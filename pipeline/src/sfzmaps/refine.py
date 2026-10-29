@@ -19,6 +19,11 @@ Starting from the rough fit (Task 8, within ~100-150 ft):
      but never dip below ~0.8 of the bump between them (measured on the synthetic 20x20
      sheet at 1-1.9 deg), whereas lattice alternatives dip to ~0.04. A confident wrong lock
      is worse than refining from the unshifted start.
+     Consequence of "edge": with the default 150 ft reach and 5 ft bins, a start whose
+     translation error is about 140-150 ft (peak beyond reach - VOTE_EDGE_BINS bins) is
+     refused, not corrected, even though it may be a true offset. Per controller ruling
+     R17, score() fails both "edge" and "ambiguous" with reason "ambiguous_placement", so
+     such sheets go to human review.
 Then each iteration:
   1. maps every scan corner to the world through the current transform;
   2. pairs scan and modern corners that are *mutual* nearest neighbours (KD-trees both
@@ -81,9 +86,14 @@ radius) or no_equivalent (moved more). classify_changes, run after refine:
      points = min_cluster); then each component is trimmed, dropping the member whose
      vector is farthest from the component median, until every pairwise vector
      difference is <= coherence_ft. Components still >= min_cluster are real_change;
-  5. the transform is refit (source="auto", config.TPS_SMOOTHING) on the inliers minus
-     real_change, and steps 1-5 repeat until the labels stop changing (at most
-     MAX_CLASSIFY_ROUNDS rounds).
+  5. one modern corner has at most one historic counterpart: when several clustered
+     candidates claim the same modern corner the closest (shortest vector) keeps it, the
+     others revert to their refine label, and a cluster that falls below min_cluster is
+     dropped;
+  6. the transform is refit (source="auto", config.TPS_SMOOTHING) on the inliers minus
+     real_change, and steps 1-6 repeat until the labels stop changing (at most
+     MAX_CLASSIFY_ROUNDS rounds; RefineResult.classify_converged is False if they were
+     still changing then).
 Matches not in a cluster keep their refine label (outlier / no_equivalent / inlier),
 re-measured against the final transform. Real-change matches never enter the fit or the
 score; changes_geojson records them with their offsets.
@@ -157,6 +167,7 @@ class RefineResult:
     final_radius_ft: float = 15.0
     ref_xy: np.ndarray | None = field(default=None, repr=False, compare=False)
     ref_block: np.ndarray | None = field(default=None, repr=False, compare=False)
+    classify_converged: bool = True      # False: classify_changes labels still changing at round 5
 
 
 def _pairs(world: np.ndarray, ref_tree: cKDTree, radius: float):
@@ -336,7 +347,7 @@ def _components(n: int, a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def _real_change(world: np.ndarray, valid: np.ndarray, W: np.ndarray, tree: cKDTree,
                  taken: np.ndarray, tol_ft: float, min_cluster: int, coherence_ft: float):
-    """One classification round (module docstring, steps 1-4).
+    """One classification round (module docstring, steps 1-5).
 
     Returns (real-change mask, modern counterpart index (-1 if none)) over all rows."""
     n = len(world)
@@ -379,6 +390,7 @@ def _real_change(world: np.ndarray, valid: np.ndarray, W: np.ndarray, tree: cKDT
     if len(pr):
         pr = pr[np.linalg.norm(bp[pr[:, 0]] - bp[pr[:, 1]], axis=1) <= CLUSTER_FT]
     comp = _components(len(best), pr[:, 0], pr[:, 1]) if len(pr) else np.arange(len(best))
+    clusters = []
     for c in np.unique(comp):
         mem = np.flatnonzero(comp == c)
         while len(mem) >= min_cluster:
@@ -388,9 +400,21 @@ def _real_change(world: np.ndarray, valid: np.ndarray, W: np.ndarray, tree: cKDT
                 break
             mem = np.delete(mem, np.argmax(np.linalg.norm(v - np.median(v, 0), axis=1)))
         if len(mem) >= min_cluster:
-            rows = cand[owner[best[mem]]]
+            clusters.append(best[mem])
+    # one modern corner, one historic corner: when several claim the same counterpart
+    # keep the closest; a cluster left below min_cluster is dropped
+    claim: dict[int, int] = {}
+    for v in np.concatenate(clusters) if clusters else []:
+        k = int(kref[v])
+        if k not in claim or np.hypot(*vec[v]) < np.hypot(*vec[claim[k]]):
+            claim[k] = int(v)
+    won = set(claim.values())
+    for cl in clusters:
+        cl = [v for v in cl if v in won]
+        if len(cl) >= min_cluster:
+            rows = cand[owner[cl]]
             rc[rows] = True
-            cp[rows] = kref[best[mem]]
+            cp[rows] = kref[cl]
     return rc, cp
 
 
@@ -418,10 +442,12 @@ def classify_changes(result: RefineResult, *, tol_ft: float = config.TOLERANCE_F
 
     tr = result.transform
     rc, cp = np.zeros(n, bool), np.full(n, -1)
+    stable = False
     for _ in range(MAX_CLASSIFY_ROUNDS):
         new_rc, new_cp = _real_change(mapped(tr), ok, W, tree, pair_k[base_inl & ~rc],
                                       tol_ft, min_cluster, coherence_ft)
         if (new_rc == rc).all() and (new_cp == cp).all():
+            stable = True
             break
         rc, cp = new_rc, new_cp
         new = _fit(P, W, pair_k, base_inl & ~rc, extra, config.TPS_SMOOTHING)
@@ -448,7 +474,8 @@ def classify_changes(result: RefineResult, *, tol_ft: float = config.TOLERANCE_F
         out.append(Match(m.px, m.py, float(W[k, 0]), float(W[k, 1]),
                          float(np.linalg.norm(world[i] - W[k])), label, k))
     return RefineResult(tr, out, result.iterations, result.converged, result.vote_shift_ft,
-                        result.vote_status, result.final_radius_ft, W, result.ref_block)
+                        result.vote_status, result.final_radius_ft, W, result.ref_block,
+                        classify_converged=stable)
 
 
 def changes_geojson(result: RefineResult) -> dict:

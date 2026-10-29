@@ -5,16 +5,24 @@ geometry really differs from today's; kept on purpose) and no_equivalent (nothin
 to compare against) are counted but never scored. dist_ft is the distance from the scan
 corner, mapped by the sheet transform, to its modern corner.
 
-passed = converged and n_scored >= min_scored and frac_within >= pass_fraction, with
-frac_within = (scored corners with dist_ft <= tol_ft) / n_scored.
-
-reason (None when passed), first that applies:
+frac_within = (scored corners with dist_ft <= tol_ft) / n_scored. A sheet passes exactly
+when reason is None. reason, first that applies (this order is the precedence):
   * "insufficient_anchors" - no RefineResult at all (score(None)): the rough fit from
-                             label anchors failed, so the sheet was never refined;
+                             label anchors failed, so the sheet was never refined. All
+                             counts are zero; no other reason is considered;
   * "not_converged"        - refine used up max_iter before the final radius settled
-                             (RefineResult.converged is False); the fit is suspect even if
-                             its numbers look good;
+                             (RefineResult.converged False), or classify_changes' labels
+                             were still changing after its last round (classify_converged
+                             False): either way the fit is suspect even if its numbers
+                             look good;
+  * "ambiguous_placement"  - the translation vote refused to shift (vote_status "edge" or
+                             "ambiguous", ruling R17): the start may sit one street or
+                             block over and a self-consistent fit cannot tell;
   * "too_few_matches"      - n_scored < min_scored;
+  * "excess_real_change"   - n_real_change > config.MAX_REAL_CHANGE_FRAC x
+                             (n_scored + n_real_change): too much excluded as real change
+                             for the exclusion to be trusted (a systematic misfit looks
+                             like real change);
   * "below_threshold"      - frac_within < pass_fraction.
 Percentiles and max are NaN when nothing is scored.
 """
@@ -24,6 +32,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from sfzmaps import config
 from sfzmaps.config import PASS_FRACTION, TOLERANCE_FT
 from sfzmaps.refine import RefineResult
 
@@ -49,18 +58,23 @@ def score(result: RefineResult | None, tol_ft: float = TOLERANCE_FT,
     labels = [m.label for m in result.matches]
     d = np.array([m.dist_ft for m in result.matches if m.label in ("inlier", "outlier")], float)
     n = len(d)
+    n_rc = labels.count("real_change")
     if n:
         frac = float(np.count_nonzero(d <= tol_ft)) / n
         p50, p95, mx = (float(np.quantile(d, 0.5)), float(np.quantile(d, 0.95)), float(d.max()))
     else:
         frac, p50, p95, mx = 0.0, float("nan"), float("nan"), float("nan")
-    if not result.converged:
+    if not (result.converged and result.classify_converged):
         reason = "not_converged"
+    elif result.vote_status in ("edge", "ambiguous"):
+        reason = "ambiguous_placement"
     elif n < min_scored:
         reason = "too_few_matches"
+    elif n_rc > config.MAX_REAL_CHANGE_FRAC * (n + n_rc):
+        reason = "excess_real_change"
     elif frac < pass_fraction:
         reason = "below_threshold"
     else:
         reason = None
-    return SheetScore(n, frac, p50, p95, mx, labels.count("real_change"),
-                      labels.count("no_equivalent"), reason is None, reason)
+    return SheetScore(n, frac, p50, p95, mx, n_rc, labels.count("no_equivalent"),
+                      reason is None, reason)

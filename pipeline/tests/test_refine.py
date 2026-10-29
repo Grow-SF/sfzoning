@@ -1,3 +1,4 @@
+import json
 import time
 
 import geopandas as gpd
@@ -247,10 +248,10 @@ def test_vote_ambiguous_on_periodic_grid_beyond_reach():
     P = _px_of(W, W.mean(0))
     start = _start_from(P, W, (180.0, 0.0))
     shift, status = refine._vote_shift(start.to_world(P), refine.cKDTree(W), 150.0)
-    assert status in ("ambiguous", "edge")
+    assert status == "ambiguous"
     assert np.allclose(shift, 0.0)
     res = refine.refine(P, ref.corners, start)
-    assert res.vote_status in ("ambiguous", "edge")
+    assert res.vote_status == "ambiguous"
     assert res.vote_shift_ft == (0.0, 0.0)
 
 
@@ -447,6 +448,7 @@ def test_changes_geojson():
     res = refine.classify_changes(
         refine.refine(np.vstack([P2, far]), ref.corners, _start_from(P, W, (10.0, 10.0))))
     gj = refine.changes_geojson(res)
+    json.dumps(gj, allow_nan=False)  # plain, strict JSON
     assert gj["type"] == "FeatureCollection"
     assert gj["crs"]["properties"]["name"] == "urn:ogc:def:crs:EPSG::2227"
     rc = [f for f in gj["features"] if f["properties"]["kind"] == "real_change"]
@@ -459,3 +461,32 @@ def test_changes_geojson():
         assert f["geometry"]["type"] == "Point"
     assert sorted(f["properties"]["n_corners"] for f in ne) == [1, 3]
     assert all(f["geometry"]["type"] == "Polygon" for f in ne)
+
+
+def test_classify_converged_flag(shifted, big_result):
+    *_, res = shifted
+    assert res.classify_converged is True
+    assert refine.classify_changes(big_result[0]).classify_converged is True
+
+
+def test_classify_not_converged_when_rounds_run_out(monkeypatch, shifted):
+    *_, before, _ = shifted
+    monkeypatch.setattr(refine, "MAX_CLASSIFY_ROUNDS", 1)  # round 1 finds 0045, no check
+    assert refine.classify_changes(before).classify_converged is False
+
+
+def test_counterpart_claimed_once():
+    """Two candidates claim the same modern corner: the closer keeps it."""
+    W = np.array([[0.0, 0.0], [250.0, 0.0], [500.0, 0.0], [0.0, 400.0]])
+    # three coherent (+20, 0) corners, plus a duplicate of the first at (+22, 0)
+    world = np.array([[20.0, 0.0], [270.0, 0.0], [520.0, 0.0], [22.0, 0.0]])
+    rc, cp = refine._real_change(world, np.ones(4, bool), W, refine.cKDTree(W),
+                                 np.array([], int), 6.0, 3, 4.0)
+    assert rc.tolist() == [True, True, True, False]
+    assert cp[:3].tolist() == [0, 1, 2]
+    # if the duplicate wins, its cluster-mate count drops below min_cluster
+    world2 = np.array([[20.0, 0.0], [270.0, 0.0], [21.0, 0.0]])
+    W2 = W[:2]
+    rc2, _ = refine._real_change(world2, np.ones(3, bool), W2, refine.cKDTree(W2),
+                                 np.array([], int), 6.0, 3, 4.0)
+    assert not rc2.any()

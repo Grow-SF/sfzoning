@@ -14,6 +14,7 @@ OUT_DIR = DATA_DIR / "out"
 WORK_CRS = "EPSG:2227"
 TOLERANCE_FT = 6.0
 PASS_FRACTION = 0.95
+MAX_REAL_CHANGE_FRAC = 0.15  # more real change than this share of scored+real_change: review
 ROUGH_TOL_FT = 150.0  # rough fit (Task 8) error budget; caps the refine translation vote
 TPS_SMOOTHING = 1.0  # ridge in ft^2 on normalized TPS; units and rationale in sfzmaps.transform
 
