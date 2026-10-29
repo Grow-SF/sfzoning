@@ -90,15 +90,24 @@ def _key(png: bytes, prompt: str, schema: type[BaseModel]) -> str:
     return h.hexdigest()
 
 
-def ask_json(image: np.ndarray, prompt: str, schema: type[T], *,
-             client: LLMClient | None = None) -> T:
+def _encode(image: np.ndarray) -> bytes:
     h, w = image.shape[:2]
     if max(h, w) > MAX_EDGE:
         raise ValueError(f"image {w}x{h} exceeds {MAX_EDGE}px long edge")
     ok, buf = cv2.imencode(".png", image)
     if not ok:
         raise ValueError("PNG encoding failed")
-    png = buf.tobytes()
+    return buf.tobytes()
+
+
+def is_cached(image: np.ndarray, prompt: str, schema: type[BaseModel]) -> bool:
+    """True if ask_json would answer from disk (no network call)."""
+    return (CACHE_DIR / "llm" / f"{_key(_encode(image), prompt, schema)}.json").exists()
+
+
+def ask_json(image: np.ndarray, prompt: str, schema: type[T], *,
+             client: LLMClient | None = None) -> T:
+    png = _encode(image)
     path = CACHE_DIR / "llm" / f"{_key(png, prompt, schema)}.json"
     if path.exists():
         try:
