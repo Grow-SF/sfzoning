@@ -138,6 +138,10 @@ def render(page: Page, out: Path) -> Path:
              "-f", str(n), "-l", str(n), str(page.source), str(stem)],
             check=True,
         )
+        # Some poppler builds write RGB PNGs even with -gray; enforce one channel.
+        g = cv2.imread(str(out), cv2.IMREAD_GRAYSCALE)
+        if g is None or not cv2.imwrite(str(out), g):
+            raise RuntimeError(f"cannot post-process {out}")
     else:
         img = cv2.imread(str(page.source), cv2.IMREAD_COLOR)
         if img is None:
