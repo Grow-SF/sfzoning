@@ -35,6 +35,7 @@ Paper transparency (alpha):
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import warnings
@@ -112,11 +113,15 @@ def median_scale_ft_per_px(t: SheetTransform, shape: tuple[int, int], step: int 
 def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path) -> Path:
     """Write the transparent-paper RGBA GeoTIFF for `png` to `out` (atomically)."""
     png, out = Path(png), Path(out)
+    if shutil.which("gdalwarp") is None:
+        raise RuntimeError("gdalwarp not found on PATH; install GDAL (e.g. `brew install gdal`)")
     img = cv2.imread(str(png), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise RuntimeError(f"cannot read {png}")
     if img.ndim == 3 and img.shape[2] == 4:
         img = img[..., :3]
+    if img.dtype != np.uint8:  # e.g. 16-bit PNG
+        img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     h, w = img.shape[:2]
     res = median_scale_ft_per_px(t, (h, w))
     rgba = make_rgba(img, mask_boxes)

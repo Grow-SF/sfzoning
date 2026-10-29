@@ -124,3 +124,53 @@ def test_gray_alpha_soft_edge():
     a = warp.paper_alpha(g)
     assert a[0, 0] == 0 and a[0, 8] == 255
     assert 0 < a[0, 4] < 255
+
+
+def _edge_crossing(profile, lo, hi):
+    """Sub-pixel index (pixel-centre coords) where alpha crosses 128 within [lo, hi)."""
+    for i in range(lo, hi - 1):
+        a, b = float(profile[i]), float(profile[i + 1])
+        if (a - 128) * (b - 128) <= 0 and a != b:
+            return i + (128 - a) / (b - a)
+    raise AssertionError("no edge found")
+
+
+def test_warp_edges_within_one_pixel_of_truth(tmp_path):
+    """Warped block edges land at their true world position (no half-pixel GCP offset).
+
+    make_sheet uses the pixel-centre convention (cv2.polylines/remap: integer coordinate =
+    pixel centre, and true_px_to_world is evaluated at those indices), so t.to_world of a
+    pixel index is the pixel-centre world position and the test is not circular.
+    The source is binary (edges quantised to a source pixel), so besides a per-edge bound of
+    one output pixel we assert the mean signed error over many edges is tiny, which is what
+    a missing +0.5 shift (0.5 source px = 0.9 ft) would violate.
+    """
+    blocks = _blocks()
+    sheet = make_sheet(blocks, px_per_ft=PX_PER_FT, rotation_deg=0.0, distortion=lambda p: p,
+                       style="filled", seed=1)
+    h, w = sheet.img.shape
+    P = np.array([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]], float)
+    t = SheetTransform([GCP(*p, *sheet.true_px_to_world(p), "auto") for p in P], smoothing=1.0).fit()
+    png = tmp_path / "p.png"
+    cv2.imwrite(str(png), sheet.img)
+    out = warp.warp_sheet(png, t, [], tmp_path / "o.tif")
+    errs_x, errs_y = [], []
+    with rasterio.open(out) as ds:
+        alpha = ds.read(4)
+        res, left, top = ds.res[0], ds.bounds.left, ds.bounds.top
+        for g in blocks.geometry:
+            x0, y0, x1, y1 = g.bounds
+            cx, cy = (x0 + x1) / 2 + 60, (y0 + y1) / 2 + 40
+            r, c = ds.index(cx, cy)
+            for xe in (x0, x1):
+                ce = int((xe - left) / res)
+                f = _edge_crossing(alpha[r], ce - 4, ce + 5)
+                errs_x.append(left + (f + 0.5) * res - xe)
+            for ye in (y0, y1):
+                re_ = int((top - ye) / res)
+                f = _edge_crossing(alpha[:, c], re_ - 4, re_ + 5)
+                errs_y.append(top - (f + 0.5) * res - ye)
+    for e in errs_x + errs_y:
+        assert abs(e) < res, e
+    assert abs(np.mean(errs_x)) < 0.3 * res and abs(np.mean(errs_y)) < 0.3 * res, \
+        (np.mean(errs_x) / res, np.mean(errs_y) / res)
