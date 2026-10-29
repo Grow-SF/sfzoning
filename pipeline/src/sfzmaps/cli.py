@@ -131,3 +131,30 @@ def estimate(
     if fallback:
         typer.echo(f"note: {fallback} of {npages} pages have no cached classification, so mask boxes "
                    "are unknown and their tiles are excluded by neatline only (upper bound).")
+
+
+@app.command()
+def run(
+    year: str = typer.Option(None, "--year", help="Series, e.g. 1948."),
+    all_: bool = typer.Option(False, "--all", help="All series."),
+    sheet: str = typer.Option(None, "--sheet", help="Only this sheet id."),
+    until: str = typer.Option(None, "--until", help="Stop after this stage."),
+    force_auto: bool = typer.Option(False, "--force-auto", help="Ignore review.json for this run."),
+    force: bool = typer.Option(False, "--force", help="Rerun every stage (config changes do not trigger reruns)."),
+) -> None:
+    """Run the pipeline per sheet (skips fresh stages; human reviews are kept)."""
+    import logging
+
+    from sfzmaps import pages, runner
+    from sfzmaps.sources import datasf
+
+    if not (year or all_):
+        raise typer.BadParameter("pass --year Y or --all")
+    if until is not None and until not in runner.STAGES:
+        raise typer.BadParameter(f"--until must be one of {', '.join(runner.STAGES)}")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    ref = datasf.load_reference()
+    allp = pages.discover()
+    for s in sorted({p.series for p in allp if all_ or p.series == year}):
+        runner.run_series(s, sheet=sheet, until=until, force_auto=force_auto, force=force,
+                          ref=ref, pages_list=allp)
