@@ -48,7 +48,7 @@ import cv2
 import numpy as np
 from shapely.geometry import mapping
 
-from sfzmaps import anchors, config, linework, pages, reading, warp
+from sfzmaps import anchors, config, linework, llm, pages, reading, warp
 from sfzmaps import refine as refine_mod
 from sfzmaps import score as score_mod
 from sfzmaps.pages import Page
@@ -83,7 +83,7 @@ def _mtime(p: Path) -> int:
 
 
 def _fresh(out: Path, inputs: list[Path], force: bool = False) -> bool:
-    if force or not out.exists():
+    if force or not out.exists() or not inputs:  # no inputs: nothing proves it current
         return False
     return all(i.exists() and _mtime(out) > _mtime(i) for i in inputs)
 
@@ -299,6 +299,8 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             _write_json(tj, _transform_json(rt, "review"))
             if review.get("change_areas") is not None:
                 _write_json(cj, review["change_areas"])
+            else:
+                cj.unlink(missing_ok=True)  # no stale auto changes next to a reviewed transform
 
         if not (_origin(tj) == "review" and _fresh(tj, [rpath], force)):
             do_review()
@@ -329,6 +331,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
                     log.info("fallback transform from answer key (%d GCPs)", len(gcps))
             else:
                 tj.unlink(missing_ok=True)
+                wt.unlink(missing_ok=True)  # a warp of an older transform must not survive
         else:
             def do_refine():
                 data = json.loads(bj.read_text())
@@ -349,7 +352,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
 
             # changes also rewrites transform.json, so it reruns when that is a review's
             # (force_auto after a review) as well as when its own artifacts are stale.
-            if _origin(tj) == "auto" and _fresh(cj, [rawj], force) and _fresh(tj, [rawj], force):
+            if _origin(tj) == "auto" and _fresh(cj, [rawj, rfj], force) and _fresh(tj, [rawj], force):
                 last_timings["changes"] = None
                 log.info("%-8s skipped (fresh)", "changes")
             else:
@@ -378,7 +381,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             sc = score_mod.score(res)
         _write_json(sj, _score_json(sc, **extra))
 
-    stage("score", sj, [p for p in (tj, rfj) if p.exists()], do_score)
+    stage("score", sj, [p for p in (tj, rfj) if p.exists()] or [rj], do_score)
     score_val = _score_load(json.loads(sj.read_text()))
     if stopped("score"):
         return score_val
@@ -389,6 +392,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
               lambda: warp.warp_sheet(png, SheetTransform.from_json(json.loads(tj.read_text())),
                                       info().mask_boxes, wt))
     else:
+        wt.unlink(missing_ok=True)
         last_timings["warp"] = None
     return score_val
 
@@ -422,6 +426,11 @@ def run_series(series: str, *, sheet: str | None = None, until: str | None = Non
         log.info("== %s/%s", p.series, p.sheet_id)
         try:
             results[p.sheet_id] = run_sheet(p, ref, until=until, force_auto=force_auto, force=force)
+        except llm.LLMAuthError as e:  # every remaining sheet would fail the same way
+            print(f"error: {e}; aborting series {series} at sheet {p.sheet_id}")
+            nan = float("nan")
+            results[p.sheet_id] = SheetScore(0, 0.0, nan, nan, nan, 0, 0, False, f"error: {e}")
+            break
         except Exception as e:  # noqa: BLE001 - one bad sheet must not stop the series
             if logfile is None:
                 config.OUT_DIR.mkdir(parents=True, exist_ok=True)

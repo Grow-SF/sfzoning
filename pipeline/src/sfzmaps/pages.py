@@ -130,24 +130,28 @@ def render(page: Page, out: Path) -> Path:
     if out.exists() and out.stat().st_mtime_ns >= page.source.stat().st_mtime_ns:
         return out
     out.parent.mkdir(parents=True, exist_ok=True)
-    if page.source.suffix.lower() == ".pdf":
-        n = (page.page_index or 0) + 1
-        stem = out.with_suffix("")
-        subprocess.run(
-            ["pdftoppm", "-r", "300", "-gray", "-png", "-singlefile",
-             "-f", str(n), "-l", str(n), str(page.source), str(stem)],
-            check=True,
-        )
-        # Some poppler builds write RGB PNGs even with -gray; enforce one channel.
-        g = cv2.imread(str(out), cv2.IMREAD_GRAYSCALE)
-        if g is None or not cv2.imwrite(str(out), g):
-            raise RuntimeError(f"cannot post-process {out}")
-    else:
-        img = cv2.imread(str(page.source), cv2.IMREAD_COLOR)
-        if img is None:
-            raise RuntimeError(f"cannot read {page.source}")
-        if not cv2.imwrite(str(out), img):
-            raise RuntimeError(f"cannot write {out}")
+    tmp = out.with_name(out.stem + ".tmp.png")  # written whole, then renamed: no partial page.png
+    try:
+        if page.source.suffix.lower() == ".pdf":
+            n = (page.page_index or 0) + 1
+            subprocess.run(
+                ["pdftoppm", "-r", "300", "-gray", "-png", "-singlefile",
+                 "-f", str(n), "-l", str(n), str(page.source), str(tmp.with_suffix(""))],
+                check=True,
+            )
+            # Some poppler builds write RGB PNGs even with -gray; enforce one channel.
+            g = cv2.imread(str(tmp), cv2.IMREAD_GRAYSCALE)
+            if g is None or not cv2.imwrite(str(tmp), g):
+                raise RuntimeError(f"cannot post-process {out}")
+        else:
+            img = cv2.imread(str(page.source), cv2.IMREAD_COLOR)
+            if img is None:
+                raise RuntimeError(f"cannot read {page.source}")
+            if not cv2.imwrite(str(tmp), img):
+                raise RuntimeError(f"cannot write {out}")
+        tmp.replace(out)
+    finally:
+        tmp.unlink(missing_ok=True)
     return out
 
 

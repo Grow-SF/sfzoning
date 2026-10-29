@@ -144,7 +144,7 @@ def test_stale_input_reruns_downstream(env, monkeypatch):
     p = d / "labels.json"
     os.utime(p, ns=(p.stat().st_mtime_ns + 10**9,) * 2)
     runner.run_sheet(page, ref)
-    assert set(f.calls) == {"rough", "refine", "changes", "warp"} or set(f.calls) >= {"rough", "refine"}
+    assert set(f.calls) == {"rough", "refine", "changes", "warp"}
     assert "labels" not in f.calls and "render" not in f.calls
 
 
@@ -184,3 +184,64 @@ def test_run_series_logs_failure_and_continues(env, monkeypatch, capsys):
     assert len(logs) == 1 and "Traceback" in logs[0].read_text() and "kaput" in logs[0].read_text()
     out = capsys.readouterr().out
     assert "frac_within" in out and "p95_ft" in out
+
+
+def test_rough_failure_after_pass_clears_score_and_warp(env, monkeypatch):
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    runner.run_sheet(page, ref)
+    assert (d / "warped.tif").exists()
+    f.rough_ok = False
+    p = d / "labels.json"
+    os.utime(p, ns=(p.stat().st_mtime_ns + 10**9,) * 2)
+    s = runner.run_sheet(page, ref)
+    assert s.reason == "insufficient_anchors" and not s.passed
+    assert json.loads((d / "score.json").read_text())["reason"] == "insufficient_anchors"
+    assert not (d / "warped.tif").exists() and not (d / "transform.json").exists()
+
+
+def test_review_edit_triggers_rewarp(env, monkeypatch):
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    d.mkdir(parents=True)
+    write_review(d)
+    runner.run_sheet(page, ref)
+    assert f.calls["warp"] == 1
+    runner.run_sheet(page, ref)
+    assert f.calls["warp"] == 1
+    p = d / "review.json"
+    r = json.loads(p.read_text())
+    r["gcps"][0]["wx"] += 5
+    p.write_text(json.dumps(r))
+    os.utime(p, ns=(p.stat().st_mtime_ns + 10**9,) * 2)
+    runner.run_sheet(page, ref)
+    assert f.calls["warp"] == 2
+    assert json.loads((d / "transform.json").read_text())["gcps"][0]["wx"] == GCPS[0].wx + 5
+
+
+def test_review_without_change_areas_removes_stale_changes(env, monkeypatch):
+    page, ref, d = env
+    Fakes(monkeypatch)
+    runner.run_sheet(page, ref)
+    assert (d / "changes.geojson").exists()
+    write_review(d)
+    r = json.loads((d / "review.json").read_text())
+    del r["change_areas"]
+    (d / "review.json").write_text(json.dumps(r))
+    runner.run_sheet(page, ref)
+    assert not (d / "changes.geojson").exists()
+
+
+def test_run_series_aborts_on_auth_error(env, monkeypatch, capsys):
+    page, ref, d = env
+    Fakes(monkeypatch)
+    from sfzmaps import llm
+
+    def boom(p):
+        raise llm.LLMAuthError("OPENAI_API_KEY missing or invalid")
+
+    monkeypatch.setattr(runner.reading, "classify_page", boom)
+    pl = [Page("1948", str(i), page.source, None) for i in range(3)]
+    res = runner.run_series("1948", pages_list=pl, ref=ref)
+    assert list(res) == ["0"]
+    assert capsys.readouterr().out.count("aborting series") == 1

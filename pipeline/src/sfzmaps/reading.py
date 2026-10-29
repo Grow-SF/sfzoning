@@ -88,7 +88,9 @@ def save(path: Path, obj: BaseModel | list[Label]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = [x.model_dump() for x in obj] if isinstance(obj, list) else obj.model_dump()
-    path.write_text(json.dumps(data, indent=1))
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(data, indent=1))
+    tmp.replace(path)
 
 
 def load_page(path: Path) -> PageInfo:

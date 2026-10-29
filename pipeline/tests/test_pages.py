@@ -117,3 +117,20 @@ def test_render_jpg_skips_when_fresh(tmp_path):
     t = out.stat().st_mtime_ns
     pages.render(page, out)
     assert out.stat().st_mtime_ns == t
+
+
+def test_render_leaves_no_partial_file_on_failure(tmp_path, monkeypatch):
+    import subprocess
+
+    src = touch(tmp_path / "a.pdf")
+
+    def fake_run(cmd, check):
+        (tmp_path / "out").mkdir(exist_ok=True)
+        Path(cmd[-1] + ".png").write_bytes(b"partial")  # pdftoppm wrote, then died
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr(pages.subprocess, "run", fake_run)
+    out = tmp_path / "out" / "page.png"
+    with pytest.raises(subprocess.CalledProcessError):
+        pages.render(pages.Page("1960", "a", src, None), out)
+    assert list(out.parent.iterdir()) == []
