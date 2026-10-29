@@ -158,3 +158,19 @@ def run(
     for s in sorted({p.series for p in allp if all_ or p.series == year}):
         runner.run_series(s, sheet=sheet, until=until, force_auto=force_auto, force=force,
                           ref=ref, pages_list=allp)
+
+
+@app.command("eval")
+def eval_(
+    year: str = typer.Option(..., "--year", help="Series with an answer key: 1948 or 1960."),
+) -> None:
+    """Per-sheet score next to the distance from our transform to the owner's .points."""
+    from sfzmaps import evaluate, pages
+
+    if year not in ("1948", "1960"):
+        raise typer.BadParameter("--year must be 1948 or 1960 (the series with answer keys)")
+    rows = evaluate.evaluate_series(year, pages.discover())
+    if not rows:
+        typer.echo(f"no processed sheets for {year}; run `sfzmaps run --year {year}` first")
+        raise typer.Exit(1)
+    typer.echo(evaluate.format_eval_table(rows))

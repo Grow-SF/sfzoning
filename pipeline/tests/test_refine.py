@@ -490,3 +490,11 @@ def test_counterpart_claimed_once():
     rc2, _ = refine._real_change(world2, np.ones(3, bool), W2, refine.cKDTree(W2),
                                  np.array([], int), 6.0, 3, 4.0)
     assert not rc2.any()
+
+
+def test_smoothing_schedule_coarse_stages_independent_of_final(monkeypatch):
+    monkeypatch.setattr(config, "TPS_SMOOTHING", 0.1)
+    monkeypatch.setattr(config, "COARSE_TPS_SMOOTHING", 1000.0)
+    assert [refine._smoothing(i, 4) for i in range(4)] == [1000.0, 100.0, 10.0, 0.1]
+    monkeypatch.setattr(config, "TPS_SMOOTHING", 50.0)  # never stiffer at the end than before
+    assert [refine._smoothing(i, 4) for i in range(4)] == [1000.0, 100.0, 50.0, 50.0]

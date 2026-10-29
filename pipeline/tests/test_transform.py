@@ -37,15 +37,19 @@ def test_affine_recovered_exactly():
 
 
 def test_smooth_warp_does_not_chase_outlier():
-    gcps = _grid(_warped)
+    # Real sheets give the final warp 600-2500 block-corner GCPs about 100-300 ft apart
+    # (MAD rejection has already removed gross outliers); a 40x40 grid over the sheet is
+    # that density. A lone corner 40 ft off may pull the fit only a few feet (Task 13
+    # measured 2-6 ft on 1948/1 and 1960/1 at the tuned smoothing).
+    gcps = _grid(_warped, n=40)
     base = SheetTransform(list(gcps), smoothing=config.TPS_SMOOTHING).fit()
-    k = 55
-    bad = list(gcps)
-    g = gcps[k]
-    bad[k] = GCP(g.px, g.py, g.wx + 40.0, g.wy, g.source)
-    t = SheetTransform(bad, smoothing=config.TPS_SMOOTHING).fit()
-    p = np.array([[g.px, g.py]])
-    assert np.linalg.norm(t.to_world(p) - base.to_world(p)) < 10.0
+    for k in (205, 820, 1234):
+        bad = list(gcps)
+        g = gcps[k]
+        bad[k] = GCP(g.px, g.py, g.wx + 40.0, g.wy, g.source)
+        t = SheetTransform(bad, smoothing=config.TPS_SMOOTHING).fit()
+        p = np.array([[g.px, g.py]])
+        assert np.linalg.norm(t.to_world(p) - base.to_world(p)) < 6.0  # 0.1: 4.1 ft; 0.03: 7.3
 
 
 def test_roundtrip_realistic_magnitudes():

@@ -132,6 +132,20 @@ def test_extract_blocks_real_1968_crop():
     assert (areas > 1.5 * np.median(areas)).sum() <= 1
 
 
+def test_extract_blocks_street_margin_stays_street():
+    """crop_1948_margin.png: page 1948/1 [2497:3197, 2880:3580], grayscale.  The
+    solid block left of the vertical street (interior point (300, 420)) has its
+    right edge (ink) at x = 344.  Specks and a ragged kerb break the long street
+    runs near that edge, so a ~7 px white margin was once read as block material
+    (it joins the alley mouth) and the block grew into the street to x ~ 351."""
+    from shapely.geometry import Point
+
+    polys = _real("crop_1948_margin.png")
+    hit = [p for p in polys if p.contains(Point(300, 420))]
+    assert len(hit) == 1
+    assert abs(max(x for x, _ in hit[0].exterior.coords) - 344) <= 2
+
+
 def test_extract_blocks_exclude_region():
     """exclude=True marks excluded pixels (same polarity as reading.exclusion_mask)."""
     blocks = _grid_blocks()

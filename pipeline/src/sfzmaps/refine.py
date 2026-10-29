@@ -41,9 +41,10 @@ corners between consecutive fits is < SHIFT_TOL_FT; the loop ends when that happ
 the last radius, or after `max_iter` refits. RefineResult.converged is False exactly when
 `max_iter` refits were used up before the last radius settled.
 
-Annealed smoothing: at radius stage i of n the TPS smoothing is
-config.TPS_SMOOTHING x COARSE_SMOOTHING_STEP^(n-1-i) (1000, 100, 10, 1 for the default
-four radii), so the wide-radius stages are nearly affine. A flexible warp at the wide
+Annealed smoothing: at radius stage i of n (i < n-1) the TPS smoothing is
+config.COARSE_TPS_SMOOTHING / COARSE_SMOOTHING_STEP^i, floored at config.TPS_SMOOTHING, and
+the last stage uses config.TPS_SMOOTHING (1000, 100, 10, 0.1 for the default four radii),
+so the wide-radius stages are nearly affine. A flexible warp at the wide
 radii can carry a whole region one street over and still look self-consistent (seen with
 a 40 ft / 1 deg start: q95 error 3.5 ft, some inliers 50-70 ft wrong); stiff early stages
 fix the global misfit before local paper stretch is admitted. The final transform uses
@@ -250,7 +251,9 @@ def _vote_shift(world: np.ndarray, ref_tree: cKDTree, reach: float) -> tuple[np.
 
 def _smoothing(stage: int, n_stages: int) -> float:
     """Stiff warp at the wide radii, config.TPS_SMOOTHING at the last one."""
-    return config.TPS_SMOOTHING * COARSE_SMOOTHING_STEP ** (n_stages - 1 - stage)
+    if stage >= n_stages - 1:
+        return config.TPS_SMOOTHING
+    return max(config.TPS_SMOOTHING, config.COARSE_TPS_SMOOTHING / COARSE_SMOOTHING_STEP ** stage)
 
 
 def _ref_arrays(ref_corners: GeoDataFrame):

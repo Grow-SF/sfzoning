@@ -15,9 +15,12 @@ about +-100 ft), one GCP moved by 40 ft shifts the fit at that pixel by:
     smoothing 0.1 -> 16.2 ft   1 -> 5.5 ft   5 -> 2.6 ft   50 -> 0.85 ft   (0.01 -> 32 ft)
 and the max error against the true distortion field (60 ft peak affine misfit) is
     0.1 -> 3.3 ft   1 -> 15 ft   5 -> 31 ft   50 -> 53 ft (essentially affine only).
-Hence the default (config.TPS_SMOOTHING = 1.0): a lone 40 ft outlier moves the fit about
-5.5 ft while real distortion is still largely corrected. Effect scales with GCP density
-(denser grids resist outliers more); Task 13 tunes against the answer key.
+That sparse grid was the Task 7 basis for a default of 1.0. Task 13 retuned it on real
+sheets, whose final warp has 600-2500 corner GCPs ~100-300 ft apart: there 1.0 was too
+stiff (block-held-out cross-validation improves down to 0.01-0.1) and config.TPS_SMOOTHING
+is now 0.1, where a lone 40 ft GCP moves the fit about 3-4 ft and a whole block moved
+15 ft about 5 ft (measured on 1948/1, 1960/1; see the tuning notes). Effect scales with GCP
+density (denser grids resist outliers more).
 
 Fewer than MIN_GCPS enabled GCPs is an error. With MIN_GCPS..TPS_MIN_GCPS-1 (3-9) the
 fit is affine only: a TPS on so few points is unstable.

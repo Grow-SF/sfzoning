@@ -12,11 +12,21 @@ WORK_DIR = DATA_DIR / "work"
 OUT_DIR = DATA_DIR / "out"
 
 WORK_CRS = "EPSG:2227"
-TOLERANCE_FT = 6.0
+TOLERANCE_FT = 6.0  # kept at 6 after Task 13 tuning (see the tuning notes)
 PASS_FRACTION = 0.95
 MAX_REAL_CHANGE_FRAC = 0.15  # more real change than this share of scored+real_change: review
 ROUGH_TOL_FT = 150.0  # rough fit (Task 8) error budget; caps the refine translation vote
-TPS_SMOOTHING = 1.0  # ridge in ft^2 on normalized TPS; units and rationale in sfzmaps.transform
+# Ridge in ft^2 on the normalized TPS (units in sfzmaps.transform) of the final sheet
+# warp. Task 13 tuned it by block-held-out cross-validation on the 1948/1960 sheets: 1.0 was
+# too stiff to follow real paper/drafting distortion; 0.01-0.1 predicts unseen blocks best.
+# 0.1 keeps nearly all of that gain while a whole block that really moved 15 ft pulls the
+# warp only ~5 ft (0.03: ~8 ft), so history is not warped away. Notes:
+# docs/superpowers/notes/2026-10-29-tuning.md.
+TPS_SMOOTHING = 0.1
+# Stiff smoothing for coarse fits: the rough anchor fit (label anchors are only good to
+# ~100 ft) and refine's widest-radius stage (divided by 10 per stage, never below
+# TPS_SMOOTHING). Independent of TPS_SMOOTHING so tuning the final warp cannot loosen them.
+COARSE_TPS_SMOOTHING = 1000.0
 
 VISION_PROVIDER = "openai"
 VISION_MODEL = "gpt-6.1-sol"

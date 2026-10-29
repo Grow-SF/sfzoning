@@ -52,6 +52,9 @@ def test_rough_fit_recovers_rotation_90():
     assert abs(fit.scale_ft_per_px - 1 / 0.55) < 0.05
     assert _median_err(blocks, sheet, fit) < 30.0
     assert all(g.source == "anchor" for g in fit.transform.gcps)
+    # label anchors are coarse: the rough fit stays stiff whatever TPS_SMOOTHING is tuned to
+    from sfzmaps import config
+    assert fit.transform.smoothing == config.COARSE_TPS_SMOOTHING
 
 
 def test_rough_fit_survives_misreads():

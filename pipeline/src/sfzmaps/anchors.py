@@ -17,7 +17,9 @@ proper (orientation preserving) complex similarity w = a*z + b, z = x - i*y.
     half a block label. Ties go to the lower weighted residual.
   * Refit: weights are used in a weighted least-squares similarity refit that re-selects
     inliers (3 rounds). The returned SheetTransform is fitted by SheetTransform.fit, which
-    is unweighted affine on the inlier GCPs (weights do not enter that final fit).
+    is unweighted affine on the inlier GCPs (weights do not enter that final fit), plus,
+    with >= 10 anchors, a TPS at config.COARSE_TPS_SMOOTHING: anchors are coarse, so the
+    rough fit stays nearly affine whatever the final warp's smoothing is.
 rotation_deg is arg(a): the world-frame angle of the pixel +x axis, in (-180, 180].
 """
 from __future__ import annotations
@@ -178,7 +180,7 @@ def rough_fit(cands: list[Candidate], *, min_inliers: int = 6,
     inliers = [c for c, k in zip(cands, inl) if k]
     gcps = [GCP(c.label.x, c.label.y, c.world[0], c.world[1], "anchor") for c in inliers]
     try:
-        tr = SheetTransform(gcps, smoothing=config.TPS_SMOOTHING).fit()
+        tr = SheetTransform(gcps, smoothing=config.COARSE_TPS_SMOOTHING).fit()
     except ValueError:
         return None
     return RoughFit(tr, inliers, scale, float(np.degrees(np.angle(a))))
