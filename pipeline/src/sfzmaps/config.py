@@ -14,7 +14,7 @@ OUT_DIR = DATA_DIR / "out"
 WORK_CRS = "EPSG:2227"
 TOLERANCE_FT = 6.0
 PASS_FRACTION = 0.95
-TPS_SMOOTHING = 50.0
+TPS_SMOOTHING = 1.0  # ridge in ft^2 on normalized TPS; units and rationale in sfzmaps.transform
 
 VISION_PROVIDER = "openai"
 VISION_MODEL = "gpt-6.1-sol"
