@@ -76,13 +76,14 @@ def calibrate(
         raise typer.BadParameter(f"no page {year}/{sheet}")
     rep: dict[float, float] = {}
     try:
-        best = reading.calibrate_scale(_page_png(match[0]), series=year, report=rep)
+        best = reading.calibrate_scale(_page_png(match[0]), report=rep)
     except (llm.LLMAuthError, llm.LLMRefusal, RuntimeError) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1)
     for s, r in rep.items():
         typer.echo(f"scale {s}: recall {r:.1%}")
-    typer.echo(f"LABEL_SCALE[{year!r}] = {best}  (add to config.LABEL_SCALE)")
+    config.save_label_scale(year, best)
+    typer.echo(f"saved label scale {best} for {year} to {config.WORK_DIR / 'label_scale.json'}")
 
 
 @app.command()
@@ -95,17 +96,23 @@ def estimate(
 
     if not (year or all_):
         raise typer.BadParameter("pass --year Y or --all")
-    in_price, out_price, out_tokens = config.PRICE_IN_PER_M / 1e6, config.PRICE_OUT_PER_M / 1e6, 800
-    calls = tokens = hits = npages = 0
+    in_price, out_price, out_tokens = config.PRICE_IN_PER_M / 1e6, config.PRICE_OUT_PER_M / 1e6, config.EST_OUT_TOKENS
+    calls = tokens = hits = npages = fallback = 0
     for page in pages.discover():
         if year and page.series != year:
             continue
         npages += 1
-        png = cv2.imread(str(_page_png(page)), cv2.IMREAD_UNCHANGED)
+        png_path = _page_png(page)
+        png = cv2.imread(str(png_path), cv2.IMREAD_UNCHANGED)
         thumb, _ = reading.thumbnail(png)
         jobs = [thumb]
-        # Mask boxes need Claude, so the estimate excludes by neatline only.
-        skip = reading.exclusion_mask(png, None)
+        # Use mask boxes when the classification is already cached (no call); else neatline only.
+        info = None
+        if llm.is_cached(thumb, reading.classify_prompt(thumb), reading.PageInfo):
+            info = reading.classify_page(png_path)
+        else:
+            fallback += 1
+        skip = reading.exclusion_mask(png, info)
         _, tiles = reading.select_tiles(png, scale=config.label_scale(page.series), skip=skip)
         jobs += [t for _, _, t in tiles]
         for i, img in enumerate(jobs):
@@ -121,4 +128,6 @@ def estimate(
     typer.echo(f"calls: {calls} (cache hits: {hits})")
     typer.echo(f"image tokens: {tokens:,.0f}")
     typer.echo(f"projected cost: ${usd:,.2f}  (${config.PRICE_IN_PER_M:g}/M in, ${config.PRICE_OUT_PER_M:g}/M out, {out_tokens} output tokens/call)")
-    typer.echo("note: mask boxes are unknown without Claude, so tiles are excluded by neatline only (upper bound).")
+    if fallback:
+        typer.echo(f"note: {fallback} of {npages} pages have no cached classification, so mask boxes "
+                   "are unknown and their tiles are excluded by neatline only (upper bound).")

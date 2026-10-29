@@ -119,11 +119,21 @@ def test_calibrate_picks_smallest_adequate_scale(tmp_path):
                                for i, (x, y) in enumerate(truth[:keep])])
 
     rep = {}
-    assert reading.calibrate_scale(p, client=Fake(fn), series="t", report=rep) == 0.5
+    assert reading.calibrate_scale(p, client=Fake(fn), report=rep) == 0.5
     assert rep[0.4] == 0.8
+
+
+def test_label_scale_persisted_and_fallbacks(tmp_path, monkeypatch):
     from sfzmaps import config
-    assert config.label_scale("t") == 0.5
-    config.LABEL_SCALE.pop("t")
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
+    assert config.label_scale("1948") == 0.5  # missing file
+    config.save_label_scale("1948", 0.4)
+    config.save_label_scale("1921", 0.6)  # merges
+    assert config.label_scale("1948") == 0.4 and config.label_scale("1921") == 0.6
+    assert config.label_scale("1960") == 0.5
+    (tmp_path / "work" / "label_scale.json").write_text("{not json")
+    assert config.label_scale("1948") == 0.5  # corrupt file
+    assert not list((tmp_path / "work").glob("*.tmp"))
 
 
 def test_out_of_bounds_labels_dropped(tmp_path):

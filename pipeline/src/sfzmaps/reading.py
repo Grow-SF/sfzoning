@@ -1,4 +1,4 @@
-"""Claude-vision page classification and printed label reading (block numbers, street names)."""
+"""Vision-model page classification and printed label reading (block numbers, street names)."""
 import argparse
 import json
 import sys
@@ -208,8 +208,7 @@ def _recall(ref: list[Label], got: list[Label]) -> float:
     return hit / len(ref)
 
 
-def calibrate_scale(png_path: Path, scales=SCALES, *, series: str | None = None,
-                    client: llm.LLMClient | None = None,
+def calibrate_scale(png_path: Path, scales=SCALES, *, client: llm.LLMClient | None = None,
                     report: dict[float, float] | None = None) -> float:
     """Smallest scale whose recall is >= 95% of the scale-1.0 result (stops at the first failing scale)."""
     img = _read_gray(png_path)
@@ -223,8 +222,6 @@ def calibrate_scale(png_path: Path, scales=SCALES, *, series: str | None = None,
         if r < 0.95:
             break
         best = s
-    if series is not None:
-        config.LABEL_SCALE[series] = best
     return best
 
 
