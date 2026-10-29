@@ -95,7 +95,7 @@ def estimate(
 
     if not (year or all_):
         raise typer.BadParameter("pass --year Y or --all")
-    in_price, out_price, out_tokens = 4 / 1e6, 20 / 1e6, 800
+    in_price, out_price, out_tokens = config.PRICE_IN_PER_M / 1e6, config.PRICE_OUT_PER_M / 1e6, 800
     calls = tokens = hits = npages = 0
     for page in pages.discover():
         if year and page.series != year:
@@ -109,16 +109,16 @@ def estimate(
         _, tiles = reading.select_tiles(png, scale=config.label_scale(page.series), skip=skip)
         jobs += [t for _, _, t in tiles]
         for i, img in enumerate(jobs):
-            prompt, schema = (reading.CLASSIFY_PROMPT, reading.PageInfo) if i == 0 \
-                else (reading.LABEL_PROMPT, reading._Labels)
+            prompt, schema = (reading.classify_prompt(img), reading.PageInfo) if i == 0 \
+                else (reading.label_prompt(img), reading._Labels)
             if llm.is_cached(img, prompt, schema):
                 hits += 1
                 continue
             calls += 1
-            tokens += img.shape[0] * img.shape[1] / 750
+            tokens += config.estimate_image_tokens(img.shape[1], img.shape[0])
     usd = tokens * in_price + calls * out_tokens * out_price
     typer.echo(f"pages: {npages}")
     typer.echo(f"calls: {calls} (cache hits: {hits})")
     typer.echo(f"image tokens: {tokens:,.0f}")
-    typer.echo(f"projected cost: ${usd:,.2f}  ($4/M in, $20/M out, {out_tokens} output tokens/call)")
+    typer.echo(f"projected cost: ${usd:,.2f}  (${config.PRICE_IN_PER_M:g}/M in, ${config.PRICE_OUT_PER_M:g}/M out, {out_tokens} output tokens/call)")
     typer.echo("note: mask boxes are unknown without Claude, so tiles are excluded by neatline only (upper bound).")

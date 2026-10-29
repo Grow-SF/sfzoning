@@ -27,3 +27,16 @@ LABEL_SCALE: dict[str, float] = {}
 
 def label_scale(series: str) -> float:
     return LABEL_SCALE.get(series, 0.5)
+
+
+# Vision provider parameters (provider-specific; change when the client is swapped).
+VISION_TILE = 1568
+VISION_OVERLAP = 160
+VISION_MAX_EDGE = 2576
+VISION_THUMB = 1024
+PRICE_IN_PER_M = 4.0
+PRICE_OUT_PER_M = 20.0
+
+
+def estimate_image_tokens(w: int, h: int) -> int:
+    return round(w * h / 750)

@@ -124,3 +124,20 @@ def test_calibrate_picks_smallest_adequate_scale(tmp_path):
     from sfzmaps import config
     assert config.label_scale("t") == 0.5
     config.LABEL_SCALE.pop("t")
+
+
+def test_out_of_bounds_labels_dropped(tmp_path):
+    p = page(tmp_path, 1000, 1000, full_ink)  # scale 1.0 -> one 1000x1000 tile
+    c = Fake(lambda *a: _Labels(labels=[lab(500, 500, "ok"), lab(1500, 10, "far"),
+                                        lab(-5, 10, "neg")]))
+    out = reading.read_labels(p, scale=1.0, client=c)
+    assert [l.text for l in out] == ["ok"]
+
+
+def test_prompt_states_image_size(tmp_path):
+    p = page(tmp_path, 1000, 600, full_ink)
+    seen = []
+    c = Fake(lambda img, prompt, s, n: (seen.append(prompt), _Labels(labels=[]))[1])
+    reading.read_labels(p, scale=1.0, client=c)
+    assert "1000 pixels wide and 600 pixels high" in seen[0]
+    assert "Claude" not in reading.LABEL_PROMPT + reading.CLASSIFY_PROMPT

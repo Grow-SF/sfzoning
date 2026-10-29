@@ -12,10 +12,10 @@ import cv2
 import numpy as np
 from pydantic import BaseModel
 
-from sfzmaps.config import CACHE_DIR, MODEL
+from sfzmaps.config import CACHE_DIR, MODEL, VISION_MAX_EDGE
 
 T = TypeVar("T", bound=BaseModel)
-MAX_EDGE = 2576
+MAX_EDGE = VISION_MAX_EDGE
 log = logging.getLogger(__name__)
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 

@@ -12,14 +12,13 @@ from pydantic import BaseModel
 from sfzmaps import config, llm
 from sfzmaps.pages import neatline_mask
 
-THUMB_EDGE = 1024
 INK_MIN = 0.005
 INK_LEVEL = 170  # gray < this counts as ink (area-averaged lettering is lighter than 1-bit black)
 DEDUPE_PX = 40
 MATCH_PX = 40
 SCALES = (1.0, 0.75, 0.6, 0.5, 0.4, 0.33)
 
-CLASSIFY_PROMPT = """This is a low-resolution thumbnail of one page from a scanned historic San Francisco zoning map set. Pixel coordinates you return are pixels in this image.
+CLASSIFY_PROMPT = """This is a low-resolution thumbnail of one page from a scanned historic San Francisco zoning map set. It is {w} pixels wide and {h} pixels high. Return all coordinates as integer pixels in this image (x from 0 to {w}, y from 0 to {h}, origin at the top-left).
 
 Return:
 - kind: "map" if the page is a map sheet showing city blocks and streets (even if it also has a legend or title block); "cover" for a title/cover page; "legend" for a page that is mainly a legend or key; "text" for pages of prose or tables; "index" for an index or key-map page showing how sheets fit together; "other" otherwise.
@@ -29,7 +28,7 @@ Return:
 
 Do not guess; use null or empty lists when unsure."""
 
-LABEL_PROMPT = """This image is a crop of a scanned historic San Francisco zoning map. Coordinates you return are pixels in this image exactly as given (x to the right, y down, origin at the top-left).
+LABEL_PROMPT = """This image is a crop of a scanned historic San Francisco zoning map. It is {w} pixels wide and {h} pixels high. Return x and y as integer pixel coordinates within this image (x from 0 to {w}, y from 0 to {h}, origin at the top-left).
 
 Find only these printed labels:
 - block_number: assessor block numbers. They are usually 1 to 4 digits, sometimes with a letter suffix (for example "26" or "3721A"), and printed inside a block.
@@ -39,6 +38,14 @@ Find only these printed labels:
 For each label give its text and the pixel center (x, y) of the printed text, plus a confidence from 0 to 1.
 
 Ignore zoning district codes (R-1, C-2, M-1, "P" and the like), legend text, sheet titles, notes, and lot dimensions or lot numbers. If a label is cut off by the image edge, skip it. Return an empty list rather than guessing."""
+
+
+def classify_prompt(img: np.ndarray) -> str:
+    return CLASSIFY_PROMPT.format(h=img.shape[0], w=img.shape[1])
+
+
+def label_prompt(img: np.ndarray) -> str:
+    return LABEL_PROMPT.format(h=img.shape[0], w=img.shape[1])
 
 
 class Box(BaseModel):
@@ -104,7 +111,7 @@ def _gray(img: np.ndarray) -> np.ndarray:
 
 def thumbnail(img: np.ndarray) -> tuple[np.ndarray, float]:
     g = _gray(img)
-    s = min(1.0, THUMB_EDGE / max(g.shape))
+    s = min(1.0, config.VISION_THUMB / max(g.shape))
     if s < 1:
         g = cv2.resize(g, (max(1, round(g.shape[1] * s)), max(1, round(g.shape[0] * s))),
                        interpolation=cv2.INTER_AREA)
@@ -115,7 +122,7 @@ def classify_page(png_path: Path, *, client: llm.LLMClient | None = None) -> Pag
     img = _read_gray(png_path)
     h, w = img.shape[:2]
     thumb, _ = thumbnail(img)
-    info = llm.ask_json(thumb, CLASSIFY_PROMPT, PageInfo, client=client)
+    info = llm.ask_json(thumb, classify_prompt(thumb), PageInfo, client=client)
     fx, fy = w / thumb.shape[1], h / thumb.shape[0]
     boxes = []
     for b in info.mask_boxes:
@@ -133,7 +140,7 @@ def exclusion_mask(img: np.ndarray, info: PageInfo | None = None) -> np.ndarray:
     return skip
 
 
-def select_tiles(img: np.ndarray, *, scale: float, tile: int = 1568, overlap: int = 160,
+def select_tiles(img: np.ndarray, *, scale: float, tile: int = config.VISION_TILE, overlap: int = config.VISION_OVERLAP,
                  skip: np.ndarray | None = None
                  ) -> tuple[np.ndarray, list[tuple[int, int, np.ndarray]]]:
     """Downscale by `scale` and cut tiles; drop blank and fully excluded ones.
@@ -165,15 +172,18 @@ def select_tiles(img: np.ndarray, *, scale: float, tile: int = 1568, overlap: in
     return g, out
 
 
-def read_labels(png_path: Path, *, scale: float, tile: int = 1568, overlap: int = 160,
+def read_labels(png_path: Path, *, scale: float, tile: int = config.VISION_TILE, overlap: int = config.VISION_OVERLAP,
                 skip: np.ndarray | None = None,
                 client: llm.LLMClient | None = None) -> list[Label]:
     img = _read_gray(png_path)
     _, tiles = select_tiles(img, scale=scale, tile=tile, overlap=overlap, skip=skip)
     out: list[Label] = []
     for x0, y0, t in tiles:
-        res = llm.ask_json(t, LABEL_PROMPT, _Labels, client=client)
+        res = llm.ask_json(t, label_prompt(t), _Labels, client=client)
+        th, tw = t.shape[:2]
         for lb in res.labels:
+            if not (0 <= lb.x <= tw and 0 <= lb.y <= th):
+                continue  # outside the tile: provider coordinate error
             out.append(lb.model_copy(update={"x": round((lb.x + x0) / scale),
                                              "y": round((lb.y + y0) / scale)}))
     return _dedupe(out)
