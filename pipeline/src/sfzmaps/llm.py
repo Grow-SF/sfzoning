@@ -3,6 +3,7 @@ import argparse
 import base64
 import hashlib
 import json
+import logging
 import os
 import sys
 from typing import Protocol, TypeVar
@@ -15,6 +16,7 @@ from sfzmaps.config import CACHE_DIR, MODEL
 
 T = TypeVar("T", bound=BaseModel)
 MAX_EDGE = 2576
+log = logging.getLogger(__name__)
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 
 
@@ -72,6 +74,8 @@ class AnthropicClient:
             raise LLMAuthError(f"Anthropic authentication failed: {e}") from None
         if resp.stop_reason == "refusal":
             raise LLMRefusal("Claude refused the request")
+        if resp.stop_reason == "max_tokens":
+            raise RuntimeError("Claude response truncated (stop_reason=max_tokens); raise max_tokens")
         if resp.parsed_output is None:
             raise RuntimeError(f"no parsed output (stop_reason={resp.stop_reason})")
         return resp.parsed_output
@@ -97,8 +101,14 @@ def ask_json(image: np.ndarray, prompt: str, schema: type[T], *,
     png = buf.tobytes()
     path = CACHE_DIR / "llm" / f"{_key(png, prompt, schema)}.json"
     if path.exists():
-        CallCounter.hits += 1
-        return schema.model_validate_json(path.read_text())
+        try:
+            cached = schema.model_validate_json(path.read_text())
+        except (ValueError, OSError) as e:
+            log.warning("discarding bad cache file %s: %s", path.name, e)
+            path.unlink(missing_ok=True)
+        else:
+            CallCounter.hits += 1
+            return cached
     if client is None:
         client = AnthropicClient()
     result = client.call(png, prompt, schema)
@@ -115,6 +125,8 @@ class _Sheet(BaseModel):
 
 
 def _smoke(path: str) -> int:
+    import anthropic
+
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         print(f"cannot read image: {path}", file=sys.stderr)
@@ -124,8 +136,11 @@ def _smoke(path: str) -> int:
         img = cv2.resize(img, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
     try:
         out = ask_json(img, "What is the sheet number printed on this map?", _Sheet)
-    except (LLMAuthError, LLMRefusal) as e:
+    except (LLMAuthError, LLMRefusal, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
+        return 1
+    except anthropic.APIError as e:
+        print(f"error: {type(e).__name__}: {e}".splitlines()[0], file=sys.stderr)
         return 1
     print("cache hit" if CallCounter.hits else "live call")
     print(out.sheet_number)

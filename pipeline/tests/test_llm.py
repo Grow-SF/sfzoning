@@ -59,3 +59,13 @@ def test_missing_key_clear_error(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
     with pytest.raises(llm.LLMAuthError, match="ANTHROPIC_API_KEY"):
         llm.AnthropicClient()
+
+
+def test_corrupt_cache_recovers(tmp_path):
+    c = FakeClient()
+    llm.ask_json(IMG, "hello", Ans, client=c)
+    f = next((tmp_path / "llm").glob("*.json"))
+    f.write_text("garbage{")
+    r = llm.ask_json(IMG, "hello", Ans, client=c)
+    assert r == Ans(n=5) and c.calls == 2
+    assert llm.ask_json(IMG, "hello", Ans, client=c) == r and c.calls == 2
