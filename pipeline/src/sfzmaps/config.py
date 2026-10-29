@@ -17,7 +17,9 @@ PASS_FRACTION = 0.95
 TPS_SMOOTHING = 50.0
 
 VISION_PROVIDER = "openai"
-VISION_MODEL = "gpt-6-astra"
+VISION_MODEL = "gpt-6.1-sol"
+VISION_REASONING_EFFORT = "low"  # lowest level documented for this model (low..max)
+VISION_CONCURRENCY = 8
 
 ROOT_FOLDER_ID = "10p74RwqmzeQFBrBqjxXdmEOUREx0BLgO"
 
@@ -54,8 +56,10 @@ def save_label_scale(series: str, scale: float) -> None:
 
 
 # Vision provider parameters (provider-specific; change when the client is swapped).
-# gpt-6-astra, detail "high": <= 2,500 32-px patches (image shrunk to fit), 1.2 tokens/patch.
-# Source: https://developers.openai.com/api/docs/guides/images-vision
+# gpt-6.1-sol is not listed in the images guide's detail table; the closest listed sibling,
+# gpt-5.6-sol, has detail "high" = fit 2048x2048 and <= 2,500 32-px patches, 1.2 tokens/patch
+# (same as gpt-6-astra). Verify with live usage. Source:
+# https://developers.openai.com/api/docs/guides/images-vision
 VISION_TILE = 768
 VISION_OVERLAP = 96
 VISION_MAX_EDGE = 2048
@@ -63,9 +67,9 @@ VISION_THUMB = 1024
 PATCH = 32
 PATCH_BUDGET = 2500
 PATCH_MULTIPLIER = 1.2
-# gpt-6-astra: $10/M in, $50/M out (https://developers.openai.com/api/docs/models)
-PRICE_IN_PER_M = 10.0
-PRICE_OUT_PER_M = 50.0
+# gpt-6.1-sol: $2/M in, $10/M out (https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+PRICE_IN_PER_M = 2.0
+PRICE_OUT_PER_M = 10.0
 EST_OUT_TOKENS = 800
 
 
@@ -73,6 +77,9 @@ def estimate_image_tokens(w: int, h: int) -> int:
     """Billable input tokens for one high-detail image (OpenAI patch formula)."""
     import math
 
+    if max(w, h) > VISION_MAX_EDGE:  # fit within the 2048 box first
+        f = VISION_MAX_EDGE / max(w, h)
+        w, h = int(w * f), int(h * f)
     patches = math.ceil(w / PATCH) * math.ceil(h / PATCH)
     if patches > PATCH_BUDGET:
         shrink = math.sqrt(PATCH * PATCH * PATCH_BUDGET / (w * h))

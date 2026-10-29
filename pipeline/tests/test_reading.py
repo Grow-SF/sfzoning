@@ -9,6 +9,7 @@ from sfzmaps.reading import Box, Label, PageInfo, _Labels
 @pytest.fixture(autouse=True)
 def tmp_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(llm, "CACHE_DIR", tmp_path / "cache")
+    monkeypatch.setattr(reading.config, "VISION_CONCURRENCY", 1)  # call-order-dependent fakes
     llm.CallCounter.reset()
 
 
@@ -154,3 +155,25 @@ def test_prompt_states_image_size(tmp_path):
     reading.read_labels(p, scale=1.0, client=c, **T)
     assert "1000 pixels wide and 600 pixels high" in seen[0]
     assert "Claude" not in reading.LABEL_PROMPT + reading.CLASSIFY_PROMPT
+
+
+def test_concurrent_read_matches_sequential(tmp_path, monkeypatch):
+    import random
+    import time
+    from sfzmaps import config
+
+    p = page(tmp_path, 3600, 1800, full_ink)
+
+    def fn(img, prompt, schema, n):
+        time.sleep(random.random() * 0.02)
+        h, w = img.shape[:2]
+        # deterministic from tile content, not call order
+        k = int(img.sum()) % 97
+        return _Labels(labels=[lab(10 + k % 50, 10 + k % 30, f"b{k}"), lab(w // 2, h // 2, f"c{w}x{h}")])
+
+    monkeypatch.setattr(config, "VISION_CONCURRENCY", 1)
+    seq = reading.read_labels(p, scale=0.5, client=Fake(fn), **T)
+    monkeypatch.setattr(llm, "CACHE_DIR", tmp_path / "cache2")
+    monkeypatch.setattr(config, "VISION_CONCURRENCY", 8)
+    par = reading.read_labels(p, scale=0.5, client=Fake(fn), **T)
+    assert seq == par and len(seq) > 2

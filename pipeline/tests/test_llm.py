@@ -89,6 +89,8 @@ class FakeResponses:
 def _client(resp):
     c = llm.OpenAIClient.__new__(llm.OpenAIClient)
     c._client = types.SimpleNamespace(responses=FakeResponses(resp))
+    import openai
+    c._openai = openai
     return c
 
 
@@ -123,6 +125,31 @@ def test_openai_incomplete_raises():
     r = _resp(status="incomplete", reason="max_output_tokens")
     with pytest.raises(RuntimeError, match="max_output_tokens"):
         _client(r).call(b"x", "p", Ans)
+
+
+def test_openai_truncated_json_raises_runtime_error():
+    def boom(**kw):
+        Ans.model_validate_json('{"n": ')  # what parse() does on truncated output
+
+    c = _client(None)
+    c._client.responses.parse = boom
+    with pytest.raises(RuntimeError, match="incomplete or invalid JSON"):
+        c.call(b"x", "p", Ans)
+
+
+def test_request_sets_reasoning_effort():
+    c = _client(_resp(parsed=Ans(n=1)))
+    c.call(b"x", "p", Ans)
+    assert c._client.responses.kwargs["reasoning"] == {"effort": config.VISION_REASONING_EFFORT}
+
+
+def test_concurrent_cache_writes_do_not_collide(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    c = FakeClient()
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(lambda _: llm.ask_json(IMG, "same", Ans, client=c), range(16)))
+    assert not list((tmp_path / "llm").glob("*.tmp*"))
+    assert llm.ask_json(IMG, "same", Ans, client=c) == Ans(n=4)
 
 
 def test_cache_key_includes_provider(monkeypatch):

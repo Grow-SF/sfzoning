@@ -6,15 +6,16 @@ import json
 import logging
 import os
 import sys
+import tempfile
+import threading
+from pathlib import Path
 from typing import Protocol, TypeVar
 
 import cv2
 import numpy as np
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
-from pathlib import Path
-
-from sfzmaps.config import CACHE_DIR, PIPELINE_DIR, VISION_MAX_EDGE, VISION_MODEL, VISION_PROVIDER
+from sfzmaps.config import CACHE_DIR, PIPELINE_DIR, VISION_MAX_EDGE, VISION_MODEL, VISION_PROVIDER, VISION_REASONING_EFFORT
 
 T = TypeVar("T", bound=BaseModel)
 MAX_EDGE = VISION_MAX_EDGE
@@ -34,6 +35,12 @@ class LLMAuthError(RuntimeError):
 class CallCounter:
     live = 0
     hits = 0
+    _lock = threading.Lock()
+
+    @classmethod
+    def bump(cls, field: str) -> None:
+        with cls._lock:
+            setattr(cls, field, getattr(cls, field) + 1)
 
     @classmethod
     def reset(cls) -> None:
@@ -75,6 +82,7 @@ class OpenAIClient:
                 model=VISION_MODEL,
                 max_output_tokens=MAX_OUT_TOKENS,
                 text_format=schema,
+                reasoning={"effort": VISION_REASONING_EFFORT},
                 input=[{
                     "role": "user",
                     "content": [
@@ -86,6 +94,9 @@ class OpenAIClient:
             )
         except self._openai.AuthenticationError:
             raise LLMAuthError("OPENAI_API_KEY missing or invalid") from None
+        except ValidationError:
+            # parse() validates the JSON itself; output cut off by max_output_tokens lands here
+            raise RuntimeError("response incomplete or invalid JSON") from None
         for item in resp.output:
             if item.type == "message" and any(c.type == "refusal" for c in item.content):
                 raise LLMRefusal("model refused the request")
@@ -132,16 +143,21 @@ def ask_json(image: np.ndarray, prompt: str, schema: type[T], *,
             log.warning("discarding bad cache file %s: %s", path.name, e)
             path.unlink(missing_ok=True)
         else:
-            CallCounter.hits += 1
+            CallCounter.bump("hits")
             return cached
     if client is None:
         client = OpenAIClient()
     result = client.call(png, prompt, schema)
-    CallCounter.live += 1
+    CallCounter.bump("live")
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(result.model_dump_json())
-    tmp.replace(path)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.stem + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(result.model_dump_json())
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
     return result
 
 
