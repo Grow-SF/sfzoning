@@ -1,0 +1,126 @@
+import cv2
+import geopandas as gpd
+import numpy as np
+import pytest
+import rasterio
+from shapely.geometry import box
+
+from sfzmaps import warp
+from sfzmaps.reading import Box
+from sfzmaps.transform import GCP, SheetTransform
+from synthetic import make_sheet
+
+PX_PER_FT = 0.55
+
+
+def _blocks():
+    rows, geoms = [], []
+    for i in range(5):
+        for j in range(5):
+            rows.append(f"{i * 5 + j + 1:04d}")
+            x, y = 6_005_000.0 + j * 460, 2_115_000.0 + i * 330
+            geoms.append(box(x, y, x + 400, y + 270))
+    return gpd.GeoDataFrame({"block_num": rows}, geometry=geoms, crs="EPSG:2227")
+
+
+def _stretch(p):
+    a = 8.0
+    x, y = p[..., 0], p[..., 1]
+    return np.stack([x + a * np.sin(x / 700 + 0.3) * np.cos(y / 900),
+                     y + a * np.cos(x / 800) * np.sin(y / 600 + 1.0)], axis=-1)
+
+
+@pytest.fixture(scope="module")
+def warped(tmp_path_factory):
+    d = tmp_path_factory.mktemp("warp")
+    sheet = make_sheet(_blocks(), px_per_ft=PX_PER_FT, rotation_deg=3.0, distortion=_stretch,
+                       style="filled", seed=1)
+    h, w = sheet.img.shape
+    xs, ys = np.meshgrid(np.linspace(0, w - 1, 8), np.linspace(0, h - 1, 8))
+    P = np.c_[xs.ravel(), ys.ravel()]
+    W = sheet.true_px_to_world(P)
+    t = SheetTransform([GCP(*p, *q, "auto") for p, q in zip(P, W)], smoothing=1.0).fit()
+    png = d / "page.png"
+    cv2.imwrite(str(png), sheet.img)
+    box_ = Box(x0=0, y0=0, x1=300, y1=250)
+    sheet.img[0:250, 0:300] = 0  # ink under the mask box to prove masking, not paper
+    cv2.imwrite(str(png), sheet.img)
+    out = warp.warp_sheet(png, t, [box_], d / "out.tif")
+    return sheet, t, out
+
+
+def test_warp_places_pixel_correctly(warped):
+    sheet, t, out = warped
+    with rasterio.open(out) as ds:
+        assert ds.crs.to_epsg() == 2227
+        assert ds.count == 4
+        res = ds.res[0]
+        alpha = ds.read(4)
+        for g in _blocks().geometry[7:18:5]:  # interior blocks
+            for cx, cy, sx, sy in [(g.bounds[0], g.bounds[1], 1, 1), (g.bounds[2], g.bounds[3], -1, -1)]:
+                r_in, c_in = ds.index(cx + sx * 3 * res, cy + sy * 3 * res)
+                r_out, c_out = ds.index(cx - sx * 4 * res, cy - sy * 4 * res)
+                assert alpha[r_in, c_in] == 255
+                assert alpha[r_out, c_out] == 0
+
+
+def test_paper_is_transparent(warped):
+    sheet, t, out = warped
+    with rasterio.open(out) as ds:
+        rgba = ds.read()
+        # world point in a street between blocks (paper)
+        r, c = ds.index(6_005_000.0 + 430, 2_115_000.0 + 135)
+    assert rgba[3, r, c] == 0
+    assert (rgba[3] == 0).mean() > 0.2
+
+
+def test_no_white_halo(tmp_path):
+    """Soft (anti-aliased) ink on white paper: partially transparent pixels stay dark."""
+    sheet = make_sheet(_blocks(), px_per_ft=PX_PER_FT, rotation_deg=3.0, distortion=_stretch,
+                       style="filled", seed=1)
+    soft = cv2.GaussianBlur(sheet.img, (0, 0), 1.5)
+    png = tmp_path / "soft.png"
+    cv2.imwrite(str(png), soft)
+    h, w = soft.shape
+    P = np.array([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]], float)
+    t = SheetTransform([GCP(*p, *sheet.true_px_to_world(p), "auto") for p in P], smoothing=1.0).fit()
+    out = warp.warp_sheet(png, t, [], tmp_path / "o.tif")
+    with rasterio.open(out) as ds:
+        rgba = ds.read()
+    semi = (rgba[3] > 0) & (rgba[3] < 255)
+    assert semi.sum() > 1000
+    assert rgba[0][semi].max() < 150, rgba[0][semi].max()  # paper white is 255
+    assert rgba[0][semi].mean() < 120
+
+
+def test_mask_box_is_transparent(warped):
+    sheet, t, out = warped
+    wx, wy = t.to_world(np.array([[150.0, 120.0]]))[0]
+    with rasterio.open(out) as ds:
+        r, c = ds.index(wx, wy)
+        assert ds.read(4)[r, c] == 0
+
+
+def test_resolution_is_median_scale(warped):
+    sheet, t, out = warped
+    with rasterio.open(out) as ds:
+        assert ds.res[0] == pytest.approx(1 / PX_PER_FT, rel=0.05)
+
+
+def test_color_paper_rule(tmp_path):
+    img = np.full((200, 200, 3), (225, 235, 240), np.uint8)  # warm paper tone, BGR
+    img[50:100, 50:100] = (40, 40, 200)  # red ink
+    img[120:160, 20:60] = (190, 120, 60)  # blue-ish colored area, luminance < otsu
+    a = warp.paper_alpha(img)
+    assert a[10, 10] == 0
+    assert a[75, 75] == 255
+    assert a[140, 40] == 255
+
+
+def test_gray_alpha_soft_edge():
+    g = np.full((10, 10), 255, np.uint8)
+    g[:, 5:] = 0
+    g[:, 4] = 175  # anti-aliased edge pixel
+    a = warp.paper_alpha(g)
+    assert a[0, 0] == 0 and a[0, 8] == 255
+    assert 0 < a[0, 4] < 255
