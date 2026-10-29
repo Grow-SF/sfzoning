@@ -25,14 +25,25 @@ fit is affine only: a TPS on so few points is unstable.
 Conditioning: EPSG:2227 coordinates are ~6e6/2e6 ft. Both pixel and world coordinates
 are centered internally (world by its mean, pixels also scaled) before any fit.
 
+Smoothing is ignored with fewer than 10 GCPs (affine only). Its effect depends on GCP
+count and density, so a value tuned on one sheet does not transfer to another.
+
+Fit state: fit() returns self. to_world/to_pixel fit lazily and keep a signature of
+(enabled GCP tuples, smoothing) taken at fit time; if GCPs or smoothing change afterwards
+(including from_json, which does not fit) the next evaluation refits automatically.
+Collinear or degenerate GCPs raise ValueError.
+
 to_pixel: rather than fit an independent reverse TPS (which cannot guarantee a round
 trip), invert the forward model numerically: start from the inverse of the affine part and
-run fixed-point iterations p += A^-1 (w - to_world(p)). The TPS part is small and smooth,
-so this converges to far below 0.5 px in a few steps and is exactly consistent with
-to_world.
+run fixed-point iterations p += A^-1 (w - to_world(p)). For gentle warps this converges to
+far below 0.5 px in a few steps and is exactly consistent with to_world. Points whose
+residual stays above 0.1 px afterwards get damped Newton steps (numerical Jacobian); any
+still unconverged are returned as NaN with one warnings.warn naming the count (never
+raises, never returns a wrong value).
 """
 from __future__ import annotations
 
+import warnings
 from dataclasses import asdict, dataclass
 from typing import Literal
 
@@ -43,6 +54,8 @@ MIN_GCPS = 3
 TPS_MIN_GCPS = 10
 _INV_ITERS = 25
 _INV_TOL_PX = 1e-6
+_CONVERGED_PX = 0.1
+_MIN_COND = 1e-6
 
 
 @dataclass
@@ -63,6 +76,14 @@ class SheetTransform:
     def __post_init__(self):
         self._fitted = False
         self._rbf = None
+        self._sig = None
+
+    def _signature(self):
+        return (tuple((g.px, g.py, g.wx, g.wy) for g in self._enabled()), self.smoothing)
+
+    def _ensure_fit(self):
+        if not self._fitted or self._sig != self._signature():
+            self.fit()
 
     # -- fitting -----------------------------------------------------------
     def _enabled(self) -> list[GCP]:
@@ -81,6 +102,9 @@ class SheetTransform:
         self._ps = float(np.abs(P - self._pm).max()) or 1.0
         self._wm = W.mean(0)
         Pn = (P - self._pm) / self._ps
+        sv = np.linalg.svd(Pn, compute_uv=False)
+        if len(sv) < 2 or sv[0] == 0 or sv[1] / sv[0] < _MIN_COND:
+            raise ValueError("GCPs are collinear/degenerate")
         A = np.c_[Pn, np.ones(len(Pn))]
         coef, *_ = np.linalg.lstsq(A, W - self._wm, rcond=None)
         self._coef = coef  # (3,2): ft per normalized unit
@@ -92,13 +116,13 @@ class SheetTransform:
         # d(world)/d(px) of the affine part, for inversion
         self._lin = coef[:2].T / self._ps
         self._lin_inv = np.linalg.inv(self._lin)
+        self._sig = self._signature()
         self._fitted = True
         return self
 
     # -- evaluation --------------------------------------------------------
     def to_world(self, px: np.ndarray) -> np.ndarray:
-        if not self._fitted:
-            self.fit()
+        self._ensure_fit()
         p = np.atleast_2d(np.asarray(px, float))
         pn = (p - self._pm) / self._ps
         out = np.c_[pn, np.ones(len(pn))] @ self._coef
@@ -107,14 +131,58 @@ class SheetTransform:
         return out + self._wm
 
     def to_pixel(self, w: np.ndarray) -> np.ndarray:
-        if not self._fitted:
-            self.fit()
+        self._ensure_fit()
         w = np.atleast_2d(np.asarray(w, float))
         p = self._pm + (w - self.to_world(self._pm[None])) @ self._lin_inv.T
         for _ in range(_INV_ITERS):
             step = (w - self.to_world(p)) @ self._lin_inv.T
             p = p + step
             if np.abs(step).max() < _INV_TOL_PX:
+                break
+
+        def err(q, ww):
+            return np.linalg.norm((ww - self.to_world(q)) @ self._lin_inv.T, axis=1)
+
+        e = err(p, w)
+        bad = ~(e <= _CONVERGED_PX)
+        if bad.any():
+            p = p.copy()
+            p[bad] = self._newton(p[bad], w[bad])
+            e = err(np.nan_to_num(p), w)
+            bad = ~(e <= _CONVERGED_PX) | ~np.isfinite(p).all(axis=1)
+            if bad.any():
+                p[bad] = np.nan
+                warnings.warn(f"to_pixel: {int(bad.sum())} point(s) did not converge; "
+                              "returned NaN", RuntimeWarning, stacklevel=2)
+        return p
+
+    def _newton(self, p, w, iters=60):
+        """Damped Newton with numerical Jacobian, per point (vectorized over points)."""
+        p = p.copy()
+        h = 0.5  # px
+        for _ in range(iters):
+            f0 = self.to_world(p)
+            r = w - f0
+            ex = (self.to_world(p + [h, 0]) - f0) / h
+            ey = (self.to_world(p + [0, h]) - f0) / h
+            det = ex[:, 0] * ey[:, 1] - ey[:, 0] * ex[:, 1]
+            det = np.where(np.abs(det) < 1e-12, np.nan, det)
+            dx = (r[:, 0] * ey[:, 1] - ey[:, 0] * r[:, 1]) / det
+            dy = (ex[:, 0] * r[:, 1] - r[:, 0] * ex[:, 1]) / det
+            d = np.c_[dx, dy]
+            d = np.where(np.isfinite(d), d, 0.0)
+            r0 = np.linalg.norm(r, axis=1)
+            t = np.ones(len(p))
+            for _ in range(12):  # backtracking line search
+                cand = p + d * t[:, None]
+                ok = np.linalg.norm(w - self.to_world(cand), axis=1) < r0
+                if ok.all():
+                    break
+                t = np.where(ok, t, t * 0.5)
+            cand = p + d * t[:, None]
+            ok = np.linalg.norm(w - self.to_world(cand), axis=1) < r0
+            p = np.where(ok[:, None], cand, p)
+            if np.abs(d * t[:, None]).max() < _INV_TOL_PX:
                 break
         return p
 

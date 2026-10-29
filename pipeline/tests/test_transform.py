@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pytest
 
@@ -112,3 +114,56 @@ def test_dense_grid_covers_image_including_edges():
     assert len(g) == len(xs) * len(ys)
     p = np.array([[x.px, x.py] for x in g])
     assert np.allclose(t.to_world(p), [[x.wx, x.wy] for x in g])
+
+
+def _strong(p):
+    p = np.asarray(p, float)
+    u = p / 7000.0
+    d = np.c_[3000 * np.sin(6 * u[:, 1]), 3000 * np.sin(6 * u[:, 0])]
+    return _affine(p) + d
+
+
+def test_strong_warp_converged_or_nan():
+    t = SheetTransform(_grid(_strong, n=14), smoothing=0.01).fit()
+    q = np.random.default_rng(2).uniform(300, 6700, (300, 2))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        back = t.to_pixel(t.to_world(q))
+    ok = np.isfinite(back).all(axis=1)
+    assert ok.sum() >= 250
+    assert np.abs(back[ok] - q[ok]).max() < 0.5
+    # never wrong: any non-finite row is fully NaN
+    assert np.isnan(back[~ok]).all()
+
+
+def test_unconvergeable_gives_nan_and_warns():
+    t = SheetTransform(_grid(_warped), smoothing=1.0).fit()
+    far = np.array([[1e12, 1e12]])  # unreachable world point
+    with pytest.warns(RuntimeWarning, match="1 point"):
+        out = t.to_pixel(far)
+    assert np.isnan(out).all()
+
+
+def test_refit_when_gcp_moves():
+    gcps = _grid(_affine, n=4)
+    t = SheetTransform(gcps, smoothing=1.0).fit()
+    q = np.array([[gcps[5].px, gcps[5].py]])
+    before = t.to_world(q).copy()
+    gcps[5].wx += 500.0
+    assert np.linalg.norm(t.to_world(q) - before) > 1.0
+    t.smoothing = 5.0
+    t.to_world(q)
+    assert t._sig[1] == 5.0
+
+
+def test_from_json_without_fit():
+    t = SheetTransform(_grid(_warped, n=4), smoothing=1.0)
+    t2 = SheetTransform.from_json(t.to_json())
+    assert np.allclose(t2.to_world(np.array([[1000.0, 1000.0]])),
+                       t.fit().to_world(np.array([[1000.0, 1000.0]])))
+
+
+def test_collinear_rejected():
+    gcps = [GCP(i * 100.0, i * 100.0, 6e6 + i, 2e6 + i, "auto") for i in range(12)]
+    with pytest.raises(ValueError, match="collinear"):
+        SheetTransform(gcps, smoothing=1.0).fit()
