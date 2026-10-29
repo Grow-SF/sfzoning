@@ -531,7 +531,7 @@ Stage artifacts per sheet in `data/work/<series>/<sheet_id>/`: `page.png`, `page
 - Modify: `docs/superpowers/notes/2026-10-29-tuning.md` (final per-series table)
 - Create: `pipeline/README.md` (setup: `brew install pmtiles`, `uv sync`, `OPENAI_API_KEY`; commands in order; where outputs land; how to review/edit)
 
-- [ ] **Step 1:** Run `uv run sfzmaps fetch && uv run sfzmaps estimate --all`, and **stop to show the owner the dollar estimate before continuing.**
+- [ ] **Step 1:** Run `uv run sfzmaps fetch`. (The owner waived the pre-spend estimate gate: no need to stop for approval. `estimate` stays available as a tool.)
 - [ ] **Step 2:** Run `uv run sfzmaps run --all`. Expected: every discovered page is either skipped with a kind, passed, or `needs_review` with a reason. No crashes; failures in one sheet don't stop the others (logged in `out/run-<timestamp>.log`).
 - [ ] **Step 3:** Fill in the tuning notes with a per-series table: sheets, passed, needs_review, median p95_ft, PMTiles size, and size per zoom.
 - [ ] **Step 4:** Write `pipeline/README.md`. Include "Recreate without re-running": `sfzmaps fetch && sfzmaps pull && sfzmaps run --all` (zero API spend).
