@@ -22,6 +22,7 @@ from shapely.geometry import MultiPolygon, Point, Polygon
 from sfzmaps.reading import Label
 
 MARGIN_PX = 100
+MAX_INVERSE_ITERS = 100
 OUTLINE_PX = 3
 _SHIFT = 4  # cv2 sub-pixel bits
 _FONT = cv2.FONT_HERSHEY_SIMPLEX
@@ -87,11 +88,13 @@ def make_sheet(blocks: gpd.GeoDataFrame, *, px_per_ft: float, rotation_deg: floa
         # Fixed-point inverse of the distortion; converges to machine
         # precision for mild (contractive) distortions.  Used for labels
         # and by tests; the forward true_px_to_world is closed-form.
-        for _ in range(100):
+        for _ in range(MAX_INVERSE_ITERS):
             step = distortion(x) - u
             x = x - step
             if np.abs(step).max() < 1e-9:
                 break
+        else:
+            raise ValueError("distortion inverse did not converge; distortion is not contractive")
         return x
 
     # Draw the undistorted sheet, then inverse-warp it through the distortion.

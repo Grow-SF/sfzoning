@@ -106,7 +106,7 @@ def test_make_sheet_px_to_world_round_trips():
 
 def test_block_corners_px_rectangles():
     polys = [box(0, 0, 100, 60), Polygon([(200, 0), (300, 0), (300, 80), (250, 80), (250, 40), (200, 40)])]
-    c = linework.block_corners_px(polys)
+    c = linework.block_corners_px(polys, street_px=20.0)
     assert c.shape == (4 + 6, 2)
 
 
@@ -125,4 +125,35 @@ def test_extract_blocks_real_1968_crop():
     polys = _real("crop_1968.png")
     assert abs(len(polys) - HAND_COUNT_1968) <= 1
     areas = np.array([p.area for p in polys])
-    assert areas.max() <= 1.5 * np.median(areas)
+    # Controller ruling R12: at most one merged block.  Known merge: the C-2
+    # block (overlay label 70, x~1000-1415, y~1230-1325), where a street
+    # segment boxed in by a jogging district line around the "C-2" lettering
+    # is read as block and bridges the two blocks on either side.
+    assert (areas > 1.5 * np.median(areas)).sum() <= 1
+
+
+def test_extract_blocks_exclude_region():
+    """exclude=True marks excluded pixels (same polarity as reading.exclusion_mask)."""
+    blocks = _grid_blocks()
+    sheet = make_sheet(blocks, px_per_ft=0.55, rotation_deg=0.0, distortion=lambda p: p, style="outline")
+    h, w = sheet.img.shape
+    exclude = np.zeros((h, w), bool)
+    exclude[:, : w // 2] = True
+    polys = linework.extract_blocks(sheet.img, exclude)
+    assert polys
+    assert all(p.bounds[0] > w // 2 for p in polys)
+    assert len(polys) < 9
+
+
+def test_block_corners_px_ignores_text_notch():
+    # 400 x 200 px rectangle with a 6 px deep, 30 px wide notch on the top edge.
+    ring = [(0, 0), (180, 0), (180, 6), (210, 6), (210, 0), (400, 0), (400, 200), (0, 200)]
+    c = linework.block_corners_px([Polygon(ring)], street_px=25.0)
+    assert len(c) == 4
+
+
+def test_make_sheet_rejects_non_contractive_distortion():
+    # p -> 3p - 2*500 has fixed point 500 but expands errors 3x per step.
+    with pytest.raises(ValueError, match="did not converge"):
+        make_sheet(_grid_blocks(), px_per_ft=0.55, rotation_deg=0.0,
+                   distortion=lambda p: 3.0 * p - 1000.0, style="outline")

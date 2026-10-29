@@ -86,9 +86,6 @@ SHARE_FRACTION = 0.12
 FRAGMENT_FRACTION = 0.15
 # Final clean-up closing + opening of each block mask (px).
 CLEAN_PX = 9
-# Douglas-Peucker tolerance for block outlines (px): edge noise below this
-# (stipple, ragged print) must not create corners.
-POLY_EPS_PX = 5.0
 MIN_BLOCK_AREA = 400
 MIN_BLOCK_SOLIDITY = 0.5
 SIMPLIFY_PX = 2.0
@@ -99,6 +96,33 @@ PHOTO_TINT_FRACTION = 0.3
 # at the block's far side even when one side is dotted.
 STREET_RUN_PX = 400
 RUN_ANGLES = (0.0, 90.0, 45.0, 135.0)
+RUN_CLEAN_PX = 5             # opening that drops 1-2 px run threads through dotted outlines
+# Paper-level estimate in `binarize`.
+BG_DOWNSAMPLE = 8            # work on an 8x downsample for speed
+BG_MAX_WIN = 61              # max-filter window (x8 = ~500 px, wider than any solid block)
+BG_BLUR_WIN = 31             # smoothing of the paper estimate
+BG_PAPER_PCT = 90            # percentile taken as the clean paper level
+STREET_RUN_RANGE = (8, 150)  # white run lengths (px) considered when measuring street width
+STROKE_RANGE_HALFPX = (2, 12)  # ridge values (half-px bins) considered thin strokes
+MIN_INTERSECT_DEG = 20.0     # edges closer to parallel than this are not intersected
+# Corner extraction (`block_corners_px`), all scaled by the sheet's street width.
+STREET_FT = 64.0             # typical SF street right-of-way, ft (sets px-per-ft)
+SIMPLIFY_FT = 2.0            # same simplification as datasf.block_corners, in ft
+MIN_EDGE_STREET_FRAC = 0.5   # corner edges shorter than this x street width are bumps/notches
+POLY_EPS_STREET_FRAC = 0.2   # Douglas-Peucker tolerance for outlines, x street width
+CLOSE_STREET_FRAC = 0.6      # per-block closing disk, x street width
+SMALL_EPS_FRAC = 0.1         # outline tolerance cap, x sqrt(block area)
+# In-and-out notches / bumps on a straight edge (lettering at the block
+# edge, line stubs): at most this wide and deep, x street width, with the
+# outline resuming within NOTCH_TOL of the same line.
+NOTCH_WIDTH_STREET_FRAC = 2.5
+NOTCH_DEPTH_STREET_FRAC = 1.2
+NOTCH_TOL_STREET_FRAC = 0.15
+NOTCH_MAX_VERTS = 4
+DEFAULT_STREET_PX = 25.0     # fallback street width when it cannot be measured
+# Lettering polygons: small (vs the median block) and not convex.
+LETTER_AREA_FRAC = 0.15
+LETTER_SOLIDITY = 0.85
 
 
 def _gray(img: np.ndarray) -> np.ndarray:
@@ -118,12 +142,12 @@ def binarize(img: np.ndarray, seal: bool | None = None) -> np.ndarray:
     """
     g = _gray(img)
     h, w = g.shape
-    f = 8
+    f = BG_DOWNSAMPLE
     small = cv2.resize(g, (max(1, w // f), max(1, h // f)), interpolation=cv2.INTER_AREA)
-    bg = cv2.dilate(small, np.ones((61, 61), np.uint8))
-    bg = cv2.blur(bg, (31, 31))
+    bg = cv2.dilate(small, np.ones((BG_MAX_WIN, BG_MAX_WIN), np.uint8))
+    bg = cv2.blur(bg, (BG_BLUR_WIN, BG_BLUR_WIN))
     bg = cv2.resize(bg, (w, h), interpolation=cv2.INTER_LINEAR).astype(np.float32)
-    paper = float(np.percentile(bg, 90))
+    paper = float(np.percentile(bg, BG_PAPER_PCT))
     bg = np.maximum(bg, 0.5 * paper)
     norm = np.clip(g.astype(np.float32) / np.maximum(bg, 1.0) * 255.0, 0, 255).astype(np.uint8)
     t, _ = cv2.threshold(norm, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
@@ -187,7 +211,7 @@ def street_runs(white: np.ndarray) -> np.ndarray:
     for a in RUN_ANGLES:
         long |= _runs(white, a) >= STREET_RUN_PX
     # Drop 1-2 px threads that slip through aligned gaps in dotted outlines.
-    return cv2.morphologyEx(long.astype(np.uint8), cv2.MORPH_OPEN, _disk(5)) > 0
+    return cv2.morphologyEx(long.astype(np.uint8), cv2.MORPH_OPEN, _disk(RUN_CLEAN_PX)) > 0
 
 
 def street_width(white: np.ndarray) -> float:
@@ -201,10 +225,11 @@ def street_width(white: np.ndarray) -> float:
         d = np.diff(f, axis=1)
         lens.append(np.nonzero(d.ravel() == -1)[0] - np.nonzero(d.ravel() == 1)[0])
     ln = np.concatenate(lens)
-    ln = ln[(ln >= 8) & (ln <= 150)]
+    lo, hi = STREET_RUN_RANGE
+    ln = ln[(ln >= lo) & (ln <= hi)]
     if not len(ln):
         return 2 * MIN_INTERIOR_HALFWIDTH
-    hist = np.convolve(np.bincount(ln, minlength=151).astype(float), np.ones(3) / 3, "same")
+    hist = np.convolve(np.bincount(ln, minlength=hi + 1).astype(float), np.ones(3) / 3, "same")
     return float(np.argmax(hist))
 
 
@@ -217,7 +242,7 @@ def stroke_width(ink: np.ndarray) -> float:
     d = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, 5)
     ridge = (d > 0) & (d >= cv2.dilate(d, np.ones((3, 3), np.uint8)))
     v = np.round(d[ridge] * 2).astype(int)              # half-px bins
-    v = v[(v >= 2) & (v <= 12)]
+    v = v[(v >= STROKE_RANGE_HALFPX[0]) & (v <= STROKE_RANGE_HALFPX[1])]
     if not len(v):
         return 0.0
     return max(1.0, float(np.argmax(np.bincount(v))) - 1.0)
@@ -455,20 +480,19 @@ def _fit_line(pts: np.ndarray):
 def _intersect(l1, l2):
     (p, d), (q, e) = l1, l2
     den = d[0] * e[1] - d[1] * e[0]
-    if abs(den) < math.sin(math.radians(20)):
+    if abs(den) < math.sin(math.radians(MIN_INTERSECT_DEG)):
         return None
     t = ((q[0] - p[0]) * e[1] - (q[1] - p[1]) * e[0]) / den
     return p + t * d
 
 
-def _polygon(contour: np.ndarray) -> Polygon | None:
+def _polygon(contour: np.ndarray, eps: float) -> Polygon | None:
     """Polygon from a dense contour; corners rounded by smoothing are restored
     by intersecting lines fitted to the adjacent straight edges."""
     pts = contour[:, 0, :].astype(float)
     n = len(pts)
     if n < 8:
         return None
-    eps = POLY_EPS_PX
     idx = cv2.approxPolyDP(contour, eps, True)
     # approxPolyDP returns points; map them back to contour indices.
     lookup = {tuple(p): i for i, p in enumerate(contour[:, 0, :].tolist())}
@@ -500,15 +524,20 @@ def _polygon(contour: np.ndarray) -> Polygon | None:
     return poly
 
 
-def extract_blocks(img: np.ndarray, mask: np.ndarray | None = None) -> list[Polygon]:
+def extract_blocks(img: np.ndarray, exclude: np.ndarray | None = None) -> list[Polygon]:
     """Block outlines (pixel coords, x right / y down) found on a scanned sheet.
 
+    `exclude` is a bool mask with True = excluded (outside the neatline,
+    legend, title...), the same polarity as `reading.exclusion_mask`.
     Handles white (outlined), solid-black, cross-hatched and stippled blocks.
-    Blocks touching the image edge or the masked-off area are dropped: they
-    are partial and would yield false corners.
+    Blocks touching the image edge or an excluded area are dropped: they are
+    partial and would yield false corners.
+
+    Pixel sizes assume ~300 dpi renders (the 1948 photos are of similar
+    scale); street and stroke widths are measured per sheet.
     """
     ink = binarize(img)
-    outside = np.zeros(ink.shape, bool) if mask is None else ~mask.astype(bool)
+    outside = np.zeros(ink.shape, bool) if exclude is None else exclude.astype(bool)
     material, anchors = block_material(ink, outside, photo=is_photo(img))
     # Each anchor claims the material geodesically nearest to it, so blocks
     # never merge through lettering or lines; then parts of one block are
@@ -519,6 +548,13 @@ def extract_blocks(img: np.ndarray, mask: np.ndarray | None = None) -> list[Poly
     # includes the whole stroke: outlined (mostly white) blocks are shrunk
     # by half the typical line width.
     half_stroke = stroke_width(ink) / 2.0
+    sw = street_width(~ink & ~outside)
+    eps = max(SIMPLIFY_PX, POLY_EPS_STREET_FRAC * sw)
+    # Closing disk: fills intrusions narrower than ~half a street (street
+    # names and lot-line stubs the street flood reached through a faded
+    # outline); real streets between blocks are never closed because each
+    # block is smoothed on its own.
+    close_px = max(CLEAN_PX, int(round(CLOSE_STREET_FRAC * sw)) | 1)
     is_white = np.bincount(groups[(anchors > 0) & (ink == 0)].ravel(), minlength=groups.max() + 1)
     is_dark = np.bincount(groups[(anchors > 0) & ink].ravel(), minlength=groups.max() + 1)
     h, w = ink.shape
@@ -533,12 +569,12 @@ def extract_blocks(img: np.ndarray, mask: np.ndarray | None = None) -> list[Poly
             continue
         y0, y1 = max(0, sl[0].start - 1), min(h, sl[0].stop + 1)
         x0, x1 = max(0, sl[1].start - 1), min(w, sl[1].stop + 1)
-        pad = CLEAN_PX + 1
+        pad = close_px + 1
         sub = np.zeros((y1 - y0 + 2 * pad, x1 - x0 + 2 * pad), np.uint8)
         sub[pad:-pad, pad:-pad] = groups[y0:y1, x0:x1] == g
         # Smooth the outline: fill dents (stipple, broken outlines), then cut
         # slivers and stroke stubs hanging off the block.
-        sub = cv2.morphologyEx(sub, cv2.MORPH_CLOSE, _disk(CLEAN_PX))
+        sub = cv2.morphologyEx(sub, cv2.MORPH_CLOSE, _disk(close_px))
         sub = cv2.morphologyEx(sub, cv2.MORPH_OPEN, _disk(CLEAN_PX))
         if int(sub.sum()) < MIN_BLOCK_AREA:
             continue
@@ -548,7 +584,9 @@ def extract_blocks(img: np.ndarray, mask: np.ndarray | None = None) -> list[Poly
         hull = cv2.contourArea(cv2.convexHull(c))
         if area < MIN_BLOCK_AREA or hull <= 0 or area / hull < MIN_BLOCK_SOLIDITY:
             continue
-        poly = _polygon(c)
+        # Small blocks (triangles at diagonal streets) get a proportionally
+        # smaller tolerance so they keep their shape.
+        poly = _polygon(c, min(eps, SMALL_EPS_FRAC * math.sqrt(area)))
         if poly is None or poly.area < MIN_BLOCK_AREA:
             continue
         if is_white[g] > is_dark[g]:
@@ -556,16 +594,145 @@ def extract_blocks(img: np.ndarray, mask: np.ndarray | None = None) -> list[Poly
             if poly.geom_type != "Polygon" or poly.is_empty:
                 continue
         polys.append(translate(poly, x0 - pad, y0 - pad))
-    return polys
+    return _drop_lettering(polys)
 
 
-def block_corners_px(polys: list[Polygon]) -> np.ndarray:
-    """N x 2 pixel block corners, by the same > 30 deg turning rule as datasf."""
+def _drop_lettering(polys: list[Polygon]) -> list[Polygon]:
+    """Drop polygons that are bold lettering (R-4, C-2...) boxed off as blocks:
+    small next to the median block and clearly non-convex.  Real small blocks
+    (triangles at diagonal streets, strips) are convex and are kept."""
+    if len(polys) < 3:
+        return polys
+    med = float(np.median([p.area for p in polys]))
+    return [p for p in polys
+            if not (p.area < LETTER_AREA_FRAC * med and p.area / p.convex_hull.area < LETTER_SOLIDITY)]
+
+
+def estimate_street_px(polys: list[Polygon]) -> float:
+    """Street width (px) from block polygons: the 75th percentile of each
+    block's gap to its nearest neighbour (lower gaps are alleys and hairline
+    splits).  Falls back to DEFAULT_STREET_PX."""
+    if len(polys) < 2:
+        return DEFAULT_STREET_PX
+    from shapely import STRtree
+    tree = STRtree(polys)
+    gaps = []
+    for i, p in enumerate(polys):
+        best = np.inf
+        for j in tree.query(p.buffer(4 * DEFAULT_STREET_PX)):
+            if j != i:
+                best = min(best, p.distance(polys[j]))
+        if np.isfinite(best):
+            gaps.append(best)
+    gaps = [g for g in gaps if g > 1.0]
+    return float(np.percentile(gaps, 75)) if gaps else DEFAULT_STREET_PX
+
+
+def _clean_ring(pts: np.ndarray, min_edge: float) -> np.ndarray:
+    """Remove bumps and notches: repeatedly collapse the shortest edge below
+    `min_edge`.  Its two endpoints become the intersection of the adjacent
+    edges' lines when that lies close by (a clipped corner is restored);
+    otherwise both are dropped (a text bump or in-and-out notch on a
+    straight edge, whose neighbours are near-parallel)."""
+    pts = [np.asarray(p, float) for p in pts]
+    while len(pts) > 3:
+        n = len(pts)
+        lens = [np.hypot(*(pts[(i + 1) % n] - pts[i])) for i in range(n)]
+        i = int(np.argmin(lens))
+        if lens[i] >= min_edge:
+            break
+        a, b = pts[i], pts[(i + 1) % n]
+        prev, nxt = pts[i - 1], pts[(i + 2) % n]
+        new = None
+        if np.hypot(*(a - prev)) > 0 and np.hypot(*(nxt - b)) > 0:
+            d1 = (a - prev) / np.hypot(*(a - prev))
+            d2 = (nxt - b) / np.hypot(*(nxt - b))
+            x = _intersect((prev, d1), (b, d2))
+            if x is not None and np.hypot(*(x - (a + b) / 2)) <= min_edge:
+                new = x
+        keep = [pts[k] for k in range(n) if k not in (i, (i + 1) % n)]
+        if new is not None:
+            keep.insert(i if i + 1 < n else 0, new)
+        pts = keep
+    return np.asarray(pts)
+
+
+def _line_dist(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> float:
+    d = b - a
+    n = np.hypot(*d)
+    if n == 0:
+        return float(np.hypot(*(p - a)))
+    return float(abs(d[0] * (p[1] - a[1]) - d[1] * (p[0] - a[0])) / n)
+
+
+def _drop_notches(pts: np.ndarray, max_width: float, max_depth: float, tol: float) -> np.ndarray:
+    """Remove in-and-out notches and bumps on straight edges.
+
+    A run of up to NOTCH_MAX_VERTS vertices between i and j is a notch (a
+    letter cut into the block edge, a stub of line, a text bump) when the
+    edge before i, when extended, passes within `tol` of j (the outline
+    resumes on the same straight line), the chord i-j is at most
+    `max_width` long, and no vertex of the run strays more than
+    `max_depth` from that line.  A genuine jog in a block outline does not
+    return to the same line, so it is kept.
+    """
+    pts = [np.asarray(q, float) for q in pts]
+    changed = True
+    while changed and len(pts) > 4:
+        changed = False
+        n = len(pts)
+        for i in range(n):
+            a, b = pts[i - 1], pts[i]
+            if np.hypot(*(b - a)) == 0:
+                continue
+            for k in range(2, NOTCH_MAX_VERTS + 2):
+                if k >= n - 2:
+                    break
+                j = (i + k) % n
+                c = pts[j]
+                if np.hypot(*(c - b)) > max_width or _line_dist(c, a, b) > tol:
+                    continue
+                # c must lie ahead of b along the edge direction.
+                if np.dot(c - b, b - a) <= 0:
+                    continue
+                run = [pts[(i + m) % n] for m in range(1, k)]
+                if all(_line_dist(q, a, b) <= max_depth for q in run):
+                    drop = {(i + m) % n for m in range(1, k)}
+                    pts = [q for t, q in enumerate(pts) if t not in drop]
+                    changed = True
+                    break
+            if changed:
+                break
+    return np.asarray(pts)
+
+
+def block_corners_px(polys: list[Polygon], street_px: float | None = None) -> np.ndarray:
+    """N x 2 pixel block corners, by the same > 30 deg turning rule as
+    datasf.block_corners, applied to a comparably simplified outline.
+
+    Scale comes from the sheet's street width (measured from the gaps
+    between `polys` unless given): px_per_ft = street_px / STREET_FT.  The
+    outline is simplified by SIMPLIFY_FT in px, edges shorter than
+    MIN_EDGE_STREET_FRAC x street width (ragged print, clipped corners) are
+    collapsed, and in-and-out notches on straight edges (lettering, line
+    stubs) are removed before turning angles are measured.
+    """
+    street_px = estimate_street_px(polys) if street_px is None else street_px
+    tol = max(1.0, SIMPLIFY_FT * street_px / STREET_FT)
+    min_edge = MIN_EDGE_STREET_FRAC * street_px
     out: list[tuple[float, float]] = []
     for p in polys:
-        simp = p.simplify(SIMPLIFY_PX)
+        simp = p.simplify(tol)
         parts = [simp] if simp.geom_type == "Polygon" else list(getattr(simp, "geoms", []))
         for part in parts:
-            if part.geom_type == "Polygon" and not part.is_empty:
-                out += _ring_corners(list(part.exterior.coords))
+            if part.geom_type != "Polygon" or part.is_empty:
+                continue
+            ring = _clean_ring(np.asarray(part.exterior.coords)[:-1], min_edge)
+            if len(ring) > 4:
+                ring = _drop_notches(ring, NOTCH_WIDTH_STREET_FRAC * street_px,
+                                     NOTCH_DEPTH_STREET_FRAC * street_px,
+                                     NOTCH_TOL_STREET_FRAC * street_px)
+            if len(ring) < 3:
+                continue
+            out += _ring_corners([tuple(q) for q in ring] + [tuple(ring[0])])
     return np.asarray(out, dtype=float).reshape(-1, 2)
