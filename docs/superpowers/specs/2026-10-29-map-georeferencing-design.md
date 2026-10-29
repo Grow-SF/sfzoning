@@ -59,6 +59,14 @@ will show **both** the actual scans and the redrawn zoning.
   real change apart from drafting error is the hard part; the builder tunes the
   thresholds and validates against known cases (e.g. the Van Ness / Geary /
   Embarcadero changes, Western Addition).
+- **Pass rule revised by the owner (2026-10-29), after real-data tuning.** The
+  source maps were hand-drafted with about ±4 ft of error per street corner (each
+  street drawn ~2 px off as a whole, measured on 1948 and 1960), so "95% within
+  6 ft" is below what the drawings support. A sheet now **passes** when, measured
+  on **held-out blocks** (blocks not used to fit the warp): median corner error
+  ≤ 5 ft AND 95% of corners within 12 ft, AND the sheet is not misplaced. Every
+  other sheet goes to human review. Exact zoning boundaries remain step two's job
+  (snapping to modern lot lines).
 - The pipeline measures this itself: for each sheet, distance from the aligned
   scan's block corners/edges to the matching modern ones (excluding real
   change), reported as summary stats (e.g. "95% of block corners within 5 ft,
