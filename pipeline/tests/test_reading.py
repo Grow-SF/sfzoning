@@ -12,6 +12,9 @@ def tmp_cache(tmp_path, monkeypatch):
     llm.CallCounter.reset()
 
 
+T = dict(tile=1568, overlap=160)  # geometry these tests were written for
+
+
 class Fake:
     def __init__(self, fn):
         self.fn, self.shapes, self.calls = fn, [], 0
@@ -48,7 +51,7 @@ def test_read_labels_offsets_tile_coords(tmp_path):
         seen.append(n)
         return _Labels(labels=[lab(10, 10, f"t{n}")])
 
-    out = reading.read_labels(p, scale=0.5, client=Fake(fn))
+    out = reading.read_labels(p, scale=0.5, client=Fake(fn), **T)
     col1 = [l for l in out if l.text == "t2"][0]
     assert (col1.x, col1.y) == (round((10 + 1568 - 160) / 0.5), 20)
     assert [l.text for l in out if l.text == "t1"][0] and \
@@ -61,7 +64,7 @@ def test_read_labels_dedupes_overlap(tmp_path):
     def fn(img, prompt, schema, n):
         return _Labels(labels=[lab(1450, 50) if n == 1 else lab(42, 50)])
 
-    out = reading.read_labels(p, scale=0.5, client=Fake(fn))
+    out = reading.read_labels(p, scale=0.5, client=Fake(fn), **T)
     assert len(out) == 1
 
 
@@ -70,13 +73,13 @@ def test_blank_tiles_not_sent(tmp_path):
         a[:300, :300] = 0
     p = page(tmp_path, 4000, 4000, corner)
     c = Fake(lambda *a: _Labels(labels=[]))
-    reading.read_labels(p, scale=1.0, client=c)
+    reading.read_labels(p, scale=1.0, client=c, **T)
     assert c.calls == 1  # only the tile touching the top-left corner
 
 
 def sent(p, skip):
     llm.CallCounter.reset()
-    reading.read_labels(p, scale=0.5, skip=skip, client=Fake(lambda *a: _Labels(labels=[])))
+    reading.read_labels(p, scale=0.5, skip=skip, client=Fake(lambda *a: _Labels(labels=[])), **T)
     return llm.CallCounter.live + llm.CallCounter.hits
 
 
@@ -109,11 +112,11 @@ def test_exclusion_mask_includes_boxes(tmp_path):
 
 
 def test_calibrate_picks_smallest_adequate_scale(tmp_path):
-    p = page(tmp_path, 1000, 1000, full_ink)
-    truth = [(50 + 90 * i, 100 + 70 * i) for i in range(10)]
+    p = page(tmp_path, 700, 700, full_ink)  # single tile at every scale
+    truth = [(50 + 60 * i, 100 + 50 * i) for i in range(10)]
 
     def fn(img, prompt, schema, n):
-        s = img.shape[0] / 1000
+        s = img.shape[0] / 700
         keep = 8 if abs(s - 0.4) < 0.01 or abs(s - 0.33) < 0.01 else 10
         return _Labels(labels=[lab(round(x * s), round(y * s), str(i))
                                for i, (x, y) in enumerate(truth[:keep])])
@@ -140,7 +143,7 @@ def test_out_of_bounds_labels_dropped(tmp_path):
     p = page(tmp_path, 1000, 1000, full_ink)  # scale 1.0 -> one 1000x1000 tile
     c = Fake(lambda *a: _Labels(labels=[lab(500, 500, "ok"), lab(1500, 10, "far"),
                                         lab(-5, 10, "neg")]))
-    out = reading.read_labels(p, scale=1.0, client=c)
+    out = reading.read_labels(p, scale=1.0, client=c, **T)
     assert [l.text for l in out] == ["ok"]
 
 
@@ -148,6 +151,6 @@ def test_prompt_states_image_size(tmp_path):
     p = page(tmp_path, 1000, 600, full_ink)
     seen = []
     c = Fake(lambda img, prompt, s, n: (seen.append(prompt), _Labels(labels=[]))[1])
-    reading.read_labels(p, scale=1.0, client=c)
+    reading.read_labels(p, scale=1.0, client=c, **T)
     assert "1000 pixels wide and 600 pixels high" in seen[0]
     assert "Claude" not in reading.LABEL_PROMPT + reading.CLASSIFY_PROMPT

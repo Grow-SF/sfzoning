@@ -1,8 +1,12 @@
+import base64
+import os
+import types
+
 import numpy as np
 import pytest
 from pydantic import BaseModel
 
-from sfzmaps import llm
+from sfzmaps import config, llm
 
 
 class Ans(BaseModel):
@@ -54,11 +58,77 @@ def test_rejects_oversize_image():
         llm.ask_json(np.zeros((100, 3000), np.uint8), "x", Ans, client=FakeClient())
 
 
-def test_missing_key_clear_error(monkeypatch):
-    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
-    with pytest.raises(llm.LLMAuthError, match="ANTHROPIC_API_KEY"):
-        llm.AnthropicClient()
+def test_missing_key_clear_error(monkeypatch, tmp_path):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(llm, "ENV_FILE", tmp_path / "nope.env")
+    with pytest.raises(llm.LLMAuthError, match="OPENAI_API_KEY missing or invalid"):
+        llm.OpenAIClient()
+
+
+def test_env_file_loaded_but_env_wins(monkeypatch, tmp_path):
+    f = tmp_path / ".env"
+    f.write_text('# c\nOPENAI_API_KEY="fromfile"\nOTHER=1\n')
+    monkeypatch.setattr(llm, "ENV_FILE", f)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    llm._load_env()
+    assert os.environ["OPENAI_API_KEY"] == "fromfile"
+    monkeypatch.setenv("OPENAI_API_KEY", "fromenv")
+    llm._load_env()
+    assert os.environ["OPENAI_API_KEY"] == "fromenv"
+
+
+class FakeResponses:
+    def __init__(self, resp):
+        self.resp, self.kwargs = resp, None
+
+    def parse(self, **kw):
+        self.kwargs = kw
+        return self.resp
+
+
+def _client(resp):
+    c = llm.OpenAIClient.__new__(llm.OpenAIClient)
+    c._client = types.SimpleNamespace(responses=FakeResponses(resp))
+    return c
+
+
+def _resp(parsed=None, content=None, status="completed", reason=None):
+    content = content if content is not None else []
+    return types.SimpleNamespace(
+        output_parsed=parsed, status=status,
+        incomplete_details=types.SimpleNamespace(reason=reason) if reason else None,
+        output=[types.SimpleNamespace(type="message", content=content)])
+
+
+def test_openai_client_builds_request():
+    c = _client(_resp(parsed=Ans(n=3)))
+    out = c.call(b"\x89PNGdata", "read it", Ans)
+    assert out == Ans(n=3)
+    kw = c._client.responses.kwargs
+    assert kw["model"] == config.VISION_MODEL and kw["text_format"] is Ans
+    content = kw["input"][0]["content"]
+    img = next(i for i in content if i["type"] == "input_image")
+    assert img["detail"] == "high"
+    assert img["image_url"] == "data:image/png;base64," + base64.b64encode(b"\x89PNGdata").decode()
+    assert {"type": "input_text", "text": "read it"} in content
+
+
+def test_openai_refusal_raises():
+    r = _resp(content=[types.SimpleNamespace(type="refusal", refusal="no")])
+    with pytest.raises(llm.LLMRefusal):
+        _client(r).call(b"x", "p", Ans)
+
+
+def test_openai_incomplete_raises():
+    r = _resp(status="incomplete", reason="max_output_tokens")
+    with pytest.raises(RuntimeError, match="max_output_tokens"):
+        _client(r).call(b"x", "p", Ans)
+
+
+def test_cache_key_includes_provider(monkeypatch):
+    k1 = llm._key(b"x", "p", Ans)
+    monkeypatch.setattr(llm, "VISION_PROVIDER", "other")
+    assert llm._key(b"x", "p", Ans) != k1
 
 
 def test_corrupt_cache_recovers(tmp_path):

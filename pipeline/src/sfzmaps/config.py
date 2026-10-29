@@ -16,7 +16,8 @@ TOLERANCE_FT = 6.0
 PASS_FRACTION = 0.95
 TPS_SMOOTHING = 50.0
 
-MODEL = "claude-opus-5-5"
+VISION_PROVIDER = "openai"
+VISION_MODEL = "gpt-6-astra"
 
 ROOT_FOLDER_ID = "10p74RwqmzeQFBrBqjxXdmEOUREx0BLgO"
 
@@ -53,14 +54,30 @@ def save_label_scale(series: str, scale: float) -> None:
 
 
 # Vision provider parameters (provider-specific; change when the client is swapped).
-VISION_TILE = 1568
-VISION_OVERLAP = 160
-VISION_MAX_EDGE = 2576
+# gpt-6-astra, detail "high": <= 2,500 32-px patches (image shrunk to fit), 1.2 tokens/patch.
+# Source: https://developers.openai.com/api/docs/guides/images-vision
+VISION_TILE = 768
+VISION_OVERLAP = 96
+VISION_MAX_EDGE = 2048
 VISION_THUMB = 1024
-PRICE_IN_PER_M = 4.0
-PRICE_OUT_PER_M = 20.0
+PATCH = 32
+PATCH_BUDGET = 2500
+PATCH_MULTIPLIER = 1.2
+# gpt-6-astra: $10/M in, $50/M out (https://developers.openai.com/api/docs/models)
+PRICE_IN_PER_M = 10.0
+PRICE_OUT_PER_M = 50.0
 EST_OUT_TOKENS = 800
 
 
 def estimate_image_tokens(w: int, h: int) -> int:
-    return round(w * h / 750)
+    """Billable input tokens for one high-detail image (OpenAI patch formula)."""
+    import math
+
+    patches = math.ceil(w / PATCH) * math.ceil(h / PATCH)
+    if patches > PATCH_BUDGET:
+        shrink = math.sqrt(PATCH * PATCH * PATCH_BUDGET / (w * h))
+        sw, sh = w * shrink / PATCH, h * shrink / PATCH
+        shrink *= min(math.floor(sw) / sw, math.floor(sh) / sh)
+        rw, rh = int(w * shrink), int(h * shrink)
+        patches = math.ceil(rw / PATCH) * math.ceil(rh / PATCH)
+    return math.ceil(patches * PATCH_MULTIPLIER)

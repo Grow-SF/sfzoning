@@ -1,4 +1,4 @@
-"""Disk-cached Claude vision client returning structured (pydantic) output."""
+"""Disk-cached OpenAI vision client returning structured (pydantic) output."""
 import argparse
 import base64
 import hashlib
@@ -12,12 +12,15 @@ import cv2
 import numpy as np
 from pydantic import BaseModel
 
-from sfzmaps.config import CACHE_DIR, MODEL, VISION_MAX_EDGE
+from pathlib import Path
+
+from sfzmaps.config import CACHE_DIR, PIPELINE_DIR, VISION_MAX_EDGE, VISION_MODEL, VISION_PROVIDER
 
 T = TypeVar("T", bound=BaseModel)
 MAX_EDGE = VISION_MAX_EDGE
 log = logging.getLogger(__name__)
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
+ENV_FILE = PIPELINE_DIR / ".env"
+MAX_OUT_TOKENS = 16000
 
 
 class LLMRefusal(RuntimeError):
@@ -42,48 +45,61 @@ class LLMClient(Protocol):
     def call(self, png: bytes, prompt: str, schema: type[T]) -> T: ...
 
 
-class AnthropicClient:
-    def __init__(self) -> None:
-        import anthropic
+def _load_env() -> None:
+    """Fill OPENAI_API_KEY from pipeline/.env if unset (an existing env var wins)."""
+    if os.environ.get("OPENAI_API_KEY"):
+        return
+    try:
+        lines = ENV_FILE.read_text().splitlines()
+    except OSError:
+        return
+    for line in lines:
+        k, sep, v = line.strip().partition("=")
+        if sep and k.strip() == "OPENAI_API_KEY" and v.strip().strip("\"'"):
+            os.environ["OPENAI_API_KEY"] = v.strip().strip("\"'")
 
-        if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
-            raise LLMAuthError("ANTHROPIC_API_KEY is not set; export it to use the Claude API")
-        self._anthropic = anthropic
-        self._client = anthropic.Anthropic()
+
+class OpenAIClient:
+    def __init__(self) -> None:
+        import openai
+
+        _load_env()
+        if not os.environ.get("OPENAI_API_KEY"):
+            raise LLMAuthError("OPENAI_API_KEY missing or invalid")
+        self._openai = openai
+        self._client = openai.OpenAI()
 
     def call(self, png: bytes, prompt: str, schema: type[T]) -> T:
         try:
-            resp = self._client.beta.messages.parse(
-                model=MODEL,
-                max_tokens=16000,
-                output_format=schema,
-                betas=[FALLBACK_BETA],
-                fallbacks="default",
-                output_config={"effort": "medium"},
-                messages=[{
+            resp = self._client.responses.parse(
+                model=VISION_MODEL,
+                max_output_tokens=MAX_OUT_TOKENS,
+                text_format=schema,
+                input=[{
                     "role": "user",
                     "content": [
-                        {"type": "image", "source": {
-                            "type": "base64", "media_type": "image/png",
-                            "data": base64.b64encode(png).decode()}},
-                        {"type": "text", "text": prompt},
+                        {"type": "input_image", "detail": "high",
+                         "image_url": "data:image/png;base64," + base64.b64encode(png).decode()},
+                        {"type": "input_text", "text": prompt},
                     ],
                 }],
             )
-        except self._anthropic.AuthenticationError as e:
-            raise LLMAuthError(f"Anthropic authentication failed: {e}") from None
-        if resp.stop_reason == "refusal":
-            raise LLMRefusal("Claude refused the request")
-        if resp.stop_reason == "max_tokens":
-            raise RuntimeError("Claude response truncated (stop_reason=max_tokens); raise max_tokens")
-        if resp.parsed_output is None:
-            raise RuntimeError(f"no parsed output (stop_reason={resp.stop_reason})")
-        return resp.parsed_output
+        except self._openai.AuthenticationError:
+            raise LLMAuthError("OPENAI_API_KEY missing or invalid") from None
+        for item in resp.output:
+            if item.type == "message" and any(c.type == "refusal" for c in item.content):
+                raise LLMRefusal("model refused the request")
+        if resp.status == "incomplete":
+            reason = resp.incomplete_details.reason if resp.incomplete_details else "unknown"
+            raise RuntimeError(f"response incomplete ({reason}); raise MAX_OUT_TOKENS if max_output_tokens")
+        if resp.output_parsed is None:
+            raise RuntimeError(f"no parsed output (status={resp.status})")
+        return resp.output_parsed
 
 
 def _key(png: bytes, prompt: str, schema: type[BaseModel]) -> str:
     h = hashlib.sha256()
-    for part in (MODEL, prompt, json.dumps(schema.model_json_schema(), sort_keys=True)):
+    for part in (VISION_PROVIDER, VISION_MODEL, prompt, json.dumps(schema.model_json_schema(), sort_keys=True)):
         h.update(part.encode())
         h.update(b"\0")
     h.update(png)
@@ -119,7 +135,7 @@ def ask_json(image: np.ndarray, prompt: str, schema: type[T], *,
             CallCounter.hits += 1
             return cached
     if client is None:
-        client = AnthropicClient()
+        client = OpenAIClient()
     result = client.call(png, prompt, schema)
     CallCounter.live += 1
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,7 +150,7 @@ class _Sheet(BaseModel):
 
 
 def _smoke(path: str) -> int:
-    import anthropic
+    import openai
 
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
@@ -148,7 +164,7 @@ def _smoke(path: str) -> int:
     except (LLMAuthError, LLMRefusal, RuntimeError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
-    except anthropic.APIError as e:
+    except openai.OpenAIError as e:
         print(f"error: {type(e).__name__}: {e}".splitlines()[0], file=sys.stderr)
         return 1
     print("cache hit" if CallCounter.hits else "live call")
