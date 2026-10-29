@@ -23,23 +23,24 @@ PAGE_SIZE = 50000
 MIN_AREA_SQFT = 50.0
 SIMPLIFY_FT = 2.0
 CORNER_ANGLE_DEG = 30.0
+NODE_CLUSTER_FT = 5.0
+MAX_PAGES = 100
 
 PARCEL_COLS = ["block_num", "lot_num", "blklot", "active", "date_rec_drop", "date_map_drop"]
 STREET_COLS = ["cnn", "street", "st_type", "streetname", "f_node_cnn", "t_node_cnn", "active"]
 
 _SUFFIXES = {
-    "ST", "STREET", "AVE", "AV", "AVENUE", "BLVD", "BOULEVARD", "RD", "ROAD", "DR", "DRIVE",
-    "CT", "COURT", "PL", "PLACE", "LN", "LANE", "TER", "TERR", "TERRACE", "WAY", "ALY",
-    "ALLEY", "HWY", "CIR", "CIRCLE", "PLZ", "PLAZA", "SQ", "SQUARE", "PARK", "PK", "ROW",
-    "WALK", "LOOP", "STWY", "PATH", "HL", "HILL", "BRG", "BRIDGE", "EXPY", "FWY", "CRES",
+    "ST", "STREET", "AVE", "AVENUE", "BLVD", "BOULEVARD", "RD", "ROAD", "DR", "DRIVE",
+    "CT", "COURT", "PL", "PLACE", "LN", "LANE", "TER", "TERRACE", "WAY", "ALY", "ALLEY",
+    "CIR", "CIRCLE", "HWY",
 }
 _UNITS = {"FIRST": 1, "SECOND": 2, "THIRD": 3, "FOURTH": 4, "FIFTH": 5, "SIXTH": 6,
           "SEVENTH": 7, "EIGHTH": 8, "NINTH": 9}
 _TEENS = {"TENTH": 10, "ELEVENTH": 11, "TWELFTH": 12, "THIRTEENTH": 13, "FOURTEENTH": 14,
           "FIFTEENTH": 15, "SIXTEENTH": 16, "SEVENTEENTH": 17, "EIGHTEENTH": 18,
           "NINETEENTH": 19}
-_TENS_ORD = {"TWENTIETH": 20, "THIRTIETH": 30}
-_TENS = {"TWENTY": 20, "THIRTY": 30}
+_TENS_ORD = {"TWENTIETH": 20, "THIRTIETH": 30, "FORTIETH": 40}
+_TENS = {"TWENTY": 20, "THIRTY": 30, "FORTY": 40}
 
 
 def _ordinal(n: int) -> str:
@@ -47,7 +48,7 @@ def _ordinal(n: int) -> str:
     return f"{n}{suf}"
 
 
-def normalize_street(name: str) -> str:
+def normalize_street(name: str, strip_type: bool = True) -> str:
     s = re.sub(r"[^A-Z0-9 ]", " ", name.upper().replace("-", " "))
     toks = s.split()
     # Spelled-out ordinals ("TWENTY FIFTH" -> 25TH).
@@ -66,7 +67,7 @@ def normalize_street(name: str) -> str:
             t = t.lstrip("0")
         out.append(t)
         i += 1
-    if len(out) > 1 and out[-1] in _SUFFIXES:
+    if strip_type and len(out) > 1 and out[-1] in _SUFFIXES:
         out.pop()
     return " ".join(out)
 
@@ -135,45 +136,87 @@ def _node(v) -> str:
     return re.sub(r"\.0+$", "", str(v))
 
 
+def _street_name(street, streetname) -> str:
+    # DataSF's `street` field is already type-free: normalize but don't strip again.
+    if street is not None and not pd.isna(street) and str(street).strip():
+        return normalize_street(str(street), strip_type=False)
+    return normalize_street(str(streetname or ""))
+
+
+def _line(geom):
+    return geom if geom.geom_type == "LineString" else max(geom.geoms, key=lambda g: g.length)
+
+
 def intersections(streets: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Nodes where >=2 distinct streets meet.
+
+    A node is located by geometry, not by assuming f_node = first vertex: among the
+    endpoints (both ends) of all segments carrying the node id, pick the point shared
+    by the most segments (endpoints within NODE_CLUSTER_FT) and average that cluster.
+    """
     s = streets[streets["active"].astype(str).str.lower() == "true"]
-    pts: dict[str, list[tuple[float, float]]] = {}
+    if "streetname" not in s.columns:
+        s = s.assign(streetname=None)
+    ends: dict[str, list[tuple[int, tuple[float, float]]]] = {}  # declared end first
     names: dict[str, set[str]] = {}
-    for f, t, street, geom in zip(s["f_node_cnn"], s["t_node_cnn"], s["street"], s.geometry):
+    for i, (f, t, street, sname, geom) in enumerate(
+        zip(s["f_node_cnn"], s["t_node_cnn"], s["street"], s["streetname"], s.geometry)
+    ):
         if geom is None or geom.is_empty:
             continue
-        line = geom if geom.geom_type == "LineString" else max(geom.geoms, key=lambda g: g.length)
-        nm = normalize_street(str(street))
-        for node, xy in ((f, line.coords[0]), (t, line.coords[-1])):
+        c = _line(geom).coords
+        first, last = (c[0][0], c[0][1]), (c[-1][0], c[-1][1])
+        nm = _street_name(street, sname)
+        for node, declared, other in ((f, first, last), (t, last, first)):
             if node is None or pd.isna(node):
                 continue
             k = _node(node)
-            pts.setdefault(k, []).append((xy[0], xy[1]))
+            ends.setdefault(k, []).extend([(i, declared), (i, other)])
             names.setdefault(k, set()).add(nm)
     rows = []
-    for k, xs in pts.items():
+    for k, cand in ends.items():
         if len(names[k]) < 2:
             continue
-        a = np.mean(xs, axis=0)
+        xy = np.array([p for _, p in cand])
+        seg = np.array([i for i, _ in cand])
+        best, best_n = None, -1
+        for p in xy:
+            near = np.hypot(*(xy - p).T) <= NODE_CLUSTER_FT
+            n = len(set(seg[near]))
+            if n > best_n:
+                best, best_n = near, n
+        a = xy[best].mean(axis=0)
         rows.append({"node_cnn": k, "streets": sorted(names[k]), "geometry": Point(a[0], a[1])})
     return gpd.GeoDataFrame(rows, columns=["node_cnn", "streets", "geometry"],
                             geometry="geometry", crs=streets.crs)
 
 
+def _page_all(fetch_page, page_size: int = PAGE_SIZE, max_pages: int = MAX_PAGES,
+              label: str = "dataset") -> list[gpd.GeoDataFrame]:
+    """Page via fetch_page(offset, limit); stop on an empty or short page."""
+    frames: list[gpd.GeoDataFrame] = []
+    for n in range(max_pages):
+        gdf = fetch_page(n * page_size, page_size)
+        if len(gdf) == 0:
+            if n == 0:
+                raise RuntimeError(f"{label}: first page came back empty")
+            return frames
+        frames.append(gdf)
+        if len(gdf) < page_size:
+            return frames
+    raise RuntimeError(f"{label}: exceeded {max_pages} pages")
+
+
 def _fetch_all(url: str, columns: list[str], geom_col: str) -> gpd.GeoDataFrame:
-    frames = []
-    offset = 0
     with httpx.Client(timeout=300, follow_redirects=True) as client:
-        while True:
-            params = {"$limit": PAGE_SIZE, "$offset": offset, "$order": ":id",
+        def fetch_page(offset: int, limit: int) -> gpd.GeoDataFrame:
+            params = {"$limit": limit, "$offset": offset, "$order": ":id",
                       "$select": ",".join(columns + [geom_col])}
             r = client.get(url, params=params)
             r.raise_for_status()
-            gdf = gpd.read_file(io.BytesIO(r.content))
-            if len(gdf) == 0:
-                break
-            frames.append(gdf)
-            offset += PAGE_SIZE
+            return gpd.read_file(io.BytesIO(r.content))
+
+        frames = _page_all(fetch_page, label=url)
     gdf = pd.concat(frames, ignore_index=True)
     gdf = gpd.GeoDataFrame(gdf, geometry="geometry", crs=frames[0].crs or "EPSG:4326")
     return gdf.to_crs(WORK_CRS)
