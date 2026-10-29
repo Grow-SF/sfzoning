@@ -35,3 +35,20 @@ def fetch(
         typer.echo(f"fetching {e.title}")
         n += len(drive.sync(e.id, config.RAW_DIR / drive._safe_name(e.title)))
     typer.echo(f"{n} files in {config.RAW_DIR}")
+
+
+@app.command()
+def refdata(
+    force: bool = typer.Option(False, "--force", help="Re-download even if cached."),
+) -> None:
+    """Download DataSF parcels/streets and build blocks, corners, intersections."""
+    from sfzmaps.sources import datasf
+
+    if force or not (config.REF_DIR / "parcels.parquet").exists() \
+            or not (config.REF_DIR / "streets.parquet").exists():
+        datasf.fetch_reference(config.REF_DIR)
+    ref = datasf.load_reference()
+    typer.echo(f"blocks: {len(ref.blocks)}")
+    typer.echo(f"corners: {len(ref.corners)}")
+    typer.echo(f"intersections: {len(ref.intersections)}")
+    typer.echo(f"bounds: {list(ref.blocks.total_bounds)}")
