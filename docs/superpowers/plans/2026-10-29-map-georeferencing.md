@@ -6,7 +6,7 @@
 
 **Architecture:** Each sheet flows through a fixed set of stages, and each stage writes a JSON or GeoTIFF artifact under `pipeline/data/work/<series>/<sheet_id>/`. Stages are idempotent and skip work whose inputs haven't changed. The stages are: render page → classify page (Claude) → read labels (Claude) → extract block shapes from the scan → rough fit from label anchors → iterative refine against DataSF block corners → smooth warp → score → GeoTIFF. Per year: stitch → PMTiles → review page. Human edits live in `review.json` and take precedence over automatic results.
 
-**Tech Stack:** Python 3.12 (uv-managed), numpy, scipy, opencv-python-headless, scikit-image, shapely 2, geopandas, pyproj, rasterio, pydantic 2, anthropic SDK, typer, FastAPI + uvicorn (editor), pytest. GDAL CLI 3.13 (`gdalwarp`, `gdalbuildvrt`, `gdal_translate`, `gdaladdo`), poppler `pdftoppm`, `pmtiles` CLI (`brew install pmtiles`). Front end: plain HTML + MapLibre GL + pmtiles JS from CDN (no build step).
+**Tech Stack:** Python 3.12 (uv-managed), numpy, scipy, opencv-python-headless, scikit-image, shapely 2, geopandas, pyproj, rasterio, pydantic 2, openai SDK, typer, FastAPI + uvicorn (editor), pytest. GDAL CLI 3.13 (`gdalwarp`, `gdalbuildvrt`, `gdal_translate`, `gdaladdo`), poppler `pdftoppm`, `pmtiles` CLI (`brew install pmtiles`). Front end: plain HTML + MapLibre GL + pmtiles JS from CDN (no build step).
 
 **Spec:** `docs/superpowers/specs/2026-10-29-map-georeferencing-design.md`
 
@@ -15,9 +15,8 @@
 - No QGIS in any workflow; the owner never places control points except in the editor for sheets under threshold.
 - Working CRS: **EPSG:2227** (CA State Plane III, US ft), matching the owner's `.points` files. Tiles: EPSG:3857.
 - Pass threshold: **95%** of a sheet's matched block corners (excluding real change and no-modern-equivalent areas) within `TOLERANCE_FT`. `TOLERANCE_FT` starts at **6.0** and is tuned against the 1948/1960 answer key (Task 13). Both values are constants in `sfzmaps/config.py`.
-- Text reading uses the Claude API, model **`claude-opus-5-5`**, through the official `anthropic` Python SDK only. Every response is cached on disk keyed by sha256(model + prompt + schema JSON + image bytes). A cache hit makes no network call.
-- Enable server-side refusal fallbacks on every Claude call: `betas=["server-side-fallback-2026-07-01"]`, `fallbacks="default"`.
-- Images sent to Claude: ≤ **2576 px** long edge. Coordinates the model returns are image pixels 1:1.
+- **Vision provider: OpenAI (owner's decision, superseding Claude; the owner has OpenAI credits).** Text reading and any other inference use the official `openai` Python SDK only, with structured outputs parsed into pydantic models. The model is the constant `config.VISION_MODEL`, set to OpenAI's current flagship vision-capable model, verified against OpenAI's docs or `client.models.list()` at implementation time (Task 4b) and recorded in the report. Every response is cached on disk keyed by sha256(provider + model + prompt + schema JSON + image bytes). A cache hit makes no network call. Credentials: `OPENAI_API_KEY`.
+- Images sent to the model are sized to the provider's actual image handling, so the server never silently downscales them below legibility. For OpenAI "high" detail, an image is fit within 2048×2048 and then scaled so its short side is ≤ 768 px. So label tiles must have a short side ≤ 768 (`VISION_TILE`/`VISION_MAX_EDGE` in config; Task 4b sets the values). Prompts state the image's pixel size and ask for integer pixel coordinates; returned coordinates are clamped to the tile.
 - **Minimize image tokens (owner's instruction).** Image tokens scale with pixel area (≈ width × height / 750), so every image is downscaled to the smallest size that still reads correctly:
   - page classification uses a ≤ 1024 px long-edge thumbnail;
   - label reading runs at a per-series `label_scale` calibrated in Task 5 (the smallest scale whose label recall is ≥ 95% of full resolution on a calibration sheet);
@@ -28,11 +27,11 @@
 - Sheets under threshold are still stitched and tiled, but `manifest.json` marks them `needs_review`.
 - Anything showing 1948 imagery (review page, editor, manifest) carries the credit string `"© Cartography Associates, David Rumsey Map Collection"`.
 - Raw scans, reference data, cache, work and output dirs are git-ignored (`pipeline/data/`). Nothing large goes in git. Shareable generated files go to the Drive folder `old-planning-maps/processed/` via `sfzmaps push`/`pull` (Task 19).
-- Before spending API money on a full run, `sfzmaps estimate` must print the projected call count and dollar cost (Opus 5.5: $4/M input, $20/M output, about 4.8k input tokens per full-size image).
+- Before spending API money on a full run, `sfzmaps estimate` must print the projected call count, image tokens and dollar cost, using the provider's real image-token formula and prices from config (Task 4b sets the OpenAI values).
 
 ## Review Focus
 
-1. **A sheet where Claude reads few or no usable labels** (e.g. Golden Gate Park or the Presidio, or a page mislabeled as a map). Expect `needs_review` with reason `insufficient_anchors`, not a crash and not a wild fit. Test in Task 8.
+1. **A sheet where the vision model reads few or no usable labels** (e.g. Golden Gate Park or the Presidio, or a page mislabeled as a map). Expect `needs_review` with reason `insufficient_anchors`, not a crash and not a wild fit. Test in Task 8.
 2. **A sheet that is rotated, mirrored-looking, or has north not up** (the 1968 pages are landscape with the map turned 90°). The rough fit must solve for any rotation. Test in Task 8.
 3. **Combined or split source images** (1948 `2-and-3.jpg` alongside `2.jpg`/`3.jpg`; a 1921 page that is only text). The page registry must not align the same map area twice, and must skip non-map pages with a logged reason. Test in Task 3.
 4. **Rerun after a human edit.** The automatic run must leave `review.json`'s points alone and must use them. Test in Task 12.
@@ -52,7 +51,7 @@ pipeline/
     sources/drive.py          # list/download public Drive folders
     sources/datasf.py         # parcels/streets → blocks, block corners, intersections
     pages.py                  # Page/Sheet registry, PDF/JPG → PNG rendering
-    llm.py                    # cached Claude client (ask_json)
+    llm.py                    # cached vision client (ask_json); OpenAI implementation
     reading.py                # page classification + label reading prompts/schemas
     linework.py               # scan → block polygons/corners in pixel space
     transform.py              # SheetTransform: affine + smoothed TPS, (de)serialize
@@ -169,6 +168,31 @@ Stage artifacts per sheet in `data/work/<series>/<sheet_id>/`: `page.png`, `page
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run tests** (PASS). Then run a manual smoke check: `uv run python -m sfzmaps.llm --smoke data/raw/1948/originals/1.jpg` downsizes the image, asks "what is the sheet number", and prints `7`. Run it twice; the second run must print `cache hit`.
 - [ ] **Step 5: Commit** `feat(pipeline): cached Claude vision client`.
+
+### Task 4b: Switch the vision client to OpenAI (owner's decision)
+
+**Files:**
+- Modify: `src/sfzmaps/llm.py` (replace `AnthropicClient` with `OpenAIClient`; drop the `anthropic` dependency), `src/sfzmaps/config.py` (`VISION_PROVIDER = "openai"`, `VISION_MODEL`, `VISION_TILE`, `VISION_OVERLAP`, `VISION_MAX_EDGE`, `VISION_THUMB`, `estimate_image_tokens`, `PRICE_IN_PER_M`, `PRICE_OUT_PER_M`), `pyproject.toml`
+- Test: `tests/test_llm.py`, `tests/test_config.py`
+
+**Interfaces:**
+- `llm.ask_json` and the `LLMClient` protocol are unchanged, so reading.py doesn't change. The cache key adds the provider name.
+- `llm.OpenAIClient.call(png, prompt, schema)` uses the installed `openai` SDK's structured-output parse helper (verify the current one in the installed SDK, e.g. `client.responses.parse(model=VISION_MODEL, input=[{role:"user", content:[{type:"input_image", image_url:"data:image/png;base64,...", detail:"high"}, {type:"input_text", text:prompt}]}], text_format=schema)` → `output_parsed`). Don't guess: confirm the names in the installed SDK source.
+  - A refusal raises `LLMRefusal`. Incomplete output (max tokens) raises a clear RuntimeError.
+  - A missing `OPENAI_API_KEY` gives a one-line error.
+  - Corrupt-cache recovery is unchanged.
+- `config.VISION_MODEL`: OpenAI's current flagship vision model, verified from the OpenAI docs (WebFetch platform.openai.com docs on models and vision) and, if a key is present, `client.models.list()`. Record the source in the report.
+- `config.VISION_TILE = 768`, `VISION_OVERLAP = 96`, `VISION_MAX_EDGE = 2048`, `VISION_THUMB = 1024`. These come from OpenAI high-detail handling (fit 2048², then short side → 768; 512-px tiles). Tiles at or below 768×768 are never downscaled by the server. The builder verifies against the current OpenAI vision docs and adjusts if the docs differ, recording the reasoning.
+- `config.estimate_image_tokens(w, h) -> int` implements OpenAI's documented high-detail formula for `VISION_MODEL` (base tokens + per-512-tile tokens after the scaling steps; verify the per-model constants in the docs). `PRICE_IN_PER_M` / `PRICE_OUT_PER_M` are the model's current prices from the docs.
+
+- [ ] **Step 1: Write failing tests:**
+  - `test_openai_client_builds_request` (monkeypatch the SDK client: the request carries a base64 PNG data URL with detail "high", `text_format` is the schema, and the model is `VISION_MODEL`)
+  - `test_openai_refusal_raises`
+  - `test_cache_key_includes_provider`
+  - `test_estimate_tokens_768_tile` (equals the documented value for one 768×768 high-detail image)
+- [ ] **Step 2: Run, implement, pass.**
+- [ ] **Step 3: Live smoke** (`python -m sfzmaps.llm --smoke data/raw/1948/originals/1.jpg` prints the sheet number `7`, then `cache hit` on the second run). Deferred if there is no `OPENAI_API_KEY`.
+- [ ] **Step 4: Commit** `feat(pipeline): OpenAI vision client`.
 
 ### Task 5: Page classification and label reading
 
@@ -498,14 +522,14 @@ Stage artifacts per sheet in `data/work/<series>/<sheet_id>/`: `page.png`, `page
   - `test_pull_keeps_newer_local_review` (fake downloader)
   - `test_push_missing_rclone_message` (monkeypatched `shutil.which` → `SystemExit` with the instruction text)
 - [ ] **Step 2: Run, implement, pass.**
-- [ ] **Step 3: Live check (owner present):** run `sfzmaps push` after Task 14's 1948 run, then `sfzmaps pull` into a fresh `SFZMAPS_DATA_DIR`, then `sfzmaps run --year 1948`. The run must make zero live Claude calls (`CallCounter` shows only cache hits) and reproduce the same `score.json` values.
+- [ ] **Step 3: Live check (owner present):** run `sfzmaps push` after Task 14's 1948 run, then `sfzmaps pull` into a fresh `SFZMAPS_DATA_DIR`, then `sfzmaps run --year 1948`. The run must make zero live model calls (`CallCounter` shows only cache hits) and reproduce the same `score.json` values.
 - [ ] **Step 4: Commit** `feat(pipeline): share processed files via Drive`.
 
 ### Task 18: Full run across all eras
 
 **Files:**
 - Modify: `docs/superpowers/notes/2026-10-29-tuning.md` (final per-series table)
-- Create: `pipeline/README.md` (setup: `brew install pmtiles`, `uv sync`, API key via `ant auth login` or `ANTHROPIC_API_KEY`; commands in order; where outputs land; how to review/edit)
+- Create: `pipeline/README.md` (setup: `brew install pmtiles`, `uv sync`, `OPENAI_API_KEY`; commands in order; where outputs land; how to review/edit)
 
 - [ ] **Step 1:** Run `uv run sfzmaps fetch && uv run sfzmaps estimate --all`, and **stop to show the owner the dollar estimate before continuing.**
 - [ ] **Step 2:** Run `uv run sfzmaps run --all`. Expected: every discovered page is either skipped with a kind, passed, or `needs_review` with a reason. No crashes; failures in one sheet don't stop the others (logged in `out/run-<timestamp>.log`).

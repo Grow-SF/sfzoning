@@ -124,7 +124,8 @@ Per sheet:
    skip the latter (log them). Handle oddities like the 1948 combined/split
    sheets and the 1921 "Join Sec." pages.
 2. **Rough placement — automatic anchors.** Read printed text with the
-   **Claude vision API** (owner's decision; tesseract isn't good enough on this
+   **OpenAI vision API** (owner's decision, replacing the earlier choice of
+   Claude because the owner has OpenAI credits; tesseract isn't good enough on this
    lettering). Tile the sheet as needed for resolution. Cache every API
    response on disk keyed by input image + prompt, so reruns are free and
    deterministic. Match the text to DataSF:
@@ -211,14 +212,14 @@ and the page classification.
 - Repo is currently a bare Vite + React template (`sfzoning`); the pipeline
   lives alongside it in its own directory.
 - 1948 imagery must carry David Rumsey Collection credit wherever it's shown.
-- Claude API key required (owner approved its use). Expected one-time cost:
+- OpenAI API key required (`OPENAI_API_KEY`); all inference uses OpenAI (owner's decision). Expected one-time cost:
   tens of dollars (unverified estimate); caching means reruns are free.
 - **Nothing large goes in git (owner's decision).** Scans and generated files
   live in the git-ignored `pipeline/data/`. Generated files that save other
   people work or money are shared in a new `processed/` folder inside the Drive
   folder `old-planning-maps`, so anyone can fully recreate the results without
   redoing the expensive or manual steps. That means:
-  - the Claude response cache (the paid step);
+  - the vision-model response cache (the paid step);
   - the per-sheet alignments, change areas, scores and human `review.json`
     files (the manual step);
   - the exact DataSF reference snapshot the results were computed against
