@@ -27,7 +27,7 @@
 - Human-reviewed alignments (`review.json` present with `status` in {`edited`,`accepted`}) are never overwritten by an automatic rerun unless `--force-auto` is passed.
 - Sheets under threshold are still stitched and tiled, but `manifest.json` marks them `needs_review`.
 - Anything showing 1948 imagery (review page, editor, manifest) carries the credit string `"© Cartography Associates, David Rumsey Map Collection"`.
-- Raw scans, reference data, cache, work and output dirs are git-ignored (`pipeline/data/`).
+- Raw scans, reference data, cache, work and output dirs are git-ignored (`pipeline/data/`). Nothing large goes in git. Shareable generated files go to the Drive folder `old-planning-maps/processed/` via `sfzmaps push`/`pull` (Task 19).
 - Before spending API money on a full run, `sfzmaps estimate` must print the projected call count and dollar cost (Opus 5.5: $4/M input, $20/M output, about 4.8k input tokens per full-size image).
 
 ## Review Focus
@@ -473,6 +473,34 @@ Stage artifacts per sheet in `data/work/<series>/<sheet_id>/`: `page.png`, `page
 - [ ] **Step 3: Live check** on the worst-scoring real 1948 sheet. Fix it in under 10 minutes and record the result in the tuning notes.
 - [ ] **Step 4: Commit** `feat(editor): browser control-point editor`.
 
+### Task 19 (runs before Task 18): Share processed files via Drive
+
+**Files:**
+- Create: `src/sfzmaps/share.py`, `tests/test_share.py`
+- Modify: `cli.py` (add `push`, `pull`), `sources/drive.py` (reuse `list_folder`/`sync` for pull)
+
+**Interfaces:**
+- Produces: `share.SHARED_GLOBS: list[str]`, relative to `DATA_DIR`:
+  - `cache/llm/**`
+  - `ref/*.parquet`
+  - `work/*/*/{page.json,labels.json,transform.json,changes.geojson,score.json,review.json}`
+  - `out/*/{*.pmtiles,manifest.json,review.html}`
+  - `out/ref/blocks.pmtiles`
+  It never includes `raw/`, PNGs or GeoTIFFs.
+- Produces: `share.bundle(dest: Path) -> list[Path]`. Writes one `processed-<series>.zip` per series (that series' `work/` and `out/` files), plus `processed-cache.zip` (the LLM cache) and `processed-ref.zip` (the reference snapshot plus `ref/SNAPSHOT.json` with the fetch date and row counts). It also writes `PROCESSED.json` with sha256, size and created_at for each zip. Zipping is deterministic: entries sorted, fixed timestamps. Re-bundling unchanged data gives identical sha256 values, so `push` skips the upload.
+- Produces: `share.pull(folder_id: str = ROOT_FOLDER_ID) -> None`. Finds the `processed` subfolder via the public listing (`drive.list_folder`), downloads `PROCESSED.json` and any zip whose sha256 differs from the local copy, and extracts into `DATA_DIR`. Local `review.json` files that are newer than the zipped copy are never overwritten; it logs a warning instead.
+- Produces: `share.push(remote: str = "sfzoning-drive:old-planning-maps/processed") -> None`. Runs `share.bundle` into `DATA_DIR/share/`, then `rclone copy --checksum` to the remote. `rclone` is the upload tool (`brew install rclone`; the owner runs `rclone config` once to create the `sfzoning-drive` remote with Google Drive access). If rclone or the remote is missing, it exits with a one-line instruction, not a traceback.
+- CLI: `sfzmaps push`, `sfzmaps pull`.
+
+- [ ] **Step 1: Write failing tests:**
+  - `test_bundle_includes_only_shared` (a temp DATA_DIR with raw/, PNG, TIF and the shared files → the zips contain exactly the shared files)
+  - `test_bundle_deterministic` (two bundles have equal sha256)
+  - `test_pull_keeps_newer_local_review` (fake downloader)
+  - `test_push_missing_rclone_message` (monkeypatched `shutil.which` → `SystemExit` with the instruction text)
+- [ ] **Step 2: Run, implement, pass.**
+- [ ] **Step 3: Live check (owner present):** run `sfzmaps push` after Task 14's 1948 run, then `sfzmaps pull` into a fresh `SFZMAPS_DATA_DIR`, then `sfzmaps run --year 1948`. The run must make zero live Claude calls (`CallCounter` shows only cache hits) and reproduce the same `score.json` values.
+- [ ] **Step 4: Commit** `feat(pipeline): share processed files via Drive`.
+
 ### Task 18: Full run across all eras
 
 **Files:**
@@ -482,5 +510,6 @@ Stage artifacts per sheet in `data/work/<series>/<sheet_id>/`: `page.png`, `page
 - [ ] **Step 1:** Run `uv run sfzmaps fetch && uv run sfzmaps estimate --all`, and **stop to show the owner the dollar estimate before continuing.**
 - [ ] **Step 2:** Run `uv run sfzmaps run --all`. Expected: every discovered page is either skipped with a kind, passed, or `needs_review` with a reason. No crashes; failures in one sheet don't stop the others (logged in `out/run-<timestamp>.log`).
 - [ ] **Step 3:** Fill in the tuning notes with a per-series table: sheets, passed, needs_review, median p95_ft, PMTiles size, and size per zoom.
-- [ ] **Step 4:** Write `pipeline/README.md`.
+- [ ] **Step 4:** Write `pipeline/README.md`. Include "Recreate without re-running": `sfzmaps fetch && sfzmaps pull && sfzmaps run --all` (zero API spend).
+- [ ] **Step 4b:** Run `sfzmaps push` to publish the full run's processed files to Drive.
 - [ ] **Step 5: Commit** `docs(pipeline): full-run results and README`.

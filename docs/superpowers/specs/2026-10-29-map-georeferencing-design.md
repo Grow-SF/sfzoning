@@ -213,6 +213,22 @@ and the page classification.
 - 1948 imagery must carry David Rumsey Collection credit wherever it's shown.
 - Claude API key required (owner approved its use). Expected one-time cost:
   tens of dollars (unverified estimate); caching means reruns are free.
+- **Nothing large goes in git (owner's decision).** Scans and generated files
+  live in the git-ignored `pipeline/data/`. Generated files that save other
+  people work or money are shared in a new `processed/` folder inside the Drive
+  folder `old-planning-maps`, so anyone can fully recreate the results without
+  redoing the expensive or manual steps. That means:
+  - the Claude response cache (the paid step);
+  - the per-sheet alignments, change areas, scores and human `review.json`
+    files (the manual step);
+  - the exact DataSF reference snapshot the results were computed against
+    (DataSF changes over time);
+  - the per-year PMTiles, manifests and review pages.
+  Rendered PNGs and warped GeoTIFFs are not shared, since they are cheap to
+  regenerate from the scans plus the alignments. `sfzmaps pull` restores the
+  shared files into `pipeline/data/` with no Google login, via the folder's
+  public link. `sfzmaps push` uploads them, which needs write access (the
+  owner).
 - Hosting is undecided and deferred to the site project (designer's call). Build
   tiles locally, one file per year/series, and report sizes per zoom level so
   hosting can be chosen with real numbers.
