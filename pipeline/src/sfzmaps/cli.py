@@ -210,7 +210,8 @@ def eval_(
 
 @app.command()
 def push() -> None:
-    """Bundle processed files and upload them to the Drive processed/ folder (rclone)."""
+    """Optional: bundle and upload to the Drive processed/ folder with rclone (needs rclone set up;
+    otherwise use `sfzmaps bundle` and copy the files by hand)."""
     from sfzmaps import share
 
     share.push()
@@ -219,8 +220,35 @@ def push() -> None:
 
 @app.command()
 def pull() -> None:
-    """Download processed files from the public Drive folder into data/."""
+    """Download processed zips from the public Drive processed/ folder and extract them into data/."""
     from sfzmaps import share
 
     share.pull()
     typer.echo("pulled")
+
+
+@app.command()
+def edit(
+    year: str = typer.Option(None, "--year", help="Only this series in the review queue."),
+    sheet: str = typer.Option(None, "--sheet", help="Only this sheet id."),
+    port: int = typer.Option(8765, "--port", help="Port on 127.0.0.1."),
+    demo: bool = typer.Option(False, "--demo", help="Edit a generated, deliberately corrupted synthetic "
+                                                    "sheet in a temporary work dir (no data needed)."),
+) -> None:
+    """Start the control-point editor (127.0.0.1 only)."""
+    import tempfile
+
+    from sfzmaps.editor import server
+
+    if demo:
+        from sfzmaps.editor import demo as demo_mod
+
+        root = Path(tempfile.mkdtemp(prefix="sfzmaps-demo-"))
+        d = demo_mod.build_demo(root)
+        server.set_reference(d.ref)
+        server.register_page(d.page)
+        year, sheet = d.series, d.sheet_id
+        typer.echo(f"demo sheet {d.series}/{d.sheet_id} in {root}")
+    server.configure(year=year, sheet=sheet)
+    typer.echo(f"editor at http://{server.HOST}:{port}/  (queue: /api/queue)")
+    server.serve(port)
