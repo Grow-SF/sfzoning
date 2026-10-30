@@ -43,6 +43,24 @@ def test_label_agreement_placed_and_misplaced():
     # one street over (460 ft): block labels land in the neighbouring block, not their own
     one_over = placement.label_agreement(_t(460.0, 0.0), _labels(), _ref())
     assert one_over.fraction <= 2 / 6
+    # local share: the shifted labels are near misses, so it fails as well; 3000 ft off,
+    # no label is near its feature at all (gross misplacement is left to the corners)
+    assert a.local_fraction == 1.0 and a.n_local == 6
+    assert one_over.n_local == 6 and one_over.local_fraction <= 2 / 6
+    assert far.n_local == 0 and np.isnan(far.local_fraction)
+
+
+def test_label_agreement_renumbered_labels_drop_out_of_local_share():
+    # a correctly placed sheet whose old block numbers name blocks miles away today (1921):
+    # the overall share is low, the local share is not
+    renamed = [Label(kind="block_number", text="2", x=int((300 + 460 * i) / S), y=int(370 / S) + 1,
+                     confidence=1) for i in (2, 3)]
+    ref = _ref()
+    far_block = box(X0 + 20000, Y0 - 500, X0 + 20400, Y0 - 240)
+    ref.blocks.loc[1, "geometry"] = far_block          # today's block "0002" is far away
+    a = placement.label_agreement(_t(), _labels() + renamed * 5, ref)
+    assert a.n == 16 and a.fraction == 5 / 16           # 1, 3, 4 and both street labels
+    assert a.n_local == 5 and a.local_fraction == 1.0
 
 
 def test_label_agreement_nothing_checkable():

@@ -22,13 +22,17 @@ reason, first that applies (this order is the precedence); passed exactly when N
   * "insufficient_anchors" - no RefineResult at all (score(None)): the rough fit from label
                              anchors failed, so the sheet was never refined. All counts
                              are zero; no other reason is considered;
-  * "misplaced"            - the sheet sits in the wrong place: its own labels disagree
-                             with the final transform (sfzmaps.placement: agreement below
-                             config.MISPLACED_MAX_LABEL_AGREEMENT over at least
-                             MISPLACED_MIN_LABELS labels), or almost none of its corners
-                             found a modern partner (inlier share below
-                             config.MISPLACED_MIN_INLIER_FRAC). Checked before the fit-health
-                             reasons because it is the most important thing to say;
+  * "misplaced"            - the sheet sits in the wrong place (is_misplaced): almost none
+                             of its corners found a modern partner (inlier share below
+                             config.MISPLACED_MIN_INLIER_FRAC); or its labels near their
+                             named block/street miss it (sfzmaps.placement local agreement
+                             below config.MISPLACED_MAX_LABEL_AGREEMENT over at least
+                             MISPLACED_MIN_LABELS labels); or its labels disagree overall
+                             AND its corners are weak (inlier share below
+                             MISPLACED_WEAK_INLIER_FRAC): old block numbers and street
+                             names disagree on well placed 1921 sheets too (Task 13c).
+                             Checked before the fit-health reasons because it is the most
+                             important thing to say;
   * "not_converged"        - refine used up max_iter before the final radius settled, or
                              classify_changes' labels were still changing after its last
                              round: the fit is suspect even if its numbers look good;
@@ -74,6 +78,7 @@ class SheetScore:
     n_holdout: int = 0
     label_agreement: float = float("nan")   # sfzmaps.placement share (NaN: not checked)
     inlier_frac: float = float("nan")       # inliers / finite scan corners
+    label_agreement_local: float = float("nan")   # placement local_fraction (NaN: not checked)
 
     @classmethod
     def empty(cls, reason: str) -> "SheetScore":
@@ -127,6 +132,27 @@ def holdout_residuals(result: RefineResult, folds: int = HOLDOUT_FOLDS,
     return out
 
 
+def is_misplaced(agreement, inlier_frac: float) -> bool:
+    """The misplacement rule (config.MISPLACED_*): corners alone (inlier share below
+    MISPLACED_MIN_INLIER_FRAC); or labels near their named feature but not on it (local
+    agreement); or labels that disagree overall, believed only when the corners are weak
+    too (inlier share below MISPLACED_WEAK_INLIER_FRAC, or no corners at all), because
+    renumbered blocks and renamed streets disagree on correctly placed sheets as well.
+    agreement: a placement.Agreement or None; inlier_frac: NaN when there are no corners."""
+    def fails(frac, n):
+        return n >= config.MISPLACED_MIN_LABELS and frac < config.MISPLACED_MAX_LABEL_AGREEMENT
+
+    no_corners = not np.isfinite(inlier_frac)
+    if not no_corners and inlier_frac < config.MISPLACED_MIN_INLIER_FRAC:
+        return True
+    if agreement is None:
+        return False
+    if fails(agreement.local_fraction, agreement.n_local):
+        return True
+    weak = no_corners or inlier_frac < config.MISPLACED_WEAK_INLIER_FRAC
+    return bool(weak and fails(agreement.fraction, agreement.n))
+
+
 def _q(d: np.ndarray, q: float) -> float:
     return float(np.quantile(d, q)) if len(d) else float("nan")
 
@@ -149,10 +175,7 @@ def score(result: RefineResult | None, tol_ft: float | None = None, min_scored: 
     h = h[np.isfinite(h)]
     hp50, hp95 = _q(h, 0.5), _q(h, 0.95)
     agree = float("nan") if agreement is None else float(agreement.fraction)
-    misplaced = bool(
-        (agreement is not None and agreement.n >= config.MISPLACED_MIN_LABELS
-         and agreement.fraction < config.MISPLACED_MAX_LABEL_AGREEMENT)
-        or (finite and inl_frac < config.MISPLACED_MIN_INLIER_FRAC))
+    misplaced = is_misplaced(agreement, inl_frac if finite else float("nan"))
     if misplaced:
         reason = "misplaced"
     elif not (result.converged and result.classify_converged):
@@ -171,4 +194,5 @@ def score(result: RefineResult | None, tol_ft: float | None = None, min_scored: 
         reason = None
     return SheetScore(n, frac, _q(d, 0.5), _q(d, 0.95), float(d.max()) if n else float("nan"),
                       n_rc, labels.count("no_equivalent"), reason is None, reason,
-                      hp50, hp95, len(h), agree, inl_frac)
+                      hp50, hp95, len(h), agree, inl_frac,
+                      float("nan") if agreement is None else float(agreement.local_fraction))

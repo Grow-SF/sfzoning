@@ -94,13 +94,51 @@ def test_score_ambiguous_placement():
     assert score.score(_result([1.0] * 100, vote_status="none")).passed
 
 
-def test_misplaced_by_label_agreement():
-    good = Agreement(0.2, 20, 20, 0)
-    assert score.score(_result([1.0] * 100), agreement=good).passed
-    s = score.score(_result([1.0] * 100), agreement=Agreement(0.19, 20, 20, 0))
+def _inlier_share(frac, n=100):
+    """n inliers among n / frac finite corners (the rest no_equivalent)."""
+    total = round(n / frac)
+    return _result([1.0] * total, ["inlier"] * n + ["no_equivalent"] * (total - n))
+
+
+def test_misplaced_by_label_agreement_needs_weak_corners():
+    # overall label failure with weak corners (10% inliers): misplaced
+    s = score.score(_inlier_share(0.10), agreement=Agreement(0.19, 20, 20, 0))
     assert not s.passed and s.reason == "misplaced" and s.label_agreement == 0.19
+    assert score.score(_inlier_share(0.10), agreement=Agreement(0.2, 20, 20, 0)).passed
     # too few labels to judge: not misplaced on that evidence
-    assert score.score(_result([1.0] * 100), agreement=Agreement(0.0, 19, 19, 0)).passed
+    assert score.score(_inlier_share(0.10), agreement=Agreement(0.0, 19, 19, 0)).passed
+    # the same label failure with healthy corners is renumbering/renaming (1921), not
+    # misplacement: config.MISPLACED_WEAK_INLIER_FRAC is the boundary
+    assert config.MISPLACED_WEAK_INLIER_FRAC == 0.15
+    assert score.score(_inlier_share(0.15, 150), agreement=Agreement(0.1, 200, 200, 0, 0.9, 30)).passed
+    assert score.score(_inlier_share(0.149, 149), agreement=Agreement(0.1, 200, 200, 0, 0.9, 30)).reason == "misplaced"
+    assert score.score(_result([1.0] * 100), agreement=Agreement(0.0, 50, 50, 0)).passed
+    # no corners at all: nothing speaks against the labels
+    assert score.is_misplaced(Agreement(0.1, 50, 50, 0), float("nan"))
+
+
+def test_misplaced_by_local_label_agreement():
+    # labels landing near (within MISPLACED_LOCAL_FT of) their own block but not on it: a
+    # shift of a few blocks, misplaced however good the corners look
+    s = score.score(_result([1.0] * 100), agreement=Agreement(0.5, 100, 100, 0, 0.19, 20))
+    assert s.reason == "misplaced" and s.label_agreement_local == 0.19
+    assert score.score(_result([1.0] * 100), agreement=Agreement(0.5, 100, 100, 0, 0.2, 20)).passed
+    assert score.score(_result([1.0] * 100), agreement=Agreement(0.5, 100, 100, 0, 0.0, 19)).passed
+
+
+def test_misplacement_rule_on_task13c_sheets():
+    # (overall agreement, n, local agreement, n_local, inlier share) from the real work dirs
+    cases = {
+        "1921/094212101": ((0.136, 264, 0.973, 37, 0.406), False),  # overlay: right place
+        "1921/094156908": ((0.162, 74, 0.600, 20, 0.306), False),
+        "1921/094254223": ((0.181, 127, 0.383, 60, 0.300), False),
+        "1921/094333266": ((0.094, 64, 0.750, 8, 0.032), True),     # overlay: sheared, wrong
+        "1921/094348509": ((0.105, 105, 0.367, 30, 0.062), True),   # weak fit, old street names
+        "1948/10": ((0.018, 333, 0.545, 11, 0.019), True),
+        "1948/14": ((0.621, 153, 0.699, 136, 0.095), False),
+    }
+    for sheet, ((f, n, lf, nl, inl), want) in cases.items():
+        assert score.is_misplaced(Agreement(f, n, n, 0, lf, nl), inl) is want, sheet
 
 
 def test_misplaced_by_inlier_fraction():
@@ -113,7 +151,7 @@ def test_misplaced_by_inlier_fraction():
 
 def test_score_reason_precedence():
     # misplaced > not_converged > ambiguous_placement > too_few_matches > excess > holdout
-    bad = Agreement(0.0, 50, 50, 0)
+    bad = Agreement(0.0, 50, 50, 0, 0.0, 50)
     assert score.score(_result([1.0] * 3, converged=False), agreement=bad).reason == "misplaced"
     assert score.score(_result([1.0] * 3, converged=False, vote_status="edge")).reason == "not_converged"
     assert score.score(_result([1.0] * 100, classify_converged=False)).reason == "not_converged"

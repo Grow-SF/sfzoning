@@ -104,18 +104,28 @@ def test_eval_skipped_sheet_has_no_row(workdir):
     assert [r.sheet for r in evaluate.evaluate_series("1948", workdir)] == ["1"]
 
 
-def test_eval_just_2_points_filename(workdir):
+def test_eval_just_2_points_filename(workdir, monkeypatch):
+    # Sheet 2 is cut from the two-page photo 2-and-3.jpg (3.jpg is the other page); its key
+    # "2-and-3.jpg.just-2.points" is in the photo's pixels, shifted by the crop origin.
+    from sfzmaps import pages
+
     aligned = config.RAW_DIR / "1948" / "aligned"
     src = aligned / "2-and-3.jpg"
     src.write_bytes(b"x")
-    page = Page("1948", "2-and-3", src, None)
-    d = config.WORK_DIR / "1948" / "2-and-3"
-    d.mkdir(parents=True)
+    page = Page("1948", "2", src, None, other=aligned / "3.jpg")
+    monkeypatch.setattr(pages, "crop_box", lambda p: (100, 40, 5000, 7000) if p.other else None)
+    d = config.WORK_DIR / "1948" / "2"
     (d / "score.json").write_text(json.dumps(SCORE))
     _transform(d)
-    (aligned / "2-and-3.jpg.just-2.points").write_text(_points(KEY))
+    (aligned / "2-and-3.jpg.just-2.points").write_text(
+        _points([(wx, wy, px + 100, py + 40, e) for wx, wy, px, py, e in KEY]))
+    assert runner.answer_key_path(page) == aligned / "2-and-3.jpg.just-2.points"
     r = evaluate.eval_sheet(page)
     assert r.n_key == 3 and r.key_median_ft == pytest.approx(3.0, abs=1e-6)
+    gcps = runner._answer_key_gcps(page, d / "page.png")
+    assert (gcps[1].px, gcps[1].py) == (1000, 1000)
+    # the photo's key is not the answer key of an uncropped page with another id
+    assert runner.answer_key_path(Page("1948", "2-and-3", src, None)) is None
 
 
 def test_eval_pdf_key_is_rescaled(workdir, tmp_path, monkeypatch):

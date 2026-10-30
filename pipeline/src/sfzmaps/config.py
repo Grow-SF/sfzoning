@@ -18,12 +18,22 @@ PASS_FRACTION = 0.95  # superseded as the pass rule (owner, 2026-10-29); TOLERAN
 # p95 <= PASS_P95_FT, and the sheet is not misplaced (sfzmaps.score).
 PASS_MEDIAN_FT = 5.0
 PASS_P95_FT = 12.0
-# Misplacement detector (sfzmaps.placement / score): fewer than this share of the sheet's
-# own labels land in their block / on their street, over at least MISPLACED_MIN_LABELS
-# checked labels; or fewer than MISPLACED_MIN_INLIER_FRAC of its corners are inliers.
+# Misplacement detector (sfzmaps.placement / score). A sheet is misplaced when
+#  * fewer than MISPLACED_MIN_INLIER_FRAC of its corners are inliers (geometry alone); or
+#  * fewer than MISPLACED_MAX_LABEL_AGREEMENT of its "local" labels (within
+#    MISPLACED_LOCAL_FT of their named block/street) land on it, over at least
+#    MISPLACED_MIN_LABELS such labels: a shift of a few blocks; or
+#  * fewer than MISPLACED_MAX_LABEL_AGREEMENT of ALL its checkable labels land on their
+#    feature (at least MISPLACED_MIN_LABELS) AND fewer than MISPLACED_WEAK_INLIER_FRAC of
+#    its corners are inliers. Label failure alone is not enough: renumbered blocks and
+#    renamed streets (1921) fail it on correctly placed sheets (Task 13c: correctly placed
+#    1921 sheets have inlier shares 0.30-0.41 at agreement 0.14-0.18; the misplaced
+#    1948/10 and 1921 section 11 have 0.02-0.03).
 MISPLACED_MAX_LABEL_AGREEMENT = 0.2
 MISPLACED_MIN_LABELS = 20
 MISPLACED_MIN_INLIER_FRAC = 0.05
+MISPLACED_WEAK_INLIER_FRAC = 0.15
+MISPLACED_LOCAL_FT = 1000.0
 MAX_REAL_CHANGE_FRAC = 0.15  # more real change than this share of scored+real_change: review
 ROUGH_TOL_FT = 150.0  # rough fit (Task 8) error budget; caps the refine translation vote
 # Ridge in ft^2 on the normalized TPS (units in sfzmaps.transform) of the final sheet
@@ -118,4 +128,4 @@ def estimate_image_tokens(w: int, h: int) -> int:
 
 # score.json format/logic version: bump whenever pass or answer-key-fallback logic changes;
 # a score.json with a missing or lower version is stale and rescored.
-SCORE_VERSION = 2
+SCORE_VERSION = 3  # 3: Task 13c misplacement rule (label failure needs weak geometry)
