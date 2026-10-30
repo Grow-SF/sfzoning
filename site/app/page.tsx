@@ -1,4 +1,5 @@
 import Credits from "@/components/Credits";
+import DraftBanner from "@/components/DraftBanner";
 import Sources from "@/components/Sources";
 import Story from "@/components/Story";
 import Explorer from "@/components/Explorer";
@@ -9,9 +10,7 @@ import styles from "@/components/endmatter.module.css";
 export default function Home() {
   return (
     <main>
-      {process.env.NODE_ENV !== "production" && (
-        <p className="draft-banner">Draft copy, not reviewed. Do not publish.</p>
-      )}
+      <DraftBanner />
       <Story steps={STORY} />
       <Explorer />
       <footer className={styles.endmatter}>

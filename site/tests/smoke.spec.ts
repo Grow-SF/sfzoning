@@ -16,6 +16,16 @@ test("page loads with a map canvas and story text", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /How San Francisco was zoned/ })).toBeVisible();
 });
 
+test("a draft build shows the banner and asks search engines not to index", async ({ page }) => {
+  for (const path of ["/", "/about"]) {
+    await page.goto(path);
+    await expect(page.getByTestId("draft-banner")).toBeVisible();
+    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex.*nofollow/);
+  }
+  await expect(page.getByTestId("review-status")).toContainText("published for the eras whose maps have been read so far");
+  await expect(page.getByTestId("review-status")).not.toContainText("still to come");
+});
+
 test("tile server down: notice appears and text still renders", async ({ page }) => {
   await page.route("http://127.0.0.1:8787/**", (r) => r.abort());
   await page.goto("/");

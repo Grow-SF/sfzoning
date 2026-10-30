@@ -4,6 +4,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Credits from "@/components/Credits";
+import DraftBanner from "@/components/DraftBanner";
 import Sources from "@/components/Sources";
 import { SOURCES, citedSourceIds } from "@/content/sources";
 import { STORY } from "@/content/story";
@@ -29,9 +30,7 @@ const ALL_IDS = Array.from(new Set([...citedSourceIds(STORY, ERAS), ...Object.ke
 export default function About() {
   return (
     <main className={styles.page}>
-      {process.env.NODE_ENV !== "production" && (
-        <p className="draft-banner">Draft copy, not reviewed. Do not publish.</p>
-      )}
+      <DraftBanner />
       <p className={styles.kicker}>About this story</p>
       <h1 className={styles.title}>How the maps were made</h1>
       <p className={styles.lede}>
@@ -41,8 +40,8 @@ export default function About() {
 
       <p className={styles.status} data-testid="review-status">
         <strong>Status: draft.</strong> The story text has not yet been reviewed. Map alignment is automatic; sheets
-        that miss the accuracy bar below are waiting for a person to check them. The “what it allowed” colours for each
-        era are still to come.
+        that miss the accuracy bar below are waiting for a person to check them. The “what it allowed” colours are
+        published for the eras whose maps have been read so far; some eras are still pending.
       </p>
 
       <section className={styles.block}>
