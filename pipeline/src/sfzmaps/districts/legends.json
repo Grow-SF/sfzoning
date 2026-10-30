@@ -1,0 +1,9 @@
+{
+ "_doc": "Hand-entered legend swatch boxes (outer printed rectangle, page.png px of work/<series>/<sheet>/) used when the vision legend read fails; add \"force\": true to prefer an entry over vision. Measured by inspection 2026-10-29: 1948 sheet 1 legend (also what the vision read returned), 1921 section 1 (20180102094142210) legend.",
+ "1948": {"sheet": "1", "swatches": {
+  "1R": [3287, 5873, 3389, 5927], "2R": [3287, 5937, 3389, 5992], "C": [3287, 6003, 3389, 6057],
+  "LI": [3688, 5874, 3790, 5928], "HI": [3688, 5939, 3791, 5993], "U": [3688, 6004, 3791, 6058]}},
+ "1921": {"sheet": "20180102094142210", "swatches": {
+  "1R": [1378, 2814, 1426, 2842], "2R": [1378, 2846, 1427, 2875], "C": [1379, 2878, 1428, 2908],
+  "LI": [1597, 2808, 1646, 2839], "HI": [1597, 2841, 1646, 2871], "U": [1598, 2873, 1647, 2904]}}
+}

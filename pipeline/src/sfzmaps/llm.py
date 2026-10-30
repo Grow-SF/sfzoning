@@ -35,6 +35,8 @@ class LLMAuthError(RuntimeError):
 class CallCounter:
     live = 0
     hits = 0
+    in_tokens = 0     # billed usage reported by live OpenAI responses
+    out_tokens = 0
     _lock = threading.Lock()
 
     @classmethod
@@ -43,9 +45,19 @@ class CallCounter:
             setattr(cls, field, getattr(cls, field) + 1)
 
     @classmethod
+    def add_usage(cls, usage) -> None:
+        if usage is None:
+            return
+        with cls._lock:
+            cls.in_tokens += int(getattr(usage, "input_tokens", 0) or 0)
+            cls.out_tokens += int(getattr(usage, "output_tokens", 0) or 0)
+
+    @classmethod
     def reset(cls) -> None:
         cls.live = 0
         cls.hits = 0
+        cls.in_tokens = 0
+        cls.out_tokens = 0
 
 
 class LLMClient(Protocol):
@@ -97,6 +109,7 @@ class OpenAIClient:
         except ValidationError:
             # parse() validates the JSON itself; output cut off by max_output_tokens lands here
             raise RuntimeError("response incomplete or invalid JSON") from None
+        CallCounter.add_usage(getattr(resp, "usage", None))
         for item in resp.output:
             if item.type == "message" and any(c.type == "refusal" for c in item.content):
                 raise LLMRefusal("model refused the request")
