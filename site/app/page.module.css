@@ -107,6 +107,17 @@
   border-left: 1px solid var(--ink);
   border-right: 1px solid var(--ink);
 }
+.byline {
+  margin: 0;
+  padding: 0 1.125rem 0.75rem;
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  color: var(--ink-2);
+  background: var(--paper-hi);
+  border-left: 1px solid var(--ink);
+  border-right: 1px solid var(--ink);
+}
+.byline a { color: inherit; }
 .cue {
   margin: 0;
   padding: 0 1.125rem 1rem;
@@ -252,6 +263,7 @@
   }
   .headline,
   .dek,
+  .byline,
   .cue {
     background: none;
     border: 0;
@@ -264,6 +276,7 @@
     padding-bottom: 1rem;
   }
   .dek { font-size: 1.375rem; max-width: 24em; padding-bottom: 1.5rem; }
+  .byline { font-size: 0.875rem; padding-bottom: 1.25rem; }
   .cue { padding-top: 1rem; border-top: 1px solid var(--ink); }
 
   .step {

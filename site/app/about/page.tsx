@@ -3,7 +3,7 @@
 // table in docs/superpowers/notes/2026-10-29-tuning.md (full run, 2026-10-29).
 import type { Metadata } from "next";
 import Link from "next/link";
-import Credits from "@/components/Credits";
+import Credits, { SOURCE_URL } from "@/components/Credits";
 import DraftBanner from "@/components/DraftBanner";
 import Sources from "@/components/Sources";
 import { SOURCES, citedSourceIds } from "@/content/sources";
@@ -113,6 +113,18 @@ export default function About() {
           Of the 83 flagged sheets, 26 had too few readable labels to place at all; they are missing from the maps
           until someone places them by hand. The rest appear, but may be off by more than the bar. Zoning boundaries
           will later be snapped to modern lot lines, which no warp of a hand-drawn map can match.
+        </p>
+      </section>
+
+      <section className={styles.block} aria-labelledby="open-source-heading">
+        <h2 id="open-source-heading" className={styles.heading}>
+          Open source
+        </h2>
+        <p>
+          The code for the map pipeline and this site, and the research behind the story, are{" "}
+          <a href={SOURCE_URL}>on GitHub</a>. The code is open source, and the pipeline can align other cities&rsquo;
+          historic maps too. Corrections, fixes and adaptations are welcome; the repository explains how to
+          contribute.
         </p>
       </section>
 
