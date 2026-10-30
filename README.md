@@ -61,6 +61,12 @@ official statement of any property's zoning. For official zoning, consult the
 
 ## Contributing
 
-Contributions are welcome under the
-[GrowSF Individual Contributor License Agreement](CLA.md). See
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Corrections, fixes and adaptations for other cities are welcome. In short:
+
+1. Agree to the [GrowSF Individual Contributor License Agreement](CLA.md) with
+   a comment on your first pull request.
+2. Fork, branch from `main`, make your change and run the tests.
+3. Open a pull request. It gets a preview deployment automatically; once a
+   maintainer merges it, it deploys to sfzoning.com.
+
+The full guide, including local setup, is in [CONTRIBUTING.md](CONTRIBUTING.md).
