@@ -41,14 +41,18 @@ def list_folder(folder_id: str) -> list[DriveEntry]:
 def download(file_id: str, dest: Path) -> None:
     part = dest.with_name(dest.name + ".part")
     params = {"id": file_id, "export": "download", "confirm": "t"}
-    with httpx.stream(
-        "GET", DOWNLOAD_URL, params=params, follow_redirects=True, timeout=120
-    ) as r:
-        r.raise_for_status()
-        with open(part, "wb") as f:
-            for chunk in r.iter_bytes(1 << 20):
-                f.write(chunk)
-    part.rename(dest)
+    try:
+        with httpx.stream(
+            "GET", DOWNLOAD_URL, params=params, follow_redirects=True, timeout=120
+        ) as r:
+            r.raise_for_status()
+            with open(part, "wb") as f:
+                for chunk in r.iter_bytes(1 << 20):
+                    f.write(chunk)
+        part.replace(dest)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
 
 
 def _safe_name(title: str) -> str:

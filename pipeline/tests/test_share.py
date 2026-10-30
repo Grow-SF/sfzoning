@@ -5,6 +5,7 @@ import subprocess
 import zipfile
 from pathlib import Path
 
+import httpx
 import pytest
 
 from sfzmaps import config, share
@@ -102,16 +103,7 @@ def test_bundle_deterministic(data, tmp_path):
     assert [sha(p) for p in a] == [sha(p) for p in b]
 
 
-def test_pull_keeps_newer_local_review(data, tmp_path):
-    src = tmp_path / "src"
-    share.bundle(src)
-    meta = json.loads((src / "PROCESSED.json").read_text())
-    rev = data / "work/1948/p1/review.json"
-    rev.write_text("LOCAL EDIT")
-    future = meta["processed-1948.zip"]["created_at_epoch"] + 1000
-    os.utime(rev, (future, future))
-    (data / "work/1948/p1/score.json").unlink()
-
+def _remote(src: Path):
     files = {p.name: DriveEntry("id-" + p.name, p.name, False) for p in src.iterdir()}
 
     def lister(fid):
@@ -120,18 +112,162 @@ def test_pull_keeps_newer_local_review(data, tmp_path):
     def downloader(fid, dest):
         dest.write_bytes((src / fid[3:]).read_bytes())
 
-    share.pull("ROOT", lister=lister, downloader=downloader)
-    assert rev.read_text() == "LOCAL EDIT"
-    assert (data / "work/1948/p1/score.json").exists()  # restored from zip
+    return lister, downloader
 
+
+REV = "work/1948/p1/review.json"
+
+
+def _fresh_pull(data, tmp_path, monkeypatch):
+    """Bundle `data` as the remote, then pull it into an empty DATA_DIR. Returns (new, remote)."""
+    src = tmp_path / "src"
+    share.bundle(src)
+    new = tmp_path / "new"
+    monkeypatch.setattr(config, "DATA_DIR", new)
+    lister, downloader = _remote(src)
+    share.pull("ROOT", lister=lister, downloader=downloader)
+    return new, src
+
+
+def _republish(data, src, rel, text, monkeypatch, new):
+    (data / rel).write_text(text)
+    monkeypatch.setattr(config, "DATA_DIR", data)
+    share.bundle(src)
+    monkeypatch.setattr(config, "DATA_DIR", new)
+    return _remote(src)
+
+
+def test_pull_keeps_local_edit_after_pull(data, tmp_path, monkeypatch):
+    new, src = _fresh_pull(data, tmp_path, monkeypatch)
+    assert (new / REV).read_bytes() == REV.encode()
+    (new / REV).write_text("LOCAL EDIT")
+    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
+    share.pull("ROOT", lister=lister, downloader=downloader)
+    assert (new / REV).read_text() == "LOCAL EDIT"
+    assert (new / (REV + ".pulled")).read_text() == "REMOTE V2"
+
+
+def test_pull_updates_unedited_review(data, tmp_path, monkeypatch):
+    new, src = _fresh_pull(data, tmp_path, monkeypatch)
+    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
+    share.pull("ROOT", lister=lister, downloader=downloader)
+    assert (new / REV).read_text() == "REMOTE V2"
+    assert not (new / (REV + ".pulled")).exists()
+
+
+def test_pull_missing_sidecar_treated_as_edited(data, tmp_path, monkeypatch):
+    new, src = _fresh_pull(data, tmp_path, monkeypatch)
+    (new / share.PULLED_SHAS).unlink()
+    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
+    share.pull("ROOT", lister=lister, downloader=downloader)
+    assert (new / REV).read_bytes() == REV.encode()  # kept
+    assert (new / (REV + ".pulled")).read_text() == "REMOTE V2"
+
+
+def test_pull_skips_unchanged_zips(data, tmp_path, monkeypatch):
+    new, src = _fresh_pull(data, tmp_path, monkeypatch)
+    lister, downloader = _remote(src)
     calls = []
 
     def counting(f, d):
         calls.append(f)
         downloader(f, d)
 
-    share.pull("ROOT", lister=lister, downloader=counting)  # shas match: only the manifest
+    share.pull("ROOT", lister=lister, downloader=counting)
     assert calls == ["id-PROCESSED.json"]
+
+
+def test_pull_network_error_is_one_line(data, tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    share.bundle(src)
+    lister, _ = _remote(src)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "new")
+
+    def boom(fid, dest):
+        raise httpx.ConnectError("no route")
+
+    with pytest.raises(SystemExit) as e:
+        share.pull("ROOT", lister=lister, downloader=boom)
+    assert str(e.value).startswith("could not") and "\n" not in str(e.value)
+
+    def bad_list(fid):
+        raise httpx.ReadTimeout("slow")
+
+    with pytest.raises(SystemExit) as e:
+        share.pull("ROOT", lister=bad_list, downloader=boom)
+    assert str(e.value).startswith("could not")
+
+
+def test_pull_corrupt_zip_is_one_line(data, tmp_path, monkeypatch):
+    src = tmp_path / "src"
+    share.bundle(src)
+    meta = json.loads((src / "PROCESSED.json").read_text())
+    z = src / "processed-1960.zip"
+    z.write_bytes(b"not a zip")
+    meta["processed-1960.zip"]["sha256"] = hashlib.sha256(b"not a zip").hexdigest()
+    (src / "PROCESSED.json").write_text(json.dumps(meta))
+    lister, downloader = _remote(src)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "new")
+    with pytest.raises(SystemExit) as e:
+        share.pull("ROOT", lister=lister, downloader=downloader)
+    assert str(e.value).startswith("could not")
+
+
+def test_extract_validates_before_writing(tmp_path):
+    z = tmp_path / "bad.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("work/ok.json", "1")
+        zf.writestr("../evil.json", "2")
+    root = tmp_path / "root"
+    root.mkdir()
+    with pytest.raises(ValueError):
+        share._extract(z, root)
+    assert not (root / "work/ok.json").exists()
+    assert not (tmp_path / "evil.json").exists()
+
+
+def test_download_failure_leaves_no_part_file(tmp_path, monkeypatch):
+    from sfzmaps.sources import drive
+
+    class Boom:
+        def __enter__(self):
+            raise httpx.ConnectError("x")
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(drive.httpx, "stream", lambda *a, **k: Boom())
+    (tmp_path / "f.zip.part").write_bytes(b"stale")
+    with pytest.raises(httpx.ConnectError):
+        drive.download("id", tmp_path / "f.zip")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_symlink_and_secret_dir_not_bundled(data, tmp_path):
+    outside = tmp_path / "outside.json"
+    outside.write_text("TOPSECRETDATA")
+    (data / "work/1948/p1/labels.json").unlink()
+    (data / "work/1948/p1/labels.json").symlink_to(outside)
+    _w(data, "cache/llm/secret/x.json", b"x")
+    _w(data, "cache/llm/mykeys/y.json", b"y")
+    share.bundle(tmp_path / "share")
+    names = _members(tmp_path / "share")
+    assert "work/1948/p1/labels.json" not in names
+    assert "cache/llm/secret/x.json" not in names
+    assert "cache/llm/mykeys/y.json" not in names
+    for z in (tmp_path / "share").glob("*.zip"):
+        assert b"TOPSECRETDATA" not in z.read_bytes()
+
+
+def test_snapshot_fetched_stable_and_no_tmp(data, tmp_path):
+    dest = tmp_path / "share"
+    share.bundle(dest)
+    first = (dest / "processed-ref.zip").read_bytes()
+    os.utime(data / "ref/parcels.parquet", (1_700_000_000, 1_700_000_000))
+    (dest / "stray.tmp").write_bytes(b"x")
+    share.bundle(dest)
+    assert (dest / "processed-ref.zip").read_bytes() == first
+    assert not list(dest.glob("*.tmp"))
 
 
 def test_push_missing_rclone_message(monkeypatch, data):
