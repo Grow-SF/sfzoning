@@ -46,9 +46,9 @@ CC BY-NC-SA 3.0) and the DataSF datasets (PDDL) keep their own terms. See
 ## Trademark
 
 GrowSF™ and the GrowSF logo are trademarks of GrowSF (U.S. application Serial
-No. 99827114). The licenses cover
-copyright only. Credit GrowSF as above, but don't use the GrowSF name or logo
-to name your version or to suggest that GrowSF made or endorses it.
+No. 99827114). The licenses cover copyright only. Credit GrowSF as above, but
+don't use the GrowSF name or logo to name your version or to suggest that
+GrowSF made or endorses it.
 
 ## Not an official zoning record
 
