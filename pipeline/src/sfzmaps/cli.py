@@ -174,3 +174,21 @@ def eval_(
         typer.echo(f"no processed sheets for {year}; run `sfzmaps run --year {year}` first")
         raise typer.Exit(1)
     typer.echo(evaluate.format_eval_table(rows))
+
+
+@app.command()
+def push() -> None:
+    """Bundle processed files and upload them to the Drive processed/ folder (rclone)."""
+    from sfzmaps import share
+
+    share.push()
+    typer.echo("pushed")
+
+
+@app.command()
+def pull() -> None:
+    """Download processed files from the public Drive folder into data/."""
+    from sfzmaps import share
+
+    share.pull()
+    typer.echo("pulled")
