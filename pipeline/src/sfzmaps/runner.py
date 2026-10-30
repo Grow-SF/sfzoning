@@ -48,7 +48,7 @@ import re
 import subprocess
 import time
 import traceback
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -171,12 +171,16 @@ def _score_load(d: dict) -> SheetScore:
 # -- answer key ------------------------------------------------------------------------
 
 def answer_key_path(page: Page) -> Path | None:
-    """The owner's .points file for a 1948/1960 sheet (ruling R9), or None."""
+    """The owner's .points file for a 1948/1960 sheet (ruling R9), or None. A page cut from a
+    two-page photo (page.other set) uses the key for that page of the photo,
+    "<photo>.just-<sheet>.points" (1948 sheet 2: "2-and-3.jpg.just-2.points"); its pixels are
+    the photo's, which _answer_key_gcps shifts by the crop origin."""
     if page.series not in ("1948", "1960") or page.page_index is not None:
         return None
     a = config.RAW_DIR / page.series / "aligned"
-    for name in (f"{page.sheet_id}.jpg.points", f"{page.sheet_id}.pdf.points",
-                 f"{page.sheet_id}.jpg.just-2.points"):
+    names = ((f"{page.source.name}.just-{page.sheet_id}.points",) if page.other is not None else
+             (f"{page.sheet_id}.jpg.points", f"{page.sheet_id}.pdf.points"))
+    for name in names:
         if (a / name).exists():
             return a / name
     return None
@@ -204,6 +208,9 @@ def _answer_key_gcps(page: Page, png: Path) -> list[GCP] | None:
         img = cv2.imread(str(png), cv2.IMREAD_UNCHANGED)
         scale = img.shape[1] / _gdal_width(page.source)
     gcps = read_points(p, scale=scale)
+    box = pages.crop_box(page)
+    if box is not None:  # key pixels are the whole photo's; page.png is the crop
+        gcps = [replace(g, px=g.px - box[0], py=g.py - box[1]) for g in gcps]
     return gcps if sum(g.enabled for g in gcps) >= 3 else None
 
 

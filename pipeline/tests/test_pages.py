@@ -134,3 +134,90 @@ def test_render_leaves_no_partial_file_on_failure(tmp_path, monkeypatch):
     with pytest.raises(subprocess.CalledProcessError):
         pages.render(pages.Page("1960", "a", src, None), out)
     assert list(out.parent.iterdir()) == []
+
+
+def test_discover_two_page_photo_yields_the_unscanned_page(tmp_path):
+    a = tmp_path / "1948" / "aligned"
+    for n in ["2-and-3", "3", "4-and-5", "4", "5", "6-and-7"]:
+        touch(a / f"{n}.jpg")
+    d = {p.sheet_id: p for p in pages.discover(tmp_path)}
+    assert set(d) == {"2", "3", "4", "5", "6-and-7"}
+    assert d["2"].source == a / "2-and-3.jpg" and d["2"].other == a / "3.jpg"
+    assert d["3"].other is None and d["4"].other is None
+    assert d["6-and-7"].other is None   # neither page alone: kept whole, as before
+    # the page with its own scan may be the first one of the name, too
+    touch(a / "8-and-9.jpg")
+    touch(a / "8.jpg")
+    d = {p.sheet_id: p for p in pages.discover(tmp_path)}
+    assert d["9"].source == a / "8-and-9.jpg" and d["9"].other == a / "8.jpg"
+
+
+def _page_art(seed: int, h: int = 900, w: int = 700) -> np.ndarray:
+    """A framed 'map': a thick border around random blocks and lines (distinct per seed)."""
+    import cv2
+    rng = np.random.default_rng(seed)
+    img = np.full((h, w), 255, np.uint8)
+    cv2.rectangle(img, (10, 10), (w - 11, h - 11), 0, 8)
+    for _ in range(160):
+        x, y = int(rng.integers(30, w - 80)), int(rng.integers(30, h - 80))
+        cv2.rectangle(img, (x, y), (x + int(rng.integers(8, 50)), y + int(rng.integers(8, 50))),
+                      int(rng.integers(0, 120)), int(rng.choice([-1, 2])))
+    for _ in range(40):
+        p = rng.integers(30, min(h, w) - 30, size=4)
+        cv2.line(img, (int(p[0]), int(p[1])), (int(p[2]), int(p[3])), 0, 2)
+    return img
+
+
+def _spread(tmp_path):
+    """2-and-3.jpg: page 2 (seed 2) left, page 3 (seed 3) right; 3.jpg: page 3 alone, at
+    another scale and offset (a separate photo)."""
+    import cv2
+    p2, p3 = _page_art(2), _page_art(3)
+    spread = np.full((1000, 1700), 235, np.uint8)
+    spread[40:940, 60:760] = p2
+    spread[50:950, 900:1600] = p3
+    a = tmp_path / "1948" / "aligned"
+    a.mkdir(parents=True)
+    cv2.imwrite(str(a / "2-and-3.jpg"), cv2.cvtColor(spread, cv2.COLOR_GRAY2BGR), [cv2.IMWRITE_JPEG_QUALITY, 95])
+    alone = np.full((1100, 900), 235, np.uint8)
+    alone[60:60 + 990, 70:70 + 770] = cv2.resize(p3, (770, 990))
+    cv2.imwrite(str(a / "3.jpg"), cv2.cvtColor(alone, cv2.COLOR_GRAY2BGR), [cv2.IMWRITE_JPEG_QUALITY, 95])
+    return a
+
+
+def test_neatline_frames_two_pages(tmp_path):
+    import cv2
+    a = _spread(tmp_path)
+    fr = pages.neatline_frames(cv2.imread(str(a / "2-and-3.jpg"), cv2.IMREAD_GRAYSCALE))
+    assert len(fr) == 2
+    (l0, t0, r0, b0), (l1, t1, r1, b1) = fr
+    assert abs(l0 - 66) <= 6 and abs(r0 - 754) <= 6 and abs(t0 - 46) <= 6 and abs(b0 - 934) <= 6
+    assert abs(l1 - 906) <= 6 and abs(r1 - 1594) <= 6
+
+
+def test_crop_box_keeps_the_page_without_its_own_scan(tmp_path):
+    import cv2
+    a = _spread(tmp_path)
+    page = {p.sheet_id: p for p in pages.discover(tmp_path)}["2"]
+    x0, y0, x1, y1 = pages.crop_box(page)
+    # the left frame plus a margin, never past the middle of the gutter (x 830)
+    assert x0 <= 66 and 754 <= x1 <= 830 and y0 <= 46 and y1 >= 934
+    out = pages.render(page, tmp_path / "w" / "page.png")
+    assert cv2.imread(str(out)).shape[:2] == (y1 - y0, x1 - x0)
+    # decided by content, not position: with page 2 scanned alone, page 3 (right) is kept
+    (a / "3.jpg").rename(a / "x.jpg")
+    alone2 = np.full((1000, 800), 235, np.uint8)
+    alone2[50:950, 50:750] = _page_art(2)
+    cv2.imwrite(str(a / "2.jpg"), alone2)
+    p3 = {p.sheet_id: p for p in pages.discover(tmp_path)}["3"]
+    assert p3.other == a / "2.jpg"
+    x0, _, x1, _ = pages.crop_box(p3)
+    assert 830 <= x0 <= 906 and x1 >= 1594
+
+
+def test_crop_box_refuses_undecidable_photo(tmp_path):
+    import cv2
+    a = _spread(tmp_path)
+    cv2.imwrite(str(a / "3.jpg"), _page_art(99))   # matches neither frame
+    with pytest.raises(RuntimeError, match="cannot tell"):
+        pages.crop_box({p.sheet_id: p for p in pages.discover(tmp_path)}["2"])

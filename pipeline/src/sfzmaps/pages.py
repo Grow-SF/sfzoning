@@ -1,4 +1,15 @@
-"""Page registry (which scans are map sheets), rendering, and neatline detection."""
+"""Page registry (which scans are map sheets), rendering, and neatline detection.
+
+Two-page photos (1948 "A-and-B.jpg", an open atlas spread). When both A and B also exist as
+single scans the photo is ignored. When only one of them does (1948: "2-and-3", sheet 3
+alone as 3.jpg), the photo yields one Page for the missing sheet (id "2"), with `other` set
+to the single scan of the page to cut away. render() crops the photo to that page:
+neatline_frames finds the framed pages, and the frame whose content matches `other` (ORB
+features, homography inliers) is the one dropped; see crop_box. The crop origin is the
+offset from the photo's pixels (the owner's answer key "2-and-3.jpg.just-2.points") to
+page.png's.
+"""
+import functools
 import logging
 import re
 import subprocess
@@ -23,6 +34,8 @@ class Page:
     sheet_id: str
     source: Path
     page_index: int | None  # 0-based page within a multi-page PDF; None for images / single-page PDFs
+    # Two-page photo only: the single scan of the OTHER page, which render() crops away.
+    other: Path | None = None
 
 
 def pdf_page_count(pdf: Path) -> int:
@@ -58,11 +71,18 @@ def _discover_1948(d: Path) -> list[Page]:
         for p in sorted((d / sub).glob("*.jpg")) if (d / sub).is_dir() else []:
             if p.stem not in NON_MAP_1948:
                 src[p.stem] = p
+    other: dict[str, Path] = {}
     for stem in list(src):
         m = _COMBO.match(stem)
-        if m and m.group(1) in src and m.group(2) in src:
+        if not m:
+            continue
+        a, b = m.group(1), m.group(2)
+        if a in src and b in src:       # both pages scanned alone: the photo adds nothing
             del src[stem]
-    return [Page("1948", s, src[s], None) for s in sorted(src, key=_natural)]
+        elif (a in src) != (b in src):  # one page alone: the photo stands for the other one
+            keep, drop = (b, a) if a in src else (a, b)
+            src[keep], other[keep] = src.pop(stem), src[drop]
+    return [Page("1948", s, src[s], None, other.get(s)) for s in sorted(src, key=_natural)]
 
 
 def _discover_1960(d: Path) -> list[Page]:
@@ -125,9 +145,11 @@ def discover(raw_dir: Path = RAW_DIR) -> list[Page]:
 
 
 def render(page: Page, out: Path) -> Path:
-    """Render to PNG: 300 dpi grayscale for PDFs, RGB for images. Skips if fresh."""
+    """Render to PNG: 300 dpi grayscale for PDFs, RGB for images (a two-page photo cropped
+    to crop_box). Skips if fresh."""
     out = Path(out)
-    if out.exists() and out.stat().st_mtime_ns >= page.source.stat().st_mtime_ns:
+    srcs = [page.source] + ([page.other] if page.other is not None else [])
+    if out.exists() and all(out.stat().st_mtime_ns >= p.stat().st_mtime_ns for p in srcs):
         return out
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.stem + ".tmp.png")  # written whole, then renamed: no partial page.png
@@ -147,6 +169,10 @@ def render(page: Page, out: Path) -> Path:
             img = cv2.imread(str(page.source), cv2.IMREAD_COLOR)
             if img is None:
                 raise RuntimeError(f"cannot read {page.source}")
+            box = crop_box(page)
+            if box is not None:
+                x0, y0, x1, y1 = box
+                img = img[y0:y1, x0:x1]
             if not cv2.imwrite(str(tmp), img):
                 raise RuntimeError(f"cannot write {out}")
         tmp.replace(out)
@@ -191,12 +217,9 @@ def neatline_mask(img: np.ndarray) -> np.ndarray:
     return mask.astype(bool)
 
 
-def neatline_frames_mask(img: np.ndarray, min_frac: float = 0.1) -> np.ndarray:
-    """Like neatline_mask, but for pages holding several framed maps side by side (a photo of
-    a two-page spread, 1948 "2-and-3"): the union of every near-rectangular closed dark
-    contour covering more than `min_frac` (and less than 90%) of the page, border included.  A page-sized
-    dark blob (cloth around a photographed spread) is skipped, so all contours are examined.  All-True if none."""
-    full = np.ones(img.shape[:2], bool)
+def _frame_contours(img: np.ndarray, min_frac: float) -> tuple[list, float, tuple[int, int]]:
+    """Near-rectangular closed dark contours covering more than `min_frac` (and at most 90%)
+    of the page, at the working scale: (contours, scale, working shape)."""
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
     if gray.dtype != np.uint8:
         gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
@@ -208,18 +231,121 @@ def neatline_frames_mask(img: np.ndarray, min_frac: float = 0.1) -> np.ndarray:
     bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
     contours, _ = cv2.findContours(bw, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     page_area = small.shape[0] * small.shape[1]
-    mask = np.zeros(small.shape, np.uint8)
-    found = False
+    out = []
     for c in contours:
         area = cv2.contourArea(c)
         rect = cv2.minAreaRect(c)
         if area <= min_frac * page_area or rect[1][0] * rect[1][1] <= 0 \
                 or area / (rect[1][0] * rect[1][1]) < 0.85 or area > 0.9 * page_area:
             continue
+        out.append(c)
+    return out, s, small.shape
+
+
+def neatline_frames_mask(img: np.ndarray, min_frac: float = 0.1) -> np.ndarray:
+    """Like neatline_mask, but for pages holding several framed maps side by side (a photo of
+    a two-page spread, 1948 "2-and-3"): the union of every near-rectangular closed dark
+    contour covering more than `min_frac` (and less than 90%) of the page, border included.  A page-sized
+    dark blob (cloth around a photographed spread) is skipped, so all contours are examined.  All-True if none."""
+    h, w = img.shape[:2]
+    contours, s, shape = _frame_contours(img, min_frac)
+    if not contours:
+        return np.ones((h, w), bool)
+    mask = np.zeros(shape, np.uint8)
+    for c in contours:
         cv2.fillPoly(mask, [cv2.convexHull(c)], 1)
-        found = True
-    if not found:
-        return full
     if s < 1:
         mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
     return mask.astype(bool)
+
+
+def neatline_frames(img: np.ndarray, min_frac: float = 0.1) -> list[tuple[int, int, int, int]]:
+    """Bounding boxes (x0, y0, x1, y1 in full-resolution pixels, x1/y1 exclusive) of the
+    separate framed maps on a page (the contours of neatline_frames_mask), left to right. The
+    inner and outer lines of one thick border are one frame: a box inside another is dropped."""
+    contours, s, _ = _frame_contours(img, min_frac)
+    h, w = img.shape[:2]
+    boxes = set()
+    for c in contours:
+        x, y, bw, bh = cv2.boundingRect(c)
+        boxes.add((max(0, int(x / s)), max(0, int(y / s)),
+                   min(w, int(np.ceil((x + bw) / s))), min(h, int(np.ceil((y + bh) / s)))))
+    tol = round(2 / s)
+
+    def inside(a, b):
+        return a[0] >= b[0] - tol and a[1] >= b[1] - tol and a[2] <= b[2] + tol and a[3] <= b[3] + tol
+
+    outer: list[tuple[int, int, int, int]] = []
+    for b in sorted(boxes, key=lambda b: -(b[2] - b[0]) * (b[3] - b[1])):
+        if not any(inside(b, o) for o in outer):
+            outer.append(b)
+    return sorted(outer)
+
+
+def _gray_small(img: np.ndarray, edge: int = 1200) -> np.ndarray:
+    g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    f = min(1.0, edge / max(g.shape))
+    return cv2.resize(g, None, fx=f, fy=f, interpolation=cv2.INTER_AREA) if f < 1 else g
+
+
+def content_match(a: np.ndarray, b: np.ndarray) -> int:
+    """How much two images show the same thing: RANSAC homography inliers among ORB feature
+    matches (ratio test), both reduced to at most 1200 px. 1948: the right frame of
+    2-and-3.jpg against 3.jpg scores ~2750, the left frame ~30."""
+    orb = cv2.ORB_create(4000)
+    ka, da = orb.detectAndCompute(_gray_small(a), None)
+    kb, db = orb.detectAndCompute(_gray_small(b), None)
+    if da is None or db is None or len(ka) < 4 or len(kb) < 4:
+        return 0
+    pairs = cv2.BFMatcher(cv2.NORM_HAMMING).knnMatch(da, db, k=2)
+    good = [m for m, n in (p for p in pairs if len(p) == 2) if m.distance < 0.75 * n.distance]
+    if len(good) < 4:
+        return 0
+    _, inl = cv2.findHomography(np.float32([ka[m.queryIdx].pt for m in good]),
+                                np.float32([kb[m.trainIdx].pt for m in good]), cv2.RANSAC, 5.0)
+    return 0 if inl is None else int(inl.sum())
+
+
+MIN_CONTENT_MATCH = 100   # homography inliers that make a frame "the other page"
+CROP_MARGIN_FRAC = 0.02   # margin kept around the frame, so the whole neatline stays on the page
+
+
+def crop_box(page: Page) -> tuple[int, int, int, int] | None:
+    """For a two-page photo (page.other set): (x0, y0, x1, y1) in the photo's pixels of the
+    page to keep, the frame (plus a margin, never reaching past half the gutter) whose content
+    does NOT match the single scan page.other. None for an ordinary page. Raises when the photo
+    does not show exactly two frames or the content does not tell them apart: warping the whole
+    spread with one transform is the bug this exists to prevent."""
+    if page.other is None:
+        return None
+    return _crop_box(page.source, page.source.stat().st_mtime_ns,
+                     page.other, page.other.stat().st_mtime_ns)
+
+
+@functools.lru_cache(maxsize=8)
+def _crop_box(source: Path, _m1: int, other: Path, _m2: int) -> tuple[int, int, int, int]:
+    img = cv2.imread(str(source), cv2.IMREAD_GRAYSCALE)
+    oth = cv2.imread(str(other), cv2.IMREAD_GRAYSCALE)
+    if img is None or oth is None:
+        raise RuntimeError(f"cannot read {source if img is None else other}")
+    frames = neatline_frames(img)
+    if len(frames) != 2:
+        raise RuntimeError(f"{source.name}: expected two framed pages, found {len(frames)}")
+    score = [content_match(img[y0:y1, x0:x1], oth) for x0, y0, x1, y1 in frames]
+    if max(score) < MIN_CONTENT_MATCH or min(score) * 3 > max(score):
+        raise RuntimeError(f"{source.name}: cannot tell which frame is {other.name} "
+                           f"(feature inliers {score})")
+    keep, drop = (frames[1], frames[0]) if score[0] > score[1] else (frames[0], frames[1])
+    log.info("%s: keeping frame %s; %s matches the other (inliers %s)", source.name, keep, other.name, score)
+    h, w = img.shape
+    m = round(CROP_MARGIN_FRAC * max(keep[2] - keep[0], keep[3] - keep[1]))
+    x0, y0, x1, y1 = max(0, keep[0] - m), max(0, keep[1] - m), min(w, keep[2] + m), min(h, keep[3] + m)
+    if drop[0] >= keep[2]:          # never reach past the middle of the gutter
+        x1 = min(x1, (keep[2] + drop[0]) // 2)
+    elif drop[2] <= keep[0]:
+        x0 = max(x0, (drop[2] + keep[0]) // 2)
+    if drop[1] >= keep[3]:
+        y1 = min(y1, (keep[3] + drop[1]) // 2)
+    elif drop[3] <= keep[1]:
+        y0 = max(y0, (drop[3] + keep[1]) // 2)
+    return int(x0), int(y0), int(x1), int(y1)
