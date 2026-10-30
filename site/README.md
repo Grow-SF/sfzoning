@@ -63,7 +63,9 @@ The share image is `app/opengraph-image.jpg` (today's zoning, screenshotted from
 Live at https://www.sfzoning.com (Vercel project `growsf/sfzoning`, root directory
 `site`; `sfzoning.com` redirects to `www`). Tiles are in the Vercel Blob store
 `sfzoning-tiles` (public, sfo1); `NEXT_PUBLIC_TILES_BASE_URL` is set to its URL in every
-environment. To deploy from a checkout: `vercel deploy --prod` from the repository root
+environment. Deploys are automatic through Vercel's GitHub integration: every pull
+request and non-`main` branch gets a preview deployment, and every merge to `main`
+deploys to production. To deploy by hand from a checkout: `vercel deploy --prod` from the repository root
 (`.vercelignore` keeps `pipeline/` data out of the upload). To upload changed tiles, use
 `@vercel/blob`'s `put` with `addRandomSuffix: false` (the CLI's `vercel blob put` adds a
 random suffix), with `BLOB_READ_WRITE_TOKEN` from `vercel env pull`.
