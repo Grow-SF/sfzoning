@@ -28,7 +28,10 @@ the GrowSF name or logo (see "Trademark" below).
      - the generated data published from this project: georeferenced scans,
        map tiles (PMTiles), district and parcel layers, statistics and the
        processed bundle (pipeline/data/share/), whether in this repository,
-       in the project's Google Drive folder, or served by sfzoning.com.
+       in the project's Google Drive folder, or served by sfzoning.com. For
+       the georeferenced scans and tiles, the license covers this project's
+       contribution (the alignment and processing), not the underlying maps;
+       see section 3.
 
    Required attribution: when you share this content or anything adapted from
    it, credit it as
@@ -49,10 +52,17 @@ the GrowSF name or logo (see "Trademark" below).
      "© Cartography Associates, David Rumsey Map Collection").
      See https://www.davidrumsey.com/about.
 
-   - Zoning maps 1921–2000s: scanned by Steven Bacio from the archives of the
-     San Francisco Planning Department. They are public records of the City
-     and County of San Francisco; GrowSF claims no copyright in the original
-     maps.
+   - Zoning maps 1921–2000s: official maps of the City and County of San
+     Francisco, from the archives of the San Francisco Planning Department,
+     scanned by Steven Bacio. To the best of our knowledge they are in the
+     public domain: they were adopted as part of the city's zoning law, the
+     older ones were published without copyright notice or before 1931, and
+     they are public records. GrowSF and Steven Bacio claim no copyright in
+     the maps or in the scans, which are faithful reproductions, and the
+     licenses in sections 1 and 2 do not apply to them. Those licenses cover
+     only what this project adds: the georeferencing, the district
+     classification, the research and text, and the code. Please credit
+     "San Francisco Planning Department" as the source of the maps.
 
    - DataSF datasets (Zoning Map – Zoning Districts 3i4a-hu95; Parcels –
      Active and Retired acdm-wktn; Streets – Active and Retired 3psu-pn9h):

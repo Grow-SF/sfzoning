@@ -30,9 +30,12 @@ part covers.
   > Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org),
   > licensed CC BY-NC-SA 4.0.
 
-Some material belongs to others and keeps its own terms: the 1948 atlas imagery
-(David Rumsey Map Collection, CC BY-NC-SA 3.0) and the DataSF datasets (PDDL).
-See `NOTICE`.
+Some material isn't ours to license. The historic zoning maps are official
+San Francisco maps from the Planning Department's archives; to the best of our
+knowledge they're in the public domain, and we claim no rights in them or in
+the scans. The 1948 atlas imagery (David Rumsey Map Collection,
+CC BY-NC-SA 3.0) and the DataSF datasets (PDDL) keep their own terms. See
+`NOTICE`.
 
 ## Trademark
 
