@@ -47,7 +47,7 @@ def test_crop_masks_outside(work):
 
 
 def test_crop_none_when_mostly_uncovered(work):
-    tif = write_sheet("1948", "s", 0, 0, 100, 100, alpha_box=(0, 0, 100, 30))
+    tif = write_sheet("1948", "s", 0, 0, 100, 100, alpha_box=(0, 0, 100, 30), footprint=(0, 0, 100, 30))
     assert sampling.parcel_crop(tif, box(20, 20, 60, 80)) is None
     assert sampling.parcel_crop(tif, box(500, 500, 520, 520)) is None
 
@@ -61,3 +61,27 @@ def test_texture_stats_distinguish_hatch_vs_solid(work):
     assert s[0] > 0.95 and b[0] < 0.05 and 0.1 < h[0] < 0.5
     assert h[5] > s[5] + 3 and h[1:5].max() > 0.5   # peaked FFT and one dominant orientation
     assert not np.isnan(s).any() and not np.isnan(b).any()
+
+
+def test_crop_transparent_paper_reads_white(work):
+    """Real warps make paper alpha 0 with black premultiplied RGB: a blank parcel inside the
+    footprint is a white crop, not None and not black."""
+    tif = write_sheet("1948", "s", 0, 0, 100, 100, fill="blank", paper="transparent")
+    crop = sampling.parcel_crop(tif, box(20, 20, 60, 60))
+    assert crop is not None
+    inside = crop[crop[..., 3] > 0][:, :3]
+    assert inside.min() == 255
+    assert sampling.texture_stats(crop)[0] < 0.01
+    tif = write_sheet("1948", "k", 0, 0, 100, 100, fill="solid", paper="transparent")
+    assert sampling.texture_stats(sampling.parcel_crop(tif, box(20, 20, 60, 60)))[0] > 0.99
+
+
+def test_crop_keep_aspect_pads_not_squashes(work):
+    tif = write_sheet("1948", "s", 0, 0, 200, 100, fill="solid")
+    crop = sampling.parcel_crop(tif, box(10, 10, 130, 40), inset_ft=0.0, px=64, keep_aspect=True)
+    assert crop.shape == (64, 64, 4)
+    rows = np.where(crop[..., 3].any(axis=1))[0]
+    cols = np.where(crop[..., 3].any(axis=0))[0]
+    assert cols.size >= 62 and 14 <= rows.size <= 20      # 120 x 30 ft stays 4:1
+    native = sampling.parcel_crop(tif, box(10, 10, 130, 40), inset_ft=0.0, px=None)
+    assert abs(native.shape[1] - 121) <= 2 and abs(native.shape[0] - 31) <= 2
