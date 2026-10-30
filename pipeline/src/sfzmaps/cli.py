@@ -209,6 +209,19 @@ def eval_(
 
 
 @app.command()
+def bundle() -> None:
+    """Bundle processed files into DATA_DIR/share/ for manual copying into Drive (no rclone needed)."""
+    from sfzmaps import config as cfg, share
+
+    dest = cfg.DATA_DIR / "share"
+    zips = share.bundle(dest)
+    typer.echo(f"bundle folder: {dest.resolve()}")
+    for f in sorted([*zips, dest / "PROCESSED.json"]):
+        typer.echo(f"  {f.name}  {f.stat().st_size:,} bytes")
+    typer.echo("Copy these files into the Drive folder old-planning-maps/processed/")
+
+
+@app.command()
 def push() -> None:
     """Optional: bundle and upload to the Drive processed/ folder with rclone (needs rclone set up;
     otherwise use `sfzmaps bundle` and copy the files by hand)."""
