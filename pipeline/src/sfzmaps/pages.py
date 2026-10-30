@@ -189,3 +189,37 @@ def neatline_mask(img: np.ndarray) -> np.ndarray:
     if s < 1:
         mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
     return mask.astype(bool)
+
+
+def neatline_frames_mask(img: np.ndarray, min_frac: float = 0.1) -> np.ndarray:
+    """Like neatline_mask, but for pages holding several framed maps side by side (a photo of
+    a two-page spread, 1948 "2-and-3"): the union of every near-rectangular closed dark
+    contour covering more than `min_frac` (and less than 90%) of the page, border included.  A page-sized
+    dark blob (cloth around a photographed spread) is skipped, so all contours are examined.  All-True if none."""
+    full = np.ones(img.shape[:2], bool)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+    if gray.dtype != np.uint8:
+        gray = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    h, w = gray.shape
+    s = min(1.0, 1500 / max(h, w))
+    small = cv2.resize(gray, (max(1, round(w * s)), max(1, round(h * s))), interpolation=cv2.INTER_AREA) if s < 1 else gray
+    _, bw = cv2.threshold(small, 0, 255, cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)
+    k = max(3, round(max(small.shape) / 300)) | 1
+    bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+    contours, _ = cv2.findContours(bw, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    page_area = small.shape[0] * small.shape[1]
+    mask = np.zeros(small.shape, np.uint8)
+    found = False
+    for c in contours:
+        area = cv2.contourArea(c)
+        rect = cv2.minAreaRect(c)
+        if area <= min_frac * page_area or rect[1][0] * rect[1][1] <= 0 \
+                or area / (rect[1][0] * rect[1][1]) < 0.85 or area > 0.9 * page_area:
+            continue
+        cv2.fillPoly(mask, [cv2.convexHull(c)], 1)
+        found = True
+    if not found:
+        return full
+    if s < 1:
+        mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+    return mask.astype(bool)

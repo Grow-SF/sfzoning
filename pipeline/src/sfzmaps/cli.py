@@ -162,7 +162,7 @@ def run(
             _publish(s)
 
 
-def _publish(series: str, min_zoom: int = 11, max_zoom: int = 19) -> None:
+def _publish(series: str, min_zoom: int = 11, max_zoom: int = 18) -> None:
     """Stitch -> tiles -> manifest for one series (scores read from each sheet's score.json)."""
     from sfzmaps import manifest, stitch, tiles
 
@@ -182,7 +182,7 @@ def _publish(series: str, min_zoom: int = 11, max_zoom: int = 19) -> None:
 def tiles(
     year: str = typer.Option(..., "--year", help="Series, e.g. 1948."),
     min_zoom: int = typer.Option(11, "--min-zoom"),
-    max_zoom: int = typer.Option(19, "--max-zoom"),
+    max_zoom: int = typer.Option(18, "--max-zoom"),
 ) -> None:
     """(Re)build the stitched VRT, PMTiles and manifest for one series from existing warps."""
     try:

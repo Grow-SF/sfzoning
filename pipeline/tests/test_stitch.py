@@ -35,6 +35,11 @@ def work(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _sid(path):
+    parts = path.split("/")
+    return parts[-1][:-4] if parts[-2] == "cut" else parts[-2]
+
+
 def _sources(vrt):
     import xml.etree.ElementTree as ET
     out = []
@@ -46,13 +51,13 @@ def _sources(vrt):
 
 def test_vrt_order_passed_on_top(work):
     w = config.WORK_DIR / "1960"
-    for sid, p, p50, reason in [("a", False, 6.0, "holdout_median"), ("b", True, 4.9, None),
-                                ("c", True, 3.0, None), ("d", False, 5.5, "holdout_median")]:
-        _tif(w / sid / "warped.tif", 6_000_000 + (10 if sid in "ab" else 20), 100)
+    for i, (sid, p, p50, reason) in enumerate([("a", False, 6.0, "holdout_median"), ("b", True, 4.9, None),
+                                               ("c", True, 3.0, None), ("d", False, 5.5, "holdout_median")]):
+        _tif(w / sid / "warped.tif", 6_000_000 + 45 * i, 100)   # disjoint: no cutting
         _score(w / sid, p, p50, reason)
     vrt = stitch.build_vrt("1960")
     assert vrt == config.OUT_DIR / "1960" / "1960.vrt"
-    names = [s.split("/")[-2] for s in _sources(vrt)]
+    names = [_sid(s) for s in _sources(vrt)]
     # last listed wins: needs_review at the bottom (worse first), then passing (worse first)
     assert names == ["a", "d", "b", "c"]
 
@@ -63,10 +68,48 @@ def test_vrt_skips_sheets_without_warp(work):
     _score(w / "a", True, 3.0)
     (w / "b").mkdir()
     _score(w / "b", False, 9.0, "x")
-    names = [s.split("/")[-2] for s in _sources(stitch.build_vrt("1960"))]
+    names = [_sid(s) for s in _sources(stitch.build_vrt("1960"))]
     assert names == ["a"]
 
 
 def test_vrt_no_sheets_raises(work):
     with pytest.raises(RuntimeError):
         stitch.build_vrt("1960")
+
+
+def _px(vrt, x, y=2_100_000 - 10):
+    with rasterio.open(vrt) as ds:
+        r, c = ds.index(x, y)
+        return ds.read(window=((r, r + 1), (c, c + 1)))[:, 0, 0]
+
+
+@pytest.mark.parametrize("top", ["a", "b"])
+def test_overlap_shows_only_top_sheet(work, top):
+    """a spans x 6000000-6000040 (value 50), b 6000020-6000060 (value 200). Only the
+    higher-priority sheet has pixels in the overlap 6000020-6000040; the other keeps the rest."""
+    w = config.WORK_DIR / "1960"
+    _tif(w / "a" / "warped.tif", 6_000_000, 50)
+    _tif(w / "b" / "warped.tif", 6_000_020, 200)
+    bad = "b" if top == "a" else "a"
+    _score(w / top, True, 3.0)
+    _score(w / bad, False, 9.0, "holdout_median")
+    vrt = stitch.build_vrt("1960")
+    val = {"a": 50, "b": 200}
+    for x in (6_000_024, 6_000_036):                      # overlap: top sheet only
+        assert list(_px(vrt, x)) == [val[top]] * 3 + [255]
+    # the lower sheet's cut raster is transparent in the overlap and untouched elsewhere
+    with rasterio.open(config.OUT_DIR / "1960" / "cut" / f"{bad}.tif") as ds:
+        a = ds.read(4)
+        for x, want in ((6_000_030, 0), (6_000_010 if bad == "a" else 6_000_050, 255)):
+            r, c = ds.index(x, 2_100_000 - 10)
+            assert a[r, c] == want
+
+
+def test_fully_covered_sheet_dropped(work):
+    """Sanity: a fully covered lower sheet is dropped from the VRT."""
+    w = config.WORK_DIR / "1960"
+    _tif(w / "a" / "warped.tif", 6_000_000, 50)
+    _tif(w / "b" / "warped.tif", 6_000_000, 200)
+    _score(w / "a", False, 9.0, "holdout_median")
+    _score(w / "b", True, 3.0)
+    assert [_sid(s) for s in _sources(stitch.build_vrt("1960"))] == ["b"]

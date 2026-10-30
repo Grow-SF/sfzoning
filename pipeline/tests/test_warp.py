@@ -174,3 +174,81 @@ def test_warp_edges_within_one_pixel_of_truth(tmp_path):
         assert abs(e) < res, e
     assert abs(np.mean(errs_x)) < 0.3 * res and abs(np.mean(errs_y)) < 0.3 * res, \
         (np.mean(errs_x) / res, np.mean(errs_y) / res)
+
+
+def _bordered(h=1600, w=1800, margin=100, stroke=12):
+    img = np.full((h, w), 255, np.uint8)
+    cv2.rectangle(img, (margin, margin), (w - margin, h - margin), 0, stroke)
+    img[600:700, 700:900] = 0   # ink well inside
+    return img
+
+
+def test_neatline_stroke_is_transparent():
+    img = _bordered()
+    rgba = warp.make_rgba(img, [])
+    a = rgba[..., 3]
+    assert a[100:112, 300:1500].max() == 0      # top border stroke
+    assert a[800, 95:115].max() == 0            # left border stroke
+    assert a[600:700, 700:900].min() == 255     # interior ink untouched
+    assert a[:warp.NEATLINE_INSET_PX + 100].max() == 0   # whole inset band is clear
+
+
+def test_no_neatline_means_no_inset():
+    img = np.full((600, 600), 255, np.uint8)
+    img[0:20, :] = 0
+    assert warp.make_rgba(img, [])[..., 3][0:20].min() == 255
+
+
+def test_warp_writes_footprint_and_clears_stroke(tmp_path):
+    import json
+    from shapely.geometry import shape
+    img = _bordered()
+    png = tmp_path / "p.png"
+    cv2.imwrite(str(png), img)
+    h, w = img.shape
+    P = np.array([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]], float)
+    W = P * 2.0 * np.array([1, -1]) + np.array([6_000_000.0, 2_120_000.0])
+    t = SheetTransform([GCP(*p, *q, "auto") for p, q in zip(P, W)], smoothing=1.0).fit()
+    out = warp.warp_sheet(png, t, [], tmp_path / "w.tif")
+    with rasterio.open(out) as ds:
+        a = ds.read(4)
+        r, c = ds.index(6_000_000 + 2 * 600, 2_120_000 - 2 * 105)   # on the top stroke
+        assert a[r, c] == 0
+        r, c = ds.index(6_000_000 + 2 * 800, 2_120_000 - 2 * 650)   # in the ink well
+        assert a[r, c] == 255
+    fp = json.loads((tmp_path / "w.footprint.geojson").read_text())
+    g = shape(fp["features"][0]["geometry"])
+    assert g.contains(__import__("shapely.geometry").geometry.Point(6_000_000 + 2 * 800, 2_120_000 - 2 * 650))
+    assert not g.contains(__import__("shapely.geometry").geometry.Point(6_000_000 + 2 * 105, 2_120_000 - 2 * 800))
+
+
+def test_two_framed_maps_on_one_page_are_both_cleared():
+    img = np.full((1600, 3400), 255, np.uint8)
+    for x0 in (100, 1800):
+        cv2.rectangle(img, (x0, 100), (x0 + 1400, 1500), 0, 12)
+        img[600:700, x0 + 600:x0 + 800] = 0
+    a = warp.make_rgba(img, [])[..., 3]
+    for x0 in (100, 1800):
+        assert a[100:112, x0 + 200:x0 + 1200].max() == 0     # top stroke
+        assert a[800, x0 - 5:x0 + 15].max() == 0             # left stroke
+        assert a[600:700, x0 + 600:x0 + 800].min() == 255    # ink kept
+    assert a[:, 1550:1750].max() == 0                        # gutter between the frames
+
+
+def test_footprint_skips_blank_corner_of_frame():
+    """Content only in the left part of the frame: the blank right part is not in the
+    footprint (a neighbour's data must show there)."""
+    img = np.full((1600, 1800), 255, np.uint8)
+    cv2.rectangle(img, (100, 100), (1700, 1500), 0, 12)
+    for y in range(250, 1400, 60):
+        cv2.line(img, (250, y), (800, y), 0, 6)          # content block at x 250-800
+    h, w = img.shape
+    P = np.array([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]], float)
+    W = P * np.array([1, -1]) + np.array([6_000_000.0, 2_120_000.0])   # 1 ft/px
+    t = SheetTransform([GCP(*p, *q, "auto") for p, q in zip(P, W)], smoothing=1.0).fit()
+    excl = warp.inset_exclusion(img, [])
+    g = warp.footprint_polygons(excl, warp.make_rgba(img, [], excl)[..., 3], t)
+    from shapely.geometry import Point
+    assert g.contains(Point(6_000_000 + 500, 2_120_000 - 800))
+    assert not g.contains(Point(6_000_000 + 1400, 2_120_000 - 800))
+    assert g.bounds[2] < 6_000_000 + 900

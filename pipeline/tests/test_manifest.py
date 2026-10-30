@@ -73,3 +73,12 @@ def test_manifest_1948_credit_and_tile_report(work):
     assert m["credit"] == config.RUMSEY_CREDIT
     assert m["tile_report"] == {"bytes_total": 30, "bytes_by_zoom": {"11": 10, "12": 20}}
     assert m["pmtiles"] == "1948.pmtiles"
+
+
+def test_manifest_keeps_previous_tile_report(work):
+    rep = TileReport(bytes_total=30, bytes_by_zoom={11: 10, 12: 20})
+    manifest.write("1960", {}, rep)
+    m = _read(manifest.write("1960", {}))
+    assert m["tile_report"] == {"bytes_total": 30, "bytes_by_zoom": {"11": 10, "12": 20}}
+    new = TileReport(bytes_total=5, bytes_by_zoom={11: 5})
+    assert _read(manifest.write("1960", {}, new))["tile_report"]["bytes_total"] == 5

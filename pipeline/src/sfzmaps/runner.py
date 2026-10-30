@@ -451,7 +451,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
 
     # warp
     if tj.exists():
-        stage("warp", wt, [tj, pj, png],
+        stage("warp", wt, [tj, pj, png, Path(warp.__file__)],  # warp.py: code change re-warps
               lambda: warp.warp_sheet(png, SheetTransform.from_json(json.loads(tj.read_text())),
                                       info().mask_boxes, wt))
     else:

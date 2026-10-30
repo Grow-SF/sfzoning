@@ -1,8 +1,19 @@
-"""Stitch a series' warped sheets into one VRT (overlaps resolved by sheet quality)."""
+"""Stitch a series' warped sheets into one VRT (overlaps resolved by sheet quality).
+
+Paper is transparent, so overlapping sheets would show both sheets' ink.  Every sheet gets a
+cutline: its footprint (warped.footprint.geojson written by warp.warp_sheet: the neatline
+interior minus mask boxes, EPSG:2227; the raster bounds when that file is missing) minus the
+union of the footprints of all higher-priority sheets (draw_order: passed over needs_review,
+then lower holdout_p50_ft on top).  A sheet that overlaps a higher-priority one is re-warped
+with `gdalwarp -cutline` onto its own pixel grid (nearest neighbour, so no resampling) into
+OUT_DIR/<series>/cut/<sheet>.tif; the others are used as they are.  The VRT lists the
+resulting rasters in draw order, so it also stays correct if a cutline is imperfect.
+"""
 from __future__ import annotations
 
 import json
 import math
+import shutil
 import subprocess
 
 from pathlib import Path
@@ -39,6 +50,65 @@ def draw_order(series: str, scores: dict[str, SheetScore]) -> list[str]:
     return sorted(have, key=key)
 
 
+def footprint(series: str, sheet_id: str):
+    """Shapely footprint (EPSG:2227) of a sheet's warped.tif."""
+    from shapely.geometry import box, shape
+
+    d = config.WORK_DIR / series / sheet_id
+    fp = d / "warped.footprint.geojson"
+    try:
+        feats = json.loads(fp.read_text())["features"]
+        from shapely.ops import unary_union
+        g = unary_union([shape(f["geometry"]) for f in feats])
+        if not g.is_empty:
+            return g
+    except (OSError, ValueError, KeyError):
+        pass
+    import rasterio
+    with rasterio.open(d / "warped.tif") as ds:
+        return box(*ds.bounds)
+
+
+def _cut(series: str, sheet_id: str, geom, out: Path) -> None:
+    import geopandas as gpd
+    import rasterio
+
+    src = config.WORK_DIR / series / sheet_id / "warped.tif"
+    cl = out.with_suffix(".cutline.geojson")
+    gpd.GeoDataFrame(geometry=[geom], crs=config.WORK_CRS).to_file(cl, driver="GeoJSON")
+    with rasterio.open(src) as ds:
+        b, res = ds.bounds, ds.res
+    subprocess.run(["gdalwarp", "-overwrite", "-q", "-r", "near", "-te", str(b.left), str(b.bottom), str(b.right), str(b.top),
+                    "-tr", repr(res[0]), repr(res[1]), "-cutline", str(cl), "-multi", "-wo", "NUM_THREADS=ALL_CPUS",
+                    "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", "-co", "BIGTIFF=IF_SAFER",
+                    str(src), str(out)], check=True, capture_output=True)
+    cl.unlink(missing_ok=True)
+
+
+def cut_sources(series: str, order: list[str]) -> list[Path]:
+    """Raster per sheet of `order` (bottom first) after the cutlines; sheets whose cut
+    footprint is empty are dropped."""
+    from shapely.ops import unary_union
+
+    cutdir = config.OUT_DIR / series / "cut"
+    shutil.rmtree(cutdir, ignore_errors=True)
+    fps = {s: footprint(series, s) for s in order}
+    out = []
+    for i, sid in enumerate(order):
+        above = unary_union([fps[o] for o in order[i + 1:]]) if i + 1 < len(order) else None
+        src = config.WORK_DIR / series / sid / "warped.tif"
+        if above is None or not fps[sid].intersects(above):
+            out.append(src)
+            continue
+        geom = fps[sid].difference(above)
+        if geom.is_empty or geom.area < 1.0:
+            continue
+        cutdir.mkdir(parents=True, exist_ok=True)
+        _cut(series, sid, geom, cutdir / f"{sid}.tif")
+        out.append(cutdir / f"{sid}.tif")
+    return out
+
+
 def build_vrt(series: str, scores: dict[str, SheetScore] | None = None) -> Path:
     scores = load_scores(series) if scores is None else scores
     order = draw_order(series, scores)
@@ -47,7 +117,7 @@ def build_vrt(series: str, scores: dict[str, SheetScore] | None = None) -> Path:
     out = config.OUT_DIR / series / f"{series}.vrt"
     out.parent.mkdir(parents=True, exist_ok=True)
     lst = out.with_suffix(".txt")
-    lst.write_text("\n".join(str(config.WORK_DIR / series / s / "warped.tif") for s in order) + "\n")
+    lst.write_text("\n".join(str(p) for p in cut_sources(series, order)) + "\n")
     # The RGBA alpha band is honored as the mask; the last listed source wins in overlaps.
     subprocess.run(["gdalbuildvrt", "-overwrite", "-resolution", "highest",
                     "-input_file_list", str(lst), str(out)], check=True, capture_output=True)

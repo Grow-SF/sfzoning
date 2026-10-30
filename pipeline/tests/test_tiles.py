@@ -35,3 +35,10 @@ def test_set_metadata_center(tmp_path):
     md = dict(sqlite3.connect(p).execute("select name, value from metadata").fetchall())
     assert md["center"] == "-122.400000,37.750000,11" and md["attribution"] == "credit"
     assert md["name"] == "SF zoning 1948"
+
+
+def test_default_max_zoom_is_18():
+    import inspect
+    from sfzmaps import cli
+    assert inspect.signature(tiles.make_pmtiles).parameters["max_zoom"].default == 18
+    assert cli._publish.__defaults__ == (11, 18)

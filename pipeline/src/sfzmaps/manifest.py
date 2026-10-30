@@ -56,17 +56,20 @@ def write(series: str, scores: dict[str, SheetScore], tile_report=None) -> Path:
             "answer_key_fallback": bool(extra.get("answer_key_fallback", False)),
             "bounds_wgs84": bounds_wgs84(d / "warped.tif"),
         })
+    out = config.OUT_DIR / series / "manifest.json"
+    if tile_report is None:   # a rewrite without a tile build keeps the last tile report
+        prev = (_json(out) or {}).get("tile_report")
+    else:
+        prev = {"bytes_total": tile_report.bytes_total,
+                "bytes_by_zoom": {str(z): b for z, b in sorted(tile_report.bytes_by_zoom.items())}}
     data = {
         "series": series,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "credit": config.RUMSEY_CREDIT if series == "1948" else None,
         "pmtiles": f"{series}.pmtiles",
-        "tile_report": None if tile_report is None else {
-            "bytes_total": tile_report.bytes_total,
-            "bytes_by_zoom": {str(z): b for z, b in sorted(tile_report.bytes_by_zoom.items())}},
+        "tile_report": prev,
         "sheets": sheets,
     }
-    out = config.OUT_DIR / series / "manifest.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=1))
