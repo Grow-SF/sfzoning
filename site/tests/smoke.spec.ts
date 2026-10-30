@@ -19,12 +19,13 @@ test("page loads with a map canvas and story text", async ({ page }) => {
 test("tile server down: notice appears and text still renders", async ({ page }) => {
   await page.route("http://127.0.0.1:8787/**", (r) => r.abort());
   await page.goto("/");
-  await expect(page.locator(".map-notice")).toContainText("could not be loaded");
+  await expect(page.locator("[data-active-step] .map-notice")).toContainText("could not be loaded");
   await expect(page.getByRole("heading", { name: /How San Francisco was zoned/ })).toBeVisible();
 });
 
 test("every 1948 step shows the Rumsey credit, and other steps do not", async ({ page }) => {
-  const credit = page.getByText("© Cartography Associates, David Rumsey Map Collection", { exact: true });
+  // The story map's credit; the explorer below has its own map and credit.
+  const credit = page.locator("[data-active-step]").getByText("© Cartography Associates, David Rumsey Map Collection", { exact: true });
   await page.goto("/");
   await expect(credit).toHaveCount(0);
   const steps1948 = STORY.filter((s) => s.era === "1948");

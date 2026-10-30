@@ -5,6 +5,8 @@ export const MAP_COLORS = {
   block: "#dfd9cd",
   blockEdge: "#d2cbbd",
   accent: "#2337c6",
+  /** District boundaries over the colour fills: ink, not black, so the scan's own linework stays distinct. */
+  districtEdge: "#2b2722",
 } as const;
 
 /**

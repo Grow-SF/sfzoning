@@ -74,22 +74,6 @@
 .ruler li:first-child span { left: 0; transform: none; }
 .ruler li:last-child span { left: auto; right: 0; transform: none; }
 
-.pending {
-  position: absolute;
-  z-index: 2;
-  top: 4.25rem;
-  left: 0.75rem;
-  max-width: 10.5rem;
-  margin: 0;
-  padding: 0.35rem 0.55rem;
-  font-family: var(--font-ui);
-  font-size: 0.75rem;
-  line-height: 1.35;
-  color: var(--ink);
-  background: var(--paper-hi);
-  border-left: 3px solid var(--accent);
-}
-
 /* ---------- Hero ---------- */
 
 .hero {
@@ -259,13 +243,6 @@
   }
   .ruler { font-size: 0.625rem; }
   .ruler li span { visibility: visible; }
-
-  .pending {
-    top: auto;
-    bottom: 0.75rem;
-    left: 0.75rem;
-    max-width: 18rem;
-  }
 
   .hero {
     min-height: 92vh;

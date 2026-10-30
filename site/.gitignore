@@ -5,3 +5,4 @@ playwright-report
 next-env.d.ts
 .env*.local
 public/maplibre
+public/data/rules.json

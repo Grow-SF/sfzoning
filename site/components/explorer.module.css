@@ -1,0 +1,310 @@
+/* Finale explorer: era slider, view switch, a pannable map, the lot card and the chart. */
+
+.explorer {
+  position: relative;
+  z-index: 1;
+  padding: 3rem 0.75rem 2.5rem;
+  background: var(--paper);
+  border-top: 1px solid var(--ink);
+}
+
+.intro { max-width: 40rem; margin: 0 0 1.25rem; }
+.heading {
+  margin: 0;
+  font-size: 2.25rem;
+  line-height: 1.02;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  font-variation-settings: "opsz" 72;
+}
+.dek { margin: 0.5rem 0 0; color: var(--ink-2); font-size: 1.0625rem; line-height: 1.45; }
+
+/* ---------- Controls ---------- */
+
+.controls {
+  display: grid;
+  gap: 0.875rem;
+  margin-bottom: 0.75rem;
+  font-family: var(--font-ui);
+}
+
+.era { display: flex; align-items: flex-end; gap: 0.875rem; }
+.eraLabel { flex: none; min-width: 5.25rem; }
+.eraValue {
+  display: block;
+  font-family: var(--font-body);
+  font-size: 2.5rem;
+  line-height: 0.9;
+  font-weight: 300;
+  font-variation-settings: "opsz" 72;
+  font-variant-numeric: lining-nums tabular-nums;
+  letter-spacing: -0.02em;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.slider { position: relative; flex: 1; padding-bottom: 1.15rem; }
+.slider input[type="range"] {
+  display: block;
+  width: 100%;
+  height: 1.75rem;
+  margin: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+.slider input[type="range"]::-webkit-slider-runnable-track { height: 1px; background: var(--ink); }
+.slider input[type="range"]::-moz-range-track { height: 1px; background: var(--ink); }
+.slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 0.875rem;
+  height: 1.375rem;
+  margin-top: -0.6875rem;
+  background: var(--accent);
+  border: 2px solid var(--paper-hi);
+  outline: 1px solid var(--accent);
+}
+.slider input[type="range"]::-moz-range-thumb {
+  width: 0.875rem;
+  height: 1.375rem;
+  border-radius: 0;
+  background: var(--accent);
+  border: 2px solid var(--paper-hi);
+}
+.slider input[type="range"]:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+
+/* Ticks under the track; thumb travel is inset by half its width, so are the ticks. */
+.ticks {
+  position: absolute;
+  left: 0.4375rem;
+  right: 0.4375rem;
+  top: 1.15rem;
+  height: 1.2rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.625rem;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+  pointer-events: none;
+}
+.ticks li { position: absolute; top: 0; width: 1px; height: 0.3rem; background: var(--ink-2); }
+.ticks li span {
+  position: absolute;
+  top: 0.4rem;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  visibility: hidden;
+}
+.ticks li[data-major] span { visibility: visible; }
+.ticks li[data-on] { background: var(--accent); height: 0.45rem; width: 2px; }
+.ticks li[data-on] span { color: var(--accent); font-weight: 700; }
+.ticks li:first-child span { left: 0; transform: none; }
+.ticks li:last-child span { left: auto; right: 0; transform: none; }
+
+/* Segmented view switch. */
+.views {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--ink);
+  min-width: 0;
+}
+.views label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  text-align: center;
+  line-height: 1.15;
+  cursor: pointer;
+  background: var(--paper-hi);
+}
+.views label + label { border-left: 1px solid var(--ink); }
+.views label[data-on] { background: var(--ink); color: var(--paper-hi); }
+.views label[data-disabled] { color: var(--rule); cursor: not-allowed; }
+.views input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: inherit; }
+.views label:has(input:focus-visible) { outline: 2px solid var(--accent); outline-offset: -4px; }
+
+/* ---------- Map frame ---------- */
+
+.frame {
+  position: relative;
+  height: 72vh;
+  height: 72svh;
+  min-height: 26rem;
+  border: 1px solid var(--ink);
+  overflow: hidden;
+}
+
+.frameNote {
+  position: absolute;
+  z-index: 2;
+  left: 0.75rem;
+  bottom: 0.75rem;
+  max-width: 16rem;
+  margin: 0;
+  padding: 0.35rem 0.55rem;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  background: var(--paper-hi);
+  border-left: 3px solid var(--accent);
+}
+
+/* ---------- Lot card ---------- */
+
+.popup {
+  position: absolute;
+  z-index: 4;
+  left: 0.5rem;
+  right: 0.5rem;
+  bottom: 0.5rem;
+  max-height: 58%;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper-hi);
+  border: 1px solid var(--ink);
+  box-shadow: 0 10px 28px -12px rgb(22 21 19 / 0.4);
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+.popupScroll {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.875rem 1rem 0.875rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rule) transparent;
+}
+
+.close {
+  position: absolute;
+  z-index: 1;
+  top: 0.25rem;
+  right: 0.25rem;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  font: 400 1.5rem/1 var(--font-ui);
+  color: var(--ink);
+  background: none;
+  border: 0;
+  cursor: pointer;
+}
+.popupEra {
+  margin: 0;
+  padding-right: 2rem;
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: lining-nums;
+}
+.popupLot { margin-left: 0.6rem; font-weight: 400; color: var(--ink-2); }
+.popupCode {
+  margin: 0.15rem 0 0;
+  font-size: 2.125rem;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  font-variation-settings: "opsz" 72;
+}
+.popupName { margin: 0.2rem 0 0; font-style: italic; color: var(--ink-2); }
+.popupCat {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.5rem 0 0;
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+.popupSwatch { width: 0.9rem; height: 0.9rem; outline: 1px solid rgb(22 21 19 / 0.3); outline-offset: -1px; }
+
+.facts {
+  display: grid;
+  grid-template-columns: 1fr;
+  margin: 0.75rem 0 0;
+  border-top: 1px solid var(--ink);
+}
+.facts dt {
+  margin-top: 0.5rem;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+.facts dd { margin: 0.05rem 0 0; }
+.facts dd.uses { font-size: 0.875rem; color: var(--ink-2); }
+.noRule { margin: 0.75rem 0 0; padding-top: 0.5rem; border-top: 1px solid var(--ink); color: var(--ink-2); }
+.sure {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  margin: 0.75rem 0 0;
+  padding-top: 0.45rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+
+/* ---------- Chart ---------- */
+
+.chart { max-width: 44rem; margin: 2.25rem 0 0; }
+.chartTitle {
+  margin: 0;
+  font-size: 1.5rem;
+  line-height: 1.15;
+  font-weight: 600;
+  font-variation-settings: "opsz" 36;
+}
+.chartDek { margin: 0.3rem 0 0.5rem; color: var(--ink-2); font-size: 1rem; line-height: 1.45; max-width: 34em; }
+.chartSvg { display: block; width: 100%; height: auto; overflow: visible; font-family: var(--font-ui); }
+.grid { stroke: var(--rule); stroke-width: 1; }
+.axis { stroke: var(--ink); stroke-width: 1; }
+.yTick, .xTick { font-size: 11px; fill: var(--ink-2); font-variant-numeric: tabular-nums; }
+.line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.solid { fill: var(--accent); stroke: var(--paper); stroke-width: 2; }
+.hollow { fill: var(--paper); stroke: var(--accent); stroke-width: 2; }
+.hit { fill: transparent; }
+.value { font-size: 12px; font-weight: 700; fill: var(--ink); font-variant-numeric: tabular-nums; }
+.dot { outline: none; }
+.dot:focus-visible .hit { stroke: var(--accent); stroke-width: 1.5; }
+.chartNote { margin: 0.4rem 0 0; font-family: var(--font-ui); font-size: 0.75rem; color: var(--ink-2); }
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* ---------- Desktop ---------- */
+
+@media (min-width: 900px) {
+  .explorer { padding: 4.5rem clamp(1.5rem, 3.2vw, 3.5rem) 3.5rem; }
+  .heading { font-size: clamp(2.75rem, 3.8vw, 3.75rem); }
+  .dek { font-size: 1.25rem; }
+  .controls { grid-template-columns: minmax(0, 1fr) 25rem; align-items: end; gap: 2rem; }
+  .eraValue { font-size: 3.25rem; }
+  .eraLabel { min-width: 8rem; }
+  .ticks li span { visibility: visible; }
+  .frame { height: 78vh; }
+  .popup {
+    left: auto;
+    right: 0.75rem;
+    top: 0.75rem;
+    bottom: auto;
+    width: 22rem;
+    max-height: calc(100% - 1.5rem);
+  }
+}

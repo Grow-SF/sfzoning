@@ -13,7 +13,22 @@ export function scanSource(series: string): string {
   return tileUrl(`${series}/${series}.pmtiles`);
 }
 
+/** Path of a series' classified-district vector tiles (layers `parcels`, `districts`). */
+export function districtPath(series: string): string {
+  return `${series}/districts/${series}-districts.pmtiles`;
+}
+
 /** Classified-district vector tiles (produced by step two; may not exist yet). */
 export function districtSource(series: string): string {
-  return tileUrl(`${series}/districts.pmtiles`);
+  return tileUrl(districtPath(series));
+}
+
+/** Plain HTTP URL of a tiles-server file (for probing and JSON). */
+export function tilesHttpUrl(path: string): string {
+  return `${tilesBase()}/${path}`;
+}
+
+/** Per-category parcel counts and areas for a series' districts. */
+export function districtStatsUrl(series: string): string {
+  return tilesHttpUrl(`${series}/districts/stats.json`);
 }

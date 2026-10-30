@@ -22,7 +22,7 @@ describe("tileUrl", () => {
   it("derives scan and district sources from the series id", () => {
     delete process.env.NEXT_PUBLIC_TILES_BASE_URL;
     expect(scanSource("1948")).toMatch(/1948\/1948\.pmtiles$/);
-    expect(districtSource("1980-1990-zoning")).toMatch(/1980-1990-zoning\/districts\.pmtiles$/);
+    expect(districtSource("1980-1990-zoning")).toMatch(/1980-1990-zoning\/districts\/1980-1990-zoning-districts\.pmtiles$/);
   });
 });
 

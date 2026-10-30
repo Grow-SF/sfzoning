@@ -15,8 +15,6 @@ export default function Story({ steps }: Props) {
   const refs = useMemo(() => steps.map(() => createRef<HTMLElement>()), [steps]);
   const { active, progress } = useScrollSteps(refs);
   const step = steps[active];
-  const era = ERAS.find((e) => e.id === step.era);
-  const classificationPending = step.view !== "scan" && !era?.districtSeries;
 
   useEffect(() => {
     mapRef.current?.apply({ era: step.era, view: step.view, camera: step.camera, highlight: step.highlight });
@@ -37,9 +35,6 @@ export default function Story({ steps }: Props) {
             </li>
           ))}
         </ol>
-        {classificationPending && (
-          <p className={styles.pending}>District colours for {era?.label ?? step.era} are coming. This is the original map.</p>
-        )}
       </div>
 
       <div className={styles.column}>

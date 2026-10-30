@@ -1,6 +1,7 @@
 import Credits from "@/components/Credits";
 import Sources from "@/components/Sources";
 import Story from "@/components/Story";
+import Explorer from "@/components/Explorer";
 import { citedSourceIds } from "@/content/sources";
 import { STORY } from "@/content/story";
 import styles from "@/components/endmatter.module.css";
@@ -12,6 +13,7 @@ export default function Home() {
         <p className="draft-banner">Draft copy, not reviewed. Do not publish.</p>
       )}
       <Story steps={STORY} />
+      <Explorer />
       <footer className={styles.endmatter}>
         <div className={styles.page}>
           <p className={styles.kicker}>Draft</p>

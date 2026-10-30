@@ -4,8 +4,8 @@
   "private": true,
   "scripts": {
     "postinstall": "node scripts/copy-maplibre-worker.mjs",
-    "predev": "node scripts/copy-maplibre-worker.mjs",
-    "prebuild": "node scripts/copy-maplibre-worker.mjs",
+    "predev": "node scripts/copy-maplibre-worker.mjs && node scripts/build-rules.mjs",
+    "prebuild": "node scripts/copy-maplibre-worker.mjs && node scripts/build-rules.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

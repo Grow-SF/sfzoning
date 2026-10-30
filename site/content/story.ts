@@ -10,8 +10,11 @@
 // Steps that repeat a camera (Sunset 1921 → 1948 → 1980; Noe Valley 1960 → 1972 → 1978)
 // do so on purpose, so the change between eras is the only thing that moves.
 //
-// All steps use the "scan" view: the district classification ("what it allowed") tiles do
-// not exist yet.
+// Views: "allowed" (district colours over the paper basemap) where the colours alone tell
+// the story (today, the 1978 legacy), "both" (colours over the scan) where the scan's own
+// labels and hatching matter, and "scan" for height and downtown floor-area steps that the
+// use colours can't show. Eras whose district tiles aren't published yet fall back to the
+// scan with a "colours coming" note (StoryMap), so these views are safe to set ahead of data.
 import type { Camera, Step } from "./schema";
 
 const CITY: Camera = { center: [-122.443, 37.758], zoom: 12.3 };
@@ -28,7 +31,7 @@ export const STORY: Step[] = [
   {
     id: "today-opening",
     era: "today",
-    view: "scan",
+    view: "allowed",
     camera: CITY,
     title: "A city zoned, block by block",
     body: [
@@ -46,7 +49,7 @@ export const STORY: Step[] = [
   {
     id: "1921-sunset",
     era: "1921",
-    view: "scan",
+    view: "both",
     camera: OUTER_SUNSET,
     title: "1921: the Sunset was zoned for apartments",
     body: [
@@ -65,7 +68,7 @@ export const STORY: Step[] = [
   {
     id: "1921-mission",
     era: "1921",
-    view: "scan",
+    view: "both",
     camera: MISSION,
     title: "Six districts, and homes allowed in five",
     body: [
@@ -84,7 +87,7 @@ export const STORY: Step[] = [
   {
     id: "1948-sunset",
     era: "1948",
-    view: "scan",
+    view: "both",
     camera: OUTER_SUNSET,
     title: "By 1948, the hatching had spread",
     body: [
@@ -107,7 +110,7 @@ export const STORY: Step[] = [
   {
     id: "1960-density-caps",
     era: "1960",
-    view: "scan",
+    view: "both",
     camera: NOE_VALLEY,
     title: "1960: the first caps on homes per lot",
     body: [
@@ -126,7 +129,7 @@ export const STORY: Step[] = [
   {
     id: "1960-not-a-downzoning",
     era: "1960",
-    view: "scan",
+    view: "both",
     camera: SOMA,
     title: "Not mainly a downzoning",
     body: [
@@ -175,7 +178,7 @@ export const STORY: Step[] = [
   {
     id: "1975-downzonings",
     era: "1975",
-    view: "scan",
+    view: "both",
     camera: WESTERN_ADDITION,
     title: "1970–75: the downzonings",
     body: [
@@ -194,7 +197,7 @@ export const STORY: Step[] = [
   {
     id: "1978-rezoning",
     era: "1980",
-    view: "scan",
+    view: "both",
     camera: NOE_VALLEY,
     title: "1978: the city counted what it gave up",
     body: [
@@ -217,7 +220,7 @@ export const STORY: Step[] = [
   {
     id: "1978-legacy",
     era: "1980",
-    view: "scan",
+    view: "allowed",
     camera: OUTER_SUNSET,
     title: "RH-1, as far as the eye can see",
     body: [
@@ -273,7 +276,7 @@ export const STORY: Step[] = [
   {
     id: "2008-area-plans",
     era: "2000s",
-    view: "scan",
+    view: "both",
     camera: MISSION_WIDE,
     title: "2008: growth goes east",
     body: [
@@ -295,7 +298,7 @@ export const STORY: Step[] = [
   {
     id: "today-reform",
     era: "today",
-    view: "scan",
+    view: "allowed",
     camera: CITY,
     title: "Today: turning the dial back",
     body: [
