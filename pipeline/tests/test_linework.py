@@ -188,3 +188,91 @@ def test_estimate_street_px_fallback_not_measured():
     from shapely.geometry import box as _box
     assert linework.estimate_street_px([_box(0, 0, 10, 10)]) == (linework.DEFAULT_STREET_PX, False)
     assert linework.estimate_street_px([]) == (linework.DEFAULT_STREET_PX, False)
+
+
+# -- corner quality ---------------------------------------------------------------------
+
+def test_block_corner_features_rows_match_block_corners_px():
+    polys = [box(0, 0, 100, 60), Polygon([(200, 0), (300, 0), (300, 80), (250, 80), (250, 40), (200, 40)])]
+    f = linework.block_corner_features(polys, street_px=20.0)
+    c = linework.block_corners_px(polys, street_px=20.0)
+    assert np.allclose(np.column_stack([f["x"], f["y"]]), c)
+    assert list(f["n_corners"]) == [4] * 4 + [6] * 6
+    assert list(f["block"]) == [0] * 4 + [1] * 6
+
+
+def test_corner_quality_clean_rectangle_is_one():
+    f = linework.block_corner_features([box(0, 0, 400, 250)], street_px=25.0)
+    assert np.allclose(linework.corner_quality(f), 1.0)
+    assert len(linework.good_corners_px([box(0, 0, 400, 250)], street_px=25.0)) == 4
+
+
+def test_corner_quality_short_jog_is_poor():
+    # 400 x 250 block with a 30 px (1.2 street widths) step in its top edge: the jog's
+    # corners are fixed by a short edge; the four outer corners stay good.
+    ring = [(0, 0), (200, 0), (200, 30), (400, 30), (400, 250), (0, 250)]
+    f = linework.block_corner_features([Polygon(ring)], street_px=25.0)
+    q = linework.corner_quality(f)
+    jog = f["x"] == 200
+    assert jog.sum() == 2 and (q[jog] < linework.MIN_CORNER_QUALITY).all()
+    assert (q[~jog] >= linework.MIN_CORNER_QUALITY).all()
+
+
+def test_corner_quality_acute_and_odd_angles_are_poor():
+    # A triangle at a diagonal street: its 45-degree corners turn 135 degrees.
+    tri = Polygon([(0, 0), (400, 0), (0, 400)])
+    f = linework.block_corner_features([tri], street_px=25.0)
+    q = linework.corner_quality(f)
+    ad = np.abs(f["turn_deg"] - 90)
+    assert (q[ad > 30] == 0).all() and (q[ad < 1] > 0.9).all()
+
+
+def test_corner_quality_complex_block_is_poor():
+    # A staircase outline (a block merged with a bold district line drawn around it):
+    # 20 corners, every edge long and every turn square, yet none is trusted.
+    pts = [(0.0, 0.0)]
+    for _ in range(9):
+        x, y = pts[-1]
+        pts += [(x + 80, y), (x + 80, y + 80)]
+    pts += [(0.0, pts[-1][1])]
+    poly = Polygon(pts)
+    f = linework.block_corner_features([poly], street_px=25.0)
+    assert f["n_corners"][0] == 20
+    assert (linework.corner_quality(f) < linework.MIN_CORNER_QUALITY).all()
+    assert len(linework.good_corners_px([poly], street_px=25.0)) == 0
+
+
+def test_corner_quality_scale_free():
+    # The same block at two scan scales (street px scaling with it) scores alike.
+    from shapely.affinity import scale as _scale
+    p = Polygon([(0, 0), (200, 0), (200, 30), (400, 30), (400, 250), (0, 250)])
+    q1 = linework.corner_quality(linework.block_corner_features([p], street_px=25.0))
+    q2 = linework.corner_quality(linework.block_corner_features(
+        [_scale(p, 0.6, 0.6, origin=(0, 0))], street_px=15.0))
+    assert np.allclose(q1, q2)
+
+
+def test_good_corners_px_empty():
+    assert linework.good_corners_px([], street_px=25.0).shape == (0, 2)
+
+
+# -- scale-aware constants --------------------------------------------------------------
+
+def test_sheet_scale_band():
+    lo, hi = linework.TUNED_STREET_PX
+    assert linework.sheet_scale(lo) == linework.sheet_scale(hi) == linework.sheet_scale(25.0) == 1.0
+    assert abs(linework.sheet_scale(16.0) - 16.0 / lo) < 1e-9
+    assert abs(linework.sheet_scale(40.0) - 40.0 / hi) < 1e-9
+    assert linework.sheet_scale(2.0) == linework.SCALE_RANGE[0]
+    assert linework.sheet_scale(float("nan")) == 1.0
+
+
+def test_extract_blocks_synthetic_coarse_scan():
+    """A coarse scan (~4 ft/px: 64 ft streets are ~16 px): the constants scale down."""
+    blocks = _grid_blocks(street=64.0)
+    sheet = make_sheet(blocks, px_per_ft=0.25, rotation_deg=8.0, distortion=_wobble, style="outline")
+    polys = linework.extract_blocks(sheet.img)
+    assert len(polys) == 9
+    for t in _truth_px(sheet, blocks):
+        best = max(t.intersection(p).area / t.union(p).area for p in polys)
+        assert best > 0.95   # fixed (unscaled) constants: 0.947 on one block

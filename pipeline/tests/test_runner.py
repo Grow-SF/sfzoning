@@ -51,7 +51,7 @@ class Fakes:
         m.setattr(runner.reading, "exclusion_mask", lambda img, info=None: np.zeros(img.shape[:2], bool))
         m.setattr(runner.reading, "read_labels", counted("labels", lambda p, **k: [Label(kind="block_number", text="1", x=1, y=2, confidence=1.0)]))
         m.setattr(runner.linework, "extract_blocks", counted("blocks", lambda img, exclude=None: [box(1, 1, 10, 10)]))
-        m.setattr(runner.linework, "block_corners_px", lambda polys: np.array([[1.0, 1.0], [10.0, 10.0]]))
+        m.setattr(runner.linework, "good_corners_px", lambda polys: np.array([[1.0, 1.0], [10.0, 10.0]]))
         m.setattr(runner.anchors, "match_labels", lambda labels, ref: [])
         m.setattr(runner.anchors, "rough_fit",
                   counted("rough", lambda c, **k: SimpleRough(SheetTransform(AUTO, 1.0)) if self.rough_ok else None))
