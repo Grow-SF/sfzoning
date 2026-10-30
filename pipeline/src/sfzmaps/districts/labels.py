@@ -58,7 +58,7 @@ PLURALITY_MARGIN = 1.25  # ... by at least this factor over the runner-up (else 
 # Parks / public sites and the small commercial clusters are islands labelled inside their own
 # boxes: never spread by plurality, and capped in splits (2000-digital: P and NC-1 flooded
 # residential blocks; capping them raised agreement on unchanged districts 66.8% -> 69.2%).
-NO_PLURALITY = {"P", "C-1", "NC-1", "NC-2", "NC-3", "NC-S", "RC-1", "RC-2"}
+NO_PLURALITY = {"P", "OS", "C-1", "NC-1", "NC-2", "NC-3", "NC-S", "RC-1", "RC-2"}
 SPLIT_P_RADIUS_PX = 150  # ... and in a split region a P label takes at most this disk (~1 block)
 MIN_REGIONS = 5          # fewer closed regions: boundary extraction failed, use the fallback
 FALLBACK_CONF = 0.3

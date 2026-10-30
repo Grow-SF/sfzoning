@@ -293,6 +293,7 @@ def test_split_caps_public_cells():
 
 
 def test_small_commercial_clusters_do_not_spread():
+    assert "OS" in labels.NO_PLURALITY          # open-space height district, like P
     left, mid, stub = box(0, 0, 100, 100), box(106, 0, 206, 100), box(212, 80, 312, 100)
     out = labels.assign_regions([left, mid, stub], [lab("NC-1", 50, 50), lab("RH-1(D)", 260, 90)])
     assert [c for p, c, _ in out if p.equals(mid)] == ["RH-1(D)"]
