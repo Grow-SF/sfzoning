@@ -165,7 +165,8 @@ def _score_load(d: dict) -> SheetScore:
                       g("insample_max_ft", "max_ft"), d["n_real_change"], d["n_no_equivalent"],
                       False if stale else d["passed"], "stale_score" if stale else d["reason"],
                       g("holdout_p50_ft"), g("holdout_p95_ft"),
-                      d.get("n_holdout", 0), g("label_agreement"), g("inlier_frac"))
+                      d.get("n_holdout", 0), g("label_agreement"), g("inlier_frac"),
+                      g("label_agreement_local"))
 
 
 # -- answer key ------------------------------------------------------------------------
