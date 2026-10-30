@@ -8,6 +8,7 @@
   --water: #d3dde0;       /* pale desaturated blue */
   --ink: #161513;         /* text */
   --ink-2: #4a4740;       /* secondary text */
+  --ink-dim: #67635a;     /* receded text (inactive story cards); still >= 4.5:1 on --paper */
   --rule: #c9c2b4;        /* hairlines */
   --accent: #2337c6;      /* ultramarine, the one strong colour */
 
@@ -51,7 +52,8 @@ a { color: var(--accent); text-underline-offset: 0.15em; }
   background: rgb(247 244 238 / 0.88);
 }
 @media (min-width: 900px) {
-  .credit { top: auto; bottom: 0.75rem; max-width: none; }
+  /* Bottom-right, beside the key (bottom-left, 15.5rem + its inset): wrap rather than run under it. */
+  .credit { top: auto; bottom: 0.75rem; max-width: min(24rem, calc(100% - 18rem)); }
 }
 
 /* "Classification coming": an era whose district colours are not published yet. */
@@ -75,7 +77,12 @@ a { color: var(--accent); text-underline-offset: 0.15em; }
   .map-pending { top: auto; bottom: 0.75rem; max-width: 18rem; }
   .explorer-map .map-pending { top: 0.75rem; bottom: auto; }
 }
-.explorer-map .credit { top: auto; bottom: 0.5rem; right: 0.5rem; max-width: none; }
+/* Explorer: the lot card fills the bottom of the map on phones and the right side on desktop,
+   so the credit goes top-right on phones (beside the key) and bottom-left on desktop. */
+.explorer-map .credit { top: 0.5rem; bottom: auto; right: 0.5rem; max-width: calc(100% - 12.25rem); }
+@media (min-width: 900px) {
+  .explorer-map .credit { top: auto; bottom: 0.5rem; right: auto; left: 0.5rem; max-width: 24rem; text-align: left; }
+}
 
 .map-notice {
   position: absolute;

@@ -277,10 +277,15 @@
     border: 0;
     border-top: 1px solid var(--ink);
     box-shadow: none;
-    opacity: 0.3;
-    transition: opacity 300ms ease;
+    transition: color 300ms ease;
   }
-  .card[data-active] { opacity: 1; }
+  /* Inactive cards recede by colour, not opacity, so their text still meets WCAG AA (4.5:1)
+     on the paper. --ink-dim is checked in tests/a11y.spec.ts. */
+  .card:not([data-active]),
+  .card:not([data-active]) :is(.year, .sourcesLabel, .sources, a) {
+    color: var(--ink-dim);
+  }
+  .card:not([data-active]) .quote { border-left-color: var(--rule); }
   .cardScroll { overflow: visible; padding: 1.5rem 0 1.75rem; }
   .year { font-size: 4.25rem; }
   .title { font-size: 1.875rem; margin: 0.5rem 0 0.875rem; }

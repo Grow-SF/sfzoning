@@ -344,6 +344,9 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         zoom: cam.zoom,
         bearing: cam.bearing ?? 0,
         interactive,
+        // On touch screens the explorer map takes two fingers to pan, so one finger still
+        // scrolls the page past it instead of being trapped.
+        cooperativeGestures: interactive && window.matchMedia("(pointer: coarse)").matches,
         attributionControl: false,
         maxZoom: 18,
         fadeDuration: 0,
@@ -477,7 +480,14 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
 
   return (
     <div ref={wrap} className={`map-wrap${className ? ` ${className}` : ""}`} data-view={state.view} data-era={state.era}>
-      <div ref={container} className="map" aria-label="Historic zoning map of San Francisco" role="img" />
+      {/* The story map is a picture; the explorer's holds a focusable canvas and controls, so
+          it is a labelled region rather than role="img" (which would hide them). */}
+      <div
+        ref={container}
+        className="map"
+        role={interactive ? "region" : "img"}
+        aria-label={interactive ? "Zoning map explorer" : "Historic zoning map of San Francisco"}
+      />
       {showLegend && <Legend compact={!interactive} />}
       {comingSoon && (
         <p className="map-pending" data-testid="classification-coming">

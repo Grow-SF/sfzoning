@@ -1,15 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
+import { centerStep } from "./helpers";
 
 const TILES = process.env.NEXT_PUBLIC_TILES_BASE_URL ?? "http://127.0.0.1:8787";
 const CREDIT = "© Cartography Associates, David Rumsey Map Collection";
 
-async function centerStep(page: Page, id: string) {
-  await page.evaluate((sid) => {
-    const r = document.querySelector(`[data-step="${sid}"] article`)!.getBoundingClientRect();
-    window.scrollBy(0, r.top + r.height / 2 - innerHeight / 2);
-  }, id);
-  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", id);
-}
 
 async function tilesExist(page: Page, path: string) {
   const r = await page.request.get(`${TILES}/${path}`, { headers: { Range: "bytes=0-6" } }).catch(() => null);
@@ -91,12 +85,12 @@ test("an era without published districts falls back to the scan with a note", as
   await expect(page.locator(".map-notice")).toHaveCount(0);
 });
 
-test("clicking a parcel in the explorer opens its lot card", async ({ page }) => {
-  test.skip(!(await tilesExist(page, "1948/districts/1948-districts.pmtiles")), "1948 district tiles not published");
+/** Scroll to the explorer, pick a view, fly to downtown and click a classified 1948 lot. */
+async function openLot(page: Page, view: "What it allowed" | "Both") {
   await page.goto("/");
   const explorer = page.getByTestId("explorer");
   await explorer.scrollIntoViewIfNeeded();
-  await explorer.getByText("What it allowed", { exact: true }).click();
+  await explorer.getByText(view, { exact: true }).click();
   await expect(explorer.getByTestId("legend")).toBeVisible();
 
   // Fly the explorer map to downtown, where the 1948 sheet has been read, and find a lot.
@@ -129,10 +123,79 @@ test("clicking a parcel in the explorer opens its lot card", async ({ page }) =>
   await page.mouse.click(pt!.x, pt!.y);
   const card = explorer.getByTestId("parcel-popup");
   await expect(card).toBeVisible();
-  await expect(card.getByRole("heading", { level: 3 })).toHaveText(pt!.code);
+  return { explorer, card, code: pt!.code };
+}
+
+test("clicking a parcel in the explorer opens its lot card", async ({ page }) => {
+  test.skip(!(await tilesExist(page, "1948/districts/1948-districts.pmtiles")), "1948 district tiles not published");
+  const { explorer, card, code } = await openLot(page, "What it allowed");
+  await expect(card.getByRole("heading", { level: 3 })).toHaveText(code);
   await expect(card).toContainText("1948");
   await expect(card).toContainText("Homes per lot");
   await expect(card).toContainText("Map reading");
+  await expect(card.getByRole("button", { name: "Close lot details" })).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(card).toHaveCount(0);
+  // Focus goes back to the map the lot was clicked on, not to the page body.
+  await expect(explorer.locator(".maplibregl-canvas")).toBeFocused();
+});
+
+test("closing the lot card with its button returns focus to the map", async ({ page }) => {
+  test.skip(!(await tilesExist(page, "1948/districts/1948-districts.pmtiles")), "1948 district tiles not published");
+  const { explorer, card } = await openLot(page, "What it allowed");
+  await card.getByRole("button", { name: "Close lot details" }).click();
+  await expect(card).toHaveCount(0);
+  await expect(explorer.locator(".maplibregl-canvas")).toBeFocused();
+});
+
+test("with a lot open on 1948 'both', the Rumsey credit stays in sight", async ({ page }) => {
+  test.skip(!(await tilesExist(page, "1948/districts/1948-districts.pmtiles")), "1948 district tiles not published");
+  const { explorer } = await openLot(page, "Both");
+  await expect(explorer.locator(".map-wrap")).toHaveAttribute("data-view", "both");
+  const credit = explorer.getByText(CREDIT, { exact: true });
+  await expect(credit).toBeVisible();
+  // Not just present: nothing (the lot card, the key) is drawn over it.
+  const covered = await credit.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const pts = [
+      [r.left + 2, r.top + 2],
+      [r.right - 2, r.top + 2],
+      [r.left + 2, r.bottom - 2],
+      [r.right - 2, r.bottom - 2],
+      [(r.left + r.right) / 2, (r.top + r.bottom) / 2],
+    ];
+    return pts.filter(([x, y]) => !el.contains(document.elementFromPoint(x, y))).length;
+  });
+  expect(covered).toBe(0);
+});
+
+test.describe("touch screens", () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test("the explorer map needs two fingers to pan, so one finger scrolls the page", async ({ page }, info) => {
+    test.skip(info.project.name !== "mobile", "phone only");
+    await page.goto("/");
+    await page.getByTestId("explorer").scrollIntoViewIfNeeded();
+    await expect(page.locator(".explorer-map canvas")).toBeAttached({ timeout: 30_000 });
+    const state = await page.evaluate(() => {
+      type M = import("maplibre-gl").Map;
+      const maps = (window as unknown as { __maps: M[] }).__maps;
+      const ex = maps.find((m) => m.getContainer().closest("[data-testid=explorer]"))!;
+      return { coarse: matchMedia("(pointer: coarse)").matches, coop: ex.cooperativeGestures.isEnabled() };
+    });
+    expect(state).toEqual({ coarse: true, coop: true });
+  });
+});
+
+test("a mouse-driven explorer map pans with one pointer", async ({ page }, info) => {
+  test.skip(info.project.name !== "desktop", "desktop only");
+  await page.goto("/");
+  await page.getByTestId("explorer").scrollIntoViewIfNeeded();
+  await expect(page.locator(".explorer-map canvas")).toBeAttached({ timeout: 30_000 });
+  const coop = await page.evaluate(() => {
+    type M = import("maplibre-gl").Map;
+    const maps = (window as unknown as { __maps: M[] }).__maps;
+    return maps.find((m) => m.getContainer().closest("[data-testid=explorer]"))!.cooperativeGestures.isEnabled();
+  });
+  expect(coop).toBe(false);
 });

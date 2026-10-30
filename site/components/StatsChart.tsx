@@ -6,7 +6,7 @@ import { loadStats } from "@/lib/districts";
 import { threePlusShare } from "@/lib/stats";
 import styles from "./explorer.module.css";
 
-type Point = { id: string; label: string; year: number; share: number; partial: boolean };
+export type Point = { id: string; label: string; year: number; share: number; partial: boolean };
 
 // An era whose read area is under this fraction of the best-covered era is drawn hollow
 // and left out of the line: its share describes a few sheets, not the city.
@@ -18,6 +18,19 @@ const X0 = 1915;
 const X1 = 2030;
 const y = (share: number) => M.top + (1 - share) * (H - M.top - M.bottom);
 const pct = (s: number) => `${Math.round(s * 100)}%`;
+
+/** One sentence for screen readers: the trend across eras read in full, then where the table is. */
+export function summary(points: Point[]): string {
+  const whole = points.filter((p) => !p.partial);
+  const tail = " Every era's value is in the table that follows.";
+  if (whole.length < 2) return `Chart of ${points.length} era${points.length === 1 ? "" : "s"}.${tail}`;
+  const a = whole[0];
+  const b = whole[whole.length - 1];
+  if (pct(a.share) === pct(b.share))
+    return `Among eras whose maps have been read in full, the share held at ${pct(a.share)} from ${a.label} to ${b.label}.${tail}`;
+  const verb = b.share < a.share ? "fell" : "rose";
+  return `Among eras whose maps have been read in full, the share ${verb} from ${pct(a.share)} in ${a.label} to ${pct(b.share)} in ${b.label}.${tail}`;
+}
 
 export default function StatsChart() {
   const [points, setPoints] = useState<Point[] | null>(null);
@@ -76,15 +89,15 @@ export default function StatsChart() {
   });
 
   return (
-    <figure ref={figRef} className={styles.chart} data-testid="stats-chart">
+    <figure ref={figRef} className={styles.chart} data-testid="stats-chart" aria-labelledby="stats-title" aria-describedby="stats-summary">
       <figcaption>
-        <h3 className={styles.chartTitle}>Where three or more homes were legal</h3>
+        <h3 id="stats-title" className={styles.chartTitle}>Where three or more homes were legal</h3>
         <p className={styles.chartDek}>
           Of the lots zoned for homes, the share whose district allowed three or more per lot, as read from each
           era&rsquo;s map.
         </p>
       </figcaption>
-      <svg viewBox={`0 0 ${W} ${H}`} className={styles.chartSvg} role="img" aria-labelledby="stats-table-caption">
+      <svg viewBox={`0 0 ${W} ${H}`} className={styles.chartSvg} aria-hidden="true" focusable="false">
         {[0, 0.5, 1].map((t) => (
           <g key={t}>
             <line x1={M.left} x2={W - M.right} y1={y(t)} y2={y(t)} className={t === 0 ? styles.axis : styles.grid} />
@@ -100,7 +113,7 @@ export default function StatsChart() {
         ))}
         {line && whole.length > 1 && <path d={line} className={styles.line} />}
         {points.map((p) => (
-          <g key={p.id} className={styles.dot} tabIndex={0} aria-label={`${p.label}: ${pct(p.share)}${p.partial ? ", partial map" : ""}`}>
+          <g key={p.id} className={styles.dot}>
             <title>{`${p.label}: ${pct(p.share)}${p.partial ? " (partial map)" : ""}`}</title>
             <circle cx={x(p.year)} cy={y(p.share)} r={12} className={styles.hit} />
             <circle cx={x(p.year)} cy={y(p.share)} r={4.5} className={p.partial ? styles.hollow : styles.solid} />
@@ -121,6 +134,10 @@ export default function StatsChart() {
           city.
         </p>
       )}
+      {/* The drawing is hidden from assistive tech; this summary and the table carry it. */}
+      <p id="stats-summary" className={styles.srOnly}>
+        {summary(points)}
+      </p>
       <table className={styles.srOnly}>
         <caption id="stats-table-caption">Share of residential lots allowing three or more homes, by era</caption>
         <thead>

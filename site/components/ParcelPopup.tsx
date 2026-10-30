@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import type { Era } from "@/lib/eras";
 import { CATEGORY_COLORS, CATEGORY_LABELS, isCategory } from "@/lib/palette";
 import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
@@ -19,6 +19,25 @@ export default function ParcelPopup({ hit, era, rules, onClose }: Props) {
   const rule = lookupRule(rules, era.year, hit.code);
   const cat = isCategory(hit.category) ? hit.category : "unknown";
 
+  // On close, hand focus back to whatever had it when the card opened (the map canvas after a
+  // click), but only if focus is still in the card: moving the era slider closes the card too,
+  // and that must not pull focus off the slider. A layout-effect cleanup runs while the card is
+  // still in the DOM, so "is focus inside it" can still be answered.
+  const boxRef = useRef<HTMLElement>(null);
+  useLayoutEffect(() => {
+    const opener = document.activeElement as HTMLElement | null;
+    const box = boxRef.current;
+    return () => {
+      const now = document.activeElement;
+      if (now && now !== document.body && !box?.contains(now)) return;
+      const target =
+        opener && opener.isConnected && opener !== document.body && !box?.contains(opener)
+          ? opener
+          : box?.parentElement?.querySelector<HTMLElement>(".maplibregl-canvas");
+      target?.focus({ preventScroll: true });
+    };
+  }, []);
+
   useEffect(() => {
     closeRef.current?.focus({ preventScroll: true });
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
@@ -27,7 +46,7 @@ export default function ParcelPopup({ hit, era, rules, onClose }: Props) {
   }, [hit, onClose]);
 
   return (
-    <aside className={styles.popup} role="dialog" aria-labelledby="parcel-code" data-testid="parcel-popup">
+    <aside ref={boxRef} className={styles.popup} role="dialog" aria-labelledby="parcel-code" data-testid="parcel-popup">
       <button ref={closeRef} type="button" className={styles.close} onClick={onClose} aria-label="Close lot details">
         ×
       </button>
