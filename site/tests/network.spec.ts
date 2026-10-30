@@ -6,14 +6,14 @@ import { STORY } from "../content/story";
 const TILES = new URL(process.env.NEXT_PUBLIC_TILES_BASE_URL ?? "http://127.0.0.1:8787");
 const SCAN_SERIES = new Set(ERAS.flatMap((e) => e.scanSeries));
 
-/** Records every request for a scan series' archive (`<series>/<series>.pmtiles`). */
+/** Records every request for a scan series' archive (`<series>/<series>-paper.pmtiles`). */
 function recordScanRequests(page: Page) {
   const log: string[] = [];
   page.on("request", (req) => {
     const u = new URL(req.url());
     if (u.origin !== TILES.origin) return;
     const [series, file, ...rest] = u.pathname.split("/").filter(Boolean);
-    if (!rest.length && SCAN_SERIES.has(series) && file === `${series}.pmtiles`) log.push(series);
+    if (!rest.length && SCAN_SERIES.has(series) && file === `${series}-paper.pmtiles`) log.push(series);
   });
   return log;
 }

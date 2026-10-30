@@ -280,3 +280,16 @@ def test_footprint_falls_back_to_neatline_on_failure(monkeypatch, caplog):
         g = warp.footprint_polygons(excl, warp.make_rgba(img, [], excl)[..., 3], t)
     assert g.is_valid and g.area > 0
     assert "falling back" in caplog.text
+
+
+def test_paper_mode_keeps_the_page_as_scanned():
+    """Paper mode: paper is opaque and untouched inside the neatline; the frame, the inset band
+    and mask boxes are still transparent."""
+    img = _bordered()
+    img[400:420, 400:420] = 200   # light grey paper tone, would be transparent without paper
+    rgba = warp.make_rgba(img, [Box(x0=1000, y0=900, x1=1100, y1=1000)], paper=True)
+    a, rgb = rgba[..., 3], rgba[..., :3]
+    assert a[400:420, 400:420].min() == 255 and rgb[400:420, 400:420].min() == 200
+    assert a[600:700, 700:900].min() == 255 and rgb[600:700, 700:900].max() == 0   # ink unchanged
+    assert a[:150].max() == 0                         # frame stroke (rows 94-106) and inset cut away
+    assert a[900:1000, 1000:1100].max() == 0                                      # mask box

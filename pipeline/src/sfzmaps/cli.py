@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import cv2
@@ -208,6 +209,47 @@ def tiles(
     except Exception as e:  # noqa: BLE001 - gdal/pmtiles subprocess errors, missing tools, ...
         typer.echo(f"error: {type(e).__name__}: {e}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def paper(
+    year: str = typer.Option(None, "--year", help="Series, e.g. 1948."),
+    all_: bool = typer.Option(False, "--all", help="Every series with warped sheets."),
+    min_zoom: int = typer.Option(11, "--min-zoom"),
+    max_zoom: int = typer.Option(18, "--max-zoom"),
+    force: bool = typer.Option(False, "--force", help="Re-warp sheets even when fresh."),
+) -> None:
+    """Warp every placed sheet as it looks on paper (opaque, untouched RGB) and publish
+    out/<series>/<series>-paper.pmtiles, the layer the site shows as "the map as drawn"."""
+    from sfzmaps import reading, stitch, tiles as tiles_mod, warp
+    from sfzmaps.transform import SheetTransform
+
+    if not year and not all_:
+        raise typer.BadParameter("pass --year or --all")
+    series_list = sorted(p.name for p in config.WORK_DIR.iterdir() if p.is_dir()) if all_ else [year]
+    for series in series_list:
+        n = 0
+        for d in sorted(p for p in (config.WORK_DIR / series).iterdir() if p.is_dir()):
+            tj, png, pj = d / "transform.json", d / "page.png", d / "page.json"
+            if not (tj.exists() and png.exists() and pj.exists() and (d / "warped.tif").exists()):
+                continue
+            out = d / stitch.raster_name(True)
+            srcs = [tj, png, pj, Path(warp.__file__)]
+            if not force and out.exists() and all(out.stat().st_mtime_ns >= p.stat().st_mtime_ns for p in srcs):
+                continue
+            warp.warp_sheet(png, SheetTransform.from_json(json.loads(tj.read_text())),
+                            reading.load_page(pj).mask_boxes, out, paper=True)
+            n += 1
+        try:
+            vrt = stitch.build_vrt(series, paper=True)
+        except RuntimeError as e:
+            typer.echo(f"{series}: skipped ({e})", err=True)
+            continue
+        out = config.OUT_DIR / series / f"{series}-paper.pmtiles"
+        report = tiles_mod.make_pmtiles(vrt, out, min_zoom=min_zoom, max_zoom=max_zoom, quality=90,
+                                        name=f"SF zoning {series} (paper)",
+                                        attribution=config.RUMSEY_CREDIT if series == "1948" else None)
+        typer.echo(f"{series}: {n} sheets warped; {out} ({report.bytes_total / 1e6:.1f} MB)")
 
 
 @app.command("eval")

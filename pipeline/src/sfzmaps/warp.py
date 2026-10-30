@@ -200,14 +200,18 @@ def _neatline_footprint(excl: np.ndarray, t: SheetTransform):
     return _valid_poly(Polygon(t.to_world(px)))
 
 
-def make_rgba(img: np.ndarray, mask_boxes: list[Box], excl: np.ndarray | None = None) -> np.ndarray:
+def make_rgba(img: np.ndarray, mask_boxes: list[Box], excl: np.ndarray | None = None,
+              paper: bool = False) -> np.ndarray:
     """(h, w, 4) uint8 RGBA, alpha 0 for paper, outside the neatline (stroke included) and
-    in mask boxes."""
+    in mask boxes.  With `paper`, the page is kept as scanned: opaque everywhere inside the
+    neatline interior (outside mask boxes), RGB untouched."""
     if excl is None:
         excl = inset_exclusion(img, mask_boxes)
+    rgb = img[..., ::-1] if img.ndim == 3 else np.repeat(img[..., None], 3, axis=2)
+    if paper:
+        return np.dstack([np.ascontiguousarray(rgb), np.where(excl, 0, 255).astype(np.uint8)])
     alpha = paper_alpha(img, ~excl if (~excl).any() else None)
     alpha[excl] = 0
-    rgb = img[..., ::-1] if img.ndim == 3 else np.repeat(img[..., None], 3, axis=2)
     rgb = np.ascontiguousarray(rgb).astype(np.float32)
     rgb *= (alpha.astype(np.float32) / 255.0)[..., None]  # towards black as alpha falls
     return np.dstack([np.round(rgb).astype(np.uint8), alpha])
@@ -230,8 +234,12 @@ def _write_footprint(path: Path, geom) -> None:
     tmp.replace(path)
 
 
-def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path) -> Path:
-    """Write the transparent-paper RGBA GeoTIFF for `png` to `out` (atomically)."""
+def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
+               paper: bool = False) -> Path:
+    """Write the transparent-paper RGBA GeoTIFF for `png` to `out` (atomically).  With
+    `paper`, the scan as it looks on paper instead (make_rgba), resampled cubic so 1-bit
+    linework is smoothed rather than stair-stepped; no footprint is written (the
+    transparent warp's footprint is the same sheet area)."""
     png, out = Path(png), Path(out)
     if shutil.which("gdalwarp") is None:
         raise RuntimeError("gdalwarp not found on PATH; install GDAL (e.g. `brew install gdal`)")
@@ -245,7 +253,7 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path) -
     h, w = img.shape[:2]
     res = median_scale_ft_per_px(t, (h, w))
     excl = inset_exclusion(img, mask_boxes)
-    rgba = make_rgba(img, mask_boxes, excl)
+    rgba = make_rgba(img, mask_boxes, excl, paper=paper)
     gcps = [GroundControlPoint(row=g.py + 0.5, col=g.px + 0.5, x=g.wx, y=g.wy)
             for g in t.dense_grid((h, w), GRID_STEP)]
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -265,12 +273,13 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path) -
         os.close(fd)
         try:
             subprocess.run(
-                ["gdalwarp", "-overwrite", "-tps", "-r", "bilinear", "-t_srs", config.WORK_CRS,
+                ["gdalwarp", "-overwrite", "-tps", "-r", "cubic" if paper else "bilinear", "-t_srs", config.WORK_CRS,
                  "-tr", repr(res), repr(res), "-srcalpha", "-dstalpha", "-multi",
                  "-wo", "NUM_THREADS=ALL_CPUS", "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES",
                  "-co", "BIGTIFF=IF_SAFER", "-q", str(src), tmp_name],
                 check=True, capture_output=True, text=True)
-            _write_footprint(out.with_name(out.stem + ".footprint.geojson"), footprint_polygons(excl, rgba[..., 3], t))
+            if not paper:
+                _write_footprint(out.with_name(out.stem + ".footprint.geojson"), footprint_polygons(excl, rgba[..., 3], t))
             os.replace(tmp_name, out)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"gdalwarp failed: {e.stderr}") from e

@@ -68,7 +68,8 @@ def _run(cmd: list[str]) -> None:
 
 def make_pmtiles(vrt: Path, out: Path, *, min_zoom: int = 11, max_zoom: int = 18,
                  tile_format: str = "WEBP", name: str = "sfzmaps",
-                 attribution: str | None = None, keep_mbtiles: Path | None = None) -> TileReport:
+                 attribution: str | None = None, keep_mbtiles: Path | None = None,
+                 quality: int = 85) -> TileReport:
     require_tools()
     out.parent.mkdir(parents=True, exist_ok=True)
     res = WEB_ORIGIN_RES / 2 ** max_zoom
@@ -79,7 +80,7 @@ def make_pmtiles(vrt: Path, out: Path, *, min_zoom: int = 11, max_zoom: int = 18
               "-t_srs", "EPSG:3857", "-tr", str(res), str(res), "-tap", "-r", "bilinear",
               "-of", "COG", "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=YES", "-co", "NUM_THREADS=ALL_CPUS",
               "-overwrite", str(vrt), str(cog)])
-        _run(["gdal_translate", "--config", "GDAL_NUM_THREADS", "ALL_CPUS", "-of", "MBTILES", "-co", f"TILE_FORMAT={tile_format}", "-co", "QUALITY=85",
+        _run(["gdal_translate", "--config", "GDAL_NUM_THREADS", "ALL_CPUS", "-of", "MBTILES", "-co", f"TILE_FORMAT={tile_format}", "-co", f"QUALITY={quality}",
               "-co", "ZOOM_LEVEL_STRATEGY=AUTO", str(cog), str(mb)])
         top = max(report_from_mbtiles(mb).bytes_by_zoom)
         if top > min_zoom:

@@ -115,7 +115,8 @@ function scanOpacity(s: MapState, series: string, avail: Availability): Opacity 
   // ink so labels and hatching show through. Pulled out to the city, the scan is a grey veil,
   // so it fades almost away and the colours carry the view.
   if (s.view === "both" && avail[era.id]) return inkByZoom(BOTH_SCAN_WEIGHT, BOTH_CITY_INK) as Expr;
-  return inkByZoom(1) as Expr;
+  // "The map as drawn": the paper itself, at full strength at every zoom.
+  return 1;
 }
 
 /** The scan series that `s` draws at all (current era or prefetch warm-up). */

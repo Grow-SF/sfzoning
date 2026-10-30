@@ -36,6 +36,7 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 | `refdata [--force]` | Download DataSF parcels and street centerlines; build blocks, corners and intersections in `data/ref/`. |
 | `run --year S` / `run --all` | Run every page of a series: classify, read labels, rough fit, extract linework, refine, classify real change, score, warp; then stitch, tile, write the manifest and review page. Fresh stages are skipped; human reviews are kept (`--force-auto` ignores them, `--force` reruns everything). `--sheet ID` and `--until STAGE` make a partial run that does not republish the series. |
 | `tiles --year S` | Rebuild the stitched VRT, PMTiles, manifest and review page for one series from existing warps. |
+| `paper --year S` / `paper --all` | Warp each placed sheet as it looks on paper (opaque, colours untouched, cubic resampling) to `warped_paper.tif` and publish `out/<series>/<series>-paper.pmtiles`: the layer the site shows as the original map. The transparent-paper `<series>.pmtiles` stays for the review page and the district readers. The PDFs are 1-bit black and white at 300 dpi, so outside 1948 (colour photos) the paper is pure white. |
 | `review --year S` | Serve `data/out/` on 127.0.0.1 and open the series review page. |
 | `edit [--year S] [--sheet ID]` | Start the control-point editor on 127.0.0.1:8765 (`--demo` for a synthetic sheet). |
 | `bundle` | Write the processed files into `data/share/` as zips plus `PROCESSED.json`, for copying by hand into the Drive folder `old-planning-maps/processed/`. |
@@ -103,8 +104,9 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
 - `cache/llm/`: cached API answers.
 - `work/<series>/<sheet>/`: per-sheet stages, i.e. `page.png`, `page.json`,
   `labels.json`, `rough.json`, `refine.json`, `changes.geojson`, `transform.json`,
-  `score.json`, `warped.tif`, and `review.json` once a human has reviewed it.
-- `out/<series>/`: `<series>.pmtiles`, `manifest.json` (per-sheet status,
+  `score.json`, `warped.tif`, `warped_paper.tif` (after `paper`), and `review.json` once a
+  human has reviewed it.
+- `out/<series>/`: `<series>.pmtiles`, `<series>-paper.pmtiles`, `manifest.json` (per-sheet status,
   `needs_review` reasons, scores, limits, bounds), `review.html`.
 - `out/ref/blocks.pmtiles`: today's blocks for the review pages.
 - `out/run-<timestamp>.log`: tracebacks for any sheet that errored.

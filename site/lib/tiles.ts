@@ -9,8 +9,13 @@ export function tileUrl(path: string): string {
   return `pmtiles://${tilesBase()}/${path}`;
 }
 
+/** The series' scans as they look on paper (pipeline `sfzmaps paper`): opaque, colours untouched. */
+export function scanPath(series: string): string {
+  return `${series}/${series}-paper.pmtiles`;
+}
+
 export function scanSource(series: string): string {
-  return tileUrl(`${series}/${series}.pmtiles`);
+  return tileUrl(scanPath(series));
 }
 
 /** Path of a series' classified-district vector tiles (layers `parcels`, `districts`). */

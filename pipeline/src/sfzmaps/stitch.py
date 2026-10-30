@@ -37,7 +37,12 @@ def load_scores(series: str) -> dict[str, SheetScore]:
     return scores
 
 
-def draw_order(series: str, scores: dict[str, SheetScore]) -> list[str]:
+def raster_name(paper: bool) -> str:
+    """Per-sheet warp to stitch: the transparent-paper warp, or the paper one (warp.make_rgba)."""
+    return "warped_paper.tif" if paper else "warped.tif"
+
+
+def draw_order(series: str, scores: dict[str, SheetScore], paper: bool = False) -> list[str]:
     """Sheet ids with a warped.tif, bottom first: needs_review under passing/reviewed sheets,
     and within a class the larger holdout_p50_ft first (so the best ends up on top)."""
     def key(sid: str):
@@ -46,7 +51,7 @@ def draw_order(series: str, scores: dict[str, SheetScore]) -> list[str]:
         p50 = sc.holdout_p50_ft
         return (top, -(p50 if math.isfinite(p50) else math.inf), sid)
 
-    have = [s for s in scores if (config.WORK_DIR / series / s / "warped.tif").exists()]
+    have = [s for s in scores if (config.WORK_DIR / series / s / raster_name(paper)).exists()]
     return sorted(have, key=key)
 
 
@@ -84,11 +89,11 @@ def polygonal(geom):
     return MultiPolygon(polys) if polys else Polygon()
 
 
-def _cut(series: str, sheet_id: str, geom, out: Path) -> None:
+def _cut(series: str, sheet_id: str, geom, out: Path, paper: bool = False) -> None:
     import geopandas as gpd
     import rasterio
 
-    src = config.WORK_DIR / series / sheet_id / "warped.tif"
+    src = config.WORK_DIR / series / sheet_id / raster_name(paper)
     cl = out.with_suffix(".cutline.geojson")
     gpd.GeoDataFrame(geometry=[geom], crs=config.WORK_CRS).to_file(cl, driver="GeoJSON")
     with rasterio.open(src) as ds:
@@ -100,18 +105,19 @@ def _cut(series: str, sheet_id: str, geom, out: Path) -> None:
     cl.unlink(missing_ok=True)
 
 
-def cut_sources(series: str, order: list[str]) -> list[Path]:
+def cut_sources(series: str, order: list[str], paper: bool = False) -> list[Path]:
     """Raster per sheet of `order` (bottom first) after the cutlines; sheets whose cut
-    footprint is empty are dropped."""
+    footprint is empty are dropped.  With opaque paper the cutlines are what keep a lower
+    sheet's margin from covering a better neighbour."""
     from shapely.ops import unary_union
 
-    cutdir = config.OUT_DIR / series / "cut"
+    cutdir = config.OUT_DIR / series / ("cut-paper" if paper else "cut")
     shutil.rmtree(cutdir, ignore_errors=True)
     fps = {s: footprint(series, s) for s in order}
     out = []
     for i, sid in enumerate(order):
         above = unary_union([fps[o] for o in order[i + 1:]]) if i + 1 < len(order) else None
-        src = config.WORK_DIR / series / sid / "warped.tif"
+        src = config.WORK_DIR / series / sid / raster_name(paper)
         if above is None or not fps[sid].intersects(above):
             out.append(src)
             continue
@@ -119,20 +125,20 @@ def cut_sources(series: str, order: list[str]) -> list[Path]:
         if geom.is_empty or geom.area < 1.0:
             continue
         cutdir.mkdir(parents=True, exist_ok=True)
-        _cut(series, sid, geom, cutdir / f"{sid}.tif")
+        _cut(series, sid, geom, cutdir / f"{sid}.tif", paper)
         out.append(cutdir / f"{sid}.tif")
     return out
 
 
-def build_vrt(series: str, scores: dict[str, SheetScore] | None = None) -> Path:
+def build_vrt(series: str, scores: dict[str, SheetScore] | None = None, paper: bool = False) -> Path:
     scores = load_scores(series) if scores is None else scores
-    order = draw_order(series, scores)
+    order = draw_order(series, scores, paper)
     if not order:
         raise RuntimeError(f"no warped sheets for series {series}; run `sfzmaps run --year {series}`")
-    out = config.OUT_DIR / series / f"{series}.vrt"
+    out = config.OUT_DIR / series / (f"{series}-paper.vrt" if paper else f"{series}.vrt")
     out.parent.mkdir(parents=True, exist_ok=True)
     lst = out.with_suffix(".txt")
-    lst.write_text("\n".join(str(p) for p in cut_sources(series, order)) + "\n")
+    lst.write_text("\n".join(str(p) for p in cut_sources(series, order, paper)) + "\n")
     # The RGBA alpha band is honored as the mask; the last listed source wins in overlaps.
     subprocess.run(["gdalbuildvrt", "-overwrite", "-resolution", "highest",
                     "-input_file_list", str(lst), str(out)], check=True, capture_output=True)
