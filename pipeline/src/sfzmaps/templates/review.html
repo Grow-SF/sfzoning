@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.4 system-ui, sans-serif; display: flex; height: 100vh; color: #1b1b1b; }
+  #side { width: 400px; overflow-y: auto; border-right: 1px solid #ccc; background: #fafafa; }
+  #side h1 { font-size: 16px; margin: 0; padding: 10px 12px; }
+  #controls { padding: 0 12px 10px; border-bottom: 1px solid #ddd; }
+  #controls label { display: block; margin: 4px 0; }
+  .key span { display: inline-block; width: 10px; height: 10px; margin: 0 4px 0 8px; border: 1px solid #333; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th { text-align: left; background: #eee; position: sticky; top: 0; padding: 4px 6px; }
+  td { padding: 5px 6px; border-top: 1px solid #e3e3e3; vertical-align: top; }
+  tr.row { cursor: pointer; }
+  tr.row:hover, tr.sel { background: #e8f0fe; }
+  .st { font-weight: 600; }
+  .needs_review { color: #b00020; }
+  .passed { color: #1b7a2b; }
+  .edited, .accepted { color: #1a55b0; }
+  .badge { background: #6a1b9a; color: #fff; border-radius: 3px; padding: 0 4px; font-size: 11px; margin-left: 4px; }
+  .reason { color: #555; font-size: 12px; }
+  #map { flex: 1; position: relative; }
+  #credit { position: absolute; right: 6px; bottom: 22px; background: rgba(255,255,255,.85); padding: 2px 6px;
+            font-size: 12px; z-index: 2; border-radius: 3px; }
+  #info { position: absolute; left: 10px; top: 10px; z-index: 2; background: rgba(255,255,255,.95); padding: 8px 12px;
+          border-radius: 4px; box-shadow: 0 1px 4px rgba(0,0,0,.3); display: none; max-width: 340px; }
+  #info b { font-size: 15px; }
+</style>
+</head>
+<body>
+<div id="side">
+  <h1 id="title"></h1>
+  <div id="controls">
+    <label>Scan opacity <input id="op" type="range" min="0" max="100" value="70"> <span id="opv">70</span>%</label>
+    <label><input id="showblocks" type="checkbox" checked> Modern block outlines</label>
+    <label><input id="showchanges" type="checkbox" checked> Change areas</label>
+    <div class="key"><span style="background:#ff7a00"></span>real change<span style="background:#00a0e0"></span>no modern equivalent</div>
+    <div class="reason" id="rule"></div>
+  </div>
+  <table><thead><tr><th>Sheet</th><th>Status</th><th>Held-out p50 / p95 (ft)</th></tr></thead><tbody id="rows"></tbody></table>
+</div>
+<div id="map">
+  <div id="info"></div>
+  <div id="credit">__CREDIT__</div>
+</div>
+<script type="application/json" id="sheets">__DATA__</script>
+<script>
+const D = JSON.parse(document.getElementById('sheets').textContent);
+const Q = new URLSearchParams(location.search);
+const ft = v => v == null ? 'n/a' : v.toFixed(1);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+if (!D.credit) document.getElementById('credit').remove();
+document.getElementById('title').textContent = 'SF zoning ' + D.series + ' review';
+document.getElementById('rule').textContent =
+  'Pass: held-out median <= ' + D.pass_median_ft + ' ft and p95 <= ' + D.pass_p95_ft + ' ft, not misplaced.';
+
+const proto = new pmtiles.Protocol();
+maplibregl.addProtocol('pmtiles', proto.tile);
+const abs = p => new URL(p, location.href).href;
+const map = new maplibregl.Map({
+  container: 'map', hash: false, preserveDrawingBuffer: true,
+  center: Q.get('c') ? Q.get('c').split(',').map(Number) : [-122.44, 37.76],
+  zoom: Q.get('z') ? Number(Q.get('z')) : 12, maxZoom: 20,
+  style: { version: 8, sources: {}, layers: [{ id: 'bg', type: 'background', paint: { 'background-color': '#e8e8e8' } }] }
+});
+map.addControl(new maplibregl.NavigationControl(), 'top-right');
+
+const opacity0 = Q.get('opacity') != null ? Number(Q.get('opacity')) : 70;
+document.getElementById('op').value = opacity0;
+document.getElementById('opv').textContent = opacity0;
+
+map.on('load', () => {
+  map.addSource('scan', { type: 'raster', url: 'pmtiles://' + abs(D.pmtiles), tileSize: 256 });
+  map.addLayer({ id: 'scan', type: 'raster', source: 'scan', paint: { 'raster-opacity': opacity0 / 100 } });
+  if (D.blocks) {
+    map.addSource('blocks', { type: 'vector', url: 'pmtiles://' + abs(D.blocks) });
+    map.addLayer({ id: 'blocks', type: 'line', source: 'blocks', 'source-layer': 'blocks',
+                   paint: { 'line-color': '#d0006f', 'line-width': 1.2 } });
+  }
+  map.addSource('changes', { type: 'geojson', data: D.changes });
+  map.addLayer({ id: 'noeq', type: 'fill', source: 'changes', filter: ['==', ['get', 'kind'], 'no_equivalent'],
+                 paint: { 'fill-color': '#00a0e0', 'fill-opacity': 0.25, 'fill-outline-color': '#0077aa' } });
+  map.addLayer({ id: 'real', type: 'circle', source: 'changes', filter: ['==', ['get', 'kind'], 'real_change'],
+                 paint: { 'circle-color': '#ff7a00', 'circle-radius': 5, 'circle-stroke-color': '#fff', 'circle-stroke-width': 1 } });
+  window.__ready = true;
+});
+
+document.getElementById('op').oninput = e => {
+  document.getElementById('opv').textContent = e.target.value;
+  if (map.getLayer('scan')) map.setPaintProperty('scan', 'raster-opacity', e.target.value / 100);
+};
+const vis = (ids, on) => ids.forEach(i => map.getLayer(i) && map.setLayoutProperty(i, 'visibility', on ? 'visible' : 'none'));
+document.getElementById('showblocks').onchange = e => vis(['blocks'], e.target.checked);
+document.getElementById('showchanges').onchange = e => vis(['noeq', 'real'], e.target.checked);
+
+const tbody = document.getElementById('rows');
+function select(s, tr) {
+  document.querySelectorAll('tr.sel').forEach(r => r.classList.remove('sel'));
+  tr.classList.add('sel');
+  if (s.bounds_wgs84) {
+    const b = s.bounds_wgs84;
+    map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 30, duration: 600 });
+  }
+  const info = document.getElementById('info');
+  info.style.display = 'block';
+  info.innerHTML = '<b>Sheet ' + esc(s.sheet_id) + '</b> <span class="st ' + esc(s.status) + '">' + esc(s.status) + '</span><br>' +
+    'held-out p50 ' + ft(s.holdout_p50_ft) + ' ft, p95 ' + ft(s.holdout_p95_ft) + ' ft' +
+    (s.reason ? '<br><span class="reason">' + esc(s.reason) + '</span>' : '') +
+    (s.answer_key_fallback ? '<br><span class="badge">answer key</span> aligned from the owner\'s control points' : '') +
+    (s.editor_url ? '<br><a href="' + esc(s.editor_url) + '" target="_blank">Open in editor</a>' : '');
+}
+D.sheets.forEach(s => {
+  const tr = document.createElement('tr');
+  tr.className = 'row';
+  tr.dataset.sheet = s.sheet_id;
+  tr.innerHTML = '<td><b>' + esc(s.sheet_id) + '</b>' + (s.answer_key_fallback ? '<span class="badge">answer key</span>' : '') + '</td>' +
+    '<td><span class="st ' + esc(s.status) + '">' + esc(s.status) + '</span>' +
+    (s.reason ? '<div class="reason">' + esc(s.reason) + '</div>' : '') +
+    (s.editor_url ? '<div><a href="' + esc(s.editor_url) + '" target="_blank" onclick="event.stopPropagation()">Open in editor</a></div>' : '') +
+    '</td><td>' + ft(s.holdout_p50_ft) + ' / ' + ft(s.holdout_p95_ft) + '</td>';
+  tr.onclick = () => select(s, tr);
+  tbody.appendChild(tr);
+});
+</script>
+</body>
+</html>
