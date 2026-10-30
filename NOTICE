@@ -1,0 +1,81 @@
+sfzoning — the history of San Francisco zoning
+Copyright (C) 2026 GrowSF
+Created by Steven Bacio for GrowSF (https://growsf.org)
+
+This repository is licensed in two parts. Neither license grants any right to
+the GrowSF name or logo (see "Trademark" below).
+
+
+1. Code: GNU Affero General Public License v3.0 only (AGPL-3.0-only)
+   See LICENSE.
+
+   Covers all source code, scripts, tests, build and configuration files,
+   including everything under pipeline/ and site/ except the paths listed in
+   section 2.
+
+   If you modify this code and distribute it, or run a modified version as a
+   service people use over a network (for example, a website), you must make
+   your version's complete source code available under the same license.
+
+
+2. Content and data: Creative Commons Attribution-NonCommercial-ShareAlike 4.0
+   International (CC BY-NC-SA 4.0). See LICENSE-content.
+
+   Covers:
+     - the story text (site/content/) and the site's written copy;
+     - research and documentation (docs/), including
+       docs/research/zoning-districts.csv;
+     - the generated data published from this project: georeferenced scans,
+       map tiles (PMTiles), district and parcel layers, statistics and the
+       processed bundle (pipeline/data/share/), whether in this repository,
+       in the project's Google Drive folder, or served by sfzoning.com.
+
+   Required attribution: when you share this content or anything adapted from
+   it, credit it as
+
+       Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org),
+       licensed CC BY-NC-SA 4.0.
+
+   with a link to https://sfzoning.com where the medium allows, and keep the
+   third-party credits in section 3.
+
+
+3. Third-party material (not covered by the licenses above; its own terms apply)
+
+   - 1948 zoning atlas imagery: David Rumsey Map Collection, licensed
+     CC BY-NC-SA 3.0 (https://creativecommons.org/licenses/by-nc-sa/3.0/).
+     Credit: "David Rumsey Map Collection, David Rumsey Map Center, Stanford
+     Libraries" (the site also shows the earlier credit
+     "© Cartography Associates, David Rumsey Map Collection").
+     See https://www.davidrumsey.com/about.
+
+   - Zoning maps 1921–2000s: scanned by Steven Bacio from the archives of the
+     San Francisco Planning Department. They are public records of the City
+     and County of San Francisco; GrowSF claims no copyright in the original
+     maps.
+
+   - DataSF datasets (Zoning Map – Zoning Districts 3i4a-hu95; Parcels –
+     Active and Retired acdm-wktn; Streets – Active and Retired 3psu-pn9h):
+     Open Data Commons Public Domain Dedication and License (PDDL) 1.0.
+
+   - Fonts: Newsreader and Libre Franklin, SIL Open Font License 1.1,
+     self-hosted via next/font.
+
+   - Software dependencies (npm and Python packages) are used under their own
+     licenses, all compatible with AGPL-3.0: mostly MIT, Apache-2.0, BSD and
+     ISC, plus libvips (LGPL-3.0, via sharp) used as a separate library.
+
+
+4. Trademark
+
+   "GrowSF" and the GrowSF logo are trademarks of GrowSF. The licenses above
+   cover copyright only and grant no trademark rights. You may (and, under
+   section 2, must) name GrowSF to give credit, but you may not use the GrowSF
+   name or logo to name your project or to suggest that GrowSF made, endorses
+   or is affiliated with your version. Please give your fork its own name.
+
+
+5. Contributions
+
+   Contributions are accepted under the GrowSF Contributor License Agreement
+   (CLA.md). See CONTRIBUTING.md.

@@ -6,6 +6,7 @@ authors = [
     { name = "Steven Bacio", email = "steven.buss@gmail.com" }
 ]
 requires-python = ">=3.12"
+license = "AGPL-3.0-only"
 dependencies = [
     "fastapi>=0.162.0",
     "geopandas>=1.2.0",
