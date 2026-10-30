@@ -472,6 +472,32 @@ def _fallback(parcels, labs: list[DistrictLabel], transform: SheetTransform):
     return codes, confs
 
 
+ROLE_MIN_LABELS = 8     # fewer district codes than this: not a use or height sheet (SU, SSD)
+ROLE_SHARE = 0.25       # a sheet reads a kind when at least this share of its codes are that kind
+
+
+def sheet_role(labs: list[DistrictLabel]) -> str:
+    """"use", "height" or "skip" for one sheet from its read labels.  Several series bind use,
+    height-and-bulk, special-use and sign sheets together (1980: sheets 1..13, 1H..13H, SU,
+    SSD), so each parcel must be read on a sheet of the right kind.  A sheet with enough use
+    codes is a use sheet (even if it prints heights too); else enough height codes make it a
+    height sheet; else it is skipped."""
+    n_use = sum(lb.kind == "use" for lb in labs)
+    n_h = sum(lb.kind == "height" for lb in labs)
+    n = n_use + n_h
+    if n < ROLE_MIN_LABELS:
+        return "skip"
+    if n_use >= ROLE_MIN_LABELS and n_use >= ROLE_SHARE * n:
+        return "use"
+    if n_h >= ROLE_MIN_LABELS and n_h >= ROLE_SHARE * n:
+        return "height"
+    return "skip"
+
+
+def sheet_roles(series: str, sheets: list[str]) -> dict[str, str]:
+    return {sid: sheet_role(read_district_labels(series, sid)) for sid in sheets}
+
+
 def assign_parcels(parcels, sheet, transform: SheetTransform | None = None):
     """DataFrame (blklot, code, height_code, confidence) for `parcels` (EPSG:2227) from one
     sheet.  `sheet` is the sheet's work dir (work/<series>/<sheet_id>); transform defaults to
@@ -501,4 +527,5 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None):
     return pd.DataFrame({"blklot": parcels["blklot"].to_numpy(),
                          "code": pd.Series(res["use"][0], dtype=object),
                          "height_code": pd.Series(res["height"][0], dtype=object),
-                         "confidence": res[role][1]})
+                         "confidence": res[role][1],
+                         "use_confidence": res["use"][1], "height_confidence": res["height"][1]})

@@ -219,3 +219,18 @@ def test_read_district_labels_offsets_dedupes_and_caches():
     assert art["page_sha256"] == labels.page_sha(d) and len(art["labels"]) == len(out)
     again = labels.read_district_labels("1960", "s1", client=Fake(lambda *a: 1 / 0))
     assert again == out
+
+
+def _labs(n_use, n_height):
+    from sfzmaps.districts.labels import DistrictLabel
+    return ([DistrictLabel(code="R-1", kind="use", x=0, y=0, confidence=1)] * n_use
+            + [DistrictLabel(code="40-X", kind="height", x=0, y=0, confidence=1)] * n_height)
+
+
+def test_sheet_role():
+    from sfzmaps.districts.labels import sheet_role
+    assert sheet_role(_labs(40, 3)) == "use"
+    assert sheet_role(_labs(2, 30)) == "height"
+    assert sheet_role(_labs(20, 20)) == "use"         # a combined use + height sheet reads both
+    assert sheet_role(_labs(3, 2)) == "skip"          # special-use / sign sheets: few codes
+    assert sheet_role([]) == "skip"

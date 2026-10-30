@@ -158,3 +158,18 @@ def test_parcel_without_geometry_dropped(data, monkeypatch):
     out = assemble.run_series("1960")
     assert len(gpd.read_file(out / "parcels.fgb")) == 4
     assert sorted(gpd.read_file(out / "districts.fgb")["code"]) == ["R-1", "R-4"]
+
+
+def test_merge_use_height_reads():
+    use = pd.DataFrame({"blklot": ["a", "b"], "code": ["R-1", "C-2"], "confidence": [0.9, 0.8],
+                        "source_sheet": ["1", "1"]})
+    height = pd.DataFrame({"blklot": ["b", "c"], "height_code": ["40-X", "65-A"],
+                           "confidence": [0.7, 0.6], "source_sheet": ["1H", "1H"]})
+    m = assemble.merge_use_height(use, height, role="use").set_index("blklot")
+    assert list(m.index) == ["a", "b", "c"]
+    assert m.loc["b", "code"] == "C-2" and m.loc["b", "height_code"] == "40-X"
+    assert m.loc["b", "confidence"] == 0.8 and m.loc["b", "source_sheet"] == "1"
+    assert m.loc["c", "code"] is None and m.loc["c", "confidence"] == 0.0
+    h = assemble.merge_use_height(use, height, role="height").set_index("blklot")
+    assert h.loc["c", "confidence"] == 0.6 and h.loc["c", "source_sheet"] == "1H"
+    assert h.loc["a", "height_code"] is None and h.loc["a", "confidence"] == 0.0

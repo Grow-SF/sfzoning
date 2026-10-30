@@ -270,9 +270,22 @@ def districts(
             raise typer.Exit(1)
         import geopandas as gpd
 
-        a, b = (pd.DataFrame(gpd.read_file(assemble.out_dir(s) / "parcels.fgb").drop(columns="geometry"))
-                for s in ("2000-digital-zoning", "today"))
+        def table(s):
+            return pd.DataFrame(gpd.read_file(assemble.out_dir(s) / "parcels.fgb").drop(columns="geometry"))
+
+        a, b = table("2000-digital-zoning"), table("today")
         typer.echo(json.dumps(val.agreement(a, b), indent=1, default=str))
+        keys = config.PIPELINE_DIR / "tests" / "fixtures" / "district_keys"
+        typer.echo("series                 parcels  unknown  key_accuracy")
+        for s in [s for s, i in SERIES.items() if i.role == "use"] + ["today"]:
+            st = assemble.out_dir(s) / "stats.json"
+            if not st.exists():
+                continue
+            j = json.loads(st.read_text())
+            n = sum(j[c]["parcels"] for c in assemble.CATEGORIES)
+            kf = keys / f"{s}.csv"
+            acc = f"{val.key_accuracy(table(s), kf):.1%}" if kf.exists() else "-"
+            typer.echo(f"{s:22} {n:8,} {j['unknown_share']:8.1%}  {acc}")
     if failures:
         typer.echo(f"{len(failures)} series failed:", err=True)
         for s, msg in failures:

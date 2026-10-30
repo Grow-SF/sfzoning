@@ -19,13 +19,13 @@ def sheet_order(series: str) -> list[str]:
     return stitch.draw_order(series, stitch.load_scores(series))[::-1]
 
 
-def assign_sheets(parcels, series: str):
-    """Series blklot -> sheet id: the highest-priority sheet whose footprint covers >= 50% of the
-    parcel's area; None where no sheet does."""
+def assign_sheets(parcels, series: str, sheets: list[str] | None = None):
+    """Series blklot -> sheet id: the highest-priority sheet (of `sheets`, default all) whose
+    footprint covers >= 50% of the parcel's area; None where no sheet does."""
     import pandas as pd
     from shapely import STRtree
 
-    order = sheet_order(series)
+    order = sheet_order(series) if sheets is None else list(sheets)
     geoms = list(parcels.geometry)
     out: list[str | None] = [None] * len(geoms)
     for sid in order:
