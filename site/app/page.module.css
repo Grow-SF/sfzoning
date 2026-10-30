@@ -209,7 +209,8 @@
 }
 .sourcesLabel { font-weight: 700; color: var(--ink); }
 .sources ul { margin: 0.125rem 0 0; padding: 0; list-style: none; }
-.sources li + li { margin-top: 0.25rem; }
+/* Each source link is a 24px-tall tap target (WCAG 2.5.8). */
+.sources a { display: inline-block; padding: 0.25rem 0; }
 
 .tail { height: 50vh; }
 

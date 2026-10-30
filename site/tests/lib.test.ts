@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ERAS } from "@/lib/eras";
 import { BASEMAP, districtSource, scanSource, tileUrl } from "@/lib/tiles";
-import { scanInkWeight } from "@/lib/theme";
+import { INK_CITY, inkByZoom, scanInkWeight } from "@/lib/theme";
 
 const orig = process.env.NEXT_PUBLIC_TILES_BASE_URL;
 afterEach(() => {
@@ -28,10 +28,13 @@ describe("tileUrl", () => {
 
 describe("scanInkWeight", () => {
   it("eases scan ink at city zooms and is full strength up close", () => {
-    expect(scanInkWeight(11)).toBeCloseTo(0.55);
-    expect(scanInkWeight(13.25)).toBeGreaterThan(0.55);
+    expect(scanInkWeight(11)).toBeCloseTo(INK_CITY);
+    expect(scanInkWeight(13.25)).toBeGreaterThan(INK_CITY);
     expect(scanInkWeight(13.25)).toBeLessThan(1);
     expect(scanInkWeight(15)).toBe(1);
+  });
+  it("has a MapLibre zoom expression with the same end stops", () => {
+    expect(inkByZoom(0.5)).toEqual(["interpolate", ["linear"], ["zoom"], 12, 0.5 * INK_CITY, 14.5, 0.5]);
   });
 });
 

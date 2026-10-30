@@ -1,18 +1,55 @@
-/* Map key. Phone: top-left under the era ruler (cards cover the bottom).
-   Desktop: bottom-left of the map. In the explorer it sits top-left. */
+/* Map key. Phone: top-left under the era ruler (cards cover the bottom); on the story map it
+   folds into a chip. Desktop: bottom-left of the map. In the explorer it sits top-left. */
 
-.legend {
+.wrap {
   position: absolute;
   z-index: 2;
   top: 4.25rem;
   left: 0.75rem;
+  font-family: var(--font-ui);
+  color: var(--ink);
+}
+
+/* ---------- Chip (story map, phones) ---------- */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2rem;
+  margin: 0;
+  padding: 0.3rem 0.6rem 0.3rem 0.4rem;
+  font: inherit;
+  font-size: 0.75rem;
+  font-weight: 600;
+  line-height: 1;
+  color: var(--ink);
+  background: rgb(247 244 238 / 0.94);
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  cursor: pointer;
+}
+.chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* The palette in miniature: ramp first, then the other uses. */
+.strip {
+  display: inline-flex;
+  height: 0.75rem;
+  outline: 1px solid rgb(22 21 19 / 0.25);
+}
+.strip span { width: 0.5rem; height: 100%; }
+
+.wrap[data-compact] .legend { display: none; }
+.wrap[data-compact][data-open] .legend { display: block; margin-top: 0.3rem; }
+
+/* ---------- Full key ---------- */
+
+.legend {
   width: 10.25rem;
   margin: 0;
   padding: 0.45rem 0.55rem 0.5rem;
-  font-family: var(--font-ui);
   font-size: 0.6875rem;
   line-height: 1.3;
-  color: var(--ink);
   background: rgb(247 244 238 / 0.94);
   border: 1px solid var(--ink);
 }
@@ -65,7 +102,7 @@
   outline: 1px solid rgb(22 21 19 / 0.25);
   outline-offset: -1px;
 }
-/* "Not read yet" is not a zoning class: show it as an empty, dashed square. */
+/* "Not read yet" is not a zoning class: show it as a pale, dashed square. */
 .unknown {
   outline: 1px dashed var(--ink-2);
 }
@@ -80,9 +117,13 @@
 }
 
 @media (min-width: 900px) {
-  .legend {
+  .wrap {
     top: auto;
     bottom: 0.75rem;
+  }
+  .chip { display: none; }
+  .wrap[data-compact] .legend { display: block; margin-top: 0; }
+  .legend {
     width: 15.5rem;
     padding: 0.6rem 0.75rem 0.65rem;
     font-size: 0.75rem;
@@ -90,7 +131,7 @@
   .uses { grid-template-columns: 1fr 1fr; column-gap: 0.75rem; }
 }
 
-:global(.explorer-map) .legend {
+:global(.explorer-map) .wrap {
   top: 0.75rem;
   bottom: auto;
 }

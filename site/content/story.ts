@@ -37,7 +37,8 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "This is San Francisco today, drawn as nothing but its blocks. Every one of them has a zoning rule that says how many homes it may hold.",
+        // DRAFT: describes the "allowed" colours shown at this step (lib/palette.ts).
+        text: "This is San Francisco today, every lot coloured by what its zoning allows. Yellow means one home per lot; the colours deepen through orange and red to brick where apartments are allowed. Violet is homes over shops, pink is commercial, teal is industry and green is parks and public land.",
       },
       {
         kind: "p",

@@ -47,6 +47,40 @@ test("the 1948 'both' step shows the legend and the Rumsey credit", async ({ pag
   await expect(story.getByText(CREDIT, { exact: true })).toBeVisible();
 });
 
+test("on phones the story's key is a chip that opens the full key", async ({ page }, info) => {
+  test.skip(info.project.name !== "mobile", "phone layout only");
+  test.skip(!(await tilesExist(page, "1960/districts/1960-districts.pmtiles")), "1960 district tiles not published");
+  await page.goto("/");
+  await centerStep(page, "1960-density-caps");
+  const legend = page.locator("[data-active-step]").getByTestId("legend");
+  const chip = legend.getByRole("button", { name: "Key" });
+  await expect(chip).toHaveAttribute("aria-expanded", "false");
+  await expect(legend.getByText("Homes allowed per lot")).toBeHidden();
+  await chip.click();
+  await expect(legend.getByRole("button", { name: "Hide key" })).toHaveAttribute("aria-expanded", "true");
+  await expect(legend.getByText("Homes allowed per lot")).toBeVisible();
+  // The chip stays small: it must not cover the map the way the full key did.
+  await legend.getByRole("button").click();
+  const box = await legend.boundingBox();
+  expect(box!.width * box!.height).toBeLessThan(390 * 844 * 0.03);
+});
+
+test("on phones the story camera centres each step above the card", async ({ page }, info) => {
+  test.skip(info.project.name !== "mobile", "phone layout only");
+  await page.goto("/");
+  await centerStep(page, "1960-density-caps");
+  await expect(page.locator("[data-active-step] .map-wrap")).toHaveAttribute("data-idle", "true");
+  const r = await page.evaluate(() => {
+    type M = import("maplibre-gl").Map;
+    const m = (window as unknown as { __map: M }).__map;
+    const p = m.project(m.getCenter());
+    const card = document.querySelector('[data-step="1960-density-caps"] article')!.getBoundingClientRect();
+    return { y: p.y, cardTop: card.top, padding: m.getPadding() };
+  });
+  expect(r.padding.bottom).toBeGreaterThan(300);
+  expect(r.y).toBeLessThan(r.cardTop);
+});
+
 test("an era without published districts falls back to the scan with a note", async ({ page }) => {
   await page.route("**/1921/districts/**", (r) => r.fulfill({ status: 404, body: "not found" }));
   await page.goto("/");

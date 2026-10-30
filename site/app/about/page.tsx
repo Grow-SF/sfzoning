@@ -13,6 +13,14 @@ import styles from "@/components/endmatter.module.css";
 export const metadata: Metadata = {
   title: "How the maps were made · How San Francisco was zoned",
   description: "How a century of San Francisco zoning maps were aligned to today’s streets, how accurate they are, and the sources behind the story.",
+  alternates: { canonical: "/about" },
+  openGraph: {
+    title: "How the maps were made",
+    description: "How a century of San Francisco zoning maps were aligned to today’s streets, how accurate they are, and the sources behind the story.",
+    url: "/about",
+    // A segment's openGraph replaces the root's, so name the share image again.
+    images: [{ url: "/opengraph-image.jpg", width: 1200, height: 630, alt: "Map of San Francisco with every lot coloured by how many homes today's zoning allows." }],
+  },
 };
 
 // Every source the story and eras cite, then the rest of the registry.

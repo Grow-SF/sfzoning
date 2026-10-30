@@ -48,8 +48,10 @@ const statsCache = new Map<string, Promise<DistrictStats | null>>();
 export function loadStats(series: string): Promise<DistrictStats | null> {
   let p = statsCache.get(series);
   if (!p) {
-    p = fetch(districtStatsUrl(series))
-      .then((r) => (r.ok ? (r.json() as Promise<DistrictStats>) : null))
+    // Only series whose tiles are published have stats; skip the rest instead of 404ing.
+    p = probeDistricts(series)
+      .then((ok) => (ok ? fetch(districtStatsUrl(series)) : null))
+      .then((r) => (r?.ok ? (r.json() as Promise<DistrictStats>) : null))
       .catch(() => null);
     statsCache.set(series, p);
   }

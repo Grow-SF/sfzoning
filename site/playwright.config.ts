@@ -8,7 +8,15 @@ const port = Number(process.env.SITE_PORT ?? 3100);
 export default defineConfig({
   testDir: "./tests",
   testMatch: /.*\.spec\.ts/,
-  timeout: 60_000,
+  timeout: 90_000,
+  // Every spec drives a WebGL map in software (SwiftShader). Two workers starve each other's
+  // main thread (and the dev server's compiler) of CPU, so scroll-driven IntersectionObserver
+  // callbacks and map loads miss their deadlines: the story-scroll spec flaked at 2 workers.
+  // One worker is deterministic and still finishes in a few minutes.
+  workers: 1,
+  fullyParallel: false,
+  retries: 0,
+  expect: { timeout: 15_000 },
   use: { baseURL: `http://127.0.0.1:${port}` },
   projects: [
     { name: "mobile", use: { viewport: { width: 390, height: 844 } } },

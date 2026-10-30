@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- Four blocks, one per step of the homes-per-lot ramp (lib/palette.ts). -->
+  <rect width="32" height="32" fill="#efebe2"/>
+  <rect x="3" y="3" width="12" height="12" fill="#E4CD37"/>
+  <rect x="17" y="3" width="12" height="12" fill="#DC7E26"/>
+  <rect x="3" y="17" width="12" height="12" fill="#B8342C"/>
+  <rect x="17" y="17" width="12" height="12" fill="#5A1805"/>
+</svg>

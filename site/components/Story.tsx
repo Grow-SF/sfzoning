@@ -15,10 +15,14 @@ export default function Story({ steps }: Props) {
   const refs = useMemo(() => steps.map(() => createRef<HTMLElement>()), [steps]);
   const { active, progress } = useScrollSteps(refs);
   const step = steps[active];
+  const next = steps[active + 1];
 
   useEffect(() => {
-    mapRef.current?.apply({ era: step.era, view: step.view, camera: step.camera, highlight: step.highlight });
-  }, [step]);
+    // The next step's era is drawn at near-zero opacity, so its tiles are already in hand
+    // when the reader scrolls on.
+    const prefetch = next && next.era !== step.era ? { era: next.era, view: next.view } : undefined;
+    mapRef.current?.apply({ era: step.era, view: step.view, camera: step.camera, highlight: step.highlight, prefetch });
+  }, [step, next]);
 
   const first = steps[0];
   return (
