@@ -69,6 +69,21 @@ def footprint(series: str, sheet_id: str):
         return box(*ds.bounds)
 
 
+def polygonal(geom):
+    """Only the polygon parts of geom (a difference can return a GeometryCollection with
+    slivers as lines/points, which gdalwarp rejects as a cutline); empty if none."""
+    from shapely.geometry import MultiPolygon, Polygon
+
+    if isinstance(geom, (Polygon, MultiPolygon)):
+        return geom
+    polys = []
+    for g in getattr(geom, "geoms", []):
+        g = polygonal(g)
+        if not g.is_empty:
+            polys.extend(g.geoms if isinstance(g, MultiPolygon) else [g])
+    return MultiPolygon(polys) if polys else Polygon()
+
+
 def _cut(series: str, sheet_id: str, geom, out: Path) -> None:
     import geopandas as gpd
     import rasterio
@@ -100,7 +115,7 @@ def cut_sources(series: str, order: list[str]) -> list[Path]:
         if above is None or not fps[sid].intersects(above):
             out.append(src)
             continue
-        geom = fps[sid].difference(above)
+        geom = polygonal(fps[sid].difference(above))
         if geom.is_empty or geom.area < 1.0:
             continue
         cutdir.mkdir(parents=True, exist_ok=True)

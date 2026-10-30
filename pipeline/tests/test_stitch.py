@@ -113,3 +113,15 @@ def test_fully_covered_sheet_dropped(work):
     _score(w / "a", False, 9.0, "holdout_median")
     _score(w / "b", True, 3.0)
     assert [_sid(s) for s in _sources(stitch.build_vrt("1960"))] == ["b"]
+
+
+def test_polygonal_drops_lines_from_collections():
+    from shapely.geometry import GeometryCollection, LineString, MultiPolygon, Point, box
+
+    from sfzmaps.stitch import polygonal
+    gc = GeometryCollection([box(0, 0, 1, 1), LineString([(2, 2), (3, 3)]), Point(5, 5),
+                             MultiPolygon([box(10, 10, 11, 11)])])
+    g = polygonal(gc)
+    assert g.geom_type == "MultiPolygon" and len(g.geoms) == 2 and g.area == 2.0
+    assert polygonal(GeometryCollection([LineString([(0, 0), (1, 1)])])).is_empty
+    assert polygonal(box(0, 0, 1, 1)).geom_type == "Polygon"
