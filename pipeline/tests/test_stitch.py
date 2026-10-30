@@ -125,3 +125,17 @@ def test_polygonal_drops_lines_from_collections():
     assert g.geom_type == "MultiPolygon" and len(g.geoms) == 2 and g.area == 2.0
     assert polygonal(GeometryCollection([LineString([(0, 0), (1, 1)])])).is_empty
     assert polygonal(box(0, 0, 1, 1)).geom_type == "Polygon"
+
+
+def test_black_ink_is_not_nodata(work):
+    """A source carrying nodata=0 must not make pure-black ink transparent in the stitch."""
+    w = config.WORK_DIR / "1929"
+    _tif(w / "a" / "warped.tif", 6_000_000, 0)          # solid black, opaque
+    with rasterio.open(w / "a" / "warped.tif", "r+") as ds:
+        ds.nodata = 0
+    _score(w / "a", True, 3.0)
+    vrt = stitch.build_vrt("1929")
+    text = vrt.read_text()
+    assert "NoDataValue" not in text and "<NODATA>" not in text
+    with rasterio.open(vrt) as ds:
+        assert ds.read(4).min() == 255 and ds.read(1).max() == 0

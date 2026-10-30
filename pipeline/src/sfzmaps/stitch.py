@@ -182,6 +182,7 @@ def paper_backing(series: str, order: list[str]) -> Path | None:
     cl.unlink(missing_ok=True)
     with rasterio.open(out, "r+") as ds:
         ds.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha]
+        ds.nodata = None   # the alpha band is the mask; a nodata of 0 would also blank black ink
     return out
 
 
@@ -203,6 +204,8 @@ def build_vrt(series: str, scores: dict[str, SheetScore] | None = None, paper: b
         srcs = ([backing] if backing else []) + whole + srcs
     lst.write_text("\n".join(str(p) for p in srcs) + "\n")
     # The RGBA alpha band is honored as the mask; the last listed source wins in overlaps.
-    subprocess.run(["gdalbuildvrt", "-overwrite", "-resolution", "highest",
+    # -srcnodata/-vrtnodata None: the alpha bands are the masks.  Without them a source with a
+    # nodata value makes every (0, 0, 0) pixel, i.e. pure black ink, transparent.
+    subprocess.run(["gdalbuildvrt", "-overwrite", "-resolution", "highest", "-srcnodata", "None", "-vrtnodata", "None",
                     "-input_file_list", str(lst), str(out)], check=True, capture_output=True)
     return out
