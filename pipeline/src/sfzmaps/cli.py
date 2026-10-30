@@ -159,13 +159,19 @@ def run(
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ref = datasf.load_reference()
     allp = pages.discover()
+    from sfzmaps import llm
+
     failures: list[tuple[str, str]] = []
-    for s in sorted({p.series for p in allp if all_ or p.series == year}):
+    todo = sorted({p.series for p in allp if all_ or p.series == year})
+    for k, s in enumerate(todo):
         try:
             runner.run_series(s, sheet=sheet, until=until, force_auto=force_auto, force=force,
                               ref=ref, pages_list=allp)
             if sheet is None and until is None:  # a partial run must not republish the series
                 _publish(s)
+        except llm.FATAL as e:  # quota / auth: every later call fails too; stop the run
+            _resume_hint(e, "run", todo[k:], all_)
+            raise typer.Exit(2)
         except Exception as e:  # noqa: BLE001 - one failing series must not stop the others
             logging.getLogger(__name__).exception("series %s failed", s)
             failures.append((s, f"{type(e).__name__}: {e}"))
@@ -174,6 +180,17 @@ def run(
         for s, msg in failures:
             typer.echo(f"  {s}: {msg[:300]}", err=True)
         raise typer.Exit(1)
+
+
+def _resume_hint(e: Exception, command: str, remaining: list[str], all_: bool) -> None:
+    """Explain a fatal vision error (quota / spend limit / auth) and how to resume."""
+    flag = "--year" if command == "run" else "--series"
+    typer.echo(f"stopped: {type(e).__name__}: {e}", err=True)
+    typer.echo(f"not finished: {', '.join(remaining)}", err=True)
+    how = f"sfzmaps {command} --all" if all_ else \
+        " ; ".join(f"sfzmaps {command} {flag} {s}" for s in remaining)
+    typer.echo(f"resume when the API is usable again with: {how}  (answers already read are "
+               "cached and not paid for twice)", err=True)
 
 
 def _publish(series: str, min_zoom: int = 11, max_zoom: int = 18) -> None:
@@ -214,9 +231,17 @@ def tiles(
 def districts(
     series: str = typer.Option(None, "--series", help="Series (e.g. 1948, 1960-zoning) or `today`."),
     all_: bool = typer.Option(False, "--all", help="Every district series, plus today."),
-    sheet: list[str] = typer.Option(None, "--sheet", help="Only these sheet ids (testing; publishes "
-                                                         "a partial series)."),
+    sheet: list[str] = typer.Option(None, "--sheet", help="Only these sheet ids (testing): writes a "
+                                                         "partial artifact (districts-partial/), "
+                                                         "never the full-series outputs."),
     validate: bool = typer.Option(False, "--validate", help="2000-digital-zoning vs DataSF today."),
+    republish: bool = typer.Option(False, "--republish", help="Re-apply overrides, height and rules "
+                                                             "to the saved reads (no vision calls)."),
+    cache_only: bool = typer.Option(False, "--cache-only", help="Vision answers from the disk cache "
+                                                               "only: region reads fall back to "
+                                                               "inheritance, other misses fail."),
+    status: bool = typer.Option(False, "--status", help="Provenance of every series' reads and "
+                                                       "which need rerunning."),
 ) -> None:
     """Read zoning districts per parcel, join the rules, publish out/<series>/districts/."""
     import json
@@ -228,20 +253,35 @@ def districts(
     from sfzmaps.districts import assemble
     from sfzmaps.districts.series import SERIES
 
+    if status:
+        typer.echo(assemble.format_status(assemble.status_rows()))
+        if not (series or all_ or validate):
+            return
     if not (series or all_ or validate):
-        raise typer.BadParameter("pass --series S, --all or --validate")
+        raise typer.BadParameter("pass --series S, --all, --validate or --status")
     if series and series != "today" and SERIES.get(series, None) is None:
         raise typer.BadParameter(f"unknown series {series!r}")
     if series and series != "today" and SERIES[series].role == "skip":
         raise typer.BadParameter(f"{series}: special-use series are out of scope")
+    if republish and sheet:
+        raise typer.BadParameter("--republish works on whole series; drop --sheet")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    todo = [s for s, i in SERIES.items() if i.role != "skip"] + ["today"] if all_ else \
-        ([series] if series else [])
+    if republish:
+        todo = [s for s, i in SERIES.items() if i.role == "use"] + ["today"] if all_ else \
+            ([series] if series else [])
+    else:
+        todo = [s for s, i in SERIES.items() if i.role != "skip"] + ["today"] if all_ else \
+            ([series] if series else [])
+    if republish or cache_only:
+        llm.CACHE_ONLY = True       # nothing below may reach the network
     live0, in0, out0 = llm.CallCounter.live, llm.CallCounter.in_tokens, llm.CallCounter.out_tokens
     failures: list[tuple[str, str]] = []
-    for s in todo:
+    for k, s in enumerate(todo):
         try:
-            d = assemble.run_series(s, sheets=sheet or None)
+            if republish:
+                d = assemble.republish(s)
+            else:
+                d = assemble.run_series(s, sheets=sheet or None, cache_only=cache_only)
             st = d / "stats.json"
             if st.exists():
                 j = json.loads(st.read_text())
@@ -249,11 +289,14 @@ def districts(
             else:
                 typer.echo(f"{s}: {d}")
             page = s if s == "today" or SERIES[s].role != "height" else assemble.zoning_series_of(s)
-            if page != "today":
+            if page != "today" and not sheet:
                 try:
                     typer.echo(f"{page}: review page {reviewpage.write(page)}")
                 except Exception as e:  # noqa: BLE001 - the review page is optional
                     typer.echo(f"{page}: review page skipped ({type(e).__name__}: {e})", err=True)
+        except llm.FATAL as e:  # quota / spend limit / auth: every later call fails too
+            _resume_hint(e, "districts", todo[k:], all_)
+            raise typer.Exit(2)
         except Exception as e:  # noqa: BLE001 - one failing series must not stop the others
             logging.getLogger(__name__).exception("series %s failed", s)
             failures.append((s, f"{type(e).__name__}: {e}"))
