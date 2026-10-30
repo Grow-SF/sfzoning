@@ -186,23 +186,21 @@ def test_street_snap_leaves_block_anchored_fit_alone():
     assert anchors.street_snap(fit, sheet.labels, _street_ref()) is fit
 
 
-def test_street_lines_cache_not_shared_between_references():
-    import gc
+def test_street_lines_cache_is_per_reference():
+    import dataclasses
 
     from shapely.geometry import LineString
 
-    def ref(name):
-        s = gpd.GeoDataFrame([{"street": name, "streetname": name + " ST", "active": "true",
-                               "geometry": LineString([(0, 0), (1, 1)])}],
-                             geometry="geometry", crs="EPSG:2227")
-        return Reference(_grid_blocks(1), None, None, s)
+    def streets(name):
+        return gpd.GeoDataFrame([{"street": name, "streetname": name + " ST", "active": "true",
+                                  "geometry": LineString([(0, 0), (1, 1)])}],
+                                geometry="geometry", crs="EPSG:2227")
 
-    seen = []
-    for name in ("AAA", "BBB", "CCC", "DDD"):
-        r = ref(name)
-        lines = anchors._street_lines(r)
-        assert list(lines) == [anchors.normalize_street(name + " ST")] or len(lines) == 1
-        seen.append(set(lines))
-        del r, lines
-        gc.collect()
-    assert len({frozenset(s) for s in seen}) == 4
+    r1 = Reference(_grid_blocks(1), None, None, streets("AAA"))
+    r2 = Reference(_grid_blocks(1), None, None, streets("BBB"))
+    l1, l2 = anchors._street_lines(r1), anchors._street_lines(r2)
+    assert set(l1) != set(l2) and len(l1) == 1 and len(l2) == 1
+    assert r1._street_lines_cache is not r2._street_lines_cache
+    r3 = dataclasses.replace(r1, streets=streets("CCC"))
+    assert getattr(r3, "_street_lines_cache", None) is None
+    assert set(anchors._street_lines(r3)) not in (set(l1), set(l2))

@@ -635,7 +635,8 @@ def estimate_street_px(polys: list[Polygon]) -> tuple[float, bool]:
         return DEFAULT_STREET_PX, False
     from shapely import STRtree
     tree = STRtree(polys)
-    radius = max(4 * DEFAULT_STREET_PX, float(np.sqrt(np.median([p.area for p in polys]))))
+    side = float(np.sqrt(np.median([p.area for p in polys])))  # median block side
+    radius = min(max(4 * DEFAULT_STREET_PX, side), 2 * side)
     gaps = []
     for i, p in enumerate(polys):
         best = np.inf

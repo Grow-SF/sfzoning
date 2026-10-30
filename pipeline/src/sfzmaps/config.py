@@ -115,3 +115,7 @@ def estimate_image_tokens(w: int, h: int) -> int:
         rw, rh = int(w * shrink), int(h * shrink)
         patches = math.ceil(rw / PATCH) * math.ceil(rh / PATCH)
     return math.ceil(patches * PATCH_MULTIPLIER)
+
+# score.json format/logic version: bump whenever pass or answer-key-fallback logic changes;
+# a score.json with a missing or lower version is stale and rescored.
+SCORE_VERSION = 2

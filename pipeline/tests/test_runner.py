@@ -324,3 +324,56 @@ def test_misplaced_with_key_warps_from_key(env, monkeypatch):
     # a rerun stays consistent
     s2 = runner.run_sheet(page, ref)
     assert s2.reason == "misplaced" and json.loads((d / "transform.json").read_text())["origin"] == "answer_key"
+
+
+def _misplaced_env(env, monkeypatch):
+    page, ref, d = env
+    Fakes(monkeypatch)
+    pts = page.source.parent / "7.jpg.points"
+    pts.write_text("mapX,mapY,pixelX,pixelY,enable\n" + "\n".join(
+        f"{g.wx},{g.wy},{g.px},{-g.py},1" for g in GCPS))
+    monkeypatch.setattr(runner, "answer_key_path", lambda p: pts)
+    from sfzmaps.score import SheetScore
+    seen = []
+
+    def fake_score(res, **k):
+        if res is None:
+            return SheetScore.empty("insufficient_anchors")
+        seen.append(res.transform.gcps[0].source)
+        return SheetScore(50, 0.9, 3.0, 9.0, 20.0, 0, 0, False, "misplaced")
+
+    monkeypatch.setattr(runner.score_mod, "score", fake_score)
+    return page, ref, d, seen
+
+
+def test_rescore_after_key_fallback_scores_auto_fit(env, monkeypatch):
+    page, ref, d, seen = _misplaced_env(env, monkeypatch)
+    runner.run_sheet(page, ref)
+    for _ in range(2):
+        (d / "score.json").unlink()
+        s = runner.run_sheet(page, ref)
+        sj = json.loads((d / "score.json").read_text())
+        assert s.reason == "misplaced" and not s.passed
+        assert sj["reason"] == "misplaced" and sj["passed"] is False
+        assert sj["answer_key_fallback"] is True and sj["metrics_of"] == "auto_fit"
+        assert json.loads((d / "transform.json").read_text())["origin"] == "answer_key"
+    assert seen and set(seen) == {"anchor"}  # never scored under the key transform
+
+
+def test_score_version_gates_staleness(env, monkeypatch):
+    page, ref, d = env
+    Fakes(monkeypatch)
+    runner.run_sheet(page, ref)
+    sj = d / "score.json"
+    cur = json.loads(sj.read_text())
+    assert cur["score_version"] == config.SCORE_VERSION and runner._score_current(cur)
+    for v in (None, config.SCORE_VERSION - 1):
+        old = {k: x for k, x in cur.items() if k != "score_version"}
+        if v is not None:
+            old["score_version"] = v
+        assert not runner._score_current(old)
+        assert runner._score_load({**old, "passed": True, "reason": None}).passed is False
+        sj.write_text(json.dumps({**old, "passed": True, "reason": None}))
+        os.utime(sj, ns=(sj.stat().st_mtime_ns + 10**9,) * 2)
+        runner.run_sheet(page, ref)
+        assert json.loads(sj.read_text())["score_version"] == config.SCORE_VERSION

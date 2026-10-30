@@ -31,6 +31,13 @@ review for that run (the file itself is never modified). If the automatic rough 
 on a 1948/1960 sheet and the owner's .points file exists, its GCPs are the transform
 (origin "answer_key"), score.json keeps reason "insufficient_anchors" and flags
 "answer_key_fallback"; refine and changes are skipped.
+If refine finishes but the sheet scores "misplaced" and a key exists, the key is likewise the
+transform (origin "answer_key"); score.json keeps reason "misplaced", passed false. A rescore
+of such a sheet uses the auto fit stored in refine.json, never the key transform.
+For every answer_key_fallback sheet score.json carries "metrics_of": "auto_fit": the
+numbers describe the automatic fit (none for insufficient_anchors), not the key warp.
+score.json also carries "score_version" (config.SCORE_VERSION); a missing or lower
+version is stale and rescored. Bump it whenever pass or fallback logic changes.
 """
 from __future__ import annotations
 
@@ -132,13 +139,15 @@ def _result_load(d: dict, ref: Reference | None, transform: SheetTransform | Non
 
 
 def _score_json(s: SheetScore, **extra) -> dict:
-    return {**{k: (_num(v) if isinstance(v, float) else v) for k, v in asdict(s).items()}, **extra}
+    return {**{k: (_num(v) if isinstance(v, float) else v) for k, v in asdict(s).items()},
+            "score_version": config.SCORE_VERSION, **extra}
 
 
 def _score_current(d: dict) -> bool:
-    """False for a pre-held-out-format score.json (no holdout_p50_ft key): it was judged by
-    an older pass rule, so it is stale and must be rescored."""
-    return "holdout_p50_ft" in d
+    """False for a score.json without holdout_p50_ft (pre-held-out format) or with a missing
+    or older config.SCORE_VERSION: it was judged by older pass/fallback logic, so it is
+    stale and must be rescored."""
+    return "holdout_p50_ft" in d and d.get("score_version", 0) >= config.SCORE_VERSION
 
 
 def _score_load(d: dict) -> SheetScore:
@@ -154,7 +163,8 @@ def _score_load(d: dict) -> SheetScore:
     return SheetScore(d["n_scored"], g("insample_frac_within", "frac_within"),
                       g("insample_p50_ft", "p50_ft"), g("insample_p95_ft", "p95_ft"),
                       g("insample_max_ft", "max_ft"), d["n_real_change"], d["n_no_equivalent"],
-                      False if stale else d["passed"], "stale_score" if stale else d["reason"], g("holdout_p50_ft"), g("holdout_p95_ft"),
+                      False if stale else d["passed"], "stale_score" if stale else d["reason"],
+                      g("holdout_p50_ft"), g("holdout_p95_ft"),
                       d.get("n_holdout", 0), g("label_agreement"), g("inlier_frac"))
 
 
@@ -410,18 +420,28 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             sc = score_mod.score(None)
             if answer_key:
                 extra["answer_key_fallback"] = True
+                extra["metrics_of"] = "auto_fit"
         else:
-            t_ = SheetTransform.from_json(json.loads(tj.read_text()))
+            tdata = json.loads(tj.read_text())
+            keyed = tdata.get("origin") == "answer_key"
+            if keyed:  # a previous misplaced fallback: score the auto fit, not the key
+                t_ = SheetTransform.from_json(json.loads(rfj.read_text())["transform"])
+            else:
+                t_ = SheetTransform.from_json(tdata)
             res = _result_load(json.loads(rfj.read_text()), ref, t_)
             sc = score_mod.score(res, agreement=agreement(t_))
+            gcps = None
             if sc.reason == "misplaced":
                 # The auto transform is in the wrong place; a sheet with an owner key is
                 # warped from that instead.  Still not passed, so review sees it.
                 gcps = _answer_key_gcps(page, png) if answer_key_path(page) else None
-                if gcps is not None:
-                    _write_json(tj, _transform_json(SheetTransform(gcps, config.MANUAL_TPS_SMOOTHING), "answer_key"))
-                    extra["answer_key_fallback"] = True
-                    log.info("misplaced: transform from answer key (%d GCPs)", len(gcps))
+            if gcps is not None:
+                _write_json(tj, _transform_json(SheetTransform(gcps, config.MANUAL_TPS_SMOOTHING), "answer_key"))
+                extra["answer_key_fallback"] = True
+                extra["metrics_of"] = "auto_fit"
+                log.info("misplaced: transform from answer key (%d GCPs)", len(gcps))
+            elif keyed:
+                _write_json(tj, _transform_json(t_, "auto"))  # no longer misplaced: back to auto
         _write_json(sj, _score_json(sc, **extra))
 
     stage("score", sj, [p for p in (tj, rfj, lj) if p.exists()] or [rj], do_score)

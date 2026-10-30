@@ -13,7 +13,7 @@ TRUE = [GCP(x, y, 6_000_000 + 0.5 * x, 2_100_000 - 0.5 * y, "auto")
 SCORE = {"n_scored": 100, "insample_frac_within": 0.97, "insample_p50_ft": 2.0,
          "insample_p95_ft": 5.5, "insample_max_ft": 9.0, "n_real_change": 3,
          "n_no_equivalent": 7, "passed": True, "reason": None, "holdout_p50_ft": 3.0,
-         "holdout_p95_ft": 8.0, "n_holdout": 100, "label_agreement": 0.8, "inlier_frac": 0.5}
+         "holdout_p95_ft": 8.0, "n_holdout": 100, "score_version": config.SCORE_VERSION, "label_agreement": 0.8, "inlier_frac": 0.5}
 
 
 def _points(rows):
