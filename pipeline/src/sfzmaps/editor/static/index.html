@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sfzmaps control-point editor</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<link rel="stylesheet" href="editor.css">
+</head>
+<body>
+<header id="topbar">
+  <label class="sheetpick">Sheet <select id="sheet-select"></select></label>
+  <div id="score" aria-live="polite">
+    <div class="metric" id="m-p50"><span class="k">held-out median</span><span class="v">–</span><span class="rule">≤ 5 ft</span></div>
+    <div class="metric" id="m-p95"><span class="k">held-out p95</span><span class="v">–</span><span class="rule">≤ 12 ft</span></div>
+    <div class="verdict" id="verdict">–</div>
+    <div class="reason" id="reason"></div>
+  </div>
+  <span id="status" class="badge"></span>
+  <input id="note" type="text" placeholder="Note (required to accept a failing sheet)" maxlength="500">
+  <button id="btn-save" class="primary" title="Save as edited (Ctrl/Cmd+S)">Save</button>
+  <button id="btn-accept" title="Save as accepted">Accept</button>
+</header>
+
+<div id="toolbar">
+  <button id="tool-add" title="Click the scan, then click the matching spot on the map">Add point</button>
+  <button id="tool-area" title="Click map vertices; double-click or Enter to finish">Mark change area</button>
+  <span class="sep"></span>
+  <button id="worst-prev" title="Previous worst area">‹</button>
+  <button id="worst-next" title="Jump to the next of the 5 worst-residual areas">Worst areas <span id="worst-n"></span></button>
+  <span class="sep"></span>
+  <button id="btn-undo" title="Undo (Ctrl/Cmd+Z)">Undo</button>
+  <button id="btn-del" title="Delete selected point (Del)">Delete</button>
+  <button id="btn-dis" title="Disable / enable selected point (D)">Disable (D)</button>
+  <span class="sep"></span>
+  <label><input type="checkbox" id="ov-on" checked> Overlay</label>
+  <input type="range" id="ov-op" min="0" max="100" value="55" title="Overlay opacity">
+  <span id="hint"></span>
+  <span id="busy"></span>
+</div>
+
+<main id="panes">
+  <section class="pane"><div class="panelabel">Scan</div><div id="scan"></div></section>
+  <section class="pane"><div class="panelabel">Modern map</div><div id="map"></div></section>
+  <aside id="side">
+    <h3>Control points</h3>
+    <table id="gcp-table"><thead><tr><th>#</th><th>source</th><th>resid ft</th></tr></thead><tbody></tbody></table>
+    <h3>Change areas</h3>
+    <ul id="area-list"></ul>
+    <div class="legend">
+      <span><i style="background:var(--green)"></i>&lt; 5 ft</span>
+      <span><i style="background:var(--amber)"></i>&lt; 12 ft</span>
+      <span><i style="background:var(--red)"></i>beyond</span>
+      <span><i style="background:var(--blue)"></i>real change</span>
+      <span><i style="background:var(--grey)"></i>no equivalent</span>
+    </div>
+  </aside>
+</main>
+<footer id="credit"></footer>
+
+<div id="modal-back" hidden>
+  <div id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <h2 id="modal-title"></h2>
+    <p id="modal-body"></p>
+    <div id="modal-btns"></div>
+  </div>
+</div>
+<div id="toast" hidden></div>
+
+<script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/proj4@2.12.1/dist/proj4.js"></script>
+<script src="editor.js"></script>
+</body>
+</html>

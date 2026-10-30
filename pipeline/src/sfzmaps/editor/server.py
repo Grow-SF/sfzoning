@@ -6,6 +6,7 @@ Endpoints (all under /api):
   GET  /sheet/{series}/{sheet_id}/image/{z}/{x}/{y}.png   Deep Zoom-style scan tiles
   POST /sheet/{series}/{sheet_id}/preview  fit in memory, score, low-res warped PNG
   GET  /sheet/{series}/{sheet_id}/preview.png
+  GET  /sheet/{series}/{sheet_id}/blocks.geojson?layer=blocks|streets   modern blocks near the sheet (WGS84)
   POST /sheet/{series}/{sheet_id}/save     write review.json, rerun the sheet, rebuild series
 
 Scores are the pipeline's (sfzmaps.score): a sheet passes on held-out median <= 5 ft AND
@@ -419,6 +420,53 @@ def _res_all(t: SheetTransform) -> list:
     return [float(x) for x in t.residuals_ft()]
 
 
+# -- reference blocks near the sheet -----------------------------------------------------
+
+BLOCKS_PAD_FT = 800.0
+BLOCKS_MAX_FEATURES = 4000
+
+
+def _sheet_extent(d: Path) -> list[float] | None:
+    """World (EPSG:2227 ft) extent of the sheet's control points (review, else transform, else
+    matches), or None when it has none."""
+    pts: list[tuple[float, float]] = []
+    review = runner._load_review(d)
+    tdata = _read_json(d / "transform.json") if (d / "transform.json").exists() else None
+    rdata = _read_json(d / "refine.json") if (d / "refine.json").exists() else None
+    src = (review or tdata or {}).get("gcps") or (rdata or {}).get("matches") or []
+    for g in src:
+        wx, wy = g.get("wx"), g.get("wy")
+        if wx is not None and wy is not None and math.isfinite(wx) and math.isfinite(wy):
+            pts.append((wx, wy))
+    if not pts:
+        return None
+    a = np.array(pts)
+    return [float(a[:, 0].min()), float(a[:, 1].min()), float(a[:, 0].max()), float(a[:, 1].max())]
+
+
+@app.get("/api/sheet/{series}/{sheet_id}/blocks.geojson")
+def blocks_geojson(series: str, sheet_id: str, layer: Literal["blocks", "streets"] = "blocks") -> JSONResponse:
+    """Modern DataSF block outlines (or street centerlines) near the sheet, as WGS84 GeoJSON
+    for the editor's map pane. Used because the blocks PMTiles is not served. Empty when the
+    reference or the sheet's extent is unavailable."""
+    d = _sheet_dir(series, sheet_id)
+    empty = {"type": "FeatureCollection", "features": []}
+    ref, ext = _get_ref(), _sheet_extent(d)
+    gdf = None if ref is None else (ref.blocks if layer == "blocks" else ref.streets)
+    if gdf is None or ext is None or len(gdf) == 0:
+        return JSONResponse(empty)
+    from shapely.geometry import box
+    pad = BLOCKS_PAD_FT
+    sel = gdf[gdf.intersects(box(ext[0] - pad, ext[1] - pad, ext[2] + pad, ext[3] + pad))]
+    sel = sel.iloc[:BLOCKS_MAX_FEATURES]
+    if len(sel) == 0:
+        return JSONResponse(empty)
+    cols = ["block_num"] if layer == "blocks" and "block_num" in sel.columns else []
+    sel = sel[cols + [sel.geometry.name]].copy()
+    sel.geometry = sel.geometry.simplify(2.0)
+    return JSONResponse(json.loads(sel.to_crs("EPSG:4326").to_json()))
+
+
 # -- tiles -----------------------------------------------------------------------------
 
 def _max_zoom(w: int, h: int) -> int:
@@ -570,7 +618,18 @@ def save(series: str, sheet_id: str, body: SaveBody, background: BackgroundTasks
 _static = Path(__file__).parent / "static"
 if _static.is_dir():
     from fastapi.staticfiles import StaticFiles
-    app.mount("/", StaticFiles(directory=_static, html=True), name="static")
+
+    class _ReadOnlyStatic(StaticFiles):
+        """Static files answer GET/HEAD only; anything else that fell through the API routes
+        (a mangled /api path) is a plain 404, not the static handler's 405."""
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] == "http" and scope["method"] not in ("GET", "HEAD"):
+                await JSONResponse({"detail": "Not Found"}, status_code=404)(scope, receive, send)
+                return
+            await super().__call__(scope, receive, send)
+
+    app.mount("/", _ReadOnlyStatic(directory=_static, html=True), name="static")
 
 
 def serve(port: int = PORT) -> None:
