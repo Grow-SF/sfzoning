@@ -1,0 +1,125 @@
+# sfzmaps: georeferencing San Francisco's historic zoning maps
+
+`sfzmaps` turns the scanned zoning maps in the Drive folder `old-planning-maps`
+(1921 to 2000-digital) into georeferenced, transparent-paper overlays: one PMTiles
+file per year/series, a machine-readable manifest, and a review page. Sheets that
+miss the accuracy bar go to a local control-point editor for human review.
+
+Design: `docs/superpowers/specs/2026-10-29-map-georeferencing-design.md`.
+Tuning history and final results: `docs/superpowers/notes/2026-10-29-tuning.md`.
+
+## Setup
+
+```sh
+brew install gdal pmtiles poppler      # gdalwarp/ogr2ogr (GDAL >= 3.13), pmtiles, pdftoppm
+cd pipeline
+uv sync
+```
+
+Page classification and label reading use the OpenAI API. Put the key in
+`pipeline/.env` (git-ignored; `chmod 600`):
+
+```
+OPENAI_API_KEY=...
+```
+
+The code loads it itself. Every answer is cached on disk under
+`data/cache/llm/`, so a rerun over the same pages makes no API calls.
+
+## Commands, in order
+
+All commands run from `pipeline/` as `uv run sfzmaps <command>`.
+
+| Command | What it does |
+|---|---|
+| `fetch [--only FOLDER]` | Mirror the Drive tree into `data/raw/`. |
+| `refdata [--force]` | Download DataSF parcels and street centerlines; build blocks, corners and intersections in `data/ref/`. |
+| `run --year S` / `run --all` | Run every page of a series: classify, read labels, rough fit, extract linework, refine, classify real change, score, warp; then stitch, tile, write the manifest and review page. Fresh stages are skipped; human reviews are kept (`--force-auto` ignores them, `--force` reruns everything). `--sheet ID` and `--until STAGE` make a partial run that does not republish the series. |
+| `tiles --year S` | Rebuild the stitched VRT, PMTiles, manifest and review page for one series from existing warps. |
+| `review --year S` | Serve `data/out/` on 127.0.0.1 and open the series review page. |
+| `edit [--year S] [--sheet ID]` | Start the control-point editor on 127.0.0.1:8765 (`--demo` for a synthetic sheet). |
+| `bundle` | Write the processed files into `data/share/` as zips plus `PROCESSED.json`, for copying by hand into the Drive folder `old-planning-maps/processed/`. |
+| `pull` | Download the processed zips from the public Drive `processed/` folder and extract them into `data/`. |
+| `eval --year 1948\|1960` | Per-sheet score next to the distance from our transform to the owner's manual `.points` (the answer key). |
+| `estimate --year S` / `--all` | Project API calls, tokens and USD for the uncached pages (no API calls). |
+| `calibrate --year S --sheet ID` | Find the smallest label-reading scale that keeps 95% of full-resolution recall. |
+
+`push` also exists: it bundles and uploads with rclone, if you have set rclone up.
+It's optional; `bundle` plus a manual copy does the same job.
+
+## Recreate without re-running
+
+```sh
+uv run sfzmaps fetch && uv run sfzmaps pull && uv run sfzmaps run --all
+```
+
+`pull` brings back the LLM cache, the reference data and every sheet's processed
+files (transforms, scores, reviews). `run --all` then finds every API answer in the
+cache, so this costs **zero API spend**. It still re-warps and re-tiles locally where
+the outputs are missing.
+
+## The pass rule
+
+A sheet **passes** when, measured on **held-out blocks** (blocks left out of the
+warp fit, 5 folds):
+
+- median corner error ≤ `PASS_MEDIAN_FT × k` (5 ft × k), and
+- 95th-percentile corner error ≤ `PASS_P95_FT × k` (12 ft × k), and
+- the sheet is not misplaced, the fit converged, placement was unambiguous, at
+  least 40 corners were scored, and real change is at most 15% of matches.
+
+**Scale factor (owner's decision).** Corner error is roughly constant in scan
+pixels, and the 1980+ PDFs are coarse office-copier scans (~4 ft/px against
+~2.7 ft/px for 1929–75). So `k = max(1, ft_per_px / 2.7)`
+(`config.PASS_REF_FT_PER_PX`), where `ft_per_px` is the sheet's final transform
+scale (the median local scale over the page). A 4 ft/px sheet passes at median
+≤ 7.4 ft and p95 ≤ 17.8 ft. Each `score.json` records `ft_per_px`, `pass_scale_k`,
+`pass_median_limit_ft` and `pass_p95_limit_ft`. The review page and the editor
+show the limit that was actually applied.
+
+Every other map sheet is `needs_review`, with the first failing reason
+(`misplaced`, `not_converged`, `ambiguous_placement`, `too_few_matches`,
+`excess_real_change`, `holdout_median`, `holdout_p95`, `insufficient_anchors`, or
+`error: ...`). Non-map pages (covers, text, indexes, legends) are skipped and keep
+their kind in `page.json`.
+
+## Where outputs land
+
+Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to move it):
+
+- `raw/`: the Drive mirror.
+- `ref/`: DataSF parquet files.
+- `cache/llm/`: cached API answers.
+- `work/<series>/<sheet>/`: per-sheet stages, i.e. `page.png`, `page.json`,
+  `labels.json`, `rough.json`, `refine.json`, `changes.geojson`, `transform.json`,
+  `score.json`, `warped.tif`, and `review.json` once a human has reviewed it.
+- `out/<series>/`: `<series>.pmtiles`, `manifest.json` (per-sheet status,
+  `needs_review` reasons, scores, limits, bounds), `review.html`.
+- `out/ref/blocks.pmtiles`: today's blocks for the review pages.
+- `out/run-<timestamp>.log`: tracebacks for any sheet that errored.
+- `share/`: the `bundle` output.
+
+## Reviewing and editing
+
+1. `uv run sfzmaps review --year 1968` opens the series over today's blocks. The
+   sidebar lists each sheet's status, reason, held-out p50/p95 and the limit
+   applied. Click a sheet to zoom to it.
+2. For a `needs_review` sheet, follow "Open in editor", or run
+   `uv run sfzmaps edit --year 1968 --sheet <id>`. The editor shows the scan beside
+   today's blocks, with the control points colored by residual and the worst
+   areas highlighted. Drag, add, delete or disable points, and mark areas as
+   real change or no modern equivalent. The preview and the held-out score update
+   as you edit.
+3. Save. This writes `review.json` and re-runs warp, score, stitch and tile for that
+   sheet. A later automatic run never overwrites a human review unless you pass
+   `--force-auto`. You can accept a sheet that still fails, with a note.
+4. For 1948 and 1960, the editor offers the owner's manual `.points` and adopts
+   them when they score better.
+
+## Credit: 1948
+
+The 1948 atlas photographs come from the **David Rumsey Map Collection**, not the
+owner's scans. Anything published from the 1948 series must carry the credit
+"© Cartography Associates, David Rumsey Map Collection" (`config.RUMSEY_CREDIT`;
+likely CC BY-NC-SA). The pipeline writes it into the 1948 PMTiles attribution,
+manifest and review page. Keep it wherever the overlay is shown.
