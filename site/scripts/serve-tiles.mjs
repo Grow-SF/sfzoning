@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 // Static tile server with HTTP Range + CORS, for local development.
+// Serves the repo's pipeline output (../pipeline/data/out from site/) by default.
 // TILES_DIR overrides the directory; PORT overrides 8787.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const DIR = path.resolve(process.env.TILES_DIR || "/Users/sbuss/workspace/sfzoning/pipeline/data/out");
+const DEFAULT_TILES_DIR = fileURLToPath(new URL("../../pipeline/data/out", import.meta.url));
+const DIR = path.resolve(process.env.TILES_DIR || DEFAULT_TILES_DIR);
 const PORT = Number(process.env.PORT || 8787);
 
 const CORS = {
