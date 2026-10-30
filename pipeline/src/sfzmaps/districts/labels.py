@@ -10,7 +10,8 @@ height maps print 40-X, 65-A...).  Steps, all in page pixels until the parcel jo
    (distance transform), relative to the sheet's measured thin-stroke width.
 3. ``regions``: connected non-heavy-line areas inside the neatline, as polygons.
 4. ``assign_regions``: one code per region; conflicting codes split the region by a Voronoi
-   of its labels; an unlabelled region inherits only when all its labelled neighbours agree.
+   of its labels; an unlabelled region takes the code a per-region vision read names for it
+   (``regionread``, at READ_CONF), else inherits only when all its coded neighbours agree.
 5. ``assign_parcels``: regions to EPSG:2227 through the sheet transform; each parcel takes
    the code covering the majority of its area.  Fewer than MIN_REGIONS regions (boundary
    extraction failed): each parcel takes the nearest label in its own block at FALLBACK_CONF.
@@ -52,6 +53,8 @@ SNAP_RADIUS_PX = 30      # a label belongs to the region covering most of this d
 SNAP_PX = 80             # else (all ink around it) to the nearest region this close
 TOUCH_PX = 15            # regions this close are neighbours (they're split by a heavy line)
 SPLIT_CONF = 0.8         # confidence factor for pieces of a region split between labels
+READ_CONF = 0.8         # confidence factor for a region named by the per-region read
+READ_PARCEL_SHARE = 0.3  # only regions at least this much covered by parcels are read
 INHERIT_CONF = 0.6       # confidence factor for a region that inherits its neighbours' code
 PLURALITY_CONF = 0.3     # confidence of a region whose neighbours disagree: longest contact wins ...
 PLURALITY_MARGIN = 1.25  # ... by at least this factor over the runner-up (else unknown)
@@ -406,18 +409,27 @@ def _split(region: Polygon, labs: list[DistrictLabel]) -> list[tuple[Polygon, st
     return [(unary_union(ps), c, conf[c] * SPLIT_CONF) for c, ps in pieces.items()]
 
 
-def assign_regions(regs: list[Polygon], labs: list[DistrictLabel], *, touch_px: float = TOUCH_PX
-                   ) -> list[tuple[Polygon, str | None, float]]:
-    """Each region with its code and confidence (see module docstring).  Pass labels of
-    one kind (use or height)."""
-    if not regs:
-        return []
+def labels_by_region(regs: list[Polygon], labs: list[DistrictLabel]) -> dict[int, list[DistrictLabel]]:
+    """Region index -> the labels that sit in it."""
     tree = STRtree(regs)
     per: dict[int, list[DistrictLabel]] = {}
     for l in labs:
         i = _region_of(Point(l.x, l.y), regs, tree)
         if i is not None:
             per.setdefault(i, []).append(l)
+    return per
+
+
+def assign_regions(regs: list[Polygon], labs: list[DistrictLabel], *, touch_px: float = TOUCH_PX,
+                   reads: dict[int, tuple[str, float]] | None = None
+                   ) -> list[tuple[Polygon, str | None, float]]:
+    """Each region with its code and confidence (see module docstring).  Pass labels of
+    one kind (use or height).  reads: {region index: (code, confidence)} from the per-region
+    read (regionread.read_regions) for unlabelled regions; they count as coded neighbours."""
+    if not regs:
+        return []
+    tree = STRtree(regs)
+    per = labels_by_region(regs, labs)
     out: list[tuple[Polygon, str | None, float]] = []
     labelled: dict[int, list[tuple[Polygon, str, float]]] = {}
     for i, ls in per.items():
@@ -430,6 +442,9 @@ def assign_regions(regs: list[Polygon], labs: list[DistrictLabel], *, touch_px: 
     for i, pieces in labelled.items():
         if len(pieces) == 1:
             code_of[i] = (pieces[0][1], pieces[0][2])
+    for i, (c, cf) in (reads or {}).items():
+        if i not in labelled:
+            code_of[i] = (c, cf * READ_CONF)
     near = [r.buffer(touch_px) for r in regs]
 
     def neighbours(i):
@@ -449,7 +464,7 @@ def assign_regions(regs: list[Polygon], labs: list[DistrictLabel], *, touch_px: 
                         out_.append((c, cf, near[i].intersection(pc.buffer(touch_px)).area))
         return out_
 
-    todo = [i for i in range(len(regs)) if i not in labelled]
+    todo = [i for i in range(len(regs)) if i not in labelled and i not in code_of]
     while todo:
         # 1. unanimous inheritance, repeated until nothing changes (chains of unlabelled regions)
         changed = True
@@ -611,10 +626,15 @@ def use_code_labels(labs: list[DistrictLabel]) -> list[DistrictLabel]:
     return out
 
 
-def assign_parcels(parcels, sheet, transform: SheetTransform | None = None):
+def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
+                   client: llm.LLMClient | None = None):
     """DataFrame (blklot, code, height_code, confidence) for `parcels` (EPSG:2227) from one
     sheet.  `sheet` is the sheet's work dir (work/<series>/<sheet_id>); transform defaults to
-    its transform.json.  Confidence is for the series' role (height series: height_code)."""
+    its transform.json.  Confidence is for the series' role (height series: height_code).
+    Unlabelled regions are read per region (regionread; client: the vision client) unless
+    regionread.ENABLED is off."""
+    from sfzmaps.districts import regionread
+
     import pandas as pd
 
     from sfzmaps.districts.series import SERIES
@@ -626,13 +646,33 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None):
     labs = read_district_labels(series, sid)
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
     regs = regions(img, reading.exclusion_mask(img, _page_info(d)))
+    ptree = STRtree(list({g.wkb: g for g in parcels.geometry}.values()))
+    share: dict[int, float] = {}
+
+    def parcel_share(i):
+        """Share of region i (in world ft) covered by parcels: streets, water and margins
+        aren't worth a read."""
+        if i not in share:
+            w = _poly_to_world(regs[i], transform)
+            if w is None or w.is_empty or w.area <= 0:
+                share[i] = 0.0
+            else:
+                hit = ptree.geometries.take(ptree.query(w, predicate="intersects"))
+                share[i] = sum(w.intersection(g).area for g in hit) / w.area
+        return share[i]
+
     res = {}
     for kind in ("use", "height"):
         ls = use_code_labels(labs) if kind == "use" else [lb for lb in labs if lb.kind == kind]
         if not ls:
             res[kind] = ([None] * len(parcels), [0.0] * len(parcels))
         elif len(regs) >= MIN_REGIONS:
-            res[kind] = _majority(parcels, assign_regions(regs, ls), transform)
+            reads = {}
+            if regionread.ENABLED:
+                per = labels_by_region(regs, ls)
+                todo = [i for i in range(len(regs)) if i not in per and parcel_share(i) >= READ_PARCEL_SHARE]
+                reads = regionread.read_regions(img, regs, todo, ls, kind, client=client)
+            res[kind] = _majority(parcels, assign_regions(regs, ls, reads=reads), transform)
         else:
             res[kind] = _fallback(parcels, ls, transform)
     info = SERIES.get(series)
