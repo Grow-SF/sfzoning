@@ -158,6 +158,38 @@ def run(
     for s in sorted({p.series for p in allp if all_ or p.series == year}):
         runner.run_series(s, sheet=sheet, until=until, force_auto=force_auto, force=force,
                           ref=ref, pages_list=allp)
+        if sheet is None and until is None:  # a partial run must not republish the series
+            _publish(s)
+
+
+def _publish(series: str, min_zoom: int = 11, max_zoom: int = 19) -> None:
+    """Stitch -> tiles -> manifest for one series (scores read from each sheet's score.json)."""
+    from sfzmaps import manifest, stitch, tiles
+
+    scores = stitch.load_scores(series)
+    vrt = stitch.build_vrt(series, scores)
+    out = config.OUT_DIR / series / f"{series}.pmtiles"
+    report = tiles.make_pmtiles(vrt, out, min_zoom=min_zoom, max_zoom=max_zoom,
+                                name=f"SF zoning {series}",
+                                attribution=config.RUMSEY_CREDIT if series == "1948" else None)
+    path = manifest.write(series, scores, report)
+    typer.echo(f"{series}: {out} ({report.bytes_total / 1e6:.1f} MB of tiles); manifest {path}")
+    for z, b in sorted(report.bytes_by_zoom.items()):
+        typer.echo(f"  z{z}: {b / 1e6:.2f} MB")
+
+
+@app.command()
+def tiles(
+    year: str = typer.Option(..., "--year", help="Series, e.g. 1948."),
+    min_zoom: int = typer.Option(11, "--min-zoom"),
+    max_zoom: int = typer.Option(19, "--max-zoom"),
+) -> None:
+    """(Re)build the stitched VRT, PMTiles and manifest for one series from existing warps."""
+    try:
+        _publish(year, min_zoom, max_zoom)
+    except RuntimeError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1)
 
 
 @app.command("eval")
