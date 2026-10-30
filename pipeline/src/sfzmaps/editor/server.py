@@ -29,6 +29,7 @@ import functools
 import json
 import logging
 import math
+import re
 import subprocess
 import threading
 import time
@@ -140,7 +141,37 @@ def _rebuild_series(series: str) -> None:
         step("review page", lambda: reviewpage.write(series))
 
 
+_rb_guard = threading.Lock()
+_rb_state: dict[str, dict] = {}
+
+
+def _schedule_rebuild(series: str) -> None:
+    """Serialize and coalesce rebuilds of one series (overlapping gdal/pmtiles runs would
+    corrupt the VRT and PMTiles). If a rebuild is running, mark the series dirty and return;
+    the running caller then performs exactly one trailing rebuild."""
+    with _rb_guard:
+        st = _rb_state.setdefault(series, {"running": False, "dirty": False})
+        if st["running"]:
+            st["dirty"] = True
+            return
+        st["running"] = True
+    while True:
+        try:
+            _rebuild_series(series)
+        except Exception:  # noqa: BLE001 - a background rebuild must never raise
+            log.exception("rebuild of series %s failed", series)
+        with _rb_guard:
+            if st["dirty"]:
+                st["dirty"] = False
+                continue
+            st["running"] = False
+            return
+
+
 def _series_scores(series: str) -> dict:
+    # TODO: reuse stitch.load_scores once Task 14 lands (not present in this branch).
+    # manifest.write(series, scores) is called without a tile_report: it must keep the
+    # previous manifest's tile_report when none is supplied (Task 14 owns that behaviour).
     out = {}
     for d in sorted((config.WORK_DIR / series).iterdir()) if (config.WORK_DIR / series).is_dir() else []:
         sj = d / "score.json"
@@ -174,10 +205,15 @@ def _score_dict(s: score_mod.SheetScore) -> dict:
     return _clean(asdict(s))
 
 
+_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
 def _sheet_dir(series: str, sheet_id: str) -> Path:
-    if "/" in series or "/" in sheet_id or series.startswith(".") or sheet_id.startswith("."):
+    if not (_ID_RE.fullmatch(series) and _ID_RE.fullmatch(sheet_id)):
         raise HTTPException(404, "no such sheet")
     d = config.WORK_DIR / series / sheet_id
+    if not d.resolve().is_relative_to(config.WORK_DIR.resolve()):
+        raise HTTPException(404, "no such sheet")
     if not (d / "page.png").exists():
         raise HTTPException(404, f"no sheet {series}/{sheet_id}")
     return d
@@ -458,8 +494,11 @@ def render_preview(d: Path, t: SheetTransform, max_px: int = PREVIEW_MAX_PX, ste
     h, w = img.shape[:2]
     s = min(1.0, max_px / max(h, w))
     small = cv2.resize(img, (max(1, round(w * s)), max(1, round(h * s))), interpolation=cv2.INTER_AREA) if s < 1 else img
-    minx, miny, maxx, maxy = _bounds(t, (w, h))
-    res = max(maxx - minx, maxy - miny) / max_px           # ft per output px
+    b = _bounds(t, (w, h))
+    if b is None or not np.isfinite(b).all() or max(b[2] - b[0], b[3] - b[1]) <= 0:
+        raise HTTPException(400, "these control points do not give a usable transform")
+    minx, miny, maxx, maxy = b
+    res = max(maxx - minx, maxy - miny) / max_px          # ft per output px
     ow, oh = max(1, math.ceil((maxx - minx) / res)), max(1, math.ceil((maxy - miny) / res))
     gx = np.unique(np.r_[np.arange(0, ow, step), ow - 1]).astype(float)
     gy = np.unique(np.r_[np.arange(0, oh, step), oh - 1]).astype(float)
@@ -480,11 +519,14 @@ def render_preview(d: Path, t: SheetTransform, max_px: int = PREVIEW_MAX_PX, ste
     rgba = warp.make_rgba(small, [])
     out = cv2.remap(rgba, mx, my, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0, 0))
     ok = cv2.cvtColor(out, cv2.COLOR_RGBA2BGRA)
-    tmp = d / "preview.tmp.png"
+    uid = f"{threading.get_ident()}.{time.time_ns()}"  # unique per call: concurrent previews
+    tmp = d / f"preview.{uid}.tmp.png"
     cv2.imwrite(str(tmp), ok)
     tmp.replace(d / "preview.png")
-    (d / "preview.pgw").write_text(
+    wtmp = d / f"preview.{uid}.tmp.pgw"
+    wtmp.write_text(
         "\n".join(repr(v) for v in (res, 0.0, 0.0, -res, minx + res / 2, maxy - res / 2)) + "\n")
+    wtmp.replace(d / "preview.pgw")
     return {"width": ow, "height": oh, "bounds": [minx, miny, maxx, maxy]}
 
 
@@ -538,7 +580,7 @@ def save(series: str, sheet_id: str, body: SaveBody, background: BackgroundTasks
         except Exception as e:  # noqa: BLE001 - review.json is saved; report the failed rerun
             log.exception("run_sheet failed after save of %s/%s", series, sheet_id)
             raise HTTPException(500, f"review saved, but rerunning the sheet failed: {type(e).__name__}: {e}")
-    background.add_task(_rebuild_series, series)
+    background.add_task(_schedule_rebuild, series)
     return JSONResponse(_clean({"status": body.status, "score": _score_dict(new),
                                 "preview_score": _score_dict(sc), "reviewer": review["reviewer"]}))
 

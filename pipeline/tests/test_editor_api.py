@@ -206,6 +206,70 @@ def test_rebuild_series_calls_modules_in_order(monkeypatch, tmp_path):
     assert calls[1][1] == "1948.pmtiles"
 
 
+def test_rebuilds_are_serialized_and_coalesced(monkeypatch):
+    import threading
+    import time
+    spans = []
+
+    def slow(series):
+        t0 = time.monotonic()
+        time.sleep(0.3)
+        spans.append((t0, time.monotonic()))
+
+    monkeypatch.setattr(server, "_rebuild_series", slow)
+    server._rb_state.clear()
+    ths = []
+    for i in range(3):  # three rapid saves
+        th = threading.Thread(target=server._schedule_rebuild, args=("1948",))
+        th.start()
+        ths.append(th)
+        time.sleep(0.05)
+    for th in ths:
+        th.join()
+    assert len(spans) == 2                      # running one + exactly one trailing
+    assert spans[0][1] <= spans[1][0]           # no overlap
+    server._schedule_rebuild("1948")            # idle again: runs normally
+    assert len(spans) == 3
+
+
+def test_rebuild_failure_does_not_wedge_scheduler(monkeypatch):
+    n = []
+
+    def boom(series):
+        n.append(1)
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(server, "_rebuild_series", boom)
+    server._rb_state.clear()
+    server._schedule_rebuild("s")
+    server._schedule_rebuild("s")
+    assert len(n) == 2
+
+
+@pytest.mark.parametrize("series,sheet", [("..", "1"), ("demo", ".."), ("demo", ".hidden"),
+                                           ("demo", "a b"), ("%2e%2e", "1"), ("demo", "..%2f1")])
+def test_sheet_ids_are_strict(env, series, sheet):
+    demo, c, _ = env
+    assert c.get(f"/api/sheet/{series}/{sheet}").status_code == 404
+    r = c.post(f"/api/sheet/{series}/{sheet}/save", json={
+        "gcps": _gcps(demo.true_gcps), "change_areas": None, "status": "edited", "note": ""})
+    assert r.status_code == 404
+
+
+def test_unusable_transform_is_400_not_500(env, monkeypatch):
+    demo, c, _ = env
+    monkeypatch.setattr(server, "_bounds", lambda t, size: None)
+    r = c.post(url(demo, "/preview"), json={"gcps": _gcps(demo.true_gcps), "change_areas": None})
+    assert r.status_code == 400
+
+
+def test_preview_tmp_files_cleaned_up(env):
+    demo, c, _ = env
+    c.post(url(demo, "/preview"), json={"gcps": _gcps(demo.true_gcps), "change_areas": None})
+    d = demo.work_dir / demo.series / demo.sheet_id
+    assert not list(d.glob("preview.*.tmp.*"))
+
+
 def test_cli_edit_demo_binds_localhost(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 
