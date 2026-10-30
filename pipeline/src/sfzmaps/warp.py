@@ -45,6 +45,7 @@ Paper transparency (alpha):
 """
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
@@ -63,6 +64,8 @@ from sfzmaps import config
 from sfzmaps.pages import neatline_frames_mask, neatline_mask
 from sfzmaps.reading import Box
 from sfzmaps.transform import SheetTransform
+
+log = logging.getLogger(__name__)
 
 PAPER_GRAY = 200
 RAMP_GRAY = 50
@@ -153,11 +156,47 @@ def footprint_polygons(excl: np.ndarray, alpha: np.ndarray, t: SheetTransform):
         rings.append(Polygon(t.to_world(px)))
     if not rings:
         return Polygon()
-    # RETR_CCOMP alternates outer/hole rings; nesting is resolved by even-odd symmetric difference
+    # RETR_CCOMP alternates outer/hole rings; nesting is resolved by even-odd symmetric difference.
+    # Rings from approxPolyDP can self-intersect (bow-ties), so repair each one first.
+    try:
+        return _combine_rings(rings)
+    except Exception as e:  # GEOSException etc: never fail the sheet over its cutline
+        log.warning("footprint union failed (%s); falling back to neatline footprint", e)
+        return _neatline_footprint(excl, t)
+
+
+def _valid_poly(g):
+    import shapely
+
+    g = shapely.make_valid(g)
+    if not g.is_valid:
+        g = g.buffer(0)
+    return g
+
+
+def _combine_rings(rings):
+    from shapely.ops import unary_union
+
+    rings = [_valid_poly(r) for r in rings]
     geom = rings[0]
     for r in rings[1:]:
-        geom = geom.symmetric_difference(r.buffer(0))
-    return unary_union([geom.buffer(0)])
+        try:
+            geom = geom.symmetric_difference(r)
+        except Exception:
+            geom = geom.buffer(0).symmetric_difference(r.buffer(0))
+    return unary_union([_valid_poly(geom)])
+
+
+def _neatline_footprint(excl: np.ndarray, t: SheetTransform):
+    """Plain footprint: bounding box of the non-excluded (inside-neatline) pixels."""
+    from shapely.geometry import Polygon
+
+    ys, xs = np.nonzero(~excl)
+    if len(xs) == 0:
+        return Polygon()
+    x0, x1, y0, y1 = xs.min(), xs.max() + 1, ys.min(), ys.max() + 1
+    px = np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float)
+    return _valid_poly(Polygon(t.to_world(px)))
 
 
 def make_rgba(img: np.ndarray, mask_boxes: list[Box], excl: np.ndarray | None = None) -> np.ndarray:

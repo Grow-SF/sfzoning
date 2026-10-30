@@ -252,3 +252,31 @@ def test_footprint_skips_blank_corner_of_frame():
     assert g.contains(Point(6_000_000 + 500, 2_120_000 - 800))
     assert not g.contains(Point(6_000_000 + 1400, 2_120_000 - 800))
     assert g.bounds[2] < 6_000_000 + 900
+
+
+def test_combine_rings_repairs_bowtie():
+    from shapely.geometry import Polygon
+    bow = Polygon([(0, 0), (10, 10), (10, 0), (0, 10)])      # self-intersecting
+    hole = Polygon([(2, 4), (3, 4), (3, 6), (2, 6)])
+    assert not bow.is_valid
+    g = warp._combine_rings([bow, hole])
+    assert g.is_valid and not g.is_empty and g.area > 0
+
+
+def test_footprint_falls_back_to_neatline_on_failure(monkeypatch, caplog):
+    img = np.full((400, 500), 255, np.uint8)
+    cv2.rectangle(img, (50, 50), (450, 350), 0, 6)
+    cv2.line(img, (100, 100), (300, 200), 0, 4)
+    h, w = img.shape
+    P = np.array([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]], float)
+    W = P * np.array([1, -1]) + np.array([6_000_000.0, 2_120_000.0])
+    t = SheetTransform([GCP(*p, *q, "auto") for p, q in zip(P, W)], smoothing=1.0).fit()
+    excl = warp.inset_exclusion(img, [])
+
+    def boom(rings):
+        raise RuntimeError("TopologyException")
+    monkeypatch.setattr(warp, "_combine_rings", boom)
+    with caplog.at_level("WARNING"):
+        g = warp.footprint_polygons(excl, warp.make_rgba(img, [], excl)[..., 3], t)
+    assert g.is_valid and g.area > 0
+    assert "falling back" in caplog.text
