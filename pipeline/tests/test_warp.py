@@ -306,14 +306,70 @@ def test_paper_mode_leaves_colour_pages_untouched():
     assert tuple(rgba[800, 900, :3]) == (246, 242, 231)
 
 
-def test_paper_mode_unframed_blank_margin_stays_clear():
-    """No neatline: paper covers the drawn content only, so a blank margin never hides a
-    neighbouring sheet."""
+def test_paper_mode_unframed_blank_margin_is_not_content():
+    """The paper is opaque over the whole page area, but the inked content (what stitch draws
+    over other sheets) excludes a blank margin far from any ink, and a legend box's own ink."""
     img = np.full((1600, 1800), 255, np.uint8)
     for x in range(200, 900, 60):
         img[200:1000, x:x + 4] = 0
     for y in range(200, 1000, 60):
         img[y:y + 4, 200:900] = 0
-    a = warp.make_rgba(img, [], paper=True)[..., 3]
-    assert a[500, 500] == 255          # paper between the drawn lines
-    assert a[1400, 1500] == 0          # blank margin far from any ink
+    img[1300:1500, 1300:1700] = 0                       # legend ink, away from the map
+    boxes = [Box(x0=1250, y0=1250, x1=1750, y1=1550)]
+    excl = warp.inset_exclusion(img, [])
+    a = warp.make_rgba(img, boxes, excl, paper=True)[..., 3]
+    assert (a == np.where(excl, 0, 255)).all()          # paper: the whole non-excluded page
+    c = warp.paper_content(img, boxes, excl)
+    assert c[500, 500] == 255                           # between the drawn lines
+    assert c[1400, 1500] == 0                           # the legend is not content
+    assert c[1450, 200] == 0                            # blank margin
+
+
+def test_erase_border_rules_keeps_crossing_streets():
+    """The printed frame rule goes; a street crossing the frame band and the map just inside
+    the old 60 px trim stay."""
+    img = _bordered()
+    img[95:400, 800:806] = 0              # a street running out to the frame, across the band
+    out = warp.erase_border_rules(img)
+    assert out[100:112, 300:700].min() == 255          # top rule erased
+    assert out[130:200, 800:806].max() == 0            # street crossing the band kept (beyond the rule's 15 px)
+    assert out[600:700, 700:900].max() == 0            # interior ink untouched
+    excl = warp.inset_exclusion(img, [], inset=warp.PAPER_EDGE_INSET_PX)   # from the page as printed
+    assert not excl[130, 800]                           # map kept up to near the frame
+    assert excl[50, 800] and excl[800, 50]              # margin outside the frame still clear
+
+
+def test_erase_border_rules_handles_a_tilted_frame():
+    """A frame rotated 2 degrees (a photographed page) is still erased."""
+    img = np.full((1600, 1800), 255, np.uint8)
+    box = cv2.boxPoints(((900, 800), (1600, 1400), 2.0)).astype(np.int32)
+    cv2.polylines(img, [box], True, 0, 14)
+    img[600:700, 700:900] = 0
+    out = warp.erase_border_rules(img)
+    edge = np.zeros(img.shape, np.uint8)
+    cv2.polylines(edge, [box], True, 1, 14)
+    assert (out[edge.astype(bool)] == 0).mean() < 0.05     # >95% of the rule gone
+    assert out[600:700, 700:900].max() == 0
+
+
+def test_erase_border_rules_unframed_page_heavy_edge_rule_only():
+    """No neatline: a heavy rule near the page edge goes; a thin line there and the map stay."""
+    img = np.full((1600, 1800), 255, np.uint8)
+    img[200:1500, 120:140] = 0                          # heavy edge rule, 20 px, ~120 px in
+    img[200:1500, 1700:1704] = 0                        # thin line near the other edge
+    for x in range(300, 1500, 60):                      # the map (no closed frame)
+        img[300:1400, x:x + 4] = 0
+    out = warp.erase_border_rules(img)
+    assert out[300:1400, 120:140].min() == 255
+    assert out[300:1400, 1700:1704].max() == 0
+    assert out[300:1400, 300:304].max() == 0
+
+
+def test_erase_border_rules_binding_shadow_on_framed_page():
+    """A framed page photographed in a bound atlas: the dark binding shadow along the page edge
+    (outside the frame band, 30 px wide) is erased too."""
+    img = _bordered()
+    img[:, 1770:1800] = 30
+    out = warp.erase_border_rules(img)
+    assert out[300:1300, 1772:1798].min() == 255
+    assert out[600:700, 700:900].max() == 0

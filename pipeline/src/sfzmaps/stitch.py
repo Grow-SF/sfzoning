@@ -127,10 +127,13 @@ def cut_sources(series: str, order: list[str], paper: bool = False) -> list[Path
     for i, sid in enumerate(order):
         above = unary_union([fps[o] for o in order[i + 1:]]) if i + 1 < len(order) else None
         src = config.WORK_DIR / series / sid / raster_name(paper)
-        if above is None or not fps[sid].intersects(above):
+        if not paper and (above is None or not fps[sid].intersects(above)):
             out.append(src)
             continue
-        geom = polygonal(fps[sid].difference(above.buffer(-PAPER_OVERLAP_FT) if paper else above))
+        if paper:   # always clipped to its content: this is the ink layer over the blank paper
+            geom = polygonal(fps[sid] if above is None else fps[sid].difference(above.buffer(-PAPER_OVERLAP_FT)))
+        else:
+            geom = polygonal(fps[sid].difference(above))
         if geom.is_empty or geom.area < 1.0:
             continue
         cutdir.mkdir(parents=True, exist_ok=True)
@@ -192,8 +195,12 @@ def build_vrt(series: str, scores: dict[str, SheetScore] | None = None, paper: b
     lst = out.with_suffix(".txt")
     srcs = cut_sources(series, order, paper)
     if paper:
+        # bottom to top: plain-paper backing (gaps between abutting sheets), every sheet's
+        # whole paper (blank map is real map), then every sheet's inked content in priority
+        # order, so blank paper never hides a neighbour's ink
         backing = paper_backing(series, order)
-        srcs = ([backing] if backing else []) + srcs   # first listed = bottom
+        whole = [config.WORK_DIR / series / s / raster_name(True) for s in order]
+        srcs = ([backing] if backing else []) + whole + srcs
     lst.write_text("\n".join(str(p) for p in srcs) + "\n")
     # The RGBA alpha band is honored as the mask; the last listed source wins in overlaps.
     subprocess.run(["gdalbuildvrt", "-overwrite", "-resolution", "highest",

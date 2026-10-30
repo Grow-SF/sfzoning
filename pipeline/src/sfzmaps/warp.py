@@ -78,6 +78,15 @@ GRID_STEP = 150
 # (median of the light pixels of 1948/1, /4, /10), so every era sits on the same paper.
 # Ink stays black: each pixel is gray/255 x PAPER_TINT, a multiply, nothing else changes.
 PAPER_TINT = (245, 240, 229)
+# Paper mode keeps the map up to the neatline (only this many px are trimmed, against edge
+# jitter) and instead erases the printed border rule inside the NEATLINE_INSET_PX band: long
+# straight ink segments near the page axes (erase_border_rules), i.e. the rule, never the
+# streets that cross it, so abutting sheets meet without a blank strip.
+PAPER_EDGE_INSET_PX = 4
+PAPER_RULE_LEN_PX = 401
+PAPER_RULE_MAX_TILT_DEG = 10
+PAPER_EDGE_BAND_PX = 150         # heavy edge lines (rules, binding shadows) lie within this of the page edge
+PAPER_EDGE_RULE_MIN_WIDTH_PX = 10   # heavier than any street line
 
 NEATLINE_INSET_PX = 60
 FOOTPRINT_CLOSE_PX = 41   # closing kernel for the content footprint (about 0.7 in on a 6000 px scan)
@@ -230,23 +239,97 @@ def make_rgba(img: np.ndarray, mask_boxes: list[Box], excl: np.ndarray | None = 
 
 
 def _paper_rgba(img: np.ndarray, rgb: np.ndarray, mask_boxes: list[Box], excl: np.ndarray) -> np.ndarray:
-    """Paper mode: opaque over the sheet's content (content_mask of the ink inside `excl`,
-    smoothed back up to full resolution), so blank margins never cover a neighbour; mask
-    boxes (legends, titles) become plain paper; gray pages are multiplied onto PAPER_TINT."""
+    """Paper mode: opaque over the whole neatline interior (blank map is real map: parks,
+    water), mask boxes (legends, titles) filled with plain paper, gray pages multiplied onto
+    PAPER_TINT.  Where this blank paper would cover a neighbour's ink, stitch draws every
+    sheet's inked content (paper_content) again on top."""
     region = ~excl
     paper_rgb = np.asarray(paper_colour(img, region), np.uint8)
     if img.ndim == 2:
         tint = np.asarray(PAPER_TINT, np.float32) / 255.0
         rgb = np.round(img[..., None].astype(np.float32) * tint).astype(np.uint8)
     rgb = np.ascontiguousarray(rgb).copy()
-    boxes = np.zeros(excl.shape, bool)
+    rgb[_box_mask(excl.shape, mask_boxes) & region] = paper_rgb
+    return np.dstack([rgb, np.where(region, 255, 0).astype(np.uint8)])
+
+
+def _box_mask(shape: tuple[int, int], mask_boxes: list[Box]) -> np.ndarray:
+    boxes = np.zeros(shape, bool)
     for b in mask_boxes:
         boxes[max(0, b.y0):b.y1, max(0, b.x0):b.x1] = True
-    rgb[boxes & region] = paper_rgb
-    small, _ = content_mask(excl, paper_alpha(img, region if region.any() else None) | (boxes & region).astype(np.uint8))
+    return boxes
+
+
+def paper_content(img: np.ndarray, mask_boxes: list[Box], excl: np.ndarray) -> np.ndarray:
+    """uint8 0/255 full-resolution mask of the sheet's inked content (content_mask of the ink
+    inside `excl`, mask boxes' own ink ignored): the part of a paper warp that stitch draws
+    over every other sheet's blank paper."""
+    region = ~excl
+    ink = paper_alpha(img, region if region.any() else None)
+    ink[_box_mask(excl.shape, mask_boxes)] = 0
+    small, _ = content_mask(excl, ink)
     h, w = excl.shape
     full = cv2.resize(small.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
-    return np.dstack([rgb, np.where(full & region, 255, 0).astype(np.uint8)])
+    return np.where(full & region, 255, 0).astype(np.uint8)
+
+
+def erase_border_rules(img: np.ndarray) -> np.ndarray:
+    """Copy of `img` with printed border rules and photographed page-edge shadows painted as
+    paper.  Two passes, each erasing dark pixels within 15 px of a straight segment at least
+    PAPER_RULE_LEN_PX long and within PAPER_RULE_MAX_TILT_DEG of the page axes (plus a 3 px
+    halo):
+      * the band NEATLINE_INSET_PX in from the detected neatline (the printed rule), any width;
+      * the band PAPER_EDGE_BAND_PX in from the page edge, only segments at least
+        PAPER_EDGE_RULE_MIN_WIDTH_PX thick (an edge rule on a page with no detected neatline,
+        or the binding shadow on the 1948 atlas photos), so a thin street line there survives."""
+    nl = neatline_mask(img)
+    if nl.all():
+        nl = neatline_frames_mask(img)
+    dark = (_lum(img) < 128).astype(np.uint8)
+    h, w = dark.shape
+    rule = np.zeros((h, w), bool)
+    if not nl.all():
+        dist = distance_transform_edt(np.pad(nl, 1, constant_values=True))[1:-1, 1:-1]  # page edge is not a border
+        rule |= _rule_pixels(dark, nl & (dist <= NEATLINE_INSET_PX), None)
+    edge = np.ones((h, w), bool)
+    e = PAPER_EDGE_BAND_PX
+    edge[e:h - e, e:w - e] = False
+    rule |= _rule_pixels(dark, edge, PAPER_EDGE_RULE_MIN_WIDTH_PX)
+    if not rule.any():
+        return img
+    out = img.copy()
+    if img.ndim == 2:
+        out[rule] = 255
+    else:
+        out[rule] = paper_colour(img, None if nl.all() else nl)[::-1]   # BGR
+    return out
+
+
+def _rule_pixels(dark: np.ndarray, band: np.ndarray, min_width: float | None) -> np.ndarray:
+    """Dark pixels of `band` near long straight near-axis segments (see erase_border_rules);
+    with `min_width`, only segments whose ink is at least that thick (median along it)."""
+    segs = cv2.HoughLinesP((dark & band).astype(np.uint8) * 255, 1, np.pi / 720, 200,
+                           minLineLength=PAPER_RULE_LEN_PX, maxLineGap=15)
+    thick = cv2.distanceTransform(dark, cv2.DIST_L2, 3) if min_width is not None else None
+    near = np.zeros(dark.shape, np.uint8)
+    for x1, y1, x2, y2 in (segs.reshape(-1, 4) if segs is not None else []):
+        ang = abs(np.degrees(np.arctan2(y2 - y1, x2 - x1))) % 90
+        if min(ang, 90 - ang) > PAPER_RULE_MAX_TILT_DEG:
+            continue
+        reach = 31   # px across the segment: a rule's own width (and double rules)
+        if thick is not None:
+            n = max(2, int(np.hypot(x2 - x1, y2 - y1) // 4))
+            xs = np.linspace(x1, x2, n).round().astype(int)
+            ys = np.linspace(y1, y2, n).round().astype(int)
+            win = [thick[max(0, y - 40):y + 41, max(0, x - 40):x + 41].max() for x, y in zip(xs, ys)]
+            width = 2 * float(np.median(win))
+            if width < min_width:
+                continue
+            reach = int(width) + 12   # a binding shadow can be far wider than a printed rule
+        cv2.line(near, (int(x1), int(y1)), (int(x2), int(y2)), 1, reach)
+    if not near.any():
+        return np.zeros(dark.shape, bool)
+    return cv2.dilate(near & dark, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))).astype(bool) & band
 
 
 def paper_colour(img: np.ndarray, region: np.ndarray | None = None) -> tuple[int, int, int]:
@@ -284,7 +367,8 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
     """Write the transparent-paper RGBA GeoTIFF for `png` to `out` (atomically).  With
     `paper`, the scan as it looks on paper instead (make_rgba), resampled cubic so 1-bit
     linework is smoothed rather than stair-stepped; mask boxes are filled with paper rather
-    than cut out, and the footprint (`<out stem>.footprint.geojson`) is the paper's own."""
+    than cut out, and the footprint (`<out stem>.footprint.geojson`) is the inked content
+    (paper_content), which stitch draws on top of every sheet's blank paper."""
     png, out = Path(png), Path(out)
     if shutil.which("gdalwarp") is None:
         raise RuntimeError("gdalwarp not found on PATH; install GDAL (e.g. `brew install gdal`)")
@@ -297,7 +381,11 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
         img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     h, w = img.shape[:2]
     res = median_scale_ft_per_px(t, (h, w))
-    excl = inset_exclusion(img, [] if paper else mask_boxes)
+    if paper:   # the neatline is found on the page as printed, before its rule is erased
+        excl = inset_exclusion(img, [], inset=PAPER_EDGE_INSET_PX)
+        img = erase_border_rules(img)
+    else:
+        excl = inset_exclusion(img, mask_boxes)
     rgba = make_rgba(img, mask_boxes, excl, paper=paper)
     gcps = [GroundControlPoint(row=g.py + 0.5, col=g.px + 0.5, x=g.wx, y=g.wy)
             for g in t.dense_grid((h, w), GRID_STEP)]
@@ -323,7 +411,8 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
                  "-wo", "NUM_THREADS=ALL_CPUS", "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES",
                  "-co", "BIGTIFF=IF_SAFER", "-q", str(src), tmp_name],
                 check=True, capture_output=True, text=True)
-            _write_footprint(out.with_name(out.stem + ".footprint.geojson"), footprint_polygons(excl, rgba[..., 3], t),
+            content = paper_content(img, mask_boxes, excl) if paper else rgba[..., 3]
+            _write_footprint(out.with_name(out.stem + ".footprint.geojson"), footprint_polygons(excl, content, t),
                              {"paper_rgb": list(paper_colour(img, ~excl)), "res_ft": res} if paper else None)
             os.replace(tmp_name, out)
         except subprocess.CalledProcessError as e:
