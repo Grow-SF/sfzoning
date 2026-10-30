@@ -3,6 +3,9 @@ import { centerStep } from "./helpers";
 import { STORY } from "../content/story";
 import { SOURCES } from "../content/sources";
 
+// The tile server the site under test reads from: local by default, or the published tiles.
+const TILES = (process.env.NEXT_PUBLIC_TILES_BASE_URL ?? "http://127.0.0.1:8787").replace(/\/+$/, "");
+
 
 test("page loads with a map canvas and story text", async ({ page }) => {
   await page.goto("/");
@@ -21,7 +24,7 @@ test("a draft build shows the banner and asks search engines not to index", asyn
 });
 
 test("tile server down: notice appears and text still renders", async ({ page }) => {
-  await page.route("http://127.0.0.1:8787/**", (r) => r.abort());
+  await page.route(`${TILES}/**`, (r) => r.abort());
   await page.goto("/");
   await expect(page.locator("[data-active-step] .map-notice")).toContainText("could not be loaded");
   await expect(page.getByRole("heading", { name: /How San Francisco was zoned/ })).toBeVisible();

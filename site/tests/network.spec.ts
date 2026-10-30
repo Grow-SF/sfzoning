@@ -76,7 +76,7 @@ test("a 1948 step loads only the 1948 scan and the prefetch era's", async ({ pag
 });
 
 test("a scan failing outside the current era raises no notice; the current era's does", async ({ page }) => {
-  await page.route("**/1948/1948.pmtiles", (r) => r.fulfill({ status: 404, body: "not found" }));
+  await page.route("**/1948/1948-paper.pmtiles", (r) => r.fulfill({ status: 404, body: "not found" }));
   await page.goto("/");
   const notice = page.locator("[data-active-step] .map-notice");
   // 1921-mission prefetches 1948, whose archive is missing: not this step's problem.
