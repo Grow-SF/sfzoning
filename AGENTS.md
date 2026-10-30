@@ -54,8 +54,14 @@ incompatible with AGPL-3.0.
 
 ## Checking your work
 
-- Tests: `cd pipeline && uv run pytest`; in `site/`, `npm test`,
-  `npm run lint` and `npm run test:e2e`.
+- Tests: `cd pipeline && uv run pytest`; in `site/`, `npm run lint`,
+  `npx tsc --noEmit` and `npm test`. GitHub runs these on every pull request.
+- If you changed the site, also run the end-to-end tests, which GitHub doesn't
+  run: in `site/`,
+  `NEXT_PUBLIC_TILES_BASE_URL=https://zwgxwpoxqzfauqfg.public.blob.vercel-storage.com npm run test:e2e`
+  (stop any running dev server first). Paste the end of the output, with the
+  pass and fail counts and any failures, into the pull request description.
+  Don't claim they passed without running them.
 - Passing tests aren't enough for map rendering. Seams, stray lines and
   missing ink have all slipped past the tests here. After changing warping,
   stitching or tiling, render the affected area and look at it; check the

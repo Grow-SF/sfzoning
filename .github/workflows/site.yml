@@ -1,0 +1,48 @@
+name: Site
+
+# Lint, type check, unit tests and a production build of site/, whenever a pull request or a
+# push to main changes the site or the research it builds from. The Playwright end-to-end
+# suite needs a browser with WebGL and takes minutes; contributors run it locally against the
+# published tiles and paste the result in the pull request (see CONTRIBUTING.md).
+on:
+  pull_request:
+    paths:
+      - "site/**"
+      - "docs/research/**"
+      - ".github/workflows/site.yml"
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - "docs/research/**"
+      - ".github/workflows/site.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: site
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx tsc --noEmit
+      - run: npm test
+      - name: Production build
+        run: npm run build
+        env:
+          # The published tiles; the build refuses a local tile server.
+          NEXT_PUBLIC_TILES_BASE_URL: https://zwgxwpoxqzfauqfg.public.blob.vercel-storage.com

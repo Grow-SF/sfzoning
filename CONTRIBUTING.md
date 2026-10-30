@@ -72,13 +72,30 @@ are reused, so most work doesn't need it.
 2. Make your change. Keep each pull request to one change, and add or update
    tests for code changes.
 3. Run the tests for what you touched:
-   - site: `npm test` and `npx playwright test` in `site/`;
+   - site: `npm run lint`, `npx tsc --noEmit` and `npm test` in `site/`;
    - pipeline: `uv run pytest` in `pipeline/`.
-4. Open a pull request against `main`. Say what changed and why; for map or
-   history fixes, include the source or a screenshot.
+4. If you changed the site, run its end-to-end tests. They drive the real
+   site in a browser and take a few minutes. Point them at the published
+   tiles, so you don't need a local copy:
+
+   ```sh
+   cd site
+   NEXT_PUBLIC_TILES_BASE_URL=https://zwgxwpoxqzfauqfg.public.blob.vercel-storage.com npm run test:e2e
+   ```
+
+   Stop any `npm run dev` you have running first; the tests start their own
+   server.
+5. Open a pull request against `main`. Say what changed and why; for map or
+   history fixes, include the source or a screenshot. If you changed the site,
+   paste the end of the end-to-end test output (the pass and fail counts, and
+   any failures) into the pull request.
 
 ## 4. Review and release
 
+- GitHub runs the tests automatically on every pull request, for the parts it
+  changes: the site's lint, type check, unit tests and production build, and
+  the pipeline's tests. The end-to-end tests don't run there, which is why
+  their output goes in the pull request.
 - Every pull request gets a **preview deployment** of the site automatically;
   Vercel posts its link on the pull request. Use it to check your change.
   Previews are visible to GrowSF's Vercel team.
