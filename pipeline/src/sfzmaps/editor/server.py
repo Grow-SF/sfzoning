@@ -13,9 +13,12 @@ Scores are the pipeline's (sfzmaps.score): a sheet passes on held-out median <= 
 held-out p95 <= 12 ft AND not misplaced; the editor shows holdout_p50_ft / holdout_p95_ft /
 reason / passed, never a share-within-tolerance.
 
-Hand-placed points are fitted with config.MANUAL_TPS_SMOOTHING, exactly as the runner does for
-review.json, and previews are scored by runner.score_review (the runner's own review
-scoring), so a preview equals the saved result. Matches inside change_areas are excluded.
+Edited points are fitted with runner.smoothing_for (TPS_SMOOTHING for a dense set of at least
+config.REVIEW_DENSE_MIN_GCPS enabled points, else MANUAL_TPS_SMOOTHING); save stores that
+smoothing in review.json and the runner uses it. Previews are scored by runner.score_review
+(the runner's own review scoring: held-out refits on the edited GCPs), so a preview equals
+the saved result. review.json's reviewer is the request's, else $SFZMAPS_REVIEWER, else
+"owner". Matches inside change_areas are excluded.
 
 Tile scheme (Deep Zoom): image of w x h px, TILE_SIZE 256, max zoom z_max = ceil(log2(max(w,h))).
 Level z is the image downscaled by 2**(z_max - z) (dimensions ceil(w / 2**(z_max-z))); tile
@@ -30,8 +33,8 @@ import functools
 import json
 import logging
 import math
+import os
 import re
-import subprocess
 import threading
 import time
 from datetime import datetime, timezone
@@ -41,6 +44,7 @@ from typing import Literal
 import cv2
 import numpy as np
 from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from pydantic import BaseModel
@@ -57,6 +61,9 @@ HOST = "127.0.0.1"
 PORT = 8765
 
 app = FastAPI(title="sfzmaps control-point editor")
+# Only answer requests addressed to this machine by name/IP: a DNS-rebinding page whose
+# hostname resolves to 127.0.0.1 sends its own Host header and is refused (400).
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost"])
 _filter: dict = {"year": None, "sheet": None}
 _save_lock = threading.Lock()
 _ref_cache: dict = {}
@@ -103,12 +110,10 @@ def _find_page(series: str, sheet_id: str):
     return None
 
 
-def _git_email() -> str:
-    try:
-        out = subprocess.run(["git", "config", "user.email"], capture_output=True, text=True, timeout=5)
-        return out.stdout.strip() or "unknown"
-    except (OSError, subprocess.SubprocessError):
-        return "unknown"
+def _default_reviewer() -> str:
+    """$SFZMAPS_REVIEWER, else "owner". Never the git email: review.json is bundled to the
+    shared Drive folder."""
+    return os.environ.get("SFZMAPS_REVIEWER", "").strip() or "owner"
 
 
 def _rebuild_series(series: str) -> None:
@@ -228,8 +233,10 @@ class SaveBody(PreviewBody):
 
 
 def _transform_of(gcps: list[GCPIn]) -> SheetTransform:
-    """The transform the runner will build from review.json (MANUAL_TPS_SMOOTHING)."""
-    t = SheetTransform([GCP(**g.model_dump()) for g in gcps], config.MANUAL_TPS_SMOOTHING)
+    """The transform the runner will build from review.json: smoothing by density
+    (runner.smoothing_for), which save stores in review.json."""
+    gs = [GCP(**g.model_dump()) for g in gcps]
+    t = SheetTransform(gs, runner.smoothing_for(gs))
     try:
         t.fit()
     except (ValueError, np.linalg.LinAlgError) as e:
@@ -347,7 +354,7 @@ def sheet(series: str, sheet_id: str) -> JSONResponse:
     score = runner._score_load(raw_score) if raw_score is not None else None
 
     if review is not None:
-        gcps, origin, smoothing = review["gcps"], "review", config.MANUAL_TPS_SMOOTHING
+        gcps, origin, smoothing = review["gcps"], "review", runner.review_smoothing(review)
     elif tdata is not None:
         gcps, origin = tdata["gcps"], tdata.get("origin", "auto")
         smoothing = tdata["smoothing"] if origin == "auto" else config.MANUAL_TPS_SMOOTHING
@@ -595,9 +602,10 @@ def save(series: str, sheet_id: str, body: SaveBody, background: BackgroundTasks
         raise HTTPException(
             400, f"accepting a sheet that does not pass ({sc.reason}; held-out median "
                  f"{sc.holdout_p50_ft:.1f} ft, p95 {sc.holdout_p95_ft:.1f} ft) requires a note")
-    review = {"status": body.status, "reviewer": body.reviewer or _git_email(),
+    review = {"status": body.status, "reviewer": body.reviewer or _default_reviewer(),
               "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "note": note,
-              "gcps": [g.model_dump() for g in body.gcps], "change_areas": body.change_areas}
+              "gcps": [g.model_dump() for g in body.gcps], "change_areas": body.change_areas,
+              "smoothing": t.smoothing}
     page = _find_page(series, sheet_id)
     if page is None:
         raise HTTPException(404, f"no source page for {series}/{sheet_id}")

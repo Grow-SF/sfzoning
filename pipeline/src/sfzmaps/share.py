@@ -176,9 +176,17 @@ def _load_pulled(root: Path) -> dict[str, str]:
         return {}  # missing/corrupt sidecar: every local review.json counts as edited
 
 
+# Files of a sheet that derive from its review: when a locally edited review.json is kept,
+# the incoming copies of these are skipped too, so they never describe another review.
+_REVIEW_DERIVED = ("transform.json", "score.json", "changes.geojson", "refine.json")
+
+
 def _extract(zpath: Path, root: Path) -> None:
     """Extract zpath into root. A review.json edited locally since the last pull is never
-    overwritten: the incoming copy goes to review.json.pulled instead."""
+    overwritten: the incoming copy goes to review.json.pulled instead, and that sheet's
+    incoming _REVIEW_DERIVED files are skipped (the local ones stay with the local review).
+    page.png is never shared, so a pull never invalidates the page_sha256 freshness of
+    page.json / labels.json."""
     root = root.resolve()
     pulled = _load_pulled(root)
     with zipfile.ZipFile(zpath) as z:
@@ -187,22 +195,32 @@ def _extract(zpath: Path, root: Path) -> None:
             target = (root / info.filename).resolve()
             if root not in target.parents or _excluded_rel(info.filename):
                 raise ValueError(f"unsafe path in {zpath.name}: {info.filename}")
+        kept: set[str] = set()  # sheet dirs (posix) whose local review.json is kept
         for info in infos:
             target = root / info.filename
+            if target.name != "review.json":
+                continue
+            new_sha = hashlib.sha256(z.read(info)).hexdigest()
+            if target.exists():
+                local_sha = _sha(target)
+                if local_sha != new_sha and local_sha != pulled.get(info.filename):
+                    kept.add(info.filename.rsplit("/", 1)[0])
+        for info in infos:
+            target = root / info.filename
+            sheet_dir = info.filename.rsplit("/", 1)[0] if "/" in info.filename else ""
             data = z.read(info)
+            if sheet_dir in kept and target.name == "review.json":
+                side = target.with_name("review.json.pulled")
+                side.write_bytes(data)
+                log.warning(
+                    "sheet %s: local review.json was edited; kept it (and its transform, "
+                    "score, changes, refine), incoming copy saved as %s", target.parent.name, side,
+                )
+                continue
+            if sheet_dir in kept and target.name in _REVIEW_DERIVED:
+                continue
             if target.name == "review.json":
-                new_sha = hashlib.sha256(data).hexdigest()
-                if target.exists():
-                    local_sha = _sha(target)
-                    if local_sha != new_sha and local_sha != pulled.get(info.filename):
-                        side = target.with_name("review.json.pulled")
-                        side.write_bytes(data)
-                        log.warning(
-                            "sheet %s: local review.json was edited; kept it, incoming copy "
-                            "saved as %s", target.parent.name, side,
-                        )
-                        continue
-                pulled[info.filename] = new_sha
+                pulled[info.filename] = hashlib.sha256(data).hexdigest()
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
     sidecar = root / PULLED_SHAS

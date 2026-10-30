@@ -17,11 +17,10 @@ def env(tmp_path, monkeypatch):
     demo = demo_mod.build_demo(tmp_path)
     monkeypatch.setattr(server, "_get_ref", lambda: demo.ref)
     monkeypatch.setattr(server, "_find_page", lambda series, sheet: demo.page)
-    monkeypatch.setattr(server, "_git_email", lambda: "tester@example.org")
     rebuilt = []
     monkeypatch.setattr(server, "_rebuild_series", lambda series: rebuilt.append(series))
     server.configure(year=None, sheet=None)
-    return demo, TestClient(server.app), rebuilt
+    return demo, TestClient(server.app, base_url="http://127.0.0.1"), rebuilt
 
 
 def _gcps(gcps):
@@ -124,7 +123,7 @@ def test_save_writes_review_json_and_reruns(env, monkeypatch):
     assert r.status_code == 200, r.text
     d = demo.work_dir / demo.series / demo.sheet_id
     rv = json.loads((d / "review.json").read_text())
-    assert rv["status"] == "edited" and rv["reviewer"] == "tester@example.org"
+    assert rv["status"] == "edited" and rv["reviewer"] == "owner"
     assert rv["note"] == "fixed 3 points" and len(rv["gcps"]) == 25 and rv["at"]
     assert not list(d.glob("*.tmp"))
     assert len(calls) == 1 and calls[0][0] is demo.page
@@ -288,7 +287,7 @@ def test_cli_edit_demo_binds_localhost(monkeypatch, tmp_path):
     r = CliRunner().invoke(cli.app, ["edit", "--demo"])
     assert r.exit_code == 0, r.output
     assert seen == {"port": 8765, "host": "127.0.0.1"}
-    q = TestClient(server.app).get("/api/queue").json()
+    q = TestClient(server.app, base_url="http://127.0.0.1").get("/api/queue").json()
     assert [(x["series"], x["status"]) for x in q] == [("demo", "needs_review")]
     server.configure(year=None, sheet=None)
     server._pages.clear()
@@ -325,3 +324,134 @@ def test_static_front_end_served(env):
     assert r.status_code == 200 and "editor.js" in r.text
     assert c.get("/editor.js").status_code == 200 and c.get("/editor.css").status_code == 200
     assert c.post("/nothing").status_code == 404
+
+
+# -- C1: a review seeded from a dense automatic transform -----------------------------
+
+def _dense_auto(demo):
+    """Turn the demo into a dense automatic sheet: one "auto" GCP per (noisy) modern
+    corner, smoothing TPS_SMOOTHING, transform.json GCPs == refine.json inliers, scored
+    by the automatic path. Returns (sheet dir, its score.json)."""
+    import numpy as np
+
+    from sfzmaps import score as score_mod
+    from sfzmaps.refine import Match, RefineResult
+    from sfzmaps.transform import GCP, SheetTransform
+
+    d = demo.work_dir / demo.series / demo.sheet_id
+    rf = json.loads((d / "refine.json").read_text())
+    rng = np.random.default_rng(1)
+    ms = []
+    for m in rf["matches"]:
+        dx, dy = rng.normal(0, 2.0, 2)
+        ms.append(Match(m["px"], m["py"], m["wx"] + dx, m["wy"] + dy, 0.0, "inlier", m["ref_idx"]))
+    t = SheetTransform([GCP(m.px, m.py, m.wx, m.wy, "auto") for m in ms], config.TPS_SMOOTHING)
+    W = t.to_world([[m.px, m.py] for m in ms])
+    for m, w in zip(ms, W):
+        m.dist_ft = float(np.hypot(w[0] - m.wx, w[1] - m.wy))
+    res = RefineResult(t, ms, 1, True, (0.0, 0.0), "ok", 15.0)
+    runner._write_json(d / "refine.json", runner._result_json(res))
+    runner._write_json(d / "transform.json", runner._transform_json(t, "auto"))
+    sc = score_mod.score(runner._result_load(runner._result_json(res), demo.ref, t),
+                         shape=runner.page_shape(d / "page.png"))
+    runner._write_json(d / "score.json", runner._score_json(sc))
+    return d, json.loads((d / "score.json").read_text())
+
+
+def test_preview_of_auto_gcps_follows_edits(env):
+    demo, c, _ = env
+    d, auto = _dense_auto(demo)
+    seed = c.get(url(demo)).json()["gcps"]
+    assert len(seed) > 100 and {g["source"] for g in seed} == {"auto"}
+    gcps = [{k: g[k] for k in ("px", "py", "wx", "wy", "source", "enabled")} for g in seed]
+
+    same = c.post(url(demo, "/preview"), json={"gcps": gcps, "change_areas": None}).json()["score"]
+    assert abs(same["holdout_p50_ft"] - auto["holdout_p50_ft"]) < 0.1
+    assert abs(same["holdout_p95_ft"] - auto["holdout_p95_ft"]) < 0.1
+
+    moved = [{**g, "wx": g["wx"] + 300.0} for g in gcps]
+    sm = c.post(url(demo, "/preview"), json={"gcps": moved, "change_areas": None}).json()["score"]
+    assert sm["holdout_p50_ft"] > 250 and sm["passed"] is False
+
+    half = [{**g, "wx": g["wx"] + (300.0 if i % 2 else 0.0)} for i, g in enumerate(gcps)]
+    sh = c.post(url(demo, "/preview"), json={"gcps": half, "change_areas": None}).json()["score"]
+    assert sh["holdout_p50_ft"] > same["holdout_p50_ft"] + 20
+
+    off = [{**g, "enabled": i % 10 == 0} for i, g in enumerate(gcps)]
+    so = c.post(url(demo, "/preview"), json={"gcps": off, "change_areas": None}).json()["score"]
+    assert so["holdout_p50_ft"] != same["holdout_p50_ft"]
+
+
+def test_resave_unchanged_auto_sheet_keeps_score(env):
+    demo, c, _ = env
+    d, auto = _dense_auto(demo)
+    assert auto["passed"] is True
+    gcps = [{k: g[k] for k in ("px", "py", "wx", "wy", "source", "enabled")}
+            for g in c.get(url(demo)).json()["gcps"]]
+    r = c.post(url(demo, "/save"), json={"gcps": gcps, "change_areas": None, "status": "edited"})
+    assert r.status_code == 200, r.text
+    rv = json.loads((d / "review.json").read_text())
+    assert rv["smoothing"] == config.TPS_SMOOTHING
+    assert json.loads((d / "transform.json").read_text())["smoothing"] == config.TPS_SMOOTHING
+    s = r.json()["score"]
+    assert s["passed"] is True
+    assert abs(s["holdout_p50_ft"] - auto["holdout_p50_ft"]) < 0.1
+    assert abs(s["holdout_p95_ft"] - auto["holdout_p95_ft"]) < 0.1
+    assert abs(r.json()["preview_score"]["holdout_p50_ft"] - s["holdout_p50_ft"]) < 1e-9
+    # the editor reopens it with the stored smoothing
+    assert c.get(url(demo)).json()["smoothing"] == config.TPS_SMOOTHING
+
+
+def test_sparse_review_uses_manual_smoothing(env):
+    demo, c, _ = env
+    r = c.post(url(demo, "/save"), json={"gcps": _gcps(demo.true_gcps), "change_areas": None,
+                                         "status": "edited"})
+    d = demo.work_dir / demo.series / demo.sheet_id
+    assert r.status_code == 200 and json.loads((d / "review.json").read_text())["smoothing"] == \
+        config.MANUAL_TPS_SMOOTHING
+
+
+def test_stored_review_smoothing_is_used_by_runner(env):
+    demo, c, _ = env
+    d = demo.work_dir / demo.series / demo.sheet_id
+    (d / "review.json").write_text(json.dumps({
+        "status": "edited", "reviewer": "x", "at": "t", "note": "", "gcps": _gcps(demo.true_gcps),
+        "change_areas": None, "smoothing": 7.5}))
+    runner.run_sheet(demo.page, demo.ref)
+    assert json.loads((d / "transform.json").read_text())["smoothing"] == 7.5
+    assert c.get(url(demo)).json()["smoothing"] == 7.5
+
+
+# -- M6 / M7 ---------------------------------------------------------------------------
+
+def test_bad_host_header_rejected(env):
+    demo, c, _ = env
+    assert c.get("/api/queue").status_code == 200
+    assert c.get("/api/queue", headers={"host": "localhost:8765"}).status_code == 200
+    assert c.get("/api/queue", headers={"host": "evil.example.com"}).status_code == 400
+
+
+def test_reviewer_default_and_env(env, monkeypatch):
+    demo, c, _ = env
+    d = demo.work_dir / demo.series / demo.sheet_id
+    body = {"gcps": _gcps(demo.true_gcps), "change_areas": None, "status": "edited"}
+    monkeypatch.delenv("SFZMAPS_REVIEWER", raising=False)
+    assert c.post(url(demo, "/save"), json=body).json()["reviewer"] == "owner"
+    monkeypatch.setenv("SFZMAPS_REVIEWER", "jane")
+    c.post(url(demo, "/save"), json=body)
+    rv = json.loads((d / "review.json").read_text())
+    assert rv["reviewer"] == "jane" and "@" not in json.dumps(rv)
+
+
+def test_editor_js_reads_series_and_sheet_from_url():
+    """I4: the review page links to EDITOR_URL?series=..&sheet=..; editor.js must read them."""
+    from pathlib import Path
+
+    from sfzmaps import reviewpage
+
+    js = (Path(server.__file__).parent / "static" / "editor.js").read_text()
+    assert "URLSearchParams" in js and 'get("series")' in js and 'get("sheet")' in js
+    assert reviewpage.EDITOR_URL.rstrip("/").endswith(f"{server.HOST}:{server.PORT}")
+    import inspect
+    src = inspect.getsource(reviewpage)
+    assert "?series=" in src and "&sheet=" in src

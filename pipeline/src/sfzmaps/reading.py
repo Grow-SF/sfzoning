@@ -84,10 +84,16 @@ class _Labels(BaseModel):
 M = TypeVar("M", bound=BaseModel)
 
 
-def save(path: Path, obj: BaseModel | list[Label]) -> None:
+def save(path: Path, obj: BaseModel | list[Label], page_sha256: str | None = None) -> None:
+    """Write a PageInfo (page.json) or labels (labels.json). With page_sha256 (the sha256 of
+    the page.png they were read from) it is stored too: a "page_sha256" key in page.json,
+    and labels.json becomes {"page_sha256": ..., "labels": [...]} (a bare list without)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = [x.model_dump() for x in obj] if isinstance(obj, list) else obj.model_dump()
+    if page_sha256 is not None:
+        data = {"page_sha256": page_sha256, "labels": data} if isinstance(data, list) \
+            else {**data, "page_sha256": page_sha256}
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(data, indent=1))
     tmp.replace(path)
@@ -98,7 +104,19 @@ def load_page(path: Path) -> PageInfo:
 
 
 def load_labels(path: Path) -> list[Label]:
-    return [Label.model_validate(d) for d in json.loads(Path(path).read_text())]
+    d = json.loads(Path(path).read_text())
+    return [Label.model_validate(x) for x in (d["labels"] if isinstance(d, dict) else d)]
+
+
+def stored_page_sha256(path: Path) -> str | None:
+    """The page_sha256 stored in a page.json / labels.json, or None (missing, unreadable,
+    or an older file without it)."""
+    try:
+        d = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    v = d.get("page_sha256") if isinstance(d, dict) else None
+    return v if isinstance(v, str) else None
 
 
 def _read_gray(png_path: Path) -> np.ndarray:

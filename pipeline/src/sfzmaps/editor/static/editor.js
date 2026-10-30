@@ -485,6 +485,13 @@ async function main() {
   $("note").addEventListener("input", updateDirty);
   try {
     await loadQueue(false);
+    // ?series=&sheet= (the review page's "Open in editor" link) selects that sheet
+    const qs = new URLSearchParams(window.location.search);
+    const want = { series: qs.get("series"), sheet: qs.get("sheet") };
+    if (want.series && want.sheet) {
+      try { await openSheet(want.series, want.sheet); return; }
+      catch (e) { toast(`Cannot open ${want.series}/${want.sheet}: ${e.message}`, true); }
+    }
     if (S.queue.length) { const q = S.queue[0]; await openSheet(q.series, q.sheet_id); }
     else toast("The queue is empty.");
   } catch (e) { toast(e.message, true); }

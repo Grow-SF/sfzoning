@@ -6,6 +6,9 @@ score -> warp. Artifacts live in config.WORK_DIR/<series>/<sheet_id>/:
   page.png          render                        (input: the source scan)
   page.json         classify                      (page.png)
   labels.json       labels                        (page.png, page.json)
+                    both store "page_sha256", the sha256 of the page.png they were read
+                    from; when it matches the current page.png they are fresh whatever the
+                    mtimes (a byte-identical re-render costs no vision calls)
   blocks_px.geojson blocks: pixel polygons + "corners", the good-quality block corners
                     (linework.good_corners_px)  (page.png, page.json)
   rough.json        rough: {"transform": ...|null, "scale_hint_ft_per_px"}
@@ -15,7 +18,7 @@ score -> warp. Artifacts live in config.WORK_DIR/<series>/<sheet_id>/:
                     converged, vote_status, classify_converged (Task 16's editor reads it)
   changes.geojson   changes                       (refine_raw.json)
   transform.json    final transform, with "origin": auto | review | answer_key
-  score.json        score                         (transform.json, refine.json, labels.json)
+  score.json        score                         (transform.json, refine.json, labels.json, rough.json)
   warped.tif        warp                          (transform.json, page.json, page.png)
   review.json       optional, written by the human review tool; never touched here
 
@@ -26,7 +29,9 @@ input artifact. The reference parquet files count as inputs of rough/refine. A c
 reruns cost nothing in API calls.
 
 Review: with review.json present (status "edited" or "accepted") and not force_auto, its
-GCPs become transform.json (origin "review"); rough/refine/changes are skipped, the score
+GCPs become transform.json (origin "review"), with review.json's "smoothing" (else chosen
+by density, smoothing_for); transform.json is rewritten whenever its content differs from
+the review (not by mtime); rough/refine/changes are skipped, the score
 is still computed for display and the warp uses the review GCPs. force_auto ignores the
 review for that run (the file itself is never modified). If the automatic rough fit fails
 on a 1948/1960 sheet and the owner's .points file exists, its GCPs are the transform
@@ -37,6 +42,8 @@ transform (origin "answer_key"); score.json keeps reason "misplaced", passed fal
 of such a sheet uses the auto fit stored in refine.json, never the key transform.
 For every answer_key_fallback sheet score.json carries "metrics_of": "auto_fit": the
 numbers describe the automatic fit (none for insufficient_anchors), not the key warp.
+A sheet that raises, or is classified as non-map, gets an "error: ..." / "skipped: ..."
+score.json and loses transform.json and warped.tif (clear_outputs); the next run reruns it.
 score.json also carries "score_version" (config.SCORE_VERSION); a missing or lower
 version is stale and rescored. Bump it whenever pass or fallback logic changes.
 """
@@ -45,6 +52,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import re
 import subprocess
 import time
@@ -95,6 +103,28 @@ def _fresh(out: Path, inputs: list[Path], force: bool = False) -> bool:
     if force or not out.exists() or not inputs:  # no inputs: nothing proves it current
         return False
     return all(i.exists() and _mtime(out) > _mtime(i) for i in inputs)
+
+
+def _file_sha256(p: Path) -> str:
+    import hashlib
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _add_page_sha(p: Path, sha: str) -> None:
+    """Store page_sha256 in an existing page.json / labels.json, keeping its mtime (so no
+    downstream stage looks stale)."""
+    try:
+        d = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return
+    d = {"page_sha256": sha, "labels": d} if isinstance(d, list) else {**d, "page_sha256": sha}
+    st = p.stat()
+    _write_json(p, d)
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
 
 
 def _ref_inputs() -> list[Path]:
@@ -233,6 +263,49 @@ def _answer_key_gcps(page: Page, png: Path) -> list[GCP] | None:
 
 # -- review ----------------------------------------------------------------------------
 
+def smoothing_for(gcps: list[GCP]) -> float:
+    """TPS smoothing for a reviewed GCP set, by density: config.TPS_SMOOTHING when at least
+    config.REVIEW_DENSE_MIN_GCPS are enabled (a review seeded from the dense automatic
+    transform), else config.MANUAL_TPS_SMOOTHING (sparse hand-placed points)."""
+    n = sum(1 for g in gcps if g.enabled)
+    return config.TPS_SMOOTHING if n >= config.REVIEW_DENSE_MIN_GCPS else config.MANUAL_TPS_SMOOTHING
+
+
+def review_smoothing(review: dict) -> float:
+    """The smoothing stored in review.json (the editor stores the one it previewed with),
+    else smoothing_for its GCPs."""
+    v = review.get("smoothing")
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v > 0:
+        return float(v)
+    return smoothing_for([GCP(**g) for g in review["gcps"]])
+
+
+def review_transform(review: dict) -> SheetTransform:
+    return SheetTransform([GCP(**g) for g in review["gcps"]], review_smoothing(review))
+
+
+def _review_applied(review: dict, tj: Path, cj: Path) -> bool:
+    """transform.json (and changes.geojson) hold exactly this review: same GCPs, same
+    smoothing, same change areas. Compared by content, not mtime, so a transform.json
+    replaced by `pull` or by an automatic run is never mistaken for the review."""
+    try:
+        tdata = json.loads(tj.read_text())
+    except (OSError, ValueError):
+        return False
+    rt = review_transform(review)
+    if tdata.get("origin") != "review" or tdata.get("smoothing") != rt.smoothing:
+        return False
+    if tdata.get("gcps") != rt.to_json()["gcps"]:
+        return False
+    ca = review.get("change_areas")
+    if ca is None:
+        return not cj.exists()
+    try:
+        return json.loads(cj.read_text()) == ca
+    except (OSError, ValueError):
+        return False
+
+
 def _load_review(d: Path) -> dict | None:
     p = d / "review.json"
     if not p.exists():
@@ -289,7 +362,8 @@ def score_review(t: SheetTransform, refine_json: Path, ref: Reference | None,
         from sfzmaps import placement
         agreement = placement.label_agreement(t, reading.load_labels(labels_json), ref)
     return score_mod.score(res, agreement=agreement,
-                           shape=page_shape(Path(refine_json).parent / "page.png"))
+                           shape=page_shape(Path(refine_json).parent / "page.png"),
+                           holdout_fit_gcps=True)
 
 
 # -- the runner ------------------------------------------------------------------------
@@ -307,8 +381,11 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
     cache: dict = {}
     if sj.exists():
         try:
-            if not _score_current(json.loads(sj.read_text())):
-                sj.unlink()  # old-format score: rescored below, never reused
+            old = json.loads(sj.read_text())
+            # old-format score: rescored below, never reused; an error or skip score
+            # describes a run that did not finish, so the sheet is rerun and rescored
+            if not _score_current(old) or str(old.get("reason") or "").startswith(("error:", "skipped:")):
+                sj.unlink()
         except ValueError:
             sj.unlink()
 
@@ -350,16 +427,50 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
     stage("render", png, [page.source], lambda: pages.render(page, png))
     if stopped("render"):
         return partial("until: render")
-    stage("classify", pj, [png], lambda: reading.save(pj, reading.classify_page(png)))
+    def png_sha() -> str:
+        if "sha" not in cache:
+            cache["sha"] = _file_sha256(png)
+        return cache["sha"]
+
+    def read_stage(name: str, out: Path, inputs: list[Path], fn, own_sha_only: bool = True) -> None:
+        """A stage that calls the vision model (classify, labels). Fresh by mtime as usual,
+        or, when page.png was re-rendered (newer mtime), by content: the page_sha256 stored
+        in `out` (labels.json: else page.json's) equals page.png's. Then no call is made, so
+        a byte-identical render on another machine re-reads nothing. A fresh `out` without
+        the hash (an older file) gets it written in, keeping its mtime."""
+        if not force and out.exists():
+            if _fresh(out, inputs):
+                if reading.stored_page_sha256(out) is None:
+                    _add_page_sha(out, png_sha())
+                last_timings[name] = None
+                log.info("%-8s skipped (fresh)", name)
+                return
+            stored = reading.stored_page_sha256(out)
+            if stored is None and not own_sha_only:
+                stored = reading.stored_page_sha256(pj)
+            if stored is not None and stored == png_sha() and all(i.exists() for i in inputs):
+                last_timings[name] = None
+                log.info("%-8s skipped (page.png content unchanged)", name)
+                return
+        t0 = time.monotonic()
+        sha = png_sha()
+        reading.save(out, fn(), page_sha256=sha)
+        last_timings[name] = time.monotonic() - t0
+        log.info("%-8s done in %.1fs", name, last_timings[name])
+
+    read_stage("classify", pj, [png], lambda: reading.classify_page(png))
     if info().kind != "map":
         log.info("skipped: %s", info().kind)
-        return SheetScore.empty(f"skipped: {info().kind}")
+        sc = SheetScore.empty(f"skipped: {info().kind}")
+        clear_outputs(d, sc)  # a sheet reclassified as non-map must not stay published
+        return sc
     if stopped("classify"):
         return partial("until: classify")
 
     # labels / blocks
-    stage("labels", lj, [png, pj], lambda: reading.save(
-        lj, reading.read_labels(png, scale=config.label_scale(page.series), skip=mask())))
+    read_stage("labels", lj, [png, pj],
+               lambda: reading.read_labels(png, scale=config.label_scale(page.series), skip=mask()),
+               own_sha_only=False)
     if stopped("labels"):
         return partial("until: labels")
 
@@ -384,8 +495,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
     result: RefineResult | None = None
 
     if review is not None:
-        rt = SheetTransform([GCP(**g) for g in review["gcps"]], config.MANUAL_TPS_SMOOTHING)
-        rpath = d / "review.json"
+        rt = review_transform(review)
 
         def do_review():
             _write_json(tj, _transform_json(rt, "review"))
@@ -394,7 +504,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             else:
                 cj.unlink(missing_ok=True)  # no stale auto changes next to a reviewed transform
 
-        if not (_origin(tj) == "review" and _fresh(tj, [rpath], force)):
+        if force or not _review_applied(review, tj, cj):
             do_review()
             log.info("review   transform from review.json (%s)", review["status"])
         for s in ("rough", "refine", "changes"):
@@ -426,12 +536,19 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             gcps = _answer_key_gcps(page, png) if answer_key_path(page) else None
             if gcps is not None:
                 answer_key = True
-                if not (_origin(tj) == "answer_key" and _fresh(tj, [rj], force)):
-                    _write_json(tj, _transform_json(SheetTransform(gcps, config.MANUAL_TPS_SMOOTHING), "answer_key"))
+                kt = _transform_json(SheetTransform(gcps, config.MANUAL_TPS_SMOOTHING), "answer_key")
+                cur = None
+                try:
+                    cur = json.loads(tj.read_text()) if tj.exists() else None
+                except ValueError:
+                    pass
+                if force or cur != kt:  # by content: a changed key (or reader) rewrites it
+                    _write_json(tj, kt)
                     log.info("fallback transform from answer key (%d GCPs)", len(gcps))
             else:
                 tj.unlink(missing_ok=True)
                 wt.unlink(missing_ok=True)  # a warp of an older transform must not survive
+                sj.unlink(missing_ok=True)  # nor a score of it: rescored as insufficient_anchors
         else:
             def do_refine():
                 data = json.loads(bj.read_text())
@@ -504,7 +621,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
                 _write_json(tj, _transform_json(t_, "auto"))  # no longer misplaced: back to auto
         _write_json(sj, _score_json(sc, **extra))
 
-    stage("score", sj, [p for p in (tj, rfj, lj) if p.exists()] or [rj], do_score)
+    stage("score", sj, [p for p in (tj, rfj, lj, rj) if p.exists()], do_score)
     score_val = _score_load(json.loads(sj.read_text()))
     if stopped("score"):
         return score_val
@@ -518,6 +635,16 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
         wt.unlink(missing_ok=True)
         last_timings["warp"] = None
     return score_val
+
+
+def clear_outputs(d: Path, sc: SheetScore) -> None:
+    """Record sc (an error or skip) as the sheet's score.json and remove its transform and
+    warp, so nothing from an earlier successful run is published for it. run_sheet discards
+    such a score on its next run."""
+    for p in (d / "transform.json", d / "warped.tif", d / "warped.footprint.geojson"):
+        p.unlink(missing_ok=True)
+    if d.is_dir():
+        _write_json(d / "score.json", _score_json(sc))
 
 
 def format_table(results: dict[str, SheetScore]) -> str:
@@ -560,6 +687,10 @@ def run_series(series: str, *, sheet: str | None = None, until: str | None = Non
             with logfile.open("a") as fh:
                 fh.write(f"=== {p.series}/{p.sheet_id}\n{traceback.format_exc()}\n")
             results[p.sheet_id] = SheetScore.empty(f"error: {type(e).__name__}: {e}")
+            try:
+                clear_outputs(config.WORK_DIR / p.series / p.sheet_id, results[p.sheet_id])
+            except OSError:
+                log.exception("could not clear outputs of %s/%s", p.series, p.sheet_id)
     print(format_table(results))
     if logfile is not None:
         print(f"errors logged to {logfile}")

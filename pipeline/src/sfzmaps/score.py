@@ -19,9 +19,11 @@ In-sample vs held-out. The automatic warp is fit on the inlier corners themselve
 their dist_ft is optimistic (Task 13: 5-15 percentage points at 6 ft). holdout_residuals
 splits the modern blocks into HOLDOUT_FOLDS folds (seeded, deterministic), refits the
 warp with the same smoothing on the inliers of the other folds, and measures each fold's
-scored corners against it: the error of the warp on blocks it never saw. When the
-transform has no automatic GCPs (a human review), the corners were not used to fit it, so
-their distances are already held-out and are used as is. The insample_* fields are kept
+scored corners against it: the error of the warp on blocks it never saw. A human review's
+transform is refit on its own GCPs instead (fit_gcps; a review seeded from the automatic
+transform keeps "auto" GCPs that the reviewer may have moved or disabled). When the
+transform has no automatic GCPs (hand-placed points), the corners were not used to fit it,
+so their distances are already held-out and are used as is. The insample_* fields are kept
 for display only.
 
 reason, first that applies (this order is the precedence); passed exactly when None:
@@ -108,9 +110,16 @@ def _groups(result: RefineResult, ms) -> np.ndarray:
 
 
 def holdout_residuals(result: RefineResult, folds: int = HOLDOUT_FOLDS,
-                      seed: int = HOLDOUT_SEED) -> np.ndarray:
+                      seed: int = HOLDOUT_SEED, fit_gcps: bool = False) -> np.ndarray:
     """Held-out distance (ft) per scored corner (inlier/outlier, in match order); NaN where
-    it could not be measured. See the module docstring."""
+    it could not be measured. See the module docstring.
+
+    fit_gcps=False (the automatic fit): each fold's warp is refit on the inlier matches of
+    the other folds. fit_gcps=True (a human review): it is refit on result.transform's own
+    enabled GCPs outside the fold, each GCP taking the fold of its nearest scored match in
+    pixel space, so moving, disabling or adding review GCPs changes the score. A review
+    seeded from an unchanged automatic transform (its GCPs are exactly the inliers) scores
+    the same as the automatic fit."""
     ms = [m for m in result.matches if m.label in ("inlier", "outlier")]
     if not ms:
         return np.empty(0)
@@ -126,14 +135,30 @@ def holdout_residuals(result: RefineResult, folds: int = HOLDOUT_FOLDS,
     order = np.random.default_rng(seed).permutation(len(uniq))
     fold_of = dict(zip(uniq[order], np.arange(len(uniq)) % folds))
     fold = np.array([fold_of[g] for g in grp])
-    inl = np.array([m.label == "inlier" for m in ms])
+    if fit_gcps:
+        en = [g for g in t.gcps if g.enabled]
+        GP = np.array([[g.px, g.py] for g in en], float).reshape(-1, 2)
+        GW = np.array([[g.wx, g.wy] for g in en], float).reshape(-1, 2)
+        ok = np.isfinite(P).all(axis=1)
+        if not ok.any():
+            return np.full(len(ms), np.nan)
+        from scipy.spatial import cKDTree
+        _, nn = cKDTree(P[ok]).query(GP)
+        gfold = fold[np.flatnonzero(ok)[nn]] if len(GP) else np.empty(0, int)
+    else:
+        inl = np.array([m.label == "inlier" for m in ms])
     out = np.full(len(ms), np.nan)
     for f in range(folds):
         test = fold == f
-        train = inl & ~test
+        if fit_gcps:
+            train = gfold != f
+            tp, tw = GP[train], GW[train]
+        else:
+            train = inl & ~test
+            tp, tw = P[train], W[train]
         if not test.any() or train.sum() < 10:
             continue
-        gcps = [GCP(p[0], p[1], w[0], w[1], "auto") for p, w in zip(P[train], W[train])]
+        gcps = [GCP(p[0], p[1], w[0], w[1], "auto") for p, w in zip(tp, tw)]
         try:
             tf = SheetTransform(gcps, smoothing=t.smoothing)
             out[test] = np.linalg.norm(tf.to_world(P[test]) - W[test], axis=1)
@@ -191,8 +216,9 @@ def _q(d: np.ndarray, q: float) -> float:
 
 def score(result: RefineResult | None, tol_ft: float | None = None, min_scored: int = 40,
           agreement=None, ft_per_px: float | None = None,
-          shape: tuple[int, int] | None = None) -> SheetScore:
-    """agreement: an sfzmaps.placement.Agreement for the final transform, or None (not
+          shape: tuple[int, int] | None = None, holdout_fit_gcps: bool = False) -> SheetScore:
+    """holdout_fit_gcps: held-out refits use result.transform's own GCPs (a human review;
+    see holdout_residuals). agreement: an sfzmaps.placement.Agreement for the final transform, or None (not
     checked). tol_ft only sets the display share insample_frac_within. ft_per_px: the sheet
     scale for the pass limits; when None it is measured from result.transform over the page
     shape (h, w) (sheet_ft_per_px)."""
@@ -209,7 +235,7 @@ def score(result: RefineResult | None, tol_ft: float | None = None, min_scored: 
     finite = sum(np.isfinite([m.px, m.py]).all() for m in result.matches)
     inl_frac = labels.count("inlier") / finite if finite else float("nan")
     frac = float(np.count_nonzero(d <= tol)) / n if n else 0.0
-    h = holdout_residuals(result) if n else np.empty(0)
+    h = holdout_residuals(result, fit_gcps=holdout_fit_gcps) if n else np.empty(0)
     h = h[np.isfinite(h)]
     hp50, hp95 = _q(h, 0.5), _q(h, 0.95)
     agree = float("nan") if agreement is None else float(agreement.fraction)

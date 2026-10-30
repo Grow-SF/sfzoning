@@ -377,3 +377,120 @@ def test_score_version_gates_staleness(env, monkeypatch):
         os.utime(sj, ns=(sj.stat().st_mtime_ns + 10**9,) * 2)
         runner.run_sheet(page, ref)
         assert json.loads(sj.read_text())["score_version"] == config.SCORE_VERSION
+
+
+def _bump(p, s=1):
+    os.utime(p, ns=(p.stat().st_mtime_ns + s * 10**9,) * 2)
+
+
+def test_rough_newly_failing_on_new_reference_rescores(env, monkeypatch):
+    """I1: new reference data (not new labels) makes the rough fit fail: the old passing
+    score must not survive."""
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    runner.run_sheet(page, ref)
+    old = json.loads((d / "score.json").read_text())
+    assert old["reason"] != "insufficient_anchors"
+    f.rough_ok = False
+    _bump(config.REF_DIR / "parcels.parquet", 5)
+    s = runner.run_sheet(page, ref)
+    assert s.reason == "insufficient_anchors"
+    assert json.loads((d / "score.json").read_text())["reason"] == "insufficient_anchors"
+    assert not (d / "warped.tif").exists() and not (d / "transform.json").exists()
+    from sfzmaps import stitch
+    assert stitch.load_scores("1948")["7"].reason == "insufficient_anchors"
+
+
+def test_review_freshness_compares_content_not_mtime(env, monkeypatch):
+    """I2: a transform.json replaced (e.g. by pull) with a different review's GCPs and a
+    newer mtime is rewritten from the local review.json."""
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    d.mkdir(parents=True)
+    write_review(d)
+    runner.run_sheet(page, ref)
+    tj = d / "transform.json"
+    t = json.loads(tj.read_text())
+    t["gcps"][0]["wx"] += 123
+    tj.write_text(json.dumps(t))
+    _bump(tj, 5)
+    runner.run_sheet(page, ref)
+    assert json.loads(tj.read_text())["gcps"][0]["wx"] == GCPS[0].wx
+    assert f.calls["warp"] == 2
+    runner.run_sheet(page, ref)  # now current: nothing rewritten
+    assert f.calls["warp"] == 2
+
+
+def test_failing_sheet_clears_published_outputs(env, monkeypatch):
+    """M2: a sheet that raises keeps neither its old score.json nor its warp."""
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    runner.run_sheet(page, ref)
+    assert (d / "warped.tif").exists()
+
+    def boom(*a, **k):
+        raise RuntimeError("kaput")
+    monkeypatch.setattr(runner.linework, "extract_blocks", boom)
+    _bump(d / "page.json", 5)
+    res = runner.run_series("1948", pages_list=[page], ref=ref)
+    assert res["7"].reason.startswith("error:")
+    assert json.loads((d / "score.json").read_text())["reason"].startswith("error:")
+    assert not (d / "warped.tif").exists() and not (d / "transform.json").exists()
+    # fixed: the next run reruns and rescores the sheet
+    monkeypatch.setattr(runner.linework, "extract_blocks", lambda img, exclude=None: [box(1, 1, 10, 10)])
+    s = runner.run_sheet(page, ref)
+    assert not str(s.reason).startswith("error:") and (d / "warped.tif").exists()
+
+
+def test_reclassified_non_map_clears_published_outputs(env, monkeypatch):
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    runner.run_sheet(page, ref)
+    assert (d / "warped.tif").exists()
+    f.kind = "legend"
+    cv2.imwrite(str(d / "page.png"), np.full((40, 60), 128, np.uint8))  # a different render
+    _bump(d / "page.png", 5)
+    s = runner.run_sheet(page, ref)
+    assert s.reason == "skipped: legend"
+    assert json.loads((d / "score.json").read_text())["reason"] == "skipped: legend"
+    assert not (d / "warped.tif").exists() and not (d / "transform.json").exists()
+
+
+def test_identical_rerender_does_not_reread(env, monkeypatch):
+    """I3: page.png re-rendered byte-identically with a newer mtime (a fresh machine after
+    pull) is not reclassified or relabelled; a different render is."""
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    runner.run_sheet(page, ref)
+    sha = runner._file_sha256(d / "page.png")
+    assert json.loads((d / "page.json").read_text())["page_sha256"] == sha
+    assert json.loads((d / "labels.json").read_text())["page_sha256"] == sha
+    (d / "page.png").unlink()
+    _bump(page.source, 10)  # forces a re-render, newer than page.json and labels.json
+    runner.run_sheet(page, ref)
+    assert f.calls["render"] == 2 and f.calls["classify"] == 1 and f.calls["labels"] == 1
+    assert (d / "page.png").stat().st_mtime_ns > (d / "labels.json").stat().st_mtime_ns
+    cv2.imwrite(str(d / "page.png"), np.full((40, 60), 7, np.uint8))
+    _bump(d / "page.png", 20)
+    runner.run_sheet(page, ref)
+    assert f.calls["classify"] == 2 and f.calls["labels"] == 2
+
+
+def test_old_page_and_labels_json_get_hash_without_rerun(env, monkeypatch):
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    runner.run_sheet(page, ref)
+    from sfzmaps import reading
+    for p in (d / "page.json", d / "labels.json"):  # an older format, without the hash
+        dd = json.loads(p.read_text())
+        dd.pop("page_sha256")
+        st = p.stat()
+        p.write_text(json.dumps(dd["labels"] if "labels" in dd else dd))
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+    m = {p: p.stat().st_mtime_ns for p in d.iterdir()}
+    runner.run_sheet(page, ref)
+    assert f.calls["classify"] == 1 and f.calls["labels"] == 1 and f.calls["warp"] == 1
+    assert reading.stored_page_sha256(d / "labels.json") == runner._file_sha256(d / "page.png")
+    assert {p: p.stat().st_mtime_ns for p in d.iterdir()} == m
+    assert len(reading.load_labels(d / "labels.json")) == 1
+

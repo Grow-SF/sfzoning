@@ -57,6 +57,11 @@ COARSE_TPS_SMOOTHING = 1000.0
 # interpolate a sparse set (a 40 ft misclick moves a 10x10 grid 16-27 ft at 0.1, 5.5-14 ft
 # at 1.0, the Task 7 value).
 MANUAL_TPS_SMOOTHING = 1.0
+# A reviewed GCP set (review.json / the editor) with at least this many enabled GCPs is
+# dense, like the automatic warp it was usually seeded from, and is fit with TPS_SMOOTHING;
+# a sparser one with MANUAL_TPS_SMOOTHING (sfzmaps.runner.smoothing_for). Re-saving an
+# unchanged ~1400-GCP automatic sheet at 1.0 stiffened its warp (held-out p50 4.48 -> 5.11 ft).
+REVIEW_DENSE_MIN_GCPS = 100
 
 VISION_PROVIDER = "openai"
 VISION_MODEL = "gpt-6.1-sol"
@@ -133,5 +138,7 @@ def estimate_image_tokens(w: int, h: int) -> int:
 
 # score.json format/logic version: bump whenever pass or answer-key-fallback logic changes;
 # a score.json with a missing or lower version is stale and rescored.
-SCORE_VERSION = 4  # 3: Task 13c misplacement rule (label failure needs weak geometry)
+SCORE_VERSION = 5  # 3: Task 13c misplacement rule (label failure needs weak geometry)
                    # 4: scale-aware pass limits (PASS_REF_FT_PER_PX)
+                   # 5: review held-out refits on the review's own GCPs; answer-key pixels
+                   #    shifted to pixel centers (rewrites misplaced-fallback key transforms)

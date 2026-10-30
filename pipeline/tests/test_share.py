@@ -317,3 +317,28 @@ def test_bundle_command_prints_folder_and_instruction(tmp_path, monkeypatch):
     assert str((tmp_path / "share").resolve()) in r.output
     assert "processed-1948.zip" in r.output and "PROCESSED.json" in r.output
     assert "Copy these files into the Drive folder old-planning-maps/processed/" in r.output
+
+
+def test_pull_keeping_local_review_keeps_its_derived_files(data, tmp_path, monkeypatch):
+    """I2: with a locally edited review.json kept, that sheet's transform/score/changes/
+    refine are not overwritten either; other files and other sheets still update."""
+    new, src = _fresh_pull(data, tmp_path, monkeypatch)
+    (new / REV).write_text("LOCAL EDIT")
+    derived = ["transform.json", "score.json", "changes.geojson", "refine.json"]
+    for n in derived:
+        (data / "work/1948/p1" / n).write_text("REMOTE " + n)
+    (data / "work/1948/p1/labels.json").write_text("REMOTE labels")
+    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
+    share.pull("ROOT", lister=lister, downloader=downloader)
+    assert (new / REV).read_text() == "LOCAL EDIT"
+    for n in derived:
+        assert (new / "work/1948/p1" / n).read_bytes() == f"work/1948/p1/{n}".encode()
+    assert (new / "work/1948/p1/labels.json").read_text() == "REMOTE labels"
+
+
+def test_pull_unedited_review_updates_derived_files(data, tmp_path, monkeypatch):
+    new, src = _fresh_pull(data, tmp_path, monkeypatch)
+    (data / "work/1948/p1/transform.json").write_text("REMOTE T")
+    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
+    share.pull("ROOT", lister=lister, downloader=downloader)
+    assert (new / "work/1948/p1/transform.json").read_text() == "REMOTE T"
