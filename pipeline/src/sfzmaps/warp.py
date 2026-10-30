@@ -78,6 +78,7 @@ GRID_STEP = 150
 # (median of the light pixels of 1948/1, /4, /10), so every era sits on the same paper.
 # Ink stays black: each pixel is gray/255 x PAPER_TINT, a multiply, nothing else changes.
 PAPER_TINT = (245, 240, 229)
+
 NEATLINE_INSET_PX = 60
 FOOTPRINT_CLOSE_PX = 41   # closing kernel for the content footprint (about 0.7 in on a 6000 px scan)
 FOOTPRINT_MAX_PX = 1000   # footprint contours are traced on a copy at most this many px wide
@@ -126,14 +127,10 @@ def inset_exclusion(img: np.ndarray, mask_boxes: list[Box], inset: int | None = 
     return excl
 
 
-def footprint_polygons(excl: np.ndarray, alpha: np.ndarray, t: SheetTransform):
-    """Shapely geometry (EPSG:2227) of the sheet's content: the ink (alpha > 0), closed with a
-    FOOTPRINT_CLOSE_PX kernel (at FOOTPRINT_MAX_PX width) and with enclosed holes filled, inside
-    the non-excluded area.  Not simply the neatline interior: a framed page often has blank
-    corners beyond the drawn map, and a cutline there would hide a neighbour's real content."""
-    from shapely.geometry import Polygon
-    from shapely.ops import unary_union
-
+def content_mask(excl: np.ndarray, alpha: np.ndarray) -> tuple[np.ndarray, float]:
+    """The sheet's content at working scale: ink (alpha > 0) closed with a FOOTPRINT_CLOSE_PX
+    kernel, enclosed holes filled, inside the non-excluded area.  Returns (uint8 0/1 mask at
+    most FOOTPRINT_MAX_PX wide, scale factor f from full resolution)."""
     h, w = excl.shape
     f = min(1.0, FOOTPRINT_MAX_PX / max(h, w))
     ink = (alpha > 0).astype(np.uint8)
@@ -149,7 +146,17 @@ def footprint_polygons(excl: np.ndarray, alpha: np.ndarray, t: SheetTransform):
     ff = np.pad(closed, 1).copy()
     cv2.floodFill(ff, np.zeros((ff.shape[0] + 2, ff.shape[1] + 2), np.uint8), (0, 0), 2)
     filled = (ff[1:-1, 1:-1] != 2).astype(np.uint8)   # content plus enclosed holes
-    ok = filled & ok0
+    return filled & ok0, f
+
+
+def footprint_polygons(excl: np.ndarray, alpha: np.ndarray, t: SheetTransform):
+    """Shapely geometry (EPSG:2227) of the sheet's content: the ink (alpha > 0), closed with a
+    FOOTPRINT_CLOSE_PX kernel (at FOOTPRINT_MAX_PX width) and with enclosed holes filled, inside
+    the non-excluded area.  Not simply the neatline interior: a framed page often has blank
+    corners beyond the drawn map, and a cutline there would hide a neighbour's real content."""
+    from shapely.geometry import Polygon
+
+    ok, f = content_mask(excl, alpha)
     ok = np.pad(ok, 1)
     cs, hier = cv2.findContours(ok, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
     rings = []
@@ -211,13 +218,10 @@ def make_rgba(img: np.ndarray, mask_boxes: list[Box], excl: np.ndarray | None = 
     neatline interior (outside mask boxes); colour pages untouched, gray pages multiplied
     onto PAPER_TINT (white -> cream, black stays black)."""
     if excl is None:
-        excl = inset_exclusion(img, mask_boxes)
+        excl = inset_exclusion(img, [] if paper else mask_boxes)
     rgb = img[..., ::-1] if img.ndim == 3 else np.repeat(img[..., None], 3, axis=2)
     if paper:
-        if img.ndim == 2:
-            tint = np.asarray(PAPER_TINT, np.float32) / 255.0
-            rgb = np.round(img[..., None].astype(np.float32) * tint).astype(np.uint8)
-        return np.dstack([np.ascontiguousarray(rgb), np.where(excl, 0, 255).astype(np.uint8)])
+        return _paper_rgba(img, rgb, mask_boxes, excl)
     alpha = paper_alpha(img, ~excl if (~excl).any() else None)
     alpha[excl] = 0
     rgb = np.ascontiguousarray(rgb).astype(np.float32)
@@ -225,12 +229,45 @@ def make_rgba(img: np.ndarray, mask_boxes: list[Box], excl: np.ndarray | None = 
     return np.dstack([np.round(rgb).astype(np.uint8), alpha])
 
 
+def _paper_rgba(img: np.ndarray, rgb: np.ndarray, mask_boxes: list[Box], excl: np.ndarray) -> np.ndarray:
+    """Paper mode: opaque over the sheet's content (content_mask of the ink inside `excl`,
+    smoothed back up to full resolution), so blank margins never cover a neighbour; mask
+    boxes (legends, titles) become plain paper; gray pages are multiplied onto PAPER_TINT."""
+    region = ~excl
+    paper_rgb = np.asarray(paper_colour(img, region), np.uint8)
+    if img.ndim == 2:
+        tint = np.asarray(PAPER_TINT, np.float32) / 255.0
+        rgb = np.round(img[..., None].astype(np.float32) * tint).astype(np.uint8)
+    rgb = np.ascontiguousarray(rgb).copy()
+    boxes = np.zeros(excl.shape, bool)
+    for b in mask_boxes:
+        boxes[max(0, b.y0):b.y1, max(0, b.x0):b.x1] = True
+    rgb[boxes & region] = paper_rgb
+    small, _ = content_mask(excl, paper_alpha(img, region if region.any() else None) | (boxes & region).astype(np.uint8))
+    h, w = excl.shape
+    full = cv2.resize(small.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR) > 0.5
+    return np.dstack([rgb, np.where(full & region, 255, 0).astype(np.uint8)])
+
+
+def paper_colour(img: np.ndarray, region: np.ndarray | None = None) -> tuple[int, int, int]:
+    """RGB of the page's paper as paper mode shows it: PAPER_TINT for gray pages; for colour
+    pages, the median of the lightest 30% of pixels inside `region`."""
+    if img.ndim == 2:
+        return PAPER_TINT
+    rgb = img[..., ::-1]
+    if region is None or not region.any():
+        region = np.ones(img.shape[:2], bool)
+    lum = _lum(img)[region]
+    light = rgb[region][lum >= np.percentile(lum, 70)]
+    return tuple(int(v) for v in np.median(light, axis=0))
+
+
 def median_scale_ft_per_px(t: SheetTransform, shape: tuple[int, int], step: int = GRID_STEP) -> float:
     """Median world distance (ft) per pixel between adjacent dense-grid GCPs."""
     return t.median_scale_ft_per_px(shape, step)
 
 
-def _write_footprint(path: Path, geom) -> None:
+def _write_footprint(path: Path, geom, properties: dict | None = None) -> None:
     import json
     from shapely.geometry import mapping
 
@@ -238,7 +275,7 @@ def _write_footprint(path: Path, geom) -> None:
     tmp.write_text(json.dumps({
         "type": "FeatureCollection",
         "crs": {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::2227"}},
-        "features": [{"type": "Feature", "properties": {}, "geometry": mapping(geom)}]}))
+        "features": [{"type": "Feature", "properties": properties or {}, "geometry": mapping(geom)}]}))
     tmp.replace(path)
 
 
@@ -246,8 +283,8 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
                paper: bool = False) -> Path:
     """Write the transparent-paper RGBA GeoTIFF for `png` to `out` (atomically).  With
     `paper`, the scan as it looks on paper instead (make_rgba), resampled cubic so 1-bit
-    linework is smoothed rather than stair-stepped; no footprint is written (the
-    transparent warp's footprint is the same sheet area)."""
+    linework is smoothed rather than stair-stepped; mask boxes are filled with paper rather
+    than cut out, and the footprint (`<out stem>.footprint.geojson`) is the paper's own."""
     png, out = Path(png), Path(out)
     if shutil.which("gdalwarp") is None:
         raise RuntimeError("gdalwarp not found on PATH; install GDAL (e.g. `brew install gdal`)")
@@ -260,7 +297,7 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
         img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
     h, w = img.shape[:2]
     res = median_scale_ft_per_px(t, (h, w))
-    excl = inset_exclusion(img, mask_boxes)
+    excl = inset_exclusion(img, [] if paper else mask_boxes)
     rgba = make_rgba(img, mask_boxes, excl, paper=paper)
     gcps = [GroundControlPoint(row=g.py + 0.5, col=g.px + 0.5, x=g.wx, y=g.wy)
             for g in t.dense_grid((h, w), GRID_STEP)]
@@ -286,8 +323,8 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
                  "-wo", "NUM_THREADS=ALL_CPUS", "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES",
                  "-co", "BIGTIFF=IF_SAFER", "-q", str(src), tmp_name],
                 check=True, capture_output=True, text=True)
-            if not paper:
-                _write_footprint(out.with_name(out.stem + ".footprint.geojson"), footprint_polygons(excl, rgba[..., 3], t))
+            _write_footprint(out.with_name(out.stem + ".footprint.geojson"), footprint_polygons(excl, rgba[..., 3], t),
+                             {"paper_rgb": list(paper_colour(img, ~excl)), "res_ft": res} if paper else None)
             os.replace(tmp_name, out)
         except subprocess.CalledProcessError as e:
             raise RuntimeError(f"gdalwarp failed: {e.stderr}") from e

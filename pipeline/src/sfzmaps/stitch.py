@@ -37,6 +37,15 @@ def load_scores(series: str) -> dict[str, SheetScore]:
     return scores
 
 
+# Paper mode: a lower sheet runs this far under the sheet above it, so footprint tracing
+# error (traced at most FOOTPRINT_MAX_PX wide, ~25 ft per step) never opens a gap between them.
+PAPER_OVERLAP_FT = 25.0
+# Paper mode: plain paper drawn under every sheet, filling the gaps between sheets narrower than
+# this many source px (each sheet's border band, warp.NEATLINE_INSET_PX, is cut on both sides
+# of a shared neatline).  It is underneath, so it never covers a sheet's ink.
+PAPER_BACKING_GAP_PX = 70
+
+
 def raster_name(paper: bool) -> str:
     """Per-sheet warp to stitch: the transparent-paper warp, or the paper one (warp.make_rgba)."""
     return "warped_paper.tif" if paper else "warped.tif"
@@ -55,12 +64,12 @@ def draw_order(series: str, scores: dict[str, SheetScore], paper: bool = False) 
     return sorted(have, key=key)
 
 
-def footprint(series: str, sheet_id: str):
-    """Shapely footprint (EPSG:2227) of a sheet's warped.tif."""
+def footprint(series: str, sheet_id: str, paper: bool = False):
+    """Shapely footprint (EPSG:2227) of a sheet's warped.tif (or warped_paper.tif)."""
     from shapely.geometry import box, shape
 
     d = config.WORK_DIR / series / sheet_id
-    fp = d / "warped.footprint.geojson"
+    fp = d / raster_name(paper).replace(".tif", ".footprint.geojson")
     try:
         feats = json.loads(fp.read_text())["features"]
         from shapely.ops import unary_union
@@ -70,7 +79,7 @@ def footprint(series: str, sheet_id: str):
     except (OSError, ValueError, KeyError):
         pass
     import rasterio
-    with rasterio.open(d / "warped.tif") as ds:
+    with rasterio.open(d / raster_name(paper)) as ds:
         return box(*ds.bounds)
 
 
@@ -113,7 +122,7 @@ def cut_sources(series: str, order: list[str], paper: bool = False) -> list[Path
 
     cutdir = config.OUT_DIR / series / ("cut-paper" if paper else "cut")
     shutil.rmtree(cutdir, ignore_errors=True)
-    fps = {s: footprint(series, s) for s in order}
+    fps = {s: footprint(series, s, paper) for s in order}
     out = []
     for i, sid in enumerate(order):
         above = unary_union([fps[o] for o in order[i + 1:]]) if i + 1 < len(order) else None
@@ -121,12 +130,55 @@ def cut_sources(series: str, order: list[str], paper: bool = False) -> list[Path
         if above is None or not fps[sid].intersects(above):
             out.append(src)
             continue
-        geom = polygonal(fps[sid].difference(above))
+        geom = polygonal(fps[sid].difference(above.buffer(-PAPER_OVERLAP_FT) if paper else above))
         if geom.is_empty or geom.area < 1.0:
             continue
         cutdir.mkdir(parents=True, exist_ok=True)
         _cut(series, sid, geom, cutdir / f"{sid}.tif", paper)
         out.append(cutdir / f"{sid}.tif")
+    return out
+
+
+def paper_backing(series: str, order: list[str]) -> Path | None:
+    """RGBA GeoTIFF of plain paper (the sheets' median paper colour) over the union of the
+    sheets' paper footprints closed by PAPER_BACKING_GAP_PX: the narrow gaps between abutting
+    sheets, and nothing beyond the sheets' outline.  None if there is nothing to fill."""
+    import statistics
+
+    import geopandas as gpd
+    import rasterio
+    from rasterio.enums import ColorInterp
+    from shapely.ops import unary_union
+
+    fps, colours, res = [], [], []
+    for sid in order:
+        fps.append(footprint(series, sid, True))
+        try:
+            props = json.loads((config.WORK_DIR / series / sid / "warped_paper.footprint.geojson").read_text())["features"][0]["properties"]
+            colours.append(props["paper_rgb"])
+            res.append(float(props["res_ft"]))
+        except (OSError, ValueError, KeyError, IndexError):
+            pass
+    if not fps or not res:
+        return None
+    r = statistics.median(res)
+    gap = PAPER_BACKING_GAP_PX * r
+    geom = polygonal(unary_union(fps).buffer(gap, join_style="mitre").buffer(-gap, join_style="mitre"))
+    if geom.is_empty:
+        return None
+    rgb = [int(statistics.median(c[i] for c in colours)) for i in range(3)] if colours else [255, 255, 255]
+    out = config.OUT_DIR / series / "cut-paper" / "_backing.tif"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cl = out.with_suffix(".geojson")
+    gpd.GeoDataFrame(geometry=[geom], crs=config.WORK_CRS).to_file(cl, driver="GeoJSON")
+    b = geom.bounds
+    subprocess.run(["gdal_rasterize", "-q", *sum((["-burn", str(v)] for v in [*rgb, 255]), []), "-ot", "Byte",
+                    "-init", "0", "-a_srs", config.WORK_CRS, "-tr", repr(r), repr(r), "-te", *map(str, b),
+                    "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", "-co", "BIGTIFF=IF_SAFER", str(cl), str(out)],
+                   check=True, capture_output=True)
+    cl.unlink(missing_ok=True)
+    with rasterio.open(out, "r+") as ds:
+        ds.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha]
     return out
 
 
@@ -138,7 +190,11 @@ def build_vrt(series: str, scores: dict[str, SheetScore] | None = None, paper: b
     out = config.OUT_DIR / series / (f"{series}-paper.vrt" if paper else f"{series}.vrt")
     out.parent.mkdir(parents=True, exist_ok=True)
     lst = out.with_suffix(".txt")
-    lst.write_text("\n".join(str(p) for p in cut_sources(series, order, paper)) + "\n")
+    srcs = cut_sources(series, order, paper)
+    if paper:
+        backing = paper_backing(series, order)
+        srcs = ([backing] if backing else []) + srcs   # first listed = bottom
+    lst.write_text("\n".join(str(p) for p in srcs) + "\n")
     # The RGBA alpha band is honored as the mask; the last listed source wins in overlaps.
     subprocess.run(["gdalbuildvrt", "-overwrite", "-resolution", "highest",
                     "-input_file_list", str(lst), str(out)], check=True, capture_output=True)

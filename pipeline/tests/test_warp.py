@@ -283,8 +283,9 @@ def test_footprint_falls_back_to_neatline_on_failure(monkeypatch, caplog):
 
 
 def test_paper_mode_keeps_the_page_as_scanned():
-    """Paper mode: paper is opaque inside the neatline and gray tones are multiplied onto the
-    cream tint; the frame, the inset band and mask boxes are still transparent."""
+    """Paper mode: paper is opaque inside the neatline, gray tones are multiplied onto the
+    cream tint and mask boxes are filled with plain paper; the frame and inset band are cut
+    (stitch's paper backing fills the gap between abutting sheets)."""
     img = _bordered()
     img[400:420, 400:420] = 200   # light grey paper tone, would be transparent without paper
     rgba = warp.make_rgba(img, [Box(x0=1000, y0=900, x1=1100, y1=1000)], paper=True)
@@ -294,7 +295,8 @@ def test_paper_mode_keeps_the_page_as_scanned():
     assert tuple(rgb[410, 410]) == tuple(round(200 * c / 255) for c in warp.PAPER_TINT)
     assert a[600:700, 700:900].min() == 255 and rgb[600:700, 700:900].max() == 0   # ink stays black
     assert a[:150].max() == 0                         # frame stroke (rows 94-106) and inset cut away
-    assert a[900:1000, 1000:1100].max() == 0                                      # mask box
+    assert a[900:1000, 1000:1100].min() == 255                                    # mask box: paper,
+    assert (rgb[900:1000, 1000:1100] == warp.PAPER_TINT).all()                    # not a hole
 
 
 def test_paper_mode_leaves_colour_pages_untouched():
@@ -302,3 +304,16 @@ def test_paper_mode_leaves_colour_pages_untouched():
     cv2.rectangle(img, (100, 100), (1700, 1500), (0, 0, 0), 12)
     rgba = warp.make_rgba(img, [], paper=True)
     assert tuple(rgba[800, 900, :3]) == (246, 242, 231)
+
+
+def test_paper_mode_unframed_blank_margin_stays_clear():
+    """No neatline: paper covers the drawn content only, so a blank margin never hides a
+    neighbouring sheet."""
+    img = np.full((1600, 1800), 255, np.uint8)
+    for x in range(200, 900, 60):
+        img[200:1000, x:x + 4] = 0
+    for y in range(200, 1000, 60):
+        img[y:y + 4, 200:900] = 0
+    a = warp.make_rgba(img, [], paper=True)[..., 3]
+    assert a[500, 500] == 255          # paper between the drawn lines
+    assert a[1400, 1500] == 0          # blank margin far from any ink
