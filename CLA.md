@@ -3,8 +3,9 @@
 Version 1.0. Adapted from the Apache Software Foundation Individual Contributor
 License Agreement v2.2 (https://www.apache.org/licenses/icla.pdf). The changes:
 "the Foundation" is GrowSF, "software" includes the project's other materials
-(text and data), and You agree by pull-request comment instead of a signed form
-(see CONTRIBUTING.md).
+(text and data), the Apache commitment about the Foundation's use of
+Contributions is omitted, section 9 (successors) is added, and You agree by
+pull-request comment instead of a signed form (see CONTRIBUTING.md).
 
 Thank you for your interest in GrowSF. To clarify the intellectual property
 license granted with Contributions from any person or entity, GrowSF must have
@@ -15,12 +16,10 @@ its users. It does not change your rights to use your own Contributions for any
 other purpose.
 
 You accept and agree to the following terms and conditions for Your
-Contributions (present and future) that you submit to GrowSF. In return, GrowSF
-shall not use Your Contributions in a way that is contrary to the public benefit
-or inconsistent with its nonprofit status and bylaws in effect at the time of
-the Contribution. Except for the license granted herein to GrowSF and recipients
-of software and other materials distributed by GrowSF, You reserve all right,
-title, and interest in and to Your Contributions.
+Contributions (present and future) that you submit to GrowSF. Except for the
+license granted herein to GrowSF and recipients of software and other materials
+distributed by GrowSF, You reserve all right, title, and interest in and to
+Your Contributions.
 
 1. Definitions.
 
@@ -100,3 +99,8 @@ title, and interest in and to Your Contributions.
 
 8. You agree to notify GrowSF of any facts or circumstances of which you become
    aware that would make these representations inaccurate in any respect.
+
+9. This Agreement binds You and benefits GrowSF and its successors and assigns.
+   GrowSF may assign its rights under this Agreement, in whole or in part, to a
+   successor organization, including on GrowSF's merger, reorganization or
+   dissolution.
