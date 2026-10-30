@@ -96,3 +96,26 @@ def test_server_supports_range(tmp_path):
         assert urllib.request.urlopen(url).status == 200
     finally:
         srv.shutdown()
+
+
+def test_district_layer_only_when_published(out):
+    _, d = _data(out("1948", [_sheet("1")]))
+    assert d["districts"] is None
+    pm = config.OUT_DIR / "1948" / "districts" / "1948-districts.pmtiles"
+    pm.parent.mkdir(parents=True)
+    pm.write_bytes(b"PMTiles")
+    html, d = _data(out("1948", [_sheet("1")]))
+    assert d["districts"] == "districts/1948-districts.pmtiles"
+    assert d["district_colors"]["single_family"] and 0 < d["low_confidence"] < 1
+    assert "'source-layer': 'parcels'" in html and "district-low" in html
+
+
+def test_stale_when_districts_republished(out):
+    p = out("1948", [_sheet("1")])
+    pm = config.OUT_DIR / "1948" / "districts" / "1948-districts.pmtiles"
+    pm.parent.mkdir(parents=True)
+    pm.write_bytes(b"PMTiles")
+    t = time.time()
+    os.utime(p.parent / "manifest.json", (t - 300, t - 300))
+    os.utime(p, (t - 200, t - 200))
+    assert reviewpage.is_stale("1948")

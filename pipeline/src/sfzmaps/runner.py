@@ -676,10 +676,10 @@ def run_series(series: str, *, sheet: str | None = None, until: str | None = Non
         log.info("== %s/%s", p.series, p.sheet_id)
         try:
             results[p.sheet_id] = run_sheet(p, ref, until=until, force_auto=force_auto, force=force)
-        except llm.LLMAuthError as e:  # every remaining sheet would fail the same way
+        except llm.FATAL as e:  # auth / quota: every remaining sheet would fail the same way
             print(f"error: {e}; aborting series {series} at sheet {p.sheet_id}")
-            results[p.sheet_id] = SheetScore.empty(f"error: {e}")
-            break
+            print(format_table(results))
+            raise                # the caller stops the whole run (the sheet's outputs are kept)
         except Exception as e:  # noqa: BLE001 - one bad sheet must not stop the series
             if logfile is None:
                 config.OUT_DIR.mkdir(parents=True, exist_ok=True)

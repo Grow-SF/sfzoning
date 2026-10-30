@@ -36,6 +36,9 @@ SHARED_GLOBS = [
     "out/*/manifest.json",
     "out/*/review.html",
     "out/ref/blocks.pmtiles",
+    "out/*/districts/*",
+    "work/*/*/district_labels.json",
+    "overrides/*.csv",
 ]
 # Never shared, whatever the globs match (credentials).
 _NEVER = ("*.env", ".env", "*key*", "*secret*")
@@ -78,6 +81,8 @@ def _group(rel: str) -> str:
         return "cache"
     if parts[0] == "ref" or rel.startswith("out/ref/"):
         return "ref"
+    if parts[0] == "overrides":
+        return "overrides"
     return parts[1]  # work/<series>/... or out/<series>/...
 
 

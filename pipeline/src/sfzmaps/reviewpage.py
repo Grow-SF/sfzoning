@@ -98,7 +98,13 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+def _districts_pmtiles(series: str) -> Path:
+    return config.OUT_DIR / series / "districts" / f"{series}-districts.pmtiles"
+
+
 def write(series: str) -> Path:
+    from sfzmaps.districts import assemble
+
     m = _read_manifest(series)
     sheets = sorted_sheets(series, m["sheets"])
     write_changes(series, sheets)
@@ -107,6 +113,9 @@ def write(series: str) -> Path:
             "pmtiles": m.get("pmtiles", f"{series}.pmtiles"),
             "blocks": "../ref/blocks.pmtiles" if blocks else None,
             "changes": "changes.wgs84.geojson", "sheets": sheets,
+            "districts": (f"districts/{series}-districts.pmtiles"
+                          if _districts_pmtiles(series).exists() else None),
+            "district_colors": assemble.COLORS, "low_confidence": assemble.LOW_CONFIDENCE,
             "pass_median_ft": config.PASS_MEDIAN_FT, "pass_p95_ft": config.PASS_P95_FT,
             "pass_ref_ft_per_px": config.PASS_REF_FT_PER_PX}
     blob = json.dumps(data).replace("</", "<\\/")
@@ -122,7 +131,8 @@ def is_stale(series: str) -> bool:
     if not out.exists():
         return True
     t = out.stat().st_mtime
-    deps = [config.OUT_DIR / series / "manifest.json", TEMPLATE, Path(__file__)]
+    deps = [config.OUT_DIR / series / "manifest.json", TEMPLATE, Path(__file__),
+            _districts_pmtiles(series)]
     return any(d.exists() and d.stat().st_mtime > t for d in deps)
 
 

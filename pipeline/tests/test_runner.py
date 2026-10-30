@@ -243,8 +243,8 @@ def test_run_series_aborts_on_auth_error(env, monkeypatch, capsys):
 
     monkeypatch.setattr(runner.reading, "classify_page", boom)
     pl = [Page("1948", str(i), page.source, None) for i in range(3)]
-    res = runner.run_series("1948", pages_list=pl, ref=ref)
-    assert list(res) == ["0"]
+    with pytest.raises(llm.LLMAuthError):
+        runner.run_series("1948", pages_list=pl, ref=ref)
     assert capsys.readouterr().out.count("aborting series") == 1
 
 

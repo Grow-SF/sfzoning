@@ -35,6 +35,12 @@ SHARED = [
     "out/1948/manifest.json",
     "out/1948/review.html",
     "out/ref/blocks.pmtiles",
+    "out/1948/districts/parcels.fgb",
+    "out/1948/districts/1948-districts.pmtiles",
+    "out/1948/districts/stats.json",
+    "out/today/districts/stats.json",
+    "work/1960/p2/district_labels.json",
+    "overrides/1948.csv",
 ]
 EXCLUDED = [
     "raw/1948/scan.tif",
@@ -72,6 +78,7 @@ def test_bundle_includes_only_shared(data, tmp_path):
     assert {z.name for z in zips} == {
         "processed-1948.zip", "processed-1960.zip",
         "processed-cache.zip", "processed-ref.zip",
+        "processed-today.zip", "processed-overrides.zip",
     }
     assert _members(dest) == set(SHARED) | {"ref/SNAPSHOT.json"}
     assert json.loads(zipfile.ZipFile(dest / "processed-ref.zip").read("ref/SNAPSHOT.json"))
