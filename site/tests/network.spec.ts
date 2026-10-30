@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { centerStep as goToStep } from "./helpers";
 import { ERAS } from "../lib/eras";
 import { STORY } from "../content/story";
 
@@ -23,13 +24,6 @@ async function settled(page: Page) {
   await expect(page.locator("[data-active-step] .map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 30_000 });
 }
 
-async function goToStep(page: Page, id: string) {
-  await page.evaluate((sid) => {
-    const r = document.querySelector(`[data-step="${sid}"] article`)!.getBoundingClientRect();
-    window.scrollBy(0, r.top + r.height / 2 - innerHeight / 2);
-  }, id);
-  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", id);
-}
 
 /** Pan the story map so every visible layer has to fetch new tiles, then wait for it. */
 async function panAndSettle(page: Page) {

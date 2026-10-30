@@ -1,13 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
+import { scrollToStep as centerStep } from "./helpers";
 import { STORY } from "../content/story";
 
-async function centerStep(page: Page, id: string) {
-  await page.evaluate((sid) => {
-    const el = document.querySelector(`[data-step="${sid}"] article`)!;
-    const r = el.getBoundingClientRect();
-    window.scrollTo(0, window.scrollY + r.top + r.height / 2 - window.innerHeight / 2);
-  }, id);
-}
 
 test("scrolling through the story activates every step in turn", async ({ page }) => {
   await page.goto("/");
