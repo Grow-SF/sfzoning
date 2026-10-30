@@ -12,7 +12,8 @@ raster, so every GCP pixel coordinate is shifted by +0.5.
 Output resolution: the median local scale of the transform in ft/px, taken from the
 world distance between adjacent dense-grid points divided by their pixel distance.  It is
 passed to gdalwarp with -tr (otherwise GDAL picks its own, usually coarser, size) so
-source detail is preserved, no more, no less.  (1948 pages: about 0.3-0.5 ft/px.)
+source detail is preserved, no more, no less.  (1948 pages: about 1.9-2.45 ft/px, measured from
+score.json ft_per_px.)
 
 Output format: tiled, DEFLATE-compressed 8-bit RGBA (grayscale scans replicate gray into
 R, G, B; RGBA is the simplest form every downstream tiler accepts).

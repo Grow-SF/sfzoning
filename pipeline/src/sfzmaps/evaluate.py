@@ -88,12 +88,13 @@ def _f(x, spec: str) -> str:
     return format(x, spec)
 
 
-COLUMNS = ("sheet", "pass", "reason", "ho_p50", "ho_p95", "in_p50", "in_p95", "in_f6", "n_scored",
+COLUMNS = ("sheet", "pass", "reason", "ho_p50", "ho_p95", "lim50", "lim95", "in_p50", "in_p95", "in_f6", "n_scored",
            "n_rc", "n_noeq", "agree", "inl", "origin", "n_key", "key_med", "key_max", "note")
 
 
 def format_eval_table(rows: list[EvalRow]) -> str:
-    """Fixed-width table; distances in ft. ho_* = held-out (decides the pass), in_* =
+    """Fixed-width table; distances in ft. ho_* = held-out (decides the pass), lim50/lim95 =
+    the sheet's scale-aware pass limits for them (score.pass_limits), in_* =
     in-sample (display), in_f6 = in-sample share within config.TOLERANCE_FT, agree = share
     of the sheet's labels landing in their block / on their street, inl = inlier share of
     scan corners. A summary line follows the rows."""
@@ -101,11 +102,12 @@ def format_eval_table(rows: list[EvalRow]) -> str:
     for r in rows:
         s = r.score
         if s is None:
-            out.append((r.sheet, "-", "no score", *["-"] * 10, r.origin or "-", str(r.n_key),
+            out.append((r.sheet, "-", "no score", *["-"] * 12, r.origin or "-", str(r.n_key),
                         _f(r.key_median_ft, ".1f"), _f(r.key_max_ft, ".1f"), r.note))
             continue
         out.append((r.sheet, "yes" if s.passed else "no", s.reason or "-",
                     _f(s.holdout_p50_ft, ".1f"), _f(s.holdout_p95_ft, ".1f"),
+                    _f(s.pass_median_limit_ft, ".1f"), _f(s.pass_p95_limit_ft, ".1f"),
                     _f(s.insample_p50_ft, ".1f"), _f(s.insample_p95_ft, ".1f"),
                     _f(s.insample_frac_within if s.n_scored else None, ".2f"), str(s.n_scored),
                     str(s.n_real_change), str(s.n_no_equivalent), _f(s.label_agreement, ".2f"),
@@ -120,9 +122,20 @@ def format_eval_table(rows: list[EvalRow]) -> str:
         return _f(float(np.median(v)) if v else None, ".1f")
 
     km = [r.key_median_ft for r in rows if r.origin != "answer_key"]
+
+    def span(v):
+        v = [x for x in v if x is not None and math.isfinite(x)]
+        if not v:
+            return "-"
+        lo, hi = min(v), max(v)
+        return f"{lo:.1f}" if abs(hi - lo) < 0.05 else f"{lo:.1f}-{hi:.1f}"
+
+    lim50 = span([s.pass_median_limit_ft for s in sc])
+    lim95 = span([s.pass_p95_limit_ft for s in sc])
     lines.append(f"passed {sum(s.passed for s in sc)}/{len(rows)}; median held-out p50 "
                  f"{med([s.holdout_p50_ft for s in sc])} ft, p95 {med([s.holdout_p95_ft for s in sc])} ft "
                  f"(in-sample p95 {med([s.insample_p95_ft for s in sc])} ft); median key distance "
-                 f"{med(km)} ft (pass: held-out median <= {config.PASS_MEDIAN_FT:g} ft and p95 <= "
-                 f"{config.PASS_P95_FT:g} ft, not misplaced)")
+                 f"{med(km)} ft (pass: held-out median <= {lim50} ft and p95 <= {lim95} ft, the "
+                 f"per-sheet limits {config.PASS_MEDIAN_FT:g} / {config.PASS_P95_FT:g} ft x k, "
+                 f"k = max(1, ft_per_px / {config.PASS_REF_FT_PER_PX:g}); not misplaced)")
     return "\n".join(lines)
