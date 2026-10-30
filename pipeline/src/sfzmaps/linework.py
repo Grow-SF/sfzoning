@@ -624,24 +624,30 @@ def _drop_lettering(polys: list[Polygon]) -> list[Polygon]:
             if not (p.area < LETTER_AREA_FRAC * med and p.area / p.convex_hull.area < LETTER_SOLIDITY)]
 
 
-def estimate_street_px(polys: list[Polygon]) -> float:
-    """Street width (px) from block polygons: the 75th percentile of each
+def estimate_street_px(polys: list[Polygon]) -> tuple[float, bool]:
+    """(street width px, measured) from block polygons: the 75th percentile of each
     block's gap to its nearest neighbour (lower gaps are alleys and hairline
-    splits).  Falls back to DEFAULT_STREET_PX."""
+    splits).  When it cannot be measured, returns (DEFAULT_STREET_PX, False): a default
+    is not a measurement and callers must not use it as a scale hint.  The neighbour
+    search radius scales with the blocks (a street is narrower than a block), so
+    fine-scale scans with very wide streets are measured too."""
     if len(polys) < 2:
-        return DEFAULT_STREET_PX
+        return DEFAULT_STREET_PX, False
     from shapely import STRtree
     tree = STRtree(polys)
+    radius = max(4 * DEFAULT_STREET_PX, float(np.sqrt(np.median([p.area for p in polys]))))
     gaps = []
     for i, p in enumerate(polys):
         best = np.inf
-        for j in tree.query(p.buffer(4 * DEFAULT_STREET_PX)):
+        for j in tree.query(p.buffer(radius)):
             if j != i:
                 best = min(best, p.distance(polys[j]))
         if np.isfinite(best):
             gaps.append(best)
     gaps = [g for g in gaps if g > 1.0]
-    return float(np.percentile(gaps, 75)) if gaps else DEFAULT_STREET_PX
+    if not gaps:
+        return DEFAULT_STREET_PX, False
+    return float(np.percentile(gaps, 75)), True
 
 
 def _clean_ring(pts: np.ndarray, min_edge: float) -> np.ndarray:
@@ -733,7 +739,7 @@ def block_corners_px(polys: list[Polygon], street_px: float | None = None) -> np
     collapsed, and in-and-out notches on straight edges (lettering, line
     stubs) are removed before turning angles are measured.
     """
-    street_px = estimate_street_px(polys) if street_px is None else street_px
+    street_px = estimate_street_px(polys)[0] if street_px is None else street_px
     tol = max(1.0, SIMPLIFY_FT * street_px / STREET_FT)
     min_edge = MIN_EDGE_STREET_FRAC * street_px
     out: list[tuple[float, float]] = []

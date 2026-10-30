@@ -31,7 +31,7 @@ for series in sys.argv[1:]:
         from shapely.geometry import shape
         from sfzmaps import linework
         polys = [shape(f["geometry"]) for f in json.loads((d / "blocks_px.geojson").read_text())["features"]]
-        hint = linework.STREET_FT / linework.estimate_street_px(polys)
+        hint = linework.STREET_FT / linework.estimate_street_px(polys)[0]
         fit2 = anchors.rough_fit(cands, scale_hint=hint)
         fit3 = anchors.street_snap(fit2, labels, ref) if fit2 else None
         key = runner._answer_key_gcps(page, d / "page.png") if runner.answer_key_path(page) else None

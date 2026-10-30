@@ -135,18 +135,26 @@ def _score_json(s: SheetScore, **extra) -> dict:
     return {**{k: (_num(v) if isinstance(v, float) else v) for k, v in asdict(s).items()}, **extra}
 
 
+def _score_current(d: dict) -> bool:
+    """False for a pre-held-out-format score.json (no holdout_p50_ft key): it was judged by
+    an older pass rule, so it is stale and must be rescored."""
+    return "holdout_p50_ft" in d
+
+
 def _score_load(d: dict) -> SheetScore:
-    """SheetScore from score.json; also reads pre-Task-13-fix files (frac_within, p50_ft...)."""
+    """SheetScore from score.json; also reads pre-Task-13-fix files (frac_within, p50_ft...),
+    which never count as passed (no held-out fields)."""
     nan = float("nan")
 
     def g(k, old=None):
         v = d.get(k, d.get(old) if old else None)
         return nan if v is None else v
 
+    stale = not _score_current(d)
     return SheetScore(d["n_scored"], g("insample_frac_within", "frac_within"),
                       g("insample_p50_ft", "p50_ft"), g("insample_p95_ft", "p95_ft"),
                       g("insample_max_ft", "max_ft"), d["n_real_change"], d["n_no_equivalent"],
-                      d["passed"], d["reason"], g("holdout_p50_ft"), g("holdout_p95_ft"),
+                      False if stale else d["passed"], "stale_score" if stale else d["reason"], g("holdout_p50_ft"), g("holdout_p95_ft"),
                       d.get("n_holdout", 0), g("label_agreement"), g("inlier_frac"))
 
 
@@ -230,6 +238,12 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
     tj, sj, wt = d / "transform.json", d / "score.json", d / "warped.tif"
     last_timings.clear()
     cache: dict = {}
+    if sj.exists():
+        try:
+            if not _score_current(json.loads(sj.read_text())):
+                sj.unlink()  # old-format score: rescored below, never reused
+        except ValueError:
+            sj.unlink()
 
     def stage(name: str, out: Path, inputs: list[Path], fn) -> bool:
         if _fresh(out, inputs, force):
@@ -321,12 +335,13 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             from shapely.geometry import shape
             labels = reading.load_labels(lj)
             polys = [shape(f["geometry"]) for f in json.loads(bj.read_text())["features"]]
-            hint = linework.STREET_FT / linework.estimate_street_px(polys)  # ft/px
+            street_px, measured = linework.estimate_street_px(polys)
+            hint = linework.STREET_FT / street_px if measured else None  # ft/px; a default is no measurement
             fit = anchors.rough_fit(anchors.match_labels(labels, ref), scale_hint=hint)
             if fit is not None:
                 fit = anchors.street_snap(fit, labels, ref)
             _write_json(rj, {"transform": _transform_json(fit.transform, "auto") if fit else None,
-                             "scale_hint_ft_per_px": _num(hint)})
+                             "scale_hint_ft_per_px": None if hint is None else _num(hint)})
 
         stage("rough", rj, [lj, bj, *_ref_inputs()], do_rough)
         if stopped("rough"):
@@ -366,7 +381,9 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
 
             # changes also rewrites transform.json, so it reruns when that is a review's
             # (force_auto after a review) as well as when its own artifacts are stale.
-            if _origin(tj) == "auto" and _fresh(cj, [rawj, rfj], force) and _fresh(tj, [rawj], force):
+            # (a misplaced sheet's tj is the answer key's while rfj exists: still current)
+            if (_origin(tj) == "auto" or (_origin(tj) == "answer_key" and rfj.exists())) \
+                    and _fresh(cj, [rawj, rfj], force) and _fresh(tj, [rawj], force):
                 last_timings["changes"] = None
                 log.info("%-8s skipped (fresh)", "changes")
             else:
@@ -397,6 +414,14 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             t_ = SheetTransform.from_json(json.loads(tj.read_text()))
             res = _result_load(json.loads(rfj.read_text()), ref, t_)
             sc = score_mod.score(res, agreement=agreement(t_))
+            if sc.reason == "misplaced":
+                # The auto transform is in the wrong place; a sheet with an owner key is
+                # warped from that instead.  Still not passed, so review sees it.
+                gcps = _answer_key_gcps(page, png) if answer_key_path(page) else None
+                if gcps is not None:
+                    _write_json(tj, _transform_json(SheetTransform(gcps, config.MANUAL_TPS_SMOOTHING), "answer_key"))
+                    extra["answer_key_fallback"] = True
+                    log.info("misplaced: transform from answer key (%d GCPs)", len(gcps))
         _write_json(sj, _score_json(sc, **extra))
 
     stage("score", sj, [p for p in (tj, rfj, lj) if p.exists()] or [rj], do_score)

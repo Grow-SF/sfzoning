@@ -171,3 +171,20 @@ def test_make_sheet_rejects_non_contractive_distortion():
     with pytest.raises(ValueError, match="did not converge"):
         make_sheet(_grid_blocks(), px_per_ft=0.55, rotation_deg=0.0,
                    distortion=lambda p: 3.0 * p - 1000.0, style="outline")
+
+
+def _px_grid(n, w, h, street):
+    from shapely.geometry import box as _box
+    return [_box(j * (w + street), i * (h + street), j * (w + street) + w, i * (h + street) + h)
+            for i in range(n) for j in range(n)]
+
+
+def test_estimate_street_px_wide_streets_measured():
+    px, measured = linework.estimate_street_px(_px_grid(3, 1500, 1000, 200))
+    assert measured and abs(px - 200) < 5
+
+
+def test_estimate_street_px_fallback_not_measured():
+    from shapely.geometry import box as _box
+    assert linework.estimate_street_px([_box(0, 0, 10, 10)]) == (linework.DEFAULT_STREET_PX, False)
+    assert linework.estimate_street_px([]) == (linework.DEFAULT_STREET_PX, False)

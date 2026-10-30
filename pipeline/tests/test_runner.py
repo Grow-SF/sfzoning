@@ -246,3 +246,81 @@ def test_run_series_aborts_on_auth_error(env, monkeypatch, capsys):
     res = runner.run_series("1948", pages_list=pl, ref=ref)
     assert list(res) == ["0"]
     assert capsys.readouterr().out.count("aborting series") == 1
+
+
+def _grid_polys(street):
+    return [box(j * (1500 + street), i * (1000 + street), j * (1500 + street) + 1500,
+                i * (1000 + street) + 1000) for i in range(3) for j in range(3)]
+
+
+def _capture_hint(monkeypatch):
+    got = {}
+
+    def rough(c, **k):
+        got.update(k)
+        return SimpleRough(SheetTransform(AUTO, 1.0))
+
+    monkeypatch.setattr(runner.anchors, "rough_fit", rough)
+    return got
+
+
+def test_wide_street_sheet_passes_measured_hint(env, monkeypatch):
+    page, ref, d = env
+    Fakes(monkeypatch)
+    got = _capture_hint(monkeypatch)
+    monkeypatch.setattr(runner.linework, "extract_blocks", lambda img, exclude=None: _grid_polys(200))
+    runner.run_sheet(page, ref)
+    assert got["scale_hint"] == pytest.approx(runner.linework.STREET_FT / 200, rel=0.05)
+
+
+def test_unmeasured_street_width_passes_no_hint(env, monkeypatch):
+    page, ref, d = env
+    Fakes(monkeypatch)
+    got = _capture_hint(monkeypatch)  # one block: default width, not a measurement
+    runner.run_sheet(page, ref)
+    assert got["scale_hint"] is None
+    assert json.loads((d / "rough.json").read_text())["scale_hint_ft_per_px"] is None
+
+
+def test_old_format_score_is_stale_and_rescored(env, monkeypatch):
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    runner.run_sheet(page, ref)
+    sj = d / "score.json"
+    old = json.loads(sj.read_text())
+    for k in ("holdout_p50_ft", "holdout_p95_ft", "n_holdout"):
+        old.pop(k)
+    old["passed"], old["reason"] = True, None
+    sj.write_text(json.dumps(old))
+    os.utime(sj, ns=(sj.stat().st_mtime_ns + 10**9,) * 2)  # newer than every input
+    assert not runner._score_current(old)
+    s = runner.run_sheet(page, ref)
+    assert "holdout_p50_ft" in json.loads(sj.read_text())
+    assert not (s.passed and s.n_holdout == 0)
+    # and an until-stage early return never reports the old file as passing
+    sj.write_text(json.dumps(old))
+    assert not runner.run_sheet(page, ref, until="rough").passed
+
+
+def test_misplaced_with_key_warps_from_key(env, monkeypatch):
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    pts = page.source.parent / "7.jpg.points"
+    pts.write_text("mapX,mapY,pixelX,pixelY,enable\n" + "\n".join(
+        f"{g.wx},{g.wy},{g.px},{-g.py},1" for g in GCPS))
+    monkeypatch.setattr(runner, "answer_key_path", lambda p: pts)
+    from sfzmaps.score import SheetScore
+    real = runner.score_mod.score
+    monkeypatch.setattr(runner.score_mod, "score",
+                        lambda res, **k: SheetScore(50, 0.9, 3.0, 9.0, 20.0, 0, 0, False, "misplaced")
+                        if res is not None else real(res, **k))
+    s = runner.run_sheet(page, ref)
+    assert s.reason == "misplaced" and not s.passed
+    sj = json.loads((d / "score.json").read_text())
+    assert sj["answer_key_fallback"] is True and sj["reason"] == "misplaced" and sj["passed"] is False
+    t = json.loads((d / "transform.json").read_text())
+    assert t["origin"] == "answer_key" and t["gcps"][0]["source"] == "answer_key"
+    assert (d / "warped.tif").exists()
+    # a rerun stays consistent
+    s2 = runner.run_sheet(page, ref)
+    assert s2.reason == "misplaced" and json.loads((d / "transform.json").read_text())["origin"] == "answer_key"

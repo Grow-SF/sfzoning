@@ -20,7 +20,7 @@ for series in sys.argv[1:]:
         if not (d / "blocks_px.geojson").exists():
             continue
         polys = [shape(f["geometry"]) for f in json.loads((d / "blocks_px.geojson").read_text())["features"]]
-        guess = linework.STREET_FT / linework.estimate_street_px(polys)
+        guess = linework.STREET_FT / linework.estimate_street_px(polys)[0]
         key = runner._answer_key_gcps(page, d / "page.png") if runner.answer_key_path(page) else None
         ks = float("nan")
         if key:

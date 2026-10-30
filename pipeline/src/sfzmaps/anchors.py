@@ -197,21 +197,19 @@ def rough_fit(cands: list[Candidate], *, min_inliers: int = 6,
     return RoughFit(tr, inliers, scale, float(np.degrees(np.angle(a))))
 
 
-_STREET_LINES: dict[int, dict] = {}
-
-
 def _street_lines(ref: Reference) -> dict:
-    """Normalized street name -> its active centerlines (one geometry), cached per ref."""
-    key = id(ref.streets)
-    if key not in _STREET_LINES:
-        from shapely.ops import unary_union
+    """Normalized street name -> its active centerlines (one geometry). The cache lives on
+    the Reference itself, so it dies with it and can never be handed to another Reference
+    (an id()-keyed module cache could be, once the first frame was garbage collected)."""
+    cached = getattr(ref, "_street_lines_cache", None)
+    if cached is not None:
+        return cached
+    from shapely.ops import unary_union
 
-        from sfzmaps.sources.datasf import _street_name
-        s = ref.streets
-        if "street" not in s.columns or not len(s):
-            _STREET_LINES.clear()
-            _STREET_LINES[key] = {}
-            return _STREET_LINES[key]
+    from sfzmaps.sources.datasf import _street_name
+    s = ref.streets
+    out: dict = {}
+    if s is not None and "street" in s.columns and len(s):
         if "active" in s.columns:
             s = s[s["active"].astype(str).str.lower() == "true"]
         sn = s["streetname"] if "streetname" in s.columns else [None] * len(s)
@@ -219,9 +217,9 @@ def _street_lines(ref: Reference) -> dict:
         for street, name, g in zip(s["street"], sn, s.geometry):
             if g is not None and not g.is_empty:
                 groups.setdefault(_street_name(street, name), []).append(g)
-        _STREET_LINES.clear()
-        _STREET_LINES[key] = {k: unary_union(v) for k, v in groups.items() if k}
-    return _STREET_LINES[key]
+        out = {k: unary_union(v) for k, v in groups.items() if k}
+    ref._street_lines_cache = out
+    return out
 
 
 def street_snap(fit: RoughFit, labels: list[Label], ref: Reference) -> RoughFit:

@@ -184,3 +184,25 @@ def test_street_snap_leaves_block_anchored_fit_alone():
     fit = anchors.rough_fit(anchors.match_labels(sheet.labels, _ref(blocks)))
     assert sum(c.kind == "block" for c in fit.inliers) >= anchors.SNAP_MAX_BLOCKS
     assert anchors.street_snap(fit, sheet.labels, _street_ref()) is fit
+
+
+def test_street_lines_cache_not_shared_between_references():
+    import gc
+
+    from shapely.geometry import LineString
+
+    def ref(name):
+        s = gpd.GeoDataFrame([{"street": name, "streetname": name + " ST", "active": "true",
+                               "geometry": LineString([(0, 0), (1, 1)])}],
+                             geometry="geometry", crs="EPSG:2227")
+        return Reference(_grid_blocks(1), None, None, s)
+
+    seen = []
+    for name in ("AAA", "BBB", "CCC", "DDD"):
+        r = ref(name)
+        lines = anchors._street_lines(r)
+        assert list(lines) == [anchors.normalize_street(name + " ST")] or len(lines) == 1
+        seen.append(set(lines))
+        del r, lines
+        gc.collect()
+    assert len({frozenset(s) for s in seen}) == 4
