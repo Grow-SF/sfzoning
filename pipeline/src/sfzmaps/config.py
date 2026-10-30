@@ -18,6 +18,11 @@ PASS_FRACTION = 0.95  # superseded as the pass rule (owner, 2026-10-29); TOLERAN
 # p95 <= PASS_P95_FT, and the sheet is not misplaced (sfzmaps.score).
 PASS_MEDIAN_FT = 5.0
 PASS_P95_FT = 12.0
+# Scale-aware pass bar (owner, 2026-10-29): corner error is roughly constant in scan pixels,
+# and the 1980+ office-copier scans are coarser (~4 ft/px vs ~2.7 ft/px for 1929-75). Both
+# limits are multiplied by k = max(1, ft_per_px / PASS_REF_FT_PER_PX), where ft_per_px is
+# the sheet's final transform scale (median local scale; sfzmaps.score.pass_limits).
+PASS_REF_FT_PER_PX = 2.7
 # Misplacement detector (sfzmaps.placement / score). A sheet is misplaced when
 #  * fewer than MISPLACED_MIN_INLIER_FRAC of its corners are inliers (geometry alone); or
 #  * fewer than MISPLACED_MAX_LABEL_AGREEMENT of its "local" labels (within
@@ -128,4 +133,5 @@ def estimate_image_tokens(w: int, h: int) -> int:
 
 # score.json format/logic version: bump whenever pass or answer-key-fallback logic changes;
 # a score.json with a missing or lower version is stale and rescored.
-SCORE_VERSION = 3  # 3: Task 13c misplacement rule (label failure needs weak geometry)
+SCORE_VERSION = 4  # 3: Task 13c misplacement rule (label failure needs weak geometry)
+                   # 4: scale-aware pass limits (PASS_REF_FT_PER_PX)

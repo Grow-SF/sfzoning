@@ -221,3 +221,48 @@ def test_holdout_uses_direct_distances_for_manual_transform():
     P = np.array([[m.px, m.py] for m in res.matches])
     W = np.array([[m.wx, m.wy] for m in res.matches])
     assert np.allclose(h, np.linalg.norm(manual.to_world(P) - W, axis=1))
+
+
+# -- scale-aware pass bar (owner, 2026-10-29) ------------------------------------------
+
+def test_pass_limits_scale_with_coarse_scans():
+    assert config.PASS_REF_FT_PER_PX == 2.7
+    k, l50, l95 = score.pass_limits(4.0)
+    assert k == pytest.approx(4.0 / 2.7)
+    assert l50 == pytest.approx(5.0 * 4.0 / 2.7) and l95 == pytest.approx(12.0 * 4.0 / 2.7)
+
+
+def test_coarse_sheet_with_7ft_median_passes():
+    s = score.score(_result(_dists(7.0, 15.0)), ft_per_px=4.0)
+    assert s.passed is True and s.reason is None
+    assert s.ft_per_px == 4.0 and s.pass_scale_k == pytest.approx(4.0 / 2.7)
+    assert s.pass_median_limit_ft == pytest.approx(7.407, abs=1e-3)
+    assert s.pass_p95_limit_ft == pytest.approx(17.778, abs=1e-3)
+
+
+def test_fine_sheet_uses_k_1():
+    s = score.score(_result(_dists(5.5, 10.0)), ft_per_px=2.5)
+    assert s.pass_scale_k == 1.0 and s.pass_median_limit_ft == 5.0 and s.pass_p95_limit_ft == 12.0
+    assert s.passed is False and s.reason == "holdout_median"
+
+
+def test_scaled_boundary():
+    fpp = 3.24                       # k = 1.2: limits 6 ft and 14.4 ft
+    k, l50, l95 = score.pass_limits(fpp)
+    assert (k, l50, l95) == pytest.approx((1.2, 6.0, 14.4))
+    assert score.score(_result(_dists(l50, l95)), ft_per_px=fpp).passed is True
+    assert score.score(_result(_dists(l50 + 0.01, l95)), ft_per_px=fpp).reason == "holdout_median"
+    assert score.score(_result(_dists(l50, l95 + 0.01)), ft_per_px=fpp).reason == "holdout_p95"
+    assert score.score(_result(_dists(5.0, 12.0)), ft_per_px=2.7).passed is True   # k = 1 exactly
+
+
+def test_unknown_scale_uses_k_1():
+    s = score.score(_result(_dists(5.0, 12.0)))     # transform None: ft_per_px NaN
+    assert math.isnan(s.ft_per_px) and s.pass_scale_k == 1.0 and s.passed is True
+
+
+def test_sheet_ft_per_px_from_transform():
+    gcps = [GCP(x, y, 3.0 * x, -3.0 * y, "auto") for x in (0, 500, 1000) for y in (0, 500, 1000)]
+    t = SheetTransform(gcps, smoothing=1.0)
+    assert score.sheet_ft_per_px(t, (1001, 1001)) == pytest.approx(3.0, rel=1e-3)
+    assert score.sheet_ft_per_px(t) == pytest.approx(3.0, rel=1e-3)

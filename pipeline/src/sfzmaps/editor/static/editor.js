@@ -360,10 +360,12 @@ function renderScore() {
   const set = (id, v, lim, was) => {
     const el = $(id); el.querySelector(".v").textContent = fmt(v);
     el.classList.toggle("ok", v != null && v <= lim); el.classList.toggle("bad", v == null || v > lim);
-    el.querySelector(".rule").textContent = `≤ ${lim} ft` + (was != null && was !== v && isFinite(was) ? ` · was ${fmt(was)}` : "");
+    el.querySelector(".rule").textContent = `≤ ${fmt(lim)} ft` + (was != null && was !== v && isFinite(was) ? ` · was ${fmt(was)}` : "");
   };
-  set("m-p50", sc && sc.holdout_p50_ft, PASS_P50, base && base.holdout_p50_ft);
-  set("m-p95", sc && sc.holdout_p95_ft, PASS_P95, base && base.holdout_p95_ft);
+  // the limits the pipeline actually applied (scale-aware: PASS x k on coarse scans)
+  const lim = (k, dflt) => (sc && sc[k] != null ? +sc[k] : dflt);
+  set("m-p50", sc && sc.holdout_p50_ft, lim("pass_median_limit_ft", PASS_P50), base && base.holdout_p50_ft);
+  set("m-p95", sc && sc.holdout_p95_ft, lim("pass_p95_limit_ft", PASS_P95), base && base.holdout_p95_ft);
   const v = $("verdict"); v.textContent = !sc ? "–" : sc.passed ? "PASS" : "FAIL";
   v.className = "verdict" + (sc ? (sc.passed ? " ok" : " bad") : "");
   $("reason").textContent = sc && sc.reason ? sc.reason : "";

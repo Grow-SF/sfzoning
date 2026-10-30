@@ -67,6 +67,14 @@ will show **both** the actual scans and the redrawn zoning.
   ≤ 5 ft AND 95% of corners within 12 ft, AND the sheet is not misplaced. Every
   other sheet goes to human review. Exact zoning boundaries remain step two's job
   (snapping to modern lot lines).
+- **Scale-aware pass bar (owner's decision, 2026-10-29).** Corner error is roughly
+  constant in scan pixels, and the 1980+ PDFs are coarse office-copier scans (~4 ft/px,
+  against ~2.7 ft/px for 1929–75), so a fixed limit in feet would fail them for the
+  scan, not the fit. Both limits are therefore multiplied by
+  `k = max(1, ft_per_px / 2.7)`, where `ft_per_px` is the sheet's final transform scale
+  (median local scale over the page): a 4 ft/px sheet passes at median ≤ 7.4 ft and
+  p95 ≤ 17.8 ft; sheets at 2.7 ft/px or finer keep 5 ft / 12 ft. Each score records
+  `ft_per_px`, `k` and the limits applied, and the review page and editor show them.
 - The pipeline measures this itself: for each sheet, distance from the aligned
   scan's block corners/edges to the matching modern ones (excluding real
   change), reported as summary stats (e.g. "95% of block corners within 5 ft,

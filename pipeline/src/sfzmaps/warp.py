@@ -214,17 +214,7 @@ def make_rgba(img: np.ndarray, mask_boxes: list[Box], excl: np.ndarray | None = 
 
 def median_scale_ft_per_px(t: SheetTransform, shape: tuple[int, int], step: int = GRID_STEP) -> float:
     """Median world distance (ft) per pixel between adjacent dense-grid GCPs."""
-    gs = t.dense_grid(shape, step)
-    h, w = shape
-    nx = len({round(g.px) for g in gs})
-    P = np.array([[g.px, g.py] for g in gs]).reshape(-1, nx, 2)
-    W = np.array([[g.wx, g.wy] for g in gs]).reshape(-1, nx, 2)
-    ratios = []
-    for ax in (0, 1):
-        dp = np.linalg.norm(np.diff(P, axis=ax), axis=2)
-        dw = np.linalg.norm(np.diff(W, axis=ax), axis=2)
-        ratios.append((dw / np.maximum(dp, 1e-9)).ravel())
-    return float(np.median(np.concatenate(ratios)))
+    return t.median_scale_ft_per_px(shape, step)
 
 
 def _write_footprint(path: Path, geom) -> None:

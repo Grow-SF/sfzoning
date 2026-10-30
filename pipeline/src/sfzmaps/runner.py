@@ -167,7 +167,22 @@ def _score_load(d: dict) -> SheetScore:
                       False if stale else d["passed"], "stale_score" if stale else d["reason"],
                       g("holdout_p50_ft"), g("holdout_p95_ft"),
                       d.get("n_holdout", 0), g("label_agreement"), g("inlier_frac"),
-                      g("label_agreement_local"))
+                      g("label_agreement_local"), g("ft_per_px"),
+                      d.get("pass_scale_k") or 1.0,
+                      d.get("pass_median_limit_ft") or config.PASS_MEDIAN_FT,
+                      d.get("pass_p95_limit_ft") or config.PASS_P95_FT)
+
+
+def page_shape(png: Path) -> tuple[int, int] | None:
+    """(h, w) of a page image, read from its header only; None if unreadable."""
+    try:
+        from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None
+        with Image.open(png) as im:
+            w, h = im.size
+        return int(h), int(w)
+    except Exception:  # noqa: BLE001 - missing or unreadable: score falls back to GCP extent
+        return None
 
 
 # -- answer key ------------------------------------------------------------------------
@@ -273,7 +288,8 @@ def score_review(t: SheetTransform, refine_json: Path, ref: Reference | None,
     if labels_json is not None and Path(labels_json).exists() and ref is not None:
         from sfzmaps import placement
         agreement = placement.label_agreement(t, reading.load_labels(labels_json), ref)
-    return score_mod.score(res, agreement=agreement)
+    return score_mod.score(res, agreement=agreement,
+                           shape=page_shape(Path(refine_json).parent / "page.png"))
 
 
 # -- the runner ------------------------------------------------------------------------
@@ -473,7 +489,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             else:
                 t_ = SheetTransform.from_json(tdata)
             res = _result_load(json.loads(rfj.read_text()), ref, t_)
-            sc = score_mod.score(res, agreement=agreement(t_))
+            sc = score_mod.score(res, agreement=agreement(t_), shape=page_shape(png))
             gcps = None
             if sc.reason == "misplaced":
                 # The auto transform is in the wrong place; a sheet with an owner key is

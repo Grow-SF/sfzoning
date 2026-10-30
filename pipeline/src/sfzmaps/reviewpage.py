@@ -107,7 +107,8 @@ def write(series: str) -> Path:
             "pmtiles": m.get("pmtiles", f"{series}.pmtiles"),
             "blocks": "../ref/blocks.pmtiles" if blocks else None,
             "changes": "changes.wgs84.geojson", "sheets": sheets,
-            "pass_median_ft": config.PASS_MEDIAN_FT, "pass_p95_ft": config.PASS_P95_FT}
+            "pass_median_ft": config.PASS_MEDIAN_FT, "pass_p95_ft": config.PASS_P95_FT,
+            "pass_ref_ft_per_px": config.PASS_REF_FT_PER_PX}
     blob = json.dumps(data).replace("</", "<\\/")
     html = (TEMPLATE.read_text().replace("__TITLE__", f"SF zoning {series} review")
             .replace("__CREDIT__", _esc(m.get("credit") or "")).replace("__DATA__", blob))

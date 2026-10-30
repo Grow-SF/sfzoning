@@ -207,6 +207,19 @@ class SheetTransform:
         return [GCP(float(p[0]), float(p[1]), float(q[0]), float(q[1]), "auto")
                 for p, q in zip(P, W)]
 
+    def median_scale_ft_per_px(self, shape: tuple[int, int], step: int = 150) -> float:
+        """Median world distance (ft) per pixel between adjacent dense-grid points over (h, w)."""
+        gs = self.dense_grid(shape, step)
+        nx = len({round(g.px) for g in gs})
+        P = np.array([[g.px, g.py] for g in gs]).reshape(-1, nx, 2)
+        W = np.array([[g.wx, g.wy] for g in gs]).reshape(-1, nx, 2)
+        ratios = []
+        for ax in (0, 1):
+            dp = np.linalg.norm(np.diff(P, axis=ax), axis=2)
+            dw = np.linalg.norm(np.diff(W, axis=ax), axis=2)
+            ratios.append((dw / np.maximum(dp, 1e-9)).ravel())
+        return float(np.median(np.concatenate(ratios)))
+
     # -- serialization -----------------------------------------------------
     def to_json(self) -> dict:
         return {"smoothing": self.smoothing, "gcps": [asdict(g) for g in self.gcps]}

@@ -4,6 +4,12 @@ Pass rule (owner, 2026-10-29, after Task 13): measured on HELD-OUT blocks, the m
 corner error is <= config.PASS_MEDIAN_FT and the 95th percentile is <= config.PASS_P95_FT,
 and the sheet is not misplaced (plus the fit-health guards below).
 
+Scale-aware limits (owner, 2026-10-29): both limits are multiplied by
+k = max(1, ft_per_px / config.PASS_REF_FT_PER_PX), because corner error is roughly constant
+in scan pixels and the 1980+ office-copier scans are coarser. ft_per_px is the final
+transform's median local scale over the page (sheet_ft_per_px), computed once per score and
+stored with the applied limits (pass_limits).
+
 Scored corners are refine matches labelled inlier or outlier. real_change (the historic
 geometry really differs from today's; kept on purpose) and no_equivalent (nothing modern
 to compare against) are counted but never scored. dist_ft is the distance from the scan
@@ -43,8 +49,8 @@ reason, first that applies (this order is the precedence); passed exactly when N
   * "excess_real_change"   - n_real_change > config.MAX_REAL_CHANGE_FRAC x
                              (n_scored + n_real_change): a systematic misfit looks like
                              real change;
-  * "holdout_median"       - held-out median > config.PASS_MEDIAN_FT;
-  * "holdout_p95"          - held-out 95th percentile > config.PASS_P95_FT.
+  * "holdout_median"       - held-out median > config.PASS_MEDIAN_FT x k;
+  * "holdout_p95"          - held-out 95th percentile > config.PASS_P95_FT x k.
 Percentiles are NaN when nothing is scored.
 """
 from __future__ import annotations
@@ -79,6 +85,10 @@ class SheetScore:
     label_agreement: float = float("nan")   # sfzmaps.placement share (NaN: not checked)
     inlier_frac: float = float("nan")       # inliers / finite scan corners
     label_agreement_local: float = float("nan")   # placement local_fraction (NaN: not checked)
+    ft_per_px: float = float("nan")         # final transform's median local scale (NaN: unknown)
+    pass_scale_k: float = 1.0               # max(1, ft_per_px / PASS_REF_FT_PER_PX)
+    pass_median_limit_ft: float = config.PASS_MEDIAN_FT   # the limits actually applied
+    pass_p95_limit_ft: float = config.PASS_P95_FT
 
     @classmethod
     def empty(cls, reason: str) -> "SheetScore":
@@ -153,16 +163,44 @@ def is_misplaced(agreement, inlier_frac: float) -> bool:
     return bool(weak and fails(agreement.fraction, agreement.n))
 
 
+def pass_limits(ft_per_px: float) -> tuple[float, float, float]:
+    """(k, median limit ft, p95 limit ft) for a sheet at ft_per_px; k = 1 when unknown."""
+    k = max(1.0, ft_per_px / config.PASS_REF_FT_PER_PX) if np.isfinite(ft_per_px) else 1.0
+    return k, config.PASS_MEDIAN_FT * k, config.PASS_P95_FT * k
+
+
+def sheet_ft_per_px(t: SheetTransform | None, shape: tuple[int, int] | None = None) -> float:
+    """Median local scale (ft/px) of transform t over the page (h, w); without shape, over
+    the box from the origin to its furthest enabled GCP. NaN when it cannot be measured."""
+    if t is None:
+        return float("nan")
+    try:
+        if shape is None:
+            P = np.array([[g.px, g.py] for g in t.gcps if g.enabled], float)
+            if len(P) < 3:
+                return float("nan")
+            shape = (int(P[:, 1].max()) + 1, int(P[:, 0].max()) + 1)
+        return t.median_scale_ft_per_px(shape)
+    except (ValueError, np.linalg.LinAlgError):
+        return float("nan")
+
+
 def _q(d: np.ndarray, q: float) -> float:
     return float(np.quantile(d, q)) if len(d) else float("nan")
 
 
 def score(result: RefineResult | None, tol_ft: float | None = None, min_scored: int = 40,
-          agreement=None) -> SheetScore:
+          agreement=None, ft_per_px: float | None = None,
+          shape: tuple[int, int] | None = None) -> SheetScore:
     """agreement: an sfzmaps.placement.Agreement for the final transform, or None (not
-    checked). tol_ft only sets the display share insample_frac_within."""
+    checked). tol_ft only sets the display share insample_frac_within. ft_per_px: the sheet
+    scale for the pass limits; when None it is measured from result.transform over the page
+    shape (h, w) (sheet_ft_per_px)."""
     if result is None:
         return SheetScore.empty("insufficient_anchors")
+    if ft_per_px is None:
+        ft_per_px = sheet_ft_per_px(result.transform, shape)
+    k, lim50, lim95 = pass_limits(ft_per_px)
     tol = config.TOLERANCE_FT if tol_ft is None else tol_ft
     labels = [m.label for m in result.matches]
     d = np.array([m.dist_ft for m in result.matches if m.label in ("inlier", "outlier")], float)
@@ -186,13 +224,14 @@ def score(result: RefineResult | None, tol_ft: float | None = None, min_scored: 
         reason = "too_few_matches"
     elif n_rc > config.MAX_REAL_CHANGE_FRAC * (n + n_rc):
         reason = "excess_real_change"
-    elif hp50 > config.PASS_MEDIAN_FT:
+    elif hp50 > lim50:
         reason = "holdout_median"
-    elif hp95 > config.PASS_P95_FT:
+    elif hp95 > lim95:
         reason = "holdout_p95"
     else:
         reason = None
     return SheetScore(n, frac, _q(d, 0.5), _q(d, 0.95), float(d.max()) if n else float("nan"),
                       n_rc, labels.count("no_equivalent"), reason is None, reason,
                       hp50, hp95, len(h), agree, inl_frac,
-                      float("nan") if agreement is None else float(agreement.local_fraction))
+                      float("nan") if agreement is None else float(agreement.local_fraction),
+                      float(ft_per_px), k, lim50, lim95)

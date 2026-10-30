@@ -59,7 +59,10 @@ const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':
 if (!D.credit) document.getElementById('credit').remove();
 document.getElementById('title').textContent = 'SF zoning ' + D.series + ' review';
 document.getElementById('rule').textContent =
-  'Pass: held-out median <= ' + D.pass_median_ft + ' ft and p95 <= ' + D.pass_p95_ft + ' ft, not misplaced.';
+  'Pass: held-out median <= ' + D.pass_median_ft + ' ft and p95 <= ' + D.pass_p95_ft +
+  ' ft at ' + D.pass_ref_ft_per_px + ' ft/px, scaled up by k = max(1, ft/px / ' + D.pass_ref_ft_per_px + ') on coarser scans; not misplaced.';
+const lim50 = s => s.pass_median_limit_ft != null ? s.pass_median_limit_ft : D.pass_median_ft;
+const lim95 = s => s.pass_p95_limit_ft != null ? s.pass_p95_limit_ft : D.pass_p95_ft;
 
 const proto = new pmtiles.Protocol();
 maplibregl.addProtocol('pmtiles', proto.tile);
@@ -111,7 +114,9 @@ function select(s, tr) {
   const info = document.getElementById('info');
   info.style.display = 'block';
   info.innerHTML = '<b>Sheet ' + esc(s.sheet_id) + '</b> <span class="st ' + esc(s.status) + '">' + esc(s.status) + '</span><br>' +
-    'held-out p50 ' + ft(s.holdout_p50_ft) + ' ft, p95 ' + ft(s.holdout_p95_ft) + ' ft' +
+    'held-out p50 ' + ft(s.holdout_p50_ft) + ' ft (&le; ' + ft(lim50(s)) + ' ft), p95 ' + ft(s.holdout_p95_ft) +
+    ' ft (&le; ' + ft(lim95(s)) + ' ft)' +
+    (s.ft_per_px != null ? '<br>scale ' + s.ft_per_px.toFixed(2) + ' ft/px, k ' + (s.pass_scale_k || 1).toFixed(2) : '') +
     (s.reason ? '<br><span class="reason">' + esc(s.reason) + '</span>' : '') +
     (s.answer_key_fallback ? '<br><span class="badge">answer key</span> aligned from the owner\'s control points' : '') +
     (s.editor_url ? '<br><a href="' + esc(s.editor_url) + '" target="_blank">Open in editor</a>' : '');
