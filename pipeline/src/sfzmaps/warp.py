@@ -74,6 +74,10 @@ RAMP_COLOR = 40
 SAT_PAPER = 0.15
 SAT_RAMP = 0.10
 GRID_STEP = 150
+# Paper mode: the 1-bit scans' white is shown as this cream, the 1948 atlas photos' own paper
+# (median of the light pixels of 1948/1, /4, /10), so every era sits on the same paper.
+# Ink stays black: each pixel is gray/255 x PAPER_TINT, a multiply, nothing else changes.
+PAPER_TINT = (245, 240, 229)
 NEATLINE_INSET_PX = 60
 FOOTPRINT_CLOSE_PX = 41   # closing kernel for the content footprint (about 0.7 in on a 6000 px scan)
 FOOTPRINT_MAX_PX = 1000   # footprint contours are traced on a copy at most this many px wide
@@ -204,11 +208,15 @@ def make_rgba(img: np.ndarray, mask_boxes: list[Box], excl: np.ndarray | None = 
               paper: bool = False) -> np.ndarray:
     """(h, w, 4) uint8 RGBA, alpha 0 for paper, outside the neatline (stroke included) and
     in mask boxes.  With `paper`, the page is kept as scanned: opaque everywhere inside the
-    neatline interior (outside mask boxes), RGB untouched."""
+    neatline interior (outside mask boxes); colour pages untouched, gray pages multiplied
+    onto PAPER_TINT (white -> cream, black stays black)."""
     if excl is None:
         excl = inset_exclusion(img, mask_boxes)
     rgb = img[..., ::-1] if img.ndim == 3 else np.repeat(img[..., None], 3, axis=2)
     if paper:
+        if img.ndim == 2:
+            tint = np.asarray(PAPER_TINT, np.float32) / 255.0
+            rgb = np.round(img[..., None].astype(np.float32) * tint).astype(np.uint8)
         return np.dstack([np.ascontiguousarray(rgb), np.where(excl, 0, 255).astype(np.uint8)])
     alpha = paper_alpha(img, ~excl if (~excl).any() else None)
     alpha[excl] = 0

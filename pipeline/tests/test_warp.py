@@ -283,13 +283,22 @@ def test_footprint_falls_back_to_neatline_on_failure(monkeypatch, caplog):
 
 
 def test_paper_mode_keeps_the_page_as_scanned():
-    """Paper mode: paper is opaque and untouched inside the neatline; the frame, the inset band
-    and mask boxes are still transparent."""
+    """Paper mode: paper is opaque inside the neatline and gray tones are multiplied onto the
+    cream tint; the frame, the inset band and mask boxes are still transparent."""
     img = _bordered()
     img[400:420, 400:420] = 200   # light grey paper tone, would be transparent without paper
     rgba = warp.make_rgba(img, [Box(x0=1000, y0=900, x1=1100, y1=1000)], paper=True)
     a, rgb = rgba[..., 3], rgba[..., :3]
-    assert a[400:420, 400:420].min() == 255 and rgb[400:420, 400:420].min() == 200
-    assert a[600:700, 700:900].min() == 255 and rgb[600:700, 700:900].max() == 0   # ink unchanged
+    assert a[400:420, 400:420].min() == 255
+    assert tuple(rgb[300, 300]) == warp.PAPER_TINT                                # white -> cream
+    assert tuple(rgb[410, 410]) == tuple(round(200 * c / 255) for c in warp.PAPER_TINT)
+    assert a[600:700, 700:900].min() == 255 and rgb[600:700, 700:900].max() == 0   # ink stays black
     assert a[:150].max() == 0                         # frame stroke (rows 94-106) and inset cut away
     assert a[900:1000, 1000:1100].max() == 0                                      # mask box
+
+
+def test_paper_mode_leaves_colour_pages_untouched():
+    img = np.full((1600, 1800, 3), (231, 242, 246), np.uint8)   # BGR paper of a 1948 photo
+    cv2.rectangle(img, (100, 100), (1700, 1500), (0, 0, 0), 12)
+    rgba = warp.make_rgba(img, [], paper=True)
+    assert tuple(rgba[800, 900, :3]) == (246, 242, 231)
