@@ -210,6 +210,76 @@ def tiles(
         raise typer.Exit(1)
 
 
+@app.command()
+def districts(
+    series: str = typer.Option(None, "--series", help="Series (e.g. 1948, 1960-zoning) or `today`."),
+    all_: bool = typer.Option(False, "--all", help="Every district series, plus today."),
+    sheet: list[str] = typer.Option(None, "--sheet", help="Only these sheet ids (testing; publishes "
+                                                         "a partial series)."),
+    validate: bool = typer.Option(False, "--validate", help="2000-digital-zoning vs DataSF today."),
+) -> None:
+    """Read zoning districts per parcel, join the rules, publish out/<series>/districts/."""
+    import json
+    import logging
+
+    import pandas as pd
+
+    from sfzmaps import llm, reviewpage
+    from sfzmaps.districts import assemble
+    from sfzmaps.districts.series import SERIES
+
+    if not (series or all_ or validate):
+        raise typer.BadParameter("pass --series S, --all or --validate")
+    if series and series != "today" and SERIES.get(series, None) is None:
+        raise typer.BadParameter(f"unknown series {series!r}")
+    if series and series != "today" and SERIES[series].role == "skip":
+        raise typer.BadParameter(f"{series}: special-use series are out of scope")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    todo = [s for s, i in SERIES.items() if i.role != "skip"] + ["today"] if all_ else \
+        ([series] if series else [])
+    live0, in0, out0 = llm.CallCounter.live, llm.CallCounter.in_tokens, llm.CallCounter.out_tokens
+    failures: list[tuple[str, str]] = []
+    for s in todo:
+        try:
+            d = assemble.run_series(s, sheets=sheet or None)
+            st = d / "stats.json"
+            if st.exists():
+                j = json.loads(st.read_text())
+                typer.echo(f"{s}: {d} (unknown share {j['unknown_share']:.1%})")
+            else:
+                typer.echo(f"{s}: {d}")
+            page = s if s == "today" or SERIES[s].role != "height" else assemble.zoning_series_of(s)
+            if page != "today":
+                try:
+                    typer.echo(f"{page}: review page {reviewpage.write(page)}")
+                except Exception as e:  # noqa: BLE001 - the review page is optional
+                    typer.echo(f"{page}: review page skipped ({type(e).__name__}: {e})", err=True)
+        except Exception as e:  # noqa: BLE001 - one failing series must not stop the others
+            logging.getLogger(__name__).exception("series %s failed", s)
+            failures.append((s, f"{type(e).__name__}: {e}"))
+    if todo:
+        tin, tout = llm.CallCounter.in_tokens - in0, llm.CallCounter.out_tokens - out0
+        usd = tin * config.PRICE_IN_PER_M / 1e6 + tout * config.PRICE_OUT_PER_M / 1e6
+        typer.echo(f"live vision calls: {llm.CallCounter.live - live0} "
+                   f"({tin:,} in / {tout:,} out tokens, ~${usd:.2f})")
+    if validate:
+        try:
+            from sfzmaps.districts import validate as val
+        except ImportError:
+            typer.echo("error: validation is not implemented yet (districts/validate.py)", err=True)
+            raise typer.Exit(1)
+        import geopandas as gpd
+
+        a, b = (pd.DataFrame(gpd.read_file(assemble.out_dir(s) / "parcels.fgb").drop(columns="geometry"))
+                for s in ("2000-digital-zoning", "today"))
+        typer.echo(json.dumps(val.agreement(a, b), indent=1, default=str))
+    if failures:
+        typer.echo(f"{len(failures)} series failed:", err=True)
+        for s, msg in failures:
+            typer.echo(f"  {s}: {msg[:300]}", err=True)
+        raise typer.Exit(1)
+
+
 @app.command("eval")
 def eval_(
     year: str = typer.Option(..., "--year", help="Series with an answer key: 1948 or 1960."),

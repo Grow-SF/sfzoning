@@ -42,6 +42,12 @@
     <label><input id="showblocks" type="checkbox" checked> Modern block outlines</label>
     <label><input id="showchanges" type="checkbox" checked> Change areas</label>
     <div class="key"><span style="background:#ff7a00"></span>real change<span style="background:#00a0e0"></span>no modern equivalent</div>
+    <div id="dctl" style="display:none">
+      <label><input id="showdistricts" type="checkbox" checked> Zoning districts (fill by category)</label>
+      <label>District opacity <input id="dop" type="range" min="0" max="100" value="55"> <span id="dopv">55</span>%</label>
+      <div class="key" id="dkey"></div>
+      <div class="key"><span style="background:transparent;border:2px dashed #e00000"></span>low confidence</div>
+    </div>
     <div class="reason" id="rule"></div>
   </div>
   <table><thead><tr><th>Sheet</th><th>Status</th><th>Held-out p50 / p95 (ft)</th></tr></thead><tbody id="rows"></tbody></table>
@@ -79,6 +85,13 @@ const opacity0 = Q.get('opacity') != null ? Number(Q.get('opacity')) : 70;
 document.getElementById('op').value = opacity0;
 document.getElementById('opv').textContent = opacity0;
 
+const dop0 = 55;
+if (D.districts) {
+  document.getElementById('dctl').style.display = 'block';
+  document.getElementById('dkey').innerHTML = Object.entries(D.district_colors)
+    .map(([k, v]) => '<b style="font-weight:normal;white-space:nowrap"><span style="background:' + v + '"></span>' +
+         esc(k.replace('_', ' ')) + '</b>').join(' ');
+}
 map.on('load', () => {
   map.addSource('scan', { type: 'raster', url: 'pmtiles://' + abs(D.pmtiles), tileSize: 256 });
   map.addLayer({ id: 'scan', type: 'raster', source: 'scan', paint: { 'raster-opacity': opacity0 / 100 } });
@@ -86,6 +99,27 @@ map.on('load', () => {
     map.addSource('blocks', { type: 'vector', url: 'pmtiles://' + abs(D.blocks) });
     map.addLayer({ id: 'blocks', type: 'line', source: 'blocks', 'source-layer': 'blocks',
                    paint: { 'line-color': '#d0006f', 'line-width': 1.2 } });
+  }
+  if (D.districts) {
+    const colors = ['match', ['get', 'category']];
+    Object.entries(D.district_colors).forEach(([k, v]) => colors.push(k, v));
+    colors.push(D.district_colors.unknown);
+    map.addSource('districts', { type: 'vector', url: 'pmtiles://' + abs(D.districts) });
+    map.addLayer({ id: 'district-fill', type: 'fill', source: 'districts', 'source-layer': 'parcels',
+                   paint: { 'fill-color': colors, 'fill-opacity': dop0 / 100 } });
+    map.addLayer({ id: 'district-edge', type: 'line', source: 'districts', 'source-layer': 'districts',
+                   paint: { 'line-color': '#222', 'line-width': 1.4 } });
+    map.addLayer({ id: 'district-low', type: 'line', source: 'districts', 'source-layer': 'parcels',
+                   filter: ['<', ['coalesce', ['get', 'confidence'], 0], D.low_confidence],
+                   paint: { 'line-color': '#e00000', 'line-width': 1.6, 'line-dasharray': [2, 1.5] } });
+    map.on('click', 'district-fill', e => {
+      const p = e.features[0].properties;
+      const info = document.getElementById('info');
+      info.style.display = 'block';
+      info.innerHTML = '<b>Parcel ' + esc(p.blklot) + '</b><br>code ' + esc(p.code || 'none') +
+        (p.height_code ? ' / height ' + esc(p.height_code) : '') + '<br>' + esc(p.category) +
+        ', confidence ' + (p.confidence != null ? Number(p.confidence).toFixed(2) : 'n/a');
+    });
   }
   map.addSource('changes', { type: 'geojson', data: D.changes });
   map.addLayer({ id: 'noeq', type: 'fill', source: 'changes', filter: ['==', ['get', 'kind'], 'no_equivalent'],
@@ -99,8 +133,13 @@ document.getElementById('op').oninput = e => {
   document.getElementById('opv').textContent = e.target.value;
   if (map.getLayer('scan')) map.setPaintProperty('scan', 'raster-opacity', e.target.value / 100);
 };
+document.getElementById('dop').oninput = e => {
+  document.getElementById('dopv').textContent = e.target.value;
+  if (map.getLayer('district-fill')) map.setPaintProperty('district-fill', 'fill-opacity', e.target.value / 100);
+};
 const vis = (ids, on) => ids.forEach(i => map.getLayer(i) && map.setLayoutProperty(i, 'visibility', on ? 'visible' : 'none'));
 document.getElementById('showblocks').onchange = e => vis(['blocks'], e.target.checked);
+document.getElementById('showdistricts').onchange = e => vis(['district-fill', 'district-edge', 'district-low'], e.target.checked);
 document.getElementById('showchanges').onchange = e => vis(['noeq', 'real'], e.target.checked);
 
 const tbody = document.getElementById('rows');

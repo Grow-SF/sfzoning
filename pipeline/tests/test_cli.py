@@ -32,3 +32,35 @@ def test_cli_run_all_continues_past_a_failing_series(monkeypatch):
     monkeypatch.setattr(cli, "_publish", lambda *a: stitch.load_scores("b"))
     res = CliRunner().invoke(cli.app, ["tiles", "--year", "b"])
     assert res.exit_code == 1 and "error: CalledProcessError" in res.output
+
+
+def test_cli_districts_series_and_all(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli, reviewpage
+    from sfzmaps.districts import assemble
+    from sfzmaps.districts.series import SERIES
+
+    ran, pages = [], []
+    monkeypatch.setattr(assemble, "run_series",
+                        lambda s, **k: ran.append((s, k.get("sheets"))) or tmp_path)
+    monkeypatch.setattr(reviewpage, "write", lambda s: pages.append(s) or tmp_path / "review.html")
+    res = CliRunner().invoke(cli.app, ["districts", "--series", "1948", "--sheet", "1"])
+    assert res.exit_code == 0, res.output
+    assert ran == [("1948", ["1"])] and pages == ["1948"]
+
+    ran.clear(), pages.clear()
+    res = CliRunner().invoke(cli.app, ["districts", "--series", "today"])
+    assert res.exit_code == 0 and ran == [("today", None)] and pages == []
+
+    ran.clear(), pages.clear()
+    res = CliRunner().invoke(cli.app, ["districts", "--all"])
+    assert res.exit_code == 0, res.output
+    names = [s for s, _ in ran]
+    assert set(names) == {s for s, i in SERIES.items() if i.role != "skip"} | {"today"}
+    assert "2000-digital-zoning" in pages and "2000-digital-height" not in pages
+
+    res = CliRunner().invoke(cli.app, ["districts", "--series", "2000-digital-su"])
+    assert res.exit_code != 0
+    res = CliRunner().invoke(cli.app, ["districts"])
+    assert res.exit_code != 0
