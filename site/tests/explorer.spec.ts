@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { centerStep } from "./helpers";
 
 const TILES = process.env.NEXT_PUBLIC_TILES_BASE_URL ?? "http://127.0.0.1:8787";
-const CREDIT = "© Cartography Associates, David Rumsey Map Collection";
+const CREDIT = "David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries";
 
 
 async function tilesExist(page: Page, path: string) {

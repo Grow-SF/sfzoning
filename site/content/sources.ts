@@ -61,7 +61,7 @@ export const SOURCES: Record<string, Source> = {
   },
   "rumsey-1948-atlas": {
     short: "1948 Zoning Map Book, David Rumsey Map Collection",
-    title: "Zoning Map Book, San Francisco, 1948. © Cartography Associates, David Rumsey Map Collection",
+    title: "Zoning Map Book, San Francisco, 1948. David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries",
     kind: "primary",
     note: "Source of the 1948 map images.",
   },

@@ -1,6 +1,6 @@
 import styles from "./endmatter.module.css";
 
-export const RUMSEY_CREDIT = "© Cartography Associates, David Rumsey Map Collection";
+export const RUMSEY_CREDIT = "David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries";
 
 export default function Credits() {
   return (
@@ -10,7 +10,8 @@ export default function Credits() {
       </h2>
       <ul className={styles.credits}>
         <li>
-          <strong>1948 zoning atlas:</strong> {RUMSEY_CREDIT}.
+          <strong>1948 zoning atlas:</strong> {RUMSEY_CREDIT}, licensed{" "}
+          <a href="https://creativecommons.org/licenses/by-nc-sa/3.0/">CC BY-NC-SA 3.0</a>.
         </li>
         <li>
           <strong>1921–2000 zoning maps:</strong> scanned from the San Francisco Planning Department’s map books on

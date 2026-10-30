@@ -70,7 +70,7 @@ VISION_CONCURRENCY = 8
 
 ROOT_FOLDER_ID = "10p74RwqmzeQFBrBqjxXdmEOUREx0BLgO"
 
-RUMSEY_CREDIT = "© Cartography Associates, David Rumsey Map Collection"
+RUMSEY_CREDIT = "David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries"
 
 # Per-series scale for label reading (calibrated in Task 5); default 0.5.
 LABEL_SCALE: dict[str, float] = {}

@@ -29,7 +29,7 @@ test("tile server down: notice appears and text still renders", async ({ page })
 
 test("every 1948 step shows the Rumsey credit, and other steps do not", async ({ page }) => {
   // The story map's credit; the explorer below has its own map and credit.
-  const credit = page.locator("[data-active-step]").getByText("© Cartography Associates, David Rumsey Map Collection", { exact: true });
+  const credit = page.locator("[data-active-step]").getByText("David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries", { exact: true });
   await page.goto("/");
   await expect(credit).toHaveCount(0);
   const steps1948 = STORY.filter((s) => s.era === "1948");
@@ -59,5 +59,5 @@ test("the about page covers methods, accuracy, review status and sources", async
   await expect(page.getByRole("heading", { name: "How accurate they are" })).toBeVisible();
   await expect(page.getByTestId("review-status")).toContainText("draft");
   await expect(page.locator("#src-finalenvironment2719sanf")).toContainText("Final Environmental Impact Report");
-  await expect(page.getByText("© Cartography Associates, David Rumsey Map Collection").first()).toBeVisible();
+  await expect(page.getByText("David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries").first()).toBeVisible();
 });

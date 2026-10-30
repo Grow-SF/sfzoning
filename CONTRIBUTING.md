@@ -6,18 +6,20 @@ other cities are all welcome.
 ## Before your first pull request: the CLA
 
 GrowSF asks every contributor to agree to the
-[GrowSF Contributor License Agreement](CLA.md). You keep the copyright in your
-work; the agreement gives GrowSF a license to use it and lets GrowSF keep the
-project's licensing flexible.
+[GrowSF Individual Contributor License Agreement](CLA.md), adapted from the
+Apache Software Foundation's ICLA. You keep the copyright in your work; the
+agreement gives GrowSF a license to use it and lets GrowSF keep the project's
+licensing flexible.
 
 To agree, post this comment on your first pull request, exactly as written:
 
-> I have read the GrowSF Contributor License Agreement (CLA.md, version 1.0)
-> and I agree to it for all my contributions to this project.
+> I have read the GrowSF Individual Contributor License Agreement (CLA.md,
+> version 1.0) and I agree to it for all my present and future contributions
+> to GrowSF.
 
-Pull requests can't be merged until the author has posted it. If you're
-contributing on behalf of an employer, say so in the same comment and confirm
-you're authorized to agree for them.
+Pull requests can't be merged until the author has posted it. If your employer
+has rights in your work, make sure you're permitted to contribute (CLA
+section 4); for contributions owned by a company, contact GrowSF.
 
 ## Licenses
 

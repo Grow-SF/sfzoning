@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import { centerStep as toStep } from "./helpers";
 
-const CREDIT = "© Cartography Associates, David Rumsey Map Collection";
+const CREDIT = "David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries";
 
 
 const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]:not([tabindex='-1'])";

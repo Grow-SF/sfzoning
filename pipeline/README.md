@@ -142,6 +142,6 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
 
 The 1948 atlas photographs come from the **David Rumsey Map Collection**, not the
 owner's scans. Anything published from the 1948 series must carry the credit
-"© Cartography Associates, David Rumsey Map Collection" (`config.RUMSEY_CREDIT`;
+"David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries" (`config.RUMSEY_CREDIT`;
 likely CC BY-NC-SA). The pipeline writes it into the 1948 PMTiles attribution,
 manifest and review page. Keep it wherever the overlay is shown.
