@@ -178,7 +178,7 @@ def test_deep_zoom_tiles(env):
 
 
 def test_rebuild_series_failing_steps_do_not_raise(monkeypatch, tmp_path, caplog):
-    from sfzmaps import manifest, stitch
+    from sfzmaps import manifest, reviewpage, stitch
     monkeypatch.setattr(config, "OUT_DIR", tmp_path / "out")
     monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     seen = []
@@ -188,6 +188,7 @@ def test_rebuild_series_failing_steps_do_not_raise(monkeypatch, tmp_path, caplog
 
     monkeypatch.setattr(stitch, "build_vrt", boom)
     monkeypatch.setattr(manifest, "write", lambda s, sc, tr=None: seen.append(tr))
+    monkeypatch.setattr(reviewpage, "write", lambda s: (_ for _ in ()).throw(RuntimeError("no blocks")))
     with caplog.at_level("WARNING"):
         server._rebuild_series("1948")  # must not raise
     assert "skipping" in caplog.text
@@ -195,7 +196,7 @@ def test_rebuild_series_failing_steps_do_not_raise(monkeypatch, tmp_path, caplog
 
 
 def test_rebuild_series_calls_task14_functions_in_order(monkeypatch, tmp_path):
-    from sfzmaps import manifest, stitch, tiles
+    from sfzmaps import manifest, reviewpage, stitch, tiles
     monkeypatch.setattr(config, "OUT_DIR", tmp_path / "out")
     monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     calls = []
@@ -205,8 +206,9 @@ def test_rebuild_series_calls_task14_functions_in_order(monkeypatch, tmp_path):
     monkeypatch.setattr(tiles, "make_pmtiles",
                         lambda vrt, out, **k: calls.append(("tiles", out.name)) or "REPORT")
     monkeypatch.setattr(manifest, "write", lambda s, sc, tr=None: calls.append(("manifest", tr)))
+    monkeypatch.setattr(reviewpage, "write", lambda s: calls.append(("review", s)))
     server._rebuild_series("1948")
-    assert calls == [("vrt", sentinel), ("tiles", "1948.pmtiles"), ("manifest", "REPORT")]
+    assert calls == [("vrt", sentinel), ("tiles", "1948.pmtiles"), ("manifest", "REPORT"), ("review", "1948")]
 
 
 def test_rebuilds_are_serialized_and_coalesced(monkeypatch):

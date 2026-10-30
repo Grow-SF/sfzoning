@@ -115,7 +115,7 @@ def _rebuild_series(series: str) -> None:
     `sfzmaps tiles`). A failing step is logged and skipped so a save never fails because of
     the rebuild; the manifest is still rewritten, keeping the previous tile_report when the
     tile build did not run."""
-    from sfzmaps import manifest, stitch, tiles
+    from sfzmaps import manifest, reviewpage, stitch, tiles
 
     def step(label: str, fn):
         try:
@@ -133,6 +133,7 @@ def _rebuild_series(series: str) -> None:
             vrt, out, name=f"SF zoning {series}",
             attribution=config.RUMSEY_CREDIT if series == "1948" else None))
     step("manifest", lambda: manifest.write(series, scores, report))
+    step("review page", lambda: reviewpage.write(series))
 
 
 _rb_guard = threading.Lock()

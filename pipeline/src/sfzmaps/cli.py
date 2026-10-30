@@ -164,7 +164,7 @@ def run(
 
 def _publish(series: str, min_zoom: int = 11, max_zoom: int = 18) -> None:
     """Stitch -> tiles -> manifest for one series (scores read from each sheet's score.json)."""
-    from sfzmaps import manifest, stitch, tiles
+    from sfzmaps import manifest, reviewpage, stitch, tiles
 
     scores = stitch.load_scores(series)
     vrt = stitch.build_vrt(series, scores)
@@ -176,7 +176,10 @@ def _publish(series: str, min_zoom: int = 11, max_zoom: int = 18) -> None:
     typer.echo(f"{series}: {out} ({report.bytes_total / 1e6:.1f} MB of tiles); manifest {path}")
     for z, b in sorted(report.bytes_by_zoom.items()):
         typer.echo(f"  z{z}: {b / 1e6:.2f} MB")
-
+    try:
+        typer.echo(f"{series}: review page {reviewpage.write(series)}")
+    except Exception as e:  # noqa: BLE001 - the review page is optional (needs GDAL/parcels)
+        typer.echo(f"{series}: review page skipped ({type(e).__name__}: {e})", err=True)
 
 
 @app.command()
