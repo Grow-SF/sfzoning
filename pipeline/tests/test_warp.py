@@ -373,3 +373,14 @@ def test_erase_border_rules_binding_shadow_on_framed_page():
     out = warp.erase_border_rules(img)
     assert out[300:1300, 1772:1798].min() == 255
     assert out[600:700, 700:900].max() == 0
+
+
+def test_erase_border_rules_double_frame_inner_line():
+    """A double frame: the inner line ~80 px in is erased; a shorter street line at the same
+    depth stays."""
+    img = _bordered()
+    img[180:186, 300:1500] = 0          # inner frame line, 80 px below the 100 px frame
+    img[1400:1406, 400:700] = 0         # a short street line at a similar depth near the bottom
+    out = warp.erase_border_rules(img)
+    assert out[180:186, 400:1400].min() == 255
+    assert out[1400:1406, 450:650].max() == 0

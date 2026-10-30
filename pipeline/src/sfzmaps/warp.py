@@ -85,6 +85,8 @@ PAPER_TINT = (245, 240, 229)
 PAPER_EDGE_INSET_PX = 4
 PAPER_RULE_LEN_PX = 401
 PAPER_RULE_MAX_TILT_DEG = 10
+PAPER_RULE_DEEP_BAND_PX = 130       # a double frame's inner line, up to this far in
+PAPER_RULE_DEEP_MIN_FRAC = 0.4      # ... only taken when it spans this share of the page side
 PAPER_EDGE_BAND_PX = 150         # heavy edge lines (rules, binding shadows) lie within this of the page edge
 PAPER_EDGE_RULE_MIN_WIDTH_PX = 10   # heavier than any street line
 
@@ -278,7 +280,9 @@ def erase_border_rules(img: np.ndarray) -> np.ndarray:
     paper.  Two passes, each erasing dark pixels within 15 px of a straight segment at least
     PAPER_RULE_LEN_PX long and within PAPER_RULE_MAX_TILT_DEG of the page axes (plus a 3 px
     halo):
-      * the band NEATLINE_INSET_PX in from the detected neatline (the printed rule), any width;
+      * the band NEATLINE_INSET_PX in from the detected neatline (the printed rule), any width,
+        and up to PAPER_RULE_DEEP_BAND_PX in for a line spanning PAPER_RULE_DEEP_MIN_FRAC of
+        the page side (a double frame's inner line);
       * the band PAPER_EDGE_BAND_PX in from the page edge, only segments at least
         PAPER_EDGE_RULE_MIN_WIDTH_PX thick (an edge rule on a page with no detected neatline,
         or the binding shadow on the 1948 atlas photos), so a thin street line there survives."""
@@ -291,6 +295,10 @@ def erase_border_rules(img: np.ndarray) -> np.ndarray:
     if not nl.all():
         dist = distance_transform_edt(np.pad(nl, 1, constant_values=True))[1:-1, 1:-1]  # page edge is not a border
         rule |= _rule_pixels(dark, nl & (dist <= NEATLINE_INSET_PX), None)
+        # the inner line of a double frame sits deeper (1935: 65-110 px in); only a line
+        # spanning a large share of the page side is taken there, never a street
+        deep = nl & (dist > NEATLINE_INSET_PX) & (dist <= PAPER_RULE_DEEP_BAND_PX)
+        rule |= _rule_pixels(dark, deep, None, round(PAPER_RULE_DEEP_MIN_FRAC * min(h, w)))
     edge = np.ones((h, w), bool)
     e = PAPER_EDGE_BAND_PX
     edge[e:h - e, e:w - e] = False
@@ -305,11 +313,12 @@ def erase_border_rules(img: np.ndarray) -> np.ndarray:
     return out
 
 
-def _rule_pixels(dark: np.ndarray, band: np.ndarray, min_width: float | None) -> np.ndarray:
+def _rule_pixels(dark: np.ndarray, band: np.ndarray, min_width: float | None,
+                 min_len: int = PAPER_RULE_LEN_PX) -> np.ndarray:
     """Dark pixels of `band` near long straight near-axis segments (see erase_border_rules);
     with `min_width`, only segments whose ink is at least that thick (median along it)."""
     segs = cv2.HoughLinesP((dark & band).astype(np.uint8) * 255, 1, np.pi / 720, 200,
-                           minLineLength=PAPER_RULE_LEN_PX, maxLineGap=15)
+                           minLineLength=min_len, maxLineGap=15)
     thick = cv2.distanceTransform(dark, cv2.DIST_L2, 3) if min_width is not None else None
     near = np.zeros(dark.shape, np.uint8)
     for x1, y1, x2, y2 in (segs.reshape(-1, 4) if segs is not None else []):
