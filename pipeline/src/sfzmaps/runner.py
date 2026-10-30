@@ -6,7 +6,8 @@ score -> warp. Artifacts live in config.WORK_DIR/<series>/<sheet_id>/:
   page.png          render                        (input: the source scan)
   page.json         classify                      (page.png)
   labels.json       labels                        (page.png, page.json)
-  blocks_px.geojson blocks: pixel polygons + "corners" (page.png, page.json)
+  blocks_px.geojson blocks: pixel polygons + "corners", the good-quality block corners
+                    (linework.good_corners_px)  (page.png, page.json)
   rough.json        rough: {"transform": ...|null, "scale_hint_ft_per_px"}
                     (labels.json, blocks_px.geojson, reference parquet files)
   refine_raw.json   refine, before change classification (blocks_px, rough.json, reference)
@@ -348,13 +349,17 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
 
     def do_blocks():
         polys = linework.extract_blocks(img(), exclude=mask())
-        corners = np.asarray(linework.block_corners_px(polys), float).reshape(-1, 2)
+        # Only corners whose outline evidence is clean (linework.corner_quality) are
+        # matched and scored; noisy ones (district lines or lettering merged into the
+        # outline, short jogs, odd angles) carry extraction error, not alignment error.
+        corners = np.asarray(linework.good_corners_px(polys), float).reshape(-1, 2)
         _write_json(bj, {"type": "FeatureCollection",
                          "features": [{"type": "Feature", "properties": {}, "geometry": mapping(p)}
                                       for p in polys],
                          "corners": [[_num(x), _num(y)] for x, y in corners]})
 
-    stage("blocks", bj, [png, pj], do_blocks)
+    # linework.py: a code change (extraction, corner quality) re-extracts, like warp.py
+    stage("blocks", bj, [png, pj, Path(linework.__file__)], do_blocks)
     if stopped("blocks"):
         return partial("until: blocks")
 
