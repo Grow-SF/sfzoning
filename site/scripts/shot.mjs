@@ -1,7 +1,8 @@
 // Dev helper: screenshot the hero, every story step, the explorer (each view) and the about
 // page at phone and desktop sizes.
-// Usage: node scripts/shot.mjs <outDir> [baseUrl] [only-prefix]   (site running, tiles on :8787)
-// Waits on the story map's own idle hook (window.__mapIdle) rather than a fixed sleep.
+// Usage: node scripts/shot.mjs <outDir> [baseUrl] [only-prefix]
+//   (site running with NEXT_PUBLIC_E2E=1 for the map hooks, tiles on :8787)
+// Waits on the maps themselves (window.__map / __maps, test builds only) rather than a fixed sleep.
 import fs from "node:fs";
 import { chromium } from "@playwright/test";
 
@@ -34,7 +35,7 @@ for (const [n, w, h] of [["mobile", 390, 844], ["desktop", 1440, 900]]) {
   const ids = await p.$$eval("[data-step]", (els) => els.map((e) => e.getAttribute("data-step")));
   for (const [i, id] of ids.entries()) {
     await p.evaluate((sid) => {
-      const el = document.querySelector(`[data-step="${sid}"]`);
+      const el = document.querySelector(`[data-step="${sid}"] article`);
       const r = el.getBoundingClientRect();
       window.scrollTo(0, window.scrollY + r.top + r.height / 2 - window.innerHeight / 2);
     }, id);
@@ -47,7 +48,7 @@ for (const [n, w, h] of [["mobile", 390, 844], ["desktop", 1440, 900]]) {
   if (n === "mobile") {
     const idx = ids.indexOf("1960-density-caps");
     await p.evaluate(() => {
-      const el = document.querySelector('[data-step="1960-density-caps"]');
+      const el = document.querySelector('[data-step="1960-density-caps"] article');
       const r = el.getBoundingClientRect();
       window.scrollTo(0, window.scrollY + r.top + r.height / 2 - window.innerHeight / 2);
     });

@@ -40,7 +40,8 @@ SITE_PORT=3217 npm run test:e2e   # use your own dev server port if 3100 is anot
 Playwright runs with **one worker** (`playwright.config.ts`): every spec drives a WebGL map in
 software rendering, and two workers starved each other of CPU, which made the story-scroll spec
 flaky. Map specs can wait on the map's idle hook: `.map-wrap[data-idle="true"]` is set on
-MapLibre's `idle` event and cleared on `movestart`/`dataloading`.
+MapLibre's `idle` event and cleared on `movestart`/`dataloading`. That hook and `window.__map`/`__maps`
+exist only when the dev server runs with `NEXT_PUBLIC_E2E=1` (playwright.config sets it).
 
 `node scripts/shot.mjs <outDir> [baseUrl]` screenshots the hero, every story step, the
 explorer (all three views) and the about page at both viewports.

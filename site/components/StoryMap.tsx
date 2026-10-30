@@ -49,6 +49,8 @@ type Props = {
 type Expr = Ml.ExpressionSpecification;
 type Opacity = number | Expr;
 
+/** Test builds only (NEXT_PUBLIC_E2E=1, set by playwright.config): window.__map(s), data-idle. */
+const E2E = process.env.NEXT_PUBLIC_E2E === "1";
 const FADE_MS = 700;
 /** Below this, tiles still load but nothing visible is drawn. */
 const WARM = 0.001;
@@ -116,6 +118,23 @@ function scanOpacity(s: MapState, series: string, avail: Availability): Opacity 
   return inkByZoom(1) as Expr;
 }
 
+/** The scan series that `s` draws at all (current era or prefetch warm-up). */
+export function scansShown(s: MapState, avail: Availability): Set<string> {
+  return new Set(allSeries().filter((series) => scanOpacity(s, series, avail) !== 0));
+}
+
+/** Add a scan's source and layer, under the district layers, if it isn't there yet. */
+function addScan(map: MlMap, series: string) {
+  const id = scanLayer(series);
+  if (map.getLayer(id)) return;
+  map.addSource(id, { type: "raster", url: scanSource(series), tileSize: 256 });
+  const before = map.getStyle().layers.find((l) => l.id.startsWith("dist-") || l.id === "selected-line")?.id;
+  map.addLayer(
+    { id, type: "raster", source: id, layout: { visibility: "none" }, paint: { "raster-opacity": 0, "raster-fade-duration": 0 } },
+    before,
+  );
+}
+
 function fillOpacity(view: MapState["view"]): Opacity {
   if (view !== "both") return districtFillOpacity(view);
   // City zoom: "allowed" strength (the scan is mostly faded). Close up: let the scan through.
@@ -135,7 +154,8 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   const availRef = useRef<Availability>({});
   const hideTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const clickRef = useRef(onParcelClick);
-  const [failed, setFailed] = useState(false);
+  /** Sources that failed to load ("blocks", "scan-<series>", or "maplibre" itself). */
+  const [failedSources, setFailedSources] = useState<ReadonlySet<string>>(() => new Set());
   const [state, setState] = useState<MapState>(initial);
   const avail = useDistrictAvailability();
 
@@ -149,11 +169,33 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     if (!map || !readyRef.current) return;
     const instant = reducedMotion();
     const fade = { duration: instant ? 0 : FADE_MS, delay: 0 };
+    // Only the current era's scan and the prefetch era's are visible (MapLibre loads tiles for
+    // every visible layer, even at zero opacity). A scan's source is added the first time it is
+    // needed, so eras the reader never reaches cost no requests at all.
+    const shown = scansShown(s, availRef.current);
     for (const series of allSeries()) {
       const id = scanLayer(series);
+      const key = `scan:${series}`;
+      const timer = hideTimers.current.get(key);
+      if (timer) clearTimeout(timer);
+      hideTimers.current.delete(key);
+      if (shown.has(series)) {
+        addScan(map, series);
+        map.setLayoutProperty(id, "visibility", "visible");
+      }
       if (!map.getLayer(id)) continue;
       map.setPaintProperty(id, "raster-opacity-transition", fade);
       map.setPaintProperty(id, "raster-opacity", scanOpacity(s, series, availRef.current));
+      if (!shown.has(series) && map.getLayoutProperty(id, "visibility") !== "none") {
+        // Hide once faded out, unless a fast scroll has made this scan wanted again.
+        const hide = () => {
+          const m = mapRef.current;
+          if (!m || !m.getLayer(id) || scansShown(stateRef.current, availRef.current).has(series)) return;
+          m.setLayoutProperty(id, "visibility", "none");
+        };
+        if (instant) hide();
+        else hideTimers.current.set(key, setTimeout(hide, FADE_MS + 50));
+      }
     }
     for (const era of ERAS) {
       const fill = distFill(era.id);
@@ -289,7 +331,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     const timers = hideTimers.current;
     const setIdle = (v: boolean) => {
       // Test and screenshot hook: true once the map has drawn everything it is going to.
-      if (wrap.current) wrap.current.dataset.idle = String(v);
+      if (E2E && wrap.current) wrap.current.dataset.idle = String(v);
     };
 
     loadMaplibre().then((maplibregl) => {
@@ -309,8 +351,10 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       if (!interactive) map.jumpTo({ ...cam, padding: storyPadding(map) });
       mapRef.current = map;
       const w = window as unknown as { __map?: MlMap; __maps?: MlMap[] };
-      if (!interactive) w.__map = map;
-      (w.__maps ??= []).push(map);
+      if (E2E) {
+        if (!interactive) w.__map = map;
+        (w.__maps ??= []).push(map);
+      }
 
       map.on("idle", () => setIdle(true));
       map.on("movestart", () => setIdle(false));
@@ -329,8 +373,13 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
           console.warn("district tiles:", sourceId, msg);
           return;
         }
-        // Tile/source fetch failure (server down, 404). Keep the page; show a notice.
-        if (/fetch|network|pmtiles|load|status|\b404\b/i.test(msg) || msg === "") setFailed(true);
+        // Only the basemap and scans matter to the notice; which scans matter (the current
+        // era's) is decided at render. Anything else is logged, not shown.
+        if (sourceId === "blocks" || sourceId.startsWith("scan-")) {
+          setFailedSources((prev) => (prev.has(sourceId) ? prev : new Set(prev).add(sourceId)));
+        } else {
+          console.warn("map error:", sourceId || "(no source)", msg);
+        }
       });
 
       map.on("load", () => {
@@ -366,15 +415,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
             "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.3, 16, 0.8],
           },
         });
-        for (const series of allSeries()) {
-          map.addSource(scanLayer(series), { type: "raster", url: scanSource(series), tileSize: 256 });
-          map.addLayer({
-            id: scanLayer(series),
-            type: "raster",
-            source: scanLayer(series),
-            paint: { "raster-opacity": 0, "raster-fade-duration": 0 },
-          });
-        }
+        // Scan layers are added on demand by paint() (see addScan), between here and the districts.
         map.addSource("selected", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({ id: "selected-line", type: "line", source: "selected", paint: { "line-color": MAP_COLORS.accent, "line-width": 3 } });
         map.addSource("highlight", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
@@ -408,10 +449,10 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       });
 
       cleanup = () => {
-        w.__maps = (w.__maps ?? []).filter((m) => m !== map);
+        if (E2E) w.__maps = (w.__maps ?? []).filter((m) => m !== map);
         map.remove();
       };
-    }, () => setFailed(true));
+    }, () => setFailedSources((prev) => new Set(prev).add("maplibre")));
 
     return () => {
       cancelled = true;
@@ -428,6 +469,11 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   const colours = state.view !== "scan";
   const showLegend = colours && avail[state.era] === true;
   const comingSoon = colours && avail[state.era] === false;
+  // The notice is for a map that can't show the step: no basemap, or no scan for this era.
+  const failed =
+    failedSources.has("maplibre") ||
+    failedSources.has("blocks") ||
+    (era?.scanSeries ?? []).some((series) => failedSources.has(scanLayer(series)));
 
   return (
     <div ref={wrap} className={`map-wrap${className ? ` ${className}` : ""}`} data-view={state.view} data-era={state.era}>
