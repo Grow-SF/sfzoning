@@ -67,6 +67,9 @@ VISION_PROVIDER = "openai"
 VISION_MODEL = "gpt-6.1-sol"
 VISION_REASONING_EFFORT = "low"  # lowest level documented for this model (low..max)
 VISION_CONCURRENCY = 8
+# Process-wide cap on vision requests in flight at once (llm.ask_json), shared by every
+# reader's thread pool so parallel series and per-region reads cannot stack up beyond it.
+VISION_MAX_INFLIGHT = 16
 
 ROOT_FOLDER_ID = "10p74RwqmzeQFBrBqjxXdmEOUREx0BLgO"
 

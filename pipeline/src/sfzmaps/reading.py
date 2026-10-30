@@ -2,7 +2,6 @@
 import argparse
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal, TypeVar
 
@@ -198,15 +197,13 @@ def read_labels(png_path: Path, *, scale: float, tile: int = config.VISION_TILE,
                 client: llm.LLMClient | None = None) -> list[Label]:
     img = _read_gray(png_path)
     _, tiles = select_tiles(img, scale=scale, tile=tile, overlap=overlap, skip=skip)
-    if client is None and tiles:
+    if client is None and tiles and not llm.CACHE_ONLY and not all(llm.is_cached(t[2], label_prompt(t[2]), _Labels) for t in tiles):
         client = llm.OpenAIClient()  # build once; shared by worker threads
 
     def one(tile):
         return llm.ask_json(tile[2], label_prompt(tile[2]), _Labels, client=client)
 
-    workers = max(1, min(config.VISION_CONCURRENCY, len(tiles)))
-    with ThreadPoolExecutor(workers) as ex:
-        results = list(ex.map(one, tiles))  # map keeps tile order -> deterministic merge
+    results = llm.pmap(one, tiles, config.VISION_CONCURRENCY)  # in tile order -> deterministic merge
     out: list[Label] = []
     for (x0, y0, t), res in zip(tiles, results):
         th, tw = t.shape[:2]
