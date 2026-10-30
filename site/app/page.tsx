@@ -21,8 +21,9 @@ export default function Home() {
             still under review.
           </p>
           <p>
-            The code is open source, and the maps and research are free to reuse for non-commercial work. See the
-            project <a href={SOURCE_URL}>on GitHub</a>, where corrections and contributions are welcome.
+            The code is open source under the AGPL-3.0; the story, research and processed maps are licensed CC
+            BY-NC-SA 4.0 for non-commercial reuse. See the project <a href={SOURCE_URL}>on GitHub</a>, where
+            corrections and contributions are welcome.
           </p>
           <Sources ids={citedSourceIds(STORY)} />
           <Credits />
