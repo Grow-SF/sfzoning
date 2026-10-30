@@ -7,13 +7,14 @@ score -> warp. Artifacts live in config.WORK_DIR/<series>/<sheet_id>/:
   page.json         classify                      (page.png)
   labels.json       labels                        (page.png, page.json)
   blocks_px.geojson blocks: pixel polygons + "corners" (page.png, page.json)
-  rough.json        rough: {"transform": ...|null} (labels.json, reference parquet files)
+  rough.json        rough: {"transform": ...|null, "scale_hint_ft_per_px"}
+                    (labels.json, blocks_px.geojson, reference parquet files)
   refine_raw.json   refine, before change classification (blocks_px, rough.json, reference)
   refine.json       changes: final matches (px, py, wx, wy, dist_ft, label, ref_idx) plus
                     converged, vote_status, classify_converged (Task 16's editor reads it)
   changes.geojson   changes                       (refine_raw.json)
   transform.json    final transform, with "origin": auto | review | answer_key
-  score.json        score                         (transform.json, refine.json)
+  score.json        score                         (transform.json, refine.json, labels.json)
   warped.tif        warp                          (transform.json, page.json, page.png)
   review.json       optional, written by the human review tool; never touched here
 
@@ -135,10 +136,18 @@ def _score_json(s: SheetScore, **extra) -> dict:
 
 
 def _score_load(d: dict) -> SheetScore:
+    """SheetScore from score.json; also reads pre-Task-13-fix files (frac_within, p50_ft...)."""
     nan = float("nan")
-    g = lambda k: d[k] if d[k] is not None else nan  # noqa: E731
-    return SheetScore(d["n_scored"], d["frac_within"], g("p50_ft"), g("p95_ft"), g("max_ft"),
-                      d["n_real_change"], d["n_no_equivalent"], d["passed"], d["reason"])
+
+    def g(k, old=None):
+        v = d.get(k, d.get(old) if old else None)
+        return nan if v is None else v
+
+    return SheetScore(d["n_scored"], g("insample_frac_within", "frac_within"),
+                      g("insample_p50_ft", "p50_ft"), g("insample_p95_ft", "p95_ft"),
+                      g("insample_max_ft", "max_ft"), d["n_real_change"], d["n_no_equivalent"],
+                      d["passed"], d["reason"], g("holdout_p50_ft"), g("holdout_p95_ft"),
+                      d.get("n_holdout", 0), g("label_agreement"), g("inlier_frac"))
 
 
 # -- answer key ------------------------------------------------------------------------
@@ -239,8 +248,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
     def partial(why: str) -> SheetScore:
         if sj.exists():
             return _score_load(json.loads(sj.read_text()))
-        nan = float("nan")
-        return SheetScore(0, 0.0, nan, nan, nan, 0, 0, False, why)
+        return SheetScore.empty(why)
 
     def img():
         if "img" not in cache:
@@ -264,8 +272,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
     stage("classify", pj, [png], lambda: reading.save(pj, reading.classify_page(png)))
     if info().kind != "map":
         log.info("skipped: %s", info().kind)
-        return SheetScore(0, 0.0, float("nan"), float("nan"), float("nan"), 0, 0, False,
-                          f"skipped: {info().kind}")
+        return SheetScore.empty(f"skipped: {info().kind}")
     if stopped("classify"):
         return partial("until: classify")
 
@@ -292,7 +299,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
     result: RefineResult | None = None
 
     if review is not None:
-        rt = SheetTransform([GCP(**g) for g in review["gcps"]], config.TPS_SMOOTHING)
+        rt = SheetTransform([GCP(**g) for g in review["gcps"]], config.MANUAL_TPS_SMOOTHING)
         rpath = d / "review.json"
 
         def do_review():
@@ -311,10 +318,17 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             return partial(f"until: {until}")
     else:
         def do_rough():
-            fit = anchors.rough_fit(anchors.match_labels(reading.load_labels(lj), ref))
-            _write_json(rj, {"transform": _transform_json(fit.transform, "auto") if fit else None})
+            from shapely.geometry import shape
+            labels = reading.load_labels(lj)
+            polys = [shape(f["geometry"]) for f in json.loads(bj.read_text())["features"]]
+            hint = linework.STREET_FT / linework.estimate_street_px(polys)  # ft/px
+            fit = anchors.rough_fit(anchors.match_labels(labels, ref), scale_hint=hint)
+            if fit is not None:
+                fit = anchors.street_snap(fit, labels, ref)
+            _write_json(rj, {"transform": _transform_json(fit.transform, "auto") if fit else None,
+                             "scale_hint_ft_per_px": _num(hint)})
 
-        stage("rough", rj, [lj, *_ref_inputs()], do_rough)
+        stage("rough", rj, [lj, bj, *_ref_inputs()], do_rough)
         if stopped("rough"):
             return partial("until: rough")
         rough = json.loads(rj.read_text())["transform"]
@@ -327,7 +341,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             if gcps is not None:
                 answer_key = True
                 if not (_origin(tj) == "answer_key" and _fresh(tj, [rj], force)):
-                    _write_json(tj, _transform_json(SheetTransform(gcps, config.TPS_SMOOTHING), "answer_key"))
+                    _write_json(tj, _transform_json(SheetTransform(gcps, config.MANUAL_TPS_SMOOTHING), "answer_key"))
                     log.info("fallback transform from answer key (%d GCPs)", len(gcps))
             else:
                 tj.unlink(missing_ok=True)
@@ -364,24 +378,28 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
                 return partial("until: changes")
 
     # score
+    def agreement(t: SheetTransform):
+        from sfzmaps import placement
+        return placement.label_agreement(t, reading.load_labels(lj), ref) if lj.exists() else None
+
     def do_score():
         extra = {}
         if review is not None:
-            res = _review_result(SheetTransform.from_json(json.loads(tj.read_text())), rfj,
-                                 ref)
-            sc = score_mod.score(res)
+            rt_ = SheetTransform.from_json(json.loads(tj.read_text()))
+            res = _review_result(rt_, rfj, ref)
+            sc = score_mod.score(res, agreement=agreement(rt_))
             extra["source"] = "review"
         elif answer_key or not rfj.exists():
             sc = score_mod.score(None)
             if answer_key:
                 extra["answer_key_fallback"] = True
         else:
-            res = _result_load(json.loads(rfj.read_text()), ref,
-                               SheetTransform.from_json(json.loads(tj.read_text())))
-            sc = score_mod.score(res)
+            t_ = SheetTransform.from_json(json.loads(tj.read_text()))
+            res = _result_load(json.loads(rfj.read_text()), ref, t_)
+            sc = score_mod.score(res, agreement=agreement(t_))
         _write_json(sj, _score_json(sc, **extra))
 
-    stage("score", sj, [p for p in (tj, rfj) if p.exists()] or [rj], do_score)
+    stage("score", sj, [p for p in (tj, rfj, lj) if p.exists()] or [rj], do_score)
     score_val = _score_load(json.loads(sj.read_text()))
     if stopped("score"):
         return score_val
@@ -401,11 +419,11 @@ def format_table(results: dict[str, SheetScore]) -> str:
     def f(x, spec):
         return "-" if x is None or (isinstance(x, float) and math.isnan(x)) else format(x, spec)
 
-    rows = [("sheet", "passed", "frac_within", "p95_ft", "reason")]
+    rows = [("sheet", "passed", "holdout_p50", "holdout_p95", "insample_p95", "reason")]
     for k, s in results.items():
-        rows.append((k, str(s.passed), f(s.frac_within if s.n_scored else None, ".3f"),
-                     f(s.p95_ft, ".1f"), s.reason or ""))
-    w = [max(len(r[i]) for r in rows) for i in range(5)]
+        rows.append((k, str(s.passed), f(s.holdout_p50_ft, ".1f"), f(s.holdout_p95_ft, ".1f"),
+                     f(s.insample_p95_ft, ".1f"), s.reason or ""))
+    w = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
     return "\n".join("  ".join(c.ljust(w[i]) for i, c in enumerate(r)).rstrip() for r in rows)
 
 
@@ -428,8 +446,7 @@ def run_series(series: str, *, sheet: str | None = None, until: str | None = Non
             results[p.sheet_id] = run_sheet(p, ref, until=until, force_auto=force_auto, force=force)
         except llm.LLMAuthError as e:  # every remaining sheet would fail the same way
             print(f"error: {e}; aborting series {series} at sheet {p.sheet_id}")
-            nan = float("nan")
-            results[p.sheet_id] = SheetScore(0, 0.0, nan, nan, nan, 0, 0, False, f"error: {e}")
+            results[p.sheet_id] = SheetScore.empty(f"error: {e}")
             break
         except Exception as e:  # noqa: BLE001 - one bad sheet must not stop the series
             if logfile is None:
@@ -437,9 +454,7 @@ def run_series(series: str, *, sheet: str | None = None, until: str | None = Non
                 logfile = config.OUT_DIR / f"run-{stamp}.log"
             with logfile.open("a") as fh:
                 fh.write(f"=== {p.series}/{p.sheet_id}\n{traceback.format_exc()}\n")
-            nan = float("nan")
-            results[p.sheet_id] = SheetScore(0, 0.0, nan, nan, nan, 0, 0, False,
-                                             f"error: {type(e).__name__}: {e}")
+            results[p.sheet_id] = SheetScore.empty(f"error: {type(e).__name__}: {e}")
     print(format_table(results))
     if logfile is not None:
         print(f"errors logged to {logfile}")

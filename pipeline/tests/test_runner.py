@@ -54,7 +54,8 @@ class Fakes:
         m.setattr(runner.linework, "block_corners_px", lambda polys: np.array([[1.0, 1.0], [10.0, 10.0]]))
         m.setattr(runner.anchors, "match_labels", lambda labels, ref: [])
         m.setattr(runner.anchors, "rough_fit",
-                  counted("rough", lambda c: SimpleRough(SheetTransform(AUTO, 1.0)) if self.rough_ok else None))
+                  counted("rough", lambda c, **k: SimpleRough(SheetTransform(AUTO, 1.0)) if self.rough_ok else None))
+        m.setattr(runner.anchors, "street_snap", lambda fit, labels, ref: fit)
         m.setattr(runner.refine_mod, "refine", counted("refine", refine))
         m.setattr(runner.refine_mod, "classify_changes", counted("changes", lambda r: r))
         m.setattr(runner.refine_mod, "changes_geojson", lambda r: {"type": "FeatureCollection", "features": []})
@@ -183,7 +184,7 @@ def test_run_series_logs_failure_and_continues(env, monkeypatch, capsys):
     logs = list(config.OUT_DIR.glob("run-*.log"))
     assert len(logs) == 1 and "Traceback" in logs[0].read_text() and "kaput" in logs[0].read_text()
     out = capsys.readouterr().out
-    assert "frac_within" in out and "p95_ft" in out
+    assert "holdout_p50" in out and "insample_p95" in out
 
 
 def test_rough_failure_after_pass_clears_score_and_warp(env, monkeypatch):

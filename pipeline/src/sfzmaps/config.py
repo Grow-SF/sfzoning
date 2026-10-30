@@ -13,7 +13,17 @@ OUT_DIR = DATA_DIR / "out"
 
 WORK_CRS = "EPSG:2227"
 TOLERANCE_FT = 6.0  # kept at 6 after Task 13 tuning (see the tuning notes)
-PASS_FRACTION = 0.95
+PASS_FRACTION = 0.95  # superseded as the pass rule (owner, 2026-10-29); TOLERANCE_FT stays for display
+# Pass rule (owner, 2026-10-29): on held-out blocks, median <= PASS_MEDIAN_FT and
+# p95 <= PASS_P95_FT, and the sheet is not misplaced (sfzmaps.score).
+PASS_MEDIAN_FT = 5.0
+PASS_P95_FT = 12.0
+# Misplacement detector (sfzmaps.placement / score): fewer than this share of the sheet's
+# own labels land in their block / on their street, over at least MISPLACED_MIN_LABELS
+# checked labels; or fewer than MISPLACED_MIN_INLIER_FRAC of its corners are inliers.
+MISPLACED_MAX_LABEL_AGREEMENT = 0.2
+MISPLACED_MIN_LABELS = 20
+MISPLACED_MIN_INLIER_FRAC = 0.05
 MAX_REAL_CHANGE_FRAC = 0.15  # more real change than this share of scored+real_change: review
 ROUGH_TOL_FT = 150.0  # rough fit (Task 8) error budget; caps the refine translation vote
 # Ridge in ft^2 on the normalized TPS (units in sfzmaps.transform) of the final sheet
@@ -27,6 +37,11 @@ TPS_SMOOTHING = 0.1
 # ~100 ft) and refine's widest-radius stage (divided by 10 per stage, never below
 # TPS_SMOOTHING). Independent of TPS_SMOOTHING so tuning the final warp cannot loosen them.
 COARSE_TPS_SMOOTHING = 1000.0
+# Smoothing for sparse hand-placed control points (review/editor GCPs, the answer-key
+# fallback: 8-40 points). TPS_SMOOTHING is tuned for 600-2500 dense corners and would nearly
+# interpolate a sparse set (a 40 ft misclick moves a 10x10 grid 16-27 ft at 0.1, 5.5-14 ft
+# at 1.0, the Task 7 value).
+MANUAL_TPS_SMOOTHING = 1.0
 
 VISION_PROVIDER = "openai"
 VISION_MODEL = "gpt-6.1-sol"

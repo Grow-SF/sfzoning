@@ -475,6 +475,37 @@ def test_classify_not_converged_when_rounds_run_out(monkeypatch, shifted):
     assert refine.classify_changes(before).classify_converged is False
 
 
+def _cycling(monkeypatch, sizes):
+    """Make _real_change alternate between two label sets: rows 0..a-1 and 0..b-1."""
+    calls = {"n": 0}
+
+    def fake(world, valid, W, tree, taken, tol_ft, min_cluster, coherence_ft):
+        k = sizes[calls["n"] % 2]
+        calls["n"] += 1
+        rc = np.zeros(len(world), bool)
+        rc[:k] = True
+        cp = np.where(rc, np.arange(len(world)), -1)
+        return rc, cp
+
+    monkeypatch.setattr(refine, "_real_change", fake)
+    return calls
+
+
+def test_classify_small_two_cycle_resolved_as_union(monkeypatch, big_result):
+    res = big_result[0]
+    calls = _cycling(monkeypatch, (8, 5))   # 8 -> 5 -> 8: flips 3 rows
+    out = refine.classify_changes(res)
+    assert out.classify_converged is True
+    assert [m.label for m in out.matches[:8]] == ["real_change"] * 8   # the union
+    assert calls["n"] == 3
+
+
+def test_classify_large_two_cycle_not_converged(monkeypatch, big_result):
+    res = big_result[0]
+    _cycling(monkeypatch, (8 + refine.CYCLE_MAX_FLIPS + 1, 8))
+    assert refine.classify_changes(res).classify_converged is False
+
+
 def test_counterpart_claimed_once():
     """Two candidates claim the same modern corner: the closer keeps it."""
     W = np.array([[0.0, 0.0], [250.0, 0.0], [500.0, 0.0], [0.0, 400.0]])
@@ -492,9 +523,12 @@ def test_counterpart_claimed_once():
     assert not rc2.any()
 
 
-def test_smoothing_schedule_coarse_stages_independent_of_final(monkeypatch):
+def test_smoothing_schedule_geometric_to_final(monkeypatch):
     monkeypatch.setattr(config, "TPS_SMOOTHING", 0.1)
     monkeypatch.setattr(config, "COARSE_TPS_SMOOTHING", 1000.0)
-    assert [refine._smoothing(i, 4) for i in range(4)] == [1000.0, 100.0, 10.0, 0.1]
-    monkeypatch.setattr(config, "TPS_SMOOTHING", 50.0)  # never stiffer at the end than before
-    assert [refine._smoothing(i, 4) for i in range(4)] == [1000.0, 100.0, 50.0, 50.0]
+    sm = [refine._smoothing(i, 4) for i in range(4)]
+    assert sm[0] == pytest.approx(1000.0) and sm[-1] == pytest.approx(0.1)
+    ratios = [a / b for a, b in zip(sm, sm[1:])]
+    assert ratios == pytest.approx([ratios[0]] * 3)  # equal steps, no jump at the end
+    monkeypatch.setattr(config, "TPS_SMOOTHING", 5000.0)  # final stiffer than coarse
+    assert refine._smoothing(3, 4) == 5000.0 and refine._smoothing(0, 4) == 5000.0

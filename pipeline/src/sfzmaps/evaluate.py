@@ -20,6 +20,7 @@ import numpy as np
 
 from sfzmaps import config
 from sfzmaps.pages import Page
+from sfzmaps.score import SheetScore
 from sfzmaps.transform import SheetTransform
 
 
@@ -27,7 +28,7 @@ from sfzmaps.transform import SheetTransform
 class EvalRow:
     sheet: str
     origin: str | None             # transform.json origin, None when there is no transform
-    score: dict | None             # score.json as written by the runner
+    score: SheetScore | None       # score.json as written by the runner
     n_key: int                     # enabled answer-key points (0 when there is no file)
     key_median_ft: float           # NaN when not measurable
     key_max_ft: float
@@ -52,8 +53,8 @@ def eval_sheet(page: Page) -> EvalRow | None:
     sj, tj, png = d / "score.json", d / "transform.json", d / "page.png"
     if not sj.exists() and not tj.exists():
         return None
-    score = json.loads(sj.read_text()) if sj.exists() else None
-    if score is not None and str(score.get("reason") or "").startswith("skipped"):
+    score = runner._score_load(json.loads(sj.read_text())) if sj.exists() else None
+    if score is not None and str(score.reason or "").startswith("skipped"):
         return None
     nan = float("nan")
     origin, t = None, None
@@ -63,7 +64,9 @@ def eval_sheet(page: Page) -> EvalRow | None:
     key = runner.answer_key_path(page)
     if key is None:
         return EvalRow(page.sheet_id, origin, score, 0, nan, nan, "no answer key")
-    gcps = runner._answer_key_gcps(page, png) if png.exists() else None
+    # page.png is only needed to rescale a PDF's key (R7); image keys are in source pixels
+    needs_png = page.source.suffix.lower() == ".pdf"
+    gcps = runner._answer_key_gcps(page, png) if (png.exists() or not needs_png) else None
     if not gcps:
         return EvalRow(page.sheet_id, origin, score, 0, nan, nan, "answer key unreadable")
     n = sum(g.enabled for g in gcps)
@@ -85,29 +88,41 @@ def _f(x, spec: str) -> str:
     return format(x, spec)
 
 
-COLUMNS = ("sheet", "frac_within", "p50", "p95", "max", "n_scored", "n_rc", "n_noeq",
-           "reason", "origin", "n_key", "key_med", "key_max", "note")
+COLUMNS = ("sheet", "pass", "reason", "ho_p50", "ho_p95", "in_p50", "in_p95", "in_f6", "n_scored",
+           "n_rc", "n_noeq", "agree", "inl", "origin", "n_key", "key_med", "key_max", "note")
 
 
 def format_eval_table(rows: list[EvalRow]) -> str:
-    """Fixed-width table; distances in ft. A summary line follows the rows."""
+    """Fixed-width table; distances in ft. ho_* = held-out (decides the pass), in_* =
+    in-sample (display), in_f6 = in-sample share within config.TOLERANCE_FT, agree = share
+    of the sheet's labels landing in their block / on their street, inl = inlier share of
+    scan corners. A summary line follows the rows."""
     out = [COLUMNS]
     for r in rows:
-        s = r.score or {}
-        scored = bool(s.get("n_scored"))
-        out.append((r.sheet, _f(s.get("frac_within") if scored else None, ".3f"),
-                    _f(s.get("p50_ft"), ".1f"), _f(s.get("p95_ft"), ".1f"),
-                    _f(s.get("max_ft"), ".1f"), str(s.get("n_scored", "-")),
-                    str(s.get("n_real_change", "-")), str(s.get("n_no_equivalent", "-")),
-                    ("pass" if s.get("passed") else (s.get("reason") or "-")) if s else "no score",
-                    r.origin or "-", str(r.n_key), _f(r.key_median_ft, ".1f"),
-                    _f(r.key_max_ft, ".1f"), r.note))
+        s = r.score
+        if s is None:
+            out.append((r.sheet, "-", "no score", *["-"] * 10, r.origin or "-", str(r.n_key),
+                        _f(r.key_median_ft, ".1f"), _f(r.key_max_ft, ".1f"), r.note))
+            continue
+        out.append((r.sheet, "yes" if s.passed else "no", s.reason or "-",
+                    _f(s.holdout_p50_ft, ".1f"), _f(s.holdout_p95_ft, ".1f"),
+                    _f(s.insample_p50_ft, ".1f"), _f(s.insample_p95_ft, ".1f"),
+                    _f(s.insample_frac_within if s.n_scored else None, ".2f"), str(s.n_scored),
+                    str(s.n_real_change), str(s.n_no_equivalent), _f(s.label_agreement, ".2f"),
+                    _f(s.inlier_frac, ".2f"), r.origin or "-", str(r.n_key),
+                    _f(r.key_median_ft, ".1f"), _f(r.key_max_ft, ".1f"), r.note))
     w = [max(len(row[i]) for row in out) for i in range(len(COLUMNS))]
     lines = ["  ".join(c.ljust(w[i]) for i, c in enumerate(row)).rstrip() for row in out]
-    n_pass = sum(bool((r.score or {}).get("passed")) for r in rows)
-    p95 = [r.score["p95_ft"] for r in rows if r.score and r.score.get("p95_ft") is not None]
-    km = [r.key_median_ft for r in rows if math.isfinite(r.key_median_ft) and r.origin != "answer_key"]
-    lines.append(f"passed {n_pass}/{len(rows)}; median p95 {_f(float(np.median(p95)) if p95 else None, '.1f')} ft; "
-                 f"median key distance {_f(float(np.median(km)) if km else None, '.1f')} ft "
-                 f"(tolerance {config.TOLERANCE_FT:g} ft, pass at {config.PASS_FRACTION:.0%})")
+    sc = [r.score for r in rows if r.score is not None]
+
+    def med(v):
+        v = [x for x in v if x is not None and math.isfinite(x)]
+        return _f(float(np.median(v)) if v else None, ".1f")
+
+    km = [r.key_median_ft for r in rows if r.origin != "answer_key"]
+    lines.append(f"passed {sum(s.passed for s in sc)}/{len(rows)}; median held-out p50 "
+                 f"{med([s.holdout_p50_ft for s in sc])} ft, p95 {med([s.holdout_p95_ft for s in sc])} ft "
+                 f"(in-sample p95 {med([s.insample_p95_ft for s in sc])} ft); median key distance "
+                 f"{med(km)} ft (pass: held-out median <= {config.PASS_MEDIAN_FT:g} ft and p95 <= "
+                 f"{config.PASS_P95_FT:g} ft, not misplaced)")
     return "\n".join(lines)

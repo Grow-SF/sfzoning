@@ -52,6 +52,22 @@ def test_smooth_warp_does_not_chase_outlier():
         assert np.linalg.norm(t.to_world(p) - base.to_world(p)) < 6.0  # 0.1: 4.1 ft; 0.03: 7.3
 
 
+def test_sparse_manual_points_do_not_chase_outlier():
+    # Hand-placed points (review editor, answer key): 8-40 per sheet. On a 10x10 grid a
+    # 40 ft misclick may pull the fit at that point < 8 ft inside the grid and < 16 ft at a
+    # grid corner (edge points have the most leverage). The dense TPS_SMOOTHING would not
+    # meet this (0.1: 16 ft inside, 27 ft at a corner).
+    gcps = _grid(_warped, n=10)
+    base = SheetTransform(list(gcps), smoothing=config.MANUAL_TPS_SMOOTHING).fit()
+    for k, bound in ((55, 8.0), (0, 16.0), (9, 16.0)):
+        bad = list(gcps)
+        g = gcps[k]
+        bad[k] = GCP(g.px, g.py, g.wx + 40.0, g.wy, g.source)
+        t = SheetTransform(bad, smoothing=config.MANUAL_TPS_SMOOTHING).fit()
+        p = np.array([[g.px, g.py]])
+        assert np.linalg.norm(t.to_world(p) - base.to_world(p)) < bound
+
+
 def test_roundtrip_realistic_magnitudes():
     t = SheetTransform(_grid(_warped), smoothing=config.TPS_SMOOTHING).fit()
     q = np.random.default_rng(1).uniform(300, 6700, (200, 2))

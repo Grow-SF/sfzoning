@@ -10,17 +10,18 @@ Units of `smoothing`: pixel inputs are centered and divided by their max half-ex
 they lie in about [-1, 1]; the TPS targets are the affine residuals in world feet.
 scipy adds `smoothing` to the diagonal of the TPS kernel matrix (kernel r^2 log r, r in
 those normalized units), so it is a ridge penalty on the residual field in ft^2 per
-unit-normalized-kernel. Measured on a 10x10 GCP grid over a 7000 px sheet (distortion
-about +-100 ft), one GCP moved by 40 ft shifts the fit at that pixel by:
+unit-normalized-kernel. Measured on a SPARSE 10x10 GCP grid over a 7000 px sheet (the
+density of hand-placed points; distortion about +-100 ft), one interior GCP moved by 40 ft
+shifts the fit at that pixel by (a grid-corner GCP moves it about 2.5x as much):
     smoothing 0.1 -> 16.2 ft   1 -> 5.5 ft   5 -> 2.6 ft   50 -> 0.85 ft   (0.01 -> 32 ft)
 and the max error against the true distortion field (60 ft peak affine misfit) is
     0.1 -> 3.3 ft   1 -> 15 ft   5 -> 31 ft   50 -> 53 ft (essentially affine only).
-That sparse grid was the Task 7 basis for a default of 1.0. Task 13 retuned it on real
-sheets, whose final warp has 600-2500 corner GCPs ~100-300 ft apart: there 1.0 was too
+Sparse (hand-placed) point sets use config.MANUAL_TPS_SMOOTHING = 1.0 for that reason.
+The automatic warp is DENSE: 600-2500 corner GCPs ~100-300 ft apart. There 1.0 was too
 stiff (block-held-out cross-validation improves down to 0.01-0.1) and config.TPS_SMOOTHING
-is now 0.1, where a lone 40 ft GCP moves the fit about 3-4 ft and a whole block moved
-15 ft about 5 ft (measured on 1948/1, 1960/1; see the tuning notes). Effect scales with GCP
-density (denser grids resist outliers more).
+is 0.1: a lone 40 ft GCP moves the fit about 3-4 ft (4.1 ft on a 40x40 grid) and a whole
+block moved 15 ft about 5 ft (measured on 1948/1, 1960/1; see the tuning notes). Effect
+scales with GCP density (denser grids resist outliers more).
 
 Fewer than MIN_GCPS enabled GCPs is an error. With MIN_GCPS..TPS_MIN_GCPS-1 (3-9) the
 fit is affine only: a TPS on so few points is unstable.

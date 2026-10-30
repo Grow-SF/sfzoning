@@ -73,7 +73,8 @@ SMALL_CELL_AREA = 150
 ACROSS_PX = 12
 ACROSS_STREET_FRACTION = 0.25
 ACROSS_INTERIOR_FRACTION = 0.25
-# A thin candidate with at least this share of its outline touching street
+# A thin candidate (half-width < MIN_INTERIOR_HALFWIDTH, not anchor-sized)
+# with at least this share of its outline touching street
 # runs alongside the street (a margin the photo street seeds missed), so it
 # is street.  An alley or lot gap touches street only at its mouth.
 ALONGSIDE_FRACTION = 0.3
@@ -334,7 +335,8 @@ def classify_white(ink: np.ndarray, outside: np.ndarray, photo: bool = False) ->
     #    to compact regions thick enough to be a block: on faded photos a
     #    block's outline is often broken in several places.)
     #  * Small pieces (counters, pattern cells) are block material.
-    #  * A thin piece whose outline lies largely against street runs
+    #  * A thin piece (half-width under MIN_INTERIOR_HALFWIDTH, not able to
+    #    anchor a block) whose outline lies largely against street runs
     #    alongside it: a street margin the photo street seeds missed (they
     #    stop short of the kerb where specks interrupt the long runs).  It is
     #    street; otherwise the block grows a strip of street.
@@ -374,7 +376,8 @@ def classify_white(ink: np.ndarray, outside: np.ndarray, photo: bool = False) ->
             y0, y1 = max(0, sl[0].start - ACROSS_PX), min(h, sl[0].stop + ACROSS_PX)
             x0, x1 = max(0, sl[1].start - ACROSS_PX), min(w, sl[1].stop + ACROSS_PX)
             comp = (clab[y0:y1, x0:x1] == i).astype(np.uint8)
-            if not anchor_ok[i]:
+            thin = float(dist[y0:y1, x0:x1][comp > 0].max()) < MIN_INTERIOR_HALFWIDTH
+            if thin and not anchor_ok[i]:
                 rim_px = comp.astype(bool) & ~(cv2.erode(comp, np.ones((3, 3), np.uint8)) > 0)
                 if (rim_px & st8[y0:y1, x0:x1]).sum() >= ALONGSIDE_FRACTION * max(int(rim_px.sum()), 1):
                     decided[i] = 1

@@ -41,10 +41,9 @@ corners between consecutive fits is < SHIFT_TOL_FT; the loop ends when that happ
 the last radius, or after `max_iter` refits. RefineResult.converged is False exactly when
 `max_iter` refits were used up before the last radius settled.
 
-Annealed smoothing: at radius stage i of n (i < n-1) the TPS smoothing is
-config.COARSE_TPS_SMOOTHING / COARSE_SMOOTHING_STEP^i, floored at config.TPS_SMOOTHING, and
-the last stage uses config.TPS_SMOOTHING (1000, 100, 10, 0.1 for the default four radii),
-so the wide-radius stages are nearly affine. A flexible warp at the wide
+Annealed smoothing: the TPS smoothing falls geometrically from config.COARSE_TPS_SMOOTHING
+at the widest radius to config.TPS_SMOOTHING at the last (1000, 46, 2.2, 0.1 for the
+default four radii), so the wide-radius stages are nearly affine. A flexible warp at the wide
 radii can carry a whole region one street over and still look self-consistent (seen with
 a 40 ft / 1 deg start: q95 error 3.5 ft, some inliers 50-70 ft wrong); stiff early stages
 fix the global misfit before local paper stretch is admitted. The final transform uses
@@ -94,7 +93,11 @@ radius) or no_equivalent (moved more). classify_changes, run after refine:
   6. the transform is refit (source="auto", config.TPS_SMOOTHING) on the inliers minus
      real_change, and steps 1-6 repeat until the labels stop changing (at most
      MAX_CLASSIFY_ROUNDS rounds; RefineResult.classify_converged is False if they were
-     still changing then).
+     still changing then). A 2-cycle (labels back to those of two rounds before) that
+     flips at most CYCLE_MAX_FLIPS corners counts as converged: the union of both states
+     is kept as real change and the transform refit once on the rest. With the flexible
+     final warp (TPS_SMOOTHING 0.1) a few borderline corners do this on real sheets
+     (1948/1: 3-5 of 1670 flipping 21 <-> 18).
 Matches not in a cluster keep their refine label (outlier / no_equivalent / inlier),
 re-measured against the final transform. Real-change matches never enter the fit or the
 score; changes_geojson records them with their offsets.
@@ -124,7 +127,6 @@ MAD_SCALE = 1.4826       # MAD -> standard deviation for normal residuals
 MIN_MAD_FT = 0.5         # floor on the scaled MAD (ft)
 SHIFT_TOL_FT = 1.0       # median shift below which the fit has stopped moving
 MIN_CORNER_GCPS = 10     # fewer corner pairs than this: keep the start's anchor GCPs
-COARSE_SMOOTHING_STEP = 10.0  # TPS smoothing x this per radius step above the last
 MAX_LOOP_GCPS = 1200     # inside the loop fit on at most this many pairs (speed)
 VOTE_REACH = 1.5         # translation vote looks this x the first radius out ...
                          # ... capped at config.ROUGH_TOL_FT
@@ -138,6 +140,7 @@ VOTE_VALLEY = 0.5        # ... and so are those not separated from it by a dip b
 CLUSTER_FT = 600.0       # real-change corners link within this distance
 COUNTERPART_FT = 60.0    # search radius for a moved corner's modern counterpart
 MAX_CLASSIFY_ROUNDS = 5
+CYCLE_MAX_FLIPS = 10      # a 2-cycle flipping at most this many labels is resolved (union)
 NOEQ_LINK_FT = 300.0     # no_equivalent corners within this join one hull
 NOEQ_BUFFER_FT = 15.0    # buffer for a no_equivalent singleton (or a 2-point/collinear hull)
 GEOJSON_CRS = {"type": "name", "properties": {"name": "urn:ogc:def:crs:EPSG::2227"}}
@@ -250,10 +253,13 @@ def _vote_shift(world: np.ndarray, ref_tree: cKDTree, reach: float) -> tuple[np.
 
 
 def _smoothing(stage: int, n_stages: int) -> float:
-    """Stiff warp at the wide radii, config.TPS_SMOOTHING at the last one."""
-    if stage >= n_stages - 1:
-        return config.TPS_SMOOTHING
-    return max(config.TPS_SMOOTHING, config.COARSE_TPS_SMOOTHING / COARSE_SMOOTHING_STEP ** stage)
+    """Geometric from config.COARSE_TPS_SMOOTHING (widest radius) to config.TPS_SMOOTHING
+    (last radius): equal ratios per stage, so no stage loosens the warp much more than the
+    one before (a 10 -> 0.1 jump at the last stage left 1948/1 oscillating)."""
+    hi, lo = config.COARSE_TPS_SMOOTHING, config.TPS_SMOOTHING
+    if n_stages <= 1 or hi <= lo:
+        return lo if stage >= n_stages - 1 else max(hi, lo)
+    return float(hi * (lo / hi) ** (stage / (n_stages - 1)))
 
 
 def _ref_arrays(ref_corners: GeoDataFrame):
@@ -446,12 +452,26 @@ def classify_changes(result: RefineResult, *, tol_ft: float = config.TOLERANCE_F
     tr = result.transform
     rc, cp = np.zeros(n, bool), np.full(n, -1)
     stable = False
+    prev_rc = None
     for _ in range(MAX_CLASSIFY_ROUNDS):
         new_rc, new_cp = _real_change(mapped(tr), ok, W, tree, pair_k[base_inl & ~rc],
                                       tol_ft, min_cluster, coherence_ft)
         if (new_rc == rc).all() and (new_cp == cp).all():
             stable = True
             break
+        flips = int((new_rc != rc).sum())
+        if prev_rc is not None and (new_rc == prev_rc).all() and flips <= CYCLE_MAX_FLIPS:
+            # 2-cycle: a few borderline corners flip in and out as the refit moves. Keep
+            # the union as real change (the conservative side for the historic record:
+            # they stay out of the fit), refit once, and stop.
+            cp = np.where(new_rc & ~rc, new_cp, cp)
+            rc = rc | new_rc
+            new = _fit(P, W, pair_k, base_inl & ~rc, extra, config.TPS_SMOOTHING)
+            if new is not None:
+                tr = new
+            stable = True
+            break
+        prev_rc = rc
         rc, cp = new_rc, new_cp
         new = _fit(P, W, pair_k, base_inl & ~rc, extra, config.TPS_SMOOTHING)
         if new is not None:

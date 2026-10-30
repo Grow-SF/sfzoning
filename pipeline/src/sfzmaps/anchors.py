@@ -41,6 +41,10 @@ MAX_ITERS = 3000
 MIN_SAMPLE_PX = 50.0
 SCALE_RANGE = (0.3, 10.0)
 REFIT_ROUNDS = 3
+SCALE_HINT_FACTOR = 1.5     # with a scale hint, RANSAC accepts hint / f .. hint * f only
+SNAP_RADII_FT = (300.0, 200.0, 120.0, 80.0, 60.0, 60.0)  # street_snap trimming schedule
+SNAP_MIN_LABELS = 8
+SNAP_MAX_BLOCKS = 10        # with this many block-number inliers the blocks already pin the fit
 
 
 @dataclass
@@ -123,7 +127,14 @@ def _wls(z, w, wt):
 
 
 def rough_fit(cands: list[Candidate], *, min_inliers: int = 6,
-              ransac_tol_ft: float = 150) -> RoughFit | None:
+              ransac_tol_ft: float = 150, scale_hint: float | None = None) -> RoughFit | None:
+    """scale_hint (ft/px, e.g. from the sheet's street width) narrows the accepted scale to
+    hint / SCALE_HINT_FACTOR .. hint * SCALE_HINT_FACTOR, so a coincidental consensus of
+    misread or renumbered labels at the wrong scale cannot win (seen on 1948/10: 7 of 288
+    anchors agreed on 3.7 ft/px and a 135 deg rotation; true 2.4 ft/px)."""
+    lo_s, hi_s = SCALE_RANGE
+    if scale_hint is not None and scale_hint > 0:
+        lo_s, hi_s = scale_hint / SCALE_HINT_FACTOR, scale_hint * SCALE_HINT_FACTOR
     if len(cands) < min_inliers:
         return None
     z = _z(np.array([[c.label.x, c.label.y] for c in cands], float))
@@ -151,7 +162,7 @@ def rough_fit(cands: list[Candidate], *, min_inliers: int = 6,
         if abs(dz) < MIN_SAMPLE_PX or abs(dw) == 0:
             continue
         a = dw / dz
-        if not SCALE_RANGE[0] <= abs(a) <= SCALE_RANGE[1]:
+        if not lo_s <= abs(a) <= hi_s:
             continue
         inl, score, resid = evaluate(a, w[i] - a * z[i])
         key = (score, -resid)
@@ -174,7 +185,7 @@ def rough_fit(cands: list[Candidate], *, min_inliers: int = 6,
             break
         inl = new
     scale = float(abs(a))
-    if inl.sum() < min_inliers or not SCALE_RANGE[0] <= scale <= SCALE_RANGE[1]:
+    if inl.sum() < min_inliers or not lo_s <= scale <= hi_s:
         return None
 
     inliers = [c for c, k in zip(cands, inl) if k]
@@ -184,3 +195,87 @@ def rough_fit(cands: list[Candidate], *, min_inliers: int = 6,
     except ValueError:
         return None
     return RoughFit(tr, inliers, scale, float(np.degrees(np.angle(a))))
+
+
+_STREET_LINES: dict[int, dict] = {}
+
+
+def _street_lines(ref: Reference) -> dict:
+    """Normalized street name -> its active centerlines (one geometry), cached per ref."""
+    key = id(ref.streets)
+    if key not in _STREET_LINES:
+        from shapely.ops import unary_union
+
+        from sfzmaps.sources.datasf import _street_name
+        s = ref.streets
+        if "street" not in s.columns or not len(s):
+            _STREET_LINES.clear()
+            _STREET_LINES[key] = {}
+            return _STREET_LINES[key]
+        if "active" in s.columns:
+            s = s[s["active"].astype(str).str.lower() == "true"]
+        sn = s["streetname"] if "streetname" in s.columns else [None] * len(s)
+        groups: dict[str, list] = {}
+        for street, name, g in zip(s["street"], sn, s.geometry):
+            if g is not None and not g.is_empty:
+                groups.setdefault(_street_name(street, name), []).append(g)
+        _STREET_LINES.clear()
+        _STREET_LINES[key] = {k: unary_union(v) for k, v in groups.items() if k}
+    return _STREET_LINES[key]
+
+
+def street_snap(fit: RoughFit, labels: list[Label], ref: Reference) -> RoughFit:
+    """Tighten a rough fit with every street-name label: a name is printed ON its street,
+    so the label's pixel, mapped by the fit, should lie on that street's centerline.
+
+    Street-pair anchors put a pair's label midpoint at the intersection, which is often a
+    few hundred feet off (labels sit mid-block); on 1960 sheets, which have only street
+    names, the rough fit was 120-330 ft off and refine then locked some regions one street
+    over. Here, ICP-style: each label pairs with the nearest point of its named street
+    within a shrinking radius (SNAP_RADII_FT), block-number inliers keep their centroids,
+    and a similarity is refit (IRLS over the schedule). Many streets in different
+    directions pin both position and scale. Returns the input fit unchanged when fewer
+    than SNAP_MIN_LABELS labels can be snapped, or when the fit already has
+    SNAP_MAX_BLOCKS block-number inliers (block centroids are better anchors than names:
+    on 1948 sheets snapping moved the fit 0-50 ft *away* from the answer key)."""
+    from shapely.geometry import Point
+    from shapely.ops import nearest_points
+
+    lines = _street_lines(ref)
+    sl = [(lb, lines.get(normalize_street(lb.text))) for lb in labels if lb.kind == "street_name"]
+    sl = [(lb, g) for lb, g in sl if g is not None]
+    blocks = [c for c in fit.inliers if c.kind == "block"]
+    if len(sl) < SNAP_MIN_LABELS or len(blocks) >= SNAP_MAX_BLOCKS:
+        return fit
+    zs = _z(np.array([[lb.x, lb.y] for lb, _ in sl], float))
+    zb = _z(np.array([[c.label.x, c.label.y] for c in blocks], float)) if blocks else np.empty(0, complex)
+    wb = np.array([complex(*c.world) for c in blocks]) if blocks else np.empty(0, complex)
+    zi = _z(np.array([[c.label.x, c.label.y] for c in fit.inliers], float))
+    wi = np.array([complex(*c.world) for c in fit.inliers])
+    ab = _wls(zi, wi, np.array([c.weight for c in fit.inliers], float))
+    if ab is None:
+        return fit
+    a, b = ab
+    keep = np.zeros(len(sl), bool)
+    targets = np.zeros(len(sl), complex)
+    for radius in SNAP_RADII_FT:
+        m = a * zs + b
+        for i, ((_, g), q) in enumerate(zip(sl, m)):
+            p = nearest_points(g, Point(q.real, q.imag))[0]
+            targets[i] = complex(p.x, p.y)
+        keep = np.abs(m - targets) <= radius
+        if keep.sum() < SNAP_MIN_LABELS:
+            return fit
+        z = np.r_[zs[keep], zb]
+        w = np.r_[targets[keep], wb]
+        nxt = _wls(z, w, np.ones(len(z)))
+        if nxt is None:
+            return fit
+        a, b = nxt
+    gcps = [GCP(lb.x, lb.y, t.real, t.imag, "anchor") for (lb, _), t, k in zip(sl, targets, keep) if k]
+    gcps += [GCP(c.label.x, c.label.y, c.world[0], c.world[1], "anchor") for c in blocks]
+    try:
+        tr = SheetTransform(gcps, smoothing=config.COARSE_TPS_SMOOTHING).fit()
+    except ValueError:
+        return fit
+    return RoughFit(tr, fit.inliers, float(abs(a)), float(np.degrees(np.angle(a))))
