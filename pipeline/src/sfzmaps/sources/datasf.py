@@ -18,6 +18,7 @@ from sfzmaps import config
 from sfzmaps.config import REF_DIR, WORK_CRS
 
 PARCELS_URL = "https://data.sf.gov/resource/acdm-wktn.geojson"
+ZONING_URL = "https://data.sf.gov/resource/3i4a-hu95.geojson"
 STREETS_URL = "https://data.sf.gov/resource/3psu-pn9h.geojson"
 PAGE_SIZE = 50000
 MIN_AREA_SQFT = 50.0
@@ -27,6 +28,7 @@ NODE_CLUSTER_FT = 5.0
 MAX_PAGES = 100
 
 PARCEL_COLS = ["block_num", "lot_num", "blklot", "active", "date_rec_drop", "date_map_drop"]
+ZONING_COLS = ["zoning_sim", "districtna", "url", "gen", "zoning", "codesectio"]
 STREET_COLS = ["cnn", "street", "st_type", "streetname", "f_node_cnn", "t_node_cnn", "active"]
 
 _SUFFIXES = {
@@ -228,6 +230,15 @@ def fetch_reference(dest: Path = REF_DIR) -> None:
     parcels.to_parquet(dest / "parcels.parquet")
     streets = _fetch_all(STREETS_URL, STREET_COLS, "line")
     streets.to_parquet(dest / "streets.parquet")
+
+
+def fetch_zoning_current(dest: Path = REF_DIR) -> Path:
+    """DataSF zoning districts (3i4a-hu95) -> ref/zoning_current.parquet."""
+    dest.mkdir(parents=True, exist_ok=True)
+    zoning = _fetch_all(ZONING_URL, ZONING_COLS, "the_geom")
+    path = dest / "zoning_current.parquet"
+    zoning.to_parquet(path)
+    return path
 
 
 @dataclass
