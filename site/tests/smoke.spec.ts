@@ -4,7 +4,7 @@ import { SOURCES } from "../content/sources";
 
 async function centerStep(page: Page, id: string) {
   await page.evaluate((sid) => {
-    const r = document.querySelector(`[data-step="${sid}"]`)!.getBoundingClientRect();
+    const r = document.querySelector(`[data-step="${sid}"] article`)!.getBoundingClientRect();
     window.scrollBy(0, r.top + r.height / 2 - innerHeight / 2);
   }, id);
   await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", id);

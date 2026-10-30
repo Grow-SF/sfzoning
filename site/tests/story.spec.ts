@@ -3,7 +3,7 @@ import { STORY } from "../content/story";
 
 async function centerStep(page: Page, id: string) {
   await page.evaluate((sid) => {
-    const el = document.querySelector(`[data-step="${sid}"]`)!;
+    const el = document.querySelector(`[data-step="${sid}"] article`)!;
     const r = el.getBoundingClientRect();
     window.scrollTo(0, window.scrollY + r.top + r.height / 2 - window.innerHeight / 2);
   }, id);
@@ -23,6 +23,43 @@ test("scrolling through the story activates every step in turn", async ({ page }
     await centerStep(page, s.id);
     await expect(story).toHaveAttribute("data-active-step", s.id);
   }
+});
+
+test.describe("phone trigger", () => {
+  test.use({ viewport: { width: 390, height: 844 } });
+
+  test("the map switches as the new card comes up past 70% of the screen, not before", async ({ page }, info) => {
+    test.skip(info.project.name !== "mobile", "phone layout only");
+    await page.goto("/");
+    const story = page.locator("[data-active-step]");
+    const wrap = story.locator(".map-wrap");
+    const putCardTopAt = (id: string, frac: number) =>
+      page.evaluate(
+        ([sid, f]) => {
+          const r = document.querySelector(`[data-step="${sid}"] article`)!.getBoundingClientRect();
+          window.scrollBy(0, r.top - innerHeight * (f as number));
+        },
+        [id, frac] as const,
+      );
+    for (const [prev, next] of [
+      ["today-opening", "1921-sunset"],
+      ["1921-mission", "1948-sunset"],
+    ]) {
+      const prevEra = STORY.find((s) => s.id === prev)!.era;
+      const nextEra = STORY.find((s) => s.id === next)!.era;
+      // The new card is on screen, its top below the trigger line: still the previous step.
+      await putCardTopAt(next, 0.8);
+      await page.waitForTimeout(400);
+      await expect(story).toHaveAttribute("data-active-step", prev);
+      await expect(wrap).toHaveAttribute("data-era", prevEra);
+      const top = await page.locator(`[data-step="${next}"] article`).evaluate((el) => el.getBoundingClientRect().top);
+      expect(top).toBeLessThan(844); // the card really is in view
+      // Its top crosses 70%: the step, and the map, change.
+      await putCardTopAt(next, 0.65);
+      await expect(story).toHaveAttribute("data-active-step", next);
+      await expect(wrap).toHaveAttribute("data-era", nextEra);
+    }
+  });
 });
 
 test.describe("small phone", () => {

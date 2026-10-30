@@ -3,80 +3,72 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 
 export type ScrollStepsOptions = {
-  /** Where the trigger line sits, as a fraction of viewport height from the top. Default 0.5. */
+  /** Where the trigger line sits, as a fraction of viewport height from the top. Default 0.7. */
   offset?: number;
 };
 
-export type ScrollStepsState = { active: number; progress: number };
+export type ScrollStepsState = { active: number };
 
 /**
- * Scrollama-style step tracker. A step is active while it crosses the trigger line
- * (the viewport middle by default). Observer callbacks are coalesced into one report per
+ * The active step is the last one whose element's top has crossed the trigger line, or the
+ * first step before any has. Pass the step *cards*, not their sections: on phones a card sits
+ * at the bottom of a full-screen section, so keying off the card means the map changes as the
+ * card itself comes up into view, not a screen earlier.
+ *
+ * Unlike an "intersecting the line" rule, this has no gaps: a short card that never straddles
+ * the line, or a jump that lands between cards, still resolves to the step the reader is on.
+ */
+export function activeIndex(tops: number[], line: number): number {
+  let active = 0;
+  tops.forEach((top, i) => {
+    if (top <= line) active = i;
+  });
+  return active;
+}
+
+/**
+ * Tracks the active step. Scroll and resize events are coalesced into one measurement per
  * animation frame, so a fast fling across several steps reports only where it landed.
- * `progress` (0..1) is how far the trigger line has travelled through the active step.
  */
 export function useScrollSteps(
   refs: RefObject<HTMLElement | null>[],
   opts: ScrollStepsOptions = {},
 ): ScrollStepsState {
-  const offset = opts.offset ?? 0.5;
+  const offset = opts.offset ?? 0.7;
   const [active, setActive] = useState(0);
-  const [progress, setProgress] = useState(0);
   const activeRef = useRef(0);
 
   useEffect(() => {
     const els = refs.map((r) => r.current).filter((el): el is HTMLElement => !!el);
-    if (!els.length || typeof IntersectionObserver === "undefined") return;
+    if (!els.length) return;
 
-    let pending: number | null = null;
     let frame = 0;
-    const flush = () => {
-      frame = 0;
-      if (pending === null) return;
-      activeRef.current = pending;
-      setActive(pending);
-      pending = null;
-    };
-
-    const top = -Math.round(offset * 100);
-    const bottom = -Math.round((1 - offset) * 100);
-    const io = new IntersectionObserver(
-      (entries) => {
-        for (const e of entries) {
-          if (!e.isIntersecting) continue;
-          const i = els.indexOf(e.target as HTMLElement);
-          if (i >= 0) pending = i; // later entries win
-        }
-        if (pending !== null && !frame) frame = requestAnimationFrame(flush);
-      },
-      { rootMargin: `${top}% 0px ${bottom}% 0px`, threshold: 0 },
-    );
-    els.forEach((el) => io.observe(el));
-
-    let pFrame = 0;
     const measure = () => {
-      pFrame = 0;
-      const el = els[activeRef.current];
-      if (!el) return;
-      const r = el.getBoundingClientRect();
-      const line = window.innerHeight * offset;
-      const p = r.height ? (line - r.top) / r.height : 0;
-      setProgress(Math.min(1, Math.max(0, p)));
+      frame = 0;
+      const next = activeIndex(
+        els.map((el) => el.getBoundingClientRect().top),
+        window.innerHeight * offset,
+      );
+      if (next !== activeRef.current) {
+        activeRef.current = next;
+        setActive(next);
+      }
     };
-    const onScroll = () => {
-      if (!pFrame) pFrame = requestAnimationFrame(measure);
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
     };
-    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    schedule(); // a reload can restore a scrolled position
 
     return () => {
-      io.disconnect();
-      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
       if (frame) cancelAnimationFrame(frame);
-      if (pFrame) cancelAnimationFrame(pFrame);
     };
     // refs are stable per mount; re-run only when the step count changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refs.length, offset]);
 
-  return { active, progress };
+  return { active };
 }

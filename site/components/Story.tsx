@@ -13,7 +13,8 @@ type Props = { steps: Step[] };
 export default function Story({ steps }: Props) {
   const mapRef = useRef<StoryMapHandle>(null);
   const refs = useMemo(() => steps.map(() => createRef<HTMLElement>()), [steps]);
-  const { active, progress } = useScrollSteps(refs);
+  // Refs are the step *cards*: a step starts as its card's top crosses 70% of the viewport.
+  const { active } = useScrollSteps(refs, { offset: 0.7 });
   const step = steps[active];
   const next = steps[active + 1];
 
@@ -53,15 +54,8 @@ export default function Story({ steps }: Props) {
         </header>
 
         {steps.map((s, i) => (
-          <section
-            key={s.id}
-            ref={refs[i]}
-            className={styles.step}
-            data-step={s.id}
-            data-active={i === active || undefined}
-            style={i === active ? ({ "--progress": progress } as React.CSSProperties) : undefined}
-          >
-            <StepCard step={s} era={ERAS.find((e) => e.id === s.era)} active={i === active} />
+          <section key={s.id} className={styles.step} data-step={s.id} data-active={i === active || undefined}>
+            <StepCard ref={refs[i]} step={s} era={ERAS.find((e) => e.id === s.era)} active={i === active} />
           </section>
         ))}
         <div className={styles.tail} aria-hidden />

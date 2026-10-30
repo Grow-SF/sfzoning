@@ -1,13 +1,14 @@
+import type { Ref } from "react";
 import type { Step } from "@/content/schema";
 import type { Era } from "@/lib/eras";
 import { SOURCES } from "@/content/sources";
 import styles from "@/app/page.module.css";
 
-type Props = { step: Step; era?: Era; active: boolean };
+type Props = { step: Step; era?: Era; active: boolean; ref?: Ref<HTMLElement> };
 
-export default function StepCard({ step, era, active }: Props) {
+export default function StepCard({ step, era, active, ref }: Props) {
   return (
-    <article className={styles.card} data-active={active || undefined} aria-labelledby={`${step.id}-title`}>
+    <article ref={ref} className={styles.card} data-active={active || undefined} aria-labelledby={`${step.id}-title`}>
       {/* The scroller carries no background: Chrome culls a WebGL canvas under an opaque
           composited scroller over the scroller's whole content height, blanking the map. */}
       <div className={styles.cardScroll} tabIndex={0}>
