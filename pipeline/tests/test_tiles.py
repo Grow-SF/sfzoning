@@ -1,5 +1,6 @@
 import shutil
 import sqlite3
+from pathlib import Path
 
 import pytest
 
@@ -42,3 +43,38 @@ def test_default_max_zoom_is_18():
     from sfzmaps import cli
     assert inspect.signature(tiles.make_pmtiles).parameters["max_zoom"].default == 18
     assert cli._publish.__defaults__ == (11, 18)
+
+
+def _fake_tools(monkeypatch, fail_convert):
+    from sfzmaps import tiles
+
+    def run(cmd):
+        if cmd[0] == "pmtiles":
+            if fail_convert:
+                raise RuntimeError("pmtiles failed: boom")
+            Path(cmd[-1]).write_bytes(b"NEW")
+        else:
+            Path(cmd[-1]).write_bytes(b"x")
+
+    monkeypatch.setattr(tiles, "require_tools", lambda: None)
+    monkeypatch.setattr(tiles, "_run", run)
+    monkeypatch.setattr(tiles, "report_from_mbtiles", lambda p: tiles.TileReport(1, {11: 1}))
+    monkeypatch.setattr(tiles, "set_metadata", lambda *a, **k: None)
+
+
+def test_failed_convert_keeps_old_pmtiles(tmp_path, monkeypatch):
+    """M4: the old PMTiles survives a failing `pmtiles convert`; a good one replaces it."""
+    import pytest
+
+    from sfzmaps import tiles
+
+    out = tmp_path / "1948.pmtiles"
+    out.write_bytes(b"OLD")
+    _fake_tools(monkeypatch, fail_convert=True)
+    with pytest.raises(RuntimeError):
+        tiles.make_pmtiles(tmp_path / "x.vrt", out)
+    assert out.read_bytes() == b"OLD"
+    _fake_tools(monkeypatch, fail_convert=False)
+    tiles.make_pmtiles(tmp_path / "x.vrt", out)
+    assert out.read_bytes() == b"NEW"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["1948.pmtiles"]

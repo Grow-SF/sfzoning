@@ -86,8 +86,10 @@ def make_pmtiles(vrt: Path, out: Path, *, min_zoom: int = 11, max_zoom: int = 18
             _run(["gdaladdo", "--config", "GDAL_NUM_THREADS", "ALL_CPUS", "-r", "bilinear", str(mb), *[str(2 ** i) for i in range(1, top - min_zoom + 1)]])
         report = report_from_mbtiles(mb)
         set_metadata(mb, name, attribution, min_zoom)
-        out.unlink(missing_ok=True)
-        _run(["pmtiles", "convert", str(mb), str(out)])
+        # convert next to `out`, then replace it: a failed convert keeps the old PMTiles
+        part = tmp / out.name
+        _run(["pmtiles", "convert", str(mb), str(part)])
+        part.replace(out)
         if keep_mbtiles:
             shutil.copy(mb, keep_mbtiles)
     return report

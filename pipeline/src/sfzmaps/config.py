@@ -118,6 +118,11 @@ PATCH_MULTIPLIER = 1.2
 PRICE_IN_PER_M = 2.0
 PRICE_OUT_PER_M = 10.0
 EST_OUT_TOKENS = 800
+# Non-image input tokens per call (prompt text, structured-output schema, message framing):
+# about 350, as measured in the final branch review (2026-10-29); consistent with the label
+# prompt (~970 chars) plus its JSON schema (~570 chars) at ~4 chars/token. `estimate` adds it
+# to every uncached call.
+EST_TEXT_TOKENS_PER_CALL = 350
 
 
 def estimate_image_tokens(w: int, h: int) -> int:

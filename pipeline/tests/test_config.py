@@ -26,3 +26,29 @@ def test_model_and_prices():
 def test_estimate_tokens_fits_2048_box_before_patch_budget():
     # 4000x1000 -> fit 2048 box -> 2048x512 = 64x16 = 1024 patches -> 1229 tokens
     assert config.estimate_image_tokens(4000, 1000) == math.ceil(1024 * 1.2)
+
+
+def test_estimate_includes_prompt_text_tokens(tmp_path, monkeypatch):
+    """R11: every uncached call is charged EST_TEXT_TOKENS_PER_CALL text tokens too."""
+    import re
+
+    import cv2
+    import numpy as np
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli, llm, pages
+    from sfzmaps.pages import Page
+
+    png = tmp_path / "page.png"
+    cv2.imwrite(str(png), np.full((600, 600), 255, np.uint8))
+    monkeypatch.setattr(pages, "discover", lambda: [Page("1948", "1", png, None)])
+    monkeypatch.setattr(cli, "_page_png", lambda page: png)
+    monkeypatch.setattr(llm, "is_cached", lambda *a: False)
+    out = CliRunner().invoke(cli.app, ["estimate", "--year", "1948"]).output
+    calls = int(re.search(r"calls: (\d+)", out).group(1))
+    img = int(re.search(r"image tokens: ([\d,]+)", out).group(1).replace(",", ""))
+    txt = int(re.search(r"prompt text tokens: ([\d,]+)", out).group(1).replace(",", ""))
+    usd = float(re.search(r"\$([\d.]+)", out).group(1))
+    assert calls >= 1 and txt == calls * config.EST_TEXT_TOKENS_PER_CALL
+    want = ((img + txt) * config.PRICE_IN_PER_M + calls * config.EST_OUT_TOKENS * config.PRICE_OUT_PER_M) / 1e6
+    assert abs(usd - want) < 0.006 and "estimate" in out

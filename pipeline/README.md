@@ -39,9 +39,9 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 | `review --year S` | Serve `data/out/` on 127.0.0.1 and open the series review page. |
 | `edit [--year S] [--sheet ID]` | Start the control-point editor on 127.0.0.1:8765 (`--demo` for a synthetic sheet). |
 | `bundle` | Write the processed files into `data/share/` as zips plus `PROCESSED.json`, for copying by hand into the Drive folder `old-planning-maps/processed/`. |
-| `pull` | Download the processed zips from the public Drive `processed/` folder and extract them into `data/`. |
+| `pull` | Download the processed zips from the public Drive `processed/` folder and extract them into `data/`. The `processed/` folder must be shared as "Anyone with the link" (Viewer); `pull` uses Drive's public download, so a private folder gives an error page, which `pull` rejects. |
 | `eval --year 1948\|1960` | Per-sheet score next to the distance from our transform to the owner's manual `.points` (the answer key). |
-| `estimate --year S` / `--all` | Project API calls, tokens and USD for the uncached pages (no API calls). |
+| `estimate --year S` / `--all` | Estimate API calls, tokens and USD for the uncached pages (no API calls). It is an estimate: image tokens use OpenAI's patch formula, prompt text is a flat `config.EST_TEXT_TOKENS_PER_CALL` (~350) per call, and output is a flat `EST_OUT_TOKENS` per call. |
 | `calibrate --year S --sheet ID` | Find the smallest label-reading scale that keeps 95% of full-resolution recall. |
 
 `push` also exists: it bundles and uploads with rclone, if you have set rclone up.
@@ -54,9 +54,20 @@ uv run sfzmaps fetch && uv run sfzmaps pull && uv run sfzmaps run --all
 ```
 
 `pull` brings back the LLM cache, the reference data and every sheet's processed
-files (transforms, scores, reviews). `run --all` then finds every API answer in the
-cache, so this costs **zero API spend**. It still re-warps and re-tiles locally where
-the outputs are missing.
+files (transforms, scores, reviews). It costs **zero API spend only if your renders
+are byte-identical** to the ones that filled the cache. `page.png` is not shared; `run`
+re-renders it from the raw scan, and the cache keys hash the image pixels.
+`page.json` and `labels.json` store the `page_sha256` of the `page.png` they came
+from. If your fresh render has the same hash, classification and labels count as
+current and nothing is re-read. A different poppler (PDF render) or OpenCV version
+can change the bytes. Then the labels are re-read and **billed**. Run
+`uv run sfzmaps estimate --all` after `fetch` and `pull`, before `run`: it shows how
+many calls would miss the cache. Either way, `run` re-warps and re-tiles locally
+where outputs are missing.
+
+`pull` never overwrites a `review.json` you edited locally (the incoming copy is saved
+as `review.json.pulled`). It also keeps that sheet's `transform.json`, `score.json`,
+`changes.geojson` and `refine.json`.
 
 ## The pass rule
 
@@ -113,6 +124,15 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
 3. Save. This writes `review.json` and re-runs warp, score, stitch and tile for that
    sheet. A later automatic run never overwrites a human review unless you pass
    `--force-auto`. You can accept a sheet that still fails, with a note.
+   `review.json` records the reviewer as `$SFZMAPS_REVIEWER`, or `"owner"` if that
+   is unset. It never records your git email, because `review.json` is bundled to
+   the shared Drive folder.
+   An edited set of 100 or more enabled points (usually the automatic points the
+   editor starts from) is fit with the automatic warp's smoothing,
+   `TPS_SMOOTHING`. A sparser hand-placed set uses `MANUAL_TPS_SMOOTHING`.
+   `review.json` stores the smoothing it used. The held-out score refits the warp
+   on your edited points, leaving out one group of blocks at a time, so moving or
+   disabling points changes it.
 4. For 1948 and 1960, the editor offers the owner's manual `.points` and adopts
    them when they score better.
 

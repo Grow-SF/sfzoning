@@ -31,6 +31,8 @@ def fetch(
         if not e.is_folder and only is None:
             config.RAW_DIR.mkdir(parents=True, exist_ok=True)
             p = config.RAW_DIR / drive._safe_name(e.title)
+            if p.exists() and drive.looks_like_html(p):  # a saved Drive error page
+                p.unlink()
             if not (p.exists() and p.stat().st_size > 0):
                 drive.download(e.id, p)
     n = 0
@@ -123,11 +125,13 @@ def estimate(
                 continue
             calls += 1
             tokens += config.estimate_image_tokens(img.shape[1], img.shape[0])
-    usd = tokens * in_price + calls * out_tokens * out_price
+    text_tokens = calls * config.EST_TEXT_TOKENS_PER_CALL
+    usd = (tokens + text_tokens) * in_price + calls * out_tokens * out_price
     typer.echo(f"pages: {npages}")
     typer.echo(f"calls: {calls} (cache hits: {hits})")
     typer.echo(f"image tokens: {tokens:,.0f}")
-    typer.echo(f"projected cost: ${usd:,.2f}  (${config.PRICE_IN_PER_M:g}/M in, ${config.PRICE_OUT_PER_M:g}/M out, {out_tokens} output tokens/call)")
+    typer.echo(f"prompt text tokens: {text_tokens:,.0f} ({config.EST_TEXT_TOKENS_PER_CALL}/call)")
+    typer.echo(f"projected cost (estimate): ${usd:,.2f}  (${config.PRICE_IN_PER_M:g}/M in, ${config.PRICE_OUT_PER_M:g}/M out, {out_tokens} output tokens/call)")
     if fallback:
         typer.echo(f"note: {fallback} of {npages} pages have no cached classification, so mask boxes "
                    "are unknown and their tiles are excluded by neatline only (upper bound).")
@@ -155,11 +159,21 @@ def run(
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     ref = datasf.load_reference()
     allp = pages.discover()
+    failures: list[tuple[str, str]] = []
     for s in sorted({p.series for p in allp if all_ or p.series == year}):
-        runner.run_series(s, sheet=sheet, until=until, force_auto=force_auto, force=force,
-                          ref=ref, pages_list=allp)
-        if sheet is None and until is None:  # a partial run must not republish the series
-            _publish(s)
+        try:
+            runner.run_series(s, sheet=sheet, until=until, force_auto=force_auto, force=force,
+                              ref=ref, pages_list=allp)
+            if sheet is None and until is None:  # a partial run must not republish the series
+                _publish(s)
+        except Exception as e:  # noqa: BLE001 - one failing series must not stop the others
+            logging.getLogger(__name__).exception("series %s failed", s)
+            failures.append((s, f"{type(e).__name__}: {e}"))
+    if failures:
+        typer.echo(f"{len(failures)} series failed:", err=True)
+        for s, msg in failures:
+            typer.echo(f"  {s}: {msg[:300]}", err=True)
+        raise typer.Exit(1)
 
 
 def _publish(series: str, min_zoom: int = 11, max_zoom: int = 18) -> None:
@@ -191,8 +205,8 @@ def tiles(
     """(Re)build the stitched VRT, PMTiles and manifest for one series from existing warps."""
     try:
         _publish(year, min_zoom, max_zoom)
-    except RuntimeError as e:
-        typer.echo(f"error: {e}", err=True)
+    except Exception as e:  # noqa: BLE001 - gdal/pmtiles subprocess errors, missing tools, ...
+        typer.echo(f"error: {type(e).__name__}: {e}", err=True)
         raise typer.Exit(1)
 
 
