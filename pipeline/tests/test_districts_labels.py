@@ -217,8 +217,68 @@ def test_read_district_labels_offsets_dedupes_and_caches():
                    and abs(b.y - a.y) <= labels.DEDUPE_PX for b in out) == 1
     art = json.loads((d / "district_labels.json").read_text())
     assert art["page_sha256"] == labels.page_sha(d) and len(art["labels"]) == len(out)
-    again = labels.read_district_labels("1960", "s1", client=Fake(lambda *a: 1 / 0))
+    again = labels.read_district_labels("1960", "s1", client=Fake(lambda *a: 1 / 0),
+                                        scale=0.5, tile=400, overlap=40)
     assert again == out
+    assert art["tile"] == 400 and art["overlap"] == 40 and art["scale"] == 0.5
+    assert art["inputs_sha256"] == labels.inputs_sha256()
+
+
+def _legacy_artifact(tmp_path):
+    lm = sl.build(codes=CODES)
+    d = sl.write_sheet("1960", "s1", lm)
+    lab = {"code": "R-1", "kind": "use", "x": 10.0, "y": 10.0, "confidence": 0.9}
+    (d / "district_labels.json").write_text(json.dumps({"page_sha256": labels.page_sha(d),
+                                                        "labels": [lab]}))
+    return d
+
+
+def test_labels_cache_rereads_when_tiling_or_scale_changes(tmp_path):
+    d = _legacy_artifact(tmp_path)
+    fake = Fake(lambda img, schema, n: schema(labels=[]))
+    labels.read_district_labels("1960", "s1", client=fake, tile=400)
+    assert fake.calls >= 1
+    art = json.loads((d / "district_labels.json").read_text())
+    assert art["tile"] == 400 and art["labels"] == []
+    n = fake.calls
+    labels.read_district_labels("1960", "s1", client=fake, scale=0.3, tile=400)
+    assert fake.calls > n
+
+
+def test_legacy_labels_artifact_fresh_under_defaults(tmp_path):
+    """Artifacts written before the key was stored (page sha only) match the current
+    defaults: no reread, no call."""
+    d = _legacy_artifact(tmp_path)
+    assert labels.labels_fresh(d)
+    out = labels.read_district_labels("1960", "s1", client=Fake(lambda *a: 1 / 0))
+    assert [l.code for l in out] == ["R-1"]
+
+
+def test_labels_cache_rereads_when_prompt_changes(tmp_path, monkeypatch):
+    d = _legacy_artifact(tmp_path)
+    monkeypatch.setattr(labels, "DISTRICT_PROMPT", labels.DISTRICT_PROMPT + " Be careful.")
+    assert not labels.labels_fresh(d)
+    fake = Fake(lambda img, schema, n: schema(labels=[]))
+    labels.read_district_labels("1960", "s1", client=fake)
+    assert fake.calls >= 1
+
+
+def test_existing_data_artifacts_still_fresh(monkeypatch):
+    """The district_labels.json / district_legend.json artifacts already in pipeline/data
+    (read before the key was stored) stay fresh: the new key must not force rereads."""
+    from sfzmaps.districts import pattern
+
+    work = config.PIPELINE_DIR / "data" / "work"
+    arts = sorted(work.glob("*/*/district_labels.json"))
+    legends = sorted(work.glob("*/*/district_legend.json"))
+    if not arts and not legends:
+        pytest.skip("no pipeline/data artifacts")
+    monkeypatch.setattr(config, "WORK_DIR", work)   # label_scale.json lives here
+    stale = [str(a.parent.relative_to(work)) for a in arts
+             if (a.parent / "page.png").exists() and not labels.labels_fresh(a.parent)]
+    stale += [str(p.relative_to(work)) for p in legends
+              if not pattern.legend_fresh(p, p.parent.parent.name)]
+    assert len(arts) > 0 and stale == []
 
 
 def _labs(n_use, n_height):

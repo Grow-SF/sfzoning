@@ -28,7 +28,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-from concurrent.futures import ThreadPoolExecutor
 from functools import lru_cache
 from pathlib import Path
 
@@ -183,6 +182,39 @@ def legend_prompt(codes: dict[str, str]) -> str:
         "and return no swatches.")
 
 
+def legend_inputs_sha256() -> str:
+    """sha256 of the legend prompt template (codes as a placeholder) and response schema."""
+    import hashlib
+
+    schema = json.dumps(LegendRead.model_json_schema(), sort_keys=True)
+    text = legend_prompt({"<CODE>": "<NAME>"}) + "\0" + schema
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+# district_legend.json files written before the read's inputs were stored (through 2d1bf49)
+# lack these fields; they were read with this template + schema fingerprint and the current
+# LEGEND_EDGE, era codes taken as unchanged.  A missing field means exactly that.
+LEGACY_LEGEND_SHA256 = "058496117906e9850b5d2b6842fd3cdc17e057fe21a01e2d9831fd4cb33e8570"
+
+
+def legend_key(series: str) -> dict:
+    return {"inputs_sha256": legend_inputs_sha256(), "era_codes": sorted(era_codes(series)),
+            "edge": LEGEND_EDGE}
+
+
+def legend_fresh(saved: Path, series: str) -> bool:
+    """A saved district_legend.json was read with the current prompt, schema, codes and edge."""
+    try:
+        d = json.loads(Path(saved).read_text())
+    except (OSError, ValueError):
+        return False
+    want = legend_key(series)
+    have = {"inputs_sha256": d.get("inputs_sha256", LEGACY_LEGEND_SHA256),
+            "era_codes": sorted(d.get("era_codes", want["era_codes"])),
+            "edge": int(d.get("edge", want["edge"]))}
+    return have == want
+
+
 def legend_swatches(series: str, *, client=None) -> dict[str, np.ndarray]:
     """Era legend code -> RGB swatch crop.
 
@@ -194,6 +226,10 @@ def legend_swatches(series: str, *, client=None) -> dict[str, np.ndarray]:
         return _swatches_from_boxes(series, cfg["sheet"], cfg["swatches"])
     root = config.WORK_DIR / series
     for saved in sorted(root.glob("*/district_legend.json")):
+        if not legend_fresh(saved, series):
+            log.info("%s: %s is stale (prompt, schema, codes or edge changed); rereading",
+                     series, saved.relative_to(root))
+            continue
         d = json.loads(saved.read_text())
         return _swatches_from_boxes(series, d["sheet"], d["swatches"])
     codes = era_codes(series)
@@ -234,7 +270,7 @@ def legend_swatches(series: str, *, client=None) -> dict[str, np.ndarray]:
                 labels[code] = sw.label
             if len(found) >= 3:
                 art = {"sheet": sheet_dir.name, "mask_box": mb, "swatches": found, "labels": labels,
-                       "source": "vision"}
+                       "source": "vision", **legend_key(series)}
                 (sheet_dir / "district_legend.json").write_text(json.dumps(art, indent=1))
                 return _swatches_from_boxes(series, sheet_dir.name, found)
     if cfg:
@@ -434,15 +470,14 @@ def classify(parcels_with_crops: pd.DataFrame, swatches: dict[str, np.ndarray], 
         res = llm.ask_json(cv2.cvtColor(img, cv2.COLOR_RGB2BGR), prompt, PatternResult, client=client)
         return numbers, res
 
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        for batch, (numbers, res) in zip(batches, pool.map(ask, batches)):
-            by_index = {it.index: it for it in res.items}
-            for num, (_, rows, kind) in zip(numbers, batch):
-                it = by_index.get(num)
-                c = _match_code(it.code, codes) if it else None
-                f = float(np.clip(it.confidence, 0, 1)) * (BLOCK_FACTOR if kind == "block" else 1.0) if c else 0.0
-                for r in rows:
-                    code[r], conf[r], via[r] = c, f, kind
+    for batch, (numbers, res) in zip(batches, llm.pmap(ask, batches, workers)):
+        by_index = {it.index: it for it in res.items}
+        for num, (_, rows, kind) in zip(numbers, batch):
+            it = by_index.get(num)
+            c = _match_code(it.code, codes) if it else None
+            f = float(np.clip(it.confidence, 0, 1)) * (BLOCK_FACTOR if kind == "block" else 1.0) if c else 0.0
+            for r in rows:
+                code[r], conf[r], via[r] = c, f, kind
     return pd.DataFrame({"blklot": df["blklot"], "code": pd.Series(code, dtype=object),
                          "confidence": conf, "via": via})
 
@@ -478,12 +513,12 @@ def read_sheet(series: str, sheet_id: str, parcels, *, swatches: dict | None = N
     for i, k in enumerate(keys):
         first.setdefault(k, i)
     uniq = sorted(first.values())
-    rows, off = [], []
+    rows, off = [], set()
     for i in uniq:
         geom = p.geometry.iloc[i]
         st = parcel_stats(tif, geom)
         if st is None:
-            off.append(i)
+            off.add(i)
             continue
         rows.append({"blklot": p["blklot"].iloc[i], "block": p["block_num"].iloc[i],
                      "crop": (lambda g=geom: tile_crop(tif, g)), "stats": st})

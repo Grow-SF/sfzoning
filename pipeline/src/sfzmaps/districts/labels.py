@@ -21,7 +21,6 @@ from __future__ import annotations
 import hashlib
 import re
 import json
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
 
@@ -125,11 +124,58 @@ def page_sha(sheet_dir: Path) -> str:
     return hashlib.sha256((Path(sheet_dir) / "page.png").read_bytes()).hexdigest()
 
 
-def save_labels(path: Path, labs: list[DistrictLabel], *, page_sha256: str) -> None:
+def inputs_sha256() -> str:
+    """sha256 of the read's prompt template and response schema."""
+    schema = json.dumps(_DistrictLabels.model_json_schema(), sort_keys=True)
+    return hashlib.sha256((DISTRICT_PROMPT + "\0" + schema).encode()).hexdigest()
+
+
+# Artifacts written before the read's inputs were stored (through 2d1bf49) carry only
+# page_sha256.  They were read with this prompt + schema fingerprint and the default scale,
+# tile and overlap, so a missing field is taken as exactly that: they stay fresh until the
+# prompt, schema or a parameter really changes.
+LEGACY_INPUTS_SHA256 = "502dab5a88665982308590f15a9cec48e8732b64495d97c5494f6d972b52f56b"
+
+
+def read_key(series: str, *, scale: float | None = None, tile: int = config.VISION_TILE,
+             overlap: int = config.VISION_OVERLAP) -> dict:
+    """What district_labels.json must match besides the page: prompt + schema, scale, tiling."""
+    return {"inputs_sha256": inputs_sha256(), "scale": round(float(scale or district_scale(series)), 6),
+            "tile": int(tile), "overlap": int(overlap)}
+
+
+def stored_key(path: Path, series: str) -> dict | None:
+    """The read key stored in a district_labels.json; missing fields (older artifacts) are the
+    legacy fingerprint and the current defaults.  None if unreadable."""
+    try:
+        d = json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(d, dict):
+        return None
+    default = read_key(series)
+    return {"inputs_sha256": d.get("inputs_sha256", LEGACY_INPUTS_SHA256),
+            "scale": round(float(d.get("scale", default["scale"])), 6),
+            "tile": int(d.get("tile", default["tile"])),
+            "overlap": int(d.get("overlap", default["overlap"]))}
+
+
+def labels_fresh(sheet_dir: Path, *, scale: float | None = None, tile: int = config.VISION_TILE,
+                 overlap: int = config.VISION_OVERLAP) -> bool:
+    """district_labels.json matches the page and every input of the read."""
+    d = Path(sheet_dir)
+    art, series = d / "district_labels.json", d.parent.name
+    if reading.stored_page_sha256(art) != page_sha(d):
+        return False
+    return stored_key(art, series) == read_key(series, scale=scale, tile=tile, overlap=overlap)
+
+
+def save_labels(path: Path, labs: list[DistrictLabel], *, page_sha256: str,
+                key: dict | None = None) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps({"page_sha256": page_sha256,
+    tmp.write_text(json.dumps({"page_sha256": page_sha256, **(key or {}),
                                "labels": [l.model_dump() for l in labs]}, indent=1))
     tmp.replace(path)
 
@@ -157,10 +203,12 @@ def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | 
                          scale: float | None = None, tile: int = config.VISION_TILE,
                          overlap: int = config.VISION_OVERLAP, force: bool = False
                          ) -> list[DistrictLabel]:
-    """District codes with page-px positions; cached in district_labels.json (by page sha)."""
+    """District codes with page-px positions; cached in district_labels.json, reused while the
+    page sha, the prompt + schema fingerprint, scale, tile and overlap all match."""
     d = config.WORK_DIR / series / sheet_id
     art, sha = d / "district_labels.json", page_sha(d)
-    if not force and reading.stored_page_sha256(art) == sha:
+    key = read_key(series, scale=scale, tile=tile, overlap=overlap)
+    if not force and reading.stored_page_sha256(art) == sha and stored_key(art, series) == key:
         return load_labels(art)
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
     if img is None:
@@ -168,15 +216,14 @@ def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | 
     skip = reading.exclusion_mask(img, _page_info(d))
     scale = scale or district_scale(series)
     _, tiles = reading.select_tiles(img, scale=scale, tile=tile, overlap=overlap, skip=skip)
-    if client is None and tiles and not all(
+    if client is None and tiles and not llm.CACHE_ONLY and not all(
             llm.is_cached(t[2], district_prompt(t[2]), _DistrictLabels) for t in tiles):
         client = llm.OpenAIClient()
 
     def one(t):
         return llm.ask_json(t[2], district_prompt(t[2]), _DistrictLabels, client=client)
 
-    with ThreadPoolExecutor(max(1, min(config.VISION_CONCURRENCY, len(tiles)))) as ex:
-        results = list(ex.map(one, tiles))
+    results = llm.pmap(one, tiles, config.VISION_CONCURRENCY)
     h, w = img.shape
     out: list[DistrictLabel] = []
     for (x0, y0, t), res in zip(tiles, results):
@@ -190,7 +237,7 @@ def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | 
             out.append(DistrictLabel(code=normalise(lb.code), kind=lb.kind, x=x, y=y,
                                      confidence=lb.confidence))
     out = _dedupe(out)
-    save_labels(art, out, page_sha256=sha)
+    save_labels(art, out, page_sha256=sha, key=key)
     return out
 
 

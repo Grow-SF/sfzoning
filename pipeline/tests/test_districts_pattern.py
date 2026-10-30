@@ -158,6 +158,46 @@ def test_legend_swatches_from_vision_refined_and_saved(work):
     assert fake.calls == 1 and set(again) == set(sw)
 
 
+def test_saved_legend_key_and_staleness(work, monkeypatch):
+    boxes, mb = write_legend_page("1948", "1")
+    fake = LegendFake(boxes, mb)
+    pattern.legend_swatches("1948", client=fake)
+    p = config.WORK_DIR / "1948" / "1" / "district_legend.json"
+    saved = json.loads(p.read_text())
+    assert saved["inputs_sha256"] == pattern.legend_inputs_sha256()
+    assert saved["edge"] == pattern.LEGEND_EDGE and saved["era_codes"] == sorted(pattern.era_codes("1948"))
+    # an artifact without the key (written through 2d1bf49) still matches the current defaults
+    for k in ("inputs_sha256", "edge", "era_codes"):
+        saved.pop(k)
+    p.write_text(json.dumps(saved))
+    assert pattern.legend_fresh(p, "1948")
+    pattern.legend_swatches("1948", client=fake)
+    assert fake.calls == 1
+    # a changed prompt makes it stale: read again
+    real = pattern.legend_prompt
+    monkeypatch.setattr(pattern, "legend_prompt", lambda codes: real(codes) + " Look closely.")
+    assert not pattern.legend_fresh(p, "1948")
+    pattern.legend_swatches("1948", client=fake)
+    assert fake.calls == 2
+    monkeypatch.setattr(pattern, "LEGEND_EDGE", 2048)
+    assert not pattern.legend_fresh(p, "1948")
+
+
+def test_cache_only_pattern_miss_never_calls(work):
+    sw = swatches()
+
+    class Raising:
+        calls = 0
+
+        def call(self, png, prompt, schema):
+            Raising.calls += 1
+            raise AssertionError("network")
+
+    with llm.cache_only(), pytest.raises(llm.LLMCacheMiss):
+        pattern.classify(_items([("0003001", "0003", 0, 20)]), sw, client=Raising())
+    assert Raising.calls == 0
+
+
 def test_legend_fallback_config(work, monkeypatch):
     boxes, mb = write_legend_page("1948", "1")
 

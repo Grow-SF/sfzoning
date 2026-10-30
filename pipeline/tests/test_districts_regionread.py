@@ -150,3 +150,52 @@ def test_assign_parcels_reads_unlabelled_regions():
     finally:
         regionread.ENABLED = True
     assert off.loc[f"{9 * 20 + 11:04d}001", "code"] == "C-2"         # inherited instead
+
+
+class Raising:
+    calls = 0
+
+    def call(self, png, prompt, schema):
+        Raising.calls += 1
+        raise AssertionError("network call in a cache-only run")
+
+
+def test_cache_only_reads_cached_mosaics_and_skips_the_rest():
+    lm, regs, labs, idx = _setup()
+    import sfzmaps.districts.regionread as rr
+    old = rr.MAX_TILES
+    rr.MAX_TILES = 1
+    try:
+        fake = FakeClient(lambda n, cs: ("C-2", 0.9))
+        cached = regionread.read_regions(lm.img, regs, [idx["BL"]], labs, "use", client=fake)
+        assert cached == {idx["BL"]: ("C-2", 0.9)}
+        regionread.Stats.reset()
+        with llm.cache_only():
+            out = regionread.read_regions(lm.img, regs, [idx["BL"], idx["RIGHT"]], labs, "use",
+                                          client=Raising())
+        assert out == cached                     # RIGHT not cached: left to inheritance
+        assert Raising.calls == 0
+        assert (regionread.Stats.asked, regionread.Stats.skipped) == (2, 1)
+    finally:
+        rr.MAX_TILES = old
+
+
+def test_cache_only_assign_parcels_with_nothing_cached_inherits():
+    lm = sl.build(codes=PRINTED)
+    d = sl.write_sheet("1960", "s1", lm)
+    labs = [lab(c, *sl.CENTRES[n]) for n, c in PRINTED.items()]
+    labels.save_labels(d / "district_labels.json", labs, page_sha256=labels.page_sha(d))
+    with llm.cache_only():
+        out = labels.assign_parcels(lm.parcels, d, lm.transform, client=Raising()).set_index("blklot")
+    assert Raising.calls == 0
+    assert out.loc[f"{9 * 20 + 11:04d}001", "code"] == "C-2"         # inherited
+
+
+def test_cache_only_labels_miss_raises_without_calling():
+    lm = sl.build(codes=PRINTED)
+    sl.write_sheet("1960", "s2", lm)
+    with llm.cache_only(), pytest.raises(llm.LLMCacheMiss):
+        labels.read_district_labels("1960", "s2", client=Raising())
+    with llm.cache_only(), pytest.raises(llm.LLMCacheMiss):
+        labels.read_district_labels("1960", "s2")          # no client: none is built either
+    assert Raising.calls == 0

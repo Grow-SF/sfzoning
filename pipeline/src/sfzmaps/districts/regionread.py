@@ -14,7 +14,7 @@ llm.ask_json.  Inheritance (labels.assign_regions) stays the fallback for region
 """
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
+import threading
 
 import cv2
 import numpy as np
@@ -38,6 +38,24 @@ OUTLINE = (255, 0, 255)  # RGB magenta
 OUTLINE_PX = 3
 WORKERS = 8
 ENABLED = True         # labels.assign_parcels reads unlabelled regions (tests switch it off)
+
+
+class Stats:
+    """Mosaics asked / answered from cache / skipped (cache-only run, not cached: those regions
+    fall back to inheritance).  provenance records `skipped` as region_misses."""
+    asked = 0
+    skipped = 0
+    _lock = threading.Lock()
+
+    @classmethod
+    def add(cls, asked: int, skipped: int) -> None:
+        with cls._lock:
+            cls.asked += asked
+            cls.skipped += skipped
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.asked = cls.skipped = 0
 
 
 class RegionItem(BaseModel):
@@ -168,22 +186,26 @@ def read_regions(page: np.ndarray, regs: list[Polygon], todo: list[int], labs, k
     batches = [items[b:b + MAX_TILES] for b in range(0, len(items), MAX_TILES)]
     asks = [(cv2.cvtColor(build_mosaic([t for _, t, _ in b]), cv2.COLOR_RGB2BGR),
              prompt([c for _, _, c in b], kind, sheet_codes)) for b in batches]
-    if client is None and not all(llm.is_cached(im, pr, RegionReads) for im, pr in asks):
+    n_all = len(asks)
+    if llm.CACHE_ONLY:          # cache-only: uncached mosaics are not read (inheritance decides)
+        keep = [k for k, (im, pr) in enumerate(asks) if llm.is_cached(im, pr, RegionReads)]
+        batches, asks = [batches[k] for k in keep], [asks[k] for k in keep]
+    Stats.add(n_all, n_all - len(asks))
+    if asks and client is None and not all(llm.is_cached(im, pr, RegionReads) for im, pr in asks):
         client = llm.OpenAIClient()
 
     def ask(a):
         return llm.ask_json(a[0], a[1], RegionReads, client=client)
 
     out: dict[int, tuple[str, float]] = {}
-    with ThreadPoolExecutor(max(1, min(workers, len(batches)))) as ex:
-        for batch, res in zip(batches, ex.map(ask, asks)):
-            by = {it.index: it for it in res.items}
-            for n, (i, _, cands) in enumerate(batch, 1):
-                it = by.get(n)
-                if it is None:
-                    continue
-                code = next((c for c in cands + sheet_codes if _canon(c) == _canon(it.code)), None)
-                conf = float(np.clip(it.confidence, 0, 1))
-                if code is not None and conf >= MIN_CONF:
-                    out[i] = (code, conf)
+    for batch, res in zip(batches, llm.pmap(ask, asks, workers)):
+        by = {it.index: it for it in res.items}
+        for n, (i, _, cands) in enumerate(batch, 1):
+            it = by.get(n)
+            if it is None:
+                continue
+            code = next((c for c in cands + sheet_codes if _canon(c) == _canon(it.code)), None)
+            conf = float(np.clip(it.confidence, 0, 1))
+            if code is not None and conf >= MIN_CONF:
+                out[i] = (code, conf)
     return out
