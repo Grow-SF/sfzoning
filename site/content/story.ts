@@ -1,78 +1,318 @@
-// DRAFT COPY. Placeholder steps for the scroll engine (Task S2); not reviewed by the owner.
-// Facts come from docs/research/zoning-history.md; every `sources` entry points into
-// docs/research/sources.md. The full story arc replaces these in a later task.
-import type { Step } from "./schema";
+// DRAFT COPY — NOT REVIEWED BY THE OWNER. Do not publish as final.
+//
+// Facts come from docs/research/zoning-history.md (and zoning-districts.csv). Every
+// `sources` entry is an id in content/sources.ts, which mirrors docs/research/sources.md.
+// Numbers appear only where the research cites them. Map descriptions ("hatching",
+// "RH-1 labels") were read off the georeferenced scans at each step's camera; the 1921 and
+// 1948 symbology is from the "Map Designations for Use of Property" legend on both atlases.
+//
+// Cameras were chosen by screenshotting candidate neighbourhoods at z14+ in every era.
+// Steps that repeat a camera (Sunset 1921 → 1948 → 1980; Noe Valley 1960 → 1972 → 1978)
+// do so on purpose, so the change between eras is the only thing that moves.
+//
+// All steps use the "scan" view: the district classification ("what it allowed") tiles do
+// not exist yet.
+import type { Camera, Step } from "./schema";
+
+const CITY: Camera = { center: [-122.443, 37.758], zoom: 12.3 };
+const OUTER_SUNSET: Camera = { center: [-122.49, 37.749], zoom: 14.2 };
+const MISSION: Camera = { center: [-122.418, 37.758], zoom: 15 };
+const NOE_VALLEY: Camera = { center: [-122.433, 37.752], zoom: 14.5 };
+const SOMA: Camera = { center: [-122.405, 37.775], zoom: 14.5 };
+const WESTERN_ADDITION: Camera = { center: [-122.433, 37.781], zoom: 14.5 };
+const DOWNTOWN: Camera = { center: [-122.401, 37.79], zoom: 14.8 };
+const FINANCIAL_DISTRICT: Camera = { center: [-122.398, 37.793], zoom: 15.2 };
+const MISSION_WIDE: Camera = { center: [-122.415, 37.762], zoom: 14.5 };
 
 export const STORY: Step[] = [
   {
-    id: "1921-first-ordinance",
-    era: "1921",
+    id: "today-opening",
+    era: "today",
     view: "scan",
-    camera: { center: [-122.4376, 37.7555], zoom: 12.2 },
-    title: "In 1921, apartments were legal almost everywhere",
+    camera: CITY,
+    title: "A city zoned, block by block",
     body: [
       {
         kind: "p",
-        text: "San Francisco’s first zoning ordinance split the city into six districts. It said what could be built, not how big: no height limits, no minimum lot sizes, no cap on homes per lot.",
+        text: "This is San Francisco today, drawn as nothing but its blocks. Every one of them has a zoning rule that says how many homes it may hold.",
       },
       {
         kind: "p",
-        text: "Apartments and flats were allowed by right in Second Residential, Commercial and Light Industrial land. Only Heavy Industrial banned dwellings outright.",
+        text: "In 1921, apartments were legal on most of the city’s residential land. By the end of the 1970s, most of it was zoned for houses. The city’s own zoning maps, aligned to today’s streets, show how that happened.",
+      },
+    ],
+    sources: ["sf-zoning-1921-10", "sfplanning-has-2020"],
+  },
+  {
+    id: "1921-sunset",
+    era: "1921",
+    view: "scan",
+    camera: OUTER_SUNSET,
+    title: "1921: the Sunset was zoned for apartments",
+    body: [
+      {
+        kind: "p",
+        text: "You’re looking at the Outer Sunset on the city’s first zone maps. The plain white blocks are Second Residential, where apartment houses, flats and boarding houses were legal by right, with no cap on how many homes a lot could hold.",
+      },
+      {
+        kind: "p",
+        text: "The diagonal hatching at the southern edge of the Sunset is First Residential: single-family houses. A two-family house was allowed only if 5,000 square feet of open lot remained. A standard San Francisco lot is 25 by 100 feet, or 2,500 square feet, so in practice that meant one house.",
+      },
+      { kind: "stat", text: "Second Residential: no limit on homes per lot" },
+    ],
+    sources: ["sf-zoning-1921-10", "use-of-property-1921-legend"],
+  },
+  {
+    id: "1921-mission",
+    era: "1921",
+    view: "scan",
+    camera: MISSION,
+    title: "Six districts, and homes allowed in five",
+    body: [
+      {
+        kind: "p",
+        text: "In the Mission, solid black marks Commercial. Black did not mean “no homes”: the ordinance said nothing allowed in the residential districts “shall be excluded from the Commercial District.” Light Industrial allowed flats and tenements too.",
+      },
+      {
+        kind: "p",
+        text: "Only Heavy Industrial banned dwellings, keeping a watchman’s quarters. And the whole ordinance had no height limits, no minimum lot sizes, no yard rules and no density limits. It regulated what a building was for, not how big it was.",
       },
       { kind: "stat", text: "6 districts, 0 density limits" },
     ],
-    sources: ["Ord. 5464 (N.S.), Building Zone Ordinance, Oct. 3, 1921 (archive.org sf-zoning-1921-10)"],
+    sources: ["sf-zoning-1921-10", "use-of-property-1921-legend"],
   },
   {
-    id: "1948-lot-rules",
+    id: "1948-sunset",
     era: "1948",
-    view: "both",
-    camera: { center: [-122.4335, 37.7805], zoom: 14.2 },
-    title: "By 1948, the first lot-size and coverage rules",
+    view: "scan",
+    camera: OUTER_SUNSET,
+    title: "By 1948, the hatching had spread",
     body: [
       {
         kind: "p",
-        text: "The 1948 maps still use the 1921 six-district system. What changed was the fine print. Section 99, approved in November 1946, was the city’s first rule about how much of a lot a home could cover.",
-      },
-      {
-        kind: "quote",
-        text: "Dwellings may cover no more than 65 per cent of the lot.",
+        text: "Same blocks, 1948. The legend hasn’t changed, but most of the Outer Sunset now carries First Residential hatching: one house per lot, in practice. North of Golden Gate Park, most of the Richmond stayed white, Second Residential.",
       },
       {
         kind: "p",
-        text: "New subdivision lots had to match the neighbourhood or be at least 33 feet wide. Resubdivided lots had to be at least 2,500 square feet. Rear yards of 25 feet were required in new subdivisions and 15 feet elsewhere.",
+        text: "The fine print changed too. Section 99, approved in November 1946, was the city’s first rule on lot size and coverage.",
       },
+      { kind: "quote", text: "Dwellings may cover no more than 65 per cent of the lot." },
       {
         kind: "p",
-        text: "In 1955 a further amendment required one off-street parking space for every new home, after complaints about apartments built without garages.",
-      },
-      {
-        kind: "p",
-        text: "First Residential land, where a second home needed 5,000 square feet of open lot, was already single-family in practice. Most standard lots were 2,500 square feet.",
+        text: "Resubdivided lots had to be at least 2,500 square feet and 25 feet wide, and new subdivisions needed 25-foot rear yards. In 1955, after complaints about new apartments without garages, every new home needed an off-street parking space.",
       },
     ],
-    sources: [
-      "City Planning Code, amended as of July 1947, Sec. 99 (Ord. 4162)",
-      "Planning Code to Dec. 1, 1957, Art. 4.5 (archive.org san-francisco-planning-code-1957)",
-    ],
+    sources: ["rumsey-1948-atlas", "planning-code-1947", "san-francisco-planning-code-1957", "draftenvironment1319sanf"],
   },
   {
     id: "1960-density-caps",
     era: "1960",
     view: "scan",
-    camera: { center: [-122.4795, 37.7595], zoom: 14.6, bearing: -8 },
+    camera: NOE_VALLEY,
     title: "1960: the first caps on homes per lot",
     body: [
       {
         kind: "p",
-        text: "The modern Planning Code took effect on May 2, 1960. For the first time, every residential district carried a number: how much lot area each home needed.",
+        text: "Now the map speaks in codes. Around Noe and Eureka Valleys it’s a patchwork of R-1, R-2 and R-3. The modern City Planning Code took effect on May 2, 1960, and for the first time every residential district came with a number: how much lot area each home needed.",
       },
-      { kind: "stat", text: "R-1: one home per lot. R-3: about six on a 25×100 lot." },
+      { kind: "stat", text: "On a 25×100 lot: R-1, one home · R-2, two · R-3, about six · R-4, about twelve" },
       {
         kind: "p",
-        text: "It also banned new housing in industrial zones, which the 1921 code had allowed in Light Industrial.",
+        text: "The code also set heights, yards and coverage. R-1 houses were held to 35 feet; R-2 and R-3 to 40.",
       },
     ],
-    sources: ["City Planning Code, effective May 2, 1960; Summary of Zoning Provisions, Mar. 1, 1960"],
+    sources: ["planning-code-1960"],
+  },
+  {
+    id: "1960-not-a-downzoning",
+    era: "1960",
+    view: "scan",
+    camera: SOMA,
+    title: "Not mainly a downzoning",
+    body: [
+      {
+        kind: "p",
+        text: "A common story says 1960 is when the city downzoned its neighbourhoods. The record says otherwise. Its biggest shifts were less commercial land, the new density caps, and what you see south of Market: M-1 and M-2, where the 1960 code allowed no homes at all. The 1921 code had allowed housing in Light Industrial.",
+      },
+      {
+        kind: "p",
+        text: "The Planning Department later wrote that the 1960 districts",
+      },
+      {
+        kind: "quote",
+        text: "allowed the existing mixed pattern of residential development to continue … new development tended to move toward the greatest density that the zoning allowed.",
+      },
+      { kind: "p", text: "The backlash to that came in the 1970s." },
+    ],
+    sources: ["planning-code-1960", "draftenvironment1319sanf"],
+  },
+  {
+    id: "1972-height-limits",
+    era: "1972",
+    view: "scan",
+    camera: NOE_VALLEY,
+    title: "1972: forty feet, almost everywhere",
+    body: [
+      {
+        kind: "p",
+        text: "Back in Noe Valley, a new kind of map. The labels now read “40-X”: a 40-foot height limit, with no extra bulk rule. Height had become its own citywide layer.",
+      },
+      {
+        kind: "p",
+        text: "In 1964 the city had capped heights in a few northern neighbourhoods, from 40 feet in the Marina to 105 on Russian Hill. Ordinance 234-72, approved Aug. 18, 1972, went further. In the Planning Department’s words, it",
+      },
+      {
+        kind: "quote",
+        text: "put height limits on all property in San Francisco, with the majority of residential areas limited to 40 feet.",
+      },
+      {
+        kind: "p",
+        text: "Voters had turned down stricter caps for downtown: Prop T (80 feet) lost 63–37 in 1971, and Prop P (160 feet) won only 43% in 1972.",
+      },
+    ],
+    sources: ["draftenvironment1319sanf", "gocodebook-sec-252", "1964-sf-zoning-partial", "map-legend-1975", "spur-high-rise-hegira"],
+  },
+  {
+    id: "1975-downzonings",
+    era: "1975",
+    view: "scan",
+    camera: WESTERN_ADDITION,
+    title: "1970–75: the downzonings",
+    body: [
+      {
+        kind: "p",
+        text: "The 1975 maps still use the 1960 codes, like these R-3s and R-4s in the Western Addition. The meanings didn’t change; the amount of each did. Between 1970 and 1975, large areas were reclassified from R-3, R-4 and R-5 to R-1 and R-2.",
+      },
+      { kind: "stat", text: "1970–75: R-5 land −57% · R-4 −7% · R-2 +22.5%" },
+      {
+        kind: "p",
+        text: "R-5 was the densest residential district, about 20 homes on a standard lot. R-2 allowed two.",
+      },
+    ],
+    sources: ["draftenvironment1319sanf", "map-legend-1975", "planning-code-1960"],
+  },
+  {
+    id: "1978-rezoning",
+    era: "1980",
+    view: "scan",
+    camera: NOE_VALLEY,
+    title: "1978: the city counted what it gave up",
+    body: [
+      {
+        kind: "p",
+        text: "Noe Valley once more, on the map amended to November 1978. The R codes are gone. In their place are RH-1, RH-2 and RH-3, “House Character” districts allowing one, two or three homes per lot, and RM, “Mixed House & Apartment Character.”",
+      },
+      {
+        kind: "p",
+        text: "The Board of Supervisors voted for the residential rezoning on Sept. 18, 1978. The city’s own Final Environmental Impact Report had said it would “reduce the allowable density in many neighborhoods, so that,",
+      },
+      { kind: "quote", text: "approximately 180,000 estimated fewer housing units could legally be built.”" },
+      {
+        kind: "p",
+        text: "It also warned that “prices and rents may be bid upward,” and that low- and moderate-income households could be displaced.",
+      },
+    ],
+    sources: ["finalenvironment2719sanf", "map-legend-1980", "sbuss-when-did-things-go-wrong"],
+  },
+  {
+    id: "1978-legacy",
+    era: "1980",
+    view: "scan",
+    camera: OUTER_SUNSET,
+    title: "RH-1, as far as the eye can see",
+    body: [
+      {
+        kind: "p",
+        text: "The Outer Sunset, 1980: RH-1 on nearly every block, one home per lot. The 1978 rules went past the labels. RH-1 was capped at 35 feet and RH-2 at 40, front setbacks had to match the neighbours, and anything over 40 feet in a residential district needed the Planning Commission’s approval.",
+      },
+      {
+        kind: "p",
+        text: "The house districts stuck. In 2020 SF Planning counted RH-1, RH-2 and RH-3 at about 70% of the city’s residential land, and 7% of its recent housing.",
+      },
+      { kind: "stat", text: "RH districts: ~70% of residential land, 7% of recent homes" },
+    ],
+    sources: ["zoning-map-book-2000", "map-legend-1980", "sfplanning-has-2020"],
+  },
+  {
+    id: "1985-downtown-plan",
+    era: "1980-1990",
+    view: "scan",
+    camera: DOWNTOWN,
+    title: "1985: the Downtown Plan",
+    body: [
+      {
+        kind: "p",
+        text: "Downtown, the 1980s maps read C-3-O, C-3-R, C-3-G and C-3-S. The Downtown Plan, passed 6–5 in September 1985, cut how much floor space each could hold. In C-3-O the basic limit fell from 14 times the lot area to 9; in C-3-R and C-3-G, from 10 to 6.",
+      },
+      {
+        kind: "p",
+        text: "Builders could go up to 18 by buying development rights from other lots. The plan also protected 266 landmark buildings and capped new office space at 950,000 square feet a year, for three years.",
+      },
+      { kind: "stat", text: "C-3-O floor-area ratio: 14 → 9" },
+    ],
+    sources: ["C124887752", "spur-prop-m"],
+  },
+  {
+    id: "1986-prop-m",
+    era: "1980-1990",
+    view: "scan",
+    camera: FINANCIAL_DISTRICT,
+    title: "1986: Prop M makes the cap permanent",
+    body: [
+      {
+        kind: "p",
+        text: "A year later voters went further. Prop M passed 51.4% to 48.6%. It set a permanent annual cap of 475,000 square feet on new large office space.",
+      },
+      {
+        kind: "p",
+        text: "It also wrote eight Priority Policies into the Planning Code, favouring the preservation of neighbourhood character and existing housing. Those policies became a standard hook for opposing change in residential neighbourhoods.",
+      },
+    ],
+    sources: ["spur-prop-m"],
+  },
+  {
+    id: "2008-area-plans",
+    era: "2000s",
+    view: "scan",
+    camera: MISSION_WIDE,
+    title: "2008: growth goes east",
+    body: [
+      {
+        kind: "p",
+        text: "The Mission in the 2000 map book: a dense patchwork of house, apartment, commercial and industrial districts. In 2008 two area plans rewrote much of this side of the city.",
+      },
+      {
+        kind: "p",
+        text: "Market & Octavia created districts with no density limit by lot area: the building’s size, not a unit count, sets how many homes fit. Eastern Neighborhoods rezoned about 2,200 acres of the Mission, SoMa, Potrero Hill and the Central Waterfront.",
+      },
+      {
+        kind: "p",
+        text: "Most of the housing built since 2000 went up in these eastern plan areas, not on the RH west side.",
+      },
+    ],
+    sources: ["zoning-map-book-2000", "sfplanning-market-octavia", "sfplanning-eastern-neighborhoods", "sfplanning-has-2020"],
+  },
+  {
+    id: "today-reform",
+    era: "today",
+    view: "scan",
+    camera: CITY,
+    title: "Today: turning the dial back",
+    body: [
+      {
+        kind: "p",
+        text: "Since November 2022, an RH lot may hold four homes, or six on a corner, under conditions. In December 2023 a Housing Production ordinance removed many conditional-use hearings and notice requirements.",
+      },
+      {
+        kind: "p",
+        text: "Then the Family Zoning Plan. The Board passed it 7–4 on Dec. 2, 2025, and it took effect on Jan. 12, 2026. It upzones about 96,000 parcels, mostly on the west and north sides, for roughly 36,000 more homes of capacity, with taller buildings along corridors such as Van Ness, Market and Geary.",
+      },
+      { kind: "stat", text: "~96,000 parcels upzoned · ~36,000 homes of new capacity" },
+      {
+        kind: "p",
+        text: "Press called it the first significant upzoning of those neighbourhoods since 1978. Whether it undoes 1978 is a question for the next set of maps.",
+      },
+    ],
+    sources: ["ord-210-22-summary", "ord-248-23", "sfplanning-family-zoning", "kqed-family-zoning"],
   },
 ];

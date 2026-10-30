@@ -1,5 +1,6 @@
 import type { Step } from "@/content/schema";
 import type { Era } from "@/lib/eras";
+import { SOURCES } from "@/content/sources";
 import styles from "@/app/page.module.css";
 
 type Props = { step: Step; era?: Era; active: boolean };
@@ -37,9 +38,21 @@ export default function StepCard({ step, era, active }: Props) {
       <footer className={styles.sources}>
         <span className={styles.sourcesLabel}>{step.sources.length > 1 ? "Sources" : "Source"}</span>
         <ul>
-          {step.sources.map((s) => (
-            <li key={s}>{s}</li>
-          ))}
+          {step.sources.map((id) => {
+            const src = SOURCES[id];
+            if (!src) return <li key={id}>{id}</li>;
+            return (
+              <li key={id} data-source={id}>
+                {src.url ? (
+                  <a href={src.url} target="_blank" rel="noreferrer">
+                    {src.short}
+                  </a>
+                ) : (
+                  <a href={`/about#src-${id}`}>{src.short}</a>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </footer>
       </div>

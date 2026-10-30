@@ -25,7 +25,7 @@ type Props = {
   interactive?: boolean;
 };
 
-const RUMSEY_CREDIT = "© Cartography Associates, David Rumsey Map Collection";
+import { RUMSEY_CREDIT } from "./Credits";
 const FADE_MS = 700;
 const layerId = (series: string) => `scan-${series}`;
 const allSeries = () => Array.from(new Set(ERAS.flatMap((e) => e.scanSeries)));

@@ -17,7 +17,7 @@ export type Step = {
   camera: Camera;
   title: string;
   body: Block[];
-  /** Pointers into docs/research/sources.md */
+  /** Ids into content/sources.ts (which mirrors docs/research/sources.md) */
   sources: string[];
   highlight?: GeoJSON;
 };

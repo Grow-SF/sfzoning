@@ -1,0 +1,122 @@
+/* End matter: sources, credits and the about page. A single reading column on paper. */
+
+.page {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 3rem 1rem 4rem;
+}
+@media (min-width: 900px) {
+  .page { padding: 5rem 1.5rem 6rem; }
+}
+
+.endmatter {
+  position: relative;
+  z-index: 1;
+  background: var(--paper);
+  border-top: 1px solid var(--ink);
+}
+
+.kicker {
+  margin: 0 0 0.5rem;
+  font-family: var(--font-ui);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.title {
+  margin: 0 0 1rem;
+  font-size: clamp(2.25rem, 7vw, 3.5rem);
+  line-height: 1.02;
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  font-variation-settings: "opsz" 72;
+}
+
+.lede {
+  margin: 0 0 2rem;
+  font-size: 1.25rem;
+  line-height: 1.45;
+  color: var(--ink-2);
+}
+
+.block { margin: 2.5rem 0 0; }
+
+.heading {
+  margin: 0 0 0.75rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--ink);
+  font-size: 1.625rem;
+  line-height: 1.15;
+  font-weight: 600;
+  font-variation-settings: "opsz" 36;
+}
+
+.subheading {
+  margin: 1.25rem 0 0.5rem;
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--ink-2);
+}
+
+.block p { margin: 0 0 0.875rem; hyphens: auto; }
+
+.sourceList,
+.credits {
+  margin: 0;
+  padding: 0 0 0 1.5rem;
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+.sourceList li,
+.credits li { margin: 0 0 0.5rem; overflow-wrap: anywhere; }
+.sourceList li:target { background: rgb(35 55 198 / 0.1); outline: 2px solid var(--accent); outline-offset: 2px; }
+.credits { list-style: square; }
+.where { color: var(--ink-2); }
+
+.figures {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0;
+  margin: 1rem 0 1.25rem;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--ink);
+}
+.figures li {
+  padding: 0.625rem 0.75rem 0.75rem 0;
+  border-bottom: 1px solid var(--rule);
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  line-height: 1.3;
+  color: var(--ink-2);
+}
+.figures strong {
+  display: block;
+  font-family: var(--font-body);
+  font-size: 2rem;
+  font-weight: 400;
+  line-height: 1.1;
+  font-variant-numeric: lining-nums tabular-nums;
+  color: var(--ink);
+}
+
+.status {
+  margin: 0 0 1.5rem;
+  padding: 0.75rem 1rem;
+  font-family: var(--font-ui);
+  font-size: 0.9375rem;
+  line-height: 1.45;
+  background: var(--paper-hi);
+  border-left: 3px solid var(--accent);
+}
+
+.back {
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
