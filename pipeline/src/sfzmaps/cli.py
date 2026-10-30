@@ -206,3 +206,31 @@ def eval_(
         typer.echo(f"no processed sheets for {year}; run `sfzmaps run --year {year}` first")
         raise typer.Exit(1)
     typer.echo(evaluate.format_eval_table(rows))
+
+
+@app.command()
+def review(
+    year: str = typer.Option(..., "--year", help="Series, e.g. 1948."),
+    port: int = typer.Option(8000, "--port"),
+    no_open: bool = typer.Option(False, "--no-open", help="Do not open the browser."),
+) -> None:
+    """Serve OUT_DIR on 127.0.0.1 (with Range support) and open the series review page."""
+    import webbrowser
+
+    from sfzmaps import reviewpage
+
+    try:
+        if reviewpage.is_stale(year):
+            typer.echo(f"wrote {reviewpage.write(year)}")
+    except RuntimeError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1)
+    srv = reviewpage.make_server(config.OUT_DIR, port)
+    url = f"http://127.0.0.1:{srv.server_address[1]}/{year}/review.html"
+    typer.echo(f"serving {config.OUT_DIR} at {url} (Ctrl-C to stop)")
+    if not no_open:
+        webbrowser.open(url)
+    try:
+        srv.serve_forever()
+    except KeyboardInterrupt:
+        pass
