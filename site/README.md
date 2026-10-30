@@ -58,7 +58,17 @@ ALLOW_LOCAL_TILES=1 npm run build
 Optional: `NEXT_PUBLIC_SITE_URL` (default `https://sfzoning.com`) makes Open Graph URLs absolute.
 The share image is `app/opengraph-image.jpg` (today's zoning, screenshotted from the site).
 
-## Deploying (later; nothing is deployed yet)
+## Deploying
+
+Live at https://www.sfzoning.com (Vercel project `growsf/sfzoning`, root directory
+`site`; `sfzoning.com` redirects to `www`). Tiles are in the Vercel Blob store
+`sfzoning-tiles` (public, sfo1); `NEXT_PUBLIC_TILES_BASE_URL` is set to its URL in every
+environment. To deploy from a checkout: `vercel deploy --prod` from the repository root
+(`.vercelignore` keeps `pipeline/` data out of the upload). To upload changed tiles, use
+`@vercel/blob`'s `put` with `addRandomSuffix: false` (the CLI's `vercel blob put` adds a
+random suffix), with `BLOB_READ_WRITE_TOKEN` from `vercel env pull`.
+
+The general recipe, for other hosts:
 
 The site deploys to Vercel as a normal Next.js app. The tiles do **not** go in git or in the
 Vercel build (about 1.2 GB); they go to object storage that supports HTTP Range requests, and

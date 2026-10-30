@@ -1,0 +1,9 @@
+# Only the site and the research it reads at build time go to Vercel.
+pipeline/
+!pipeline/README.md
+**/node_modules
+**/.venv
+**/.next
+**/.env*
+**/test-results
+**/playwright-report

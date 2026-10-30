@@ -31,3 +31,4 @@ pipeline/data/
 pipeline/.venv/
 pipeline/.env
 .claude/
+.vercel

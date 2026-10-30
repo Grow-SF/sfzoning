@@ -7,3 +7,4 @@ next-env.d.ts
 public/maplibre
 public/data/rules.json
 *.tsbuildinfo
+.vercel
