@@ -291,3 +291,35 @@ def test_cli_edit_demo_binds_localhost(monkeypatch, tmp_path):
     server.configure(year=None, sheet=None)
     server._pages.clear()
     server.set_reference(None)
+
+
+def test_blocks_geojson_near_sheet(env):
+    demo, c, _ = env
+    r = c.get(url(demo, "/blocks.geojson"))
+    assert r.status_code == 200
+    fc = r.json()
+    assert fc["type"] == "FeatureCollection" and len(fc["features"]) == 81
+    lon, lat = fc["features"][0]["geometry"]["coordinates"][0][0]
+    assert -123 < lon < -122 and 37 < lat < 38           # WGS84, San Francisco
+    assert "block_num" in fc["features"][0]["properties"]
+
+
+def test_blocks_geojson_streets_empty_and_404(env):
+    demo, c, _ = env
+    assert c.get(url(demo, "/blocks.geojson?layer=streets")).json()["features"] == []
+    assert c.get(url(demo, "/blocks.geojson?layer=nope")).status_code == 422
+    assert c.get("/api/sheet/demo/nope/blocks.geojson").status_code == 404
+
+
+def test_blocks_geojson_without_reference(env, monkeypatch):
+    demo, c, _ = env
+    monkeypatch.setattr(server, "_get_ref", lambda: None)
+    assert c.get(url(demo, "/blocks.geojson")).json()["features"] == []
+
+
+def test_static_front_end_served(env):
+    _, c, _ = env
+    r = c.get("/")
+    assert r.status_code == 200 and "editor.js" in r.text
+    assert c.get("/editor.js").status_code == 200 and c.get("/editor.css").status_code == 200
+    assert c.post("/nothing").status_code == 404
