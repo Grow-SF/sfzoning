@@ -46,11 +46,18 @@ _FAMILY_PREFIXES = (("RH", "RH"), ("RM", "RM"), ("RC", "RC"), ("RTO", "RTO"), ("
                     ("MUG", "MU"), ("MUO", "MU"))
 
 
+_FAMILY_EXACT = {"RCD": "NC", "RH-DTR": "DTR", "SB-DTR": "DTR", "TB-DTR": "DTR", "CMUO": "MU",
+                 "WMUG": "MU", "WMUO": "MU", "RED-MX": "MU", "SALI": "PDR"}
+
+
 def family_for(code: str) -> str:
-    """Era-independent family: R (1960s R-n), RH, RM, RC, RTO, NC, NCT, C3, C, M, MU, P, PDR, other."""
+    """Era-independent family: R (1960s R-n), RH, RM, RC, RTO, NC, NCT, C3, C, M, MU, P, PDR,
+    DTR, other."""
     norm = normalise_code(code, 0)
     if norm is None:
         return "other"
+    if norm in _FAMILY_EXACT:
+        return _FAMILY_EXACT[norm]
     if norm.startswith("C-3"):
         return "C3"
     for pre, fam in _FAMILY_PREFIXES:

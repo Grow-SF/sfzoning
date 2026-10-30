@@ -32,6 +32,18 @@ _ALPHA_ALIAS = {"CM": "C-M", "C-M": "C-M", "UNRESTRICTED": "U", "PUBLIC": "P", "
                 "RTOM": "RTO-M", "RTO-M": "RTO-M", "RTOC": "RTO-C", "RTO-C": "RTO-C",
                 "NC-S": "NC-S"}
 
+# DataSF-only codes (today's special areas, D7): flat form (no spaces/hyphens) -> canonical.
+_SPECIAL_AREA = {
+    "RTO1": "RTO-1", "RCD": "RCD", "SALI": "SALI", "REDMX": "RED-MX", "WMUG": "WMUG",
+    "WMUO": "WMUO", "CMUO": "CMUO", "MRMU": "MR-MU", "BRMU": "BR-MU", "P70MU": "P70-MU",
+    "PPSMU": "PPS-MU", "SMU": "S-MU", "MBRA": "MB-RA", "MBO": "MB-O", "HPRA": "HP-RA",
+    "TIR": "TI-R", "TIMU": "TI-MU", "TIOS": "TI-OS", "TIPCI": "TI-PCI",
+    "YBIR": "YBI-R", "YBIMU": "YBI-MU", "YBIOS": "YBI-OS", "YBIPCI": "YBI-PCI",
+    "PMR": "PM-R", "PMMU1": "PM-MU1", "PMMU2": "PM-MU2", "PMOS": "PM-OS", "PMCF": "PM-CF",
+    "PMS": "PM-S", "JOBCORPS": "JOB CORPS",
+    "RHDTR": "RH-DTR", "SBDTR": "SB-DTR", "TBDTR": "TB-DTR",
+}
+
 # Canonical normalised code -> CSV `code` cell (compound cells cover several codes).
 _CSV_KEY = {
     "RTO": "RTO / RTO-M", "RTO-M": "RTO / RTO-M",
@@ -44,6 +56,15 @@ _CSV_KEY = {
     "CCB": "CCB / CRNC / CVR", "CRNC": "CCB / CRNC / CVR", "CVR": "CCB / CRNC / CVR",
     "RED": "RED / SPD / RSD", "SPD": "RED / SPD / RSD", "RSD": "RED / SPD / RSD",
     "NCD": "Named NCDs",
+    "RTO-1": "RTO / RTO-M",
+    "RH-DTR": "RH-DTR / SB-DTR / TB-DTR", "SB-DTR": "RH-DTR / SB-DTR / TB-DTR",
+    "TB-DTR": "RH-DTR / SB-DTR / TB-DTR",
+    **{c: "MR-MU / BR-MU / P70-MU / PPS-MU / S-MU"
+       for c in ("MR-MU", "BR-MU", "P70-MU", "PPS-MU", "S-MU")},
+    **{c: "TI-R / YBI-R / PM-R" for c in ("TI-R", "YBI-R", "PM-R")},
+    **{c: "TI-MU / YBI-MU / PM-MU1 / PM-MU2" for c in ("TI-MU", "YBI-MU", "PM-MU1", "PM-MU2")},
+    **{c: "TI-OS / YBI-OS / TI-PCI / YBI-PCI / PM-OS / PM-CF / PM-S / Job Corps"
+       for c in ("TI-OS", "YBI-OS", "TI-PCI", "YBI-PCI", "PM-OS", "PM-CF", "PM-S", "JOB CORPS")},
 }
 
 _SUFFIX_ALIAS = {"(D)": "(D)", "D": "(D)", "(S)": "(S)", "S": "(S)"}
@@ -63,6 +84,10 @@ def normalise_code(raw: str, year: int) -> str | None:
         return s.replace(" ", "")
     s = re.sub(r"[\s.]*$", "", s)
     flat = s.replace(" ", "").replace("-", "")
+    if flat in _SPECIAL_AREA:
+        return _SPECIAL_AREA[flat]
+    if re.match(r"NCT[\s-]+(?![123]$)\S", s):              # named NCT ("NCT-MISSION")
+        return "NCT"
     if flat in _ALPHA_ALIAS:
         return _ALPHA_ALIAS[flat]
     if s in _ALPHA_ONLY:

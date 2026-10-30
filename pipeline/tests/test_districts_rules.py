@@ -114,3 +114,32 @@ def test_series_table_matches_spec():
 def test_series_table_complete():
     found = {p.series for p in pages.discover()}
     assert found <= set(series.SERIES)
+
+
+# DataSF today codes outside the original CSV (D7): every one resolves, with the category its
+# Planning Code district purpose implies (rows added to the research CSV, confidence medium/low).
+TODAY_CODES = [
+    ("NCT-MISSION", "mixed"), ("NCT-24TH-MISSION", "mixed"), ("NCT-UPPER MARKET", "mixed"),
+    ("NCT-GLEN PARK", "mixed"), ("RTO-1", "multi_family"), ("RH DTR", "multi_family"),
+    ("SB-DTR", "multi_family"), ("TB DTR", "multi_family"), ("RCD", "mixed"),
+    ("SALI", "industrial"), ("RED-MX", "mixed"), ("WMUG", "mixed"), ("WMUO", "commercial"),
+    ("CMUO", "mixed"), ("MR-MU", "mixed"), ("BR-MU", "mixed"), ("P70-MU", "mixed"),
+    ("PPS-MU", "mixed"), ("S-MU", "mixed"), ("MB-RA", "mixed"), ("MB-O", "commercial"),
+    ("HP-RA", "mixed"), ("TI-MU", "mixed"), ("TI-R", "multi_family"), ("TI-OS", "public"),
+    ("TI-PCI", "public"), ("YBI-R", "multi_family"), ("YBI-OS", "public"), ("YBI-PCI", "public"),
+    ("YBI-MU", "mixed"), ("PM-R", "multi_family"), ("PM-OS", "public"), ("PM-MU1", "mixed"),
+    ("PM-MU2", "mixed"), ("PM-CF", "public"), ("PM-S", "public"), ("Job Corps", "public"),
+]
+
+
+@pytest.mark.parametrize("code,expected", TODAY_CODES)
+def test_today_special_codes(code, expected):
+    assert categories.category_for(code, 2026) == expected
+
+
+@pytest.mark.parametrize("code,family", [
+    ("NCT-MISSION", "NCT"), ("RCD", "NC"), ("RH DTR", "DTR"), ("WMUG", "MU"), ("CMUO", "MU"),
+    ("RTO-1", "RTO"), ("MB-RA", "other"), ("PM-R", "other"),
+])
+def test_family_for_today_codes(code, family):
+    assert categories.family_for(code) == family
