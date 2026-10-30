@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Static tile server with HTTP Range + CORS, for local development.
 // Serves the repo's pipeline output (../pipeline/data/out from site/) by default.
-// TILES_DIR overrides the directory; PORT overrides 8787.
+// TILES_DIR overrides the directory; PORT overrides 8787; HOST overrides 127.0.0.1 (0.0.0.0 for LAN).
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 const DEFAULT_TILES_DIR = fileURLToPath(new URL("../../pipeline/data/out", import.meta.url));
 const DIR = path.resolve(process.env.TILES_DIR || DEFAULT_TILES_DIR);
 const PORT = Number(process.env.PORT || 8787);
+const HOST = process.env.HOST || "127.0.0.1";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -65,4 +66,4 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(PORT, "127.0.0.1", () => console.log(`serving ${DIR} on http://127.0.0.1:${PORT}`));
+server.listen(PORT, HOST, () => console.log(`serving ${DIR} on http://${HOST}:${PORT}`));
