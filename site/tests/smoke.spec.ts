@@ -13,7 +13,13 @@ test("tile server down: notice appears and text still renders", async ({ page })
   await expect(page.getByRole("heading", { name: /How San Francisco was zoned/ })).toBeVisible();
 });
 
-test("1948 shows imagery and the Rumsey credit", async ({ page }) => {
-  await page.goto("/?era=1948&zoom=13");
+test("the 1948 step shows the Rumsey credit", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByText("David Rumsey Map Collection")).toHaveCount(0);
+  await page.locator('[data-step="1948-lot-rules"]').scrollIntoViewIfNeeded();
+  await page.evaluate(() => {
+    const r = document.querySelector('[data-step="1948-lot-rules"]')!.getBoundingClientRect();
+    window.scrollBy(0, r.top + r.height / 2 - innerHeight / 2);
+  });
   await expect(page.getByText("David Rumsey Map Collection")).toBeVisible();
 });

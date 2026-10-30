@@ -8,6 +8,7 @@ import type { Feature, FeatureCollection, Geometry } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { ERAS } from "@/lib/eras";
 import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
+import { MAP_COLORS, scanInkWeight } from "@/lib/theme";
 
 export type MapState = {
   era: string;
@@ -46,7 +47,7 @@ function targetOpacity(state: MapState, series: string): number {
   const era = ERAS.find((e) => e.id === state.era);
   if (!era || !era.scanSeries.includes(series)) return 0;
   // District classification tiles arrive in step two; until then every view shows the scan.
-  return state.view === "both" ? 0.7 : 1;
+  return (state.view === "both" ? 0.7 : 1) * scanInkWeight(state.camera.zoom);
 }
 
 const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap({ initial, interactive = false }, ref) {
@@ -85,7 +86,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap({ initial, 
     ensureProtocol();
     const map = new maplibregl.Map({
       container: container.current,
-      style: { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": "#1c2229" } }] },
+      style: { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": MAP_COLORS.water } }] },
       center: initial.camera.center,
       zoom: initial.camera.zoom,
       bearing: initial.camera.bearing ?? 0,
@@ -105,8 +106,37 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap({ initial, 
 
     map.on("load", () => {
       map.addSource("blocks", { type: "vector", url: tileUrl(BASEMAP) });
-      map.addLayer({ id: "blocks-fill", type: "fill", source: "blocks", "source-layer": "blocks", paint: { "fill-color": "#232b33" } });
-      map.addLayer({ id: "blocks-line", type: "line", source: "blocks", "source-layer": "blocks", paint: { "line-color": "#46535f", "line-width": 0.6 } });
+      // There is no land or street layer, only blocks. A wide street-coloured stroke under the
+      // block fill paints the gaps between blocks as streets (~20 m wide at every zoom), while
+      // open water stays blue.
+      map.addLayer({
+        id: "streets",
+        type: "line",
+        source: "blocks",
+        "source-layer": "blocks",
+        layout: { "line-join": "round" },
+        paint: {
+          "line-color": MAP_COLORS.street,
+          "line-width": ["interpolate", ["exponential", 2], ["zoom"], 12, 2, 18, 128],
+        },
+      });
+      map.addLayer({
+        id: "blocks-fill",
+        type: "fill",
+        source: "blocks",
+        "source-layer": "blocks",
+        paint: { "fill-color": MAP_COLORS.block },
+      });
+      map.addLayer({
+        id: "blocks-line",
+        type: "line",
+        source: "blocks",
+        "source-layer": "blocks",
+        paint: {
+          "line-color": MAP_COLORS.blockEdge,
+          "line-width": ["interpolate", ["linear"], ["zoom"], 12, 0.3, 16, 0.8],
+        },
+      });
       for (const series of allSeries()) {
         map.addSource(layerId(series), { type: "raster", url: scanSource(series), tileSize: 256 });
         map.addLayer({
@@ -117,7 +147,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap({ initial, 
         });
       }
       map.addSource("highlight", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
-      map.addLayer({ id: "highlight-line", type: "line", source: "highlight", paint: { "line-color": "#ffb703", "line-width": 3 } });
+      map.addLayer({ id: "highlight-line", type: "line", source: "highlight", paint: { "line-color": MAP_COLORS.accent, "line-width": 3 } });
       readyRef.current = true;
       if (pending.current) {
         const p = pending.current;

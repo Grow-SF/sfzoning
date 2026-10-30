@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ERAS } from "@/lib/eras";
 import { BASEMAP, districtSource, scanSource, tileUrl } from "@/lib/tiles";
+import { scanInkWeight } from "@/lib/theme";
 
 const orig = process.env.NEXT_PUBLIC_TILES_BASE_URL;
 afterEach(() => {
@@ -22,6 +23,15 @@ describe("tileUrl", () => {
     delete process.env.NEXT_PUBLIC_TILES_BASE_URL;
     expect(scanSource("1948")).toMatch(/1948\/1948\.pmtiles$/);
     expect(districtSource("1980-1990-zoning")).toMatch(/1980-1990-zoning\/districts\.pmtiles$/);
+  });
+});
+
+describe("scanInkWeight", () => {
+  it("eases scan ink at city zooms and is full strength up close", () => {
+    expect(scanInkWeight(11)).toBeCloseTo(0.55);
+    expect(scanInkWeight(13.25)).toBeGreaterThan(0.55);
+    expect(scanInkWeight(13.25)).toBeLessThan(1);
+    expect(scanInkWeight(15)).toBe(1);
   });
 });
 
