@@ -4,7 +4,9 @@ The history of San Francisco zoning, 1921 to today: the city's archived zoning
 maps aligned to real streets, what each district allowed, and a scrolling story
 built on them.
 
-By Steven Bacio for [GrowSF](https://growsf.org).
+Created and maintained by Steven Bacio for [GrowSF](https://growsf.org).
+Source at [github.com/Grow-SF/sfzoning](https://github.com/Grow-SF/sfzoning);
+the site is being built for [sfzoning.com](https://sfzoning.com).
 
 - `pipeline/`: the georeferencing pipeline. It aligns scanned historic maps to
   modern GIS data automatically, reads each era's zoning districts, and
