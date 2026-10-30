@@ -143,3 +143,7 @@ def test_today_special_codes(code, expected):
 ])
 def test_family_for_today_codes(code, family):
     assert categories.family_for(code) == family
+
+
+def test_mission_bay_open_space():
+    assert categories.category_for("MB-OS", 2000) == "public"

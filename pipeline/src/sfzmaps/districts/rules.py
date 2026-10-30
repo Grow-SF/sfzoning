@@ -36,7 +36,7 @@ _ALPHA_ALIAS = {"CM": "C-M", "C-M": "C-M", "UNRESTRICTED": "U", "PUBLIC": "P", "
 _SPECIAL_AREA = {
     "RTO1": "RTO-1", "RCD": "RCD", "SALI": "SALI", "REDMX": "RED-MX", "WMUG": "WMUG",
     "WMUO": "WMUO", "CMUO": "CMUO", "MRMU": "MR-MU", "BRMU": "BR-MU", "P70MU": "P70-MU",
-    "PPSMU": "PPS-MU", "SMU": "S-MU", "MBRA": "MB-RA", "MBO": "MB-O", "HPRA": "HP-RA",
+    "PPSMU": "PPS-MU", "SMU": "S-MU", "MBRA": "MB-RA", "MBO": "MB-O", "MBOS": "MB-OS", "HPRA": "HP-RA",
     "TIR": "TI-R", "TIMU": "TI-MU", "TIOS": "TI-OS", "TIPCI": "TI-PCI",
     "YBIR": "YBI-R", "YBIMU": "YBI-MU", "YBIOS": "YBI-OS", "YBIPCI": "YBI-PCI",
     "PMR": "PM-R", "PMMU1": "PM-MU1", "PMMU2": "PM-MU2", "PMOS": "PM-OS", "PMCF": "PM-CF",

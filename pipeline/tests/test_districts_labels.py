@@ -234,3 +234,65 @@ def test_sheet_role():
     assert sheet_role(_labs(20, 20)) == "use"         # a combined use + height sheet reads both
     assert sheet_role(_labs(3, 2)) == "skip"          # special-use / sign sheets: few codes
     assert sheet_role([]) == "skip"
+
+
+def test_overlay_labels_are_not_use_codes():
+    from sfzmaps.districts.labels import DistrictLabel, use_code_labels
+    labs = [DistrictLabel(code=c, kind="use", x=0, y=0, confidence=1) for c in
+            ("NORTH OF MARKET RES. S.U.D.", "RINCON HILL RES. SUD", "VAN NESS SPECIAL USE DISTRICT",
+             "NC-2 & FINANCIAL RUSD", "RC-4", "RINCON SUD-CU")]
+    assert [lb.code for lb in use_code_labels(labs)] == ["NC-2", "RC-4"]
+
+
+def test_inheritance_propagates_through_unlabelled_chain():
+    a, b, c = box(0, 0, 100, 100), box(106, 0, 206, 100), box(212, 0, 312, 100)
+    out = labels.assign_regions([a, b, c], [lab("R-1", 50, 50)])
+    got = {round(p.bounds[0]): (code, conf) for p, code, conf in out}
+    assert got[106][0] == "R-1" and got[212][0] == "R-1"
+    assert got[212][1] < got[106][1] < 0.9              # each hop costs confidence
+
+
+def test_disagreeing_neighbours_longest_contact_wins_at_low_confidence():
+    # mid touches R-1 along its 100-long side and C-2 only along a 20-long stub
+    left, mid, stub = box(0, 0, 100, 100), box(106, 0, 206, 100), box(212, 80, 312, 100)
+    out = labels.assign_regions([left, mid, stub], [lab("R-1", 50, 50), lab("C-2", 260, 90)])
+    m = [(c, conf) for p, c, conf in out if p.equals(mid)][0]
+    assert m[0] == "R-1" and m[1] <= labels.PLURALITY_CONF
+
+
+def test_hairline_lot_lines_do_not_lower_the_heavy_threshold():
+    """Digital-era sheets draw lot lines as 1 px hairlines, more ink than anything else; the
+    thin-stroke width must come from the block outlines, or every block outline reads heavy."""
+    lm = sl.build()
+    img = lm.img.copy()
+    for y in range(20, img.shape[0] - 20, 6):          # dense 1 px hatching: a sea of hairlines
+        img[y, 20:img.shape[1] - 20] = np.minimum(img[y, 20:img.shape[1] - 20], 0)
+    m = labels.heavy_line_mask(img)
+    x0, y0, x1, y1 = sl.block_px(1, 1)
+    assert m[y0 + 10:y1 - 10, x0:x0 + sl.THIN].mean() < 0.3    # block outline still thin
+    assert m[300:500, 409:412].mean() > 0.95
+
+
+def test_public_is_never_inherited_by_plurality():
+    # mid touches a park (P) along its long side and R-1 along a stub: P must not spread
+    left, mid, stub = box(0, 0, 100, 100), box(106, 0, 206, 100), box(212, 80, 312, 100)
+    out = labels.assign_regions([left, mid, stub], [lab("P", 50, 50), lab("R-1", 260, 90)])
+    m = [c for p, c, _ in out if p.equals(mid)][0]
+    assert m == "R-1"
+
+
+def test_split_caps_public_cells():
+    """A park's P sharing an open region with a district label takes only a disk around its
+    label; the rest of the region goes to the district (2000-digital: P flooded blocks)."""
+    region = box(0, 0, 2000, 400)
+    out = labels.assign_regions([region], [lab("P", 100, 200), lab("RH-2", 1900, 200)])
+    by = {c: p for p, c, _ in out}
+    assert by["P"].area <= 3.15 * labels.SPLIT_P_RADIUS_PX ** 2 + 1
+    assert by["RH-2"].contains(Point(500, 200)) and by["RH-2"].contains(Point(1000, 200))
+    assert abs(by["P"].area + by["RH-2"].area - region.area) < 1
+
+
+def test_small_commercial_clusters_do_not_spread():
+    left, mid, stub = box(0, 0, 100, 100), box(106, 0, 206, 100), box(212, 80, 312, 100)
+    out = labels.assign_regions([left, mid, stub], [lab("NC-1", 50, 50), lab("RH-1(D)", 260, 90)])
+    assert [c for p, c, _ in out if p.equals(mid)] == ["RH-1(D)"]

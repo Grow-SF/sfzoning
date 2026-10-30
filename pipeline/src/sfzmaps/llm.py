@@ -86,7 +86,7 @@ class OpenAIClient:
         if not os.environ.get("OPENAI_API_KEY"):
             raise LLMAuthError("OPENAI_API_KEY missing or invalid")
         self._openai = openai
-        self._client = openai.OpenAI()
+        self._client = openai.OpenAI(max_retries=8)   # backoff on 429 / 5xx under parallel series
 
     def call(self, png: bytes, prompt: str, schema: type[T]) -> T:
         try:

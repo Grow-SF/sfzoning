@@ -18,6 +18,7 @@ height maps print 40-X, 65-A...).  Steps, all in page pixels until the parcel jo
 from __future__ import annotations
 
 import hashlib
+import re
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -36,6 +37,7 @@ from sfzmaps.transform import SheetTransform
 # --- tuning (page px unless noted) ------------------------------------------------------
 HEAVY_FACTOR = 1.6       # heavy line: estimated width >= this x the thin stroke width ...
 HEAVY_MIN_EXTRA = 2.0    # ... and at least this many px wider than it
+MIN_THIN_PX = 2          # ridges narrower than this are hairlines, not the thin stroke
 GAP_CLOSE_PX = 9         # closing disk that bridges small breaks in heavy lines
 BRIDGE_PX = 120         # a heavy line's loose end joins heavy ink up to this far ahead ...
 BRIDGE_CONE_DEG = 35.0  # ... within this angle of the line's direction
@@ -51,6 +53,13 @@ SNAP_PX = 80             # else (all ink around it) to the nearest region this c
 TOUCH_PX = 15            # regions this close are neighbours (they're split by a heavy line)
 SPLIT_CONF = 0.8         # confidence factor for pieces of a region split between labels
 INHERIT_CONF = 0.6       # confidence factor for a region that inherits its neighbours' code
+PLURALITY_CONF = 0.3     # confidence of a region whose neighbours disagree: longest contact wins ...
+PLURALITY_MARGIN = 1.25  # ... by at least this factor over the runner-up (else unknown)
+# Parks / public sites and the small commercial clusters are islands labelled inside their own
+# boxes: never spread by plurality, and capped in splits (2000-digital: P and NC-1 flooded
+# residential blocks; capping them raised agreement on unchanged districts 66.8% -> 69.2%).
+NO_PLURALITY = {"P", "C-1", "NC-1", "NC-2", "NC-3", "NC-S", "RC-1", "RC-2"}
+SPLIT_P_RADIUS_PX = 150  # ... and in a split region a P label takes at most this disk (~1 block)
 MIN_REGIONS = 5          # fewer closed regions: boundary extraction failed, use the fallback
 FALLBACK_CONF = 0.3
 FALLBACK_BLOCK_FT = 20.0  # labels within this distance of a block count as in it
@@ -190,10 +199,25 @@ def heavy_line_mask(page_img: np.ndarray) -> np.ndarray:
     return _heavy(page_img)[0]
 
 
+def thin_stroke_width(ink: np.ndarray) -> float:
+    """The sheet's thin-stroke (block outline) width: the most common stroke-ridge width
+    (2 x distance-to-paper - 1, at local maxima) of at least MIN_THIN_PX.  Hairlines are left
+    out: the digital-era sheets draw lot lines 1 px wide, more ink than anything else, and
+    taking them as the thin stroke made every 3 px block outline read heavy (2000-digital p11
+    and others: each block its own region)."""
+    d = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, 5)
+    ridge = (cv2.dilate(d, np.ones((3, 3), np.uint8)) == d) & (d > 0)
+    w = np.round(2 * d[ridge] - 1).astype(int)
+    w = w[(w >= MIN_THIN_PX) & (w < 4 * MIN_THIN_PX + 8)]
+    if not w.size:
+        return float(linework.stroke_width(ink) or 1.0)
+    return float(np.bincount(w).argmax())
+
+
 def _heavy(page_img: np.ndarray) -> tuple[np.ndarray, float]:
     """(heavy-line mask, the width threshold in px)."""
     ink = linework.binarize(page_img)
-    sw = linework.stroke_width(ink) or 1.0
+    sw = thin_stroke_width(ink)
     width_thr = max(HEAVY_FACTOR * sw, sw + HEAVY_MIN_EXTRA)
     d_thr = (width_thr + 1) / 2
     d = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, 5)
@@ -341,23 +365,44 @@ def _region_of(pt: Point, regs: list[Polygon], tree: STRtree) -> int | None:
     return int(i[0]) if len(i) else None
 
 
+def _voronoi_pieces(region, pts: list[DistrictLabel]) -> dict[str, list]:
+    cells = voronoi_polygons(MultiPoint([(l.x, l.y) for l in pts]), extend_to=region)
+    pieces: dict[str, list] = {}
+    for cell in cells.geoms:
+        l = min(pts, key=lambda l: cell.distance(Point(l.x, l.y)))
+        piece = cell.intersection(region)
+        if not piece.is_empty:
+            pieces.setdefault(l.code, []).append(piece)
+    return pieces
+
+
 def _split(region: Polygon, labs: list[DistrictLabel]) -> list[tuple[Polygon, str, float]]:
+    """A region carrying conflicting codes, split by a Voronoi of its labels.  Cells of
+    NO_PLURALITY (P) labels are capped to a SPLIT_P_RADIUS_PX disk round the label: parks and
+    public sites are small and labelled inside themselves, and an uncapped cell handed whole
+    neighbourhoods to a park whose outline didn't close the region."""
     best: dict[tuple[float, float], DistrictLabel] = {}
     for l in labs:      # one label per position (highest confidence)
         k = (l.x, l.y)
         if k not in best or l.confidence > best[k].confidence:
             best[k] = l
     pts = list(best.values())
-    cells = voronoi_polygons(MultiPoint([(l.x, l.y) for l in pts]), extend_to=region)
-    pieces: dict[str, list] = {}
     conf: dict[str, float] = {}
-    for cell in cells.geoms:
-        l = min(pts, key=lambda l: cell.distance(Point(l.x, l.y)))
-        piece = cell.intersection(region)
-        if piece.is_empty:
-            continue
-        pieces.setdefault(l.code, []).append(piece)
+    for l in pts:
         conf[l.code] = max(conf.get(l.code, 0.0), l.confidence)
+    pieces = _voronoi_pieces(region, pts)
+    capped = [l for l in pts if l.code in NO_PLURALITY]
+    others = [l for l in pts if l.code not in NO_PLURALITY]
+    if capped and others:
+        disks = unary_union([Point(l.x, l.y).buffer(SPLIT_P_RADIUS_PX) for l in capped])
+        public = {c: unary_union(ps).intersection(disks) for c, ps in pieces.items()
+                  if c in NO_PLURALITY}
+        taken = unary_union([g for g in public.values() if not g.is_empty])
+        rest = region.difference(taken) if not taken.is_empty else region
+        pieces = {c: [g] for c, g in public.items() if not g.is_empty}
+        if not rest.is_empty:
+            for c, ps in _voronoi_pieces(rest, others).items():
+                pieces.setdefault(c, []).extend(ps)
     return [(unary_union(ps), c, conf[c] * SPLIT_CONF) for c, ps in pieces.items()]
 
 
@@ -381,16 +426,66 @@ def assign_regions(regs: list[Polygon], labs: list[DistrictLabel], *, touch_px: 
             labelled[i] = [(regs[i], ls[0].code, max(l.confidence for l in ls))]
         else:
             labelled[i] = _split(regs[i], ls)
+    code_of: dict[int, tuple[str, float]] = {}
+    for i, pieces in labelled.items():
+        if len(pieces) == 1:
+            code_of[i] = (pieces[0][1], pieces[0][2])
+    near = [r.buffer(touch_px) for r in regs]
+
+    def neighbours(i):
+        """(code, conf, contact) of each coded neighbour; contact = overlap area of the two
+        regions' touch buffers, proportional to their shared boundary length."""
+        out_ = []
+        for j in tree.query(near[i], predicate="intersects"):
+            j = int(j)
+            if j == i:
+                continue
+            if j in code_of:
+                c, cf = code_of[j]
+                out_.append((c, cf, near[i].intersection(near[j]).area))
+            elif j in labelled:                       # split region: each piece separately
+                for pc, c, cf in labelled[j]:
+                    if pc.intersects(near[i]):
+                        out_.append((c, cf, near[i].intersection(pc.buffer(touch_px)).area))
+        return out_
+
+    todo = [i for i in range(len(regs)) if i not in labelled]
+    while todo:
+        # 1. unanimous inheritance, repeated until nothing changes (chains of unlabelled regions)
+        changed = True
+        while changed:
+            changed, rest = False, []
+            for i in todo:
+                nb = neighbours(i)
+                codes = {c for c, _, _ in nb}
+                if len(codes) == 1:
+                    code_of[i] = (codes.pop(), min(cf for _, cf, _ in nb) * INHERIT_CONF)
+                    changed = True
+                else:
+                    rest.append(i)
+            todo = rest
+        # 2. disagreeing neighbours: the code with the longest contact, at low confidence (a
+        #    tie stays unknown); then go back to unanimous inheritance from there
+        picked = {}
+        for i in todo:
+            contact: dict[str, float] = {}
+            for c, _, a in neighbours(i):
+                if c not in NO_PLURALITY:
+                    contact[c] = contact.get(c, 0.0) + a
+            if not contact:
+                continue
+            ranked = sorted(contact.items(), key=lambda kv: -kv[1]) + [("", 0.0)]
+            if ranked[0][1] > ranked[1][1] * PLURALITY_MARGIN:
+                picked[i] = (ranked[0][0], PLURALITY_CONF)
+        if not picked:
+            break
+        code_of.update(picked)
+        todo = [i for i in todo if i not in picked]
     for i, r in enumerate(regs):
         if i in labelled:
             out.extend(labelled[i])
-            continue
-        near = r.buffer(touch_px)
-        nb = [(c, cf) for j in tree.query(near, predicate="intersects") if int(j) in labelled
-              for p, c, cf in labelled[int(j)] if p.intersects(near)]
-        codes = {c for c, _ in nb}
-        if len(codes) == 1:
-            out.append((r, codes.pop(), min(cf for _, cf in nb) * INHERIT_CONF))
+        elif i in code_of:
+            out.append((r, *code_of[i]))
         else:
             out.append((r, None, 0.0))
     return out
@@ -482,7 +577,7 @@ def sheet_role(labs: list[DistrictLabel]) -> str:
     SSD), so each parcel must be read on a sheet of the right kind.  A sheet with enough use
     codes is a use sheet (even if it prints heights too); else enough height codes make it a
     height sheet; else it is skipped."""
-    n_use = sum(lb.kind == "use" for lb in labs)
+    n_use = len(use_code_labels(labs))
     n_h = sum(lb.kind == "height" for lb in labs)
     n = n_use + n_h
     if n < ROLE_MIN_LABELS:
@@ -496,6 +591,24 @@ def sheet_role(labs: list[DistrictLabel]) -> str:
 
 def sheet_roles(series: str, sheets: list[str]) -> dict[str, str]:
     return {sid: sheet_role(read_district_labels(series, sid)) for sid in sheets}
+
+
+_OVERLAY = re.compile(r"S\.?\s*U\.?\s*D\b|\bRUSD\b|SPECIAL\s+USE")
+
+
+def use_code_labels(labs: list[DistrictLabel]) -> list[DistrictLabel]:
+    """Use labels that name a use district.  Special-use-district overlays ("NORTH OF MARKET
+    RES. S.U.D.", "RINCON HILL RES. SUD") are printed inside use districts on the 1990s-2000s
+    maps and would otherwise split them; "NC-2 & FINANCIAL RUSD" keeps its district, NC-2."""
+    out = []
+    for lb in labs:
+        if lb.kind != "use":
+            continue
+        code = lb.code.split("&")[0].strip()
+        if not code or _OVERLAY.search(code):
+            continue
+        out.append(lb if code == lb.code else lb.model_copy(update={"code": code}))
+    return out
 
 
 def assign_parcels(parcels, sheet, transform: SheetTransform | None = None):
@@ -515,7 +628,7 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None):
     regs = regions(img, reading.exclusion_mask(img, _page_info(d)))
     res = {}
     for kind in ("use", "height"):
-        ls = [l for l in labs if l.kind == kind]
+        ls = use_code_labels(labs) if kind == "use" else [lb for lb in labs if lb.kind == kind]
         if not ls:
             res[kind] = ([None] * len(parcels), [0.0] * len(parcels))
         elif len(regs) >= MIN_REGIONS:

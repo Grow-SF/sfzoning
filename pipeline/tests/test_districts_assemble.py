@@ -173,3 +173,17 @@ def test_merge_use_height_reads():
     h = assemble.merge_use_height(use, height, role="height").set_index("blklot")
     assert h.loc["c", "confidence"] == 0.6 and h.loc["c", "source_sheet"] == "1H"
     assert h.loc["a", "height_code"] is None and h.loc["a", "confidence"] == 0.0
+
+
+def test_unzoned_harbor_blocks_by_era(monkeypatch):
+    monkeypatch.setattr(assemble, "UNZONED_UNTIL", {"1002": 1969})
+    raw = _raw(["R-1", "R-1", "R-4", "R-4", "2R"])
+    early = assemble.mask_unzoned(raw, 1948).set_index("blklot")
+    assert early.loc["1002001", "code"] is None and early.loc["1002001", "confidence"] == 0.0
+    assert early.loc["1000001", "code"] == "R-1"
+    late = assemble.mask_unzoned(raw, 1972).set_index("blklot")
+    assert late.loc["1002001", "code"] == "2R"
+
+
+def test_default_unzoned_blocks_are_the_port_piers():
+    assert assemble.UNZONED_UNTIL == {"9900": 1969}

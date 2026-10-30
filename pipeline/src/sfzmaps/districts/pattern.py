@@ -60,7 +60,7 @@ INK_TOL = 0.6
 TOL = np.array([TONE_TOL, INK_TOL, np.inf, np.inf, np.inf, np.inf, np.inf])
 BLOCK_FACTOR = 0.9
 LEGEND_MAX_CALLS = 8
-WORKERS = 4           # concurrent mosaic calls
+WORKERS = 10          # concurrent mosaic calls (latency-bound: ~25 s per mosaic)
 LEGEND_EDGE = 1024
 LEGENDS_JSON = Path(__file__).with_name("legends.json")
 

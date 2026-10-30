@@ -203,6 +203,23 @@ def join_height(df: pd.DataFrame, height: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+# Blocks outside city zoning until a year: the Port's piers and wharves (block 9900) were State
+# Harbor Commission land until the Burton Act transfer (1968, effective 1969), so the 1921-1968
+# maps draw them as bare outlines that read as the white (2R) pattern.  They stay uncoded.
+UNZONED_UNTIL = {"9900": 1969}
+
+
+def mask_unzoned(df: pd.DataFrame, year: int) -> pd.DataFrame:
+    """Code None, confidence 0 for parcels in UNZONED_UNTIL blocks before that block's year."""
+    df = df.copy()
+    block = df["blklot"].astype(str).str[:4]
+    m = block.map(lambda b: b in UNZONED_UNTIL and year < UNZONED_UNTIL[b])
+    df["code"] = df["code"].astype(object)
+    df.loc[m, "code"] = None
+    df.loc[m, "confidence"] = 0.0
+    return df
+
+
 def categorise(df: pd.DataFrame, year: int) -> pd.DataFrame:
     df = df.copy()
     df["category"] = [category_for(c, year) if isinstance(c, str) and c.strip() else "unknown"
@@ -266,8 +283,9 @@ def write_pmtiles(parcels: gpd.GeoDataFrame, districts: gpd.GeoDataFrame, out: P
 
 
 def publish(series: str, df: pd.DataFrame, year: int) -> Path:
-    """Overrides -> height join -> rules join -> category, then every output file."""
-    df = apply_overrides(df, series)
+    """Unzoned blocks -> overrides -> height join -> rules join -> category, then every
+    output file."""
+    df = apply_overrides(mask_unzoned(df, year), series)
     hp = out_dir(series) / "height.parquet"
     if hp.exists():
         df = join_height(df, pd.read_parquet(hp))
