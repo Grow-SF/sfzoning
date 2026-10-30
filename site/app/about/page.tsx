@@ -3,7 +3,7 @@
 // table in docs/superpowers/notes/2026-10-29-tuning.md (full run, 2026-10-29).
 import type { Metadata } from "next";
 import Link from "next/link";
-import Credits from "@/components/Credits";
+import Credits, { SOURCE_URL } from "@/components/Credits";
 import DraftBanner from "@/components/DraftBanner";
 import Sources from "@/components/Sources";
 import { SOURCES, citedSourceIds } from "@/content/sources";
@@ -114,6 +114,24 @@ export default function About() {
           until someone places them by hand. The rest appear, but may be off by more than the bar. Zoning boundaries
           will later be snapped to modern lot lines, which no warp of a hand-drawn map can match.
         </p>
+      </section>
+
+      <section className={styles.block} aria-labelledby="reuse-heading">
+        <h2 id="reuse-heading" className={styles.heading}>
+          Source code and reuse
+        </h2>
+        <p>
+          The code for the map pipeline and this site is open source, licensed under the{" "}
+          <a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU AGPL v3.0</a> and published{" "}
+          <a href={SOURCE_URL}>on GitHub</a>. The pipeline can align other cities&rsquo; historic maps too.
+        </p>
+        <p>
+          The story, the research and the processed maps are licensed{" "}
+          <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>: you can reuse and adapt
+          them with credit, for non-commercial purposes, under the same license. That is not an open source license.
+          The original zoning maps are, to the best of our knowledge, in the public domain.
+        </p>
+        <p>Corrections, fixes and adaptations are welcome; the repository explains how to contribute.</p>
       </section>
 
       <Sources ids={ALL_IDS} />

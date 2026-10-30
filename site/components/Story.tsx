@@ -7,6 +7,7 @@ import type { Step } from "@/content/schema";
 import { ERAS, heroCue } from "@/lib/eras";
 import { useScrollSteps } from "@/lib/useScrollSteps";
 import styles from "@/app/page.module.css";
+import { SOURCE_URL } from "./Credits";
 
 type Props = { steps: Step[] };
 
@@ -47,6 +48,10 @@ export default function Story({ steps }: Props) {
           <h1 className={styles.headline}>How San Francisco was zoned</h1>
           <p className={styles.dek}>
             A century of rules about what could be built where, read straight off the city&rsquo;s own maps.
+          </p>
+          <p className={styles.byline}>
+            By Steven Bacio for <a href="https://growsf.org">GrowSF</a> &middot;{" "}
+            <a href={SOURCE_URL}>Source on GitHub</a>
           </p>
           <p className={styles.cue} data-testid="hero-cue">
             {heroCue(first)}
