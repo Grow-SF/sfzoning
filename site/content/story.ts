@@ -42,7 +42,7 @@ export const STORY: Step[] = [
       },
       {
         kind: "p",
-        text: "In 1921, apartments were legal on most of the city’s residential land. By the end of the 1970s, most of it was zoned for houses. The city’s own zoning maps, aligned to today’s streets, show how that happened.",
+        text: "In 1921, apartments were legal across large parts of the city. By the end of the 1970s, most of it was zoned for houses. The city’s own zoning maps, aligned to today’s streets, show how that happened.",
       },
     ],
     sources: ["sf-zoning-1921-10", "sfplanning-has-2020"],
@@ -163,7 +163,7 @@ export const STORY: Step[] = [
       },
       {
         kind: "p",
-        text: "In 1964 the city had capped heights in a few northern neighbourhoods, from 40 feet in the Marina to 105 on Russian Hill. Ordinance 234-72, approved Aug. 18, 1972, went further. In the Planning Department’s words, it",
+        text: "In 1964 the city had capped heights in a few northern neighbourhoods, at limits as low as 20 to 35 feet in Anza Vista and as high as 105 on Russian Hill. Ordinance 234-72, approved Aug. 18, 1972, went further. In the Planning Department’s words, it",
       },
       {
         kind: "quote",
@@ -269,7 +269,7 @@ export const STORY: Step[] = [
       },
       {
         kind: "p",
-        text: "It also wrote eight Priority Policies into the Planning Code, favouring the preservation of neighbourhood character and existing housing. Those policies became a standard hook for opposing change in residential neighbourhoods.",
+        text: "It also wrote eight Priority Policies into the Planning Code, favouring the preservation of neighbourhood character and existing housing.",
       },
     ],
     sources: ["spur-prop-m"],

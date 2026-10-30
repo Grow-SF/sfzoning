@@ -4,7 +4,7 @@ import { createRef, useEffect, useMemo, useRef } from "react";
 import StoryMap, { type StoryMapHandle } from "./StoryMap";
 import StepCard from "./StepCard";
 import type { Step } from "@/content/schema";
-import { ERAS } from "@/lib/eras";
+import { ERAS, heroCue } from "@/lib/eras";
 import { useScrollSteps } from "@/lib/useScrollSteps";
 import styles from "@/app/page.module.css";
 
@@ -47,7 +47,9 @@ export default function Story({ steps }: Props) {
           <p className={styles.dek}>
             A century of rules about what could be built where, read straight off the city&rsquo;s own maps.
           </p>
-          <p className={styles.cue}>Scroll to begin in 1921</p>
+          <p className={styles.cue} data-testid="hero-cue">
+            {heroCue(first)}
+          </p>
         </header>
 
         {steps.map((s, i) => (

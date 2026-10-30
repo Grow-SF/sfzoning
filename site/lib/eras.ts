@@ -27,3 +27,10 @@ export const ERAS: Era[] = [
   { id: "2000s", label: "2000s", year: 2000, scanSeries: ["2000-digital-zoning"], districtSeries: "2000-digital-zoning", sources: ["zoning-map-book-2000"] },
   { id: "today", label: "Today", year: 2026, scanSeries: [], districtSeries: "today", sources: ["sfplanning-has-2020", "sfplanning-family-zoning"] },
 ];
+
+/** The hero's scroll cue names where the story actually starts (its first step's era). */
+export function heroCue(first: { era: string }): string {
+  if (first.era === "today") return "Scroll to begin with today’s map";
+  const era = ERAS.find((e) => e.id === first.era);
+  return `Scroll to begin in ${era?.label ?? first.era}`;
+}
