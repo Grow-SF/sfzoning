@@ -20,7 +20,11 @@ npm run dev            # http://localhost:3000 (builds public/data/rules.json fi
 - `scripts/serve-tiles.mjs` is a static server with HTTP Range and CORS, the two things
   PMTiles needs. `TILES_DIR` and `PORT` override its directory and port.
 - `NEXT_PUBLIC_TILES_BASE_URL` points the site at the tiles (default `http://127.0.0.1:8787`).
-  It is inlined at build time, so set it before `next build`.
+  It is inlined at build time, so set it before `next build`. A production build
+  (`VERCEL` set or `NODE_ENV=production`) stops in `prebuild` if it is unset or not https;
+  `ALLOW_LOCAL_TILES=1` lets a local production build use the local tile server.
+- `NEXT_PUBLIC_DRAFT` keeps the draft banner up and adds `noindex, nofollow` unless it is
+  exactly `false` (`lib/draft.ts`).
 - The site picks up whatever the pipeline has published. Each era's district tiles are probed
   (`lib/districts.ts`); an era without them shows its scan with a "district colours are
   coming" note instead of failing.
@@ -46,6 +50,8 @@ explorer (all three views) and the about page at both viewports.
 ```sh
 NEXT_PUBLIC_TILES_BASE_URL=https://tiles.example.org npm run build
 npm start
+# or, against the local tile server:
+ALLOW_LOCAL_TILES=1 npm run build
 ```
 
 Optional: `NEXT_PUBLIC_SITE_URL` (default `https://sfzoning.com`) makes Open Graph URLs absolute.
