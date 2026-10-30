@@ -235,6 +235,38 @@ def _review_result(review_t: SheetTransform, refine_json: Path, ref: Reference |
     return RefineResult(review_t, ms, 0, True)
 
 
+def _apply_change_areas(res: RefineResult, change_areas: dict | None) -> None:
+    """Relabel scored matches whose modern corner lies inside a reviewer-drawn change area
+    as real_change (counted, never scored). change_areas is a GeoJSON FeatureCollection in
+    EPSG:2227 (the format of changes.geojson)."""
+    if not change_areas or not change_areas.get("features"):
+        return
+    from shapely import contains_xy
+    from shapely.geometry import shape
+    from shapely.ops import unary_union
+    area = unary_union([shape(f["geometry"]) for f in change_areas["features"] if f.get("geometry")])
+    if area.is_empty:
+        return
+    for m in res.matches:
+        if m.label in ("inlier", "outlier") and np.isfinite([m.wx, m.wy]).all() \
+                and contains_xy(area, m.wx, m.wy):
+            m.label = "real_change"
+
+
+def score_review(t: SheetTransform, refine_json: Path, ref: Reference | None,
+                 change_areas: dict | None = None, labels_json: Path | None = None) -> SheetScore:
+    """Score of a human-edited transform `t`: refine.json's matches re-measured under `t`
+    (else one inlier per GCP), reviewer change areas excluded. Used by run_sheet's review
+    branch and by the editor's preview, so both always agree."""
+    res = _review_result(t, refine_json, ref)
+    _apply_change_areas(res, change_areas)
+    agreement = None
+    if labels_json is not None and Path(labels_json).exists() and ref is not None:
+        from sfzmaps import placement
+        agreement = placement.label_agreement(t, reading.load_labels(labels_json), ref)
+    return score_mod.score(res, agreement=agreement)
+
+
 # -- the runner ------------------------------------------------------------------------
 
 def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_auto: bool = False,
@@ -413,8 +445,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
         extra = {}
         if review is not None:
             rt_ = SheetTransform.from_json(json.loads(tj.read_text()))
-            res = _review_result(rt_, rfj, ref)
-            sc = score_mod.score(res, agreement=agreement(rt_))
+            sc = score_review(rt_, rfj, ref, review.get("change_areas"), lj)
             extra["source"] = "review"
         elif answer_key or not rfj.exists():
             sc = score_mod.score(None)
