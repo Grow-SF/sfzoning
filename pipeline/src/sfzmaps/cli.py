@@ -285,6 +285,9 @@ def districts(
                                                                "inheritance, other misses fail."),
     status: bool = typer.Option(False, "--status", help="Provenance of every series' reads and "
                                                        "which need rerunning."),
+    shared_archive: bool = typer.Option(False, "--shared", help="Merge every published series into "
+                                                                "out/shared/ for the explorer (no "
+                                                                "vision calls). Rerun after publishing."),
 ) -> None:
     """Read zoning districts per parcel, join the rules, publish out/<series>/districts/."""
     import json
@@ -293,9 +296,16 @@ def districts(
     import pandas as pd
 
     from sfzmaps import llm, reviewpage
-    from sfzmaps.districts import assemble
+    from sfzmaps.districts import assemble, shared
     from sfzmaps.districts.series import SERIES
 
+    if shared_archive:
+        if series or all_ or validate or status or republish or cache_only or sheet:
+            raise typer.BadParameter("--shared runs alone")
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+        names = [s for s, i in SERIES.items() if i.role == "use"] + ["today"]
+        typer.echo(f"{shared.build(names)}")
+        return
     if status:
         typer.echo(assemble.format_status(assemble.status_rows()))
         if not (series or all_ or validate):

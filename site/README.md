@@ -109,6 +109,28 @@ while the pipeline rewrote them). Upload a changed archive under a new path, or 
 that open tabs need a reload. Re-run the same command whenever the pipeline publishes more eras; the site needs no rebuild
 to show a new era's districts (it probes for them at runtime).
 
+### The explorer's shared archive
+
+The explorer stores each lot and district line once, with a number, and looks up what that number
+looks like in each year (`lib/lookupLayer.ts`). Switching years changes one value and loads nothing.
+A deployment without these files, or a tab that has lost its WebGL context, uses the per-era files
+instead. The story and the stats use those files too, so they stay published.
+
+The layer draws MapLibre's own tile buffers, which MapLibre doesn't publish as an API, so
+`maplibre-gl`'s version is pinned exactly. After upgrading it, check the explorer by eye in all
+three views.
+
+After publishing or republishing any series:
+
+```sh
+cd pipeline && uv run sfzmaps districts --shared   # no API calls; takes about five minutes
+```
+
+Upload `shared/districts-<hash>.pmtiles`, `.table.gz` and `.cards.json.gz` first, then
+`shared/districts.json`, which points the site at them. The site needs no rebuild. The names change
+with the data, so nothing is overwritten in place. Keep the previous files until open tabs have had
+time to reload.
+
 Serve `.pmtiles` as `application/octet-stream` (or `application/vnd.pmtiles`) **without**
 `Content-Encoding: gzip`: a CDN that compresses the archive breaks Range reads.
 
