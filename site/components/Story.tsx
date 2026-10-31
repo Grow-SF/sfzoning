@@ -45,7 +45,7 @@ export default function Story({ steps }: Props) {
 
       <div className={styles.column}>
         <header className={styles.hero}>
-          <h1 className={styles.headline}>How San Francisco was zoned</h1>
+          <h1 className={styles.headline}>A History of San Francisco’s Zoning</h1>
           <p className={styles.dek}>
             A century of rules about what could be built where, read straight off the city&rsquo;s own maps.
           </p>

@@ -23,8 +23,6 @@ npm run dev            # http://localhost:3000 (builds public/data/rules.json fi
   It is inlined at build time, so set it before `next build`. A production build
   (`VERCEL` set or `NODE_ENV=production`) stops in `prebuild` if it is unset or not https;
   `ALLOW_LOCAL_TILES=1` lets a local production build use the local tile server.
-- `NEXT_PUBLIC_DRAFT` keeps the draft banner up and adds `noindex, nofollow` unless it is
-  exactly `false` (`lib/draft.ts`).
 - The site picks up whatever the pipeline has published. Each era's district tiles are probed
   (`lib/districts.ts`); an era without them shows its scan with a "district colours are
   coming" note instead of failing.

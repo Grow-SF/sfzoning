@@ -100,22 +100,6 @@ a { color: var(--accent); text-underline-offset: 0.15em; }
   color: var(--ink);
 }
 
-.draft-banner {
-  position: fixed;
-  z-index: 10;
-  top: 0;
-  left: 0;
-  right: 0;
-  margin: 0;
-  padding: 0.2rem 0.75rem;
-  font-family: var(--font-ui);
-  font-size: 0.75rem;
-  /* Not fully opaque: an opaque fixed layer makes headless Chrome cull a strip of the map canvas. */
-  background: rgb(255 226 138 / 0.97);
-  color: var(--ink);
-  text-align: center;
-}
-
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
