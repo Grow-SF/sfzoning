@@ -3,14 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { ERAS } from "@/lib/eras";
 import { loadStats } from "@/lib/districts";
-import { threePlusShare } from "@/lib/stats";
+import { isPartialMap, threePlusShare } from "@/lib/stats";
 import styles from "./explorer.module.css";
 
 export type Point = { id: string; label: string; year: number; share: number; partial: boolean };
-
-// An era whose read area is under this fraction of the best-covered era is drawn hollow
-// and left out of the line: its share describes a few sheets, not the city.
-const PARTIAL_BELOW = 0.6;
 
 const H = 230;
 const M = { top: 22, right: 18, bottom: 30, left: 40 };
@@ -19,7 +15,7 @@ const X1 = 2030;
 const y = (share: number) => M.top + (1 - share) * (H - M.top - M.bottom);
 const pct = (s: number) => `${Math.round(s * 100)}%`;
 
-/** One sentence for screen readers: the trend across eras read in full, then where the table is. */
+/** One sentence for screen readers: the trend across whole maps, then where the table is. */
 export function summary(points: Point[]): string {
   const whole = points.filter((p) => !p.partial);
   const tail = " Every era's value is in the table that follows.";
@@ -27,9 +23,9 @@ export function summary(points: Point[]): string {
   const a = whole[0];
   const b = whole[whole.length - 1];
   if (pct(a.share) === pct(b.share))
-    return `Among eras whose maps have been read in full, the share held at ${pct(a.share)} from ${a.label} to ${b.label}.${tail}`;
+    return `Among eras whose maps cover the whole city, the share held at ${pct(a.share)} from ${a.label} to ${b.label}.${tail}`;
   const verb = b.share < a.share ? "fell" : "rose";
-  return `Among eras whose maps have been read in full, the share ${verb} from ${pct(a.share)} in ${a.label} to ${pct(b.share)} in ${b.label}.${tail}`;
+  return `Among eras whose maps cover the whole city, the share ${verb} from ${pct(a.share)} in ${a.label} to ${pct(b.share)} in ${b.label}.${tail}`;
 }
 
 export default function StatsChart() {
@@ -51,15 +47,13 @@ export default function StatsChart() {
     const eras = ERAS.filter((e) => e.districtSeries);
     Promise.all(eras.map((e) => loadStats(e.districtSeries!))).then((all) => {
       if (!live) return;
-      const areas = all.map((s) => s?.mapped_area_sqft ?? 0);
-      const maxArea = Math.max(0, ...areas);
       const pts: Point[] = [];
       all.forEach((s, i) => {
         if (!s) return;
         const share = threePlusShare(s);
         if (share === null) return;
         const e = eras[i];
-        pts.push({ id: e.id, label: e.label, year: e.year, share, partial: maxArea > 0 && areas[i] < maxArea * PARTIAL_BELOW });
+        pts.push({ id: e.id, label: e.label, year: e.year, share, partial: isPartialMap(s) });
       });
       setPoints(pts);
     });
@@ -130,8 +124,8 @@ export default function StatsChart() {
           <svg width="10" height="10" aria-hidden>
             <circle cx="5" cy="5" r="3.8" className={styles.hollow} />
           </svg>{" "}
-          Hollow dots: only part of that era&rsquo;s map has been read so far, so the share describes a few sheets, not the
-          city.
+          Hollow dots: that map covers only part of the city, so its share isn&rsquo;t comparable and it&rsquo;s left off
+          the line.
         </p>
       )}
       {/* The drawing is hidden from assistive tech; this summary and the table carry it. */}

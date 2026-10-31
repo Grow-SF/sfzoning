@@ -62,9 +62,19 @@ Live at https://www.sfzoning.com (Vercel project `growsf/sfzoning`, root directo
 `site`; `sfzoning.com` redirects to `www`). Tiles are in the Vercel Blob store
 `sfzoning-tiles` (public, sfo1); `NEXT_PUBLIC_TILES_BASE_URL` is set to its URL in every
 environment. To deploy from a checkout: `vercel deploy --prod` from the repository root
-(`.vercelignore` keeps `pipeline/` data out of the upload). To upload changed tiles, use
-`@vercel/blob`'s `put` with `addRandomSuffix: false` (the CLI's `vercel blob put` adds a
-random suffix), with `BLOB_READ_WRITE_TOKEN` from `vercel env pull`.
+(`.vercelignore` keeps `pipeline/` data out of the upload).
+
+To publish changed tiles, with `BLOB_READ_WRITE_TOKEN` from `vercel env pull`:
+
+```sh
+NEXT_PUBLIC_TILES_BASE_URL=<store url> node --env-file=.env.local scripts/publish-tiles.mjs --dry-run
+NEXT_PUBLIC_TILES_BASE_URL=<store url> node --env-file=.env.local scripts/publish-tiles.mjs
+```
+
+It never overwrites a file. A changed file goes up as `<name>-<hash of its bytes>.<ext>`, and
+`lib/published.json` maps its usual path to that name. Commit that file and deploy: the site reads
+only the names it shipped with, so pages already open keep working, and rolling back a deployment
+rolls back its data too. Keep old files until open tabs have had time to reload.
 
 The general recipe, for other hosts:
 
@@ -106,6 +116,26 @@ page open breaks that reader's Range reads (locally, district colours vanished f
 while the pipeline rewrote them). Upload a changed archive under a new path, or accept
 that open tabs need a reload. Re-run the same command whenever the pipeline publishes more eras; the site needs no rebuild
 to show a new era's districts (it probes for them at runtime).
+
+### The explorer's shared archive
+
+The explorer stores each lot and district line once, with a number, and looks up what that number
+looks like in each year (`lib/lookupLayer.ts`). Switching years changes one value and loads nothing.
+A deployment without these files, or a tab that has lost its WebGL context, uses the per-era files
+instead. The story and the stats use those files too, so they stay published.
+
+The layer draws MapLibre's own tile buffers, which MapLibre doesn't publish as an API, so
+`maplibre-gl`'s version is pinned exactly. After upgrading it, check the explorer by eye in all
+three views.
+
+After publishing or republishing any series:
+
+```sh
+cd pipeline && uv run sfzmaps districts --shared   # no API calls; takes about five minutes
+```
+
+Then publish and deploy as described under [Deploying](#deploying). A new era's data appears on
+the site with that deploy.
 
 Serve `.pmtiles` as `application/octet-stream` (or `application/vnd.pmtiles`) **without**
 `Content-Encoding: gzip`: a CDN that compresses the archive breaks Range reads.

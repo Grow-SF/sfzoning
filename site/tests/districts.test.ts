@@ -2,10 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CATEGORIES, CATEGORY_COLORS, CATEGORY_LABELS, fillColorExpression } from "@/lib/palette";
+import { gunzipped, lotCard, lotCategory, NO_VALUE, parseManifest, type SharedDistricts } from "@/lib/shared";
 import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
-import { threePlusShare, type DistrictStats } from "@/lib/stats";
+import { isPartialMap, threePlusShare, type DistrictStats } from "@/lib/stats";
 import { ERAS } from "@/lib/eras";
-import { districtSource, districtStatsUrl } from "@/lib/tiles";
+import { districtSource, districtStatsUrl, publishedPath } from "@/lib/tiles";
+import { hashedName, plan } from "../scripts/publish-tiles.mjs";
 import { buildRules, parseCsv } from "../scripts/build-rules.mjs";
 
 const PIPELINE_CATEGORIES = [
@@ -36,6 +38,89 @@ describe("palette", () => {
     expect(expr[0]).toBe("match");
     expect(expr[expr.length - 1]).toBe(CATEGORY_COLORS.unknown);
     for (const c of PIPELINE_CATEGORIES) expect(expr).toContain(c);
+  });
+});
+
+describe("shared archive", () => {
+  const manifest = {
+    version: 2,
+    archive: "shared/districts-abc.pmtiles",
+    table: "shared/districts-abc.table.gz",
+    cards: "shared/districts-abc.cards.json.gz",
+    categories: ["single_family", "commercial"],
+    lots: 3,
+    lineSets: 1,
+    eras: ["1929", "1948"],
+  };
+  // Two eras, three lots, one line set. 1929's map leaves out lot 2.
+  const shared: SharedDistricts = {
+    ...parseManifest(manifest)!,
+    values: new Uint8Array([0, 1, NO_VALUE, 1, 1, 0, 1, 1]),
+  };
+
+  it("refuses a pointer it can't draw, so the site falls back to per-era archives", () => {
+    expect(parseManifest(manifest)).not.toBeNull();
+    expect(parseManifest({ ...manifest, version: 1 })).toBeNull();
+    expect(parseManifest({ ...manifest, categories: ["brand_new_use"] })).toBeNull();
+    expect(parseManifest({ ...manifest, table: undefined })).toBeNull();
+    expect(parseManifest(null)).toBeNull();
+  });
+  it("finds a lot's category per era, and none where the map doesn't cover it", () => {
+    expect(lotCategory(shared, 0, 1)).toBe("commercial");
+    expect(lotCategory(shared, 1, 2)).toBe("single_family");
+    expect(lotCategory(shared, 0, 2)).toBeNull();
+  });
+  it("reads a lot's card for one era, leaving other eras' values alone", () => {
+    const cards = {
+      blklot: ["0001001", "0001002"],
+      strings: ["C-2", "40-X", "RH-1"],
+      eras: {
+        "1948": { code: [0, null], height: [null, null], confidence: [0.9, null] },
+        "1990-1996-zoning": { code: [2, 2], height: [1, 1], confidence: [0.5, 0.5] },
+      },
+    };
+    expect(lotCard(cards, "1948", 0)).toEqual({ blklot: "0001001", code: "C-2", height_code: undefined, confidence: 0.9 });
+    expect(lotCard(cards, "1990-1996-zoning", 1)).toEqual({ blklot: "0001002", code: "RH-1", height_code: "40-X", confidence: 0.5 });
+  });
+  it("unpacks a .gz file whether or not the host already did", async () => {
+    const text = new TextEncoder().encode("hello");
+    const packed = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
+    expect(await gunzipped(packed)).toEqual(text);
+    expect(await gunzipped(text.buffer)).toEqual(text);
+  });
+});
+
+describe("published tile names", () => {
+  const map = { "1975/districts/stats.json": "1975/districts/stats-abc123.json" };
+  const withBase = (base: string, run: () => void) => {
+    const was = process.env.NEXT_PUBLIC_TILES_BASE_URL;
+    process.env.NEXT_PUBLIC_TILES_BASE_URL = base;
+    try {
+      run();
+    } finally {
+      if (was === undefined) delete process.env.NEXT_PUBLIC_TILES_BASE_URL;
+      else process.env.NEXT_PUBLIC_TILES_BASE_URL = was;
+    }
+  };
+  it("reads a changed file under its new name and an unchanged one where it always was", () => {
+    withBase("https://tiles.example.org", () => {
+      expect(publishedPath("1975/districts/stats.json", map)).toBe("1975/districts/stats-abc123.json");
+      expect(publishedPath("1948/districts/stats.json", map)).toBe("1948/districts/stats.json");
+    });
+  });
+  it("keeps the usual names on a local tile server, whose files are the pipeline's own output", () => {
+    withBase("http://127.0.0.1:8787", () => expect(publishedPath("1975/districts/stats.json", map)).toBe("1975/districts/stats.json"));
+  });
+  it("puts the hash after the name, leaving only the last extension", () => {
+    expect(hashedName("1975/districts/stats.json", "abc")).toBe("1975/districts/stats-abc.json");
+    expect(hashedName("shared/districts-x.cards.json.gz", "abc")).toBe("shared/districts-x.cards.json-abc.gz");
+  });
+  it("never plans to replace a published file", () => {
+    expect(plan("a/stats.json", "h1", undefined, "h1").action).toBe("keep");
+    expect(plan("a/stats.json", "h1", undefined, null)).toEqual({ action: "upload", to: "a/stats.json", map: false });
+    expect(plan("a/stats.json", "h2", undefined, "h1")).toEqual({ action: "upload", to: "a/stats-h2.json", map: true });
+    expect(plan("a/stats.json", "h3", "a/stats-h2.json", "h2")).toEqual({ action: "upload", to: "a/stats-h3.json", map: true });
+    expect(plan("a/stats.json", "h2", "a/stats-h2.json", "h2").action).toBe("keep");
   });
 });
 
@@ -104,6 +189,22 @@ describe("confidenceLabel", () => {
     expect(confidenceLabel(0)).toBe("Not read");
     expect(confidenceLabel(undefined)).toBe("Not read");
     expect(confidenceLabel("0.9")).toBe("High");
+  });
+});
+
+describe("isPartialMap", () => {
+  const stats = (parcels: number, unmapped?: number) =>
+    ({ single_family: { parcels, area_sqft: 0 }, unmapped_parcels: unmapped }) as unknown as DistrictStats;
+  it("flags a map that leaves out part of the city", () => {
+    expect(isPartialMap(stats(200_292, 27_679))).toBe(true); // 1929
+    expect(isPartialMap(stats(210_410, 17_561))).toBe(true); // 1990-96
+  });
+  it("accepts a map that only misses scattered lots", () => {
+    expect(isPartialMap(stats(223_252, 4_719))).toBe(false); // 1921, the lowest of the whole maps
+    expect(isPartialMap(stats(227_699, 272))).toBe(false); // today
+  });
+  it("makes no claim without the count", () => {
+    expect(isPartialMap(stats(100))).toBe(false);
   });
 });
 
