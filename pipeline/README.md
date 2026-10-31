@@ -24,7 +24,8 @@ OPENAI_API_KEY=...
 ```
 
 The code loads it itself. Every answer is cached on disk under
-`data/cache/llm/`, so a rerun over the same pages makes no API calls.
+`data/cache/llm/`, so a rerun over the same pages makes no API calls. District pattern
+answers are also cached per tile, so re-placing a sheet re-reads only the tiles that changed.
 
 ## Commands, in order
 

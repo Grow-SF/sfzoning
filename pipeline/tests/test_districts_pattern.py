@@ -29,9 +29,11 @@ class FakeClient:
         self.calls = 0
         self.tiles_seen = []
         self.conf = conf
+        self.sent = []
 
     def call(self, png, prompt, schema):
         self.calls += 1
+        self.sent.append((png, prompt))
         img = cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR)
         n = int(prompt.split("numbered 1 to ")[1].split()[0].rstrip(".,"))
         self.tiles_seen.append(n)
@@ -238,3 +240,114 @@ def test_shipped_legend_config_matches_era_codes():
     for series in ("1921", "1948"):
         assert set(cfg[series]["swatches"]) == set(pattern.era_codes(series)) == \
             {"1R", "2R", "C", "LI", "HI", "U"}
+
+
+def _old_batches(rows):
+    """Tile values in the pre-change item order: mixed 2-parcel blocks yield both parcels in
+    order; chunked by MAX_TILES."""
+    vals = [r[2] for r in rows]
+    return [vals[b:b + pattern.MAX_TILES] for b in range(0, len(vals), pattern.MAX_TILES)]
+
+
+def test_empty_tile_cache_sends_old_batches(work):
+    # the mosaics must equal what the pre-change code built: same items, same order, 48 per batch
+    sw = swatches(); rows = []
+    for b in range(60):
+        rows += [(f"{b:04d}001", f"{b:04d}", b % 40, 20), (f"{b:04d}002", f"{b:04d}", 255 - b % 40, 250)]
+    fake = _fake(sw); pattern.classify(_items(rows), sw, client=fake)
+    expect = [pattern.build_mosaic([_tile(v) for v in vals], sw)[0] for vals in _old_batches(rows)]
+    got = [cv2.imdecode(np.frombuffer(p, np.uint8), cv2.IMREAD_COLOR)[..., ::-1] for p, _ in fake.sent]
+    assert sorted(x.tobytes() for x in got) == sorted(x.tobytes() for x in expect)
+    assert sorted(p for _, p in fake.sent) == sorted(
+        pattern.pattern_prompt(len(v), list(sw), None, None) for v in _old_batches(rows))
+
+
+def test_rerun_after_shift_pays_only_new_tile(work):
+    sw = swatches()
+    rows = [(f"{b:04d}00{j}", f"{b:04d}", (0 if j == 1 else 255), (20 if j == 1 else 250))
+            for b in range(60) for j in (1, 2)]
+    first = pattern.classify(_items(rows), sw, client=_fake(sw))
+    fake = _fake(sw)
+    new = [("9999001", "9999", 128, 120)]          # a new parcel at the front shifts every batch
+    out = pattern.classify(_items(new + rows), sw, client=fake)
+    assert fake.calls == 1 and fake.tiles_seen == [1]
+    m = dict(zip(first["blklot"], first["code"]))
+    assert all(m[k] == c for k, c in zip(out["blklot"], out["code"]) if k in m)
+
+
+def test_all_hits_make_no_call(work):
+    sw = swatches(); rows = [("0001001", "0001", 0, 20), ("0001002", "0001", 255, 250)]
+    pattern.classify(_items(rows), sw, client=_fake(sw))
+    class Never:
+        def call(self, *a): raise AssertionError("no call expected")
+    out = pattern.classify(_items(rows[::-1]), sw, client=Never())   # new mosaic, same tiles
+    assert list(out["code"]) == ["2R", "C"] and llm.CallCounter.tile_hits >= 2
+
+
+def test_legend_or_prompt_change_misses(work):
+    sw = swatches(); rows = [("0001001", "0001", 0, 20), ("0001002", "0001", 255, 250)]
+    pattern.classify(_items(rows), sw, client=_fake(sw))
+    fake = _fake(sw); pattern.classify(_items(rows), sw, client=fake, year=1999)   # wording changes
+    assert fake.calls == 1
+    sw2 = dict(sw); k = next(iter(sw2)); sw2[k] = 255 - sw2[k]
+    fake2 = _fake(sw2); pattern.classify(_items(rows), sw2, client=fake2)
+    assert fake2.calls == 1
+
+
+def test_omitted_index_not_cached(work):
+    sw = swatches(); rows = [("0001001", "0001", 0, 20), ("0001002", "0001", 255, 250)]
+    fake = _fake(sw); orig = fake.call
+    def drop_first(png, prompt, schema):
+        r = orig(png, prompt, schema); r.items = [i for i in r.items if i.index != 1]; return r
+    fake.call = drop_first
+    out = pattern.classify(_items(rows), sw, client=fake)
+    assert out["code"].iloc[0] is None
+    again = _fake(sw); pattern.classify(_items(rows[::-1]), sw, client=again)   # new mosaic
+    assert again.calls == 1 and again.tiles_seen == [1]
+
+
+def test_tile_cache_stores_raw_confidence(work):
+    # a uniform block (factor 0.9) and a lone parcel with identical pixels share one entry
+    sw = swatches()
+    block = _items([(f"0001{i:03d}", "0001", 0, 30) for i in range(3)])
+    pattern.classify(block, sw, client=_fake(sw), block_crops={"0001": _tile(0)})
+    out = pattern.classify(_items([("0002001", "0002", 0, 30)]), sw, client=_fake(sw))
+    assert out["confidence"].iloc[0] == pytest.approx(0.8)      # raw, not 0.72
+
+
+def test_cached_code_outside_legend_maps_to_none(work):
+    sw = swatches(); rows = [("0001001", "0001", 0, 20)]
+    tile = pattern._as_tile(_tile(0), pattern.TILE_PX)
+    llm.tile_put(llm.tile_key(tile, pattern._tile_context(sw, list(sw), None, None)),
+                 {"code": "ZZ", "confidence": 0.9})
+    class Never:
+        def call(self, *a): raise AssertionError("no call expected")
+    out = pattern.classify(_items(rows), sw, client=Never())
+    assert out["code"].iloc[0] is None and out["confidence"].iloc[0] == 0.0
+
+
+def test_cache_only_serves_tile_hits(work):
+    sw = swatches(); rows = [("0001001", "0001", 0, 20)]
+    pattern.classify(_items(rows), sw, client=_fake(sw))
+    with llm.cache_only():
+        out = pattern.classify(_items(rows), sw, client=None)
+    assert out["code"].iloc[0] == "C"
+
+
+def test_first_run_free_even_with_shared_tile_across_calls(work):
+    import shutil
+
+    sw = swatches()
+    rowsA = [("0001001", "0001", 7, 20), ("0001002", "0001", 250, 250)]
+    # B: 100 mixed-block parcels (3 old mosaics); its first tile repeats one of A's
+    rowsB = [("9000001", "9000", 7, 20), ("9000002", "9000", 250, 250)]
+    for b in range(1, 50):
+        rowsB += [(f"{9000 + b}001", f"{9000 + b}", 30 + b, 20), (f"{9000 + b}002", f"{9000 + b}", 240 - b, 250)]
+    pattern.classify(_items(rowsB), sw, client=_fake(sw))            # B's old mosaics are cached
+    first = pattern.classify(_items(rowsB), sw, client=_fake(sw))
+    shutil.rmtree(llm.CACHE_DIR / "llm" / "tiles")                   # tile store empty again
+    pattern.classify(_items(rowsA), sw, client=_fake(sw))            # A stores the shared tile
+    class Never:
+        def call(self, *a): raise AssertionError("no call expected")
+    out = pattern.classify(_items(rowsB), sw, client=Never())
+    assert list(out["code"]) == list(first["code"])

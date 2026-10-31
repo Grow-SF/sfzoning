@@ -318,6 +318,7 @@ def districts(
     if republish or cache_only:
         llm.CACHE_ONLY = True       # nothing below may reach the network
     live0, in0, out0 = llm.CallCounter.live, llm.CallCounter.in_tokens, llm.CallCounter.out_tokens
+    hits0 = llm.CallCounter.tile_hits
     failures: list[tuple[str, str]] = []
     for k, s in enumerate(todo):
         try:
@@ -348,6 +349,8 @@ def districts(
         usd = tin * config.PRICE_IN_PER_M / 1e6 + tout * config.PRICE_OUT_PER_M / 1e6
         typer.echo(f"live vision calls: {llm.CallCounter.live - live0} "
                    f"({tin:,} in / {tout:,} out tokens, ~${usd:.2f})")
+        if llm.CallCounter.tile_hits - hits0 > 0:
+            typer.echo(f"tile cache: {llm.CallCounter.tile_hits - hits0} tiles reused")
     if validate:
         try:
             from sfzmaps.districts import validate as val
