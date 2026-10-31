@@ -22,7 +22,9 @@ const S = {                       // editor state
   gcps: [], areas: [], baseSig: "", history: [],
   sel: null, mode: null, pending: null, drawPts: [],
   baseScore: null, score: null, previewSeq: 0, previewTimer: null, busy: 0,
-  queue: [], zmax: 0, scale: 1, worst: [], worstIdx: -1, saving: false, autofill: false,
+  queue: [], zmax: 0, scale: 1, worst: [], worstIdx: -1, saving: false,
+  autofill: null,                 // autofill_id of the auto-fill these points came from, or null
+  autofilling: false,             // an auto-fill request is in flight
 };
 let scanMap, scanLayer, scanMarkers = [], scanMatchLayer, scanPending, scanWorst;
 let map, mapReady = null, mapMarkers = [];
@@ -255,35 +257,46 @@ function setSel(i) { S.sel = i; refreshStyles(); }
 function pushHistory() { S.history.push(JSON.stringify([S.gcps, S.areas, S.autofill])); if (S.history.length > 100) S.history.shift(); }
 function undo() {
   const h = S.history.pop(); if (!h) return;
-  let af; [S.gcps, S.areas, af] = JSON.parse(h); S.autofill = !!af;
+  let af; [S.gcps, S.areas, af] = JSON.parse(h); S.autofill = typeof af === "string" ? af : null;
   S.sel = null; S.pending = null; clearPending();
   rebuildMarkers(); renderAreas(); afterEdit();
 }
 function edited() { renderAreas(); refreshStyles(); afterEdit(); }
 function afterEdit() { updateDirty(); schedulePreview(); updateAutofillBtn(); }
+// Auto-fill seeds only from the reviewer's own points (the server ignores auto ones).
+const ownPoints = () => S.gcps.filter((g) => g.enabled && g.source !== "auto").length;
 function updateAutofillBtn() {
   const b = $("tool-autofill"); if (!b) return;
-  const n = S.gcps.filter((g) => g.enabled).length;
+  const n = ownPoints();
   b.disabled = n < 4 || !!S.autofilling;
-  b.title = n < 4 ? "Needs at least 4 enabled points" : "Seed the automatic matcher from your points";
+  b.title = n < 4 ? "Auto-fill needs at least 4 enabled points of your own (auto points don't count)"
+                  : "Seed the automatic matcher from your points";
 }
 async function autofill() {
-  if (S.autofilling || S.gcps.filter((g) => g.enabled).length < 4) return;
+  if (S.autofilling || S.saving || ownPoints() < 4) return;
   S.autofilling = true; clearTimeout(S.previewTimer); S.previewSeq++;
   $("busy").textContent = "Auto-filling…"; updateAutofillBtn();
+  $("btn-save").disabled = $("btn-accept").disabled = true;
+  const series = S.series, sheet = S.sheet, sig = signature();
   pushHistory();
+  const hist = S.history, entry = hist[hist.length - 1];
+  const dropEntry = () => { const i = hist.lastIndexOf(entry); if (i >= 0) hist.splice(i, 1); };
   try {
-    const r = await post(`/api/sheet/${S.series}/${S.sheet}/autofill`, { gcps: cleanGcps(), change_areas: areasFC() });
+    const r = await post(`/api/sheet/${series}/${sheet}/autofill`, { gcps: cleanGcps(), change_areas: areasFC() });
+    if (S.series !== series || S.sheet !== sheet || signature() !== sig) {
+      dropEntry(); toast("Auto-fill discarded: the sheet or points changed while it ran.", true); return;
+    }
     S.gcps = r.gcps.map((g) => ({ px: g.px, py: g.py, wx: g.wx, wy: g.wy, source: g.source, enabled: g.enabled !== false, _r: g.residual_ft }));
-    S.autofill = true; S.score = r.score; S.sel = null;
+    S.autofill = r.autofill_id; S.score = r.score; S.sel = null;
     await mapReady;
     setOverlay(r); rebuildMarkers(); renderScore(); edited();
     toast(`Auto-fill: ${r.n_matches} matched corners. Review, then Save.`);
   } catch (e) {
-    S.history.pop();
+    dropEntry();
     toast("Auto-fill failed: " + e.message, true);
   } finally {
     S.autofilling = false; $("busy").textContent = ""; updateAutofillBtn();
+    if (!S.saving) $("btn-save").disabled = $("btn-accept").disabled = false;
   }
 }
 function renderAreas() {
@@ -435,7 +448,7 @@ async function loadQueue(keepSelection) {
 async function openSheet(series, sheet) {
   const d = await api(`/api/sheet/${series}/${sheet}`);
   clearTimeout(S.previewTimer); S.previewSeq++;
-  S.series = series; S.sheet = sheet; S.data = d; S.history = []; S.autofill = false; S.sel = null; S.worstIdx = -1;
+  S.series = series; S.sheet = sheet; S.data = d; S.history = []; S.autofill = null; S.sel = null; S.worstIdx = -1;
   setMode(null);
   S.gcps = d.gcps.map((g) => ({ px: g.px, py: g.py, wx: g.wx, wy: g.wy, source: g.source, enabled: g.enabled !== false, _r: g.residual_ft }));
   S.areas = ((d.change_areas && d.change_areas.features) || []).filter((f) => f.geometry && f.geometry.type === "Polygon");
@@ -464,7 +477,7 @@ async function onPickSheet() {
   try { await openSheet(series, sheet); } catch (e) { toast(e.message, true); }
 }
 async function save(status) {
-  if (S.saving || !S.data) return;
+  if (S.saving || S.autofilling || !S.data) return;
   const note = $("note").value.trim();
   if (status === "accepted" && !(S.score && S.score.passed) && !note) {
     toast("Accepting a sheet that does not pass needs a note.", true); $("note").focus(); return;

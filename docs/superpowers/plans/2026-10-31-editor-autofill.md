@@ -95,9 +95,9 @@
 - [ ] **Step 3: Implement**
   - Import `from sfzmaps import refine as refine_mod` at module level, so the test can monkeypatch `server.refine_mod.refine`.
   - The route:
-    1. Count enabled posted GCPs; fewer than `AUTOFILL_MIN_POINTS` → 400 `"auto-fill needs at least 4 enabled points"`.
+    1. Count enabled non-auto posted GCPs; fewer than `AUTOFILL_MIN_POINTS` → 400 `"auto-fill needs at least 4 enabled points of your own (auto points don't count)"`.
     2. `blocks_px.geojson` missing → 409 `"no block corners for this sheet; run the pipeline for it first"`.
-    3. `seed = _transform_of(body.gcps)`.
+    3. `seed = _transform_of(` the enabled non-auto posted GCPs `)`; auto points never seed.
     4. Corners: from `blocks_px.geojson`, exactly as `runner.run_sheet.do_refine` builds them (`None` → NaN, reshape `(-1, 2)`).
     5. `raw = refine_mod.refine(corners, _get_ref().corners, seed)`, then `res = refine_mod.classify_changes(raw)`.
     6. `res.transform.check_warpable(runner.page_shape(d / "page.png"))`. On `RuntimeError` → 422 with the message.

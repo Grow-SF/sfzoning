@@ -487,7 +487,8 @@ def test_autofill_returns_dense_set_keeping_manual_points(env):
     assert body["score"]["passed"] is True, body["score"]
     assert {"residuals", "matches", "preview_png_url", "preview_bounds", "preview_size"} <= set(body)
     af = json.loads((d / "autofill.json").read_text())
-    assert {"seed", "raw", "result", "n_matches"} <= set(af)
+    assert {"seed", "raw", "result", "n_matches", "id"} <= set(af)
+    assert isinstance(af["id"], str) and body["autofill_id"] == af["id"]
     for n, m in before.items():
         assert (d / n).stat().st_mtime_ns == m, n
 
@@ -509,6 +510,35 @@ def test_autofill_counts_enabled_points_only(env):
     assert r.status_code == 200, r.text
     off = [g for g in r.json()["gcps"] if g["enabled"] is False]
     assert len(off) == 1 and off[0]["source"] == "manual"
+
+
+def test_autofill_seeds_from_own_points_not_auto(env):
+    """A sheet that opens with a (bad) automatic transform posts hundreds of auto points;
+    the seed must come from the reviewer's own points only, not reproduce the bad fit."""
+    demo, c, _ = env
+    bad = _gcps(demo.true_gcps)
+    for g in bad:
+        g["source"], g["wx"] = "auto", g["wx"] + 80.0
+    r = c.post(url(demo, "/autofill"), json={"gcps": bad + _seed(demo)})
+    assert r.status_code == 200, r.text
+    sc = r.json()["score"]
+    assert sc["passed"] is True and sc["holdout_p50_ft"] < 7, sc
+    assert len([g for g in r.json()["gcps"] if g["source"] == "manual"]) == 6
+    # refine alone recovers from a constant 80 ft seed error on the demo, so also check
+    # what seeded it: the reviewer's six points, none of the auto ones.
+    seed = json.loads((_sheet_dir_of(demo) / "autofill.json").read_text())["seed"]["gcps"]
+    assert len(seed) == 6 and {g["source"] for g in seed} == {"manual"}
+
+
+def test_autofill_auto_points_do_not_count_toward_minimum(env):
+    demo, c, _ = env
+    auto = _gcps(demo.true_gcps)
+    for g in auto:
+        g["source"] = "auto"
+    r = c.post(url(demo, "/autofill"), json={"gcps": auto + _seed(demo, 3)})
+    assert r.status_code == 400
+    assert r.json()["detail"] == ("auto-fill needs at least 4 enabled points of your own "
+                                  "(auto points don't count)")
 
 
 def test_autofill_without_blocks_is_409(env):
@@ -548,6 +578,55 @@ def test_preview_autofill_scores_against_autofill_json(env):
     assert p.json()["score"]["n_scored"] == a.json()["score"]["n_scored"]
 
 
+def _strip(gcps):
+    return [{k: g[k] for k in ("px", "py", "wx", "wy", "source", "enabled")} for g in gcps]
+
+
+def test_preview_with_stale_autofill_id_is_409(env):
+    demo, c, _ = env
+    a1 = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a1.status_code == 200, a1.text
+    a2 = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a2.status_code == 200, a2.text
+    id1, id2 = a1.json()["autofill_id"], a2.json()["autofill_id"]
+    assert id1 != id2
+    gcps = _strip(a1.json()["gcps"])
+    p = c.post(url(demo, "/preview"), json={"gcps": gcps, "autofill": id1})
+    assert p.status_code == 409
+    assert p.json()["detail"] == "this auto-fill was replaced; run auto-fill again"
+    assert c.post(url(demo, "/preview"), json={"gcps": gcps, "autofill": id2}).status_code == 200
+
+
+def test_save_with_stale_autofill_id_is_409_and_promotes_nothing(env):
+    demo, c, rebuilt = env
+    d = _sheet_dir_of(demo)
+    a1 = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a1.status_code == 200, a1.text
+    a2 = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a2.status_code == 200, a2.text
+    names = ("rough.json", "refine_raw.json", "refine.json", "review.json", "transform.json")
+    before = {n: (d / n).read_bytes() for n in names if (d / n).exists()}
+    r = c.post(url(demo, "/save"), json={"gcps": _strip(a1.json()["gcps"]), "status": "edited",
+                                         "autofill": a1.json()["autofill_id"]})
+    assert r.status_code == 409, r.text
+    assert {n: (d / n).read_bytes() for n in names if (d / n).exists()} == before
+    assert (d / "autofill.json").exists() and not rebuilt
+
+
+def test_promote_autofill_rechecks_id_and_missing_file(env):
+    from fastapi import HTTPException
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    with pytest.raises(HTTPException) as e:
+        server._promote_autofill(d, True)
+    assert e.value.status_code == 409
+    a = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a.status_code == 200, a.text
+    with pytest.raises(HTTPException) as e:
+        server._promote_autofill(d, "not-the-id")
+    assert e.value.status_code == 409
+
+
 def test_preview_autofill_without_file_is_409(env):
     demo, c, _ = env
     r = c.post(url(demo, "/preview"), json={"gcps": _seed(demo), "autofill": True})
@@ -584,7 +663,8 @@ def _autofill_and_save(demo, c, d, status="edited"):
     assert a.status_code == 200, a.text
     af = json.loads((d / "autofill.json").read_text())
     gcps = [{k: g[k] for k in ("px", "py", "wx", "wy", "source", "enabled")} for g in a.json()["gcps"]]
-    r = c.post(url(demo, "/save"), json={"gcps": gcps, "status": status, "autofill": True})
+    r = c.post(url(demo, "/save"), json={"gcps": gcps, "status": status,
+                                         "autofill": a.json()["autofill_id"]})
     return a, af, r
 
 
@@ -626,7 +706,10 @@ def test_force_auto_after_autofill_save_reproduces_refine(env):
     d = _sheet_dir_of(demo)
     a, af, r = _autofill_and_save(demo, c, d)
     assert r.status_code == 200, r.text
+    names = ("rough.json", "refine_raw.json")
+    before = {n: (d / n).stat().st_mtime_ns for n in names}
     runner.run_sheet(demo.page, demo.ref, force_auto=True)
+    assert {n: (d / n).stat().st_mtime_ns for n in names} == before
     assert json.loads((d / "transform.json").read_text())["origin"] == "auto"
     assert json.loads((d / "refine.json").read_text())["matches"] == af["result"]["matches"]
 
@@ -643,5 +726,8 @@ def test_front_end_has_autofill_and_current_pass_bar():
     assert "≤ 5 ft" not in html and "≤ 12 ft" not in html
     assert "&lt; 7 ft" in html and "&lt; 15 ft" in html
     assert "/autofill" in js and "autofill: S.autofill" in js
+    assert "autofill_id" in js and "autofilling: false" in js
+    assert "Auto-fill discarded: the sheet or points changed while it ran." in js
+    assert "auto points don't count" in js
     assert "PASS_P50 = 7" in js and "PASS_P95 = 15" in js
     assert "above 5 ft" not in js

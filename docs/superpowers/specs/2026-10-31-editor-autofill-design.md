@@ -48,11 +48,11 @@ as usual.
 
 - **Body:** the same as preview: `{gcps, change_areas}`.
 - **400** with a plain message when fewer than `AUTOFILL_MIN_POINTS = 4`
-  points are enabled **(my call: three fix an affine, and a fourth gives one
+  enabled non-auto points are posted (auto points don't count) **(my call: three fix an affine, and a fourth gives one
   check)**.
 - **409** when the sheet has no `blocks_px.geojson`; the message says to run
   the pipeline for that sheet first.
-- **Seed:** `_transform_of(body.gcps)`, the same fit preview uses.
+- **Seed:** `_transform_of` of the enabled non-auto points only (auto points are dropped), the same fit preview uses.
 - **Refine:** called in memory, exactly as the runner calls it:
   - corners from `blocks_px.geojson`, with `None` turned into NaN, as in
     `runner.do_refine`;
