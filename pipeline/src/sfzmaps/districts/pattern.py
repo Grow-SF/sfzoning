@@ -476,15 +476,30 @@ def classify(parcels_with_crops: pd.DataFrame, swatches: dict[str, np.ndarray], 
     tiles = [_as_tile(c, TILE_PX) for c, _, _ in items]
     keys = [llm.tile_key(t, ctx) for t in tiles]
     answers: list[tuple[str, float] | None] = [None] * len(items)    # raw (code, confidence)
+
+    # A mosaic the old batching already paid for is asked as-is (a free mosaic-cache hit),
+    # whatever the tile store holds, so a first run under this code costs nothing even when
+    # an earlier call stored a tile that repeats here.
+    batches: list[list[int]] = []
+    whole: set[int] = set()
+    for b0 in range(0, len(items), MAX_TILES):
+        old = list(range(b0, min(b0 + MAX_TILES, len(items))))
+        img, _ = build_mosaic([items[n][0] for n in old], swatches)
+        if llm.is_cached(cv2.cvtColor(img, cv2.COLOR_RGB2BGR),
+                         pattern_prompt(len(old), codes, names, year), PatternResult):
+            batches.append(old)
+            whole.update(old)
     for n, k in enumerate(keys):
+        if n in whole:
+            continue
         hit = llm.tile_get(k)
         if hit is not None:
             try:
                 answers[n] = (str(hit["code"]), float(hit["confidence"]))
             except (KeyError, TypeError, ValueError):     # not a pattern answer: a miss
                 pass
-    todo = [n for n, a in enumerate(answers) if a is None]
-    batches = [todo[b0:b0 + MAX_TILES] for b0 in range(0, len(todo), MAX_TILES)]
+    todo = [n for n, a in enumerate(answers) if a is None and n not in whole]
+    batches += [todo[b0:b0 + MAX_TILES] for b0 in range(0, len(todo), MAX_TILES)]
 
     def ask(batch):
         img, numbers = build_mosaic([items[n][0] for n in batch], swatches)
