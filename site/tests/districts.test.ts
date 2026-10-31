@@ -6,7 +6,8 @@ import { gunzipped, lotCard, lotCategory, NO_VALUE, parseManifest, type SharedDi
 import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
 import { isPartialMap, threePlusShare, type DistrictStats } from "@/lib/stats";
 import { ERAS } from "@/lib/eras";
-import { districtSource, districtStatsUrl } from "@/lib/tiles";
+import { districtSource, districtStatsUrl, publishedPath } from "@/lib/tiles";
+import { hashedName, plan } from "../scripts/publish-tiles.mjs";
 import { buildRules, parseCsv } from "../scripts/build-rules.mjs";
 
 const PIPELINE_CATEGORIES = [
@@ -86,6 +87,40 @@ describe("shared archive", () => {
     const packed = await new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).arrayBuffer();
     expect(await gunzipped(packed)).toEqual(text);
     expect(await gunzipped(text.buffer)).toEqual(text);
+  });
+});
+
+describe("published tile names", () => {
+  const map = { "1975/districts/stats.json": "1975/districts/stats-abc123.json" };
+  const withBase = (base: string, run: () => void) => {
+    const was = process.env.NEXT_PUBLIC_TILES_BASE_URL;
+    process.env.NEXT_PUBLIC_TILES_BASE_URL = base;
+    try {
+      run();
+    } finally {
+      if (was === undefined) delete process.env.NEXT_PUBLIC_TILES_BASE_URL;
+      else process.env.NEXT_PUBLIC_TILES_BASE_URL = was;
+    }
+  };
+  it("reads a changed file under its new name and an unchanged one where it always was", () => {
+    withBase("https://tiles.example.org", () => {
+      expect(publishedPath("1975/districts/stats.json", map)).toBe("1975/districts/stats-abc123.json");
+      expect(publishedPath("1948/districts/stats.json", map)).toBe("1948/districts/stats.json");
+    });
+  });
+  it("keeps the usual names on a local tile server, whose files are the pipeline's own output", () => {
+    withBase("http://127.0.0.1:8787", () => expect(publishedPath("1975/districts/stats.json", map)).toBe("1975/districts/stats.json"));
+  });
+  it("puts the hash after the name, leaving only the last extension", () => {
+    expect(hashedName("1975/districts/stats.json", "abc")).toBe("1975/districts/stats-abc.json");
+    expect(hashedName("shared/districts-x.cards.json.gz", "abc")).toBe("shared/districts-x.cards.json-abc.gz");
+  });
+  it("never plans to replace a published file", () => {
+    expect(plan("a/stats.json", "h1", undefined, "h1").action).toBe("keep");
+    expect(plan("a/stats.json", "h1", undefined, null)).toEqual({ action: "upload", to: "a/stats.json", map: false });
+    expect(plan("a/stats.json", "h2", undefined, "h1")).toEqual({ action: "upload", to: "a/stats-h2.json", map: true });
+    expect(plan("a/stats.json", "h3", "a/stats-h2.json", "h2")).toEqual({ action: "upload", to: "a/stats-h3.json", map: true });
+    expect(plan("a/stats.json", "h2", "a/stats-h2.json", "h2").action).toBe("keep");
   });
 });
 

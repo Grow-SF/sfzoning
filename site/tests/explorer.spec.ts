@@ -2,13 +2,14 @@ import { expect, test, type Page } from "@playwright/test";
 import { centerStep } from "./helpers";
 import { ALLOWED_FILL_OPACITY, CATEGORIES, CATEGORY_COLORS, CATEGORY_LABELS } from "../lib/palette";
 import { MAP_COLORS } from "../lib/theme";
+import { publishedPath } from "../lib/tiles";
 
 const TILES = process.env.NEXT_PUBLIC_TILES_BASE_URL ?? "http://127.0.0.1:8787";
 const CREDIT = "David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries";
 
 
 async function tilesExist(page: Page, path: string) {
-  const r = await page.request.get(`${TILES}/${path}`, { headers: { Range: "bytes=0-6" } }).catch(() => null);
+  const r = await page.request.get(`${TILES}/${publishedPath(path)}`, { headers: { Range: "bytes=0-6" } }).catch(() => null);
   return !!r && r.ok();
 }
 
@@ -146,7 +147,7 @@ test("an era without published districts falls back to the scan with a note", as
 
 /** The published table and lot cards, read as the site reads them; null without shared files. */
 const SHARED_DATA = `async (tiles) => {
-  const r = await fetch(tiles + "/shared/districts.json");
+  const r = await fetch(tiles + "/${publishedPath("shared/districts.json")}");
   if (!r.ok) return null;
   const m = await r.json();
   const gz = async (path) => new Response((await fetch(tiles + "/" + path)).body.pipeThrough(new DecompressionStream("gzip")));

@@ -4,7 +4,7 @@ import { tileUrl, tilesHttpUrl } from "./tiles";
 // The explorer's one set of shapes for every era (pipeline `sfzmaps districts --shared`). Each lot
 // and district line is stored once with a number, and a small table says what that number looks
 // like in each year, so switching year changes no geometry and fetches nothing.
-// out/shared/districts.json names the current files, so publishing needs no site rebuild.
+// shared/districts.json names the current files.
 
 export const SHARED_SOURCE = "dist-shared";
 const MANIFEST_VERSION = 2;

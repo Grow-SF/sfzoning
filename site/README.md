@@ -64,9 +64,19 @@ Live at https://www.sfzoning.com (Vercel project `growsf/sfzoning`, root directo
 `site`; `sfzoning.com` redirects to `www`). Tiles are in the Vercel Blob store
 `sfzoning-tiles` (public, sfo1); `NEXT_PUBLIC_TILES_BASE_URL` is set to its URL in every
 environment. To deploy from a checkout: `vercel deploy --prod` from the repository root
-(`.vercelignore` keeps `pipeline/` data out of the upload). To upload changed tiles, use
-`@vercel/blob`'s `put` with `addRandomSuffix: false` (the CLI's `vercel blob put` adds a
-random suffix), with `BLOB_READ_WRITE_TOKEN` from `vercel env pull`.
+(`.vercelignore` keeps `pipeline/` data out of the upload).
+
+To publish changed tiles, with `BLOB_READ_WRITE_TOKEN` from `vercel env pull`:
+
+```sh
+NEXT_PUBLIC_TILES_BASE_URL=<store url> node --env-file=.env.local scripts/publish-tiles.mjs --dry-run
+NEXT_PUBLIC_TILES_BASE_URL=<store url> node --env-file=.env.local scripts/publish-tiles.mjs
+```
+
+It never overwrites a file. A changed file goes up as `<name>-<hash of its bytes>.<ext>`, and
+`lib/published.json` maps its usual path to that name. Commit that file and deploy: the site reads
+only the names it shipped with, so pages already open keep working, and rolling back a deployment
+rolls back its data too. Keep old files until open tabs have had time to reload.
 
 The general recipe, for other hosts:
 
@@ -126,10 +136,8 @@ After publishing or republishing any series:
 cd pipeline && uv run sfzmaps districts --shared   # no API calls; takes about five minutes
 ```
 
-Upload `shared/districts-<hash>.pmtiles`, `.table.gz` and `.cards.json.gz` first, then
-`shared/districts.json`, which points the site at them. The site needs no rebuild. The names change
-with the data, so nothing is overwritten in place. Keep the previous files until open tabs have had
-time to reload.
+Then publish and deploy as described under [Deploying](#deploying). A new era's data appears on
+the site with that deploy.
 
 Serve `.pmtiles` as `application/octet-stream` (or `application/vnd.pmtiles`) **without**
 `Content-Encoding: gzip`: a CDN that compresses the archive breaks Range reads.
