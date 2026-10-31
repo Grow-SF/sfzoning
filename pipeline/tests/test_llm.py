@@ -352,3 +352,37 @@ def test_corrupt_cache_recovers(tmp_path):
     r = llm.ask_json(IMG, "hello", Ans, client=c)
     assert r == Ans(n=5) and c.calls == 2
     assert llm.ask_json(IMG, "hello", Ans, client=c) == r and c.calls == 2
+
+
+def test_tile_store_roundtrip_and_counter(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm, "CACHE_DIR", tmp_path); llm.CallCounter.reset()
+    t = np.full((96, 96, 3), 7, np.uint8)
+    k = llm.tile_key(t, "ctx")
+    assert llm.tile_get(k) is None and llm.CallCounter.tile_hits == 0
+    llm.tile_put(k, {"code": "C", "confidence": 0.8})
+    assert llm.tile_get(k) == {"code": "C", "confidence": 0.8}
+    assert llm.CallCounter.tile_hits == 1
+    assert (tmp_path / "llm" / "tiles" / f"{k}.json").exists()
+    llm.CallCounter.reset(); assert llm.CallCounter.tile_hits == 0
+
+
+def test_tile_put_never_overwrites(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm, "CACHE_DIR", tmp_path)
+    k = llm.tile_key(np.zeros((96, 96, 3), np.uint8), "ctx")
+    llm.tile_put(k, {"code": "C", "confidence": 0.8})
+    llm.tile_put(k, {"code": "2R", "confidence": 0.1})
+    assert llm.tile_get(k)["code"] == "C"
+
+
+def test_tile_key_changes_with_pixels_and_context():
+    a = np.zeros((96, 96, 3), np.uint8); b = a.copy(); b[5, 5, 0] = 1
+    assert llm.tile_key(a, "x") != llm.tile_key(b, "x")
+    assert llm.tile_key(a, "x") != llm.tile_key(a, "y")
+    assert llm.tile_key(a, "x") == llm.tile_key(a.copy(), "x")
+
+
+def test_tile_get_corrupt_file_is_a_miss(tmp_path, monkeypatch):
+    monkeypatch.setattr(llm, "CACHE_DIR", tmp_path)
+    k = llm.tile_key(np.zeros((96, 96, 3), np.uint8), "ctx")
+    p = tmp_path / "llm" / "tiles" / f"{k}.json"; p.parent.mkdir(parents=True); p.write_text("{nope")
+    assert llm.tile_get(k) is None and not p.exists()

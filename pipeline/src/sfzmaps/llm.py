@@ -69,6 +69,7 @@ _sleep = time.sleep
 class CallCounter:
     live = 0
     hits = 0
+    tile_hits = 0     # per-tile answers served from the tile store (tile_get)
     in_tokens = 0     # billed usage reported by live OpenAI responses (or estimated, below)
     out_tokens = 0
     estimated = 0     # calls whose usage was estimated (invalid JSON: the SDK drops usage)
@@ -102,6 +103,7 @@ class CallCounter:
     def reset(cls) -> None:
         cls.live = 0
         cls.hits = 0
+        cls.tile_hits = 0
         cls.in_tokens = 0
         cls.out_tokens = 0
         cls.estimated = 0
@@ -233,12 +235,18 @@ class OpenAIClient:
         return resp.output_parsed
 
 
+def _model_parts() -> tuple[list[str], list[str]]:
+    """(leading, trailing) key parts naming the provider, model and call parameters; shared by
+    _key and tile_key so the two can't drift.  Legacy params keep the v1 key (no trailing)."""
+    params = (VISION_REASONING_EFFORT, MAX_OUT_TOKENS, DETAIL)
+    trailing = [] if params == LEGACY_KEY_PARAMS else ["params:" + json.dumps(list(params))]
+    return [VISION_PROVIDER, VISION_MODEL], trailing
+
+
 def _key(png: bytes, prompt: str, schema: type[BaseModel]) -> str:
     h = hashlib.sha256()
-    parts = [VISION_PROVIDER, VISION_MODEL, prompt, json.dumps(schema.model_json_schema(), sort_keys=True)]
-    params = (VISION_REASONING_EFFORT, MAX_OUT_TOKENS, DETAIL)
-    if params != LEGACY_KEY_PARAMS:          # v2 key; legacy params keep the v1 key
-        parts.append("params:" + json.dumps(list(params)))
+    lead, trail = _model_parts()
+    parts = [*lead, prompt, json.dumps(schema.model_json_schema(), sort_keys=True), *trail]
     for part in parts:
         h.update(part.encode())
         h.update(b"\0")
@@ -259,6 +267,55 @@ def _encode(image: np.ndarray) -> bytes:
 def is_cached(image: np.ndarray, prompt: str, schema: type[BaseModel]) -> bool:
     """True if ask_json would answer from disk (no network call)."""
     return (CACHE_DIR / "llm" / f"{_key(_encode(image), prompt, schema)}.json").exists()
+
+
+def tile_key(tile_rgb: np.ndarray, context: str) -> str:
+    """Key of one tile's answer: its PNG bytes, the caller's context string (prompt, schema,
+    anything else the answer depends on) and the provider / model / parameters."""
+    h = hashlib.sha256()
+    lead, trail = _model_parts()
+    for part in (*lead, context, *trail):
+        h.update(part.encode())
+        h.update(b"\0")
+    h.update(_encode(cv2.cvtColor(tile_rgb, cv2.COLOR_RGB2BGR)))
+    return h.hexdigest()
+
+
+def _tile_path(key: str) -> Path:
+    return CACHE_DIR / "llm" / "tiles" / f"{key}.json"
+
+
+def tile_get(key: str) -> dict | None:
+    """The stored answer for a tile key, or None (a corrupt file is discarded: a miss)."""
+    path = _tile_path(key)
+    try:
+        answer = json.loads(path.read_text())
+        if not isinstance(answer, dict):
+            raise ValueError("not a JSON object")
+    except FileNotFoundError:
+        return None
+    except (ValueError, OSError) as e:
+        log.warning("discarding bad tile cache file %s: %s", path.name, e)
+        path.unlink(missing_ok=True)
+        return None
+    CallCounter.bump("tile_hits")
+    return answer
+
+
+def tile_put(key: str, answer: dict) -> None:
+    """Store a tile's answer unless one is already there (first answer wins), atomically."""
+    path = _tile_path(key)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.stem + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(answer, f)
+        try:
+            os.link(tmp_name, path)       # fails if present: never overwrite
+        except FileExistsError:
+            pass
+    finally:
+        Path(tmp_name).unlink(missing_ok=True)
 
 
 def max_usd() -> float | None:
