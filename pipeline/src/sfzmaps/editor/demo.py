@@ -20,7 +20,7 @@ import geopandas as gpd
 import numpy as np
 from shapely.geometry import box
 
-from sfzmaps import config, runner
+from sfzmaps import config, linework, runner
 from sfzmaps import score as score_mod
 from sfzmaps.pages import Page
 from sfzmaps.refine import Match, RefineResult
@@ -124,7 +124,9 @@ def build_demo(root: Path, *, set_config: bool = True) -> Demo:
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(b"demo")
     os.utime(source, ns=(1, 1))
-    t0 = time.time_ns() - 60_000_000_000  # a minute ago, so any later write is strictly newer
+    # a minute ago, so any later write is strictly newer; but never before linework.py, a
+    # blocks input (a fresh checkout, as in CI, would otherwise make blocks look stale)
+    t0 = max(time.time_ns() - 60_000_000_000, Path(linework.__file__).stat().st_mtime_ns + 1)
     steps = [
         (d / "page.png", lambda p: cv2.imwrite(str(p), img)),
         (d / "page.json", lambda p: p.write_text(json.dumps(
