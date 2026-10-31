@@ -22,13 +22,15 @@ Apache Software Foundation's ICLA. You keep the copyright in your work; the
 agreement gives GrowSF a license to use it and lets GrowSF keep the project's
 licensing flexible.
 
-To agree, post this comment on your first pull request, exactly as written:
+To agree, post this comment on your first pull request, exactly as written, on
+one line:
 
-> I have read the GrowSF Individual Contributor License Agreement (CLA.md,
-> version 1.0) and I agree to it for all my present and future contributions
-> to GrowSF.
+```
+I have read the GrowSF Individual Contributor License Agreement (CLA.md, version 1.0) and I agree to it for all my present and future contributions to GrowSF.
+```
 
-Pull requests can't be merged until the author has posted it. If your employer
+A bot checks each pull request, asks first-time contributors to post it, and
+records the agreement. Pull requests can't be merged until the author has. If your employer
 has rights in your work, make sure you're permitted to contribute (CLA
 section 4); for contributions owned by a company, contact GrowSF.
 
