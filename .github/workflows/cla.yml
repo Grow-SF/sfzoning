@@ -1,0 +1,43 @@
+name: CLA
+
+# Records contributors' agreement to the GrowSF Individual Contributor License Agreement
+# (CLA.md) and blocks merging until each pull request author has agreed. A contributor agrees
+# by commenting the exact sentence in SIGN below (also in CONTRIBUTING.md); "recheck"
+# re-runs the check. Signatures are stored on the unprotected cla-signatures branch.
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CLA Assistant
+        if: >-
+          github.event_name == 'pull_request_target' ||
+          github.event.comment.body == 'recheck' ||
+          github.event.comment.body == 'I have read the GrowSF Individual Contributor License Agreement (CLA.md, version 1.0) and I agree to it for all my present and future contributions to GrowSF.'
+        uses: contributor-assistant/github-action@v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-signatures: signatures/version1/cla.json
+          path-to-document: https://github.com/Grow-SF/sfzoning/blob/main/CLA.md
+          branch: cla-signatures
+          allowlist: sbuss,dependabot[bot],vercel[bot],github-actions[bot]
+          custom-pr-sign-comment: I have read the GrowSF Individual Contributor License Agreement (CLA.md, version 1.0) and I agree to it for all my present and future contributions to GrowSF.
+          custom-notsigned-prcomment: >-
+            Thanks for your pull request! Before it can be merged, please agree to the
+            [GrowSF Individual Contributor License Agreement](https://github.com/Grow-SF/sfzoning/blob/main/CLA.md)
+            by posting the comment below, exactly as written. You keep the copyright in your work.
+          custom-allsigned-prcomment: Everyone on this pull request has agreed to the GrowSF CLA. Thank you!
+          signed-commit-message: $contributorName agreed to the GrowSF CLA in $owner/$repo#$pullRequestNo
+          lock-pullrequest-aftermerge: false
