@@ -622,8 +622,9 @@ def autofill(series: str, sheet_id: str, body: PreviewBody) -> JSONResponse:
         res.transform.check_warpable(runner.page_shape(d / "page.png"))
     except RuntimeError as e:
         raise HTTPException(422, str(e))
-    # refine's result GCPs are all "auto"; keep the reviewer's own points alongside them
-    merged = [vars_of(g) for g in res.transform.gcps] + \
+    # Take refine's auto GCPs only: on sparse sheets refine._fit also appends the seed's
+    # non-auto GCPs, and the posted list already supplies every one of those (disabled too).
+    merged = [vars_of(g) for g in res.transform.gcps if g.source == "auto"] + \
              [g.model_dump() for g in body.gcps if g.source != "auto"]
     t = _transform_of([GCPIn(**g) for g in merged])
     meta = render_preview(d, t)
@@ -632,9 +633,10 @@ def autofill(series: str, sheet_id: str, body: PreviewBody) -> JSONResponse:
         "seed": runner._transform_json(seed, "seed"), "raw": runner._result_json(raw),
         "result": runner._result_json(res), "n_matches": n_matches})
     sc = _score_new(d, t, body.change_areas, autofill=True)
+    resid = _residuals(t)
     return JSONResponse(_clean({
-        "gcps": [_gcp_json(g, r) for g, r in zip(t.gcps, _residuals(t))],
-        "residuals": _residuals(t),
+        "gcps": [_gcp_json(g, r) for g, r in zip(t.gcps, resid)],
+        "residuals": resid,
         "matches": [runner._match_json(m) for m in res.matches], "n_matches": n_matches,
         "score": _score_dict(sc),
         "preview_png_url": f"/api/sheet/{series}/{sheet_id}/preview.png?v={time.time_ns()}",

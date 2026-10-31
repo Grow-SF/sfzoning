@@ -552,3 +552,26 @@ def test_preview_autofill_without_file_is_409(env):
     demo, c, _ = env
     r = c.post(url(demo, "/preview"), json={"gcps": _seed(demo), "autofill": True})
     assert r.status_code == 409
+
+
+def test_autofill_does_not_duplicate_manual_points_refine_kept(env, monkeypatch):
+    """refine._fit appends the seed's non-auto GCPs on sparse sheets; they must not come back twice."""
+    from sfzmaps.refine import RefineResult
+    from sfzmaps.transform import GCP, SheetTransform
+    demo, c, _ = env
+    seed = _seed(demo)
+
+    def fake_refine(corners, ref, s):
+        gs = [GCP(g.px, g.py, g.wx, g.wy, "auto") for g in demo.true_gcps] + \
+             [g for g in s.gcps if g.source != "auto"]
+        ms = [runner._match_load(m) for m in
+              json.loads((_sheet_dir_of(demo) / "refine.json").read_text())["matches"]]
+        return RefineResult(SheetTransform(gs, config.TPS_SMOOTHING).fit(), ms, 1, True)
+
+    monkeypatch.setattr(server.refine_mod, "refine", fake_refine)
+    monkeypatch.setattr(server.refine_mod, "classify_changes", lambda r: r)
+    r = c.post(url(demo, "/autofill"), json={"gcps": seed})
+    assert r.status_code == 200, r.text
+    gcps = r.json()["gcps"]
+    assert len([g for g in gcps if g["source"] == "manual"]) == 6
+    assert len(gcps) == 25 + 6
