@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 import subprocess
 
@@ -186,9 +187,34 @@ def paper_backing(series: str, order: list[str]) -> Path | None:
     return out
 
 
+# Sheets the 1964-1980 books bind beside the zoning sheets: height (1H, 13SH), special-use
+# (2SU, 1SUa) and sign-district (SSD) maps.  They are placed like any sheet, but a zoning
+# edition's map layers show only its zoning sheets.
+_NON_ZONING_SHEET = re.compile(r"\d*(H|SH|SU[a-z]?|SSD)")
+
+
+def layer_sheets(series: str, order: list[str]) -> list[str]:
+    """`order` without the non-zoning sheets when `series` is a zoning (use) edition; height
+    and other series keep every sheet.  An unread sheet number keeps the sheet."""
+    from sfzmaps.districts.series import SERIES
+
+    info = SERIES.get(series)
+    if info is None or info.role != "use":
+        return order
+
+    def number(sid: str) -> str:
+        try:
+            n = json.loads((config.WORK_DIR / series / sid / "page.json").read_text()).get("sheet_number")
+        except (OSError, ValueError):
+            return ""
+        return str(n or "").strip()
+
+    return [s for s in order if not _NON_ZONING_SHEET.fullmatch(number(s))]
+
+
 def build_vrt(series: str, scores: dict[str, SheetScore] | None = None, paper: bool = False) -> Path:
     scores = load_scores(series) if scores is None else scores
-    order = draw_order(series, scores, paper)
+    order = layer_sheets(series, draw_order(series, scores, paper))
     if not order:
         raise RuntimeError(f"no warped sheets for series {series}; run `sfzmaps run --year {series}`")
     out = config.OUT_DIR / series / (f"{series}-paper.vrt" if paper else f"{series}.vrt")

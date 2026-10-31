@@ -139,3 +139,32 @@ def test_black_ink_is_not_nodata(work):
     assert "NoDataValue" not in text and "<NODATA>" not in text
     with rasterio.open(vrt) as ds:
         assert ds.read(4).min() == 255 and ds.read(1).max() == 0
+
+
+def _page(sheet_dir, number):
+    (sheet_dir / "page.json").write_text(json.dumps({"kind": "map", "sheet_number": number}))
+
+
+def test_zoning_layer_leaves_out_height_su_and_sign_sheets(work):
+    # mixed books (1964-1980) bind 1..13 with 1H..13H, SH, SU and SSD sheets; only zoning
+    # sheets belong in a zoning edition's map layers
+    w = config.WORK_DIR / "1972"
+    nums = {"z1": "1", "z5a": "5A", "unread": None, "h": "10H", "sh": "13SH", "su": "1SUa",
+            "su2": "2SU", "ssd": "SSD"}
+    for i, (sid, num) in enumerate(nums.items()):
+        _tif(w / sid / "warped.tif", 6_000_000 + 45 * i, 100)
+        _score(w / sid, True, 3.0 + i)
+        _page(w / sid, num)
+    names = sorted(_sid(s) for s in _sources(stitch.build_vrt("1972")))
+    assert names == ["unread", "z1", "z5a"]
+    assert stitch.draw_order("1972", stitch.load_scores("1972"))  # districts still see every sheet
+    assert len(stitch.draw_order("1972", stitch.load_scores("1972"))) == len(nums)
+
+
+def test_height_series_keeps_its_height_sheets(work):
+    w = config.WORK_DIR / "1980-1990-height"
+    for i, (sid, num) in enumerate([("a", "1H"), ("b", "2H")]):
+        _tif(w / sid / "warped.tif", 6_000_000 + 45 * i, 100)
+        _score(w / sid, True, 3.0)
+        _page(w / sid, num)
+    assert sorted(_sid(s) for s in _sources(stitch.build_vrt("1980-1990-height"))) == ["a", "b"]
