@@ -2,12 +2,15 @@ import json
 import shutil
 from dataclasses import asdict
 
+import cv2
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from sfzmaps import config, runner
 from sfzmaps.editor import demo as demo_mod
 from sfzmaps.editor import server
+from sfzmaps.transform import SheetTransform
 
 
 @pytest.fixture
@@ -310,6 +313,32 @@ def test_blocks_geojson_streets_empty_and_404(env):
     assert c.get(url(demo, "/blocks.geojson?layer=streets")).json()["features"] == []
     assert c.get(url(demo, "/blocks.geojson?layer=nope")).status_code == 422
     assert c.get("/api/sheet/demo/nope/blocks.geojson").status_code == 404
+
+
+def test_blocks_geojson_unplaced_sheet_gets_whole_city(env):
+    # a sheet with no control points yet (the one a reviewer most needs the map for)
+    demo, c, _ = env
+    d = demo.work_dir / demo.series / demo.sheet_id
+    for n in ("transform.json", "refine.json"):
+        (d / n).unlink()
+    fc = c.get(url(demo, "/blocks.geojson")).json()
+    assert len(fc["features"]) == len(demo.ref.blocks)
+
+
+def test_sheet_extent_covers_whole_page_not_just_points(env):
+    # points bunched in one corner (as on a mostly unbuilt sheet) still show the whole scan
+    demo, c, _ = env
+    d = demo.work_dir / demo.series / demo.sheet_id
+    t = SheetTransform.from_json(json.loads((d / "transform.json").read_text()))
+    corner = sorted(t.gcps, key=lambda g: g.px + g.py)[:4]
+    pts = [{"px": g.px, "py": g.py, "wx": g.wx, "wy": g.wy, "source": "manual", "enabled": True}
+           for g in corner]
+    (d / "review.json").write_text(json.dumps({"status": "edited", "gcps": pts, "change_areas": None}))
+    ext = server._sheet_extent(d)
+    h, w = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE).shape
+    far = runner.review_transform(json.loads((d / "review.json").read_text())).to_world(
+        np.array([[w, h]], float))[0]
+    assert ext[0] <= far[0] <= ext[2] and ext[1] <= far[1] <= ext[3]
 
 
 def test_blocks_geojson_without_reference(env, monkeypatch):

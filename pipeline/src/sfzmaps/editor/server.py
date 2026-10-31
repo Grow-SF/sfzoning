@@ -437,13 +437,29 @@ def _res_all(t: SheetTransform) -> list:
 
 # -- reference blocks near the sheet -----------------------------------------------------
 
-BLOCKS_PAD_FT = 800.0
-BLOCKS_MAX_FEATURES = 4000
+BLOCKS_PAD_FT = 2000.0
+BLOCKS_MAX_FEATURES = 20000
+
+
+def _page_outline_world(d: Path, review: dict | None, tdata: dict | None) -> list[tuple[float, float]]:
+    """The page's corners and edge midpoints through the sheet's transform (review, else
+    transform.json), so the modern map covers the whole scan, not only where the points are."""
+    try:
+        t = runner.review_transform(review) if review else SheetTransform.from_json(tdata) if tdata else None
+        if t is None or len([g for g in t.gcps if g.enabled]) < 3:
+            return []
+        with Image.open(d / "page.png") as im:
+            w, h = im.size
+        px = np.array([[x, y] for x in (0, w / 2, w) for y in (0, h / 2, h)], float)
+        wd = t.to_world(px)
+    except Exception:  # a degenerate or missing fit: fall back to the points alone
+        return []
+    return [(float(x), float(y)) for x, y in wd if math.isfinite(x) and math.isfinite(y)]
 
 
 def _sheet_extent(d: Path) -> list[float] | None:
     """World (EPSG:2227 ft) extent of the sheet's control points (review, else transform, else
-    matches), or None when it has none."""
+    matches) and of the page outline through its transform, or None when it has neither."""
     pts: list[tuple[float, float]] = []
     review = runner._load_review(d)
     tdata = _read_json(d / "transform.json") if (d / "transform.json").exists() else None
@@ -453,6 +469,7 @@ def _sheet_extent(d: Path) -> list[float] | None:
         wx, wy = g.get("wx"), g.get("wy")
         if wx is not None and wy is not None and math.isfinite(wx) and math.isfinite(wy):
             pts.append((wx, wy))
+    pts += _page_outline_world(d, review, tdata)
     if not pts:
         return None
     a = np.array(pts)
@@ -463,17 +480,21 @@ def _sheet_extent(d: Path) -> list[float] | None:
 def blocks_geojson(series: str, sheet_id: str, layer: Literal["blocks", "streets"] = "blocks") -> JSONResponse:
     """Modern DataSF block outlines (or street centerlines) near the sheet, as WGS84 GeoJSON
     for the editor's map pane. Used because the blocks PMTiles is not served. Empty when the
-    reference or the sheet's extent is unavailable."""
+    reference is unavailable. A sheet with no control points yet gets the whole city, uncapped,
+    so the reviewer can find where to place the first ones."""
     d = _sheet_dir(series, sheet_id)
     empty = {"type": "FeatureCollection", "features": []}
     ref, ext = _get_ref(), _sheet_extent(d)
     gdf = None if ref is None else (ref.blocks if layer == "blocks" else ref.streets)
-    if gdf is None or ext is None or len(gdf) == 0:
+    if gdf is None or len(gdf) == 0:
         return JSONResponse(empty)
-    from shapely.geometry import box
-    pad = BLOCKS_PAD_FT
-    sel = gdf[gdf.intersects(box(ext[0] - pad, ext[1] - pad, ext[2] + pad, ext[3] + pad))]
-    sel = sel.iloc[:BLOCKS_MAX_FEATURES]
+    if ext is None:
+        sel = gdf
+    else:
+        from shapely.geometry import box
+        pad = BLOCKS_PAD_FT
+        sel = gdf[gdf.intersects(box(ext[0] - pad, ext[1] - pad, ext[2] + pad, ext[3] + pad))]
+        sel = sel.iloc[:BLOCKS_MAX_FEATURES]
     if len(sel) == 0:
         return JSONResponse(empty)
     cols = ["block_num"] if layer == "blocks" and "block_num" in sel.columns else []
