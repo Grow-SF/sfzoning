@@ -7,10 +7,12 @@ Endpoints (all under /api):
   POST /sheet/{series}/{sheet_id}/preview  fit in memory, score, low-res warped PNG
   GET  /sheet/{series}/{sheet_id}/preview.png
   GET  /sheet/{series}/{sheet_id}/blocks.geojson?layer=blocks|streets   modern blocks near the sheet (WGS84)
+  POST /sheet/{series}/{sheet_id}/autofill  seed the automatic refine from the posted points;
+                                           writes autofill.json only, returns a dense set + preview + score
   POST /sheet/{series}/{sheet_id}/save     write review.json, rerun the sheet, rebuild series
 
-Scores are the pipeline's (sfzmaps.score): a sheet passes on held-out median <= 5 ft AND
-held-out p95 <= 12 ft AND not misplaced; the editor shows holdout_p50_ft / holdout_p95_ft /
+Scores are the pipeline's (sfzmaps.score): a sheet passes on held-out median <= 7 ft AND
+held-out p95 <= 15 ft AND not misplaced; the editor shows holdout_p50_ft / holdout_p95_ft /
 reason / passed, never a share-within-tolerance.
 
 Edited points are fitted with runner.smoothing_for (TPS_SMOOTHING for a dense set of at least
@@ -50,12 +52,14 @@ from PIL import Image
 from pydantic import BaseModel
 
 from sfzmaps import config, runner
+from sfzmaps import refine as refine_mod
 from sfzmaps import score as score_mod
 from sfzmaps.transform import GCP, SheetTransform
 
 log = logging.getLogger(__name__)
 
 TILE_SIZE = 256
+AUTOFILL_MIN_POINTS = 4
 PREVIEW_MAX_PX = 2048
 HOST = "127.0.0.1"
 PORT = 8765
@@ -224,6 +228,10 @@ class GCPIn(BaseModel):
 class PreviewBody(BaseModel):
     gcps: list[GCPIn]
     change_areas: dict | None = None
+    # Score against autofill.json's matches instead of refine.json's. A string is the
+    # autofill_id that /autofill returned and must still be the file's id (else 409);
+    # True means the current file, any id (kept for callers that predate the id).
+    autofill: bool | str | None = None
 
 
 class SaveBody(PreviewBody):
@@ -565,18 +573,91 @@ def render_preview(d: Path, t: SheetTransform, max_px: int = PREVIEW_MAX_PX, ste
     return {"width": ow, "height": oh, "bounds": [minx, miny, maxx, maxy]}
 
 
-def _score_new(d: Path, t: SheetTransform, change_areas: dict | None) -> score_mod.SheetScore:
-    return runner.score_review(t, d / "refine.json", _get_ref(), change_areas, d / "labels.json")
+def _autofill_path(d: Path) -> Path:
+    return d / "autofill.json"
+
+
+def _load_autofill(d: Path, want: bool | str) -> dict:
+    """autofill.json, checked against the auto-fill the caller is working from: `want` is
+    an autofill_id (must match the file's) or True (any). 409 when missing or replaced."""
+    p = _autofill_path(d)
+    af = _read_json(p) if p.exists() else None
+    if not af or "result" not in af:
+        raise HTTPException(409, "no auto-fill for this sheet; run auto-fill first")
+    if isinstance(want, str) and af.get("id") != want:
+        raise HTTPException(409, "this auto-fill was replaced; run auto-fill again")
+    return af
+
+
+def _score_new(d: Path, t: SheetTransform, change_areas: dict | None,
+               autofill: bool | str | None = None) -> score_mod.SheetScore:
+    if not autofill:
+        return runner.score_review(t, d / "refine.json", _get_ref(), change_areas, d / "labels.json")
+    af = _load_autofill(d, autofill)
+    tmp = d / f"autofill.{threading.get_ident()}.{time.time_ns()}.tmp.json"
+    try:
+        tmp.write_text(json.dumps(af["result"]))
+        return runner.score_review(t, tmp, _get_ref(), change_areas, d / "labels.json")
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 @app.post("/api/sheet/{series}/{sheet_id}/preview")
 def preview(series: str, sheet_id: str, body: PreviewBody) -> JSONResponse:
     d = _sheet_dir(series, sheet_id)
     t = _transform_of(body.gcps)
-    sc = _score_new(d, t, body.change_areas)
+    sc = _score_new(d, t, body.change_areas, body.autofill)
     meta = render_preview(d, t)
     return JSONResponse(_clean({
         "score": _score_dict(sc), "residuals": _residuals(t),
+        "preview_png_url": f"/api/sheet/{series}/{sheet_id}/preview.png?v={time.time_ns()}",
+        "preview_bounds": meta["bounds"], "preview_size": {"width": meta["width"], "height": meta["height"]},
+    }))
+
+
+@app.post("/api/sheet/{series}/{sheet_id}/autofill")
+def autofill(series: str, sheet_id: str, body: PreviewBody) -> JSONResponse:
+    """Run the automatic refine seeded from the reviewer's points. Writes only
+    autofill.json (the editor promotes it on save); never touches the pipeline's files."""
+    d = _sheet_dir(series, sheet_id)
+    # Seed from the reviewer's own points only: a sheet with an automatic transform opens
+    # with hundreds of auto points, which would just reproduce that (bad) fit.
+    own = [g for g in body.gcps if g.enabled and g.source != "auto"]
+    if len(own) < AUTOFILL_MIN_POINTS:
+        raise HTTPException(400, f"auto-fill needs at least {AUTOFILL_MIN_POINTS} enabled points "
+                                 "of your own (auto points don't count)")
+    bj = d / "blocks_px.geojson"
+    if not bj.exists():
+        raise HTTPException(409, "no block corners for this sheet; run the pipeline for it first")
+    seed = _transform_of(own)
+    data = json.loads(bj.read_text())
+    corners = np.array([[np.nan if v is None else v for v in c] for c in data["corners"]],
+                       float).reshape(-1, 2)
+    raw = refine_mod.refine(corners, _get_ref().corners, seed)
+    res = refine_mod.classify_changes(raw)
+    try:
+        res.transform.check_warpable(runner.page_shape(d / "page.png"))
+    except RuntimeError as e:
+        raise HTTPException(422, str(e))
+    # Take refine's auto GCPs only: on sparse sheets refine._fit also appends the seed's
+    # non-auto GCPs, and the posted list already supplies every one of those (disabled too).
+    merged = [vars_of(g) for g in res.transform.gcps if g.source == "auto"] + \
+             [g.model_dump() for g in body.gcps if g.source != "auto"]
+    t = _transform_of([GCPIn(**g) for g in merged])
+    meta = render_preview(d, t)
+    n_matches = sum(m.label == "inlier" for m in res.matches)
+    af_id = str(time.time_ns())
+    runner._write_json(_autofill_path(d), {
+        "id": af_id, "seed": runner._transform_json(seed, "seed"), "raw": runner._result_json(raw),
+        "result": runner._result_json(res), "n_matches": n_matches})
+    sc = _score_new(d, t, body.change_areas, autofill=af_id)
+    resid = _residuals(t)
+    return JSONResponse(_clean({
+        "autofill_id": af_id,
+        "gcps": [_gcp_json(g, r) for g, r in zip(t.gcps, resid)],
+        "residuals": resid,
+        "matches": [runner._match_json(m) for m in res.matches], "n_matches": n_matches,
+        "score": _score_dict(sc),
         "preview_png_url": f"/api/sheet/{series}/{sheet_id}/preview.png?v={time.time_ns()}",
         "preview_bounds": meta["bounds"], "preview_size": {"width": meta["width"], "height": meta["height"]},
     }))
@@ -592,11 +673,25 @@ def preview_png(series: str, sheet_id: str) -> FileResponse:
 
 # -- save ------------------------------------------------------------------------------
 
+def _promote_autofill(d: Path, want: bool | str) -> dict:
+    """Write the auto-fill into the pipeline's own artifacts, in dependency order (so mtimes
+    run rough <= refine_raw <= refine and a later force_auto run only reruns `changes`).
+    Call under _save_lock: it re-checks `want` (an autofill_id, or True for any) against the
+    file and raises 409, writing nothing, when the file is gone or was replaced.
+    Returns the loaded autofill.json; the caller deletes it after a successful run_sheet."""
+    af = _load_autofill(d, want)
+    runner._write_json(d / "rough.json", {"transform": af["seed"], "scale_hint_ft_per_px": None,
+                                          "seeded_from": "editor autofill"})
+    runner._write_json(d / "refine_raw.json", af["raw"])
+    runner._write_json(d / "refine.json", af["result"])
+    return af
+
+
 @app.post("/api/sheet/{series}/{sheet_id}/save")
 def save(series: str, sheet_id: str, body: SaveBody, background: BackgroundTasks) -> JSONResponse:
     d = _sheet_dir(series, sheet_id)
     t = _transform_of(body.gcps)
-    sc = _score_new(d, t, body.change_areas)
+    sc = _score_new(d, t, body.change_areas, autofill=body.autofill)
     note = body.note.strip()
     if body.status == "accepted" and not sc.passed and not note:
         raise HTTPException(
@@ -606,16 +701,27 @@ def save(series: str, sheet_id: str, body: SaveBody, background: BackgroundTasks
               "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "note": note,
               "gcps": [g.model_dump() for g in body.gcps], "change_areas": body.change_areas,
               "smoothing": t.smoothing}
+    if body.autofill:
+        review["autofill"] = {
+            "seed_points": sum(1 for g in body.gcps if g.enabled and g.source != "auto"),
+            "matches": None}  # filled from autofill.json under the lock
     page = _find_page(series, sheet_id)
     if page is None:
         raise HTTPException(404, f"no source page for {series}/{sheet_id}")
     with _save_lock:
+        if body.autofill:
+            af = _promote_autofill(d, body.autofill)
+            review["autofill"]["matches"] = af["n_matches"]
         runner._write_json(d / "review.json", review)  # atomic
         try:
             new = runner.run_sheet(page, _get_ref())
         except Exception as e:  # noqa: BLE001 - review.json is saved; report the failed rerun
             log.exception("run_sheet failed after save of %s/%s", series, sheet_id)
             raise HTTPException(500, f"review saved, but rerunning the sheet failed: {type(e).__name__}: {e}")
+        if body.autofill:  # unless a newer auto-fill replaced it meanwhile
+            cur = _read_json(_autofill_path(d)) if _autofill_path(d).exists() else None
+            if cur and cur.get("id") == af.get("id"):
+                _autofill_path(d).unlink(missing_ok=True)
     background.add_task(_schedule_rebuild, series)
     return JSONResponse(_clean({"status": body.status, "score": _score_dict(new),
                                 "preview_score": _score_dict(sc), "reviewer": review["reviewer"]}))

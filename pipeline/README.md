@@ -142,7 +142,12 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
    `review.json` stores the smoothing it used. The held-out score refits the warp
    on your edited points, leaving out one group of blocks at a time, so moving or
    disabling points changes it.
-4. For 1948 and 1960, the editor offers the owner's manual `.points` and adopts
+4. **Auto-fill from my points** (needs 4 or more enabled points of your own; `auto`
+   points don't count) seeds the automatic matcher from your points and fills in the
+   matched block corners. It never saves: review the result, then Save. Saving an
+   auto-fill fits it with usually `TPS_SMOOTHING` (the result is dense; under 100 enabled
+   points it is `MANUAL_TPS_SMOOTHING`) and records `autofill` in `review.json`.
+5. For 1948 and 1960, the editor offers the owner's manual `.points` and adopts
    them when they score better.
 
 ## Credit: 1948

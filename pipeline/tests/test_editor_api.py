@@ -455,3 +455,279 @@ def test_editor_js_reads_series_and_sheet_from_url():
     import inspect
     src = inspect.getsource(reviewpage)
     assert "?series=" in src and "&sheet=" in src
+
+
+# -- auto-fill ---------------------------------------------------------------------------
+
+def _seed(demo, n=6):
+    pts = _gcps(demo.true_gcps[:: max(1, len(demo.true_gcps) // n)][:n])
+    for p in pts:
+        p["source"] = "manual"
+    return pts
+
+
+def _sheet_dir_of(demo):
+    return demo.work_dir / demo.series / demo.sheet_id
+
+
+def test_autofill_returns_dense_set_keeping_manual_points(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    seed = _seed(demo)
+    names = ("refine.json", "transform.json", "rough.json")
+    before = {n: (d / n).stat().st_mtime_ns for n in names if (d / n).exists()}
+    r = c.post(url(demo, "/autofill"), json={"gcps": seed})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["gcps"]) > 25
+    manual = [g for g in body["gcps"] if g["source"] == "manual"]
+    assert len(manual) == 6
+    assert {(g["px"], g["py"]) for g in manual} == {(g["px"], g["py"]) for g in seed}
+    assert body["n_matches"] >= 40
+    assert body["score"]["passed"] is True, body["score"]
+    assert {"residuals", "matches", "preview_png_url", "preview_bounds", "preview_size"} <= set(body)
+    af = json.loads((d / "autofill.json").read_text())
+    assert {"seed", "raw", "result", "n_matches", "id"} <= set(af)
+    assert isinstance(af["id"], str) and body["autofill_id"] == af["id"]
+    for n, m in before.items():
+        assert (d / n).stat().st_mtime_ns == m, n
+
+
+def test_autofill_needs_four_enabled_points(env):
+    demo, c, _ = env
+    r = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo, 3)})
+    assert r.status_code == 400 and "4" in r.json()["detail"]
+
+
+def test_autofill_counts_enabled_points_only(env):
+    demo, c, _ = env
+    seed = _seed(demo, 5)
+    seed[0]["enabled"] = seed[1]["enabled"] = False
+    assert c.post(url(demo, "/autofill"), json={"gcps": seed}).status_code == 400
+    seed = _seed(demo, 6)
+    seed[1]["enabled"] = False   # not seed[0]: the other five would then be collinear
+    r = c.post(url(demo, "/autofill"), json={"gcps": seed})
+    assert r.status_code == 200, r.text
+    off = [g for g in r.json()["gcps"] if g["enabled"] is False]
+    assert len(off) == 1 and off[0]["source"] == "manual"
+
+
+def test_autofill_seeds_from_own_points_not_auto(env):
+    """A sheet that opens with a (bad) automatic transform posts hundreds of auto points;
+    the seed must come from the reviewer's own points only, not reproduce the bad fit."""
+    demo, c, _ = env
+    bad = _gcps(demo.true_gcps)
+    for g in bad:
+        g["source"], g["wx"] = "auto", g["wx"] + 80.0
+    r = c.post(url(demo, "/autofill"), json={"gcps": bad + _seed(demo)})
+    assert r.status_code == 200, r.text
+    sc = r.json()["score"]
+    assert sc["passed"] is True and sc["holdout_p50_ft"] < 7, sc
+    assert len([g for g in r.json()["gcps"] if g["source"] == "manual"]) == 6
+    # refine alone recovers from a constant 80 ft seed error on the demo, so also check
+    # what seeded it: the reviewer's six points, none of the auto ones.
+    seed = json.loads((_sheet_dir_of(demo) / "autofill.json").read_text())["seed"]["gcps"]
+    assert len(seed) == 6 and {g["source"] for g in seed} == {"manual"}
+
+
+def test_autofill_auto_points_do_not_count_toward_minimum(env):
+    demo, c, _ = env
+    auto = _gcps(demo.true_gcps)
+    for g in auto:
+        g["source"] = "auto"
+    r = c.post(url(demo, "/autofill"), json={"gcps": auto + _seed(demo, 3)})
+    assert r.status_code == 400
+    assert r.json()["detail"] == ("auto-fill needs at least 4 enabled points of your own "
+                                  "(auto points don't count)")
+
+
+def test_autofill_without_blocks_is_409(env):
+    demo, c, _ = env
+    (_sheet_dir_of(demo) / "blocks_px.geojson").unlink()
+    r = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert r.status_code == 409 and "run the pipeline" in r.json()["detail"]
+
+
+def test_autofill_degenerate_is_422_and_writes_nothing(env, monkeypatch):
+    from sfzmaps.refine import RefineResult
+    from sfzmaps.transform import GCP, SheetTransform
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    w, h = runner.page_shape(d / "page.png")[::-1]
+    gs = [GCP(px, py, wx, wy, "auto") for (px, py), (wx, wy) in
+          zip([(0, 0), (w, 0), (0, h), (w, h)], [(0, 0), (1, 0), (0, 1), (1, 1)])]
+    t = SheetTransform(gs, config.MANUAL_TPS_SMOOTHING).fit()
+    monkeypatch.setattr(server.refine_mod, "refine", lambda *a, **k: RefineResult(t, [], 1, True))
+    r = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert r.status_code == 422, r.text
+    assert not (d / "autofill.json").exists()
+
+
+def test_preview_autofill_scores_against_autofill_json(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    a = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a.status_code == 200, a.text
+    gcps = [{k: g[k] for k in ("px", "py", "wx", "wy", "source", "enabled")} for g in a.json()["gcps"]]
+    p = c.post(url(demo, "/preview"), json={"gcps": gcps, "autofill": True})
+    assert p.status_code == 200, p.text
+    assert p.json()["score"]["n_scored"] == a.json()["score"]["n_scored"]
+    (d / "refine.json").unlink()
+    p = c.post(url(demo, "/preview"), json={"gcps": gcps, "autofill": True})
+    assert p.status_code == 200, p.text
+    assert p.json()["score"]["n_scored"] == a.json()["score"]["n_scored"]
+
+
+def _strip(gcps):
+    return [{k: g[k] for k in ("px", "py", "wx", "wy", "source", "enabled")} for g in gcps]
+
+
+def test_preview_with_stale_autofill_id_is_409(env):
+    demo, c, _ = env
+    a1 = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a1.status_code == 200, a1.text
+    a2 = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a2.status_code == 200, a2.text
+    id1, id2 = a1.json()["autofill_id"], a2.json()["autofill_id"]
+    assert id1 != id2
+    gcps = _strip(a1.json()["gcps"])
+    p = c.post(url(demo, "/preview"), json={"gcps": gcps, "autofill": id1})
+    assert p.status_code == 409
+    assert p.json()["detail"] == "this auto-fill was replaced; run auto-fill again"
+    assert c.post(url(demo, "/preview"), json={"gcps": gcps, "autofill": id2}).status_code == 200
+
+
+def test_save_with_stale_autofill_id_is_409_and_promotes_nothing(env):
+    demo, c, rebuilt = env
+    d = _sheet_dir_of(demo)
+    a1 = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a1.status_code == 200, a1.text
+    a2 = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a2.status_code == 200, a2.text
+    names = ("rough.json", "refine_raw.json", "refine.json", "review.json", "transform.json")
+    before = {n: (d / n).read_bytes() for n in names if (d / n).exists()}
+    r = c.post(url(demo, "/save"), json={"gcps": _strip(a1.json()["gcps"]), "status": "edited",
+                                         "autofill": a1.json()["autofill_id"]})
+    assert r.status_code == 409, r.text
+    assert {n: (d / n).read_bytes() for n in names if (d / n).exists()} == before
+    assert (d / "autofill.json").exists() and not rebuilt
+
+
+def test_promote_autofill_rechecks_id_and_missing_file(env):
+    from fastapi import HTTPException
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    with pytest.raises(HTTPException) as e:
+        server._promote_autofill(d, True)
+    assert e.value.status_code == 409
+    a = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a.status_code == 200, a.text
+    with pytest.raises(HTTPException) as e:
+        server._promote_autofill(d, "not-the-id")
+    assert e.value.status_code == 409
+
+
+def test_preview_autofill_without_file_is_409(env):
+    demo, c, _ = env
+    r = c.post(url(demo, "/preview"), json={"gcps": _seed(demo), "autofill": True})
+    assert r.status_code == 409
+
+
+def test_autofill_does_not_duplicate_manual_points_refine_kept(env, monkeypatch):
+    """refine._fit appends the seed's non-auto GCPs on sparse sheets; they must not come back twice."""
+    from sfzmaps.refine import RefineResult
+    from sfzmaps.transform import GCP, SheetTransform
+    demo, c, _ = env
+    seed = _seed(demo)
+
+    def fake_refine(corners, ref, s):
+        gs = [GCP(g.px, g.py, g.wx, g.wy, "auto") for g in demo.true_gcps] + \
+             [g for g in s.gcps if g.source != "auto"]
+        ms = [runner._match_load(m) for m in
+              json.loads((_sheet_dir_of(demo) / "refine.json").read_text())["matches"]]
+        return RefineResult(SheetTransform(gs, config.TPS_SMOOTHING).fit(), ms, 1, True)
+
+    monkeypatch.setattr(server.refine_mod, "refine", fake_refine)
+    monkeypatch.setattr(server.refine_mod, "classify_changes", lambda r: r)
+    r = c.post(url(demo, "/autofill"), json={"gcps": seed})
+    assert r.status_code == 200, r.text
+    gcps = r.json()["gcps"]
+    assert len([g for g in gcps if g["source"] == "manual"]) == 6
+    assert len(gcps) == 25 + 6
+
+
+# -- save promotes the auto-fill ------------------------------------------------------------
+
+def _autofill_and_save(demo, c, d, status="edited"):
+    a = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a.status_code == 200, a.text
+    af = json.loads((d / "autofill.json").read_text())
+    gcps = [{k: g[k] for k in ("px", "py", "wx", "wy", "source", "enabled")} for g in a.json()["gcps"]]
+    r = c.post(url(demo, "/save"), json={"gcps": gcps, "status": status,
+                                         "autofill": a.json()["autofill_id"]})
+    return a, af, r
+
+
+def test_save_autofill_promotes_and_matches_preview(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    a, af, r = _autofill_and_save(demo, c, d)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["score"]["passed"] is True
+    assert body["score"]["holdout_p50_ft"] == pytest.approx(body["preview_score"]["holdout_p50_ft"])
+    assert json.loads((d / "refine.json").read_text()) == af["result"]
+    assert json.loads((d / "refine_raw.json").read_text()) == af["raw"]
+    assert json.loads((d / "rough.json").read_text())["seeded_from"] == "editor autofill"
+    m = [(d / n).stat().st_mtime_ns for n in ("rough.json", "refine_raw.json", "refine.json")]
+    assert m == sorted(m)
+    assert not (d / "autofill.json").exists()
+    review = json.loads((d / "review.json").read_text())
+    assert review["autofill"] == {"seed_points": 6, "matches": af["n_matches"]}
+    assert review["smoothing"] == config.TPS_SMOOTHING
+
+
+def test_save_without_autofill_flag_does_not_promote(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    before = (d / "refine.json").read_bytes()
+    a = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a.status_code == 200, a.text
+    r = c.post(url(demo, "/save"), json={"gcps": _gcps(demo.true_gcps), "status": "edited",
+                                         "autofill": False})
+    assert r.status_code == 200, r.text
+    assert (d / "refine.json").read_bytes() == before
+    assert "autofill" not in json.loads((d / "review.json").read_text())
+    assert (d / "autofill.json").exists()
+
+
+def test_force_auto_after_autofill_save_reproduces_refine(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    a, af, r = _autofill_and_save(demo, c, d)
+    assert r.status_code == 200, r.text
+    names = ("rough.json", "refine_raw.json")
+    before = {n: (d / n).stat().st_mtime_ns for n in names}
+    runner.run_sheet(demo.page, demo.ref, force_auto=True)
+    assert {n: (d / n).stat().st_mtime_ns for n in names} == before
+    assert json.loads((d / "transform.json").read_text())["origin"] == "auto"
+    assert json.loads((d / "refine.json").read_text())["matches"] == af["result"]["matches"]
+
+
+def test_front_end_has_autofill_and_current_pass_bar():
+    from pathlib import Path
+
+    static = Path(server.__file__).parent / "static"
+    html = (static / "index.html").read_text(encoding="utf-8")
+    js = (static / "editor.js").read_text(encoding="utf-8")
+    assert 'id="tool-autofill"' in html
+    assert "Auto-fill from my points" in html
+    assert "≤ 7 ft" in html and "≤ 15 ft" in html
+    assert "≤ 5 ft" not in html and "≤ 12 ft" not in html
+    assert "&lt; 7 ft" in html and "&lt; 15 ft" in html
+    assert "/autofill" in js and "autofill: S.autofill" in js
+    assert "autofill_id" in js and "autofilling: false" in js
+    assert "Auto-fill discarded: the sheet or points changed while it ran." in js
+    assert "auto points don't count" in js
+    assert "PASS_P50 = 7" in js and "PASS_P95 = 15" in js
+    assert "above 5 ft" not in js
