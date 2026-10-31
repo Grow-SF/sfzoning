@@ -136,6 +136,18 @@ def _fresh_pull(data, tmp_path, monkeypatch):
     return new, src
 
 
+def test_pull_restores_the_explorers_shared_files(data, tmp_path, monkeypatch):
+    wanted = [f"out/shared/{n}" for n in ("districts.json", "districts-x.pmtiles", "districts-x.table.gz",
+                                          "districts-x.cards.json.gz", "districts-x.counts.json")]
+    for rel in wanted:
+        _w(data, rel, rel.encode())
+    _w(data, "out/shared/districts-x.tmp.gpkg", b"a build in progress")
+    new, _ = _fresh_pull(data, tmp_path, monkeypatch)
+    for rel in wanted:
+        assert (new / rel).read_bytes() == rel.encode()
+    assert not (new / "out/shared/districts-x.tmp.gpkg").exists()
+
+
 def _republish(data, src, rel, text, monkeypatch, new):
     (data / rel).write_text(text)
     monkeypatch.setattr(config, "DATA_DIR", data)
