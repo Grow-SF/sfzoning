@@ -10,14 +10,14 @@ const TILES = (process.env.NEXT_PUBLIC_TILES_BASE_URL ?? "http://127.0.0.1:8787"
 test("page loads with a map canvas and story text", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("canvas").first()).toBeAttached();
-  await expect(page.getByRole("heading", { name: /How San Francisco was zoned/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /A History of San Francisco’s Zoning/ })).toBeVisible();
 });
 
-test("a draft build shows the banner and asks search engines not to index", async ({ page }) => {
+test("pages carry no draft banner and let search engines index them", async ({ page }) => {
   for (const path of ["/", "/about"]) {
     await page.goto(path);
-    await expect(page.getByTestId("draft-banner")).toBeVisible();
-    await expect(page.locator('meta[name="robots"]')).toHaveAttribute("content", /noindex.*nofollow/);
+    await expect(page.getByText("Do not publish")).toHaveCount(0);
+    await expect(page.locator('meta[name="robots"][content*="noindex"]')).toHaveCount(0);
   }
   await expect(page.getByTestId("review-status")).toContainText("published for the eras whose maps have been read so far");
   await expect(page.getByTestId("review-status")).not.toContainText("still to come");
@@ -27,7 +27,7 @@ test("tile server down: notice appears and text still renders", async ({ page })
   await page.route(`${TILES}/**`, (r) => r.abort());
   await page.goto("/");
   await expect(page.locator("[data-active-step] .map-notice")).toContainText("could not be loaded");
-  await expect(page.getByRole("heading", { name: /How San Francisco was zoned/ })).toBeVisible();
+  await expect(page.getByRole("heading", { name: /A History of San Francisco’s Zoning/ })).toBeVisible();
 });
 
 test("every 1948 step shows the Rumsey credit, and other steps do not", async ({ page }) => {

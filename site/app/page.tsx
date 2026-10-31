@@ -1,5 +1,4 @@
 import Credits, { SOURCE_URL } from "@/components/Credits";
-import DraftBanner from "@/components/DraftBanner";
 import Sources from "@/components/Sources";
 import Story from "@/components/Story";
 import Explorer from "@/components/Explorer";
@@ -10,7 +9,6 @@ import styles from "@/components/endmatter.module.css";
 export default function Home() {
   return (
     <main>
-      <DraftBanner />
       <Story steps={STORY} />
       <Explorer />
       <footer className={styles.endmatter}>
