@@ -29,13 +29,14 @@ def _dists(median, p95, n=100):
 
 
 def test_pass_rule_boundaries():
-    assert (config.PASS_MEDIAN_FT, config.PASS_P95_FT) == (5.0, 12.0)
-    s = score.score(_result(_dists(5.0, 12.0)))
-    assert s.holdout_p50_ft == 5.0 and s.holdout_p95_ft == 12.0
+    assert (config.PASS_MEDIAN_FT, config.PASS_P95_FT) == (7.0, 15.0)   # owner, 2026-10-30
+    m, p = config.PASS_MEDIAN_FT, config.PASS_P95_FT
+    s = score.score(_result(_dists(m, p)))
+    assert s.holdout_p50_ft == m and s.holdout_p95_ft == p
     assert s.passed and s.reason is None
-    s = score.score(_result(_dists(5.01, 12.0)))
+    s = score.score(_result(_dists(m + 0.01, p)))
     assert not s.passed and s.reason == "holdout_median"
-    s = score.score(_result(_dists(5.0, 12.01)))
+    s = score.score(_result(_dists(m, p + 0.01)))
     assert not s.passed and s.reason == "holdout_p95"
 
 
@@ -43,8 +44,8 @@ def test_insample_fields_are_display_only():
     # 95% within 6 ft no longer decides anything
     s = score.score(_result([1.0] * 60 + [11.0] * 40))
     assert s.insample_frac_within == 0.6 and s.passed
-    s = score.score(_result([6.0] * 50))
-    assert s.insample_frac_within == 1.0 and not s.passed and s.reason == "holdout_median"
+    s = score.score(_result([config.PASS_MEDIAN_FT + 1.0] * 50))
+    assert not s.passed and s.reason == "holdout_median"
 
 
 def test_score_too_few_matches():
@@ -229,31 +230,35 @@ def test_pass_limits_scale_with_coarse_scans():
     assert config.PASS_REF_FT_PER_PX == 2.7
     k, l50, l95 = score.pass_limits(4.0)
     assert k == pytest.approx(4.0 / 2.7)
-    assert l50 == pytest.approx(5.0 * 4.0 / 2.7) and l95 == pytest.approx(12.0 * 4.0 / 2.7)
+    assert l50 == pytest.approx(config.PASS_MEDIAN_FT * 4.0 / 2.7)
+    assert l95 == pytest.approx(config.PASS_P95_FT * 4.0 / 2.7)
 
 
-def test_coarse_sheet_with_7ft_median_passes():
-    s = score.score(_result(_dists(7.0, 15.0)), ft_per_px=4.0)
+def test_coarse_sheet_gets_scaled_limits():
+    k = 4.0 / 2.7
+    s = score.score(_result(_dists(config.PASS_MEDIAN_FT * k, config.PASS_P95_FT * k)), ft_per_px=4.0)
     assert s.passed is True and s.reason is None
-    assert s.ft_per_px == 4.0 and s.pass_scale_k == pytest.approx(4.0 / 2.7)
-    assert s.pass_median_limit_ft == pytest.approx(7.407, abs=1e-3)
-    assert s.pass_p95_limit_ft == pytest.approx(17.778, abs=1e-3)
+    assert s.ft_per_px == 4.0 and s.pass_scale_k == pytest.approx(k)
+    assert s.pass_median_limit_ft == pytest.approx(config.PASS_MEDIAN_FT * k)
+    assert s.pass_p95_limit_ft == pytest.approx(config.PASS_P95_FT * k)
 
 
 def test_fine_sheet_uses_k_1():
-    s = score.score(_result(_dists(5.5, 10.0)), ft_per_px=2.5)
-    assert s.pass_scale_k == 1.0 and s.pass_median_limit_ft == 5.0 and s.pass_p95_limit_ft == 12.0
+    s = score.score(_result(_dists(config.PASS_MEDIAN_FT + 0.5, 10.0)), ft_per_px=2.5)
+    assert s.pass_scale_k == 1.0
+    assert (s.pass_median_limit_ft, s.pass_p95_limit_ft) == (config.PASS_MEDIAN_FT, config.PASS_P95_FT)
     assert s.passed is False and s.reason == "holdout_median"
 
 
 def test_scaled_boundary():
-    fpp = 3.24                       # k = 1.2: limits 6 ft and 14.4 ft
+    fpp = 3.24                       # k = 1.2
     k, l50, l95 = score.pass_limits(fpp)
-    assert (k, l50, l95) == pytest.approx((1.2, 6.0, 14.4))
+    assert (k, l50, l95) == pytest.approx((1.2, 1.2 * config.PASS_MEDIAN_FT, 1.2 * config.PASS_P95_FT))
     assert score.score(_result(_dists(l50, l95)), ft_per_px=fpp).passed is True
     assert score.score(_result(_dists(l50 + 0.01, l95)), ft_per_px=fpp).reason == "holdout_median"
     assert score.score(_result(_dists(l50, l95 + 0.01)), ft_per_px=fpp).reason == "holdout_p95"
-    assert score.score(_result(_dists(5.0, 12.0)), ft_per_px=2.7).passed is True   # k = 1 exactly
+    assert score.score(_result(_dists(config.PASS_MEDIAN_FT, config.PASS_P95_FT)),
+                       ft_per_px=2.7).passed is True   # k = 1 exactly
 
 
 def test_unknown_scale_uses_k_1():

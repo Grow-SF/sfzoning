@@ -41,6 +41,7 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 | `edit [--year S] [--sheet ID]` | Start the control-point editor on 127.0.0.1:8765 (`--demo` for a synthetic sheet). |
 | `bundle` | Write the processed files into `data/share/` as zips plus `PROCESSED.json`, for copying by hand into the Drive folder `old-planning-maps/processed/`. |
 | `pull` | Download the processed zips from the public Drive `processed/` folder and extract them into `data/`. The `processed/` folder must be shared as "Anyone with the link" (Viewer); `pull` uses Drive's public download, so a private folder gives an error page, which `pull` rejects. |
+| `crossref --year S` / `--all` | Re-place flagged sheets by matching each to the same printed sheet number in another edition that passed (SIFT + RANSAC on the drawings, composed with that sheet's transform), then rerun refine and score. A result is kept only if it scores better; otherwise the sheet's files are restored. Republishes improved series (`--no-publish` to skip). No API calls. |
 | `eval --year 1948\|1960` | Per-sheet score next to the distance from our transform to the owner's manual `.points` (the answer key). |
 | `estimate --year S` / `--all` | Estimate API calls, tokens and USD for the uncached pages (no API calls). It is an estimate: image tokens use OpenAI's patch formula, prompt text is a flat `config.EST_TEXT_TOKENS_PER_CALL` (~350) per call, and output is a flat `EST_OUT_TOKENS` per call. |
 | `calibrate --year S --sheet ID` | Find the smallest label-reading scale that keeps 95% of full-resolution recall. |
@@ -75,8 +76,8 @@ as `review.json.pulled`). It also keeps that sheet's `transform.json`, `score.js
 A sheet **passes** when, measured on **held-out blocks** (blocks left out of the
 warp fit, 5 folds):
 
-- median corner error ≤ `PASS_MEDIAN_FT × k` (5 ft × k), and
-- 95th-percentile corner error ≤ `PASS_P95_FT × k` (12 ft × k), and
+- median corner error ≤ `PASS_MEDIAN_FT × k` (7 ft × k), and
+- 95th-percentile corner error ≤ `PASS_P95_FT × k` (15 ft × k), and
 - the sheet is not misplaced, the fit converged, placement was unambiguous, at
   least 40 corners were scored, and real change is at most 15% of matches.
 
@@ -85,14 +86,20 @@ pixels, and the 1980+ PDFs are coarse office-copier scans (~4 ft/px against
 ~2.7 ft/px for 1929–75). So `k = max(1, ft_per_px / 2.7)`
 (`config.PASS_REF_FT_PER_PX`), where `ft_per_px` is the sheet's final transform
 scale (the median local scale over the page). A 4 ft/px sheet passes at median
-≤ 7.4 ft and p95 ≤ 17.8 ft. Each `score.json` records `ft_per_px`, `pass_scale_k`,
+≤ 10.4 ft and p95 ≤ 22.2 ft.
+
+**Bar history (owner's decisions).** 5 ft / 12 ft on 2026-10-29; relaxed to
+7 ft / 15 ft on 2026-10-30, once the zoning colors followed today's lot lines,
+because the sheets between 5 and 7 ft (at most 4 screen pixels at z18) didn't
+look misaligned. Each `score.json` records `ft_per_px`, `pass_scale_k`,
 `pass_median_limit_ft` and `pass_p95_limit_ft`. The review page and the editor
 show the limit that was actually applied.
 
 Every other map sheet is `needs_review`, with the first failing reason
 (`misplaced`, `not_converged`, `ambiguous_placement`, `too_few_matches`,
 `excess_real_change`, `holdout_median`, `holdout_p95`, `insufficient_anchors`, or
-`error: ...`). Non-map pages (covers, text, indexes, legends) are skipped and keep
+`error: ...`). `sfzmaps crossref` retries flagged sheets by matching them to the
+same sheet in another edition that passed; see the commands table. Non-map pages (covers, text, indexes, legends) are skipped and keep
 their kind in `page.json`.
 
 ## Where outputs land

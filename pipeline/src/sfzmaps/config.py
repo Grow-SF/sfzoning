@@ -14,10 +14,13 @@ OUT_DIR = DATA_DIR / "out"
 WORK_CRS = "EPSG:2227"
 TOLERANCE_FT = 6.0  # kept at 6 after Task 13 tuning (see the tuning notes)
 PASS_FRACTION = 0.95  # superseded as the pass rule (owner, 2026-10-29); TOLERANCE_FT stays for display
-# Pass rule (owner, 2026-10-29): on held-out blocks, median <= PASS_MEDIAN_FT and
-# p95 <= PASS_P95_FT, and the sheet is not misplaced (sfzmaps.score).
-PASS_MEDIAN_FT = 5.0
-PASS_P95_FT = 12.0
+# Pass rule: on held-out blocks, median <= PASS_MEDIAN_FT and p95 <= PASS_P95_FT, and the
+# sheet is not misplaced (sfzmaps.score). Owner, 2026-10-29: 5 / 12 ft. Relaxed by the owner on
+# 2026-10-30 to 7 / 15 ft: the zoning colours now follow today's lot lines, so scan precision
+# only affects how the paper scans sit, and the 36 sheets between 5 and 7 ft (at most 4 screen
+# px at z18) were flagged without looking misaligned.
+PASS_MEDIAN_FT = 7.0
+PASS_P95_FT = 15.0
 # Scale-aware pass bar (owner, 2026-10-29): corner error is roughly constant in scan pixels,
 # and the 1980+ office-copier scans are coarser (~4 ft/px vs ~2.7 ft/px for 1929-75). Both
 # limits are multiplied by k = max(1, ft_per_px / PASS_REF_FT_PER_PX), where ft_per_px is
@@ -146,7 +149,7 @@ def estimate_image_tokens(w: int, h: int) -> int:
 
 # score.json format/logic version: bump whenever pass or answer-key-fallback logic changes;
 # a score.json with a missing or lower version is stale and rescored.
-SCORE_VERSION = 5  # 3: Task 13c misplacement rule (label failure needs weak geometry)
+SCORE_VERSION = 6  # 6: pass bar 7 / 15 ft (owner, 2026-10-30); 3: Task 13c misplacement rule (label failure needs weak geometry)
                    # 4: scale-aware pass limits (PASS_REF_FT_PER_PX)
                    # 5: review held-out refits on the review's own GCPs; answer-key pixels
                    #    shifted to pixel centers (rewrites misplaced-fallback key transforms)
