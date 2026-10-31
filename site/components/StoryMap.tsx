@@ -178,6 +178,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   /** The lot number behind selectedBlklot, in the shared shapes. */
   const selectedLot = useRef<number | null>(null);
   const clicks = useRef(0);
+  const paintedEra = useRef(initial.era);
   const clickRef = useRef(onParcelClick);
   /** Sources that failed to load ("blocks", "scan-<series>", or "maplibre" itself). */
   const [failedSources, setFailedSources] = useState<ReadonlySet<string>>(() => new Set());
@@ -199,8 +200,12 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   const paint = useCallback((s: MapState) => {
     const map = mapRef.current;
     if (!map || !readyRef.current) return;
-    const instant = reducedMotion();
-    const fade = { duration: instant ? 0 : FADE_MS, delay: 0 };
+    // In the explorer a new year replaces the last at once, so the eye can compare the two. A fade
+    // shows a blend of both that neither map ever drew. The story's fades are part of its pacing.
+    const newYear = interactive && paintedEra.current !== s.era;
+    paintedEra.current = s.era;
+    const instant = reducedMotion() || newYear;
+    const fade ={ duration: instant ? 0 : FADE_MS, delay: 0 };
     // Only the current era's scan and the prefetch era's are visible (MapLibre loads tiles for
     // every visible layer, even at zero opacity). A scan's source is added the first time it is
     // needed, so eras the reader never reaches cost no requests at all.

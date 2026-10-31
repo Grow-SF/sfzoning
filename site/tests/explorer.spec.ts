@@ -317,9 +317,12 @@ test("a year looks the same when you come back to it", async ({ page }) => {
   const first = await canvas.screenshot();
   await explorer.getByRole("slider", { name: "Year" }).focus();
   await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(100);
+  const right_away = await canvas.screenshot();
   await page.waitForTimeout(900);
   const next = await canvas.screenshot();
   expect(next.equals(first), "another year looks different").toBe(false);
+  expect(right_away.equals(next), "the new year appears at once, with no blend of the two").toBe(true);
   await page.keyboard.press("ArrowLeft");
   await page.waitForTimeout(900);
   expect((await canvas.screenshot()).equals(first), "the same year looks the same").toBe(true);
