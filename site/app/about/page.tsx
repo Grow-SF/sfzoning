@@ -91,28 +91,33 @@ export default function About() {
           about ±4 feet at a street corner, so that is roughly the floor.
         </p>
         <p>
-          A sheet passes when half its corners land within 5 feet and 95% within 12 feet. Coarser scans get a
+          A sheet passes when half its corners land within 7 feet and 95% within 15 feet. Coarser scans get a
           proportionally looser bar: the 1980-and-later maps are office-copier scans at about 4 feet per pixel, and
-          pass at about 7½ and 18 feet. A sheet also fails if it looks misplaced or the fit didn’t settle.
+          pass at about 10 and 22 feet. A sheet also fails if it looks misplaced or the fit didn’t settle.
         </p>
         <ul className={styles.figures} aria-label="Alignment results">
           <li>
             <strong>369</strong>map sheets
           </li>
           <li>
-            <strong>286</strong>passed automatically
+            <strong>334</strong>passed automatically
           </li>
           <li>
-            <strong>83</strong>flagged for review
+            <strong>35</strong>flagged for review
           </li>
           <li>
             <strong>4–6 ft</strong>typical median error
           </li>
         </ul>
         <p>
-          Of the 83 flagged sheets, 26 had too few readable labels to place at all; they are missing from the maps
-          until someone places them by hand. The rest appear, but may be off by more than the bar. Zoning boundaries
-          will later be snapped to modern lot lines, which no warp of a hand-drawn map can match.
+          Most map books reuse the same base sheets from edition to edition, so a sheet that can&rsquo;t be placed
+          from its own labels is matched against the same sheet in another edition that was placed, and checked
+          against the same bar. Of the 35 sheets still flagged, 26 couldn&rsquo;t be placed at all; they are missing
+          from the maps until someone places them by hand. The rest appear, but may be off by more than the bar.
+        </p>
+        <p>
+          The colors showing what each district allowed don&rsquo;t depend on this precision: each lot is colored by
+          the district the historic map shows for it, using today&rsquo;s lot lines.
         </p>
       </section>
 
