@@ -69,8 +69,8 @@ def test_eval_table(workdir):
     lines = evaluate.format_eval_table(rows).splitlines()
     assert lines[0].split()[:5] == ["sheet", "pass", "reason", "ho_p50", "ho_p95"]
     one = lines[1].split()
-    assert one[:15] == ["1", "yes", "-", "3.0", "8.0", "5.0", "12.0", "2.0", "5.5", "0.97", "100", "3",
-                        "7", "0.80", "0.50"]
+    assert one[:15] == ["1", "yes", "-", "3.0", "8.0", f"{config.PASS_MEDIAN_FT:.1f}", f"{config.PASS_P95_FT:.1f}",
+                        "2.0", "5.5", "0.97", "100", "3", "7", "0.80", "0.50"]
     assert one[15:19] == ["auto", "3", "3.0", "4.0"]
     assert "holdout_median" in lines[2] and "no answer key" in lines[2]
     assert lines[-1].startswith("passed 1/2; median held-out p50 4.5 ft, p95 8.0 ft (in-sample p95 5.5 ft); "
@@ -171,4 +171,5 @@ def test_eval_summary_prints_scaled_limits(workdir):
     (d / "score.json").write_text(json.dumps({**SCORE, "pass_median_limit_ft": 7.4,
                                               "pass_p95_limit_ft": 17.8, "pass_scale_k": 1.48}))
     last = evaluate.format_eval_table(evaluate.evaluate_series("1948", workdir)).splitlines()[-1]
-    assert "held-out median <= 5.0-7.4 ft and p95 <= 12.0-17.8 ft" in last
+    lo50, lo95 = config.PASS_MEDIAN_FT, config.PASS_P95_FT     # sheet 1 keeps the default limits
+    assert f"held-out median <= {lo50:.1f}-7.4 ft and p95 <= {lo95:.1f}-17.8 ft" in last

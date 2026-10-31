@@ -629,12 +629,23 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
     # warp
     if tj.exists():
         stage("warp", wt, [tj, pj, png, Path(warp.__file__)],  # warp.py: code change re-warps
-              lambda: warp.warp_sheet(png, SheetTransform.from_json(json.loads(tj.read_text())),
-                                      info().mask_boxes, wt))
+              lambda: _warp_checked(png, SheetTransform.from_json(json.loads(tj.read_text())),
+                                    info().mask_boxes, wt))
     else:
         wt.unlink(missing_ok=True)
         last_timings["warp"] = None
     return score_val
+
+
+def _warp_checked(png: Path, t: SheetTransform, mask_boxes, out: Path, paper: bool = False) -> Path:
+    """warp.warp_sheet, after SheetTransform.check_warpable: a degenerate transform fails in
+    seconds instead of starting a warp that never finishes."""
+    img = cv2.imread(str(png), cv2.IMREAD_UNCHANGED)
+    if img is None:
+        raise RuntimeError(f"cannot read {png}")
+    t.check_warpable(img.shape[:2])
+    return warp.warp_sheet(png, t, mask_boxes, out, paper=True) if paper else \
+        warp.warp_sheet(png, t, mask_boxes, out)
 
 
 def clear_outputs(d: Path, sc: SheetScore) -> None:

@@ -62,7 +62,11 @@ _CONVERGED_PX = 0.1
 _MIN_COND = 1e-6
 
 
+# SheetTransform.check_warpable: any real scan's ft/px lies well inside this range.
+WARPABLE_FT_PER_PX = (0.05, 200.0)   # real scans 1.9-9.2; tests use 0.4; the broken fit was 0.0005
+
 @dataclass
+
 class GCP:
     px: float
     py: float
@@ -206,6 +210,16 @@ class SheetTransform:
         W = self.to_world(P)
         return [GCP(float(p[0]), float(p[1]), float(q[0]), float(q[1]), "auto")
                 for p, q in zip(P, W)]
+
+    def check_warpable(self, shape: tuple[int, int]) -> float:
+        """The transform's ft/px over a page of `shape`; raises if it is outside
+        WARPABLE_FT_PER_PX. Every real scan is 1.9-9.2 ft/px; anything else is a degenerate
+        transform, and warping it would build an enormous (or empty) raster."""
+        res = self.median_scale_ft_per_px(shape)
+        lo, hi = WARPABLE_FT_PER_PX
+        if not (lo <= res <= hi):
+            raise RuntimeError(f"transform scale {res:.4g} ft/px is outside {lo}-{hi}; refusing to warp")
+        return res
 
     def median_scale_ft_per_px(self, shape: tuple[int, int], step: int = 150) -> float:
         """Median world distance (ft) per pixel between adjacent dense-grid points over (h, w)."""

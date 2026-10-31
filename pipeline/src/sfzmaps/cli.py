@@ -1,4 +1,5 @@
 import json
+import math
 from pathlib import Path
 
 import cv2
@@ -238,7 +239,7 @@ def paper(
 ) -> None:
     """Warp every placed sheet as it looks on paper (opaque, untouched RGB) and publish
     out/<series>/<series>-paper.pmtiles, the layer the site shows as "the map as drawn"."""
-    from sfzmaps import reading, stitch, tiles as tiles_mod, warp
+    from sfzmaps import reading, runner, stitch, tiles as tiles_mod, warp
     from sfzmaps.transform import SheetTransform
 
     if not year and not all_:
@@ -254,8 +255,8 @@ def paper(
             srcs = [tj, png, pj, Path(warp.__file__)]
             if not force and out.exists() and all(out.stat().st_mtime_ns >= p.stat().st_mtime_ns for p in srcs):
                 continue
-            warp.warp_sheet(png, SheetTransform.from_json(json.loads(tj.read_text())),
-                            reading.load_page(pj).mask_boxes, out, paper=True)
+            runner._warp_checked(png, SheetTransform.from_json(json.loads(tj.read_text())),
+                                 reading.load_page(pj).mask_boxes, out, paper=True)
             n += 1
         try:
             vrt = stitch.build_vrt(series, paper=True)
@@ -376,6 +377,99 @@ def districts(
         for s, msg in failures:
             typer.echo(f"  {s}: {msg[:300]}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def crossref(
+    year: str = typer.Option(None, "--year", help="Series, e.g. 1972."),
+    all_: bool = typer.Option(False, "--all", help="Every series with flagged sheets."),
+    sheet: str = typer.Option(None, "--sheet", help="Only this sheet id."),
+    max_refs: int = typer.Option(4, "--max-refs", help="Passing counterparts to try per sheet."),
+    publish: bool = typer.Option(True, "--publish/--no-publish", help="Republish improved series."),
+) -> None:
+    """Re-place flagged sheets by matching them to the same sheet in another edition that
+    passed (sfzmaps.crossref); keep a result only if it scores better. No API calls."""
+    import logging
+    import shutil
+
+    from sfzmaps import crossref as xr, manifest, pages, reading, runner, stitch
+    from sfzmaps.sources import datasf
+
+    if not (year or all_):
+        raise typer.BadParameter("pass --year Y or --all")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    ref = datasf.load_reference()
+    allp = pages.discover()
+    by_key = {(p.series, p.sheet_id): p for p in allp}
+    numbers: dict[tuple[str, str], str | None] = {}
+    passed: set[tuple[str, str]] = set()
+    flagged: dict[str, list[str]] = {}
+    for d in sorted(config.WORK_DIR.glob("*/*/page.json")):
+        series, sid = d.parent.parent.name, d.parent.name
+        info = reading.load_page(d)
+        if info.kind != "map":
+            continue
+        numbers[(series, sid)] = info.sheet_number
+    for series in sorted({s for s, _ in numbers}):
+        for sid, sc in stitch.load_scores(series).items():
+            st = manifest.status_of(series, sid, sc)
+            if st != "needs_review":
+                if (config.WORK_DIR / series / sid / "transform.json").exists():
+                    passed.add((series, sid))
+            elif not str(sc.reason or "").startswith(("skipped", "error")) \
+                    and not (config.WORK_DIR / series / sid / "review.json").exists():
+                flagged.setdefault(series, []).append(sid)
+    todo = sorted(flagged) if all_ else [year]
+    summary: list[str] = []
+
+    def say(line: str) -> None:   # each sheet's outcome as soon as it's known
+        summary.append(line)
+        typer.echo(line)
+    for series in todo:
+        kept = 0
+        for sid in flagged.get(series, []):
+            if sheet and sid != sheet:
+                continue
+            d = config.WORK_DIR / series / sid
+            old = stitch.load_scores(series).get(sid)
+            cands = xr.candidates(series, numbers.get((series, sid)), passed, numbers)[:max_refs]
+            best = None
+            for rs, rid in cands:
+                m = xr.match(d, config.WORK_DIR / rs / rid)
+                if m and (best is None or m[1] > best[2]):
+                    best = (rs, rid, m[1], m[0])
+            if best is None:
+                say(f"{series}/{sid} #{numbers.get((series, sid))}: no matching edition "
+                               f"({len(cands)} tried)")
+                continue
+            rs, rid, n, H = best
+            t = xr.composed_transform(d, config.WORK_DIR / rs / rid, H)
+            if t is None:
+                say(f"{series}/{sid}: match with {rs}/{rid} left too little overlap")
+                continue
+            saved = xr.backup(d)
+            (d / "rough.json").write_text(json.dumps({
+                "transform": runner._transform_json(t, "crossref"), "scale_hint_ft_per_px": None,
+                "crossref": {"series": rs, "sheet": rid, "inliers": n}}))
+            # refine + score only; the sheet is warped only if the result is kept
+            new = runner.run_sheet(by_key[(series, sid)], ref, until="score")
+            was = "unplaced" if old is None or not math.isfinite(old.holdout_p50_ft) else \
+                f"{old.reason or 'pass'} {old.holdout_p50_ft:.1f} ft"
+            now = f"{'pass' if new.passed else new.reason} {new.holdout_p50_ft:.1f} ft"
+            if xr.better(old, new):
+                shutil.rmtree(saved, ignore_errors=True)
+                runner.run_sheet(by_key[(series, sid)], ref)   # warp (the rest is fresh)
+                kept += 1
+                say(f"{series}/{sid}: KEPT via {rs}/{rid} ({n} matches): {was} -> {now}")
+            else:
+                xr.restore(d, saved)
+                say(f"{series}/{sid}: not better via {rs}/{rid} ({n} matches): "
+                               f"{was} vs {now}")
+        if kept and publish and not sheet:
+            _publish(series)
+            paper(year=series, all_=False, min_zoom=11, max_zoom=18, force=False)
+    kept_n = sum(" KEPT " in x for x in summary)
+    typer.echo(f"done: {kept_n} kept of {len(summary)} flagged sheets tried" if summary else "nothing flagged")
 
 
 @app.command("eval")
