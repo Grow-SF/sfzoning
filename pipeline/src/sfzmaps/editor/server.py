@@ -463,17 +463,21 @@ def _sheet_extent(d: Path) -> list[float] | None:
 def blocks_geojson(series: str, sheet_id: str, layer: Literal["blocks", "streets"] = "blocks") -> JSONResponse:
     """Modern DataSF block outlines (or street centerlines) near the sheet, as WGS84 GeoJSON
     for the editor's map pane. Used because the blocks PMTiles is not served. Empty when the
-    reference or the sheet's extent is unavailable."""
+    reference is unavailable. A sheet with no control points yet gets the whole city, uncapped,
+    so the reviewer can find where to place the first ones."""
     d = _sheet_dir(series, sheet_id)
     empty = {"type": "FeatureCollection", "features": []}
     ref, ext = _get_ref(), _sheet_extent(d)
     gdf = None if ref is None else (ref.blocks if layer == "blocks" else ref.streets)
-    if gdf is None or ext is None or len(gdf) == 0:
+    if gdf is None or len(gdf) == 0:
         return JSONResponse(empty)
-    from shapely.geometry import box
-    pad = BLOCKS_PAD_FT
-    sel = gdf[gdf.intersects(box(ext[0] - pad, ext[1] - pad, ext[2] + pad, ext[3] + pad))]
-    sel = sel.iloc[:BLOCKS_MAX_FEATURES]
+    if ext is None:
+        sel = gdf
+    else:
+        from shapely.geometry import box
+        pad = BLOCKS_PAD_FT
+        sel = gdf[gdf.intersects(box(ext[0] - pad, ext[1] - pad, ext[2] + pad, ext[3] + pad))]
+        sel = sel.iloc[:BLOCKS_MAX_FEATURES]
     if len(sel) == 0:
         return JSONResponse(empty)
     cols = ["block_num"] if layer == "blocks" and "block_num" in sel.columns else []

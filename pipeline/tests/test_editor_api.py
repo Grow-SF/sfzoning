@@ -312,6 +312,16 @@ def test_blocks_geojson_streets_empty_and_404(env):
     assert c.get("/api/sheet/demo/nope/blocks.geojson").status_code == 404
 
 
+def test_blocks_geojson_unplaced_sheet_gets_whole_city(env):
+    # a sheet with no control points yet (the one a reviewer most needs the map for)
+    demo, c, _ = env
+    d = demo.work_dir / demo.series / demo.sheet_id
+    for n in ("transform.json", "refine.json"):
+        (d / n).unlink()
+    fc = c.get(url(demo, "/blocks.geojson")).json()
+    assert len(fc["features"]) == len(demo.ref.blocks)
+
+
 def test_blocks_geojson_without_reference(env, monkeypatch):
     demo, c, _ = env
     monkeypatch.setattr(server, "_get_ref", lambda: None)
