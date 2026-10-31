@@ -418,6 +418,16 @@ def pattern_prompt(n: int, codes: list[str], names: dict[str, str] | None = None
         "confidence = 0 to 1.")
 
 
+def _tile_context(swatches: dict[str, np.ndarray], codes: list[str],
+                  names: dict[str, str] | None, year: int | None) -> str:
+    """What a tile's answer depends on besides its pixels: the legend strip and the prompt."""
+    import hashlib
+
+    strip = np.ascontiguousarray(build_mosaic([], swatches)[0])
+    return (hashlib.sha256(strip.tobytes()).hexdigest() + "\0" + pattern_prompt(0, codes, names, year)
+            + "\0" + json.dumps(PatternResult.model_json_schema(), sort_keys=True))
+
+
 def _uniform(stats: np.ndarray) -> bool:
     med = np.median(stats, axis=0)
     tol = TOL[:stats.shape[1]] if stats.shape[1] <= len(TOL) else \
@@ -462,22 +472,39 @@ def classify(parcels_with_crops: pd.DataFrame, swatches: dict[str, np.ndarray], 
     code = [None] * len(df)
     conf = [0.0] * len(df)
     via = ["no_tile"] * len(df)
-    batches = [items[b0:b0 + MAX_TILES] for b0 in range(0, len(items), MAX_TILES)]
+    ctx = _tile_context(swatches, codes, names, year)
+    tiles = [_as_tile(c, TILE_PX) for c, _, _ in items]
+    keys = [llm.tile_key(t, ctx) for t in tiles]
+    answers: list[tuple[str, float] | None] = [None] * len(items)    # raw (code, confidence)
+    for n, k in enumerate(keys):
+        hit = llm.tile_get(k)
+        if hit is not None:
+            try:
+                answers[n] = (str(hit["code"]), float(hit["confidence"]))
+            except (KeyError, TypeError, ValueError):     # not a pattern answer: a miss
+                pass
+    todo = [n for n, a in enumerate(answers) if a is None]
+    batches = [todo[b0:b0 + MAX_TILES] for b0 in range(0, len(todo), MAX_TILES)]
 
     def ask(batch):
-        img, numbers = build_mosaic([c for c, _, _ in batch], swatches)
+        img, numbers = build_mosaic([items[n][0] for n in batch], swatches)
         prompt = pattern_prompt(len(batch), codes, names, year)
         res = llm.ask_json(cv2.cvtColor(img, cv2.COLOR_RGB2BGR), prompt, PatternResult, client=client)
         return numbers, res
 
-    for batch, (numbers, res) in zip(batches, llm.pmap(ask, batches, workers)):
-        by_index = {it.index: it for it in res.items}
-        for num, (_, rows, kind) in zip(numbers, batch):
-            it = by_index.get(num)
-            c = _match_code(it.code, codes) if it else None
-            f = float(np.clip(it.confidence, 0, 1)) * (BLOCK_FACTOR if kind == "block" else 1.0) if c else 0.0
-            for r in rows:
-                code[r], conf[r], via[r] = c, f, kind
+    if batches:
+        for batch, (numbers, res) in zip(batches, llm.pmap(ask, batches, workers)):
+            by_index = {it.index: it for it in res.items}
+            for num, n in zip(numbers, batch):
+                it = by_index.get(num)
+                if it is not None:
+                    answers[n] = (it.code, it.confidence)
+                    llm.tile_put(keys[n], {"code": it.code, "confidence": it.confidence})
+    for ans, (_, rows, kind) in zip(answers, items):
+        c = _match_code(ans[0], codes) if ans else None
+        f = float(np.clip(ans[1], 0, 1)) * (BLOCK_FACTOR if kind == "block" else 1.0) if c else 0.0
+        for r in rows:
+            code[r], conf[r], via[r] = c, f, kind
     return pd.DataFrame({"blklot": df["blklot"], "code": pd.Series(code, dtype=object),
                          "confidence": conf, "via": via})
 
