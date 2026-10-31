@@ -575,3 +575,57 @@ def test_autofill_does_not_duplicate_manual_points_refine_kept(env, monkeypatch)
     gcps = r.json()["gcps"]
     assert len([g for g in gcps if g["source"] == "manual"]) == 6
     assert len(gcps) == 25 + 6
+
+
+# -- save promotes the auto-fill ------------------------------------------------------------
+
+def _autofill_and_save(demo, c, d, status="edited"):
+    a = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a.status_code == 200, a.text
+    af = json.loads((d / "autofill.json").read_text())
+    gcps = [{k: g[k] for k in ("px", "py", "wx", "wy", "source", "enabled")} for g in a.json()["gcps"]]
+    r = c.post(url(demo, "/save"), json={"gcps": gcps, "status": status, "autofill": True})
+    return a, af, r
+
+
+def test_save_autofill_promotes_and_matches_preview(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    a, af, r = _autofill_and_save(demo, c, d)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["score"]["passed"] is True
+    assert body["score"]["holdout_p50_ft"] == pytest.approx(body["preview_score"]["holdout_p50_ft"])
+    assert json.loads((d / "refine.json").read_text()) == af["result"]
+    assert json.loads((d / "refine_raw.json").read_text()) == af["raw"]
+    assert json.loads((d / "rough.json").read_text())["seeded_from"] == "editor autofill"
+    m = [(d / n).stat().st_mtime_ns for n in ("rough.json", "refine_raw.json", "refine.json")]
+    assert m == sorted(m)
+    assert not (d / "autofill.json").exists()
+    review = json.loads((d / "review.json").read_text())
+    assert review["autofill"] == {"seed_points": 6, "matches": af["n_matches"]}
+    assert review["smoothing"] == config.TPS_SMOOTHING
+
+
+def test_save_without_autofill_flag_does_not_promote(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    before = (d / "refine.json").read_bytes()
+    a = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a.status_code == 200, a.text
+    r = c.post(url(demo, "/save"), json={"gcps": _gcps(demo.true_gcps), "status": "edited",
+                                         "autofill": False})
+    assert r.status_code == 200, r.text
+    assert (d / "refine.json").read_bytes() == before
+    assert "autofill" not in json.loads((d / "review.json").read_text())
+    assert (d / "autofill.json").exists()
+
+
+def test_force_auto_after_autofill_save_reproduces_refine(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    a, af, r = _autofill_and_save(demo, c, d)
+    assert r.status_code == 200, r.text
+    runner.run_sheet(demo.page, demo.ref, force_auto=True)
+    assert json.loads((d / "transform.json").read_text())["origin"] == "auto"
+    assert json.loads((d / "refine.json").read_text())["matches"] == af["result"]["matches"]

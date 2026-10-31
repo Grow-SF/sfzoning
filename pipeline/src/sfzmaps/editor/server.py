@@ -654,11 +654,23 @@ def preview_png(series: str, sheet_id: str) -> FileResponse:
 
 # -- save ------------------------------------------------------------------------------
 
+def _promote_autofill(d: Path) -> dict:
+    """Write the auto-fill into the pipeline's own artifacts, in dependency order (so mtimes
+    run rough <= refine_raw <= refine and a later force_auto run only reruns `changes`).
+    Returns the loaded autofill.json; the caller deletes it after a successful run_sheet."""
+    af = _read_json(_autofill_path(d))
+    runner._write_json(d / "rough.json", {"transform": af["seed"], "scale_hint_ft_per_px": None,
+                                          "seeded_from": "editor autofill"})
+    runner._write_json(d / "refine_raw.json", af["raw"])
+    runner._write_json(d / "refine.json", af["result"])
+    return af
+
+
 @app.post("/api/sheet/{series}/{sheet_id}/save")
 def save(series: str, sheet_id: str, body: SaveBody, background: BackgroundTasks) -> JSONResponse:
     d = _sheet_dir(series, sheet_id)
     t = _transform_of(body.gcps)
-    sc = _score_new(d, t, body.change_areas)
+    sc = _score_new(d, t, body.change_areas, autofill=body.autofill)
     note = body.note.strip()
     if body.status == "accepted" and not sc.passed and not note:
         raise HTTPException(
@@ -668,16 +680,25 @@ def save(series: str, sheet_id: str, body: SaveBody, background: BackgroundTasks
               "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "note": note,
               "gcps": [g.model_dump() for g in body.gcps], "change_areas": body.change_areas,
               "smoothing": t.smoothing}
+    if body.autofill:
+        review["autofill"] = {
+            "seed_points": sum(1 for g in body.gcps if g.enabled and g.source != "auto"),
+            "matches": None}  # filled from autofill.json under the lock
     page = _find_page(series, sheet_id)
     if page is None:
         raise HTTPException(404, f"no source page for {series}/{sheet_id}")
     with _save_lock:
+        if body.autofill:
+            af = _promote_autofill(d)
+            review["autofill"]["matches"] = af["n_matches"]
         runner._write_json(d / "review.json", review)  # atomic
         try:
             new = runner.run_sheet(page, _get_ref())
         except Exception as e:  # noqa: BLE001 - review.json is saved; report the failed rerun
             log.exception("run_sheet failed after save of %s/%s", series, sheet_id)
             raise HTTPException(500, f"review saved, but rerunning the sheet failed: {type(e).__name__}: {e}")
+        if body.autofill:
+            _autofill_path(d).unlink(missing_ok=True)
     background.add_task(_schedule_rebuild, series)
     return JSONResponse(_clean({"status": body.status, "score": _score_dict(new),
                                 "preview_score": _score_dict(sc), "reviewer": review["reviewer"]}))
