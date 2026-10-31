@@ -91,11 +91,14 @@ as usual.
 
 ### Scoring with the auto-fill's matches
 
-- Preview and save bodies gain `autofill: bool = false`.
+- `autofill.json` carries an `"id"` (`str(time_ns)`), returned as `autofill_id`.
+  Preview and save bodies gain `autofill`: that id, `true` for "the current file",
+  or null/false for none **(my call, after the final review: one file slot plus
+  undo needs an id so a replaced auto-fill can't be scored or saved by mistake)**.
 - When it is true:
   - scoring uses `runner.score_review(t, d / "autofill.json"…)`, which reads
     the `result` member (a small loader adapter is fine);
-  - **409** if `autofill.json` is missing.
+  - **409** if `autofill.json` is missing, or its id differs from the one sent.
 - The editor's change areas are unchanged by auto-fill. They stay the
   reviewer's drawn polygons. Auto-detected real change is already carried
   as match labels in `result`, and `score_review` excludes those matches.
@@ -118,7 +121,7 @@ as usual.
   only `changes` (`transform.json`'s origin is `review`), which reproduces
   `refine.json` from `refine_raw.json`. So "automatic" then means "automatic
   from this seed", which is what the 1960 sheet 5 fix did.
-- Delete `autofill.json` after a successful promotion.
+- Delete `autofill.json` after a successful promotion, if its id is still the saved one.
 - `review.json` gains `"autofill": {"seed_points": <enabled posted points>,
   "matches": <n_matches>}`.
 - Smoothing comes from `runner.smoothing_for` as today. The merged set has
@@ -134,13 +137,15 @@ as usual.
 - **On success:**
   - pushes the current state to the undo history and replaces the point
     list with the returned set;
-  - sets `S.autofill = true` and shows the returned score and overlay;
+  - sets `S.autofill` to the returned id and shows the returned score and overlay;
   - toasts "Auto-fill: N matched corners. Review, then Save."
-- **Later edits** keep `S.autofill = true`, and every preview or save sends
+- **Later edits** keep `S.autofill`, and every preview or save sends
   `autofill: S.autofill`.
 - **Undo** to the state before the auto-fill clears it: the history entry
-  stores the flag.
+  stores the id.
 - **Opening a sheet** resets it.
+- **A result that arrives after the sheet or the points changed** is discarded with a toast,
+  and Save/Accept are disabled while an auto-fill runs **(my call, after the final review)**.
 - **On failure:** a toast with the server's message; the points are unchanged.
 
 ### Pass-bar labels (bundled fix)
