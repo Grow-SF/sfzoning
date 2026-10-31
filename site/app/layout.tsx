@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Libre_Franklin, Newsreader } from "next/font/google";
 import "./globals.css";
-import { draftMetadata } from "@/lib/draft";
 
 // next/font self-hosts both families at build time; no runtime font CDN.
 const serif = Newsreader({
@@ -13,7 +12,7 @@ const serif = Newsreader({
 });
 const sans = Libre_Franklin({ subsets: ["latin"], variable: "--font-sans", display: "swap" });
 
-const TITLE = "How San Francisco was zoned";
+const TITLE = "A History of San Francisco’s Zoning";
 const DESCRIPTION =
   "A century of San Francisco zoning, told on the city’s own maps: how land where apartments were legal in 1921 came to be zoned for houses.";
 
@@ -26,8 +25,6 @@ export const metadata: Metadata = {
   openGraph: { title: TITLE, description: DESCRIPTION, url: "/", siteName: "sfzoning.com", locale: "en_US", type: "article" },
   twitter: { card: "summary_large_image", title: TITLE, description: DESCRIPTION },
   alternates: { canonical: "/" },
-  // Drafts stay out of search results (NEXT_PUBLIC_DRAFT=false lifts it).
-  ...draftMetadata(),
 };
 
 export const viewport: Viewport = { themeColor: "#efebe2" };

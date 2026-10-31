@@ -4,7 +4,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import Credits, { SOURCE_URL } from "@/components/Credits";
-import DraftBanner from "@/components/DraftBanner";
 import Sources from "@/components/Sources";
 import { SOURCES, citedSourceIds } from "@/content/sources";
 import { STORY } from "@/content/story";
@@ -12,7 +11,7 @@ import { ERAS } from "@/lib/eras";
 import styles from "@/components/endmatter.module.css";
 
 export const metadata: Metadata = {
-  title: "How the maps were made · How San Francisco was zoned",
+  title: "How the maps were made · A History of San Francisco’s Zoning",
   description: "How a century of San Francisco zoning maps were aligned to today’s streets, how accurate they are, and the sources behind the story.",
   alternates: { canonical: "/about" },
   openGraph: {
@@ -30,7 +29,6 @@ const ALL_IDS = Array.from(new Set([...citedSourceIds(STORY, ERAS), ...Object.ke
 export default function About() {
   return (
     <main className={styles.page}>
-      <DraftBanner />
       <p className={styles.kicker}>About this story</p>
       <h1 className={styles.title}>How the maps were made</h1>
       <p className={styles.lede}>
