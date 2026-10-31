@@ -455,3 +455,100 @@ def test_editor_js_reads_series_and_sheet_from_url():
     import inspect
     src = inspect.getsource(reviewpage)
     assert "?series=" in src and "&sheet=" in src
+
+
+# -- auto-fill ---------------------------------------------------------------------------
+
+def _seed(demo, n=6):
+    pts = _gcps(demo.true_gcps[:: max(1, len(demo.true_gcps) // n)][:n])
+    for p in pts:
+        p["source"] = "manual"
+    return pts
+
+
+def _sheet_dir_of(demo):
+    return demo.work_dir / demo.series / demo.sheet_id
+
+
+def test_autofill_returns_dense_set_keeping_manual_points(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    seed = _seed(demo)
+    names = ("refine.json", "transform.json", "rough.json")
+    before = {n: (d / n).stat().st_mtime_ns for n in names if (d / n).exists()}
+    r = c.post(url(demo, "/autofill"), json={"gcps": seed})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["gcps"]) > 25
+    manual = [g for g in body["gcps"] if g["source"] == "manual"]
+    assert len(manual) == 6
+    assert {(g["px"], g["py"]) for g in manual} == {(g["px"], g["py"]) for g in seed}
+    assert body["n_matches"] >= 40
+    assert body["score"]["passed"] is True, body["score"]
+    assert {"residuals", "matches", "preview_png_url", "preview_bounds", "preview_size"} <= set(body)
+    af = json.loads((d / "autofill.json").read_text())
+    assert {"seed", "raw", "result", "n_matches"} <= set(af)
+    for n, m in before.items():
+        assert (d / n).stat().st_mtime_ns == m, n
+
+
+def test_autofill_needs_four_enabled_points(env):
+    demo, c, _ = env
+    r = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo, 3)})
+    assert r.status_code == 400 and "4" in r.json()["detail"]
+
+
+def test_autofill_counts_enabled_points_only(env):
+    demo, c, _ = env
+    seed = _seed(demo, 5)
+    seed[0]["enabled"] = seed[1]["enabled"] = False
+    assert c.post(url(demo, "/autofill"), json={"gcps": seed}).status_code == 400
+    seed = _seed(demo, 6)
+    seed[1]["enabled"] = False   # not seed[0]: the other five would then be collinear
+    r = c.post(url(demo, "/autofill"), json={"gcps": seed})
+    assert r.status_code == 200, r.text
+    off = [g for g in r.json()["gcps"] if g["enabled"] is False]
+    assert len(off) == 1 and off[0]["source"] == "manual"
+
+
+def test_autofill_without_blocks_is_409(env):
+    demo, c, _ = env
+    (_sheet_dir_of(demo) / "blocks_px.geojson").unlink()
+    r = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert r.status_code == 409 and "run the pipeline" in r.json()["detail"]
+
+
+def test_autofill_degenerate_is_422_and_writes_nothing(env, monkeypatch):
+    from sfzmaps.refine import RefineResult
+    from sfzmaps.transform import GCP, SheetTransform
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    w, h = runner.page_shape(d / "page.png")[::-1]
+    gs = [GCP(px, py, wx, wy, "auto") for (px, py), (wx, wy) in
+          zip([(0, 0), (w, 0), (0, h), (w, h)], [(0, 0), (1, 0), (0, 1), (1, 1)])]
+    t = SheetTransform(gs, config.MANUAL_TPS_SMOOTHING).fit()
+    monkeypatch.setattr(server.refine_mod, "refine", lambda *a, **k: RefineResult(t, [], 1, True))
+    r = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert r.status_code == 422, r.text
+    assert not (d / "autofill.json").exists()
+
+
+def test_preview_autofill_scores_against_autofill_json(env):
+    demo, c, _ = env
+    d = _sheet_dir_of(demo)
+    a = c.post(url(demo, "/autofill"), json={"gcps": _seed(demo)})
+    assert a.status_code == 200, a.text
+    gcps = [{k: g[k] for k in ("px", "py", "wx", "wy", "source", "enabled")} for g in a.json()["gcps"]]
+    p = c.post(url(demo, "/preview"), json={"gcps": gcps, "autofill": True})
+    assert p.status_code == 200, p.text
+    assert p.json()["score"]["n_scored"] == a.json()["score"]["n_scored"]
+    (d / "refine.json").unlink()
+    p = c.post(url(demo, "/preview"), json={"gcps": gcps, "autofill": True})
+    assert p.status_code == 200, p.text
+    assert p.json()["score"]["n_scored"] == a.json()["score"]["n_scored"]
+
+
+def test_preview_autofill_without_file_is_409(env):
+    demo, c, _ = env
+    r = c.post(url(demo, "/preview"), json={"gcps": _seed(demo), "autofill": True})
+    assert r.status_code == 409
