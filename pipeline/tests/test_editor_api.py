@@ -629,3 +629,19 @@ def test_force_auto_after_autofill_save_reproduces_refine(env):
     runner.run_sheet(demo.page, demo.ref, force_auto=True)
     assert json.loads((d / "transform.json").read_text())["origin"] == "auto"
     assert json.loads((d / "refine.json").read_text())["matches"] == af["result"]["matches"]
+
+
+def test_front_end_has_autofill_and_current_pass_bar():
+    from pathlib import Path
+
+    static = Path(server.__file__).parent / "static"
+    html = (static / "index.html").read_text(encoding="utf-8")
+    js = (static / "editor.js").read_text(encoding="utf-8")
+    assert 'id="tool-autofill"' in html
+    assert "Auto-fill from my points" in html
+    assert "≤ 7 ft" in html and "≤ 15 ft" in html
+    assert "≤ 5 ft" not in html and "≤ 12 ft" not in html
+    assert "&lt; 7 ft" in html and "&lt; 15 ft" in html
+    assert "/autofill" in js and "autofill: S.autofill" in js
+    assert "PASS_P50 = 7" in js and "PASS_P95 = 15" in js
+    assert "above 5 ft" not in js

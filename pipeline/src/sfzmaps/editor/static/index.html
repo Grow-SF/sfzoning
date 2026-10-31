@@ -12,8 +12,8 @@
 <header id="topbar">
   <label class="sheetpick">Sheet <select id="sheet-select"></select></label>
   <div id="score" aria-live="polite">
-    <div class="metric" id="m-p50"><span class="k">held-out median</span><span class="v">–</span><span class="rule">≤ 5 ft</span></div>
-    <div class="metric" id="m-p95"><span class="k">held-out p95</span><span class="v">–</span><span class="rule">≤ 12 ft</span></div>
+    <div class="metric" id="m-p50"><span class="k">held-out median</span><span class="v">–</span><span class="rule">≤ 7 ft</span></div>
+    <div class="metric" id="m-p95"><span class="k">held-out p95</span><span class="v">–</span><span class="rule">≤ 15 ft</span></div>
     <div class="verdict" id="verdict">–</div>
     <div class="reason" id="reason"></div>
   </div>
@@ -26,6 +26,7 @@
 <div id="toolbar">
   <button id="tool-add" title="Click the scan, then click the matching spot on the map">Add point</button>
   <button id="tool-area" title="Click map vertices; double-click or Enter to finish">Mark change area</button>
+  <button id="tool-autofill" title="Seed the automatic matcher from your points">Auto-fill from my points</button>
   <span class="sep"></span>
   <button id="worst-prev" title="Previous worst area">‹</button>
   <button id="worst-next" title="Jump to the next of the 5 worst-residual areas">Worst areas <span id="worst-n"></span></button>
@@ -49,8 +50,8 @@
     <h3>Change areas</h3>
     <ul id="area-list"></ul>
     <div class="legend">
-      <span><i style="background:var(--green)"></i>&lt; 5 ft</span>
-      <span><i style="background:var(--amber)"></i>&lt; 12 ft</span>
+      <span><i style="background:var(--green)"></i>&lt; 7 ft</span>
+      <span><i style="background:var(--amber)"></i>&lt; 15 ft</span>
       <span><i style="background:var(--red)"></i>beyond</span>
       <span><i style="background:var(--blue)"></i>real change</span>
       <span><i style="background:var(--grey)"></i>no equivalent</span>

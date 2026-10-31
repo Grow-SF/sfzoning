@@ -6,8 +6,8 @@
  */
 "use strict";
 
-const TOL_GREEN = 5, TOL_AMBER = 12;           // residual colours; same as the pass rule
-const PASS_P50 = 5, PASS_P95 = 12;
+const TOL_GREEN = 7, TOL_AMBER = 15;           // residual colours; same as the pass rule
+const PASS_P50 = 7, PASS_P95 = 15;
 const DEBOUNCE_MS = 400;
 const COL = { green: "#2e9e4f", amber: "#e0a21b", red: "#d6342c", blue: "#2f7de1", grey: "#8b8f96", none: "#4b5563" };
 
@@ -22,7 +22,7 @@ const S = {                       // editor state
   gcps: [], areas: [], baseSig: "", history: [],
   sel: null, mode: null, pending: null, drawPts: [],
   baseScore: null, score: null, previewSeq: 0, previewTimer: null, busy: 0,
-  queue: [], zmax: 0, scale: 1, worst: [], worstIdx: -1, saving: false,
+  queue: [], zmax: 0, scale: 1, worst: [], worstIdx: -1, saving: false, autofill: false,
 };
 let scanMap, scanLayer, scanMarkers = [], scanMatchLayer, scanPending, scanWorst;
 let map, mapReady = null, mapMarkers = [];
@@ -252,15 +252,40 @@ function renderTable() {
 function setSel(i) { S.sel = i; refreshStyles(); }
 
 /* ---------- editing ---------- */
-function pushHistory() { S.history.push(JSON.stringify([S.gcps, S.areas])); if (S.history.length > 100) S.history.shift(); }
+function pushHistory() { S.history.push(JSON.stringify([S.gcps, S.areas, S.autofill])); if (S.history.length > 100) S.history.shift(); }
 function undo() {
   const h = S.history.pop(); if (!h) return;
-  [S.gcps, S.areas] = JSON.parse(h);
+  let af; [S.gcps, S.areas, af] = JSON.parse(h); S.autofill = !!af;
   S.sel = null; S.pending = null; clearPending();
   rebuildMarkers(); renderAreas(); afterEdit();
 }
 function edited() { renderAreas(); refreshStyles(); afterEdit(); }
-function afterEdit() { updateDirty(); schedulePreview(); }
+function afterEdit() { updateDirty(); schedulePreview(); updateAutofillBtn(); }
+function updateAutofillBtn() {
+  const b = $("tool-autofill"); if (!b) return;
+  const n = S.gcps.filter((g) => g.enabled).length;
+  b.disabled = n < 4 || !!S.autofilling;
+  b.title = n < 4 ? "Needs at least 4 enabled points" : "Seed the automatic matcher from your points";
+}
+async function autofill() {
+  if (S.autofilling || S.gcps.filter((g) => g.enabled).length < 4) return;
+  S.autofilling = true; clearTimeout(S.previewTimer); S.previewSeq++;
+  $("busy").textContent = "Auto-filling…"; updateAutofillBtn();
+  pushHistory();
+  try {
+    const r = await post(`/api/sheet/${S.series}/${S.sheet}/autofill`, { gcps: cleanGcps(), change_areas: areasFC() });
+    S.gcps = r.gcps.map((g) => ({ px: g.px, py: g.py, wx: g.wx, wy: g.wy, source: g.source, enabled: g.enabled !== false, _r: g.residual_ft }));
+    S.autofill = true; S.score = r.score; S.sel = null;
+    await mapReady;
+    setOverlay(r); rebuildMarkers(); renderScore(); edited();
+    toast(`Auto-fill: ${r.n_matches} matched corners. Review, then Save.`);
+  } catch (e) {
+    S.history.pop();
+    toast("Auto-fill failed: " + e.message, true);
+  } finally {
+    S.autofilling = false; $("busy").textContent = ""; updateAutofillBtn();
+  }
+}
 function renderAreas() {
   setSource("areas", { type: "FeatureCollection", features: S.areas.map((a) => ({ type: "Feature", properties: {},
     geometry: { type: "Polygon", coordinates: a.geometry.coordinates.map((r) => r.map(([x, y]) => toLL(x, y))) } })) });
@@ -340,7 +365,7 @@ function schedulePreview(delay) {
 async function runPreview(initial) {
   const seq = ++S.previewSeq, sheet = S.sheet, series = S.series;
   try {
-    const r = await post(`/api/sheet/${series}/${sheet}/preview`, { gcps: cleanGcps(), change_areas: areasFC() });
+    const r = await post(`/api/sheet/${series}/${sheet}/preview`, { gcps: cleanGcps(), change_areas: areasFC(), autofill: S.autofill });
     if (seq !== S.previewSeq || sheet !== S.sheet) return;               // a newer edit superseded this
     await mapReady;
     setOverlay(r);
@@ -385,7 +410,7 @@ function computeWorst(matches) {
     .map((c) => ({ px: c.px / c.n, py: c.py / c.n, wx: c.wx / c.n, wy: c.wy / c.n, n: c.n, score: c.score }));
 }
 function jumpWorst(dir) {
-  if (!S.worst.length) { toast("No residual clusters above 5 ft."); return; }
+  if (!S.worst.length) { toast(`No residual clusters above ${PASS_P50} ft.`); return; }
   S.worstIdx = (S.worstIdx + dir + S.worst.length) % S.worst.length;
   const w = S.worst[S.worstIdx];
   scanMap.setView(px2ll(w.px, w.py), Math.max(scanMap.getZoom(), S.zmax - 2));
@@ -410,12 +435,12 @@ async function loadQueue(keepSelection) {
 async function openSheet(series, sheet) {
   const d = await api(`/api/sheet/${series}/${sheet}`);
   clearTimeout(S.previewTimer); S.previewSeq++;
-  S.series = series; S.sheet = sheet; S.data = d; S.history = []; S.sel = null; S.worstIdx = -1;
+  S.series = series; S.sheet = sheet; S.data = d; S.history = []; S.autofill = false; S.sel = null; S.worstIdx = -1;
   setMode(null);
   S.gcps = d.gcps.map((g) => ({ px: g.px, py: g.py, wx: g.wx, wy: g.wy, source: g.source, enabled: g.enabled !== false, _r: g.residual_ft }));
   S.areas = ((d.change_areas && d.change_areas.features) || []).filter((f) => f.geometry && f.geometry.type === "Polygon");
   S.baseScore = d.score; S.score = d.score;
-  S.baseSig = signature();
+  S.baseSig = signature(); updateAutofillBtn();
   $("note").value = d.note || "";
   $("credit").textContent = d.credit || "";
   $("sheet-select").value = series + "/" + sheet;
@@ -447,7 +472,7 @@ async function save(status) {
   S.saving = true; clearTimeout(S.previewTimer);
   $("btn-save").disabled = $("btn-accept").disabled = true; $("busy").textContent = "saving (re-running sheet)…";
   try {
-    const r = await post(`/api/sheet/${S.series}/${S.sheet}/save`, { gcps: cleanGcps(), change_areas: areasFC(), status, note });
+    const r = await post(`/api/sheet/${S.series}/${S.sheet}/save`, { gcps: cleanGcps(), change_areas: areasFC(), status, note, autofill: S.autofill });
     toast(`Saved as ${r.status}: ${r.score.passed ? "PASS" : "FAIL"}, held-out median ${fmt(r.score.holdout_p50_ft)} ft, p95 ${fmt(r.score.holdout_p95_ft)} ft`);
     await loadQueue(true);
     await openSheet(S.series, S.sheet);
@@ -477,6 +502,7 @@ async function main() {
   $("btn-accept").onclick = () => save("accepted");
   $("tool-add").onclick = () => setMode("add");
   $("tool-area").onclick = () => setMode("area");
+  $("tool-autofill").onclick = autofill;
   $("worst-next").onclick = () => jumpWorst(1);
   $("worst-prev").onclick = () => jumpWorst(-1);
   $("btn-undo").onclick = undo; $("btn-del").onclick = deleteSel; $("btn-dis").onclick = toggleSel;
