@@ -183,7 +183,8 @@ def _load_pulled(root: Path) -> dict[str, str]:
 
 # Files of a sheet that derive from its review: when a locally edited review.json is kept,
 # the incoming copies of these are skipped too, so they never describe another review.
-_REVIEW_DERIVED = ("transform.json", "score.json", "changes.geojson", "refine.json")
+_REVIEW_DERIVED = ("transform.json", "score.json", "changes.geojson", "refine.json",
+                   "rough.json")  # rough.json: an editor auto-fill save writes it
 
 
 def _extract(zpath: Path, root: Path) -> None:
@@ -219,7 +220,7 @@ def _extract(zpath: Path, root: Path) -> None:
                 side.write_bytes(data)
                 log.warning(
                     "sheet %s: local review.json was edited; kept it (and its transform, "
-                    "score, changes, refine), incoming copy saved as %s", target.parent.name, side,
+                    "score, changes, refine, rough), incoming copy saved as %s", target.parent.name, side,
                 )
                 continue
             if sheet_dir in kept and target.name in _REVIEW_DERIVED:

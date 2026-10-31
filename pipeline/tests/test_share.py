@@ -328,10 +328,10 @@ def test_bundle_command_prints_folder_and_instruction(tmp_path, monkeypatch):
 
 def test_pull_keeping_local_review_keeps_its_derived_files(data, tmp_path, monkeypatch):
     """I2: with a locally edited review.json kept, that sheet's transform/score/changes/
-    refine are not overwritten either; other files and other sheets still update."""
+    refine/rough are not overwritten either; other files and other sheets still update."""
     new, src = _fresh_pull(data, tmp_path, monkeypatch)
     (new / REV).write_text("LOCAL EDIT")
-    derived = ["transform.json", "score.json", "changes.geojson", "refine.json"]
+    derived = ["transform.json", "score.json", "changes.geojson", "refine.json", "rough.json"]
     for n in derived:
         (data / "work/1948/p1" / n).write_text("REMOTE " + n)
     (data / "work/1948/p1/labels.json").write_text("REMOTE labels")
