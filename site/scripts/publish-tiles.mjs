@@ -57,7 +57,7 @@ function filesToPublish() {
   const pointer = JSON.parse(readFileSync(path.join(OUT, "shared/districts.json"), "utf8"));
   const series = pointer.eras;
   return [
-    ...series.flatMap((s) => [`${s}/districts/${s}-districts.pmtiles`, `${s}/districts/stats.json`]),
+    ...series.map((s) => `${s}/districts/stats.json`),
     pointer.archive,
     pointer.table,
     pointer.cards,

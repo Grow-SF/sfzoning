@@ -23,9 +23,20 @@ npm run dev            # http://localhost:3000 (builds public/data/rules.json fi
   It is inlined at build time, so set it before `next build`. A production build
   (`VERCEL` set or `NODE_ENV=production`) stops in `prebuild` if it is unset or not https;
   `ALLOW_LOCAL_TILES=1` lets a local production build use the local tile server.
-- The site picks up whatever the pipeline has published. Each era's district tiles are probed
-  (`lib/districts.ts`); an era without them shows its scan with a "district colours are
-  coming" note instead of failing.
+- The site picks up whatever the pipeline has published. The shared districts name the eras
+  they cover (`lib/districts.ts`); an era they don't cover shows its scan with a "district
+  colours are coming" note instead of failing.
+
+### Loading the story ahead
+
+Everything read from an archive goes through one 32 MB in-memory byte cache (`lib/archiveCache.ts`),
+shared by both maps, because the browser's HTTP cache isn't reliable for range reads. When the story
+map goes idle at a step, it preloads the tiles for both neighbouring steps' cameras (`lib/preload.ts`):
+the scans on screen, the neighbour's scans and the shared districts. A step whose scans finished
+preloading cross-fades during its pan; otherwise the old scan is held until the new one has loaded and
+the camera has stopped, or for at most 8s (`lib/scanHold.ts`). Only the last 6 destinations count as
+preloaded, so an entry doesn't outlive its bytes in the cache. A failed preload is silent: it counts as
+not preloaded, and replaces the archive so its failed read can't reach the map.
 
 ### Tests
 
@@ -86,7 +97,7 @@ the site reads them from there.
 
 Upload, preserving paths relative to `pipeline/data/out/`:
 
-- `**/*.pmtiles` (scans, `*/districts/*-districts.pmtiles`, `ref/blocks.pmtiles`)
+- `**/*.pmtiles` (scans, `shared/districts-*.pmtiles`, `ref/blocks.pmtiles`)
 - `**/manifest.json`
 - `**/stats.json` (the explorer's chart reads `<series>/districts/stats.json`)
 
@@ -114,15 +125,14 @@ aws s3 sync pipeline/data/out s3://sfzoning-tiles \
 Treat uploaded archives as immutable: a `.pmtiles` file overwritten while a reader has the
 page open breaks that reader's Range reads (locally, district colours vanished for a session
 while the pipeline rewrote them). Upload a changed archive under a new path, or accept
-that open tabs need a reload. Re-run the same command whenever the pipeline publishes more eras; the site needs no rebuild
-to show a new era's districts (it probes for them at runtime).
+that open tabs need a reload.
 
-### The explorer's shared archive
+### The shared districts
 
-The explorer stores each lot and district line once, with a number, and looks up what that number
-looks like in each year (`lib/lookupLayer.ts`). Switching years changes one value and loads nothing.
-A deployment without these files, or a tab that has lost its WebGL context, uses the per-era files
-instead. The story and the stats use those files too, so they stay published.
+The story and the explorer both store each lot and district line once, with a number, and look up
+what that number looks like in each year (`lib/lookupLayer.ts`). Switching years changes one value
+and loads nothing. Without these files the map shows only the scans, with a note. The stats chart
+reads each series' `stats.json`.
 
 The layer draws MapLibre's own tile buffers, which MapLibre doesn't publish as an API, so
 `maplibre-gl`'s version is pinned exactly. After upgrading it, check the explorer by eye in all

@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CATEGORIES, CATEGORY_COLORS, CATEGORY_LABELS, fillColorExpression } from "@/lib/palette";
+import { CATEGORIES, CATEGORY_COLORS, CATEGORY_LABELS } from "@/lib/palette";
 import { gunzipped, lotCard, lotCategory, NO_VALUE, parseManifest, type SharedDistricts } from "@/lib/shared";
 import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
 import { isPartialMap, threePlusShare, type DistrictStats } from "@/lib/stats";
 import { ERAS } from "@/lib/eras";
-import { districtSource, districtStatsUrl, publishedPath } from "@/lib/tiles";
+import { districtStatsUrl, publishedPath } from "@/lib/tiles";
 import { hashedName, plan } from "../scripts/publish-tiles.mjs";
 import { buildRules, parseCsv } from "../scripts/build-rules.mjs";
 
@@ -32,12 +32,6 @@ describe("palette", () => {
     }
     const colors = Object.values(CATEGORY_COLORS).map((c) => c.toLowerCase());
     expect(new Set(colors).size).toBe(colors.length);
-  });
-  it("builds a match expression that falls back to the unknown colour", () => {
-    const expr = fillColorExpression() as unknown[];
-    expect(expr[0]).toBe("match");
-    expect(expr[expr.length - 1]).toBe(CATEGORY_COLORS.unknown);
-    for (const c of PIPELINE_CATEGORIES) expect(expr).toContain(c);
   });
 });
 
@@ -125,9 +119,7 @@ describe("published tile names", () => {
 });
 
 describe("district tile paths", () => {
-  it("follow the pipeline's out/<series>/districts/<series>-districts.pmtiles layout", () => {
-    expect(districtSource("1948")).toMatch(/\/1948\/districts\/1948-districts\.pmtiles$/);
-    expect(districtSource("today")).toMatch(/\/today\/districts\/today-districts\.pmtiles$/);
+  it("follow the pipeline's out/<series>/districts/ layout", () => {
     expect(districtStatsUrl("1948")).toMatch(/^https?:\/\/.*\/1948\/districts\/stats\.json$/);
   });
   it("gives every era, including today, a district series", () => {
