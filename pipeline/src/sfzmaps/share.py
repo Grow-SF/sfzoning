@@ -37,6 +37,11 @@ SHARED_GLOBS = [
     "out/*/review.html",
     "out/ref/blocks.pmtiles",
     "out/*/districts/*",
+    # What makes out/shared's archive usable. By name: a build in progress leaves other files there.
+    "out/shared/districts.json",
+    "out/shared/*.table.gz",
+    "out/shared/*.cards.json.gz",
+    "out/shared/*.counts.json",
     "work/*/*/district_labels.json",
     "overrides/*.csv",
 ]
