@@ -124,11 +124,12 @@
   .chip { display: none; }
   .wrap[data-compact] .legend { display: block; margin-top: 0; }
   .legend {
-    width: 17rem;
-    padding: 0.6rem 0.75rem 0.65rem;
+    width: 16.25rem; /* no wider: at 960px it would reach the Rumsey credit */
+    padding: 0.6rem 0.6rem 0.65rem;
     font-size: 0.75rem;
   }
-  .uses { grid-template-columns: 1fr 1fr; column-gap: 0.75rem; }
+  .uses { grid-template-columns: auto auto; justify-content: space-between; column-gap: 0.35rem; }
+  .uses li { gap: 0.25rem; }
 }
 
 :global(.explorer-map) .wrap {
