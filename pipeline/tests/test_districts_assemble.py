@@ -51,7 +51,7 @@ def test_override_applied_before_join(data, monkeypatch):
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-2", "R-2", "R-4", "R-4", "M-1"]))
     out = assemble.run_series("1960")
     g = gpd.read_file(out / "parcels.fgb").set_index("blklot")
-    assert g.loc["1000001", "code"] == "C-2" and g.loc["1000001", "category"] == "commercial"
+    assert g.loc["1000001", "code"] == "C-2" and g.loc["1000001", "category"] == "commercial_light"
     assert g.loc["1000001", "confidence"] == 1.0
     assert (g.loc[["1001001", "1001002"], "category"] == "single_family").all()
     assert g.loc["1000002", "category"] == "two_unit"
@@ -123,7 +123,7 @@ def test_today_published_same_way(data, monkeypatch):
     assert out == config.OUT_DIR / "today" / "districts"
     g = gpd.read_file(out / "parcels.fgb").set_index("blklot")
     assert g.loc["1000001", "category"] == "single_family"
-    assert g.loc["1002001", "category"] == "multi_family"
+    assert g.loc["1002001", "category"] == "homes_low"
     assert (out / "stats.json").exists()
 
 

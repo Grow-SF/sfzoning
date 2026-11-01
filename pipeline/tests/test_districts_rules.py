@@ -8,15 +8,15 @@ from sfzmaps.districts import categories, rules, series
 # brief's example mapping are marked DEVIATION. (None so far: every brief example matches the CSV.)
 KNOWN = [
     (1921, "1R", "single_family"),     # 1R: max 1 unit (two-family only with 5,000 sq ft open area)
-    (1921, "2R", "multi_family"),      # unlimited
+    (1921, "2R", "homes_top"),      # unlimited
     (1960, "R-1", "single_family"),
     (1960, "R-2", "two_unit"),
-    (1960, "R-4", "multi_family"),     # 1 per 200 sq ft
-    (1960, "C-2", "commercial"),
+    (1960, "R-4", "homes_high"),     # 1 per 200 sq ft
+    (1960, "C-2", "commercial_light"),
     (1980, "RH-2", "two_unit"),
     (1980, "RH-3", "three_unit"),
-    (1980, "RM-1", "multi_family"),
-    (1990, "NC-2", "mixed"),           # NC-2 starts 1987, so year 1990 (not 1980) is the in-era check
+    (1980, "RM-1", "homes_low"),
+    (1990, "NC-2", "homes_low"),           # NC-2 starts 1987, so year 1990 (not 1980) is the in-era check
     (1960, "M-1", "industrial"),
     (1960, "P", "public"),
     (1921, "U", "unrestricted"),
@@ -24,13 +24,13 @@ KNOWN = [
     (1980, "RH-1(S)", "two_unit"),     # CSV max 2 (second unit): two_unit, not single_family
     (1980, "RH-1(D)", "single_family"),
     (1980, "RH-1", "single_family"),
-    (1970, "R-4-C", "mixed"),
-    (1980, "RC-3", "mixed"),
+    (1970, "R-4-C", "homes_high"),
+    (1980, "RC-3", "homes_mid"),
     (1990, "SLI", "industrial"),
-    (2010, "NCT-2", "mixed"),
-    (2010, "RTO", "multi_family"),     # "no numeric density limit"
-    (1966, "R-3.5", "multi_family"),   # CSV max_units "unknown" -> multi_family default
-    (1970, "C-3-O", "commercial"),
+    (2010, "NCT-2", "homes_top"),
+    (2010, "RTO", "homes_top"),     # "no numeric density limit"
+    (1966, "R-3.5", "homes_mid"),   # CSV max_units "unknown": placed by hand, unverified
+    (1970, "C-3-O", "commercial_dense"),
     (1921, "HI", "industrial"),
     (1960, "40' SHD", "unknown"),      # "special" rows feed height_code, not category
 ]
@@ -43,7 +43,7 @@ def test_known_categories(year, code, expected):
 
 def test_era_fallback_for_series_start_year():
     # NC-2 only exists from 1987 but a 1980-1990 series looks up at 1980: nearest era row is used.
-    assert categories.category_for("NC-2", 1980) == "mixed"
+    assert categories.category_for("NC-2", 1980) == "homes_low"
     # strict rule_for stays strict
     assert rules.rule_for("NC-2", 1980) is None
 
@@ -119,16 +119,16 @@ def test_series_table_complete():
 # DataSF today codes outside the original CSV (D7): every one resolves, with the category its
 # Planning Code district purpose implies (rows added to the research CSV, confidence medium/low).
 TODAY_CODES = [
-    ("NCT-MISSION", "mixed"), ("NCT-24TH-MISSION", "mixed"), ("NCT-UPPER MARKET", "mixed"),
-    ("NCT-GLEN PARK", "mixed"), ("RTO-1", "multi_family"), ("RH DTR", "multi_family"),
-    ("SB-DTR", "multi_family"), ("TB DTR", "multi_family"), ("RCD", "mixed"),
-    ("SALI", "industrial"), ("RED-MX", "mixed"), ("WMUG", "mixed"), ("WMUO", "commercial"),
-    ("CMUO", "mixed"), ("MR-MU", "mixed"), ("BR-MU", "mixed"), ("P70-MU", "mixed"),
-    ("PPS-MU", "mixed"), ("S-MU", "mixed"), ("MB-RA", "mixed"), ("MB-O", "commercial"),
-    ("HP-RA", "mixed"), ("TI-MU", "mixed"), ("TI-R", "multi_family"), ("TI-OS", "public"),
-    ("TI-PCI", "public"), ("YBI-R", "multi_family"), ("YBI-OS", "public"), ("YBI-PCI", "public"),
-    ("YBI-MU", "mixed"), ("PM-R", "multi_family"), ("PM-OS", "public"), ("PM-MU1", "mixed"),
-    ("PM-MU2", "mixed"), ("PM-CF", "public"), ("PM-S", "public"), ("Job Corps", "public"),
+    ("NCT-MISSION", "homes_top"), ("NCT-24TH-MISSION", "homes_top"), ("NCT-UPPER MARKET", "homes_top"),
+    ("NCT-GLEN PARK", "homes_top"), ("RTO-1", "homes_top"), ("RH DTR", "homes_top"),
+    ("SB-DTR", "homes_top"), ("TB DTR", "homes_top"), ("RCD", "homes_low"),
+    ("SALI", "industrial"), ("RED-MX", "homes_top"), ("WMUG", "homes_top"), ("WMUO", "commercial_light"),
+    ("CMUO", "commercial_light"), ("MR-MU", "homes_top"), ("BR-MU", "homes_top"), ("P70-MU", "homes_top"),
+    ("PPS-MU", "homes_top"), ("S-MU", "homes_top"), ("MB-RA", "homes_top"), ("MB-O", "commercial_light"),
+    ("HP-RA", "homes_top"), ("TI-MU", "homes_top"), ("TI-R", "homes_top"), ("TI-OS", "public"),
+    ("TI-PCI", "public"), ("YBI-R", "homes_top"), ("YBI-OS", "public"), ("YBI-PCI", "public"),
+    ("YBI-MU", "homes_top"), ("PM-R", "homes_top"), ("PM-OS", "public"), ("PM-MU1", "homes_top"),
+    ("PM-MU2", "homes_top"), ("PM-CF", "public"), ("PM-S", "public"), ("Job Corps", "public"),
 ]
 
 
@@ -147,3 +147,96 @@ def test_family_for_today_codes(code, family):
 
 def test_mission_bay_open_space():
     assert categories.category_for("MB-OS", 2000) == "public"
+
+
+# The map's categories: a seven-step housing scale (single_family .. homes_top) plus uses.
+MAP_CATEGORY_TABLE = [
+    ("RH-1", 2020, "single_family"),
+    ("RH-1(D)", 2020, "single_family"),
+    ("R-1", 1960, "single_family"),
+    ("1R", 1948, "single_family"),
+    ("RH-1(S)", 2020, "two_unit"),
+    ("RH-2", 2020, "two_unit"),
+    ("R-2", 1960, "two_unit"),
+    ("RH-3", 2020, "three_unit"),
+    ("RM-1", 2020, "homes_low"),
+    ("RM-2", 2020, "homes_low"),
+    ("NC-1", 2020, "homes_low"),
+    ("NC-2", 2020, "homes_low"),
+    ("NC-3", 2020, "homes_low"),
+    ("NC-S", 2020, "homes_low"),
+    ("RC-1", 1990, "homes_low"),
+    ("RC-2", 1990, "homes_low"),
+    ("RM-3", 2020, "homes_mid"),
+    ("R-3", 1960, "homes_mid"),
+    ("RC-3", 2020, "homes_mid"),
+    ("C-1", 1960, "homes_mid"),
+    ("RM-4", 2020, "homes_high"),
+    ("R-4", 1960, "homes_high"),
+    ("RC-4", 2020, "homes_high"),
+    ("SLR", 2000, "homes_high"),
+    ("R-5", 1960, "homes_top"),
+    ("2R", 1948, "homes_top"),
+    ("NCT-3", 2020, "homes_top"),
+    ("RTO", 2020, "homes_top"),
+    ("UMU", 2020, "homes_top"),
+    ("MUR", 2020, "homes_top"),
+    ("MUG", 2020, "homes_top"),
+    ("RH-DTR", 2020, "homes_top"),
+    ("C-3-O", 2020, "commercial_dense"),
+    ("C-3-R", 2020, "commercial_dense"),
+    ("C-3-G", 2020, "commercial_dense"),
+    ("C-3-S", 2020, "commercial_dense"),
+    ("C-3", 1960, "commercial_dense"),
+    ("C-M", 2020, "commercial_dense"),
+    ("C-2", 2020, "commercial_light"),
+    ("SSO", 2000, "commercial_light"),
+    ("WMUO", 2020, "commercial_light"),
+    ("MB-O", 2020, "commercial_light"),
+    ("MUO", 2020, "commercial_light"),
+    ("CMUO", 2020, "commercial_light"),
+    ("C", 1948, "commercial_dense"),
+    ("M-1", 2020, "industrial"),
+    ("PDR-1-G", 2020, "industrial"),
+    ("LI", 1948, "industrial"),
+    ("HI", 1948, "industrial"),
+    ("P", 2020, "public"),
+    ("U", 1948, "unrestricted"),
+    # Code forms that old maps print land on the same step through normalisation.
+    ("R-1-D", 1960, "single_family"),
+    ("R1D", 1960, "single_family"),
+    ("C-3-O(SD)", 2020, "commercial_dense"),
+    ("C3O(SD)", 2020, "commercial_dense"),
+    ("R-4-C", 1970, "homes_high"),
+    ("R-5-C", 1970, "homes_top"),
+    ("WMUG", 2020, "homes_top"),
+    ("NCT-MISSION", 2020, "homes_top"),
+    ("NCD", 2000, "homes_low"),
+    ("Valencia NCD", 2000, "homes_low"),
+]
+
+
+@pytest.mark.parametrize("code,year,expected", MAP_CATEGORY_TABLE)
+def test_map_category_table(code, year, expected):
+    assert categories.category_for(code, year) == expected
+
+
+def test_map_categories_are_the_agreed_set_in_order():
+    assert categories.CATEGORIES == (
+        "single_family", "two_unit", "three_unit", "homes_low", "homes_mid", "homes_high",
+        "homes_top", "commercial_light", "commercial_dense", "industrial", "public",
+        "unrestricted", "unknown")
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("1 per 400 sq ft (6 on a 2,500 sq ft lot)", "homes_mid"),   # the density, not the parenthetical
+    ("1 per 3,000 sq ft of lot area", "homes_low"),
+    ("1 per 125 sq ft; a one-room apartment counts as 3/4", "homes_top"),
+    ("No numeric density limit (form-based)", "homes_top"),
+    ("unlimited", "homes_top"),
+    ("1 per 249 sq ft", "homes_high"),
+    ("1 per 250 sq ft", "homes_mid"),
+    ("1 per 500 sq ft", "homes_low"),
+])
+def test_density_text_picks_the_step(text, expected):
+    assert categories.step_from_text(text) == expected
