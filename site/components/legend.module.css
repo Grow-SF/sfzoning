@@ -59,7 +59,7 @@
   font-weight: 700;
 }
 
-/* A stepped scale from red (one home) to bright green (20+ or no limit). */
+/* A stepped scale from red (one home) to the richest green (20+ or no limit). */
 .ramp {
   display: grid;
   grid-template-columns: repeat(7, 1fr);

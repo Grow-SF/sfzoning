@@ -13,6 +13,8 @@ The owner wants the map to take a position. The densest housing and vibrant mixe
 
 **Changed after seeing it on the map:** the owner found the dark green and dark blue too hard to tell apart and not friendly enough, and approved a screenshot of 1960 Noe. So the top of the scale is a bright emerald, not deep green, and dense commercial is a mid blue, not dark blue. Where this document says otherwise, this paragraph wins. The colour-blind test bars were lowered to allow it.
 
+**Changed again:** the owner found the emerald a little loud, could not read the scale's darkness (12 homes looked almost blue, and darker than either 6 or 20+), and turned against the teal. So the four green steps are now all plainly green and get steadily deeper as homes rise, ending in the richest green. Where this document says otherwise, this paragraph wins. The bars came down again; `site/lib/palette.ts` has the numbers.
+
 ## The scale
 
 Seven steps, for housing and mixed-use alike, by how many homes the zone allows. Mixed-use has no colour of its own; this is how the map "pivots" to it. (Proposed by the author; the owner saw it and raised only C-1.)

@@ -43,10 +43,10 @@ MIN_ZOOM, MAX_ZOOM = 11, 16
 COLUMNS = ["blklot", "code", "height_code", "confidence", "source_sheet"]
 TILE_PARCEL_PROPS = ["blklot", "code", "height_code", "category", "confidence"]
 # Story-category colours shared by the review page (and a starting point for the site).
-COLORS = {"single_family": "#fe4400", "two_unit": "#f89600", "three_unit": "#ffff6c",
-          "homes_low": "#77f7b0", "homes_mid": "#3b9246", "homes_high": "#00645b",
-          "homes_top": "#00cd5f", "commercial_light": "#89d7ff", "commercial_dense": "#1149af",
-          "industrial": "#85420b", "public": "#939aa1", "unrestricted": "#8562af",
+COLORS = {"single_family": "#fe4400", "two_unit": "#f89600", "three_unit": "#ffee66",
+          "homes_low": "#a0f5be", "homes_mid": "#5cda80", "homes_high": "#2cb25a",
+          "homes_top": "#009600", "commercial_light": "#89d7ff", "commercial_dense": "#1149af",
+          "industrial": "#85420b", "public": "#97a1b1", "unrestricted": "#8562af",
           "unknown": "#ffffff"}
 
 
