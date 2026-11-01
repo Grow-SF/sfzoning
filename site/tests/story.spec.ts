@@ -134,23 +134,6 @@ test("scrolling fast through the story leaves only the last step's scan showing"
   expect(await visibleScans(page)).toEqual([`scan-${last.era}`]);
 });
 
-test("a scan that never arrives ends with colours and no stuck hold", async ({ page }) => {
-  await page.route("**/1948/1948-paper.pmtiles", (route) => route.fulfill({ status: 404 }));
-  await page.goto("/");
-  await centerStep(page, "1921-mission");
-  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1921-mission");
-  await page.waitForTimeout(3000);
-  await centerStep(page, "1948-sunset");
-  await page.waitForTimeout(9000);
-  await expect(page.getByTestId("legend")).toBeVisible();
-  expect(await visibleScans(page)).not.toContain("scan-1921");
-  const hidden = await page.evaluate(() => {
-    const m = (window as unknown as { __map: import("maplibre-gl").Map }).__map;
-    return m.getLayoutProperty("scan-1921", "visibility");
-  });
-  expect(hidden).toBe("none");
-});
-
 /** The share of the story map's pixels that are strongly coloured (the district colours, not the scan's ink). */
 async function colouredShare(page: Page) {
   const shot = (await page.locator("[data-active-step] .map-wrap").screenshot()).toString("base64");
@@ -174,6 +157,81 @@ const delayed = (ms: number) => async (route: import("@playwright/test").Route) 
   await new Promise((r) => setTimeout(r, ms));
   await route.continue().catch(() => {});
 };
+
+/** A route that never answers: the request stays open, unlike a 404, which ends a preload. */
+const never = () => {};
+
+const activeWrap = (page: Page) => page.locator("[data-active-step] .map-wrap");
+
+async function settleAt(page: Page, id: string) {
+  await centerStep(page, id);
+  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", id);
+  await expect(activeWrap(page)).toHaveAttribute("data-idle", "true", { timeout: 60_000 });
+}
+
+test("a scan that never arrives holds the old one up to the limit, then shows colours", async ({ page }) => {
+  await page.route("**/1948/1948-paper.pmtiles", never);
+  await page.goto("/");
+  await settleAt(page, "1921-mission");
+  await centerStep(page, "1948-sunset");
+  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1948-sunset");
+  await page.waitForTimeout(3000);
+  expect(await visibleScans(page), "the old scan is held").toContain("scan-1921");
+  await page.waitForTimeout(6500); // past the 8s limit, and the 300ms exit
+  expect(await visibleScans(page), "the limit ended the hold").not.toContain("scan-1921");
+  await expect(page.locator("[data-active-step]").getByTestId("legend")).toBeVisible();
+  expect(await colouredShare(page)).toBeGreaterThan(0.02);
+});
+
+test("a new camera move on the same scans restarts the hold's limit", async ({ page }) => {
+  await page.route("**/1960/1960-paper.pmtiles", never);
+  await page.goto("/");
+  await settleAt(page, "1948-sunset");
+  await centerStep(page, "1960-density-caps");
+  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1960-density-caps");
+  await page.waitForTimeout(6000);
+  await centerStep(page, "1960-not-a-downzoning");
+  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1960-not-a-downzoning");
+  await page.waitForTimeout(3500); // ~9.5s since the hold began, ~3.5s since the camera moved again
+  expect(await visibleScans(page), "still held, counting from the last move").toContain("scan-1948");
+  await page.waitForTimeout(5500);
+  expect(await visibleScans(page), "released by the limit").not.toContain("scan-1948");
+});
+
+test("the Rumsey credit stays while the 1948 scan is held under 1960, and goes with it", async ({ page }) => {
+  await page.route("**/1960/1960-paper.pmtiles", never);
+  await page.goto("/");
+  await settleAt(page, "1948-sunset");
+  const credit = page.locator("[data-active-step]").getByText("David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries", { exact: true });
+  await expect(credit).toBeVisible();
+  await centerStep(page, "1960-density-caps");
+  await expect(activeWrap(page)).toHaveAttribute("data-era", "1960");
+  await page.waitForTimeout(3000);
+  expect(await visibleScans(page)).toContain("scan-1948");
+  await expect(credit).toBeVisible();
+  await expect(credit).toHaveCount(0, { timeout: 10_000 });
+  expect(await visibleScans(page)).not.toContain("scan-1948");
+});
+
+test("a preload that failed doesn't count as loaded, and doesn't break that scan afterwards", async ({ page }) => {
+  // Every read of the 1960 scan fails while the neighbours preload.
+  let failed = 0;
+  await page.route("**/1960/1960-paper.pmtiles", (route) => (failed++, route.abort()));
+  await page.goto("/");
+  await settleAt(page, "1948-sunset");
+  await expect.poll(() => failed, { timeout: 30_000 }).toBeGreaterThan(0);
+  await page.waitForTimeout(500);
+  await page.unroute("**/1960/1960-paper.pmtiles");
+  await page.route("**/1960/1960-paper.pmtiles", delayed(3000));
+  await centerStep(page, "1960-density-caps");
+  await expect(activeWrap(page)).toHaveAttribute("data-era", "1960");
+  await page.waitForTimeout(2200); // the camera has stopped; the scan has not arrived
+  expect(await visibleScans(page), "held, since the preload failed").toContain("scan-1948");
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __map: import("maplibre-gl").Map }).__map.isSourceLoaded("scan-1960")), { timeout: 45_000 })
+    .toBe(true);
+  await expect(page.locator("[data-active-step] .map-notice")).toHaveCount(0);
+});
 
 test("the old scan stays under a new one whose tiles are slow", async ({ page }) => {
   await page.route("**/1948/1948-paper.pmtiles", delayed(6000));

@@ -293,6 +293,30 @@ test("a year looks the same when you come back to it", async ({ page }) => {
   expect((await canvas.screenshot()).equals(first), "the same year looks the same").toBe(true);
 });
 
+test("a new year in the original map replaces the last at once, even with its scan still on the way", async ({ page }) => {
+  await page.route("**/1960/1960-paper.pmtiles", () => {}); // never answers
+  await page.goto("/");
+  const explorer = page.getByTestId("explorer");
+  await explorer.scrollIntoViewIfNeeded();
+  await explorer.getByText("Original map", { exact: true }).click();
+  await explorerMap(page);
+  await expect(explorer.locator(".map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 60_000 });
+  const scans = () =>
+    page.evaluate(() => {
+      const maps = (window as unknown as { __maps: import("maplibre-gl").Map[] }).__maps;
+      const m = maps.find((x) => x.getContainer().closest("[data-testid=explorer]"))!;
+      return m
+        .getStyle()
+        .layers.filter((l) => l.id.startsWith("scan-") && m.getLayoutProperty(l.id, "visibility") === "visible")
+        .map((l) => l.id);
+    });
+  expect(await scans()).toEqual(["scan-1948"]);
+  await explorer.getByRole("slider", { name: "Year" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(explorer.getByTestId("explorer-era")).toHaveText("1960");
+  expect(await scans()).toEqual(["scan-1960"]);
+});
+
 test("clicking a parcel in the explorer opens its lot card", async ({ page }) => {
   test.skip(!(await tilesExist(page, "shared/districts.json")), "shared files not published");
   const { explorer, card, code } = await openLot(page, "What it allowed");

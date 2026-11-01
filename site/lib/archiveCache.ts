@@ -85,3 +85,13 @@ export function registerArchive(protocol: Protocol, url: string, pm: Pm): PMTile
   }
   return archive;
 }
+
+/**
+ * Swap `failed` for a fresh archive at `url`, unless that has happened already. Reads under way keep
+ * the old one; the bytes it did read stay in the shared cache.
+ */
+export function replaceArchive(protocol: Protocol, url: string, failed: PMTiles, pm: Pm) {
+  if (protocol.get(url) !== failed) return;
+  protocol.tiles.delete(url);
+  registerArchive(protocol, url, pm);
+}

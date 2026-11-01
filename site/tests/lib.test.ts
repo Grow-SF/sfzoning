@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Protocol } from "pmtiles";
-import { preload, tilesCovering } from "@/lib/preload";
-import { ByteCache, cachedSource } from "@/lib/archiveCache";
+import { preload, RecentDestinations, tilesCovering } from "@/lib/preload";
+import { ByteCache, cachedSource, type Pm } from "@/lib/archiveCache";
 import { ERAS } from "@/lib/eras";
 import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
-import { HOLD_LIMIT_MS, heldScans } from "@/lib/scanHold";
+import { COLOURS, HOLD_LIMIT_MS, heldScans, nextHeld } from "@/lib/scanHold";
 import { INK_CITY, inkByZoom, scanInkWeight } from "@/lib/theme";
 
 const orig = process.env.NEXT_PUBLIC_TILES_BASE_URL;
@@ -178,12 +178,118 @@ describe("cachedSource", () => {
 });
 
 describe("preload", () => {
-  it("resolves when a fetch fails", async () => {
-    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
-    try {
-      await expect(preload(new Protocol(), ["https://tiles.example.org/x.pmtiles"], () => [{ z: 0, x: 0, y: 0 }])).resolves.toBeUndefined();
-    } finally {
-      vi.unstubAllGlobals();
+  const url = "https://tiles.example.org/x.pmtiles";
+  const tile = () => [{ z: 0, x: 0, y: 0 }];
+  /**
+   * Stand-ins for the pmtiles classes. Like the real archive, each one keeps its header read,
+   * rejected or not, for good. `reads` answers each upstream read in turn; `tiles` each tile read.
+   */
+  const fakes = (reads: boolean[], tiles: (() => Promise<unknown>)[] = []) => {
+    class FetchSource {
+      constructor(readonly url: string) {}
+      getKey = () => this.url;
+      getBytes = async () => {
+        if (reads.shift() === false) throw new Error("offline");
+        return { data: new ArrayBuffer(1) };
+      };
     }
+    class PMTiles {
+      private header?: Promise<{ maxZoom: number }>;
+      constructor(readonly source: FetchSource) {}
+      getHeader = () => (this.header ??= this.source.getBytes().then(() => ({ maxZoom: 14 })));
+      getZxy = () => (tiles.shift() ?? (() => Promise.resolve({ data: new ArrayBuffer(1) })))();
+    }
+    return { PMTiles, FetchSource } as unknown as Pm;
+  };
+
+  it("reports success, with a tile missing from the archive counting as success", async () => {
+    const pm = fakes([true], [() => Promise.resolve(undefined)]);
+    expect(await preload(new Protocol(), pm, url, tile)).toBe(true);
+  });
+  it("reports failure, without rejecting, when a tile can't be read", async () => {
+    const pm = fakes([true], [() => Promise.reject(new Error("offline"))]);
+    expect(await preload(new Protocol(), pm, url, tile)).toBe(false);
+  });
+  it("leaves the archive usable after a failed read: the next attempt succeeds", async () => {
+    const protocol = new Protocol();
+    const pm = fakes([false, true]);
+    const once = "https://tiles.example.org/fails-once.pmtiles";
+    expect(await preload(protocol, pm, once, tile)).toBe(false);
+    expect(await preload(protocol, pm, once, tile)).toBe(true);
+  });
+  it("a map source reading by URL after a failure gets a working archive, not none", async () => {
+    const protocol = new Protocol();
+    const pm = fakes([false, true]);
+    const live = "https://tiles.example.org/live.pmtiles";
+    await preload(protocol, pm, live, tile);
+    await expect(protocol.get(live)!.getHeader()).resolves.toMatchObject({ maxZoom: 14 });
+  });
+});
+
+describe("RecentDestinations", () => {
+  const at = (n: number) => ({ center: [n, 0] as [number, number], zoom: 12 });
+
+  it("counts a destination as ready only once its fetch has succeeded", () => {
+    const d = new RecentDestinations();
+    expect(d.start("1948", at(1))).toBe(true);
+    expect(d.ready("1948", at(1))).toBe(false);
+    expect(d.start("1948", at(1))).toBe(false); // already on its way
+    d.finish("1948", at(1), true);
+    expect(d.ready("1948", at(1))).toBe(true);
+  });
+  it("forgets a failed fetch: not ready, and a later step tries again", () => {
+    const d = new RecentDestinations();
+    d.start("1948", at(1));
+    d.finish("1948", at(1), false);
+    expect(d.ready("1948", at(1))).toBe(false);
+    expect(d.start("1948", at(1))).toBe(true);
+  });
+  it("forgets the oldest destination past the limit: not ready, and fetched again", () => {
+    const d = new RecentDestinations(2);
+    for (const n of [1, 2, 3]) {
+      d.start("1948", at(n));
+      d.finish("1948", at(n), true);
+    }
+    expect(d.ready("1948", at(1))).toBe(false);
+    expect(d.ready("1948", at(3))).toBe(true);
+    expect(d.start("1948", at(1))).toBe(true);
+  });
+  it("keeps a destination a step asked for again", () => {
+    const d = new RecentDestinations(2);
+    d.arrived("1948", at(1));
+    d.arrived("1948", at(2));
+    expect(d.start("1948", at(1))).toBe(false);
+    d.arrived("1948", at(3));
+    expect(d.ready("1948", at(1))).toBe(true);
+    expect(d.ready("1948", at(2))).toBe(false);
+  });
+  it("a fetch finishing after its destination was forgotten doesn't bring it back", () => {
+    const d = new RecentDestinations(1);
+    d.start("1948", at(1));
+    d.arrived("1948", at(2));
+    d.finish("1948", at(1), true);
+    expect(d.ready("1948", at(1))).toBe(false);
+  });
+});
+
+describe("nextHeld", () => {
+  it("holds the scans a step leaves", () => {
+    expect(nextHeld([], ["1948"], ["1960"], false, false)).toEqual(["1948"]);
+  });
+  it("past two scans, drops the oldest and keeps the one on screen now", () => {
+    expect(nextHeld(["1921", "1948"], ["1960"], ["1972"], false, false)).toEqual(["1948", "1960"]);
+  });
+  it("a scan held before and on screen again since counts as the most recent", () => {
+    expect(nextHeld(["1948", "1921"], ["1948"], ["1972"], false, false)).toEqual(["1921", "1948"]);
+  });
+  it("doesn't hold a scan the step wants", () => {
+    expect(nextHeld(["1948"], ["1960"], ["1948"], false, false)).toEqual(["1960"]);
+  });
+  it("keeps colours on a step with a scan alone, and they don't use up the scans' places", () => {
+    expect(nextHeld(["1921", "1948"], ["1960"], ["1972"], true, true)).toEqual(["1948", "1960", COLOURS]);
+    expect(nextHeld([COLOURS], ["1960"], ["1972"], true, false)).toEqual(["1960", COLOURS]);
+  });
+  it("releases held colours on a step that draws colours of its own", () => {
+    expect(nextHeld([COLOURS], ["1960"], ["1972"], false, true)).toEqual(["1960"]);
   });
 });
