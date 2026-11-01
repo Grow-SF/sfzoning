@@ -7,7 +7,7 @@ import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
 import { isPartialMap, threePlusShare, type DistrictStats } from "@/lib/stats";
 import { ERAS } from "@/lib/eras";
 import { districtStatsUrl, publishedPath } from "@/lib/tiles";
-import { hashedName, plan } from "../scripts/publish-tiles.mjs";
+import { hashedName, plan, uploadedBytesMatch } from "../scripts/publish-tiles.mjs";
 import { buildRules, parseCsv } from "../scripts/build-rules.mjs";
 
 const PIPELINE_CATEGORIES = [
@@ -217,5 +217,26 @@ describe("threePlusShare", () => {
   });
   it("is null with no residential parcels", () => {
     expect(threePlusShare(stats({ commercial_dense: 4 }))).toBeNull();
+  });
+});
+
+describe("uploadedBytesMatch", () => {
+  const noWait = async () => {};
+  const reads = (...hashes: (string | null)[]) => {
+    const calls = { n: 0 };
+    return { calls, read: async () => hashes[Math.min(calls.n++, hashes.length - 1)] };
+  };
+
+  it("waits out a store that hasn't caught up yet", async () => {
+    const { read, calls } = reads(null, "old", "h1");
+    expect(await uploadedBytesMatch(read, "h1", noWait)).toBe(true);
+    expect(calls.n).toBe(3);
+  });
+
+  it("still fails on a real mismatch, after a bounded number of reads", async () => {
+    const { read, calls } = reads("other");
+    expect(await uploadedBytesMatch(read, "h1", noWait)).toBe(false);
+    expect(calls.n).toBeLessThan(10);
+    expect(calls.n).toBeGreaterThan(1);
   });
 });

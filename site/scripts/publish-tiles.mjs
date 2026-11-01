@@ -52,6 +52,20 @@ async function remoteSha(name) {
   return h.digest("hex");
 }
 
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Whether an upload reads back as `hash`. A read straight after `put` can see the store lagging
+ * (a 404 or a miss), so it gets a few tries, about 30 seconds in all, before it counts as a mismatch.
+ */
+export async function uploadedBytesMatch(read, hash, wait = pause) {
+  for (const ms of [1000, 2000, 4000, 8000, 16000]) {
+    if ((await read()) === hash) return true;
+    await wait(ms);
+  }
+  return (await read()) === hash;
+}
+
 /** Every file the site reads that the pipeline can change, by its usual path. */
 function filesToPublish() {
   const pointer = JSON.parse(readFileSync(path.join(OUT, "shared/districts.json"), "utf8"));
@@ -88,7 +102,9 @@ async function main() {
         cacheControlMaxAge: ONE_YEAR,
         multipart: statSync(local).size > 50_000_000,
       });
-      if ((await remoteSha(step.to)) !== hash) throw new Error(`${step.to}: uploaded bytes don't match`);
+      if (!(await uploadedBytesMatch(() => remoteSha(step.to), hash))) {
+        throw new Error(`${step.to}: uploaded bytes don't match`);
+      }
     }
     if (step.map) {
       manifest[file] = step.to;
