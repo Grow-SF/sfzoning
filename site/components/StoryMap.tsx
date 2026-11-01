@@ -6,7 +6,9 @@ import type { Map as MlMap } from "maplibre-gl";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { ERAS } from "@/lib/eras";
-import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
+import type { Protocol as PmProtocol } from "pmtiles";
+import { BASEMAP, scanPath, scanSource, tileUrl, tilesHttpUrl } from "@/lib/tiles";
+import { preload, tilesCovering } from "@/lib/preload";
 import { INK_ZOOM, MAP_COLORS, inkByZoom } from "@/lib/theme";
 import { ALLOWED_FILL_OPACITY, BOTH_SCAN_WEIGHT, districtFillOpacity } from "@/lib/palette";
 import { loadLotCards, loadSharedDistricts, lotCard, lotCategory, SHARED_SOURCE, type SharedDistricts } from "@/lib/shared";
@@ -22,9 +24,11 @@ export type MapState = {
   /** Omit to leave the camera where it is (the explorer, where the reader pans). */
   camera?: { center: [number, number]; zoom: number; bearing?: number };
   highlight?: Feature<Geometry> | FeatureCollection<Geometry>;
-  /** Warm this era's tiles (the next step's) by drawing them at near-zero opacity. */
-  prefetch?: { era: string; view: "scan" | "allowed" | "both" };
+  /** Story only: destinations (the neighbouring steps') whose tiles to fetch now, without drawing them. */
+  preload?: Preload[];
 };
+
+export type Preload = { camera: { center: [number, number]; zoom: number }; scanSeries: string[] };
 
 export type StoryMapHandle = { apply: (state: MapState) => void };
 
@@ -62,8 +66,6 @@ const HOLD_CHECK_MS = 200;
 const TILE_FADE_MS = 300;
 /** Held alongside scans: the old colours stay up until the new scan has arrived. */
 const COLOURS = "colours";
-/** Below this, tiles still load but nothing visible is drawn. */
-const WARM = 0.001;
 /** In "both" at city zoom the colours carry the view; the scan fades to a trace of itself. */
 const BOTH_CITY_INK = 0.3;
 const scanLayer = (series: string) => `scan-${series}`;
@@ -80,6 +82,8 @@ function afterFirstPaint(): Promise<void> {
 }
 
 let ml: typeof Ml | null = null;
+/** The one pmtiles protocol: MapLibre and preloads share its archives, headers and directories. */
+let protocol: PmProtocol | null = null;
 /**
  * maplibre-gl (290 kB gzipped) is fetched and started only after the page has loaded and
  * gone idle, so the hero's headline paints and hydrates without waiting on WebGL work.
@@ -89,7 +93,8 @@ async function loadMaplibre(): Promise<typeof Ml> {
   await afterFirstPaint();
   const [lib, { Protocol }] = await Promise.all([import("maplibre-gl"), import("pmtiles")]);
   lib.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
-  lib.addProtocol("pmtiles", new Protocol().tile);
+  protocol = new Protocol();
+  lib.addProtocol("pmtiles", protocol.tile);
   ml = lib;
   return lib;
 }
@@ -112,10 +117,7 @@ function storyPadding(map: MlMap): Ml.PaddingOptions {
 
 function scanOpacity(s: MapState, series: string, avail: Availability): Opacity {
   const era = ERAS.find((e) => e.id === s.era);
-  if (!era || !era.scanSeries.includes(series)) {
-    const next = s.prefetch && ERAS.find((e) => e.id === s.prefetch!.era);
-    return next && next.scanSeries.includes(series) && !(s.prefetch!.view === "allowed" && avail[next.id]) ? WARM : 0;
-  }
+  if (!era || !era.scanSeries.includes(series)) return 0;
   // "allowed" hides the scan only once the colours exist; until then the scan stands in.
   if (s.view === "allowed" && avail[era.id]) return 0;
   // In "both" the scan's solid black (1948 Commercial, say) would drown the colours; ease the
@@ -126,18 +128,12 @@ function scanOpacity(s: MapState, series: string, avail: Availability): Opacity 
   return 1;
 }
 
-/** The scan series that `s` draws at all (current era or prefetch warm-up). */
+/** The scan series that `s` draws at all. */
 export function scansShown(s: MapState, avail: Availability): Set<string> {
   return new Set(allSeries().filter((series) => scanOpacity(s, series, avail) !== 0));
 }
 
-/** The scans drawn for real: shown, but not merely warmed up. */
-function scansWanted(s: MapState, avail: Availability): string[] {
-  return allSeries().filter((series) => {
-    const o = scanOpacity(s, series, avail);
-    return o !== 0 && o !== WARM;
-  });
-}
+const scansWanted = (s: MapState, avail: Availability): string[] => [...scansShown(s, avail)];
 
 /** Add a scan's source and layer, under the district layers, if it isn't there yet. */
 function addScan(map: MlMap, series: string, fadeTiles: boolean) {
@@ -186,6 +182,8 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   const holdRef = useRef<Hold | null>(null);
   const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastWanted = useRef<string[]>([]);
+  /** Destinations already preloaded (camera and scans), so each is fetched once. */
+  const preloaded = useRef(new Set<string>());
   /** The era whose colours are on screen (null: none). */
   const lastEra = useRef<number | null>(null);
   const paintedEra = useRef(initial.era);
@@ -262,7 +260,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         // New scans sit above the held ones, still under the districts.
         const before = map.getStyle().layers.find((l) => l.id.startsWith("dist-") || l.id === "selected-line")?.id;
         for (const series of wanted) {
-          addScan(map, series, !interactive);
+          addScan(map, series, !interactive && !reducedMotion());
           map.moveLayer(scanLayer(series), before);
         }
       } else holdRef.current = null;
@@ -275,7 +273,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       if (timer) clearTimeout(timer);
       hideTimers.current.delete(key);
       if (shown.has(series)) {
-        addScan(map, series, !interactive);
+        addScan(map, series, !interactive && !reducedMotion());
         map.setLayoutProperty(id, "visibility", "visible");
       }
       if (!map.getLayer(id)) continue;
@@ -319,6 +317,27 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         };
         if (reducedMotion()) map.jumpTo(cam);
         else map.easeTo({ ...cam, duration: PAN_MS });
+      }
+      // The neighbouring steps' ground, so the pan finds the old map already there. A failure
+      // here is silent: the map fetches what it needs when it gets there.
+      const shared = sharedRef.current;
+      if (!interactive && protocol && s.preload) {
+        const { clientWidth: w, clientHeight: h } = map.getContainer();
+        // Each archive once per destination, however many steps ask for it.
+        const once = (archive: string, cam: Preload["camera"]) => {
+          const key = JSON.stringify([archive, cam.center, cam.zoom]);
+          if (preloaded.current.has(key)) return false;
+          preloaded.current.add(key);
+          return true;
+        };
+        for (const p of s.preload) {
+          const cam = { center: p.camera.center, zoom: p.camera.zoom };
+          const scans = p.scanSeries.filter((series) => once(series, cam)).map((series) => tilesHttpUrl(scanPath(series)));
+          if (scans.length) void preload(protocol, scans, (maxZoom) => tilesCovering(cam, w, h, 256, maxZoom));
+          if (shared && once(SHARED_SOURCE, cam)) {
+            void preload(protocol, [shared.url.replace(/^pmtiles:\/\//, "")], (maxZoom) => tilesCovering(cam, w, h, 512, maxZoom));
+          }
+        }
       }
     },
     [paint, interactive],

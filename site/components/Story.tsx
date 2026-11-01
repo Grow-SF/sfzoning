@@ -1,7 +1,8 @@
 "use client";
 
 import { createRef, useEffect, useMemo, useRef } from "react";
-import StoryMap, { type StoryMapHandle } from "./StoryMap";
+import StoryMap, { scansShown, type StoryMapHandle } from "./StoryMap";
+import { useDistrictAvailability } from "@/lib/districts";
 import StepCard from "./StepCard";
 import type { Step } from "@/content/schema";
 import { ERAS, heroCue } from "@/lib/eras";
@@ -18,13 +19,18 @@ export default function Story({ steps }: Props) {
   const { active } = useScrollSteps(refs, { offset: 0.7 });
   const step = steps[active];
   const next = steps[active + 1];
+  const prev = steps[active - 1];
+  const avail = useDistrictAvailability();
 
   useEffect(() => {
-    // The next step's scan is drawn at near-zero opacity, so its tiles are already in hand when
-    // the reader scrolls on. Colours need no warm-up: every year uses the same shapes.
-    const prefetch = next && next.era !== step.era ? { era: next.era, view: next.view } : undefined;
-    mapRef.current?.apply({ era: step.era, view: step.view, camera: step.camera, highlight: step.highlight, prefetch });
-  }, [step, next]);
+    // Both neighbours' ground is fetched ahead, for scrolling either way: the scans on screen now
+    // (they stay up while the camera pans) and the neighbour's own, at the neighbour's camera.
+    const here = scansShown({ era: step.era, view: step.view }, avail);
+    const preload = [prev, next]
+      .filter((n): n is Step => !!n)
+      .map((n) => ({ camera: n.camera, scanSeries: Array.from(new Set([...here, ...scansShown({ era: n.era, view: n.view }, avail)])) }));
+    mapRef.current?.apply({ era: step.era, view: step.view, camera: step.camera, highlight: step.highlight, preload });
+  }, [step, next, prev, avail]);
 
   const first = steps[0];
   return (

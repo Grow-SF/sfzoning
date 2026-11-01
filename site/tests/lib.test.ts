@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Protocol } from "pmtiles";
+import { preload, tilesCovering } from "@/lib/preload";
 import { ERAS } from "@/lib/eras";
 import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
 import { HOLD_LIMIT_MS, heldScans } from "@/lib/scanHold";
@@ -76,5 +78,49 @@ describe("heldScans", () => {
   });
   it("has nothing to release without a hold", () => {
     expect(heldScans(null, ["1950"], never, false, 2000)).toBeNull();
+  });
+});
+
+describe("tilesCovering", () => {
+  const camera = { center: [-122.4194, 37.7749] as [number, number], zoom: 14.2 };
+  const worldTile = (lon: number, lat: number, z: number) => {
+    const n = 2 ** z;
+    const rad = (lat * Math.PI) / 180;
+    return { x: Math.floor(((lon + 180) / 360) * n), y: Math.floor(((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n) };
+  };
+  const has = (tiles: { z: number; x: number; y: number }[], z: number, t: { x: number; y: number }) =>
+    tiles.some((k) => k.z === z && k.x === t.x && k.y === t.y);
+
+  it("covers the centre tile and all four corners of the viewport", () => {
+    const tiles = tilesCovering(camera, 1440, 900, 512, 18);
+    expect(new Set(tiles.map((t) => t.z))).toEqual(new Set([14]));
+    expect(has(tiles, 14, worldTile(camera.center[0], camera.center[1], 14))).toBe(true);
+    // Half the viewport in degrees at z14.2 (512px world), a little inside the edge.
+    const dLon = (720 / (512 * 2 ** camera.zoom)) * 360 * 0.99;
+    const dLat = (450 / (512 * 2 ** camera.zoom)) * 360 * Math.cos((camera.center[1] * Math.PI) / 180) * 0.99;
+    for (const sx of [-1, 1])
+      for (const sy of [-1, 1])
+        expect(has(tiles, 14, worldTile(camera.center[0] + sx * dLon, camera.center[1] + sy * dLat, 14))).toBe(true);
+  });
+  it("uses one zoom higher for 256px tiles", () => {
+    expect(new Set(tilesCovering(camera, 1440, 900, 256, 18).map((t) => t.z))).toEqual(new Set([15]));
+  });
+  it("clamps to the archive's max zoom, covering the same ground", () => {
+    const tiles = tilesCovering({ ...camera, zoom: 17.5 }, 1440, 900, 512, 14);
+    expect(new Set(tiles.map((t) => t.z))).toEqual(new Set([14]));
+    expect(has(tiles, 14, worldTile(camera.center[0], camera.center[1], 14))).toBe(true);
+    // At z17.5 the viewport is small; clamped to z14 it still includes at least that one tile.
+    expect(tiles.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe("preload", () => {
+  it("resolves when a fetch fails", async () => {
+    vi.stubGlobal("fetch", () => Promise.reject(new Error("offline")));
+    try {
+      await expect(preload(new Protocol(), ["https://tiles.example.org/x.pmtiles"], () => [{ z: 0, x: 0, y: 0 }])).resolves.toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

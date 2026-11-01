@@ -35,14 +35,15 @@ async function panAndSettle(page: Page) {
   await settled(page);
 }
 
-const prefetchScans = (i: number) => {
-  const next = STORY[i + 1];
-  return next && next.era !== STORY[i].era ? ERAS.find((e) => e.id === next.era)!.scanSeries : [];
+/** Scans the story may fetch at step i: the current era's, plus the neighbouring steps' (preloaded). */
+const allowedScans = (i: number) => {
+  const eras = [STORY[i - 1], STORY[i], STORY[i + 1]].filter(Boolean).map((s) => s.era);
+  return new Set(eras.flatMap((id) => ERAS.find((e) => e.id === id)!.scanSeries));
 };
 
-test("the opening (today) step loads no scans but the next step's warm-up", async ({ page }, info) => {
+test("the opening (today) step loads no scans but the next step's", async ({ page }, info) => {
   expect(STORY[0].era).toBe("today");
-  const allowed = new Set(prefetchScans(0));
+  const allowed = allowedScans(0);
   const log = recordScanRequests(page);
   await page.goto("/");
   await settled(page);
@@ -50,7 +51,7 @@ test("the opening (today) step loads no scans but the next step's warm-up", asyn
   await settled(page);
   info.annotations.push({ type: "today-step scan requests", description: JSON.stringify(counts(log)) });
   console.log(`[${info.project.name}] today step scan requests:`, log.length, counts(log));
-  // Today has no scan; nothing but the prefetch era's scan may be fetched.
+  // Today has no scan; nothing but the neighbouring steps' scans may be fetched.
   expect(log.filter((s) => !allowed.has(s))).toEqual([]);
 
   log.length = 0;
@@ -58,9 +59,9 @@ test("the opening (today) step loads no scans but the next step's warm-up", asyn
   expect(log.filter((s) => !allowed.has(s))).toEqual([]);
 });
 
-test("a 1948 step loads only the 1948 scan and the prefetch era's", async ({ page }) => {
+test("a 1948 step loads only its own scan and the neighbouring eras'", async ({ page }) => {
   const i = STORY.findIndex((s) => s.id === "1948-sunset");
-  const allowed = new Set(["1948", ...prefetchScans(i)]);
+  const allowed = allowedScans(i);
   const log = recordScanRequests(page);
   await page.goto("/");
   await settled(page);
@@ -75,11 +76,60 @@ test("a 1948 step loads only the 1948 scan and the prefetch era's", async ({ pag
   expect(log).toContain("1948");
 });
 
+/**
+ * Records the byte ranges of the shared district tiles' archive, in order of request. A range
+ * asked for twice is not new: what counts is how much ground a request opens up that nothing had
+ * fetched before (the browser's cache decides whether a repeat reaches the network, not us).
+ */
+function recordSharedRanges(page: Page) {
+  const seen = new Set<string>();
+  const fresh: string[] = [];
+  let counting = false;
+  page.on("request", (req) => {
+    if (!/\/shared\/districts-[^/]+\.pmtiles/.test(req.url())) return;
+    const range = req.headers()["range"] ?? "";
+    if (!seen.has(range) && counting) fresh.push(range);
+    seen.add(range);
+  });
+  return {
+    /** From now on, count ranges nothing has asked for yet. */
+    start: () => ((counting = true), (fresh.length = 0)),
+    fresh: () => fresh.length,
+  };
+}
+
+test("the next step's shared tiles are already fetched before the reader scrolls there", async ({ page, browser }) => {
+  const from = "1960-density-caps";
+  const to = "1960-not-a-downzoning";
+  const visit = async (p: Page, via?: string) => {
+    const log = recordSharedRanges(p);
+    await p.goto("/");
+    await settled(p);
+    if (via) {
+      await goToStep(p, via);
+      await p.waitForTimeout(6000);
+      await settled(p);
+    }
+    log.start();
+    await goToStep(p, to);
+    await p.waitForTimeout(2500);
+    await settled(p);
+    return log.fresh();
+  };
+  const ahead = await visit(page, from);
+  const context = await browser.newContext();
+  const cold = await visit(await context.newPage());
+  await context.close();
+  console.log("shared-tile requests going to", to, { ahead, cold });
+  expect(cold).toBeGreaterThan(0);
+  expect(ahead).toBeLessThan(cold / 2);
+});
+
 test("a scan failing outside the current era raises no notice; the current era's does", async ({ page }) => {
   await page.route("**/1948/1948-paper.pmtiles", (r) => r.fulfill({ status: 404, body: "not found" }));
   await page.goto("/");
   const notice = page.locator("[data-active-step] .map-notice");
-  // 1921-mission prefetches 1948, whose archive is missing: not this step's problem.
+  // 1921-mission preloads 1948, whose archive is missing: not this step's problem.
   await goToStep(page, "1921-mission");
   await page.waitForTimeout(2500);
   await expect(notice).toHaveCount(0);

@@ -118,12 +118,7 @@ const visibleScans = (page: Page) =>
     const m = (window as unknown as { __map: import("maplibre-gl").Map }).__map;
     return m
       .getStyle()
-      .layers.filter((l) => {
-        if (!l.id.startsWith("scan-") || m.getLayoutProperty(l.id, "visibility") !== "visible") return false;
-        // A scan warmed for the next step is "visible" but drawn at near-zero opacity.
-        const o = m.getPaintProperty(l.id, "raster-opacity");
-        return typeof o !== "number" || o > 0.01;
-      })
+      .layers.filter((l) => l.id.startsWith("scan-") && m.getLayoutProperty(l.id, "visibility") === "visible")
       .map((l) => l.id);
   });
 
@@ -149,6 +144,11 @@ test("a scan that never arrives ends with colours and no stuck hold", async ({ p
   await page.waitForTimeout(9000);
   await expect(page.getByTestId("legend")).toBeVisible();
   expect(await visibleScans(page)).not.toContain("scan-1921");
+  const hidden = await page.evaluate(() => {
+    const m = (window as unknown as { __map: import("maplibre-gl").Map }).__map;
+    return m.getLayoutProperty("scan-1921", "visibility");
+  });
+  expect(hidden).toBe("none");
 });
 
 const delayed = (ms: number) => async (route: import("@playwright/test").Route) => {
