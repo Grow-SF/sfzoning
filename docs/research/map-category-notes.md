@@ -21,12 +21,13 @@ CSV (`docs/research/zoning-districts.csv`, `max_units_per_lot`).
 | RED, SPD, RSD | homes_top | CSV "not read"; compared with the form-based mixed-use zones (UMU, MUR) | unverified |
 | RED-MX | homes_top | CSV "form-based; not verified" | unverified |
 | WMUG | homes_top | CSV "form-based; not verified"; follows UMU/MUG | unverified |
-| RCD | homes_low | CSV "form-based; not verified"; compared with the NC districts (NC-2) | unverified |
+| RCD | homes_top | CSV "form-based (no numeric lot cap); not verified" | unverified |
 | RTO-C | homes_top | CSV "not read (form-based expected)"; follows RTO | unverified |
 | MR-MU, BR-MU, P70-MU, PPS-MU, S-MU | homes_top | per development agreement, no per-lot cap | unverified |
 | MB-RA, HP-RA | homes_top | per redevelopment plan | unverified |
 | TI-R, YBI-R, PM-R, TI-MU, YBI-MU, PM-MU1, PM-MU2 | homes_top | per development agreement | unverified |
-| Named NCDs (NCD) | homes_low | CSV: varies (Broadway 1/400, Castro 1/600, Inner Clement 1/600); no confirmed limit | unverified |
+| Broadway NCD | homes_mid | CSV: Broadway 1/400 (2000) | from CSV |
+| Other named NCDs (NCD) | homes_low | CSV: varies (Castro 1/600, Inner Clement 1/600); the rest have no figure in the CSV and take the same step | unverified |
 | Named NCTs (NCT-MISSION etc.) | homes_top | CSV: NCT form-based, no density limit | from CSV |
 | R-3.5 (1964-78) | homes_mid | CSV "unknown"; sits between R-3 (1 per 400) and R-4 (1 per 200) | unverified |
 | R-4-C, R-5-C (1968-78) | homes_high, homes_top | CSV "presumably R-4 / R-5 density; not verified" | unverified |

@@ -24,12 +24,13 @@ _EXPLICIT = {
     "C-1": "homes_mid",
     # R-3.5 is between R-3 (1 per 400) and R-4 (1 per 200); the CSV has no number. Unverified.
     "R-3.5": "homes_mid",
-    # Named NCDs vary; no confirmed limit. Unverified.
+    # Named NCDs vary and all normalise to NCD. Those the research gives are 1 per 600, except
+    # Broadway (see category_for); the rest are unverified.
     "NCD": "homes_low",
     # Unread limits or per-agreement / per-plan zones: the closest comparable zone. Unverified.
     "CCB": "homes_high", "CRNC": "homes_high", "CVR": "homes_high",
     "RED": "homes_top", "SPD": "homes_top", "RSD": "homes_top", "RED-MX": "homes_top",
-    "RCD": "homes_low", "RTO-C": "homes_top",
+    "RTO-C": "homes_top",
     "MB-RA": "homes_top", "HP-RA": "homes_top",
 }
 
@@ -78,6 +79,9 @@ def category_for(code: str, year: int) -> str:
     """Story category. Strict era match first; if the code exists in the CSV only in another era
     (a series' single lookup year can sit outside the era of a code printed on it), use the
     nearest-era row. Codes absent from the CSV are 'unknown'."""
+    # Normalising drops an NCD's name, so read this one from the raw code: 1 per 400 in the research.
+    if normalise_code(code, year) == "NCD" and "BROADWAY" in code.upper():
+        return "homes_mid"
     rule = rule_for(code, year)
     if rule is None:
         rows = rules_for_any_era(code)

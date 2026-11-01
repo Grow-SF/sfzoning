@@ -121,7 +121,7 @@ def test_series_table_complete():
 TODAY_CODES = [
     ("NCT-MISSION", "homes_top"), ("NCT-24TH-MISSION", "homes_top"), ("NCT-UPPER MARKET", "homes_top"),
     ("NCT-GLEN PARK", "homes_top"), ("RTO-1", "homes_top"), ("RH DTR", "homes_top"),
-    ("SB-DTR", "homes_top"), ("TB DTR", "homes_top"), ("RCD", "homes_low"),
+    ("SB-DTR", "homes_top"), ("TB DTR", "homes_top"), ("RCD", "homes_top"),
     ("SALI", "industrial"), ("RED-MX", "homes_top"), ("WMUG", "homes_top"), ("WMUO", "commercial_light"),
     ("CMUO", "commercial_light"), ("MR-MU", "homes_top"), ("BR-MU", "homes_top"), ("P70-MU", "homes_top"),
     ("PPS-MU", "homes_top"), ("S-MU", "homes_top"), ("MB-RA", "homes_top"), ("MB-O", "commercial_light"),
@@ -213,6 +213,12 @@ MAP_CATEGORY_TABLE = [
     ("NCT-MISSION", 2020, "homes_top"),
     ("NCD", 2000, "homes_low"),
     ("Valencia NCD", 2000, "homes_low"),
+    ("NCD-CASTRO", 2026, "homes_low"),
+    # Broadway's 1 per 400 is the one NCD limit the research gives that differs from homes_low.
+    ("BROADWAY NCD", 2000, "homes_mid"),
+    ("NCD-BROADWAY", 2026, "homes_mid"),
+    # Form-based, no numeric lot cap, in the research.
+    ("RCD", 2026, "homes_top"),
 ]
 
 
