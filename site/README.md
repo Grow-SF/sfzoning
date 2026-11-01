@@ -27,6 +27,17 @@ npm run dev            # http://localhost:3000 (builds public/data/rules.json fi
   they cover (`lib/districts.ts`); an era they don't cover shows its scan with a "district
   colours are coming" note instead of failing.
 
+### Loading the story ahead
+
+Everything read from an archive goes through one 32 MB in-memory byte cache (`lib/archiveCache.ts`),
+shared by both maps, because the browser's HTTP cache isn't reliable for range reads. When the story
+map goes idle at a step, it preloads the tiles for both neighbouring steps' cameras (`lib/preload.ts`):
+the scans on screen, the neighbour's scans and the shared districts. A step whose scans finished
+preloading cross-fades during its pan; otherwise the old scan is held until the new one has loaded and
+the camera has stopped, or for at most 8s (`lib/scanHold.ts`). Only the last 6 destinations count as
+preloaded, so an entry doesn't outlive its bytes in the cache. A failed preload is silent: it counts as
+not preloaded, and replaces the archive so its failed read can't reach the map.
+
 ### Tests
 
 ```sh

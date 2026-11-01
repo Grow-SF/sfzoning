@@ -23,7 +23,7 @@ Causes: the story warms the next era at the current camera, not the next step's 
 
 1. `StoryMap` draws all districts through `addLookupLayer`, in the story and the explorer. No per-year vector source or layer remains in `site/`.
 2. Story transitions: colours cross-fade over the same 1.4s as the camera move.
-3. Scans, in the story only: the old scan stays underneath while the new one loads, and the new one fades in above it as its tiles are ready. The old scan goes once the new source has finished loading and the fade is done. If the new scan has really failed, an 8s limit ends the hold, so a slow scan never counts as failed at ordinary 4G speeds (up to 2.73s measured).
+3. Scans, in the story only: when a step's destination scans have finished preloading there's no hold, and all layers cross-fade during the pan. Otherwise the old scan stays underneath while the new one loads, and the new one fades in above it as its tiles are ready. That hold releases, with a 300ms exit, once the new scan is loaded and the camera has stopped, or at an 8s limit, so a slow scan never counts as failed at ordinary 4G speeds (up to 2.73s measured).
 4. The next step's destination is loaded ahead of time: the shared tiles, the next era's scan and the current era's scan, so the old map exists where the pan arrives. This costs up to two scan viewports per era change. It replaces the near-zero-opacity warm-up layer, which warmed the current camera.
 5. Story recordings improve against the numbers above on both connections, with no blank-block frames in the recorded transitions on the fast connection.
 
