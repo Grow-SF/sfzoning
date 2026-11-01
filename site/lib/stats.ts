@@ -30,7 +30,7 @@ export function isPartialMap(stats: DistrictStats): boolean {
 }
 
 /**
- * Of the parcels zoned for homes (single-family through the densest steps, mixed-use included),
+ * Of the parcels on the homes scale (single-family through the densest steps, mixed-use included),
  * the share whose district allowed three or more homes per lot. null if none are residential.
  */
 export function threePlusShare(stats: DistrictStats): number | null {

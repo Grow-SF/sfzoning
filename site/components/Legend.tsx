@@ -46,7 +46,7 @@ export default function Legend({ compact = false }: Props) {
         </button>
       )}
       <figure id={id} className={styles.legend} aria-label="Map key">
-        <figcaption className={styles.head}>Homes allowed on a typical lot</figcaption>
+        <figcaption className={styles.head}>Homes allowed per lot</figcaption>
         <ol className={styles.ramp}>
           {HOMES_RAMP.map((c) => (
             <li key={c} title={CATEGORY_LABELS[c]}>

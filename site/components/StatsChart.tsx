@@ -87,7 +87,7 @@ export default function StatsChart() {
       <figcaption>
         <h3 id="stats-title" className={styles.chartTitle}>Where three or more homes were legal</h3>
         <p className={styles.chartDek}>
-          Of the lots zoned for homes, the share whose district allowed three or more per lot, as read from each
+          Of the lots on the homes scale, the share whose district allowed three or more per lot, as read from each
           era&rsquo;s map.
         </p>
       </figcaption>

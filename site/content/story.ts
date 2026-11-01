@@ -136,7 +136,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "A common story says 1960 is when the city downzoned its neighbourhoods. The record says otherwise. By the city’s own later account, the code cut commercial zoning and added the new density caps, and it barred homes from the brown south of Market: M-1 and M-2. The 1921 code had allowed housing in Light Industrial.",
+        text: "A common story says 1960 is when the city downzoned its neighbourhoods. The record says otherwise. The city’s own later account says the code cut commercial zoning. It also added the new density caps and barred homes from the brown south of Market: M-1 and M-2. The 1921 code had allowed housing in Light Industrial.",
       },
       {
         kind: "p",

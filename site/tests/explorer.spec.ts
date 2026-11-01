@@ -79,10 +79,10 @@ test("on phones the story's key is a chip that opens the full key", async ({ pag
   const legend = page.locator("[data-active-step]").getByTestId("legend");
   const chip = legend.getByRole("button", { name: "Key" });
   await expect(chip).toHaveAttribute("aria-expanded", "false");
-  await expect(legend.getByText("Homes allowed on a typical lot")).toBeHidden();
+  await expect(legend.getByText("Homes allowed per lot")).toBeHidden();
   await chip.click();
   await expect(legend.getByRole("button", { name: "Hide key" })).toHaveAttribute("aria-expanded", "true");
-  await expect(legend.getByText("Homes allowed on a typical lot")).toBeVisible();
+  await expect(legend.getByText("Homes allowed per lot")).toBeVisible();
   // The chip stays small: it must not cover the map the way the full key did.
   await legend.getByRole("button").click();
   const box = await legend.boundingBox();

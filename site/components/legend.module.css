@@ -124,7 +124,7 @@
   .chip { display: none; }
   .wrap[data-compact] .legend { display: block; margin-top: 0; }
   .legend {
-    width: 15.5rem;
+    width: 17rem;
     padding: 0.6rem 0.75rem 0.65rem;
     font-size: 0.75rem;
   }
