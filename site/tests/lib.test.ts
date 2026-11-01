@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { ERAS } from "@/lib/eras";
 import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
+import { HOLD_LIMIT_MS, heldScans } from "@/lib/scanHold";
 import { INK_CITY, inkByZoom, scanInkWeight } from "@/lib/theme";
 
 const orig = process.env.NEXT_PUBLIC_TILES_BASE_URL;
@@ -48,5 +49,32 @@ describe("ERAS", () => {
   });
   it("covers the 15 story eras", () => {
     expect(ERAS).toHaveLength(15);
+  });
+});
+
+describe("heldScans", () => {
+  const hold = { held: ["1948"], since: 1000 };
+  const never = () => false;
+  const always = () => true;
+  it("keeps the held scans while the wanted one is not loaded", () => {
+    expect(heldScans(hold, ["1950"], never, true, 2000)).toEqual(hold);
+  });
+  it("keeps them while loaded but not yet faded in", () => {
+    expect(heldScans(hold, ["1950"], always, false, 2000)).toEqual(hold);
+  });
+  it("releases them once loaded and faded", () => {
+    expect(heldScans(hold, ["1950"], always, true, 2000)).toBeNull();
+  });
+  it("releases them at the limit even if the scan never arrived", () => {
+    expect(heldScans(hold, ["1950"], never, false, 1000 + HOLD_LIMIT_MS - 1)).toEqual(hold);
+    expect(heldScans(hold, ["1950"], never, false, 1000 + HOLD_LIMIT_MS)).toBeNull();
+  });
+  it("drops a held scan that is wanted again", () => {
+    const two = { held: ["1948", "1950"], since: 1000 };
+    expect(heldScans(two, ["1950"], never, false, 2000)).toEqual({ held: ["1948"], since: 1000 });
+    expect(heldScans({ held: ["1950"], since: 1000 }, ["1950"], never, false, 2000)).toBeNull();
+  });
+  it("has nothing to release without a hold", () => {
+    expect(heldScans(null, ["1950"], never, false, 2000)).toBeNull();
   });
 });

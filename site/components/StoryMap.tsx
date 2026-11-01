@@ -10,6 +10,7 @@ import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
 import { INK_ZOOM, MAP_COLORS, inkByZoom } from "@/lib/theme";
 import { ALLOWED_FILL_OPACITY, BOTH_SCAN_WEIGHT, districtFillOpacity } from "@/lib/palette";
 import { loadLotCards, loadSharedDistricts, lotCard, lotCategory, SHARED_SOURCE, type SharedDistricts } from "@/lib/shared";
+import { heldScans, type Hold } from "@/lib/scanHold";
 import { addLookupLayer, LOTS_LAYER } from "@/lib/lookupLayer";
 import { useDistrictAvailability, type Availability } from "@/lib/districts";
 import Legend from "./Legend";
@@ -54,6 +55,9 @@ type Opacity = number | Expr;
 /** Test builds only (NEXT_PUBLIC_E2E=1, set by playwright.config): window.__map(s), data-idle. */
 const E2E = process.env.NEXT_PUBLIC_E2E === "1";
 const FADE_MS = 700;
+/** The story's step: the camera move and the colour fades take this long together. */
+const PAN_MS = 1400;
+const HOLD_CHECK_MS = 200;
 /** Below this, tiles still load but nothing visible is drawn. */
 const WARM = 0.001;
 /** In "both" at city zoom the colours carry the view; the scan fades to a trace of itself. */
@@ -123,6 +127,14 @@ export function scansShown(s: MapState, avail: Availability): Set<string> {
   return new Set(allSeries().filter((series) => scanOpacity(s, series, avail) !== 0));
 }
 
+/** The scans drawn for real: shown, but not merely warmed up. */
+function scansWanted(s: MapState, avail: Availability): string[] {
+  return allSeries().filter((series) => {
+    const o = scanOpacity(s, series, avail);
+    return o !== 0 && o !== WARM;
+  });
+}
+
 /** Add a scan's source and layer, under the district layers, if it isn't there yet. */
 function addScan(map: MlMap, series: string) {
   const id = scanLayer(series);
@@ -166,6 +178,10 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   /** The lot number behind selectedBlklot, in the shared shapes. */
   const selectedLot = useRef<number | null>(null);
   const clicks = useRef(0);
+  /** Story only: scans kept visible under a new one until it has arrived. */
+  const holdRef = useRef<Hold | null>(null);
+  const holdTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastWanted = useRef<string[]>([]);
   const paintedEra = useRef(initial.era);
   const clickRef = useRef(onParcelClick);
   /** Sources that failed to load ("blocks", "scan-<series>", or "maplibre" itself). */
@@ -184,6 +200,11 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     return i >= 0 ? i : undefined;
   }, []);
 
+  const stopHold = useCallback(() => {
+    if (holdTimer.current) clearInterval(holdTimer.current);
+    holdTimer.current = null;
+  }, []);
+
   /** Paint every layer for `s` without moving the camera. */
   const paint = useCallback((s: MapState) => {
     const map = mapRef.current;
@@ -193,11 +214,48 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     const newYear = interactive && paintedEra.current !== s.era;
     paintedEra.current = s.era;
     const instant = reducedMotion() || newYear;
-    const fade ={ duration: instant ? 0 : FADE_MS, delay: 0 };
+    const fade = { duration: instant ? 0 : interactive ? FADE_MS : PAN_MS, delay: 0 };
     // Only the current era's scan and the prefetch era's are visible (MapLibre loads tiles for
     // every visible layer, even at zero opacity). A scan's source is added the first time it is
     // needed, so eras the reader never reaches cost no requests at all.
     const shown = scansShown(s, availRef.current);
+    const wanted = scansWanted(s, availRef.current);
+    if (wanted.join() !== lastWanted.current.join()) {
+      // The story keeps the scans it is leaving under the new one until that has arrived.
+      const gone = lastWanted.current.filter((x) => !wanted.includes(x));
+      const held = Array.from(new Set([...(holdRef.current?.held ?? []), ...gone])).filter((x) => !wanted.includes(x));
+      lastWanted.current = wanted;
+      stopHold();
+      if (!interactive && !instant && wanted.length && held.length) {
+        holdRef.current = { held, since: Date.now() };
+        holdTimer.current = setInterval(() => {
+          const m = mapRef.current;
+          const since = holdRef.current?.since ?? 0;
+          const next = m
+            ? heldScans(
+                holdRef.current,
+                lastWanted.current,
+                (series) => m.isSourceLoaded(scanLayer(series)),
+                Date.now() - since >= PAN_MS,
+                Date.now(),
+              )
+            : null;
+          holdRef.current = next;
+          if (!next) {
+            stopHold();
+            // Released scans fade and hide as any scan leaving the view does.
+            paint(stateRef.current);
+          }
+        }, HOLD_CHECK_MS);
+        // New scans sit above the held ones, still under the districts.
+        const before = map.getStyle().layers.find((l) => l.id.startsWith("dist-") || l.id === "selected-line")?.id;
+        for (const series of wanted) {
+          addScan(map, series);
+          map.moveLayer(scanLayer(series), before);
+        }
+      } else holdRef.current = null;
+    }
+    const holding = (series: string) => holdRef.current?.held.includes(series) ?? false;
     for (const series of allSeries()) {
       const id = scanLayer(series);
       const key = `scan:${series}`;
@@ -209,22 +267,23 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         map.setLayoutProperty(id, "visibility", "visible");
       }
       if (!map.getLayer(id)) continue;
+      if (holding(series)) continue; // keeps its opacity until the hold releases it
       map.setPaintProperty(id, "raster-opacity-transition", fade);
       map.setPaintProperty(id, "raster-opacity", scanOpacity(s, series, availRef.current));
       if (!shown.has(series) && map.getLayoutProperty(id, "visibility") !== "none") {
         // Hide once faded out, unless a fast scroll has made this scan wanted again.
         const hide = () => {
           const m = mapRef.current;
-          if (!m || !m.getLayer(id) || scansShown(stateRef.current, availRef.current).has(series)) return;
+          if (!m || !m.getLayer(id) || scansShown(stateRef.current, availRef.current).has(series) || holding(series)) return;
           m.setLayoutProperty(id, "visibility", "none");
         };
         if (instant) hide();
-        else hideTimers.current.set(key, setTimeout(hide, FADE_MS + 50));
+        else hideTimers.current.set(key, setTimeout(hide, fade.duration + 50));
       }
     }
     const shownIndex = s.view === "scan" ? undefined : sharedIndex(s.era);
     lookupRef.current?.show({ era: shownIndex ?? null, fillOpacity: FILL_AT_ZOOM[s.view], lineOpacity: lineOpacity(s.view) }, fade.duration);
-  }, [interactive, sharedIndex]);
+  }, [interactive, sharedIndex, stopHold]);
 
   const applyNow = useCallback(
     (s: MapState) => {
@@ -246,7 +305,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
           ...(interactive ? {} : { padding: storyPadding(map) }),
         };
         if (reducedMotion()) map.jumpTo(cam);
-        else map.easeTo({ ...cam, duration: 1400 });
+        else map.easeTo({ ...cam, duration: PAN_MS });
       }
     },
     [paint, interactive],
@@ -446,6 +505,9 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       cancelled = true;
       readyRef.current = false;
       for (const t of timers.values()) clearTimeout(t);
+      if (holdTimer.current) clearInterval(holdTimer.current);
+      holdTimer.current = null;
+      holdRef.current = null;
       cleanup();
       mapRef.current = null;
     };

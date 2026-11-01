@@ -112,3 +112,41 @@ test.describe("small phone", () => {
       .toBe(true);
   });
 });
+
+const visibleScans = (page: Page) =>
+  page.evaluate(() => {
+    const m = (window as unknown as { __map: import("maplibre-gl").Map }).__map;
+    return m
+      .getStyle()
+      .layers.filter((l) => {
+        if (!l.id.startsWith("scan-") || m.getLayoutProperty(l.id, "visibility") !== "visible") return false;
+        // A scan warmed for the next step is "visible" but drawn at near-zero opacity.
+        const o = m.getPaintProperty(l.id, "raster-opacity");
+        return typeof o !== "number" || o > 0.01;
+      })
+      .map((l) => l.id);
+  });
+
+test("scrolling fast through the story leaves only the last step's scan showing", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", STORY[0].id);
+  const ids = ["1921-sunset", "1948-sunset", "1960-density-caps", "1972-height-limits", "1975-downzonings"];
+  for (const id of ids) await centerStep(page, id);
+  const last = STORY.find((s) => s.id === ids[ids.length - 1])!;
+  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", last.id);
+  await expect(page.locator("[data-active-step] .map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 60_000 });
+  await page.waitForTimeout(2000);
+  expect(await visibleScans(page)).toEqual([`scan-${last.era}`]);
+});
+
+test("a scan that never arrives ends with colours and no stuck hold", async ({ page }) => {
+  await page.route("**/1948/1948-paper.pmtiles", (route) => route.fulfill({ status: 404 }));
+  await page.goto("/");
+  await centerStep(page, "1921-mission");
+  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1921-mission");
+  await page.waitForTimeout(3000);
+  await centerStep(page, "1948-sunset");
+  await page.waitForTimeout(9000);
+  await expect(page.getByTestId("legend")).toBeVisible();
+  expect(await visibleScans(page)).not.toContain("scan-1921");
+});
