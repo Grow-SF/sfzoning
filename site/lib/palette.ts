@@ -62,12 +62,6 @@ export function isCategory(v: unknown): v is Category {
   return typeof v === "string" && (CATEGORIES as readonly string[]).includes(v);
 }
 
-/** MapLibre `match` expression colouring a feature by its `category` property. */
-export function fillColorExpression(): unknown[] {
-  const pairs = CATEGORIES.flatMap((c) => [c, CATEGORY_COLORS[c]]);
-  return ["match", ["get", "category"], ...pairs, CATEGORY_COLORS.unknown];
-}
-
 export const ALLOWED_FILL_OPACITY = 0.85;
 export const BOTH_FILL_OPACITY = 0.7;
 /**

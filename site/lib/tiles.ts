@@ -30,16 +30,6 @@ export function scanSource(series: string): string {
   return tileUrl(scanPath(series));
 }
 
-/** Path of a series' classified-district vector tiles (layers `parcels`, `districts`). */
-export function districtPath(series: string): string {
-  return `${series}/districts/${series}-districts.pmtiles`;
-}
-
-/** Classified-district vector tiles (produced by step two; may not exist yet). */
-export function districtSource(series: string): string {
-  return tileUrl(districtPath(series));
-}
-
 /** Plain HTTP URL of a tiles-server file (for probing and JSON). */
 export function tilesHttpUrl(path: string): string {
   return `${tilesBase()}/${publishedPath(path)}`;

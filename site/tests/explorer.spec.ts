@@ -34,37 +34,7 @@ test("the explorer's era slider is keyboard-operable", async ({ page }) => {
   await expect(era).toHaveText("1921");
 });
 
-test("going back to a year just viewed reuses its tiles instead of rebuilding them", async ({ page }) => {
-  test.skip(!(await tilesExist(page, "1960/districts/1960-districts.pmtiles")), "1960 district tiles not published");
-  const log: string[] = [];
-  page.on("request", (req) => {
-    // Either 1948's own archive or the shared one, whichever this device and deployment use.
-    if (/\/(1948\/districts\/1948-districts|shared\/districts-[^/]+)\.pmtiles$/.test(req.url())) log.push(req.url());
-  });
-  await page.goto("/");
-  const explorer = page.getByTestId("explorer");
-  await explorer.scrollIntoViewIfNeeded();
-  const wrap = explorer.locator(".map-wrap");
-  await expect(wrap).toHaveAttribute("data-idle", "true", { timeout: 30_000 });
-  const slider = explorer.getByRole("slider", { name: "Year" });
-  const era = explorer.getByTestId("explorer-era");
-
-  await slider.focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(era).toHaveText("1960");
-  // Long enough for 1948 to finish fading out (hiding it here is what used to drop its tiles).
-  await page.waitForTimeout(1500);
-  await expect(wrap).toHaveAttribute("data-idle", "true", { timeout: 30_000 });
-
-  log.length = 0;
-  await page.keyboard.press("ArrowLeft");
-  await expect(era).toHaveText("1948");
-  await page.waitForTimeout(500);
-  await expect(wrap).toHaveAttribute("data-idle", "true", { timeout: 30_000 });
-  expect(log).toEqual([]);
-});
-
-test("with the shared archive, every year switches without any tile request", async ({ page }) => {
+test("every year switches without any tile request", async ({ page }) => {
   test.skip(!(await tilesExist(page, "shared/districts.json")), "shared archive not published");
   const log: string[] = [];
   page.on("request", (req) => {
@@ -92,7 +62,7 @@ test("with the shared archive, every year switches without any tile request", as
 });
 
 test("the 1948 'both' step shows the legend and the Rumsey credit", async ({ page }) => {
-  test.skip(!(await tilesExist(page, "1948/districts/1948-districts.pmtiles")), "1948 district tiles not published");
+  test.skip(!(await tilesExist(page, "shared/districts.json")), "shared files not published");
   await page.goto("/");
   await centerStep(page, "1948-sunset");
   const story = page.locator("[data-active-step]");
@@ -103,7 +73,7 @@ test("the 1948 'both' step shows the legend and the Rumsey credit", async ({ pag
 
 test("on phones the story's key is a chip that opens the full key", async ({ page }, info) => {
   test.skip(info.project.name !== "mobile", "phone layout only");
-  test.skip(!(await tilesExist(page, "1960/districts/1960-districts.pmtiles")), "1960 district tiles not published");
+  test.skip(!(await tilesExist(page, "shared/districts.json")), "shared files not published");
   await page.goto("/");
   await centerStep(page, "1960-density-caps");
   const legend = page.locator("[data-active-step]").getByTestId("legend");
@@ -135,8 +105,8 @@ test("on phones the story camera centres each step above the card", async ({ pag
   expect(r.y).toBeLessThan(r.cardTop);
 });
 
-test("an era without published districts falls back to the scan with a note", async ({ page }) => {
-  await page.route("**/1921/districts/**", (r) => r.fulfill({ status: 404, body: "not found" }));
+test("without the districts, the map shows the scan with a note instead of failing", async ({ page }) => {
+  await page.route("**/shared/districts*.json", (r) => r.fulfill({ status: 404, body: "not found" }));
   await page.goto("/");
   await centerStep(page, "1921-sunset");
   const story = page.locator("[data-active-step]");
@@ -201,7 +171,7 @@ async function openLot(page: Page, view: "What it allowed" | "Both") {
     map.jumpTo({ center: [-122.404, 37.792], zoom: 16 });
     for (let t = 0; t < 100; t++) {
       await new Promise((r) => setTimeout(r, 200));
-      const layer = map.getLayer("dist-shared-lots") ? "dist-shared-lots" : "dist-1948-fill";
+      const layer = "dist-shared-lots";
       if (!map.loaded() || !map.getLayer(layer)) continue;
       const c = map.getCanvas();
       const w = c.clientWidth;
@@ -212,11 +182,6 @@ async function openLot(page: Page, view: "What it allowed" | "Both") {
           // Only points where the map itself takes the click (not the legend or a note).
           if (document.elementFromPoint(r.left + x, r.top + y) !== c) continue;
           const hits = map.queryRenderedFeatures([x, y], { layers: [layer] });
-          if (layer === "dist-1948-fill") {
-            const code = hits.map((f) => f.properties?.code).find(Boolean);
-            if (code) return { x: r.left + x, y: r.top + y, code: String(code) };
-            continue;
-          }
           const lots: number[] = hits.map((f) => Number(f.properties?.i)).sort((a, b) => a - b);
           const lot = lots.find((n) => data.categoryOf("1948", n) !== null);
           const code = lot === undefined ? null : data.codeOf("1948", lot);
@@ -239,7 +204,6 @@ async function openLot(page: Page, view: "What it allowed" | "Both") {
 }
 
 test("a lot's colour on screen is the use its card names", async ({ page }) => {
-  // The per-year files draw stacked condo lots over themselves, which darkens them.
   test.skip(!(await tilesExist(page, "shared/districts.json")), "shared files not published");
   const { card, before } = await openLot(page, "What it allowed");
   const text = (await card.textContent()) ?? "";
@@ -330,7 +294,7 @@ test("a year looks the same when you come back to it", async ({ page }) => {
 });
 
 test("clicking a parcel in the explorer opens its lot card", async ({ page }) => {
-  test.skip(!(await tilesExist(page, "1948/districts/1948-districts.pmtiles")), "1948 district tiles not published");
+  test.skip(!(await tilesExist(page, "shared/districts.json")), "shared files not published");
   const { explorer, card, code } = await openLot(page, "What it allowed");
   await expect(card.getByRole("heading", { level: 3 })).toHaveText(code);
   await expect(card).toContainText("1948");
@@ -344,7 +308,7 @@ test("clicking a parcel in the explorer opens its lot card", async ({ page }) =>
 });
 
 test("closing the lot card with its button returns focus to the map", async ({ page }) => {
-  test.skip(!(await tilesExist(page, "1948/districts/1948-districts.pmtiles")), "1948 district tiles not published");
+  test.skip(!(await tilesExist(page, "shared/districts.json")), "shared files not published");
   const { explorer, card } = await openLot(page, "What it allowed");
   await card.getByRole("button", { name: "Close lot details" }).click();
   await expect(card).toHaveCount(0);
@@ -352,7 +316,7 @@ test("closing the lot card with its button returns focus to the map", async ({ p
 });
 
 test("with a lot open on 1948 'both', the Rumsey credit stays in sight", async ({ page }) => {
-  test.skip(!(await tilesExist(page, "1948/districts/1948-districts.pmtiles")), "1948 district tiles not published");
+  test.skip(!(await tilesExist(page, "shared/districts.json")), "shared files not published");
   const { explorer } = await openLot(page, "Both");
   await expect(explorer.locator(".map-wrap")).toHaveAttribute("data-view", "both");
   const credit = explorer.getByText(CREDIT, { exact: true });

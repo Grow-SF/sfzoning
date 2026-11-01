@@ -20,8 +20,8 @@ export default function Story({ steps }: Props) {
   const next = steps[active + 1];
 
   useEffect(() => {
-    // The next step's era is drawn at near-zero opacity, so its tiles are already in hand
-    // when the reader scrolls on.
+    // The next step's scan is drawn at near-zero opacity, so its tiles are already in hand when
+    // the reader scrolls on. Colours need no warm-up: every year uses the same shapes.
     const prefetch = next && next.era !== step.era ? { era: next.era, view: next.view } : undefined;
     mapRef.current?.apply({ era: step.era, view: step.view, camera: step.camera, highlight: step.highlight, prefetch });
   }, [step, next]);

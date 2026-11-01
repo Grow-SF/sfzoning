@@ -19,6 +19,20 @@ test("scrolling through the story activates every step in turn", async ({ page }
   }
 });
 
+test("the story draws its colours from the shared tiles", async ({ page }) => {
+  const perYear: string[] = [];
+  const shared: string[] = [];
+  page.on("request", (req) => {
+    if (/\/districts\/[^/]*-districts\.pmtiles/.test(req.url())) perYear.push(req.url());
+    if (/\/shared\/districts-[^/]+\.pmtiles/.test(req.url())) shared.push(req.url());
+  });
+  await page.goto("/");
+  await centerStep(page, "1921-sunset");
+  await expect(page.locator("[data-active-step] .map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 60_000 });
+  expect(perYear).toEqual([]);
+  expect(shared.length).toBeGreaterThan(0);
+});
+
 test.describe("phone trigger", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 

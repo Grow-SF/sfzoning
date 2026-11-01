@@ -5,12 +5,12 @@ import type * as Ml from "maplibre-gl";
 import type { Map as MlMap } from "maplibre-gl";
 import type { Feature, FeatureCollection, Geometry } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { ERAS, rememberEra } from "@/lib/eras";
-import { BASEMAP, districtSource, scanSource, tileUrl } from "@/lib/tiles";
+import { ERAS } from "@/lib/eras";
+import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
 import { INK_ZOOM, MAP_COLORS, inkByZoom } from "@/lib/theme";
-import { ALLOWED_FILL_OPACITY, BOTH_SCAN_WEIGHT, districtFillOpacity, fillColorExpression } from "@/lib/palette";
-import { loadLotCards, loadSharedDistricts, lotCard, lotCategory, noteLostContext, SHARED_SOURCE, type SharedDistricts } from "@/lib/shared";
-import { addLookupLayer, LOTS_LAYER, type LookupLook } from "@/lib/lookupLayer";
+import { ALLOWED_FILL_OPACITY, BOTH_SCAN_WEIGHT, districtFillOpacity } from "@/lib/palette";
+import { loadLotCards, loadSharedDistricts, lotCard, lotCategory, SHARED_SOURCE, type SharedDistricts } from "@/lib/shared";
+import { addLookupLayer, LOTS_LAYER } from "@/lib/lookupLayer";
 import { useDistrictAvailability, type Availability } from "@/lib/districts";
 import Legend from "./Legend";
 import { RUMSEY_CREDIT } from "./Credits";
@@ -59,9 +59,6 @@ const WARM = 0.001;
 /** In "both" at city zoom the colours carry the view; the scan fades to a trace of itself. */
 const BOTH_CITY_INK = 0.3;
 const scanLayer = (series: string) => `scan-${series}`;
-const distSrc = (era: string) => `dist-${era}`;
-const distFill = (era: string) => `dist-${era}-fill`;
-const distLine = (era: string) => `dist-${era}-line`;
 const allSeries = () => Array.from(new Set(ERAS.flatMap((e) => e.scanSeries)));
 
 /** Resolves once the page has loaded and the main thread has a moment to spare. */
@@ -139,24 +136,17 @@ function addScan(map: MlMap, series: string) {
 }
 
 const LINE_WIDTH = { lo: [11, 0.4], hi: [16, 1.4] } as const;
-const lineWidthExpression: Expr = ["interpolate", ["linear"], ["zoom"], ...LINE_WIDTH.lo, ...LINE_WIDTH.hi];
 const lineOpacity = (view: MapState["view"]) => (view === "both" ? 0.9 : 0.6);
 
 const between = (x: number, [x0, y0]: readonly [number, number], [x1, y1]: readonly [number, number]) =>
   y0 + (y1 - y0) * Math.min(1, Math.max(0, (x - x0) / (x1 - x0)));
 
-/** fillOpacity(), worked out for a zoom. Same object each time, so an unchanged look stays unchanged. */
+/** Fill opacity per view at a zoom. In "both", the scan shows through more closely up. Same object each time, so an unchanged look stays unchanged. */
 const FILL_AT_ZOOM: Record<MapState["view"], (zoom: number) => number> = {
   scan: () => 0,
   allowed: () => ALLOWED_FILL_OPACITY,
   both: (zoom) => between(zoom, [INK_ZOOM.lo + 0.5, ALLOWED_FILL_OPACITY], [INK_ZOOM.hi - 0.5, districtFillOpacity("both")]),
 };
-
-function fillOpacity(view: MapState["view"]): Opacity {
-  if (view !== "both") return districtFillOpacity(view);
-  // City zoom: "allowed" strength (the scan is mostly faded). Close up: let the scan through.
-  return ["interpolate", ["linear"], ["zoom"], INK_ZOOM.lo + 0.5, ALLOWED_FILL_OPACITY, INK_ZOOM.hi - 0.5, districtFillOpacity("both")];
-}
 
 const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   { initial, interactive = false, onParcelClick, selectedBlklot = null, className },
@@ -170,9 +160,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   const stateRef = useRef<MapState>(initial);
   const availRef = useRef<Availability>({});
   const hideTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  /** Explorer only: eras whose district layers stay visible (at zero opacity) once faded out. */
-  const keptEras = useRef<string[]>([]);
-  /** Explorer: the one set of shapes for every era, and the table saying how each looks. */
+  /** The one set of shapes for every era, and the table saying how each looks. */
   const sharedRef = useRef<SharedDistricts | null>(null);
   const lookupRef = useRef<ReturnType<typeof addLookupLayer> | null>(null);
   /** The lot number behind selectedBlklot, in the shared shapes. */
@@ -189,7 +177,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     clickRef.current = onParcelClick;
   }, [onParcelClick]);
 
-  /** An era's position in the shared table; undefined if it uses its own archive. */
+  /** An era's position in the shared table; undefined if it has no districts yet. */
   const sharedIndex = useCallback((eraId: string) => {
     const series = ERAS.find((e) => e.id === eraId)?.districtSeries;
     const i = series && sharedRef.current ? sharedRef.current.eras.indexOf(series) : -1;
@@ -234,41 +222,8 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         else hideTimers.current.set(key, setTimeout(hide, FADE_MS + 50));
       }
     }
-    // Changing a vector layer's visibility makes MapLibre reload its source, and hiding the last
-    // layer then discards those tiles rather than caching them, so coming back costs a full
-    // re-fetch and re-parse (the better part of a second). The explorer therefore leaves recent
-    // eras visible at zero opacity. The story doesn't: its camera moves would make them load
-    // tiles at every stop. Eras in the shared shapes (see lib/shared.ts) have no layers of their own.
-    if (interactive && s.view !== "scan") keptEras.current = rememberEra(keptEras.current, s.era);
-    const stays = (id: string) => keptEras.current.includes(id);
     const shownIndex = s.view === "scan" ? undefined : sharedIndex(s.era);
-    const look: LookupLook = { era: shownIndex ?? null, fillOpacity: FILL_AT_ZOOM[s.view], lineOpacity: lineOpacity(s.view) };
-    lookupRef.current?.show(look, fade.duration);
-    for (const era of ERAS) {
-      const fill = distFill(era.id);
-      if (!map.getLayer(fill)) continue;
-      const on = era.id === s.era && s.view !== "scan";
-      const warm = !on && s.prefetch?.era === era.id && s.prefetch.view !== "scan";
-      const timer = hideTimers.current.get(era.id);
-      if (timer) clearTimeout(timer);
-      hideTimers.current.delete(era.id);
-      const layers = [fill, distLine(era.id)];
-      if (on || warm) for (const l of layers) map.setLayoutProperty(l, "visibility", "visible");
-      map.setPaintProperty(fill, "fill-opacity-transition", fade);
-      map.setPaintProperty(fill, "fill-opacity", on ? fillOpacity(s.view) : warm ? WARM : 0);
-      map.setPaintProperty(distLine(era.id), "line-opacity-transition", fade);
-      map.setPaintProperty(distLine(era.id), "line-opacity", on ? lineOpacity(s.view) : 0);
-      if (!on && !warm && !stays(era.id) && map.getLayoutProperty(fill, "visibility") !== "none") {
-        // Hide after the fade so off-screen eras stop loading tiles.
-        const hide = () => {
-          const cur = stateRef.current;
-          if (!mapRef.current || (cur.era === era.id && cur.view !== "scan") || cur.prefetch?.era === era.id) return;
-          for (const l of layers) if (mapRef.current.getLayer(l)) mapRef.current.setLayoutProperty(l, "visibility", "none");
-        };
-        if (instant) hide();
-        else hideTimers.current.set(era.id, setTimeout(hide, FADE_MS + 50));
-      }
-    }
+    lookupRef.current?.show({ era: shownIndex ?? null, fillOpacity: FILL_AT_ZOOM[s.view], lineOpacity: lineOpacity(s.view) }, fade.duration);
   }, [interactive, sharedIndex]);
 
   const applyNow = useCallback(
@@ -298,57 +253,6 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   );
 
   useImperativeHandle(ref, () => ({ apply: applyNow }), [applyNow]);
-
-  // Add an era's district layers once its tiles are known to exist.
-  const addDistricts = useCallback(
-    (eraId: string) => {
-      const map = mapRef.current;
-      const era = ERAS.find((e) => e.id === eraId);
-      if (!map || !readyRef.current || !era?.districtSeries || map.getSource(distSrc(eraId))) return;
-      if (sharedIndex(eraId) !== undefined) return; // drawn by the shared layer
-      map.addSource(distSrc(eraId), { type: "vector", url: districtSource(era.districtSeries) });
-      const hidden = { visibility: "none" as const };
-      map.addLayer(
-        {
-          id: distFill(eraId),
-          type: "fill",
-          source: distSrc(eraId),
-          "source-layer": "parcels",
-          layout: hidden,
-          paint: {
-            "fill-color": fillColorExpression() as Expr,
-            "fill-opacity": 0,
-            "fill-outline-color": "rgba(0,0,0,0)",
-          },
-        },
-        "selected-line",
-      );
-      map.addLayer(
-        {
-          id: distLine(eraId),
-          type: "line",
-          source: distSrc(eraId),
-          "source-layer": "districts",
-          layout: hidden,
-          paint: {
-            "line-color": MAP_COLORS.districtEdge,
-            "line-width": lineWidthExpression,
-            "line-opacity": 0,
-          },
-        },
-        "selected-line",
-      );
-      map.on("mouseenter", distFill(eraId), () => {
-        // A kept era is still under the pointer at zero opacity; only the current one is clickable.
-        if (clickRef.current && stateRef.current.era === eraId) map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", distFill(eraId), () => {
-        map.getCanvas().style.cursor = "";
-      });
-      paint(stateRef.current);
-    },
-    [paint, sharedIndex],
-  );
 
   /** The topmost lot this era colours at a point (the lowest number is the smallest lot). */
   const lotAt = useCallback((map: MlMap, point: Ml.PointLike, eraIndex: number) => {
@@ -383,22 +287,20 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     const map = mapRef.current;
     if (!map || !readyRef.current) return;
     const src = map.getSource("selected") as Ml.GeoJSONSource | undefined;
-    const era = stateRef.current.era;
-    const inShared = sharedIndex(era) !== undefined;
-    const source = inShared ? SHARED_SOURCE : distSrc(era);
-    const filter: Ml.FilterSpecification = inShared ? ["==", ["get", "i"], selectedLot.current ?? -1] : ["==", ["get", "blklot"], selectedBlklot ?? ""];
-    const features = selectedBlklot && map.getSource(source) ? map.querySourceFeatures(source, { sourceLayer: "parcels", filter }) : [];
+    const features =
+      selectedBlklot && map.getSource(SHARED_SOURCE)
+        ? map.querySourceFeatures(SHARED_SOURCE, { sourceLayer: "parcels", filter: ["==", ["get", "i"], selectedLot.current ?? -1] })
+        : [];
     src?.setData({
       type: "FeatureCollection",
       features: features.map((f) => ({ type: "Feature", properties: {}, geometry: f.geometry })),
     });
-  }, [selectedBlklot, sharedIndex]);
+  }, [selectedBlklot]);
 
   useEffect(() => {
     availRef.current = avail;
-    for (const [eraId, ok] of Object.entries(avail)) if (ok) addDistricts(eraId);
     paint(stateRef.current);
-  }, [avail, addDistricts, paint]);
+  }, [avail, paint]);
 
   useEffect(() => {
     if (!container.current) return;
@@ -410,8 +312,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       if (E2E && wrap.current) wrap.current.dataset.idle = String(v);
     };
 
-    // The story map stays on per-era archives: it only ever needs one or two eras at a time.
-    Promise.all([loadMaplibre(), interactive ? loadSharedDistricts() : null]).then(([maplibregl, shared]) => {
+    Promise.all([loadMaplibre(), loadSharedDistricts()]).then(([maplibregl, shared]) => {
       if (cancelled || !container.current) return;
       sharedRef.current = shared;
       const cam = initial.camera ?? { center: [-122.443, 37.758] as [number, number], zoom: 12.3 };
@@ -437,9 +338,6 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         (w.__maps ??= []).push(map);
       }
 
-      map.getCanvas().addEventListener("webglcontextlost", () => {
-        if (sharedRef.current) noteLostContext();
-      });
       map.on("idle", () => setIdle(true));
       map.on("movestart", () => setIdle(false));
       map.on("dataloading", () => setIdle(false));
@@ -451,8 +349,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       map.on("error", (e) => {
         const msg = String((e as unknown as { error?: Error }).error?.message ?? "");
         const sourceId = String((e as unknown as { sourceId?: string }).sourceId ?? "");
-        // District tiles are optional and published one series at a time (a file can be
-        // mid-write); a district error never blanks the map, so it never raises the notice.
+        // A district error never blanks the map, so it never raises the notice.
         if (sourceId.startsWith("dist-")) {
           console.warn("district tiles:", sourceId, msg);
           return;
@@ -506,7 +403,6 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         map.addLayer({ id: "highlight-line", type: "line", source: "highlight", paint: { "line-color": MAP_COLORS.accent, "line-width": 3 } });
         readyRef.current = true;
         addSharedDistricts();
-        for (const [eraId, ok] of Object.entries(availRef.current)) if (ok) addDistricts(eraId);
         if (pending.current) {
           const p = pending.current;
           pending.current = null;
@@ -522,38 +418,22 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         if (s.view === "scan") return cb(null);
         const shared = sharedRef.current;
         const index = sharedIndex(s.era);
-        if (shared && index !== undefined) {
-          const lot = lotAt(map, e.point, index);
-          if (lot === null) return cb(null);
-          const category = lotCategory(shared, index, lot) ?? undefined;
-          // A later click, or a slow download overtaken by one, wins.
-          loadLotCards(shared.cards).then(
-            (cards) => {
-              if (click !== clicks.current) return;
-              selectedLot.current = lot;
-              const card = lotCard(cards, shared.eras[index], lot);
-              clickRef.current?.({ era: s.era, category, ...card });
-            },
-            (err) => {
-              console.warn("lot cards:", err);
-              if (click === clicks.current) clickRef.current?.(null);
-            },
-          );
-          return;
-        }
-        const layer = distFill(s.era);
-        if (!map.getLayer(layer)) return cb(null);
-        const f = map.queryRenderedFeatures(e.point, { layers: [layer] })[0];
-        if (!f) return cb(null);
-        const p = f.properties as Record<string, string | number | undefined>;
-        cb({
-          era: s.era,
-          blklot: p.blklot != null ? String(p.blklot) : undefined,
-          code: p.code != null ? String(p.code) : undefined,
-          height_code: p.height_code != null ? String(p.height_code) : undefined,
-          category: p.category != null ? String(p.category) : undefined,
-          confidence: p.confidence,
-        });
+        if (!shared || index === undefined) return cb(null);
+        const lot = lotAt(map, e.point, index);
+        if (lot === null) return cb(null);
+        const category = lotCategory(shared, index, lot) ?? undefined;
+        // A later click, or a slow download overtaken by one, wins.
+        loadLotCards(shared.cards).then(
+          (cards) => {
+            if (click !== clicks.current) return;
+            selectedLot.current = lot;
+            clickRef.current?.({ era: s.era, category, ...lotCard(cards, shared.eras[index], lot) });
+          },
+          (err) => {
+            console.warn("lot cards:", err);
+            if (click === clicks.current) clickRef.current?.(null);
+          },
+        );
       });
 
       cleanup = () => {

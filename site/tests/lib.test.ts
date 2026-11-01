@@ -1,21 +1,12 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { ERAS, rememberEra } from "@/lib/eras";
-import { BASEMAP, districtSource, scanSource, tileUrl } from "@/lib/tiles";
+import { ERAS } from "@/lib/eras";
+import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
 import { INK_CITY, inkByZoom, scanInkWeight } from "@/lib/theme";
 
 const orig = process.env.NEXT_PUBLIC_TILES_BASE_URL;
 afterEach(() => {
   if (orig === undefined) delete process.env.NEXT_PUBLIC_TILES_BASE_URL;
   else process.env.NEXT_PUBLIC_TILES_BASE_URL = orig;
-});
-
-describe("rememberEra", () => {
-  it("puts the viewed era first without repeating it", () => {
-    expect(rememberEra(["1964", "1968"], "1968", 3)).toEqual(["1968", "1964"]);
-  });
-  it("drops the least recently viewed era past the limit", () => {
-    expect(rememberEra(["1972", "1968", "1964"], "1975", 3)).toEqual(["1975", "1972", "1968"]);
-  });
 });
 
 describe("tileUrl", () => {
@@ -28,10 +19,9 @@ describe("tileUrl", () => {
     expect(tileUrl("ref/blocks.pmtiles")).toBe("pmtiles://https://tiles.example.org/ref/blocks.pmtiles");
     expect(BASEMAP).toBe("ref/blocks.pmtiles");
   });
-  it("derives scan and district sources from the series id", () => {
+  it("derives scan sources from the series id", () => {
     delete process.env.NEXT_PUBLIC_TILES_BASE_URL;
     expect(scanSource("1948")).toMatch(/1948\/1948-paper\.pmtiles$/);
-    expect(districtSource("1980-1990-zoning")).toMatch(/1980-1990-zoning\/districts\/1980-1990-zoning-districts\.pmtiles$/);
   });
 });
 

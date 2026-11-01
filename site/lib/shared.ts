@@ -1,15 +1,13 @@
 import { isCategory, type Category } from "./palette";
 import { tileUrl, tilesHttpUrl } from "./tiles";
 
-// The explorer's one set of shapes for every era (pipeline `sfzmaps districts --shared`). Each lot
+// The map's one set of shapes for every era (pipeline `sfzmaps districts --shared`). Each lot
 // and district line is stored once with a number, and a small table says what that number looks
 // like in each year, so switching year changes no geometry and fetches nothing.
 // shared/districts.json names the current files.
 
 export const SHARED_SOURCE = "dist-shared";
 const MANIFEST_VERSION = 2;
-/** Set after a lost WebGL context, so a reload on this device takes the lighter per-era path. */
-const LOST_CONTEXT_FLAG = "sfz-no-shared-tiles";
 export const NO_VALUE = 255;
 
 export type SharedManifest = {
@@ -42,20 +40,6 @@ export function parseManifest(json: unknown): SharedManifest | null {
   return { url: tileUrl(archive), table, cards, categories, lots, lineSets, eras };
 }
 
-function storageFlag(write: boolean): boolean {
-  // Storage can throw in a private window; losing the flag only loses the fallback.
-  try {
-    if (write) window.sessionStorage.setItem(LOST_CONTEXT_FLAG, "1");
-    return window.sessionStorage.getItem(LOST_CONTEXT_FLAG) === "1";
-  } catch {
-    return false;
-  }
-}
-
-export function noteLostContext() {
-  storageFlag(true);
-}
-
 /** Bytes of a .gz file. A host may already have unpacked it in transit, so check rather than assume. */
 export async function gunzipped(bytes: ArrayBuffer): Promise<Uint8Array> {
   const head = new Uint8Array(bytes, 0, Math.min(2, bytes.byteLength));
@@ -70,9 +54,15 @@ async function fetchGz(path: string): Promise<Uint8Array> {
   return gunzipped(await r.arrayBuffer());
 }
 
-/** The shared districts if all of them are really there and haven't cost this tab its GPU; else null. */
-export async function loadSharedDistricts(): Promise<SharedDistricts | null> {
-  if (storageFlag(false)) return null;
+let districts: Promise<SharedDistricts | null> | null = null;
+
+/** The shared districts if all of them are really there; else null, and the map shows only scans. */
+export function loadSharedDistricts(): Promise<SharedDistricts | null> {
+  districts ??= fetchSharedDistricts();
+  return districts;
+}
+
+async function fetchSharedDistricts(): Promise<SharedDistricts | null> {
   try {
     const r = await fetch(tilesHttpUrl("shared/districts.json"));
     if (!r.ok) return null;

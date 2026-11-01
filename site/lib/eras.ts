@@ -28,14 +28,6 @@ export const ERAS: Era[] = [
   { id: "today", label: "Today", year: 2026, scanSeries: [], districtSeries: "today", sources: ["sfplanning-has-2020", "sfplanning-family-zoning"] },
 ];
 
-/** How many eras the explorer keeps loaded for instant switching, counting the current one. */
-export const KEPT_ERAS = 3;
-
-/** The most recently viewed eras, newest first, after viewing `id`. */
-export function rememberEra(recent: readonly string[], id: string, max = KEPT_ERAS): string[] {
-  return [id, ...recent.filter((e) => e !== id)].slice(0, max);
-}
-
 /** The hero's scroll cue names where the story actually starts (its first step's era). */
 export function heroCue(first: { era: string }): string {
   if (first.era === "today") return "Scroll to begin with today’s map";
