@@ -11,6 +11,8 @@ The owner wants the map to take a position. The densest housing and vibrant mixe
 - Light commercial is light blue, dense commercial is dark blue, and industrial is brown.
 - SSO is light blue. C-1 and WMUO differ, because C-1 allowed homes and WMUO doesn't.
 
+**Changed after seeing it on the map:** the owner found the dark green and dark blue too hard to tell apart and not friendly enough, and approved a screenshot of 1960 Noe. So the top of the scale is a bright emerald, not deep green, and dense commercial is a mid blue, not dark blue. Where this document says otherwise, this paragraph wins. The colour-blind test bars were lowered to allow it.
+
 ## The scale
 
 Seven steps, for housing and mixed-use alike, by how many homes the zone allows. Mixed-use has no colour of its own; this is how the map "pivots" to it. (Proposed by the author; the owner saw it and raised only C-1.)
