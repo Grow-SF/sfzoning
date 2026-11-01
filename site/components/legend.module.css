@@ -45,7 +45,7 @@
 /* ---------- Full key ---------- */
 
 .legend {
-  width: 10.25rem;
+  width: 11rem;
   margin: 0;
   padding: 0.45rem 0.55rem 0.5rem;
   font-size: 0.6875rem;
@@ -59,10 +59,10 @@
   font-weight: 700;
 }
 
-/* A stepped ramp: lightness carries "more homes", so it reads without hue. */
+/* A stepped scale from red (one home) to deep green (20+ or no limit). */
 .ramp {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   margin: 0;
   padding: 0;
   list-style: none;

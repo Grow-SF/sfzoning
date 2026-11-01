@@ -8,7 +8,10 @@ const RAMP_TICKS: Record<string, string> = {
   single_family: "1",
   two_unit: "2",
   three_unit: "3",
-  multi_family: "Apts",
+  homes_low: "3-4",
+  homes_mid: "6",
+  homes_high: "12",
+  homes_top: "20+",
 };
 
 type Props = {
@@ -20,7 +23,7 @@ type Props = {
   compact?: boolean;
 };
 
-/** Key to the "what it allowed" colours: a homes-per-lot ramp, then the other uses. */
+/** Key to the "what it allowed" colours: a homes-per-lot scale, then the other uses. */
 export default function Legend({ compact = false }: Props) {
   const [open, setOpen] = useState(false);
   const id = useId();
@@ -43,7 +46,7 @@ export default function Legend({ compact = false }: Props) {
         </button>
       )}
       <figure id={id} className={styles.legend} aria-label="Map key">
-        <figcaption className={styles.head}>Homes allowed per lot</figcaption>
+        <figcaption className={styles.head}>Homes allowed on a typical lot</figcaption>
         <ol className={styles.ramp}>
           {HOMES_RAMP.map((c) => (
             <li key={c} title={CATEGORY_LABELS[c]}>

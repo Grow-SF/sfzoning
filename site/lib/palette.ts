@@ -1,25 +1,35 @@
 // "What it allowed" palette. One palette for every era, so change between eras pops.
 //
-// Homes allowed per lot read as one warm ramp, light to dark (one house is yellow,
-// apartments deep brick), so density is legible from lightness alone, without hue.
-// The other uses step out of that ramp: violet, orchid pink, deep teal, green, navy. Public
-// is green, not blue, so parks never read as water on the basemap; industrial is teal, not
-// grey, so it never reads as the scans' own ink.
+// Homes allowed per lot read as one scale of seven steps running from red (one home) through
+// orange and pale yellow to deep green (about 20 homes or no limit), evenly spaced in OKLab.
+// Mixed-use has no colour of its own: it sits on the scale by how many homes it allows. The
+// other uses step out of that scale: light blue and dark blue for light and dense commercial,
+// brown for industrial, purple for unrestricted. Public land is a quiet grey, not green, so
+// parks never read as part of the scale or as water; industrial is brown, not grey, so it
+// never reads as the scans' own ink.
 //
 // tests/palette.test.ts checks every pair (OKLab ΔE ×100) under normal vision and simulated
 // protanopia and deuteranopia (Machado 2009), in the "allowed" view (fills over the paper
 // basemap) and in the "both" view, over paper and over the scans' solid black ink. Current
-// minimums: allowed ≥ 15.7 normal / 9.9 colour-blind; both ≥ 13.5 normal / 8.4 colour-blind.
-// The colours came from a constrained search over OKLCH boxes (one hue family per use), with
-// chroma capped so the map stays a printed map, not a neon one.
+// minimums (normal / protan / deutan): allowed 15.1 / 9.1 / 9.1; both over paper 12.1 / 8.1 /
+// 8.1; both over ink 12.8 / 8.0 / 8.0. The scale's adjacent steps are 16.4 to 19.9 apart (mean
+// 18.3, none more than 10% off it); its closest pair is 16.4 normal, 9.0 protan, 8.7 deutan.
+// The first mockup (#DB2D27 ... #00381C) had a closest pair of 1.2 for protanopia: red and
+// dark green collapse to the same dark olive. To fix it, the red turned orange-red, the deep
+// greens leaned toward teal (protanopia sees blue-green apart from red), and the other uses
+// moved only as far as the bars needed. The colours came from a constrained search with the
+// mockup as the starting point and a penalty for every step away from it.
 // "Unknown" is a pale neutral near the paper: it means "not read yet", not a zoning class.
 export const CATEGORIES = [
   "single_family",
   "two_unit",
   "three_unit",
-  "multi_family",
-  "mixed",
-  "commercial",
+  "homes_low",
+  "homes_mid",
+  "homes_high",
+  "homes_top",
+  "commercial_light",
+  "commercial_dense",
   "industrial",
   "public",
   "unrestricted",
@@ -29,34 +39,55 @@ export const CATEGORIES = [
 export type Category = (typeof CATEGORIES)[number];
 
 export const CATEGORY_COLORS: Record<Category, string> = {
-  single_family: "#E4CD37",
-  two_unit: "#DC7E26",
-  three_unit: "#B8342C",
-  multi_family: "#5A1805",
-  mixed: "#886CC9",
-  commercial: "#F68FD5",
-  industrial: "#00687B",
-  public: "#5AAA82",
-  unrestricted: "#001961",
-  unknown: "#E8E6E1",
+  single_family: "#FE4B00",
+  two_unit: "#F29E01",
+  three_unit: "#F2F26F",
+  homes_low: "#6CD980",
+  homes_mid: "#279B48",
+  homes_high: "#006553",
+  homes_top: "#002E0C",
+  commercial_light: "#7ADAFF",
+  commercial_dense: "#043E9F",
+  industrial: "#814201",
+  public: "#9F9E9C",
+  unrestricted: "#8056A4",
+  unknown: "#FFF5FF",
 };
 
 export const CATEGORY_LABELS: Record<Category, string> = {
   single_family: "One home",
   two_unit: "Two homes",
   three_unit: "Three homes",
-  multi_family: "Apartments",
-  mixed: "Homes and shops",
-  commercial: "Commercial",
+  homes_low: "3-4 homes",
+  homes_mid: "About 6 homes",
+  homes_high: "About 12 homes",
+  homes_top: "20+ or no limit",
+  commercial_light: "Light commercial",
+  commercial_dense: "Dense commercial",
   industrial: "Industrial",
   public: "Public",
   unrestricted: "Unrestricted",
   unknown: "Not read yet",
 };
 
-/** Residential categories, ordered by how many homes a lot may hold. */
-export const HOMES_RAMP: Category[] = ["single_family", "two_unit", "three_unit", "multi_family"];
-export const OTHER_USES: Category[] = ["mixed", "commercial", "industrial", "public", "unrestricted", "unknown"];
+/** The scale of seven steps, by how many homes a lot may hold. */
+export const HOMES_RAMP: Category[] = [
+  "single_family",
+  "two_unit",
+  "three_unit",
+  "homes_low",
+  "homes_mid",
+  "homes_high",
+  "homes_top",
+];
+export const OTHER_USES: Category[] = [
+  "commercial_light",
+  "commercial_dense",
+  "industrial",
+  "public",
+  "unrestricted",
+  "unknown",
+];
 
 export function isCategory(v: unknown): v is Category {
   return typeof v === "string" && (CATEGORIES as readonly string[]).includes(v);

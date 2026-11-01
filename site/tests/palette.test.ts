@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { deltaE, hexToRgb, over, type RGB, type Vision } from "@/lib/colorcheck";
+import { deltaE, hexToRgb, oklab, over, type RGB, type Vision } from "@/lib/colorcheck";
 import {
   ALLOWED_FILL_OPACITY,
   BOTH_FILL_OPACITY,
   BOTH_SCAN_WEIGHT,
   CATEGORIES,
   CATEGORY_COLORS,
-  type Category,
+  HOMES_RAMP,
 } from "@/lib/palette";
 import { MAP_COLORS } from "@/lib/theme";
 
@@ -47,17 +47,26 @@ describe("palette colour-blind safety", () => {
         expect(w.d, w.pair).toBeGreaterThanOrEqual(c.min[v]);
       });
 
-  it("commercial over black ink does not read as apartments over paper", () => {
+  it("commercial_dense over black ink does not read as homes_top over paper", () => {
     // The S4 review: 1948 Commercial (solid black) tinted pink read plum, next to the brick.
-    const cm = over(hexToRgb(CATEGORY_COLORS.commercial), BOTH_FILL_OPACITY, ink);
-    const mf = over(hexToRgb(CATEGORY_COLORS.multi_family), BOTH_FILL_OPACITY, block);
+    const cm = over(hexToRgb(CATEGORY_COLORS.commercial_dense), BOTH_FILL_OPACITY, ink);
+    const mf = over(hexToRgb(CATEGORY_COLORS.homes_top), BOTH_FILL_OPACITY, block);
     for (const v of VISIONS) expect(deltaE(cm, mf, v), v).toBeGreaterThanOrEqual(15);
   });
 
-  it("the homes ramp gets darker with every step", () => {
-    const ramp: Category[] = ["single_family", "two_unit", "three_unit", "multi_family"];
-    const L = ramp.map((k) => deltaE(hexToRgb(CATEGORY_COLORS[k]), [0, 0, 0]));
-    for (let i = 1; i < L.length; i++) expect(L[i]).toBeLessThan(L[i - 1]);
+  it("the scale runs from a red to a deep green", () => {
+    const first = hexToRgb(CATEGORY_COLORS[HOMES_RAMP[0]]);
+    const last = hexToRgb(CATEGORY_COLORS[HOMES_RAMP[HOMES_RAMP.length - 1]]);
+    expect(first[0]).toBeGreaterThan(Math.max(first[1], first[2]));
+    expect(last[1]).toBeGreaterThan(Math.max(last[0], last[2]));
+    expect(oklab(last)[0]).toBeLessThan(0.45);
+  });
+
+  it("steps are evenly spaced", () => {
+    const rgb = HOMES_RAMP.map((k) => hexToRgb(CATEGORY_COLORS[k]));
+    const gaps = rgb.slice(1).map((c, i) => deltaE(rgb[i], c));
+    const mean = gaps.reduce((s, g) => s + g, 0) / gaps.length;
+    for (const g of gaps) expect(Math.abs(g - mean) / mean, gaps.map((x) => x.toFixed(1)).join(" ")).toBeLessThanOrEqual(0.25);
   });
 });
 
