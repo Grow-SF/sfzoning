@@ -7,6 +7,7 @@ import type { Feature, FeatureCollection, Geometry } from "geojson";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { ERAS } from "@/lib/eras";
 import type { Protocol as PmProtocol } from "pmtiles";
+import { registerArchive, type Pm } from "@/lib/archiveCache";
 import { BASEMAP, scanPath, scanSource, tileUrl, tilesHttpUrl } from "@/lib/tiles";
 import { preload, tilesCovering } from "@/lib/preload";
 import { INK_ZOOM, MAP_COLORS, inkByZoom } from "@/lib/theme";
@@ -84,6 +85,15 @@ function afterFirstPaint(): Promise<void> {
 let ml: typeof Ml | null = null;
 /** The one pmtiles protocol: MapLibre and preloads share its archives, headers and directories. */
 let protocol: PmProtocol | null = null;
+let pm: Pm | null = null;
+
+/**
+ * Have the archive behind a `pmtiles://` source URL in the protocol, reading through the shared byte
+ * cache. Call it before adding the source: MapLibre would otherwise make an uncached archive of its own.
+ */
+function registerSource(url: string) {
+  if (protocol && pm) registerArchive(protocol, url.replace(/^pmtiles:\/\//, ""), pm);
+}
 /**
  * maplibre-gl (290 kB gzipped) is fetched and started only after the page has loaded and
  * gone idle, so the hero's headline paints and hydrates without waiting on WebGL work.
@@ -91,9 +101,10 @@ let protocol: PmProtocol | null = null;
 async function loadMaplibre(): Promise<typeof Ml> {
   if (ml) return ml;
   await afterFirstPaint();
-  const [lib, { Protocol }] = await Promise.all([import("maplibre-gl"), import("pmtiles")]);
+  const [lib, pmtiles] = await Promise.all([import("maplibre-gl"), import("pmtiles")]);
   lib.setWorkerUrl("/maplibre/maplibre-gl-worker.mjs");
-  protocol = new Protocol();
+  protocol = new pmtiles.Protocol();
+  pm = { PMTiles: pmtiles.PMTiles, FetchSource: pmtiles.FetchSource };
   lib.addProtocol("pmtiles", protocol.tile);
   ml = lib;
   return lib;
@@ -139,6 +150,7 @@ const scansWanted = (s: MapState, avail: Availability): string[] => [...scansSho
 function addScan(map: MlMap, series: string, fadeTiles: boolean) {
   const id = scanLayer(series);
   if (map.getLayer(id)) return;
+  registerSource(scanSource(series));
   map.addSource(id, { type: "raster", url: scanSource(series), tileSize: 256 });
   const before = map.getStyle().layers.find((l) => l.id.startsWith("dist-") || l.id === "selected-line")?.id;
   map.addLayer(
@@ -322,7 +334,12 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       // here is silent: the map fetches what it needs when it gets there.
       const shared = sharedRef.current;
       if (!interactive && protocol && s.preload) {
-        const { clientWidth: w, clientHeight: h } = map.getContainer();
+        // The story's padding puts the camera's centre off the canvas centre, by half the difference of
+        // the paddings; a box centred on the camera that much taller/wider still covers all the canvas.
+        const pad = storyPadding(map);
+        const { clientWidth, clientHeight } = map.getContainer();
+        const w = clientWidth + Math.abs((pad.left ?? 0) - (pad.right ?? 0));
+        const h = clientHeight + Math.abs((pad.top ?? 0) - (pad.bottom ?? 0));
         // Each archive once per destination, however many steps ask for it.
         const once = (archive: string, cam: Preload["camera"]) => {
           const key = JSON.stringify([archive, cam.center, cam.zoom]);
@@ -330,6 +347,11 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
           preloaded.current.add(key);
           return true;
         };
+        // The map is drawing this camera itself: no need to ask for it again.
+        if (s.camera) {
+          for (const series of scansShown(s, availRef.current)) once(series, s.camera);
+          once(SHARED_SOURCE, s.camera);
+        }
         for (const p of s.preload) {
           const cam = { center: p.camera.center, zoom: p.camera.zoom };
           const scans = p.scanSeries.filter((series) => once(series, cam)).map((series) => tilesHttpUrl(scanPath(series)));
@@ -360,6 +382,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     const map = mapRef.current;
     const shared = sharedRef.current;
     if (!map || !shared) return;
+    registerSource(shared.url);
     map.addSource(SHARED_SOURCE, { type: "vector", url: shared.url });
     lookupRef.current = addLookupLayer(map, shared, SHARED_SOURCE, "selected-line", (zoom) => between(zoom, LINE_WIDTH.lo, LINE_WIDTH.hi), MAP_COLORS.districtEdge);
     map.on("mousemove", (e) => {
@@ -455,6 +478,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       });
 
       map.on("load", () => {
+        registerSource(tileUrl(BASEMAP));
         map.addSource("blocks", { type: "vector", url: tileUrl(BASEMAP) });
         // There is no land or street layer, only blocks. A wide street-coloured stroke under the
         // block fill paints the gaps between blocks as streets (~20 m wide at every zoom), while

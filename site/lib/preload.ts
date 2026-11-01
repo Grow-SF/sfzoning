@@ -1,4 +1,5 @@
-import type { PMTiles, Protocol } from "pmtiles";
+import type { Protocol } from "pmtiles";
+import { registerArchive } from "./archiveCache";
 
 export type TileId = { z: number; x: number; y: number };
 
@@ -17,7 +18,9 @@ export function tilesCovering(
   tileSize: 256 | 512,
   maxZoom: number,
 ): TileId[] {
-  const z = Math.max(0, Math.min(maxZoom, Math.floor(camera.zoom) + (tileSize === 256 ? 1 : 0)));
+  // MapLibre rounds the zoom for raster sources and floors it for vector ones.
+  const wanted = tileSize === 256 ? Math.round(camera.zoom + 1) : Math.floor(camera.zoom);
+  const z = Math.max(0, Math.min(maxZoom, wanted));
   const n = 2 ** z;
   const [lon, lat] = camera.center;
   const sin = Math.sin((lat * Math.PI) / 180);
@@ -35,22 +38,18 @@ export function tilesCovering(
 }
 
 /**
- * Fetch tiles of the archives at `urls` ahead of need. Each archive is added to `protocol` once, so
- * MapLibre, asking for the same URL, reuses its header and directory cache and the tile bytes the
- * browser has kept. `tiles` says which, given the archive's max zoom. Never rejects: a tile that
- * can't be had now is simply fetched when the map needs it.
+ * Fetch tiles of the archives at `urls` ahead of need. Each archive is in `protocol` once (see
+ * registerArchive), so MapLibre, asking for the same URL, reuses its header, directories and the
+ * tile bytes it keeps in memory. `tiles` says which, given the archive's max zoom. Never rejects: a
+ * tile that can't be had now is simply fetched when the map needs it.
  */
 export async function preload(protocol: Protocol, urls: string[], tiles: (maxZoom: number) => TileId[]): Promise<void> {
   try {
-    const { PMTiles } = await import("pmtiles");
+    const { PMTiles, FetchSource } = await import("pmtiles");
     await Promise.all(
       urls.map(async (url) => {
         try {
-          let archive: PMTiles | undefined = protocol.get(url);
-          if (!archive) {
-            archive = new PMTiles(url);
-            protocol.add(archive);
-          }
+          const archive = registerArchive(protocol, url, { PMTiles, FetchSource });
           const { maxZoom } = await archive.getHeader();
           await Promise.all(tiles(maxZoom).map((t) => archive.getZxy(t.z, t.x, t.y).catch(() => {})));
         } catch {

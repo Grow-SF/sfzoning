@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Protocol } from "pmtiles";
 import { preload, tilesCovering } from "@/lib/preload";
+import { ByteCache, cachedSource } from "@/lib/archiveCache";
 import { ERAS } from "@/lib/eras";
 import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
 import { HOLD_LIMIT_MS, heldScans } from "@/lib/scanHold";
@@ -109,8 +110,70 @@ describe("tilesCovering", () => {
     const tiles = tilesCovering({ ...camera, zoom: 17.5 }, 1440, 900, 512, 14);
     expect(new Set(tiles.map((t) => t.z))).toEqual(new Set([14]));
     expect(has(tiles, 14, worldTile(camera.center[0], camera.center[1], 14))).toBe(true);
-    // At z17.5 the viewport is small; clamped to z14 it still includes at least that one tile.
-    expect(tiles.length).toBeGreaterThanOrEqual(1);
+    // Clamped to z14 the tiles are larger than the z17.5 viewport; its four corners are still inside them.
+    const dLon = (720 / (512 * 2 ** 17.5)) * 360 * 0.99;
+    const dLat = (450 / (512 * 2 ** 17.5)) * 360 * Math.cos((camera.center[1] * Math.PI) / 180) * 0.99;
+    for (const sx of [-1, 1])
+      for (const sy of [-1, 1])
+        expect(has(tiles, 14, worldTile(camera.center[0] + sx * dLon, camera.center[1] + sy * dLat, 14))).toBe(true);
+  });
+  it("rounds the zoom for 256px tiles as MapLibre does, and floors it for 512px", () => {
+    expect(new Set(tilesCovering({ ...camera, zoom: 14.5 }, 1440, 900, 256, 18).map((t) => t.z))).toEqual(new Set([16]));
+    expect(new Set(tilesCovering({ ...camera, zoom: 14.4 }, 1440, 900, 256, 18).map((t) => t.z))).toEqual(new Set([15]));
+    expect(new Set(tilesCovering({ ...camera, zoom: 14.8 }, 1440, 900, 512, 18).map((t) => t.z))).toEqual(new Set([14]));
+  });
+});
+
+describe("cachedSource", () => {
+  const bytes = (n: number) => new Uint8Array(n).buffer;
+  const fake = (read: (offset: number, length: number) => Promise<{ data: ArrayBuffer }>) => {
+    const calls: string[] = [];
+    const source = {
+      getKey: () => "a",
+      getBytes: (offset: number, length: number) => (calls.push(`${offset}+${length}`), read(offset, length)),
+    };
+    return { source, calls };
+  };
+
+  it("makes one upstream request for two reads of a range", async () => {
+    const { source, calls } = fake(async (_o, l) => ({ data: bytes(l) }));
+    const s = cachedSource(source, new ByteCache(1000));
+    await s.getBytes(0, 10);
+    await s.getBytes(0, 10);
+    expect(calls).toEqual(["0+10"]);
+  });
+  it("shares one request between concurrent reads", async () => {
+    const { source, calls } = fake(async (_o, l) => ({ data: bytes(l) }));
+    const s = cachedSource(source, new ByteCache(1000));
+    const [a, b] = await Promise.all([s.getBytes(5, 10), s.getBytes(5, 10)]);
+    expect(calls).toEqual(["5+10"]);
+    expect(a.data).not.toBe(b.data); // each caller owns its copy
+  });
+  it("evicts the least recently used range once past the bound", async () => {
+    const { source, calls } = fake(async (_o, l) => ({ data: bytes(l) }));
+    const s = cachedSource(source, new ByteCache(25));
+    await s.getBytes(0, 10);
+    await s.getBytes(10, 10);
+    await s.getBytes(0, 10); // 0 is now the more recent
+    await s.getBytes(20, 10); // 30 bytes: evicts 10+10
+    calls.length = 0;
+    await s.getBytes(0, 10);
+    await s.getBytes(20, 10);
+    expect(calls).toEqual([]);
+    await s.getBytes(10, 10);
+    expect(calls).toEqual(["10+10"]);
+  });
+  it("does not keep a failed read", async () => {
+    let fail = true;
+    const { source, calls } = fake(async (_o, l) => {
+      if (fail) throw new Error("offline");
+      return { data: bytes(l) };
+    });
+    const s = cachedSource(source, new ByteCache(1000));
+    await expect(s.getBytes(0, 10)).rejects.toThrow("offline");
+    fail = false;
+    await expect(s.getBytes(0, 10)).resolves.toBeDefined();
+    expect(calls).toEqual(["0+10", "0+10"]);
   });
 });
 
