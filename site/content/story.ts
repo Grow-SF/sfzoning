@@ -38,7 +38,7 @@ export const STORY: Step[] = [
       {
         kind: "p",
         // DRAFT: describes the "allowed" colours shown at this step (lib/palette.ts).
-        text: "This is San Francisco today, every lot coloured by what its zoning allows. Yellow means one home per lot; the colours deepen through orange and red to brick where apartments are allowed. Violet is homes over shops, pink is commercial, teal is industry and green is parks and public land.",
+        text: "This is San Francisco today, every lot coloured by what its zoning allows. Orange-red means one home per lot. The colours run through amber and pale yellow, then through deepening greens as more homes are allowed, with or without shops below. Light and dark blue are commercial, brown is industry and grey is parks and public land.",
       },
       {
         kind: "p",
@@ -56,11 +56,11 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "You’re looking at the Outer Sunset on the city’s first zone maps. The deep brick blocks (plain white on the original map) are Second Residential, where apartment houses, flats and boarding houses were legal by right, with no cap on how many homes a lot could hold.",
+        text: "You’re looking at the Outer Sunset on the city’s first zone maps. The deep green blocks (plain white on the original map) are Second Residential, where apartment houses, flats and boarding houses were legal by right, with no cap on how many homes a lot could hold.",
       },
       {
         kind: "p",
-        text: "The yellow at the southern edge of the Sunset (diagonal hatching on the original) is First Residential: single-family houses. A two-family house was allowed only if 5,000 square feet of open lot remained. A standard San Francisco lot is 25 by 100 feet, or 2,500 square feet, so in practice that meant one house.",
+        text: "The orange-red at the southern edge of the Sunset (diagonal hatching on the original) is First Residential: single-family houses. A two-family house was allowed only if 5,000 square feet of open lot remained. A standard San Francisco lot is 25 by 100 feet, or 2,500 square feet, so in practice that meant one house.",
       },
       { kind: "stat", text: "Second Residential: no limit on homes per lot" },
     ],
@@ -75,11 +75,11 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "In the Mission, the pink streets are Commercial (solid black on the original map). Commercial did not mean “no homes”: the ordinance said nothing allowed in the residential districts “shall be excluded from the Commercial District.” Light Industrial, in teal, allowed flats and tenements too.",
+        text: "In the Mission, the blue streets are Commercial (solid black on the original map). Commercial did not mean “no homes”: the ordinance said nothing allowed in the residential districts “shall be excluded from the Commercial District.” Light Industrial, in brown, allowed flats and tenements too.",
       },
       {
         kind: "p",
-        text: "Only Heavy Industrial banned dwellings, keeping a watchman’s quarters. And the whole ordinance had no height limits, no minimum lot sizes, no yard rules and no density limits. It regulated what a building was for, not how big it was.",
+        text: "Only Heavy Industrial, the same brown on this map, banned dwellings, keeping a watchman’s quarters. And the whole ordinance had no height limits, no minimum lot sizes, no yard rules and no density limits. It regulated what a building was for, not how big it was.",
       },
       { kind: "stat", text: "6 districts, 0 density limits" },
     ],
@@ -94,7 +94,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "Same blocks, 1948. The legend hasn’t changed, but most of the Outer Sunset has turned yellow: First Residential (hatched on the original), one house per lot in practice. North of Golden Gate Park, most of the Richmond stayed deep brick: Second Residential.",
+        text: "Same blocks, 1948. The legend hasn’t changed, but most of the Outer Sunset has turned orange-red: First Residential (hatched on the original), one house per lot in practice. North of Golden Gate Park, most of the Richmond stayed deep green: Second Residential.",
       },
       {
         kind: "p",
@@ -117,7 +117,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "Now the map speaks in codes. Around Noe and Eureka Valleys it’s a patchwork of R-1 (yellow), R-2 (orange) and R-3 (deep brick). The modern City Planning Code took effect on May 2, 1960, and for the first time every residential district came with a number: how much lot area each home needed.",
+        text: "Now the map speaks in codes. Around Noe and Eureka Valleys it’s a patchwork of R-1 (orange-red), R-2 (amber) and R-3 (mid green). The modern City Planning Code took effect on May 2, 1960, and for the first time every residential district came with a number: how much lot area each home needed.",
       },
       { kind: "stat", text: "On a 25×100 lot: R-1, one home · R-2, two · R-3, about six · R-4, about twelve" },
       {
@@ -136,7 +136,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "A common story says 1960 is when the city downzoned its neighbourhoods. The record says otherwise. Its biggest shifts were less commercial land, the new density caps, and the teal south of Market: M-1 and M-2, where the 1960 code allowed no homes at all. The 1921 code had allowed housing in Light Industrial.",
+        text: "A common story says 1960 is when the city downzoned its neighbourhoods. The record says otherwise. By the city’s own later account, the code cut commercial zoning and added the new density caps, and it barred homes from the brown south of Market: M-1 and M-2. The 1921 code had allowed housing in Light Industrial.",
       },
       {
         kind: "p",
@@ -185,7 +185,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "The 1975 maps still use the 1960 codes, like the R-3s and R-4s in deep brick across the Western Addition. The meanings didn’t change; the amount of each did. Between 1970 and 1975, large areas were reclassified from R-3, R-4 and R-5 to R-1 and R-2.",
+        text: "The 1975 maps still use the 1960 codes, like the R-3s in mid green and the R-4s in teal-green across the Western Addition. The meanings didn’t change; the amount of each did. Between 1970 and 1975, large areas were reclassified from R-3, R-4 and R-5 to R-1 and R-2.",
       },
       { kind: "stat", text: "1970–75: R-5 land −57% · R-4 −7% · R-2 +22.5%" },
       {
@@ -204,7 +204,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "Noe Valley once more, on the map amended to November 1978. The R codes are gone. In their place are RH-1, RH-2 and RH-3 (yellow, orange and red), “House Character” districts allowing one, two or three homes per lot, and RM (deep brick), “Mixed House & Apartment Character.”",
+        text: "Noe Valley once more, on the map amended to November 1978. The R codes are gone. In their place are RH-1, RH-2 and RH-3 (orange-red, amber and pale yellow), “House Character” districts allowing one, two or three homes per lot, and RM (shades of green), “Mixed House & Apartment Character.”",
       },
       {
         kind: "p",
@@ -283,7 +283,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "The Mission in the 2000 map book: a dense patchwork of house, apartment, commercial and industrial districts, with violet where homes and shops mix. In 2008 two area plans rewrote much of this side of the city.",
+        text: "The Mission in the 2000 map book: a dense patchwork of house, apartment, commercial and industrial districts, with homes over shops in the same greens as apartments. In 2008 two area plans rewrote much of this side of the city.",
       },
       {
         kind: "p",
