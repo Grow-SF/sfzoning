@@ -4,6 +4,13 @@ Read `CONTRIBUTING.md` first; it covers setup, tests and the pull request
 flow. `pipeline/README.md` and `site/README.md` cover each part in depth. This
 file lists what an agent is most likely to get wrong here.
 
+## Running things
+
+Whenever work could run in parallel, run it in parallel by default: for example
+one `sfzmaps districts --series S --republish` per series, and separate test
+suites side by side. Keep steps that depend on each other in order (`--shared`
+needs every series first). Playwright stays at one worker; see `site/README.md`.
+
 ## Spending money
 
 The pipeline's label and district readers call the OpenAI API, at real cost
