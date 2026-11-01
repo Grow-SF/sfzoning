@@ -221,6 +221,13 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     holdTimer.current = null;
   }, []);
 
+  /** Removes the idle listener of a preload that has not started yet. */
+  const pendingPreload = useRef<(() => void) | null>(null);
+  const dropPreload = useCallback(() => {
+    pendingPreload.current?.();
+    pendingPreload.current = null;
+  }, []);
+
   /** Paint every layer for `s` without moving the camera. */
   const paint = useCallback((s: MapState) => {
     const map = mapRef.current;
@@ -332,8 +339,15 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       }
       // The neighbouring steps' ground, so the pan finds the old map already there. A failure
       // here is silent: the map fetches what it needs when it gets there.
+      // Not before the map is idle at this step: its own tiles come first, and a step change before
+      // then drops what was waiting. (Requests already in flight finish.)
+      dropPreload();
       const shared = sharedRef.current;
-      if (!interactive && protocol && s.preload) {
+      const wanted = s.preload;
+      if (!interactive && protocol && wanted) {
+        const start = () => {
+          dropPreload();
+          if (!protocol) return;
         // The story's padding puts the camera's centre off the canvas centre, by half the difference of
         // the paddings; a box centred on the camera that much taller/wider still covers all the canvas.
         const pad = storyPadding(map);
@@ -352,7 +366,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
           for (const series of scansShown(s, availRef.current)) once(series, s.camera);
           once(SHARED_SOURCE, s.camera);
         }
-        for (const p of s.preload) {
+        for (const p of wanted) {
           const cam = { center: p.camera.center, zoom: p.camera.zoom };
           const scans = p.scanSeries.filter((series) => once(series, cam)).map((series) => tilesHttpUrl(scanPath(series)));
           if (scans.length) void preload(protocol, scans, (maxZoom) => tilesCovering(cam, w, h, 256, maxZoom));
@@ -360,9 +374,13 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
             void preload(protocol, [shared.url.replace(/^pmtiles:\/\//, "")], (maxZoom) => tilesCovering(cam, w, h, 512, maxZoom));
           }
         }
+        };
+        map.on("idle", start);
+        pendingPreload.current = () => map.off("idle", start);
+        map.triggerRepaint(); // an unchanged view would otherwise never report idle again
       }
     },
-    [paint, interactive],
+    [paint, interactive, dropPreload],
   );
 
   useImperativeHandle(ref, () => ({ apply: applyNow }), [applyNow]);
@@ -560,6 +578,8 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     return () => {
       cancelled = true;
       readyRef.current = false;
+      pendingPreload.current?.();
+      pendingPreload.current = null;
       for (const t of timers.values()) clearTimeout(t);
       if (holdTimer.current) clearInterval(holdTimer.current);
       holdTimer.current = null;
