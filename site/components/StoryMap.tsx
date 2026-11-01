@@ -69,6 +69,7 @@ const TILE_FADE_MS = 300;
 const COLOURS = "colours";
 /** In "both" at city zoom the colours carry the view; the scan fades to a trace of itself. */
 const BOTH_CITY_INK = 0.3;
+const preloadKey = (archive: string, cam: { center: [number, number]; zoom: number }) => JSON.stringify([archive, cam.center, cam.zoom]);
 const scanLayer = (series: string) => `scan-${series}`;
 const allSeries = () => Array.from(new Set(ERAS.flatMap((e) => e.scanSeries)));
 
@@ -196,6 +197,8 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   const lastWanted = useRef<string[]>([]);
   /** Destinations already preloaded (camera and scans), so each is fetched once. */
   const preloaded = useRef(new Set<string>());
+  /** Of those, the ones that have finished: their tiles are in memory. */
+  const doneRef = useRef(new Set<string>());
   /** The era whose colours are on screen (null: none). */
   const lastEra = useRef<number | null>(null);
   const paintedEra = useRef(initial.era);
@@ -229,7 +232,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   }, []);
 
   /** Paint every layer for `s` without moving the camera. */
-  const paint = useCallback((s: MapState) => {
+  const paint = useCallback((s: MapState, fadeMs?: number) => {
     const map = mapRef.current;
     if (!map || !readyRef.current) return;
     // In the explorer a new year replaces the last at once, so the eye can compare the two. A fade
@@ -237,7 +240,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     const newYear = interactive && paintedEra.current !== s.era;
     paintedEra.current = s.era;
     const instant = reducedMotion() || newYear;
-    const fade = { duration: instant ? 0 : interactive ? FADE_MS : PAN_MS, delay: 0 };
+    const fade = { duration: instant ? 0 : (fadeMs ?? (interactive ? FADE_MS : PAN_MS)), delay: 0 };
     // Only the current era's scan and the prefetch era's are visible (MapLibre loads tiles for
     // every visible layer, even at zero opacity). A scan's source is added the first time it is
     // needed, so eras the reader never reaches cost no requests at all.
@@ -255,7 +258,18 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       );
       lastWanted.current = wanted;
       stopHold();
-      if (!interactive && !instant && wanted.length && held.length) {
+      // Scans whose tiles for this camera were preloaded and are in memory need no hold: old scan, new
+      // scan and colours all cross-fade together over the pan.
+      const ready = !!s.camera && wanted.every((series) => doneRef.current.has(preloadKey(series, s.camera!)));
+      if (!interactive && wanted.length) {
+        // New scans sit above the old ones, still under the districts.
+        const before = map.getStyle().layers.find((l) => l.id.startsWith("dist-") || l.id === "selected-line")?.id;
+        for (const series of wanted) {
+          addScan(map, series, !reducedMotion());
+          map.moveLayer(scanLayer(series), before);
+        }
+      }
+      if (!interactive && !instant && wanted.length && held.length && !ready) {
         holdRef.current = { held, since: Date.now() };
         holdTimer.current = setInterval(() => {
           const m = mapRef.current;
@@ -265,23 +279,17 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
                 holdRef.current,
                 lastWanted.current,
                 (series) => m.isSourceLoaded(scanLayer(series)),
-                Date.now() - since >= PAN_MS,
+                Date.now() - since >= PAN_MS, // the camera has stopped
                 Date.now(),
               )
             : null;
           holdRef.current = next;
           if (!next) {
             stopHold();
-            // Released scans fade and hide as any scan leaving the view does.
-            paint(stateRef.current);
+            // Released scans (and held colours) leave quickly: the pan is over.
+            paint(stateRef.current, TILE_FADE_MS);
           }
         }, HOLD_CHECK_MS);
-        // New scans sit above the held ones, still under the districts.
-        const before = map.getStyle().layers.find((l) => l.id.startsWith("dist-") || l.id === "selected-line")?.id;
-        for (const series of wanted) {
-          addScan(map, series, !interactive && !reducedMotion());
-          map.moveLayer(scanLayer(series), before);
-        }
       } else holdRef.current = null;
     }
     const holding = (series: string) => holdRef.current?.held.includes(series) ?? false;
@@ -356,20 +364,26 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         const h = clientHeight + Math.abs((pad.top ?? 0) - (pad.bottom ?? 0));
         // Each archive once per destination, however many steps ask for it.
         const once = (archive: string, cam: Preload["camera"]) => {
-          const key = JSON.stringify([archive, cam.center, cam.zoom]);
+          const key = preloadKey(archive, cam);
           if (preloaded.current.has(key)) return false;
           preloaded.current.add(key);
           return true;
         };
         // The map is drawing this camera itself: no need to ask for it again.
         if (s.camera) {
-          for (const series of scansShown(s, availRef.current)) once(series, s.camera);
+          // Idle here: this camera's scans have arrived.
+          for (const series of scansShown(s, availRef.current)) (once(series, s.camera), doneRef.current.add(preloadKey(series, s.camera)));
           once(SHARED_SOURCE, s.camera);
         }
         for (const p of wanted) {
           const cam = { center: p.camera.center, zoom: p.camera.zoom };
-          const scans = p.scanSeries.filter((series) => once(series, cam)).map((series) => tilesHttpUrl(scanPath(series)));
-          if (scans.length) void preload(protocol, scans, (maxZoom) => tilesCovering(cam, w, h, 256, maxZoom));
+          const fresh = p.scanSeries.filter((series) => once(series, cam));
+          if (fresh.length) {
+            const urls = fresh.map((series) => tilesHttpUrl(scanPath(series)));
+            void preload(protocol, urls, (maxZoom) => tilesCovering(cam, w, h, 256, maxZoom)).then(() => {
+              for (const series of fresh) doneRef.current.add(preloadKey(series, cam));
+            });
+          }
           if (shared && once(SHARED_SOURCE, cam)) {
             void preload(protocol, [shared.url.replace(/^pmtiles:\/\//, "")], (maxZoom) => tilesCovering(cam, w, h, 512, maxZoom));
           }

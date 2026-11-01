@@ -62,10 +62,10 @@ describe("heldScans", () => {
   it("keeps the held scans while the wanted one is not loaded", () => {
     expect(heldScans(hold, ["1950"], never, true, 2000)).toEqual(hold);
   });
-  it("keeps them while loaded but not yet faded in", () => {
+  it("keeps them while loaded but the camera is still moving", () => {
     expect(heldScans(hold, ["1950"], always, false, 2000)).toEqual(hold);
   });
-  it("releases them once loaded and faded", () => {
+  it("releases them once loaded and the camera has stopped", () => {
     expect(heldScans(hold, ["1950"], always, true, 2000)).toBeNull();
   });
   it("releases them at the limit even if the scan never arrived", () => {

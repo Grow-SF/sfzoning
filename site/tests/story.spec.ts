@@ -151,6 +151,25 @@ test("a scan that never arrives ends with colours and no stuck hold", async ({ p
   expect(hidden).toBe("none");
 });
 
+/** The share of the story map's pixels that are strongly coloured (the district colours, not the scan's ink). */
+async function colouredShare(page: Page) {
+  const shot = (await page.locator("[data-active-step] .map-wrap").screenshot()).toString("base64");
+  return await page.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext("2d")!;
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) n++;
+    return n / (d.length / 4);
+  }, shot);
+}
+
 const delayed = (ms: number) => async (route: import("@playwright/test").Route) => {
   await new Promise((r) => setTimeout(r, ms));
   await route.continue().catch(() => {});
@@ -181,20 +200,29 @@ test("going from colours to a scan alone keeps the colours until the scan arrive
   await page.waitForTimeout(1500);
   await centerStep(page, "1985-downtown-plan");
   await page.waitForTimeout(3500); // the camera has stopped; the scan has not arrived
-  const shot = (await page.locator("[data-active-step] .map-wrap").screenshot()).toString("base64");
-  const coloured = await page.evaluate(async (b64) => {
-    const img = new Image();
-    img.src = `data:image/png;base64,${b64}`;
-    await img.decode();
-    const c = document.createElement("canvas");
-    c.width = img.width;
-    c.height = img.height;
-    const g = c.getContext("2d")!;
-    g.drawImage(img, 0, 0);
-    const d = g.getImageData(0, 0, c.width, c.height).data;
-    let n = 0;
-    for (let i = 0; i < d.length; i += 4) if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) n++;
-    return n / (d.length / 4);
-  }, shot);
+  const coloured = await colouredShare(page);
   expect(coloured).toBeGreaterThan(0.02);
+});
+
+test("when the next scan is preloaded the colours fade during the pan, not after it", async ({ page }) => {
+  let lastTile = Date.now();
+  page.on("request", (req) => {
+    if (/\.pmtiles$/.test(new URL(req.url()).pathname)) lastTile = Date.now();
+  });
+  await page.goto("/");
+  await centerStep(page, "1960-density-caps");
+  await centerStep(page, "1972-height-limits");
+  await centerStep(page, "1975-downzonings");
+  await centerStep(page, "1978-rezoning");
+  await centerStep(page, "1978-legacy");
+  // Idle, then the neighbours' preload (which starts at idle) has finished: no tile request for 1s.
+  await page.waitForTimeout(300);
+  await expect(page.locator("[data-active-step] .map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 60_000 });
+  while (Date.now() - lastTile < 1000) await page.waitForTimeout(100);
+  const before = await colouredShare(page);
+  expect(before).toBeGreaterThan(0.02);
+  await centerStep(page, "1985-downtown-plan");
+  await page.waitForTimeout(900); // the screenshot itself takes a few hundred ms: ~1.3s into the pan
+  const during = await colouredShare(page);
+  expect(during).toBeLessThan(before / 2);
 });
