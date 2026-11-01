@@ -35,7 +35,7 @@ from sfzmaps.districts.assemble import MAX_ZOOM, MIN_ZOOM, _has_pmtiles
 log = logging.getLogger(__name__)
 
 # Part of the archive's name: raise it when the same inputs would now build a different archive.
-ARCHIVE_FORMAT = 4
+ARCHIVE_FORMAT = 5
 # The site refuses a pointer whose version it doesn't know, and uses the per-year files instead.
 MANIFEST_VERSION = 2
 # Same order as the table's numbers; the pointer carries it, so the site never assumes it.
