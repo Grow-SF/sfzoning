@@ -150,3 +150,51 @@ test("a scan that never arrives ends with colours and no stuck hold", async ({ p
   await expect(page.getByTestId("legend")).toBeVisible();
   expect(await visibleScans(page)).not.toContain("scan-1921");
 });
+
+const delayed = (ms: number) => async (route: import("@playwright/test").Route) => {
+  await new Promise((r) => setTimeout(r, ms));
+  await route.continue().catch(() => {});
+};
+
+test("the old scan stays under a new one whose tiles are slow", async ({ page }) => {
+  await page.route("**/1948/1948-paper.pmtiles", delayed(6000));
+  await page.goto("/");
+  await centerStep(page, "1921-mission");
+  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1921-mission");
+  await page.waitForTimeout(3000);
+  await centerStep(page, "1948-sunset");
+  await page.waitForTimeout(2000);
+  const old = await page.evaluate(() => {
+    const m = (window as unknown as { __map: import("maplibre-gl").Map }).__map;
+    const o = m.getPaintProperty("scan-1921", "raster-opacity");
+    return { visibility: m.getLayoutProperty("scan-1921", "visibility"), solid: typeof o !== "number" || o > 0 };
+  });
+  expect(old).toEqual({ visibility: "visible", solid: true });
+});
+
+test("going from colours to a scan alone keeps the colours until the scan arrives", async ({ page }) => {
+  await page.route("**/1980-1990-zoning/*paper.pmtiles", delayed(6000));
+  await page.goto("/");
+  await centerStep(page, "1978-legacy");
+  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1978-legacy");
+  await expect(page.locator("[data-active-step] .map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 60_000 });
+  await page.waitForTimeout(1500);
+  await centerStep(page, "1985-downtown-plan");
+  await page.waitForTimeout(3500); // the camera has stopped; the scan has not arrived
+  const shot = (await page.locator("[data-active-step] .map-wrap").screenshot()).toString("base64");
+  const coloured = await page.evaluate(async (b64) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${b64}`;
+    await img.decode();
+    const c = document.createElement("canvas");
+    c.width = img.width;
+    c.height = img.height;
+    const g = c.getContext("2d")!;
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, c.width, c.height).data;
+    let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]) > 60) n++;
+    return n / (d.length / 4);
+  }, shot);
+  expect(coloured).toBeGreaterThan(0.02);
+});
