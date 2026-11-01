@@ -293,6 +293,16 @@ test("a year looks the same when you come back to it", async ({ page }) => {
   expect((await canvas.screenshot()).equals(first), "the same year looks the same").toBe(true);
 });
 
+test("the Rumsey credit shows in the explorer's 1948 'What it allowed' view", async ({ page }) => {
+  await page.goto("/");
+  const explorer = page.getByTestId("explorer");
+  await explorer.scrollIntoViewIfNeeded();
+  await expect(explorer.getByTestId("explorer-era")).toHaveText("1948");
+  await explorer.getByText("What it allowed", { exact: true }).click();
+  await expect(explorer.locator(".map-wrap")).toHaveAttribute("data-view", "allowed");
+  await expect(explorer.getByText(CREDIT, { exact: true })).toBeVisible();
+});
+
 test("a new year in the original map replaces the last at once, even with its scan still on the way", async ({ page }) => {
   await page.route("**/1960/1960-paper.pmtiles", () => {}); // never answers
   await page.goto("/");

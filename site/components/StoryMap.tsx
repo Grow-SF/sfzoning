@@ -606,8 +606,8 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   }, []);
 
   const era = ERAS.find((e) => e.id === state.era);
-  // Wherever 1948 imagery is on screen, even under a later year's step.
-  const showCredit = drawnScans.includes("1948");
+  // In every view of 1948, and wherever its imagery is on screen, even under a later year's step.
+  const showCredit = state.era === "1948" || drawnScans.includes("1948");
   const colours = state.view !== "scan";
   const showLegend = colours && avail[state.era] === true;
   const comingSoon = colours && avail[state.era] === false;
