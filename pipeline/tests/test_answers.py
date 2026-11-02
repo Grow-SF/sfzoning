@@ -58,3 +58,23 @@ def test_remove_takes_the_sidecar_with_it(tmp_path):
     answers.write(art, [K1])
     answers.remove(art)
     assert not art.exists() and not answers.sidecar(art).exists()
+
+
+def test_baseline_lists_only_artifacts_without_sidecars_and_forgets_changed_ones(tmp_path, monkeypatch):
+    for n in ("DATA_DIR", "WORK_DIR", "OUT_DIR"):
+        monkeypatch.setattr(config, n, tmp_path / "data" / n.lower().removesuffix("_dir"))
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "data" / "work")
+    monkeypatch.setattr(config, "OUT_DIR", tmp_path / "data" / "out")
+    monkeypatch.setattr(config, "PIPELINE_DIR", tmp_path)
+    old = tmp_path / "data" / "work" / "1948" / "6a" / "labels.json"
+    new = tmp_path / "data" / "work" / "1948" / "7" / "labels.json"
+    partial = tmp_path / "data" / "work" / "1948" / "districts_raw.partial.parquet"
+    for p in (old, new, partial):
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("x")
+    answers.write(new, [K1])
+    assert answers.write_baseline(answers.all_artifacts()) == 1
+    assert answers.covered(old) and list(json.loads(answers.baseline_path().read_text())) == ["work/1948/6a/labels.json"]
+    old.write_text("changed")
+    assert answers.write_baseline([]) == 0 and not answers.covered(old)

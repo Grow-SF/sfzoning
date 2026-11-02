@@ -464,8 +464,18 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
                 return
         t0 = time.monotonic()
         sha = png_sha()
-        with llm.recording() as keys:
-            result = fn()
+        replay = not force and out.exists() and not answers.covered(out)
+        try:
+            # a replay (an artifact made before sidecars) never pays: answers from the cache only
+            with llm.recording() as keys, llm.cache_only(replay or llm.CACHE_ONLY):
+                result = fn()
+        except llm.LLMCacheMiss:
+            if not replay:
+                raise
+            log.info("%-8s kept as is: made before answers were recorded, and its answers aren't "
+                     "all cached under today's prompt (`sfzmaps answers --baseline` lists it)", name)
+            last_timings[name] = None
+            return
         answers.write(out, keys)
         text = reading.dumps(result, page_sha256=sha)
         if not (out.exists() and out.read_text() == text):

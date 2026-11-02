@@ -110,3 +110,26 @@ def record(keys) -> None:
     outer result also depends on)."""
     for k in keys:
         llm._record(k)
+
+
+def all_artifacts() -> list[Path]:
+    """Every answer artifact on disk (data/work, data/out), live or not."""
+    out = []
+    for root in (config.WORK_DIR, config.OUT_DIR):
+        if root.exists():
+            for name in ANSWER_ARTIFACTS:
+                out += [p for p in root.rglob(name) if "districts-partial" not in p.parts
+                        and not p.name.startswith("districts_raw.partial")]
+    return sorted(set(out))
+
+
+def write_baseline(paths) -> int:
+    """Record the given artifacts without a sidecar in the baseline, by their exact bytes, and
+    drop entries whose file is gone or changed; returns the number of entries."""
+    base = {k: v for k, v in _baseline().items()
+            if (config.DATA_DIR / k).exists() and _md5(config.DATA_DIR / k) == v}
+    for p in paths:
+        if not sidecar(p).exists():
+            base[baseline_key(p)] = _md5(p)
+    baseline_path().write_text(json.dumps(dict(sorted(base.items())), indent=1) + "\n")
+    return len(base)

@@ -363,3 +363,29 @@ def test_small_commercial_clusters_do_not_spread():
     left, mid, stub = box(0, 0, 100, 100), box(106, 0, 206, 100), box(212, 80, 312, 100)
     out = labels.assign_regions([left, mid, stub], [lab("NC-1", 50, 50), lab("RH-1(D)", 260, 90)])
     assert [c for p, c, _ in out if p.equals(mid)] == ["RH-1(D)"]
+
+
+def test_an_old_artifact_whose_answers_arent_cached_is_kept_without_paying(tmp_path):
+    """Made before answers were recorded, and its answers aren't cached under today's prompt:
+    kept as it is, no call, no sidecar (the baseline lists it)."""
+    d = _legacy_artifact(tmp_path)
+    answers.sidecar(d / "district_labels.json").unlink()
+    out = labels.read_district_labels("1960", "s1", client=Fake(lambda *a: 1 / 0))
+    assert [l.code for l in out] == ["R-1"]
+    assert not answers.sidecar(d / "district_labels.json").exists()
+
+
+def test_an_old_artifact_is_replayed_from_the_cache_and_kept_byte_for_byte(tmp_path):
+    d = _legacy_artifact(tmp_path)
+    art = d / "district_labels.json"
+    fake = Fake(lambda img, schema, n: schema(labels=[]))
+    labels.read_district_labels("1960", "s1", client=fake, tile=400)     # reads, caches answers
+    recorded = answers.read(art)
+    assert recorded and all(k.startswith("llm/") for k in recorded)
+    answers.sidecar(art).unlink()                                        # as if made before sidecars
+    before, calls = (art.read_bytes(), art.stat().st_mtime_ns), fake.calls
+    with llm.recording() as outer:
+        labels.read_district_labels("1960", "s1", client=fake, tile=400)
+    assert fake.calls == calls                                           # replayed from the cache
+    assert answers.read(art) == recorded and outer == set(recorded)      # and consumed
+    assert (art.read_bytes(), art.stat().st_mtime_ns) == before

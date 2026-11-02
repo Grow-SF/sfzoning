@@ -226,12 +226,24 @@ def legend_swatches(series: str, *, client=None) -> dict[str, np.ndarray]:
         return _swatches_from_boxes(series, cfg["sheet"], cfg["swatches"])
     root = config.WORK_DIR / series
     for saved in sorted(root.glob("*/district_legend.json")):
-        if not legend_fresh(saved, series) or not answers.covered(saved):
-            log.info("%s: %s is stale (prompt, schema, codes, edge or answers record); rereading",
+        if not legend_fresh(saved, series):
+            log.info("%s: %s is stale (prompt, schema, codes or edge changed); rereading",
                      series, saved.relative_to(root))
             continue
-        answers.consume(saved)
         d = json.loads(saved.read_text())
+        if not answers.covered(saved):    # made before answers were recorded: replay, never paying
+            try:
+                with llm.cache_only(True), llm.recording() as keys:
+                    again = _read_legend(series, root, client)
+            except llm.LLMCacheMiss:
+                again = None
+            if again is not None and again[0] / "district_legend.json" == saved \
+                    and again[2] == d["swatches"]:
+                answers.write(saved, keys)
+            else:
+                log.info("%s: %s kept as is (answers not all cached under today's prompt; "
+                         "`sfzmaps answers --baseline` lists it)", series, saved.relative_to(root))
+        answers.consume(saved)
         return _swatches_from_boxes(series, d["sheet"], d["swatches"])
     with llm.recording() as keys:
         found_at = _read_legend(series, root, client)

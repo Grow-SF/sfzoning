@@ -532,6 +532,29 @@ def push() -> None:
     typer.echo("pushed")
 
 
+@app.command("answers")
+def answers_cmd(
+    check: bool = typer.Option(False, "--check", help="List live artifacts whose answers aren't "
+                                                     "recorded (no sidecar, no baseline entry)."),
+    baseline: bool = typer.Option(False, "--baseline", help="Record every artifact still without a "
+                                                           "sidecar in pipeline/cache-baseline.json."),
+) -> None:
+    """Answer provenance (sfzmaps.answers): which artifacts know the answers they were made from.
+    A build replays old artifacts from the cache at $0; --baseline records what's left."""
+    from sfzmaps import answers, ship as ship_mod
+
+    if baseline:
+        n = answers.write_baseline(answers.all_artifacts())
+        typer.echo(f"{answers.baseline_path()}: {n} artifact(s) accepted as they are (commit it)")
+        return
+    _, unknown = ship_mod.needed_answers()
+    for p in unknown:
+        typer.echo(str(p))
+    typer.echo(f"{len(unknown)} live artifact(s) without recorded answers")
+    if check and unknown:
+        raise typer.Exit(1)
+
+
 @app.command("pull-drive")
 def pull_drive() -> None:
     """Older way to get data: the processed zips from the public Drive processed/ folder,
