@@ -38,7 +38,8 @@ def test_build_refuses_tools_outside_the_flake_unless_told(monkeypatch, capsys):
 
 
 def test_every_stage_depends_on_the_pinned_toolchain():
-    assert all({"../pixi.toml", "../pixi.lock"} <= set(build.stage_deps(st)) for st in build.stages().values())
+    built = [st for st in build.stages().values() if not st.frozen]     # refdata is never built
+    assert built and all({"../pixi.toml", "../pixi.lock"} <= set(build.stage_deps(st)) for st in built)
 
 
 def test_render_check_compares_fresh_renders_with_the_recorded_hashes(tmp_path, monkeypatch):
