@@ -363,3 +363,73 @@ def pull(dvc_checkout: bool = True) -> tuple[int, int]:
         subprocess.run(["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc", "checkout"],
                        cwd=config.PIPELINE_DIR, check=True)
     return applied_n, n
+
+
+# --- the merge gate (CI) ---------------------------------------------------------------------------
+
+DATA_DEPS = ("data/",)   # deps CI doesn't have (scans, reference data, outputs): not checked here
+
+
+def lock_problems(status_json: str) -> list[str]:
+    """From `dvc status --json` on a checkout without data: stages whose git-tracked deps or
+    command changed since dvc.lock was recorded (a commit added after the build, or a rebase
+    without a rebuild). Missing data deps and outputs are expected in CI and ignored."""
+    out = []
+    for stage, changes in (json.loads(status_json or "{}") or {}).items():
+        if stage.endswith(".dvc"):
+            continue
+        for ch in changes:
+            if ch == "changed command":
+                out.append(f"{stage}: its command changed since dvc.lock was recorded")
+            elif isinstance(ch, dict):
+                for path, how in (ch.get("changed deps") or {}).items():
+                    if not path.startswith(DATA_DEPS):
+                        out.append(f"{stage}: {path} {how} since dvc.lock was recorded")
+    return out
+
+
+def check_shipped(status_json: str, client=None) -> list[str]:
+    """Everything this commit needs is on the Blob store and dvc.lock matches the code: the list
+    of problems (empty = mergeable). Public reads only."""
+    client = client or _client()
+    problems = lock_problems(status_json)
+    if not needed_path().exists():
+        return problems + ["pipeline/cache-needed.json is missing: run `sfzmaps ship`"]
+    needed = json.loads(needed_path().read_text())
+    if needed.get("lock_md5") != lock_md5():
+        problems.append("dvc.lock changed since `sfzmaps ship` ran: build, then ship again")
+    records = cachepack.recorded()
+    for sha, rec in sorted(records.items()):
+        size = remote_size(f"{PACK_PREFIX}/{sha}.zip", client)
+        if size != rec["bytes"]:
+            problems.append(f"answer pack {sha[:12]} is {'missing' if size is None else f'{size} bytes'} "
+                            f"on the Blob store (recorded {rec['bytes']})")
+    with tempfile.TemporaryDirectory(prefix="sfzmaps-check-") as tmp:
+        try:
+            have = known_keys(records, client)
+            np_ = Path(tmp) / "needed.keys.gz"
+            download(f"{NEEDED_PREFIX}/{needed['keys_sha']}.keys.gz", np_, "sha256", needed["keys_sha"], client)
+            import gzip
+            keys = gzip.decompress(np_.read_bytes()).decode().split()
+            gap = [k for k in answers.validate(keys) if k not in have]
+            if gap:
+                problems.append(f"{len(gap)} needed answer(s) are in no shipped pack (e.g. {gap[0]})")
+        except ShipError as e:
+            problems.append(str(e))
+        cache = Path(tmp) / "dvc"
+        outs = lock_outs((config.PIPELINE_DIR / "dvc.lock").read_text())
+        dirs = [m for m in outs if m.endswith(".dir")]
+        try:
+            for m in dirs:
+                download(object_name(m), object_path(m, cache), "md5", _md5_hex(m), client)
+        except ShipError as e:
+            return problems + [str(e)]
+        objs = objects(outs, lambda md5: json.loads(object_path(md5, cache).read_text()))
+        files = [m for m in objs if not m.endswith(".dir")]
+        with ThreadPoolExecutor(WORKERS) as ex:
+            sizes = list(ex.map(lambda m: remote_size(object_name(m), client), files))
+        absent = [m for m, sz in zip(files, sizes) if sz is None]
+        if absent:
+            problems.append(f"{len(absent)} of {len(files)} data object(s) are not on the Blob store "
+                            f"(e.g. {object_name(absent[0])}): run `sfzmaps ship`")
+    return problems

@@ -192,3 +192,70 @@ def test_pull_applies_packs_and_fetches_missing_objects_once(data, tmp_path, mon
     assert (config.CACHE_DIR / K1).read_text() == '{"a": 1}'
     assert ship.object_path(md5(f1), cache).read_bytes() == f1
     assert ship.pull(dvc_checkout=False) == (0, 0)             # applied twice: a no-op
+
+
+# --- the merge gate ---------------------------------------------------------------------------------
+
+def test_lock_problems_flag_code_changes_and_ignore_missing_data():
+    status = json.dumps({
+        "edition-1948": [{"changed deps": {"src/sfzmaps/runner.py": "modified", "data/raw": "deleted"}},
+                         {"changed outs": {"data/out/1948": "deleted"}}],
+        "today": ["changed command"],
+        "shared": [{"changed deps": {"data/out/today/districts": "deleted"}}],
+    })
+    got = ship.lock_problems(status)
+    assert any("src/sfzmaps/runner.py" in p for p in got) and any("today" in p for p in got)
+    assert not any("data/" in p for p in got) and len(got) == 2
+    assert ship.lock_problems("{}") == []
+
+
+def _shipped_state(data, tmp_path):
+    """A commit as `ship` leaves it, and the Blob store it filled."""
+    for k in (K1, K2):
+        p = config.CACHE_DIR / k
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text("{}")
+    pack = cachepack.make_pack([K1, K2])
+    cachepack.write_record(pack)
+    f1 = b"tile bytes"
+    manifest = json.dumps([{"md5": md5(f1), "relpath": "x.pmtiles"}]).encode()
+    dirmd5 = md5(manifest) + ".dir"
+    (config.PIPELINE_DIR / "dvc.lock").write_text(f"stages:\n  s:\n    outs:\n    - path: data/out/x\n      md5: {dirmd5}\n")
+    nb = ship.needed_bytes([K1, K2])
+    nsha = hashlib.sha256(nb).hexdigest()
+    ship.needed_path().write_text(json.dumps({"lock_md5": ship.lock_md5(), "keys_sha": nsha, "keys": 2}))
+    blob = FakeBlob({f"cache/packs/{pack.sha}.zip": pack.data,
+                     f"cache/packs/{pack.sha}.keys.gz": pack.index_bytes(),
+                     f"cache/needed/{nsha}.keys.gz": nb,
+                     ship.object_name(dirmd5): manifest, ship.object_name(md5(f1)): f1})
+    return blob, dirmd5, md5(f1)
+
+
+def test_a_fully_shipped_commit_passes(data, tmp_path):
+    blob, _, _ = _shipped_state(data, tmp_path)
+    assert ship.check_shipped("{}", blob.client()) == []
+
+
+def test_missing_data_a_stale_ship_or_an_unpacked_answer_fail(data, tmp_path):
+    blob, dirmd5, filemd5 = _shipped_state(data, tmp_path)
+    del blob.objects[ship.object_name(filemd5)]
+    assert any("not on the Blob store" in p for p in ship.check_shipped("{}", blob.client()))
+    blob, dirmd5, filemd5 = _shipped_state(data, tmp_path)
+    (config.PIPELINE_DIR / "dvc.lock").write_text((config.PIPELINE_DIR / "dvc.lock").read_text() + "\n")
+    assert any("changed since `sfzmaps ship`" in p for p in ship.check_shipped("{}", blob.client()))
+
+
+def test_a_needed_answer_in_no_pack_fails(data, tmp_path):
+    blob, _, _ = _shipped_state(data, tmp_path)
+    k3 = "llm/" + "3" * 64 + ".json"
+    nb = ship.needed_bytes([K1, K2, k3])
+    nsha = hashlib.sha256(nb).hexdigest()
+    blob.objects[f"cache/needed/{nsha}.keys.gz"] = nb
+    ship.needed_path().write_text(json.dumps({"lock_md5": ship.lock_md5(), "keys_sha": nsha, "keys": 3}))
+    got = ship.check_shipped("{}", blob.client())
+    assert any("in no shipped pack" in p and k3 in p for p in got)
+
+
+def test_no_needed_list_means_not_shipped(data, tmp_path):
+    (config.PIPELINE_DIR).mkdir(parents=True, exist_ok=True)
+    assert any("cache-needed.json is missing" in p for p in ship.check_shipped("{}", FakeBlob().client()))
