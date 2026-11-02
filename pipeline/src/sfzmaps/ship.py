@@ -11,9 +11,18 @@ What a commit needs, so a fresh checkout builds at $0 and finds nothing to do:
 `sfzmaps ship` runs on a branch when it is ready to merge: it uploads what main lacks and
 commits the new pack's record, so merging the branch gives main exactly what it shipped.
 Nothing leaves the machine before that. `sfzmaps pull` fetches a commit's packs and data
-(public URLs, no token) and checks the data out. Uploads go through site/scripts/blob-put.mjs
-(the token stays in site/.env.local); downloads and existence checks here add a query string,
-so no read of a missing object is ever cached at its real URL.
+(public URLs, no token) and checks the data out.
+
+Requests are kept to the fewest that get the data (a burst of per-object checks once tripped
+Vercel's DDoS protection): ship learns what the store holds from its list API (one call per
+1,000 names, site/scripts/blob-list.mjs), uploads only what's missing (one request each,
+site/scripts/blob-put.mjs), lists once more to confirm, then publishes a *shipped manifest*
+(cache/shipped/<sha>.json: every object and pack it confirmed, for this dvc.lock).
+pipeline/cache-needed.json names it. The merge gate then reads two files and the pack indexes,
+never one request per object; pull reads the manifest and fetches only what it lacks, a few at
+a time. A name is only ever published after its object is uploaded, so no read is ever made of
+a missing object, and downloads need no cache-busting: they are ordinary cacheable CDN reads.
+The token stays in site/.env.local, read by node.
 """
 from __future__ import annotations
 
@@ -34,7 +43,10 @@ BASE = (os.environ.get("NEXT_PUBLIC_TILES_BASE_URL")
 DVC_PREFIX = "dvc/files/md5"
 PACK_PREFIX = "cache/packs"
 NEEDED_PREFIX = "cache/needed"
-WORKERS = 16
+SHIPPED_PREFIX = "cache/shipped"
+PULL_WORKERS = 4                     # downloads at once: a browser's tile load, not a burst
+RETRY_STATUS = {403, 429, 500, 502, 503, 504}
+RETRY_WAIT_S = (2, 8, 30)
 
 
 class ShipError(Exception):
@@ -48,32 +60,31 @@ def _client():
     return httpx.Client(timeout=120, follow_redirects=True)
 
 
-def remote_size(name: str, client=None) -> int | None:
-    """Size of the published object, or None; cache-busted, so a miss is never cached."""
-    c = client or _client()
-    r = c.head(f"{BASE}/{name}", params={"check": str(time.time_ns())})
-    if r.status_code == 404:
-        return None
-    r.raise_for_status()
-    return int(r.headers.get("content-length", "-1"))
-
-
-def download(name: str, dest: Path, alg: str, want: str, client=None) -> None:
+def download(name: str, dest: Path, alg: str, want: str, client=None, wait=time.sleep) -> None:
     """Stream a published object to dest, atomically, if its hash (alg) is `want`; else
-    ShipError and nothing is written."""
+    ShipError and nothing is written. A refusal or overload (403, 429, 5xx) waits and retries a
+    few times, slower each time, then gives up."""
     c = client or _client()
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + f".{os.getpid()}.{time.time_ns()}.tmp")
-    h = hashlib.new(alg)
     try:
-        with c.stream("GET", f"{BASE}/{name}", params={"check": str(time.time_ns())}) as r:
-            if r.status_code == 404:
-                raise ShipError(f"{name} is not on the Blob store (was the branch shipped?)")
-            r.raise_for_status()
-            with open(tmp, "wb") as f:
-                for chunk in r.iter_bytes(1 << 20):
-                    h.update(chunk)
-                    f.write(chunk)
+        for attempt, pause in enumerate((*RETRY_WAIT_S, None)):
+            h = hashlib.new(alg)
+            with c.stream("GET", f"{BASE}/{name}") as r:
+                if r.status_code == 404:
+                    raise ShipError(f"{name} is not on the Blob store (was this commit shipped?)")
+                if r.status_code in RETRY_STATUS and pause is not None:
+                    wait(pause)
+                    continue
+                if r.status_code in RETRY_STATUS:
+                    raise ShipError(f"{name}: the Blob store keeps refusing ({r.status_code}); "
+                                    "try again later")
+                r.raise_for_status()
+                with open(tmp, "wb") as f:
+                    for chunk in r.iter_bytes(1 << 20):
+                        h.update(chunk)
+                        f.write(chunk)
+            break
         if h.hexdigest() != want:
             raise ShipError(f"{name}: downloaded bytes don't match their name")
         os.replace(tmp, dest)
@@ -184,18 +195,34 @@ def known_keys(records: dict[str, dict], client=None) -> dict[str, str]:
     return out
 
 
-# --- upload (node, @vercel/blob) ------------------------------------------------------------------
+# --- the store's listing and uploads (node, @vercel/blob, token in site/.env.local) ----------------
+
+def _node(script: str, args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
+    site = _repo_root() / "site"
+    if not (site / ".env.local").exists():
+        raise ShipError("site/.env.local is missing (BLOB_READ_WRITE_TOKEN, from `vercel env pull`)")
+    return subprocess.run(["node", "--env-file=.env.local", f"scripts/{script}", *args], cwd=site,
+                          input=stdin, capture_output=True, text=True)
+
+
+def listing(prefixes=(f"{DVC_PREFIX}/", "cache/")) -> dict[str, int]:
+    """name -> size of everything the store holds under prefixes: one list call per 1,000 names."""
+    p = _node("blob-list.mjs", list(prefixes))
+    if p.returncode != 0:
+        raise ShipError(f"listing the Blob store failed: {p.stderr.strip()[-300:]}")
+    out = {}
+    for line in p.stdout.splitlines():
+        r = json.loads(line)
+        out[r["name"]] = r["size"]
+    return out
+
 
 def upload(entries: list[dict]) -> dict[str, str]:
     """Upload manifest entries with site/scripts/blob-put.mjs; name -> status. The token is read
     by node from site/.env.local; it never passes through here."""
     if not entries:
         return {}
-    site = _repo_root() / "site"
-    if not (site / ".env.local").exists():
-        raise ShipError("site/.env.local is missing (BLOB_READ_WRITE_TOKEN, from `vercel env pull`)")
-    p = subprocess.run(["node", "--env-file=.env.local", "scripts/blob-put.mjs"], cwd=site,
-                       input=json.dumps(entries), capture_output=True, text=True)
+    p = _node("blob-put.mjs", [], json.dumps(entries))
     status = {}
     for line in p.stdout.splitlines():
         try:
@@ -213,8 +240,9 @@ def upload(entries: list[dict]) -> dict[str, str]:
 # --- what a commit needs, published so CI can check it ----------------------------------------------
 
 def needed_path() -> Path:
-    """pipeline/cache-needed.json: which dvc.lock was shipped, and the published list of the
-    answers that commit needs (cache/needed/<sha>.keys.gz)."""
+    """pipeline/cache-needed.json: which dvc.lock was shipped, the published list of the answers
+    that commit needs (cache/needed/<sha>.keys.gz) and its shipped manifest
+    (cache/shipped/<sha>.json: every object and pack confirmed on the store)."""
     return config.PIPELINE_DIR / "cache-needed.json"
 
 
@@ -272,8 +300,8 @@ def preflight(base: str = "origin/main") -> None:
 
 
 def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
-    """Upload what this commit needs that `base` and this branch haven't shipped, and commit the
-    new pack's record."""
+    """Upload what this commit needs that the store lacks, confirm it, publish the shipped
+    manifest, and commit the records (pack record, pipeline/cache-needed.json)."""
     preflight(base)
     client = _client()
     keys, unknown = needed_answers()
@@ -286,22 +314,27 @@ def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
     cache = dvc_cache()
     outs = lock_outs((config.PIPELINE_DIR / "dvc.lock").read_text())
     objs = objects(outs, lambda md5: json.loads(object_path(md5, cache).read_text()))
-    with ThreadPoolExecutor(WORKERS) as ex:
-        sizes = list(ex.map(lambda m: remote_size(object_name(m), client), objs))
-    missing = [m for m, s in zip(objs, sizes) if s is None]
-    nbytes = sum(object_path(m, cache).stat().st_size for m in missing)
+    size = {m: object_path(m, cache).stat().st_size for m in objs}
+    held = listing()
+    wrong = [m for m in objs if object_name(m) in held and held[object_name(m)] != size[m]]
+    if wrong:
+        raise ShipError(f"{len(wrong)} object(s) on the store differ in size from the local ones "
+                        f"(e.g. {object_name(wrong[0])}); not overwriting")
+    missing = [m for m in objs if object_name(m) not in held]
+    nbytes = sum(size[m] for m in missing)
     if dry_run:
         return ShipReport(None, len(new), len(objs), len(missing), nbytes)
     pack_sha = None
     entries = [{"file": str(object_path(m, cache)), "name": object_name(m), "alg": "md5",
                 "hash": _md5_hex(m)} for m in missing]
     nb = needed_bytes(keys)
-    needed = {"lock_md5": lock_md5(), "keys_sha": hashlib.sha256(nb).hexdigest(), "keys": len(keys)}
+    keys_sha = hashlib.sha256(nb).hexdigest()
     with tempfile.TemporaryDirectory(prefix="sfzmaps-ship-") as tmp:
         np_ = Path(tmp) / "needed.keys.gz"
         np_.write_bytes(nb)
-        entries.append({"file": str(np_), "name": f"{NEEDED_PREFIX}/{needed['keys_sha']}.keys.gz",
-                        "alg": "sha256", "hash": needed["keys_sha"]})
+        if f"{NEEDED_PREFIX}/{keys_sha}.keys.gz" not in held:
+            entries.append({"file": str(np_), "name": f"{NEEDED_PREFIX}/{keys_sha}.keys.gz",
+                            "alg": "sha256", "hash": keys_sha})
         if new:
             pack = cachepack.make_pack(new)
             zp, ip = Path(tmp) / f"{pack.sha}.zip", Path(tmp) / f"{pack.sha}.keys.gz"
@@ -312,14 +345,34 @@ def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
                         {"file": str(ip), "name": f"{PACK_PREFIX}/{pack.sha}.keys.gz", "alg": "sha256",
                          "hash": index_sha}]
             pack_sha = pack.sha
-        upload(entries)                      # data, list and pack first ...
-        files = []                           # ... the records only once they're all there
+            records = {**records, pack.sha: pack.record()}
+        upload(entries)                                   # only what the listing lacked ...
+        held = listing()                                  # ... then one more listing confirms
+        absent = [object_name(m) for m in objs if held.get(object_name(m)) != size[m]]
+        absent += [f"{PACK_PREFIX}/{sha}.zip" for sha, r in records.items()
+                   if held.get(f"{PACK_PREFIX}/{sha}.zip") != r["bytes"]]
+        if f"{NEEDED_PREFIX}/{keys_sha}.keys.gz" not in held:
+            absent.append(f"{NEEDED_PREFIX}/{keys_sha}.keys.gz")
+        if absent:
+            raise ShipError(f"{len(absent)} object(s) aren't on the store after uploading "
+                            f"(e.g. {absent[0]}); run ship again")
+        manifest = json.dumps({"lock_md5": lock_md5(), "outs": outs,
+                               "objects": {m: size[m] for m in objs},
+                               "packs": {sha: r["bytes"] for sha, r in sorted(records.items())}},
+                              indent=0, sort_keys=True).encode()
+        shipped_sha = hashlib.sha256(manifest).hexdigest()
+        mp = Path(tmp) / "shipped.json"
+        mp.write_bytes(manifest)
+        upload([{"file": str(mp), "name": f"{SHIPPED_PREFIX}/{shipped_sha}.json", "alg": "sha256",
+                 "hash": shipped_sha, "contentType": "application/json"}])
+        files = []                                        # the records last
         if pack_sha:
             files.append(cachepack.write_record(pack))
             cachepack.mark_applied(pack_sha)
-        old = needed_path().read_text() if needed_path().exists() else None
+        needed = {"lock_md5": lock_md5(), "keys_sha": keys_sha, "keys": len(keys),
+                  "shipped_sha": shipped_sha}
         new_text = json.dumps(needed, indent=1, sort_keys=True) + "\n"
-        if old != new_text:
+        if not needed_path().exists() or needed_path().read_text() != new_text:
             needed_path().write_text(new_text)
             files.append(needed_path())
         if files:
@@ -329,11 +382,28 @@ def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
     return ShipReport(pack_sha, len(new), len(objs), len(missing), nbytes)
 
 
+def shipped_manifest(client=None) -> dict:
+    """This commit's shipped manifest (named in cache-needed.json, sha-checked)."""
+    if not needed_path().exists():
+        raise ShipError("pipeline/cache-needed.json is missing: this commit wasn't shipped")
+    sha = json.loads(needed_path().read_text()).get("shipped_sha")
+    if not sha:
+        raise ShipError("pipeline/cache-needed.json names no shipped manifest: ship again")
+    with tempfile.TemporaryDirectory(prefix="sfzmaps-manifest-") as tmp:
+        p = Path(tmp) / "m.json"
+        download(f"{SHIPPED_PREFIX}/{sha}.json", p, "sha256", sha, client)
+        return json.loads(p.read_text())
+
+
 # --- pull -----------------------------------------------------------------------------------------
 
 def pull(dvc_checkout: bool = True) -> tuple[int, int]:
-    """Fetch this commit's packs and data from the Blob store; (packs applied, objects fetched)."""
+    """Fetch this commit's packs and data from the Blob store; (packs applied, objects fetched).
+    Reads the shipped manifest, then fetches only what's missing locally, PULL_WORKERS at a time."""
     client = _client()
+    manifest = shipped_manifest(client)
+    if manifest["lock_md5"] != lock_md5():
+        raise ShipError("this checkout's dvc.lock isn't the one shipped; pull on a shipped commit")
     done = cachepack.applied()
     applied_n = 0
     for sha, rec in sorted(cachepack.recorded().items()):
@@ -346,23 +416,17 @@ def pull(dvc_checkout: bool = True) -> tuple[int, int]:
         cachepack.mark_applied(sha)
         applied_n += 1
     cache = dvc_cache()
-    outs = lock_outs((config.PIPELINE_DIR / "dvc.lock").read_text())
+    todo = [m for m in manifest["objects"] if not object_path(m, cache).exists()]
 
-    def fetch(md5: str) -> int:
-        p = object_path(md5, cache)
-        if p.exists():
-            return 0
-        download(object_name(md5), p, "md5", _md5_hex(md5), client)
-        return 1
+    def fetch(md5: str) -> None:
+        download(object_name(md5), object_path(md5, cache), "md5", _md5_hex(md5), client)
 
-    with ThreadPoolExecutor(WORKERS) as ex:      # manifests first: they list the files
-        n = sum(ex.map(fetch, [m for m in outs if m.endswith(".dir")]))
-        objs = objects(outs, lambda md5: json.loads(object_path(md5, cache).read_text()))
-        n += sum(ex.map(fetch, [m for m in objs if not m.endswith(".dir")]))
+    with ThreadPoolExecutor(PULL_WORKERS) as ex:
+        list(ex.map(fetch, todo))
     if dvc_checkout:
         subprocess.run(["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc", "checkout"],
                        cwd=config.PIPELINE_DIR, check=True)
-    return applied_n, n
+    return applied_n, len(todo)
 
 
 # --- the merge gate (CI) ---------------------------------------------------------------------------
@@ -390,20 +454,28 @@ def lock_problems(status_json: str) -> list[str]:
 
 def check_shipped(status_json: str, client=None) -> list[str]:
     """Everything this commit needs is on the Blob store and dvc.lock matches the code: the list
-    of problems (empty = mergeable). Public reads only."""
+    of problems (empty = mergeable). Public reads only, and few: the shipped manifest, the needed
+    list and the pack indexes (ship confirmed every object with the store's listing)."""
     client = client or _client()
     problems = lock_problems(status_json)
     if not needed_path().exists():
         return problems + ["pipeline/cache-needed.json is missing: run `sfzmaps ship`"]
     needed = json.loads(needed_path().read_text())
     if needed.get("lock_md5") != lock_md5():
-        problems.append("dvc.lock changed since `sfzmaps ship` ran: build, then ship again")
+        return problems + ["dvc.lock changed since `sfzmaps ship` ran: build, then ship again"]
+    try:
+        manifest = shipped_manifest(client)
+    except ShipError as e:
+        return problems + [str(e)]
+    if manifest.get("lock_md5") != lock_md5() or manifest.get("outs") != lock_outs(
+            (config.PIPELINE_DIR / "dvc.lock").read_text()):
+        problems.append("the shipped manifest doesn't describe this dvc.lock: ship again")
+    if not set(manifest.get("outs", [])) <= set(manifest.get("objects", {})):
+        problems.append("the shipped manifest lacks some of dvc.lock's outputs: ship again")
     records = cachepack.recorded()
     for sha, rec in sorted(records.items()):
-        size = remote_size(f"{PACK_PREFIX}/{sha}.zip", client)
-        if size != rec["bytes"]:
-            problems.append(f"answer pack {sha[:12]} is {'missing' if size is None else f'{size} bytes'} "
-                            f"on the Blob store (recorded {rec['bytes']})")
+        if manifest.get("packs", {}).get(sha) != rec["bytes"]:
+            problems.append(f"answer pack {sha[:12]} wasn't confirmed on the store by `sfzmaps ship`")
     with tempfile.TemporaryDirectory(prefix="sfzmaps-check-") as tmp:
         try:
             have = known_keys(records, client)
@@ -416,20 +488,4 @@ def check_shipped(status_json: str, client=None) -> list[str]:
                 problems.append(f"{len(gap)} needed answer(s) are in no shipped pack (e.g. {gap[0]})")
         except ShipError as e:
             problems.append(str(e))
-        cache = Path(tmp) / "dvc"
-        outs = lock_outs((config.PIPELINE_DIR / "dvc.lock").read_text())
-        dirs = [m for m in outs if m.endswith(".dir")]
-        try:
-            for m in dirs:
-                download(object_name(m), object_path(m, cache), "md5", _md5_hex(m), client)
-        except ShipError as e:
-            return problems + [str(e)]
-        objs = objects(outs, lambda md5: json.loads(object_path(md5, cache).read_text()))
-        files = [m for m in objs if not m.endswith(".dir")]
-        with ThreadPoolExecutor(WORKERS) as ex:
-            sizes = list(ex.map(lambda m: remote_size(object_name(m), client), files))
-        absent = [m for m, sz in zip(files, sizes) if sz is None]
-        if absent:
-            problems.append(f"{len(absent)} of {len(files)} data object(s) are not on the Blob store "
-                            f"(e.g. {object_name(absent[0])}): run `sfzmaps ship`")
     return problems

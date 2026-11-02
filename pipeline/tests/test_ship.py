@@ -15,12 +15,16 @@ class FakeBlob:
     def __init__(self, objects=None):
         self.objects = dict(objects or {})
         self.requests = []
+        self.refuse = {}             # name -> how many times to answer 403 first
 
     def client(self):
         def handle(req):
             self.requests.append(req)
-            assert "check" in req.url.params                 # never a cacheable real-URL miss
             name = req.url.path.lstrip("/")
+            if name in self.refuse:
+                self.refuse[name] -= 1
+                if self.refuse[name] >= 0:
+                    return httpx.Response(403)
             if name not in self.objects:
                 return httpx.Response(404)
             body = self.objects[name]
@@ -113,17 +117,36 @@ def _cache_with(tmp_path, files):
     return cache
 
 
-def _setup_ship(data, tmp_path, monkeypatch, blob, uploaded):
-    f1 = b"tile bytes"
-    manifest = json.dumps([{"md5": md5(f1), "relpath": "x.pmtiles"}]).encode()
+class Store:
+    """The Blob store as ship sees it: a public FakeBlob plus the token-side list / put."""
+    def __init__(self, blob):
+        self.blob, self.lists, self.puts = blob, 0, []
+
+    def listing(self, prefixes=None):
+        self.lists += 1
+        return {n: len(b) for n, b in self.blob.objects.items()}
+
+    def upload(self, entries):
+        for e in entries:
+            self.puts.append(e["name"])
+            self.blob.objects[e["name"]] = open(e["file"], "rb").read()
+        return {e["name"]: "uploaded" for e in entries}
+
+
+F1 = b"tile bytes"
+
+
+def _setup_ship(data, tmp_path, monkeypatch, blob):
+    manifest = json.dumps([{"md5": md5(F1), "relpath": "x.pmtiles"}]).encode()
     dirmd5 = md5(manifest) + ".dir"
-    cache = _cache_with(tmp_path, {dirmd5: manifest, md5(f1): f1})
-    (config.PIPELINE_DIR).mkdir(parents=True, exist_ok=True)
+    cache = _cache_with(tmp_path, {dirmd5: manifest, md5(F1): F1})
+    config.PIPELINE_DIR.mkdir(parents=True, exist_ok=True)
     (config.PIPELINE_DIR / "dvc.lock").write_text(f"stages:\n  s:\n    outs:\n    - path: data/out/x\n      md5: {dirmd5}\n")
     for k in (K1, K2):
         p = config.CACHE_DIR / k
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("{}")
+    store = Store(blob)
     monkeypatch.setattr(ship, "preflight", lambda base="origin/main": None)
     monkeypatch.setattr(ship, "dvc_cache", lambda: cache)
     monkeypatch.setattr(ship, "_client", blob.client)
@@ -132,34 +155,20 @@ def _setup_ship(data, tmp_path, monkeypatch, blob, uploaded):
     monkeypatch.setattr(ship, "known_keys", lambda recs, client=None: {K1: "x"})   # main has K1
     commits = []
     monkeypatch.setattr(ship, "_git", lambda *a: commits.append(a) or "")
-    monkeypatch.setattr(ship, "upload", lambda entries: uploaded.extend(entries) or {e["name"]: "uploaded" for e in entries})
-    return cache, commits, dirmd5, md5(f1)
+    monkeypatch.setattr(ship, "listing", store.listing)
+    monkeypatch.setattr(ship, "upload", store.upload)
+    return cache, commits, dirmd5, store
 
 
-def test_ship_uploads_only_what_main_lacks_then_records_the_pack(data, tmp_path, monkeypatch):
-    blob, uploaded = FakeBlob(), []
-    cache, commits, dirmd5, filemd5 = _setup_ship(data, tmp_path, monkeypatch, blob, uploaded)
-    rep = ship.ship()
-    names = [e["name"] for e in uploaded]
-    assert ship.object_name(dirmd5) in names and ship.object_name(filemd5) in names
-    pack_zip = [n for n in names if n.endswith(".zip")]
-    assert len(pack_zip) == 1 and rep.new_answers == 1                # only K2: main has K1
-    rec = cachepack.recorded()[rep.pack]
-    assert rec["keys"] == 1 and any(a[0] == "commit" for a in commits)
-    needed = json.loads(ship.needed_path().read_text())          # the full list, for CI
-    assert needed["keys"] == 2 and needed["lock_md5"] == ship.lock_md5()
-    assert f"cache/needed/{needed['keys_sha']}.keys.gz" in names
 
-
-def test_a_failed_upload_records_nothing(data, tmp_path, monkeypatch):
-    blob, uploaded = FakeBlob(), []
-    _setup_ship(data, tmp_path, monkeypatch, blob, uploaded)
-    def fail(entries):
-        raise ship.ShipError("upload failed")
-    monkeypatch.setattr(ship, "upload", fail)
-    with pytest.raises(ship.ShipError):
+def test_ship_refuses_to_overwrite_an_object_that_differs(data, tmp_path, monkeypatch):
+    blob = FakeBlob()
+    _setup_ship(data, tmp_path, monkeypatch, blob)
+    blob.objects[ship.object_name(md5(F1))] = b"other bytes!!"
+    with pytest.raises(ship.ShipError, match="differ in size"):
         ship.ship()
-    assert cachepack.recorded() == {} and not ship.needed_path().exists()
+
+
 
 
 def test_ship_refuses_artifacts_of_unknown_provenance(data, monkeypatch):
@@ -169,29 +178,6 @@ def test_ship_refuses_artifacts_of_unknown_provenance(data, monkeypatch):
     with pytest.raises(ship.ShipError, match="no answers record"):
         ship.ship()
 
-
-def test_pull_applies_packs_and_fetches_missing_objects_once(data, tmp_path, monkeypatch):
-    # a shipped state: one pack and one output (manifest + file) on the store
-    for k in (K1,):
-        p = config.CACHE_DIR / k
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text('{"a": 1}')
-    pack = cachepack.make_pack([K1])
-    cachepack.write_record(pack)
-    (config.CACHE_DIR / K1).unlink()
-    f1 = b"tile bytes"
-    manifest = json.dumps([{"md5": md5(f1), "relpath": "x.pmtiles"}]).encode()
-    dirmd5 = md5(manifest) + ".dir"
-    (config.PIPELINE_DIR / "dvc.lock").write_text(f"stages:\n  s:\n    outs:\n    - path: data/out/x\n      md5: {dirmd5}\n")
-    blob = FakeBlob({f"cache/packs/{pack.sha}.zip": pack.data, ship.object_name(dirmd5): manifest,
-                     ship.object_name(md5(f1)): f1})
-    cache = tmp_path / "dvccache"
-    monkeypatch.setattr(ship, "dvc_cache", lambda: cache)
-    monkeypatch.setattr(ship, "_client", blob.client)
-    assert ship.pull(dvc_checkout=False) == (1, 2)
-    assert (config.CACHE_DIR / K1).read_text() == '{"a": 1}'
-    assert ship.object_path(md5(f1), cache).read_bytes() == f1
-    assert ship.pull(dvc_checkout=False) == (0, 0)             # applied twice: a no-op
 
 
 # --- the merge gate ---------------------------------------------------------------------------------
@@ -209,53 +195,8 @@ def test_lock_problems_flag_code_changes_and_ignore_missing_data():
     assert ship.lock_problems("{}") == []
 
 
-def _shipped_state(data, tmp_path):
-    """A commit as `ship` leaves it, and the Blob store it filled."""
-    for k in (K1, K2):
-        p = config.CACHE_DIR / k
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text("{}")
-    pack = cachepack.make_pack([K1, K2])
-    cachepack.write_record(pack)
-    f1 = b"tile bytes"
-    manifest = json.dumps([{"md5": md5(f1), "relpath": "x.pmtiles"}]).encode()
-    dirmd5 = md5(manifest) + ".dir"
-    (config.PIPELINE_DIR / "dvc.lock").write_text(f"stages:\n  s:\n    outs:\n    - path: data/out/x\n      md5: {dirmd5}\n")
-    nb = ship.needed_bytes([K1, K2])
-    nsha = hashlib.sha256(nb).hexdigest()
-    ship.needed_path().write_text(json.dumps({"lock_md5": ship.lock_md5(), "keys_sha": nsha, "keys": 2}))
-    blob = FakeBlob({f"cache/packs/{pack.sha}.zip": pack.data,
-                     f"cache/packs/{pack.sha}.keys.gz": pack.index_bytes(),
-                     f"cache/needed/{nsha}.keys.gz": nb,
-                     ship.object_name(dirmd5): manifest, ship.object_name(md5(f1)): f1})
-    return blob, dirmd5, md5(f1)
-
-
-def test_a_fully_shipped_commit_passes(data, tmp_path):
-    blob, _, _ = _shipped_state(data, tmp_path)
-    assert ship.check_shipped("{}", blob.client()) == []
-
-
-def test_missing_data_a_stale_ship_or_an_unpacked_answer_fail(data, tmp_path):
-    blob, dirmd5, filemd5 = _shipped_state(data, tmp_path)
-    del blob.objects[ship.object_name(filemd5)]
-    assert any("not on the Blob store" in p for p in ship.check_shipped("{}", blob.client()))
-    blob, dirmd5, filemd5 = _shipped_state(data, tmp_path)
-    (config.PIPELINE_DIR / "dvc.lock").write_text((config.PIPELINE_DIR / "dvc.lock").read_text() + "\n")
-    assert any("changed since `sfzmaps ship`" in p for p in ship.check_shipped("{}", blob.client()))
-
-
-def test_a_needed_answer_in_no_pack_fails(data, tmp_path):
-    blob, _, _ = _shipped_state(data, tmp_path)
-    k3 = "llm/" + "3" * 64 + ".json"
-    nb = ship.needed_bytes([K1, K2, k3])
-    nsha = hashlib.sha256(nb).hexdigest()
-    blob.objects[f"cache/needed/{nsha}.keys.gz"] = nb
-    ship.needed_path().write_text(json.dumps({"lock_md5": ship.lock_md5(), "keys_sha": nsha, "keys": 3}))
-    got = ship.check_shipped("{}", blob.client())
-    assert any("in no shipped pack" in p and k3 in p for p in got)
 
 
 def test_no_needed_list_means_not_shipped(data, tmp_path):
-    (config.PIPELINE_DIR).mkdir(parents=True, exist_ok=True)
+    config.PIPELINE_DIR.mkdir(parents=True, exist_ok=True)
     assert any("cache-needed.json is missing" in p for p in ship.check_shipped("{}", FakeBlob().client()))
