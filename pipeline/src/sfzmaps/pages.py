@@ -144,12 +144,13 @@ def discover(raw_dir: Path = RAW_DIR) -> list[Page]:
     return out
 
 
-def render(page: Page, out: Path) -> Path:
+def render(page: Page, out: Path, force: bool = False) -> Path:
     """Render to PNG: 300 dpi grayscale for PDFs, RGB for images (a two-page photo cropped
-    to crop_box). Skips if fresh."""
+    to crop_box). Skips if newer than its sources, unless force (the runner decides freshness
+    by content, sfzmaps.fresh)."""
     out = Path(out)
     srcs = [page.source] + ([page.other] if page.other is not None else [])
-    if out.exists() and all(out.stat().st_mtime_ns >= p.stat().st_mtime_ns for p in srcs):
+    if not force and out.exists() and all(out.stat().st_mtime_ns >= p.stat().st_mtime_ns for p in srcs):
         return out
     out.parent.mkdir(parents=True, exist_ok=True)
     tmp = out.with_name(out.stem + ".tmp.png")  # written whole, then renamed: no partial page.png

@@ -23,8 +23,10 @@ score -> warp. Artifacts live in config.WORK_DIR/<series>/<sheet_id>/:
   (inputs/<series>/reviews/<sheet>.json: optional reviewed fit, written by the editor;
    inputs/<series>/seeds/<sheet>.json: optional pinned rough fit; see sfzmaps.inputs)
 
-Staleness: a stage is skipped when its artifact exists and is strictly newer than every
-input artifact. The reference parquet files count as inputs of rough/refine. A changed
+Staleness: a stage is skipped when its artifact exists and its fingerprint sidecar
+(<artifact>.inputs.json, sfzmaps.fresh) matches the content of every input artifact now; mtimes
+are never compared, so a checkout or `git switch` that rewrites identical files reruns nothing.
+The reference parquet files count as inputs of rough/refine. A changed
 `config` value (thresholds, label scale) does NOT trigger a rerun; pass force=True
 (`sfzmaps run --force`) to rerun every stage. Labels are cached per vision call, so
 reruns cost nothing in API calls.
@@ -70,7 +72,7 @@ import cv2
 import numpy as np
 from shapely.geometry import mapping
 
-from sfzmaps import anchors, answers, config, inputs, linework, llm, pages, reading, warp
+from sfzmaps import anchors, answers, config, fresh, inputs, linework, llm, pages, reading, warp
 from sfzmaps import refine as refine_mod
 from sfzmaps import score as score_mod
 from sfzmaps.pages import Page
@@ -94,20 +96,22 @@ def _num(x):
 
 
 def _write_json(path: Path, data) -> None:
+    """Write `data` as JSON, leaving the file untouched when it already holds exactly that."""
+    text = json.dumps(data, indent=1)
+    try:
+        if path.read_text() == text:
+            return
+    except OSError:
+        pass
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=1))
+    tmp.write_text(text)
     tmp.replace(path)
 
 
-def _mtime(p: Path) -> int:
-    return p.stat().st_mtime_ns
-
-
 def _fresh(out: Path, inputs: list[Path], force: bool = False) -> bool:
-    if force or not out.exists() or not inputs:  # no inputs: nothing proves it current
-        return False
-    return all(i.exists() and _mtime(out) > _mtime(i) for i in inputs)
+    """out exists and was made from inputs with exactly their current content (sfzmaps.fresh)."""
+    return fresh.is_fresh(out, inputs, force)
 
 
 def _file_sha256(p: Path) -> str:
@@ -402,6 +406,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             return False
         t0 = time.monotonic()
         fn()
+        fresh.record(out, inputs)
         last_timings[name] = time.monotonic() - t0
         log.info("%-8s done in %.1fs", name, last_timings[name])
         return True
@@ -430,7 +435,8 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
         return cache["mask"]
 
     # render / classify
-    stage("render", png, [page.source], lambda: pages.render(page, png))
+    stage("render", png, [page.source] + ([page.other] if page.other is not None else []),
+          lambda: pages.render(page, png, force=True))
     if stopped("render"):
         return partial("until: render")
     def png_sha() -> str:
@@ -439,8 +445,8 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
         return cache["sha"]
 
     def read_stage(name: str, out: Path, inputs: list[Path], fn, own_sha_only: bool = True) -> None:
-        """A stage that calls the vision model (classify, labels). Fresh by mtime as usual,
-        or, when page.png was re-rendered (newer mtime), by content: the page_sha256 stored
+        """A stage that calls the vision model (classify, labels). Fresh by fingerprint as usual,
+        or, when page.png was re-rendered (no matching fingerprint), by content: the page_sha256 stored
         in `out` (labels.json: else page.json's) equals page.png's. Then no call is made, so
         a byte-identical render on another machine re-reads nothing. A fresh `out` without
         the hash (an older file) gets it written in, keeping its mtime.
@@ -482,6 +488,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             reading.save(out, result, page_sha256=sha)
         else:
             log.info("%-8s unchanged on re-read: kept as is (answers recorded)", name)
+        fresh.record(out, inputs)
         last_timings[name] = time.monotonic() - t0
         log.info("%-8s done in %.1fs", name, last_timings[name])
 
@@ -621,6 +628,8 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             else:
                 t0 = time.monotonic()
                 do_changes()
+                fresh.record(cj, [rawj, rfj])
+                fresh.record(tj, [rawj])
                 last_timings["changes"] = time.monotonic() - t0
                 log.info("%-8s done in %.1fs", "changes", last_timings["changes"])
             if stopped("changes"):
@@ -665,6 +674,7 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
                 _write_json(tj, _transform_json(t_, "auto"))  # no longer misplaced: back to auto
         _write_json(sj, _score_json(sc, **extra))
 
+    # inputs hashed after the run: score may rewrite transform.json (answer key fallback)
     stage("score", sj, [p for p in (tj, rfj, lj, rj) if p.exists()], do_score)
     score_val = _score_load(json.loads(sj.read_text()))
     if stopped("score"):
@@ -698,6 +708,7 @@ def clear_outputs(d: Path, sc: SheetScore) -> None:
     such a score on its next run."""
     for p in (d / "transform.json", d / "warped.tif", d / "warped.footprint.geojson"):
         p.unlink(missing_ok=True)
+        fresh.sidecar(p).unlink(missing_ok=True)
     if d.is_dir():
         _write_json(d / "score.json", _score_json(sc))
 

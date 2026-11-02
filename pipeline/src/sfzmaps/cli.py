@@ -240,7 +240,7 @@ def paper(
 ) -> None:
     """Warp every placed sheet as it looks on paper (opaque, untouched RGB) and publish
     out/<series>/<series>-paper.pmtiles, the layer the site shows as "the map as drawn"."""
-    from sfzmaps import reading, runner, stitch, tiles as tiles_mod, warp
+    from sfzmaps import fresh, reading, runner, stitch, tiles as tiles_mod, warp
     from sfzmaps.transform import SheetTransform
 
     if not year and not all_:
@@ -254,10 +254,11 @@ def paper(
                 continue
             out = d / stitch.raster_name(True)
             srcs = [tj, png, pj, Path(warp.__file__)]
-            if not force and out.exists() and all(out.stat().st_mtime_ns >= p.stat().st_mtime_ns for p in srcs):
+            if fresh.is_fresh(out, srcs, force):  # by content, never mtime
                 continue
             runner._warp_checked(png, SheetTransform.from_json(json.loads(tj.read_text())),
                                  reading.load_page(pj).mask_boxes, out, paper=True)
+            fresh.record(out, srcs)
             n += 1
         try:
             out, report, rebuilt = stitch.publish_layer(series, paper=True, min_zoom=min_zoom,

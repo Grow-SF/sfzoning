@@ -51,7 +51,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from pydantic import BaseModel
 
-from sfzmaps import config, inputs, runner
+from sfzmaps import config, fresh, inputs, runner
 from sfzmaps import refine as refine_mod
 from sfzmaps import score as score_mod
 from sfzmaps.transform import GCP, SheetTransform
@@ -690,8 +690,8 @@ def preview_png(series: str, sheet_id: str) -> FileResponse:
 # -- save ------------------------------------------------------------------------------
 
 def _promote_autofill(d: Path, want: bool | str) -> dict:
-    """Write the auto-fill into the pipeline's own artifacts, in dependency order (so mtimes
-    run rough <= refine_raw <= refine and a later force_auto run only reruns `changes`).
+    """Write the auto-fill into the pipeline's own artifacts, each with the fingerprint the
+    runner would record (sfzmaps.fresh), so a later force_auto run only reruns `changes`.
     Call under _save_lock: it re-checks `want` (an autofill_id, or True for any) against the
     file and raises 409, writing nothing, when the file is gone or was replaced.
     Returns the loaded autofill.json; the caller deletes it after a successful run_sheet."""
@@ -700,6 +700,10 @@ def _promote_autofill(d: Path, want: bool | str) -> dict:
                                           "seeded_from": "editor autofill"})
     runner._write_json(d / "refine_raw.json", af["raw"])
     runner._write_json(d / "refine.json", af["result"])
+    rj, rawj, lj, bj = d / "rough.json", d / "refine_raw.json", d / "labels.json", d / "blocks_px.geojson"
+    for out, ins in ((rj, [lj, bj, *runner._ref_inputs()]), (rawj, [bj, rj, *runner._ref_inputs()])):
+        if all(p.exists() for p in ins):
+            fresh.record(out, ins)
     return af
 
 
