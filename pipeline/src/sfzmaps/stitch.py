@@ -235,3 +235,89 @@ def build_vrt(series: str, scores: dict[str, SheetScore] | None = None, paper: b
     subprocess.run(["gdalbuildvrt", "-overwrite", "-resolution", "highest", "-srcnodata", "None", "-vrtnodata", "None",
                     "-input_file_list", str(lst), str(out)], check=True, capture_output=True)
     return out
+
+
+# --- skipping unchanged layers ----------------------------------------------------------------
+# Stitching and tiling a series takes minutes and was redone on every run, so any code change
+# meant about an hour of re-tiling identical layers. A layer is rebuilt only when what it is
+# made of changed: the sheets in draw order, each sheet's warped raster and footprint (by
+# content), the stitch and tiling code, and the tiling parameters. The fingerprint of the last
+# build is kept beside the layer (<name>.inputs.json); a missing or different one rebuilds.
+
+def _sha256(p: Path) -> str:
+    import hashlib
+
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def stamp_path(out: Path) -> Path:
+    return out.with_name(out.name.removesuffix(".pmtiles") + ".inputs.json")
+
+
+def layer_inputs(series: str, scores: dict[str, SheetScore], paper: bool, params: dict,
+                 known: dict | None = None) -> tuple[dict, dict]:
+    """(fingerprint, hash cache) of a layer's inputs. known: the previous build's hash cache
+    {relpath: [size, mtime_ns, sha]}, reused for files whose size and mtime are unchanged."""
+    from sfzmaps import tiles
+
+    known = known or {}
+    cache: dict[str, list] = {}
+
+    def sha(p: Path) -> str:
+        st = p.stat()
+        rel = p.relative_to(config.WORK_DIR).as_posix()
+        k = known.get(rel)
+        h = k[2] if k and k[0] == st.st_size and k[1] == st.st_mtime_ns else _sha256(p)
+        cache[rel] = [st.st_size, st.st_mtime_ns, h]
+        return h
+
+    order = layer_sheets(series, draw_order(series, scores, paper))
+    files = {}
+    for sid in order:
+        d = config.WORK_DIR / series / sid
+        raster = d / raster_name(paper)
+        for p in (raster, raster.with_name(raster.name.replace(".tif", ".footprint.geojson"))):
+            if p.exists():
+                files[p.relative_to(config.WORK_DIR).as_posix()] = sha(p)
+    code = {Path(f).name: _sha256(Path(f)) for f in (__file__, tiles.__file__)}
+    return {"order": order, "files": files, "code": code, "params": params}, cache
+
+
+def publish_layer(series: str, scores: dict[str, SheetScore] | None = None, *, paper: bool = False,
+                  min_zoom: int = 11, max_zoom: int = 18, force: bool = False):
+    """Stitch and tile one series' layer (out/<series>/<series>[-paper].pmtiles) unless its
+    inputs are unchanged since the last build. Returns (pmtiles path, TileReport, rebuilt)."""
+    from sfzmaps import tiles
+
+    scores = load_scores(series) if scores is None else scores
+    out = config.OUT_DIR / series / (f"{series}-paper.pmtiles" if paper else f"{series}.pmtiles")
+    params = {"paper": paper, "min_zoom": min_zoom, "max_zoom": max_zoom,
+              "quality": 90 if paper else 85,
+              "name": f"SF zoning {series}" + (" (paper)" if paper else ""),
+              "attribution": config.RUMSEY_CREDIT if series == "1948" else None}
+    stamp = stamp_path(out)
+    try:
+        prev = json.loads(stamp.read_text())
+    except (OSError, ValueError):
+        prev = {}
+    fp, cache = layer_inputs(series, scores, paper, params, prev.get("hash_cache"))
+    if not fp["order"]:
+        raise RuntimeError(f"no warped sheets for series {series}; run `sfzmaps run --year {series}`")
+    if not force and out.exists() and prev.get("inputs") == fp and "report" in prev:
+        r = prev["report"]
+        return out, tiles.TileReport(r["bytes_total"], {int(z): b for z, b in r["bytes_by_zoom"].items()}), False
+    stamp.unlink(missing_ok=True)   # the layer is about to change: no stamp may vouch for it
+    vrt = build_vrt(series, scores, paper=paper)
+    report = tiles.make_pmtiles(vrt, out, min_zoom=min_zoom, max_zoom=max_zoom, quality=params["quality"],
+                                name=params["name"], attribution=params["attribution"])
+    tmp = stamp.with_name(stamp.name + ".tmp")
+    tmp.write_text(json.dumps({"inputs": fp, "hash_cache": cache,
+                               "report": {"bytes_total": report.bytes_total,
+                                          "bytes_by_zoom": {str(z): b for z, b in report.bytes_by_zoom.items()}}},
+                              indent=1, sort_keys=True))
+    tmp.replace(stamp)
+    return out, report, True

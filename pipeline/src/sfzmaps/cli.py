@@ -199,17 +199,15 @@ def _resume_hint(e: Exception, command: str, remaining: list[str], all_: bool) -
 
 
 def _publish(series: str, min_zoom: int = 11, max_zoom: int = 18) -> None:
-    """Stitch -> tiles -> manifest for one series (scores read from each sheet's score.json)."""
+    """Stitch -> tiles -> manifest for one series (scores read from each sheet's score.json;
+    an unchanged layer is not re-tiled: stitch.publish_layer)."""
     from sfzmaps import manifest, reviewpage, stitch, tiles
 
     scores = stitch.load_scores(series)
-    vrt = stitch.build_vrt(series, scores)
-    out = config.OUT_DIR / series / f"{series}.pmtiles"
-    report = tiles.make_pmtiles(vrt, out, min_zoom=min_zoom, max_zoom=max_zoom,
-                                name=f"SF zoning {series}",
-                                attribution=config.RUMSEY_CREDIT if series == "1948" else None)
+    out, report, rebuilt = stitch.publish_layer(series, scores, min_zoom=min_zoom, max_zoom=max_zoom)
     path = manifest.write(series, scores, report)
-    typer.echo(f"{series}: {out} ({report.bytes_total / 1e6:.1f} MB of tiles); manifest {path}")
+    typer.echo(f"{series}: {out} ({report.bytes_total / 1e6:.1f} MB of tiles"
+               f"{'' if rebuilt else ', unchanged: not re-tiled'}); manifest {path}")
     for z, b in sorted(report.bytes_by_zoom.items()):
         typer.echo(f"  z{z}: {b / 1e6:.2f} MB")
     try:
@@ -262,15 +260,13 @@ def paper(
                                  reading.load_page(pj).mask_boxes, out, paper=True)
             n += 1
         try:
-            vrt = stitch.build_vrt(series, paper=True)
+            out, report, rebuilt = stitch.publish_layer(series, paper=True, min_zoom=min_zoom,
+                                                        max_zoom=max_zoom, force=force)
         except RuntimeError as e:
             typer.echo(f"{series}: skipped ({e})", err=True)
             continue
-        out = config.OUT_DIR / series / f"{series}-paper.pmtiles"
-        report = tiles_mod.make_pmtiles(vrt, out, min_zoom=min_zoom, max_zoom=max_zoom, quality=90,
-                                        name=f"SF zoning {series} (paper)",
-                                        attribution=config.RUMSEY_CREDIT if series == "1948" else None)
-        typer.echo(f"{series}: {n} sheets warped; {out} ({report.bytes_total / 1e6:.1f} MB)")
+        typer.echo(f"{series}: {n} sheets warped; {out} ({report.bytes_total / 1e6:.1f} MB"
+                   f"{'' if rebuilt else ', unchanged: not re-tiled'})")
 
 
 @app.command()

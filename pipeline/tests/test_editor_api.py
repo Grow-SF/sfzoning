@@ -210,13 +210,12 @@ def test_rebuild_series_calls_task14_functions_in_order(monkeypatch, tmp_path):
     calls = []
     sentinel = {"s1": object()}
     monkeypatch.setattr(stitch, "load_scores", lambda s: sentinel)
-    monkeypatch.setattr(stitch, "build_vrt", lambda s, sc=None: calls.append(("vrt", sc)) or tmp_path / "x.vrt")
-    monkeypatch.setattr(tiles, "make_pmtiles",
-                        lambda vrt, out, **k: calls.append(("tiles", out.name)) or "REPORT")
+    monkeypatch.setattr(stitch, "publish_layer",
+                        lambda s, sc=None, **k: calls.append(("layer", sc)) or (tmp_path / "1948.pmtiles", "REPORT", True))
     monkeypatch.setattr(manifest, "write", lambda s, sc, tr=None: calls.append(("manifest", tr)))
     monkeypatch.setattr(reviewpage, "write", lambda s: calls.append(("review", s)))
     server._rebuild_series("1948")
-    assert calls == [("vrt", sentinel), ("tiles", "1948.pmtiles"), ("manifest", "REPORT"), ("review", "1948")]
+    assert calls == [("layer", sentinel), ("manifest", "REPORT"), ("review", "1948")]
 
 
 def test_rebuilds_are_serialized_and_coalesced(monkeypatch):

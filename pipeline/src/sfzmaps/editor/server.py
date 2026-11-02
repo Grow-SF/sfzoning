@@ -135,13 +135,8 @@ def _rebuild_series(series: str) -> None:
             return None
 
     scores = stitch.load_scores(series)
-    vrt = step("stitch", lambda: stitch.build_vrt(series, scores))
-    report = None
-    if vrt is not None:
-        out = config.OUT_DIR / series / f"{series}.pmtiles"
-        report = step("tiles", lambda: tiles.make_pmtiles(
-            vrt, out, name=f"SF zoning {series}",
-            attribution=config.RUMSEY_CREDIT if series == "1948" else None))
+    built = step("tiles", lambda: stitch.publish_layer(series, scores))
+    report = built[1] if built else None
     step("manifest", lambda: manifest.write(series, scores, report))
     step("review page", lambda: reviewpage.write(series))
 
