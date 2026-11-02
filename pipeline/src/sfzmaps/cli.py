@@ -199,7 +199,8 @@ def _resume_hint(e: Exception, command: str, remaining: list[str], all_: bool) -
 
 
 def _publish(series: str, min_zoom: int = 11, max_zoom: int = 18) -> None:
-    """Stitch -> tiles -> manifest for one series (scores read from each sheet's score.json)."""
+    """Stitch -> tiles -> manifest for one series (scores read from each sheet's score.json;
+    an unchanged layer is not re-tiled: stitch.publish_layer)."""
     from sfzmaps import manifest, reviewpage, stitch, tiles
 
     scores = stitch.load_scores(series)
