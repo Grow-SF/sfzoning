@@ -273,7 +273,8 @@ def test_existing_data_artifacts_still_fresh(monkeypatch):
     legends = sorted(work.glob("*/*/district_legend.json"))
     if not arts and not legends:
         pytest.skip("no pipeline/data artifacts")
-    monkeypatch.setattr(config, "WORK_DIR", work)   # label_scale.json lives here
+    monkeypatch.setattr(config, "WORK_DIR", work)
+    monkeypatch.setattr(config, "INPUTS_DIR", config.PIPELINE_DIR / "inputs")  # label_scale.json
     stale = [str(a.parent.relative_to(work)) for a in arts
              if (a.parent / "page.png").exists() and not labels.labels_fresh(a.parent)]
     stale += [str(p.relative_to(work)) for p in legends

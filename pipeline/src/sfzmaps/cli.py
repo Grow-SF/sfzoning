@@ -5,10 +5,13 @@ from pathlib import Path
 import cv2
 import typer
 
-from sfzmaps import config
+from sfzmaps import config, inputs
 from sfzmaps.sources import drive
 
 app = typer.Typer(no_args_is_help=True, help="Georeference historic SF zoning maps.")
+# Exit status of a command stopped by llm.FATAL (quota, spend cap, missing key): `sfzmaps build`
+# reports it as "needs a paid read". Not 2, which click uses for usage errors.
+PAID_READ_EXIT = 75
 
 
 @app.callback()
@@ -87,7 +90,7 @@ def calibrate(
     for s, r in rep.items():
         typer.echo(f"scale {s}: recall {r:.1%}")
     config.save_label_scale(year, best)
-    typer.echo(f"saved label scale {best} for {year} to {config.WORK_DIR / 'label_scale.json'}")
+    typer.echo(f"saved label scale {best} for {year} to {config._scale_file()} (commit it)")
 
 
 @app.command()
@@ -173,7 +176,7 @@ def run(
                 _publish(s)
         except llm.FATAL as e:  # quota / auth: every later call fails too; stop the run
             _resume_hint(e, "run", todo[k:], all_)
-            raise typer.Exit(2)
+            raise typer.Exit(PAID_READ_EXIT)
         except Exception as e:  # noqa: BLE001 - one failing series must not stop the others
             logging.getLogger(__name__).exception("series %s failed", s)
             failures.append((s, f"{type(e).__name__}: {e}"))
@@ -350,7 +353,7 @@ def districts(
                     typer.echo(f"{page}: review page skipped ({type(e).__name__}: {e})", err=True)
         except llm.FATAL as e:  # quota / spend limit / auth: every later call fails too
             _resume_hint(e, "districts", todo[k:], all_)
-            raise typer.Exit(2)
+            raise typer.Exit(PAID_READ_EXIT)
         except Exception as e:  # noqa: BLE001 - one failing series must not stop the others
             logging.getLogger(__name__).exception("series %s failed", s)
             failures.append((s, f"{type(e).__name__}: {e}"))
@@ -430,7 +433,7 @@ def crossref(
                 if (config.WORK_DIR / series / sid / "transform.json").exists():
                     passed.add((series, sid))
             elif not str(sc.reason or "").startswith(("skipped", "error")) \
-                    and not (config.WORK_DIR / series / sid / "review.json").exists():
+                    and not inputs.review_path(series, sid).exists():
                 flagged.setdefault(series, []).append(sid)
     todo = sorted(flagged) if all_ else [year]
     summary: list[str] = []
@@ -461,9 +464,13 @@ def crossref(
                 say(f"{series}/{sid}: match with {rs}/{rid} left too little overlap")
                 continue
             saved = xr.backup(d)
-            (d / "rough.json").write_text(json.dumps({
+            # The candidate is tried as the sheet's seed (the runner uses a seed over any
+            # rough.json), and stays pinned if kept; otherwise the old seed comes back.
+            seed_p = inputs.seed_path(series, sid)
+            old_seed = seed_p.read_bytes() if seed_p.exists() else None
+            runner._write_json(seed_p, {
                 "transform": runner._transform_json(t, "crossref"), "scale_hint_ft_per_px": None,
-                "crossref": {"series": rs, "sheet": rid, "inliers": n}}))
+                "crossref": {"series": rs, "sheet": rid, "inliers": n}})
             # refine + score only; the sheet is warped only if the result is kept
             new = runner.run_sheet(by_key[(series, sid)], ref, until="score")
             was = "unplaced" if old is None or not math.isfinite(old.holdout_p50_ft) else \
@@ -473,9 +480,14 @@ def crossref(
                 shutil.rmtree(saved, ignore_errors=True)
                 runner.run_sheet(by_key[(series, sid)], ref)   # warp (the rest is fresh)
                 kept += 1
-                say(f"{series}/{sid}: KEPT via {rs}/{rid} ({n} matches): {was} -> {now}")
+                say(f"{series}/{sid}: KEPT via {rs}/{rid} ({n} matches): {was} -> {now}; pinned as "
+                    f"{seed_p.relative_to(config.PIPELINE_DIR)} (commit it)")
             else:
                 xr.restore(d, saved)
+                if old_seed is None:
+                    seed_p.unlink(missing_ok=True)
+                else:
+                    seed_p.write_bytes(old_seed)
                 say(f"{series}/{sid}: not better via {rs}/{rid} ({n} matches): "
                                f"{was} vs {now}")
         if kept and publish and not sheet:
@@ -586,3 +598,46 @@ def review(
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+
+
+@app.command()
+def stage(name: str = typer.Argument(..., help="A build stage, e.g. edition-1948, period-1980-1990, "
+                                               "today, shared (see `sfzmaps build --list`).")) -> None:
+    """Run one build stage's commands, at $0 (what `sfzmaps build` and `dvc repro` run)."""
+    from sfzmaps import build as build_mod
+
+    if name not in build_mod.stages():
+        raise typer.BadParameter(f"unknown stage {name!r}; stages: {', '.join(build_mod.stages())}")
+    try:
+        build_mod.run_stage(name)
+    except build_mod.StageFailed as e:
+        typer.echo(f"stage {name}: {e}", err=True)
+        raise typer.Exit(PAID_READ_EXIT if e.paid_read else 1)
+
+
+@app.command()
+def build(
+    targets: list[str] = typer.Argument(None, help="Only these stages (and what they depend on)."),
+    jobs: int = typer.Option(4, "--jobs", "-j", help="Stages run at once."),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Say what would run; run nothing."),
+    force: bool = typer.Option(False, "--force", help="Run the named stages even if up to date."),
+    write_dvc_yaml: bool = typer.Option(False, "--write-dvc-yaml", help="Regenerate pipeline/dvc.yaml."),
+    list_: bool = typer.Option(False, "--list", help="List the stages."),
+) -> None:
+    """Rebuild what is stale (by DVC's content hashes), in parallel, never spending money."""
+    import logging
+
+    from sfzmaps import build as build_mod
+
+    if write_dvc_yaml:
+        build_mod.dvc_yaml_path().write_text(build_mod.dvc_yaml())
+        typer.echo(f"wrote {build_mod.dvc_yaml_path()}")
+        return
+    if list_:
+        for st in build_mod.stages().values():
+            typer.echo(f"{st.name:24} {' '.join(c[0] + ' ' + c[-1] for c in build_mod.stage_commands(st.name))}")
+        return
+    if force and not targets:
+        raise typer.BadParameter("--force needs the stages to run")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    raise typer.Exit(build_mod.build(targets or None, jobs, dry_run, force))

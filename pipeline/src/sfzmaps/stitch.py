@@ -19,7 +19,7 @@ import subprocess
 
 from pathlib import Path
 
-from sfzmaps import config, manifest
+from sfzmaps import config, inputs, manifest
 from sfzmaps.score import SheetScore
 
 
@@ -204,7 +204,7 @@ def layer_sheets(series: str, order: list[str]) -> list[str]:
 
     def number(sid: str) -> str:
         try:
-            n = json.loads((config.WORK_DIR / series / sid / "page.json").read_text()).get("sheet_number")
+            n = inputs.page_dict(config.WORK_DIR / series / sid / "page.json").get("sheet_number")
         except (OSError, ValueError):
             return ""
         return str(n or "").strip()

@@ -58,12 +58,14 @@ def _blocks(n: int = 9) -> gpd.GeoDataFrame:
 
 def build_demo(root: Path, *, set_config: bool = True) -> Demo:
     """Write the demo sheet under root (work dir root/work). With set_config, point
-    config.WORK_DIR (and RAW/REF/OUT) at root so the runner and editor use it."""
+    config.WORK_DIR (and RAW/REF/OUT/INPUTS) at root so the runner and editor use it: a demo
+    save never writes a review into the repo's pipeline/inputs/."""
     root = Path(root)
     work = root / "work"
     if set_config:
         config.WORK_DIR, config.RAW_DIR = work, root / "raw"
         config.REF_DIR, config.OUT_DIR = root / "ref", root / "out"
+        config.INPUTS_DIR = root / "inputs"
     d = work / SERIES / SHEET
     d.mkdir(parents=True, exist_ok=True)
 

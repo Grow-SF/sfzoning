@@ -1,10 +1,8 @@
 # Zoning overrides: seam and printed-P corrections
 
-`pipeline/data/overrides/` is git-ignored, so this folder keeps a copy. To restore them, copy
-`<series>.csv` back there and run `uv run sfzmaps districts --series <S> --republish`, then
-`uv run sfzmaps districts --shared`.
+The overrides themselves are pipeline inputs, in git at `pipeline/inputs/<series>/overrides.csv`
+(`blklot,block,code`); `sfzmaps build` applies them. This folder keeps the research behind them:
 
-- `<series>.csv`: the overrides as applied (`blklot,block,code`).
 - `regions.csv`: one row per series, read sheet, crop, old code and new code, with lot counts, blocks
   and the reviewer's note.
 - `1975-c2-not-applied.csv`: the lots a 1975 C-2 review left unchanged (see "1975 C-2 misreads").

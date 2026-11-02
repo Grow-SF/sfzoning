@@ -10,6 +10,8 @@ REF_DIR = DATA_DIR / "ref"
 CACHE_DIR = DATA_DIR / "cache"
 WORK_DIR = DATA_DIR / "work"
 OUT_DIR = DATA_DIR / "out"
+# Hand-made inputs, in git (sfzmaps.inputs)
+INPUTS_DIR = Path(os.environ.get("SFZMAPS_INPUTS_DIR") or PIPELINE_DIR / "inputs")
 
 WORK_CRS = "EPSG:2227"
 TOLERANCE_FT = 6.0  # kept at 6 after Task 13 tuning (see the tuning notes)
@@ -83,7 +85,7 @@ LABEL_SCALE: dict[str, float] = {}
 
 
 def _scale_file() -> Path:
-    return WORK_DIR / "label_scale.json"
+    return INPUTS_DIR / "label_scale.json"
 
 
 def _load_scales() -> dict[str, float]:
@@ -95,7 +97,7 @@ def _load_scales() -> dict[str, float]:
 
 
 def label_scale(series: str) -> float:
-    """Calibrated scale (WORK_DIR/label_scale.json) over LABEL_SCALE over the 0.5 default."""
+    """Calibrated scale (INPUTS_DIR/label_scale.json) over LABEL_SCALE over the 0.5 default."""
     return {**LABEL_SCALE, **_load_scales()}.get(series, 0.5)
 
 

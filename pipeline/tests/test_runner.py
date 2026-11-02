@@ -8,12 +8,18 @@ import numpy as np
 import pytest
 from shapely.geometry import box
 
-from sfzmaps import config, runner
+from sfzmaps import inputs, config, runner
 from sfzmaps.pages import Page
 from sfzmaps.reading import Label, PageInfo
 from sfzmaps.refine import Match, RefineResult
 from sfzmaps.sources.datasf import Reference
 from sfzmaps.transform import GCP, SheetTransform
+
+
+def _mk(p):
+    """p with its parent made (a review under inputs/<series>/reviews/)."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 GCPS = [GCP(0, 0, 6_000_000, 2_100_000, "manual"), GCP(1000, 0, 6_000_400, 2_100_000, "manual"),
         GCP(0, 1000, 6_000_000, 2_099_600, "manual"), GCP(1000, 1000, 6_000_400, 2_099_600, "manual")]
@@ -82,7 +88,7 @@ def env(tmp_path, monkeypatch):
 
 
 def write_review(d, status="edited"):
-    (d / "review.json").write_text(json.dumps({
+    _mk(inputs.review_path(d.parent.name, d.name)).write_text(json.dumps({
         "status": status, "reviewer": "me", "at": "2026-01-01T00:00:00Z", "note": "",
         "gcps": [g.__dict__ for g in GCPS], "change_areas": {"type": "FeatureCollection", "features": []}}))
 
@@ -109,7 +115,7 @@ def test_force_auto_ignores_review(env, monkeypatch):
     assert f.calls["refine"] == 1
     t = json.loads((d / "transform.json").read_text())
     assert t["gcps"][0]["wx"] == AUTO[0].wx
-    assert (d / "review.json").exists()  # never deleted
+    assert inputs.review_path(d.parent.name, d.name).exists()  # never deleted
     # and a later normal run goes back to the review
     runner.run_sheet(page, ref)
     t = json.loads((d / "transform.json").read_text())
@@ -210,7 +216,7 @@ def test_review_edit_triggers_rewarp(env, monkeypatch):
     assert f.calls["warp"] == 1
     runner.run_sheet(page, ref)
     assert f.calls["warp"] == 1
-    p = d / "review.json"
+    p = inputs.review_path(d.parent.name, d.name)
     r = json.loads(p.read_text())
     r["gcps"][0]["wx"] += 5
     p.write_text(json.dumps(r))
@@ -226,9 +232,9 @@ def test_review_without_change_areas_removes_stale_changes(env, monkeypatch):
     runner.run_sheet(page, ref)
     assert (d / "changes.geojson").exists()
     write_review(d)
-    r = json.loads((d / "review.json").read_text())
+    r = json.loads(inputs.review_path(d.parent.name, d.name).read_text())
     del r["change_areas"]
-    (d / "review.json").write_text(json.dumps(r))
+    _mk(inputs.review_path(d.parent.name, d.name)).write_text(json.dumps(r))
     runner.run_sheet(page, ref)
     assert not (d / "changes.geojson").exists()
 
@@ -494,3 +500,43 @@ def test_old_page_and_labels_json_get_hash_without_rerun(env, monkeypatch):
     assert {p: p.stat().st_mtime_ns for p in d.iterdir()} == m
     assert len(reading.load_labels(d / "labels.json")) == 1
 
+
+
+def _write_seed(page, gcps=GCPS):
+    seed = {"transform": runner._transform_json(SheetTransform(gcps, 1.0), "crossref"),
+            "scale_hint_ft_per_px": None}
+    _mk(inputs.seed_path(page.series, page.sheet_id)).write_text(json.dumps(seed))
+    return seed
+
+
+def test_seed_replaces_the_automatic_rough_fit(env, monkeypatch):
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    seed = _write_seed(page)
+    runner.run_sheet(page, ref)
+    assert "rough" not in f.calls and f.calls["refine"] == 1   # refine runs from the seed
+    assert json.loads((d / "rough.json").read_text()) == seed
+    assert json.loads((d / "transform.json").read_text())["origin"] == "auto"
+
+
+def test_unchanged_seed_reruns_nothing_and_a_changed_one_refines_again(env, monkeypatch):
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    _write_seed(page)
+    runner.run_sheet(page, ref)
+    runner.run_sheet(page, ref)
+    assert f.calls["refine"] == 1                              # same content: rough.json untouched
+    _write_seed(page, AUTO)
+    runner.run_sheet(page, ref)
+    assert f.calls["refine"] == 2 and "rough" not in f.calls
+
+
+def test_review_wins_over_seed(env, monkeypatch):
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    _write_seed(page, AUTO)
+    d.mkdir(parents=True)
+    write_review(d)
+    runner.run_sheet(page, ref)
+    assert "refine" not in f.calls
+    assert json.loads((d / "transform.json").read_text())["origin"] == "review"

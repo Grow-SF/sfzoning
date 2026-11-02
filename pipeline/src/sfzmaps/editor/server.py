@@ -9,7 +9,7 @@ Endpoints (all under /api):
   GET  /sheet/{series}/{sheet_id}/blocks.geojson?layer=blocks|streets   modern blocks near the sheet (WGS84)
   POST /sheet/{series}/{sheet_id}/autofill  seed the automatic refine from the posted points;
                                            writes autofill.json only, returns a dense set + preview + score
-  POST /sheet/{series}/{sheet_id}/save     write review.json, rerun the sheet, rebuild series
+  POST /sheet/{series}/{sheet_id}/save     write the review (inputs/<series>/reviews/), rerun the sheet, rebuild series
 
 Scores are the pipeline's (sfzmaps.score): a sheet passes on held-out median <= 7 ft AND
 held-out p95 <= 15 ft AND not misplaced; the editor shows holdout_p50_ft / holdout_p95_ft /
@@ -51,7 +51,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from PIL import Image
 from pydantic import BaseModel
 
-from sfzmaps import config, runner
+from sfzmaps import config, inputs, runner
 from sfzmaps import refine as refine_mod
 from sfzmaps import score as score_mod
 from sfzmaps.transform import GCP, SheetTransform
@@ -115,8 +115,8 @@ def _find_page(series: str, sheet_id: str):
 
 
 def _default_reviewer() -> str:
-    """$SFZMAPS_REVIEWER, else "owner". Never the git email: review.json is bundled to the
-    shared Drive folder."""
+    """$SFZMAPS_REVIEWER, else "owner". Never the git email: reviews are committed to the public
+    repository."""
     return os.environ.get("SFZMAPS_REVIEWER", "").strip() or "owner"
 
 
@@ -733,7 +733,7 @@ def save(series: str, sheet_id: str, body: SaveBody, background: BackgroundTasks
         if body.autofill:
             af = _promote_autofill(d, body.autofill)
             review["autofill"]["matches"] = af["n_matches"]
-        runner._write_json(d / "review.json", review)  # atomic
+        runner._write_json(inputs.review_path(series, sheet_id), review)  # atomic
         try:
             new = runner.run_sheet(page, _get_ref())
         except Exception as e:  # noqa: BLE001 - review.json is saved; report the failed rerun

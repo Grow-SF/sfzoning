@@ -32,3 +32,7 @@ pipeline/.venv/
 pipeline/.env
 .claude/
 .vercel
+
+# Python bytecode
+__pycache__/
+*.pyc

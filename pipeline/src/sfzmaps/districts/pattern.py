@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from sfzmaps import config, llm
+from sfzmaps import config, inputs, llm
 from sfzmaps.districts import sampling
 
 log = logging.getLogger(__name__)
@@ -236,7 +236,7 @@ def legend_swatches(series: str, *, client=None) -> dict[str, np.ndarray]:
     prompt = legend_prompt(codes)
     calls = 0
     for sheet_dir in sorted(p.parent for p in root.glob("*/page.json")):
-        info = json.loads((sheet_dir / "page.json").read_text())
+        info = inputs.page_dict(sheet_dir / "page.json")
         boxes = info.get("mask_boxes") or []
         if not boxes:
             continue
