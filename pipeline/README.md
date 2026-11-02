@@ -220,6 +220,8 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
   `needs_review` reasons, scores, limits, bounds), `review.html`.
 - `out/ref/blocks.pmtiles`: today's blocks for the review pages.
 - `out/run-<timestamp>.log`: tracebacks for any sheet that errored.
+- `tmp/`: scratch while tiling (outside `out/`, which DVC versions); safe to delete when no
+  build is running.
 - `share/`: the `bundle` output.
 
 ## Reviewing and editing

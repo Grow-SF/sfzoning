@@ -89,6 +89,8 @@ def test_failed_convert_keeps_old_pmtiles(tmp_path, monkeypatch):
 
     from sfzmaps import tiles
 
+    from sfzmaps import config
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     out = tmp_path / "1948.pmtiles"
     out.write_bytes(b"OLD")
     _fake_tools(monkeypatch, fail_convert=True)
@@ -98,4 +100,24 @@ def test_failed_convert_keeps_old_pmtiles(tmp_path, monkeypatch):
     _fake_tools(monkeypatch, fail_convert=False)
     tiles.make_pmtiles(tmp_path / "x.vrt", out)
     assert out.read_bytes() == b"NEW"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["1948.pmtiles"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["1948.pmtiles", "data"]
+    assert list((tmp_path / "data" / "tmp").iterdir()) == []      # scratch cleaned up
+
+
+def test_tiling_scratch_never_lands_beside_the_output(tmp_path, monkeypatch):
+    """data/out is versioned by DVC: a crash mid-tiling must leave nothing in it (crashed runs
+    once left 13 GB of web.tif and tile databases there)."""
+    import pytest
+
+    from sfzmaps import config
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    out_dir = tmp_path / "data" / "out" / "1948"
+    out_dir.mkdir(parents=True)
+    seen = []
+    _fake_tools(monkeypatch, fail_convert=True)
+    real_run = tiles._run
+    monkeypatch.setattr(tiles, "_run", lambda cmd: (seen.append(Path(cmd[-1]).parent), real_run(cmd)))
+    with pytest.raises(RuntimeError):
+        tiles.make_pmtiles(tmp_path / "x.vrt", out_dir / "1948.pmtiles")
+    assert seen and all((tmp_path / "data" / "tmp") in p.parents for p in seen)
+    assert list(out_dir.iterdir()) == []
