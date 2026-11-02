@@ -463,9 +463,13 @@ def test_changes_geojson():
     assert all(f["geometry"]["type"] == "Polygon" for f in ne)
 
 
-def test_classify_converged_flag(shifted, big_result):
+# One test per sheet, so each runs on the worker that already built that sheet.
+def test_classify_converged_flag(shifted):
     *_, res = shifted
     assert res.classify_converged is True
+
+
+def test_classify_converged_flag_unshifted(big_result):
     assert refine.classify_changes(big_result[0]).classify_converged is True
 
 
