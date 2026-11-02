@@ -6,6 +6,16 @@
   calling the network (or reading pipeline/.env).  Tests of the client itself opt out with
   ``@pytest.mark.real_openai_client`` (they build it with __new__ or a fake SDK).
 """
+import os
+
+# Parallel workers (pytest-xdist) each get one maths thread; otherwise every worker's
+# NumPy/OpenCV grabs all cores and the run gets slower, not faster. Set before they load.
+if os.environ.get("PYTEST_XDIST_WORKER"):
+    for _v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+        os.environ.setdefault(_v, "1")
+    import cv2
+    cv2.setNumThreads(1)
+
 import pytest
 
 from sfzmaps import config, llm

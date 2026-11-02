@@ -1,9 +1,8 @@
 name: Site
 
 # Lint, type check, unit tests and a production build of site/, whenever a pull request or a
-# push to main changes the site or the research it builds from. The Playwright end-to-end
-# suite needs a browser with WebGL and takes minutes; contributors run it locally against the
-# published tiles and paste the result in the pull request (see CONTRIBUTING.md).
+# push to main changes the site or the research it builds from. There are no browser tests;
+# the owner checks the site by eye.
 on:
   pull_request:
     paths:

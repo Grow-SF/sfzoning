@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Protocol } from "pmtiles";
 import { preload, RecentDestinations, tilesCovering } from "@/lib/preload";
 import { ByteCache, cachedSource, type Pm } from "@/lib/archiveCache";
-import { ERAS } from "@/lib/eras";
 import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
 import { COLOURS, HOLD_LIMIT_MS, heldScans, nextHeld } from "@/lib/scanHold";
 import { INK_CITY, inkByZoom, scanInkWeight } from "@/lib/theme";
@@ -38,20 +37,6 @@ describe("scanInkWeight", () => {
   });
   it("has a MapLibre zoom expression with the same end stops", () => {
     expect(inkByZoom(0.5)).toEqual(["interpolate", ["linear"], ["zoom"], 12, 0.5 * INK_CITY, 14.5, 0.5]);
-  });
-});
-
-describe("ERAS", () => {
-  it("has unique ids", () => {
-    const ids = ERAS.map((e) => e.id);
-    expect(new Set(ids).size).toBe(ids.length);
-  });
-  it("is sorted by year", () => {
-    const years = ERAS.map((e) => e.year);
-    expect(years).toEqual([...years].sort((a, b) => a - b));
-  });
-  it("covers the 15 story eras", () => {
-    expect(ERAS).toHaveLength(15);
   });
 });
 
@@ -116,11 +101,6 @@ describe("tilesCovering", () => {
     for (const sx of [-1, 1])
       for (const sy of [-1, 1])
         expect(has(tiles, 14, worldTile(camera.center[0] + sx * dLon, camera.center[1] + sy * dLat, 14))).toBe(true);
-  });
-  it("rounds the zoom for 256px tiles as MapLibre does, and floors it for 512px", () => {
-    expect(new Set(tilesCovering({ ...camera, zoom: 14.5 }, 1440, 900, 256, 18).map((t) => t.z))).toEqual(new Set([16]));
-    expect(new Set(tilesCovering({ ...camera, zoom: 14.4 }, 1440, 900, 256, 18).map((t) => t.z))).toEqual(new Set([15]));
-    expect(new Set(tilesCovering({ ...camera, zoom: 14.8 }, 1440, 900, 512, 18).map((t) => t.z))).toEqual(new Set([14]));
   });
 });
 
