@@ -168,3 +168,72 @@ def test_height_series_keeps_its_height_sheets(work):
         _score(w / sid, True, 3.0)
         _page(w / sid, num)
     assert sorted(_sid(s) for s in _sources(stitch.build_vrt("1980-1990-height"))) == ["a", "b"]
+
+
+# --- publish_layer: skip unchanged layers -----------------------------------------------------
+
+@pytest.fixture
+def layer(tmp_path, monkeypatch):
+    from sfzmaps import stitch, tiles
+    from sfzmaps.score import SheetScore
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
+    monkeypatch.setattr(config, "OUT_DIR", tmp_path / "out")
+    for sid in ("a", "b"):
+        d = tmp_path / "work" / "1948" / sid
+        d.mkdir(parents=True)
+        (d / "warped.tif").write_bytes(sid.encode())
+    built = []
+
+    def make(vrt, out, **k):
+        built.append(k)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"TILES")
+        return tiles.TileReport(5, {11: 5})
+
+    monkeypatch.setattr(stitch, "build_vrt", lambda *a, **k: tmp_path / "x.vrt")
+    monkeypatch.setattr(tiles, "make_pmtiles", make)
+    scores = {s: SheetScore.empty("no_score") for s in ("a", "b")}
+    return stitch, scores, built, tmp_path / "work" / "1948"
+
+
+def test_an_unchanged_layer_is_not_re_tiled(layer):
+    stitch, scores, built, _ = layer
+    out, rep, rebuilt = stitch.publish_layer("1948", scores)
+    assert rebuilt and len(built) == 1 and stitch.stamp_path(out).name == "1948.inputs.json"
+    out2, rep2, rebuilt2 = stitch.publish_layer("1948", scores)
+    assert not rebuilt2 and len(built) == 1 and out2 == out and rep2 == rep
+
+
+def test_a_changed_sheet_re_tiles_but_a_touched_one_does_not(layer):
+    import os
+    stitch, scores, built, w = layer
+    stitch.publish_layer("1948", scores)
+    os.utime(w / "a" / "warped.tif", ns=(1, 1))                # same bytes, new mtime
+    assert stitch.publish_layer("1948", scores)[2] is False
+    (w / "a" / "warped.tif").write_bytes(b"a, re-warped")
+    assert stitch.publish_layer("1948", scores)[2] is True and len(built) == 2
+
+
+def test_order_params_force_and_paper_each_rebuild(layer):
+    from sfzmaps.score import SheetScore
+    stitch, scores, built, w = layer
+    stitch.publish_layer("1948", scores)
+    assert stitch.publish_layer("1948", scores, max_zoom=17)[2] is True       # parameters
+    assert stitch.publish_layer("1948", scores, max_zoom=17, force=True)[2] is True
+    (w / "c").mkdir()
+    (w / "c" / "warped.tif").write_bytes(b"c")
+    more = {**scores, "c": SheetScore.empty("no_score")}
+    assert stitch.publish_layer("1948", more, max_zoom=17)[2] is True         # a new sheet
+    fp, _ = stitch.layer_inputs("1948", more, False, {})
+    assert set(fp["code"]) == {"stitch.py", "tiles.py"}
+
+
+def test_a_failed_tiling_leaves_no_stamp_to_vouch_for_it(layer, monkeypatch):
+    from sfzmaps import tiles
+    stitch, scores, built, w = layer
+    out, _, _ = stitch.publish_layer("1948", scores)
+    (w / "a" / "warped.tif").write_bytes(b"changed")
+    monkeypatch.setattr(tiles, "make_pmtiles", lambda *a, **k: 1 / 0)
+    with pytest.raises(ZeroDivisionError):
+        stitch.publish_layer("1948", scores)
+    assert not stitch.stamp_path(out).exists()

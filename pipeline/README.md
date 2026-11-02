@@ -84,9 +84,11 @@ whether its data matches its code and inputs (`uv run sfzmaps build --dry-run`, 
   (`sfzmaps build --write-dvc-yaml`); a test keeps them equal.
 - **Stale** means a stage's code (`src/sfzmaps`, except the editor), its inputs
   (`inputs/<series>`), the scans, the reference data or its own outputs changed. Inside a
-  stage, the pipeline's own checks still decide which sheets are recomputed, but every series
-  in it is re-stitched and re-tiled, so a code change costs about an hour of tiling. The dry
-  run shows what would run first.
+  stage, the pipeline's own checks decide what is recomputed: sheets whose placement is
+  current are skipped, and a layer is re-stitched and re-tiled only when its sheets, their
+  warped rasters (by content), the stitch or tiling code, or the tiling settings changed (the
+  fingerprint of each build is kept beside the layer as `<name>.inputs.json`). So most code
+  changes rebuild in minutes. The dry run shows which stages would run.
 - **Never spends money.** Stages run with `SFZMAPS_MAX_USD=0`: cached answers are free, and a
   read that would call the API fails the stage instead. Run that read yourself
   (`SFZMAPS_MAX_USD=5 uv run sfzmaps run --year S`, or `districts --series S`), then build again.
