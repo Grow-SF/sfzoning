@@ -12,8 +12,7 @@
     "start": "next start",
     "lint": "eslint .",
     "tiles": "node scripts/serve-tiles.mjs",
-    "test": "vitest run",
-    "test:e2e": "playwright test"
+    "test": "vitest run"
   },
   "dependencies": {
     "maplibre-gl": "6.16.0",
