@@ -132,26 +132,29 @@ export default function StatsChart() {
       <p id="stats-summary" className={styles.srOnly}>
         {summary(points)}
       </p>
-      <table className={styles.srOnly}>
-        <caption id="stats-table-caption">Share of residential lots allowing three or more homes, by era</caption>
-        <thead>
-          <tr>
-            <th scope="col">Era</th>
-            <th scope="col">Share</th>
-          </tr>
-        </thead>
-        <tbody>
-          {points.map((p) => (
-            <tr key={p.id}>
-              <th scope="row">{p.label}</th>
-              <td>
-                {pct(p.share)}
-                {p.partial ? " (partial map)" : ""}
-              </td>
+      {/* On the wrapper: a table ignores width: 1px and would widen the page on phones. */}
+      <div className={styles.srOnly}>
+        <table>
+          <caption id="stats-table-caption">Share of residential lots allowing three or more homes, by era</caption>
+          <thead>
+            <tr>
+              <th scope="col">Era</th>
+              <th scope="col">Share</th>
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {points.map((p) => (
+              <tr key={p.id}>
+                <th scope="row">{p.label}</th>
+                <td>
+                  {pct(p.share)}
+                  {p.partial ? " (partial map)" : ""}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </figure>
   );
 }
