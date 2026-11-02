@@ -10,6 +10,10 @@ the basemap is our own `ref/blocks.pmtiles` and fonts are self-hosted by `next/f
 
 ## Development
 
+Node 22 comes pinned with the repository's other tools: `brew install pixi` once, then
+`pixi shell` from the repository root (see `pipeline/README.md`, Setup). Your own Node 22+
+works too.
+
 ```sh
 cd site
 npm install            # also copies the MapLibre worker into public/maplibre/

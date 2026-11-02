@@ -1,13 +1,13 @@
 """The system tools the pipeline runs, where they come from, and whether they render the same.
 
-The tools are declared and pinned in the repository's flake.nix (Nix): GDAL, poppler, pmtiles,
-uv, git. `sfzmaps doctor` reports each tool's path and version, and whether it comes from the
-Nix store; with --renders it re-renders sample pages into a temporary folder and compares them
+The tools are declared in the repository's pixi.toml and locked in pixi.lock (conda-forge):
+GDAL, poppler, uv, git. `sfzmaps doctor` reports each tool's path and version, and whether it
+comes from that pixi environment; with --renders it re-renders sample pages into a temporary folder and compares them
 with the page_sha256 their page.json recorded. A different render means the vision-answer
 cache misses for that page (paid re-reads), so check renders before changing the toolchain.
 
-`sfzmaps build` refuses to run unless every tool comes from the Nix store (the flake's dev
-shell), so a build records one known toolchain. --system-tools overrides that, loudly.
+`sfzmaps build` refuses to run unless every tool comes from the pixi environment (`pixi shell`
+or `pixi run`), so a build records one known toolchain. --system-tools overrides that, loudly.
 """
 from __future__ import annotations
 
@@ -26,11 +26,19 @@ from sfzmaps import config
 
 # Every external program the pipeline (and its build) calls.
 TOOLS = ("gdalwarp", "gdal_translate", "gdaladdo", "gdalbuildvrt", "gdal_rasterize", "gdalinfo",
-         "ogr2ogr", "pdftoppm", "pdfinfo", "pmtiles", "uv", "git")
-NIX_STORE = "/nix/store/"
+         "ogr2ogr", "pdftoppm", "pdfinfo", "uv", "git")
 # How to ask each tool its version (stdout or stderr), and the version pattern.
-_VERSION_CMD = {"gdalinfo": ["--version"], "pdftoppm": ["-v"], "pmtiles": ["version"],
-                "uv": ["--version"], "git": ["--version"]}
+_VERSION_CMD = {"gdalinfo": ["--version"], "pdftoppm": ["-v"], "uv": ["--version"],
+                "git": ["--version"]}
+
+
+def env_prefix() -> Path:
+    """The pixi environment the tools must come from: the active one (pixi shell / pixi run
+    set CONDA_PREFIX), else the repository's default environment."""
+    active = os.environ.get("CONDA_PREFIX")
+    if active and os.environ.get("PIXI_PROJECT_ROOT"):
+        return Path(active).resolve()
+    return (config.PIPELINE_DIR.parent / ".pixi" / "envs" / "default").resolve()
 
 
 @dataclass
@@ -40,8 +48,10 @@ class Tool:
     version: str | None
 
     @property
-    def from_nix(self) -> bool:
-        return bool(self.path) and os.path.realpath(self.path).startswith(NIX_STORE)
+    def from_env(self) -> bool:
+        if not self.path:
+            return False
+        return Path(os.path.realpath(self.path)).is_relative_to(env_prefix())
 
 
 def _version(path: str, args: list[str]) -> str | None:
@@ -74,12 +84,12 @@ def python_libraries() -> dict[str, str]:
     return found
 
 
-def not_from_nix(ts: list[Tool] | None = None) -> list[Tool]:
-    return [t for t in (ts if ts is not None else tools()) if not t.from_nix]
+def not_from_env(ts: list[Tool] | None = None) -> list[Tool]:
+    return [t for t in (ts if ts is not None else tools()) if not t.from_env]
 
 
 def toolchain_id() -> str:
-    """What the build ran with: the flake's pin inside its dev shell, else "system"."""
+    """"pixi" inside the repository's pixi environment (pixi.toml sets it), else "system"."""
     return os.environ.get("SFZMAPS_TOOLCHAIN") or "system"
 
 

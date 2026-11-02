@@ -380,7 +380,7 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
     (paper_content), which stitch draws on top of every sheet's blank paper."""
     png, out = Path(png), Path(out)
     if shutil.which("gdalwarp") is None:
-        raise RuntimeError("gdalwarp not found on PATH; install GDAL (e.g. `brew install gdal`)")
+        raise RuntimeError("gdalwarp not found on PATH; run inside `pixi shell` (pixi.toml pins GDAL)")
     img = cv2.imread(str(png), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise RuntimeError(f"cannot read {png}")

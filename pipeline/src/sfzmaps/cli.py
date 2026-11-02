@@ -617,7 +617,7 @@ def build(
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Say what would run; run nothing."),
     force: bool = typer.Option(False, "--force", help="Run the named stages even if up to date."),
     system_tools: bool = typer.Option(False, "--system-tools", help="Build with tools that aren't "
-                                                                    "from the flake (not recommended)."),
+                                                                    "from the pixi environment (not recommended)."),
     write_dvc_yaml: bool = typer.Option(False, "--write-dvc-yaml", help="Regenerate pipeline/dvc.yaml."),
     list_: bool = typer.Option(False, "--list", help="List the stages."),
 ) -> None:
@@ -653,14 +653,14 @@ def doctor(
     ts = toolchain.tools()
     typer.echo(f"toolchain: {toolchain.toolchain_id()}")
     for t in ts:
-        where = "nix" if t.from_nix else ("MISSING" if not t.path else "system")
+        where = "pixi" if t.from_env else ("MISSING" if not t.path else "system")
         typer.echo(f"  {t.name:15} {t.version or '':10} {where:7} {t.path or ''}")
     for k, v in toolchain.python_libraries().items():
         typer.echo(f"  {k:26} {v}  (bundled in the Python wheel)")
-    bad = toolchain.not_from_nix(ts)
+    bad = toolchain.not_from_env(ts)
     if bad:
-        typer.echo(f"{len(bad)} tool(s) not from the flake: run inside `nix develop` "
-                   f"(see pipeline/README.md, Toolchain)")
+        typer.echo(f"{len(bad)} tool(s) not from the pixi environment: run `pixi run doctor`, or "
+                   f"this inside `pixi shell` (see pipeline/README.md, Toolchain)")
     if renders:
         n, differ = toolchain.check_renders(renders)
         typer.echo(f"renders: {n} pages checked, {len(differ)} differ"

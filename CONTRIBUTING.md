@@ -40,7 +40,9 @@ Fork the repository, clone your fork, and set up the part you're working on.
 
 ### The site (`site/`)
 
-You need Node.js 22 or later. You don't need to build any map tiles: point
+You need Node.js 22 or later: either your own, or the pinned one from
+[pixi](https://pixi.sh) (`brew install pixi`, then `pixi shell` from the repository
+root; see the pipeline section below). You don't need to build any map tiles: point
 your dev server at the published ones.
 
 ```sh
@@ -53,12 +55,14 @@ Then open http://localhost:3000. See `site/README.md` for more.
 
 ### The pipeline (`pipeline/`)
 
-The system tools are pinned in `flake.nix`. Install [Nix](https://nixos.org),
-then run `nix develop` from the repository root for a shell with exactly those versions
-(GDAL, poppler, pmtiles, uv, Node). See "Toolchain" in `pipeline/README.md`.
+The system tools (GDAL, poppler, uv, git, Node) are pinned in `pixi.toml` and
+locked in `pixi.lock`. Install [pixi](https://pixi.sh) once (`brew install pixi` on
+macOS); it puts the tools in `.pixi/` inside the repository and needs no admin
+rights. Then, from the repository root:
 
 ```sh
-nix develop
+pixi install
+pixi shell
 cd pipeline
 uv sync
 uv run pytest

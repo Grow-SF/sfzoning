@@ -31,7 +31,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -71,7 +72,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -111,7 +113,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -151,7 +154,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -191,7 +195,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -231,7 +236,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -271,7 +277,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -311,7 +318,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -351,7 +359,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -391,7 +400,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -431,7 +441,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -481,7 +492,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -531,7 +543,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -581,7 +594,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -631,7 +645,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/ref
     outs:
       - data/work/today:
@@ -668,7 +683,8 @@ stages:
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
-      - ../flake.nix
+      - ../pixi.toml
+      - ../pixi.lock
       - data/out/1921/districts
       - data/out/1929/districts
       - data/out/1935/districts

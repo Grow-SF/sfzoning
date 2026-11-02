@@ -123,7 +123,7 @@ def _code_deps() -> list[str]:
 
 
 def stage_deps(st: Stage) -> list[str]:
-    deps = _code_deps() + ["pyproject.toml", "uv.lock", "../flake.nix"]
+    deps = _code_deps() + ["pyproject.toml", "uv.lock", "../pixi.toml", "../pixi.lock"]
     if st.shared:
         from sfzmaps.districts.series import SERIES
         return deps + [f"data/out/{s}/districts" for s, i in SERIES.items() if i.role == "use"] \
@@ -246,7 +246,7 @@ def stale_stages(status_json: str) -> set[str]:
 
 
 def git_dirty(paths: tuple[str, ...] = ("src", "inputs", "dvc.yaml", "pyproject.toml", "uv.lock",
-                                        "../flake.nix", "../flake.lock")) -> list[str]:
+                                        "../pixi.toml", "../pixi.lock")) -> list[str]:
     p = subprocess.run(["git", "status", "--porcelain", "--", *paths], cwd=config.PIPELINE_DIR,
                        check=True, capture_output=True, text=True)
     return [line for line in p.stdout.splitlines() if line.strip()]
@@ -349,19 +349,20 @@ def run_build(order: list[str], table: dict[str, Stage], jobs: int, *,
 
 
 def require_toolchain(system_tools: bool) -> None:
-    """Every system tool from the flake's Nix store (a build records one known toolchain:
-    flake.nix is a dep of every stage), unless system_tools."""
+    """Every system tool from the repository's pixi environment (a build records one known
+    toolchain: pixi.toml and pixi.lock are deps of every stage), unless system_tools."""
     from sfzmaps import toolchain
 
-    bad = toolchain.not_from_nix()
+    bad = toolchain.not_from_env()
     if not bad:
         return
     names = ", ".join(f"{t.name} ({t.path or 'missing'})" for t in bad)
     if system_tools:
-        print(f"WARNING: --system-tools: building with tools outside the flake: {names}")
+        print(f"WARNING: --system-tools: building with tools outside pixi: {names}")
         return
-    raise SystemExit(f"these tools aren't from the flake: {names}\nRun the build inside "
-                     "`nix develop` (pipeline/README.md, Toolchain), or pass --system-tools.")
+    raise SystemExit(f"these tools aren't from the pixi environment: {names}\nRun the build "
+                     "with `pixi run build`, or inside `pixi shell` (pipeline/README.md, Toolchain), "
+                     "or pass --system-tools.")
 
 
 def build(targets: list[str] | None, jobs: int, dry_run: bool, force: bool,

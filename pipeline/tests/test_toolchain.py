@@ -6,35 +6,39 @@ import pytest
 from sfzmaps import build, config, toolchain
 
 
-def test_a_tool_counts_as_nix_only_when_it_resolves_into_the_store(tmp_path):
-    store = tmp_path / "nix" / "store" / "abc-gdal" / "bin"
-    store.mkdir(parents=True)
-    (store / "gdalwarp").write_text("")
+def test_a_tool_counts_only_when_it_resolves_into_the_pixi_environment(tmp_path, monkeypatch):
+    env = tmp_path / ".pixi" / "envs" / "default" / "bin"
+    env.mkdir(parents=True)
+    (env / "gdalwarp").write_text("")
     link = tmp_path / "bin" / "gdalwarp"
     link.parent.mkdir()
-    link.symlink_to(store / "gdalwarp")
-    old = toolchain.NIX_STORE
-    try:
-        toolchain.NIX_STORE = str(tmp_path / "nix" / "store") + "/"
-        assert toolchain.Tool("gdalwarp", str(link), None).from_nix          # via a profile link
-        assert not toolchain.Tool("gdalwarp", "/opt/homebrew/bin/gdalwarp", None).from_nix
-        assert not toolchain.Tool("pmtiles", None, None).from_nix              # missing
-    finally:
-        toolchain.NIX_STORE = old
+    link.symlink_to(env / "gdalwarp")
+    monkeypatch.setenv("CONDA_PREFIX", str(env.parent))
+    monkeypatch.setenv("PIXI_PROJECT_ROOT", str(tmp_path))
+    assert toolchain.env_prefix() == env.parent.resolve()
+    assert toolchain.Tool("gdalwarp", str(link), None).from_env           # via a link
+    assert not toolchain.Tool("gdalwarp", "/opt/homebrew/bin/gdalwarp", None).from_env
+    assert not toolchain.Tool("pdftoppm", None, None).from_env           # missing
+
+
+def test_outside_pixi_the_repositorys_default_environment_is_expected(monkeypatch):
+    monkeypatch.delenv("PIXI_PROJECT_ROOT", raising=False)
+    monkeypatch.setenv("CONDA_PREFIX", "/somewhere/else")              # another conda env
+    assert toolchain.env_prefix() == (config.PIPELINE_DIR.parent / ".pixi/envs/default").resolve()
 
 
 def test_build_refuses_tools_outside_the_flake_unless_told(monkeypatch, capsys):
-    monkeypatch.setattr(toolchain, "not_from_nix", lambda: [toolchain.Tool("pdftoppm", "/opt/homebrew/bin/pdftoppm", "26.10.0")])
-    with pytest.raises(SystemExit, match="nix develop"):
+    monkeypatch.setattr(toolchain, "not_from_env", lambda: [toolchain.Tool("pdftoppm", "/opt/homebrew/bin/pdftoppm", "26.10.0")])
+    with pytest.raises(SystemExit, match="pixi run build"):
         build.require_toolchain(False)
     build.require_toolchain(True)
     assert "WARNING" in capsys.readouterr().out
-    monkeypatch.setattr(toolchain, "not_from_nix", lambda: [])
+    monkeypatch.setattr(toolchain, "not_from_env", lambda: [])
     build.require_toolchain(False)
 
 
-def test_every_stage_depends_on_the_flake():
-    assert all("../flake.nix" in build.stage_deps(st) for st in build.stages().values())
+def test_every_stage_depends_on_the_pinned_toolchain():
+    assert all({"../pixi.toml", "../pixi.lock"} <= set(build.stage_deps(st)) for st in build.stages().values())
 
 
 def test_render_check_compares_fresh_renders_with_the_recorded_hashes(tmp_path, monkeypatch):

@@ -10,14 +10,16 @@ Tuning history and final results: `docs/superpowers/notes/2026-10-29-tuning.md`.
 
 ## Setup
 
-The system tools (GDAL, poppler, pmtiles, uv, git, Node) are declared and pinned in the
-repository's `flake.nix`; see [Toolchain](#toolchain). With [Nix](https://nixos.org) installed:
+The system tools (GDAL, poppler, uv, git, Node) are pinned in the repository's `pixi.toml` and
+locked in `pixi.lock`; see [Toolchain](#toolchain). Install [pixi](https://pixi.sh) once
+(`brew install pixi` on macOS), then, from the repository root:
 
 ```sh
-nix develop            # from the repository root: a shell with exactly the pinned tools
+pixi install           # the pinned tools, into .pixi/ inside the repository (no admin rights)
+pixi shell             # a shell with them first on PATH (or prefix commands with `pixi run`)
 cd pipeline
 uv sync
-uv run sfzmaps doctor  # every tool should say "nix"
+uv run sfzmaps doctor  # every tool should say "pixi"
 ```
 
 Page classification and label reading use the OpenAI API. Put the key in
@@ -127,32 +129,28 @@ the way to share data.
 
 ## Toolchain
 
-`flake.nix` pins one nixpkgs commit for every system tool the pipeline runs: GDAL 3.13.3
-(`gdalwarp`, `gdal_translate`, `gdaladdo`, `gdalbuildvrt`, `gdal_rasterize`, `gdalinfo`,
-`ogr2ogr`), poppler 26.10.0 (`pdftoppm`, `pdfinfo`), pmtiles 1.31.2, uv and git, plus Node for
-the site. `flake.lock` records the pin's content hash. Every build stage depends on
-`flake.nix`, and `sfzmaps build` refuses to run unless every tool comes from the Nix store, so
-`dvc.lock` names the toolchain as well as the code (`--system-tools` overrides it, loudly).
+`pixi.toml` declares every system tool the pipeline runs, from conda-forge, and `pixi.lock`
+pins each package's exact build and hash: GDAL 3.13.3 (`gdalwarp`, `gdal_translate`,
+`gdaladdo`, `gdalbuildvrt`, `gdal_rasterize`, `gdalinfo`, `ogr2ogr`), poppler 26.10.0
+(`pdftoppm`, `pdfinfo`), uv and git, plus Node 22 for the site. They install into `.pixi/`
+inside the repository. Tile archives are written with the `pmtiles` Python library (in
+`uv.lock`), so the separate pmtiles command-line tool isn't needed.
 
-`uv run sfzmaps doctor` lists each tool's version and where it comes from, and the GDAL and GEOS
-versions the Python wheels bundle (rasterio, pyogrio, shapely; these are pinned by `uv.lock`,
-separately from the GDAL tools). `--renders N` re-renders N PDF pages per series into a
-temporary folder and compares them with the `page_sha256` their `page.json` recorded.
+Every build stage depends on `pixi.toml` and `pixi.lock`, and `sfzmaps build` refuses to run
+unless every tool comes from the pixi environment, so `dvc.lock` names the toolchain as well as
+the code (`--system-tools` overrides it, loudly). Shortcuts from the repository root:
+`pixi run build`, `pixi run doctor`, `pixi run doctor-renders`.
 
-**Before moving the pin**, run `uv run sfzmaps doctor --renders 3` inside the new shell. Page
-renders feed the vision-answer cache keys, so a poppler (or font or image library) that renders
-different bytes makes labels and classification re-read, and bill, every page that changed.
-The current pin matches the Homebrew versions the existing renders were made with; with those,
-21 sampled pages rendered byte for byte the same.
+`sfzmaps doctor` lists each tool's version and where it comes from, and the GDAL and GEOS
+versions the Python wheels bundle (rasterio, pyogrio, shapely; pinned by `uv.lock`, separately
+from the GDAL tools). `--renders N` re-renders N PDF pages per series into a temporary folder
+and compares them with the `page_sha256` their `page.json` recorded.
 
-First-time setup on a Mac (installs Nix system-wide; needs your password):
-
-```sh
-curl -fsSL https://install.determinate.systems/nix | sh -s -- install
-nix flake lock          # from the repository root; commit flake.lock
-nix develop
-cd pipeline && uv run sfzmaps doctor --renders 3
-```
+**Before changing any version in `pixi.toml`** (or running `pixi update`), run
+`pixi run doctor-renders`. Page renders feed the vision-answer cache keys, so a poppler (or
+font or image library) that renders different bytes makes labels and classification re-read,
+and bill, every page that changed. With the current lock, 63 sampled pages (3 per series)
+rendered byte for byte as the existing ones, which were made with Homebrew's poppler 26.10.0.
 
 ## Recreate without re-running
 

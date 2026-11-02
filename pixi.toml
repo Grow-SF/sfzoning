@@ -1,0 +1,27 @@
+# The system tools sfzoning.com builds with, pinned and locked (pixi.lock), from conda-forge.
+# Setup: `brew install pixi`, then `pixi shell` (or `pixi run <cmd>`) from the repository root.
+#
+# The versions matter beyond tidiness: page renders (poppler's pdftoppm) feed the vision-answer
+# cache keys, so a poppler that renders different bytes means paid re-reads. Before changing
+# any version here, check renders with `pixi run doctor-renders` (pipeline/README.md, Toolchain).
+# pixi.toml and pixi.lock are dependencies of every build stage (pipeline/dvc.yaml).
+[workspace]
+name = "sfzoning"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "linux-aarch64"]
+
+[dependencies]
+libgdal-core = "==3.13.3"  # gdalwarp, gdal_translate, gdaladdo, gdalbuildvrt, gdal_rasterize, gdalinfo, ogr2ogr
+poppler = "==26.10.0"  # pdftoppm, pdfinfo (page renders)
+uv = "*"               # Python and the project's Python packages (pipeline/uv.lock)
+nodejs = "22.*"        # the site (site/package-lock.json)
+git = "*"
+
+[activation.env]
+# `sfzmaps doctor` / `sfzmaps build` check the tools come from this environment
+SFZMAPS_TOOLCHAIN = "pixi"
+
+[tasks]
+doctor = { cmd = "uv run sfzmaps doctor", cwd = "pipeline" }
+doctor-renders = { cmd = "uv run sfzmaps doctor --renders 3", cwd = "pipeline" }
+build = { cmd = "uv run sfzmaps build", cwd = "pipeline" }
