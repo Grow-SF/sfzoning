@@ -57,8 +57,6 @@ type Props = {
 type Expr = Ml.ExpressionSpecification;
 type Opacity = number | Expr;
 
-/** Test builds only (NEXT_PUBLIC_E2E=1, set by playwright.config): window.__map(s), data-idle. */
-const E2E = process.env.NEXT_PUBLIC_E2E === "1";
 const FADE_MS = 700;
 /** The story's step: the camera move and the colour fades take this long together. */
 const PAN_MS = 1400;
@@ -454,10 +452,6 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     let cancelled = false;
     let cleanup = () => {};
     const timers = hideTimers.current;
-    const setIdle = (v: boolean) => {
-      // Test and screenshot hook: true once the map has drawn everything it is going to.
-      if (E2E && wrap.current) wrap.current.dataset.idle = String(v);
-    };
 
     Promise.all([loadMaplibre(), loadSharedDistricts()]).then(([maplibregl, shared]) => {
       if (cancelled || !container.current) return;
@@ -479,15 +473,6 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       });
       if (!interactive) map.jumpTo({ ...cam, padding: storyPadding(map) });
       mapRef.current = map;
-      const w = window as unknown as { __map?: MlMap; __maps?: MlMap[] };
-      if (E2E) {
-        if (!interactive) w.__map = map;
-        (w.__maps ??= []).push(map);
-      }
-
-      map.on("idle", () => setIdle(true));
-      map.on("movestart", () => setIdle(false));
-      map.on("dataloading", () => setIdle(false));
       // Phone rotation or a resized window changes how much map the card leaves visible.
       map.on("resize", () => {
         if (!interactive) map.setPadding(storyPadding(map));
@@ -585,7 +570,6 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       });
 
       cleanup = () => {
-        if (E2E) w.__maps = (w.__maps ?? []).filter((m) => m !== map);
         map.remove();
       };
     }, () => setFailedSources((prev) => new Set(prev).add("maplibre")));
