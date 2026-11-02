@@ -12,7 +12,7 @@
 // Prints one JSON line per file: {"name", "status": "uploaded"|"error", "error"?}.
 
 import { createHash } from "node:crypto";
-import { createReadStream, statSync } from "node:fs";
+import { createReadStream, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const ONE_YEAR = 31_536_000;
@@ -32,13 +32,16 @@ export async function putOne(entry, { put } = {}) {
   if (hash !== hex) throw new Error(`${name}: manifest hash ${hash} doesn't match the name`);
   if ((await hashFile(file, alg)) !== hash) throw new Error(`${name}: ${file} doesn't hash to its name`);
   const size = statSync(file).size;
-  await put(name, createReadStream(file), {
+  // a buffer for ordinary files, so the SDK can resend it when it retries a request (a stream
+  // can only be read once); multipart uploads read large files in parts themselves
+  const multipart = size > 50_000_000;
+  await put(name, multipart ? createReadStream(file) : readFileSync(file), {
     access: "public",
     addRandomSuffix: false,
     allowOverwrite: false,
     cacheControlMaxAge: ONE_YEAR,
     contentType: entry.contentType || "application/octet-stream",
-    multipart: size > 50_000_000,
+    multipart,
   });
   return "uploaded";
 }
