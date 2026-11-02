@@ -52,10 +52,15 @@ class Stage:
     series: tuple[str, ...]      # run and paper, in this order
     districts: tuple[str, ...]   # districts --series, in this order
     upstream: tuple[str, ...] = ()
+    frozen: bool = False         # never run by a build or dvc repro; only `build --force NAME`
 
     @property
     def shared(self) -> bool:
         return self.name == "shared"
+
+    @property
+    def refdata(self) -> bool:
+        return self.name == "refdata"
 
 
 def stages() -> dict[str, Stage]:
@@ -65,13 +70,15 @@ def stages() -> dict[str, Stage]:
     periods: dict[str, list[str]] = {}
     for s, info in SERIES.items():
         periods.setdefault(info.period, []).append(s)
-    out: dict[str, Stage] = {}
+    # The DataSF reference data, recorded and shipped like any output (a fresh checkout gets
+    # main's, not today's): frozen, because fetching it again would change every build.
+    out: dict[str, Stage] = {"refdata": Stage("refdata", (), (), frozen=True)}
     for period, members in periods.items():
         role = {s: SERIES[s].role for s in members}
         reads = sorted((s for s in members if role[s] != "skip"), key=lambda s: role[s] != "height")
         name = f"edition-{period}" if len(members) == 1 else f"period-{period}"
-        out[name] = Stage(name, tuple(members), tuple(reads))
-    out["today"] = Stage("today", (), ("today",))
+        out[name] = Stage(name, tuple(members), tuple(reads), ("refdata",))
+    out["today"] = Stage("today", (), ("today",), ("refdata",))
     out["shared"] = Stage("shared", (), (), tuple(out))
     return out
 
@@ -107,7 +114,8 @@ def plan_run(stale: set[str], targets: list[str] | None, table: dict[str, Stage]
     unknown = [t for t in targets or [] if t not in table]
     if unknown:
         raise ValueError(f"unknown stage(s): {', '.join(unknown)}; stages: {', '.join(table)}")
-    run = downstream(set(stale) & set(table), table)
+    frozen = {n for n, st in table.items() if st.frozen}
+    run = downstream(set(stale) & set(table) - frozen, table) - frozen
     if targets:
         run &= upstream(set(targets), table)
         if force:
@@ -123,6 +131,8 @@ def _code_deps() -> list[str]:
 
 
 def stage_deps(st: Stage) -> list[str]:
+    if st.refdata:
+        return []
     deps = _code_deps() + ["pyproject.toml", "uv.lock", "../pixi.toml", "../pixi.lock"]
     if st.shared:
         from sfzmaps.districts.series import SERIES
@@ -137,6 +147,8 @@ def stage_deps(st: Stage) -> list[str]:
 def stage_outs(st: Stage) -> list[str]:
     if st.shared:
         return ["data/out/shared"]
+    if st.refdata:
+        return ["data/ref"]
     names = st.series or st.districts
     return [f"data/{kind}/{s}" for s in names for kind in ("work", "out")]
 
@@ -148,8 +160,11 @@ def dvc_yaml() -> str:
              "# Run builds with `uv run sfzmaps build` (parallel); `dvc repro` works too (serial).",
              "stages:"]
     for st in stages().values():
-        lines += [f"  {st.name}:", f"    cmd: uv run --frozen sfzmaps stage {st.name}", "    deps:"]
-        lines += [f"      - {d}" for d in stage_deps(st)]
+        lines += [f"  {st.name}:", f"    cmd: uv run --frozen sfzmaps stage {st.name}"]
+        if st.frozen:
+            lines += ["    frozen: true"]
+        if stage_deps(st):
+            lines += ["    deps:"] + [f"      - {d}" for d in stage_deps(st)]
         lines += ["    outs:"]
         for o in stage_outs(st):
             # persist: DVC must never delete a stage's outputs before running it (they are
@@ -169,6 +184,8 @@ def stage_commands(name: str) -> list[list[str]]:
     st = stages()[name]
     if st.shared:
         return [["districts", "--shared"]]
+    if st.refdata:
+        return [["refdata"]]
     cmds = [["run", "--year", s] for s in st.series] + [["paper", "--year", s] for s in st.series]
     return cmds + [["districts", "--series", s] for s in st.districts]
 
