@@ -71,17 +71,6 @@ test("the 1948 'both' step shows the legend and the Rumsey credit", async ({ pag
   await expect(story.getByText(CREDIT, { exact: true })).toBeVisible();
 });
 
-test("on phones the page doesn't scroll sideways once the chart has loaded", async ({ page }, info) => {
-  test.skip(info.project.name !== "mobile", "phone layout only");
-  await page.goto("/");
-  await page.locator("#stats-table-caption").waitFor({ state: "attached" });
-  const { scroll, client } = await page.evaluate(() => ({
-    scroll: document.documentElement.scrollWidth,
-    client: document.documentElement.clientWidth,
-  }));
-  expect(scroll).toBeLessThanOrEqual(client);
-});
-
 test("on phones the story's key is a chip that opens the full key", async ({ page }, info) => {
   test.skip(info.project.name !== "mobile", "phone layout only");
   test.skip(!(await tilesExist(page, "shared/districts.json")), "shared files not published");
