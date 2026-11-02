@@ -341,9 +341,10 @@ def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
             zp.write_bytes(pack.data)
             ip.write_bytes(pack.index_bytes())
             index_sha = hashlib.sha256(pack.index_bytes()).hexdigest()
-            entries += [{"file": str(zp), "name": f"{PACK_PREFIX}/{pack.sha}.zip", "alg": "sha256", "hash": pack.sha},
-                        {"file": str(ip), "name": f"{PACK_PREFIX}/{pack.sha}.keys.gz", "alg": "sha256",
-                         "hash": index_sha}]
+            for f, name, h in ((zp, f"{PACK_PREFIX}/{pack.sha}.zip", pack.sha),
+                               (ip, f"{PACK_PREFIX}/{pack.sha}.keys.gz", index_sha)):
+                if held.get(name) != f.stat().st_size:     # an interrupted ship may have sent it
+                    entries.append({"file": str(f), "name": name, "alg": "sha256", "hash": h})
             pack_sha = pack.sha
             records = {**records, pack.sha: pack.record()}
         upload(entries)                                   # only what the listing lacked ...
