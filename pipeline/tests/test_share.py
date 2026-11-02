@@ -21,13 +21,11 @@ def _w(root: Path, rel: str, data: bytes = b"x") -> None:
 SHARED = [
     "cache/llm/ab/abcdef.json",
     "ref/parcels.parquet",
-    "work/label_scale.json",
     "work/1948/p1/page.json",
     "work/1948/p1/labels.json",
     "work/1948/p1/transform.json",
     "work/1948/p1/changes.geojson",
     "work/1948/p1/score.json",
-    "work/1948/p1/review.json",
     "work/1948/p1/refine.json",
     "work/1948/p1/rough.json",
     "work/1960/p2/score.json",
@@ -40,9 +38,12 @@ SHARED = [
     "out/1948/districts/stats.json",
     "out/today/districts/stats.json",
     "work/1960/p2/district_labels.json",
-    "overrides/1948.csv",
 ]
 EXCLUDED = [
+    # hand-made inputs: in git under pipeline/inputs/ now, never bundled
+    "work/label_scale.json",
+    "work/1948/p1/review.json",
+    "overrides/1948.csv",
     "raw/1948/scan.tif",
     "work/1948/p1/page.png",
     "work/1948/p1/warp.tif",
@@ -78,7 +79,7 @@ def test_bundle_includes_only_shared(data, tmp_path):
     assert {z.name for z in zips} == {
         "processed-1948.zip", "processed-1960.zip",
         "processed-cache.zip", "processed-ref.zip",
-        "processed-today.zip", "processed-overrides.zip",
+        "processed-today.zip",
     }
     assert _members(dest) == set(SHARED) | {"ref/SNAPSHOT.json"}
     assert json.loads(zipfile.ZipFile(dest / "processed-ref.zip").read("ref/SNAPSHOT.json"))
@@ -156,31 +157,21 @@ def _republish(data, src, rel, text, monkeypatch, new):
     return _remote(src)
 
 
-def test_pull_keeps_local_edit_after_pull(data, tmp_path, monkeypatch):
-    new, src = _fresh_pull(data, tmp_path, monkeypatch)
-    assert (new / REV).read_bytes() == REV.encode()
-    (new / REV).write_text("LOCAL EDIT")
-    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
-    share.pull("ROOT", lister=lister, downloader=downloader)
-    assert (new / REV).read_text() == "LOCAL EDIT"
-    assert (new / (REV + ".pulled")).read_text() == "REMOTE V2"
-
-
-def test_pull_updates_unedited_review(data, tmp_path, monkeypatch):
-    new, src = _fresh_pull(data, tmp_path, monkeypatch)
-    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
-    share.pull("ROOT", lister=lister, downloader=downloader)
-    assert (new / REV).read_text() == "REMOTE V2"
-    assert not (new / (REV + ".pulled")).exists()
-
-
-def test_pull_missing_sidecar_treated_as_edited(data, tmp_path, monkeypatch):
-    new, src = _fresh_pull(data, tmp_path, monkeypatch)
-    (new / share.PULLED_SHAS).unlink()
-    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
-    share.pull("ROOT", lister=lister, downloader=downloader)
-    assert (new / REV).read_bytes() == REV.encode()  # kept
-    assert (new / (REV + ".pulled")).read_text() == "REMOTE V2"
+def test_pull_skips_hand_made_inputs_from_an_older_bundle(data, tmp_path, monkeypatch, caplog):
+    """Bundles from before pipeline/inputs/ carry reviews, overrides and the label scale; a pull
+    writes none of them into data/ (nothing reads them there), and still extracts the rest."""
+    old = tmp_path / "old.zip"
+    with zipfile.ZipFile(old, "w") as z:
+        for rel in (REV, REV + ".pulled", "work/label_scale.json", "work/.pulled_shas.json",
+                    "overrides/1948.csv", "work/1948/p1/transform.json"):
+            z.writestr(rel, rel)
+    new = tmp_path / "new"
+    with caplog.at_level("WARNING"):
+        share._extract(old, new)
+    assert (new / "work/1948/p1/transform.json").read_text() == "work/1948/p1/transform.json"
+    for rel in (REV, REV + ".pulled", "work/label_scale.json", "work/.pulled_shas.json", "overrides/1948.csv"):
+        assert not (new / rel).exists()
+    assert "pipeline/inputs/" in caplog.text
 
 
 def test_pull_skips_unchanged_zips(data, tmp_path, monkeypatch):
@@ -338,26 +329,8 @@ def test_bundle_command_prints_folder_and_instruction(tmp_path, monkeypatch):
     assert "Copy these files into the Drive folder old-planning-maps/processed/" in r.output
 
 
-def test_pull_keeping_local_review_keeps_its_derived_files(data, tmp_path, monkeypatch):
-    """I2: with a locally edited review.json kept, that sheet's transform/score/changes/
-    refine/rough are not overwritten either; other files and other sheets still update."""
+def test_pull_updates_derived_files(data, tmp_path, monkeypatch):
     new, src = _fresh_pull(data, tmp_path, monkeypatch)
-    (new / REV).write_text("LOCAL EDIT")
-    derived = ["transform.json", "score.json", "changes.geojson", "refine.json", "rough.json"]
-    for n in derived:
-        (data / "work/1948/p1" / n).write_text("REMOTE " + n)
-    (data / "work/1948/p1/labels.json").write_text("REMOTE labels")
-    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
-    share.pull("ROOT", lister=lister, downloader=downloader)
-    assert (new / REV).read_text() == "LOCAL EDIT"
-    for n in derived:
-        assert (new / "work/1948/p1" / n).read_bytes() == f"work/1948/p1/{n}".encode()
-    assert (new / "work/1948/p1/labels.json").read_text() == "REMOTE labels"
-
-
-def test_pull_unedited_review_updates_derived_files(data, tmp_path, monkeypatch):
-    new, src = _fresh_pull(data, tmp_path, monkeypatch)
-    (data / "work/1948/p1/transform.json").write_text("REMOTE T")
-    lister, downloader = _republish(data, src, REV, "REMOTE V2", monkeypatch, new)
+    lister, downloader = _republish(data, src, "work/1948/p1/transform.json", "REMOTE T", monkeypatch, new)
     share.pull("ROOT", lister=lister, downloader=downloader)
     assert (new / "work/1948/p1/transform.json").read_text() == "REMOTE T"

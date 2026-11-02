@@ -7,10 +7,16 @@ import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
-from sfzmaps import config, runner
+from sfzmaps import inputs, config, runner
 from sfzmaps.editor import demo as demo_mod
 from sfzmaps.editor import server
 from sfzmaps.transform import SheetTransform
+
+
+def _mk(p):
+    """p with its parent made (a review under inputs/<series>/reviews/)."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 @pytest.fixture
@@ -77,7 +83,7 @@ def test_sheet_payload(env):
 def test_sheet_starts_from_review_json(env):
     demo, c, _ = env
     d = demo.work_dir / demo.series / demo.sheet_id
-    (d / "review.json").write_text(json.dumps({
+    _mk(inputs.review_path(d.parent.name, d.name)).write_text(json.dumps({
         "status": "edited", "reviewer": "x", "at": "t", "note": "", "gcps": _gcps(demo.true_gcps[:6]),
         "change_areas": None}))
     r = c.get(url(demo)).json()
@@ -125,7 +131,7 @@ def test_save_writes_review_json_and_reruns(env, monkeypatch):
                                          "status": "edited", "note": "fixed 3 points"})
     assert r.status_code == 200, r.text
     d = demo.work_dir / demo.series / demo.sheet_id
-    rv = json.loads((d / "review.json").read_text())
+    rv = json.loads(inputs.review_path(d.parent.name, d.name).read_text())
     assert rv["status"] == "edited" and rv["reviewer"] == "owner"
     assert rv["note"] == "fixed 3 points" and len(rv["gcps"]) == 25 and rv["at"]
     assert not list(d.glob("*.tmp"))
@@ -145,7 +151,7 @@ def test_accept_below_threshold_requires_note(env):
     body = {"gcps": _bad(demo), "change_areas": None, "status": "accepted", "note": "  "}
     r = c.post(url(demo, "/save"), json=body)
     assert r.status_code == 400 and "note" in r.json()["detail"]
-    assert not (demo.work_dir / demo.series / demo.sheet_id / "review.json").exists()
+    assert not (inputs.review_path(demo.series, demo.sheet_id)).exists()
     assert rebuilt == []
     ok = c.post(url(demo, "/save"), json={**body, "note": "scan damaged; best effort"})
     assert ok.status_code == 200 and ok.json()["status"] == "accepted"
@@ -333,10 +339,10 @@ def test_sheet_extent_covers_whole_page_not_just_points(env):
     corner = sorted(t.gcps, key=lambda g: g.px + g.py)[:4]
     pts = [{"px": g.px, "py": g.py, "wx": g.wx, "wy": g.wy, "source": "manual", "enabled": True}
            for g in corner]
-    (d / "review.json").write_text(json.dumps({"status": "edited", "gcps": pts, "change_areas": None}))
+    _mk(inputs.review_path(d.parent.name, d.name)).write_text(json.dumps({"status": "edited", "gcps": pts, "change_areas": None}))
     ext = server._sheet_extent(d)
     h, w = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE).shape
-    far = runner.review_transform(json.loads((d / "review.json").read_text())).to_world(
+    far = runner.review_transform(json.loads(inputs.review_path(d.parent.name, d.name).read_text())).to_world(
         np.array([[w, h]], float))[0]
     assert ext[0] <= far[0] <= ext[2] and ext[1] <= far[1] <= ext[3]
 
@@ -419,7 +425,7 @@ def test_resave_unchanged_auto_sheet_keeps_score(env):
             for g in c.get(url(demo)).json()["gcps"]]
     r = c.post(url(demo, "/save"), json={"gcps": gcps, "change_areas": None, "status": "edited"})
     assert r.status_code == 200, r.text
-    rv = json.loads((d / "review.json").read_text())
+    rv = json.loads(inputs.review_path(d.parent.name, d.name).read_text())
     assert rv["smoothing"] == config.TPS_SMOOTHING
     assert json.loads((d / "transform.json").read_text())["smoothing"] == config.TPS_SMOOTHING
     s = r.json()["score"]
@@ -436,14 +442,14 @@ def test_sparse_review_uses_manual_smoothing(env):
     r = c.post(url(demo, "/save"), json={"gcps": _gcps(demo.true_gcps), "change_areas": None,
                                          "status": "edited"})
     d = demo.work_dir / demo.series / demo.sheet_id
-    assert r.status_code == 200 and json.loads((d / "review.json").read_text())["smoothing"] == \
+    assert r.status_code == 200 and json.loads(inputs.review_path(d.parent.name, d.name).read_text())["smoothing"] == \
         config.MANUAL_TPS_SMOOTHING
 
 
 def test_stored_review_smoothing_is_used_by_runner(env):
     demo, c, _ = env
     d = demo.work_dir / demo.series / demo.sheet_id
-    (d / "review.json").write_text(json.dumps({
+    _mk(inputs.review_path(d.parent.name, d.name)).write_text(json.dumps({
         "status": "edited", "reviewer": "x", "at": "t", "note": "", "gcps": _gcps(demo.true_gcps),
         "change_areas": None, "smoothing": 7.5}))
     runner.run_sheet(demo.page, demo.ref)
@@ -468,7 +474,7 @@ def test_reviewer_default_and_env(env, monkeypatch):
     assert c.post(url(demo, "/save"), json=body).json()["reviewer"] == "owner"
     monkeypatch.setenv("SFZMAPS_REVIEWER", "jane")
     c.post(url(demo, "/save"), json=body)
-    rv = json.loads((d / "review.json").read_text())
+    rv = json.loads(inputs.review_path(d.parent.name, d.name).read_text())
     assert rv["reviewer"] == "jane" and "@" not in json.dumps(rv)
 
 
@@ -711,7 +717,7 @@ def test_save_autofill_promotes_and_matches_preview(env):
     m = [(d / n).stat().st_mtime_ns for n in ("rough.json", "refine_raw.json", "refine.json")]
     assert m == sorted(m)
     assert not (d / "autofill.json").exists()
-    review = json.loads((d / "review.json").read_text())
+    review = json.loads(inputs.review_path(d.parent.name, d.name).read_text())
     assert review["autofill"] == {"seed_points": 6, "matches": af["n_matches"]}
     assert review["smoothing"] == config.TPS_SMOOTHING
 
@@ -726,7 +732,7 @@ def test_save_without_autofill_flag_does_not_promote(env):
                                          "autofill": False})
     assert r.status_code == 200, r.text
     assert (d / "refine.json").read_bytes() == before
-    assert "autofill" not in json.loads((d / "review.json").read_text())
+    assert "autofill" not in json.loads(inputs.review_path(d.parent.name, d.name).read_text())
     assert (d / "autofill.json").exists()
 
 

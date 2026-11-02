@@ -31,7 +31,7 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 
-from sfzmaps import config
+from sfzmaps import config, inputs
 from sfzmaps.districts.categories import CATEGORIES, category_for
 from sfzmaps.districts.series import SERIES
 
@@ -262,11 +262,11 @@ def blocks_of(blklots: pd.Series, parcels: pd.DataFrame | None = None) -> pd.Ser
 
 def apply_overrides(df: pd.DataFrame, series: str, *, column: str = "code",
                     blocks: pd.Series | None = None) -> pd.DataFrame:
-    """overrides/<series>.csv rows (blklot or block, code) set `column` (code at confidence 1;
+    """inputs/<series>/overrides.csv rows (blklot or block, code) set `column` (code at confidence 1;
     for a height series' file, height_code: its value column may be height_code or code).
     A block row applies to every parcel of the block (block_num); a blklot row wins over a
     block row.  Override keys that match no parcel warn."""
-    path = config.DATA_DIR / "overrides" / f"{series}.csv"
+    path = inputs.overrides_path(series)
     if not path.exists():
         return df
     ov = pd.read_csv(path, dtype=str, keep_default_na=False)

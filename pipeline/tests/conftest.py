@@ -1,13 +1,14 @@
 """Test-wide guards: no test may reach the vision API.
 
 * per-region reads (regionread.ENABLED) are off unless a test switches them on;
+* config.INPUTS_DIR points into the test's tmp_path (never the repo's pipeline/inputs/);
 * constructing llm.OpenAIClient raises, so a missing FakeClient fails loudly instead of
   calling the network (or reading pipeline/.env).  Tests of the client itself opt out with
   ``@pytest.mark.real_openai_client`` (they build it with __new__ or a fake SDK).
 """
 import pytest
 
-from sfzmaps import llm
+from sfzmaps import config, llm
 from sfzmaps.districts import regionread
 
 
@@ -23,7 +24,9 @@ def pytest_configure(config):
 
 
 @pytest.fixture(autouse=True)
-def _no_vision_api(request, monkeypatch):
+def _no_vision_api(request, monkeypatch, tmp_path):
+    # hand-made inputs: never the repo's real ones (sfzmaps.inputs reads config.INPUTS_DIR)
+    monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
     monkeypatch.setattr(regionread, "ENABLED", False)
     monkeypatch.setattr(llm, "CACHE_ONLY", False)
     monkeypatch.delenv("SFZMAPS_MAX_USD", raising=False)

@@ -6,9 +6,15 @@ import pytest
 import rasterio
 from rasterio.transform import from_origin
 
-from sfzmaps import config, manifest
+from sfzmaps import inputs, config, manifest
 from sfzmaps.score import SheetScore
 from sfzmaps.tiles import TileReport
+
+
+def _mk(p):
+    """p with its parent made (a review under inputs/<series>/reviews/)."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    return p
 
 
 def _score(passed, p50=3.0, p95=9.0, reason=None):
@@ -60,7 +66,7 @@ def test_manifest_review_status_wins(work):
     w = config.WORK_DIR / "1960"
     for sid, st in [("a", "edited"), ("b", "accepted"), ("c", "needs_work")]:
         _warp(w / sid)
-        (w / sid / "review.json").write_text(json.dumps({"status": st}))
+        _mk(inputs.review_path(w.name, sid)).write_text(json.dumps({"status": st}))
     scores = {k: _score(False, reason="holdout_median") for k in "abc"}
     by = {s["sheet_id"]: s for s in _read(manifest.write("1960", scores))["sheets"]}
     assert (by["a"]["status"], by["b"]["status"], by["c"]["status"]) == ("edited", "accepted", "needs_review")

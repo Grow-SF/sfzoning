@@ -5,7 +5,7 @@ from pathlib import Path
 import cv2
 import typer
 
-from sfzmaps import config
+from sfzmaps import config, inputs
 from sfzmaps.sources import drive
 
 app = typer.Typer(no_args_is_help=True, help="Georeference historic SF zoning maps.")
@@ -430,7 +430,7 @@ def crossref(
                 if (config.WORK_DIR / series / sid / "transform.json").exists():
                     passed.add((series, sid))
             elif not str(sc.reason or "").startswith(("skipped", "error")) \
-                    and not (config.WORK_DIR / series / sid / "review.json").exists():
+                    and not inputs.review_path(series, sid).exists():
                 flagged.setdefault(series, []).append(sid)
     todo = sorted(flagged) if all_ else [year]
     summary: list[str] = []

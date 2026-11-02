@@ -20,7 +20,8 @@ score -> warp. Artifacts live in config.WORK_DIR/<series>/<sheet_id>/:
   transform.json    final transform, with "origin": auto | review | answer_key
   score.json        score                         (transform.json, refine.json, labels.json, rough.json)
   warped.tif        warp                          (transform.json, page.json, page.png)
-  review.json       optional, written by the human review tool; never touched here
+  (inputs/<series>/reviews/<sheet>.json: optional reviewed fit, written by the editor;
+   inputs/<series>/seeds/<sheet>.json: optional pinned rough fit; see sfzmaps.inputs)
 
 Staleness: a stage is skipped when its artifact exists and is strictly newer than every
 input artifact. The reference parquet files count as inputs of rough/refine. A changed
@@ -28,7 +29,11 @@ input artifact. The reference parquet files count as inputs of rough/refine. A c
 (`sfzmaps run --force`) to rerun every stage. Labels are cached per vision call, so
 reruns cost nothing in API calls.
 
-Review: with review.json present (status "edited" or "accepted") and not force_auto, its
+Seed: with inputs/<series>/seeds/<sheet>.json present (and no review), rough.json is that
+file's content (rewritten only when it differs) instead of the automatic rough fit; refine,
+changes, score and warp run from it as usual.
+
+Review: with a review (inputs/<series>/reviews/<sheet>.json) present (status "edited" or "accepted") and not force_auto, its
 GCPs become transform.json (origin "review"), with review.json's "smoothing" (else chosen
 by density, smoothing_for); transform.json is rewritten whenever its content differs from
 the review (not by mtime); rough/refine/changes are skipped, the score
@@ -65,7 +70,7 @@ import cv2
 import numpy as np
 from shapely.geometry import mapping
 
-from sfzmaps import anchors, config, linework, llm, pages, reading, warp
+from sfzmaps import anchors, config, inputs, linework, llm, pages, reading, warp
 from sfzmaps import refine as refine_mod
 from sfzmaps import score as score_mod
 from sfzmaps.pages import Page
@@ -307,7 +312,8 @@ def _review_applied(review: dict, tj: Path, cj: Path) -> bool:
 
 
 def _load_review(d: Path) -> dict | None:
-    p = d / "review.json"
+    """The reviewed fit of sheet dir work/<series>/<sheet> (sfzmaps.inputs), if edited/accepted."""
+    p = inputs.review_path(d.parent.name, d.name)
     if not p.exists():
         return None
     r = json.loads(p.read_text())
@@ -524,7 +530,24 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
             _write_json(rj, {"transform": _transform_json(fit.transform, "auto") if fit else None,
                              "scale_hint_ft_per_px": None if hint is None else _num(hint)})
 
-        stage("rough", rj, [lj, bj, *_ref_inputs()], do_rough)
+        seed_p = inputs.seed_path(page.series, page.sheet_id)
+        if seed_p.exists():
+            # A pinned rough fit (crossref / hand-seeded placement): rough.json is the seed,
+            # rewritten only when its content differs, so refine reruns only when the seed changes.
+            seed = json.loads(seed_p.read_text())
+            cur = None
+            try:
+                cur = json.loads(rj.read_text()) if rj.exists() else None
+            except ValueError:
+                pass
+            if force or cur != seed:
+                _write_json(rj, seed)
+                log.info("%-8s from seed %s", "rough", seed_p.name)
+            else:
+                log.info("%-8s skipped (seed)", "rough")
+            last_timings["rough"] = None
+        else:
+            stage("rough", rj, [lj, bj, *_ref_inputs()], do_rough)
         if stopped("rough"):
             return partial("until: rough")
         rough = json.loads(rj.read_text())["transform"]

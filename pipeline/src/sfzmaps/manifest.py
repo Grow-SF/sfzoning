@@ -9,7 +9,7 @@ from pathlib import Path
 import rasterio
 from rasterio.warp import transform_bounds
 
-from sfzmaps import config
+from sfzmaps import config, inputs
 from sfzmaps.score import SheetScore
 
 
@@ -26,8 +26,8 @@ def _json(path: Path) -> dict | None:
 
 
 def status_of(series: str, sheet_id: str, score: SheetScore) -> str:
-    """"edited" / "accepted" from review.json, else "passed" or "needs_review"."""
-    r = _json(config.WORK_DIR / series / sheet_id / "review.json")
+    """"edited" / "accepted" from the sheet's review (sfzmaps.inputs), else "passed" or "needs_review"."""
+    r = _json(inputs.review_path(series, sheet_id))
     if r and r.get("status") in ("edited", "accepted"):
         return r["status"]
     return "passed" if score.passed else "needs_review"

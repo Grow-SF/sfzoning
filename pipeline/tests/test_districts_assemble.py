@@ -7,7 +7,7 @@ import pandas as pd
 import pytest
 from shapely.geometry import box as _box
 
-from sfzmaps import config
+from sfzmaps import inputs, config
 from sfzmaps.districts import assemble
 
 X0, Y0 = 6006000, 2110000  # San Francisco, EPSG:2227
@@ -40,10 +40,10 @@ def _raw(codes, height=None, conf=0.9, sheet="1"):
                          "confidence": [conf] * n, "source_sheet": [sheet] * n})
 
 
-def _overrides(text):
-    d = config.DATA_DIR / "overrides"
-    d.mkdir(exist_ok=True)
-    (d / "1960.csv").write_text(text)
+def _overrides(text, series="1960"):
+    p = inputs.overrides_path(series)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
 
 
 def test_override_applied_before_join(data, monkeypatch):
@@ -300,9 +300,7 @@ def suffixed(data, monkeypatch):
 
 
 def test_block_overrides_use_block_num(suffixed):
-    d = config.DATA_DIR / "overrides"
-    d.mkdir()
-    (d / "1960.csv").write_text("blklot,block,code\n,2330,C-2\n,0792T,M-1\n0792T021S,,R-1\n")
+    _overrides("blklot,block,code\n,2330,C-2\n,0792T,M-1\n0792T021S,,R-1\n")
     out = assemble.apply_overrides(suffixed, "1960").set_index("blklot")["code"]
     assert out["2330006A"] == "C-2" and out["2330007"] == "C-2"
     assert out["0792T022"] == "M-1" and out["0792T021S"] == "R-1"   # blklot row wins
@@ -321,9 +319,7 @@ def test_blocks_of_and_unzoned_by_block_num(suffixed, monkeypatch):
 
 
 def test_height_series_overrides_set_height_code(data, monkeypatch):
-    d = config.DATA_DIR / "overrides"
-    d.mkdir()
-    (d / "2000-digital-height.csv").write_text("blklot,block,height_code\n1000001,,105-E\n,1001,OS\n")
+    _overrides("blklot,block,height_code\n1000001,,105-E\n,1001,OS\n", "2000-digital-height")
     raws = {"2000-digital-zoning": _raw(["RH-1", "RH-2", "RM-1", "NC-1", "M-1"]),
             "2000-digital-height": _raw([None, None], height=["40-X", "40-X"])}
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: raws[s].copy())

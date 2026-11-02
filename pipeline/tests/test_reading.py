@@ -135,7 +135,7 @@ def test_label_scale_persisted_and_fallbacks(tmp_path, monkeypatch):
     config.save_label_scale("1921", 0.6)  # merges
     assert config.label_scale("1948") == 0.4 and config.label_scale("1921") == 0.6
     assert config.label_scale("1960") == 0.5
-    (tmp_path / "work" / "label_scale.json").write_text("{not json")
+    config._scale_file().write_text("{not json")
     assert config.label_scale("1948") == 0.5  # corrupt file
     assert not list((tmp_path / "work").glob("*.tmp"))
 

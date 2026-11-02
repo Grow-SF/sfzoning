@@ -68,9 +68,9 @@ can change the bytes. Then the labels are re-read and **billed**. Run
 many calls would miss the cache. Either way, `run` re-warps and re-tiles locally
 where outputs are missing.
 
-`pull` never overwrites a `review.json` you edited locally (the incoming copy is saved
-as `review.json.pulled`). It also keeps that sheet's `transform.json`, `score.json`,
-`changes.geojson` and `refine.json`.
+Hand-made inputs (reviews, seeds, page corrections, zoning overrides, the label scale) are in
+git under `inputs/` (see [Inputs](#inputs)), so `pull` never touches them; it skips any an older
+bundle still carries.
 
 ## The pass rule
 
@@ -112,8 +112,8 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
 - `cache/llm/`: cached API answers.
 - `work/<series>/<sheet>/`: per-sheet stages, i.e. `page.png`, `page.json`,
   `labels.json`, `rough.json`, `refine.json`, `changes.geojson`, `transform.json`,
-  `score.json`, `warped.tif`, `warped_paper.tif` (after `paper`), and `review.json` once a
-  human has reviewed it.
+  `score.json`, `warped.tif`, `warped_paper.tif` (after `paper`). Machine output only:
+  everything a person decides is in `inputs/`.
 - `out/<series>/`: `<series>.pmtiles`, `<series>-paper.pmtiles`, `manifest.json` (per-sheet status,
   `needs_review` reasons, scores, limits, bounds), `review.html`.
 - `out/ref/blocks.pmtiles`: today's blocks for the review pages.
@@ -131,23 +131,22 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
    areas highlighted. Drag, add, delete or disable points, and mark areas as
    real change or no modern equivalent. The preview and the held-out score update
    as you edit.
-3. Save. This writes `review.json` and re-runs warp, score, stitch and tile for that
+3. Save. This writes `inputs/<series>/reviews/<sheet>.json` (commit it) and re-runs warp, score, stitch and tile for that
    sheet. A later automatic run never overwrites a human review unless you pass
    `--force-auto`. You can accept a sheet that still fails, with a note.
-   `review.json` records the reviewer as `$SFZMAPS_REVIEWER`, or `"owner"` if that
-   is unset. It never records your git email, because `review.json` is bundled to
-   the shared Drive folder.
+   The review records the reviewer as `$SFZMAPS_REVIEWER`, or `"owner"` if that
+   is unset. It never records your git email, because reviews are committed to the public repository.
    An edited set of 100 or more enabled points (usually the automatic points the
    editor starts from) is fit with the automatic warp's smoothing,
    `TPS_SMOOTHING`. A sparser hand-placed set uses `MANUAL_TPS_SMOOTHING`.
-   `review.json` stores the smoothing it used. The held-out score refits the warp
+   The review stores the smoothing it used. The held-out score refits the warp
    on your edited points, leaving out one group of blocks at a time, so moving or
    disabling points changes it.
 4. **Auto-fill from my points** (needs 4 or more enabled points of your own; `auto`
    points don't count) seeds the automatic matcher from your points and fills in the
    matched block corners. It never saves: review the result, then Save. Saving an
    auto-fill fits it with usually `TPS_SMOOTHING` (the result is dense; under 100 enabled
-   points it is `MANUAL_TPS_SMOOTHING`) and records `autofill` in `review.json`.
+   points it is `MANUAL_TPS_SMOOTHING`) and records `autofill` in the review.
 5. For 1948 and 1960, the editor offers the owner's manual `.points` and adopts
    them when they score better.
 

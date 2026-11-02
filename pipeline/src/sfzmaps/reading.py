@@ -99,7 +99,9 @@ def save(path: Path, obj: BaseModel | list[Label], page_sha256: str | None = Non
 
 
 def load_page(path: Path) -> PageInfo:
-    return PageInfo.model_validate_json(Path(path).read_text())
+    """A page.json with its hand-made patch applied (sfzmaps.inputs.page_dict)."""
+    from sfzmaps import inputs
+    return PageInfo.model_validate(inputs.page_dict(path))
 
 
 def load_labels(path: Path) -> list[Label]:
