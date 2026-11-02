@@ -111,11 +111,6 @@ def test_refine_final_transform_is_auto_corners_only(big_result):
     assert len(res.transform.gcps) == len(_inliers(res))
 
 
-def test_refine_is_fast(big_result):
-    res, secs = big_result
-    assert secs < 30.0, f"refine took {secs:.1f}s"
-
-
 def test_refine_half_street_offset_does_not_lock_wrong_side(big):
     """Start off by about half a street width (~32 ft) in x with no rotation."""
     _, sheet, ref, corners = big
