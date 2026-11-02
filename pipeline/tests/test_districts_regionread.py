@@ -8,6 +8,7 @@ import pytest
 from shapely.geometry import Point
 
 import synthetic_labelmap as sl
+from sfzmaps import answers
 from sfzmaps import config, llm, reading
 from sfzmaps.districts import labels, regionread
 from sfzmaps.districts.labels import DistrictLabel
@@ -137,6 +138,7 @@ def test_assign_parcels_reads_unlabelled_regions():
     d = sl.write_sheet("1960", "s1", lm)
     labs = [lab(c, *sl.CENTRES[n]) for n, c in PRINTED.items()]
     labels.save_labels(d / "district_labels.json", labs, page_sha256=labels.page_sha(d))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
     fake = FakeClient(lambda n, cs: ("R-1", 0.9))
     out = labels.assign_parcels(lm.parcels, d, lm.transform, client=fake).set_index("blklot")
     assert fake.calls >= 1
@@ -185,6 +187,7 @@ def test_cache_only_assign_parcels_with_nothing_cached_inherits():
     d = sl.write_sheet("1960", "s1", lm)
     labs = [lab(c, *sl.CENTRES[n]) for n, c in PRINTED.items()]
     labels.save_labels(d / "district_labels.json", labs, page_sha256=labels.page_sha(d))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
     with llm.cache_only():
         out = labels.assign_parcels(lm.parcels, d, lm.transform, client=Raising()).set_index("blklot")
     assert Raising.calls == 0

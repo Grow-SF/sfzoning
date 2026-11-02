@@ -31,7 +31,7 @@ from shapely import STRtree, voronoi_polygons
 from shapely.geometry import MultiPoint, Point, Polygon
 from shapely.ops import unary_union
 
-from sfzmaps import config, linework, llm, reading
+from sfzmaps import answers, config, linework, llm, reading
 from sfzmaps.transform import SheetTransform
 
 # --- tuning (page px unless noted) ------------------------------------------------------
@@ -208,7 +208,9 @@ def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | 
     d = config.WORK_DIR / series / sheet_id
     art, sha = d / "district_labels.json", page_sha(d)
     key = read_key(series, scale=scale, tile=tile, overlap=overlap)
-    if not force and reading.stored_page_sha256(art) == sha and stored_key(art, series) == key:
+    if not force and reading.stored_page_sha256(art) == sha and stored_key(art, series) == key \
+            and answers.covered(art):
+        answers.consume(art)
         return load_labels(art)
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
     if img is None:
@@ -223,7 +225,8 @@ def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | 
     def one(t):
         return llm.ask_json(t[2], district_prompt(t[2]), _DistrictLabels, client=client)
 
-    results = llm.pmap(one, tiles, config.VISION_CONCURRENCY)
+    with llm.recording() as keys:
+        results = llm.pmap(one, tiles, config.VISION_CONCURRENCY)
     h, w = img.shape
     out: list[DistrictLabel] = []
     for (x0, y0, t), res in zip(tiles, results):
@@ -237,7 +240,9 @@ def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | 
             out.append(DistrictLabel(code=normalise(lb.code), kind=lb.kind, x=x, y=y,
                                      confidence=lb.confidence))
     out = _dedupe(out)
+    answers.write(art, keys)          # sidecar first: an artifact never exists without one
     save_labels(art, out, page_sha256=sha, key=key)
+    answers.consume(art)
     return out
 
 

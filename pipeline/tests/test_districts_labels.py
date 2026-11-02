@@ -7,6 +7,7 @@ import pytest
 from shapely.geometry import Point, box
 
 import synthetic_labelmap as sl
+from sfzmaps import answers
 from sfzmaps import config, llm, reading
 from sfzmaps.districts import labels
 from sfzmaps.districts.labels import DistrictLabel
@@ -136,6 +137,7 @@ def test_parcel_majority_region(tmp_path):
     lm = sl.build(codes=CODES)
     d = sl.write_sheet("1960", "s1", lm)
     labels.save_labels(d / "district_labels.json", _label_list(), page_sha256=labels.page_sha(d))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
     # a parcel straddling the x=410 district line: 70% left of it (R-1 side), 30% right
     straddle = sl.px_box_world(340, 200, 440, 240)
     p = lm.parcels.copy()
@@ -159,6 +161,7 @@ def test_height_labels_fill_height_code():
     labs = [lab(c, *sl.CENTRES[n], kind="height") for n, c in
             {"TL": "40-X", "BL": "40-X", "MID": "65-A", "RIGHT": "40-X", "ISLAND": "OS"}.items()]
     labels.save_labels(d / "district_labels.json", labs, page_sha256=labels.page_sha(d))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
     out = labels.assign_parcels(lm.parcels, d, lm.transform).set_index("blklot")
     assert out.loc["0001001", "height_code"] == "40-X"
     assert out["code"].isna().all()
@@ -171,6 +174,7 @@ def test_fallback_nearest_label():
     x2, y2, x3, y3 = sl.block_px(3, 0)
     labs = [lab("R-1", x0 + 10, y0 + 30), lab("C-2", x1 - 10, y0 + 30), lab("M-1", x2 + 40, y2 + 30)]
     labels.save_labels(d / "district_labels.json", labs, page_sha256=labels.page_sha(d))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
     out = labels.assign_parcels(lm.parcels, d, lm.transform).set_index("blklot")
     assert out.loc["0001001", "code"] == "R-1" and out.loc["0001002", "code"] == "C-2"
     assert out.loc["0004001", "code"] == "M-1" and out.loc["0004002", "code"] == "M-1"
@@ -230,6 +234,7 @@ def _legacy_artifact(tmp_path):
     lab = {"code": "R-1", "kind": "use", "x": 10.0, "y": 10.0, "confidence": 0.9}
     (d / "district_labels.json").write_text(json.dumps({"page_sha256": labels.page_sha(d),
                                                         "labels": [lab]}))
+    answers.write(d / "district_labels.json", [])
     return d
 
 

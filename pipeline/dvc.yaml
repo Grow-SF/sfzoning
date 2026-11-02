@@ -6,6 +6,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -47,6 +48,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -88,6 +90,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -129,6 +132,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -170,6 +174,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -211,6 +216,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -252,6 +258,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -293,6 +300,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -334,6 +342,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -375,6 +384,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -416,6 +426,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -467,6 +478,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -518,6 +530,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -569,6 +582,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -620,6 +634,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
@@ -658,6 +673,7 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
       - src/sfzmaps/cli.py
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py

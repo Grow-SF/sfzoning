@@ -540,3 +540,54 @@ def test_review_wins_over_seed(env, monkeypatch):
     runner.run_sheet(page, ref)
     assert "refine" not in f.calls
     assert json.loads((d / "transform.json").read_text())["origin"] == "review"
+
+
+# --- answer provenance (sfzmaps.answers) ---------------------------------------------------------
+
+KEY_A = "llm/" + "a" * 64 + ".json"
+KEY_B = "llm/" + "b" * 64 + ".json"
+
+
+def test_a_read_writes_its_answers_sidecar(env, monkeypatch):
+    from sfzmaps import answers, llm
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    labels = [Label(kind="block_number", text="1", x=1, y=2, confidence=1.0)]
+    monkeypatch.setattr(runner.reading, "read_labels", lambda p, **k: (llm._record(KEY_A), labels)[1])
+    runner.run_sheet(page, ref)
+    assert answers.read(d / "labels.json") == [KEY_A]
+    assert answers.read(d / "page.json") == []          # the fake classify asks nothing
+
+
+def test_an_artifact_without_sidecar_is_replayed_and_kept_as_is(env, monkeypatch):
+    """Data made before sidecars: re-read (from the cache), the sidecar is written, and the
+    artifact, unchanged, keeps its bytes and mtime, so nothing downstream reruns."""
+    from sfzmaps import answers, llm
+    page, ref, d = env
+    f = Fakes(monkeypatch)
+    labels = [Label(kind="block_number", text="1", x=1, y=2, confidence=1.0)]
+    monkeypatch.setattr(runner.reading, "read_labels", lambda p, **k: (llm._record(KEY_A), labels)[1])
+    runner.run_sheet(page, ref)
+    lj = d / "labels.json"
+    answers.sidecar(lj).unlink()                         # as if made before sidecars
+    before = (lj.read_bytes(), lj.stat().st_mtime_ns)
+    blocks0 = f.calls["blocks"]
+    runner.run_sheet(page, ref)
+    assert answers.read(lj) == [KEY_A]
+    assert (lj.read_bytes(), lj.stat().st_mtime_ns) == before
+    assert f.calls["blocks"] == blocks0                  # no cascade
+
+
+def test_a_replay_that_reads_differently_rewrites_the_artifact(env, monkeypatch):
+    from sfzmaps import answers, llm
+    page, ref, d = env
+    Fakes(monkeypatch)
+    one = [Label(kind="block_number", text="1", x=1, y=2, confidence=1.0)]
+    two = [Label(kind="block_number", text="2", x=1, y=2, confidence=1.0)]
+    monkeypatch.setattr(runner.reading, "read_labels", lambda p, **k: (llm._record(KEY_A), one)[1])
+    runner.run_sheet(page, ref)
+    answers.sidecar(d / "labels.json").unlink()
+    monkeypatch.setattr(runner.reading, "read_labels", lambda p, **k: (llm._record(KEY_B), two)[1])
+    runner.run_sheet(page, ref)
+    assert answers.read(d / "labels.json") == [KEY_B]
+    assert "2" in (d / "labels.json").read_text()
