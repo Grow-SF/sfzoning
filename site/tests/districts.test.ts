@@ -7,16 +7,19 @@ import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
 import { isPartialMap, threePlusShare, type DistrictStats } from "@/lib/stats";
 import { ERAS } from "@/lib/eras";
 import { districtStatsUrl, publishedPath } from "@/lib/tiles";
-import { hashedName, plan } from "../scripts/publish-tiles.mjs";
+import { hashedName, plan, uploadedBytesMatch } from "../scripts/publish-tiles.mjs";
 import { buildRules, parseCsv } from "../scripts/build-rules.mjs";
 
 const PIPELINE_CATEGORIES = [
   "single_family",
   "two_unit",
   "three_unit",
-  "multi_family",
-  "mixed",
-  "commercial",
+  "homes_low",
+  "homes_mid",
+  "homes_high",
+  "homes_top",
+  "commercial_light",
+  "commercial_dense",
   "industrial",
   "public",
   "unrestricted",
@@ -41,7 +44,7 @@ describe("shared archive", () => {
     archive: "shared/districts-abc.pmtiles",
     table: "shared/districts-abc.table.gz",
     cards: "shared/districts-abc.cards.json.gz",
-    categories: ["single_family", "commercial"],
+    categories: ["single_family", "commercial_dense"],
     lots: 3,
     lineSets: 1,
     eras: ["1929", "1948"],
@@ -60,7 +63,7 @@ describe("shared archive", () => {
     expect(parseManifest(null)).toBeNull();
   });
   it("finds a lot's category per era, and none where the map doesn't cover it", () => {
-    expect(lotCategory(shared, 0, 1)).toBe("commercial");
+    expect(lotCategory(shared, 0, 1)).toBe("commercial_dense");
     expect(lotCategory(shared, 1, 2)).toBe("single_family");
     expect(lotCategory(shared, 0, 2)).toBeNull();
   });
@@ -205,9 +208,35 @@ describe("threePlusShare", () => {
   const stats = (o: Partial<Record<string, number>>): DistrictStats =>
     Object.fromEntries(PIPELINE_CATEGORIES.map((c) => [c, { ...z, parcels: o[c] ?? 0 }])) as unknown as DistrictStats;
   it("is the share of residential parcels that allow three or more homes", () => {
-    expect(threePlusShare(stats({ single_family: 50, two_unit: 25, three_unit: 5, multi_family: 10, mixed: 10, commercial: 999 }))).toBeCloseTo(0.25);
+    expect(threePlusShare(stats({ single_family: 50, two_unit: 25, three_unit: 5, homes_low: 4, homes_mid: 3, homes_high: 2, homes_top: 1, commercial_dense: 999 }))).toBeCloseTo(15 / 90);
+  });
+  it("counts all homes_* steps and three_unit as three-plus, and adds one and two homes to the total", () => {
+    expect(threePlusShare(stats({ three_unit: 1, homes_low: 1, homes_mid: 1, homes_high: 1, homes_top: 1 }))).toBe(1);
+    expect(threePlusShare(stats({ single_family: 3, two_unit: 3, homes_top: 4 }))).toBeCloseTo(0.4);
+    expect(threePlusShare(stats({ commercial_light: 5, industrial: 5, homes_top: 1 }))).toBe(1);
   });
   it("is null with no residential parcels", () => {
-    expect(threePlusShare(stats({ commercial: 4 }))).toBeNull();
+    expect(threePlusShare(stats({ commercial_dense: 4 }))).toBeNull();
+  });
+});
+
+describe("uploadedBytesMatch", () => {
+  const noWait = async () => {};
+  const reads = (...hashes: (string | null)[]) => {
+    const calls = { n: 0 };
+    return { calls, read: async () => hashes[Math.min(calls.n++, hashes.length - 1)] };
+  };
+
+  it("waits out a store that hasn't caught up yet", async () => {
+    const { read, calls } = reads(null, "old", "h1");
+    expect(await uploadedBytesMatch(read, "h1", noWait)).toBe(true);
+    expect(calls.n).toBe(3);
+  });
+
+  it("still fails on a real mismatch, after a bounded number of reads", async () => {
+    const { read, calls } = reads("other");
+    expect(await uploadedBytesMatch(read, "h1", noWait)).toBe(false);
+    expect(calls.n).toBeLessThan(10);
+    expect(calls.n).toBeGreaterThan(1);
   });
 });

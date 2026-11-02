@@ -9,11 +9,11 @@ def _df(rows):
 
 
 def test_agreement_math():
-    a = _df([("1", "RH-1", "single_family"), ("2", "RH-2", "two_unit"), ("3", "RM-1", "multi_family"),
-             ("4", "NC-2", "mixed"), ("5", None, "unknown"), ("6", "M-1", "industrial"),
+    a = _df([("1", "RH-1", "single_family"), ("2", "RH-2", "two_unit"), ("3", "RM-1", "homes_low"),
+             ("4", "NC-2", "homes_low"), ("5", None, "unknown"), ("6", "M-1", "industrial"),
              ("9", "P", "public")])
-    b = _df([("1", "RH-1(D)", "single_family"), ("2", "RH-2", "two_unit"), ("3", "NCT-3", "mixed"),
-             ("4", "NC-2", "mixed"), ("5", "RH-1", "single_family"), ("6", "PDR-1-G", "industrial"),
+    b = _df([("1", "RH-1(D)", "single_family"), ("2", "RH-2", "two_unit"), ("3", "NCT-3", "homes_top"),
+             ("4", "NC-2", "homes_low"), ("5", "RH-1", "single_family"), ("6", "PDR-1-G", "industrial"),
              ("7", "P", "public")])
     r = validate.agreement(a, b)
     assert r["n_common"] == 6                     # 1-6; 7 and 9 are one-sided
@@ -25,7 +25,7 @@ def test_agreement_math():
     assert r["by_family"]["RH"] == {"n": 2, "agree": 2, "share": 1.0}
     assert r["family_confusion"]["RM"] == {"NCT": 1}
     assert r["family_confusion"]["M"] == {"PDR": 1}
-    assert r["category_confusion"]["multi_family"] == {"mixed": 1}
+    assert r["category_confusion"]["homes_low"] == {"homes_top": 1}
     assert r["by_category"]["single_family"]["share"] == 1.0
 
 

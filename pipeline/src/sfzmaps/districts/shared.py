@@ -35,12 +35,13 @@ from sfzmaps.districts.assemble import MAX_ZOOM, MIN_ZOOM, _has_pmtiles
 log = logging.getLogger(__name__)
 
 # Part of the archive's name: raise it when the same inputs would now build a different archive.
-ARCHIVE_FORMAT = 4
+ARCHIVE_FORMAT = 5
 # The site refuses a pointer whose version it doesn't know, and uses the per-year files instead.
 MANIFEST_VERSION = 2
 # Same order as the table's numbers; the pointer carries it, so the site never assumes it.
-CATEGORIES = ("single_family", "two_unit", "three_unit", "multi_family", "mixed", "commercial",
-              "industrial", "public", "unrestricted", "unknown")
+CATEGORIES = ("single_family", "two_unit", "three_unit", "homes_low", "homes_mid", "homes_high",
+              "homes_top", "commercial_light", "commercial_dense", "industrial", "public",
+              "unrestricted", "unknown")
 NO_VALUE = 255
 # District-line vertices match across years to a tenth of a foot (EPSG:2227 is in feet).
 EDGE_SNAP = 10

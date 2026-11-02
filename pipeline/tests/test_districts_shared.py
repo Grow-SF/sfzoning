@@ -41,7 +41,7 @@ def polygons(*shapes):
 @pytest.fixture
 def out(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "OUT_DIR", tmp_path / "out")
-    write_series("1948", {"1000001": ("R-1", None, "single_family"), "1000002": ("C-2", None, "commercial")})
+    write_series("1948", {"1000001": ("R-1", None, "single_family"), "1000002": ("C-2", None, "commercial_light")})
     write_series("1990-1996-zoning", {"1000001": ("RH-2", "40-X", "two_unit"), "1001001": ("M-1", None, "industrial")})
     return config.OUT_DIR
 
@@ -77,7 +77,7 @@ def test_smaller_lots_get_lower_numbers_so_they_draw_over_larger_ones(out):
 def test_lots_stacked_on_one_footprint_with_the_same_values_draw_once(out):
     condo = dict(GEOM, **{"1000003": GEOM["1000001"]})
     write_series("1960", {"1000001": ("R-1", None, "single_family"), "1000003": ("R-1", None, "single_family"),
-                          "1000002": ("C-2", None, "commercial")}, geom=condo)
+                          "1000002": ("C-2", None, "commercial_light")}, geom=condo)
     assert sorted(shared.merge(["1960"])["blklot"]) == ["1000001", "1000002"]
 
 
@@ -159,7 +159,7 @@ def test_only_full_series_are_included(out):
 def test_the_archive_name_follows_the_data(out):
     a = shared.source_hashes(["1948", "1990-1996-zoning"])
     shutil.rmtree(out / "1948")
-    write_series("1948", {"1000001": ("R-2", None, "two_unit"), "1000002": ("C-2", None, "commercial")})
+    write_series("1948", {"1000001": ("R-2", None, "two_unit"), "1000002": ("C-2", None, "commercial_light")})
     assert shared.archive_name(shared.source_hashes(["1948", "1990-1996-zoning"])) != shared.archive_name(a)
 
 

@@ -7,9 +7,17 @@ export type DistrictStats = Record<Category, { parcels: number; area_sqft: numbe
   unmapped_parcels?: number;
 };
 
-const RESIDENTIAL: Category[] = ["single_family", "two_unit", "three_unit", "multi_family", "mixed"];
-const THREE_PLUS: Category[] = ["three_unit", "multi_family", "mixed"];
-const ALL: Category[] = [...RESIDENTIAL, "commercial", "industrial", "public", "unrestricted", "unknown"];
+const THREE_PLUS: Category[] = ["three_unit", "homes_low", "homes_mid", "homes_high", "homes_top"];
+const RESIDENTIAL: Category[] = ["single_family", "two_unit", ...THREE_PLUS];
+const ALL: Category[] = [
+  ...RESIDENTIAL,
+  "commercial_light",
+  "commercial_dense",
+  "industrial",
+  "public",
+  "unrestricted",
+  "unknown",
+];
 
 // Whole maps miss about 2% of lots at most (scattered, and lots newer than the map); 1990-96 misses 8%.
 const MIN_LOT_COVERAGE = 0.95;
@@ -22,7 +30,7 @@ export function isPartialMap(stats: DistrictStats): boolean {
 }
 
 /**
- * Of the parcels zoned for homes (single-family through mixed residential-commercial),
+ * Of the parcels on the homes scale (single-family through the densest steps, mixed-use included),
  * the share whose district allowed three or more homes per lot. null if none are residential.
  */
 export function threePlusShare(stats: DistrictStats): number | null {

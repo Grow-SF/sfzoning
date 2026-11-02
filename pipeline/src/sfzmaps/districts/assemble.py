@@ -43,10 +43,11 @@ MIN_ZOOM, MAX_ZOOM = 11, 16
 COLUMNS = ["blklot", "code", "height_code", "confidence", "source_sheet"]
 TILE_PARCEL_PROPS = ["blklot", "code", "height_code", "category", "confidence"]
 # Story-category colours shared by the review page (and a starting point for the site).
-COLORS = {"single_family": "#f6d55c", "two_unit": "#f4a259", "three_unit": "#e07a3f",
-          "multi_family": "#c0392b", "mixed": "#9b59b6", "commercial": "#3b7dd8",
-          "industrial": "#7f8c8d", "public": "#2e9e5b", "unrestricted": "#4a2f27",
-          "unknown": "#d9d9d9"}
+COLORS = {"single_family": "#fe4400", "two_unit": "#f89600", "three_unit": "#ffee66",
+          "homes_low": "#a0f5be", "homes_mid": "#5cda80", "homes_high": "#2cb25a",
+          "homes_top": "#009600", "commercial_light": "#89d7ff", "commercial_dense": "#1149af",
+          "industrial": "#85420b", "public": "#97a1b1", "unrestricted": "#8562af",
+          "unknown": "#ffffff"}
 
 
 def out_dir(series: str, *, partial: bool = False) -> Path:

@@ -45,7 +45,7 @@
 /* ---------- Full key ---------- */
 
 .legend {
-  width: 10.25rem;
+  width: 11rem;
   margin: 0;
   padding: 0.45rem 0.55rem 0.5rem;
   font-size: 0.6875rem;
@@ -59,10 +59,10 @@
   font-weight: 700;
 }
 
-/* A stepped ramp: lightness carries "more homes", so it reads without hue. */
+/* A stepped scale from red (one home) to the richest green (20+ or no limit). */
 .ramp {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(7, 1fr);
   margin: 0;
   padding: 0;
   list-style: none;
@@ -124,11 +124,12 @@
   .chip { display: none; }
   .wrap[data-compact] .legend { display: block; margin-top: 0; }
   .legend {
-    width: 15.5rem;
-    padding: 0.6rem 0.75rem 0.65rem;
+    width: 16.25rem; /* no wider: at 960px it would reach the Rumsey credit */
+    padding: 0.6rem 0.6rem 0.65rem;
     font-size: 0.75rem;
   }
-  .uses { grid-template-columns: 1fr 1fr; column-gap: 0.75rem; }
+  .uses { grid-template-columns: auto auto; justify-content: space-between; column-gap: 0.35rem; }
+  .uses li { gap: 0.25rem; }
 }
 
 :global(.explorer-map) .wrap {

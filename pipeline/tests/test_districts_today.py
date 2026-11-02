@@ -31,5 +31,5 @@ def test_today_categories():
                  ("C-3-O", "C-3-O", box(35, 0, 60, 10))])
     out = today.assign_today(parcels, zoning).set_index("blklot")
     assert out.loc["a", "category"] == "single_family"
-    assert out.loc["b", "category"] == "multi_family"
-    assert out.loc["c", "category"] == "commercial"
+    assert out.loc["b", "category"] == "homes_low"
+    assert out.loc["c", "category"] == "commercial_dense"
