@@ -1,11 +1,13 @@
 """Disk-cached OpenAI vision client returning structured (pydantic) output."""
 import argparse
 import base64
+import contextvars
 import hashlib
 import json
 import logging
 import os
 import random
+import re
 import sys
 import tempfile
 import threading
@@ -269,6 +271,35 @@ def is_cached(image: np.ndarray, prompt: str, schema: type[BaseModel]) -> bool:
     return (CACHE_DIR / "llm" / f"{_key(_encode(image), prompt, schema)}.json").exists()
 
 
+# --- answer provenance ------------------------------------------------------------------------
+# Every artifact made from vision answers records the keys it was made from (sfzmaps.answers), so
+# the answers a commit needs are known from its data, not from what a run happened to touch.
+# A recording is a scope: keys read or stored inside it go to the innermost one (an inner read
+# that writes its own artifact claims its keys), and llm.pmap carries it into worker threads.
+ANSWER_KEY = re.compile(r"^llm/(tiles/)?[0-9a-f]{64}\.json$")
+_RECORDING: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar("answer_recording", default=None)
+_RECORD_LOCK = threading.Lock()
+
+
+@contextmanager
+def recording():
+    """Collect the answer keys (cache paths like "llm/<key>.json", "llm/tiles/<key>.json")
+    used inside, from any thread llm.pmap runs."""
+    keys: set[str] = set()
+    token = _RECORDING.set(keys)
+    try:
+        yield keys
+    finally:
+        _RECORDING.reset(token)
+
+
+def _record(rel: str) -> None:
+    keys = _RECORDING.get()
+    if keys is not None:
+        with _RECORD_LOCK:
+            keys.add(rel)
+
+
 def tile_key(tile_rgb: np.ndarray, context: str) -> str:
     """Key of one tile's answer: its PNG bytes, the caller's context string (prompt, schema,
     anything else the answer depends on) and the provider / model / parameters."""
@@ -299,6 +330,7 @@ def tile_get(key: str) -> dict | None:
         path.unlink(missing_ok=True)
         return None
     CallCounter.bump("tile_hits")
+    _record(f"llm/tiles/{key}.json")
     return answer
 
 
@@ -316,6 +348,7 @@ def tile_put(key: str, answer: dict) -> None:
             pass
     finally:
         Path(tmp_name).unlink(missing_ok=True)
+    _record(f"llm/tiles/{key}.json")      # what later runs read under this key (first wins)
 
 
 def max_usd() -> float | None:
@@ -357,7 +390,8 @@ def pmap(fn, items, workers: int) -> list:
     if not items:
         return []
     ex = ThreadPoolExecutor(max(1, min(workers, len(items))))
-    futs = [ex.submit(fn, x) for x in items]
+    # each call runs in a copy of the caller's context, so an answer recording reaches it
+    futs = [ex.submit(contextvars.copy_context().run, fn, x) for x in items]
     try:
         out = [f.result() for f in futs]
     except (*FATAL, KeyboardInterrupt) as e:
@@ -375,7 +409,8 @@ def pmap(fn, items, workers: int) -> list:
 def ask_json(image: np.ndarray, prompt: str, schema: type[T], *,
              client: LLMClient | None = None) -> T:
     png = _encode(image)
-    path = CACHE_DIR / "llm" / f"{_key(png, prompt, schema)}.json"
+    key = _key(png, prompt, schema)
+    path = CACHE_DIR / "llm" / f"{key}.json"
     if path.exists():
         try:
             cached = schema.model_validate_json(path.read_text())
@@ -384,6 +419,7 @@ def ask_json(image: np.ndarray, prompt: str, schema: type[T], *,
             path.unlink(missing_ok=True)
         else:
             CallCounter.bump("hits")
+            _record(f"llm/{key}.json")
             return cached
     if CACHE_ONLY:
         raise LLMCacheMiss(f"cache-only run: no cached answer ({path.name})")
@@ -404,10 +440,13 @@ def ask_json(image: np.ndarray, prompt: str, schema: type[T], *,
     try:
         with os.fdopen(fd, "w") as f:
             f.write(result.model_dump_json())
-        os.replace(tmp_name, path)
-    except BaseException:
+        try:
+            os.link(tmp_name, path)       # put-if-absent: never replace a stored answer
+        except FileExistsError:           # another process stored one meanwhile: it wins, so
+            result = schema.model_validate_json(path.read_text())   # every user agrees on it
+    finally:
         Path(tmp_name).unlink(missing_ok=True)
-        raise
+    _record(f"llm/{key}.json")
     return result
 
 

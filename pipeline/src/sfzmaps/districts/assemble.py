@@ -446,7 +446,11 @@ def run_series(series: str, *, sheets: list[str] | None = None, client=None,
         raise ValueError(f"{series}: special-use series are out of scope")
     partial = bool(sheets)
     skipped0 = regionread.Stats.skipped
-    with llm.cache_only(cache_only or llm.CACHE_ONLY):
+    from sfzmaps import answers
+
+    # everything the read was made from: pattern / region reads, plus the answers of the legend
+    # and district-label artifacts it consumed (answers.consume), fresh or not
+    with llm.cache_only(cache_only or llm.CACHE_ONLY), llm.recording() as keys:
         raw = read_raw(series, sheets=sheets, client=client)
     prov = provenance(series, cache_only=cache_only or llm.CACHE_ONLY,
                       region_misses=regionread.Stats.skipped - skipped0)
@@ -456,6 +460,7 @@ def run_series(series: str, *, sheets: list[str] | None = None, client=None,
         zs = zoning_series_of(series)
         d = out_dir(zs, partial=partial)
         d.mkdir(parents=True, exist_ok=True)
+        answers.write(d / "height.parquet", keys)        # sidecar first
         raw[["blklot", "height_code", "confidence", "source_sheet"]].to_parquet(d / "height.parquet")
         _write_json(_height_prov_path(zs, partial=partial), prov)
         if partial:
@@ -466,6 +471,7 @@ def run_series(series: str, *, sheets: list[str] | None = None, client=None,
         return d
     raw_path = _raw_path(series, partial=partial)
     raw_path.parent.mkdir(parents=True, exist_ok=True)
+    answers.write(raw_path, keys)                          # sidecar first
     raw.to_parquet(raw_path)
     _write_json(_prov_path(series, partial=partial), prov)
     return publish(series, raw, info.year, partial=partial)

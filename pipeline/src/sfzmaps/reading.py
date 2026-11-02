@@ -89,13 +89,18 @@ def save(path: Path, obj: BaseModel | list[Label], page_sha256: str | None = Non
     and labels.json becomes {"page_sha256": ..., "labels": [...]} (a bare list without)."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(dumps(obj, page_sha256))
+    tmp.replace(path)
+
+
+def dumps(obj: BaseModel | list[Label], page_sha256: str | None = None) -> str:
+    """The exact text save() writes."""
     data = [x.model_dump() for x in obj] if isinstance(obj, list) else obj.model_dump()
     if page_sha256 is not None:
         data = {"page_sha256": page_sha256, "labels": data} if isinstance(data, list) \
             else {**data, "page_sha256": page_sha256}
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=1))
-    tmp.replace(path)
+    return json.dumps(data, indent=1)
 
 
 def load_page(path: Path) -> PageInfo:

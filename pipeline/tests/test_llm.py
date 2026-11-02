@@ -386,3 +386,67 @@ def test_tile_get_corrupt_file_is_a_miss(tmp_path, monkeypatch):
     k = llm.tile_key(np.zeros((96, 96, 3), np.uint8), "ctx")
     p = tmp_path / "llm" / "tiles" / f"{k}.json"; p.parent.mkdir(parents=True); p.write_text("{nope")
     assert llm.tile_get(k) is None and not p.exists()
+
+
+# --- answer provenance ------------------------------------------------------------------------
+
+def _keys_of(img, prompt):
+    return f"llm/{llm._key(llm._encode(img), prompt, Ans)}.json"
+
+
+def test_recording_captures_live_answers_and_cache_hits():
+    c = FakeClient()
+    with llm.recording() as live:
+        llm.ask_json(IMG, "a", Ans, client=c)
+    with llm.recording() as hit:
+        llm.ask_json(IMG, "a", Ans, client=c)
+    assert live == hit == {_keys_of(IMG, "a")} and c.calls == 1
+    assert all(llm.ANSWER_KEY.match(k) for k in live)
+    llm.ask_json(IMG, "b", Ans, client=c)                     # outside any recording: fine
+
+
+def test_an_inner_recording_claims_its_keys():
+    c = FakeClient()
+    with llm.recording() as outer:
+        llm.ask_json(IMG, "outer", Ans, client=c)
+        with llm.recording() as inner:
+            llm.ask_json(IMG, "inner", Ans, client=c)
+    assert outer == {_keys_of(IMG, "outer")} and inner == {_keys_of(IMG, "inner")}
+
+
+def test_pmap_workers_record_into_the_callers_recording():
+    c = FakeClient()
+    prompts = [f"p{i}" for i in range(12)]
+    with llm.recording() as keys:
+        llm.pmap(lambda p: llm.ask_json(IMG, p, Ans, client=c), prompts, workers=4)
+    assert keys == {_keys_of(IMG, p) for p in prompts}
+
+
+def test_tile_reads_and_writes_are_recorded():
+    rgb = np.zeros((8, 8, 3), np.uint8)
+    k = llm.tile_key(rgb, "ctx")
+    with llm.recording() as put:
+        llm.tile_put(k, {"code": "R-1", "confidence": 0.9})
+    with llm.recording() as got:
+        assert llm.tile_get(k) == {"code": "R-1", "confidence": 0.9}
+    assert put == got == {f"llm/tiles/{k}.json"}
+    with llm.recording() as miss:
+        assert llm.tile_get("0" * 64) is None
+    assert miss == set()
+
+
+def test_a_stored_answer_is_never_replaced_and_the_late_writer_uses_it(monkeypatch):
+    """Two worktrees asking the same question at once: the first stored answer wins for both,
+    so what each records is what the cache holds."""
+    class Racing(FakeClient):
+        def call(self, png, prompt, schema):
+            # another process stores its answer while this call is in flight
+            path = llm.CACHE_DIR / "llm" / f"{llm._key(png, prompt, schema)}.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(Ans(n=99).model_dump_json())
+            return Ans(n=1)
+
+    got = llm.ask_json(IMG, "same", Ans, client=Racing())
+    assert got == Ans(n=99)
+    assert Ans.model_validate_json((llm.CACHE_DIR / "llm" / f"{llm._key(llm._encode(IMG), 'same', Ans)}.json").read_text()) == Ans(n=99)
+    assert not list((llm.CACHE_DIR / "llm").glob("*.tmp"))

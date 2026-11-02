@@ -20,7 +20,7 @@ import geopandas as gpd
 import numpy as np
 from shapely.geometry import box
 
-from sfzmaps import config, linework, runner
+from sfzmaps import answers, config, linework, runner
 from sfzmaps import score as score_mod
 from sfzmaps.pages import Page
 from sfzmaps.refine import Match, RefineResult
@@ -143,4 +143,6 @@ def build_demo(root: Path, *, set_config: bool = True) -> Demo:
     for i, (p, fn) in enumerate(steps):  # strictly increasing mtimes: every stage looks fresh
         fn(p)
         os.utime(p, ns=(t0 + i * 10_000_000, t0 + i * 10_000_000))
+    for p in (d / "page.json", d / "labels.json"):   # synthetic: made from no vision answers
+        answers.write(p, [])
     return Demo(Page(SERIES, SHEET, source, None), ref, SERIES, SHEET, work, list(BAD_INDICES), true_gcps)

@@ -23,3 +23,6 @@ pipeline/data/work/label_scale.json
 # would make every stage look stale after a checkout or a different Python
 **/__pycache__/
 *.pyc
+# scratch a crash can leave behind (tiling now works in data/tmp; crossref backups in sheet dirs)
+pipeline/data/out/*/sfzmaps-tiles-*/
+pipeline/data/work/*/*/crossref-*/

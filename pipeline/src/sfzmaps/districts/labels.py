@@ -19,8 +19,9 @@ height maps print 40-X, 65-A...).  Steps, all in page pixels until the parcel jo
 from __future__ import annotations
 
 import hashlib
-import re
 import json
+import logging
+import re
 from pathlib import Path
 from typing import Literal
 
@@ -31,8 +32,10 @@ from shapely import STRtree, voronoi_polygons
 from shapely.geometry import MultiPoint, Point, Polygon
 from shapely.ops import unary_union
 
-from sfzmaps import config, linework, llm, reading
+from sfzmaps import answers, config, linework, llm, reading
 from sfzmaps.transform import SheetTransform
+
+log = logging.getLogger(__name__)
 
 # --- tuning (page px unless noted) ------------------------------------------------------
 HEAVY_FACTOR = 1.6       # heavy line: estimated width >= this x the thin stroke width ...
@@ -208,8 +211,29 @@ def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | 
     d = config.WORK_DIR / series / sheet_id
     art, sha = d / "district_labels.json", page_sha(d)
     key = read_key(series, scale=scale, tile=tile, overlap=overlap)
-    if not force and reading.stored_page_sha256(art) == sha and stored_key(art, series) == key:
+    fresh = not force and reading.stored_page_sha256(art) == sha and stored_key(art, series) == key
+    if fresh and answers.covered(art):
+        answers.consume(art)
         return load_labels(art)
+    if fresh:     # made before answers were recorded: replay it from the cache, never paying
+        try:
+            with llm.cache_only(True):
+                again = _read(d, series, sha, key, scale, tile, overlap, client, write=False)
+        except llm.LLMCacheMiss:
+            log.info("%s/%s: district labels kept as is (answers not all cached under today's "
+                     "prompt; `sfzmaps answers --baseline` lists it)", series, sheet_id)
+            return load_labels(art)
+        if again[0] == load_labels(art):
+            answers.write(art, again[1])
+            answers.consume(art)
+            return load_labels(art)
+    return _read(d, series, sha, key, scale, tile, overlap, client)[0]
+
+
+def _read(d, series, sha, key, scale, tile, overlap, client, write: bool = True):
+    """Read a sheet's district labels under recording: (labels, answer keys); with write, save
+    them (sidecar first) and fold their answers into the current recording."""
+    art = d / "district_labels.json"
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise RuntimeError(f"cannot read {d / 'page.png'}")
@@ -223,7 +247,8 @@ def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | 
     def one(t):
         return llm.ask_json(t[2], district_prompt(t[2]), _DistrictLabels, client=client)
 
-    results = llm.pmap(one, tiles, config.VISION_CONCURRENCY)
+    with llm.recording() as keys:
+        results = llm.pmap(one, tiles, config.VISION_CONCURRENCY)
     h, w = img.shape
     out: list[DistrictLabel] = []
     for (x0, y0, t), res in zip(tiles, results):
@@ -237,8 +262,11 @@ def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | 
             out.append(DistrictLabel(code=normalise(lb.code), kind=lb.kind, x=x, y=y,
                                      confidence=lb.confidence))
     out = _dedupe(out)
-    save_labels(art, out, page_sha256=sha, key=key)
-    return out
+    if write:
+        answers.write(art, keys)          # sidecar first: an artifact never exists without one
+        save_labels(art, out, page_sha256=sha, key=key)
+        answers.consume(art)
+    return out, keys
 
 
 # --- boundaries -------------------------------------------------------------------------

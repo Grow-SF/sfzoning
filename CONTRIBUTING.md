@@ -82,6 +82,9 @@ are reused, so most work doesn't need it.
 3. Run the tests for what you touched:
    - site: `npm run lint`, `npx tsc --noEmit` and `npm test` in `site/`;
    - pipeline: `uv run pytest` in `pipeline/`.
+   If you changed pipeline data, build (`uv run sfzmaps build`), commit `dvc.lock`, then
+   `uv run sfzmaps ship` once the branch is ready (it needs the owner's Blob token; ask in the
+   pull request if you don't have it). The `Cache shipped` check fails until then.
 4. There are no browser tests; the owner checks the site by eye. If you
    changed the site, say what to look at.
 5. Open a pull request against `main`. Say what changed and why; for map or

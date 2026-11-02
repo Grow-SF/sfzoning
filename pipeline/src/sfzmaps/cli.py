@@ -532,13 +532,73 @@ def push() -> None:
     typer.echo("pushed")
 
 
-@app.command()
-def pull() -> None:
-    """Download processed zips from the public Drive processed/ folder and extract them into data/."""
+@app.command("answers")
+def answers_cmd(
+    check: bool = typer.Option(False, "--check", help="List live artifacts whose answers aren't "
+                                                     "recorded (no sidecar, no baseline entry)."),
+    baseline: bool = typer.Option(False, "--baseline", help="Record every artifact still without a "
+                                                           "sidecar in pipeline/cache-baseline.json."),
+) -> None:
+    """Answer provenance (sfzmaps.answers): which artifacts know the answers they were made from.
+    A build replays old artifacts from the cache at $0; --baseline records what's left."""
+    from sfzmaps import answers, ship as ship_mod
+
+    if baseline:
+        n = answers.write_baseline(answers.all_artifacts())
+        typer.echo(f"{answers.baseline_path()}: {n} artifact(s) accepted as they are (commit it)")
+        return
+    _, unknown = ship_mod.needed_answers()
+    for p in unknown:
+        typer.echo(str(p))
+    typer.echo(f"{len(unknown)} live artifact(s) without recorded answers")
+    if check and unknown:
+        raise typer.Exit(1)
+
+
+@app.command("pull-drive")
+def pull_drive() -> None:
+    """Older way to get data: the processed zips from the public Drive processed/ folder,
+    extracted into data/. `sfzmaps pull` gets exactly this commit's cache instead."""
     from sfzmaps import share
 
     share.pull()
     typer.echo("pulled")
+
+
+@app.command()
+def pull(no_checkout: bool = typer.Option(False, "--no-checkout",
+                                          help="Fetch into the caches but don't check data out.")) -> None:
+    """This commit's cache from the Blob store (public, no token): the answer packs it records
+    and the data its dvc.lock names. Then `sfzmaps build` finds nothing to do, at $0."""
+    from sfzmaps import ship as ship_mod
+
+    try:
+        packs, objs = ship_mod.pull(dvc_checkout=not no_checkout)
+    except ship_mod.ShipError as e:
+        typer.echo(f"pull: {e}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"pulled: {packs} answer pack(s) applied, {objs} data object(s) fetched")
+
+
+@app.command()
+def ship(
+    base: str = typer.Option("origin/main", "--base", help="What the branch merges into."),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Say what would upload; upload nothing."),
+) -> None:
+    """When a branch is ready to merge: upload the answers and data this commit needs that
+    `--base` hasn't shipped, to the Blob store, and commit the new answer pack's record (push it
+    with the branch). Needs site/.env.local (BLOB_READ_WRITE_TOKEN). Never calls the vision API."""
+    from sfzmaps import ship as ship_mod
+
+    try:
+        r = ship_mod.ship(base, dry_run=dry_run)
+    except ship_mod.ShipError as e:
+        typer.echo(f"ship: {e}", err=True)
+        raise typer.Exit(1)
+    verb = "would upload" if dry_run else "uploaded"
+    typer.echo(f"{verb} {r.objects_uploaded} of {r.objects_total} data object(s) "
+               f"({r.bytes_uploaded / 1e9:.2f} GB) and {r.new_answers} new answer(s)"
+               + (f" as pack {r.pack[:12]} (record committed; push the branch)" if r.pack else ""))
 
 
 @app.command()

@@ -36,7 +36,7 @@ import numpy as np
 import pandas as pd
 from pydantic import BaseModel
 
-from sfzmaps import config, inputs, llm
+from sfzmaps import answers, config, inputs, llm
 from sfzmaps.districts import sampling
 
 log = logging.getLogger(__name__)
@@ -231,7 +231,36 @@ def legend_swatches(series: str, *, client=None) -> dict[str, np.ndarray]:
                      series, saved.relative_to(root))
             continue
         d = json.loads(saved.read_text())
+        if not answers.covered(saved):    # made before answers were recorded: replay, never paying
+            try:
+                with llm.cache_only(True), llm.recording() as keys:
+                    again = _read_legend(series, root, client)
+            except llm.LLMCacheMiss:
+                again = None
+            if again is not None and again[0] / "district_legend.json" == saved \
+                    and again[2] == d["swatches"]:
+                answers.write(saved, keys)
+            else:
+                log.info("%s: %s kept as is (answers not all cached under today's prompt; "
+                         "`sfzmaps answers --baseline` lists it)", series, saved.relative_to(root))
+        answers.consume(saved)
         return _swatches_from_boxes(series, d["sheet"], d["swatches"])
+    with llm.recording() as keys:
+        found_at = _read_legend(series, root, client)
+    answers.record(keys)      # a rebuild asks the same boxes again, legend found or not
+    if found_at is not None:
+        sheet_dir, art, found = found_at
+        answers.write(sheet_dir / "district_legend.json", keys)   # sidecar first
+        (sheet_dir / "district_legend.json").write_text(json.dumps(art, indent=1))
+        return _swatches_from_boxes(series, sheet_dir.name, found)
+    if cfg:
+        return _swatches_from_boxes(series, cfg["sheet"], cfg["swatches"])
+    raise RuntimeError(f"no legend found for series {series}; add it to {LEGENDS_JSON.name}")
+
+
+def _read_legend(series: str, root: Path, client):
+    """Vision read of the legend from the page.json mask boxes: (sheet dir, artifact, swatch
+    boxes) for the first box that reads as a legend of >= 3 era codes, else None."""
     codes = era_codes(series)
     prompt = legend_prompt(codes)
     calls = 0
@@ -271,11 +300,8 @@ def legend_swatches(series: str, *, client=None) -> dict[str, np.ndarray]:
             if len(found) >= 3:
                 art = {"sheet": sheet_dir.name, "mask_box": mb, "swatches": found, "labels": labels,
                        "source": "vision", **legend_key(series)}
-                (sheet_dir / "district_legend.json").write_text(json.dumps(art, indent=1))
-                return _swatches_from_boxes(series, sheet_dir.name, found)
-    if cfg:
-        return _swatches_from_boxes(series, cfg["sheet"], cfg["swatches"])
-    raise RuntimeError(f"no legend found for series {series}; add it to {LEGENDS_JSON.name}")
+                return sheet_dir, art, found
+    return None
 
 
 # ---------------------------------------------------------------- crops and mosaic

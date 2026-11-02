@@ -351,3 +351,24 @@ def test_backfill_provenance_from_mtimes(data, monkeypatch):
     assert datetime.fromisoformat(p["read_at"]).timestamp() == 1_800_000_000
     assert json.loads((config.WORK_DIR / "1972" / "districts_raw.json").read_text()) == {"keep": True}
     assert json.loads((h.parent / "height.json").read_text())["region_read"] is True
+
+
+def test_series_read_names_every_answer_it_used_the_same_on_every_run(data, monkeypatch):
+    """districts_raw.parquet's sidecar = the series' own reads plus the answers of the legend /
+    district-label artifacts it consumed, whether those were read now or reused, so it is
+    complete and identical between runs (no dvc.lock churn)."""
+    from sfzmaps import answers, llm
+    legend = config.WORK_DIR / "1960" / "s1" / "district_legend.json"
+    answers.write(legend, ["llm/" + "1" * 64 + ".json"])
+    own = "llm/tiles/" + "2" * 64 + ".json"
+
+    def read_raw(s, **k):
+        answers.consume(legend)          # a fresh legend, reused
+        llm._record(own)                 # the series' own pattern read
+        return _raw(["R-2", "R-2", "R-4", "R-4", "M-1"])
+
+    monkeypatch.setattr(assemble, "read_raw", read_raw)
+    assemble.run_series("1960")
+    first = answers.read(assemble._raw_path("1960"))
+    assemble.run_series("1960")
+    assert first == answers.read(assemble._raw_path("1960")) == sorted(["llm/" + "1" * 64 + ".json", own])

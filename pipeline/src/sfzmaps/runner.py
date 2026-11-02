@@ -70,7 +70,7 @@ import cv2
 import numpy as np
 from shapely.geometry import mapping
 
-from sfzmaps import anchors, config, inputs, linework, llm, pages, reading, warp
+from sfzmaps import anchors, answers, config, inputs, linework, llm, pages, reading, warp
 from sfzmaps import refine as refine_mod
 from sfzmaps import score as score_mod
 from sfzmaps.pages import Page
@@ -443,8 +443,12 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
         or, when page.png was re-rendered (newer mtime), by content: the page_sha256 stored
         in `out` (labels.json: else page.json's) equals page.png's. Then no call is made, so
         a byte-identical render on another machine re-reads nothing. A fresh `out` without
-        the hash (an older file) gets it written in, keeping its mtime."""
-        if not force and out.exists():
+        the hash (an older file) gets it written in, keeping its mtime.
+        Provenance (sfzmaps.answers): `out` counts as current only with its answers sidecar (or a
+        baseline entry). Otherwise it is read again under recording, the sidecar is written
+        first, and `out` is rewritten only if the read differs from it, so a replay from the
+        cache leaves it, and its mtime (what later stages' freshness reads), untouched."""
+        if not force and out.exists() and answers.covered(out):
             if _fresh(out, inputs):
                 if reading.stored_page_sha256(out) is None:
                     _add_page_sha(out, png_sha())
@@ -460,7 +464,24 @@ def run_sheet(page: Page, ref: Reference, *, until: str | None = None, force_aut
                 return
         t0 = time.monotonic()
         sha = png_sha()
-        reading.save(out, fn(), page_sha256=sha)
+        replay = not force and out.exists() and not answers.covered(out)
+        try:
+            # a replay (an artifact made before sidecars) never pays: answers from the cache only
+            with llm.recording() as keys, llm.cache_only(replay or llm.CACHE_ONLY):
+                result = fn()
+        except llm.LLMCacheMiss:
+            if not replay:
+                raise
+            log.info("%-8s kept as is: made before answers were recorded, and its answers aren't "
+                     "all cached under today's prompt (`sfzmaps answers --baseline` lists it)", name)
+            last_timings[name] = None
+            return
+        answers.write(out, keys)
+        text = reading.dumps(result, page_sha256=sha)
+        if not (out.exists() and out.read_text() == text):
+            reading.save(out, result, page_sha256=sha)
+        else:
+            log.info("%-8s unchanged on re-read: kept as is (answers recorded)", name)
         last_timings[name] = time.monotonic() - t0
         log.info("%-8s done in %.1fs", name, last_timings[name])
 

@@ -49,7 +49,10 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 | `review --year S` | Serve `data/out/` on 127.0.0.1 and open the series review page. |
 | `edit [--year S] [--sheet ID]` | Start the control-point editor on 127.0.0.1:8765 (`--demo` for a synthetic sheet). |
 | `bundle` | Write the processed files into `data/share/` as zips plus `PROCESSED.json`, for copying by hand into the Drive folder `old-planning-maps/processed/`. |
-| `pull` | Download the processed zips from the public Drive `processed/` folder and extract them into `data/`. The `processed/` folder must be shared as "Anyone with the link" (Viewer); `pull` uses Drive's public download, so a private folder gives an error page, which `pull` rejects. |
+| `pull` | This commit's cache from the Blob store: its answer packs and the data its `dvc.lock` names. See [Shipping the cache](#shipping-the-cache). |
+| `ship [--dry-run]` | When a branch is ready to merge: upload what its commit needs that `main` hasn't shipped, and commit the records. |
+| `answers [--check\|--baseline]` | Which artifacts know the answers they were made from; record the rest. |
+| `pull-drive` | The older way: the processed zips from the public Drive `processed/` folder, extracted into `data/`. |
 | `crossref --year S` / `--all` | Re-place flagged sheets by matching each to the same printed sheet number in another edition that passed (SIFT + RANSAC on the drawings, composed with that sheet's transform), then rerun refine and score. A result is kept only if it scores better, and is then pinned as the sheet's seed (`inputs/<series>/seeds/`; commit it); otherwise the sheet's files and seed are restored. Republishes improved series (`--no-publish` to skip). No API calls. |
 | `eval --year 1948\|1960` | Per-sheet score next to the distance from our transform to the owner's manual `.points` (the answer key). |
 | `estimate --year S` / `--all` | Estimate API calls, tokens and USD for the uncached pages (no API calls). It is an estimate: image tokens use OpenAI's patch formula, prompt text is a flat `config.EST_TEXT_TOKENS_PER_CALL` (~350) per call, and output is a flat `EST_OUT_TOKENS` per call. |
@@ -120,12 +123,48 @@ It links `data/raw`, `data/ref` and `data/cache` to the main checkout and checks
 and `data/out` exactly as that worktree's `dvc.lock` records them, from the shared cache. Never
 link `work/` or `out/` between checkouts.
 
-**Sharing (not set up yet).** A DVC remote would let `dvc push` / `dvc pull` replace the Drive
-bundle. Cloudflare R2 (S3-compatible, no download fees) suits it:
-`dvc remote add -d storage s3://<bucket>/sfzoning` with
-`dvc remote modify storage endpointurl https://<account>.r2.cloudflarestorage.com`, and
-credentials in `.dvc/config.local` (never committed). Until then, `bundle` and `pull` stay
-the way to share data.
+**Sharing** is [Shipping the cache](#shipping-the-cache): each commit's data and answers on the
+Blob store.
+
+## Shipping the cache
+
+Each branch or worktree builds and works locally; nothing leaves the machine until the branch is
+ready to merge. Then `uv run sfzmaps ship` publishes what that commit needs, so `main` (and
+anyone) gets it with `uv run sfzmaps pull` and builds at $0 with nothing to do.
+
+- **What a commit needs**: its processed data (the DVC objects its `dvc.lock` names: `work/`,
+  `out/` and `ref/`), and the vision answers that data was made from. Every artifact made from
+  answers keeps a sidecar, `<artifact>.answers`, listing the answer keys it was made from,
+  written before the artifact and versioned with it. Only live artifacts count (every page's
+  `page.json`, map pages' `labels.json`, each series' district reads, which fold in the legend
+  and district labels they used), so answers from abandoned or superseded experiments never
+  ship.
+- **`sfzmaps ship`** (needs `site/.env.local`; never calls the vision API) refuses a dirty tree or
+  data that doesn't match `dvc.lock`. It uploads the data objects the Blob store lacks, one new
+  *answer pack* of exactly the needed answers `main` hasn't shipped (a zip named by its sha256,
+  with an index of every answer's sha256), and the full list of needed answers. Then it commits
+  the pack's record (`pipeline/cache-packs/<sha>.json`) and `pipeline/cache-needed.json`: push
+  them with the branch. Uploads come first and records last, and nothing is ever overwritten:
+  every name is the hash of its bytes. `--dry-run` says what would upload.
+- **`sfzmaps pull`** applies the packs recorded at this commit (sha-checked, put-if-absent) and
+  fetches the data objects its `dvc.lock` names (md5-checked), then checks them out. Public URLs,
+  no token. (`pull-drive` is the older Drive download.)
+- **The merge gate.** The `Cache shipped` workflow checks every PR touching the pipeline, with
+  public reads only: every recorded pack and needed answer, and every data object, is on the
+  Blob store; no two packs disagree on an answer; and `dvc.lock` matches the code (a commit
+  added after shipping, or a rebase without a rebuild, fails). With GitHub's "require branches
+  to be up to date before merging", the merged tree is exactly the shipped one, so ordinary
+  merge commits work; `git bisect --first-parent` walks the shipped states.
+- **Old artifacts.** A build replays artifacts made before sidecars existed from the cache, at
+  $0, and writes their sidecars without touching them. `uv run sfzmaps answers --baseline`
+  records whatever couldn't be replayed (its answers aren't cached under today's prompt) in
+  `pipeline/cache-baseline.json`, by exact md5, accepted as it is; `--check` lists live
+  artifacts still without a record.
+- **Never delete an answer to force a re-read**: packs keep one answer per key. Change the prompt
+  or its context instead (the key changes).
+
+Costs: Blob storage is $0.023/GB-month (about 13 GB of data plus packs); a contributor's first
+full `pull` is about $0.65 at $0.05/GB, then only what changed.
 
 ## Toolchain
 
@@ -158,9 +197,11 @@ rendered byte for byte as the existing ones, which were made with Homebrew's pop
 uv run sfzmaps fetch && uv run sfzmaps pull && uv run sfzmaps build
 ```
 
-`pull` brings back the LLM cache, the reference data and every sheet's processed
-files (transforms, scores); the hand-made inputs are already in git. It costs **zero API spend only if your renders
-are byte-identical** to the ones that filled the cache. `page.png` is not shared; `run`
+`fetch` mirrors the scans from Drive; `pull` brings this commit's processed data, reference data
+and the answers it was made from ([Shipping the cache](#shipping-the-cache)); the hand-made
+inputs are already in git. `build` then finds nothing to do. Re-reading costs **zero API spend
+only if your renders are byte-identical** to the ones that filled the cache (the pixi toolchain
+makes them so; `pixi run doctor-renders` checks). `page.png` is not shared; `run`
 re-renders it from the raw scan, and the cache keys hash the image pixels.
 `page.json` and `labels.json` store the `page_sha256` of the `page.png` they came
 from. If your fresh render has the same hash, classification and labels count as
@@ -220,6 +261,8 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
   `needs_review` reasons, scores, limits, bounds), `review.html`.
 - `out/ref/blocks.pmtiles`: today's blocks for the review pages.
 - `out/run-<timestamp>.log`: tracebacks for any sheet that errored.
+- `tmp/`: scratch while tiling (outside `out/`, which DVC versions); safe to delete when no
+  build is running.
 - `share/`: the `bundle` output.
 
 ## Reviewing and editing
