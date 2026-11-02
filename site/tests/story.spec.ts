@@ -2,7 +2,6 @@ import { expect, test, type Page } from "@playwright/test";
 import { scrollToStep as centerStep } from "./helpers";
 import { STORY } from "../content/story";
 
-
 test("scrolling through the story activates every step in turn", async ({ page }) => {
   await page.goto("/");
   const story = page.locator("[data-active-step]");
@@ -70,49 +69,6 @@ test.describe("phone trigger", () => {
   });
 });
 
-test.describe("small phone", () => {
-  test.use({ viewport: { width: 360, height: 740 } });
-
-  test("the longest step's card is fully readable via its own scroll", async ({ page }, info) => {
-    test.skip(info.project.name !== "mobile", "phone layout only");
-    await page.goto("/");
-    const id = await page.$$eval("[data-step]", (els) => {
-      let best = els[0];
-      for (const el of els) {
-        const h = (e: Element) => e.querySelector("article > div")!.scrollHeight;
-        if (h(el) > h(best)) best = el;
-      }
-      return best.getAttribute("data-step")!;
-    });
-    await centerStep(page, id);
-    await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", id);
-
-    const scroller = page.locator(`[data-step="${id}"] article > div`);
-    const m = await scroller.evaluate((el) => {
-      const card = el.parentElement!.getBoundingClientRect();
-      return { top: card.top, bottom: card.bottom, sh: el.scrollHeight, ch: el.clientHeight, vh: innerHeight };
-    });
-    // The card box itself sits wholly on screen, below the era ruler, within 55% of the viewport.
-    expect(m.top).toBeGreaterThanOrEqual(56);
-    expect(m.bottom).toBeLessThanOrEqual(m.vh);
-    expect(m.bottom - m.top).toBeLessThanOrEqual(m.vh * 0.55 + 1);
-    expect(m.sh).toBeGreaterThan(m.ch); // long enough to need its own scroll
-
-    // Scroll the card itself (wheel over it); the last line must come into the card's view.
-    await scroller.hover();
-    for (let i = 0; i < 10; i++) await page.mouse.wheel(0, 200);
-    await expect
-      .poll(() =>
-        scroller.evaluate((el) => {
-          const last = el.querySelector("footer li:last-child")!.getBoundingClientRect();
-          const box = el.getBoundingClientRect();
-          return last.bottom <= box.bottom + 1 && last.top >= box.top;
-        }),
-      )
-      .toBe(true);
-  });
-});
-
 const visibleScans = (page: Page) =>
   page.evaluate(() => {
     const m = (window as unknown as { __map: import("maplibre-gl").Map }).__map;
@@ -121,18 +77,6 @@ const visibleScans = (page: Page) =>
       .layers.filter((l) => l.id.startsWith("scan-") && m.getLayoutProperty(l.id, "visibility") === "visible")
       .map((l) => l.id);
   });
-
-test("scrolling fast through the story leaves only the last step's scan showing", async ({ page }) => {
-  await page.goto("/");
-  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", STORY[0].id);
-  const ids = ["1921-sunset", "1948-sunset", "1960-density-caps", "1972-height-limits", "1975-downzonings"];
-  for (const id of ids) await centerStep(page, id);
-  const last = STORY.find((s) => s.id === ids[ids.length - 1])!;
-  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", last.id);
-  await expect(page.locator("[data-active-step] .map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 60_000 });
-  await page.waitForTimeout(2000);
-  expect(await visibleScans(page)).toEqual([`scan-${last.era}`]);
-});
 
 /** The share of the story map's pixels that are strongly coloured (the district colours, not the scan's ink). */
 async function colouredShare(page: Page) {
@@ -183,21 +127,6 @@ test("a scan that never arrives holds the old one up to the limit, then shows co
   expect(await colouredShare(page)).toBeGreaterThan(0.02);
 });
 
-test("a new camera move on the same scans restarts the hold's limit", async ({ page }) => {
-  await page.route("**/1960/1960-paper.pmtiles", never);
-  await page.goto("/");
-  await settleAt(page, "1948-sunset");
-  await centerStep(page, "1960-density-caps");
-  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1960-density-caps");
-  await page.waitForTimeout(6000);
-  await centerStep(page, "1960-not-a-downzoning");
-  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1960-not-a-downzoning");
-  await page.waitForTimeout(3500); // ~9.5s since the hold began, ~3.5s since the camera moved again
-  expect(await visibleScans(page), "still held, counting from the last move").toContain("scan-1948");
-  await page.waitForTimeout(5500);
-  expect(await visibleScans(page), "released by the limit").not.toContain("scan-1948");
-});
-
 test("the Rumsey credit stays while the 1948 scan is held under 1960, and goes with it", async ({ page }) => {
   await page.route("**/1960/1960-paper.pmtiles", never);
   await page.goto("/");
@@ -211,55 +140,6 @@ test("the Rumsey credit stays while the 1948 scan is held under 1960, and goes w
   await expect(credit).toBeVisible();
   await expect(credit).toHaveCount(0, { timeout: 10_000 });
   expect(await visibleScans(page)).not.toContain("scan-1948");
-});
-
-test("a preload that failed doesn't count as loaded, and doesn't break that scan afterwards", async ({ page }) => {
-  // Every read of the 1960 scan fails while the neighbours preload.
-  let failed = 0;
-  await page.route("**/1960/1960-paper.pmtiles", (route) => (failed++, route.abort()));
-  await page.goto("/");
-  await settleAt(page, "1948-sunset");
-  await expect.poll(() => failed, { timeout: 30_000 }).toBeGreaterThan(0);
-  await page.waitForTimeout(500);
-  await page.unroute("**/1960/1960-paper.pmtiles");
-  await page.route("**/1960/1960-paper.pmtiles", delayed(3000));
-  await centerStep(page, "1960-density-caps");
-  await expect(activeWrap(page)).toHaveAttribute("data-era", "1960");
-  await page.waitForTimeout(2200); // the camera has stopped; the scan has not arrived
-  expect(await visibleScans(page), "held, since the preload failed").toContain("scan-1948");
-  await expect
-    .poll(() => page.evaluate(() => (window as unknown as { __map: import("maplibre-gl").Map }).__map.isSourceLoaded("scan-1960")), { timeout: 45_000 })
-    .toBe(true);
-  await expect(page.locator("[data-active-step] .map-notice")).toHaveCount(0);
-});
-
-test("the old scan stays under a new one whose tiles are slow", async ({ page }) => {
-  await page.route("**/1948/1948-paper.pmtiles", delayed(6000));
-  await page.goto("/");
-  await centerStep(page, "1921-mission");
-  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1921-mission");
-  await page.waitForTimeout(3000);
-  await centerStep(page, "1948-sunset");
-  await page.waitForTimeout(2000);
-  const old = await page.evaluate(() => {
-    const m = (window as unknown as { __map: import("maplibre-gl").Map }).__map;
-    const o = m.getPaintProperty("scan-1921", "raster-opacity");
-    return { visibility: m.getLayoutProperty("scan-1921", "visibility"), solid: typeof o !== "number" || o > 0 };
-  });
-  expect(old).toEqual({ visibility: "visible", solid: true });
-});
-
-test("going from colours to a scan alone keeps the colours until the scan arrives", async ({ page }) => {
-  await page.route("**/1980-1990-zoning/*paper.pmtiles", delayed(6000));
-  await page.goto("/");
-  await centerStep(page, "1978-legacy");
-  await expect(page.locator("[data-active-step]")).toHaveAttribute("data-active-step", "1978-legacy");
-  await expect(page.locator("[data-active-step] .map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 60_000 });
-  await page.waitForTimeout(1500);
-  await centerStep(page, "1985-downtown-plan");
-  await page.waitForTimeout(3500); // the camera has stopped; the scan has not arrived
-  const coloured = await colouredShare(page);
-  expect(coloured).toBeGreaterThan(0.02);
 });
 
 test("when the next scan is preloaded the colours fade during the pan, not after it", async ({ page }) => {

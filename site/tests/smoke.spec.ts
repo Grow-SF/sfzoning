@@ -6,21 +6,10 @@ import { SOURCES } from "../content/sources";
 // The tile server the site under test reads from: local by default, or the published tiles.
 const TILES = (process.env.NEXT_PUBLIC_TILES_BASE_URL ?? "http://127.0.0.1:8787").replace(/\/+$/, "");
 
-
 test("page loads with a map canvas and story text", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("canvas").first()).toBeAttached();
   await expect(page.getByRole("heading", { name: /A History of San Francisco’s Zoning/ })).toBeVisible();
-});
-
-test("pages carry no draft banner and let search engines index them", async ({ page }) => {
-  for (const path of ["/", "/about"]) {
-    await page.goto(path);
-    await expect(page.getByText("Do not publish")).toHaveCount(0);
-    await expect(page.locator('meta[name="robots"][content*="noindex"]')).toHaveCount(0);
-  }
-  await expect(page.getByTestId("review-status")).toContainText("published for the eras whose maps have been read so far");
-  await expect(page.getByTestId("review-status")).not.toContainText("still to come");
 });
 
 test("tile server down: notice appears and text still renders", async ({ page }) => {

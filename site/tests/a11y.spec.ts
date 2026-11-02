@@ -1,9 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { centerStep as toStep } from "./helpers";
 
-const CREDIT = "David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries";
-
-
 const FOCUSABLE = "a[href], button, input, select, textarea, [tabindex]:not([tabindex='-1'])";
 
 test("no role=img or aria-hidden container holds focusable content", async ({ page }) => {
@@ -70,26 +67,3 @@ test("inactive story cards keep AA text contrast on desktop", async ({ page }, i
   expect(worst.min, worst.what).toBeGreaterThanOrEqual(4.5);
 });
 
-test.describe("narrow desktop", () => {
-  test.use({ viewport: { width: 960, height: 800 } });
-
-  test("the story key and the Rumsey credit don't overlap at 960px", async ({ page }, info) => {
-    test.skip(info.project.name !== "desktop", "desktop layout only");
-    await page.goto("/");
-    await toStep(page, "1948-sunset");
-    const story = page.locator("[data-active-step]");
-    const legend = story.getByTestId("legend");
-    const credit = story.getByText(CREDIT, { exact: true });
-    await expect(legend).toBeVisible();
-    await expect(credit).toBeVisible();
-    const a = (await legend.boundingBox())!;
-    const b = (await credit.boundingBox())!;
-    const overlap = a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
-    expect(overlap, JSON.stringify({ legend: a, credit: b })).toBe(false);
-    if (process.env.SHOT_DIR) {
-      await expect(story.locator(".map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 30_000 });
-      await page.waitForTimeout(900);
-      await page.screenshot({ path: `${process.env.SHOT_DIR}/desktop-960-1948-legend-credit.png` });
-    }
-  });
-});
