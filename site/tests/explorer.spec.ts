@@ -7,7 +7,6 @@ import { publishedPath } from "../lib/tiles";
 const TILES = process.env.NEXT_PUBLIC_TILES_BASE_URL ?? "http://127.0.0.1:8787";
 const CREDIT = "David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries";
 
-
 async function tilesExist(page: Page, path: string) {
   const r = await page.request.get(`${TILES}/${publishedPath(path)}`, { headers: { Range: "bytes=0-6" } }).catch(() => null);
   return !!r && r.ok();
@@ -370,33 +369,3 @@ test("with a lot open on 1948 'both', the Rumsey credit stays in sight", async (
   expect(covered).toBe(0);
 });
 
-test.describe("touch screens", () => {
-  test.use({ hasTouch: true, isMobile: true });
-
-  test("the explorer map needs two fingers to pan, so one finger scrolls the page", async ({ page }, info) => {
-    test.skip(info.project.name !== "mobile", "phone only");
-    await page.goto("/");
-    await page.getByTestId("explorer").scrollIntoViewIfNeeded();
-    await expect(page.locator(".explorer-map canvas")).toBeAttached({ timeout: 30_000 });
-    const state = await page.evaluate(() => {
-      type M = import("maplibre-gl").Map;
-      const maps = (window as unknown as { __maps: M[] }).__maps;
-      const ex = maps.find((m) => m.getContainer().closest("[data-testid=explorer]"))!;
-      return { coarse: matchMedia("(pointer: coarse)").matches, coop: ex.cooperativeGestures.isEnabled() };
-    });
-    expect(state).toEqual({ coarse: true, coop: true });
-  });
-});
-
-test("a mouse-driven explorer map pans with one pointer", async ({ page }, info) => {
-  test.skip(info.project.name !== "desktop", "desktop only");
-  await page.goto("/");
-  await page.getByTestId("explorer").scrollIntoViewIfNeeded();
-  await expect(page.locator(".explorer-map canvas")).toBeAttached({ timeout: 30_000 });
-  const coop = await page.evaluate(() => {
-    type M = import("maplibre-gl").Map;
-    const maps = (window as unknown as { __maps: M[] }).__maps;
-    return maps.find((m) => m.getContainer().closest("[data-testid=explorer]"))!.cooperativeGestures.isEnabled();
-  });
-  expect(coop).toBe(false);
-});

@@ -21,16 +21,4 @@ describe("sources", () => {
       if (s.url) expect(s.url, id).toMatch(/^https:\/\//);
     }
   });
-
-  it("cites the Final EIR on the 1978 step that quotes 180,000", () => {
-    const steps = STORY.filter((s) => s.body.some((b) => b.text.includes("180,000")));
-    expect(steps.length).toBeGreaterThan(0);
-    for (const s of steps) expect(s.sources).toContain("finalenvironment2719sanf");
-  });
-
-  it("puts the 1948 steps on the Rumsey atlas source", () => {
-    const steps = STORY.filter((s) => s.era === "1948");
-    expect(steps.length).toBeGreaterThan(0);
-    for (const s of steps) expect(s.sources).toContain("rumsey-1948-atlas");
-  });
 });

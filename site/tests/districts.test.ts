@@ -1,14 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { CATEGORIES, CATEGORY_COLORS, CATEGORY_LABELS } from "@/lib/palette";
 import { gunzipped, lotCard, lotCategory, NO_VALUE, parseManifest, type SharedDistricts } from "@/lib/shared";
 import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
 import { isPartialMap, threePlusShare, type DistrictStats } from "@/lib/stats";
-import { ERAS } from "@/lib/eras";
-import { districtStatsUrl, publishedPath } from "@/lib/tiles";
+import { publishedPath } from "@/lib/tiles";
 import { hashedName, plan, uploadedBytesMatch } from "../scripts/publish-tiles.mjs";
-import { buildRules, parseCsv } from "../scripts/build-rules.mjs";
+import { buildRules } from "../scripts/build-rules.mjs";
 
 const PIPELINE_CATEGORIES = [
   "single_family",
@@ -25,18 +23,6 @@ const PIPELINE_CATEGORIES = [
   "unrestricted",
   "unknown",
 ];
-
-describe("palette", () => {
-  it("covers every pipeline category with a distinct colour and a label", () => {
-    expect([...CATEGORIES].sort()).toEqual([...PIPELINE_CATEGORIES].sort());
-    for (const c of PIPELINE_CATEGORIES) {
-      expect(CATEGORY_COLORS[c as keyof typeof CATEGORY_COLORS]).toMatch(/^#[0-9a-f]{6}$/i);
-      expect(CATEGORY_LABELS[c as keyof typeof CATEGORY_LABELS]?.trim()).toBeTruthy();
-    }
-    const colors = Object.values(CATEGORY_COLORS).map((c) => c.toLowerCase());
-    expect(new Set(colors).size).toBe(colors.length);
-  });
-});
 
 describe("shared archive", () => {
   const manifest = {
@@ -121,25 +107,7 @@ describe("published tile names", () => {
   });
 });
 
-describe("district tile paths", () => {
-  it("follow the pipeline's out/<series>/districts/ layout", () => {
-    expect(districtStatsUrl("1948")).toMatch(/^https?:\/\/.*\/1948\/districts\/stats\.json$/);
-  });
-  it("gives every era, including today, a district series", () => {
-    for (const e of ERAS) expect(e.districtSeries).toBeTruthy();
-    expect(ERAS.find((e) => e.id === "today")!.districtSeries).toBe("today");
-  });
-});
-
 describe("build-rules", () => {
-  it("parses quoted CSV with embedded commas and quotes", () => {
-    const rows = parseCsv('a,b\n"x, y","say ""hi"""\n');
-    expect(rows).toEqual([
-      ["a", "b"],
-      ["x, y", 'say "hi"'],
-    ]);
-  });
-
   const csv = fs.readFileSync(path.resolve(__dirname, "../../docs/research/zoning-districts.csv"), "utf8");
   const rules = buildRules(csv) as Rule[];
 

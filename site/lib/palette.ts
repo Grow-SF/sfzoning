@@ -11,7 +11,7 @@
 // Public land is a quiet grey, not green, so parks never read as part of the scale or as water;
 // industrial is brown, not grey, so it never reads as the scans' own ink.
 //
-// tests/palette.test.ts checks every pair (OKLab ΔE ×100) under normal vision and simulated
+// Every pair was checked (OKLab ΔE ×100) under normal vision and simulated
 // protanopia and deuteranopia (Machado 2009), in the "allowed" view (fills over the paper
 // basemap) and in the "both" view, over paper and over the scans' solid black ink. Current
 // minimums (normal / protan / deutan): allowed 9.6 / 6.2 / 7.6; both over paper 8.8 / 6.2 / 6.1;

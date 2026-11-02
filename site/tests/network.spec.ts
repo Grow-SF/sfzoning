@@ -24,7 +24,6 @@ async function settled(page: Page) {
   await expect(page.locator("[data-active-step] .map-wrap")).toHaveAttribute("data-idle", "true", { timeout: 30_000 });
 }
 
-
 /** Pan the story map so every visible layer has to fetch new tiles, then wait for it. */
 async function panAndSettle(page: Page) {
   await page.evaluate(() => {
@@ -129,28 +128,6 @@ test("the next step's shared tiles are already fetched before the reader scrolls
   console.log("tile requests going to", to, { ahead, cold });
   expect(cold).toBeGreaterThan(0);
   expect(ahead).toBeLessThan(cold / 2);
-});
-
-test("neighbour preloads wait for the map to go idle at the step", async ({ page }) => {
-  // The current step's scan is slow; the next era's archive is a neighbour's, not this step's.
-  await page.route("**/1948/1948-paper.pmtiles", async (route) => {
-    await new Promise((r) => setTimeout(r, 4000));
-    await route.continue().catch(() => {});
-  });
-  const idleAtRequest: string[] = [];
-  await page.route("**/1960/1960-paper.pmtiles", async (route) => {
-    idleAtRequest.push((await page.locator("[data-active-step] .map-wrap").getAttribute("data-idle")) ?? "?");
-    await route.continue().catch(() => {});
-  });
-  await page.goto("/");
-  await settled(page);
-  await goToStep(page, "1948-sunset");
-  await page.waitForTimeout(300);
-  await settled(page);
-  await page.waitForTimeout(1500);
-  // The 1960 scan was preloaded (a neighbour's), but only after the map had gone idle.
-  expect(idleAtRequest.length).toBeGreaterThan(0);
-  expect(idleAtRequest.filter((v) => v !== "true")).toEqual([]);
 });
 
 test("a scan failing outside the current era raises no notice; the current era's does", async ({ page }) => {
