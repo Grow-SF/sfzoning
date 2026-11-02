@@ -39,6 +39,9 @@ or Blob token.
 - Rebuild with `uv run sfzmaps build` (parallel, $0, recorded in `pipeline/dvc.lock`), not by
   running commands by hand, and commit `dvc.lock` afterwards. In a worktree, set up data with
   `pipeline/scripts/worktree-data.sh`; never link another checkout's `data/work` or `data/out`.
+- Run the pipeline inside `nix develop` (the tools pinned in `flake.nix`); `sfzmaps build`
+  refuses tools from elsewhere. Before changing the pin, check renders with
+  `uv run sfzmaps doctor --renders 3`: a render that differs means paid re-reads.
 - Keep DVC's cache type `reflink,copy`; `hardlink`/`symlink` corrupt the cache because the
   pipeline rewrites files in place. Never run a bare `dvc gc`.
 

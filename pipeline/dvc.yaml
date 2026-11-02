@@ -26,10 +26,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -64,10 +66,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -102,10 +106,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -140,10 +146,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -178,10 +186,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -216,10 +226,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -254,10 +266,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -292,10 +306,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -330,10 +346,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -368,10 +386,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -406,10 +426,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -454,10 +476,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -502,10 +526,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -550,10 +576,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
       - data/raw
       - inputs/label_scale.json
@@ -598,10 +626,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/ref
     outs:
       - data/work/today:
@@ -633,10 +663,12 @@ stages:
       - src/sfzmaps/stitch.py
       - src/sfzmaps/templates
       - src/sfzmaps/tiles.py
+      - src/sfzmaps/toolchain.py
       - src/sfzmaps/transform.py
       - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
+      - ../flake.nix
       - data/out/1921/districts
       - data/out/1929/districts
       - data/out/1935/districts

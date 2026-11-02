@@ -53,10 +53,12 @@ Then open http://localhost:3000. See `site/README.md` for more.
 
 ### The pipeline (`pipeline/`)
 
-You need Python 3.12, [uv](https://docs.astral.sh/uv/), and GDAL 3.13 or
-later, pmtiles and poppler (`brew install gdal pmtiles poppler` on macOS).
+The system tools are pinned in `flake.nix`. Install [Nix](https://nixos.org),
+then run `nix develop` from the repository root for a shell with exactly those versions
+(GDAL, poppler, pmtiles, uv, Node). See "Toolchain" in `pipeline/README.md`.
 
 ```sh
+nix develop
 cd pipeline
 uv sync
 uv run pytest
