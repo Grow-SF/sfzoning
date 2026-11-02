@@ -23,11 +23,10 @@ class TileReport:
 
 
 def require_tools() -> None:
-    missing = [t for t in ("gdalwarp", "gdal_translate", "gdaladdo", "pmtiles") if shutil.which(t) is None]
+    missing = [t for t in ("gdalwarp", "gdal_translate", "gdaladdo") if shutil.which(t) is None]
     if missing:
-        hint = {"pmtiles": "install it with `brew install pmtiles` (https://github.com/protomaps/go-pmtiles)"}
         raise RuntimeError("missing tool(s): " + "; ".join(
-            f"{t}: {hint.get(t, 'install GDAL (`brew install gdal`)')}" for t in missing))
+            f"{t}: run inside `pixi shell` (pixi.toml pins GDAL)" for t in missing))
 
 
 def report_from_mbtiles(path: Path) -> TileReport:
@@ -42,7 +41,7 @@ def report_from_mbtiles(path: Path) -> TileReport:
 
 def set_metadata(path: Path, name: str, attribution: str | None, min_zoom: int) -> None:
     """name/description/attribution and a center at the middle of the bounds. Without a
-    center, pmtiles convert computes a wrong one (longitude 92 for SF)."""
+    center, a converter computes a wrong one (longitude 92 for SF)."""
     con = sqlite3.connect(path)
     try:
         b = con.execute("select value from metadata where name='bounds'").fetchone()
@@ -64,6 +63,12 @@ def _run(cmd: list[str]) -> None:
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         raise RuntimeError(f"{cmd[0]} failed: {r.stderr.strip() or r.stdout.strip()}")
+
+
+def _convert(mbtiles: Path, out: Path) -> None:
+    from pmtiles.convert import mbtiles_to_pmtiles
+
+    mbtiles_to_pmtiles(str(mbtiles), str(out), None)
 
 
 def make_pmtiles(vrt: Path, out: Path, *, min_zoom: int = 11, max_zoom: int = 18,
@@ -89,7 +94,9 @@ def make_pmtiles(vrt: Path, out: Path, *, min_zoom: int = 11, max_zoom: int = 18
         set_metadata(mb, name, attribution, min_zoom)
         # convert next to `out`, then replace it: a failed convert keeps the old PMTiles
         part = tmp / out.name
-        _run(["pmtiles", "convert", str(mb), str(part)])
+        # the pmtiles Python library (uv.lock), not the go-pmtiles CLI: same tiles byte for
+        # byte (checked on a 15,617-tile layer), one less system tool
+        _convert(mb, part)
         part.replace(out)
         if keep_mbtiles:
             shutil.copy(mb, keep_mbtiles)

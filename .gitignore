@@ -36,3 +36,6 @@ pipeline/.env
 # Python bytecode
 __pycache__/
 *.pyc
+
+# pixi environments (pixi.toml)
+.pixi/

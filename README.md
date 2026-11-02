@@ -16,6 +16,12 @@ the site is being built for [sfzoning.com](https://sfzoning.com).
 - `docs/`: design notes, plans and research, including the table of what each
   district allowed in each era.
 
+## Setup
+
+The system tools (GDAL, poppler, uv, git, Node) are pinned in `pixi.toml` and locked in
+`pixi.lock`. Install [pixi](https://pixi.sh) (`brew install pixi` on macOS), then run
+`pixi install` and `pixi shell` here. `CONTRIBUTING.md` has the rest of the setup for each part.
+
 ## License
 
 The project is licensed in two parts. See `NOTICE` for exactly what each part

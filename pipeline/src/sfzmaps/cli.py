@@ -617,6 +617,8 @@ def build(
     jobs: int = typer.Option(4, "--jobs", "-j", help="Stages run at once."),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Say what would run; run nothing."),
     force: bool = typer.Option(False, "--force", help="Run the named stages even if up to date."),
+    system_tools: bool = typer.Option(False, "--system-tools", help="Build with tools that aren't "
+                                                                    "from the pixi environment (not recommended)."),
     write_dvc_yaml: bool = typer.Option(False, "--write-dvc-yaml", help="Regenerate pipeline/dvc.yaml."),
     list_: bool = typer.Option(False, "--list", help="List the stages."),
 ) -> None:
@@ -636,4 +638,37 @@ def build(
     if force and not targets:
         raise typer.BadParameter("--force needs the stages to run")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    raise typer.Exit(build_mod.build(targets or None, jobs, dry_run, force))
+    raise typer.Exit(build_mod.build(targets or None, jobs, dry_run, force, system_tools))
+
+
+@app.command()
+def doctor(
+    renders: int = typer.Option(0, "--renders", help="Also re-render this many PDF pages per series "
+                                                     "(into a temp folder) and compare them with "
+                                                     "their recorded page_sha256."),
+) -> None:
+    """The system tools in use, where they come from, and (with --renders) whether they render
+    pages byte for byte as the recorded ones (a different render means paid re-reads)."""
+    from sfzmaps import toolchain
+
+    ts = toolchain.tools()
+    typer.echo(f"toolchain: {toolchain.toolchain_id()}")
+    for t in ts:
+        where = "pixi" if t.from_env else ("MISSING" if not t.path else "system")
+        typer.echo(f"  {t.name:15} {t.version or '':10} {where:7} {t.path or ''}")
+    for k, v in toolchain.python_libraries().items():
+        typer.echo(f"  {k:26} {v}  (bundled in the Python wheel)")
+    bad = toolchain.not_from_env(ts)
+    if bad:
+        typer.echo(f"{len(bad)} tool(s) not from the pixi environment: run `pixi run doctor`, or "
+                   f"this inside `pixi shell` (see pipeline/README.md, Toolchain)")
+    if renders:
+        n, differ = toolchain.check_renders(renders)
+        typer.echo(f"renders: {n} pages checked, {len(differ)} differ"
+                   + (f": {', '.join(differ[:10])}" if differ else ""))
+        if differ:
+            typer.echo("these pages would be re-read (and billed) by labels/classify; don't switch "
+                       "toolchains until that's understood", err=True)
+            raise typer.Exit(1)
+    if bad:
+        raise typer.Exit(1)

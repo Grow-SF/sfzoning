@@ -40,7 +40,9 @@ Fork the repository, clone your fork, and set up the part you're working on.
 
 ### The site (`site/`)
 
-You need Node.js 22 or later. You don't need to build any map tiles: point
+You need Node.js 22 or later: either your own, or the pinned one from
+[pixi](https://pixi.sh) (`brew install pixi`, then `pixi shell` from the repository
+root; see the pipeline section below). You don't need to build any map tiles: point
 your dev server at the published ones.
 
 ```sh
@@ -53,10 +55,14 @@ Then open http://localhost:3000. See `site/README.md` for more.
 
 ### The pipeline (`pipeline/`)
 
-You need Python 3.12, [uv](https://docs.astral.sh/uv/), and GDAL 3.13 or
-later, pmtiles and poppler (`brew install gdal pmtiles poppler` on macOS).
+The system tools (GDAL, poppler, uv, git, Node) are pinned in `pixi.toml` and
+locked in `pixi.lock`. Install [pixi](https://pixi.sh) once (`brew install pixi` on
+macOS); it puts the tools in `.pixi/` inside the repository and needs no admin
+rights. Then, from the repository root:
 
 ```sh
+pixi install
+pixi shell
 cd pipeline
 uv sync
 uv run pytest

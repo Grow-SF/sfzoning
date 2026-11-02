@@ -19,10 +19,30 @@ def test_report_from_mbtiles(tmp_path):
     assert r.bytes_total == 16 and r.bytes_by_zoom == {11: 12, 12: 4}
 
 
-def test_missing_pmtiles_cli_message(monkeypatch):
+def test_missing_gdal_tools_point_to_pixi_and_no_pmtiles_cli_is_needed(monkeypatch):
     monkeypatch.setattr(shutil, "which", lambda n: None)
-    with pytest.raises(RuntimeError, match="brew install pmtiles"):
+    with pytest.raises(RuntimeError, match="pixi shell") as e:
         tiles.require_tools()
+    assert "pmtiles" not in str(e.value)
+
+
+def test_convert_writes_a_pmtiles_archive_from_mbtiles(tmp_path):
+    from pmtiles.reader import MmapSource, Reader
+    mb = tmp_path / "t.mbtiles"
+    con = sqlite3.connect(mb)
+    con.execute("create table metadata (name text, value text)")
+    con.execute("create table tiles (zoom_level int, tile_column int, tile_row int, tile_data blob)")
+    con.executemany("insert into metadata values (?, ?)", [("format", "webp"), ("minzoom", "11"), ("maxzoom", "11"),
+                    ("bounds", "-122.5,37.7,-122.3,37.8"), ("center", "-122.4,37.75,11")])
+    con.execute("insert into tiles values (11, 327, 1255, ?)", (b"RIFFtile",))
+    con.commit()
+    con.close()
+    tiles._convert(mb, tmp_path / "t.pmtiles")
+    with open(tmp_path / "t.pmtiles", "rb") as f:
+        r = Reader(MmapSource(f))
+        h = r.header()
+        assert r.get(11, 327, (1 << 11) - 1 - 1255) == b"RIFFtile"      # TMS row flipped to XYZ
+        assert h["center_zoom"] == 11 and round(h["center_lon_e7"] / 1e7, 1) == -122.4
 
 
 def test_set_metadata_center(tmp_path):
@@ -49,15 +69,16 @@ def _fake_tools(monkeypatch, fail_convert):
     from sfzmaps import tiles
 
     def run(cmd):
-        if cmd[0] == "pmtiles":
-            if fail_convert:
-                raise RuntimeError("pmtiles failed: boom")
-            Path(cmd[-1]).write_bytes(b"NEW")
-        else:
-            Path(cmd[-1]).write_bytes(b"x")
+        Path(cmd[-1]).write_bytes(b"x")
+
+    def convert(mb, out):
+        if fail_convert:
+            raise RuntimeError("convert failed: boom")
+        Path(out).write_bytes(b"NEW")
 
     monkeypatch.setattr(tiles, "require_tools", lambda: None)
     monkeypatch.setattr(tiles, "_run", run)
+    monkeypatch.setattr(tiles, "_convert", convert)
     monkeypatch.setattr(tiles, "report_from_mbtiles", lambda p: tiles.TileReport(1, {11: 1}))
     monkeypatch.setattr(tiles, "set_metadata", lambda *a, **k: None)
 

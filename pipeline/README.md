@@ -10,10 +10,16 @@ Tuning history and final results: `docs/superpowers/notes/2026-10-29-tuning.md`.
 
 ## Setup
 
+The system tools (GDAL, poppler, uv, git, Node) are pinned in the repository's `pixi.toml` and
+locked in `pixi.lock`; see [Toolchain](#toolchain). Install [pixi](https://pixi.sh) once
+(`brew install pixi` on macOS), then, from the repository root:
+
 ```sh
-brew install gdal pmtiles poppler      # gdalwarp/ogr2ogr (GDAL >= 3.13), pmtiles, pdftoppm
+pixi install           # the pinned tools, into .pixi/ inside the repository (no admin rights)
+pixi shell             # a shell with them first on PATH (or prefix commands with `pixi run`)
 cd pipeline
 uv sync
+uv run sfzmaps doctor  # every tool should say "pixi"
 ```
 
 Page classification and label reading use the OpenAI API. Put the key in
@@ -120,6 +126,31 @@ bundle. Cloudflare R2 (S3-compatible, no download fees) suits it:
 `dvc remote modify storage endpointurl https://<account>.r2.cloudflarestorage.com`, and
 credentials in `.dvc/config.local` (never committed). Until then, `bundle` and `pull` stay
 the way to share data.
+
+## Toolchain
+
+`pixi.toml` declares every system tool the pipeline runs, from conda-forge, and `pixi.lock`
+pins each package's exact build and hash: GDAL 3.13.3 (`gdalwarp`, `gdal_translate`,
+`gdaladdo`, `gdalbuildvrt`, `gdal_rasterize`, `gdalinfo`, `ogr2ogr`), poppler 26.10.0
+(`pdftoppm`, `pdfinfo`), uv and git, plus Node 22 for the site. They install into `.pixi/`
+inside the repository. Tile archives are written with the `pmtiles` Python library (in
+`uv.lock`), so the separate pmtiles command-line tool isn't needed.
+
+Every build stage depends on `pixi.toml` and `pixi.lock`, and `sfzmaps build` refuses to run
+unless every tool comes from the pixi environment, so `dvc.lock` names the toolchain as well as
+the code (`--system-tools` overrides it, loudly). Shortcuts from the repository root:
+`pixi run build`, `pixi run doctor`, `pixi run doctor-renders`.
+
+`sfzmaps doctor` lists each tool's version and where it comes from, and the GDAL and GEOS
+versions the Python wheels bundle (rasterio, pyogrio, shapely; pinned by `uv.lock`, separately
+from the GDAL tools). `--renders N` re-renders N PDF pages per series into a temporary folder
+and compares them with the `page_sha256` their `page.json` recorded.
+
+**Before changing any version in `pixi.toml`** (or running `pixi update`), run
+`pixi run doctor-renders`. Page renders feed the vision-answer cache keys, so a poppler (or
+font or image library) that renders different bytes makes labels and classification re-read,
+and bill, every page that changed. With the current lock, 63 sampled pages (3 per series)
+rendered byte for byte as the existing ones, which were made with Homebrew's poppler 26.10.0.
 
 ## Recreate without re-running
 

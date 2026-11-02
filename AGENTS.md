@@ -39,6 +39,10 @@ or Blob token.
 - Rebuild with `uv run sfzmaps build` (parallel, $0, recorded in `pipeline/dvc.lock`), not by
   running commands by hand, and commit `dvc.lock` afterwards. In a worktree, set up data with
   `pipeline/scripts/worktree-data.sh`; never link another checkout's `data/work` or `data/out`.
+- Run the pipeline with the tools pinned in `pixi.toml` (`pixi shell`, or `pixi run ...`);
+  `sfzmaps build` refuses tools from elsewhere. Before changing a version there or running
+  `pixi update`, check renders with `pixi run doctor-renders`: a render that differs means
+  paid re-reads.
 - Keep DVC's cache type `reflink,copy`; `hardlink`/`symlink` corrupt the cache because the
   pipeline rewrites files in place. Never run a bare `dvc gc`.
 
