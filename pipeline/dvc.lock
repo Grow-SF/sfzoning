@@ -46,10 +46,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -115,10 +111,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -137,10 +129,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -210,10 +198,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -279,10 +263,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -301,10 +281,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -374,10 +350,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -443,10 +415,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -465,10 +433,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -538,10 +502,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -607,10 +567,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -629,10 +585,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -702,10 +654,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -771,10 +719,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -793,10 +737,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -866,10 +806,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -935,10 +871,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -957,10 +889,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -1030,10 +958,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -1099,10 +1023,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -1121,10 +1041,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -1194,10 +1110,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -1263,10 +1175,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -1285,10 +1193,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -1358,10 +1262,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -1427,10 +1327,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -1449,10 +1345,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -1522,10 +1414,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -1591,10 +1479,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -1613,10 +1497,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -1696,10 +1576,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -1765,10 +1641,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -1787,10 +1659,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -1890,10 +1758,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -1959,10 +1823,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -1981,10 +1841,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -2084,10 +1940,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -2153,10 +2005,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -2175,10 +2023,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -2278,10 +2122,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -2347,10 +2187,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -2369,10 +2205,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -2448,10 +2280,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -2517,10 +2345,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -2539,10 +2363,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
@@ -2668,10 +2488,6 @@ stages:
       hash: md5
       md5: c8b35eb418d0f08dfc0fd83f55a788b2
       size: 5035
-    - path: src/sfzmaps/cachepack.py
-      hash: md5
-      md5: 7c3c97d3df7feeea908b482c8ddbdb8a
-      size: 6171
     - path: src/sfzmaps/cli.py
       hash: md5
       md5: 1de545674ef9b14698d48394d8b1fa7f
@@ -2737,10 +2553,6 @@ stages:
       hash: md5
       md5: 463b16e4ea28198f53508a442df30145
       size: 13504
-    - path: src/sfzmaps/ship.py
-      hash: md5
-      md5: e16a34ca6dc3dec621ea3006a810bd10
-      size: 19133
     - path: src/sfzmaps/sources
       hash: md5
       md5: ec3650f0006c823d734cc1751620389a.dir
@@ -2759,10 +2571,6 @@ stages:
       hash: md5
       md5: 0c917a6b394cffbd1d1a1879920076fb
       size: 4831
-    - path: src/sfzmaps/toolchain.py
-      hash: md5
-      md5: a0c7a3919eb8481a0f33542e78b91177
-      size: 5136
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: 90faab5c812995e3011e41455c84b12c
