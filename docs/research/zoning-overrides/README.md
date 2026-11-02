@@ -7,6 +7,7 @@
 - `<series>.csv`: the overrides as applied (`blklot,block,code`).
 - `regions.csv`: one row per series, read sheet, crop, old code and new code, with lot counts, blocks
   and the reviewer's note.
+- `1975-c2-not-applied.csv`: the lots a 1975 C-2 review left unchanged (see "1975 C-2 misreads").
 
 ## What they correct
 
@@ -40,8 +41,32 @@ known one and not P. The crop images aren't kept.
   (R-1-D printed in the lot), 7295038 (C-2), 7380036 (RH-1(D)), 4591A090 and 4886009 (mixed), and
   most of the 1975 P candidates. 3899001 in 1948 (Mission Rock) is also unchanged.
 
+## 1975 C-2 misreads
+
+A second pass on 1975 looked at the 8,247 "suspect" lots: C-2 in 1975 but not in 1972 or 1980. Those
+years only chose which lots to look at. Each verdict comes from the code printed in the lot's
+heavy-line region on the scan, recorded per block and read sheet (per lot where a heavy line splits a
+block on p03).
+
+| Verdict | Lots | Result |
+| --- | ---: | --- |
+| correct | 4,542 | Added to `1975.csv`, with `kind` `c2-suspect` in `regions.csv` |
+| correct, moderate confidence | 526 | Stays C-2 |
+| unclear | 2,780 | Stays C-2 |
+| keep (the scan prints C-2) | 389 | Stays C-2 |
+| no verdict | 10 | Stays C-2 |
+
+`1975-c2-not-applied.csv` lists the 3,705 lots that stay C-2, with their verdict, any proposed code
+and the reviewer's note. These checks were also by region, so a row can carry a lot or two that
+overhang a heavy line; the notes in `regions.csv` say where the reviewer saw that.
+
+C-2 lots went from 30,077 to 25,535, and threePlusShare from 40.9% to 40.4%.
+
 ## Still wrong
 
-1975 keeps about 9,000 more C-2 lots than 1972 or 1980, largely on sheets p03 and p07. In Noe, for
-example, C-2 still covers blocks where the scan prints R-2, R-3 and R-4. 1975's P lots also remain far
+1975 keeps about 4,500 more C-2 lots than 1972 or 1980. Of the 3,705 lots above, the review confirmed
+only the 389 "keep" lots as C-2, and it had no firm evidence to change the rest. The render of Noe also
+shows what looks like a misread that isn't C-2, which this pass didn't look for: blocks between Castro
+and Noe, such as 3622 to 3624 and 3655, are split between R-2 and R-4 with no heavy line through them
+on the scan. 1975's P lots also remain far
 below 1972's, because small P regions lost in seams had no candidates to apply.
