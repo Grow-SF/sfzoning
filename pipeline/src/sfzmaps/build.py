@@ -143,6 +143,8 @@ def stage_deps(st: Stage) -> list[str]:
     deps += ["data/ref"]
     if st.series:
         deps += ["data/raw", "inputs/label_scale.json"] + [f"inputs/{s}" for s in st.series]
+    if st.districts:
+        deps += ["inputs/parks.csv"]
     return deps
 
 

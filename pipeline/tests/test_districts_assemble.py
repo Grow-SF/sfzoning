@@ -57,6 +57,18 @@ def test_override_applied_before_join(data, monkeypatch):
     assert g.loc["1000002", "category"] == "two_unit"
 
 
+def test_listed_park_lots_are_public_in_every_series_and_keep_their_code(data, monkeypatch):
+    # 1000001 is read as housing, 1002001 isn't on the map at all; 1000002 isn't a listed park
+    inputs.parks_path().parent.mkdir(parents=True, exist_ok=True)
+    inputs.parks_path().write_text("name,blklot,note\nA park,1000001,\nA park,1002001,\n")
+    monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-1", "R-1", "R-4", "R-4"]))
+    g = gpd.read_file(assemble.run_series("1960") / "parcels.fgb").set_index("blklot")
+    assert g.loc["1000001", ["code", "category"]].tolist() == ["R-1", "public"]
+    assert g.loc["1000001", "note"] == "Shown as park; this map zones it R-1"
+    assert g.loc["1002001", "category"] == "public"
+    assert g.loc["1000002", "category"] == "single_family" and pd.isna(g.loc["1000002", "note"])
+
+
 def test_override_missing_blklot_warns(data):
     _overrides("blklot,code\n9999999,C-2\n1000002,R-1\n")
     with pytest.warns(UserWarning, match="9999999"):

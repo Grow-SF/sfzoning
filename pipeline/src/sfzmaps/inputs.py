@@ -10,7 +10,9 @@ only what the pipeline can rebuild. Per series, inputs/<series>/:
   pages/<sheet>.json     fields that override the machine page.json (e.g. {"kind": "text"})
   overrides.csv          zoning corrections (blklot,block,code), applied by districts
 
-and inputs/label_scale.json, the calibrated label-reading scale per series.
+and inputs/label_scale.json, the calibrated label-reading scale per series, and inputs/parks.csv
+(name,blklot,note), the lots of parks that existed from 1921 to today: category `public` in every
+series, whatever the map zones them (owner's decision, 2026-11-02).
 """
 from __future__ import annotations
 
@@ -38,6 +40,10 @@ def page_patch_path(series: str, sheet_id: str) -> Path:
 
 def overrides_path(series: str) -> Path:
     return series_dir(series) / "overrides.csv"
+
+
+def parks_path() -> Path:
+    return config.INPUTS_DIR / "parks.csv"
 
 
 def label_scale_path() -> Path:

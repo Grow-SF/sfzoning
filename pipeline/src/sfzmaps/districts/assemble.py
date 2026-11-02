@@ -2,7 +2,7 @@
 story category, then the published outputs under out/<series>/districts/:
 
   parcels.fgb      one row per mapped parcel: blklot, code, height_code, category, confidence,
-                   source_sheet (EPSG:2227)
+                   source_sheet, note (why a park lot shows as public; apply_parks) (EPSG:2227)
   districts.fgb    parcels dissolved by code (code, category)
   <series>-districts.pmtiles   vector tiles, layers `parcels` and `districts` (EPSG:3857, z11-16)
   stats.json       {category: {parcels, area_sqft}, unknown_share, mapped_area_sqft,
@@ -327,6 +327,29 @@ def categorise(df: pd.DataFrame, year: int) -> pd.DataFrame:
     return df
 
 
+def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame) -> pd.DataFrame:
+    """inputs/parks.csv lots are `public` in every series, whatever the map zones them (owner's
+    decision: old maps zoned park land residential as a quirk of the law, not because homes could
+    go there). The read code stays, and `note` says what the map shows. A listed lot the map
+    doesn't cover is added, so the park is whole in every era."""
+    df = df.copy()
+    df["note"] = None
+    path = inputs.parks_path()
+    if not path.exists():
+        return df
+    lots = set(pd.read_csv(path, dtype=str)["blklot"].str.strip())
+    missing = sorted(lots & set(parcels["blklot"]) - set(df["blklot"]))
+    if missing:
+        df = pd.concat([df, pd.DataFrame({"blklot": missing, "code": None, "height_code": None,
+                                          "confidence": 0.0, "source_sheet": None,
+                                          "category": "unknown", "note": None})], ignore_index=True)
+    m = df["blklot"].isin(lots) & (df["category"] != "public")
+    df.loc[m, "note"] = [f"Shown as park; this map zones it {c}" if isinstance(c, str) and c.strip()
+                         else "Shown as park; this map gives it no district" for c in df.loc[m, "code"]]
+    df.loc[m, "category"] = "public"
+    return df
+
+
 # ---------------------------------------------------------------- outputs
 
 def stats(g: gpd.GeoDataFrame) -> dict:
@@ -347,7 +370,8 @@ def dissolve(g: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     coded = g[g["code"].notna()]
     if coded.empty:
         return gpd.GeoDataFrame({"code": [], "category": []}, geometry=[], crs=g.crs)
-    d = coded[["code", "category", "geometry"]].dissolve(by="code", aggfunc="first").reset_index()
+    # by category too: a park (apply_parks) keeps the code its map reads but is its own district
+    d = coded[["code", "category", "geometry"]].dissolve(by=["code", "category"]).reset_index()
     d = d[d.geometry.notna() & ~d.geometry.is_empty]
     return d[["code", "category", "geometry"]]
 
@@ -404,11 +428,11 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
     hs = height_series_of(series)
     if hs:
         df = apply_overrides(df, hs, column="height_code", blocks=blocks)
-    df = categorise(df, year)
+    df = apply_parks(categorise(df, year), parcels)
     geo = parcels[["blklot", "geometry"]].drop_duplicates("blklot")
     g = gpd.GeoDataFrame(df.merge(geo, on="blklot", how="inner"), geometry="geometry", crs=geo.crs)
     g = g[g.geometry.notna() & ~g.geometry.is_empty]       # a few DataSF parcels have no shape
-    g = g[["blklot", "code", "height_code", "category", "confidence", "source_sheet", "geometry"]]
+    g = g[["blklot", "code", "height_code", "category", "confidence", "source_sheet", "note", "geometry"]]
     g["confidence"] = g["confidence"].astype(float).round(3)
     d = out_dir(series, partial=partial)
     d.mkdir(parents=True, exist_ok=True)
