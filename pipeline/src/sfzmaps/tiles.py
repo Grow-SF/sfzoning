@@ -13,6 +13,8 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from sfzmaps import config
+
 WEB_ORIGIN_RES = 2 * math.pi * 6378137 / 256   # metres per pixel at zoom 0 (256 px tiles)
 
 
@@ -78,7 +80,11 @@ def make_pmtiles(vrt: Path, out: Path, *, min_zoom: int = 11, max_zoom: int = 18
     require_tools()
     out.parent.mkdir(parents=True, exist_ok=True)
     res = WEB_ORIGIN_RES / 2 ** max_zoom
-    with tempfile.TemporaryDirectory(prefix="sfzmaps-tiles-", dir=out.parent) as tmp:
+    # scratch outside the tracked outputs (data/out is versioned by DVC; a crash must not leave
+    # gigabytes of web.tif there), but on the same filesystem, so the final rename is atomic
+    scratch = config.DATA_DIR / "tmp"
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="sfzmaps-tiles-", dir=scratch) as tmp:
         tmp = Path(tmp)
         cog, mb = tmp / "web.tif", tmp / "tiles.mbtiles"
         _run(["gdalwarp", "--config", "GDAL_NUM_THREADS", "ALL_CPUS", "-multi", "-wo", "NUM_THREADS=ALL_CPUS",
