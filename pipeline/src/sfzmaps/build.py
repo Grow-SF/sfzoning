@@ -39,8 +39,10 @@ log = logging.getLogger(__name__)
 # DVC runs pinned, outside the project environment: upgrading it must not change uv.lock (a dep
 # of every stage) and so restale everything.
 DVC = ["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc"]
-# Code that can't change a build output: the editor, the build driver, bundling, evaluation.
-CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "__pycache__"}
+# Code that can't change a build output: the editor, the build driver, bundling, evaluation,
+# shipping (ship, cachepack) and the toolchain check.
+CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "ship.py", "cachepack.py",
+                "toolchain.py", "__pycache__"}
 # The exit code of a pipeline command stopped by llm.FATAL (the $0 cap, or no API key): "needs a
 # paid read", not a bug. Same value as cli.PAID_READ_EXIT (a test keeps them equal).
 PAID_READ_EXIT = 75
