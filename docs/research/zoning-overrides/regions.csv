@@ -322,3 +322,83 @@ series,read_sheet,kind,old,new,lots,blocks,crop,verdict_note
 2000-digital-zoning,2000-digital-zoning-p13,printed-P,RH-1(D),P,1,7283,contact_18.png,small P printed in lot
 2000-digital-zoning,2000-digital-zoning-p13,printed-P,RH-1(D),P,1,7283,contact_19.png,Lake Merced P
 2000-digital-zoning,2000-digital-zoning-p13,printed-P,RH-1(D),P,1,7299,contact_20.png,
+1975,p03,c2-suspect,C-2,C-3-S,169,3730,p03n-3_B_NE.png,inside the C-3-S region; lower right corner touches the stepped M-1 boundary
+1975,p03,c2-suspect,C-2,C-3-S,179,3726 3727,p03n-3_B_NE.png,inside the heavy-line region that prints C-3-S
+1975,p03,c2-suspect,C-2,P,1,0900,p03n2_b900.png,"Marina/bay lot, all north of heavy Marina Blvd line, P printed inside twice"
+1975,p03,c2-suspect,C-2,P,1,1196,p03n-3_A_1187.png,printed P inside its own heavy box
+1975,p03,c2-suspect,C-2,R-1,166,0965 0966 0971 0972 0973 0974 0984 0985 0986,p03n2_t1.png,"inside R-1 region (R-1 printed, no heavy line between)"
+1975,p03,c2-suspect,C-2,R-1,64,0995 0996,p03n2_w1.png,"inside R-1 region (R-1 printed, no heavy line between)"
+1975,p03,c2-suspect,C-2,R-1,27,1109,p03n-3_A_1109.png,inside the Ewing Terr box printing R-1; a few east lots overhang the heavy right edge
+1975,p03,c2-suspect,C-2,R-1,8,1010,p03n2_z2.png,"north of stair line, west of R-2 box: R-1 region (R-1 printed west, see p03n2_w1)"
+1975,p03,c2-suspect,C-2,R-1,27,0997,p03n2_t1.png,west part of block inside R-1 region
+1975,p03,c2-suspect,C-2,R-2,16,1162,p03n-3_A_1162w.png,Turk Blvd row is in the region with the big printed R-2 above the heavy line
+1975,p03,c2-suspect,C-2,R-2,22,1009,p03n2_z1.png,"north of heavy stair line, R-2 printed"
+1975,p03,c2-suspect,C-2,R-3,4,1091,p03n-3_A_1092.png,band between two heavy lines; R-3 printed in same band to the west
+1975,p03,c2-suspect,C-2,R-3,34,1092,p03n-3_A_1092.png,band between two heavy lines; printed C-2 is north of the upper heavy line; R-3 printed in same band to the west (seen in p03n-3_A1 thumbnail t_A1_p04.png)
+1975,p03,c2-suspect,C-2,R-3,6,0997,p03n2_t1.png,east strip south of heavy line is in R-3 region
+1975,p03,c2-suspect,C-2,R-3,113,0127,p03n1_N.png,inside R-3 region (Russian Hill)
+1975,p03,c2-suspect,C-2,R-3,4,0150,p03n1_C.png,inside R-3 region; one lot touches bottom line
+1975,p03,c2-suspect,C-2,R-3,38,0983,p03n2_t1.png,inside heavy box with R-3 printed in block below
+1975,p03,c2-suspect,C-2,R-3,30,1187,p03n-3_A_1187w.png,same heavy-line region as printed R-3 just west (north of the P box)
+1975,p03,c2-suspect,C-2,R-3,7,0845,p03n2_p8a.png,"south of heavy line; region reaches R-3 printed SW (p03n2_s08), not in crop"
+1975,p03,c2-suspect,C-2,R-3,2,0044,p03n1_A.png,west of heavy stair line in R-3 region; lots touch the line
+1975,p03,c2-suspect,C-2,R-3.5,22,1220,p03n-3_A_1221.png,R-3.5 printed in same block and heavy-line region
+1975,p03,c2-suspect,C-2,R-4,1,1032,p03n2_t3.png,big lot encloses printed R-4 at Masonic
+1975,p03,c2-suspect,C-2,R-4,4,0043,p03n1_A.png,big lot in same heavy-line region as printed R-4 to its east
+1975,p03,c2-suspect,C-2,R-4,2,1216,p03n-3_A_1217.png,east of the Divisadero heavy line in the region with printed R-4 (lot slightly overlaps the line)
+1975,p03,c2-suspect,C-2,R-4,11,0840 0841 0842 0843,p03n2_s08.png,inside R-4 region (R-4 printed at Webster/Buchanan and Oak)
+1975,p03,c2-suspect,C-2,R-4,3,1219,p03n-3_A_1217.png,inside block with printed R-4 (seen in t_A3_p08.png)
+1975,p03,c2-suspect,C-2,R-4,1,1021,p03n2_z1.png,lot south of lower heavy line; C-2 label is north of the line
+1975,p03,c2-suspect,C-2,R-4,15,0845,p03n2_p8a.png,"north of heavy line through block, R-4 printed north of Oak St"
+1975,p03,c2-suspect,C-2,R-4,16,1019,p03n2_w1.png,"south of lower heavy line, region with R-4 printed (California/Masonic)"
+1975,p03,c2-suspect,C-2,R-4,43,1020,p03n2_z1.png,"south of lower heavy line, region with R-4 printed (Masonic)"
+1975,p03,c2-suspect,C-2,R-4,27,1221,p03n-3_A_1221.png,strip between P box heavy line and lower heavy line; R-4 printed in same strip to the west; a few narrow lots extend below the line
+1975,p03,c2-suspect,C-2,R-5,13,0121,p03n1_M.png,R-5 printed in the block below Macondray
+1975,p03,c2-suspect,C-2,R-5,48,0121A,p03n1_M.png,all at one point in the R-5 block
+1975,p03,c2-suspect,C-2,R-5,7,0523,p03n1_H.png,inside printed R-5 region (p03 itself prints it)
+1975,p03,c2-suspect,C-2,R-5,1,0120,p03n1_N.png,lot just inside the R-5 box; edge on heavy line
+1975,p05,c2-suspect,C-2,R-2,1,1594,rest_c1.png,lot inside the printed R-2 box
+1975,p07,c2-suspect,C-2,R-1,59,2954,p07-3_C13.png,R-1 printed adjacent in same region (Teresita Blvd); no heavy line between
+1975,p07,c2-suspect,C-2,R-1,25,2944,p07-3_C13.png,R-1 printed in same region
+1975,p07,c2-suspect,C-2,R-1,15,2938,p07-3_C13.png,"R-1 printed in same region (Del Vale/Encline); p13 prints it, p07 blank"
+1975,p07,c2-suspect,C-2,R-1-D,70,2947 2948,p07-3_C13.png,R-1-D label printed on these blocks
+1975,p07,c2-suspect,C-2,R-1-D,306,2970 2971 2972 2973 2974 2979 2980 2982 2983 2985 2987 2988 2989 3011 3013 3076,p07-4_o29s.png,south of Portola heavy line; one region with R-1-D printed on p12 area; sheet seen p07+p12 area
+1975,p07,c2-suspect,C-2,R-2,40,2806,p07-3_A8.png,R-2 label sits on block
+1975,p07,c2-suspect,C-2,R-2,63,2700,p07-2_s1.png,R-2 printed beneath Caselli in same region
+1975,p07,c2-suspect,C-2,R-2,70,1651,p07-1_A1p04.png,R-2 printed in 1653 same region; small C-1 box at corner
+1975,p07,c2-suspect,C-2,R-2,53,1653,p07-1_A1p04.png,R-2 printed in block
+1975,p07,c2-suspect,C-2,R-2,43,2802,p07-3_A8.png,R-2 printed in same region
+1975,p07,c2-suspect,C-2,R-2,165,1652 1654 1655,p07-1_A1p04.png,R-2 printed in same region
+1975,p07,c2-suspect,C-2,R-2,62,1767 1768 1769 1770,p07-1_D1.png,R-2 printed in same region
+1975,p07,c2-suspect,C-2,R-2,28,2702,p07-2_s1.png,R-2 printed in same region
+1975,p07,c2-suspect,C-2,R-2,42,2775,p07-3_A8.png,"R-2 printed in same region (east of heavy line, Douglas-Diamond)"
+1975,p07,c2-suspect,C-2,R-2,7,1766,p07-1_D1.png,R-2 printed in same region (south of Irving heavy line)
+1975,p07,c2-suspect,C-2,R-2,53,2660,p07-2_s1.png,R-2 printed on block
+1975,p07,c2-suspect,C-2,R-2,64,2646,p07-2_w1.png,R-2 printed on block
+1975,p07,c2-suspect,C-2,R-2,43,2616,p07-2_n1.png,R-2 printed rotated on Java Ter strip inside block
+1975,p07,c2-suspect,C-2,R-2,32,2829,p07-3_B.png,R-2 region east of heavy line
+1975,p07,c2-suspect,C-2,R-2,65,2618,p07-2_w1.png,same heavy region as printed R-2 near Seventeenth/Saturn; no heavy line between
+1975,p07,c2-suspect,C-2,R-2,256,6501 6502 6503 6541 6542 6543 6544,p07-4_bw.png,same heavy-line region as printed R-2 at Homestead/Clipper; also crops/p07-4_dh2.png
+1975,p07,c2-suspect,C-2,R-2,411,2619 2620 2626 2627 2645 2652 2653 2654 2657,p07-2_w1.png,same region as R-2
+1975,p07,c2-suspect,C-2,R-2,68,2656,p07-2_w1.png,same region as R-2 above Merritt/Storrie heavy diagonal
+1975,p07,c2-suspect,C-2,R-2,31,2659,p07-2_s1.png,west of heavy curve; R-2 printed in region
+1975,p07,c2-suspect,C-2,R-3,64,2658,p07-2_s1.png,R-3 printed directly below in same region (between heavy diagonal and squiggle line)
+1975,p07,c2-suspect,C-2,R-3,36,2713,p07-2_s1.png,R-3 printed in region below squiggle
+1975,p07,c2-suspect,C-2,R-3,50,2754,p07-3_A8.png,R-3 printed on p08 in same heavy-line region (Market/Grand View strip)
+1975,p07,c2-suspect,C-2,R-3,77,7515,p07-4_dh2.png,strip between Diamond Hts Blvd and Red Rock Way joins region printing R-3 (Duncan St)
+1975,p07,c2-suspect,C-2,R-3.5,18,1221,p07-1_C3p08.png,south of heavy line in region open to R-3.5; R-4 box adjacent
+1975,p07,c2-suspect,C-2,R-4,37,7501,p07-4_dh2.png,Carnelian loop prints R-4; one large lot reaches toward P region east
+1975,p07,c2-suspect,C-2,R-4,77,2607,p07-2_w1.png,R-4 printed in Buena Vista Ave East strip region
+1975,p07,c2-suspect,C-2,R-4,14,1657,p07-1_A3.png,strip below heavy line along Fulton; R-4 printed in strip
+1975,p08,c2-suspect,C-2,R-3,13,6596,rest_e1.png,"pocket west of the thick line, in the R-3 region"
+1975,p08,c2-suspect,C-2,R-4,30,3564,rest_a2.png,"Prosper St lots outside the R-2 box, in the R-4 region; one lot straddles the R-2 box top"
+1975,p08,c2-suspect,C-2,R-4,119,3534 3544 3545,rest_a3.png,"lots sit east of the heavy line, in the region that prints R-4 to the east"
+1975,p09,c2-suspect,C-2,C-1,5,4335 5507,rest_e2.png,inside the printed C-1 box
+1975,p09,c2-suspect,C-2,R-3,9,4336,rest_e2.png,"most lots in R-3 region, one lot in the C-1 box"
+1975,p11,c2-suspect,C-2,R-1,64,6157 6172 6173 6195,rest_d2.png,"lots lie west of the freeway heavy line, in the region printing R-1"
+1975,p12,c2-suspect,C-2,R-1,5,6964 6965,p12-13_B1.png,R-1 printed in Seneca/Navajo region; lots close to heavy line
+1975,p12,c2-suspect,C-2,R-1,336,3000 3029 3031 3033 3034 3035 3036 3037 3059 3060 3062 3063 3089 3090 6763 6764 6765,p12-13_A3.png,"R-1 printed in same heavy-line region (north of Joost line), seen on p13"
+1975,p12,c2-suspect,C-2,R-1,2,7028,p12-13_B1.png,R-1 printed in same region (Alemany area); 2 lots
+1975,p12,c2-suspect,C-2,R-1,99,6345 6346 6347 6348 6410,p12-13_C1.png,"R-1 printed in same region east of Mission St, seen on p12; 6346 sits by end of narrow R-2 strip"
+1975,p12,c2-suspect,C-2,R-1,220,3119 3142 3143 3156 3182 3184 6774 6776,p12-13_A3.png,"R-1 printed south of Monterey heavy line, same region, seen on p13"
+1975,p13,c2-suspect,C-2,R-1,63,7061 7062 7094 7103,p12-13_B3.png,"R-1 printed north; region open to north, no heavy line between"
