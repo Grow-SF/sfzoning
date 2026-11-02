@@ -4,13 +4,11 @@ name: Cache shipped
 # this commit needs to build at $0 — its answer packs, the answers its data was made from, and
 # the data objects its dvc.lock names — is on the public Blob store, and dvc.lock matches the
 # code (no commit added, or rebase, since the build). Public reads only: no secrets.
+# It runs on every pull request, so it can be a required check (a path filter would leave
+# site-only PRs waiting forever for it); without pipeline changes it just confirms main's
+# shipped state still holds, in a few reads.
 on:
   pull_request:
-    paths:
-      - "pipeline/**"
-      - "pixi.toml"
-      - "pixi.lock"
-      - ".github/workflows/cache.yml"
 
 permissions:
   contents: read
