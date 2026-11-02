@@ -33,6 +33,8 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 
 | Command | What it does |
 |---|---|
+| `build [-j N] [--dry-run] [STAGE...]` | Rebuild whatever is stale, in parallel, at $0: see [Builds](#builds). The usual way to run the pipeline. |
+| `stage NAME` | Run one build stage (what `build` and `dvc repro` call). |
 | `fetch [--only FOLDER]` | Mirror the Drive tree into `data/raw/`. |
 | `refdata [--force]` | Download DataSF parcels and street centerlines; build blocks, corners and intersections in `data/ref/`. |
 | `run --year S` / `run --all` | Run every page of a series: classify, read labels, rough fit, extract linework, refine, classify real change, score, warp; then stitch, tile, write the manifest and review page. Fresh stages are skipped; human reviews are kept (`--force-auto` ignores them, `--force` reruns everything). `--sheet ID` and `--until STAGE` make a partial run that does not republish the series. |
@@ -50,14 +52,81 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 `push` also exists: it bundles and uploads with rclone, if you have set rclone up.
 It's optional; `bundle` plus a manual copy does the same job.
 
+## Inputs
+
+Everything a person decides is in git, under `inputs/`, so every checkout has it. `data/`
+holds only what the pipeline can rebuild. Per series, `inputs/<series>/`:
+
+- `reviews/<sheet>.json`: a reviewed fit, written by the editor. Commit it.
+- `seeds/<sheet>.json`: a pinned rough fit, used instead of the automatic one; refine still
+  runs from it. These are the sheets placed by matching another edition (`crossref`) or by
+  hand-guided seeding; without the seed, a `--force` run would refit them from scratch. Delete
+  a seed to let the pipeline place that sheet on its own again.
+- `pages/<sheet>.json`: fields that override the machine `page.json`, e.g. `{"kind": "text"}`
+  for a page the classifier took for a map.
+- `overrides.csv`: zoning corrections (`blklot,block,code`); the research behind them is in
+  `docs/research/zoning-overrides/`.
+
+and `inputs/label_scale.json`, the calibrated label-reading scale per series.
+
+## Builds
+
+`uv run sfzmaps build` rebuilds exactly what is stale, up to `-j` stages at once (default 4),
+and records what it built. [DVC](https://dvc.org) keeps the record: `dvc.lock` (committed)
+holds the content hash of every input and output of every stage, so a checkout can tell
+whether its data matches its code and inputs (`uv run sfzmaps build --dry-run`, or
+`uv tool run --from dvc==3.67.1 dvc status`).
+
+- **Stages** (`sfzmaps build --list`): one per edition (`edition-1948`: run, paper,
+  districts), one per 1980–2000 period (`period-1980-1990`: its zoning, height and
+  special-use series, heights read before zoning), `today`, and `shared`, the merged
+  archive the site reads. `pipeline/dvc.yaml` is generated from `sfzmaps.build`
+  (`sfzmaps build --write-dvc-yaml`); a test keeps them equal.
+- **Stale** means a stage's code (`src/sfzmaps`, except the editor), its inputs
+  (`inputs/<series>`), the scans, the reference data or its own outputs changed. Inside a
+  stage, the pipeline's own checks still decide which sheets are recomputed, but every series
+  in it is re-stitched and re-tiled, so a code change costs about an hour of tiling. The dry
+  run shows what would run first.
+- **Never spends money.** Stages run with `SFZMAPS_MAX_USD=0`: cached answers are free, and a
+  read that would call the API fails the stage instead. Run that read yourself
+  (`SFZMAPS_MAX_USD=5 uv run sfzmaps run --year S`, or `districts --series S`), then build again.
+- **Fails loudly.** A stage fails when a command fails, when a sheet newly errors, or when
+  `paper` skips a series. A failed stage isn't recorded and the stages after it don't run.
+- **Records what it was built from.** `build` refuses to start with uncommitted changes in
+  `src/`, `inputs/`, `dvc.yaml` or the lock files, and stops recording if they change while it
+  runs. One build at a time per data folder (`data/.build.lock`). Logs: `data/build-logs/`.
+  Commit `dvc.lock` after a build.
+- **Publishing checks it.** `site/scripts/publish-tiles.mjs` refuses to publish unless DVC says
+  the data matches `dvc.lock`.
+- `dvc repro` also works, one stage at a time.
+
+DVC caches each recorded version in `.dvc/cache` as copy-on-write clones (`cache.type =
+reflink,copy`), which cost no disk on APFS; never switch it to `hardlink` or `symlink`, because
+the pipeline rewrites files in place. Stitch intermediates and the editor's caches are in
+`.dvcignore`. To reclaim cache space, only ever run
+`dvc gc --workspace --all-commits --all-branches`: a plain `dvc gc` deletes versions other
+branches and worktrees still use.
+
+**Worktrees.** In a new git worktree, run `pipeline/scripts/worktree-data.sh <main checkout>`.
+It links `data/raw`, `data/ref` and `data/cache` to the main checkout and checks out `data/work`
+and `data/out` exactly as that worktree's `dvc.lock` records them, from the shared cache. Never
+link `work/` or `out/` between checkouts.
+
+**Sharing (not set up yet).** A DVC remote would let `dvc push` / `dvc pull` replace the Drive
+bundle. Cloudflare R2 (S3-compatible, no download fees) suits it:
+`dvc remote add -d storage s3://<bucket>/sfzoning` with
+`dvc remote modify storage endpointurl https://<account>.r2.cloudflarestorage.com`, and
+credentials in `.dvc/config.local` (never committed). Until then, `bundle` and `pull` stay
+the way to share data.
+
 ## Recreate without re-running
 
 ```sh
-uv run sfzmaps fetch && uv run sfzmaps pull && uv run sfzmaps run --all
+uv run sfzmaps fetch && uv run sfzmaps pull && uv run sfzmaps build
 ```
 
 `pull` brings back the LLM cache, the reference data and every sheet's processed
-files (transforms, scores, reviews). It costs **zero API spend only if your renders
+files (transforms, scores); the hand-made inputs are already in git. It costs **zero API spend only if your renders
 are byte-identical** to the ones that filled the cache. `page.png` is not shared; `run`
 re-renders it from the raw scan, and the cache keys hash the image pixels.
 `page.json` and `labels.json` store the `page_sha256` of the `page.png` they came

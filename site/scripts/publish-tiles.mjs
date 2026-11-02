@@ -5,9 +5,15 @@
 //
 //   node --env-file=.env.local scripts/publish-tiles.mjs          # needs BLOB_READ_WRITE_TOKEN
 //   ... scripts/publish-tiles.mjs --dry-run                       # says what it would do
+//   ... scripts/publish-tiles.mjs --skip-dvc-check                # emergencies only (see below)
+//
+// It refuses to publish unless DVC says pipeline/data matches the checkout's dvc.lock: data from
+// another checkout, or built before a code or input change, is how stale lot cards went live
+// (2026-11-01). Build with `uv run sfzmaps build` first.
 //
 // Then commit lib/published.json and deploy. Until that deploy, the live site reads the old files.
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -52,6 +58,29 @@ async function remoteSha(name) {
   return h.digest("hex");
 }
 
+export const DVC = ["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc"];
+
+/**
+ * Why the pipeline data can't be published, or null when `dvc status --json` (its stdout) says
+ * every stage matches dvc.lock.
+ */
+export function dvcProblem(statusJson) {
+  let stale;
+  try {
+    stale = Object.keys(JSON.parse(statusJson || "{}"));
+  } catch {
+    return "could not read `dvc status --json`";
+  }
+  if (stale.length === 0) return null;
+  return `pipeline data doesn't match dvc.lock (${stale.slice(0, 6).join(", ")}${stale.length > 6 ? ", ..." : ""}); ` +
+    "run `uv run sfzmaps build` in pipeline/ and commit dvc.lock";
+}
+
+function dvcStatus() {
+  const [cmd, ...args] = DVC;
+  return execFileSync(cmd, [...args, "status", "--json"], { cwd: path.join(SITE, "../pipeline"), encoding: "utf8" });
+}
+
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -81,6 +110,13 @@ function filesToPublish() {
 
 async function main() {
   const dryRun = process.argv.includes("--dry-run");
+  if (process.argv.includes("--skip-dvc-check")) {
+    console.warn("WARNING: --skip-dvc-check: publishing without checking the data matches dvc.lock");
+  } else {
+    const problem = dvcProblem(dvcStatus());
+    if (problem && !dryRun) throw new Error(`refusing to publish: ${problem}`);
+    if (problem) console.warn(`(a real publish would refuse: ${problem})`);
+  }
   const manifest = JSON.parse(readFileSync(MANIFEST, "utf8"));
   const { put } = await import("@vercel/blob");
   for (const file of filesToPublish()) {

@@ -1,0 +1,5 @@
+[core]
+    analytics = false
+    autostage = false
+[cache]
+    type = "reflink,copy"

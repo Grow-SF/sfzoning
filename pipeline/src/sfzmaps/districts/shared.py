@@ -298,8 +298,8 @@ def build(series: list[str]) -> Path:
         finally:
             gpkg.unlink(missing_ok=True)
             tmp.unlink(missing_ok=True)
-        table.write_bytes(gzip.compress(colour_table(parcels, series, sets), 9))
-        cards.write_bytes(gzip.compress(json.dumps(lot_cards(parcels, series), separators=(",", ":")).encode(), 9))
+        table.write_bytes(gzip.compress(colour_table(parcels, series, sets), 9, mtime=0))
+        cards.write_bytes(gzip.compress(json.dumps(lot_cards(parcels, series), separators=(",", ":")).encode(), 9, mtime=0))
         meta.write_text(json.dumps({"lots": len(parcels), "lineSets": len(sets)}))
     counts = json.loads(meta.read_text())
     write_manifest(series, out.stem, counts["lots"], counts["lineSets"])

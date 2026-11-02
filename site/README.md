@@ -141,7 +141,7 @@ three views.
 After publishing or republishing any series:
 
 ```sh
-cd pipeline && uv run sfzmaps districts --shared   # no API calls; takes about five minutes
+cd pipeline && uv run sfzmaps build   # no API calls; rebuilds what is stale, shared districts included
 ```
 
 Then publish and deploy as described under [Deploying](#deploying). A new era's data appears on

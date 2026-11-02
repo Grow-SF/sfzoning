@@ -7,7 +7,7 @@ import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
 import { isPartialMap, threePlusShare, type DistrictStats } from "@/lib/stats";
 import { ERAS } from "@/lib/eras";
 import { districtStatsUrl, publishedPath } from "@/lib/tiles";
-import { hashedName, plan, uploadedBytesMatch } from "../scripts/publish-tiles.mjs";
+import { dvcProblem, hashedName, plan, uploadedBytesMatch } from "../scripts/publish-tiles.mjs";
 import { buildRules, parseCsv } from "../scripts/build-rules.mjs";
 
 const PIPELINE_CATEGORIES = [
@@ -238,5 +238,16 @@ describe("uploadedBytesMatch", () => {
     expect(await uploadedBytesMatch(read, "h1", noWait)).toBe(false);
     expect(calls.n).toBeLessThan(10);
     expect(calls.n).toBeGreaterThan(1);
+  });
+});
+
+describe("dvcProblem", () => {
+  it("publishes only when every stage matches dvc.lock", () => {
+    expect(dvcProblem("{}")).toBeNull();
+    expect(dvcProblem("")).toBeNull();
+    expect(dvcProblem(JSON.stringify({ "period-1980-1990": [{ "changed outs": {} }] }))).toMatch(
+      /doesn't match dvc.lock \(period-1980-1990\).*sfzmaps build/,
+    );
+    expect(dvcProblem("not json")).toMatch(/could not read/);
   });
 });

@@ -33,6 +33,15 @@ or Blob token.
 
 ## Data and tiles
 
+- Hand-made inputs (reviews, seeds, page corrections, zoning overrides, the label scale) live
+  in git under `pipeline/inputs/`; commit them. Don't put anything a person decided into
+  `pipeline/data/`.
+- Rebuild with `uv run sfzmaps build` (parallel, $0, recorded in `pipeline/dvc.lock`), not by
+  running commands by hand, and commit `dvc.lock` afterwards. In a worktree, set up data with
+  `pipeline/scripts/worktree-data.sh`; never link another checkout's `data/work` or `data/out`.
+- Keep DVC's cache type `reflink,copy`; `hardlink`/`symlink` corrupt the cache because the
+  pipeline rewrites files in place. Never run a bare `dvc gc`.
+
 - Never commit `pipeline/data/`. It's gigabytes, and it's shared through the
   processed bundle instead.
 - Published tiles are served from Vercel Blob. Don't overwrite a published

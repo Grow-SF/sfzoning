@@ -1,0 +1,21 @@
+# Files inside tracked pipeline folders that DVC must not hash or version (see
+# pipeline/README.md, "Builds"): they are rebuilt on demand, or written by the editor while you
+# browse, so tracking them would mark stages stale for nothing and grow the cache.
+
+# stitch intermediates (stitch.build_vrt makes them and tiling consumes them at once)
+pipeline/data/out/*/cut/
+pipeline/data/out/*/cut-paper/
+pipeline/data/out/*/*.vrt
+pipeline/data/out/*/*.txt
+# the editor's caches and previews
+pipeline/data/work/*/*/dz/
+pipeline/data/work/*/*/preview.png
+pipeline/data/work/*/*/preview.pgw
+pipeline/data/work/*/*/autofill.json
+# hand-made inputs from before pipeline/inputs/ (old worktrees' code still reads them)
+pipeline/data/work/*/*/review.json
+pipeline/data/work/*/*/review.json.pulled
+pipeline/data/work/label_scale.json
+# temp files from interrupted writes
+*.tmp
+.DS_Store

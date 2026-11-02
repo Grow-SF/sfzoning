@@ -586,3 +586,44 @@ def review(
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
+
+
+@app.command()
+def stage(name: str = typer.Argument(..., help="A build stage, e.g. edition-1948, period-1980-1990, "
+                                               "today, shared (see `sfzmaps build --list`).")) -> None:
+    """Run one build stage's commands, at $0 (what `sfzmaps build` and `dvc repro` run)."""
+    from sfzmaps import build as build_mod
+
+    if name not in build_mod.stages():
+        raise typer.BadParameter(f"unknown stage {name!r}; stages: {', '.join(build_mod.stages())}")
+    try:
+        build_mod.run_stage(name)
+    except build_mod.StageFailed as e:
+        typer.echo(f"stage {name}: {e}", err=True)
+        raise typer.Exit(build_mod.PAID_READ_EXIT if e.paid_read else 1)
+
+
+@app.command()
+def build(
+    targets: list[str] = typer.Argument(None, help="Only these stages (and what they depend on)."),
+    jobs: int = typer.Option(4, "--jobs", "-j", help="Stages run at once."),
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Say what would run; run nothing."),
+    force: bool = typer.Option(False, "--force", help="Run the named stages even if up to date."),
+    write_dvc_yaml: bool = typer.Option(False, "--write-dvc-yaml", help="Regenerate pipeline/dvc.yaml."),
+    list_: bool = typer.Option(False, "--list", help="List the stages."),
+) -> None:
+    """Rebuild what is stale (by DVC's content hashes), in parallel, never spending money."""
+    from sfzmaps import build as build_mod
+
+    if write_dvc_yaml:
+        build_mod.dvc_yaml_path().write_text(build_mod.dvc_yaml())
+        typer.echo(f"wrote {build_mod.dvc_yaml_path()}")
+        return
+    if list_:
+        for st in build_mod.stages().values():
+            typer.echo(f"{st.name:24} {' '.join(c[0] + ' ' + c[-1] for c in build_mod.stage_commands(st.name))}")
+        return
+    if force and not targets:
+        raise typer.BadParameter("--force needs the stages to run")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    raise typer.Exit(build_mod.build(targets or None, jobs, dry_run, force))
