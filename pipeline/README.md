@@ -44,7 +44,7 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 | `edit [--year S] [--sheet ID]` | Start the control-point editor on 127.0.0.1:8765 (`--demo` for a synthetic sheet). |
 | `bundle` | Write the processed files into `data/share/` as zips plus `PROCESSED.json`, for copying by hand into the Drive folder `old-planning-maps/processed/`. |
 | `pull` | Download the processed zips from the public Drive `processed/` folder and extract them into `data/`. The `processed/` folder must be shared as "Anyone with the link" (Viewer); `pull` uses Drive's public download, so a private folder gives an error page, which `pull` rejects. |
-| `crossref --year S` / `--all` | Re-place flagged sheets by matching each to the same printed sheet number in another edition that passed (SIFT + RANSAC on the drawings, composed with that sheet's transform), then rerun refine and score. A result is kept only if it scores better; otherwise the sheet's files are restored. Republishes improved series (`--no-publish` to skip). No API calls. |
+| `crossref --year S` / `--all` | Re-place flagged sheets by matching each to the same printed sheet number in another edition that passed (SIFT + RANSAC on the drawings, composed with that sheet's transform), then rerun refine and score. A result is kept only if it scores better, and is then pinned as the sheet's seed (`inputs/<series>/seeds/`; commit it); otherwise the sheet's files and seed are restored. Republishes improved series (`--no-publish` to skip). No API calls. |
 | `eval --year 1948\|1960` | Per-sheet score next to the distance from our transform to the owner's manual `.points` (the answer key). |
 | `estimate --year S` / `--all` | Estimate API calls, tokens and USD for the uncached pages (no API calls). It is an estimate: image tokens use OpenAI's patch formula, prompt text is a flat `config.EST_TEXT_TOKENS_PER_CALL` (~350) per call, and output is a flat `EST_OUT_TOKENS` per call. |
 | `calibrate --year S --sheet ID` | Find the smallest label-reading scale that keeps 95% of full-resolution recall. |
@@ -90,8 +90,8 @@ whether its data matches its code and inputs (`uv run sfzmaps build --dry-run`, 
 - **Never spends money.** Stages run with `SFZMAPS_MAX_USD=0`: cached answers are free, and a
   read that would call the API fails the stage instead. Run that read yourself
   (`SFZMAPS_MAX_USD=5 uv run sfzmaps run --year S`, or `districts --series S`), then build again.
-- **Fails loudly.** A stage fails when a command fails, when a sheet newly errors, or when
-  `paper` skips a series. A failed stage isn't recorded and the stages after it don't run.
+- **Fails loudly.** A stage fails when a command fails, when any of its sheets is in error
+  (`score.json` reason `error: ...`, also on a retry), or when `paper` skips a series. A failed stage isn't recorded and the stages after it don't run.
 - **Records what it was built from.** `build` refuses to start with uncommitted changes in
   `src/`, `inputs/`, `dvc.yaml` or the lock files, and stops recording if they change while it
   runs. One build at a time per data folder (`data/.build.lock`). Logs: `data/build-logs/`.

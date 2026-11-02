@@ -2102,8 +2102,8 @@ stages:
       size: 11993
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 6bc0cd440e0754cdd64c6954618a14d4
-      size: 29609
+      md5: 5887d462247681a0ef13c4f446052135
+      size: 29629
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -2114,8 +2114,8 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 1846f40c07b8720dc559e372101c2915.dir
-      size: 359489
+      md5: 38a2b1290d947eac8bf7191cdb025ca7.dir
+      size: 359517
       nfiles: 27
     - path: src/sfzmaps/inputs.py
       hash: md5
@@ -2198,12 +2198,12 @@ stages:
     outs:
     - path: data/out/today
       hash: md5
-      md5: bf882102cbf03420bfc81f038811cbaf.dir
+      md5: 7453a5fa2e0f1cb5fac835d618d358b4.dir
       size: 135942925
       nfiles: 5
     - path: data/work/today
       hash: md5
-      md5: 9e289f0be98f214ba45b279209a2593a.dir
+      md5: 79373c6b12f275755cf2f0821276f364.dir
       size: 105
       nfiles: 1
   shared:

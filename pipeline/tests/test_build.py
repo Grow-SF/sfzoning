@@ -119,7 +119,7 @@ def test_stage_runs_its_commands_at_zero_dollars(tmp_path, monkeypatch):
     assert [a for a, _ in got] == build.stage_commands("edition-1948") and {u for _, u in got} == {"0"}
 
 
-def test_stage_fails_when_a_sheet_newly_errors(tmp_path, monkeypatch):
+def test_stage_fails_while_any_sheet_is_in_error_even_on_a_retry(tmp_path, monkeypatch):
     sj = _stage_env(tmp_path, monkeypatch)
 
     def run(argv, env):
@@ -177,3 +177,16 @@ def test_build_cli_lists_stages_and_checks_dvc_yaml(monkeypatch):
     monkeypatch.setattr(build, "dvc_yaml", lambda: "different\n")
     r = CliRunner().invoke(app, ["build", "--dry-run"])
     assert r.exit_code != 0 and "dvc.yaml is out of date" in str(r.exception or r.output)
+
+
+def test_paid_read_exit_codes_agree():
+    from sfzmaps import cli
+    assert build.PAID_READ_EXIT == cli.PAID_READ_EXIT != 2      # 2 is click's usage error
+
+
+def test_a_failed_record_is_reported_not_raised():
+    def commit(n):
+        if n == "a":
+            raise RuntimeError("dvc commit: lock")
+    res = build.run_build(["a", "b"], _table(), 2, run_stage=lambda n: None, commit=commit)
+    assert "recording it failed" in res.failed["a"] and set(res.ran) == {"a", "b"} and not res.ok

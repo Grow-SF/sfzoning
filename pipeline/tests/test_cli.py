@@ -84,7 +84,7 @@ def test_cli_districts_quota_aborts_with_resume_hint(monkeypatch, tmp_path):
     monkeypatch.setattr(assemble, "run_series", run)
     monkeypatch.setattr(reviewpage, "write", lambda s: tmp_path / "review.html")
     res = CliRunner().invoke(cli.app, ["districts", "--all"])
-    assert res.exit_code == 2
+    assert res.exit_code == cli.PAID_READ_EXIT
     assert ran[-1] == "1960" and "1964" not in ran          # the loop stopped
     assert "series failed" not in res.output
     assert "resume" in res.output and "sfzmaps districts --all" in res.output
@@ -107,7 +107,7 @@ def test_cli_run_auth_aborts_with_resume_hint(monkeypatch):
 
     monkeypatch.setattr(runner, "run_series", rs)
     res = CliRunner().invoke(cli.app, ["run", "--all"])
-    assert res.exit_code == 2 and ran == ["1921"]
+    assert res.exit_code == cli.PAID_READ_EXIT and ran == ["1921"]
     assert "series failed" not in res.output and "sfzmaps run --all" in res.output
 
 

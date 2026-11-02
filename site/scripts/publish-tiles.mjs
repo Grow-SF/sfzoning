@@ -76,9 +76,21 @@ export function dvcProblem(statusJson) {
     "run `uv run sfzmaps build` in pipeline/ and commit dvc.lock";
 }
 
-function dvcStatus() {
+/** Why publishing must stop (DVC's verdict, then whether dvc.lock is committed), or null. */
+function checkPipelineData() {
+  const pipeline = path.join(SITE, "../pipeline");
   const [cmd, ...args] = DVC;
-  return execFileSync(cmd, [...args, "status", "--json"], { cwd: path.join(SITE, "../pipeline"), encoding: "utf8" });
+  let status;
+  try {
+    status = execFileSync(cmd, [...args, "status", "--json"], { cwd: pipeline, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  } catch (e) {
+    const why = e.code === "ENOENT" ? "uv isn't installed" : String(e.stderr || e.message).trim().split("\n").slice(-2).join(" ");
+    return `could not run dvc status (${why})`;
+  }
+  const problem = dvcProblem(status);
+  if (problem) return problem;
+  const lock = execFileSync("git", ["status", "--porcelain", "--", "dvc.lock"], { cwd: pipeline, encoding: "utf8" });
+  return lock.trim() ? "pipeline/dvc.lock has uncommitted changes; commit it, so the deploy names the data it shows" : null;
 }
 
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -113,7 +125,7 @@ async function main() {
   if (process.argv.includes("--skip-dvc-check")) {
     console.warn("WARNING: --skip-dvc-check: publishing without checking the data matches dvc.lock");
   } else {
-    const problem = dvcProblem(dvcStatus());
+    const problem = checkPipelineData();
     if (problem && !dryRun) throw new Error(`refusing to publish: ${problem}`);
     if (problem) console.warn(`(a real publish would refuse: ${problem})`);
   }

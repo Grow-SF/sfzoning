@@ -766,3 +766,12 @@ def test_front_end_has_autofill_and_current_pass_bar():
     assert "auto points don't count" in js
     assert "PASS_P50 = 7" in js and "PASS_P95 = 15" in js
     assert "above 5 ft" not in js
+
+
+def test_demo_saves_inputs_under_its_own_root(tmp_path, monkeypatch):
+    from sfzmaps.editor import demo as demo_mod
+    for n in ("WORK_DIR", "RAW_DIR", "REF_DIR", "OUT_DIR", "INPUTS_DIR"):
+        monkeypatch.setattr(config, n, getattr(config, n))   # restored after the test
+    d = demo_mod.build_demo(tmp_path / "demo")
+    assert config.INPUTS_DIR == tmp_path / "demo" / "inputs"
+    assert tmp_path / "demo" in inputs.review_path(d.series, d.sheet_id).parents

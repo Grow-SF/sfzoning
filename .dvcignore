@@ -19,3 +19,7 @@ pipeline/data/work/label_scale.json
 # temp files from interrupted writes
 *.tmp
 .DS_Store
+# Python bytecode: its header holds the source mtime and interpreter version, so hashing it
+# would make every stage look stale after a checkout or a different Python
+**/__pycache__/
+*.pyc

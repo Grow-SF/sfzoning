@@ -41,9 +41,9 @@ log = logging.getLogger(__name__)
 DVC = ["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc"]
 # Code that can't change a build output: the editor, the build driver, bundling, evaluation.
 CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "__pycache__"}
-# An exit code of a pipeline command that means "needs a paid read" (llm.FATAL: the $0 cap or
-# no API key) rather than a bug.
-PAID_READ_EXIT = 2
+# The exit code of a pipeline command stopped by llm.FATAL (the $0 cap, or no API key): "needs a
+# paid read", not a bug. Same value as cli.PAID_READ_EXIT (a test keeps them equal).
+PAID_READ_EXIT = 75
 
 
 @dataclass(frozen=True)
@@ -199,18 +199,23 @@ def _sfzmaps_exe() -> list[str]:
 
 def run_stage(name: str, run: Callable[[list[str], dict], tuple[int, str]] | None = None) -> None:
     """Run one stage's commands in order, at $0 (SFZMAPS_MAX_USD=0). StageFailed when a command
-    fails, a sheet newly errors (run keeps going past a failing sheet and exits 0) or paper
-    skips a series."""
+    fails, any sheet of the stage is in error afterwards (run keeps going past a failing sheet
+    and exits 0, and a retry must not accept it) or paper skips a series."""
     st = stages()[name]
     env = {**os.environ, "SFZMAPS_MAX_USD": "0"}
 
     def default_run(argv: list[str], env: dict) -> tuple[int, str]:
-        p = subprocess.run(_sfzmaps_exe() + argv, env=env, stderr=subprocess.PIPE, text=True)
-        sys.stderr.write(p.stderr)
-        return p.returncode, p.stderr
+        # stderr (the commands' logging) is passed through line by line as it comes, and kept
+        # so the paper "skipped" check can read it
+        p = subprocess.Popen(_sfzmaps_exe() + argv, env=env, stderr=subprocess.PIPE, text=True)
+        kept = []
+        for line in p.stderr:
+            sys.stderr.write(line)
+            sys.stderr.flush()
+            kept.append(line)
+        return p.wait(), "".join(kept)
 
     run = run or default_run
-    before = _errored_sheets(st.series)
     for argv in stage_commands(name):
         code, err = run(argv, env)
         what = "sfzmaps " + " ".join(argv)
@@ -221,10 +226,10 @@ def run_stage(name: str, run: Callable[[list[str], dict], tuple[int, str]] | Non
             raise StageFailed(f"{what} failed (exit {code})")
         if argv[0] == "paper" and f"{argv[2]}: skipped (" in err:
             raise StageFailed(f"{what} skipped the series: {err.strip().splitlines()[-1]}")
-    new = sorted(_errored_sheets(st.series) - before)
-    if new:
-        raise StageFailed(f"{len(new)} sheet(s) newly failed: {', '.join(new[:8])}"
-                          f"{' ...' if len(new) > 8 else ''} (see out/run-*.log)")
+    bad = sorted(_errored_sheets(st.series))
+    if bad:
+        raise StageFailed(f"{len(bad)} sheet(s) in error: {', '.join(bad[:8])}"
+                          f"{' ...' if len(bad) > 8 else ''} (see out/run-*.log)")
 
 
 # --- sfzmaps build ---------------------------------------------------------------------------
@@ -332,7 +337,11 @@ def run_build(order: list[str], table: dict[str, Stage], jobs: int, *,
                 if stop:
                     failed[n] = f"not recorded: {stop}"
                     continue
-                commit(n)
+                try:
+                    commit(n)
+                except Exception as e:  # noqa: BLE001 - reported with the rest of the build
+                    failed[n] = f"ran, but recording it failed: {e}"
+                    continue
                 done.add(n)
                 log.info("build: %s done", n)
     return BuildResult(ran, failed, skipped)
@@ -341,7 +350,7 @@ def run_build(order: list[str], table: dict[str, Stage], jobs: int, *,
 def build(targets: list[str] | None, jobs: int, dry_run: bool, force: bool) -> int:
     """`sfzmaps build`: exit status."""
     table = stages()
-    if dvc_yaml_path().read_text() != dvc_yaml():
+    if not dvc_yaml_path().exists() or dvc_yaml_path().read_text() != dvc_yaml():
         raise SystemExit("pipeline/dvc.yaml is out of date: run `uv run sfzmaps build --write-dvc-yaml`")
     dirty = git_dirty()
     if dirty and not dry_run:
@@ -380,7 +389,9 @@ def build(targets: list[str] | None, jobs: int, dry_run: bool, force: bool) -> i
             return None
 
         def commit(name: str) -> None:
-            dvc("commit", "--force", name)
+            p = dvc("commit", "--force", name, check=False)
+            if p.returncode != 0:
+                raise RuntimeError(f"dvc commit: {p.stderr.strip()[-300:]}")
 
         t0 = time.monotonic()
         res = run_build(order, table, jobs, run_stage=one, commit=commit, guard=guard)

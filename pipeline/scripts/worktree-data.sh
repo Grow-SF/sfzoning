@@ -10,9 +10,13 @@
 #
 #   pipeline/scripts/worktree-data.sh /path/to/main/checkout
 set -euo pipefail
-main=$(cd "${1:?usage: worktree-data.sh MAIN_CHECKOUT}" && pwd)
-here=$(git rev-parse --show-toplevel)
-[ "$main" != "$here" ] || { echo "run this in a worktree, not the main checkout" >&2; exit 1; }
+main=$(cd "${1:?usage: worktree-data.sh MAIN_CHECKOUT}" && pwd -P)
+here=$(cd "$(git rev-parse --show-toplevel)" && pwd -P)
+# the main checkout is the first entry of `git worktree list`
+first=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
+first=$(cd "$first" && pwd -P)
+[ "$main" = "$first" ] || { echo "$main is not the main checkout ($first is)" >&2; exit 1; }
+[ "$here" != "$first" ] || { echo "run this inside a worktree, not the main checkout" >&2; exit 1; }
 dvc() { (cd "$here/pipeline" && uv tool run --from dvc==3.67.1 dvc "$@"); }
 
 mkdir -p "$here/pipeline/data"
