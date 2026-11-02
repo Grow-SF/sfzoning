@@ -164,3 +164,16 @@ def test_one_build_at_a_time(tmp_path):
         with pytest.raises(SystemExit, match="another build"):
             with build.build_lock(tmp_path / "l"):
                 pass
+
+
+def test_build_cli_lists_stages_and_checks_dvc_yaml(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps.cli import app
+    r = CliRunner().invoke(app, ["build", "--list"])
+    assert r.exit_code == 0 and "period-1980-1990" in r.output and "shared" in r.output
+    r = CliRunner().invoke(app, ["build", "--force"])
+    assert r.exit_code != 0
+    monkeypatch.setattr(build, "dvc_yaml", lambda: "different\n")
+    r = CliRunner().invoke(app, ["build", "--dry-run"])
+    assert r.exit_code != 0 and "dvc.yaml is out of date" in str(r.exception or r.output)

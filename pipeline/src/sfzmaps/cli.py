@@ -613,6 +613,8 @@ def build(
     list_: bool = typer.Option(False, "--list", help="List the stages."),
 ) -> None:
     """Rebuild what is stale (by DVC's content hashes), in parallel, never spending money."""
+    import logging
+
     from sfzmaps import build as build_mod
 
     if write_dvc_yaml:
