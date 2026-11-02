@@ -43,6 +43,10 @@ or Blob token.
   `sfzmaps build` refuses tools from elsewhere. Before changing a version there or running
   `pixi update`, check renders with `pixi run doctor-renders`: a render that differs means
   paid re-reads.
+- Before a branch that changed pipeline data merges, build, commit `dvc.lock`, and run
+  `uv run sfzmaps ship`; the `Cache shipped` check enforces it. Merge only branches that are up
+  to date with `main` (the shipped tree must be the merged tree). Never delete a cached answer
+  to force a re-read; change the prompt or context instead.
 - Keep DVC's cache type `reflink,copy`; `hardlink`/`symlink` corrupt the cache because the
   pipeline rewrites files in place. Never run a bare `dvc gc`.
 
