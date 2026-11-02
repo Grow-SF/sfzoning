@@ -13,8 +13,9 @@ const b = await chromium.launch({ args: ["--use-gl=swiftshader", "--enable-unsaf
 const p = await b.newPage({ viewport: { width: 1936, height: 760 } });
 await p.goto(base);
 await p.addStyleTag({ content: "[aria-label=Eras], [data-testid=legend], .draft-banner { display: none !important; }" });
-await p.waitForFunction(() => document.querySelector(".map-wrap")?.getAttribute("data-idle") === "true", null, { timeout: 60_000 });
-await p.waitForTimeout(1000);
+// No map hooks in the build: wait for the tiles to finish downloading, then for the fades.
+await p.waitForLoadState("networkidle", { timeout: 60_000 });
+await p.waitForTimeout(2000);
 const box = await p.locator(".map-wrap").first().boundingBox();
 await p.screenshot({ path: out, clip: { x: Math.round(box.x + (box.width - 1200) / 2), y: 70, width: 1200, height: 630 } });
 await b.close();

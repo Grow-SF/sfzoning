@@ -1,8 +1,8 @@
 // Dev helper: screenshot the hero, every story step, the explorer (each view) and the about
 // page at phone and desktop sizes.
 // Usage: node scripts/shot.mjs <outDir> [baseUrl] [only-prefix]
-//   (site running with NEXT_PUBLIC_E2E=1 for the map hooks, tiles on :8787)
-// Waits on the maps themselves (window.__map / __maps, test builds only) rather than a fixed sleep.
+//   (site running, tiles on :8787 or a published base)
+// Waits for downloads to stop, then for the camera move and fades.
 import fs from "node:fs";
 import { chromium } from "@playwright/test";
 
@@ -11,17 +11,10 @@ const base = process.argv[3] ?? "http://127.0.0.1:3100";
 const only = process.argv[4];
 fs.mkdirSync(out, { recursive: true });
 
-/** Resolve once the map (story: __map; explorer: the last of __maps) has settled. */
-async function settle(p, which = "story") {
-  await p.waitForFunction(
-    (w) => {
-      const maps = window.__maps ?? [];
-      const m = w === "story" ? window.__map : maps[maps.length - 1];
-      return !!m && m.loaded() && !m.isMoving() && m.areTilesLoaded();
-    },
-    which,
-    { timeout: 30_000, polling: 250 },
-  ).catch(() => console.warn("map did not settle", which));
+/** Resolve once the map has stopped downloading and finished moving. */
+async function settle(p) {
+  await p.waitForTimeout(1500); // the 1.4s camera move
+  await p.waitForLoadState("networkidle", { timeout: 30_000 }).catch(() => console.warn("map did not settle"));
   await p.waitForTimeout(900); // paint-property fades
 }
 
