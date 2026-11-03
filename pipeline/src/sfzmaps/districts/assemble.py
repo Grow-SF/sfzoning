@@ -328,13 +328,23 @@ def categorise(df: pd.DataFrame, year: int) -> pd.DataFrame:
     return df
 
 
-def parks_in_effect(year: int) -> pd.DataFrame:
-    """inputs/parks.csv rows (name, blklot) of the parks that existed in `year`: since <= year."""
+def _parks_csv() -> pd.DataFrame:
     path = inputs.parks_path()
     if not path.exists():
-        return pd.DataFrame({"name": [], "blklot": []}, dtype=str)
-    p = pd.read_csv(path, dtype={"name": str, "blklot": str, "since": int})
+        return pd.DataFrame({"name": [], "blklot": [], "since": [], "public_since": []})
+    p = pd.read_csv(path, dtype={"name": str, "blklot": str})
     p["blklot"] = p["blklot"].str.strip()
+    # public_since (optional): the year the land became public, when that is before it became a park
+    if "public_since" not in p:
+        p["public_since"] = p["since"]
+    p["public_since"] = pd.to_numeric(p["public_since"], errors="coerce").fillna(p["since"])
+    p["public_since"] = p[["since", "public_since"]].min(axis=1)
+    return p
+
+
+def parks_in_effect(year: int) -> pd.DataFrame:
+    """inputs/parks.csv rows (name, blklot) of the parks that existed in `year`: since <= year."""
+    p = _parks_csv()
     return p.loc[p["since"] <= year, ["name", "blklot"]].reset_index(drop=True)
 
 
@@ -342,11 +352,15 @@ def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame, year: int) -> pd.DataFr
     """Lots of a park in inputs/parks.csv are `public` in every series from the year it became a
     park (`since`) on, whatever the map zones them (owner's decision: old maps zoned park land
     residential as a quirk of the law, not because homes could go there); earlier series keep the
-    map's zoning. The read code stays, and `note` says what the map shows. A lot of a park in
-    effect that the map doesn't cover is added, so the park is whole."""
+    map's zoning. Land public before it was a park (`public_since`, e.g. the Presidio, an Army post
+    from 1776 and a park from 1994) is `public` from that year, and only counts as a park from
+    `since`. The read code stays, and `note` says what the map shows. A lot of a park in effect
+    that the map doesn't cover is added, so the park is whole."""
     df = df.copy()
     df["note"] = None
-    lots = set(parks_in_effect(year)["blklot"])
+    p = _parks_csv()
+    parks = set(p.loc[p["since"] <= year, "blklot"])
+    lots = parks | set(p.loc[p["public_since"] <= year, "blklot"])
     if not lots:
         return df
     missing = sorted(lots & set(parcels["blklot"]) - set(df["blklot"]))
@@ -355,8 +369,10 @@ def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame, year: int) -> pd.DataFr
                                           "confidence": 0.0, "source_sheet": None,
                                           "category": "unknown", "note": None})], ignore_index=True)
     m = df["blklot"].isin(lots) & (df["category"] != "public")
-    df.loc[m, "note"] = [f"Shown as park; this map zones it {c}" if isinstance(c, str) and c.strip()
-                         else "Shown as park; this map gives it no district" for c in df.loc[m, "code"]]
+    what = ["Shown as park" if b in parks else "Public land" for b in df.loc[m, "blklot"]]
+    df.loc[m, "note"] = [f"{w}; this map zones it {c}" if isinstance(c, str) and c.strip()
+                         else f"{w}; this map gives it no district"
+                         for w, c in zip(what, df.loc[m, "code"])]
     df.loc[m, "category"] = "public"
     return df
 

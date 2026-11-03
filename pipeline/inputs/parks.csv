@@ -1,4 +1,4 @@
-name,blklot,since,source
+name,blklot,since,source,public_since
 Alamo Square,0799001,1856,"Park created 1856 by Mayor Van Ness (https://en.wikipedia.org/wiki/Alamo_Square,_San_Francisco); lot from DataSF Rec and Park properties"
 Alta Plaza Park,0607001,1855,"Reserved for park use by the Van Ness Ordinances 1855, built 1890-92; New Fillmore, 'From an abandoned quarry came a jewel of an urban park' (https://newfillmore.com/?p=11419); lot from DataSF Rec and Park properties"
 Aquatic Park,0405007,1979,"NPS Land Resources tract SAFR-101-02, conveyed to the National Park Service 1979"
@@ -102,7 +102,7 @@ Mission Dolores Park,3599001,1905,City bought the land 1905 (https://en.wikipedi
 Moscone Rec Center,0469001,1855,"Reserved for park use by the Van Ness Ordinances 1855; New Fillmore, 'From an abandoned quarry came a jewel of an urban park' (https://newfillmore.com/?p=11419); lot from DataSF Rec and Park properties"
 Mt. Davidson Park,3015003,1929,Summit bought by the city for a park 1929 (https://en.wikipedia.org/wiki/Mount_Davidson_(California)); lot from DataSF Rec and Park properties
 Portsmouth Square,0209017,1835,Set aside as an official plaza 1835 (https://en.wikipedia.org/wiki/Portsmouth_Square); lot from DataSF Rec and Park properties
-Presidio,1300001,1994,"NPS Land Resources tract GOGA-01-120, conveyed to the National Park Service 1994"
+Presidio,1300001,1994,"NPS Land Resources tract GOGA-01-120, conveyed to the National Park Service 1994",1776
 San Francisco Zoo,7281005,1929,Fleishhacker Zoo established June 12 1929 (https://www.sfzoo.org/the-history-of-the-san-francisco-zoo/); lot from DataSF Rec and Park properties
 San Francisco Zoo,7281006,1929,Fleishhacker Zoo established June 12 1929 (https://www.sfzoo.org/the-history-of-the-san-francisco-zoo/); lot from DataSF Rec and Park properties
 San Francisco Zoo,7281007,1929,Fleishhacker Zoo established June 12 1929 (https://www.sfzoo.org/the-history-of-the-san-francisco-zoo/); lot from DataSF Rec and Park properties

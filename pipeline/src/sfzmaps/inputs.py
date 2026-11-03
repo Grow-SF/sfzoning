@@ -13,7 +13,9 @@ only what the pipeline can rebuild. Per series, inputs/<series>/:
 and inputs/label_scale.json, the calibrated label-reading scale per series, and inputs/parks.csv
 (name,blklot,since,source), San Francisco's park lots with the year each became a park: category
 `public` in every series whose year is `since` or later, whatever the map zones them; earlier
-series keep the map's zoning (owner's decision, 2026-11-02). Candidates come from
+series keep the map's zoning (owner's decision, 2026-11-02). The optional last column
+`public_since` is the year the land became public when that was before it became a park (the
+Presidio: an Army post from 1776): `public` from then, counted as a park only from `since`. Candidates come from
 `sfzmaps parks` (sfzmaps.parks); a park without a documented year is left out.
 """
 from __future__ import annotations

@@ -81,6 +81,20 @@ def test_a_park_is_public_from_its_year_on(data, monkeypatch):
         assert json.loads((d / "stats.json").read_text())["parks"] == {"count": count, "acres": round(count * 1e4 / 43560, 1)}
 
 
+def test_public_land_is_public_before_it_is_counted_as_a_park(data, monkeypatch):
+    # Presidio-like: public land from 1776, a park from 1994
+    inputs.parks_path().parent.mkdir(parents=True, exist_ok=True)
+    inputs.parks_path().write_text("name,blklot,since,source,public_since\nPresidio,1000001,1994,,1776\n")
+    monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-1", "R-1"]))
+    for series, count, note in (("1960", 0, "Public land; this map zones it R-1"),
+                                ("2000-digital-zoning", 1, "Shown as park; this map zones it R-1")):
+        d = assemble.run_series(series)
+        g = gpd.read_file(d / "parcels.fgb").set_index("blklot")
+        assert g.loc["1000001", "category"] == "public" and g.loc["1000001", "note"] == note
+        assert g.loc["1000002", "category"] == "single_family"
+        assert json.loads((d / "stats.json").read_text())["parks"]["count"] == count
+
+
 def test_override_missing_blklot_warns(data):
     _overrides("blklot,code\n9999999,C-2\n1000002,R-1\n")
     with pytest.warns(UserWarning, match="9999999"):
