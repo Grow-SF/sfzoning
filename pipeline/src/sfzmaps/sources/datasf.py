@@ -20,6 +20,10 @@ from sfzmaps.config import REF_DIR, WORK_CRS
 PARCELS_URL = "https://data.sf.gov/resource/acdm-wktn.geojson"
 ZONING_URL = "https://data.sf.gov/resource/3i4a-hu95.geojson"
 STREETS_URL = "https://data.sf.gov/resource/3psu-pn9h.geojson"
+REC_PARK_URL = "https://data.sf.gov/resource/gtr9-ntp6.geojson"
+# NPS Land Resources Division tracts: every federal tract with the date it was conveyed
+NPS_TRACTS_URL = ("https://services1.arcgis.com/fBc8EJBxQRMcHlei/arcgis/rest/services/"
+                  "NPS_Land_Resources_Division_Boundary_and_Tract_Data_Service/FeatureServer/1/query")
 PAGE_SIZE = 50000
 MIN_AREA_SQFT = 50.0
 SIMPLIFY_FT = 2.0
@@ -29,6 +33,8 @@ MAX_PAGES = 100
 
 PARCEL_COLS = ["block_num", "lot_num", "blklot", "active", "date_rec_drop", "date_map_drop"]
 ZONING_COLS = ["zoning_sim", "districtna", "url", "gen", "zoning", "codesectio"]
+REC_PARK_COLS = ["property_id", "property_name", "acres", "propertytype", "ownership", "complex",
+                 "address"]
 STREET_COLS = ["cnn", "street", "st_type", "streetname", "f_node_cnn", "t_node_cnn", "active"]
 
 _SUFFIXES = {
@@ -230,6 +236,38 @@ def fetch_reference(dest: Path = REF_DIR) -> None:
     parcels.to_parquet(dest / "parcels.parquet")
     streets = _fetch_all(STREETS_URL, STREET_COLS, "line")
     streets.to_parquet(dest / "streets.parquet")
+
+
+def fetch_rec_park_properties(dest: Path = REF_DIR) -> Path:
+    """DataSF Recreation and Parks Properties (gtr9-ntp6), every Rec and Park property with its
+    outline -> ref/rec_park_properties.parquet. The source of inputs/parks.csv's city lots
+    (sfzmaps.parks); it has no acquisition dates."""
+    dest.mkdir(parents=True, exist_ok=True)
+    props = _fetch_all(REC_PARK_URL, REC_PARK_COLS, "shape")
+    path = dest / "rec_park_properties.parquet"
+    props.to_parquet(path)
+    return path
+
+
+def fetch_nps_tracts(dest: Path = REF_DIR) -> Path:
+    """The National Park Service's land tracts in San Francisco (Golden Gate National Recreation
+    Area, the Presidio, the Maritime park), each with the date it was conveyed (`ConveyDate`)
+    -> ref/nps_tracts.parquet. One request: about 70 tracts, under the service's 2,000 limit."""
+    dest.mkdir(parents=True, exist_ok=True)
+    params = {"where": "ALPHA IN ('GOGA','SAFR','PRES')", "outFields": "*", "f": "geojson",
+              "geometry": "-122.52,37.70,-122.35,37.84", "geometryType": "esriGeometryEnvelope",
+              "inSR": "4326", "spatialRel": "esriSpatialRelIntersects", "outSR": "4326"}
+    with httpx.Client(timeout=300, follow_redirects=True) as client:
+        r = client.get(NPS_TRACTS_URL, params=params)
+        r.raise_for_status()
+    tracts = gpd.read_file(io.BytesIO(r.content))
+    if len(tracts) == 0 or len(tracts) >= 2000:
+        raise RuntimeError(f"NPS tracts: {len(tracts)} rows; expected about 70")
+    if tracts.crs is None:
+        tracts = tracts.set_crs("EPSG:4326")
+    path = dest / "nps_tracts.parquet"
+    tracts.to_crs(WORK_CRS).to_parquet(path)
+    return path
 
 
 def fetch_zoning_current(dest: Path = REF_DIR) -> Path:

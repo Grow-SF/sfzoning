@@ -57,11 +57,31 @@ def refdata(
     if force or not (config.REF_DIR / "parcels.parquet").exists() \
             or not (config.REF_DIR / "streets.parquet").exists():
         datasf.fetch_reference(config.REF_DIR)
+    # the park outlines behind inputs/parks.csv (`sfzmaps parks`)
+    if force or not (config.REF_DIR / "rec_park_properties.parquet").exists():
+        datasf.fetch_rec_park_properties(config.REF_DIR)
+    if force or not (config.REF_DIR / "nps_tracts.parquet").exists():
+        datasf.fetch_nps_tracts(config.REF_DIR)
     ref = datasf.load_reference()
     typer.echo(f"blocks: {len(ref.blocks)}")
     typer.echo(f"corners: {len(ref.corners)}")
     typer.echo(f"intersections: {len(ref.intersections)}")
     typer.echo(f"bounds: {list(ref.blocks.total_bounds)}")
+
+
+@app.command()
+def parks(
+    out: Path = typer.Option(None, "--out", help="Write the CSV here instead of stdout."),
+) -> None:
+    """Park lots the reference data shows (Rec and Park properties, NPS tracts): the candidates
+    for inputs/parks.csv, with the NPS conveyance year where there is one. Reads data/ref only."""
+    from sfzmaps import parks as park_lots
+
+    text = park_lots.candidates().to_csv(index=False)
+    if out:
+        out.write_text(text)
+    else:
+        typer.echo(text, nl=False)
 
 
 def _page_png(page) -> Path:

@@ -6,7 +6,8 @@ story category, then the published outputs under out/<series>/districts/:
   districts.fgb    parcels dissolved by code (code, category)
   <series>-districts.pmtiles   vector tiles, layers `parcels` and `districts` (EPSG:3857, z11-16)
   stats.json       {category: {parcels, area_sqft}, unknown_share, mapped_area_sqft,
-                   unmapped_parcels, provenance: {use, height}} (today: also notes)
+                   unmapped_parcels, parks: {count, acres} (park_tally),
+                   provenance: {use, height}} (today: also notes)
   unknown_codes.json   codes read but absent from the research table -> parcel count
 
 A height series (role "height") instead writes out/<zoning series>/districts/height.parquet,
@@ -327,17 +328,27 @@ def categorise(df: pd.DataFrame, year: int) -> pd.DataFrame:
     return df
 
 
-def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame) -> pd.DataFrame:
-    """inputs/parks.csv lots are `public` in every series, whatever the map zones them (owner's
-    decision: old maps zoned park land residential as a quirk of the law, not because homes could
-    go there). The read code stays, and `note` says what the map shows. A listed lot the map
-    doesn't cover is added, so the park is whole in every era."""
-    df = df.copy()
-    df["note"] = None
+def parks_in_effect(year: int) -> pd.DataFrame:
+    """inputs/parks.csv rows (name, blklot) of the parks that existed in `year`: since <= year."""
     path = inputs.parks_path()
     if not path.exists():
+        return pd.DataFrame({"name": [], "blklot": []}, dtype=str)
+    p = pd.read_csv(path, dtype={"name": str, "blklot": str, "since": int})
+    p["blklot"] = p["blklot"].str.strip()
+    return p.loc[p["since"] <= year, ["name", "blklot"]].reset_index(drop=True)
+
+
+def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame, year: int) -> pd.DataFrame:
+    """Lots of a park in inputs/parks.csv are `public` in every series from the year it became a
+    park (`since`) on, whatever the map zones them (owner's decision: old maps zoned park land
+    residential as a quirk of the law, not because homes could go there); earlier series keep the
+    map's zoning. The read code stays, and `note` says what the map shows. A lot of a park in
+    effect that the map doesn't cover is added, so the park is whole."""
+    df = df.copy()
+    df["note"] = None
+    lots = set(parks_in_effect(year)["blklot"])
+    if not lots:
         return df
-    lots = set(pd.read_csv(path, dtype=str)["blklot"].str.strip())
     missing = sorted(lots & set(parcels["blklot"]) - set(df["blklot"]))
     if missing:
         df = pd.concat([df, pd.DataFrame({"blklot": missing, "code": None, "height_code": None,
@@ -364,6 +375,14 @@ def stats(g: gpd.GeoDataFrame) -> dict:
     out["unknown_share"] = round(out["unknown"]["parcels"] / n, 4) if n else 0.0
     out["mapped_area_sqft"] = round(sum(out[c]["area_sqft"] for c in CATEGORIES), 1)
     return out
+
+
+def park_tally(year: int, geo: gpd.GeoDataFrame) -> dict:
+    """The parks of inputs/parks.csv in effect in `year`: how many (by name) and their lots'
+    land area in acres."""
+    p = parks_in_effect(year)
+    shapes = geo[geo["blklot"].isin(set(p["blklot"]))]
+    return {"count": int(p["name"].nunique()), "acres": round(float(shapes.geometry.area.sum()) / 43560, 1)}
 
 
 def dissolve(g: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
@@ -428,7 +447,7 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
     hs = height_series_of(series)
     if hs:
         df = apply_overrides(df, hs, column="height_code", blocks=blocks)
-    df = apply_parks(categorise(df, year), parcels)
+    df = apply_parks(categorise(df, year), parcels, year)
     geo = parcels[["blklot", "geometry"]].drop_duplicates("blklot")
     g = gpd.GeoDataFrame(df.merge(geo, on="blklot", how="inner"), geometry="geometry", crs=geo.crs)
     g = g[g.geometry.notna() & ~g.geometry.is_empty]       # a few DataSF parcels have no shape
@@ -442,6 +461,7 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
     write_pmtiles(g, districts, d / f"{series}-districts.pmtiles", f"SF zoning districts {series}")
     st = stats(g)
     st["unmapped_parcels"] = int((~geo["blklot"].isin(set(g["blklot"]))).sum())
+    st["parks"] = park_tally(year, geo)
     st["provenance"] = read_provenance(series, partial=partial)
     if partial:
         st["partial"] = True

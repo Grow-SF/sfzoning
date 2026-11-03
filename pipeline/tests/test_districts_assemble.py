@@ -57,16 +57,28 @@ def test_override_applied_before_join(data, monkeypatch):
     assert g.loc["1000002", "category"] == "two_unit"
 
 
-def test_listed_park_lots_are_public_in_every_series_and_keep_their_code(data, monkeypatch):
+def test_listed_park_lots_are_public_and_keep_their_code(data, monkeypatch):
     # 1000001 is read as housing, 1002001 isn't on the map at all; 1000002 isn't a listed park
     inputs.parks_path().parent.mkdir(parents=True, exist_ok=True)
-    inputs.parks_path().write_text("name,blklot,note\nA park,1000001,\nA park,1002001,\n")
+    inputs.parks_path().write_text("name,blklot,since,source\nA park,1000001,1900,\nA park,1002001,1900,\n")
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-1", "R-1", "R-4", "R-4"]))
     g = gpd.read_file(assemble.run_series("1960") / "parcels.fgb").set_index("blklot")
     assert g.loc["1000001", ["code", "category"]].tolist() == ["R-1", "public"]
     assert g.loc["1000001", "note"] == "Shown as park; this map zones it R-1"
     assert g.loc["1002001", "category"] == "public"
     assert g.loc["1000002", "category"] == "single_family" and pd.isna(g.loc["1000002", "note"])
+
+
+def test_a_park_is_public_from_its_year_on(data, monkeypatch):
+    # since=1950: the 1948 map keeps its zoning, the 1960 map shows the park
+    inputs.parks_path().parent.mkdir(parents=True, exist_ok=True)
+    inputs.parks_path().write_text("name,blklot,since,source\nNew park,1000001,1950,\nOld park,1000002,1900,\n")
+    monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-1", "R-1"]))
+    for series, category, count in (("1948", "single_family", 1), ("1960", "public", 2)):
+        d = assemble.run_series(series)
+        assert gpd.read_file(d / "parcels.fgb").set_index("blklot").loc["1000001", "category"] == category
+        # 100x100 ft lots: 10,000 sq ft each
+        assert json.loads((d / "stats.json").read_text())["parks"] == {"count": count, "acres": round(count * 1e4 / 43560, 1)}
 
 
 def test_override_missing_blklot_warns(data):

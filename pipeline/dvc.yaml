@@ -23,6 +23,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -66,6 +67,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -109,6 +111,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -152,6 +155,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -195,6 +199,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -238,6 +243,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -281,6 +287,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -324,6 +331,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -367,6 +375,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -410,6 +419,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -453,6 +463,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -506,6 +517,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -559,6 +571,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -612,6 +625,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -665,6 +679,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py
@@ -705,6 +720,7 @@ stages:
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
       - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
       - src/sfzmaps/pointsfile.py
       - src/sfzmaps/reading.py

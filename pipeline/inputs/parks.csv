@@ -1,7 +1,129 @@
-name,blklot,note
-Golden Gate Park,1700001,"Park since 1870; the lot includes the Panhandle"
-Presidio,1300001,"Military reservation (Spanish from 1776, US Army 1846-1994), then a national park"
-Lincoln Park,1313029,"Park since 1909 (the former City Cemetery); golf course, Legion of Honor; east lot"
-Lincoln Park,1313023,"Park since 1909 (the former City Cemetery); west lot"
-Buena Vista Park,2601001,"Reserved 1867, named a park 1894"
-Sutro Heights,1484002,"Open to the public free from 1885; deeded to the city in 1920 to be held forever as a public park (NPS)"
+name,blklot,since,source
+Alamo Square,0799001,1856,"Park created 1856 by Mayor Van Ness (https://en.wikipedia.org/wiki/Alamo_Square,_San_Francisco); lot from DataSF Rec and Park properties"
+Alta Plaza Park,0607001,1855,"Reserved for park use by the Van Ness Ordinances 1855, built 1890-92; New Fillmore, 'From an abandoned quarry came a jewel of an urban park' (https://newfillmore.com/?p=11419); lot from DataSF Rec and Park properties"
+Aquatic Park,0405007,1979,"NPS Land Resources tract SAFR-101-02, conveyed to the National Park Service 1979"
+Bernal Heights Park,5547044,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5547046,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548002,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548003,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548004,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548005,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548006,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548008,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548009,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548010,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548011,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548012,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548013,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548014,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548015,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548016,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548017,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5548018,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614001,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614002,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614003,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614004,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614005,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614047,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614048,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614049,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614050,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614051,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614052,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614053,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5614054,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5621019,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5622033,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Bernal Heights Park,5623035,1972,"Rec and Park Commission took the hilltop from Public Works 1972, dedicated 1973 (https://bernalwood.com/2013/05/28/what-year-was-the-party-to-celebrate-bernal-hill-becoming-a-park/); lot from DataSF Rec and Park properties"
+Buena Vista Park,2601001,1867,"Reserved 1867, named a park 1894; lot from DataSF Rec and Park properties"
+China Beach,1309001,1977,"NPS Land Resources tract GOGA-01-118, conveyed to the National Park Service 1977"
+Collis P Huntington Park,0245002,1915,Land donated to the city 1915 by Arabella Huntington (https://en.wikipedia.org/wiki/Huntington_Park_(San_Francisco)); lot from DataSF Rec and Park properties
+Corona Heights Park,2615002,1941,Bought 1941 and named Corona Heights (https://en.wikipedia.org/wiki/Corona_Heights_Park); lot from DataSF Rec and Park properties
+Duboce Park,0876001,1858,"Designated public park land 1858, built 1902 (https://en.wikipedia.org/wiki/Duboce_Park); lot from DataSF Rec and Park properties"
+Embarcadero Plaza,0233035,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Embarcadero Plaza,3714001,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Embarcadero Plaza,3714002,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Embarcadero Plaza,3714011,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Embarcadero Plaza,3714012,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Embarcadero Plaza,3714013,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Embarcadero Plaza,3714014,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Embarcadero Plaza,3714015,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Embarcadero Plaza,3714016,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Embarcadero Plaza,3714018,1972,Plaza completed 1972 (https://en.wikipedia.org/wiki/Justin_Herman_Plaza); lot from DataSF Rec and Park properties
+Fort Funston,7282006,1973,"NPS Land Resources tract GOGA-01-107, conveyed to the National Park Service 1973"
+Fort Funston,7282009,1975,"NPS Land Resources tract GOGA-01-108, conveyed to the National Park Service 1975"
+Fort Mason,0409002,1974,"NPS Land Resources tract GOGA-01-124, conveyed to the National Park Service 1974"
+Garfield Square,6523001,1884,First opened 1884 (https://en.wikipedia.org/wiki/Garfield_Square); lot from DataSF Rec and Park properties
+Glen Canyon Park,3030002,1922,City bought the site 1922 (https://en.wikipedia.org/wiki/Glen_Canyon_Park); lot from DataSF Rec and Park properties
+Glen Canyon Park,6706013,1922,City bought the site 1922 (https://en.wikipedia.org/wiki/Glen_Canyon_Park); lot from DataSF Rec and Park properties
+Glen Canyon Park,6706014,1922,City bought the site 1922 (https://en.wikipedia.org/wiki/Glen_Canyon_Park); lot from DataSF Rec and Park properties
+Glen Canyon Park,6706015,1922,City bought the site 1922 (https://en.wikipedia.org/wiki/Glen_Canyon_Park); lot from DataSF Rec and Park properties
+Glen Canyon Park,6733A041,1922,City bought the site 1922 (https://en.wikipedia.org/wiki/Glen_Canyon_Park); lot from DataSF Rec and Park properties
+Glen Canyon Park,7524009,1922,City bought the site 1922 (https://en.wikipedia.org/wiki/Glen_Canyon_Park); lot from DataSF Rec and Park properties
+Glen Canyon Park,7524101,1922,City bought the site 1922 (https://en.wikipedia.org/wiki/Glen_Canyon_Park); lot from DataSF Rec and Park properties
+Glen Canyon Park,7560002,1922,City bought the site 1922 (https://en.wikipedia.org/wiki/Glen_Canyon_Park); lot from DataSF Rec and Park properties
+Golden Gate Park,1263001,1870,Park since 1870; the main lot includes the Panhandle; lot from DataSF Rec and Park properties
+Golden Gate Park,1263011,1870,Park since 1870; the main lot includes the Panhandle; lot from DataSF Rec and Park properties
+Golden Gate Park,1264001,1870,Park since 1870; the main lot includes the Panhandle; lot from DataSF Rec and Park properties
+Golden Gate Park,1700001,1870,Park since 1870; the main lot includes the Panhandle; lot from DataSF Rec and Park properties
+Hamilton Rec Center,0703002,1855,"Reserved for park use by the Van Ness Ordinances 1855; New Fillmore, 'From an abandoned quarry came a jewel of an urban park' (https://newfillmore.com/?p=11419); lot from DataSF Rec and Park properties"
+Holly Park,PARKHOLL,1862,Donated to the city 1862 (https://en.wikipedia.org/wiki/Holly_Park_(San_Francisco)); lot from DataSF Rec and Park properties
+Jefferson Square,0745001,1855,"Reserved for park use by the Van Ness Ordinances 1855; New Fillmore, 'From an abandoned quarry came a jewel of an urban park' (https://newfillmore.com/?p=11419); lot from DataSF Rec and Park properties"
+John McLaren Park,6188025,1926,Board of Supervisors resolution Oct 4 1926; land bought 1928-1958 (https://en.wikipedia.org/wiki/John_McLaren_Park); lot from DataSF Rec and Park properties
+John McLaren Park,6188026,1926,Board of Supervisors resolution Oct 4 1926; land bought 1928-1958 (https://en.wikipedia.org/wiki/John_McLaren_Park); lot from DataSF Rec and Park properties
+John McLaren Park,6189034,1926,Board of Supervisors resolution Oct 4 1926; land bought 1928-1958 (https://en.wikipedia.org/wiki/John_McLaren_Park); lot from DataSF Rec and Park properties
+John McLaren Park,6190066,1926,Board of Supervisors resolution Oct 4 1926; land bought 1928-1958 (https://en.wikipedia.org/wiki/John_McLaren_Park); lot from DataSF Rec and Park properties
+John McLaren Park,6220002,1926,Board of Supervisors resolution Oct 4 1926; land bought 1928-1958 (https://en.wikipedia.org/wiki/John_McLaren_Park); lot from DataSF Rec and Park properties
+John McLaren Park,6221001,1926,Board of Supervisors resolution Oct 4 1926; land bought 1928-1958 (https://en.wikipedia.org/wiki/John_McLaren_Park); lot from DataSF Rec and Park properties
+Lafayette Park,0625003,1855,"Reserved for park use by the Van Ness Ordinances 1855; New Fillmore, 'From an abandoned quarry came a jewel of an urban park' (https://newfillmore.com/?p=11419); lot from DataSF Rec and Park properties"
+Lake Merced Park,7283004,1925,Harding Park golf course opened July 18 1925 (https://en.wikipedia.org/wiki/TPC_Harding_Park); lot from DataSF Rec and Park properties
+Lands End,1313015,1977,"NPS Land Resources tract GOGA-01-115, conveyed to the National Park Service 1977"
+Lands End,1313016,1977,"NPS Land Resources tract GOGA-01-110, conveyed to the National Park Service 1977"
+Lands End,1313020,1980,"NPS Land Resources tract GOGA-01-111, conveyed to the National Park Service 1980"
+Lands End,1313021,1980,"NPS Land Resources tract GOGA-01-111, conveyed to the National Park Service 1980"
+Lands End,1313025,1974,"NPS Land Resources tract GOGA-01-112, conveyed to the National Park Service 1974"
+Lands End,1313026,1974,"NPS Land Resources tract GOGA-01-113, conveyed to the National Park Service 1974"
+Lands End,1313030,1975,"NPS Land Resources tract GOGA-01-132, conveyed to the National Park Service 1975"
+Lincoln Park,1313029,1909,Park since 1909 (the former City Cemetery); lot from DataSF Rec and Park properties
+Mission Creek Park,3806010,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,3806011,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,3809002,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,3809006,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,3810006,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,8707002,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,8708002,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,8710002,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,8714002,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,8730001,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Creek Park,8731001,2010,"Completed by fall 2010 (https://en.wikipedia.org/wiki/Mission_Bay,_San_Francisco); lot from DataSF Rec and Park properties"
+Mission Dolores Park,3586001,1905,City bought the land 1905 (https://en.wikipedia.org/wiki/Mission_Dolores_Park); lot from DataSF Rec and Park properties
+Mission Dolores Park,3599001,1905,City bought the land 1905 (https://en.wikipedia.org/wiki/Mission_Dolores_Park); lot from DataSF Rec and Park properties
+Moscone Rec Center,0469001,1855,"Reserved for park use by the Van Ness Ordinances 1855; New Fillmore, 'From an abandoned quarry came a jewel of an urban park' (https://newfillmore.com/?p=11419); lot from DataSF Rec and Park properties"
+Mt. Davidson Park,3015003,1929,Summit bought by the city for a park 1929 (https://en.wikipedia.org/wiki/Mount_Davidson_(California)); lot from DataSF Rec and Park properties
+Portsmouth Square,0209017,1835,Set aside as an official plaza 1835 (https://en.wikipedia.org/wiki/Portsmouth_Square); lot from DataSF Rec and Park properties
+Presidio,1300001,1994,"NPS Land Resources tract GOGA-01-120, conveyed to the National Park Service 1994"
+San Francisco Zoo,7281005,1929,Fleishhacker Zoo established June 12 1929 (https://www.sfzoo.org/the-history-of-the-san-francisco-zoo/); lot from DataSF Rec and Park properties
+San Francisco Zoo,7281006,1929,Fleishhacker Zoo established June 12 1929 (https://www.sfzoo.org/the-history-of-the-san-francisco-zoo/); lot from DataSF Rec and Park properties
+San Francisco Zoo,7281007,1929,Fleishhacker Zoo established June 12 1929 (https://www.sfzoo.org/the-history-of-the-san-francisco-zoo/); lot from DataSF Rec and Park properties
+San Francisco Zoo,7281009,1929,Fleishhacker Zoo established June 12 1929 (https://www.sfzoo.org/the-history-of-the-san-francisco-zoo/); lot from DataSF Rec and Park properties
+Sea Cliff shoreline,1301021,1977,"NPS Land Resources tract GOGA-01-119, conveyed to the National Park Service 1977"
+Sigmund Stern Recreation Grove,2488001,1931,Donated to the city 1931 by Rosalie Meyer Stern (https://en.wikipedia.org/wiki/Sigmund_Stern_Grove); lot from DataSF Rec and Park properties
+South Park,3775103,1897,"City took over the park 1897 (https://en.wikipedia.org/wiki/South_Park,_San_Francisco); lot from DataSF Rec and Park properties"
+Sutro Heights,1484002,1920,Deeded to the city in 1920 to be held forever as a public park; NPS tract GOGA-01-109 conveyed 1975 (https://home.nps.gov/goga/learn/historyculture/vestiges-sutro-heights.htm)
+Telegraph Hill - Pioneer Park,0078061,1876,"Hilltop given to the city, park established 1876 (https://en.wikipedia.org/wiki/Pioneer_Park_(San_Francisco)); lot from DataSF Rec and Park properties"
+Telegraph Hill - Pioneer Park,0078062,1876,"Hilltop given to the city, park established 1876 (https://en.wikipedia.org/wiki/Pioneer_Park_(San_Francisco)); lot from DataSF Rec and Park properties"
+Telegraph Hill - Pioneer Park,0079008,1876,"Hilltop given to the city, park established 1876 (https://en.wikipedia.org/wiki/Pioneer_Park_(San_Francisco)); lot from DataSF Rec and Park properties"
+Telegraph Hill - Pioneer Park,0079009,1876,"Hilltop given to the city, park established 1876 (https://en.wikipedia.org/wiki/Pioneer_Park_(San_Francisco)); lot from DataSF Rec and Park properties"
+Telegraph Hill - Pioneer Park,0086011,1876,"Hilltop given to the city, park established 1876 (https://en.wikipedia.org/wiki/Pioneer_Park_(San_Francisco)); lot from DataSF Rec and Park properties"
+Telegraph Hill - Pioneer Park,0086012,1876,"Hilltop given to the city, park established 1876 (https://en.wikipedia.org/wiki/Pioneer_Park_(San_Francisco)); lot from DataSF Rec and Park properties"
+Telegraph Hill - Pioneer Park,0086013,1876,"Hilltop given to the city, park established 1876 (https://en.wikipedia.org/wiki/Pioneer_Park_(San_Francisco)); lot from DataSF Rec and Park properties"
+Telegraph Hill - Pioneer Park,0086056,1876,"Hilltop given to the city, park established 1876 (https://en.wikipedia.org/wiki/Pioneer_Park_(San_Francisco)); lot from DataSF Rec and Park properties"
+UN Plaza,0351039,1975,Built and dedicated 1975 (https://en.wikipedia.org/wiki/United_Nations_Plaza_(San_Francisco)); lot from DataSF Rec and Park properties
+UN Plaza,0351041,1975,Built and dedicated 1975 (https://en.wikipedia.org/wiki/United_Nations_Plaza_(San_Francisco)); lot from DataSF Rec and Park properties
+UN Plaza,0351043,1975,Built and dedicated 1975 (https://en.wikipedia.org/wiki/United_Nations_Plaza_(San_Francisco)); lot from DataSF Rec and Park properties
+UN Plaza,0351046,1975,Built and dedicated 1975 (https://en.wikipedia.org/wiki/United_Nations_Plaza_(San_Francisco)); lot from DataSF Rec and Park properties
+UN Plaza,0351049,1975,Built and dedicated 1975 (https://en.wikipedia.org/wiki/United_Nations_Plaza_(San_Francisco)); lot from DataSF Rec and Park properties
+Union Square,0308001,1850,"Set aside as a public park 1850 (https://en.wikipedia.org/wiki/Union_Square,_San_Francisco); lot from DataSF Rec and Park properties"
+Washington Square,0102001,1847,Designated a city square 1847 (https://en.wikipedia.org/wiki/Washington_Square_(San_Francisco)); lot from DataSF Rec and Park properties
+Washington Square,0102002,1847,Designated a city square 1847 (https://en.wikipedia.org/wiki/Washington_Square_(San_Francisco)); lot from DataSF Rec and Park properties

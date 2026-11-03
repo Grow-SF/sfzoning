@@ -11,8 +11,10 @@ only what the pipeline can rebuild. Per series, inputs/<series>/:
   overrides.csv          zoning corrections (blklot,block,code), applied by districts
 
 and inputs/label_scale.json, the calibrated label-reading scale per series, and inputs/parks.csv
-(name,blklot,note), the lots of parks that existed from 1921 to today: category `public` in every
-series, whatever the map zones them (owner's decision, 2026-11-02).
+(name,blklot,since,source), San Francisco's park lots with the year each became a park: category
+`public` in every series whose year is `since` or later, whatever the map zones them; earlier
+series keep the map's zoning (owner's decision, 2026-11-02). Candidates come from
+`sfzmaps parks` (sfzmaps.parks); a park without a documented year is left out.
 """
 from __future__ import annotations
 

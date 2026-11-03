@@ -42,7 +42,8 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 | `build [-j N] [--dry-run] [STAGE...]` | Rebuild whatever is stale, in parallel, at $0: see [Builds](#builds). The usual way to run the pipeline. |
 | `stage NAME` | Run one build stage (what `build` and `dvc repro` call). |
 | `fetch [--only FOLDER]` | Mirror the Drive tree into `data/raw/`. |
-| `refdata [--force]` | Download DataSF parcels and street centerlines; build blocks, corners and intersections in `data/ref/`. |
+| `refdata [--force]` | Download DataSF parcels and street centerlines; build blocks, corners and intersections in `data/ref/`. Also the park outlines: DataSF's Recreation and Parks Properties and the National Park Service's land tracts in the city. |
+| `parks [--out CSV]` | The park lots `data/ref/` shows (at least half the lot inside a Rec and Park property, or an NPS tract the NPS owns outright that today's zoning calls P), with the NPS conveyance year: the candidates for `inputs/parks.csv`. |
 | `run --year S` / `run --all` | Run every page of a series: classify, read labels, rough fit, extract linework, refine, classify real change, score, warp; then stitch, tile, write the manifest and review page. Fresh stages are skipped; human reviews are kept (`--force-auto` ignores them, `--force` reruns everything). `--sheet ID` and `--until STAGE` make a partial run that does not republish the series. |
 | `tiles --year S` | Rebuild the stitched VRT, PMTiles, manifest and review page for one series from existing warps. |
 | `paper --year S` / `paper --all` | Warp each placed sheet as it looks on paper (opaque, colours untouched, cubic resampling) to `warped_paper.tif` and publish `out/<series>/<series>-paper.pmtiles`: the layer the site shows as the original map. The transparent-paper `<series>.pmtiles` stays for the review page and the district readers. The PDFs are 1-bit black and white at 300 dpi; their white is multiplied onto `warp.PAPER_TINT`, the 1948 photos' cream paper, so every era sits on the same paper (ink stays black; 1948 is untouched). Each sheet keeps its map up to its frame; the printed border rule and the 1948 photos' binding shadows are erased (`warp.erase_border_rules`). The stitch stacks a plain-paper backing (`stitch.paper_backing`, for narrow gaps), every sheet's whole paper (legend and title boxes filled with paper), then every sheet's inked content in priority order, so blank paper never hides a neighbour's map. |
@@ -76,7 +77,11 @@ holds only what the pipeline can rebuild. Per series, `inputs/<series>/`:
 - `overrides.csv`: zoning corrections (`blklot,block,code`); the research behind them is in
   `docs/research/zoning-overrides/`.
 
-and `inputs/label_scale.json`, the calibrated label-reading scale per series.
+and `inputs/label_scale.json`, the calibrated label-reading scale per series, and
+`inputs/parks.csv` (`name,blklot,since,source`): park lots, each `public` in every series whose
+year is `since` (the year it became a park) or later, whatever its map zones it. Its lots come
+from `sfzmaps parks`; a park without a documented year stays out. Each series' `stats.json`
+counts the parks in effect (`parks: {count, acres}`).
 
 ## Builds
 
@@ -275,7 +280,9 @@ their kind in `page.json`.
 Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to move it):
 
 - `raw/`: the Drive mirror.
-- `ref/`: DataSF parquet files.
+- `ref/`: the reference data, the `refdata` stage's output (DVC-tracked and shipped like any
+  output): DataSF parcels, streets, today's zoning, Rec and Park properties
+  (`rec_park_properties.parquet`), and NPS land tracts (`nps_tracts.parquet`).
 - `cache/llm/`: cached API answers.
 - `work/<series>/<sheet>/`: per-sheet stages, i.e. `page.png`, `page.json`,
   `labels.json`, `rough.json`, `refine.json`, `changes.geojson`, `transform.json`,
