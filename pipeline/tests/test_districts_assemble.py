@@ -243,20 +243,21 @@ def test_merge_use_height_reads():
     assert h.loc["a", "height_code"] is None and h.loc["a", "confidence"] == 0.0
 
 
-def test_a_lot_in_a_sheets_page_background_takes_the_next_sheets_district():
-    from sfzmaps.districts.read import prefer_closed
-    first = pd.DataFrame({"blklot": ["a", "b", "c", "d"], "code": ["P", "P", "R-1", "P"],
-                          "confidence": [0.99] * 4, "source_sheet": ["6"] * 4,
-                          "open": [True, True, False, True]})
-    later = pd.DataFrame({"blklot": ["a", "b", "c", "d"], "code": ["R-1", "R-3", "R-2", None],
-                          "confidence": [0.9, 0.8, 0.9, 0.0], "source_sheet": ["7"] * 4,
-                          "open": [False, True, False, False]})
-    m = prefer_closed(first, later, "code").set_index("blklot")
-    assert m.loc["a", "code"] == "R-1" and m.loc["a", "source_sheet"] == "7"   # closed on 7
-    assert not m.loc["a", "open"]
-    assert m.loc["b", "code"] == "P"      # background on both: keeps its first read
-    assert m.loc["c", "code"] == "R-1"    # closed on its own sheet: never replaced
-    assert m.loc["d", "code"] == "P"      # no code on the next sheet
+def test_a_lot_on_two_sheets_takes_the_reading_nearest_its_printed_label():
+    from sfzmaps.districts.read import pick_readings
+    inf = float("inf")
+    rd = pd.DataFrame({
+        "blklot": ["a", "a", "b", "b", "c", "c", "d", "d"],
+        "code": ["P", "R-1", "R-1", "R-2", "P", "R-3", None, "R-1"],
+        "confidence": [0.99, 0.9] * 4,
+        "source_sheet": ["6", "7"] * 4, "rank": [0, 1] * 4,
+        "label_ft": [7500.0, 500.0, 400.0, 300.0, inf, inf, inf, 900.0]})
+    m = pick_readings(rd, "code").set_index("blklot")
+    assert m.loc["a", "code"] == "R-1" and m.loc["a", "source_sheet"] == "7"  # 6 only draws it
+    assert m.loc["b", "code"] == "R-2"           # nearer label wins whatever the priority
+    assert m.loc["c", "code"] == "P"             # no label backs either: sheet priority
+    assert m.loc["d", "code"] == "R-1"           # a code beats none
+    assert len(m) == 4
 
 
 def test_unzoned_harbor_blocks_by_era(monkeypatch):

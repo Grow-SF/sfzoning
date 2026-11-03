@@ -58,62 +58,50 @@ def merge_use_height(use: pd.DataFrame, height: pd.DataFrame, role: str) -> pd.D
     return out.sort_values("blklot").reset_index(drop=True)[COLUMNS]
 
 
-def prefer_closed(first: pd.DataFrame, later: pd.DataFrame, col: str) -> pd.DataFrame:
-    """first with each row read in its sheet's page background ("open") replaced by the row
-    for the same parcel in `later` (a lower-priority sheet's read), when that one was read in
-    a closed district with a code.  Kept rows keep their order."""
-    good = later[~later["open"].astype(bool) & later[col].notna()].drop_duplicates("blklot")
-    good = good.set_index("blklot")
-    swap = first["open"].astype(bool) & first["blklot"].isin(good.index)
-    out = first.copy()
-    if swap.any():
-        out.loc[swap, list(good.columns)] = good.loc[out.loc[swap, "blklot"]].to_numpy()
-    return out
+def pick_readings(rd: pd.DataFrame, col: str) -> pd.DataFrame:
+    """One reading per parcel from its readings on every covering sheet (columns blklot, col,
+    confidence, source_sheet, rank = sheet priority, label_ft): one with a code, nearest to the
+    printed label backing it, then the highest-priority sheet.  Each sheet also draws the next
+    sheets' streets, unzoned, for context; a parcel there takes whatever code its region
+    picked up from a label far away (1972: a band of the Sunset as P; 1960: the Tenderloin as
+    M-1), while the sheet that zones it prints its code nearby."""
+    key = rd.assign(_none=rd[col].isna())
+    key = key.sort_values(["_none", "label_ft", "rank"], kind="stable")
+    return key.drop_duplicates("blklot").drop(columns="_none").reset_index(drop=True)
+
+
+def readings(series: str, parcels, kind_order: list[str], kind: str) -> pd.DataFrame:
+    """Every parcel's reading of `kind` on every sheet of kind_order that covers it."""
+    from sfzmaps.districts import labels, sampling
+
+    col = "code" if kind == "use" else "height_code"
+    out = []
+    for rank, sid in enumerate(kind_order):
+        sub = parcels[(sampling.assign_sheets(parcels, series, sheets=[sid]) == sid).to_numpy()]
+        if not len(sub):
+            continue
+        log.info("%s sheet %s (%s): %d parcels", series, sid, kind, len(sub))
+        r = labels.assign_parcels(sub.reset_index(drop=True), config.WORK_DIR / series / sid,
+                                  all_parcels=parcels)
+        out.append(pd.DataFrame({"blklot": r["blklot"], col: r[col],
+                                 "confidence": r[f"{kind}_confidence"], "source_sheet": sid,
+                                 "rank": rank, "label_ft": r[f"{kind}_label_ft"]}))
+    cols = ["blklot", col, "confidence", "source_sheet", "rank", "label_ft"]
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=cols)
 
 
 def _read_b(series: str, parcels, order: list[str]) -> pd.DataFrame:
     """Reader B per sheet kind: use codes from use sheets, height codes from height sheets
-    (labels.sheet_role), each parcel on its highest-priority sheet of that kind.  A parcel
-    that falls in that sheet's page background (labels.open_regions: context streets zoned on
-    another sheet) is read again on the next sheets that cover it, and takes the first read
-    in a closed district; if there is none it keeps its first read."""
-    from sfzmaps.districts import labels, sampling
+    (labels.sheet_role); each parcel read on every sheet of that kind covering it, keeping
+    one reading (pick_readings)."""
+    from sfzmaps.districts import labels
 
     roles = labels.sheet_roles(series, order)
     log.info("%s sheet roles: %s", series, roles)
     parts = {}
-    for kind, col, conf in (("use", "code", "use_confidence"), ("height", "height_code", "height_confidence")):
+    for kind, col in (("use", "code"), ("height", "height_code")):
         kind_order = [s for s in order if roles[s] == kind]
-        sheet = sampling.assign_sheets(parcels, series, sheets=kind_order).to_numpy()
-
-        def read(sub, sid):
-            r = labels.assign_parcels(sub.reset_index(drop=True), config.WORK_DIR / series / sid)
-            return pd.DataFrame({"blklot": r["blklot"], col: r[col], "confidence": r[conf],
-                                 "source_sheet": sid, "open": r["open"]})
-
-        out = []
-        for sid in kind_order:
-            sub = parcels[sheet == sid]
-            if not len(sub):
-                continue
-            log.info("%s sheet %s (%s): %d parcels", series, sid, kind, len(sub))
-            out.append(read(sub, sid))
-        cols = ["blklot", col, "confidence", "source_sheet", "open"]
-        got = pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=cols)
-        rank = {s: i for i, s in enumerate(kind_order)}
-        for sid in kind_order:
-            o = got[got["open"].astype(bool)]
-            pending = o.loc[o["source_sheet"].map(rank) < rank[sid], "blklot"]
-            sub = parcels[parcels["blklot"].isin(pending)]
-            if not len(sub):
-                continue
-            sub = sub[(sampling.assign_sheets(sub, series, sheets=[sid]) == sid).to_numpy()]
-            if not len(sub):
-                continue
-            log.info("%s sheet %s (%s): %d parcels again (page background on their sheet)",
-                     series, sid, kind, len(sub))
-            got = prefer_closed(got, read(sub, sid), col)
-        parts[kind] = got.drop(columns="open")
+        parts[kind] = pick_readings(readings(series, parcels, kind_order, kind), col)
     return merge_use_height(parts["use"], parts["height"], SERIES[series].role)
 
 

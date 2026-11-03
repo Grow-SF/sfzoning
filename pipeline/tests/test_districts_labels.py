@@ -40,17 +40,6 @@ def _region_at(regs, x, y):
 
 # --- boundaries -------------------------------------------------------------
 
-def test_regions_along_the_neatline_are_open():
-    inside = np.zeros((1000, 1000), bool)
-    inside[50:950, 50:950] = True
-    left = box(50, 50, 500, 950).difference(box(300, 300, 700, 700))    # background, split in two
-    right = box(500, 50, 950, 950).difference(box(300, 300, 700, 700))  # by a line to the frame
-    district = box(320, 320, 680, 680)                                  # inside the map
-    nick = box(940, 500, 950, 520)                                      # barely touches the frame
-    assert labels.open_regions([district, left, right, nick], inside) == [1, 2]
-    assert labels.open_regions([district], inside) == []
-
-
 def test_heavy_vs_thin():
     lm = sl.build()
     m = labels.heavy_line_mask(lm.img)
@@ -125,6 +114,20 @@ def test_conflicting_labels_split():
     assert len(one) == 1 and one[0][1] == "R-1"
 
 
+def test_a_lone_label_in_a_region_of_another_code_keeps_only_its_surroundings():
+    """Mt Vernon 1960: one R-3 printed beside a small box in an unclosed region full of R-1."""
+    region = box(0, 0, 2000, 400)
+    r1 = [lab("R-1", x, 200) for x in (100, 900, 1700)]
+    out = labels.assign_regions([region], r1 + [lab("R-3", 1300, 200)])
+    by = {c: p for p, c, _ in out}
+    assert by["R-3"].area == pytest.approx(np.pi * labels.SPLIT_MINOR_RADIUS_PX ** 2, rel=0.02)
+    assert by["R-1"].contains(Point(1150, 50))          # beyond the disk: the main code
+    # two codes printed alike: neither dominates, an even split
+    even = {c: p for p, c, _ in labels.assign_regions(
+        [region], [lab("R-1", 500, 200), lab("R-3", 1500, 200)])}
+    assert even["R-3"].area == pytest.approx(even["R-1"].area)
+
+
 def test_label_on_heavy_ink_snaps_to_nearest_region():
     a, b = box(0, 0, 100, 100), box(110, 0, 210, 100)
     out = labels.assign_regions([a, b], [lab("R-1", 103, 50), lab("R-2", 160, 50)])
@@ -164,6 +167,29 @@ def test_parcel_majority_region(tmp_path):
     assert out.loc[f"{5 * 20 + 6:04d}002", "code"] == "C-2"    # block (5, 5): MID
     assert out.index.name == "blklot" and set(out.columns) >= {"code", "height_code", "confidence"}
     assert out["height_code"].isna().all()
+
+
+def test_a_parcel_knows_how_far_its_printed_label_is(tmp_path):
+    """use_label_ft: distance from a parcel to the label its code comes from; inf when its
+    region inherited the code (no label printed in it)."""
+    lm = sl.build(codes=CODES)
+    d = sl.write_sheet("1960", "s1", lm)
+    labs = [l for l in _label_list() if l.code != "R-2"] + [lab("R1", *sl.CENTRES["BL"])]
+    labels.save_labels(d / "district_labels.json", labs, page_sha256=labels.page_sha(d))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
+    out = labels.assign_parcels(lm.parcels, d, lm.transform).set_index("blklot")
+    tl = lm.transform.to_world(np.array([sl.CENTRES["TL"]]))[0]
+    near, far = out.loc["0001001"], out.loc[f"{9 * 20 + 1:04d}001"]
+    c = lm.parcels.set_index("blklot").geometry["0001001"].centroid
+    assert near["use_label_ft"] == pytest.approx(np.hypot(c.x - tl[0], c.y - tl[1]))
+    assert far["code"] == "R-1"                  # printed "R1": one district, one code
+    assert near["use_label_ft"] < 1e9 and np.isinf(out["height_label_ft"]).all()
+
+
+def test_hyphenate():
+    assert [labels.hyphenate(c) for c in ("R1", "R4", "R1D", "RH1(D)", "R-1", "P", "NC-2", None)] == \
+        ["R-1", "R-4", "R-1-D", "RH-1(D)", "R-1", "P", "NC-2", None]
+    assert labels.hyphenate("UPPER MARKET NCD") == "UPPER MARKET NCD"
 
 
 def test_height_labels_fill_height_code():

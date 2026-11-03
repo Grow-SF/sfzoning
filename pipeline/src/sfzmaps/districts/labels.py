@@ -10,11 +10,14 @@ height maps print 40-X, 65-A...).  Steps, all in page pixels until the parcel jo
    (distance transform), relative to the sheet's measured thin-stroke width.
 3. ``regions``: connected non-heavy-line areas inside the neatline, as polygons.
 4. ``assign_regions``: one code per region; conflicting codes split the region by a Voronoi
-   of its labels; an unlabelled region takes the code a per-region vision read names for it
-   (``regionread``, at READ_CONF), else inherits only when all its coded neighbours agree.
+   of its labels (minority codes capped to a disk round their labels); an unlabelled region
+   takes the code a per-region vision read names for it (``regionread``, at READ_CONF), else
+   inherits only when all its coded neighbours agree.
 5. ``assign_parcels``: regions to EPSG:2227 through the sheet transform; each parcel takes
-   the code covering the majority of its area.  Fewer than MIN_REGIONS regions (boundary
-   extraction failed): each parcel takes the nearest label in its own block at FALLBACK_CONF.
+   the code covering the majority of its area, and records how far it lies from the printed
+   label backing that code (``supporting_labels``; read.pick_readings uses it to choose
+   between sheets).  Fewer than MIN_REGIONS regions (boundary extraction failed): each parcel
+   takes the nearest label in its own block at FALLBACK_CONF.
 """
 from __future__ import annotations
 
@@ -65,16 +68,16 @@ PLURALITY_MARGIN = 1.25  # ... by at least this factor over the runner-up (else 
 # residential blocks; capping them raised agreement on unchanged districts 66.8% -> 69.2%).
 NO_PLURALITY = {"P", "OS", "C-1", "NC-1", "NC-2", "NC-3", "NC-S", "RC-1", "RC-2"}
 SPLIT_P_RADIUS_PX = 150  # ... and in a split region a P label takes at most this disk (~1 block)
-# The page background: sea, margins and the next sheet's streets, drawn for context and zoned on
-# that sheet, are one region with no heavy line closing it, so it took the code of whatever label
-# sat in it (1968: Golden Gate Park's P made Sunset blocks public; a C-2 on Portola made Miraloma
-# Park commercial).  A heavy line running to the neatline can split it (1975 sheet 9: pieces
-# touching 0.36 and 0.34 of it, one holding a lone R-2 that made a seam of SoMa and the Mission
-# R-2), so every region running along at least this share of the neatline is "open": its
-# reading is only the fallback for a lot that no other sheet reads inside a closed district.
-# (Measured on every reader-B sheet: background pieces touch 0.11-1.0 of the neatline.)
-OPEN_EDGE_SHARE = 0.1
-OPEN_EDGE_PX = 3 * TOUCH_PX   # a region this close to the neatline runs along it
+# A region that no heavy line closes (the page background, a district whose line stops short)
+# can hold many labels of one code and one or two of others.  Split evenly, a lone label took
+# as much as its neighbours (1960/1964: an R-3 printed by a small C-1 box at Restani made ~300
+# Mt Vernon lots R-3; 1964: an R-4 made 490 Silver Terrace lots R-4).  So when one code has at
+# least SPLIT_MAJORITY x the labels of any other (P and the NO_PLURALITY codes aside, capped
+# above), each other code keeps only this disk round its labels and the main code fills the
+# rest.  Chosen on the seam reviews' cases (wrong lots 1599 -> 1086 at 100 px; 150: 1154,
+# 200: 1244) and raising 1960/1964 agreement (same base drawings) 0.938 -> 0.951.
+SPLIT_MINOR_RADIUS_PX = 100
+SPLIT_MAJORITY = 2
 MIN_REGIONS = 5          # fewer closed regions: boundary extraction failed, use the fallback
 FALLBACK_CONF = 0.3
 FALLBACK_BLOCK_FT = 20.0  # labels within this distance of a block count as in it
@@ -125,6 +128,18 @@ def normalise(code: str) -> str:
     """Upper case, one kind of hyphen, no spaces around hyphens."""
     c = code.strip().upper().replace("–", "-").replace("—", "-").replace("‐", "-")
     return " ".join("-".join(p.strip() for p in c.split("-")).split())
+
+
+def hyphenate(code: str | None) -> str | None:
+    """A use code printed without its hyphens ("R1", "R1D", "RH1(D)": 1968 and 1975 print
+    some) in its usual form ("R-1"), so one district isn't two codes.  Applied to the codes
+    parcels take, not to the labels: those also go into the region-read prompts, whose cached
+    answers are keyed by their text."""
+    from sfzmaps.districts.rules import normalise_code
+
+    if code and re.fullmatch(r"[A-Z]{1,3}\d.*", code):
+        return normalise_code(code, 0) or code
+    return code
 
 
 def district_scale(series: str) -> float:
@@ -423,19 +438,6 @@ def regions(page_img: np.ndarray, exclude: np.ndarray | None = None) -> list[Pol
     return free + solid
 
 
-def open_regions(regs: list[Polygon], inside: np.ndarray) -> list[int]:
-    """Indices of the regions running along the neatline (see OPEN_EDGE_SHARE).  inside: bool
-    mask of the area within the neatline."""
-    cs, _ = cv2.findContours(inside.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    if not cs or not regs:
-        return []
-    ring = Polygon(max(cs, key=cv2.contourArea)[:, 0, :]).exterior
-    if ring.length <= 0:
-        return []
-    return [i for i, r in enumerate(regs)
-            if r.buffer(OPEN_EDGE_PX).intersection(ring).length >= OPEN_EDGE_SHARE * ring.length]
-
-
 def _polygons(mask: np.ndarray, connectivity: int, min_area: float) -> list[Polygon]:
     n, lab, stats, _ = cv2.connectedComponentsWithStats(mask.astype(np.uint8), connectivity=connectivity)
     out = []
@@ -481,7 +483,8 @@ def _split(region: Polygon, labs: list[DistrictLabel]) -> list[tuple[Polygon, st
     """A region carrying conflicting codes, split by a Voronoi of its labels.  Cells of
     NO_PLURALITY (P) labels are capped to a SPLIT_P_RADIUS_PX disk round the label: parks and
     public sites are small and labelled inside themselves, and an uncapped cell handed whole
-    neighbourhoods to a park whose outline didn't close the region."""
+    neighbourhoods to a park whose outline didn't close the region.  Likewise, when one code
+    dominates the region's labels, the others are capped to SPLIT_MINOR_RADIUS_PX."""
     best: dict[tuple[float, float], DistrictLabel] = {}
     for l in labs:      # one label per position (highest confidence)
         k = (l.x, l.y)
@@ -492,12 +495,24 @@ def _split(region: Polygon, labs: list[DistrictLabel]) -> list[tuple[Polygon, st
     for l in pts:
         conf[l.code] = max(conf.get(l.code, 0.0), l.confidence)
     pieces = _voronoi_pieces(region, pts)
-    capped = [l for l in pts if l.code in NO_PLURALITY]
-    others = [l for l in pts if l.code not in NO_PLURALITY]
+    radius = {l.code: SPLIT_P_RADIUS_PX for l in pts if l.code in NO_PLURALITY}
+    count: dict[str, int] = {}
+    for l in pts:
+        if l.code not in radius:
+            count[l.code] = count.get(l.code, 0) + 1
+    top = sorted(count.values(), reverse=True) + [0]
+    if len(count) > 1 and top[0] >= SPLIT_MAJORITY * top[1]:
+        main = max(count, key=count.get)
+        for c in count:
+            if c != main:
+                radius[c] = SPLIT_MINOR_RADIUS_PX
+    capped = [l for l in pts if l.code in radius]
+    others = [l for l in pts if l.code not in radius]
     if capped and others:
-        disks = unary_union([Point(l.x, l.y).buffer(SPLIT_P_RADIUS_PX) for l in capped])
-        public = {c: unary_union(ps).intersection(disks) for c, ps in pieces.items()
-                  if c in NO_PLURALITY}
+        disks = {c: unary_union([Point(l.x, l.y).buffer(radius[c]) for l in capped if l.code == c])
+                 for c in radius}
+        public = {c: unary_union(ps).intersection(disks[c]) for c, ps in pieces.items()
+                  if c in radius}
         taken = unary_union([g for g in public.values() if not g.is_empty])
         rest = region.difference(taken) if not taken.is_empty else region
         pieces = {c: [g] for c, g in public.items() if not g.is_empty}
@@ -624,42 +639,75 @@ def _block_of(parcels) -> "np.ndarray":
     return parcels["blklot"].astype(str).str[:-3].to_numpy()
 
 
-def _majority(parcels, assigned, transform: SheetTransform):
-    """(code, confidence) per parcel row: the code covering the largest share of its area."""
+def supporting_labels(regs: list[Polygon], labs: list[DistrictLabel],
+                      assigned: list[tuple[Polygon, str | None, float]]) -> list[np.ndarray]:
+    """Per assigned piece, the page px (n x 2) of the printed labels it takes its code from:
+    the labels of that code sitting in the piece's own region.  Empty for a region that
+    inherited its code or was named by the per-region read."""
+    per = labels_by_region(regs, labs)
+    tree = STRtree(regs)
+    out = []
+    for poly, code, _ in assigned:
+        pts = np.zeros((0, 2))
+        if code is not None and not poly.is_empty:
+            rp = poly.representative_point()
+            home = [int(i) for i in tree.query(rp, predicate="intersects")]
+            if home:
+                i = min(home, key=lambda i: regs[i].area)
+                src = [(l.x, l.y) for l in per.get(i, []) if l.code == code]
+                if src:
+                    pts = np.array(src, float)
+        out.append(pts)
+    return out
+
+
+def _majority(parcels, assigned, transform: SheetTransform, support: list[np.ndarray] | None = None):
+    """(code, confidence, label distance) per parcel row: the code covering the largest share
+    of its area, and the distance (ft) from the parcel to the nearest printed label backing
+    that code (support: page px per assigned piece, supporting_labels); inf when none does."""
     import geopandas as gpd
 
     n = len(parcels)
-    codes, confs = [None] * n, [0.0] * n
-    rows = [(_poly_to_world(p, transform), c, cf) for p, c, cf in assigned]
+    codes, confs, dists = [None] * n, [0.0] * n, [np.inf] * n
+    support = support if support is not None else [np.zeros((0, 2))] * len(assigned)
+    rows = [(_poly_to_world(p, transform), c, cf,
+             transform.to_world(s) if len(s) else s) for (p, c, cf), s in zip(assigned, support)]
     rows = [r for r in rows if r[0] is not None and not r[0].is_empty]
     if not rows or not n:
-        return codes, confs
+        return codes, confs, dists
     rg = gpd.GeoDataFrame({"code": [r[1] if r[1] is not None else "" for r in rows],
-                           "rconf": [r[2] for r in rows]},
+                           "rconf": [r[2] for r in rows], "rid": np.arange(len(rows))},
                           geometry=[r[0] for r in rows], crs=config.WORK_CRS)
     pg = gpd.GeoDataFrame({"pid": np.arange(n)}, geometry=list(parcels.geometry), crs=config.WORK_CRS)
     ov = gpd.overlay(pg, rg, how="intersection", keep_geom_type=False)
     if ov.empty:
-        return codes, confs
+        return codes, confs, dists
     ov["area"] = ov.geometry.area
     ov["wconf"] = ov["area"] * ov["rconf"]
     g = ov.groupby(["pid", "code"])[["area", "wconf"]].sum().reset_index()
     g = g.sort_values("area", ascending=False).drop_duplicates("pid")
+    rids = ov.groupby(["pid", "code"])["rid"].agg(list)
     parea = pg.geometry.area.to_numpy()
+    cent = pg.geometry.centroid
+    cx, cy = cent.x.to_numpy(), cent.y.to_numpy()
     for pid, code, area, wconf in g[["pid", "code", "area", "wconf"]].itertuples(index=False):
         if code == "":
             continue
         share = min(1.0, area / parea[pid]) if parea[pid] > 0 else 0.0
         codes[pid], confs[pid] = code, float(wconf / area * share)
-    return codes, confs
+        pts = [rows[r][3] for r in rids[(pid, code)] if len(rows[r][3])]
+        if pts:
+            p = np.vstack(pts)
+            dists[pid] = float(np.hypot(p[:, 0] - cx[pid], p[:, 1] - cy[pid]).min())
+    return codes, confs, dists
 
 
 def _fallback(parcels, labs: list[DistrictLabel], transform: SheetTransform):
     """Nearest label inside each parcel's own block (FALLBACK_CONF), else None."""
     n = len(parcels)
-    codes, confs = [None] * n, [0.0] * n
+    codes, confs, dists = [None] * n, [0.0] * n, [np.inf] * n
     if not labs or not n:
-        return codes, confs
+        return codes, confs, dists
     w = transform.to_world(np.array([[l.x, l.y] for l in labs]))
     pts = [Point(x, y) for x, y in w]
     tree = STRtree(pts)
@@ -677,7 +725,8 @@ def _fallback(parcels, labs: list[DistrictLabel], transform: SheetTransform):
             g = geoms[i]
             j = min(cand, key=lambda j: (g.distance(pts[j]), g.centroid.distance(pts[j])))
             codes[i], confs[i] = labs[j].code, FALLBACK_CONF
-    return codes, confs
+            dists[i] = float(g.centroid.distance(pts[j]))
+    return codes, confs, dists
 
 
 ROLE_MIN_LABELS = 8     # fewer district codes than this: not a use or height sheet (SU, SSD)
@@ -725,12 +774,14 @@ def use_code_labels(labs: list[DistrictLabel]) -> list[DistrictLabel]:
 
 
 def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
-                   client: llm.LLMClient | None = None):
-    """DataFrame (blklot, code, height_code, confidence) for `parcels` (EPSG:2227) from one
-    sheet.  `sheet` is the sheet's work dir (work/<series>/<sheet_id>); transform defaults to
-    its transform.json.  Confidence is for the series' role (height series: height_code).
-    Unlabelled regions are read per region (regionread; client: the vision client) unless
-    regionread.ENABLED is off."""
+                   client: llm.LLMClient | None = None, all_parcels=None):
+    """DataFrame (blklot, code, height_code, confidence, use/height confidence and label_ft)
+    for `parcels` (EPSG:2227) from one sheet.  `sheet` is the sheet's work dir
+    (work/<series>/<sheet_id>); transform defaults to its transform.json.  Confidence is for
+    the series' role (height series: height_code).  Unlabelled regions are read per region
+    (regionread; client: the vision client) unless regionread.ENABLED is off; which regions
+    are worth a read is judged against all_parcels (default `parcels`), so a sheet reads a
+    lot the same whichever other lots it is asked about."""
     from sfzmaps.districts import regionread
 
     import pandas as pd
@@ -744,8 +795,8 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
     labs = read_district_labels(series, sid)
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
     regs = regions(img, reading.exclusion_mask(img, _page_info(d)))
-    bg = open_regions(regs, reading.neatline_mask(img)) if len(regs) >= MIN_REGIONS else []
-    ptree = STRtree(list({g.wkb: g for g in parcels.geometry}.values()))
+    every = parcels if all_parcels is None else all_parcels
+    ptree = STRtree(list({g.wkb: g for g in every.geometry if g is not None and not g.is_empty}.values()))
     share: dict[int, float] = {}
 
     def parcel_share(i):
@@ -764,37 +815,23 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
     for kind in ("use", "height"):
         ls = use_code_labels(labs) if kind == "use" else [lb for lb in labs if lb.kind == kind]
         if not ls:
-            res[kind] = ([None] * len(parcels), [0.0] * len(parcels))
+            res[kind] = ([None] * len(parcels), [0.0] * len(parcels), [np.inf] * len(parcels))
         elif len(regs) >= MIN_REGIONS:
             reads = {}
             if regionread.ENABLED:
                 per = labels_by_region(regs, ls)
                 todo = [i for i in range(len(regs)) if i not in per and parcel_share(i) >= READ_PARCEL_SHARE]
                 reads = regionread.read_regions(img, regs, todo, ls, kind, client=client)
-            res[kind] = _majority(parcels, assign_regions(regs, ls, reads=reads), transform)
+            assigned = assign_regions(regs, ls, reads=reads)
+            res[kind] = _majority(parcels, assigned, transform, supporting_labels(regs, ls, assigned))
         else:
             res[kind] = _fallback(parcels, ls, transform)
     info = SERIES.get(series)
     role = "height" if info is not None and info.role == "height" else "use"
     return pd.DataFrame({"blklot": parcels["blklot"].to_numpy(),
-                         "code": pd.Series(res["use"][0], dtype=object),
+                         "code": pd.Series([hyphenate(c) for c in res["use"][0]], dtype=object),
                          "height_code": pd.Series(res["height"][0], dtype=object),
                          "confidence": res[role][1],
                          "use_confidence": res["use"][1], "height_confidence": res["height"][1],
-                         "open": _in_open(parcels, regs, bg, transform)})
-
-
-def _in_open(parcels, regs: list[Polygon], bg: list[int], transform: SheetTransform) -> np.ndarray:
-    """Per parcel: most of its area lies in regions along the neatline (open_regions)."""
-    import shapely
-
-    out = np.zeros(len(parcels), bool)
-    w = _poly_to_world(unary_union([regs[i] for i in bg]), transform) if bg else None
-    if w is None or w.is_empty or not len(parcels):
-        return out
-    geoms = np.asarray(parcels.geometry)
-    hit = shapely.STRtree(geoms).query(w, predicate="intersects")
-    if len(hit):
-        g = geoms[hit]
-        out[hit] = shapely.area(shapely.intersection(g, w)) >= 0.5 * shapely.area(g)
+                         "use_label_ft": res["use"][2], "height_label_ft": res["height"][2]})
     return out
