@@ -184,6 +184,18 @@ anyone) gets it with `uv run sfzmaps pull` and builds at $0 with nothing to do.
   blobs in a batch counts as 100 operations, not one." Deletes are free but count as advanced
   operations. Multipart parts must be at least 5 MB and equal in size except the last, and the
   docs recommend multipart for files over 100 MB.
+- **Pruning.** `uv run python -m sfzmaps.prune --dry-run` (not yet an `sfzmaps` subcommand:
+  `cli.py` is a build dependency, so adding one means re-recording `dvc.lock`) says what the
+  store holds under `dvc/` and `cache/` that nothing uses; without `--dry-run` it deletes it.
+  *Used* is everything named by `main`'s shipped manifest and by that of every open pull
+  request whose branch has a `cache-needed.json` (via `gh pr list`): manifests, needed lists,
+  answer packs and their indexes, data packs and objects stored alone. Tiles and stats under
+  other prefixes are never touched. It refuses when `main`'s manifest is version 1, when an open
+  PR's branch can't be read, and when any used name is missing from the listing. Requests: one
+  listing pass, any manifest not cached locally, then `site/scripts/blob-del.mjs` deletes 100
+  URLs per `del()` call at most 50 a second, and one more listing confirms. **Commits shipped
+  before a prune can't be pulled afterwards** if their objects were unused at the time; an open
+  PR with a version 1 manifest keeps every object it stores alone until it ships again.
 - **Never delete an answer to force a re-read**: packs keep one answer per key. Change the prompt
   or its context instead (the key changes).
 
