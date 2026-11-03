@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -36,7 +37,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
-from sfzmaps import answers, cachepack, config
+from sfzmaps import answers, cachepack, config, datapack
 
 BASE = (os.environ.get("NEXT_PUBLIC_TILES_BASE_URL")
         or "https://zwgxwpoxqzfauqfg.public.blob.vercel-storage.com").rstrip("/")
@@ -44,6 +45,8 @@ DVC_PREFIX = "dvc/files/md5"
 PACK_PREFIX = "cache/packs"
 NEEDED_PREFIX = "cache/needed"
 SHIPPED_PREFIX = "cache/shipped"
+DATAPACK_PREFIX = "cache/datapacks"
+MAX_REQUESTS = 500                   # a ship making more than this needs --yes
 PULL_WORKERS = 4                     # downloads at once: a browser's tile load, not a burst
 RETRY_STATUS = {403, 429, 500, 502, 503, 504}
 RETRY_WAIT_S = (2, 8, 30)
@@ -264,6 +267,9 @@ class ShipReport:
     objects_total: int
     objects_uploaded: int
     bytes_uploaded: int
+    packs_new: int = 0                # data packs built for objects nothing placed yet
+    singles_uploaded: int = 0         # large objects uploaded alone
+    requests: int = 0                 # requests to the store, listings included
 
 
 def _git(*args: str) -> str:
@@ -299,9 +305,67 @@ def preflight(base: str = "origin/main") -> None:
         raise ShipError(f"nothing to ship: HEAD is not ahead of {base}")
 
 
-def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
+def _list_calls(held: dict[str, int]) -> int:
+    """Requests one listing makes: one per 1,000 names under each prefix."""
+    dvc = sum(n.startswith(f"{DVC_PREFIX}/") for n in held)
+    return max(1, math.ceil(dvc / 1000)) + max(1, math.ceil((len(held) - dvc) / 1000))
+
+
+def datapack_name(sha: str) -> str:
+    return f"{DATAPACK_PREFIX}/{sha}.zip"
+
+
+def _manifest(sha: str, client) -> dict:
+    """A shipped manifest by its sha256, kept locally once fetched (it never changes)."""
+    p = config.CACHE_DIR / "shipped" / f"{sha}.json"
+    if not p.exists():
+        download(f"{SHIPPED_PREFIX}/{sha}.json", p, "sha256", sha, client)
+    return json.loads(p.read_text())
+
+
+def prior_manifests(base: str, client) -> list[dict]:
+    """The v2 manifests whose data packs this ship may reuse: this branch's own (from an earlier
+    ship of it), then each one cache-needed.json named on `base`, newest first, back to the
+    first v1 or missing manifest."""
+    out = []
+    if needed_path().exists():
+        sha = json.loads(needed_path().read_text()).get("shipped_sha")
+        try:
+            m = _manifest(sha, client) if sha else {}
+        except ShipError:
+            m = {}
+        if m.get("version") == 2:
+            out.append(m)
+    try:
+        commits = _git("log", "--format=%H", base, "--", "pipeline/cache-needed.json").split()
+    except subprocess.CalledProcessError:
+        commits = []
+    seen = set()
+    for c in commits:
+        try:
+            sha = json.loads(_git("show", f"{c}:pipeline/cache-needed.json")).get("shipped_sha")
+        except (subprocess.CalledProcessError, ValueError):
+            continue
+        if not sha or sha in seen:
+            continue
+        seen.add(sha)
+        try:
+            m = _manifest(sha, client)
+        except ShipError:
+            break
+        if m.get("version") != 2:
+            break
+        out.append(m)
+    return out
+
+
+def ship(base: str = "origin/main", dry_run: bool = False, yes: bool = False) -> ShipReport:
     """Upload what this commit needs that the store lacks, confirm it, publish the shipped
-    manifest, and commit the records (pack record, pipeline/cache-needed.json)."""
+    manifest, and commit the records (pack record, pipeline/cache-needed.json).
+
+    A data object stays in the data pack an earlier manifest (this branch's, or one on `base`)
+    put it in, or alone if it's already stored alone; the rest go into new data packs (under
+    datapack.SINGLE_MIN) or alone. More than MAX_REQUESTS requests need `yes`."""
     preflight(base)
     client = _client()
     keys, unknown = needed_answers()
@@ -320,16 +384,44 @@ def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
     if wrong:
         raise ShipError(f"{len(wrong)} object(s) on the store differ in size from the local ones "
                         f"(e.g. {object_name(wrong[0])}); not overwriting")
-    missing = [m for m in objs if object_name(m) not in held]
+    where: dict[str, str] = {}                            # md5 -> data pack sha
+    data_packs: dict[str, int] = {}                       # data pack sha -> bytes
+    for prior in prior_manifests(base, client):
+        for m, sha in (prior.get("where") or {}).items():
+            pbytes = (prior.get("data_packs") or {}).get(sha)
+            if m in size and m not in where and pbytes is not None \
+                    and held.get(datapack_name(sha)) == pbytes:
+                where[m] = sha
+                data_packs[sha] = pbytes
+    missing = [m for m in objs if m not in where and object_name(m) not in held]
+    packs, singles = datapack.plan_packs({m: size[m] for m in missing})
     nbytes = sum(size[m] for m in missing)
-    if dry_run:
-        return ShipReport(None, len(new), len(objs), len(missing), nbytes)
-    pack_sha = None
-    entries = [{"file": str(object_path(m, cache)), "name": object_name(m), "alg": "md5",
-                "hash": _md5_hex(m)} for m in missing]
     nb = needed_bytes(keys)
     keys_sha = hashlib.sha256(nb).hexdigest()
+    requests = (2 * _list_calls(held) + len(packs) + len(singles) + (2 if new else 0) + 1
+                + (f"{NEEDED_PREFIX}/{keys_sha}.keys.gz" not in held))
+
+    def report(pack_sha=None) -> ShipReport:
+        return ShipReport(pack_sha, len(new), len(objs), len(missing), nbytes, len(packs),
+                          len(singles), requests)
+
+    if dry_run:
+        return report()
+    if requests > MAX_REQUESTS and not yes:
+        raise ShipError(f"this ship would make {requests} requests to the store (more than "
+                        f"{MAX_REQUESTS}); check with --dry-run, then pass --yes")
+    pack_sha = None
+    entries = [{"file": str(object_path(m, cache)), "name": object_name(m), "alg": "md5",
+                "hash": _md5_hex(m)} for m in singles]
     with tempfile.TemporaryDirectory(prefix="sfzmaps-ship-") as tmp:
+        for i, members in enumerate(packs):
+            dp = Path(tmp) / f"data-{i}.zip"
+            sha = datapack.make_pack(members, cache, dp)
+            data_packs[sha] = dp.stat().st_size
+            where.update({m: sha for m in members})
+            if held.get(datapack_name(sha)) != data_packs[sha]:   # an interrupted ship may have sent it
+                entries.append({"file": str(dp), "name": datapack_name(sha), "alg": "sha256",
+                                "hash": sha})
         np_ = Path(tmp) / "needed.keys.gz"
         np_.write_bytes(nb)
         if f"{NEEDED_PREFIX}/{keys_sha}.keys.gz" not in held:
@@ -349,7 +441,10 @@ def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
             records = {**records, pack.sha: pack.record()}
         upload(entries)                                   # only what the listing lacked ...
         held = listing()                                  # ... then one more listing confirms
-        absent = [object_name(m) for m in objs if held.get(object_name(m)) != size[m]]
+        absent = [datapack_name(where[m]) for m in objs
+                  if m in where and held.get(datapack_name(where[m])) != data_packs[where[m]]]
+        absent += [object_name(m) for m in objs
+                   if m not in where and held.get(object_name(m)) != size[m]]
         absent += [f"{PACK_PREFIX}/{sha}.zip" for sha, r in records.items()
                    if held.get(f"{PACK_PREFIX}/{sha}.zip") != r["bytes"]]
         if f"{NEEDED_PREFIX}/{keys_sha}.keys.gz" not in held:
@@ -357,15 +452,19 @@ def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
         if absent:
             raise ShipError(f"{len(absent)} object(s) aren't on the store after uploading "
                             f"(e.g. {absent[0]}); run ship again")
-        manifest = json.dumps({"lock_md5": lock_md5(), "outs": outs,
+        placed = {m: where[m] for m in objs if m in where}
+        manifest = json.dumps({"version": 2, "lock_md5": lock_md5(), "outs": outs,
                                "objects": {m: size[m] for m in objs},
+                               "where": placed,
+                               "data_packs": {sha: data_packs[sha] for sha in sorted(set(placed.values()))},
                                "packs": {sha: r["bytes"] for sha, r in sorted(records.items())}},
                               indent=0, sort_keys=True).encode()
         shipped_sha = hashlib.sha256(manifest).hexdigest()
-        mp = Path(tmp) / "shipped.json"
-        mp.write_bytes(manifest)
-        upload([{"file": str(mp), "name": f"{SHIPPED_PREFIX}/{shipped_sha}.json", "alg": "sha256",
-                 "hash": shipped_sha, "contentType": "application/json"}])
+        if f"{SHIPPED_PREFIX}/{shipped_sha}.json" not in held:
+            mp = Path(tmp) / "shipped.json"
+            mp.write_bytes(manifest)
+            upload([{"file": str(mp), "name": f"{SHIPPED_PREFIX}/{shipped_sha}.json",
+                     "alg": "sha256", "hash": shipped_sha, "contentType": "application/json"}])
         files = []                                        # the records last
         if pack_sha:
             files.append(cachepack.write_record(pack))
@@ -380,7 +479,7 @@ def ship(base: str = "origin/main", dry_run: bool = False) -> ShipReport:
             _git("add", *map(str, files))
             _git("commit", "-q", "-m", f"cache: ship {len(objs)} data objects, {len(keys)} answers"
                  + (f" (new pack {pack_sha[:12]}: {len(new)})" if pack_sha else ""))
-    return ShipReport(pack_sha, len(new), len(objs), len(missing), nbytes)
+    return report(pack_sha)
 
 
 def shipped_manifest(client=None) -> dict:

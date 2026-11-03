@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from sfzmaps import answers, cachepack, config, ship
+from sfzmaps import answers, cachepack, config, datapack, ship
 
 K1 = "llm/" + "1" * 64 + ".json"
 K2 = "llm/tiles/" + "2" * 64 + ".json"
@@ -136,10 +136,10 @@ class Store:
 F1 = b"tile bytes"
 
 
-def _setup_ship(data, tmp_path, monkeypatch, blob):
-    manifest = json.dumps([{"md5": md5(F1), "relpath": "x.pmtiles"}]).encode()
+def _setup_ship(data, tmp_path, monkeypatch, blob, files=(F1,)):
+    manifest = json.dumps([{"md5": md5(b), "relpath": f"x{i}"} for i, b in enumerate(files)]).encode()
     dirmd5 = md5(manifest) + ".dir"
-    cache = _cache_with(tmp_path, {dirmd5: manifest, md5(F1): F1})
+    cache = _cache_with(tmp_path, {dirmd5: manifest, **{md5(b): b for b in files}})
     config.PIPELINE_DIR.mkdir(parents=True, exist_ok=True)
     (config.PIPELINE_DIR / "dvc.lock").write_text(f"stages:\n  s:\n    outs:\n    - path: data/out/x\n      md5: {dirmd5}\n")
     for k in (K1, K2):
@@ -169,6 +169,59 @@ def test_ship_refuses_to_overwrite_an_object_that_differs(data, tmp_path, monkey
         ship.ship()
 
 
+def _shipped(blob):
+    sha = json.loads(ship.needed_path().read_text())["shipped_sha"]
+    return json.loads(blob.objects[f"{ship.SHIPPED_PREFIX}/{sha}.json"])
+
+
+def test_ship_packs_new_small_objects_and_uploads_large_alone(data, tmp_path, monkeypatch):
+    import io
+    import zipfile
+    monkeypatch.setattr(datapack, "SINGLE_MIN", 1000)
+    big = b"b" * 2000
+    blob = FakeBlob()
+    _, _, dirmd5, store = _setup_ship(data, tmp_path, monkeypatch, blob, files=(F1, big))
+    r = ship.ship()
+    packs = [n for n in store.puts if n.startswith(f"{ship.DATAPACK_PREFIX}/")]
+    assert len(packs) == 1
+    assert ship.object_name(md5(big)) in store.puts
+    assert ship.object_name(md5(F1)) not in store.puts and ship.object_name(dirmd5) not in store.puts
+    psha = packs[0].removeprefix(f"{ship.DATAPACK_PREFIX}/").removesuffix(".zip")
+    assert zipfile.ZipFile(io.BytesIO(blob.objects[packs[0]])).namelist() == sorted([dirmd5, md5(F1)])
+    m = _shipped(blob)
+    assert m["version"] == 2
+    assert m["where"] == {dirmd5: psha, md5(F1): psha}
+    assert m["data_packs"] == {psha: len(blob.objects[packs[0]])}
+    assert (r.packs_new, r.singles_uploaded) == (1, 1)
+
+
+def test_ship_reuses_packs_main_already_has(data, tmp_path, monkeypatch):
+    blob = FakeBlob()
+    cache, _, dirmd5, store = _setup_ship(data, tmp_path, monkeypatch, blob)
+    other = b"an object an older commit also packed"
+    p = ship.object_path(md5(other), cache)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(other)
+    zp = tmp_path / "main.zip"
+    psha = datapack.make_pack([dirmd5, md5(F1), md5(other)], cache, zp)
+    blob.objects[f"{ship.DATAPACK_PREFIX}/{psha}.zip"] = zp.read_bytes()
+    where = {dirmd5: psha, md5(F1): psha, md5(other): psha}
+    main = json.dumps({"version": 2, "lock_md5": "0" * 32, "outs": [], "objects": {}, "where": where,
+                       "data_packs": {psha: zp.stat().st_size}, "packs": {}}).encode()
+    msha = hashlib.sha256(main).hexdigest()
+    blob.objects[f"{ship.SHIPPED_PREFIX}/{msha}.json"] = main
+    main_needed = json.dumps({"shipped_sha": msha})
+    monkeypatch.setattr(ship, "_git", lambda *a: "c1\n" if a[0] == "log" else
+                        main_needed if a[:2] == ("show", "c1:pipeline/cache-needed.json") else "")
+    monkeypatch.setattr(ship, "known_keys", lambda recs, client=None: {K1: "x", K2: "y"})
+    ship.ship()
+    assert not [n for n in store.puts if n.startswith((f"{ship.DATAPACK_PREFIX}/", f"{ship.DVC_PREFIX}/"))]
+    m = _shipped(blob)
+    assert m["where"] == {dirmd5: psha, md5(F1): psha}
+    assert m["data_packs"] == {psha: zp.stat().st_size}
+    before = list(store.puts)
+    ship.ship()
+    assert store.puts == before
 
 
 def test_ship_refuses_artifacts_of_unknown_provenance(data, monkeypatch):
