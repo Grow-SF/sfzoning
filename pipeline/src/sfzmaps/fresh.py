@@ -91,6 +91,58 @@ def record(out: Path, inputs: list[Path]) -> None:
     tmp.replace(p)
 
 
+# -- code as an input -------------------------------------------------------------------------
+
+_PKG_DIR = Path(__file__).resolve().parent
+
+
+def module_file(module: str) -> Path | None:
+    """The source file of an sfzmaps module (None for anything else)."""
+    parts = module.split(".")
+    if parts[0] != "sfzmaps":
+        return None
+    p = _PKG_DIR.joinpath(*parts[1:])
+    if (p / "__init__.py").is_file():
+        return p / "__init__.py"
+    return p.with_suffix(".py") if p.with_suffix(".py").is_file() else None
+
+
+def _imports(module: str, path: Path) -> set[str]:
+    """sfzmaps modules a module imports anywhere in its source (function-level imports too)."""
+    import ast
+
+    pkg = module if path.name == "__init__.py" else module.rpartition(".")[0]
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            found.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                up = pkg.split(".")[: len(pkg.split(".")) - node.level + 1]
+                base = ".".join(up + ([node.module] if node.module else []))
+            found.add(base)
+            found.update(f"{base}.{a.name}" for a in node.names)
+    return {m for m in found if module_file(m) is not None}
+
+
+def code_files(modules: list[str], *, cut: frozenset[str] = frozenset()) -> list[Path]:
+    """The source files of these sfzmaps modules and of every sfzmaps module they import,
+    transitively, as a step's code inputs. Modules in `cut` (and what only they import) are left
+    out: name there the modules whose effect reaches the step only through files it already
+    fingerprints by content (a warp's code, when the step hashes the warped raster)."""
+    seen: dict[str, Path] = {}
+    todo = list(modules)
+    while todo:
+        m = todo.pop()
+        path = module_file(m)
+        if m in seen or m in cut or path is None:
+            continue
+        seen[m] = path
+        todo.extend(_imports(m, path))
+    return sorted(set(seen.values()))
+
+
 # -- adoption from dvc.lock -------------------------------------------------------------------
 
 _lock: dict | None = None

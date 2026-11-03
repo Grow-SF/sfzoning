@@ -118,7 +118,7 @@ def test_cli_republish_and_cache_only_never_reach_network(monkeypatch, tmp_path)
     from sfzmaps.districts import assemble
 
     seen = []
-    monkeypatch.setattr(assemble, "republish", lambda s: seen.append(("re", s, llm.CACHE_ONLY)) or tmp_path)
+    monkeypatch.setattr(assemble, "republish", lambda s, **k: seen.append(("re", s, llm.CACHE_ONLY)) or tmp_path)
     monkeypatch.setattr(assemble, "run_series",
                         lambda s, **k: seen.append(("run", s, k.get("cache_only"))) or tmp_path)
     monkeypatch.setattr(reviewpage, "write", lambda s: tmp_path / "review.html")

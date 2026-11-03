@@ -3,6 +3,10 @@ stages:
   edition-1921:
     cmd: uv run --frozen sfzmaps stage edition-1921
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -48,8 +52,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -60,13 +64,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -148,17 +152,21 @@ stages:
     outs:
     - path: data/out/1921
       hash: md5
-      md5: 320ffe004550c661105bc02766b90c73.dir
-      size: 344247803
+      md5: 86cd27484f690c7073ce906f06a4cedc.dir
+      size: 316919584
       nfiles: 12
     - path: data/work/1921
       hash: md5
-      md5: b69bfa198673f925298d7868817d5e15.dir
-      size: 230763266
-      nfiles: 487
+      md5: 7011f8bf12569151bdcbbea747afc61c.dir
+      size: 230793205
+      nfiles: 488
   edition-1929:
     cmd: uv run --frozen sfzmaps stage edition-1929
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -204,8 +212,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -216,13 +224,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -304,17 +312,21 @@ stages:
     outs:
     - path: data/out/1929
       hash: md5
-      md5: 57333f1e9c64a8fe46a34754e9a1e217.dir
-      size: 311387035
+      md5: 015280557e1b29e3debfbbcda35f4b21.dir
+      size: 288089178
       nfiles: 12
     - path: data/work/1929
       hash: md5
-      md5: dd13c9bff3278b42b6feef856133397a.dir
-      size: 293611874
-      nfiles: 360
+      md5: b0855519d541b2feb6fb2161906e60ec.dir
+      size: 293634116
+      nfiles: 361
   edition-1935:
     cmd: uv run --frozen sfzmaps stage edition-1935
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -360,8 +372,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -372,13 +384,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -460,17 +472,21 @@ stages:
     outs:
     - path: data/out/1935
       hash: md5
-      md5: 6091adf11c8d57ffdc721a11df7e67b5.dir
-      size: 371334665
+      md5: e59c93edadaa56705d8e053caeb2e3ab.dir
+      size: 344302629
       nfiles: 12
     - path: data/work/1935
       hash: md5
-      md5: 1d1857683cb2b7fa015362562bd69d8b.dir
-      size: 346173574
-      nfiles: 419
+      md5: 5f12adfd17585ac7eaed4970cb3f2251.dir
+      size: 346198879
+      nfiles: 420
   edition-1948:
     cmd: uv run --frozen sfzmaps stage edition-1948
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -516,8 +532,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -528,13 +544,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -616,17 +632,21 @@ stages:
     outs:
     - path: data/out/1948
       hash: md5
-      md5: dea67ba3a341c036b0f7f2497f0a0a04.dir
-      size: 391021875
+      md5: 0d332144ad077be841f4bb1c5716f6ff.dir
+      size: 363519159
       nfiles: 12
     - path: data/work/1948
       hash: md5
-      md5: 7a659e6d111f9d4e3b33d4837531234e.dir
-      size: 1812196833
-      nfiles: 388
+      md5: 2c7007f995055f2612815f33cf230cf7.dir
+      size: 1812220498
+      nfiles: 389
   edition-1960:
     cmd: uv run --frozen sfzmaps stage edition-1960
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -672,8 +692,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -684,13 +704,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -772,17 +792,21 @@ stages:
     outs:
     - path: data/out/1960
       hash: md5
-      md5: 864f2063a4c355028924a79b0b624290.dir
-      size: 260358796
+      md5: 92cf8c0624a1b40b2fe8096242545dbd.dir
+      size: 236408389
       nfiles: 12
     - path: data/work/1960
       hash: md5
-      md5: 2e7b4b65b73e3089fa8a5b2413b15a0a.dir
-      size: 222834871
-      nfiles: 379
+      md5: cdc525cfe90693ec06eb94f80655d11b.dir
+      size: 222858474
+      nfiles: 380
   edition-1964:
     cmd: uv run --frozen sfzmaps stage edition-1964
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -828,8 +852,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -840,13 +864,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -928,17 +952,21 @@ stages:
     outs:
     - path: data/out/1964
       hash: md5
-      md5: 0d0ede22274d1be87e277988a1b2c2f1.dir
-      size: 262238067
+      md5: 968cfbd9cbbeae27a73b2946403ef5e2.dir
+      size: 238130845
       nfiles: 12
     - path: data/work/1964
       hash: md5
-      md5: 9b7e6d9b47bcb7869f5c1c50f329ad02.dir
-      size: 281209833
-      nfiles: 486
+      md5: a39c203c70b892706179c871db6e751b.dir
+      size: 281239281
+      nfiles: 487
   edition-1968:
     cmd: uv run --frozen sfzmaps stage edition-1968
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -984,8 +1012,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -996,13 +1024,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -1084,17 +1112,21 @@ stages:
     outs:
     - path: data/out/1968
       hash: md5
-      md5: 6eff7008abe354ec56aa796339c227a4.dir
-      size: 269431239
+      md5: 91ef5de18260123f4bcbc0eee31ffbd5.dir
+      size: 245267084
       nfiles: 12
     - path: data/work/1968
       hash: md5
-      md5: bc415ba2cac5c7674460926ff9dda61c.dir
-      size: 331627178
-      nfiles: 614
+      md5: 9a19f12c5dd7dff0fd7ff785840a3184.dir
+      size: 331664101
+      nfiles: 615
   edition-1972:
     cmd: uv run --frozen sfzmaps stage edition-1972
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -1140,8 +1172,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -1152,13 +1184,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -1240,17 +1272,21 @@ stages:
     outs:
     - path: data/out/1972
       hash: md5
-      md5: c0ba02787c4e9e2dba2447fc276fac4c.dir
-      size: 271871513
+      md5: 5e9f20e3e472305494854513787ae4ab.dir
+      size: 247566011
       nfiles: 12
     - path: data/work/1972
       hash: md5
-      md5: f96efa8a51e2aa7e8e9efd7033a07d0b.dir
-      size: 498680908
-      nfiles: 883
+      md5: 2798502c9235561f0f6dabd7b4eb3e1e.dir
+      size: 498732906
+      nfiles: 884
   edition-1975:
     cmd: uv run --frozen sfzmaps stage edition-1975
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -1296,8 +1332,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -1308,13 +1344,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -1396,17 +1432,21 @@ stages:
     outs:
     - path: data/out/1975
       hash: md5
-      md5: c58694e7d79f2649d105321189941555.dir
-      size: 270551159
+      md5: f519249b7ee5470cf828389aa802f748.dir
+      size: 246222234
       nfiles: 12
     - path: data/work/1975
       hash: md5
-      md5: 03dde774ea8bf8976a32b2fb8edb6c9f.dir
-      size: 500709016
-      nfiles: 890
+      md5: 53084e89147d049a2c7e90ecf7eb5f1e.dir
+      size: 500761290
+      nfiles: 891
   edition-1980:
     cmd: uv run --frozen sfzmaps stage edition-1980
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -1452,8 +1492,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -1464,13 +1504,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -1552,17 +1592,21 @@ stages:
     outs:
     - path: data/out/1980
       hash: md5
-      md5: 40267789a495f4edd80762c5be2ccee1.dir
-      size: 305488851
+      md5: 9969d1d6658975c8f9fad35baf6f74da.dir
+      size: 280505398
       nfiles: 12
     - path: data/work/1980
       hash: md5
-      md5: f3bf7840e2d420e875a1f61bd3ff2a83.dir
-      size: 416466366
-      nfiles: 950
+      md5: 85303da22227fc295a3208d957f87573.dir
+      size: 416521644
+      nfiles: 951
   period-1980-1990:
     cmd: uv run --frozen sfzmaps stage period-1980-1990
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -1618,8 +1662,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -1630,13 +1674,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -1718,19 +1762,19 @@ stages:
     outs:
     - path: data/out/1980-1990-height
       hash: md5
-      md5: 304fdbb6f674f5a10fc18bdacb96c188.dir
+      md5: 4a9a4310b8cd095ac5f46bf14947f14c.dir
       size: 68185777
       nfiles: 7
     - path: data/out/1980-1990-su
       hash: md5
-      md5: 051da92fca4da52fc42adc588412a3da.dir
+      md5: 7dcb7b93e0757e1f379597ca8d14cfdc.dir
       size: 57420023
       nfiles: 7
     - path: data/out/1980-1990-zoning
       hash: md5
-      md5: fc6723d124b0466f0dff005ab90bdc8d.dir
-      size: 224651969
-      nfiles: 15
+      md5: 5ddee04e68fccc4f893690e40d3110f1.dir
+      size: 199674094
+      nfiles: 16
     - path: data/work/1980-1990-height
       hash: md5
       md5: 288857f9bd06b60785aac5b0f6d5f8cc.dir
@@ -1743,12 +1787,16 @@ stages:
       nfiles: 162
     - path: data/work/1980-1990-zoning
       hash: md5
-      md5: a7cf299cf24764a802a6c421594d2279.dir
-      size: 82031170
-      nfiles: 380
+      md5: 72322e52bd6c0eacb96199fb300a5bd7.dir
+      size: 82054493
+      nfiles: 381
   period-1990-1996:
     cmd: uv run --frozen sfzmaps stage period-1990-1996
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -1804,8 +1852,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -1816,13 +1864,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -1904,19 +1952,19 @@ stages:
     outs:
     - path: data/out/1990-1996-height
       hash: md5
-      md5: 3850fab543f5603c9e3df2e15307dd2a.dir
+      md5: 36b77006e365c04516c874df54cf5c10.dir
       size: 72648044
       nfiles: 7
     - path: data/out/1990-1996-su
       hash: md5
-      md5: 2570736f83ad3ee0815e0d52a2256180.dir
+      md5: e410ac5d0f00b003238121bfe980fd42.dir
       size: 52907980
       nfiles: 7
     - path: data/out/1990-1996-zoning
       hash: md5
-      md5: 7abb60e0e6c7295119974429206f7d80.dir
-      size: 202654285
-      nfiles: 15
+      md5: 22b7b914c7d16b9befee7f825eb74761.dir
+      size: 179983190
+      nfiles: 16
     - path: data/work/1990-1996-height
       hash: md5
       md5: d0a8ea46fda169254d6a7529fdafb0d3.dir
@@ -1929,12 +1977,16 @@ stages:
       nfiles: 310
     - path: data/work/1990-1996-zoning
       hash: md5
-      md5: 0c2973a4edc0bb3b8f337abd5bb7e250.dir
-      size: 74090565
-      nfiles: 484
+      md5: 553acb8bc2da4f0ac1c19f193753b208.dir
+      size: 74121234
+      nfiles: 485
   period-1996-2000:
     cmd: uv run --frozen sfzmaps stage period-1996-2000
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -1990,8 +2042,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -2002,13 +2054,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -2090,19 +2142,19 @@ stages:
     outs:
     - path: data/out/1996-2000-height
       hash: md5
-      md5: ff0097c2b87a593fc3bc07d65ac99545.dir
+      md5: a5626b027e869886b7a26cf150f1ee0c.dir
       size: 73931890
       nfiles: 7
     - path: data/out/1996-2000-su
       hash: md5
-      md5: d683121a37fb3be03890af6591638435.dir
+      md5: 023ea1f2e4090fe7db921b66ff2dcd8b.dir
       size: 87212225
       nfiles: 7
     - path: data/out/1996-2000-zoning
       hash: md5
-      md5: 7618f5433a1306022e6a2f63c344d8f9.dir
-      size: 220762173
-      nfiles: 15
+      md5: 0b3d058328663cabfe8e30336450c487.dir
+      size: 195536668
+      nfiles: 16
     - path: data/work/1996-2000-height
       hash: md5
       md5: 94a4a72c84ae92bb528c277441c4eb88.dir
@@ -2115,12 +2167,16 @@ stages:
       nfiles: 567
     - path: data/work/1996-2000-zoning
       hash: md5
-      md5: c647a1e12a9271ab93197221c61eeca6.dir
-      size: 82763997
-      nfiles: 524
+      md5: 80651db8267f993f95a5c68fc0ec2f1f.dir
+      size: 82796632
+      nfiles: 525
   period-2000-digital:
     cmd: uv run --frozen sfzmaps stage period-2000-digital
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -2176,8 +2232,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -2188,13 +2244,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -2276,19 +2332,19 @@ stages:
     outs:
     - path: data/out/2000-digital-height
       hash: md5
-      md5: c002094bc713122c91ac7ebd8229c8b9.dir
+      md5: f101a92cb9769e409221933fced36f0f.dir
       size: 71674439
       nfiles: 7
     - path: data/out/2000-digital-su
       hash: md5
-      md5: 1c5437e6042f2aba7933d39a5e589ee0.dir
+      md5: c71c62e6de1ea61b474f06e6107a7a71.dir
       size: 84863967
       nfiles: 7
     - path: data/out/2000-digital-zoning
       hash: md5
-      md5: 476681e2b93f4fe5759acbf285dc99d0.dir
-      size: 221545984
-      nfiles: 15
+      md5: 20eb6c56a0792db162e4240667ca1b24.dir
+      size: 196323714
+      nfiles: 16
     - path: data/work/2000-digital-height
       hash: md5
       md5: f1bd00e8cee4429b72c3cf2b3179af26.dir
@@ -2301,12 +2357,16 @@ stages:
       nfiles: 542
     - path: data/work/2000-digital-zoning
       hash: md5
-      md5: 6ce9f6a572e5a8d0c937cdcead947d5e.dir
-      size: 74272125
-      nfiles: 380
+      md5: dea91a4efb47b7076ef8753ab2d7e715.dir
+      size: 74295448
+      nfiles: 381
   today:
     cmd: uv run --frozen sfzmaps stage today
     deps:
+    - path: ../docs/research/zoning-districts.csv
+      hash: md5
+      md5: e95e49eefce5250ef622610cd9003fb4
+      size: 47240
     - path: ../pixi.lock
       hash: md5
       md5: 0317d1741ef83b7e7317cca2d0659bd3
@@ -2338,8 +2398,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -2350,13 +2410,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
@@ -2438,12 +2498,12 @@ stages:
     outs:
     - path: data/out/today
       hash: md5
-      md5: 3f419f11c47b3409b28b3e499d0ccc56.dir
-      size: 135941799
+      md5: d2ec23a449d258ac18beb66ca67b06c5.dir
+      size: 108684979
       nfiles: 5
     - path: data/work/today
       hash: md5
-      md5: 05536949baa05bf67c74fc1fa264ec37.dir
+      md5: 4c0c60ba8a45ec73ef0fae5ad0dbfe02.dir
       size: 111
       nfiles: 1
   shared:
@@ -2459,78 +2519,78 @@ stages:
       size: 1362
     - path: data/out/1921/districts
       hash: md5
-      md5: e3978b8c76e4ef4be8c56d99fe1f27d7.dir
-      size: 135375967
+      md5: d3aa7e8c15552e619fb5d8f0dee0308b.dir
+      size: 108047778
       nfiles: 5
     - path: data/out/1929/districts
       hash: md5
-      md5: a7ee372711b78954c2cb365a67b46738.dir
-      size: 117682245
+      md5: 8fea6112a9db4abaaa9ab52df9e52b9d.dir
+      size: 94384418
       nfiles: 5
     - path: data/out/1935/districts
       hash: md5
-      md5: 179a39f3805265bf27eb22085c5b16df.dir
-      size: 136506445
+      md5: f7bbe44d90dda421c3a8d58a989b2ca1.dir
+      size: 109474439
       nfiles: 5
     - path: data/out/1948/districts
       hash: md5
-      md5: 74416fbe3043ef4bd1a9465d73e578aa.dir
-      size: 133324296
+      md5: d863726157fb78a1fbe8ec7ac0742834.dir
+      size: 105821610
       nfiles: 5
     - path: data/out/1960/districts
       hash: md5
-      md5: b4912a666d62b27cd0686e8a18de6e9a.dir
-      size: 128651742
+      md5: 2e418b23675696f617d28f090316fccc.dir
+      size: 104701365
       nfiles: 5
     - path: data/out/1964/districts
       hash: md5
-      md5: bc4513e517329c89ce749c203b87f5f2.dir
-      size: 134232600
+      md5: 79b42fddfd404c8bd035bcb21ccb86c6.dir
+      size: 110125408
       nfiles: 5
     - path: data/out/1968/districts
       hash: md5
-      md5: 81f21e4b28eeb2ad52bdb470d7b6308b.dir
-      size: 134455658
+      md5: 4f76556012d0419669be1d334651e522.dir
+      size: 110291533
       nfiles: 5
     - path: data/out/1972/districts
       hash: md5
-      md5: e9fdc0b0d5558377431d1e04d2cacfcf.dir
-      size: 136517125
+      md5: c07bd21b1fa9ceaa08d3616dd22ec291.dir
+      size: 112211653
       nfiles: 5
     - path: data/out/1975/districts
       hash: md5
-      md5: 3f8e5d771af0bbe430ac9ce8e185e287.dir
-      size: 136556675
+      md5: 1211aa8a8ecf6f3ce14b6eca955f35f7.dir
+      size: 112227780
       nfiles: 5
     - path: data/out/1980-1990-zoning/districts
       hash: md5
-      md5: 22812577fead94e24ab4b66533b079cb.dir
-      size: 138112339
-      nfiles: 8
+      md5: 1d5ee4e47d006ffc7621a7e894c3bc80.dir
+      size: 113134506
+      nfiles: 9
     - path: data/out/1980/districts
       hash: md5
-      md5: 42a5f2921a2d50936d7a08b579b4501e.dir
-      size: 137744003
+      md5: becb30f6baeebc3286ac077721651742.dir
+      size: 112760580
       nfiles: 5
     - path: data/out/1990-1996-zoning/districts
       hash: md5
-      md5: ce983de3b18000939c7a7e601aea3108.dir
-      size: 127308996
-      nfiles: 8
+      md5: 510151ec0538fd89c8c1bbc8c9f2fbf4.dir
+      size: 104637943
+      nfiles: 9
     - path: data/out/1996-2000-zoning/districts
       hash: md5
-      md5: 758879d307763f6811b3361b8e09b0fc.dir
-      size: 138779649
-      nfiles: 8
+      md5: 3569020f62540611d518745d54c2fd00.dir
+      size: 113554186
+      nfiles: 9
     - path: data/out/2000-digital-zoning/districts
       hash: md5
-      md5: 717e8dbe2a48dbed956379f526f9c133.dir
-      size: 139557545
-      nfiles: 8
+      md5: 63cfc26d83202c6b59efb48389587910.dir
+      size: 114335320
+      nfiles: 9
     - path: data/out/today/districts
       hash: md5
-      md5: 2baa914b4daaf10e2a13d999f9554ee5.dir
-      size: 135941799
+      md5: 19761a1e1c4f31f93fff753d08612827.dir
+      size: 108684979
       nfiles: 5
     - path: pyproject.toml
       hash: md5
@@ -2550,8 +2610,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: e25d1f39101fe0853664ea004c575bbd
-      size: 35522
+      md5: c807bfb178cf9283ac34429abfbcf540
+      size: 35992
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -2562,13 +2622,13 @@ stages:
       size: 8949
     - path: src/sfzmaps/districts
       hash: md5
-      md5: 7560b9cdd79b22677acf30d89013fa0c.dir
-      size: 143056
-      nfiles: 13
+      md5: 68ebca0e374013f135c117a201da9ea9.dir
+      size: 154095
+      nfiles: 14
     - path: src/sfzmaps/fresh.py
       hash: md5
-      md5: e8bc3975a260785e27d756fd666ea21c
-      size: 6399
+      md5: 1f9071c136ea67a618c97335e3edaa45
+      size: 8516
     - path: src/sfzmaps/inputs.py
       hash: md5
       md5: c1812f86c71c68c938e76414d4a515ca
