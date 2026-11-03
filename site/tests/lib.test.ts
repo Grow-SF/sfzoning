@@ -5,6 +5,7 @@ import { ByteCache, cachedSource, type Pm } from "@/lib/archiveCache";
 import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
 import { COLOURS, HOLD_LIMIT_MS, heldScans, nextHeld } from "@/lib/scanHold";
 import { INK_CITY, inkByZoom, scanInkWeight } from "@/lib/theme";
+import { shownColor } from "@/lib/palette";
 
 const orig = process.env.NEXT_PUBLIC_TILES_BASE_URL;
 afterEach(() => {
@@ -271,5 +272,13 @@ describe("nextHeld", () => {
   });
   it("releases held colours on a step that draws colours of its own", () => {
     expect(nextHeld([COLOURS], ["1960"], ["1972"], false, true)).toEqual(["1960"]);
+  });
+});
+
+describe("shownColor", () => {
+  it("matches the lots: the colour at the map's fill strength over the blocks", () => {
+    // #FF5A28 at 0.85 over block #dfd9cd, as the map composites it.
+    expect(shownColor("single_family", 0.85)).toBe("#fa6d41");
+    expect(shownColor("single_family", 1)).toBe("#ff5a28");
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { CATEGORY_COLORS, CATEGORY_LABELS, HOMES_RAMP, OTHER_USES } from "@/lib/palette";
+import { CATEGORY_LABELS, HOMES_RAMP, OTHER_USES, shownColor } from "@/lib/palette";
 import styles from "./legend.module.css";
 
 const RAMP_TICKS: Record<string, string> = {
@@ -21,12 +21,15 @@ type Props = {
    * always show the full key.
    */
   compact?: boolean;
+  /** Fill strength the map draws the lots at right now, so the swatches match them. */
+  fillOpacity: number;
 };
 
 /** Key to the "what it allowed" colours: a homes-per-lot scale, then the other uses. */
-export default function Legend({ compact = false }: Props) {
+export default function Legend({ compact = false, fillOpacity }: Props) {
   const [open, setOpen] = useState(false);
   const id = useId();
+  const color = (c: (typeof HOMES_RAMP)[number]) => shownColor(c, fillOpacity);
   return (
     <div className={styles.wrap} data-compact={compact || undefined} data-open={open || undefined} data-testid="legend">
       {compact && (
@@ -39,7 +42,7 @@ export default function Legend({ compact = false }: Props) {
         >
           <span className={styles.strip} aria-hidden>
             {[...HOMES_RAMP, ...OTHER_USES.filter((c) => c !== "unknown")].map((c) => (
-              <span key={c} style={{ background: CATEGORY_COLORS[c] }} />
+              <span key={c} style={{ background: color(c) }} />
             ))}
           </span>
           {open ? "Hide key" : "Key"}
@@ -50,7 +53,7 @@ export default function Legend({ compact = false }: Props) {
         <ol className={styles.ramp}>
           {HOMES_RAMP.map((c) => (
             <li key={c} title={CATEGORY_LABELS[c]}>
-              <span className={styles.bar} style={{ background: CATEGORY_COLORS[c] }} aria-hidden />
+              <span className={styles.bar} style={{ background: color(c) }} aria-hidden />
               <span className={styles.tick} aria-hidden>
                 {RAMP_TICKS[c]}
               </span>
@@ -63,7 +66,7 @@ export default function Legend({ compact = false }: Props) {
             <li key={c} data-category={c}>
               <span
                 className={c === "unknown" ? `${styles.swatch} ${styles.unknown}` : styles.swatch}
-                style={{ background: CATEGORY_COLORS[c] }}
+                style={{ background: color(c) }}
                 aria-hidden
               />
               {CATEGORY_LABELS[c]}

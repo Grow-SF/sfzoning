@@ -199,6 +199,8 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   /** Sources that failed to load ("blocks", "scan-<series>", or "maplibre" itself). */
   const [failedSources, setFailedSources] = useState<ReadonlySet<string>>(() => new Set());
   const [state, setState] = useState<MapState>(initial);
+  /** Camera zoom, settled after each move: the key draws its colours at the fill strength the map uses there. */
+  const [zoom, setZoom] = useState(initial.camera?.zoom ?? 12.3);
   /** The scans on screen, including held ones and ones fading out. */
   const [drawnScans, setDrawnScans] = useState<readonly string[]>([]);
   const avail = useDistrictAvailability();
@@ -473,6 +475,8 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       });
       if (!interactive) map.jumpTo({ ...cam, padding: storyPadding(map) });
       mapRef.current = map;
+      setZoom(map.getZoom());
+      map.on("zoomend", () => setZoom(map.getZoom()));
       // Phone rotation or a resized window changes how much map the card leaves visible.
       map.on("resize", () => {
         if (!interactive) map.setPadding(storyPadding(map));
@@ -611,7 +615,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         role={interactive ? "region" : "img"}
         aria-label={interactive ? "Zoning map explorer" : "Historic zoning map of San Francisco"}
       />
-      {showLegend && <Legend compact={!interactive} />}
+      {showLegend && <Legend compact={!interactive} fillOpacity={FILL_AT_ZOOM[state.view](zoom)} />}
       {comingSoon && (
         <p className="map-pending" data-testid="classification-coming">
           District colours for {era?.label ?? state.era} are coming.

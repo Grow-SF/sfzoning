@@ -1,3 +1,5 @@
+import { MAP_COLORS } from "./theme";
+
 // "What it allowed" palette. One palette for every era, so change between eras pops.
 //
 // Homes allowed per lot read as one scale of seven steps: orange-red (one home), amber, pale
@@ -23,7 +25,9 @@
 // (deutan). homes_top and commercial_dense stay at least 21 apart. The scale's adjacent steps
 // are 9.8 to 20.7 apart (mean 13.9, none more than 49% off it): tightest between the top two
 // greens, widest from amber to yellow.
-// RH-1's orange-red, the amber, both commercial blues, the brown and the purple are unchanged
+// RH-1's orange-red was lightened from #FE4400 to #FF5A28 at the owner's request (it read too
+// intense); that lowered its margins to homes_top (protan 8.0 to 5.3) and homes_high (deutan
+// 7.6 to 6.2) in the "allowed" view. The amber, both commercial blues, the brown and the purple are unchanged
 // from the colours the owner approved. The yellow softened from #FFFF6C so it doesn't read as
 // neon; the grey took a slight cool cast (#939AA1 to #97A1B1) to stand off the mid green.
 // ALLOWED_FILL_OPACITY stays 0.85: 0.7 there would match the look exactly but lower every
@@ -49,7 +53,7 @@ export const CATEGORIES = [
 export type Category = (typeof CATEGORIES)[number];
 
 export const CATEGORY_COLORS: Record<Category, string> = {
-  single_family: "#FE4400",
+  single_family: "#FF5A28",
   two_unit: "#F89600",
   three_unit: "#FFEE66",
   homes_low: "#A0F5BE",
@@ -104,6 +108,17 @@ export function isCategory(v: unknown): v is Category {
 }
 
 export const ALLOWED_FILL_OPACITY = 0.85;
+
+/**
+ * A category's colour as the map shows it: drawn at `opacity` over the basemap's blocks. The key
+ * uses this so its swatches match the lots rather than the full-strength colour.
+ */
+export function shownColor(c: Category, opacity: number): string {
+  const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const top = rgb(CATEGORY_COLORS[c]);
+  const ground = rgb(MAP_COLORS.block);
+  return `#${top.map((v, i) => Math.round(v * opacity + ground[i] * (1 - opacity)).toString(16).padStart(2, "0")).join("")}`;
+}
 export const BOTH_FILL_OPACITY = 0.7;
 /**
  * Scan ink weight under the colours in "both". Half-strength ink keeps the scan's labels and
