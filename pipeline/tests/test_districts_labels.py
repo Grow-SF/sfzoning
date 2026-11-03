@@ -40,6 +40,18 @@ def _region_at(regs, x, y):
 
 # --- boundaries -------------------------------------------------------------
 
+def test_page_background_is_the_open_region():
+    inside = np.zeros((1000, 1000), bool)
+    inside[50:950, 50:950] = True
+    ring_band = box(50, 50, 950, 950).difference(box(300, 300, 700, 700))   # runs along the frame
+    district = box(320, 320, 680, 680)
+    corner = box(50, 50, 290, 290)                                          # touches two sides
+    assert labels.open_region([district, ring_band, corner], inside) == 1
+    assert labels.open_region([district, corner], inside) is None
+    lm = sl.build(codes=CODES)                  # districts filling the frame: none is background
+    assert labels.open_region(labels.regions(lm.img, lm.exclude), ~lm.exclude) is None
+
+
 def test_heavy_vs_thin():
     lm = sl.build()
     m = labels.heavy_line_mask(lm.img)
