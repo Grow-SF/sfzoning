@@ -2,10 +2,11 @@
 story category, then the published outputs under out/<series>/districts/:
 
   parcels.fgb      one row per mapped parcel: blklot, code, height_code, category, confidence,
-                   source_sheet (EPSG:2227)
+                   source_sheet, note (why a park lot shows as public; apply_parks) (EPSG:2227)
   districts.fgb    parcels dissolved by code (code, category)
   stats.json       {category: {parcels, area_sqft}, unknown_share, mapped_area_sqft,
-                   unmapped_parcels, provenance: {use, height}} (today: also notes)
+                   unmapped_parcels, parks: {count, acres} (park_tally),
+                   provenance: {use, height}} (today: also notes)
   unknown_codes.json   codes read but absent from the research table -> parcel count
 
 and, only for the review page (`sfzmaps review`, review_tiles), <series>-districts.pmtiles:
@@ -154,7 +155,7 @@ SHEET_PRODUCERS = frozenset({"sfzmaps.runner", "sfzmaps.warp", "sfzmaps.refine",
 # The code publish() runs: the joins, the rules and the categories (not the readers).
 PUBLISH_MODULES = ("sfzmaps.districts.assemble", "sfzmaps.districts.categories",
                    "sfzmaps.districts.rules", "sfzmaps.districts.series", "sfzmaps.inputs",
-                   "sfzmaps.config", "sfzmaps.fresh")
+                   "sfzmaps.config", "sfzmaps.fresh", "sfzmaps.parks")
 PUBLISHED = ("parcels.fgb", "districts.fgb", "stats.json", "unknown_codes.json")
 
 
@@ -203,6 +204,7 @@ def publish_inputs(series: str) -> list[Path]:
         if hs:
             files.append(inputs.overrides_path(hs))
     files += [config.REF_DIR / "parcels.parquet", _rules_csv(),
+              inputs.parks_path(), inputs.park_maps_path(),     # apply_parks, park_tally
               *(fresh.module_file(m) for m in PUBLISH_MODULES)]
     return [p for p in files if p is not None and p.exists()]
 
@@ -332,6 +334,102 @@ def categorise(df: pd.DataFrame, year: int) -> pd.DataFrame:
     return df
 
 
+def _parks_csv() -> pd.DataFrame:
+    path = inputs.parks_path()
+    if not path.exists():
+        return pd.DataFrame({"name": [], "blklot": [], "since": [], "public_since": []})
+    p = pd.read_csv(path, dtype={"name": str, "blklot": str})
+    p["blklot"] = p["blklot"].str.strip()
+    # public_since (optional): the year the land became public, when that is before it became a park
+    if "public_since" not in p:
+        p["public_since"] = p["since"]
+    p["public_since"] = pd.to_numeric(p["public_since"], errors="coerce").fillna(p["since"])
+    p["public_since"] = p[["since", "public_since"]].min(axis=1)
+    return p
+
+
+def _park_maps_csv() -> pd.DataFrame:
+    path = inputs.park_maps_path()
+    if not path.exists():
+        return pd.DataFrame({"name": [], "blklot": [], "series": []}, dtype=object)
+    p = pd.read_csv(path, dtype=str)
+    p["blklot"] = p["blklot"].str.strip()
+    return p
+
+
+def park_starts() -> pd.DataFrame:
+    """Every park lot with when it became one, one row per lot: name, blklot, since (the year it
+    is a park from), reason (how the lot card says it: '1870' for a dated source in
+    inputs/parks.csv, 'the 1964 map' for the first map showing it as public, inputs/park_maps.csv),
+    public_since (the year it is `public` from: since, or earlier for land public before it was a
+    park). With both, the earlier wins (owner's decision, 2026-11-02), except where parks.csv says
+    the land was public before it was a park (the Presidio, an Army post until 1994): a map showing
+    it public says so, not that it was a park."""
+    from sfzmaps import parks
+
+    dated = _parks_csv().drop_duplicates("blklot").set_index("blklot")
+    maps = _park_maps_csv().drop_duplicates("blklot").set_index("blklot")
+    rows = []
+    for b in dated.index.union(maps.index):
+        name, since, reason, public = None, None, None, None
+        if b in dated.index:
+            r = dated.loc[b]
+            name, since, reason, public = r["name"], int(r["since"]), str(int(r["since"])), int(r["public_since"])
+        if b in maps.index and (public is None or public >= since):
+            s = maps.loc[b, "series"]
+            year = parks.map_year(s)
+            if since is None or year < since:
+                name, since, reason = name or maps.loc[b, "name"], year, parks.map_label(s)
+                public = min(public, year) if public is not None else year
+        rows.append({"name": name, "blklot": b, "since": since, "reason": reason, "public_since": public})
+    out = pd.DataFrame(rows, columns=["name", "blklot", "since", "reason", "public_since"])
+    return out.astype({"since": "int64", "public_since": "int64"})
+
+
+def parks_in_effect(year: int) -> pd.DataFrame:
+    """park_starts rows (name, blklot) of the parks that existed in `year`: since <= year."""
+    p = park_starts()
+    return p.loc[p["since"] <= year, ["name", "blklot"]].reset_index(drop=True)
+
+
+# Lot card notes for a lot from a year on, whatever its map shows (owner's decision, 2026-11-02)
+LOT_NOTES = {"1300001": (1996, "Federal land, outside city zoning. "
+                               "The Presidio Trust leases about 1,400 homes here.")}
+
+
+def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame, year: int) -> pd.DataFrame:
+    """Park lots (park_starts) are `public` in every series from the year they became parks on,
+    whatever the map zones them (owner's decision: old maps zoned park land residential as a quirk
+    of the law, not because homes could go there); earlier series keep the map's zoning. Land
+    public before it was a park (`public_since`, e.g. the Presidio, an Army post from 1776 and a
+    park from 1994) is `public` from that year, and only counts as a park from `since`. The read
+    code stays, and `note` says since when and what the map shows ("Park since the 1964 map; this
+    map zones it R-1"). A lot of a park in effect that the map doesn't cover is added, so the park
+    is whole. LOT_NOTES add to a lot's note from their year on."""
+    df = df.copy()
+    df["note"] = None
+    p = park_starts()
+    reason = dict(zip(p["blklot"], p["reason"]))
+    parks = set(p.loc[p["since"] <= year, "blklot"])
+    lots = parks | set(p.loc[p["public_since"] <= year, "blklot"])
+    missing = sorted(lots & set(parcels["blklot"]) - set(df["blklot"]))
+    if missing:
+        df = pd.concat([df, pd.DataFrame({"blklot": missing, "code": None, "height_code": None,
+                                          "confidence": 0.0, "source_sheet": None,
+                                          "category": "unknown", "note": None})], ignore_index=True)
+    m = df["blklot"].isin(lots) & (df["category"] != "public")
+    what = [f"Park since {reason[b]}" if b in parks else "Public land" for b in df.loc[m, "blklot"]]
+    df.loc[m, "note"] = [f"{w}; this map zones it {c}" if isinstance(c, str) and c.strip()
+                         else f"{w}; this map gives it no district"
+                         for w, c in zip(what, df.loc[m, "code"])]
+    df.loc[m, "category"] = "public"
+    for b, (start, text) in LOT_NOTES.items():
+        at = df["blklot"] == b
+        if year >= start and at.any():
+            df.loc[at, "note"] = [f"{n}. {text}" if isinstance(n, str) else text for n in df.loc[at, "note"]]
+    return df
+
+
 # ---------------------------------------------------------------- outputs
 
 def stats(g: gpd.GeoDataFrame) -> dict:
@@ -348,11 +446,20 @@ def stats(g: gpd.GeoDataFrame) -> dict:
     return out
 
 
+def park_tally(year: int, geo: gpd.GeoDataFrame) -> dict:
+    """The parks in effect in `year` (park_starts: a dated source or an earlier map showing them):
+    how many (by name) and their lots' land area in acres."""
+    p = parks_in_effect(year)
+    shapes = geo[geo["blklot"].isin(set(p["blklot"]))]
+    return {"count": int(p["name"].nunique()), "acres": round(float(shapes.geometry.area.sum()) / 43560, 1)}
+
+
 def dissolve(g: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     coded = g[g["code"].notna()]
     if coded.empty:
         return gpd.GeoDataFrame({"code": [], "category": []}, geometry=[], crs=g.crs)
-    d = coded[["code", "category", "geometry"]].dissolve(by="code", aggfunc="first").reset_index()
+    # by category too: a park (apply_parks) keeps the code its map reads but is its own district
+    d = coded[["code", "category", "geometry"]].dissolve(by=["code", "category"]).reset_index()
     d = d[d.geometry.notna() & ~d.geometry.is_empty]
     return d[["code", "category", "geometry"]]
 
@@ -409,11 +516,11 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
     hs = height_series_of(series)
     if hs:
         df = apply_overrides(df, hs, column="height_code", blocks=blocks)
-    df = categorise(df, year)
+    df = apply_parks(categorise(df, year), parcels, year)
     geo = parcels[["blklot", "geometry"]].drop_duplicates("blklot")
     g = gpd.GeoDataFrame(df.merge(geo, on="blklot", how="inner"), geometry="geometry", crs=geo.crs)
     g = g[g.geometry.notna() & ~g.geometry.is_empty]       # a few DataSF parcels have no shape
-    g = g[["blklot", "code", "height_code", "category", "confidence", "source_sheet", "geometry"]]
+    g = g[["blklot", "code", "height_code", "category", "confidence", "source_sheet", "note", "geometry"]]
     g["confidence"] = g["confidence"].astype(float).round(3)
     d = out_dir(series, partial=partial)
     d.mkdir(parents=True, exist_ok=True)
@@ -425,6 +532,7 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
         p.unlink(missing_ok=True)
     st = stats(g)
     st["unmapped_parcels"] = int((~geo["blklot"].isin(set(g["blklot"]))).sum())
+    st["parks"] = park_tally(year, geo)
     st["provenance"] = read_provenance(series, partial=partial)
     if partial:
         st["partial"] = True

@@ -67,6 +67,7 @@ export default function ParcelPopup({ hit, era, rules, onClose }: Props) {
           <span className={styles.popupSwatch} style={{ background: colors[cat] }} aria-hidden />
           {CATEGORY_LABELS[cat]}
         </p>
+        {hit.note && <p className={styles.popupName}>{hit.note}</p>}
 
         {rule ? (
           <dl className={styles.facts}>

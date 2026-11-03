@@ -6,7 +6,7 @@ a small table says what each number looks like in each year:
 
   out/shared/districts-<hash>.pmtiles       lots (`i`) and district lines (`s`), geometry only
   out/shared/districts-<hash>.table.gz      each era's category per lot, and which line sets it draws
-  out/shared/districts-<hash>.cards.json.gz each era's code, height and confidence, for the lot card
+  out/shared/districts-<hash>.cards.json.gz each era's code, height, confidence and notes, for the lot card
   out/shared/districts.json                 the pointer the site reads
 
 All are named by their inputs, so none is ever overwritten in place.
@@ -36,7 +36,7 @@ from sfzmaps.districts.assemble import MAX_ZOOM, MIN_ZOOM, _has_pmtiles
 log = logging.getLogger(__name__)
 
 # Part of the archive's name: raise it when the same inputs would now build a different archive.
-ARCHIVE_FORMAT = 5
+ARCHIVE_FORMAT = 6
 # The site refuses a pointer whose version it doesn't know, and uses the per-year files instead.
 MANIFEST_VERSION = 2
 # Same order as the table's numbers; the pointer carries it, so the site never assumes it.
@@ -72,7 +72,7 @@ def published_series(candidates: list[str]) -> list[str]:
     return [s for s in candidates if (_series_dir(s) / "parcels.fgb").exists()]
 
 
-MERGE_COLUMNS = ["blklot", "category", "code", "height_code", "confidence"]
+MERGE_COLUMNS = ["blklot", "category", "code", "height_code", "confidence", "note"]
 
 
 def _read_all(series: list[str], name: str, columns: list[str] | None = None) -> list[gpd.GeoDataFrame]:
@@ -100,6 +100,7 @@ def merge(series: list[str]) -> gpd.GeoDataFrame:
             era_key("k", s): g["code"],
             era_key("h", s): g["height_code"],
             era_key("f", s): g["confidence"],
+            era_key("n", s): g["note"] if "note" in g else None,
         }).set_index("blklot"))
     lots = pd.concat(geoms, ignore_index=True).drop_duplicates("blklot").set_index("blklot")
     wide = pd.concat(frames, axis=1).dropna(axis=1, how="all")
@@ -220,6 +221,10 @@ def lot_cards(parcels: gpd.GeoDataFrame, series: list[str]) -> dict:
             "height": numbered(_column(parcels, era_key("h", s))),
             "confidence": [None if pd.isna(v) else round(float(v), 2) for v in _column(parcels, era_key("f", s))],
         }
+        # a handful of lots (parks shown as public), so by lot number rather than a column
+        notes = _column(parcels, era_key("n", s)).dropna()
+        if len(notes):
+            eras[s]["notes"] = {str(i): strings.setdefault(str(v), len(strings)) for i, v in notes.items()}
     return {"blklot": parcels["blklot"].astype(str).tolist(), "strings": list(strings), "eras": eras}
 
 
@@ -321,6 +326,9 @@ def build(series: list[str]) -> Path:
     series = published_series(series)
     if not series:
         raise ValueError("no published series to merge")
+    # each series' parks depend on the earlier maps, through inputs/park_maps.csv
+    from sfzmaps import parks
+    parks.check_first_maps()
     name = archive_name(source_hashes(series))
     d = shared_dir()
     d.mkdir(parents=True, exist_ok=True)

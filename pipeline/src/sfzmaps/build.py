@@ -138,13 +138,16 @@ def stage_deps(st: Stage) -> list[str]:
     deps = _code_deps() + ["pyproject.toml", "uv.lock", "../pixi.toml", "../pixi.lock"]
     if st.shared:
         from sfzmaps.districts.series import SERIES
+        # data/ref and park_maps.csv: the check that park_maps.csv still matches the maps
         return deps + [f"data/out/{s}/districts" for s, i in SERIES.items() if i.role == "use"] \
-            + ["data/out/today/districts"]
+            + ["data/out/today/districts", "data/ref", "inputs/park_maps.csv"]
     deps += ["data/ref"]
     if st.districts:
         deps += ["../docs/research/zoning-districts.csv"]   # the rules: each code's category
     if st.series:
         deps += ["data/raw", "inputs/label_scale.json"] + [f"inputs/{s}" for s in st.series]
+    if st.districts:
+        deps += ["inputs/parks.csv", "inputs/park_maps.csv"]
     return deps
 
 
