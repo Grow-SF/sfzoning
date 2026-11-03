@@ -2718,6 +2718,6 @@ stages:
     outs:
     - path: data/ref
       hash: md5
-      md5: 98585fba8cf2eb79c7e6fdc475d494c6.dir
-      size: 58384799
-      nfiles: 3
+      md5: 197e86e6c27b43f28f2651b2cce879ca.dir
+      size: 59466886
+      nfiles: 5
