@@ -41,6 +41,8 @@ export type ParcelHit = {
   height_code?: string;
   category?: string;
   confidence?: string | number;
+  /** Why the lot shows as it does when that isn't its code (a park the map zones otherwise). */
+  note?: string;
 };
 
 type Props = {
