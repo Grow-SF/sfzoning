@@ -139,20 +139,37 @@ anyone) gets it with `uv run sfzmaps pull` and builds at $0 with nothing to do.
   `page.json`, map pages' `labels.json`, each series' district reads, which fold in the legend
   and district labels they used), so answers from abandoned or superseded experiments never
   ship.
-- **`sfzmaps ship`** (needs `site/.env.local`; never calls the vision API) refuses a dirty tree or
-  data that doesn't match `dvc.lock`. It uploads the data objects the Blob store lacks, one new
+- **Data packs.** Data objects under 8 MB travel in *data packs*: uncompressed zips of at most
+  256 MB, named by their sha256 (`cache/datapacks/<sha>.zip`). Larger objects are stored alone
+  (`dvc/files/md5/…`). Today that's 13 packs (3.5 GB, about 10,250 objects) plus 204
+  single objects (7 GB), so a fresh `pull` makes 219 requests instead of one per object (about
+  10,450): the manifest, the answer pack, 13 data packs and 204 single objects; measured into an
+  empty DVC cache, it took 11.5 minutes, and `dvc checkout` then took 3 seconds. The shipped
+  manifest (version 2) says which pack holds each small object; an object a pack on `main`
+  already holds keeps that pack, so a ship packs only new small objects.
+- **`sfzmaps ship`** (needs `site/.env.local`, or `SFZMAPS_ENV_FILE=<path>` naming another, e.g.
+  the main checkout's from a worktree; never calls the vision API) refuses a dirty tree or
+  data that doesn't match `dvc.lock`. It uploads the data the Blob store lacks, one new
   *answer pack* of exactly the needed answers `main` hasn't shipped (a zip named by its sha256,
   with an index of every answer's sha256), and the full list of needed answers. Then it commits
   the pack's record (`pipeline/cache-packs/<sha>.json`) and `pipeline/cache-needed.json`: push
   them with the branch. Uploads come first and records last, and nothing is ever overwritten:
-  every name is the hash of its bytes. `--dry-run` says what would upload.
+  every name is the hash of its bytes. Requests stay few and one at a time: one listing call
+  per 1,000 names, one request per file up to 50 MB, and larger files in 64 MB parts sent one
+  after another. `--dry-run` says what would upload and how many requests it takes; more than
+  500 need `--yes`. `--repack` (run once, for PR #28) also moved the small objects that older
+  ships stored alone into packs; it shipped 13 packs (3.46 GB) in about 95 requests.
 - **`sfzmaps pull`** applies the packs recorded at this commit (sha-checked, put-if-absent) and
-  fetches the data objects its `dvc.lock` names (md5-checked), then checks them out. Public URLs,
-  no token. (`pull-drive` is the older Drive download.)
+  fetches the data its `dvc.lock` names that the local DVC cache lacks, then checks it out:
+  each data pack holding a missing object once (2 at a time; every member md5-checked, written
+  atomically, present ones skipped, so an interrupted pull resumes), then single objects (4 at
+  a time, md5-checked). Commits shipped before data packs (version 1 manifests) still pull, one
+  request per object. Public URLs, no token. (`pull-drive` is the older Drive download.)
 - **The merge gate.** The `Cache shipped` workflow checks every PR touching the pipeline, with
-  public reads only: every recorded pack and needed answer, and every data object, is on the
-  Blob store; no two packs disagree on an answer; and `dvc.lock` matches the code (a commit
-  added after shipping, or a rebase without a rebuild, fails). With GitHub's "require branches
+  public reads only: every recorded pack and needed answer, and every data object (in a data
+  pack `ship` confirmed, or alone), is on the Blob store; no two packs disagree on an answer;
+  and `dvc.lock` matches the code (a commit added after shipping, or a rebase without a
+  rebuild, fails). With GitHub's "require branches
   to be up to date before merging", the merged tree is exactly the shipped one, so ordinary
   merge commits work; `git bisect --first-parent` walks the shipped states.
 - **Old artifacts.** A build replays artifacts made before sidecars existed from the cache, at

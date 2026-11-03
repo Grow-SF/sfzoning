@@ -2,8 +2,12 @@
 
 What a commit needs, so a fresh checkout builds at $0 and finds nothing to do:
 
-* its **processed data**: the DVC objects (data/work, data/out, data/ref) its dvc.lock names,
-  stored on Blob under the DVC cache layout, dvc/files/md5/<2>/<30>[.dir];
+* its **processed data**: the DVC objects (data/work, data/out, data/ref) its dvc.lock names.
+  Objects under 8 MB (datapack.SINGLE_MIN) travel in *data packs* (sfzmaps.datapack): zips of
+  at most 256 MB, cache/datapacks/<sha256>.zip. Larger objects are stored alone under the DVC
+  cache layout, dvc/files/md5/<2>/<30>[.dir]. For about 10,450 objects (10.6 GB) that is 13
+  packs and about 200 single objects, so a fresh pull makes about 220 requests instead of one
+  per object;
 * its **answers**: the cached vision answers its live artifacts were made from (their
   .answers sidecars, sfzmaps.answers), in content-addressed packs (sfzmaps.cachepack) recorded
   in pipeline/cache-packs/.
@@ -15,12 +19,18 @@ Nothing leaves the machine before that. `sfzmaps pull` fetches a commit's packs 
 
 Requests are kept to the fewest that get the data (a burst of per-object checks once tripped
 Vercel's DDoS protection): ship learns what the store holds from its list API (one call per
-1,000 names, site/scripts/blob-list.mjs), uploads only what's missing (one request each,
-site/scripts/blob-put.mjs), lists once more to confirm, then publishes a *shipped manifest*
-(cache/shipped/<sha>.json: every object and pack it confirmed, for this dvc.lock).
+1,000 names, site/scripts/blob-list.mjs), uploads only what's missing, one file at a time
+(site/scripts/blob-put.mjs: one request per file up to 50 MB; larger ones in 64 MB parts sent
+one after another, 2 + parts requests), lists once more to confirm, then publishes a *shipped
+manifest* (cache/shipped/<sha>.json, version 2: every object, the data pack each small one is
+in, and every pack it confirmed, for this dvc.lock). An object a pack on main already holds
+keeps that pack; only new small objects go into new packs. `ship --dry-run` prints the
+requests it would make; more than MAX_REQUESTS need --yes. `ship --repack` (once, from the
+version 1 layout where every object was stored alone) packs the small objects too.
 pipeline/cache-needed.json names it. The merge gate then reads two files and the pack indexes,
-never one request per object; pull reads the manifest and fetches only what it lacks, a few at
-a time. A name is only ever published after its object is uploaded, so no read is ever made of
+never one request per object; pull reads the manifest and fetches only what it lacks: each
+data pack holding a missing object once (2 at a time), then single objects (4 at a time).
+Version 1 manifests (older commits) still pull and pass the gate. A name is only ever published after its object is uploaded, so no read is ever made of
 a missing object, and downloads need no cache-busting: they are ordinary cacheable CDN reads.
 The token stays in site/.env.local, read by node.
 """
