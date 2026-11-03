@@ -117,7 +117,7 @@ def _show(ref: str, path: str) -> str | None:
         return None
 
 
-def open_pr_refs(ignore: frozenset[int] = frozenset()) -> list[str]:
+def open_pr_refs() -> list[str]:
     p = subprocess.run(["gh", "pr", "list", "--state", "open", "--limit", "200",
                         "--json", "number,headRefName,isCrossRepository"],
                        cwd=ship._repo_root(), capture_output=True, text=True)
@@ -125,8 +125,6 @@ def open_pr_refs(ignore: frozenset[int] = frozenset()) -> list[str]:
         raise PruneError(f"`gh pr list` failed: {p.stderr.strip()[-300:]}")
     refs = []
     for pr in json.loads(p.stdout or "[]"):
-        if pr["number"] in ignore:
-            continue
         if pr.get("isCrossRepository"):
             raise PruneError(f"PR #{pr['number']} comes from a fork; its cache-needed.json can't be "
                              "read from origin")
@@ -134,15 +132,14 @@ def open_pr_refs(ignore: frozenset[int] = frozenset()) -> list[str]:
     return refs
 
 
-def gather_used(client=None, ignore: frozenset[int] = frozenset()) -> tuple[set[str], list[str], int]:
-    """(used names, the refs they came from, manifests downloaded). Fetches origin first.
-    PRs in `ignore` don't count: their branch can no longer be pulled afterwards."""
+def gather_used(client=None) -> tuple[set[str], list[str], int]:
+    """(used names, the refs they came from, manifests downloaded). Fetches origin first."""
     ship._git("fetch", "-q", "origin")
     client = client or ship._client()
     downloads = 0
     used: set[str] = set()
     sources = []
-    for i, ref in enumerate(["origin/main", *open_pr_refs(ignore)]):
+    for i, ref in enumerate(["origin/main", *open_pr_refs()]):
         try:
             ship._git("rev-parse", "--verify", "-q", ref)
         except subprocess.CalledProcessError:
@@ -176,10 +173,8 @@ def delete(names: list[str]) -> None:
         raise PruneError(f"deleting stopped: {p.stderr.strip()[-300:]} (run prune again; it lists first)")
 
 
-def run(dry_run: bool, echo=print, ignore: frozenset[int] = frozenset()) -> int:
-    used, sources, downloads = gather_used(ignore=ignore)
-    if ignore:
-        echo("ignoring PRs: " + ", ".join(f"#{n}" for n in sorted(ignore)))
+def run(dry_run: bool, echo=print) -> int:
+    used, sources, downloads = gather_used()
     held = ship.listing(PREFIXES)
     list_calls = sum(max(1, math.ceil(sum(n.startswith(pre) for n in held) / 1000)) for pre in PREFIXES)
     p = plan(held, used)
@@ -216,11 +211,9 @@ def run(dry_run: bool, echo=print, ignore: frozenset[int] = frozenset()) -> int:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m sfzmaps.prune", description=__doc__.split("\n")[0])
     ap.add_argument("--dry-run", "-n", action="store_true", help="Say what would be deleted; delete nothing.")
-    ap.add_argument("--ignore-pr", type=int, action="append", default=[], metavar="N",
-                    help="Don't keep what open PR N uses (it can't be pulled afterwards). Repeatable.")
     args = ap.parse_args(argv)
     try:
-        return run(args.dry_run, ignore=frozenset(args.ignore_pr))
+        return run(args.dry_run)
     except (PruneError, ship.ShipError) as e:
         print(f"prune: {e}", file=sys.stderr)
         return 1
