@@ -64,7 +64,7 @@ def test_listed_park_lots_are_public_and_keep_their_code(data, monkeypatch):
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-1", "R-1", "R-4", "R-4"]))
     g = gpd.read_file(assemble.run_series("1960") / "parcels.fgb").set_index("blklot")
     assert g.loc["1000001", ["code", "category"]].tolist() == ["R-1", "public"]
-    assert g.loc["1000001", "note"] == "Shown as park; this map zones it R-1"
+    assert g.loc["1000001", "note"] == "Park since 1900; this map zones it R-1"
     assert g.loc["1002001", "category"] == "public"
     assert g.loc["1000002", "category"] == "single_family" and pd.isna(g.loc["1000002", "note"])
 
@@ -87,12 +87,39 @@ def test_public_land_is_public_before_it_is_counted_as_a_park(data, monkeypatch)
     inputs.parks_path().write_text("name,blklot,since,source,public_since\nPresidio,1000001,1994,,1776\n")
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-1", "R-1"]))
     for series, count, note in (("1960", 0, "Public land; this map zones it R-1"),
-                                ("2000-digital-zoning", 1, "Shown as park; this map zones it R-1")):
+                                ("2000-digital-zoning", 1, "Park since 1994; this map zones it R-1")):
         d = assemble.run_series(series)
         g = gpd.read_file(d / "parcels.fgb").set_index("blklot")
         assert g.loc["1000001", "category"] == "public" and g.loc["1000001", "note"] == note
         assert g.loc["1000002", "category"] == "single_family"
         assert json.loads((d / "stats.json").read_text())["parks"]["count"] == count
+
+
+def _first_maps_from(monkeypatch, *reads):
+    """Publish each (series, codes) read in turn, then write inputs/park_maps.csv from them for
+    the park lots 1000001 and 1000002 (no dates in parks.csv)."""
+    from sfzmaps import parks
+
+    for series, codes in reads:
+        monkeypatch.setattr(assemble, "read_raw", lambda s, codes=codes, **k: _raw(codes))
+        assemble.run_series(series)
+    parks.write_first_maps(pd.DataFrame({"name": ["A park", "B park"], "blklot": ["1000001", "1000002"]}))
+
+
+def test_a_park_a_map_shows_is_public_on_every_later_map(data, monkeypatch):
+    # P is a public code from 1960 on (the research table has no public code before it)
+    _first_maps_from(monkeypatch, ("1960", ["P", "R-1"]), ("1964", ["R-1", "R-1"]))
+    g = gpd.read_file(assemble.run_series("1964") / "parcels.fgb").set_index("blklot")
+    assert g.loc["1000001", ["code", "category"]].tolist() == ["R-1", "public"]
+    assert g.loc["1000001", "note"] == "Park since the 1960 map; this map zones it R-1"
+    assert json.loads((assemble.out_dir("1964") / "stats.json").read_text())["parks"]["count"] == 1
+
+
+def test_a_park_no_map_shows_keeps_its_maps_zoning(data, monkeypatch):
+    _first_maps_from(monkeypatch, ("1960", ["P", "R-1"]), ("1964", ["R-1", "R-1"]))
+    g = gpd.read_file(assemble.run_series("1964") / "parcels.fgb").set_index("blklot")
+    assert g.loc["1000002", "category"] == "single_family" and pd.isna(g.loc["1000002", "note"])
+    assert inputs.park_maps_path().read_text().splitlines()[1:] == ["A park,1000001,1960"]
 
 
 def test_override_missing_blklot_warns(data):

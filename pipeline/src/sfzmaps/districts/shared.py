@@ -275,6 +275,9 @@ def build(series: list[str]) -> Path:
     series = published_series(series)
     if not series:
         raise ValueError("no published series to merge")
+    # each series' parks depend on the earlier maps, through inputs/park_maps.csv
+    from sfzmaps import parks
+    parks.check_first_maps()
     name = archive_name(source_hashes(series))
     d = shared_dir()
     d.mkdir(parents=True, exist_ok=True)

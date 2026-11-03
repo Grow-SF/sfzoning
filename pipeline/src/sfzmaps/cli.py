@@ -72,11 +72,18 @@ def refdata(
 @app.command()
 def parks(
     out: Path = typer.Option(None, "--out", help="Write the CSV here instead of stdout."),
+    maps: bool = typer.Option(False, "--maps", help="Write inputs/park_maps.csv instead: the first "
+                              "published map showing each park lot as public."),
 ) -> None:
     """Park lots the reference data shows (Rec and Park properties, NPS tracts): the candidates
-    for inputs/parks.csv, with the NPS conveyance year where there is one. Reads data/ref only."""
+    for inputs/parks.csv, with the NPS conveyance year where there is one. Reads data/ref only.
+    --maps: the first map showing each as public (inputs/park_maps.csv), from the published maps."""
     from sfzmaps import parks as park_lots
 
+    if maps:
+        path = park_lots.write_first_maps()
+        typer.echo(f"{path}")
+        return
     text = park_lots.candidates().to_csv(index=False)
     if out:
         out.write_text(text)

@@ -342,38 +342,85 @@ def _parks_csv() -> pd.DataFrame:
     return p
 
 
+def _park_maps_csv() -> pd.DataFrame:
+    path = inputs.park_maps_path()
+    if not path.exists():
+        return pd.DataFrame({"name": [], "blklot": [], "series": []}, dtype=object)
+    p = pd.read_csv(path, dtype=str)
+    p["blklot"] = p["blklot"].str.strip()
+    return p
+
+
+def park_starts() -> pd.DataFrame:
+    """Every park lot with when it became one, one row per lot: name, blklot, since (the year it
+    is a park from), reason (how the lot card says it: '1870' for a dated source in
+    inputs/parks.csv, 'the 1964 map' for the first map showing it as public, inputs/park_maps.csv),
+    public_since (the year it is `public` from: since, or earlier for land public before it was a
+    park). With both, the earlier wins (owner's decision, 2026-11-02), except where parks.csv says
+    the land was public before it was a park (the Presidio, an Army post until 1994): a map showing
+    it public says so, not that it was a park."""
+    from sfzmaps import parks
+
+    dated = _parks_csv().drop_duplicates("blklot").set_index("blklot")
+    maps = _park_maps_csv().drop_duplicates("blklot").set_index("blklot")
+    rows = []
+    for b in dated.index.union(maps.index):
+        name, since, reason, public = None, None, None, None
+        if b in dated.index:
+            r = dated.loc[b]
+            name, since, reason, public = r["name"], int(r["since"]), str(int(r["since"])), int(r["public_since"])
+        if b in maps.index and (public is None or public >= since):
+            s = maps.loc[b, "series"]
+            year = parks.map_year(s)
+            if since is None or year < since:
+                name, since, reason = name or maps.loc[b, "name"], year, parks.map_label(s)
+                public = min(public, year) if public is not None else year
+        rows.append({"name": name, "blklot": b, "since": since, "reason": reason, "public_since": public})
+    out = pd.DataFrame(rows, columns=["name", "blklot", "since", "reason", "public_since"])
+    return out.astype({"since": "int64", "public_since": "int64"})
+
+
 def parks_in_effect(year: int) -> pd.DataFrame:
-    """inputs/parks.csv rows (name, blklot) of the parks that existed in `year`: since <= year."""
-    p = _parks_csv()
+    """park_starts rows (name, blklot) of the parks that existed in `year`: since <= year."""
+    p = park_starts()
     return p.loc[p["since"] <= year, ["name", "blklot"]].reset_index(drop=True)
 
 
+# Lot card notes for a lot from a year on, whatever its map shows (owner's decision, 2026-11-02)
+LOT_NOTES = {"1300001": (1996, "Federal land, outside city zoning. "
+                               "The Presidio Trust leases about 1,400 homes here.")}
+
+
 def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame, year: int) -> pd.DataFrame:
-    """Lots of a park in inputs/parks.csv are `public` in every series from the year it became a
-    park (`since`) on, whatever the map zones them (owner's decision: old maps zoned park land
-    residential as a quirk of the law, not because homes could go there); earlier series keep the
-    map's zoning. Land public before it was a park (`public_since`, e.g. the Presidio, an Army post
-    from 1776 and a park from 1994) is `public` from that year, and only counts as a park from
-    `since`. The read code stays, and `note` says what the map shows. A lot of a park in effect
-    that the map doesn't cover is added, so the park is whole."""
+    """Park lots (park_starts) are `public` in every series from the year they became parks on,
+    whatever the map zones them (owner's decision: old maps zoned park land residential as a quirk
+    of the law, not because homes could go there); earlier series keep the map's zoning. Land
+    public before it was a park (`public_since`, e.g. the Presidio, an Army post from 1776 and a
+    park from 1994) is `public` from that year, and only counts as a park from `since`. The read
+    code stays, and `note` says since when and what the map shows ("Park since the 1964 map; this
+    map zones it R-1"). A lot of a park in effect that the map doesn't cover is added, so the park
+    is whole. LOT_NOTES add to a lot's note from their year on."""
     df = df.copy()
     df["note"] = None
-    p = _parks_csv()
+    p = park_starts()
+    reason = dict(zip(p["blklot"], p["reason"]))
     parks = set(p.loc[p["since"] <= year, "blklot"])
     lots = parks | set(p.loc[p["public_since"] <= year, "blklot"])
-    if not lots:
-        return df
     missing = sorted(lots & set(parcels["blklot"]) - set(df["blklot"]))
     if missing:
         df = pd.concat([df, pd.DataFrame({"blklot": missing, "code": None, "height_code": None,
                                           "confidence": 0.0, "source_sheet": None,
                                           "category": "unknown", "note": None})], ignore_index=True)
     m = df["blklot"].isin(lots) & (df["category"] != "public")
-    what = ["Shown as park" if b in parks else "Public land" for b in df.loc[m, "blklot"]]
+    what = [f"Park since {reason[b]}" if b in parks else "Public land" for b in df.loc[m, "blklot"]]
     df.loc[m, "note"] = [f"{w}; this map zones it {c}" if isinstance(c, str) and c.strip()
                          else f"{w}; this map gives it no district"
                          for w, c in zip(what, df.loc[m, "code"])]
     df.loc[m, "category"] = "public"
+    for b, (start, text) in LOT_NOTES.items():
+        at = df["blklot"] == b
+        if year >= start and at.any():
+            df.loc[at, "note"] = [f"{n}. {text}" if isinstance(n, str) else text for n in df.loc[at, "note"]]
     return df
 
 
@@ -394,8 +441,8 @@ def stats(g: gpd.GeoDataFrame) -> dict:
 
 
 def park_tally(year: int, geo: gpd.GeoDataFrame) -> dict:
-    """The parks of inputs/parks.csv in effect in `year`: how many (by name) and their lots'
-    land area in acres."""
+    """The parks in effect in `year` (park_starts: a dated source or an earlier map showing them):
+    how many (by name) and their lots' land area in acres."""
     p = parks_in_effect(year)
     shapes = geo[geo["blklot"].isin(set(p["blklot"]))]
     return {"count": int(p["name"].nunique()), "acres": round(float(shapes.geometry.area.sum()) / 43560, 1)}
