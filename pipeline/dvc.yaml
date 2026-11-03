@@ -17,6 +17,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -58,6 +59,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -99,6 +101,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -140,6 +143,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -181,6 +185,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -222,6 +227,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -263,6 +269,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -304,6 +311,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -345,6 +353,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -386,6 +395,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -427,6 +437,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -478,6 +489,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -529,6 +541,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -580,6 +593,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -631,6 +645,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
@@ -669,6 +684,7 @@ stages:
       - src/sfzmaps/config.py
       - src/sfzmaps/crossref.py
       - src/sfzmaps/districts
+      - src/sfzmaps/fresh.py
       - src/sfzmaps/inputs.py
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py

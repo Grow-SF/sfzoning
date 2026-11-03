@@ -39,7 +39,7 @@ class Fakes:
                 return fn(*a, **k)
             return w
 
-        def render(page, out):
+        def render(page, out, **k):
             Path(out).parent.mkdir(parents=True, exist_ok=True)
             cv2.imwrite(str(out), np.full((40, 60), 255, np.uint8))
             return out
@@ -143,16 +143,28 @@ def test_stage_skip_when_fresh(env, monkeypatch):
     assert f.calls["refine"] == 1
 
 
-def test_stale_input_reruns_downstream(env, monkeypatch):
+def test_touched_input_reruns_nothing_but_changed_content_does(env, monkeypatch, tmp_path):
+    """Freshness is by content: a checkout that rewrites identical files (new mtimes, here
+    also for the warp code) reruns nothing; a real change reruns what depends on it."""
     page, ref, d = env
     f = Fakes(monkeypatch)
+    code = tmp_path / "warp.py"
+    code.write_text(Path(runner.warp.__file__).read_text())
+    monkeypatch.setattr(runner.warp, "__file__", str(code))
     runner.run_sheet(page, ref)
     f.calls.clear()
-    p = d / "labels.json"
-    os.utime(p, ns=(p.stat().st_mtime_ns + 10**9,) * 2)
+    for p in [code, page.source, *d.iterdir()]:
+        _bump(p, 5)
     runner.run_sheet(page, ref)
-    assert set(f.calls) == {"rough", "refine", "changes", "warp"}
-    assert "labels" not in f.calls and "render" not in f.calls
+    assert f.calls == {}
+    code.write_text(code.read_text() + "\n# changed\n")
+    runner.run_sheet(page, ref)
+    assert f.calls == {"warp": 1}
+    f.calls.clear()
+    lj = d / "labels.json"
+    lj.write_text(lj.read_text().replace('"text": "1"', '"text": "2"'))
+    runner.run_sheet(page, ref)
+    assert f.calls == {"rough": 1}  # same rough fit: nothing after it reruns
 
 
 def test_rough_failure_uses_answer_key(env, monkeypatch):
@@ -200,7 +212,7 @@ def test_rough_failure_after_pass_clears_score_and_warp(env, monkeypatch):
     assert (d / "warped.tif").exists()
     f.rough_ok = False
     p = d / "labels.json"
-    os.utime(p, ns=(p.stat().st_mtime_ns + 10**9,) * 2)
+    p.write_text(p.read_text().replace('"text": "1"', '"text": "2"'))
     s = runner.run_sheet(page, ref)
     assert s.reason == "insufficient_anchors" and not s.passed
     assert json.loads((d / "score.json").read_text())["reason"] == "insufficient_anchors"
@@ -398,7 +410,7 @@ def test_rough_newly_failing_on_new_reference_rescores(env, monkeypatch):
     old = json.loads((d / "score.json").read_text())
     assert old["reason"] != "insufficient_anchors"
     f.rough_ok = False
-    _bump(config.REF_DIR / "parcels.parquet", 5)
+    (config.REF_DIR / "parcels.parquet").write_bytes(b"new")
     s = runner.run_sheet(page, ref)
     assert s.reason == "insufficient_anchors"
     assert json.loads((d / "score.json").read_text())["reason"] == "insufficient_anchors"
@@ -422,9 +434,7 @@ def test_review_freshness_compares_content_not_mtime(env, monkeypatch):
     _bump(tj, 5)
     runner.run_sheet(page, ref)
     assert json.loads(tj.read_text())["gcps"][0]["wx"] == GCPS[0].wx
-    assert f.calls["warp"] == 2
-    runner.run_sheet(page, ref)  # now current: nothing rewritten
-    assert f.calls["warp"] == 2
+    assert f.calls["warp"] == 1  # restored byte for byte: the warp of it is still current
 
 
 def test_failing_sheet_clears_published_outputs(env, monkeypatch):
@@ -437,7 +447,8 @@ def test_failing_sheet_clears_published_outputs(env, monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("kaput")
     monkeypatch.setattr(runner.linework, "extract_blocks", boom)
-    _bump(d / "page.json", 5)
+    pj = d / "page.json"
+    pj.write_text(json.dumps({**json.loads(pj.read_text()), "sheet_number": "changed"}))
     res = runner.run_series("1948", pages_list=[page], ref=ref)
     assert res["7"].reason.startswith("error:")
     assert json.loads((d / "score.json").read_text())["reason"].startswith("error:")
