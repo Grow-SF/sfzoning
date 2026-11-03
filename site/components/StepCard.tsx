@@ -2,11 +2,13 @@ import type { Ref } from "react";
 import type { Step } from "@/content/schema";
 import type { Era } from "@/lib/eras";
 import { SOURCES } from "@/content/sources";
+import { usePalette } from "@/lib/paletteChoice";
 import styles from "@/app/page.module.css";
 
 type Props = { step: Step; era?: Era; active: boolean; ref?: Ref<HTMLElement> };
 
 export default function StepCard({ step, era, active, ref }: Props) {
+  const { name } = usePalette();
   return (
     <article ref={ref} className={styles.card} data-active={active || undefined} aria-labelledby={`${step.id}-title`}>
       {/* The scroller carries no background: Chrome culls a WebGL canvas under an opaque
@@ -17,7 +19,9 @@ export default function StepCard({ step, era, active, ref }: Props) {
         {step.title}
       </h2>
       {step.body.map((b, i) => {
-        const text = b.href ? <a href={b.href}>{b.text}</a> : b.text;
+        // The colour-blind palette names different colours.
+        const words = name === "accessible" && b.cvd ? b.cvd : b.text;
+        const text = b.href ? <a href={b.href}>{words}</a> : words;
         if (b.kind === "quote")
           return (
             <blockquote key={i} className={styles.quote}>
