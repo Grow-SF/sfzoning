@@ -17,6 +17,7 @@ import { heldScans, nextHeld, COLOURS, type Hold } from "@/lib/scanHold";
 import { addLookupLayer, LOTS_LAYER } from "@/lib/lookupLayer";
 import { useDistrictAvailability, type Availability } from "@/lib/districts";
 import Legend from "./Legend";
+import { usePalette } from "@/lib/paletteChoice";
 import { RUMSEY_CREDIT } from "./Credits";
 
 export type MapState = {
@@ -201,6 +202,12 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   const [state, setState] = useState<MapState>(initial);
   /** Camera zoom, settled after each move: the key draws its colours at the fill strength the map uses there. */
   const [zoom, setZoom] = useState(initial.camera?.zoom ?? 12.3);
+  const { colors } = usePalette();
+  const colorsRef = useRef(colors);
+  useEffect(() => {
+    colorsRef.current = colors;
+    lookupRef.current?.setColors(colors);
+  }, [colors]);
   /** The scans on screen, including held ones and ones fading out. */
   const [drawnScans, setDrawnScans] = useState<readonly string[]>([]);
   const avail = useDistrictAvailability();
@@ -418,6 +425,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     registerSource(shared.url);
     map.addSource(SHARED_SOURCE, { type: "vector", url: shared.url });
     lookupRef.current = addLookupLayer(map, shared, SHARED_SOURCE, "selected-line", (zoom) => between(zoom, LINE_WIDTH.lo, LINE_WIDTH.hi), MAP_COLORS.districtEdge);
+    lookupRef.current.setColors(colorsRef.current);
     map.on("mousemove", (e) => {
       const index = sharedIndex(stateRef.current.era);
       if (index === undefined || !clickRef.current) return;

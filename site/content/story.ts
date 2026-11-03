@@ -38,7 +38,7 @@ export const STORY: Step[] = [
       {
         kind: "p",
         // DRAFT: describes the "allowed" colours shown at this step (lib/palette.ts).
-        text: "This is San Francisco today, every lot coloured by what its zoning allows. Orange-red means one home per lot. The colours run through amber and pale yellow, then greens that deepen step by step as more homes are allowed, with or without shops below, ending in the richest green where the most homes are allowed. Light and mid blue are commercial, brown is industry and grey is parks and public land.",
+        text: "This is San Francisco today, every lot coloured by what its zoning allows. Dusty rose means one home per lot. The colours run through amber and pale yellow, then greens that deepen step by step as more homes are allowed, with or without shops below, ending in the richest green where the most homes are allowed. Light and mid blue are commercial, brown is industry and grey is parks and public land.",
       },
       {
         kind: "p",
@@ -60,7 +60,7 @@ export const STORY: Step[] = [
       },
       {
         kind: "p",
-        text: "The orange-red at the southern edge of the Sunset (diagonal hatching on the original) is First Residential: single-family houses. A two-family house was allowed only if 5,000 square feet of open lot remained. A standard San Francisco lot is 25 by 100 feet, or 2,500 square feet, so in practice that meant one house.",
+        text: "The rose at the southern edge of the Sunset (diagonal hatching on the original) is First Residential: single-family houses. A two-family house was allowed only if 5,000 square feet of open lot remained. A standard San Francisco lot is 25 by 100 feet, or 2,500 square feet, so in practice that meant one house.",
       },
       { kind: "stat", text: "Second Residential: no limit on homes per lot" },
     ],
@@ -94,7 +94,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "Same blocks, 1948. The legend hasn’t changed, but most of the Outer Sunset has turned orange-red: First Residential (hatched on the original), one house per lot in practice. North of Golden Gate Park, most of the Richmond stayed rich green: Second Residential.",
+        text: "Same blocks, 1948. The legend hasn’t changed, but most of the Outer Sunset has turned rose: First Residential (hatched on the original), one house per lot in practice. North of Golden Gate Park, most of the Richmond stayed rich green: Second Residential.",
       },
       {
         kind: "p",
@@ -117,7 +117,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "Now the map speaks in codes. Around Noe and Eureka Valleys it’s a patchwork of R-1 (orange-red), R-2 (amber) and R-3 (light green). The modern City Planning Code took effect on May 2, 1960, and for the first time every residential district came with a number: how much lot area each home needed.",
+        text: "Now the map speaks in codes. Around Noe and Eureka Valleys it’s a patchwork of R-1 (rose), R-2 (amber) and R-3 (light green). The modern City Planning Code took effect on May 2, 1960, and for the first time every residential district came with a number: how much lot area each home needed.",
       },
       { kind: "stat", text: "On a 25×100 lot: R-1, one home · R-2, two · R-3, about six · R-4, about twelve" },
       {
@@ -204,7 +204,7 @@ export const STORY: Step[] = [
     body: [
       {
         kind: "p",
-        text: "Noe Valley once more, on the map amended to November 1978. The R codes are gone. In their place are RH-1, RH-2 and RH-3 (orange-red, amber and pale yellow), “House Character” districts allowing one, two or three homes per lot, and RM (pale, light and deeper greens), “Mixed House & Apartment Character.”",
+        text: "Noe Valley once more, on the map amended to November 1978. The R codes are gone. In their place are RH-1, RH-2 and RH-3 (rose, amber and pale yellow), “House Character” districts allowing one, two or three homes per lot, and RM (pale, light and deeper greens), “Mixed House & Apartment Character.”",
       },
       {
         kind: "p",

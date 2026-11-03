@@ -1,5 +1,5 @@
 import type * as Ml from "maplibre-gl";
-import { CATEGORY_COLORS } from "./palette";
+import { CATEGORY_COLORS, type Category } from "./palette";
 import { NO_VALUE, type SharedDistricts } from "./shared";
 
 // Draws the shared districts with one copy of each shape and one small table, instead of one
@@ -158,7 +158,9 @@ export function addLookupLayer(map: Ml.Map, shared: SharedDistricts, source: str
 
   const palette = new Float32Array(16 * 4);
   // The table's numbers are the pointer's category order, so at most 16 categories.
-  shared.categories.forEach((c, i) => palette.set(rgba(CATEGORY_COLORS[c]), i * 4));
+  const fillPalette = (colors: Record<Category, string>) =>
+    shared.categories.forEach((c, i) => palette.set(rgba(colors[c]), i * 4));
+  fillPalette(CATEGORY_COLORS);
   const edgeColor = rgba(edge);
 
   let gl: WebGL2RenderingContext | null = null;
@@ -298,6 +300,11 @@ export function addLookupLayer(map: Ml.Map, shared: SharedDistricts, source: str
       look = next;
       startedAt = performance.now();
       duration = ms;
+      map.triggerRepaint();
+    },
+    /** Draw with these colours (the reader switched palettes). */
+    setColors(colors: Record<Category, string>) {
+      fillPalette(colors);
       map.triggerRepaint();
     },
   };

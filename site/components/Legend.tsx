@@ -1,7 +1,8 @@
 "use client";
 
 import { useId, useState } from "react";
-import { CATEGORY_LABELS, HOMES_RAMP, OTHER_USES, shownColor } from "@/lib/palette";
+import { CATEGORY_LABELS, HOMES_RAMP, OTHER_USES, shownColor, type Category } from "@/lib/palette";
+import { setPaletteName, usePalette } from "@/lib/paletteChoice";
 import styles from "./legend.module.css";
 
 const RAMP_TICKS: Record<string, string> = {
@@ -25,11 +26,13 @@ type Props = {
   fillOpacity: number;
 };
 
-/** Key to the "what it allowed" colours: a homes-per-lot scale, then the other uses. */
+/** Key to the "what it allowed" colours: a homes-per-lot scale, then the other uses, and the
+ * switch to the colour-blind palette. */
 export default function Legend({ compact = false, fillOpacity }: Props) {
   const [open, setOpen] = useState(false);
   const id = useId();
-  const color = (c: (typeof HOMES_RAMP)[number]) => shownColor(c, fillOpacity);
+  const { name, colors } = usePalette();
+  const color = (c: Category) => shownColor(c, fillOpacity, colors);
   return (
     <div className={styles.wrap} data-compact={compact || undefined} data-open={open || undefined} data-testid="legend">
       {compact && (
@@ -73,6 +76,15 @@ export default function Legend({ compact = false, fillOpacity }: Props) {
             </li>
           ))}
         </ul>
+        <label className={styles.cvd}>
+          <input
+            type="checkbox"
+            checked={name === "accessible"}
+            onChange={(e) => setPaletteName(e.target.checked ? "accessible" : "standard")}
+            data-testid="palette-toggle"
+          />
+          Colour-blind friendly
+        </label>
       </figure>
     </div>
   );
