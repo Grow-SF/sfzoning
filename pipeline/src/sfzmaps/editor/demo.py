@@ -10,8 +10,6 @@ self-contained so the installed package needs no test code.
 from __future__ import annotations
 
 import json
-import os
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +18,7 @@ import geopandas as gpd
 import numpy as np
 from shapely.geometry import box
 
-from sfzmaps import answers, config, linework, runner
+from sfzmaps import answers, config, fresh, linework, runner
 from sfzmaps import score as score_mod
 from sfzmaps.pages import Page
 from sfzmaps.refine import Match, RefineResult
@@ -125,24 +123,21 @@ def build_demo(root: Path, *, set_config: bool = True) -> Demo:
     source = root / "raw" / SERIES / "demo.jpg"
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_bytes(b"demo")
-    os.utime(source, ns=(1, 1))
-    # a minute ago, so any later write is strictly newer; but never before linework.py, a
-    # blocks input (a fresh checkout, as in CI, would otherwise make blocks look stale)
-    t0 = max(time.time_ns() - 60_000_000_000, Path(linework.__file__).stat().st_mtime_ns + 1)
-    steps = [
-        (d / "page.png", lambda p: cv2.imwrite(str(p), img)),
-        (d / "page.json", lambda p: p.write_text(json.dumps(
-            {"kind": "map", "sheet_number": SHEET, "neighbor_refs": [], "mask_boxes": []}))),
-        (d / "labels.json", lambda p: p.write_text("[]")),
-        (d / "blocks_px.geojson", lambda p: p.write_text(json.dumps(
-            {"type": "FeatureCollection", "features": [], "corners": P.tolist()}))),
-        (d / "refine.json", lambda p: runner._write_json(p, runner._result_json(res))),
-        (d / "transform.json", lambda p: runner._write_json(p, runner._transform_json(t, "auto"))),
-        (d / "score.json", lambda p: runner._write_json(p, runner._score_json(sc))),
-    ]
-    for i, (p, fn) in enumerate(steps):  # strictly increasing mtimes: every stage looks fresh
-        fn(p)
-        os.utime(p, ns=(t0 + i * 10_000_000, t0 + i * 10_000_000))
+    png, pj, lj, bj = d / "page.png", d / "page.json", d / "labels.json", d / "blocks_px.geojson"
+    rfj, tj, sj = d / "refine.json", d / "transform.json", d / "score.json"
+    cv2.imwrite(str(png), img)
+    sha = fresh.sha256(png)
+    pj.write_text(json.dumps({"kind": "map", "sheet_number": SHEET, "neighbor_refs": [], "mask_boxes": [],
+                              "page_sha256": sha}))
+    lj.write_text(json.dumps({"page_sha256": sha, "labels": []}))
+    bj.write_text(json.dumps({"type": "FeatureCollection", "features": [], "corners": P.tolist()}))
+    runner._write_json(rfj, runner._result_json(res))
+    runner._write_json(tj, runner._transform_json(t, "auto"))
+    runner._write_json(sj, runner._score_json(sc))
+    # each artifact's fingerprint, as the runner records it: every stage looks fresh
+    for out, ins in ((png, [source]), (pj, [png]), (lj, [png, pj]),
+                     (bj, [png, pj, Path(linework.__file__)]), (sj, [tj, rfj, lj])):
+        fresh.record(out, ins)
     for p in (d / "page.json", d / "labels.json"):   # synthetic: made from no vision answers
         answers.write(p, [])
     return Demo(Page(SERIES, SHEET, source, None), ref, SERIES, SHEET, work, list(BAD_INDICES), true_gcps)

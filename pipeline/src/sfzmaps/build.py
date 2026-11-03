@@ -40,9 +40,9 @@ log = logging.getLogger(__name__)
 # of every stage) and so restale everything.
 DVC = ["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc"]
 # Code that can't change a build output: the editor, the build driver, bundling, evaluation,
-# shipping (ship, cachepack) and the toolchain check.
+# shipping (ship, cachepack, datapack) and the toolchain check.
 CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "ship.py", "cachepack.py",
-                "toolchain.py", "__pycache__"}
+                "datapack.py", "toolchain.py", "__pycache__"}
 # The exit code of a pipeline command stopped by llm.FATAL (the $0 cap, or no API key): "needs a
 # paid read", not a bug. Same value as cli.PAID_READ_EXIT (a test keeps them equal).
 PAID_READ_EXIT = 75
@@ -264,6 +264,17 @@ def stale_stages(status_json: str) -> set[str]:
     return {k.rsplit(":", 1)[-1] for k in data if not k.endswith(".dvc")}
 
 
+def changed_deps(status_json: str) -> dict[str, list[str]]:
+    """Stage name -> its dependencies `dvc status --json` reports changed. A stage's commands get
+    this as SFZMAPS_DVC_CHANGED_DEPS, so sfzmaps.fresh can adopt outputs made before fingerprint
+    sidecars existed when DVC proves their inputs unchanged."""
+    out: dict[str, list[str]] = {}
+    for k, items in json.loads(status_json or "{}").items():
+        deps = [p for it in items if isinstance(it, dict) for p in (it.get("changed deps") or {})]
+        out[k.rsplit(":", 1)[-1]] = sorted(deps)
+    return out
+
+
 def git_dirty(paths: tuple[str, ...] = ("src", "inputs", "dvc.yaml", "pyproject.toml", "uv.lock",
                                         "../pixi.toml", "../pixi.lock")) -> list[str]:
     p = subprocess.run(["git", "status", "--porcelain", "--", *paths], cwd=config.PIPELINE_DIR,
@@ -413,10 +424,14 @@ def build(targets: list[str] | None, jobs: int, dry_run: bool, force: bool,
         logs = config.DATA_DIR / "build-logs"
         logs.mkdir(parents=True, exist_ok=True)
 
+        from sfzmaps import fresh
+        changed = changed_deps(st.stdout)
+
         def one(name: str) -> None:
+            env = {**os.environ, fresh.CHANGED_DEPS_ENV: json.dumps(changed.get(name, []))}
             with open(logs / f"{name}.log", "w") as f:
                 p = subprocess.run(["uv", "run", "--frozen", "sfzmaps", "stage", name],
-                                   cwd=config.PIPELINE_DIR, stdout=f, stderr=subprocess.STDOUT)
+                                   cwd=config.PIPELINE_DIR, stdout=f, stderr=subprocess.STDOUT, env=env)
             if p.returncode != 0:
                 tail = (logs / f"{name}.log").read_text().strip().splitlines()[-1:] or [""]
                 raise StageFailed(f"exit {p.returncode}: {tail[0][:300]} (log: {logs / (name + '.log')})")

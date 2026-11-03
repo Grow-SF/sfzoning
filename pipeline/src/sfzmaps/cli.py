@@ -240,7 +240,7 @@ def paper(
 ) -> None:
     """Warp every placed sheet as it looks on paper (opaque, untouched RGB) and publish
     out/<series>/<series>-paper.pmtiles, the layer the site shows as "the map as drawn"."""
-    from sfzmaps import reading, runner, stitch, tiles as tiles_mod, warp
+    from sfzmaps import fresh, reading, runner, stitch, tiles as tiles_mod, warp
     from sfzmaps.transform import SheetTransform
 
     if not year and not all_:
@@ -254,10 +254,11 @@ def paper(
                 continue
             out = d / stitch.raster_name(True)
             srcs = [tj, png, pj, Path(warp.__file__)]
-            if not force and out.exists() and all(out.stat().st_mtime_ns >= p.stat().st_mtime_ns for p in srcs):
+            if fresh.is_fresh(out, srcs, force):  # by content, never mtime
                 continue
             runner._warp_checked(png, SheetTransform.from_json(json.loads(tj.read_text())),
                                  reading.load_page(pj).mask_boxes, out, paper=True)
+            fresh.record(out, srcs)
             n += 1
         try:
             out, report, rebuilt = stitch.publish_layer(series, paper=True, min_zoom=min_zoom,
@@ -584,21 +585,27 @@ def pull(no_checkout: bool = typer.Option(False, "--no-checkout",
 def ship(
     base: str = typer.Option("origin/main", "--base", help="What the branch merges into."),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Say what would upload; upload nothing."),
+    yes: bool = typer.Option(False, "--yes", help="Ship even if it takes more than 500 requests."),
+    repack: bool = typer.Option(False, "--repack", help="Also move small objects stored alone into "
+                                "data packs (once, from the old one-object-per-request layout)."),
 ) -> None:
     """When a branch is ready to merge: upload the answers and data this commit needs that
     `--base` hasn't shipped, to the Blob store, and commit the new answer pack's record (push it
-    with the branch). Needs site/.env.local (BLOB_READ_WRITE_TOKEN). Never calls the vision API."""
+    with the branch). Small data objects travel in data packs, large ones alone. Needs
+    site/.env.local (BLOB_READ_WRITE_TOKEN). Never calls the vision API."""
     from sfzmaps import ship as ship_mod
 
     try:
-        r = ship_mod.ship(base, dry_run=dry_run)
+        r = ship_mod.ship(base, dry_run=dry_run, yes=yes, repack=repack)
     except ship_mod.ShipError as e:
         typer.echo(f"ship: {e}", err=True)
         raise typer.Exit(1)
     verb = "would upload" if dry_run else "uploaded"
     typer.echo(f"{verb} {r.objects_uploaded} of {r.objects_total} data object(s) "
-               f"({r.bytes_uploaded / 1e9:.2f} GB) and {r.new_answers} new answer(s)"
+               f"({r.bytes_uploaded / 1e9:.2f} GB) in {r.packs_new} new data pack(s) and "
+               f"{r.singles_uploaded} single object(s), and {r.new_answers} new answer(s)"
                + (f" as pack {r.pack[:12]} (record committed; push the branch)" if r.pack else ""))
+    typer.echo(f"{'would make' if dry_run else 'made'} about {r.requests} request(s) to the store")
 
 
 @app.command()
