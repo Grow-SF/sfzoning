@@ -4,11 +4,14 @@ story category, then the published outputs under out/<series>/districts/:
   parcels.fgb      one row per mapped parcel: blklot, code, height_code, category, confidence,
                    source_sheet, note (why a park lot shows as public; apply_parks) (EPSG:2227)
   districts.fgb    parcels dissolved by code (code, category)
-  <series>-districts.pmtiles   vector tiles, layers `parcels` and `districts` (EPSG:3857, z11-16)
   stats.json       {category: {parcels, area_sqft}, unknown_share, mapped_area_sqft,
                    unmapped_parcels, parks: {count, acres} (park_tally),
                    provenance: {use, height}} (today: also notes)
   unknown_codes.json   codes read but absent from the research table -> parcel count
+
+and, only for the review page (`sfzmaps review`, review_tiles), <series>-districts.pmtiles:
+vector tiles, layers `parcels` and `districts` (EPSG:3857, z11-16). The site reads the shared
+archive instead (districts/shared.py).
 
 A height series (role "height") instead writes out/<zoning series>/districts/height.parquet,
 joined by blklot into its period's zoning output (republished if that already exists).
@@ -17,6 +20,12 @@ Provenance: every read writes {reader, region_read, git, read_at} next to its ou
 (work/<series>/districts_raw.json, out/<zoning series>/districts/height.json); publish copies
 both into stats.json.  A --sheet read is partial: it goes to districts_raw.partial.* and
 out/<series>/districts-partial/ and never touches the full-series outputs.
+
+Freshness (sfzmaps.fresh): a full read is skipped when its output's fingerprint still matches
+read_inputs() (the series' sheet files, its hand-made inputs, the parcels and the code the read
+runs), and publishing is skipped when the outputs' fingerprint still matches publish_inputs()
+(the read, heights, overrides, rules and the code that joins them). So a build with nothing
+changed for a series rewrites nothing, and an overrides edit republishes without reading again.
 """
 from __future__ import annotations
 
@@ -32,16 +41,17 @@ from pathlib import Path
 import geopandas as gpd
 import pandas as pd
 
-from sfzmaps import config, inputs
+from sfzmaps import config, fresh, inputs
 from sfzmaps.districts.categories import CATEGORIES, category_for
+# the reading half lives in districts.read, so publishing code can change without a new read
+from sfzmaps.districts.read import (COLUMNS, MEDIUM, cap_confidence, load_parcels,  # noqa: F401
+                                    merge_use_height, read_raw, sheet_statuses)
 from sfzmaps.districts.series import SERIES
 
 log = logging.getLogger(__name__)
 
-MEDIUM = 0.6            # confidence cap for parcels read from needs_review sheets
 LOW_CONFIDENCE = 0.5    # the review page outlines parcels below this
 MIN_ZOOM, MAX_ZOOM = 11, 16
-COLUMNS = ["blklot", "code", "height_code", "confidence", "source_sheet"]
 TILE_PARCEL_PROPS = ["blklot", "code", "height_code", "category", "confidence"]
 # Story-category colours shared by the review page (and a starting point for the site).
 COLORS = {"single_family": "#fe4400", "two_unit": "#f89600", "three_unit": "#ffee66",
@@ -135,97 +145,83 @@ def zoning_series_of(series: str) -> str:
     return next(s for s, i in SERIES.items() if i.period == period and i.role == "use")
 
 
-def load_parcels() -> gpd.GeoDataFrame:
-    p = gpd.read_parquet(config.REF_DIR / "parcels.parquet")
-    return p[p["active"]].reset_index(drop=True)
+# ---------------------------------------------------------------- freshness
+
+# Modules that make the per-sheet files a read fingerprints by content (warps, fits, scores, the
+# stitched tiles): their code reaches a read only through those files, so a change there reruns
+# the read only when it changes the files.
+SHEET_PRODUCERS = frozenset({"sfzmaps.runner", "sfzmaps.warp", "sfzmaps.refine", "sfzmaps.placement",
+                             "sfzmaps.anchors", "sfzmaps.tiles", "sfzmaps.pointsfile"})
+# The code publish() runs: the joins, the rules and the categories (not the readers).
+PUBLISH_MODULES = ("sfzmaps.districts.assemble", "sfzmaps.districts.categories",
+                   "sfzmaps.districts.rules", "sfzmaps.districts.series", "sfzmaps.inputs",
+                   "sfzmaps.config", "sfzmaps.fresh", "sfzmaps.parks")
+PUBLISHED = ("parcels.fgb", "districts.fgb", "stats.json", "unknown_codes.json")
 
 
-# ---------------------------------------------------------------- reading
+def _rules_csv() -> Path:
+    from sfzmaps.districts import rules
 
-def sheet_statuses(series: str) -> dict[str, str]:
-    from sfzmaps import manifest, stitch
-
-    return {sid: manifest.status_of(series, sid, sc) for sid, sc in stitch.load_scores(series).items()}
+    return rules.RULES_CSV
 
 
-def cap_confidence(df: pd.DataFrame, statuses: dict[str, str]) -> pd.DataFrame:
-    """Parcels from needs_review sheets keep their code at confidence <= MEDIUM."""
-    df = df.copy()
-    bad = df["source_sheet"].map(lambda s: statuses.get(s) == "needs_review")
-    df.loc[bad, "confidence"] = df.loc[bad, "confidence"].clip(upper=MEDIUM)
-    return df
+def _read_by_districts(p: Path) -> bool:
+    """A sheet file the reads may use: not another step's fingerprint, nor the paper layer."""
+    n = p.name
+    return not (n.endswith(".inputs.json") or n.startswith("warped_paper") or ".tmp" in n)
 
 
-def merge_use_height(use: pd.DataFrame, height: pd.DataFrame, role: str) -> pd.DataFrame:
-    """One row per parcel read on a use sheet (code) and/or a height sheet (height_code);
-    confidence and source_sheet come from the series' role."""
-    u = use[["blklot", "code", "confidence", "source_sheet"]].drop_duplicates("blklot")
-    h = height[["blklot", "height_code", "confidence", "source_sheet"]].drop_duplicates("blklot")
-    m = u.merge(h, on="blklot", how="outer", suffixes=("_u", "_h"))
-    mine, other = ("_u", "_h") if role == "use" else ("_h", "_u")
-    out = pd.DataFrame({
-        "blklot": m["blklot"],
-        "code": m["code"].astype(object).where(m["code"].notna(), None),
-        "height_code": m["height_code"].astype(object).where(m["height_code"].notna(), None),
-        "confidence": m["confidence" + mine].fillna(0.0).astype(float),
-        "source_sheet": m["source_sheet" + mine].where(m["source_sheet" + mine].notna(),
-                                                       m["source_sheet" + other]),
-    })
-    return out.sort_values("blklot").reset_index(drop=True)[COLUMNS]
+def read_inputs(series: str) -> list[Path]:
+    """Everything a full read of a series is made from: its sheets' files (work/<series>/<sheet>/),
+    its hand-made inputs except the overrides (applied when publishing), the label scale, the
+    parcels, the legend boxes and the code the read runs (districts.read and what it imports);
+    for the legend-pattern reader (A), also the research table, whose codes it matches."""
+    from sfzmaps.districts import pattern
+
+    root = config.WORK_DIR / series
+    sheets = sorted(p for p in root.rglob("*") if p.parent != root and p.is_file()
+                    and _read_by_districts(p)) if root.is_dir() else []
+    hand = inputs.series_dir(series)
+    made = sorted(p for p in hand.rglob("*") if p.is_file() and p != inputs.overrides_path(series)) \
+        if hand.is_dir() else []
+    info = SERIES.get(series)
+    files = [*sheets, *made, inputs.label_scale_path(), config.REF_DIR / "parcels.parquet",
+             *([_rules_csv()] if info is None or info.reader == "A" else []), pattern.LEGENDS_JSON,
+             *fresh.code_files(["sfzmaps.districts.read"], cut=SHEET_PRODUCERS)]
+    return [p for p in files if p.exists()]
 
 
-def _read_b(series: str, parcels, order: list[str]) -> pd.DataFrame:
-    """Reader B per sheet kind: use codes from use sheets, height codes from height sheets
-    (labels.sheet_role), each parcel on its highest-priority sheet of that kind."""
-    from sfzmaps.districts import labels, sampling
+def publish_inputs(series: str) -> list[Path]:
+    """Everything publish() makes a series' outputs from (today: the DataSF zoning it reads)."""
+    from sfzmaps.districts import today
 
-    roles = labels.sheet_roles(series, order)
-    log.info("%s sheet roles: %s", series, roles)
-    parts = {}
-    for kind, col, conf in (("use", "code", "use_confidence"), ("height", "height_code", "height_confidence")):
-        kind_order = [s for s in order if roles[s] == kind]
-        sheet = sampling.assign_sheets(parcels, series, sheets=kind_order).to_numpy()
-        out = []
-        for sid in kind_order:
-            sub = parcels[sheet == sid]
-            if not len(sub):
-                continue
-            log.info("%s sheet %s (%s): %d parcels", series, sid, kind, len(sub))
-            r = labels.assign_parcels(sub.reset_index(drop=True), config.WORK_DIR / series / sid)
-            out.append(pd.DataFrame({"blklot": r["blklot"], col: r[col], "confidence": r[conf],
-                                     "source_sheet": sid}))
-        parts[kind] = pd.concat(out, ignore_index=True) if out else \
-            pd.DataFrame(columns=["blklot", col, "confidence", "source_sheet"])
-    return merge_use_height(parts["use"], parts["height"], SERIES[series].role)
+    if series == "today":
+        files = [config.REF_DIR / "zoning_current.parquet", Path(today.__file__)]
+    else:
+        files = [_raw_path(series), _prov_path(series), out_dir(series) / "height.parquet",
+                 _height_prov_path(series), inputs.overrides_path(series)]
+        hs = height_series_of(series)
+        if hs:
+            files.append(inputs.overrides_path(hs))
+    files += [config.REF_DIR / "parcels.parquet", _rules_csv(),
+              inputs.parks_path(), inputs.park_maps_path(),     # apply_parks, park_tally
+              *(fresh.module_file(m) for m in PUBLISH_MODULES)]
+    return [p for p in files if p is not None and p.exists()]
 
 
-def read_raw(series: str, *, sheets: list[str] | None = None, client=None) -> pd.DataFrame:
-    """Reader output for every mapped parcel (COLUMNS). Each parcel is read on its
-    highest-priority covering sheet (of the right kind, for reader B); `sheets` limits the
-    read to those sheets."""
-    from sfzmaps.districts import pattern, sampling
+def _read_current(series: str, out: Path, prov_path: Path) -> bool:
+    """A full read's output still matches what it was read from. A cache-only read that fell back
+    on uncached regions never counts: a later paid read may have filled them."""
+    prov = _read_json(prov_path)
+    if not prov or (prov.get("cache_only") and int(prov.get("region_misses") or 0) > 0):
+        return False
+    return fresh.is_fresh(out, read_inputs(series))
 
-    info = SERIES[series]
-    parcels = load_parcels()
-    if info.reader == "B":
-        order = [s for s in sampling.sheet_order(series) if sheets is None or s in sheets]
-        return cap_confidence(_read_b(series, parcels, order), sheet_statuses(series))
-    parcels["sheet"] = sampling.assign_sheets(parcels, series).to_numpy()
-    order = [s for s in sampling.sheet_order(series) if sheets is None or s in sheets]
-    swatches = pattern.legend_swatches(series, client=client)
-    out = []
-    for sid in order:
-        sub = parcels[parcels["sheet"] == sid]
-        if not len(sub):
-            continue
-        log.info("%s sheet %s: %d parcels", series, sid, len(sub))
-        r = pattern.read_sheet(series, sid, sub, swatches=swatches, client=client)
-        r["height_code"] = None
-        r["source_sheet"] = sid
-        out.append(r[COLUMNS])
-    if not out:
-        return pd.DataFrame(columns=COLUMNS)
-    return cap_confidence(pd.concat(out, ignore_index=True), sheet_statuses(series))
+
+def publish_current(series: str) -> bool:
+    d = out_dir(series)
+    return all((d / n).exists() for n in PUBLISHED) and \
+        fresh.is_fresh(d / "stats.json", publish_inputs(series))
 
 
 def read_today() -> pd.DataFrame:
@@ -323,8 +319,18 @@ def mask_unzoned(df: pd.DataFrame, year: int, *, blocks: pd.Series | None = None
 
 def categorise(df: pd.DataFrame, year: int) -> pd.DataFrame:
     df = df.copy()
-    df["category"] = [category_for(c, year) if isinstance(c, str) and c.strip() else "unknown"
-                      for c in df["code"]]
+    # once per distinct code: a lookup scans the research table, and a series has ~200k parcels
+    # but only dozens of codes
+    known: dict[str, str] = {}
+
+    def category(c) -> str:
+        if not (isinstance(c, str) and c.strip()):
+            return "unknown"
+        if c not in known:
+            known[c] = category_for(c, year)
+        return known[c]
+
+    df["category"] = [category(c) for c in df["code"]]
     return df
 
 
@@ -521,7 +527,9 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
     g.to_file(d / "parcels.fgb", driver="FlatGeobuf")
     districts = dissolve(g)
     districts.to_file(d / "districts.fgb", driver="FlatGeobuf")
-    write_pmtiles(g, districts, d / f"{series}-districts.pmtiles", f"SF zoning districts {series}")
+    tiles = review_tiles_path(series, partial=partial)    # made again on demand (review_tiles)
+    for p in (tiles, fresh.sidecar(tiles)):
+        p.unlink(missing_ok=True)
     st = stats(g)
     st["unmapped_parcels"] = int((~geo["blklot"].isin(set(g["blklot"]))).sum())
     st["parks"] = park_tally(year, geo)
@@ -536,62 +544,116 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
     return d
 
 
+def review_tiles_path(series: str, *, partial: bool = False) -> Path:
+    return out_dir(series, partial=partial) / f"{series}-districts.pmtiles"
+
+
+def review_tiles(series: str) -> Path | None:
+    """The review page's vector tiles of a published series (layers `parcels` and `districts`),
+    made from its parcels.fgb and districts.fgb, again only when those changed. Nothing else reads
+    them, so builds don't make them. None if the series isn't published or GDAL can't write
+    PMTiles."""
+    d = out_dir(series)
+    src = [d / "parcels.fgb", d / "districts.fgb"]
+    out = review_tiles_path(series)
+    if not all(p.exists() for p in src):
+        return None
+    if fresh.is_fresh(out, src):
+        return out
+    import pyogrio
+
+    g = pyogrio.read_dataframe(src[0], use_arrow=True)
+    districts = pyogrio.read_dataframe(src[1], use_arrow=True)
+    if write_pmtiles(g, districts, out, f"SF zoning districts {series}") is None:
+        return None
+    fresh.record(out, src)
+    return out
+
+
+def _publish_full(series: str, *, force: bool = False, today_provenance: bool = False) -> Path:
+    """Publish a series' full outputs from its saved read, unless they are current."""
+    d = out_dir(series)
+    if not force and publish_current(series):
+        log.info("%s: published outputs are current; not republished", series)
+        return d
+    if series == "today":
+        if today_provenance:
+            _write_json(_prov_path("today"), provenance("today"))
+        publish("today", read_today(), date.today().year)
+    else:
+        publish(series, pd.read_parquet(_raw_path(series)), SERIES[series].year)
+    fresh.record(d / "stats.json", publish_inputs(series))
+    return d
+
+
 def run_series(series: str, *, sheets: list[str] | None = None, client=None,
-               cache_only: bool = False) -> Path:
+               cache_only: bool = False, force: bool = False) -> Path:
     """Read, assign, join and publish one series (or `today`); returns its districts dir.
     sheets: a partial read (districts_raw.partial.*, out/<series>/districts-partial/), which
     leaves the full-series outputs alone.  cache_only: vision answers from the disk cache only
-    (region reads skip uncached mosaics; any other miss raises llm.LLMCacheMiss)."""
+    (region reads skip uncached mosaics; any other miss raises llm.LLMCacheMiss).  A full read
+    whose inputs haven't changed is not read again, nor republished when its outputs are current
+    (read_inputs, publish_inputs); force: read and publish anyway."""
     from sfzmaps import llm
     from sfzmaps.districts import regionread
 
     if series == "today":
-        _write_json(_prov_path("today"), provenance("today"))
-        return publish("today", read_today(), date.today().year)
+        return _publish_full("today", force=force, today_provenance=True)
     info = SERIES[series]
     if info.role == "skip":
         raise ValueError(f"{series}: special-use series are out of scope")
     partial = bool(sheets)
-    skipped0 = regionread.Stats.skipped
-    from sfzmaps import answers
+    if info.role == "height":
+        zs = zoning_series_of(series)
+        out, prov_path = out_dir(zs, partial=partial) / "height.parquet", _height_prov_path(zs, partial=partial)
+    else:
+        out, prov_path = _raw_path(series, partial=partial), _prov_path(series, partial=partial)
+    if not partial and not force and _read_current(series, out, prov_path):
+        log.info("%s: read is current; not read again", series)
+    else:
+        _read_and_save(series, out, prov_path, sheets=sheets, client=client, cache_only=cache_only)
+        if not partial:
+            fresh.record(out, read_inputs(series))
+    if info.role == "height":
+        if partial:
+            return out.parent
+        if _raw_path(zs).exists():
+            _publish_full(zs, force=force)
+        return out.parent
+    if partial:
+        return publish(series, pd.read_parquet(out), info.year, partial=True)
+    return _publish_full(series, force=force)
 
+
+def _read_and_save(series: str, out: Path, prov_path: Path, *, sheets, client, cache_only: bool) -> None:
+    """Read a series and save the read (`out`, its answers sidecar and its provenance)."""
+    from sfzmaps import answers, llm
+    from sfzmaps.districts import regionread
+
+    skipped0 = regionread.Stats.skipped
     # everything the read was made from: pattern / region reads, plus the answers of the legend
     # and district-label artifacts it consumed (answers.consume), fresh or not
     with llm.cache_only(cache_only or llm.CACHE_ONLY), llm.recording() as keys:
         raw = read_raw(series, sheets=sheets, client=client)
     prov = provenance(series, cache_only=cache_only or llm.CACHE_ONLY,
                       region_misses=regionread.Stats.skipped - skipped0)
-    if partial:
+    if sheets:
         prov["sheets"] = list(sheets)
-    if info.role == "height":
-        zs = zoning_series_of(series)
-        d = out_dir(zs, partial=partial)
-        d.mkdir(parents=True, exist_ok=True)
-        answers.write(d / "height.parquet", keys)        # sidecar first
-        raw[["blklot", "height_code", "confidence", "source_sheet"]].to_parquet(d / "height.parquet")
-        _write_json(_height_prov_path(zs, partial=partial), prov)
-        if partial:
-            return d
-        zraw = _raw_path(zs)
-        if zraw.exists():
-            publish(zs, pd.read_parquet(zraw), SERIES[zs].year)
-        return d
-    raw_path = _raw_path(series, partial=partial)
-    raw_path.parent.mkdir(parents=True, exist_ok=True)
-    answers.write(raw_path, keys)                          # sidecar first
-    raw.to_parquet(raw_path)
-    _write_json(_prov_path(series, partial=partial), prov)
-    return publish(series, raw, info.year, partial=partial)
-
-
-def republish(series: str) -> Path:
-    """Re-apply overrides / height / rules to the last read without reading again (no vision
-    calls).  A height series republishes its period's zoning series."""
-    if series == "today":
-        return publish("today", read_today(), date.today().year)
     if SERIES[series].role == "height":
+        raw = raw[["blklot", "height_code", "confidence", "source_sheet"]]
+    out.parent.mkdir(parents=True, exist_ok=True)
+    answers.write(out, keys)                               # sidecar first
+    raw.to_parquet(out)
+    _write_json(prov_path, prov)
+
+
+def republish(series: str, *, force: bool = False) -> Path:
+    """Re-apply overrides / height / rules to the last read without reading again (no vision
+    calls), unless the outputs are current.  A height series republishes its period's zoning
+    series."""
+    if series != "today" and SERIES[series].role == "height":
         series = zoning_series_of(series)
-    return publish(series, pd.read_parquet(_raw_path(series)), SERIES[series].year)
+    return _publish_full(series, force=force)
 
 
 # ---------------------------------------------------------------- backfill

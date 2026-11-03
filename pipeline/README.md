@@ -47,7 +47,7 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 | `run --year S` / `run --all` | Run every page of a series: classify, read labels, rough fit, extract linework, refine, classify real change, score, warp; then stitch, tile, write the manifest and review page. Fresh stages are skipped; human reviews are kept (`--force-auto` ignores them, `--force` reruns everything). `--sheet ID` and `--until STAGE` make a partial run that does not republish the series. |
 | `tiles --year S` | Rebuild the stitched VRT, PMTiles, manifest and review page for one series from existing warps. |
 | `paper --year S` / `paper --all` | Warp each placed sheet as it looks on paper (opaque, colours untouched, cubic resampling) to `warped_paper.tif` and publish `out/<series>/<series>-paper.pmtiles`: the layer the site shows as the original map. The transparent-paper `<series>.pmtiles` stays for the review page and the district readers. The PDFs are 1-bit black and white at 300 dpi; their white is multiplied onto `warp.PAPER_TINT`, the 1948 photos' cream paper, so every era sits on the same paper (ink stays black; 1948 is untouched). Each sheet keeps its map up to its frame; the printed border rule and the 1948 photos' binding shadows are erased (`warp.erase_border_rules`). The stitch stacks a plain-paper backing (`stitch.paper_backing`, for narrow gaps), every sheet's whole paper (legend and title boxes filled with paper), then every sheet's inked content in priority order, so blank paper never hides a neighbour's map. |
-| `review --year S` | Serve `data/out/` on 127.0.0.1 and open the series review page. |
+| `review --year S` | Serve `data/out/` on 127.0.0.1 and open the series review page. Makes the page's districts layer (`out/<S>/districts/<S>-districts.pmtiles`) first if the series' districts changed; builds don't make it, since the site reads the shared archive. |
 | `edit [--year S] [--sheet ID]` | Start the control-point editor on 127.0.0.1:8765 (`--demo` for a synthetic sheet). |
 | `bundle` | Write the processed files into `data/share/` as zips plus `PROCESSED.json`, for copying by hand into the Drive folder `old-planning-maps/processed/`. |
 | `pull` | This commit's cache from the Blob store: its answer packs and the data its `dvc.lock` names. See [Shipping the cache](#shipping-the-cache). |
@@ -105,7 +105,11 @@ whether its data matches its code and inputs (`uv run sfzmaps build --dry-run`, 
   stage, the pipeline's own checks decide what is recomputed: sheets whose placement is
   current are skipped, and a layer is re-stitched and re-tiled only when its sheets, their
   warped rasters (by content), the stitch or tiling code, or the tiling settings changed (the
-  fingerprint of each build is kept beside the layer as `<name>.inputs.json`). So most code
+  fingerprint of each build is kept beside the layer as `<name>.inputs.json`). Districts work
+  the same way: a series is read again only when its sheet files, its hand-made inputs, the
+  parcels, the research table or the code the read runs changed (`districts_raw.parquet.inputs.json`),
+  and republished only when its read, heights, overrides, rules or the joining code changed
+  (`stats.json.inputs.json`); `districts --force` reads and publishes anyway. So most code
   changes rebuild in minutes. The dry run shows which stages would run.
 - **Never spends money.** Stages run with `SFZMAPS_MAX_USD=0`: cached answers are free, and a
   read that would call the API fails the stage instead. Run that read yourself

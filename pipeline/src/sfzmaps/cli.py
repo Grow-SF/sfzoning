@@ -315,8 +315,11 @@ def districts(
     shared_archive: bool = typer.Option(False, "--shared", help="Merge every published series into "
                                                                 "out/shared/ for the explorer (no "
                                                                 "vision calls). Rerun after publishing."),
+    force: bool = typer.Option(False, "--force", help="Read and publish even when the outputs are "
+                                                     "current (their inputs haven't changed)."),
 ) -> None:
-    """Read zoning districts per parcel, join the rules, publish out/<series>/districts/."""
+    """Read zoning districts per parcel, join the rules, publish out/<series>/districts/. A series
+    whose read and outputs are current (nothing they're made from changed) is skipped."""
     import json
     import logging
 
@@ -327,7 +330,7 @@ def districts(
     from sfzmaps.districts.series import SERIES
 
     if shared_archive:
-        if series or all_ or validate or status or republish or cache_only or sheet:
+        if series or all_ or validate or status or republish or cache_only or sheet or force:
             raise typer.BadParameter("--shared runs alone")
         logging.basicConfig(level=logging.INFO, format="%(message)s")
         names = [s for s, i in SERIES.items() if i.role == "use"] + ["today"]
@@ -360,9 +363,9 @@ def districts(
     for k, s in enumerate(todo):
         try:
             if republish:
-                d = assemble.republish(s)
+                d = assemble.republish(s, force=force)
             else:
-                d = assemble.run_series(s, sheets=sheet or None, cache_only=cache_only)
+                d = assemble.run_series(s, sheets=sheet or None, cache_only=cache_only, force=force)
             st = d / "stats.json"
             if st.exists():
                 j = json.loads(st.read_text())
@@ -672,8 +675,10 @@ def review(
     import webbrowser
 
     from sfzmaps import reviewpage
+    from sfzmaps.districts import assemble
 
     try:
+        assemble.review_tiles(year)     # the districts layer: made here, on demand, not by builds
         if reviewpage.is_stale(year):
             typer.echo(f"wrote {reviewpage.write(year)}")
     except RuntimeError as e:

@@ -142,6 +142,8 @@ def stage_deps(st: Stage) -> list[str]:
         return deps + [f"data/out/{s}/districts" for s, i in SERIES.items() if i.role == "use"] \
             + ["data/out/today/districts", "data/ref", "inputs/park_maps.csv"]
     deps += ["data/ref"]
+    if st.districts:
+        deps += ["../docs/research/zoning-districts.csv"]   # the rules: each code's category
     if st.series:
         deps += ["data/raw", "inputs/label_scale.json"] + [f"inputs/{s}" for s in st.series]
     if st.districts:

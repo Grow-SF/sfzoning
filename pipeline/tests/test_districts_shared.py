@@ -151,6 +151,16 @@ def test_lot_cards_hold_each_years_values_by_lot_number(out):
     json.dumps(cards)  # numpy values would break the file
 
 
+def test_a_park_note_reaches_the_lot_card(out):
+    path = config.OUT_DIR / "1948" / "districts" / "parcels.fgb"
+    g = gpd.read_file(path)
+    g["note"] = g["blklot"].map({"1000001": "Park since 1870; this map zones it R-1"})
+    g.to_file(path, driver="FlatGeobuf")
+    cards = shared.lot_cards(shared.merge(["1948"]), ["1948"])
+    i = cards["blklot"].index("1000001")
+    assert cards["strings"][cards["eras"]["1948"]["notes"][str(i)]] == "Park since 1870; this map zones it R-1"
+
+
 def test_only_full_series_are_included(out):
     write_series("1929", {"1000001": ("R", None, "single_family")}, partial=True)
     assert shared.published_series(["1948", "1929", "1990-1996-zoning", "1935"]) == ["1948", "1990-1996-zoning"]

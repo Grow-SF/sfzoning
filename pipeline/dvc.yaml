@@ -42,6 +42,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1921
@@ -87,6 +88,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1929
@@ -132,6 +134,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1935
@@ -177,6 +180,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1948
@@ -222,6 +226,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1960
@@ -267,6 +272,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1964
@@ -312,6 +318,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1968
@@ -357,6 +364,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1972
@@ -402,6 +410,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1975
@@ -447,6 +456,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1980
@@ -492,6 +502,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1980-1990-zoning
@@ -547,6 +558,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1990-1996-zoning
@@ -602,6 +614,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/1996-2000-zoning
@@ -657,6 +670,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - data/raw
       - inputs/label_scale.json
       - inputs/2000-digital-zoning
@@ -712,6 +726,7 @@ stages:
       - ../pixi.toml
       - ../pixi.lock
       - data/ref
+      - ../docs/research/zoning-districts.csv
       - inputs/parks.csv
       - inputs/park_maps.csv
     outs:

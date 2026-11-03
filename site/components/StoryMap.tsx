@@ -17,6 +17,7 @@ import { heldScans, nextHeld, COLOURS, type Hold } from "@/lib/scanHold";
 import { addLookupLayer, LOTS_LAYER } from "@/lib/lookupLayer";
 import { useDistrictAvailability, type Availability } from "@/lib/districts";
 import Legend from "./Legend";
+import { usePalette } from "@/lib/paletteChoice";
 import { RUMSEY_CREDIT } from "./Credits";
 
 export type MapState = {
@@ -201,6 +202,14 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   /** Sources that failed to load ("blocks", "scan-<series>", or "maplibre" itself). */
   const [failedSources, setFailedSources] = useState<ReadonlySet<string>>(() => new Set());
   const [state, setState] = useState<MapState>(initial);
+  /** Camera zoom, settled after each move: the key draws its colours at the fill strength the map uses there. */
+  const [zoom, setZoom] = useState(initial.camera?.zoom ?? 12.3);
+  const { colors } = usePalette();
+  const colorsRef = useRef(colors);
+  useEffect(() => {
+    colorsRef.current = colors;
+    lookupRef.current?.setColors(colors);
+  }, [colors]);
   /** The scans on screen, including held ones and ones fading out. */
   const [drawnScans, setDrawnScans] = useState<readonly string[]>([]);
   const avail = useDistrictAvailability();
@@ -418,6 +427,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     registerSource(shared.url);
     map.addSource(SHARED_SOURCE, { type: "vector", url: shared.url });
     lookupRef.current = addLookupLayer(map, shared, SHARED_SOURCE, "selected-line", (zoom) => between(zoom, LINE_WIDTH.lo, LINE_WIDTH.hi), MAP_COLORS.districtEdge);
+    lookupRef.current.setColors(colorsRef.current);
     map.on("mousemove", (e) => {
       const index = sharedIndex(stateRef.current.era);
       if (index === undefined || !clickRef.current) return;
@@ -475,6 +485,8 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
       });
       if (!interactive) map.jumpTo({ ...cam, padding: storyPadding(map) });
       mapRef.current = map;
+      setZoom(map.getZoom());
+      map.on("zoomend", () => setZoom(map.getZoom()));
       // Phone rotation or a resized window changes how much map the card leaves visible.
       map.on("resize", () => {
         if (!interactive) map.setPadding(storyPadding(map));
@@ -613,7 +625,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         role={interactive ? "region" : "img"}
         aria-label={interactive ? "Zoning map explorer" : "Historic zoning map of San Francisco"}
       />
-      {showLegend && <Legend compact={!interactive} />}
+      {showLegend && <Legend compact={!interactive} fillOpacity={FILL_AT_ZOOM[state.view](zoom)} />}
       {comingSoon && (
         <p className="map-pending" data-testid="classification-coming">
           District colours for {era?.label ?? state.era} are coming.
