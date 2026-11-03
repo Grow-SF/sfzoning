@@ -19,14 +19,15 @@ import hashlib
 import json
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import geopandas as gpd
-import mapbox_vector_tile
 import numpy as np
 import pandas as pd
 import pyogrio
 import shapely
+from mapbox_vector_tile.Mapbox import vector_tile_pb2
 from pmtiles.reader import MmapSource, all_tiles
 
 from sfzmaps import config
@@ -71,14 +72,23 @@ def published_series(candidates: list[str]) -> list[str]:
     return [s for s in candidates if (_series_dir(s) / "parcels.fgb").exists()]
 
 
+MERGE_COLUMNS = ["blklot", "category", "code", "height_code", "confidence"]
+
+
+def _read_all(series: list[str], name: str, columns: list[str] | None = None) -> list[gpd.GeoDataFrame]:
+    """Each series' `name` file, read in parallel (the reader runs outside the GIL)."""
+    with ThreadPoolExecutor(max_workers=min(8, len(series) or 1)) as pool:
+        return list(pool.map(lambda s: pyogrio.read_dataframe(_series_dir(s) / name, columns=columns,
+                                                               use_arrow=True), series))
+
+
 def merge(series: list[str]) -> gpd.GeoDataFrame:
     """One row per footprint with every era's columns. A row's position is its lot number; where
     lots overlap, the map draws the lowest number, which is the smallest lot."""
     wkb: dict[str, bytes] = {}
     frames: list[pd.DataFrame] = []
     geoms: list[gpd.GeoDataFrame] = []
-    for s in series:
-        g = pyogrio.read_dataframe(_series_dir(s) / "parcels.fgb")
+    for s, g in zip(series, _read_all(series, "parcels.fgb", MERGE_COLUMNS)):
         for lot, shape in zip(g["blklot"], g.geometry.to_wkb()):
             if wkb.setdefault(lot, shape) != shape:
                 raise ValueError(f"lot {lot} has different geometry in {s}; "
@@ -103,7 +113,9 @@ def _numbered(lots: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     area = lots.geometry.area.to_numpy()
     a, b = lots.sindex.query(lots.geometry, predicate="intersects")
     touching = a != b
-    overlap = shapely.area(shapely.intersection(lots.geometry.values[a[touching]], lots.geometry.values[b[touching]])) > 0
+    shapes = np.asarray(lots.geometry.values)
+    # interiors meet: the lots share area (a third of the time of measuring each intersection)
+    overlap = shapely.relate_pattern(shapes[a[touching]], shapes[b[touching]], "T********")
     overlapping = np.unique(a[touching][overlap])
     first = overlapping[np.argsort(area[overlapping], kind="stable")]
     rest = np.setdiff1d(np.arange(len(lots)), overlapping)
@@ -122,28 +134,53 @@ def _ring_segments(geom) -> list[tuple[tuple[int, int], tuple[int, int]]]:
     return out
 
 
+def _segments(geoms) -> np.ndarray:
+    """_ring_segments of every geometry, in order, as an (n, 4) int64 array (ax, ay, bx, by)."""
+    rings = shapely.get_rings(shapely.get_parts(np.asarray(geoms, dtype=object)))
+    if not len(rings):
+        return np.empty((0, 4), dtype=np.int64)
+    xy, ring = shapely.get_coordinates(rings, return_index=True)
+    xy = np.round(xy * EDGE_SNAP).astype(np.int64)
+    same_ring = ring[:-1] == ring[1:]
+    a, b = xy[:-1][same_ring], xy[1:][same_ring]
+    keep = (a != b).any(axis=1)
+    a, b = a[keep], b[keep]
+    swap = (a[:, 0] > b[:, 0]) | ((a[:, 0] == b[:, 0]) & (a[:, 1] > b[:, 1]))   # a < b as tuples
+    lo, hi = np.where(swap[:, None], b, a), np.where(swap[:, None], a, b)
+    return np.hstack([lo, hi])
+
+
 def district_edges(series: list[str]) -> tuple[gpd.GeoDataFrame, list[list[int]]]:
     """Every era's district lines with each stretch stored once: most edges run along the same
     streets year after year. Returns (lines tagged `s`, each set `s`'s era positions)."""
-    masks: dict[tuple, int] = {}
-    crs = None
-    for bit, s in enumerate(series):
-        districts = pyogrio.read_dataframe(_series_dir(s) / "districts.fgb")
-        crs = crs or districts.crs
-        for geom in districts.geometry:
-            for seg in _ring_segments(geom):
-                masks[seg] = masks.get(seg, 0) | (1 << bit)
-    by_mask: dict[int, list] = {}
-    for seg, mask in masks.items():
-        by_mask.setdefault(mask, []).append(seg)
+    frames = _read_all(series, "districts.fgb", [])
+    crs = next((d.crs for d in frames if d.crs is not None), None)
+    segs = [_segments(d.geometry.values) for d in frames]
+    allsegs = np.concatenate(segs) if segs else np.empty((0, 4), dtype=np.int64)
+    bits = np.concatenate([np.full(len(x), 1 << e, dtype=np.int64) for e, x in enumerate(segs)]) \
+        if segs else np.empty(0, dtype=np.int64)
+    # one entry per distinct segment, in order of first appearance, with the eras that draw it
+    order = np.lexsort(allsegs.T[::-1])                     # stable: a run starts at its first
+    ranked = allsegs[order]
+    starts = np.flatnonzero(np.r_[True, (ranked[1:] != ranked[:-1]).any(axis=1)]) \
+        if len(ranked) else np.empty(0, dtype=np.int64)
+    masks = np.bitwise_or.reduceat(bits[order], starts) if len(starts) else bits[:0]
+    first = order[starts]
+    by_first = np.argsort(first, kind="stable")
+    uniq, masks = ranked[starts][by_first], masks[by_first]
+    # grouped by era set (ascending), each group in order of first appearance
+    by_mask = np.argsort(masks, kind="stable")
+    uniq, masks = uniq[by_mask], masks[by_mask]
+    cuts = np.flatnonzero(np.r_[True, masks[1:] != masks[:-1]]) if len(masks) else starts[:0]
     rows, geometry, sets = [], [], []
-    for mask in sorted(by_mask):
-        coords = np.array(by_mask[mask], dtype=float) / EDGE_SNAP
+    for lo, hi in zip(cuts, [*cuts[1:], len(masks)]):
+        mask = masks[lo]
+        coords = uniq[lo:hi].reshape(-1, 2, 2).astype(float) / EDGE_SNAP
         chains = shapely.get_parts(shapely.line_merge(shapely.multilinestrings(shapely.linestrings(coords))))
         rows += [len(sets)] * len(chains)
         geometry += list(chains)
-        sets.append([e for e in range(len(series)) if mask >> e & 1])
-    log.info("%d edges in %d lines across %d year sets", len(masks), len(geometry), len(sets))
+        sets.append([e for e in range(len(series)) if int(mask) >> e & 1])
+    log.info("%d edges in %d lines across %d year sets", len(uniq), len(geometry), len(sets))
     return gpd.GeoDataFrame({"s": rows}, geometry=geometry, crs=crs), sets
 
 
@@ -241,15 +278,29 @@ def stale_series() -> list[str]:
 
 
 def lots_by_zoom(path: Path) -> dict[int, set[int]]:
-    """Every lot in each zoom's tiles, decoded as the browser decodes them. (GDAL's own reader
-    returns far too few lots from this archive's largest tiles, and reports no error.)"""
+    """Every lot in each zoom's tiles: each `parcels` feature's `i`, read from the tile's protobuf
+    the way the browser reads it (feature tags into the layer's keys and values), without
+    decoding geometry, which is what made a full decode slow. (GDAL's own reader returns far too
+    few lots from this archive's largest tiles, and reports no error.)"""
     found: dict[int, set[int]] = {}
     with path.open("rb") as f:
         get = MmapSource(f)
         for (z, _, _), data in all_tiles(get):
             raw = gzip.decompress(data) if data[:2] == b"\x1f\x8b" else data
-            features = mapbox_vector_tile.decode(raw).get("parcels", {}).get("features", [])
-            found.setdefault(z, set()).update(int(x["properties"]["i"]) for x in features)
+            tile = vector_tile_pb2.tile()
+            tile.ParseFromString(raw)
+            got = found.setdefault(z, set())
+            for layer in tile.layers:
+                if layer.name != "parcels" or "i" not in layer.keys:
+                    continue
+                key, values = list(layer.keys).index("i"), layer.values
+                for feature in layer.features:
+                    tags = feature.tags
+                    for j in range(0, len(tags) - 1, 2):
+                        if tags[j] == key:
+                            v = values[tags[j + 1]]
+                            # an integer is in one of these (the others stay 0)
+                            got.add(int(v.int_value + v.uint_value + v.sint_value))
     return found
 
 

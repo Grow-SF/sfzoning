@@ -82,9 +82,10 @@ def test_height_join_by_blklot(data, monkeypatch):
     assert g.loc["1000001", "height_code"] == "40-X" and g.loc["1001001", "height_code"] == "65-A"
     assert pd.isna(g.loc["1001002", "height_code"])
     assert g.loc["1000001", "code"] == "RH-1" and g.loc["1000001", "confidence"] == 0.9
-    # a height rerun after the zoning run republishes the zoning output
+    # a height rerun after the zoning run republishes the zoning output (forced: the stub's
+    # new answer comes from no input the fingerprint sees)
     raws["2000-digital-height"] = _raw([None], height=["80-B"])
-    assemble.run_series("2000-digital-height")
+    assemble.run_series("2000-digital-height", force=True)
     g = gpd.read_file(out / "parcels.fgb").set_index("blklot")
     assert g.loc["1000001", "height_code"] == "80-B"
 
@@ -135,10 +136,12 @@ def _has_pmtiles_driver() -> bool:
 
 
 @pytest.mark.skipif(not _has_pmtiles_driver(), reason="ogr2ogr lacks the PMTiles driver")
-def test_pmtiles_written(data, monkeypatch):
+def test_review_tiles_on_demand_only(data, monkeypatch):
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-1", "R-2", "R-4", "C-2", "M-1"]))
     out = assemble.run_series("1960")
     p = out / "1960-districts.pmtiles"
+    assert not p.exists()                     # publishing doesn't make them
+    assert assemble.review_tiles("1960") == p
     assert p.exists() and p.stat().st_size > 0
     assert p.read_bytes()[:7] == b"PMTiles"
     if shutil.which("pmtiles"):
@@ -281,6 +284,63 @@ def test_republish_rereads_nothing(data, monkeypatch):
     _overrides("blklot,code\n1000001,C-2\n")
     g = gpd.read_file(assemble.republish("1960") / "parcels.fgb").set_index("blklot")
     assert g.loc["1000001", "code"] == "C-2"
+
+
+# --- freshness ----------------------------------------------------------------------------
+
+@pytest.fixture
+def counted(data, monkeypatch):
+    """A 1960 series with one sheet file, and a read stub that counts its calls."""
+    sheet = config.WORK_DIR / "1960" / "1" / "labels.json"
+    sheet.parent.mkdir(parents=True)
+    sheet.write_text('{"labels": []}')
+    calls = []
+
+    def read(s, **k):
+        calls.append(s)
+        return _raw(["R-1", "R-1", "R-4", "R-4", "M-1"])
+
+    monkeypatch.setattr(assemble, "read_raw", read)
+    return sheet, calls
+
+
+def test_unchanged_inputs_skip_read_and_publish(counted):
+    _, calls = counted
+    out = assemble.run_series("1960")
+    files = [assemble._raw_path("1960"), *(out / n for n in assemble.PUBLISHED)]
+    before = [(p.read_bytes(), p.stat().st_mtime_ns) for p in files]
+    assert assemble.run_series("1960") == out
+    assert assemble.republish("1960") == out
+    assert calls == ["1960"]
+    assert [(p.read_bytes(), p.stat().st_mtime_ns) for p in files] == before
+
+
+def test_changed_inputs_rerun_what_they_affect(counted):
+    sheet, calls = counted
+    out = assemble.run_series("1960")
+    # an override changes only the publish: no new read
+    _overrides("blklot,code\n1000001,C-2\n")
+    g = gpd.read_file(assemble.run_series("1960") / "parcels.fgb").set_index("blklot")
+    assert g.loc["1000001", "code"] == "C-2" and calls == ["1960"]
+    # a sheet file the read uses changes: read again
+    sheet.write_text('{"labels": [1]}')
+    assemble.run_series("1960")
+    assert calls == ["1960", "1960"]
+    # a read that fell back on uncached regions is read again, even with nothing changed
+    prov = json.loads(assemble._prov_path("1960").read_text())
+    assemble._prov_path("1960").write_text(json.dumps(prov | {"cache_only": True, "region_misses": 2}))
+    assemble.run_series("1960")
+    assert calls == ["1960"] * 3
+    assert (out / "stats.json").exists()
+
+
+def test_read_code_inputs_are_the_readers_not_publishing_or_sheet_producers():
+    names = {p.relative_to(p.parents[1]).as_posix() if p.parent.name == "districts" else p.name
+             for p in assemble.read_inputs("1960")}
+    assert {"districts/read.py", "districts/labels.py", "districts/pattern.py",
+            "districts/regionread.py", "llm.py", "stitch.py", "transform.py"} <= names
+    assert not {"districts/assemble.py", "districts/categories.py", "warp.py", "refine.py",
+                "runner.py"} & names
 
 
 # --- overrides by block_num ---------------------------------------------------------------
