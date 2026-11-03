@@ -58,28 +58,50 @@ def merge_use_height(use: pd.DataFrame, height: pd.DataFrame, role: str) -> pd.D
     return out.sort_values("blklot").reset_index(drop=True)[COLUMNS]
 
 
+def pick_readings(rd: pd.DataFrame, col: str) -> pd.DataFrame:
+    """One reading per parcel from its readings on every covering sheet (columns blklot, col,
+    confidence, source_sheet, rank = sheet priority, label_ft): one with a code, nearest to the
+    printed label backing it, then the highest-priority sheet.  Each sheet also draws the next
+    sheets' streets, unzoned, for context; a parcel there takes whatever code its region
+    picked up from a label far away (1972: a band of the Sunset as P; 1960: the Tenderloin as
+    M-1), while the sheet that zones it prints its code nearby."""
+    key = rd.assign(_none=rd[col].isna())
+    key = key.sort_values(["_none", "label_ft", "rank"], kind="stable")
+    return key.drop_duplicates("blklot").drop(columns="_none").reset_index(drop=True)
+
+
+def readings(series: str, parcels, kind_order: list[str], kind: str) -> pd.DataFrame:
+    """Every parcel's reading of `kind` on every sheet of kind_order that covers it."""
+    from sfzmaps.districts import labels, sampling
+
+    col = "code" if kind == "use" else "height_code"
+    out = []
+    for rank, sid in enumerate(kind_order):
+        sub = parcels[(sampling.assign_sheets(parcels, series, sheets=[sid]) == sid).to_numpy()]
+        if not len(sub):
+            continue
+        log.info("%s sheet %s (%s): %d parcels", series, sid, kind, len(sub))
+        r = labels.assign_parcels(sub.reset_index(drop=True), config.WORK_DIR / series / sid,
+                                  all_parcels=parcels)
+        out.append(pd.DataFrame({"blklot": r["blklot"], col: r[col],
+                                 "confidence": r[f"{kind}_confidence"], "source_sheet": sid,
+                                 "rank": rank, "label_ft": r[f"{kind}_label_ft"]}))
+    cols = ["blklot", col, "confidence", "source_sheet", "rank", "label_ft"]
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame(columns=cols)
+
+
 def _read_b(series: str, parcels, order: list[str]) -> pd.DataFrame:
     """Reader B per sheet kind: use codes from use sheets, height codes from height sheets
-    (labels.sheet_role), each parcel on its highest-priority sheet of that kind."""
-    from sfzmaps.districts import labels, sampling
+    (labels.sheet_role); each parcel read on every sheet of that kind covering it, keeping
+    one reading (pick_readings)."""
+    from sfzmaps.districts import labels
 
     roles = labels.sheet_roles(series, order)
     log.info("%s sheet roles: %s", series, roles)
     parts = {}
-    for kind, col, conf in (("use", "code", "use_confidence"), ("height", "height_code", "height_confidence")):
+    for kind, col in (("use", "code"), ("height", "height_code")):
         kind_order = [s for s in order if roles[s] == kind]
-        sheet = sampling.assign_sheets(parcels, series, sheets=kind_order).to_numpy()
-        out = []
-        for sid in kind_order:
-            sub = parcels[sheet == sid]
-            if not len(sub):
-                continue
-            log.info("%s sheet %s (%s): %d parcels", series, sid, kind, len(sub))
-            r = labels.assign_parcels(sub.reset_index(drop=True), config.WORK_DIR / series / sid)
-            out.append(pd.DataFrame({"blklot": r["blklot"], col: r[col], "confidence": r[conf],
-                                     "source_sheet": sid}))
-        parts[kind] = pd.concat(out, ignore_index=True) if out else \
-            pd.DataFrame(columns=["blklot", col, "confidence", "source_sheet"])
+        parts[kind] = pick_readings(readings(series, parcels, kind_order, kind), col)
     return merge_use_height(parts["use"], parts["height"], SERIES[series].role)
 
 

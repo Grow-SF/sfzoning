@@ -243,6 +243,23 @@ def test_merge_use_height_reads():
     assert h.loc["a", "height_code"] is None and h.loc["a", "confidence"] == 0.0
 
 
+def test_a_lot_on_two_sheets_takes_the_reading_nearest_its_printed_label():
+    from sfzmaps.districts.read import pick_readings
+    inf = float("inf")
+    rd = pd.DataFrame({
+        "blklot": ["a", "a", "b", "b", "c", "c", "d", "d"],
+        "code": ["P", "R-1", "R-1", "R-2", "P", "R-3", None, "R-1"],
+        "confidence": [0.99, 0.9] * 4,
+        "source_sheet": ["6", "7"] * 4, "rank": [0, 1] * 4,
+        "label_ft": [7500.0, 500.0, 400.0, 300.0, inf, inf, inf, 900.0]})
+    m = pick_readings(rd, "code").set_index("blklot")
+    assert m.loc["a", "code"] == "R-1" and m.loc["a", "source_sheet"] == "7"  # 6 only draws it
+    assert m.loc["b", "code"] == "R-2"           # nearer label wins whatever the priority
+    assert m.loc["c", "code"] == "P"             # no label backs either: sheet priority
+    assert m.loc["d", "code"] == "R-1"           # a code beats none
+    assert len(m) == 4
+
+
 def test_unzoned_harbor_blocks_by_era(monkeypatch):
     monkeypatch.setattr(assemble, "UNZONED_UNTIL", {"1002": 1969})
     raw = _raw(["R-1", "R-1", "R-4", "R-4", "2R"])
