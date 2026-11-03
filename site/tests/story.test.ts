@@ -28,6 +28,12 @@ describe("validateStory", () => {
     expect(errs).toMatch(/empty title/);
     expect(errs).toMatch(/no sources/);
   });
+  it("catches a paragraph naming a colour with no colour-blind version", () => {
+    const named = { ...base, view: "allowed" as const, body: [{ kind: "p" as const, text: "The amber lots." }] };
+    expect(validateStory([named], ERAS).join("\n")).toMatch(/names "amber" but has no colour-blind/);
+    const both = { ...named, body: [{ kind: "p" as const, text: "The amber lots.", cvd: "The green lots." }] };
+    expect(validateStory([both], ERAS)).toEqual([]);
+  });
   it("catches an out-of-range camera", () => {
     const errs = validateStory([{ ...base, camera: { center: [0, 0], zoom: 30 } }], ERAS).join("\n");
     expect(errs).toMatch(/camera/);
