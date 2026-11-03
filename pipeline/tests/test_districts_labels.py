@@ -122,6 +122,11 @@ def test_a_lone_label_in_a_region_of_another_code_keeps_only_its_surroundings():
     by = {c: p for p, c, _ in out}
     assert by["R-3"].area == pytest.approx(np.pi * labels.SPLIT_MINOR_RADIUS_PX ** 2, rel=0.02)
     assert by["R-1"].contains(Point(1150, 50))          # beyond the disk: the main code
+    # printed twice it is a district of its own (Forest Hill 1980), even if outnumbered
+    many = [lab("R-1", x, 200) for x in (100, 300, 500, 700, 900)]
+    two = {c: p for p, c, _ in labels.assign_regions(
+        [region], many + [lab("R-3", 1500, 100), lab("R-3", 1700, 300)])}
+    assert two["R-3"].contains(Point(1900, 50))
     # two codes printed alike: neither dominates, an even split
     even = {c: p for p, c, _ in labels.assign_regions(
         [region], [lab("R-1", 500, 200), lab("R-3", 1500, 200)])}

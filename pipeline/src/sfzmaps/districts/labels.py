@@ -69,15 +69,20 @@ PLURALITY_MARGIN = 1.25  # ... by at least this factor over the runner-up (else 
 NO_PLURALITY = {"P", "OS", "C-1", "NC-1", "NC-2", "NC-3", "NC-S", "RC-1", "RC-2"}
 SPLIT_P_RADIUS_PX = 150  # ... and in a split region a P label takes at most this disk (~1 block)
 # A region that no heavy line closes (the page background, a district whose line stops short)
-# can hold many labels of one code and one or two of others.  Split evenly, a lone label took
+# can hold many labels of one code and a stray one of another.  Split evenly, a lone label took
 # as much as its neighbours (1960/1964: an R-3 printed by a small C-1 box at Restani made ~300
 # Mt Vernon lots R-3; 1964: an R-4 made 490 Silver Terrace lots R-4).  So when one code has at
 # least SPLIT_MAJORITY x the labels of any other (P and the NO_PLURALITY codes aside, capped
-# above), each other code keeps only this disk round its labels and the main code fills the
-# rest.  Chosen on the seam reviews' cases (wrong lots 1599 -> 1086 at 100 px; 150: 1154,
-# 200: 1244) and raising 1960/1964 agreement (same base drawings) 0.938 -> 0.951.
+# above), a code printed only SPLIT_LONE time keeps only this disk round its label and the
+# main code fills the rest.  Chosen on the seam reviews' cases (wrong lots 1718 -> 1204; 150
+# and 200 px did worse) and agreement between maps drawn on the same base (1960/1964
+# 0.939 -> 0.947, 1996/2000 0.689 -> 0.692).
 SPLIT_MINOR_RADIUS_PX = 100
 SPLIT_MAJORITY = 2
+# Only a code printed once is capped: in a huge unclosed region (1980 sheet 12) a code printed
+# several times nearby is a real district even when another code outnumbers it overall;
+# capping those made ~1,100 Forest Hill lots RH-2 from a label 3,000 ft away.
+SPLIT_LONE = 1
 MIN_REGIONS = 5          # fewer closed regions: boundary extraction failed, use the fallback
 FALLBACK_CONF = 0.3
 FALLBACK_BLOCK_FT = 20.0  # labels within this distance of a block count as in it
@@ -504,7 +509,7 @@ def _split(region: Polygon, labs: list[DistrictLabel]) -> list[tuple[Polygon, st
     if len(count) > 1 and top[0] >= SPLIT_MAJORITY * top[1]:
         main = max(count, key=count.get)
         for c in count:
-            if c != main:
+            if c != main and count[c] <= SPLIT_LONE:
                 radius[c] = SPLIT_MINOR_RADIUS_PX
     capped = [l for l in pts if l.code in radius]
     others = [l for l in pts if l.code not in radius]
