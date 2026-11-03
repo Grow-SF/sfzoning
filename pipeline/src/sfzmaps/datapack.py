@@ -71,6 +71,8 @@ def make_pack(md5s: list[str], cache: Path, out: Path) -> str:
                     body = _object_path(m, cache).read_bytes()
                 except FileNotFoundError:
                     raise DataPackError(f"object {m} is not in the DVC cache") from None
+                if hashlib.md5(body).hexdigest() != m.removesuffix(".dir"):
+                    raise DataPackError(f"object {m} in the DVC cache doesn't match its md5")
                 zi = zipfile.ZipInfo(m, _FIXED_DATE)
                 zi.compress_type = zipfile.ZIP_STORED
                 zi.external_attr = 0o644 << 16
