@@ -74,7 +74,7 @@ def prefer_closed(first: pd.DataFrame, later: pd.DataFrame, col: str) -> pd.Data
 def _read_b(series: str, parcels, order: list[str]) -> pd.DataFrame:
     """Reader B per sheet kind: use codes from use sheets, height codes from height sheets
     (labels.sheet_role), each parcel on its highest-priority sheet of that kind.  A parcel
-    that falls in that sheet's page background (labels.open_region: context streets zoned on
+    that falls in that sheet's page background (labels.open_regions: context streets zoned on
     another sheet) is read again on the next sheets that cover it, and takes the first read
     in a closed district; if there is none it keeps its first read."""
     from sfzmaps.districts import labels, sampling

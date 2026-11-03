@@ -68,9 +68,12 @@ SPLIT_P_RADIUS_PX = 150  # ... and in a split region a P label takes at most thi
 # The page background: sea, margins and the next sheet's streets, drawn for context and zoned on
 # that sheet, are one region with no heavy line closing it, so it took the code of whatever label
 # sat in it (1968: Golden Gate Park's P made Sunset blocks public; a C-2 on Portola made Miraloma
-# Park commercial).  It is the largest region running along at least this share of the neatline
-# (measured 1960/1968: it touches ~0.7 and covers 10M-25M px; no other region tops 0.25M px).
-OPEN_EDGE_SHARE = 0.5
+# Park commercial).  A heavy line running to the neatline can split it (1975 sheet 9: pieces
+# touching 0.36 and 0.34 of it, one holding a lone R-2 that made a seam of SoMa and the Mission
+# R-2), so every region running along at least this share of the neatline is "open": its
+# reading is only the fallback for a lot that no other sheet reads inside a closed district.
+# (Measured on every reader-B sheet: background pieces touch 0.11-1.0 of the neatline.)
+OPEN_EDGE_SHARE = 0.1
 OPEN_EDGE_PX = 3 * TOUCH_PX   # a region this close to the neatline runs along it
 MIN_REGIONS = 5          # fewer closed regions: boundary extraction failed, use the fallback
 FALLBACK_CONF = 0.3
@@ -420,18 +423,17 @@ def regions(page_img: np.ndarray, exclude: np.ndarray | None = None) -> list[Pol
     return free + solid
 
 
-def open_region(regs: list[Polygon], inside: np.ndarray) -> int | None:
-    """Index of the page-background region (see OPEN_EDGE_SHARE), or None.  inside: bool mask
-    of the area within the neatline."""
+def open_regions(regs: list[Polygon], inside: np.ndarray) -> list[int]:
+    """Indices of the regions running along the neatline (see OPEN_EDGE_SHARE).  inside: bool
+    mask of the area within the neatline."""
     cs, _ = cv2.findContours(inside.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     if not cs or not regs:
-        return None
+        return []
     ring = Polygon(max(cs, key=cv2.contourArea)[:, 0, :]).exterior
     if ring.length <= 0:
-        return None
-    edge = [i for i, r in enumerate(regs)
+        return []
+    return [i for i, r in enumerate(regs)
             if r.buffer(OPEN_EDGE_PX).intersection(ring).length >= OPEN_EDGE_SHARE * ring.length]
-    return max(edge, key=lambda i: regs[i].area) if edge else None
 
 
 def _polygons(mask: np.ndarray, connectivity: int, min_area: float) -> list[Polygon]:
@@ -742,7 +744,7 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
     labs = read_district_labels(series, sid)
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
     regs = regions(img, reading.exclusion_mask(img, _page_info(d)))
-    bg = open_region(regs, reading.neatline_mask(img)) if len(regs) >= MIN_REGIONS else None
+    bg = open_regions(regs, reading.neatline_mask(img)) if len(regs) >= MIN_REGIONS else []
     ptree = STRtree(list({g.wkb: g for g in parcels.geometry}.values()))
     share: dict[int, float] = {}
 
@@ -782,12 +784,12 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
                          "open": _in_open(parcels, regs, bg, transform)})
 
 
-def _in_open(parcels, regs: list[Polygon], bg: int | None, transform: SheetTransform) -> np.ndarray:
-    """Per parcel: most of its area lies in the page-background region (open_region)."""
+def _in_open(parcels, regs: list[Polygon], bg: list[int], transform: SheetTransform) -> np.ndarray:
+    """Per parcel: most of its area lies in regions along the neatline (open_regions)."""
     import shapely
 
     out = np.zeros(len(parcels), bool)
-    w = _poly_to_world(regs[bg], transform) if bg is not None else None
+    w = _poly_to_world(unary_union([regs[i] for i in bg]), transform) if bg else None
     if w is None or w.is_empty or not len(parcels):
         return out
     geoms = np.asarray(parcels.geometry)
