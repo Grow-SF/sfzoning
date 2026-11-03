@@ -586,6 +586,8 @@ def ship(
     base: str = typer.Option("origin/main", "--base", help="What the branch merges into."),
     dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Say what would upload; upload nothing."),
     yes: bool = typer.Option(False, "--yes", help="Ship even if it takes more than 500 requests."),
+    repack: bool = typer.Option(False, "--repack", help="Also move small objects stored alone into "
+                                "data packs (once, from the old one-object-per-request layout)."),
 ) -> None:
     """When a branch is ready to merge: upload the answers and data this commit needs that
     `--base` hasn't shipped, to the Blob store, and commit the new answer pack's record (push it
@@ -594,7 +596,7 @@ def ship(
     from sfzmaps import ship as ship_mod
 
     try:
-        r = ship_mod.ship(base, dry_run=dry_run, yes=yes)
+        r = ship_mod.ship(base, dry_run=dry_run, yes=yes, repack=repack)
     except ship_mod.ShipError as e:
         typer.echo(f"ship: {e}", err=True)
         raise typer.Exit(1)

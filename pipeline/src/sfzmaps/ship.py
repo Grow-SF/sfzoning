@@ -47,6 +47,8 @@ NEEDED_PREFIX = "cache/needed"
 SHIPPED_PREFIX = "cache/shipped"
 DATAPACK_PREFIX = "cache/datapacks"
 MAX_REQUESTS = 500                   # a ship making more than this needs --yes
+MULTIPART_MIN = 50_000_000           # blob-put.mjs: larger files go up in parts ...
+PART_BYTES = 64 * 1024 * 1024        # ... of this size, one at a time (keep the two equal)
 PULL_WORKERS = 4                     # downloads at once: a browser's tile load, not a burst
 PULL_WORKERS_PACKS = 2               # data packs (up to 256 MB each) downloaded at once
 RETRY_STATUS = {403, 429, 500, 502, 503, 504}
@@ -202,10 +204,14 @@ def known_keys(records: dict[str, dict], client=None) -> dict[str, str]:
 # --- the store's listing and uploads (node, @vercel/blob, token in site/.env.local) ----------------
 
 def _node(script: str, args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
+    """Run a site script; node reads the token from site/.env.local, or from the file
+    SFZMAPS_ENV_FILE names (e.g. the main checkout's, from a worktree that has none)."""
     site = _repo_root() / "site"
-    if not (site / ".env.local").exists():
-        raise ShipError("site/.env.local is missing (BLOB_READ_WRITE_TOKEN, from `vercel env pull`)")
-    return subprocess.run(["node", "--env-file=.env.local", f"scripts/{script}", *args], cwd=site,
+    env_file = Path(os.environ.get("SFZMAPS_ENV_FILE") or site / ".env.local")
+    if not env_file.exists():
+        raise ShipError(f"{env_file} is missing (BLOB_READ_WRITE_TOKEN, from `vercel env pull`); "
+                        "SFZMAPS_ENV_FILE may name another")
+    return subprocess.run(["node", f"--env-file={env_file}", f"scripts/{script}", *args], cwd=site,
                           input=stdin, capture_output=True, text=True)
 
 
@@ -312,6 +318,11 @@ def _list_calls(held: dict[str, int]) -> int:
     return max(1, math.ceil(dvc / 1000)) + max(1, math.ceil((len(held) - dvc) / 1000))
 
 
+def put_requests(nbytes: int) -> int:
+    """Requests blob-put.mjs makes to upload a file of this size."""
+    return 1 if nbytes <= MULTIPART_MIN else 2 + math.ceil(nbytes / PART_BYTES)
+
+
 def datapack_name(sha: str) -> str:
     return f"{DATAPACK_PREFIX}/{sha}.zip"
 
@@ -360,13 +371,17 @@ def prior_manifests(base: str, client) -> list[dict]:
     return out
 
 
-def ship(base: str = "origin/main", dry_run: bool = False, yes: bool = False) -> ShipReport:
+def ship(base: str = "origin/main", dry_run: bool = False, yes: bool = False,
+         repack: bool = False) -> ShipReport:
     """Upload what this commit needs that the store lacks, confirm it, publish the shipped
     manifest, and commit the records (pack record, pipeline/cache-needed.json).
 
     A data object stays in the data pack an earlier manifest (this branch's, or one on `base`)
     put it in, or alone if it's already stored alone; the rest go into new data packs (under
-    datapack.SINGLE_MIN) or alone. More than MAX_REQUESTS requests need `yes`."""
+    datapack.SINGLE_MIN) or alone. More than MAX_REQUESTS requests need `yes`.
+
+    `repack` also packs the small objects already stored alone (a one-time move from v1, where
+    every object was stored alone); those single copies stay on the store."""
     preflight(base)
     client = _client()
     keys, unknown = needed_answers()
@@ -394,12 +409,16 @@ def ship(base: str = "origin/main", dry_run: bool = False, yes: bool = False) ->
                     and held.get(datapack_name(sha)) == pbytes:
                 where[m] = sha
                 data_packs[sha] = pbytes
-    missing = [m for m in objs if m not in where and object_name(m) not in held]
+    missing = [m for m in objs if m not in where and (object_name(m) not in held
+                                                       or (repack and size[m] < datapack.SINGLE_MIN))]
     packs, singles = datapack.plan_packs({m: size[m] for m in missing})
     nbytes = sum(size[m] for m in missing)
     nb = needed_bytes(keys)
     keys_sha = hashlib.sha256(nb).hexdigest()
-    requests = (2 * _list_calls(held) + len(packs) + len(singles) + (2 if new else 0) + 1
+    # a pack's zip adds about 100 bytes per member to the objects' own bytes
+    requests = (2 * _list_calls(held)
+                + sum(put_requests(sum(size[m] + 100 for m in p)) for p in packs)
+                + sum(put_requests(size[m]) for m in singles) + (2 if new else 0) + 1
                 + (f"{NEEDED_PREFIX}/{keys_sha}.keys.gz" not in held))
 
     def report(pack_sha=None) -> ShipReport:
