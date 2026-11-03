@@ -154,16 +154,17 @@ anyone) gets it with `uv run sfzmaps pull` and builds at $0 with nothing to do.
   with an index of every answer's sha256), and the full list of needed answers. Then it commits
   the pack's record (`pipeline/cache-packs/<sha>.json`) and `pipeline/cache-needed.json`: push
   them with the branch. Uploads come first and records last, and nothing is ever overwritten:
-  every name is the hash of its bytes. Requests stay few and one at a time: one listing call
-  per 1,000 names, one request per file up to 50 MB, and larger files in 64 MB parts sent one
-  after another. `--dry-run` says what would upload and how many requests it takes; more than
+  every name is the hash of its bytes. Requests stay few: one listing call per 1,000 names,
+  then one file at a time, one request per file up to 100 MB; a larger file goes up with the
+  SDK's multipart upload (`put(..., { multipart: true })`, which `@vercel/blob` 2.8.2 splits
+  into 8 MB parts, sends 8 at once in Node and retries part by part). `--dry-run` says what would upload and how many requests it takes; more than
   500 need `--yes`. `--repack` (run once, for PR #28) also moved the small objects that older
   ships stored alone into packs; it shipped 13 packs (3.46 GB) in about 95 requests.
 - **`sfzmaps pull`** applies the packs recorded at this commit (sha-checked, put-if-absent) and
   fetches the data its `dvc.lock` names that the local DVC cache lacks, then checks it out:
-  each data pack holding a missing object once (2 at a time; every member md5-checked, written
-  atomically, present ones skipped, so an interrupted pull resumes), then single objects (4 at
-  a time, md5-checked). Commits shipped before data packs (version 1 manifests) still pull, one
+  each data pack holding a missing object once (4 at a time; every member md5-checked, written
+  atomically, present ones skipped, so an interrupted pull resumes), then single objects (also
+  4 at a time, md5-checked). Commits shipped before data packs (version 1 manifests) still pull, one
   request per object. Public URLs, no token. (`pull-drive` is the older Drive download.)
 - **The merge gate.** The `Cache shipped` workflow checks every PR touching the pipeline, with
   public reads only: every recorded pack and needed answer, and every data object (in a data
@@ -177,6 +178,12 @@ anyone) gets it with `uv run sfzmaps pull` and builds at $0 with nothing to do.
   records whatever couldn't be replayed (its answers aren't cached under today's prompt) in
   `pipeline/cache-baseline.json`, by exact md5, accepted as it is; `--check` lists live
   artifacts still without a record.
+- **The store's limits.** These settings come from Vercel's Blob docs, not from tests against
+  the store (testing there risks its DDoS protection). Pro rate limits are 4,500 advanced
+  operations a minute (75/s) and 7,200 simple ones (120/s), counted per blob: "Deleting 100
+  blobs in a batch counts as 100 operations, not one." Deletes are free but count as advanced
+  operations. Multipart parts must be at least 5 MB and equal in size except the last, and the
+  docs recommend multipart for files over 100 MB.
 - **Never delete an answer to force a re-read**: packs keep one answer per key. Change the prompt
   or its context instead (the key changes).
 

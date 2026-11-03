@@ -20,7 +20,7 @@
 
 - **Pack rule:** objects under `SINGLE_MIN = 8 MB` go in packs of at most `PACK_MAX = 256 MB`. Larger objects are stored alone, as now. For today's data that's about 14 packs plus 213 single objects, so a fresh pull makes about 230 requests instead of 10,450.
 - Names are content hashes, nothing on the store is ever overwritten or deleted, and records are written last, as `ship` does now.
-- Requests: one list call per 1,000 names; uploads and downloads at most 2–4 at a time. `ship --dry-run` prints the number of requests it would make, and `ship` refuses more than 500 without `--yes`.
+- Requests: one list call per 1,000 names; uploads one file at a time (files over 100 MB with the SDK's multipart, 8 MB parts, 8 at once); downloads 4 at a time, packs and single objects alike. `ship --dry-run` prints the number of requests it would make, and `ship` refuses more than 500 without `--yes`.
 - Old shipped manifests (v1: objects stored alone) must still pull and pass the merge gate, so older commits and `git bisect` keep working.
 - Tests: only those listed. Never read or print `site/.env.local`; node reads it.
 
@@ -65,7 +65,7 @@
 
 **Files:** Modify `ship.py` (`pull`, `check_shipped`); Test `test_ship.py`
 
-- `pull` (v2): download each needed pack once, 2 at a time, and `apply_pack` it; fetch single objects as now. With v1, behaviour is unchanged.
+- `pull` (v2): download each needed pack once, 4 at a time, and `apply_pack` it; fetch single objects as now. With v1, behaviour is unchanged.
 - `check_shipped`: for v2, every object is either in a pack listed in `data_packs` or stored alone, and `ship` confirmed each pack's size by listing.
 
 - [ ] Tests: `test_pull_v2_applies_packs_and_singles` (a fake client serving a pack and one single object; the DVC cache ends up complete); `test_pull_v1_still_works`.
@@ -84,6 +84,6 @@
 The owner asked: "be sure to efficiently delete the unused files from blobstore when done".
 
 - [ ] Add `sfzmaps prune --dry-run` and `site/scripts/blob-del.mjs`. "Used" means named by the shipped manifest of `main`, or by an open PR branch's `cache-needed.json`: every listed pack, single object, answer pack, needed list and manifest. "Unused" means anything else under `dvc/` and `cache/`. Tiles and stats the site publishes are out of scope.
-- [ ] One listing finds the candidates. Delete in batches of up to 1,000 URLs per `del()` call (the Blob SDK takes an array), one batch at a time. A final listing confirms.
+- [ ] One listing finds the candidates. Delete in batches of 100 URLs per `del()` call (the Blob SDK takes an array), one batch at a time, paced to at most 50 deletes per second (one batch every 2 seconds or slower). Vercel counts operations per blob ("Deleting 100 blobs in a batch counts as 100 operations, not one"), and deletes, though free, are advanced operations, limited to 4,500 a minute (75/s) on Pro; 50/s stays well under that. A final listing confirms. Don't test against the store first.
 - [ ] Refuse to run when `main`'s manifest is v1, and when any used name is missing from the listing.
 - [ ] Old commits shipped before this change can't be pulled afterwards; say so in the README. Report the names and bytes deleted and the requests made.

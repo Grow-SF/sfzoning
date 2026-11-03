@@ -20,8 +20,10 @@ Nothing leaves the machine before that. `sfzmaps pull` fetches a commit's packs 
 Requests are kept to the fewest that get the data (a burst of per-object checks once tripped
 Vercel's DDoS protection): ship learns what the store holds from its list API (one call per
 1,000 names, site/scripts/blob-list.mjs), uploads only what's missing, one file at a time
-(site/scripts/blob-put.mjs: one request per file up to 50 MB; larger ones in 64 MB parts sent
-one after another, 2 + parts requests), lists once more to confirm, then publishes a *shipped
+(site/scripts/blob-put.mjs: one request per file up to 100 MB; a larger one with the SDK's
+multipart upload, put(..., { multipart: true }), which @vercel/blob 2.8.2 splits into 8 MB
+parts sent 8 at once in Node, retrying failed parts: 2 + parts requests), lists once more to
+confirm, then publishes a *shipped
 manifest* (cache/shipped/<sha>.json, version 2: every object, the data pack each small one is
 in, and every pack it confirmed, for this dvc.lock). An object a pack on main already holds
 keeps that pack; only new small objects go into new packs. `ship --dry-run` prints the
@@ -29,8 +31,15 @@ requests it would make; more than MAX_REQUESTS need --yes. `ship --repack` (once
 version 1 layout where every object was stored alone) packs the small objects too.
 pipeline/cache-needed.json names it. The merge gate then reads two files and the pack indexes,
 never one request per object; pull reads the manifest and fetches only what it lacks: each
-data pack holding a missing object once (2 at a time), then single objects (4 at a time).
-Version 1 manifests (older commits) still pull and pass the gate. A name is only ever published after its object is uploaded, so no read is ever made of
+data pack holding a missing object once, then single objects, 4 at a time for both.
+Version 1 manifests (older commits) still pull and pass the gate.
+
+Vercel's Blob docs set the limits these settings sit under. Pro rate limits: 4,500 advanced
+operations a minute (75/s) and 7,200 simple ones (120/s), counted per blob: "Deleting 100
+blobs in a batch counts as 100 operations, not one." Multipart parts are at least 5 MB and
+equal in size except the last, and the docs recommend multipart for files over 100 MB.
+
+A name is only ever published after its object is uploaded, so no read is ever made of
 a missing object, and downloads need no cache-busting: they are ordinary cacheable CDN reads.
 The token stays in site/.env.local, read by node.
 """
@@ -57,10 +66,9 @@ NEEDED_PREFIX = "cache/needed"
 SHIPPED_PREFIX = "cache/shipped"
 DATAPACK_PREFIX = "cache/datapacks"
 MAX_REQUESTS = 500                   # a ship making more than this needs --yes
-MULTIPART_MIN = 50_000_000           # blob-put.mjs: larger files go up in parts ...
-PART_BYTES = 64 * 1024 * 1024        # ... of this size, one at a time (keep the two equal)
-PULL_WORKERS = 4                     # downloads at once: a browser's tile load, not a burst
-PULL_WORKERS_PACKS = 2               # data packs (up to 256 MB each) downloaded at once
+MULTIPART_MIN = 100_000_000          # blob-put.mjs: larger files go up multipart (the SDK's) ...
+PART_BYTES = 8 * 1024 * 1024         # ... in the SDK's 8 MB parts (keep both equal to blob-put.mjs)
+PULL_WORKERS = 4                     # downloads at once, data packs and single objects alike
 RETRY_STATUS = {403, 429, 500, 502, 503, 504}
 RETRY_WAIT_S = (2, 8, 30)
 
@@ -530,8 +538,8 @@ def shipped_manifest(client=None) -> dict:
 def pull(dvc_checkout: bool = True) -> tuple[int, int]:
     """Fetch this commit's packs and data from the Blob store; (answer packs applied, objects
     fetched). Reads the shipped manifest, then fetches only what's missing locally: with a v2
-    manifest, each data pack holding a missing object once (PULL_WORKERS_PACKS at a time), then
-    the objects stored alone (PULL_WORKERS at a time). A v1 manifest stores every object alone."""
+    manifest, each data pack holding a missing object once, then the objects stored alone, both
+    PULL_WORKERS at a time. A v1 manifest stores every object alone."""
     client = _client()
     manifest = shipped_manifest(client)
     if manifest["lock_md5"] != lock_md5():
@@ -567,7 +575,7 @@ def pull(dvc_checkout: bool = True) -> tuple[int, int]:
     def fetch(md5: str) -> None:
         download(object_name(md5), object_path(md5, cache), "md5", _md5_hex(md5), client)
 
-    with ThreadPoolExecutor(PULL_WORKERS_PACKS) as ex:   # packs are large: fewer at once
+    with ThreadPoolExecutor(PULL_WORKERS) as ex:
         list(ex.map(fetch_pack, sorted(by_pack)))
     lost = sorted(m for ms in by_pack.values() for m in ms if not object_path(m, cache).exists())
     if lost:
