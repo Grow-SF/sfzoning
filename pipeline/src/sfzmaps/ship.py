@@ -48,6 +48,7 @@ SHIPPED_PREFIX = "cache/shipped"
 DATAPACK_PREFIX = "cache/datapacks"
 MAX_REQUESTS = 500                   # a ship making more than this needs --yes
 PULL_WORKERS = 4                     # downloads at once: a browser's tile load, not a burst
+PULL_WORKERS_PACKS = 2               # data packs (up to 256 MB each) downloaded at once
 RETRY_STATUS = {403, 429, 500, 502, 503, 504}
 RETRY_WAIT_S = (2, 8, 30)
 
@@ -498,8 +499,10 @@ def shipped_manifest(client=None) -> dict:
 # --- pull -----------------------------------------------------------------------------------------
 
 def pull(dvc_checkout: bool = True) -> tuple[int, int]:
-    """Fetch this commit's packs and data from the Blob store; (packs applied, objects fetched).
-    Reads the shipped manifest, then fetches only what's missing locally, PULL_WORKERS at a time."""
+    """Fetch this commit's packs and data from the Blob store; (answer packs applied, objects
+    fetched). Reads the shipped manifest, then fetches only what's missing locally: with a v2
+    manifest, each data pack holding a missing object once (PULL_WORKERS_PACKS at a time), then
+    the objects stored alone (PULL_WORKERS at a time). A v1 manifest stores every object alone."""
     client = _client()
     manifest = shipped_manifest(client)
     if manifest["lock_md5"] != lock_md5():
@@ -517,12 +520,32 @@ def pull(dvc_checkout: bool = True) -> tuple[int, int]:
         applied_n += 1
     cache = dvc_cache()
     todo = [m for m in manifest["objects"] if not object_path(m, cache).exists()]
+    where = (manifest.get("where") or {}) if manifest.get("version") == 2 else {}   # v1: all alone
+    by_pack: dict[str, set[str]] = {}
+    for m in todo:
+        if m in where:
+            by_pack.setdefault(where[m], set()).add(m)
+
+    def fetch_pack(sha: str) -> None:
+        with tempfile.TemporaryDirectory(prefix="sfzmaps-pull-") as tmp:
+            zp = Path(tmp) / f"{sha}.zip"
+            download(datapack_name(sha), zp, "sha256", sha, client)
+            try:
+                datapack.apply_pack(zp, cache, by_pack[sha])
+            except datapack.DataPackError as e:
+                raise ShipError(str(e)) from None
 
     def fetch(md5: str) -> None:
         download(object_name(md5), object_path(md5, cache), "md5", _md5_hex(md5), client)
 
+    with ThreadPoolExecutor(PULL_WORKERS_PACKS) as ex:   # packs are large: fewer at once
+        list(ex.map(fetch_pack, sorted(by_pack)))
+    lost = sorted(m for ms in by_pack.values() for m in ms if not object_path(m, cache).exists())
+    if lost:
+        raise ShipError(f"{len(lost)} object(s) weren't in the data pack the manifest names "
+                        f"(e.g. {lost[0]})")
     with ThreadPoolExecutor(PULL_WORKERS) as ex:
-        list(ex.map(fetch, todo))
+        list(ex.map(fetch, [m for m in todo if m not in where]))
     if dvc_checkout:
         subprocess.run(["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc", "checkout"],
                        cwd=config.PIPELINE_DIR, check=True)
@@ -572,6 +595,22 @@ def check_shipped(status_json: str, client=None) -> list[str]:
         problems.append("the shipped manifest doesn't describe this dvc.lock: ship again")
     if not set(manifest.get("outs", [])) <= set(manifest.get("objects", {})):
         problems.append("the shipped manifest lacks some of dvc.lock's outputs: ship again")
+    if manifest.get("version") == 2:
+        # Each object is in a data pack whose size ship confirmed by listing, or stored alone
+        # (also confirmed by listing). v1 manifests store every object alone.
+        where, dpacks = manifest.get("where") or {}, manifest.get("data_packs") or {}
+        stray = sorted(set(where) - set(manifest.get("objects", {})))
+        if stray:
+            problems.append(f"the shipped manifest places {len(stray)} object(s) it doesn't list "
+                            f"(e.g. {stray[0]}): ship again")
+        unlisted = sorted({sha for sha in where.values() if sha not in dpacks})
+        unlisted += sorted(sha for sha, n in dpacks.items()
+                           if not isinstance(n, int) or isinstance(n, bool) or n <= 0)
+        if unlisted:
+            problems.append(f"data pack {unlisted[0][:12]} wasn't confirmed on the store by "
+                            "`sfzmaps ship`: ship again")
+    elif manifest.get("version", 1) != 1:
+        problems.append(f"the shipped manifest's version {manifest.get('version')!r} is unknown")
     records = cachepack.recorded()
     for sha, rec in sorted(records.items()):
         if manifest.get("packs", {}).get(sha) != rec["bytes"]:

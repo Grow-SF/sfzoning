@@ -231,6 +231,47 @@ def test_ship_refuses_artifacts_of_unknown_provenance(data, monkeypatch):
     with pytest.raises(ship.ShipError, match="no answers record"):
         ship.ship()
 
+# --- pull -------------------------------------------------------------------------------------------
+
+def _publish(blob, manifest: dict, lock: str):
+    """Publish a shipped manifest for this dvc.lock and name it in cache-needed.json."""
+    config.PIPELINE_DIR.mkdir(parents=True, exist_ok=True)
+    (config.PIPELINE_DIR / "dvc.lock").write_text(lock)
+    body = json.dumps({"lock_md5": ship.lock_md5(), **manifest}).encode()
+    sha = hashlib.sha256(body).hexdigest()
+    blob.objects[f"{ship.SHIPPED_PREFIX}/{sha}.json"] = body
+    ship.needed_path().write_text(json.dumps({"shipped_sha": sha}))
+
+
+def test_pull_v2_applies_packs_and_singles(data, tmp_path, monkeypatch):
+    small, big = b"small object", b"a large object stored alone"
+    src = _cache_with(tmp_path / "src", {md5(small): small})
+    zp = tmp_path / "p.zip"
+    psha = datapack.make_pack([md5(small)], src, zp)
+    blob = FakeBlob({f"{ship.DATAPACK_PREFIX}/{psha}.zip": zp.read_bytes(),
+                     ship.object_name(md5(big)): big})
+    _publish(blob, {"version": 2, "outs": [], "packs": {},
+                    "objects": {md5(small): len(small), md5(big): len(big)},
+                    "where": {md5(small): psha}, "data_packs": {psha: zp.stat().st_size}}, "stages: {}\n")
+    cache = tmp_path / "dst"
+    monkeypatch.setattr(ship, "dvc_cache", lambda: cache)
+    monkeypatch.setattr(ship, "_client", blob.client)
+    ship.pull(dvc_checkout=False)
+    assert ship.object_path(md5(small), cache).read_bytes() == small
+    assert ship.object_path(md5(big), cache).read_bytes() == big
+    assert not any(r.url.path.endswith(ship.object_name(md5(small))) for r in blob.requests)
+
+
+def test_pull_v1_still_works(data, tmp_path, monkeypatch):
+    a, b = b"first object", b"second object"
+    blob = FakeBlob({ship.object_name(md5(a)): a, ship.object_name(md5(b)): b})
+    _publish(blob, {"outs": [], "packs": {}, "objects": {md5(a): len(a), md5(b): len(b)}}, "stages: {}\n")
+    cache = tmp_path / "dst"
+    monkeypatch.setattr(ship, "dvc_cache", lambda: cache)
+    monkeypatch.setattr(ship, "_client", blob.client)
+    assert ship.pull(dvc_checkout=False) == (0, 2)
+    assert ship.object_path(md5(a), cache).read_bytes() == a
+    assert ship.object_path(md5(b), cache).read_bytes() == b
 
 
 # --- the merge gate ---------------------------------------------------------------------------------
