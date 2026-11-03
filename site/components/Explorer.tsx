@@ -14,7 +14,7 @@ const START = { center: [-122.443, 37.765] as [number, number], zoom: 12.4 };
 
 export default function Explorer() {
   const mapRef = useRef<StoryMapHandle>(null);
-  const [index, setIndex] = useState(() => ERAS.findIndex((e) => e.id === "1948"));
+  const [index, setIndex] = useState(() => ERAS.findIndex((e) => e.id === "1960"));
   const [view, setView] = useState<View>("both");
   const [hit, setHit] = useState<ParcelHit | null>(null);
   const [rules, setRules] = useState<Rule[]>([]);
