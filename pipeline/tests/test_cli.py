@@ -166,5 +166,6 @@ def test_cli_downloads_listed(monkeypatch):
 
     res = CliRunner().invoke(cli.app, ["--help"])
     assert "downloads" in res.output
-    res = CliRunner().invoke(cli.app, ["downloads", "--help"])
-    assert res.exit_code == 0 and "--series" in res.output
+    res = CliRunner().invoke(cli.app, ["downloads", "--help"], env={"NO_COLOR": "1", "TERM": "dumb"})
+    import re
+    assert res.exit_code == 0 and "--series" in re.sub(r"\x1b\[[0-9;]*m", "", res.output)
