@@ -185,6 +185,11 @@ def read_inputs(series: str) -> list[Path]:
     made = sorted(p for p in hand.rglob("*") if p.is_file() and p != inputs.overrides_path(series)) \
         if hand.is_dir() else []
     info = SERIES.get(series)
+    from sfzmaps.districts import labels
+    if series in labels.TWIN_SERIES and labels.TWIN_FUSE:     # each sheet joins its twin's lines
+        twin = labels.TWIN_SERIES[1 - labels.TWIN_SERIES.index(series)]
+        sheets += sorted(p for n in ("page.png", "district_labels.json")
+                         for p in (config.WORK_DIR / twin).glob(f"*/{n}"))
     files = [*sheets, *made, inputs.label_scale_path(), config.REF_DIR / "parcels.parquet",
              *([_rules_csv()] if info is None or info.reader == "A" else []), pattern.LEGENDS_JSON,
              *fresh.code_files(["sfzmaps.districts.read"], cut=SHEET_PRODUCERS | _OTHER_READER[

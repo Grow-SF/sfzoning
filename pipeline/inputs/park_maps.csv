@@ -2,12 +2,12 @@ name,blklot,series
 10th Ave & Clement Park,1441007,1980
 24th & York Mini Park,4209015,today
 29th & Diamond Open Space,7536018,1980
-900 Innes,4646001,2000-digital-zoning
+900 Innes,4646001,today
 900 Innes,4646002,today
 900 Innes,4646003,today
 900 Innes,4646003A,today
 900 Innes,4646019,today
-900 Innes,4646022,2000-digital-zoning
+900 Innes,4646022,today
 Alamo Square,0799001,1964
 Alice Chalmers Playground,6474042,1964
 Alioto Mini Park,3595016,today
@@ -135,7 +135,6 @@ Gilman Playground,4945006,1980-1990-zoning
 Gilman Playground,4963003,1980
 Gilman Playground,4963004,today
 Glen Canyon Park,3030002,1964
-Glen Canyon Park,6706013,1996-2000-zoning
 Glen Canyon Park,6706014,1990-1996-zoning
 Glen Canyon Park,6706015,1990-1996-zoning
 Glen Canyon Park,6733A041,1980
@@ -145,8 +144,6 @@ Golden Gate Heights Park,2132B001,1964
 Golden Gate Park,1263011,1964
 Golden Gate Park,1264001,1964
 Golden Gate Park,1700001,1968
-Grand View Open Space,1928B045,1996-2000-zoning
-Grand View Open Space,1928B046,1996-2000-zoning
 Grand View Park,2034A001,1980-1990-zoning
 Grand View Park,2034A001A,1980-1990-zoning
 Grand View Park,2034A001E,1980-1990-zoning
@@ -173,7 +170,6 @@ Grand View Park,2034A046,1980
 Grand View Park,2034A047,1980
 Grand View Park,2034A048,1980
 Grattan Playground,1283001,1964
-Guy Place Mini Park,3749005,2000-digital-zoning
 Hamilton Rec Center,0703002,1964
 Hawk Hill,2336027,1964
 Hawk Hill,2337007,1980-1990-zoning
@@ -196,7 +192,7 @@ India Basin - Shoreline Park,4605017,1996-2000-zoning
 India Basin - Shoreline Park,4606026,1990-1996-zoning
 India Basin - Shoreline Park,4607024,1990-1996-zoning
 India Basin - Shoreline Park,4621021,1990-1996-zoning
-India Basin - Shoreline Park,4622007,2000-digital-zoning
+India Basin - Shoreline Park,4622007,today
 India Basin - Shoreline Park,4622008,1996-2000-zoning
 India Basin - Shoreline Park,4622012,1996-2000-zoning
 India Basin - Shoreline Park,4622016,1996-2000-zoning
@@ -283,18 +279,17 @@ Minnie and Lovie Ward Rec Center,7068001,1964
 Miraloma Playground,2955B003,1964
 Mission Bay Park,8711003,2000-digital-zoning
 Mission Bay Park,8711009,2000-digital-zoning
-Mission Bay Park,8720003,2000-digital-zoning
-Mission Bay Park,8720005,2000-digital-zoning
-Mission Bay Park,8720006,2000-digital-zoning
+Mission Bay Park,8720003,1996-2000-zoning
+Mission Bay Park,8720005,1996-2000-zoning
+Mission Bay Park,8720006,1996-2000-zoning
 Mission Bay Park,8720007,1996-2000-zoning
-Mission Bay Park,8720013,2000-digital-zoning
+Mission Bay Park,8720013,1996-2000-zoning
 Mission Creek Park,3809002,1996-2000-zoning
 Mission Creek Park,3809006,1996-2000-zoning
 Mission Creek Park,3810006,1980-1990-zoning
 Mission Creek Park,8707002,1980-1990-zoning
 Mission Creek Park,8708002,2000-digital-zoning
 Mission Creek Park,8710002,2000-digital-zoning
-Mission Creek Park,8730001,1996-2000-zoning
 Mission Creek Park,8731001,2000-digital-zoning
 Mission Dolores Park,3586001,1964
 Mission Dolores Park,3599001,1964
@@ -392,7 +387,7 @@ Twin Peaks,2643003,1980
 Twin Peaks,2643006,2000-digital-zoning
 Twin Peaks,2643007,1980-1990-zoning
 Twin Peaks,2643009,1964
-Twin Peaks,2643010,today
+Twin Peaks,2643010,2000-digital-zoning
 Twin Peaks,2643014,1980-1990-zoning
 Twin Peaks,2643017,today
 Twin Peaks,2643021,1980-1990-zoning

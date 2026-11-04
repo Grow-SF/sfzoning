@@ -6,6 +6,8 @@ import ParcelPopup from "./ParcelPopup";
 import StatsChart from "./StatsChart";
 import { ERAS } from "@/lib/eras";
 import { loadRules, type Rule } from "@/lib/rules";
+import { loadStats } from "@/lib/districts";
+import { parksLine } from "@/lib/stats";
 import type { View } from "@/content/schema";
 import styles from "./explorer.module.css";
 
@@ -41,6 +43,19 @@ export default function Explorer() {
   useEffect(() => {
     loadRules().then(setRules);
   }, []);
+
+  // The parks that existed in the era's year (the pipeline's park tally), under the map.
+  const [parks, setParks] = useState<{ era: string; line: string | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    const series = era.districtSeries;
+    if (!series) return;
+    loadStats(series).then((s) => live && setParks({ era: era.id, line: parksLine(s) }));
+    return () => {
+      live = false;
+    };
+  }, [era.id, era.districtSeries]);
+  const parksNow = parks && parks.era === era.id ? parks.line : null;
 
   useEffect(() => {
     mapRef.current?.apply({ era: era.id, view: effectiveView });
@@ -137,6 +152,12 @@ export default function Explorer() {
           <p className={styles.frameNote}>There is no scanned map for today, only the current zoning.</p>
         )}
       </div>
+
+      {parksNow && (
+        <p className={styles.parksNote} data-testid="explorer-parks">
+          In {era.label}: {parksNow}.
+        </p>
+      )}
 
       <StatsChart />
     </section>
