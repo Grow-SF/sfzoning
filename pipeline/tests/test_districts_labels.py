@@ -255,6 +255,36 @@ def test_a_far_label_in_an_open_region_leaves_the_lot_unread(tmp_path, monkeypat
     assert near["code"].isna().sum() < len(near)
 
 
+def test_label_fixes_recode_move_drop_and_add_read_labels():
+    """inputs/<series>/label_fixes.csv: a person's corrections, matched to the nearest read label
+    of the code within FIX_PX; the cached read itself is left alone."""
+    labs = [lab("M-1", 100, 100), lab("R-3", 500, 500), lab("C-2", 900, 900), lab("M-1", 300, 300)]
+    fixes = [{"x": "110", "y": "95", "code": "M-1", "fix_code": "RH-1"},           # misread
+             {"x": "505", "y": "500", "code": "R-3", "fix_code": "", "fix_x": "520", "fix_y": "560"},
+             {"x": "900", "y": "900", "code": "C-2", "fix_code": "-"},             # not a code
+             {"x": "50", "y": "60", "code": "", "fix_code": "C-2"},                 # missed
+             {"x": "700", "y": "700", "code": "R-1", "fix_code": "R-2"}]            # no match
+    out = {(l.code, l.x, l.y) for l in labels.apply_label_fixes(labs, fixes)}
+    assert out == {("RH-1", 100, 100), ("R-3", 520, 560), ("M-1", 300, 300), ("C-2", 50, 60)}
+
+
+def test_read_district_labels_applies_the_series_label_fixes(tmp_path, monkeypatch):
+    from sfzmaps import inputs
+
+    lm = sl.build(codes=CODES)
+    d = sl.write_sheet("1960", "s1", lm)
+    labels.save_labels(d / "district_labels.json", _label_list(), page_sha256=labels.page_sha(d),
+                       key=labels.read_key("1960"))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
+    fixes = tmp_path / "label_fixes.csv"
+    x, y = sl.CENTRES["MID"]
+    fixes.write_text(f"sheet,x,y,code,fix_code,fix_x,fix_y,note\ns1,{x},{y},C-2,C-3,,,\ns2,{x},{y},C-2,-,,,\n")
+    monkeypatch.setattr(inputs, "label_fixes_path", lambda s: fixes)
+    codes = {l.code for l in labels.read_district_labels("1960", "s1", client=Fake(lambda *a: 1 / 0))}
+    assert "C-3" in codes and "C-2" not in codes
+    assert {l.code for l in labels.load_labels(d / "district_labels.json")} >= {"C-2"}   # cache as read
+
+
 def test_hyphenate():
     assert [labels.hyphenate(c) for c in ("R1", "R4", "R1D", "RH1(D)", "R-1", "P", "NC-2", None)] == \
         ["R-1", "R-4", "R-1-D", "RH-1(D)", "R-1", "P", "NC-2", None]

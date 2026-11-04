@@ -266,7 +266,63 @@ def _dedupe(labs: list[DistrictLabel]) -> list[DistrictLabel]:
     return sorted(kept, key=lambda l: (l.y, l.x))
 
 
+FIX_PX = 40              # a label_fixes.csv row matches a read label of its code this close
+
+
+def label_fixes(series: str, sheet_id: str) -> list[dict]:
+    """inputs/<series>/label_fixes.csv rows for this sheet: a person's corrections of read labels,
+    checked on the scan (sheet, x, y, code: the label as read, or empty to add fix_code there;
+    fix_code: the code printed, or "-" when nothing is; fix_x, fix_y: where it applies, e.g. the small box a leader line points
+    to; note).  Never fixed by deleting a cached answer: the read stays, this corrects it."""
+    import csv
+
+    from sfzmaps import inputs
+
+    path = inputs.label_fixes_path(series)
+    if not path.exists():
+        return []
+    with open(path, newline="") as f:
+        return [r for r in csv.DictReader(f) if r["sheet"] == sheet_id]
+
+
+def apply_label_fixes(labs: list[DistrictLabel], fixes: list[dict]) -> list[DistrictLabel]:
+    """labs with each fix applied to the nearest label of its code within FIX_PX of its x, y."""
+    out = list(labs)
+    for fx in fixes:
+        x, y, code = float(fx["x"]), float(fx["y"]), normalise(fx["code"] or "")
+        if not code:            # a code printed there that the read missed
+            out.append(DistrictLabel(code=normalise(fx["fix_code"]), kind="use", x=x, y=y, confidence=1.0))
+            continue
+        near = [(np.hypot(l.x - x, l.y - y), i) for i, l in enumerate(out)
+                if l is not None and l.code == code and np.hypot(l.x - x, l.y - y) <= FIX_PX]
+        if not near:
+            log.warning("label fix %s at (%s, %s): no such label read", code, x, y)
+            continue
+        i = min(near)[1]
+        new = (fx.get("fix_code") or "").strip()
+        if new == "-":
+            out[i] = None
+            continue
+        upd = {"code": normalise(new) if new else out[i].code}
+        if (fx.get("fix_x") or "").strip():
+            upd["x"], upd["y"] = float(fx["fix_x"]), float(fx["fix_y"])
+        out[i] = out[i].model_copy(update=upd)
+    return [l for l in out if l is not None]
+
+
 def read_district_labels(series: str, sheet_id: str, *, client: llm.LLMClient | None = None,
+                         scale: float | None = None, tile: int = config.VISION_TILE,
+                         overlap: int = config.VISION_OVERLAP, force: bool = False
+                         ) -> list[DistrictLabel]:
+    """District codes with page-px positions (_read_labels), with inputs/<series>/label_fixes.csv
+    applied (label_fixes)."""
+    labs = _read_labels(series, sheet_id, client=client, scale=scale, tile=tile, overlap=overlap,
+                        force=force)
+    fixes = label_fixes(series, sheet_id)
+    return apply_label_fixes(labs, fixes) if fixes else labs
+
+
+def _read_labels(series: str, sheet_id: str, *, client: llm.LLMClient | None = None,
                          scale: float | None = None, tile: int = config.VISION_TILE,
                          overlap: int = config.VISION_OVERLAP, force: bool = False
                          ) -> list[DistrictLabel]:
