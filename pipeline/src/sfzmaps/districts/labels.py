@@ -533,13 +533,81 @@ def walls(page_img: np.ndarray) -> tuple[np.ndarray, float]:
     return kept, width_thr
 
 
-def walls_and_bridges(page_img: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+def walls_and_bridges(page_img: np.ndarray, extra: np.ndarray | None = None
+                      ) -> tuple[np.ndarray, np.ndarray, float]:
     """(walls: heavy lines bridged where the bridge is over ink, the same with every bridge,
-    the heavy width threshold), from one bridging pass."""
+    the heavy width threshold), from one bridging pass.  extra: more heavy-line ink to add
+    (the twin scan's, twin_heavy)."""
     heavy, width_thr = _heavy(page_img)
+    if extra is not None:
+        heavy = heavy | extra
     every = _bridge_all(heavy, BRIDGE_PX)
     kept = _ink_bridges(heavy, every, linework.binarize(page_img)) if INK_SHARE is not None else every
     return kept, every, width_thr
+
+
+# The 1996-2000 (sheets 25-36) and 2000-digital (sheets 1-12) maps are two scans of the same
+# drawings.  A district line inked on either is real, and a gap on one scan is often closed on
+# the other, so each sheet's heavy lines are joined with its twin's, registered onto it.
+# --check: 1996 ~ 2000 agreement 0.770 -> 0.799, 1990-1996 ~ 1996-2000 0.747 -> 0.753, seam-case
+# wrong lots 279 -> 248 (2000 Mission M-1 47 -> 11).
+TWIN_FUSE = True
+TWIN_SERIES = ("1996-2000-zoning", "2000-digital-zoning")
+TWIN_OFFSET = 24        # 1996-2000 sheet p(N + 24) is 2000-digital sheet p(N)
+
+
+def twin_of(series: str, sid: str) -> tuple[str, str] | None:
+    m = re.fullmatch(r".*-p(\d+)", sid)
+    if not m:
+        return None
+    n = int(m.group(1))
+    if series == TWIN_SERIES[0] and 1 <= n - TWIN_OFFSET <= 12:
+        return TWIN_SERIES[1], f"{TWIN_SERIES[1]}-p{n - TWIN_OFFSET:02d}"
+    if series == TWIN_SERIES[1] and 1 <= n <= 12:
+        return TWIN_SERIES[0], f"{TWIN_SERIES[0]}-p{n + TWIN_OFFSET}"
+    return None
+
+
+def register(img: np.ndarray, other: np.ndarray, labs: list, other_labs: list, f: int = 4
+             ) -> np.ndarray | None:
+    """2x3 affine taking `other`'s page px onto `img`'s: the shift by phase correlation on f x
+    downsampled pages, then an affine fitted (RANSAC) to the labels both scans read with the
+    same code (the scans differ by a shift and ~0.5% scale; ECC on the 1-bit pages drifted).
+    None with fewer than 6 matched labels."""
+    def small(a):
+        return cv2.resize(a, (a.shape[1] // f, a.shape[0] // f), interpolation=cv2.INTER_AREA).astype(np.float32)
+    a, b = small(img), small(other)
+    h, w = min(a.shape[0], b.shape[0]), min(a.shape[1], b.shape[1])
+    (dx, dy), _ = cv2.phaseCorrelate(b[:h, :w], a[:h, :w])
+    dx, dy = dx * f, dy * f
+    src, dst = [], []
+    for l in other_labs:
+        best = min((m for m in labs if m.code == l.code), default=None,
+                   key=lambda m: (m.x - l.x - dx) ** 2 + (m.y - l.y - dy) ** 2)
+        if best is not None and np.hypot(best.x - l.x - dx, best.y - l.y - dy) <= 60:
+            src.append((l.x, l.y))
+            dst.append((best.x, best.y))
+    if len(src) < 6:
+        return None
+    m, _ = cv2.estimateAffine2D(np.float32(src), np.float32(dst), ransacReprojThreshold=8.0)
+    return m
+
+
+def twin_heavy(img: np.ndarray, series: str, sid: str) -> np.ndarray | None:
+    """The twin scan's heavy lines registered onto this page, or None (no twin / no fit)."""
+    tw = twin_of(series, sid)
+    if tw is None:
+        return None
+    p = config.WORK_DIR / tw[0] / tw[1] / "page.png"
+    other = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE) if p.exists() else None
+    if other is None:
+        return None
+    m = register(img, other, read_district_labels(series, sid), read_district_labels(*tw))
+    if m is None:
+        return None
+    oh, _ = _heavy(other)
+    return cv2.warpAffine(oh.astype(np.uint8), m, (img.shape[1], img.shape[0]),
+                          flags=cv2.INTER_NEAREST) > 0
 
 
 def _component_polygon(mask: np.ndarray, ox: int, oy: int) -> Polygon | None:
@@ -1121,7 +1189,8 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
         transform = SheetTransform.from_json(json.loads((d / "transform.json").read_text()))
     labs = read_district_labels(series, sid)
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
-    kept, every_bridge, thr = walls_and_bridges(img)
+    extra = twin_heavy(img, series, sid) if TWIN_FUSE else None
+    kept, every_bridge, thr = walls_and_bridges(img, extra)
     wall = (kept, thr)
     exclude = reading.exclusion_mask(img, _page_info(d))
     regs = regions(img, exclude, wall)
