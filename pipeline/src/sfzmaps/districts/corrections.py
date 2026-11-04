@@ -10,7 +10,10 @@ block (site/lib/corrections.ts).  `sfzmaps corrections N`:
    prints the proposed code before anything is applied (`--apply`);
 3. with --apply, sets each lot's code in inputs/<series>/overrides.csv with a note naming the
    issue (shown on the lot card), and adds a review case per series and code change to
-   inputs/district_cases.csv, so the reader is measured against what readers found.
+   inputs/district_cases.csv, so the reader is measured against what readers found.  A drawn
+   area (a row with `area`: lng, lat corners) goes to inputs/<series>/area_overrides.geojson
+   instead: publishing gives it the code, splitting any lot its line cuts
+   (assemble.apply_area_overrides).
 
 The 1996-2000 and 2000-digital maps are two scans of one drawing: a correction to one is applied
 to the other too.
@@ -71,11 +74,23 @@ def check(rows: list[dict], parcels: pd.DataFrame) -> Checked:
     known = set(parcels["blklot"].astype(str))
     out = Checked()
     for i, r in enumerate(rows, 1):
-        s, b = str(r.get("series") or ""), str(r.get("blklot") or "").strip()
+        s, b = str(r.get("series") or ""), str(r.get("blklot") or "").strip().split("~")[0]
         code = _norm(str(r.get("proposed") or ""))
         info = SERIES.get(s)
+        area = r.get("area")
         if info is None or s == "today":
             out.problems.append(f"row {i}: series {s!r} isn't a historic map")
+        elif area is not None:
+            ok = isinstance(area, list) and len(area) >= 3 and all(
+                isinstance(p, list) and len(p) == 2 and all(isinstance(v, (int, float)) for v in p) for p in area)
+            if not ok:
+                out.problems.append(f"row {i}: the drawn area needs 3+ [lng, lat] corners")
+            elif not code or category_for(code, info.year) == "unknown":
+                out.problems.append(f"row {i}: {code or 'no code'} isn't a district code the {s} map uses")
+            else:
+                out.ok.append({"series": s, "blklot": b, "shown": "", "proposed": code,
+                               "note": str(r.get("note") or "").strip(), "area": [[float(x), float(y)] for x, y in area]})
+            continue
         elif b not in known:
             out.problems.append(f"row {i}: lot {b!r} isn't an active parcel")
         elif not code:
@@ -105,10 +120,36 @@ def note_for(issue: int, shown: str) -> str:
     return f"Corrected from a reader's report (issue #{issue}){seen}"
 
 
+def write_areas(rows: list[dict], issue: int) -> dict[str, int]:
+    """Append each drawn area to inputs/<series>/area_overrides.geojson (code, note naming the
+    issue; an earlier area from the same issue is replaced).  {series: areas written}."""
+    done: dict[str, int] = {}
+    tag = f"(issue #{issue})"
+    for r in rows:
+        if "area" not in r:
+            continue
+        path = inputs.area_overrides_path(r["series"])
+        fc = json.loads(path.read_text()) if path.exists() else {"type": "FeatureCollection", "features": []}
+        if done.get(r["series"]) is None:       # first area of this issue for the series: drop older copies
+            fc["features"] = [f for f in fc["features"] if tag not in str(f.get("properties", {}).get("note", ""))]
+        ring = r["area"] + ([r["area"][0]] if r["area"][0] != r["area"][-1] else [])
+        note = note_for(issue, "") + (f": {r['note']}" if r["note"] else "")
+        fc["features"].append({"type": "Feature", "properties": {"code": r["proposed"], "note": note},
+                               "geometry": {"type": "Polygon", "coordinates": [ring]}})
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(fc, indent=1) + "\n")
+        done[r["series"]] = done.get(r["series"], 0) + 1
+    return done
+
+
 def write_overrides(rows: list[dict], issue: int) -> dict[str, int]:
     """Set each lot's code in inputs/<series>/overrides.csv (replacing an earlier row for the
-    lot), with a note naming the issue.  {series: rows written}."""
+    lot), with a note naming the issue.  {series: rows written}.  Area rows are left to
+    write_areas."""
     done: dict[str, int] = {}
+    rows = [r for r in rows if "area" not in r]
+    if not rows:
+        return done
     for s, grp in pd.DataFrame(rows).groupby("series"):
         path = inputs.overrides_path(s)
         cur = (pd.read_csv(path, dtype=str, keep_default_na=False) if path.exists()
@@ -129,7 +170,7 @@ def write_cases(rows: list[dict], issue: int, cent: pd.DataFrame) -> int:
     Rows the reader left unread (no code shown) give no case: a case needs a wrong code."""
     from sfzmaps.districts.check import CASES_CSV
 
-    df = pd.DataFrame([r for r in rows if r["shown"] and r["shown"] != r["proposed"]])
+    df = pd.DataFrame([r for r in rows if "area" not in r and r["shown"] and r["shown"] != r["proposed"]])
     if df.empty:
         return 0
     c = cent.set_index("blklot")
@@ -164,6 +205,11 @@ def crops(rows: list[dict], dest: Path, parcels) -> list[Path]:
     out = []
     for r in rows:
         s, b = r["series"], r["blklot"]
+        if "area" in r:
+            p = _area_crop(r, dest, parcels)
+            if p is not None:
+                out.append(p)
+            continue
         raw = chk.loader(chk.WORK)(s)
         sheet = None
         if raw is not None:
@@ -192,3 +238,38 @@ def crops(rows: list[dict], dest: Path, parcels) -> list[Path]:
         cv2.imwrite(str(p), crop)
         out.append(p)
     return out
+
+
+def _area_crop(r: dict, dest: Path, parcels) -> Path | None:
+    """A scan crop round a drawn area, the area outlined in red, on the sheet that covers the
+    lots it touches most."""
+    import cv2
+    import geopandas as gpd
+    import numpy as np
+    from shapely.geometry import Polygon
+
+    from sfzmaps.districts import sampling
+    from sfzmaps.transform import SheetTransform
+
+    poly = gpd.GeoSeries([Polygon(r["area"])], crs=4326).to_crs(parcels.crs).iloc[0]
+    hit = parcels[parcels.intersects(poly)]
+    if hit.empty:
+        return None
+    sheets = sampling.assign_sheets(hit, r["series"]).dropna()
+    if sheets.empty:
+        return None
+    sheet = sheets.value_counts().index[0]
+    d = config.WORK_DIR / r["series"] / str(sheet)
+    if not (d / "page.png").exists():
+        return None
+    t = SheetTransform.from_json(json.loads((d / "transform.json").read_text()))
+    px = t.to_pixel(np.asarray(poly.exterior.coords)[:, :2])
+    img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
+    (x0, y0), (x1, y1) = px.min(axis=0) - 150, px.max(axis=0) + 150
+    x0, y0 = int(max(0, x0)), int(max(0, y0))
+    crop = cv2.cvtColor(img[y0:int(y1), x0:int(x1)], cv2.COLOR_GRAY2BGR)
+    cv2.polylines(crop, [np.round(px - (x0, y0)).astype(np.int32)], True, (0, 0, 255), 2)
+    cv2.putText(crop, f"{r['series']} area -> {r['proposed']}", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+    p = dest / f"{r['series']}_{r['blklot']}.png"
+    cv2.imwrite(str(p), crop)
+    return p

@@ -32,7 +32,13 @@ export type MapState = {
 
 export type Preload = { camera: { center: [number, number]; zoom: number }; scanSeries: string[] };
 
-export type StoryMapHandle = { apply: (state: MapState) => void };
+export type StoryMapHandle = {
+  apply: (state: MapState) => void;
+  /** Close the area being drawn (as a double-click does). */
+  finishArea: () => void;
+  /** Forget the area being drawn or last drawn. */
+  clearArea: () => void;
+};
 
 /** A clicked parcel: its tile properties plus the era it was clicked in. */
 export type ParcelHit = {
@@ -54,6 +60,10 @@ type Props = {
   onParcelClick?: (hit: ParcelHit | null) => void;
   /** Outline this parcel (by blklot) in the current era. */
   selectedBlklot?: string | null;
+  /** Explorer only: clicks place the corners of an area instead of opening lot cards; a
+   * double-click (or finishArea) closes it and calls onArea with its ring (lng, lat). */
+  drawing?: boolean;
+  onArea?: (ring: [number, number][]) => void;
   className?: string;
 };
 
@@ -172,7 +182,7 @@ const FILL_AT_ZOOM: Record<MapState["view"], (zoom: number) => number> = {
 };
 
 const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
-  { initial, interactive = false, onParcelClick, selectedBlklot = null, className },
+  { initial, interactive = false, onParcelClick, selectedBlklot = null, drawing = false, onArea, className },
   ref,
 ) {
   const container = useRef<HTMLDivElement>(null);
@@ -199,6 +209,9 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
   const lastEra = useRef<number | null>(null);
   const paintedEra = useRef(initial.era);
   const clickRef = useRef(onParcelClick);
+  const drawingRef = useRef(drawing);
+  const areaRef = useRef(onArea);
+  const corners = useRef<[number, number][]>([]);
   /** Sources that failed to load ("blocks", "scan-<series>", or "maplibre" itself). */
   const [failedSources, setFailedSources] = useState<ReadonlySet<string>>(() => new Set());
   const [state, setState] = useState<MapState>(initial);
@@ -407,7 +420,48 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     [paint, interactive, dropPreload],
   );
 
-  useImperativeHandle(ref, () => ({ apply: applyNow }), [applyNow]);
+  /** The area being drawn: its outline (closed once finished) and corner dots. */
+  const showArea = useCallback((closed: boolean) => {
+    const src = mapRef.current?.getSource("draw") as Ml.GeoJSONSource | undefined;
+    const pts = corners.current;
+    const line = closed && pts.length >= 3 ? [...pts, pts[0]] : pts;
+    src?.setData({
+      type: "FeatureCollection",
+      features: [
+        ...(line.length >= 2 ? [{ type: "Feature" as const, properties: {}, geometry: { type: "LineString" as const, coordinates: line } }] : []),
+        ...pts.map((c) => ({ type: "Feature" as const, properties: {}, geometry: { type: "Point" as const, coordinates: c } })),
+      ],
+    });
+  }, []);
+  const finishArea = useCallback(() => {
+    if (corners.current.length < 3) return;
+    showArea(true);
+    areaRef.current?.([...corners.current]);
+  }, [showArea]);
+  const clearArea = useCallback(() => {
+    corners.current = [];
+    showArea(false);
+  }, [showArea]);
+
+  useEffect(() => {
+    areaRef.current = onArea;
+  }, [onArea]);
+  useEffect(() => {
+    drawingRef.current = drawing;
+    const map = mapRef.current;
+    if (!map) return;
+    if (drawing) {
+      map.doubleClickZoom.disable();
+      map.getCanvas().style.cursor = "crosshair";
+      corners.current = [];
+      showArea(false);
+    } else {
+      map.doubleClickZoom.enable();
+      map.getCanvas().style.cursor = "";
+    }
+  }, [drawing, showArea]);
+
+  useImperativeHandle(ref, () => ({ apply: applyNow, finishArea, clearArea }), [applyNow, finishArea, clearArea]);
 
   /** The topmost lot this era colours at a point (the lowest number is the smallest lot). */
   const lotAt = useCallback((map: MlMap, point: Ml.PointLike, eraIndex: number) => {
@@ -429,6 +483,7 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
     lookupRef.current = addLookupLayer(map, shared, SHARED_SOURCE, "selected-line", (zoom) => between(zoom, LINE_WIDTH.lo, LINE_WIDTH.hi), MAP_COLORS.districtEdge);
     lookupRef.current.setColors(colorsRef.current);
     map.on("mousemove", (e) => {
+      if (drawingRef.current) return;
       const index = sharedIndex(stateRef.current.era);
       if (index === undefined || !clickRef.current) return;
       const hit = stateRef.current.view !== "scan" && lotAt(map, e.point, index) !== null;
@@ -548,6 +603,9 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         map.addLayer({ id: "selected-line", type: "line", source: "selected", paint: { "line-color": MAP_COLORS.accent, "line-width": 3 } });
         map.addSource("highlight", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
         map.addLayer({ id: "highlight-line", type: "line", source: "highlight", paint: { "line-color": MAP_COLORS.accent, "line-width": 3 } });
+        map.addSource("draw", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+        map.addLayer({ id: "draw-line", type: "line", source: "draw", filter: ["==", ["geometry-type"], "LineString"], paint: { "line-color": MAP_COLORS.accent, "line-width": 2, "line-dasharray": [2, 1] } });
+        map.addLayer({ id: "draw-dots", type: "circle", source: "draw", filter: ["==", ["geometry-type"], "Point"], paint: { "circle-radius": 4, "circle-color": MAP_COLORS.accent } });
         readyRef.current = true;
         addSharedDistricts();
         if (pending.current) {
@@ -557,7 +615,17 @@ const StoryMap = forwardRef<StoryMapHandle, Props>(function StoryMap(
         }
       });
 
+      map.on("dblclick", (e) => {
+        if (!drawingRef.current) return;
+        e.preventDefault();
+        finishArea();
+      });
       map.on("click", (e) => {
+        if (drawingRef.current) {
+          corners.current = [...corners.current, [e.lngLat.lng, e.lngLat.lat]];
+          showArea(false);
+          return;
+        }
         const cb = clickRef.current;
         if (!cb) return;
         const s = stateRef.current;

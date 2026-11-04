@@ -15,7 +15,9 @@ old map prints for the lot** — not today's zoning, not what seems likely.
 1. `uv run sfzmaps corrections N` (or `--file PATH` for a downloaded file). Writes nothing to
    `inputs/`; prints kept rows, skipped rows with reasons, and writes scan crops to
    `data/check/corrections/N/`. Rows for the 1996-2000 / 2000-digital twin scan are added
-   automatically (same drawing).
+   automatically (same drawing). A row with `area` (a shape the reader drew, perhaps through a
+   lot) gets a crop with the shape outlined: check the old map's district line really runs
+   along it.
 2. Read **every** crop (lot outlined red). Keep a row only if the printed code in that lot's
    district is legibly the proposed code. Drop rows that match today's zoning but not the scan.
 3. Decide override vs label fix (table below). For a label fix, add a row to
@@ -26,7 +28,9 @@ old map prints for the lot** — not today's zoning, not what seems likely.
    `gh issue view N --json body -q .body > /tmp/corrections-N.md`, delete those rows from the
    JSON block, and use `--file /tmp/corrections-N.md`. Then
    `uv run sfzmaps corrections N --apply [--file ...]`. Writes `inputs/<series>/overrides.csv` (note names the issue, shown on the
-   lot card) and review cases in `inputs/district_cases.csv`. Commit `inputs/`.
+   lot card), drawn areas to `inputs/<series>/area_overrides.geojson` (publishing gives a lot
+   90%+ inside the code and splits a lot the line cuts into `<blklot>~in`/`~out` for that map
+   only), and review cases in `inputs/district_cases.csv`. Commit `inputs/`.
 5. Build from the repo root: `pixi run build -j 8` ($0; no `--dry-run` flag exists).
    If `shared` fails with "park_maps.csv is out of date", run `uv run sfzmaps parks --maps`,
    commit `inputs/park_maps.csv`, build again. A label fix may need a capped paid region read:

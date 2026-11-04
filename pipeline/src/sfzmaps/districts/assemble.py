@@ -212,7 +212,8 @@ def publish_inputs(series: str) -> list[Path]:
         files = [config.REF_DIR / "zoning_current.parquet", Path(today.__file__)]
     else:
         files = [_raw_path(series), _prov_path(series), out_dir(series) / "height.parquet",
-                 _height_prov_path(series), inputs.overrides_path(series)]
+                 _height_prov_path(series), inputs.overrides_path(series),
+                 inputs.area_overrides_path(series)]
         hs = height_series_of(series)
         if hs:
             files.append(inputs.overrides_path(hs))
@@ -311,6 +312,55 @@ def apply_overrides(df: pd.DataFrame, series: str, *, column: str = "code",
                     df["override_note"] = None
                 df.loc[mask, "override_note"] = note
     return df
+
+
+AREA_WHOLE = 0.9    # a lot this much inside an area override takes its code whole ...
+AREA_MIN = 0.1      # ... one this little inside is left alone (drawing slop); between, it is split
+PIECE_SEP = "~"     # a split lot's pieces: <blklot>~in (the area's code) and <blklot>~out
+
+
+def apply_area_overrides(g: gpd.GeoDataFrame, series: str, year: int) -> gpd.GeoDataFrame:
+    """inputs/<series>/area_overrides.geojson: areas (WGS84 polygons, properties code and note)
+    a person drew and checked against the scan, where a district line of the old map runs
+    through today's (or the year's) lots.  A lot mostly inside takes the code; a lot the line
+    cuts is split for this series into <blklot>~in (the area's code, the note) and
+    <blklot>~out (as read).  District lines otherwise come from lot lines; only these hand-drawn
+    areas cut a lot (AGENTS.md)."""
+    path = inputs.area_overrides_path(series)
+    if not path.exists() or g.empty:
+        return g
+    areas = gpd.read_file(path).to_crs(g.crs)
+    from sfzmaps.districts.categories import category_for
+
+    g = g.reset_index(drop=True)
+    drop, add = [], []
+    for _, a in areas.iterrows():
+        code = str(a.get("code") or "").strip()
+        if not code or a.geometry is None or a.geometry.is_empty:
+            continue
+        note = str(a.get("note") or "").strip() or None
+        cat = category_for(code, year)
+        for i in g.sindex.query(a.geometry, predicate="intersects"):
+            lot = g.iloc[i]
+            if i in drop or lot.geometry.area <= 0:
+                continue
+            inside = lot.geometry.intersection(a.geometry)
+            share = inside.area / lot.geometry.area
+            if share >= AREA_WHOLE:
+                g.loc[i, ["code", "category", "confidence"]] = [code, cat, 1.0]
+                if note:
+                    g.loc[i, "note"] = note
+            elif share > AREA_MIN:
+                drop.append(i)
+                outside = lot.geometry.difference(a.geometry)
+                add.append({**lot.to_dict(), "blklot": f"{lot.blklot}{PIECE_SEP}in", "geometry": inside,
+                            "code": code, "category": cat, "confidence": 1.0, "note": note})
+                add.append({**lot.to_dict(), "blklot": f"{lot.blklot}{PIECE_SEP}out", "geometry": outside})
+    if not drop and not add:
+        return g
+    out = pd.concat([g.drop(index=drop), gpd.GeoDataFrame(add, geometry="geometry", crs=g.crs)],
+                    ignore_index=True)
+    return gpd.GeoDataFrame(out, geometry="geometry", crs=g.crs)
 
 
 def add_override_notes(df: pd.DataFrame) -> pd.DataFrame:
@@ -591,6 +641,7 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
     geo = parcels[["blklot", "geometry"]].drop_duplicates("blklot")
     g = gpd.GeoDataFrame(df.merge(geo, on="blklot", how="inner"), geometry="geometry", crs=geo.crs)
     g = g[g.geometry.notna() & ~g.geometry.is_empty]       # a few DataSF parcels have no shape
+    g = apply_area_overrides(g, series, year)
     g = g[["blklot", "code", "height_code", "category", "confidence", "source_sheet", "note", "geometry"]]
     g["confidence"] = g["confidence"].astype(float).round(3)
     d = out_dir(series, partial=partial)

@@ -11,6 +11,7 @@ import {
   MAX_URL,
   removeCorrection,
   resetCorrections,
+  roundRing,
   type Correction,
 } from "@/lib/corrections";
 import type { Rule } from "@/lib/rules";
@@ -82,6 +83,21 @@ describe("the issue", () => {
     expect(issueUrl(many)).toBeNull();
     expect(correctionsFile(many).length).toBeGreaterThan(MAX_URL);
     expect(issueUrl([])).toBeNull();
+  });
+});
+
+describe("area corrections", () => {
+  it("carry their outline to the pipeline and read as an area for people", () => {
+    const area = c({ blklot: "area-abc", shown: "", proposed: "RH-1", area: [[-122.4, 37.8], [-122.39, 37.8], [-122.39, 37.81]] });
+    const body = issueBody([c(), area]);
+    expect(body).toContain("| 1980 | drawn area | none | RH-1 |");
+    const block = JSON.parse(body.split("```" + FENCE + "\n")[1].split("\n```")[0]);
+    expect(block[1].area).toHaveLength(3);
+    expect(block[0].area).toBeUndefined();
+    expect(new URL(issueUrl([c(), area])!).searchParams.get("title")).toBe("Map corrections: 1 lot, 1 area (1980)");
+  });
+  it("rounds corners to about a metre", () => {
+    expect(roundRing([[-122.4123456, 37.7654321]])).toEqual([[-122.41235, 37.76543]]);
   });
 });
 

@@ -61,6 +61,26 @@ def test_apply_writes_overrides_with_a_note_the_lot_card_shows(tmp_path, monkeyp
     assert "override_note" not in out
 
 
+def test_a_drawn_area_is_checked_and_written_for_publishing(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
+    ring = [[-122.4, 37.8], [-122.39, 37.8], [-122.39, 37.81]]
+    rows = [{"era": "1980", "series": "1980", "blklot": "area-x", "shown": "", "proposed": "rh-1", "note": "line through 0028016", "area": ring},
+            {"era": "1980", "series": "1980", "blklot": "area-y", "shown": "", "proposed": "RH-1", "note": "", "area": [[1, 2]]},
+            {"era": "1980", "series": "1980", "blklot": "2842007~in", "shown": "C-2", "proposed": "P", "note": ""}]
+    got = corr.check(rows, PARCELS)
+    assert [r.get("area") is not None for r in got.ok] == [True, False]
+    assert got.ok[1]["blklot"] == "2842007"                      # a split piece names its lot
+    assert any("3+" in p for p in got.problems)
+    assert corr.write_overrides(got.ok, 5) == {"1980": 1}         # the lot row only
+    assert corr.write_areas(got.ok, 5) == {"1980": 1}
+    assert corr.write_areas(got.ok, 5) == {"1980": 1}             # re-run: replaced, not doubled
+    fc = json.loads((tmp_path / "inputs" / "1980" / "area_overrides.geojson").read_text())
+    assert len(fc["features"]) == 1
+    f = fc["features"][0]
+    assert f["properties"]["code"] == "RH-1" and "issue #5" in f["properties"]["note"]
+    assert f["geometry"]["coordinates"][0][0] == f["geometry"]["coordinates"][0][-1]   # closed
+
+
 def test_apply_adds_a_review_case_per_code_change(tmp_path, monkeypatch):
     cases = tmp_path / "district_cases.csv"
     cases.write_text("id,series,x0,y0,x1,y1,wrong,right,kind,note\nold,1980,0,0,1,1,R-1,R-2,seam,\n")

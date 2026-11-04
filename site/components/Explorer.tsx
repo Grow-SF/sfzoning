@@ -5,6 +5,7 @@ import StoryMap, { type ParcelHit, type StoryMapHandle } from "./StoryMap";
 import ParcelPopup from "./ParcelPopup";
 import StatsChart from "./StatsChart";
 import CorrectionsTray from "./CorrectionsTray";
+import AreaCorrection from "./AreaCorrection";
 import { ERAS } from "@/lib/eras";
 import { loadRules, type Rule } from "@/lib/rules";
 import { loadStats } from "@/lib/districts";
@@ -21,6 +22,14 @@ export default function Explorer({ eager = false }: { eager?: boolean }) {
   const [view, setView] = useState<View>("both");
   const [hit, setHit] = useState<ParcelHit | null>(null);
   const [rules, setRules] = useState<Rule[]>([]);
+  // Drawing an area for a correction: clicks place corners instead of opening lot cards.
+  const [drawing, setDrawing] = useState(false);
+  const [ring, setRing] = useState<[number, number][] | null>(null);
+  const stopDrawing = useCallback(() => {
+    setDrawing(false);
+    setRing(null);
+    mapRef.current?.clearArea();
+  }, []);
   const sliderId = useId();
   const era = ERAS[index];
   const noScan = era.scanSeries.length === 0;
@@ -61,6 +70,9 @@ export default function Explorer({ eager = false }: { eager?: boolean }) {
   useEffect(() => {
     mapRef.current?.apply({ era: era.id, view: effectiveView });
   }, [era.id, effectiveView]);
+
+  // An area is drawn on one era's map; moving the slider drops it.
+  useEffect(() => stopDrawing(), [era.id, stopDrawing]);
 
   // A lot card belongs to the era it was opened in; moving the slider closes it.
   const shown = hit && hit.era === era.id && effectiveView !== "scan" ? hit : null;
@@ -145,6 +157,8 @@ export default function Explorer({ eager = false }: { eager?: boolean }) {
             interactive
             initial={{ era: era.id, view: effectiveView, camera: START }}
             onParcelClick={onParcel}
+            drawing={drawing && !ring}
+            onArea={setRing}
             selectedBlklot={shown?.blklot ?? null}
           />
         )}
@@ -158,6 +172,23 @@ export default function Explorer({ eager = false }: { eager?: boolean }) {
         <p className={styles.parksNote} data-testid="explorer-parks">
           In {era.label}: {parksNow}.
         </p>
+      )}
+
+      {!noScan && (
+        <AreaCorrection
+          key={era.id}
+          era={era}
+          rules={rules}
+          drawing={drawing}
+          ring={ring}
+          onStart={() => {
+            setHit(null);
+            setRing(null);
+            setDrawing(true);
+          }}
+          onFinish={() => mapRef.current?.finishArea()}
+          onDone={stopDrawing}
+        />
       )}
 
       <CorrectionsTray />
