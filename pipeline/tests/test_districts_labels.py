@@ -285,6 +285,26 @@ def test_read_district_labels_applies_the_series_label_fixes(tmp_path, monkeypat
     assert {l.code for l in labels.load_labels(d / "district_labels.json")} >= {"C-2"}   # cache as read
 
 
+def test_twin_sheets_pair_the_two_scans_of_one_drawing():
+    assert labels.twin_of("1996-2000-zoning", "1996-2000-zoning-p35") == ("2000-digital-zoning", "2000-digital-zoning-p11")
+    assert labels.twin_of("2000-digital-zoning", "2000-digital-zoning-p01") == ("1996-2000-zoning", "1996-2000-zoning-p25")
+    assert labels.twin_of("1996-2000-zoning", "1996-2000-zoning-p20") is None   # not a zoning sheet's twin
+    assert labels.twin_of("1980", "20180102115319417-p04") is None
+
+
+def test_register_finds_the_twin_scans_shift_and_scale_from_shared_labels():
+    lm = sl.build(codes=CODES)
+    m_true = np.float32([[1.005, 0.0, -30.0], [0.0, 1.005, 45.0]])          # other -> img
+    inv = cv2.invertAffineTransform(m_true)
+    other = cv2.warpAffine(lm.img, inv, (lm.img.shape[1], lm.img.shape[0]), borderValue=255)
+    pts = [(x, y) for x in range(150, 1100, 190) for y in range(150, 1100, 210)]
+    labs = [lab("R-1", x, y) for x, y in pts]
+    other_labs = [lab("R-1", *(inv @ np.array([x, y, 1.0]))) for x, y in pts]
+    m = labels.register(lm.img, other, labs, other_labs)
+    assert m is not None and np.allclose(m, m_true, atol=0.5)
+    assert labels.register(lm.img, other, labs[:3], other_labs[:3]) is None     # too few to fit
+
+
 def test_hyphenate():
     assert [labels.hyphenate(c) for c in ("R1", "R4", "R1D", "RH1(D)", "R-1", "P", "NC-2", None)] == \
         ["R-1", "R-4", "R-1-D", "RH-1(D)", "R-1", "P", "NC-2", None]
