@@ -20,7 +20,9 @@
 // LICENSE beside it. A sheet already shipped as a DVC object (dvc/files/md5/..) is linked there;
 // a sheet under 8 MB is packed by `sfzmaps ship`, so it goes up as downloads/sheets/<md5>/<name>.
 // What is on the store comes from one listing pass (1,000 names per request), never a request per
-// file. Rerunning after a failure uploads only what the listing doesn't show.
+// file. Rerunning after a failure uploads only what the listing doesn't show (a name listed at the
+// wrong size goes to a fresh folder; see resolveListed). When nothing changed, lib/downloads.json
+// is left as it is, `generated` date included.
 
 import { createReadStream, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -159,6 +161,56 @@ export function manifestProblem(manifest, base = BASE) {
   return bad ? `lib/downloads.json has a url outside ${base} (${bad}); ${fix}` : null;
 }
 
+/** JSON with object keys sorted, so two manifests compare by content, not key order. */
+const stable = (v) =>
+  JSON.stringify(v, (_, x) => (x && typeof x === "object" && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x));
+
+/** True when `next` publishes the same thing as `prev` (only `generated` may differ). */
+export function sameManifest(prev, next) {
+  const pick = (m) => stable({ base: m.base, local: m.local, license: m.license, files: m.files, sheets: m.sheets, superseded: m.superseded ?? [] });
+  return pick(prev) === pick(next);
+}
+
+/**
+ * Which uploads still need doing, given the store's listed sizes. A name already listed at its
+ * local size is done (a re-run after a failure). A listed name of another size is a broken upload
+ * from an aborted run, and the store never overwrites: a download file then moves, with its
+ * sidecars, to downloads/<fingerprint 12>-<sha256 12>/ (its urls in `files` follow); a sheet, or a
+ * fresh folder that is wrong too, stops the publish with what to delete.
+ */
+export function resolveListed(upload, files, sizes, sizeOf, base = BASE) {
+  const wrong = (u) => sizes.has(u.to) && sizes.get(u.to) !== sizeOf(u);
+  const fail = (u) => {
+    throw new Error(`${u.to} is on the store already but listed at ${sizes.get(u.to)} bytes, not ${sizeOf(u)} ` +
+      "(an aborted upload?); it isn't in any manifest, so delete it from the store and run again");
+  };
+  const moved = new Set();
+  for (const u of upload) {
+    if (!wrong(u)) continue;
+    if (u.root !== "downloads" || moved.has(u.key)) fail(u);
+    moved.add(u.key);
+  }
+  const out = { ...files };
+  const todo = [];
+  for (const u of upload) {
+    if (moved.has(u.key)) {
+      const f = files[u.key];
+      const name = path.posix.basename(u.to);
+      const to = `downloads/${f.fingerprint.slice(0, 12)}-${f.sha256.slice(0, 12)}/${name}`;
+      const v = { ...u, to };
+      if (wrong(v)) fail(v);
+      const old = `${base}/${u.to}`;
+      const g = (out[u.key] = { ...out[u.key], extra: { ...out[u.key].extra } });
+      if (g.url === old) g.url = `${base}/${to}`;
+      for (const [k, x] of Object.entries(g.extra)) if (x === old) g.extra[k] = `${base}/${to}`;
+      if (!sizes.has(to)) todo.push(v);
+    } else if (!sizes.has(u.to)) {
+      todo.push(u);
+    }
+  }
+  return { todo, files: out };
+}
+
 /** Superseded urls to delete: expired, and only ever under downloads/. */
 export function deletable(superseded, today, base = BASE) {
   return expired(superseded, today).filter((u) => u.startsWith(`${base}/downloads/`));
@@ -227,8 +279,8 @@ async function main() {
 
   const d = planDownloads(index, manifest, now);
   const s = planSheets(index, manifest, sizes, now);
-  const superseded = pruneSuperseded([...d.superseded, ...s.superseded], d.files, s.sheets);
-  const todo = [...d.upload, ...s.upload].filter((u) => !sizes.has(u.to));
+  const { todo, files } = resolveListed([...d.upload, ...s.upload], d.files, sizes, (u) => statSync(localPath(u)).size);
+  const superseded = pruneSuperseded([...d.superseded, ...s.superseded], files, s.sheets);
   const stale = deletable(superseded, now);
   let requests = counter.n;
   if (todo.length) requests += Math.max(1, Math.ceil([...sizes.keys()].filter((n) => n.startsWith("downloads/")).length / 1000)); // size check
@@ -236,7 +288,7 @@ async function main() {
   const totalBytes = todo.reduce((n, u) => n + statSync(localPath(u)).size, 0);
 
   console.log(`listing: ${sizes.size} names under downloads/ and dvc/files/md5/ in ${counter.n} request(s)`);
-  console.log(`files: ${Object.keys(d.files).length} (${d.upload.length} new uploads planned), sheets: ${Object.values(s.sheets).reduce((n, x) => n + x.items.length, 0)} (${s.upload.length} to upload as packed)`);
+  console.log(`files: ${Object.keys(files).length} (${d.upload.length} new uploads planned), sheets: ${Object.values(s.sheets).reduce((n, x) => n + x.items.length, 0)} (${s.upload.length} to upload as packed)`);
   console.log(`to upload now: ${todo.length} file(s), ${totalBytes} bytes; superseded: ${superseded.length}; expired to delete: ${stale.length}`);
   console.log(`requests: ${requests} listing and upload, ${stale.length ? 1 : 0} delete`);
   if (dryRun) {
@@ -269,7 +321,12 @@ async function main() {
   const gone = new Set(stale);
   const keep = superseded.filter((x) => !gone.has(x.url));
   if (stale.length) await del(stale);
-  writeFileSync(MANIFEST, JSON.stringify(build(index, d.files, s.sheets, keep, now, BASE), null, 1) + "\n");
+  const next = build(index, files, s.sheets, keep, now, BASE);
+  if (sameManifest(manifest, next)) {
+    console.log(`${MANIFEST} unchanged (generated ${manifest.generated}); nothing to commit.`);
+    return;
+  }
+  writeFileSync(MANIFEST, JSON.stringify(next, null, 1) + "\n");
   console.log(`wrote ${MANIFEST}; commit it and deploy.`);
 }
 

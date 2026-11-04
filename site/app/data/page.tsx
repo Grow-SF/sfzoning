@@ -39,15 +39,16 @@ export default function DataPage() {
           <p>
             <strong>Lots</strong> are today’s parcels, each tagged with the district the historic map put it in.{" "}
             <strong>Districts</strong> are those same lots dissolved into one shape per district. <strong>Scans</strong>{" "}
-            are the historic map pages themselves, aligned to today’s streets and left as scanned: one citywide image,
-            and the individual sheets.
+            are the historic map pages themselves, warped to line up with today’s street corners: one citywide image,
+            and the individual sheets. Black-and-white scans are tinted to the paper colour, and printed border rules
+            and binding shadows are erased; nothing is traced or drawn on them.
           </p>
           <p>
             Lots and districts come as GeoJSON, GeoPackage and Shapefile, in WGS84 (EPSG:4326). The GeoPackage also
             carries a copy in California State Plane (zone III, feet). Each download includes a README and the license.
           </p>
           <p>
-            This is a reconstruction from scanned maps, read by a program and checked by people, not an official
+            This is a reconstruction from scanned maps, read by a program, with some corrections by hand, not an official
             record. Read <a href="/about">how the maps were made</a> and how accurate they are before relying on them.
           </p>
         </section>
@@ -61,7 +62,8 @@ export default function DataPage() {
             sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)”.
           </p>
           <p>
-            Lot lines are DataSF parcels (San Francisco Open Data). The 1948 atlas images are from the {RUMSEY_CREDIT}.
+            Lot lines are DataSF parcels (San Francisco Open Data). The 1948 atlas images are from the {RUMSEY_CREDIT},
+            licensed <a href="https://creativecommons.org/licenses/by-nc-sa/3.0/">CC BY-NC-SA 3.0</a>.
           </p>
         </section>
 

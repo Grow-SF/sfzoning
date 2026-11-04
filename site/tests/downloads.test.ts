@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, lastUpdated, latestRedirects, latestUrl, rows, sheetsCsv, type Manifest } from "../lib/downloadRows";
+import { formatBytes, lastUpdated, latestRedirects, latestUrl, rows, sheetCredit, sheetLicense, sheetsCsv, type Manifest } from "../lib/downloadRows";
 import { ERAS } from "../lib/eras";
 import { menuItems } from "../lib/menuItems";
 import { makeZip } from "client-zip";
@@ -59,17 +59,23 @@ describe("helpers", () => {
     expect(formatBytes(700_000_000)).toBe("0.7 GB");
   });
   it("finds the latest update", () => expect(lastUpdated(manifest)).toBe("2026-11-04"));
-  it("writes the sheet csv", () => {
+  it("writes the sheet csv, each row carrying its license and credit (Rumsey for 1948)", () => {
     expect(sheetsCsv(manifest, "1948").split("\n")).toEqual([
-      "sheet,name,url,bytes,md5,updated",
-      `p01,1948-p01.tif,${B}/sheets/p01.tif,100,m,2026-11-04`,
+      "sheet,name,url,bytes,md5,updated,license,credit",
+      `p01,1948-p01.tif,${B}/sheets/p01.tif,100,m,2026-11-04,` +
+        "CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/); 1948 imagery CC BY-NC-SA 3.0 (https://creativecommons.org/licenses/by-nc-sa/3.0/)," +
+        `"Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org); imagery: David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries"`,
     ]);
+  });
+  it("credits only sfzoning.com outside 1948", () => {
+    expect(sheetLicense("1960")).toBe("CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/)");
+    expect(sheetCredit("1960")).toBe("Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)");
   });
   it("quotes csv fields with commas, quotes and carriage returns", () => {
     const m: Manifest = { files: {}, superseded: [], sheets: { s: { updated: "d", readme: "", items: [
       { sheet: "a", name: 'x,"y"', url: "u", bytes: 1, md5: "m\r", updated: "d" },
     ] } } };
-    expect(sheetsCsv(m, "s").split("\n")[1]).toBe('a,"x,""y""",u,1,"m\r",d');
+    expect(sheetsCsv(m, "s").split("\n")[1]).toMatch(/^a,"x,""y""",u,1,"m\r",d,/);
   });
   it("maps stable links to current urls", () => {
     const r = latestRedirects(manifest);

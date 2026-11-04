@@ -144,3 +144,58 @@ describe("today", () => {
     expect(t()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });
+
+describe("manifest unchanged", () => {
+  const same = script.sameManifest as (a: unknown, b: unknown) => boolean;
+  const m = {
+    generated: "2026-11-01", base: BASE, license: "L", superseded: [{ url: "u", since: "d" }],
+    files: { a: { url: "x", bytes: 1, extra: { r: "y" } } }, sheets: { s: { updated: "d", readme: "", items: [] } },
+  };
+  it("ignores the generated date and key order", () => {
+    const later = { files: { a: { extra: { r: "y" }, bytes: 1, url: "x" } }, sheets: m.sheets, superseded: m.superseded, license: "L", base: BASE, generated: "2026-11-04" };
+    expect(same(m, later)).toBe(true);
+  });
+  it("sees a change in files, sheets or superseded", () => {
+    expect(same(m, { ...m, files: { a: { url: "x2", bytes: 1, extra: { r: "y" } } } })).toBe(false);
+    expect(same(m, { ...m, sheets: {} })).toBe(false);
+    expect(same(m, { ...m, superseded: [] })).toBe(false);
+  });
+});
+
+describe("names already on the store", () => {
+  const resolve = script.resolveListed as (...a: unknown[]) => { todo: { key: string; to: string }[]; files: Record<string, { url: string; extra: Record<string, string> }> };
+  const fp = "f".repeat(40);
+  const sha = "1234567890ab" + "0".repeat(52);
+  const plan = () => {
+    const i = { files: { "1948/lots.geojson": { ...entry(fp), sha256: sha, extra: ["1948/x.README.txt"] } } };
+    return planDownloads(i, {}, "2026-11-04", BASE) as unknown as { upload: { key: string; to: string; root: string; local: string }[]; files: Record<string, { url: string; extra: Record<string, string> }> };
+  };
+  const folder = `downloads/${fp.slice(0, 12)}`;
+
+  it("skips a name already listed at the same size", () => {
+    const p = plan();
+    const sizes = new Map([[`${folder}/1948-lots.geojson.zip`, 10]]);
+    const r = resolve(p.upload, p.files, sizes, () => 10, BASE);
+    expect(r.todo.map((u) => u.to)).toEqual([`${folder}/x.README.txt`]);
+    expect(r.files["1948/lots.geojson"].url).toBe(`${BASE}/${folder}/1948-lots.geojson.zip`);
+  });
+
+  it("moves a file whose listed size differs (an aborted run) to a fresh folder, sidecars too", () => {
+    const p = plan();
+    const sizes = new Map([[`${folder}/1948-lots.geojson.zip`, 3]]);
+    const r = resolve(p.upload, p.files, sizes, () => 10, BASE);
+    const fresh = `downloads/${fp.slice(0, 12)}-${sha.slice(0, 12)}`;
+    expect(r.todo.map((u) => u.to)).toEqual([`${fresh}/1948-lots.geojson.zip`, `${fresh}/x.README.txt`]);
+    expect(r.files["1948/lots.geojson"].url).toBe(`${BASE}/${fresh}/1948-lots.geojson.zip`);
+    expect(r.files["1948/lots.geojson"].extra["x.README.txt"]).toBe(`${BASE}/${fresh}/x.README.txt`);
+  });
+
+  it("fails clearly when the fresh folder is wrong too, or a sheet's listed size differs", () => {
+    const p = plan();
+    const fresh = `downloads/${fp.slice(0, 12)}-${sha.slice(0, 12)}`;
+    const sizes = new Map([[`${folder}/1948-lots.geojson.zip`, 3], [`${fresh}/1948-lots.geojson.zip`, 4]]);
+    expect(() => resolve(p.upload, p.files, sizes, () => 10, BASE)).toThrow(/listed at 4 bytes.*10/);
+    const sheet = [{ key: "1948/sheet-1", local: "1948/1/warped_paper.tif", to: "downloads/sheets/m/n.tif", root: "work" }];
+    expect(() => resolve(sheet, {}, new Map([["downloads/sheets/m/n.tif", 1]]), () => 10, BASE)).toThrow(/downloads\/sheets\/m\/n\.tif.*listed at 1 bytes/);
+  });
+});

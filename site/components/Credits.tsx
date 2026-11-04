@@ -1,6 +1,7 @@
+import { RUMSEY_CREDIT } from "@/lib/credits";
 import styles from "./endmatter.module.css";
 
-export const RUMSEY_CREDIT = "David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries";
+export { RUMSEY_CREDIT };
 /**
  * Who made this site, shown in the credits. If you run a modified version, replace it with the
  * attribution NOTICE section 1 requires of works based on this code:

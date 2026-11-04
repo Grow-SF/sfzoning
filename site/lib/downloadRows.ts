@@ -1,3 +1,4 @@
+import { DATA_CREDIT, DATA_LICENSE, RUMSEY_CREDIT, RUMSEY_LICENSE } from "./credits";
 import { ERAS, type Era } from "./eras";
 import { latestRedirects, latestUrl } from "./latestRedirects.mjs";
 
@@ -102,11 +103,19 @@ export function lastUpdated(m: Manifest): string {
 
 const csvField = (v: string | number) => (/[",\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 
-/** The per-sheet index of a series as CSV. */
+/** The license of a series' sheets: the project's, plus the Rumsey imagery's for 1948. */
+export const sheetLicense = (series: string) =>
+  series === "1948" ? `${DATA_LICENSE}; 1948 imagery ${RUMSEY_LICENSE}` : DATA_LICENSE;
+
+/** The credit a series' sheets ask for: sfzoning.com, plus the Rumsey collection for 1948. */
+export const sheetCredit = (series: string) =>
+  series === "1948" ? `${DATA_CREDIT}; imagery: ${RUMSEY_CREDIT}` : DATA_CREDIT;
+
+/** The per-sheet index of a series as CSV. A single sheet carries no README, so each row names its license and credit. */
 export function sheetsCsv(m: Manifest, series: string): string {
-  const header = "sheet,name,url,bytes,md5,updated";
+  const header = "sheet,name,url,bytes,md5,updated,license,credit";
   const lines = (m.sheets[series]?.items ?? []).map((i) =>
-    [i.sheet, i.name, i.url, i.bytes, i.md5, i.updated].map(csvField).join(","),
+    [i.sheet, i.name, i.url, i.bytes, i.md5, i.updated, sheetLicense(series), sheetCredit(series)].map(csvField).join(","),
   );
   return [header, ...lines].join("\n");
 }

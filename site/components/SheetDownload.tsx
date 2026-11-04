@@ -2,6 +2,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { DATA_CREDIT, RUMSEY_CREDIT } from "@/lib/credits";
 import { formatBytes, type Manifest } from "@/lib/downloadRows";
 import { saveSheet, saveSheetsZip, type Progress, type Saved } from "@/lib/sheetZip";
 import styles from "./downloads.module.css";
@@ -100,6 +101,16 @@ export default function SheetDownload({ series, sheets, license }: Props) {
       </span>
       <details className={styles.sheets}>
         <summary>One sheet at a time</summary>
+        <span className={styles.meta}>
+          A single sheet comes without a README. It is licensed{" "}
+          <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>; credit it as “{DATA_CREDIT}”.
+          {series === "1948" && (
+            <>
+              {" "}The 1948 images are from the {RUMSEY_CREDIT}, licensed{" "}
+              <a href="https://creativecommons.org/licenses/by-nc-sa/3.0/">CC BY-NC-SA 3.0</a>.
+            </>
+          )}
+        </span>
         <ul className={styles.sheetList}>
           {sheets.items.map((i) => (
             <li key={i.sheet}>

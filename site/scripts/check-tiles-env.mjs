@@ -58,7 +58,9 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   // Pick up .env.production(.local) the way `next build` will, so the check sees the same value.
   const { loadEnvConfig } = (await import("@next/env")).default; // CommonJS module
   loadEnvConfig(process.cwd(), false, { info: () => {}, error: console.error });
-  const manifest = JSON.parse(readFileSync(new URL("../lib/downloads.json", import.meta.url), "utf8"));
+  // DOWNLOADS_MANIFEST lets tests check a fixture; on Vercel the real lib/downloads.json is always used.
+  const file = (!process.env.VERCEL && process.env.DOWNLOADS_MANIFEST) || fileURLToPath(new URL("../lib/downloads.json", import.meta.url));
+  const manifest = JSON.parse(readFileSync(file, "utf8"));
   const err = checkTilesEnv(process.env) || checkDownloadsManifest(process.env, manifest);
   if (err) {
     console.error(`\nBuild stopped: ${err}\n`);
