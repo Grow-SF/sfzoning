@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { formatBytes, lastUpdated, latestRedirects, latestUrl, rows, sheetsCsv, type Manifest } from "../lib/downloadRows";
 import { ERAS } from "../lib/eras";
 import { menuItems } from "../lib/menuItems";
-import { zipEntries } from "../lib/sheetZip";
+import { makeZip } from "client-zip";
+import { zipEntries, zipLength } from "../lib/sheetZip";
 
 const B = "https://blob.example/downloads";
 const file = (series: string, layer: string, fmt: string, name: string, bytes: number, updated: string) => ({
@@ -122,5 +123,30 @@ describe("zipEntries", () => {
       new Response("", { status: String(url).endsWith("p02.tif") ? 404 : 200 });
     const run = async () => { for await (const e of zipEntries(src, "1948", fetchFn)) void e; };
     await expect(run()).rejects.toThrow(/1948-p02\.tif.*404/);
+  });
+  it("refuses a sheet whose Content-Length is not the manifest's size", async () => {
+    const fetchFn = async () => new Response("xxxxx", { headers: { "content-length": "5" } });
+    const run = async () => { for await (const e of zipEntries(src, "1948", fetchFn)) void e; };
+    await expect(run()).rejects.toThrow("Could not download sheet 1948-p01.tif: size 5, expected 1");
+  });
+  it("fails the zip when a sheet's body is not the manifest's size", async () => {
+    const body = () => new ReadableStream({ start(c) { c.enqueue(new Uint8Array(3)); c.close(); } });
+    const fetchFn = async () => new Response(body());
+    await expect(new Response(makeZip(zipEntries(src, "1948", fetchFn))).arrayBuffer()).rejects.toThrow(
+      "Could not download sheet 1948-p01.tif: size at least 3, expected 1",
+    );
+  });
+  it("predicts the zip's exact length", async () => {
+    const s = { license: "Licence ©", sheets: { a: { updated: "2026-11-04", readme: "Zoning, café — “1948”\n", items: [
+      { sheet: "1", name: "a-1.tif", url: "u1", bytes: 1234, md5: "m", updated: "2026-11-04" },
+      { sheet: "2", name: "a-2é.tif", url: "u2", bytes: 7, md5: "m", updated: "2026-11-03" },
+    ] } } };
+    const fetchFn = async (url: string) => new Response(new Uint8Array(url === "u1" ? 1234 : 7));
+    const zip = await new Response(makeZip(zipEntries(s, "a", fetchFn))).arrayBuffer();
+    expect(zipLength(s, "a")).toBe(zip.byteLength);
+  });
+  it("needs the license text", async () => {
+    const run = async () => { for await (const e of zipEntries({ sheets: src.sheets }, "1948", async () => new Response("x"))) void e; };
+    await expect(run()).rejects.toThrow(/license/i);
   });
 });
