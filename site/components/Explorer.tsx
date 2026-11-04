@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import StoryMap, { type ParcelHit, type StoryMapHandle } from "./StoryMap";
 import ParcelPopup from "./ParcelPopup";
 import StatsChart from "./StatsChart";
+import CorrectionsTray from "./CorrectionsTray";
 import { ERAS } from "@/lib/eras";
 import { loadRules, type Rule } from "@/lib/rules";
 import { loadStats } from "@/lib/districts";
@@ -158,6 +159,8 @@ export default function Explorer({ eager = false }: { eager?: boolean }) {
           In {era.label}: {parksNow}.
         </p>
       )}
+
+      <CorrectionsTray />
 
       <StatsChart />
     </section>
