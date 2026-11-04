@@ -65,14 +65,29 @@ def test_regions_closed():
 
 
 def test_regions_bridge_gap_in_heavy_line():
-    """A heavy line that stops short (a drafting gap, or a stretch drawn over a thin block
-    outline) still separates the districts."""
+    """A heavy line that stops short where it runs along a thin block outline still separates
+    the districts: the outline under the gap carries the bridge."""
     lm = sl.build(codes=CODES)
     lm.img[200:260, 404:418] = 255          # 60 px gap in the x = 410 line ...
-    lm.img[200:260, 400:402] = 0            # ... where only the thin block outline remains
+    lm.img[200:260, 409:413] = 0            # ... where only a block outline (under it) remains
     regs = labels.regions(lm.img, lm.exclude)
     assert len(regs) == 5
     assert _region_at(regs, 100, 100) is not _region_at(regs, 600, 120)
+
+
+def test_no_bridge_across_blank_paper():
+    """A gap over blank paper is not bridged: on two scans of one drawing such bridges cut the
+    districts in different places (#34); the split around the gap decides instead."""
+    lm = sl.build(codes=CODES)
+    lm.img[200:260, 404:418] = 255          # the same gap, nothing printed in it
+    regs = labels.regions(lm.img, lm.exclude)
+    assert _region_at(regs, 100, 100) is _region_at(regs, 600, 120)
+    off = labels.INK_SHARE
+    try:
+        labels.INK_SHARE = None             # without the ink test the line is bridged
+        assert len(labels.regions(lm.img, lm.exclude)) == 5
+    finally:
+        labels.INK_SHARE = off
 
 
 def test_filled_box_is_a_region():
@@ -131,6 +146,36 @@ def test_a_lone_label_in_a_region_of_another_code_keeps_only_its_surroundings():
     even = {c: p for p, c, _ in labels.assign_regions(
         [region], [lab("R-1", 500, 200), lab("R-3", 1500, 200)])}
     assert even["R-3"].area == pytest.approx(even["R-1"].area)
+
+
+def test_a_lone_label_is_capped_once_another_code_is_printed_often_enough():
+    """1964 sheet 13: R-1 x4 outnumbers the lone R-3, though R-2 x3 keeps R-1 short of a 2x
+    majority; with R-1 printed only 3 times (Bayview Hill 1980) the lone code is a district."""
+    region = box(0, 0, 4000, 400)
+    lone = [lab("R-3", 2000, 200)]
+    many = [lab("R-1", x, 200) for x in (100, 400, 700, 1000)] + \
+           [lab("R-2", x, 200) for x in (3100, 3400, 3700)]
+    capped = {c: p for p, c, _ in labels.assign_regions([region], many + lone)}
+    assert capped["R-3"].area == pytest.approx(np.pi * labels.SPLIT_MINOR_RADIUS_PX ** 2, rel=0.02)
+    few = {c: p for p, c, _ in labels.assign_regions([region], many[1:] + lone)}
+    assert few["R-3"].contains(Point(2000, 50)) and few["R-3"].area > 400 * 500
+
+
+def test_a_split_measures_distance_around_district_lines_not_across_them(monkeypatch):
+    """A district line that stops short of closing (a gap at its foot) still keeps each side
+    with the label printed on it; a straight-line split hands the far side of the line to the
+    label just across it (Forest Hill 1980, Mt Vernon 1964)."""
+    monkeypatch.setattr(labels, "GEO_SPLIT", True)
+    region = box(0, 0, 1000, 400)
+    wall = np.zeros((400, 1000), bool)
+    wall[0:300, 495:505] = True                         # the line, open at the bottom
+    labs = [lab("R-1", 450, 50), lab("R-2", 900, 350)]
+    straight = {c: p for p, c, _ in labels.assign_regions([region], labs)}
+    around = {c: p for p, c, _ in labels.assign_regions([region], labs, wall=wall)}
+    assert straight["R-1"].contains(Point(600, 50))     # nearer in a straight line ...
+    assert around["R-2"].contains(Point(600, 50))       # ... but the line is in the way
+    assert around["R-1"].contains(Point(100, 350)) and around["R-2"].contains(Point(950, 50))
+    assert around["R-1"].area + around["R-2"].area == pytest.approx(region.area, rel=0.01)
 
 
 def test_label_on_heavy_ink_snaps_to_nearest_region():
