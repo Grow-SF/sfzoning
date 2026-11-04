@@ -22,8 +22,8 @@ import { fileURLToPath } from "node:url";
 const SITE = fileURLToPath(new URL("..", import.meta.url));
 const OUT = path.resolve(process.env.TILES_DIR || path.join(SITE, "../pipeline/data/out"));
 const MANIFEST = path.join(SITE, "lib/published.json");
-const BASE = (process.env.NEXT_PUBLIC_TILES_BASE_URL || "https://zwgxwpoxqzfauqfg.public.blob.vercel-storage.com").replace(/\/+$/, "");
-const ONE_YEAR = 31_536_000;
+export const BASE = (process.env.NEXT_PUBLIC_TILES_BASE_URL || "https://zwgxwpoxqzfauqfg.public.blob.vercel-storage.com").replace(/\/+$/, "");
+export const ONE_YEAR = 31_536_000;
 
 /** `a/stats.json` + hash → `a/stats-<hash>.json`. Only the last extension moves past the hash. */
 export function hashedName(file, hash) {
@@ -77,7 +77,7 @@ export function dvcProblem(statusJson) {
 }
 
 /** Why publishing must stop (DVC's verdict, then whether dvc.lock is committed), or null. */
-function checkPipelineData() {
+export function checkPipelineData() {
   const pipeline = path.join(SITE, "../pipeline");
   const [cmd, ...args] = DVC;
   let status;
