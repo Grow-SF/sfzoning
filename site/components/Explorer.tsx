@@ -14,7 +14,7 @@ import styles from "./explorer.module.css";
 const VIEW_LABELS: Record<View, string> = { scan: "Original map", allowed: "What it allowed", both: "Both" };
 const START = { center: [-122.443, 37.765] as [number, number], zoom: 12.4 };
 
-export default function Explorer() {
+export default function Explorer({ eager = false }: { eager?: boolean }) {
   const mapRef = useRef<StoryMapHandle>(null);
   const [index, setIndex] = useState(() => ERAS.findIndex((e) => e.id === "1960"));
   const [view, setView] = useState<View>("both");
@@ -29,7 +29,7 @@ export default function Explorer() {
   // Mount the explorer's map only as the reader nears it: a second WebGL map loading tiles
   // under the story would compete with the story map for the GPU and the network.
   const frameRef = useRef<HTMLDivElement>(null);
-  const [near, setNear] = useState(false);
+  const [near, setNear] = useState(eager);
   useEffect(() => {
     const el = frameRef.current;
     if (!el || near) return;
