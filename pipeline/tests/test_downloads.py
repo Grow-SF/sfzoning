@@ -56,6 +56,11 @@ def test_su_series_gets_citywide_only(tmp_data_su):
 
 
 def test_fingerprint_changes_with_source_bytes_and_version(tmp_data):
+    fpj = tmp_data / "work/1948/1/warped_paper.footprint.geojson"
+    cw = {i.key: i for i in downloads.catalog()}["1948/citywide.cog"]
+    before = downloads.fingerprint(cw, "1")
+    _touch(fpj, b"moved")
+    assert downloads.fingerprint(cw, "1") != before
     for key in ("1948/lots.gpkg", "1948/citywide.cog"):
         item = {i.key: i for i in downloads.catalog()}[key]
         fp = downloads.fingerprint(item, "1")
@@ -75,5 +80,20 @@ def test_readme_has_attribution_license_and_rumsey_only_for_1948():
 
 
 def test_readme_field_table_only_for_vector_layers():
-    assert "height_cd" in readme("1960", "lots", "d", "c")
+    assert "height " in readme("1960", "lots", "d", "c")
     assert "FIELDS" not in readme("1960", "citywide", "d", "c")
+
+
+def test_readme_crs_text_per_layer():
+    lots = readme("1960", "lots", "d", "c")
+    assert "GeoJSON and Shapefile are in WGS 84 (EPSG:4326)" in lots
+    assert "`lots_ca_spcs`" in lots and "EPSG:2227" in lots
+    assert "`districts_ca_spcs`" in readme("1960", "districts", "d", "c")
+    city = readme("1960", "citywide", "d", "c")
+    assert "EPSG:2227" in city and "4326" not in city
+
+
+def test_citywide_sources_skip_missing_footprint(tmp_data):
+    (tmp_data / "work/1948/1/warped_paper.footprint.geojson").unlink()
+    cw = {i.key: i for i in downloads.catalog()}["1948/citywide.cog"]
+    downloads.fingerprint(cw, "1")

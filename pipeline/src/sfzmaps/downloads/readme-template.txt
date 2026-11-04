@@ -14,9 +14,9 @@ historic position and the data follows today's lot lines.
 
 WHAT "confidence" MEANS
 A number from 0 to 1 for how sure the reading is that the lot belongs to the
-district shown. 1 means a person confirmed it. Low values mean the label was
-hard to read, the lot straddles a district line, or the sheet was marginal.
-0 means nothing could be read for the lot.
+district shown. Lots whose district was set by hand from a review get 1.
+Lots read from a sheet flagged for review are capped at 0.6. 0 means no
+district could be assigned to the lot.
 
 NOT AN OFFICIAL RECORD
 This is a reconstruction, not an official record of the San Francisco

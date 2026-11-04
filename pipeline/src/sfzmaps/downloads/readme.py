@@ -22,7 +22,7 @@ underlying maps or the DataSF parcels, which keep their own terms. See https://s
 LOT_FIELDS = [
     ("blklot", "blklot", "DataSF parcel id: block and lot"),
     ("code", "code", "zoning district code read from the map"),
-    ("height_code", "height_cd", "height district code (where the period has a height map)"),
+    ("height_code", "height", "height district code (where the period has a height map)"),
     ("category", "category", "category used on sfzoning.com"),
     ("confidence", "confidence", "0 to 1, how sure the reading is"),
     ("source_sheet", "src_sheet", "sheet the label was read from"),
@@ -35,11 +35,13 @@ DISTRICT_FIELDS = [
 
 _WHAT = {
     "lots": "One polygon per San Francisco lot (today's DataSF parcels) with the zoning district\n"
-            "the {edition} map assigns it. GeoJSON is in WGS 84 (EPSG:4326); GeoPackage and\n"
-            "Shapefile are in California State Plane III, feet (EPSG:2227).",
-    "districts": "The {edition} zoning districts: the lots merged by district code. GeoJSON is\n"
-                 "in WGS 84 (EPSG:4326); GeoPackage and Shapefile are in California State Plane III,\n"
-                 "feet (EPSG:2227).",
+            "the {edition} map assigns it. GeoJSON and Shapefile are in WGS 84 (EPSG:4326). The\n"
+            "GeoPackage has the layer `lots` in WGS 84 (EPSG:4326) and the same lots in California\n"
+            "State Plane III, feet (EPSG:2227) as `lots_ca_spcs`.",
+    "districts": "The {edition} zoning districts: the lots merged by district code. GeoJSON and\n"
+                 "Shapefile are in WGS 84 (EPSG:4326). The GeoPackage has the layer `districts` in\n"
+                 "WGS 84 (EPSG:4326) and the same districts in California State Plane III, feet\n"
+                 "(EPSG:2227) as `districts_ca_spcs`.",
     "citywide": "The {edition} zoning map sheets stitched into one citywide georeferenced image\n"
                 "(Cloud Optimized GeoTIFF, California State Plane III, feet, EPSG:2227). The scans\n"
                 "are shown as scanned: not resampled to modern streets, not vectorized, nothing\n"

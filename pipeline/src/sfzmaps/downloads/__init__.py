@@ -39,7 +39,8 @@ def citywide_sources(series: str) -> list[Path]:
     tifs = sorted((config.WORK_DIR / series).glob("*/warped_paper.tif"))
     out: list[Path] = []
     for t in tifs:
-        out += [t, t.with_name("warped_paper.footprint.geojson")]
+        fp = t.with_name("warped_paper.footprint.geojson")
+        out += [t, fp] if fp.exists() else [t]
     return out + [Path(stitch.__file__)] if tifs else []
 
 
