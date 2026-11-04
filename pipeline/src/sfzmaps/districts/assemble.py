@@ -275,7 +275,8 @@ def apply_overrides(df: pd.DataFrame, series: str, *, column: str = "code",
     """inputs/<series>/overrides.csv rows (blklot or block, code) set `column` (code at confidence 1;
     for a height series' file, height_code: its value column may be height_code or code).
     A block row applies to every parcel of the block (block_num); a blklot row wins over a
-    block row.  Override keys that match no parcel warn."""
+    block row.  Override keys that match no parcel warn.  A row's `note` (optional column, e.g.
+    from a reader's correction) goes to `override_note`, shown on the lot card (publish)."""
     path = inputs.overrides_path(series)
     if not path.exists():
         return df
@@ -300,7 +301,23 @@ def apply_overrides(df: pd.DataFrame, series: str, *, column: str = "code",
         df.loc[mask, column] = code
         if column == "code":
             df.loc[mask, "confidence"] = 1.0
+            note = (r.get("note") or "").strip()
+            if note:
+                if "override_note" not in df:
+                    df["override_note"] = None
+                df.loc[mask, "override_note"] = note
     return df
+
+
+def add_override_notes(df: pd.DataFrame) -> pd.DataFrame:
+    """Each overridden lot's override note joins its card note (after apply_parks)."""
+    if "override_note" not in df:
+        return df
+    df = df.copy()
+    m = df["override_note"].notna()
+    df.loc[m, "note"] = [f"{n}. {o}" if isinstance(n, str) and n else o
+                         for n, o in zip(df.loc[m, "note"], df.loc[m, "override_note"])]
+    return df.drop(columns="override_note")
 
 
 def join_height(df: pd.DataFrame, height: pd.DataFrame) -> pd.DataFrame:
@@ -529,7 +546,7 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
     hs = height_series_of(series)
     if hs:
         df = apply_overrides(df, hs, column="height_code", blocks=blocks)
-    df = apply_parks(categorise(df, year), parcels, year)
+    df = add_override_notes(apply_parks(categorise(df, year), parcels, year))
     geo = parcels[["blklot", "geometry"]].drop_duplicates("blklot")
     g = gpd.GeoDataFrame(df.merge(geo, on="blklot", how="inner"), geometry="geometry", crs=geo.crs)
     g = g[g.geometry.notna() & ~g.geometry.is_empty]       # a few DataSF parcels have no shape
