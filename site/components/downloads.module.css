@@ -30,6 +30,25 @@
 .scan { margin: 0 0 0.75rem; }
 .scan:last-child { margin-bottom: 0; }
 .caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.button {
+  padding: 0.25rem 0.625rem;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--ink);
+  border-radius: 2px;
+  cursor: pointer;
+}
+.button:hover { background: var(--paper-hi); }
+.link { padding: 0; font: inherit; color: var(--accent); text-decoration: underline; background: none; border: 0; cursor: pointer; }
+.link:disabled { cursor: progress; opacity: 0.6; }
+.progress { display: block; }
+.error { display: block; color: #a4262c; font-size: 0.75rem; }
+.sheets { margin: 0.25rem 0 0; }
+.sheets summary { cursor: pointer; color: var(--ink-2); font-size: 0.75rem; }
+.sheetList { margin: 0.25rem 0 0; padding: 0; list-style: none; max-height: 16rem; overflow-y: auto; }
+.sheetList li { padding: 0.125rem 0; }
+.size { color: var(--ink-2); font-size: 0.75rem; }
 .more { display: flex; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0 0; font-family: var(--font-ui); font-size: 0.875rem; }
 
 @media (max-width: 719px) {

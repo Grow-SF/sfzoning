@@ -1,4 +1,5 @@
 import { formatBytes, rows, type Cell, type Manifest, type ScanCell } from "@/lib/downloadRows";
+import SheetDownload from "./SheetDownload";
 import styles from "./downloads.module.css";
 
 function Links({ cells }: { cells: Cell[] }) {
@@ -17,19 +18,7 @@ function Links({ cells }: { cells: Cell[] }) {
   );
 }
 
-/** The sheets cell: count, total size, date and the CSV. The browser zip button goes here (Task 9). */
-function SheetsCell({ sheets }: { sheets: NonNullable<ScanCell["sheets"]> }) {
-  return (
-    <span className={styles.item}>
-      {sheets.count} sheets
-      <span className={styles.meta}>
-        {formatBytes(sheets.bytes)} · {sheets.updated} · <a href={`/data/sheets/${sheets.series}`}>sheet list (CSV)</a>
-      </span>
-    </span>
-  );
-}
-
-function Scan({ scan }: { scan: ScanCell }) {
+function Scan({ scan, manifest }: { scan: ScanCell; manifest: Manifest }) {
   return (
     <div className={styles.scan}>
       {scan.label && <span className={styles.label}>{scan.label}</span>}
@@ -41,7 +30,10 @@ function Scan({ scan }: { scan: ScanCell }) {
           </span>
         </span>
       )}
-      {scan.sheets && <SheetsCell sheets={scan.sheets} />}
+      {/* The client component gets only this series' sheets, not the whole manifest. */}
+      {scan.sheets && (
+        <SheetDownload series={scan.series} sheets={manifest.sheets[scan.series]} license={manifest.license} />
+      )}
     </div>
   );
 }
@@ -74,7 +66,7 @@ export default function DownloadTable({ manifest }: { manifest: Manifest }) {
               </td>
               <td data-label="Scans">
                 {scans.length ? (
-                  scans.map((s) => <Scan key={s.series} scan={s} />)
+                  scans.map((s) => <Scan key={s.series} scan={s} manifest={manifest} />)
                 ) : (
                   <span className={styles.none}>{r.scans.length ? "Not yet published" : "No scan"}</span>
                 )}

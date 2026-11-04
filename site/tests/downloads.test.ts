@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { formatBytes, lastUpdated, latestRedirects, latestUrl, rows, sheetsCsv, type Manifest } from "../lib/downloadRows";
 import { ERAS } from "../lib/eras";
 import { menuItems } from "../lib/menuItems";
+import { zipEntries } from "../lib/sheetZip";
 
 const B = "https://blob.example/downloads";
 const file = (series: string, layer: string, fmt: string, name: string, bytes: number, updated: string) => ({
@@ -93,5 +94,33 @@ describe("menuItems", () => {
   it("lists Download the Data only when there are downloads, in a fixed order", () => {
     expect(menuItems(false).map((i) => i.href)).toEqual(["/", "/maps", "/about"]);
     expect(menuItems(true).map((i) => i.href)).toEqual(["/", "/maps", "/data", "/about"]);
+  });
+});
+
+describe("zipEntries", () => {
+  const src = {
+    license: "LICENSE TEXT",
+    sheets: { "1948": { updated: "2026-11-04", readme: "README TEXT", items: [
+      { sheet: "p01", name: "1948-p01.tif", url: `${B}/sheets/p01.tif`, bytes: 1, md5: "m", updated: "2026-11-04" },
+      { sheet: "p02", name: "1948-p02.tif", url: `${B}/sheets/p02.tif`, bytes: 1, md5: "m", updated: "2026-11-04" },
+    ] } },
+  };
+  it("yields the README and LICENSE, then each sheet fetched in order", async () => {
+    const urls: string[] = [];
+    const fetchFn = async (url: string | URL | Request) => { urls.push(String(url)); return new Response("x"); };
+    const names: string[] = [];
+    for await (const e of zipEntries(src, "1948", fetchFn)) {
+      names.push(e.name);
+      if (e.name === "README.txt") expect(e.input).toBe("README TEXT");
+      if (e.name === "LICENSE.txt") expect(e.input).toBe("LICENSE TEXT");
+    }
+    expect(names).toEqual(["README.txt", "LICENSE.txt", "1948-p01.tif", "1948-p02.tif"]);
+    expect(urls).toEqual([`${B}/sheets/p01.tif`, `${B}/sheets/p02.tif`]);
+  });
+  it("names the sheet that failed", async () => {
+    const fetchFn = async (url: string | URL | Request) =>
+      new Response("", { status: String(url).endsWith("p02.tif") ? 404 : 200 });
+    const run = async () => { for await (const e of zipEntries(src, "1948", fetchFn)) void e; };
+    await expect(run()).rejects.toThrow(/1948-p02\.tif.*404/);
   });
 });
