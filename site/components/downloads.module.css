@@ -1,0 +1,49 @@
+/* The download table: one row per era; stacks into a card per era below 720px. */
+.table {
+  width: 100%;
+  margin: 1rem 0 0;
+  border-collapse: collapse;
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+.table th,
+.table td {
+  padding: 0.625rem 0.75rem 0.625rem 0;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--rule);
+}
+.table thead th {
+  border-bottom: 1px solid var(--ink);
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+.era { font-family: var(--font-body); font-size: 1.125rem; font-weight: 600; white-space: nowrap; }
+.cell { display: flex; flex-direction: column; gap: 0.375rem; }
+.item { display: block; }
+.meta { display: block; color: var(--ink-2); font-size: 0.75rem; }
+.label { display: block; color: var(--ink-2); font-size: 0.75rem; font-weight: 700; }
+.none { color: var(--ink-2); }
+.scan { margin: 0 0 0.75rem; }
+.scan:last-child { margin-bottom: 0; }
+.caption { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+.more { display: flex; gap: 1rem; flex-wrap: wrap; margin: 0.5rem 0 0; font-family: var(--font-ui); font-size: 0.875rem; }
+
+@media (max-width: 719px) {
+  .table, .table tbody, .table tr, .table td, .table th { display: block; }
+  .table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .table tr { padding: 0.75rem 0; border-bottom: 1px solid var(--ink); }
+  .table th, .table td { padding: 0.25rem 0; border: 0; }
+  .table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--ink-2);
+  }
+}

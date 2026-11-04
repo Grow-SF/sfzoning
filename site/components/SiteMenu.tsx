@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { menuItems } from "@/lib/menuItems";
 import styles from "./siteMenu.module.css";
 
@@ -11,6 +11,7 @@ export default function SiteMenu({ hasDownloads }: { hasDownloads: boolean }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const listId = useId();
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const items = menuItems(hasDownloads);
 
   // Links from before the explorer moved to /maps pointed at /#explore.
@@ -20,7 +21,11 @@ export default function SiteMenu({ hasDownloads }: { hasDownloads: boolean }) {
 
   useEffect(() => {
     if (!open) return;
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      toggleRef.current?.focus();
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
@@ -33,6 +38,7 @@ export default function SiteMenu({ hasDownloads }: { hasDownloads: boolean }) {
         </Link>
         <button
           type="button"
+          ref={toggleRef}
           className={styles.toggle}
           aria-expanded={open}
           aria-controls={listId}
