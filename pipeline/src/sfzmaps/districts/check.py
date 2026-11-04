@@ -85,7 +85,8 @@ def centroids() -> pd.DataFrame:
 
     p = load_parcels()
     c = p.geometry.centroid
-    return pd.DataFrame({"blklot": p["blklot"].to_numpy(), "x": c.x.to_numpy(), "y": c.y.to_numpy()})
+    return pd.DataFrame({"blklot": p["blklot"].to_numpy(), "x": c.x.to_numpy(), "y": c.y.to_numpy(),
+                         "area": p.geometry.area.to_numpy()})
 
 
 def score_cases(cases: pd.DataFrame, get, cent: pd.DataFrame) -> pd.DataFrame:
@@ -122,6 +123,28 @@ def key_scores(get) -> dict[str, tuple[int, int]]:
         if r is not None:
             k = key_report(r, f)
             out[f.stem] = (int(k.ok.sum()), len(k))
+    return out
+
+
+def park_scores(get, cent: pd.DataFrame) -> dict[str, tuple[float, float]]:
+    """Per use series: acres of dated park lots (inputs/parks.csv, a park by the map's year) read
+    P, of the acres of those lots read at all.  Big parks are the lots most likely to merge with
+    their neighbours when a boundary opens, and lot counts hide them."""
+    from sfzmaps import parks
+    from sfzmaps.districts.assemble import _parks_csv
+
+    p = _parks_csv()
+    since = dict(zip(p["blklot"], pd.to_numeric(p["since"])))
+    acres = cent.set_index("blklot")["area"] / 43560
+    out = {}
+    for s in use_series():
+        r = get(s)
+        if r is None:
+            continue
+        y = parks.map_year(s)
+        m = r[r.blklot.map(lambda b: since.get(b, 1e9) <= y) & r.code.notna()]
+        a = m.blklot.map(acres)
+        out[s] = (float(a[m.code == "P"].sum()), float(a.sum()))
     return out
 
 
@@ -189,6 +212,12 @@ def report(sources: dict[str, str | Path], n_clusters: int = 5) -> str:
     for s in sorted({k for v in keys.values() for k in v}):
         lines.append(f"{s:34}" + "".join(
             f"{(f'{keys[n][s][0]}/{keys[n][s][1]}' if s in keys[n] else '-'):>{w}}" for n in names))
+
+    lines += ["", "Dated parks read P (acres; higher is better)", head("series")]
+    pk = {n: park_scores(g, cent) for n, g in gets.items()}
+    for s in [s for s in use_series() if any(s in v for v in pk.values())]:
+        lines.append(f"{s:34}" + "".join(
+            f"{(f'{pk[n][s][0]:.0f}/{pk[n][s][1]:.0f}' if s in pk[n] else '-'):>{w}}" for n in names))
 
     def agree_rows(pairs):
         for a, b, sheets in pairs:

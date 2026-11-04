@@ -8,9 +8,11 @@ height maps print 40-X, 65-A...).  Steps, all in page pixels until the parcel jo
    Cached as ``work/<series>/<sheet>/district_labels.json`` keyed by the page.png sha256.
 2. ``heavy_line_mask``: heavy district lines vs thin block / lot lines by local stroke width
    (distance transform), relative to the sheet's measured thin-stroke width.
-3. ``regions``: connected non-heavy-line areas inside the neatline, as polygons.
-4. ``assign_regions``: one code per region; conflicting codes split the region by a Voronoi
-   of its labels (minority codes capped to a disk round their labels); an unlabelled region
+3. ``regions``: connected areas inside the neatline between heavy lines (``walls``: their gaps
+   bridged where the bridge runs over printed ink), as polygons.
+4. ``assign_regions``: one code per region; conflicting codes split the region by a geodesic
+   Voronoi of its labels, distance measured around heavy lines (minority codes capped to a
+   disk round their labels); an unlabelled region
    takes the code a per-region vision read names for it (``regionread``, at READ_CONF), else
    inherits only when all its coded neighbours agree.
 5. ``assign_parcels``: regions to EPSG:2227 through the sheet transform; each parcel takes
@@ -83,6 +85,29 @@ SPLIT_MAJORITY = 2
 # several times nearby is a real district even when another code outnumbers it overall;
 # capping those made ~1,100 Forest Hill lots RH-2 from a label 3,000 ft away.
 SPLIT_LONE = 1
+# A bridge is kept only if at least INK_SHARE of it lies on printed ink (dilated 1 px): a
+# district line that breaks where it runs along a block outline has a thin line under its gap,
+# while bridges across a street or a strip of blank paper cut districts in different places on
+# two scans of one drawing (#34: 1996 and 2000 agreed on 69% of lots).  Measured with
+# `sfzmaps districts --check`, with GEO_SPLIT and PARK_CLOSED: see the pull request for #34
+# (0.4 and 0.6 kept more stray bridges; counting ink 5 px away, not 1, did worse).  It costs
+# 1964 Mt Vernon, where the open Mission C-2 strip leaves the Restani R-3 a large share of a
+# region with R-1 x7, R-2 x4 and C-2 x4: capping any lone code there also capped real, singly
+# printed districts (1980 Excelsior RH-2, Bayview Hill RH-1(D)).
+INK_SHARE: float | None = 0.8
+INK_NEAR_PX = 1                  # ink this close to a bridge pixel counts as under it
+# Split a multi-code region by distance travelled around heavy lines (geodesic), not in a
+# straight line: a district line with a gap at one end still keeps each side with its own label
+# (1980 Forest Hill: 119 -> 0 lots wrong).  Computed on a grid of GEO_PX page px per cell.
+GEO_SPLIT = True
+GEO_PX = 4
+# Parks are drawn as closed outlines, and their gaps are mostly where a street crosses (blank
+# paper), which INK_SHARE no longer bridges: McLaren Park (1980 sheet 23) then joined the
+# residential page around it and kept only its SPLIT_P_RADIUS_PX disk.  So a P label also takes
+# the region it would have with every bridge (ink or not), when no other code is printed in
+# it and it is at most PARK_MAX_PX.
+PARK_CLOSED = True
+PARK_MAX_PX = 5_000_000
 MIN_REGIONS = 5          # fewer closed regions: boundary extraction failed, use the fallback
 FALLBACK_CONF = 0.3
 FALLBACK_BLOCK_FT = 20.0  # labels within this distance of a block count as in it
@@ -341,7 +366,8 @@ def _heavy(page_img: np.ndarray) -> tuple[np.ndarray, float]:
 _NB = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
 
 
-def bridge_gaps(heavy: np.ndarray, max_gap: float = BRIDGE_PX) -> np.ndarray:
+def bridge_gaps(heavy: np.ndarray, max_gap: float = BRIDGE_PX,
+                ink: np.ndarray | None = None) -> np.ndarray:
     """Close gaps in heavy lines: each loose end of the heavy-line skeleton is joined to
     the nearest heavy skeleton pixel ahead of it (within BRIDGE_CONE_DEG of its direction,
     at most max_gap away) that isn't just the same line bending back.  Real district lines
@@ -402,7 +428,32 @@ def bridge_gaps(heavy: np.ndarray, max_gap: float = BRIDGE_PX) -> np.ndarray:
                 best, best_d = q, dist
         if best is not None:
             cv2.line(out, (int(ex), int(ey)), (int(best[1]), int(best[0])), 1, 3)
-    return out > 0
+    out = out > 0
+    if ink is not None and INK_SHARE is not None:
+        out = _ink_bridges(heavy, out, ink)
+    return out
+
+
+def _ink_bridges(heavy: np.ndarray, out: np.ndarray, ink: np.ndarray) -> np.ndarray:
+    """Drop bridges that mostly cross blank paper: a district line that broke where it ran
+    along a block outline has a thin printed line under its gap; one across a street has none."""
+    new = (out & ~heavy).astype(np.uint8)
+    n, comp, stats, _ = cv2.connectedComponentsWithStats(new, connectivity=8)
+    if n < 2:
+        return out
+    k = 2 * INK_NEAR_PX + 1
+    ink1 = cv2.dilate(ink.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+    on = np.bincount(comp[ink1 & (comp > 0)], minlength=n)
+    bad = on / np.maximum(stats[:, cv2.CC_STAT_AREA], 1) < INK_SHARE
+    bad[0] = False
+    return out & ~bad[comp]
+
+
+def walls(page_img: np.ndarray) -> tuple[np.ndarray, float]:
+    """(heavy lines with their gaps bridged, the heavy width threshold): what bounds regions."""
+    heavy, width_thr = _heavy(page_img)
+    ink = linework.binarize(page_img) if INK_SHARE is not None else None
+    return bridge_gaps(heavy, BRIDGE_PX, ink=ink), width_thr
 
 
 def _component_polygon(mask: np.ndarray, ox: int, oy: int) -> Polygon | None:
@@ -423,15 +474,17 @@ def _component_polygon(mask: np.ndarray, ox: int, oy: int) -> Polygon | None:
     return poly if poly.is_valid and not poly.is_empty else None
 
 
-def regions(page_img: np.ndarray, exclude: np.ndarray | None = None) -> list[Polygon]:
+def regions(page_img: np.ndarray, exclude: np.ndarray | None = None,
+            wall: tuple[np.ndarray, float] | None = None) -> list[Polygon]:
     """Polygons (page px) of the connected areas between heavy lines, inside the neatline
     (exclude: True outside it / in legends).  Solid heavy blobs much thicker than a line (a
     tiny district box filled by its own bold code) are regions too."""
     heavy, width_thr = _heavy(page_img)
+    bridged = (wall or walls(page_img))[0]
     inside = ~exclude if exclude is not None else np.ones(heavy.shape, bool)
     k = int(BLOB_FACTOR * width_thr) | 1
     blobs = cv2.morphologyEx(heavy.astype(np.uint8), cv2.MORPH_OPEN, linework._disk(k)) > 0
-    free = _polygons(~bridge_gaps(heavy) & inside, 4, MIN_REGION_PX)
+    free = _polygons(~bridged & inside, 4, MIN_REGION_PX)
     solid = _polygons(blobs & inside, 8, max(MIN_REGION_PX, 4 * k * k))   # not line corners
     if solid:   # small holes are filled in free regions; a blob's hole must stay open
         tree = STRtree(solid)
@@ -484,7 +537,87 @@ def _voronoi_pieces(region, pts: list[DistrictLabel]) -> dict[str, list]:
     return pieces
 
 
-def _split(region: Polygon, labs: list[DistrictLabel]) -> list[tuple[Polygon, str, float]]:
+def _raster(geom, ox: int, oy: int, w: int, h: int) -> np.ndarray:
+    m = np.zeros((h, w), np.uint8)
+    for g in getattr(geom, "geoms", [geom]):
+        if g.is_empty or g.geom_type != "Polygon":
+            continue
+        cv2.fillPoly(m, [np.int32(np.array(g.exterior.coords) - [ox, oy])], 1)
+        for r in g.interiors:
+            cv2.fillPoly(m, [np.int32(np.array(r.coords) - [ox, oy])], 0)
+    return m > 0
+
+
+def _geo_pieces(region, pts: list[DistrictLabel], wall: np.ndarray) -> dict[str, list] | None:
+    """Like _voronoi_pieces, but by distance travelled through the region around heavy lines
+    (geodesic Voronoi, i.e. seeded region growing from the labels): a district line with a gap
+    still keeps each side with the label printed on it, and only the area by the gap is
+    contested.  Computed on a GEO_PX grid; None when the region is too small for it."""
+    from scipy.ndimage import distance_transform_edt
+    from skimage.graph import MCP_Geometric
+
+    f = GEO_PX
+    x0, y0, x1, y1 = (int(v) for v in region.bounds)
+    x0, y0 = max(0, x0 - f), max(0, y0 - f)
+    x1, y1 = min(wall.shape[1], x1 + f), min(wall.shape[0], y1 + f)
+    hh, ww = (y1 - y0) // f, (x1 - x0) // f
+    if hh < 2 or ww < 2:
+        return None
+    fine = _raster(region, x0, y0, x1 - x0, y1 - y0)[:hh * f, :ww * f]
+    inreg = fine.reshape(hh, f, ww, f).any(axis=(1, 3))
+    free = (fine & ~wall[y0:y0 + hh * f, x0:x0 + ww * f]).reshape(hh, f, ww, f).all(axis=(1, 3))
+    if not free.any():
+        return None
+    _, (iy, ix) = distance_transform_edt(~free, return_indices=True)
+    codes = sorted({l.code for l in pts})
+    cost = np.where(free, 1.0, np.inf)
+    dist = np.full((len(codes), hh, ww), np.inf)
+    for k, c in enumerate(codes):
+        seeds = set()
+        for l in pts:
+            if l.code == c:
+                cy = min(hh - 1, max(0, int((l.y - y0) / f)))
+                cx = min(ww - 1, max(0, int((l.x - x0) / f)))
+                seeds.add((int(iy[cy, cx]), int(ix[cy, cx])))
+        dist[k] = MCP_Geometric(cost).find_costs(list(seeds))[0]
+    lab = np.where(np.isfinite(dist.min(axis=0)), dist.argmin(axis=0) + 1, 0)
+    # cells no label reaches (walled off) and the walls themselves: the nearest labelled cell
+    if (lab == 0).all():
+        return None
+    _, (ny, nx) = distance_transform_edt(lab == 0, return_indices=True)
+    lab = np.where(inreg, lab[ny, nx], 0)
+    from affine import Affine
+    from rasterio.features import shapes
+    from shapely.geometry import shape
+
+    cells: dict[int, list] = {}
+    for gj, v in shapes(lab.astype(np.int32), mask=lab > 0, transform=Affine(f, 0, x0, 0, f, y0)):
+        cells.setdefault(int(v), []).append(shape(gj))
+    pieces: dict[str, list] = {}
+    for v, gs in cells.items():
+        g = _areal(unary_union(gs).intersection(region))
+        if g is not None:
+            pieces.setdefault(codes[v - 1], []).append(g)
+    return pieces
+
+
+def _areal(g):
+    """The polygonal part of a geometry (intersections can add slivers of line), or None."""
+    parts = [p for p in getattr(g, "geoms", [g])
+             if p.geom_type in ("Polygon", "MultiPolygon") and not p.is_empty]
+    return unary_union(parts) if parts else None
+
+
+def _pieces(region, pts: list[DistrictLabel], wall: np.ndarray | None) -> dict[str, list]:
+    if GEO_SPLIT and wall is not None and len({l.code for l in pts}) > 1:
+        got = _geo_pieces(region, pts, wall)
+        if got is not None:
+            return got
+    return _voronoi_pieces(region, pts)
+
+
+def _split(region: Polygon, labs: list[DistrictLabel],
+           wall: np.ndarray | None = None) -> list[tuple[Polygon, str, float]]:
     """A region carrying conflicting codes, split by a Voronoi of its labels.  Cells of
     NO_PLURALITY (P) labels are capped to a SPLIT_P_RADIUS_PX disk round the label: parks and
     public sites are small and labelled inside themselves, and an uncapped cell handed whole
@@ -499,7 +632,7 @@ def _split(region: Polygon, labs: list[DistrictLabel]) -> list[tuple[Polygon, st
     conf: dict[str, float] = {}
     for l in pts:
         conf[l.code] = max(conf.get(l.code, 0.0), l.confidence)
-    pieces = _voronoi_pieces(region, pts)
+    pieces = _pieces(region, pts, wall)
     radius = {l.code: SPLIT_P_RADIUS_PX for l in pts if l.code in NO_PLURALITY}
     count: dict[str, int] = {}
     for l in pts:
@@ -522,7 +655,7 @@ def _split(region: Polygon, labs: list[DistrictLabel]) -> list[tuple[Polygon, st
         rest = region.difference(taken) if not taken.is_empty else region
         pieces = {c: [g] for c, g in public.items() if not g.is_empty}
         if not rest.is_empty:
-            for c, ps in _voronoi_pieces(rest, others).items():
+            for c, ps in _pieces(rest, others, wall).items():
                 pieces.setdefault(c, []).extend(ps)
     return [(unary_union(ps), c, conf[c] * SPLIT_CONF) for c, ps in pieces.items()]
 
@@ -539,8 +672,8 @@ def labels_by_region(regs: list[Polygon], labs: list[DistrictLabel]) -> dict[int
 
 
 def assign_regions(regs: list[Polygon], labs: list[DistrictLabel], *, touch_px: float = TOUCH_PX,
-                   reads: dict[int, tuple[str, float]] | None = None
-                   ) -> list[tuple[Polygon, str | None, float]]:
+                   reads: dict[int, tuple[str, float]] | None = None,
+                   wall: np.ndarray | None = None) -> list[tuple[Polygon, str | None, float]]:
     """Each region with its code and confidence (see module docstring).  Pass labels of
     one kind (use or height).  reads: {region index: (code, confidence)} from the per-region
     read (regionread.read_regions) for unlabelled regions; they count as coded neighbours."""
@@ -555,7 +688,7 @@ def assign_regions(regs: list[Polygon], labs: list[DistrictLabel], *, touch_px: 
         if len(codes) == 1:
             labelled[i] = [(regs[i], ls[0].code, max(l.confidence for l in ls))]
         else:
-            labelled[i] = _split(regs[i], ls)
+            labelled[i] = _split(regs[i], ls, wall)
     code_of: dict[int, tuple[str, float]] = {}
     for i, pieces in labelled.items():
         if len(pieces) == 1:
@@ -636,6 +769,26 @@ def _poly_to_world(poly, transform: SheetTransform):
     w = transform.to_world(coords)
     out = shapely.set_coordinates(g, w)
     return out if out.is_valid else out.buffer(0)
+
+
+def closed_parks(assigned: list[tuple[Polygon, str | None, float]], closed: list[Polygon],
+                 labs: list[DistrictLabel]) -> list[tuple[Polygon, str | None, float]]:
+    """assigned, with each P label's region among `closed` (regions with every gap bridged) made
+    P, when only P is printed in it and it is at most PARK_MAX_PX (see PARK_CLOSED); the other
+    pieces give way to it."""
+    parks = []
+    for i, ls in labels_by_region(closed, labs).items():
+        if {l.code for l in ls} == {"P"} and closed[i].area <= PARK_MAX_PX:
+            parks.append((closed[i], max(l.confidence for l in ls)))
+    if not parks:
+        return assigned
+    taken = unary_union([p for p, _ in parks])
+    out = []
+    for poly, code, cf in assigned:
+        rest = _areal(poly.difference(taken)) if code != "P" else poly.difference(taken)
+        if rest is not None and not rest.is_empty:
+            out.append((rest, code, cf))
+    return out + [(p, "P", cf) for p, cf in parks]
 
 
 def _block_of(parcels) -> "np.ndarray":
@@ -799,7 +952,13 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
         transform = SheetTransform.from_json(json.loads((d / "transform.json").read_text()))
     labs = read_district_labels(series, sid)
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
-    regs = regions(img, reading.exclusion_mask(img, _page_info(d)))
+    wall = walls(img)
+    exclude = reading.exclusion_mask(img, _page_info(d))
+    regs = regions(img, exclude, wall)
+    closed = None
+    if PARK_CLOSED and INK_SHARE is not None:
+        heavy, thr = _heavy(img)
+        closed = regions(img, exclude, (bridge_gaps(heavy, BRIDGE_PX), thr))
     every = parcels if all_parcels is None else all_parcels
     ptree = STRtree(list({g.wkb: g for g in every.geometry if g is not None and not g.is_empty}.values()))
     share: dict[int, float] = {}
@@ -827,7 +986,9 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
                 per = labels_by_region(regs, ls)
                 todo = [i for i in range(len(regs)) if i not in per and parcel_share(i) >= READ_PARCEL_SHARE]
                 reads = regionread.read_regions(img, regs, todo, ls, kind, client=client)
-            assigned = assign_regions(regs, ls, reads=reads)
+            assigned = assign_regions(regs, ls, reads=reads, wall=wall[0])
+            if closed is not None and kind == "use":
+                assigned = closed_parks(assigned, closed, ls)
             res[kind] = _majority(parcels, assigned, transform, supporting_labels(regs, ls, assigned))
         else:
             res[kind] = _fallback(parcels, ls, transform)

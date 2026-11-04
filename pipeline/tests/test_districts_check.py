@@ -41,3 +41,19 @@ def test_the_committed_cases_name_known_use_series_and_ordered_boxes():
     assert set(cases.kind) <= {"seam", "harm", "other"}
     assert cases.id.is_unique
     assert all(cases.right) and cases.wrong.notna().all()
+
+
+def test_park_scores_count_acres_of_parks_dated_by_the_map_year(monkeypatch):
+    from sfzmaps import parks
+    from sfzmaps.districts import assemble
+
+    monkeypatch.setattr(assemble, "_parks_csv", lambda: pd.DataFrame(
+        {"name": ["A", "B"], "blklot": ["p1", "p2"], "since": [1900, 1990]}))
+    monkeypatch.setattr(check, "use_series", lambda: ["1980"])
+    monkeypatch.setattr(parks, "map_year", lambda s: 1980)
+    acre = 43560
+    cent = pd.DataFrame({"blklot": ["p1", "p2", "h"], "x": 0, "y": 0, "area": [10 * acre, 5 * acre, acre]})
+    raw = _raw([("p1", "R-1", "s"), ("p2", "P", "s"), ("h", "P", "s")])
+    assert check.park_scores(lambda s: raw, cent) == {"1980": (0.0, 10.0)}   # p2 isn't a park yet
+    raw = _raw([("p1", "P", "s")])
+    assert check.park_scores(lambda s: raw, cent) == {"1980": (10.0, 10.0)}
