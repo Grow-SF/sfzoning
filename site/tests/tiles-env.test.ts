@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { checkTilesEnv } from "../scripts/check-tiles-env.mjs";
+import { checkDownloadsManifest, checkTilesEnv } from "../scripts/check-tiles-env.mjs";
 
 const SCRIPT = path.resolve(__dirname, "../scripts/check-tiles-env.mjs");
 
@@ -44,5 +44,23 @@ describe("check-tiles-env script", () => {
   it("exits 0 for an https URL, and for ALLOW_LOCAL_TILES=1", () => {
     expect(run({ VERCEL: "1", NEXT_PUBLIC_TILES_BASE_URL: "https://tiles.example.com" }).status).toBe(0);
     expect(run({ NODE_ENV: "production", ALLOW_LOCAL_TILES: "1" }).status).toBe(0);
+  });
+});
+
+describe("checkDownloadsManifest", () => {
+  const prod = { VERCEL: "1" };
+  const base = "https://blob.example";
+  const good = { files: { k: { url: `${base}/a.zip`, extra: { r: `${base}/r.txt` } } }, sheets: { s: { items: [{ url: `${base}/dvc/x` }] } } };
+  it("accepts a manifest under the Blob base, and anything outside production", () => {
+    expect(checkDownloadsManifest(prod, good, base)).toBeNull();
+    expect(checkDownloadsManifest(prod, { files: {}, sheets: {} }, base)).toBeNull();
+    expect(checkDownloadsManifest({}, { local: true, files: {} }, base)).toBeNull();
+  });
+  it("fails a production build on a local manifest or a foreign url, telling how to restore it", () => {
+    expect(checkDownloadsManifest(prod, { local: true, files: {} }, base)).toMatch(/git checkout site\/lib\/downloads\.json/);
+    const foreign = { ...good, sheets: { s: { items: [{ url: "http://127.0.0.1:8787/x" }] } } };
+    expect(checkDownloadsManifest(prod, foreign, base)).toMatch(/outside https:\/\/blob\.example/);
+    const extra = { files: { k: { url: `${base}/a`, extra: { r: "http://127.0.0.1/r" } } }, sheets: {} };
+    expect(checkDownloadsManifest(prod, extra, base)).not.toBeNull();
   });
 });

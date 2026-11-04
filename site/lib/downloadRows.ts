@@ -1,7 +1,7 @@
 import { ERAS, type Era } from "./eras";
-import { latestRedirects } from "./latestRedirects.mjs";
+import { latestRedirects, latestUrl } from "./latestRedirects.mjs";
 
-export { latestRedirects };
+export { latestRedirects, latestUrl };
 
 export type ManifestFile = {
   series: string; layer: string; fmt: string; url: string; bytes: number; sha256: string;
@@ -100,7 +100,7 @@ export function lastUpdated(m: Manifest): string {
   return dates.sort().at(-1) ?? "";
 }
 
-const csvField = (v: string | number) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
+const csvField = (v: string | number) => (/[",\r\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 
 /** The per-sheet index of a series as CSV. */
 export function sheetsCsv(m: Manifest, series: string): string {

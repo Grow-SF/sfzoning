@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatBytes, lastUpdated, latestRedirects, rows, sheetsCsv, type Manifest } from "../lib/downloadRows";
+import { formatBytes, lastUpdated, latestRedirects, latestUrl, rows, sheetsCsv, type Manifest } from "../lib/downloadRows";
 import { ERAS } from "../lib/eras";
 import { menuItems } from "../lib/menuItems";
 
@@ -63,6 +63,12 @@ describe("helpers", () => {
       `p01,1948-p01.tif,${B}/sheets/p01.tif,100,m,2026-11-04`,
     ]);
   });
+  it("quotes csv fields with commas, quotes and carriage returns", () => {
+    const m: Manifest = { files: {}, superseded: [], sheets: { s: { updated: "d", readme: "", items: [
+      { sheet: "a", name: 'x,"y"', url: "u", bytes: 1, md5: "m\r", updated: "d" },
+    ] } } };
+    expect(sheetsCsv(m, "s").split("\n")[1]).toBe('a,"x,""y""",u,1,"m\r",d');
+  });
   it("maps stable links to current urls", () => {
     const r = latestRedirects(manifest);
     expect(r).toContainEqual({
@@ -70,6 +76,16 @@ describe("helpers", () => {
     });
     expect(r.map((x) => x.source)).toContain("/data/latest/1948/1948-lots.README.txt");
     expect(r.map((x) => x.source)).toContain("/data/latest/1948/1948-p01.tif");
+  });
+});
+
+describe("latestUrl", () => {
+  it("finds files, sidecars and sheets, and nothing else", () => {
+    expect(latestUrl(manifest, "1948", "1948-lots.geojson.zip")).toBe(`${B}/abc/1948-lots.geojson.zip`);
+    expect(latestUrl(manifest, "1948", "1948-citywide.README.txt")).toBe(`${B}/abc/1948-citywide.README.txt`);
+    expect(latestUrl(manifest, "1948", "1948-p01.tif")).toBe(`${B}/sheets/p01.tif`);
+    expect(latestUrl(manifest, "1948", "nope.zip")).toBeNull();
+    expect(latestUrl(manifest, "1921", "1948-lots.geojson.zip")).toBeNull();
   });
 });
 
