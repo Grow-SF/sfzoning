@@ -148,19 +148,6 @@ def test_a_lone_label_in_a_region_of_another_code_keeps_only_its_surroundings():
     assert even["R-3"].area == pytest.approx(even["R-1"].area)
 
 
-def test_a_lone_label_is_capped_once_another_code_is_printed_often_enough():
-    """1964 sheet 13: R-1 x4 outnumbers the lone R-3, though R-2 x3 keeps R-1 short of a 2x
-    majority; with R-1 printed only 3 times (Bayview Hill 1980) the lone code is a district."""
-    region = box(0, 0, 4000, 400)
-    lone = [lab("R-3", 2000, 200)]
-    many = [lab("R-1", x, 200) for x in (100, 400, 700, 1000)] + \
-           [lab("R-2", x, 200) for x in (3100, 3400, 3700)]
-    capped = {c: p for p, c, _ in labels.assign_regions([region], many + lone)}
-    assert capped["R-3"].area == pytest.approx(np.pi * labels.SPLIT_MINOR_RADIUS_PX ** 2, rel=0.02)
-    few = {c: p for p, c, _ in labels.assign_regions([region], many[1:] + lone)}
-    assert few["R-3"].contains(Point(2000, 50)) and few["R-3"].area > 400 * 500
-
-
 def test_a_park_keeps_its_outline_closed_by_every_bridge():
     """McLaren Park 1980: its outline's gaps cross streets, so the ink-checked regions merge it
     with the homes around it; the fully bridged outline, holding only P, stays P."""

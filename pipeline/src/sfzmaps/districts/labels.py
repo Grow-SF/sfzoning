@@ -85,18 +85,15 @@ SPLIT_MAJORITY = 2
 # several times nearby is a real district even when another code outnumbers it overall;
 # capping those made ~1,100 Forest Hill lots RH-2 from a label 3,000 ft away.
 SPLIT_LONE = 1
-# ... and a lone code is capped whenever another code is printed at least LONE_MAIN times in the
-# region, however many the other codes have (1964 sheet 13, after INK_SHARE opened the Mission
-# C-2 strip: R-1 x7, R-2 x4, C-2 x4 and the Restani R-3 x1 again made ~300 Mt Vernon lots R-3).
-# 2 and 3 also capped the real, singly printed RH-1(D) of Bayview Hill (1980 sheet 19: M-1 x3).
-LONE_MAIN: int | None = 4
 # A bridge is kept only if at least INK_SHARE of it lies on printed ink (dilated 1 px): a
 # district line that breaks where it runs along a block outline has a thin line under its gap,
 # while bridges across a street or a strip of blank paper cut districts in different places on
 # two scans of one drawing (#34: 1996 and 2000 agreed on 69% of lots).  Measured with
-# `sfzmaps districts --check`, with GEO_SPLIT and LONE_MAIN: seam-case wrong lots 1002 -> 634,
-# harm cases 202 -> 72, same-base agreement 1996/2000 0.685 -> 0.746, 1960/1964 0.947 ->
-# 0.960, and every adjacent-era pair up (0.4 and 0.6 kept more stray bridges).
+# `sfzmaps districts --check`, with GEO_SPLIT and PARK_CLOSED: see the pull request for #34
+# (0.4 and 0.6 kept more stray bridges; counting ink 5 px away, not 1, did worse).  It costs
+# 1964 Mt Vernon, where the open Mission C-2 strip leaves the Restani R-3 a large share of a
+# region with R-1 x7, R-2 x4 and C-2 x4: capping any lone code there also capped real, singly
+# printed districts (1980 Excelsior RH-2, Bayview Hill RH-1(D)).
 INK_SHARE: float | None = 0.8
 INK_NEAR_PX = 1                  # ink this close to a bridge pixel counts as under it
 # Split a multi-code region by distance travelled around heavy lines (geodesic), not in a
@@ -642,8 +639,7 @@ def _split(region: Polygon, labs: list[DistrictLabel],
         if l.code not in radius:
             count[l.code] = count.get(l.code, 0) + 1
     top = sorted(count.values(), reverse=True) + [0]
-    lone_cap = LONE_MAIN is not None and top[0] >= LONE_MAIN
-    if len(count) > 1 and (top[0] >= SPLIT_MAJORITY * top[1] or lone_cap):
+    if len(count) > 1 and top[0] >= SPLIT_MAJORITY * top[1]:
         main = max(count, key=count.get)
         for c in count:
             if c != main and count[c] <= SPLIT_LONE:

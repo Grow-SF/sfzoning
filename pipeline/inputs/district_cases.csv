@@ -39,3 +39,4 @@ id,series,x0,y0,x1,y1,wrong,right,kind,note
 00-A5 SoMa RM-1,2000-digital-zoning,6008200,2110290,6009400,2110470,RM-1,C-3-G;C-M;C-3-S,seam,
 00-A6 19th RH-3,2000-digital-zoning,6009370,2103730,6009520,2104930,RH-3,RH-2,seam,
 00-A7 Glen Park P,2000-digital-zoning,5995480,2098270,5995860,2098510,P,RH-1(D),seam,a P region leaks into a row of lots
+80-EX Excelsior C-2,1980,5995800,2086800,5999300,2092200,C-2,RH-1;RH-2;RH-1(D);P,harm,"the Mission/San Jose C-2 strip, merged with the page, spread over the blocks (main read ~326 C-2 here, the real strip)"
