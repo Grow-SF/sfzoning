@@ -416,13 +416,26 @@ def test_changed_inputs_rerun_what_they_affect(counted):
     assert (out / "stats.json").exists()
 
 
+def _code_names(series):
+    return {p.relative_to(p.parents[1]).as_posix() if p.parent.name == "districts" else p.name
+            for p in assemble.read_inputs(series) if p.suffix == ".py"}
+
+
 def test_read_code_inputs_are_the_readers_not_publishing_or_sheet_producers():
-    names = {p.relative_to(p.parents[1]).as_posix() if p.parent.name == "districts" else p.name
-             for p in assemble.read_inputs("1960")}
-    assert {"districts/read.py", "districts/labels.py", "districts/pattern.py",
-            "districts/regionread.py", "llm.py", "stitch.py", "transform.py"} <= names
+    names = _code_names("1960")
+    assert {"districts/read.py", "districts/labels.py", "districts/regionread.py", "llm.py",
+            "stitch.py", "transform.py"} <= names
     assert not {"districts/assemble.py", "districts/categories.py", "warp.py", "refine.py",
                 "runner.py"} & names
+
+
+def test_a_series_read_depends_on_its_own_reader_only():
+    """1960 reads labels (reader B), 1929 legend patterns (A): a change to one reader's code
+    must not re-read the other's series."""
+    b, a = _code_names("1960"), _code_names("1929")
+    assert "districts/labels.py" in b and "districts/pattern.py" not in b
+    assert "districts/pattern.py" in a and not {"districts/labels.py", "districts/regionread.py"} & a
+    assert {"districts/read.py", "llm.py", "stitch.py"} <= a
 
 
 # --- overrides by block_num ---------------------------------------------------------------

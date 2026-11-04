@@ -187,8 +187,16 @@ def read_inputs(series: str) -> list[Path]:
     info = SERIES.get(series)
     files = [*sheets, *made, inputs.label_scale_path(), config.REF_DIR / "parcels.parquet",
              *([_rules_csv()] if info is None or info.reader == "A" else []), pattern.LEGENDS_JSON,
-             *fresh.code_files(["sfzmaps.districts.read"], cut=SHEET_PRODUCERS)]
+             *fresh.code_files(["sfzmaps.districts.read"], cut=SHEET_PRODUCERS | _OTHER_READER[
+                 "A" if info is None else info.reader])]
     return [p for p in files if p.exists()]
+
+
+# read.py runs one reader per series; the other reader's code (and what only it imports) doesn't
+# reach the read, so a change there must not re-read the series (a reader B change used to re-read
+# 1921-1948 too, ~10 minutes of every build).
+_OTHER_READER = {"A": frozenset({"sfzmaps.districts.labels"}),
+                 "B": frozenset({"sfzmaps.districts.pattern"})}
 
 
 def publish_inputs(series: str) -> list[Path]:
