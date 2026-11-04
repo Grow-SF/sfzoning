@@ -14,7 +14,8 @@ historic position and the data follows today's lot lines.
 
 WHAT "confidence" MEANS
 A number from 0 to 1 for how sure the reading is that the lot belongs to the
-district shown. Lots whose district was set by hand from a review get 1.
+district shown. Lots whose district was set by an override (inputs/<series>/overrides.csv in the
+source repository) get 1.
 Lots read from a sheet flagged for review are capped at 0.6. 0 means no
 district could be assigned to the lot.
 

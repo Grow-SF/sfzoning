@@ -80,7 +80,9 @@ def test_readme_has_attribution_license_and_rumsey_only_for_1948():
 
 
 def test_readme_field_table_only_for_vector_layers():
-    assert "height " in readme("1960", "lots", "d", "c")
+    r = readme("1960", "lots", "d", "c")
+    row = next(l for l in r.splitlines() if l.startswith("height_code"))
+    assert row.split()[1] == "height" and "height_cd" not in r
     assert "FIELDS" not in readme("1960", "citywide", "d", "c")
 
 
