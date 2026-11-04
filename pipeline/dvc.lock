@@ -36,8 +36,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -164,7 +164,7 @@ stages:
     outs:
     - path: data/out/1921
       hash: md5
-      md5: f329bbb650f1e8f4a04253d7fb929b6d.dir
+      md5: 8b7615a97c019f8a1ce8a2d6a22ca6a5.dir
       size: 316939465
       nfiles: 12
     - path: data/work/1921
@@ -208,8 +208,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -336,7 +336,7 @@ stages:
     outs:
     - path: data/out/1929
       hash: md5
-      md5: 0de7dd3cedd349191fb928ce810f69b7.dir
+      md5: ff9487fdfc57509368cc9f0d11586f17.dir
       size: 288175003
       nfiles: 12
     - path: data/work/1929
@@ -380,8 +380,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -508,7 +508,7 @@ stages:
     outs:
     - path: data/out/1935
       hash: md5
-      md5: d75af05efc81ffdc2aa6611fef677974.dir
+      md5: f37919a2be6329b7da9e95096f349d58.dir
       size: 344342007
       nfiles: 12
     - path: data/work/1935
@@ -552,8 +552,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -680,7 +680,7 @@ stages:
     outs:
     - path: data/out/1948
       hash: md5
-      md5: 0ac1229ba95a9434983c0d26e410bd2e.dir
+      md5: 0b02a868954963c094101df2782c058a.dir
       size: 363556528
       nfiles: 12
     - path: data/work/1948
@@ -724,8 +724,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -852,7 +852,7 @@ stages:
     outs:
     - path: data/out/1960
       hash: md5
-      md5: c5c7bde4bdfe32ec3352f06e321eb765.dir
+      md5: 7e4b0526e9d4f0b1f856b08ed63bf08d.dir
       size: 236543051
       nfiles: 12
     - path: data/work/1960
@@ -896,8 +896,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -1024,7 +1024,7 @@ stages:
     outs:
     - path: data/out/1964
       hash: md5
-      md5: f84ec496de5272434175ba629d32616f.dir
+      md5: c035b4063d405c957eb8c1f9672fb0ab.dir
       size: 237986069
       nfiles: 12
     - path: data/work/1964
@@ -1068,8 +1068,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -1196,7 +1196,7 @@ stages:
     outs:
     - path: data/out/1968
       hash: md5
-      md5: e60ae7eb0cb13f17a22f87267d7371dc.dir
+      md5: e71dc95085d52623e1e5c624dc087528.dir
       size: 244905573
       nfiles: 12
     - path: data/work/1968
@@ -1240,8 +1240,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -1368,7 +1368,7 @@ stages:
     outs:
     - path: data/out/1972
       hash: md5
-      md5: bbc902ff9e0cfe6192902da76950a03e.dir
+      md5: c5e0608f545292d03811de2823264e4b.dir
       size: 247252033
       nfiles: 12
     - path: data/work/1972
@@ -1412,8 +1412,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -1540,7 +1540,7 @@ stages:
     outs:
     - path: data/out/1975
       hash: md5
-      md5: 0338eb45d3ca6229657a9c5ceedc3990.dir
+      md5: cd9db927b8224cdffa9297eba59bc4b6.dir
       size: 246109355
       nfiles: 12
     - path: data/work/1975
@@ -1584,8 +1584,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -1712,7 +1712,7 @@ stages:
     outs:
     - path: data/out/1980
       hash: md5
-      md5: b8cf801d0b9740ed8ba95b1f714aa684.dir
+      md5: 572743c7521ea836ab205ea4cca8d232.dir
       size: 280249975
       nfiles: 12
     - path: data/work/1980
@@ -1757,8 +1757,8 @@ stages:
       nfiles: 1
     - path: inputs/1980-1990-zoning
       hash: md5
-      md5: 28d82b81d7bb17b4ebca31ac0d8a2d0a.dir
-      size: 232
+      md5: e803c0d0f5a2b67ae9c8e89f5acd050c.dir
+      size: 444
       nfiles: 2
     - path: inputs/label_scale.json
       hash: md5
@@ -1766,8 +1766,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -1894,18 +1894,18 @@ stages:
     outs:
     - path: data/out/1980-1990-height
       hash: md5
-      md5: 992fbde83284fe9d9f8f92f56f247a1b.dir
+      md5: 0ba526f0be6f994a683ff449963d7485.dir
       size: 68185777
       nfiles: 7
     - path: data/out/1980-1990-su
       hash: md5
-      md5: fdd1419beb53336dadcc31f874ecee8a.dir
+      md5: a4498f83596483b457ded34de0db0c4c.dir
       size: 57420023
       nfiles: 7
     - path: data/out/1980-1990-zoning
       hash: md5
-      md5: a8b83a18186c6dc68aad79c6d6121089.dir
-      size: 199427954
+      md5: e66d58031e8424b15fd71639cadacda5.dir
+      size: 199428364
       nfiles: 16
     - path: data/work/1980-1990-height
       hash: md5
@@ -1919,8 +1919,8 @@ stages:
       nfiles: 162
     - path: data/work/1980-1990-zoning
       hash: md5
-      md5: 5cac0afcde35c3d4ef6e43b65d7e403f.dir
-      size: 81969283
+      md5: 59ac61408b1fb967b345d0e466e5c1a8.dir
+      size: 81969875
       nfiles: 381
   period-1990-1996:
     cmd: uv run --frozen sfzmaps stage period-1990-1996
@@ -1968,8 +1968,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -2096,17 +2096,17 @@ stages:
     outs:
     - path: data/out/1990-1996-height
       hash: md5
-      md5: 96dfb9c4ef81a0fea7d8fd2eb90b22a6.dir
+      md5: 6a09aae4f279aecb0c311ad91be6aab5.dir
       size: 72648044
       nfiles: 7
     - path: data/out/1990-1996-su
       hash: md5
-      md5: 43e2caf036c2900566abcd8037e0b66f.dir
+      md5: 7f01260598a8f732a4ef1a322f946dbc.dir
       size: 52907980
       nfiles: 7
     - path: data/out/1990-1996-zoning
       hash: md5
-      md5: b8ccf88f54d6d9fea21808ba1a68ca87.dir
+      md5: 9b4d36847a5d8482bee7560d99d8a7a4.dir
       size: 179944262
       nfiles: 16
     - path: data/work/1990-1996-height
@@ -2170,8 +2170,8 @@ stages:
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -2298,17 +2298,17 @@ stages:
     outs:
     - path: data/out/1996-2000-height
       hash: md5
-      md5: 7851880acd2a091505dc5657457e61fe.dir
+      md5: 5863819259f84e9314f056f47711c793.dir
       size: 73931890
       nfiles: 7
     - path: data/out/1996-2000-su
       hash: md5
-      md5: bdada7ae5ab685c516bdfd09d55bba1b.dir
+      md5: 56f907d0457efdb50cc87363f31ba115.dir
       size: 87212225
       nfiles: 7
     - path: data/out/1996-2000-zoning
       hash: md5
-      md5: d38b07c80b6d43c7a80c7d57152a87a5.dir
+      md5: e5f7f538501fa58e35767328b913e424.dir
       size: 195366732
       nfiles: 16
     - path: data/work/1996-2000-height
@@ -2363,17 +2363,17 @@ stages:
       nfiles: 1
     - path: inputs/2000-digital-zoning
       hash: md5
-      md5: 1552f2d4a18a02d72862295bbd194503.dir
-      size: 73
-      nfiles: 1
+      md5: 11efba36b4cd6bc8ff799449b514b72b.dir
+      size: 601
+      nfiles: 2
     - path: inputs/label_scale.json
       hash: md5
       md5: 7a3a620163bce44d489477d1a9132864
       size: 447
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -2500,18 +2500,18 @@ stages:
     outs:
     - path: data/out/2000-digital-height
       hash: md5
-      md5: 912e523b936d404fabd50cef2bcae35f.dir
+      md5: 70abe92823b7e324b0513ce44832d686.dir
       size: 71674439
       nfiles: 7
     - path: data/out/2000-digital-su
       hash: md5
-      md5: 095013a98598f6e1271287d12b0a097a.dir
+      md5: 1749d684df1f131604e32174592496a9.dir
       size: 84863967
       nfiles: 7
     - path: data/out/2000-digital-zoning
       hash: md5
-      md5: 9c0768b2d62c6c31712f399c36ac6115.dir
-      size: 196208039
+      md5: 09b96dd674f7132e9f0543b33ffa2acb.dir
+      size: 196211936
       nfiles: 16
     - path: data/work/2000-digital-height
       hash: md5
@@ -2525,8 +2525,8 @@ stages:
       nfiles: 542
     - path: data/work/2000-digital-zoning
       hash: md5
-      md5: 254dd0596eb84c0bc54ce408a2d9fd2d.dir
-      size: 74204732
+      md5: 5743cf1da1254ffd0a8b536f2d963560.dir
+      size: 74204691
       nfiles: 381
   today:
     cmd: uv run --frozen sfzmaps stage today
@@ -2550,8 +2550,8 @@ stages:
       nfiles: 5
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: inputs/parks.csv
       hash: md5
       md5: 2e480d5e774973e1b7818e8f7c270214
@@ -2678,12 +2678,12 @@ stages:
     outs:
     - path: data/out/today
       hash: md5
-      md5: cc0cb732fca61fb5f065dfe1fba6eec0.dir
-      size: 108694797
+      md5: 06b6022dd7a8022394c817902e0089ed.dir
+      size: 108695005
       nfiles: 5
     - path: data/work/today
       hash: md5
-      md5: 7cdef3e96912245d9a58676448bbf01a.dir
+      md5: 0a39a0543bc1badd34025e75bd1839a9.dir
       size: 111
       nfiles: 1
   shared:
@@ -2699,78 +2699,78 @@ stages:
       size: 1362
     - path: data/out/1921/districts
       hash: md5
-      md5: 2dd2989aae8b309684ab9893013e9466.dir
+      md5: d65b0021e6e902c497d08c05517624bd.dir
       size: 108067659
       nfiles: 5
     - path: data/out/1929/districts
       hash: md5
-      md5: 05c6000e6a6f7fd50d268246d8625bde.dir
+      md5: faf59cd8e6599f7989f8098357bcb030.dir
       size: 94470243
       nfiles: 5
     - path: data/out/1935/districts
       hash: md5
-      md5: d77a091d3a4a04dd78d2455fba39d1ae.dir
+      md5: 206a93f403be3bea0080b13aa028aae8.dir
       size: 109513817
       nfiles: 5
     - path: data/out/1948/districts
       hash: md5
-      md5: 203db8789a12843fb6b4e6e1385ebfc1.dir
+      md5: 8dfa73c92c9d8613aecc9e20c5d7f30d.dir
       size: 105858979
       nfiles: 5
     - path: data/out/1960/districts
       hash: md5
-      md5: f276a9f82f78311fb3dfacac0de731ec.dir
+      md5: 2ee03b196c0c3ac61b1945c8a15b1255.dir
       size: 104836027
       nfiles: 5
     - path: data/out/1964/districts
       hash: md5
-      md5: 0cf29e9f9b17ec1c6736a8e32da6649d.dir
+      md5: 7181c795f258c2f92ec98d653ecd5498.dir
       size: 109980632
       nfiles: 5
     - path: data/out/1968/districts
       hash: md5
-      md5: a0f88e674dfe88790d058004d17444ea.dir
+      md5: 5314df6400e94da2c5a908fea4bd65d6.dir
       size: 109930022
       nfiles: 5
     - path: data/out/1972/districts
       hash: md5
-      md5: 6f107d9b019b32f59de216e9a310e9f7.dir
+      md5: a6ecffe0f2ea0ae1b54e077692d70c5b.dir
       size: 111897675
       nfiles: 5
     - path: data/out/1975/districts
       hash: md5
-      md5: e71668c23e7fa4c46e3438dbd73a06d2.dir
+      md5: 71d6aa70190dd9b37c01265d84921b1e.dir
       size: 112114901
       nfiles: 5
     - path: data/out/1980-1990-zoning/districts
       hash: md5
-      md5: a0b62239055196ea10351c3d154b95bd.dir
-      size: 112888366
+      md5: 2a4ea731ebbb1270869ba5aa9db94f9d.dir
+      size: 112888776
       nfiles: 9
     - path: data/out/1980/districts
       hash: md5
-      md5: 0843b191a1b004ce451fe395f41a4dcc.dir
+      md5: cb7392cba524ac2c3c4344d34f617060.dir
       size: 112505157
       nfiles: 5
     - path: data/out/1990-1996-zoning/districts
       hash: md5
-      md5: 8ab4e6fded45a0b0122b77e50f079009.dir
+      md5: 9d7892f5de5c7ee05410dd2da29a180b.dir
       size: 104599015
       nfiles: 9
     - path: data/out/1996-2000-zoning/districts
       hash: md5
-      md5: 8a917a9313a069d9681fcfe959dc31cb.dir
+      md5: d7f9ba4653b0f5ce0841f10966fe5c2d.dir
       size: 113384250
       nfiles: 9
     - path: data/out/2000-digital-zoning/districts
       hash: md5
-      md5: 4d2fcdd982dbf4f38bf77b9c8aac4dfe.dir
-      size: 114219645
+      md5: bca1407c30557fe4c28589cadd3348b8.dir
+      size: 114223542
       nfiles: 9
     - path: data/out/today/districts
       hash: md5
-      md5: bf40923d57ae6d3a2d82a049778d1252.dir
-      size: 108694797
+      md5: 72f30181df511183f6ed3aea8abe367e.dir
+      size: 108695005
       nfiles: 5
     - path: data/ref
       hash: md5
@@ -2779,8 +2779,8 @@ stages:
       nfiles: 5
     - path: inputs/park_maps.csv
       hash: md5
-      md5: 02790048388edb1840006ee9e26d21c6
-      size: 16157
+      md5: 91aad1e3723704a12f26a3c1d223bcc6
+      size: 16388
     - path: pyproject.toml
       hash: md5
       md5: 745bc81c029e8e9a5370a6a9f76a700b
@@ -2903,9 +2903,9 @@ stages:
     outs:
     - path: data/out/shared
       hash: md5
-      md5: a207f7da4d0df11bbe4adac46ec5813e.dir
-      size: 288306732
-      nfiles: 45
+      md5: 3beff9439f7a718e7a1355ee585fb92e.dir
+      size: 314223608
+      nfiles: 49
   refdata:
     cmd: uv run --frozen sfzmaps stage refdata
     outs:

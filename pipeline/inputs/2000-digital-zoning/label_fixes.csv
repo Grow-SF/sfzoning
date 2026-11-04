@@ -1,0 +1,6 @@
+sheet,x,y,code,fix_code,fix_x,fix_y,note
+2000-digital-zoning-p02,2750,1898,P,-,,,"block 125: the big 3 of a rotated RH-3, read as P (#35 Union St)"
+2000-digital-zoning-p02,2754,1926,R-3,RH-3,,,"block 125: the rotated RH-3 (#35 Union St)"
+2000-digital-zoning-p02,1506,3876,P,-,,,"blocks 821-822: the R of the big RM-1, read as P (#35 Fell/Oak)"
+2000-digital-zoning-p08,412,2178,RH-3,RH-2,,,"block 4081: vertical RH-2 (#35 19th St)"
+2000-digital-zoning-p08,396,2414,RH-3,RH-2,,,"block 4086 / 21st St: vertical RH-2 (#35 19th St)"
