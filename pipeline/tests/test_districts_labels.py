@@ -161,6 +161,20 @@ def test_a_lone_label_is_capped_once_another_code_is_printed_often_enough():
     assert few["R-3"].contains(Point(2000, 50)) and few["R-3"].area > 400 * 500
 
 
+def test_a_park_keeps_its_outline_closed_by_every_bridge():
+    """McLaren Park 1980: its outline's gaps cross streets, so the ink-checked regions merge it
+    with the homes around it; the fully bridged outline, holding only P, stays P."""
+    merged = [(box(0, 0, 1000, 400), "RH-1", 0.8)]
+    closed = [box(0, 0, 300, 400), box(300, 0, 1000, 400)]
+    labs = [lab("P", 100, 200), lab("RH-1", 600, 200)]
+    out = {c: p for p, c, _ in labels.closed_parks(merged, closed, labs)}
+    assert out["P"].area == pytest.approx(300 * 400)
+    assert out["RH-1"].area == pytest.approx(700 * 400)
+    # a closed region that also prints another code is not a park outline
+    shared = labels.closed_parks(merged, closed, labs + [lab("RH-1", 200, 200)])
+    assert [c for _, c, _ in shared] == ["RH-1"]
+
+
 def test_a_split_measures_distance_around_district_lines_not_across_them(monkeypatch):
     """A district line that stops short of closing (a gap at its foot) still keeps each side
     with the label printed on it; a straight-line split hands the far side of the line to the

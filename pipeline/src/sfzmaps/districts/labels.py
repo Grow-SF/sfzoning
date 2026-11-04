@@ -104,6 +104,13 @@ INK_NEAR_PX = 1                  # ink this close to a bridge pixel counts as un
 # (1980 Forest Hill: 119 -> 0 lots wrong).  Computed on a grid of GEO_PX page px per cell.
 GEO_SPLIT = True
 GEO_PX = 4
+# Parks are drawn as closed outlines, and their gaps are mostly where a street crosses (blank
+# paper), which INK_SHARE no longer bridges: McLaren Park (1980 sheet 23) then joined the
+# residential page around it and kept only its SPLIT_P_RADIUS_PX disk.  So a P label also takes
+# the region it would have with every bridge (ink or not), when no other code is printed in
+# it and it is at most PARK_MAX_PX.
+PARK_CLOSED = True
+PARK_MAX_PX = 5_000_000
 MIN_REGIONS = 5          # fewer closed regions: boundary extraction failed, use the fallback
 FALLBACK_CONF = 0.3
 FALLBACK_BLOCK_FT = 20.0  # labels within this distance of a block count as in it
@@ -768,6 +775,26 @@ def _poly_to_world(poly, transform: SheetTransform):
     return out if out.is_valid else out.buffer(0)
 
 
+def closed_parks(assigned: list[tuple[Polygon, str | None, float]], closed: list[Polygon],
+                 labs: list[DistrictLabel]) -> list[tuple[Polygon, str | None, float]]:
+    """assigned, with each P label's region among `closed` (regions with every gap bridged) made
+    P, when only P is printed in it and it is at most PARK_MAX_PX (see PARK_CLOSED); the other
+    pieces give way to it."""
+    parks = []
+    for i, ls in labels_by_region(closed, labs).items():
+        if {l.code for l in ls} == {"P"} and closed[i].area <= PARK_MAX_PX:
+            parks.append((closed[i], max(l.confidence for l in ls)))
+    if not parks:
+        return assigned
+    taken = unary_union([p for p, _ in parks])
+    out = []
+    for poly, code, cf in assigned:
+        rest = _areal(poly.difference(taken)) if code != "P" else poly.difference(taken)
+        if rest is not None and not rest.is_empty:
+            out.append((rest, code, cf))
+    return out + [(p, "P", cf) for p, cf in parks]
+
+
 def _block_of(parcels) -> "np.ndarray":
     if "block_num" in parcels.columns:
         return parcels["block_num"].astype(str).to_numpy()
@@ -930,7 +957,12 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
     labs = read_district_labels(series, sid)
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
     wall = walls(img)
-    regs = regions(img, reading.exclusion_mask(img, _page_info(d)), wall)
+    exclude = reading.exclusion_mask(img, _page_info(d))
+    regs = regions(img, exclude, wall)
+    closed = None
+    if PARK_CLOSED and INK_SHARE is not None:
+        heavy, thr = _heavy(img)
+        closed = regions(img, exclude, (bridge_gaps(heavy, BRIDGE_PX), thr))
     every = parcels if all_parcels is None else all_parcels
     ptree = STRtree(list({g.wkb: g for g in every.geometry if g is not None and not g.is_empty}.values()))
     share: dict[int, float] = {}
@@ -959,6 +991,8 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
                 todo = [i for i in range(len(regs)) if i not in per and parcel_share(i) >= READ_PARCEL_SHARE]
                 reads = regionread.read_regions(img, regs, todo, ls, kind, client=client)
             assigned = assign_regions(regs, ls, reads=reads, wall=wall[0])
+            if closed is not None and kind == "use":
+                assigned = closed_parks(assigned, closed, ls)
             res[kind] = _majority(parcels, assigned, transform, supporting_labels(regs, ls, assigned))
         else:
             res[kind] = _fallback(parcels, ls, transform)
