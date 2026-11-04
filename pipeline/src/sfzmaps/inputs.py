@@ -50,6 +50,10 @@ def overrides_path(series: str) -> Path:
     return series_dir(series) / "overrides.csv"
 
 
+def label_fixes_path(series: str) -> Path:
+    return series_dir(series) / "label_fixes.csv"
+
+
 def parks_path() -> Path:
     return config.INPUTS_DIR / "parks.csv"
 
