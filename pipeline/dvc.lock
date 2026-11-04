@@ -2161,8 +2161,8 @@ stages:
       nfiles: 2
     - path: inputs/1996-2000-zoning
       hash: md5
-      md5: ab89869602570b7ef63f7456a48984bf.dir
-      size: 243
+      md5: 856c2ac23f9cf25a4a296280b6ae3602.dir
+      size: 1165
       nfiles: 2
     - path: inputs/label_scale.json
       hash: md5
@@ -2298,18 +2298,18 @@ stages:
     outs:
     - path: data/out/1996-2000-height
       hash: md5
-      md5: 5863819259f84e9314f056f47711c793.dir
+      md5: 2463cb7cabbd2d3345a154c96c08ba7f.dir
       size: 73931890
       nfiles: 7
     - path: data/out/1996-2000-su
       hash: md5
-      md5: 56f907d0457efdb50cc87363f31ba115.dir
+      md5: 691ac50224c289a8e1327df6179bfd8a.dir
       size: 87212225
       nfiles: 7
     - path: data/out/1996-2000-zoning
       hash: md5
-      md5: e5f7f538501fa58e35767328b913e424.dir
-      size: 195366732
+      md5: 414e67018c0da616fc8f1deb2c63e3c4.dir
+      size: 195381406
       nfiles: 16
     - path: data/work/1996-2000-height
       hash: md5
@@ -2323,8 +2323,8 @@ stages:
       nfiles: 567
     - path: data/work/1996-2000-zoning
       hash: md5
-      md5: 56b9249eb5bc1ab099070141cb8fb082.dir
-      size: 82708098
+      md5: 1764be3f884c9d94f3e09f8b894f9efd.dir
+      size: 82706999
       nfiles: 525
   period-2000-digital:
     cmd: uv run --frozen sfzmaps stage period-2000-digital
@@ -2363,8 +2363,8 @@ stages:
       nfiles: 1
     - path: inputs/2000-digital-zoning
       hash: md5
-      md5: 11efba36b4cd6bc8ff799449b514b72b.dir
-      size: 601
+      md5: 4fe763220bad423152b897f3e6965638.dir
+      size: 1847
       nfiles: 2
     - path: inputs/label_scale.json
       hash: md5
@@ -2500,18 +2500,18 @@ stages:
     outs:
     - path: data/out/2000-digital-height
       hash: md5
-      md5: 70abe92823b7e324b0513ce44832d686.dir
+      md5: 091cfa8800e8f3e2e6158d8611c4326d.dir
       size: 71674439
       nfiles: 7
     - path: data/out/2000-digital-su
       hash: md5
-      md5: 1749d684df1f131604e32174592496a9.dir
+      md5: 346e991f5cd3f38c1db76f02b0f9178b.dir
       size: 84863967
       nfiles: 7
     - path: data/out/2000-digital-zoning
       hash: md5
-      md5: 09b96dd674f7132e9f0543b33ffa2acb.dir
-      size: 196211936
+      md5: 2f6354deec6f5e9c859c0d77ae7d2094.dir
+      size: 196212354
       nfiles: 16
     - path: data/work/2000-digital-height
       hash: md5
@@ -2525,8 +2525,8 @@ stages:
       nfiles: 542
     - path: data/work/2000-digital-zoning
       hash: md5
-      md5: 5743cf1da1254ffd0a8b536f2d963560.dir
-      size: 74204691
+      md5: b0ae9c7992fa4a6a7b39a38e99aa8007.dir
+      size: 74205669
       nfiles: 381
   today:
     cmd: uv run --frozen sfzmaps stage today
@@ -2759,13 +2759,13 @@ stages:
       nfiles: 9
     - path: data/out/1996-2000-zoning/districts
       hash: md5
-      md5: d7f9ba4653b0f5ce0841f10966fe5c2d.dir
-      size: 113384250
+      md5: 136658fa6a2f3eb1c0bc0894dd4edd6a.dir
+      size: 113398924
       nfiles: 9
     - path: data/out/2000-digital-zoning/districts
       hash: md5
-      md5: bca1407c30557fe4c28589cadd3348b8.dir
-      size: 114223542
+      md5: 927987ee2bb0bd129c2b6c516200a5b3.dir
+      size: 114223960
       nfiles: 9
     - path: data/out/today/districts
       hash: md5
@@ -2903,9 +2903,9 @@ stages:
     outs:
     - path: data/out/shared
       hash: md5
-      md5: 3beff9439f7a718e7a1355ee585fb92e.dir
-      size: 314223608
-      nfiles: 49
+      md5: f3599f82d4fc3a3456c06b8655a5b434.dir
+      size: 340140059
+      nfiles: 53
   refdata:
     cmd: uv run --frozen sfzmaps stage refdata
     outs:
