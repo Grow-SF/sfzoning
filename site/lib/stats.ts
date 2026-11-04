@@ -5,6 +5,8 @@ export type DistrictStats = Record<Category, { parcels: number; area_sqft: numbe
   unknown_share?: number;
   mapped_area_sqft?: number;
   unmapped_parcels?: number;
+  /** The parks that existed in the map's year: how many (by name) and their lots' acres. */
+  parks?: { count: number; acres: number };
 };
 
 const THREE_PLUS: Category[] = ["three_unit", "homes_low", "homes_mid", "homes_high", "homes_top"];
@@ -37,4 +39,12 @@ export function threePlusShare(stats: DistrictStats): number | null {
   const n = (cs: Category[]) => cs.reduce((s, c) => s + (stats[c]?.parcels ?? 0), 0);
   const total = n(RESIDENTIAL);
   return total > 0 ? n(THREE_PLUS) / total : null;
+}
+
+/** "132 parks covering 3,614 acres" for the map's year, or null if the stats predate the tally. */
+export function parksLine(stats: DistrictStats | null): string | null {
+  const p = stats?.parks;
+  if (!p || !p.count) return null;
+  const acres = Math.round(p.acres);
+  return `${p.count.toLocaleString("en-US")} park${p.count === 1 ? "" : "s"} covering ${acres.toLocaleString("en-US")} acre${acres === 1 ? "" : "s"}`;
 }
