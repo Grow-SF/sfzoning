@@ -255,6 +255,61 @@
   color: var(--ink-2);
 }
 
+/* ---------- Corrections ---------- */
+
+.linkButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.correctLine { margin: 0.6rem 0 0; font-family: var(--font-ui); font-size: 0.8125rem; color: var(--ink-2); }
+.correctForm {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0.6rem 0 0;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--rule);
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+}
+.correctForm label { font-weight: 700; color: var(--ink-2); }
+.correctForm input { font: inherit; padding: 0.3rem 0.4rem; border: 1px solid var(--ink-2); background: var(--paper-hi); color: var(--ink); }
+.correctHelp { margin: 0 0 0.2rem; color: var(--ink-2); }
+.correctButtons { display: flex; gap: 0.75rem; align-items: center; margin-top: 0.3rem; }
+.correctButtons button[type="submit"], .trayButtons button:not(.linkButton) {
+  font: inherit;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--ink);
+  background: var(--paper-hi);
+  color: var(--ink);
+  cursor: pointer;
+}
+.tray {
+  max-width: 44rem;
+  margin: 1rem 0 0;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--rule);
+  background: var(--paper-hi);
+  font-family: var(--font-ui);
+  font-size: 0.875rem;
+}
+.trayTitle { margin: 0 0 0.4rem; font-size: 1rem; }
+.trayList { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.25rem; }
+.trayList li { display: flex; justify-content: space-between; gap: 1rem; }
+.trayButtons { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-top: 0.75rem; }
+.trayPrimary {
+  padding: 0.4rem 0.8rem;
+  background: var(--ink);
+  color: var(--paper-hi);
+  text-decoration: none;
+  font-weight: 700;
+}
+.trayNote { margin: 0.5rem 0 0; color: var(--ink-2); font-size: 0.75rem; }
+
 /* ---------- Chart ---------- */
 
 .chart { max-width: 44rem; margin: 2.25rem 0 0; }

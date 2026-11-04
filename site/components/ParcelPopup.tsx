@@ -6,6 +6,7 @@ import { CATEGORY_LABELS, isCategory } from "@/lib/palette";
 import { usePalette } from "@/lib/paletteChoice";
 import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
 import type { ParcelHit } from "./StoryMap";
+import CorrectionForm from "./CorrectionForm";
 import styles from "./explorer.module.css";
 
 type Props = { hit: ParcelHit; era: Era; rules: Rule[]; onClose: () => void };
@@ -93,6 +94,7 @@ export default function ParcelPopup({ hit, era, rules, onClose }: Props) {
           <span>Map reading: {confidenceLabel(hit.confidence)}</span>
           {rule && <span>Rule summary: {rule.confidence[0].toUpperCase() + rule.confidence.slice(1)}</span>}
         </p>
+        <CorrectionForm key={`${era.id}-${hit.blklot}`} hit={hit} era={era} rules={rules} />
       </div>
     </aside>
   );
