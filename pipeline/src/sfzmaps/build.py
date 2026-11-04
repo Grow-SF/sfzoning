@@ -40,9 +40,9 @@ log = logging.getLogger(__name__)
 # of every stage) and so restale everything.
 DVC = ["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc"]
 # Code that can't change a build output: the editor, the build driver, bundling, evaluation,
-# shipping (ship, cachepack, datapack), the toolchain check and the GIS downloads.
+# shipping (ship, cachepack, datapack, release), the toolchain check and the GIS downloads.
 CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "ship.py", "cachepack.py",
-                "datapack.py", "toolchain.py", "downloads", "__pycache__"}
+                "datapack.py", "release.py", "toolchain.py", "downloads", "__pycache__"}
 # The exit code of a pipeline command stopped by llm.FATAL (the $0 cap, or no API key): "needs a
 # paid read", not a bug. Same value as cli.PAID_READ_EXIT (a test keeps them equal).
 PAID_READ_EXIT = 75

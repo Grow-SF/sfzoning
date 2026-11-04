@@ -666,6 +666,24 @@ def ship(
 
 
 @app.command()
+def release(
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Check and plan; publish, commit and push nothing."),
+    no_pr: bool = typer.Option(False, "--no-pr", help="Commit the manifests on a release branch; don't push or open a PR."),
+) -> None:
+    """After a merge: check, export the GIS downloads, publish tiles and downloads to the Blob
+    store, and open a PR with the updated manifests (merging it deploys). Needs site/.env.local
+    (BLOB_READ_WRITE_TOKEN), or SFZMAPS_ENV_FILE, and `gh`. Never calls the vision API."""
+    from sfzmaps import release as release_mod
+    from sfzmaps import ship as ship_mod
+
+    try:
+        release_mod.release(dry_run=dry_run, no_pr=no_pr, d=release_mod.Deps(echo=typer.echo))
+    except (release_mod.ReleaseError, ship_mod.ShipError) as e:
+        typer.echo(f"release: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
 def edit(
     year: str = typer.Option(None, "--year", help="Only this series in the review queue."),
     sheet: str = typer.Option(None, "--sheet", help="Only this sheet id."),
