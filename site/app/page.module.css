@@ -8,9 +8,9 @@
 
 .mapPane {
   position: sticky;
-  top: 0;
-  height: 100vh;
-  height: 100svh;
+  top: var(--menu-h);
+  height: calc(100vh - var(--menu-h));
+  height: calc(100svh - var(--menu-h));
   overflow: hidden;
   z-index: 0;
 }
@@ -18,8 +18,8 @@
 .column {
   position: relative;
   z-index: 1;
-  margin-top: -100vh;
-  margin-top: -100svh;
+  margin-top: calc(var(--menu-h) - 100vh);
+  margin-top: calc(var(--menu-h) - 100svh);
   /* Let map-area taps fall through; cards take them back. */
   pointer-events: none;
 }
@@ -77,8 +77,8 @@
 /* ---------- Hero ---------- */
 
 .hero {
-  min-height: 100vh;
-  min-height: 100svh;
+  min-height: calc(100vh - var(--menu-h));
+  min-height: calc(100svh - var(--menu-h));
   display: flex;
   flex-direction: column;
   justify-content: flex-end;
@@ -133,8 +133,8 @@
 /* ---------- Steps and cards ---------- */
 
 .step {
-  min-height: 100vh;
-  min-height: 100svh;
+  min-height: calc(100vh - var(--menu-h));
+  min-height: calc(100svh - var(--menu-h));
   display: flex;
   align-items: flex-end;
   padding: 0 0.75rem 1rem;
@@ -280,7 +280,7 @@
   .cue { padding-top: 1rem; border-top: 1px solid var(--ink); }
 
   .step {
-    min-height: 100vh;
+    min-height: calc(100vh - var(--menu-h));
     align-items: center;
     padding: 0;
   }

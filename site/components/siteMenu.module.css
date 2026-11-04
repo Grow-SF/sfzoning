@@ -1,0 +1,69 @@
+/* Slim sticky top bar. --menu-h (globals.css) is the height the story and explorer leave free. */
+.menu {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: var(--menu-h);
+  background: var(--paper);
+  border-bottom: 1px solid var(--ink);
+  font-family: var(--font-ui);
+}
+.bar {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0 0.75rem;
+}
+.title {
+  color: var(--ink);
+  text-decoration: none;
+  font-size: 0.875rem;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.toggle {
+  display: none;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex: none;
+  border: 0;
+  background: none;
+  color: var(--ink);
+  font-size: 1.375rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.list {
+  display: flex;
+  gap: 1.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+}
+.list a { color: var(--ink-2); text-decoration: none; }
+.list a:hover { color: var(--ink); text-decoration: underline; }
+.list a[aria-current="page"] { color: var(--ink); font-weight: 600; text-decoration: underline; text-underline-offset: 0.3em; }
+
+@media (max-width: 719.98px) {
+  .toggle { display: block; }
+  .list {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    gap: 0;
+    background: var(--paper);
+    border-bottom: 1px solid var(--ink);
+    font-size: 1rem;
+  }
+  .list[data-open] { display: flex; }
+  .list a { display: block; padding: 0.75rem; }
+}

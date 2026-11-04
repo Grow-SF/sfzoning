@@ -704,6 +704,24 @@ def ship(
 
 
 @app.command()
+def release(
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Check and plan; publish, commit and push nothing."),
+    no_pr: bool = typer.Option(False, "--no-pr", help="Commit the manifests on a release branch; don't push or open a PR."),
+) -> None:
+    """After a merge: check, export the GIS downloads, publish tiles and downloads to the Blob
+    store, and open a PR with the updated manifests (merging it deploys). Needs site/.env.local
+    (BLOB_READ_WRITE_TOKEN), or SFZMAPS_ENV_FILE, and `gh`. Never calls the vision API."""
+    from sfzmaps import release as release_mod
+    from sfzmaps import ship as ship_mod
+
+    try:
+        release_mod.release(dry_run=dry_run, no_pr=no_pr, d=release_mod.Deps(echo=typer.echo))
+    except (release_mod.ReleaseError, ship_mod.ShipError) as e:
+        typer.echo(f"release: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
 def edit(
     year: str = typer.Option(None, "--year", help="Only this series in the review queue."),
     sheet: str = typer.Option(None, "--sheet", help="Only this sheet id."),
@@ -803,6 +821,27 @@ def build(
         raise typer.BadParameter("--force needs the stages to run")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     raise typer.Exit(build_mod.build(targets or None, jobs, dry_run, force, system_tools))
+
+
+@app.command()
+def downloads(
+    series: list[str] = typer.Option(None, "--series", "-s", help="Only this series (repeatable)."),
+    system_tools: bool = typer.Option(False, "--system-tools", help="Use GDAL from outside the pixi "
+                                                                    "environment (not recommended)."),
+) -> None:
+    """Write the GIS downloads (lot and district zips, citywide COG, sheet list) into
+    data/downloads/ and its index.json; what is unchanged is left alone. $0, no API calls."""
+    from sfzmaps import build as build_mod
+    from sfzmaps import downloads as dl
+
+    build_mod.require_toolchain(system_tools)
+    try:
+        index = dl.run(series or None, log=typer.echo)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--series")
+    files = index["files"]
+    typer.echo(f"{len(files)} files, {sum(f['bytes'] for f in files.values()):,} bytes; "
+               f"{sum(len(v) for v in index['sheets'].values())} sheets listed; index {dl.DOWNLOADS_DIR / 'index.json'}")
 
 
 @app.command()

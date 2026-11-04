@@ -49,9 +49,11 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 | `paper --year S` / `paper --all` | Warp each placed sheet as it looks on paper (opaque, colours untouched, cubic resampling) to `warped_paper.tif` and publish `out/<series>/<series>-paper.pmtiles`: the layer the site shows as the original map. The transparent-paper `<series>.pmtiles` stays for the review page and the district readers. The PDFs are 1-bit black and white at 300 dpi; their white is multiplied onto `warp.PAPER_TINT`, the 1948 photos' cream paper, so every era sits on the same paper (ink stays black; 1948 is untouched). Each sheet keeps its map up to its frame; the printed border rule and the 1948 photos' binding shadows are erased (`warp.erase_border_rules`). The stitch stacks a plain-paper backing (`stitch.paper_backing`, for narrow gaps), every sheet's whole paper (legend and title boxes filled with paper), then every sheet's inked content in priority order, so blank paper never hides a neighbour's map. |
 | `review --year S` | Serve `data/out/` on 127.0.0.1 and open the series review page. Makes the page's districts layer (`out/<S>/districts/<S>-districts.pmtiles`) first if the series' districts changed; builds don't make it, since the site reads the shared archive. |
 | `edit [--year S] [--sheet ID]` | Start the control-point editor on 127.0.0.1:8765 (`--demo` for a synthetic sheet). |
+| `downloads [--series S ...]` | Write the public GIS downloads into `data/downloads/` (git-ignored) and its `index.json`: per edition, lot and district zips (GeoJSON, GeoPackage, Shapefile), the citywide Cloud Optimized GeoTIFF, and the per-sheet list. An item whose sources are unchanged is not rewritten, so its date stays. $0, no API calls; not a DVC stage; needs the pixi GDAL. |
 | `bundle` | Write the processed files into `data/share/` as zips plus `PROCESSED.json`, for copying by hand into the Drive folder `old-planning-maps/processed/`. |
 | `pull` | This commit's cache from the Blob store: its answer packs and the data its `dvc.lock` names. See [Shipping the cache](#shipping-the-cache). |
 | `ship [--dry-run]` | When a branch is ready to merge: upload what its commit needs that `main` hasn't shipped, and commit the records. |
+| `release [--dry-run] [--no-pr]` | After a merge, from an up-to-date `main`: check, run `downloads`, publish tiles and downloads to the Blob store, and open a PR with the updated manifests. See [Releasing](#releasing). |
 | `answers [--check\|--baseline]` | Which artifacts know the answers they were made from; record the rest. |
 | `pull-drive` | The older way: the processed zips from the public Drive `processed/` folder, extracted into `data/`. |
 | `crossref --year S` / `--all` | Re-place flagged sheets by matching each to the same printed sheet number in another edition that passed (SIFT + RANSAC on the drawings, composed with that sheet's transform), then rerun refine and score. A result is kept only if it scores better, and is then pinned as the sheet's seed (`inputs/<series>/seeds/`; commit it); otherwise the sheet's files and seed are restored. Republishes improved series (`--no-publish` to skip). No API calls. |
@@ -153,6 +155,9 @@ anyone) gets it with `uv run sfzmaps pull` and builds at $0 with nothing to do.
   `page.json`, map pages' `labels.json`, each series' district reads, which fold in the legend
   and district labels they used), so answers from abandoned or superseded experiments never
   ship.
+- **Shipped objects back public downloads.** The single `dvc/files/md5/…` objects (the large
+  sheets) are also what the site's public sheet downloads link to. Never delete one, and never
+  `dvc gc` them away.
 - **Data packs.** Data objects under 8 MB travel in *data packs*: uncompressed zips of at most
   256 MB, named by their sha256 (`cache/datapacks/<sha>.zip`). Larger objects are stored alone
   (`dvc/files/md5/…`). Today that's 13 packs (3.5 GB, about 10,250 objects) plus 204
@@ -203,6 +208,24 @@ anyone) gets it with `uv run sfzmaps pull` and builds at $0 with nothing to do.
 
 Costs: Blob storage is $0.023/GB-month (about 13 GB of data plus packs); a contributor's first
 full `pull` is about $0.65 at $0.05/GB, then only what changed.
+
+## Releasing
+
+`uv run sfzmaps release` does everything public after a merge, in order. It stops at the first
+problem:
+
+1. Checks: the tree is clean, `HEAD` is `origin/main` (after a fetch), DVC data matches
+   `dvc.lock`, and this commit's cache is shipped (the `Cache shipped` workflow's check).
+2. `sfzmaps downloads` (the GIS export).
+3. `site/scripts/publish-tiles.mjs`, then `publish-downloads.mjs`, with the Blob token from
+   `site/.env.local` or `SFZMAPS_ENV_FILE`, like `ship`.
+4. If `site/lib/published.json` or `site/lib/downloads.json` changed: commit them on
+   `release/<date>-<sha7>` (Pacific date), push, and open a PR (`gh`). Merging it deploys. With
+   `--no-pr` it only commits. Nothing changed prints "nothing to release".
+
+`--dry-run` runs the checks and export and passes `--dry-run` to both scripts; nothing is
+uploaded, committed or pushed. The scripts stay runnable alone (see `site/README.md`). The
+download page goes live on the first release that lists files.
 
 ## Toolchain
 
