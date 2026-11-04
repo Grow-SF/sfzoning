@@ -47,6 +47,7 @@ class Deps:
     run: Callable[..., subprocess.CompletedProcess] = _run           # run(cmd, cwd=None)
     check_shipped: Callable[[str], list[str]] = ship.check_shipped   # the `Cache shipped` workflow's check
     downloads: Callable[[], dict] = _downloads_run
+    env_file: Callable[[], object] = ship.env_file_path              # raises ShipError when missing
     today: Callable[[], str] = _today
     echo: Callable[[str], None] = print
 
@@ -61,21 +62,32 @@ class Summary:
     branch: str | None = None
 
 
+def _why(e: Exception) -> str:
+    return (getattr(e, "stderr", None) or str(e)).strip()
+
+
 def checks(d: Deps | None = None) -> list[str]:
     """Problems that stop a release (empty = go)."""
     d = d or Deps()
     problems: list[str] = []
-    dirty = [l for l in d.git("status", "--porcelain").splitlines() if l.strip()]
-    if dirty:
-        problems.append("the working tree isn't clean: " + "; ".join(l.strip() for l in dirty[:5]))
+    try:
+        dirty = [l for l in d.git("status", "--porcelain").splitlines() if l.strip()]
+        if dirty:
+            problems.append("the working tree isn't clean: " + "; ".join(l.strip() for l in dirty[:5]))
+    except (subprocess.CalledProcessError, OSError) as e:
+        problems.append(f"git status failed: {_why(e)}")
     try:
         d.git("fetch", "origin", "main")
         head, main = d.git("rev-parse", "HEAD").strip(), d.git("rev-parse", "origin/main").strip()
         if head != main:
             problems.append(f"HEAD is not origin/main ({head[:7]} vs {main[:7]}): release from an "
                             "up-to-date main")
-    except subprocess.CalledProcessError as e:
-        problems.append(f"git couldn't compare HEAD with origin/main: {(e.stderr or str(e)).strip()}")
+    except (subprocess.CalledProcessError, OSError) as e:
+        problems.append(f"git couldn't compare HEAD with origin/main: {_why(e)}")
+    try:
+        d.env_file()
+    except ship.ShipError as e:
+        problems.append(str(e))
     st = d.run(DVC_STATUS, cwd=config.PIPELINE_DIR)
     if st.returncode != 0 or (st.stdout or "").strip() not in ("", "{}"):
         problems.append("the data doesn't match dvc.lock; run `uv run sfzmaps build` and commit dvc.lock")
@@ -102,6 +114,18 @@ def _tally(script: str, out: str, s: Summary) -> None:
             s.deleted += int(m.group(4))
 
 
+SAFE = ("\nUploads already made are safe (content-hashed, never overwritten); a re-run skips them. "
+        "The manifests were restored.")
+
+
+def _restore(d: Deps) -> None:
+    """Undo a half-done publish's manifest edits so a re-run starts from a clean tree."""
+    try:
+        d.git("restore", "--", *MANIFESTS)
+    except (subprocess.CalledProcessError, OSError):
+        pass
+
+
 def release(dry_run: bool = False, no_pr: bool = False, d: Deps | None = None) -> Summary:
     d = d or Deps()
     problems = checks(d)
@@ -110,10 +134,15 @@ def release(dry_run: bool = False, no_pr: bool = False, d: Deps | None = None) -
     d.downloads()
     s = Summary()
     for script in SCRIPTS:
-        r = d.node(script, ["--dry-run"] if dry_run else [])
+        try:
+            r = d.node(script, ["--dry-run"] if dry_run else [])
+        except (ship.ShipError, OSError) as e:
+            _restore(d)
+            raise ReleaseError(f"{script} couldn't run: {e}{SAFE}")
         d.echo((r.stdout or "").rstrip())
         if r.returncode != 0:
-            raise ReleaseError(f"{script} failed:\n{(r.stderr or r.stdout or '').strip()}")
+            _restore(d)
+            raise ReleaseError(f"{script} failed:\n{(r.stderr or r.stdout or '').strip()}{SAFE}")
         _tally(script, r.stdout or "", s)
     if dry_run:
         d.echo(f"dry run: would upload {s.files} file(s), {s.bytes:,} bytes; nothing published, "
@@ -123,28 +152,48 @@ def release(dry_run: bool = False, no_pr: bool = False, d: Deps | None = None) -
     if not changed:
         d.echo("nothing to release")
         return s
-    sha = d.git("rev-parse", "--short=7", "HEAD").strip()
+    try:
+        sha = d.git("rev-parse", "--short=7", "HEAD").strip()
+        before = d.git("rev-parse", "--abbrev-ref", "HEAD").strip()
+    except (subprocess.CalledProcessError, OSError) as e:
+        raise ReleaseError(f"git failed before the release commit ({_why(e)}); the manifests are "
+                           f"changed but uncommitted: commit {' and '.join(MANIFESTS)} by hand")
     date = d.today()
     s.branch = f"release/{date}-{sha}"
-    before = d.git("rev-parse", "--abbrev-ref", "HEAD").strip()
-    d.git("checkout", "-b", s.branch)
-    d.git("add", "--", *MANIFESTS)
-    d.git("commit", "-m", f"Release {date}\n\nUpdated manifests: {', '.join(MANIFESTS)}")
-    if no_pr:
-        d.echo(f"committed on {s.branch} (--no-pr: not pushed)")
-    else:
-        d.git("push", "-u", "origin", s.branch)
-        body = (f"Published to the Blob store: {s.files} file(s), {s.bytes:,} bytes; "
-                f"{s.superseded} superseded, {s.deleted} expired file(s) deleted.\n\n"
-                f"Manifests updated: {', '.join(MANIFESTS)}. Merging deploys.\n\n{PR_FOOTER}")
-        r = d.run(["gh", "pr", "create", "--title", f"Release {date}", "--body", body],
-                  cwd=config.PIPELINE_DIR)
-        if r.returncode != 0:
-            raise ReleaseError(f"gh pr create failed (branch {s.branch} is pushed):\n"
-                               f"{(r.stderr or '').strip()}")
-        lines = (r.stdout or "").strip().splitlines()
-        s.pr_url = lines[-1] if lines else None
-    d.git("checkout", before)
+    title = f"Release {date}"
+    body = (f"Published to the Blob store: {s.files} file(s), {s.bytes:,} bytes; "
+            f"{s.superseded} superseded, {s.deleted} expired file(s) deleted.\n\n"
+            f"Manifests updated: {', '.join(MANIFESTS)}. Merging deploys.\n\n{PR_FOOTER}")
+    step = "creating the branch"
+    try:
+        d.git("checkout", "-b", s.branch)
+        step = "committing"
+        d.git("add", "--", *MANIFESTS)
+        d.git("commit", "-m", f"{title}\n\nUpdated manifests: {', '.join(MANIFESTS)}")
+        if no_pr:
+            d.echo(f"committed on {s.branch} (--no-pr: not pushed)")
+        else:
+            step = "pushing"
+            d.git("push", "-u", "origin", s.branch)
+            step = "opening the PR"
+            r = d.run(["gh", "pr", "create", "--base", "main", "--title", title, "--body", body],
+                      cwd=config.PIPELINE_DIR)
+            if r.returncode != 0:
+                raise subprocess.CalledProcessError(r.returncode, "gh", stderr=r.stderr)
+            lines = (r.stdout or "").strip().splitlines()
+            s.pr_url = lines[-1] if lines else None
+    except (subprocess.CalledProcessError, OSError) as e:
+        finish = {"creating the branch": f"git checkout -b {s.branch}, then commit the manifests",
+                  "committing": f"commit the manifests on {s.branch}, then push and open the PR",
+                  "pushing": f"git push -u origin {s.branch}, then gh pr create --base main --title '{title}'",
+                  "opening the PR": f"gh pr create --base main --head {s.branch} --title '{title}'"}[step]
+        raise ReleaseError(f"{step} failed ({_why(e)}). The release is published; the manifests are "
+                           f"on branch {s.branch}. To finish: {finish}")
+    finally:
+        try:
+            d.git("checkout", before)
+        except (subprocess.CalledProcessError, OSError):
+            pass
     d.echo(f"uploaded {s.files} file(s), {s.bytes:,} bytes; superseded {s.superseded}, "
            f"deleted {s.deleted}" + (f"; PR {s.pr_url}" if s.pr_url else ""))
     return s

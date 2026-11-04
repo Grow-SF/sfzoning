@@ -221,14 +221,21 @@ def known_keys(records: dict[str, dict], client=None) -> dict[str, str]:
 
 # --- the store's listing and uploads (node, @vercel/blob, token in site/.env.local) ----------------
 
+def env_file_path() -> Path:
+    """The env file holding the Blob token: SFZMAPS_ENV_FILE, else site/.env.local. Raises
+    ShipError when it doesn't exist. (Never read or print its contents.)"""
+    env_file = Path(os.environ.get("SFZMAPS_ENV_FILE") or _repo_root() / "site" / ".env.local")
+    if not env_file.exists():
+        raise ShipError(f"{env_file} is missing (BLOB_READ_WRITE_TOKEN, from `vercel env pull`); "
+                        "SFZMAPS_ENV_FILE may name another")
+    return env_file
+
+
 def _node(script: str, args: list[str], stdin: str | None = None) -> subprocess.CompletedProcess:
     """Run a site script; node reads the token from site/.env.local, or from the file
     SFZMAPS_ENV_FILE names (e.g. the main checkout's, from a worktree that has none)."""
     site = _repo_root() / "site"
-    env_file = Path(os.environ.get("SFZMAPS_ENV_FILE") or site / ".env.local")
-    if not env_file.exists():
-        raise ShipError(f"{env_file} is missing (BLOB_READ_WRITE_TOKEN, from `vercel env pull`); "
-                        "SFZMAPS_ENV_FILE may name another")
+    env_file = env_file_path()
     return subprocess.run(["node", f"--env-file={env_file}", f"scripts/{script}", *args], cwd=site,
                           input=stdin, capture_output=True, text=True)
 
