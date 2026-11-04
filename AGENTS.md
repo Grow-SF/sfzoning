@@ -58,6 +58,12 @@ or Blob token.
 - A production build of the site must never point at local tiles
   (`scripts/check-tiles-env.mjs` enforces this; don't bypass it).
 
+## Readers' corrections
+
+Issues labelled `correction` come from the site's corrections tray. Process them with the
+`processing-map-corrections` skill (`.claude/skills/processing-map-corrections/SKILL.md`):
+check every scan crop before applying anything.
+
 ## Faithfulness to the historic maps
 
 - The paper layer shows the scans as scanned. Don't upscale them, vectorize
