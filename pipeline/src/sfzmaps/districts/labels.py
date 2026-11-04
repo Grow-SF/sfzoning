@@ -107,6 +107,15 @@ GEO_PX = 4
 # the region it would have with every bridge (ink or not), when no other code is printed in
 # it and it is at most PARK_MAX_PX.
 PARK_CLOSED = True
+# A lot coded only from pieces that reach the page's edge (the neatline, a legend, the margin:
+# the unbounded page background) and whose backing label is over OPEN_REACH_FT away takes no
+# code from this sheet (#38: the Fort Miley VA hospital read C-2 from a label 2,700 ft away;
+# #35: Mission lots on 2000 sheet 8 read M-1 through the margin).  Another sheet may still read
+# it; else it is unknown.  None turns the guard off.  At 2,500 ft it blanks 0.03-0.8% of lots per
+# series, and 1996/2000 coded only 38% of those alike (74% overall): mostly noise.  2,000 ft
+# also blanked lots read right; 3,000 ft missed the VA hospital.
+OPEN_REACH_FT: float | None = 2500.0
+OPEN_EDGE_PX = 15        # a piece this close to the page edge or an excluded area is open
 PARK_MAX_PX = 5_000_000
 MIN_REGIONS = 5          # fewer closed regions: boundary extraction failed, use the fallback
 FALLBACK_CONF = 0.3
@@ -819,7 +828,31 @@ def supporting_labels(regs: list[Polygon], labs: list[DistrictLabel],
     return out
 
 
-def _majority(parcels, assigned, transform: SheetTransform, support: list[np.ndarray] | None = None):
+def open_pieces(assigned, exclude: np.ndarray) -> list[bool]:
+    """Per assigned piece: does it come within OPEN_EDGE_PX of the page edge or an excluded area
+    (outside the neatline, legends)?"""
+    import shapely
+
+    edge = exclude.copy()
+    edge[:OPEN_EDGE_PX, :] = edge[-OPEN_EDGE_PX:, :] = True
+    edge[:, :OPEN_EDGE_PX] = edge[:, -OPEN_EDGE_PX:] = True
+    k = 2 * OPEN_EDGE_PX + 1
+    edge = cv2.dilate(edge.astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+    h, w = edge.shape
+    out = []
+    for poly, _, _ in assigned:
+        xy = shapely.get_coordinates(shapely.segmentize(poly.boundary, 10.0)) if not poly.is_empty else []
+        if not len(xy):
+            out.append(False)
+            continue
+        xi = np.clip(xy[:, 0].astype(int), 0, w - 1)
+        yi = np.clip(xy[:, 1].astype(int), 0, h - 1)
+        out.append(bool(edge[yi, xi].any()))
+    return out
+
+
+def _majority(parcels, assigned, transform: SheetTransform, support: list[np.ndarray] | None = None,
+              open_: list[bool] | None = None):
     """(code, confidence, label distance) per parcel row: the code covering the largest share
     of its area, and the distance (ft) from the parcel to the nearest printed label backing
     that code (support: page px per assigned piece, supporting_labels); inf when none does."""
@@ -828,8 +861,9 @@ def _majority(parcels, assigned, transform: SheetTransform, support: list[np.nda
     n = len(parcels)
     codes, confs, dists = [None] * n, [0.0] * n, [np.inf] * n
     support = support if support is not None else [np.zeros((0, 2))] * len(assigned)
+    open_ = open_ if open_ is not None else [False] * len(assigned)
     rows = [(_poly_to_world(p, transform), c, cf,
-             transform.to_world(s) if len(s) else s) for (p, c, cf), s in zip(assigned, support)]
+             transform.to_world(s) if len(s) else s, o) for (p, c, cf), s, o in zip(assigned, support, open_)]
     rows = [r for r in rows if r[0] is not None and not r[0].is_empty]
     if not rows or not n:
         return codes, confs, dists
@@ -857,6 +891,9 @@ def _majority(parcels, assigned, transform: SheetTransform, support: list[np.nda
         if pts:
             p = np.vstack(pts)
             dists[pid] = float(np.hypot(p[:, 0] - cx[pid], p[:, 1] - cy[pid]).min())
+        if (OPEN_REACH_FT is not None and np.isfinite(dists[pid]) and dists[pid] > OPEN_REACH_FT
+                and all(rows[r][4] for r in rids[(pid, code)])):
+            codes[pid], confs[pid] = None, 0.0
     return codes, confs, dists
 
 
@@ -989,7 +1026,8 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
             assigned = assign_regions(regs, ls, reads=reads, wall=wall[0])
             if closed is not None and kind == "use":
                 assigned = closed_parks(assigned, closed, ls)
-            res[kind] = _majority(parcels, assigned, transform, supporting_labels(regs, ls, assigned))
+            res[kind] = _majority(parcels, assigned, transform, supporting_labels(regs, ls, assigned),
+                                  open_pieces(assigned, exclude) if OPEN_REACH_FT is not None else None)
         else:
             res[kind] = _fallback(parcels, ls, transform)
     info = SERIES.get(series)
