@@ -124,17 +124,22 @@ describe("zipEntries", () => {
     const run = async () => { for await (const e of zipEntries(src, "1948", fetchFn)) void e; };
     await expect(run()).rejects.toThrow(/1948-p02\.tif.*404/);
   });
-  it("refuses a sheet whose Content-Length is not the manifest's size", async () => {
-    const fetchFn = async () => new Response("xxxxx", { headers: { "content-length": "5" } });
-    const run = async () => { for await (const e of zipEntries(src, "1948", fetchFn)) void e; };
-    await expect(run()).rejects.toThrow("Could not download sheet 1948-p01.tif: size 5, expected 1");
-  });
   it("fails the zip when a sheet's body is not the manifest's size", async () => {
     const body = () => new ReadableStream({ start(c) { c.enqueue(new Uint8Array(3)); c.close(); } });
     const fetchFn = async () => new Response(body());
     await expect(new Response(makeZip(zipEntries(src, "1948", fetchFn))).arrayBuffer()).rejects.toThrow(
       "Could not download sheet 1948-p01.tif: size at least 3, expected 1",
     );
+  });
+  it("fails the zip when a sheet's body is short", async () => {
+    const fetchFn = async () => new Response(new ReadableStream({ start(c) { c.close(); } }));
+    await expect(new Response(makeZip(zipEntries(src, "1948", fetchFn))).arrayBuffer()).rejects.toThrow(
+      "Could not download sheet 1948-p01.tif: size 0, expected 1",
+    );
+  });
+  it("judges a sheet by its decoded bytes, not a compressed Content-Length", async () => {
+    const fetchFn = async () => new Response("x", { headers: { "content-length": "40" } });
+    await expect(new Response(makeZip(zipEntries(src, "1948", fetchFn))).arrayBuffer()).resolves.toBeInstanceOf(ArrayBuffer);
   });
   it("predicts the zip's exact length", async () => {
     const s = { license: "Licence ©", sheets: { a: { updated: "2026-11-04", readme: "Zoning, café — “1948”\n", items: [

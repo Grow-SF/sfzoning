@@ -63,12 +63,9 @@ export async function* zipEntries(
     }
     if (!res.ok) throw new Error(`Could not download sheet ${item.name}: HTTP ${res.status}`);
     // The zip's Content-Length is predicted from the manifest, so a sheet of another size must stop
-    // the download rather than end in a broken or truncated file. (A compressed transfer's
-    // Content-Length is not the body's, so only the counted body is checked then.)
-    const len = res.headers.get("content-length");
-    if (len !== null && !res.headers.get("content-encoding") && Number(len) !== item.bytes) {
-      throw new Error(`Could not download sheet ${item.name}: size ${len}, expected ${item.bytes}`);
-    }
+    // the download rather than end in a broken or truncated file. Only the decoded bytes are
+    // counted: Blob may send the sheet compressed (br), so its Content-Length can be the
+    // compressed size, and cross-origin the Content-Encoding header that would say so is hidden.
     if (!res.body) throw new Error(`Could not download sheet ${item.name}: empty response`);
     yield { name: item.name, input: sized(res.body, item), lastModified: day(item.updated), size: item.bytes };
     // The generator resumes once client-zip has read the whole sheet.
