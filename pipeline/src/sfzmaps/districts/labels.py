@@ -438,7 +438,18 @@ def bridge_gaps(heavy: np.ndarray, max_gap: float = BRIDGE_PX,
     at most max_gap away) that isn't just the same line bending back.  Real district lines
     are closed; on the scans they break where the pen thinned or ran along a block outline.
     A wrong bridge only cuts off a sliver that then inherits its neighbours' code, while a
-    gap merges two districts."""
+    gap merges two districts.  With ink (and INK_SHARE), bridges over blank paper are dropped."""
+    every = _bridge_all(heavy, max_gap)
+    if ink is not None and INK_SHARE is not None:
+        return _ink_bridges(heavy, every, ink)
+    return every
+
+
+def _bridge_all(heavy: np.ndarray, max_gap: float) -> np.ndarray:
+    """bridge_gaps without the ink check.  The walk from each end is a breadth-first search
+    over the skeleton's pixels, numbered in row-major order with their neighbours in _NB order,
+    so that it visits (and picks the pixel BRIDGE_BACK_PX steps back) exactly as a walk over
+    the image would."""
     from scipy.spatial import cKDTree
     from skimage.morphology import skeletonize
 
@@ -450,53 +461,55 @@ def bridge_gaps(heavy: np.ndarray, max_gap: float = BRIDGE_PX,
     pts = np.argwhere(sk)
     if len(pts) < 2:
         return heavy
-    nb = sum(np.roll(np.roll(sk, dy, 0), dx, 1) for dy, dx in _NB) * sk
-    ends = np.argwhere(sk & (nb == 1))
-    tree = cKDTree(pts)
     h, w = sk.shape
+    idx = np.full((h + 2, w + 2), -1, np.int64)          # padded: neighbours never wrap
+    idx[pts[:, 0] + 1, pts[:, 1] + 1] = np.arange(len(pts))
+    nbr = np.stack([idx[pts[:, 0] + 1 + dy, pts[:, 1] + 1 + dx] for dy, dx in _NB], axis=1)
+    adj = [[j for j in row if j >= 0] for row in nbr.tolist()]
+    ends = np.flatnonzero((nbr >= 0).sum(axis=1) == 1)
+    tree = cKDTree(pts)
     out = heavy.astype(np.uint8).copy()
     cos_lim = np.cos(np.radians(BRIDGE_CONE_DEG))
     reach = int(3 * max_gap)
-    for ey, ex in ends:
+    stamp = [-1] * len(pts)
+    seen_np = np.full(len(pts), -1, np.int64)
+    for e in ends.tolist():
+        ey, ex = (int(v) for v in pts[e])
         # walk the skeleton from the end (BFS) to find the line's own pixels and direction
-        seen = {(ey, ex): 0}
-        frontier, back = [(ey, ex)], None
+        stamp[e] = e
+        visited, frontier, back = [e], [e], None
         for step in range(1, reach + 1):
             nxt = []
-            for y, x in frontier:
-                for dy, dx in _NB:
-                    q = (y + dy, x + dx)
-                    if 0 <= q[0] < h and 0 <= q[1] < w and sk[q] and q not in seen:
-                        seen[q] = step
-                        nxt.append(q)
+            for i in frontier:
+                for j in adj[i]:
+                    if stamp[j] != e:
+                        stamp[j] = e
+                        nxt.append(j)
             if step == BRIDGE_BACK_PX and nxt:
                 back = nxt[0]
             if not nxt:
                 break
+            visited.extend(nxt)
             frontier = nxt
         if back is None:
             continue        # a short spur: no direction
-        v = np.array([ey - back[0], ex - back[1]], float)
+        v = np.array([ey - pts[back][0], ex - pts[back][1]], float)
         if np.linalg.norm(v) < BRIDGE_STRAIGHT * BRIDGE_BACK_PX:
             continue        # curls (lettering touching a line), no clear direction
         v /= np.linalg.norm(v)
-        best, best_d = None, np.inf
-        for i in tree.query_ball_point((ey, ex), max_gap):
-            q = tuple(pts[i])
-            if q in seen:
-                continue
-            u = np.array([q[0] - ey, q[1] - ex], float)
-            dist = float(np.linalg.norm(u))
-            if dist < 2 or u @ v < cos_lim * dist:
-                continue
-            if dist < best_d:
-                best, best_d = q, dist
-        if best is not None:
-            cv2.line(out, (int(ex), int(ey)), (int(best[1]), int(best[0])), 1, 3)
-    out = out > 0
-    if ink is not None and INK_SHARE is not None:
-        out = _ink_bridges(heavy, out, ink)
-    return out
+        cand = np.asarray(tree.query_ball_point((ey, ex), max_gap), np.int64)
+        if not len(cand):
+            continue
+        seen_np[visited] = e
+        cand = cand[seen_np[cand] != e]
+        u = (pts[cand] - (ey, ex)).astype(float)
+        dist = np.hypot(u[:, 0], u[:, 1])
+        ok = (dist >= 2) & (u @ v >= cos_lim * dist)
+        if not ok.any():
+            continue
+        best = pts[cand[ok][np.argmin(dist[ok])]]
+        cv2.line(out, (ex, ey), (int(best[1]), int(best[0])), 1, 3)
+    return out > 0
 
 
 def _ink_bridges(heavy: np.ndarray, out: np.ndarray, ink: np.ndarray) -> np.ndarray:
@@ -516,9 +529,17 @@ def _ink_bridges(heavy: np.ndarray, out: np.ndarray, ink: np.ndarray) -> np.ndar
 
 def walls(page_img: np.ndarray) -> tuple[np.ndarray, float]:
     """(heavy lines with their gaps bridged, the heavy width threshold): what bounds regions."""
+    kept, _, width_thr = walls_and_bridges(page_img)
+    return kept, width_thr
+
+
+def walls_and_bridges(page_img: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """(walls: heavy lines bridged where the bridge is over ink, the same with every bridge,
+    the heavy width threshold), from one bridging pass."""
     heavy, width_thr = _heavy(page_img)
-    ink = linework.binarize(page_img) if INK_SHARE is not None else None
-    return bridge_gaps(heavy, BRIDGE_PX, ink=ink), width_thr
+    every = _bridge_all(heavy, BRIDGE_PX)
+    kept = _ink_bridges(heavy, every, linework.binarize(page_img)) if INK_SHARE is not None else every
+    return kept, every, width_thr
 
 
 def _component_polygon(mask: np.ndarray, ox: int, oy: int) -> Polygon | None:
@@ -761,23 +782,39 @@ def assign_regions(regs: list[Polygon], labs: list[DistrictLabel], *, touch_px: 
     for i, (c, cf) in (reads or {}).items():
         if i not in labelled:
             code_of[i] = (c, cf * READ_CONF)
-    near = [r.buffer(touch_px) for r in regs]
+    # buffers, candidate neighbours and contact areas are only geometry: each is computed once,
+    # when first needed (the inheritance loop below asks for the same regions again and again)
+    near_c: dict[int, object] = {}
+    cand_c: dict[int, list[int]] = {}
+    area_c: dict[tuple, float] = {}
+
+    def near(i):
+        if i not in near_c:
+            near_c[i] = regs[i].buffer(touch_px)
+        return near_c[i]
+
+    def touch(i, j, k=None):
+        """Overlap of region i's touch buffer with region j's (k: piece k of split region j)."""
+        key = (i, j, k)
+        if key not in area_c:
+            other = near(j) if k is None else labelled[j][k][0].buffer(touch_px)
+            area_c[key] = near(i).intersection(other).area
+        return area_c[key]
 
     def neighbours(i):
         """(code, conf, contact) of each coded neighbour; contact = overlap area of the two
         regions' touch buffers, proportional to their shared boundary length."""
+        if i not in cand_c:
+            cand_c[i] = [int(j) for j in tree.query(near(i), predicate="intersects") if int(j) != i]
         out_ = []
-        for j in tree.query(near[i], predicate="intersects"):
-            j = int(j)
-            if j == i:
-                continue
+        for j in cand_c[i]:
             if j in code_of:
                 c, cf = code_of[j]
-                out_.append((c, cf, near[i].intersection(near[j]).area))
+                out_.append((c, cf, touch(i, j)))
             elif j in labelled:                       # split region: each piece separately
-                for pc, c, cf in labelled[j]:
-                    if pc.intersects(near[i]):
-                        out_.append((c, cf, near[i].intersection(pc.buffer(touch_px)).area))
+                for k, (pc, c, cf) in enumerate(labelled[j]):
+                    if pc.intersects(near(i)):
+                        out_.append((c, cf, touch(i, j, k)))
         return out_
 
     todo = [i for i in range(len(regs)) if i not in labelled and i not in code_of]
@@ -923,20 +960,18 @@ def _majority(parcels, assigned, transform: SheetTransform, support: list[np.nda
     rows = [r for r in rows if r[0] is not None and not r[0].is_empty]
     if not rows or not n:
         return codes, confs, dists
-    rg = gpd.GeoDataFrame({"code": [r[1] if r[1] is not None else "" for r in rows],
-                           "rconf": [r[2] for r in rows], "rid": np.arange(len(rows))},
-                          geometry=[r[0] for r in rows], crs=config.WORK_CRS)
-    pg = gpd.GeoDataFrame({"pid": np.arange(n)}, geometry=list(parcels.geometry), crs=config.WORK_CRS)
-    ov = gpd.overlay(pg, rg, how="intersection", keep_geom_type=False)
+    ov = _overlap(np.array(list(parcels.geometry), dtype=object), [r[0] for r in rows])
     if ov.empty:
         return codes, confs, dists
-    ov["area"] = ov.geometry.area
+    ov["code"] = [rows[r][1] if rows[r][1] is not None else "" for r in ov["rid"]]
+    ov["rconf"] = [rows[r][2] for r in ov["rid"]]
     ov["wconf"] = ov["area"] * ov["rconf"]
     g = ov.groupby(["pid", "code"])[["area", "wconf"]].sum().reset_index()
     g = g.sort_values("area", ascending=False).drop_duplicates("pid")
     rids = ov.groupby(["pid", "code"])["rid"].agg(list)
-    parea = pg.geometry.area.to_numpy()
-    cent = pg.geometry.centroid
+    pgeo = gpd.GeoSeries(list(parcels.geometry), crs=config.WORK_CRS)
+    parea = pgeo.area.to_numpy()
+    cent = pgeo.centroid
     cx, cy = cent.x.to_numpy(), cent.y.to_numpy()
     for pid, code, area, wconf in g[["pid", "code", "area", "wconf"]].itertuples(index=False):
         if code == "":
@@ -951,6 +986,35 @@ def _majority(parcels, assigned, transform: SheetTransform, support: list[np.nda
                 and all(rows[r][4] for r in rids[(pid, code)])):
             codes[pid], confs[pid] = None, 0.0
     return codes, confs, dists
+
+
+def _overlap(parcels: np.ndarray, pieces: list) -> "pd.DataFrame":
+    """(pid, rid, area): each parcel x region piece that intersect, with the area they share.
+    One bulk query of the pieces (prepared) against the parcels; a parcel wholly inside a piece
+    takes its own area, so only parcels on a piece's edge are intersected (what
+    geopandas.overlay did here, at a fraction of the time)."""
+    import pandas as pd
+    import shapely
+
+    bad = ~shapely.is_valid(parcels) & ~shapely.is_missing(parcels)
+    if bad.any():
+        parcels = parcels.copy()
+        parcels[bad] = shapely.make_valid(parcels[bad])
+    pieces = np.array(pieces, dtype=object)
+    pbad = ~shapely.is_valid(pieces)
+    if pbad.any():
+        pieces[pbad] = shapely.make_valid(pieces[pbad])
+    shapely.prepare(pieces)
+    tree = shapely.STRtree(parcels)
+    rid, pid = tree.query(pieces, predicate="intersects")
+    if not len(pid):
+        return pd.DataFrame({"pid": [], "rid": [], "area": []})
+    inside = shapely.contains_properly(pieces[rid], parcels[pid])
+    area = shapely.area(parcels[pid])
+    edge = ~inside
+    area[edge] = shapely.area(shapely.intersection(parcels[pid[edge]], pieces[rid[edge]]))
+    out = pd.DataFrame({"pid": pid, "rid": rid, "area": area}).sort_values(["pid", "rid"], kind="stable")
+    return out.reset_index(drop=True)
 
 
 def _fallback(parcels, labs: list[DistrictLabel], transform: SheetTransform):
@@ -1024,6 +1088,18 @@ def use_code_labels(labs: list[DistrictLabel]) -> list[DistrictLabel]:
     return out
 
 
+_PTREE: list = []      # (parcels frame, its tree): one series reads every sheet against the same frame
+
+
+def _parcel_tree(every) -> STRtree:
+    """STRtree of the distinct parcel shapes (stacked condos share one), built once per frame."""
+    if _PTREE and _PTREE[0][0] is every:
+        return _PTREE[0][1]
+    tree = STRtree(list({g.wkb: g for g in every.geometry if g is not None and not g.is_empty}.values()))
+    _PTREE[:] = [(every, tree)]
+    return tree
+
+
 def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
                    client: llm.LLMClient | None = None, all_parcels=None):
     """DataFrame (blklot, code, height_code, confidence, use/height confidence and label_ft)
@@ -1045,15 +1121,15 @@ def assign_parcels(parcels, sheet, transform: SheetTransform | None = None, *,
         transform = SheetTransform.from_json(json.loads((d / "transform.json").read_text()))
     labs = read_district_labels(series, sid)
     img = cv2.imread(str(d / "page.png"), cv2.IMREAD_GRAYSCALE)
-    wall = walls(img)
+    kept, every_bridge, thr = walls_and_bridges(img)
+    wall = (kept, thr)
     exclude = reading.exclusion_mask(img, _page_info(d))
     regs = regions(img, exclude, wall)
     closed = None
     if PARK_CLOSED and INK_SHARE is not None:
-        heavy, thr = _heavy(img)
-        closed = regions(img, exclude, (bridge_gaps(heavy, BRIDGE_PX), thr))
+        closed = regions(img, exclude, (every_bridge, thr))
     every = parcels if all_parcels is None else all_parcels
-    ptree = STRtree(list({g.wkb: g for g in every.geometry if g is not None and not g.is_empty}.values()))
+    ptree = _parcel_tree(every)
     share: dict[int, float] = {}
 
     def parcel_share(i):
