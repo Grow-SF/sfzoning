@@ -1,2 +1,12 @@
 sheet,x,y,code,fix_code,fix_x,fix_y,note
 1996-2000-zoning-p30,2910,2756,M-1,RH-1,,,"block 2746: the boxed RH-1, its R hidden by the box line (#36)"
+1996-2000-zoning-p34,1042,3390,RH-2,RH-1,,,"block 6200, Visitacion Valley: a big RH-1 (2000 reads it right)"
+1996-2000-zoning-p34,1440,2824,RH-2,-,,,"block 5462: the RH-1 read twice, once as RH-2"
+1996-2000-zoning-p35,1264,3138,RH-1,RH-2,,,"Athens/Moscow: a diagonal RH-2 (2000 reads it right)"
+1996-2000-zoning-p36,2220,2732,RM-2,-,,,"Geneva Ave: the RH-2 read twice, once as RM-2"
+1996-2000-zoning-p36,1936,2826,RM-1,NC-1,,,"block 6980: a boxed NC-1 (2000 reads it right)"
+1996-2000-zoning-p26,2710,2140,RH-1,RM-1,,,"block 152: a vertical RM-1 (2000 reads it right)"
+1996-2000-zoning-p27,1072,3290,RH-3,RM-1,,,"block 1443: RM-1 (2000 reads it right)"
+1996-2000-zoning-p27,1766,3452,RH-1,RH-3,,,"block 1542: RH-3 (2000 reads it right)"
+1996-2000-zoning-p27,790,3488,RM-2,RM-1,,,"block 1529: a boxed RM-1 (2000 reads it right)"
+1996-2000-zoning-p28,2246,2846,RM-2,-,,,"blocks 1404-1405: the RH-2 read twice, once as RM-2"
