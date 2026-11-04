@@ -42,17 +42,20 @@ def export_citywide(item: Item, out: Path, updated: str, commit: str) -> None:
     out.with_name(f"{stem}.LICENSE.txt").write_text(LICENSE_TEXT)
 
 
-def sheet_entries(series: str) -> list[dict]:
+def sheet_entries(series: str, known: list[dict] | None = None) -> list[dict]:
     """One entry per placed sheet (every dir with warped_paper.tif), in natural order of sheet id."""
     entries = []
+    old = {e["sheet"]: e for e in known or []}
     for tif in (config.WORK_DIR / series).glob("*/warped_paper.tif"):
-        entries.append({
-            "sheet": tif.parent.name,
-            "name": f"{series}-sheet-{tif.parent.name}.tif",
-            "md5": _md5(tif),
-            "bytes": tif.stat().st_size,
-            "sha256": stitch._sha256(tif),
-        })
+        st = tif.stat()
+        sheet = tif.parent.name
+        k = old.get(sheet)
+        if k and k.get("bytes") == st.st_size and k.get("mtime_ns") == st.st_mtime_ns:
+            md5, sha = k["md5"], k["sha256"]  # unchanged since the last index: don't read GBs again
+        else:
+            md5, sha = _md5(tif), stitch._sha256(tif)
+        entries.append({"sheet": sheet, "name": f"{series}-sheet-{sheet}.tif", "md5": md5,
+                        "bytes": st.st_size, "sha256": sha, "mtime_ns": st.st_mtime_ns})
     return sorted(entries, key=lambda e: _natural(e["sheet"]))
 
 

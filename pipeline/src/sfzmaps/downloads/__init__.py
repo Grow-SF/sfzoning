@@ -7,6 +7,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -118,6 +119,10 @@ def run(series: list[str] | None = None, log=lambda line: None) -> dict:
     commit = _commit()
     items = catalog()
     everything = {i.series for i in items}
+    known = everything | set(prev.get("sheets", {})) | {s for s in SERIES if (config.WORK_DIR / s).is_dir()}
+    unknown = sorted(set(series or []) - known)
+    if unknown:
+        raise ValueError(f"unknown series: {', '.join(unknown)} (known: {', '.join(sorted(known))})")
     wanted = set(series) if series else everything
     files: dict = {k: v for k, v in prev_files.items() if v.get("series") not in wanted}
     sheets: dict = {k: v for k, v in prev.get("sheets", {}).items() if k not in wanted}
@@ -149,7 +154,7 @@ def run(series: list[str] | None = None, log=lambda line: None) -> dict:
         }
         log(f"wrote  {item.key}  ({out.stat().st_size:,} bytes)")
     for s in sorted(wanted & everything):
-        entries = rasters.sheet_entries(s)
+        entries = rasters.sheet_entries(s, prev.get("sheets", {}).get(s))
         if not entries:
             continue
         sheets[s] = entries
@@ -167,7 +172,9 @@ def run(series: list[str] | None = None, log=lambda line: None) -> dict:
     }
     text = json.dumps(index, indent=2) + "\n"
     if not index_path.exists() or index_path.read_text() != text:
-        index_path.write_text(text)
+        part = index_path.with_name("index.json.part")
+        part.write_text(text)
+        os.replace(part, index_path)  # a reader never sees a half-written index
     return index
 
 

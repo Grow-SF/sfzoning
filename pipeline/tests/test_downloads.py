@@ -266,7 +266,8 @@ def test_sheet_entries_md5_matches_file(tmp_data):
     e = next(e for e in es if e["sheet"] == "2")
     raw = (tmp_data / "work" / "1948" / "2" / "warped_paper.tif").read_bytes()
     assert e == {"sheet": "2", "name": "1948-sheet-2.tif", "md5": hashlib.md5(raw).hexdigest(),
-                 "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+                 "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+                 "mtime_ns": (tmp_data / "work" / "1948" / "2" / "warped_paper.tif").stat().st_mtime_ns}
 
 
 def test_failed_tool_call_shows_gdal_stderr(tmp_path):
@@ -369,6 +370,38 @@ def test_changed_source_rewrites_only_that_series(fake_exports, tmp_data, monkey
         "1948/lots.geojson", "1948/lots.gpkg", "1948/lots.shp"]
     assert {u for _, u in fake_exports} == {"2030-01-02"}
     assert idx["files"]["today/lots.geojson"]["fingerprint"]
+
+
+def test_unchanged_sheet_is_not_rehashed(tmp_data, monkeypatch):
+    from sfzmaps import stitch
+    from sfzmaps.downloads import rasters
+    first = rasters.sheet_entries("1948")
+    calls = []
+    monkeypatch.setattr(rasters, "_md5", lambda p: calls.append(p) or "x")
+    monkeypatch.setattr(stitch, "_sha256", lambda p: calls.append(p) or "x")
+    assert rasters.sheet_entries("1948", first) == first and calls == []
+    _touch(tmp_data / "work" / "1948" / "1" / "warped_paper.tif", b"changed!")
+    assert rasters.sheet_entries("1948", first)[0]["md5"] == "x" and calls
+
+
+def test_unknown_series_is_rejected(fake_exports):
+    with pytest.raises(ValueError, match="unknown series: 19488"):
+        downloads.run(["19488"])
+
+
+def test_index_written_atomically(fake_exports, tmp_data):
+    downloads.run()
+    root = tmp_data / "downloads"
+    assert (root / "index.json").exists() and not (root / "index.json.part").exists()
+
+
+def test_sheets_readme_date_survives_later_unchanged_rerun(fake_exports, tmp_data, monkeypatch):
+    monkeypatch.setattr("sfzmaps.downloads._today", lambda: "2026-11-04")
+    first = downloads.run()
+    monkeypatch.setattr("sfzmaps.downloads._today", lambda: "2027-03-09")
+    second = downloads.run()
+    assert "2026-11-04" in first["readme"]["1948"]
+    assert second["readme"]["1948"] == first["readme"]["1948"]
 
 
 def test_run_limited_to_series_keeps_other_entries(fake_exports, tmp_data):

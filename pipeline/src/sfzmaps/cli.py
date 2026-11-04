@@ -779,7 +779,10 @@ def downloads(
     from sfzmaps import downloads as dl
 
     build_mod.require_toolchain(system_tools)
-    index = dl.run(series or None, log=typer.echo)
+    try:
+        index = dl.run(series or None, log=typer.echo)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--series")
     files = index["files"]
     typer.echo(f"{len(files)} files, {sum(f['bytes'] for f in files.values()):,} bytes; "
                f"{sum(len(v) for v in index['sheets'].values())} sheets listed; index {dl.DOWNLOADS_DIR / 'index.json'}")
