@@ -590,6 +590,44 @@ def push() -> None:
     typer.echo("pushed")
 
 
+@app.command("corrections")
+def corrections_cmd(
+    issue: int = typer.Argument(..., help="The GitHub issue number the site's corrections tray opened."),
+    apply: bool = typer.Option(False, "--apply", help="Write the corrections into inputs/ (overrides "
+                               "and review cases). Without it, only check them and write scan crops."),
+    file: Path = typer.Option(None, "--file", help="Read the corrections from this file (the tray's "
+                              "download, or text pasted into the issue as an attachment) instead of the issue body."),
+) -> None:
+    """Import readers' corrections from a GitHub issue (districts/corrections.py). First run
+    without --apply: check the crops in data/check/corrections/<issue>/ against the proposed codes;
+    then --apply, build, and commit inputs/."""
+    from sfzmaps.districts import check as chk
+    from sfzmaps.districts import corrections as corr
+    from sfzmaps.districts.read import load_parcels
+
+    meta = ({"url": f"issue #{issue}", "body": file.read_text()} if file is not None else corr.fetch(issue))
+    rows = corr.parse(meta["body"])
+    if not rows:
+        raise typer.BadParameter(f"issue #{issue} has no ```{corr.FENCE} block")
+    parcels = load_parcels()
+    got = corr.check(rows, parcels)
+    for p in got.problems:
+        typer.echo(f"skipped: {p}", err=True)
+    rows = corr.with_twins(got.ok)
+    for r in rows:
+        typer.echo(f"{r['series']:22} {r['blklot']:10} {r['shown'] or 'none':>8} -> {r['proposed']:8} {r['note']}")
+    dest = config.DATA_DIR / "check" / "corrections" / str(issue)
+    shots = corr.crops(rows, dest, parcels)
+    typer.echo(f"{len(rows)} corrections from {meta['url']}; {len(shots)} scan crops in {dest}")
+    if not apply:
+        typer.echo("check the crops, then run again with --apply")
+        return
+    done = corr.write_overrides(rows, issue)
+    n_cases = corr.write_cases(rows, issue, chk.centroids())
+    typer.echo(f"overrides: {', '.join(f'{s} {n}' for s, n in done.items())}; review cases added: {n_cases}. "
+               "Now build and commit inputs/.")
+
+
 @app.command("answers")
 def answers_cmd(
     check: bool = typer.Option(False, "--check", help="List live artifacts whose answers aren't "
