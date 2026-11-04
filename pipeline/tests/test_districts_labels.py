@@ -237,6 +237,24 @@ def test_a_parcel_knows_how_far_its_printed_label_is(tmp_path):
     assert near["use_label_ft"] < 1e9 and np.isinf(out["height_label_ft"]).all()
 
 
+def test_a_far_label_in_an_open_region_leaves_the_lot_unread(tmp_path, monkeypatch):
+    """#38: a lot coded only from a piece that reaches the page edge, from a label farther than
+    OPEN_REACH_FT, gets no code from this sheet; enclosed districts keep theirs."""
+    lm = sl.build(codes=CODES)
+    d = sl.write_sheet("1960", "s1", lm)
+    labels.save_labels(d / "district_labels.json", _label_list(), page_sha256=labels.page_sha(d))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
+    island = f"{sl.ISLAND_BLOCK[1] * 20 + sl.ISLAND_BLOCK[0] + 1:04d}001"
+    monkeypatch.setattr(labels, "OPEN_REACH_FT", None)
+    every = labels.assign_parcels(lm.parcels, d, lm.transform).set_index("blklot")
+    monkeypatch.setattr(labels, "OPEN_REACH_FT", 1.0)
+    near = labels.assign_parcels(lm.parcels, d, lm.transform).set_index("blklot")
+    assert every["code"].notna().all()
+    assert near.loc[island, "code"] == "P"                      # enclosed: kept
+    assert near.loc["0001001", "code"] is None                  # TL reaches the page edge
+    assert near["code"].isna().sum() < len(near)
+
+
 def test_hyphenate():
     assert [labels.hyphenate(c) for c in ("R1", "R4", "R1D", "RH1(D)", "R-1", "P", "NC-2", None)] == \
         ["R-1", "R-4", "R-1-D", "RH-1(D)", "R-1", "P", "NC-2", None]
