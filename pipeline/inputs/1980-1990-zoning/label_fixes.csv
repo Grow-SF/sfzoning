@@ -1,2 +1,4 @@
 sheet,x,y,code,fix_code,fix_x,fix_y,note
 1980-1990-zoning-p06,2748,2298,M-1,RH-1,,,"block 2746: the boxed RH-1, its R hidden by the box line (#36)"
+1980-1990-zoning-p01,272,2474,P,RM-3,,,"block 220: a vertical RM-3, its upper half read as P (#35 block 0220)"
+1980-1990-zoning-p01,268,2524,RM-1,-,,,"block 220: the lower half of the same RM-3 (#35 block 0220)"
