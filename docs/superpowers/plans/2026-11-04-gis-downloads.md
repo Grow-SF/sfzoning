@@ -4,7 +4,7 @@
 
 **Goal:** Publish every edition's lots, districts, citywide scan image and individual aligned sheets as GIS downloads with a per-file "last updated" date, and split the site into four pages under a top menu.
 
-**Architecture:** A new `sfzmaps downloads` command (Python, pinned GDAL) writes lot/district zips and citywide COGs into `data/downloads/` plus `index.json`, which records each file's source fingerprint and every sheet's DVC md5. A new `site/scripts/publish-downloads.mjs` uploads only files whose fingerprint changed to Blob (`downloads/<fp12>/<readable name>`), checks the shipped sheet objects exist, keeps dates, and writes `site/lib/downloads.json`. The site renders `/data` from that manifest, serves `downloads.json`, the sheet CSVs and `/data/latest/...` redirects, and builds sheet zips in the browser from the shipped DVC objects.
+**Architecture:** `sfzmaps release` (run after a merge, from `main`) bundles the public steps: checks, downloads export, tile and download publishing, and a PR with the updated manifests. A new `sfzmaps downloads` command (Python, pinned GDAL) writes lot/district zips and citywide COGs into `data/downloads/` plus `index.json`, which records each file's source fingerprint and every sheet's DVC md5. A new `site/scripts/publish-downloads.mjs` uploads only files whose fingerprint changed to Blob (`downloads/<fp12>/<readable name>`), checks the shipped sheet objects exist, keeps dates, and writes `site/lib/downloads.json`. The site renders `/data` from that manifest, serves `downloads.json`, the sheet CSVs and `/data/latest/...` redirects, and builds sheet zips in the browser from the shipped DVC objects.
 
 **Tech Stack:** Python 3 + typer + GDAL CLI (pixi); Node ESM + `@vercel/blob` 2.8.2; Next.js 16 App Router, React 19, vitest; `client-zip` (MIT) for browser zips.
 
@@ -21,7 +21,7 @@
 - Remote requests: one listing call per 1,000 names, one request per uploaded file, one batch delete.
 - New dependencies must be AGPL-3.0 compatible (MIT/BSD/Apache fine).
 - Use the GDAL from `pixi.toml` (`toolchain` checks as in other commands).
-- Rollout: build everything now; do not run a real publish. `/data` and its menu entry appear only when `lib/downloads.json` lists files.
+- Rollout: build everything now; do not run a real publish or `sfzmaps release` (only `--dry-run`). `/data` and its menu entry appear only when `lib/downloads.json` lists files.
 - Draft copy is marked `// DRAFT COPY — NOT REVIEWED BY THE OWNER.` like `app/about/page.tsx`.
 
 ## Review Focus
@@ -262,7 +262,31 @@ Field mapping (lots): `blklot, code, height_code, category, confidence, source_s
 - [ ] **Step 2: Run** — FAIL. **Step 3: Implement.** **Step 4: Run** `npm test`, lint, tsc — PASS.
 - [ ] **Step 5: Commit** `feat(site): browser-built sheet zips`.
 
-### Task 10: End-to-end check (no publish)
+### Task 11: `sfzmaps release`
+
+One command for everything that goes public after a merge, so nothing has to be remembered.
+
+**Files:**
+- Create: `pipeline/src/sfzmaps/release.py`
+- Modify: `pipeline/src/sfzmaps/cli.py`, `pipeline/README.md` (commands table + a "Releasing" section), `site/README.md` (publishing section points at `sfzmaps release`; the scripts stay runnable alone)
+- Test: `pipeline/tests/test_release.py`
+
+**Interfaces:**
+- Consumes: `downloads.run()` (Task 4); `site/scripts/publish-tiles.mjs` and `publish-downloads.mjs` (Task 5), run as subprocesses with the env file `ship` uses (`site/.env.local`, or `SFZMAPS_ENV_FILE`); the git helpers in `ship.py`.
+- Produces: `sfzmaps release [--dry-run] [--no-pr]`, which in order:
+  1. `checks() -> list[str]` (problems; any one stops the release): tree clean; `HEAD` equals `origin/main` after a fetch; DVC data matches `dvc.lock`; this commit's cache is shipped (the same public checks as the `Cache shipped` workflow).
+  2. `downloads.run()`.
+  3. `publish-tiles.mjs`, then `publish-downloads.mjs` (each with `--dry-run` under `--dry-run`).
+  4. If `site/lib/published.json` or `site/lib/downloads.json` changed: commit them on branch `release/<YYYY-MM-DD>-<sha7>`, push, and open a PR (`gh pr create`, title `Release <date>`, body listing what was uploaded), unless `--no-pr`, which only commits. Merging that PR deploys. Nothing changed: print "nothing to release".
+  5. Print a summary: files uploaded, bytes, superseded files deleted, PR URL.
+- The download page goes live on the first release that lists files (Task 6/8 gating), so the owner's first `sfzmaps release` after the big iteration is the launch.
+
+- [ ] **Step 1: Failing tests** (subprocess and VCS calls injected): `test_release_stops_on_dirty_tree`; `test_release_stops_when_not_at_origin_main`; `test_release_stops_when_cache_not_shipped`; `test_dry_run_passes_dry_run_to_both_scripts_and_commits_nothing`; `test_no_changes_makes_no_branch`.
+- [ ] **Step 2: Run** `uv run pytest tests/test_release.py -v` — FAIL. **Step 3: Implement.** **Step 4: Run** the whole suite — PASS.
+- [ ] **Step 5:** `uv run sfzmaps release --dry-run` from this worktree should stop at "HEAD is not origin/main" (expected); report the output.
+- [ ] **Step 6: Commit** `feat: sfzmaps release`.
+
+### Task 12: End-to-end check (no publish)
 
 - [ ] **Step 1:** `pixi run uv run sfzmaps downloads` for all series in parallel batches (`--series` per group); report total sizes.
 - [ ] **Step 2:** Write a local test manifest with `publish-downloads.mjs --local http://127.0.0.1:<tiles port>` (serving `data/downloads` and the DVC cache objects through `npm run tiles`), start `npm run dev`, open `/`, `/maps`, `/data`, `/about` at desktop and 375px width; download one lots zip, one citywide image, one sheet and a sheets zip in Chrome and Firefox; open each in QGIS-compatible `ogrinfo`/`gdalinfo`. Screenshot the menu (both widths) and `/data` for the owner.

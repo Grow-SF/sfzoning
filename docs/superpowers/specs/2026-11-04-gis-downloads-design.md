@@ -144,6 +144,10 @@ each one carries its README and LICENSE.
   multipart upload. Uploads are one request per file plus a single list call to find what exists
   (minimise remote requests).
 
+- **`sfzmaps release`** (owner): one command after a merge, from `main`, that runs the checks,
+  the downloads export, the tile publish and the downloads publish, then opens a PR with the
+  updated manifests (merging it deploys). The scripts stay runnable on their own.
+
 ## Site
 
 - **Top menu** in `app/layout.tsx`: site title at left, the four links at right; under a
