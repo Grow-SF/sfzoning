@@ -6,6 +6,7 @@ a COG with no resampling: the scans stay as scanned.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 from sfzmaps import config, stitch
@@ -26,11 +27,15 @@ def export_citywide(item: Item, out: Path, updated: str, commit: str) -> None:
     """Write the citywide COG at `out` plus `<stem>.README.txt` and `<stem>.LICENSE.txt`."""
     vrt = stitch.build_vrt(item.series, paper=True)
     part = out.with_name(out.name + ".part")
-    run_tool("gdal_translate", "-q", "-of", "COG", "-co", "COMPRESS=DEFLATE",
-             "-co", "BIGTIFF=IF_SAFER", "-co", "OVERVIEWS=AUTO",
-             "-mo", f"TIFFTAG_COPYRIGHT={_copyright(item.series)}",
-             "-mo", f"TIFFTAG_IMAGEDESCRIPTION={item.series} edition, last updated {updated}",
-             str(vrt), str(part))
+    try:
+        run_tool("gdal_translate", "-q", "-of", "COG", "-co", "COMPRESS=DEFLATE",
+                 "-co", "BIGTIFF=IF_SAFER", "-co", "OVERVIEWS=AUTO", "-co", "OVERVIEW_RESAMPLING=AVERAGE",
+                 "-mo", f"TIFFTAG_COPYRIGHT={_copyright(item.series)}",
+                 "-mo", f"TIFFTAG_IMAGEDESCRIPTION={item.series} edition, last updated {updated}",
+                 str(vrt), str(part))
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
     part.replace(out)
     stem = out.name.removesuffix(out.suffix)
     out.with_name(f"{stem}.README.txt").write_text(readme(item.series, "citywide", updated, commit))
@@ -38,7 +43,7 @@ def export_citywide(item: Item, out: Path, updated: str, commit: str) -> None:
 
 
 def sheet_entries(series: str) -> list[dict]:
-    """One entry per placed sheet (every dir with warped_paper.tif), sorted by sheet id."""
+    """One entry per placed sheet (every dir with warped_paper.tif), in natural order of sheet id."""
     entries = []
     for tif in (config.WORK_DIR / series).glob("*/warped_paper.tif"):
         entries.append({
@@ -48,7 +53,12 @@ def sheet_entries(series: str) -> list[dict]:
             "bytes": tif.stat().st_size,
             "sha256": stitch._sha256(tif),
         })
-    return sorted(entries, key=lambda e: e["sheet"])
+    return sorted(entries, key=lambda e: _natural(e["sheet"]))
+
+
+def _natural(name: str) -> list:
+    """"2" before "10", "5a" after "5"; digit runs compare as numbers (parts alternate str, int)."""
+    return [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", name)]
 
 
 def _md5(p: Path) -> str:

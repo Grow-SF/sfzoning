@@ -4,7 +4,9 @@ No network and no paid reads. Not a DVC stage.
 """
 from __future__ import annotations
 
+import datetime
 import hashlib
+import json
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -84,3 +86,90 @@ def run_tool(*cmd: str) -> None:
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode:
         raise RuntimeError(f"{cmd[0]} failed ({r.returncode}): {r.stderr.strip() or r.stdout.strip()}")
+
+
+def _commit() -> str:
+    repo = Path(__file__).resolve().parent
+    r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=repo, capture_output=True, text=True)
+    return r.stdout.strip() or "unknown"
+
+
+def _today() -> str:
+    return datetime.date.today().isoformat()
+
+
+def _sha256_file(p: Path) -> str:
+    return stitch._sha256(p)
+
+
+def run(series: list[str] | None = None, log=lambda line: None) -> dict:
+    """Write what is out of date under DOWNLOADS_DIR and return (and write) index.json.
+
+    An item whose fingerprint equals the previous index entry, and whose file exists, is left alone
+    (not even its date changes). `series` limits the work; entries of other series are kept.
+    """
+    from sfzmaps.downloads import rasters, readme as readme_mod, vectors
+
+    root = DOWNLOADS_DIR
+    root.mkdir(parents=True, exist_ok=True)
+    index_path = root / "index.json"
+    prev: dict = json.loads(index_path.read_text()) if index_path.exists() else {}
+    prev_files = prev.get("files", {})
+    commit = _commit()
+    items = catalog()
+    everything = {i.series for i in items}
+    wanted = set(series) if series else everything
+    files: dict = {k: v for k, v in prev_files.items() if v.get("series") not in wanted}
+    sheets: dict = {k: v for k, v in prev.get("sheets", {}).items() if k not in wanted}
+    readmes: dict = {k: v for k, v in prev.get("readme", {}).items() if k not in wanted}
+    updated = _today()
+    for item in items:
+        if item.series not in wanted:
+            continue
+        fp = fingerprint(item, EXPORTER_VERSION)
+        out = root / item.series / item.filename
+        old = prev_files.get(item.key)
+        extra_ok = all((root / e).exists() for e in (old or {}).get("extra", []))
+        if old and old.get("fingerprint") == fp and out.exists() and extra_ok and old.get("path") == f"{item.series}/{item.filename}":
+            files[item.key] = old
+            log(f"same   {item.key}")
+            continue
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if item.layer == "citywide":
+            rasters.export_citywide(item, out, updated, commit)
+            stem = out.name.removesuffix(out.suffix)
+            extra = [f"{item.series}/{stem}.README.txt", f"{item.series}/{stem}.LICENSE.txt"]
+        else:
+            vectors.export_vector(item, out, updated, commit)
+            extra = []
+        files[item.key] = {
+            "series": item.series, "layer": item.layer, "fmt": item.fmt,
+            "path": f"{item.series}/{item.filename}", "fingerprint": fp,
+            "bytes": out.stat().st_size, "sha256": _sha256_file(out), "extra": extra,
+        }
+        log(f"wrote  {item.key}  ({out.stat().st_size:,} bytes)")
+    for s in sorted(wanted & everything):
+        entries = rasters.sheet_entries(s)
+        if not entries:
+            continue
+        sheets[s] = entries
+        old_readme = prev.get("readme", {}).get(s)
+        if old_readme is not None and prev.get("sheets", {}).get(s) == entries:
+            readmes[s] = old_readme  # nothing changed: keep its date
+        else:
+            readmes[s] = readme_mod.readme(s, "sheets", updated, commit)
+    index = {
+        "commit": prev.get("commit", commit) if not _anything_written(prev, files, sheets, readmes) else commit,
+        "license": readme_mod.LICENSE_TEXT,
+        "files": dict(sorted(files.items())),
+        "sheets": dict(sorted(sheets.items())),
+        "readme": dict(sorted(readmes.items())),
+    }
+    text = json.dumps(index, indent=2) + "\n"
+    if not index_path.exists() or index_path.read_text() != text:
+        index_path.write_text(text)
+    return index
+
+
+def _anything_written(prev: dict, files: dict, sheets: dict, readmes: dict) -> bool:
+    return (prev.get("files"), prev.get("sheets"), prev.get("readme")) != (files, sheets, readmes) or "commit" not in prev

@@ -46,6 +46,10 @@ _WHAT = {
                 "(Cloud Optimized GeoTIFF, California State Plane III, feet, EPSG:2227). The scans\n"
                 "are shown as scanned: not resampled to modern streets, not vectorized, nothing\n"
                 "drawn on them.",
+    "sheets": "The aligned sheets of the {edition} zoning map, one GeoTIFF per sheet, each at its own\n"
+              "native resolution (California State Plane III, feet, EPSG:2227). The sheets are not\n"
+              "resampled: they are the scans as scanned, placed on the map, with nothing drawn on\n"
+              "them and no warping to modern streets.",
 }
 
 

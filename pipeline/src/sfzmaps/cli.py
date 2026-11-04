@@ -768,6 +768,24 @@ def build(
 
 
 @app.command()
+def downloads(
+    series: list[str] = typer.Option(None, "--series", "-s", help="Only this series (repeatable)."),
+    system_tools: bool = typer.Option(False, "--system-tools", help="Use GDAL from outside the pixi "
+                                                                    "environment (not recommended)."),
+) -> None:
+    """Write the GIS downloads (lot and district zips, citywide COG, sheet list) into
+    data/downloads/ and its index.json; what is unchanged is left alone. $0, no API calls."""
+    from sfzmaps import build as build_mod
+    from sfzmaps import downloads as dl
+
+    build_mod.require_toolchain(system_tools)
+    index = dl.run(series or None, log=typer.echo)
+    files = index["files"]
+    typer.echo(f"{len(files)} files, {sum(f['bytes'] for f in files.values()):,} bytes; "
+               f"{sum(len(v) for v in index['sheets'].values())} sheets listed; index {dl.DOWNLOADS_DIR / 'index.json'}")
+
+
+@app.command()
 def doctor(
     renders: int = typer.Option(0, "--renders", help="Also re-render this many PDF pages per series "
                                                      "(into a temp folder) and compare them with "

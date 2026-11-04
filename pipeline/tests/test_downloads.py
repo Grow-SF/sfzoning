@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from sfzmaps import config, downloads
@@ -260,7 +262,7 @@ def test_sheet_entries_md5_matches_file(tmp_data):
         _touch(tmp_data / "work" / "1948" / sid / "warped_paper.tif", data)
     (tmp_data / "work" / "1948" / "9").mkdir()  # no warped_paper.tif: not listed
     es = rasters.sheet_entries("1948")
-    assert [e["sheet"] for e in es] == ["1", "10", "2"]
+    assert [e["sheet"] for e in es] == ["1", "2", "10"]
     e = next(e for e in es if e["sheet"] == "2")
     raw = (tmp_data / "work" / "1948" / "2" / "warped_paper.tif").read_bytes()
     assert e == {"sheet": "2", "name": "1948-sheet-2.tif", "md5": hashlib.md5(raw).hexdigest(),
@@ -270,3 +272,108 @@ def test_sheet_entries_md5_matches_file(tmp_data):
 def test_failed_tool_call_shows_gdal_stderr(tmp_path):
     with pytest.raises(RuntimeError, match="ogr2ogr failed.*nonexistent"):
         downloads.run_tool("ogr2ogr", str(tmp_path / "o.gpkg"), str(tmp_path / "nonexistent.fgb"))
+
+
+def test_sheet_entries_sort_naturally(tmp_data):
+    from sfzmaps.downloads import rasters
+    for sid in ("10", "5a", "2", "5", "1"):
+        _touch(tmp_data / "work" / "1948" / sid / "warped_paper.tif")
+    assert [e["sheet"] for e in rasters.sheet_entries("1948")] == ["1", "2", "5", "5a", "10"]
+    for sid in ("1948-02-01T000000", "1948-01-31T235959"):
+        _touch(tmp_data / "work" / "t" / sid / "warped_paper.tif")
+    assert [e["sheet"] for e in rasters.sheet_entries("t")] == ["1948-01-31T235959", "1948-02-01T000000"]
+
+
+@needs_gdal_raster
+def test_failed_gdal_translate_leaves_no_part(tmp_data, monkeypatch):
+    from sfzmaps.downloads import rasters
+    shutil.rmtree(tmp_data / "work" / "1948")
+    _make_sheets(tmp_data / "work")
+    _fake_build_vrt(monkeypatch)
+    monkeypatch.setattr(rasters, "run_tool", lambda *a: (Path(a[-1]).write_bytes(b"half"), 1 / 0))
+    item = {i.key: i for i in downloads.catalog()}["1948/citywide.cog"]
+    out = tmp_data / "x.tif"
+    with pytest.raises(ZeroDivisionError):
+        rasters.export_citywide(item, out, "2026-11-04", "abc")
+    assert not out.with_name("x.tif.part").exists()
+
+
+def test_readme_sheets_layer():
+    t = readme("1948", "sheets", "2026-11-04", "abc1234")
+    assert "native resolution" in t and "EPSG:2227" in t
+    assert "David Rumsey" in t and "Based on sfzoning.com by Steven Bacio" in t
+    assert "FIELDS" not in t
+
+
+# --- run() and index.json ---------------------------------------------------
+
+import json
+import os
+
+
+@pytest.fixture
+def fake_exports(tmp_data, monkeypatch):
+    """Stand-in exporters writing small files; records which items were written."""
+    monkeypatch.setattr(downloads, "DOWNLOADS_DIR", tmp_data / "downloads")
+    monkeypatch.setattr(downloads, "_commit", lambda: "abc1234")
+    written = []
+
+    def vec(item, out, updated, commit):
+        written.append((item.key, updated))
+        out.write_bytes(f"{item.key}|{updated}".encode())
+
+    def city(item, out, updated, commit):
+        written.append((item.key, updated))
+        out.write_bytes(b"cog")
+        stem = out.name.removesuffix(out.suffix)
+        out.with_name(f"{stem}.README.txt").write_text("r")
+        out.with_name(f"{stem}.LICENSE.txt").write_text("l")
+    monkeypatch.setattr("sfzmaps.downloads.vectors.export_vector", vec)
+    monkeypatch.setattr("sfzmaps.downloads.rasters.export_citywide", city)
+    return written
+
+
+def _mtimes(root):
+    return {str(p): p.stat().st_mtime_ns for p in root.rglob("*") if p.is_file()}
+
+
+def test_rerun_rewrites_nothing(fake_exports, tmp_data):
+    first = downloads.run()
+    root = tmp_data / "downloads"
+    assert len(fake_exports) == 7  # 6 vector + 1 citywide
+    entry = first["files"]["1948/lots.geojson"]
+    assert entry["path"] == "1948/1948-lots.geojson.zip" and entry["layer"] == "lots"
+    assert entry["bytes"] == (root / entry["path"]).stat().st_size
+    assert first["files"]["1948/citywide.cog"]["extra"] == [
+        "1948/1948-citywide.README.txt", "1948/1948-citywide.LICENSE.txt"]
+    assert first["files"]["1948/lots.geojson"]["extra"] == []
+    assert first["commit"] == "abc1234" and "CC BY-NC-SA 4.0" in first["license"]
+    assert [e["sheet"] for e in first["sheets"]["1948"]] == ["1"]
+    assert "Rumsey" in first["readme"]["1948"] or "David Rumsey" in first["readme"]["1948"]
+    before, text = _mtimes(root), (root / "index.json").read_text()
+    fake_exports.clear()
+    second = downloads.run()
+    assert fake_exports == [] and _mtimes(root) == before
+    assert (root / "index.json").read_text() == text and second == first
+
+
+def test_changed_source_rewrites_only_that_series(fake_exports, tmp_data, monkeypatch):
+    _touch(tmp_data / "out" / "today" / "districts" / "parcels.fgb")
+    _touch(tmp_data / "out" / "today" / "districts" / "districts.fgb")
+    downloads.run()
+    fake_exports.clear()
+    monkeypatch.setattr("sfzmaps.downloads._today", lambda: "2030-01-02")
+    _touch(tmp_data / "out" / "1948" / "districts" / "parcels.fgb", b"changed")
+    idx = downloads.run()
+    assert sorted(k for k, _ in fake_exports) == [
+        "1948/lots.geojson", "1948/lots.gpkg", "1948/lots.shp"]
+    assert {u for _, u in fake_exports} == {"2030-01-02"}
+    assert idx["files"]["today/lots.geojson"]["fingerprint"]
+
+
+def test_run_limited_to_series_keeps_other_entries(fake_exports, tmp_data):
+    _touch(tmp_data / "out" / "today" / "districts" / "parcels.fgb")
+    _touch(tmp_data / "out" / "today" / "districts" / "districts.fgb")
+    downloads.run()
+    idx = downloads.run(["1948"])
+    assert any(k.startswith("today/") for k in idx["files"])

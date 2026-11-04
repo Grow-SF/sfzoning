@@ -146,3 +146,14 @@ def test_cli_districts_status(monkeypatch):
     res = CliRunner().invoke(cli.app, ["districts", "--status"])
     assert res.exit_code == 0, res.output
     assert "1960" in res.output and "region-read abc1234" in res.output and "no" in res.output
+
+
+def test_cli_downloads_listed(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    res = CliRunner().invoke(cli.app, ["--help"])
+    assert "downloads" in res.output
+    res = CliRunner().invoke(cli.app, ["downloads", "--help"])
+    assert res.exit_code == 0 and "--series" in res.output
