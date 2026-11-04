@@ -78,3 +78,69 @@ describe("expired", () => {
     expect(expired(s, "2026-11-04")).toEqual(["old"]);
   });
 });
+
+describe("local manifests", () => {
+  const L = "http://127.0.0.1:8787";
+  it("local urls point at <base>/downloads/<index path> and <base>/work/<series>/<sheet>", () => {
+    const i = { files: { "1948/lots.geojson": { ...entry("a".repeat(40)), extra: ["1948/x.README.txt"] } } };
+    const r = planDownloads(i, {}, "2026-11-04", L, true);
+    expect(r.files["1948/lots.geojson"].url).toBe(`${L}/downloads/1948/1948-lots.geojson.zip`);
+    const f = r.files["1948/lots.geojson"] as unknown as { extra: Record<string, string> };
+    expect(f.extra["x.README.txt"]).toBe(`${L}/downloads/1948/x.README.txt`);
+    const s = planSheets({ sheets: { "1948": [{ sheet: "10", name: "n.tif", md5: "ab" + "c".repeat(30), bytes: 1 }] }, readme: {} }, {}, new Set(), "2026-11-04", L, true);
+    expect(sh(s).items[0].url).toBe(`${L}/work/1948/10/warped_paper.tif`);
+  });
+
+  it("a real publish refuses a local manifest or any url outside the real base", () => {
+    const mp = script.manifestProblem as (...a: unknown[]) => string | null;
+    expect(mp({ local: true, base: BASE, files: {}, sheets: {} }, BASE)).toMatch(/git checkout/);
+    expect(mp({ base: "http://127.0.0.1:8787", files: {}, sheets: {} }, BASE)).toMatch(/git checkout/);
+    expect(mp({ base: BASE, files: { k: { url: "http://127.0.0.1:8787/x", extra: {} } }, sheets: {} }, BASE)).toMatch(/outside/);
+    expect(mp({ files: {}, sheets: {}, superseded: [] }, BASE)).toBeNull();
+    expect(mp({ base: BASE, files: { k: { url: `${BASE}/downloads/a/b`, extra: {} } }, sheets: {}, superseded: [] }, BASE)).toBeNull();
+  });
+});
+
+describe("superseded", () => {
+  const prune = script.pruneSuperseded as (...a: unknown[]) => { url: string }[];
+  it("a url that becomes current again (A to B to A) is not left to be deleted", () => {
+    const m0 = { files: {}, superseded: [] };
+    const a = planDownloads(index("a".repeat(40)), m0, "2026-01-01", BASE);
+    const b = planDownloads(index("b".repeat(40)), { files: a.files, superseded: a.superseded }, "2026-02-01", BASE);
+    expect(b.superseded).toHaveLength(1);
+    const back = planDownloads(index("a".repeat(40)), { files: b.files, superseded: b.superseded }, "2026-03-01", BASE);
+    expect(back.superseded).toHaveLength(2);
+    expect(prune(back.superseded, back.files, {}).map((x) => x.url)).not.toContain(back.files["1948/lots.geojson"].url);
+  });
+
+  it("a vanished index entry supersedes its old urls", () => {
+    const manifest = { files: { gone: { fingerprint: "x", url: "u1", updated: "d", extra: { "R.txt": "u2" } } }, superseded: [] };
+    const r = planDownloads({ files: {} }, manifest, "2026-11-04", BASE);
+    expect(r.superseded.map((x) => (x as { url: string }).url)).toEqual(["u1", "u2"]);
+  });
+
+  it("a packed sheet that moves to a dvc object supersedes its downloads url, and dvc urls never do", () => {
+    const md5 = "ab" + "c".repeat(30);
+    const dvc = `dvc/files/md5/ab/${"c".repeat(30)}`;
+    const packed = `${BASE}/downloads/sheets/${md5}/1948-sheet-10.tif`;
+    const idx = { sheets: { "1948": [{ sheet: "10", name: "1948-sheet-10.tif", md5, bytes: 1 }] }, readme: {} };
+    type R = { superseded: { url: string }[] };
+    const toDvc = planSheets(idx, { sheets: { "1948": { items: [{ sheet: "10", md5, url: packed, updated: "d" }] } } }, new Set([dvc]), "2026-11-04", BASE) as unknown as R;
+    expect(toDvc.superseded.map((x) => x.url)).toEqual([packed]);
+    const fromDvc = planSheets(idx, { sheets: { "1948": { items: [{ sheet: "10", md5: "old", url: `${BASE}/${dvc}`, updated: "d" }] } } }, new Set(), "2026-11-04", BASE) as unknown as R;
+    expect(fromDvc.superseded).toEqual([]);
+  });
+
+  it("only urls under downloads/ are ever deleted", () => {
+    const del = script.deletable as (...a: unknown[]) => string[];
+    const old = [{ url: `${BASE}/downloads/a/b`, since: "2026-01-01" }, { url: `${BASE}/dvc/files/md5/ab/cd`, since: "2026-01-01" }];
+    expect(del(old, "2026-11-04", BASE)).toEqual([`${BASE}/downloads/a/b`]);
+  });
+});
+
+describe("today", () => {
+  it("is a calendar date", () => {
+    const t = script.today as () => string;
+    expect(t()).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
