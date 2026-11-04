@@ -198,3 +198,75 @@ def test_zip_contains_readme_and_license_with_fixed_dates(tmp_path):
     out2 = tmp_path / "again.zip"
     vectors.export_vector(_item(tmp_path, "lots", "geojson"), out2, "2026-11-04", "abc1234")
     assert out.read_bytes() == out2.read_bytes()
+
+
+# --- citywide image and sheet entries ---------------------------------------
+
+import hashlib
+import subprocess
+
+needs_gdal_raster = pytest.mark.skipif(not shutil.which("gdal_create"), reason="gdal_create not on PATH")
+
+
+def _make_sheets(work, series="1948"):
+    for sid, x0 in (("2", 6007000), ("1", 6007100)):
+        d = work / series / sid
+        d.mkdir(parents=True)
+        subprocess.run(["gdal_create", "-of", "GTiff", "-outsize", "32", "32", "-bands", "4",
+                        "-burn", "200", "-burn", "190", "-burn", "170", "-burn", "255",
+                        "-a_srs", "EPSG:2227", "-a_ullr", str(x0), "2112100", str(x0 + 100), "2112000",
+                        "-ot", "Byte", str(d / "warped_paper.tif")], check=True, capture_output=True)
+
+
+def _fake_build_vrt(monkeypatch):
+    def build(series, scores=None, paper=False):
+        assert paper
+        tifs = sorted((config.WORK_DIR / series).glob("*/warped_paper.tif"))
+        out = config.OUT_DIR / series / f"{series}-paper.vrt"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        subprocess.run(["gdalbuildvrt", "-overwrite", str(out), *map(str, tifs)], check=True, capture_output=True)
+        return out
+    monkeypatch.setattr("sfzmaps.stitch.build_vrt", build)
+
+
+@needs_gdal_raster
+def test_citywide_is_cog_with_license_tags(tmp_data, monkeypatch):
+    import json
+    from sfzmaps.downloads import rasters
+    shutil.rmtree(tmp_data / "work" / "1948")
+    _make_sheets(tmp_data / "work")
+    _fake_build_vrt(monkeypatch)
+    item = {i.key: i for i in downloads.catalog()}["1948/citywide.cog"]
+    out = tmp_data / "dl" / item.filename
+    out.parent.mkdir()
+    rasters.export_citywide(item, out, "2026-11-04", "abc1234")
+    info = json.loads(subprocess.run(["gdalinfo", "-json", str(out)], check=True,
+                                     capture_output=True, text=True).stdout)
+    assert info["metadata"]["IMAGE_STRUCTURE"]["LAYOUT"] == "COG"
+    assert len(info["bands"]) == 4
+    assert info["stac"]["proj:epsg"] == 2227
+    md = info["metadata"][""]
+    assert "Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)" in md["TIFFTAG_COPYRIGHT"]
+    assert config.RUMSEY_CREDIT in md["TIFFTAG_COPYRIGHT"]
+    assert "2026-11-04" in md["TIFFTAG_IMAGEDESCRIPTION"]
+    assert not out.with_name(out.name + ".part").exists()
+    assert "Based on sfzoning.com" in (tmp_data / "dl" / "1948-citywide.README.txt").read_text()
+    assert "CC BY-NC-SA 4.0" in (tmp_data / "dl" / "1948-citywide.LICENSE.txt").read_text()
+
+
+def test_sheet_entries_md5_matches_file(tmp_data):
+    from sfzmaps.downloads import rasters
+    for sid, data in (("10", b"ten"), ("2", b"two" * 1000)):
+        _touch(tmp_data / "work" / "1948" / sid / "warped_paper.tif", data)
+    (tmp_data / "work" / "1948" / "9").mkdir()  # no warped_paper.tif: not listed
+    es = rasters.sheet_entries("1948")
+    assert [e["sheet"] for e in es] == ["1", "10", "2"]
+    e = next(e for e in es if e["sheet"] == "2")
+    raw = (tmp_data / "work" / "1948" / "2" / "warped_paper.tif").read_bytes()
+    assert e == {"sheet": "2", "name": "1948-sheet-2.tif", "md5": hashlib.md5(raw).hexdigest(),
+                 "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def test_failed_tool_call_shows_gdal_stderr(tmp_path):
+    with pytest.raises(RuntimeError, match="ogr2ogr failed.*nonexistent"):
+        downloads.run_tool("ogr2ogr", str(tmp_path / "o.gpkg"), str(tmp_path / "nonexistent.fgb"))

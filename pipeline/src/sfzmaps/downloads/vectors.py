@@ -5,12 +5,11 @@ deterministic (fixed member dates, sorted entries) so unchanged data gives ident
 """
 from __future__ import annotations
 
-import subprocess
 import tempfile
 import zipfile
 from pathlib import Path
 
-from sfzmaps.downloads import Item
+from sfzmaps.downloads import Item, run_tool
 from sfzmaps.downloads.readme import DISTRICT_FIELDS, LICENSE_TEXT, LOT_FIELDS, readme
 
 _FIELDS = {"lots": LOT_FIELDS, "districts": DISTRICT_FIELDS}
@@ -18,7 +17,7 @@ _FIXED_DATE = (1980, 1, 1, 0, 0, 0)
 
 
 def _ogr(*args: str) -> None:
-    subprocess.run(["ogr2ogr", "-q", *args], check=True, capture_output=True, text=True)
+    run_tool("ogr2ogr", "-q", *args)
 
 
 def _select(layer: str, src: Path, rename: bool) -> str:

@@ -5,6 +5,7 @@ No network and no paid reads. Not a DVC stage.
 from __future__ import annotations
 
 import hashlib
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -76,3 +77,10 @@ def fingerprint(item: Item, exporter_version: str) -> str:
         h.update(f"{rel}\0{digest}\n".encode())
     h.update(f"exporter:{exporter_version}".encode())
     return h.hexdigest()
+
+
+def run_tool(*cmd: str) -> None:
+    """Run a GDAL command line; on failure raise with GDAL's own stderr in the message."""
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode:
+        raise RuntimeError(f"{cmd[0]} failed ({r.returncode}): {r.stderr.strip() or r.stdout.strip()}")
