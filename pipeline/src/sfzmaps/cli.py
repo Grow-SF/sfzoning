@@ -317,6 +317,17 @@ def districts(
                                                                 "vision calls). Rerun after publishing."),
     force: bool = typer.Option(False, "--force", help="Read and publish even when the outputs are "
                                                      "current (their inputs haven't changed)."),
+    check: bool = typer.Option(False, "--check", help="Print the $0 accuracy check of the saved "
+                                                     "reads: review cases, answer keys, same-base and "
+                                                     "adjacent-era agreement."),
+    against: list[str] = typer.Option(None, "--against", help="With --check or --map: also these "
+                                                             "dirs of <series>_raw.parquet (a "
+                                                             "--snapshot or an experiment)."),
+    snapshot: Path = typer.Option(None, "--snapshot", help="Copy every series' current raw reads "
+                                                          "to this dir (the 'before' of a change)."),
+    map_series: str = typer.Option(None, "--map", help="Draw this series' city map, one panel per "
+                                                       "--against dir and one for the current "
+                                                       "reads, to data/check/<series>.png."),
 ) -> None:
     """Read zoning districts per parcel, join the rules, publish out/<series>/districts/. A series
     whose read and outputs are current (nothing they're made from changed) is skipped."""
@@ -329,6 +340,22 @@ def districts(
     from sfzmaps.districts import assemble, shared
     from sfzmaps.districts.series import SERIES
 
+    if check or snapshot or map_series:
+        if series or all_ or validate or status or republish or cache_only or sheet or force \
+                or shared_archive:
+            raise typer.BadParameter("--check, --snapshot and --map run alone")
+        from sfzmaps.districts import check as chk
+
+        if snapshot:
+            typer.echo(f"{len(chk.snapshot(snapshot))} series copied to {snapshot}")
+        panels = {Path(a).name: a for a in against or []}
+        if map_series:
+            out = chk.city_map(map_series, {**panels, "now": chk.WORK},
+                               config.DATA_DIR / "check" / f"{map_series}.png")
+            typer.echo(str(out))
+        if check:
+            typer.echo(chk.report({"now": chk.WORK, **panels}))
+        return
     if shared_archive:
         if series or all_ or validate or status or republish or cache_only or sheet or force:
             raise typer.BadParameter("--shared runs alone")

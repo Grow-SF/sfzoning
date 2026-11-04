@@ -58,6 +58,7 @@ All commands run from `pipeline/` as `uv run sfzmaps <command>`.
 | `eval --year 1948\|1960` | Per-sheet score next to the distance from our transform to the owner's manual `.points` (the answer key). |
 | `estimate --year S` / `--all` | Estimate API calls, tokens and USD for the uncached pages (no API calls). It is an estimate: image tokens use OpenAI's patch formula, prompt text is a flat `config.EST_TEXT_TOKENS_PER_CALL` (~350) per call, and output is a flat `EST_OUT_TOKENS` per call. |
 | `calibrate --year S --sheet ID` | Find the smallest label-reading scale that keeps 95% of full-resolution recall. |
+| `districts --check [--against DIR...]` | The $0 accuracy check of the district reads: see [Checking the district reads](#checking-the-district-reads). |
 
 `push` also exists: it bundles and uploads with rclone, if you have set rclone up.
 It's optional; `bundle` plus a manual copy does the same job.
@@ -333,6 +334,32 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
    points it is `MANUAL_TPS_SMOOTHING`) and records `autofill` in the review.
 5. For 1948 and 1960, the editor offers the owner's manual `.points` and adopts
    them when they score better.
+
+## Checking the district reads
+
+Measure every change to the district readers before shipping it. Nothing here calls the API.
+
+1. Before the change: `uv run sfzmaps districts --snapshot data/check/before`.
+2. Make the change and rebuild.
+3. Compare: `uv run sfzmaps districts --check --against data/check/before`. It prints one column
+   per source:
+   - **Review cases** (`inputs/district_cases.csv`): known artifacts, each a bbox with the code
+     wrongly read there and the right ones. The counts are wrong / right lots in the box. `seam`
+     and `other` cases should go down. `harm` cases mark areas that an earlier change broke, and
+     they must stay right.
+   - **Answer keys** (`tests/fixtures/district_keys/`).
+   - **Same base drawing**. 1960 and 1964 share their drawings, and 1996-2000 p25-p36 and
+     2000-digital p01-p12 are two scans of the same twelve drawings. Agreement between them needs
+     no key, so it is the best single measure of how repeatable the reader is.
+   - **Adjacent eras**. Real rezonings lower these too, so look for drops rather than maximising them.
+   - **The largest clusters where the same-base maps disagree**: where to look for new cases. Check
+     one against the scans, then add it to `inputs/district_cases.csv` (commit it).
+4. Look at the whole city: `uv run sfzmaps districts --map S --against data/check/before` writes
+   `data/check/S.png`. It shows before | now, with lots coloured by zoning class and sheet
+   footprints outlined. Regressions no case covers show up here.
+
+An experiment can write `<series>_raw.parquet` files (columns `blklot`, `code`, `source_sheet`)
+into a directory and pass it to `--against`, with no rebuild.
 
 ## Credit: 1948
 
