@@ -261,7 +261,7 @@ def blocks_of(blklots: pd.Series, parcels: pd.DataFrame | None = None) -> pd.Ser
     table fall back to the leading 4 digits plus a letter right after them."""
     blk = blklots.astype(str)
     try:
-        p = parcels if parcels is not None else load_parcels()
+        p = parcels if parcels is not None else load_parcels(every=True)
         m = p.drop_duplicates("blklot").set_index("blklot")["block_num"].astype(str)
         got = blk.map(m)
     except Exception:  # noqa: BLE001 - no parcel table (unit tests): the pattern decides
@@ -271,11 +271,14 @@ def blocks_of(blklots: pd.Series, parcels: pd.DataFrame | None = None) -> pd.Ser
 
 
 def apply_overrides(df: pd.DataFrame, series: str, *, column: str = "code",
-                    blocks: pd.Series | None = None) -> pd.DataFrame:
+                    blocks: pd.Series | None = None, remap: dict[str, str] | None = None) -> pd.DataFrame:
     """inputs/<series>/overrides.csv rows (blklot or block, code) set `column` (code at confidence 1;
     for a height series' file, height_code: its value column may be height_code or code).
     A block row applies to every parcel of the block (block_num); a blklot row wins over a
-    block row.  Override keys that match no parcel warn."""
+    block row.  Override keys that match no parcel warn.  A row's `note` (optional column, e.g.
+    from a reader's correction) goes to `override_note`, shown on the lot card (publish).
+    remap: {lot: the series' lot it sits in} (lots.era_lot_of) for a key that isn't one of the
+    series' lots (an override written for today's lots, on a map drawn on the lots of its year)."""
     path = inputs.overrides_path(series)
     if not path.exists():
         return df
@@ -289,6 +292,8 @@ def apply_overrides(df: pd.DataFrame, series: str, *, column: str = "code",
     for r in rows:
         code = (r.get(column) or r.get("code") or "").strip()
         key = (r.get("blklot") or "").strip()
+        if key and remap and not (blk == key).any() and key in remap:
+            key = remap[key]
         mask = blk == key if key else block == (r.get("block") or "").strip()
         if not code or not (key or (r.get("block") or "").strip()):
             continue
@@ -300,7 +305,23 @@ def apply_overrides(df: pd.DataFrame, series: str, *, column: str = "code",
         df.loc[mask, column] = code
         if column == "code":
             df.loc[mask, "confidence"] = 1.0
+            note = (r.get("note") or "").strip()
+            if note:
+                if "override_note" not in df:
+                    df["override_note"] = None
+                df.loc[mask, "override_note"] = note
     return df
+
+
+def add_override_notes(df: pd.DataFrame) -> pd.DataFrame:
+    """Each overridden lot's override note joins its card note (after apply_parks)."""
+    if "override_note" not in df:
+        return df
+    df = df.copy()
+    m = df["override_note"].notna()
+    df.loc[m, "note"] = [f"{n}. {o}" if isinstance(n, str) and n else o
+                         for n, o in zip(df.loc[m, "note"], df.loc[m, "override_note"])]
+    return df.drop(columns="override_note")
 
 
 def join_height(df: pd.DataFrame, height: pd.DataFrame) -> pd.DataFrame:
@@ -410,7 +431,31 @@ LOT_NOTES = {"1300001": (1996, "Federal land, outside city zoning. "
                                "The Presidio Trust leases about 1,400 homes here.")}
 
 
-def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame, year: int) -> pd.DataFrame:
+PARK_ERA_SHARE = 0.5     # an era's lot is park when park lots of later times cover this share of it
+
+
+def _era_park_lots(lots: set[str], parcels: pd.DataFrame, remap: dict[str, str]) -> dict[str, str]:
+    """{lot of the series' year: a park lot standing for it} for park lots (keyed by today's lots)
+    that aren't lots of the year, when park lots cover at least PARK_ERA_SHARE of that lot: a
+    park re-surveyed in the 2000s keeps its park colour on the older maps, while a small park
+    carved from a former rail yard doesn't make the whole yard public."""
+    later = [b for b in lots if b not in set(parcels["blklot"]) and b in remap]
+    if not later:
+        return {}
+    every = load_parcels(every=True).drop_duplicates("blklot").set_index("blklot").geometry
+    era_area = parcels.drop_duplicates("blklot").set_index("blklot").geometry.area
+    cover: dict[str, float] = {}
+    first: dict[str, str] = {}
+    for b in later:
+        e = remap[b]
+        if b in every.index and e in era_area.index:
+            cover[e] = cover.get(e, 0.0) + float(every[b].area)
+            first.setdefault(e, b)
+    return {e: first[e] for e, a in cover.items() if era_area[e] > 0 and a >= PARK_ERA_SHARE * era_area[e]}
+
+
+def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame, year: int,
+                remap: dict[str, str] | None = None) -> pd.DataFrame:
     """Park lots (park_starts) are `public` in every series from the year they became parks on,
     whatever the map zones them (owner's decision: old maps zoned park land residential as a quirk
     of the law, not because homes could go there); earlier series keep the map's zoning. Land
@@ -425,6 +470,13 @@ def apply_parks(df: pd.DataFrame, parcels: pd.DataFrame, year: int) -> pd.DataFr
     reason = dict(zip(p["blklot"], p["reason"]))
     parks = set(p.loc[p["since"] <= year, "blklot"])
     lots = parks | set(p.loc[p["public_since"] <= year, "blklot"])
+    if remap:       # park lots recorded after the map's year stand for the year's lot they cover
+        stand = _era_park_lots(lots, parcels, remap)
+        for e, b in stand.items():
+            reason.setdefault(e, reason.get(b))
+            if b in parks:
+                parks.add(e)
+            lots.add(e)
     missing = sorted(lots & set(parcels["blklot"]) - set(df["blklot"]))
     if missing:
         df = pd.concat([df, pd.DataFrame({"blklot": missing, "code": None, "height_code": None,
@@ -516,11 +568,17 @@ TODAY_NOTES = (
 
 def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) -> Path:
     """Unzoned blocks -> overrides -> height join -> height overrides -> rules join ->
-    category, then every output file (partial: out/<series>/districts-partial/)."""
-    parcels = load_parcels()
+    category, then every output file (partial: out/<series>/districts-partial/).  Published on
+    the lots of the series' year (read.series_year)."""
+    from sfzmaps.districts.read import series_year
+
+    yr = series_year(series)
+    parcels = load_parcels(yr)
     df = df.reset_index(drop=True)
     blocks = blocks_of(df["blklot"], parcels)
-    df = apply_overrides(mask_unzoned(df, year, blocks=blocks), series, blocks=blocks)
+    from sfzmaps.districts import lots
+    remap = lots.era_lot_of(yr) if yr is not None else None
+    df = apply_overrides(mask_unzoned(df, year, blocks=blocks), series, blocks=blocks, remap=remap)
     hp = out_dir(series) / "height.parquet"
     if partial and (out_dir(series, partial=True) / "height.parquet").exists():
         hp = out_dir(series, partial=True) / "height.parquet"
@@ -528,8 +586,8 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
         df = join_height(df, pd.read_parquet(hp))
     hs = height_series_of(series)
     if hs:
-        df = apply_overrides(df, hs, column="height_code", blocks=blocks)
-    df = apply_parks(categorise(df, year), parcels, year)
+        df = apply_overrides(df, hs, column="height_code", blocks=blocks, remap=remap)
+    df = add_override_notes(apply_parks(categorise(df, year), parcels, year, remap=remap))
     geo = parcels[["blklot", "geometry"]].drop_duplicates("blklot")
     g = gpd.GeoDataFrame(df.merge(geo, on="blklot", how="inner"), geometry="geometry", crs=geo.crs)
     g = g[g.geometry.notna() & ~g.geometry.is_empty]       # a few DataSF parcels have no shape

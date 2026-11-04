@@ -126,6 +126,9 @@ def first_maps(cands: pd.DataFrame | None = None) -> pd.DataFrame:
 
     if cands is None:
         cands = candidates()
+    from sfzmaps.districts import lots as era_lots
+    from sfzmaps.districts.read import series_year
+
     lots = set(cands["blklot"])
     first: dict[str, str] = {}
     for s in map_series():
@@ -133,12 +136,15 @@ def first_maps(cands: pd.DataFrame | None = None) -> pd.DataFrame:
         if not path.exists():
             continue
         g = gpd.read_file(path, columns=["blklot", "code"], ignore_geometry=True)
-        g = g[g["blklot"].isin(lots) & g["code"].notna()]
+        code = dict(zip(g["blklot"], g["code"]))
+        # a map drawn on the lots of its year names a newer park lot by the lot it sits in
+        yr = series_year(s)
+        remap = era_lots.era_lot_of(yr) if yr is not None and not lots <= set(code) else {}
         year = map_year(s)
-        public = {c for c in g["code"].unique() if isinstance(c, str) and c.strip()
-                  and category_for(c, year) == "public"}
-        for b in g.loc[g["code"].isin(public), "blklot"]:
-            first.setdefault(b, s)
+        for b in sorted(lots):
+            c = code.get(b) if b in code else code.get(remap.get(b))
+            if isinstance(c, str) and c.strip() and category_for(c, year) == "public":
+                first.setdefault(b, s)
     out = cands[cands["blklot"].isin(first)][["name", "blklot"]].copy()
     out["series"] = out["blklot"].map(first)
     return out.sort_values(["name", "blklot"]).reset_index(drop=True)

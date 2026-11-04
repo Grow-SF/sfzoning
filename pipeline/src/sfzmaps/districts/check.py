@@ -83,7 +83,7 @@ def load_cases(path: Path | str = CASES_CSV) -> pd.DataFrame:
 def centroids() -> pd.DataFrame:
     from sfzmaps.districts.read import load_parcels
 
-    p = load_parcels()
+    p = load_parcels(every=True)       # any lot a series was read on, retired ones included
     c = p.geometry.centroid
     return pd.DataFrame({"blklot": p["blklot"].to_numpy(), "x": c.x.to_numpy(), "y": c.y.to_numpy(),
                          "area": p.geometry.area.to_numpy()})
@@ -116,11 +116,30 @@ def agreement(a: pd.DataFrame, b: pd.DataFrame, sheets: dict[str, str] | None = 
     return (float((m.code_a == m.code_b).mean()) if len(m) else float("nan")), len(m)
 
 
+def with_key_lots(r: pd.DataFrame, keys: list[str], remap: dict[str, str]) -> pd.DataFrame:
+    """r plus a row for each key lot it lacks that sits in one of its lots (remap: a later lot ->
+    the series' lot): the keys name today's lots, a series may be read on the lots of its year."""
+    have = set(r["blklot"])
+    add = {b: remap[b] for b in keys if b not in have and remap.get(b) in have}
+    if not add:
+        return r
+    src = r.drop_duplicates("blklot").set_index("blklot")
+    extra = src.loc[list(add.values())].reset_index(drop=True).assign(blklot=list(add.keys()))
+    return pd.concat([r, extra], ignore_index=True)
+
+
 def key_scores(get) -> dict[str, tuple[int, int]]:
+    from sfzmaps.districts import lots
+    from sfzmaps.districts.read import series_year
+
     out = {}
     for f in sorted(KEYS_DIR.glob("*.csv")):
         r = get(f.stem)
         if r is not None:
+            keys = pd.read_csv(f, dtype=str, keep_default_na=False)["blklot"].tolist()
+            yr = series_year(f.stem)
+            if yr is not None and not set(keys) <= set(r["blklot"]):
+                r = with_key_lots(r, keys, lots.era_lot_of(yr))
             k = key_report(r, f)
             out[f.stem] = (int(k.ok.sum()), len(k))
     return out
@@ -288,7 +307,7 @@ def city_map(series: str, panels: dict[str, str | Path], out: Path | str, ft_per
         a = np.asarray(coords)[:, :2]
         return np.int32(np.c_[(a[:, 0] - x0) / ft_per_px, (y1 - a[:, 1]) / ft_per_px])
 
-    parcels = load_parcels()[["blklot", "geometry"]]
+    parcels = load_parcels(every=True)[["blklot", "geometry"]]
     fps = []
     for sid in sampling.sheet_order(series):
         try:
