@@ -73,7 +73,7 @@ def test_fingerprint_changes_with_source_bytes_and_version(tmp_data):
 
 
 def test_readme_has_attribution_license_and_rumsey_only_for_1948():
-    r = readme("1948", "citywide", "2026-11-04", "abc1234")
+    r = " ".join(readme("1948", "citywide", "2026-11-04", "abc1234").split())
     assert "Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)" in r
     assert "CC BY-NC-SA 4.0" in r and config.RUMSEY_CREDIT in r and "2026-11-04" in r
     assert config.RUMSEY_CREDIT not in readme("1960", "lots", "2026-11-04", "abc1234")
@@ -88,13 +88,69 @@ def test_readme_field_table_only_for_vector_layers():
     assert "FIELDS" not in readme("1960", "citywide", "d", "c")
 
 
+def _flat(text):
+    return " ".join(text.split())
+
+
 def test_readme_crs_text_per_layer():
-    lots = readme("1960", "lots", "d", "c")
+    lots = _flat(readme("1960", "lots", "d", "c"))
     assert "GeoJSON and Shapefile are in WGS 84 (EPSG:4326)" in lots
     assert "`lots_ca_spcs`" in lots and "EPSG:2227" in lots
     assert "`districts_ca_spcs`" in readme("1960", "districts", "d", "c")
     city = readme("1960", "citywide", "d", "c")
     assert "EPSG:2227" in city and "4326" not in city
+
+
+def test_fingerprint_covers_the_exporter_code(tmp_data, monkeypatch):
+    code = tmp_data / "code"
+    files = [code / n for n in ("readme.py", "readme-template.txt", "vectors.py", "rasters.py")]
+    for f in files:
+        _touch(f, b"v1")
+    monkeypatch.setattr(downloads, "EXPORTER_CODE", files)
+    item = {i.key: i for i in downloads.catalog()}["1948/lots.geojson"]
+    before = downloads.fingerprint(item, "1")
+    for f in files:
+        _touch(f, b"v2")
+        after = downloads.fingerprint(item, "1")
+        assert after != before
+        before = after
+
+
+def test_exporter_code_is_the_real_exporter_files():
+    names = {p.name for p in downloads.EXPORTER_CODE}
+    assert names == {"readme.py", "readme-template.txt", "vectors.py", "rasters.py"}
+    assert all(p.exists() for p in downloads.EXPORTER_CODE)
+
+
+def test_today_readme_credits_datasf_zoning_not_a_scan():
+    for layer in ("lots", "districts"):
+        r = _flat(readme("today", layer, "d", "c"))
+        assert "3i4a-hu95" in r and "Zoning Districts" in r
+        assert "read from the scans" not in r and "read from the map" not in r
+        assert "flagged for review" not in r
+    lots = readme("today", "lots", "d", "c")
+    row = next(l for l in lots.splitlines() if l.startswith("source_sheet"))
+    assert "datasf" in row
+    lots = _flat(lots)
+    assert "largest share" in lots
+    assert "Always 1" in lots
+
+
+def test_historic_confidence_names_overrides_and_hand_added_labels():
+    r = _flat(readme("1960", "lots", "d", "c"))
+    assert "inputs/<series>/overrides.csv" in r and "inputs/<series>/label_fixes.csv" in r
+    assert "3i4a-hu95" not in r
+
+
+def test_scan_readmes_describe_the_warp_honestly():
+    for layer in ("citywide", "sheets"):
+        r = readme("1960", layer, "d", "c")
+        flat = _flat(r)
+        assert "not resampled" not in flat and "no warping" not in flat
+        assert "thin plate spline" in flat and "today's street corners" in flat
+        assert "tinted to the paper colour" in flat and "binding shadows" in flat
+        assert "Nothing is vectorized or drawn" in flat
+    assert "finest sheet" in _flat(readme("1960", "citywide", "d", "c"))
 
 
 def test_citywide_sources_skip_missing_footprint(tmp_data):
@@ -300,8 +356,8 @@ def test_failed_gdal_translate_leaves_no_part(tmp_data, monkeypatch):
 
 
 def test_readme_sheets_layer():
-    t = readme("1948", "sheets", "2026-11-04", "abc1234")
-    assert "native resolution" in t and "EPSG:2227" in t
+    t = _flat(readme("1948", "sheets", "2026-11-04", "abc1234"))
+    assert "own resolution" in t and "EPSG:2227" in t
     assert "David Rumsey" in t and "Based on sfzoning.com by Steven Bacio" in t
     assert "FIELDS" not in t
 
@@ -402,6 +458,17 @@ def test_sheets_readme_date_survives_later_unchanged_rerun(fake_exports, tmp_dat
     second = downloads.run()
     assert "2026-11-04" in first["readme"]["1948"]
     assert second["readme"]["1948"] == first["readme"]["1948"]
+
+
+def test_sheets_readme_refreshes_when_its_text_changes(fake_exports, tmp_data, monkeypatch):
+    from sfzmaps.downloads import readme as readme_mod
+    monkeypatch.setattr("sfzmaps.downloads._today", lambda: "2026-11-04")
+    downloads.run()
+    monkeypatch.setattr("sfzmaps.downloads._today", lambda: "2027-03-09")
+    real = readme_mod.readme
+    monkeypatch.setattr(readme_mod, "readme", lambda *a: real(*a).replace("WHAT THIS FILE IS", "WHAT THIS IS"))
+    second = downloads.run()
+    assert "WHAT THIS IS" in second["readme"]["1948"] and "2027-03-09" in second["readme"]["1948"]
 
 
 def test_run_limited_to_series_keeps_other_entries(fake_exports, tmp_data):

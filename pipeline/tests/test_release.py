@@ -10,8 +10,9 @@ SHA = "a" * 40
 class Fake:
     """Injected git / node / gh / dvc; records calls."""
     def __init__(self, dirty="", head=SHA, main=SHA, shipped=(), changed=" M site/lib/downloads.json",
-                 dvc=(0, "{}"), git_fail=None, gh=None, env_ok=True):
+                 dvc=(0, "{}"), git_fail=None, gh=None, env_ok=True, bad_tools=(), downloads_error=None):
         self.git_fail, self.gh, self.env_ok = git_fail or {}, gh, env_ok
+        self.bad_tools, self.downloads_error = list(bad_tools), downloads_error
         self.dirty, self.head, self.main, self.shipped, self.changed, self.dvc = dirty, head, main, shipped, changed, dvc
         self.git_calls, self.node_calls, self.run_calls, self.out, self.downloads_calls = [], [], [], [], 0
 
@@ -46,11 +47,15 @@ class Fake:
         return subprocess.CompletedProcess(cmd, self.dvc[0], self.dvc[1], "")
 
     def deps(self):
-        def dl():
+        def dl(log):
             self.downloads_calls += 1
+            log("wrote  1948/lots.geojson  (10 bytes)")
+            if self.downloads_error:
+                raise self.downloads_error
             return {}
         return release.Deps(git=self.git, node=self.node, run=self.run, check_shipped=lambda s: list(self.shipped),
-                            downloads=dl, env_file=self._env, today=lambda: "2026-11-04", echo=self.out.append)
+                            downloads=dl, env_file=self._env, today=lambda: "2026-11-04", echo=self.out.append,
+                            toolchain=lambda: list(self.bad_tools))
 
     def _env(self):
         if not self.env_ok:
@@ -193,3 +198,23 @@ def test_tally_reads_the_scripts_real_output_lines():
     release._tally("publish-tiles.mjs", tiles, s)
     release._tally("publish-downloads.mjs", dl, s)
     assert (s.files, s.bytes, s.superseded, s.deleted) == (7, 13095, 2, 1)
+
+
+def test_tools_outside_pixi_stop_the_release_before_the_export():
+    f = Fake(bad_tools=["gdal_translate (/usr/bin/gdal_translate)"])
+    with pytest.raises(release.ReleaseError, match="pixi.*gdal_translate"):
+        release.release(d=f.deps())
+    assert f.downloads_calls == 0 and f.node_calls == []
+
+
+def test_export_failure_is_a_release_error_and_publishes_nothing():
+    f = Fake(downloads_error=RuntimeError("gdal_translate failed (1): disk full"))
+    with pytest.raises(release.ReleaseError, match="export failed.*disk full"):
+        release.release(d=f.deps())
+    assert f.node_calls == []
+
+
+def test_export_progress_is_printed():
+    f = Fake()
+    release.release(dry_run=True, d=f.deps())
+    assert "wrote  1948/lots.geojson  (10 bytes)" in f.out

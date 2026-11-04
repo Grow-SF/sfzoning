@@ -1,7 +1,7 @@
 """Citywide image (a Cloud Optimized GeoTIFF) and the per-sheet download entries.
 
-The image is the same paper stitch the site shows (`stitch.build_vrt(paper=True)`), copied into
-a COG with no resampling: the scans stay as scanned.
+The image is the same paper stitch the site shows (`stitch.build_vrt(paper=True)`) copied into a
+COG: the warped sheets (warp.py) at the finest sheet's resolution, nothing vectorized or drawn.
 """
 from __future__ import annotations
 

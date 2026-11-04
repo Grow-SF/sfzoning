@@ -8,6 +8,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,13 @@ from sfzmaps import config, stitch
 from sfzmaps.districts.series import SERIES
 
 DOWNLOADS_DIR = config.DATA_DIR / "downloads"
-EXPORTER_VERSION = "1"  # bump when the format of any output changes
+# Bump by hand only to force a refresh the exporter code below doesn't show (say, a GDAL option
+# that changes output while the code stays the same): the fingerprint already covers that code.
+EXPORTER_VERSION = "2"
+_HERE = Path(__file__).parent
+# The code that writes the downloads: a change to any of it (README text included) refreshes them.
+EXPORTER_CODE = [_HERE / "readme.py", _HERE / "readme-template.txt", _HERE / "vectors.py",
+                 _HERE / "rasters.py"]
 
 VECTOR_FORMATS = ("geojson", "gpkg", "shp")
 _EXT = {"geojson": "geojson.zip", "gpkg": "gpkg.zip", "shp": "shp.zip", "cog": "tif"}
@@ -78,6 +85,8 @@ def fingerprint(item: Item, exporter_version: str) -> str:
     h = hashlib.sha256()
     for rel, digest in sorted((_rel(p), stitch._sha256(p)) for p in item.sources):
         h.update(f"{rel}\0{digest}\n".encode())
+    for p in EXPORTER_CODE:
+        h.update(f"code:{p.name}\0{stitch._sha256(p)}\n".encode())
     h.update(f"exporter:{exporter_version}".encode())
     return h.hexdigest()
 
@@ -159,10 +168,12 @@ def run(series: list[str] | None = None, log=lambda line: None) -> dict:
             continue
         sheets[s] = entries
         old_readme = prev.get("readme", {}).get(s)
-        if old_readme is not None and prev.get("sheets", {}).get(s) == entries:
-            readmes[s] = old_readme  # nothing changed: keep its date
+        new_readme = readme_mod.readme(s, "sheets", updated, commit)
+        if (old_readme is not None and prev.get("sheets", {}).get(s) == entries
+                and _undated(old_readme) == _undated(new_readme)):
+            readmes[s] = old_readme  # nothing changed, text included: keep its date
         else:
-            readmes[s] = readme_mod.readme(s, "sheets", updated, commit)
+            readmes[s] = new_readme
     index = {
         "commit": prev.get("commit", commit) if not _anything_written(prev, files, sheets, readmes) else commit,
         "license": readme_mod.LICENSE_TEXT,
@@ -176,6 +187,11 @@ def run(series: list[str] | None = None, log=lambda line: None) -> dict:
         part.write_text(text)
         os.replace(part, index_path)  # a reader never sees a half-written index
     return index
+
+
+def _undated(readme_text: str) -> str:
+    """A README without its LAST UPDATED line (date and build), to compare the rest."""
+    return re.sub(r"(?m)^(LAST UPDATED\n).*$", r"\1", readme_text)
 
 
 def _anything_written(prev: dict, files: dict, sheets: dict, readmes: dict) -> bool:

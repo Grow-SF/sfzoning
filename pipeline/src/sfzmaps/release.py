@@ -31,9 +31,15 @@ def _run(cmd: list[str], cwd=None) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
 
 
-def _downloads_run() -> dict:
+def _downloads_run(log: Callable[[str], None]) -> dict:
     from sfzmaps import downloads
-    return downloads.run()
+    return downloads.run(log=log)
+
+
+def _tools_outside_pixi() -> list[str]:
+    """The system tools (GDAL and the rest) not from the repository's pixi environment."""
+    from sfzmaps import toolchain
+    return [f"{t.name} ({t.path or 'missing'})" for t in toolchain.not_from_env()]
 
 
 def _today() -> str:
@@ -46,7 +52,8 @@ class Deps:
     node: Callable[..., subprocess.CompletedProcess] = ship._node    # node(script, args); reads the env file
     run: Callable[..., subprocess.CompletedProcess] = _run           # run(cmd, cwd=None)
     check_shipped: Callable[[str], list[str]] = ship.check_shipped   # the `Cache shipped` workflow's check
-    downloads: Callable[[], dict] = _downloads_run
+    downloads: Callable[[Callable[[str], None]], dict] = _downloads_run  # downloads(log)
+    toolchain: Callable[[], list[str]] = _tools_outside_pixi           # tools outside pixi
     env_file: Callable[[], object] = ship.env_file_path              # raises ShipError when missing
     today: Callable[[], str] = _today
     echo: Callable[[str], None] = print
@@ -84,6 +91,10 @@ def checks(d: Deps | None = None) -> list[str]:
                             "up-to-date main")
     except (subprocess.CalledProcessError, OSError) as e:
         problems.append(f"git couldn't compare HEAD with origin/main: {_why(e)}")
+    bad = d.toolchain()
+    if bad:
+        problems.append("these tools aren't from the pixi environment: " + ", ".join(bad) +
+                        "; release inside `pixi shell` (pipeline/README.md, Toolchain)")
     try:
         d.env_file()
     except ship.ShipError as e:
@@ -131,7 +142,11 @@ def release(dry_run: bool = False, no_pr: bool = False, d: Deps | None = None) -
     problems = checks(d)
     if problems:
         raise ReleaseError("not releasing:\n  " + "\n  ".join(problems))
-    d.downloads()
+    d.echo("exporting the GIS downloads (unchanged files are skipped)")
+    try:
+        d.downloads(d.echo)
+    except Exception as e:  # noqa: BLE001 - any export failure stops the release with its reason
+        raise ReleaseError(f"the downloads export failed, nothing was published: {e}") from e
     s = Summary()
     for script in SCRIPTS:
         try:
