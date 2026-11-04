@@ -336,7 +336,7 @@ stages:
     outs:
     - path: data/out/1929
       hash: md5
-      md5: 7eac19dcdc85a2de9e0c129316991528.dir
+      md5: 0de7dd3cedd349191fb928ce810f69b7.dir
       size: 288175003
       nfiles: 12
     - path: data/work/1929
