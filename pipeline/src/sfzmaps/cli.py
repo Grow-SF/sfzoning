@@ -609,7 +609,7 @@ def corrections_cmd(
     rows = corr.parse(meta["body"])
     if not rows:
         raise typer.BadParameter(f"issue #{issue} has no ```{corr.FENCE} block")
-    parcels = load_parcels()
+    parcels = load_parcels(every=True)    # a lot on an old map may since have been retired
     got = corr.check(rows, parcels)
     for p in got.problems:
         typer.echo(f"skipped: {p}", err=True)

@@ -28,7 +28,7 @@ def data(tmp_path, monkeypatch):
          "active": True},
         geometry=[box(0, 0, 100, 100), box(100, 0, 200, 100), box(0, 200, 50, 300),
                   box(50, 200, 100, 300), box(300, 0, 400, 50)], crs="EPSG:2227")
-    monkeypatch.setattr(assemble, "load_parcels", lambda: parcels.copy())
+    monkeypatch.setattr(assemble, "load_parcels", lambda *a, **k: parcels.copy())
     return tmp_path
 
 
@@ -221,7 +221,7 @@ def test_review_tiles_on_demand_only(data, monkeypatch):
 def test_parcel_without_geometry_dropped(data, monkeypatch):
     parcels = assemble.load_parcels()
     parcels.loc[4, "geometry"] = None
-    monkeypatch.setattr(assemble, "load_parcels", lambda: parcels.copy())
+    monkeypatch.setattr(assemble, "load_parcels", lambda *a, **k: parcels.copy())
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-1", "R-1", "R-4", "R-4", "M-1"]))
     out = assemble.run_series("1960")
     assert len(gpd.read_file(out / "parcels.fgb")) == 4
@@ -447,7 +447,7 @@ def suffixed(data, monkeypatch):
          "block_num": ["2330", "2330", "0792T", "0792T", "0792"], "active": True},
         geometry=[box(0, 0, 100, 100), box(100, 0, 200, 100), box(0, 200, 50, 300),
                   box(50, 200, 100, 300), box(300, 0, 400, 50)], crs="EPSG:2227")
-    monkeypatch.setattr(assemble, "load_parcels", lambda: parcels.copy())
+    monkeypatch.setattr(assemble, "load_parcels", lambda *a, **k: parcels.copy())
     raw = pd.DataFrame({"blklot": list(parcels["blklot"]), "code": ["R-2"] * 5,
                         "height_code": pd.Series([None] * 5, dtype=object), "confidence": 0.9,
                         "source_sheet": "1"})
@@ -469,7 +469,7 @@ def test_blocks_of_and_unzoned_by_block_num(suffixed, monkeypatch):
     out = assemble.mask_unzoned(suffixed, 1948).set_index("blklot")["code"]
     assert out["0792T021S"] is None and out["0792001"] == "R-2"
     # without a parcel table the fallback still reads the lettered block
-    monkeypatch.setattr(assemble, "load_parcels", lambda: 1 / 0)
+    monkeypatch.setattr(assemble, "load_parcels", lambda *a, **k: 1 / 0)
     assert list(assemble.blocks_of(pd.Series(["0792T021S", "2330006A"]))) == ["0792T", "2330"]
 
 

@@ -21,9 +21,25 @@ MEDIUM = 0.6            # confidence cap for parcels read from needs_review shee
 COLUMNS = ["blklot", "code", "height_code", "confidence", "source_sheet"]
 
 
-def load_parcels() -> gpd.GeoDataFrame:
+def load_parcels(year: float | None = None, *, every: bool = False) -> gpd.GeoDataFrame:
+    """Today's lots (DataSF's active parcels); with `year`, the lots of that year instead
+    (districts/lots.py: retired lots back, their successors out); with `every`, all lots ever
+    recorded (to look up any lot's place)."""
     p = gpd.read_parquet(config.REF_DIR / "parcels.parquet")
-    return p[p["active"]].reset_index(drop=True)
+    if every:
+        return p.reset_index(drop=True)
+    if year is None:
+        return p[p["active"]].reset_index(drop=True)
+    from sfzmaps.districts import lots
+
+    t = lots.lives().set_index("blklot").reindex(p["blklot"].astype(str))
+    return p[lots.valid_in(t.reset_index(), year + 0.5)].reset_index(drop=True)
+
+
+def series_year(series: str) -> float | None:
+    """The year whose lots a series is read and published on (None: today's lots)."""
+    info = SERIES.get(series)
+    return None if info is None or series == "today" else float(info.year)
 
 
 def sheet_statuses(series: str) -> dict[str, str]:
@@ -112,7 +128,7 @@ def read_raw(series: str, *, sheets: list[str] | None = None, client=None) -> pd
     from sfzmaps.districts import pattern, sampling
 
     info = SERIES[series]
-    parcels = load_parcels()
+    parcels = load_parcels(series_year(series))
     if info.reader == "B":
         order = [s for s in sampling.sheet_order(series) if sheets is None or s in sheets]
         return cap_confidence(_read_b(series, parcels, order), sheet_statuses(series))
