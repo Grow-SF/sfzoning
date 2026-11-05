@@ -3,7 +3,7 @@ import { formatBytes, lastUpdated, latestRedirects, latestUrl, rows, sheetCredit
 import { ERAS } from "../lib/eras";
 import { menuItems } from "../lib/menuItems";
 import { makeZip } from "client-zip";
-import { zipEntries, zipLength } from "../lib/sheetZip";
+import { sheetResponse, sheetsZipResponse, zipEntries, zipLength } from "../lib/sheetZip";
 
 const B = "https://blob.example/downloads";
 const file = (series: string, layer: string, fmt: string, name: string, bytes: number, updated: string) => ({
@@ -159,5 +159,44 @@ describe("zipEntries", () => {
   it("needs the license text", async () => {
     const run = async () => { for await (const e of zipEntries({ sheets: src.sheets }, "1948", async () => new Response("x"))) void e; };
     await expect(run()).rejects.toThrow(/license/i);
+  });
+});
+
+describe("server downloads", () => {
+  const src = {
+    license: "LICENSE TEXT",
+    sheets: { "1948": { updated: "2026-11-04", readme: "README TEXT", items: [
+      { sheet: "p01", name: "1948-p01.tif", url: "u1", bytes: 3, md5: "m", updated: "2026-11-04" },
+      { sheet: "p02", name: "1948-p02é.tif", url: "u2", bytes: 2, md5: "m", updated: "2026-11-04" },
+    ] } },
+  };
+  const fetchFn = async (url: string) => new Response(new Uint8Array(url === "u1" ? 3 : 2));
+  it("answers the sheets zip as an attachment of its predicted length", async () => {
+    const res = sheetsZipResponse(src, "1948", fetchFn);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("application/zip");
+    expect(res.headers.get("content-disposition")).toBe('attachment; filename="1948-sheets.zip"');
+    const body = await res.arrayBuffer();
+    expect(res.headers.get("content-length")).toBe(String(body.byteLength));
+    expect(body.byteLength).toBe(zipLength(src, "1948"));
+  });
+  it("answers one sheet as an attachment under its own name", async () => {
+    const res = await sheetResponse(src, "1948", "p02", fetchFn);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/tiff");
+    expect(res.headers.get("content-disposition")).toBe(
+      `attachment; filename="1948-p02_.tif"; filename*=UTF-8''1948-p02%C3%A9.tif`,
+    );
+    expect(res.headers.get("content-length")).toBe("2");
+    expect((await res.arrayBuffer()).byteLength).toBe(2);
+  });
+  it("404s an unknown series or sheet without fetching", async () => {
+    const never = async () => { throw new Error("fetched"); };
+    expect(sheetsZipResponse(src, "1900", never).status).toBe(404);
+    expect((await sheetResponse(src, "1948", "p99", never)).status).toBe(404);
+  });
+  it("answers 502 when Blob refuses a single sheet", async () => {
+    const res = await sheetResponse(src, "1948", "p01", async () => new Response("", { status: 500 }));
+    expect(res.status).toBe(502);
   });
 });

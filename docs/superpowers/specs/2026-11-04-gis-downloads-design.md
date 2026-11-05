@@ -70,18 +70,19 @@ each one carries its README and LICENSE.
   `warped_paper.tif` as the pipeline wrote it (native resolution, unresampled) is already on Blob,
   stored alone by `sfzmaps ship` at its public DVC path (`dvc/files/md5/…`; objects over 8 MB are
   never packed). Downloads point straight at those objects:
-  - one sheet: the page fetches the object and saves it as `<series>-sheet-<id>.tif`;
-  - all sheets of a series: the page streams a zip in the browser (each sheet fetched in turn, plus
-    README and LICENSE, written straight to disk as `<series>-sheets.zip`; File System Access API
-    where available, a service-worker stream otherwise). A permissively licensed streaming-zip
-    library is fine (AGPL-compatible);
+  - one sheet: `/data/sheets/<series>/sheet/<id>`, a site route that streams the object from Blob
+    as an attachment named `<series>-sheet-<id>.tif`;
+  - all sheets of a series: `/data/sheets/<series>/zip`, a site route that builds
+    `<series>-sheets.zip` while it streams (README, LICENSE, then each sheet fetched in turn), with
+    an exact Content-Length, so the browser shows an ordinary download (owner, 2026-11-04: the first
+    version built the zip in the page, and readers couldn't tell it was downloading);
   - for scripts: a per-series sheet list, `<series>-sheets.csv` (sheet, readable name, URL, size,
     md5, last updated), so `wget`/`curl` can fetch them all.
   - Those cache objects must never be deleted: they back public downloads. Write that into
     `pipeline/README.md` next to the existing never-overwrite rule. The publish fails if a listed
     object is missing on Blob (checked with one listing call).
-  - The README for a sheets zip is generated in the browser from the manifest, with the same text
-    as the server-made READMEs (shared template).
+  - The README for a sheets zip comes from the manifest, with the same text as the pipeline's
+    READMEs (shared template).
 - Every scanned series gets its downloads, including the height and special-use series of 1980–90,
   1990–96, 1996–2000 and 2000. In the table their row's GeoTIFF cell lists Zoning · Height ·
   Special use. For the 1964–1980 books, which bind height and special-use sheets in with the
