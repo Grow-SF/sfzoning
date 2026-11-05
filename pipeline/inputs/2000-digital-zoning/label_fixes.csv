@@ -18,3 +18,4 @@ sheet,x,y,code,fix_code,fix_x,fix_y,note
 2000-digital-zoning-p04,2648,2624,RC-3,NC-1,,,"block 1383: NC-1 (1996 reads it right)"
 2000-digital-zoning-p04,2802,2624,NC-3,NC-1,,,"block 1381: NC-1 (1996 reads it right)"
 2000-digital-zoning-p04,2232,2694,RM-1,RH-2,,,"blocks 1404-1405: RH-2 (1996 reads it right)"
+2000-digital-zoning-p11,1002,1514,NC-2,,1039,1522,"Glen Park, block 6739: a bracket after this NC-2 points into the slim strip east of it; the rest is RH-1"
