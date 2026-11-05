@@ -10,3 +10,4 @@ sheet,x,y,code,fix_code,fix_x,fix_y,note
 1996-2000-zoning-p27,1766,3452,RH-1,RH-3,,,"block 1542: RH-3 (2000 reads it right)"
 1996-2000-zoning-p27,790,3488,RM-2,RM-1,,,"block 1529: a boxed RM-1 (2000 reads it right)"
 1996-2000-zoning-p28,2246,2846,RM-2,-,,,"blocks 1404-1405: the RH-2 read twice, once as RM-2"
+1996-2000-zoning-p35,1036,1650,,NC-2,,,"Glen Park, block 6739: NC-2 printed beside the block, its bracket pointing into the slim strip (2000 reads it)"

@@ -50,6 +50,10 @@ def overrides_path(series: str) -> Path:
     return series_dir(series) / "overrides.csv"
 
 
+def area_overrides_path(series: str) -> Path:
+    return series_dir(series) / "area_overrides.geojson"
+
+
 def label_fixes_path(series: str) -> Path:
     return series_dir(series) / "label_fixes.csv"
 

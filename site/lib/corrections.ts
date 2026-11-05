@@ -23,7 +23,24 @@ export type Correction = {
   /** The code the reader says the old map prints for the lot */
   proposed: string;
   note: string;
+  /** An area the reader drew instead of one lot (lng, lat corners): the old map's district line
+   * runs here, perhaps through a lot. blklot is then a key ("area-…"), not a lot. */
+  area?: [number, number][];
 };
+
+export function isArea(c: Correction): boolean {
+  return Array.isArray(c.area) && c.area.length >= 3;
+}
+
+/** A new area correction's key. */
+export function areaKey(): string {
+  return `area-${Date.now().toString(36)}`;
+}
+
+/** Corners rounded to ~1 m: enough for a lot line, short enough for an issue link. */
+export function roundRing(ring: [number, number][]): [number, number][] {
+  return ring.map(([x, y]) => [Math.round(x * 1e5) / 1e5, Math.round(y * 1e5) / 1e5]);
+}
 
 const KEY = "sfz-corrections";
 const listeners = new Set<() => void>();
@@ -98,7 +115,10 @@ export function codesForYear(rules: Rule[], year: number): string[] {
 }
 
 function lotLabel(b: string): string {
-  return b.length >= 7 ? `${b.slice(0, 4)}/${b.slice(4)}` : b;
+  if (b.startsWith("area-")) return "drawn area";
+  const [lot, piece] = b.split("~");
+  const label = lot.length >= 7 ? `${lot.slice(0, 4)}/${lot.slice(4)}` : lot;
+  return piece ? `${label} (part)` : label;
 }
 
 /** The issue's text: a table for people, then a fenced JSON block the pipeline reads. */
@@ -106,7 +126,8 @@ export function issueBody(list: Correction[]): string {
   const rows = list.map(
     (c) => `| ${c.era} | ${lotLabel(c.blklot)} | ${c.shown || "none"} | ${c.proposed} | ${c.note.replace(/\|/g, "/").replace(/\n/g, " ")} |`,
   );
-  const data = list.map(({ era, series, blklot, shown, proposed, note }) => ({ era, series, blklot, shown, proposed, note }));
+  const data = list.map(({ era, series, blklot, shown, proposed, note, area }) =>
+    area ? { era, series, blklot, shown, proposed, note, area } : { era, series, blklot, shown, proposed, note });
   return [
     "Corrections suggested on sfzoning.com: what the old map prints for these lots.",
     "",
@@ -123,7 +144,10 @@ export function issueBody(list: Correction[]): string {
 
 export function issueTitle(list: Correction[]): string {
   const eras = [...new Set(list.map((c) => c.era))];
-  return `Map corrections: ${list.length} lot${list.length === 1 ? "" : "s"} (${eras.join(", ")})`;
+  const areas = list.filter(isArea).length;
+  const lots = list.length - areas;
+  const parts = [lots ? `${lots} lot${lots === 1 ? "" : "s"}` : "", areas ? `${areas} area${areas === 1 ? "" : "s"}` : ""];
+  return `Map corrections: ${parts.filter(Boolean).join(", ")} (${eras.join(", ")})`;
 }
 
 /** A link that opens a pre-filled GitHub issue, or null when it would be too long to open. */

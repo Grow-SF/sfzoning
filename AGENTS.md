@@ -70,8 +70,11 @@ check every scan crop before applying anything.
   them, or draw anything that isn't in the scan. The only edits are the cream
   tint on the 1-bit scans, erasing printed border rules and binding shadows,
   and plain paper filling gaps between sheets.
-- Zoning boundaries come from modern lot lines (DataSF parcels), never from
-  tracing the scan.
+- Zoning boundaries come from lot lines (DataSF parcels, as they were in each map's
+  year: `districts/lots.py`), never from tracing the scan automatically. The one
+  exception is a hand-drawn area in `inputs/<series>/area_overrides.geojson`: a person
+  drew it on the site and it was checked against the scan, and a lot its line cuts is
+  split for that map only.
 - Where a street really moved, keep the historic position; don't warp the
   scan to fit today's streets.
 

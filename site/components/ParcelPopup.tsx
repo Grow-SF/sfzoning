@@ -13,7 +13,10 @@ type Props = { hit: ParcelHit; era: Era; rules: Rule[]; onClose: () => void };
 
 function formatBlklot(b?: string) {
   if (!b) return null;
-  return b.length >= 7 ? `Block ${b.slice(0, 4)}, lot ${b.slice(4)}` : `Lot ${b}`;
+  // A lot split by a district line drawn on this map: <blklot>~in / ~out
+  const [lot, piece] = b.split("~");
+  const label = lot.length >= 7 ? `Block ${lot.slice(0, 4)}, lot ${lot.slice(4)}` : `Lot ${lot}`;
+  return piece ? `Part of ${label.charAt(0).toLowerCase()}${label.slice(1)}` : label;
 }
 
 export default function ParcelPopup({ hit, era, rules, onClose }: Props) {

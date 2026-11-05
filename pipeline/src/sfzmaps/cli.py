@@ -623,9 +623,11 @@ def corrections_cmd(
         typer.echo("check the crops, then run again with --apply")
         return
     done = corr.write_overrides(rows, issue)
+    areas = corr.write_areas(rows, issue)
     n_cases = corr.write_cases(rows, issue, chk.centroids())
-    typer.echo(f"overrides: {', '.join(f'{s} {n}' for s, n in done.items())}; review cases added: {n_cases}. "
-               "Now build and commit inputs/.")
+    typer.echo(f"overrides: {', '.join(f'{s} {n}' for s, n in done.items()) or 'none'}; "
+               f"drawn areas: {', '.join(f'{s} {n}' for s, n in areas.items()) or 'none'}; "
+               f"review cases added: {n_cases}. Now build and commit inputs/.")
 
 
 @app.command("answers")

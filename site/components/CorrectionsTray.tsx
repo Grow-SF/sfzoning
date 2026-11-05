@@ -45,7 +45,8 @@ export default function CorrectionsTray() {
         {list.map((c) => (
           <li key={`${c.era}-${c.blklot}`}>
             <span>
-              {c.era}, block {c.blklot.slice(0, 4)} lot {c.blklot.slice(4)}: {c.shown || "none"} &rarr;{" "}
+              {c.area ? `${c.era}, a drawn area` : `${c.era}, block ${c.blklot.slice(0, 4)} lot ${c.blklot.slice(4)}`}:{" "}
+              {c.area ? "" : `${c.shown || "none"} → `}
               <strong>{c.proposed}</strong>
               {c.note ? ` (${c.note})` : ""}
             </span>
@@ -53,7 +54,7 @@ export default function CorrectionsTray() {
               type="button"
               className={styles.linkButton}
               onClick={() => removeCorrection(c.era, c.blklot)}
-              aria-label={`Remove the correction for ${c.era}, lot ${c.blklot}`}
+              aria-label={`Remove the correction for ${c.era}, ${c.area ? "the drawn area" : `lot ${c.blklot}`}`}
             >
               Remove
             </button>

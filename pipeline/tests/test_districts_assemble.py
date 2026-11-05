@@ -527,3 +527,25 @@ def test_series_read_names_every_answer_it_used_the_same_on_every_run(data, monk
     first = answers.read(assemble._raw_path("1960"))
     assemble.run_series("1960")
     assert first == answers.read(assemble._raw_path("1960")) == sorted(["llm/" + "1" * 64 + ".json", own])
+
+
+def test_a_drawn_area_takes_whole_lots_and_splits_the_lot_its_line_cuts(tmp_path, monkeypatch):
+    from shapely.geometry import box as _box, mapping
+
+    monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
+    crs = "EPSG:2227"
+    g = gpd.GeoDataFrame({"blklot": ["a", "b", "c"], "code": ["RH-2"] * 3, "height_code": None,
+                          "category": "two_unit", "confidence": 0.8, "source_sheet": "s", "note": None},
+                         geometry=[_box(0, 0, 100, 100), _box(100, 0, 200, 100), _box(200, 0, 300, 100)], crs=crs)
+    area = gpd.GeoSeries([_box(-10, -10, 150, 110)], crs=crs).to_crs(4326).iloc[0]   # all of a, half of b
+    (tmp_path / "inputs" / "1980").mkdir(parents=True)
+    (tmp_path / "inputs" / "1980" / "area_overrides.geojson").write_text(json.dumps({
+        "type": "FeatureCollection",
+        "features": [{"type": "Feature", "geometry": mapping(area), "properties": {"code": "RH-1", "note": "issue #9"}}]}))
+    out = assemble.apply_area_overrides(g, "1980", 1980).set_index("blklot")
+    assert out.loc["a", "code"] == "RH-1" and out.loc["a", "note"] == "issue #9"       # whole lot inside
+    assert "b" not in out.index                                                       # cut: two pieces
+    assert out.loc["b~in", "code"] == "RH-1" and out.loc["b~out", "code"] == "RH-2"
+    assert out.loc["b~in"].geometry.area == pytest.approx(5000, rel=0.01)
+    assert out.loc["c", "code"] == "RH-2"                                             # untouched
+    assert assemble.apply_area_overrides(g, "1964", 1964).equals(g)                   # no file: as is
