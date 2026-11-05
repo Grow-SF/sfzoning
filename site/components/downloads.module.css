@@ -38,12 +38,10 @@
   border: 1px solid var(--ink);
   border-radius: 2px;
   cursor: pointer;
+  display: inline-block;
+  text-decoration: none;
 }
 .button:hover { background: var(--paper-hi); }
-.link { padding: 0; font: inherit; color: var(--accent); text-decoration: underline; background: none; border: 0; cursor: pointer; }
-.link:disabled { cursor: progress; opacity: 0.6; }
-.progress { display: block; }
-.error { display: block; color: #a4262c; font-size: 0.75rem; }
 .sheets { margin: 0.25rem 0 0; }
 .sheets summary { cursor: pointer; color: var(--ink-2); font-size: 0.75rem; }
 .sheetList { margin: 0.25rem 0 0; padding: 0; list-style: none; max-height: 16rem; overflow-y: auto; }
