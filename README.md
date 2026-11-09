@@ -22,6 +22,15 @@ The system tools (GDAL, poppler, uv, git, Node) are pinned in `pixi.toml` and lo
 `pixi.lock`. Install [pixi](https://pixi.sh) (`brew install pixi` on macOS), then run
 `pixi install` and `pixi shell` here. `CONTRIBUTING.md` has the rest of the setup for each part.
 
+## About the scans
+
+The historic San Francisco zoning maps were scanned by me, Steven Bacio, in 
+early 2018. Thanks to the assistance of Michael Webster at the San Francisco
+Planning Department, I spent a day in the SF Planning archives scanning their
+paper maps on a large-format scanner and I then uploaded them to [Google Drive](https://drive.google.com/drive/u/0/folders/10p74RwqmzeQFBrBqjxXdmEOUREx0BLgO).
+I, of course, cannot claim copyright on these maps but if you use them I would
+appreciate an acknowledgement of the archival work I undertook. 
+
 ## License
 
 The project is licensed in two parts. See `NOTICE` for exactly what each part
