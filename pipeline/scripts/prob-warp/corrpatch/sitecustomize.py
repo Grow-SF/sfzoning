@@ -6,7 +6,7 @@ import os
 
 if int(os.environ.get("RBF_THREADS", "1")) > 1:      # speed E7: the thin-plate spline on threads, bit-identical
     import sys
-    sys.path.insert(0, "/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad/allyears")
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "allyears"))
     import rbfthreads
     rbfthreads.install()
 

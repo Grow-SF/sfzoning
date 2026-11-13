@@ -4,6 +4,7 @@ miss (px: where today's fit + correction puts each control point's map point vs 
 cell determinant of prob6 (below 0: a fold).  Appends a JSON line to allyears/run/probsum.jsonl.
 usage: ay_probsum.py SERIES SHEET"""
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -11,8 +12,9 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 
 SERIES, NN = sys.argv[1], sys.argv[2]
-A = Path("/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad/allyears")
-S = A / "run" / SERIES / NN
+A = Path(__file__).resolve().parent
+RUN = Path(os.environ.get("PW_RUN", A.parents[2] / "data" / "prob-warp" / "run"))
+S = RUN / SERIES / NN
 out = {"series": SERIES, "sheet": NN}
 for f in ("today", "p1", "prob6"):
     p = S / f"dm_{NN}_{f}.npz"
@@ -43,5 +45,5 @@ e0 = np.linalg.norm(gb - gx, axis=1)
 out["gcp_miss_px_p50_today"] = round(float(np.median(e0)), 2)
 out["gcp_miss_px_p99_today"] = round(float(np.percentile(e0, 99)), 2)
 print(json.dumps(out))
-with open(A / "run" / "probsum.jsonl", "a") as fh:
+with open(RUN / "probsum.jsonl", "a") as fh:
     fh.write(json.dumps(out) + "\n")

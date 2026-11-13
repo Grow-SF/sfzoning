@@ -1,7 +1,9 @@
 #!/bin/zsh
 # corrections for every fitted sheet of one series, CORR_P at a time (default 3).  usage: corr_series.sh SERIES
-A=/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad/allyears
-W=/Users/sbuss/workspace/sfzoning/.claude/worktrees/cache-maybe/pipeline/data/work/$1
+A=${PW_CODE:-$(cd "$(dirname "$0")" && pwd)}                 # this folder (prob-warp/allyears)
+P=${PW_PIPELINE:-$(cd "$A/../../.." && pwd)}                 # the repo's pipeline folder
+RUN=${PW_RUN:-$P/data/prob-warp/run}                          # outputs, per series/sheet
+W=${PW_WORK:-$P/data/work}/$1
 SH=()
 for d in $W/*(/); do
   [ -f $d/transform.json ] && [ -f $d/warped.tif ] && [ -f $d/blocks_px.geojson ] && [ -f $d/refine.json ] && SH+=(${d:t})

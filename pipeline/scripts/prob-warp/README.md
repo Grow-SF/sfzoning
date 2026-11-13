@@ -73,9 +73,28 @@ scratch copy (`torchenv`) was damaged by the `/tmp` cleaner, so reinstall it.
   - kept: p01–p05, p08 and p11–p13 (prob6), and p09–p10 (plus);
   - lost: p06 and p07. Their plain prob6 fits survive, plus one variant for p06 (`confit_06_prob6lm.npz`).
 - **The lost p1 fields:** their logs and distance maps survive, and `corr.sh` recomputes them.
-- **Rescued copy (not in git):** `~/sfz-rnd/prob-warp-2026-11-13/`, with timestamps kept.
+- **Rescued copy (not in git):** in the `cache-maybe` worktree's git-ignored
+  `pipeline/data/prob-warp/rescued-2026-11-13/`, with timestamps kept.
   - `allyears-run/`: every sheet's outputs and logs;
+  - `allyears-chain/`: the years chain's text-erased pages, which prob6 reads (`ay_regprep3.py`);
   - `data_ay2/`: the mirror with the chosen transforms.
+
+## Running it
+
+- `rebuild.sh [SERIES ...]` runs the six steps in order. Settings are environment variables, listed at its top. All
+  paths default to this repo; outputs go to `pipeline/data/prob-warp/run` (git-ignored).
+- The torch environment: `uv venv --python 3.12 DIR && uv pip install --python DIR/bin/python torch==2.15.0
+  numpy==2.5.4 scipy==1.18.1`, then `PW_TPY=DIR/bin/python`.
+- `check/`: rebuild one sheet (`rebuild_one.sh`) and compare its outputs with the rescued copy (`compare_rebuild.py`).
+
+## Rebuild status
+
+- **2000 p01, rebuilt with these scripts: not yet identical.** It used 429,825 block-line points against the
+  original's 428,227. The 2000 sheets were run in `SAME2000` mode (`ftpx` 3.99, and each sheet's measured area from
+  `stepview/city_m2/parts.json`). That file was deleted by the `/tmp` cleaner, and none of the surviving older
+  `parts.json` files, nor one rebuilt from the pipeline's footprints, reproduces the original's points
+  (`check/try_parts.sh`).
+- **Not recreatable yet:** 2000 p06 and p07's letter-erased fits, and the warps built from them.
 
 ## Next
 

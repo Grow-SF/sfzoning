@@ -2,11 +2,13 @@
 # the correction for one sheet of any series (the 2000 steps and settings; see ay.py), logged to run/SERIES/SHEET/corr.log
 # with a STEP line (name, end time) after each step.  usage: corr.sh SERIES SHEET
 export SERIES=$1 SHEET=$2
-A=/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad/allyears
-TPY=/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad/torchenv/bin/python
-O=$A/run/$1/$2
+A=${PW_CODE:-$(cd "$(dirname "$0")" && pwd)}                 # this folder (prob-warp/allyears)
+P=${PW_PIPELINE:-$(cd "$A/../../.." && pwd)}                 # the repo's pipeline folder
+RUN=${PW_RUN:-$P/data/prob-warp/run}                          # outputs, per series/sheet
+TPY=${PW_TPY:?set PW_TPY to the torch environment python (README)}
+O=$RUN/$1/$2
 mkdir -p $O
-cd /Users/sbuss/workspace/sfzoning/.claude/worktrees/cache-maybe/pipeline || exit 1
+cd $P || exit 1
 L=$O/corr.log
 [ -f $O/confit_$2_p1.npz ] && [ -f $O/gcpmoved_$2_p1.png ] && { echo "SKIP $1 $2 (done)"; exit 0; }
 echo "STAGE $1 $2 start $(date +%H:%M:%S)" | tee $L

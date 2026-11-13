@@ -15,13 +15,14 @@ import os
 import sys
 from pathlib import Path
 
-SCR = Path("/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad")
-AY = SCR / "allyears"
+AY = Path(__file__).resolve().parent                      # this folder (prob-warp/allyears)
+SCR = Path(os.environ.get("PW_SCRATCH", AY.parent))      # only for the SAME2000 check run
+RUN = Path(os.environ.get("PW_RUN", AY.parents[2] / "data" / "prob-warp" / "run"))
 SERIES, NN = os.environ["SERIES"], os.environ["SHEET"]
-OUT = Path(os.environ["AY_OUT"]) if os.environ.get("AY_OUT") else AY / "run" / SERIES / NN   # AY_OUT: profiling runs
+OUT = Path(os.environ["AY_OUT"]) if os.environ.get("AY_OUT") else RUN / SERIES / NN   # AY_OUT: profiling runs
 OUT.mkdir(parents=True, exist_ok=True)
 S = str(OUT) + "/"
-REAL = Path("/Users/sbuss/workspace/sfzoning/.claude/worktrees/cache-maybe/pipeline/data/work")
+REAL = Path(os.environ.get("PW_WORK", AY.parents[2] / "data" / "work"))
 D = REAL / SERIES / NN
 sys.path.insert(0, str(AY))
 _SET = OUT / "settings.json"

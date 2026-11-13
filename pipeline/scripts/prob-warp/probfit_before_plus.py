@@ -31,7 +31,7 @@ from scipy.ndimage import gaussian_filter
 NN, TAG = sys.argv[1], sys.argv[2]
 ITERS = int(sys.argv[3]) if len(sys.argv) > 3 else 800
 LAM, RATIO, RIP = 1.0, 2.0, 1000.0
-S = os.environ.get("PROBDIR", "/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad/")
+S = os.environ["PROBDIR"]
 LOWMEM = bool(os.environ.get("LOWMEM"))
 torch.set_num_threads(int(__import__("os").environ.get("THREADS", "5")))
 R2 = np.load(S + f"reg2_{NN}.npz")

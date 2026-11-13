@@ -1,9 +1,11 @@
 #!/bin/zsh
 # prob.sh for every sheet of every zoning series that has the old chain's inputs, PROB_P at a time (default 3,
 # THREADS 3 each).  Log: run/prob_all.log.  usage: prob_all.sh
-A=/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad/allyears
+A=${PW_CODE:-$(cd "$(dirname "$0")" && pwd)}                 # this folder (prob-warp/allyears)
+P=${PW_PIPELINE:-$(cd "$A/../../.." && pwd)}                 # the repo's pipeline folder
+RUN=${PW_RUN:-$P/data/prob-warp/run}                          # outputs, per series/sheet
 JOBS=()
-for s in $A/run/*(/); do
+for s in $RUN/*(/); do
   for d in $s/*(/); do
     [ -f $d/reg2_${d:t}.npz ] && [ -f $d/dm_sides_${d:t}.npz ] && JOBS+=("${s:t} ${d:t}")
   done

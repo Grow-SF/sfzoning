@@ -19,7 +19,7 @@ from scipy.ndimage import gaussian_filter
 
 LAM, HOLD, HOLD_CP, TAG = float(sys.argv[1]), float(sys.argv[2]), float(sys.argv[3]), sys.argv[4]
 RATIO, RIP = float(sys.argv[5]), float(sys.argv[6])
-sys.path.insert(0, '/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad/allyears')
+sys.path.insert(0, __import__('os').path.dirname(__import__('os').path.abspath(__file__)))
 from ay import *  # noqa: F403,E402
 import json  # noqa: E402
 FTPX = settings()['ftpx']

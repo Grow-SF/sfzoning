@@ -5,16 +5,20 @@ print as p1 and has no fold, else p1.  For 2000-digital-zoning p06 and p07 the s
 with every fitted letter erased) is used.  Writes allyears/run/choice.json.  Warps are made after (warp_prob.sh).
 usage: mirror_prob.py"""
 import json
+import os
 import shutil
 from pathlib import Path
 
-SCR = Path("/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad")
-A = SCR / "allyears"
-M1, M2 = SCR / "data_ay", SCR / "data_ay2"
+A = Path(__file__).resolve().parent
+PIPE = A.parents[2]
+RUN = Path(os.environ.get("PW_RUN", PIPE / "data" / "prob-warp" / "run"))
+M1 = Path(os.environ.get("PW_MIRROR", PIPE / "data" / "prob-warp" / "data_ay"))
+M2 = Path(os.environ.get("PW_MIRROR2", PIPE / "data" / "prob-warp" / "data_ay2"))
+ERASED = Path(os.environ.get("PW_ERASED_2000", RUN.parent / "erased-2000"))   # 2000 p06/p07 letter-erased fits
 if not M2.exists():
     shutil.copytree(M1, M2, symlinks=True)
 rows = {}
-for line in open(A / "run" / "probsum.jsonl"):
+for line in open(RUN / "probsum.jsonl"):
     r = json.loads(line)
     rows[(r["series"], r["sheet"])] = r
 choice = {}
@@ -25,16 +29,16 @@ for (series, sheet), r in sorted(rows.items()):
         continue
     p1, pr = r.get("within1_p1", 0), r.get("within1_prob6", 0)
     use = "prob6" if (pr >= p1 and r.get("min_det_prob6", 0) > 0) else "p1"
-    f = A / "run" / series / sheet / f"confit_{sheet}_{use}.npz"
+    f = RUN / series / sheet / f"confit_{sheet}_{use}.npz"
     if series == "2000-digital-zoning" and sheet.endswith(("p06", "p07")):
-        use, f = "prob6 (all text erased)", SCR / f"confit_{sheet[-2:]}_prob6.npz"
+        use, f = "prob6 (all text erased)", ERASED / f"confit_{sheet[-2:]}_prob6.npz"
     tj = json.loads(tj_p.read_text())
     tj["correction"] = {"file": str(f)}
     tj_p.write_text(json.dumps(tj))
     choice[f"{series}/{sheet}"] = {"fit": use, "within1_today": r.get("within1_today"), "within1_p1": p1, "within1_prob6": pr,
                                    "gcp_p99_p1": r.get("gcp_miss_px_p99_p1"), "gcp_p99_prob6": r.get("gcp_miss_px_p99_prob6"),
                                    "min_det_prob6": r.get("min_det_prob6")}
-json.dump(choice, open(A / "run" / "choice.json", "w"), indent=1)
+json.dump(choice, open(RUN / "choice.json", "w"), indent=1)
 n = {}
 for v in choice.values():
     n[v["fit"]] = n.get(v["fit"], 0) + 1

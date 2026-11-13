@@ -12,7 +12,7 @@ from skimage.morphology import skeletonize
 from ay import *  # noqa: F403
 
 page = cv2.imread(str(D / "page.png"), cv2.IMREAD_GRAYSCALE) < 128
-CH = AY / "chain" / SERIES
+CH = Path(os.environ.get("PW_CHAIN", AY.parents[2] / "data" / "prob-warp" / "chain")) / SERIES   # years chain
 nb, cl = CH / NN / "noblock.png", CH / f"{NN}_c1" / "clean.png"
 text_src = "none"
 if nb.exists() and cl.exists():
