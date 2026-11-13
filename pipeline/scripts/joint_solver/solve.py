@@ -53,7 +53,7 @@ def solve_joint(n_lots, a, b, odds, rd, options=None, label_weight=1.0, wall_wei
     return p, U
 
 
-def solve_quarter(run, q, true_borders=False):
+def solve_quarter(run, q, true_borders=False, keep_costs=False):
     """solve the whole city with holdout q's inputs; writes runs/{run}-{q}.npz"""
     t0 = time.time()
 
@@ -74,6 +74,10 @@ def solve_quarter(run, q, true_borders=False):
     p, U = solve_joint(C.n, C.a, C.b, odds, rd, load_options(q), table_codes=table_codes, log=log)
     names = rd.names + [""]
     save_run(RUNS / f"{run}-{q}.npz", np.array(names)[p])
+    if keep_costs:                                       # for hole causes
+        np.savez_compressed(RUNS / f"{run}-{q}-costs.npz", U=U.astype(np.float32), odds=odds.astype(np.float32),
+                            codes=p, names=np.array(rd.names), table_codes=table_codes, lot=rd.lot, code=rd.code,
+                            trust=rd.trust)
     log(f"done in {time.time() - t0:.0f} s")
 
 
@@ -88,14 +92,14 @@ def join(run):
     save_run(RUNS / f"{run}.npz", out)
 
 
-def solve_all(run, true_borders=False):
+def solve_all(run, true_borders=False, keep_costs=False):
     """the four holdouts side by side (one process each), then join"""
     import os
     import subprocess
     RUNS.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", VECLIB_MAXIMUM_THREADS="1",
                MKL_NUM_THREADS="1")
-    flags = ["--true-borders"] * true_borders
+    flags = ["--true-borders"] * true_borders + ["--keep-costs"] * keep_costs
     procs = []
     for q in QUARTERS:
         logf = open(RUNS / f"{run}-{q}.log", "w")

@@ -9,7 +9,10 @@ thousand lots: that is one mistake).
              names left out; a top reading naming no table code counts wrong.
   holes      short breaks in a drawn district line: a connected run of missed table-line borders (joined at
              junctions, any angle) up to 100 ft long that meets found table-line borders at two or more places
-  incidents  wrong lots grouped into connected patches with the same table code and the same wrong code"""
+  incidents  wrong lots grouped into connected patches with the same table code and the same wrong code
+
+Data errors (data_errors.npz, from holes.py): parcels the table codes differently from what the drawing shows.  They
+are left out of the borders, labels and holes."""
 from collections import Counter
 
 import numpy as np
@@ -18,10 +21,19 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from .borders import junction_neighbours
-from .data import QUARTERS, city
+from .data import OUT, QUARTERS, city
 from .labels import top_readings
 
+DATA_ERRORS = OUT / "data_errors.npz"
 HOLE_FT = 100.0
+
+
+def data_error_lots():
+    C = city()
+    m = np.zeros(C.n, bool)
+    if DATA_ERRORS.exists():
+        m[np.load(DATA_ERRORS)["lots"]] = True
+    return m
 
 
 class Table:
@@ -116,15 +128,16 @@ def incidents(codes):
                 big=int((sz >= 100).sum()), lots_in_big=int(sz[sz >= 100].sum()), biggest=biggest)
 
 
-def report(name, codes):
-    ex = np.zeros(city().n, bool)
+def report(name, codes, exclude_data_errors=True):
+    ex = data_error_lots() if exclude_data_errors else np.zeros(city().n, bool)
     s = score(codes, Table(ex))
     i = incidents(codes)
     print(f"{name}: district lines drawn {s['recall']:.1%} ({s['recall_ft']:.1%} by length); drawn lines that are "
           f"table lines {s['precision']:.1%} ({s['precision_ft']:.1%}); zoning labels right "
           f"{s['zoning_labels']:.1%} of "
           f"{s['n_zoning_labels']:,} (all labels {s['labels']:.1%} of {s['n_labels']:,}); holes {s['holes']} "
-          f"({s['hole_ft']:,.0f} ft; missed runs over 100 ft: {s['long_runs']}, {s['long_miles']:.1f} mi)")
+          f"({s['hole_ft']:,.0f} ft; missed runs over 100 ft: {s['long_runs']}, {s['long_miles']:.1f} mi)"
+          + (f" [{int(ex.sum())} data-error parcels left out]" if ex.any() else ""))
     print(f"   wrong lots {i['wrong_lots']:,} in {i['incidents']:,} incidents (median {i['median']} lots); "
           f"incidents of 100+ lots: {i['big']} holding {i['lots_in_big']:,}")
     for n, t, r, blocks in i["biggest"]:
