@@ -71,4 +71,6 @@ def main(args: list[str]) -> None:
         sys.meta_path.insert(0, _Rewriter(Path(script).parent, scratch))
     sys.argv = [script, *args[1:]]
     sys.path.insert(0, str(Path(script).parent))
-    exec(compile(src, script, "exec"), {"__name__": "__main__", "__file__": script})
+    g = {"__name__": "__main__", "__file__": script}
+    record.watch_globals(g)
+    exec(compile(src, script, "exec"), g)
