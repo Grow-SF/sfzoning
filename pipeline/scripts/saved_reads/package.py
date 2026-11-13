@@ -1,23 +1,25 @@
-"""Build the saved-reads package from recorded runs (record_all.sh): every answer with a readable image name and what
-it was asked with, ready to check in.
+"""Build the saved-reads package from recorded runs (record_all.sh) and the reads matched by time (timed_reads.json):
+every answer with a readable image name and what it was asked with, ready to check in.
 
 Writes, under OUT (the checked-in folder, default pipeline/saved-reads):
   reads/<read>.jsonl.gz   one line per answer of that read, sorted by image:
-                            read, series, sheet, image (readable name), page_box (page px, when the image is a piece of
-                            the sheet's page.png), at (the point it is about, page px, when it is about one point),
-                            case (code-check case id), variant, model, effort, prompt (short name), asked (when the
-                            answer was stored, UTC), script (where the script is in git and the run's arguments),
-                            answer (as the model gave it), image_sha256, cache_key
+                            read, series, sheet, image (readable name: <read>/<sheet>/<what>.png), page_box (page px,
+                            when the image is a piece of the sheet's page), at (the point it is about, page px), case
+                            (code-check case id), place (an old solve's place or district number), variant, scale,
+                            model, provider, effort, prompt (short name; text in prompts.jsonl), asked (when the
+                            answer was stored, UTC), script (where the script is in git, its arguments and settings),
+                            matched ("replayed": the record's prompt, image and model were asked again from the cache and
+                            make exactly its cache key; "by time": see timed_reads.json), answer (as the model gave it),
+                            image_sha256, cache_key
   prompts.jsonl           {name, read, sha256, text}: every prompt, by its short name
   schemas.jsonl           {sha256, schema}: every answer format
   runs.jsonl              every recorded run (script, git location, arguments, settings)
   images.manifest.tsv     readable image name, sha256, bytes
-and under IMAGES (default pipeline/data/saved-reads/images, not in git): every image at its readable name; zipped by
-the caller as images.zip.
+and under IMAGES (default pipeline/data/saved-reads/images, not in git): every image at its readable name.
 usage: python -m saved_reads package --calls CALLS_DIR [--out OUT] [--images IMAGES]"""
 import gzip
 import json
-import os
+import re
 import shutil
 import struct
 import time
@@ -26,96 +28,124 @@ from pathlib import Path
 
 from sfzmaps import config
 
-# recorded folder name -> (read name, short description used in the README)
-READS = {
-    "terra-boxes": "terra-page-boxes",
-    "codes2000-terra": "code-reads", "codes2000-sol": "code-reads",
-    "leaders-sol": "leader-reads",
-    "k8-textpass-cw": "terra-turned-tiles",
-    "k8-placeread": "terra-place-reads", "k8-placeask": "terra-place-asks", "k8-placeask-split": "terra-place-asks-split",
-    "k8-distask": "terra-district-asks",
-    "k8-read3": "third-read", "k8-read3r": "third-reread",
-    "pipeline-labels": "pipeline-label-reads",
+from .by_time import stored_between
+
+READS = {   # recorded folder -> read name
+    "codes2000-terra": "code-reads", "codes2000-sol": "code-reads", "leaders-sol": "leader-reads",
+    "k8-textpass-cw": "terra-turned-tiles", "k8-placeread": "terra-place-reads", "k8-placeask": "terra-place-asks",
+    "k8-placeask-split": "terra-place-asks-split", "k8-distask": "terra-district-asks", "k8-read3": "third-read",
+    "k8-read3r": "third-reread", "pipeline-labels": "pipeline-label-reads",
 }
+SER = "2000-digital-zoning"
 
 
 def _read_of(folder: str) -> str:
-    for k, v in READS.items():
-        if folder == k or folder.startswith(k + "-"):
-            return v
-    return folder
+    if folder in READS:
+        return READS[folder]
+    return "terra-page-boxes" if folder.startswith("terra-boxes-") else folder
 
 
 def _png_size(path: Path) -> tuple[int, int]:
     with open(path, "rb") as f:
-        head = f.read(24)
-    return struct.unpack(">II", head[16:24])
+        return struct.unpack(">II", f.read(24)[16:24])
 
 
-def _find(ctx: dict, *names):
-    """the first of names found in any frame's locals (innermost frames first)"""
+def _find(ctx: dict, name):
     for frame in ctx.values():
-        for n in names:
-            if n in frame:
-                return frame[n]
+        if name in frame:
+            return frame[name]
     return None
 
 
-def _p4(v) -> str:
+def _n(v) -> str:
     return f"{int(round(float(v))):04d}"
 
 
-def describe(read: str, script: str, g: dict, ctx: dict, wh: tuple[int, int], argv: list[str], env: dict) -> dict:
-    """series, sheet, page_box / at / case / variant, and the image's readable name (without the read folder)"""
-    d = {}
+def _sheet(sid) -> str:
+    sid = str(sid)
+    return sid if sid.startswith(SER) else f"{SER}-p{sid.removeprefix('p')}"
+
+
+def describe(script: str, g: dict, ctx: dict, note: dict, wh: tuple[int, int], argv: list[str], env: dict) -> dict:
+    """series, sheet, the image's readable name (under the read's folder), and page_box / at / case / place / variant /
+    scale, from what the asking script knew (record.py's context, the script's settings, the note it posted)"""
     w, h = wh
     name = Path(script).name
     if name == "textboxes.py":
         t = _find(ctx, "t")
         x0, y0 = g.get("bx0", 0) + t[0], g.get("by0", 0) + t[1]
-        d.update(series=g["series"], sheet=g["sheet"], page_box=[x0, y0, x0 + w, y0 + h])
-        d["image"] = f"{g['sheet']}/tile_{_p4(x0)}_{_p4(y0)}_{w}x{h}.png"
-    elif name in ("leaders2.py", "leaders.py", "reread.py"):
-        c = _find(ctx, "c") or {}
-        sid = c.get("sid", "")
-        sheet = sid if sid.startswith("2000-") else f"2000-digital-zoning-{sid}"
-        d.update(series="2000-digital-zoning", sheet=sheet, at=[c.get("x"), c.get("y")], code_read_before=c.get("code"))
-        kind = {"leaders2.py": "leader-map", "leaders.py": "leader-read", "reread.py": "recheck"}[name]
-        case = f"case_{c['id']}_" if "id" in c else ""
-        if "id" in c:
+        return {"series": g["series"], "sheet": g["sheet"], "page_box": [x0, y0, x0 + w, y0 + h],
+                "image": f"{g['series']}/{g['sheet']}/tile_{_n(x0)}_{_n(y0)}_{w}x{h}.png"}
+    if name in ("leaders2.py", "reread.py"):
+        c = _find(ctx, "c")
+        sheet = _sheet(c["sid"])
+        d = {"series": SER, "sheet": sheet, "at": [c["x"], c["y"]], "code_read_before": c.get("code")}
+        if name == "reread.py":
             d["case"] = c["id"]
-        d["image"] = f"{kind}/{sheet}/{case}at_{_p4(c.get('x', 0))}_{_p4(c.get('y', 0))}.png"
-    elif name == "pipeline_labels.py":
-        sheet_dir = _find(ctx, "d")
-        series = _find(ctx, "series") or ""
-        t = _find(ctx, "t")
-        sheet = Path(str(sheet_dir)).name if sheet_dir else ""
-        d.update(series=series, sheet=sheet)
-        if t:
-            d["page_box"] = [t[0], t[1], t[0] + w, t[1] + h]
-            d["image"] = f"{series}/{sheet}/tile_{_p4(t[0])}_{_p4(t[1])}_{w}x{h}.png"
-    else:                                   # k8 scripts: sheet from the frame, the rest from what the frame knew
-        nn = _find(ctx, "nn", "sheet_nn")
-        sheet = f"2000-digital-zoning-p{nn}" if isinstance(nn, str) and len(nn) <= 3 else (_find(ctx, "sheet", "sid") or "")
-        d.update(series="2000-digital-zoning", sheet=sheet)
-        variant = env.get("SPLIT") and "split" or (argv[0] if name == "textpass.py" and argv else "")
-        if variant:
-            d["variant"] = variant
-        keys = [k for k in ("place", "pi", "i", "j", "k", "tx", "ty", "x0", "y0", "x1", "y1", "x", "y", "turn", "rot")
-                if _find(ctx, k) is not None and not isinstance(_find(ctx, k), (list, dict))]
-        parts = [f"{k}_{_find(ctx, k)}" for k in keys[:6]]
-        d["image"] = f"{sheet or 'unknown-sheet'}/" + ("_".join(parts) or "unplaced") + (f"_{variant}" if variant else "")
-    return d
+            d["image"] = f"recheck/{sheet}/case_{c['id']}_at_{_n(c['x'])}_{_n(c['y'])}.png"
+        else:
+            d["image"] = f"leader-map/{sheet}/at_{_n(c['x'])}_{_n(c['y'])}.png"
+        return d
+    if name == "leaders.py":
+        sheet, x, y = _sheet(_find(ctx, "sid")), _find(ctx, "x"), _find(ctx, "y")
+        return {"series": SER, "sheet": sheet, "at": [x, y], "code_read_before": _find(ctx, "code"),
+                "image": f"{sheet}/at_{_n(x)}_{_n(y)}.png"}
+    if name == "pipeline_labels.py":
+        t, s = _find(ctx, "t"), note.get("scale") or 1.0
+        box = [round(v / s, 1) for v in (t[0], t[1], t[0] + w, t[1] + h)]
+        return {"series": note["series"], "sheet": note["sheet"], "scale": s, "page_box": box,
+                "image": f"{note['series']}/{note['sheet']}/tile_{_n(t[0])}_{_n(t[1])}_{w}x{h}_at_scale_{s:g}.png"}
+    j = _find(ctx, "j")
+    if name == "textpass.py":                       # j: sheet, x, y, w, h (page px)
+        nn, x, y, tw, th = j[:5]
+        var = g.get("VAR", argv[0] if argv else "")
+        return {"series": SER, "sheet": _sheet(nn), "variant": var, "page_box": [x, y, x + tw, y + th],
+                "image": f"{_sheet(nn)}/tile_{_n(x)}_{_n(y)}_{tw}x{th}_{var}.png"}
+    if name == "placeread.py":                      # j: sheet, x, y, w, h, turned
+        nn, x, y, tw, th, turned = j[:6]
+        way = "turned" if turned else "upright"
+        return {"series": SER, "sheet": _sheet(nn), "variant": way, "page_box": [x, y, x + tw, y + th],
+                "image": f"{_sheet(nn)}/tile_{_n(x)}_{_n(y)}_{tw}x{th}_{way}.png"}
+    if name in ("placeask.py", "distask.py"):       # j: place, sheet, x, y, enlarged, size (page px), turned
+        place, nn, x, y, up, size, turned = j[:7]
+        way = "turned" if turned else "upright"
+        what = "district" if name == "distask.py" else "place"
+        return {"series": SER, "sheet": _sheet(nn), "place": place, "at": [x, y], "variant": way,
+                "image": f"{_sheet(nn)}/{what}_{place}_at_{_n(x)}_{_n(y)}_{size}px_x{up:g}_{way}.png"}
+    return {"image": None}
+
+
+class Templates:
+    """Prompts that differ only in their numbers (tile size, place) or in the code asked about are one template:
+    the prompt with the code it asks about (quoted on the line that says it is circled) replaced by "{code}"
+    and every number by #.  Named <read>-t1, -t2 ... in order of first use."""
+
+    def __init__(self):
+        self.names, self.count = {}, defaultdict(int)
+
+    def name(self, read: str, text: str, code: str | None) -> str:
+        t = text
+        if code:                    # the code varies only on the line that says it is circled (at the centre)
+            t = "\n".join(l.replace(f'"{code}"', '"{code}"') if "circled" in l else l for l in text.split("\n"))
+        t = re.sub(r"\d+(\.\d+)?", "#", t)
+        k = (read, t)
+        if k not in self.names:
+            self.names[k] = f"{read}-t{1 + sum(r == read for r, _ in self.names)}"
+        self.count[self.names[k]] += 1
+        return self.names[k]
+
+
+def _asked(key: str) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((config.CACHE_DIR / key).stat().st_mtime))
 
 
 def main(calls: Path, out: Path, images: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
     (out / "reads").mkdir(exist_ok=True)
     images.mkdir(parents=True, exist_ok=True)
-    cache = config.CACHE_DIR
-    prompts, schemas, runs, prompt_names = {}, {}, {}, {}
-    per_read = defaultdict(dict)
-    manifest = {}
+    prompts, schemas, runs, prompt_read, used = {}, {}, {}, {}, {}
+    templates = Templates()
+    per_read, manifest, unplaced = defaultdict(dict), {}, defaultdict(int)
     for folder in sorted(p for p in calls.iterdir() if (p / "calls.jsonl").exists()):
         read = _read_of(folder.name)
         for line in open(folder / "runs.jsonl"):
@@ -124,9 +154,7 @@ def main(calls: Path, out: Path, images: Path) -> None:
         for line in open(folder / "prompts.jsonl"):
             p = json.loads(line)
             prompts[p["sha"]] = p["text"]
-            if p["sha"] not in prompt_names:
-                n = 1 + sum(1 for v in prompt_names.values() if v.startswith(read + "-v"))
-                prompt_names[p["sha"]] = f"{read}-v{n}"
+            prompt_read.setdefault(p["sha"], read)
         if (folder / "schemas.jsonl").exists():
             for line in open(folder / "schemas.jsonl"):
                 s = json.loads(line)
@@ -137,44 +165,72 @@ def main(calls: Path, out: Path, images: Path) -> None:
                 continue
             run = runs[c["run"]]
             img = folder / "images" / f"{c['image']}.png"
-            d = describe(read, run["script"], run.get("script_globals", {}), c.get("context", {}), _png_size(img),
-                         run.get("argv", []), run.get("env", {}))
-            name = f"{read}/{d.pop('image', 'unplaced/' + c['image'][:16] + '.png')}"
-            if not name.endswith(".png"):
-                name += ".png"
+            d = describe(run["script"], run.get("script_globals", {}), c.get("context", {}), c.get("note", {}),
+                         _png_size(img), run.get("argv", []), run.get("env", {}))
+            rel = d.pop("image")
+            if rel is None:
+                unplaced[read] += 1
+                rel = f"unplaced/{c['image'][:16]}.png"
+            name = f"{read}/{rel}"
+            if name in manifest and manifest[name][0] != c["image"]:
+                raise SystemExit(f"two different images named {name}")
             dest = images / name
             if not dest.exists():
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(img, dest)
             manifest[name] = (c["image"], img.stat().st_size)
-            f = cache / c["key"]
-            rec = {"read": read, **d, "image": name, "model": c["model"][1], "provider": c["model"][0],
-                   "effort": c["effort"], "params": c["params"], "prompt": prompt_names[c["prompt"]],
-                   "asked": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(f.stat().st_mtime)),
-                   "script": {"source": run.get("source", ""), "git_blob": run.get("script_git_blob"),
-                              "args": run.get("argv", []), "env": run.get("env", {})},
-                   "answer": json.loads(f.read_text()), "image_sha256": c["image"], "cache_key": c["key"]}
-            if c.get("schema"):
-                rec["answer_format"] = c["schema"]
-            per_read[read][(name, c["key"])] = rec
-    for read, recs in per_read.items():
+            tname = templates.name(read, prompts[c["prompt"]], d.get("code_read_before"))
+            used[c["prompt"]] = tname
+            per_read[read][(name, c["key"])] = {
+                "read": read, **d, "image": name, "model": c["model"][1], "provider": c["model"][0],
+                "effort": c["effort"], "params": c["params"], "prompt": tname, "prompt_sha256": c["prompt"],
+                "answer_format": c.get("schema"), "asked": _asked(c["key"]),
+                "script": {"source": run.get("source", ""), "git_blob": run.get("script_git_blob"),
+                           "args": run.get("argv", []), "env": run.get("env", {})},
+                "matched": "replayed", "answer": json.loads((config.CACHE_DIR / c["key"]).read_text()),
+                "image_sha256": c["image"], "cache_key": c["key"]}
+    done = {k for recs in per_read.values() for (_, k) in recs}
+    spec = json.loads((Path(__file__).parent / "timed_reads.json").read_text())
+    for t in spec["reads"]:
+        n = 0
+        for m, key, answer in stored_between(t["from"], t["to"]):
+            if key in done or (t["fields"] and not set(t["fields"]) <= set(answer)):
+                continue
+            done.add(key)
+            n += 1
+            per_read[t["read"]][("~" + key, key)] = {
+                "read": t["read"], "series": SER, "sheet": None, "image": None, "model": t["model"],
+                "asked": _asked(key), "matched": "by time",
+                "script": {"source": f"rescued scratch copy: pipeline/data/rnd/scratch-2026-11-13/{t['script']}",
+                           "args": t["args"], "env": t.get("env", {}), "command": t["command"],
+                           "transcript_line": t["line"], "window": [t["from"], t["to"]]},
+                "answer": answer, "cache_key": key}
+        print(f"  by time, {t['read']}: {n} answers")
+    for read, recs in sorted(per_read.items()):
         with gzip.open(out / "reads" / f"{read}.jsonl.gz", "wt", compresslevel=9) as gz:
             for k in sorted(recs):
                 gz.write(json.dumps(recs[k], sort_keys=True) + "\n")
-        print(f"{read}: {len(recs)} answers")
-    with open(out / "prompts.jsonl", "w") as f:
-        for sha, name in sorted(prompt_names.items(), key=lambda kv: kv[1]):
-            f.write(json.dumps({"name": name, "sha256": sha, "text": prompts[sha]}) + "\n")
+        by = defaultdict(int)
+        for r in recs.values():
+            by[r["matched"]] += 1
+        print(f"{read}: {len(recs)} answers ({dict(by)}){f'; {unplaced[read]} without a place' if unplaced[read] else ''}")
+    with open(out / "prompts.jsonl", "w") as f:            # every exact prompt, with its template
+        for sha, tname in sorted(used.items(), key=lambda kv: (kv[1], kv[0])):
+            f.write(json.dumps({"sha256": sha, "template": tname, "text": prompts[sha]}) + "\n")
+    with open(out / "templates.jsonl", "w") as f:          # each template: the prompt with what varies blanked out
+        for (read, text), tname in sorted(templates.names.items(), key=lambda kv: kv[1]):
+            f.write(json.dumps({"template": tname, "read": read, "prompts": templates.count[tname], "text": text}) + "\n")
     with open(out / "schemas.jsonl", "w") as f:
         for sha, s in sorted(schemas.items()):
             f.write(json.dumps({"sha256": sha, "schema": s}, sort_keys=True) + "\n")
     with open(out / "runs.jsonl", "w") as f:
         for k in sorted(runs):
-            r = {kk: v for kk, v in runs[k].items() if kk not in ("cwd", "data_dir")}
-            r["script"] = r.get("source") or Path(r.get("script", "")).name
+            r = {kk: v for kk, v in runs[k].items() if kk not in ("cwd", "data_dir", "script")}
+            r["script"] = r.pop("source", "") or Path(runs[k].get("script", "")).name
             f.write(json.dumps(r, sort_keys=True) + "\n")
     with open(out / "images.manifest.tsv", "w") as f:
         f.write("image\tsha256\tbytes\n")
         for name in sorted(manifest):
             f.write(f"{name}\t{manifest[name][0]}\t{manifest[name][1]}\n")
-    print(f"{sum(len(v) for v in per_read.values())} answers, {len(manifest)} images, {len(prompt_names)} prompts")
+    print(f"{sum(len(v) for v in per_read.values())} answers, {len(manifest)} images, {len(used)} prompts in "
+          f"{len(templates.names)} templates")

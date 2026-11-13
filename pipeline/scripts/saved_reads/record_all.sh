@@ -11,8 +11,9 @@
 #                       (SFZ_CORR mirror data_ay2): textpass.py cw; placeread.py; placeask.py; placeask.py SPLIT=1;
 #                       distask.py; read3.py; read3r.py
 #   pipeline-labels     Sol, the pipeline's district label reads, every series             districts/labels.py
-# The k8 scripts write into their scratch folder, so they run on a copy-on-write clone of the rescued one.
-# usage: [SR_PIPELINE=DIR] record_all.sh [OUT]
+# The k8 scripts write into their scratch folder, so they run on a copy-on-write clone of the rescued one (with k6:
+# k8/p06 and k8/p07 are links into run k6).
+# usage: [SR_PIPELINE=DIR] [ONLY="terra-boxes codes2000 leaders-sol k8 pipeline-labels"] record_all.sh [OUT]
 P=${SR_PIPELINE:-${0:A:h:h:h}}                                # the pipeline folder (data, venv, git)
 PKG=${0:A:h:h}                                                # the folder holding this package
 OUT=${1:-$P/data/saved-reads/calls}
@@ -28,8 +29,10 @@ git show zoning-lines-rnd:pipeline/scripts/zoning-lines/leaders.py > $SRC/zoning
 PW="prob-warp@$(git rev-parse --short prob-warp):pipeline/scripts/prob-warp"     # where each script is in git
 ZL="zoning-lines-rnd@$(git rev-parse --short zoning-lines-rnd):pipeline/scripts/zoning-lines"
 RUN=(env -u SFZMAPS_DATA_DIR -u SFZ_CORR -u PYTHONPATH -u OPENAI_API_KEY PYTHONPATH=$PKG .venv/bin/python -W ignore -m saved_reads run)
+want() { [ -z "$ONLY" ] || [[ " $ONLY " == *" $1 "* ]]; }
 count() { echo "  $1: $(wc -l < $OUT/$1/calls.jsonl | tr -d ' ') lookups, $(grep -c '"hit": false' $OUT/$1/calls.jsonl) not in the cache"; }
 
+if want terra-boxes; then
 echo "terra-boxes $(date +%H:%M:%S)"
 for s in 1960 1964 1968 1972 1975 1980 1980-1990-zoning 1990-1996-zoning 2000-digital-zoning; do
   for d in data/work/$s/*(/); do
@@ -42,6 +45,8 @@ for s in 1960 1964 1968 1972 1975 1980 1980-1990-zoning 1990-1996-zoning 2000-di
   count terra-boxes-$s
 done
 
+fi
+if want codes2000; then
 echo "codes2000 $(date +%H:%M:%S)"
 C=$W/codes2000
 rm -rf $C && mkdir -p $C/leaders2
@@ -52,6 +57,8 @@ SR_SOURCE=$PW/codes2000/reread.py $RUN --out $OUT/codes2000-terra --scratch $C $
 SR_SOURCE=$PW/codes2000/reread.py $RUN --out $OUT/codes2000-sol --scratch $C $SRC/prob-warp/reread.py gpt-6.1-sol high all > $C/reread_sol.log 2>&1
 count codes2000-terra; count codes2000-sol
 
+fi
+if want leaders-sol; then
 echo "leaders-sol $(date +%H:%M:%S)"
 L=$W/leaders
 rm -rf $L && mkdir -p $L/leaders
@@ -63,10 +70,12 @@ for e in medium low; do
 done
 count leaders-sol
 
+fi
+if want k8; then
 echo "k8 $(date +%H:%M:%S)"
 WS=$W/scratch
 if [ ! -d $WS ]; then
-  mkdir -p $WS && for f in k8 zon2000 corrpatch data_ay2; do cp -cR $RESCUED/$f $WS/; done   # clones: no extra disk
+  mkdir -p $WS && for f in k8 k6 zon2000 corrpatch data_ay2; do /bin/cp -cR $RESCUED/$f $WS/; done   # macOS clones: no extra disk
 fi
 K8=(env -u OPENAI_API_KEY SFZ_CORR=1 PYTHONPATH=$PKG:$WS/corrpatch:$WS/k8 SFZMAPS_DATA_DIR=$WS/data_ay2 .venv/bin/python -W ignore -m saved_reads run --scratch $WS)
 k8() { local name=$1; shift; SR_SOURCE="rescued scratch copy: pipeline/data/rnd/scratch-2026-11-13/k8/$1" $K8 --out $OUT/k8-$name $WS/k8/$1 ${@:2} > $W/k8-$name.log 2>&1 || echo "  FAILED k8 $name: $(tail -1 $W/k8-$name.log)"; count k8-$name; }
@@ -78,8 +87,11 @@ k8 distask distask.py cws
 k8 read3 read3.py
 k8 read3r read3r.py
 
+fi
+if want pipeline-labels; then
 echo "pipeline-labels $(date +%H:%M:%S)"
 SR_SOURCE="saved-reads: pipeline/scripts/saved_reads/pipeline_labels.py; pipeline src/sfzmaps/districts/labels.py @ $(git rev-parse --short HEAD)" $RUN --out $OUT/pipeline-labels $PKG/saved_reads/pipeline_labels.py > $W/pipeline-labels.log 2>&1
 grep -c MISS $W/pipeline-labels.log | sed 's/^/  sheets with a missing answer: /'
 count pipeline-labels
+fi
 echo "done $(date +%H:%M:%S)"

@@ -6,6 +6,7 @@ stored key no longer matches today's prompt is read with today's, and its old an
 usage: pipeline_labels.py [SERIES ...]"""
 import sys
 
+from saved_reads import record
 from sfzmaps import config, llm
 from sfzmaps.districts import labels as L
 
@@ -17,6 +18,7 @@ for s in series:
         sha = L.page_sha(d)
         key = L.read_key(s, scale=None, tile=config.VISION_TILE, overlap=config.VISION_OVERLAP)
         fresh = L.stored_key(d / "district_labels.json", s) == key
+        record.note(series=s, sheet=d.name, scale=L.district_scale(s))   # tiles are cut from the page at this scale
         try:
             out, keys = L._read(d, s, sha, key, None, config.VISION_TILE, config.VISION_OVERLAP, None, write=False)
             print(f"{s}/{d.name}: {len(keys)} answers, {len(out)} labels{'' if fresh else ' (stored key differs)'}",

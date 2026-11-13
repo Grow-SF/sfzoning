@@ -4,6 +4,8 @@
       run a reading script cache-only (nothing paid), recording every lookup into DIR
   python -m saved_reads package --calls CALLS_DIR [--out OUT] [--images IMAGES]
       turn the recorded runs into the checked-in package (pipeline/saved-reads) and the named images
+  python -m saved_reads verify [--from PACKAGE] [--images IMAGES]
+      rebuild every replayed record's cache key from its own prompt, schema, model and image, and compare
   python -m saved_reads restore-cache [--from PACKAGE]
       write the package's answers back into the answer cache (a fresh clone, before replaying)
   python -m saved_reads index --out OUT [--calls DIR ...]
@@ -25,7 +27,7 @@ def _flags(args, names):
 
 
 def main() -> None:
-    if len(sys.argv) < 2 or sys.argv[1] not in ("run", "index", "package", "restore-cache"):
+    if len(sys.argv) < 2 or sys.argv[1] not in ("run", "index", "package", "restore-cache", "verify"):
         sys.exit(__doc__)
     cmd, args = sys.argv[1], sys.argv[2:]
     if cmd == "run":
@@ -37,6 +39,11 @@ def main() -> None:
             sys.exit(__doc__)
         from .index import main as index
         index(f["--out"][0], f["--calls"])
+    elif cmd == "verify":
+        f = _flags(args, ("--from", "--images"))
+        pipe = Path(__file__).resolve().parents[2]
+        from .verify import main as verify
+        verify((f["--from"] or [pipe / "saved-reads"])[0], (f["--images"] or [pipe / "data" / "saved-reads" / "images"])[0])
     elif cmd == "restore-cache":
         f = _flags(args, ("--from",))
         from .restore import main as restore

@@ -82,6 +82,12 @@ def _context(stack) -> dict:
     return out
 
 
+def note(**kw) -> None:
+    """what the asking code is working on now (e.g. series, sheet, scale), added to every lookup until the next note:
+    for code that asks from worker threads, whose stacks do not show the loop that chose the sheet"""
+    _state["note"] = {k: _small(v) for k, v in kw.items()}
+
+
 def watch_globals(g: dict) -> None:
     """the script's own top-level namespace (run.py executes the script in it), read at the first lookup: lookups
     made from worker threads do not have the script's top level on their stack"""
@@ -100,6 +106,8 @@ def _write(rec: dict, prompt: str, png: bytes, schema_json: str | None) -> None:
     caller = next((f"{f.filename}:{f.lineno}" for f in stack if "saved_reads" not in f.filename
                    and not f.filename.endswith("llm.py")), "")
     rec.update(prompt=p_sha, image=i_sha, run=_state["run"], caller=caller, context=_context(stack))
+    if _state.get("note"):
+        rec["note"] = dict(_state["note"])
     first = not _state["globals_written"]
     g = _script_globals() if first else None
     with _lock:
