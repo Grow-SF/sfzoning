@@ -3,9 +3,9 @@
 #   1. the p1 correction chain (corr.sh)
 #   2. its mirror entry with the p1 correction (build_mirror_ay.py)
 #   3. for the series with printed codes (1960 on; flow.py ran 1921-1948 as CORR_ONLY): Terra's boxes and the frame
-#      line replayed at $0 (terra_replay.sh), then the years chain's pages (chain_pages.sh).  The code fit is resumed
-#      from the chain's surviving checkpoint (FITS_FROM, default the rescued SHEET_c1) until the code lists are rebuilt;
-#      set CODES=FILE and FITS_FROM= to fit from scratch.
+#      line replayed at $0 (terra_replay.sh), then the years chain's pages (chain_pages.sh), the codes fitted from
+#      scratch against the series' code list: 2000's codes_final.json (codes2000.sh), else codes.py's list.  CODES=FILE
+#      gives another list; FITS_FROM=DIR resumes from a saved checkpoint instead.
 #   4. prob6 (prob.sh), which reads those pages
 # The 2000 sheets run in SAME2000 mode, as the original runs did: ftpx 3.99 and the measured area from
 # stepview/city_m2/parts.json (rebuilt by make_parts.py into the rebuild folder).  usage: rebuild_one.sh SERIES SHEET
@@ -32,8 +32,15 @@ case $SERIES in
     echo "3. chain pages $SERIES $SHEET $(date +%H:%M:%S)"
     D=$PW_CHAIN/$SERIES/$SHEET
     [ -f $D/textboxes_gpt-6.1-terra.json ] && [ -f $D/frame_bottom.json ] || zsh $CK/terra_replay.sh $SERIES $SHEET
-    if [ -z "$CODES" ]; then
-      export FITS_FROM=${FITS_FROM-$PW_RESCUED/allyears-chain/$SERIES/${SHEET}_c1}
+    if [ -z "$FITS_FROM" ] && [ -z "$CODES" ]; then      # the series' code list, as the chain had it
+      if [[ $SERIES == 2000-digital-zoning ]]; then
+        export CODES=$PW_DATA/rebuild-2026-11-13/codes2000/codes_final.json
+        [ -f $CODES ] || zsh $CK/codes2000.sh
+      else
+        export CODES=$PW_DATA/rebuild-2026-11-13/codes/codes_$SERIES.json
+        [ -f $CODES ] || { mkdir -p ${CODES:h} && ( cd $PW_PIPELINE && env -u SFZMAPS_DATA_DIR -u SFZ_CORR -u PYTHONPATH \
+          .venv/bin/python $PW_CODE/codes.py $SERIES $CODES.tmp > /dev/null && mv $CODES.tmp $CODES ); }
+      fi
     fi
     zsh $CK/chain_pages.sh $SERIES $SHEET ;;
 esac

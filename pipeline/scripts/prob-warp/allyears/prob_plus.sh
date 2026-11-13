@@ -3,14 +3,14 @@
 # run/SERIES/SHEET/plus (the plain prob6 run's files untouched).  Logged to plus/prob.log.  usage: prob_plus.sh SERIES SHEET
 export SERIES=$1 SHEET=$2
 A=${PW_CODE:-$(cd "$(dirname "$0")" && pwd)}                 # this folder (prob-warp/allyears)
-P=${PW_PIPELINE:-$(cd "$A/../../.." && pwd)}                 # the repo's pipeline folder
-RUN=${PW_RUN:-$P/data/prob-warp/run}                          # outputs, per series/sheet
+PIPE=${PW_PIPELINE:-$(cd "$A/../../.." && pwd)}              # the repo's pipeline folder
+RUN=${PW_RUN:-$PIPE/data/prob-warp/run}                       # outputs, per series/sheet
 TPY=${PW_TPY:?set PW_TPY to the torch environment python (README)}
 O=$RUN/$1/$2
 P=$O/plus
 mkdir -p $P
 L=$P/prob.log
-cd $P || exit 1
+cd $PIPE || exit 1
 echo "STAGE $1 $2 start $(date +%H:%M:%S)" | tee $L
 .venv/bin/python -W ignore $A/sides_plus.py >> $L 2>&1 || { echo "FAILED $1 $2 sides_plus" | tee -a $L; tail -n 5 $L; exit 1; }
 .venv/bin/python -W ignore $A/ay_probprep_plus.py >> $L 2>&1 || { echo "FAILED $1 $2 probprep" | tee -a $L; tail -n 5 $L; exit 1; }
