@@ -135,6 +135,18 @@ class Templates:
         return self.names[k]
 
 
+def _arg(a: str) -> str:
+    """a script argument as a reader can use it: no machine-specific folders"""
+    pipe = str(config.DATA_DIR.parent)
+    if a.startswith(pipe + "/data/saved-reads/work"):
+        return "<the replay's output folder>"
+    if a.startswith(pipe + "/"):
+        return a[len(pipe) + 1:]
+    if "/" in a and Path(a).is_absolute():
+        return Path(a).name
+    return a
+
+
 def _asked(key: str) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((config.CACHE_DIR / key).stat().st_mtime))
 
@@ -186,7 +198,8 @@ def main(calls: Path, out: Path, images: Path) -> None:
                 "effort": c["effort"], "params": c["params"], "prompt": tname, "prompt_sha256": c["prompt"],
                 "answer_format": c.get("schema"), "asked": _asked(c["key"]),
                 "script": {"source": run.get("source", ""), "git_blob": run.get("script_git_blob"),
-                           "args": run.get("argv", []), "env": run.get("env", {})},
+                           "args": [_arg(a) for a in run.get("argv", [])],
+                           "env": {k: _arg(v) for k, v in run.get("env", {}).items()}},
                 "matched": "replayed", "answer": json.loads((config.CACHE_DIR / c["key"]).read_text()),
                 "image_sha256": c["image"], "cache_key": c["key"]}
     done = {k for recs in per_read.values() for (_, k) in recs}
@@ -226,6 +239,10 @@ def main(calls: Path, out: Path, images: Path) -> None:
     with open(out / "runs.jsonl", "w") as f:
         for k in sorted(runs):
             r = {kk: v for kk, v in runs[k].items() if kk not in ("cwd", "data_dir", "script")}
+            r["argv"] = [_arg(a) for a in r.get("argv", [])]
+            r["env"] = {kk: _arg(v) for kk, v in r.get("env", {}).items()}
+            if "script_globals" in r:
+                r["script_globals"] = {kk: _arg(v) if isinstance(v, str) else v for kk, v in r["script_globals"].items()}
             r["script"] = r.pop("source", "") or Path(runs[k].get("script", "")).name
             f.write(json.dumps(r, sort_keys=True) + "\n")
     with open(out / "images.manifest.tsv", "w") as f:
