@@ -9,7 +9,7 @@ import numpy as np
 
 from . import energy as E
 from . import search
-from .codes import canon
+from .codes import canon, table_vocabulary
 from .data import QUARTERS, RUNS, city, save_run, wall_odds
 from .labels import readings
 from .placement import load_options
@@ -65,7 +65,7 @@ def solve_quarter(run, q, true_borders=False):
     if true_borders:                                     # the ceiling: the table's own borders as near-certain walls
         both = C.known[C.a] & C.known[C.b]
         odds = np.where(both, np.where(C.table[C.a] != C.table[C.b], 6.0, -6.0), odds)
-    rd = readings(q)
+    rd = readings(q, table_vocabulary(C.lots))
     index = {}
     for i, n in enumerate(rd.names):
         index.setdefault(n, i)

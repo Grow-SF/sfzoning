@@ -24,8 +24,9 @@ def print_set(q):
     return f"cwfwx{q}"
 
 
-def readings(q):
-    """every reading of holdout q's print set.  Overlay (SUD) names are dropped."""
+def readings(q, vocabulary=None):
+    """every reading of holdout q's print set.  Overlay (SUD) names are dropped; so are readings naming no code in
+    vocabulary (when given: overlay text such as 'NORTH OF', 'RES.' is not a zoning code)."""
     P = print_set(q)
     R = np.load(INPUTS / f"lotclf6_{P}.npz")
     raw_names = list(R["names"].astype(str))
@@ -46,6 +47,8 @@ def readings(q):
     for i, n in enumerate(names):
         first.setdefault(n, i)
     code = np.array([first[names[k]] for k in code], int)
+    if vocabulary is not None:
+        keep &= np.array([names[k] in vocabulary for k in code])
     return Readings(lot[keep], code[keep], trust[keep], label[keep], far[keep], names)
 
 
