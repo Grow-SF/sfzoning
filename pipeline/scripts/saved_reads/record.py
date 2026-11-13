@@ -84,7 +84,9 @@ def install(out: Path, script: str, argv: list[str]) -> None:
     run = f"{time.strftime('%Y%m%dT%H%M%S')}-{os.getpid()}"
     _state.update(out=out, run=run, seen=seen)
     src = Path(script).read_bytes() if Path(script).exists() else b""
-    _append(out / "runs.jsonl", {"run": run, "script": script, "script_sha256": _sha(src), "argv": argv,
+    blob = hashlib.sha1(b"blob %d\0" % len(src) + src).hexdigest()      # the script's git blob id
+    _append(out / "runs.jsonl", {"run": run, "script": script, "script_sha256": _sha(src), "script_git_blob": blob,
+                                 "argv": argv,
                                  "cwd": os.getcwd(), "data_dir": str(llm.CACHE_DIR.parent),
                                  "started": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     ask, tile_key = llm.ask_json, llm.tile_key

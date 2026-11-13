@@ -40,18 +40,28 @@ def _uses() -> dict[str, list[str]]:
     """answer key -> pipeline outputs whose .answers sidecar lists it"""
     out = defaultdict(list)
     data = config.DATA_DIR
-    for root, dirs, files in os.walk(data, followlinks=True):
-        if Path(root) == CACHE or str(Path(root)).startswith(str(CACHE) + os.sep):
-            dirs[:] = []
-            continue
-        for f in files:
-            if f.endswith(".answers"):
-                p = Path(root) / f
-                rel = str(p.relative_to(data))[: -len(".answers")]
-                for line in p.read_text().splitlines():
-                    if line.strip():
-                        out[line.strip()].append(rel)
+    seen = set()
+    roots = [config.WORK_DIR, data / "out"]          # where the pipeline writes outputs (and their sidecars)
+    for top in roots:
+        for root, dirs, files in os.walk(top, followlinks=True):
+            real = os.path.realpath(root)
+            if real in seen:                         # a folder reached twice through links: read it once
+                dirs[:] = []
+                continue
+            seen.add(real)
+            _sidecars(Path(root), files, data, out)
     return out
+
+
+def _sidecars(root: Path, files, data: Path, out) -> None:
+    """add one folder's .answers sidecars: each lists the answer keys its output was made from"""
+    for f in files:
+        if f.endswith(".answers"):
+            p = root / f
+            rel = str(p.relative_to(data))[: -len(".answers")]
+            for line in p.read_text().splitlines():
+                if line.strip():
+                    out[line.strip()].append(rel)
 
 
 def _asked(folders: list[Path]) -> dict[str, list[dict]]:
