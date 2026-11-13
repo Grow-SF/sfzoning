@@ -30,7 +30,7 @@ def main(argv=None):
     p.add_argument("run")
     p.add_argument("--picture", help="write a picture of every hole, by cause")
     p.add_argument("--save-data-errors", action="store_true",
-                   help="write the data-error list (data-errors-2000-digital.csv and joint/data_errors.npz)")
+                   help="write the data-error list (joint/data-errors-2000-digital.csv and joint/data_errors.npz)")
     p = sub.add_parser("published", help="the published 2000 map as the run 'published', scored the same way")
     p.add_argument("--districts", help="districts_raw.parquet of a main checkout (default: this checkout's)")
     args = ap.parse_args(argv)

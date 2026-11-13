@@ -26,7 +26,7 @@ from .borders import border_paths
 from .data import FT_PER_PX, OUT, QUARTERS, RUNS, city, load_run
 from .measures import DATA_ERRORS, Table, holes
 
-DATA_ERRORS_CSV = Path(__file__).parent / "data-errors-2000-digital.csv"
+DATA_ERRORS_CSV = OUT / "data-errors-2000-digital.csv"
 DATA_ERROR_CAUSES = {"SLIVER UNDER THE BAND", "PRINTED ONE LOT OVER", "ON THE LINE, READ AS NO WALL"}
 
 

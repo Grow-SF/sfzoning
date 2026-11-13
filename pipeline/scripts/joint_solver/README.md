@@ -16,7 +16,7 @@ uv run python -m scripts.joint_solver holes J7 --picture holes.png
 
 - `solve RUN --true-borders` is the ceiling check: with the table's own borders as walls, the solve must find
   (nearly) the table's answer.
-- `holes RUN --save-data-errors` rewrites `data-errors-2000-digital.csv`.
+- `holes RUN --save-data-errors` writes the data-error list to `SFZ_RND/joint/`.
 - Needs `PyMaxflow` (`uv pip install PyMaxflow`; GPL-3.0, which can be combined with AGPL-3.0).
 
 ## Files

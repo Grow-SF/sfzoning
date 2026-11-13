@@ -70,7 +70,8 @@ Held out by quarter and scored against the April 2000 table. The 33 data-error p
 ## Where it needs manual checks
 
 - **Data errors.** At 33 parcels the printed district line is drawn over the parcel, and the table puts the parcel on the
-  other side. They are listed for publishing in `data-errors-2000-digital.csv` and left out of every score.
+  other side. They are left out of every score. `holes --save-data-errors` writes the list; it is not checked
+  in, because the inputs it is derived from cannot yet be rebuilt from this branch (below).
 - **Three lines printed beside the table's line.** These may also be data errors; they need a person to decide.
 - **Districts of 100+ lots whose code differs from their own labels' reading.** These are the big flips.
 - **Narrow strips with a single label,** where a misread names the whole strip wrong.
@@ -78,7 +79,12 @@ Held out by quarter and scored against the April 2000 table. The 33 data-error p
 ## Not done
 
 - Not wired into `sfzmaps` or the published tiles.
-- The inputs (wall odds, print sets) come from the R&D chain on the local branch `bubble-rnd/snapshot-w3`, not pushed.
+- **The inputs cannot be rebuilt from this branch.** The wall odds, label readings, sheet warp, merged page, lot
+  grid and scored lots were made by R&D scripts (local branches `bubble-rnd/snapshot-w3` and `zoning-lines-rnd`,
+  not pushed). The wall odds were fitted on per-sheet cleaned pages, and the scored lots come from an old R&D run.
+  Making every input reproducible from the scans, the DataSF tables and the saved reads is in progress.
+- **The scores use a corrected table.** At 888 lots in 216 groups, LLM helpers judged that the map prints the
+  run's code, not the table's, and those lots count as the run's code (`k8/judge2/final2.csv`).
 - The 101 hand-checked leader moves placement learns from are rows of `inputs/2000-digital-zoning/label_fixes.csv`
   that are not committed yet.
 - Extra package for these scripts only: `PyMaxflow` (GPL-3.0, which can be combined with AGPL-3.0).
