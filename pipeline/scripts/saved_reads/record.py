@@ -148,8 +148,17 @@ def install(out: Path, script: str, argv: list[str]) -> None:
                                            "K3", "FITAREA") if k in os.environ},
         "data_dir": str(llm.CACHE_DIR.parent), "started": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     ask, tile_key = llm.ask_json, llm.tile_key
+    model, effort = os.environ.get("SR_MODEL"), os.environ.get("SR_EFFORT")
+
+    def _override():
+        """SR_MODEL / SR_EFFORT: ask another model or effort than the script names (scripts set it at the top)"""
+        if model:
+            llm.VISION_MODEL = model
+        if effort:
+            llm.VISION_REASONING_EFFORT = effort
 
     def ask_json(image, prompt, schema, *, client=None):
+        _override()
         png = llm._encode(image)
         rel = f"llm/{llm._key(png, prompt, schema)}.json"
         rec = {"key": rel, "kind": "ask", "schema_name": schema.__name__, **_model(),
@@ -158,6 +167,7 @@ def install(out: Path, script: str, argv: list[str]) -> None:
         return ask(image, prompt, schema, client=client)
 
     def tile_key_rec(tile_rgb, context):
+        _override()
         key = tile_key(tile_rgb, context)
         png = llm._encode(cv2.cvtColor(tile_rgb, cv2.COLOR_RGB2BGR))
         rel = f"llm/tiles/{key}.json"
