@@ -8,12 +8,12 @@ set -e
 R=${0:A:h}
 PKG=${R:h:h}
 P=${SR_PIPELINE:-${PKG:h}}
-OUT=${1:-$P/data/saved-reads/calls-live}             # the paid runs' own records; record_all.sh replays them into calls/
+OUT=${1:-$P/data/saved-reads/calls-live}             # the paid runs' own records; replay_all.sh replays them into calls/
 W=$P/data/saved-reads/work/rerun-rest
 mkdir -p $W/codecheck $W/leaders
 cd $P
 cp ${PKG:h}/inputs/code-check-2000/codecheck_cases_published.json $W/codecheck/cases.json
-SRC="$(git -C $R rev-parse --short HEAD):pipeline/scripts/saved_reads/rerun"      # the commit these scripts are at
+SRC="$(git -C $R rev-parse --short HEAD):pipeline/scripts/saved_reads/red_circle"      # the commit these scripts are at
 LIVE=(uv run --env-file $KEY --project $P env -u SFZMAPS_DATA_DIR -u SFZ_CORR PYTHONPATH=$PKG python -W ignore -m saved_reads run --live)
 echo "re-check and leader reads $(date +%H:%M:%S)"
 SR_SOURCE=$SRC/reread.py THREADS=12 SFZMAPS_MAX_USD=20 $LIVE --out $OUT/codes2000-reread-terra-fixed --scratch $W $R/reread.py gpt-6.1-terra high all > $W/reread_terra.log 2>&1 &

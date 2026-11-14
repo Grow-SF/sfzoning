@@ -6,8 +6,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from .layout import answer_files
+
 pkg = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(__file__).resolve().parents[2] / "saved-reads"
-for f in sorted((pkg / "reads").glob("*.jsonl.gz")):
+for f in answer_files(pkg):
     rs = [json.loads(line) for line in gzip.open(f, "rt")]
     asked = sorted(r["asked"] for r in rs)
     print(f"## {f.name.removesuffix('.jsonl.gz')}: {len(rs)} answers; {dict(Counter(r['matched'] for r in rs))}")

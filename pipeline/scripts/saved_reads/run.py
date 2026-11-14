@@ -5,7 +5,7 @@ scripts build a client up front even when every answer is cached), so nothing is
 script.
 
   --out DIR      where the record goes (calls.jsonl, prompts.jsonl, schemas.jsonl, images/, runs.jsonl)
-  --scratch DIR  the R&D scripts (sources/, rerun/: kept exactly as they ran) hard-code the scratch folder they ran in
+  --scratch DIR  the R&D scripts (scripts_as_they_ran/, red_circle/: kept exactly as they ran) hard-code the scratch folder they ran in
                  (SCRATCH); every mention of it reads DIR instead (the file on disk is not edited).  A script that
                  mentions SCRATCH is refused without --scratch, so that folder is never read.
   --live         let missing answers be asked (paid).  Refused unless SFZMAPS_MAX_USD caps the spend and an API key
@@ -28,7 +28,7 @@ SCRATCH = "/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a
 
 
 class _Rewriter(importlib.abc.MetaPathFinder, importlib.abc.Loader):
-    """Imports the script's sibling modules (e.g. k8/lotwalls.py) with the scratch folder replaced, as the script."""
+    """Imports the script's sibling modules (e.g. experiments_2000/lotwalls.py) with the scratch folder replaced, as the script."""
 
     def __init__(self, folder: Path, scratch: str):
         self.folder, self.scratch = folder, scratch

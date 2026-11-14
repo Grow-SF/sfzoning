@@ -7,7 +7,7 @@ Reported per read and model:
   re-check      the code read; and, on the cases the owner answered on the code-check page, how often each round's
                 code is the owner's (ok: the case's code; fix: the owner's code; nolabel: no code)
   leader reads  whether a leader was seen; where it points
-usage: python -m saved_reads.rerun.compare PACKAGE IMAGES CALLS ANSWERS.json CASES.json"""
+usage: python -m saved_reads.red_circle.compare PACKAGE IMAGES CALLS ANSWERS.json CASES.json"""
 import gzip
 import hashlib
 import json
@@ -19,6 +19,8 @@ import cv2
 import numpy as np
 
 from sfzmaps import config
+
+from ..layout import answer_file
 
 
 def blanked(path: Path) -> str:
@@ -36,13 +38,14 @@ def norm(code) -> str:
 
 
 def kind_of(template: str) -> str:
-    return {"code-reads-t1": "leader map", "code-reads-t2": "re-check"}.get(template, "leader reads")
+    return {"zoning-codes-2000 question 1": "leader map", "zoning-codes-2000 question 2": "re-check"}.get(
+        template, "leader reads")
 
 
 def main(package: Path, images: Path, calls: Path, answers: Path, cases: Path) -> None:
     old = {}                                         # (kind, model, effort, blanked image) -> original record
-    for f in ("code-reads", "leader-reads"):
-        for line in gzip.open(package / "reads" / f"{f}.jsonl.gz", "rt"):
+    for f in ("zoning-codes-2000", "leader-lines-2000"):
+        for line in gzip.open(answer_file(package, f), "rt"):
             r = json.loads(line)
             old[(kind_of(r["prompt"]), r["model"], r["effort"], blanked(images / r["image"]))] = r
     kinds = {"leaders2.py": "leader map", "reread.py": "re-check", "leaders.py": "leader reads"}

@@ -1,24 +1,25 @@
 #!/bin/zsh
-# Record every saved read the later steps (sheet warp, joint solver, text detector) are made from, cache-only: nothing is
-# paid (no key, a client that cannot call out; a missing answer stops that script).  One record folder per read under
+# Step 2 of pipeline/saved-reads/README.md: ask every question that can be asked again (all but the 2000 experiments),
+# answered from the cache only, recording exactly how each answer was asked: nothing is paid (no key, a client that
+# cannot call out; a missing answer stops that script).  One record folder per kind of question under
 # OUT (default pipeline/data/saved-reads/calls).  Each script runs as it ran, with the arguments and settings of its
 # paid run (from the 2026-11 session's commands):
-#   terra-boxes-SERIES  Terra, whole-page text boxes, every sheet the years chain read     sources/textboxes.py
-#   codes2000-terra/sol 2000 code list: leader map of every use code, then a re-read of     sources/leaders2.py,
-#                       every code-check case (Terra and Sol, high effort)                 reread.py
-#   leaders-sol         Sol, leader read of every 2000 use code, medium and low effort     sources/leaders.py
-#   fixed-marks         the code and leader reads asked again with their marks red          rerun/*.py
+#   terra-boxes-SERIES  all the text on every sheet, 1960-2000 (Terra)                     scripts_as_they_ran/textboxes.py
+#   codes2000-terra/sol each zoning code on the 2000 map: what is circled, and its leader;   scripts_as_they_ran/
+#                       then a re-check of every code-check case (Terra and Sol, high)     leaders2.py, reread.py
+#   leaders-sol         each code's leader line on the 2000 map (Sol, medium and low)       scripts_as_they_ran/leaders.py
+#   fixed-marks         the code and leader questions asked again with the circle red      red_circle/*.py
 #   pipeline-labels     Sol, the pipeline's district label reads, every series             districts/labels.py
-# sources/ holds the scripts of the first three exactly as they ran (each record's script.git_blob is the file's hash);
+# scripts_as_they_ran/ holds the scripts of the first three exactly as they ran (each record's script.git_blob is the file's hash);
 # SR_SOURCE names where each ran.  The code-check cases come from inputs/code-check-2000.  Everything it reads is in
 # this checkout or comes with sfzmaps pull.
-# Not replayed: the frozen k8 reads (package.py FROZEN; their code is in sources/k8).  They were asked about the old warp
+# Not replayed: the 2000 experiments of Nov 10-11 (package.py FROZEN; code in scripts_as_they_ran/experiments_2000).  They were asked about the old warp
 # and old solves, which no checkout has, so the package keeps their records as they were made.
-# usage: [SR_PIPELINE=DIR] [ONLY="terra-boxes codes2000 leaders-sol pipeline-labels fixed-marks"] record_all.sh [OUT]
+# usage: [SR_PIPELINE=DIR] [ONLY="terra-boxes codes2000 leaders-sol pipeline-labels fixed-marks"] replay_all.sh [OUT]
 P=${SR_PIPELINE:-${0:A:h:h:h}}                                # the pipeline folder (data, venv, git)
 PKG=${0:A:h:h}                                                # the folder holding this package
 OUT=${1:-$P/data/saved-reads/calls}
-SRC=$PKG/saved_reads/sources                                  # the reading scripts, as they ran
+SRC=$PKG/saved_reads/scripts_as_they_ran                                  # the reading scripts, as they ran
 CASES=${PKG:h}/inputs/code-check-2000/codecheck_cases_published.json
 W=$P/data/saved-reads/work
 mkdir -p $OUT $W
@@ -79,10 +80,10 @@ grep -c MISS $W/pipeline-labels.log | sed 's/^/  sheets with a missing answer: /
 count pipeline-labels
 fi
 if want fixed-marks; then
-# the code reads and leader reads asked again with their marks red (rerun/rerun.sh, paid), replayed from the cache
+# the code reads and leader reads asked again with their marks red (red_circle/rerun.sh, paid), replayed from the cache
 echo "fixed-marks $(date +%H:%M:%S)"
 F=$W/fixed-marks
-R=$PKG/saved_reads/rerun
+R=$PKG/saved_reads/red_circle
 rm -rf $F && mkdir -p $F/leaders2 $F/codecheck $F/leaders
 cp $CASES $F/codecheck/cases.json
 FX="saved-reads@0117477:pipeline/scripts/saved_reads/rerun"   # where the replay was first recorded

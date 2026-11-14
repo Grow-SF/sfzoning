@@ -1,23 +1,18 @@
-"""Build the saved-reads package from recorded runs (record_all.sh): every answer with a readable image name and what
-it was asked with, ready to check in.  The frozen reads (FROZEN: they can't be asked again from any checkout) are
-carried over from the package as it stands, record for record; so are the times answers were first stored ("asked"),
-which a restored cache file doesn't keep.  Packaging a replay from a fresh clone therefore gives the package back.
+"""Build the saved-reads package from recorded runs (replay_all.sh): every answer with a readable picture name and
+what it was asked with, ready to check in (layout.py says where each file goes).  The experiments (FROZEN: they can't
+be asked again from any checkout) are carried over from the package as it stands, record for record; so are the times
+answers were first stored ("asked"), which a restored cache file doesn't keep.  Packaging a replay from a fresh clone
+therefore gives the package back.
 
-Writes, under OUT (the checked-in folder, default pipeline/saved-reads):
-  reads/<read>.jsonl.gz   one line per answer of that read, sorted by image:
-                            read, series, sheet, image (readable name: <read>/<sheet>/<what>.png), page_box (page px,
-                            when the image is a piece of the sheet's page), at (the point it is about, page px), case
-                            (code-check case id), place (an old solve's place or district number), variant, scale,
-                            model, provider, effort, prompt (short name; text in prompts.jsonl), asked (when the
-                            answer was stored, UTC), script (where the script is in git, its arguments and settings),
-                            matched ("replayed": the record's prompt, image and model were asked again from the cache and
-                            make exactly its cache key; "by time": see sources/k8/timed_reads.json), answer (as given),
-                            image_sha256, cache_key
-  prompts.jsonl           {sha256, templates, text}: every exact prompt, and the templates (one per read) it belongs to
-  schemas.jsonl           {sha256, schema}: every answer format
-  runs.jsonl              every recorded run (script, git location, arguments, settings)
-  images.manifest.tsv     readable image name, sha256, bytes
-and under IMAGES (default pipeline/data/saved-reads/images, not in git): every image at its readable name.
+One line per answer in answers/<read>.jsonl.gz, sorted by picture:
+  read, series, sheet, image (readable name: <read>/<sheet>/<what>.png), page_box (page px, when the picture is a piece
+  of the sheet's page), at (the point it is about, page px), case (code-check case id), place (an old solve's place or
+  district number), variant, scale, model, provider, effort, prompt (the question's template; its exact text is in
+  how-each-was-asked/questions.jsonl by prompt_sha256), answer_format (how-each-was-asked/answer-formats.jsonl), asked
+  (when the answer was first stored, UTC), script (where the asking script ran, its arguments and settings), matched
+  ("replayed": asked again from the cache, its question, picture and model make exactly its cache key; "by time": see
+  scripts_as_they_ran/experiments_2000/timed_reads.json), answer (as given), image_sha256, cache_key.
+The pictures go under IMAGES (default pipeline/data/saved-reads/images, kept out of the repository) at their names.
 usage: python -m saved_reads package --calls CALLS_DIR [--out OUT] [--images IMAGES]"""
 import gzip
 import io
@@ -31,15 +26,21 @@ from pathlib import Path
 
 from sfzmaps import config
 
+from .layout import ANSWERS, FORMATS, MANIFEST, QUESTIONS, RUNS, TEMPLATES, answer_file, answer_files
+
 # Made in the k8 R&D run (2026-11-10/11) from the old warp, old solves' places and that day's sheet placements, which
-# no checkout has: kept as they were recorded (their code: sources/k8).  A recorded folder of one of these is ignored.
-FROZEN = {"terra-turned-tiles", "terra-place-reads", "terra-place-asks", "terra-place-asks-split",
-          "terra-district-asks", "third-read", "third-reread", "terra-rotation-pilot"}
+# no checkout has: kept as they were recorded (their code: scripts_as_they_ran/experiments_2000).  A recorded folder of
+# one of these is ignored.
+EXP = "experiments-2000"
+FROZEN = {f"{EXP}/{r}" for r in ("sideways-text", "close-up-text", "codes-on-tinted-lots", "codes-on-tinted-lots-smaller",
+                                 "code-of-tinted-area", "third-code-read", "third-code-read-recheck", "sideways-trial")}
 READS = {   # recorded folder -> read name
-    "codes2000-terra": "code-reads", "codes2000-sol": "code-reads", "leaders-sol": "leader-reads",
-    "k8-textpass-cw": "terra-turned-tiles", "k8-placeread": "terra-place-reads", "k8-placeask": "terra-place-asks",
-    "k8-placeask-split": "terra-place-asks-split", "k8-distask": "terra-district-asks", "k8-read3": "third-read",
-    "k8-read3r": "third-reread", "pipeline-labels": "pipeline-label-reads",
+    "codes2000-terra": "zoning-codes-2000", "codes2000-sol": "zoning-codes-2000", "leaders-sol": "leader-lines-2000",
+    "pipeline-labels": "district-labels",
+    "k8-textpass-cw": f"{EXP}/sideways-text", "k8-placeread": f"{EXP}/close-up-text",
+    "k8-placeask": f"{EXP}/codes-on-tinted-lots", "k8-placeask-split": f"{EXP}/codes-on-tinted-lots-smaller",
+    "k8-distask": f"{EXP}/code-of-tinted-area", "k8-read3": f"{EXP}/third-code-read",
+    "k8-read3r": f"{EXP}/third-code-read-recheck",
 }
 SER = "2000-digital-zoning"
 
@@ -48,10 +49,10 @@ def _read_of(folder: str) -> str:
     if folder in READS:
         return READS[folder]
     if folder.startswith("codes2000-") and folder.endswith("-fixed"):
-        return "code-reads-fixed-marks"           # rerun/rerun.sh: the marks red, as the prompts say
+        return "zoning-codes-2000-red-circle"     # red_circle/rerun.sh: the circle red, as the questions say
     if folder.startswith("leaders-sol-fixed"):
-        return "leader-reads-fixed-marks"
-    return "terra-page-boxes" if folder.startswith("terra-boxes-") else folder
+        return "leader-lines-2000-red-circle"
+    return "text-on-every-sheet" if folder.startswith("terra-boxes-") else folder
 
 
 def _png_size(path: Path) -> tuple[int, int]:
@@ -127,7 +128,7 @@ def describe(script: str, g: dict, ctx: dict, note: dict, wh: tuple[int, int], a
 class Templates:
     """Prompts that differ only in their numbers (tile size, place) or in the code asked about are one template:
     the prompt with the code it asks about (quoted on the line that says it is circled) replaced by "{code}"
-    and every number by #.  Named <read>-t1, -t2 ... in order of first use."""
+    and every number by #.  Named "<read> question 1", "question 2" ... in order of first use."""
 
     def __init__(self):
         self.names, self.count = {}, defaultdict(int)
@@ -139,7 +140,7 @@ class Templates:
         t = re.sub(r"\d+(\.\d+)?", "#", t)
         k = (read, t)
         if k not in self.names:
-            self.names[k] = f"{read}-t{1 + sum(r == read for r, _ in self.names)}"
+            self.names[k] = f"{read} question {1 + sum(r == read for r, _ in self.names)}"
         self.count[self.names[k]] += 1
         return self.names[k]
 
@@ -164,24 +165,24 @@ def _previous(out: Path) -> dict:
     """The package as it stands in OUT: records per read, and the prompts, templates, schemas, runs and image rows."""
     rows = lambda name: [json.loads(l) for l in open(out / name)] if (out / name).exists() else []  # noqa: E731
     recs = defaultdict(list)
-    for f in sorted((out / "reads").glob("*.jsonl.gz")) if (out / "reads").exists() else []:
+    for f in answer_files(out) if (out / ANSWERS).exists() else []:
         for line in gzip.open(f, "rt"):
             r = json.loads(line)
             recs[r["read"]].append(r)
     manifest = {}
-    if (out / "images.manifest.tsv").exists():
-        for line in list(open(out / "images.manifest.tsv"))[1:]:
+    if (out / MANIFEST).exists():
+        for line in list(open(out / MANIFEST))[1:]:
             name, sha, size = line.rstrip("\n").split("\t")
             manifest[name] = (sha, int(size))
-    return {"recs": recs, "prompts": rows("prompts.jsonl"), "templates": rows("templates.jsonl"),
-            "schemas": rows("schemas.jsonl"), "runs": rows("runs.jsonl"), "manifest": manifest}
+    return {"recs": recs, "prompts": rows(QUESTIONS), "templates": rows(TEMPLATES), "schemas": rows(FORMATS),
+            "runs": rows(RUNS), "manifest": manifest}
 
 
 def main(calls: Path, out: Path, images: Path) -> None:
     prev = _previous(out)
     first_asked = {r["cache_key"]: r["asked"] for rs in prev["recs"].values() for r in rs if r.get("asked")}
     out.mkdir(parents=True, exist_ok=True)
-    (out / "reads").mkdir(exist_ok=True)
+    (out / QUESTIONS).parent.mkdir(exist_ok=True)
     images.mkdir(parents=True, exist_ok=True)
     prompts, schemas, runs, prompt_read, used = {}, {}, {}, {}, defaultdict(set)
     templates = Templates()
@@ -248,28 +249,29 @@ def main(calls: Path, out: Path, images: Path) -> None:
                 used[r["prompt_sha256"]].add(r["prompt"])
             if r.get("answer_format"):
                 schemas[r["answer_format"]] = prev_schemas[r["answer_format"]]
-    carried_runs = [r for r in prev["runs"] if "/k8/" in r.get("script", "")]
+    carried_runs = [r for r in prev["runs"] if "experiments_2000/" in r.get("script", "")]
     for read, recs in sorted(per_read.items()):
         # mtime 0: the same records give the same bytes, so a repackage changes only what changed
-        with io.TextIOWrapper(gzip.GzipFile(out / "reads" / f"{read}.jsonl.gz", "wb", 9, mtime=0)) as gz:
+        answer_file(out, read).parent.mkdir(parents=True, exist_ok=True)
+        with io.TextIOWrapper(gzip.GzipFile(answer_file(out, read), "wb", 9, mtime=0)) as gz:
             for k in sorted(recs):
                 gz.write(json.dumps(recs[k], sort_keys=True) + "\n")
         by = defaultdict(int)
         for r in recs.values():
             by[r["matched"]] += 1
         print(f"{read}: {len(recs)} answers ({dict(by)}){f'; {unplaced[read]} without a place' if unplaced[read] else ''}")
-    with open(out / "prompts.jsonl", "w") as f:            # every exact prompt, with the templates it belongs to
+    with open(out / QUESTIONS, "w") as f:            # every exact prompt, with the templates it belongs to
         for sha, tnames in sorted(used.items(), key=lambda kv: (sorted(kv[1]), kv[0])):
             f.write(json.dumps({"sha256": sha, "templates": sorted(tnames), "text": prompts[sha]}) + "\n")
-    with open(out / "templates.jsonl", "w") as f:          # each template: the prompt with what varies blanked out
+    with open(out / TEMPLATES, "w") as f:          # each template: the prompt with what varies blanked out
         made = [{"template": tname, "read": read, "prompts": templates.count[tname], "text": text}
                 for (read, text), tname in templates.names.items()]
         for t in sorted(made + carried_templates, key=lambda t: t["template"]):
             f.write(json.dumps(t) + "\n")
-    with open(out / "schemas.jsonl", "w") as f:
+    with open(out / FORMATS, "w") as f:
         for sha, s in sorted(schemas.items()):
             f.write(json.dumps({"sha256": sha, "schema": s}, sort_keys=True) + "\n")
-    with open(out / "runs.jsonl", "w") as f:
+    with open(out / RUNS, "w") as f:
         made = []
         for k in runs:
             r = {kk: v for kk, v in runs[k].items() if kk not in ("cwd", "data_dir", "script")}
@@ -281,7 +283,7 @@ def main(calls: Path, out: Path, images: Path) -> None:
             made.append(r)
         for r in sorted(made + carried_runs, key=lambda r: r["run"]):
             f.write(json.dumps(r, sort_keys=True) + "\n")
-    with open(out / "images.manifest.tsv", "w") as f:
+    with open(out / MANIFEST, "w") as f:
         f.write("image\tsha256\tbytes\n")
         for name in sorted(manifest):
             f.write(f"{name}\t{manifest[name][0]}\t{manifest[name][1]}\n")

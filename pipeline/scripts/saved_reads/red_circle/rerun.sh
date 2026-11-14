@@ -8,15 +8,15 @@
 # Run check_marks.py first.  usage: KEY=<the API key file> rerun.sh [OUT]
 set -e
 : ${KEY:?set KEY to the API key file, e.g. pipeline/.env of the main checkout; its contents are never printed}
-R=${0:A:h}                                                    # this folder (saved_reads/rerun)
+R=${0:A:h}                                                    # this folder (saved_reads/red_circle)
 PKG=${R:h:h}                                                  # the folder holding the saved_reads package
 P=${SR_PIPELINE:-${PKG:h}}                                    # the pipeline folder
-OUT=${1:-$P/data/saved-reads/calls-live}             # the paid runs' own records; record_all.sh replays them into calls/
+OUT=${1:-$P/data/saved-reads/calls-live}             # the paid runs' own records; replay_all.sh replays them into calls/
 W=$P/data/saved-reads/work/rerun
 mkdir -p $W/leaders2 $W/codecheck $W/leaders
 cd $P
 cp ${PKG:h}/inputs/code-check-2000/codecheck_cases_published.json $W/codecheck/cases.json
-SRC="$(git -C $R rev-parse --short HEAD):pipeline/scripts/saved_reads/rerun"      # the commit these scripts are at
+SRC="$(git -C $R rev-parse --short HEAD):pipeline/scripts/saved_reads/red_circle"      # the commit these scripts are at
 LIVE=(uv run --env-file $KEY --project $P env -u SFZMAPS_DATA_DIR -u SFZ_CORR PYTHONPATH=$PKG python -W ignore -m saved_reads run --live)
 spent() { grep -h 'spent' $1 | tail -n 1; }
 

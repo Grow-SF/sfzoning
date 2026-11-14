@@ -9,6 +9,8 @@ import json
 from collections import Counter
 from pathlib import Path
 
+from .layout import FORMATS, MANIFEST, QUESTIONS, answer_files
+
 
 def key(provider: str, model: str, prompt: str, schema: dict, params: list[str], png: bytes) -> str:
     h = hashlib.sha256()
@@ -20,15 +22,15 @@ def key(provider: str, model: str, prompt: str, schema: dict, params: list[str],
 
 
 def main(package: Path, images: Path) -> None:
-    prompts = {json.loads(l)["sha256"]: json.loads(l)["text"] for l in open(package / "prompts.jsonl")}
-    schemas = {json.loads(l)["sha256"]: json.loads(l)["schema"] for l in open(package / "schemas.jsonl")}
+    prompts = {json.loads(l)["sha256"]: json.loads(l)["text"] for l in open(package / QUESTIONS)}
+    schemas = {json.loads(l)["sha256"]: json.loads(l)["schema"] for l in open(package / FORMATS)}
     manifest = {}
-    for line in list(open(package / "images.manifest.tsv"))[1:]:
+    for line in list(open(package / MANIFEST))[1:]:
         name, sha, _ = line.rstrip("\n").split("\t")
         manifest[name] = sha
     n = Counter()
     bad = []
-    for f in sorted((package / "reads").glob("*.jsonl.gz")):
+    for f in answer_files(package):
         for line in gzip.open(f, "rt"):
             r = json.loads(line)
             if r["matched"] != "replayed":
