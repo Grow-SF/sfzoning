@@ -31,6 +31,11 @@ from sfzmaps import llm
 _lock = threading.Lock()
 _state = {}
 _PKG = str(Path(sfzmaps.__file__).parent)
+_SELF = str(Path(__file__).resolve().parent)          # this package's own files (run.py, record.py): never context
+
+
+def _is_self(filename: str) -> bool:
+    return str(Path(filename).resolve().parent) == _SELF
 
 
 def _sha(b: bytes) -> str:
@@ -65,7 +70,7 @@ def _small(v, depth=0):
 
 def _ours(filename: str) -> bool:
     """a frame of the asking script's own folder, or of the pipeline package (not llm.py or this package)"""
-    if "saved_reads" in filename or filename.endswith("llm.py"):
+    if _is_self(filename) or filename.endswith("llm.py"):
         return False
     return filename.startswith(_state["folder"]) or filename.startswith(_PKG)
 
@@ -103,7 +108,7 @@ def _write(rec: dict, prompt: str, png: bytes, schema_json: str | None) -> None:
     out = _state["out"]
     stack = inspect.stack()[2:14]
     p_sha, i_sha = _sha(prompt.encode()), _sha(png)
-    caller = next((f"{f.filename}:{f.lineno}" for f in stack if "saved_reads" not in f.filename
+    caller = next((f"{f.filename}:{f.lineno}" for f in stack if not _is_self(f.filename)
                    and not f.filename.endswith("llm.py")), "")
     rec.update(prompt=p_sha, image=i_sha, run=_state["run"], caller=caller, context=_context(stack))
     if _state.get("note"):
