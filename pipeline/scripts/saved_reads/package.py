@@ -11,7 +11,7 @@ Writes, under OUT (the checked-in folder, default pipeline/saved-reads):
                             matched ("replayed": the record's prompt, image and model were asked again from the cache and
                             make exactly its cache key; "by time": see timed_reads.json), answer (as the model gave it),
                             image_sha256, cache_key
-  prompts.jsonl           {name, read, sha256, text}: every prompt, by its short name
+  prompts.jsonl           {sha256, templates, text}: every exact prompt, and the templates (one per read) it belongs to
   schemas.jsonl           {sha256, schema}: every answer format
   runs.jsonl              every recorded run (script, git location, arguments, settings)
   images.manifest.tsv     readable image name, sha256, bytes
@@ -159,7 +159,7 @@ def main(calls: Path, out: Path, images: Path) -> None:
     out.mkdir(parents=True, exist_ok=True)
     (out / "reads").mkdir(exist_ok=True)
     images.mkdir(parents=True, exist_ok=True)
-    prompts, schemas, runs, prompt_read, used = {}, {}, {}, {}, {}
+    prompts, schemas, runs, prompt_read, used = {}, {}, {}, {}, defaultdict(set)
     templates = Templates()
     per_read, manifest, unplaced = defaultdict(dict), {}, defaultdict(int)
     for folder in sorted(p for p in calls.iterdir() if (p / "calls.jsonl").exists()):
@@ -196,7 +196,7 @@ def main(calls: Path, out: Path, images: Path) -> None:
                 shutil.copyfile(img, dest)
             manifest[name] = (c["image"], img.stat().st_size)
             tname = templates.name(read, prompts[c["prompt"]], d.get("code_read_before"))
-            used[c["prompt"]] = tname
+            used[c["prompt"]].add(tname)             # a prompt asked by two reads belongs to both templates
             per_read[read][(name, c["key"])] = {
                 "read": read, **d, "image": name, "model": c["model"][1], "provider": c["model"][0],
                 "effort": c["effort"], "params": c["params"], "prompt": tname, "prompt_sha256": c["prompt"],
@@ -231,9 +231,9 @@ def main(calls: Path, out: Path, images: Path) -> None:
         for r in recs.values():
             by[r["matched"]] += 1
         print(f"{read}: {len(recs)} answers ({dict(by)}){f'; {unplaced[read]} without a place' if unplaced[read] else ''}")
-    with open(out / "prompts.jsonl", "w") as f:            # every exact prompt, with its template
-        for sha, tname in sorted(used.items(), key=lambda kv: (kv[1], kv[0])):
-            f.write(json.dumps({"sha256": sha, "template": tname, "text": prompts[sha]}) + "\n")
+    with open(out / "prompts.jsonl", "w") as f:            # every exact prompt, with the templates it belongs to
+        for sha, tnames in sorted(used.items(), key=lambda kv: (sorted(kv[1]), kv[0])):
+            f.write(json.dumps({"sha256": sha, "templates": sorted(tnames), "text": prompts[sha]}) + "\n")
     with open(out / "templates.jsonl", "w") as f:          # each template: the prompt with what varies blanked out
         for (read, text), tname in sorted(templates.names.items(), key=lambda kv: kv[1]):
             f.write(json.dumps({"template": tname, "read": read, "prompts": templates.count[tname], "text": text}) + "\n")

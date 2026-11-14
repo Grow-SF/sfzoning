@@ -18,7 +18,7 @@ Made by `pipeline/scripts/saved_reads` (`record_all.sh`, then `python -m saved_r
 |---|---|
 | `reads/<read>.jsonl.gz` | One line per answer. Fields are listed under [One record](#one-record). |
 | `templates.jsonl` | Each read's prompt, with what varies blanked out: every number becomes `#`, and the code asked about becomes `"{code}"`. A record's `prompt` field names its template. |
-| `prompts.jsonl` | Every exact prompt (339), with its sha256 and template. |
+| `prompts.jsonl` | Every exact prompt (339), with its sha256 and its templates: one per read that asked it (the red-mark reruns ask the same prompts as the originals). |
 | `schemas.jsonl` | Every answer format (JSON schema) the model was held to. |
 | `runs.jsonl` | Every recorded run: script and its git location, arguments, settings, and the script's top-level values. |
 | `images.manifest.tsv` | Every image's readable name, sha256 and size. |
