@@ -341,12 +341,14 @@ as for the rest of the pipeline. The fits use PyTorch, which comes with the pipe
    a street width and sharpens in stages.
 4. **The choice.** The probabilistic correction where it puts at least as many block-side points within 1 px of the
    print as the first correction and never folds the scan; otherwise the first correction.
-5. **Street edges and later blocks (2000 sheets p09 and p10 only).** Every other sheet is fitted to the blocks of
+5. **Street edges and later blocks (2000 sheets p09 and p10 only).** These two don't go through the choice: they
+   get the probabilistic correction, fitted with this extra evidence as well. Every other sheet is fitted to the blocks of
    its own year. On these two, much of the printed street grid has no blocks in the year's lot records (land held
    whole then and split up later, such as the Hunters Point shipyard on p09), so the fit has little to hold on to
    there. They also use the outlines of later blocks and the edges of every street, each point counted by how little
    the year's own blocks already explain it. Otherwise the fit is the probabilistic correction.
-6. **The warp.** The sheet is warped with its chosen correction, exactly as the pipeline warps it otherwise. A sheet
+6. **The warp.** The scan is first resampled by the correction, then warped as the pipeline warps it otherwise (its
+   control-point grid and resolution), so wherever the correction is zero the result is the same as before. A sheet
    with nothing to fit is written with today's placement, uncorrected.
 
 ### What it reads
@@ -356,6 +358,7 @@ as for the rest of the pipeline. The fits use PyTorch, which comes with the pipe
 | each sheet's scan, placement and outputs (`page.png`, `page.json`, `transform.json`, `refine.json`, `blocks_px.geojson`, `warped.tif`, `warped.footprint.geojson`, ...) | `data/work/<series>/<sheet>/` | the pipeline's build from the scans (`sfzmaps pull` brings them; `sfzmaps build` remakes them) |
 | the lots of each map's year, and every lot ever recorded | `data/ref/parcels.parquet` | DataSF's parcels, the pipeline's reference data |
 | street centre lines (street edges only) | `data/ref/streets.parquet` | DataSF, the pipeline's reference data |
+| the old placement check's verdict, which `scores.json` carries | `data/work/<series>/<sheet>/score.json` | the pipeline's build |
 | GDAL, for the warps | the pixi environment | `pixi.toml`, `pixi.lock` |
 | PyTorch, for the fits | the pipeline's Python environment | `pyproject.toml`, `uv.lock` |
 
@@ -372,14 +375,17 @@ as for the rest of the pipeline. The fits use PyTorch, which comes with the pipe
 
 ### Results
 
-Only what has been checked:
+Only what has been checked. "The approved run" means the corrections the owner looked at and approved on
+2026-11-09, made by earlier scripts.
 
-- **The same corrections as the approved run's**, for 1921 (all 16 sheets) and for the 2000 sheets checked.
+- **1921 is identical to the approved run's:** all 16 sheets.
+- **The ported code changes no numbers.** Every correction checked (1921 and 2000) is identical to what the earlier
+  scripts made with the same method.
 - **No text removal.** The approved run took the printed zoning codes out of the ink before fitting. Fitted with and
   without on the 13 2000 sheets, the scores were the same (within 1 px 0.759 both), so the warp reads no text.
-- **2000 is fitted like every other year.** The approved run fitted the 2000 sheets on their own measured area with a
-  fixed scale. Scored on the same points, those corrections and the new ones are equal (within 1 px 0.749 against
-  0.748, within 2 px 0.812 both).
+- **2000 is fitted like every other year**, so its corrections differ from the approved run's, which fitted the 2000
+  sheets on their own measured area with a fixed scale. Scored on the same points, the old 2000 setup's corrections
+  and the new ones are equal (within 1 px 0.749 against 0.748, within 2 px 0.812 both).
 - **Every sheet:** the full build of all 357 placed sheets is pending.
 
 ### Next

@@ -49,7 +49,6 @@ or Blob token.
   to force a re-read; change the prompt or context instead.
 - Keep DVC's cache type `reflink,copy`; `hardlink`/`symlink` corrupt the cache because the
   pipeline rewrites files in place. Never run a bare `dvc gc`.
-
 - The warp's corrected sheets live in `pipeline/data/warp/`, made by `uv run sfzmaps warp` (the `warp-<series>`
   build stages); see "The sheet warp" in `pipeline/README.md`.
 - Never commit `pipeline/data/`. It's gigabytes, and it's shared through the
