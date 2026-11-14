@@ -3,16 +3,21 @@
 A sheet's folder holds: transform.json (today's placement plus "correction": {"file": "correction.npz"}, written
 last; it is what everything downstream loads), correction.npz (the chosen correction and which kind it is),
 warped.tif and warped_paper.tif with their footprints, and scores.json (what the choice used, and the old placement
-check's result).  A sheet with nothing to fit is written with today's placement uncorrected, and scores.json says
-why.  Any other failure fails the sheet."""
+check's result).  A sheet with nothing to fit, or whose chosen correction has a value that isn't finite, is written
+with today's placement uncorrected, and scores.json says why.  Any other failure fails the sheet."""
+import functools
 import json
 import logging
 import multiprocessing
-import shutil
+import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from importlib.metadata import version
 from pathlib import Path
 
+import numpy as np
+
 from sfzmaps import config, fresh
+from sfzmaps.inputs import page_patch_path
 from sfzmaps.sheetwarp import apply, scores, targets
 from sfzmaps.sheetwarp import first as first_fit
 from sfzmaps.sheetwarp import probabilistic as probabilistic_fit
@@ -45,10 +50,60 @@ def fit_sheet(sheet: Sheet) -> tuple[Correction, str, dict]:
     return {"first": first, "probabilistic": probabilistic}[kind], kind, s
 
 
+# Modules the warp imports but whose code it never runs: the freshness bookkeeping, the vision-model calls (reading
+# imports them; the warp only loads page.json), the sheet statuses and the district readers (districts.read imports
+# them; the warp only takes the year and its lots) and the corner finding (linework imports it; the warp only
+# measures the street width).
+NOT_RUN_BY_THE_WARP = frozenset({
+    "sfzmaps.fresh", "sfzmaps.llm", "sfzmaps.manifest", "sfzmaps.stitch", "sfzmaps.districts.labels",
+    "sfzmaps.districts.sampling", "sfzmaps.districts.pattern", "sfzmaps.sources.datasf"})
+# The Python packages the fits and the warp compute with: a new version of any can change the numbers.
+NUMERIC_PACKAGES = ("torch", "numpy", "scipy", "opencv-python-headless", "shapely", "scikit-image")
+
+
+def warp_code_files() -> list[Path]:
+    """The source files of the code the warp runs: a change to any of them redoes every sheet."""
+    return fresh.code_files(["sfzmaps.sheetwarp.run"], cut=NOT_RUN_BY_THE_WARP)
+
+
+@functools.cache
+def numeric_versions() -> dict[str, str]:
+    """The versions that change the numbers: those of NUMERIC_PACKAGES, and the GDAL of the gdalwarp on PATH (the
+    one the warp runs)."""
+    try:
+        gdal = subprocess.run(["gdalwarp", "--version"], capture_output=True, text=True, check=True).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        gdal = "no gdalwarp"
+    return {**{p: version(p) for p in NUMERIC_PACKAGES}, "gdal": gdal}
+
+
 def _freshness_inputs(sheet: Sheet) -> list[Path]:
-    return ([sheet.folder / f for f in PLACED_FILES]
+    """The files the warp reads for the sheet: its placed files and its paper warp (copied as they are when it is
+    left uncorrected), the old placement check and the page's hand-made patch where there are any, the lots and
+    streets, and the code it runs."""
+    optional = [sheet.folder / "score.json", page_patch_path(sheet.series, sheet.name)]
+    return ([sheet.folder / f for f in (*PLACED_FILES, "warped_paper.tif", "warped_paper.footprint.geojson")]
+            + [p for p in optional if p.exists()]
             + [config.REF_DIR / "parcels.parquet", config.REF_DIR / "streets.parquet"]
-            + fresh.code_files(["sfzmaps.sheetwarp.run"]))
+            + warp_code_files())
+
+
+def _outputs_complete(out: Path) -> bool:
+    """Every file a finished sheet has: transform.json, scores.json and the four warp files, and correction.npz when
+    transform.json names it."""
+    try:
+        corrected = "correction" in json.loads((out / "transform.json").read_text())
+    except (OSError, ValueError):
+        return False
+    expected = ["scores.json", *apply.WARP_FILES] + (["correction.npz"] if corrected else [])
+    return all((out / f).exists() for f in expected)
+
+
+def _require_finite(correction: Correction, kind: str) -> None:
+    """NothingToFit where the chosen correction has a value that isn't finite: there is no correction to warp with."""
+    if not (np.isfinite(correction.grid).all() and np.isfinite(correction.origin).all()
+            and np.isfinite(correction.spacing)):
+        raise NothingToFit(f"the {kind} correction has values that aren't finite")
 
 
 def _placement_check(sheet: Sheet) -> dict:
@@ -61,12 +116,12 @@ def _placement_check(sheet: Sheet) -> dict:
 
 
 def correct_sheet(series: str, name: str, force: bool = False) -> str:
-    """Fit, choose and warp one sheet into OUT/series/name.  "skipped" when its inputs (the sheet's placed files,
-    the lots and streets, and this code) are as they were when it was last done."""
+    """Fit, choose and warp one sheet into OUT/series/name.  "skipped" when every output is there and its inputs
+    (`_freshness_inputs`) and `numeric_versions` are as they were when it was last done."""
     sheet = Sheet(series, name)
     out = OUT / series / name
-    placement, inputs = out / "transform.json", _freshness_inputs(sheet)
-    if fresh.is_fresh(placement, inputs, force):
+    placement, read, versions = out / "transform.json", _freshness_inputs(sheet), numeric_versions()
+    if _outputs_complete(out) and fresh.is_fresh(placement, read, force, versions):
         return "skipped"
     placement.unlink(missing_ok=True)               # written last: a sheet cut short is redone
     fresh.sidecar(placement).unlink(missing_ok=True)
@@ -74,19 +129,26 @@ def correct_sheet(series: str, name: str, force: bool = False) -> str:
     today = json.loads((sheet.folder / "transform.json").read_text())
     try:
         correction, kind, s = fit_sheet(sheet)
+        _require_finite(correction, kind)
     except NothingToFit as e:
         (out / "correction.npz").unlink(missing_ok=True)
         (out / "scores.json").write_text(json.dumps({"uncorrected": str(e), **_placement_check(sheet)}, indent=1))
         apply.warp_with_correction(sheet, None, out)
         placement.write_text(json.dumps(today))
-        fresh.record(placement, inputs)
+        fresh.record(placement, read, versions)
         return f"uncorrected: {e}"
     correction.save(out / "correction.npz", kind=kind)
     (out / "scores.json").write_text(json.dumps({**s, "chosen": kind, **_placement_check(sheet)}, indent=1))
     apply.warp_with_correction(sheet, correction, out)
     placement.write_text(json.dumps({**today, "correction": {"file": "correction.npz"}}))
-    fresh.record(placement, inputs)
+    fresh.record(placement, read, versions)
     return f"corrected ({kind})"
+
+
+def _log_to_stderr(level: int) -> None:
+    """A spawned worker's logging, set up as the command's (it starts without any), so the fits' progress lines
+    reach the command's stderr and the build's log."""
+    logging.basicConfig(level=level, format="%(message)s")
 
 
 def correct_series(series: str, jobs: int = 3, force: bool = False) -> dict[str, str]:
@@ -108,7 +170,8 @@ def correct_series(series: str, jobs: int = 3, force: bool = False) -> dict[str,
         for name in names:
             finished(name, lambda name=name: correct_sheet(series, name, force))
     else:
-        with ProcessPoolExecutor(jobs, mp_context=multiprocessing.get_context("spawn")) as pool:
+        with ProcessPoolExecutor(jobs, mp_context=multiprocessing.get_context("spawn"), initializer=_log_to_stderr,
+                                 initargs=(logging.getLogger().getEffectiveLevel(),)) as pool:
             futures = {pool.submit(correct_sheet, series, name, force): name for name in names}
             for f in as_completed(futures):
                 finished(futures[f], f.result)

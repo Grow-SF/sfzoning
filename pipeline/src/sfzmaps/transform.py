@@ -184,6 +184,8 @@ class SheetTransform:
         found (where the correction changes sharply between nodes this is the closest it gets)."""
         u = self.correction.u
         q = np.atleast_2d(np.asarray(px, float))
+        if not len(q):
+            return self.uncorrected().to_world(q)
         p = q - u(q)
         best, err = p.copy(), np.linalg.norm(p + u(p) - q, axis=1)
         for _ in range(60):
@@ -300,8 +302,13 @@ class SheetTransform:
 
     # -- serialization -----------------------------------------------------
     def to_json(self) -> dict:
+        """The placement as transform.json holds it; a correction is named by its file (beside transform.json), so a
+        correction that has no file yet can't be written."""
         d = {"smoothing": self.smoothing, "gcps": [asdict(g) for g in self.gcps]}
         if self.correction is not None:
+            if self.correction.file is None:
+                raise ValueError("this placement's correction has no file to name in transform.json (only a "
+                                 "correction loaded from its file has one)")
             d["correction"] = {"file": self.correction.file}
         return d
 

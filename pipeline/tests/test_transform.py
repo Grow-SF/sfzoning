@@ -250,3 +250,18 @@ def test_a_correction_needs_its_folder():
     d = {**_fitted().to_json(), "correction": {"file": "correction.npz"}}
     with pytest.raises(ValueError):
         SheetTransform.from_json(d, folder=None)
+
+
+def test_a_corrected_placement_maps_no_points_to_no_points():
+    t = _fitted()
+    none = np.zeros((0, 2))
+    assert t.to_world(none).shape == (0, 2)
+    t.correction = _constant_correction(1.5, -2.0)
+    assert t.to_world(none).shape == (0, 2)
+
+
+def test_a_correction_without_a_file_cannot_be_written():
+    t = _fitted()
+    t.correction = _constant_correction(1.5, -2.0)       # made in memory: no file yet
+    with pytest.raises(ValueError, match="file"):
+        t.to_json()

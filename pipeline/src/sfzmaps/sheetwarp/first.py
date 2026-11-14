@@ -142,6 +142,8 @@ def propagated_shifts(sheet: Sheet, sides: SidePoints, targets: Targets, held_si
     pending = [s for s in range(ns) if not solved_side[s] and len(members[s])]
     if not pending:
         raise NothingToFit(f"{sheet.series}/{sheet.name}: every block side is held, none is left to move")
+    if not solved_side.any():
+        raise NothingToFit(f"{sheet.series}/{sheet.name}: no held block side on the crop to carry the shifts from")
     blocks = json.loads((sheet.folder / "blocks_px.geojson").read_text())
     SW, _ = linework.estimate_street_px([shapely.geometry.shape(f["geometry"]) for f in blocks["features"]])
     reach = np.arange(-(SW / 2 - 0.5), SW / 2 - 0.5 + 0.01, 0.5)
@@ -206,6 +208,9 @@ def first_correction(sheet: Sheet, sides: SidePoints, targets: Targets, held: np
 
     shifts = propagated_shifts(sheet, sides, targets, held)
     C = _inputs(sheet, sides, targets, held)
+    for what, points in (("block-side points", C.held_line), ("control points", C.held_cp)):
+        if not len(points):           # the mean of an empty term is NaN: the whole fit would be NaN
+            raise NothingToFit(f"{sheet.series}/{sheet.name}: no held {what} on the crop for the first correction")
     torch.set_num_threads(8)
     Hp, HN, HC = C.held_line, C.held_n, C.held_cp
     Fp, FN, FO = shifts.free, shifts.free_n, shifts.free_off

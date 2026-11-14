@@ -12,6 +12,9 @@ app = typer.Typer(no_args_is_help=True, help="Georeference historic SF zoning ma
 # Exit status of a command stopped by llm.FATAL (quota, spend cap, missing key): `sfzmaps build`
 # reports it as "needs a paid read". Not 2, which click uses for usage errors.
 PAID_READ_EXIT = 75
+# `sfzmaps build --system-tools` sets this for its stages, so a stage's command (`sfzmaps warp`) accepts the same
+# tools. Same value as build.SYSTEM_TOOLS_ENV (a test keeps them equal).
+SYSTEM_TOOLS_ENV = "SFZMAPS_SYSTEM_TOOLS"
 
 
 @app.callback()
@@ -783,9 +786,14 @@ def warp(
     series: list[str] = typer.Argument(None, help="Only these series (default: every series with placed sheets)."),
     jobs: int = typer.Option(3, "--jobs", "-j", help="Sheets fitted at once."),
     force: bool = typer.Option(False, "--force", help="Correct sheets again even when their inputs are unchanged."),
+    system_tools: bool = typer.Option(False, "--system-tools", envvar=SYSTEM_TOOLS_ENV,
+                                      help="Warp with tools that aren't from the pixi environment (not recommended)."),
 ) -> None:
     """Correct every placed sheet's placement and warp it, into data/warp/<series>/<sheet>/ (skips a sheet whose
     inputs haven't changed). Run inside `pixi shell` so gdalwarp is the pinned one."""
+    import logging
+
+    from sfzmaps import build as build_mod
     from sfzmaps.districts.series import SERIES
     from sfzmaps.sheetwarp import run as sheetwarp
     from sfzmaps.sheetwarp.sheet import placed_sheets
@@ -793,6 +801,8 @@ def warp(
     unknown = [s for s in series or [] if s not in SERIES]
     if unknown:
         raise typer.BadParameter(f"unknown series {', '.join(unknown)}; known: {', '.join(SERIES)}")
+    build_mod.require_toolchain(system_tools)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     failed = []
     for s in series or [s for s in SERIES if placed_sheets(s)]:
         try:

@@ -50,6 +50,9 @@ CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "ship.py", "cac
 # The exit code of a pipeline command stopped by llm.FATAL (the $0 cap, or no API key): "needs a
 # paid read", not a bug. Same value as cli.PAID_READ_EXIT (a test keeps them equal).
 PAID_READ_EXIT = 75
+# How `build --system-tools` reaches its stages' commands (`sfzmaps warp` checks its tools too). Same value as
+# cli.SYSTEM_TOOLS_ENV (a test keeps them equal).
+SYSTEM_TOOLS_ENV = "SFZMAPS_SYSTEM_TOOLS"
 
 
 @dataclass(frozen=True)
@@ -475,7 +478,8 @@ def build(targets: list[str] | None, jobs: int, dry_run: bool, force: bool,
         changed = changed_deps(st.stdout)
 
         def one(name: str) -> None:
-            env = {**os.environ, fresh.CHANGED_DEPS_ENV: json.dumps(changed.get(name, []))}
+            env = {**os.environ, fresh.CHANGED_DEPS_ENV: json.dumps(changed.get(name, [])),
+                   SYSTEM_TOOLS_ENV: "1" if system_tools else "0"}
             with open(logs / f"{name}.log", "w") as f:
                 p = subprocess.run(["uv", "run", "--frozen", "sfzmaps", "stage", name],
                                    cwd=config.PIPELINE_DIR, stdout=f, stderr=subprocess.STDOUT, env=env)
