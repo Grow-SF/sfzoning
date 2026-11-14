@@ -307,6 +307,89 @@ Every other map sheet is `needs_review`, with the first failing reason
 same sheet in another edition that passed; see the commands table. Non-map pages (covers, text, indexes, legends) are skipped and keep
 their kind in `page.json`.
 
+## The sheet warp (`sfzmaps warp`)
+
+The pipeline places each scanned sheet on the city. Small errors remain: a sheet's printed block lines can miss
+the real block lines by a few pixels. The sheet warp corrects each sheet's placement so its printed block lines land
+on the block lines of its year, then warps the sheet with that correction. It works on every placed sheet of a series.
+The published maps don't use the warped sheets yet.
+
+### Running it
+
+```
+uv run sfzmaps warp [SERIES ...] [--jobs N] [--force]
+```
+
+With no series it does every series. A sheet whose inputs haven't changed since its last warp is skipped;
+`--force` redoes it. `uv run sfzmaps build` runs one `warp-<series>` stage per series when its inputs are stale, like
+every other stage. Warping needs the pinned GDAL, so run inside the pixi environment (`pixi shell` or `pixi run`),
+as for the rest of the pipeline. The fits use PyTorch, which comes with the pipeline's own dependencies.
+
+### The steps, for each sheet
+
+1. **What to aim at.** Points every 2 ft along the side of every block of the sheet's year, inside the sheet's drawn
+   map. On the scan, the centre line of every stroke no wider than a block line, and for each direction a map of the
+   distance to the nearest such line running that way. A point fits the print when it lies within 1 px of a printed
+   line running its way.
+2. **The first correction.** Sides the print already holds stay where they are. Every other side is moved onto the
+   nearest printed line running its way, carried outward from the held sides so neighbouring sides move together. The
+   correction is a smooth field (a grid every 50 px) fitted to all of that.
+3. **The probabilistic correction.** Each block-side point either lies on a printed block line running its way, or
+   isn't printed (missing, or hidden under heavy ink). Ink counts as a block line by how likely its stroke width says
+   it is. The fit is the smooth field that makes all the points together most probable, held to stretching about as
+   much as today's placement does, with a steep penalty wherever it would fold the scan over. It starts blurred to half
+   a street width and sharpens in stages.
+4. **The choice.** The probabilistic correction where it puts at least as many block-side points within 1 px of the
+   print as the first correction and never folds the scan; otherwise the first correction.
+5. **Street edges and later blocks (2000 sheets p09 and p10 only).** Every other sheet is fitted to the blocks of
+   its own year. On these two, much of the printed street grid has no blocks in the year's lot records (land held
+   whole then and split up later, such as the Hunters Point shipyard on p09), so the fit has little to hold on to
+   there. They also use the outlines of later blocks and the edges of every street, each point counted by how little
+   the year's own blocks already explain it. Otherwise the fit is the probabilistic correction.
+6. **The warp.** The sheet is warped with its chosen correction, exactly as the pipeline warps it otherwise. A sheet
+   with nothing to fit is written with today's placement, uncorrected.
+
+### What it reads
+
+| What | Where | Comes from |
+|---|---|---|
+| each sheet's scan, placement and outputs (`page.png`, `page.json`, `transform.json`, `refine.json`, `blocks_px.geojson`, `warped.tif`, `warped.footprint.geojson`, ...) | `data/work/<series>/<sheet>/` | the pipeline's build from the scans (`sfzmaps pull` brings them; `sfzmaps build` remakes them) |
+| the lots of each map's year, and every lot ever recorded | `data/ref/parcels.parquet` | DataSF's parcels, the pipeline's reference data |
+| street centre lines (street edges only) | `data/ref/streets.parquet` | DataSF, the pipeline's reference data |
+| GDAL, for the warps | the pixi environment | `pixi.toml`, `pixi.lock` |
+| PyTorch, for the fits | the pipeline's Python environment | `pyproject.toml`, `uv.lock` |
+
+### What it writes
+
+`pipeline/data/warp/<series>/<sheet>/`:
+
+| File | What |
+|---|---|
+| `transform.json` | today's placement plus `"correction": {"file": "correction.npz"}`; load it with `SheetTransform.from_json(d, folder=...)`, which applies the correction itself |
+| `correction.npz` | the chosen correction and which kind it is |
+| `scores.json` | the scores, the choice, the old placement check's verdict, or why the sheet was left uncorrected |
+| `warped.tif`, `warped_paper.tif` | the sheet warped with its correction, and the paper layer, each with its footprint |
+
+### Results
+
+Only what has been checked:
+
+- **The same corrections as the approved run's**, for 1921 (all 16 sheets) and for the 2000 sheets checked.
+- **No text removal.** The approved run took the printed zoning codes out of the ink before fitting. Fitted with and
+  without on the 13 2000 sheets, the scores were the same (within 1 px 0.759 both), so the warp reads no text.
+- **2000 is fitted like every other year.** The approved run fitted the 2000 sheets on their own measured area with a
+  fixed scale. Scored on the same points, those corrections and the new ones are equal (within 1 px 0.749 against
+  0.748, within 2 px 0.812 both).
+- **Every sheet:** the full build of all 357 placed sheets is pending.
+
+### Next
+
+1. Look at the seams where warped sheets meet.
+2. Check that every run gives the same result, on every year.
+3. Decide whether street edges and later blocks should apply to every sheet: test it on every sheet, and the owner
+   decides.
+4. Move whatever reads the old pipeline's sheets onto `data/warp`.
+
 ## Where outputs land
 
 Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to move it):
@@ -320,6 +403,7 @@ Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to mov
   `labels.json`, `rough.json`, `refine.json`, `changes.geojson`, `transform.json`,
   `score.json`, `warped.tif`, `warped_paper.tif` (after `paper`). Machine output only:
   everything a person decides is in `inputs/`.
+- `warp/<series>/<sheet>/`: corrected placements and warped sheets (see The sheet warp).
 - `out/<series>/`: `<series>.pmtiles`, `<series>-paper.pmtiles`, `manifest.json` (per-sheet status,
   `needs_review` reasons, scores, limits, bounds), `review.html`.
 - `out/ref/blocks.pmtiles`: today's blocks for the review pages.
