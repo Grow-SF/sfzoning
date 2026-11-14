@@ -81,8 +81,8 @@ A fixed inputs ──► B warper ──► C merged page ──► E solver inp
   - Test: the stage is frozen and its output is the table's parquet.
 - [ ] **A3. Decisions people made, in git.**
   - `label_fixes.csv` (D3).
-  - The code-check and leader-check answers: today in `prob-warp:…/codes2000/answers/`; they move to
-    `pipeline/inputs/2000-digital-zoning/`.
+  - [x] The code-check and leader-check answers: moved to `pipeline/inputs/code-check-2000/` in #59 (not
+    `inputs/2000-digital-zoning/`, which the 2000 build stage depends on as a whole).
   - The frame-cut regions picked by eye (`zcuts.py`'s constants) as an input file.
 - [ ] **A4. Declared dependencies.** A `rnd` extra in `pipeline/pyproject.toml` (torch==2.15.0, PyMaxflow), locked in
   `uv.lock`.
