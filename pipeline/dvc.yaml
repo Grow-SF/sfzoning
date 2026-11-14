@@ -7,6 +7,14 @@ stages:
     outs:
       - data/ref:
           persist: true
+  saved-reads:
+    cmd: uv run --frozen sfzmaps stage saved-reads
+    frozen: true
+    deps:
+      - saved-reads/images.manifest.tsv
+    outs:
+      - data/saved-reads/images:
+          persist: true
   edition-1921:
     cmd: uv run --frozen sfzmaps stage edition-1921
     deps:
