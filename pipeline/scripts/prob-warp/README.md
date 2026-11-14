@@ -69,6 +69,14 @@ zsh pipeline/scripts/prob-warp/check/rewarp_all.sh            # every series: fi
 - **No text removal since 2026-11-13** (below). prob6 fits the page's ink as printed; on 2000 its fields differ from
   the approved run's by up to 8.2 px (median 0.03–0.13 px per sheet).
 - **Determinism:** fitting the 13 2000 sheets twice gives byte-identical outputs (THREADS=3).
+- **Full re-warp, every series (2026-11-14, `check/rewarp_all.sh`):** 174 sheets fitted and warped, none failed. The
+  choice took prob6 on 66 sheets and p1 on 108 (prob6 mostly on 1921 and 1980–2000, p1 on 1935–1975).
+  - Every p1 fit is byte-identical to the approved run's; so is every prob6 fit of 1921–1948, which never had text
+    removal. Every warped sheet whose chosen fit didn't change is byte-identical to the approved run's warp (all of
+    1921–1948, and every sheet that keeps p1).
+  - Without text removal, each year's share of block-line points within 1 px of the chosen fit is the same as with
+    it, to 0.001 (1960 0.705, 1964 0.720, 1968 0.704, 1972 0.725, 1975 0.742, 1980 0.774, 1980–1990 0.774,
+    1990–1996 0.718, 2000 0.759). The choice changes on one sheet: 1990–1996 p28 (prob6 0.648 vs p1 0.649) keeps p1.
 
 ## The approved run (`manifest.csv`)
 
@@ -100,5 +108,6 @@ PR (#59).
 
 1. **One entry point as a package**, with torch declared in the pipeline's dependencies.
 2. **Determinism on every series:** `check/fit_twice.sh`.
-3. **Into production:** move the correction into the pipeline's transform stage instead of the `sitecustomize` patch,
+3. **Look at the seams** where re-warped sheets meet (AGENTS.md), against the approved run's.
+4. **Into production:** move the correction into the pipeline's transform stage instead of the `sitecustomize` patch,
    then regenerate the production maps.
