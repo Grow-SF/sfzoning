@@ -6,6 +6,7 @@ warped.tif and warped_paper.tif with their footprints, and scores.json (what the
 check's result).  A sheet with nothing to fit is written with today's placement uncorrected, and scores.json says
 why.  Any other failure fails the sheet."""
 import json
+import logging
 import multiprocessing
 import shutil
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -19,6 +20,7 @@ from sfzmaps.sheetwarp.sheet import PLACED_FILES, NothingToFit, Sheet, placed_sh
 from sfzmaps.sheetwarp.street_edges_and_later_blocks import street_edges_and_later_blocks
 from sfzmaps.transform import Correction
 
+log = logging.getLogger(__name__)
 OUT = config.DATA_DIR / "warp"
 STREET_EDGES_AND_LATER_BLOCKS = {"2000-digital-zoning": {"2000-digital-zoning-p09", "2000-digital-zoning-p10"}}
 STREET_EDGES_KIND = "street edges and later blocks"
@@ -100,6 +102,7 @@ def correct_series(series: str, jobs: int = 3, force: bool = False) -> dict[str,
         except Exception as e:
             failed[name] = f"{type(e).__name__}: {e}"
             print(f"{series}/{name}: FAILED {failed[name]}", flush=True)
+            log.error("%s/%s failed", series, name, exc_info=e)      # a worker's traceback comes along as the cause
 
     if jobs <= 1:
         for name in names:

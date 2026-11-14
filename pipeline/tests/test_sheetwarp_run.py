@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from sfzmaps import cli, config
+from sfzmaps import cli, config, fresh
 from sfzmaps.sheetwarp import run, scores
 from sfzmaps.sheetwarp.sheet import PLACED_FILES, NothingToFit
 from sfzmaps.transform import Correction, SheetTransform
@@ -110,24 +110,28 @@ def test_the_correction_is_named_relative_to_its_folder(world, monkeypatch):
     assert s["placement_check"] == {"passed": False, "reason": "misplaced"}
 
 
-def test_a_sheet_interrupted_before_its_placement_is_written_is_redone(world, monkeypatch):
+def test_a_sheet_interrupted_after_a_finished_run_is_redone(world, monkeypatch):
     calls, warps = [], []
     monkeypatch.setattr(run, "fit_sheet", _fake_fit(calls))
 
     def warp(sheet, correction, out_dir):
         warps.append(1)
-        if len(warps) == 1:
+        if len(warps) == 2:
             raise RuntimeError("interrupted")
         _fake_warp(sheet, correction, out_dir)
     monkeypatch.setattr(run.apply, "warp_with_correction", warp)
-    with pytest.raises(RuntimeError):
-        run.correct_sheet("s", "a")
-    assert not (run.OUT / "s" / "a" / "transform.json").exists()
+    out = run.OUT / "s" / "a"
     assert run.correct_sheet("s", "a") == "corrected (first)"
-    assert calls == ["a", "a"]
+    assert (out / "transform.json").exists()
+    with pytest.raises(RuntimeError):
+        run.correct_sheet("s", "a", force=True)
+    assert not (out / "transform.json").exists()
+    assert not fresh.sidecar(out / "transform.json").exists()
+    assert run.correct_sheet("s", "a") == "corrected (first)"
+    assert calls == ["a", "a", "a"]
 
 
-def test_a_series_finishes_every_sheet_then_raises_naming_the_ones_that_failed(world, monkeypatch):
+def test_a_series_finishes_every_sheet_then_raises_naming_the_ones_that_failed(world, monkeypatch, caplog):
     other = config.WORK_DIR / "s" / "b"
     other.mkdir()
     for f in PLACED_FILES:
@@ -140,8 +144,10 @@ def test_a_series_finishes_every_sheet_then_raises_naming_the_ones_that_failed(w
             raise ValueError("boom")
         return "corrected (first)"
     monkeypatch.setattr(run, "correct_sheet", correct)
-    with pytest.raises(RuntimeError, match="s/a"):
-        run.correct_series("s", jobs=1)
+    with caplog.at_level("ERROR"):
+        with pytest.raises(RuntimeError, match="s/a"):
+            run.correct_series("s", jobs=1)
+    assert "Traceback" in caplog.text and "ValueError: boom" in caplog.text and "in correct" in caplog.text
     assert done == ["a", "b"]
 
 

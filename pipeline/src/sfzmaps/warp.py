@@ -379,7 +379,8 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
     linework is smoothed rather than stair-stepped; mask boxes are filled with paper rather
     than cut out, and the footprint (`<out stem>.footprint.geojson`) is the inked content
     (paper_content), which stitch draws on top of every sheet's blank paper.  `resample`, when given, takes
-    the RGBA from make_rgba and returns the RGBA to warp (the sheet warp resamples the scan by its correction)."""
+    the RGBA from make_rgba and returns the RGBA to warp (the sheet warp resamples the scan by its correction); the
+    footprint is still traced on the page as it is, which is the frame the placement's to_world expects."""
     png, out = Path(png), Path(out)
     if shutil.which("gdalwarp") is None:
         raise RuntimeError("gdalwarp not found on PATH; run inside `pixi shell` (pixi.toml pins GDAL)")
@@ -398,6 +399,7 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
     else:
         excl = inset_exclusion(img, mask_boxes)
     rgba = make_rgba(img, mask_boxes, excl, paper=paper)
+    content_alpha = rgba[..., 3]       # the footprint is traced on the page's own frame, whatever is warped
     if resample is not None:
         rgba = resample(rgba)
     gcps = [GroundControlPoint(row=g.py + 0.5, col=g.px + 0.5, x=g.wx, y=g.wy)
@@ -424,7 +426,7 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
                  "-wo", "NUM_THREADS=ALL_CPUS", "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES",
                  "-co", "BIGTIFF=IF_SAFER", "-q", str(src), tmp_name],
                 check=True, capture_output=True, text=True)
-            content = paper_content(img, mask_boxes, excl) if paper else rgba[..., 3]
+            content = paper_content(img, mask_boxes, excl) if paper else content_alpha
             _write_footprint(out.with_name(out.stem + ".footprint.geojson"), footprint_polygons(excl, content, t),
                              {"paper_rgb": list(paper_colour(img, ~excl)), "res_ft": res} if paper else None)
             os.replace(tmp_name, out)

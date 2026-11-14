@@ -222,6 +222,21 @@ def test_warp_writes_footprint_and_clears_stroke(tmp_path):
     assert not g.contains(__import__("shapely.geometry").geometry.Point(6_000_000 + 2 * 105, 2_120_000 - 2 * 800))
 
 
+def test_the_footprint_stays_on_the_page_when_the_warped_image_is_resampled(tmp_path):
+    img = _bordered()
+    png = tmp_path / "p.png"
+    cv2.imwrite(str(png), img)
+    h, w = img.shape
+    P = np.array([[0, 0], [w - 1, 0], [0, h - 1], [w - 1, h - 1]], float)
+    W = P * 2.0 * np.array([1, -1]) + np.array([6_000_000.0, 2_120_000.0])
+    t = SheetTransform([GCP(*p, *q, "auto") for p, q in zip(P, W)], smoothing=1.0).fit()
+    plain = warp.warp_sheet(png, t, [], tmp_path / "plain.tif")
+    shifted = warp.warp_sheet(png, t, [], tmp_path / "shifted.tif", resample=lambda rgba: np.roll(rgba, 25, axis=1))
+    assert (tmp_path / "shifted.footprint.geojson").read_text() == (tmp_path / "plain.footprint.geojson").read_text()
+    with rasterio.open(plain) as a, rasterio.open(shifted) as b:
+        assert not np.array_equal(a.read(), b.read())
+
+
 def test_two_framed_maps_on_one_page_are_both_cleared():
     img = np.full((1600, 3400), 255, np.uint8)
     for x0 in (100, 1800):
