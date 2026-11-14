@@ -22,6 +22,7 @@ Made by `pipeline/scripts/saved_reads` (`record_all.sh`, then `python -m saved_r
 | `schemas.jsonl` | Every answer format (JSON schema) the model was held to. |
 | `runs.jsonl` | Every recorded run: script and its git location, arguments, settings, and the script's top-level values. |
 | `images.manifest.tsv` | Every image's readable name, sha256 and size. |
+| `decoded/textboxes2_<pass>.jsonl.gz` | The k8 runs' text boxes in page px, one line per box with its `sheet` (see [Frozen reads](#frozen-reads)). |
 
 **The images** are 29,381 files, 2.1 GB, so they are not in git. They live in `pipeline/data/saved-reads/images/<image>`
 and ship through the frozen DVC stage `saved-reads`: `uv run sfzmaps pull` brings them, and the build checks them
@@ -97,6 +98,19 @@ about the old warp, old solves' places and that day's sheet placements, which no
 `scripts/saved_reads/sources/k8/` as it was (the replayed ones match their records' `git_blob`; `read3.py`, `read3r.py`
 and `rotpilot.py` are their last versions, edited after their paid runs). `package` keeps their records as they are;
 nothing replays them.
+
+**Their text boxes in page px** (`decoded/`). The records matched by time carry no page position, so the boxes the k8
+runs decoded from these answers are kept as they were written (`k8/pNN/textboxes2_<pass>.json`, every sheet of 2000),
+one file per pass:
+
+| Pass | Boxes | What it is |
+|---|---|---|
+| `cw` | 9,993 | the turned tiles (`terra-turned-tiles`, `textpass.py cw`) |
+| `pl`, `cwpl` | 876, 10,869 | the place reads (`terra-place-reads`, `placeread.py`); `cwpl` = `cw` plus these |
+| `pa`, `cwpa` | 101, 10,970 | the place asks (`terra-place-asks`, `placeask.py`); `cwpa` = `cw` plus place reads and these |
+| `pb` | 44 | the split place asks (`terra-place-asks-split`, `placeask.py` with `SPLIT=1`) |
+| `pd` | 80 | the district asks (`terra-district-asks`, `distask.py`) |
+| `cwx` | 10,016 | no model call: `cw` plus the zoning-code boxes of the other passes that lie on the map, overlap no `cw` box and hold no print the old chain had (`sources/k8/zmerge_cwx.py`, 2026-11-11, $0). Every box is one of those passes' boxes: 9,993 from `cw`, 14 `cwpa`, 8 `pd`, 1 `pb`. |
 
 ## The red-mark reruns (2026-11-13)
 
@@ -183,7 +197,6 @@ and what `pull` brings is read.
 ## Gaps
 
 - **The [frozen reads](#frozen-reads) can't be asked again,** only checked against themselves (`verify`).
-- **One second pass has no maker found.** `textboxes2_cwx` was found only as a file, and the detector reads it.
 - **`by time` records have no image or prompt** (see above).
 - **`asked` is the cache file's time when the answer was first packaged.** For an answer applied from a shipped pack
   before that, it's when the pack was applied.
