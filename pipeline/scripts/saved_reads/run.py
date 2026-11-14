@@ -5,8 +5,9 @@ scripts build a client up front even when every answer is cached), so nothing is
 script.
 
   --out DIR      where the record goes (calls.jsonl, prompts.jsonl, schemas.jsonl, images/, runs.jsonl)
-  --scratch DIR  the R&D scripts hard-code the scratch folder they ran in; every mention of it reads DIR instead
-                 (the file on disk is not edited)
+  --scratch DIR  the R&D scripts (sources/, rerun/: kept exactly as they ran) hard-code the scratch folder they ran in
+                 (SCRATCH); every mention of it reads DIR instead (the file on disk is not edited).  A script that
+                 mentions SCRATCH is refused without --scratch, so that folder is never read.
   --live         let missing answers be asked (paid).  Refused unless SFZMAPS_MAX_USD caps the spend and an API key
                  is in the environment (uv run --env-file <the key file> ...).  With SR_MODEL / SR_EFFORT set, every
                  question goes to that model / effort instead of the one the script names: new answers, new keys.
@@ -22,6 +23,7 @@ from sfzmaps import llm
 
 from . import record
 
+# The R&D session's scratch folder, as the kept scripts spell it.  Only ever replaced, never read.
 SCRATCH = "/private/tmp/claude-501/-Users-sbuss-workspace-sfzoning/eb18d2fc-e22a-48a6-afbc-57c31cd3e134/scratchpad"
 
 
@@ -77,8 +79,10 @@ def main(args: list[str]) -> None:
     else:
         llm.CACHE_ONLY = True
         llm.OpenAIClient = _NoClient
-    record.install(out, script, args[1:])
     src = Path(script).read_text()
+    if SCRATCH in src and not scratch:
+        sys.exit(f"{Path(script).name} hard-codes the R&D scratch folder: give --scratch DIR (a work folder)")
+    record.install(out, script, args[1:])
     if scratch:
         src = src.replace(SCRATCH, scratch)
         sys.meta_path.insert(0, _Rewriter(Path(script).parent, scratch))

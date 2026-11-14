@@ -12,4 +12,11 @@ outside this branch. Each record's `script.git_blob` is the hash of its file her
 | `leaders.py` | `zoning-lines-rnd@8ec7b40:pipeline/scripts/zoning-lines/leaders.py` | `leader-reads` |
 
 They hand their crops to the model with the red mark shown blue. `../rerun/` holds the fixed copies that made the
-`-fixed-marks` reads. Don't edit these: they are the record of what ran.
+`-fixed-marks` reads. Don't edit these: they are the record of what ran. Some hard-code the R&D session's scratch
+folder; `python -m saved_reads run --scratch DIR` reads a work folder in its place, and refuses to run them without it.
+
+`k8/`: the code of the [frozen reads](../../../saved-reads/README.md#frozen-reads), from the k8 R&D run (2026-11-10/11):
+`textpass.py`, `placeread.py`, `placeask.py`, `distask.py` (each matches its records' `git_blob`), `read3.py`,
+`read3r.py`, `rotpilot.py` (their last versions, edited after their paid runs), the modules they import (`lotwalls.py`,
+`truth.py`, `yard.py`, `lotcode.py`, `lotcode_lib.py`), and `by_time.py` with `timed_reads.json`, which matched the
+`by time` records once. They read inputs (the old warp, old solves' places) that no checkout has, so nothing runs them.

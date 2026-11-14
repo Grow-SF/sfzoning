@@ -66,8 +66,8 @@ variant, scale                      turned / upright / cw; the label reader's pa
 model, provider, effort, params     the model and call settings
 prompt, prompt_sha256               the prompt's template, and the exact prompt (prompts.jsonl)
 answer_format                       sha256 of the answer schema (schemas.jsonl)
-asked                               when the answer was stored (UTC): the cache file's time
-script                              source (branch@commit:path, or the rescued scratch copy), git_blob,
+asked                               when the answer was first stored (UTC): the cache file's time then
+script                              source (where it ran: branch@commit:path, or the k8 R&D run), git_blob,
                                     args, env
 matched                             "replayed" or "by time" (below)
 answer                              the answer, exactly as the model gave it (coordinates in the image's px)
@@ -84,12 +84,19 @@ image_sha256, cache_key             the exact image bytes, and the answer's file
   - the place and district reads took their places from old solves;
   - the place and district scripts were edited after their paid runs.
 
-  So each answer is matched to the paid run that made it by when it was stored, and by its fields. `timed_reads.json`
-  (beside the code) gives each run's command, time window and session-transcript line. These records have no image
-  or prompt.
+  So each answer was matched once to the paid run that made it, by when it was stored and by its fields
+  (`scripts/saved_reads/sources/k8/by_time.py`, with `timed_reads.json`: each run's command, time window and
+  session-transcript line). These records have no image or prompt.
 
-  The files those runs wrote hold their decoded results: `pipeline/data/rnd/scratch-2026-11-13/k8/pNN/textboxes2_*.json`
-  and `zon2000/read3.npz`, `read3r.npz`.
+## Frozen reads
+
+The eight reads made in the k8 R&D run (2026-11-10/11) can't be asked again from any checkout: `terra-turned-tiles`,
+`terra-place-reads`, `terra-place-asks`, `terra-place-asks-split`, `terra-district-asks`, `third-read`,
+`third-reread`, `terra-rotation-pilot` (4,611 answers, 798 of them replayed and 3,813 matched by time). They were asked
+about the old warp, old solves' places and that day's sheet placements, which no checkout has. Their code is in
+`scripts/saved_reads/sources/k8/` as it was (the replayed ones match their records' `git_blob`; `read3.py`, `read3r.py`
+and `rotpilot.py` are their last versions, edited after their paid runs). `package` keeps their records as they are;
+nothing replays them.
 
 ## The red-mark reruns (2026-11-13)
 
@@ -133,32 +140,27 @@ cd pipeline/scripts && ../.venv/bin/python -m saved_reads verify
 # {'key rebuilt exactly': 39269, 'by time (no image to check)': 3813}   mismatches: 0   (2026-11-13)
 ```
 
-**Full: everything again from the scans.** From a clone of this branch, in `pipeline/`:
+**Full: everything again from the scans.** From a fresh clone of this branch, in `pipeline/`. Nothing outside the clone
+and what `pull` brings is read.
 
-1. **Data.** Set up the pipeline data for the scans and the pipeline's own outputs: `scripts/worktree-data.sh`, or
-   `uv run sfzmaps pull`.
-2. **Replay** every script with the API blocked. Every lookup must say `0 not in the cache`. It first writes this
-   package's answers into the answer cache (`restore-cache`; answers already there are kept), since `pull` brings only
-   the answers the build's own outputs were made from.
+1. **Data:** `uv sync && uv run sfzmaps pull` (the scans, the pipeline's outputs, and this package's images).
+2. **Replay** every script that can be replayed (all but the [frozen reads](#frozen-reads)) with the API blocked.
+   Every lookup must say `0 not in the cache`. It first writes this package's answers into the answer cache
+   (`restore-cache`; answers already there are kept), since `pull` brings only the answers the build's own outputs
+   were made from.
    ```
    zsh scripts/saved_reads/record_all.sh data/saved-reads/check
    ```
    The scripts it runs are in `scripts/saved_reads/sources/` (exactly as they ran) and `rerun/`, and the code-check
-   cases in `inputs/code-check-2000/`, all in this branch. The `k8` reads also need the rescued scratch folder
-   `pipeline/data/rnd/scratch-2026-11-13` (see [Gaps](#gaps)).
-3. **Package** the replay and compare it with this one:
+   cases in `inputs/code-check-2000/`.
+3. **Package** the replay over a copy of this package (it carries the frozen reads and the first-stored times from
+   it) and compare. Every file must be the same but `runs.jsonl`, which records the replay's own runs.
    ```
+   cp -R saved-reads data/saved-reads/check-package
    cd scripts && ../.venv/bin/python -m saved_reads package --calls ../data/saved-reads/check \
-     --out ../data/saved-reads/check-package --images ../data/saved-reads/check-images && cd ..
-   for f in saved-reads/reads/*.jsonl.gz; do
-     diff <(gunzip -c $f | jq -c 'del(.asked, .script)') \
-          <(gunzip -c data/saved-reads/check-package/reads/${f:t} | jq -c 'del(.asked, .script)') > /dev/null \
-       && echo "same  ${f:t}" || echo "DIFFERS ${f:t}"
-   done
-   diff saved-reads/images.manifest.tsv data/saved-reads/check-package/images.manifest.tsv && echo "images same"
+     --out ../data/saved-reads/check-package && cd ..
+   diff -r -x runs.jsonl -x README.md saved-reads data/saved-reads/check-package && echo "same"
    ```
-   `asked` is left out because restored answer files carry the restore time; `script` because it holds the replay's
-   own paths and, for the pipeline's label reads, the checkout's commit.
 
 ## Redo a read with a newer model (paid)
 
@@ -180,9 +182,8 @@ cd pipeline/scripts && ../.venv/bin/python -m saved_reads verify
 
 ## Gaps
 
-- **The `k8` scripts and their inputs** live only in the rescued scratch folder
-  `pipeline/data/rnd/scratch-2026-11-13` (git-ignored) and on the local branch `rnd/scratch-archive`. Their inputs
-  include old solves' place files and that day's transforms.
+- **The [frozen reads](#frozen-reads) can't be asked again,** only checked against themselves (`verify`).
 - **One second pass has no maker found.** `textboxes2_cwx` was found only as a file, and the detector reads it.
 - **`by time` records have no image or prompt** (see above).
-- **`asked` is the cache file's time.** For an answer applied from a shipped pack, it's when the pack was applied.
+- **`asked` is the cache file's time when the answer was first packaged.** For an answer applied from a shipped pack
+  before that, it's when the pack was applied.

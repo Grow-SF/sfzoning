@@ -1,5 +1,7 @@
-"""Build the saved-reads package from recorded runs (record_all.sh) and the reads matched by time (timed_reads.json):
-every answer with a readable image name and what it was asked with, ready to check in.
+"""Build the saved-reads package from recorded runs (record_all.sh): every answer with a readable image name and what
+it was asked with, ready to check in.  The frozen reads (FROZEN: they can't be asked again from any checkout) are
+carried over from the package as it stands, record for record; so are the times answers were first stored ("asked"),
+which a restored cache file doesn't keep.  Packaging a replay from a fresh clone therefore gives the package back.
 
 Writes, under OUT (the checked-in folder, default pipeline/saved-reads):
   reads/<read>.jsonl.gz   one line per answer of that read, sorted by image:
@@ -9,7 +11,7 @@ Writes, under OUT (the checked-in folder, default pipeline/saved-reads):
                             model, provider, effort, prompt (short name; text in prompts.jsonl), asked (when the
                             answer was stored, UTC), script (where the script is in git, its arguments and settings),
                             matched ("replayed": the record's prompt, image and model were asked again from the cache and
-                            make exactly its cache key; "by time": see timed_reads.json), answer (as the model gave it),
+                            make exactly its cache key; "by time": see sources/k8/timed_reads.json), answer (as given),
                             image_sha256, cache_key
   prompts.jsonl           {sha256, templates, text}: every exact prompt, and the templates (one per read) it belongs to
   schemas.jsonl           {sha256, schema}: every answer format
@@ -29,8 +31,10 @@ from pathlib import Path
 
 from sfzmaps import config
 
-from .by_time import stored_between
-
+# Made in the k8 R&D run (2026-11-10/11) from the old warp, old solves' places and that day's sheet placements, which
+# no checkout has: kept as they were recorded (their code: sources/k8).  A recorded folder of one of these is ignored.
+FROZEN = {"terra-turned-tiles", "terra-place-reads", "terra-place-asks", "terra-place-asks-split",
+          "terra-district-asks", "third-read", "third-reread", "terra-rotation-pilot"}
 READS = {   # recorded folder -> read name
     "codes2000-terra": "code-reads", "codes2000-sol": "code-reads", "leaders-sol": "leader-reads",
     "k8-textpass-cw": "terra-turned-tiles", "k8-placeread": "terra-place-reads", "k8-placeask": "terra-place-asks",
@@ -156,7 +160,26 @@ def _asked(key: str) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime((config.CACHE_DIR / key).stat().st_mtime))
 
 
+def _previous(out: Path) -> dict:
+    """The package as it stands in OUT: records per read, and the prompts, templates, schemas, runs and image rows."""
+    rows = lambda name: [json.loads(l) for l in open(out / name)] if (out / name).exists() else []  # noqa: E731
+    recs = defaultdict(list)
+    for f in sorted((out / "reads").glob("*.jsonl.gz")) if (out / "reads").exists() else []:
+        for line in gzip.open(f, "rt"):
+            r = json.loads(line)
+            recs[r["read"]].append(r)
+    manifest = {}
+    if (out / "images.manifest.tsv").exists():
+        for line in list(open(out / "images.manifest.tsv"))[1:]:
+            name, sha, size = line.rstrip("\n").split("\t")
+            manifest[name] = (sha, int(size))
+    return {"recs": recs, "prompts": rows("prompts.jsonl"), "templates": rows("templates.jsonl"),
+            "schemas": rows("schemas.jsonl"), "runs": rows("runs.jsonl"), "manifest": manifest}
+
+
 def main(calls: Path, out: Path, images: Path) -> None:
+    prev = _previous(out)
+    first_asked = {r["cache_key"]: r["asked"] for rs in prev["recs"].values() for r in rs if r.get("asked")}
     out.mkdir(parents=True, exist_ok=True)
     (out / "reads").mkdir(exist_ok=True)
     images.mkdir(parents=True, exist_ok=True)
@@ -165,6 +188,9 @@ def main(calls: Path, out: Path, images: Path) -> None:
     per_read, manifest, unplaced = defaultdict(dict), {}, defaultdict(int)
     for folder in sorted(p for p in calls.iterdir() if (p / "calls.jsonl").exists()):
         read = _read_of(folder.name)
+        if read in FROZEN:
+            print(f"  {folder.name}: {read} is frozen, its records come from the package")
+            continue
         for line in open(folder / "runs.jsonl"):
             r = json.loads(line)
             runs.setdefault(r["run"], {}).update(r)
@@ -201,29 +227,28 @@ def main(calls: Path, out: Path, images: Path) -> None:
             per_read[read][(name, c["key"])] = {
                 "read": read, **d, "image": name, "model": c["model"][1], "provider": c["model"][0],
                 "effort": c["effort"], "params": c["params"], "prompt": tname, "prompt_sha256": c["prompt"],
-                "answer_format": c.get("schema"), "asked": _asked(c["key"]),
+                "answer_format": c.get("schema"), "asked": first_asked.get(c["key"]) or _asked(c["key"]),
                 "script": {"source": run.get("source", ""), "git_blob": run.get("script_git_blob"),
                            "args": [_arg(a) for a in run.get("argv", [])],
                            "env": {k: _arg(v) for k, v in run.get("env", {}).items()}},
                 "matched": "replayed", "answer": json.loads((config.CACHE_DIR / c["key"]).read_text()),
                 "image_sha256": c["image"], "cache_key": c["key"]}
-    done = {k for recs in per_read.values() for (_, k) in recs}
-    spec = json.loads((Path(__file__).parent / "timed_reads.json").read_text())
-    for t in spec["reads"]:
-        n = 0
-        for m, key, answer in stored_between(t["from"], t["to"]):
-            if key in done or (t["fields"] and not set(t["fields"]) <= set(answer)):
-                continue
-            done.add(key)
-            n += 1
-            per_read[t["read"]][("~" + key, key)] = {
-                "read": t["read"], "series": SER, "sheet": None, "image": None, "model": t["model"],
-                "asked": _asked(key), "matched": "by time",
-                "script": {"source": f"rescued scratch copy: pipeline/data/rnd/scratch-2026-11-13/{t['script']}",
-                           "args": t["args"], "env": t.get("env", {}), "command": t["command"],
-                           "transcript_line": t["line"], "window": [t["from"], t["to"]]},
-                "answer": answer, "cache_key": key}
-        print(f"  by time, {t['read']}: {n} answers")
+    prev_prompts = {p["sha256"]: p["text"] for p in prev["prompts"]}
+    prev_schemas = {s["sha256"]: s["schema"] for s in prev["schemas"]}
+    carried_templates = [t for t in prev["templates"] if t["read"] in FROZEN]
+    for read in sorted(FROZEN) if prev["recs"] else []:    # carried over, record for record (none into a new folder)
+        if not prev["recs"].get(read):
+            raise SystemExit(f"frozen read {read} has no records in {out}: package over a copy of the package")
+        for r in prev["recs"][read]:
+            per_read[read][(r.get("image") or "~" + r["cache_key"], r["cache_key"])] = r
+            if r.get("image"):
+                manifest[r["image"]] = prev["manifest"][r["image"]]
+            if r.get("prompt_sha256"):
+                prompts[r["prompt_sha256"]] = prev_prompts[r["prompt_sha256"]]
+                used[r["prompt_sha256"]].add(r["prompt"])
+            if r.get("answer_format"):
+                schemas[r["answer_format"]] = prev_schemas[r["answer_format"]]
+    carried_runs = [r for r in prev["runs"] if "/k8/" in r.get("script", "")]
     for read, recs in sorted(per_read.items()):
         # mtime 0: the same records give the same bytes, so a repackage changes only what changed
         with io.TextIOWrapper(gzip.GzipFile(out / "reads" / f"{read}.jsonl.gz", "wb", 9, mtime=0)) as gz:
@@ -237,19 +262,24 @@ def main(calls: Path, out: Path, images: Path) -> None:
         for sha, tnames in sorted(used.items(), key=lambda kv: (sorted(kv[1]), kv[0])):
             f.write(json.dumps({"sha256": sha, "templates": sorted(tnames), "text": prompts[sha]}) + "\n")
     with open(out / "templates.jsonl", "w") as f:          # each template: the prompt with what varies blanked out
-        for (read, text), tname in sorted(templates.names.items(), key=lambda kv: kv[1]):
-            f.write(json.dumps({"template": tname, "read": read, "prompts": templates.count[tname], "text": text}) + "\n")
+        made = [{"template": tname, "read": read, "prompts": templates.count[tname], "text": text}
+                for (read, text), tname in templates.names.items()]
+        for t in sorted(made + carried_templates, key=lambda t: t["template"]):
+            f.write(json.dumps(t) + "\n")
     with open(out / "schemas.jsonl", "w") as f:
         for sha, s in sorted(schemas.items()):
             f.write(json.dumps({"sha256": sha, "schema": s}, sort_keys=True) + "\n")
     with open(out / "runs.jsonl", "w") as f:
-        for k in sorted(runs):
+        made = []
+        for k in runs:
             r = {kk: v for kk, v in runs[k].items() if kk not in ("cwd", "data_dir", "script")}
             r["argv"] = [_arg(a) for a in r.get("argv", [])]
             r["env"] = {kk: _arg(v) for kk, v in r.get("env", {}).items()}
             if "script_globals" in r:
                 r["script_globals"] = {kk: _arg(v) if isinstance(v, str) else v for kk, v in r["script_globals"].items()}
             r["script"] = r.pop("source", "") or Path(runs[k].get("script", "")).name
+            made.append(r)
+        for r in sorted(made + carried_runs, key=lambda r: r["run"]):
             f.write(json.dumps(r, sort_keys=True) + "\n")
     with open(out / "images.manifest.tsv", "w") as f:
         f.write("image\tsha256\tbytes\n")

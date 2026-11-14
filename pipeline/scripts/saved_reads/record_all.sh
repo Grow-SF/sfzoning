@@ -8,22 +8,19 @@
 #                       every code-check case (Terra and Sol, high effort)                 reread.py
 #   leaders-sol         Sol, leader read of every 2000 use code, medium and low effort     sources/leaders.py
 #   fixed-marks         the code and leader reads asked again with their marks red          rerun/*.py
-#   k8-*                2000 second passes and third reads, as run in k8 with pay.sh       k8/*.py (the scratch copy)
-#                       (SFZ_CORR mirror data_ay2): textpass.py cw; placeread.py; placeask.py; placeask.py SPLIT=1;
-#                       distask.py; read3.py; read3r.py
 #   pipeline-labels     Sol, the pipeline's district label reads, every series             districts/labels.py
 # sources/ holds the scripts of the first three exactly as they ran (each record's script.git_blob is the file's hash);
-# SR_SOURCE names where each ran.  The code-check cases come from inputs/code-check-2000.
-# The k8 scripts write into their scratch folder, so they run on a copy-on-write clone of the rescued one (with k6:
-# k8/p06 and k8/p07 are links into run k6).
-# usage: [SR_PIPELINE=DIR] [ONLY="terra-boxes codes2000 leaders-sol k8 pipeline-labels fixed-marks"] record_all.sh [OUT]
+# SR_SOURCE names where each ran.  The code-check cases come from inputs/code-check-2000.  Everything it reads is in
+# this checkout or comes with sfzmaps pull.
+# Not replayed: the frozen k8 reads (package.py FROZEN; their code is in sources/k8).  They were asked about the old warp
+# and old solves, which no checkout has, so the package keeps their records as they were made.
+# usage: [SR_PIPELINE=DIR] [ONLY="terra-boxes codes2000 leaders-sol pipeline-labels fixed-marks"] record_all.sh [OUT]
 P=${SR_PIPELINE:-${0:A:h:h:h}}                                # the pipeline folder (data, venv, git)
 PKG=${0:A:h:h}                                                # the folder holding this package
 OUT=${1:-$P/data/saved-reads/calls}
 SRC=$PKG/saved_reads/sources                                  # the reading scripts, as they ran
 CASES=${PKG:h}/inputs/code-check-2000/codecheck_cases_published.json
 W=$P/data/saved-reads/work
-RESCUED=$P/data/rnd/scratch-2026-11-13
 mkdir -p $OUT $W
 cd $P
 PW="prob-warp@99f85e7:pipeline/scripts/prob-warp"             # where each ran (branch@commit:folder)
@@ -75,26 +72,9 @@ done
 count leaders-sol
 
 fi
-if want k8; then
-echo "k8 $(date +%H:%M:%S)"
-WS=$W/scratch
-if [ ! -d $WS ]; then
-  mkdir -p $WS && for f in k8 k6 zon2000 corrpatch data_ay2; do /bin/cp -cR $RESCUED/$f $WS/; done   # macOS clones: no extra disk
-fi
-K8=(env -u OPENAI_API_KEY SFZ_CORR=1 PYTHONPATH=$PKG:$WS/corrpatch:$WS/k8 SFZMAPS_DATA_DIR=$WS/data_ay2 .venv/bin/python -W ignore -m saved_reads run --scratch $WS)
-k8() { local name=$1; shift; SR_SOURCE="rescued scratch copy: pipeline/data/rnd/scratch-2026-11-13/k8/$1" $K8 --out $OUT/k8-$name $WS/k8/$1 ${@:2} > $W/k8-$name.log 2>&1 || echo "  FAILED k8 $name: $(tail -1 $W/k8-$name.log)"; count k8-$name; }
-k8 textpass-cw textpass.py cw
-k8 placeread placeread.py c_cwb_pfitf1.npz 40
-k8 placeask placeask.py c_cwb_pfitf1.npz 0 236
-SPLIT=1 k8 placeask-split placeask.py c_cwq_pfitf1.npz 0 2000
-k8 distask distask.py cws
-k8 read3 read3.py
-k8 read3r read3r.py
-
-fi
 if want pipeline-labels; then
 echo "pipeline-labels $(date +%H:%M:%S)"
-SR_SOURCE="saved-reads: pipeline/scripts/saved_reads/pipeline_labels.py; pipeline src/sfzmaps/districts/labels.py @ $(git rev-parse --short HEAD)" $RUN --out $OUT/pipeline-labels $PKG/saved_reads/pipeline_labels.py > $W/pipeline-labels.log 2>&1
+SR_SOURCE="saved-reads: pipeline/scripts/saved_reads/pipeline_labels.py, with the pipeline's src/sfzmaps/districts/labels.py" $RUN --out $OUT/pipeline-labels $PKG/saved_reads/pipeline_labels.py > $W/pipeline-labels.log 2>&1
 grep -c MISS $W/pipeline-labels.log | sed 's/^/  sheets with a missing answer: /'
 count pipeline-labels
 fi
