@@ -12,7 +12,8 @@ def test_every_series_is_in_exactly_one_stage():
     table = build.stages()
     owned = [s for st in table.values() for s in st.series]
     assert sorted(owned) == sorted(SERIES) and len(owned) == len(set(owned))
-    assert list(table)[-1] == "shared" and set(table["shared"].upstream) == set(table) - {"shared"}
+    # shared comes last and needs every stage but the saved reads' images, which no output is made from
+    assert list(table)[-1] == "shared" and set(table["shared"].upstream) == set(table) - {"shared", "saved-reads"}
 
 
 def test_a_period_reads_heights_before_zoning_and_never_special_use():
@@ -190,3 +191,46 @@ def test_a_failed_record_is_reported_not_raised():
             raise RuntimeError("dvc commit: lock")
     res = build.run_build(["a", "b"], _table(), 2, run_stage=lambda n: None, commit=commit)
     assert "recording it failed" in res.failed["a"] and set(res.ran) == {"a", "b"} and not res.ok
+
+
+def _saved_reads(tmp_path, images: dict[str, bytes], listed: dict[str, bytes]):
+    """an images folder holding `images`, and a manifest naming `listed` (name -> the bytes it expects)"""
+    import hashlib
+    d = tmp_path / "images"
+    for name, b in images.items():
+        (d / name).parent.mkdir(parents=True, exist_ok=True)
+        (d / name).write_bytes(b)
+    m = tmp_path / "images.manifest.tsv"
+    m.write_text("image\tsha256\tbytes\n" + "".join(
+        f"{n}\t{hashlib.sha256(b).hexdigest()}\t{len(b)}\n" for n, b in listed.items()))
+    return m, d
+
+
+def test_saved_reads_stage_is_frozen_owns_the_images_and_nothing_depends_on_it():
+    table = build.stages()
+    st = table["saved-reads"]
+    assert st.frozen and build.stage_outs(st) == ["data/saved-reads/images"]
+    assert build.stage_deps(st) == ["saved-reads/images.manifest.tsv"]
+    assert not any("saved-reads" in other.upstream for other in table.values())
+    assert "src/sfzmaps/savedreads.py" not in build._code_deps()     # changing it restales no other stage
+
+
+def test_saved_reads_check_names_missing_changed_and_unlisted_images(tmp_path):
+    from sfzmaps import savedreads
+    m, d = _saved_reads(tmp_path, {"a/1.png": b"one", "a/2.png": b"two!", "b/x.png": b"extra"},
+                        {"a/1.png": b"one", "a/2.png": b"two", "a/3.png": b"three"})
+    assert sorted(savedreads.check(m, d)) == ["differs from the manifest: a/2.png", "missing: a/3.png",
+                                               "not in the manifest: b/x.png"]
+    m, d = _saved_reads(tmp_path / "ok", {"a/1.png": b"one"}, {"a/1.png": b"one"})
+    assert savedreads.check(m, d) == []
+
+
+def test_saved_reads_stage_fails_unless_the_images_match(tmp_path, monkeypatch):
+    from sfzmaps import savedreads
+    m, d = _saved_reads(tmp_path, {"a/1.png": b"one"}, {"a/1.png": b"uno"})
+    monkeypatch.setattr(savedreads, "manifest_path", lambda: m)
+    monkeypatch.setattr(savedreads, "images_dir", lambda: d)
+    with pytest.raises(build.StageFailed, match="differs from the manifest: a/1.png"):
+        build.run_stage("saved-reads", run=lambda argv, env: pytest.fail("runs no sfzmaps command"))
+    (d / "a/1.png").write_bytes(b"uno")
+    build.run_stage("saved-reads", run=lambda argv, env: pytest.fail("runs no sfzmaps command"))
