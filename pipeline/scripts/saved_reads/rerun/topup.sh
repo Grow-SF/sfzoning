@@ -9,7 +9,7 @@ PKG=${R:h:h}
 P=${SR_PIPELINE:-${PKG:h}}
 W=$P/data/saved-reads/work/rerun-rest
 cd $P
-SR_SOURCE="saved-reads@$(git rev-parse --short saved-reads):pipeline/scripts/saved_reads/rerun/reread.py" THREADS=12 SFZMAPS_MAX_USD=$CAP \
+SR_SOURCE="$(git -C $R rev-parse --short HEAD):pipeline/scripts/saved_reads/rerun/reread.py" THREADS=12 SFZMAPS_MAX_USD=$CAP \
   uv run --env-file $KEY --project $P env -u SFZMAPS_DATA_DIR -u SFZ_CORR PYTHONPATH=$PKG python -W ignore -m saved_reads run --live \
   --out $P/data/saved-reads/calls-live/codes2000-reread-${M#gpt-6.1-}-fixed --scratch $W $R/reread.py $M high all > $W/topup_${M#gpt-6.1-}.log 2>&1
 tail -n 1 $W/topup_${M#gpt-6.1-}.log

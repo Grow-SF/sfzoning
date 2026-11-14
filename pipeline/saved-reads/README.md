@@ -40,10 +40,10 @@ the image is:
 
 | Read | Answers | Model, effort | What the model was shown | What it was asked | When (UTC) | Made by | Used by |
 |---|---|---|---|---|---|---|---|
-| `terra-page-boxes` | 14,829 | Terra, low | 768 × 768 px tiles (160 px overlap) of each whole page: 179 sheets of the 9 series 1960–2000 | every piece of printed text: text, kind (zoning code, block number, street name, other), box, direction, angle | 11-06 … 11-08 | `prob-warp:…/allyears/textboxes.py` | solver (2000); detector: training targets. (The warp erased the codes it fitted to these until 11-13; it no longer removes text.) |
+| `terra-page-boxes` | 14,829 | Terra, low | 768 × 768 px tiles (160 px overlap) of each whole page: 179 sheets of the 9 series 1960–2000 | every piece of printed text: text, kind (zoning code, block number, street name, other), box, direction, angle | 11-06 … 11-08 | `sources/textboxes.py` | solver (2000); detector: training targets. (The warp erased the codes it fitted to these until 11-13; it no longer removes text.) |
 | `terra-turned-tiles` | 702 | Terra, low | the 2000 tiles turned a quarter clockwise | same as page boxes | 11-06 … 11-11 | `k8/textpass.py cw` | solver: extra readings and prints; detector: "unknown" areas |
-| `code-reads` | 6,592 | Terra and Sol, high | a 320 px square around each of the 1,648 use codes on the 2000 sheets, shown at 2×, with the code circled in red | t1, the leader map: what code is circled, and does a leader line carry it elsewhere (and where); t2, the re-check: read the code nearest the centre | 11-05 | `prob-warp:…/codes2000/leaders2.py map`, `reread.py all` | the 2000 code list (`codes_final.json`), with the owner's answers (the warp's until 11-13) |
-| `leader-reads` | 3,296 | Sol, medium and low | the same crops | leader read (t1 medium, t2 low) | 11-05 | `zoning-lines-rnd:…/leaders.py sheet` | the leader-check page's cases |
+| `code-reads` | 6,592 | Terra and Sol, high | a 320 px square around each of the 1,648 use codes on the 2000 sheets, shown at 2×, with the code circled in red | t1, the leader map: what code is circled, and does a leader line carry it elsewhere (and where); t2, the re-check: read the code nearest the centre | 11-05 | `sources/leaders2.py map`, `reread.py all` | the 2000 code list (`codes_final.json`), with the owner's answers in `pipeline/inputs/code-check-2000` (the warp's until 11-13) |
+| `leader-reads` | 3,296 | Sol, medium and low | the same crops | leader read (t1 medium, t2 low) | 11-05 | `sources/leaders.py sheet` | the leader-check page's cases |
 | `code-reads-fixed-marks` | 6,592 | Terra and Sol, high | as `code-reads`, the mark red | as `code-reads` | 11-13 | `saved-reads:…/rerun/leaders2.py map`, `reread.py all` | in place of `code-reads` (below) |
 | `leader-reads-fixed-marks` | 3,296 | Sol, medium and low | as `leader-reads`, the mark red | as `leader-reads` | 11-13 | `saved-reads:…/rerun/leaders.py sheet` | in place of `leader-reads` |
 | `pipeline-label-reads` | 3,866 | Sol, low | the pipeline's tiles of each district map page (245 sheets, 14 series), at the series' district scale | every district label: code, kind, point, confidence | 10-30 … 10-31 | the pipeline's `districts/labels.py` | solver: the second reader; detector: "unknown" areas (the warp's 1960–1990 code lists until 11-13) |
@@ -146,8 +146,9 @@ cd pipeline/scripts && ../.venv/bin/python -m saved_reads verify
    ```
    zsh scripts/saved_reads/record_all.sh data/saved-reads/check
    ```
-   It needs the branches `prob-warp` and `zoning-lines-rnd` for the scripts. The `k8` reads also need the rescued
-   scratch folder `pipeline/data/rnd/scratch-2026-11-13` (see [Gaps](#gaps)).
+   The scripts it runs are in `scripts/saved_reads/sources/` (exactly as they ran) and `rerun/`, and the code-check
+   cases in `inputs/code-check-2000/`, all in this branch. The `k8` reads also need the rescued scratch folder
+   `pipeline/data/rnd/scratch-2026-11-13` (see [Gaps](#gaps)).
 4. **Package** the replay and compare it with this one:
    ```
    cd scripts && ../.venv/bin/python -m saved_reads package --calls ../data/saved-reads/check \
@@ -159,8 +160,8 @@ cd pipeline/scripts && ../.venv/bin/python -m saved_reads verify
    done
    diff saved-reads/images.manifest.tsv data/saved-reads/check-package/images.manifest.tsv && echo "images same"
    ```
-   `asked` is left out because restored answer files carry the restore time; `script` because the branches' commits
-   move.
+   `asked` is left out because restored answer files carry the restore time; `script` because it holds the replay's
+   own paths and, for the pipeline's label reads, the checkout's commit.
 
 ## Redo a read with a newer model (paid)
 

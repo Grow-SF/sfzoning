@@ -15,8 +15,8 @@ OUT=${1:-$P/data/saved-reads/calls-live}             # the paid runs' own record
 W=$P/data/saved-reads/work/rerun
 mkdir -p $W/leaders2 $W/codecheck $W/leaders
 cd $P
-git show prob-warp:pipeline/scripts/prob-warp/codes2000/answers/codecheck_cases_published.json > $W/codecheck/cases.json
-SRC="saved-reads@$(git rev-parse --short saved-reads):pipeline/scripts/saved_reads/rerun"
+cp ${PKG:h}/inputs/code-check-2000/codecheck_cases_published.json $W/codecheck/cases.json
+SRC="$(git -C $R rev-parse --short HEAD):pipeline/scripts/saved_reads/rerun"      # the commit these scripts are at
 LIVE=(uv run --env-file $KEY --project $P env -u SFZMAPS_DATA_DIR -u SFZ_CORR PYTHONPATH=$PKG python -W ignore -m saved_reads run --live)
 spent() { grep -h 'spent' $1 | tail -n 1; }
 
