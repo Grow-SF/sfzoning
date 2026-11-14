@@ -13,7 +13,7 @@
 #   pipeline-labels     Sol, the pipeline's district label reads, every series             districts/labels.py
 # The k8 scripts write into their scratch folder, so they run on a copy-on-write clone of the rescued one (with k6:
 # k8/p06 and k8/p07 are links into run k6).
-# usage: [SR_PIPELINE=DIR] [ONLY="terra-boxes codes2000 leaders-sol k8 pipeline-labels"] record_all.sh [OUT]
+# usage: [SR_PIPELINE=DIR] [ONLY="terra-boxes codes2000 leaders-sol k8 pipeline-labels fixed-marks"] record_all.sh [OUT]
 P=${SR_PIPELINE:-${0:A:h:h:h}}                                # the pipeline folder (data, venv, git)
 PKG=${0:A:h:h}                                                # the folder holding this package
 OUT=${1:-$P/data/saved-reads/calls}
@@ -93,5 +93,28 @@ echo "pipeline-labels $(date +%H:%M:%S)"
 SR_SOURCE="saved-reads: pipeline/scripts/saved_reads/pipeline_labels.py; pipeline src/sfzmaps/districts/labels.py @ $(git rev-parse --short HEAD)" $RUN --out $OUT/pipeline-labels $PKG/saved_reads/pipeline_labels.py > $W/pipeline-labels.log 2>&1
 grep -c MISS $W/pipeline-labels.log | sed 's/^/  sheets with a missing answer: /'
 count pipeline-labels
+fi
+if want fixed-marks; then
+# the code reads and leader reads asked again with their marks red (rerun/rerun.sh, paid), replayed from the cache
+echo "fixed-marks $(date +%H:%M:%S)"
+F=$W/fixed-marks
+R=$PKG/saved_reads/rerun
+rm -rf $F && mkdir -p $F/leaders2 $F/codecheck $F/leaders
+git show prob-warp:pipeline/scripts/prob-warp/codes2000/answers/codecheck_cases_published.json > $F/codecheck/cases.json
+FX="saved-reads@$(git rev-parse --short saved-reads):pipeline/scripts/saved_reads/rerun"
+for m in terra sol; do
+  SR_SOURCE=$FX/leaders2.py THREADS=12 $RUN --out $OUT/codes2000-$m-fixed --scratch $F $R/leaders2.py map gpt-6.1-$m $R/leaders2_v2.txt high \
+    > $F/map_$m.log 2>&1 || echo "  FAILED leader map $m: $(grep -m1 -E 'LLMCacheMiss|Error' $F/map_$m.log)"
+  SR_SOURCE=$FX/reread.py THREADS=12 $RUN --out $OUT/codes2000-$m-fixed --scratch $F $R/reread.py gpt-6.1-$m high all \
+    > $F/reread_$m.log 2>&1 || echo "  FAILED re-check $m: $(grep -m1 -E 'LLMCacheMiss|Error' $F/reread_$m.log)"
+  count codes2000-$m-fixed
+done
+for e in medium low; do
+  for n in 01 02 03 04 05 06 07 08 09 10 11 12 13; do
+    SR_SOURCE=$FX/leaders.py $RUN --out $OUT/leaders-sol-fixed --scratch $F $R/leaders.py sheet 2000-digital-zoning-p$n $e \
+      > $F/leaders-p$n-$e.log 2>&1 || echo "  FAILED leader read p$n $e: $(grep -m1 -E 'LLMCacheMiss|Error' $F/leaders-p$n-$e.log)"
+  done
+done
+count leaders-sol-fixed
 fi
 echo "done $(date +%H:%M:%S)"

@@ -69,12 +69,29 @@ def main(package: Path, images: Path, calls: Path, answers: Path, cases: Path) -
     for cid, a in json.load(open(answers)).items():
         if a["answer"] in ("ok", "fix", "nolabel") and cid in pub:
             truth[cid] = norm({"ok": pub[cid]["code"], "fix": a.get("code"), "nolabel": None}[a["answer"]])
+    def changed(kind, o, n) -> int:
+        """how many of the things later steps use differ (each counts: the code read, whether a leader is seen,
+        where it points)"""
+        a = o["answer"]
+        if kind == "re-check":
+            return int(norm(a["code"]) != norm(n["code"]))
+        moved = a["has_leader"] and n["has_leader"] and np.hypot(a["x"] - n["x"], a["y"] - n["y"]) > 30
+        code = kind == "leader map" and norm(a["code_read"]) != norm(n["code_read"])
+        return int(code) + int(bool(a["has_leader"]) != bool(n["has_leader"])) + int(bool(moved))
+
+    totals = Counter()
     for (kind, model, effort), ps in sorted(pairs.items()):
         seen = {}
         for o, n in ps:
             seen[(o["image"])] = (o, n)              # a crop asked twice in a run counts once
         ps = list(seen.values())
-        line = f"{kind:12s} {model:14s} {effort:6s} {len(ps):5d} pairs:"
+        nch = [changed(kind, o, n) for o, n in ps]
+        totals[(model, "answers")] += len(ps)
+        totals[(model, "changes")] += sum(nch)
+        totals[(model, "answers changed")] += sum(c > 0 for c in nch)
+        print(f"{kind:12s} {model:14s} {effort:6s} {len(ps):5d} answers: {sum(nch)} changes in "
+              f"{sum(c > 0 for c in nch)} answers")
+        line = f"{'':12s} {'':14s} {'':6s} {'':5s}   in detail:"
         if kind == "re-check":
             ch = sum(norm(o["answer"]["code"]) != norm(n["code"]) for o, n in ps)
             line += f" code differs {ch} ({ch / len(ps):.1%})"
@@ -95,6 +112,11 @@ def main(package: Path, images: Path, calls: Path, answers: Path, cases: Path) -
             line += (f" leader seen {lo} -> {ln} (changed on {flip}, {flip / len(ps):.1%});"
                      f" both see one but it points elsewhere: {moved}")
         print(line)
+    for m in sorted({m for m, _ in totals}):
+        print(f"total {m}: {totals[(m, 'changes')]} changes in {totals[(m, 'answers changed')]} of "
+              f"{totals[(m, 'answers')]} answers")
+    s = lambda k: sum(v for (m, kk), v in totals.items() if kk == k)
+    print(f"total: {s('changes')} changes in {s('answers changed')} of {s('answers')} answers")
     if unpaired:
         print("not paired with an original:", dict(unpaired))
 

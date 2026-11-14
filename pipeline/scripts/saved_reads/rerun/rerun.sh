@@ -11,7 +11,7 @@ set -e
 R=${0:A:h}                                                    # this folder (saved_reads/rerun)
 PKG=${R:h:h}                                                  # the folder holding the saved_reads package
 P=${SR_PIPELINE:-${PKG:h}}                                    # the pipeline folder
-OUT=${1:-$P/data/saved-reads/calls}
+OUT=${1:-$P/data/saved-reads/calls-live}             # the paid runs' own records; record_all.sh replays them into calls/
 W=$P/data/saved-reads/work/rerun
 mkdir -p $W/leaders2 $W/codecheck $W/leaders
 cd $P
