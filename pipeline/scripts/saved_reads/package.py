@@ -18,6 +18,7 @@ Writes, under OUT (the checked-in folder, default pipeline/saved-reads):
 and under IMAGES (default pipeline/data/saved-reads/images, not in git): every image at its readable name.
 usage: python -m saved_reads package --calls CALLS_DIR [--out OUT] [--images IMAGES]"""
 import gzip
+import io
 import json
 import re
 import shutil
@@ -224,7 +225,8 @@ def main(calls: Path, out: Path, images: Path) -> None:
                 "answer": answer, "cache_key": key}
         print(f"  by time, {t['read']}: {n} answers")
     for read, recs in sorted(per_read.items()):
-        with gzip.open(out / "reads" / f"{read}.jsonl.gz", "wt", compresslevel=9) as gz:
+        # mtime 0: the same records give the same bytes, so a repackage changes only what changed
+        with io.TextIOWrapper(gzip.GzipFile(out / "reads" / f"{read}.jsonl.gz", "wb", 9, mtime=0)) as gz:
             for k in sorted(recs):
                 gz.write(json.dumps(recs[k], sort_keys=True) + "\n")
         by = defaultdict(int)
