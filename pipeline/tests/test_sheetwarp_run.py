@@ -190,6 +190,7 @@ def test_warp_rejects_an_unknown_series():
 
 
 def test_warp_checks_that_its_tools_come_from_pixi(monkeypatch):
+    monkeypatch.delenv("SFZMAPS_SYSTEM_TOOLS", raising=False)
     checked, corrected = [], []
     monkeypatch.setattr(build, "require_toolchain", checked.append)
     monkeypatch.setattr(run, "correct_series", lambda series, jobs, force: corrected.append(series) or {})

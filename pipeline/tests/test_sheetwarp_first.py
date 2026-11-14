@@ -42,15 +42,24 @@ def _first_correction_inputs(n_held_line, n_held_cp):
     return targets, shifts, held
 
 
-@pytest.mark.parametrize("n_held_line, n_held_cp", [(0, 3), (3, 0)])
-def test_the_first_correction_with_nothing_held_has_nothing_to_fit(monkeypatch, n_held_line, n_held_cp):
-    # the mean of an empty term is NaN, which would make the whole correction NaN
+def _run_first_correction(monkeypatch, n_held_line, n_held_cp):
     targets, shifts, held = _first_correction_inputs(n_held_line, n_held_cp)
     monkeypatch.setattr(first, "propagated_shifts", lambda *a: shifts)
     monkeypatch.setattr(first, "_inputs", lambda *a: held)
     sheet = SimpleNamespace(series="s", name="n")
+    return first.first_correction(sheet, None, targets, None)
+
+
+def test_the_first_correction_with_no_held_block_side_points_has_nothing_to_fit(monkeypatch):
+    # the mean of an empty term is NaN, which would make the whole correction NaN
     with pytest.raises(NothingToFit, match="no held"):
-        first.first_correction(sheet, None, targets, None)
+        _run_first_correction(monkeypatch, 0, 3)
+
+
+def test_the_first_correction_with_no_held_control_points_is_still_finite(monkeypatch):
+    # the empty mean's NaN loss has an empty gradient into the grid, so the grid stays finite
+    correction = _run_first_correction(monkeypatch, 3, 0)
+    assert np.isfinite(correction.grid).all()
 
 
 def test_held_sides_leaves_out_points_near_a_sides_ends():

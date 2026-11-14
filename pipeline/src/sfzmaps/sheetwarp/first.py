@@ -208,9 +208,8 @@ def first_correction(sheet: Sheet, sides: SidePoints, targets: Targets, held: np
 
     shifts = propagated_shifts(sheet, sides, targets, held)
     C = _inputs(sheet, sides, targets, held)
-    for what, points in (("block-side points", C.held_line), ("control points", C.held_cp)):
-        if not len(points):           # the mean of an empty term is NaN: the whole fit would be NaN
-            raise NothingToFit(f"{sheet.series}/{sheet.name}: no held {what} on the crop for the first correction")
+    if not len(C.held_line):          # the mean of an empty term is NaN: the whole fit would be NaN
+        raise NothingToFit(f"{sheet.series}/{sheet.name}: no held block-side points on the crop for the first correction")
     torch.set_num_threads(8)
     Hp, HN, HC = C.held_line, C.held_n, C.held_cp
     Fp, FN, FO = shifts.free, shifts.free_n, shifts.free_off
