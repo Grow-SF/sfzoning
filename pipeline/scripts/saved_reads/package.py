@@ -42,6 +42,10 @@ SER = "2000-digital-zoning"
 def _read_of(folder: str) -> str:
     if folder in READS:
         return READS[folder]
+    if folder.startswith("codes2000-") and folder.endswith("-fixed"):
+        return "code-reads-fixed-marks"           # rerun/rerun.sh: the marks red, as the prompts say
+    if folder.startswith("leaders-sol-fixed"):
+        return "leader-reads-fixed-marks"
     return "terra-page-boxes" if folder.startswith("terra-boxes-") else folder
 
 
