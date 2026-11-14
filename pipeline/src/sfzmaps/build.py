@@ -42,7 +42,7 @@ DVC = ["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc"]
 # Code that can't change a build output: the editor, the build driver, bundling, evaluation,
 # shipping (ship, cachepack, datapack, release), the toolchain check and the GIS downloads.
 CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "ship.py", "cachepack.py",
-                "datapack.py", "release.py", "toolchain.py", "downloads", "__pycache__"}
+                "datapack.py", "release.py", "toolchain.py", "downloads", "savedreads.py", "__pycache__"}
 # The exit code of a pipeline command stopped by llm.FATAL (the $0 cap, or no API key): "needs a
 # paid read", not a bug. Same value as cli.PAID_READ_EXIT (a test keeps them equal).
 PAID_READ_EXIT = 75
@@ -64,6 +64,10 @@ class Stage:
     def refdata(self) -> bool:
         return self.name == "refdata"
 
+    @property
+    def saved_reads(self) -> bool:
+        return self.name == "saved-reads"
+
 
 def stages() -> dict[str, Stage]:
     """Every stage, in dependency order (shared last)."""
@@ -75,13 +79,16 @@ def stages() -> dict[str, Stage]:
     # The DataSF reference data, recorded and shipped like any output (a fresh checkout gets
     # main's, not today's): frozen, because fetching it again would change every build.
     out: dict[str, Stage] = {"refdata": Stage("refdata", (), (), frozen=True)}
+    # The images the saved vision reads were given (pipeline/saved-reads): made by a replay outside the build, only
+    # checked here and recorded, so they ship and pull with everything else.  Nothing depends on them.
+    out["saved-reads"] = Stage("saved-reads", (), (), frozen=True)
     for period, members in periods.items():
         role = {s: SERIES[s].role for s in members}
         reads = sorted((s for s in members if role[s] != "skip"), key=lambda s: role[s] != "height")
         name = f"edition-{period}" if len(members) == 1 else f"period-{period}"
         out[name] = Stage(name, tuple(members), tuple(reads), ("refdata",))
     out["today"] = Stage("today", (), ("today",), ("refdata",))
-    out["shared"] = Stage("shared", (), (), tuple(out))
+    out["shared"] = Stage("shared", (), (), tuple(n for n in out if n != "saved-reads"))
     return out
 
 
@@ -135,6 +142,8 @@ def _code_deps() -> list[str]:
 def stage_deps(st: Stage) -> list[str]:
     if st.refdata:
         return []
+    if st.saved_reads:
+        return ["saved-reads/images.manifest.tsv"]
     deps = _code_deps() + ["pyproject.toml", "uv.lock", "../pixi.toml", "../pixi.lock"]
     if st.shared:
         from sfzmaps.districts.series import SERIES
@@ -156,6 +165,8 @@ def stage_outs(st: Stage) -> list[str]:
         return ["data/out/shared"]
     if st.refdata:
         return ["data/ref"]
+    if st.saved_reads:
+        return ["data/saved-reads/images"]
     names = st.series or st.districts
     return [f"data/{kind}/{s}" for s in names for kind in ("work", "out")]
 
@@ -193,6 +204,8 @@ def stage_commands(name: str) -> list[list[str]]:
         return [["districts", "--shared"]]
     if st.refdata:
         return [["refdata"]]
+    if st.saved_reads:
+        return []                      # checked in run_stage itself (savedreads.check)
     cmds = [["run", "--year", s] for s in st.series] + [["paper", "--year", s] for s in st.series]
     return cmds + [["districts", "--series", s] for s in st.districts]
 
@@ -226,6 +239,13 @@ def run_stage(name: str, run: Callable[[list[str], dict], tuple[int, str]] | Non
     fails, any sheet of the stage is in error afterwards (run keeps going past a failing sheet
     and exits 0, and a retry must not accept it) or paper skips a series."""
     st = stages()[name]
+    if st.saved_reads:
+        from sfzmaps import savedreads
+        problems = savedreads.check()
+        if problems:
+            raise StageFailed(f"{len(problems)} saved-read image(s) don't match pipeline/saved-reads/"
+                              f"images.manifest.tsv: {'; '.join(problems[:5])}")
+        return
     env = {**os.environ, "SFZMAPS_MAX_USD": "0"}
 
     def default_run(argv: list[str], env: dict) -> tuple[int, str]:

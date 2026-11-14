@@ -2914,3 +2914,16 @@ stages:
       md5: 197e86e6c27b43f28f2651b2cce879ca.dir
       size: 59466886
       nfiles: 5
+  saved-reads:
+    cmd: uv run --frozen sfzmaps stage saved-reads
+    deps:
+    - path: saved-reads/images.manifest.tsv
+      hash: md5
+      md5: cf1947eb844d1a3d0d3b53487d38e2e9
+      size: 4328025
+    outs:
+    - path: data/saved-reads/images
+      hash: md5
+      md5: 2fa78a2ff02e69d141a9db06452e83b4.dir
+      size: 2168573805
+      nfiles: 29381
