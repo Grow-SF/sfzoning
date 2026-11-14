@@ -40,6 +40,21 @@ zsh pipeline/scripts/prob-warp/check/rewarp_all.sh            # every series: fi
   (`pipeline/data/prob-warp/rescued-2026-11-13`, never in git), `rebuild_series.sh` also compares each sheet with them;
   without that folder it skips the comparison.
 
+## What it reads, and where each comes from
+
+Every script it runs is in this folder; everything else it reads is one of these. Nothing else is read.
+
+| What | Where | Comes from |
+|---|---|---|
+| each sheet's scan, fitted placement and pipeline outputs: `page.png`, `page.json`, `transform.json`, `refine.json`, `blocks_px.geojson`, `warped.footprint.geojson`, `warped.tif`, `district_labels.json` (with its `.answers`) | `pipeline/data/work/<series>/<sheet>/` | the pipeline's build from the scans (`sfzmaps pull` brings them; `sfzmaps fetch` then `sfzmaps build` remakes them) |
+| the lots of each map's year, and every lot ever recorded | `pipeline/data/ref/parcels.parquet` (the lot history is computed from it into `data/cache`) | DataSF's parcels, the pipeline's reference data (`sfzmaps pull`) |
+| street centrelines (the "plus" fit only) | `pipeline/data/ref/streets.parquet` | DataSF, the pipeline's reference data (`sfzmaps pull`) |
+| hand corrections to label reads (used in choosing the sheets) | `pipeline/inputs/<series>/label_fixes.csv` | git |
+| the torch environment's packages | `requirements-torch.txt` | git (the exact packages the approved run used) |
+| the gdal tools for the warps | the pixi environment | `pixi.toml` / `pixi.lock` (`pixi install`) |
+
+Everything under `pipeline/data/prob-warp/` is made by these scripts, in the order below.
+
 ## Run order, per sheet
 
 1. **Pipeline:** the sheet's `page.png` and fitted transform (`refine`).
