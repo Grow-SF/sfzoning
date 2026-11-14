@@ -13,6 +13,10 @@ into one tracked folder, and a height series' districts write into its zoning se
                 for each, then districts for height before zoning (zoning reads the heights)
   today         districts for today's DataSF zoning
   shared        the merged archive the site reads (districts --shared)
+  warp-<S>      the sheet warp of one series (sfzmaps warp S), after the stage above that places it
+
+The old pipeline's stages (edition-*, period-*, today, shared) are frozen: the sheet warp replaces
+them, so a build runs only the warp-* stages (`build --force NAME` still runs an old one).
 
 A stage never spends money: it runs with SFZMAPS_MAX_USD=0, so a cached answer is free and any
 live vision call fails the stage. Paid reads are run deliberately, then `sfzmaps build` again.
@@ -55,6 +59,7 @@ class Stage:
     districts: tuple[str, ...]   # districts --series, in this order
     upstream: tuple[str, ...] = ()
     frozen: bool = False         # never run by a build or dvc repro; only `build --force NAME`
+    warp: str | None = None      # the series this stage corrects (`sfzmaps warp`): a sheet-warp stage
 
     @property
     def shared(self) -> bool:
@@ -86,9 +91,14 @@ def stages() -> dict[str, Stage]:
         role = {s: SERIES[s].role for s in members}
         reads = sorted((s for s in members if role[s] != "skip"), key=lambda s: role[s] != "height")
         name = f"edition-{period}" if len(members) == 1 else f"period-{period}"
-        out[name] = Stage(name, tuple(members), tuple(reads), ("refdata",))
-    out["today"] = Stage("today", (), ("today",), ("refdata",))
-    out["shared"] = Stage("shared", (), (), tuple(n for n in out if n != "saved-reads"))
+        out[name] = Stage(name, tuple(members), tuple(reads), ("refdata",), frozen=True)
+    out["today"] = Stage("today", (), ("today",), ("refdata",), frozen=True)
+    # The old pipeline is replaced by the sheet warp: its stages never run again, only `build --force`.
+    old = tuple(n for n in out if n != "saved-reads")
+    owner = {s: n for n, st in out.items() for s in st.series}
+    for s in SERIES:
+        out[f"warp-{s}"] = Stage(f"warp-{s}", (), (), (owner[s], "refdata"), warp=s)
+    out["shared"] = Stage("shared", (), (), old, frozen=True)
     return out
 
 
@@ -145,6 +155,8 @@ def stage_deps(st: Stage) -> list[str]:
     if st.saved_reads:
         return ["saved-reads/images.manifest.tsv"]
     deps = _code_deps() + ["pyproject.toml", "uv.lock", "../pixi.toml", "../pixi.lock"]
+    if st.warp:
+        return deps + ["data/ref", f"data/work/{st.warp}"]
     if st.shared:
         from sfzmaps.districts.series import SERIES
         # data/ref and park_maps.csv: the check that park_maps.csv still matches the maps
@@ -167,6 +179,8 @@ def stage_outs(st: Stage) -> list[str]:
         return ["data/ref"]
     if st.saved_reads:
         return ["data/saved-reads/images"]
+    if st.warp:
+        return [f"data/warp/{st.warp}"]
     names = st.series or st.districts
     return [f"data/{kind}/{s}" for s in names for kind in ("work", "out")]
 
@@ -200,6 +214,8 @@ def dvc_yaml_path() -> Path:
 def stage_commands(name: str) -> list[list[str]]:
     """The pipeline commands a stage runs, in order (each `sfzmaps ...` argv tail)."""
     st = stages()[name]
+    if st.warp:
+        return [["warp", st.warp]]
     if st.shared:
         return [["districts", "--shared"]]
     if st.refdata:
@@ -325,6 +341,11 @@ def build_lock(path: Path | None = None):
         yield
 
 
+def needs_prepare(order: list[str], table: dict[str, Stage]) -> bool:
+    """Whether prepare() is needed: only the old pipeline's stages use today's blocks and zoning."""
+    return any(not table[n].warp for n in order)
+
+
 def prepare() -> None:
     """Shared prerequisites, made once before any stage runs (stages run in parallel, and each
     would otherwise make them itself): today's blocks for the review pages, today's zoning."""
@@ -444,7 +465,8 @@ def build(targets: list[str] | None, jobs: int, dry_run: bool, force: bool,
               f"{jobs} at a time: {', '.join(order)}")
         if dry_run:
             return 0
-        prepare()
+        if needs_prepare(order, table):
+            prepare()
         head = git_head()
         logs = config.DATA_DIR / "build-logs"
         logs.mkdir(parents=True, exist_ok=True)

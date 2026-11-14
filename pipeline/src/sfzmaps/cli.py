@@ -806,7 +806,7 @@ def warp(
 
 @app.command()
 def stage(name: str = typer.Argument(..., help="A build stage, e.g. edition-1948, period-1980-1990, "
-                                               "today, shared (see `sfzmaps build --list`).")) -> None:
+                                               "today, shared, warp-1948 (see `sfzmaps build --list`).")) -> None:
     """Run one build stage's commands, at $0 (what `sfzmaps build` and `dvc repro` run)."""
     from sfzmaps import build as build_mod
 

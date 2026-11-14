@@ -12,8 +12,10 @@ def test_every_series_is_in_exactly_one_stage():
     table = build.stages()
     owned = [s for st in table.values() for s in st.series]
     assert sorted(owned) == sorted(SERIES) and len(owned) == len(set(owned))
-    # shared comes last and needs every stage but the saved reads' images, which no output is made from
-    assert list(table)[-1] == "shared" and set(table["shared"].upstream) == set(table) - {"shared", "saved-reads"}
+    # shared comes last and needs the old stages only: not the saved reads' images (no output is made
+    # from them) and not the warp stages (the old pipeline's merge doesn't read them)
+    assert list(table)[-1] == "shared" and set(table["shared"].upstream) == {
+        n for n in table if n not in ("shared", "saved-reads") and not n.startswith("warp-")}
 
 
 def test_a_period_reads_heights_before_zoning_and_never_special_use():
@@ -49,11 +51,11 @@ def test_status_keys_with_or_without_a_path_prefix():
 
 def test_plan_adds_downstream_and_limits_to_targets():
     t = build.stages()
-    assert build.plan_run({"edition-1948"}, None, t) == ["edition-1948", "shared"]
-    assert build.plan_run({"edition-1948", "today"}, ["edition-1948"], t) == ["edition-1948"]
-    assert build.plan_run(set(), ["today"], t) == []
-    assert build.plan_run(set(), ["today"], t, force=True) == ["today"]
-    assert build.plan_run({"today"}, ["shared"], t) == ["today", "shared"]
+    assert build.plan_run({"warp-1948"}, None, t) == ["warp-1948"]
+    assert build.plan_run({"edition-1948"}, None, t) == []        # the old stages are frozen
+    assert build.plan_run({"warp-1948", "warp-1975"}, ["warp-1948"], t) == ["warp-1948"]
+    assert build.plan_run(set(), ["warp-1948"], t) == []
+    assert build.plan_run(set(), ["warp-1948"], t, force=True) == ["warp-1948"]
     with pytest.raises(ValueError):
         build.plan_run(set(), ["edition-1999"], t)
 
@@ -234,3 +236,36 @@ def test_saved_reads_stage_fails_unless_the_images_match(tmp_path, monkeypatch):
         build.run_stage("saved-reads", run=lambda argv, env: pytest.fail("runs no sfzmaps command"))
     (d / "a/1.png").write_bytes(b"uno")
     build.run_stage("saved-reads", run=lambda argv, env: pytest.fail("runs no sfzmaps command"))
+
+
+def test_every_series_has_one_warp_stage_after_the_stage_that_places_it():
+    table = build.stages()
+    names = list(table)
+    warps = {n: st for n, st in table.items() if st.warp}
+    assert sorted(st.warp for st in warps.values()) == sorted(SERIES)
+    for n, st in warps.items():
+        assert n == f"warp-{st.warp}" and not st.series and not st.districts and not st.frozen
+        owner = [o for o, ost in table.items() if st.warp in ost.series]
+        assert len(owner) == 1 and st.upstream == (owner[0], "refdata")
+        assert names.index(n) > names.index(owner[0]) and names.index(n) < names.index("shared")
+
+
+def test_a_warp_stage_reads_its_series_work_and_writes_data_warp():
+    st = build.stages()["warp-1948"]
+    assert build.stage_commands("warp-1948") == [["warp", "1948"]]
+    assert build.stage_deps(st) == build._code_deps() + [
+        "pyproject.toml", "uv.lock", "../pixi.toml", "../pixi.lock", "data/ref", "data/work/1948"]
+    assert build.stage_outs(st) == ["data/warp/1948"]
+
+
+def test_the_old_pipeline_stages_are_frozen():
+    table = build.stages()
+    old = [n for n in table if n.startswith(("edition-", "period-")) or n in ("today", "shared")]
+    assert old and all(table[n].frozen for n in old)
+    assert not any(st.frozen for n, st in table.items() if n.startswith("warp-"))
+
+
+def test_a_build_prepares_only_for_the_old_stages():
+    t = build.stages()
+    assert build.needs_prepare(["warp-1948"], t) is False
+    assert build.needs_prepare(["warp-1948", "today"], t) is True
