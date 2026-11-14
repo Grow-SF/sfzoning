@@ -1,12 +1,8 @@
 #!/bin/zsh
-# Rebuild one sheet with these scripts, in the order flow.py ran them:
+# Rebuild one sheet with these scripts:
 #   1. the p1 correction chain (corr.sh)
 #   2. its mirror entry with the p1 correction (build_mirror_ay.py)
-#   3. for the series with printed codes (1960 on; flow.py ran 1921-1948 as CORR_ONLY): Terra's boxes and the frame
-#      line replayed at $0 (terra_replay.sh), then the years chain's pages (chain_pages.sh), the codes fitted from
-#      scratch against the series' code list: 2000's codes_final.json (codes2000.sh), else codes.py's list.  CODES=FILE
-#      gives another list; FITS_FROM=DIR resumes from a saved checkpoint instead.
-#   4. prob6 (prob.sh), which reads those pages
+#   3. prob6 (prob.sh), on the page's ink as printed (no text removal since 2026-11-13)
 # The 2000 sheets run in SAME2000 mode, as the original runs did: ftpx 3.99 and the measured area from
 # stepview/city_m2/parts.json (rebuilt by make_parts.py into the rebuild folder).  usage: rebuild_one.sh SERIES SHEET
 set -e
@@ -26,24 +22,6 @@ echo "2. mirror $SERIES $SHEET $(date +%H:%M:%S)"
   [ -d $PW_MIRROR/work/$SERIES ] && [ ! -L $PW_MIRROR/work/$SERIES ] || \
     env -u SFZMAPS_DATA_DIR -u SFZ_CORR -u PYTHONPATH .venv/bin/python $PW_CODE/build_mirror_ay.py $SERIES --prepare
   env -u SFZMAPS_DATA_DIR -u SFZ_CORR -u PYTHONPATH .venv/bin/python $PW_CODE/build_mirror_ay.py $SERIES $SHEET )
-case $SERIES in
-  1921|1929|1935|1948) echo "3. no printed codes: no chain pages" ;;
-  *)
-    echo "3. chain pages $SERIES $SHEET $(date +%H:%M:%S)"
-    D=$PW_CHAIN/$SERIES/$SHEET
-    [ -f $D/textboxes_gpt-6.1-terra.json ] && [ -f $D/frame_bottom.json ] || zsh $CK/terra_replay.sh $SERIES $SHEET
-    if [ -z "$FITS_FROM" ] && [ -z "$CODES" ]; then      # the series' code list, as the chain had it
-      if [[ $SERIES == 2000-digital-zoning ]]; then
-        export CODES=$PW_DATA/rebuild-2026-11-13/codes2000/codes_final.json
-        [ -f $CODES ] || zsh $CK/codes2000.sh
-      else
-        export CODES=$PW_DATA/rebuild-2026-11-13/codes/codes_$SERIES.json
-        [ -f $CODES ] || { mkdir -p ${CODES:h} && ( cd $PW_PIPELINE && env -u SFZMAPS_DATA_DIR -u SFZ_CORR -u PYTHONPATH \
-          .venv/bin/python $PW_CODE/codes.py $SERIES $CODES.tmp > /dev/null && mv $CODES.tmp $CODES ); }
-      fi
-    fi
-    zsh $CK/chain_pages.sh $SERIES $SHEET ;;
-esac
-echo "4. prob6 $SERIES $SHEET $(date +%H:%M:%S)"
+echo "3. prob6 $SERIES $SHEET $(date +%H:%M:%S)"
 THREADS=3 sh $PW_CODE/prob.sh $SERIES $SHEET
 echo "done $SERIES $SHEET $(date +%H:%M:%S)"

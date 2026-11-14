@@ -21,11 +21,12 @@ reproducible and put into the production pipeline.
 
 ## Status
 
-- **Unchanged copies:**
-  - 15 scripts from the R&D scratch folder in `/tmp`, which were never in git before 2026-11-13;
-  - 21 scripts from the local branch `zoning-lines-rnd`.
-- **Hard-coded paths throughout:** the scratch folder and the `cache-maybe` worktree.
-- **Never re-run from these copies.** Rebuilding one sheet and comparing it with `manifest.csv` is the first check.
+- **Where the scripts came from:** 15 from the R&D scratch folder in `/tmp` (never in git before 2026-11-13) and 21
+  from the local branch `zoning-lines-rnd`. They now run from the repo; paths are settings (`check/rebuild_env.sh`).
+- **Rebuilt from scratch, identical to the approved run:** all 13 2000 sheets, p1 and prob6 (`check/rebuild_series.sh`),
+  with the years chain's pages and the 2000 code list it needed at the time.
+- **No text removal since 2026-11-13** (below). prob6 now fits the page's ink as printed, so its fields differ from the
+  approved run's by up to 8.2 px on 2000 (median 0.03–0.13 px per sheet).
 
 ## Run order, per sheet
 
@@ -35,7 +36,7 @@ reproducible and put into the production pipeline.
    - the fit (`confit6.py`);
    - output: `confit_<sheet>_p1.npz`, plus the `reg2_*` and `dm_sides_*` inputs that step 3 needs.
 3. **prob6** (`allyears/prob.sh`; all sheets: `prob_all.sh`):
-   - `ay_probprep.py` and `ay_regprep3.py` (inputs);
+   - `ay_probprep.py` and `ay_regprep3.py` (inputs: the page's ink as printed, text included);
    - `probfit.py <sheet> prob6 800` under the torch environment (the fit);
    - `distmeasure.py prob6` (measure) and `ay_probsum.py` (summary);
    - output: `confit_<sheet>_prob6.npz`.
@@ -46,7 +47,7 @@ reproducible and put into the production pipeline.
 5. **Choice** (`allyears/mirror_prob.py`):
    - prob6 where its share of block-line points within 1 px is at least p1's and it never folds, otherwise p1;
    - each chosen sheet's `transform.json` in the mirror gets `"correction": {"file": ...}`;
-   - 2000 p06 and p07 used a prob6 fitted on a page with every fitted letter erased.
+   - every sheet is chosen the same way (the approved run used a letter-erased prob6 for 2000 p06 and p07).
 6. **Apply** (`corrpatch/sitecustomize.py`, run with `PYTHONPATH=corrpatch SFZ_CORR=1`):
    - loads the correction into `SheetTransform`;
    - `allyears/warp_prob.sh` (`warpK.py`) writes `warped.tif`.
@@ -76,7 +77,7 @@ scratch copy (`torchenv`) was damaged by the `/tmp` cleaner, so reinstall it.
 - **Rescued copy (not in git):** in the `cache-maybe` worktree's git-ignored
   `pipeline/data/prob-warp/rescued-2026-11-13/`, with timestamps kept.
   - `allyears-run/`: every sheet's outputs and logs;
-  - `allyears-chain/`: the years chain's text-erased pages, which prob6 reads (`ay_regprep3.py`);
+  - `allyears-chain/`: the years chain's text-erased pages, which prob6 read until 2026-11-13;
   - `data_ay2/`: the mirror with the chosen transforms.
 
 ## Running it
@@ -85,22 +86,40 @@ scratch copy (`torchenv`) was damaged by the `/tmp` cleaner, so reinstall it.
   paths default to this repo; outputs go to `pipeline/data/prob-warp/run` (git-ignored).
 - The torch environment: `uv venv --python 3.12 DIR && uv pip install --python DIR/bin/python torch==2.15.0
   numpy==2.5.4 scipy==1.18.1`, then `PW_TPY=DIR/bin/python`.
-- `check/`: rebuild one sheet (`rebuild_one.sh`) and compare its outputs with the rescued copy (`compare_rebuild.py`).
+- `check/`:
+  - `rebuild_one.sh` / `rebuild_series.sh`: rebuild sheets (settings in `rebuild_env.sh`; set `PW_PIPELINE` when
+    running from a copy outside the repo) and compare them with the rescued copy (`compare_rebuild.py`);
+  - `fit_twice.sh`: fit a series' sheets a second time and compare the fields (is prob6 the same every run?);
+  - `field_diff.py`, `field_diff_spot.py`: how far two runs' fields differ per sheet, and a close-up of the largest.
+- `codes2000/` and `allyears/textboxes.py` no longer feed the warper. They stay because the saved reads
+  (`pipeline/saved-reads`) were made with them and its replay reads them from this branch; `codes2000/answers/` holds
+  the owner's code-check answers.
 
-## Rebuild status
+## Text removal dropped (2026-11-13)
 
-- **2000 p01, rebuilt with these scripts: not yet identical.** It used 429,825 block-line points against the
-  original's 428,227. The 2000 sheets were run in `SAME2000` mode (`ftpx` 3.99, and each sheet's measured area from
-  `stepview/city_m2/parts.json`). That file was deleted by the `/tmp` cleaner, and none of the surviving older
-  `parts.json` files, nor one rebuilt from the pipeline's footprints, reproduces the original's points
-  (`check/try_parts.sh`).
-- **Not recreatable yet:** 2000 p06 and p07's letter-erased fits, and the warps built from them.
+The approved run took printed zoning codes out of the ink before fitting: the years chain fitted a letter shape to each
+code (from Terra's boxes and the 2000 code list) and erased it, and 2000 p06 and p07 used a page with every fitted
+letter erased. The owner asked why the warper needed to know about text, so prob6 was run on the 13 2000 sheets with
+and without it (`check/text_ablation.sh`, commit b5bea0d; removed with the chain after):
+
+| Mean over 13 sheets | With text removal | Without |
+|---|---|---|
+| block-line points within 1 px of a printed line | 0.759 | 0.759 |
+| within 2 px | 0.822 | 0.822 |
+| control points' miss, 99th percentile (px) | 2.956 | 2.951 |
+| smallest cell determinant (folds below 0) | 0.911 | 0.909 |
+
+At the four largest field differences (p02 8.2 px, p06 4.4, p11 3.4, p01 3.3) the fit without text removal sits on
+the print as well or better. On p06 the erased "2" of RH-2 took part of a block line with it. The owner dropped text
+removal from the warper. The years chain's scripts (`flow.py`, `fitboxes.py`, `chain_pages.sh`, ...) and the p06/p07
+variant (`erased2000/`) were removed from this folder with it; they are in this branch's history and on
+`zoning-lines-rnd`.
 
 ## Next
 
-1. **Make it run from the repo:** no hard-coded paths, one entry point, torch as a declared dependency.
-2. **Check a rebuild:** rebuild one sheet that has a surviving prob6 field, and compare it with the manifest.
-3. **Recompute what was lost:** the p1 fields, and 2000 p06 and p07. The owner has dropped page cleaning for reading
-   zoning, so decide whether the letter-erased variant is still wanted.
+1. **One entry point and declared dependencies:** the warper as a package with torch in the pipeline's `rnd` extra.
+2. **Determinism:** `check/fit_twice.sh` on every series. Done for 2000 (2026-11-13): all 13 sheets' prob6 outputs are
+   byte-identical run to run (THREADS=3), and identical to the fit-test run without text removal.
+3. **Recompute what was lost:** the p1 fields of the other series (`corr.sh`), then prob6 on them.
 4. **Into production:** move the correction into the pipeline's transform stage instead of the `sitecustomize` patch,
    then regenerate the production maps.

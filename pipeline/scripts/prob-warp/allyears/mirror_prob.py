@@ -1,8 +1,9 @@
 """The all-years mirror for graph building (SFZMAPS_DATA_DIR=<scratch>/data_ay2): a copy of data_ay (everything linked
 to the real data except each corrected sheet's folder) with each corrected sheet's transform.json pointing at its
 chosen correction: prob6 (the probabilistic fit) where it puts at least as many block-line points within 1 px of the
-print as p1 and has no fold, else p1.  For 2000-digital-zoning p06 and p07 the scratchpad's prob6 (fitted on the page
-with every fitted letter erased) is used.  Writes allyears/run/choice.json.  Warps are made after (warp_prob.sh).
+print as p1 and has no fold, else p1.  Every sheet is chosen the same way (until 2026-11-13, 2000 p06 and p07 used a
+prob6 fitted on the page with every fitted letter erased; the owner dropped text removal from the warper).  Writes
+PW_RUN/choice.json.  Warps are made after (warp_prob.sh).
 usage: mirror_prob.py"""
 import json
 import os
@@ -14,7 +15,6 @@ PIPE = A.parents[2]
 RUN = Path(os.environ.get("PW_RUN", PIPE / "data" / "prob-warp" / "run"))
 M1 = Path(os.environ.get("PW_MIRROR", PIPE / "data" / "prob-warp" / "data_ay"))
 M2 = Path(os.environ.get("PW_MIRROR2", PIPE / "data" / "prob-warp" / "data_ay2"))
-ERASED = Path(os.environ.get("PW_ERASED_2000", RUN.parent / "erased-2000"))   # 2000 p06/p07 letter-erased fits
 if not M2.exists():
     shutil.copytree(M1, M2, symlinks=True)
 rows = {}
@@ -30,8 +30,6 @@ for (series, sheet), r in sorted(rows.items()):
     p1, pr = r.get("within1_p1", 0), r.get("within1_prob6", 0)
     use = "prob6" if (pr >= p1 and r.get("min_det_prob6", 0) > 0) else "p1"
     f = RUN / series / sheet / f"confit_{sheet}_{use}.npz"
-    if series == "2000-digital-zoning" and sheet.endswith(("p06", "p07")):
-        use, f = "prob6 (all text erased)", ERASED / f"confit_{sheet[-2:]}_prob6.npz"
     tj = json.loads(tj_p.read_text())
     tj["correction"] = {"file": str(f)}
     tj_p.write_text(json.dumps(tj))

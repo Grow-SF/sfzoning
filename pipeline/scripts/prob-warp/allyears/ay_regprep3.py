@@ -1,7 +1,8 @@
 """regprep3.py for any series/sheet (env SERIES, SHEET; ay.py): block-line centres weighted by their probability of
-being a block line at their stroke width (the sheet's own widths fitted as two groups), on reg2's crop.  Text out where
-the years chain erased it (allyears/chain/SERIES/SHEET: noblock.png ink not in SHEET_c1/clean.png: the zoning codes
-its letter fit drew); other text stays and is weighed by its width like any ink.  -> S/regw_NN.npz"""
+being a block line at their stroke width (the sheet's own widths fitted as two groups), on reg2's crop.  All ink is
+used as printed: text is weighed by its width like any ink.  (Until 2026-11-13 the zoning codes the years chain had
+fitted and erased were taken out first; the owner dropped that after a fit test found the same fit without it:
+README, "Text removal dropped".)  -> S/regw_NN.npz"""
 import json
 
 import cv2
@@ -12,15 +13,6 @@ from skimage.morphology import skeletonize
 from ay import *  # noqa: F403
 
 page = cv2.imread(str(D / "page.png"), cv2.IMREAD_GRAYSCALE) < 128
-CH = Path(os.environ.get("PW_CHAIN", AY.parents[2] / "data" / "prob-warp" / "chain")) / SERIES   # years chain
-nb, cl = CH / NN / "noblock.png", CH / f"{NN}_c1" / "clean.png"
-text_src = "none"
-if nb.exists() and cl.exists():
-    noblock = cv2.imread(str(nb), cv2.IMREAD_GRAYSCALE) < 128
-    clean = cv2.imread(str(cl), cv2.IMREAD_GRAYSCALE) < 128
-    if noblock.shape == page.shape == clean.shape:
-        page = page & ~(noblock & ~clean)
-        text_src = "years chain (codes erased)"
 R2 = np.load(S + f"reg2_{NN}.npz")
 x0, y0 = (int(v) for v in R2["origin"])
 B, h, w = R2["targets"].shape
@@ -49,6 +41,6 @@ for i, b in enumerate(np.arange(0, 180, 10.0)):
     dd = np.abs((cdir - b + 90) % 180 - 90)
     W8[i] = (weight * (dd <= 20.0)).astype(np.float16)
 np.savez_compressed(S + f"regw_{NN}.npz", weights=W8, origin=np.array([x0, y0]))
-print(json.dumps({"series": SERIES, "sheet": NN, "text_out": text_src,
+print(json.dumps({"series": SERIES, "sheet": NN,
                   "block_line_px": round(float(m[thin]), 2), "heavy_px": round(float(m[1 - thin]), 2),
                   "block_share": round(float(pi[thin]), 2)}))

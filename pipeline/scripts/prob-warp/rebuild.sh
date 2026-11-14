@@ -10,8 +10,6 @@
 #   PW_TPY       the torch environment's python (required; README)
 #   PW_PIPELINE  the pipeline folder [this repo's]        PW_WORK    its work folder [PW_PIPELINE/data/work]
 #   PW_RUN       outputs [PW_PIPELINE/data/prob-warp/run]  PW_MIRROR, PW_MIRROR2  the two mirrors [beside PW_RUN]
-#   PW_CHAIN     the years chain's text-erased pages, read by prob6 [PW_PIPELINE/data/prob-warp/chain]
-#   PW_ERASED_2000  2000 p06/p07's letter-erased prob6 fits [PW_RUN/../erased-2000]
 # usage: rebuild.sh [SERIES ...]      (default: the 13 series of the original run)
 set -e
 A=${0:A:h}/allyears
