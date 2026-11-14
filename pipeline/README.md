@@ -317,13 +317,19 @@ The published maps don't use the warped sheets yet.
 ### Running it
 
 ```
-uv run sfzmaps warp [SERIES ...] [--jobs N] [--force]
+uv run sfzmaps warp [SERIES ...] [--jobs N] [--force] [--system-tools]
 ```
 
-With no series it does every series. A sheet whose inputs haven't changed since its last warp is skipped;
+With no series it does every series. A sheet is skipped when all its outputs are there and nothing it is made from
+has changed since its last warp: the files in "What it reads", the code the warp runs, and the versions of the
+libraries that compute it (PyTorch, NumPy, SciPy, OpenCV, Shapely, scikit-image, and the GDAL of `gdalwarp`).
 `--force` redoes it. `uv run sfzmaps build` runs one `warp-<series>` stage per series when its inputs are stale, like
 every other stage. Warping needs the pinned GDAL, so run inside the pixi environment (`pixi shell` or `pixi run`),
-as for the rest of the pipeline. The fits use PyTorch, which comes with the pipeline's own dependencies.
+as for the rest of the pipeline; like `sfzmaps build`, it refuses tools from elsewhere unless you pass
+`--system-tools`. The fits use PyTorch, which comes with the pipeline's own dependencies.
+
+Mind memory: each warp fits `--jobs` sheets at once (3 by default), and a large sheet's fit takes several GB.
+`sfzmaps build -j N` runs N stages at once, so up to N warp stages each fitting 3 sheets.
 
 ### The steps, for each sheet
 
@@ -355,7 +361,8 @@ as for the rest of the pipeline. The fits use PyTorch, which comes with the pipe
 
 | What | Where | Comes from |
 |---|---|---|
-| each sheet's scan, placement and outputs (`page.png`, `page.json`, `transform.json`, `refine.json`, `blocks_px.geojson`, `warped.tif`, `warped.footprint.geojson`, ...) | `data/work/<series>/<sheet>/` | the pipeline's build from the scans (`sfzmaps pull` brings them; `sfzmaps build` remakes them) |
+| each sheet's scan, placement and outputs (`page.png`, `page.json`, `transform.json`, `refine.json`, `blocks_px.geojson`, `warped.tif`, `warped_paper.tif` and their footprints) | `data/work/<series>/<sheet>/` | the pipeline's build from the scans (`sfzmaps pull` brings them; `sfzmaps build` remakes them) |
+| a page's hand-made patch, if it has one (the warp takes the mask boxes from the patched `page.json`) | `inputs/<series>/pages/<sheet>.json` | made by hand |
 | the lots of each map's year, and every lot ever recorded | `data/ref/parcels.parquet` | DataSF's parcels, the pipeline's reference data |
 | street centre lines (street edges only) | `data/ref/streets.parquet` | DataSF, the pipeline's reference data |
 | the old placement check's verdict, which `scores.json` carries | `data/work/<series>/<sheet>/score.json` | the pipeline's build |
@@ -378,7 +385,8 @@ as for the rest of the pipeline. The fits use PyTorch, which comes with the pipe
 Only what has been checked. "The approved run" means the corrections the owner looked at and approved on
 2026-11-09, made by earlier scripts.
 
-- **1921 is identical to the approved run's:** all 16 sheets.
+- **1921 is the same as the approved run:** all 16 sheets' corrections are identical to those of the approved run's
+  rebuild of 2026-11-13, which reproduced the approved run byte for byte.
 - **The ported code changes no numbers.** Every correction checked (1921 and 2000) is identical to what the earlier
   scripts made with the same method.
 - **No text removal.** The approved run took the printed zoning codes out of the ink before fitting. Fitted with and
