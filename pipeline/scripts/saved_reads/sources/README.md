@@ -18,7 +18,5 @@ folder; `python -m saved_reads run --scratch DIR` reads a work folder in its pla
 `k8/`: the code of the [frozen reads](../../../saved-reads/README.md#frozen-reads), from the k8 R&D run (2026-11-10/11):
 `textpass.py`, `placeread.py`, `placeask.py`, `distask.py` (each matches its records' `git_blob`), `read3.py`,
 `read3r.py`, `rotpilot.py` (their last versions, edited after their paid runs), the modules they import (`lotwalls.py`,
-`truth.py`, `yard.py`, `lotcode.py`, `lotcode_lib.py`), `by_time.py` with `timed_reads.json`, which matched the
-`by time` records once, and `zmerge_cwx.py`, which merged the passes into `textboxes2_cwx` (it ran as `k8/zmerge.py
-cwx` on 2026-11-11; that file was overwritten the next day by an unrelated script of the same name, so this copy is
-recovered from the session's transcript: the script as written plus its one edit before the run). They read inputs (the old warp, old solves' places) that no checkout has, so nothing runs them.
+`truth.py`, `yard.py`, `lotcode.py`, `lotcode_lib.py`), and `by_time.py` with `timed_reads.json`, which matched the
+`by time` records once. They read inputs (the old warp, old solves' places) that no checkout has, so nothing runs them.

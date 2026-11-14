@@ -106,11 +106,13 @@ one file per pass:
 | Pass | Boxes | What it is |
 |---|---|---|
 | `cw` | 9,993 | the turned tiles (`terra-turned-tiles`, `textpass.py cw`) |
-| `pl`, `cwpl` | 876, 10,869 | the place reads (`terra-place-reads`, `placeread.py`); `cwpl` = `cw` plus these |
-| `pa`, `cwpa` | 101, 10,970 | the place asks (`terra-place-asks`, `placeask.py`); `cwpa` = `cw` plus place reads and these |
+| `pl` | 876 | the place reads (`terra-place-reads`, `placeread.py`) |
+| `pa` | 101 | the place asks (`terra-place-asks`, `placeask.py`) |
 | `pb` | 44 | the split place asks (`terra-place-asks-split`, `placeask.py` with `SPLIT=1`) |
 | `pd` | 80 | the district asks (`terra-district-asks`, `distask.py`) |
-| `cwx` | 10,016 | no model call: `cw` plus the zoning-code boxes of the other passes that lie on the map, overlap no `cw` box and hold no print the old chain had (`sources/k8/zmerge_cwx.py`, 2026-11-11, $0). Every box is one of those passes' boxes: 9,993 from `cw`, 14 `cwpa`, 8 `pd`, 1 `pb`. |
+
+The k8 runs also wrote three combined passes, `cwpl`, `cwpa` and `cwx`. They are not kept: every box in them is a box
+of these five (same sheet, same box), so they add nothing.
 
 ## The red-mark reruns (2026-11-13)
 
