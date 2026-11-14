@@ -52,6 +52,7 @@ import shutil
 import subprocess
 import tempfile
 import warnings
+from collections.abc import Callable
 from pathlib import Path
 
 import cv2
@@ -372,12 +373,13 @@ def _write_footprint(path: Path, geom, properties: dict | None = None) -> None:
 
 
 def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
-               paper: bool = False) -> Path:
+               paper: bool = False, resample: Callable[[np.ndarray], np.ndarray] | None = None) -> Path:
     """Write the transparent-paper RGBA GeoTIFF for `png` to `out` (atomically).  With
     `paper`, the scan as it looks on paper instead (make_rgba), resampled cubic so 1-bit
     linework is smoothed rather than stair-stepped; mask boxes are filled with paper rather
     than cut out, and the footprint (`<out stem>.footprint.geojson`) is the inked content
-    (paper_content), which stitch draws on top of every sheet's blank paper."""
+    (paper_content), which stitch draws on top of every sheet's blank paper.  `resample`, when given, takes
+    the RGBA from make_rgba and returns the RGBA to warp (the sheet warp resamples the scan by its correction)."""
     png, out = Path(png), Path(out)
     if shutil.which("gdalwarp") is None:
         raise RuntimeError("gdalwarp not found on PATH; run inside `pixi shell` (pixi.toml pins GDAL)")
@@ -396,6 +398,8 @@ def warp_sheet(png: Path, t: SheetTransform, mask_boxes: list[Box], out: Path,
     else:
         excl = inset_exclusion(img, mask_boxes)
     rgba = make_rgba(img, mask_boxes, excl, paper=paper)
+    if resample is not None:
+        rgba = resample(rgba)
     gcps = [GroundControlPoint(row=g.py + 0.5, col=g.px + 0.5, x=g.wx, y=g.wy)
             for g in t.dense_grid((h, w), GRID_STEP)]
     out.parent.mkdir(parents=True, exist_ok=True)

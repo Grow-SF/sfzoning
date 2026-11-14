@@ -779,6 +779,32 @@ def review(
 
 
 @app.command()
+def warp(
+    series: list[str] = typer.Argument(None, help="Only these series (default: every series with placed sheets)."),
+    jobs: int = typer.Option(3, "--jobs", "-j", help="Sheets fitted at once."),
+    force: bool = typer.Option(False, "--force", help="Correct sheets again even when their inputs are unchanged."),
+) -> None:
+    """Correct every placed sheet's placement and warp it, into data/warp/<series>/<sheet>/ (skips a sheet whose
+    inputs haven't changed). Run inside `pixi shell` so gdalwarp is the pinned one."""
+    from sfzmaps.districts.series import SERIES
+    from sfzmaps.sheetwarp import run as sheetwarp
+    from sfzmaps.sheetwarp.sheet import placed_sheets
+
+    unknown = [s for s in series or [] if s not in SERIES]
+    if unknown:
+        raise typer.BadParameter(f"unknown series {', '.join(unknown)}; known: {', '.join(SERIES)}")
+    failed = []
+    for s in series or [s for s in SERIES if placed_sheets(s)]:
+        try:
+            sheetwarp.correct_series(s, jobs, force)
+        except RuntimeError as e:
+            typer.echo(f"error: {e}", err=True)
+            failed.append(s)
+    if failed:
+        raise typer.Exit(1)
+
+
+@app.command()
 def stage(name: str = typer.Argument(..., help="A build stage, e.g. edition-1948, period-1980-1990, "
                                                "today, shared (see `sfzmaps build --list`).")) -> None:
     """Run one build stage's commands, at $0 (what `sfzmaps build` and `dvc repro` run)."""
