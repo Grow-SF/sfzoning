@@ -101,8 +101,9 @@ and without it (commit b5bea0d, `check/text_ablation.sh`):
 At the four largest field differences (p02 8.2 px, p06 4.4, p11 3.4, p01 3.3) the fit without text removal sits on
 the print as well or better. On p06 the erased "2" of RH-2 took part of a block line with it. The owner dropped text
 removal from the warper, and the scripts that served only it are gone from this folder (they are in this branch's
-history). The scripts that made the saved reads it used, and the owner's code-check answers, are in the saved-reads
-PR (#59).
+history). The answers it used are in `pipeline/saved-reads` with the scripts that asked for them
+(`pipeline/scripts/saved_reads/scripts_as_they_ran`), and the owner's code-check answers in
+`pipeline/inputs/code-check-2000` (#59).
 
 ## Next
 
