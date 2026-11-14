@@ -137,19 +137,16 @@ cd pipeline/scripts && ../.venv/bin/python -m saved_reads verify
 
 1. **Data.** Set up the pipeline data for the scans and the pipeline's own outputs: `scripts/worktree-data.sh`, or
    `uv run sfzmaps pull`.
-2. **Answers.** Put this package's answers into the answer cache. They are not in a shipped answer pack yet, so
-   `pull` does not bring them:
-   ```
-   cd scripts && ../.venv/bin/python -m saved_reads restore-cache && cd ..
-   ```
-3. **Replay** every script with the API blocked. Every lookup must say `0 not in the cache`.
+2. **Replay** every script with the API blocked. Every lookup must say `0 not in the cache`. It first writes this
+   package's answers into the answer cache (`restore-cache`; answers already there are kept), since `pull` brings only
+   the answers the build's own outputs were made from.
    ```
    zsh scripts/saved_reads/record_all.sh data/saved-reads/check
    ```
    The scripts it runs are in `scripts/saved_reads/sources/` (exactly as they ran) and `rerun/`, and the code-check
    cases in `inputs/code-check-2000/`, all in this branch. The `k8` reads also need the rescued scratch folder
    `pipeline/data/rnd/scratch-2026-11-13` (see [Gaps](#gaps)).
-4. **Package** the replay and compare it with this one:
+3. **Package** the replay and compare it with this one:
    ```
    cd scripts && ../.venv/bin/python -m saved_reads package --calls ../data/saved-reads/check \
      --out ../data/saved-reads/check-package --images ../data/saved-reads/check-images && cd ..
@@ -186,8 +183,6 @@ cd pipeline/scripts && ../.venv/bin/python -m saved_reads verify
 - **The `k8` scripts and their inputs** live only in the rescued scratch folder
   `pipeline/data/rnd/scratch-2026-11-13` (git-ignored) and on the local branch `rnd/scratch-archive`. Their inputs
   include old solves' place files and that day's transforms.
-- **The answers are not shipped.** They aren't in an answer pack yet, so `sfzmaps pull` doesn't bring them;
-  `restore-cache` does.
 - **One second pass has no maker found.** `textboxes2_cwx` was found only as a file, and the detector reads it.
 - **`by time` records have no image or prompt** (see above).
 - **`asked` is the cache file's time.** For an answer applied from a shipped pack, it's when the pack was applied.

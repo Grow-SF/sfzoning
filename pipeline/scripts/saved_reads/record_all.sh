@@ -29,6 +29,10 @@ cd $P
 PW="prob-warp@99f85e7:pipeline/scripts/prob-warp"             # where each ran (branch@commit:folder)
 ZL="zoning-lines-rnd@8ec7b40:pipeline/scripts/zoning-lines"
 RUN=(env -u SFZMAPS_DATA_DIR -u SFZ_CORR -u PYTHONPATH -u OPENAI_API_KEY PYTHONPATH=$PKG .venv/bin/python -W ignore -m saved_reads run)
+# the package's answers into the answer cache first: a fresh clone's cache has none of them (sfzmaps pull brings only
+# the answers the build's outputs were made from).  Answers already there are left as they are.
+env -u SFZMAPS_DATA_DIR -u SFZ_CORR -u PYTHONPATH PYTHONPATH=$PKG .venv/bin/python -m saved_reads restore-cache \
+  --from ${PKG:h}/saved-reads
 want() { [ -z "$ONLY" ] || [[ " $ONLY " == *" $1 "* ]]; }
 count() { echo "  $1: $(wc -l < $OUT/$1/calls.jsonl | tr -d ' ') lookups, $(grep -c '"hit": false' $OUT/$1/calls.jsonl) not in the cache"; }
 
