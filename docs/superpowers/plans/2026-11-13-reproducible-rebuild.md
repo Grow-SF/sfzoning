@@ -55,17 +55,17 @@ they were wrong, not copied exactly.
 | | Question | Recommendation |
 |---|---|---|
 | D1 | The judge2 table corrections (888 lots counted as the run's code: helper agents' verdicts) in the solver's score | **Drop them.** Score against the raw table and list the 216 groups for a person. |
-| D2 | Which 2000 code reads the warper's code list uses | **The red-mark reruns.** Agreement with the owner's checked codes went 84.8% → 88.3% (Terra). |
+| D2 | Which 2000 code reads the warper's code list uses | **Settled 11-13: moot.** The warper no longer uses a code list (D6). |
 | D3 | The owner's uncommitted `label_fixes.csv` rows (the 101 leader moves the solver learns from, plus 266 others) | **Commit them** in their own PR. |
-| D4 | Warper simplifications | **One method for every sheet:** prob6 with the same settings. Drop the p06/p07 letter-erased variant and the p09/p10 "plus" special case, unless the fit measure shows they're needed. |
-| D5 | What the text detector reads | **Each sheet's page**, not the merged page, so it doesn't depend on the warp and the warper can use it. |
-| D6 | How the warper keeps printed text out of its fit (B2) until the detector is ready. Its old way, fitted-and-erased codes, is the cleaned page. | **Down-weight ink inside the saved Terra code boxes** as a stopgap: Terra at use, in the warper only. The other way is to wait for D. |
+| D4 | Warper simplifications | **One method for every sheet:** prob6 with the same settings. Drop the p09/p10 "plus" special case, unless the fit measure shows it's needed. (The p06/p07 letter-erased variant went with D6.) |
+| D5 | What the text detector reads | **Each sheet's page**, not the merged page, so it doesn't depend on the warp. |
+| D6 | How the warper keeps printed text out of its fit | **Settled 11-13: it doesn't.** Fit test on the 13 2000 sheets, with vs without text removal: the same scores (within 1 px 0.759 / 0.759; no folds), and at the four largest differences the fit without sits on the print as well or better. The owner dropped text removal from the warper (PR #58). |
 
 ## Order
 
 ```
 A fixed inputs ──► B warper ──► C merged page ──► E solver inputs ──► F solver ──► G fresh-clone check
-        └────────► D detector (per-sheet pages; feeds B's text removal and E's walls)
+        └────────► D detector (per-sheet pages; feeds E's walls)
 ```
 
 ### A. Fixed inputs, each reachable from a fresh clone
@@ -92,19 +92,16 @@ A fixed inputs ──► B warper ──► C merged page ──► E solver inp
 
 - [ ] **B1. Package `pipeline/scripts/warp/`, one entry point: `python -m warp fit|apply SERIES [SHEET...]`.**
   - Steps: block-line points → the prob6 field (`probfit`) → the warped sheet.
-  - It reads only the pipeline's sheets, the saved reads and A's inputs.
+  - It reads only the pipeline's sheets and block lines: no saved reads, no code list, no detector.
   - Settings are fixed in one place: LOWMEM on, 3 threads, the same as the approved run.
-- [ ] **B2. Text removal before the fit** (prob6 takes printed codes out of the ink it fits to).
-  - Today it uses the years chain's fitted-and-erased codes. That is the cleaned-page method the 11-13 decision
-    dropped.
-  - Replacement, per D6: down-weight ink inside the saved Terra code boxes. Later, after D, use the detector's text
-    odds.
-  - Gate: the block-line fit (share of points within 1 px; folds) on every sheet is no worse than the approved run
-    (`manifest.csv`), and the owner looks at the seams.
+- [x] **B2. No text removal (D6).** prob6 fits the page's ink as printed. The years chain's pages, the 2000 code
+  list and the p06/p07 letter-erased variant are no longer warper inputs (`prob-warp`, README "Text removal
+  dropped").
 - [ ] **B3. One method for every sheet (D4).**
   - Drop the p1-or-prob6 choice unless prob6 folds on a sheet.
-  - Drop the p06/p07 variant and the "plus" sheets.
-  - Gate: as B2.
+  - Drop the "plus" sheets.
+  - Gate: the block-line fit (share of points within 1 px; folds) on every sheet is no worse than the approved run
+    (`manifest.csv`), and the owner looks at the seams.
 - [ ] **B4. Determinism.** Fit each sheet twice; the largest field difference must be ≤ 0.01 px.
   - If torch threading breaks this, pin deterministic algorithms and a single thread for the fit.
 - [ ] **B5. A DVC stage per series** (`warp-<series>`), so warps ship and pull like other outputs.
@@ -177,6 +174,5 @@ A fixed inputs ──► B warper ──► C merged page ──► E solver inp
 2. **Torch giving different results from run to run.** The B4 and D2 twice-run checks.
 3. **A fitted step that saw its own held-out quarter.** Each fitted output records its quarter; F1 refuses one
    without it.
-4. **The warp changing under the solver.** C, D and E take the warp's DVC hash as an input, so a new warp makes them
+4. **The warp changing under the solver.** C and E take the warp's DVC hash as an input, so a new warp makes them
    stale.
-5. **New code lists changing the warp (D2).** B2's gate is measured with the code list B actually uses.
