@@ -1,103 +1,88 @@
-"""What every step shares (env SERIES, SHEET = the sheet's folder name):
-  NN      the sheet's folder name (file tag)
-  S       this sheet's output folder (WARP_FITS/<series>/<sheet>/), trailing slash
-  D       the sheet's real work folder (inputs; never written)
-  YEAR    the series' lot year (read.series_year)
-  PART()  the area measured: the sheet's drawn map (its warped footprint; for 2000 with AS_APPROVED_2000, the
-          measured area the approved run used, WARP_AREA_2000) less the Presidio
-  FTPX    the scan's ft per px (today's fit, median)
-  HALF    block-line weight: the 75th percentile of the skeleton half-width (px) of the ink lying where today's fit
-          puts the block outlines (blocks_px.geojson, within 1 px).  On the 2000 sheets this gives 2.0, the setting
-          the 2000 run used.
-Light imports only at module level: first_correction_fit.py runs in the torch environment, which has no sfzmaps."""
+"""What every step shares.  Each step runs for one sheet: env SERIES (the year's folder name in data/work) and SHEET
+(the sheet's folder name).
+  S   the sheet's fit folder, data/sheet-warp/fits/<year>/<sheet>/ (or under WARP_FITS), with a trailing slash
+  D   the sheet's folder in the pipeline's data/work: read, never written
+Only light imports at the top: the two fits run in the PyTorch environment, which has no sfzmaps."""
 import json
 import os
-import sys
 from pathlib import Path
 
-AY = Path(__file__).resolve().parent                      # this folder (sheet_warp/steps)
-RUN = Path(os.environ.get("WARP_FITS", AY.parents[2] / "data" / "sheet-warp" / "fits"))
-SERIES, NN = os.environ["SERIES"], os.environ["SHEET"]
-OUT = Path(os.environ["AY_OUT"]) if os.environ.get("AY_OUT") else RUN / SERIES / NN   # AY_OUT: profiling runs
+PIPELINE = Path(__file__).resolve().parents[3]
+FITS = Path(os.environ.get("WARP_FITS", PIPELINE / "data" / "sheet-warp" / "fits"))
+SERIES, SHEET = os.environ["SERIES"], os.environ["SHEET"]
+OUT = FITS / SERIES / SHEET
 OUT.mkdir(parents=True, exist_ok=True)
 S = str(OUT) + "/"
-REAL = Path(os.environ.get("WARP_WORK", AY.parents[2] / "data" / "work"))
-D = REAL / SERIES / NN
-sys.path.insert(0, str(AY))
-_SET = OUT / "settings.json"
-if int(os.environ.get("RBF_THREADS", "1")) > 1:      # speed E7: today's fit's thin-plate spline on threads, bit-identical
-    import threaded_spline
-    threaded_spline.install()
+D = PIPELINE / "data" / "work" / SERIES / SHEET
 
 
-def settings():
-    return json.loads(_SET.read_text()) if _SET.exists() else {}
+def year():
+    """the year of the lots the sheet is fitted to"""
+    from sfzmaps.districts import read
+    return read.series_year(SERIES)
 
 
-def save_setting(**kw):
-    s = settings()
-    s.update(kw)
-    _SET.write_text(json.dumps(s, indent=1))
+def lots_and_area(cuts=2):
+    """the year's lots, and the area the warp measures: the sheet's drawn map (its warped footprint) less the Presidio
+    (block 1300, and 8 ft round it).  The block-side steps cut the Presidio out twice and the extra evidence once: each
+    cut rounds the outline's corners a little differently, and every fit was made this way."""
+    import shapely
+    from sfzmaps.districts import read
+    lots = read.load_parcels(year=year())
+    presidio = lots[lots["block_num"] == "1300"].union_all().buffer(8.0)
+    area = shapely.from_geojson((D / "warped.footprint.geojson").read_text())
+    for _ in range(cuts):
+        area = area.difference(presidio)
+    return lots, area
 
 
 def side_pixels(T0, SD):
-    """Today's fit's to_pixel of the block-side points (dm_sides: pts, ta, tb), computed once per sheet and kept in
-    pix_NN.npz (speed E4).  Each array is the same call on the same batch as before, so the values are bit-identical
-    (to_pixel's iteration stops on the batch's largest step: never split or merge these batches)."""
+    """Today's placement (to_pixel) of the block-side points and their tangents' ends, computed once per sheet and kept
+    in block_side_points_on_page.npz.  Always the same call on the same batch: to_pixel's iteration stops on the
+    batch's largest step, so placing the points in other batches would change the values slightly."""
     import numpy as np
-    f = S + f"pix_{NN}.npz"
+    f = S + "block_side_points_on_page.npz"
     if not os.path.exists(f):
         np.savez(f, pts=T0.to_pixel(SD["pts"]), ta=T0.to_pixel(SD["ta"]), tb=T0.to_pixel(SD["tb"]))
     Z = np.load(f)
     return Z["pts"], Z["ta"], Z["tb"]
 
 
-def year():
-    from sfzmaps.districts import read
-    return read.series_year(SERIES)
-
-
-def PART():
-    import shapely
-    from sfzmaps.districts import read
-    fp = shapely.from_geojson((D / "warped.footprint.geojson").read_text())
-    if os.environ.get("AS_APPROVED_2000"):  # 2000 as the approved run fitted it: its measured area per sheet
-        fp = shapely.from_wkt(json.load(open(os.environ["WARP_AREA_2000"]))[NN[-2:]])
-    lots = read.load_parcels(year=year())
-    return fp.difference(lots[lots["block_num"] == "1300"].union_all().buffer(8.0))
+def _kept(key, compute):
+    """a number measured once per sheet and kept in scan_measures.json"""
+    f = OUT / "scan_measures.json"
+    s = json.loads(f.read_text()) if f.exists() else {}
+    if key not in s:
+        s[key] = compute()
+        f.write_text(json.dumps(s, indent=1))
+    return s[key]
 
 
 def ftpx():
-    if os.environ.get("AS_APPROVED_2000"):  # 2000 as the approved run fitted it: its constant (the measured scale is 4.006-4.038
-        save_setting(ftpx=3.99)             # on p06, p08, p13, which moves the held rule's near-end cut by one point)
-        return 3.99
-    s = settings()
-    if "ftpx" not in s:
+    """the scan's scale: map feet per page pixel (today's placement, median over the page)"""
+    def compute():
         import cv2
         from sfzmaps.transform import SheetTransform
         h, w = cv2.imread(str(D / "page.png"), cv2.IMREAD_GRAYSCALE).shape
         t = SheetTransform.from_json(json.loads((D / "transform.json").read_text()))
-        save_setting(ftpx=float(t.median_scale_ft_per_px((h, w))))
-        s = settings()
-    return s["ftpx"]
+        return float(t.median_scale_ft_per_px((h, w)))
+    return _kept("ft_per_px", compute)
 
 
-def half(ink=None):
-    s = settings()
-    if "half" not in s:
+def half(ink):
+    """the block lines' half width (px): the 75th percentile of the ink's half width along its centre line, where
+    today's placement puts the block outlines (blocks_px.geojson, within 1 px).  Wider ink is heavier than a block line."""
+    def compute():
         import cv2
         import numpy as np
         import shapely
         from scipy import ndimage
         from skimage.morphology import skeletonize
-        if ink is None:
-            ink = cv2.imread(str(D / "page.png"), cv2.IMREAD_GRAYSCALE) < 128
         m = np.zeros(ink.shape, np.uint8)
         for f in json.loads((D / "blocks_px.geojson").read_text())["features"]:
             for q in shapely.get_parts(shapely.geometry.shape(f["geometry"])):
                 if q.geom_type == "Polygon":
                     cv2.polylines(m, [np.round(np.asarray(q.exterior.coords)[:, :2]).astype(np.int32)], True, 1, 3)
         hw = ndimage.distance_transform_edt(ink)[skeletonize(ink) & (m > 0)]
-        save_setting(half=float(np.percentile(hw, 75)) if len(hw) else 2.0, half_n=int(len(hw)))
-        s = settings()
-    return s["half"]
+        return float(np.percentile(hw, 75)) if len(hw) else 2.0
+    return _kept("block_line_half_width_px", compute)

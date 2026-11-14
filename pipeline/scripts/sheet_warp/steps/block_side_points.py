@@ -1,22 +1,19 @@
-"""The block-side points (dm_sides_NN.npz) and today's to_pixel of them (pix_NN.npz), on their own so they run beside
-regprep2 (speed E3c).  The same code as measure_fit.py's cache block; the page size from page.png (what regprep2
-stores as reg2's shape).  distmeasure then finds both files and skips building them.  env SERIES, SHEET."""
+"""The block-side points: a point every 2 ft along every side of every block of the sheet's year inside its drawn map
+(not the Presidio), each with the two ends of its tangent (3 ft either way).  Sides are cut where they turn more than
+30 degrees.  -> block_side_points.npz (pts, sid: which side, ta, tb), and today's placement of them on the page
+(block_side_points_on_page.npz)."""
 import json
 
 import cv2
 import numpy as np
 import shapely
 
-from sfzmaps.districts import read
 from sfzmaps.transform import SheetTransform
 
-from warp_common import *  # noqa: F403
+from warp_common import D, S, SHEET, lots_and_area, side_pixels
 
 T0 = SheetTransform.from_json(json.loads((D / "transform.json").read_text()))
-cache = S + f"dm_sides_{NN}.npz"
-lots = read.load_parcels(year=year())
-part = PART()
-area = part.difference(lots[lots["block_num"] == "1300"].union_all().buffer(8.0))
+lots, area = lots_and_area()
 Hp, Wp = cv2.imread(str(D / "page.png"), cv2.IMREAD_GRAYSCALE).shape
 pg = shapely.Polygon(T0.to_world(np.array([[0, 0], [Wp, 0], [Wp, Hp], [0, Hp]], float)))
 blocks = lots[lots.intersects(pg)].dissolve(by="block_num").geometry
@@ -41,6 +38,6 @@ for g in blocks.boundary:
                     pts.append(sl.interpolate(v).coords[0][:2]); sid_.append(sid)
                     ta.append(sl.interpolate(max(0, v - 3)).coords[0][:2]); tb.append(sl.interpolate(min(sl.length, v + 3)).coords[0][:2])
                 sid += 1
-np.savez(cache, pts=np.array(pts), sid=np.array(sid_), ta=np.array(ta), tb=np.array(tb))
-side_pixels(T0, np.load(cache))
-print(f"{NN}: {len(pts)} side points, their pixels cached")
+np.savez(S + "block_side_points.npz", pts=np.array(pts), sid=np.array(sid_), ta=np.array(ta), tb=np.array(tb))
+side_pixels(T0, np.load(S + "block_side_points.npz"))
+print(f"{SHEET}: {len(pts)} block-side points on {sid} sides")

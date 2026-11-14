@@ -1,8 +1,8 @@
-"""block_line_weights.py for any series/sheet (env SERIES, SHEET; warp_common.py): block-line centres weighted by their probability of
-being a block line at their stroke width (the sheet's own widths fitted as two groups), on reg2's crop.  All ink is
-used as printed: text is weighed by its width like any ink.  (Until 2026-11-13 the zoning codes the years chain had
-fitted and erased were taken out first; the owner dropped that after a fit test found the same fit without it:
-README, "Text removal dropped".)  -> S/regw_NN.npz"""
+"""How likely each inked centre pixel is to be a block line, from its stroke width: the sheet's stroke widths on the
+crop of fit_targets.npz, fitted as two groups (thin block lines and heavier ink); each centre pixel's weight is its
+chance of being in the thin group.  All ink counts as printed, text included (its width speaks for it).  Kept per
+direction (18, every 10 degrees: the ink's direction within 20 degrees), for the probabilistic fit.
+-> block_line_weights.npz (weights: 18 x h x w)."""
 import json
 
 import cv2
@@ -10,12 +10,12 @@ import numpy as np
 from scipy import ndimage
 from skimage.morphology import skeletonize
 
-from warp_common import *  # noqa: F403
+from warp_common import D, S, SERIES, SHEET
 
 page = cv2.imread(str(D / "page.png"), cv2.IMREAD_GRAYSCALE) < 128
-R2 = np.load(S + f"reg2_{NN}.npz")
-x0, y0 = (int(v) for v in R2["origin"])
-B, h, w = R2["targets"].shape
+FT = np.load(S + "fit_targets.npz")
+x0, y0 = (int(v) for v in FT["origin"])
+B, h, w = FT["targets"].shape
 sub = page[y0:y0 + h, x0:x0 + w]
 half = ndimage.distance_transform_edt(sub)
 sk = skeletonize(sub)
@@ -40,7 +40,7 @@ W8 = np.zeros((B, h, w), np.float16)
 for i, b in enumerate(np.arange(0, 180, 10.0)):
     dd = np.abs((cdir - b + 90) % 180 - 90)
     W8[i] = (weight * (dd <= 20.0)).astype(np.float16)
-np.savez_compressed(S + f"regw_{NN}.npz", weights=W8, origin=np.array([x0, y0]))
-print(json.dumps({"series": SERIES, "sheet": NN,
+np.savez_compressed(S + "block_line_weights.npz", weights=W8)
+print(json.dumps({"series": SERIES, "sheet": SHEET,
                   "block_line_px": round(float(m[thin]), 2), "heavy_px": round(float(m[1 - thin]), 2),
                   "block_share": round(float(pi[thin]), 2)}))

@@ -1,16 +1,16 @@
-"""More evidence for the warp where the map's own year has no blocks (owner, 2026-11-09): dm_sides_plus_NN.npz =
-the block-side points (dm_sides, weight 1), plus
-  later blocks   lots recorded after the map's year, merged by block: their outlines (a holding split up later,
-                 e.g. the Hunters Point shipyard, had its street grid printed long before);
-  street edges   every street centre line (DataSF, active or not) offset by +- half its width: the map prints a street
-                 as its two edges.  The width per street (cnn): the gap between the block outlines either side,
-                 measured along it (median); a street with no block beside it takes its name's median, else the
-                 sheet's median.
+"""Extra evidence, for sheets whose own year has few blocks where the map prints a street grid: the block-side points
+(block_side_points.npz, weight 1), plus
+  later blocks   lots recorded after the map's year, merged by block: their outlines (land held whole in the map's year
+                 and split up later, such as the Hunters Point shipyard, often had its streets printed long before);
+  street edges   every street centre line (DataSF, current or retired) offset by half its width each way: the map
+                 prints a street as its two edges.  Each street's width (by cnn) is the gap between the block outlines
+                 either side, measured along it (median); a street with no block beside it takes its name's median,
+                 else the sheet's median.
 Each added point counts by how little the evidence already there explains it: w = 1 - exp(-d^2 / (2 s^2)), d its
 distance to the nearest block-side point (for street edges: to block sides or later-block points), s half the
-sheet's median street width: an edge with a block outline on it counts nothing, an edge with nothing near counts in
-full.  Sides are cut into straight stretches and sampled every 2 ft with tangents, as block_side_points.py.
-env SERIES, SHEET (warp_common.py).  -> S/dm_sides_plus_NN.npz (pts, sid, ta, tb, wt, kind 0 block / 1 later / 2 street)"""
+sheet's median street width.  So an edge with a block outline on it counts nothing, an edge with nothing near counts
+in full.  Sides are cut into straight stretches and sampled every 2 ft with tangents, as block_side_points.py does.
+-> extra_evidence_points.npz (pts, sid, ta, tb, wt, kind: 0 block side, 1 later block, 2 street edge)."""
 import json
 
 import cv2
@@ -19,17 +19,16 @@ import numpy as np
 import shapely
 from scipy.spatial import cKDTree
 
-from warp_common import *  # noqa: F403
+from warp_common import D, S, SHEET, lots_and_area, year
 from sfzmaps import config
 from sfzmaps.districts import lots as lotsmod
 from sfzmaps.districts import read
 from sfzmaps.transform import SheetTransform
 
 T0 = SheetTransform.from_json(json.loads((D / "transform.json").read_text()))
-SD = np.load(S + f"dm_sides_{NN}.npz")
+SD = np.load(S + "block_side_points.npz")
 Y = year()
-lots = read.load_parcels(year=Y)
-area = PART()
+lots, area = lots_and_area(cuts=1)
 Hp, Wp = cv2.imread(str(D / "page.png"), cv2.IMREAD_GRAYSCALE).shape
 pg = shapely.Polygon(T0.to_world(np.array([[0, 0], [Wp, 0], [Wp, Hp], [0, Hp]], float)))
 blocks = lots[lots.intersects(pg)].dissolve(by="block_num").geometry
@@ -130,7 +129,7 @@ pts = np.vstack([SD["pts"], P1, P2])
 out = dict(pts=pts, sid=np.r_[SD["sid"], I1, I2], ta=np.vstack([SD["ta"], A1, A2]), tb=np.vstack([SD["tb"], B1, B2]),
            wt=np.r_[np.ones(len(SD["pts"])), w1, w2], kind=np.r_[np.zeros(len(SD["pts"]), int), np.ones(len(P1), int),
                                                                    np.full(len(P2), 2)])
-np.savez(S + f"dm_sides_plus_{NN}.npz", **out)
-print(f"{NN}: block-side points {len(SD['pts'])}; later-block points {len(P1)} (weight sum {w1.sum():.0f}); street-edge "
+np.savez(S + "extra_evidence_points.npz", **out)
+print(f"{SHEET}: block-side points {len(SD['pts'])}; later-block points {len(P1)} (weight sum {w1.sum():.0f}); street-edge "
       f"points {len(P2)} (weight sum {w2.sum():.0f}); street widths measured on {len(widths)} of {len(st)} segments, "
       f"median {W_MED:.0f} ft")

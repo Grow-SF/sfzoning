@@ -1,14 +1,8 @@
 """Loaded only for the corrected-fit runs (PYTHONPATH=correction_patch, SFZ_CORR=1).  A sheet's transform.json may carry
-"correction": {"file": <confit npz>}: today's fit with that correction map laid on top, nothing re-fitted.
+"correction": {"file": <a correction .npz>}: today's fit with that correction map laid on top, nothing re-fitted.
 SheetTransform.to_world(q) then returns today's to_world(p), p solving p + u(p) = q (u: the map, bilinear between
 its grid points); to_pixel inverts to_world as before, so it returns today's to_pixel(w) + u."""
 import os
-
-if int(os.environ.get("RBF_THREADS", "1")) > 1:      # speed E7: the thin-plate spline on threads, bit-identical
-    import sys
-    sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "steps"))
-    import threaded_spline
-    threaded_spline.install()
 
 if os.environ.get("SFZ_CORR"):
     import numpy as np

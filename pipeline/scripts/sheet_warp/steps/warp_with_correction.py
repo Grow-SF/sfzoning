@@ -1,15 +1,15 @@
 """Warp one sheet with its corrected placement (today's fit + its correction field) into the stand-in data folder:
 warped.tif and warped_paper.tif (+ footprints).  Run with the correction patch on (SFZ_CORR=1,
-PYTHONPATH=correction_patch, SFZMAPS_DATA_DIR=the stand-in data folder); warp_one_corrected_sheet.sh sets these.
+PYTHONPATH=correction_patch, SFZMAPS_DATA_DIR=the stand-in data folder); warp.py sets these.
 
 How: the corrected fit sends map point w to page pixel p0 + u(p0), p0 = today's to_pixel(w).  So the scan is
 first resampled by the correction map alone (pixel p takes the scan at p + u(p); where u is 0 this is an exact
 copy), then warped exactly as today (warp.warp_sheet, today's GCP grid, gdalwarp -tps).  The footprint is traced
 on the original page and taken to the map with the corrected to_world.
-usage: warp_with_correction.py NN [plain|paper|both]"""
+usage: warp_with_correction.py SHEET [plain|paper|both]"""
 import json
+import os
 import sys
-from pathlib import Path
 
 import cv2
 import numpy as np
@@ -18,10 +18,9 @@ from scipy.ndimage import map_coordinates
 from sfzmaps import config, reading, warp
 from sfzmaps.transform import SheetTransform
 
-NN = sys.argv[1]
+SHEET = sys.argv[1]
 which = sys.argv[2] if len(sys.argv) > 2 else "both"
-import os  # noqa: E402
-D = config.WORK_DIR / os.environ["SERIES"] / NN
+D = config.WORK_DIR / os.environ["SERIES"] / SHEET
 assert "stand-in-data" in str(D), D   # never the real data
 t = SheetTransform.from_json(json.loads((D / "transform.json").read_text()))
 assert hasattr(t, "_corr"), "patch not loaded or no correction"
@@ -51,10 +50,10 @@ def make_rgba_corrected(*a, **k):
     ux = map_coordinates(G[0], [(ys - o[1]) / sp, (xs - o[0]) / sp], order=1, mode="constant", cval=0.0).astype(np.float32)
     uy = map_coordinates(G[1], [(ys - o[1]) / sp, (xs - o[0]) / sp], order=1, mode="constant", cval=0.0).astype(np.float32)
     moved = np.hypot(ux, uy) > 0
-    print(f"p{NN}: pixels with a correction {moved.mean():.1%}, max {np.hypot(ux, uy).max():.1f} px", flush=True)
+    print(f"{SHEET}: pixels with a correction {moved.mean():.1%}, max {np.hypot(ux, uy).max():.1f} px", flush=True)
     out = cv2.remap(rgba, xs + ux, ys + uy, interp["mode"], borderMode=cv2.BORDER_CONSTANT, borderValue=0)
     same = np.array_equal(out[~moved], rgba[~moved])
-    print(f"p{NN}: uncorrected pixels copied exactly: {same}", flush=True)
+    print(f"{SHEET}: uncorrected pixels copied exactly: {same}", flush=True)
     return out
 
 
@@ -69,4 +68,4 @@ for kind in (["plain", "paper"] if which == "both" else [which]):
             f.unlink()          # the stand-in folder's link to the real file, never the real file
     interp["mode"] = cv2.INTER_CUBIC if kind == "paper" else cv2.INTER_LINEAR
     warp.warp_sheet(png, Proxy(), boxes, out, paper=(kind == "paper"))
-    print(f"p{NN}: wrote {out.name}", flush=True)
+    print(f"{SHEET}: wrote {out.name}", flush=True)

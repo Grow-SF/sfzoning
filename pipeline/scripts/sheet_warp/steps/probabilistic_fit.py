@@ -1,25 +1,20 @@
-"""Probabilistic correction of today's fit, sheet NN.  No search windows, hit tests, held/free split or caps.
-Every 2000 block-line point (probin_NN.npz, placed by today's fit) is explained by the print with a probability:
-  printed      it lies on a printed block line running its way (reg2_NN.npz centres within 20 deg of its direction):
-               density along the line's normal N(d; 0, s), summed over every such centre (the centres blurred by a
-               Gaussian of width s), weight 1 - eps
-  not printed  not printed here or hidden under heavy ink: uniform over every distance a point can have (0 to the
-               distance maps' largest value, DMAX), weight eps
-A smooth displacement field u (grid every 50 px, bilinear, as first_correction_fit.py) is fitted to make all points together as
-probable as possible: minimise mean(-log p) * 2 s^2 (so a point near its line costs about d^2 at any s, the scale the
-existing smoothness was set on) + LAMBDA * smooth + RIP * rip, with the existing settings (LAMBDA 1, RATIO 2,
-RIP 1000, as correction p1).  s starts at half a street width (wider, a street's two printed edges blur into one
-ridge down its middle and pull block lines into it) and halves each stage; after each stage eps and sigma
-(the printed lines' own spread) are re-estimated from the points (EM on their distance to the nearest same-way
-centre); the last stage is at s = sigma.  The warp's control points (matched corners) are evidence too: a 2-D
-Gaussian around the matched page px with today's spread and outlier share (EM on today's residuals, kept fixed:
-re-estimating after the fit only shrinks it).  Each block side counts once (its points share one weight), or with PERPOINT=1 every point counts once.
-Prior on the correction: each grid point's correction ~ N(0, TAU), TAU = today's measured misfit (sigma at the start),
-so with no printed line nearby it stays near zero.  No fold: a steep penalty where a grid cell's determinant of
-p -> p + u(p) goes below 0 (the scan turned over); the smallest determinant is reported.
--> confit_NN_<TAG>.npz (same format as first_correction_fit.py: Gc on the crop grid, G on the page grid).
-usage: probabilistic_fit.py NN TAG [ITERS]"""
-import os
+"""The probabilistic correction of a sheet's placement (runs in the PyTorch environment).
+
+Every block-side point (probabilistic_inputs.npz, placed by today's placement) is explained by the print with a
+probability:
+  printed      it lies on a printed block line running its way: the density across the line, N(d; 0, s), summed over
+               every such line's centre pixels (block_line_weights.npz: each weighted by how likely it is a block line),
+               weight 1 - eps
+  not printed  missing from the print or hidden under heavy ink: uniform over every distance a point can have, weight eps
+The placement's control points are evidence too: a 2-D Gaussian around each one's matched page pixel.  The correction is
+a smooth displacement field (a grid every 50 px, bilinear) that makes all of it together most probable, with a prior
+keeping each grid point's correction near zero where no printed line is near, a prior on how much the field may
+stretch and shear (the spread of today's own placement), and a steep penalty where it would fold the scan over.  The
+spread s starts at half a street width and halves each stage; after each stage eps and sigma (the printed lines' own
+spread) are re-estimated from the points; the last stage is at s = sigma.
+With "extra_evidence" it fits the extra evidence points (extra_evidence_inputs.npz), each counted by its weight.
+-> probabilistic_correction.npz or extra_evidence_correction.npz (Gc: the field on the grid, spacing, origin: its
+top-left page pixel).  usage: probabilistic_fit.py [extra_evidence]"""
 import sys
 import time
 
@@ -28,34 +23,23 @@ import torch
 import torch.nn.functional as F
 from scipy.ndimage import gaussian_filter
 
-NN, TAG = sys.argv[1], sys.argv[2]
-ITERS = int(sys.argv[3]) if len(sys.argv) > 3 else 800
-LAM, RATIO, RIP = 1.0, 2.0, 1000.0
-S = os.environ["PROBDIR"]
-LOWMEM = bool(os.environ.get("LOWMEM"))
-torch.set_num_threads(int(__import__("os").environ.get("THREADS", "5")))
-R2 = np.load(S + f"reg2_{NN}.npz")
-T8 = R2["targets"]
+from warp_common import S, SHEET
+
+NAME = "extra_evidence" if sys.argv[1:] == ["extra_evidence"] else "probabilistic"
+ITERS = 800                        # optimiser steps per stage
+torch.set_num_threads(3)           # fixed: the same threads every run
+T8 = np.load(S + "fit_targets.npz")["targets"]
 B, h, w = T8.shape
-PI = np.load(S + f"probin_{NN}.npz")
+PI = np.load(S + f"{NAME}_inputs.npz")
 Pp, PB, SW = PI["P"].astype(np.float32), PI["bin"], float(PI["street_px"])
-SID = PI["sid"]
-_u, _inv, _cnt = np.unique(SID, return_inverse=True, return_counts=True)
-WPT = torch.from_numpy((1.0 / _cnt[_inv]).astype(np.float32))      # each block side counts once: its points share 1
-NSIDE = len(_u)
-if __import__("os").environ.get("PERPOINT"):      # every block-line point is its own observation
-    WPT = torch.ones(len(SID))
-NOBS = float(WPT.sum()) + 0.0
+N = len(Pp)
 GB_, GX_ = PI["gbase"].astype(np.float32), PI["gpx"].astype(np.float32)
 NG = len(GB_)
-NOBS += NG
 x0, y0 = (int(v) for v in PI["origin"])
-Hp_, Wp_ = (int(v) for v in PI["shape"])
-N = len(Pp)
-# added evidence (extra_evidence_points.py): each point's weight, and which points are block sides (kind 0)
-if "wt" in PI.files:
-    WPT = WPT * torch.from_numpy(PI["wt"].astype(np.float32))
-    NOBS = float(WPT.sum()) + NG
+# every block-side point is one observation; an extra evidence point counts by its weight, and only the block sides
+# (kind 0) measure how well the print is fitted
+WPT = torch.from_numpy(PI["wt"].astype(np.float32)) if "wt" in PI.files else torch.ones(N)
+NOBS = float(WPT.sum()) + NG
 BASE = (PI["kind"] == 0) if "kind" in PI.files else np.ones(N, bool)
 DMAX = float(T8.max())
 SP = 50
@@ -73,25 +57,8 @@ def field(G, g):
     return F.grid_sample(G, g, mode="bilinear", padding_mode="border", align_corners=True)[0, :, 0, :].T
 
 
-class Sample(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, xy, maps):
-        out = torch.zeros(3, xy.shape[0])
-        g = torch.stack([xy[:, 0] / (w - 1) * 2 - 1, xy[:, 1] / (h - 1) * 2 - 1], -1)
-        for b, ii in enumerate(groups):
-            if len(ii):
-                out[:, ii] = F.grid_sample(maps[b:b + 1], g[ii][None, None], mode="bilinear", padding_mode="zeros", align_corners=True)[0, :, 0, :]
-        ctx.save_for_backward(out[1:])
-        return out[0]
-
-    @staticmethod
-    def backward(ctx, gr):
-        (grad,) = ctx.saved_tensors
-        return (gr[None] * grad).T, None
-
-
-def sample_ad(xy, maps1):
-    """value maps only (B, 1, h, w); gradient w.r.t. xy through grid_sample"""
+def sample(xy, maps1):
+    """each point's value on the density map of its direction (B, 1, h, w); differentiable in xy"""
     g = torch.stack([xy[:, 0] / (w - 1) * 2 - 1, xy[:, 1] / (h - 1) * 2 - 1], -1)
     vals, idx = [], []
     for b, ii in enumerate(groups):
@@ -154,15 +121,10 @@ def em2(r, eps, sig, rounds=50):
 
 geps, gsig = em2(np.linalg.norm(GB_ - GX_, axis=1), 0.05, 2.0)
 print(f"control points {NG}: today eps {geps:.3f}, sigma {gsig:.2f} px", flush=True)
-print(f"p{NN}: points {N}; street width {SW:.1f} px; grid {SP} px; start (today): eps {eps:.2f}, sigma {sig:.2f} px; "
+print(f"{SHEET}: points {N}; street width {SW:.1f} px; grid {SP} px; start (today): eps {eps:.2f}, sigma {sig:.2f} px; "
       f"within 1/2/4 px {share(Pp)[0]:.1%} {share(Pp)[1]:.1%} {share(Pp)[2]:.1%}", flush=True)
-cent = (T8 == 0)
-if os.environ.get("WMAP"):        # block-line centres weighted by their probability of being a block line (regprep3)
-    cent = np.load(S + f"regw_{NN}.npz")["weights"]
-TAU_J = float(PI["tau_j"]) if "tau_j" in PI.files else None
-SHAPE = bool(os.environ.get("SHAPE"))
-print(f"centre weights: {'regw (width probability, text erased)' if os.environ.get('WMAP') else 'reg2 (in or out)'}; "
-      f"shape prior: {'on, stretch spread %.4f' % TAU_J if SHAPE else 'off (smoothness LAMBDA %.1f, rip)' % LAM}", flush=True)
+cent = np.load(S + "block_line_weights.npz")["weights"]
+TAU_J = float(PI["tau_j"])         # how much today's placement stretches and shears across the sheet
 G = torch.zeros(1, 2, gh, gw, requires_grad=True)
 gP = gp(Pp)
 gG = gp(GB_)
@@ -175,37 +137,26 @@ while True:
     last = s <= sig
     if last:
         s = sig
-    maps = np.zeros((B, 1 if LOWMEM else 3, h, w), np.float32)
+    maps = np.zeros((B, 1, h, w), np.float32)
     for b in range(B):
-        lb = gaussian_filter(np.asarray(cent[b], np.float32), s)       # summed 2-D Gaussians: along a line, N(d; 0, s)
-        maps[b, 0] = lb
-        if not LOWMEM:
-            gy_, gx_ = np.gradient(lb)
-            maps[b, 1], maps[b, 2] = gx_, gy_
+        maps[b, 0] = gaussian_filter(np.asarray(cent[b], np.float32), s)   # summed 2-D Gaussians: along a line, N(d; 0, s)
     maps = torch.from_numpy(maps)
     opt = torch.optim.Adam([G], lr=0.25)
     for it in range(ITERS):
         opt.zero_grad()
-        v = sample_ad(Pt + field(G, gP), maps) if LOWMEM else Sample.apply(Pt + field(G, gP), maps)
+        v = sample(Pt + field(G, gP), maps)
         nll = -torch.log((1 - eps) * torch.clamp(v, min=0) + eps / DMAX)
         rg = torch.sum((GBt + field(G, gG) - GXt) ** 2, dim=1)
         nllg = -torch.log((1 - geps) * torch.exp(-rg / (2 * gsig * gsig)) / (2 * np.pi * gsig * gsig) + geps / AREA)
         data = (torch.sum(nll * WPT) + torch.sum(nllg)) / NOBS * 2 * s * s
-        smooth = (torch.sum((G[:, :, 1:, :] - G[:, :, :-1, :]) ** 2) + torch.sum((G[:, :, :, 1:] - G[:, :, :, :-1]) ** 2)) / N
-        mag = torch.sqrt(torch.sum(G[0] ** 2, dim=0) + 1e-6)
-        nb = 0.25 * (mag[:-2, 1:-1] + mag[2:, 1:-1] + mag[1:-1, :-2] + mag[1:-1, 2:])
-        rip = torch.sum(torch.relu(mag[1:-1, 1:-1] - RATIO * nb) ** 2) / N
         prior = torch.sum(G ** 2) / (2 * TAU * TAU) / NOBS * 2 * s * s
         fold = torch.sum(torch.relu(-jdet(G)) ** 2) * 1e6
-        if SHAPE:
-            ux_x = (G[0, 0, :, 1:] - G[0, 0, :, :-1]) / SP
-            uy_x = (G[0, 1, :, 1:] - G[0, 1, :, :-1]) / SP
-            ux_y = (G[0, 0, 1:, :] - G[0, 0, :-1, :]) / SP
-            uy_y = (G[0, 1, 1:, :] - G[0, 1, :-1, :]) / SP
-            shape = (torch.sum(ux_x ** 2) + torch.sum(uy_x ** 2) + torch.sum(ux_y ** 2) + torch.sum(uy_y ** 2)) / (2 * TAU_J ** 2) / NOBS * 2 * s * s
-            (data + prior + shape + fold).backward()
-        else:
-            (data + prior + LAM * smooth + RIP * rip + fold).backward()
+        ux_x = (G[0, 0, :, 1:] - G[0, 0, :, :-1]) / SP
+        uy_x = (G[0, 1, :, 1:] - G[0, 1, :, :-1]) / SP
+        ux_y = (G[0, 0, 1:, :] - G[0, 0, :-1, :]) / SP
+        uy_y = (G[0, 1, 1:, :] - G[0, 1, :-1, :]) / SP
+        shape = (torch.sum(ux_x ** 2) + torch.sum(uy_x ** 2) + torch.sum(ux_y ** 2) + torch.sum(uy_y ** 2)) / (2 * TAU_J ** 2) / NOBS * 2 * s * s
+        (data + prior + shape + fold).backward()
         opt.step()
     del maps
     with torch.no_grad():
@@ -215,17 +166,11 @@ while True:
         ug = field(G, gG).numpy()
     eps, sig = em(nearest_d((Pp + u)[BASE], BASE), eps, sig)
     a1, a2, a4 = share(Pp + u)
-    print(f"  stage {stage}: s {s:.2f} px; within 1/2/4 px {a1:.1%} {a2:.1%} {a4:.1%}; eps {eps:.2f}, sigma {sig:.2f} px; control points eps {geps:.3f} sigma {gsig:.2f} px, off p99 {np.percentile(np.linalg.norm(GB_ + ug - GX_, axis=1), 99):.1f} px; "
+    print(f"  stage {stage}: s {s:.2f} px; within 1/2/4 px {a1:.1%} {a2:.1%} {a4:.1%}; eps {eps:.2f}, sigma {sig:.2f} px; control points off p99 {np.percentile(np.linalg.norm(GB_ + ug - GX_, axis=1), 99):.1f} px; "
           f"moved p50 {np.median(np.linalg.norm(u, axis=1)):.1f} p90 {np.percentile(np.linalg.norm(u, axis=1), 90):.1f} px, biggest correction {umax:.1f} px; smallest cell determinant {dmin:.2f}; {time.time() - t0:.0f}s", flush=True)
     stage += 1
     if last:
         break
     s = s / 2
-yy, xx = np.meshgrid(np.arange(0, Hp_ + SP, SP, dtype=np.float32), np.arange(0, Wp_ + SP, SP, dtype=np.float32), indexing="ij")
-cx, cy = (xx - x0) / ext[0].item() * 2 - 1, (yy - y0) / ext[1].item() * 2 - 1
-inside = (cx >= -1) & (cx <= 1) & (cy >= -1) & (cy <= 1)
-gpage = F.grid_sample(G.detach(), torch.from_numpy(np.stack([cx, cy], -1))[None], mode="bilinear", padding_mode="border", align_corners=True)[0].numpy()
-gpage[:, ~inside] = 0.0
-np.savez(S + f"confit_{NN}_{TAG}.npz", G=gpage, spacing=SP, lam=LAM, Gc=G.detach().numpy()[0], origin=np.array([x0, y0]),
-         eps=eps, sigma=sig)
-print("saved", S + f"confit_{NN}_{TAG}.npz")
+np.savez(S + f"{NAME}_correction.npz", Gc=G.detach().numpy()[0], spacing=SP, origin=np.array([x0, y0]))
+print("saved", S + f"{NAME}_correction.npz")
