@@ -1,5 +1,5 @@
 #!/bin/zsh
-# The whole warp, every series, from the pipeline's sheets: rebuild.sh's steps with check/'s settings (rebuild_env.sh;
+# The whole warp, every series, from the pipeline's sheets, with check/'s settings (rebuild_env.sh;
 # the 2000 sheets in SAME2000 mode), into rebuild-2026-11-13/run-notext and its data_ay / data_ay2 mirrors:
 #   1. per sheet: p1, its mirror entry, prob6 (rebuild_all.sh -> rebuild_series.sh -> rebuild_one.sh, JOBS sheets at a
 #      time; a sheet's finished fits are kept), each series compared with the rescued run
@@ -10,6 +10,7 @@
 set -e
 CK=${0:A:h}
 source $CK/rebuild_env.sh
+zsh $CK/torchenv.sh                                  # the torch environment, made if missing
 echo "1. fits $(date +%H:%M:%S)"
 JOBS=${JOBS:-3} zsh $CK/rebuild_all.sh $@
 echo "2. choice $(date +%H:%M:%S)"

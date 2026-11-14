@@ -82,9 +82,16 @@ def one(name):
 
     def poly(p):
         return shapely.Polygon(ring(p.exterior), [ring(i) for i in p.interiors])
-    moved = shapely.union_all([poly(p) for p in shapely.get_parts(fp) for p in
-                               (shapely.get_parts(p) if p.geom_type != "Polygon" else [p]) if p.geom_type == "Polygon"]) \
-        if fp.geom_type != "Polygon" else poly(fp)
+    if fp.geom_type == "Polygon":
+        moved = poly(fp)
+    else:
+        parts = [poly(p) for p in shapely.get_parts(fp) for p in
+                 (shapely.get_parts(p) if p.geom_type != "Polygon" else [p]) if p.geom_type == "Polygon"]
+        try:
+            moved = shapely.union_all(parts)
+        except shapely.errors.GEOSException:     # a moved ring crosses itself (1960 13): mend each piece, then join
+            moved = shapely.union_all([shapely.make_valid(p) for p in parts])
+            print(f"{name}: footprint pieces mended (a moved ring crossed itself)", flush=True)
     if not os.path.lexists(dst / "warped.footprint.geojson") or (dst / "warped.footprint.geojson").is_symlink():
         if (dst / "warped.footprint.geojson").is_symlink():
             (dst / "warped.footprint.geojson").unlink()

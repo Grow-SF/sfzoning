@@ -5,6 +5,7 @@
 # usage: [JOBS=4] fit_twice.sh SERIES [SHEET ...]
 CK=${0:A:h}
 source $CK/rebuild_env.sh
+zsh $CK/torchenv.sh || exit 1                        # the torch environment, made if missing
 SER=$1; shift
 TWICE=$PW_DATA/rebuild-2026-11-13/run-twice
 mkdir -p $TWICE/$SER

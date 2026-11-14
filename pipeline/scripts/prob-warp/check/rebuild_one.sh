@@ -8,6 +8,7 @@
 set -e
 CK=${0:A:h}
 source $CK/rebuild_env.sh
+zsh $CK/torchenv.sh                                  # the torch environment, made if missing
 SERIES=$1 SHEET=$2
 mkdir -p $PW_RUN
 if [[ $SERIES == 2000-digital-zoning ]]; then
