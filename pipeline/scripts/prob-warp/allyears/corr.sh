@@ -12,7 +12,7 @@ cd $P || exit 1
 L=$O/corr.log
 [ -f $O/confit_$2_p1.npz ] && [ -f $O/gcpmoved_$2_p1.png ] && { echo "SKIP $1 $2 (done)"; exit 0; }
 echo "STAGE $1 $2 start $(date +%H:%M:%S)" | tee $L
-st() { echo "STEP $1 $(python3 -c 'import time; print(f"{time.time():.2f}")')" >> $L; }
+st() { echo "STEP $1 $(.venv/bin/python -c 'import time; print(f"{time.time():.2f}")')" >> $L; }
 st begin
 # E3c: the side points and their pixels (sides.py) beside regprep2; independent of each other
 .venv/bin/python $A/sides.py > $O/sides.log 2>&1 &

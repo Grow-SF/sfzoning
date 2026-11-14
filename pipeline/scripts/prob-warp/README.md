@@ -78,11 +78,12 @@ zsh pipeline/scripts/prob-warp/check/rewarp_all.sh            # every series: fi
     it, to 0.001 (1960 0.705, 1964 0.720, 1968 0.704, 1972 0.725, 1975 0.742, 1980 0.774, 1980–1990 0.774,
     1990–1996 0.718, 2000 0.759). The choice changes on one sheet: 1990–1996 p28 (prob6 0.648 vs p1 0.649) keeps p1.
 
-## The approved run (`manifest.csv`)
+## The approved run
 
-174 sheets across all series got a correction on 2026-11-08/09. Per sheet, the manifest gives the chosen fit, its
-correction file, its sha256, size and modified time, and the measures behind the choice. Many of those files were
-deleted by a `/tmp` cleaner on 2026-11-13; `rewarp_all.sh` remakes every one.
+174 sheets across all series got a correction on 2026-11-08/09. Many of its files were deleted by a `/tmp` cleaner on
+2026-11-13; what survived was copied to the owner's machine (`pipeline/data/prob-warp/rescued-2026-11-13`, never in
+git) and is what the rebuilds above were compared with. `rewarp_all.sh` remakes every one of the 174 from the
+pipeline's data.
 
 ## Text removal dropped (2026-11-13)
 
