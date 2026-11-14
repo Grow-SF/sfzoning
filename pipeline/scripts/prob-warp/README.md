@@ -87,13 +87,15 @@ scratch copy (`torchenv`) was damaged by the `/tmp` cleaner, so reinstall it.
 - The torch environment: `uv venv --python 3.12 DIR && uv pip install --python DIR/bin/python torch==2.15.0
   numpy==2.5.4 scipy==1.18.1`, then `PW_TPY=DIR/bin/python`.
 - `check/`:
-  - `rebuild_one.sh` / `rebuild_series.sh`: rebuild sheets (settings in `rebuild_env.sh`; set `PW_PIPELINE` when
-    running from a copy outside the repo) and compare them with the rescued copy (`compare_rebuild.py`);
+  - `rewarp_all.sh`: the whole warp, every series: fits, choice, plus, warps (settings in `rebuild_env.sh`; set
+    `PW_PIPELINE` when running from a copy outside the repo);
+  - `rebuild_one.sh` / `rebuild_series.sh` / `rebuild_all.sh`: rebuild sheets and compare them with the rescued copy
+    (`compare_rebuild.py`);
   - `fit_twice.sh`: fit a series' sheets a second time and compare the fields (is prob6 the same every run?);
   - `field_diff.py`, `field_diff_spot.py`: how far two runs' fields differ per sheet, and a close-up of the largest.
-- `codes2000/` and `allyears/textboxes.py` no longer feed the warper. They stay because the saved reads
-  (`pipeline/saved-reads`) were made with them and its replay reads them from this branch; `codes2000/answers/` holds
-  the owner's code-check answers.
+- The scripts that made the saved reads the warper once used (`textboxes.py`, `codes2000/`) and the owner's code-check
+  answers moved to the saved-reads PR (#59): `pipeline/scripts/saved_reads/sources/` and
+  `pipeline/inputs/code-check-2000/`.
 
 ## Text removal dropped (2026-11-13)
 

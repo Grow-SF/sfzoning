@@ -16,7 +16,8 @@ A=${0:A:h}/allyears
 P=${PW_PIPELINE:-${0:A:h:h:h}}
 export PW_CODE=$A PW_PIPELINE=$P PW_RUN=${PW_RUN:-$P/data/prob-warp/run} PW_WORK=${PW_WORK:-$P/data/work}
 : ${PW_TPY:?set PW_TPY to the torch environment python (README)}
-SERIES=(${@:-1921 1929 1935 1948 1960 1964 1968 1972 1975 1980 1980-1990-zoning 1990-1996-zoning 2000-digital-zoning})
+SERIES=($@)                          # zsh keeps a ${@:-...} default as one word, so the default list is set here
+(( ${#SERIES} )) || SERIES=(1921 1929 1935 1948 1960 1964 1968 1972 1975 1980 1980-1990-zoning 1990-1996-zoning 2000-digital-zoning)
 mkdir -p $PW_RUN
 echo "1. p1 correction: ${#SERIES} series"
 for s in $SERIES; do zsh $A/corr_series.sh $s; done
