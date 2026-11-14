@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from sfzmaps import config
-from sfzmaps.transform import GCP, SheetTransform
+from sfzmaps.transform import GCP, Correction, SheetTransform
 
 W0 = np.array([6_000_000.0, 2_000_000.0])
 
@@ -187,3 +187,66 @@ def test_collinear_rejected():
     gcps = [GCP(i * 100.0, i * 100.0, 6e6 + i, 2e6 + i, "auto") for i in range(12)]
     with pytest.raises(ValueError, match="collinear"):
         SheetTransform(gcps, smoothing=1.0).fit()
+
+
+# -- corrections -------------------------------------------------------------
+def _fitted():
+    return SheetTransform(_grid(_warped, n=10), smoothing=config.TPS_SMOOTHING).fit()
+
+
+def _constant_correction(dx, dy, n=3, spacing=50.0):
+    grid = np.empty((2, n, n), np.float32)
+    grid[0], grid[1] = dx, dy
+    return Correction(grid, spacing, np.array([0.0, 0.0]))
+
+
+def test_a_correction_adds_its_field_to_to_pixel():
+    t = _fitted()
+    base = t.uncorrected()
+    inside_px = np.array([[10.0, 10.0], [50.0, 70.0], [90.0, 30.0]])
+    outside_px = np.array([[500.0, 500.0], [3000.0, 4000.0]])
+    w_in, w_out = base.to_world(inside_px), base.to_world(outside_px)
+    t.correction = _constant_correction(1.5, -2.0)
+    diff_in = t.to_pixel(w_in) - base.to_pixel(w_in)
+    assert np.abs(diff_in - [1.5, -2.0]).max() < 1e-6
+    diff_out = t.to_pixel(w_out) - base.to_pixel(w_out)
+    assert np.abs(diff_out).max() < 1e-6
+
+
+def test_to_world_inverts_a_corrected_to_pixel():
+    t = _fitted()
+    n = 6
+    ii, jj = np.meshgrid(np.arange(n), np.arange(n))
+    grid = np.stack([3.0 * np.sin(ii / 2.0) * np.cos(jj / 3.0),
+                     2.0 * np.cos(ii / 3.0) * np.sin(jj / 2.0)]).astype(np.float32)
+    t.correction = Correction(grid, 100.0, np.array([1000.0, 2000.0]))
+    rng = np.random.default_rng(0)
+    q = np.c_[rng.uniform(1010, 1490, 200), rng.uniform(2010, 2490, 200)]
+    assert np.abs(t.to_pixel(t.to_world(q)) - q).max() < 1e-3
+
+
+def test_without_a_correction_nothing_changes():
+    t = _fitted()
+    d = t.to_json()
+    t2 = SheetTransform.from_json(d)
+    q = np.array([[1234.5, 5678.9], [10.0, 20.0]])
+    assert np.array_equal(t2.to_world(q), t.to_world(q))
+    assert np.array_equal(t2.to_pixel(t.to_world(q)), t.to_pixel(t.to_world(q)))
+    assert t2.to_json() == d
+    assert "correction" not in t2.to_json()
+
+
+def test_from_json_reads_the_correction_beside_the_placement(tmp_path):
+    c = _constant_correction(1.5, -2.0)
+    c.save(tmp_path / "correction.npz")
+    d = {**_fitted().to_json(), "correction": {"file": "correction.npz"}}
+    t = SheetTransform.from_json(d, folder=tmp_path)
+    assert np.array_equal(t.correction.grid, c.grid)
+    assert t.correction.spacing == 50.0
+    assert t.to_json()["correction"] == {"file": "correction.npz"}
+
+
+def test_a_correction_needs_its_folder():
+    d = {**_fitted().to_json(), "correction": {"file": "correction.npz"}}
+    with pytest.raises(ValueError):
+        SheetTransform.from_json(d, folder=None)

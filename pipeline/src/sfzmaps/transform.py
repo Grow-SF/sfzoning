@@ -49,10 +49,12 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
 from scipy.interpolate import RBFInterpolator
+from scipy.ndimage import map_coordinates
 
 MIN_GCPS = 3
 TPS_MIN_GCPS = 10
@@ -76,15 +78,52 @@ class GCP:
     enabled: bool = True
 
 
+@dataclass(eq=False)
+class Correction:
+    """A small displacement field laid over a placement: page px -> extra page px, bilinear between
+    grid nodes and 0 outside the grid. grid[0] is the x displacement and grid[1] the y displacement
+    at each node (row = y, column = x); node (0, 0) sits at page px `origin`, nodes `spacing` px apart."""
+    grid: np.ndarray
+    spacing: float
+    origin: np.ndarray
+    file: str | None = None
+
+    def u(self, p: np.ndarray) -> np.ndarray:
+        """Displacement (n, 2) at page px (n, 2)."""
+        rows = (p[:, 1] - self.origin[1]) / self.spacing
+        cols = (p[:, 0] - self.origin[0]) / self.spacing
+        return np.stack([map_coordinates(self.grid[k], [rows, cols], order=1, mode="constant", cval=0.0)
+                         for k in (0, 1)], -1)
+
+    def save(self, path: Path, **extra) -> None:
+        np.savez(path, Gc=self.grid, spacing=self.spacing, origin=self.origin, **extra)
+
+    @classmethod
+    def load(cls, path: Path) -> "Correction":
+        path = Path(path)
+        with np.load(path) as z:
+            return cls(grid=z["Gc"], spacing=float(z["spacing"]),
+                       origin=np.asarray(z["origin"], float), file=path.name)
+
+
 @dataclass
 class SheetTransform:
     gcps: list[GCP]
     smoothing: float  # TPS ridge in ft^2 (see module docstring); 0 is forbidden
+    correction: Correction | None = None  # laid over the fitted placement; nothing is re-fitted
 
     def __post_init__(self):
         self._fitted = False
         self._rbf = None
         self._sig = None
+        self._uncorrected = None
+
+    def uncorrected(self) -> "SheetTransform":
+        """The same placement without the correction (kept while the GCPs and smoothing are unchanged)."""
+        base = self._uncorrected
+        if base is None or base.gcps is not self.gcps or base.smoothing != self.smoothing:
+            base = self._uncorrected = SheetTransform(self.gcps, self.smoothing)
+        return base
 
     def _signature(self):
         return (tuple((g.px, g.py, g.wx, g.wy) for g in self._enabled()), self.smoothing)
@@ -130,6 +169,8 @@ class SheetTransform:
 
     # -- evaluation --------------------------------------------------------
     def to_world(self, px: np.ndarray) -> np.ndarray:
+        if self.correction is not None:
+            return self._corrected_to_world(px)
         self._ensure_fit()
         p = np.atleast_2d(np.asarray(px, float))
         pn = (p - self._pm) / self._ps
@@ -138,7 +179,30 @@ class SheetTransform:
             out = out + self._rbf(pn)
         return out + self._wm
 
+    def _corrected_to_world(self, px: np.ndarray) -> np.ndarray:
+        """Uncorrected to_world(p), p solving p + u(p) = q: damped fixed-point steps that keep the best p
+        found (where the correction changes sharply between nodes this is the closest it gets)."""
+        u = self.correction.u
+        q = np.atleast_2d(np.asarray(px, float))
+        p = q - u(q)
+        best, err = p.copy(), np.linalg.norm(p + u(p) - q, axis=1)
+        for _ in range(60):
+            p = p + 0.5 * (q - u(p) - p)
+            e = np.linalg.norm(p + u(p) - q, axis=1)
+            better = e < err
+            best[better], err[better] = p[better], e[better]
+            if err.max() < 1e-4:
+                break
+        return self.uncorrected().to_world(best)
+
     def to_pixel(self, w: np.ndarray) -> np.ndarray:
+        if self.correction is not None:
+            # the correction's own direction: the uncorrected pixel plus u there, no inverting
+            p = self.uncorrected().to_pixel(w)
+            ok = np.isfinite(p).all(axis=1)
+            out = p.copy()
+            out[ok] = p[ok] + self.correction.u(p[ok])
+            return out
         self._ensure_fit()
         w = np.atleast_2d(np.asarray(w, float))
         p = self._pm + (w - self.to_world(self._pm[None])) @ self._lin_inv.T
@@ -236,8 +300,17 @@ class SheetTransform:
 
     # -- serialization -----------------------------------------------------
     def to_json(self) -> dict:
-        return {"smoothing": self.smoothing, "gcps": [asdict(g) for g in self.gcps]}
+        d = {"smoothing": self.smoothing, "gcps": [asdict(g) for g in self.gcps]}
+        if self.correction is not None:
+            d["correction"] = {"file": self.correction.file}
+        return d
 
     @classmethod
-    def from_json(cls, d: dict) -> "SheetTransform":
-        return cls([GCP(**g) for g in d["gcps"]], float(d["smoothing"]))
+    def from_json(cls, d: dict, folder: Path | None = None) -> "SheetTransform":
+        """`folder` is where a correction file named in `d` lives (beside the placement's transform.json)."""
+        correction = None
+        if d.get("correction"):
+            if folder is None:
+                raise ValueError("this placement carries a correction file; pass the folder it is in")
+            correction = Correction.load(Path(folder) / d["correction"]["file"])
+        return cls([GCP(**g) for g in d["gcps"]], float(d["smoothing"]), correction)
