@@ -14,6 +14,9 @@
 # Default STAGEs: solver-page solver-lots solver-prints solver-text-nw solver-labels solver-walls solver-solve.
 # Only nw is retrained (it uses the GPU: run when it is free); text-ne/-sw/-se are copied from --ref into the clone
 # before the first stage that reads all four chances (solver-walls, solver-text-scores), unless named.
+# After each stage is compared (or fails), its outputs in the clone are replaced by --ref's
+# (`compare_outputs.py --use-reference`), so every later stage runs on the same inputs as --ref's own run of it did:
+# a stage is held to its own epsilon, never to the epsilons of the stages above it as well.
 #
 # The stages run as `uv run --frozen sfzmaps stage NAME`, not `sfzmaps build --force NAME`: the build plans every
 # stale upstream stage as well, and a fresh clone's dvc.lock has no record of the text/labels/walls/solve stages until
@@ -31,7 +34,7 @@ while [ $# -gt 0 ]; do
     --clone) CLONE="${2:?--clone needs a folder}"; shift 2 ;;
     --ref) REF="$(cd "${2:?--ref needs a pipeline folder}" && pwd)"; shift 2 ;;
     --dry-run|-n) DRY=1; shift ;;
-    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
     -*) echo "unknown option $1" >&2; exit 2 ;;
     *) STAGES+=("$1"); shift ;;
   esac
@@ -58,6 +61,7 @@ echo "  stages   warp-2000-digital-zoning (only if the pull does not bring it) $
 for q in ne sw se; do
   has "solver-text-$q" || echo "  note     solver-text-$q is NOT retrained: copied from $REF before the first stage that needs all four"
 done
+echo "  note     after each stage is compared, its outputs in the clone are replaced by $REF's: every later stage runs on the reference's inputs"
 [ "$DRY" = 1 ] && { echo "(dry run: nothing cloned or built)"; exit 0; }
 
 # --- the branch must be pushed -------------------------------------------------------------------
@@ -112,23 +116,33 @@ copy_other_quarters() {
   done
 }
 
+compare() { (cd "$REF" && PYTHONDONTWRITEBYTECODE=1 uv run --frozen python -I scripts/compare_outputs.py "$@"); }
+
 RESULTS=()
 FAILED=0
+STOPPED=""
 for s in "${STAGES[@]}"; do
   case "$s" in solver-walls|solver-text-scores) copy_other_quarters ;; esac
   if run_stage "$s"; then
-    out="$(cd "$REF" && PYTHONDONTWRITEBYTECODE=1 uv run --frozen python -I scripts/compare_outputs.py "$s" "$CLONE/pipeline" "$REF")"; rc=$?
+    out="$(compare "$s" "$CLONE/pipeline" "$REF")"; rc=$?
     echo "$out"
   else
     out="$s: stage failed"; rc=1; echo "$out"
   fi
   RESULTS+=("$out")
   [ $rc -eq 0 ] || FAILED=1
-  [ "$s" = warp-2000-digital-zoning ] && [ $rc -ne 0 ] && break
+  # the stages after this one read the reference's outputs of it, as the reference's own run of them did
+  if ! compare --use-reference "$s" "$CLONE/pipeline" "$REF"; then
+    FAILED=1
+    STOPPED="stopped after $s: $REF has no outputs of it, so the stages after it would not run on the reference's inputs"
+    break
+  fi
 done
 
 echo; echo "== summary"
+echo "(each stage ran on the reference's outputs of the stages before it, copied in after each comparison)"
 [ -z "$PULL_NOTE" ] || echo "$PULL_NOTE"
+[ -z "$STOPPED" ] || echo "$STOPPED"
 printf '%-28s %s\n' STAGE RESULT
 for r in "${RESULTS[@]}"; do
   printf '%-28s %s\n' "${r%%:*}" "$(printf '%s' "$r" | head -1 | sed 's/^[^:]*: //')"

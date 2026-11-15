@@ -745,7 +745,9 @@ folder must be empty), runs `pixi install`, `uv sync --frozen` and `sfzmaps pull
 `warp-2000-digital-zoning` if the pull did not bring it, then runs each stage (default `solver-page solver-lots
 solver-prints solver-text-nw solver-labels solver-walls solver-solve`) and compares its outputs with this checkout's
 (`scripts/compare_outputs.py`, tested in `tests/test_compare_outputs.py`). Each stage is held to its own epsilon on the
-same upstream outputs, not chained end to end: the warp, page, lots, prints, labels, walls and solve must be
+same upstream outputs, not chained end to end: after each stage is compared (or fails), its outputs in the clone are
+replaced by this checkout's (`compare_outputs.py --use-reference`), so the next stage runs on exactly the inputs this
+checkout's run of it had, and the summary says so. The warp, page, lots, prints, labels, walls and solve must be
 byte-identical (an `.npz` by its arrays, a `.parquet` by its table); a text stage's `chance/*.png` may differ by 0.01 × 255
 (2 counts) and its `.json` numbers by 1%, and `model.pt` is not compared; `solver-text-scores` numbers match within
 1%. Only `nw` is retrained (it trains on the GPU, so run the check when the GPU is free); `text-ne`, `-sw` and `-se`

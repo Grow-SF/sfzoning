@@ -125,3 +125,22 @@ def test_missing_and_extra_files_differ(tmp_path):
     _write(tmp_path / "new", "solver-page", "only_new.txt", lambda p: p.write_text("x"))
     _write(tmp_path / "ref", "solver-page", "only_ref.txt", lambda p: p.write_text("x"))
     assert len(co.compare_stage("solver-page", tmp_path / "new", tmp_path / "ref").differs) == 2
+
+
+def test_after_a_stage_is_compared_the_references_outputs_replace_the_clones(tmp_path, capsys):
+    # the clone's text chances differ from the reference's within the epsilon; the stages after it must read the
+    # reference's, so each is held to its own epsilon and not to the ones above it as well
+    stage = "solver-text-nw"
+    _write(tmp_path / "new", stage, "chance/p01.png", _png([[0, 2]]))
+    _write(tmp_path / "new", stage, "chance/p99.png", _png([[1]]))            # made only in the clone
+    _write(tmp_path / "ref", stage, "chance/p01.png", _png([[0, 0]]))
+    _write(tmp_path / "ref", stage, "model.pt", lambda p: p.write_bytes(b"weights"))
+    assert co.compare_stage(stage, tmp_path / "new", tmp_path / "ref").status == "differs"
+    assert co.main(["--use-reference", stage, str(tmp_path / "new"), str(tmp_path / "ref")]) == 0
+    assert "copied" in capsys.readouterr().out
+    new, ref = (tmp_path / side / co.STAGE_DIRS[stage] for side in ("new", "ref"))
+    assert {p.relative_to(new): p.read_bytes() for p in new.rglob("*") if p.is_file()} == {
+        p.relative_to(ref): p.read_bytes() for p in ref.rglob("*") if p.is_file()}
+    assert co.compare_stage(stage, tmp_path / "new", tmp_path / "ref").status == "identical"
+    # no reference outputs to use: refused, and the clone's left as they are
+    assert co.main(["--use-reference", "solver-page", str(tmp_path / "new"), str(tmp_path / "ref")]) == 2

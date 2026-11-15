@@ -1,9 +1,11 @@
 """Compare one stage's outputs in two checkouts, each stage held to its own epsilon (fresh_clone_check.sh).
 
     uv run python scripts/compare_outputs.py STAGE NEW_PIPELINE_DIR REF_PIPELINE_DIR
+    uv run python scripts/compare_outputs.py --use-reference STAGE NEW_PIPELINE_DIR REF_PIPELINE_DIR
 
 NEW and REF are `pipeline/` folders. Prints `STAGE: identical | within epsilon | differs`, then the first
-differences; exits 1 only for `differs`.
+differences; exits 1 only for `differs`. With --use-reference, replaces NEW's outputs of STAGE with a copy of REF's
+(after the comparison, so the stages after it run on the reference's inputs); exits 2 if REF has none.
 
 Rules:
   * every file is compared byte for byte; if the bytes differ, an .npz is compared by its arrays' content, a
@@ -17,6 +19,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -194,7 +197,29 @@ def compare_stage(stage: str, new_pipeline: Path, ref_pipeline: Path) -> Result:
     return res
 
 
+def use_reference(stage: str, new_pipeline: Path, ref_pipeline: Path) -> Path:
+    """Put the reference's outputs of `stage` in the place of the new checkout's (those deleted first, nothing of them
+    left), so that every later stage runs on the inputs the reference's own run of it had: each stage is held to its
+    own epsilon, never to the epsilons of the stages above it as well.  Returns the new checkout's folder."""
+    sub = STAGE_DIRS[stage]
+    src, dst = Path(ref_pipeline) / sub, Path(new_pipeline) / sub
+    if not src.is_dir():
+        raise FileNotFoundError(f"{src} is missing: no reference outputs of {stage} to use")
+    shutil.rmtree(dst, ignore_errors=True)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst, symlinks=True)
+    return dst
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) == 4 and argv[0] == "--use-reference" and argv[1] in STAGE_DIRS:
+        try:
+            dst = use_reference(argv[1], Path(argv[2]), Path(argv[3]))
+        except FileNotFoundError as e:
+            print(f"{argv[1]}: {e}")
+            return 2
+        print(f"{argv[1]}: the reference's outputs copied into {dst} (the stages after it read them)")
+        return 0
     if len(argv) != 3 or argv[0] not in STAGE_DIRS:
         print(__doc__)
         print("stages:", " ".join(STAGE_DIRS))
