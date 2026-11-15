@@ -53,7 +53,7 @@ PLACEMENT_STEP = 32               # px between the page points where the placeme
 # simple: an easy area can't tell training recipes apart, and the scores are to be taken on dense areas, never only the
 # simple west.  So this is the runner-up (score 0.030), the central strip through the Mission, Noe Valley and Glen
 # Park: 99.7% inside every training map's sheets, with 10-13% of each training map's box area (7-16% of each kind it
-# prints).
+# prints).  `pipeline/scripts/choose_text_validation_area.py` re-derives the candidates and this choice from the data.
 VALIDATION_AREA = (6000442.0, 2091727.0, 6008805.0, 2108453.0)
 BOX_FIELDS = ("words", "kinds", "angles", "other", "points")    # SheetData's arrays of boxes and points
 LOAD_THREADS = 8                  # sheets read at once
