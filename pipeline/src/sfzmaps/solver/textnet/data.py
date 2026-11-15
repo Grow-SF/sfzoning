@@ -48,10 +48,13 @@ PLACEMENT_STEP = 32               # px between the page points where the placeme
 # maps' Terra sheets cover together (the union of their warped footprints, 50.2 sq mi: so 5.0 sq mi) that lie inside
 # every training map's sheets (at least 99.5% inside their intersection, 38.7 sq mi; corners on a 250 ft grid, width
 # to height 1:2 to 2:1), the one whose share of each training map's Terra box area is nearest 10%: in all and, at half
-# weight, of each kind the map prints (5% of its boxes or more; the older maps print no block numbers).  It is the
-# city's south-west (Parkside, Lakeshore, Ingleside, Ocean Avenue), with 9-12% of each training map's box area (6-15%
-# of each kind it prints).
-VALIDATION_AREA = (5983192.0, 2089227.0, 5999918.0, 2097590.0)
+# weight, of each kind the map prints (5% of its boxes or more; the older maps print no block numbers).  The rule's
+# best was the residential south-west (Parkside, Lakeshore, Ingleside; score 0.022), but its lettering is sparse and
+# simple: an easy area can't tell training recipes apart, and the scores are to be taken on dense areas, never only the
+# simple west.  So this is the runner-up (score 0.030), the central strip through the Mission, Noe Valley and Glen
+# Park: 99.7% inside every training map's sheets, with 10-13% of each training map's box area (7-16% of each kind it
+# prints).
+VALIDATION_AREA = (6000442.0, 2091727.0, 6008805.0, 2108453.0)
 BOX_FIELDS = ("words", "kinds", "angles", "other", "points")    # SheetData's arrays of boxes and points
 LOAD_THREADS = 8                  # sheets read at once
 BAND = 512                        # page rows drawn at a time when finding where crops may centre
