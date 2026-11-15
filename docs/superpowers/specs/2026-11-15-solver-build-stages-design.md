@@ -139,7 +139,8 @@ inputs/2000-digital-zoning/label_fixes.csv ─► solver-solve
   y) / 4). The lots and walls use the same grid.
 - **Per sheet** (the 13 placed 2000-digital-zoning sheets):
   - The crop is the frame quad minus the cut boxes. The frame is found on `page.png` by a port of `zframe2.py`
-    (measured, inset 2 px; its search windows stay as named constants).
+    (measured, inset 4 px as J7's saved frames were, which keeps the legend box's top line out; its search windows
+    stay as named constants).
   - The page is sampled through `SheetTransform.from_json(data/warp/.../transform.json, folder=...)`: `to_pixel`
     every 8 grid px, bilinear between, then the nearest page px.
   - Ink is page < 128 inside the crop.
