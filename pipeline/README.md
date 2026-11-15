@@ -459,8 +459,8 @@ merged page, the lots and the walls all sit on it.
 
 **The merged page** (`sfzmaps solver page`, stage `solver-page`, after `warp-2000-digital-zoning`) lays every warped
 2000 zoning sheet onto the grid as one picture of the printed ink. Each sheet's crop is its printed frame, found on
-`page.png` as four straight, slightly tilted lines and taken 2 px inside them (`solver/frame.py`; its search windows
-are fixed page px), minus the cut boxes in `inputs/merged-page/` (notes and the north arrow printed inside the
+`page.png` as four straight, slightly tilted lines and taken 4 px inside them, so the legend box's slightly bowed top
+line stays out (`solver/frame.py`; its search windows are fixed page px), minus the cut boxes in `inputs/merged-page/` (notes and the north arrow printed inside the
 frame). The sheet's corrected placement (`data/warp/2000-digital-zoning/<sheet>/transform.json`) is evaluated every
 8 grid px, read bilinearly between, and each grid px takes the nearest page px: the only resampling, so the 1-bit
 scans stay 1-bit. A grid px is ink where any sheet shows ink (page < 128) inside its crop. It writes

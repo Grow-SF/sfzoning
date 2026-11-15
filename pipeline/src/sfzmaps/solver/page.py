@@ -1,5 +1,5 @@
 """The merged page: every warped sheet of the 2000 series laid onto the solver's grid, as one picture of the printed
-ink.  Each sheet is cropped to its printed frame (`frame.find_frame`, 2 px inside) minus the cut boxes of
+ink.  Each sheet is cropped to its printed frame (`frame.find_frame`, 4 px inside) minus the cut boxes of
 `inputs/merged-page/` (notes and the north arrow printed inside the frame), and read through its corrected
 placement: `to_pixel` at every STEP-th grid px, bilinear between, then the nearest page px.  That is the only
 resampling, so the 1-bit scans stay 1-bit.  A grid px is ink where any sheet shows ink there (a sheet that is blank

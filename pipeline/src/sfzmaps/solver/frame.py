@@ -26,7 +26,9 @@ LEGEND_MIN_KEPT = 0.6                  # the legend line's own fit is used when 
 LEGEND_MAX_SD_PX = 1.0                 # ... with no more spread than this
 GAP_BIN_PX = 2.0                       # histogram bins of the gap below the top line (the fallback bottom)
 GAP_KEEP_PX = 3.0                      # the fallback bottom's points: those this close to the most common gap
-FRAME_INSET_PX = 2.0                   # the crop's distance inside the fitted lines
+FRAME_INSET_PX = 4.0                   # the crop's distance inside the fitted lines.  At 2 px the legend box's top
+                                       # line, which bows above its fitted line, leaks into the crop along the
+                                       # bottom of p09, p02 and p11 (runs of up to 190 page px of false ink)
 
 
 def band_inner(dark: np.ndarray) -> int:
