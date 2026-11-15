@@ -171,8 +171,10 @@ def test_labels_stage_depends_on_its_code_and_reads():
     deps = build.stage_deps(st)
     for f in ("trust", "streetside", "lotsize", "strokes", "labels_stage"):
         assert f"src/sfzmaps/solver/{f}.py" in deps
-    for d in ("data/solver/prints", "data/solver/lots", "data/solver/page", "data/ref"):
+    for d in ("data/solver/prints/prints.parquet", "data/solver/lots", "data/solver/page", "data/ref"):
         assert d in deps
+    # of the prints' folder only prints.parquet: a change to the Terra boxes or the summary must not rerun it
+    assert [d for d in deps if d.startswith("data/solver/prints")] == ["data/solver/prints/prints.parquet"]
     # the prints' code (and the model client it imports) is not this stage's: it reads only prints.parquet
     assert not any(d.endswith(("solver/prints.py", "/llm.py", "/cli.py", "/build.py")) for d in deps)
     assert st.upstream == ("solver-prints",) and build.stage_outs(st) == ["data/solver/labels"]

@@ -1864,7 +1864,7 @@ stages:
       - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
-      - data/solver/prints
+      - data/solver/prints/prints.parquet
       - data/solver/lots
       - data/solver/page
       - data/ref

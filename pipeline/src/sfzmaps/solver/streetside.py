@@ -10,9 +10,10 @@ the reach doubling up to FAR_SEARCH_LIMIT_FT.
 
 Four rates say how often the table's code at each side is the print's top reading (its most trusted, from
 readings_{q}.npz), for ordinary streets and for freeways.  They are fitted once per held-out quarter q against the
-April 2000 table as downloaded (`table.known_and_codes`; the by-eye corrections are never read).  A print counts
-for side A's rate when the lot under its text is outside q, and for side B's when the lot across is: no fit reads
-the table's code of a lot in its own quarter.
+April 2000 table as downloaded (`table.known_and_codes`; the by-eye corrections are never read).  A print is held
+out by the quarter of each side's lot (`lots.quarter`, from the lot's centroid), not by its own position: it counts
+for side A's rate when the lot under its text is outside q, and for side B's when the lot across is.  So no fit
+reads the table's code of a lot in its own quarter.
 
 Writes, under data/solver/labels/:
   streetside_{q}.npz  for each quarter q (nw, ne, sw, se), per print (prints.parquet's rows):
@@ -106,8 +107,9 @@ def rates(top, under, far, street, freeway, codes, known, quarter, q: str) -> di
     """The four rates of the fit that holds out quarter q.  Per print: `top` (its top reading, "" for none), `under`
     (side A's lot), `far` (side B's lot, -1 for none), `street` (on street ground) and `freeway` (its nearest
     centreline is one); per lot: `codes` (the table's), `known` and `quarter` (nw 0, ne 1, sw 2, se 3).  A print
-    counts for a side when it has a top reading, is on street ground, and that side's lot has a known code and is
-    outside q; the rate is the share of those prints whose top reading is that lot's code (0 for none)."""
+    counts for a side when it has a top reading, is on street ground, and that side's lot has a known code and lies
+    outside q (by the lot's quarter, not the print's position); the rate is the share of those prints whose top
+    reading is that lot's code (0 for none)."""
     qi = paths.QUARTERS.index(q)
     top, under, far = np.asarray(top).astype(str), np.asarray(under), np.asarray(far)
     has = street & (under >= 0) & (top != "")

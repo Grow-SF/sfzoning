@@ -134,7 +134,9 @@ def stages() -> dict[str, Stage]:
             writes=(f"data/solver/text-{q}",),
             code=("sfzmaps.solver.textnet.train", "sfzmaps.solver.textnet.predict", "sfzmaps.solver.textnet.evaluate"))
     out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
-                                 reads=("data/solver/prints", "data/solver/lots", "data/solver/page", "data/ref"),
+                                 # of the prints, only prints.parquet: the Terra boxes and the summary aren't read
+                                 reads=("data/solver/prints/prints.parquet", "data/solver/lots", "data/solver/page",
+                                        "data/ref"),
                                  writes=("data/solver/labels",), code=("sfzmaps.solver.labels_stage",))
     out["shared"] = Stage("shared", (), (), old, frozen=True)
     return out
