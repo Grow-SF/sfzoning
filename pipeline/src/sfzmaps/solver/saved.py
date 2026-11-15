@@ -25,8 +25,17 @@ def by_sheet(read: str, sheet: str) -> list[dict]:
 
 
 def by_key(read: str) -> dict[str, dict]:
-    """The lines of `read` by their `cache_key` ("llm/<key>.json")."""
-    return {r["cache_key"]: r for r in answers(read) if r.get("cache_key")}
+    """The lines of `read` by their `cache_key` ("llm/<key>.json"); a key on two lines is an error (ValueError),
+    since one would hide the other."""
+    out = {}
+    for r in answers(read):
+        k = r.get("cache_key")
+        if not k:
+            continue
+        if k in out:
+            raise ValueError(f"{read}: the cache key {k} is on more than one line")
+        out[k] = r
+    return out
 
 
 def cache_key(key: str) -> str:

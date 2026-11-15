@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from pydantic import BaseModel
 
-from sfzmaps import llm
+from sfzmaps import config, llm
 from sfzmaps.solver import grid, prints, saved
 
 SHEET = "2000-digital-zoning-p01"
@@ -105,14 +105,17 @@ def _crop_as_read3(pg, box):
     c0, c1 = int(max(0, cx - half)), int(min(pg.shape[1], cx + half))
     crop = pg[r0:r1, c0:c1]
     z = max(1, int(np.ceil(640 / max(crop.shape))))
-    z = min(z, max(1, llm.MAX_EDGE // max(crop.shape)))
+    z = min(z, max(1, 2048 // max(crop.shape)))           # the pipeline's long-edge limit when they were asked
     if z > 1:
         crop = cv2.resize(crop, None, fx=z, fy=z, interpolation=cv2.INTER_CUBIC)
     return crop, ((bx0 - c0) * z, (by0 - r0) * z, (bx1 - c0) * z, (by1 - r0) * z)
 
 
+ASKED_OF = (["openai", "gpt-6.1-sol"], [])     # Sol at low effort: the first key format, no trailing parts
+
+
 def _key(crop, prompt):
-    return f"llm/{llm._key(llm._encode(crop), prompt, CodeRead)}.json"
+    return f"llm/{llm._key(llm._encode(crop), prompt, CodeRead, model_parts=ASKED_OF)}.json"
 
 
 def _write_answers(root, read, records):
@@ -136,10 +139,10 @@ def test_third_read_found_by_recomputed_key(tmp_path, monkeypatch):
     upright = _on(_print(250, 315, box=(200, 300, 300, 330)), "RH-2", "RH-2")
     sideways = _on(_print(510, 650, box=(500, 600, 520, 700)), "RM-1", "")
     point = _on(_print(70, 110, kind=2), "", "P")
-    # the median code size of the prints with a box is (100 + 100) / 2 = 100: a point gets a box 100 wide, 50 high
+    # a point gets a box of the first run's median code size, 64 px wide and 32 high, whatever the boxes here are
     want = {}
     for name, box in (("upright", upright["box"]), ("sideways", sideways["box"]),
-                      ("point", (20.0, 85.0, 120.0, 135.0))):
+                      ("point", (70 - 32.0, 110 - 16.0, 70 + 32.0, 110 + 16.0))):
         crop, cbox = _crop_as_read3(pg, box)
         want[name] = crop, cbox, _prompt_as_read3(crop, *cbox)
     third = [{"cache_key": _key(want[n][0], want[n][2]), "answer": repr(a)} for n, a in (
@@ -151,7 +154,8 @@ def test_third_read_found_by_recomputed_key(tmp_path, monkeypatch):
     h, w = crop.shape
     recheck = []
     for rot, f, ans in (
-            (cv2.ROTATE_90_CLOCKWISE, lambda x, y: (h - 1 - y, x), {"code": "RM-2", "confidence": 0.5, "leader": False}),
+            (cv2.ROTATE_90_CLOCKWISE, lambda x, y: (h - 1 - y, x),
+             {"code": "RM-2", "confidence": 0.5, "leader": False}),
             (cv2.ROTATE_90_COUNTERCLOCKWISE, lambda x, y: (y, w - 1 - x),
              {"code": "RM-3", "confidence": 0.8, "leader": False})):
         turned = cv2.rotate(crop, rot)
@@ -190,6 +194,41 @@ def test_missing_third_read_is_counted_not_guessed():
     assert counts["third_read"] == {"asked": 2, "found": 1, "missing": 1, "saved": 2, "unused": 1}
     with pytest.raises(prints.SavedReadsMissing, match="third_read: 1 of 2"):
         prints.check_key_match(counts)
+
+
+def test_third_read_key_ignores_the_live_model_settings(monkeypatch):
+    pg = _page()
+    p = _on(_print(250, 315, box=(200, 300, 300, 330)), "RH-2", "RH-2")
+    crop, cbox = _crop_as_read3(pg, p["box"])
+    prompt = _prompt_as_read3(crop, *cbox)
+    table = {_key(crop, prompt): {"answer": {"code": "RH-2", "confidence": 0.9, "leader": False}}}
+    default_before = llm._key(llm._encode(crop), prompt, CodeRead)
+    for mod in (config, llm):
+        monkeypatch.setattr(mod, "VISION_MODEL", "gpt-9-other")
+        monkeypatch.setattr(mod, "VISION_REASONING_EFFORT", "high")
+        monkeypatch.setattr(mod, "VISION_PROVIDER", "elsewhere")
+    monkeypatch.setattr(llm, "MAX_EDGE", 512)                 # smaller than the crop: the limit they were asked under
+    assert llm._key(llm._encode(crop, max_edge=2048), prompt, CodeRead) != default_before   # the patch took
+    counts = prints.third_reads([p], {SHEET: pg}, table, {})
+    assert counts["third_read"]["found"] == 1 and p["third_code"] == "RH-2"
+
+
+def test_missing_sol_labels_stop_naming_the_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path)
+    with pytest.raises(FileNotFoundError, match=f"{SHEET}/district_labels.json"):
+        prints.sol_labels(SHEET)
+    (tmp_path / prints.paths.SERIES / SHEET).mkdir(parents=True)
+    (tmp_path / prints.paths.SERIES / SHEET / "district_labels.json").write_text(
+        json.dumps({"labels": [_label("RH-1", 10, 20)]}))
+    assert prints.sol_labels(SHEET) == [_label("RH-1", 10, 20)]
+
+
+def test_saved_by_key_refuses_a_repeated_key(tmp_path, monkeypatch):
+    monkeypatch.setattr(saved.paths, "SAVED_ANSWERS", tmp_path)
+    _write_answers(tmp_path, "x", [{"cache_key": "llm/aa.json", "answer": {"code": "P"}},
+                                   {"cache_key": "llm/aa.json", "answer": {"code": "RH-1"}}])
+    with pytest.raises(ValueError, match="llm/aa.json"):
+        saved.by_key("x")
 
 
 def _tile(px, py, items, window="0,0,3300,5100", size=768):

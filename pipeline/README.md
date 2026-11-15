@@ -495,7 +495,8 @@ the box farthest from its tile's edge winning; a turned box on no print with a k
 reads on a print) is a print of its own (kind 3). The third read and its turned re-check name no sheet or picture:
 each print's crop and question are made again as `read3.py` and `read3r.py` made them, and the answer is found by its
 cache key (`llm._key`; the answer formats keep the scripts' class names and fields, and no docstrings, since the JSON
-schema is in the key). A key not found is counted, and that print has no such read; with fewer than 95% of a read's
+schema is in the key). The keys are made with the model, picture limit and point-box size the reads were asked with
+(Sol at low effort, 2,048 px, 64 px; pinned in `solver/prints.py`), never the pipeline's settings of today. A key not found is counted, and that print has no such read; with fewer than 95% of a read's
 keys found the stage stops. It writes `data/solver/prints/prints.parquet` (one row per print; the columns are listed
 in `solver/prints.py`), `terra_boxes.json` (every sheet's decoded Terra boxes, every kind, page px) and
 `summary.json` (prints by kind; keys asked, found and missing per read). The same inputs give the same bytes.

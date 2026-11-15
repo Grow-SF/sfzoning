@@ -18,8 +18,9 @@ Three more saved reads join the prints:
     printed there; and its re-check (`third-code-read-recheck`): the crop turned a quarter each way, for codes printed
     taller than wide.  These answers name no sheet or picture, so each print's crop and question are made again
     exactly as they were asked and the answer is found by its cache key.  A key not found is counted and that print
-    has no such read; with fewer than MIN_KEY_MATCH of the keys found, the stage stops.  The key also holds the
-    pipeline's vision model (`llm._key`): the third reads were asked of its default, Sol at low effort.
+    has no such read; with fewer than MIN_KEY_MATCH of the keys found, the stage stops.  The key also names the model
+    asked; it is made with the model, picture limit and point-box size the third reads were asked with
+    (THIRD_READ_MODEL_PARTS, THIRD_READ_MAX_EDGE, POINT_CODE_SIZE), never today's settings.
 
 Writes, under data/solver/prints/:
   prints.parquet    one row per print, in the order: sheet by sheet, Terra's boxes then Sol's other points; then the
@@ -67,6 +68,15 @@ TURNED_JOIN_IOU = 0.3     # a turned box overlapping a print's Terra box by more
 CROP_REACH = 1.5          # the third read's crop reaches this many code sizes from the code's centre each way
 CROP_MIN_EDGE = 640       # ... and is enlarged by a whole factor until its long edge is at least this (px)
 MIN_KEY_MATCH = 0.95      # fewer of a read's saved answers found than this share of those asked: stop
+# How the third reads were asked (a historical fact, not a setting): of the pipeline's default vision model then, Sol
+# at low effort, whose key has the first format's parts (no trailing parameters), with pictures up to 2048 px.  The
+# keys are made with these, whatever the pipeline's model is today.
+THIRD_READ_MODEL_PARTS = (["openai", "gpt-6.1-sol"], [])
+THIRD_READ_MAX_EDGE = 2048
+# The box the third read was asked about around a bare Sol point: this wide and half as high (px).  It is read3.py's
+# `med`, the median long side of the Terra boxes of the prints it read (the first run's 1,771 with a box), measured
+# on today's kept prints (64.0 from 1,769 boxes); every saved key of a point print is found with it.
+POINT_CODE_SIZE = 64.0
 
 
 # The answer formats, copied from the scripts that asked.  A docstring would enter the JSON schema (as its
@@ -170,6 +180,15 @@ def _row(page_x, page_y, kind, box=None, terra_code="", sol_code="", sol_confide
             "recheck_found": False}
 
 
+def sol_labels(sheet: str) -> list[dict]:
+    """Sol's labels of a sheet: the "labels" of data/work/<series>/<sheet>/district_labels.json (a declared input of
+    the stage, so a missing file stops it)."""
+    f = config.WORK_DIR / paths.SERIES / sheet / "district_labels.json"
+    if not f.is_file():
+        raise FileNotFoundError(f"no Sol labels for {sheet}: can't read {f}")
+    return json.loads(f.read_text())["labels"]
+
+
 def match_prints(boxes: list[dict], labels: list[dict]) -> list[dict]:
     """One sheet's prints in page px from its Terra boxes (`terra_boxes`) and Sol's labels (district_labels.json's
     "labels"): each zoning-code box, with the read of the Sol point inside it nearest its centre (kind 0) or none
@@ -232,15 +251,15 @@ def code_box(p: dict, size: float) -> tuple[tuple, float]:
 
 def third_read_crop(page_gray: np.ndarray, box, size: float) -> tuple[np.ndarray, tuple]:
     """The close crop the third read was shown: the page within CROP_REACH sizes of the box's centre, enlarged by a
-    whole factor (cubic) until its long edge is at least CROP_MIN_EDGE (never past llm.MAX_EDGE).  Returns the crop
-    and the box in the crop's px (floats)."""
+    whole factor (cubic) until its long edge is at least CROP_MIN_EDGE (never past THIRD_READ_MAX_EDGE).  Returns
+    the crop and the box in the crop's px (floats)."""
     bx0, by0, bx1, by1 = box
     cx, cy, half = (bx0 + bx1) / 2, (by0 + by1) / 2, size * CROP_REACH
     r0, r1 = int(max(0, cy - half)), int(min(page_gray.shape[0], cy + half))
     c0, c1 = int(max(0, cx - half)), int(min(page_gray.shape[1], cx + half))
     crop = page_gray[r0:r1, c0:c1]
     z = max(1, int(np.ceil(CROP_MIN_EDGE / max(crop.shape))))
-    z = min(z, max(1, llm.MAX_EDGE // max(crop.shape)))
+    z = min(z, max(1, THIRD_READ_MAX_EDGE // max(crop.shape)))
     if z > 1:
         crop = cv2.resize(crop, None, fx=z, fy=z, interpolation=cv2.INTER_CUBIC)
     return crop, ((bx0 - c0) * z, (by0 - r0) * z, (bx1 - c0) * z, (by1 - r0) * z)
@@ -268,20 +287,20 @@ def recheck_crops(crop: np.ndarray, box) -> list[tuple[np.ndarray, str]]:
 
 
 def _key(crop: np.ndarray, prompt: str) -> str:
-    return saved.cache_key(llm._key(llm._encode(crop), prompt, CodeRead))
+    """The saved cache key of a third-read question: asked of THIRD_READ_MODEL_PARTS, not today's model."""
+    png = llm._encode(crop, max_edge=THIRD_READ_MAX_EDGE)
+    return saved.cache_key(llm._key(png, prompt, CodeRead, model_parts=THIRD_READ_MODEL_PARTS))
 
 
 def third_reads(prints: list[dict], pages: dict[str, np.ndarray], third: dict[str, dict],
                 recheck: dict[str, dict]) -> dict:
     """Find the third read and its re-check of every print of kinds 0-2 (changed in place) in the saved answers
-    `third` and `recheck` (by cache key, `saved.by_key`), each crop and question made again as they were asked.  The
-    code size of a point is the median long side of the prints' Terra boxes.  The re-check is asked of codes printed
-    taller than wide whose longest read has more than one letter; of its two answers the surer one with a code wins.
-    `pages`: each sheet's page, grayscale.  Returns, per read, the keys asked, found and missing, the saved answers,
-    and those no print asked for."""
+    `third` and `recheck` (by cache key, `saved.by_key`), each crop and question made again as they were asked; a
+    point is asked about with a box of POINT_CODE_SIZE.  The re-check is asked of codes printed taller than wide whose
+    longest read has more than one letter; of its two answers the surer one with a code wins.  `pages`: each sheet's
+    page, grayscale.  Returns, per read, the keys asked, found and missing, the saved answers, and those no print
+    asked for."""
     asked = [p for p in prints if p["kind"] < 3]
-    sizes = np.array([code_box(p, 0.0)[1] for p in asked], float)
-    size = np.median(sizes[sizes > 0]) if (sizes > 0).any() else 0.0
     found = {"third_read": set(), "recheck": set()}
     counts = {"third_read": {"asked": 0, "found": 0, "missing": 0}, "recheck": {"asked": 0, "found": 0, "missing": 0}}
 
@@ -295,7 +314,7 @@ def third_reads(prints: list[dict], pages: dict[str, np.ndarray], third: dict[st
         return CodeRead.model_validate(rec["answer"])
 
     for p in asked:
-        box, sz = code_box(p, size)
+        box, sz = code_box(p, POINT_CODE_SIZE)
         crop, cbox = third_read_crop(pages[p["sheet"]], box, sz)
         p.update(third_code="", third_confidence=math.nan, third_leader=False, third_found=False,
                  recheck_code="", recheck_confidence=math.nan, recheck_found=False,
@@ -395,11 +414,9 @@ def build_prints() -> dict:
         warp = config.DATA_DIR / "warp" / paths.SERIES / name
         transform = SheetTransform.from_json(json.loads((warp / "transform.json").read_text()), folder=warp)
         footprint = shapely.from_geojson((warp / "warped.footprint.geojson").read_text())
-        labels_file = config.WORK_DIR / paths.SERIES / name / "district_labels.json"
-        labels = json.loads(labels_file.read_text())["labels"] if labels_file.exists() else []
         boxes[name] = terra_boxes(name, terra)
         placed[name] = transform, footprint
-        rows += _place(match_prints(boxes[name], labels), name, transform, footprint, lot_rasters, mapped)
+        rows += _place(match_prints(boxes[name], sol_labels(name)), name, transform, footprint, lot_rasters, mapped)
     codes_known = set(lot_rasters.codes[lot_rasters.known]) | {p["sol_code"] for p in rows if p["sol_code"]}
     new = []
     for name in names:
