@@ -233,9 +233,13 @@ inputs/2000-digital-zoning/label_fixes.csv ─► solver-solve
     rather than lowering the iterations. **(my call)**
 - **Outputs per quarter:**
   - the model;
-  - the text chance of every sheet's page (uint8 PNG per sheet), predicted by that quarter's model;
-  - `evaluation.json`, scored on its held-out quarter: held-out text found by kind, and the share of table
-    district-line ink called text. R&D for NE: 94.9% of words found, 0.55% of district-line ink.
+  - the text chance of every sheet's page (uint8 PNG per sheet), predicted by that quarter's model.
+- **Scores** (the `solver-text-scores` stage, so scoring never retrains):
+  - each quarter is scored on its held-out pixels;
+  - the scores are held-out text found by kind, and the share of table district-line ink called text;
+  - R&D for NE: 94.9% of words found, 0.55% of district-line ink.
+- **Taking turns on the GPU:** two processes using the Mac's GPU at once can return wrong numbers. The detector takes
+  the GPU alone, and the warp's fits share it among themselves (`sfzmaps.gpu`).
 - **Epsilon:** predictions within 0.01 between runs.
 
 ### Labels: trust, street sides, lot size, strokes (plan E4 second half, E5, E6)
