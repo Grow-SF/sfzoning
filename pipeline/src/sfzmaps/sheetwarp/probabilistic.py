@@ -155,19 +155,22 @@ def observation_count(wt: np.ndarray | None, n_points: int, n_control_points: in
     return (float(np.sum(wt, dtype=np.float64)) if wt is not None else float(n_points)) + n_control_points
 
 
-def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weights: np.ndarray) -> Correction:
+def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weights: np.ndarray,
+                             stop_when_settled: bool = True) -> Correction:
     """The displacement field that makes every point and control point together most probable (PyTorch, on
     `fit_device()`; the grid comes back as float32 on the CPU).  Everything the fit put on the device is given back
-    before it returns (a worker fits sheet after sheet)."""
+    before it returns (a worker fits sheet after sheet).  With `stop_when_settled` False every stage runs the full
+    ITERS steps (the street-edge fit needs that: its low-weight points pull slowly)."""
     from sfzmaps.sheetwarp.device import fit_device, release_device_memory
 
     try:
-        return _fit_probabilistic(inputs, targets, weights)
+        return _fit_probabilistic(inputs, targets, weights, stop_when_settled)
     finally:
         release_device_memory(fit_device())
 
 
-def _fit_probabilistic(inputs: ProbabilisticInputs, targets: Targets, weights: np.ndarray) -> Correction:
+def _fit_probabilistic(inputs: ProbabilisticInputs, targets: Targets, weights: np.ndarray,
+                       stop_when_settled: bool = True) -> Correction:
     import torch
 
     from sfzmaps.sheetwarp.device import MapSampler, PointField, blur, fit_device
@@ -289,7 +292,7 @@ def _fit_probabilistic(inputs: ProbabilisticInputs, targets: Targets, weights: n
         while steps < ITERS:
             opt.zero_grad()
             stage_loss = loss(G, maps, s)
-            if stop.settled(steps, stage_loss.detach()):
+            if stop_when_settled and stop.settled(steps, stage_loss.detach()):
                 break
             stage_loss.backward()
             opt.step()

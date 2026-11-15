@@ -47,7 +47,7 @@ def fit_sheet(sheet: Sheet) -> tuple[Correction, str, dict]:
     if sheet.name in STREET_EDGES_AND_LATER_BLOCKS.get(sheet.series, ()):
         points = street_edges_and_later_blocks(sheet, sides)
         street_inputs = probabilistic_fit.probabilistic_inputs(sheet, points, aim)
-        return probabilistic_fit.probabilistic_correction(street_inputs, aim, weights), STREET_EDGES_KIND, s
+        return probabilistic_fit.probabilistic_correction(street_inputs, aim, weights, stop_when_settled=False), STREET_EDGES_KIND, s
     kind = scores.choose(s)
     return {"first": first, "probabilistic": probabilistic}[kind], kind, s
 

@@ -82,6 +82,15 @@ def test_a_stage_stops_when_its_loss_settles(monkeypatch, caplog):
     assert all(50 <= n < ITERS for n in steps), steps
 
 
+def test_without_the_stop_rule_every_stage_runs_the_full_cap(monkeypatch, caplog):
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "cpu")
+    inputs, targets, weights = _synthetic_sheet()
+    with caplog.at_level(logging.INFO, logger=probabilistic.__name__):
+        probabilistic_correction(inputs, targets, weights, stop_when_settled=False)
+    steps = [int(m) for m in re.findall(r"stage \d+: .*?steps (\d+)", caplog.text)]
+    assert len(steps) >= 3 and all(n == ITERS for n in steps), steps
+
+
 def test_the_stop_rule_compares_the_loss_every_25_steps_from_50_on():
     def stop_step(loss_after):
         """the step a stage stops at, given its loss after each step"""
