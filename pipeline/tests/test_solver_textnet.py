@@ -1,7 +1,11 @@
 import contextlib
 import dataclasses
 import gzip
+import hashlib
 import json
+import os
+import platform
+import shutil
 import threading
 
 import cv2
@@ -11,19 +15,16 @@ import torch
 import torch.nn.functional as F
 
 from sfzmaps import config
-from sfzmaps.solver import grid, paths
-from sfzmaps.solver.textnet import boxes, data, evaluate, model, predict, scores, stage, train
+from sfzmaps.solver import grid, paths, runs
+from sfzmaps.solver.textnet import boxes, data, model, predict, score_stage, scores, stage, train, trial
 from sfzmaps.transform import SheetTransform
 
 SHEET = "2000-digital-zoning-p01"
 SIZE = 640
-SPLIT_PX = 319.5          # the quarter split, page px both ways: px 0-319 west / north, 320 on east / south
-WORD_A = [100, 100, 180, 130]     # a zoning code read left to right, in nw
-WORD_B = [450, 80, 470, 200]      # a street name read bottom to top, in ne
+WORD_A = [100, 100, 180, 130]     # a zoning code read left to right
+WORD_B = [450, 80, 470, 200]      # a street name read bottom to top
 OTHER_NEAR_A = [160, 110, 230, 125]   # another pass's box, half on word A
-OTHER_ALONE = [100, 400, 160, 430]    # another pass's box on no Terra box, in sw
-SOL_IN_A = (175, 115)             # a Sol label point inside word A's box
-SOL_ALONE = (500, 500)            # a Sol label point far from any box, in se
+OTHER_ALONE = [100, 400, 160, 430]    # another pass's box on no Terra box
 
 
 @contextlib.contextmanager
@@ -72,71 +73,21 @@ def _page() -> np.ndarray:
     return pg
 
 
-def _transform_json() -> dict:
-    """An affine placement, 4 ft per page px, north up, with the quarter split at page px (SPLIT_PX, SPLIT_PX)."""
-    sx, sy = grid.QUARTER_SPLIT
-    corners = [(0.0, 0.0), (640.0, 0.0), (640.0, 640.0), (0.0, 640.0)]
-    gcps = [{"px": px, "py": py, "wx": sx + 4 * (px - SPLIT_PX), "wy": sy - 4 * (py - SPLIT_PX), "source": "manual"}
-            for px, py in corners]
-    return {"smoothing": 1.0, "gcps": gcps}
-
-
-def _terra(text, box, kind, angle):
-    return {"text": text, "kind": kind, "box": box, "angle_deg": angle, "edge": 100}
-
-
-@pytest.fixture
-def sheet(tmp_path, monkeypatch):
-    """One synthetic sheet laid out as the stage reads it: its page, Sol's labels, its corrected placement, Terra's
-    boxes and one other pass's boxes."""
-    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
-    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
-    monkeypatch.setattr(paths, "PRINTS_DIR", tmp_path / "prints")
-    monkeypatch.setattr(paths, "SAVED_ANSWERS", tmp_path / "answers")
-    monkeypatch.setattr(paths, "SHEETS", (SHEET,))
-    work = tmp_path / "work" / paths.SERIES / SHEET
-    work.mkdir(parents=True)
-    cv2.imwrite(str(work / "page.png"), _page())
-    labels = [{"code": "RH-1", "kind": "use", "x": SOL_IN_A[0], "y": SOL_IN_A[1]},
-              {"code": "RH-2", "kind": "use", "x": SOL_ALONE[0], "y": SOL_ALONE[1]}]
-    (work / "district_labels.json").write_text(json.dumps({"labels": labels}))
-    warp = tmp_path / "data" / "warp" / paths.SERIES / SHEET
-    warp.mkdir(parents=True)
-    (warp / "transform.json").write_text(json.dumps(_transform_json()))
-    paths.PRINTS_DIR.mkdir()
-    terra = [_terra("RH-1", WORD_A, "zoning code", 0), _terra("ELM ST", WORD_B, "street name", 90)]
-    (paths.PRINTS_DIR / "terra_boxes.json").write_text(json.dumps({SHEET: terra, "another-sheet": []}))
-    other = tmp_path / "answers" / data.OTHER_PASSES
-    other.mkdir(parents=True)
-    with gzip.open(other / "some-pass.jsonl.gz", "wt") as f:
-        for box in (OTHER_NEAR_A, OTHER_ALONE):
-            f.write(json.dumps({"sheet": SHEET, "text": "x", "kind": "other", "box": box, "angle_deg": 0}) + "\n")
-        f.write(json.dumps({"sheet": "another-sheet", "text": "x", "kind": "other", "box": [300, 300, 340, 340],
-                            "angle_deg": 0}) + "\n")
-    return SHEET
-
-
-def test_targets_mark_boxes_and_unknowns(sheet):
-    t = data.sheet_targets(sheet, "ne")
-    assert t.ink.shape == (SIZE, SIZE) and t.ink[300, 10] and not t.ink[5, 5]
-    # Terra's boxes are text, with their kind and reading angle
-    assert t.text[105:126, 105:176].all() and t.text[85:196, 452:469].all()
-    assert t.text.sum() == 81 * 31 + 21 * 121                 # the two boxes, their edges included, nothing else
-    assert (t.kind[105, 105], t.kind[100, 455]) == (data.KINDS["zoning code"], data.KINDS["street name"])
-    assert t.kind[50, 50] == data.NO_KIND
-    assert (t.angle[115, 140], t.angle[150, 460]) == (0, 90)
-    # unknown: other passes' boxes and discs at Sol's points, minus every Terra box; not another sheet's boxes
-    assert t.unknown[115, 200] and not t.unknown[115, 170]       # the other box beyond word A, and inside it
-    assert t.unknown[415, 130] and t.unknown[500, 529] and not t.unknown[500, 532]
-    assert t.unknown[140, 175] and not t.unknown[115, 150]       # Sol's point in A: its disc is unknown only outside A
-    assert not t.unknown[320, 320]
-    # held out: the ne quarter (rows 0-319, columns 320-639) by the placement and the split
-    assert t.heldout[:320, 320:].all() and t.heldout.sum() == 320 * 320
-    assert not t.known[:320, 320:].any()
-    assert np.array_equal(t.known, ~t.unknown & ~t.heldout)
-    # crops centre on ink or text outside the held-out quarter
-    assert t.centre_ok[300, 10] and t.centre_ok[115, 140] and not t.centre_ok[150, 460] and not t.centre_ok[300, 400]
-    assert not t.centre_ok[50, 50]
+def test_targets_mark_boxes_and_unknowns(maps):
+    sd, = data.load_sheets([paths.SERIES], hold_out_validation=False)
+    t = data.crop_targets(sd, SIZE // 2, SIZE // 2, SIZE, 1.0, 0)        # the whole page
+    assert t["ink"].shape == (SIZE, SIZE) and t["ink"][300, 10] and not t["ink"][5, 5]
+    # Terra's boxes are text, with their kind and reading angle: above the line, words A and B, edges included
+    assert t["text"][100:131, 100:181].all() and t["text"][80:201, 450:471].all()
+    assert t["text"][:300].sum() == 81 * 31 + 21 * 121
+    assert (t["kind"][105, 105], t["kind"][100, 455]) == (data.KINDS["zoning code"], data.KINDS["street name"])
+    assert t["kind"][50, 50] == data.NO_KIND
+    assert (t["angle"][115, 140], t["angle"][150, 460]) == (0, 90)
+    # unknown (not known): other passes' boxes and discs at Sol's points, minus every Terra box
+    assert not t["known"][115, 200] and t["known"][115, 170]       # the other box beyond word A, and inside it
+    assert not t["known"][415, 130] and not t["known"][500, 529] and t["known"][500, 532]
+    assert not t["known"][140, 175] and t["known"][115, 150]       # Sol's point in A: its disc is unknown outside A
+    assert t["known"][600, 50]
 
 
 def test_model_output_shape():
@@ -151,6 +102,7 @@ def test_model_output_shape():
 
 
 SMALL = train.Recipe(batch=4, crop=64)        # small batches, so CPU tests stay quick; every other setting today's
+TINY = train.Recipe(iterations=2, batch=2, crop=64, width=8)      # a few seconds' training, for the stages' tests
 
 
 def test_three_iterations_twice_give_identical_weights_on_cpu(maps):
@@ -165,10 +117,10 @@ def test_three_iterations_twice_give_identical_weights_on_cpu(maps):
     assert not all(torch.equal(first[k], untrained[k]) for k in first)
 
 
-def test_crop_turns_the_reading_angle_with_the_picture(sheet):
-    t = data.sheet_targets(sheet, "ne")
-    flat = train.crop(t, 140, 460, scale=1.0, turns=0, size=64)
-    turned = train.crop(t, 140, 460, scale=1.0, turns=1, size=64)
+def test_crop_turns_the_reading_angle_with_the_picture(maps):
+    sd, = data.load_sheets([paths.SERIES], hold_out_validation=False)
+    flat = data.crop_targets(sd, 140, 460, 64, 1.0, 0)          # on word B, read bottom to top
+    turned = data.crop_targets(sd, 140, 460, 64, 1.0, 1)
     assert np.array_equal(turned["ink"], np.rot90(flat["ink"]))
     on = turned["text"] > 0
     assert on.any() and (turned["angle"][on] == -180).all()      # 90 + 90 = 180, read in [-180, 180)
@@ -182,26 +134,6 @@ def _loss_and_grads(net, parts, ink_only="off"):
     loss, _ = train.loss_fn(net(x), t, k, a, w)
     loss.backward()
     return loss.item(), [p.grad.clone() for p in net.parameters()]
-
-
-def test_heldout_pixels_carry_no_loss(sheet):
-    t = data.sheet_targets(sheet, "ne")
-    torch.manual_seed(0)
-    net = model.TextNet()
-    # a crop made only of the held-out quarter, on word B: no loss, no gradient
-    inside = train.crop(t, 140, 460, scale=1.0, turns=0, size=64)
-    assert not inside["known"].any() and inside["text"].any()
-    loss, grads = _loss_and_grads(net, inside)
-    assert loss == 0 and all((g == 0).all() for g in grads)
-    # a crop across the split: changing the held-out pixels' targets changes nothing
-    across = train.crop(t, 200, 330, scale=1.0, turns=0, size=64)
-    held = ~across["known"] & ~t.unknown[168:232, 298:362]
-    assert held.any() and across["known"].any()
-    loss, grads = _loss_and_grads(net, across)
-    flipped = {**across, "text": np.where(held, 1 - across["text"], across["text"]),
-               "kind": np.where(held, 1, across["kind"]), "angle": np.where(held, 45, across["angle"])}
-    loss2, grads2 = _loss_and_grads(net, flipped)
-    assert loss2 == loss and all(torch.equal(g, g2) for g, g2 in zip(grads, grads2))
 
 
 def _boolean_indexed_loss(out, t, k, a, w):
@@ -253,174 +185,6 @@ def test_fit_stops_at_the_first_log_whose_loss_is_not_finite(maps, monkeypatch):
     with pytest.raises(FloatingPointError, match="iterations 3-4"):
         train.fit(sheets, dataclasses.replace(SMALL, iterations=6, batch=2, width=8), device="cpu", seed=0)
     assert len(seen) == 4
-
-
-@pytest.fixture
-def solver_dir(tmp_path, monkeypatch):
-    """The solver's outputs in the test's folder."""
-    monkeypatch.setattr(paths, "SOLVER_DIR", tmp_path / "solver")
-    monkeypatch.setattr(paths, "TEXT_SCORES_DIR", tmp_path / "solver" / "text-scores")
-    return tmp_path / "solver"
-
-
-def test_a_quarter_trains_and_scores_in_one_exclusive_turn_and_writes_only_the_model_and_chances(
-        sheet, solver_dir, monkeypatch):
-    turns, calls = [], []
-
-    @contextlib.contextmanager
-    def turn(exclusive, device):
-        turns.append((exclusive, device))
-        yield
-        turns.append(None)
-
-    def inside(fn, what):
-        def wrapped(*args, **kwargs):
-            calls.append((what, turns[-1:] == [(True, "cpu")]))
-            return fn(*args, **kwargs)
-        return wrapped
-
-    monkeypatch.setattr(stage, "DEFAULT_RECIPE", SMALL)
-    monkeypatch.setattr(stage.gpu, "gpu_turn", turn)
-    monkeypatch.setattr(data, "sheet_targets", inside(data.sheet_targets, "targets"))
-    monkeypatch.setattr(train, "loss_fn", inside(train.loss_fn, "step"))
-    monkeypatch.setattr(predict, "chance", inside(predict.chance, "scored"))
-    paths.text_dir("ne").mkdir(parents=True)
-    (paths.text_dir("ne") / "evaluation.json").write_text("{}")       # a file no step of the stage writes
-    s = stage.build_text("ne", iterations=2, device="cpu")
-    # the pages' targets are read before the turn; every step and every sheet scored is inside it
-    assert turns == [(True, "cpu"), None]
-    assert calls == [("targets", False), ("step", True), ("step", True), ("scored", True)]
-    assert sorted(p.name for p in paths.text_dir("ne").iterdir()) == ["chance", "model.pt"]
-    assert [p.name for p in paths.chance_dir("ne").iterdir()] == [f"{SHEET}.png"]
-    saved = torch.load(paths.text_dir("ne") / "model.pt")
-    assert (saved["iterations"], saved["device"], saved["seed"]) == (2, "cpu", 0)
-    assert train.Recipe(**saved["recipe"]) == dataclasses.replace(SMALL, iterations=2)
-    assert (s["quarter"], s["iterations"], s["device"], s["sheets"]) == ("ne", 2, "cpu", 1)
-
-
-def test_a_quarter_trains_the_default_steps_unless_told_and_never_zero(solver_dir, monkeypatch):
-    steps = []
-    monkeypatch.setattr(train, "quarter_targets", lambda q: [])
-    monkeypatch.setattr(train, "fit", lambda sheets, recipe, device, seed=0: steps.append(recipe.iterations) or "net")
-    monkeypatch.setattr(train, "save_model", lambda *args: None)
-    monkeypatch.setattr(predict, "predict_sheets", lambda q, device: 0)
-    stage.build_text("nw", device="cpu")
-    stage.build_text("nw", iterations=5, device="cpu")
-    assert steps == [train.ITERATIONS, 5]
-    for bad in (0, -1):
-        with pytest.raises(ValueError, match="at least 1"):
-            stage.build_text("nw", iterations=bad, device="cpu")
-    with pytest.raises(ValueError, match="no quarter"):
-        stage.build_text("north", device="cpu")
-    assert steps == [train.ITERATIONS, 5]
-
-
-def test_the_text_command_runs_the_stage_and_refuses_zero_iterations(monkeypatch):
-    from typer.testing import CliRunner
-
-    from sfzmaps import cli
-    got = []
-
-    def build_text(q, iterations=None, device=None):
-        got.append((q, iterations, device))
-        return {"quarter": q, "iterations": iterations or train.ITERATIONS, "device": device or "cpu", "sheets": 13,
-                "seconds": {"targets": 1.0, "train": 2.0, "predict": 3.0}}
-
-    monkeypatch.setattr(stage, "build_text", build_text)
-    runner = CliRunner()
-    assert runner.invoke(cli.app, ["solver", "text", "nw", "--iterations", "0"]).exit_code != 0
-    assert runner.invoke(cli.app, ["solver", "text", "nowhere"]).exit_code != 0
-    res = runner.invoke(cli.app, ["solver", "text", "nw", "--device", "cpu"])
-    assert res.exit_code == 0 and "13 sheets scored" in res.output
-    assert got == [("nw", None, "cpu")]
-
-
-def test_scoring_without_a_model_leaves_the_last_chances_alone(sheet, solver_dir):
-    old = paths.chance_dir("ne")
-    old.mkdir(parents=True)
-    (old / f"{SHEET}.png").write_bytes(b"the last run's")
-    with pytest.raises(FileNotFoundError, match="model.pt"):
-        predict.predict_sheets("ne", device="cpu")
-    assert (old / f"{SHEET}.png").read_bytes() == b"the last run's"
-
-
-def test_scores_write_one_evaluation_per_quarter_from_one_set_of_district_lines(solver_dir, monkeypatch):
-    made = []
-    monkeypatch.setattr(evaluate, "district_lines", lambda: made.append("lines") or np.ones((2, 2), bool))
-    monkeypatch.setattr(evaluate, "score_quarter", lambda q, lines: {"quarter": q, "line_px": int(lines.sum())})
-    out = evaluate.build_scores()
-    assert made == ["lines"] and list(out) == list(paths.QUARTERS)
-    for q in paths.QUARTERS:
-        assert json.loads((paths.TEXT_SCORES_DIR / f"evaluation_{q}.json").read_text()) == {"quarter": q, "line_px": 4}
-
-
-def test_district_lines_are_borders_between_known_different_codes():
-    grown = np.array([[0, 0, 1, 1, 2, 2],
-                      [0, 0, 1, 1, 2, 2],
-                      [3, 3, 3, 3, 3, 3]], np.int32)
-    codes = np.array(["RH-1", "RH-2", "RH-2", ""])          # lot 3's code is not known
-    known = np.array([True, True, True, False])
-    lines = evaluate.district_line_px(grown, codes, known)
-    # one px per crack between lots of different known codes: the px right of (or below) the crack
-    expected = np.zeros(grown.shape, bool)
-    expected[0:2, 2] = True                                  # lots 0 | 1; 1 | 2 share RH-2; 3 is not known
-    assert np.array_equal(lines, expected)
-
-
-def _per_sheet(folder: str, names) -> list[str]:
-    return [f"{folder}/{sheet}/{name}" for sheet in paths.SHEETS for name in names]
-
-
-def test_text_stages_depend_on_the_detector_code_only():
-    from sfzmaps import build
-    table = build.stages()
-    for q in paths.QUARTERS:
-        st = table[f"solver-text-{q}"]
-        deps = build.stage_deps(st)
-        assert st.code == ("sfzmaps.solver.textnet.stage",)
-        assert {"src/sfzmaps/solver/textnet/stage.py", "src/sfzmaps/solver/textnet/train.py",
-                "src/sfzmaps/solver/textnet/predict.py", "src/sfzmaps/solver/textnet/data.py",
-                "src/sfzmaps/solver/textnet/model.py", "src/sfzmaps/solver/grid.py",
-                "data/solver/prints/terra_boxes.json"} <= set(deps)
-        # hours of training must not rerun for a change to the lots, the table, the merged page, the codes, the
-        # prints' code, the model client, the command line, the scoring, the walls' or the solve's folders (runs.py)
-        # or the GPU's turns (which decide when it computes, never what); of the prints' output only the Terra boxes
-        # are read, and the lots not at all
-        assert not any(d.endswith(("solver/lots.py", "solver/table.py", "solver/page.py", "solver/frame.py",
-                                   "solver/codes.py", "solver/prints.py", "/llm.py", "/cli.py", "textnet/evaluate.py",
-                                   "solver/runs.py", "/gpu.py"))
-                       for d in deps)
-        assert [d for d in deps if d.startswith("data/solver/")] == ["data/solver/prints/terra_boxes.json"]
-        # of each sheet only the files the detector reads: its placement and correction, its page, Sol's points;
-        # nothing else of data/warp or data/work (another file the warp or the label stage writes retrains nothing)
-        assert [d for d in deps if d.startswith(("data/warp", "data/work"))] == (
-            _per_sheet(f"data/warp/{paths.SERIES}", ("transform.json", "correction.npz"))
-            + _per_sheet(f"data/work/{paths.SERIES}", ("page.png", "district_labels.json")))
-        assert st.upstream == ("solver-prints",) and build.stage_outs(st) == [f"data/solver/text-{q}"]
-        assert build.stage_commands(f"solver-text-{q}") == [["solver", "text", q]]
-
-
-def test_the_text_scores_stage_reads_every_quarters_chances_not_the_detector_code():
-    from sfzmaps import build
-    table = build.stages()
-    st = table["solver-text-scores"]
-    deps = build.stage_deps(st)
-    assert st.code == ("sfzmaps.solver.textnet.evaluate",)
-    assert set(st.upstream) == {f"solver-text-{q}" for q in paths.QUARTERS}
-    assert {f"data/solver/text-{q}/chance" for q in paths.QUARTERS} | {"data/solver/lots"} <= set(deps)
-    assert "src/sfzmaps/solver/textnet/evaluate.py" in deps and "src/sfzmaps/solver/lots.py" in deps
-    # the scores read the chances, not the weights or the code that made them
-    assert not any(d.endswith(("textnet/train.py", "textnet/predict.py", "textnet/model.py", "textnet/stage.py",
-                               "/gpu.py", "model.pt")) for d in deps)
-    # of each sheet only the files the scores read: the detector's own, and the warped footprint
-    assert [d for d in deps if d.startswith(("data/warp", "data/work"))] == (
-        _per_sheet(f"data/warp/{paths.SERIES}", ("transform.json", "correction.npz"))
-        + _per_sheet(f"data/work/{paths.SERIES}", ("page.png", "district_labels.json"))
-        + _per_sheet(f"data/warp/{paths.SERIES}", ("warped.footprint.geojson",)))
-    assert build.stage_outs(st) == ["data/solver/text-scores"]
-    assert build.stage_commands("solver-text-scores") == [["solver", "text-scores"]]
-    names = list(table)
-    assert names.index("solver-text-scores") > max(names.index(f"solver-text-{q}") for q in paths.QUARTERS)
 
 
 # --- the training data of many maps, held out by an area -------------------------------------------------------------
@@ -865,6 +629,9 @@ def test_recipe_round_trips_through_the_saved_model(maps, tmp_path):
     assert train.Recipe().name() == "default"
     assert train.Recipe(iterations=2000, half_size=True, ink_only="ink").name() == (
         "half_size-ink_only=ink-iterations=2000")
+    # but not prefetch, which never changes the weights (the same batches, drawn sooner)
+    assert train.Recipe(prefetch=True).name() == "default"
+    assert train.Recipe(half_size=True, prefetch=True).name() == "half_size"
     sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
     recipe = train.Recipe(iterations=2, batch=2, crop=64, width=8, half_size=True, heads="text", decoder="light",
                           ink_only="ink+1px", weight_average=0.5, max_lr=6e-3, pct_start=0.1)
@@ -1156,3 +923,414 @@ def test_scores_read_the_sheets_of_the_maps_scored_and_add_them_up(maps):
     assert json.dumps(got) == json.dumps(scores.score_sheets(chances, "whole"))
     with pytest.raises(ValueError, match="1975"):
         scores.score_sheets({("1975", "1"): chances[sheets[0].series, sheets[0].sheet]}, "whole")
+
+
+# --- the build: one detector, its scores on the test drawings, and the trials -----------------------------------------
+
+def test_sheets_read_without_their_placements_train_alike_but_hold_nothing_out(maps):
+    placed = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False)
+    shutil.rmtree(config.DATA_DIR / "warp")                    # no placement anywhere: none is read
+    bare = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False, placement=False)
+    for p, b in zip(placed, bare):
+        assert b.world.shape == (0, 0, 2) and np.isnan(b.ft_per_px) and not b.hold_out
+        # the same crops and the same centres as with the placement: the training reads none of it
+        for y, x, size, scale, turns in ((115, 140, 64, 1.0, 0), (320, 330, 96, 1.6, 3), (470, 200, 64, 0.6, 1)):
+            got, want = data.crop_targets(b, y, x, size, scale, turns), data.crop_targets(p, y, x, size, scale, turns)
+            assert all(np.array_equal(got[k], want[k]) for k in want)
+        assert all(np.array_equal(g, w) for g, w in zip(data.centres(b, 4), data.centres(p, 4)))
+        # but which px are in the validation area is not known, so it can't be held out or scored
+        with pytest.raises(ValueError, match="placement"):
+            data.in_validation(b, 0, 0, 8, 8)
+    with pytest.raises(ValueError, match="placement"):
+        data.load_sheets([paths.SERIES], hold_out_validation=True, placement=False)
+
+
+def test_chance_on_some_px_is_the_whole_pages_there(monkeypatch):
+    monkeypatch.setattr(predict, "TILE", 32)
+    monkeypatch.setattr(predict, "PAD", 8)
+    torch.manual_seed(0)
+    net = train.build_net(train.Recipe(width=8)).eval()
+    rng = np.random.default_rng(3)
+    ink = rng.random((100, 90)) < 0.2
+    only = np.zeros(ink.shape, bool)
+    only[40:50, 35:70] = True                    # in two tiles' columns, one tile's rows
+    whole = predict.chance(net, ink, "cpu")
+    some = predict.chance(net, ink, "cpu", only=only)
+    assert np.array_equal(some[only], whole[only]) and whole[only].any()
+    # the tiles holding px asked for are scored whole; the others are left 0
+    tiles = np.zeros(ink.shape, bool)
+    tiles[32:64, 32:96] = True
+    assert np.array_equal(some[tiles], whole[tiles]) and not some[~tiles].any() and whole[~tiles].any()
+    with pytest.raises(ValueError, match="page"):
+        predict.chance(net, ink, "cpu", only=only[:-1])
+
+
+# The weights a short fit of the stage's recipe gives on the two synthetic maps, held so that a change to how the
+# detector trains is seen.  torch's CPU kernels add up in another order on another kind of machine, or with another
+# number of threads for the maths libraries (conftest gives each pytest-xdist worker one), so the bits are held where
+# they were recorded (the owner's Mac, in a worker and not), by machine and those threads; the losses of each step,
+# within 1e-5, everywhere.
+GUARD_STEPS = 3
+GUARD_WEIGHTS = {("Darwin", "arm64", "1", "1"): "63c3a81eecde334c46613ff0a854dfd2d81318497b120483ca380aec7a62d726",
+                 ("Darwin", "arm64", None, None): "a96a9118a2e92d34e414d77fe3ad1f5bf874f3307ce80c73d11da5f4da6622b4"}
+GUARD_LOSSES = [[0.6314478516578674, 1.8442327976226807, 1.0988179445266724],      # text, kind, angle, each step
+                [0.5883994102478027, 2.0600595474243164, 0.9381569623947144],
+                [0.5847379565238953, 1.4276576042175293, 0.8226476907730103]]
+
+
+def test_the_stages_recipe_trains_the_weights_recorded(maps, monkeypatch):
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False, placement=False)
+    real, parts = train.loss_fn, []
+
+    def loss_fn(*args):
+        loss, p = real(*args)
+        parts.append(p.detach().tolist())
+        return loss, p
+
+    monkeypatch.setattr(train, "loss_fn", loss_fn)
+    net = train.fit(sheets, dataclasses.replace(stage.DEFAULT_RECIPE, iterations=GUARD_STEPS), "cpu", seed=0)
+    digest = hashlib.sha256()
+    for k, v in net.state_dict().items():
+        digest.update(k.encode() + v.contiguous().numpy().tobytes())
+    assert np.allclose(parts, GUARD_LOSSES, rtol=1e-5, atol=0)
+    want = GUARD_WEIGHTS.get((platform.system(), platform.machine(), os.environ.get("OMP_NUM_THREADS"),
+                              os.environ.get("VECLIB_MAXIMUM_THREADS")))
+    if want is not None:
+        assert digest.hexdigest() == want
+
+
+@pytest.fixture
+def solver_dir(tmp_path, monkeypatch):
+    """The solver's outputs in the test's folder."""
+    solver = tmp_path / "solver"
+    monkeypatch.setattr(paths, "SOLVER_DIR", solver)
+    monkeypatch.setattr(paths, "TEXT_DIR", solver / "text")
+    monkeypatch.setattr(paths, "TEXT_MODEL", solver / "text" / "model.pt")
+    monkeypatch.setattr(paths, "TEXT_CHANCE_DIR", solver / "text" / "chance")
+    monkeypatch.setattr(paths, "TEXT_SCORES_DIR", solver / "text-scores")
+    monkeypatch.setattr(runs, "EXPERIMENTS_DIR", solver / "experiments")
+    return solver
+
+
+@pytest.fixture
+def built(maps, solver_dir, monkeypatch):
+    """The two synthetic maps as the build's: both trained on, the 1960 one also the test drawing; the 2000 sheet the
+    one the walls read."""
+    monkeypatch.setattr(paths, "TEXT_TRAIN_SERIES", (paths.SERIES, OLD))
+    monkeypatch.setattr(paths, "TEXT_TEST_SERIES", (OLD,))
+    monkeypatch.setattr(paths, "SHEETS", (SHEET,))
+    return solver_dir
+
+
+def _turns(monkeypatch, module):
+    """Record the GPU's turns `module` takes (each (exclusive, device) at its start, None at its end) and, for the
+    functions named later (`_inside`), whether each call is inside a turn."""
+    turns = []
+
+    @contextlib.contextmanager
+    def turn(exclusive, device):
+        turns.append((exclusive, device))
+        yield
+        turns.append(None)
+
+    monkeypatch.setattr(module.gpu, "gpu_turn", turn)
+    return turns
+
+
+def _inside(monkeypatch, target, name, turns, calls):
+    real = getattr(target, name)
+
+    def wrapped(*args, **kwargs):
+        calls.append((name, bool(turns) and turns[-1] is not None))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(target, name, wrapped)
+
+
+def _tree(root) -> dict[str, bytes]:
+    """Every file under `root` by its path there, with its bytes."""
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_the_detector_trains_on_every_map_whole_and_scores_the_2000_sheets_in_one_exclusive_turn(built, monkeypatch):
+    turns, calls, trained = _turns(monkeypatch, stage), [], []
+    for target, name in ((data, "load_sheets"), (train, "loss_fn"), (predict, "chance")):
+        _inside(monkeypatch, target, name, turns, calls)
+    real_fit = train.fit
+    monkeypatch.setattr(train, "fit", lambda sheets, *a: trained.extend(sheets) or real_fit(sheets, *a))
+    monkeypatch.setattr(stage, "DEFAULT_RECIPE", TINY)
+    shutil.rmtree(config.DATA_DIR / "warp")                    # it reads no placement
+    paths.TEXT_CHANCE_DIR.mkdir(parents=True)
+    (paths.TEXT_CHANCE_DIR / "an-old-sheet.png").write_bytes(b"from the last run")
+    (paths.TEXT_DIR / "evaluation_nw.json").write_text("{}")   # a file no step of the stage writes
+    s = stage.build_text(device="cpu")
+    # the sheets are read before the turn; every step and every sheet scored is inside it, the one turn
+    assert turns == [(True, "cpu"), None]
+    assert calls == [("load_sheets", False), ("loss_fn", True), ("loss_fn", True), ("chance", True)]
+    # every sheet of every training map, none with the area held out, none with its placement
+    assert [(sd.series, sd.sheet, sd.hold_out, sd.world.size) for sd in trained] == [
+        (paths.SERIES, SHEET, False, 0), (OLD, OLD_SHEET, False, 0)]
+    # the model and the 2000 sheets' chances, nothing else, nothing of the last run, no part folder left
+    assert sorted(_tree(built)) == ["text/chance/2000-digital-zoning-p01.png", "text/model.pt"]
+    saved = torch.load(paths.TEXT_MODEL)
+    assert train.Recipe(**saved["recipe"]) == TINY and (saved["iterations"], saved["device"], saved["seed"]) == (
+        2, "cpu", 0)
+    # the chance is the saved model's on the page, as the scores stage reads it
+    ink = data.load_page(SHEET) < grid.INK_BELOW
+    want = predict.chance(predict.load_model(paths.TEXT_MODEL, "cpu"), ink, "cpu")
+    assert np.array_equal(cv2.imread(str(paths.TEXT_CHANCE_DIR / f"{SHEET}.png"), cv2.IMREAD_GRAYSCALE), want)
+    assert (s["iterations"], s["device"], s["trained_on"], s["scored"]) == (2, "cpu", 2, 1)
+    assert list(s["seconds"]) == ["load", "train", "predict"]
+
+
+def test_a_detector_run_that_stops_leaves_the_last_one_whole(built, monkeypatch):
+    paths.TEXT_CHANCE_DIR.mkdir(parents=True)
+    (paths.TEXT_CHANCE_DIR / f"{SHEET}.png").write_bytes(b"the last run's")
+    paths.TEXT_MODEL.write_bytes(b"the last model")
+    before = _tree(built)
+
+    real = predict.chance
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("stopped while scoring")
+
+    monkeypatch.setattr(predict, "chance", broken)
+    with pytest.raises(RuntimeError, match="stopped"):
+        stage.build_text(TINY, device="cpu")
+    assert {k: v for k, v in _tree(built).items() if k.startswith("text/")} == before
+    # the next run clears what the stopped one left beside it, and replaces the last one whole
+    monkeypatch.setattr(predict, "chance", real)
+    stage.build_text(TINY, device="cpu")
+    assert sorted(_tree(built)) == ["text/chance/2000-digital-zoning-p01.png", "text/model.pt"]
+
+
+def test_the_scores_stage_scores_the_test_drawings_whole_with_the_stages_model(built, monkeypatch):
+    with pytest.raises(FileNotFoundError, match="solver-text"):
+        score_stage.build_scores("cpu")
+    net = train.fit(data.load_sheets([paths.SERIES], False, placement=False), TINY, "cpu", 0)
+    train.save_model(paths.TEXT_MODEL, net, TINY, "cpu", 0)
+    paths.TEXT_SCORES_DIR.mkdir(parents=True)
+    (paths.TEXT_SCORES_DIR / "evaluation_nw.json").write_text("{}")      # the quarter models' scores
+    turns, calls = _turns(monkeypatch, score_stage), []
+    for target, name in ((data, "load_sheets"), (predict, "chance"), (scores, "score_sheets")):
+        _inside(monkeypatch, target, name, turns, calls)
+    got = score_stage.build_scores("cpu")
+    assert turns == [(True, "cpu"), None]
+    assert calls == [("load_sheets", False), ("chance", True), ("score_sheets", False)]
+    # every px of every sheet of the test drawings, by the stage's model; nothing else written, no time in it
+    sheets = data.load_sheets([OLD], hold_out_validation=False)
+    chance = predict.chance(predict.load_model(paths.TEXT_MODEL, "cpu"), data.page_ink(sheets[0]), "cpu")
+    want = scores.score_sheets({(OLD, OLD_SHEET): chance}, "whole", sheets)
+    assert got["scores"] == want and want["where"] == "whole" and list(want["series"]) == [OLD]
+    assert sorted(_tree(paths.TEXT_SCORES_DIR)) == ["scores.json"]
+    written = (paths.TEXT_SCORES_DIR / "scores.json").read_bytes()
+    assert json.loads(written) == want
+    score_stage.build_scores("cpu")
+    assert (paths.TEXT_SCORES_DIR / "scores.json").read_bytes() == written
+
+
+def test_the_text_commands_run_their_stages(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    got = []
+    sd = _in_memory_sheet(_edge_page(), words=EDGE_WORDS, points=[EDGE_POINT])
+    some = _score(sd, np.random.default_rng(0).integers(0, 256, (SIZE, SIZE), dtype=np.uint8), "whole")
+    monkeypatch.setattr(stage, "build_text", lambda device=None: got.append(("text", device)) or {
+        "iterations": 8000, "device": device, "trained_on": 87, "scored": 13,
+        "seconds": {"load": 1.0, "train": 2.0, "predict": 3.0}})
+    monkeypatch.setattr(score_stage, "build_scores", lambda device=None: got.append(("scores", device)) or {
+        "scores": some, "seconds": {"load": 1.0, "predict": 2.0, "score": 3.0}})
+    runner = CliRunner()
+    res = runner.invoke(cli.app, ["solver", "text", "--device", "cpu"])
+    assert res.exit_code == 0 and "87 sheets; 13 2000 sheets scored" in res.output
+    res = runner.invoke(cli.app, ["solver", "text-scores", "--device", "cpu"])
+    assert res.exit_code == 0 and f"{paths.SERIES}: AUC" in res.output and "all: AUC" in res.output
+    assert got == [("text", "cpu"), ("scores", "cpu")]
+    # one detector: no quarter to name; no device but the two
+    assert runner.invoke(cli.app, ["solver", "text", "nw"]).exit_code != 0
+    assert runner.invoke(cli.app, ["solver", "text", "--device", "cuda"]).exit_code != 0
+    assert len(got) == 2
+
+
+def test_a_recipe_is_written_as_settings_over_todays():
+    assert trial.parse_recipe([]) == trial.parse_recipe("default") == trial.parse_recipe("") == train.Recipe()
+    r = trial.parse_recipe("half_size=True ink_only=ink+1px iterations=2000 max_lr=6e-3 heads=text")
+    assert r == train.Recipe(half_size=True, ink_only="ink+1px", iterations=2000, max_lr=6e-3, heads="text")
+    assert trial.parse_recipe(["prefetch=yes", "half_size=off", "weight_average=0.999"]) == train.Recipe(
+        prefetch=True, weight_average=0.999)
+    for bad, said in (("iterations=2e3", "whole number"), ("half_size=maybe", "True or False"),
+                      ("max_lr=fast", "a number"), ("speed=2", "no setting"), ("iterations", "name=value"),
+                      ("crop=64 crop=96", "twice"), ("ink_only=all", "one of"), ("iterations=0", "at least 1")):
+        with pytest.raises(ValueError, match=said):
+            trial.parse_recipe(bad)
+    # each recipe and seed its own folder; prefetch, which never changes the weights, is no part of its name
+    assert trial.folder(r) == runs.EXPERIMENTS_DIR / f"text-{r.name()}"
+    assert trial.folder(train.Recipe(), 2) == runs.EXPERIMENTS_DIR / "text-default-seed=2"
+    assert trial.folder(dataclasses.replace(r, prefetch=True)) == trial.folder(r)
+
+
+def test_trials_train_with_the_area_held_out_score_it_and_write_only_their_folders(built, tmp_path, monkeypatch):
+    monkeypatch.setattr(scores, "_LINE_INK", {})
+    first, second = TINY, dataclasses.replace(TINY, ink_only="ink")
+    before = {k: v for k, v in _tree(tmp_path).items()}
+    turns, calls, trained, lines = _turns(monkeypatch, trial), [], [], []
+    real_fit = train.fit
+    monkeypatch.setattr(train, "fit", lambda sheets, *a: trained.append([sd.hold_out for sd in sheets])
+                        or real_fit(sheets, *a))
+    for target, name in ((data, "load_sheets"), (train, "fit"), (predict, "chance"), (scores, "score_sheets")):
+        _inside(monkeypatch, target, name, turns, calls)
+    real_lines = scores.long_lines
+    monkeypatch.setattr(scores, "long_lines", lambda ink, ft: lines.append(ft) or real_lines(ink, ft))
+    got = trial.run_trials([first, second], device="cpu")
+    # the sheets read once, with the area held out; each recipe trained and predicted in its own turn, then scored
+    assert turns == [(True, "cpu"), None, (True, "cpu"), None]
+    assert calls == [("load_sheets", False),
+                     ("fit", True), ("chance", True), ("chance", True), ("score_sheets", False),
+                     ("fit", True), ("chance", True), ("chance", True), ("score_sheets", False)]
+    assert trained == [[True, True], [True, True]]           # every sheet of both maps, the area held out
+    assert len(lines) == 2                                    # each sheet's long lines found once, for both
+    # only the recipes' folders are new, each with its four files; nothing else changed
+    after = _tree(tmp_path)
+    new = sorted(k for k in after if k not in before)
+    folders = [f"solver/experiments/text-{r.name()}" for r in (first, second)]
+    assert new == sorted(f"{f}/{name}" for f in folders for name in trial.FILES)
+    assert {k: v for k, v in after.items() if k in before} == before
+    for r, f, res in zip((first, second), folders, got):
+        folder = tmp_path / f
+        assert res["folder"] == folder and res["name"] == r.name()
+        assert train.Recipe(**json.loads((folder / "recipe.json").read_text())) == r
+        assert list(json.loads((folder / "minutes.json").read_text())) == list(trial.PARTS)
+        # the scores are the validation area's, of the model's chance there, as a whole page's prediction gives it
+        sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
+        net = predict.load_model(folder / "model.pt", "cpu")
+        chances = {(sd.series, sd.sheet): predict.chance(net, data.page_ink(sd), "cpu") for sd in sheets}
+        want = scores.score_sheets(chances, "validation", sheets)
+        assert res["scores"] == want == json.loads((folder / "scores.json").read_text())
+        assert want["where"] == "validation" and want["all"]["words"]["all"]["of"] > 0
+        assert torch.load(folder / "model.pt")["recipe"] == dataclasses.asdict(r)
+    # the same recipe twice would write one folder
+    with pytest.raises(ValueError, match="one folder"):
+        trial.run_trials([first, dataclasses.replace(first, prefetch=True)], device="cpu")
+
+
+def test_a_reused_trial_scores_the_model_in_its_folder_and_keeps_its_training_minutes(built, monkeypatch):
+    folder = trial.folder(TINY)
+    # nothing to reuse: refused before anything is read
+    read = []
+    real_load = data.load_sheets
+    monkeypatch.setattr(data, "load_sheets", lambda *a, **k: read.append(a) or real_load(*a, **k))
+    with pytest.raises(FileNotFoundError, match="no model"):
+        trial.run_trials([TINY], device="cpu", reuse=True)
+    assert not read
+    # a model trained beforehand, by the recipe, with its training's minutes (as the baseline was)
+    sheets = real_load([paths.SERIES, OLD], hold_out_validation=True)
+    folder.mkdir(parents=True)
+    train.save_model(folder / "model.pt", train.fit(sheets, TINY, "cpu", 0), TINY, "cpu", 0)
+    (folder / "minutes.json").write_text(json.dumps({"load": 1.5, "train": 42.0}))
+    model_bytes = (folder / "model.pt").read_bytes()
+    monkeypatch.setattr(train, "fit", lambda *a, **k: pytest.fail("a reused trial trains nothing"))
+    res, = trial.run_trials([TINY], device="cpu", reuse=True)
+    assert (folder / "model.pt").read_bytes() == model_bytes
+    minutes = json.loads((folder / "minutes.json").read_text())
+    assert list(minutes) == list(trial.PARTS) and minutes["train"] == 42.0 and minutes["load"] != 1.5
+    net = predict.load_model(folder / "model.pt", "cpu")
+    want = scores.score_sheets({(sd.series, sd.sheet): predict.chance(net, data.page_ink(sd), "cpu")
+                                for sd in sheets}, "validation", sheets)
+    assert res["scores"] == want == json.loads((folder / "scores.json").read_text())
+    # a model of another recipe or seed is not this recipe's
+    for recipe, seed in ((dataclasses.replace(TINY, width=4), 0), (TINY, 1)):
+        other = trial.folder(recipe, seed)
+        other.mkdir(parents=True)
+        shutil.copy(folder / "model.pt", other / "model.pt")
+        with pytest.raises(ValueError, match="another recipe or seed"):
+            trial.run_trials([recipe], device="cpu", seed=seed, reuse=True)
+
+
+def test_the_trial_command_reads_its_recipes_and_runs_them_together(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    asked = []
+    sd = _in_memory_sheet(_edge_page(), words=EDGE_WORDS, points=[EDGE_POINT])
+    some = _score(sd, np.zeros((SIZE, SIZE), np.uint8), "validation")
+
+    def run_trials(recipes, device=None, seed=0, reuse=False):
+        asked.append((recipes, device, seed, reuse))
+        return [{"name": r.name(), "folder": trial.folder(r, seed), "scores": some,
+                 "minutes": {"load": 1.0, "train": 2.0, "predict": 0.5, "score": 0.25}} for r in recipes]
+
+    monkeypatch.setattr(trial, "run_trials", run_trials)
+    runner = CliRunner()
+    res = runner.invoke(cli.app, ["solver", "text-trial", "--set", "half_size=True", "--set", "ink_only=ink",
+                                  "--recipe", "iterations=2000", "--recipe", "default", "--seed", "1",
+                                  "--device", "cpu"])
+    assert res.exit_code == 0, res.output
+    assert asked == [([train.Recipe(half_size=True, ink_only="ink"), train.Recipe(iterations=2000), train.Recipe()],
+                      "cpu", 1, False)]
+    assert "half_size-ink_only=ink: AUC" in res.output and "text-iterations=2000-seed=1" in res.output
+    assert runner.invoke(cli.app, ["solver", "text-trial", "--reuse", "--device", "cpu"]).exit_code == 0
+    assert asked[-1] == ([train.Recipe()], "cpu", 0, True)
+    for bad in (["--set", "speed=2"], ["--recipe", "iterations=0"], ["--device", "cuda"]):
+        assert runner.invoke(cli.app, ["solver", "text-trial", *bad]).exit_code != 0
+    assert len(asked) == 2
+
+
+def _text_files(root: str, series_list, names) -> list[str]:
+    return [f"{root}/{s}/{sheet}/{name}" for s in series_list for sheet in paths.TEXT_SHEETS[s] for name in names]
+
+
+TEXTNET_CODE = ("textnet/data.py", "textnet/boxes.py", "textnet/model.py", "textnet/train.py", "textnet/predict.py")
+# code a change to which must not retrain the detector or rescore it: the lots, the table, the merged page, the codes,
+# the prints, the model client, the command line, the walls, the solve, their folders (runs), the GPU's turns, the
+# trials
+NOT_TEXT_CODE = ("solver/lots.py", "solver/table.py", "solver/codes.py", "solver/prints.py", "/llm.py", "/cli.py",
+                 "solver/walls.py", "solver/wallevidence.py", "solver/textgrid.py", "solver/solve.py",
+                 "solver/runs.py", "/gpu.py", "textnet/trial.py")
+
+
+def test_one_detector_stage_reads_its_maps_sheets_file_by_file_and_no_placement():
+    from sfzmaps import build
+    table = build.stages()
+    assert [n for n in table if n.startswith("solver-text")] == ["solver-text", "solver-text-scores"]
+    st = table["solver-text"]
+    assert build.stage_commands("solver-text") == [["solver", "text"]] and build.stage_outs(st) == ["data/solver/text"]
+    assert st.code == ("sfzmaps.solver.textnet.stage",) and "sfzmaps.solver.runs" in st.cut
+    deps = build.stage_deps(st)
+    code = [d for d in deps if d.startswith("src/")]
+    assert {f"src/sfzmaps/solver/{f}" for f in (*TEXTNET_CODE, "textnet/stage.py", "paths.py", "grid.py")} <= set(code)
+    assert not any(d.endswith((*NOT_TEXT_CODE, "textnet/scores.py", "textnet/score_stage.py", "solver/strokes.py",
+                               "solver/page.py")) for d in code)
+    # of each training map's sheets only the page and Sol's points, of the saved answers Terra's boxes and the 2000
+    # sheets' other passes: no placement (a warp retrains nothing), nothing of the prints or of another stage
+    assert [d for d in deps if not d.startswith("src/")] == [
+        "pyproject.toml", "uv.lock",
+        *_text_files("data/work", paths.TEXT_TRAIN_SERIES, ("page.png", "district_labels.json")),
+        "saved-reads/answers/text-on-every-sheet.jsonl.gz", "saved-reads/answers/experiments-2000/text-positions"]
+    assert sum(len(paths.TEXT_SHEETS[s]) for s in paths.TEXT_TRAIN_SERIES) == 87
+    assert set(paths.SHEETS) <= set(paths.TEXT_SHEETS[paths.SERIES])      # the pages it scores are among those read
+    # after the stages that made those pages (frozen: they never run in a build)
+    assert all(table[u].frozen for u in st.upstream) and len(st.upstream) == len(paths.TEXT_TRAIN_SERIES)
+
+
+def test_the_scores_stage_reads_the_model_and_the_test_drawings_with_their_placements():
+    from sfzmaps import build
+    table = build.stages()
+    st = table["solver-text-scores"]
+    assert build.stage_commands("solver-text-scores") == [["solver", "text-scores"]]
+    assert build.stage_outs(st) == ["data/solver/text-scores"]
+    assert st.code == ("sfzmaps.solver.textnet.score_stage",) and "sfzmaps.solver.runs" in st.cut
+    assert st.upstream == ("solver-text", *(f"warp-{s}" for s in paths.TEXT_TEST_SERIES))
+    deps = build.stage_deps(st)
+    code = [d for d in deps if d.startswith("src/")]
+    assert {f"src/sfzmaps/solver/{f}" for f in (*TEXTNET_CODE, "textnet/scores.py", "textnet/score_stage.py",
+                                                "strokes.py")} <= set(code)
+    assert not any(d.endswith((*NOT_TEXT_CODE, "textnet/stage.py")) for d in code)
+    # the stage's model (not its chances), and of each test drawing's sheets the page, Sol's points and the placement
+    assert [d for d in deps if not d.startswith("src/")] == [
+        "pyproject.toml", "uv.lock", "data/solver/text/model.pt",
+        *_text_files("data/work", paths.TEXT_TEST_SERIES, ("page.png", "district_labels.json")),
+        *_text_files("data/warp", paths.TEXT_TEST_SERIES, ("transform.json", "correction.npz")),
+        "saved-reads/answers/text-on-every-sheet.jsonl.gz"]
+    names = list(table)
+    assert names.index("solver-text") < names.index("solver-text-scores") < names.index("solver-walls")

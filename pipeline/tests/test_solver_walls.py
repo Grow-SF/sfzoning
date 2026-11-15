@@ -1,5 +1,4 @@
 import json
-import shutil
 
 import cv2
 import geopandas as gpd
@@ -254,10 +253,11 @@ def test_closings_do_not_depend_on_the_number_of_workers():
 
 
 def _text_folders(tmp_path, monkeypatch):
-    """Point the data, work, page, solver and walls folders into tmp_path, with no cut boxes."""
+    """Point the data, work, page, solver, detector and walls folders into tmp_path, with no cut boxes."""
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     monkeypatch.setattr(paths, "SOLVER_DIR", tmp_path / "solver")
+    monkeypatch.setattr(paths, "TEXT_CHANCE_DIR", tmp_path / "solver" / "text" / "chance")
     monkeypatch.setattr(paths, "PAGE_DIR", tmp_path / "page")
     monkeypatch.setattr(runs, "WALLS_DIR", tmp_path / "walls")
     (tmp_path / "cuts.json").write_text("{}")
@@ -276,11 +276,10 @@ def _page_point(col0, row0, x, y) -> np.ndarray:
                  np.ravel(grid.Y1 - grid.FT_PER_PX * row0 - OFFSET_FT - 4 * y)]
 
 
-def _sheet(tmp_path, name, col0, row0, page_image, chances):
+def _sheet(tmp_path, name, col0, row0, page_image, chance):
     """A sheet at 4 ft per page px whose page px (x, y) is the map point `_page_point(col0, row0, x, y)`: grid px
-    (col0 + x, row0 + y) has its centre at page (x + 0.4, y + 0.4), so it reads page px (x, y), whose own map point is
-    1.6 ft west and 1.6 ft north of the grid px's centre.  Framed by its whole page, with each quarter's chance of
-    text (`chances`, page px)."""
+    (col0 + x, row0 + y) has its centre at page (x + 0.4, y + 0.4), so it reads page px (x, y).  Framed by its whole
+    page, with the detector's chance of text on it (`chance`, page px)."""
     x0, y1 = _page_point(col0, row0, 0, 0)[0]
     corners = [(0, 0), (SHEET_PX, 0), (0, SHEET_PX), (SHEET_PX, SHEET_PX)]
     placement = SheetTransform([GCP(x, y, x0 + 4 * x, y1 - 4 * y, "manual") for x, y in corners], 1.0)
@@ -294,59 +293,38 @@ def _sheet(tmp_path, name, col0, row0, page_image, chances):
     last = SHEET_PX - 1
     frames[name] = [[0, 0], [last, 0], [last, last], [0, last]]
     (tmp_path / "page" / "frames.json").write_text(json.dumps(frames))
-    for q, chance in chances.items():
-        folder = tmp_path / "solver" / f"text-{q}" / "chance"
-        folder.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(folder / f"{name}.png"), chance)
+    paths.TEXT_CHANCE_DIR.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(paths.TEXT_CHANCE_DIR / f"{name}.png"), np.ascontiguousarray(chance))
 
 
-def test_out_of_fold_text_takes_each_pixels_own_quarter_model(tmp_path, monkeypatch):
-    """Review Focus 4: every grid px takes the chance of the model that held out the page px it reads: the quarter of
-    that page px's own map point, as the detector held it out (`textnet.data.page_quarters`), even on the row and the
-    column by the split where the grid px's centre lies in another quarter.  Where two sheets inked a px the larger
-    chance wins; a sheet that covers a px without inking it gives nothing; a px no sheet inked is 0.  Nothing is
-    written."""
+def test_text_chance_takes_the_largest_chance_of_the_sheets_that_inked_each_px(tmp_path, monkeypatch):
+    """Every grid px takes the detector's chance at the page px it reads, as the merged page reads its ink, from the
+    sheets that inked it there: where two did, the larger chance wins; a sheet that covers a px without inking it
+    gives nothing; a px no sheet inked is 0.  Nothing is written."""
     _text_folders(tmp_path, monkeypatch)
-    model = {"nw": 11, "ne": 22, "sw": 33, "se": 44}
-    col_a, col_b, row0 = SPLIT_COL - 100, SPLIT_COL, SPLIT_ROW - 100      # sheet a straddles the split
-    rise = np.broadcast_to((np.arange(SHEET_PX) // 20).astype(np.uint8), (SHEET_PX, SHEET_PX))   # +1 every 20 px
+    a, b = f"{paths.SERIES}-p01", f"{paths.SERIES}-p02"
+    monkeypatch.setattr(paths, "SHEETS", (a, b))
+    col_a, col_b, row0 = SPLIT_COL - 100, SPLIT_COL, SPLIT_ROW - 100      # sheet b overlaps sheet a's east half
+    step = np.arange(SHEET_PX) // 20
+    chance_a = (50 + step[None, :] + 10 * step[:, None]).astype(np.uint8)     # +1 every 20 px east, +10 south
     page_a = np.zeros((SHEET_PX, SHEET_PX), np.uint8)                      # all ink ...
     page_a[:, 50:55] = 255                                                 # ... but a paper stripe
-    _sheet(tmp_path, f"{paths.SERIES}-p01", col_a, row0, page_a, {q: v + rise for q, v in model.items()})
+    _sheet(tmp_path, a, col_a, row0, page_a, chance_a)
     page_b = np.full((SHEET_PX, SHEET_PX), 255, np.uint8)
     page_b[:, :50] = 0                                                     # sheet b inks its west quarter only
-    _sheet(tmp_path, f"{paths.SERIES}-p02", col_b, row0, page_b,
-           {q: np.full((SHEET_PX, SHEET_PX), 200, np.uint8) for q in model})
+    _sheet(tmp_path, b, col_b, row0, page_b, np.full((SHEET_PX, SHEET_PX), 200, np.uint8))
     # what each grid px of the window should get, from the placement alone
     r, c = np.mgrid[row0:row0 + SHEET_PX, col_a:col_b + SHEET_PX]
     xa, xb, y = c - col_a, c - col_b, r - row0                             # the page px each sheet reads
-    qa = grid.quarter_of(_page_point(col_a, row0, xa, y)).reshape(c.shape)
-    qb = grid.quarter_of(_page_point(col_b, row0, xb, y)).reshape(c.shape)
-    centre_quarter = grid.quarter_of(grid.to_map(np.c_[c.ravel() + 0.5, r.ravel() + 0.5])).reshape(c.shape)
     inked_a = (xa < SHEET_PX) & ~((xa >= 50) & (xa < 55))
     inked_b = (xb >= 0) & (xb < 50)
-    by_index = np.array([model[q] for q in paths.QUARTERS])
-
-    def expected(quarters):
-        wanted = [paths.QUARTERS.index(q) for q in quarters]
-        a = np.where(inked_a & np.isin(qa, wanted), by_index[qa] + xa // 20, 0)
-        b = np.where(inked_b & np.isin(qb, wanted), 200, 0)
-        return np.maximum(a, b).astype(np.uint8)
-
+    expected = np.maximum(np.where(inked_a, chance_a[y, np.minimum(xa, SHEET_PX - 1)], 0),
+                          np.where(inked_b, 200, 0)).astype(np.uint8)
     window = np.s_[row0:row0 + SHEET_PX, col_a:col_b + SHEET_PX]
     every = textgrid.text_chance()
     assert every.shape == (grid.HEIGHT, grid.WIDTH) and every.dtype == np.uint8
-    np.testing.assert_array_equal(every[window], expected(paths.QUARTERS))
+    np.testing.assert_array_equal(every[window], expected)
     assert every.sum(dtype=np.int64) == every[window].sum(dtype=np.int64)     # nothing outside the sheets
-    for qi, q in enumerate(paths.QUARTERS):                 # sheet a's own px: model q's chance in quarter q
-        mine = inked_a & ~inked_b & (qa == qi)
-        assert mine.sum() > 1000
-        np.testing.assert_array_equal(every[window][mine] - xa[mine] // 20, model[q])
-    # the row by the split: its grid px centres are south of it, the page px they read north: the north models
-    moved = inked_a & ~inked_b & (qa != centre_quarter)
-    assert moved.sum() > 100 and (r[moved] == SPLIT_ROW).all()
-    np.testing.assert_array_equal(every[window][moved] - xa[moved] // 20, by_index[qa[moved]])
-    assert (by_index[qa[moved]] != by_index[centre_quarter[moved]]).all()
     assert (every[window][inked_a & inked_b] == 200).all() and (every[window][inked_a & ~inked_b] < 200).all()
     # the px some sheet inked are the merged page's ink, laid by the merge's own sampler
     ink, covered = np.zeros(every.shape, bool), np.zeros(every.shape, np.uint8)
@@ -359,15 +337,14 @@ def test_out_of_fold_text_takes_each_pixels_own_quarter_model(tmp_path, monkeypa
                        page.grid_box(tr, np.array(frames[name]), ink.shape))
     np.testing.assert_array_equal(every > 0, ink)
     assert not runs.WALLS_DIR.exists()                     # computed, not written
-    # a look at some quarters: the others' page px give 0
-    some = textgrid.text_chance(["nw", "se"])
-    np.testing.assert_array_equal(some[window], expected(("nw", "se")))
-    assert some.sum(dtype=np.int64) == some[window].sum(dtype=np.int64)
-    # a quarter without its chances: the whole set can't be made, a look without that quarter can
-    shutil.rmtree(paths.chance_dir("sw"))
-    with pytest.raises(FileNotFoundError, match="text-sw"):
+    # a sheet the detector did not score is an error naming its stage; so is a sheet the warp placed but the
+    # detector's list does not name
+    (paths.TEXT_CHANCE_DIR / f"{b}.png").unlink()
+    with pytest.raises(FileNotFoundError, match="solver-text"):
         textgrid.text_chance()
-    np.testing.assert_array_equal(textgrid.text_chance(["nw"])[window], expected(("nw",)))
+    monkeypatch.setattr(paths, "SHEETS", (a,))
+    with pytest.raises(ValueError, match="placed but not listed: " + b):
+        textgrid.text_chance()
 
 
 def test_text_chance_is_written_whole(tmp_path):

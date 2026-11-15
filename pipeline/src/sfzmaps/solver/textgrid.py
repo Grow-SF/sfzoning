@@ -1,13 +1,11 @@
-"""The text detector's chance of text on the solver's grid, out of fold: no px is scored by a model that learned from
-it.  Each detector held out the page px of one quarter, by the quarter of the px's map point through the sheet's
-corrected placement (`textnet.data.page_quarters`); so the chance at a page px of quarter q is taken from model q, the
-one that never trained on it.
+"""The text detector's chance of text on the solver's grid, from the one detector (stage `solver-text`) and its chance
+on each 2000 sheet's page (`paths.TEXT_CHANCE_DIR/<sheet>.png`, uint8 chance x 255 in its page px).
 
-Each sheet's chance (`text-<q>/chance/<sheet>.png`, uint8 chance x 255 in its page px) is read through the sheet's
-corrected placement exactly as the merged page reads its ink (`page.sheet_px`: the same crop, the frame of
-`page/frames.json` minus the cut boxes, and the same page px for every grid px).  A grid px takes the chance only from
-the sheets that inked it (page < INK_BELOW at the page px it reads, as the merge reads ink); where several did, the
-largest chance wins, and a px no sheet inked is 0.
+Each sheet's chance is read through the sheet's corrected placement exactly as the merged page reads its ink
+(`page.sheet_px`: the same crop, the frame of `page/frames.json` minus the cut boxes, and the same page px for every
+grid px).  A grid px takes the chance only from the sheets that inked it (page < INK_BELOW at the page px it reads, as
+the merge reads ink); where several did, the largest chance wins, and a px no sheet inked is 0.  The sheets are those
+the warp placed, once they are seen to be the detector's (`paths.check_sheets`).
 
 `text_chance` computes it afresh at every call and writes nothing; the walls stage writes what it used with
 `write_text_chance` (WALLS_DIR/text_chance.png: uint8, chance x 255, HEIGHT x WIDTH of the grid).
@@ -30,17 +28,14 @@ log = logging.getLogger(__name__)
 TEXT_CHANCE_FILE = "text_chance.png"
 
 
-def _chance_files(quarters, names) -> dict[str, dict]:
-    """Each quarter's chance file per sheet; a missing one is an error naming the quarter's stage."""
-    out = {}
-    for q in quarters:
-        files = {name: paths.chance_dir(q) / f"{name}.png" for name in names}
-        missing = [str(f) for f in files.values() if not f.is_file()]
-        if missing:
-            raise FileNotFoundError(f"can't read {missing[0]} ({len(missing)} of {len(names)} sheets missing): "
-                                    f"train the detector first (`sfzmaps solver text {q}`, stage solver-text-{q})")
-        out[q] = files
-    return out
+def _chance_files(names) -> dict[str, Path]:
+    """The detector's chance file of each sheet; a missing one is an error naming its stage."""
+    files = {name: paths.TEXT_CHANCE_DIR / f"{name}.png" for name in names}
+    missing = [str(f) for f in files.values() if not f.is_file()]
+    if missing:
+        raise FileNotFoundError(f"can't read {missing[0]} ({len(missing)} of {len(names)} sheets missing): train the "
+                                "detector first (`sfzmaps solver text`, stage solver-text)")
+    return files
 
 
 def _read(path, shape) -> np.ndarray:
@@ -52,24 +47,15 @@ def _read(path, shape) -> np.ndarray:
     return a
 
 
-def text_chance(quarters=None) -> np.ndarray:
-    """The chance of text at every grid px (uint8, chance x 255, HEIGHT x WIDTH), out of fold (see the module).
-
-    `quarters`: the quarters whose models are read (default all four); a page px of another quarter gives 0, so a
-    subset is only a partial look.  A missing chance file of a quarter asked for is an error.  Nothing is written."""
+def text_chance() -> np.ndarray:
+    """The chance of text at every grid px (uint8, chance x 255, HEIGHT x WIDTH; see the module).  A missing chance
+    file is an error.  Nothing is written."""
     from sfzmaps.solver.textnet import data
     t0 = time.perf_counter()
-    asked = set(paths.QUARTERS if quarters is None else quarters)
-    unknown = sorted(asked - set(paths.QUARTERS))
-    if unknown:
-        raise ValueError(f"no quarter {unknown[0]!r}: one of {', '.join(paths.QUARTERS)}")
-    quarters = [q for q in paths.QUARTERS if q in asked]
-    names = paths.sheet_names()
-    files = _chance_files(quarters, names)
+    names = paths.check_sheets()
+    files = _chance_files(names)
     frames = json.loads((paths.PAGE_DIR / "frames.json").read_text())
     cuts = page.load_cuts()
-    model_of = np.full(len(paths.QUARTERS), -1)                    # quarter index -> its model's row in `chance`
-    model_of[[paths.QUARTERS.index(q) for q in quarters]] = np.arange(len(quarters))
     out = np.zeros((grid.HEIGHT, grid.WIDTH), np.uint8)
     for name in names:
         if name not in frames:
@@ -78,10 +64,9 @@ def text_chance(quarters=None) -> np.ndarray:
         tr = SheetTransform.from_json(json.loads((folder / "transform.json").read_text()), folder=folder)
         pg = data.load_page(name)
         dark = pg < grid.INK_BELOW
-        held_out_by = model_of[data.page_quarters(tr, pg.shape)]     # per page px: the model that never saw it
         quad = np.asarray(frames[name], float)
         crop = page.crop_mask(pg.shape, quad, cuts.get(name, []))
-        chance = np.stack([_read(files[q][name], pg.shape) for q in quarters])      # (quarters, h, w)
+        chance = _read(files[name], pg.shape)
         del pg
         for rows, cols, on, yi, xi in page.sheet_px(tr, crop, out.shape, page.grid_box(tr, quad, out.shape)):
             r, c = np.nonzero(on)
@@ -90,10 +75,8 @@ def text_chance(quarters=None) -> np.ndarray:
             r, c, y, x = r[inked], c[inked], y[inked], x[inked]
             if not len(r):
                 continue
-            model = held_out_by[y, x]
-            value = np.where(model >= 0, chance[np.maximum(model, 0), y, x], 0).astype(np.uint8)
             band = out[rows, cols]
-            band[r, c] = np.maximum(band[r, c], value)
+            band[r, c] = np.maximum(band[r, c], chance[y, x])
         log.info("text chance: %s laid (%.0f s)", name, time.perf_counter() - t0)
     return out
 

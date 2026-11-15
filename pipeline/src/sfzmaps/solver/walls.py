@@ -16,7 +16,8 @@ is left to the solve's energy.
 
 Candidate features (CANDIDATES, in the order they are tried): the five of `wallevidence.OPTIONS` (text_weighted,
 text_weighted_beside_letters, street_crossing, no_city_limit, text_discounted_enclosure), read through the detector's
-out-of-fold text chance (`textgrid.text_chance`, all four quarters) and the merged page's ink, and
+text chance on the grid (`textgrid.text_chance`, from the one detector's chance on each sheet's page) and the merged
+page's ink, and
   context           (`context`, after the lots' character) touching pairs: hats over KIND_KNOTS of how the line
                     between the lots' centroids runs along their long axes (the mean |cos| with each lot's minimum
                     rotated rectangle's long side: 0 side by side, 0.5 between, 1 back to back); pairs across a
@@ -238,7 +239,8 @@ class Inputs:
 
 def load_inputs(configs) -> Inputs:
     """Read, once, what the walls need to fit every configuration of `configs` (each a list of candidate names; see
-    `Inputs`).  The text chance is computed from all four quarters' detectors (`textgrid.text_chance`)."""
+    `Inputs`).  The text chance is computed from the detector's chance on each sheet's page
+    (`textgrid.text_chance`)."""
     import geopandas as gpd
     import shapely
 

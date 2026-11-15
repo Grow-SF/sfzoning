@@ -134,41 +134,42 @@ def stages() -> dict[str, Stage]:
                                  reads=("saved-reads/answers", "data/work/2000-digital-zoning",
                                         "data/warp/2000-digital-zoning", "data/solver/lots", "data/solver/page"),
                                  writes=("data/solver/prints",), code=("sfzmaps.solver.prints",))
-    quarters = ("nw", "ne", "sw", "se")
-    # what the detectors learn from, file by file for each sheet of `paths.SHEETS` (a fixed list, so dvc.yaml doesn't
-    # depend on what data is there): its corrected placement and correction, its page and Sol's label points; then
-    # the other text passes' boxes, and of the prints only the Terra boxes (a change to prints.parquet must not
-    # retrain them).  Nothing else in data/work or data/warp reruns them.
-    text_reads = (*_sheet_files("data/warp/2000-digital-zoning", ("transform.json", "correction.npz")),
-                  *_sheet_files("data/work/2000-digital-zoning", ("page.png", "district_labels.json")),
-                  "data/solver/prints/terra_boxes.json", "saved-reads/answers/experiments-2000/text-positions")
-    for q in quarters:
-        out[f"solver-text-{q}"] = Stage(f"solver-text-{q}", (), (), ("solver-prints",), command=("solver", "text", q),
-                                        reads=text_reads, writes=(f"data/solver/text-{q}",),
-                                        code=("sfzmaps.solver.textnet.stage",))
-    # the detectors' scores on their held-out quarters, from their chances (not their weights), the lots, and the
-    # sheets' warped footprints (only px on the map count)
-    out["solver-text-scores"] = Stage("solver-text-scores", (), (), tuple(f"solver-text-{q}" for q in quarters),
-                                      command=("solver", "text-scores"),
-                                      reads=(*text_reads,
-                                             *_sheet_files("data/warp/2000-digital-zoning",
-                                                           ("warped.footprint.geojson",)),
-                                             "data/solver/lots", *(f"data/solver/text-{q}/chance" for q in quarters)),
-                                      writes=("data/solver/text-scores",), code=("sfzmaps.solver.textnet.evaluate",))
+    # The text detector: one model (`sfzmaps solver text`), trained on every sheet Terra read of the training maps
+    # (`paths.TEXT_SHEETS`, fixed lists, so dvc.yaml doesn't depend on what data is there), file by file: of each
+    # sheet only its page and Sol's label points, and of the saved answers Terra's boxes and the 2000 sheets' other
+    # text passes.  Trained on the whole of each map, it reads no placement, so a warp retrains nothing; the 2000
+    # pages it scores are among those it reads.  Its scores (`sfzmaps solver text-scores`) read its model and the test
+    # drawings' sheets, with their placements (the long lines are measured in each sheet's feet).  Both cut `runs`
+    # too: they take only its folder swap, which decides how their outputs are put in place, never what they are.
+    from sfzmaps.solver import paths
+    text_cut = (*OUTPUT_NEUTRAL, "sfzmaps.solver.runs")
+    terra = "saved-reads/answers/text-on-every-sheet.jsonl.gz"
+    out["solver-text"] = Stage(
+        "solver-text", (), (), tuple(dict.fromkeys(owner[s] for s in paths.TEXT_TRAIN_SERIES)),
+        command=("solver", "text"),
+        reads=(*_text_sheet_files("data/work", paths.TEXT_TRAIN_SERIES, ("page.png", "district_labels.json")), terra,
+               "saved-reads/answers/experiments-2000/text-positions"),
+        writes=("data/solver/text",), code=("sfzmaps.solver.textnet.stage",), cut=text_cut)
+    out["solver-text-scores"] = Stage(
+        "solver-text-scores", (), (), ("solver-text", *(f"warp-{s}" for s in paths.TEXT_TEST_SERIES)),
+        command=("solver", "text-scores"),
+        reads=("data/solver/text/model.pt",
+               *_text_sheet_files("data/work", paths.TEXT_TEST_SERIES, ("page.png", "district_labels.json")),
+               *_text_sheet_files("data/warp", paths.TEXT_TEST_SERIES, ("transform.json", "correction.npz")), terra),
+        writes=("data/solver/text-scores",), code=("sfzmaps.solver.textnet.score_stage",), cut=text_cut)
     out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
                                  # of the prints, only prints.parquet: the Terra boxes and the summary aren't read
                                  reads=("data/solver/prints/prints.parquet", "data/solver/lots", "data/solver/page",
                                         "data/ref"),
                                  writes=("data/solver/labels",), code=("sfzmaps.solver.labels_stage",))
     # the walls read what `walls.build_walls` reads: the merged page (and its frames), the cut boxes, the lots, the
-    # strokes, the Terra boxes, the warp's placements, and for the text discount the four detectors' chances and the
-    # sheets' pages they are read on
-    out["solver-walls"] = Stage("solver-walls", (), (), ("solver-labels", *(f"solver-text-{q}" for q in quarters)),
+    # strokes, the Terra boxes, the warp's placements, and for the text discount the detector's chance and the
+    # sheets' pages it is read on
+    out["solver-walls"] = Stage("solver-walls", (), (), ("solver-labels", "solver-text"),
                                 command=("solver", "walls"),
                                 reads=("data/solver/page", "inputs/merged-page/2000-digital-zoning.json",
                                        "data/solver/lots", "data/solver/labels/strokes.npz",
-                                       "data/solver/prints/terra_boxes.json",
-                                       *(f"data/solver/text-{q}/chance" for q in quarters),
+                                       "data/solver/prints/terra_boxes.json", "data/solver/text/chance",
                                        "data/work/2000-digital-zoning", "data/warp/2000-digital-zoning"),
                                 writes=("data/solver/walls",), code=("sfzmaps.solver.walls",))
     # the solve: the placement, the four held-out solves, the join, the data errors and the report.  Of the inputs
@@ -184,10 +185,11 @@ def stages() -> dict[str, Stage]:
     return out
 
 
-def _sheet_files(folder: str, names: tuple[str, ...]) -> tuple[str, ...]:
-    """`folder`/<sheet>/<name> for each sheet of the 2000 solver's `paths.SHEETS` and each of `names`, by sheet."""
+def _text_sheet_files(root: str, series_list, names: tuple[str, ...]) -> tuple[str, ...]:
+    """`root`/<series>/<sheet>/<name> for each series of `series_list`, each sheet Terra read of it
+    (`paths.TEXT_SHEETS`) and each of `names`: by series, then by sheet."""
     from sfzmaps.solver import paths
-    return tuple(f"{folder}/{sheet}/{name}" for sheet in paths.SHEETS for name in names)
+    return tuple(f"{root}/{s}/{sheet}/{name}" for s in series_list for sheet in paths.TEXT_SHEETS[s] for name in names)
 
 
 def downstream(names: set[str], table: dict[str, Stage]) -> set[str]:

@@ -7,7 +7,9 @@ from sfzmaps.solver import paths, runs
 def test_solver_folders_sit_under_the_data_dir():
     assert paths.SOLVER_DIR == config.DATA_DIR / "solver"
     assert paths.PAGE_DIR == paths.SOLVER_DIR / "page"
-    assert paths.text_dir("ne") == paths.SOLVER_DIR / "text-ne"
+    assert paths.TEXT_DIR == paths.SOLVER_DIR / "text" and paths.TEXT_MODEL == paths.TEXT_DIR / "model.pt"
+    assert paths.TEXT_CHANCE_DIR == paths.TEXT_DIR / "chance"
+    assert paths.TEXT_SCORES_DIR == paths.SOLVER_DIR / "text-scores"
     assert runs.WALLS_DIR == paths.SOLVER_DIR / "walls" and runs.SOLVE_DIR == paths.SOLVER_DIR / "solve"
 
 

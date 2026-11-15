@@ -404,13 +404,13 @@ def test_the_gpus_turns_are_in_no_command_stages_code_deps():
         if st.command:
             assert "sfzmaps.gpu" in st.cut and "src/sfzmaps/gpu.py" not in build.stage_deps(st), name
     # a stage that cuts nothing has it
-    st = build.Stage("x", (), (), command=("solver", "text", "nw"), code=("sfzmaps.solver.textnet.stage",), cut=())
+    st = build.Stage("x", (), (), command=("solver", "text"), code=("sfzmaps.solver.textnet.stage",), cut=())
     assert "src/sfzmaps/gpu.py" in build.stage_deps(st)
 
 
 def test_the_solver_packages_hold_no_module_list():
     # every solver stage imports both packages: an edit to their docstrings would rerun all of them (the detector's
-    # four for hours), so they are one line each and the module list is in the README
+    # training too), so they are one line each and the module list is in the README
     from sfzmaps import config
     for init in ("solver/__init__.py", "solver/textnet/__init__.py"):
         text = (config.PIPELINE_DIR / "src" / "sfzmaps" / init).read_text()
@@ -427,23 +427,25 @@ def test_the_page_and_the_lots_read_only_the_inputs_file_they_use():
         assert inputs == [f"inputs/{used}"], name
 
 
-def test_the_walls_read_what_build_walls_reads_and_follow_the_four_detectors():
+def test_the_walls_read_what_build_walls_reads_and_follow_the_one_detector():
     t = build.stages()
     st = t["solver-walls"]
     assert build.stage_commands("solver-walls") == [["solver", "walls"]]
-    assert {"solver-labels", "solver-text-nw", "solver-text-ne", "solver-text-sw", "solver-text-se"} <= set(st.upstream)
+    assert set(st.upstream) == {"solver-labels", "solver-text"}
     deps = build.stage_deps(st)
     for d in ("data/solver/page", "data/solver/lots", "data/solver/labels/strokes.npz",
-              "data/solver/prints/terra_boxes.json", "data/solver/text-nw/chance", "data/solver/text-ne/chance",
-              "data/solver/text-sw/chance", "data/solver/text-se/chance",
+              "data/solver/prints/terra_boxes.json", "data/solver/text/chance",
               "data/work/2000-digital-zoning",                  # the sheets' pages, where the text chance is read
               "data/warp/2000-digital-zoning", "src/sfzmaps/solver/walls.py", "src/sfzmaps/solver/wallevidence.py",
               "src/sfzmaps/solver/textgrid.py"):
         assert d in deps, d
     assert [d for d in deps if d.startswith("inputs/")] == ["inputs/merged-page/2000-digital-zoning.json"]
-    # not the prints' table, the detectors' weights or scores, the rest of the labels, or the solve's code
+    # not the prints' table, the detector's weights or scores, the rest of the labels, or the solve's code; of the
+    # detector's code only what reads its chance (no training, no scoring)
+    assert [d for d in deps if d.startswith("data/solver/text")] == ["data/solver/text/chance"]
+    assert not any(d.endswith(("textnet/stage.py", "textnet/train.py", "textnet/predict.py", "textnet/model.py",
+                               "textnet/scores.py", "textnet/score_stage.py", "textnet/trial.py")) for d in deps)
     assert not any(d in ("data/solver/prints", "data/solver/prints/prints.parquet", "data/solver/labels")
-                   or d.startswith(("data/solver/text-scores", "data/solver/text-nw/model"))
                    or d.endswith(("solver/solve.py", "solver/placement.py", "solver/search.py")) for d in deps)
     assert build.stage_outs(st) == ["data/solver/walls"]
 

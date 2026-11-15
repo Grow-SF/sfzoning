@@ -982,42 +982,85 @@ def solver_labels() -> None:
     typer.echo("seconds: " + ", ".join(f"{k} {v}" for k, v in s["seconds"].items()))
 
 
-@solver_app.command("text")
-def solver_text(
-    quarter: str = typer.Argument(..., help="The quarter held out: nw, ne, sw or se."),
-    iterations: int = typer.Option(None, "--iterations", min=1, help="Training steps (default 8,000)."),
-    device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where available, else cpu)."),
-) -> None:
-    """Train the text detector with one quarter of the city held out and score every sheet's page with it:
-    data/solver/text-<quarter>/model.pt and chance/<sheet>.png."""
-    import logging
+_DEVICE_OPTION = typer.Option(None, "--device", help="cpu or mps (default: mps where available, else cpu).")
 
-    from sfzmaps.solver import paths
-    from sfzmaps.solver.textnet import stage
-    if quarter not in paths.QUARTERS:
-        raise typer.BadParameter(f"one of {', '.join(paths.QUARTERS)}", param_hint="QUARTER")
+
+def _check_device(device: str | None) -> None:
     if device not in (None, "cpu", "mps"):
         raise typer.BadParameter("cpu or mps", param_hint="--device")
+
+
+@solver_app.command("text")
+def solver_text(device: str = _DEVICE_OPTION) -> None:
+    """Train the text detector on every sheet Terra read of the training maps (the validation area included) and
+    score every 2000 sheet's page with it: data/solver/text/model.pt and chance/<sheet>.png."""
+    import logging
+
+    from sfzmaps.solver.textnet import stage
+    _check_device(device)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    s = stage.build_text(quarter, iterations, device)
-    typer.echo(f"{s['quarter']} held out: {s['iterations']:,} steps on {s['device']}, {s['sheets']} sheets scored")
+    s = stage.build_text(device=device)
+    typer.echo(f"{s['iterations']:,} steps on {s['device']} over {s['trained_on']} sheets; {s['scored']} 2000 sheets "
+               "scored")
     typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in s["seconds"].items()))
 
 
+def _scores_line(s: dict) -> str:
+    """One line of a detector's scores (`scores.score_sheets`' "all", or one map's)."""
+    def pc(v, digits=1):
+        return "-" if v is None else f"{v:.{digits}%}"
+
+    words = "; ".join(f"{k} {v['found']:,}/{v['of']:,}" for k, v in s["words"].items())
+    auc = "-" if s["auc"] is None else f"{s['auc']:.4f}"
+    return (f"AUC {auc}, words found {pc(s['words_found'])} ({words}), text ink found {pc(s['text_ink_found'])}, "
+            f"ink outside boxes called text {pc(s['ink_outside_boxes_called_text'], 2)}, long-line ink called text "
+            f"{pc(s['long_lines']['called_text'], 2)} (of {s['long_lines']['ink_px']:,} px)")
+
+
 @solver_app.command("text-scores")
-def solver_text_scores() -> None:
-    """Score each quarter's text detector on the quarter it held out, from its chances:
-    data/solver/text-scores/evaluation_<quarter>.json."""
+def solver_text_scores(device: str = _DEVICE_OPTION) -> None:
+    """Score the text detector (data/solver/text/model.pt) on the test drawings, every px of every sheet Terra read
+    of them: data/solver/text-scores/scores.json."""
     import logging
 
-    from sfzmaps.solver.textnet import evaluate
+    from sfzmaps.solver.textnet import score_stage
+    _check_device(device)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    for q, s in evaluate.build_scores().items():
-        words = "; ".join(f"{k} {v['found']:,}/{v['of']:,}" for k, v in s["words"].items())
-        typer.echo(f"{q} held out: AUC {s['auc']:.4f}, log loss {s['log_loss']:.4f}, text ink found "
-                   f"{s['text_ink_found']:.1%}; words found: {words}; new text pieces {s['new_text_pieces']:,}; "
-                   f"district-line ink called text {s['district_lines']['called_text']:.2%} "
-                   f"(of {s['district_lines']['ink_px']:,} px)")
+    s = score_stage.build_scores(device)
+    for name, v in [*s["scores"]["series"].items(), ("all", s["scores"]["all"])]:
+        typer.echo(f"{name}: {_scores_line(v)}")
+    typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in s["seconds"].items()))
+
+
+@solver_app.command("text-trial")
+def solver_text_trial(
+    settings: list[str] = typer.Option(None, "--set", help="One setting of a recipe, name=value (repeatable): "
+                                                          "together, one recipe over today's."),
+    recipes: list[str] = typer.Option(None, "--recipe",
+                                      help="A whole recipe, its settings apart by spaces (\"half_size=True "
+                                           "ink_only=ink\"; \"default\" for today's); repeat for several, tried in "
+                                           "turn on sheets read once."),
+    seed: int = typer.Option(0, "--seed", min=0, help="The seed (its folder gets -seed=N when not 0)."),
+    reuse: bool = typer.Option(False, "--reuse", help="Score the model already in each recipe's folder; train "
+                                                      "nothing."),
+    device: str = _DEVICE_OPTION,
+) -> None:
+    """Try recipes for the text detector: each trained with the validation area held out on every training map and
+    scored there, into data/solver/experiments/text-<recipe>/ (model.pt, recipe.json, scores.json, minutes.json).
+    With neither --set nor --recipe, today's recipe."""
+    import logging
+
+    from sfzmaps.solver.textnet import trial
+    _check_device(device)
+    try:
+        asked = ([trial.parse_recipe(settings)] if settings else []) + [trial.parse_recipe(r) for r in recipes or []]
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--set / --recipe")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    for r in trial.run_trials(asked or [trial.parse_recipe([])], device, seed, reuse):
+        typer.echo(f"{r['name']}: {_scores_line(r['scores']['all'])}")
+        typer.echo("  minutes: " + ", ".join(f"{k} {v:.1f}" for k, v in r["minutes"].items())
+                   + f"; written to {r['folder']}")
 
 
 def _in_one_thread(argv: list[str]) -> None:

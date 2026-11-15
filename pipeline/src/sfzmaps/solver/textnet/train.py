@@ -1,11 +1,11 @@
-"""Fitting the text detector, by a recipe (`Recipe`; its defaults are the recipe the four quarter models trained with).
+"""Fitting the text detector, by a recipe (`Recipe`; its defaults are today's recipe, the one the 2000 detector of
+each quarter of the city trained with before there was one detector).
 
-Each step takes `batch` crops of `crop` x `crop` px from the sheets' pages, centred on a px where a crop may centre
-(taken every CENTRE_STRIDE px each way): TEXT_SHARE of them on text, the rest on any ink.  Each crop is scaled by a
-factor drawn log-uniformly from SCALE (so small street lettering also teaches big code lettering) and turned a random
-number of quarter turns (the reading angle turns with it).  The sheets are the maps' (`data.SheetData`: centres from
-`data.centres`, crops drawn by `data.crop_targets`) or, until their stages go, a quarter model's 2000 sheets
-(`data.SheetTargets`: whole-page targets, cropped by `crop`).
+Each step takes `batch` crops of `crop` x `crop` px from the sheets' pages (`data.SheetData`), centred on a px where a
+crop may centre (`data.centres`, taken every CENTRE_STRIDE px each way): TEXT_SHARE of them on text, the rest on any
+ink.  Each crop is scaled by a factor drawn log-uniformly from SCALE (so small street lettering also teaches big code
+lettering) and turned a random number of quarter turns (the reading angle turns with it); its targets are drawn for it
+alone (`data.crop_targets`).
 
 The loss is binary cross-entropy on text over the px it reads, plus KIND_WEIGHT x the cross-entropy of the kind and
 ANGLE_WEIGHT x (1 - cosine) of the reading direction, both on the text px it reads; a text-only network (`heads`
@@ -20,7 +20,7 @@ is read, logged and checked, so the device is waited on only then.  A mean that 
 Every draw comes from one numpy generator and the weights from torch's, both seeded; torch runs deterministic
 algorithms on THREADS threads.  With `prefetch` a background thread draws the batches ahead, from that one generator
 and in the same order, so the weights are the same bit for bit.  On the Mac's GPU the training runs in the GPU's
-exclusive turn (`sfzmaps.gpu`), which the caller takes (`stage.build_text`).
+exclusive turn (`sfzmaps.gpu`), which the caller takes (`stage.build_text`, `trial.run_trials`).
 
 `save_model` writes the weights with the recipe they came from; `predict.load_model` builds the network that recipe
 names.
@@ -34,12 +34,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import cv2
 import numpy as np
 import torch
 import torch.nn.functional as F
 
-from sfzmaps.solver import paths
 from sfzmaps.solver.textnet import data, model
 
 log = logging.getLogger(__name__)
@@ -59,11 +57,12 @@ THREADS = 4
 LOG_EVERY = 250         # iterations between progress lines (and reads of the loss from the device)
 PREFETCH = 2            # batches drawn ahead with `prefetch`
 CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text"), "decoder": ("full", "light")}
+NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
 
 
 @dataclasses.dataclass(frozen=True)
 class Recipe:
-    """How the detector is trained.  The defaults are today's recipe, the four quarter models'.
+    """How the detector is trained.  The defaults are today's recipe (see the module).
 
       iterations      steps
       max_lr          the one-cycle schedule's peak learning rate
@@ -117,12 +116,13 @@ class Recipe:
                              f"even, not {self.crop}")
 
     def name(self) -> str:
-        """A short id of the recipe, the same every run (for folder names): each setting that differs from today's
-        (the defaults), sorted by name, as "name=value" (a switch turned on as its name alone), joined by "-";
-        "default" when none differs."""
+        """A short id of the weights the recipe trains, the same every run (for folder names): each setting that
+        differs from today's (the defaults), sorted by name, as "name=value" (a switch turned on as its name alone),
+        joined by "-"; "default" when none differs.  The settings of NOT_IN_NAME, which never change the weights,
+        are left out."""
         today = Recipe()
         changed = sorted((f.name, getattr(self, f.name)) for f in dataclasses.fields(self)
-                         if getattr(self, f.name) != getattr(today, f.name))
+                         if f.name not in NOT_IN_NAME and getattr(self, f.name) != getattr(today, f.name))
         return "-".join(k if v is True else f"{k}={v}" for k, v in changed) or "default"
 
 
@@ -160,27 +160,11 @@ class Pool:
         return i, int(r), int(c)
 
 
-def _quarter_centres(t: data.SheetTargets) -> tuple[np.ndarray, np.ndarray]:
-    """A quarter model's sheet's crop centres, on text and on ink: every CENTRE_STRIDE-th px each way that is
-    `centre_ok`, as int32 (n, 2) (row, col)."""
-    k = CENTRE_STRIDE
-    ok = t.centre_ok[::k, ::k]
-    out = []
-    for mask in (ok & (t.text[::k, ::k] > 0), ok & t.ink[::k, ::k]):
-        r, c = np.nonzero(mask)
-        out.append(np.c_[r * k, c * k].astype(np.int32))
-    return out[0], out[1]
-
-
-def centre_pools(sheets: list) -> tuple[Pool, Pool]:
-    """Where crops may centre on the sheets, on text and on ink (`data.centres` every CENTRE_STRIDE-th px; on a quarter
-    model's sheets, the `centre_ok` px among those), data.LOAD_THREADS sheets at a time.  Stops (ValueError) when
-    either pool is empty."""
-    def one(s):
-        return _quarter_centres(s) if isinstance(s, data.SheetTargets) else data.centres(s, CENTRE_STRIDE)
-
+def centre_pools(sheets: list[data.SheetData]) -> tuple[Pool, Pool]:
+    """Where crops may centre on the sheets, on text and on ink (`data.centres` every CENTRE_STRIDE-th px),
+    data.LOAD_THREADS sheets at a time.  Stops (ValueError) when either pool is empty."""
     with ThreadPoolExecutor(data.LOAD_THREADS) as ex:
-        found = list(ex.map(one, sheets))
+        found = list(ex.map(lambda sd: data.centres(sd, CENTRE_STRIDE), sheets))
     pools = Pool([f[0] for f in found]), Pool([f[1] for f in found])
     if not len(pools[0]) or not len(pools[1]):
         raise ValueError(f"nothing to train on: {len(pools[0])} text and {len(pools[1])} ink px where a crop may "
@@ -188,31 +172,7 @@ def centre_pools(sheets: list) -> tuple[Pool, Pool]:
     return pools
 
 
-def crop(t: data.SheetTargets, y: int, x: int, scale: float, turns: int, size: int = CROP) -> dict[str, np.ndarray]:
-    """A quarter model's training crop centred on page px (row y, col x), moved inside the page: `size` / `scale` px
-    of page resized to `size` x `size` (nearest px) and turned `turns` quarter turns counter-clockwise, the reading
-    angle with it (in [-180, 180) degrees on text, 0 elsewhere).  Keys: ink, text, kind, angle, known."""
-    h, w = t.ink.shape
-    src = int(round(size / scale))
-    y0 = int(np.clip(y - src // 2, 0, h - src))
-    x0 = int(np.clip(x - src // 2, 0, w - src))
-    sl = (slice(y0, y0 + src), slice(x0, x0 + src))
-    angle = np.where(t.text[sl] > 0, (t.angle[sl].astype(np.int32) + 90 * turns + 180) % 360 - 180, 0)
-    parts = {"ink": t.ink[sl], "text": t.text[sl], "kind": t.kind[sl], "angle": angle.astype(np.int16),
-             "known": t.known[sl]}
-    if src != size:
-        parts = {k: cv2.resize(v.astype(np.uint8) if v.dtype == bool else v, (size, size),
-                               interpolation=cv2.INTER_NEAREST).astype(v.dtype) for k, v in parts.items()}
-    return {k: np.rot90(v, turns) for k, v in parts.items()}
-
-
-def _crop_at(sheet, y: int, x: int, size: int, scale: float, turns: int) -> dict[str, np.ndarray]:
-    if isinstance(sheet, data.SheetTargets):
-        return crop(sheet, y, x, scale, turns, size)
-    return data.crop_targets(sheet, y, x, size, scale, turns)
-
-
-def draw(sheets: list, pools: tuple[Pool, Pool], recipe: Recipe,
+def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe,
          rng: np.random.Generator) -> list[dict[str, np.ndarray]]:
     """One batch of `recipe.batch` crops: for each, text or ink, a centre from that pool, a scale and a number of
     turns."""
@@ -221,7 +181,7 @@ def draw(sheets: list, pools: tuple[Pool, Pool], recipe: Recipe,
         pool = pools[0] if rng.random() < TEXT_SHARE else pools[1]
         i, y, x = pool[rng.integers(len(pool))]
         scale = float(np.exp(rng.uniform(np.log(SCALE[0]), np.log(SCALE[1]))))
-        out.append(_crop_at(sheets[i], y, x, recipe.crop, scale, int(rng.integers(4))))
+        out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, int(rng.integers(4))))
     return out
 
 
@@ -307,7 +267,7 @@ class WeightAverage:
 
 
 @contextlib.contextmanager
-def _batches(sheets: list, pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator):
+def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator):
     """The training's batches (`batch_tensors` of `draw`), one per step, from `rng` in order: drawn when asked for or,
     with `recipe.prefetch`, by a background thread up to PREFETCH ahead (which alone uses `rng` meanwhile: the same
     batches, in the same order).  An error in that thread is raised where the batch is asked for."""
@@ -352,7 +312,7 @@ def _batches(sheets: list, pools: tuple[Pool, Pool], recipe: Recipe, rng: np.ran
         worker.join()
 
 
-def fit(sheets: list, recipe: Recipe, device: str | None = None, seed: int = 0) -> model.TextNet:
+def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None, seed: int = 0) -> model.TextNet:
     """A TextNet fitted on the sheets by `recipe` on `device` (default `default_device()`); see the module.  On `mps`
     the caller holds the GPU's exclusive turn (`gpu.gpu_turn`).  Raises FloatingPointError at the first log whose
     mean loss over the steps since the last is not finite."""
@@ -390,17 +350,6 @@ def fit(sheets: list, recipe: Recipe, device: str | None = None, seed: int = 0) 
     if average is not None:
         average.put_into(net)
     return net
-
-
-def quarter_targets(q: str) -> list[data.SheetTargets]:
-    """Every sheet's targets (`paths.SHEETS`, once they are the sheets the warp placed: `paths.check_sheets`) with
-    quarter `q` held out, in sheet name order: what the detector of `q` learns from."""
-    data.quarter_index(q)
-    names = paths.check_sheets()
-    t0 = time.perf_counter()
-    sheets = [data.sheet_targets(name, q) for name in names]
-    log.info("%d sheets' targets read (%.0f s)", len(sheets), time.perf_counter() - t0)
-    return sheets
 
 
 def save_model(out: Path, net: model.TextNet, recipe: Recipe, device: str, seed: int = 0) -> Path:
