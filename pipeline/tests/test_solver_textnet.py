@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from sfzmaps import config
 from sfzmaps.solver import grid, paths
-from sfzmaps.solver.textnet import boxes, data, evaluate, model, predict, stage, train
+from sfzmaps.solver.textnet import boxes, data, evaluate, model, predict, scores, stage, train
 from sfzmaps.transform import SheetTransform
 
 SHEET = "2000-digital-zoning-p01"
@@ -883,3 +883,247 @@ def test_recipe_round_trips_through_the_saved_model(maps, tmp_path):
     torch.save({k: v for k, v in saved.items() if k != "recipe"}, tmp_path / "old.pt")
     with pytest.raises(ValueError, match="recipe"):
         predict.load_model(tmp_path / "old.pt", "cpu")
+
+
+# --- the scores ------------------------------------------------------------------------------------------------------
+
+AREA_CORNER = (319.5, 319.5)      # page px of VALIDATION_AREA's north-west corner: rows and columns 320 on are in it
+EDGE_WORDS = [([300, 400, 380, 430], "zoning code", 0),    # P: across the area's west edge, its centre (340, 415) in it
+              ([400, 290, 460, 340], "street name", 0),    # Q: across its north edge, its centre (430, 315) outside
+              ([500, 500, 560, 530], "block number", 0),   # R: inside
+              ([50, 50, 120, 80], "other", 0)]             # S: outside
+EDGE_POINT = (600, 450)           # one of Sol's points, in the area
+
+
+def _in_memory_sheet(gray, ft_per_px=4.0, corner=AREA_CORNER, words=(), points=(), sheet=SHEET) -> data.SheetData:
+    """A 2000 SheetData made in memory: the page `gray`, placed north up at `ft_per_px` ft per page px with
+    VALIDATION_AREA's north-west corner at page px `corner` (col, row), so the px east of and below it are in the
+    area; Terra's `words` (axis box, kind, reading angle) and Sol's `points` (x, y)."""
+    h, w = gray.shape
+    ax0, _, _, ay1 = data.VALIDATION_AREA
+    step = data.PLACEMENT_STEP
+    gx, gy = np.meshgrid(np.arange(0, w - 1 + step, step, dtype=float), np.arange(0, h - 1 + step, step, dtype=float))
+    world = np.stack([ax0 + ft_per_px * (gx - corner[0]), ay1 - ft_per_px * (gy - corner[1])], -1)
+    rects = [data.word_rect(box, angle) for box, _, angle in words]
+    return data.SheetData(
+        series=paths.SERIES, sheet=sheet, height=h, width=w, ink_bits=np.packbits(gray < grid.INK_BELOW, axis=1),
+        words=np.round(np.array(rects, float).reshape(-1, 4, 2)).astype(np.int32),
+        kinds=np.array([data.KINDS[k] for _, k, _ in words], np.uint8),
+        angles=np.array([data.reading_angle(r) for r in rects], np.int16), other=np.zeros((0, 4, 2), np.int32),
+        points=np.array(points, np.int32).reshape(-1, 2), world=world, ft_per_px=float(ft_per_px), hold_out=False)
+
+
+def _box_mask(shape, box) -> np.ndarray:
+    """The page px (bool) of an axis box (x0, y0, x1, y1), its edges included: the px a word read left to right
+    fills."""
+    x0, y0, x1, y1 = box
+    m = np.zeros(shape, bool)
+    m[y0:y1 + 1, x0:x1 + 1] = True
+    return m
+
+
+def _u8(a) -> np.ndarray:
+    return np.asarray(a).astype(np.uint8)
+
+
+def _score(sd, chance, where) -> dict:
+    return scores.score_sheets({(sd.series, sd.sheet): chance}, where, [sd])
+
+
+def _drawing(ft_per_px: float) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """One drawing in feet (1,600 ft square) at `ft_per_px` ft per page px: three straight lines apart, each a bar
+    (from x0 to x1, centred on y, of a width; ft), and a speck 8 ft below the long thin line (a bar 4 ft long).
+    Returns the page and the px of each."""
+    lines = {"long thin": (100, 420, 200, 8), "short thin": (100, 260, 600, 8), "long thick": (100, 420, 1000, 24),
+             "speck": (300, 304, 214, 4)}
+    n = int(round(1600 / ft_per_px))
+    gray = np.full((n, n), 255, np.uint8)
+    px = {}
+    for name, (x0, x1, y, width) in lines.items():
+        m = np.zeros((n, n), bool)
+        r0 = int(round((y - width / 2) / ft_per_px))
+        m[r0:r0 + int(round(width / ft_per_px)), int(round(x0 / ft_per_px)):int(round(x1 / ft_per_px))] = True
+        gray[m] = 0
+        px[name] = m
+    return gray, px
+
+
+def test_long_line_measure_uses_feet_per_sheet():
+    # the same drawing at 2 and at 4 ft per page px: the same line is long and thin (at least LONG_LINE_FT long, at
+    # most THIN_LINE_FT wide, each in the sheet's own feet), nearly all of its ink and none of the others'
+    for ft in (2.0, 4.0):
+        gray, lines = _drawing(ft)
+        found = scores.long_lines(gray < grid.INK_BELOW, ft)
+        assert found[lines["long thin"]].mean() >= 0.9, ft
+        assert not found[lines["short thin"]].any() and not found[lines["long thick"]].any(), ft
+        # a speck beside the line, whose centre line is no stroke, is not the line's
+        assert lines["speck"].any() and not found[lines["speck"]].any(), ft
+        assert not (found & (gray >= grid.INK_BELOW)).any()
+    # read at the grid's 4 ft per px instead, the 2 ft drawing's thin line would be 16 ft wide: the scale decides
+    gray, lines = _drawing(2.0)
+    assert scores.long_lines(gray < grid.INK_BELOW, grid.FT_PER_PX)[lines["long thin"]].mean() < 0.5
+    # the scores read each sheet's own scale: the same long-line ink, in square feet, at both
+    area_ft2 = []
+    for ft in (2.0, 4.0):
+        gray, _ = _drawing(ft)
+        sd = _in_memory_sheet(gray, ft_per_px=ft)
+        long_ink = _score(sd, np.zeros(gray.shape, np.uint8), "whole")["all"]["long_lines"]["ink_px"]
+        area_ft2.append(long_ink * ft * ft)
+    assert area_ft2[0] > 0 and area_ft2[0] == pytest.approx(area_ft2[1], rel=0.1)
+
+
+def _edge_page() -> np.ndarray:
+    """The page of EDGE_WORDS: each word's ink a block inside its box; a thin line 1,040 ft long whose last 160 ft
+    are in the area; ink at Sol's point."""
+    gray = np.full((SIZE, SIZE), 255, np.uint8)
+    for (x0, y0, x1, y1), _, _ in EDGE_WORDS:
+        gray[y0 + 3:y1 - 2, x0 + 2:x1 - 1] = 0
+    gray[598:600, 100:360] = 0
+    gray[440:460, 590:610] = 0
+    return gray
+
+
+def _edge_masks(gray) -> dict[str, np.ndarray]:
+    """The edge page's px, drawn independently: ink, the area (rows and columns 320 on), text (the words' boxes),
+    unknown (within READ_POINT_RADIUS of Sol's point, in no box)."""
+    ink = gray < grid.INK_BELOW
+    area = np.zeros(gray.shape, bool)
+    area[320:, 320:] = True
+    text = np.zeros(gray.shape, bool)
+    for box, _, _ in EDGE_WORDS:
+        text |= _box_mask(gray.shape, box)
+    disc = np.zeros(gray.shape, np.uint8)
+    cv2.circle(disc, EDGE_POINT, data.READ_POINT_RADIUS, 1, -1)
+    return {"ink": ink, "area": area, "text": text, "unknown": (disc > 0) & ~text}
+
+
+def test_validation_scores_use_only_validation_pixels():
+    gray = _edge_page()
+    sd = _in_memory_sheet(gray, words=EDGE_WORDS, points=[EDGE_POINT])
+    m = _edge_masks(gray)
+    rng = np.random.default_rng(0)
+    chance = rng.integers(0, 256, gray.shape, dtype=np.uint8)
+    v = _score(sd, chance, "validation")
+    # the ink px scored are the known ink px in the area, and no others
+    scored = m["ink"] & m["area"] & ~m["unknown"]
+    assert m["unknown"].any() and (m["ink"] & m["unknown"]).any()
+    assert v["all"]["ink_px"] == scored.sum() and v["all"]["text_ink_px"] == (scored & m["text"]).sum()
+    assert v["series"][paths.SERIES]["sheets"] == 1 and v["where"] == "validation"
+    # a chance changed anywhere outside the area changes nothing; changed on the ink inside, the scores change
+    assert _score(sd, np.where(m["area"], chance, rng.integers(0, 256, gray.shape, dtype=np.uint8)),
+                  "validation") == v
+    assert _score(sd, _u8(np.where(scored, 255 - chance, chance)), "validation") != v
+    # the long line is long by its whole length (its 160 ft in the area alone would be short): its ink in the area
+    # is the long-line ink
+    line = np.zeros(gray.shape, bool)
+    line[598:600, 320:360] = True
+    assert 0.9 * line.sum() <= v["all"]["long_lines"]["ink_px"] <= line.sum()
+    assert not scores.long_lines(m["ink"] & m["area"], sd.ft_per_px)[line].any()
+    # on the whole sheet every known ink px counts, outside the area too
+    w = _score(sd, chance, "whole")
+    assert w["all"]["ink_px"] == (m["ink"] & ~m["unknown"]).sum() and w["where"] == "whole"
+    assert w["all"]["long_lines"]["ink_px"] > v["all"]["long_lines"]["ink_px"]
+    assert _score(sd, _u8(np.where(m["area"], chance, 0)), "whole") != w
+    # validation needs a chance for every sheet with px in the area, and only those; whole needs every sheet's
+    away = _in_memory_sheet(gray, corner=(5000.0, 5000.0), sheet="2000-digital-zoning-p02")
+    both = [sd, away]
+    key = (sd.series, sd.sheet)
+    assert scores.score_sheets({key: chance}, "validation", both) == v
+    with pytest.raises(ValueError, match="2000-digital-zoning-p02"):
+        scores.score_sheets({key: chance}, "whole", both)
+    with pytest.raises(ValueError, match=SHEET):
+        scores.score_sheets({(away.series, away.sheet): chance}, "validation", both)
+    with pytest.raises(ValueError, match="elsewhere"):
+        scores.score_sheets({key: chance, (paths.SERIES, "elsewhere"): chance}, "validation", both)
+    with pytest.raises(ValueError, match="shape"):
+        _score(sd, chance[:-1], "validation")
+    with pytest.raises(ValueError, match="where"):
+        _score(sd, chance, "train")
+
+
+def test_a_word_across_the_validation_edge_counts_by_its_centre_and_only_its_ink_inside():
+    # in validation a word is counted when its centre px is in the area, and judged on its ink in the area alone (no
+    # px the detector trained on counts); a word whose centre is outside is not counted, though its ink inside counts
+    # as text ink. On the whole sheet every word counts, judged on all its ink
+    gray = _edge_page()
+    sd = _in_memory_sheet(gray, words=EDGE_WORDS, points=[EDGE_POINT])
+    m = _edge_masks(gray)
+    p_ink, q_ink, r_ink = (_box_mask(gray.shape, box) & m["ink"] for box, _, _ in EDGE_WORDS[:3])
+    assert (p_ink & ~m["area"]).any() and (q_ink & m["area"]).any() and (q_ink & ~m["area"]).any()
+    # P's ink outside the area called text, its ink inside not quite: not found in validation, found on the whole
+    # sheet (its mean chance there (255 x 18 + 100 x 59) / 77 = 136)
+    chance = _u8(np.where(p_ink & ~m["area"], 255, np.where(p_ink, 100, 0)))
+    v = _score(sd, chance, "validation")["all"]
+    assert {k: (x["found"], x["of"]) for k, x in v["words"].items()} == {
+        "zoning code": (0, 1), "block number": (0, 1), "street name": (0, 0), "other": (0, 0), "all": (0, 2)}
+    assert v["text_ink_px"] == ((p_ink | q_ink | r_ink) & m["area"]).sum()
+    w = _score(sd, chance, "whole")["all"]["words"]
+    assert {k: (x["found"], x["of"]) for k, x in w.items()} == {
+        "zoning code": (1, 1), "block number": (0, 1), "street name": (0, 1), "other": (0, 1), "all": (1, 4)}
+    # the other way round, P is found in validation: its ink inside called, its ink outside not
+    chance = _u8(np.where(p_ink & m["area"], 255, 0))
+    assert _score(sd, chance, "validation")["all"]["words"]["zoning code"] == {"found": 1, "of": 1}
+
+
+def test_words_found_counts_a_box_with_half_its_ink_called_text():
+    # a word is found when on average half its ink is called text: the mean chance over its ink (the ink px in its
+    # rectangle) is CALLED (0.5) or more, the rule of the quarter models' scores
+    a_box, b_box, c_box, d_box = [20, 20, 120, 60], [200, 20, 300, 60], [260, 20, 360, 60], [20, 100, 120, 140]
+    gray = np.full((200, 400), 255, np.uint8)
+    gray[30:50, 30:110] = 0        # A's ink: 80 columns
+    gray[30:50, 210:250] = 0       # B's ink outside C
+    gray[30:50, 265:295] = 0       # ink where B and C overlap
+    gray[30:50, 310:320] = 0       # C's ink outside B
+    gray[150:152, :] = 0           # a line in no box
+    words = [(a_box, "zoning code", 0), (b_box, "street name", 0), (c_box, "other", 0), (d_box, "block number", 0)]
+    sd = _in_memory_sheet(gray, words=words)
+    ink = gray < grid.INK_BELOW
+    a = _box_mask(gray.shape, a_box) & ink
+    cols = np.arange(400)[None, :]
+
+    def found(chance) -> dict[str, int]:
+        return {k: x["found"] for k, x in _score(sd, chance, "whole")["all"]["words"].items()}
+
+    def a_found(chance) -> bool:
+        return found(chance)["zoning code"] == 1
+
+    assert a_found(_u8(np.where(a, scores.CALLED, 0))) and not a_found(_u8(np.where(a, scores.CALLED - 1, 0)))
+    # a float chance is read as the detector writes it (x 255, rounded): 0.5 is called text, 0.498 is not
+    assert a_found(np.where(a, 0.5, 0.0)) and not a_found(np.where(a, 0.498, 0.0))
+    # the mean, however the chance is spread: half at 255 and half at 1 is 128; 60% of the ink at 255 found, 40% not;
+    # but 40% at 255 and the rest at 100 is found (a mean of 162), though most of its px are not called
+    assert a_found(_u8(np.where(a & (cols % 2 == 0), 255, np.where(a, 1, 0))))
+    assert a_found(_u8(np.where(a & (cols < 78), 255, 0))) and not a_found(_u8(np.where(a & (cols < 62), 255, 0)))
+    assert a_found(_u8(np.where(a & (cols < 62), 255, np.where(a, 100, 0))))
+    # paper in its box and ink in no box count for nothing
+    rows = np.arange(200)[:, None]
+    assert not a_found(_u8(np.where((_box_mask(gray.shape, a_box) & ~ink) | (ink & (rows >= 150)), 255, 0)))
+    # overlapping words are each judged on their own ink, the ink where they overlap each one's: called there, C is
+    # found (600 of its 800 ink px) and B not (600 of 1,400)
+    overlap = _box_mask(gray.shape, b_box) & _box_mask(gray.shape, c_box) & ink
+    f = found(_u8(np.where(overlap, 255, 0)))
+    assert f["other"] == 1 and f["street name"] == 0 and f["zoning code"] == 0
+    # a word with no ink (D) is not counted
+    w = _score(sd, np.zeros(gray.shape, np.uint8), "whole")["all"]
+    assert {k: x["of"] for k, x in w["words"].items()} == {
+        "zoning code": 1, "block number": 0, "street name": 1, "other": 1, "all": 3}
+    assert w["words_found"] == 0.0
+
+
+def test_scores_read_the_sheets_of_the_maps_scored_and_add_them_up(maps):
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False)
+    rng = np.random.default_rng(1)
+    chances = {(sd.series, sd.sheet): rng.integers(0, 256, (sd.height, sd.width), dtype=np.uint8) for sd in sheets}
+    # by default every sheet Terra read of the maps named, in the maps' order whatever the chances' order
+    got = scores.score_sheets(dict(reversed(chances.items())), "whole")
+    assert got == scores.score_sheets(chances, "whole", sheets) and list(got["series"]) == [paths.SERIES, OLD]
+    # over all, the maps' counts added up
+    per_map = list(got["series"].values())
+    for k in ("sheets", "ink_px", "text_ink_px"):
+        assert got["all"][k] == sum(s[k] for s in per_map) > 0
+    assert got["all"]["words"]["all"]["of"] == sum(s["words"]["all"]["of"] for s in per_map) > 0
+    assert got["all"]["long_lines"]["ink_px"] == sum(s["long_lines"]["ink_px"] for s in per_map) > 0
+    # JSON as it is, and the same bytes from the same chances
+    assert json.dumps(got) == json.dumps(scores.score_sheets(chances, "whole"))
+    with pytest.raises(ValueError, match="1975"):
+        scores.score_sheets({("1975", "1"): chances[sheets[0].series, sheets[0].sheet]}, "whole")

@@ -378,10 +378,23 @@ def _words(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
     return _paint(sd.words, np.arange(1, len(sd.words) + 1), y0, x0, h, w)
 
 
+def _unknown(sd: SheetData, word: np.ndarray, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+    """The unknown px of a page window, given its words (`_words`): within READ_POINT_RADIUS of one of Sol's points
+    or in another pass's box, but in no word."""
+    other = _paint(sd.other, np.ones(len(sd.other), np.int32), y0, x0, h, w, sd.points, READ_POINT_RADIUS)
+    return (other > 0) & (word == 0)
+
+
 def _known(sd: SheetData, word: np.ndarray, y0: int, x0: int, h: int, w: int) -> np.ndarray:
     """The px of a page window the loss reads, given its words (`_words`): not unknown, not held out."""
-    other = _paint(sd.other, np.ones(len(sd.other), np.int32), y0, x0, h, w, sd.points, READ_POINT_RADIUS)
-    return ~((other > 0) & (word == 0)) & ~_held(sd, y0, x0, h, w)
+    return ~_unknown(sd, word, y0, x0, h, w) & ~_held(sd, y0, x0, h, w)
+
+
+def page_text(sd: SheetData) -> tuple[np.ndarray, np.ndarray]:
+    """A sheet's whole page of text px (in one of Terra's words) and of unknown px, bool each, as the detector learns
+    them (`crop_targets`), whether or not the sheet holds the area out: for its scores."""
+    word = _words(sd, 0, 0, sd.height, sd.width)
+    return word > 0, _unknown(sd, word, 0, 0, sd.height, sd.width)
 
 
 def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int) -> dict[str, np.ndarray]:

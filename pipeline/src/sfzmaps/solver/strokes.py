@@ -31,8 +31,10 @@ from sfzmaps.solver import grid, page, paths
 NEIGHBOURS = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
 
 
-def strokes(ink: np.ndarray) -> dict[str, np.ndarray]:
-    """The strokes of `ink` (bool, True = ink, on the grid from its top-left corner): strokes.npz's arrays."""
+def strokes(ink: np.ndarray, ft_per_px: float = grid.FT_PER_PX, to_map=grid.to_map) -> dict[str, np.ndarray]:
+    """The strokes of `ink` (bool, True = ink, on the grid from its top-left corner): strokes.npz's arrays.  Ink of
+    another scale (a sheet's page) gives its own `ft_per_px` (for the widths and lengths) and `to_map` ((col, row)
+    -> the points' xy)."""
     ink = np.asarray(ink, bool)
     height, width = ink.shape
     half = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
@@ -112,8 +114,8 @@ def strokes(ink: np.ndarray) -> dict[str, np.ndarray]:
     for a, b, path in found:
         p = np.vstack([node_xy[a], np.array([(x, y) for y, x in path], float), node_xy[b]])
         w = 2 * half[np.clip(p[:, 1].astype(int), 0, height - 1), np.clip(p[:, 0].astype(int), 0, width - 1)] \
-            * grid.FT_PER_PX
-        length = float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) * grid.FT_PER_PX
+            * ft_per_px
+        length = float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) * ft_per_px
         median = np.median(w)
         q1, q3 = np.percentile(w, [25, 75])
         points.append(p)
@@ -127,7 +129,7 @@ def strokes(ink: np.ndarray) -> dict[str, np.ndarray]:
         out["spur"].append(a != b and (degree[a] == 1 or degree[b] == 1) and length < median)
         out["dega"].append(degree[a])
         out["degb"].append(degree[b])
-    xy = grid.to_map(np.vstack(points) + 0.5) if points else np.zeros((0, 2))
+    xy = to_map(np.vstack(points) + 0.5) if points else np.zeros((0, 2))
     return {"xy": xy.astype(np.float32),
             "w": (np.concatenate(widths) if widths else np.zeros(0)).astype(np.float32),
             "off": np.array(off, np.int64),

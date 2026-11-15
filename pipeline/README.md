@@ -469,7 +469,8 @@ The modules (`src/sfzmaps/solver/`):
 - `saved`, `prints`: the saved vision answers, read by file, sheet or cache key (nothing asks a model), and every
   printed zoning code with its saved reads (`sfzmaps solver prints`);
 - `textnet/`: the text detector (`data`, `model`, `train`, `predict`, `stage`: `sfzmaps solver text Q`) and its
-  scores (`evaluate`: `sfzmaps solver text-scores`);
+  scores (`evaluate`: `sfzmaps solver text-scores`; `scores`: the one measure on the validation area and the test
+  drawings, which replaces it);
 - `labels_stage` with `trust`, `streetside`, `lotsize`, `strokes`: what the solver knows about the labels and the ink
   (`sfzmaps solver labels`);
 - `textgrid`, `wallevidence`, `walls`: the detectors' chance of text on the grid, out of fold, and the wall odds
