@@ -21,7 +21,16 @@ def _write(root, stage, rel, make):
     make(p)
 
 
-def _both(tmp_path, stage, rel, make_new, make_ref):
+def _fill(tmp_path, stage):
+    """The stage's required files, the same on both sides, so only the file under test can differ."""
+    for side in ("new", "ref"):
+        for pat in co.REQUIRED[stage]:
+            _write(tmp_path / side, stage, pat.replace("*", "filler"), lambda p: p.write_bytes(b"same"))
+
+
+def _both(tmp_path, stage, rel, make_new, make_ref, fill=True):
+    if fill:
+        _fill(tmp_path, stage)
     _write(tmp_path / "new", stage, rel, make_new)
     _write(tmp_path / "ref", stage, rel, make_ref)
     return co.compare_stage(stage, tmp_path / "new", tmp_path / "ref")
@@ -71,9 +80,33 @@ def test_png_in_an_exact_stage_must_match(tmp_path):
     assert _both(tmp_path, "solver-page", "ink.png", _png([[0, 255]]), _png([[1, 255]])).status == "differs"
 
 
-def test_model_file_is_not_compared(tmp_path):
-    r = _both(tmp_path, "solver-text-nw", "model.pt", lambda p: p.write_bytes(b"a"), lambda p: p.write_bytes(b"b"))
-    assert r.status == "identical" and r.identical == 0
+def test_model_file_is_not_compared_and_alone_is_not_a_pass(tmp_path):
+    r = _both(tmp_path, "solver-text-nw", "model.pt", lambda p: p.write_bytes(b"a"), lambda p: p.write_bytes(b"b"),
+              fill=False)
+    assert r.status == "differs" and r.identical == 0
+    assert all("model.pt" not in d for d in r.differs)
+    with_chance = _both(tmp_path / "x", "solver-text-nw", "model.pt", lambda p: p.write_bytes(b"a"),
+                        lambda p: p.write_bytes(b"b"))
+    assert with_chance.status == "identical"
+
+
+def test_empty_stage_folders_differ(tmp_path):
+    for side in ("new", "ref"):
+        (tmp_path / side / co.STAGE_DIRS["solver-walls"]).mkdir(parents=True)
+    r = co.compare_stage("solver-walls", tmp_path / "new", tmp_path / "ref")
+    assert r.status == "differs" and "no files compared" in r.differs
+
+
+def test_a_required_output_missing_on_one_side_differs(tmp_path):
+    _fill(tmp_path, "solver-lots")
+    (tmp_path / "ref" / co.STAGE_DIRS["solver-lots"] / "table.parquet").unlink()
+    r = co.compare_stage("solver-lots", tmp_path / "new", tmp_path / "ref")
+    assert r.status == "differs" and any("table.parquet" in d for d in r.differs)
+
+
+def test_text_chance_png_that_is_not_uint8_differs(tmp_path):
+    big = lambda v: (lambda p: cv2.imwrite(str(p), np.array([[v]], dtype=np.uint16)))
+    assert _both(tmp_path, "solver-text-nw", "chance/a.png", big(100), big(101)).status == "differs"
 
 
 def test_text_scores_json_within_one_percent(tmp_path):
@@ -88,6 +121,7 @@ def test_json_of_an_exact_stage_is_byte_exact(tmp_path):
 
 
 def test_missing_and_extra_files_differ(tmp_path):
+    _fill(tmp_path, "solver-page")
     _write(tmp_path / "new", "solver-page", "only_new.txt", lambda p: p.write_text("x"))
     _write(tmp_path / "ref", "solver-page", "only_ref.txt", lambda p: p.write_text("x"))
     assert len(co.compare_stage("solver-page", tmp_path / "new", tmp_path / "ref").differs) == 2

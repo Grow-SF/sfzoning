@@ -42,6 +42,21 @@ STAGE_DIRS = {
     "solver-walls": "data/solver/walls",
     "solver-solve": "data/solver/solve",
 }
+# what each stage must have made, on both sides (patterns under its folder): a pass needs these present
+REQUIRED = {
+    "warp-2000-digital-zoning": ["*/transform.json", "*/warped.tif"],
+    "solver-page": ["ink.png", "sheets.png", "frames.json"],
+    "solver-lots": ["lots.npz", "table.parquet"],
+    "solver-prints": ["prints.parquet", "summary.json", "terra_boxes.json"],
+    "solver-text-nw": ["chance/*.png"],
+    "solver-text-ne": ["chance/*.png"],
+    "solver-text-sw": ["chance/*.png"],
+    "solver-text-se": ["chance/*.png"],
+    "solver-text-scores": ["*.json"],
+    "solver-labels": ["readings_*.npz", "strokes.npz", "trust.json"],
+    "solver-walls": ["walls_*.npz"],
+    "solver-solve": ["runs/final.npz", "report.json"],
+}
 TEXT_STAGES = {"solver-text-nw", "solver-text-ne", "solver-text-sw", "solver-text-se"}
 LOOSE_JSON = TEXT_STAGES | {"solver-text-scores"}
 
@@ -122,6 +137,8 @@ def compare_file(rel: Path, new: Path, ref: Path, stage: str) -> tuple[str, str]
         a, b = _png(new), _png(ref)
         if a.shape != b.shape:
             return "differs", f"shape {a.shape} vs {b.shape}"
+        if a.dtype != np.uint8 or b.dtype != np.uint8:
+            return "differs", f"dtype {a.dtype} vs {b.dtype}, not uint8"
         worst = int(np.abs(a.astype(np.int32) - b.astype(np.int32)).max()) if a.size else 0
         if worst == 0:
             return "identical", ""
@@ -156,6 +173,12 @@ def compare_stage(stage: str, new_pipeline: Path, ref_pipeline: Path) -> Result:
         res.differs.append(f"{ref_root} is missing (nothing to compare with)")
         return res
     new, ref = _files(new_root, stage), _files(ref_root, stage)
+    for pat in REQUIRED[stage]:
+        for side, files in (("made", new), ("reference", ref)):
+            if not any(r.match(pat) for r in files):
+                res.differs.append(f"no {pat} in the {side} outputs")
+    if not set(new) & set(ref):
+        res.differs.append("no files compared")
     for rel in sorted(set(ref) - set(new)):
         res.differs.append(f"{rel}: not made")
     for rel in sorted(set(new) - set(ref)):

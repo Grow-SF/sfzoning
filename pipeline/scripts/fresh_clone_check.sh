@@ -80,12 +80,18 @@ git clone --quiet --branch "$BRANCH" "$URL" "$CLONE" || exit 2
 [ "$(git -C "$CLONE" rev-parse HEAD)" = "$HEAD_SHA" ] || { echo "the clone is not at $HEAD_SHA" >&2; exit 2; }
 
 # pixi's tools first on the path, as `sfzmaps build` requires (AGENTS.md)
-px() { (cd "$CLONE/pipeline" && pixi run --manifest-path "$CLONE/pixi.toml" "$@"); }
+# Every command in the clone runs with SFZMAPS_DATA_DIR, SFZMAPS_INPUTS_DIR, SFZMAPS_ENV_FILE, OPENAI_API_KEY and
+# SFZMAPS_MAX_USD unset, so config.py falls back to the clone's own pipeline/data and pipeline/inputs (an exported
+# SFZMAPS_DATA_DIR would otherwise make the clone write into this checkout's data and compare it with itself), and a
+# stage can neither find the key nor spend.
+px() { (cd "$CLONE/pipeline" && env -u SFZMAPS_DATA_DIR -u SFZMAPS_INPUTS_DIR -u SFZMAPS_ENV_FILE -u OPENAI_API_KEY \
+        -u SFZMAPS_MAX_USD pixi run --manifest-path "$CLONE/pixi.toml" "$@"); }
 step() { echo; echo "== $*"; }
 
 step "pixi install"; (cd "$CLONE" && pixi install) || exit 2
 step "uv sync --frozen"; px uv sync --frozen || exit 2
-step "sfzmaps pull (what is not shipped yet is built below)"; px uv run --frozen sfzmaps pull || echo "(pull reported the above; continuing)"
+step "sfzmaps pull (what is not shipped yet is built below)"; PULL_NOTE=""
+px uv run --frozen sfzmaps pull || PULL_NOTE="sfzmaps pull FAILED (see above): the stages were built from whatever the clone had"
 
 run_stage() { step "stage $1"; px uv run --frozen sfzmaps stage "$1"; }
 
@@ -111,7 +117,7 @@ FAILED=0
 for s in "${STAGES[@]}"; do
   case "$s" in solver-walls|solver-text-scores) copy_other_quarters ;; esac
   if run_stage "$s"; then
-    out="$(cd "$REF" && uv run --frozen python scripts/compare_outputs.py "$s" "$CLONE/pipeline" "$REF")"; rc=$?
+    out="$(cd "$REF" && PYTHONDONTWRITEBYTECODE=1 uv run --frozen python -I scripts/compare_outputs.py "$s" "$CLONE/pipeline" "$REF")"; rc=$?
     echo "$out"
   else
     out="$s: stage failed"; rc=1; echo "$out"
@@ -122,6 +128,7 @@ for s in "${STAGES[@]}"; do
 done
 
 echo; echo "== summary"
+[ -z "$PULL_NOTE" ] || echo "$PULL_NOTE"
 printf '%-28s %s\n' STAGE RESULT
 for r in "${RESULTS[@]}"; do
   printf '%-28s %s\n' "${r%%:*}" "$(printf '%s' "$r" | head -1 | sed 's/^[^:]*: //')"
