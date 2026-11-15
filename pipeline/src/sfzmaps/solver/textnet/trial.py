@@ -1,14 +1,19 @@
 """Trying recipes for the text detector (`sfzmaps solver text-trial`): each trained on every sheet Terra read of the
-training maps (`paths.TEXT_TRAIN_SERIES`) with the validation area held out, and scored on that area alone.  Not a
-stage: each recipe's run goes in its own experiment folder (`folder`: data/solver/experiments/text-<Recipe.name()>/,
-with -seed=<n> after it for a seed other than 0), never a stage's output and never shipped:
+training maps (`paths.TEXT_TRAIN_SERIES`, or some of them: `training_maps`) with the validation area held out, and
+scored on that area alone (and, when asked, on whole test drawings).  Not a stage: each recipe's run goes in its own
+experiment folder (`folder`: data/solver/experiments/text-<Recipe.name()>/, with -train=<maps> after it when trained
+on some of the maps only and -seed=<n> for a seed other than 0), never a stage's output and never shipped:
 
-  model.pt      the weights, with the recipe they came from (`train.save_model`)
-  recipe.json   the recipe's settings (`train.Recipe(**...)` reads them back)
-  scores.json   the scores on the validation area (`scores.score_sheets`, "validation"; no times in it)
-  minutes.json  the minutes each part took: load (reading the sheets, once for all the recipes of a run), train,
-                predict and score (the first recipe's score also finds each sheet's long lines, which the later ones
-                reuse: `scores.line_ink`)
+  model.pt          the weights, with the recipe they came from (`train.save_model`)
+  recipe.json       the recipe's settings (`train.Recipe(**...)` reads them back)
+  scores.json       the scores on the validation area (`scores.score_sheets`, "validation"; no times in it)
+  test_scores.json  with test maps asked for, the scores on every px of their sheets ("whole", as the scores stage
+                    takes them, `score_stage`)
+  minutes.json      the minutes each part took, by run: "plain", or "prefetch" for a run with the batches drawn ahead
+                    (`Recipe.prefetch`, which trains the same weights into the same folder, so the two runs' minutes
+                    are kept side by side): load (reading the sheets, once for all the recipes of a run), train,
+                    predict and score (the first recipe's score also finds each sheet's long lines, which the later
+                    ones reuse: `scores.line_ink`), and test (predicting and scoring the test drawings)
 
 The sheets are read once for all the recipes.  The recipes run one at a time, each training and predicting in its own
 exclusive turn on the Mac's GPU (`sfzmaps.gpu`), and scored on the CPU after it.  Only the tiles holding px of the
@@ -36,16 +41,46 @@ from sfzmaps.solver.textnet import data, predict, scores, train
 
 log = logging.getLogger(__name__)
 
-PREFIX = "text-"                  # an experiment folder of the text detector's (`folder`)
+PREFIX = runs.TEXT_PREFIX         # an experiment folder of the text detector's (`folder`; a solve never takes one)
 FILES = ("model.pt", "recipe.json", "scores.json", "minutes.json")
-PARTS = ("load", "train", "predict", "score")      # minutes.json's parts, in order
+TEST_FILE = "test_scores.json"
+PARTS = ("load", "train", "predict", "score", "test")      # minutes.json's parts of a run, in order
+RUNS = ("plain", "prefetch")                                # minutes.json's runs, by `Recipe.prefetch`
 TRUE, FALSE = ("true", "yes", "on", "1"), ("false", "no", "off", "0")
 
 
-def folder(recipe: train.Recipe, seed: int = 0) -> Path:
-    """The experiment folder of a recipe's trial with `seed`: EXPERIMENTS_DIR/text-<recipe.name()>, with -seed=<seed>
-    after it when the seed is not 0."""
-    return runs.EXPERIMENTS_DIR / f"{PREFIX}{recipe.name()}{f'-seed={seed}' if seed else ''}"
+def training_maps(series=None) -> tuple[str, ...]:
+    """The maps a trial trains on: `series` (None: every training map, `paths.TEXT_TRAIN_SERIES`), in the order of
+    paths.TEXT_TRAIN_SERIES (the order the sheets are read in, so one set of maps trains one way).  A map that is not
+    a training map, or none, is a ValueError."""
+    if series is None:
+        return tuple(paths.TEXT_TRAIN_SERIES)
+    return _maps(series, paths.TEXT_TRAIN_SERIES, "training")
+
+
+def test_maps(series) -> tuple[str, ...]:
+    """The test drawings a trial is also scored on (`paths.TEXT_TEST_SERIES`, in that order); none for none.  A map
+    that is not a test drawing is a ValueError."""
+    return _maps(series, paths.TEXT_TEST_SERIES, "test") if series else ()
+
+
+def _maps(series, allowed, kind: str) -> tuple[str, ...]:
+    asked = set(series)
+    unknown = sorted(asked - set(allowed))
+    if unknown:
+        raise ValueError(f"not a {kind} map: {', '.join(unknown)} (the {kind} maps are {', '.join(allowed)})")
+    if not asked:
+        raise ValueError(f"no {kind} map")
+    return tuple(s for s in allowed if s in asked)
+
+
+def folder(recipe: train.Recipe, seed: int = 0, train_series=None) -> Path:
+    """The experiment folder of a recipe's trial with `seed`, trained on `train_series` (`training_maps`):
+    EXPERIMENTS_DIR/text-<recipe.name()>, with -train=<the maps, joined by "+"> after it when not every training map
+    and -seed=<seed> when the seed is not 0."""
+    maps = training_maps(train_series)
+    some = f"-train={'+'.join(maps)}" if maps != tuple(paths.TEXT_TRAIN_SERIES) else ""
+    return runs.EXPERIMENTS_DIR / f"{PREFIX}{recipe.name()}{some}{f'-seed={seed}' if seed else ''}"
 
 
 def _value(field: dataclasses.Field, text: str):
@@ -107,8 +142,10 @@ def _check_saved(f: Path, recipe: train.Recipe, seed: int) -> None:
 
 
 def _minutes(f: Path) -> dict:
-    """A folder's minutes.json as it was, {} without one."""
-    return json.loads(f.read_text()) if f.is_file() else {}
+    """A folder's minutes.json as it was, by run (RUNS); {} without one.  A file of one run's parts alone (as the
+    first baseline's was written) is the plain run's."""
+    got = json.loads(f.read_text()) if f.is_file() else {}
+    return got if set(got) <= set(RUNS) else {RUNS[0]: got}
 
 
 def validation_scopes(sheets: list[data.SheetData]) -> dict[tuple[str, str], np.ndarray]:
@@ -134,13 +171,16 @@ def validation_chances(net, sheets: list[data.SheetData], scopes: dict, device: 
     return out
 
 
-def run_trials(recipes: list[train.Recipe], device: str | None = None, seed: int = 0,
-               reuse: bool = False) -> list[dict]:
-    """Try each recipe in turn (see the module) on `device` (None: `train.default_device()`) with `seed`.  Every
-    recipe's folder must be its own, and with `reuse` hold its model (checked before anything is read).  Returns, per
-    recipe, its name, folder, scores and minutes."""
+def run_trials(recipes: list[train.Recipe], device: str | None = None, seed: int = 0, reuse: bool = False,
+               train_series=None, test_series=()) -> list[dict]:
+    """Try each recipe in turn (see the module) on `device` (None: `train.default_device()`) with `seed`, trained on
+    `train_series` (None: every training map; `training_maps`) and, with `test_series`, scored on those test drawings
+    as well (`test_maps`).  Every recipe's folder must be its own, and with `reuse` hold its model (checked before
+    anything is read).  Returns, per recipe, its name, folder, scores (and test scores, or None) and this run's
+    minutes."""
     device = device or train.default_device()
-    plan = [(r, folder(r, seed)) for r in recipes]
+    maps, tests = training_maps(train_series), test_maps(test_series)
+    plan = [(r, folder(r, seed, maps)) for r in recipes]
     seen = set()
     for r, out in plan:
         if out in seen:
@@ -149,16 +189,19 @@ def run_trials(recipes: list[train.Recipe], device: str | None = None, seed: int
         if reuse:
             _check_saved(out / FILES[0], r, seed)
     t0 = time.perf_counter()
-    sheets = data.load_sheets(paths.TEXT_TRAIN_SERIES, hold_out_validation=True)
+    sheets = data.load_sheets(maps, hold_out_validation=True)
     scopes = validation_scopes(sheets)
+    test_sheets = data.load_sheets(tests, hold_out_validation=False) if tests else []
     load = (time.perf_counter() - t0) / 60
-    log.info("%d sheets read, %d with px in the validation area (%.1f min)", len(sheets), len(scopes), load)
+    log.info("%d sheets read, %d with px in the validation area, %d of test drawings (%.1f min)", len(sheets),
+             len(scopes), len(test_sheets), load)
     results = []
     for recipe, out in plan:
-        minutes = {"load": load}
+        minutes, run = {"load": load}, RUNS[recipe.prefetch]
+        before = _minutes(out / FILES[3])       # the other run's minutes are kept (the same weights)
         if reuse:
             work = out
-            minutes.update({k: v for k, v in _minutes(out / FILES[3]).items() if k == "train"})
+            minutes.update({k: v for k, v in before.get(run, {}).items() if k == "train"})
         else:
             work = runs.fresh_folder(out)
         with gpu.gpu_turn(True, device):
@@ -177,18 +220,31 @@ def run_trials(recipes: list[train.Recipe], device: str | None = None, seed: int
             net = predict.load_model(work / FILES[0], device)
             chances = validation_chances(net, sheets, scopes, device)
             minutes["predict"] = (time.perf_counter() - t0) / 60
+            t0 = time.perf_counter()
+            test_chances = {(sd.series, sd.sheet): predict.chance(net, data.page_ink(sd), device)
+                            for sd in test_sheets}
+            test_seconds = time.perf_counter() - t0
             del net
         t0 = time.perf_counter()
         got = scores.score_sheets(chances, "validation", sheets)
         minutes["score"] = (time.perf_counter() - t0) / 60
         del chances
+        tested = None
+        if tests:
+            t0 = time.perf_counter()
+            tested = scores.score_sheets(test_chances, "whole", test_sheets)
+            minutes["test"] = (test_seconds + time.perf_counter() - t0) / 60
+            _write_json(work / TEST_FILE, tested)
+        del test_chances
         minutes = {k: round(minutes[k], 3) for k in PARTS if k in minutes}
+        every = {**before, run: minutes}
         _write_json(work / FILES[1], dataclasses.asdict(recipe))
         _write_json(work / FILES[2], got)
-        _write_json(work / FILES[3], minutes)
+        _write_json(work / FILES[3], {k: every[k] for k in RUNS if k in every})
         if not reuse:
             runs.replace_folder(work, out)
         log.info("%s: words found %s, long-line ink called text %s", recipe.name(), got["all"]["words_found"],
                  got["all"]["long_lines"]["called_text"])
-        results.append({"name": recipe.name(), "folder": out, "scores": got, "minutes": minutes})
+        results.append({"name": recipe.name(), "folder": out, "scores": got, "test_scores": tested,
+                        "minutes": minutes})
     return results

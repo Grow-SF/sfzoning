@@ -55,7 +55,7 @@ REQUIRED = {
     "solver-solve": ["runs/final.npz", "report.json"],
 }
 TEXT_STAGES = {"solver-text"}
-LOOSE_JSON = TEXT_STAGES | {"solver-text-scores"}
+LOOSE_JSON = {"solver-text-scores"}     # the text stage writes no JSON (its model and chances)
 
 
 @dataclass

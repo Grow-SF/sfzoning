@@ -75,6 +75,13 @@ def test_a_solve_never_takes_the_folder_of_walls_fitted_as_an_experiment():
         runs.solve_dir(walls.name)
 
 
+def test_a_solve_never_takes_the_folder_of_a_text_detector_trial():
+    from sfzmaps.solver.textnet import train, trial
+    for folder in (trial.folder(train.Recipe()), trial.folder(train.Recipe(half_size=True), seed=1)):
+        with pytest.raises(ValueError, match="text detector"):
+            runs.solve_dir(folder.name)
+
+
 def test_a_folder_built_afresh_replaces_the_old_one_whole(tmp_path):
     folder = tmp_path / "walls"
     folder.mkdir()

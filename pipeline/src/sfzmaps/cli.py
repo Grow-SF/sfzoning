@@ -1043,6 +1043,12 @@ def solver_text_trial(
     seed: int = typer.Option(0, "--seed", min=0, help="The seed (its folder gets -seed=N when not 0)."),
     reuse: bool = typer.Option(False, "--reuse", help="Score the model already in each recipe's folder; train "
                                                       "nothing."),
+    train_series: str = typer.Option(None, "--train-series",
+                                     help="Train on these training maps only (comma-separated; default all six); "
+                                          "the folder gets -train=<maps>."),
+    test_series: str = typer.Option(None, "--test-series",
+                                    help="Also score every px of these test drawings (comma-separated): "
+                                         "test_scores.json."),
     device: str = _DEVICE_OPTION,
 ) -> None:
     """Try recipes for the text detector: each trained with the validation area held out on every training map and
@@ -1052,13 +1058,33 @@ def solver_text_trial(
 
     from sfzmaps.solver.textnet import trial
     _check_device(device)
+
+    def names(text: str | None) -> list[str] | None:
+        return None if text is None else [s.strip() for s in text.split(",") if s.strip()]
+
+    try:
+        maps = trial.training_maps(names(train_series))
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--train-series")
+    try:
+        tests = trial.test_maps(names(test_series))
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--test-series")
     try:
         asked = ([trial.parse_recipe(settings)] if settings else []) + [trial.parse_recipe(r) for r in recipes or []]
     except ValueError as e:
         raise typer.BadParameter(str(e), param_hint="--set / --recipe")
+    asked = asked or [trial.parse_recipe([])]
+    folders = [trial.folder(r, seed, maps) for r in asked]
+    twice = sorted({f.name for f in folders if folders.count(f) > 1})
+    if twice:
+        raise typer.BadParameter(f"two of the recipes are one ({', '.join(twice)}; prefetch aside): they would write "
+                                 "one folder", param_hint="--set / --recipe")
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    for r in trial.run_trials(asked or [trial.parse_recipe([])], device, seed, reuse):
+    for r in trial.run_trials(asked, device, seed, reuse, maps, tests):
         typer.echo(f"{r['name']}: {_scores_line(r['scores']['all'])}")
+        for name, v in (r["test_scores"] or {"series": {}})["series"].items():
+            typer.echo(f"  test {name}: {_scores_line(v)}")
         typer.echo("  minutes: " + ", ".join(f"{k} {v:.1f}" for k, v in r["minutes"].items())
                    + f"; written to {r['folder']}")
 

@@ -1737,7 +1737,6 @@ stages:
       - src/sfzmaps/solver/textnet/predict.py
       - src/sfzmaps/solver/textnet/stage.py
       - src/sfzmaps/solver/textnet/train.py
-      - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
       - data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png

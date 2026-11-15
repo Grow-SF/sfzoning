@@ -582,7 +582,8 @@ seen with 64 px of context, training and scoring in one exclusive turn on the GP
 Its reads are named file by file: each training sheet's `page.png` and `district_labels.json` in
 `data/work/<series>/<sheet>/`, Terra's saved answers and the other passes' folder. Trained on every px, it needs no
 placement, so it reads none and no warp retrains it. Its code is the detector's alone: the lots, the table, the
-merged page, the scores, the trials, the walls' and the solve's folders and the GPU's turns are not in it.
+merged page, the scores, the trials, the placements' code (`transform.py`, which it never runs), the walls' and the
+solve's folders and the GPU's turns are not in it.
 
 **The text scores** (`sfzmaps solver text-scores [--device cpu|mps]`, stage `solver-text-scores`, after `solver-text`
 and the test maps' warps; `solver/textnet/score_stage.py`) score the stage's `model.pt` on every px of every sheet of
@@ -596,13 +597,17 @@ of each test sheet, `page.png`, `district_labels.json`, `transform.json` and `co
 scale), file by file. Nothing in it is a time: the same chances give the same bytes.
 
 **Trying recipes** (`sfzmaps solver text-trial [--set NAME=VALUE ...] [--recipe "NAME=VALUE ..." ...] [--seed N]
-[--reuse] [--device cpu|mps]`, `solver/textnet/trial.py`) is how the recipe is chosen; it is no stage. `--set`
-(repeatable) makes one recipe from settings over today's, and each `--recipe` another (its settings apart by spaces;
-`default` for today's); with neither, today's. The training sheets are read once with the validation area held out;
-then each recipe in turn trains and predicts in its own exclusive GPU turn (only the tiles holding validation px) and
-is scored on the validation area (the long lines found once per sheet for all of them). Each writes
-`data/solver/experiments/text-<Recipe.name()>/` (`-seed=N` after it for a seed other than 0): `model.pt`,
-`recipe.json`, `scores.json` (the validation area's, as above) and `minutes.json` (load, train, predict, score).
+[--reuse] [--train-series MAP,...] [--test-series MAP,...] [--device cpu|mps]`, `solver/textnet/trial.py`) is how the
+recipe is chosen; it is no stage. `--set` (repeatable) makes one recipe from settings over today's, and each
+`--recipe` another (its settings apart by spaces; `default` for today's); with neither, today's. Two that are one
+recipe (prefetch aside) are a usage error: they would write one folder. The training sheets are read once with the
+validation area held out; then each recipe in turn trains and predicts in its own exclusive GPU turn (only the tiles
+holding validation px) and is scored on the validation area (the long lines found once per sheet for all of them).
+Each writes `data/solver/experiments/text-<Recipe.name()>/` (`-train=<maps>` after it when `--train-series` names
+some of the training maps only, `-seed=N` for a seed other than 0): `model.pt`, `recipe.json`, `scores.json` (the
+validation area's, as above), with `--test-series` `test_scores.json` (every px of those test drawings, as the
+scores stage takes them), and `minutes.json` (load, train, predict, score and test, under `plain` or, for a run
+with `prefetch`, `prefetch`: the two train the same weights into one folder, so both runs' minutes are kept).
 `Recipe.name()` lists the settings that differ from today's, sorted (`default` for none), without `prefetch`, which
 never changes the weights. `--reuse` scores the `model.pt` already in each recipe's folder (that recipe's and seed's)
 instead of training, keeping the training minutes its `minutes.json` had.

@@ -114,6 +114,9 @@ def test_text_scores_json_within_one_percent(tmp_path):
     assert ok.status == "within epsilon"
     bad = _both(tmp_path / "x", "solver-text-scores", "e.json", _json({"auc": 0.95}), _json({"auc": 0.995}))
     assert bad.status == "differs"
+    # the detector's own stage writes no JSON: one there is held byte for byte
+    own = _both(tmp_path / "y", "solver-text", "e.json", _json({"auc": 0.995}), _json({"auc": 0.9954}))
+    assert own.status == "differs"
 
 
 def test_json_of_an_exact_stage_is_byte_exact(tmp_path):

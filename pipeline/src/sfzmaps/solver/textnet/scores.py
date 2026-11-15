@@ -15,14 +15,14 @@ unknown px, near Sol's points and in the other passes' boxes, left out).  A chan
               (the share of the text ink called text); ink outside every box called text (the share of the ink in no
               word); and the share of the ink called text that is in a word
   words       Terra's words found, by kind: a word is found when the mean chance over its ink is CALLED or more (on
-              average half its ink called text).  That is the found-word rule of the quarter models' scores
-              (`evaluate.py`), kept; not "at least half its px called", which differs where the chance is neither 0
-              nor 1.  Each word is its own rectangle, as drawn for training, and its ink the ink px inside it: where
-              two overlap, that ink is each one's.  (The quarter models' scores counted connected regions of box px
-              as words, so their 96.6% of words found is not comparable.)  A word with no ink is not counted.  In
-              validation a word is counted when its centre px (its rectangle's corners' mean, rounded) is in the
-              area, and is judged on its ink in the area alone, so no px the detector trained on counts; a word whose
-              centre is outside is not counted, though its ink inside still counts as text ink
+              average half its ink called text).  That is the found-word rule of the quarter models' scores (their
+              `evaluate.py`, since deleted), kept; not "at least half its px called", which differs where the chance
+              is neither 0 nor 1.  Each word is its own rectangle, as drawn for training, and its ink the ink px
+              inside it: where two overlap, that ink is each one's.  (The quarter models' scores counted connected
+              regions of box px as words, so their 96.6% of words found is not comparable.)  A word with no ink is
+              not counted.  In validation a word is counted when its centre px (its rectangle's corners' mean,
+              rounded) is in the area, and is judged on its ink in the area alone, so no px the detector trained on
+              counts; a word whose centre is outside is not counted, though its ink inside still counts as text ink
   long lines  ink on long strokes no wider than a heavy line (`line_ink`): the share called text and the mean chance;
               the share of it in a word (which a detector calling exactly the words would call), and the share of the
               rest called text.  It stands in for district-line ink called text, which needs the zoning table

@@ -140,7 +140,9 @@ def stages() -> dict[str, Stage]:
     # text passes.  Trained on the whole of each map, it reads no placement, so a warp retrains nothing; the 2000
     # pages it scores are among those it reads.  Its scores (`sfzmaps solver text-scores`) read its model and the test
     # drawings' sheets, with their placements (the long lines are measured in each sheet's feet).  Both cut `runs`
-    # too: they take only its folder swap, which decides how their outputs are put in place, never what they are.
+    # too: they take only its folder swap, which decides how their outputs are put in place, never what they are.  The
+    # detector's stage also cuts the placements' code (`sfzmaps.transform`, which changes often): it reads no
+    # placement, so that code never runs in it, and a change there must not retrain the detector.
     from sfzmaps.solver import paths
     text_cut = (*OUTPUT_NEUTRAL, "sfzmaps.solver.runs")
     terra = "saved-reads/answers/text-on-every-sheet.jsonl.gz"
@@ -149,7 +151,7 @@ def stages() -> dict[str, Stage]:
         command=("solver", "text"),
         reads=(*_text_sheet_files("data/work", paths.TEXT_TRAIN_SERIES, ("page.png", "district_labels.json")), terra,
                "saved-reads/answers/experiments-2000/text-positions"),
-        writes=("data/solver/text",), code=("sfzmaps.solver.textnet.stage",), cut=text_cut)
+        writes=("data/solver/text",), code=("sfzmaps.solver.textnet.stage",), cut=(*text_cut, "sfzmaps.transform"))
     out["solver-text-scores"] = Stage(
         "solver-text-scores", (), (), ("solver-text", *(f"warp-{s}" for s in paths.TEXT_TEST_SERIES)),
         command=("solver", "text-scores"),

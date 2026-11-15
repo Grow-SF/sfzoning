@@ -969,7 +969,9 @@ def test_chance_on_some_px_is_the_whole_pages_there(monkeypatch):
 # detector trains is seen.  torch's CPU kernels add up in another order on another kind of machine, or with another
 # number of threads for the maths libraries (conftest gives each pytest-xdist worker one), so the bits are held where
 # they were recorded (the owner's Mac, in a worker and not), by machine and those threads; the losses of each step,
-# within 1e-5, everywhere.
+# within 1e-5, everywhere.  The recipe's name is held too, so a new DEFAULT_RECIPE is seen even where its first steps
+# would train alike (re-record all three when it changes).
+GUARD_RECIPE = "default"
 GUARD_STEPS = 3
 GUARD_WEIGHTS = {("Darwin", "arm64", "1", "1"): "63c3a81eecde334c46613ff0a854dfd2d81318497b120483ca380aec7a62d726",
                  ("Darwin", "arm64", None, None): "a96a9118a2e92d34e414d77fe3ad1f5bf874f3307ce80c73d11da5f4da6622b4"}
@@ -979,6 +981,7 @@ GUARD_LOSSES = [[0.6314478516578674, 1.8442327976226807, 1.0988179445266724],   
 
 
 def test_the_stages_recipe_trains_the_weights_recorded(maps, monkeypatch):
+    assert stage.DEFAULT_RECIPE.name() == GUARD_RECIPE
     sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False, placement=False)
     real, parts = train.loss_fn, []
 
@@ -1200,7 +1203,9 @@ def test_trials_train_with_the_area_held_out_score_it_and_write_only_their_folde
         folder = tmp_path / f
         assert res["folder"] == folder and res["name"] == r.name()
         assert train.Recipe(**json.loads((folder / "recipe.json").read_text())) == r
-        assert list(json.loads((folder / "minutes.json").read_text())) == list(trial.PARTS)
+        minutes = json.loads((folder / "minutes.json").read_text())
+        assert list(minutes) == ["plain"] and list(minutes["plain"]) == [p for p in trial.PARTS if p != "test"]
+        assert res["minutes"] == minutes["plain"] and res["test_scores"] is None
         # the scores are the validation area's, of the model's chance there, as a whole page's prediction gives it
         sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
         net = predict.load_model(folder / "model.pt", "cpu")
@@ -1232,8 +1237,9 @@ def test_a_reused_trial_scores_the_model_in_its_folder_and_keeps_its_training_mi
     monkeypatch.setattr(train, "fit", lambda *a, **k: pytest.fail("a reused trial trains nothing"))
     res, = trial.run_trials([TINY], device="cpu", reuse=True)
     assert (folder / "model.pt").read_bytes() == model_bytes
-    minutes = json.loads((folder / "minutes.json").read_text())
-    assert list(minutes) == list(trial.PARTS) and minutes["train"] == 42.0 and minutes["load"] != 1.5
+    minutes = json.loads((folder / "minutes.json").read_text())["plain"]     # a flat file is the plain run's
+    assert list(minutes) == [p for p in trial.PARTS if p != "test"] and minutes["train"] == 42.0
+    assert minutes["load"] != 1.5
     net = predict.load_model(folder / "model.pt", "cpu")
     want = scores.score_sheets({(sd.series, sd.sheet): predict.chance(net, data.page_ink(sd), "cpu")
                                 for sd in sheets}, "validation", sheets)
@@ -1247,6 +1253,58 @@ def test_a_reused_trial_scores_the_model_in_its_folder_and_keeps_its_training_mi
             trial.run_trials([recipe], device="cpu", seed=seed, reuse=True)
 
 
+def test_a_prefetched_trial_keeps_the_plain_runs_minutes_beside_its_own(built, monkeypatch):
+    monkeypatch.setattr(scores, "_LINE_INK", {})
+    plain = TINY
+    fast = dataclasses.replace(TINY, prefetch=True)
+    folder = trial.folder(plain)
+    assert trial.folder(fast) == folder
+    trial.run_trials([plain], device="cpu")
+    weights = torch.load(folder / "model.pt")["state_dict"]
+    validation = (folder / "scores.json").read_bytes()
+    first = json.loads((folder / "minutes.json").read_text())["plain"]
+    res, = trial.run_trials([fast], device="cpu")
+    minutes = json.loads((folder / "minutes.json").read_text())
+    assert list(minutes) == ["plain", "prefetch"] and minutes["plain"] == first
+    assert res["minutes"] == minutes["prefetch"]
+    # the same weights, so the same scores
+    again = torch.load(folder / "model.pt")["state_dict"]
+    assert all(torch.equal(weights[k], again[k]) for k in weights)
+    assert (folder / "scores.json").read_bytes() == validation
+    # a reused prefetch run keeps its own training minutes, and the plain run's whole
+    res, = trial.run_trials([fast], device="cpu", reuse=True)
+    again = json.loads((folder / "minutes.json").read_text())
+    assert again["plain"] == first and again["prefetch"]["train"] == minutes["prefetch"]["train"]
+
+
+def test_a_trial_on_some_maps_has_its_own_folder_and_is_scored_on_whole_test_drawings(built, monkeypatch):
+    monkeypatch.setattr(scores, "_LINE_INK", {})
+    trained = []
+    real_fit = train.fit
+    monkeypatch.setattr(train, "fit", lambda sheets, *a: trained.append([sd.series for sd in sheets])
+                        or real_fit(sheets, *a))
+    # the maps in the training maps' order, whatever order they are asked in; never a test drawing or nothing
+    assert trial.training_maps() == trial.training_maps([OLD, paths.SERIES]) == (paths.SERIES, OLD)
+    assert trial.folder(TINY, 0, [paths.SERIES, OLD]) == trial.folder(TINY)
+    assert trial.folder(TINY, 3, [OLD]) == runs.EXPERIMENTS_DIR / f"text-{TINY.name()}-train={OLD}-seed=3"
+    for bad in (["1980"], []):
+        with pytest.raises(ValueError, match="training map"):
+            trial.training_maps(bad)
+    with pytest.raises(ValueError, match="not a test map"):
+        trial.test_maps([paths.SERIES])
+    res, = trial.run_trials([TINY], device="cpu", train_series=[OLD], test_series=[OLD])
+    folder = trial.folder(TINY, 0, [OLD])
+    assert res["folder"] == folder and trained == [[OLD]] and not trial.folder(TINY).exists()
+    assert set(trial.FILES) | {trial.TEST_FILE} == {f.name for f in folder.iterdir()}
+    # the test drawings' scores: every px of their sheets, as the scores stage takes them
+    sheets = data.load_sheets([OLD], hold_out_validation=False)
+    net = predict.load_model(folder / "model.pt", "cpu")
+    want = scores.score_sheets({(sd.series, sd.sheet): predict.chance(net, data.page_ink(sd), "cpu")
+                                for sd in sheets}, "whole", sheets)
+    assert res["test_scores"] == want == json.loads((folder / trial.TEST_FILE).read_text())
+    assert "test" in json.loads((folder / "minutes.json").read_text())["plain"]
+
+
 def test_the_trial_command_reads_its_recipes_and_runs_them_together(monkeypatch):
     from typer.testing import CliRunner
 
@@ -1255,9 +1313,10 @@ def test_the_trial_command_reads_its_recipes_and_runs_them_together(monkeypatch)
     sd = _in_memory_sheet(_edge_page(), words=EDGE_WORDS, points=[EDGE_POINT])
     some = _score(sd, np.zeros((SIZE, SIZE), np.uint8), "validation")
 
-    def run_trials(recipes, device=None, seed=0, reuse=False):
-        asked.append((recipes, device, seed, reuse))
-        return [{"name": r.name(), "folder": trial.folder(r, seed), "scores": some,
+    def run_trials(recipes, device=None, seed=0, reuse=False, train_series=None, test_series=()):
+        asked.append((recipes, device, seed, reuse, train_series, test_series))
+        return [{"name": r.name(), "folder": trial.folder(r, seed, train_series), "scores": some,
+                 "test_scores": some if test_series else None,
                  "minutes": {"load": 1.0, "train": 2.0, "predict": 0.5, "score": 0.25}} for r in recipes]
 
     monkeypatch.setattr(trial, "run_trials", run_trials)
@@ -1266,14 +1325,28 @@ def test_the_trial_command_reads_its_recipes_and_runs_them_together(monkeypatch)
                                   "--recipe", "iterations=2000", "--recipe", "default", "--seed", "1",
                                   "--device", "cpu"])
     assert res.exit_code == 0, res.output
+    every = tuple(paths.TEXT_TRAIN_SERIES)
     assert asked == [([train.Recipe(half_size=True, ink_only="ink"), train.Recipe(iterations=2000), train.Recipe()],
-                      "cpu", 1, False)]
+                      "cpu", 1, False, every, ())]
     assert "half_size-ink_only=ink: AUC" in res.output and "text-iterations=2000-seed=1" in res.output
     assert runner.invoke(cli.app, ["solver", "text-trial", "--reuse", "--device", "cpu"]).exit_code == 0
-    assert asked[-1] == ([train.Recipe()], "cpu", 0, True)
-    for bad in (["--set", "speed=2"], ["--recipe", "iterations=0"], ["--device", "cuda"]):
-        assert runner.invoke(cli.app, ["solver", "text-trial", *bad]).exit_code != 0
-    assert len(asked) == 2
+    assert asked[-1] == ([train.Recipe()], "cpu", 0, True, every, ())
+    # some of the maps (in the training maps' order) and test drawings to score on too
+    res = runner.invoke(cli.app, ["solver", "text-trial", "--train-series", "1990-1996-zoning, 2000-digital-zoning",
+                                  "--test-series", "1980", "--device", "cpu"])
+    assert res.exit_code == 0, res.output
+    assert asked[-1] == ([train.Recipe()], "cpu", 0, False, ("2000-digital-zoning", "1990-1996-zoning"), ("1980",))
+    assert "-train=2000-digital-zoning+1990-1996-zoning" in res.output and "test 2000-digital-zoning: AUC" in res.output
+    # a usage error, nothing run: a bad setting or map, or two recipes that are one (they would write one folder)
+    for bad in (["--set", "speed=2"], ["--recipe", "iterations=0"], ["--device", "cuda"],
+                ["--set", "half_size=True", "--recipe", "half_size=True prefetch=True"],
+                ["--recipe", "default", "--recipe", "iterations=8000"],
+                ["--train-series", "1980"], ["--train-series", ","], ["--test-series", "1960"]):
+        res = runner.invoke(cli.app, ["solver", "text-trial", *bad])
+        assert res.exit_code == 2, (bad, res.output)
+    assert "one folder" in runner.invoke(cli.app, ["solver", "text-trial", "--set", "half_size=True", "--recipe",
+                                                   "half_size=True"]).output
+    assert len(asked) == 3
 
 
 def _text_files(root: str, series_list, names) -> list[str]:
@@ -1299,8 +1372,9 @@ def test_one_detector_stage_reads_its_maps_sheets_file_by_file_and_no_placement(
     deps = build.stage_deps(st)
     code = [d for d in deps if d.startswith("src/")]
     assert {f"src/sfzmaps/solver/{f}" for f in (*TEXTNET_CODE, "textnet/stage.py", "paths.py", "grid.py")} <= set(code)
+    # nor the placements' code (it reads no placement; that code changes often and must not retrain the detector)
     assert not any(d.endswith((*NOT_TEXT_CODE, "textnet/scores.py", "textnet/score_stage.py", "solver/strokes.py",
-                               "solver/page.py")) for d in code)
+                               "solver/page.py", "sfzmaps/transform.py")) for d in code)
     # of each training map's sheets only the page and Sol's points, of the saved answers Terra's boxes and the 2000
     # sheets' other passes: no placement (a warp retrains nothing), nothing of the prints or of another stage
     assert [d for d in deps if not d.startswith("src/")] == [
@@ -1324,7 +1398,7 @@ def test_the_scores_stage_reads_the_model_and_the_test_drawings_with_their_place
     deps = build.stage_deps(st)
     code = [d for d in deps if d.startswith("src/")]
     assert {f"src/sfzmaps/solver/{f}" for f in (*TEXTNET_CODE, "textnet/scores.py", "textnet/score_stage.py",
-                                                "strokes.py")} <= set(code)
+                                                "strokes.py")} | {"src/sfzmaps/transform.py"} <= set(code)
     assert not any(d.endswith((*NOT_TEXT_CODE, "textnet/stage.py")) for d in code)
     # the stage's model (not its chances), and of each test drawing's sheets the page, Sol's points and the placement
     assert [d for d in deps if not d.startswith("src/")] == [
