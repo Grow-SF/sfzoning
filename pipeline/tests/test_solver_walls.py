@@ -1,10 +1,13 @@
+import json
+
 import numpy as np
 from scipy import ndimage
 
-from sfzmaps.solver import city, grid, lots, strokes, wallevidence, walls
+from sfzmaps import config
+from sfzmaps.solver import city, grid, lots, paths, strokes, wallevidence, walls
+from sfzmaps.transform import GCP, SheetTransform
 
 LOT_PX = 15         # the synthetic lots are squares of 15 px (60 ft)
-BAR_PX = 7          # a printed district line 7 px (28 ft) wide: drawn at every enclosure width
 
 
 def _lots(lot: np.ndarray, codes, quarter=None) -> lots.Lots:
@@ -186,6 +189,35 @@ def test_text_rings_drop_boxes_outside_the_frame_and_in_cuts():
     assert len(rings) == 2
     np.testing.assert_allclose(np.sort(rings[0][:, 0]), [10, 10, 30, 30])
     np.testing.assert_allclose(np.sort(rings[1][:, 1]), [40, 40, 80, 80])
+
+
+def test_terra_text_puts_page_boxes_on_the_grid_through_the_sheet_placement(tmp_path, monkeypatch):
+    """Page px (x right, y down) -> map ft (2 ft per page px, x east, y north) -> grid (col east, row south): a box
+    keeps its place and its long side; a box outside the sheet's frame is left out."""
+    sheet = f"{paths.SERIES}-p01"
+    corners = [(0, 0), (400, 0), (0, 400), (400, 400)]
+    placement = SheetTransform([GCP(x, y, grid.X0 + 2 * x, grid.Y1 - 2 * y, "manual") for x, y in corners], 1.0)
+    warp = tmp_path / "data" / "warp" / paths.SERIES / sheet
+    warp.mkdir(parents=True)
+    (warp / "transform.json").write_text(json.dumps(placement.to_json()))
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    for name, folder, content in (("PRINTS_DIR", "prints", {"terra_boxes.json": {sheet: [
+            {"box": [100, 40, 140, 60], "angle_deg": 0},          # wide, near the top: grid cols 50-70, rows 20-30
+            {"box": [20, 200, 30, 260], "angle_deg": 90},          # tall, lower left: cols 10-15, rows 100-130
+            {"box": [100, 380, 140, 399], "angle_deg": 0}]}}),     # its centre below the frame: left out
+            ("PAGE_DIR", "page", {"frames.json": {sheet: [[0, 0], [400, 0], [400, 300], [0, 300]]}})):
+        (tmp_path / folder).mkdir()
+        for f, data in content.items():
+            (tmp_path / folder / f).write_text(json.dumps(data))
+        monkeypatch.setattr(paths, name, tmp_path / folder)
+    (tmp_path / "cuts.json").write_text("{}")
+    monkeypatch.setattr(paths, "CUTS_FILE", tmp_path / "cuts.json")
+    text = walls.terra_text((200, 100))
+    rows, cols = np.nonzero(text)
+    wide = rows < 50
+    assert (rows[wide].min(), rows[wide].max(), cols[wide].min(), cols[wide].max()) == (20, 30, 50, 70)
+    assert (rows[~wide].min(), rows[~wide].max(), cols[~wide].min(), cols[~wide].max()) == (100, 130, 10, 15)
+    assert text.sum() == 11 * 21 + 31 * 6                   # two full rectangles, nothing from the third box
 
 
 def test_hats_are_a_partition_of_unity():

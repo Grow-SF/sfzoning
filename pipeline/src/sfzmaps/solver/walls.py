@@ -17,7 +17,8 @@ is left to the solve's energy.
 Writes, under data/solver/walls/:
   walls_{q}.npz     lo_ab: float32 per pair row, the log odds from the fit without quarter q
   evaluation.json   per quarter: the log loss on the held-out pairs (both lots known and in q), their number, and the
-                    training pairs' number and log loss; the number of pairs and features; the seconds
+                    training pairs' number and log loss; the number of pairs and features; the strokes touching
+                    text (no times: the same inputs give the same bytes)
 """
 import json
 import logging
@@ -139,7 +140,7 @@ def terra_text(shape) -> np.ndarray:
 
 def build_walls(workers: int | None = None) -> dict:
     """Fit the wall odds and write walls_{q}.npz and evaluation.json into WALLS_DIR.  `workers`: processes for the
-    closing paths (default half the CPUs).  Returns the evaluation."""
+    closing paths (default half the CPUs).  Returns the evaluation and the seconds taken (not written)."""
     import geopandas as gpd
     import shapely
     t0 = time.perf_counter()
@@ -162,7 +163,6 @@ def build_walls(workers: int | None = None) -> dict:
     del F
     odds, evaluation = fit_walls(X, lots_)
     evaluation["strokes_touching_text"] = int((letter > 0).sum())
-    evaluation["seconds"] = round(time.perf_counter() - t0, 1)
     write_walls(paths.WALLS_DIR, odds, evaluation)
-    return evaluation
+    return {**evaluation, "seconds": round(time.perf_counter() - t0, 1)}
 

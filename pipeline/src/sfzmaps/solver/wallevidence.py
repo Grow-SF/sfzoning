@@ -58,6 +58,14 @@ WIDTH_SCALE = 40.0          # ft: a width enters as width / WIDTH_SCALE ...
 WIDTH_CAP = 1.5             # ... capped at this
 NEAR_FT = 26.0              # the profile's letter share and length count while the stroke is within this
 BAND_ROWS = 1024            # grid rows of loose ends per closing job (memory and parallelism only)
+# Scales of the log lengths and counts (each feature is log(1 + value) / scale, or value / scale), so the fit's ridge
+# sees columns of like size; scalings only, nothing is cut.
+STROKE_LENGTH_SCALE = 8.0       # log(1 + a stroke's length, ft): stroke evidence and profile
+LINE_LENGTH_SCALE = 9.0         # log(1 + a whole line's length, ft)
+STEMS_SCALE = 3.0               # log(1 + the strokes of other lines ending on a whole line)
+TURN_SCALE = 2.0                # a whole line's sharpest turn (0 straight on .. 2 doubling back)
+STRAIGHT_GAP_SCALE = 5.5        # log(1 + a straight closing's length, ft)
+CLOSING_GAP_SCALE = 6.0         # log(1 + a closing path's length, ft)
 
 GROUPS = (("stroke evidence", 60), ("whole line", 30), ("straight closing", 30), ("enclosure", 16),
           ("closing path", 24), ("profile", 48))
@@ -192,7 +200,10 @@ def text_rings(boxes: list[dict], quad, cuts) -> list[np.ndarray]:
 
 
 def text_raster(rings_map: list[np.ndarray], shape) -> np.ndarray:
-    """The grid px (bool) whose centres are inside any of the rings (map ft)."""
+    """The grid px (bool) a ring (map ft) covers, as `cv2.fillPoly` fills it: the corners go in at `to_grid - 0.5`
+    (px centres at whole numbers) to 1/16 px, and each scan line is filled from the px nearest its left edge to the px
+    nearest its right edge, both included, so a ring takes in up to half a px more on each side than the px whose
+    centres it holds (a box 2 px wide from col 10.2 fills cols 10, 11 and 12)."""
     out = np.zeros(shape, np.uint8)
     for ring in rings_map:
         pts = np.rint((grid.to_grid(ring) - 0.5) * 16).astype(np.int32)
@@ -486,7 +497,7 @@ def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray, worke
     k = np.where(ok, near, 0)
     Hd = border.near_hats(near, dist)
     Hw = hats(wmed[k], WIDTH_KNOTS)
-    per = [letter[k], log_length[k] / 8.0,
+    per = [letter[k], log_length[k] / STROKE_LENGTH_SCALE,
            np.clip(strokes["wiqr"][k] / np.maximum(wmed[k], 1.0), 0, STEADINESS_CAP), strokes["spur"][k].astype(float)]
     for i in range(len(DISTANCE_KNOTS)):                            # stroke evidence
         cols += [border.mean(Hd[:, i] * Hw[:, j]) for j in range(len(WIDTH_KNOTS))]
@@ -494,8 +505,8 @@ def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray, worke
     del Hw, per
     lines = whole_lines(strokes)
     ln = lines["line"][k]
-    per = [np.log1p(lines["length"][ln]) / 9.0, lines["closed"][ln].astype(float), np.log1p(lines["stems"][ln]) / 3.0,
-           lines["turn"][ln] / 2.0, _width(lines["width"][ln])]
+    per = [np.log1p(lines["length"][ln]) / LINE_LENGTH_SCALE, lines["closed"][ln].astype(float),
+           np.log1p(lines["stems"][ln]) / STEMS_SCALE, lines["turn"][ln] / TURN_SCALE, _width(lines["width"][ln])]
     for i in range(len(DISTANCE_KNOTS)):                            # whole line
         cols += [border.mean(Hd[:, i] * v) for v in per]
     del per, ln, Hd
@@ -509,7 +520,7 @@ def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray, worke
     del cid
     Hc = border.near_hats(near_c, dist_c)
     c = straight[np.maximum(near_c, 0)] if len(straight) else np.zeros((len(near_c), 10))
-    per = [np.ones(len(c)), np.log1p(c[:, 4]) / 5.5, c[:, 5], _width(np.minimum(c[:, 6], c[:, 7])), c[:, 8]]
+    per = [np.ones(len(c)), np.log1p(c[:, 4]) / STRAIGHT_GAP_SCALE, c[:, 5], _width(np.minimum(c[:, 6], c[:, 7])), c[:, 8]]
     for i in range(len(DISTANCE_KNOTS)):                            # straight closing
         cols += [border.mean(Hc[:, i] * v) for v in per]
     del Hc, c, per
@@ -527,7 +538,7 @@ def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray, worke
     j = np.maximum(near_c, 0)
     far_width = np.r_[wmed, CITY_LIMIT_WIDTH]
     if len(found["src"]):
-        per = [np.ones(len(j)), np.log1p(found["gap"][j]) / 6.0, found["align"][j].astype(float),
+        per = [np.ones(len(j)), np.log1p(found["gap"][j]) / CLOSING_GAP_SCALE, found["align"][j].astype(float),
                _width(np.minimum(wmed[found["src"][j]], far_width[found["tgt"][j]]))]
     else:
         per = [np.zeros(len(j))] * 4
@@ -543,7 +554,7 @@ def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray, worke
         Hd = border.near_hats(near, dist)
         cols += [border.mean(Hd[:, i]) for i in range(len(DISTANCE_KNOTS))]
         close = Hd[:, DISTANCE_KNOTS < NEAR_FT].sum(1)
-        cols += [border.mean(close * letter[k]), border.mean(close * log_length[k] / 8.0)]
+        cols += [border.mean(close * letter[k]), border.mean(close * log_length[k] / STROKE_LENGTH_SCALE)]
         del Hd, close
     log.info("profile (%.0f s)", time.perf_counter() - t0)
     F = np.stack(cols, 1).astype(np.float32)
