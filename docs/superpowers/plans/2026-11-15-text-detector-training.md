@@ -9,7 +9,7 @@ never saw, in a few minutes per training run, built by one `solver-text` stage.
 - **Training data:** `sfzmaps.solver.textnet` learns from many series' original pages, held out by a fixed area of
   the city.
 - **Recipe:** training is driven by a `Recipe` (today's settings by default) whose options are the speed candidates.
-- **Measurement:** a screening command measures a recipe on the validation area. A loop task picks the recipe by the
+- **Measurement:** a trial command measures a recipe on the validation area. A loop task picks the recipe by the
   spec's keep rule.
 - **The build:** `solver-text` trains the shipped model, and `solver-text-scores` scores it on the test drawings.
 
@@ -165,7 +165,7 @@ never saw, in a few minutes per training run, built by one `solver-text` stage.
   - `test_words_found_counts_a_box_with_half_its_ink_called_text`: the rule today's evaluate uses, kept.
 - [ ] **Step 2:** Implement; the tests pass. Full suite. Commit.
 
-### Task 4: One `solver-text` stage, a scores stage, a screening command, `textgrid` with one model
+### Task 4: One `solver-text` stage, a scores stage, a trial command, `textgrid` with one model
 
 **Files:**
 - Modify: `pipeline/src/sfzmaps/build.py`, `pipeline/src/sfzmaps/cli.py`,
@@ -183,14 +183,14 @@ never saw, in a few minutes per training run, built by one `solver-text` stage.
 - **`stage.build_text(recipe=DEFAULT_RECIPE)`** trains on every training sheet, the validation area included, then
   predicts the 2000 sheets, in one GPU turn.
 - **`DEFAULT_RECIPE`** lives in `textnet/stage.py`: today's recipe, until Task 5 sets it.
-- **`sfzmaps solver text-screen [--set key=value ...]`** trains with the validation area held out. It scores the
+- **`sfzmaps solver text-trial [--set key=value ...]`** trains with the validation area held out. It scores the
   validation area and writes to `data/solver/experiments/text-<recipe name>/` (not a stage output, not shipped):
   `scores.json`, `recipe.json` and `minutes.json`.
 - **`textgrid.text_chance()`** samples `data/solver/text/chance/` (one model). The walls stage's reads follow.
 
 - [ ] **Step 1: Write failing tests:**
   - the stage deps: no quarter stages; the named files; no `paths` / `runs` churn;
-  - `text-screen` writes only under `experiments/`;
+  - `text-trial` writes only under `experiments/`;
   - `textgrid` with one model;
   - the walls deps updated.
 - [ ] **Step 2:** Implement; the tests pass. Regenerate `dvc.yaml`. Full suite. Commit.
@@ -204,9 +204,9 @@ never saw, in a few minutes per training run, built by one `solver-text` stage.
   table)
 - Scratch: the per-run results and the minutes stay in `data/solver/experiments/` and the report.
 
-The GPU runs one job at a time. Run each `text-screen` in the foreground or wait on it, never two at once.
+The GPU runs one job at a time. Run each `text-trial` in the foreground or wait on it, never two at once.
 
-- [ ] **Step 1: Baseline.** `text-screen` with the default recipe (today's). Record the minutes and the validation
+- [ ] **Step 1: Baseline.** `text-trial` with the default recipe (today's). Record the minutes and the validation
   scores.
 - [ ] **Step 2: The big levers first.** These make every later run cheaper:
   - `half_size=True`;
