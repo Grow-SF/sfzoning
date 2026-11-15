@@ -1,5 +1,4 @@
 """Where the 2000 solver's hand-made inputs and built outputs live."""
-import importlib
 from pathlib import Path
 
 from sfzmaps import config
@@ -25,8 +24,9 @@ def text_dir(quarter: str) -> Path:
 
 
 def sheet_names() -> list[str]:
-    """The placed sheets of the 2000 series."""
-    # Imported by name, not with an import statement: the build's import scan (fresh.code_files) would
-    # follow a statement and make every solver stage depend on the whole warp and old pipeline.
-    sheet = importlib.import_module("sfzmaps.sheetwarp.sheet")
-    return sheet.placed_sheets(SERIES)
+    """The sheets of the 2000 series the solver reads: the folders of data/warp/<series> that hold a
+    transform.json, sorted by name."""
+    root = config.DATA_DIR / "warp" / SERIES
+    if not root.is_dir():
+        return []
+    return sorted(d.name for d in root.iterdir() if (d / "transform.json").is_file())
