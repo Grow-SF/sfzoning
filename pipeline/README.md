@@ -328,8 +328,27 @@ every other stage. Warping needs the pinned GDAL, so run inside the pixi environ
 as for the rest of the pipeline; like `sfzmaps build`, it refuses tools from elsewhere unless you pass
 `--system-tools`. The fits use PyTorch, which comes with the pipeline's own dependencies.
 
-Mind memory: each warp fits `--jobs` sheets at once (3 by default), and a large sheet's fit takes several GB.
-`sfzmaps build -j N` runs N stages at once, so up to N warp stages each fitting 3 sheets.
+The fits run on the Mac's GPU (PyTorch's `mps` device) when there is one, and on the CPU otherwise, which is slower.
+`SFZMAPS_WARP_DEVICE=cpu` or `=mps` picks one. The method is deterministic: a sheet fitted twice on the same device
+gets the same correction. The GPU and the CPU give slightly different corrections from each other, so each sheet's
+`scores.json` records the device (and the macOS version) that fitted it, and a change of either counts as a change of
+inputs.
+
+Mind memory: each warp fits `--jobs` sheets at once (6 by default), and a large sheet's fit takes several GB.
+`sfzmaps build -j N` runs N series at once, each fitting 6 sheets at a time, so `-j 1` is the safe choice on a 64 GB
+Mac. Measured on the 12 sheets of 1929 on the GPU: 2.95 sheets a minute with 3 at a time, 4.07 with 6 (the default),
+4.24 with 9.
+
+### How fast it is
+
+Each probabilistic stage stops when its loss has settled (it fell by less than 1e-4 of itself over 25 steps, after at
+least 50 steps), with 800 steps as the most it takes. The preparation is faster too: distance maps by OpenCV, the
+crop's features computed once, and block-side points placed through a precomputed grid that agrees with the exact
+placement to within 0.001 px.
+
+- The fits on five real sheets run 6 to 25 times faster than before (1948 sheet 11: 245 s down to 10 s), with the same
+  scores: the mean share of block-side points within 1 px changed by +0.0001.
+- Preparing the two biggest sheets went from 152 s to 36 s and from 286 s to 58 s.
 
 ### The steps, for each sheet
 
@@ -394,7 +413,9 @@ Only what has been checked. "The approved run" means the corrections the owner l
 - **2000 is fitted like every other year**, so its corrections differ from the approved run's, which fitted the 2000
   sheets on their own measured area with a fixed scale. Scored on the same points, the old 2000 setup's corrections
   and the new ones are equal (within 1 px 0.749 against 0.748, within 2 px 0.812 both).
-- **Every sheet:** the full build of all 357 placed sheets is pending.
+- **The faster method does not reproduce the approved run byte for byte.** Its corrections are judged by the same
+  scores instead.
+- **Every sheet:** the full rebuild of all 357 placed sheets with the faster method is pending.
 
 ### Next
 
