@@ -45,10 +45,10 @@ def cache_key(key: str) -> str:
     return f"llm/{key}.json"
 
 
-def sol_labels(sheet: str) -> list[dict]:
+def sol_labels(sheet: str, series: str = paths.SERIES) -> list[dict]:
     """Sol's labels of a sheet: the "labels" of data/work/<series>/<sheet>/district_labels.json (a declared input of
     the stages that read it, so a missing file stops them)."""
-    f = config.WORK_DIR / paths.SERIES / sheet / "district_labels.json"
+    f = config.WORK_DIR / series / sheet / "district_labels.json"
     if not f.is_file():
         raise FileNotFoundError(f"no Sol labels for {sheet}: can't read {f}")
     return json.loads(f.read_text())["labels"]

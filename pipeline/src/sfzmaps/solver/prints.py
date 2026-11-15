@@ -45,7 +45,6 @@ Writes, under data/solver/prints/:
 import json
 import math
 import time
-from typing import Literal
 
 import cv2
 import numpy as np
@@ -55,15 +54,14 @@ from pydantic import BaseModel
 
 from sfzmaps import config, llm
 from sfzmaps.solver import codes, grid, lots, page, paths, saved
+from sfzmaps.solver.textnet import boxes as textboxes
 from sfzmaps.transform import SheetTransform
 
-TERRA_READ = "text-on-every-sheet"
+TERRA_READ = textboxes.TERRA_READ
 TURNED_POSITIONS = "experiments-2000/text-positions/sideways-text"
 THIRD_READ = "experiments-2000/third-code-read"
 RECHECK_READ = "experiments-2000/third-code-read-recheck"
 
-SAME_TEXT_IOU = 0.3       # Terra: a box overlapping a kept box by more is the same text, read again from another tile
-PART_OF_LABEL = 0.7       # Terra: a word with more of its box than this inside a longer label holding it is part of it
 TURNED_JOIN_IOU = 0.3     # a turned box overlapping a print's Terra box by more is one more reading of that print
 CROP_REACH = 1.5          # the third read's crop reaches this many code sizes from the code's centre each way
 CROP_MIN_EDGE = 640       # ... and is enlarged by a whole factor until its long edge is at least this (px)
@@ -79,23 +77,9 @@ THIRD_READ_MAX_EDGE = 2048
 POINT_CODE_SIZE = 64.0
 
 
-# The answer formats, copied from the scripts that asked.  A docstring would enter the JSON schema (as its
-# "description") and so the cache key: these classes keep the scripts' names and fields, and no docstrings.
-class TextItem(BaseModel):    # one piece of text in Terra's answer (text-on-every-sheet)
-    text: str
-    kind: Literal["zoning code", "block number", "street name", "other"]
-    x0: int
-    y0: int
-    x1: int
-    y1: int
-    direction: Literal["left-to-right", "bottom-to-top", "top-to-bottom", "upside-down", "slanted"]
-    angle_deg: int
-
-
-class TextItems(BaseModel):
-    items: list[TextItem]
-
-
+# The answer format, copied from the scripts that asked (Terra's is `textnet.boxes.TextItems`).  A docstring would
+# enter the JSON schema (as its "description") and so the cache key: this class keeps the scripts' name and fields,
+# and no docstring.
 class CodeRead(BaseModel):    # the third read's answer (third-code-read and its re-check)
     code: str
     confidence: float
@@ -111,52 +95,10 @@ COLUMNS = ["sheet", "page_x", "page_y", "x", "y", "kind", "box_x0", "box_y0", "b
            "lab_lot", "street"]
 
 
-def _iou(a, b) -> float:
-    """Intersection over union of two boxes (x0, y0, x1, y1)."""
-    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
-    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
-    i = ix * iy
-    u = (a[2] - a[0]) * (a[3] - a[1]) + (b[2] - b[0]) * (b[3] - b[1]) - i
-    return i / u if u > 0 else 0
-
-
-def _inside(a, b) -> float:
-    """The share of box a's area inside box b."""
-    ix = max(0, min(a[2], b[2]) - max(a[0], b[0]))
-    iy = max(0, min(a[3], b[3]) - max(a[1], b[1]))
-    return ix * iy / max(1, (a[2] - a[0]) * (a[3] - a[1]))
-
-
 def terra_boxes(sheet: str, records: list[dict] | None = None) -> list[dict]:
-    """A sheet's Terra text boxes, every kind, in page px: each tile's items moved by the tile's `page_box`, sorted by
-    distance from their tile's edge (farthest first; tiles in the order they were read, row by row), a box
-    overlapping a kept one by IoU > SAME_TEXT_IOU dropped as the same text, a word inside a longer label that holds
-    it dropped, and boxes outside the window the script was asked about dropped.  Each item: Terra's own fields
-    (x0..y1 in its tile), `box` (page px), `edge` and `tile` (its tile's top-left corner).  `records`: the lines of
-    `text-on-every-sheet` (read from disk when None)."""
-    recs = [r for r in (saved.answers(TERRA_READ) if records is None else records) if r.get("sheet") == sheet]
-    if not recs:
-        return []
-    windows = {r["script"]["args"][3] for r in recs}
-    if len(windows) != 1:
-        raise ValueError(f"{sheet}: Terra's tiles come from {len(windows)} windows; one run per sheet is expected")
-    wx0, wy0, wx1, wy1 = map(int, windows.pop().split(","))
-    items = []
-    for r in sorted(recs, key=lambda r: (r["page_box"][1], r["page_box"][0])):
-        tx, ty, ex, ey = r["page_box"]
-        tw, th = ex - tx, ey - ty
-        for it in TextItems.model_validate(r["answer"]).items:
-            items.append({**it.model_dump(), "box": [it.x0 + tx, it.y0 + ty, it.x1 + tx, it.y1 + ty],
-                          "edge": min(it.x0, it.y0, tw - it.x1, th - it.y1), "tile": [tx, ty]})
-    items.sort(key=lambda i: -i["edge"])
-    kept = []
-    for it in items:
-        if not any(_iou(it["box"], k["box"]) > SAME_TEXT_IOU for k in kept):
-            kept.append(it)
-    kept = [k for k in kept if not any(
-        o is not k and len(o["text"]) > len(k["text"]) and k["text"].replace(" ", "") in o["text"].replace(" ", "")
-        and _inside(k["box"], o["box"]) > PART_OF_LABEL for o in kept)]
-    return [k for k in kept if k["box"][2] > wx0 and k["box"][3] > wy0 and k["box"][0] < wx1 and k["box"][1] < wy1]
+    """A 2000 sheet's Terra text boxes, every kind, in page px, decoded as `textnet.boxes.terra_boxes` decodes any
+    sheet's.  `records`: the lines of `text-on-every-sheet` (read from disk when None)."""
+    return textboxes.terra_boxes(paths.SERIES, sheet, records)
 
 
 def _code(text: str) -> str:
@@ -221,7 +163,7 @@ def join_turned(prints: list[dict], turned: list[dict], codes_known: set[str]) -
         code = _code(b["text"])
         x0, y0, x1, y1 = b["box"]
         hit = [p for p in prints if (x0 <= p["page_x"] <= x1 and y0 <= p["page_y"] <= y1)
-               or (p["box"] is not None and _iou(b["box"], p["box"]) > TURNED_JOIN_IOU)]
+               or (p["box"] is not None and textboxes.iou(b["box"], p["box"]) > TURNED_JOIN_IOU)]
         for p in hit:
             if b["edge"] > p["turned_edge"]:
                 p["turned_code"], p["turned_edge"] = code, b["edge"]

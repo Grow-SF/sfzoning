@@ -1708,6 +1708,8 @@ stages:
       - src/sfzmaps/solver/prints.py
       - src/sfzmaps/solver/saved.py
       - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
       - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
@@ -1729,6 +1731,7 @@ stages:
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/saved.py
       - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
       - src/sfzmaps/solver/textnet/data.py
       - src/sfzmaps/solver/textnet/model.py
       - src/sfzmaps/solver/textnet/predict.py
@@ -1804,6 +1807,7 @@ stages:
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/saved.py
       - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
       - src/sfzmaps/solver/textnet/data.py
       - src/sfzmaps/solver/textnet/model.py
       - src/sfzmaps/solver/textnet/predict.py
@@ -1879,6 +1883,7 @@ stages:
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/saved.py
       - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
       - src/sfzmaps/solver/textnet/data.py
       - src/sfzmaps/solver/textnet/model.py
       - src/sfzmaps/solver/textnet/predict.py
@@ -1954,6 +1959,7 @@ stages:
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/saved.py
       - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
       - src/sfzmaps/solver/textnet/data.py
       - src/sfzmaps/solver/textnet/model.py
       - src/sfzmaps/solver/textnet/predict.py
@@ -2034,6 +2040,7 @@ stages:
       - src/sfzmaps/solver/saved.py
       - src/sfzmaps/solver/table.py
       - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
       - src/sfzmaps/solver/textnet/data.py
       - src/sfzmaps/solver/textnet/evaluate.py
       - src/sfzmaps/transform.py
@@ -2159,6 +2166,7 @@ stages:
       - src/sfzmaps/solver/table.py
       - src/sfzmaps/solver/textgrid.py
       - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
       - src/sfzmaps/solver/textnet/data.py
       - src/sfzmaps/solver/threads.py
       - src/sfzmaps/solver/wallevidence.py

@@ -11,6 +11,31 @@ QUARTERS = ("nw", "ne", "sw", "se")
 # `check_sheets` stops a stage that reads them when the warp has placed other sheets.
 SHEETS = tuple(f"{SERIES}-p{i:02d}" for i in range(1, 14))
 
+
+def _pages(prefix: str, numbers) -> tuple[str, ...]:
+    return tuple(f"{prefix}{i:02d}" for i in numbers)
+
+
+# The text detector's maps: it learns from the training maps (both lettering styles: the 2000 drawing and its two
+# earlier scans, modern italic; the 1960 and the 1964 / 1968 drawings, older serif) and is scored on the test maps,
+# whole drawings it never saw (1980, modern; 1972 / 1975, one drawing, older).
+TEXT_TRAIN_SERIES = ("2000-digital-zoning", "1980-1990-zoning", "1990-1996-zoning", "1960", "1964", "1968")
+TEXT_TEST_SERIES = ("1980", "1972", "1975")
+# The sheets Terra read (the saved answers of `text-on-every-sheet`), by series, in `textnet.boxes.sheet_order`: the
+# detector reads only these.  Fixed here, like SHEETS, so dvc.yaml is the same before anything is pulled;
+# `textnet.boxes.check_text_sheets` stops a stage when the saved answers name other sheets.
+TEXT_SHEETS: dict[str, tuple[str, ...]] = {
+    "2000-digital-zoning": SHEETS,
+    "1980-1990-zoning": _pages("1980-1990-zoning-p", range(1, 14)),
+    "1990-1996-zoning": _pages("1990-1996-zoning-p", range(22, 34)),     # 12 of its 33 pages
+    "1960": tuple(str(i) for i in range(1, 14)),
+    "1964": _pages("20180102105639444-p", range(2, 18)),
+    "1968": _pages("20180102110513967-p", range(2, 22)),
+    "1980": _pages("20180102115319417-p", [*range(2, 32), 33, 34]),
+    "1972": _pages("20180102113004574-p", [*range(1, 30), 31]),
+    "1975": _pages("20180102114142444-p", [*range(2, 31), 32]),
+}
+
 SOLVER_DIR = config.DATA_DIR / "solver"
 PAGE_DIR = SOLVER_DIR / "page"
 LOTS_DIR = SOLVER_DIR / "lots"
