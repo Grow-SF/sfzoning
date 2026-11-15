@@ -4,8 +4,6 @@ import os
 from pathlib import Path
 
 PIPELINE_DIR = Path(__file__).resolve().parents[2]
-# Sheets the sheet warp fits at once, in all: `sfzmaps warp` alone, or shared by the warp stages a build runs at once.
-WARP_WORKERS = 6
 DATA_DIR = Path(os.environ.get("SFZMAPS_DATA_DIR") or PIPELINE_DIR / "data")
 RAW_DIR = DATA_DIR / "raw"
 REF_DIR = DATA_DIR / "ref"

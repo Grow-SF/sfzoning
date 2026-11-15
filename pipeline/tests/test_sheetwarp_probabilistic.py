@@ -212,3 +212,32 @@ def test_a_spread_that_cannot_be_estimated_has_nothing_to_fit(monkeypatch):
     inputs.wt, inputs.kind = np.ones(len(inputs.P), np.float32), np.full(len(inputs.P), 2)
     with pytest.raises(NothingToFit, match="spread"):
         probabilistic_correction(inputs, targets, weights)
+
+
+def test_the_observation_count_does_not_depend_on_torch_s_threads():
+    wt = np.random.default_rng(1).uniform(0, 1, 40_000).astype(np.float32) ** 3    # torch's float32 sum of these
+    counts, threads_before = set(), torch.get_num_threads()                        # differs by its thread count
+    for threads in (1, 2, 3, 5, 8, 10):
+        torch.set_num_threads(threads)
+        counts.add(probabilistic.observation_count(wt, len(wt), 4))
+    torch.set_num_threads(threads_before)
+    assert len(counts) == 1
+    assert counts.pop() == float(np.sum(wt, dtype=np.float64)) + 4
+    assert probabilistic.observation_count(None, 1000, 4) == 1004
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="no GPU (mps) here")
+def test_a_fit_gives_back_the_gpu_memory_it_used(monkeypatch):
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "mps")
+    inputs, targets, weights = _synthetic_sheet()
+    torch.zeros(1, device="mps").cpu()                             # the framework's own start-up buffers
+    before = torch.mps.driver_allocated_memory()
+    probabilistic_correction(inputs, targets, weights)
+    assert torch.mps.current_allocated_memory() <= 1_000_000
+    assert torch.mps.driver_allocated_memory() <= before + 1_000_000
+
+
+def test_a_fit_still_runs_on_the_cpu_after_giving_back_memory(monkeypatch):
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "cpu")
+    inputs, targets, weights = _synthetic_sheet()
+    assert np.isfinite(probabilistic_correction(inputs, targets, weights).grid).all()

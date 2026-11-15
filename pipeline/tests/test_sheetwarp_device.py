@@ -71,7 +71,7 @@ def test_point_field_repeats_bit_for_bit(device):
     G = torch.from_numpy(rng.normal(0, 2, (1, 2, gh, gw)).astype(np.float32)).to(device)
     upstream = torch.from_numpy(rng.normal(0, 1, (len(points), 2)).astype(np.float32)).to(device)
 
-    def run():          # about a thousand contributions per grid node: summed in any other order, the bits change
+    def run():          # about four thousand contributions per grid node: summed in any other order, the bits change
         grid = G.clone().requires_grad_()
         u = PointField(points, (gh, gw), spacing, device).field(grid)
         (u * upstream).sum().backward()

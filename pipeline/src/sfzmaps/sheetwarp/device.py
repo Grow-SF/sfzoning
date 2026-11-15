@@ -12,6 +12,7 @@
   blur         a stage's density maps: each direction's block-line weights blurred by a Gaussian, as
                `scipy.ndimage.gaussian_filter` does it (OpenCV on the CPU, a separable convolution on the GPU).
 """
+import gc
 import os
 
 import cv2
@@ -34,12 +35,22 @@ def fit_device() -> torch.device:
     return torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
 
+def release_device_memory(device) -> None:
+    """Give back what a fit's device tensors held, once the caller has let go of them: the GPU's allocator keeps
+    every buffer it has made (a sheet's maps, tables and grids) for reuse, so a worker that fits sheet after sheet
+    would hold the biggest of them all, and more.  Collects what is unreachable, then empties the allocator's cache.
+    Nothing to do on the CPU."""
+    gc.collect()
+    if torch.device(device).type == "mps":
+        torch.mps.empty_cache()
+
+
 class PointField:
     """The correction field at a fixed set of points (crop px).  The grid's nodes are `spacing` px apart, the first
     at the crop's top-left; each point's value is the bilinear interpolation of its 4 surrounding nodes, and beyond
     the grid the value at its nearest edge.  Where each point falls on the grid is worked out once, in the float32
-    arithmetic `F.grid_sample(..., align_corners=True, padding_mode="border")` uses on the points normalised by the
-    grid's extent (as the fits did), so the values are the same to float rounding.
+    steps `F.grid_sample(..., align_corners=True, padding_mode="border")` takes on the points normalised by the
+    grid's extent (as the fits did), so the values are equal to float rounding.
 
     `field(G)` is differentiable in G: the gradient into each node is the sum of its own contributions, in a fixed
     order, over a fixed padded table of them (nodes grouped by how many contributions they take, so the padding stays

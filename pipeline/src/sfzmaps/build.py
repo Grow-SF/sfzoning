@@ -53,7 +53,10 @@ PAID_READ_EXIT = 75
 # How `build --system-tools` reaches its stages' commands (`sfzmaps warp` checks its tools too). Same value as
 # cli.SYSTEM_TOOLS_ENV (a test keeps them equal).
 SYSTEM_TOOLS_ENV = "SFZMAPS_SYSTEM_TOOLS"
-# How `build --jobs` reaches a stage's process: the warp stages a build runs at once share config.WARP_WORKERS.
+# Sheets the sheet warp fits at once, in all: `sfzmaps warp` alone, or shared by the warp stages a build runs at
+# once.  Not in config.py (the warp's code fingerprint): changing it must not refit every sheet.
+WARP_WORKERS = 6
+# How `build --jobs` reaches a stage's process: the warp stages a build runs at once share WARP_WORKERS.
 BUILD_JOBS_ENV = "SFZMAPS_BUILD_JOBS"
 
 
@@ -256,9 +259,9 @@ def _sfzmaps_exe() -> list[str]:
 
 
 def warp_workers(build_jobs: int) -> int:
-    """The sheets one warp stage fits at once when a build runs `build_jobs` stages at once: config.WARP_WORKERS
+    """The sheets one warp stage fits at once when a build runs `build_jobs` stages at once: WARP_WORKERS
     shared between them, at least one each."""
-    return max(1, config.WARP_WORKERS // max(1, build_jobs))
+    return max(1, WARP_WORKERS // max(1, build_jobs))
 
 
 def run_stage(name: str, run: Callable[[list[str], dict], tuple[int, str]] | None = None) -> None:

@@ -274,7 +274,7 @@ def test_a_build_prepares_only_for_the_old_stages():
 @pytest.mark.parametrize("build_jobs, workers", [(1, 6), (2, 3), (4, 1), (8, 1)])
 def test_the_warp_stages_a_build_runs_at_once_share_one_budget_of_workers(monkeypatch, build_jobs, workers):
     monkeypatch.setenv(build.BUILD_JOBS_ENV, str(build_jobs))
-    monkeypatch.setattr(config, "WARP_WORKERS", 6)
+    monkeypatch.setattr(build, "WARP_WORKERS", 6)
     got = []
     build.run_stage("warp-1948", run=lambda argv, env: got.append(argv) or (0, ""))
     assert got == [["warp", "1948", "--jobs", str(workers)]]

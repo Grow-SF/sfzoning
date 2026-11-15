@@ -148,9 +148,26 @@ def block_line_weights(sheet: Sheet, targets: Targets) -> np.ndarray:
     return W8
 
 
+def observation_count(wt: np.ndarray | None, n_points: int, n_control_points: int) -> float:
+    """How many observations the fit counts: the points by their weights (each 1 where there are none) and each
+    control point as one.  Summed in float64 by numpy: a float32 sum by torch on the CPU splits the work by the
+    threads it has, so its last bits depend on them."""
+    return (float(np.sum(wt, dtype=np.float64)) if wt is not None else float(n_points)) + n_control_points
+
+
 def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weights: np.ndarray) -> Correction:
     """The displacement field that makes every point and control point together most probable (PyTorch, on
-    `fit_device()`; the grid comes back as float32 on the CPU)."""
+    `fit_device()`; the grid comes back as float32 on the CPU).  Everything the fit put on the device is given back
+    before it returns (a worker fits sheet after sheet)."""
+    from sfzmaps.sheetwarp.device import fit_device, release_device_memory
+
+    try:
+        return _fit_probabilistic(inputs, targets, weights)
+    finally:
+        release_device_memory(fit_device())
+
+
+def _fit_probabilistic(inputs: ProbabilisticInputs, targets: Targets, weights: np.ndarray) -> Correction:
     import torch
 
     from sfzmaps.sheetwarp.device import MapSampler, PointField, blur, fit_device
@@ -168,7 +185,7 @@ def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weig
     # every point is one observation, counted by its weight; only the block sides (kind 0) measure how well the print
     # is fitted
     WPT = torch.from_numpy(inputs.wt.astype(np.float32)) if inputs.wt is not None else torch.ones(N)
-    NOBS = float(WPT.sum()) + NG
+    NOBS = observation_count(inputs.wt, N, NG)
     WPT = WPT.to(device)
     BASE = (inputs.kind == 0) if inputs.kind is not None else np.ones(N, bool)
     DMAX = float(T8.max())

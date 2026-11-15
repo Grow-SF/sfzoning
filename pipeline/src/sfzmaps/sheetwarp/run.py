@@ -159,7 +159,7 @@ def _log_to_stderr(level: int) -> None:
     logging.basicConfig(level=level, format="%(message)s")
 
 
-def correct_series(series: str, jobs: int = config.WARP_WORKERS, force: bool = False) -> dict[str, str]:
+def correct_series(series: str, jobs: int, force: bool = False) -> dict[str, str]:
     """Every placed sheet of the series, `jobs` at a time in worker processes (each fit sets its own thread count);
     name -> result.  Raises after every sheet has finished if any raised, naming them."""
     names = placed_sheets(series)

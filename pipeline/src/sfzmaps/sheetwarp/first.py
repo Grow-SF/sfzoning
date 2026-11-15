@@ -216,7 +216,17 @@ def first_correction(sheet: Sheet, sides: SidePoints, targets: Targets, held: np
       smooth         keep neighbouring grid points' corrections close
       no spikes      no grid point's correction more than twice its neighbours' average (weight 1000)
     Every term is a mean over its points (smooth and no spikes: per free point), so each weighs the same on every
-    sheet.  Fitted with PyTorch on `fit_device()`; the grid comes back as float32 on the CPU."""
+    sheet.  Fitted with PyTorch on `fit_device()`; the grid comes back as float32 on the CPU.  Everything the fit put
+    on the device is given back before it returns (a worker fits sheet after sheet)."""
+    from sfzmaps.sheetwarp.device import fit_device, release_device_memory
+
+    try:
+        return _fit_first(sheet, sides, targets, held)
+    finally:
+        release_device_memory(fit_device())
+
+
+def _fit_first(sheet: Sheet, sides: SidePoints, targets: Targets, held: np.ndarray) -> Correction:
     import torch
 
     from sfzmaps.sheetwarp.device import PointField, fit_device
