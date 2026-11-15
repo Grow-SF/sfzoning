@@ -87,8 +87,10 @@ On a sheet's ink pixels:
 - text ink found;
 - words found, by kind;
 - ink outside every box called text;
-- **long straight lines called text:** ink on strokes at least 200 ft long and at most 12 ft wide, named constants.
+- **long straight lines called text:** ink on strokes at least 200 ft long and at most 48 ft wide, named constants.
   This stands in for "district-line ink called text", which needs the zoning table. **(my call)**
+  - Letters fall out by length.
+  - The width limit only excludes solid fills; the 2000 map's district lines are 24–32 ft wide.
 
 Reported per test drawing and for the validation area.
 
