@@ -43,10 +43,11 @@ Candidate features (OPTIONS), each off unless named, so each can be measured aga
   no_city_limit     (an ablation) the city limit is no closing's end and no enclosure wall
   text_discounted_enclosure
                     ("text-discounted enclosure", 48) the enclosure again at each of TEXT_LEVELS, with only the
-                    strokes whose mean text chance (`stroke_text_chance`) is below the level as walls, and the closing
-                    paths from such a stroke to such a stroke or the city limit: 16 columns per text level (the
-                    enclosure's own levels, in its order), the text levels outermost.  The levels are basis features
-                    with fitted weights; the enclosure's own 16 columns stay as they are
+                    strokes whose mean text chance (`stroke_text_chance`) is below the level as walls (drawn on their
+                    own), and the closing paths from such a stroke that end on the city limit or on or next to such a
+                    stroke (`kept_closings`): 16 columns per text level (the enclosure's own levels, in its order),
+                    the text levels outermost.  The levels are basis features with fitted weights; the enclosure's
+                    own 16 columns stay as they are
 The extra groups follow the profile in that order (`groups`).
 """
 import logging
@@ -161,13 +162,14 @@ def _draw(raster: np.ndarray, xy, value: int) -> None:
     cv2.polylines(raster, [_px(xy).reshape(-1, 1, 2)], False, int(value), 1)
 
 
-def stroke_raster(strokes, shape) -> np.ndarray:
+def stroke_raster(strokes, shape, only: np.ndarray | None = None) -> np.ndarray:
     """Each stroke's id on the grid (int32, -1 where none), as 1 px centre lines drawn narrowest first, so where
-    strokes cross the widest is on top."""
+    strokes cross the widest is on top.  `only`: draw just these strokes (bool per stroke)."""
     sid = np.full(shape, -1, np.int32)
     xy, off = strokes["xy"], strokes["off"]
     for k in np.argsort(strokes["wmed"], kind="stable"):
-        _draw(sid, xy[off[k]:off[k + 1]], k)
+        if only is None or only[k]:
+            _draw(sid, xy[off[k]:off[k + 1]], k)
     return sid
 
 
@@ -534,20 +536,39 @@ class LotRegions:
         return out
 
 
+def kept_closings(found: dict, kept: np.ndarray, kept_sid: np.ndarray) -> np.ndarray:
+    """The closing paths (`found`, from `closings`) that are walls when only the strokes `kept` are (bool per stroke):
+    those from a kept stroke that end on the city limit (target = the number of strokes) or on or next to (8
+    neighbours) a px of a kept stroke in `kept_sid` (`stroke_raster` of the kept strokes alone).  The far end is judged
+    on that raster, not by the target the closing found: where strokes cross, the shared raster names only the widest,
+    which may be text over a kept line."""
+    kept = np.asarray(kept, bool)
+    if not len(found["src"]):
+        return np.zeros(0, bool)
+    near = cv2.dilate((kept_sid >= 0).view(np.uint8), np.ones((3, 3), np.uint8)).view(bool)
+    c, r = _px(found["xy"][found["off"][1:] - 1]).T
+    h, w = near.shape
+    inside = (r >= 0) & (r < h) & (c >= 0) & (c < w)
+    on_kept = np.zeros(len(r), bool)
+    on_kept[inside] = near[r[inside], c[inside]]
+    return kept[found["src"]] & ((found["tgt"] == len(kept)) | on_kept)
+
+
 def separated(region: np.ndarray, a, b) -> np.ndarray:
     """Pairs whose two lots are both placed and in different regions."""
     return (region[a] != region[b]) & (region[a] > 0) & (region[b] > 0)
 
 
 def enclosure(lots, mapped: np.ndarray, sid: np.ndarray, wmed, found: dict, city_limit_wall: bool = True,
-              kept=(None,)) -> np.ndarray:
+              kept=(None,), strokes=None) -> np.ndarray:
     """Whether each pair's lots are walled apart, per level (float32 (pairs, 16), column = width level x closing
     level).  At a level the walls are the city limit, every stroke at least that wide (`sid`, `wmed`) and every
     closing path (`found`, from `closings`) up to that long from a stroke that wide; the regions are what the walls
     leave 4-connected on the mapped area, and each lot is in the region holding most of its px (`LotRegions`).
     `city_limit_wall` False (an ablation): the city limit is no wall.  `kept`: the sets of strokes that may be walls
-    (bool per stroke; None: every stroke), each giving its 16 columns in turn; with a set, a closing path is a wall
-    only when its stroke and the stroke it reaches (or the city limit) are in it."""
+    (bool per stroke; None: every stroke, as `sid` holds them), each giving its 16 columns in turn.  With a set, its
+    strokes are drawn again on their own (`stroke_raster(strokes, only=...)`, so a kept stroke is a wall where a wider
+    dropped one crosses it) and only its closing paths count (`kept_closings`)."""
     t0 = time.perf_counter()
     wmed = np.asarray(wmed, float)
     place = LotRegions(lots.lot, lots.n)
@@ -556,18 +577,17 @@ def enclosure(lots, mapped: np.ndarray, sid: np.ndarray, wmed, found: dict, city
     out = np.zeros((len(lots.a), levels * len(kept)), np.float32)
     col = 0
     for strokes_kept in kept:
-        at = np.maximum(sid, 0)
         if strokes_kept is None:
-            on = sid >= 0
+            walls_sid = sid
             closing_kept = np.ones(len(found["src"]), bool)
         else:
             strokes_kept = np.asarray(strokes_kept, bool)
-            on = (sid >= 0) & strokes_kept[at]
-            reaches = np.r_[strokes_kept, True]                       # a stroke, or the city limit (id = strokes)
-            closing_kept = strokes_kept[found["src"]] & reaches[found["tgt"]]
-            log.info("enclosure: %d of %d strokes kept as walls", strokes_kept.sum(), len(strokes_kept))
-        width = np.where(on, wmed[at].astype(np.float32), np.float32(-1))
-        del at, on
+            walls_sid = stroke_raster(strokes, sid.shape, only=strokes_kept)
+            closing_kept = kept_closings(found, strokes_kept, walls_sid)
+            log.info("enclosure: %d of %d strokes kept as walls, %d of %d closing paths", strokes_kept.sum(),
+                     len(strokes_kept), closing_kept.sum(), len(closing_kept))
+        width = np.where(walls_sid >= 0, wmed[np.maximum(walls_sid, 0)].astype(np.float32), np.float32(-1))
+        del walls_sid
         for wl in ENCLOSURE_WIDTHS:
             strokes_wall = limit | (width >= wl)
             for gl in ENCLOSURE_CLOSINGS:
@@ -704,7 +724,7 @@ def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray | None
     if TEXT_DISCOUNTED_ENCLOSURE in options:                        # text-discounted enclosure (kept for the end)
         chance = stroke_text_chance(strokes, text)
         discounted = enclosure(lots, mapped, sid, wmed, found, city_limit_wall=limit,
-                               kept=[chance < level for level in TEXT_LEVELS])
+                               kept=[chance < level for level in TEXT_LEVELS], strokes=strokes)
     cid = np.full(shape, -1, np.int32)
     for i in np.argsort(-found["gap"], kind="stable"):
         _draw(cid, found["xy"][found["off"][i]:found["off"][i + 1]], i)

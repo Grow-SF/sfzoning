@@ -597,6 +597,85 @@ def test_text_discounted_enclosure_lets_a_ring_of_text_through():
         wallevidence.border_features(L, mapped, s, letter, options=options)            # no text chance given
 
 
+def test_text_discounted_enclosure_keeps_a_ring_crossed_by_wider_text():
+    """A ring of line crossed by a wider bar of text: where they cross, the shared stroke raster holds the wider (text)
+    stroke, but the ring walls there all the same: at each text level the walls are drawn from the kept strokes
+    alone."""
+    L, ink, across = _ring_city()
+    lo_ = 2 * LOT_PX + 3
+    mid = 4 * LOT_PX + 3 + 7                                # a column away from lot lines, across the ring's top side
+    bar = np.zeros(ink.shape, bool)
+    bar[lo_ - 25:lo_ + 25, mid - 6:mid + 7] = True          # 13 px wide, the ring 7
+    options = ["text_discounted_enclosure"]
+    by_level = len(wallevidence.ENCLOSURE_WIDTHS) * len(wallevidence.ENCLOSURE_CLOSINGS)
+    for text_px in (bar & ~ink, bar):                       # the text's chance off the ring only, or on it too
+        s = strokes.strokes(ink | bar)
+        text = np.where(text_px, 230, 0).astype(np.uint8)
+        F = wallevidence.border_features(L, np.ones(ink.shape, bool), s, np.zeros(len(s["wmed"])), options=options,
+                                         text=text)
+        assert F[across][:, _columns("enclosure")].all()
+        apart = F[:, _columns("text-discounted enclosure", options)].reshape(len(F), -1, by_level)
+        assert apart[across].all()                          # every text level, every width and closing level
+
+
+def _closing(cells) -> np.ndarray:
+    """A closing path through grid px (row, col), as map points."""
+    rc = np.asarray(cells, float)
+    return grid.to_map(np.c_[rc[:, 1] + 0.5, rc[:, 0] + 0.5]).astype(np.float32)
+
+
+def test_kept_closings_start_on_a_kept_stroke_and_end_on_kept_ink():
+    """A closing path is a wall at a text level when its stroke is kept and it ends on the city limit, or on or next to
+    a px of a kept stroke (the raster of the kept strokes alone): not when it ends on text away from kept ink, nor
+    when it starts from text.  Its far end is judged by the raster, not by the stroke the shared raster names there
+    (the wider stroke where two cross)."""
+    kept = np.array([True, False, True])                    # strokes 0 and 2 kept, 1 is text
+    kept_sid = np.full((20, 20), -1, np.int32)
+    kept_sid[:, 10] = 2
+    paths = [[(5, 4), (5, 9), (5, 10)],                     # from 0, onto kept stroke 2
+             [(9, 4), (9, 1), (9, 0)],                      # from 0, onto the city limit
+             [(14, 4), (14, 2)],                            # from 0, onto text away from kept ink
+             [(2, 14), (2, 11)],                            # from text, next to kept stroke 2
+             [(17, 4), (17, 10)]]                           # from 0, onto a px where text lies over stroke 2
+    found = {"src": np.array([0, 0, 0, 1, 0]), "tgt": np.array([2, 3, 1, 2, 1]),
+             "xy": np.vstack([_closing(p) for p in paths]),
+             "off": np.cumsum([0] + [len(p) for p in paths]).astype(np.int64)}
+    np.testing.assert_array_equal(wallevidence.kept_closings(found, kept, kept_sid), [True, True, False, False, True])
+
+
+def test_text_discounted_enclosure_closes_on_kept_lines_and_the_city_limit_not_on_text():
+    """A line along the lot line between rows 3 and 4 stops 8 px short of an upright: its loose end closes on it
+    (closings <= 60 ft).  At every text level the pairs on either side are apart when the upright is a line or the
+    city limit; not when the upright is text.  (Where the path lands on a px that text shares with a kept line:
+    `test_kept_closings_start_on_a_kept_stroke_and_end_on_kept_ink`.)"""
+    lot = _lot_grid(8, 8)
+    L = _lots(lot, ["RH-1"] * 64)
+    edge = 7 * LOT_PX
+    rows = _pair_rows(L, 3 * 8 + np.arange(6), 4 * 8 + np.arange(6))
+    bar = np.zeros(lot.shape, bool)
+    bar[4 * LOT_PX - 3:4 * LOT_PX + 4, :edge - 8] = True
+    upright = np.zeros(lot.shape, bool)
+    upright[:, edge - 3:edge + 4] = True
+    everywhere, short_of_edge = np.ones(lot.shape, bool), np.zeros(lot.shape, bool)
+    short_of_edge[:, :edge] = True
+    cases = {"onto a line": (bar | upright, None, everywhere, True),
+             "onto the city limit": (bar, None, short_of_edge, True),
+             "onto text": (bar | upright, upright, everywhere, False)}
+    options = ["text_discounted_enclosure"]
+    by_level = len(wallevidence.ENCLOSURE_WIDTHS) * len(wallevidence.ENCLOSURE_CLOSINGS)
+    closed = [_level(w, g) for w in wallevidence.ENCLOSURE_WIDTHS if w <= 26 for g in (60.0, 150.0, 400.0)]
+    for name, (ink, text_px, mapped, walled) in cases.items():
+        s = strokes.strokes(ink)
+        text = np.zeros(ink.shape, np.uint8) if text_px is None else np.where(text_px, 230, 0).astype(np.uint8)
+        F = wallevidence.border_features(L, mapped, s, np.zeros(len(s["wmed"])), options=options, text=text)
+        assert F[rows][:, _columns("enclosure")[closed]].all(), name           # the default closes it
+        apart = F[rows][:, _columns("text-discounted enclosure", options)].reshape(len(rows), -1, by_level)
+        if walled:
+            assert apart[:, :, closed].all(), name
+        else:
+            assert not apart.any(), name
+
+
 def test_stroke_text_chance_is_the_mean_over_its_points():
     """A stroke's text chance: the mean of the chance (x 255 on the grid) over its points."""
     ink = np.zeros((30, 40), bool)
