@@ -36,6 +36,7 @@ import shapely
 from sfzmaps import config
 from sfzmaps.solver import paths
 from sfzmaps.solver.lots import load_lots
+from sfzmaps.solver.table import TABLE_CRS
 from sfzmaps.solver.trust import load_prints
 
 FREEWAY_TYPES = ("HWY", "RAMP")          # street types that are freeways
@@ -44,6 +45,17 @@ SIDE_STEP_FT = 5.0                       # the centreline's direction at the pri
 FAR_SEARCH_FT = 100.0                    # side B is searched within this reach of the print,
 FAR_SEARCH_LIMIT_FT = 3200.0             # doubling up to this
 STREETS_FILE = config.DATA_DIR / "ref" / "streets.parquet"
+
+
+def load_streets(path=None) -> gpd.GeoDataFrame:
+    """The street centrelines (`path`, default STREETS_FILE) in the lots' CRS (`table.TABLE_CRS`, EPSG:2227 ft),
+    reprojected if the file holds another; a file with no CRS is an error (ValueError), since its numbers can't be
+    told from feet."""
+    path = path or STREETS_FILE
+    streets = gpd.read_parquet(path)
+    if streets.crs is None:
+        raise ValueError(f"{path} has no CRS: can't tell its coordinates are {TABLE_CRS} feet")
+    return streets if streets.crs == TABLE_CRS else streets.to_crs(TABLE_CRS)
 
 
 def freeways(streets: gpd.GeoDataFrame) -> np.ndarray:
@@ -129,7 +141,7 @@ def build_streetsides() -> dict:
     found = load_prints()
     city = load_lots()
     lots = gpd.read_parquet(paths.LOTS_DIR / "table.parquet").geometry.values
-    streets = gpd.read_parquet(STREETS_FILE)
+    streets = load_streets()
     xy = found[["x", "y"]].to_numpy(float)
     under = found["lab_lot"].to_numpy(np.int64)
     street = found["street"].to_numpy(bool)

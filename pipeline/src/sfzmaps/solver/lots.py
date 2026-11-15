@@ -74,6 +74,16 @@ def scored_lots(lot: np.ndarray, mapped: np.ndarray, known: np.ndarray) -> np.nd
     return known & (2 * on_map > total)
 
 
+def lot_centroids(geometries) -> np.ndarray:
+    """Each lot's centroid (x, y) (float64 (n, 2), one row per lot in lot order; NaN for an empty geometry, whose
+    quarter is then sw, and which has no px to be scored)."""
+    c = shapely.centroid(np.asarray(geometries, dtype=object))
+    has = ~shapely.is_empty(c)
+    out = np.full((len(c), 2), np.nan)
+    out[has] = shapely.get_coordinates(c[has])
+    return out
+
+
 def build_lots() -> dict:
     """Paint the lots on the grid and write lots.npz and table.parquet into LOTS_DIR.  Returns a summary: lots,
     scored lots, pairs, the median centroid of the scored lots, seconds."""
@@ -84,7 +94,7 @@ def build_lots() -> dict:
     pairs = neighbour_pairs(lot, grown)
     mapped = page.load_sheets() > 0
     scored = scored_lots(lot, mapped, known)
-    centroids = shapely.get_coordinates(shapely.centroid(lots.geometry.values))
+    centroids = lot_centroids(lots.geometry.values)
     paths.LOTS_DIR.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(paths.LOTS_DIR / "lots.npz", lot=lot, grown=grown, pairs=pairs, scored=scored, known=known,
              quarter=quarter_of(centroids), table=codes)

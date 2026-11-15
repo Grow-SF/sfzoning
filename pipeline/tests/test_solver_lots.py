@@ -90,6 +90,16 @@ def test_quarter_of_uses_the_split():
     assert q.tolist() == [0, 1, 2, 3, 1] and q.dtype == np.int8
 
 
+def test_an_empty_lot_keeps_every_later_lot_in_its_own_quarter():
+    from shapely.geometry import Polygon
+    sx, sy = grid.QUARTER_SPLIT
+    geoms = [box(sx - 20, sy + 10, sx - 10, sy + 20), Polygon(), box(sx + 10, sy - 20, sx + 20, sy - 10),
+             box(sx + 10, sy + 10, sx + 20, sy + 20)]
+    c = lots.lot_centroids(geoms)
+    assert c.shape == (4, 2) and np.isnan(c[1]).all()
+    assert lots.quarter_of(c)[[0, 2, 3]].tolist() == [0, 3, 1]       # nw, se, ne: lot order kept past the empty one
+
+
 def test_lots_table_codes_follow_table_row_order(tmp_path, monkeypatch):
     t = _table([_px(2, 2, 6, 6), _px(6, 2, 10, 6), _px(13, 2, 17, 6)], ["rh1", "RM-2/RH-1", " nc-3 "])
     monkeypatch.setattr(lots.table, "load_table", lambda: t)

@@ -41,6 +41,20 @@ def test_streetside_finds_the_far_lot_across_a_street():
     assert streetside.far_side(xy, under, lots, flipped)[0].tolist() == [1, 1, 0, -1, -1]
 
 
+def test_streets_are_read_in_the_lots_feet_whatever_their_file_holds(tmp_path):
+    from shapely.geometry import LineString
+    ft = gpd.GeoDataFrame({"streetname": ["A ST"], "st_type": ["ST"]},
+                          geometry=[LineString([(6000000.0, 2100000.0), (6000400.0, 2100000.0)])], crs="EPSG:2227")
+    ft.to_crs("EPSG:4326").to_parquet(tmp_path / "degrees.parquet")
+    back = streetside.load_streets(tmp_path / "degrees.parquet")
+    assert back.crs == "EPSG:2227"
+    assert np.allclose(shapely.get_coordinates(back.geometry.values), shapely.get_coordinates(ft.geometry.values),
+                       atol=0.01)
+    ft.set_crs(None, allow_override=True).to_parquet(tmp_path / "unknown.parquet")
+    with pytest.raises(ValueError, match="no CRS"):
+        streetside.load_streets(tmp_path / "unknown.parquet")
+
+
 def test_streetside_top_reading_is_the_most_trusted_first():
     names = np.array(["NC-1", "RH-1", "RH-2"])
     top = streetside.top_codes(names, print_index=np.array([0, 0, 1, 1, 3]), code_index=np.array([0, 1, 2, 1, 0]),

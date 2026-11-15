@@ -13,8 +13,11 @@ There is one fit per quarter of the city.  The fit that holds out quarter q lear
 lot under the print's text, `lab_lot`) has a known code in the April 2000 table as downloaded
 (`table.known_and_codes`; the by-eye corrections are never read) and lies outside q.  A reading is held out by the
 quarter of that lot (`lots.quarter`, from the lot's centroid), not by the print's own position, so no fit learns
-from a code of a lot in its own quarter, and the trust of q's readings is a held-out guess.  The weights are found by
-Newton's method with a ridge on each weight (RIDGE, RIDGE_BY_FEATURE).
+from a code of a lot in its own quarter, and the trust of q's readings is a held-out guess.  The features made from
+more than one print (the median print height, the codes Sol reads on some print, the distance to the nearest other
+print) are computed over every print, in every quarter, from what the readers saw: they read no table code, so they
+carry none of a held-out quarter's codes into its fit.  The weights are found by Newton's method with a ridge on each
+weight (RIDGE, RIDGE_BY_FEATURE).
 
 Writes, under data/solver/labels/:
   readings_{q}.npz  for each quarter q (nw, ne, sw, se), every reading and its trust from the fit that held q out:
