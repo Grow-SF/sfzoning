@@ -16,6 +16,8 @@ is only ever read at ink), or the known ink and the px next to it, the 8 around 
 
 The parts of the loss stay on the device, summed; every LOG_EVERY steps (and at the last) their mean over those steps
 is read, logged and checked, so the device is waited on only then.  A mean that is not finite stops the training.
+Each batch goes to the device without waiting for it either (`Copies`): a waiting copy to the Mac's GPU first waits
+for all the work queued before it, so every step would wait for the last.
 
 Every draw comes from one numpy generator and the weights from torch's, both seeded; torch runs deterministic
 algorithms on THREADS threads.  With `prefetch` a background thread draws the batches ahead, from that one generator
@@ -25,6 +27,7 @@ exclusive turn (`sfzmaps.gpu`), which the caller takes (`stage.build_text`, `tri
 `save_model` writes the weights with the recipe they came from; `predict.load_model` builds the network that recipe
 names.
 """
+import collections
 import contextlib
 import dataclasses
 import logging
@@ -56,6 +59,7 @@ ANGLE_WEIGHT = 0.5
 THREADS = 4
 LOG_EVERY = 250         # iterations between progress lines (and reads of the loss from the device)
 PREFETCH = 2            # batches drawn ahead with `prefetch`
+HELD = 2                # steps a batch is held after its copy to the GPU was queued (`Copies`)
 CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text"), "decoder": ("full", "light")}
 NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
 
@@ -266,6 +270,38 @@ class WeightAverage:
             state[k].copy_(s / share)
 
 
+class Copies:
+    """Batches copied to a device without waiting (`non_blocking`), one call per step.  On the Mac's GPU such a copy is
+    only queued: it reads the batch's CPU memory when the GPU gets to it.  So each batch is held, with an event
+    recorded after its copy (`event`, by default `torch.mps.Event`), until HELD steps later, when that event is waited
+    for (the GPU is then usually past it, so the wait costs nothing) and the batch let go; `close` waits for and lets
+    go of the rest.  On the CPU the batch is its own copy and nothing is held."""
+
+    def __init__(self, device, event=None):
+        self.device = torch.device(device)
+        self.event = event if event is not None else (torch.mps.Event if self.device.type == "mps" else None)
+        self.held = collections.deque()
+
+    def __call__(self, batch: tuple[torch.Tensor, ...]) -> tuple[torch.Tensor, ...]:
+        out = tuple(v.to(self.device, non_blocking=True) for v in batch)
+        if self.event is not None:
+            done = self.event()
+            done.record()
+            self.held.append((batch, done))
+            while len(self.held) > HELD:
+                self._let_go()
+        return out
+
+    def _let_go(self) -> None:
+        batch, done = self.held.popleft()
+        done.synchronize()          # the copy has read the batch: only now may its memory go
+        del batch
+
+    def close(self) -> None:
+        while self.held:
+            self._let_go()
+
+
 @contextlib.contextmanager
 def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator):
     """The training's batches (`batch_tensors` of `draw`), one per step, from `rng` in order: drawn when asked for or,
@@ -327,9 +363,10 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
                                                 pct_start=recipe.pct_start)
     average = WeightAverage(net, recipe.weight_average) if recipe.weight_average else None
     sums, first, t0 = torch.zeros(3, device=device), 1, time.perf_counter()
-    with _batches(sheets, pools, recipe, rng) as batches:
+    copies = Copies(device)
+    with _batches(sheets, pools, recipe, rng) as batches, contextlib.closing(copies):
         for it, batch in enumerate(batches, 1):
-            x, t, k, a, w = (v.to(device) for v in batch)
+            x, t, k, a, w = copies(batch)
             loss, parts = loss_fn(net(x), t, k, a, w)
             opt.zero_grad()
             loss.backward()

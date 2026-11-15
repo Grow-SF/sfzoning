@@ -610,7 +610,11 @@ scores stage takes them), and `minutes.json` (load, train, predict, score and te
 with `prefetch`, `prefetch`: the two train the same weights into one folder, so both runs' minutes are kept).
 `Recipe.name()` lists the settings that differ from today's, sorted (`default` for none), without `prefetch`, which
 never changes the weights. `--reuse` scores the `model.pt` already in each recipe's folder (that recipe's and seed's)
-instead of training, keeping the training minutes its `minutes.json` had.
+instead of training, keeping the training minutes its `minutes.json` had. Each scored sheet's long-line ink takes
+seconds to find, about 4 minutes for the validation sheets, so the trials keep it in
+`data/solver/experiments/line-masks/<series>/<sheet>-<digest>.npz` (packed bits, labelled with the sheet's scale, a
+digest of its ink, the two constants and a digest of the code and libraries that find the lines) and read it back
+when the label matches. The scores stage finds the lines afresh.
 
 The detector trains on `mps` where there is one (else `cpu`; `--device` overrides): two 200-step runs on `mps` gave
 bit-identical weights and predicted chance (max difference 0), at 0.39 s a step against 3.1 s on `cpu` (about 52 min
@@ -626,7 +630,11 @@ trial's recipe predict in one: nothing else computes on the GPU meanwhile. The s
 detector. The tests hold a shared turn for their whole run, taken without waiting; while a detector has the GPU they
 never use it (the warp's fits run on the CPU and the tests marked `mps` are skipped). The loss stays on the device
 between progress lines (every 250 steps, so the GPU is not waited on each step); a mean loss there that is not finite
-stops the training.
+stops the training. Each batch goes to the GPU without waiting either (`train.Copies`): a waiting copy to `mps` first
+waits for all the work queued before it. A copy that doesn't wait reads the batch's memory only when the GPU gets to
+it, so the batch is held with an event recorded after its copy and let go two steps later, once that event has passed.
+On `mps` it trained the same weights bit for bit as waiting copies, about 2% faster (300-step runs alternated
+four times each way).
 
 **The trust of each reading** (`solver/trust.py`, run by the `solver-labels` stage) is the chance that a code read
 on a print is the district printed there. Each different code among a print's five reads (Sol, Terra, the third

@@ -19,20 +19,30 @@ The sheets are read once for all the recipes.  The recipes run one at a time, ea
 exclusive turn on the Mac's GPU (`sfzmaps.gpu`), and scored on the CPU after it.  Only the tiles holding px of the
 validation area are predicted (`predict.chance`'s `only`); they get the chance a whole page's scoring would give them.
 
+Each sheet's long-line ink (`scores.line_ink`, minutes to find on a page) is kept on disk for the next trials
+(`line_masks_dir`: experiments/line-masks/<series>/<sheet>-<digest>.npz, packed bits), under its `scores.line_key`
+and a digest of the code that finds it (`line_code`), and read back when both match.  Only the trials read it: the
+scores stage finds the lines afresh.
+
 A recipe is written as "name=value" settings over today's (`parse_recipe`); a recipe that runs is made afresh in a
 folder beside its own and renamed into place (`runs.replace_folder`).  With `reuse`, each recipe's folder must already
 hold its model.pt (that recipe's and that seed's): it is scored, not trained, and the minutes its training took are
 kept from the folder's minutes.json.
 """
 import dataclasses
+import functools
 import gc
+import hashlib
+import inspect
 import json
 import logging
 import os
 import time
 from pathlib import Path
 
+import cv2
 import numpy as np
+import skimage
 import torch
 
 from sfzmaps import gpu
@@ -148,6 +158,70 @@ def _minutes(f: Path) -> dict:
     return got if set(got) <= set(RUNS) else {RUNS[0]: got}
 
 
+def line_masks_dir() -> Path:
+    """The folder of the long-line ink kept for the trials (see the module)."""
+    return runs.EXPERIMENTS_DIR / "line-masks"
+
+
+@functools.cache
+def line_code() -> str:
+    """A digest of what finds a sheet's long lines: the source of `scores.long_lines` (and the stroke points it
+    reads), of `strokes` and every module it imports, and the versions of the libraries they use."""
+    from sfzmaps import fresh
+    h = hashlib.blake2b(digest_size=16)
+    for f in fresh.code_files(["sfzmaps.solver.strokes"]):
+        h.update(f.read_bytes())
+    for fn in (scores.long_lines, scores._page_px):
+        h.update(inspect.getsource(fn).encode())
+    for lib in (np, cv2, skimage):
+        h.update(lib.__version__.encode())
+    return h.hexdigest()
+
+
+def _line_file(sd: data.SheetData) -> tuple[Path, str]:
+    """Where a sheet's long-line ink is kept on disk, and the label it is kept with (its key and the code's)."""
+    label = repr((scores.line_key(sd), line_code()))
+    name = hashlib.blake2b(label.encode(), digest_size=10).hexdigest()
+    return line_masks_dir() / sd.series / f"{sd.sheet}-{name}.npz", label
+
+
+def read_line_masks(sheets: list[data.SheetData]) -> int:
+    """Give `scores.line_ink` each sheet's long-line ink kept on disk (see the module) that it hasn't already, when
+    its label matches.  Returns how many were read."""
+    n = 0
+    for sd in sheets:
+        key = scores.line_key(sd)
+        f, label = _line_file(sd)
+        if key in scores._LINE_INK or not f.is_file():
+            continue
+        with np.load(f) as kept:
+            if str(kept["label"]) == label:
+                scores._LINE_INK[key] = kept["bits"]
+                n += 1
+    return n
+
+
+def keep_line_masks(sheets: list[data.SheetData]) -> int:
+    """Write the long-line ink `scores.line_ink` has found for the sheets to disk, each not there yet (whole: to a
+    file beside it first, then renamed into place).  Returns how many were written."""
+    n = 0
+    for sd in sheets:
+        key = scores.line_key(sd)
+        f, label = _line_file(sd)
+        if key not in scores._LINE_INK or f.is_file():
+            continue
+        f.parent.mkdir(parents=True, exist_ok=True)
+        part = f.with_name(f".{f.name}.{os.getpid()}.part")
+        try:
+            with open(part, "wb") as out:
+                np.savez(out, bits=scores._LINE_INK[key], label=np.array(label))
+            os.replace(part, f)
+        finally:
+            part.unlink(missing_ok=True)
+        n += 1
+    return n
+
+
 def validation_scopes(sheets: list[data.SheetData]) -> dict[tuple[str, str], np.ndarray]:
     """Each sheet's px in the validation area (`scores.scored_px`), packed 8 px a byte along each row, for the sheets
     with any."""
@@ -192,9 +266,10 @@ def run_trials(recipes: list[train.Recipe], device: str | None = None, seed: int
     sheets = data.load_sheets(maps, hold_out_validation=True)
     scopes = validation_scopes(sheets)
     test_sheets = data.load_sheets(tests, hold_out_validation=False) if tests else []
+    lines = read_line_masks(sheets + test_sheets)
     load = (time.perf_counter() - t0) / 60
-    log.info("%d sheets read, %d with px in the validation area, %d of test drawings (%.1f min)", len(sheets),
-             len(scopes), len(test_sheets), load)
+    log.info("%d sheets read, %d with px in the validation area, %d of test drawings; long lines kept for %d (%.1f "
+             "min)", len(sheets), len(scopes), len(test_sheets), lines, load)
     results = []
     for recipe, out in plan:
         minutes, run = {"load": load}, RUNS[recipe.prefetch]
@@ -227,12 +302,14 @@ def run_trials(recipes: list[train.Recipe], device: str | None = None, seed: int
             del net
         t0 = time.perf_counter()
         got = scores.score_sheets(chances, "validation", sheets)
+        keep_line_masks(sheets)
         minutes["score"] = (time.perf_counter() - t0) / 60
         del chances
         tested = None
         if tests:
             t0 = time.perf_counter()
             tested = scores.score_sheets(test_chances, "whole", test_sheets)
+            keep_line_masks(test_sheets)
             minutes["test"] = (test_seconds + time.perf_counter() - t0) / 60
             _write_json(work / TEST_FILE, tested)
         del test_chances

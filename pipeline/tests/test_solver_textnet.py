@@ -1193,11 +1193,14 @@ def test_trials_train_with_the_area_held_out_score_it_and_write_only_their_folde
                      ("fit", True), ("chance", True), ("chance", True), ("score_sheets", False)]
     assert trained == [[True, True], [True, True]]           # every sheet of both maps, the area held out
     assert len(lines) == 2                                    # each sheet's long lines found once, for both
-    # only the recipes' folders are new, each with its four files; nothing else changed
+    # only the recipes' folders are new, each with its four files, and each scored sheet's long lines kept for the
+    # next trials; nothing else changed
     after = _tree(tmp_path)
     new = sorted(k for k in after if k not in before)
     folders = [f"solver/experiments/text-{r.name()}" for r in (first, second)]
-    assert new == sorted(f"{f}/{name}" for f in folders for name in trial.FILES)
+    kept = [k for k in new if k.startswith("solver/experiments/line-masks/")]
+    assert sorted(k.split("/")[3] for k in kept) == [OLD, paths.SERIES]
+    assert sorted(k for k in new if k not in kept) == sorted(f"{f}/{name}" for f in folders for name in trial.FILES)
     assert {k: v for k, v in after.items() if k in before} == before
     for r, f, res in zip((first, second), folders, got):
         folder = tmp_path / f
@@ -1253,6 +1256,34 @@ def test_a_reused_trial_scores_the_model_in_its_folder_and_keeps_its_training_mi
             trial.run_trials([recipe], device="cpu", seed=seed, reuse=True)
 
 
+def test_the_long_lines_kept_on_disk_are_those_found_afresh_and_only_for_their_page_and_code(built, monkeypatch):
+    monkeypatch.setattr(scores, "_LINE_INK", {})
+    calls = []
+    real = scores.long_lines
+    monkeypatch.setattr(scores, "long_lines", lambda ink, ft: calls.append(ft) or real(ink, ft))
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
+    fresh = [scores.line_ink(sd) for sd in sheets]
+    assert len(calls) == 2 and trial.keep_line_masks(sheets) == 2 and trial.keep_line_masks(sheets) == 0
+    # another process (no answers kept in it) reads them back: the same px, and nothing found again
+    monkeypatch.setattr(scores, "_LINE_INK", {})
+    assert trial.read_line_masks(sheets) == 2
+    assert all(np.array_equal(scores.line_ink(sd), f) for sd, f in zip(sheets, fresh)) and len(calls) == 2
+    # another page under the same name, or another code finding the lines, has its own file: none is read
+    monkeypatch.setattr(scores, "_LINE_INK", {})
+    other = dataclasses.replace(sheets[0], ink_bits=sheets[0].ink_bits.copy())
+    other.ink_bits[5, :] = ~other.ink_bits[5, :]       # another page: a row of it inverted
+    assert trial.read_line_masks([other]) == 0
+    code = trial.line_code
+    monkeypatch.setattr(trial, "line_code", lambda: "another")
+    assert trial.read_line_masks(sheets) == 0
+    # a file whose label is not the sheet's (a clash of names) is not read
+    monkeypatch.setattr(trial, "line_code", code)
+    f, label = trial._line_file(sheets[1])
+    with open(f, "wb") as out:
+        np.savez(out, bits=np.packbits(fresh[1], axis=1), label=np.array(label + "x"))
+    assert trial.read_line_masks([sheets[1]]) == 0
+
+
 def test_a_prefetched_trial_keeps_the_plain_runs_minutes_beside_its_own(built, monkeypatch):
     monkeypatch.setattr(scores, "_LINE_INK", {})
     plain = TINY
@@ -1303,6 +1334,35 @@ def test_a_trial_on_some_maps_has_its_own_folder_and_is_scored_on_whole_test_dra
                                 for sd in sheets}, "whole", sheets)
     assert res["test_scores"] == want == json.loads((folder / trial.TEST_FILE).read_text())
     assert "test" in json.loads((folder / "minutes.json").read_text())["plain"]
+
+
+def test_batches_go_to_the_gpu_without_waiting_and_are_held_until_their_copy_is_done():
+    events = []
+
+    class Event:
+        def __init__(self):
+            self.n, self.synced = len(events), False
+            events.append(self)
+
+        def record(self):
+            pass
+
+        def synchronize(self):
+            self.synced = True
+
+    copies = train.Copies("cpu", event=Event)
+    batches = [(torch.full((2,), float(i)),) for i in range(5)]
+    for i, b in enumerate(batches):
+        out = copies(b)
+        assert torch.equal(out[0], b[0])
+        # each batch held, with its event, until HELD steps later: then its event is waited for and it is let go
+        assert [e.synced for e in events] == [j < i + 1 - train.HELD for j in range(i + 1)]
+        assert [h[0] for h in copies.held] == batches[max(0, i + 1 - train.HELD):i + 1]
+    copies.close()
+    assert all(e.synced for e in events) and not copies.held
+    # on the CPU no event is made and nothing held: the batch is its own copy
+    plain = train.Copies("cpu")
+    assert plain.event is None and plain(batches[0])[0] is batches[0][0] and not plain.held
 
 
 def test_the_trial_command_reads_its_recipes_and_runs_them_together(monkeypatch):

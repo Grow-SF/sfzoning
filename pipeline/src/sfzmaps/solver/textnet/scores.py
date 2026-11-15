@@ -119,13 +119,18 @@ def long_lines(ink: np.ndarray, ft_per_px: float) -> np.ndarray:
     return ink & is_long[nearest] & (piece_of[nearest] == piece)
 
 
+def line_key(sd: data.SheetData) -> tuple:
+    """What a sheet's long-line ink is kept under (`line_ink`): the sheet's name and shape, its scale, a digest of its
+    ink and the two constants."""
+    digest = hashlib.blake2b(sd.ink_bits.tobytes(), digest_size=16).hexdigest()
+    return (sd.series, sd.sheet, sd.height, sd.width, sd.ft_per_px, digest, LONG_LINE_FT, THIN_LINE_FT)
+
+
 def line_ink(sd: data.SheetData) -> np.ndarray:
     """A sheet's whole page of long-line ink (bool, `long_lines` of its ink at its scale), found once per process: the
-    answer is kept (as packed bits) under the sheet's name and shape, its scale, a digest of its ink and the two
-    constants, so scoring several detectors' chances in one process finds the lines once, and another page under the
-    same name is never given this one's."""
-    digest = hashlib.blake2b(sd.ink_bits.tobytes(), digest_size=16).hexdigest()
-    key = (sd.series, sd.sheet, sd.height, sd.width, sd.ft_per_px, digest, LONG_LINE_FT, THIN_LINE_FT)
+    answer is kept (as packed bits) under `line_key`, so scoring several detectors' chances in one process finds the
+    lines once, and another page under the same name is never given this one's."""
+    key = line_key(sd)
     if key not in _LINE_INK:
         _LINE_INK[key] = np.packbits(long_lines(data.page_ink(sd), sd.ft_per_px), axis=1)
     return np.unpackbits(_LINE_INK[key], axis=1, count=sd.width).view(bool)
