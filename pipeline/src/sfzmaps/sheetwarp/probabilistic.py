@@ -10,9 +10,11 @@ a smooth displacement field (a grid every 50 px, bilinear) that makes all of it 
 keeping each grid point's correction near zero where no printed line is near, a prior on how much the field may
 stretch and shear (the spread of today's own placement), and a steep penalty where it would fold the scan over.  The
 spread s starts at half a street width and halves each stage; after each stage eps and sigma (the printed lines' own
-spread) are re-estimated from the points; the last stage is at s = sigma.
+spread) are re-estimated from the points; the last stage is at s = sigma.  A stage stops when its loss has settled
+(`StopWhenSettled`), after 800 steps at most.
 Points with weights (street edges and later blocks) each count by their weight; only the block sides (kind 0)
-measure how well the print is fitted."""
+measure how well the print is fitted.
+The fit runs on `device.fit_device()`: the Mac's GPU when there is one, else the CPU."""
 import json
 import logging
 import time
@@ -21,7 +23,6 @@ from dataclasses import dataclass
 import numpy as np
 import shapely
 from scipy import ndimage
-from scipy.ndimage import gaussian_filter
 from scipy.spatial import cKDTree
 from skimage.morphology import skeletonize
 
@@ -32,8 +33,27 @@ from sfzmaps.transform import Correction
 
 log = logging.getLogger(__name__)
 
-ITERS = 800                        # optimiser steps per stage
+ITERS = 800                        # optimiser steps per stage, at most
 GRID_SPACING = 50
+SETTLE_STEPS = 25                  # a stage has settled when its loss fell by SETTLE_FALL of itself or less over
+SETTLE_FALL = 1e-4                 # the last SETTLE_STEPS steps, once it has taken SETTLE_MIN_STEPS
+SETTLE_MIN_STEPS = 50
+
+
+class StopWhenSettled:
+    """A stage's stop rule.  Every SETTLE_STEPS steps it reads the loss (so the GPU is waited for only then) and
+    compares it with the loss SETTLE_STEPS steps before; from SETTLE_MIN_STEPS steps on, the stage has settled once
+    the loss fell by no more than SETTLE_FALL of its size over those steps (or rose)."""
+
+    def __init__(self):
+        self.loss_before = None
+
+    def settled(self, steps: int, loss) -> bool:
+        """`loss` (a float or a 0-d tensor) after `steps` optimiser steps of the stage"""
+        if steps % SETTLE_STEPS:
+            return False
+        before, self.loss_before = self.loss_before, float(loss)
+        return steps >= SETTLE_MIN_STEPS and before - self.loss_before <= SETTLE_FALL * abs(self.loss_before)
 
 
 @dataclass
@@ -127,11 +147,15 @@ def block_line_weights(sheet: Sheet, targets: Targets) -> np.ndarray:
 
 
 def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weights: np.ndarray) -> Correction:
-    """The displacement field that makes every point and control point together most probable (PyTorch)."""
+    """The displacement field that makes every point and control point together most probable (PyTorch, on
+    `fit_device()`; the grid comes back as float32 on the CPU)."""
     import torch
-    import torch.nn.functional as F
 
-    torch.set_num_threads(3)           # fixed: the same threads every run
+    from sfzmaps.sheetwarp.device import MapSampler, PointField, blur, fit_device
+
+    device = fit_device()
+    if device.type == "cpu":
+        torch.set_num_threads(3)       # fixed: the same threads every run
     T8 = targets.maps
     B, h, w = T8.shape
     Pp, PB, SW = inputs.P.astype(np.float32), inputs.bin, float(inputs.street_px)
@@ -143,30 +167,14 @@ def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weig
     # is fitted
     WPT = torch.from_numpy(inputs.wt.astype(np.float32)) if inputs.wt is not None else torch.ones(N)
     NOBS = float(WPT.sum()) + NG
+    WPT = WPT.to(device)
     BASE = (inputs.kind == 0) if inputs.kind is not None else np.ones(N, bool)
     DMAX = float(T8.max())
     SP = GRID_SPACING
     gh, gw = int(np.ceil((h - 1) / SP)) + 1, int(np.ceil((w - 1) / SP)) + 1
-    ext = torch.tensor([(gw - 1) * SP, (gh - 1) * SP], dtype=torch.float32)
-    groups = [torch.as_tensor(np.flatnonzero(PB == b)) for b in range(B)]
-
-    def gp(xy):
-        xy = torch.as_tensor(xy)
-        return torch.stack([xy[:, 0] / ext[0] * 2 - 1, xy[:, 1] / ext[1] * 2 - 1], -1)[None, None]
-
-    def field(G, g):
-        return F.grid_sample(G, g, mode="bilinear", padding_mode="border", align_corners=True)[0, :, 0, :].T
-
-    def sample(xy, maps1):
-        """each point's value on the density map of its direction (B, 1, h, w); differentiable in xy"""
-        g = torch.stack([xy[:, 0] / (w - 1) * 2 - 1, xy[:, 1] / (h - 1) * 2 - 1], -1)
-        vals, idx = [], []
-        for b, ii in enumerate(groups):
-            if len(ii):
-                vals.append(F.grid_sample(maps1[b:b + 1], g[ii][None, None], mode="bilinear", padding_mode="zeros",
-                                          align_corners=True)[0, 0, 0, :])
-                idx.append(ii)
-        return torch.zeros(xy.shape[0]).index_copy(0, torch.cat(idx), torch.cat(vals))
+    field_at_points = PointField(Pp, (gh, gw), SP, device)
+    field_at_control_points = PointField(GB_, (gh, gw), SP, device)
+    on_maps = MapSampler(PB, h, w, device)     # each point's value on the density map of its direction
 
     def jdet(G):
         """determinant of the map p -> p + u(p) on each grid cell (forward differences averaged over the cell's
@@ -217,13 +225,28 @@ def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weig
     log.info("control points %d: today eps %.3f, sigma %.2f px", NG, geps, gsig)
     log.info("points %d; street width %.1f px; grid %d px; start (today): eps %.2f, sigma %.2f px; within 1/2/4 px "
              "%.1f%% %.1f%% %.1f%%", N, SW, SP, eps, sig, *(100 * a for a in share(Pp)))
-    cent = weights
     TAU_J = float(inputs.tau_j)         # how much today's placement stretches and shears across the sheet
-    G = torch.zeros(1, 2, gh, gw, requires_grad=True)
-    gP = gp(Pp)
-    gG = gp(GB_)
-    GBt, GXt = torch.from_numpy(GB_), torch.from_numpy(GX_)
-    Pt = torch.from_numpy(Pp)
+    G = torch.zeros(1, 2, gh, gw, device=device, requires_grad=True)
+    GBt, GXt = torch.from_numpy(GB_).to(device), torch.from_numpy(GX_).to(device)
+    Pt = torch.from_numpy(Pp).to(device)
+    weights_on_device = torch.from_numpy(np.ascontiguousarray(weights)).to(device)    # uploaded once; each stage blurs
+
+    def loss(G, maps, s):
+        v = on_maps.sample(maps, Pt + field_at_points.field(G))
+        nll = -torch.log((1 - eps) * torch.clamp(v, min=0) + eps / DMAX)
+        rg = torch.sum((GBt + field_at_control_points.field(G) - GXt) ** 2, dim=1)
+        nllg = -torch.log((1 - geps) * torch.exp(-rg / (2 * gsig * gsig)) / (2 * np.pi * gsig * gsig) + geps / AREA)
+        data = (torch.sum(nll * WPT) + torch.sum(nllg)) / NOBS * 2 * s * s
+        prior = torch.sum(G ** 2) / (2 * TAU * TAU) / NOBS * 2 * s * s
+        fold = torch.sum(torch.relu(-jdet(G)) ** 2) * 1e6
+        ux_x = (G[0, 0, :, 1:] - G[0, 0, :, :-1]) / SP
+        uy_x = (G[0, 1, :, 1:] - G[0, 1, :, :-1]) / SP
+        ux_y = (G[0, 0, 1:, :] - G[0, 0, :-1, :]) / SP
+        uy_y = (G[0, 1, 1:, :] - G[0, 1, :-1, :]) / SP
+        shape = (torch.sum(ux_x ** 2) + torch.sum(uy_x ** 2) + torch.sum(ux_y ** 2) + torch.sum(uy_y ** 2)) / (2 * TAU_J ** 2) / NOBS * 2 * s * s
+        return data + prior + shape + fold
+
+    log.info("fitting on %s", device)
     t0 = time.time()
     s = SW / 2          # the two printed edges of a street (one street width apart) stay two ridges, not one
     stage = 0
@@ -231,42 +254,33 @@ def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weig
         last = s <= sig
         if last:
             s = sig
-        maps = np.zeros((B, 1, h, w), np.float32)
-        for b in range(B):
-            maps[b, 0] = gaussian_filter(np.asarray(cent[b], np.float32), s)   # summed 2-D Gaussians: along a line, N(d; 0, s)
-        maps = torch.from_numpy(maps)
+        maps = blur(weights_on_device, s, device)       # summed 2-D Gaussians: along a line, N(d; 0, s)
         opt = torch.optim.Adam([G], lr=0.25)
-        for it in range(ITERS):
+        stop = StopWhenSettled()
+        steps = 0
+        while steps < ITERS:
             opt.zero_grad()
-            v = sample(Pt + field(G, gP), maps)
-            nll = -torch.log((1 - eps) * torch.clamp(v, min=0) + eps / DMAX)
-            rg = torch.sum((GBt + field(G, gG) - GXt) ** 2, dim=1)
-            nllg = -torch.log((1 - geps) * torch.exp(-rg / (2 * gsig * gsig)) / (2 * np.pi * gsig * gsig) + geps / AREA)
-            data = (torch.sum(nll * WPT) + torch.sum(nllg)) / NOBS * 2 * s * s
-            prior = torch.sum(G ** 2) / (2 * TAU * TAU) / NOBS * 2 * s * s
-            fold = torch.sum(torch.relu(-jdet(G)) ** 2) * 1e6
-            ux_x = (G[0, 0, :, 1:] - G[0, 0, :, :-1]) / SP
-            uy_x = (G[0, 1, :, 1:] - G[0, 1, :, :-1]) / SP
-            ux_y = (G[0, 0, 1:, :] - G[0, 0, :-1, :]) / SP
-            uy_y = (G[0, 1, 1:, :] - G[0, 1, :-1, :]) / SP
-            shape = (torch.sum(ux_x ** 2) + torch.sum(uy_x ** 2) + torch.sum(ux_y ** 2) + torch.sum(uy_y ** 2)) / (2 * TAU_J ** 2) / NOBS * 2 * s * s
-            (data + prior + shape + fold).backward()
+            stage_loss = loss(G, maps, s)
+            if stop.settled(steps, stage_loss.detach()):
+                break
+            stage_loss.backward()
             opt.step()
+            steps += 1
         del maps
         with torch.no_grad():
-            u = field(G, gP).numpy()
+            u = field_at_points.field(G).cpu().numpy()
             umax = float(torch.linalg.norm(G[0], dim=0).max())
             dmin = float(jdet(G).min())
-            ug = field(G, gG).numpy()
+            ug = field_at_control_points.field(G).cpu().numpy()
         eps, sig = em(nearest_d((Pp + u)[BASE], BASE), eps, sig)
         a1, a2, a4 = share(Pp + u)
-        log.info("  stage %d: s %.2f px; within 1/2/4 px %.1f%% %.1f%% %.1f%%; eps %.2f, sigma %.2f px; control points "
-                 "off p99 %.1f px; moved p50 %.1f p90 %.1f px, biggest correction %.1f px; smallest cell determinant "
-                 "%.2f; %.0fs", stage, s, 100 * a1, 100 * a2, 100 * a4, eps, sig,
+        log.info("  stage %d: s %.2f px; steps %d; within 1/2/4 px %.1f%% %.1f%% %.1f%%; eps %.2f, sigma %.2f px; "
+                 "control points off p99 %.1f px; moved p50 %.1f p90 %.1f px, biggest correction %.1f px; smallest "
+                 "cell determinant %.2f; %.0fs", stage, s, steps, 100 * a1, 100 * a2, 100 * a4, eps, sig,
                  np.percentile(np.linalg.norm(GB_ + ug - GX_, axis=1), 99), np.median(np.linalg.norm(u, axis=1)),
                  np.percentile(np.linalg.norm(u, axis=1), 90), umax, dmin, time.time() - t0)
         stage += 1
         if last:
             break
         s = s / 2
-    return Correction(grid=G.detach().numpy()[0], spacing=SP, origin=np.array([x0, y0]))
+    return Correction(grid=G.detach().cpu().numpy()[0], spacing=SP, origin=np.array([x0, y0]))

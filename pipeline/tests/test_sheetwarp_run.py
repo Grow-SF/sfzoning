@@ -218,7 +218,8 @@ def test_the_code_the_warp_runs_is_pinned():
     assert [p.relative_to(root).as_posix() for p in run.warp_code_files()] == [
         "__init__.py", "config.py", "districts/__init__.py", "districts/lots.py", "districts/read.py",
         "districts/series.py", "inputs.py", "linework.py", "pages.py", "reading.py",
-        "sheetwarp/__init__.py", "sheetwarp/apply.py", "sheetwarp/first.py", "sheetwarp/probabilistic.py",
+        "sheetwarp/__init__.py", "sheetwarp/apply.py", "sheetwarp/device.py", "sheetwarp/first.py",
+        "sheetwarp/probabilistic.py",
         "sheetwarp/run.py", "sheetwarp/scores.py", "sheetwarp/sheet.py",
         "sheetwarp/street_edges_and_later_blocks.py", "sheetwarp/targets.py", "transform.py", "warp.py"]
 

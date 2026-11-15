@@ -202,15 +202,18 @@ def first_correction(sheet: Sheet, sides: SidePoints, targets: Targets, held: np
       smooth         keep neighbouring grid points' corrections close
       no spikes      no grid point's correction more than twice its neighbours' average (weight 1000)
     Every term is a mean over its points (smooth and no spikes: per free point), so each weighs the same on every
-    sheet."""
+    sheet.  Fitted with PyTorch on `fit_device()`; the grid comes back as float32 on the CPU."""
     import torch
-    import torch.nn.functional as F
+
+    from sfzmaps.sheetwarp.device import PointField, fit_device
 
     shifts = propagated_shifts(sheet, sides, targets, held)
     C = _inputs(sheet, sides, targets, held)
     if not len(C.held_line):          # the mean of an empty term is NaN: the whole fit would be NaN
         raise NothingToFit(f"{sheet.series}/{sheet.name}: no held block-side points on the crop for the first correction")
-    torch.set_num_threads(8)
+    device = fit_device()
+    if device.type == "cpu":
+        torch.set_num_threads(8)
     Hp, HN, HC = C.held_line, C.held_n, C.held_cp
     Fp, FN, FO = shifts.free, shifts.free_n, shifts.free_off
     CR, CS = C.corner_rec, C.corner_scan
@@ -218,27 +221,20 @@ def first_correction(sheet: Sheet, sides: SidePoints, targets: Targets, held: np
     B, h, w = targets.maps.shape
     SP = GRID_SPACING
     gh, gw = int(np.ceil((h - 1) / SP)) + 1, int(np.ceil((w - 1) / SP)) + 1
-    ext = torch.tensor([(gw - 1) * SP, (gh - 1) * SP], dtype=torch.float32)
-
-    def gp(xy):
-        xy = torch.as_tensor(xy)
-        return torch.stack([xy[:, 0] / ext[0] * 2 - 1, xy[:, 1] / ext[1] * 2 - 1], -1)[None, None]
-
-    def field(G, g):
-        return F.grid_sample(G, g, mode="bilinear", padding_mode="border", align_corners=True)[0, :, 0, :].T
-
-    CRt, CSt, HNt, FNt, FOt = (torch.tensor(a) for a in (CR, CS, HN, FN, FO))
-    gF, gH, gC, gK = gp(Fp), gp(Hp), gp(CR), gp(HC)
-    G = torch.zeros(1, 2, gh, gw, requires_grad=True)
+    field_at_free, field_at_held = PointField(Fp, (gh, gw), SP, device), PointField(Hp, (gh, gw), SP, device)
+    field_at_corners, field_at_held_cp = PointField(CR, (gh, gw), SP, device), PointField(HC, (gh, gw), SP, device)
+    CRt, CSt, HNt, FNt, FOt = (torch.tensor(a).to(device) for a in (CR, CS, HN, FN, FO))
+    G = torch.zeros(1, 2, gh, gw, device=device, requires_grad=True)
     t0 = time.time()
     opt = torch.optim.Adam([G], lr=0.25)
     for it in range(1500):
         opt.zero_grad()
-        data = torch.mean((torch.sum(field(G, gF) * FNt, dim=1) - FOt) ** 2)
-        dc = torch.linalg.norm(CRt + field(G, gC) - CSt, dim=1) if len(CR) else torch.zeros(1)
+        data = torch.mean((torch.sum(field_at_free.field(G) * FNt, dim=1) - FOt) ** 2)
+        dc = (torch.linalg.norm(CRt + field_at_corners.field(G) - CSt, dim=1) if len(CR)
+              else torch.zeros(1, device=device))
         cor = torch.mean(CAP * CAP * dc * dc / (dc * dc + CAP * CAP)) / (CAP * CAP)
-        held_term = torch.mean(torch.sum(field(G, gH) * HNt, dim=1) ** 2)
-        heldcp = torch.mean(torch.sum(field(G, gK) ** 2, dim=1))
+        held_term = torch.mean(torch.sum(field_at_held.field(G) * HNt, dim=1) ** 2)
+        heldcp = torch.mean(torch.sum(field_at_held_cp.field(G) ** 2, dim=1))
         smooth = (torch.sum((G[:, :, 1:, :] - G[:, :, :-1, :]) ** 2)
                   + torch.sum((G[:, :, :, 1:] - G[:, :, :, :-1]) ** 2)) / len(Fp)
         mag = torch.sqrt(torch.sum(G[0] ** 2, dim=0) + 1e-6)
@@ -247,11 +243,11 @@ def first_correction(sheet: Sheet, sides: SidePoints, targets: Targets, held: np
         (data + cor + HOLD * held_term + HOLD_CP * heldcp + smooth + RIP * rip).backward()
         opt.step()
     with torch.no_grad():
-        uh = field(G, gH).numpy()
+        uh = field_at_held.field(G).cpu().numpy()
         umax = float(torch.linalg.norm(G[0], dim=0).max())
     hm = np.abs(np.sum(uh * HN, axis=1))
-    log.info("%s/%s: first correction: free side points %d, thrown-out corners %d, held side points %d, held "
+    log.info("%s/%s: first correction (on %s): free side points %d, thrown-out corners %d, held side points %d, held "
              "control points %d; biggest correction %.1f px; held sides moved across their line px p99 %.2f; %.0fs",
-             sheet.series, sheet.name, len(Fp), len(CR), len(Hp), len(HC), umax, np.percentile(hm, 99),
+             sheet.series, sheet.name, device, len(Fp), len(CR), len(Hp), len(HC), umax, np.percentile(hm, 99),
              time.time() - t0)
-    return Correction(grid=G.detach().numpy()[0], spacing=SP, origin=np.array([x0, y0], float))
+    return Correction(grid=G.detach().cpu().numpy()[0], spacing=SP, origin=np.array([x0, y0], float))

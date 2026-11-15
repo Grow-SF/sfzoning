@@ -2,10 +2,15 @@ from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import torch
 
 from sfzmaps.sheetwarp import first
 from sfzmaps.sheetwarp.sheet import NothingToFit
 from sfzmaps.sheetwarp.targets import SidePoints, Targets
+
+# the CPU everywhere (CI's path); the Mac's GPU too where there is one
+DEVICES = ["cpu", pytest.param("mps", marks=pytest.mark.skipif(not torch.backends.mps.is_available(),
+                                                                reason="no GPU (mps) here"))]
 
 
 def _sides(n_points, sid):
@@ -60,6 +65,16 @@ def test_the_first_correction_with_no_held_control_points_is_still_finite(monkey
     # the empty mean's NaN loss has an empty gradient into the grid, so the grid stays finite
     correction = _run_first_correction(monkeypatch, 3, 0)
     assert np.isfinite(correction.grid).all()
+
+
+@pytest.mark.parametrize("device", DEVICES)
+def test_the_first_correction_repeats_bit_for_bit(device, monkeypatch):
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", device)
+    # thousands of held points on the same 4 grid nodes: added up in any other order, their pull changes in the bits
+    first_run = _run_first_correction(monkeypatch, 5000, 3)
+    second_run = _run_first_correction(monkeypatch, 5000, 3)
+    assert isinstance(first_run.grid, np.ndarray) and first_run.grid.dtype == np.float32
+    assert np.array_equal(first_run.grid, second_run.grid)
 
 
 def test_held_sides_leaves_out_points_near_a_sides_ends():
