@@ -453,11 +453,12 @@ dependencies are the source files in the import closure of its `code` modules, `
 `reads`; it recomputes its whole output when any of them changes, and needs no `prepare()`. Of a checked-in inputs
 folder a stage reads only the file it uses, so a README or `PROVENANCE.md` reruns nothing, and
 `table-corrections.csv` (read only in scoring) reruns only the solve. A stage's code deps leave out the modules of its
-`cut` (`build.OUTPUT_NEUTRAL`: `sfzmaps.gpu`, whose turns decide when a stage computes on the GPU, never what), and
-the two package `__init__.py` files are one line each, so an edit to the GPU's turns or to the module list below
-reruns nothing. Outputs go under `data/solver/`: `sfzmaps.solver.paths` names where the earlier stages and the text
-detector read and write, and `sfzmaps.solver.runs` the walls' and the solve's folders, so a change to the latter
-reruns neither the detector nor the stages before it.
+`cut` (`build.OUTPUT_NEUTRAL`: `sfzmaps.gpu`, whose turns decide when a stage computes on the GPU, never what; the
+text detector's two stages also cut `sfzmaps.solver.runs`, of which they take only the folder swap that puts their
+outputs in place), and the two package `__init__.py` files are one line each, so an edit to the GPU's turns or to the
+module list below reruns nothing. Outputs go under `data/solver/`: `sfzmaps.solver.paths` names where the earlier
+stages and the text detector read and write, and `sfzmaps.solver.runs` the walls' and the solve's folders, so a
+change to the latter reruns neither the detector nor the stages before it.
 
 The modules (`src/sfzmaps/solver/`):
 
@@ -468,12 +469,12 @@ The modules (`src/sfzmaps/solver/`):
 - `table`, `lots`: the April 2000 table and its lots on the grid (`sfzmaps solver lots`);
 - `saved`, `prints`: the saved vision answers, read by file, sheet or cache key (nothing asks a model), and every
   printed zoning code with its saved reads (`sfzmaps solver prints`);
-- `textnet/`: the text detector (`data`, `model`, `train`, `predict`, `stage`: `sfzmaps solver text Q`) and its
-  scores (`evaluate`: `sfzmaps solver text-scores`; `scores`: the one measure on the validation area and the test
-  drawings, which replaces it);
+- `textnet/`: the text detector (`boxes`, `data`, `model`, `train`, `predict`, `stage`: `sfzmaps solver text`), its
+  scores (`scores`: the one measure on the validation area and the test drawings; `score_stage`:
+  `sfzmaps solver text-scores`) and its trials (`trial`: `sfzmaps solver text-trial`);
 - `labels_stage` with `trust`, `streetside`, `lotsize`, `strokes`: what the solver knows about the labels and the ink
   (`sfzmaps solver labels`);
-- `textgrid`, `wallevidence`, `walls`: the detectors' chance of text on the grid, out of fold, and the wall odds
+- `textgrid`, `wallevidence`, `walls`: the detector's chance of text on the grid, and the wall odds
   between neighbouring lots (`sfzmaps solver walls`);
 - `city`, `labels`, `placement`, `energy`, `search`, `solve`: the city as the solve reads it, each quarter's readings
   of the labels, where each label belongs (`sfzmaps solver placement`), the energy over every lot's code, its
@@ -516,9 +517,10 @@ The same inputs give the same bytes; `sfzmaps.solver.lots.load_lots()` reads it 
 
 **The prints** (`sfzmaps solver prints`, stage `solver-prints`, after `solver-lots`) are the zoning codes printed on
 the sheets, each with every saved read of it. Nothing asks a model: every answer comes from `saved-reads/answers/`
-(`sfzmaps.solver.saved`). Terra's text boxes (`text-on-every-sheet`) are decoded as the script that asked them did
-(each tile's items moved by its `page_box`; the copy farthest from its tile's edge kept, tiles taken row by row; a
-word inside a longer label that holds it dropped). A zoning-code box with Sol's label points (`district_labels.json`,
+(`sfzmaps.solver.saved`). Terra's text boxes (`text-on-every-sheet`) are decoded (`solver/textnet/boxes.py`, which
+the text detector reads them through too) as the script that asked them did (each tile's items moved by its
+`page_box`; the copy farthest from its tile's edge kept, tiles taken row by row; a word inside a longer label that
+holds it dropped). A zoning-code box with Sol's label points (`district_labels.json`,
 kind "use") inside it is a print read by both (kind 0; the point nearest the box's centre gives Sol's read, and all
 the points inside are used up), a box with none is Terra's alone (kind 1), and a point in no box is Sol's alone
 (kind 2). A print sits at its box's centre (or Sol's point), goes to the map through the sheet's corrected placement,
@@ -535,38 +537,75 @@ keys found the stage stops. It writes `data/solver/prints/prints.parquet` (one r
 in `solver/prints.py`), `terra_boxes.json` (every sheet's decoded Terra boxes, every kind, page px) and
 `summary.json` (prints by kind; keys asked, found and missing per read). The same inputs give the same bytes.
 
-**The text detector** (`sfzmaps solver text Q [--iterations N] [--device cpu|mps]`, stages `solver-text-nw`,
-`-ne`, `-sw` and `-se`, after `solver-prints`) scores every px of every sheet's page as printed text or not, so the
-walls can weigh ink by how likely it is to be a district line rather than lettering. It is a small U-Net
+**The text detector** scores every px of a sheet's page as printed text or not, so the walls can weigh ink by how
+likely it is to be a district line rather than lettering. It is one detector for both lettering styles: a small U-Net
 (`solver/textnet/`: width 24, 5 levels, 7 outputs: text, 4 kinds, the reading direction's cosine and sine) over the
-ink mask (`page.png` < 128) of each sheet's own page, unwarped. It learns only from Terra's boxes
-(`data/solver/prints/terra_boxes.json`, every kind, each drawn as the word's rotated rectangle in page px). Text Terra
-may have missed is taught neither way: the boxes of the other text passes
-(`saved-reads/answers/experiments-2000/text-positions/`) and 30-px discs at Sol's label points, outside every Terra
-box. Each quarter's model holds that quarter out: a page px's quarter is `grid.quarter_of` of its map point through
-the sheet's corrected placement (evaluated every 32 px, bilinear between); held-out px carry no loss and no crop
-centres on one. Training: 8,000 steps of 12 crops of 320 px (half centred on text, the rest on any ink; each scaled
-by 0.6–1.6 and turned by quarter turns, the reading angle with it); loss = text cross-entropy + 0.5 × kind
-cross-entropy + 0.5 × (1 − cosine) of the reading direction; AdamW at 2e-3 with a one-cycle schedule. Every draw comes
-from one seeded numpy generator and the weights from seeded torch, with deterministic algorithms on 4 threads. The
-model then scores every sheet's page in 1,024-px tiles seen with 64 px of context. A stage
-(`solver/textnet/stage.py`) makes its folder afresh and writes only `data/solver/text-<Q>/model.pt` (the weights,
-with the recipe that made them, the iterations, device and seed) and `chance/<sheet>.png` (uint8, the chance of text × 255, page px). Its code is
-the detector's alone: the lots, the table, the merged page, the scoring, the walls' and the solve's folders and the
-GPU's turns are not in it, so a change to them retrains nothing. Its reads are named file by file for each of the 13
-sheets of `paths.SHEETS` (a fixed list, so `dvc.yaml` is the same in a fresh clone before anything is pulled):
-`transform.json` and `correction.npz` in `data/warp/2000-digital-zoning/<sheet>/`, `page.png` and
-`district_labels.json` in `data/work/2000-digital-zoning/<sheet>/`; no other file there retrains it. Before reading
-them it checks that the warp placed exactly those sheets (`paths.check_sheets`).
+ink mask (`page.png` < 128) of each sheet's own page, unwarped.
 
-**The text scores** (`sfzmaps solver text-scores`, stage `solver-text-scores`, after the four text stages) score each
-quarter's model on the quarter it held out, from the chances it wrote (`solver/textnet/evaluate.py`), on the map only
-(inside the sheet's warped footprint: the legend, alike on every sheet, is left out). It reads the detector's files
-of each sheet and its `warped.footprint.geojson`, file by file, and the lots. It writes
-`data/solver/text-scores/evaluation_<Q>.json`: AUC and log loss of text ink against other ink, the share of text ink
-found, Terra's words found by kind, pieces of text found where Terra drew no box (listed for a look), and the share
-of ink on the table's district lines (borders between lots whose known codes differ, read on the grid, away from
-every box) called text.
+- **The maps.** It trains on six maps, every sheet Terra read of them (87 sheets): the 2000 drawing
+  (`2000-digital-zoning`) and its two earlier scans (`1980-1990-zoning`, `1990-1996-zoning`), in modern italic
+  lettering, and `1960` and `1964` / `1968` (one drawing), in an older serif. It is tested on whole drawings it never
+  saw: `1980` (a separate modern drawing, 32 sheets) and `1972` / `1975` (one older drawing, 30 sheets each). The maps
+  are `paths.TEXT_TRAIN_SERIES` and `TEXT_TEST_SERIES`, and their sheets `paths.TEXT_SHEETS`, fixed in code so
+  `dvc.yaml` is the same in a fresh clone before anything is pulled; reading them stops when the saved answers name
+  other sheets (`textnet.boxes.check_text_sheets`).
+- **What it learns.** Only where text is printed, from Terra's boxes (`saved-reads/answers/text-on-every-sheet`,
+  decoded by `solver/textnet/boxes.py`, every kind, each drawn as the word's rotated rectangle in page px); never the
+  zoning table. Text Terra may have missed is taught neither way: 30-px discs at Sol's label points
+  (`district_labels.json`) and, on the 2000 sheets, the boxes of the other text passes
+  (`saved-reads/answers/experiments-2000/text-positions/`), outside every Terra box. A sheet is kept compact
+  (`data.SheetData`: its ink as packed bits, its boxes and points as short arrays) and each crop's targets are drawn
+  for that crop alone, so 87 sheets of 17–35 Mpx never become page-sized target rasters.
+- **The validation area** (`data.VALIDATION_AREA`, a rectangle in map feet: the central strip through the Mission,
+  Noe Valley and Glen Park, about 10% of the area the training maps cover) is how a recipe is chosen without looking
+  at the test drawings. A page px is in it when its map point, through the sheet's corrected placement (evaluated
+  every 32 px, bilinear between), is; when held out, those px carry no loss (a crop centred outside may overlap them)
+  and no crop centres on one. It is held out on every training map at once, an area rather than some sheets, because
+  the 2000 drawing's three scans, and 1964 and 1968, are one drawing each: held-out sheets of one would be learned
+  from another. It is a dense area on purpose: an area of sparse, simple lettering can't tell recipes apart.
+  `scripts/choose_text_validation_area.py` re-derives the choice from the data.
+- **The recipe** (`train.Recipe`; the stage's is `stage.DEFAULT_RECIPE`): by default today's, 8,000 steps of 12
+  crops of 320 px (half centred on text, the rest on any ink; each scaled by 0.6–1.6 and turned by quarter turns, the
+  reading angle with it); loss = text cross-entropy + 0.5 × kind cross-entropy + 0.5 × (1 − cosine) of the reading
+  direction; AdamW at 2e-3 with a one-cycle schedule. Its options are the speed candidates: the steps and the
+  schedule, the loss on ink only (`ink_only`), the network at half size on the ink folded 2 × 2 (`half_size`), the
+  text output alone (`heads`), an average of the weights (`weight_average`), batches drawn ahead in a thread
+  (`prefetch`: the same batches, the same weights) and a lighter decoder. Every draw comes from one seeded numpy
+  generator and the weights from seeded torch, with deterministic algorithms on 4 threads.
+
+**The detector's stage** (`sfzmaps solver text [--device cpu|mps]`, stage `solver-text`, `solver/textnet/stage.py`)
+trains `DEFAULT_RECIPE` on all 87 training sheets with the validation area included (the recipe was already chosen
+with it held out), then scores every 2000 sheet's page (`paths.SHEETS`, the ones the walls read) in 1,024-px tiles
+seen with 64 px of context, training and scoring in one exclusive turn on the GPU. It writes only
+`data/solver/text/model.pt` (the weights, with the recipe that made them, the iterations, device and seed) and
+`chance/<sheet>.png` (uint8, the chance of text × 255, page px), built in a folder beside it and renamed into place.
+Its reads are named file by file: each training sheet's `page.png` and `district_labels.json` in
+`data/work/<series>/<sheet>/`, Terra's saved answers and the other passes' folder. Trained on every px, it needs no
+placement, so it reads none and no warp retrains it. Its code is the detector's alone: the lots, the table, the
+merged page, the scores, the trials, the walls' and the solve's folders and the GPU's turns are not in it.
+
+**The text scores** (`sfzmaps solver text-scores [--device cpu|mps]`, stage `solver-text-scores`, after `solver-text`
+and the test maps' warps; `solver/textnet/score_stage.py`) score the stage's `model.pt` on every px of every sheet of
+the test drawings (`textnet.scores.score_sheets`, "whole"), predicting them in one exclusive turn on the GPU. It
+writes `data/solver/text-scores/scores.json`, per map and over all, on the ink px (Sol's discs left out): AUC and log
+loss of text against other ink; the share of text ink called text (a chance of 0.5 or more); Terra's words found by
+kind (the mean chance over a word's ink at least 0.5); the share of the ink outside every box called text; and the
+share of the ink on long straight lines called text (strokes at least 200 ft long and at most 48 ft wide, in each
+sheet's own feet: a stand-in for district-line ink called text, which needs the zoning table). It reads the model and,
+of each test sheet, `page.png`, `district_labels.json`, `transform.json` and `correction.npz` (for the sheet's
+scale), file by file. Nothing in it is a time: the same chances give the same bytes.
+
+**Trying recipes** (`sfzmaps solver text-trial [--set NAME=VALUE ...] [--recipe "NAME=VALUE ..." ...] [--seed N]
+[--reuse] [--device cpu|mps]`, `solver/textnet/trial.py`) is how the recipe is chosen; it is no stage. `--set`
+(repeatable) makes one recipe from settings over today's, and each `--recipe` another (its settings apart by spaces;
+`default` for today's); with neither, today's. The training sheets are read once with the validation area held out;
+then each recipe in turn trains and predicts in its own exclusive GPU turn (only the tiles holding validation px) and
+is scored on the validation area (the long lines found once per sheet for all of them). Each writes
+`data/solver/experiments/text-<Recipe.name()>/` (`-seed=N` after it for a seed other than 0): `model.pt`,
+`recipe.json`, `scores.json` (the validation area's, as above) and `minutes.json` (load, train, predict, score).
+`Recipe.name()` lists the settings that differ from today's, sorted (`default` for none), without `prefetch`, which
+never changes the weights. `--reuse` scores the `model.pt` already in each recipe's folder (that recipe's and seed's)
+instead of training, keeping the training minutes its `minutes.json` had.
 
 The detector trains on `mps` where there is one (else `cpu`; `--device` overrides): two 200-step runs on `mps` gave
 bit-identical weights and predicted chance (max difference 0), at 0.39 s a step against 3.1 s on `cpu` (about 52 min
@@ -577,8 +616,8 @@ by up to 2.5 in a logit, training-mode batch norm by up to 3,000) and now and th
 work on `mps` takes a turn (`sfzmaps.gpu`, an `flock` on `/tmp/sfzmaps-mps.lock`, one file for the whole machine).
 macOS deletes files in `/tmp` that nobody has touched for 3 days, so every turn taken sets the file's times to now,
 and a turn whose file was deleted (and maybe made again by another process) while it waited is taken again on the
-file now at that path. A detector's stage trains and scores in one exclusive turn: nothing else computes on the GPU
-meanwhile. The sheet warp's fits (`sfzmaps warp`) take a shared turn: warps run beside each other, never beside a
+file now at that path. The detector's stage trains and scores in one exclusive turn, its scores stage and each
+trial's recipe predict in one: nothing else computes on the GPU meanwhile. The sheet warp's fits (`sfzmaps warp`) take a shared turn: warps run beside each other, never beside a
 detector. The tests hold a shared turn for their whole run, taken without waiting; while a detector has the GPU they
 never use it (the warp's fits run on the CPU and the tests marked `mps` are skipped). The loss stays on the device
 between progress lines (every 250 steps, so the GPU is not waited on each step); a mean loss there that is not finite
@@ -627,11 +666,11 @@ lot sizes and the strokes (`solver/labels_stage.py`). Nothing asks a model, and 
   `spur`, `dega`, `degb`). On the 2000 page: about 172,000 strokes and 3,240 miles, in about 25 s and 3 GB.
 
 **The walls** (`sfzmaps solver walls [--workers N] [--candidates A,B] [--evaluate A,B ...]`, stage `solver-walls`,
-after `solver-labels` and the four text stages; `solver/wallevidence.py` and `solver/walls.py`) give every pair of
+after `solver-labels` and `solver-text`; `solver/wallevidence.py` and `solver/walls.py`) give every pair of
 neighbouring lots (each row of `lots.npz` `pairs`) the log odds that a printed district line runs between them. The
 stage reads what they read: the merged page (with `frames.json`), the cut boxes, the lots, `strokes.npz`,
-`terra_boxes.json` and the warp's placements, and for the text discount the four detectors' `chance/` and the sheets'
-pages (`data/work/2000-digital-zoning`) they are read on.
+`terra_boxes.json` and the warp's placements, and for the text discount the detector's `chance/` and the sheets'
+pages (`data/work/2000-digital-zoning`) it is read on.
 Nothing in them decides: every measure is a feature, and one fit weighs them all. The ink is read through the raw
 page's strokes (`strokes.npz`; no cleaned page, no line chain). A pair's border px are both px of every 4-neighbour
 px pair where `grown` changes between its lots, and each feature is a mean over them; distances enter as hat
@@ -680,9 +719,9 @@ with `--walls DIR`, never over the stage's walls. `--evaluate A,B` (repeatable, 
 read the text detector's chance of text on the grid (`solver/textgrid.py`, computed afresh each time; a fit writes the
 one it fitted with to its folder's `text_chance.png`, never read back).
 Each sheet's chance is read through its corrected placement at the same page px as the merged page reads its ink
-(`page.sheet_px`, the same crop), from the detector that held out that page px (the quarter of its map point, as the
-detector's own held-out mask has it), so no px is scored by a model that learned from it; a grid px takes the
-largest chance among the sheets that inked it, 0 where none did. It needs all four quarters' detectors.
+(`page.sheet_px`, the same crop); a grid px takes the largest chance among the sheets that inked it, 0 where none did.
+The detector trained on all of every map, these sheets too: it learns only where text is printed, from Terra's boxes,
+never the table's codes, so it carries nothing of a held-out quarter's codes into the walls' fits.
 
 - `text_weighted`: the stroke evidence and the profile weigh each border px's nearest stroke px by (1 − its text
   chance), and read that chance where Terra's letter share was (the same 208 columns);
@@ -786,17 +825,16 @@ Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), 
 rebuild from a clone. Push the branch first; it clones `origin`'s copy of it into `data/fresh-clone/` (git-ignored; the
 folder must be empty), runs `pixi install`, `uv sync --frozen` and `sfzmaps pull`, builds
 `warp-2000-digital-zoning` if the pull did not bring it, then runs each stage (default `solver-page solver-lots
-solver-prints solver-text-nw solver-labels solver-walls solver-solve`) and compares its outputs with this checkout's
+solver-prints solver-text solver-labels solver-walls solver-solve`) and compares its outputs with this checkout's
 (`scripts/compare_outputs.py`, tested in `tests/test_compare_outputs.py`). Each stage is held to its own epsilon on the
 same upstream outputs, not chained end to end: after each stage is compared (or fails), its outputs in the clone are
 replaced by this checkout's (`compare_outputs.py --use-reference`), so the next stage runs on exactly the inputs this
 checkout's run of it had, and the summary says so. The warp, page, lots, prints, labels, walls and solve must be
-byte-identical (an `.npz` by its arrays, a `.parquet` by its table); a text stage's `chance/*.png` may differ by 0.01 × 255
-(2 counts) and its `.json` numbers by 1%, and `model.pt` is not compared; `solver-text-scores` numbers match within
-1%. Only `nw` is retrained (it trains on the GPU, so run the check when the GPU is free); `text-ne`, `-sw` and `-se`
-are copied from this checkout before the walls, which read all four. It runs each stage with `sfzmaps stage`, not
+byte-identical (an `.npz` by its arrays, a `.parquet` by its table); the detector's `chance/*.png` may differ by
+0.01 × 255 (2 counts), and `model.pt` is not compared; `solver-text-scores` numbers match within 1%. The detector
+trains on the GPU, so run the check when the GPU is free. It runs each stage with `sfzmaps stage`, not
 `sfzmaps build --force`: a build also plans every stale upstream stage, and until `sfzmaps ship` has recorded the
-solver stages in `dvc.lock` that would retrain the other three quarters. It prints a table (identical, within
+solver stages in `dvc.lock` that would run every stage above the one named. It prints a table (identical, within
 epsilon, differs, with the first differences) and exits 1 if any stage differs. CI doesn't run it.
 
 ## Where outputs land
