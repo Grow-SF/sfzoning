@@ -53,6 +53,8 @@ PAID_READ_EXIT = 75
 # How `build --system-tools` reaches its stages' commands (`sfzmaps warp` checks its tools too). Same value as
 # cli.SYSTEM_TOOLS_ENV (a test keeps them equal).
 SYSTEM_TOOLS_ENV = "SFZMAPS_SYSTEM_TOOLS"
+# How `build --jobs` reaches a stage's process: the warp stages a build runs at once share config.WARP_WORKERS.
+BUILD_JOBS_ENV = "SFZMAPS_BUILD_JOBS"
 
 
 @dataclass(frozen=True)
@@ -253,6 +255,12 @@ def _sfzmaps_exe() -> list[str]:
     return [str(exe)] if exe.exists() else [sys.executable, "-m", "sfzmaps.cli"]
 
 
+def warp_workers(build_jobs: int) -> int:
+    """The sheets one warp stage fits at once when a build runs `build_jobs` stages at once: config.WARP_WORKERS
+    shared between them, at least one each."""
+    return max(1, config.WARP_WORKERS // max(1, build_jobs))
+
+
 def run_stage(name: str, run: Callable[[list[str], dict], tuple[int, str]] | None = None) -> None:
     """Run one stage's commands in order, at $0 (SFZMAPS_MAX_USD=0). StageFailed when a command
     fails, any sheet of the stage is in error afterwards (run keeps going past a failing sheet
@@ -280,6 +288,8 @@ def run_stage(name: str, run: Callable[[list[str], dict], tuple[int, str]] | Non
 
     run = run or default_run
     for argv in stage_commands(name):
+        if argv[0] == "warp":
+            argv = [*argv, "--jobs", str(warp_workers(int(os.environ.get(BUILD_JOBS_ENV) or 1)))]
         code, err = run(argv, env)
         what = "sfzmaps " + " ".join(argv)
         if code == PAID_READ_EXIT:
@@ -479,7 +489,8 @@ def build(targets: list[str] | None, jobs: int, dry_run: bool, force: bool,
 
         def one(name: str) -> None:
             env = {**os.environ, fresh.CHANGED_DEPS_ENV: json.dumps(changed.get(name, [])),
-                   SYSTEM_TOOLS_ENV: "1" if system_tools else "0"}
+                   SYSTEM_TOOLS_ENV: "1" if system_tools else "0",
+                   BUILD_JOBS_ENV: str(jobs)}
             with open(logs / f"{name}.log", "w") as f:
                 p = subprocess.run(["uv", "run", "--frozen", "sfzmaps", "stage", name],
                                    cwd=config.PIPELINE_DIR, stdout=f, stderr=subprocess.STDOUT, env=env)

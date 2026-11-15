@@ -123,11 +123,12 @@ def _placement_check(sheet: Sheet) -> dict:
 
 
 def correct_sheet(series: str, name: str, force: bool = False) -> str:
-    """Fit, choose and warp one sheet into OUT/series/name.  "skipped" when every output is there and its inputs
-    (`_freshness_inputs`) and `numeric_versions` are as they were when it was last done."""
+    """Fit, choose and warp one sheet into OUT/series/name.  "skipped" when every output is there and its
+    inputs (`_freshness_inputs`) and `numeric_versions` are as they were when it was last done."""
     sheet = Sheet(series, name)
     out = OUT / series / name
-    placement, read, versions = out / "transform.json", _freshness_inputs(sheet), numeric_versions()
+    placement = out / "transform.json"
+    read, versions = _freshness_inputs(sheet), numeric_versions()
     if _outputs_complete(out) and fresh.is_fresh(placement, read, force, versions):
         return "skipped"
     placement.unlink(missing_ok=True)               # written last: a sheet cut short is redone
@@ -158,7 +159,7 @@ def _log_to_stderr(level: int) -> None:
     logging.basicConfig(level=level, format="%(message)s")
 
 
-def correct_series(series: str, jobs: int = 6, force: bool = False) -> dict[str, str]:
+def correct_series(series: str, jobs: int = config.WARP_WORKERS, force: bool = False) -> dict[str, str]:
     """Every placed sheet of the series, `jobs` at a time in worker processes (each fit sets its own thread count);
     name -> result.  Raises after every sheet has finished if any raised, naming them."""
     names = placed_sheets(series)
