@@ -18,8 +18,9 @@ from sfzmaps.sheetwarp.targets import Targets, ink_centres
 from sfzmaps.transform import Correction
 
 # the CPU everywhere (CI's path); the Mac's GPU too where there is one
-DEVICES = ["cpu", pytest.param("mps", marks=pytest.mark.skipif(not torch.backends.mps.is_available(),
-                                                                reason="no GPU (mps) here"))]
+DEVICES = ["cpu", pytest.param("mps", marks=[pytest.mark.mps,
+                                              pytest.mark.skipif(not torch.backends.mps.is_available(),
+                                                                 reason="no GPU (mps) here")])]
 OFF_THE_PRINT = 1.5          # px: how far today's placement puts the synthetic sheet's block sides off their lines
 
 
@@ -235,6 +236,7 @@ def test_the_observation_count_does_not_depend_on_torch_s_threads():
     assert probabilistic.observation_count(None, 1000, 4) == 1004
 
 
+@pytest.mark.mps
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="no GPU (mps) here")
 def test_a_fit_gives_back_the_gpu_memory_it_used(monkeypatch):
     monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "mps")

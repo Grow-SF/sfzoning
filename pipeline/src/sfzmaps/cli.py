@@ -794,12 +794,15 @@ def warp(
                                       help="Warp with tools that aren't from the pixi environment (not recommended)."),
 ) -> None:
     """Correct every placed sheet's placement and warp it, into data/warp/<series>/<sheet>/ (skips a sheet whose
-    inputs haven't changed). Run inside `pixi shell` so gdalwarp is the pinned one."""
+    inputs haven't changed). Run inside `pixi shell` so gdalwarp is the pinned one. On the Mac's GPU the fits take a
+    shared turn (`sfzmaps.gpu`): they wait while a text detector has the GPU."""
     import logging
 
     from sfzmaps import build as build_mod
+    from sfzmaps import gpu
     from sfzmaps.districts.series import SERIES
     from sfzmaps.sheetwarp import run as sheetwarp
+    from sfzmaps.sheetwarp.device import fit_device
     from sfzmaps.sheetwarp.sheet import placed_sheets
 
     unknown = [s for s in series or [] if s not in SERIES]
@@ -808,12 +811,13 @@ def warp(
     build_mod.require_toolchain(system_tools)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     failed = []
-    for s in series or [s for s in SERIES if placed_sheets(s)]:
-        try:
-            sheetwarp.correct_series(s, jobs, force)
-        except RuntimeError as e:
-            typer.echo(f"error: {e}", err=True)
-            failed.append(s)
+    with gpu.gpu_turn(False, fit_device()):
+        for s in series or [s for s in SERIES if placed_sheets(s)]:
+            try:
+                sheetwarp.correct_series(s, jobs, force)
+            except RuntimeError as e:
+                typer.echo(f"error: {e}", err=True)
+                failed.append(s)
     if failed:
         raise typer.Exit(1)
 

@@ -1,10 +1,15 @@
-"""Test-wide guards: no test may reach the vision API.
+"""Test-wide guards: no test may reach the vision API, or use the Mac's GPU while a text detector has it.
 
 * per-region reads (regionread.ENABLED) are off unless a test switches them on;
 * config.INPUTS_DIR points into the test's tmp_path (never the repo's pipeline/inputs/);
 * constructing llm.OpenAIClient raises, so a missing FakeClient fails loudly instead of
   calling the network (or reading pipeline/.env).  Tests of the client itself opt out with
-  ``@pytest.mark.real_openai_client`` (they build it with __new__ or a fake SDK).
+  ``@pytest.mark.real_openai_client`` (they build it with __new__ or a fake SDK);
+* where there is a GPU (`mps`), each test process holds a shared turn on it (`sfzmaps.gpu`) for the whole session,
+  taken without waiting.  When a detector's exclusive turn has it, the session never uses it: the warp's fits run
+  on the CPU (SFZMAPS_WARP_DEVICE=cpu) and the tests that need the GPU (marked ``mps``) are skipped.  Either way the
+  tests can't give a detector training beside them wrong numbers (two processes on `mps` at once do), and never
+  wait for one.
 """
 import os
 
@@ -18,7 +23,7 @@ if os.environ.get("PYTEST_XDIST_WORKER"):
 
 import pytest
 
-from sfzmaps import config, llm
+from sfzmaps import config, gpu, llm
 from sfzmaps.districts import regionread
 
 
@@ -31,6 +36,41 @@ class _NoClient:
 def pytest_configure(config):
     config.addinivalue_line("markers", "real_openai_client: keep the real llm.OpenAIClient class "
                                        "(the test wires a fake SDK itself)")
+    config.addinivalue_line("markers", "mps: the test computes on the Mac's GPU (skipped while a detector has it)")
+
+
+GPU_BUSY = "the GPU is busy (a detector is training)"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _gpu_turn_for_the_session():
+    """True when the GPU is busy (see the module); holds a shared turn for the session otherwise."""
+    import torch
+    if not torch.backends.mps.is_available():
+        yield False
+        return
+    turn = gpu.take_turn(exclusive=False, wait=False)
+    if turn is not None:
+        try:
+            yield False
+        finally:
+            gpu.end_turn(turn)
+        return
+    before = os.environ.get("SFZMAPS_WARP_DEVICE")
+    os.environ["SFZMAPS_WARP_DEVICE"] = "cpu"
+    try:
+        yield True
+    finally:
+        if before is None:
+            os.environ.pop("SFZMAPS_WARP_DEVICE", None)
+        else:
+            os.environ["SFZMAPS_WARP_DEVICE"] = before
+
+
+@pytest.fixture(autouse=True)
+def _no_gpu_while_a_detector_has_it(request, _gpu_turn_for_the_session):
+    if _gpu_turn_for_the_session and request.node.get_closest_marker("mps") is not None:
+        pytest.skip(GPU_BUSY)
 
 
 @pytest.fixture(autouse=True)

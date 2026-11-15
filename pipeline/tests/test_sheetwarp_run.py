@@ -189,6 +189,27 @@ def test_warp_rejects_an_unknown_series():
     assert "NOPE" in res.output and "1921" in res.output
 
 
+def test_the_warp_fits_in_a_shared_turn_on_its_device(monkeypatch):
+    import contextlib
+
+    from sfzmaps import gpu
+    held, seen = [], []
+
+    @contextlib.contextmanager
+    def turn(exclusive, device):
+        held.append((exclusive, str(device)))
+        yield
+        held.append(None)
+
+    monkeypatch.setattr(gpu, "gpu_turn", turn)
+    monkeypatch.setattr(build, "require_toolchain", lambda system_tools: None)
+    monkeypatch.setattr(run, "correct_series", lambda series, jobs, force: seen.append((series, held[-1])) or {})
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "mps")      # only named: the recorded turn locks nothing
+    assert CliRunner().invoke(cli.app, ["warp", "1921", "1948"]).exit_code == 0
+    # one shared turn (other warps may fit beside it, a detector may not) around every series' fits
+    assert held == [(False, "mps"), None] and seen == [("1921", (False, "mps")), ("1948", (False, "mps"))]
+
+
 def test_warp_checks_that_its_tools_come_from_pixi(monkeypatch):
     monkeypatch.delenv("SFZMAPS_SYSTEM_TOOLS", raising=False)
     checked, corrected = [], []

@@ -13,8 +13,9 @@ from sfzmaps.sheetwarp.sheet import NothingToFit
 from sfzmaps.sheetwarp.targets import SidePoints, Targets
 
 # the CPU everywhere (CI's path); the Mac's GPU too where there is one
-DEVICES = ["cpu", pytest.param("mps", marks=pytest.mark.skipif(not torch.backends.mps.is_available(),
-                                                                reason="no GPU (mps) here"))]
+DEVICES = ["cpu", pytest.param("mps", marks=[pytest.mark.mps,
+                                              pytest.mark.skipif(not torch.backends.mps.is_available(),
+                                                                 reason="no GPU (mps) here")])]
 
 
 def _sides(n_points, sid):
