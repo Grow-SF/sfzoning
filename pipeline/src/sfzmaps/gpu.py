@@ -31,18 +31,46 @@ def on_gpu(device) -> bool:
 def take_turn(exclusive: bool, wait: bool = True) -> int | None:
     """Open LOCK (made if missing) and lock it, exclusive or shared.  Returns the open file descriptor, which holds
     the turn until `end_turn`; with `wait` False, None at once when the turn can't be had now.  The file is opened
-    read-only: a lock needs no write access, so a lock file another user made works too."""
-    fd = os.open(LOCK, os.O_RDONLY | os.O_CREAT, 0o666)
+    read-only: a lock needs no write access, so a lock file another user made works too.
+
+    macOS deletes the files in /tmp that nobody has touched for 3 days, a lock file a turn holds or waits on too.  So
+    every turn taken sets the file's times to now (a turn is never that old), and a lock that turns out to be on a
+    file no longer at LOCK (deleted, and maybe made again by another process, while this one waited) is let go and
+    taken again on the file there now: turns on two files would not keep each other out."""
     mode = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+    while True:
+        fd = os.open(LOCK, os.O_RDONLY | os.O_CREAT, 0o666)
+        try:
+            fcntl.flock(fd, mode if wait else mode | fcntl.LOCK_NB)
+        except BlockingIOError:
+            os.close(fd)
+            return None
+        except BaseException:
+            os.close(fd)
+            raise
+        if _at_lock(fd):
+            _touch(fd)
+            return fd
+        os.close(fd)            # locked a file no longer at LOCK: lock the one there now
+
+
+def _at_lock(fd: int) -> bool:
+    """Whether the open file `fd` is the file at LOCK now."""
+    held = os.fstat(fd)
     try:
-        fcntl.flock(fd, mode if wait else mode | fcntl.LOCK_NB)
-    except BlockingIOError:
-        os.close(fd)
-        return None
-    except BaseException:
-        os.close(fd)
-        raise
-    return fd
+        now = os.stat(LOCK)
+    except FileNotFoundError:
+        return False
+    return (held.st_dev, held.st_ino) == (now.st_dev, now.st_ino)
+
+
+def _touch(fd: int) -> None:
+    """Set the open file's access and modification times to now (left alone where this user may not: another
+    user's lock file is touched by that user's turns)."""
+    try:
+        os.utime(fd)
+    except OSError:
+        pass
 
 
 def end_turn(fd: int) -> None:

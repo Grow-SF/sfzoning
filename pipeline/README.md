@@ -544,10 +544,13 @@ kernel for (`index_put_with_accumulate_mps`). That holds only for one process on
 processes computing on `mps` at once, the same step on the same input gives different numbers each time (outputs off
 by up to 2.5 in a logit, training-mode batch norm by up to 3,000) and now and then a gradient that is all NaN. So
 work on `mps` takes a turn (`sfzmaps.gpu`, an `flock` on `/tmp/sfzmaps-mps.lock`, one file for the whole machine).
-A detector's stage trains and scores in one exclusive turn: nothing else computes on the GPU meanwhile. The sheet
-warp's fits (`sfzmaps warp`) take a shared turn: warps run beside each other, never beside a detector. The tests
-hold a shared turn for their whole run, taken without waiting; while a detector has the GPU they never use it (the
-warp's fits run on the CPU and the tests marked `mps` are skipped). A loss that is not finite stops the training.
+macOS deletes files in `/tmp` that nobody has touched for 3 days, so every turn taken sets the file's times to now,
+and a turn whose file was deleted (and maybe made again by another process) while it waited is taken again on the
+file now at that path. A detector's stage trains and scores in one exclusive turn: nothing else computes on the GPU
+meanwhile. The sheet warp's fits (`sfzmaps warp`) take a shared turn: warps run beside each other, never beside a
+detector. The tests hold a shared turn for their whole run, taken without waiting; while a detector has the GPU they
+never use it (the warp's fits run on the CPU and the tests marked `mps` are skipped). A loss that is not finite stops
+the training.
 
 **The trust of each reading** (`solver/trust.py`, run by the `solver-labels` stage) is the chance that a code read
 on a print is the district printed there. Each different code among a print's five reads (Sol, Terra, the third
