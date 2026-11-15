@@ -70,9 +70,9 @@ def test_parquet_compared_by_content(tmp_path):
 
 def test_text_chance_png_within_two_counts_but_not_three(tmp_path):
     ref = [[10, 20], [30, 40]]
-    near = _both(tmp_path, "solver-text-nw", "chance/a.png", _png([[12, 18], [30, 40]]), _png(ref))
+    near = _both(tmp_path, "solver-text", "chance/a.png", _png([[12, 18], [30, 40]]), _png(ref))
     assert near.status == "within epsilon"
-    far = _both(tmp_path / "x", "solver-text-nw", "chance/a.png", _png([[13, 20], [30, 40]]), _png(ref))
+    far = _both(tmp_path / "x", "solver-text", "chance/a.png", _png([[13, 20], [30, 40]]), _png(ref))
     assert far.status == "differs"
 
 
@@ -81,11 +81,11 @@ def test_png_in_an_exact_stage_must_match(tmp_path):
 
 
 def test_model_file_is_not_compared_and_alone_is_not_a_pass(tmp_path):
-    r = _both(tmp_path, "solver-text-nw", "model.pt", lambda p: p.write_bytes(b"a"), lambda p: p.write_bytes(b"b"),
+    r = _both(tmp_path, "solver-text", "model.pt", lambda p: p.write_bytes(b"a"), lambda p: p.write_bytes(b"b"),
               fill=False)
     assert r.status == "differs" and r.identical == 0
     assert all("model.pt" not in d for d in r.differs)
-    with_chance = _both(tmp_path / "x", "solver-text-nw", "model.pt", lambda p: p.write_bytes(b"a"),
+    with_chance = _both(tmp_path / "x", "solver-text", "model.pt", lambda p: p.write_bytes(b"a"),
                         lambda p: p.write_bytes(b"b"))
     assert with_chance.status == "identical"
 
@@ -106,7 +106,7 @@ def test_a_required_output_missing_on_one_side_differs(tmp_path):
 
 def test_text_chance_png_that_is_not_uint8_differs(tmp_path):
     big = lambda v: (lambda p: cv2.imwrite(str(p), np.array([[v]], dtype=np.uint16)))
-    assert _both(tmp_path, "solver-text-nw", "chance/a.png", big(100), big(101)).status == "differs"
+    assert _both(tmp_path, "solver-text", "chance/a.png", big(100), big(101)).status == "differs"
 
 
 def test_text_scores_json_within_one_percent(tmp_path):
@@ -130,7 +130,7 @@ def test_missing_and_extra_files_differ(tmp_path):
 def test_after_a_stage_is_compared_the_references_outputs_replace_the_clones(tmp_path, capsys):
     # the clone's text chances differ from the reference's within the epsilon; the stages after it must read the
     # reference's, so each is held to its own epsilon and not to the ones above it as well
-    stage = "solver-text-nw"
+    stage = "solver-text"
     _write(tmp_path / "new", stage, "chance/p01.png", _png([[0, 2]]))
     _write(tmp_path / "new", stage, "chance/p99.png", _png([[1]]))            # made only in the clone
     _write(tmp_path / "ref", stage, "chance/p01.png", _png([[0, 0]]))

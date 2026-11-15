@@ -10,9 +10,9 @@ differences; exits 1 only for `differs`. With --use-reference, replaces NEW's ou
 Rules:
   * every file is compared byte for byte; if the bytes differ, an .npz is compared by its arrays' content, a
     .parquet by pandas `equals`, a .png by its decoded pixels (equal content still counts as identical);
-  * the text detector stages (solver-text-nw/-ne/-sw/-se): chance/*.png may differ by at most 2 counts (0.01 x 255)
-    at any px (within epsilon); model.pt is not compared; .json numbers compare within 1% (a retrained model's
-    scores move a little);
+  * the text detector's stage (solver-text): chance/*.png may differ by at most 2 counts (0.01 x 255) at any px
+    (within epsilon); model.pt is not compared; .json numbers compare within 1% (a retrained model's scores move a
+    little);
   * solver-text-scores: .json numbers within 1% (relative, or 1e-4 absolute near zero).
 """
 from __future__ import annotations
@@ -36,10 +36,7 @@ STAGE_DIRS = {
     "solver-page": "data/solver/page",
     "solver-lots": "data/solver/lots",
     "solver-prints": "data/solver/prints",
-    "solver-text-nw": "data/solver/text-nw",
-    "solver-text-ne": "data/solver/text-ne",
-    "solver-text-sw": "data/solver/text-sw",
-    "solver-text-se": "data/solver/text-se",
+    "solver-text": "data/solver/text",
     "solver-text-scores": "data/solver/text-scores",
     "solver-labels": "data/solver/labels",
     "solver-walls": "data/solver/walls",
@@ -51,16 +48,13 @@ REQUIRED = {
     "solver-page": ["ink.png", "sheets.png", "frames.json"],
     "solver-lots": ["lots.npz", "table.parquet"],
     "solver-prints": ["prints.parquet", "summary.json", "terra_boxes.json"],
-    "solver-text-nw": ["chance/*.png"],
-    "solver-text-ne": ["chance/*.png"],
-    "solver-text-sw": ["chance/*.png"],
-    "solver-text-se": ["chance/*.png"],
-    "solver-text-scores": ["*.json"],
+    "solver-text": ["chance/*.png"],
+    "solver-text-scores": ["scores.json"],
     "solver-labels": ["readings_*.npz", "strokes.npz", "trust.json"],
     "solver-walls": ["walls_*.npz"],
     "solver-solve": ["runs/final.npz", "report.json"],
 }
-TEXT_STAGES = {"solver-text-nw", "solver-text-ne", "solver-text-sw", "solver-text-se"}
+TEXT_STAGES = {"solver-text"}
 LOOSE_JSON = TEXT_STAGES | {"solver-text-scores"}
 
 

@@ -9,19 +9,18 @@
 # pipeline/ this script lives in). Each stage is held to its own epsilon (scripts/compare_outputs.py):
 #   byte-identical     the warp (deterministic on the GPU), solver-page/-lots/-prints/-labels/-walls/-solve
 #                      (an .npz by its arrays, a .parquet by its table)
-#   solver-text-<q>    chance/*.png within 0.01 x 255 (2 counts); numbers in .json within 1%; model.pt not compared
+#   solver-text        chance/*.png within 0.01 x 255 (2 counts); numbers in .json within 1%; model.pt not compared
 #   solver-text-scores numbers within 1%
-# Default STAGEs: solver-page solver-lots solver-prints solver-text-nw solver-labels solver-walls solver-solve.
-# Only nw is retrained (it uses the GPU: run when it is free); text-ne/-sw/-se are copied from --ref into the clone
-# before the first stage that reads all four chances (solver-walls, solver-text-scores), unless named.
+# Default STAGEs: solver-page solver-lots solver-prints solver-text solver-labels solver-walls solver-solve.
+# solver-text and solver-text-scores use the GPU: run when it is free.
 # After each stage is compared (or fails), its outputs in the clone are replaced by --ref's
 # (`compare_outputs.py --use-reference`), so every later stage runs on the same inputs as --ref's own run of it did:
 # a stage is held to its own epsilon, never to the epsilons of the stages above it as well.
 #
 # The stages run as `uv run --frozen sfzmaps stage NAME`, not `sfzmaps build --force NAME`: the build plans every
 # stale upstream stage as well, and a fresh clone's dvc.lock has no record of the text/labels/walls/solve stages until
-# the owner has run `sfzmaps ship`, so building solver-walls would retrain text-ne/-sw/-se. Exit status is 1 if any
-# stage differs, 2 for a usage or setup problem.
+# the owner has run `sfzmaps ship`, so building one stage would run every stage above it as well. Exit status is 1 if
+# any stage differs, 2 for a usage or setup problem.
 set -u -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -34,15 +33,15 @@ while [ $# -gt 0 ]; do
     --clone) CLONE="${2:?--clone needs a folder}"; shift 2 ;;
     --ref) REF="$(cd "${2:?--ref needs a pipeline folder}" && pwd)"; shift 2 ;;
     --dry-run|-n) DRY=1; shift ;;
-    -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,23p' "$0"; exit 0 ;;
     -*) echo "unknown option $1" >&2; exit 2 ;;
     *) STAGES+=("$1"); shift ;;
   esac
 done
-[ ${#STAGES[@]} -gt 0 ] || STAGES=(solver-page solver-lots solver-prints solver-text-nw solver-labels solver-walls solver-solve)
+[ ${#STAGES[@]} -gt 0 ] || STAGES=(solver-page solver-lots solver-prints solver-text solver-labels solver-walls solver-solve)
 [ -n "$CLONE" ] || CLONE="$REF/data/fresh-clone"
 
-known="warp-2000-digital-zoning solver-page solver-lots solver-prints solver-text-nw solver-text-ne solver-text-sw solver-text-se solver-text-scores solver-labels solver-walls solver-solve"
+known="warp-2000-digital-zoning solver-page solver-lots solver-prints solver-text solver-text-scores solver-labels solver-walls solver-solve"
 for s in "${STAGES[@]}"; do
   case " $known " in *" $s "*) ;; *) echo "unknown stage $s; known: $known" >&2; exit 2 ;; esac
 done
@@ -58,9 +57,6 @@ echo "  origin   $URL"
 echo "  clone    $CLONE"
 echo "  compare  $REF"
 echo "  stages   warp-2000-digital-zoning (only if the pull does not bring it) ${STAGES[*]}"
-for q in ne sw se; do
-  has "solver-text-$q" || echo "  note     solver-text-$q is NOT retrained: copied from $REF before the first stage that needs all four"
-done
 echo "  note     after each stage is compared, its outputs in the clone are replaced by $REF's: every later stage runs on the reference's inputs"
 [ "$DRY" = 1 ] && { echo "(dry run: nothing cloned or built)"; exit 0; }
 
@@ -103,26 +99,12 @@ if [ ! -d "$CLONE/pipeline/data/warp/2000-digital-zoning" ] || [ -z "$(ls -A "$C
   has warp-2000-digital-zoning || STAGES=(warp-2000-digital-zoning "${STAGES[@]}")
 fi
 
-copied=0
-copy_other_quarters() {
-  [ "$copied" = 1 ] && return
-  copied=1
-  for q in ne sw se; do
-    has "solver-text-$q" && continue
-    echo "copying text-$q from $REF/data/solver/text-$q (not retrained)"
-    mkdir -p "$CLONE/pipeline/data/solver"
-    rm -rf "$CLONE/pipeline/data/solver/text-$q"
-    cp -R "$REF/data/solver/text-$q" "$CLONE/pipeline/data/solver/text-$q" || exit 2
-  done
-}
-
 compare() { (cd "$REF" && PYTHONDONTWRITEBYTECODE=1 uv run --frozen python -I scripts/compare_outputs.py "$@"); }
 
 RESULTS=()
 FAILED=0
 STOPPED=""
 for s in "${STAGES[@]}"; do
-  case "$s" in solver-walls|solver-text-scores) copy_other_quarters ;; esac
   if run_stage "$s"; then
     out="$(compare "$s" "$CLONE/pipeline" "$REF")"; rc=$?
     echo "$out"
