@@ -525,6 +525,20 @@ the grid, away from every box) called text.
 
 The detector trains on `mps` where there is one (else `cpu`; `--device` overrides): two 200-step runs on `mps` gave bit-identical weights and predicted chance (max difference 0), at 0.39 s a step against 3.1 s on `cpu` (about 52 min against 6.9 h for 8,000 steps), once the loss avoided boolean-mask indexing, whose backward `mps` has no deterministic kernel for (`index_put_with_accumulate_mps`).
 
+**The trust of each reading** (`solver/trust.py`, run by the `solver-labels` stage) is the chance that a code read
+on a print is the district printed there. Each different code among a print's five reads (Sol, Terra, the third
+read, the re-check, the turned pass) is one reading. One logistic regression on 23 features (listed in
+`trust.FEATURES`: which reads name the code, Sol's and the third read's confidence as −log(max(1 − c, 0.001)), the
+print's height as the log of its ratio to the median, in a street, a leader line, printed sideways, and for prints
+found only by the turned pass the log of the distance to the nearest other print over 100 ft (at least 1 ft), in a
+street, a single letter) gives each reading its trust. The target is that the code is the table's code of the lot
+under the print. The fit is Newton's method from zero (at most 200 steps, stopping when no weight moves 1e-8), with a
+ridge of 1e-3 on each weight and 1,000 on the turned-pass-only distance and street weights. There is one fit per
+quarter, trained only on readings whose lot has a known code in the uncorrected table and lies outside that quarter.
+It writes `data/solver/labels/readings_<Q>.npz` (`names`, and per reading `print_index` into `prints.parquet`,
+`code_index` into `names` and `trust`) and `trust.json` (each fit's weights and held-out log loss). The same inputs
+give the same bytes.
+
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
 ## Where outputs land
