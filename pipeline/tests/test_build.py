@@ -171,6 +171,39 @@ def test_the_second_status_asks_dvc_about_that_stage_alone():
     assert calls == [("status", "--json", n) for n in ("solver-lots", "solver-prints", "solver-labels")]
 
 
+def test_a_build_asks_dvc_again_about_the_stages_after_a_stale_one(monkeypatch, tmp_path, capsys):
+    import types
+    table = _chain()
+    yaml = tmp_path / "dvc.yaml"
+    yaml.write_text("stages\n")
+    for name, value in (("stages", lambda: table), ("dvc_yaml", lambda: "stages\n"), ("dvc_yaml_path", lambda: yaml),
+                        ("require_toolchain", lambda system_tools: None), ("git_dirty", lambda *a: []),
+                        ("git_head", lambda: "head"), ("prepare", lambda: None)):
+        monkeypatch.setattr(build, name, value)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    asked, ran = [], []
+
+    def dvc(*args, check=True):
+        asked.append(args)
+        if args == ("status", "--json"):                       # at the start: only a is stale
+            return _Done(0, json.dumps({"dvc.yaml:a": [{"changed deps": {"inputs/a": "modified"}}]}))
+        if args[:2] == ("status", "--json"):                   # asked again: b unchanged, c changed on its own
+            return _Done(0, json.dumps({"c": [{"changed deps": {"inputs/c": "modified"}}]} if args[2] == "c" else {}))
+        return _Done(0, "")                                    # dvc commit
+
+    monkeypatch.setattr(build, "dvc", dvc)
+    monkeypatch.setattr(build, "subprocess", types.SimpleNamespace(
+        STDOUT=-2, run=lambda argv, **kw: ran.append((argv[-1], kw["env"]["SFZMAPS_DVC_CHANGED_DEPS"])) or _Done(0, "")))
+    assert build.build(None, 1, dry_run=False, force=False) == 0
+    # b is asked again once a is recorded, and not run; c is asked once b counts as done, and runs with its own
+    # changed deps from the second status
+    assert asked == [("status", "--json"), ("commit", "--force", "a"), ("status", "--json", "b"),
+                     ("status", "--json", "c"), ("commit", "--force", "c")]
+    assert ran == [("a", '["inputs/a"]'), ("c", '["inputs/c"]')]
+    out = capsys.readouterr().out
+    assert "b, c only if still stale" in out and "up to date after its upstreams: b" in out
+
+
 def _stage_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     sj = tmp_path / "work" / "1948" / "s1" / "score.json"
