@@ -5,7 +5,8 @@
 > solver" in `pipeline/README.md`. The notes beside this file (`notes/`) are the R&D notes behind it, as written.
 
 R&D, not wired into the build. It reads the district of every parcel from the 2000-digital-zoning scan. It grew out of
-the "bubble" solver of earlier R&D. It runs on a data folder (see `README.md`) and makes no paid reads.
+the "bubble" solver of earlier R&D. It runs on a data folder (now the build's: see "The 2000 solver" in
+`pipeline/README.md`) and makes no paid reads.
 
 ## How it works
 

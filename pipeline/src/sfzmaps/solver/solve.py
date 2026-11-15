@@ -8,18 +8,22 @@ Writes, under data/solver/solve/runs/:
   {run}-{q}.npz        the solve that held out quarter q: `names` and `pred` (city.save_run)
   {run}-{q}.log        its log
   {run}-{q}-costs.npz  with keep_costs: its label costs, odds, codes and readings (for holes.py)
-  {run}.npz            the join: every lot from its own quarter's solve"""
+  {run}.npz            the join: every lot from its own quarter's solve
+
+`solve_and_report` is the `solver-solve` stage (`sfzmaps solver solve final`): the placement, the four solves, the
+join, the data errors among the run's holes and the report."""
 import os
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
 
 from sfzmaps.solver import energy as E
 from sfzmaps.solver import paths, search
-from sfzmaps.solver.city import city, run_file, save_run, wall_odds
+from sfzmaps.solver.city import city, load_run, run_file, save_run, wall_odds
 from sfzmaps.solver.codes import canon, table_vocabulary
 from sfzmaps.solver.labels import readings
 from sfzmaps.solver.placement import load_options
@@ -91,7 +95,8 @@ def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders:
         index.setdefault(n, i)
     table_codes = np.array([index.get(canon(c), -1) if k else -1 for c, k in zip(C.table, C.known)])
     log(f"readings {len(rd.lot):,} on {len(np.unique(rd.lot)):,} lots")
-    p, U = solve_joint(C.n, C.a, C.b, odds, rd, load_options(q), table_codes=table_codes, log=log)
+    options = load_options(q, walls_dir)
+    p, U = solve_joint(C.n, C.a, C.b, odds, rd, options, table_codes=table_codes, log=log)
     names = rd.names + [""]
     save_run(run_file(f"{run}-{q}"), np.array(names)[p])
     if keep_costs:                                       # for hole causes
@@ -140,3 +145,19 @@ def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = Fals
         raise RuntimeError(f"solve failed for {', '.join(failed)}; see {runs}/{run}-<quarter>.log")
     join(run)
     print(f"joined: {run_file(run)}")
+
+
+def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool = False) -> dict:
+    """Everything a solve needs and makes, from the walls of `walls_dir` (default WALLS_DIR): fit the placement
+    (placement.npz), solve the four held-out quarters with their costs and join them (`solve_all`), list the data
+    errors among the run's holes (`holes.write_data_errors`: data_errors.npz and data-errors-2000-digital.csv), and
+    write the report (`report.write_report`: report.json and report.md), which scores the run with those parcels left
+    out and with every lot.  Returns the report."""
+    from sfzmaps.solver import holes, placement, report
+    summary = placement.fit(walls_dir)
+    solve_all(run, walls_dir, true_borders, keep_costs=True)
+    rows = holes.causes(run)
+    holes.write_data_errors(holes.data_errors(rows), load_run(run))
+    found = report.build_report(run, summary, dict(Counter(r["cause"] for r in rows)), walls_dir)
+    report.write_report(found)
+    return found

@@ -116,8 +116,8 @@ def stages() -> dict[str, Stage]:
     for s in SERIES:
         out[f"warp-{s}"] = Stage(f"warp-{s}", (), (), (owner[s], "refdata"), warp=s)
     # The 2000 solver's inputs: command stages, each naming its code, its reads and its writes.
-    # Of a checked-in inputs folder, only the file read: its README, PROVENANCE.md or the table's by-eye corrections
-    # (read only in scoring) never rerun the chain.
+    # Of a checked-in inputs folder, only the file read: its README or PROVENANCE.md never rerun the chain, and the
+    # table's by-eye corrections (read only in scoring) rerun only the solve.
     out["solver-page"] = Stage("solver-page", (), (), ("warp-2000-digital-zoning",), command=("solver", "page"),
                                reads=("data/warp/2000-digital-zoning", "data/work/2000-digital-zoning",
                                       "inputs/merged-page/2000-digital-zoning.json"),
@@ -149,6 +149,26 @@ def stages() -> dict[str, Stage]:
                                  reads=("data/solver/prints/prints.parquet", "data/solver/lots", "data/solver/page",
                                         "data/ref"),
                                  writes=("data/solver/labels",), code=("sfzmaps.solver.labels_stage",))
+    # the walls read what `walls.build_walls` reads: the merged page (and its frames), the cut boxes, the lots, the
+    # strokes, the Terra boxes, the warp's placements, and for the text discount the four detectors' chances and the
+    # sheets' pages they are read on
+    out["solver-walls"] = Stage("solver-walls", (), (), ("solver-labels", *(f"solver-text-{q}" for q in quarters)),
+                                command=("solver", "walls"),
+                                reads=("data/solver/page", "inputs/merged-page/2000-digital-zoning.json",
+                                       "data/solver/lots", "data/solver/labels/strokes.npz",
+                                       "data/solver/prints/terra_boxes.json",
+                                       *(f"data/solver/text-{q}/chance" for q in quarters),
+                                       "data/work/2000-digital-zoning", "data/warp/2000-digital-zoning"),
+                                writes=("data/solver/walls",), code=("sfzmaps.solver.walls",))
+    # the solve: the placement, the four held-out solves, the join, the data errors and the report.  Of the inputs
+    # folders the hand leader moves and the by-eye corrections the score counts against; the table itself reaches it
+    # as the lots' table.parquet
+    out["solver-solve"] = Stage("solver-solve", (), (), ("solver-walls",), command=("solver", "solve", "final"),
+                                reads=("data/solver/lots", "data/solver/page/ink.png",
+                                       "data/solver/prints/prints.parquet", "data/solver/labels", "data/solver/walls",
+                                       "data/warp/2000-digital-zoning", "inputs/2000-digital-zoning/label_fixes.csv",
+                                       "inputs/zoning-2000/table-corrections.csv"),
+                                writes=("data/solver/solve",), code=("sfzmaps.solver.solve",))
     out["shared"] = Stage("shared", (), (), old, frozen=True)
     return out
 

@@ -1,10 +1,13 @@
+import json
+
+import cv2
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import pytest
 import shapely
 
-from sfzmaps.solver import city, energy, grid, labels, lots, paths, solve, table
+from sfzmaps.solver import borders, city, energy, grid, labels, lots, measures, paths, placement, report, solve, table
 
 SHAPE = (70, 100)                       # grid rows, columns: 280 x 400 ft
 COLUMNS, ROWS, SIDE = 8, 5, 40.0        # 40 lots, 40-ft squares, touching
@@ -46,12 +49,20 @@ def _write_walls(folder, odds) -> None:
         np.savez(folder / f"walls_{q}.npz", lo_ab=np.asarray(odds, np.float32))
 
 
+def _write_placement(lot_under, walls_dir=None) -> None:
+    """Every label stays on the lot under its text, for each held-out model, fitted with the walls of walls_dir."""
+    n = len(lot_under)
+    np.savez(paths.SOLVE_DIR / "placement.npz", label=np.tile(np.arange(n), 4), lot=np.tile(lot_under, 4),
+             chance=np.ones(4 * n), stay=np.ones(4 * n, bool), holdout=np.repeat(np.arange(4), n),
+             walls=city.walls_digest(walls_dir))
+
+
 @pytest.fixture
 def synthetic_city(tmp_path, monkeypatch):
     """A city of 40 lots (8 columns x 5 rows) in three districts by column, one print in each district read right
     with trust 0.95, every label staying on its own lot, and walls the reader never saw (NaN: a line everywhere).
     Returns the City."""
-    for name in ("LOTS_DIR", "PRINTS_DIR", "LABELS_DIR", "WALLS_DIR", "SOLVE_DIR", "TABLE_DIR"):
+    for name in ("PAGE_DIR", "LOTS_DIR", "PRINTS_DIR", "LABELS_DIR", "WALLS_DIR", "SOLVE_DIR", "TABLE_DIR"):
         monkeypatch.setattr(paths, name, tmp_path / name.lower())
         (tmp_path / name.lower()).mkdir()
     monkeypatch.setattr(grid, "HEIGHT", SHAPE[0])
@@ -73,12 +84,14 @@ def synthetic_city(tmp_path, monkeypatch):
     for q in paths.QUARTERS:
         _write_readings(q, NAMES, [0, 1, 2], [1, 2, 0], [0.95] * 3)
         _write_streetside(q, [-1] * 3, [False] * 3, [False] * 3, 0.8, 0.8)
-    np.savez(paths.SOLVE_DIR / "placement.npz", label=np.tile([0, 1, 2], 4), lot=np.tile(under, 4),
-             chance=np.ones(12), stay=np.ones(12, bool), holdout=np.repeat(np.arange(4), 3))
     _write_walls(paths.WALLS_DIR, np.full(len(pairs), np.nan))
+    _write_placement(under)
+    cv2.imwrite(str(paths.PAGE_DIR / "ink.png"), np.full(SHAPE, 255, np.uint8))      # a blank page
     city.city.cache_clear()
+    borders.border_paths.cache_clear()
     yield city.city()
     city.city.cache_clear()
+    borders.border_paths.cache_clear()
 
 
 def test_true_border_walls_recover_the_table(synthetic_city, tmp_path):
@@ -87,10 +100,11 @@ def test_true_border_walls_recover_the_table(synthetic_city, tmp_path):
     # the walls the reader never saw are a line everywhere, so the table's own borders decide
     solve.solve_quarter("tb", "nw", true_borders=True)
     np.testing.assert_array_equal(city.load_run("tb-nw"), C.table)
-    # the same borders read as odds from another walls folder
+    # the same borders read as odds from another walls folder, with a placement fitted on them
     both = C.known[C.a] & C.known[C.b]
     odds = np.where(both & (C.table[C.a] != C.table[C.b]), 6.0, -6.0)
     _write_walls(tmp_path / "true-walls", odds)
+    _write_placement([_lot(c, 2) for c in LABELLED], tmp_path / "true-walls")
     solve.solve_quarter("walls", "se", walls_dir=tmp_path / "true-walls")
     np.testing.assert_array_equal(city.load_run("walls-se"), C.table)
     # discrete and seeded: a second solve gives every lot the same code
@@ -174,3 +188,90 @@ def test_join_takes_each_lot_from_its_quarters_solve(synthetic_city):
     solve.join("j")
     assert set(C.quarter.tolist()) == {0, 1, 2, 3}
     assert city.load_run("j").tolist() == [f"RH-{100 * C.quarter[i] + i}" for i in range(C.n)]
+
+
+def test_a_solve_refuses_a_placement_fitted_on_other_walls(synthetic_city, tmp_path):
+    odds = np.full(len(synthetic_city.a), -1.0)
+    _write_walls(tmp_path / "other", odds)
+    with pytest.raises(ValueError, match="other walls"):
+        solve.solve_quarter("other", "nw", walls_dir=tmp_path / "other")
+    # fitted on them, then the same odds written again: the same walls
+    _write_placement([_lot(c, 2) for c in LABELLED], tmp_path / "other")
+    _write_walls(tmp_path / "other", odds.copy())
+    solve.solve_quarter("other", "nw", walls_dir=tmp_path / "other")
+    # one quarter's odds changed: other walls
+    changed = np.where(np.arange(len(odds)) == 0, 2.0, odds).astype(np.float32)
+    np.savez(tmp_path / "other" / "walls_se.npz", lo_ab=changed)
+    with pytest.raises(ValueError, match="other walls"):
+        solve.solve_quarter("other", "nw", walls_dir=tmp_path / "other")
+    # a placement that names no walls is refused too
+    P = dict(np.load(placement.placement_file()))
+    del P["walls"]
+    np.savez(placement.placement_file(), **P)
+    with pytest.raises(ValueError, match="other walls"):
+        solve.solve_quarter("tb", "nw")
+
+
+def _right_but_lot_0(C) -> None:
+    """The run "r": the table's codes, but lot 0 (RH-1, in the top-left corner) given NC-1."""
+    codes = C.table.astype(object).copy()
+    codes[0] = "NC-1"
+    city.save_run(city.run_file("r"), codes.astype(str))
+
+
+def test_the_report_gives_six_measures_with_and_without_the_data_errors_against_j7(synthetic_city):
+    C = synthetic_city
+    _right_but_lot_0(C)
+    np.savez(measures.data_errors_file(), lots=np.array([0]))
+    got = report.build_report("r", placement_summary={"labels": 3}, hole_causes={"BIG AREA": 0})
+    left_out, every = got["measures"]["data_errors_left_out"], got["measures"]["every_lot"]
+    assert set(report.J7) <= set(left_out) and set(report.J7) <= set(every) and got["j7"] == report.J7
+    # lot 0's two borders are drawn and are no table line: they count only when the data error is counted
+    assert left_out["drawn_are_table_lines"] == 1.0 > every["drawn_are_table_lines"]
+    assert left_out["lines_drawn"] == every["lines_drawn"] == 1.0
+    # wrong lots and incidents count every scored lot either way, as J7's did
+    assert left_out["wrong_lots"] == every["wrong_lots"] == 1 and left_out["incidents"] == every["incidents"] == 1
+    assert got["wrong_lots_by_quarter"] == {"nw": 1, "ne": 0, "sw": 0, "se": 0}
+    assert got["data_errors"] == {"parcels": 1, "j7_parcels": 33} and len(got["definition_changes"]) == 6
+    md = report.markdown(got)
+    assert "96.3%" in md and "8,625" in md and all(change in md for change in got["definition_changes"])
+
+
+def test_a_report_written_again_at_another_time_is_the_same_bytes(synthetic_city, monkeypatch):
+    import time
+    _right_but_lot_0(synthetic_city)
+    report.write_report(report.build_report("r", placement_summary={"labels": 3}, hole_causes={}))
+    before = {f: (paths.SOLVE_DIR / f).read_bytes() for f in ("report.json", "report.md")}
+    monkeypatch.setattr(time, "time", lambda: 4e9)
+    monkeypatch.setattr(time, "perf_counter", lambda: 4e9)
+    city.city.cache_clear()
+    report.write_report(report.build_report("r", placement_summary={"labels": 3}, hole_causes={}))
+    assert {f: (paths.SOLVE_DIR / f).read_bytes() for f in before} == before
+    assert json.loads(before["report.json"])["run"] == "r"
+
+
+def test_the_trust_check_reads_each_label_by_the_fit_that_held_its_lot_out(synthetic_city):
+    # the labels' lots are in sw (print 0) and se (prints 1, 2); the other fits say print 0 is NC-1 at 0.99
+    for q in ("nw", "ne", "se"):
+        _write_readings(q, NAMES, [0, 1, 2], [0, 2, 0], [0.99, 0.95, 0.95])
+    _write_readings("sw", NAMES, [0, 1, 2], [1, 2, 0], [0.6, 0.95, 0.95])
+    got = report.top_reading_calibration()
+    assert got["labels"] == 3 and got["right"] == 3
+    bins = {(b["from"], b["to"]): b for b in got["bins"]}
+    assert bins[(0.5, 0.7)]["labels"] == 1 and bins[(0.5, 0.7)]["right"] == 1.0
+    assert bins[(0.9, 0.97)]["labels"] == 2
+    assert got["used"] == list(energy.TOP_READING_FIT)
+
+
+def test_the_report_scores_the_walls_by_quarter_against_the_scoring_table(synthetic_city, tmp_path):
+    C = synthetic_city
+    both = C.known[C.a] & C.known[C.b]
+    _write_walls(tmp_path / "true", np.where(both & (C.table[C.a] != C.table[C.b]), 6.0, -6.0))
+    before = report.walls_evaluation(tmp_path / "true")["held_out_log_loss"]
+    assert before == pytest.approx({q: np.log1p(np.exp(-6.0)) for q in paths.QUARTERS}, abs=1e-6)
+    # a by-eye correction puts lot 0 (nw) in NC-1: its two borders become table lines the walls call open, in nw only
+    (paths.TABLE_DIR / table.CORRECTIONS_FILE).write_text(
+        "group,verdict,pass,A,B,lots,blklots\n0,A,1,NC-1,RH-1,1,0000\n")
+    city.city.cache_clear()
+    after = report.walls_evaluation(tmp_path / "true")["held_out_log_loss"]
+    assert after["nw"] > before["nw"] and all(after[q] == before[q] for q in ("ne", "sw", "se"))

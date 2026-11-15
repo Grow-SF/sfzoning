@@ -1,6 +1,7 @@
 """The city the solver reads: the lots, their neighbours and the table's codes (the `solver-lots` stage's lots.npz
 and table.parquet), the page's ink on the same grid, the wall odds (the `solver-walls` stage's walls_{q}.npz), and
 the runs the solver writes (data/solver/solve/runs/)."""
+import hashlib
 from functools import cached_property, lru_cache
 from pathlib import Path
 
@@ -20,6 +21,21 @@ def wall_odds(q: str, walls_dir: Path | None = None) -> np.ndarray:
     if not f.is_file():
         raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver walls`")
     return np.nan_to_num(np.load(f)["lo_ab"].astype(float), nan=UNREAD_ODDS)
+
+
+def walls_digest(walls_dir: Path | None = None) -> str:
+    """What identifies the walls of `walls_dir` (default WALLS_DIR): the sha256 of every quarter's odds as written
+    (walls_{q}.npz `lo_ab`, its type, shape and bytes, nw ne sw se), so the same odds written again are the same
+    walls."""
+    h = hashlib.sha256()
+    for q in paths.QUARTERS:
+        f = Path(walls_dir or paths.WALLS_DIR) / f"walls_{q}.npz"
+        if not f.is_file():
+            raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver walls`")
+        lo = np.ascontiguousarray(np.load(f)["lo_ab"])
+        h.update(f"{q} {lo.dtype.str} {lo.shape}\n".encode())
+        h.update(lo.tobytes())
+    return h.hexdigest()
 
 
 class City:

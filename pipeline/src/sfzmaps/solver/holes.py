@@ -30,6 +30,7 @@ from sfzmaps.solver.measures import QUARTERS, Table, data_errors_file, holes
 
 FT_PER_PX = grid.FT_PER_PX
 DATA_ERROR_CAUSES = {"SLIVER UNDER THE BAND", "PRINTED ONE LOT OVER", "ON THE LINE, READ AS NO WALL"}
+DATA_ERROR_INKED = 0.5      # a data error's wrong lot is at least this share inked
 
 
 def _ink_per_border(M):
@@ -132,15 +133,23 @@ def report_causes(run, picture=None, save_data_errors=False):
               f"{r['heavy']:.2f} ink {r['ink']:.2f} | band {r['band_off']:+.0f} ft into a {r['lot_w']:.0f}-ft lot, "
               f"{r['lot_ink']:.0%} inked | wrong lots {len(r['wrong_lots'])} (area {r['area']}); energy to fix: "
               f"labels {r['dU']:+.1f}, differ {r['dD']:+.1f}, same {r['dS']:+.1f}; labels {r['labels']}")
-    errors = [r for r in rows if r["cause"] in DATA_ERROR_CAUSES and r["lot_ink"] >= 0.5]
+    errors = data_errors(rows)
     print(f"data errors: {len(errors)} holes, {len({lot for r in errors for lot in r['wrong_lots']})} parcels")
     if save_data_errors:
-        _save_data_errors(errors, load_run(run))
+        write_data_errors(errors, load_run(run))
     if picture:
         _picture(rows, load_run(run), picture)
 
 
-def _save_data_errors(errors, codes):
+def data_errors(rows):
+    """the holes of `rows` (from `causes`) that are data errors: a sliver, one-lot-over or on-the-line hole whose
+    wrong lot is at least DATA_ERROR_INKED inked"""
+    return [r for r in rows if r["cause"] in DATA_ERROR_CAUSES and r["lot_ink"] >= DATA_ERROR_INKED]
+
+
+def write_data_errors(errors, codes):
+    """Write the data-error parcels of `errors` (the run's `codes` give each its drawing's code):
+    data-errors-2000-digital.csv and data_errors.npz in SOLVE_DIR.  Returns the parcels' lot indices."""
     C = city()
     lonlat = C.lots.to_crs(4326).geometry.representative_point()
     csv_file = paths.SOLVE_DIR / "data-errors-2000-digital.csv"
@@ -157,6 +166,7 @@ def _save_data_errors(errors, codes):
     lots = sorted({lot for r in errors for lot in r["wrong_lots"]})
     np.savez_compressed(data_errors_file(), lots=np.array(lots, int))
     print(f"saved {csv_file} and {data_errors_file()} ({len(lots)} parcels)")
+    return lots
 
 
 def _picture(rows, codes, out, F=5):

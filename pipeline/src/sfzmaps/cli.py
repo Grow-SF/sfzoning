@@ -1066,20 +1066,22 @@ def solver_placement(walls: Path = _WALLS_OPTION) -> None:
 
 @solver_app.command("solve")
 def solver_solve(
-    run: str = typer.Argument(..., help="A name for the run (data/solver/solve/runs/RUN.npz)."),
+    run: str = typer.Argument(..., help="A name for the run (data/solver/solve/runs/RUN.npz); the stage's is "
+                                        "'final'."),
     walls: Path = _WALLS_OPTION,
     true_borders: bool = typer.Option(False, "--true-borders",
                                       help="The ceiling check: the table's own borders as walls."),
-    keep_costs: bool = typer.Option(False, "--keep-costs", help="Keep each solve's costs (needed by `holes`)."),
 ) -> None:
-    """Solve the four held-out quarters side by side, join them and score the run (data-error parcels left out)."""
-    from sfzmaps.solver import solve
+    """Fit the placement, solve the four held-out quarters side by side and join them, list the data errors among
+    the run's holes, and score it against J7: data/solver/solve/placement.npz, runs/RUN*.npz (with each solve's
+    costs), data_errors.npz, data-errors-2000-digital.csv, report.json and report.md."""
+    from sfzmaps.solver import report, solve
     try:
-        solve.solve_all(run, walls, true_borders, keep_costs)
+        found = solve.solve_and_report(run, walls, true_borders)
     except RuntimeError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)
-    _solver_score([run], True)
+    typer.echo(report.markdown(found))
 
 
 @solver_app.command("solve-quarter")

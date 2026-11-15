@@ -397,6 +397,48 @@ def test_the_page_and_the_lots_read_only_the_inputs_file_they_use():
         assert inputs == [f"inputs/{used}"], name
 
 
+def test_the_walls_read_what_build_walls_reads_and_follow_the_four_detectors():
+    t = build.stages()
+    st = t["solver-walls"]
+    assert build.stage_commands("solver-walls") == [["solver", "walls"]]
+    assert {"solver-labels", "solver-text-nw", "solver-text-ne", "solver-text-sw", "solver-text-se"} <= set(st.upstream)
+    deps = build.stage_deps(st)
+    for d in ("data/solver/page", "data/solver/lots", "data/solver/labels/strokes.npz",
+              "data/solver/prints/terra_boxes.json", "data/solver/text-nw/chance", "data/solver/text-ne/chance",
+              "data/solver/text-sw/chance", "data/solver/text-se/chance",
+              "data/work/2000-digital-zoning",                  # the sheets' pages, where the text chance is read
+              "data/warp/2000-digital-zoning", "src/sfzmaps/solver/walls.py", "src/sfzmaps/solver/wallevidence.py",
+              "src/sfzmaps/solver/textgrid.py"):
+        assert d in deps, d
+    assert [d for d in deps if d.startswith("inputs/")] == ["inputs/merged-page/2000-digital-zoning.json"]
+    # not the prints' table, the detectors' weights or scores, the rest of the labels, or the solve's code
+    assert not any(d in ("data/solver/prints", "data/solver/prints/prints.parquet", "data/solver/labels")
+                   or d.startswith(("data/solver/text-scores", "data/solver/text-nw/model"))
+                   or d.endswith(("solver/solve.py", "solver/placement.py", "solver/search.py")) for d in deps)
+    assert build.stage_outs(st) == ["data/solver/walls"]
+
+
+def test_the_solve_reads_what_the_solve_and_its_report_read():
+    t = build.stages()
+    st = t["solver-solve"]
+    assert build.stage_commands("solver-solve") == [["solver", "solve", "final"]]
+    assert "solver-walls" in st.upstream
+    deps = build.stage_deps(st)
+    for d in ("data/solver/lots", "data/solver/page/ink.png", "data/solver/prints/prints.parquet",
+              "data/solver/labels", "data/solver/walls", "data/warp/2000-digital-zoning",
+              "src/sfzmaps/solver/solve.py", "src/sfzmaps/solver/placement.py", "src/sfzmaps/solver/holes.py",
+              "src/sfzmaps/solver/measures.py", "src/sfzmaps/solver/report.py"):
+        assert d in deps, d
+    # the hand leader moves and the by-eye corrections the score counts against; not the table file (the lots'
+    # table.parquet carries it) or a README
+    assert [d for d in deps if d.startswith("inputs/")] == ["inputs/2000-digital-zoning/label_fixes.csv",
+                                                            "inputs/zoning-2000/table-corrections.csv"]
+    # the walls' and the detector's code reach the solve only through the walls they wrote
+    assert not any(d.endswith(("solver/walls.py", "solver/wallevidence.py", "solver/textgrid.py"))
+                   or "/textnet/" in d or d.startswith(("data/solver/text-", "data/work/")) for d in deps)
+    assert build.stage_outs(st) == ["data/solver/solve"]
+
+
 def test_needs_prepare_is_false_for_command_stages():
     st = _command_stage()
     assert build.needs_prepare(["x"], {"x": st}) is False

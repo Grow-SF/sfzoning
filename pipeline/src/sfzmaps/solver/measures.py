@@ -91,7 +91,7 @@ def holes(T, drawn):
     longer = runs[length[runs] > HOLE_FT]
     order = np.argsort(comp[mi], kind="stable")
     by_run = np.split(mi[order], np.flatnonzero(np.diff(comp[mi][order])) + 1)
-    members = {int(comp[m[0]]): m for m in by_run}
+    members = {int(comp[m[0]]): m for m in by_run if len(m)}      # none when every table line is drawn
     return [members[int(h)] for h in hs], len(longer), float(length[longer].sum())
 
 

@@ -451,8 +451,9 @@ The inputs of the 2000 joint solver are made by `sfzmaps solver <part>` commands
 `sfzmaps build` (a "command stage": a `Stage` with `command`, `reads`, `writes` and `code`). A command stage's
 dependencies are the source files in the import closure of its `code` modules, `pyproject.toml`, `uv.lock` and its
 `reads`; it recomputes its whole output when any of them changes, and needs no `prepare()`. Of a checked-in inputs
-folder a stage reads only the file it uses, so a README, `PROVENANCE.md` or `table-corrections.csv` (read only in
-scoring) reruns nothing. Outputs go under `data/solver/`; `sfzmaps.solver.paths` names every location.
+folder a stage reads only the file it uses, so a README or `PROVENANCE.md` reruns nothing, and
+`table-corrections.csv` (read only in scoring) reruns only the solve. Outputs go under `data/solver/`;
+`sfzmaps.solver.paths` names every location.
 
 Hand-made and downloaded inputs are in `inputs/zoning-2000/` (see its README): the April 2000 table
 (`april2000.geojson.gz`, downloaded from DataSF by `sfzmaps solver fetch-table`, with `PROVENANCE.md`) and
@@ -590,9 +591,12 @@ lot sizes and the strokes (`solver/labels_stage.py`). Nothing asks a model, and 
   tagged a spur. It writes `strokes.npz` (`xy`, `w`, `off`, and per stroke `a`, `b`, `length`, `wmed`, `wiqr`,
   `spur`, `dega`, `degb`). On the 2000 page: about 172,000 strokes and 3,240 miles, in about 25 s and 3 GB.
 
-**The walls** (`sfzmaps solver walls [--workers N] [--candidates A,B] [--evaluate A,B ...]`,
-`solver/wallevidence.py` and `solver/walls.py`) give every pair of neighbouring lots (each row of `lots.npz` `pairs`)
-the log odds that a printed district line runs between them.
+**The walls** (`sfzmaps solver walls [--workers N] [--candidates A,B] [--evaluate A,B ...]`, stage `solver-walls`,
+after `solver-labels` and the four text stages; `solver/wallevidence.py` and `solver/walls.py`) give every pair of
+neighbouring lots (each row of `lots.npz` `pairs`) the log odds that a printed district line runs between them. The
+stage reads what they read: the merged page (with `frames.json`), the cut boxes, the lots, `strokes.npz`,
+`terra_boxes.json` and the warp's placements, and for the text discount the four detectors' `chance/` and the sheets'
+pages (`data/work/2000-digital-zoning`) they are read on.
 Nothing in them decides: every measure is a feature, and one fit weighs them all. The ink is read through the raw
 page's strokes (`strokes.npz`; no cleaned page, no line chain). A pair's border px are both px of every 4-neighbour
 px pair where `grown` changes between its lots, and each feature is a mean over them; distances enter as hat
@@ -679,18 +683,33 @@ The commands, run from `pipeline/`:
   hand leader moves (the rows of `inputs/2000-digital-zoning/label_fixes.csv` with a fix point, placed on the map
   through each sheet's corrected warp, matched to a print of the same code within 40 page px), and elsewhere the
   table: stay when the lot under the text has the code, else the nearest option whose lots mostly have it. It writes
-  `data/solver/solve/placement.npz` and prints each model's held-out hit rate, the hand moves' among them.
-- `sfzmaps solver solve RUN [--walls DIR] [--true-borders] [--keep-costs]` solves the city four times side by side,
-  one `sfzmaps solver solve-quarter RUN Q` process per held-out quarter (one BLAS thread each), each with that
-  quarter's walls, readings and placement model; every lot then takes its code from the solve that held its quarter
-  out. The energy charges each label once over the lots it may stand for (its top reading's trust calibrated:
-  logit = 0.128 + 1.085 logit(trust)), a different code across a border with odds < 0 its −odds, and the same code
-  across a border with odds > 0 its odds; a tiny tie-break (1e-4 × the cheapest path from each code's labels) settles
-  lots no label reaches. The search runs graph-cut expansion moves (PyMaxflow), then region moves, compound moves and
-  expansion again until the energy stops falling; a move is kept only if the exact energy falls. It is discrete and
-  the same every run. It writes `data/solver/solve/runs/RUN-<Q>.npz` and `.log`, the join `RUN.npz`, and with
-  `--keep-costs` each solve's costs (`RUN-<Q>-costs.npz`, for `holes`), then scores the run. `--true-borders` is the
-  ceiling check: the table's own borders as walls (odds ±6) must give back nearly the table.
+  `data/solver/solve/placement.npz` (with `walls`, the digest of the walls it was fitted with: `city.walls_digest`,
+  of every quarter's odds) and prints each model's held-out hit rate, the hand moves' among them. A solve refuses a
+  placement fitted on other walls.
+- `sfzmaps solver solve RUN [--walls DIR] [--true-borders]` (stage `solver-solve`, after `solver-walls`, runs
+  `solve final`) fits the placement as above, solves the city, lists the data errors among the run's holes and writes
+  the report. The solve runs four times side by side, one `sfzmaps solver solve-quarter RUN Q [--keep-costs]` process
+  per held-out quarter (one BLAS thread each), each with that quarter's walls, readings and placement model; every lot
+  then takes its code from the solve that held its quarter out. The energy charges each label once over the lots it
+  may stand for (its top reading's trust calibrated: logit = 0.128 + 1.085 logit(trust), `energy.TOP_READING_FIT`), a
+  different code across a border with odds < 0 its −odds, and the same code across a border with odds > 0 its odds;
+  a tiny tie-break (1e-4 × the cheapest path from each code's labels) settles lots no label reaches. The search runs
+  graph-cut expansion moves (PyMaxflow), then region moves, compound moves and expansion again until the energy stops
+  falling; a move is kept only if the exact energy falls. It is discrete: every lot gets the same code every run. It
+  writes `data/solver/solve/runs/RUN-<Q>.npz`, `.log` and each solve's costs (`RUN-<Q>-costs.npz`, for `holes`), the
+  join `RUN.npz`, the data errors (`data_errors.npz` and `data-errors-2000-digital.csv`, as `holes --save-data-errors`)
+  and the report (`solver/report.py`, `report.json` and `report.md`): the six measures (below) against J7's, with the
+  data-error parcels left out and with every lot; wrong lots by quarter, the largest incidents, the holes by cause,
+  the walls' held-out log loss per quarter (against the scoring table, beside J7's quoted numbers, and against the
+  table as downloaded, from their `evaluation.json`), the placement's hit rates; a check of `energy.TOP_READING_FIT`
+  on this build's held-out trust (each label's top reading, from the fit that held its lot's quarter out, against the
+  table as downloaded there: the log loss of the energy's calibration and of one fitted afresh, and stated against
+  right by trust); and what differs from J7's definitions. The report holds no times: the same run gives the same bytes.
+  `--true-borders` is the ceiling check: the table's own borders as walls (odds ±6) must give back nearly the table.
+  The stage reads the lots, the merged page's `ink.png` (the holes' causes), `prints.parquet`, the labels, the
+  walls, the warp's placements (the hand leader moves), `label_fixes.csv` and `table-corrections.csv`. On the 2000
+  page it takes about 4 minutes (the four solves about 165 s each, side by side), up to 17 GB in one process, and
+  writes about 110 MB, most of it the solves' costs.
 - `sfzmaps solver score RUN... [--with-data-errors]` scores runs by their mistakes (`solver/measures.py`): the share
   of the table's district lines the run draws and of the lines it draws that are table lines (by count and length),
   the share of zoning labels whose district comes out right, holes (missed runs of table line up to 100 ft that meet

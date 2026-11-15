@@ -17,7 +17,8 @@ fitted four times, each time without the labels whose lot (under the text) is in
 model's chances, so a holdout's solve uses only the model that did not see it.
 
 Writes data/solver/solve/placement.npz: per option, `label` (a prints.parquet row), `lot`, `chance`, `stay` and
-`holdout` (the quarter the model held out: nw 0, ne 1, sw 2, se 3)."""
+`holdout` (the quarter the model held out: nw 0, ne 1, sw 2, se 3); and `walls`, the digest of the walls it was
+fitted with (`city.walls_digest`): a solve with other walls refuses it."""
 import csv
 import json
 from collections import Counter
@@ -31,7 +32,7 @@ from scipy.spatial import cKDTree
 
 from sfzmaps import config
 from sfzmaps.solver import paths
-from sfzmaps.solver.city import city, wall_odds
+from sfzmaps.solver.city import city, wall_odds, walls_digest
 from sfzmaps.solver.codes import canon
 from sfzmaps.solver.trust import load_prints
 
@@ -230,18 +231,23 @@ def fit(walls_dir=None, log=print) -> dict:
     opts = np.array(out, dtype=object)
     paths.SOLVE_DIR.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(placement_file(), label=opts[:, 0].astype(int), lot=opts[:, 1].astype(int),
-                        chance=opts[:, 2].astype(float), stay=opts[:, 3].astype(bool), holdout=opts[:, 4].astype(int))
+                        chance=opts[:, 2].astype(float), stay=opts[:, 3].astype(bool), holdout=opts[:, 4].astype(int),
+                        walls=walls_digest(walls_dir))
     summary["options"] = len(opts)
     log(f"saved {placement_file()}: {len(opts):,} options for {len(set(opts[:, 0].tolist())):,} labels")
     return summary
 
 
-def load_options(q: str) -> dict:
-    """label -> [(lot, chance, is_stay)] for holdout q, stay first"""
+def load_options(q: str, walls_dir: Path | None = None) -> dict:
+    """label -> [(lot, chance, is_stay)] for holdout q, stay first.  The placement must have been fitted with the
+    walls of `walls_dir` (default WALLS_DIR): its walled areas come from them."""
     f = placement_file()
     if not f.is_file():
         raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver placement`")
     P = np.load(f)
+    if "walls" not in P.files or str(P["walls"]) != walls_digest(walls_dir):
+        raise ValueError(f"{f} was fitted with other walls than {walls_dir or paths.WALLS_DIR}: rerun "
+                         "`sfzmaps solver placement` with the same --walls")
     m = P["holdout"] == paths.QUARTERS.index(q)
     options = {}
     for label, lot, chance, stay in zip(P["label"][m], P["lot"][m], P["chance"][m], P["stay"][m]):
