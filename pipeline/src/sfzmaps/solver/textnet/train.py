@@ -1,19 +1,37 @@
-"""Fitting the text detector with one quarter of the city held out.
+"""Fitting the text detector, by a recipe (`Recipe`; its defaults are the recipe the four quarter models trained with).
 
-Each step takes BATCH crops of CROP x CROP px from the sheets' pages, centred on a px that is not held out (`centre_ok`,
-taken every CENTRE_STRIDE px each way): TEXT_SHARE of them on text, the rest on any ink.  Each crop is scaled by a
+Each step takes `batch` crops of `crop` x `crop` px from the sheets' pages, centred on a px where a crop may centre
+(taken every CENTRE_STRIDE px each way): TEXT_SHARE of them on text, the rest on any ink.  Each crop is scaled by a
 factor drawn log-uniformly from SCALE (so small street lettering also teaches big code lettering) and turned a random
-number of quarter turns (the reading angle turns with it).  The loss is binary cross-entropy on text over the known
-px, plus KIND_WEIGHT x the cross-entropy of the kind and ANGLE_WEIGHT x (1 - cosine) of the reading direction, both on
-known text px.  AdamW at LEARNING_RATE with a one-cycle schedule.  Every draw comes from one numpy generator and the
-weights from torch's, both seeded; torch runs deterministic algorithms on THREADS threads.  On the Mac's GPU the
-training runs in the GPU's exclusive turn (`sfzmaps.gpu`), which the caller takes (`stage.build_text`).  A loss that is
-not finite stops the training.
+number of quarter turns (the reading angle turns with it).  The sheets are the maps' (`data.SheetData`: centres from
+`data.centres`, crops drawn by `data.crop_targets`) or, until their stages go, a quarter model's 2000 sheets
+(`data.SheetTargets`: whole-page targets, cropped by `crop`).
 
-Writes data/solver/text-<q>/model.pt: the weights (`state_dict`) with the iterations, device and seed they came from.
+The loss is binary cross-entropy on text over the px it reads, plus KIND_WEIGHT x the cross-entropy of the kind and
+ANGLE_WEIGHT x (1 - cosine) of the reading direction, both on the text px it reads; a text-only network (`heads`
+"text") has the text's alone.  It reads the known px (`ink_only` "off"), only the known ink ("ink": the chance of text
+is only ever read at ink), or the known ink and the px next to it, the 8 around each ink px ("ink+1px").  AdamW
+(WEIGHT_DECAY) with a one-cycle schedule rising to `max_lr` over the first `pct_start` of the steps.  With
+`weight_average` the model kept is the moving average of the weights over the steps (`WeightAverage`).
+
+The parts of the loss stay on the device, summed; every LOG_EVERY steps (and at the last) their mean over those steps
+is read, logged and checked, so the device is waited on only then.  A mean that is not finite stops the training.
+
+Every draw comes from one numpy generator and the weights from torch's, both seeded; torch runs deterministic
+algorithms on THREADS threads.  With `prefetch` a background thread draws the batches ahead, from that one generator
+and in the same order, so the weights are the same bit for bit.  On the Mac's GPU the training runs in the GPU's
+exclusive turn (`sfzmaps.gpu`), which the caller takes (`stage.build_text`).
+
+`save_model` writes the weights with the recipe they came from; `predict.load_model` builds the network that recipe
+names.
 """
+import contextlib
+import dataclasses
 import logging
+import queue
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -29,19 +47,93 @@ log = logging.getLogger(__name__)
 ITERATIONS = 8000
 CROP = 320              # px, the side of a training crop
 BATCH = 12              # crops per step
+LEARNING_RATE = 2e-3    # the one-cycle schedule's peak
+PCT_START = 0.3         # the share of the steps the learning rate rises over
 TEXT_SHARE = 0.5        # the share of crops centred on text (the others on any ink)
 SCALE = (0.6, 1.6)      # the range of the factor each crop is scaled by
 CENTRE_STRIDE = 4       # crops centre on every this-many-th px each way
-LEARNING_RATE = 2e-3
 WEIGHT_DECAY = 1e-4
 KIND_WEIGHT = 0.5
 ANGLE_WEIGHT = 0.5
 THREADS = 4
-LOG_EVERY = 250         # iterations between progress lines
+LOG_EVERY = 250         # iterations between progress lines (and reads of the loss from the device)
+PREFETCH = 2            # batches drawn ahead with `prefetch`
+CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text"), "decoder": ("full", "light")}
+
+
+@dataclasses.dataclass(frozen=True)
+class Recipe:
+    """How the detector is trained.  The defaults are today's recipe, the four quarter models'.
+
+      iterations      steps
+      max_lr          the one-cycle schedule's peak learning rate
+      pct_start       the share of the steps the learning rate rises over
+      batch, crop     crops per step, and their side in px
+      width           the network's channels at full resolution (`model.TextNet`)
+      ink_only        the px the loss reads: "off" every known px, "ink" the known ink, "ink+1px" the known ink and
+                      the px next to it
+      half_size       the network runs at half the px each way, on the ink folded 2 x 2 into channels (`model.fold`);
+                      crops must be even
+      heads           "all" outputs (text, kind, reading direction) or "text" alone
+      weight_average  the decay of the moving average of the weights kept as the model (`WeightAverage`); 0 is off
+      prefetch        the next batches drawn in a background thread (the same batches)
+      decoder         "full" two convolutions per block up, or "light" one
+    """
+    iterations: int = ITERATIONS
+    max_lr: float = LEARNING_RATE
+    pct_start: float = PCT_START
+    batch: int = BATCH
+    crop: int = CROP
+    width: int = model.WIDTH
+    ink_only: str = "off"
+    half_size: bool = False
+    heads: str = "all"
+    weight_average: float = 0.0
+    prefetch: bool = False
+    decoder: str = "full"
+
+    def __post_init__(self):
+        for f in dataclasses.fields(self):
+            v = getattr(self, f.name)
+            if f.type is bool and not isinstance(v, bool):
+                raise ValueError(f"recipe: {f.name} is True or False, not {v!r}")
+            if f.type is int and (isinstance(v, bool) or not isinstance(v, (int, np.integer))):
+                raise ValueError(f"recipe: {f.name} is a whole number, not {v!r}")
+            if f.type is float and (isinstance(v, bool) or not isinstance(v, (int, float, np.integer, np.floating))):
+                raise ValueError(f"recipe: {f.name} is a number, not {v!r}")
+            if f.type in (int, float):
+                object.__setattr__(self, f.name, f.type(v))     # one type per setting: one name, one saved form
+            if f.name in CHOICES and v not in CHOICES[f.name]:
+                raise ValueError(f"recipe: {f.name} is one of {', '.join(CHOICES[f.name])}, not {v!r}")
+        for name, ok, rule in (("iterations", self.iterations >= 1, "at least 1"),
+                               ("batch", self.batch >= 1, "at least 1"), ("crop", self.crop >= 1, "at least 1"),
+                               ("width", self.width >= 1, "at least 1"), ("max_lr", self.max_lr > 0, "above 0"),
+                               ("pct_start", 0 < self.pct_start < 1, "between 0 and 1"),
+                               ("weight_average", 0 <= self.weight_average < 1, "at least 0 and below 1")):
+            if not ok:
+                raise ValueError(f"recipe: {name} must be {rule}, not {getattr(self, name)}")
+        if self.half_size and self.crop % model.FOLD:
+            raise ValueError(f"recipe: half_size folds each crop {model.FOLD} x {model.FOLD}, so the crop must be "
+                             f"even, not {self.crop}")
+
+    def name(self) -> str:
+        """A short id of the recipe, the same every run (for folder names): each setting that differs from today's
+        (the defaults), sorted by name, as "name=value" (a switch turned on as its name alone), joined by "-";
+        "default" when none differs."""
+        today = Recipe()
+        changed = sorted((f.name, getattr(self, f.name)) for f in dataclasses.fields(self)
+                         if getattr(self, f.name) != getattr(today, f.name))
+        return "-".join(k if v is True else f"{k}={v}" for k, v in changed) or "default"
+
+
+def build_net(recipe: Recipe) -> model.TextNet:
+    """The (untrained) network a recipe names: its width, size, outputs and decoder."""
+    return model.TextNet(width=recipe.width, outputs=model.OUTPUTS if recipe.heads == "all" else 1,
+                         half_size=recipe.half_size, decoder=recipe.decoder)
 
 
 def default_device() -> str:
-    """The device a quarter trains on unless told: "mps" where available, else "cpu"."""
+    """The device the detector trains on unless told: "mps" where available, else "cpu"."""
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
@@ -51,67 +143,131 @@ def settle_torch() -> None:
     torch.use_deterministic_algorithms(True)
 
 
-def centre_pools(sheets: list[data.SheetTargets]) -> tuple[np.ndarray, np.ndarray]:
-    """Where crops may centre, as (sheet, row, col) rows (int64): every CENTRE_STRIDE-th px each way that is
-    `centre_ok`, on text and on ink."""
-    on_text, on_ink = [], []
+class Pool:
+    """Crop centres on many sheets, kept sheet by sheet (no one array of them all): `pool[j]` is the j-th centre,
+    counting through the sheets in order and each sheet's centres in order, as (sheet index, row, col)."""
+
+    def __init__(self, parts: list[np.ndarray]):
+        self.parts = parts                                    # each sheet's (n, 2) (row, col)
+        self.ends = np.cumsum([len(p) for p in parts], dtype=np.int64)
+
+    def __len__(self) -> int:
+        return int(self.ends[-1]) if len(self.ends) else 0
+
+    def __getitem__(self, j) -> tuple[int, int, int]:
+        i = int(np.searchsorted(self.ends, j, side="right"))
+        r, c = self.parts[i][j - (int(self.ends[i - 1]) if i else 0)]
+        return i, int(r), int(c)
+
+
+def _quarter_centres(t: data.SheetTargets) -> tuple[np.ndarray, np.ndarray]:
+    """A quarter model's sheet's crop centres, on text and on ink: every CENTRE_STRIDE-th px each way that is
+    `centre_ok`, as int32 (n, 2) (row, col)."""
     k = CENTRE_STRIDE
-    for i, t in enumerate(sheets):
-        ok = t.centre_ok[::k, ::k]
-        for pool, mask in ((on_text, ok & (t.text[::k, ::k] > 0)), (on_ink, ok & t.ink[::k, ::k])):
-            r, c = np.nonzero(mask)
-            pool.append(np.c_[np.full(len(r), i), r * k, c * k].astype(np.int64))
-    pools = np.concatenate(on_text), np.concatenate(on_ink)
+    ok = t.centre_ok[::k, ::k]
+    out = []
+    for mask in (ok & (t.text[::k, ::k] > 0), ok & t.ink[::k, ::k]):
+        r, c = np.nonzero(mask)
+        out.append(np.c_[r * k, c * k].astype(np.int32))
+    return out[0], out[1]
+
+
+def centre_pools(sheets: list) -> tuple[Pool, Pool]:
+    """Where crops may centre on the sheets, on text and on ink (`data.centres` every CENTRE_STRIDE-th px; on a quarter
+    model's sheets, the `centre_ok` px among those), data.LOAD_THREADS sheets at a time.  Stops (ValueError) when
+    either pool is empty."""
+    def one(s):
+        return _quarter_centres(s) if isinstance(s, data.SheetTargets) else data.centres(s, CENTRE_STRIDE)
+
+    with ThreadPoolExecutor(data.LOAD_THREADS) as ex:
+        found = list(ex.map(one, sheets))
+    pools = Pool([f[0] for f in found]), Pool([f[1] for f in found])
     if not len(pools[0]) or not len(pools[1]):
-        raise ValueError(f"nothing to train on: {len(pools[0])} text and {len(pools[1])} ink px outside the held-out "
-                         "quarter")
+        raise ValueError(f"nothing to train on: {len(pools[0])} text and {len(pools[1])} ink px where a crop may "
+                         "centre")
     return pools
 
 
-def crop(t: data.SheetTargets, y: int, x: int, scale: float, turns: int) -> dict[str, np.ndarray]:
-    """The training crop centred on page px (row y, col x), moved inside the page: CROP / `scale` px of page resized
-    to CROP x CROP (nearest px) and turned `turns` quarter turns counter-clockwise, the reading angle with it (in
-    [-180, 180) degrees on text, 0 elsewhere).  Keys: ink, text, kind, angle, known."""
+def crop(t: data.SheetTargets, y: int, x: int, scale: float, turns: int, size: int = CROP) -> dict[str, np.ndarray]:
+    """A quarter model's training crop centred on page px (row y, col x), moved inside the page: `size` / `scale` px
+    of page resized to `size` x `size` (nearest px) and turned `turns` quarter turns counter-clockwise, the reading
+    angle with it (in [-180, 180) degrees on text, 0 elsewhere).  Keys: ink, text, kind, angle, known."""
     h, w = t.ink.shape
-    src = int(round(CROP / scale))
+    src = int(round(size / scale))
     y0 = int(np.clip(y - src // 2, 0, h - src))
     x0 = int(np.clip(x - src // 2, 0, w - src))
     sl = (slice(y0, y0 + src), slice(x0, x0 + src))
     angle = np.where(t.text[sl] > 0, (t.angle[sl].astype(np.int32) + 90 * turns + 180) % 360 - 180, 0)
     parts = {"ink": t.ink[sl], "text": t.text[sl], "kind": t.kind[sl], "angle": angle.astype(np.int16),
              "known": t.known[sl]}
-    if src != CROP:
-        parts = {k: cv2.resize(v.astype(np.uint8) if v.dtype == bool else v, (CROP, CROP),
+    if src != size:
+        parts = {k: cv2.resize(v.astype(np.uint8) if v.dtype == bool else v, (size, size),
                                interpolation=cv2.INTER_NEAREST).astype(v.dtype) for k, v in parts.items()}
     return {k: np.rot90(v, turns) for k, v in parts.items()}
 
 
-def draw(sheets: list[data.SheetTargets], pools: tuple[np.ndarray, np.ndarray],
+def _crop_at(sheet, y: int, x: int, size: int, scale: float, turns: int) -> dict[str, np.ndarray]:
+    if isinstance(sheet, data.SheetTargets):
+        return crop(sheet, y, x, scale, turns, size)
+    return data.crop_targets(sheet, y, x, size, scale, turns)
+
+
+def draw(sheets: list, pools: tuple[Pool, Pool], recipe: Recipe,
          rng: np.random.Generator) -> list[dict[str, np.ndarray]]:
-    """One batch of BATCH crops: for each, text or ink, a centre from that pool, a scale and a number of turns."""
+    """One batch of `recipe.batch` crops: for each, text or ink, a centre from that pool, a scale and a number of
+    turns."""
     out = []
-    for _ in range(BATCH):
+    for _ in range(recipe.batch):
         pool = pools[0] if rng.random() < TEXT_SHARE else pools[1]
         i, y, x = pool[rng.integers(len(pool))]
         scale = float(np.exp(rng.uniform(np.log(SCALE[0]), np.log(SCALE[1]))))
-        out.append(crop(sheets[i], int(y), int(x), scale, int(rng.integers(4))))
+        out.append(_crop_at(sheets[i], y, x, recipe.crop, scale, int(rng.integers(4))))
     return out
 
 
-def to_tensors(crops: list[dict[str, np.ndarray]], device) -> tuple[torch.Tensor, ...]:
-    """A batch's input and targets on `device`: ink (n, 1, h, w) float, text float, kind int64, angle (degrees) float
-    and the loss weight (known) float."""
+def _next_to(ink: np.ndarray) -> np.ndarray:
+    """Each px of (n, h, w) bool crops that is ink or one of the 8 px around an ink px of its crop."""
+    h, w = ink.shape[1:]
+    p = np.pad(ink, ((0, 0), (1, 1), (1, 1)))
+    out = np.zeros_like(ink)
+    for dy in range(3):
+        for dx in range(3):
+            out |= p[:, dy:dy + h, dx:dx + w]
+    return out
+
+
+def loss_weight(crops: list[dict[str, np.ndarray]], ink_only: str = "off") -> np.ndarray:
+    """Which px of a batch the loss reads (n, h, w) bool: the known px, only their ink, or their ink and the px next
+    to it (`ink_only` "off", "ink" or "ink+1px")."""
+    known = np.stack([c["known"] for c in crops])
+    if ink_only == "off":
+        return known
+    ink = np.stack([c["ink"] for c in crops])
+    return known & (_next_to(ink) if ink_only == "ink+1px" else ink)
+
+
+def batch_tensors(crops: list[dict[str, np.ndarray]], ink_only: str = "off") -> tuple[torch.Tensor, ...]:
+    """A batch's input and targets on the CPU: ink (n, 1, h, w) float, text float, kind int64, angle (degrees) float
+    and the loss weight (`loss_weight`) float."""
     def stack(key, dtype):
-        return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype)).to(device)
+        return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype))
     return (stack("ink", np.float32)[:, None], stack("text", np.float32), stack("kind", np.int64),
-            stack("angle", np.float32), stack("known", np.float32))
+            stack("angle", np.float32), torch.from_numpy(loss_weight(crops, ink_only).astype(np.float32)))
+
+
+def to_tensors(crops: list[dict[str, np.ndarray]], device, ink_only: str = "off") -> tuple[torch.Tensor, ...]:
+    """`batch_tensors` on `device`."""
+    return tuple(v.to(device) for v in batch_tensors(crops, ink_only))
 
 
 def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor,
-            w: torch.Tensor) -> tuple[torch.Tensor, tuple[float, float, float]]:
-    """The loss of a batch (see the module) and its three parts (text, kind, angle).  Px with weight `w` 0 add
-    nothing to it."""
+            w: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """The loss of a batch (see the module) and its three parts (text, kind, angle) as one tensor on the batch's
+    device (reading it waits for the device).  Px of weight `w` 0 add nothing to it.  A text-only network's (one
+    output) is its text part; the other two are 0."""
     lt = (F.binary_cross_entropy_with_logits(out[:, 0], t, reduction="none") * w).sum() / w.sum().clamp(min=1)
+    if out.shape[1] == 1:
+        return lt, torch.stack([lt, torch.zeros_like(lt), torch.zeros_like(lt)])
     # Masked sums, not boolean indexing: the backward of indexing has no deterministic kernel on mps.
     m = ((t > 0) & (w > 0)).float()
     n = m.sum().clamp(min=1)
@@ -120,37 +276,119 @@ def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor
     rad = torch.deg2rad(a)
     cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
     la = ((1 - cosine) * m).sum() / n
-    return lt + KIND_WEIGHT * lk + ANGLE_WEIGHT * la, (lt.item(), lk.item(), la.item())
+    return lt + KIND_WEIGHT * lk + ANGLE_WEIGHT * la, torch.stack([lt, lk, la])
 
 
-def fit(sheets: list[data.SheetTargets], iterations: int = ITERATIONS, device: str | None = None,
-        seed: int = 0) -> model.TextNet:
-    """A TextNet fitted on the sheets' known px for `iterations` steps on `device` (default `default_device()`).  On
-    `mps` the caller holds the GPU's exclusive turn (`gpu.gpu_turn`).  Raises FloatingPointError at the first step
-    whose loss is not finite."""
+class WeightAverage:
+    """The exponential moving average of a network's state, taken after every step (`Recipe.weight_average`, the
+    decay d): every floating-point entry, the weights and the batch norms' running statistics.  After t steps it is
+    sum over steps s of (1 - d) d^(t - s) w_s, divided by 1 - d^t so the steps' shares sum to 1 (the untrained state
+    has none).  Whole-number entries (the batch norms' step counts) stay the network's own."""
+
+    def __init__(self, net: model.TextNet, decay: float):
+        self.decay, self.steps = decay, 0
+        self.sums = {k: torch.zeros_like(v) for k, v in net.state_dict().items() if v.is_floating_point()}
+
+    @torch.no_grad()
+    def update(self, net: model.TextNet) -> None:
+        """Add the network's state after a step."""
+        state = net.state_dict()
+        for k, s in self.sums.items():
+            s.mul_(self.decay).add_(state[k], alpha=1 - self.decay)
+        self.steps += 1
+
+    @torch.no_grad()
+    def put_into(self, net: model.TextNet) -> None:
+        """Set the network's floating-point state to the average."""
+        state = net.state_dict()
+        share = 1 - self.decay ** self.steps
+        for k, s in self.sums.items():
+            state[k].copy_(s / share)
+
+
+@contextlib.contextmanager
+def _batches(sheets: list, pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator):
+    """The training's batches (`batch_tensors` of `draw`), one per step, from `rng` in order: drawn when asked for or,
+    with `recipe.prefetch`, by a background thread up to PREFETCH ahead (which alone uses `rng` meanwhile: the same
+    batches, in the same order).  An error in that thread is raised where the batch is asked for."""
+    def make():
+        return batch_tensors(draw(sheets, pools, recipe, rng), recipe.ink_only)
+
+    if not recipe.prefetch:
+        yield (make() for _ in range(recipe.iterations))
+        return
+    ready, stop = queue.Queue(PREFETCH), threading.Event()
+
+    def put(item) -> bool:
+        while not stop.is_set():
+            try:
+                ready.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def produce():
+        try:
+            for _ in range(recipe.iterations):
+                if not put(make()):
+                    return
+        except BaseException as e:      # noqa: BLE001 - handed to the training's thread, raised there
+            put(e)
+
+    def consume():
+        for _ in range(recipe.iterations):
+            item = ready.get()
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+    worker = threading.Thread(target=produce, name="textnet-prefetch", daemon=True)
+    worker.start()
+    try:
+        yield consume()
+    finally:
+        stop.set()
+        worker.join()
+
+
+def fit(sheets: list, recipe: Recipe, device: str | None = None, seed: int = 0) -> model.TextNet:
+    """A TextNet fitted on the sheets by `recipe` on `device` (default `default_device()`); see the module.  On `mps`
+    the caller holds the GPU's exclusive turn (`gpu.gpu_turn`).  Raises FloatingPointError at the first log whose
+    mean loss over the steps since the last is not finite."""
     device = device or default_device()
     settle_torch()
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     pools = centre_pools(sheets)
-    net = model.TextNet().to(device)
-    opt = torch.optim.AdamW(net.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LEARNING_RATE, total_steps=iterations)
-    t0, running = time.perf_counter(), np.zeros(3)
-    for it in range(iterations):
-        x, t, k, a, w = to_tensors(draw(sheets, pools, rng), device)
-        loss, parts = loss_fn(net(x), t, k, a, w)
-        if not np.isfinite(parts).all():
-            raise FloatingPointError(f"iteration {it + 1}: the loss is not finite (text {parts[0]}, kind "
-                                     f"{parts[1]}, angle {parts[2]})")
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-        sched.step()
-        running = 0.98 * running + 0.02 * np.array(parts)
-        if (it + 1) % LOG_EVERY == 0 or it + 1 == iterations:
-            log.info("iteration %d: text %.4f, kind %.4f, angle %.4f (%.0f s)", it + 1, *running,
-                     time.perf_counter() - t0)
+    net = build_net(recipe).to(device)
+    opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=WEIGHT_DECAY)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.iterations,
+                                                pct_start=recipe.pct_start)
+    average = WeightAverage(net, recipe.weight_average) if recipe.weight_average else None
+    sums, first, t0 = torch.zeros(3, device=device), 1, time.perf_counter()
+    with _batches(sheets, pools, recipe, rng) as batches:
+        for it, batch in enumerate(batches, 1):
+            x, t, k, a, w = (v.to(device) for v in batch)
+            loss, parts = loss_fn(net(x), t, k, a, w)
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            if average is not None:
+                average.update(net)
+            sums += parts.detach()
+            if it % LOG_EVERY == 0 or it == recipe.iterations:
+                mean = (sums / (it - first + 1)).cpu().numpy()
+                if not np.isfinite(mean).all():
+                    raise FloatingPointError(f"iterations {first}-{it}: the loss is not finite (mean text {mean[0]}, "
+                                             f"kind {mean[1]}, angle {mean[2]})")
+                log.info("iterations %d-%d: text %.4f, kind %.4f, angle %.4f (%.1f s)", first, it, *mean,
+                         time.perf_counter() - t0)
+                sums.zero_()
+                first = it + 1
+    if average is not None:
+        average.put_into(net)
     return net
 
 
@@ -165,11 +403,11 @@ def quarter_targets(q: str) -> list[data.SheetTargets]:
     return sheets
 
 
-def save_model(q: str, net: model.TextNet, iterations: int, device: str, seed: int = 0) -> Path:
-    """Write the weights of the detector that held out `q` to `text_dir(q)/model.pt`, with the iterations, device
-    and seed they came from."""
-    out = paths.text_dir(q) / "model.pt"
+def save_model(out: Path, net: model.TextNet, recipe: Recipe, device: str, seed: int = 0) -> Path:
+    """Write a trained detector to `out` (its folder made): the weights (`state_dict`, on the CPU) and the recipe they
+    came from (as a dict), with its iterations, the device and the seed.  Returns `out`."""
+    out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"state_dict": {k: v.cpu() for k, v in net.state_dict().items()}, "iterations": iterations,
-                "device": device, "seed": seed}, out)
+    torch.save({"state_dict": {k: v.cpu() for k, v in net.state_dict().items()}, "recipe": dataclasses.asdict(recipe),
+                "iterations": recipe.iterations, "device": device, "seed": seed}, out)
     return out

@@ -550,7 +550,7 @@ cross-entropy + 0.5 × (1 − cosine) of the reading direction; AdamW at 2e-3 wi
 from one seeded numpy generator and the weights from seeded torch, with deterministic algorithms on 4 threads. The
 model then scores every sheet's page in 1,024-px tiles seen with 64 px of context. A stage
 (`solver/textnet/stage.py`) makes its folder afresh and writes only `data/solver/text-<Q>/model.pt` (the weights,
-with the iterations, device and seed) and `chance/<sheet>.png` (uint8, the chance of text × 255, page px). Its code is
+with the recipe that made them, the iterations, device and seed) and `chance/<sheet>.png` (uint8, the chance of text × 255, page px). Its code is
 the detector's alone: the lots, the table, the merged page, the scoring, the walls' and the solve's folders and the
 GPU's turns are not in it, so a change to them retrains nothing. Its reads are named file by file for each of the 13
 sheets of `paths.SHEETS` (a fixed list, so `dvc.yaml` is the same in a fresh clone before anything is pulled):
@@ -579,8 +579,9 @@ and a turn whose file was deleted (and maybe made again by another process) whil
 file now at that path. A detector's stage trains and scores in one exclusive turn: nothing else computes on the GPU
 meanwhile. The sheet warp's fits (`sfzmaps warp`) take a shared turn: warps run beside each other, never beside a
 detector. The tests hold a shared turn for their whole run, taken without waiting; while a detector has the GPU they
-never use it (the warp's fits run on the CPU and the tests marked `mps` are skipped). A loss that is not finite stops
-the training.
+never use it (the warp's fits run on the CPU and the tests marked `mps` are skipped). The loss stays on the device
+between progress lines (every 250 steps, so the GPU is not waited on each step); a mean loss there that is not finite
+stops the training.
 
 **The trust of each reading** (`solver/trust.py`, run by the `solver-labels` stage) is the chance that a code read
 on a print is the district printed there. Each different code among a print's five reads (Sol, Terra, the third

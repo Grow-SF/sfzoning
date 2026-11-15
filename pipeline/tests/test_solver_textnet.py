@@ -2,6 +2,7 @@ import contextlib
 import dataclasses
 import gzip
 import json
+import threading
 
 import cv2
 import numpy as np
@@ -143,19 +144,20 @@ def test_model_output_shape():
     out = net(torch.zeros(2, 1, 64, 96))
     assert out.shape == (2, model.OUTPUTS, 64, 96) and model.OUTPUTS == 7
     assert sum(isinstance(m, torch.nn.Conv2d) for m in net.modules()) == 2 * (5 + 4) + 1
+    # the light decoder: one convolution in each block up
+    light = model.TextNet(decoder="light")
+    assert light(torch.zeros(2, 1, 64, 96)).shape == (2, model.OUTPUTS, 64, 96)
+    assert sum(isinstance(m, torch.nn.Conv2d) for m in light.modules()) == 2 * 5 + 4 + 1
 
 
-@pytest.fixture
-def small_crops(monkeypatch):
-    """Smaller batches than the real ones, so CPU tests stay quick; nothing else changes."""
-    monkeypatch.setattr(train, "CROP", 64)
-    monkeypatch.setattr(train, "BATCH", 4)
+SMALL = train.Recipe(batch=4, crop=64)        # small batches, so CPU tests stay quick; every other setting today's
 
 
-def test_three_iterations_twice_give_identical_weights_on_cpu(sheet, small_crops):
-    t = data.sheet_targets(sheet, "ne")
-    first = train.fit([t], iterations=3, device="cpu", seed=0).state_dict()
-    second = train.fit([t], iterations=3, device="cpu", seed=0).state_dict()
+def test_three_iterations_twice_give_identical_weights_on_cpu(maps):
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
+    recipe = dataclasses.replace(SMALL, iterations=3)
+    first = train.fit(sheets, recipe, device="cpu", seed=0).state_dict()
+    second = train.fit(sheets, recipe, device="cpu", seed=0).state_dict()
     torch.manual_seed(0)
     untrained = model.TextNet().state_dict()
     assert first.keys() == second.keys()
@@ -163,35 +165,36 @@ def test_three_iterations_twice_give_identical_weights_on_cpu(sheet, small_crops
     assert not all(torch.equal(first[k], untrained[k]) for k in first)
 
 
-def test_crop_turns_the_reading_angle_with_the_picture(sheet, small_crops):
+def test_crop_turns_the_reading_angle_with_the_picture(sheet):
     t = data.sheet_targets(sheet, "ne")
-    flat = train.crop(t, 140, 460, scale=1.0, turns=0)
-    turned = train.crop(t, 140, 460, scale=1.0, turns=1)
+    flat = train.crop(t, 140, 460, scale=1.0, turns=0, size=64)
+    turned = train.crop(t, 140, 460, scale=1.0, turns=1, size=64)
     assert np.array_equal(turned["ink"], np.rot90(flat["ink"]))
     on = turned["text"] > 0
     assert on.any() and (turned["angle"][on] == -180).all()      # 90 + 90 = 180, read in [-180, 180)
     assert (flat["angle"][flat["text"] > 0] == 90).all()
 
 
-def _loss_and_grads(net, parts):
-    x, t, k, a, w = train.to_tensors([parts], "cpu")
+def _loss_and_grads(net, parts, ink_only="off"):
+    """The loss of one crop (a dict) or a batch of them (a list), and every gradient, with `ink_only`'s weights."""
+    x, t, k, a, w = train.to_tensors(parts if isinstance(parts, list) else [parts], "cpu", ink_only)
     net.zero_grad()
     loss, _ = train.loss_fn(net(x), t, k, a, w)
     loss.backward()
     return loss.item(), [p.grad.clone() for p in net.parameters()]
 
 
-def test_heldout_pixels_carry_no_loss(sheet, small_crops):
+def test_heldout_pixels_carry_no_loss(sheet):
     t = data.sheet_targets(sheet, "ne")
     torch.manual_seed(0)
     net = model.TextNet()
     # a crop made only of the held-out quarter, on word B: no loss, no gradient
-    inside = train.crop(t, 140, 460, scale=1.0, turns=0)
+    inside = train.crop(t, 140, 460, scale=1.0, turns=0, size=64)
     assert not inside["known"].any() and inside["text"].any()
     loss, grads = _loss_and_grads(net, inside)
     assert loss == 0 and all((g == 0).all() for g in grads)
     # a crop across the split: changing the held-out pixels' targets changes nothing
-    across = train.crop(t, 200, 330, scale=1.0, turns=0)
+    across = train.crop(t, 200, 330, scale=1.0, turns=0, size=64)
     held = ~across["known"] & ~t.unknown[168:232, 298:362]
     assert held.any() and across["known"].any()
     loss, grads = _loss_and_grads(net, across)
@@ -235,19 +238,21 @@ def test_masked_loss_equals_the_boolean_indexed_loss_even_where_the_direction_ou
     assert torch.allclose(g_masked, g_indexed, rtol=1e-10, atol=1e-15)
 
 
-def test_fit_stops_at_the_first_loss_that_is_not_finite(sheet, small_crops, monkeypatch):
-    t = data.sheet_targets(sheet, "ne")
+def test_fit_stops_at_the_first_log_whose_loss_is_not_finite(maps, monkeypatch):
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
+    monkeypatch.setattr(train, "LOG_EVERY", 2)
     real, seen = train.loss_fn, []
 
     def loss_fn(*args):
         loss, parts = real(*args)
         seen.append(parts)
-        return (loss * float("nan"), (float("nan"),) * 3) if len(seen) == 2 else (loss, parts)
+        return (loss * float("nan"), parts * float("nan")) if len(seen) == 3 else (loss, parts)
 
     monkeypatch.setattr(train, "loss_fn", loss_fn)
-    with pytest.raises(FloatingPointError, match="iteration 2"):
-        train.fit([t], iterations=5, device="cpu", seed=0)
-    assert len(seen) == 2
+    # the losses stay on the device until the log after step 4, which finds the third not finite
+    with pytest.raises(FloatingPointError, match="iterations 3-4"):
+        train.fit(sheets, dataclasses.replace(SMALL, iterations=6, batch=2, width=8), device="cpu", seed=0)
+    assert len(seen) == 4
 
 
 @pytest.fixture
@@ -259,7 +264,7 @@ def solver_dir(tmp_path, monkeypatch):
 
 
 def test_a_quarter_trains_and_scores_in_one_exclusive_turn_and_writes_only_the_model_and_chances(
-        sheet, small_crops, solver_dir, monkeypatch):
+        sheet, solver_dir, monkeypatch):
     turns, calls = [], []
 
     @contextlib.contextmanager
@@ -274,6 +279,7 @@ def test_a_quarter_trains_and_scores_in_one_exclusive_turn_and_writes_only_the_m
             return fn(*args, **kwargs)
         return wrapped
 
+    monkeypatch.setattr(stage, "DEFAULT_RECIPE", SMALL)
     monkeypatch.setattr(stage.gpu, "gpu_turn", turn)
     monkeypatch.setattr(data, "sheet_targets", inside(data.sheet_targets, "targets"))
     monkeypatch.setattr(train, "loss_fn", inside(train.loss_fn, "step"))
@@ -288,13 +294,14 @@ def test_a_quarter_trains_and_scores_in_one_exclusive_turn_and_writes_only_the_m
     assert [p.name for p in paths.chance_dir("ne").iterdir()] == [f"{SHEET}.png"]
     saved = torch.load(paths.text_dir("ne") / "model.pt")
     assert (saved["iterations"], saved["device"], saved["seed"]) == (2, "cpu", 0)
+    assert train.Recipe(**saved["recipe"]) == dataclasses.replace(SMALL, iterations=2)
     assert (s["quarter"], s["iterations"], s["device"], s["sheets"]) == ("ne", 2, "cpu", 1)
 
 
 def test_a_quarter_trains_the_default_steps_unless_told_and_never_zero(solver_dir, monkeypatch):
     steps = []
     monkeypatch.setattr(train, "quarter_targets", lambda q: [])
-    monkeypatch.setattr(train, "fit", lambda sheets, iterations, device, seed=0: steps.append(iterations) or "net")
+    monkeypatch.setattr(train, "fit", lambda sheets, recipe, device, seed=0: steps.append(recipe.iterations) or "net")
     monkeypatch.setattr(train, "save_model", lambda *args: None)
     monkeypatch.setattr(predict, "predict_sheets", lambda q, device: 0)
     stage.build_text("nw", device="cpu")
@@ -679,3 +686,200 @@ def test_text_sheet_lists_match_the_saved_answers(tmp_path, monkeypatch):
     assert list(real) == [*paths.TEXT_TRAIN_SERIES, *paths.TEXT_TEST_SERIES]
     assert not set(paths.TEXT_TRAIN_SERIES) & set(paths.TEXT_TEST_SERIES)
     assert all(list(v) == sorted(set(v), key=boxes.sheet_order) for v in real.values())
+
+
+# --- the training recipe and its options -----------------------------------------------------------------------------
+
+TODAYS_PARAMETERS = 2_758_567     # the detector's weights before the recipe (model.TextNet of 78c74c1)
+
+
+def _todays_loss(out, t, k, a, w):
+    """The loss as it was before the recipe (train.loss_fn of 78c74c1), copied: binary cross-entropy on text over the
+    px of weight `w`, plus 0.5 x the kind's cross-entropy and 0.5 x (1 - cosine) of the reading direction, both on
+    weighted text px."""
+    lt = (F.binary_cross_entropy_with_logits(out[:, 0], t, reduction="none") * w).sum() / w.sum().clamp(min=1)
+    m = ((t > 0) & (w > 0)).float()
+    n = m.sum().clamp(min=1)
+    lk = (F.cross_entropy(out[:, 1:5], torch.where(m > 0, k, torch.zeros_like(k)), reduction="none") * m).sum() / n
+    cs = out[:, 5:7]
+    rad = torch.deg2rad(a)
+    cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
+    la = ((1 - cosine) * m).sum() / n
+    return lt + 0.5 * lk + 0.5 * la
+
+
+def _fixed_batch(sheets, size=64) -> list[dict[str, np.ndarray]]:
+    """Four crops of the two synthetic sheets: on word A, across the validation area's corner (word C), on the 1960
+    zoning code and on its slanted street, at three scales and every turn."""
+    new, old = sheets
+    return [data.crop_targets(new, 115, 140, size, 1.0, 0), data.crop_targets(new, 300, 300, size, 1.0, 1),
+            data.crop_targets(old, 170, 250, size, 0.8, 2), data.crop_targets(old, 340, 440, size, 1.3, 3)]
+
+
+def _flip(crops, where) -> list[dict[str, np.ndarray]]:
+    """The crops with their text, kind and reading-angle targets changed at the px `where` (one mask per crop)."""
+    return [{**c, "text": np.where(m, 1 - c["text"], c["text"]).astype(np.uint8),
+             "kind": np.where(m, 2, c["kind"]).astype(np.uint8),
+             "angle": np.where(m, 45, c["angle"]).astype(np.int16)} for c, m in zip(crops, where)]
+
+
+def test_default_recipe_trains_as_today(maps):
+    # today's settings: 8,000 steps of 12 crops of 320 px, a one-cycle peak of 2e-3 reached 30% in, width 24, the
+    # loss on every known px, the network at full size with all seven outputs, no average, no prefetch
+    assert dataclasses.asdict(train.Recipe()) == {
+        "iterations": 8000, "max_lr": 2e-3, "pct_start": 0.3, "batch": 12, "crop": 320, "width": 24, "ink_only": "off",
+        "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full"}
+    torch.manual_seed(0)
+    net = train.build_net(train.Recipe())
+    assert sum(p.numel() for p in net.parameters()) == TODAYS_PARAMETERS
+    # on a fixed batch, the loss is today's: the weight is the known px, and the loss of the outputs is the same
+    crops = _fixed_batch(data.load_sheets([paths.SERIES, OLD], hold_out_validation=True))
+    x, t, k, a, w = train.to_tensors(crops, "cpu", train.Recipe().ink_only)
+    known = torch.from_numpy(np.stack([c["known"] for c in crops]).astype(np.float32))
+    assert torch.equal(w, known) and (t * w).sum() > 0 and (w == 0).any()
+    out = net(x)
+    assert out.shape == (4, 7, 64, 64)
+    assert torch.equal(train.loss_fn(out, t, k, a, w)[0], _todays_loss(out, t, k, a, known))
+
+
+def test_half_size_fold_is_lossless_and_shapes_round_trip(monkeypatch):
+    x = torch.arange(2 * 6 * 10, dtype=torch.float32).reshape(2, 1, 6, 10)
+    folded = model.fold(x)
+    assert folded.shape == (2, 4, 3, 5)
+    assert torch.equal(folded.flatten().sort().values, x.flatten())      # every px kept once: nothing lost
+    assert torch.equal(model.unfold(folded), x)
+    # the half-size network runs on the folded ink, at half the px each way, and gives every px its outputs
+    torch.manual_seed(0)
+    net = train.build_net(train.Recipe(half_size=True, width=8)).eval()
+    seen = []
+    net.down[0].register_forward_hook(lambda m, i, o: seen.append(tuple(i[0].shape)))
+    assert net(torch.zeros(2, 1, 64, 96)).shape == (2, model.OUTPUTS, 64, 96) and seen == [(2, 4, 32, 48)]
+    # crops are even: an odd crop can't be folded, so the recipe refuses it
+    with pytest.raises(ValueError, match="even"):
+        train.Recipe(half_size=True, crop=321)
+    assert predict.TILE % 2 == 0 and predict.PAD % 2 == 0
+    # an odd page: padded with paper to the network's multiple, scored, and cut back to the page
+    ink = np.zeros((75, 101), bool)
+    ink[10:20, 10:40] = True
+    ink[74, :] = True
+    ink[:, 100] = True
+    got = predict.chance(net, ink, "cpu")
+    assert got.shape == ink.shape and got.dtype == np.uint8
+    padded = np.zeros((96, 128), np.float32)
+    padded[:75, :101] = ink
+    with torch.no_grad():
+        want = torch.sigmoid(net(torch.from_numpy(padded)[None, None])[0, 0, :75, :101]).numpy()
+    assert np.array_equal(got, np.round(255 * want).astype(np.uint8))
+    # and in tiles smaller than the page, whose windows at the page's odd edge are odd before padding
+    monkeypatch.setattr(predict, "TILE", 32)
+    monkeypatch.setattr(predict, "PAD", 8)
+    tiled = predict.chance(net, ink, "cpu")
+    assert tiled.shape == ink.shape and tiled[74].all() and tiled[:, 100].all()
+
+
+def test_ink_only_loss_ignores_paper(maps):
+    crops = _fixed_batch(data.load_sheets([paths.SERIES, OLD], hold_out_validation=True))
+    ink = [c["ink"] for c in crops]
+    near = [cv2.dilate(i.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0 for i in ink]   # ink and the px next to it
+    torch.manual_seed(0)
+    net = train.build_net(train.Recipe(width=8))
+    for ink_only, paper in (("ink", [~i for i in ink]), ("ink+1px", [~n for n in near])):
+        loss, grads = _loss_and_grads(net, crops, ink_only)
+        assert loss > 0
+        loss2, grads2 = _loss_and_grads(net, _flip(crops, paper), ink_only)
+        assert loss2 == loss and all(torch.equal(g, g2) for g, g2 in zip(grads, grads2))
+    # the px next to the ink count with "ink+1px" only; with "off", paper counts too
+    ring = [n & ~i for n, i in zip(near, ink)]
+    assert _loss_and_grads(net, _flip(crops, ring), "ink")[0] == _loss_and_grads(net, crops, "ink")[0]
+    assert _loss_and_grads(net, _flip(crops, ring), "ink+1px")[0] != _loss_and_grads(net, crops, "ink+1px")[0]
+    assert _loss_and_grads(net, _flip(crops, [~i for i in ink]), "off")[0] != _loss_and_grads(net, crops, "off")[0]
+
+
+def test_prefetch_gives_bit_identical_weights(maps, monkeypatch):
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
+    real, drawn_on = train.draw, []
+    monkeypatch.setattr(train, "draw", lambda *args: drawn_on.append(threading.current_thread()) or real(*args))
+    recipe = dataclasses.replace(SMALL, iterations=5, width=8)
+    off = train.fit(sheets, recipe, device="cpu", seed=0).state_dict()
+    on = train.fit(sheets, dataclasses.replace(recipe, prefetch=True), device="cpu", seed=0).state_dict()
+    assert off.keys() == on.keys() and all(torch.equal(off[k], on[k]) for k in off)
+    # the batches with prefetch were drawn in another thread, one per step and no more
+    main = threading.main_thread()
+    assert len(drawn_on) == 10 and all(t is main for t in drawn_on[:5]) and not any(t is main for t in drawn_on[5:])
+
+
+def test_text_head_only_predicts_text(maps):
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
+    recipe = dataclasses.replace(SMALL, heads="text", width=8, iterations=2)
+    torch.manual_seed(0)
+    net = train.build_net(recipe)
+    crops = _fixed_batch(sheets)
+    x, t, k, a, w = train.to_tensors(crops, "cpu")
+    out = net(x)
+    assert out.shape == (4, 1, 64, 64)
+    # the loss is the text's alone
+    loss, parts = train.loss_fn(out, t, k, a, w)
+    text = (F.binary_cross_entropy_with_logits(out[:, 0], t, reduction="none") * w).sum() / w.sum()
+    assert torch.equal(loss, text) and torch.equal(parts, torch.stack([text, torch.tensor(0.0), torch.tensor(0.0)]))
+    # so the kind and the reading angle teach it nothing
+    other = [{**c, "kind": np.where(c["text"] > 0, 3 - c["kind"] % 4, c["kind"]).astype(np.uint8),
+              "angle": np.where(c["text"] > 0, 90, 0).astype(np.int16)} for c in crops]
+    loss1, grads1 = _loss_and_grads(net, crops)
+    loss2, grads2 = _loss_and_grads(net, other)
+    assert loss1 == loss2 and all(torch.equal(g, g2) for g, g2 in zip(grads1, grads2))
+    # it trains and scores pages
+    fitted = train.fit(sheets, recipe, device="cpu", seed=0).eval()
+    assert predict.chance(fitted, data.page_ink(sheets[0]), "cpu").shape == (SIZE, SIZE)
+
+
+def test_weight_average_is_the_ema_of_weights(maps, monkeypatch):
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
+    decay, steps = 0.6, 4
+    recipe = dataclasses.replace(SMALL, iterations=steps, width=8, weight_average=decay)
+    after, real = [], train.WeightAverage.update
+
+    def update(self, net):
+        after.append({k: v.detach().clone() for k, v in net.state_dict().items()})
+        return real(self, net)
+
+    monkeypatch.setattr(train.WeightAverage, "update", update)
+    got = train.fit(sheets, recipe, device="cpu", seed=0).state_dict()
+    plain = train.fit(sheets, dataclasses.replace(recipe, weight_average=0.0), device="cpu", seed=0).state_dict()
+    # the average is taken after every step, beside the training: the weights it averages are the plain recipe's
+    assert len(after) == steps and all(torch.equal(after[-1][k], plain[k]) for k in plain)
+    # the model is their exponential moving average, each step weighted as the decay gives and the shares scaled to
+    # sum to 1 (so the untrained weights count for nothing); every float of the state, the batch norms' statistics too
+    shares = [(1 - decay) * decay ** (steps - 1 - s) / (1 - decay ** steps) for s in range(steps)]
+    assert sum(shares) == pytest.approx(1.0)
+    for key, v in got.items():
+        if v.is_floating_point():
+            want = sum(share * after[s][key] for s, share in enumerate(shares))
+            assert torch.allclose(v, want, rtol=1e-5, atol=1e-7), key
+        else:
+            assert torch.equal(v, plain[key]), key
+    assert not all(torch.equal(got[k], plain[k]) for k in plain)
+
+
+def test_recipe_round_trips_through_the_saved_model(maps, tmp_path):
+    # the short id: the settings that differ from today's, by name; a switch on as its name alone
+    assert train.Recipe().name() == "default"
+    assert train.Recipe(iterations=2000, half_size=True, ink_only="ink").name() == (
+        "half_size-ink_only=ink-iterations=2000")
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
+    recipe = train.Recipe(iterations=2, batch=2, crop=64, width=8, half_size=True, heads="text", decoder="light",
+                          ink_only="ink+1px", weight_average=0.5, max_lr=6e-3, pct_start=0.1)
+    assert recipe.name() == ("batch=2-crop=64-decoder=light-half_size-heads=text-ink_only=ink+1px-iterations=2-"
+                             "max_lr=0.006-pct_start=0.1-weight_average=0.5-width=8")
+    net = train.fit(sheets, recipe, device="cpu", seed=0).eval()
+    f = train.save_model(tmp_path / "text" / "model.pt", net, recipe, "cpu", 0)
+    saved = torch.load(f)
+    assert train.Recipe(**saved["recipe"]) == recipe
+    assert (saved["iterations"], saved["device"], saved["seed"]) == (2, "cpu", 0)
+    # prediction builds the network the recipe names, and scores as the trained one does
+    loaded = predict.load_model(f, "cpu")
+    ink = data.page_ink(sheets[1])
+    assert np.array_equal(predict.chance(loaded, ink, "cpu"), predict.chance(net, ink, "cpu"))
+    # a model saved without its recipe is refused, not guessed
+    torch.save({k: v for k, v in saved.items() if k != "recipe"}, tmp_path / "old.pt")
+    with pytest.raises(ValueError, match="recipe"):
+        predict.load_model(tmp_path / "old.pt", "cpu")
