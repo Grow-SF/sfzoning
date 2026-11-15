@@ -21,7 +21,7 @@ the detector's out-of-fold text chance (`textgrid.text_chance`, all four quarter
                     between the lots' centroids runs along their long axes (the mean |cos| with each lot's minimum
                     rotated rectangle's long side: 0 side by side, 0.5 between, 1 back to back); pairs across a
                     street: hats over STREET_WIDTH_KNOTS of the street's width (the distance between the two lots)
-`evaluate_candidates` scores a set of them without writing anything.
+`evaluate_candidates` scores several configurations of them from inputs read once, and writes nothing.
 
 Writes, under data/solver/walls/:
   walls_{q}.npz     lo_ab: float32 per pair row, the log odds from the fit without quarter q
@@ -29,7 +29,8 @@ Writes, under data/solver/walls/:
                     training pairs' number and log loss; the number of pairs and features; the candidate features
                     used; the strokes touching text (where Terra's letter share is read) (no times: the same inputs
                     give the same bytes)
-  text_chance.png   the detector's text chance on the grid, when a candidate reads it (`textgrid`)
+  text_chance.png   the detector's text chance on the grid that the fit read, when a candidate reads it
+                    (`textgrid.write_text_chance`; an output only, never read back)
 """
 import json
 import logging
@@ -64,6 +65,8 @@ CANDIDATES = (wallevidence.TEXT_WEIGHTED, wallevidence.TEXT_WEIGHTED_BESIDE_LETT
 
 def check_candidates(names) -> tuple[str, ...]:
     """The candidate features named, in CANDIDATES order; an unknown name, or both text weightings, is an error."""
+    if isinstance(names, str):
+        raise TypeError(f"a configuration is a list of candidate names, not the string {names!r}")
     named = set(names)
     unknown = sorted(named - set(CANDIDATES))
     if unknown:
@@ -227,15 +230,19 @@ class Inputs:
     ink: np.ndarray | None
 
 
-def load_inputs(candidates=(), fresh_text: bool = False) -> Inputs:
-    """Read what the walls need under `candidates` (see `Inputs`).  The text chance is read from all four quarters'
-    detectors (`textgrid.text_chance`; remade, not read back, with `fresh_text`)."""
+READS_TEXT = (wallevidence.TEXT_WEIGHTED, wallevidence.TEXT_WEIGHTED_BESIDE_LETTERS, wallevidence.STREET_CROSSING)
+
+
+def load_inputs(configs) -> Inputs:
+    """Read, once, what the walls need to fit every configuration of `configs` (each a list of candidate names; see
+    `Inputs`).  The text chance is computed from all four quarters' detectors (`textgrid.text_chance`)."""
     import geopandas as gpd
     import shapely
 
     from sfzmaps.solver import textgrid
     t0 = time.perf_counter()
-    candidates = check_candidates(candidates)
+    configs = [check_candidates(c) for c in configs]
+    used = {c for config in configs for c in config}
     lots_ = lots.load_lots()
     mapped = page.load_sheets() > 0
     strokes_file = paths.LABELS_DIR / "strokes.npz"
@@ -243,18 +250,17 @@ def load_inputs(candidates=(), fresh_text: bool = False) -> Inputs:
         raise FileNotFoundError(f"can't read {strokes_file}: run `sfzmaps solver labels`")
     strokes = dict(np.load(strokes_file))
     letter = None
-    if wallevidence.TEXT_WEIGHTED not in candidates:
+    if any(wallevidence.TEXT_WEIGHTED not in config for config in configs):      # Terra's letter share is read
         boxes = terra_text(lots_.lot.shape)
         letter = wallevidence.letter_share(strokes, boxes)
         del boxes
         log.info("letter share: %d of %d strokes touch text (%.0f s)", (letter > 0).sum(), len(letter),
                  time.perf_counter() - t0)
-    reads_text = {wallevidence.TEXT_WEIGHTED, wallevidence.TEXT_WEIGHTED_BESIDE_LETTERS, wallevidence.STREET_CROSSING}
-    text = textgrid.text_chance(cache=not fresh_text) if reads_text & set(candidates) else None
-    ink = page.load_ink() if wallevidence.STREET_CROSSING in candidates else None
+    text = textgrid.text_chance() if used & set(READS_TEXT) else None
+    ink = page.load_ink() if wallevidence.STREET_CROSSING in used else None
     geometries = gpd.read_parquet(paths.LOTS_DIR / "table.parquet").geometry.values
     log_area = np.log(np.maximum(shapely.area(geometries), 1.0))
-    return Inputs(lots_, mapped, strokes, log_area, geometries if CONTEXT in candidates else None, letter, text, ink)
+    return Inputs(lots_, mapped, strokes, log_area, geometries if CONTEXT in used else None, letter, text, ink)
 
 
 def candidate_design(inputs: Inputs, candidates=(), workers: int = 1) -> np.ndarray:
@@ -267,33 +273,40 @@ def candidate_design(inputs: Inputs, candidates=(), workers: int = 1) -> np.ndar
     return design(F, inputs.lots, inputs.log_area, extra)
 
 
-def evaluate_candidates(names, workers: int | None = None) -> dict:
-    """Fit the walls with the candidate features `names` (one configuration; [] is the default set) per held-out
-    quarter, as `build_walls` fits them (the table as downloaded), and return the evaluation (per quarter the
-    held-out log loss and pairs, the training log loss and pairs; the pairs, features and candidates) without
-    writing anything but the text chance's file (`textgrid.text_chance`, read back when it is there)."""
-    candidates = check_candidates(names)
+def evaluate_candidates(configs, workers: int | None = None) -> list[dict]:
+    """Fit the walls under each configuration of `configs` (each a list of candidate names; [] is the default set)
+    per held-out quarter, as `build_walls` fits them (the table as downloaded), from inputs read once.  Returns one
+    evaluation per configuration, in order (per quarter the held-out log loss and pairs, the training log loss and
+    pairs; the pairs, features and candidates).  Writes nothing."""
+    configs = [check_candidates(c) for c in configs]
+    if not configs:
+        raise ValueError("no configuration to evaluate")
     workers = workers or max(1, (os.cpu_count() or 2) // 2)
-    inputs = load_inputs(candidates)
-    X = candidate_design(inputs, candidates, workers)
-    _, evaluation = fit_walls(X, inputs.lots)
-    return {**evaluation, "candidates": list(candidates)}
+    inputs = load_inputs(configs)
+    out = []
+    for candidates in configs:
+        _, evaluation = fit_walls(candidate_design(inputs, candidates, workers), inputs.lots)
+        out.append({**evaluation, "candidates": list(candidates)})
+    return out
 
 
 def build_walls(workers: int | None = None, candidates=()) -> dict:
     """Fit the wall odds with the candidate features `candidates` (none by default) and write walls_{q}.npz and
-    evaluation.json into WALLS_DIR (and text_chance.png, remade from all four quarters, when a candidate reads it).
+    evaluation.json into WALLS_DIR, and text_chance.png (`textgrid.write_text_chance`) when a candidate reads it.
     `workers`: processes for the closing paths (default half the CPUs).  Returns the evaluation and the seconds
     taken (not written)."""
+    from sfzmaps.solver import textgrid
     t0 = time.perf_counter()
     candidates = check_candidates(candidates)
     workers = workers or max(1, (os.cpu_count() or 2) // 2)
-    inputs = load_inputs(candidates, fresh_text=True)
+    inputs = load_inputs([candidates])
     X = candidate_design(inputs, candidates, workers)
     odds, evaluation = fit_walls(X, inputs.lots)
     evaluation["candidates"] = list(candidates)
     if inputs.letter is not None:
         evaluation["strokes_touching_text"] = int((inputs.letter > 0).sum())
     write_walls(paths.WALLS_DIR, odds, evaluation)
+    if inputs.text is not None:
+        textgrid.write_text_chance(paths.WALLS_DIR, inputs.text)
     return {**evaluation, "seconds": round(time.perf_counter() - t0, 1)}
 

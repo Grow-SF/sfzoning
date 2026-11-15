@@ -1,18 +1,22 @@
-"""The text detector's chance of text on the solver's grid, out of fold: every grid px takes the chance of the model
-that held out its own quarter (`grid.quarter_of` of the px's map point), so no px is scored by a model that learned
-from it.
+"""The text detector's chance of text on the solver's grid, out of fold: no px is scored by a model that learned from
+it.  Each detector held out the page px of one quarter, by the quarter of the px's map point through the sheet's
+corrected placement (`textnet.data.page_quarters`); so the chance at a page px of quarter q is taken from model q, the
+one that never trained on it.
 
 Each sheet's chance (`text-<q>/chance/<sheet>.png`, uint8 chance x 255 in its page px) is read through the sheet's
 corrected placement exactly as the merged page reads its ink (`page.sheet_px`: the same crop, the frame of
 `page/frames.json` minus the cut boxes, and the same page px for every grid px).  A grid px takes the chance only from
-the sheets that inked it (page < INK_BELOW there, as the merge reads ink); where several did, the largest chance
-wins, and a px no sheet inked is 0.
+the sheets that inked it (page < INK_BELOW at the page px it reads, as the merge reads ink); where several did, the
+largest chance wins, and a px no sheet inked is 0.
 
-Writes WALLS_DIR/text_chance.png (uint8, chance x 255, HEIGHT x WIDTH of the grid) when made from all four quarters.
+`text_chance` computes it afresh at every call and writes nothing; the walls stage writes what it used with
+`write_text_chance` (WALLS_DIR/text_chance.png: uint8, chance x 255, HEIGHT x WIDTH of the grid).
 """
 import json
 import logging
+import os
 import time
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -48,24 +52,18 @@ def _read(path, shape) -> np.ndarray:
     return a
 
 
-def text_chance(quarters=None, cache: bool = True) -> np.ndarray:
+def text_chance(quarters=None) -> np.ndarray:
     """The chance of text at every grid px (uint8, chance x 255, HEIGHT x WIDTH), out of fold (see the module).
 
-    `quarters`: the quarters whose models are read (default all four); a px in another quarter is 0, so a subset is
-    only a partial look.  Made from all four, the result is written to WALLS_DIR/text_chance.png; with `cache` that
-    file is read back instead of remade when it is there (it holds the chances as they were when it was written: a
-    retrained detector needs `cache=False`).  A missing chance file of a quarter asked for is an error."""
+    `quarters`: the quarters whose models are read (default all four); a page px of another quarter gives 0, so a
+    subset is only a partial look.  A missing chance file of a quarter asked for is an error.  Nothing is written."""
+    from sfzmaps.solver.textnet import data
     t0 = time.perf_counter()
     asked = set(paths.QUARTERS if quarters is None else quarters)
     unknown = sorted(asked - set(paths.QUARTERS))
     if unknown:
         raise ValueError(f"no quarter {unknown[0]!r}: one of {', '.join(paths.QUARTERS)}")
     quarters = [q for q in paths.QUARTERS if q in asked]
-    every = len(quarters) == len(paths.QUARTERS)
-    cached = paths.WALLS_DIR / TEXT_CHANCE_FILE
-    if every and cache and cached.is_file():
-        return _read(cached, (grid.HEIGHT, grid.WIDTH))
-    from sfzmaps.solver.textnet import data
     names = paths.sheet_names()
     files = _chance_files(quarters, names)
     frames = json.loads((paths.PAGE_DIR / "frames.json").read_text())
@@ -80,6 +78,7 @@ def text_chance(quarters=None, cache: bool = True) -> np.ndarray:
         tr = SheetTransform.from_json(json.loads((folder / "transform.json").read_text()), folder=folder)
         pg = data.load_page(name)
         dark = pg < grid.INK_BELOW
+        held_out_by = model_of[data.page_quarters(tr, pg.shape)]     # per page px: the model that never saw it
         quad = np.asarray(frames[name], float)
         crop = page.crop_mask(pg.shape, quad, cuts.get(name, []))
         chance = np.stack([_read(files[q][name], pg.shape) for q in quarters])      # (quarters, h, w)
@@ -91,13 +90,25 @@ def text_chance(quarters=None, cache: bool = True) -> np.ndarray:
             r, c, y, x = r[inked], c[inked], y[inked], x[inked]
             if not len(r):
                 continue
-            model = model_of[grid.quarter_of(grid.to_map(np.c_[c + cols.start + 0.5, r + rows.start + 0.5]))]
+            model = held_out_by[y, x]
             value = np.where(model >= 0, chance[np.maximum(model, 0), y, x], 0).astype(np.uint8)
             band = out[rows, cols]
             band[r, c] = np.maximum(band[r, c], value)
         log.info("text chance: %s laid (%.0f s)", name, time.perf_counter() - t0)
-    if every:
-        paths.WALLS_DIR.mkdir(parents=True, exist_ok=True)
-        if not cv2.imwrite(str(cached), out):
-            raise OSError(f"can't write {cached}")
     return out
+
+
+def write_text_chance(folder: Path, chance: np.ndarray) -> Path:
+    """Write `chance` (from `text_chance`) to folder/text_chance.png: to a temporary file in the folder first, then
+    renamed into place, so a reader never sees a part-written file.  Returns the file."""
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    final = folder / TEXT_CHANCE_FILE
+    part = folder / f".{TEXT_CHANCE_FILE}.{os.getpid()}.part.png"     # cv2 picks the format by the extension
+    try:
+        if not cv2.imwrite(str(part), chance):
+            raise OSError(f"can't write {part}")
+        os.replace(part, final)
+    finally:
+        part.unlink(missing_ok=True)
+    return final

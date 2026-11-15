@@ -590,9 +590,9 @@ lot sizes and the strokes (`solver/labels_stage.py`). Nothing asks a model, and 
   tagged a spur. It writes `strokes.npz` (`xy`, `w`, `off`, and per stroke `a`, `b`, `length`, `wmed`, `wiqr`,
   `spur`, `dega`, `degb`). On the 2000 page: about 172,000 strokes and 3,240 miles, in about 25 s and 3 GB.
 
-**The walls** (`sfzmaps solver walls [--workers N] [--candidates A,B] [--evaluate]`, `solver/wallevidence.py` and
-`solver/walls.py`) give every pair
-of neighbouring lots (each row of `lots.npz` `pairs`) the log odds that a printed district line runs between them.
+**The walls** (`sfzmaps solver walls [--workers N] [--candidates A,B] [--evaluate A,B ...]`,
+`solver/wallevidence.py` and `solver/walls.py`) give every pair of neighbouring lots (each row of `lots.npz` `pairs`)
+the log odds that a printed district line runs between them.
 Nothing in them decides: every measure is a feature, and one fit weighs them all. The ink is read through the raw
 page's strokes (`strokes.npz`; no cleaned page, no line chain). A pair's border px are both px of every 4-neighbour
 px pair where `grown` changes between its lots, and each feature is a mean over them; distances enter as hat
@@ -631,12 +631,14 @@ number, and the same inputs give the same odds. On the 2000 page: 437,000 pairs 
 closing paths from 68,363 loose ends, in about 4 minutes and 12 GB with 6 workers.
 
 **Candidate wall features** (`--candidates A,B`, none by default; `walls.CANDIDATES`). Each is tried against the set
-above and kept only if it lowers the held-out log loss in at least three quarters; `--evaluate` (or
-`walls.evaluate_candidates`) scores a configuration without writing any walls. Most read the text detector's chance
-of text on the grid (`solver/textgrid.py`, written to `data/solver/walls/text_chance.png`): every grid px takes the
-chance of the detector that held out its own quarter, read through each sheet's corrected placement at the same page
-px as the merged page reads its ink (`page.sheet_px`, the same crop), the largest among the sheets that inked the px,
-0 where none did. It needs all four quarters' detectors.
+above and kept only if it lowers the held-out log loss in at least three quarters. `--evaluate A,B` (repeatable,
+`none` for the set above; `walls.evaluate_candidates`) scores several configurations from inputs read once and
+writes nothing. Most candidates read the text detector's chance of text on the grid (`solver/textgrid.py`, computed
+afresh each time; the walls write the one they fitted with to `data/solver/walls/text_chance.png`, never read back).
+Each sheet's chance is read through its corrected placement at the same page px as the merged page reads its ink
+(`page.sheet_px`, the same crop), from the detector that held out that page px (the quarter of its map point, as the
+detector's own held-out mask has it), so no px is scored by a model that learned from it; a grid px takes the
+largest chance among the sheets that inked it, 0 where none did. It needs all four quarters' detectors.
 
 - `text_weighted`: the stroke evidence and the profile weigh each border px's nearest stroke px by (1 − its text
   chance), and read that chance where Terra's letter share was (the same 208 columns);

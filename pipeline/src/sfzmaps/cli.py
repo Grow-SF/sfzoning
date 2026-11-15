@@ -1024,10 +1024,12 @@ def solver_text_scores() -> None:
 def solver_walls(
     workers: int = typer.Option(None, "--workers", help="Processes for the closing paths (default half the CPUs)."),
     candidates: str = typer.Option("", "--candidates",
-                                   help="Candidate features to add, comma-separated (walls.CANDIDATES); none by "
+                                   help="Candidate features to fit with, comma-separated (walls.CANDIDATES); none by "
                                         "default."),
-    evaluate: bool = typer.Option(False, "--evaluate",
-                                  help="Only score the configuration: print its held-out log loss, write no walls."),
+    evaluate: list[str] = typer.Option(None, "--evaluate",
+                                       help="Only score a configuration (comma-separated candidates; 'none' for the "
+                                            "default set) and print its held-out log loss; repeat for several, all "
+                                            "fitted on inputs read once. Writes nothing."),
 ) -> None:
     """Fit the wall odds, held out by quarter, from the raw page's strokes: data/solver/walls/walls_<q>.npz and
     evaluation.json."""
@@ -1035,12 +1037,20 @@ def solver_walls(
 
     from sfzmaps.solver import walls
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    names = [c.strip() for c in candidates.split(",") if c.strip()]
-    s = walls.evaluate_candidates(names, workers) if evaluate else walls.build_walls(workers, names)
-    typer.echo(f"{', '.join(s['candidates']) or 'no candidates'}: {s['pairs']:,} pairs, {s['features']} features; "
-               "held-out log loss " + ", ".join(f"{q} {v['held_out_log_loss']:.4f} ({v['held_out_pairs']:,} pairs)"
-                                                for q, v in s["quarters"].items())
-               + (f"; {s['seconds']} s" if "seconds" in s else ""))
+
+    def names(text: str) -> list[str]:
+        return [c.strip() for c in text.split(",") if c.strip() and c.strip() != "none"]
+
+    if evaluate:
+        results = walls.evaluate_candidates([names(c) for c in evaluate], workers)
+    else:
+        results = [walls.build_walls(workers, names(candidates))]
+    for s in results:
+        typer.echo(f"{', '.join(s['candidates']) or 'no candidates'}: {s['pairs']:,} pairs, {s['features']} "
+                   "features; held-out log loss "
+                   + ", ".join(f"{q} {v['held_out_log_loss']:.4f} ({v['held_out_pairs']:,} pairs)"
+                               for q, v in s["quarters"].items())
+                   + (f"; {s['seconds']} s" if "seconds" in s else ""))
 
 
 _WALLS_OPTION = typer.Option(None, "--walls", help="The folder of walls_<q>.npz (default data/solver/walls).")
