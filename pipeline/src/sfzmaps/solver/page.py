@@ -26,7 +26,7 @@ log = logging.getLogger(__name__)
 
 STEP = 8                    # grid px between the points where the placement itself is evaluated
 BAND_ROWS = 512             # grid rows laid at once (memory only: the result doesn't depend on it)
-INK_BELOW = frame.DARK_BELOW   # a page px darker than this (128) is ink, as for the frame
+INK_BELOW = grid.INK_BELOW     # a page px darker than this (128) is ink, as for the frame
 OUTLINE_POINTS = 80         # points along each side of the crop when finding where on the grid it lands
 
 

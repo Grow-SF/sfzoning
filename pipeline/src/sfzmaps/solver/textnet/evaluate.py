@@ -1,4 +1,5 @@
-"""The text detector scored on the quarter it never trained on.
+"""The text detectors scored, each on the quarter it never trained on (`sfzmaps solver text-scores`, stage
+`solver-text-scores`, after the four `solver-text-<Q>` stages): from the chances they wrote, never their weights.
 
 Only the held-out quarter's px count, and of those only px on the map: px whose map point is inside the sheet's warped
 footprint (the legend and margins, alike on every sheet, are left out; a map area two sheets both show counts on
@@ -16,7 +17,7 @@ or more is "called text".
                   middle of streets too) whose known codes differ; each border crack marks the grid px after it
                   (right of it or below it), widened to LINE_WIDTH_PX on the grid.
 
-Writes data/solver/text-<q>/evaluation.json.
+Writes data/solver/text-scores/evaluation_<q>.json, one per quarter.
 """
 import json
 import logging
@@ -26,7 +27,7 @@ import numpy as np
 import shapely
 
 from sfzmaps.solver import grid, lots, paths
-from sfzmaps.solver.textnet import data, predict
+from sfzmaps.solver.textnet import data
 
 log = logging.getLogger(__name__)
 
@@ -153,25 +154,39 @@ class _Tally:
         }
 
 
-def evaluate(q: str) -> dict:
-    """Score the model that held out `q` on that quarter (see the module) and write `text_dir(q)/evaluation.json`."""
-    data.quarter_index(q)
+def district_lines() -> np.ndarray:
+    """The table's district lines on the grid (bool), each line px widened to LINE_WIDTH_PX (see the module)."""
     built = lots.load_lots()
-    lines = cv2.dilate(district_line_px(built.grown, built.codes, built.known).astype(np.uint8),
-                       _square(LINE_WIDTH_PX)) > 0
-    del built
+    return cv2.dilate(district_line_px(built.grown, built.codes, built.known).astype(np.uint8),
+                      _square(LINE_WIDTH_PX)) > 0
+
+
+def score_quarter(q: str, lines: np.ndarray) -> dict:
+    """The scores of the detector that held out `q`, on that quarter (see the module), from its chances
+    (`paths.chance_dir(q)`) and the district lines (`district_lines`)."""
+    data.quarter_index(q)
     tally = _Tally()
     for name in paths.sheet_names():
-        f = predict.chance_dir(q) / f"{name}.png"
+        f = paths.chance_dir(q) / f"{name}.png"
         chance = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
         if chance is None:
-            raise FileNotFoundError(f"can't read {f}: run the prediction first")
+            raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver text {q}` first")
         t = data.sheet_targets(name, q)
         if chance.shape != t.ink.shape:
-            raise ValueError(f"{f} is {chance.shape}, its page {t.ink.shape}: run the prediction again")
+            raise ValueError(f"{f} is {chance.shape}, its page {t.ink.shape}: run `sfzmaps solver text {q}` again")
         x, y = data.page_world(data.load_transform(name), chance.shape)
         tally.add_sheet(name, t, chance, _on_grid(footprint_on_grid(name), x, y), _on_grid(lines, x, y))
-        log.info("%s evaluated", name)
-    out = tally.scores(q)
-    (paths.text_dir(q) / "evaluation.json").write_text(json.dumps(out, indent=1) + "\n")
+        log.info("%s: %s evaluated", q, name)
+    return tally.scores(q)
+
+
+def build_scores() -> dict:
+    """Score each quarter's detector on its held-out quarter and write TEXT_SCORES_DIR/evaluation_<q>.json.  Returns
+    the scores by quarter."""
+    lines = district_lines()
+    paths.TEXT_SCORES_DIR.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for q in paths.QUARTERS:
+        out[q] = score_quarter(q, lines)
+        (paths.TEXT_SCORES_DIR / f"evaluation_{q}.json").write_text(json.dumps(out[q], indent=1) + "\n")
     return out

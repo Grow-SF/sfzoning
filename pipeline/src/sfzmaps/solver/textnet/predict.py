@@ -2,18 +2,19 @@
 
 The page's ink is scored TILE x TILE px at a time, each tile seen with PAD px of page around it (so its edges are
 scored with their context) and padded with paper to a multiple of `model.MULTIPLE`; tiles with no ink are left at 0.
+On the Mac's GPU the scoring runs in the GPU's exclusive turn (`sfzmaps.gpu`), which the caller takes
+(`stage.build_text`).
 Writes data/solver/text-<q>/chance/<sheet>.png: uint8, the chance of text x 255.
 """
 import logging
 import shutil
 import time
-from pathlib import Path
 
 import cv2
 import numpy as np
 import torch
 
-from sfzmaps.solver import page, paths
+from sfzmaps.solver import grid, paths
 from sfzmaps.solver.textnet import data, model, train
 
 log = logging.getLogger(__name__)
@@ -53,24 +54,21 @@ def chance(net: model.TextNet, ink: np.ndarray, device: str) -> np.ndarray:
     return out
 
 
-def chance_dir(q: str) -> Path:
-    """Where the chance of text of each sheet's page goes, for the model that held out `q`."""
-    return paths.text_dir(q) / "chance"
-
-
-def predict_sheets(q: str, device: str | None = None) -> None:
-    """Score every warped sheet's page with the model that held out `q` and write `chance/<sheet>.png` (the folder
-    is made afresh), in the device's `train.gpu_turn`."""
+def predict_sheets(q: str, device: str | None = None) -> int:
+    """Score every warped sheet's page with the model that held out `q` and write `paths.chance_dir(q)/<sheet>.png`
+    (the folder is made afresh once the model has loaded).  On `mps` the caller holds the GPU's exclusive turn
+    (`gpu.gpu_turn`).  Returns the number of sheets scored."""
     device = device or train.default_device()
     train.settle_torch()
-    out = chance_dir(q)
+    net = load_model(q, device)
+    out = paths.chance_dir(q)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    with train.gpu_turn(device):
-        net = load_model(q, device)
-        for name in paths.sheet_names():
-            t0 = time.perf_counter()
-            ink = data.load_page(name) < page.INK_BELOW
-            if not cv2.imwrite(str(out / f"{name}.png"), chance(net, ink, device)):
-                raise OSError(f"can't write {out / f'{name}.png'}")
-            log.info("%s scored (%.0f s)", name, time.perf_counter() - t0)
+    names = paths.sheet_names()
+    for name in names:
+        t0 = time.perf_counter()
+        ink = data.load_page(name) < grid.INK_BELOW
+        if not cv2.imwrite(str(out / f"{name}.png"), chance(net, ink, device)):
+            raise OSError(f"can't write {out / f'{name}.png'}")
+        log.info("%s scored (%.0f s)", name, time.perf_counter() - t0)
+    return len(names)

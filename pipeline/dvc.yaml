@@ -1667,7 +1667,7 @@ stages:
       - uv.lock
       - data/warp/2000-digital-zoning
       - data/work/2000-digital-zoning
-      - inputs/merged-page
+      - inputs/merged-page/2000-digital-zoning.json
     outs:
       - data/solver/page:
           persist: true
@@ -1687,7 +1687,7 @@ stages:
       - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
-      - inputs/zoning-2000
+      - inputs/zoning-2000/april2000.geojson.gz
       - data/solver/page
     outs:
       - data/solver/lots:
@@ -1724,20 +1724,16 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/gpu.py
       - src/sfzmaps/solver/__init__.py
-      - src/sfzmaps/solver/codes.py
-      - src/sfzmaps/solver/frame.py
       - src/sfzmaps/solver/grid.py
-      - src/sfzmaps/solver/lots.py
-      - src/sfzmaps/solver/page.py
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/saved.py
-      - src/sfzmaps/solver/table.py
       - src/sfzmaps/solver/textnet/__init__.py
       - src/sfzmaps/solver/textnet/data.py
-      - src/sfzmaps/solver/textnet/evaluate.py
       - src/sfzmaps/solver/textnet/model.py
       - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/stage.py
       - src/sfzmaps/solver/textnet/train.py
       - src/sfzmaps/transform.py
       - pyproject.toml
@@ -1745,7 +1741,6 @@ stages:
       - data/work/2000-digital-zoning
       - data/warp/2000-digital-zoning
       - data/solver/prints/terra_boxes.json
-      - data/solver/lots
       - saved-reads/answers/experiments-2000/text-positions
     outs:
       - data/solver/text-nw:
@@ -1755,20 +1750,16 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/gpu.py
       - src/sfzmaps/solver/__init__.py
-      - src/sfzmaps/solver/codes.py
-      - src/sfzmaps/solver/frame.py
       - src/sfzmaps/solver/grid.py
-      - src/sfzmaps/solver/lots.py
-      - src/sfzmaps/solver/page.py
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/saved.py
-      - src/sfzmaps/solver/table.py
       - src/sfzmaps/solver/textnet/__init__.py
       - src/sfzmaps/solver/textnet/data.py
-      - src/sfzmaps/solver/textnet/evaluate.py
       - src/sfzmaps/solver/textnet/model.py
       - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/stage.py
       - src/sfzmaps/solver/textnet/train.py
       - src/sfzmaps/transform.py
       - pyproject.toml
@@ -1776,7 +1767,6 @@ stages:
       - data/work/2000-digital-zoning
       - data/warp/2000-digital-zoning
       - data/solver/prints/terra_boxes.json
-      - data/solver/lots
       - saved-reads/answers/experiments-2000/text-positions
     outs:
       - data/solver/text-ne:
@@ -1786,20 +1776,16 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/gpu.py
       - src/sfzmaps/solver/__init__.py
-      - src/sfzmaps/solver/codes.py
-      - src/sfzmaps/solver/frame.py
       - src/sfzmaps/solver/grid.py
-      - src/sfzmaps/solver/lots.py
-      - src/sfzmaps/solver/page.py
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/saved.py
-      - src/sfzmaps/solver/table.py
       - src/sfzmaps/solver/textnet/__init__.py
       - src/sfzmaps/solver/textnet/data.py
-      - src/sfzmaps/solver/textnet/evaluate.py
       - src/sfzmaps/solver/textnet/model.py
       - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/stage.py
       - src/sfzmaps/solver/textnet/train.py
       - src/sfzmaps/transform.py
       - pyproject.toml
@@ -1807,13 +1793,38 @@ stages:
       - data/work/2000-digital-zoning
       - data/warp/2000-digital-zoning
       - data/solver/prints/terra_boxes.json
-      - data/solver/lots
       - saved-reads/answers/experiments-2000/text-positions
     outs:
       - data/solver/text-sw:
           persist: true
   solver-text-se:
     cmd: uv run --frozen sfzmaps stage solver-text-se
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/gpu.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/stage.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/transform.py
+      - pyproject.toml
+      - uv.lock
+      - data/work/2000-digital-zoning
+      - data/warp/2000-digital-zoning
+      - data/solver/prints/terra_boxes.json
+      - saved-reads/answers/experiments-2000/text-positions
+    outs:
+      - data/solver/text-se:
+          persist: true
+  solver-text-scores:
+    cmd: uv run --frozen sfzmaps stage solver-text-scores
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
@@ -1829,19 +1840,20 @@ stages:
       - src/sfzmaps/solver/textnet/__init__.py
       - src/sfzmaps/solver/textnet/data.py
       - src/sfzmaps/solver/textnet/evaluate.py
-      - src/sfzmaps/solver/textnet/model.py
-      - src/sfzmaps/solver/textnet/predict.py
-      - src/sfzmaps/solver/textnet/train.py
       - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
       - data/work/2000-digital-zoning
       - data/warp/2000-digital-zoning
       - data/solver/prints/terra_boxes.json
-      - data/solver/lots
       - saved-reads/answers/experiments-2000/text-positions
+      - data/solver/lots
+      - data/solver/text-nw/chance
+      - data/solver/text-ne/chance
+      - data/solver/text-sw/chance
+      - data/solver/text-se/chance
     outs:
-      - data/solver/text-se:
+      - data/solver/text-scores:
           persist: true
   solver-labels:
     cmd: uv run --frozen sfzmaps stage solver-labels

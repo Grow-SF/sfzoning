@@ -116,26 +116,34 @@ def stages() -> dict[str, Stage]:
     for s in SERIES:
         out[f"warp-{s}"] = Stage(f"warp-{s}", (), (), (owner[s], "refdata"), warp=s)
     # The 2000 solver's inputs: command stages, each naming its code, its reads and its writes.
+    # Of a checked-in inputs folder, only the file read: its README, PROVENANCE.md or the table's by-eye corrections
+    # (read only in scoring) never rerun the chain.
     out["solver-page"] = Stage("solver-page", (), (), ("warp-2000-digital-zoning",), command=("solver", "page"),
                                reads=("data/warp/2000-digital-zoning", "data/work/2000-digital-zoning",
-                                      "inputs/merged-page"),
+                                      "inputs/merged-page/2000-digital-zoning.json"),
                                writes=("data/solver/page",), code=("sfzmaps.solver.page",))
     out["solver-lots"] = Stage("solver-lots", (), (), ("solver-page",), command=("solver", "lots"),
-                               reads=("inputs/zoning-2000", "data/solver/page"),
+                               reads=("inputs/zoning-2000/april2000.geojson.gz", "data/solver/page"),
                                writes=("data/solver/lots",), code=("sfzmaps.solver.lots",))
     out["solver-prints"] = Stage("solver-prints", (), (), ("solver-lots",), command=("solver", "prints"),
                                  reads=("saved-reads/answers", "data/work/2000-digital-zoning",
                                         "data/warp/2000-digital-zoning", "data/solver/lots", "data/solver/page"),
                                  writes=("data/solver/prints",), code=("sfzmaps.solver.prints",))
-    for q in ("nw", "ne", "sw", "se"):
-        out[f"solver-text-{q}"] = Stage(
-            f"solver-text-{q}", (), (), ("solver-prints",), command=("solver", "text", q),
-            # of the prints, only the Terra boxes: a change to prints.parquet must not retrain the detectors
-            reads=("data/work/2000-digital-zoning", "data/warp/2000-digital-zoning",
-                   "data/solver/prints/terra_boxes.json", "data/solver/lots",
-                   "saved-reads/answers/experiments-2000/text-positions"),
-            writes=(f"data/solver/text-{q}",),
-            code=("sfzmaps.solver.textnet.train", "sfzmaps.solver.textnet.predict", "sfzmaps.solver.textnet.evaluate"))
+    quarters = ("nw", "ne", "sw", "se")
+    # what the detectors learn from: the sheets' pages, Sol's label points and the other text passes' boxes, the
+    # corrected placements, and of the prints only the Terra boxes (a change to prints.parquet must not retrain them)
+    text_reads = ("data/work/2000-digital-zoning", "data/warp/2000-digital-zoning",
+                  "data/solver/prints/terra_boxes.json", "saved-reads/answers/experiments-2000/text-positions")
+    for q in quarters:
+        out[f"solver-text-{q}"] = Stage(f"solver-text-{q}", (), (), ("solver-prints",), command=("solver", "text", q),
+                                        reads=text_reads, writes=(f"data/solver/text-{q}",),
+                                        code=("sfzmaps.solver.textnet.stage",))
+    # the detectors' scores on their held-out quarters, from their chances (not their weights) and the lots
+    out["solver-text-scores"] = Stage("solver-text-scores", (), (), tuple(f"solver-text-{q}" for q in quarters),
+                                      command=("solver", "text-scores"),
+                                      reads=(*text_reads, "data/solver/lots",
+                                             *(f"data/solver/text-{q}/chance" for q in quarters)),
+                                      writes=("data/solver/text-scores",), code=("sfzmaps.solver.textnet.evaluate",))
     out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
                                  # of the prints, only prints.parquet: the Terra boxes and the summary aren't read
                                  reads=("data/solver/prints/prints.parquet", "data/solver/lots", "data/solver/page",

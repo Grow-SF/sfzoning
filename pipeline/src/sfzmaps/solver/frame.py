@@ -10,7 +10,9 @@ its points kept, or a spread above LEGEND_MAX_SD_PX), the bottom is fitted to th
 the top line instead.  The crop is the quadrilateral inside the four lines, FRAME_INSET_PX further in."""
 import numpy as np
 
-DARK_BELOW = 128                       # a page px darker than this is ink
+from sfzmaps.solver import grid
+
+DARK_BELOW = grid.INK_BELOW            # a page px darker than this (128) is ink
 # Where each side's inner edge is searched for: page px, the same on every page (x for left and right, y for top and
 # bottom), and where along the side it is sampled.
 WINDOWS = {"left": (40, 220), "right": (3080, 3260), "top": (400, 600), "bottom": (3900, 4100)}

@@ -10,6 +10,7 @@ SOLVER_DIR = config.DATA_DIR / "solver"
 PAGE_DIR = SOLVER_DIR / "page"
 LOTS_DIR = SOLVER_DIR / "lots"
 PRINTS_DIR = SOLVER_DIR / "prints"
+TEXT_SCORES_DIR = SOLVER_DIR / "text-scores"    # the text detectors' scores on their held-out quarters
 LABELS_DIR = SOLVER_DIR / "labels"
 WALLS_DIR = SOLVER_DIR / "walls"
 SOLVE_DIR = SOLVER_DIR / "solve"      # placement.npz, runs/, the data-error list
@@ -21,8 +22,13 @@ SAVED_ANSWERS = config.PIPELINE_DIR / "saved-reads" / "answers"
 
 
 def text_dir(quarter: str) -> Path:
-    """The text detector's folder for one quarter of the city."""
+    """The text detector's folder for one quarter of the city: its model.pt and chance/."""
     return SOLVER_DIR / f"text-{quarter}"
+
+
+def chance_dir(quarter: str) -> Path:
+    """Where the chance of text of each sheet's page goes, for the detector that held out `quarter`."""
+    return text_dir(quarter) / "chance"
 
 
 def sheet_names() -> list[str]:

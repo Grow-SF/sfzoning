@@ -84,6 +84,7 @@ inputs/2000-digital-zoning/label_fixes.csv ─► solver-solve
 | `solver-lots` | `sfzmaps solver lots` | `data/solver/lots/` | the table, the page's sheet coverage |
 | `solver-prints` | `sfzmaps solver prints` | `data/solver/prints/` | saved reads, Sol label reads, lots |
 | `solver-text-nw` … `-se` | `sfzmaps solver text Q` | `data/solver/text-Q/` | sheet pages, Terra boxes (from prints), quarters |
+| `solver-text-scores` | `sfzmaps solver text-scores` | `data/solver/text-scores/` | the four quarters' chances, lots |
 | `solver-labels` | `sfzmaps solver labels` | `data/solver/labels/` | prints, lots, streets, merged page |
 | `solver-walls` | `sfzmaps solver walls` | `data/solver/walls/` | merged page, text chances, lots |
 | `solver-solve` | `sfzmaps solver solve` | `data/solver/solve/` | everything above, hand labels, table corrections |
@@ -92,8 +93,10 @@ inputs/2000-digital-zoning/label_fixes.csv ─► solver-solve
   file of `src/sfzmaps` as the old stages have. So editing the solver's search doesn't retrain the text detector.
   `pyproject.toml` and `uv.lock` are deps too, since a library change can change numbers.
 - **Four text stages.** The detector is the slow step (about 1.7 h per quarter on the GPU in R&D), so there is one
-  stage per held-out quarter. A build can run them side by side, and changing one quarter's input reruns only that
-  quarter. **(my call)**
+  stage per held-out quarter. A build can start them together (each trains and scores in its own exclusive turn on
+  the GPU: two processes on `mps` at once get wrong numbers), and changing one quarter's input reruns only that
+  quarter. Their scores on the held-out quarters are one more stage, `solver-text-scores`, so the detectors' code
+  holds no lots, table or page code. **(my call)**
 - **Code and data.** The solver moves from `pipeline/scripts/joint_solver/` into `sfzmaps.solver` (one subpackage,
   one CLI group `sfzmaps solver ...`). The `SFZ_RND` folder goes. Its R&D notes move to
   `docs/research/joint-solver/`. **(my call)**

@@ -1,13 +1,13 @@
 """The text detector's data: each 2000 sheet's own page (`page.png`, the scan before any warp), with what it learns.
 
-  ink        page < `page.INK_BELOW` (128), the model's only input
+  ink        page < `grid.INK_BELOW` (128), the model's only input
   text       1 inside one of Terra's text boxes (every kind; `PRINTS_DIR/terra_boxes.json`), drawn as the rotated
              rectangle of the word in page px
   kind       the box's kind (KINDS: 0 zoning code, 1 block number, 2 street name, 3 other), NO_KIND outside text
   angle      the reading direction in whole degrees, counter-clockwise from left-to-right, inside text (0 outside)
   unknown    inside another pass's box (OTHER_PASSES) or within READ_POINT_RADIUS of one of Sol's label points, but in
              no Terra box: text Terra may have missed, taught neither as text nor as not-text
-  heldout    the px of the quarter held out: `lots.quarter_of` of the px's map point through the sheet's corrected
+  heldout    the px of the quarter held out: `grid.quarter_of` of the px's map point through the sheet's corrected
              placement
   known      the px the loss reads: not unknown and not held out
   centre_ok  the px a training crop may centre on: ink or text, not held out
@@ -22,7 +22,7 @@ import cv2
 import numpy as np
 
 from sfzmaps import config
-from sfzmaps.solver import lots, page, paths, saved
+from sfzmaps.solver import grid, paths, saved
 from sfzmaps.transform import SheetTransform
 
 KINDS = {"zoning code": 0, "block number": 1, "street name": 2, "other": 3}
@@ -47,7 +47,7 @@ class SheetTargets:
 
 
 def quarter_index(q: str) -> int:
-    """The index of a quarter's name ("nw" 0, "ne" 1, "sw" 2, "se" 3), as `lots.quarter_of` numbers them."""
+    """The index of a quarter's name ("nw" 0, "ne" 1, "sw" 2, "se" 3), as `grid.quarter_of` numbers them."""
     if q not in paths.QUARTERS:
         raise ValueError(f"no quarter {q!r}: one of {', '.join(paths.QUARTERS)}")
     return paths.QUARTERS.index(q)
@@ -138,7 +138,7 @@ def page_world(transform, shape: tuple[int, int], step: int = PLACEMENT_STEP) ->
 def page_quarters(transform, shape: tuple[int, int]) -> np.ndarray:
     """Each page px's quarter of the city (int8 raster: nw 0, ne 1, sw 2, se 3), from its map point (`page_world`)."""
     x, y = page_world(transform, shape)
-    return lots.quarter_of(np.c_[x.ravel(), y.ravel()]).reshape(shape)
+    return grid.quarter_of(np.c_[x.ravel(), y.ravel()]).reshape(shape)
 
 
 def load_page(sheet: str) -> np.ndarray:
@@ -185,4 +185,4 @@ def sheet_targets(sheet: str, q: str) -> SheetTargets:
     gray = load_page(sheet)
     quarter = page_quarters(load_transform(sheet), gray.shape)
     read_points = [(lb["x"], lb["y"]) for lb in saved.sol_labels(sheet)]
-    return targets(gray < page.INK_BELOW, terra_boxes(sheet), other_boxes(sheet), read_points, quarter, q)
+    return targets(gray < grid.INK_BELOW, terra_boxes(sheet), other_boxes(sheet), read_points, quarter, q)

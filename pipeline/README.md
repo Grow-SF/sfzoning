@@ -450,8 +450,9 @@ Only what has been checked. "The approved run" means the corrections the owner l
 The inputs of the 2000 joint solver are made by `sfzmaps solver <part>` commands, each one a stage of
 `sfzmaps build` (a "command stage": a `Stage` with `command`, `reads`, `writes` and `code`). A command stage's
 dependencies are the source files in the import closure of its `code` modules, `pyproject.toml`, `uv.lock` and its
-`reads`; it recomputes its whole output when any of them changes, and needs no `prepare()`. Outputs go under
-`data/solver/`; `sfzmaps.solver.paths` names every location.
+`reads`; it recomputes its whole output when any of them changes, and needs no `prepare()`. Of a checked-in inputs
+folder a stage reads only the file it uses, so a README, `PROVENANCE.md` or `table-corrections.csv` (read only in
+scoring) reruns nothing. Outputs go under `data/solver/`; `sfzmaps.solver.paths` names every location.
 
 Hand-made and downloaded inputs are in `inputs/zoning-2000/` (see its README): the April 2000 table
 (`april2000.geojson.gz`, downloaded from DataSF by `sfzmaps solver fetch-table`, with `PROVENANCE.md`) and
@@ -459,7 +460,9 @@ Hand-made and downloaded inputs are in `inputs/zoning-2000/` (see its README): t
 
 The solver's grid (`sfzmaps.solver.grid`) is one raster over the city in EPSG:2227 feet, 4 ft per px, 11,900 ×
 9,825 px, north up, its top-left corner at (5979300, 2124100): col = (x − 5979300) / 4, row = (2124100 − y) / 4. The
-merged page, the lots and the walls all sit on it.
+merged page, the lots and the walls all sit on it. The grid module also holds what every part reads alike: a page px
+is ink below 128 (`INK_BELOW`), and the city's four quarters, which the fits hold out in turn, split at
+`QUARTER_SPLIT` (`quarter_of`: nw 0, ne 1, sw 2, se 3).
 
 **The merged page** (`sfzmaps solver page`, stage `solver-page`, after `warp-2000-digital-zoning`) lays every warped
 2000 zoning sheet onto the grid as one picture of the printed ink. Each sheet's crop is its printed frame, found on
@@ -513,21 +516,37 @@ ink mask (`page.png` < 128) of each sheet's own page, unwarped. It learns only f
 (`data/solver/prints/terra_boxes.json`, every kind, each drawn as the word's rotated rectangle in page px). Text Terra
 may have missed is taught neither way: the boxes of the other text passes
 (`saved-reads/answers/experiments-2000/text-positions/`) and 30-px discs at Sol's label points, outside every Terra
-box. Each quarter's model holds that quarter out: a page px's quarter is `lots.quarter_of` of its map point through
+box. Each quarter's model holds that quarter out: a page px's quarter is `grid.quarter_of` of its map point through
 the sheet's corrected placement (evaluated every 32 px, bilinear between); held-out px carry no loss and no crop
 centres on one. Training: 8,000 steps of 12 crops of 320 px (half centred on text, the rest on any ink; each scaled
 by 0.6–1.6 and turned by quarter turns, the reading angle with it); loss = text cross-entropy + 0.5 × kind
 cross-entropy + 0.5 × (1 − cosine) of the reading direction; AdamW at 2e-3 with a one-cycle schedule. Every draw comes
 from one seeded numpy generator and the weights from seeded torch, with deterministic algorithms on 4 threads. The
-model then scores every sheet's page in 1,024-px tiles seen with 64 px of context, and is evaluated on its held-out
-quarter, on the map only (inside the sheet's warped footprint: the legend, alike on every sheet, is left out). It
-writes `data/solver/text-<Q>/model.pt` (the weights, with the iterations, device and seed), `chance/<sheet>.png`
-(uint8, the chance of text × 255, page px) and `evaluation.json`: AUC and log loss of text ink against other ink,
-the share of text ink found, Terra's words found by kind, pieces of text found where Terra drew no box (listed for a
-look), and the share of ink on the table's district lines (borders between lots whose known codes differ, read on
-the grid, away from every box) called text.
+model then scores every sheet's page in 1,024-px tiles seen with 64 px of context. A stage
+(`solver/textnet/stage.py`) makes its folder afresh and writes only `data/solver/text-<Q>/model.pt` (the weights,
+with the iterations, device and seed) and `chance/<sheet>.png` (uint8, the chance of text × 255, page px). Its code is
+the detector's alone: the lots, the table, the merged page and the scoring are not in it, so a change to them retrains
+nothing.
 
-The detector trains on `mps` where there is one (else `cpu`; `--device` overrides): two 200-step runs on `mps` gave bit-identical weights and predicted chance (max difference 0), at 0.39 s a step against 3.1 s on `cpu` (about 52 min against 6.9 h for 8,000 steps), once the loss avoided boolean-mask indexing, whose backward `mps` has no deterministic kernel for (`index_put_with_accumulate_mps`). That holds for one process on the GPU at a time only. With two processes running the detector on `mps` at once (as the build ran `solver-text-nw` and `-ne`), the same step on the same input gave different numbers each time: outputs off by up to 2.5 in a logit, training-mode batch norm off by up to 3,000. Now and then a gradient came back all NaN, which is how the first nw and ne runs went NaN from step 750 and 1,000. So training and scoring on `mps` wait their turn for the GPU (`train.gpu_turn`, a lock on `/tmp/sfzmaps-mps.lock`), and a loss that is not finite stops the training. The sheet warp's `mps` fits take no turn: a detector run beside them can still get wrong numbers.
+**The text scores** (`sfzmaps solver text-scores`, stage `solver-text-scores`, after the four text stages) score each
+quarter's model on the quarter it held out, from the chances it wrote (`solver/textnet/evaluate.py`), on the map only
+(inside the sheet's warped footprint: the legend, alike on every sheet, is left out). It writes
+`data/solver/text-scores/evaluation_<Q>.json`: AUC and log loss of text ink against other ink, the share of text ink
+found, Terra's words found by kind, pieces of text found where Terra drew no box (listed for a look), and the share
+of ink on the table's district lines (borders between lots whose known codes differ, read on the grid, away from
+every box) called text.
+
+The detector trains on `mps` where there is one (else `cpu`; `--device` overrides): two 200-step runs on `mps` gave
+bit-identical weights and predicted chance (max difference 0), at 0.39 s a step against 3.1 s on `cpu` (about 52 min
+against 6.9 h for 8,000 steps), once the loss avoided boolean-mask indexing, whose backward `mps` has no deterministic
+kernel for (`index_put_with_accumulate_mps`). That holds only for one process on the GPU at a time: with two
+processes computing on `mps` at once, the same step on the same input gives different numbers each time (outputs off
+by up to 2.5 in a logit, training-mode batch norm by up to 3,000) and now and then a gradient that is all NaN. So
+work on `mps` takes a turn (`sfzmaps.gpu`, an `flock` on `/tmp/sfzmaps-mps.lock`, one file for the whole machine).
+A detector's stage trains and scores in one exclusive turn: nothing else computes on the GPU meanwhile. The sheet
+warp's fits (`sfzmaps warp`) take a shared turn: warps run beside each other, never beside a detector. The tests
+hold a shared turn for their whole run, taken without waiting; while a detector has the GPU they never use it (the
+warp's fits run on the CPU and the tests marked `mps` are skipped). A loss that is not finite stops the training.
 
 **The trust of each reading** (`solver/trust.py`, run by the `solver-labels` stage) is the chance that a code read
 on a print is the district printed there. Each different code among a print's five reads (Sol, Terra, the third

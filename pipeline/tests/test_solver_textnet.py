@@ -1,8 +1,6 @@
 import contextlib
-import fcntl
 import gzip
 import json
-import threading
 
 import cv2
 import numpy as np
@@ -11,8 +9,8 @@ import torch
 import torch.nn.functional as F
 
 from sfzmaps import config
-from sfzmaps.solver import lots, paths
-from sfzmaps.solver.textnet import data, evaluate, model, predict, train
+from sfzmaps.solver import grid, paths
+from sfzmaps.solver.textnet import data, evaluate, model, predict, stage, train
 
 SHEET = "2000-digital-zoning-p01"
 SIZE = 640
@@ -23,6 +21,40 @@ OTHER_NEAR_A = [160, 110, 230, 125]   # another pass's box, half on word A
 OTHER_ALONE = [100, 400, 160, 430]    # another pass's box on no Terra box, in sw
 SOL_IN_A = (175, 115)             # a Sol label point inside word A's box
 SOL_ALONE = (500, 500)            # a Sol label point far from any box, in se
+
+
+@contextlib.contextmanager
+def torch_settings_kept():
+    """Put back what `train.settle_torch` and the seeds change for the whole process (torch's threads, its
+    deterministic mode and its random state) when the body ends."""
+    threads = torch.get_num_threads()
+    deterministic = torch.are_deterministic_algorithms_enabled()
+    warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
+    rng = torch.get_rng_state()
+    try:
+        yield
+    finally:
+        torch.set_num_threads(threads)
+        torch.use_deterministic_algorithms(deterministic, warn_only=warn_only)
+        torch.set_rng_state(rng)
+
+
+@pytest.fixture(autouse=True)
+def _torch_as_it_was():
+    """Every test here leaves torch as it found it, for the tests that run after it in the same process."""
+    with torch_settings_kept():
+        yield
+
+
+def test_torch_settings_come_back_after_settle_torch():
+    with torch_settings_kept():
+        torch.set_num_threads(2)
+        torch.use_deterministic_algorithms(False)
+        with torch_settings_kept():
+            train.settle_torch()
+            torch.manual_seed(123)
+            assert torch.get_num_threads() == train.THREADS and torch.are_deterministic_algorithms_enabled()
+        assert torch.get_num_threads() == 2 and not torch.are_deterministic_algorithms_enabled()
 
 
 def _page() -> np.ndarray:
@@ -39,7 +71,7 @@ def _page() -> np.ndarray:
 
 def _transform_json() -> dict:
     """An affine placement, 4 ft per page px, north up, with the quarter split at page px (SPLIT_PX, SPLIT_PX)."""
-    sx, sy = lots.QUARTER_SPLIT
+    sx, sy = grid.QUARTER_SPLIT
     corners = [(0.0, 0.0), (640.0, 0.0), (640.0, 640.0), (0.0, 640.0)]
     gcps = [{"px": px, "py": py, "wx": sx + 4 * (px - SPLIT_PX), "wy": sy - 4 * (py - SPLIT_PX), "source": "manual"}
             for px, py in corners]
@@ -215,65 +247,101 @@ def test_fit_stops_at_the_first_loss_that_is_not_finite(sheet, small_crops, monk
     assert len(seen) == 2
 
 
-def _gpu_taken(lock) -> bool:
-    """Whether a turn holds the GPU's lock file: tried without waiting, from an open of its own."""
-    with open(lock, "a") as f:
-        try:
-            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            return True
-        fcntl.flock(f, fcntl.LOCK_UN)
-        return False
+@pytest.fixture
+def solver_dir(tmp_path, monkeypatch):
+    """The solver's outputs in the test's folder."""
+    monkeypatch.setattr(paths, "SOLVER_DIR", tmp_path / "solver")
+    monkeypatch.setattr(paths, "TEXT_SCORES_DIR", tmp_path / "solver" / "text-scores")
+    return tmp_path / "solver"
 
 
-def test_one_user_at_a_time_has_the_gpu(tmp_path, monkeypatch):
-    lock = tmp_path / "mps.lock"
-    monkeypatch.setattr(train, "MPS_LOCK", lock)
-    order = []
-
-    def second():
-        with train.gpu_turn("mps"):
-            order.append("second's turn")
-
-    with train.gpu_turn("mps"):
-        assert _gpu_taken(lock)
-        waiting = threading.Thread(target=second)
-        waiting.start()
-        waiting.join(0.5)
-        order.append("first's turn ends")
-    waiting.join(10)
-    assert order == ["first's turn ends", "second's turn"] and not _gpu_taken(lock)
-    with train.gpu_turn("cpu"):            # the CPU takes no turn
-        assert not _gpu_taken(lock)
-
-
-def test_training_and_scoring_run_inside_the_devices_gpu_turn(sheet, small_crops, monkeypatch, tmp_path):
-    held = []
+def test_a_quarter_trains_and_scores_in_one_exclusive_turn_and_writes_only_the_model_and_chances(
+        sheet, small_crops, solver_dir, monkeypatch):
+    turns, calls = [], []
 
     @contextlib.contextmanager
-    def turn(device):
-        held.append(device)
+    def turn(exclusive, device):
+        turns.append((exclusive, device))
         yield
-        held.append(None)
+        turns.append(None)
 
-    def inside(fn):
-        def wrapped(*args):
-            calls.append(held[-1:] == ["cpu"])
-            return fn(*args)
+    def inside(fn, what):
+        def wrapped(*args, **kwargs):
+            calls.append((what, turns[-1:] == [(True, "cpu")]))
+            return fn(*args, **kwargs)
         return wrapped
 
-    monkeypatch.setattr(train, "gpu_turn", turn)
-    calls = []
-    monkeypatch.setattr(train, "loss_fn", inside(train.loss_fn))
-    net = train.fit([data.sheet_targets(sheet, "ne")], iterations=2, device="cpu", seed=0)
-    assert held == ["cpu", None] and calls == [True, True]
-    monkeypatch.setattr(paths, "SOLVER_DIR", tmp_path / "solver")
+    monkeypatch.setattr(stage.gpu, "gpu_turn", turn)
+    monkeypatch.setattr(data, "sheet_targets", inside(data.sheet_targets, "targets"))
+    monkeypatch.setattr(train, "loss_fn", inside(train.loss_fn, "step"))
+    monkeypatch.setattr(predict, "chance", inside(predict.chance, "scored"))
     paths.text_dir("ne").mkdir(parents=True)
-    torch.save({"state_dict": net.state_dict()}, paths.text_dir("ne") / "model.pt")
-    calls = []
-    monkeypatch.setattr(predict, "chance", inside(predict.chance))
-    predict.predict_sheets("ne", device="cpu")
-    assert held == ["cpu", None, "cpu", None] and calls == [True]
+    (paths.text_dir("ne") / "evaluation.json").write_text("{}")       # a file no step of the stage writes
+    s = stage.build_text("ne", iterations=2, device="cpu")
+    # the pages' targets are read before the turn; every step and every sheet scored is inside it
+    assert turns == [(True, "cpu"), None]
+    assert calls == [("targets", False), ("step", True), ("step", True), ("scored", True)]
+    assert sorted(p.name for p in paths.text_dir("ne").iterdir()) == ["chance", "model.pt"]
+    assert [p.name for p in paths.chance_dir("ne").iterdir()] == [f"{SHEET}.png"]
+    saved = torch.load(paths.text_dir("ne") / "model.pt")
+    assert (saved["iterations"], saved["device"], saved["seed"]) == (2, "cpu", 0)
+    assert (s["quarter"], s["iterations"], s["device"], s["sheets"]) == ("ne", 2, "cpu", 1)
+
+
+def test_a_quarter_trains_the_default_steps_unless_told_and_never_zero(solver_dir, monkeypatch):
+    steps = []
+    monkeypatch.setattr(train, "quarter_targets", lambda q: [])
+    monkeypatch.setattr(train, "fit", lambda sheets, iterations, device, seed=0: steps.append(iterations) or "net")
+    monkeypatch.setattr(train, "save_model", lambda *args: None)
+    monkeypatch.setattr(predict, "predict_sheets", lambda q, device: 0)
+    stage.build_text("nw", device="cpu")
+    stage.build_text("nw", iterations=5, device="cpu")
+    assert steps == [train.ITERATIONS, 5]
+    for bad in (0, -1):
+        with pytest.raises(ValueError, match="at least 1"):
+            stage.build_text("nw", iterations=bad, device="cpu")
+    with pytest.raises(ValueError, match="no quarter"):
+        stage.build_text("north", device="cpu")
+    assert steps == [train.ITERATIONS, 5]
+
+
+def test_the_text_command_runs_the_stage_and_refuses_zero_iterations(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    got = []
+
+    def build_text(q, iterations=None, device=None):
+        got.append((q, iterations, device))
+        return {"quarter": q, "iterations": iterations or train.ITERATIONS, "device": device or "cpu", "sheets": 13,
+                "seconds": {"targets": 1.0, "train": 2.0, "predict": 3.0}}
+
+    monkeypatch.setattr(stage, "build_text", build_text)
+    runner = CliRunner()
+    assert runner.invoke(cli.app, ["solver", "text", "nw", "--iterations", "0"]).exit_code != 0
+    assert runner.invoke(cli.app, ["solver", "text", "nowhere"]).exit_code != 0
+    res = runner.invoke(cli.app, ["solver", "text", "nw", "--device", "cpu"])
+    assert res.exit_code == 0 and "13 sheets scored" in res.output
+    assert got == [("nw", None, "cpu")]
+
+
+def test_scoring_without_a_model_leaves_the_last_chances_alone(sheet, solver_dir):
+    old = paths.chance_dir("ne")
+    old.mkdir(parents=True)
+    (old / f"{SHEET}.png").write_bytes(b"the last run's")
+    with pytest.raises(FileNotFoundError, match="model.pt"):
+        predict.predict_sheets("ne", device="cpu")
+    assert (old / f"{SHEET}.png").read_bytes() == b"the last run's"
+
+
+def test_scores_write_one_evaluation_per_quarter_from_one_set_of_district_lines(solver_dir, monkeypatch):
+    made = []
+    monkeypatch.setattr(evaluate, "district_lines", lambda: made.append("lines") or np.ones((2, 2), bool))
+    monkeypatch.setattr(evaluate, "score_quarter", lambda q, lines: {"quarter": q, "line_px": int(lines.sum())})
+    out = evaluate.build_scores()
+    assert made == ["lines"] and list(out) == list(paths.QUARTERS)
+    for q in paths.QUARTERS:
+        assert json.loads((paths.TEXT_SCORES_DIR / f"evaluation_{q}.json").read_text()) == {"quarter": q, "line_px": 4}
 
 
 def test_district_lines_are_borders_between_known_different_codes():
@@ -289,17 +357,41 @@ def test_district_lines_are_borders_between_known_different_codes():
     assert np.array_equal(lines, expected)
 
 
-def test_text_stages_depend_on_the_detector_code_not_on_the_prints_code():
+def test_text_stages_depend_on_the_detector_code_only():
     from sfzmaps import build
     table = build.stages()
     for q in paths.QUARTERS:
         st = table[f"solver-text-{q}"]
         deps = build.stage_deps(st)
-        assert {"src/sfzmaps/solver/textnet/train.py", "src/sfzmaps/solver/textnet/predict.py",
-                "src/sfzmaps/solver/textnet/evaluate.py", "data/solver/prints/terra_boxes.json",
-                "data/solver/lots"} <= set(deps)
-        # hours of training must not rerun for a change to the prints' code, the model client, or the prints'
-        # other files (prints.parquet, summary.json): of the prints' output only the Terra boxes are read
-        assert not any(d.endswith(("solver/prints.py", "/llm.py", "/cli.py")) for d in deps)
-        assert "data/solver/prints" not in deps
+        assert st.code == ("sfzmaps.solver.textnet.stage",)
+        assert {"src/sfzmaps/solver/textnet/stage.py", "src/sfzmaps/solver/textnet/train.py",
+                "src/sfzmaps/solver/textnet/predict.py", "src/sfzmaps/solver/textnet/data.py",
+                "src/sfzmaps/solver/textnet/model.py", "src/sfzmaps/solver/grid.py", "src/sfzmaps/gpu.py",
+                "data/solver/prints/terra_boxes.json"} <= set(deps)
+        # hours of training must not rerun for a change to the lots, the table, the merged page, the codes, the
+        # prints' code, the model client, the command line or the scoring; of the prints' output only the Terra
+        # boxes are read, and the lots not at all
+        assert not any(d.endswith(("solver/lots.py", "solver/table.py", "solver/page.py", "solver/frame.py",
+                                   "solver/codes.py", "solver/prints.py", "/llm.py", "/cli.py", "textnet/evaluate.py"))
+                       for d in deps)
+        assert [d for d in deps if d.startswith("data/solver/")] == ["data/solver/prints/terra_boxes.json"]
         assert st.upstream == ("solver-prints",) and build.stage_outs(st) == [f"data/solver/text-{q}"]
+        assert build.stage_commands(f"solver-text-{q}") == [["solver", "text", q]]
+
+
+def test_the_text_scores_stage_reads_every_quarters_chances_not_the_detector_code():
+    from sfzmaps import build
+    table = build.stages()
+    st = table["solver-text-scores"]
+    deps = build.stage_deps(st)
+    assert st.code == ("sfzmaps.solver.textnet.evaluate",)
+    assert set(st.upstream) == {f"solver-text-{q}" for q in paths.QUARTERS}
+    assert {f"data/solver/text-{q}/chance" for q in paths.QUARTERS} | {"data/solver/lots"} <= set(deps)
+    assert "src/sfzmaps/solver/textnet/evaluate.py" in deps and "src/sfzmaps/solver/lots.py" in deps
+    # the scores read the chances, not the weights or the code that made them
+    assert not any(d.endswith(("textnet/train.py", "textnet/predict.py", "textnet/model.py", "textnet/stage.py",
+                               "/gpu.py", "model.pt")) for d in deps)
+    assert build.stage_outs(st) == ["data/solver/text-scores"]
+    assert build.stage_commands("solver-text-scores") == [["solver", "text-scores"]]
+    names = list(table)
+    assert names.index("solver-text-scores") > max(names.index(f"solver-text-{q}") for q in paths.QUARTERS)

@@ -354,6 +354,16 @@ def test_a_command_stage_depends_on_its_import_closure_and_reads(monkeypatch):
     assert build.stage_commands("x") == [["solver", "page"]]
 
 
+def test_the_page_and_the_lots_read_only_the_inputs_file_they_use():
+    from sfzmaps.solver import paths, table
+    t = build.stages()
+    for name, used in (("solver-page", f"{paths.CUTS_FILE.parent.name}/{paths.CUTS_FILE.name}"),
+                       ("solver-lots", f"{paths.TABLE_DIR.name}/{table.TABLE_FILE}")):
+        inputs = [d for d in build.stage_deps(t[name]) if d.startswith("inputs/")]
+        # a README, PROVENANCE.md or the table's by-eye corrections (read only in scoring) rerun nothing
+        assert inputs == [f"inputs/{used}"], name
+
+
 def test_needs_prepare_is_false_for_command_stages():
     st = _command_stage()
     assert build.needs_prepare(["x"], {"x": st}) is False

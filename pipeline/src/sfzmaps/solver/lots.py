@@ -17,19 +17,9 @@ import shapely
 from scipy import ndimage
 
 from sfzmaps.solver import grid, page, paths, table
+from sfzmaps.solver.grid import QUARTER_SPLIT, quarter_of  # noqa: F401 - the quarters are the grid's; kept here too
 
-# The split of the city into four quarters, EPSG:2227 ft: the median centroid (x, y) of the scored lots of the first
-# 2000 run, kept so held-out numbers compare with it.  East is x >= split, north is y >= split.
-QUARTER_SPLIT = (6000180.818639896, 2101727.4853113447)
 SUBPIXEL_BITS = 4           # polygon corners are filled to 1/16 px
-
-
-def quarter_of(xy: np.ndarray) -> np.ndarray:
-    """The quarter of each map point (n, 2): nw 0, ne 1, sw 2, se 3 (int8)."""
-    xy = np.asarray(xy, float).reshape(-1, 2)
-    east = xy[:, 0] >= QUARTER_SPLIT[0]
-    north = xy[:, 1] >= QUARTER_SPLIT[1]
-    return (np.where(north, 0, 2) + east).astype(np.int8)
 
 
 def _polygons(geom) -> list:
