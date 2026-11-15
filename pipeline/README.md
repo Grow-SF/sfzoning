@@ -567,6 +567,45 @@ lot sizes and the strokes (`solver/labels_stage.py`). Nothing asks a model, and 
   tagged a spur. It writes `strokes.npz` (`xy`, `w`, `off`, and per stroke `a`, `b`, `length`, `wmed`, `wiqr`,
   `spur`, `dega`, `degb`). On the 2000 page: about 172,000 strokes and 3,240 miles, in about 25 s and 3 GB.
 
+**The walls** (`sfzmaps solver walls [--workers N]`, `solver/wallevidence.py` and `solver/walls.py`) give every pair
+of neighbouring lots (each row of `lots.npz` `pairs`) the log odds that a printed district line runs between them.
+Nothing in them decides: every measure is a feature, and one fit weighs them all. The ink is read through the raw
+page's strokes (`strokes.npz`; no cleaned page, no line chain). A pair's border px are both px of every 4-neighbour
+px pair where `grown` changes between its lots, and each feature is a mean over them; distances enter as hat
+functions over 0 / 6 / 14 / 26 / 42 / 64 ft. The 208 border features, in `wallevidence.GROUPS` order:
+
+- **stroke evidence** (60): the nearest stroke (the widest on top where strokes cross): its distance × hats of its
+  median width (0–40 ft), and its distance × its letter share, log length, steadiness (width spread over median
+  width, capped at 3) and spur tag. The letter share is the share of the stroke's points inside Terra's text boxes
+  (`prints/terra_boxes.json`, every kind, each the word's rectangle turned to its reading angle), kept when the box's
+  centre is inside the sheet's crop (`page/frames.json`) and in no cut box (`inputs/merged-page/`), and put on the
+  grid through the sheet's corrected placement;
+- **whole line** (30): the nearest stroke's whole line (strokes joined at each node, the straightest pairing first):
+  its length, whether it closes on itself, the strokes of other lines ending on it, its sharpest turn, its width;
+- **straight closing** (30): from every loose stroke end, the straight gap to the nearest point of another stroke
+  within 250 ft (a search reach; the fit weighs the length): its length, how well it carries on the end's direction,
+  the smaller width at its ends, its share over lots;
+- **enclosure** (16): at each level of stroke width ≥ 6 / 12 / 18 / 26 ft × closing paths ≤ 0 / 60 / 150 / 400 ft,
+  the walls are those strokes, those closing paths and the city limit (the edge of the mapped area, `sheets.png` >
+  0: a wall at every level); a pair is apart when its lots are in different 4-connected regions, each lot in the
+  region holding most of its px. A closing path is the shortest way (`MCP_Geometric`) from a loose end over street
+  ground and lot lines, never through a lot, to a stroke sharing no node with it or to the city limit, within 512 ft;
+- **closing path** (24): the nearest closing path: its length, how well it carries on, the smaller width at its ends
+  (the city limit counts 40 ft);
+- **profile** (48): for each width level 0 / 6 / 12 / 18 / 24 / 32 ft, the distance to the nearest stroke at least
+  that wide, and, while it is within 26 ft, its letter share and log length.
+
+The fit adds the same 208 times "the pair faces across a street" (no touching px) and the lots' character: hats of
+the difference of their log areas, that times across a street, and hats of the smaller log area. It is one ridge
+logistic regression (ridge 0.1, Newton's method from zero) per quarter, trained on the pairs with both lots known and
+both outside the quarter; the target is that the two lots' codes in the table as downloaded differ. There is no
+whole-wall stage: how a line holds together along its length is left to the solve's energy. It writes
+`data/solver/walls/walls_<Q>.npz` (`lo_ab`, float32 per pair row, the odds of the fit without quarter Q) and
+`evaluation.json` (per quarter the log loss on the held-out pairs, both lots known and in the quarter, and their
+number). The closing paths run on `--workers` processes in bands of grid rows; the result is the same for any
+number, and the same inputs give the same odds. On the 2000 page: 437,000 pairs over 16.3 million border px, 60,716
+closing paths from 68,363 loose ends, in about 4 minutes and 12 GB with 6 workers.
+
 **The solve** (`solver/city.py`, `labels.py`, `placement.py`, `energy.py`, `search.py`, `solve.py`) reads the
 district of every lot from the page: one energy over every lot's code, minimised for the whole city and held out by
 quarter. How it works and how well it did as R&D (run J7) is written up in `docs/research/joint-solver/`, with the

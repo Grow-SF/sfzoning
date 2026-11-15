@@ -1012,6 +1012,22 @@ def solver_text(
     typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in times.items()))
 
 
+@solver_app.command("walls")
+def solver_walls(
+    workers: int = typer.Option(None, "--workers", help="Processes for the closing paths (default half the CPUs)."),
+) -> None:
+    """Fit the wall odds, held out by quarter, from the raw page's strokes: data/solver/walls/walls_<q>.npz and
+    evaluation.json."""
+    import logging
+
+    from sfzmaps.solver import walls
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = walls.build_walls(workers)
+    typer.echo(f"{s['pairs']:,} pairs, {s['features']} features; held-out log loss "
+               + ", ".join(f"{q} {v['held_out_log_loss']:.4f} ({v['held_out_pairs']:,} pairs)"
+                           for q, v in s["quarters"].items()) + f"; {s['seconds']} s")
+
+
 _WALLS_OPTION = typer.Option(None, "--walls", help="The folder of walls_<q>.npz (default data/solver/walls).")
 
 
