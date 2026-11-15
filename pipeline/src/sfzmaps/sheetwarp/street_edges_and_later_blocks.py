@@ -141,9 +141,10 @@ def street_edges_and_later_blocks(sheet: Sheet, sides: SidePoints) -> SidePoints
     log.info("%s/%s: block-side points %d; later-block points %d (weight sum %.0f); street-edge points %d (weight "
              "sum %.0f); street widths measured on %d of %d segments, median %.0f ft", sheet.series, sheet.name,
              len(sides.pts), len(P1), w1.sum(), len(P2), w2.sum(), len(widths), len(st), W_MED)
-    # one to_pixel call on each whole array (its iteration stops on the batch's largest step)
-    return SidePoints(pts=pts, sid=np.r_[sides.sid, I1, I2], ta=ta, tb=tb,
-                      px=T0.to_pixel(pts), pa=T0.to_pixel(ta), pb=T0.to_pixel(tb),
+    # placed through the grid, one call on each whole array (its iteration stops on the batch's largest step)
+    page_shape = sheet.page.shape
+    return SidePoints(pts=pts, sid=np.r_[sides.sid, I1, I2], ta=ta, tb=tb, px=T0.grid_to_pixel(pts, page_shape),
+                      pa=T0.grid_to_pixel(ta, page_shape), pb=T0.grid_to_pixel(tb, page_shape),
                       wt=np.r_[np.ones(len(sides.pts)), w1, w2],
                       kind=np.r_[np.full(len(sides.pts), BLOCK_SIDE), np.full(len(P1), LATER_BLOCK),
                                  np.full(len(P2), STREET_EDGE)])

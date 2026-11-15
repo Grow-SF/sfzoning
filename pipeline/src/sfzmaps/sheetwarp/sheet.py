@@ -16,10 +16,29 @@ from sfzmaps.transform import SheetTransform
 
 PLACED_FILES = ("page.png", "page.json", "transform.json", "refine.json", "blocks_px.geojson", "warped.tif",
                 "warped.footprint.geojson")
+EXACT_DISTANCE_BELOW_PX = 2047.0     # round(d*d) of OpenCV's float32 distance d is the exact squared distance below
+                                     # 2048 px (2**22 px^2); 1 px less, so one just over can't pass for one under
 
 
 class NothingToFit(Exception):
     """Raised by any step that has nothing to work on; the message is the reason."""
+
+
+def distance_transform(mask: np.ndarray, cap: float | None = None) -> np.ndarray:
+    """`scipy.ndimage.distance_transform_edt(mask)`, the same float64 values: for each True pixel the Euclidean
+    distance to the nearest False one, 0 on False pixels; with `cap`, no value above it.  Computed with OpenCV's
+    exact transform, each float32 distance d brought back to scipy's value sqrt(round(d*d)) (its squared distance
+    is a whole number of px).  scipy computes it where that isn't exact: a distance not capped that reaches
+    EXACT_DISTANCE_BELOW_PX, and a mask with no False pixel (OpenCV has nothing to measure from; scipy measures from
+    just outside the corner)."""
+    exact = not mask.all()
+    if exact:
+        d = cv2.distanceTransform(mask.astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE).astype(np.float64)
+        d = np.sqrt(np.rint(d * d))
+        exact = (cap is not None and cap < EXACT_DISTANCE_BELOW_PX) or d.max() < EXACT_DISTANCE_BELOW_PX
+    if not exact:
+        d = ndimage.distance_transform_edt(mask)
+    return d if cap is None else np.minimum(d, cap)
 
 
 def placed_sheets(series: str) -> list[str]:
@@ -53,6 +72,12 @@ class Sheet:
         return self.page < 128
 
     @cached_property
+    def distance_to_paper(self) -> np.ndarray:
+        """per page pixel, the distance (px) to the nearest paper pixel: 0 on paper; on the ink's centre line, the
+        ink's half width"""
+        return distance_transform(self.ink)
+
+    @cached_property
     def year(self):
         """the year of the lots the sheet is fitted to"""
         return read.series_year(self.series)
@@ -77,7 +102,7 @@ class Sheet:
             for q in shapely.get_parts(shapely.geometry.shape(f["geometry"])):
                 if q.geom_type == "Polygon":
                     cv2.polylines(m, [np.round(np.asarray(q.exterior.coords)[:, :2]).astype(np.int32)], True, 1, 3)
-        hw = ndimage.distance_transform_edt(ink)[skeletonize(ink) & (m > 0)]
+        hw = self.distance_to_paper[skeletonize(ink) & (m > 0)]
         return float(np.percentile(hw, 75)) if len(hw) else 2.0
 
     def area(self, cuts: int = 2):

@@ -29,10 +29,8 @@ def held_sides(sheet: Sheet, sides: SidePoints, d_today: np.ndarray) -> np.ndarr
     the side's ends (the corner, where the line running its way stops).  The first correction keeps held sides in
     place."""
     d, sid, p = d_today, sides.sid, sides.px
-    ink = sheet.ink
-    heavy = ndimage.maximum_filter(
-        (ndimage.distance_transform_edt(ink) > sheet.block_line_half_width).astype(np.uint8), size=7) > 0
-    H, W = ink.shape
+    heavy = ndimage.maximum_filter((sheet.distance_to_paper > sheet.block_line_half_width).astype(np.uint8), size=7) > 0
+    H, W = sheet.ink.shape
     ok = np.isfinite(p).all(1)
     xi = np.clip(np.round(p[:, 0]).astype(int), 0, W - 1)
     yi = np.clip(np.round(p[:, 1]).astype(int), 0, H - 1)
@@ -102,6 +100,15 @@ def _inputs(sheet: Sheet, sides: SidePoints, targets: Targets, held_side: np.nda
                    corner_scan=(rc[:, :2] - [x0, y0]).astype(np.float32))
 
 
+def side_members(sid: np.ndarray, keep: np.ndarray, n_sides: int) -> list[np.ndarray]:
+    """per side 0 .. n_sides - 1, the indices of its points where `keep` is True, ascending (one stable sort of the
+    side ids, not a mask of every point per side)"""
+    order = np.argsort(sid, kind="stable")
+    order = order[keep[order]]
+    starts = np.searchsorted(sid[order], np.arange(n_sides + 1))
+    return [order[a:b] for a, b in zip(starts[:-1], starts[1:])]
+
+
 @dataclass
 class _Shifts:
     """per free side point (crop px): its normal and how far it should move along it"""
@@ -132,7 +139,7 @@ def propagated_shifts(sheet: Sheet, sides: SidePoints, targets: Targets, held_si
     pbin = np.round((np.degrees(np.arctan2(dv[:, 1], dv[:, 0])) % 180) / 10.0).astype(int) % B
     ok = np.isfinite(P).all(1) & (P[:, 0] >= 0) & (P[:, 0] < w) & (P[:, 1] >= 0) & (P[:, 1] < h)
     ns = sid.max() + 1
-    members = [np.flatnonzero((sid == s) & ok) for s in range(ns)]
+    members = side_members(sid, ok, ns)
     shift = np.full((len(P), 2), np.nan)
     solved_side = np.zeros(ns, bool)
     for s in range(ns):
@@ -152,10 +159,19 @@ def propagated_shifts(sheet: Sheet, sides: SidePoints, targets: Targets, held_si
         idx = np.flatnonzero(~np.isnan(shift[:, 0]))
         return cKDTree(P[idx]), idx
 
+    def nearest_first(tree, unsolved):
+        """the heap of the unsolved sides by their closest point's distance to the solved points in `tree` (one
+        query of all their points, on every core: the same distances as a query per side)"""
+        if not unsolved:
+            return []
+        points = np.concatenate([members[t] for t in unsolved])
+        starts = np.cumsum([0] + [len(members[t]) for t in unsolved[:-1]])
+        heap = list(zip(np.minimum.reduceat(tree.query(P[points], workers=-1)[0], starts).tolist(), unsolved))
+        heapq.heapify(heap)
+        return heap
+
     tree, sidx = solved_tree()
-    dist0 = {s: float(tree.query(P[members[s]])[0].min()) for s in pending}
-    heap = [(dist0[s], s) for s in pending]
-    heapq.heapify(heap)
+    heap = nearest_first(tree, pending)
     k = 0
     while heap:
         _, s = heapq.heappop(heap)
@@ -183,9 +199,7 @@ def propagated_shifts(sheet: Sheet, sides: SidePoints, targets: Targets, held_si
         k += 1
         if k % 50 == 0:
             tree, sidx = solved_tree()
-            heap = [(float(tree.query(P[members[t]])[0].min()), t) for t in range(ns)
-                    if not solved_side[t] and len(members[t])]
-            heapq.heapify(heap)
+            heap = nearest_first(tree, [t for t in range(ns) if not solved_side[t] and len(members[t])])
     free = ok & ~held_side[sid]
     tgt = np.sum(shift[free] * nrm[free], axis=1)          # target offset along each point's normal
     return _Shifts(free=P[free].astype(np.float32), free_n=nrm[free].astype(np.float32),

@@ -1,4 +1,8 @@
+import cv2
 import numpy as np
+import pytest
+from scipy import ndimage
+from skimage.morphology import skeletonize
 
 from sfzmaps import config
 from sfzmaps.sheetwarp import sheet, targets
@@ -45,3 +49,62 @@ def test_measure_with_a_correction_moves_the_points_first():
     moved = targets.distances(tg, px + shift, pa + shift, pb + shift)
     assert (targets.measure(tg, sides, correction) == moved).all()
     assert (targets.measure(tg, sides) != moved).any()
+
+
+# -- the distance transform and the crop's ink centres, against today's scipy versions --------------------------
+@pytest.mark.parametrize("shape, paper_share", [((300, 400), 0.5), ((300, 400), 0.01), ((1000, 1200), 3e-6),
+                                                ((3, 5000), 0.0)])
+def test_the_distance_transform_equals_scipys(shape, paper_share):
+    rng = np.random.default_rng(int(paper_share * 1e4))
+    mask = rng.random(shape) >= paper_share
+    mask[0, 0] = False                   # one paper pixel at least: (3, 5000) is 4999 px from its far end
+    assert np.array_equal(sheet.distance_transform(mask), ndimage.distance_transform_edt(mask))
+    assert np.array_equal(sheet.distance_transform(mask, cap=255),
+                          np.minimum(ndimage.distance_transform_edt(mask), 255))
+
+
+def test_the_distance_transform_of_a_mask_without_paper_or_ink_equals_scipys():
+    for mask in (np.ones((40, 60), bool), np.zeros((40, 60), bool)):
+        assert np.array_equal(sheet.distance_transform(mask), ndimage.distance_transform_edt(mask))
+        assert np.array_equal(sheet.distance_transform(mask, cap=20),
+                              np.minimum(ndimage.distance_transform_edt(mask), 20))
+
+
+def _page(only_across_and_down=False):
+    """ink on paper: strokes 1-7 px wide every which way, rings and lettering; or only lines across and down (most
+    directions then have no ink at all)"""
+    page = np.full((300, 420), 255, np.uint8)
+    for k, width in enumerate((1, 2, 3, 5, 7)):
+        cv2.line(page, (20, 30 + 50 * k), (400, 30 + 50 * k), 0, width)
+        cv2.line(page, (30 + 80 * k, 15), (30 + 80 * k, 290), 0, width)
+    if not only_across_and_down:
+        for k, width in enumerate((1, 2, 4)):
+            cv2.line(page, (10, 290 - 20 * k), (410, 20 + 40 * k), 0, width)
+            cv2.circle(page, (120 + 90 * k, 150), 25 + 10 * k, 0, width)
+        cv2.putText(page, "BLOCK 1300", (60, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.2, 0, 3)
+    return page < 128
+
+
+def _todays_direction_maps(ink, block_line_half_width):
+    """fit_targets' maps as they were computed before the ink centres were shared (scipy's distances)"""
+    centres = skeletonize(ink) & (ndimage.distance_transform_edt(ink) <= block_line_half_width)
+    f = ndimage.gaussian_filter(ink.astype(np.float32), 1.0)
+    gx, gy = ndimage.sobel(f, 1), ndimage.sobel(f, 0)
+    Jxx, Jxy, Jyy = (ndimage.gaussian_filter(v, 2.0) for v in (gx * gx, gx * gy, gy * gy))
+    cdir = (0.5 * np.degrees(np.arctan2(2 * Jxy, Jxx - Jyy)) + 90.0) % 180
+    maps = np.zeros((18, *ink.shape), np.uint8)
+    for i, b in enumerate(np.arange(0, 180, 10.0)):
+        m = centres & (np.abs((cdir - b + 90) % 180 - 90) <= 20.0)
+        maps[i] = np.minimum(ndimage.distance_transform_edt(~m), 255).astype(np.uint8)
+    return maps
+
+
+@pytest.mark.parametrize("only_across_and_down", [False, True])
+def test_direction_maps_from_the_shared_ink_centres_equal_todays(only_across_and_down):
+    ink = _page(only_across_and_down)
+    maps = targets.direction_maps(targets.ink_centres(ink), 1.5)
+    assert maps.dtype == np.uint8 and maps.shape == (18, *ink.shape)
+    assert np.array_equal(maps, _todays_direction_maps(ink, 1.5))
+    assert (maps == 0).any()
+    if only_across_and_down:
+        assert (maps == 255).any()          # a direction with no ink at all: scipy's distances, capped

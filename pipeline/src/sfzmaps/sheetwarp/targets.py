@@ -7,8 +7,10 @@ import shapely
 from scipy import ndimage
 from skimage.morphology import skeletonize
 
-from sfzmaps.sheetwarp.sheet import NothingToFit, Sheet
+from sfzmaps.sheetwarp.sheet import NothingToFit, Sheet, distance_transform
 from sfzmaps.transform import Correction
+
+DIRECTIONS = np.arange(0, 180, 10.0)       # the 18 directions of the maps (degrees)
 
 
 @dataclass
@@ -28,12 +30,24 @@ class SidePoints:
 
 
 @dataclass
+class InkCentres:
+    """The centre line (skeleton) of the ink on a crop and, at each of its pixels (in `skeleton`'s row-major order),
+    the ink's half width (px: the distance to the nearest paper pixel) and the direction the ink runs there
+    (degrees, 0-180: the structure tensor, 2 px smoothing)."""
+    skeleton: np.ndarray
+    half_width: np.ndarray
+    direction: np.ndarray
+
+
+@dataclass
 class Targets:
     """For each of 18 directions (every 10 degrees), the distance (px, capped at 255) from every pixel of the crop
-    to the nearest printed block-line centre running that way.  `origin` is the crop's top-left page pixel."""
+    to the nearest printed block-line centre running that way.  `origin` is the crop's top-left page pixel;
+    `ink_centres`, the crop's ink centres the maps were made from (the block-line weights use them too)."""
     maps: np.ndarray
     origin: np.ndarray
     page_shape: tuple
+    ink_centres: InkCentres | None = None
 
 
 def block_side_points(sheet: Sheet) -> SidePoints:
@@ -68,16 +82,18 @@ def block_side_points(sheet: Sheet) -> SidePoints:
     if not pts:
         raise NothingToFit(f"{sheet.series}/{sheet.name}: no block sides inside the drawn map")
     pts, sid_, ta, tb = np.array(pts), np.array(sid_), np.array(ta), np.array(tb)
-    # Always one to_pixel call on each whole array: its iteration stops on the batch's largest step, so placing
-    # the points in other batches would change the values slightly.
-    return SidePoints(pts=pts, sid=sid_, ta=ta, tb=tb,
-                      px=T0.to_pixel(pts), pa=T0.to_pixel(ta), pb=T0.to_pixel(tb))
+    # Placed through the grid (grid_to_pixel), always one call on each whole array: its iteration stops on the
+    # batch's largest step, so placing the points in other batches would change the values slightly.
+    page_shape = sheet.page.shape
+    return SidePoints(pts=pts, sid=sid_, ta=ta, tb=tb, px=T0.grid_to_pixel(pts, page_shape),
+                      pa=T0.grid_to_pixel(ta, page_shape), pb=T0.grid_to_pixel(tb, page_shape))
 
 
 def _crop(T0, pts, ta, tb, W, H):
     """the box round the points that land on the page with a usable direction, plus 60 px.  Only its extreme points
-    matter, so only candidates for them are placed exactly: each point placed by the placement's linear part alone
-    (to_pixel's own first guess), those within 200 px of the page, the 3000 most extreme each way along x and y."""
+    matter, so only candidates for them are placed (through the grid, `grid_to_pixel`): each point placed by the
+    placement's linear part alone (to_pixel's own first guess), those within 200 px of the page, the 3000 most
+    extreme each way along x and y."""
     T0._ensure_fit()
     lin = T0._pm + (pts - T0.to_world(T0._pm[None])) @ T0._lin_inv.T
     near = np.flatnonzero((lin[:, 0] > -200) & (lin[:, 0] < W + 200) & (lin[:, 1] > -200) & (lin[:, 1] < H + 200))
@@ -86,8 +102,8 @@ def _crop(T0, pts, ta, tb, W, H):
         o = np.argsort(lin[near][:, c], kind="stable")
         pick.update(o[:3000].tolist()); pick.update(o[-3000:].tolist())
     sel = near[np.array(sorted(pick))]
-    px = T0.to_pixel(pts[sel])
-    dv = T0.to_pixel(tb[sel]) - T0.to_pixel(ta[sel])
+    px = T0.grid_to_pixel(pts[sel], (H, W))
+    dv = T0.grid_to_pixel(tb[sel], (H, W)) - T0.grid_to_pixel(ta[sel], (H, W))
     pdir = np.degrees(np.arctan2(dv[:, 1], dv[:, 0])) % 180
     ok = np.isfinite(px).all(1) & np.isfinite(pdir) & (px[:, 0] >= 0) & (px[:, 0] < W) & (px[:, 1] >= 0) & (px[:, 1] < H)
     p = px[ok]
@@ -97,11 +113,40 @@ def _crop(T0, pts, ta, tb, W, H):
             min(W, int(p[:, 0].max()) + 60), min(H, int(p[:, 1].max()) + 60))
 
 
+def ink_centres(ink: np.ndarray) -> InkCentres:
+    """The ink's centre line on a crop, with its half width and direction there."""
+    skeleton = skeletonize(ink)
+    f = ndimage.gaussian_filter(ink.astype(np.float32), 1.0)
+    gx, gy = ndimage.sobel(f, 1), ndimage.sobel(f, 0)
+    Jxx, Jxy, Jyy = (ndimage.gaussian_filter(v, 2.0)[skeleton] for v in (gx * gx, gx * gy, gy * gy))
+    direction = (0.5 * np.degrees(np.arctan2(2 * Jxy, Jxx - Jyy)) + 90.0) % 180     # the ink runs across its gradient
+    return InkCentres(skeleton=skeleton, half_width=distance_transform(ink)[skeleton], direction=direction)
+
+
+def runs_within_20_degrees(direction: np.ndarray, b: float) -> np.ndarray:
+    """whether each direction (degrees, 0-180) is within 20 degrees of b, either way round"""
+    return np.abs((direction - b + 90) % 180 - 90) <= 20.0
+
+
+def direction_maps(centres: InkCentres, block_line_half_width: float) -> np.ndarray:
+    """(18, h, w) uint8: per direction of DIRECTIONS, each pixel's distance (px, capped at 255) to the nearest ink
+    centre no wider than a block line running within 20 degrees of it"""
+    rows, cols = np.nonzero(centres.skeleton)
+    thin = centres.half_width <= block_line_half_width
+    maps = np.zeros((len(DIRECTIONS), *centres.skeleton.shape), np.uint8)
+    for i, b in enumerate(DIRECTIONS):
+        on = thin & runs_within_20_degrees(centres.direction, b)
+        centre = np.zeros(centres.skeleton.shape, bool)
+        centre[rows[on], cols[on]] = True
+        maps[i] = distance_transform(~centre, cap=255).astype(np.uint8)
+    return maps
+
+
 def fit_targets(sheet: Sheet) -> Targets:
     """On the scan, the centre line of every ink stroke no wider than a block line (`sheet.block_line_half_width`),
     each with the direction its ink runs there (structure tensor, 2 px smoothing); per direction, the distance to
-    the nearest such centre running within 20 degrees of it.  The maps cover the box round the sheet's block lines
-    as today's placement puts them on the page, plus 60 px."""
+    the nearest such centre running within 20 degrees of it (`direction_maps`).  The maps cover the box round the
+    sheet's block lines as today's placement puts them on the page, plus 60 px."""
     T0 = sheet.transform
     H, W = sheet.page.shape
     ink = sheet.ink
@@ -120,17 +165,9 @@ def fit_targets(sheet: Sheet) -> Targets:
     if not pts:
         raise NothingToFit(f"{sheet.series}/{sheet.name}: no block lines inside the drawn map")
     x0, y0, x1, y1 = _crop(T0, np.array(pts), np.array([a for a, _ in tang]), np.array([b for _, b in tang]), W, H)
-    sub = ink[y0:y1, x0:x1]
-    centres = skeletonize(sub) & (ndimage.distance_transform_edt(sub) <= sheet.block_line_half_width)
-    f = ndimage.gaussian_filter(sub.astype(np.float32), 1.0)
-    gx, gy = ndimage.sobel(f, 1), ndimage.sobel(f, 0)
-    Jxx, Jxy, Jyy = (ndimage.gaussian_filter(v, 2.0) for v in (gx * gx, gx * gy, gy * gy))
-    cdir = (0.5 * np.degrees(np.arctan2(2 * Jxy, Jxx - Jyy)) + 90.0) % 180     # the ink runs across its gradient
-    maps = np.zeros((18, y1 - y0, x1 - x0), np.uint8)
-    for i, b in enumerate(np.arange(0, 180, 10.0)):
-        m = centres & (np.abs((cdir - b + 90) % 180 - 90) <= 20.0)
-        maps[i] = np.minimum(ndimage.distance_transform_edt(~m), 255).astype(np.uint8)
-    return Targets(maps=maps, origin=np.array([x0, y0]), page_shape=(H, W))
+    centres = ink_centres(ink[y0:y1, x0:x1])
+    return Targets(maps=direction_maps(centres, sheet.block_line_half_width), origin=np.array([x0, y0]),
+                   page_shape=(H, W), ink_centres=centres)
 
 
 def distances(targets: Targets, px, pa, pb) -> np.ndarray:

@@ -22,13 +22,11 @@ from dataclasses import dataclass
 
 import numpy as np
 import shapely
-from scipy import ndimage
 from scipy.spatial import cKDTree
-from skimage.morphology import skeletonize
 
 from sfzmaps import linework
-from sfzmaps.sheetwarp.sheet import Sheet
-from sfzmaps.sheetwarp.targets import SidePoints, Targets
+from sfzmaps.sheetwarp.sheet import NothingToFit, Sheet
+from sfzmaps.sheetwarp.targets import DIRECTIONS, SidePoints, Targets, runs_within_20_degrees
 from sfzmaps.transform import Correction
 
 log = logging.getLogger(__name__)
@@ -38,6 +36,7 @@ GRID_SPACING = 50
 SETTLE_STEPS = 25                  # a stage has settled when its loss fell by SETTLE_FALL of itself or less over
 SETTLE_FALL = 1e-4                 # the last SETTLE_STEPS steps, once it has taken SETTLE_MIN_STEPS
 SETTLE_MIN_STEPS = 50
+SIGMA_FLOOR_PX = 1e-3              # an EM round's sigma never goes below this: at 0 the next round would divide 0 by 0
 
 
 class StopWhenSettled:
@@ -109,40 +108,43 @@ def probabilistic_inputs(sheet: Sheet, points: SidePoints, targets: Targets) -> 
                                gbase=GBASE.astype(np.float32), gpx=GPX.astype(np.float32), tau_j=TAU_J, **extra)
 
 
-def block_line_weights(sheet: Sheet, targets: Targets) -> np.ndarray:
-    """How likely each inked centre pixel is to be a block line, from its stroke width: the sheet's stroke widths on
-    the crop of the targets, fitted as two groups (thin block lines and heavier ink); each centre pixel's weight is
-    its chance of being in the thin group.  All ink counts as printed, text included (its width speaks for it).
-    Kept per direction (18, every 10 degrees: the ink's direction within 20 degrees).  Returns (18, h, w) float16."""
-    page = sheet.page < 128
-    x0, y0 = (int(v) for v in targets.origin)
-    B, h, w = targets.maps.shape
-    sub = page[y0:y0 + h, x0:x0 + w]
-    half = ndimage.distance_transform_edt(sub)
-    sk = skeletonize(sub)
-    wid = 2.0 * half[sk]
-    m = np.array([np.percentile(wid, 25), np.percentile(wid, 95)])
+def stroke_width_groups(widths: np.ndarray) -> tuple[np.ndarray, float, float, float]:
+    """The stroke widths fitted as two Gaussian groups, thin block lines and heavier ink (EM, 200 rounds, from the
+    25th and 95th percentiles).  Fitted on the widths' histogram (a skeleton's widths take few values), the same fit
+    as on every width.  Returns each width's chance of being in the thin group, the thin and the heavy group's mean
+    width, and the thin group's share."""
+    m = np.array([np.percentile(widths, 25), np.percentile(widths, 95)])
     s = np.array([1.0, 1.0])
     pi = np.array([0.7, 0.3])
+    values, value_of, counts = np.unique(widths, return_inverse=True, return_counts=True)
+    counts = counts.astype(np.float64)[:, None]
     for _ in range(200):
-        lk = pi[None] * np.exp(-(wid[:, None] - m[None]) ** 2 / (2 * s[None] ** 2)) / (np.sqrt(2 * np.pi) * s[None])
+        lk = pi[None] * np.exp(-(values[:, None] - m[None]) ** 2 / (2 * s[None] ** 2)) / (np.sqrt(2 * np.pi) * s[None])
         r = lk / np.maximum(lk.sum(1, keepdims=True), 1e-300)
-        pi = r.mean(0)
-        m = (r * wid[:, None]).sum(0) / r.sum(0)
-        s = np.sqrt((r * (wid[:, None] - m[None]) ** 2).sum(0) / r.sum(0)) + 1e-3
+        counted = r * counts
+        pi = counted.sum(0) / len(widths)
+        m = (counted * values[:, None]).sum(0) / counted.sum(0)
+        s = np.sqrt((counted * (values[:, None] - m[None]) ** 2).sum(0) / counted.sum(0)) + 1e-3
     thin = int(np.argmin(m))
-    weight = np.zeros(sub.shape, np.float32)
-    weight[sk] = r[:, thin]
-    f = ndimage.gaussian_filter(sub.astype(np.float32), 1.0)
-    gx, gy = ndimage.sobel(f, 1), ndimage.sobel(f, 0)
-    Jxx, Jxy, Jyy = (ndimage.gaussian_filter(v, 2.0) for v in (gx * gx, gx * gy, gy * gy))
-    cdir = (0.5 * np.degrees(np.arctan2(2 * Jxy, Jxx - Jyy)) + 90.0) % 180
+    return r[value_of, thin], float(m[thin]), float(m[1 - thin]), float(pi[thin])
+
+
+def block_line_weights(sheet: Sheet, targets: Targets) -> np.ndarray:
+    """How likely each inked centre pixel is to be a block line, from its stroke width: the stroke widths of the
+    crop's ink centres (`targets.ink_centres`), fitted as two groups (`stroke_width_groups`); each centre pixel's
+    weight is its chance of being in the thin group.  All ink counts as printed, text included (its width speaks
+    for it).  Kept per direction (18, every 10 degrees: the ink's direction within 20 degrees).  Returns (18, h, w)
+    float16."""
+    centres = targets.ink_centres
+    B, h, w = targets.maps.shape
+    thin_share, thin_width, heavy_width, block_share = stroke_width_groups(2.0 * centres.half_width)
+    weight = thin_share.astype(np.float32)
+    rows, cols = np.nonzero(centres.skeleton)
     W8 = np.zeros((B, h, w), np.float16)
-    for i, b in enumerate(np.arange(0, 180, 10.0)):
-        dd = np.abs((cdir - b + 90) % 180 - 90)
-        W8[i] = (weight * (dd <= 20.0)).astype(np.float16)
+    for i, b in enumerate(DIRECTIONS):
+        W8[i, rows, cols] = (weight * runs_within_20_degrees(centres.direction, b)).astype(np.float16)
     log.info("%s/%s: block line width %.2f px, heavy ink %.2f px, block share %.2f", sheet.series, sheet.name,
-             m[thin], m[1 - thin], pi[thin])
+             thin_width, heavy_width, block_share)
     return W8
 
 
@@ -200,14 +202,23 @@ def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weig
             pu = eps / DMAX
             r = pl / np.maximum(pl + pu, 1e-300)
             eps = float(1 - r.mean())
-            sig = float(np.sqrt((r * d * d).sum() / max(r.sum(), 1e-9)))
+            sig = max(float(np.sqrt((r * d * d).sum() / max(r.sum(), 1e-9))), SIGMA_FLOOR_PX)
         return eps, max(sig, 0.5)
+
+    def estimate(d, eps, sig):
+        """`em`, or NothingToFit where its estimate isn't a number (no point to measure on): a sigma that isn't a
+        number never lets the stages reach it"""
+        eps, sig = em(d, eps, sig)
+        if not (np.isfinite(eps) and np.isfinite(sig)):
+            raise NothingToFit(f"the points' spread from the printed lines can't be estimated (eps {eps}, sigma "
+                               f"{sig})")
+        return eps, sig
 
     def share(xy):
         d = nearest_d(xy[BASE], BASE)
         return np.mean(d <= 1), np.mean(d <= 2), np.mean(d <= 4)
 
-    eps, sig = em(nearest_d(Pp[BASE], BASE), 0.5, SW / 4)
+    eps, sig = estimate(nearest_d(Pp[BASE], BASE), 0.5, SW / 4)
     TAU = sig          # prior on the correction: today's fit is believed close; spread = today's measured misfit
     AREA = float(h * w)
 
@@ -218,7 +229,7 @@ def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weig
             pu = eps / AREA
             q = pl / np.maximum(pl + pu, 1e-300)
             eps = float(np.clip(1 - q.mean(), 1e-4, 0.5))
-            sig = float(np.sqrt((q * r * r).sum() / max(2 * q.sum(), 1e-9)))
+            sig = max(float(np.sqrt((q * r * r).sum() / max(2 * q.sum(), 1e-9))), SIGMA_FLOOR_PX)
         return eps, max(sig, 0.25)
 
     geps, gsig = em2(np.linalg.norm(GB_ - GX_, axis=1), 0.05, 2.0)
@@ -272,7 +283,7 @@ def probabilistic_correction(inputs: ProbabilisticInputs, targets: Targets, weig
             umax = float(torch.linalg.norm(G[0], dim=0).max())
             dmin = float(jdet(G).min())
             ug = field_at_control_points.field(G).cpu().numpy()
-        eps, sig = em(nearest_d((Pp + u)[BASE], BASE), eps, sig)
+        eps, sig = estimate(nearest_d((Pp + u)[BASE], BASE), eps, sig)
         a1, a2, a4 = share(Pp + u)
         log.info("  stage %d: s %.2f px; steps %d; within 1/2/4 px %.1f%% %.1f%% %.1f%%; eps %.2f, sigma %.2f px; "
                  "control points off p99 %.1f px; moved p50 %.1f p90 %.1f px, biggest correction %.1f px; smallest "

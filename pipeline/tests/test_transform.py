@@ -265,3 +265,40 @@ def test_a_correction_without_a_file_cannot_be_written():
     t.correction = _constant_correction(1.5, -2.0)       # made in memory: no file yet
     with pytest.raises(ValueError, match="file"):
         t.to_json()
+
+
+# -- placing large batches through a grid -------------------------------------
+def test_grid_to_pixel_matches_to_pixel():
+    # a dense placement with paper wobble, like a real sheet's: 1600 control points, each a few ft off a smooth warp
+    gcps = _grid(_warped, n=40)
+    rng = np.random.default_rng(3)
+    for g in gcps:
+        g.wx, g.wy = g.wx + rng.normal(0, 3.0), g.wy + rng.normal(0, 3.0)
+    t = SheetTransform(gcps, smoothing=config.TPS_SMOOTHING).fit()
+    page_shape = (7000, 7000)
+    on_the_page = rng.uniform(0, 7000, (8000, 2))
+    just_off_it = np.c_[rng.uniform(-250, 0, 200), rng.uniform(0, 7000, 200)]
+    far_off_it = np.c_[rng.uniform(-3000, -1000, 50), rng.uniform(0, 7000, 50)]
+    w = t.to_world(np.vstack([on_the_page, just_off_it, far_off_it]))
+    w = np.vstack([w, [[np.nan, 2_000_000.0]], [[1e12, 1e12]]])      # not a point; a point nothing places
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        exact = t.to_pixel(w)
+        handed_to_to_pixel = []
+        t.to_pixel = lambda ww: handed_to_to_pixel.append(len(ww)) or SheetTransform.to_pixel(t, ww)
+        by_the_grid = t.grid_to_pixel(w, page_shape)
+    # only what lies more than 8 steps (256 px) off the page, the non-point and the point nothing places
+    assert sum(handed_to_to_pixel) == 52
+    finite = np.isfinite(exact).all(axis=1)
+    assert finite.sum() == len(w) - 2
+    assert np.array_equal(np.isfinite(by_the_grid), np.isfinite(exact))
+    assert np.abs(by_the_grid[finite] - exact[finite]).max() < 1e-3
+
+
+def test_grid_to_pixel_adds_the_correction():
+    t = _fitted()
+    base = t.uncorrected()
+    w = base.to_world(np.array([[10.0, 10.0], [50.0, 70.0], [3000.0, 4000.0]]))
+    t.correction = _constant_correction(1.5, -2.0)
+    moved = t.grid_to_pixel(w, (7000, 7000)) - base.grid_to_pixel(w, (7000, 7000))
+    assert np.abs(moved[:2] - [1.5, -2.0]).max() < 1e-6 and np.abs(moved[2]).max() < 1e-6

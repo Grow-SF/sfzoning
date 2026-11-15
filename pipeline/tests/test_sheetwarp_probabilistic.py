@@ -2,16 +2,19 @@ import logging
 import re
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 import torch
 from scipy import ndimage
+from skimage.morphology import skeletonize
 
-from sfzmaps.sheetwarp import probabilistic
+from sfzmaps.sheetwarp import device, probabilistic
 from sfzmaps.sheetwarp.probabilistic import (ITERS, ProbabilisticInputs, StopWhenSettled, block_line_weights,
                                              probabilistic_correction)
 from sfzmaps.sheetwarp.street_edges_and_later_blocks import unexplained_weight
-from sfzmaps.sheetwarp.targets import Targets
+from sfzmaps.sheetwarp.sheet import NothingToFit
+from sfzmaps.sheetwarp.targets import Targets, ink_centres
 from sfzmaps.transform import Correction
 
 # the CPU everywhere (CI's path); the Mac's GPU too where there is one
@@ -20,11 +23,11 @@ DEVICES = ["cpu", pytest.param("mps", marks=pytest.mark.skipif(not torch.backend
 OFF_THE_PRINT = 1.5          # px: how far today's placement puts the synthetic sheet's block sides off their lines
 
 
-def _synthetic_sheet():
+def _synthetic_sheet(off_the_print=OFF_THE_PRINT, either_side_px=0.8):
     """A 200 px crop printed with 1 px block lines every 50 px each way; its block-side points, every 2 px along
-    them and up to 0.8 px either side of them (a print is never exact), and three control points, all placed
-    OFF_THE_PRINT px right of and below where the print has them: the inputs of a probabilistic correction, its
-    targets and block-line weights."""
+    them and up to `either_side_px` either side of them (a print is never exact), and three control points, all
+    placed `off_the_print` px right of and below where the print has them: the inputs of a probabilistic
+    correction, its targets and block-line weights."""
     h = w = 200
     lines = (50, 100, 150)
     along = np.arange(14, 187, 2.0)
@@ -36,16 +39,16 @@ def _synthetic_sheet():
     maps = np.full((18, h, w), 255, np.uint8)
     for b, centres in ((9, running_down), (0, running_across)):
         maps[b] = np.minimum(ndimage.distance_transform_edt(~centres), 255).astype(np.uint8)
-    either_side = np.random.default_rng(5).uniform(-0.8, 0.8, len(lines) * len(along) * 2)
+    either_side = np.random.default_rng(5).uniform(-either_side_px, either_side_px, len(lines) * len(along) * 2)
     down = np.array([(x, y) for x in lines for y in along], float)
     across = np.array([(x, y) for y in lines for x in along], float)
     down[:, 0] += either_side[:len(down)]
     across[:, 1] += either_side[len(down):]
-    points = np.concatenate([down, across]) + OFF_THE_PRINT
+    points = np.concatenate([down, across]) + off_the_print
     bins = np.repeat([9, 0], [len(down), len(across)])
     control_on_the_print = np.array([[50.0, 50.0], [150.0, 50.0], [100.0, 150.0]], np.float32)
     inputs = ProbabilisticInputs(P=points.astype(np.float32), bin=bins, street_px=20.0, origin=np.array([0, 0]),
-                                 gbase=control_on_the_print + OFF_THE_PRINT, gpx=control_on_the_print, tau_j=0.01)
+                                 gbase=control_on_the_print + off_the_print, gpx=control_on_the_print, tau_j=0.01)
     return inputs, Targets(maps=maps, origin=np.array([0, 0]), page_shape=(h, w)), weights
 
 
@@ -99,8 +102,9 @@ def test_block_line_weights_favour_the_thin_strokes():
         page[10:190, x] = 0
     for y in (40, 100, 160):             # heavy horizontal bars, 6 px
         page[y - 3:y + 3, 10:190] = 0
-    targets = Targets(maps=np.zeros((18, 200, 200), np.uint8), origin=np.array([0, 0]), page_shape=(200, 200))
-    weights = block_line_weights(SimpleNamespace(page=page, series="s", name="n"), targets)
+    targets = Targets(maps=np.zeros((18, 200, 200), np.uint8), origin=np.array([0, 0]), page_shape=(200, 200),
+                      ink_centres=ink_centres(page < 128))
+    weights = block_line_weights(SimpleNamespace(series="s", name="n"), targets)
     assert weights.shape == (18, 200, 200) and weights.dtype == np.float16
     # thin centres: the vertical lines' columns, between the bars; vertical ink is 90 degrees, map 9
     thin_centres = weights[9][50:90, [30, 60, 90, 120]].astype(float)
@@ -117,3 +121,94 @@ def test_street_edge_points_count_by_how_little_blocks_explain_them():
     assert w[0] == 0
     assert 0 < w[1] < 0.1
     assert w[2] > 0.999
+
+
+def _todays_stroke_width_fit(widths):
+    """the stroke-width EM as block_line_weights ran it on every centre pixel: each one's chance of the thin group"""
+    m = np.array([np.percentile(widths, 25), np.percentile(widths, 95)])
+    s = np.array([1.0, 1.0])
+    pi = np.array([0.7, 0.3])
+    for _ in range(200):
+        lk = pi[None] * np.exp(-(widths[:, None] - m[None]) ** 2 / (2 * s[None] ** 2)) / (np.sqrt(2 * np.pi) * s[None])
+        r = lk / np.maximum(lk.sum(1, keepdims=True), 1e-300)
+        pi = r.mean(0)
+        m = (r * widths[:, None]).sum(0) / r.sum(0)
+        s = np.sqrt((r * (widths[:, None] - m[None]) ** 2).sum(0) / r.sum(0)) + 1e-3
+    thin = int(np.argmin(m))
+    return r[:, thin], m[thin], m[1 - thin], pi[thin]
+
+
+def test_the_stroke_width_fit_on_the_histogram_equals_the_fit_on_every_pixel():
+    # widths as an ink skeleton has them: twice the distance to the paper, sqrt of whole numbers; mostly thin lines
+    rng = np.random.default_rng(11)
+    widths = 2.0 * np.sqrt(np.r_[rng.choice([1, 2, 4, 5], 30000, p=[0.5, 0.3, 0.15, 0.05]),
+                                 rng.choice([9, 10, 13, 16, 18, 25], 6000)].astype(float))
+    thin_share, *groups = probabilistic.stroke_width_groups(widths)
+    todays_share, *todays_groups = _todays_stroke_width_fit(widths)
+    # the same fit summed in another order: alike to 1e-11 of each chance (the far tail's tiny chances included)
+    assert np.allclose(thin_share, todays_share, rtol=1e-9, atol=0)
+    assert np.allclose(groups, todays_groups, rtol=1e-12)
+    # what the weights keep of it: float16 by way of float32, as they are stored
+    assert np.array_equal(thin_share.astype(np.float32).astype(np.float16),
+                          todays_share.astype(np.float32).astype(np.float16))
+
+
+def _todays_block_line_weights(ink):
+    """block_line_weights as it was before the ink centres were shared: per pixel, scipy's distances"""
+    half = ndimage.distance_transform_edt(ink)
+    sk = skeletonize(ink)
+    weight = np.zeros(ink.shape, np.float32)
+    weight[sk] = _todays_stroke_width_fit(2.0 * half[sk])[0]
+    f = ndimage.gaussian_filter(ink.astype(np.float32), 1.0)
+    gx, gy = ndimage.sobel(f, 1), ndimage.sobel(f, 0)
+    Jxx, Jxy, Jyy = (ndimage.gaussian_filter(v, 2.0) for v in (gx * gx, gx * gy, gy * gy))
+    cdir = (0.5 * np.degrees(np.arctan2(2 * Jxy, Jxx - Jyy)) + 90.0) % 180
+    W8 = np.zeros((18, *ink.shape), np.float16)
+    for i, b in enumerate(np.arange(0, 180, 10.0)):
+        W8[i] = (weight * (np.abs((cdir - b + 90) % 180 - 90) <= 20.0)).astype(np.float16)
+    return W8
+
+
+def test_block_line_weights_from_the_shared_ink_centres_equal_todays():
+    page = np.full((260, 400), 255, np.uint8)
+    for k, width in enumerate((1, 1, 2, 3, 6)):
+        cv2.line(page, (15, 20 + 45 * k), (385, 40 + 45 * k), 0, width)
+        cv2.line(page, (30 + 75 * k, 10), (20 + 75 * k, 250), 0, width)
+    cv2.circle(page, (200, 130), 60, 0, 2)
+    cv2.putText(page, "R-4 C-2", (60, 200), cv2.FONT_HERSHEY_SIMPLEX, 1.5, 0, 4)
+    ink = page < 128
+    targets = Targets(maps=np.zeros((18, *ink.shape), np.uint8), origin=np.array([0, 0]), page_shape=ink.shape,
+                      ink_centres=ink_centres(ink))
+    weights = block_line_weights(SimpleNamespace(series="s", name="n"), targets)
+    assert weights.dtype == np.float16 and (weights > 0).any()
+    assert np.array_equal(weights, _todays_block_line_weights(ink))
+
+
+def test_a_spread_that_collapses_to_zero_still_ends_the_fit(monkeypatch):
+    # every block-side point exactly on its printed line and every control point on its match: every distance is 0,
+    # so both EMs' sigma fall to 0 and their next round divides 0 by 0.  The points' NaN sigma never let the stages
+    # reach it (the fit ran forever); the control points' made the correction NaN.
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "cpu")
+    inputs, targets, weights = _synthetic_sheet(off_the_print=0.0, either_side_px=0.0)
+    stages = []
+    todays_blur = device.blur
+
+    def blur_counting_stages(maps, s, on):
+        stages.append(s)
+        assert len(stages) <= 40, "the stages never end"
+        return todays_blur(maps, s, on)
+
+    monkeypatch.setattr(device, "blur", blur_counting_stages)
+    correction = probabilistic_correction(inputs, targets, weights)
+    assert np.isfinite(correction.grid).all()
+    assert len(stages) <= 6                # from half the street width (10 px) down to sigma, halving
+
+
+@pytest.mark.filterwarnings("ignore::RuntimeWarning")          # the mean of no distances
+def test_a_spread_that_cannot_be_estimated_has_nothing_to_fit(monkeypatch):
+    # no block-side point (kind 0) to measure the spread on: its estimate is not a number
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "cpu")
+    inputs, targets, weights = _synthetic_sheet()
+    inputs.wt, inputs.kind = np.ones(len(inputs.P), np.float32), np.full(len(inputs.P), 2)
+    with pytest.raises(NothingToFit, match="spread"):
+        probabilistic_correction(inputs, targets, weights)
