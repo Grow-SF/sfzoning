@@ -553,6 +553,61 @@ def test_no_city_limit_leaves_the_limit_open():
     np.testing.assert_array_equal(open_limit[:, same], plain[:, same])
 
 
+def _ring_city():
+    """8 x 8 lots of 15 px and a 7 px wide ring around lots 2-5 of each row and column (as in
+    `test_enclosure_separates_two_walled_regions`); which pairs it separates."""
+    lot = _lot_grid(8, 8)
+    L = _lots(lot, ["RH-1"] * 64)
+    ink = np.zeros(lot.shape, bool)
+    lo_, hi_ = 2 * LOT_PX + 3, 6 * LOT_PX + 3
+    for k in (lo_, hi_):
+        ink[lo_ - 3:hi_ + 4, k - 3:k + 4] = True
+        ink[k - 3:k + 4, lo_ - 3:hi_ + 4] = True
+    r, c = np.divmod(np.arange(64), 8)
+    inner = (r >= 2) & (r <= 5) & (c >= 2) & (c <= 5)
+    return L, ink, inner[L.a] != inner[L.b]
+
+
+def test_text_discounted_enclosure_lets_a_ring_of_text_through():
+    """text_discounted_enclosure: the enclosure again, once per text level, with only the strokes whose mean text
+    chance is below the level as walls (and the closing paths between them).  A ring of letters separates its lots
+    in the default enclosure but at no text level; a ring the detector is unsure of (chance .6) walls only at the
+    level .75; a ring of line walls at every level.  The default columns come first, to the bit."""
+    L, ink, across = _ring_city()
+    s = strokes.strokes(ink)
+    mapped = np.ones(ink.shape, bool)
+    letter = np.zeros(len(s["wmed"]))
+    options = ["text_discounted_enclosure"]
+    n = wallevidence.N_FEATURES
+    plain = wallevidence.border_features(L, mapped, s, letter)
+    by_level = len(wallevidence.ENCLOSURE_WIDTHS) * len(wallevidence.ENCLOSURE_CLOSINGS)
+    assert sum(k for _, k in wallevidence.groups(options)) == n + len(wallevidence.TEXT_LEVELS) * by_level
+    for chance, walled_at in ((0.9, ()), (0.6, (0.75,)), (0.0, wallevidence.TEXT_LEVELS)):
+        text = np.where(ink, round(255 * chance), 0).astype(np.uint8)
+        F = wallevidence.border_features(L, mapped, s, letter, options=options, text=text)
+        np.testing.assert_array_equal(F[:, :n], plain)
+        assert F[across][:, _columns("enclosure")].all()                # the default: the ring walls at every level
+        apart = F[:, _columns("text-discounted enclosure", options)].reshape(len(F), -1, by_level)
+        for i, level in enumerate(wallevidence.TEXT_LEVELS):
+            if level in walled_at:
+                assert apart[across, i].all() and not apart[~across, i].any()
+            else:
+                assert not apart[:, i].any()
+    with pytest.raises(ValueError):
+        wallevidence.border_features(L, mapped, s, letter, options=options)            # no text chance given
+
+
+def test_stroke_text_chance_is_the_mean_over_its_points():
+    """A stroke's text chance: the mean of the chance (x 255 on the grid) over its points."""
+    ink = np.zeros((30, 40), bool)
+    ink[4:7, 2:38] = True
+    s = strokes.strokes(ink)
+    text = np.zeros(ink.shape, np.uint8)
+    text[:, :20] = 204                                         # .8 on the west half of the stroke
+    assert len(s["wmed"]) == 1
+    assert wallevidence.stroke_text_chance(s, text)[0] == pytest.approx(0.4, abs=0.05)
+
+
 def _city_inputs(text=True) -> walls.Inputs:
     """The district city as the walls read it (`walls.Inputs`); the text chance 0 everywhere, or none."""
     L, ink, _, _ = _district_city()

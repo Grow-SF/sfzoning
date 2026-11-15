@@ -14,9 +14,10 @@ table as downloaded differ, and it trains only on pairs with both lots known and
 the odds of every fit; the solve reads quarter q's.  No whole-wall stage: how a line holds together along its length
 is left to the solve's energy.
 
-Candidate features (CANDIDATES, in the order they are tried; none by default, which is the set above): the four of
-`wallevidence.OPTIONS` (text_weighted, text_weighted_beside_letters, street_crossing, no_city_limit), read through
-the detector's out-of-fold text chance (`textgrid.text_chance`, all four quarters) and the merged page's ink, and
+Candidate features (CANDIDATES, in the order they are tried; none by default, which is the set above): the five of
+`wallevidence.OPTIONS` (text_weighted, text_weighted_beside_letters, street_crossing, no_city_limit,
+text_discounted_enclosure), read through the detector's out-of-fold text chance (`textgrid.text_chance`, all four
+quarters) and the merged page's ink, and
   context           (`context`, after the lots' character) touching pairs: hats over KIND_KNOTS of how the line
                     between the lots' centroids runs along their long axes (the mean |cos| with each lot's minimum
                     rotated rectangle's long side: 0 side by side, 0.5 between, 1 back to back); pairs across a
@@ -60,7 +61,7 @@ PROBABILITY_FLOOR = 1e-6    # the log loss counts a probability below this as th
 
 CONTEXT = "context"
 CANDIDATES = (wallevidence.TEXT_WEIGHTED, wallevidence.TEXT_WEIGHTED_BESIDE_LETTERS, wallevidence.STREET_CROSSING,
-              CONTEXT, wallevidence.NO_CITY_LIMIT)
+              CONTEXT, wallevidence.NO_CITY_LIMIT, wallevidence.TEXT_DISCOUNTED_ENCLOSURE)
 
 
 def check_candidates(names) -> tuple[str, ...]:
@@ -230,9 +231,6 @@ class Inputs:
     ink: np.ndarray | None
 
 
-READS_TEXT = (wallevidence.TEXT_WEIGHTED, wallevidence.TEXT_WEIGHTED_BESIDE_LETTERS, wallevidence.STREET_CROSSING)
-
-
 def load_inputs(configs) -> Inputs:
     """Read, once, what the walls need to fit every configuration of `configs` (each a list of candidate names; see
     `Inputs`).  The text chance is computed from all four quarters' detectors (`textgrid.text_chance`)."""
@@ -256,7 +254,7 @@ def load_inputs(configs) -> Inputs:
         del boxes
         log.info("letter share: %d of %d strokes touch text (%.0f s)", (letter > 0).sum(), len(letter),
                  time.perf_counter() - t0)
-    text = textgrid.text_chance() if used & set(READS_TEXT) else None
+    text = textgrid.text_chance() if used & set(wallevidence.READS_TEXT) else None
     ink = page.load_ink() if wallevidence.STREET_CROSSING in used else None
     geometries = gpd.read_parquet(paths.LOTS_DIR / "table.parquet").geometry.values
     log_area = np.log(np.maximum(shapely.area(geometries), 1.0))
