@@ -736,6 +736,21 @@ The commands, run from `pipeline/`:
 
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
+**The fresh-clone check** (`scripts/fresh_clone_check.sh [--clone DIR] [--dry-run] [STAGE...]`) shows the stages
+rebuild from a clone. Push the branch first; it clones `origin`'s copy of it into `data/fresh-clone/` (git-ignored; the
+folder must be empty), runs `pixi install`, `uv sync --frozen` and `sfzmaps pull`, builds
+`warp-2000-digital-zoning` if the pull did not bring it, then runs each stage (default `solver-page solver-lots
+solver-prints solver-text-nw solver-labels solver-walls solver-solve`) and compares its outputs with this checkout's
+(`scripts/compare_outputs.py`, tested in `tests/test_compare_outputs.py`). Each stage is held to its own epsilon on the
+same upstream outputs, not chained end to end: the warp, page, lots, prints, labels, walls and solve must be
+byte-identical (an `.npz` by its arrays, a `.parquet` by its table); a text stage's `chance/*.png` may differ by 0.01 × 255
+(2 counts) and its `.json` numbers by 1%, and `model.pt` is not compared; `solver-text-scores` numbers match within
+1%. Only `nw` is retrained (it trains on the GPU, so run the check when the GPU is free); `text-ne`, `-sw` and `-se`
+are copied from this checkout before the walls, which read all four. It runs each stage with `sfzmaps stage`, not
+`sfzmaps build --force`: a build also plans every stale upstream stage, and until `sfzmaps ship` has recorded the
+solver stages in `dvc.lock` that would retrain the other three quarters. It prints a table (identical, within
+epsilon, differs, with the first differences) and exits 1 if any stage differs. CI doesn't run it.
+
 ## Where outputs land
 
 Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to move it):
