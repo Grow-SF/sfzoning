@@ -117,6 +117,9 @@ def stages() -> dict[str, Stage]:
                                reads=("data/warp/2000-digital-zoning", "data/work/2000-digital-zoning",
                                       "inputs/merged-page"),
                                writes=("data/solver/page",), code=("sfzmaps.solver.page",))
+    out["solver-lots"] = Stage("solver-lots", (), (), ("solver-page",), command=("solver", "lots"),
+                               reads=("inputs/zoning-2000", "data/solver/page"),
+                               writes=("data/solver/lots",), code=("sfzmaps.solver.lots",))
     out["shared"] = Stage("shared", (), (), old, frozen=True)
     return out
 

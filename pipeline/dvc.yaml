@@ -1671,6 +1671,27 @@ stages:
     outs:
       - data/solver/page:
           persist: true
+  solver-lots:
+    cmd: uv run --frozen sfzmaps stage solver-lots
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000
+      - data/solver/page
+    outs:
+      - data/solver/lots:
+          persist: true
   shared:
     cmd: uv run --frozen sfzmaps stage shared
     frozen: true

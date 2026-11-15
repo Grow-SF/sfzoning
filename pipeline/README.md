@@ -467,6 +467,19 @@ scans stay 1-bit. A grid px is ink where any sheet shows ink (page < 128) inside
 `data/solver/page/ink.png` (0 = ink, 255 = paper), `sheets.png` (how many sheets' crops cover each px; 0 = not
 mapped) and `frames.json` (each sheet's crop quad, page px). The same inputs give the same bytes.
 
+**The lots** (`sfzmaps solver lots`, stage `solver-lots`, after `solver-page`) paint the table's lots on the same
+grid. Each polygon's exterior is filled with `cv2.fillPoly`, largest lot first, with its corners at `to_grid - 0.5`
+to 1/16 px (fillPoly takes integer coordinates as px centres), so a lot's px are the grid px whose centres are
+inside it and line up with `ink.png`. `grown` gives every px its nearest lot (`distance_transform_edt`), so lots
+facing each other across a street are neighbours. `pairs` holds each two lots whose `grown` regions meet:
+`a < b`, the px pairs where both px are inside lots (touching) and the others (street), sorted by (a, b); a
+pair's border is (touching + street) × 4 ft. A lot is **scored** when its code is known (one district, not blank)
+and more than half of its px are on the mapped area (`sheets.png > 0`). `quarter` (nw 0, ne 1, sw 2, se 3) comes
+from the lot's centroid and `QUARTER_SPLIT`, the median centroid of the first run's scored lots, kept so held-out
+numbers compare with it. It writes `data/solver/lots/lots.npz` (`lot`, `grown`, `pairs`, `scored`, `known`,
+`quarter`, `table`: each lot's code, as `known_and_codes`) and `table.parquet` (the loaded table, in lot order).
+The same inputs give the same bytes; `sfzmaps.solver.lots.load_lots()` reads it back.
+
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
 ## Where outputs land

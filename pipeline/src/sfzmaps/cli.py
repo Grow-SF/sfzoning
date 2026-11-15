@@ -934,3 +934,12 @@ def solver_page() -> None:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     s = page.build_page()
     typer.echo(f"{s['sheets']} sheets laid: {s['ink_px']:,} ink px, {s['covered_px']:,} px covered, {s['seconds']} s")
+
+
+@solver_app.command("lots")
+def solver_lots() -> None:
+    """Paint the April 2000 lots on the solver's grid: data/solver/lots/lots.npz and table.parquet."""
+    from sfzmaps.solver import lots
+    s = lots.build_lots()
+    typer.echo(f"{s['lots']:,} lots, {s['scored']:,} scored, {s['pairs']:,} neighbour pairs, median centroid of the "
+               f"scored lots ({s['median_x']:.3f}, {s['median_y']:.3f}), {s['seconds']} s")
