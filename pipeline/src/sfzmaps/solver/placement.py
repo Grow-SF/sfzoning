@@ -16,7 +16,7 @@ label's code, else the nearest option whose lots are mostly that code.  A condit
 fitted four times, each time without the labels whose lot (under the text) is in one quarter.  Every label gets each
 model's chances, so a holdout's solve uses only the model that did not see it.
 
-Writes placement.npz into the run's folder (`paths.solve_dir`): per option, `label` (a prints.parquet row), `lot`,
+Writes placement.npz into the run's folder (`runs.solve_dir`): per option, `label` (a prints.parquet row), `lot`,
 `chance`, `stay` and `holdout` (the quarter the model held out: nw 0, ne 1, sw 2, se 3); and `walls`, the digest of
 the walls it was fitted with (`city.walls_digest`): a solve with other walls refuses it."""
 import csv
@@ -31,7 +31,7 @@ from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
 from sfzmaps import config
-from sfzmaps.solver import paths
+from sfzmaps.solver import paths, runs
 from sfzmaps.solver.city import city, wall_odds, walls_digest
 from sfzmaps.solver.codes import canon
 from sfzmaps.solver.trust import load_prints
@@ -59,7 +59,7 @@ def leader_moves(label_fixes: Path | None = None) -> dict:
     px at the label, in feet."""
     from sfzmaps.transform import SheetTransform
     moves, transforms = {}, {}
-    with open(label_fixes or paths.LABEL_FIXES, newline="") as f:
+    with open(label_fixes or runs.LABEL_FIXES, newline="") as f:
         for fx in csv.DictReader(f):
             if not (fx.get("fix_x") or "").strip():
                 continue
@@ -248,7 +248,7 @@ def load_options(q: str, folder, walls_dir: Path | None = None) -> dict:
         raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver placement`")
     P = np.load(f)
     if "walls" not in P.files or str(P["walls"]) != walls_digest(walls_dir):
-        raise ValueError(f"{f} was fitted with other walls than {walls_dir or paths.WALLS_DIR}: rerun "
+        raise ValueError(f"{f} was fitted with other walls than {walls_dir or runs.WALLS_DIR}: rerun "
                          "`sfzmaps solver placement` with the same --walls")
     m = P["holdout"] == paths.QUARTERS.index(q)
     options = {}

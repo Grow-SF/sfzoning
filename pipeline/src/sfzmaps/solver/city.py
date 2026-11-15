@@ -1,13 +1,13 @@
 """The city the solver reads: the lots, their neighbours and the table's codes (the `solver-lots` stage's lots.npz
 and table.parquet), the page's ink on the same grid, the wall odds (the `solver-walls` stage's walls_{q}.npz), and
-the runs the solver writes (each run's folder, `paths.solve_dir`)."""
+the runs the solver writes (each run's folder, `runs.solve_dir`)."""
 import hashlib
 from functools import cached_property, lru_cache
 from pathlib import Path
 
 import numpy as np
 
-from sfzmaps.solver import grid, page, paths, table
+from sfzmaps.solver import grid, lots, page, paths, runs, table
 from sfzmaps.solver.codes import canon
 
 UNREAD_ODDS = 10.0          # the wall odds of a pair the wall reader gave none: a line
@@ -17,7 +17,7 @@ def wall_odds(q: str, walls_dir: Path | None = None) -> np.ndarray:
     """Per pair of neighbouring lots (the rows of lots.npz `pairs`): the log odds that a printed district line runs
     between them, fitted without quarter q, from `walls_dir/walls_{q}.npz` (default WALLS_DIR).  A pair with no
     odds (NaN) gets UNREAD_ODDS."""
-    f = Path(walls_dir or paths.WALLS_DIR) / f"walls_{q}.npz"
+    f = Path(walls_dir or runs.WALLS_DIR) / f"walls_{q}.npz"
     if not f.is_file():
         raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver walls`")
     return np.nan_to_num(np.load(f)["lo_ab"].astype(float), nan=UNREAD_ODDS)
@@ -29,7 +29,7 @@ def walls_digest(walls_dir: Path | None = None) -> str:
     walls."""
     h = hashlib.sha256()
     for q in paths.QUARTERS:
-        f = Path(walls_dir or paths.WALLS_DIR) / f"walls_{q}.npz"
+        f = Path(walls_dir or runs.WALLS_DIR) / f"walls_{q}.npz"
         if not f.is_file():
             raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver walls`")
         lo = np.ascontiguousarray(np.load(f)["lo_ab"])
@@ -46,13 +46,13 @@ class City:
                            the scores count against ("" where not known)
       table_raw            the table's code as downloaded (lots.npz `table`): what every fit learns from
       scored, quarter      the lots the scores count, and each lot's quarter (nw 0, ne 1, sw 2, se 3)
-      centroid             each lot's centroid, map ft
+      centroid             each lot's centroid, map ft, one row per lot (`lots.lot_centroids`: NaN for a lot with
+                           no area)
       lots                 the table itself (table.parquet: blklot, zoning, geometry)
     The rasters (`lot_raster`, `grown_raster`) and the page's ink (`scan()`) load on use; all three share the grid."""
 
     def __init__(self):
         import geopandas as gpd
-        import shapely
         f = paths.LOTS_DIR / "lots.npz"
         if not f.is_file():
             raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver lots`")
@@ -69,7 +69,7 @@ class City:
         self.table = table.corrected_codes(self.lots)
         self.scored = z["scored"]
         self.quarter = z["quarter"].astype(int)
-        self.centroid = shapely.get_coordinates(shapely.centroid(self.lots.geometry.values))
+        self.centroid = lots.lot_centroids(self.lots.geometry.values)
 
     @cached_property
     def lot_raster(self) -> np.ndarray:
@@ -108,9 +108,9 @@ def city() -> City:
 
 def run_file(run: str, part: str = "", folder: Path | None = None) -> Path:
     """Where a file of the run `run` is kept: <folder>/runs/{run}{part}.npz, in the run's own folder
-    (`paths.solve_dir`) unless `folder` is given.  `part`: "" for the join, "-{q}" for the solve that held out
+    (`runs.solve_dir`) unless `folder` is given.  `part`: "" for the join, "-{q}" for the solve that held out
     quarter q, "-{q}-costs" for its costs."""
-    return Path(folder or paths.solve_dir(run)) / "runs" / f"{run}{part}.npz"
+    return Path(folder or runs.solve_dir(run)) / "runs" / f"{run}{part}.npz"
 
 
 def load_run(run: str, folder: Path | None = None) -> np.ndarray:

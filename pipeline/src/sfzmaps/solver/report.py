@@ -12,7 +12,7 @@ Beside them: wrong lots by quarter, the largest incidents, the holes by cause, t
 (`walls_evaluation`), the placement's held-out hit rates, and a check of the energy's trust calibration
 (`top_reading_calibration`).
 
-Writes report.json and report.md into the run's folder (`paths.solve_dir`).  Nothing in them is a time: the same
+Writes report.json and report.md into the run's folder (`runs.solve_dir`).  Nothing in them is a time: the same
 run gives the same bytes."""
 import json
 from pathlib import Path
@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 from scipy.special import expit
 
-from sfzmaps.solver import energy, paths
+from sfzmaps.solver import energy, paths, runs
 from sfzmaps.solver.city import city, load_run, wall_odds
 from sfzmaps.solver.codes import table_vocabulary
 from sfzmaps.solver.labels import readings
@@ -53,6 +53,9 @@ DEFINITION_CHANGES = (
     "The walls' feature set: the walls read the raw page's strokes (`wallevidence`), with the candidate features "
     "their evaluation.json names, in one ridge logistic regression per quarter; J7's walls came from its cleaned page "
     "and its chain of graph steps.",
+    "Unchanged, and named here: the placement's training answers from the table (stay when the lot under the text has "
+    "the label's code, else the nearest walled area whose lots mostly have it) count an area's lots across the quarter "
+    "split, as J7's did, so a label near the split can learn from table codes of the quarter its model is scored on.",
 )
 ONE_MEASURE = ("Each run's data errors come from its own holes, so the left-out set differs from run to run: compare "
                "runs of this build on the every-lot column; the left-out column is there for the comparison with J7.")
@@ -148,7 +151,7 @@ def walls_evaluation(walls_dir: Path | None = None) -> dict:
     pairs, J7's on its own) and, from their evaluation.json when there is one, against the table as downloaded (the
     fit's own target); and the candidate features they were fitted with."""
     C = city()
-    folder = Path(walls_dir or paths.WALLS_DIR)
+    folder = Path(walls_dir or runs.WALLS_DIR)
     line = C.table[C.a] != C.table[C.b]
     scoring = {}
     for k, q in enumerate(paths.QUARTERS):
@@ -170,7 +173,7 @@ def build_report(run: str, placement_summary: dict, hole_causes: dict, walls_dir
     run's own): `placement_summary` is what `placement.fit` returned, `hole_causes` the run's holes (data errors
     counted) by cause, `walls_dir` the walls it was solved with."""
     C = city()
-    folder = Path(folder or paths.solve_dir(run))
+    folder = Path(folder or runs.solve_dir(run))
     codes = load_run(run, folder)
     errors = data_error_lots(folder)
     wrong = C.scored & (codes != C.table)
@@ -266,8 +269,8 @@ def markdown(report: dict) -> str:
 
 
 def write_report(report: dict, folder: Path | None = None) -> None:
-    """Write report.json and report.md into `folder` (default the run's own, `paths.solve_dir`)."""
-    folder = Path(folder or paths.solve_dir(report["run"]))
+    """Write report.json and report.md into `folder` (default the run's own, `runs.solve_dir`)."""
+    folder = Path(folder or runs.solve_dir(report["run"]))
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "report.json").write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
     (folder / "report.md").write_text(markdown(report))

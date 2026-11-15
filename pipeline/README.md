@@ -452,8 +452,33 @@ The inputs of the 2000 joint solver are made by `sfzmaps solver <part>` commands
 dependencies are the source files in the import closure of its `code` modules, `pyproject.toml`, `uv.lock` and its
 `reads`; it recomputes its whole output when any of them changes, and needs no `prepare()`. Of a checked-in inputs
 folder a stage reads only the file it uses, so a README or `PROVENANCE.md` reruns nothing, and
-`table-corrections.csv` (read only in scoring) reruns only the solve. Outputs go under `data/solver/`;
-`sfzmaps.solver.paths` names every location.
+`table-corrections.csv` (read only in scoring) reruns only the solve. A stage's code deps leave out the modules of its
+`cut` (`build.OUTPUT_NEUTRAL`: `sfzmaps.gpu`, whose turns decide when a stage computes on the GPU, never what), and
+the two package `__init__.py` files are one line each, so an edit to the GPU's turns or to the module list below
+reruns nothing. Outputs go under `data/solver/`: `sfzmaps.solver.paths` names where the earlier stages and the text
+detector read and write, and `sfzmaps.solver.runs` the walls' and the solve's folders, so a change to the latter
+reruns neither the detector nor the stages before it.
+
+The modules (`src/sfzmaps/solver/`):
+
+- `paths`, `runs`: the locations above; `threads`: one thread for the maths libraries where the walls, the
+  placement, the report and the solve compute;
+- `grid`: the raster over the city that the page, the lots and the walls share; `codes`: zoning codes in one spelling;
+- `frame`, `page`: a scanned 2000 page's printed frame, measured, and the merged page (`sfzmaps solver page`);
+- `table`, `lots`: the April 2000 table and its lots on the grid (`sfzmaps solver lots`);
+- `saved`, `prints`: the saved vision answers, read by file, sheet or cache key (nothing asks a model), and every
+  printed zoning code with its saved reads (`sfzmaps solver prints`);
+- `textnet/`: the text detector (`data`, `model`, `train`, `predict`, `stage`: `sfzmaps solver text Q`) and its
+  scores (`evaluate`: `sfzmaps solver text-scores`);
+- `labels_stage` with `trust`, `streetside`, `lotsize`, `strokes`: what the solver knows about the labels and the ink
+  (`sfzmaps solver labels`);
+- `textgrid`, `wallevidence`, `walls`: the detectors' chance of text on the grid, out of fold, and the wall odds
+  between neighbouring lots (`sfzmaps solver walls`);
+- `city`, `labels`, `placement`, `energy`, `search`, `solve`: the city as the solve reads it, each quarter's readings
+  of the labels, where each label belongs (`sfzmaps solver placement`), the energy over every lot's code, its
+  search, and the four held-out solves (`sfzmaps solver solve`);
+- `borders`, `measures`, `holes`, `published`, `report`: scoring a run against the table (`sfzmaps solver score`,
+  `holes`, `published`) and the solve's report against J7's.
 
 Hand-made and downloaded inputs are in `inputs/zoning-2000/` (see its README): the April 2000 table
 (`april2000.geojson.gz`, downloaded from DataSF by `sfzmaps solver fetch-table`, with `PROVENANCE.md`) and
@@ -526,12 +551,17 @@ from one seeded numpy generator and the weights from seeded torch, with determin
 model then scores every sheet's page in 1,024-px tiles seen with 64 px of context. A stage
 (`solver/textnet/stage.py`) makes its folder afresh and writes only `data/solver/text-<Q>/model.pt` (the weights,
 with the iterations, device and seed) and `chance/<sheet>.png` (uint8, the chance of text × 255, page px). Its code is
-the detector's alone: the lots, the table, the merged page and the scoring are not in it, so a change to them retrains
-nothing.
+the detector's alone: the lots, the table, the merged page, the scoring, the walls' and the solve's folders and the
+GPU's turns are not in it, so a change to them retrains nothing. Its reads are named file by file for each of the 13
+sheets of `paths.SHEETS` (a fixed list, so `dvc.yaml` is the same in a fresh clone before anything is pulled):
+`transform.json` and `correction.npz` in `data/warp/2000-digital-zoning/<sheet>/`, `page.png` and
+`district_labels.json` in `data/work/2000-digital-zoning/<sheet>/`; no other file there retrains it. Before reading
+them it checks that the warp placed exactly those sheets (`paths.check_sheets`).
 
 **The text scores** (`sfzmaps solver text-scores`, stage `solver-text-scores`, after the four text stages) score each
 quarter's model on the quarter it held out, from the chances it wrote (`solver/textnet/evaluate.py`), on the map only
-(inside the sheet's warped footprint: the legend, alike on every sheet, is left out). It writes
+(inside the sheet's warped footprint: the legend, alike on every sheet, is left out). It reads the detector's files
+of each sheet and its `warped.footprint.geojson`, file by file, and the lots. It writes
 `data/solver/text-scores/evaluation_<Q>.json`: AUC and log loss of text ink against other ink, the share of text ink
 found, Terra's words found by kind, pieces of text found where Terra drew no box (listed for a look), and the share
 of ink on the table's district lines (borders between lots whose known codes differ, read on the grid, away from
@@ -634,16 +664,19 @@ whole-wall stage: how a line holds together along its length is left to the solv
 `data/solver/walls/walls_<Q>.npz` (`lo_ab`, float32 per pair row, the odds of the fit without quarter Q) and
 `evaluation.json` (per quarter the log loss on the held-out pairs, both lots known and in the quarter, and their
 number). It writes them into a fresh folder beside `data/solver/walls` and renames that into its place, so nothing of
-an earlier fit (a candidates fit's `text_chance.png`) is left. The closing paths run on `--workers` processes in
-bands of grid rows; the result is the same for any number, and the same inputs give the same odds. On the 2000
-page: 437,000 pairs over 16.3 million border px, 60,716 closing paths from 68,363 loose ends, in about 4 minutes and
-12 GB with 6 workers.
+an earlier fit (a `text_chance.png` its candidates no longer read) is left. The closing paths run on `--workers`
+processes in bands of grid rows; the result is the same for any number, and the same inputs give the same odds. On
+the 2000 page: 437,000 pairs over 16.3 million border px, 60,716 closing paths from 68,363 loose ends, in about 4
+minutes and 12 GB with 6 workers.
 
-**Candidate wall features** (`--candidates A,B`, none by default; `walls.CANDIDATES`). Each is tried against the set
-above and kept only if it lowers the held-out log loss in at least three quarters. `--evaluate A,B` (repeatable,
-`none` for the set above; `walls.evaluate_candidates`) scores several configurations from inputs read once and
-writes nothing. Most candidates read the text detector's chance of text on the grid (`solver/textgrid.py`, computed
-afresh each time; the walls write the one they fitted with to `data/solver/walls/text_chance.png`, never read back).
+**Candidate wall features** (`walls.CANDIDATES`). Each is tried against the set above and kept only if it lowers the
+held-out log loss in at least three quarters; the stage fits with those kept, `walls.DEFAULT_CANDIDATES` in code
+(none yet). `--candidates A,B` fits with others as an experiment: into
+`data/solver/experiments/walls-<the names sorted, joined by +>/` (`runs.walls_experiment_dir`), for a solve to read
+with `--walls DIR`, never over the stage's walls. `--evaluate A,B` (repeatable, `none` for the set above;
+`walls.evaluate_candidates`) scores several configurations from inputs read once and writes nothing. Most candidates
+read the text detector's chance of text on the grid (`solver/textgrid.py`, computed afresh each time; a fit writes the
+one it fitted with to its folder's `text_chance.png`, never read back).
 Each sheet's chance is read through its corrected placement at the same page px as the merged page reads its ink
 (`page.sheet_px`, the same crop), from the detector that held out that page px (the quarter of its map point, as the
 detector's own held-out mask has it), so no px is scored by a model that learned from it; a grid px takes the
@@ -678,12 +711,19 @@ R&D notes behind it. What it reads:
   freeway, a lot across) also speaks for the lot across at trust × min(`rB_st` / `rA_st`, 1). Overlay (SUD) names and
   names of no table code are dropped.
 
-**Runs and their folders** (`paths.solve_dir`). The `solver-solve` stage's run is `final`, in `data/solver/solve/`
+**Runs and their folders** (`runs.solve_dir`). The `solver-solve` stage's run is `final`, in `data/solver/solve/`
 (shipped). Every other run is an experiment, in its own `data/solver/experiments/RUN/` (no stage's output, never
-shipped), with its own placement, runs, data errors and report. `final` is refused with `--walls` or
-`--true-borders`, and `placement` and `holes --save-data-errors` never write into it. A solve builds its run's folder
-afresh beside it (`.NAME.part`) and renames it into place, so nothing of an earlier solve is left, and nothing it
-writes holds a time.
+shipped), with its own placement, runs, data errors and report; a run's name can't start with `walls-` (those folders
+hold the walls of `walls --candidates`). `final` is refused with `--walls` or `--true-borders`, and `placement` and
+`holes --save-data-errors` never write into it. A solve builds its run's folder afresh beside it (`.NAME.part`) and
+renames it into place, so nothing of an earlier solve is left, and nothing it writes holds a time.
+
+**One thread for the maths libraries** (`solver/threads.py`). The walls' fit, the placement, the report and each
+quarter's solve compute in processes whose BLAS and OpenMP run one thread (`OMP_NUM_THREADS`,
+`OPENBLAS_NUM_THREADS`, `VECLIB_MAXIMUM_THREADS` and `MKL_NUM_THREADS` = 1), so their numbers don't depend on how many
+cores the machine has. The libraries read these only as they load, before any command runs, so `sfzmaps solver
+walls`, `placement` and `solve` start themselves again in such a process when theirs isn't one, and the solve starts
+its quarters' processes so.
 
 The commands, run from `pipeline/`:
 
@@ -708,8 +748,9 @@ The commands, run from `pipeline/`:
   a tiny tie-break (1e-4 × the cheapest path from each code's labels) settles lots no label reaches. The search runs
   graph-cut expansion moves (PyMaxflow), then region moves, compound moves and expansion again until the energy stops
   falling; a move is kept only if the exact energy falls. It is discrete: every lot gets the same code every run. Into
-  the run's folder it writes `placement.npz`, `runs/RUN-<Q>.npz`, `.log` (the quarter's log, with no times: each
-  solve's time is printed to the console only) and each solve's costs (`RUN-<Q>-costs.npz`, for `holes`), the join
+  the run's folder it writes `placement.npz`, `runs/RUN-<Q>.npz`, `.log` (the quarter's log: what its process
+  prints, with no times; each solve's time and anything a process writes to stderr, a library's warning or a
+  traceback, go to the console only) and each solve's costs (`RUN-<Q>-costs.npz`, for `holes`), the join
   `runs/RUN.npz`, the data errors (`data_errors.npz` and `data-errors-2000-digital.csv`, as `holes
   --save-data-errors`) and the report (`solver/report.py`, `report.json` and `report.md`): the six measures (below)
   against J7's, with the data-error parcels left out and with every lot; wrong lots by quarter, the largest

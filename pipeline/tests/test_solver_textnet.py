@@ -90,6 +90,7 @@ def sheet(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
     monkeypatch.setattr(paths, "PRINTS_DIR", tmp_path / "prints")
     monkeypatch.setattr(paths, "SAVED_ANSWERS", tmp_path / "answers")
+    monkeypatch.setattr(paths, "SHEETS", (SHEET,))
     work = tmp_path / "work" / paths.SERIES / SHEET
     work.mkdir(parents=True)
     cv2.imwrite(str(work / "page.png"), _page())
@@ -357,6 +358,10 @@ def test_district_lines_are_borders_between_known_different_codes():
     assert np.array_equal(lines, expected)
 
 
+def _per_sheet(folder: str, names) -> list[str]:
+    return [f"{folder}/{sheet}/{name}" for sheet in paths.SHEETS for name in names]
+
+
 def test_text_stages_depend_on_the_detector_code_only():
     from sfzmaps import build
     table = build.stages()
@@ -366,15 +371,22 @@ def test_text_stages_depend_on_the_detector_code_only():
         assert st.code == ("sfzmaps.solver.textnet.stage",)
         assert {"src/sfzmaps/solver/textnet/stage.py", "src/sfzmaps/solver/textnet/train.py",
                 "src/sfzmaps/solver/textnet/predict.py", "src/sfzmaps/solver/textnet/data.py",
-                "src/sfzmaps/solver/textnet/model.py", "src/sfzmaps/solver/grid.py", "src/sfzmaps/gpu.py",
+                "src/sfzmaps/solver/textnet/model.py", "src/sfzmaps/solver/grid.py",
                 "data/solver/prints/terra_boxes.json"} <= set(deps)
         # hours of training must not rerun for a change to the lots, the table, the merged page, the codes, the
-        # prints' code, the model client, the command line or the scoring; of the prints' output only the Terra
-        # boxes are read, and the lots not at all
+        # prints' code, the model client, the command line, the scoring, the walls' or the solve's folders (runs.py)
+        # or the GPU's turns (which decide when it computes, never what); of the prints' output only the Terra boxes
+        # are read, and the lots not at all
         assert not any(d.endswith(("solver/lots.py", "solver/table.py", "solver/page.py", "solver/frame.py",
-                                   "solver/codes.py", "solver/prints.py", "/llm.py", "/cli.py", "textnet/evaluate.py"))
+                                   "solver/codes.py", "solver/prints.py", "/llm.py", "/cli.py", "textnet/evaluate.py",
+                                   "solver/runs.py", "/gpu.py"))
                        for d in deps)
         assert [d for d in deps if d.startswith("data/solver/")] == ["data/solver/prints/terra_boxes.json"]
+        # of each sheet only the files the detector reads: its placement and correction, its page, Sol's points;
+        # nothing else of data/warp or data/work (another file the warp or the label stage writes retrains nothing)
+        assert [d for d in deps if d.startswith(("data/warp", "data/work"))] == (
+            _per_sheet(f"data/warp/{paths.SERIES}", ("transform.json", "correction.npz"))
+            + _per_sheet(f"data/work/{paths.SERIES}", ("page.png", "district_labels.json")))
         assert st.upstream == ("solver-prints",) and build.stage_outs(st) == [f"data/solver/text-{q}"]
         assert build.stage_commands(f"solver-text-{q}") == [["solver", "text", q]]
 
@@ -391,6 +403,11 @@ def test_the_text_scores_stage_reads_every_quarters_chances_not_the_detector_cod
     # the scores read the chances, not the weights or the code that made them
     assert not any(d.endswith(("textnet/train.py", "textnet/predict.py", "textnet/model.py", "textnet/stage.py",
                                "/gpu.py", "model.pt")) for d in deps)
+    # of each sheet only the files the scores read: the detector's own, and the warped footprint
+    assert [d for d in deps if d.startswith(("data/warp", "data/work"))] == (
+        _per_sheet(f"data/warp/{paths.SERIES}", ("transform.json", "correction.npz"))
+        + _per_sheet(f"data/work/{paths.SERIES}", ("page.png", "district_labels.json"))
+        + _per_sheet(f"data/warp/{paths.SERIES}", ("warped.footprint.geojson",)))
     assert build.stage_outs(st) == ["data/solver/text-scores"]
     assert build.stage_commands("solver-text-scores") == [["solver", "text-scores"]]
     names = list(table)

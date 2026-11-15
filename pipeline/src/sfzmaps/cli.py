@@ -1020,22 +1020,37 @@ def solver_text_scores() -> None:
                    f"(of {s['district_lines']['ink_px']:,} px)")
 
 
+def _in_one_thread(argv: list[str]) -> None:
+    """Unless this process is pinned to one thread for the maths libraries (`sfzmaps.solver.threads`), run
+    `sfzmaps <argv>` again in a process that is, and exit with its status: the libraries read their thread count
+    only as they load, and the walls', the placement's and the report's numbers must not depend on how many cores
+    the machine has."""
+    from sfzmaps.solver import threads
+    if not threads.pinned():
+        raise typer.Exit(threads.run_pinned(argv))
+
+
 @solver_app.command("walls")
 def solver_walls(
     workers: int = typer.Option(None, "--workers", help="Processes for the closing paths (default half the CPUs)."),
-    candidates: str = typer.Option("", "--candidates",
-                                   help="Candidate features to fit with, comma-separated (walls.CANDIDATES); none by "
-                                        "default."),
+    candidates: str = typer.Option(None, "--candidates",
+                                   help="Fit with these candidate features (comma-separated, walls.CANDIDATES; 'none' "
+                                        "for none) as an experiment, into data/solver/experiments/walls-<names>/ "
+                                        "(for `solve RUN --walls`), never over the stage's walls."),
     evaluate: list[str] = typer.Option(None, "--evaluate",
                                        help="Only score a configuration (comma-separated candidates; 'none' for the "
                                             "default set) and print its held-out log loss; repeat for several, all "
                                             "fitted on inputs read once. Writes nothing."),
 ) -> None:
-    """Fit the wall odds, held out by quarter, from the raw page's strokes: data/solver/walls/walls_<q>.npz and
-    evaluation.json."""
+    """Fit the wall odds, held out by quarter, from the raw page's strokes: the stage's walls, with
+    walls.DEFAULT_CANDIDATES (data/solver/walls/walls_<q>.npz and evaluation.json), or with --candidates an
+    experiment's."""
     import logging
 
     from sfzmaps.solver import walls
+    _in_one_thread(["solver", "walls", *(["--workers", str(workers)] if workers is not None else []),
+                    *(["--candidates", candidates] if candidates is not None else []),
+                    *[a for c in evaluate or [] for a in ("--evaluate", c)]])
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     def names(text: str) -> list[str]:
@@ -1044,23 +1059,24 @@ def solver_walls(
     if evaluate:
         results = walls.evaluate_candidates([names(c) for c in evaluate], workers)
     else:
-        results = [walls.build_walls(workers, names(candidates))]
+        results = [walls.build_walls(workers, None if candidates is None else names(candidates))]
     for s in results:
         typer.echo(f"{', '.join(s['candidates']) or 'no candidates'}: {s['pairs']:,} pairs, {s['features']} "
                    "features; held-out log loss "
                    + ", ".join(f"{q} {v['held_out_log_loss']:.4f} ({v['held_out_pairs']:,} pairs)"
                                for q, v in s["quarters"].items())
-                   + (f"; {s['seconds']} s" if "seconds" in s else ""))
+                   + (f"; {s['seconds']} s" if "seconds" in s else "")
+                   + (f"; written to {s['folder']}" if "folder" in s else ""))
 
 
 _WALLS_OPTION = typer.Option(None, "--walls", help="The folder of walls_<q>.npz (default data/solver/walls).")
 
 
 def _not_the_stage_run(run: str) -> None:
-    from sfzmaps.solver import paths
-    if run == paths.FINAL_RUN:
-        raise typer.BadParameter(f"{paths.FINAL_RUN!r} is the solver-solve stage's run, made only by "
-                                 f"`sfzmaps solver solve {paths.FINAL_RUN}`", param_hint="RUN")
+    from sfzmaps.solver import runs
+    if run == runs.FINAL_RUN:
+        raise typer.BadParameter(f"{runs.FINAL_RUN!r} is the solver-solve stage's run, made only by "
+                                 f"`sfzmaps solver solve {runs.FINAL_RUN}`", param_hint="RUN")
 
 
 @solver_app.command("placement")
@@ -1070,9 +1086,14 @@ def solver_placement(
 ) -> None:
     """Fit where each printed label belongs, held out by quarter (learning from the hand leader moves of
     label_fixes.csv and the table): data/solver/experiments/RUN/placement.npz."""
-    from sfzmaps.solver import paths, placement
+    from sfzmaps.solver import placement, runs
     _not_the_stage_run(run)
-    placement.fit(paths.solve_dir(run), walls)
+    try:
+        folder = runs.solve_dir(run)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="RUN")
+    _in_one_thread(["solver", "placement", run, *(["--walls", str(walls)] if walls else [])])
+    placement.fit(folder, walls)
 
 
 @solver_app.command("solve")
@@ -1086,7 +1107,14 @@ def solver_solve(
     """Fit the placement, solve the four held-out quarters side by side and join them, list the data errors among
     the run's holes, and score it against J7, into the run's folder made afresh: placement.npz, runs/RUN*.npz (with
     each solve's costs), data_errors.npz, data-errors-2000-digital.csv, report.json and report.md."""
-    from sfzmaps.solver import report, solve
+    from sfzmaps.solver import report, runs, solve
+    try:
+        runs.check_final(run, walls, true_borders)
+        runs.solve_dir(run)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="RUN")
+    _in_one_thread(["solver", "solve", run, *(["--walls", str(walls)] if walls else []),
+                    *(["--true-borders"] if true_borders else [])])
     try:
         found = solve.solve_and_report(run, walls, true_borders)
     except ValueError as e:

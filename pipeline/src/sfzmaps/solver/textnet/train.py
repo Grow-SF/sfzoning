@@ -155,12 +155,10 @@ def fit(sheets: list[data.SheetTargets], iterations: int = ITERATIONS, device: s
 
 
 def quarter_targets(q: str) -> list[data.SheetTargets]:
-    """Every warped sheet's targets with quarter `q` held out, in sheet name order: what the detector of `q` learns
-    from."""
+    """Every sheet's targets (`paths.SHEETS`, once they are the sheets the warp placed: `paths.check_sheets`) with
+    quarter `q` held out, in sheet name order: what the detector of `q` learns from."""
     data.quarter_index(q)
-    names = paths.sheet_names()
-    if not names:
-        raise FileNotFoundError(f"no warped {paths.SERIES} sheets: run the warp-{paths.SERIES} stage first")
+    names = paths.check_sheets()
     t0 = time.perf_counter()
     sheets = [data.sheet_targets(name, q) for name in names]
     log.info("%d sheets' targets read (%.0f s)", len(sheets), time.perf_counter() - t0)

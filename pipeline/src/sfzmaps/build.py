@@ -52,6 +52,9 @@ CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "ship.py", "cac
                 "datapack.py", "release.py", "toolchain.py", "downloads", "savedreads.py", "solver", "gpu.py",
                 "__pycache__"}
 # (solver: the 2000 solver's stages name their own code, as an import closure.)
+# Modules a command stage imports that can't change its output, left out of its code deps (`Stage.cut`): the GPU's
+# turns (`sfzmaps.gpu`) only decide when a stage computes on the GPU, never what.
+OUTPUT_NEUTRAL = ("sfzmaps.gpu",)
 # The exit code of a pipeline command stopped by llm.FATAL (the $0 cap, or no API key): "needs a
 # paid read", not a bug. Same value as cli.PAID_READ_EXIT (a test keeps them equal).
 PAID_READ_EXIT = 75
@@ -77,6 +80,8 @@ class Stage:
     reads: tuple[str, ...] = ()     # a command stage's data and input deps, relative to pipeline/
     writes: tuple[str, ...] = ()    # a command stage's outs
     code: tuple[str, ...] = ()      # a command stage's entry modules; its code deps are their import closure
+    cut: tuple[str, ...] = OUTPUT_NEUTRAL   # modules left out of that closure (`fresh.code_files`), with what only
+                                            # they import
 
     @property
     def shared(self) -> bool:
@@ -130,19 +135,25 @@ def stages() -> dict[str, Stage]:
                                         "data/warp/2000-digital-zoning", "data/solver/lots", "data/solver/page"),
                                  writes=("data/solver/prints",), code=("sfzmaps.solver.prints",))
     quarters = ("nw", "ne", "sw", "se")
-    # what the detectors learn from: the sheets' pages, Sol's label points and the other text passes' boxes, the
-    # corrected placements, and of the prints only the Terra boxes (a change to prints.parquet must not retrain them)
-    text_reads = ("data/work/2000-digital-zoning", "data/warp/2000-digital-zoning",
+    # what the detectors learn from, file by file for each sheet of `paths.SHEETS` (a fixed list, so dvc.yaml doesn't
+    # depend on what data is there): its corrected placement and correction, its page and Sol's label points; then
+    # the other text passes' boxes, and of the prints only the Terra boxes (a change to prints.parquet must not
+    # retrain them).  Nothing else in data/work or data/warp reruns them.
+    text_reads = (*_sheet_files("data/warp/2000-digital-zoning", ("transform.json", "correction.npz")),
+                  *_sheet_files("data/work/2000-digital-zoning", ("page.png", "district_labels.json")),
                   "data/solver/prints/terra_boxes.json", "saved-reads/answers/experiments-2000/text-positions")
     for q in quarters:
         out[f"solver-text-{q}"] = Stage(f"solver-text-{q}", (), (), ("solver-prints",), command=("solver", "text", q),
                                         reads=text_reads, writes=(f"data/solver/text-{q}",),
                                         code=("sfzmaps.solver.textnet.stage",))
-    # the detectors' scores on their held-out quarters, from their chances (not their weights) and the lots
+    # the detectors' scores on their held-out quarters, from their chances (not their weights), the lots, and the
+    # sheets' warped footprints (only px on the map count)
     out["solver-text-scores"] = Stage("solver-text-scores", (), (), tuple(f"solver-text-{q}" for q in quarters),
                                       command=("solver", "text-scores"),
-                                      reads=(*text_reads, "data/solver/lots",
-                                             *(f"data/solver/text-{q}/chance" for q in quarters)),
+                                      reads=(*text_reads,
+                                             *_sheet_files("data/warp/2000-digital-zoning",
+                                                           ("warped.footprint.geojson",)),
+                                             "data/solver/lots", *(f"data/solver/text-{q}/chance" for q in quarters)),
                                       writes=("data/solver/text-scores",), code=("sfzmaps.solver.textnet.evaluate",))
     out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
                                  # of the prints, only prints.parquet: the Terra boxes and the summary aren't read
@@ -171,6 +182,12 @@ def stages() -> dict[str, Stage]:
                                 writes=("data/solver/solve",), code=("sfzmaps.solver.solve",))
     out["shared"] = Stage("shared", (), (), old, frozen=True)
     return out
+
+
+def _sheet_files(folder: str, names: tuple[str, ...]) -> tuple[str, ...]:
+    """`folder`/<sheet>/<name> for each sheet of the 2000 solver's `paths.SHEETS` and each of `names`, by sheet."""
+    from sfzmaps.solver import paths
+    return tuple(f"{folder}/{sheet}/{name}" for sheet in paths.SHEETS for name in names)
 
 
 def downstream(names: set[str], table: dict[str, Stage]) -> set[str]:
@@ -221,11 +238,12 @@ def _code_deps() -> list[str]:
 
 
 def _command_stage_deps(st: Stage) -> list[str]:
-    """A command stage's deps: the source files of its entry modules' import closure, the
-    dependency pins, and its named reads."""
+    """A command stage's deps: the source files of its entry modules' import closure (without its `cut` modules and
+    what only they import), the dependency pins, and its named reads."""
     from sfzmaps import fresh
 
-    files = [p.relative_to(config.PIPELINE_DIR).as_posix() for p in fresh.code_files(list(st.code))]
+    files = [p.relative_to(config.PIPELINE_DIR).as_posix()
+             for p in fresh.code_files(list(st.code), cut=frozenset(st.cut))]
     return sorted(files) + ["pyproject.toml", "uv.lock", *st.reads]
 
 

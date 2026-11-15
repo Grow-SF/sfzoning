@@ -34,6 +34,14 @@ def test_committed_dvc_yaml_is_the_generated_one():
         "run `uv run sfzmaps build --write-dvc-yaml`"
 
 
+def test_dvc_yaml_is_the_same_with_no_data(tmp_path, monkeypatch):
+    # a fresh clone writes (and checks) dvc.yaml before anything is pulled
+    from sfzmaps import config
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "data" / "work")
+    assert build.dvc_yaml() == build.dvc_yaml_path().read_text()
+
+
 def test_stage_deps_are_per_series_and_skip_the_editor():
     st = build.stages()["edition-1948"]
     deps = build.stage_deps(st)
@@ -385,6 +393,28 @@ def test_a_command_stage_depends_on_its_import_closure_and_reads(monkeypatch):
     assert build.stage_outs(st) == ["data/solver/page"]
     monkeypatch.setattr(build, "stages", lambda: {"x": st})
     assert build.stage_commands("x") == [["solver", "page"]]
+
+
+def test_the_gpus_turns_are_in_no_command_stages_code_deps():
+    from sfzmaps import fresh
+    # the detector's stage imports sfzmaps.gpu (its training takes a turn on the GPU) ...
+    assert any(p.name == "gpu.py" for p in fresh.code_files(["sfzmaps.solver.textnet.stage"]))
+    # ... but the turns decide when it computes, never what: an edit to gpu.py reruns no stage
+    for name, st in build.stages().items():
+        if st.command:
+            assert "sfzmaps.gpu" in st.cut and "src/sfzmaps/gpu.py" not in build.stage_deps(st), name
+    # a stage that cuts nothing has it
+    st = build.Stage("x", (), (), command=("solver", "text", "nw"), code=("sfzmaps.solver.textnet.stage",), cut=())
+    assert "src/sfzmaps/gpu.py" in build.stage_deps(st)
+
+
+def test_the_solver_packages_hold_no_module_list():
+    # every solver stage imports both packages: an edit to their docstrings would rerun all of them (the detector's
+    # four for hours), so they are one line each and the module list is in the README
+    from sfzmaps import config
+    for init in ("solver/__init__.py", "solver/textnet/__init__.py"):
+        text = (config.PIPELINE_DIR / "src" / "sfzmaps" / init).read_text()
+        assert len(text.splitlines()) == 1 and text.startswith('"""'), init
 
 
 def test_the_page_and_the_lots_read_only_the_inputs_file_they_use():

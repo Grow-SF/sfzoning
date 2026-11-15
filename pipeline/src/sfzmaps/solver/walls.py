@@ -14,17 +14,19 @@ table as downloaded differ, and it trains only on pairs with both lots known and
 the odds of every fit; the solve reads quarter q's.  No whole-wall stage: how a line holds together along its length
 is left to the solve's energy.
 
-Candidate features (CANDIDATES, in the order they are tried; none by default, which is the set above): the five of
-`wallevidence.OPTIONS` (text_weighted, text_weighted_beside_letters, street_crossing, no_city_limit,
-text_discounted_enclosure), read through the detector's out-of-fold text chance (`textgrid.text_chance`, all four
-quarters) and the merged page's ink, and
+Candidate features (CANDIDATES, in the order they are tried): the five of `wallevidence.OPTIONS` (text_weighted,
+text_weighted_beside_letters, street_crossing, no_city_limit, text_discounted_enclosure), read through the detector's
+out-of-fold text chance (`textgrid.text_chance`, all four quarters) and the merged page's ink, and
   context           (`context`, after the lots' character) touching pairs: hats over KIND_KNOTS of how the line
                     between the lots' centroids runs along their long axes (the mean |cos| with each lot's minimum
                     rotated rectangle's long side: 0 side by side, 0.5 between, 1 back to back); pairs across a
                     street: hats over STREET_WIDTH_KNOTS of the street's width (the distance between the two lots)
-`evaluate_candidates` scores several configurations of them from inputs read once, and writes nothing.
+The stage fits with DEFAULT_CANDIDATES (none yet: the set above), set in code by the measured loop.  A fit with other
+candidates (`build_walls(candidates=...)`, `sfzmaps solver walls --candidates`) is an experiment, written to its own
+folder (`runs.walls_experiment_dir`) for a solve to read with `--walls`, never over the stage's.
+`evaluate_candidates` scores several configurations from inputs read once, and writes nothing.
 
-Writes, under data/solver/walls/:
+Writes, under data/solver/walls/ (the stage's) or the experiment's folder:
   walls_{q}.npz     lo_ab: float32 per pair row, the log odds from the fit without quarter q
   evaluation.json   per quarter: the log loss on the held-out pairs (both lots known and in q), their number, and the
                     training pairs' number and log loss; the number of pairs and features; the candidate features
@@ -43,7 +45,7 @@ from pathlib import Path
 import numpy as np
 from scipy.special import expit
 
-from sfzmaps.solver import lots, page, paths, wallevidence
+from sfzmaps.solver import lots, page, paths, runs, threads, wallevidence
 from sfzmaps.solver.wallevidence import hats
 
 log = logging.getLogger(__name__)
@@ -62,6 +64,9 @@ PROBABILITY_FLOOR = 1e-6    # the log loss counts a probability below this as th
 CONTEXT = "context"
 CANDIDATES = (wallevidence.TEXT_WEIGHTED, wallevidence.TEXT_WEIGHTED_BESIDE_LETTERS, wallevidence.STREET_CROSSING,
               CONTEXT, wallevidence.NO_CITY_LIMIT, wallevidence.TEXT_DISCOUNTED_ENCLOSURE)
+# The candidate features the stage fits with (`build_walls()`): each kept only if it lowers the held-out log loss in
+# at least three quarters.  None yet; the measured loop sets them.
+DEFAULT_CANDIDATES: tuple[str, ...] = ()
 
 
 def check_candidates(names) -> tuple[str, ...]:
@@ -279,6 +284,7 @@ def evaluate_candidates(configs, workers: int | None = None) -> list[dict]:
     configs = [check_candidates(c) for c in configs]
     if not configs:
         raise ValueError("no configuration to evaluate")
+    threads.warn_unless_pinned(log, "the walls' evaluation")
     workers = workers or max(1, (os.cpu_count() or 2) // 2)
     inputs = load_inputs(configs)
     out = []
@@ -288,15 +294,22 @@ def evaluate_candidates(configs, workers: int | None = None) -> list[dict]:
     return out
 
 
-def build_walls(workers: int | None = None, candidates=()) -> dict:
-    """Fit the wall odds with the candidate features `candidates` (none by default) and write walls_{q}.npz and
-    evaluation.json into WALLS_DIR, and text_chance.png (`textgrid.write_text_chance`) when a candidate reads it.
-    They are written into a fresh folder that then takes WALLS_DIR's place (`paths.fresh_folder`,
-    `paths.replace_folder`), so nothing of an earlier fit is left.  `workers`: processes for the closing paths
-    (default half the CPUs).  Returns the evaluation and the seconds taken (not written)."""
+def build_walls(workers: int | None = None, candidates=None) -> dict:
+    """Fit the wall odds and write walls_{q}.npz and evaluation.json, and text_chance.png
+    (`textgrid.write_text_chance`) when a candidate reads it: with `candidates` None, the stage's walls, with
+    DEFAULT_CANDIDATES, into WALLS_DIR; with candidates named (a list, maybe empty), an experiment, into its own folder
+    (`runs.walls_experiment_dir`), leaving the stage's alone.  They are written into a fresh folder that then takes
+    the target's place (`runs.fresh_folder`, `runs.replace_folder`), so nothing of an earlier fit is left.
+    `workers`: processes for the closing paths (default half the CPUs).  Returns the evaluation, the folder and the
+    seconds taken (the last two not written)."""
     from sfzmaps.solver import textgrid
     t0 = time.perf_counter()
-    candidates = check_candidates(candidates)
+    if candidates is None:
+        candidates, target = check_candidates(DEFAULT_CANDIDATES), runs.WALLS_DIR
+    else:
+        candidates = check_candidates(candidates)
+        target = runs.walls_experiment_dir(candidates)
+    threads.warn_unless_pinned(log, "the walls")
     workers = workers or max(1, (os.cpu_count() or 2) // 2)
     inputs = load_inputs([candidates])
     X = candidate_design(inputs, candidates, workers)
@@ -304,10 +317,10 @@ def build_walls(workers: int | None = None, candidates=()) -> dict:
     evaluation["candidates"] = list(candidates)
     if inputs.letter is not None:
         evaluation["strokes_touching_text"] = int((inputs.letter > 0).sum())
-    folder = paths.fresh_folder(paths.WALLS_DIR)
+    folder = runs.fresh_folder(target)
     write_walls(folder, odds, evaluation)
     if inputs.text is not None:
         textgrid.write_text_chance(folder, inputs.text)
-    paths.replace_folder(folder, paths.WALLS_DIR)
-    return {**evaluation, "seconds": round(time.perf_counter() - t0, 1)}
+    runs.replace_folder(folder, target)
+    return {**evaluation, "folder": str(target), "seconds": round(time.perf_counter() - t0, 1)}
 

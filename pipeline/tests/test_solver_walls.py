@@ -9,7 +9,7 @@ import shapely
 from scipy import ndimage
 
 from sfzmaps import config
-from sfzmaps.solver import city, grid, lots, page, paths, strokes, textgrid, wallevidence, walls
+from sfzmaps.solver import city, grid, lots, page, paths, runs, strokes, textgrid, wallevidence, walls
 from sfzmaps.transform import GCP, SheetTransform
 
 LOT_PX = 15         # the synthetic lots are squares of 15 px (60 ft)
@@ -259,7 +259,7 @@ def _text_folders(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     monkeypatch.setattr(paths, "SOLVER_DIR", tmp_path / "solver")
     monkeypatch.setattr(paths, "PAGE_DIR", tmp_path / "page")
-    monkeypatch.setattr(paths, "WALLS_DIR", tmp_path / "walls")
+    monkeypatch.setattr(runs, "WALLS_DIR", tmp_path / "walls")
     (tmp_path / "cuts.json").write_text("{}")
     monkeypatch.setattr(paths, "CUTS_FILE", tmp_path / "cuts.json")
     (tmp_path / "page").mkdir()
@@ -358,7 +358,7 @@ def test_out_of_fold_text_takes_each_pixels_own_quarter_model(tmp_path, monkeypa
         page.lay_sheet(tr, pg, page.crop_mask(pg.shape, frames[name], []), ink, covered,
                        page.grid_box(tr, np.array(frames[name]), ink.shape))
     np.testing.assert_array_equal(every > 0, ink)
-    assert not paths.WALLS_DIR.exists()                     # computed, not written
+    assert not runs.WALLS_DIR.exists()                     # computed, not written
     # a look at some quarters: the others' page px give 0
     some = textgrid.text_chance(["nw", "se"])
     np.testing.assert_array_equal(some[window], expected(("nw", "se")))
@@ -701,7 +701,7 @@ def test_evaluate_candidates_scores_each_configuration_from_inputs_read_once(tmp
     of each quarter's fit and its own features, in the order given, and nothing is written."""
     inputs, reads = _city_inputs(), []
     monkeypatch.setattr(walls, "load_inputs", lambda configs: reads.append(configs) or inputs)
-    monkeypatch.setattr(paths, "WALLS_DIR", tmp_path / "walls")
+    monkeypatch.setattr(runs, "WALLS_DIR", tmp_path / "walls")
     base, crossing = walls.evaluate_candidates([[], ["street_crossing"]])
     assert len(reads) == 1 and [list(c) for c in reads[0]] == [[], ["street_crossing"]]
     for result in (base, crossing):
@@ -717,19 +717,69 @@ def test_evaluate_candidates_scores_each_configuration_from_inputs_read_once(tmp
         walls.evaluate_candidates(["street_crossing"])      # a configuration is a list of names
 
 
-def test_build_walls_writes_the_text_chance_it_read(tmp_path, monkeypatch):
-    """build_walls writes the walls, the candidates in evaluation.json and, when a candidate reads it, the text chance
-    it fitted with; the default set reads none and writes none."""
-    monkeypatch.setattr(paths, "WALLS_DIR", tmp_path / "walls")
+def test_a_candidates_fit_is_an_experiment_beside_the_stages_walls(tmp_path, monkeypatch):
+    """A fit with candidates named (`sfzmaps solver walls --candidates`) is an experiment: its walls, its candidates in
+    evaluation.json and, when a candidate reads it, the text chance it fitted with go to its own folder
+    (experiments/walls-<the names sorted>), which a solve reads with --walls; the stage's walls are left as they were.
+    The stage's fit (no candidates named) uses DEFAULT_CANDIDATES; with none it reads no text chance and writes none."""
+    assert walls.check_candidates(walls.DEFAULT_CANDIDATES) == tuple(walls.DEFAULT_CANDIDATES)
+    monkeypatch.setattr(runs, "WALLS_DIR", tmp_path / "walls")
+    monkeypatch.setattr(runs, "EXPERIMENTS_DIR", tmp_path / "experiments")
+    monkeypatch.setattr(walls, "DEFAULT_CANDIDATES", ())
+    monkeypatch.setattr(walls, "load_inputs", lambda configs: _city_inputs(text=False))
+    walls.build_walls(1)
+    stage = {p.name: p.read_bytes() for p in (tmp_path / "walls").iterdir()}
+    assert sorted(stage) == ["evaluation.json"] + [f"walls_{q}.npz" for q in sorted(paths.QUARTERS)]
     inputs = _city_inputs()
     inputs.text[inputs.ink] = 7
     monkeypatch.setattr(walls, "load_inputs", lambda configs: inputs)
-    walls.build_walls(1, ["street_crossing"])
-    assert json.loads((tmp_path / "walls" / "evaluation.json").read_text())["candidates"] == ["street_crossing"]
-    np.testing.assert_array_equal(cv2.imread(str(tmp_path / "walls" / "text_chance.png"), cv2.IMREAD_GRAYSCALE),
-                                  inputs.text)
-    shutil.rmtree(tmp_path / "walls")
-    monkeypatch.setattr(walls, "load_inputs", lambda configs: _city_inputs(text=False))
+    got = walls.build_walls(1, ["street_crossing", "no_city_limit"])
+    folder = tmp_path / "experiments" / "walls-no_city_limit+street_crossing"
+    assert got["folder"] == str(folder)
+    assert json.loads((folder / "evaluation.json").read_text())["candidates"] == ["street_crossing", "no_city_limit"]
+    np.testing.assert_array_equal(cv2.imread(str(folder / "text_chance.png"), cv2.IMREAD_GRAYSCALE), inputs.text)
+    assert {p.name: p.read_bytes() for p in (tmp_path / "walls").iterdir()} == stage
+    assert city.wall_odds("nw", folder).shape == inputs.lots.a.shape
+    # the stage's fit takes its candidates from the code, and writes only the stage's folder
+    monkeypatch.setattr(walls, "DEFAULT_CANDIDATES", ("street_crossing",))
     walls.build_walls(1)
-    assert sorted(p.name for p in (tmp_path / "walls").iterdir()) == ["evaluation.json"] + [
-        f"walls_{q}.npz" for q in sorted(paths.QUARTERS)]
+    assert json.loads((tmp_path / "walls" / "evaluation.json").read_text())["candidates"] == ["street_crossing"]
+    assert [p.name for p in (tmp_path / "experiments").iterdir()] == [folder.name]
+
+
+def _pinned(monkeypatch, pinned: bool) -> None:
+    from sfzmaps.solver import threads
+    for k, v in threads.ONE_THREAD.items():
+        monkeypatch.setenv(k, v)
+    if not pinned:
+        monkeypatch.delenv("VECLIB_MAXIMUM_THREADS")
+
+
+def test_the_walls_command_fits_in_a_process_pinned_to_one_thread(monkeypatch):
+    """`sfzmaps solver walls` fits in a process started with one thread for the maths libraries (they read it only as
+    they load): pinned, it fits there; not, it starts itself again pinned with the same options and fits nothing.
+    `--candidates` makes an experiment; without it the stage's walls are fitted."""
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    from sfzmaps.solver import threads
+    fits, evaluations, reruns = [], [], []
+    done = {"pairs": 1, "features": 1, "quarters": {}, "candidates": [], "folder": "F", "seconds": 0.0}
+    monkeypatch.setattr(walls, "build_walls", lambda workers=None, candidates=None: fits.append((workers, candidates))
+                        or done)
+    monkeypatch.setattr(walls, "evaluate_candidates", lambda configs, workers=None: evaluations.append(configs) or [])
+    monkeypatch.setattr(threads, "run_pinned", lambda argv: reruns.append(argv) or 0)
+    runner = CliRunner()
+    _pinned(monkeypatch, True)
+    assert runner.invoke(cli.app, ["solver", "walls"]).exit_code == 0
+    assert runner.invoke(cli.app, ["solver", "walls", "--candidates", "context,street_crossing"]).exit_code == 0
+    assert runner.invoke(cli.app, ["solver", "walls", "--candidates", "none"]).exit_code == 0
+    assert runner.invoke(cli.app, ["solver", "walls", "--evaluate", "none", "--evaluate", "context"]).exit_code == 0
+    assert fits == [(None, None), (None, ["context", "street_crossing"]), (None, [])]
+    assert evaluations == [[[], ["context"]]] and reruns == []
+    _pinned(monkeypatch, False)
+    for args in (["--workers", "3"], ["--candidates", "context"], ["--evaluate", "none", "--evaluate", "context"]):
+        assert runner.invoke(cli.app, ["solver", "walls", *args]).exit_code == 0
+    assert reruns == [["solver", "walls", "--workers", "3"], ["solver", "walls", "--candidates", "context"],
+                      ["solver", "walls", "--evaluate", "none", "--evaluate", "context"]]
+    assert len(fits) == 3 and len(evaluations) == 1

@@ -163,10 +163,11 @@ def district_lines() -> np.ndarray:
 
 def score_quarter(q: str, lines: np.ndarray) -> dict:
     """The scores of the detector that held out `q`, on that quarter (see the module), from its chances
-    (`paths.chance_dir(q)`) and the district lines (`district_lines`)."""
+    (`paths.chance_dir(q)`) of every sheet (`paths.SHEETS`, once they are the sheets the warp placed:
+    `paths.check_sheets`) and the district lines (`district_lines`)."""
     data.quarter_index(q)
     tally = _Tally()
-    for name in paths.sheet_names():
+    for name in paths.check_sheets():
         f = paths.chance_dir(q) / f"{name}.png"
         chance = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
         if chance is None:

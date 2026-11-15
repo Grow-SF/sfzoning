@@ -14,7 +14,7 @@ Causes, in this order:
 Data errors: a sliver, one-lot-over or on-the-line hole whose wrong lot is at least half inked.  The printed line is
 drawn over the parcel and the table puts the parcel on the other side; nothing a reader can do about it.  They are
 listed for publishing and left out of the scores (data-errors-2000-digital.csv and data_errors.npz in the run's
-folder, `paths.solve_dir`)."""
+folder, `runs.solve_dir`)."""
 import csv
 from collections import Counter
 from pathlib import Path
@@ -23,7 +23,7 @@ import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
-from sfzmaps.solver import grid, paths
+from sfzmaps.solver import grid, runs
 from sfzmaps.solver.borders import border_paths
 from sfzmaps.solver.city import city, load_run, run_file
 from sfzmaps.solver.measures import QUARTERS, Table, data_errors_file, holes
@@ -137,7 +137,7 @@ def report_causes(run, picture=None, save_data_errors=False):
     errors = data_errors(rows)
     print(f"data errors: {len(errors)} holes, {len({lot for r in errors for lot in r['wrong_lots']})} parcels")
     if save_data_errors:
-        write_data_errors(errors, load_run(run), paths.solve_dir(run))
+        write_data_errors(errors, load_run(run), runs.solve_dir(run))
     if picture:
         _picture(rows, load_run(run), picture)
 

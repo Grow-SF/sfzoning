@@ -2,21 +2,20 @@
 
 Held out by quarter: the city is solved four times, each time with wall odds and a placement model fitted without one
 quarter, and every lot takes its answer from the solve that did not see its quarter.  The four solves run side by side,
-each in its own process (`sfzmaps solver solve-quarter`), with one thread each for the linear algebra.
+each in its own process (`sfzmaps solver solve-quarter`), with one thread each for the linear algebra (`threads`).
 
-Writes, under runs/ in the run's folder (`paths.solve_dir`: data/solver/solve for the stage's run `final`,
+Writes, under runs/ in the run's folder (`runs.solve_dir`: data/solver/solve for the stage's run `final`,
 data/solver/experiments/<run> for any other):
   {run}-{q}.npz        the solve that held out quarter q: `names` and `pred` (city.save_run)
-  {run}-{q}.log        its log (no times: the same inputs give the same bytes)
+  {run}-{q}.log        its log: what its process prints, with no times (the same inputs give the same bytes); its
+                       stderr goes to the console
   {run}-{q}-costs.npz  with keep_costs: its label costs, odds, codes and readings (for holes.py)
   {run}.npz            the join: every lot from its own quarter's solve
 
-`solve_and_report` is the `solver-solve` stage (`sfzmaps solver solve final`): the placement, the four solves, the
-join, the data errors among the run's holes and the report, built in a fresh folder that then takes the run
-folder's place."""
-import os
+`solve_and_report` is the `solver-solve` stage (`sfzmaps solver solve final`, a process pinned to one thread like
+the quarters'): the placement, the four solves, the join, the data errors among the run's holes and the report, built
+in a fresh folder that then takes the run folder's place."""
 import subprocess
-import sys
 import time
 from collections import Counter
 from pathlib import Path
@@ -24,15 +23,13 @@ from pathlib import Path
 import numpy as np
 
 from sfzmaps.solver import energy as E
-from sfzmaps.solver import paths, search
+from sfzmaps.solver import paths, runs, search, threads
 from sfzmaps.solver.city import city, load_run, run_file, save_run, wall_odds
 from sfzmaps.solver.codes import canon, table_vocabulary
 from sfzmaps.solver.labels import readings
 from sfzmaps.solver.placement import load_options
 
 TRUE_BORDER_ODDS = 6.0      # the ceiling check: the table's own borders as near-certain walls (+) or none (-)
-ONE_THREAD = {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "VECLIB_MAXIMUM_THREADS": "1",
-              "MKL_NUM_THREADS": "1"}
 
 
 def solve_joint(n_lots, a, b, odds, rd, options=None, label_weight=1.0, wall_weight=1.0, same_weight=1.0,
@@ -77,10 +74,10 @@ def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders:
                   keep_costs: bool = False, folder: Path | None = None) -> None:
     """Solve the whole city with holdout q's inputs (the walls of `walls_dir`, default WALLS_DIR, and the placement
     in the run's folder) and write runs/{run}-{q}.npz into `folder` (default the run's own,
-    `paths.solve_dir`).  The scoring table (with the by-eye corrections) gives the true borders of the ceiling check
+    `runs.solve_dir`).  The scoring table (with the by-eye corrections) gives the true borders of the ceiling check
     and the table's answer the log prices.  What it prints is the quarter's log: no times."""
-    paths.check_final(run, walls_dir, true_borders)
-    folder = Path(folder or paths.solve_dir(run))
+    runs.check_final(run, walls_dir, true_borders)
+    folder = Path(folder or runs.solve_dir(run))
 
     def log(s):
         print(f"{q}: {s}", flush=True)
@@ -122,30 +119,26 @@ def join(run: str, folder: Path | None = None) -> None:
     save_run(run_file(run, folder=folder), out)
 
 
-def _sfzmaps() -> list[str]:
-    """The command that runs sfzmaps in this environment."""
-    exe = Path(sys.executable).with_name("sfzmaps")
-    return [str(exe)] if exe.exists() else [sys.executable, "-m", "sfzmaps.cli"]
-
-
 def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = False, keep_costs: bool = False,
               folder: Path | None = None) -> None:
-    """The four holdouts side by side (one `sfzmaps solver solve-quarter` process each, writing into `folder`,
-    default the run's own), then the join.  It prints each quarter's log and how long each took (the times only
-    here, never in the run's folder)."""
-    paths.check_final(run, walls_dir, true_borders)
-    folder = Path(folder or paths.solve_dir(run))
-    runs = run_file(run, folder=folder).parent
-    runs.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, **ONE_THREAD)
+    """The four holdouts side by side (one `sfzmaps solver solve-quarter` process each, pinned to one thread
+    (`threads`), writing into `folder`, default the run's own), then the join.  A quarter's log (runs/RUN-Q.log) is
+    what its process prints; what it writes to stderr (a library's warning, a traceback) goes to the console, never
+    into the run's folder.  It prints each quarter's log and how long each took (the times only here, never in the
+    run's folder)."""
+    runs.check_final(run, walls_dir, true_borders)
+    folder = Path(folder or runs.solve_dir(run))
+    logs = run_file(run, folder=folder).parent
+    logs.mkdir(parents=True, exist_ok=True)
+    env = threads.environment()
     flags = (["--true-borders"] * true_borders + ["--keep-costs"] * keep_costs
              + (["--walls", str(walls_dir)] if walls_dir else []) + ["--folder", str(folder)])
     t0 = time.perf_counter()
     procs = []
     for q in paths.QUARTERS:
-        logf = open(runs / f"{run}-{q}.log", "w")
-        cmd = _sfzmaps() + ["solver", "solve-quarter", run, q] + flags
-        procs.append((q, logf, subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, env=env)))
+        logf = open(logs / f"{run}-{q}.log", "w")
+        cmd = threads.sfzmaps_command() + ["solver", "solve-quarter", run, q] + flags
+        procs.append((q, logf, subprocess.Popen(cmd, stdout=logf, env=env)))
     seconds = {}
     while len(seconds) < len(procs):                     # each solve's time, as it ends
         for q, _, p in procs:
@@ -157,31 +150,36 @@ def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = Fals
         if p.returncode != 0:
             failed.append(q)
         logf.close()
-        print((runs / f"{run}-{q}.log").read_text().rstrip())
+        print((logs / f"{run}-{q}.log").read_text().rstrip())
     print("solved in " + ", ".join(f"{q} {seconds[q]:.0f} s" for q in paths.QUARTERS), flush=True)
     if failed:
-        raise RuntimeError(f"solve failed for {', '.join(failed)}; see {runs}/{run}-<quarter>.log")
+        raise RuntimeError(f"solve failed for {', '.join(failed)}; see {logs}/{run}-<quarter>.log and the errors "
+                           "above")
     join(run, folder)
     print(f"joined: {run_file(run, folder=folder)}")
 
 
 def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool = False) -> dict:
     """Everything a solve needs and makes, from the walls of `walls_dir` (default WALLS_DIR), built in a fresh
-    folder beside the run's (`paths.fresh_folder`) that then takes its place (`paths.replace_folder`), so nothing of
+    folder beside the run's (`runs.fresh_folder`) that then takes its place (`runs.replace_folder`), so nothing of
     an earlier solve is left: fit the placement (placement.npz), solve the four held-out quarters with their costs
     and join them (`solve_all`), list the data errors among the run's holes (`holes.write_data_errors`:
     data_errors.npz and data-errors-2000-digital.csv), and write the report (`report.write_report`: report.json and
     report.md), which scores the run with those parcels left out and with every lot.  The stage's run (`final`) is
-    refused with other walls or the true borders (`paths.check_final`).  Returns the report."""
+    refused with other walls or the true borders (`runs.check_final`).  The placement and the report are computed in
+    this process: `sfzmaps solver solve` runs it pinned to one thread (`threads`).  Returns the report."""
+    import logging
+
     from sfzmaps.solver import holes, placement, report
-    paths.check_final(run, walls_dir, true_borders)
-    target = paths.solve_dir(run)
-    folder = paths.fresh_folder(target)
+    runs.check_final(run, walls_dir, true_borders)
+    target = runs.solve_dir(run)
+    threads.warn_unless_pinned(logging.getLogger(__name__), "the placement and the report")
+    folder = runs.fresh_folder(target)
     summary = placement.fit(folder, walls_dir)
     solve_all(run, walls_dir, true_borders, keep_costs=True, folder=folder)
     rows = holes.causes(run, folder)
     holes.write_data_errors(holes.data_errors(rows), load_run(run, folder), folder)
     found = report.build_report(run, summary, dict(Counter(r["cause"] for r in rows)), walls_dir, folder)
     report.write_report(found, folder)
-    paths.replace_folder(folder, target)
+    runs.replace_folder(folder, target)
     return found

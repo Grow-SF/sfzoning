@@ -22,7 +22,7 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
-from sfzmaps.solver import paths
+from sfzmaps.solver import paths, runs
 from sfzmaps.solver.borders import junction_neighbours
 from sfzmaps.solver.city import city
 from sfzmaps.solver.labels import top_readings
@@ -32,7 +32,7 @@ HOLE_FT = 100.0
 
 
 def data_errors_file(folder):
-    """a run's data-error list, in its folder (`paths.solve_dir`)"""
+    """a run's data-error list, in its folder (`runs.solve_dir`)"""
     return Path(folder) / "data_errors.npz"
 
 
@@ -139,7 +139,7 @@ def incidents(codes):
 
 def report(name, codes, exclude_data_errors=True):
     """print the measures of the run `name` (`codes`), leaving out its own data-error list unless told not to"""
-    ex = data_error_lots(paths.solve_dir(name)) if exclude_data_errors else np.zeros(city().n, bool)
+    ex = data_error_lots(runs.solve_dir(name)) if exclude_data_errors else np.zeros(city().n, bool)
     s = score(codes, Table(ex))
     i = incidents(codes)
     print(f"{name}: district lines drawn {s['recall']:.1%} ({s['recall_ft']:.1%} by length); drawn lines that are "

@@ -55,16 +55,17 @@ def chance(net: model.TextNet, ink: np.ndarray, device: str) -> np.ndarray:
 
 
 def predict_sheets(q: str, device: str | None = None) -> int:
-    """Score every warped sheet's page with the model that held out `q` and write `paths.chance_dir(q)/<sheet>.png`
-    (the folder is made afresh once the model has loaded).  On `mps` the caller holds the GPU's exclusive turn
-    (`gpu.gpu_turn`).  Returns the number of sheets scored."""
+    """Score every sheet's page (`paths.SHEETS`, once they are the sheets the warp placed: `paths.check_sheets`)
+    with the model that held out `q` and write `paths.chance_dir(q)/<sheet>.png` (the folder is made afresh once the
+    model has loaded).  On `mps` the caller holds the GPU's exclusive turn (`gpu.gpu_turn`).  Returns the number of
+    sheets scored."""
+    names = paths.check_sheets()
     device = device or train.default_device()
     train.settle_torch()
     net = load_model(q, device)
     out = paths.chance_dir(q)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    names = paths.sheet_names()
     for name in names:
         t0 = time.perf_counter()
         ink = data.load_page(name) < grid.INK_BELOW

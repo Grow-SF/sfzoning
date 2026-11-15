@@ -1724,7 +1724,6 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
-      - src/sfzmaps/gpu.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/grid.py
       - src/sfzmaps/solver/paths.py
@@ -1738,8 +1737,58 @@ stages:
       - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
-      - data/work/2000-digital-zoning
-      - data/warp/2000-digital-zoning
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/correction.npz
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/district_labels.json
       - data/solver/prints/terra_boxes.json
       - saved-reads/answers/experiments-2000/text-positions
     outs:
@@ -1750,7 +1799,6 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
-      - src/sfzmaps/gpu.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/grid.py
       - src/sfzmaps/solver/paths.py
@@ -1764,8 +1812,58 @@ stages:
       - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
-      - data/work/2000-digital-zoning
-      - data/warp/2000-digital-zoning
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/correction.npz
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/district_labels.json
       - data/solver/prints/terra_boxes.json
       - saved-reads/answers/experiments-2000/text-positions
     outs:
@@ -1776,7 +1874,6 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
-      - src/sfzmaps/gpu.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/grid.py
       - src/sfzmaps/solver/paths.py
@@ -1790,8 +1887,58 @@ stages:
       - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
-      - data/work/2000-digital-zoning
-      - data/warp/2000-digital-zoning
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/correction.npz
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/district_labels.json
       - data/solver/prints/terra_boxes.json
       - saved-reads/answers/experiments-2000/text-positions
     outs:
@@ -1802,7 +1949,6 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
-      - src/sfzmaps/gpu.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/grid.py
       - src/sfzmaps/solver/paths.py
@@ -1816,8 +1962,58 @@ stages:
       - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
-      - data/work/2000-digital-zoning
-      - data/warp/2000-digital-zoning
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/correction.npz
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/district_labels.json
       - data/solver/prints/terra_boxes.json
       - saved-reads/answers/experiments-2000/text-positions
     outs:
@@ -1843,10 +2039,73 @@ stages:
       - src/sfzmaps/transform.py
       - pyproject.toml
       - uv.lock
-      - data/work/2000-digital-zoning
-      - data/warp/2000-digital-zoning
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/correction.npz
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/transform.json
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/correction.npz
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p01/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p02/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p03/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p04/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p05/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p06/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p07/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p08/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p09/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p10/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p11/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p12/district_labels.json
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
+      - data/work/2000-digital-zoning/2000-digital-zoning-p13/district_labels.json
       - data/solver/prints/terra_boxes.json
       - saved-reads/answers/experiments-2000/text-positions
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/warped.footprint.geojson
+      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/warped.footprint.geojson
       - data/solver/lots
       - data/solver/text-nw/chance
       - data/solver/text-ne/chance
@@ -1895,11 +2154,13 @@ stages:
       - src/sfzmaps/solver/lots.py
       - src/sfzmaps/solver/page.py
       - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/runs.py
       - src/sfzmaps/solver/saved.py
       - src/sfzmaps/solver/table.py
       - src/sfzmaps/solver/textgrid.py
       - src/sfzmaps/solver/textnet/__init__.py
       - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/threads.py
       - src/sfzmaps/solver/wallevidence.py
       - src/sfzmaps/solver/walls.py
       - src/sfzmaps/transform.py
@@ -1939,9 +2200,11 @@ stages:
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/placement.py
       - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
       - src/sfzmaps/solver/search.py
       - src/sfzmaps/solver/solve.py
       - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/threads.py
       - src/sfzmaps/solver/trust.py
       - src/sfzmaps/transform.py
       - pyproject.toml

@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import cv2
 import geopandas as gpd
@@ -7,7 +8,8 @@ import pandas as pd
 import pytest
 import shapely
 
-from sfzmaps.solver import borders, city, energy, grid, labels, lots, measures, paths, placement, report, solve, table
+from sfzmaps.solver import (borders, city, energy, grid, labels, lots, measures, paths, placement, report, runs, solve,
+                            table)
 
 SHAPE = (70, 100)                       # grid rows, columns: 280 x 400 ft
 COLUMNS, ROWS, SIDE = 8, 5, 40.0        # 40 lots, 40-ft squares, touching
@@ -58,11 +60,11 @@ def _write_walls(folder, odds) -> None:
         np.savez(folder / f"walls_{q}.npz", lo_ab=np.asarray(odds, np.float32))
 
 
-def _write_placement(lot_under, walls_dir=None, run=paths.FINAL_RUN) -> None:
+def _write_placement(lot_under, walls_dir=None, run=runs.FINAL_RUN) -> None:
     """The run's placement: every label stays on the lot under its text, for each held-out model, fitted with the
     walls of walls_dir."""
     n = len(lot_under)
-    folder = paths.solve_dir(run)
+    folder = runs.solve_dir(run)
     folder.mkdir(parents=True, exist_ok=True)
     np.savez(folder / "placement.npz", label=np.tile(np.arange(n), 4), lot=np.tile(lot_under, 4),
              chance=np.ones(4 * n), stay=np.ones(4 * n, bool), holdout=np.repeat(np.arange(4), n),
@@ -74,9 +76,9 @@ def synthetic_city(tmp_path, monkeypatch):
     """A city of 40 lots (8 columns x 5 rows) in three districts by column, one print in each district read right
     with trust 0.95, every label staying on its own lot, and walls the reader never saw (NaN: a line everywhere).
     Returns the City."""
-    for name in ("PAGE_DIR", "LOTS_DIR", "PRINTS_DIR", "LABELS_DIR", "WALLS_DIR", "SOLVE_DIR", "EXPERIMENTS_DIR",
-                 "TABLE_DIR"):
-        monkeypatch.setattr(paths, name, tmp_path / name.lower())
+    for module, name in ((paths, "PAGE_DIR"), (paths, "LOTS_DIR"), (paths, "PRINTS_DIR"), (paths, "LABELS_DIR"),
+                         (runs, "WALLS_DIR"), (runs, "SOLVE_DIR"), (runs, "EXPERIMENTS_DIR"), (paths, "TABLE_DIR")):
+        monkeypatch.setattr(module, name, tmp_path / name.lower())
         (tmp_path / name.lower()).mkdir()
     monkeypatch.setattr(grid, "HEIGHT", SHAPE[0])
     monkeypatch.setattr(grid, "WIDTH", SHAPE[1])
@@ -97,7 +99,7 @@ def synthetic_city(tmp_path, monkeypatch):
     for q in paths.QUARTERS:
         _write_readings(q, NAMES, [0, 1, 2], [1, 2, 0], [0.95] * 3)
         _write_streetside(q, [-1] * 3, [False] * 3, [False] * 3, 0.8, 0.8)
-    _write_walls(paths.WALLS_DIR, np.full(len(pairs), np.nan))
+    _write_walls(runs.WALLS_DIR, np.full(len(pairs), np.nan))
     cv2.imwrite(str(paths.PAGE_DIR / "ink.png"), np.full(SHAPE, 255, np.uint8))      # a blank page
     city.city.cache_clear()
     borders.border_paths.cache_clear()
@@ -117,13 +119,26 @@ def test_true_border_walls_recover_the_table(synthetic_city, tmp_path):
     both = C.known[C.a] & C.known[C.b]
     odds = np.where(both & (C.table[C.a] != C.table[C.b]), 6.0, -6.0)
     _write_walls(tmp_path / "true-walls", odds)
-    for run in ("walls", "walls-again"):
+    for run in ("walls", "again"):
         _write_placement(UNDER, tmp_path / "true-walls", run)
     solve.solve_quarter("walls", "se", walls_dir=tmp_path / "true-walls")
     np.testing.assert_array_equal(_solved("walls", "se"), C.table)
     # discrete and seeded: a second solve gives every lot the same code
-    solve.solve_quarter("walls-again", "se", walls_dir=tmp_path / "true-walls")
-    np.testing.assert_array_equal(_solved("walls-again", "se"), _solved("walls", "se"))
+    solve.solve_quarter("again", "se", walls_dir=tmp_path / "true-walls")
+    np.testing.assert_array_equal(_solved("again", "se"), _solved("walls", "se"))
+
+
+def test_the_city_has_one_centroid_per_lot_even_for_a_lot_with_no_area(synthetic_city):
+    # a lot of the table with an empty outline: its row is NaN, and every other lot keeps its own row
+    t = gpd.read_parquet(paths.LOTS_DIR / "table.parquet")
+    t.loc[5, "geometry"] = shapely.Polygon()
+    t.to_parquet(paths.LOTS_DIR / "table.parquet")
+    city.city.cache_clear()
+    C = city.city()
+    assert C.centroid.shape == (C.n, 2) and np.isnan(C.centroid[5]).all()
+    others = np.delete(np.arange(C.n), 5)
+    np.testing.assert_array_equal(C.centroid[others],
+                                  shapely.get_coordinates(shapely.centroid(t.geometry.values[others])))
 
 
 def test_city_scores_on_the_corrected_table_and_fits_on_the_raw_one(synthetic_city):
@@ -221,9 +236,9 @@ def test_a_solve_refuses_a_placement_fitted_on_other_walls(synthetic_city, tmp_p
         solve.solve_quarter("other", "nw", walls_dir=tmp_path / "other")
     # a placement that names no walls is refused too
     _write_placement(UNDER, run="old")
-    P = dict(np.load(placement.placement_file(paths.solve_dir("old"))))
+    P = dict(np.load(placement.placement_file(runs.solve_dir("old"))))
     del P["walls"]
-    np.savez(placement.placement_file(paths.solve_dir("old")), **P)
+    np.savez(placement.placement_file(runs.solve_dir("old")), **P)
     with pytest.raises(ValueError, match="other walls"):
         solve.solve_quarter("old", "nw")
 
@@ -238,7 +253,7 @@ def _right_but_lot_0(C) -> None:
 def test_the_report_gives_six_measures_with_and_without_the_data_errors_against_j7(synthetic_city):
     C = synthetic_city
     _right_but_lot_0(C)
-    np.savez(measures.data_errors_file(paths.solve_dir("r")), lots=np.array([0]))
+    np.savez(measures.data_errors_file(runs.solve_dir("r")), lots=np.array([0]))
     got = report.build_report("r", placement_summary={"labels": 3}, hole_causes={"BIG AREA": 0})
     left_out, every = got["measures"]["data_errors_left_out"], got["measures"]["every_lot"]
     assert set(report.J7) <= set(left_out) and set(report.J7) <= set(every) and got["j7"] == report.J7
@@ -248,7 +263,9 @@ def test_the_report_gives_six_measures_with_and_without_the_data_errors_against_
     # wrong lots and incidents count every scored lot either way, as J7's did
     assert left_out["wrong_lots"] == every["wrong_lots"] == 1 and left_out["incidents"] == every["incidents"] == 1
     assert got["wrong_lots_by_quarter"] == {"nw": 1, "ne": 0, "sw": 0, "se": 0}
-    assert got["data_errors"] == {"parcels": 1, "j7_parcels": 33} and len(got["definition_changes"]) == 6
+    assert got["data_errors"] == {"parcels": 1, "j7_parcels": 33} and len(got["definition_changes"]) == 7
+    # the placement's leak across the quarter split, inherited from J7, is named
+    assert any("placement" in c and "quarter split" in c and "as J7's did" in c for c in got["definition_changes"])
     md = report.markdown(got)
     assert "96.3%" in md and "8,625" in md and all(change in md for change in got["definition_changes"])
 
@@ -257,12 +274,12 @@ def test_a_report_written_again_at_another_time_is_the_same_bytes(synthetic_city
     import time
     _right_but_lot_0(synthetic_city)
     report.write_report(report.build_report("r", placement_summary={"labels": 3}, hole_causes={}))
-    before = {f: (paths.solve_dir("r") / f).read_bytes() for f in ("report.json", "report.md")}
+    before = {f: (runs.solve_dir("r") / f).read_bytes() for f in ("report.json", "report.md")}
     monkeypatch.setattr(time, "time", lambda: 4e9)
     monkeypatch.setattr(time, "perf_counter", lambda: 4e9)
     city.city.cache_clear()
     report.write_report(report.build_report("r", placement_summary={"labels": 3}, hole_causes={}))
-    assert {f: (paths.solve_dir("r") / f).read_bytes() for f in before} == before
+    assert {f: (runs.solve_dir("r") / f).read_bytes() for f in before} == before
     assert json.loads(before["report.json"])["run"] == "r"
 
 
@@ -310,24 +327,24 @@ def test_a_quarter_log_is_the_same_bytes_at_another_time(synthetic_city, capsys,
 def test_an_experiment_writes_only_in_its_own_folder(synthetic_city):
     _write_placement(UNDER, run="trial")
     solve.solve_quarter("trial", "sw", keep_costs=True)
-    assert sorted(p.name for p in (paths.EXPERIMENTS_DIR / "trial" / "runs").iterdir()) == [
+    assert sorted(p.name for p in (runs.EXPERIMENTS_DIR / "trial" / "runs").iterdir()) == [
         "trial-sw-costs.npz", "trial-sw.npz"]
-    assert not any(paths.SOLVE_DIR.iterdir())
+    assert not any(runs.SOLVE_DIR.iterdir())
     # each run's data errors are its own: the stage's list leaves nothing out of an experiment's score
-    np.savez(measures.data_errors_file(paths.SOLVE_DIR), lots=np.array([0, 1]))
-    assert measures.data_error_lots(paths.solve_dir("trial")).sum() == 0
-    assert measures.data_error_lots(paths.solve_dir(paths.FINAL_RUN)).sum() == 2
+    np.savez(measures.data_errors_file(runs.SOLVE_DIR), lots=np.array([0, 1]))
+    assert measures.data_error_lots(runs.solve_dir("trial")).sum() == 0
+    assert measures.data_error_lots(runs.solve_dir(runs.FINAL_RUN)).sum() == 2
 
 
 def test_the_stage_run_is_refused_other_walls_or_the_true_borders(synthetic_city, tmp_path):
     _write_walls(tmp_path / "other", np.full(len(synthetic_city.a), -1.0))
     for kwargs in ({"walls_dir": tmp_path / "other"}, {"true_borders": True}):
         with pytest.raises(ValueError, match="solver-solve stage"):
-            solve.solve_and_report(paths.FINAL_RUN, **kwargs)
+            solve.solve_and_report(runs.FINAL_RUN, **kwargs)
         with pytest.raises(ValueError, match="solver-solve stage"):
-            solve.solve_quarter(paths.FINAL_RUN, "nw", **kwargs)
+            solve.solve_quarter(runs.FINAL_RUN, "nw", **kwargs)
     # nothing was written: no part-built folder, nothing in the stage's
-    assert not any(paths.SOLVE_DIR.iterdir()) and not paths.SOLVE_DIR.with_name(".solve.part").exists()
+    assert not any(runs.SOLVE_DIR.iterdir()) and not runs.SOLVE_DIR.with_name(".solve.part").exists()
 
 
 def test_the_cli_keeps_hand_runs_out_of_the_stage_run(synthetic_city):
@@ -337,4 +354,61 @@ def test_the_cli_keeps_hand_runs_out_of_the_stage_run(synthetic_city):
     for args in (["placement", "final"], ["holes", "final", "--save-data-errors"]):
         got = CliRunner().invoke(cli.app, ["solver", *args])
         assert got.exit_code != 0 and "solver-solve stage's run" in got.output, args
-    assert not any(paths.SOLVE_DIR.iterdir())
+    assert not any(runs.SOLVE_DIR.iterdir())
+
+
+def test_the_solve_and_the_placement_run_in_a_process_pinned_to_one_thread(synthetic_city, monkeypatch):
+    """`sfzmaps solver solve` (the placement, the report, ...) and `placement` compute in a process started with one
+    thread for the maths libraries: pinned, they compute there; not, they start themselves again pinned with the same
+    arguments.  A run they refuse is refused at once, in this process."""
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    from sfzmaps.solver import threads
+    solved, placed, reruns = [], [], []
+    monkeypatch.setattr(solve, "solve_and_report", lambda run, walls, true_borders: solved.append(
+        (run, walls, true_borders)) or {"run": run})
+    monkeypatch.setattr(report, "markdown", lambda found: "the report")
+    monkeypatch.setattr(placement, "fit", lambda folder, walls: placed.append((folder, walls)))
+    monkeypatch.setattr(threads, "run_pinned", lambda argv: reruns.append(argv) or 0)
+    runner = CliRunner()
+    for k, v in threads.ONE_THREAD.items():
+        monkeypatch.setenv(k, v)
+    assert runner.invoke(cli.app, ["solver", "solve", "final"]).exit_code == 0
+    assert runner.invoke(cli.app, ["solver", "placement", "trial", "--walls", "w"]).exit_code == 0
+    assert solved == [("final", None, False)] and placed == [(runs.solve_dir("trial"), Path("w"))] and not reruns
+    monkeypatch.delenv("OMP_NUM_THREADS")
+    assert runner.invoke(cli.app, ["solver", "solve", "trial", "--walls", "w", "--true-borders"]).exit_code == 0
+    assert runner.invoke(cli.app, ["solver", "placement", "trial"]).exit_code == 0
+    assert reruns == [["solver", "solve", "trial", "--walls", "w", "--true-borders"], ["solver", "placement", "trial"]]
+    for args in (["solve", "final", "--walls", "w"], ["solve", "walls-context"], ["placement", "final"]):
+        assert runner.invoke(cli.app, ["solver", *args]).exit_code != 0, args
+    assert len(reruns) == 2 and len(solved) == 1 and len(placed) == 1
+
+FAKE_QUARTER = '''
+import os, sys
+import numpy as np
+run, q, folder = sys.argv[3], sys.argv[4], sys.argv[sys.argv.index("--folder") + 1]
+os.makedirs(os.path.join(folder, "runs"), exist_ok=True)
+np.savez(os.path.join(folder, "runs", f"{run}-{q}.npz"), names=np.array(["RH-1"]),
+         pred=np.zeros(int(os.environ["FAKE_LOTS"]), np.int64))
+print(f"{q}: solved, threads {os.environ.get('VECLIB_MAXIMUM_THREADS')} {os.environ.get('OMP_NUM_THREADS')}")
+print(f"{q}: a library's warning", file=sys.stderr)
+'''
+
+
+def test_a_quarters_log_holds_what_it_prints_and_its_warnings_go_to_the_console(synthetic_city, tmp_path,
+                                                                                 monkeypatch, capfd):
+    # each quarter's process (a stand-in that writes its solve) runs pinned to one thread; its log (runs/RUN-Q.log, a
+    # stage output) holds what it prints, never a library's warning on stderr, which goes to the console
+    import sys
+    script = tmp_path / "fake_quarter.py"
+    script.write_text(FAKE_QUARTER)
+    monkeypatch.setattr(solve.threads, "sfzmaps_command", lambda: [sys.executable, str(script)])
+    monkeypatch.setenv("FAKE_LOTS", str(synthetic_city.n))
+    solve.solve_all("t", folder=tmp_path / "out")
+    for q in paths.QUARTERS:
+        assert (tmp_path / "out" / "runs" / f"t-{q}.log").read_text() == f"{q}: solved, threads 1 1\n"
+    err = capfd.readouterr().err
+    assert all(f"{q}: a library's warning" in err for q in paths.QUARTERS)
+    assert city.load_run("t", tmp_path / "out").tolist() == ["RH-1"] * synthetic_city.n
