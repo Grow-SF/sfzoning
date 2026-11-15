@@ -6,10 +6,14 @@ factor drawn log-uniformly from SCALE (so small street lettering also teaches bi
 number of quarter turns (the reading angle turns with it).  The loss is binary cross-entropy on text over the known
 px, plus KIND_WEIGHT x the cross-entropy of the kind and ANGLE_WEIGHT x (1 - cosine) of the reading direction, both on
 known text px.  AdamW at LEARNING_RATE with a one-cycle schedule.  Every draw comes from one numpy generator and the
-weights from torch's, both seeded; torch runs deterministic algorithms on THREADS threads.
+weights from torch's, both seeded; torch runs deterministic algorithms on THREADS threads.  On the Mac's GPU the
+training waits for its turn (`gpu_turn`): two processes using `mps` at once get wrong numbers back.  A loss that is
+not finite stops the training.
 
 Writes data/solver/text-<q>/model.pt: the weights (`state_dict`) with the iterations, device and seed they came from.
 """
+import contextlib
+import fcntl
 import logging
 import time
 from pathlib import Path
@@ -36,11 +40,36 @@ KIND_WEIGHT = 0.5
 ANGLE_WEIGHT = 0.5
 THREADS = 4
 LOG_EVERY = 250         # iterations between progress lines
+MPS_LOCK = Path("/tmp/sfzmaps-mps.lock")   # held by the one process whose turn it is on the Mac's GPU
 
 
 def default_device() -> str:
     """The device a quarter trains on unless told: "mps" where available, else "cpu"."""
     return "mps" if torch.backends.mps.is_available() else "cpu"
+
+
+@contextlib.contextmanager
+def gpu_turn(device: str):
+    """Have the Mac's GPU to this process alone while the body runs, if `device` is "mps": wait until no other
+    process holds MPS_LOCK (one file for the whole machine, as the GPU is), then hold it.  Two processes running the
+    detector on `mps` at once get wrong numbers back: the same step on the same input gives a different output each
+    time (a logit off by up to 2.5), and now and then a gradient that is all NaN; one process alone gets the same bits
+    every time.  The CPU takes no turn."""
+    if torch.device(device).type != "mps":
+        yield
+        return
+    with open(MPS_LOCK, "a") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            log.info("waiting for the GPU: another process holds %s", MPS_LOCK)
+            t0 = time.perf_counter()
+            fcntl.flock(f, fcntl.LOCK_EX)
+            log.info("the GPU is ours after %.0f s", time.perf_counter() - t0)
+        try:
+            yield
+        finally:
+            fcntl.flock(f, fcntl.LOCK_UN)
 
 
 def settle_torch() -> None:
@@ -123,27 +152,32 @@ def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor
 
 def fit(sheets: list[data.SheetTargets], iterations: int = ITERATIONS, device: str | None = None,
         seed: int = 0) -> model.TextNet:
-    """A TextNet fitted on the sheets' known px for `iterations` steps on `device` (default `default_device()`)."""
+    """A TextNet fitted on the sheets' known px for `iterations` steps on `device` (default `default_device()`), in
+    the device's `gpu_turn`.  Raises FloatingPointError at the first step whose loss is not finite."""
     device = device or default_device()
     settle_torch()
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     pools = centre_pools(sheets)
-    net = model.TextNet().to(device)
-    opt = torch.optim.AdamW(net.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
-    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LEARNING_RATE, total_steps=iterations)
-    t0, running = time.perf_counter(), np.zeros(3)
-    for it in range(iterations):
-        x, t, k, a, w = to_tensors(draw(sheets, pools, rng), device)
-        loss, parts = loss_fn(net(x), t, k, a, w)
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-        sched.step()
-        running = 0.98 * running + 0.02 * np.array(parts)
-        if (it + 1) % LOG_EVERY == 0 or it + 1 == iterations:
-            log.info("iteration %d: text %.4f, kind %.4f, angle %.4f (%.0f s)", it + 1, *running,
-                     time.perf_counter() - t0)
+    with gpu_turn(device):
+        net = model.TextNet().to(device)
+        opt = torch.optim.AdamW(net.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=LEARNING_RATE, total_steps=iterations)
+        t0, running = time.perf_counter(), np.zeros(3)
+        for it in range(iterations):
+            x, t, k, a, w = to_tensors(draw(sheets, pools, rng), device)
+            loss, parts = loss_fn(net(x), t, k, a, w)
+            if not np.isfinite(parts).all():
+                raise FloatingPointError(f"iteration {it + 1}: the loss is not finite (text {parts[0]}, kind "
+                                         f"{parts[1]}, angle {parts[2]})")
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+            sched.step()
+            running = 0.98 * running + 0.02 * np.array(parts)
+            if (it + 1) % LOG_EVERY == 0 or it + 1 == iterations:
+                log.info("iteration %d: text %.4f, kind %.4f, angle %.4f (%.0f s)", it + 1, *running,
+                         time.perf_counter() - t0)
     return net
 
 

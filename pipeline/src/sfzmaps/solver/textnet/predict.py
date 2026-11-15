@@ -60,16 +60,17 @@ def chance_dir(q: str) -> Path:
 
 def predict_sheets(q: str, device: str | None = None) -> None:
     """Score every warped sheet's page with the model that held out `q` and write `chance/<sheet>.png` (the folder
-    is made afresh)."""
+    is made afresh), in the device's `train.gpu_turn`."""
     device = device or train.default_device()
     train.settle_torch()
-    net = load_model(q, device)
     out = chance_dir(q)
     shutil.rmtree(out, ignore_errors=True)
     out.mkdir(parents=True)
-    for name in paths.sheet_names():
-        t0 = time.perf_counter()
-        ink = data.load_page(name) < page.INK_BELOW
-        if not cv2.imwrite(str(out / f"{name}.png"), chance(net, ink, device)):
-            raise OSError(f"can't write {out / f'{name}.png'}")
-        log.info("%s scored (%.0f s)", name, time.perf_counter() - t0)
+    with train.gpu_turn(device):
+        net = load_model(q, device)
+        for name in paths.sheet_names():
+            t0 = time.perf_counter()
+            ink = data.load_page(name) < page.INK_BELOW
+            if not cv2.imwrite(str(out / f"{name}.png"), chance(net, ink, device)):
+                raise OSError(f"can't write {out / f'{name}.png'}")
+            log.info("%s scored (%.0f s)", name, time.perf_counter() - t0)

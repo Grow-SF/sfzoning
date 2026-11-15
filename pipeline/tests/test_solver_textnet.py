@@ -1,14 +1,18 @@
+import contextlib
+import fcntl
 import gzip
 import json
+import threading
 
 import cv2
 import numpy as np
 import pytest
 import torch
+import torch.nn.functional as F
 
 from sfzmaps import config
 from sfzmaps.solver import lots, paths
-from sfzmaps.solver.textnet import data, evaluate, model, train
+from sfzmaps.solver.textnet import data, evaluate, model, predict, train
 
 SHEET = "2000-digital-zoning-p01"
 SIZE = 640
@@ -160,6 +164,116 @@ def test_heldout_pixels_carry_no_loss(sheet, small_crops):
                "kind": np.where(held, 1, across["kind"]), "angle": np.where(held, 45, across["angle"])}
     loss2, grads2 = _loss_and_grads(net, flipped)
     assert loss2 == loss and all(torch.equal(g, g2) for g, g2 in zip(grads, grads2))
+
+
+def _boolean_indexed_loss(out, t, k, a, w):
+    """The loss as it was before it became masked sums: kind and angle computed on the known text px only, picked out
+    by boolean indexing (whose backward mps can't run deterministically)."""
+    lt = (F.binary_cross_entropy_with_logits(out[:, 0], t, reduction="none") * w).sum() / w.sum().clamp(min=1)
+    m = (t > 0) & (w > 0)
+    lk = F.cross_entropy(out[:, 1:5].permute(0, 2, 3, 1)[m], k[m])
+    cs = out[:, 5:7].permute(0, 2, 3, 1)[m]
+    rad = torch.deg2rad(a[m])
+    la = (1 - (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)).mean()
+    return lt + train.KIND_WEIGHT * lk + train.ANGLE_WEIGHT * la
+
+
+def test_masked_loss_equals_the_boolean_indexed_loss_even_where_the_direction_output_is_zero():
+    g = torch.Generator().manual_seed(0)
+    n, h, w_ = 3, 12, 10
+    t = (torch.rand(n, h, w_, generator=g) < 0.4).double()
+    w = (torch.rand(n, h, w_, generator=g) < 0.7).double()
+    k = torch.where(t > 0, torch.randint(0, 4, (n, h, w_), generator=g), torch.full((n, h, w_), data.NO_KIND))
+    a = torch.where(t > 0, torch.randint(-180, 180, (n, h, w_), generator=g).double(), torch.zeros(n, h, w_).double())
+    out = torch.randn(n, model.OUTPUTS, h, w_, generator=g, dtype=torch.float64)
+    off = ~((t > 0) & (w > 0))
+    out[:, 5:7] = torch.where(off[:, None], 0.0, out[:, 5:7])     # (cos, sin) exactly (0, 0) off the known text
+    grads = []
+    for fn in (lambda o: train.loss_fn(o, t, k, a, w)[0], lambda o: _boolean_indexed_loss(o, t, k, a, w)):
+        o = out.clone().requires_grad_(True)
+        loss = fn(o)
+        loss.backward()
+        grads.append((loss.detach(), o.grad))
+    (masked, g_masked), (indexed, g_indexed) = grads
+    assert torch.isfinite(masked) and torch.isfinite(g_masked).all()
+    assert torch.allclose(masked, indexed, rtol=1e-12, atol=0)
+    assert torch.allclose(g_masked, g_indexed, rtol=1e-10, atol=1e-15)
+
+
+def test_fit_stops_at_the_first_loss_that_is_not_finite(sheet, small_crops, monkeypatch):
+    t = data.sheet_targets(sheet, "ne")
+    real, seen = train.loss_fn, []
+
+    def loss_fn(*args):
+        loss, parts = real(*args)
+        seen.append(parts)
+        return (loss * float("nan"), (float("nan"),) * 3) if len(seen) == 2 else (loss, parts)
+
+    monkeypatch.setattr(train, "loss_fn", loss_fn)
+    with pytest.raises(FloatingPointError, match="iteration 2"):
+        train.fit([t], iterations=5, device="cpu", seed=0)
+    assert len(seen) == 2
+
+
+def _gpu_taken(lock) -> bool:
+    """Whether a turn holds the GPU's lock file: tried without waiting, from an open of its own."""
+    with open(lock, "a") as f:
+        try:
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(f, fcntl.LOCK_UN)
+        return False
+
+
+def test_one_user_at_a_time_has_the_gpu(tmp_path, monkeypatch):
+    lock = tmp_path / "mps.lock"
+    monkeypatch.setattr(train, "MPS_LOCK", lock)
+    order = []
+
+    def second():
+        with train.gpu_turn("mps"):
+            order.append("second's turn")
+
+    with train.gpu_turn("mps"):
+        assert _gpu_taken(lock)
+        waiting = threading.Thread(target=second)
+        waiting.start()
+        waiting.join(0.5)
+        order.append("first's turn ends")
+    waiting.join(10)
+    assert order == ["first's turn ends", "second's turn"] and not _gpu_taken(lock)
+    with train.gpu_turn("cpu"):            # the CPU takes no turn
+        assert not _gpu_taken(lock)
+
+
+def test_training_and_scoring_run_inside_the_devices_gpu_turn(sheet, small_crops, monkeypatch, tmp_path):
+    held = []
+
+    @contextlib.contextmanager
+    def turn(device):
+        held.append(device)
+        yield
+        held.append(None)
+
+    def inside(fn):
+        def wrapped(*args):
+            calls.append(held[-1:] == ["cpu"])
+            return fn(*args)
+        return wrapped
+
+    monkeypatch.setattr(train, "gpu_turn", turn)
+    calls = []
+    monkeypatch.setattr(train, "loss_fn", inside(train.loss_fn))
+    net = train.fit([data.sheet_targets(sheet, "ne")], iterations=2, device="cpu", seed=0)
+    assert held == ["cpu", None] and calls == [True, True]
+    monkeypatch.setattr(paths, "SOLVER_DIR", tmp_path / "solver")
+    paths.text_dir("ne").mkdir(parents=True)
+    torch.save({"state_dict": net.state_dict()}, paths.text_dir("ne") / "model.pt")
+    calls = []
+    monkeypatch.setattr(predict, "chance", inside(predict.chance))
+    predict.predict_sheets("ne", device="cpu")
+    assert held == ["cpu", None, "cpu", None] and calls == [True]
 
 
 def test_district_lines_are_borders_between_known_different_codes():
