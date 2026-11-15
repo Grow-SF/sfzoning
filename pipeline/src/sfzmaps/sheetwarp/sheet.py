@@ -16,8 +16,9 @@ from sfzmaps.transform import SheetTransform
 
 PLACED_FILES = ("page.png", "page.json", "transform.json", "refine.json", "blocks_px.geojson", "warped.tif",
                 "warped.footprint.geojson")
-EXACT_DISTANCE_BELOW_PX = 2047.0     # round(d*d) of OpenCV's float32 distance d is the exact squared distance below
-                                     # 2048 px (2**22 px^2); 1 px less, so one just over can't pass for one under
+EXACT_DISTANCE_BELOW_PX = 512.0      # round(d*d) of OpenCV's float32 distance d is the exact squared distance below this:
+                                     # OpenCV's float32 error differs by platform (x86 vs ARM), and the room to round
+                                     # right shrinks with d*d; at 512 px even an error of many float32 ulps rounds right
 
 
 class NothingToFit(Exception):
