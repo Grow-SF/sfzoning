@@ -226,7 +226,29 @@ def test_the_code_the_warp_runs_is_pinned():
 
 def test_the_versions_that_change_the_numbers_are_pinned():
     assert set(run.numeric_versions()) == {"torch", "numpy", "scipy", "opencv-python-headless", "shapely",
-                                           "scikit-image", "gdal"}
+                                           "scikit-image", "gdal", "fit device", "macos"}
+
+
+def test_the_versions_name_the_device_the_fits_run_on_and_the_macos(monkeypatch):
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "cpu")
+    monkeypatch.setattr(run.platform, "mac_ver", lambda: ("26.1", ("", "", ""), ""))
+    assert run.numeric_versions()["fit device"] == "cpu" and run.numeric_versions()["macos"] == "26.1"
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "mps")
+    monkeypatch.setattr(run.platform, "mac_ver", lambda: ("", ("", "", ""), ""))
+    assert run.numeric_versions()["fit device"] == "mps" and run.numeric_versions()["macos"] == ""
+
+
+def test_a_sheet_fitted_on_another_device_is_redone_and_scores_record_the_device(world, monkeypatch):
+    calls = []
+    monkeypatch.setattr(run, "fit_sheet", _fake_fit(calls))
+    monkeypatch.setattr(run.apply, "warp_with_correction", _fake_warp)
+    monkeypatch.setattr(run, "numeric_versions", lambda: {"fit device": "cpu"})
+    monkeypatch.setenv("SFZMAPS_WARP_DEVICE", "cpu")
+    assert run.correct_sheet("s", "a") == "corrected (first)"
+    assert json.loads((run.OUT / "s" / "a" / "scores.json").read_text())["device"] == "cpu"
+    assert run.correct_sheet("s", "a") == "skipped"
+    monkeypatch.setattr(run, "numeric_versions", lambda: {"fit device": "mps"})
+    assert run.correct_sheet("s", "a") == "corrected (first)"
 
 
 def test_a_new_version_of_a_library_the_fits_compute_with_redoes_the_sheet(world, monkeypatch):

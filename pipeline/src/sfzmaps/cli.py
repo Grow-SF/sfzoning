@@ -784,7 +784,7 @@ def review(
 @app.command()
 def warp(
     series: list[str] = typer.Argument(None, help="Only these series (default: every series with placed sheets)."),
-    jobs: int = typer.Option(3, "--jobs", "-j", help="Sheets fitted at once."),
+    jobs: int = typer.Option(6, "--jobs", "-j", help="Sheets fitted at once."),
     force: bool = typer.Option(False, "--force", help="Correct sheets again even when their inputs are unchanged."),
     system_tools: bool = typer.Option(False, "--system-tools", envvar=SYSTEM_TOOLS_ENV,
                                       help="Warp with tools that aren't from the pixi environment (not recommended)."),

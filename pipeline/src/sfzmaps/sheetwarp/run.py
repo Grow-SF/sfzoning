@@ -9,6 +9,7 @@ import functools
 import json
 import logging
 import multiprocessing
+import platform
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from importlib.metadata import version
@@ -19,6 +20,7 @@ import numpy as np
 from sfzmaps import config, fresh
 from sfzmaps.inputs import page_patch_path
 from sfzmaps.sheetwarp import apply, scores, targets
+from sfzmaps.sheetwarp.device import fit_device
 from sfzmaps.sheetwarp import first as first_fit
 from sfzmaps.sheetwarp import probabilistic as probabilistic_fit
 from sfzmaps.sheetwarp.sheet import PLACED_FILES, NothingToFit, Sheet, placed_sheets
@@ -67,14 +69,19 @@ def warp_code_files() -> list[Path]:
 
 
 @functools.cache
-def numeric_versions() -> dict[str, str]:
-    """The versions that change the numbers: those of NUMERIC_PACKAGES, and the GDAL of the gdalwarp on PATH (the
-    one the warp runs)."""
+def _library_versions() -> dict[str, str]:
+    """The versions of NUMERIC_PACKAGES, and the GDAL of the gdalwarp on PATH (the one the warp runs)."""
     try:
         gdal = subprocess.run(["gdalwarp", "--version"], capture_output=True, text=True, check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         gdal = "no gdalwarp"
     return {**{p: version(p) for p in NUMERIC_PACKAGES}, "gdal": gdal}
+
+
+def numeric_versions() -> dict[str, str]:
+    """What changes the numbers: the library versions, the device the fits run on (the GPU and the CPU round
+    differently, each the same every run) and the macOS version (Metal changes with it; empty elsewhere)."""
+    return {**_library_versions(), "fit device": fit_device().type, "macos": platform.mac_ver()[0]}
 
 
 def _freshness_inputs(sheet: Sheet) -> list[Path]:
@@ -138,7 +145,7 @@ def correct_sheet(series: str, name: str, force: bool = False) -> str:
         fresh.record(placement, read, versions)
         return f"uncorrected: {e}"
     correction.save(out / "correction.npz", kind=kind)
-    (out / "scores.json").write_text(json.dumps({**s, "chosen": kind, **_placement_check(sheet)}, indent=1))
+    (out / "scores.json").write_text(json.dumps({**s, "chosen": kind, "device": fit_device().type, **_placement_check(sheet)}, indent=1))
     apply.warp_with_correction(sheet, correction, out)
     placement.write_text(json.dumps({**today, "correction": {"file": "correction.npz"}}))
     fresh.record(placement, read, versions)
@@ -151,7 +158,7 @@ def _log_to_stderr(level: int) -> None:
     logging.basicConfig(level=level, format="%(message)s")
 
 
-def correct_series(series: str, jobs: int = 3, force: bool = False) -> dict[str, str]:
+def correct_series(series: str, jobs: int = 6, force: bool = False) -> dict[str, str]:
     """Every placed sheet of the series, `jobs` at a time in worker processes (each fit sets its own thread count);
     name -> result.  Raises after every sheet has finished if any raised, naming them."""
     names = placed_sheets(series)
