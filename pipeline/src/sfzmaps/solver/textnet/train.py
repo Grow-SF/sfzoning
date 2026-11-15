@@ -110,14 +110,14 @@ def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor
     """The loss of a batch (see the module) and its three parts (text, kind, angle).  Px with weight `w` 0 add
     nothing to it."""
     lt = (F.binary_cross_entropy_with_logits(out[:, 0], t, reduction="none") * w).sum() / w.sum().clamp(min=1)
-    m = (t > 0) & (w > 0)
-    if m.any():
-        lk = F.cross_entropy(out[:, 1:5].permute(0, 2, 3, 1)[m], k[m])
-        cs = out[:, 5:7].permute(0, 2, 3, 1)[m]
-        rad = torch.deg2rad(a[m])
-        la = (1 - (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)).mean()
-    else:
-        lk = la = out.sum() * 0
+    # Masked sums, not boolean indexing: the backward of indexing has no deterministic kernel on mps.
+    m = ((t > 0) & (w > 0)).float()
+    n = m.sum().clamp(min=1)
+    lk = (F.cross_entropy(out[:, 1:5], torch.where(m > 0, k, torch.zeros_like(k)), reduction="none") * m).sum() / n
+    cs = out[:, 5:7]
+    rad = torch.deg2rad(a)
+    cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
+    la = ((1 - cosine) * m).sum() / n
     return lt + KIND_WEIGHT * lk + ANGLE_WEIGHT * la, (lt.item(), lk.item(), la.item())
 
 

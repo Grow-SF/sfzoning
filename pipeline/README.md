@@ -523,6 +523,8 @@ the share of text ink found, Terra's words found by kind, pieces of text found w
 look), and the share of ink on the table's district lines (borders between lots whose known codes differ, read on
 the grid, away from every box) called text.
 
+The detector trains on `mps` where there is one (else `cpu`; `--device` overrides): two 200-step runs on `mps` gave bit-identical weights and predicted chance (max difference 0), at 0.39 s a step against 3.1 s on `cpu` (about 52 min against 6.9 h for 8,000 steps), once the loss avoided boolean-mask indexing, whose backward `mps` has no deterministic kernel for (`index_put_with_accumulate_mps`).
+
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
 ## Where outputs land
