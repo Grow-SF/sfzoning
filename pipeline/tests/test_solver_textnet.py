@@ -182,7 +182,10 @@ def test_text_stages_depend_on_the_detector_code_not_on_the_prints_code():
         st = table[f"solver-text-{q}"]
         deps = build.stage_deps(st)
         assert {"src/sfzmaps/solver/textnet/train.py", "src/sfzmaps/solver/textnet/predict.py",
-                "src/sfzmaps/solver/textnet/evaluate.py", "data/solver/prints", "data/solver/lots"} <= set(deps)
-        # hours of training must not rerun for a change to the prints' code or the model client
+                "src/sfzmaps/solver/textnet/evaluate.py", "data/solver/prints/terra_boxes.json",
+                "data/solver/lots"} <= set(deps)
+        # hours of training must not rerun for a change to the prints' code, the model client, or the prints'
+        # other files (prints.parquet, summary.json): of the prints' output only the Terra boxes are read
         assert not any(d.endswith(("solver/prints.py", "/llm.py", "/cli.py")) for d in deps)
+        assert "data/solver/prints" not in deps
         assert st.upstream == ("solver-prints",) and build.stage_outs(st) == [f"data/solver/text-{q}"]

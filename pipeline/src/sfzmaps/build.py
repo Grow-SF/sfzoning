@@ -127,8 +127,10 @@ def stages() -> dict[str, Stage]:
     for q in ("nw", "ne", "sw", "se"):
         out[f"solver-text-{q}"] = Stage(
             f"solver-text-{q}", (), (), ("solver-prints",), command=("solver", "text", q),
-            reads=("data/work/2000-digital-zoning", "data/warp/2000-digital-zoning", "data/solver/prints",
-                   "data/solver/lots", "saved-reads/answers/experiments-2000/text-positions"),
+            # of the prints, only the Terra boxes: a change to prints.parquet must not retrain the detectors
+            reads=("data/work/2000-digital-zoning", "data/warp/2000-digital-zoning",
+                   "data/solver/prints/terra_boxes.json", "data/solver/lots",
+                   "saved-reads/answers/experiments-2000/text-positions"),
             writes=(f"data/solver/text-{q}",),
             code=("sfzmaps.solver.textnet.train", "sfzmaps.solver.textnet.predict", "sfzmaps.solver.textnet.evaluate"))
     out["shared"] = Stage("shared", (), (), old, frozen=True)

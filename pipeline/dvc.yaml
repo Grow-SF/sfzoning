@@ -1744,7 +1744,7 @@ stages:
       - uv.lock
       - data/work/2000-digital-zoning
       - data/warp/2000-digital-zoning
-      - data/solver/prints
+      - data/solver/prints/terra_boxes.json
       - data/solver/lots
       - saved-reads/answers/experiments-2000/text-positions
     outs:
@@ -1775,7 +1775,7 @@ stages:
       - uv.lock
       - data/work/2000-digital-zoning
       - data/warp/2000-digital-zoning
-      - data/solver/prints
+      - data/solver/prints/terra_boxes.json
       - data/solver/lots
       - saved-reads/answers/experiments-2000/text-positions
     outs:
@@ -1806,7 +1806,7 @@ stages:
       - uv.lock
       - data/work/2000-digital-zoning
       - data/warp/2000-digital-zoning
-      - data/solver/prints
+      - data/solver/prints/terra_boxes.json
       - data/solver/lots
       - saved-reads/answers/experiments-2000/text-positions
     outs:
@@ -1837,7 +1837,7 @@ stages:
       - uv.lock
       - data/work/2000-digital-zoning
       - data/warp/2000-digital-zoning
-      - data/solver/prints
+      - data/solver/prints/terra_boxes.json
       - data/solver/lots
       - saved-reads/answers/experiments-2000/text-positions
     outs:
