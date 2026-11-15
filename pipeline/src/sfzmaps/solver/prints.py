@@ -180,15 +180,6 @@ def _row(page_x, page_y, kind, box=None, terra_code="", sol_code="", sol_confide
             "recheck_found": False}
 
 
-def sol_labels(sheet: str) -> list[dict]:
-    """Sol's labels of a sheet: the "labels" of data/work/<series>/<sheet>/district_labels.json (a declared input of
-    the stage, so a missing file stops it)."""
-    f = config.WORK_DIR / paths.SERIES / sheet / "district_labels.json"
-    if not f.is_file():
-        raise FileNotFoundError(f"no Sol labels for {sheet}: can't read {f}")
-    return json.loads(f.read_text())["labels"]
-
-
 def match_prints(boxes: list[dict], labels: list[dict]) -> list[dict]:
     """One sheet's prints in page px from its Terra boxes (`terra_boxes`) and Sol's labels (district_labels.json's
     "labels"): each zoning-code box, with the read of the Sol point inside it nearest its centre (kind 0) or none
@@ -416,7 +407,8 @@ def build_prints() -> dict:
         footprint = shapely.from_geojson((warp / "warped.footprint.geojson").read_text())
         boxes[name] = terra_boxes(name, terra)
         placed[name] = transform, footprint
-        rows += _place(match_prints(boxes[name], sol_labels(name)), name, transform, footprint, lot_rasters, mapped)
+        rows += _place(match_prints(boxes[name], saved.sol_labels(name)), name, transform, footprint, lot_rasters,
+                        mapped)
     codes_known = set(lot_rasters.codes[lot_rasters.known]) | {p["sol_code"] for p in rows if p["sol_code"]}
     new = []
     for name in names:

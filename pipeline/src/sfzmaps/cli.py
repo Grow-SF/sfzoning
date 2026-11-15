@@ -957,3 +957,37 @@ def solver_prints() -> None:
     for read, c in s["saved_answers"].items():
         typer.echo(f"  {read}: {c['found']:,} of {c['asked']:,} keys found ({c['missing']:,} missing); "
                    f"{c['unused']:,} of {c['saved']:,} saved answers asked by no print")
+
+
+@solver_app.command("text")
+def solver_text(
+    quarter: str = typer.Argument(..., help="The quarter held out: nw, ne, sw or se."),
+    iterations: int = typer.Option(None, "--iterations", help="Training steps (default 8,000)."),
+    device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where available, else cpu)."),
+) -> None:
+    """Train the text detector with one quarter of the city held out, score every sheet's page with it and evaluate
+    it on that quarter: data/solver/text-<quarter>/model.pt, chance/<sheet>.png and evaluation.json."""
+    import logging
+    import time
+
+    from sfzmaps.solver import paths
+    from sfzmaps.solver.textnet import evaluate, predict, train
+    if quarter not in paths.QUARTERS:
+        raise typer.BadParameter(f"one of {', '.join(paths.QUARTERS)}", param_hint="QUARTER")
+    if device not in (None, "cpu", "mps"):
+        raise typer.BadParameter("cpu or mps", param_hint="--device")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    times = {}
+    t0 = time.perf_counter()
+    train.train_quarter(quarter, iterations=iterations or train.ITERATIONS, device=device)
+    times["train"], t0 = time.perf_counter() - t0, time.perf_counter()
+    predict.predict_sheets(quarter, device=device)
+    times["predict"], t0 = time.perf_counter() - t0, time.perf_counter()
+    s = evaluate.evaluate(quarter)
+    times["evaluate"] = time.perf_counter() - t0
+    words = "; ".join(f"{k} {v['found']:,}/{v['of']:,}" for k, v in s["words"].items())
+    typer.echo(f"{quarter} held out: AUC {s['auc']:.4f}, log loss {s['log_loss']:.4f}, text ink found "
+               f"{s['text_ink_found']:.1%}; words found: {words}; new text pieces {s['new_text_pieces']:,}; "
+               f"district-line ink called text {s['district_lines']['called_text']:.2%} "
+               f"(of {s['district_lines']['ink_px']:,} px)")
+    typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in times.items()))

@@ -501,6 +501,28 @@ keys found the stage stops. It writes `data/solver/prints/prints.parquet` (one r
 in `solver/prints.py`), `terra_boxes.json` (every sheet's decoded Terra boxes, every kind, page px) and
 `summary.json` (prints by kind; keys asked, found and missing per read). The same inputs give the same bytes.
 
+**The text detector** (`sfzmaps solver text Q [--iterations N] [--device cpu|mps]`, stages `solver-text-nw`,
+`-ne`, `-sw` and `-se`, after `solver-prints`) scores every px of every sheet's page as printed text or not, so the
+walls can weigh ink by how likely it is to be a district line rather than lettering. It is a small U-Net
+(`solver/textnet/`: width 24, 5 levels, 7 outputs: text, 4 kinds, the reading direction's cosine and sine) over the
+ink mask (`page.png` < 128) of each sheet's own page, unwarped. It learns only from Terra's boxes
+(`data/solver/prints/terra_boxes.json`, every kind, each drawn as the word's rotated rectangle in page px). Text Terra
+may have missed is taught neither way: the boxes of the other text passes
+(`saved-reads/answers/experiments-2000/text-positions/`) and 30-px discs at Sol's label points, outside every Terra
+box. Each quarter's model holds that quarter out: a page px's quarter is `lots.quarter_of` of its map point through
+the sheet's corrected placement (evaluated every 32 px, bilinear between); held-out px carry no loss and no crop
+centres on one. Training: 8,000 steps of 12 crops of 320 px (half centred on text, the rest on any ink; each scaled
+by 0.6–1.6 and turned by quarter turns, the reading angle with it); loss = text cross-entropy + 0.5 × kind
+cross-entropy + 0.5 × (1 − cosine) of the reading direction; AdamW at 2e-3 with a one-cycle schedule. Every draw comes
+from one seeded numpy generator and the weights from seeded torch, with deterministic algorithms on 4 threads. The
+model then scores every sheet's page in 1,024-px tiles seen with 64 px of context, and is evaluated on its held-out
+quarter, on the map only (inside the sheet's warped footprint: the legend, alike on every sheet, is left out). It
+writes `data/solver/text-<Q>/model.pt` (the weights, with the iterations, device and seed), `chance/<sheet>.png`
+(uint8, the chance of text × 255, page px) and `evaluation.json`: AUC and log loss of text ink against other ink,
+the share of text ink found, Terra's words found by kind, pieces of text found where Terra drew no box (listed for a
+look), and the share of ink on the table's district lines (borders between lots whose known codes differ, read on
+the grid, away from every box) called text.
+
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
 ## Where outputs land

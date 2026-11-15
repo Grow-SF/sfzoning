@@ -1,0 +1,188 @@
+import gzip
+import json
+
+import cv2
+import numpy as np
+import pytest
+import torch
+
+from sfzmaps import config
+from sfzmaps.solver import lots, paths
+from sfzmaps.solver.textnet import data, evaluate, model, train
+
+SHEET = "2000-digital-zoning-p01"
+SIZE = 640
+SPLIT_PX = 319.5          # the quarter split, page px both ways: px 0-319 west / north, 320 on east / south
+WORD_A = [100, 100, 180, 130]     # a zoning code read left to right, in nw
+WORD_B = [450, 80, 470, 200]      # a street name read bottom to top, in ne
+OTHER_NEAR_A = [160, 110, 230, 125]   # another pass's box, half on word A
+OTHER_ALONE = [100, 400, 160, 430]    # another pass's box on no Terra box, in sw
+SOL_IN_A = (175, 115)             # a Sol label point inside word A's box
+SOL_ALONE = (500, 500)            # a Sol label point far from any box, in se
+
+
+def _page() -> np.ndarray:
+    """The synthetic page: white paper, word A's letters and word B's (drawn turned a quarter), a stray mark."""
+    pg = np.full((SIZE, SIZE), 255, np.uint8)
+    cv2.putText(pg, "RH-1", (102, 128), cv2.FONT_HERSHEY_SIMPLEX, 0.9, 0, 2)
+    turned = np.full((20, 120), 255, np.uint8)
+    cv2.putText(turned, "ELM ST", (2, 17), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 2)
+    pg[80:200, 450:470] = np.rot90(turned)           # reads bottom to top
+    pg[410:420, 110:150] = 0                          # ink under the other pass's lone box
+    cv2.line(pg, (0, 300), (639, 300), 0, 2)          # a printed line: ink that is not text
+    return pg
+
+
+def _transform_json() -> dict:
+    """An affine placement, 4 ft per page px, north up, with the quarter split at page px (SPLIT_PX, SPLIT_PX)."""
+    sx, sy = lots.QUARTER_SPLIT
+    corners = [(0.0, 0.0), (640.0, 0.0), (640.0, 640.0), (0.0, 640.0)]
+    gcps = [{"px": px, "py": py, "wx": sx + 4 * (px - SPLIT_PX), "wy": sy - 4 * (py - SPLIT_PX), "source": "manual"}
+            for px, py in corners]
+    return {"smoothing": 1.0, "gcps": gcps}
+
+
+def _terra(text, box, kind, angle):
+    return {"text": text, "kind": kind, "box": box, "angle_deg": angle, "edge": 100}
+
+
+@pytest.fixture
+def sheet(tmp_path, monkeypatch):
+    """One synthetic sheet laid out as the stage reads it: its page, Sol's labels, its corrected placement, Terra's
+    boxes and one other pass's boxes."""
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(paths, "PRINTS_DIR", tmp_path / "prints")
+    monkeypatch.setattr(paths, "SAVED_ANSWERS", tmp_path / "answers")
+    work = tmp_path / "work" / paths.SERIES / SHEET
+    work.mkdir(parents=True)
+    cv2.imwrite(str(work / "page.png"), _page())
+    labels = [{"code": "RH-1", "kind": "use", "x": SOL_IN_A[0], "y": SOL_IN_A[1]},
+              {"code": "RH-2", "kind": "use", "x": SOL_ALONE[0], "y": SOL_ALONE[1]}]
+    (work / "district_labels.json").write_text(json.dumps({"labels": labels}))
+    warp = tmp_path / "data" / "warp" / paths.SERIES / SHEET
+    warp.mkdir(parents=True)
+    (warp / "transform.json").write_text(json.dumps(_transform_json()))
+    paths.PRINTS_DIR.mkdir()
+    terra = [_terra("RH-1", WORD_A, "zoning code", 0), _terra("ELM ST", WORD_B, "street name", 90)]
+    (paths.PRINTS_DIR / "terra_boxes.json").write_text(json.dumps({SHEET: terra, "another-sheet": []}))
+    other = tmp_path / "answers" / data.OTHER_PASSES
+    other.mkdir(parents=True)
+    with gzip.open(other / "some-pass.jsonl.gz", "wt") as f:
+        for box in (OTHER_NEAR_A, OTHER_ALONE):
+            f.write(json.dumps({"sheet": SHEET, "text": "x", "kind": "other", "box": box, "angle_deg": 0}) + "\n")
+        f.write(json.dumps({"sheet": "another-sheet", "text": "x", "kind": "other", "box": [300, 300, 340, 340],
+                            "angle_deg": 0}) + "\n")
+    return SHEET
+
+
+def test_targets_mark_boxes_and_unknowns(sheet):
+    t = data.sheet_targets(sheet, "ne")
+    assert t.ink.shape == (SIZE, SIZE) and t.ink[300, 10] and not t.ink[5, 5]
+    # Terra's boxes are text, with their kind and reading angle
+    assert t.text[105:126, 105:176].all() and t.text[85:196, 452:469].all()
+    assert t.text.sum() == 81 * 31 + 21 * 121                 # the two boxes, their edges included, nothing else
+    assert (t.kind[105, 105], t.kind[100, 455]) == (data.KINDS["zoning code"], data.KINDS["street name"])
+    assert t.kind[50, 50] == data.NO_KIND
+    assert (t.angle[115, 140], t.angle[150, 460]) == (0, 90)
+    # unknown: other passes' boxes and discs at Sol's points, minus every Terra box; not another sheet's boxes
+    assert t.unknown[115, 200] and not t.unknown[115, 170]       # the other box beyond word A, and inside it
+    assert t.unknown[415, 130] and t.unknown[500, 529] and not t.unknown[500, 532]
+    assert t.unknown[140, 175] and not t.unknown[115, 150]       # Sol's point in A: its disc is unknown only outside A
+    assert not t.unknown[320, 320]
+    # held out: the ne quarter (rows 0-319, columns 320-639) by the placement and the split
+    assert t.heldout[:320, 320:].all() and t.heldout.sum() == 320 * 320
+    assert not t.known[:320, 320:].any()
+    assert np.array_equal(t.known, ~t.unknown & ~t.heldout)
+    # crops centre on ink or text outside the held-out quarter
+    assert t.centre_ok[300, 10] and t.centre_ok[115, 140] and not t.centre_ok[150, 460] and not t.centre_ok[300, 400]
+    assert not t.centre_ok[50, 50]
+
+
+def test_model_output_shape():
+    net = model.TextNet()
+    out = net(torch.zeros(2, 1, 64, 96))
+    assert out.shape == (2, model.OUTPUTS, 64, 96) and model.OUTPUTS == 7
+    assert sum(isinstance(m, torch.nn.Conv2d) for m in net.modules()) == 2 * (5 + 4) + 1
+
+
+@pytest.fixture
+def small_crops(monkeypatch):
+    """Smaller batches than the real ones, so CPU tests stay quick; nothing else changes."""
+    monkeypatch.setattr(train, "CROP", 64)
+    monkeypatch.setattr(train, "BATCH", 4)
+
+
+def test_three_iterations_twice_give_identical_weights_on_cpu(sheet, small_crops):
+    t = data.sheet_targets(sheet, "ne")
+    first = train.fit([t], iterations=3, device="cpu", seed=0).state_dict()
+    second = train.fit([t], iterations=3, device="cpu", seed=0).state_dict()
+    torch.manual_seed(0)
+    untrained = model.TextNet().state_dict()
+    assert first.keys() == second.keys()
+    assert all(torch.equal(first[k], second[k]) for k in first)
+    assert not all(torch.equal(first[k], untrained[k]) for k in first)
+
+
+def test_crop_turns_the_reading_angle_with_the_picture(sheet, small_crops):
+    t = data.sheet_targets(sheet, "ne")
+    flat = train.crop(t, 140, 460, scale=1.0, turns=0)
+    turned = train.crop(t, 140, 460, scale=1.0, turns=1)
+    assert np.array_equal(turned["ink"], np.rot90(flat["ink"]))
+    on = turned["text"] > 0
+    assert on.any() and (turned["angle"][on] == -180).all()      # 90 + 90 = 180, read in [-180, 180)
+    assert (flat["angle"][flat["text"] > 0] == 90).all()
+
+
+def _loss_and_grads(net, parts):
+    x, t, k, a, w = train.to_tensors([parts], "cpu")
+    net.zero_grad()
+    loss, _ = train.loss_fn(net(x), t, k, a, w)
+    loss.backward()
+    return loss.item(), [p.grad.clone() for p in net.parameters()]
+
+
+def test_heldout_pixels_carry_no_loss(sheet, small_crops):
+    t = data.sheet_targets(sheet, "ne")
+    torch.manual_seed(0)
+    net = model.TextNet()
+    # a crop made only of the held-out quarter, on word B: no loss, no gradient
+    inside = train.crop(t, 140, 460, scale=1.0, turns=0)
+    assert not inside["known"].any() and inside["text"].any()
+    loss, grads = _loss_and_grads(net, inside)
+    assert loss == 0 and all((g == 0).all() for g in grads)
+    # a crop across the split: changing the held-out pixels' targets changes nothing
+    across = train.crop(t, 200, 330, scale=1.0, turns=0)
+    held = ~across["known"] & ~t.unknown[168:232, 298:362]
+    assert held.any() and across["known"].any()
+    loss, grads = _loss_and_grads(net, across)
+    flipped = {**across, "text": np.where(held, 1 - across["text"], across["text"]),
+               "kind": np.where(held, 1, across["kind"]), "angle": np.where(held, 45, across["angle"])}
+    loss2, grads2 = _loss_and_grads(net, flipped)
+    assert loss2 == loss and all(torch.equal(g, g2) for g, g2 in zip(grads, grads2))
+
+
+def test_district_lines_are_borders_between_known_different_codes():
+    grown = np.array([[0, 0, 1, 1, 2, 2],
+                      [0, 0, 1, 1, 2, 2],
+                      [3, 3, 3, 3, 3, 3]], np.int32)
+    codes = np.array(["RH-1", "RH-2", "RH-2", ""])          # lot 3's code is not known
+    known = np.array([True, True, True, False])
+    lines = evaluate.district_line_px(grown, codes, known)
+    # one px per crack between lots of different known codes: the px right of (or below) the crack
+    expected = np.zeros(grown.shape, bool)
+    expected[0:2, 2] = True                                  # lots 0 | 1; 1 | 2 share RH-2; 3 is not known
+    assert np.array_equal(lines, expected)
+
+
+def test_text_stages_depend_on_the_detector_code_not_on_the_prints_code():
+    from sfzmaps import build
+    table = build.stages()
+    for q in paths.QUARTERS:
+        st = table[f"solver-text-{q}"]
+        deps = build.stage_deps(st)
+        assert {"src/sfzmaps/solver/textnet/train.py", "src/sfzmaps/solver/textnet/predict.py",
+                "src/sfzmaps/solver/textnet/evaluate.py", "data/solver/prints", "data/solver/lots"} <= set(deps)
+        # hours of training must not rerun for a change to the prints' code or the model client
+        assert not any(d.endswith(("solver/prints.py", "/llm.py", "/cli.py")) for d in deps)
+        assert st.upstream == ("solver-prints",) and build.stage_outs(st) == [f"data/solver/text-{q}"]

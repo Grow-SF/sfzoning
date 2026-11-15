@@ -216,11 +216,11 @@ def test_third_read_key_ignores_the_live_model_settings(monkeypatch):
 def test_missing_sol_labels_stop_naming_the_file(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WORK_DIR", tmp_path)
     with pytest.raises(FileNotFoundError, match=f"{SHEET}/district_labels.json"):
-        prints.sol_labels(SHEET)
+        saved.sol_labels(SHEET)
     (tmp_path / prints.paths.SERIES / SHEET).mkdir(parents=True)
     (tmp_path / prints.paths.SERIES / SHEET / "district_labels.json").write_text(
         json.dumps({"labels": [_label("RH-1", 10, 20)]}))
-    assert prints.sol_labels(SHEET) == [_label("RH-1", 10, 20)]
+    assert saved.sol_labels(SHEET) == [_label("RH-1", 10, 20)]
 
 
 def test_saved_by_key_refuses_a_repeated_key(tmp_path, monkeypatch):

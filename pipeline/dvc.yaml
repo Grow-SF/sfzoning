@@ -1719,6 +1719,130 @@ stages:
     outs:
       - data/solver/prints:
           persist: true
+  solver-text-nw:
+    cmd: uv run --frozen sfzmaps stage solver-text-nw
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/evaluate.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/transform.py
+      - pyproject.toml
+      - uv.lock
+      - data/work/2000-digital-zoning
+      - data/warp/2000-digital-zoning
+      - data/solver/prints
+      - data/solver/lots
+      - saved-reads/answers/experiments-2000/text-positions
+    outs:
+      - data/solver/text-nw:
+          persist: true
+  solver-text-ne:
+    cmd: uv run --frozen sfzmaps stage solver-text-ne
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/evaluate.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/transform.py
+      - pyproject.toml
+      - uv.lock
+      - data/work/2000-digital-zoning
+      - data/warp/2000-digital-zoning
+      - data/solver/prints
+      - data/solver/lots
+      - saved-reads/answers/experiments-2000/text-positions
+    outs:
+      - data/solver/text-ne:
+          persist: true
+  solver-text-sw:
+    cmd: uv run --frozen sfzmaps stage solver-text-sw
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/evaluate.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/transform.py
+      - pyproject.toml
+      - uv.lock
+      - data/work/2000-digital-zoning
+      - data/warp/2000-digital-zoning
+      - data/solver/prints
+      - data/solver/lots
+      - saved-reads/answers/experiments-2000/text-positions
+    outs:
+      - data/solver/text-sw:
+          persist: true
+  solver-text-se:
+    cmd: uv run --frozen sfzmaps stage solver-text-se
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/evaluate.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/transform.py
+      - pyproject.toml
+      - uv.lock
+      - data/work/2000-digital-zoning
+      - data/warp/2000-digital-zoning
+      - data/solver/prints
+      - data/solver/lots
+      - saved-reads/answers/experiments-2000/text-positions
+    outs:
+      - data/solver/text-se:
+          persist: true
   shared:
     cmd: uv run --frozen sfzmaps stage shared
     frozen: true

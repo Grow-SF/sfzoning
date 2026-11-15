@@ -1,9 +1,11 @@
 """The saved vision answers (`pipeline/saved-reads/answers/`, see its README): one gzipped JSON line per answer, read
-by answer file, by sheet, or by the answer's cache key.  Nothing here asks a model."""
+by answer file, by sheet, or by the answer's cache key; and Sol's label points of each sheet, which the label stage
+keeps in data/work (`sol_labels`).  Nothing here asks a model."""
 import ast
 import gzip
 import json
 
+from sfzmaps import config
 from sfzmaps.solver import paths
 
 
@@ -41,3 +43,12 @@ def by_key(read: str) -> dict[str, dict]:
 def cache_key(key: str) -> str:
     """The saved `cache_key` of the answer whose `llm._key` is `key`: its file in the answer cache."""
     return f"llm/{key}.json"
+
+
+def sol_labels(sheet: str) -> list[dict]:
+    """Sol's labels of a sheet: the "labels" of data/work/<series>/<sheet>/district_labels.json (a declared input of
+    the stages that read it, so a missing file stops them)."""
+    f = config.WORK_DIR / paths.SERIES / sheet / "district_labels.json"
+    if not f.is_file():
+        raise FileNotFoundError(f"no Sol labels for {sheet}: can't read {f}")
+    return json.loads(f.read_text())["labels"]
