@@ -3,7 +3,6 @@ import math
 
 import numpy as np
 import pandas as pd
-import pytest
 from scipy.optimize import minimize
 
 from sfzmaps.solver import lots, paths, prints, trust
@@ -110,19 +109,8 @@ def _logistic_set(rng, n=400, k=5):
     return X, y
 
 
-def test_newton_fit_matches_sklearn_with_same_ridge():
-    linear_model = pytest.importorskip("sklearn.linear_model")
-    X, y = _logistic_set(np.random.default_rng(0))
-    for ridge in (1e-3, 1.0):
-        ours = trust.newton_fit(X, y, ridge)
-        # sklearn minimises C * sum(log loss) + |w|^2 / 2, the same optimum as sum(log loss) + ridge * |w|^2 / 2 at
-        # C = 1 / ridge; the base column is in X, so no separate (unpenalised) intercept
-        ref = linear_model.LogisticRegression(C=1 / ridge, fit_intercept=False, solver="newton-cholesky", tol=1e-12,
-                                              max_iter=1000).fit(X, y).coef_[0]
-        np.testing.assert_allclose(ours, ref, atol=1e-4)
-
-
-def test_newton_fit_reaches_the_ridge_optimum_per_weight():
+def test_newton_fit_matches_scipy_minimum_of_log_loss_with_per_weight_ridge():
+    # the ridges the trust fit uses (1e-3 and 1000) and one between, on different weights
     X, y = _logistic_set(np.random.default_rng(1))
     ridge = np.array([1e-3, 1000.0, 1e-3, 1000.0, 0.5, 1e-3])
 

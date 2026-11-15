@@ -9,16 +9,21 @@ and how sure they were, how the print sits (its height, in a street, a leader li
 prints found only by the turned pass, how far they are from another print, whether they are in a street and whether
 the code is a single letter (easy to find by accident).
 
-There is one fit per quarter of the city.  The fit that holds out quarter q learns only from readings whose lot has a
-known code in the April 2000 table as downloaded (`table.known_and_codes`; the by-eye corrections are never read) and
-lies outside q (`lots.quarter`, from the lot's centroid), so the trust of q's readings is a held-out guess.  The
-weights are found by Newton's method with a ridge on each weight (RIDGE, RIDGE_BY_FEATURE).
+There is one fit per quarter of the city.  The fit that holds out quarter q learns only from readings whose lot (the
+lot under the print's text, `lab_lot`) has a known code in the April 2000 table as downloaded
+(`table.known_and_codes`; the by-eye corrections are never read) and lies outside q.  A reading is held out by the
+quarter of that lot (`lots.quarter`, from the lot's centroid), not by the print's own position, so no fit learns
+from a code of a lot in its own quarter, and the trust of q's readings is a held-out guess.  The weights are found by
+Newton's method with a ridge on each weight (RIDGE, RIDGE_BY_FEATURE).
 
 Writes, under data/solver/labels/:
   readings_{q}.npz  for each quarter q (nw, ne, sw, se), every reading and its trust from the fit that held q out:
                       names        the code vocabulary (str): the table's known codes with Sol's and Terra's reads,
                                    sorted; then the third read's and the re-check's other codes, sorted; then the
-                                   turned pass's other codes, sorted
+                                   turned pass's other codes, sorted.  Every one is in `codes.canon`'s one spelling,
+                                   so the table's undashed spellings (NC1) and a print's overlay text after a
+                                   district ('NC-2 & FRANCISCO') join their district's name (118 names on the 2000
+                                   prints)
                       print_index  int64 per reading: the print's row in prints.parquet
                       code_index   int64 per reading: its code, an index into names
                       trust        float64 per reading: the fitted chance, at least TRUST_FLOOR
@@ -219,7 +224,8 @@ def ridges() -> np.ndarray:
 
 
 def training_rows(table: FeatureTable, q: str) -> np.ndarray:
-    """The readings the fit holding out quarter q learns from: a lot with a known code, outside q."""
+    """The readings the fit holding out quarter q learns from: the lot under the print's text has a known code and
+    is outside q (the lot's quarter, not the print's position)."""
     return table.known & (table.quarter != paths.QUARTERS.index(q))
 
 
