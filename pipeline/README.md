@@ -539,6 +539,34 @@ table and lies outside that quarter, by the lot's quarter, not the print's posit
 `code_index` into `names` and `trust`) and `trust.json` (each fit's weights and held-out log loss). The same inputs
 give the same bytes.
 
+**The labels** (`sfzmaps solver labels`, stage `solver-labels`, after `solver-prints`) are everything the solver
+knows about the prints and the ink around them, in `data/solver/labels/`: the trust above, then the street sides, the
+lot sizes and the strokes (`solver/labels_stage.py`). Nothing asks a model, and the same inputs give the same bytes.
+
+- **Street sides** (`solver/streetside.py`): a code printed on street ground also speaks, at a lower trust, for the
+  lot across the street. For each print with a lot under its text (side A), the nearest street centreline in
+  `data/ref/streets.parquet` gives the sides: a lot's side is where its nearest point to the print falls along the
+  centreline's normal (its direction from 5 ft before the print's foot to 5 ft after). Side B is the nearest lot
+  other than A on the other side, searched within 100 ft of the print, the reach doubling up to 3,200 ft. A
+  centreline is a freeway when its `st_type` is HWY or RAMP or its name is a numbered highway or interstate
+  (`^(HWY|I-)\s*\d`). Four rates, fitted once per held-out quarter on the uncorrected table, are how often the
+  table's code at side A, or at side B, is the print's top reading (its most trusted in `readings_<Q>.npz`), on
+  ordinary streets (`rA_st`, `rB_st`) and freeways (`rA_fw`, `rB_fw`). A print counts for a side when it is on street
+  ground and that side's lot has a known code outside the quarter, so no fit reads a code of its own quarter. It
+  writes `streetside_<Q>.npz` (per print `lotB`, `onst`, `isfw`, and the four rates).
+- **Lot size** (`solver/lotsize.py`): what a lot's size says about its code. Lots are binned by log area at
+  `arange(5, 14.01, 0.25)` (36 bins; smaller and larger lots join the end bins). Per code, each bin's count is
+  blended with half of each neighbour's (no wraparound), smoothed toward the overall size distribution with 36
+  pseudo-lots, and turned into log p(bin | code) − log p(bin): a code with no training lots carries no evidence. One
+  fit per held-out quarter, on the scored lots outside it with a known code in the uncorrected table. It writes
+  `lotsize.npz` (`codes`, `edges`, `PMI` [quarter, code, bin]).
+- **Strokes** (`solver/strokes.py`): the merged `ink.png`, raw (text and lines alike), thinned to centre lines
+  (`skeletonize`). Nodes are runs of centre-line px with other than two neighbours (ends and junctions); a stroke runs
+  between two nodes, or round a closed loop. Each keeps its path (map ft, at grid px centres), its width (twice the
+  distance to the paper, × 4 ft), its length and its end nodes' degree; a dead end shorter than its median width is
+  tagged a spur. It writes `strokes.npz` (`xy`, `w`, `off`, and per stroke `a`, `b`, `length`, `wmed`, `wiqr`,
+  `spur`, `dega`, `degb`). On the 2000 page: about 172,000 strokes and 3,240 miles, in about 25 s and 3 GB.
+
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
 ## Where outputs land

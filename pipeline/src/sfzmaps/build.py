@@ -133,6 +133,9 @@ def stages() -> dict[str, Stage]:
                    "saved-reads/answers/experiments-2000/text-positions"),
             writes=(f"data/solver/text-{q}",),
             code=("sfzmaps.solver.textnet.train", "sfzmaps.solver.textnet.predict", "sfzmaps.solver.textnet.evaluate"))
+    out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
+                                 reads=("data/solver/prints", "data/solver/lots", "data/solver/page", "data/ref"),
+                                 writes=("data/solver/labels",), code=("sfzmaps.solver.labels_stage",))
     out["shared"] = Stage("shared", (), (), old, frozen=True)
     return out
 

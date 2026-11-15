@@ -959,6 +959,24 @@ def solver_prints() -> None:
                    f"{c['unused']:,} of {c['saved']:,} saved answers asked by no print")
 
 
+@solver_app.command("labels")
+def solver_labels() -> None:
+    """Fit what the solver knows about the printed labels (no model is asked): data/solver/labels/readings_<q>.npz,
+    trust.json, streetside_<q>.npz, lotsize.npz and strokes.npz."""
+    from sfzmaps.solver import labels_stage
+    s = labels_stage.build_labels()
+    t, side, size, ink = s["trust"], s["streetside"], s["lotsize"], s["strokes"]
+    typer.echo(f"trust: {t['readings']:,} readings of {t['prints']:,} prints, {t['names']} names; held-out log loss "
+               + ", ".join(f"{q} {v['held_out_log_loss']:.4f}" for q, v in t["quarters"].items()))
+    typer.echo(f"street sides: {side['on_street']:,} prints on street ground ({side['by_freeway']} by a freeway), "
+               f"{side['with_side_b']:,} with a lot across; side A / B right on ordinary streets: "
+               + ", ".join(f"{q} {r['rA_st']:.3f} / {r['rB_st']:.3f}" for q, r in side["rates"].items()))
+    typer.echo(f"lot size: {size['codes']} codes; codes with no training lots: "
+               + ", ".join(f"{q} {n}" for q, n in size["codes_without_lots"].items()))
+    typer.echo(f"strokes: {ink['strokes']:,} ({ink['spurs']:,} spurs), {ink['nodes']:,} nodes, {ink['miles']:,} miles")
+    typer.echo("seconds: " + ", ".join(f"{k} {v}" for k, v in s["seconds"].items()))
+
+
 @solver_app.command("text")
 def solver_text(
     quarter: str = typer.Argument(..., help="The quarter held out: nw, ne, sw or se."),

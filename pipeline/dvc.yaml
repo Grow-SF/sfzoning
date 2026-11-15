@@ -1843,6 +1843,34 @@ stages:
     outs:
       - data/solver/text-se:
           persist: true
+  solver-labels:
+    cmd: uv run --frozen sfzmaps stage solver-labels
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/labels_stage.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/lotsize.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/transform.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/prints
+      - data/solver/lots
+      - data/solver/page
+      - data/ref
+    outs:
+      - data/solver/labels:
+          persist: true
   shared:
     cmd: uv run --frozen sfzmaps stage shared
     frozen: true
