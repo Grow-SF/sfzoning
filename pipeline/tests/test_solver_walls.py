@@ -1,13 +1,19 @@
 import json
+import shutil
 
+import cv2
+import geopandas as gpd
 import numpy as np
+import pytest
+import shapely
 from scipy import ndimage
 
 from sfzmaps import config
-from sfzmaps.solver import city, grid, lots, paths, strokes, wallevidence, walls
+from sfzmaps.solver import city, grid, lots, page, paths, strokes, textgrid, wallevidence, walls
 from sfzmaps.transform import GCP, SheetTransform
 
 LOT_PX = 15         # the synthetic lots are squares of 15 px (60 ft)
+SPLIT_COL, SPLIT_ROW = 5220, 5593   # the grid px holding grid.QUARTER_SPLIT (col 5220.2, row 5593.1)
 
 
 def _lots(lot: np.ndarray, codes, quarter=None) -> lots.Lots:
@@ -240,3 +246,295 @@ def test_closings_do_not_depend_on_the_number_of_workers():
     assert len(one["src"]) > 4
     for k in one:
         np.testing.assert_array_equal(one[k], many[k])
+
+
+# --- the detector's text chance on the grid, and the candidate features -----------------------------------------
+
+
+def _text_folders(tmp_path, monkeypatch):
+    """Point the data, work, page, solver and walls folders into tmp_path, with no cut boxes."""
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
+    monkeypatch.setattr(paths, "SOLVER_DIR", tmp_path / "solver")
+    monkeypatch.setattr(paths, "PAGE_DIR", tmp_path / "page")
+    monkeypatch.setattr(paths, "WALLS_DIR", tmp_path / "walls")
+    (tmp_path / "cuts.json").write_text("{}")
+    monkeypatch.setattr(paths, "CUTS_FILE", tmp_path / "cuts.json")
+    (tmp_path / "page").mkdir()
+    (tmp_path / "page" / "frames.json").write_text("{}")
+
+
+def _sheet(tmp_path, name, col0, row0, page_image, chances):
+    """A 400 x 400 px sheet whose page px (x, y) lies at grid (col0 + x / 2, row0 + y / 2) (2 ft per page px), framed
+    by its whole page, with each quarter's chance of text (`chances`, page px)."""
+    x0, y1 = grid.X0 + grid.FT_PER_PX * col0, grid.Y1 - grid.FT_PER_PX * row0
+    corners = [(0, 0), (400, 0), (0, 400), (400, 400)]
+    placement = SheetTransform([GCP(x, y, x0 + 2 * x, y1 - 2 * y, "manual") for x, y in corners], 1.0)
+    warp = tmp_path / "data" / "warp" / paths.SERIES / name
+    warp.mkdir(parents=True)
+    (warp / "transform.json").write_text(json.dumps(placement.to_json()))
+    work = tmp_path / "work" / paths.SERIES / name
+    work.mkdir(parents=True)
+    cv2.imwrite(str(work / "page.png"), page_image)
+    frames = json.loads((tmp_path / "page" / "frames.json").read_text())
+    frames[name] = [[0, 0], [399, 0], [399, 399], [0, 399]]
+    (tmp_path / "page" / "frames.json").write_text(json.dumps(frames))
+    for q, chance in chances.items():
+        folder = tmp_path / "solver" / f"text-{q}" / "chance"
+        folder.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(folder / f"{name}.png"), chance)
+
+
+def test_out_of_fold_text_takes_each_pixels_own_quarter_model(tmp_path, monkeypatch):
+    """Review Focus 4: every grid px takes the chance of the model that held out its own quarter (`grid.quarter_of`
+    of the px's map point), read at the page px the merge reads its ink from.  Where two sheets inked a px the larger
+    chance wins; a sheet that covers a px without inking it gives nothing; a px no sheet inked is 0."""
+    _text_folders(tmp_path, monkeypatch)
+    model = {"nw": 11, "ne": 22, "sw": 33, "se": 44}
+    col_a, col_b, row0 = SPLIT_COL - 100, SPLIT_COL, SPLIT_ROW - 100      # sheet a straddles the split
+    rise = np.broadcast_to((np.arange(400) // 40).astype(np.uint8), (400, 400))   # +1 every 40 page px east
+    page_a = np.zeros((400, 400), np.uint8)                                # all ink ...
+    page_a[:, 100:110] = 255                                               # ... but a paper stripe
+    _sheet(tmp_path, f"{paths.SERIES}-p01", col_a, row0, page_a, {q: v + rise for q, v in model.items()})
+    page_b = np.full((400, 400), 255, np.uint8)
+    page_b[:, :100] = 0                                                    # sheet b inks its west quarter only
+    _sheet(tmp_path, f"{paths.SERIES}-p02", col_b, row0, page_b,
+           {q: np.full((400, 400), 200, np.uint8) for q in model})
+    # what each grid px of the window should get, from the placement alone
+    r, c = np.mgrid[row0:row0 + 200, col_a:col_b + 200]
+    quarter = grid.quarter_of(grid.to_map(np.c_[c.ravel() + 0.5, r.ravel() + 0.5])).reshape(c.shape)
+    xa, xb = 2 * (c - col_a) + 1, 2 * (c - col_b) + 1                      # the page column each sheet reads
+    inked_a = (xa < 400) & ~((xa >= 100) & (xa < 110))
+    inked_b = (xb >= 0) & (xb < 100)
+    by_index = np.array([model[q] for q in paths.QUARTERS])
+
+    def expected(quarters):
+        wanted = np.isin(quarter, [paths.QUARTERS.index(q) for q in quarters])
+        a = np.where(inked_a & wanted, by_index[quarter] + xa // 40, 0)
+        b = np.where(inked_b & wanted, 200, 0)
+        return np.maximum(a, b).astype(np.uint8)
+
+    window = np.s_[row0:row0 + 200, col_a:col_b + 200]
+    every = textgrid.text_chance()
+    assert every.shape == (grid.HEIGHT, grid.WIDTH) and every.dtype == np.uint8
+    np.testing.assert_array_equal(every[window], expected(paths.QUARTERS))
+    assert every.sum(dtype=np.int64) == every[window].sum(dtype=np.int64)     # nothing outside the sheets
+    for qi, q in enumerate(paths.QUARTERS):                 # sheet a's own px: model q's chance in quarter q
+        mine = inked_a & ~inked_b & (quarter == qi)
+        assert mine.sum() > 1000
+        np.testing.assert_array_equal(every[window][mine] - xa[mine] // 40, model[q])
+    assert (every[window][inked_a & inked_b] == 200).all() and (every[window][inked_a & ~inked_b] < 200).all()
+    # the px some sheet inked are the merged page's ink, laid by the merge's own sampler
+    ink, covered = np.zeros(every.shape, bool), np.zeros(every.shape, np.uint8)
+    frames = json.loads((tmp_path / "page" / "frames.json").read_text())
+    for name in paths.sheet_names():
+        folder = config.DATA_DIR / "warp" / paths.SERIES / name
+        tr = SheetTransform.from_json(json.loads((folder / "transform.json").read_text()), folder=folder)
+        pg = cv2.imread(str(config.WORK_DIR / paths.SERIES / name / "page.png"), cv2.IMREAD_GRAYSCALE)
+        page.lay_sheet(tr, pg, page.crop_mask(pg.shape, frames[name], []), ink, covered,
+                       page.grid_box(tr, np.array(frames[name]), ink.shape))
+    np.testing.assert_array_equal(every > 0, ink)
+    # the whole set is kept in the walls folder; a look at some quarters is not
+    cached = paths.WALLS_DIR / "text_chance.png"
+    np.testing.assert_array_equal(cv2.imread(str(cached), cv2.IMREAD_GRAYSCALE), every)
+    cached.unlink()
+    some = textgrid.text_chance(["nw", "se"])
+    np.testing.assert_array_equal(some[window], expected(("nw", "se")))
+    assert some.sum(dtype=np.int64) == some[window].sum(dtype=np.int64)
+    assert not cached.exists()
+    # a quarter without its chances: the whole set can't be made, a look without that quarter can
+    shutil.rmtree(paths.chance_dir("sw"))
+    with pytest.raises(FileNotFoundError, match="text-sw"):
+        textgrid.text_chance()
+    np.testing.assert_array_equal(textgrid.text_chance(["nw"])[window], expected(("nw",)))
+
+
+def _columns(name, options=()) -> np.ndarray:
+    """The column numbers of one feature group of `border_features` under `options`."""
+    s = wallevidence.columns(options)[name]
+    return np.arange(s.start, s.stop)
+
+
+STROKE_INK = np.array([i * 10 + j for i in range(6) for j in range(6)])   # stroke evidence: near x width hats
+STROKE_LETTER = np.array([i * 10 + 6 for i in range(6)])                   # stroke evidence: near x letter share
+PROFILE_LETTER = 160 + np.array([level * 8 + 6 for level in range(6)])     # profile: near x letter share
+
+
+def test_text_ink_counts_less_than_line_ink():
+    """Two borders crossed by the same ink, which the detector calls text on one and a line on the other.  S1 can't
+    tell them apart (no Terra box on either); with the ink weighted by (1 - text chance) the text's border keeps
+    almost no stroke evidence and the line's keeps all of it, and the text share says which is text."""
+    lot = _lot_grid(2, 4)
+    L = _lots(lot, ["RH-1"] * 8)
+    ink = np.zeros(lot.shape, bool)
+    ink[2:28, 13:18] = True                    # across the borders 0 | 1 and 4 | 5 (between cols 14 and 15)
+    ink[2:28, 43:48] = True                    # the same across 2 | 3 and 6 | 7 (between cols 44 and 45)
+    text = np.where(ink & (np.arange(lot.shape[1]) < 30), 255, 0).astype(np.uint8)
+    s = strokes.strokes(ink)
+    mapped = np.ones(lot.shape, bool)
+    s1 = wallevidence.border_features(L, mapped, s, np.zeros(len(s["wmed"])))
+    c1 = wallevidence.border_features(L, mapped, s, None, options=["text_weighted"], text=text)
+    rows = _pair_rows(L, np.array([0, 2]), np.array([1, 3]))        # the text's border, the line's border
+    before, after = s1[rows][:, STROKE_INK].sum(1), c1[rows][:, STROKE_INK].sum(1)
+    assert before[0] == pytest.approx(before[1]) and before[1] > 0.5   # the same ink, the same evidence
+    assert after[1] == pytest.approx(before[1])                         # the line keeps it
+    assert after[0] < 0.05 * after[1]                                   # text counts (almost) nothing
+    share = c1[rows][:, STROKE_LETTER].sum(1)
+    assert share[0] == pytest.approx(before[0]) and share[1] == 0      # the text share: all of it, none of it
+
+
+def test_text_weighted_changes_only_the_stroke_evidence_and_profile():
+    """c1: the stroke evidence and the profile weigh the nearest stroke px by (1 - text chance) and read its text
+    chance where Terra's letter share was; every other column is S1's to the bit, and with no text anywhere the
+    whole matrix is S1's (with no Terra letters)."""
+    L, ink, _, _ = _district_city()
+    s = strokes.strokes(ink)
+    mapped = np.ones(ink.shape, bool)
+    s1 = wallevidence.border_features(L, mapped, s, np.zeros(len(s["wmed"])))
+    text = np.where(ink, np.random.default_rng(1).integers(0, 256, ink.shape), 0).astype(np.uint8)
+    c1 = wallevidence.border_features(L, mapped, s, None, options=["text_weighted"], text=text)
+    assert c1.shape == s1.shape
+    changed = np.r_[_columns("stroke evidence"), _columns("profile")]
+    same = np.setdiff1d(np.arange(wallevidence.N_FEATURES), changed)
+    np.testing.assert_array_equal(c1[:, same], s1[:, same])
+    assert not np.array_equal(c1[:, _columns("stroke evidence")], s1[:, _columns("stroke evidence")])
+    assert not np.array_equal(c1[:, _columns("profile")], s1[:, _columns("profile")])
+    no_text = wallevidence.border_features(L, mapped, s, None, options=["text_weighted"], text=np.zeros_like(text))
+    np.testing.assert_array_equal(no_text, s1)
+
+
+def test_text_weighted_beside_letters_keeps_terra_letter_share_too():
+    """c2: c1's columns, then S1's Terra letter-share columns (stroke evidence and profile) to the bit."""
+    L, ink, _, _ = _district_city()
+    s = strokes.strokes(ink)
+    mapped = np.ones(ink.shape, bool)
+    rng = np.random.default_rng(2)
+    letter = rng.random(len(s["wmed"]))
+    text = np.where(ink, rng.integers(0, 256, ink.shape), 0).astype(np.uint8)
+    s1 = wallevidence.border_features(L, mapped, s, letter)
+    c1 = wallevidence.border_features(L, mapped, s, None, options=["text_weighted"], text=text)
+    c2 = wallevidence.border_features(L, mapped, s, letter, options=["text_weighted_beside_letters"], text=text)
+    n = wallevidence.N_FEATURES
+    assert c2.shape[1] == n + 12 == sum(k for _, k in wallevidence.groups(["text_weighted_beside_letters"]))
+    np.testing.assert_array_equal(c2[:, :n], c1)
+    np.testing.assert_array_equal(c2[:, _columns("Terra letter share", ["text_weighted_beside_letters"])],
+                                  s1[:, np.r_[STROKE_LETTER, PROFILE_LETTER]])
+    with pytest.raises(ValueError):
+        wallevidence.border_features(L, mapped, s, letter, options=["text_weighted", "text_weighted_beside_letters"],
+                                     text=text)
+    with pytest.raises(ValueError):
+        wallevidence.border_features(L, mapped, s, letter, options=["no_such_feature"])
+
+
+def _street_city():
+    """Two rows of four 15 px lots with a 15 px (60 ft) street between them.  A line is printed along the street's
+    north edge in front of lots 0-1, and text of the same shape in front of lots 2-3."""
+    lot = np.full((45, 60), -1, np.int32)
+    lot[:15] = np.arange(60) // 15
+    lot[30:] = 4 + np.arange(60) // 15
+    L = _lots(lot, ["RH-1"] * 8)
+    ink = np.zeros(lot.shape, bool)
+    ink[15:18, 1:29] = True
+    ink[15:18, 31:59] = True
+    text = np.where(ink & (np.arange(60) >= 30), 255, 0).astype(np.uint8)
+    return L, ink, text
+
+
+def test_street_crossing_reads_ink_across_the_whole_street():
+    """c3: the ink met crossing the street from one lot's edge to the other's, weighted by (1 - text chance).  A line
+    along the street's edge is far from the border px in the street's middle, so S1's near hats miss it; the
+    crossing finds it, and finds nothing where the same ink is text.  The S1 columns come first, to the bit."""
+    L, ink, text = _street_city()
+    s = strokes.strokes(ink)
+    mapped = np.ones(ink.shape, bool)
+    letter = np.zeros(len(s["wmed"]))
+    s1 = wallevidence.border_features(L, mapped, s, letter)
+    c3 = wallevidence.border_features(L, mapped, s, letter, options=["street_crossing"], text=text, ink=ink)
+    n = wallevidence.N_FEATURES
+    assert c3.shape[1] == n + len(wallevidence.WIDTH_KNOTS)
+    np.testing.assert_array_equal(c3[:, :n], s1)
+    line, text_row = _pair_rows(L, np.array([1, 2]), np.array([5, 6]))
+    assert L.touching[line] == 0 and L.touching[text_row] == 0
+    assert s1[line, 0:6].sum() < 0.05                      # S1: no stroke within 6 ft of the street's middle
+    crossing = c3[:, _columns("street crossing", ["street_crossing"])]
+    assert crossing[line, 0] < 0.2                          # nearly every crossing meets line ink ...
+    assert crossing[line, 1:3].sum() > 0.8                  # ... about 12 ft of it (hats at 8 and 14 ft)
+    assert crossing[text_row, 0] == 1.0                     # text only: no line ink across
+    with pytest.raises(ValueError):
+        wallevidence.border_features(L, mapped, s, letter, options=["street_crossing"], text=text)   # no ink given
+
+
+def test_context_tells_the_touching_kind_and_the_street_width():
+    """c4: touching pairs get hats of how their centre line runs along the lots' long axes (0 side by side, 0.5
+    between, 1 back to back); pairs across a street get hats of the street's width.  The default design comes first,
+    to the bit."""
+    def box(x0, y0, x1, y1):            # ft from the grid's corner, y down
+        return shapely.box(grid.X0 + x0, grid.Y1 - y1, grid.X0 + x1, grid.Y1 - y0)
+    geometries = np.array([box(0, 0, 25, 100),            # 0
+                           box(25, 0, 50, 100),           # 1: side by side with 0
+                           box(0, 100, 25, 200),          # 2: back to back with 0
+                           box(0, 268.75, 25, 368.75)],   # 3: across a 68.75 ft street from 2
+                          dtype=object)
+    lot, _ = lots.lot_rasters(gpd.GeoDataFrame(geometry=geometries, crs="EPSG:2227"), (100, 20))
+    L = _lots(lot, ["RH-1"] * 4)
+    context = walls.context(geometries, L)
+    side, back, street = _pair_rows(L, np.array([0, 0, 2]), np.array([1, 2, 3]))
+    kinds, widths = slice(0, 3), slice(3, 3 + len(walls.STREET_WIDTH_KNOTS))
+    np.testing.assert_allclose(context[side, kinds], [1, 0, 0])
+    np.testing.assert_allclose(context[back, kinds], [0, 0, 1])
+    assert context[[side, back], widths].sum() == 0 and context[street, kinds].sum() == 0
+    np.testing.assert_allclose(context[street, widths], walls.STREET_WIDTH_KNOTS == 68.75)
+    F = np.random.default_rng(3).random((len(L.a), wallevidence.N_FEATURES)).astype(np.float32)
+    log_area = np.log(np.full(L.n, 2500.0))
+    plain = walls.design(F, L, log_area)
+    with_context = walls.design(F, L, log_area, context)
+    np.testing.assert_array_equal(with_context[:, :plain.shape[1]], plain)
+    np.testing.assert_array_equal(with_context[:, plain.shape[1]:], context)
+
+
+def test_no_city_limit_leaves_the_limit_open():
+    """c5 (ablation): the city limit is neither a closing's end nor an enclosure wall, so a line stopping short of
+    the mapped edge stays open; the columns that read neither are S1's to the bit."""
+    lot = _lot_grid(8, 8)
+    L = _lots(lot, ["RH-1"] * 64)
+    edge = 7 * LOT_PX
+    bar = np.zeros(lot.shape, bool)
+    bar[4 * LOT_PX - 3:4 * LOT_PX + 4, :edge - 8] = True
+    mapped = np.zeros(lot.shape, bool)
+    mapped[:, :edge] = True
+    s = strokes.strokes(bar)
+    found = wallevidence.closings(s, lot, mapped, city_limit_wall=False)
+    assert not (found["tgt"] == len(s["wmed"])).any()
+    letter = np.zeros(len(s["wmed"]))
+    s1 = wallevidence.border_features(L, mapped, s, letter)
+    c5 = wallevidence.border_features(L, mapped, s, letter, options=["no_city_limit"])
+    rows = _pair_rows(L, 3 * 8 + np.arange(6), 4 * 8 + np.arange(6))
+    enclosure = _columns("enclosure")
+    assert s1[rows][:, enclosure[_level(6.0, 60.0)]].all()          # S1: closed on the city limit
+    assert not c5[rows][:, enclosure].any()                         # without it: open at every level
+    same = np.r_[_columns("stroke evidence"), _columns("whole line"), _columns("straight closing"),
+                 _columns("profile")]
+    np.testing.assert_array_equal(c5[:, same], s1[:, same])
+
+
+def test_evaluate_candidates_scores_each_quarter_and_writes_nothing(tmp_path, monkeypatch):
+    """One call per configuration: the held-out log loss of each quarter's fit, the configuration's features, and
+    nothing written."""
+    L, ink, _, _ = _district_city()
+    s = strokes.strokes(ink)
+    inputs = walls.Inputs(lots=L, mapped=np.ones(ink.shape, bool), strokes=s, log_area=np.full(L.n, np.log(1600.0)),
+                          geometries=None, letter=np.zeros(len(s["wmed"])), text=np.zeros(ink.shape, np.uint8),
+                          ink=ink)
+    monkeypatch.setattr(walls, "load_inputs", lambda candidates, fresh_text=False: inputs)
+    monkeypatch.setattr(paths, "WALLS_DIR", tmp_path / "walls")
+    base = walls.evaluate_candidates([])
+    crossing = walls.evaluate_candidates(["street_crossing"])
+    assert set(base["quarters"]) == set(paths.QUARTERS)
+    for result in (base, crossing):
+        for q in paths.QUARTERS:
+            assert 0 < result["quarters"][q]["held_out_log_loss"] < 1
+    assert base["candidates"] == [] and crossing["candidates"] == ["street_crossing"]
+    assert crossing["features"] == base["features"] + 2 * len(wallevidence.WIDTH_KNOTS)
+    assert not (tmp_path / "walls").exists()
+    with pytest.raises(ValueError):
+        walls.evaluate_candidates(["text_weighted", "text_weighted_beside_letters"])

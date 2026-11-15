@@ -66,22 +66,21 @@ def grid_box(transform, quad: np.ndarray, shape: tuple[int, int]) -> tuple[int, 
     return r0, r1, c0, c1
 
 
-def lay_sheet(transform, page: np.ndarray, crop: np.ndarray, ink: np.ndarray, sheets: np.ndarray,
-              box: tuple[int, int, int, int] | None = None) -> None:
-    """Lay one sheet onto the grid: set `ink` where the sheet shows ink inside its crop and add 1 to `sheets` where
-    its crop covers.  `ink` and `sheets` are grid arrays from the grid's top-left corner, changed in place.
+def sheet_px(transform, crop: np.ndarray, shape: tuple[int, int], box: tuple[int, int, int, int] | None = None):
+    """The page px each grid px of a sheet reads, band of grid rows by band: yields (rows, cols, on, yi, xi), where
+    `rows` and `cols` are the band's slices of the grid, `on` (bool) marks the grid px whose page px is in the crop
+    and `yi`, `xi` (int64) are that page px (meaningful where `on`).
 
     `transform`: anything with `to_pixel(map points (n, 2)) -> page px (n, 2)`.  It is evaluated at the centres of
     the grid px whose row and column are multiples of STEP, read bilinearly between, and rounded to the nearest page
-    px; `page`: the sheet's grayscale page; `crop`: the page px it contributes (`crop_mask`).  `box`: the grid rows
-    and columns to lay (`grid_box`), the whole grid when None; the points are the same either way, so a box that holds
-    the crop gives the same result."""
-    rows, cols = ink.shape
+    px; `crop`: the page px the sheet contributes (`crop_mask`, the page's shape); `shape`: the grid's.  `box`: the
+    grid rows and columns to read (`grid_box`), the whole grid when None; the points are the same either way, so a
+    box that holds the crop gives the same result."""
+    rows, cols = shape
     r0, r1, c0, c1 = box if box is not None else (0, rows, 0, cols)
     if r1 <= r0 or c1 <= c0:
         return
-    h, w = page.shape
-    dark = page < INK_BELOW
+    h, w = crop.shape
     nr0, nc0 = r0 // STEP * STEP, c0 // STEP * STEP
     node_rows = np.arange(nr0, r1 - 1 + STEP, STEP)          # the last one at or past r1 - 1: no px past the nodes
     node_cols = np.arange(nc0, c1 - 1 + STEP, STEP)
@@ -98,10 +97,20 @@ def lay_sheet(transform, page: np.ndarray, crop: np.ndarray, ink: np.ndarray, sh
         yi = np.round(np.where(on, y, -1)).astype(np.int64)
         on &= (xi >= 0) & (xi < w) & (yi >= 0) & (yi < h)
         on[on] = crop[yi[on], xi[on]]
+        yield slice(a0, a1), slice(c0, c1), on, yi, xi
+
+
+def lay_sheet(transform, page: np.ndarray, crop: np.ndarray, ink: np.ndarray, sheets: np.ndarray,
+              box: tuple[int, int, int, int] | None = None) -> None:
+    """Lay one sheet onto the grid: set `ink` where the sheet shows ink inside its crop and add 1 to `sheets` where
+    its crop covers.  `ink` and `sheets` are grid arrays from the grid's top-left corner, changed in place.
+    `transform`, `crop` and `box` as `sheet_px` reads them; `page`: the sheet's grayscale page."""
+    dark = page < INK_BELOW
+    for rows, cols, on, yi, xi in sheet_px(transform, crop, ink.shape, box):
         seen = np.zeros(on.shape, bool)
         seen[on] = dark[yi[on], xi[on]]
-        ink[a0:a1, c0:c1] |= seen
-        sheets[a0:a1, c0:c1] += on.astype(np.uint8)
+        ink[rows, cols] |= seen
+        sheets[rows, cols] += on.astype(np.uint8)
 
 
 def build_page() -> dict:

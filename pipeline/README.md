@@ -590,7 +590,8 @@ lot sizes and the strokes (`solver/labels_stage.py`). Nothing asks a model, and 
   tagged a spur. It writes `strokes.npz` (`xy`, `w`, `off`, and per stroke `a`, `b`, `length`, `wmed`, `wiqr`,
   `spur`, `dega`, `degb`). On the 2000 page: about 172,000 strokes and 3,240 miles, in about 25 s and 3 GB.
 
-**The walls** (`sfzmaps solver walls [--workers N]`, `solver/wallevidence.py` and `solver/walls.py`) give every pair
+**The walls** (`sfzmaps solver walls [--workers N] [--candidates A,B] [--evaluate]`, `solver/wallevidence.py` and
+`solver/walls.py`) give every pair
 of neighbouring lots (each row of `lots.npz` `pairs`) the log odds that a printed district line runs between them.
 Nothing in them decides: every measure is a feature, and one fit weighs them all. The ink is read through the raw
 page's strokes (`strokes.npz`; no cleaned page, no line chain). A pair's border px are both px of every 4-neighbour
@@ -628,6 +629,26 @@ whole-wall stage: how a line holds together along its length is left to the solv
 number). The closing paths run on `--workers` processes in bands of grid rows; the result is the same for any
 number, and the same inputs give the same odds. On the 2000 page: 437,000 pairs over 16.3 million border px, 60,716
 closing paths from 68,363 loose ends, in about 4 minutes and 12 GB with 6 workers.
+
+**Candidate wall features** (`--candidates A,B`, none by default; `walls.CANDIDATES`). Each is tried against the set
+above and kept only if it lowers the held-out log loss in at least three quarters; `--evaluate` (or
+`walls.evaluate_candidates`) scores a configuration without writing any walls. Most read the text detector's chance
+of text on the grid (`solver/textgrid.py`, written to `data/solver/walls/text_chance.png`): every grid px takes the
+chance of the detector that held out its own quarter, read through each sheet's corrected placement at the same page
+px as the merged page reads its ink (`page.sheet_px`, the same crop), the largest among the sheets that inked the px,
+0 where none did. It needs all four quarters' detectors.
+
+- `text_weighted`: the stroke evidence and the profile weigh each border px's nearest stroke px by (1 − its text
+  chance), and read that chance where Terra's letter share was (the same 208 columns);
+- `text_weighted_beside_letters`: the same, with Terra's letter-share columns kept beside it (12 more);
+- `street_crossing`: for every border px pair, the crossing from the nearest px of one lot to the nearest px of the
+  other (the street's whole width, both edges included; for touching lots the two px themselves), and hats over
+  0–40 ft of the ink met along it, weighted by (1 − text chance) (6 more). A line printed along a street's edge is
+  far from the street's middle, where the border px are;
+- `context`: touching pairs get hats of their kind (side by side, between, back to back: how the line between the
+  lots' centroids runs along their long axes); pairs across a street get hats of the street's width at the table's
+  peaks (25 to 125 ft, then parks and water);
+- `no_city_limit` (an ablation): the city limit is no closing's end and no enclosure wall.
 
 **The solve** (`solver/city.py`, `labels.py`, `placement.py`, `energy.py`, `search.py`, `solve.py`) reads the
 district of every lot from the page: one energy over every lot's code, minimised for the whole city and held out by

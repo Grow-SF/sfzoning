@@ -27,6 +27,21 @@ The feature groups, in column order (GROUPS):
 Widths are scaled by WIDTH_SCALE and capped at WIDTH_CAP; lengths enter as log(1 + ft) over a fixed scale, so the
 fit's ridge sees columns of like size.  The city limit is the edge of the mapped area (`sheets.png` > 0), the
 raster's own edge included.
+
+Candidate features (OPTIONS), each off unless named, so each can be measured against the set above:
+  text_weighted     the stroke evidence and the profile weigh each border px's nearest stroke px by (1 - its text
+                    chance, `textgrid.text_chance`), and read that text chance where Terra's letter share was: near x
+                    width hats x (1 - t), near x t, near x [log length, steadiness, spur] x (1 - t); per profile level
+                    near hats x (1 - t), near x t, near x log length x (1 - t).  The same columns, the same number.
+  text_weighted_beside_letters
+                    the same, and Terra's letter-share columns of the stroke evidence and the profile kept beside it,
+                    as a group of their own ("Terra letter share", 12) after the profile
+  street_crossing   ("street crossing", 6) for every pair of border px, the crossing from the px of one lot nearest
+                    the first to the px of the other lot nearest the second (the street's whole width, both edges
+                    included; for touching lots the two px themselves): hats over WIDTH_KNOTS of the ink met along it
+                    weighted by (1 - text chance), in ft
+  no_city_limit     (an ablation) the city limit is no closing's end and no enclosure wall
+The extra groups follow the profile in that order (`groups`).
 """
 import logging
 import multiprocessing
@@ -35,6 +50,7 @@ from concurrent.futures import ProcessPoolExecutor
 
 import cv2
 import numpy as np
+from scipy import ndimage
 from scipy.spatial import cKDTree
 from skimage.graph import MCP_Geometric
 
@@ -70,6 +86,44 @@ CLOSING_GAP_SCALE = 6.0         # log(1 + a closing path's length, ft)
 GROUPS = (("stroke evidence", 60), ("whole line", 30), ("straight closing", 30), ("enclosure", 16),
           ("closing path", 24), ("profile", 48))
 N_FEATURES = sum(k for _, k in GROUPS)
+
+TEXT_WEIGHTED = "text_weighted"
+TEXT_WEIGHTED_BESIDE_LETTERS = "text_weighted_beside_letters"
+STREET_CROSSING = "street_crossing"
+NO_CITY_LIMIT = "no_city_limit"
+OPTIONS = (TEXT_WEIGHTED, TEXT_WEIGHTED_BESIDE_LETTERS, STREET_CROSSING, NO_CITY_LIMIT)
+
+
+def check_options(options) -> tuple[str, ...]:
+    """The candidate features named in `options`, in OPTIONS order; an unknown name, or both text weightings, is an
+    error."""
+    named = set(options)
+    unknown = sorted(named - set(OPTIONS))
+    if unknown:
+        raise ValueError(f"no candidate feature {unknown[0]!r}: one of {', '.join(OPTIONS)}")
+    if {TEXT_WEIGHTED, TEXT_WEIGHTED_BESIDE_LETTERS} <= named:
+        raise ValueError(f"{TEXT_WEIGHTED} and {TEXT_WEIGHTED_BESIDE_LETTERS} are two ways of one feature: name one")
+    return tuple(o for o in OPTIONS if o in named)
+
+
+def groups(options=()) -> list[tuple[str, int]]:
+    """The feature groups of `border_features` under `options`, in column order, with their numbers of columns."""
+    options = check_options(options)
+    out = list(GROUPS)
+    if TEXT_WEIGHTED_BESIDE_LETTERS in options:
+        out.append(("Terra letter share", len(DISTANCE_KNOTS) + len(PROFILE_LEVELS)))
+    if STREET_CROSSING in options:
+        out.append(("street crossing", len(WIDTH_KNOTS)))
+    return out
+
+
+def columns(options=()) -> dict[str, slice]:
+    """Each feature group's columns of `border_features` under `options`."""
+    out, start = {}, 0
+    for name, k in groups(options):
+        out[name] = slice(start, start + k)
+        start += k
+    return out
 
 
 def hats(x, knots) -> np.ndarray:
@@ -115,12 +169,15 @@ def city_limit(mapped: np.ndarray) -> np.ndarray:
 
 class Border:
     """Every pair's border px: rows, cols and the pair row (`pair`) of both px of each 4-neighbour px pair where
-    `grown` changes between the pair's two lots; `mean(v)` is each pair's mean of a value per border px."""
+    `grown` changes between the pair's two lots; `mean(v)` is each pair's mean of a value per border px.  The px
+    pairs are kept in blocks (`blocks`: per direction, the number of px pairs), each block's first px, then their
+    second px in the same order (`px_pairs`)."""
 
     def __init__(self, lots):
         grown, n = lots.grown, lots.n
         keys = lots.a.astype(np.int64) * n + lots.b
         self.pairs = len(keys)
+        self.blocks = []
         rows, cols, pair = [], [], []
         for d in (0, 1):
             ga, gb = (grown[:, :-1], grown[:, 1:]) if d == 0 else (grown[:-1], grown[1:])
@@ -131,6 +188,7 @@ class Border:
             del m
             k = np.minimum(np.searchsorted(keys, lo * n + hi), len(keys) - 1)
             ok = keys[k] == lo * n + hi
+            self.blocks.append(int(ok.sum()))
             for dr, dc in ((0, 0), (d, 1 - d)):
                 rows.append((r[ok] + dr).astype(np.int32))
                 cols.append((c[ok] + dc).astype(np.int32))
@@ -142,20 +200,36 @@ class Border:
         """Each pair's mean over its border px of `values` (one per border px)."""
         return np.bincount(self.pair, values, minlength=self.pairs) / self.count
 
-    def nearest(self, ids: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def px_pairs(self) -> tuple[np.ndarray, np.ndarray]:
+        """The border px pairs as indices into `rows` / `cols` / `pair`: each pair's first px and its second."""
+        first, second, start = [], [], 0
+        for k in self.blocks:
+            first.append(np.arange(start, start + k))
+            second.append(np.arange(start + k, start + 2 * k))
+            start += 2 * k
+        return np.concatenate(first), np.concatenate(second)
+
+    def nearest(self, ids: np.ndarray, values: np.ndarray | None = None):
         """For each border px, the id of the nearest px of `ids` that holds one (>= 0) and its distance in ft
-        (`cv2.distanceTransformWithLabels`, L2 with a 5 x 5 mask); -1 and inf where `ids` holds none."""
+        (`cv2.distanceTransformWithLabels`, L2 with a 5 x 5 mask); -1 and inf where `ids` holds none.  With `values`
+        (a raster like `ids`), also the value at that nearest px (0 where there is none)."""
         hit = ids >= 0
         if not hit.any():
-            return np.full(len(self.rows), -1, np.int32), np.full(len(self.rows), np.inf, np.float32)
+            none = np.full(len(self.rows), -1, np.int32), np.full(len(self.rows), np.inf, np.float32)
+            return none if values is None else (*none, np.zeros(len(self.rows), values.dtype))
         dist, lab = cv2.distanceTransformWithLabels((~hit).view(np.uint8), cv2.DIST_L2, 5,
                                                     labelType=cv2.DIST_LABEL_PIXEL)
         ys, xs = np.nonzero(hit)
         del hit
         to_id = np.full(int(lab.max()) + 1, -1, np.int32)
         to_id[lab[ys, xs]] = ids[ys, xs]
-        near = to_id[lab[self.rows, self.cols]]
-        return near, dist[self.rows, self.cols] * np.float32(grid.FT_PER_PX)
+        at = lab[self.rows, self.cols]
+        near = to_id[at]
+        if values is None:
+            return near, dist[self.rows, self.cols] * np.float32(grid.FT_PER_PX)
+        to_value = np.zeros(len(to_id), values.dtype)
+        to_value[lab[ys, xs]] = values[ys, xs]
+        return near, dist[self.rows, self.cols] * np.float32(grid.FT_PER_PX), to_value[at]
 
     def near_hats(self, near, dist) -> np.ndarray:
         """Hats of each border px's distance over DISTANCE_KNOTS, 0 where there is nothing (near < 0)."""
@@ -364,7 +438,7 @@ def _close_band_job(job):
 
 
 def closings(strokes, lot: np.ndarray, mapped: np.ndarray, sid: np.ndarray | None = None, workers: int = 1,
-             band_rows: int = BAND_ROWS) -> dict[str, np.ndarray]:
+             band_rows: int = BAND_ROWS, city_limit_wall: bool = True) -> dict[str, np.ndarray]:
     """From every loose end, the shortest way (`MCP_Geometric`, 8-connected) over street ground and lot lines (a lot
     px with a 4-neighbour of another lot), never through a lot, to another stroke or to the city limit, within
     CLOSING_REACH.  Another stroke is one sharing no node with this one; the strokes sharing a node may be crossed.
@@ -373,7 +447,7 @@ def closings(strokes, lot: np.ndarray, mapped: np.ndarray, sid: np.ndarray | Non
     `sid`: the stroke raster (`stroke_raster`), made when None.  The loose ends are worked in bands of `band_rows`
     grid rows, on `workers` processes; the result is the same for any band size and number of workers.  The
     processes are spawned, so with workers > 1 the calling program's main module must be safe to import (behind
-    `if __name__ == "__main__"`)."""
+    `if __name__ == "__main__"`).  `city_limit_wall` False (an ablation): no path ends on the city limit."""
     t0 = time.perf_counter()
     xy, off, a, b = strokes["xy"].astype(float), strokes["off"], strokes["a"], strokes["b"]
     n = len(a)
@@ -385,7 +459,8 @@ def closings(strokes, lot: np.ndarray, mapped: np.ndarray, sid: np.ndarray | Non
     free[1:, :] |= lot[1:, :] != lot[:-1, :]
     free[:-1, :] |= lot[:-1, :] != lot[1:, :]
     targets = stroke_raster(strokes, lot.shape) if sid is None else sid.copy()
-    targets[city_limit(mapped)] = n
+    if city_limit_wall:
+        targets[city_limit(mapped)] = n
     free |= targets >= 0
     by_node: dict[int, list[int]] = {}
     for k in range(n):
@@ -447,15 +522,16 @@ def separated(region: np.ndarray, a, b) -> np.ndarray:
     return (region[a] != region[b]) & (region[a] > 0) & (region[b] > 0)
 
 
-def enclosure(lots, mapped: np.ndarray, sid: np.ndarray, wmed, found: dict) -> np.ndarray:
+def enclosure(lots, mapped: np.ndarray, sid: np.ndarray, wmed, found: dict, city_limit_wall: bool = True) -> np.ndarray:
     """Whether each pair's lots are walled apart, per level (float32 (pairs, 16), column = width level x closing
     level).  At a level the walls are the city limit, every stroke at least that wide (`sid`, `wmed`) and every
     closing path (`found`, from `closings`) up to that long from a stroke that wide; the regions are what the walls
-    leave 4-connected on the mapped area, and each lot is in the region holding most of its px (`LotRegions`)."""
+    leave 4-connected on the mapped area, and each lot is in the region holding most of its px (`LotRegions`).
+    `city_limit_wall` False (an ablation): the city limit is no wall."""
     t0 = time.perf_counter()
     wmed = np.asarray(wmed, float)
     place = LotRegions(lots.lot, lots.n)
-    limit = city_limit(mapped)
+    limit = city_limit(mapped) if city_limit_wall else np.zeros(mapped.shape, bool)
     width = np.where(sid >= 0, wmed[np.maximum(sid, 0)].astype(np.float32), np.float32(-1))
     out = np.zeros((len(lots.a), len(ENCLOSURE_WIDTHS) * len(ENCLOSURE_CLOSINGS)), np.float32)
     col = 0
@@ -477,31 +553,91 @@ def enclosure(lots, mapped: np.ndarray, sid: np.ndarray, wmed, found: dict) -> n
     return out
 
 
-def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray, workers: int = 1) -> np.ndarray:
-    """The border evidence of every pair of neighbouring lots: float32 (pairs, N_FEATURES), in the row order of
-    `lots.a` / `lots.b` and the column order of GROUPS.  `lots`: `lots.Lots` (the rasters on the grid from its
-    top-left corner); `mapped`: the mapped area (bool, the lots' raster shape); `strokes`: strokes.npz's arrays;
-    `letter`: each stroke's letter share; `workers`: processes for the closing paths."""
+def street_crossing(lots, border: Border, ink: np.ndarray, text: np.ndarray) -> np.ndarray:
+    """The ink across every pair's border (float32 (pairs, len(WIDTH_KNOTS))): for each px pair of the border, the
+    crossing from the px of the first px's lot nearest it to the px of the second's lot nearest it (`grown`'s own
+    nearest lot px, so the street's whole width with both edges; for touching lots the two px themselves), sampled
+    once per 8-connected step, both ends included.  The ink met is weighted by (1 - text chance) and counts the
+    crossing's length per step (ft); each pair's mean over its px pairs of hats of it over WIDTH_KNOTS."""
     t0 = time.perf_counter()
+    weight = np.where(ink, 255 - text.astype(np.int16), 0).astype(np.uint8)    # 255 a line for sure, 0 none
+    idx = ndimage.distance_transform_edt(lots.lot < 0, return_distances=False, return_indices=True)
+    first, second = border.px_pairs()
+    ar, ac = idx[0][border.rows[first], border.cols[first]], idx[1][border.rows[first], border.cols[first]]
+    br, bc = idx[0][border.rows[second], border.cols[second]], idx[1][border.rows[second], border.cols[second]]
+    del idx
+    dr, dc = (br - ar).astype(float), (bc - ac).astype(float)
+    steps = np.maximum(np.maximum(np.abs(dr), np.abs(dc)), 1).astype(np.int64)
+    met = np.zeros(len(first))
+    order = np.argsort(-steps, kind="stable")
+    longest = steps[order]
+    for s in range(int(longest[0]) + 1 if len(order) else 0):
+        o = order[:np.searchsorted(-longest, -s, side="right")]    # the crossings at least s steps long
+        r = ar[o] + np.rint(dr[o] * s / steps[o]).astype(np.int64)
+        c = ac[o] + np.rint(dc[o] * s / steps[o]).astype(np.int64)
+        met[o] += weight[r, c]
+    across = met / 255.0 * np.hypot(dr, dc) / steps * grid.FT_PER_PX
+    value = np.zeros(len(border.rows))
+    value[first] = across
+    value[second] = across
+    H = hats(value, WIDTH_KNOTS)
+    log.info("street crossings: %d px pairs, the longest %d px (%.0f s)", len(first), int(longest[0]) if len(order)
+             else 0, time.perf_counter() - t0)
+    return np.stack([border.mean(H[:, j]) for j in range(len(WIDTH_KNOTS))], 1).astype(np.float32)
+
+
+def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray | None, workers: int = 1, options=(),
+                    text: np.ndarray | None = None, ink: np.ndarray | None = None) -> np.ndarray:
+    """The border evidence of every pair of neighbouring lots: float32 (pairs, features), in the row order of
+    `lots.a` / `lots.b` and the column order of `groups(options)` (GROUPS, N_FEATURES columns, with no options).
+    `lots`: `lots.Lots` (the rasters on the grid from its top-left corner); `mapped`: the mapped area (bool, the lots'
+    raster shape); `strokes`: strokes.npz's arrays; `letter`: each stroke's letter share (not read under
+    text_weighted alone); `workers`: processes for the closing paths.  `options`: the candidate features (OPTIONS);
+    `text`: the chance of text on the grid (uint8 x 255, `textgrid.text_chance`), for the text weightings and the
+    street crossing; `ink`: the merged page's ink (bool), for the street crossing."""
+    t0 = time.perf_counter()
+    options = check_options(options)
+    weighted = TEXT_WEIGHTED in options or TEXT_WEIGHTED_BESIDE_LETTERS in options
+    terra = TEXT_WEIGHTED not in options
+    if (weighted or STREET_CROSSING in options) and text is None:
+        raise ValueError(f"{', '.join(options)} read the chance of text: pass `text`")
+    if STREET_CROSSING in options and ink is None:
+        raise ValueError(f"{STREET_CROSSING} reads the merged page's ink: pass `ink`")
+    if terra and letter is None:
+        raise ValueError("Terra's letter share is read: pass `letter`")
     shape = lots.lot.shape
     wmed = strokes["wmed"].astype(float)
     log_length = np.log1p(strokes["length"].astype(float))
-    letter = np.asarray(letter, float)
+    letter = np.asarray(letter, float) if terra else None
     border = Border(lots)
     sid = stroke_raster(strokes, shape)
     log.info("border px %d, strokes drawn (%.0f s)", len(border.pair), time.perf_counter() - t0)
-    cols = []
+    cols, terra_cols = [], []
 
-    near, dist = border.nearest(sid)
+    if weighted:
+        near, dist, t = border.nearest(sid, text)
+        t = t / 255.0                                                # the nearest stroke px's chance of text
+        keep = 1.0 - t
+    else:
+        near, dist = border.nearest(sid)
     ok = near >= 0
     k = np.where(ok, near, 0)
     Hd = border.near_hats(near, dist)
     Hw = hats(wmed[k], WIDTH_KNOTS)
-    per = [letter[k], log_length[k] / STROKE_LENGTH_SCALE,
+    per = [log_length[k] / STROKE_LENGTH_SCALE,
            np.clip(strokes["wiqr"][k] / np.maximum(wmed[k], 1.0), 0, STEADINESS_CAP), strokes["spur"][k].astype(float)]
+    if weighted:
+        per = [t] + [v * keep for v in per]
+    else:
+        per = [letter[k]] + per
     for i in range(len(DISTANCE_KNOTS)):                            # stroke evidence
-        cols += [border.mean(Hd[:, i] * Hw[:, j]) for j in range(len(WIDTH_KNOTS))]
+        if weighted:
+            cols += [border.mean(Hd[:, i] * Hw[:, j] * keep) for j in range(len(WIDTH_KNOTS))]
+        else:
+            cols += [border.mean(Hd[:, i] * Hw[:, j]) for j in range(len(WIDTH_KNOTS))]
         cols += [border.mean(Hd[:, i] * v) for v in per]
+        if weighted and terra:
+            terra_cols.append(border.mean(Hd[:, i] * letter[k]))
     del Hw, per
     lines = whole_lines(strokes)
     ln = lines["line"][k]
@@ -526,8 +662,9 @@ def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray, worke
     del Hc, c, per
     log.info("straight closings: %d (%.0f s)", len(straight), time.perf_counter() - t0)
 
-    found = closings(strokes, lots.lot, mapped, sid=sid, workers=workers)
-    sep = enclosure(lots, mapped, sid, wmed, found)                 # enclosure
+    limit = NO_CITY_LIMIT not in options
+    found = closings(strokes, lots.lot, mapped, sid=sid, workers=workers, city_limit_wall=limit)
+    sep = enclosure(lots, mapped, sid, wmed, found, city_limit_wall=limit)      # enclosure
     cols += list(sep.T)
     cid = np.full(shape, -1, np.int32)
     for i in np.argsort(-found["gap"], kind="stable"):
@@ -549,14 +686,31 @@ def border_features(lots, mapped: np.ndarray, strokes, letter: np.ndarray, worke
 
     for lv in PROFILE_LEVELS:                                       # profile
         if lv > 0:
-            near, dist = border.nearest(np.where((sid >= 0) & (wmed[np.maximum(sid, 0)] >= lv), sid, -1))
+            level = np.where((sid >= 0) & (wmed[np.maximum(sid, 0)] >= lv), sid, -1)
+            if weighted:
+                near, dist, t = border.nearest(level, text)
+                t = t / 255.0
+                keep = 1.0 - t
+            else:
+                near, dist = border.nearest(level)
+            del level
         k = np.where(near >= 0, near, 0)
         Hd = border.near_hats(near, dist)
-        cols += [border.mean(Hd[:, i]) for i in range(len(DISTANCE_KNOTS))]
         close = Hd[:, DISTANCE_KNOTS < NEAR_FT].sum(1)
-        cols += [border.mean(close * letter[k]), border.mean(close * log_length[k] / STROKE_LENGTH_SCALE)]
+        if weighted:
+            cols += [border.mean(Hd[:, i] * keep) for i in range(len(DISTANCE_KNOTS))]
+            cols += [border.mean(close * t), border.mean(close * log_length[k] / STROKE_LENGTH_SCALE * keep)]
+            if terra:
+                terra_cols.append(border.mean(close * letter[k]))
+        else:
+            cols += [border.mean(Hd[:, i]) for i in range(len(DISTANCE_KNOTS))]
+            cols += [border.mean(close * letter[k]), border.mean(close * log_length[k] / STROKE_LENGTH_SCALE)]
         del Hd, close
     log.info("profile (%.0f s)", time.perf_counter() - t0)
+    cols += terra_cols                                              # Terra letter share (beside the weighting)
+    del sid
     F = np.stack(cols, 1).astype(np.float32)
-    assert F.shape[1] == N_FEATURES
+    if STREET_CROSSING in options:                                  # street crossing
+        F = np.concatenate([F, street_crossing(lots, border, ink, text)], 1)
+    assert F.shape[1] == sum(n for _, n in groups(options))
     return F
