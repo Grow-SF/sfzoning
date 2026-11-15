@@ -449,6 +449,10 @@ dependencies are the source files in the import closure of its `code` modules, `
 `reads`; it recomputes its whole output when any of them changes, and needs no `prepare()`. Outputs go under
 `data/solver/`; `sfzmaps.solver.paths` names every location.
 
+Hand-made and downloaded inputs are in `inputs/zoning-2000/` (see its README): the April 2000 table
+(`april2000.geojson.gz`, downloaded from DataSF by `sfzmaps solver fetch-table`, with `PROVENANCE.md`) and
+`table-corrections.csv`, which is used only in scoring. The lot index is the row order of the table file.
+
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
 ## Where outputs land

@@ -914,3 +914,11 @@ def doctor(
             raise typer.Exit(1)
     if bad:
         raise typer.Exit(1)
+
+
+@solver_app.command("fetch-table")
+def solver_fetch_table() -> None:
+    """Download the April 2000 zoning table from DataSF into inputs/zoning-2000/, with its PROVENANCE.md."""
+    from sfzmaps.solver import table
+    info = table.fetch_table()
+    typer.echo(f"{info['rows']} rows, sha256 {info['sha256']}")
