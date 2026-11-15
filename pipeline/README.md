@@ -407,10 +407,23 @@ placement to within 0.001 px.
 Only what has been checked. "The approved run" means the corrections the owner looked at and approved on
 2026-11-09, made by earlier scripts.
 
-- **1921 is the same as the approved run:** all 16 sheets' corrections are identical to those of the approved run's
-  rebuild of 2026-11-13, which reproduced the approved run byte for byte.
-- **The ported code changes no numbers.** Every correction checked (1921 and 2000) is identical to what the earlier
-  scripts made with the same method.
+- **Every sheet, 2026-11-14:** all 357 placed sheets corrected and warped on the Mac's GPU in 81 minutes
+  (`sfzmaps build -j 2`); none was left uncorrected.
+- **As good as before it got faster.** On the 149 sheets the earlier (CPU) method had corrected, the share of
+  block-side points within 1 px of the print is the same on average (0.6786 both); no sheet is more than 0.004 lower,
+  and 148 of the 149 choose the same correction. None folds.
+- **The 208 sheets corrected for the first time** (the rest of 1972–1980, and the 1980–2000 height, special-use and
+  1996–2000 scans) all fit the print better than the pipeline's own placement: per series, the share within 1 px
+  rises from 0.39–0.67 to 0.46–0.80, and every sheet gains.
+- **Sheets printed from the same drawing agree better once corrected** (a period's zoning, height and special-use
+  scans, and the 1996–2000 scan against the 2000 map): the share of one sheet's ink within 4 ft of the other's rises
+  on nearly every pair (zoning against height, every pair in every period: about 0.50 → 0.55). The exception is 2000
+  p09, fitted with street edges and later blocks, against the scans of the same drawing that aren't (its special-use
+  sheet 0.81 → 0.68, the 1996–2000 scan 0.89 → 0.78): see "Next".
+- **The same every run:** a sheet fitted twice in separate processes on the same Mac gives byte-identical corrections.
+- **Before the speed-up, the port changed no numbers:** 1921's corrections were identical to the approved run's
+  rebuild of 2026-11-13 (which reproduced the approved run byte for byte), and every correction checked was identical
+  to what the earlier scripts made.
 - **No text removal.** The approved run took the printed zoning codes out of the ink before fitting. Fitted with and
   without on the 13 2000 sheets, the scores were the same (within 1 px 0.759 both), so the warp reads no text.
 - **2000 is fitted like every other year**, so its corrections differ from the approved run's, which fitted the 2000
@@ -418,15 +431,15 @@ Only what has been checked. "The approved run" means the corrections the owner l
   and the new ones are equal (within 1 px 0.749 against 0.748, within 2 px 0.812 both).
 - **The faster method does not reproduce the approved run byte for byte.** Its corrections are judged by the same
   scores instead.
-- **Every sheet:** the full rebuild of all 357 placed sheets with the faster method is pending.
 
 ### Next
 
-1. Look at the seams where warped sheets meet.
-2. Check that every run gives the same result, on every year.
-3. Decide whether street edges and later blocks should apply to every sheet: test it on every sheet, and the owner
+1. Look at the seams where warped sheets meet, by eye, across every series (spot checks on 1948 and 2000 show no new
+   jogs or doubled lines).
+2. Decide whether street edges and later blocks should apply by ground rather than by sheet name: today only 2000 p09
+   and p10 use them, so p09 now disagrees with the other scans of the same drawing. Test it on every sheet; the owner
    decides.
-4. Move whatever reads the old pipeline's sheets onto `data/warp`.
+3. Move whatever reads the old pipeline's sheets onto `data/warp`.
 
 ## Where outputs land
 
