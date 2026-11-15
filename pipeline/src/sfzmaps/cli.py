@@ -943,3 +943,17 @@ def solver_lots() -> None:
     s = lots.build_lots()
     typer.echo(f"{s['lots']:,} lots, {s['scored']:,} scored, {s['pairs']:,} neighbour pairs, median centroid of the "
                f"scored lots ({s['median_x']:.3f}, {s['median_y']:.3f}), {s['seconds']} s")
+
+
+@solver_app.command("prints")
+def solver_prints() -> None:
+    """Find every printed zoning code on the 2000 sheets with its saved reads (no model is asked):
+    data/solver/prints/prints.parquet, terra_boxes.json and summary.json."""
+    from sfzmaps.solver import prints
+    s = prints.build_prints()
+    kinds = s["by_kind"]
+    typer.echo(f"{s['prints']:,} prints: Terra and Sol {kinds['0']}, Terra only {kinds['1']}, Sol only {kinds['2']}, "
+               f"turned pass only {kinds['3']}; {s['seconds']} s")
+    for read, c in s["saved_answers"].items():
+        typer.echo(f"  {read}: {c['found']:,} of {c['asked']:,} keys found ({c['missing']:,} missing); "
+                   f"{c['unused']:,} of {c['saved']:,} saved answers asked by no print")

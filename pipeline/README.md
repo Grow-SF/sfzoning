@@ -480,6 +480,26 @@ numbers compare with it. It writes `data/solver/lots/lots.npz` (`lot`, `grown`, 
 `quarter`, `table`: each lot's code, as `known_and_codes`) and `table.parquet` (the loaded table, in lot order).
 The same inputs give the same bytes; `sfzmaps.solver.lots.load_lots()` reads it back.
 
+**The prints** (`sfzmaps solver prints`, stage `solver-prints`, after `solver-lots`) are the zoning codes printed on
+the sheets, each with every saved read of it. Nothing asks a model: every answer comes from `saved-reads/answers/`
+(`sfzmaps.solver.saved`). Terra's text boxes (`text-on-every-sheet`) are decoded as the script that asked them did
+(each tile's items moved by its `page_box`; the copy farthest from its tile's edge kept, tiles taken row by row; a
+word inside a longer label that holds it dropped). A zoning-code box with Sol's label points (`district_labels.json`,
+kind "use") inside it is a print read by both (kind 0; the point nearest the box's centre gives Sol's read, and all
+the points inside are used up), a box with none is Terra's alone (kind 1), and a point in no box is Sol's alone
+(kind 2). A print sits at its box's centre (or Sol's point), goes to the map through the sheet's corrected placement,
+and is kept inside the sheet's warped footprint and on the mapped area; `lab_lot` is `grown` at the grid px holding
+it and `street` is `lot < 0` there. The turned pass (`experiments-2000/text-positions/sideways-text`, page px) adds a
+reading to every print whose point is inside a turned box (edges included) or whose Terra box it overlaps by IoU > 0.3,
+the box farthest from its tile's edge winning; a turned box on no print with a known code (the table's, or one Sol
+reads on a print) is a print of its own (kind 3). The third read and its turned re-check name no sheet or picture:
+each print's crop and question are made again as `read3.py` and `read3r.py` made them, and the answer is found by its
+cache key (`llm._key`; the answer formats keep the scripts' class names and fields, and no docstrings, since the JSON
+schema is in the key). A key not found is counted, and that print has no such read; with fewer than 95% of a read's
+keys found the stage stops. It writes `data/solver/prints/prints.parquet` (one row per print; the columns are listed
+in `solver/prints.py`), `terra_boxes.json` (every sheet's decoded Terra boxes, every kind, page px) and
+`summary.json` (prints by kind; keys asked, found and missing per read). The same inputs give the same bytes.
+
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
 ## Where outputs land

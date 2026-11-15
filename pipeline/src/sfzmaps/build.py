@@ -120,6 +120,10 @@ def stages() -> dict[str, Stage]:
     out["solver-lots"] = Stage("solver-lots", (), (), ("solver-page",), command=("solver", "lots"),
                                reads=("inputs/zoning-2000", "data/solver/page"),
                                writes=("data/solver/lots",), code=("sfzmaps.solver.lots",))
+    out["solver-prints"] = Stage("solver-prints", (), (), ("solver-lots",), command=("solver", "prints"),
+                                 reads=("saved-reads/answers", "data/work/2000-digital-zoning",
+                                        "data/warp/2000-digital-zoning", "data/solver/lots", "data/solver/page"),
+                                 writes=("data/solver/prints",), code=("sfzmaps.solver.prints",))
     out["shared"] = Stage("shared", (), (), old, frozen=True)
     return out
 
