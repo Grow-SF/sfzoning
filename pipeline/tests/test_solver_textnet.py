@@ -931,11 +931,12 @@ def _score(sd, chance, where) -> dict:
 
 
 def _drawing(ft_per_px: float) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-    """One drawing in feet (1,600 ft square) at `ft_per_px` ft per page px: three straight lines apart, each a bar
-    (from x0 to x1, centred on y, of a width; ft), and a speck 8 ft below the long thin line (a bar 4 ft long).
-    Returns the page and the px of each."""
-    lines = {"long thin": (100, 420, 200, 8), "short thin": (100, 260, 600, 8), "long thick": (100, 420, 1000, 24),
-             "speck": (300, 304, 214, 4)}
+    """One drawing in feet (1,600 ft square) at `ft_per_px` ft per page px: four straight bars apart (from x0 to x1,
+    centred on y, of a width; ft): a long thin line, a short thin one, a long heavy one (a district line's 40 ft) and
+    a long solid fill (64 ft); and a speck 8 ft below the long thin line (a bar 4 ft long).  Returns the page and the
+    px of each."""
+    lines = {"long thin": (100, 420, 200, 8), "short thin": (100, 260, 500, 8), "long heavy": (100, 420, 800, 40),
+             "solid": (100, 420, 1200, 64), "speck": (300, 304, 214, 4)}
     n = int(round(1600 / ft_per_px))
     gray = np.full((n, n), 255, np.uint8)
     px = {}
@@ -949,19 +950,22 @@ def _drawing(ft_per_px: float) -> tuple[np.ndarray, dict[str, np.ndarray]]:
 
 
 def test_long_line_measure_uses_feet_per_sheet():
-    # the same drawing at 2 and at 4 ft per page px: the same line is long and thin (at least LONG_LINE_FT long, at
-    # most THIN_LINE_FT wide, each in the sheet's own feet), nearly all of its ink and none of the others'
+    # the same drawing at 2 and at 4 ft per page px: the same lines are long lines (at least LONG_LINE_FT long, at most
+    # THIN_LINE_FT wide, each in the sheet's own feet), the thin and the heavy one, nearly all of their ink; the short
+    # line and the solid fill are not
     for ft in (2.0, 4.0):
         gray, lines = _drawing(ft)
         found = scores.long_lines(gray < grid.INK_BELOW, ft)
-        assert found[lines["long thin"]].mean() >= 0.9, ft
-        assert not found[lines["short thin"]].any() and not found[lines["long thick"]].any(), ft
+        assert found[lines["long thin"]].mean() >= 0.9 and found[lines["long heavy"]].mean() >= 0.8, ft
+        assert not found[lines["short thin"]].any() and not found[lines["solid"]].any(), ft
         # a speck beside the line, whose centre line is no stroke, is not the line's
         assert lines["speck"].any() and not found[lines["speck"]].any(), ft
         assert not (found & (gray >= grid.INK_BELOW)).any()
-    # read at the grid's 4 ft per px instead, the 2 ft drawing's thin line would be 16 ft wide: the scale decides
+    # read at the grid's 4 ft per px instead, the 2 ft drawing's short line would be 320 ft long and its heavy line
+    # 80 ft wide: the sheet's scale decides both
     gray, lines = _drawing(2.0)
-    assert scores.long_lines(gray < grid.INK_BELOW, grid.FT_PER_PX)[lines["long thin"]].mean() < 0.5
+    wrong = scores.long_lines(gray < grid.INK_BELOW, grid.FT_PER_PX)
+    assert wrong[lines["short thin"]].mean() >= 0.9 and not wrong[lines["long heavy"]].any()
     # the scores read each sheet's own scale: the same long-line ink, in square feet, at both
     area_ft2 = []
     for ft in (2.0, 4.0):
@@ -1108,6 +1112,31 @@ def test_words_found_counts_a_box_with_half_its_ink_called_text():
     assert {k: x["of"] for k, x in w["words"].items()} == {
         "zoning code": 1, "block number": 0, "street name": 1, "other": 1, "all": 3}
     assert w["words_found"] == 0.0
+
+
+def test_a_sheets_long_lines_are_found_once_per_process(monkeypatch):
+    monkeypatch.setattr(scores, "_LINE_INK", {})
+    calls = []
+    real = scores.long_lines
+    monkeypatch.setattr(scores, "long_lines", lambda ink, ft: calls.append(ft) or real(ink, ft))
+    gray = _edge_page()
+    sd = _in_memory_sheet(gray, words=EDGE_WORDS, points=[EDGE_POINT])
+    rng = np.random.default_rng(2)
+    chances = [rng.integers(0, 256, gray.shape, dtype=np.uint8) for _ in range(2)]
+    first = [_score(sd, c, where) for c in chances for where in scores.WHERE]
+    # two detectors' chances, on validation and on the whole sheet, and an equal copy of the sheet: the lines once
+    assert _score(dataclasses.replace(sd, ink_bits=sd.ink_bits.copy()), chances[0], "validation") == first[0]
+    assert len(calls) == 1
+    assert np.array_equal(scores.line_ink(sd), real(data.page_ink(sd), sd.ft_per_px)) and len(calls) == 1
+    # the same as found afresh
+    monkeypatch.setattr(scores, "_LINE_INK", {})
+    assert [_score(sd, c, where) for c in chances for where in scores.WHERE] == first and len(calls) == 2
+    # another page under the same name, or the same page at another scale, is not given the kept answer
+    other = gray.copy()
+    other[100:102, 50:600] = 0
+    scores.line_ink(_in_memory_sheet(other, words=EDGE_WORDS, points=[EDGE_POINT]))
+    scores.line_ink(_in_memory_sheet(gray, ft_per_px=2.0, words=EDGE_WORDS, points=[EDGE_POINT]))
+    assert calls == [4.0, 4.0, 4.0, 2.0]
 
 
 def test_scores_read_the_sheets_of_the_maps_scored_and_add_them_up(maps):

@@ -15,21 +15,24 @@ unknown px, near Sol's points and in the other passes' boxes, left out).  A chan
               (the share of the text ink called text); ink outside every box called text (the share of the ink in no
               word); and the share of the ink called text that is in a word
   words       Terra's words found, by kind: a word is found when the mean chance over its ink is CALLED or more (on
-              average half its ink called text: the rule of the quarter models' scores).  Each word is its own
-              rectangle, as drawn for training, and its ink the ink px inside it: where two overlap, that ink is each
-              one's.  A word with no ink is not counted.  In validation a word is counted when its centre px (its
-              rectangle's corners' mean, rounded) is in the area, and is judged on its ink in the area alone, so no px
-              the detector trained on counts; a word whose centre is outside is not counted, though its ink inside
-              still counts as text ink
-  long lines  ink on long thin strokes (`long_lines`): the share called text and the mean chance; the share of it in a
-              word (which a detector calling exactly the words would call), and the share of the rest called text.
-              It stands in for district-line ink called text, which needs the zoning table
+              average half its ink called text).  That is the found-word rule of the quarter models' scores
+              (`evaluate.py`), kept; not "at least half its px called", which differs where the chance is neither 0
+              nor 1.  Each word is its own rectangle, as drawn for training, and its ink the ink px inside it: where
+              two overlap, that ink is each one's.  (The quarter models' scores counted connected regions of box px
+              as words, so their 96.6% of words found is not comparable.)  A word with no ink is not counted.  In
+              validation a word is counted when its centre px (its rectangle's corners' mean, rounded) is in the
+              area, and is judged on its ink in the area alone, so no px the detector trained on counts; a word whose
+              centre is outside is not counted, though its ink inside still counts as text ink
+  long lines  ink on long strokes no wider than a heavy line (`line_ink`): the share called text and the mean chance;
+              the share of it in a word (which a detector calling exactly the words would call), and the share of the
+              rest called text.  It stands in for district-line ink called text, which needs the zoning table
 
 Summed over the sheets of each map (series), and over all of them.  The counts are whole numbers, divided only at the
 end, so the scores don't depend on the order of the sheets; a share of nothing is None; nothing in them is a time or a
 path, so the same chances give the same bytes.
 """
 import dataclasses
+import hashlib
 from collections.abc import Mapping
 
 import cv2
@@ -39,9 +42,14 @@ from sfzmaps.solver import paths, strokes
 from sfzmaps.solver.textnet import data
 
 CALLED = 128              # a chance of at least this (of 255) is "called text": a chance of 0.5 or more
-LONG_LINE_FT = 200.0      # a long line: a stroke at least this long ...
-THIN_LINE_FT = 12.0       # ... and at most this wide (its median width); both in the sheet's own feet (`ft_per_px`)
+# A long line: a stroke at least LONG_LINE_FT long and at most THIN_LINE_FT wide (its median width), both in the
+# sheet's own feet (`ft_per_px`).  The measure is to catch district lines called text: the 2000 map's are heavy, 24 to
+# 32 ft wide, and its ordinary lines about 16 ft.  Letters already fall out by length, so the width limit only keeps
+# out solid fills.
+LONG_LINE_FT = 200.0
+THIN_LINE_FT = 48.0
 WHERE = ("validation", "whole")
+_LINE_INK: dict[tuple, np.ndarray] = {}     # `line_ink`'s answers in this process, packed bits, by sheet
 
 
 def auc(pos: np.ndarray, neg: np.ndarray) -> float | None:
@@ -81,8 +89,8 @@ def _page_px(colrow: np.ndarray) -> np.ndarray:
 
 
 def long_lines(ink: np.ndarray, ft_per_px: float) -> np.ndarray:
-    """The ink px (bool) on long thin strokes: of the strokes of the ink (`strokes.strokes`: its centre lines, split
-    at their ends and junctions), those at least LONG_LINE_FT long and at most THIN_LINE_FT wide (median), measured at
+    """The ink px (bool) on long lines: of the strokes of the ink (`strokes.strokes`: its centre lines, split at their
+    ends and junctions), those at least LONG_LINE_FT long and at most THIN_LINE_FT wide (median), measured at
     `ft_per_px` ft per px.  Each ink px is its nearest centre-line px's, in its own piece of ink (a speck whose centre
     line is no stroke is no line's); a centre-line px where strokes meet is on a long line when one of them is."""
     ink = np.asarray(ink, bool)
@@ -109,6 +117,18 @@ def long_lines(ink: np.ndarray, ft_per_px: float) -> np.ndarray:
     piece_of = np.zeros(len(is_long), np.int32)
     piece_of[nearest[centre]] = piece[centre]
     return ink & is_long[nearest] & (piece_of[nearest] == piece)
+
+
+def line_ink(sd: data.SheetData) -> np.ndarray:
+    """A sheet's whole page of long-line ink (bool, `long_lines` of its ink at its scale), found once per process: the
+    answer is kept (as packed bits) under the sheet's name and shape, its scale, a digest of its ink and the two
+    constants, so scoring several detectors' chances in one process finds the lines once, and another page under the
+    same name is never given this one's."""
+    digest = hashlib.blake2b(sd.ink_bits.tobytes(), digest_size=16).hexdigest()
+    key = (sd.series, sd.sheet, sd.height, sd.width, sd.ft_per_px, digest, LONG_LINE_FT, THIN_LINE_FT)
+    if key not in _LINE_INK:
+        _LINE_INK[key] = np.packbits(long_lines(data.page_ink(sd), sd.ft_per_px), axis=1)
+    return np.unpackbits(_LINE_INK[key], axis=1, count=sd.width).view(bool)
 
 
 @dataclasses.dataclass
@@ -197,7 +217,7 @@ def score_sheet(sd: data.SheetData, chance: np.ndarray, scope: np.ndarray) -> _T
     t.pos += np.bincount(chance[scored & text], minlength=256)
     t.neg += np.bincount(chance[scored & ~text], minlength=256)
     _add_words(t, sd, chance, ink & scope, scope)
-    line = long_lines(ink, sd.ft_per_px) & scored
+    line = line_ink(sd) & scored
     t.line_px = int(line.sum())
     t.line_called = int((chance[line] >= CALLED).sum())
     t.line_chance = int(chance[line].sum(dtype=np.int64))
