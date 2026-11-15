@@ -922,3 +922,15 @@ def solver_fetch_table() -> None:
     from sfzmaps.solver import table
     info = table.fetch_table()
     typer.echo(f"{info['rows']} rows, sha256 {info['sha256']}")
+
+
+@solver_app.command("page")
+def solver_page() -> None:
+    """Merge the warped 2000 sheets into one page on the solver's grid: data/solver/page/ink.png, sheets.png and
+    frames.json."""
+    import logging
+
+    from sfzmaps.solver import page
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = page.build_page()
+    typer.echo(f"{s['sheets']} sheets laid: {s['ink_px']:,} ink px, {s['covered_px']:,} px covered, {s['seconds']} s")

@@ -453,6 +453,20 @@ Hand-made and downloaded inputs are in `inputs/zoning-2000/` (see its README): t
 (`april2000.geojson.gz`, downloaded from DataSF by `sfzmaps solver fetch-table`, with `PROVENANCE.md`) and
 `table-corrections.csv`, which is used only in scoring. The lot index is the row order of the table file.
 
+The solver's grid (`sfzmaps.solver.grid`) is one raster over the city in EPSG:2227 feet, 4 ft per px, 11,900 ×
+9,825 px, north up, its top-left corner at (5979300, 2124100): col = (x − 5979300) / 4, row = (2124100 − y) / 4. The
+merged page, the lots and the walls all sit on it.
+
+**The merged page** (`sfzmaps solver page`, stage `solver-page`, after `warp-2000-digital-zoning`) lays every warped
+2000 zoning sheet onto the grid as one picture of the printed ink. Each sheet's crop is its printed frame, found on
+`page.png` as four straight, slightly tilted lines and taken 2 px inside them (`solver/frame.py`; its search windows
+are fixed page px), minus the cut boxes in `inputs/merged-page/` (notes and the north arrow printed inside the
+frame). The sheet's corrected placement (`data/warp/2000-digital-zoning/<sheet>/transform.json`) is evaluated every
+8 grid px, read bilinearly between, and each grid px takes the nearest page px: the only resampling, so the 1-bit
+scans stay 1-bit. A grid px is ink where any sheet shows ink (page < 128) inside its crop. It writes
+`data/solver/page/ink.png` (0 = ink, 255 = paper), `sheets.png` (how many sheets' crops cover each px; 0 = not
+mapped) and `frames.json` (each sheet's crop quad, page px). The same inputs give the same bytes.
+
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
 ## Where outputs land

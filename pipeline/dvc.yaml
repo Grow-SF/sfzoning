@@ -1652,6 +1652,25 @@ stages:
     outs:
       - data/warp/2000-digital-su:
           persist: true
+  solver-page:
+    cmd: uv run --frozen sfzmaps stage solver-page
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/2000-digital-zoning
+      - data/work/2000-digital-zoning
+      - inputs/merged-page
+    outs:
+      - data/solver/page:
+          persist: true
   shared:
     cmd: uv run --frozen sfzmaps stage shared
     frozen: true

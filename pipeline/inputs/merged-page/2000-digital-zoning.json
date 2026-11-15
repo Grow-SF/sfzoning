@@ -1,0 +1,16 @@
+{
+ "2000-digital-zoning-p01": [
+  {"box": [163, 3830, 713, 3991], "what": "bottom left: the note \"San Francisco Municipal Code, Part II, Chapter II, Section 209, with amendments to and including August 2000\""},
+  {"box": [2898, 3737, 3146, 3954], "what": "bottom right: the north arrow and the 0-800 feet scale bar"},
+  {"box": [2228, 526, 3118, 641], "what": "top right: the note \"Zoning districts along the bay extend to the pier head line as shown on maps 1, 2, 8, and 9 ... RH-1 district by Planning Code Section 105(e)\""}
+ ],
+ "2000-digital-zoning-p02": [
+  {"box": [118, 505, 1008, 631], "what": "top left: the pier head line note (as on p01)"}
+ ],
+ "2000-digital-zoning-p08": [
+  {"box": [2223, 555, 3124, 675], "what": "top right: the pier head line note (as on p01)"}
+ ],
+ "2000-digital-zoning-p09": [
+  {"box": [2287, 3874, 3178, 3995], "what": "bottom right: the pier head line note (as on p01)"}
+ ]
+}

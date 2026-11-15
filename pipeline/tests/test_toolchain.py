@@ -38,7 +38,8 @@ def test_build_refuses_tools_outside_the_flake_unless_told(monkeypatch, capsys):
 
 
 def test_every_stage_depends_on_the_pinned_toolchain():
-    built = [st for st in build.stages().values() if not st.frozen]     # refdata is never built
+    # refdata is never built; command stages (the 2000 solver's) run Python only, pinned by uv.lock, and no pixi tool
+    built = [st for st in build.stages().values() if not st.frozen and not st.command]
     assert built and all({"../pixi.toml", "../pixi.lock"} <= set(build.stage_deps(st)) for st in built)
 
 

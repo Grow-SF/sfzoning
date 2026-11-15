@@ -14,6 +14,7 @@ into one tracked folder, and a height series' districts write into its zoning se
   today         districts for today's DataSF zoning
   shared        the merged archive the site reads (districts --shared)
   warp-<S>      the sheet warp of one series (sfzmaps warp S), after the stage above that places it
+  solver-<part> one of the 2000 solver's inputs (sfzmaps solver <part>), after the 2000 warp
 
 The old pipeline's stages (edition-*, period-*, today, shared) are frozen: the sheet warp replaces
 them, so a build runs only the warp-* stages (`build --force NAME` still runs an old one).
@@ -111,6 +112,11 @@ def stages() -> dict[str, Stage]:
     owner = {s: n for n, st in out.items() for s in st.series}
     for s in SERIES:
         out[f"warp-{s}"] = Stage(f"warp-{s}", (), (), (owner[s], "refdata"), warp=s)
+    # The 2000 solver's inputs: command stages, each naming its code, its reads and its writes.
+    out["solver-page"] = Stage("solver-page", (), (), ("warp-2000-digital-zoning",), command=("solver", "page"),
+                               reads=("data/warp/2000-digital-zoning", "data/work/2000-digital-zoning",
+                                      "inputs/merged-page"),
+                               writes=("data/solver/page",), code=("sfzmaps.solver.page",))
     out["shared"] = Stage("shared", (), (), old, frozen=True)
     return out
 

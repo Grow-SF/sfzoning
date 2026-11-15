@@ -13,9 +13,10 @@ def test_every_series_is_in_exactly_one_stage():
     owned = [s for st in table.values() for s in st.series]
     assert sorted(owned) == sorted(SERIES) and len(owned) == len(set(owned))
     # shared comes last and needs the old stages only: not the saved reads' images (no output is made
-    # from them) and not the warp stages (the old pipeline's merge doesn't read them)
+    # from them), not the warp stages (the old pipeline's merge doesn't read them) and not the solver's
     assert list(table)[-1] == "shared" and set(table["shared"].upstream) == {
-        n for n in table if n not in ("shared", "saved-reads") and not n.startswith("warp-")}
+        n for n in table if n not in ("shared", "saved-reads") and not n.startswith("warp-")
+        and not table[n].command}
 
 
 def test_a_period_reads_heights_before_zoning_and_never_special_use():
