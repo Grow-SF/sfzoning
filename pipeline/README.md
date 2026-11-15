@@ -328,17 +328,17 @@ every other stage. Warping needs the pinned GDAL, so run inside the pixi environ
 as for the rest of the pipeline; like `sfzmaps build`, it refuses tools from elsewhere unless you pass
 `--system-tools`. The fits use PyTorch, which comes with the pipeline's own dependencies.
 
-The fits run on the Mac's GPU (PyTorch's `mps` device) when there is one, and on the CPU otherwise, which is slower.
-`SFZMAPS_WARP_DEVICE=cpu` or `=mps` picks one. The method is deterministic: a sheet fitted twice on the same device
-gets the same correction. The GPU and the CPU give slightly different corrections from each other, so each sheet's
-`scores.json` records the device (and the macOS version) that fitted it, and a change of either counts as a change of
-inputs.
+The fits run on the Mac's GPU when there is one, and on the CPU otherwise, which is slower.
+`SFZMAPS_WARP_DEVICE=cpu` or `=mps` (the GPU) picks one. The method is deterministic: a sheet fitted twice on the same
+device gets the same correction. The GPU and the CPU give slightly different corrections from each other, so each sheet's
+`scores.json` records the device that fitted it. The sheet's freshness record also holds the macOS version, so a
+different device or macOS version refits the sheet.
 
 Mind memory: each warp fits `--jobs` sheets at once (6 by default), and a large sheet's fit takes several GB.
 `sfzmaps build -j N` runs N series at once and shares one budget of 6 sheets among them: each warp stage fits
 `max(1, 6 // N)` sheets at a time. So `-j 1` does one series with 6 sheets at once, `-j 2` two series with 3 each, and
-`-j 4` four series with 1 each; the total stays near 6 sheets, which is safe on a 64 GB Mac. Measured on the 12 sheets of 1929 on the GPU: 2.95 sheets a minute with 3 at a time, 4.07 with 6 (the default),
-4.24 with 9.
+`-j 4` four series with 1 each. The total is at most 6 sheets while N is 6 or less (each series gets at least 1),
+which is safe on a 64 GB Mac.
 
 ### How fast it is
 
@@ -350,6 +350,8 @@ placement to within 0.001 px.
 - The fits on five real sheets run 6 to 25 times faster than before (1948 sheet 11: 245 s down to 10 s), with the same
   scores: the mean share of block-side points within 1 px changed by +0.0001.
 - Preparing the two biggest sheets went from 152 s to 36 s and from 286 s to 58 s.
+- Whole sheets, 1929 (12 sheets) on the GPU: 2.95 sheets a minute with 3 sheets at a time, 4.07 with 6 (the default),
+  4.24 with 9.
 
 ### The steps, for each sheet
 
