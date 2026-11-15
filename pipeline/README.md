@@ -335,8 +335,9 @@ gets the same correction. The GPU and the CPU give slightly different correction
 inputs.
 
 Mind memory: each warp fits `--jobs` sheets at once (6 by default), and a large sheet's fit takes several GB.
-`sfzmaps build -j N` runs N series at once, each fitting 6 sheets at a time, so `-j 1` is the safe choice on a 64 GB
-Mac. Measured on the 12 sheets of 1929 on the GPU: 2.95 sheets a minute with 3 at a time, 4.07 with 6 (the default),
+`sfzmaps build -j N` runs N series at once and shares one budget of 6 sheets among them: each warp stage fits
+`max(1, 6 // N)` sheets at a time. So `-j 1` does one series with 6 sheets at once, `-j 2` two series with 3 each, and
+`-j 4` four series with 1 each; the total stays near 6 sheets, which is safe on a 64 GB Mac. Measured on the 12 sheets of 1929 on the GPU: 2.95 sheets a minute with 3 at a time, 4.07 with 6 (the default),
 4.24 with 9.
 
 ### How fast it is
