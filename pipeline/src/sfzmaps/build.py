@@ -4,6 +4,8 @@ DVC (pipeline/dvc.yaml + dvc.lock, committed) records the content hash of every 
 of every stage, so a checkout can tell whether its data matches its code and inputs. DVC runs
 stages one at a time, so `sfzmaps build` runs them itself, up to --jobs at once in dependency
 order, and asks DVC only what is stale (`dvc status`) and to record each success (`dvc commit`).
+A stage that is planned only because an upstream stage is stale is asked about again (`dvc status
+STAGE`) once those have run and been recorded, and doesn't run when what they wrote is unchanged.
 
 A stage is the smallest unit whose writes don't cross another's (DVC refuses two stages writing
 into one tracked folder, and a height series' districts write into its zoning series' out/):
@@ -33,7 +35,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -369,6 +371,17 @@ def stale_stages(status_json: str) -> set[str]:
     return {k.rsplit(":", 1)[-1] for k in data if not k.endswith(".dvc")}
 
 
+def still_stale(name: str, run: Callable[..., subprocess.CompletedProcess] | None = None) -> tuple[bool, list[str]]:
+    """Whether stage `name` is stale by `dvc status --json NAME` (that stage alone), and its changed deps. A build
+    asks this of a stage planned only because an upstream stage was stale, once those have run and been recorded:
+    if what the upstream wrote is unchanged where the stage reads it, it needn't run. A status that fails counts as
+    stale."""
+    p = (run or dvc)("status", "--json", name, check=False)
+    if p.returncode != 0:
+        return True, []
+    return name in stale_stages(p.stdout), changed_deps(p.stdout).get(name, [])
+
+
 def changed_deps(status_json: str) -> dict[str, list[str]]:
     """Stage name -> its dependencies `dvc status --json` reports changed. A stage's commands get
     this as SFZMAPS_DVC_CHANGED_DEPS, so sfzmaps.fresh can adopt outputs made before fingerprint
@@ -426,6 +439,7 @@ class BuildResult:
     ran: list[str]
     failed: dict[str, str]
     skipped: list[str]
+    fresh: list[str] = field(default_factory=list)   # up to date after its upstreams: not run
 
     @property
     def ok(self) -> bool:
@@ -434,17 +448,26 @@ class BuildResult:
 
 def run_build(order: list[str], table: dict[str, Stage], jobs: int, *,
               run_stage: Callable[[str], None], commit: Callable[[str], None],
-              guard: Callable[[], str | None] = lambda: None) -> BuildResult:
+              guard: Callable[[], str | None] = lambda: None,
+              recheck: Callable[[str], bool] | None = None, must_run: set[str] | None = None) -> BuildResult:
     """Run `order` (from plan_run), up to `jobs` at once, each once its upstream stages in
     `order` succeeded; commit each success (one at a time). A failure skips its downstream
     stages. guard() is checked before each commit: a message stops all further commits and
-    starts (the inputs changed under the build)."""
+    starts (the inputs changed under the build).
+
+    must_run: the stages that run whatever (stale at the start, or forced); None, every stage in
+    `order`. Any other stage is there only because an upstream stage was stale: once its upstream
+    stages in `order` are recorded, recheck(name) says whether it is stale now, and if not it
+    doesn't run (`fresh`) and counts as done for its own downstream. recheck is called from this
+    thread only, between the commits, so it may ask DVC."""
     todo = list(order)
     done: set[str] = set()
     failed: dict[str, str] = {}
     skipped: list[str] = []
     ran: list[str] = []
+    fresh: list[str] = []
     stop: str | None = None
+    check = set() if must_run is None or recheck is None else set(order) - set(must_run)
 
     def ready(n: str) -> bool:
         return all(u in done or u not in order for u in table[n].upstream)
@@ -458,10 +481,21 @@ def run_build(order: list[str], table: dict[str, Stage], jobs: int, *,
             for n in [n for n in todo if blocked(n) or stop]:
                 todo.remove(n)
                 skipped.append(n)
-            for n in [n for n in todo if ready(n)][: max(0, jobs - len(running))]:
+            freed = False
+            for n in [n for n in todo if ready(n)]:
+                if len(running) >= max(1, jobs):
+                    break
                 todo.remove(n)
+                if n in check and not recheck(n):
+                    fresh.append(n)
+                    done.add(n)
+                    freed = True
+                    log.info("build: %s is up to date after its upstreams", n)
+                    continue
                 running[pool.submit(run_stage, n)] = n
                 log.info("build: started %s", n)
+            if freed:         # its downstream may be ready now
+                continue
             if not running:   # nothing could start: what is left can't run
                 skipped.extend(todo)
                 break
@@ -485,7 +519,7 @@ def run_build(order: list[str], table: dict[str, Stage], jobs: int, *,
                     continue
                 done.add(n)
                 log.info("build: %s done", n)
-    return BuildResult(ran, failed, skipped)
+    return BuildResult(ran, failed, skipped, fresh)
 
 
 def require_toolchain(system_tools: bool) -> None:
@@ -521,12 +555,19 @@ def build(targets: list[str] | None, jobs: int, dry_run: bool, force: bool,
         st = dvc("status", "--json", check=False)
         if st.returncode != 0:
             raise SystemExit(f"dvc status failed:\n{st.stderr.strip()}")
-        order = plan_run(stale_stages(st.stdout), targets, table, force)
+        stale = stale_stages(st.stdout)
+        order = plan_run(stale, targets, table, force)
         if not order:
             print("nothing to build: every stage is up to date")
             return 0
+        # the stages that run whatever; the others are planned only because an upstream stage is stale, and are
+        # asked again once it has run
+        must_run = (stale & set(order)) | (set(targets or []) if force else set())
+        later = [n for n in order if n not in must_run]
         print(f"{'would build' if dry_run else 'building'} {len(order)} stage(s), "
-              f"{jobs} at a time: {', '.join(order)}")
+              f"{jobs} at a time: {', '.join(order)}"
+              + (f"\n  (of them, {', '.join(later)} only if still stale once their upstream stages have run)"
+                 if later else ""))
         if dry_run:
             return 0
         if needs_prepare(order, table):
@@ -561,9 +602,17 @@ def build(targets: list[str] | None, jobs: int, dry_run: bool, force: bool,
             if p.returncode != 0:
                 raise RuntimeError(f"dvc commit: {p.stderr.strip()[-300:]}")
 
+        def recheck(name: str) -> bool:
+            again, deps = still_stale(name)
+            changed[name] = deps
+            return again
+
         t0 = time.monotonic()
-        res = run_build(order, table, jobs, run_stage=one, commit=commit, guard=guard)
+        res = run_build(order, table, jobs, run_stage=one, commit=commit, guard=guard, recheck=recheck,
+                        must_run=must_run)
         print(f"built {len(res.ran)} stage(s) in {(time.monotonic() - t0) / 60:.1f} min")
+        for n in res.fresh:
+            print(f"up to date after its upstreams: {n}")
         for n, msg in res.failed.items():
             print(f"FAILED  {n}: {msg}")
         for n in res.skipped:

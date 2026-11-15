@@ -114,6 +114,10 @@ whether its data matches its code and inputs (`uv run sfzmaps build --dry-run`, 
   and republished only when its read, heights, overrides, rules or the joining code changed
   (`stats.json.inputs.json`); `districts --force` reads and publishes anyway. So most code
   changes rebuild in minutes. The dry run shows which stages would run.
+- **Downstream only when it changed.** A stage that is not stale itself but comes after one that
+  is waits for that one to run and be recorded, then is asked again (`dvc status STAGE`): when
+  what its upstream stages wrote is unchanged where it reads, it doesn't run ("up to date after
+  its upstreams"). Stale stages, and stages named with `--force`, always run.
 - **Never spends money.** Stages run with `SFZMAPS_MAX_USD=0`: cached answers are free, and a
   read that would call the API fails the stage instead. Run that read yourself
   (`SFZMAPS_MAX_USD=5 uv run sfzmaps run --year S`, or `districts --series S`), then build again.

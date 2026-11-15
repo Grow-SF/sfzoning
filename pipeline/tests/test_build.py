@@ -108,6 +108,69 @@ def test_inputs_changing_mid_build_stop_recording():
     assert commits == ["a"] and "b" in res.failed and res.skipped == ["z"]
 
 
+def _chain():
+    """a -> b -> c, and d beside them"""
+    S = build.Stage
+    return {"a": S("a", (), ()), "b": S("b", (), (), ("a",)), "c": S("c", (), (), ("b",)), "d": S("d", (), ())}
+
+
+def test_a_stage_planned_only_for_its_upstream_is_checked_again_once_that_is_recorded():
+    events = []
+    still_stale = {"b": False, "c": True}         # a ran and changed nothing b reads; c changed on its own
+
+    def recheck(n):
+        events.append(("recheck", n))
+        return still_stale[n]
+
+    res = build.run_build(["a", "b", "c"], _chain(), 1, run_stage=lambda n: events.append(("run", n)),
+                          commit=lambda n: events.append(("commit", n)), recheck=recheck, must_run={"a"})
+    # b is asked again only after a is recorded; up to date, it doesn't run, and c (its downstream) is asked in turn
+    assert events == [("run", "a"), ("commit", "a"), ("recheck", "b"), ("recheck", "c"), ("run", "c"),
+                      ("commit", "c")]
+    assert res.ok and res.ran == ["a", "c"] and res.fresh == ["b"] and not res.skipped
+
+
+def test_stale_stages_always_run_and_a_clean_upstream_frees_its_downstream():
+    asked = []
+    res = build.run_build(["a", "b", "c", "d"], _chain(), 2, run_stage=lambda n: None, commit=lambda n: None,
+                          recheck=lambda n: asked.append(n) or False, must_run={"a", "c", "d"})
+    assert asked == ["b"] and sorted(res.ran) == ["a", "c", "d"] and res.fresh == ["b"] and res.ok
+    # without must_run (and without recheck) every planned stage runs, as before
+    res = build.run_build(["a", "b", "c"], _chain(), 1, run_stage=lambda n: None, commit=lambda n: None)
+    assert res.ran == ["a", "b", "c"] and res.fresh == []
+
+
+def test_a_stage_whose_upstream_failed_is_skipped_not_checked_again():
+    def run(n):
+        if n == "a":
+            raise build.StageFailed("boom")
+
+    res = build.run_build(["a", "b", "c"], _chain(), 1, run_stage=run, commit=lambda n: None,
+                          recheck=lambda n: pytest.fail("not asked"), must_run={"a"})
+    assert set(res.failed) == {"a"} and res.skipped == ["b", "c"] and res.fresh == []
+
+
+class _Done:
+    def __init__(self, returncode, stdout):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, ""
+
+
+def test_the_second_status_asks_dvc_about_that_stage_alone():
+    calls = []
+
+    def dvc(*args, check=True):
+        calls.append(args)
+        return {"solver-lots": _Done(0, "{}"),
+                "solver-prints": _Done(0, json.dumps({"dvc.yaml:solver-prints": [
+                    {"changed deps": {"data/solver/lots": "modified"}}]})),
+                "solver-labels": _Done(1, "")}[args[-1]]
+
+    assert build.still_stale("solver-lots", dvc) == (False, [])
+    assert build.still_stale("solver-prints", dvc) == (True, ["data/solver/lots"])
+    assert build.still_stale("solver-labels", dvc) == (True, [])       # a status that fails: run it
+    assert calls == [("status", "--json", n) for n in ("solver-lots", "solver-prints", "solver-labels")]
+
+
 def _stage_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     sj = tmp_path / "work" / "1948" / "s1" / "score.json"
