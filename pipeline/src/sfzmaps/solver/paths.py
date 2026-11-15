@@ -11,6 +11,8 @@ PAGE_DIR = SOLVER_DIR / "page"
 LOTS_DIR = SOLVER_DIR / "lots"
 PRINTS_DIR = SOLVER_DIR / "prints"
 LABELS_DIR = SOLVER_DIR / "labels"
+WALLS_DIR = SOLVER_DIR / "walls"
+SOLVE_DIR = SOLVER_DIR / "solve"      # placement.npz, runs/, the data-error list
 
 TABLE_DIR = config.INPUTS_DIR / "zoning-2000"
 CUTS_FILE = config.INPUTS_DIR / "merged-page" / "2000-digital-zoning.json"

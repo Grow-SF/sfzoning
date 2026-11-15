@@ -1,18 +1,32 @@
 """Solving the city: one energy over every lot's code (energy.py), searched as in search.py.
 
 Held out by quarter: the city is solved four times, each time with wall odds and a placement model fitted without one
-quarter, and every lot takes its answer from the solve that did not see its quarter."""
+quarter, and every lot takes its answer from the solve that did not see its quarter.  The four solves run side by side,
+each in its own process (`sfzmaps solver solve-quarter`), with one thread each for the linear algebra.
+
+Writes, under data/solver/solve/runs/:
+  {run}-{q}.npz        the solve that held out quarter q: `names` and `pred` (city.save_run)
+  {run}-{q}.log        its log
+  {run}-{q}-costs.npz  with keep_costs: its label costs, odds, codes and readings (for holes.py)
+  {run}.npz            the join: every lot from its own quarter's solve"""
+import os
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 
-from . import energy as E
-from . import search
-from .codes import canon, table_vocabulary
-from .data import QUARTERS, RUNS, city, save_run, wall_odds
-from .labels import readings
-from .placement import load_options
+from sfzmaps.solver import energy as E
+from sfzmaps.solver import paths, search
+from sfzmaps.solver.city import city, run_file, save_run, wall_odds
+from sfzmaps.solver.codes import canon, table_vocabulary
+from sfzmaps.solver.labels import readings
+from sfzmaps.solver.placement import load_options
+
+TRUE_BORDER_ODDS = 6.0      # the ceiling check: the table's own borders as near-certain walls (+) or none (-)
+ONE_THREAD = {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "VECLIB_MAXIMUM_THREADS": "1",
+              "MKL_NUM_THREADS": "1"}
 
 
 def solve_joint(n_lots, a, b, odds, rd, options=None, label_weight=1.0, wall_weight=1.0, same_weight=1.0,
@@ -53,18 +67,24 @@ def solve_joint(n_lots, a, b, odds, rd, options=None, label_weight=1.0, wall_wei
     return p, U
 
 
-def solve_quarter(run, q, true_borders=False, keep_costs=False):
-    """solve the whole city with holdout q's inputs; writes runs/{run}-{q}.npz"""
+def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders: bool = False,
+                  keep_costs: bool = False) -> None:
+    """Solve the whole city with holdout q's inputs (the walls of `walls_dir`, default WALLS_DIR); writes
+    runs/{run}-{q}.npz.  The scoring table (with the by-eye corrections) gives the true borders of the ceiling check
+    and the table's answer the log prices."""
     t0 = time.time()
 
     def log(s):
         print(f"{q}: {s}", flush=True)
 
     C = city()
-    odds = wall_odds(q)
-    if true_borders:                                     # the ceiling: the table's own borders as near-certain walls
+    odds = wall_odds(q, walls_dir)
+    if len(odds) != len(C.a):
+        raise ValueError(f"walls_{q}.npz has {len(odds):,} odds for {len(C.a):,} neighbour pairs: rerun "
+                         "`sfzmaps solver walls` after `sfzmaps solver lots`")
+    if true_borders:
         both = C.known[C.a] & C.known[C.b]
-        odds = np.where(both, np.where(C.table[C.a] != C.table[C.b], 6.0, -6.0), odds)
+        odds = np.where(both, np.where(C.table[C.a] != C.table[C.b], TRUE_BORDER_ODDS, -TRUE_BORDER_ODDS), odds)
     rd = readings(q, table_vocabulary(C.lots))
     index = {}
     for i, n in enumerate(rd.names):
@@ -73,45 +93,50 @@ def solve_quarter(run, q, true_borders=False, keep_costs=False):
     log(f"readings {len(rd.lot):,} on {len(np.unique(rd.lot)):,} lots")
     p, U = solve_joint(C.n, C.a, C.b, odds, rd, load_options(q), table_codes=table_codes, log=log)
     names = rd.names + [""]
-    save_run(RUNS / f"{run}-{q}.npz", np.array(names)[p])
+    save_run(run_file(f"{run}-{q}"), np.array(names)[p])
     if keep_costs:                                       # for hole causes
-        np.savez_compressed(RUNS / f"{run}-{q}-costs.npz", U=U.astype(np.float32), odds=odds.astype(np.float32),
+        np.savez_compressed(run_file(f"{run}-{q}-costs"), U=U.astype(np.float32), odds=odds.astype(np.float32),
                             codes=p, names=np.array(rd.names), table_codes=table_codes, lot=rd.lot, code=rd.code,
                             trust=rd.trust)
     log(f"done in {time.time() - t0:.0f} s")
 
 
-def join(run):
-    """every lot takes the answer of the solve that held out its quarter; writes runs/{run}.npz"""
+def join(run: str) -> None:
+    """Every lot takes the answer of the solve that held out its quarter; writes runs/{run}.npz."""
     C = city()
     out = np.full(C.n, "", dtype=object)
-    for k, q in enumerate(QUARTERS):
-        R = np.load(RUNS / f"{run}-{q}.npz", allow_pickle=True)
+    for k, q in enumerate(paths.QUARTERS):
+        R = np.load(run_file(f"{run}-{q}"), allow_pickle=True)
         m = C.quarter == k
         out[m] = R["names"].astype(str)[R["pred"]][m]
-    save_run(RUNS / f"{run}.npz", out)
+    save_run(run_file(run), out)
 
 
-def solve_all(run, true_borders=False, keep_costs=False):
-    """the four holdouts side by side (one process each), then join"""
-    import os
-    import subprocess
-    RUNS.mkdir(parents=True, exist_ok=True)
-    env = dict(os.environ, OMP_NUM_THREADS="1", OPENBLAS_NUM_THREADS="1", VECLIB_MAXIMUM_THREADS="1",
-               MKL_NUM_THREADS="1")
-    flags = ["--true-borders"] * true_borders + ["--keep-costs"] * keep_costs
+def _sfzmaps() -> list[str]:
+    """The command that runs sfzmaps in this environment."""
+    exe = Path(sys.executable).with_name("sfzmaps")
+    return [str(exe)] if exe.exists() else [sys.executable, "-m", "sfzmaps.cli"]
+
+
+def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = False, keep_costs: bool = False) -> None:
+    """The four holdouts side by side (one `sfzmaps solver solve-quarter` process each), then the join."""
+    runs = run_file(run).parent
+    runs.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ, **ONE_THREAD)
+    flags = (["--true-borders"] * true_borders + ["--keep-costs"] * keep_costs
+             + (["--walls", str(walls_dir)] if walls_dir else []))
     procs = []
-    for q in QUARTERS:
-        logf = open(RUNS / f"{run}-{q}.log", "w")
-        cmd = [sys.executable, "-m", __package__, "solve", run, "--quarter", q] + flags
+    for q in paths.QUARTERS:
+        logf = open(runs / f"{run}-{q}.log", "w")
+        cmd = _sfzmaps() + ["solver", "solve-quarter", run, q] + flags
         procs.append((q, logf, subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, env=env)))
     failed = []
     for q, logf, p in procs:
         if p.wait() != 0:
             failed.append(q)
         logf.close()
-        print((RUNS / f"{run}-{q}.log").read_text().rstrip())
+        print((runs / f"{run}-{q}.log").read_text().rstrip())
     if failed:
-        sys.exit(f"solve failed for {', '.join(failed)}; see {RUNS}/{run}-<quarter>.log")
+        raise RuntimeError(f"solve failed for {', '.join(failed)}; see {runs}/{run}-<quarter>.log")
     join(run)
-    print(f"joined: {RUNS / (run + '.npz')}")
+    print(f"joined: {run_file(run)}")

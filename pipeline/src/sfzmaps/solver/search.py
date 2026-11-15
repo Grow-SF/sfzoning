@@ -14,7 +14,7 @@ import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
-from .energy import energy, wall_terms
+from sfzmaps.solver.energy import energy, wall_terms
 
 
 def expansion_moves(U, a0, b0, odds, same_weight, start, sweeps=5, log=None):

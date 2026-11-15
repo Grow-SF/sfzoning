@@ -14,7 +14,7 @@ Writes, under data/solver/labels/:
   lotsize.npz  codes  the table's known codes of scored lots, sorted (str)
                edges  LOG_AREA_EDGES (37)
                PMI    float64 (4, codes, 36): [quarter held out (nw, ne, sw, se), code, size bin], the evidence
-               The joint solver (`scripts/joint_solver/placement.py`) bins each lot's log area with
+               Placement (`solver/placement.py`) bins each lot's log area with
                clip(digitize(log(max(area, 1)), edges) - 1, 0, 35) and reads PMI[quarter][code] by bin.
 """
 import geopandas as gpd

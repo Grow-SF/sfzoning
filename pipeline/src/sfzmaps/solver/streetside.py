@@ -24,8 +24,8 @@ Writes, under data/solver/labels/:
                         rA_st, rB_st  ordinary streets: the share of prints whose top reading is the code of side A,
                                       and of side B
                         rA_fw, rB_fw  the same on freeways and ramps
-                      The joint solver (`scripts/joint_solver/labels.py`) copies a reading of a print on an ordinary
-                      street (onst, not isfw, lotB >= 0) to side B at trust x min(rB_st / rA_st, 1).
+                      The solver (`solver/labels.py`) copies a reading of a print on an ordinary street (onst, not
+                      isfw, lotB >= 0) to side B at trust x min(rB_st / rA_st, 1).
 """
 import re
 

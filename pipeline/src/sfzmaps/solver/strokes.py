@@ -19,7 +19,7 @@ Writes, under data/solver/labels/:
                wiqr    float32: the spread of its width (upper less lower quartile), ft
                spur    bool: a dead end (an end node with this stroke alone) shorter than its median width
                dega, degb  int64: the number of strokes at node a, and at node b (a loop counts twice)
-               The joint solver (`scripts/joint_solver/placement.py`) reads xy, off and wmed.
+               Placement (`solver/placement.py`) reads xy, off and wmed.
 """
 import cv2
 import numpy as np

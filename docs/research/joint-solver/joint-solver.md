@@ -1,5 +1,9 @@
 # The joint solver for the 2000 zoning map
 
+> The R&D write-up of run J7, as it was written when the solver lived in `pipeline/scripts/joint_solver/` on its R&D
+> data folder. The solver now lives in `pipeline/src/sfzmaps/solver/` and reads inputs the build makes; see "The 2000
+> solver" in `pipeline/README.md`. The notes beside this file (`notes/`) are the R&D notes behind it, as written.
+
 R&D, not wired into the build. It reads the district of every parcel from the 2000-digital-zoning scan. It grew out of
 the "bubble" solver of earlier R&D. It runs on a data folder (see `README.md`) and makes no paid reads.
 

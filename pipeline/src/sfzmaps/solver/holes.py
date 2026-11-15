@@ -1,6 +1,6 @@
 """Why each hole in a run's district lines is there (measures.py defines a hole), and the data errors among them.
 
-Per hole: the solve's wall chance there; the raw scan's ink on the table's line, beside it, and as a heavy band; the
+Per hole: the solve's wall chance there; the page's ink on the table's line, beside it, and as a heavy band; the
 wrongly coded lots touching it (how many, and the size of the wrong area they belong to), the lot's width and how much
 of it is inked; the labels on those lots; and how the energy would change if they took their table codes.
 Causes, in this order:
@@ -13,7 +13,8 @@ Causes, in this order:
   CHEAPER STEP                  read as a wall, no label pull: the energy prefers the step
 Data errors: a sliver, one-lot-over or on-the-line hole whose wrong lot is at least half inked.  The printed line is
 drawn over the parcel and the table puts the parcel on the other side; nothing a reader can do about it.  They are
-listed for publishing and left out of the scores."""
+listed for publishing and left out of the scores (data-errors-2000-digital.csv and data_errors.npz in
+data/solver/solve/)."""
 import csv
 from collections import Counter
 from pathlib import Path
@@ -22,11 +23,12 @@ import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
-from .borders import border_paths
-from .data import FT_PER_PX, OUT, QUARTERS, RUNS, city, load_run
-from .measures import DATA_ERRORS, Table, holes
+from sfzmaps.solver import grid, paths
+from sfzmaps.solver.borders import border_paths
+from sfzmaps.solver.city import city, load_run, run_file
+from sfzmaps.solver.measures import QUARTERS, Table, data_errors_file, holes
 
-DATA_ERRORS_CSV = OUT / "data-errors-2000-digital.csv"
+FT_PER_PX = grid.FT_PER_PX
 DATA_ERROR_CAUSES = {"SLIVER UNDER THE BAND", "PRINTED ONE LOT OVER", "ON THE LINE, READ AS NO WALL"}
 
 
@@ -63,7 +65,7 @@ def causes(run):
     _, wcomp = connected_components(coo_matrix((np.ones(int(wm.sum())), (a[wm], b[wm])), shape=(C.n, C.n)),
                                     directed=False)
     wsize = np.bincount(wcomp[wrong], minlength=C.n)
-    costs = {q: np.load(RUNS / f"{run}-{q}-costs.npz", allow_pickle=True) for q in QUARTERS}
+    costs = {q: np.load(run_file(f"{run}-{q}-costs"), allow_pickle=True) for q in QUARTERS}
     lot_ink = C.lot_ink()
     rows = []
     for ks in hole_list:
@@ -141,7 +143,9 @@ def report_causes(run, picture=None, save_data_errors=False):
 def _save_data_errors(errors, codes):
     C = city()
     lonlat = C.lots.to_crs(4326).geometry.representative_point()
-    with open(DATA_ERRORS_CSV, "w", newline="") as f:
+    csv_file = paths.SOLVE_DIR / "data-errors-2000-digital.csv"
+    paths.SOLVE_DIR.mkdir(parents=True, exist_ok=True)
+    with open(csv_file, "w", newline="") as f:
         w = csv.writer(f, lineterminator="\n")
         w.writerow(["blklot", "table_code", "drawing_code", "lot_width_ft", "lot_inked_share", "lon", "lat", "note"])
         for r in errors:
@@ -151,13 +155,12 @@ def _save_data_errors(errors, codes):
                             "the printed district line is drawn over this parcel; the table puts the parcel on the "
                             "other side"])
     lots = sorted({lot for r in errors for lot in r["wrong_lots"]})
-    OUT.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(DATA_ERRORS, lots=np.array(lots, int))
-    print(f"saved {DATA_ERRORS_CSV} and {DATA_ERRORS} ({len(lots)} parcels)")
+    np.savez_compressed(data_errors_file(), lots=np.array(lots, int))
+    print(f"saved {csv_file} and {data_errors_file()} ({len(lots)} parcels)")
 
 
 def _picture(rows, codes, out, F=5):
-    """per hole, 240 ft around the wrong lot: the raw scan, table lines black (the hole red), the run's borders blue,
+    """per hole, 240 ft around the wrong lot: the page's ink, table lines black (the hole red), the run's borders blue,
     the wrong lot outlined magenta; grouped by cause"""
     import cv2
     C = city()
@@ -166,17 +169,14 @@ def _picture(rows, codes, out, F=5):
     drawn = codes[a] != codes[b]
     grown = C.grown_raster
     Hh, Ww = grown.shape
-    ink, row0, col0 = C.scan()
+    ink = C.scan()
     keys = a.astype(np.int64) * N + b
     panels = []
     for r in sorted(rows, key=lambda r: (r["cause"], -r["ft"])):
-        c0, r0 = C.to_grid(C.centroid[r["lot"]] - 120)
+        c0, r0 = C.px(C.centroid[r["lot"]] + np.array([-120.0, 120.0]))     # the window's top-left corner
         c0, r0 = max(int(c0), 0), max(int(r0), 0)
         c1, r1 = min(c0 + 60, Ww), min(r0 + 60, Hh)
-        pr, pc = row0 - np.arange(r0, r1), np.arange(c0, c1) - col0
-        page = np.full((r1 - r0, c1 - c0), 255, np.uint8)
-        okr, okc = (pr >= 0) & (pr < ink.shape[0]), (pc >= 0) & (pc < ink.shape[1])
-        page[np.ix_(np.flatnonzero(okr), np.flatnonzero(okc))] = np.where(ink[np.ix_(pr[okr], pc[okc])], 0, 255)
+        page = np.where(ink[r0:r1, c0:c1], 0, 255).astype(np.uint8)
         faint = cv2.cvtColor((255 - (255 - page) * 0.4).astype(np.uint8), cv2.COLOR_GRAY2BGR)
         big = cv2.resize(faint, None, fx=F, fy=F, interpolation=cv2.INTER_NEAREST)
         gw = grown[r0:r1, c0:c1]
@@ -196,7 +196,6 @@ def _picture(rows, codes, out, F=5):
         outline = cv2.resize((gw == r["lot"]).astype(np.uint8), None, fx=F, fy=F, interpolation=cv2.INTER_NEAREST)
         cnts, _ = cv2.findContours(outline, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         cv2.drawContours(big, cnts, -1, (200, 0, 200), 2)
-        big = big[::-1].copy()
         cap = np.full((34, big.shape[1], 3), 255, np.uint8)
         cv2.putText(cap, r["cause"][:28], (4, 13), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 150), 1)
         text = f"{r['table']} wall {r['wall']:.2f} lot {r['lot_w']:.0f}ft band {r['band_off']:+.0f}ft"

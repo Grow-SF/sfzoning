@@ -10,7 +10,8 @@ from sfzmaps.build import WARP_WORKERS
 from sfzmaps.sources import drive
 
 app = typer.Typer(no_args_is_help=True, help="Georeference historic SF zoning maps.")
-solver_app = typer.Typer(no_args_is_help=True, help="Make the 2000 solver's inputs (each is a `sfzmaps build` stage).")
+solver_app = typer.Typer(no_args_is_help=True,
+                         help="The 2000 solver: make its inputs (each a `sfzmaps build` stage) and solve.")
 app.add_typer(solver_app, name="solver")
 # Exit status of a command stopped by llm.FATAL (quota, spend cap, missing key): `sfzmaps build`
 # reports it as "needs a paid read". Not 2, which click uses for usage errors.
@@ -1009,3 +1010,90 @@ def solver_text(
                f"district-line ink called text {s['district_lines']['called_text']:.2%} "
                f"(of {s['district_lines']['ink_px']:,} px)")
     typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in times.items()))
+
+
+_WALLS_OPTION = typer.Option(None, "--walls", help="The folder of walls_<q>.npz (default data/solver/walls).")
+
+
+@solver_app.command("placement")
+def solver_placement(walls: Path = _WALLS_OPTION) -> None:
+    """Fit where each printed label belongs, held out by quarter (learning from the hand leader moves of
+    label_fixes.csv and the table): data/solver/solve/placement.npz."""
+    from sfzmaps.solver import placement
+    placement.fit(walls)
+
+
+@solver_app.command("solve")
+def solver_solve(
+    run: str = typer.Argument(..., help="A name for the run (data/solver/solve/runs/RUN.npz)."),
+    walls: Path = _WALLS_OPTION,
+    true_borders: bool = typer.Option(False, "--true-borders",
+                                      help="The ceiling check: the table's own borders as walls."),
+    keep_costs: bool = typer.Option(False, "--keep-costs", help="Keep each solve's costs (needed by `holes`)."),
+) -> None:
+    """Solve the four held-out quarters side by side, join them and score the run (data-error parcels left out)."""
+    from sfzmaps.solver import solve
+    try:
+        solve.solve_all(run, walls, true_borders, keep_costs)
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    _solver_score([run], True)
+
+
+@solver_app.command("solve-quarter")
+def solver_solve_quarter(
+    run: str = typer.Argument(..., help="The run's name."),
+    quarter: str = typer.Argument(..., help="The quarter held out: nw, ne, sw or se."),
+    walls: Path = _WALLS_OPTION,
+    true_borders: bool = typer.Option(False, "--true-borders"),
+    keep_costs: bool = typer.Option(False, "--keep-costs"),
+) -> None:
+    """Solve the whole city with one quarter's held-out inputs: data/solver/solve/runs/RUN-QUARTER.npz (no join)."""
+    from sfzmaps.solver import paths, solve
+    if quarter not in paths.QUARTERS:
+        raise typer.BadParameter(f"one of {', '.join(paths.QUARTERS)}", param_hint="QUARTER")
+    solve.solve_quarter(run, quarter, walls, true_borders, keep_costs)
+
+
+@solver_app.command("score")
+def solver_score(
+    runs: list[str] = typer.Argument(..., help="Runs to score."),
+    with_data_errors: bool = typer.Option(False, "--with-data-errors", help="Count the data-error parcels too."),
+) -> None:
+    """Score runs against the April 2000 table (with its by-eye corrections)."""
+    _solver_score(runs, not with_data_errors)
+
+
+def _solver_score(runs: list[str], exclude_data_errors: bool) -> None:
+    from sfzmaps.solver.city import load_run
+    from sfzmaps.solver.measures import report
+    for r in runs:
+        report(r, load_run(r), exclude_data_errors)
+
+
+@solver_app.command("holes")
+def solver_holes(
+    run: str = typer.Argument(..., help="A run solved with --keep-costs."),
+    picture: Path = typer.Option(None, "--picture", help="Write a picture of every hole, by cause."),
+    save_data_errors: bool = typer.Option(False, "--save-data-errors",
+                                          help="Write the data-error list (data/solver/solve/data_errors.npz and "
+                                               "data-errors-2000-digital.csv)."),
+) -> None:
+    """Why each hole in a run's district lines is there, and the data errors among them."""
+    from sfzmaps.solver.holes import report_causes
+    report_causes(run, picture, save_data_errors)
+
+
+@solver_app.command("published")
+def solver_published(
+    districts: Path = typer.Option(None, "--districts",
+                                   help="districts_raw.parquet (default data/work/2000-digital-zoning/)."),
+) -> None:
+    """The published 2000 map as the run 'published', scored the same way."""
+    from sfzmaps.solver.published import save_published
+    _solver_score([save_published(districts)], True)
+
+
+if __name__ == "__main__":
+    app()

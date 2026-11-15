@@ -27,9 +27,8 @@ Writes, under data/solver/labels/:
                       print_index  int64 per reading: the print's row in prints.parquet
                       code_index   int64 per reading: its code, an index into names
                       trust        float64 per reading: the fitted chance, at least TRUST_FLOOR
-                    The joint solver (`scripts/joint_solver/labels.py` and `placement.py`) reads the same arrays as
-                    `cj` (print_index), `ck` (code_index), `cr` (trust) and `names`, and the lot under each print
-                    as `lab_lot`, which is prints.parquet's `lab_lot`.
+                    The solver (`solver/labels.py` and `placement.py`) reads them with the lot under each print,
+                    prints.parquet's `lab_lot`.
   trust.json        per quarter: the weights by feature, the readings trained on and held out, and the held-out
                     log loss (against the table's codes)
 """

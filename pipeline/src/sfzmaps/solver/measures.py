@@ -5,14 +5,15 @@ thousand lots: that is one mistake).
              different codes); precision: share of the map's drawn borders that are table lines.  By count and length.
   labels     share of printed zoning labels whose district comes out right.  A label stands for the nearest table
              district carrying its top reading (the one under it when its lot has that code); right when most of that
-             district's scored lots get that code.  Labels per quarter from that quarter's held-out print set; overlay
-             names left out; a top reading naming no table code counts wrong.
+             district's scored lots get that code.  Each label's top reading comes from the trust fit that held its
+             lot's quarter out; overlay names left out; a top reading naming no table code counts wrong.
   holes      short breaks in a drawn district line: a connected run of missed table-line borders (joined at
              junctions, any angle) up to 100 ft long that meets found table-line borders at two or more places
   incidents  wrong lots grouped into connected patches with the same table code and the same wrong code
 
-Data errors (data_errors.npz, from holes.py): parcels the table codes differently from what the drawing shows.  They
-are left out of the borders, labels and holes."""
+The table scored against is the one with the by-eye corrections (`City.table`).  Data errors (data_errors.npz in
+data/solver/solve/, from holes.py): parcels the table codes differently from what the drawing shows.  They are left
+out of the borders, labels and holes."""
 from collections import Counter
 
 import numpy as np
@@ -20,19 +21,25 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 from scipy.spatial import cKDTree
 
-from .borders import junction_neighbours
-from .data import OUT, QUARTERS, city
-from .labels import top_readings
+from sfzmaps.solver import paths
+from sfzmaps.solver.borders import junction_neighbours
+from sfzmaps.solver.city import city
+from sfzmaps.solver.labels import top_readings
 
-DATA_ERRORS = OUT / "data_errors.npz"
+QUARTERS = paths.QUARTERS
 HOLE_FT = 100.0
 
 
+def data_errors_file():
+    return paths.SOLVE_DIR / "data_errors.npz"
+
+
 def data_error_lots():
+    """the data-error parcels (bool per lot), none when no list was written"""
     C = city()
     m = np.zeros(C.n, bool)
-    if DATA_ERRORS.exists():
-        m[np.load(DATA_ERRORS)["lots"]] = True
+    if data_errors_file().exists():
+        m[np.load(data_errors_file())["lots"]] = True
     return m
 
 

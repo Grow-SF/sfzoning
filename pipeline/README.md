@@ -567,6 +567,55 @@ lot sizes and the strokes (`solver/labels_stage.py`). Nothing asks a model, and 
   tagged a spur. It writes `strokes.npz` (`xy`, `w`, `off`, and per stroke `a`, `b`, `length`, `wmed`, `wiqr`,
   `spur`, `dega`, `degb`). On the 2000 page: about 172,000 strokes and 3,240 miles, in about 25 s and 3 GB.
 
+**The solve** (`solver/city.py`, `labels.py`, `placement.py`, `energy.py`, `search.py`, `solve.py`) reads the
+district of every lot from the page: one energy over every lot's code, minimised for the whole city and held out by
+quarter. How it works and how well it did as R&D (run J7) is written up in `docs/research/joint-solver/`, with the
+R&D notes behind it. What it reads:
+
+- **The lots** (`city.City`): `lots.npz` and `table.parquet`. Scores count against the table with its by-eye
+  corrections (`City.table`, from `table.corrected_codes`); every fit learns from the table as downloaded
+  (`City.table_raw`). The true borders of the ceiling check and the table's answer the log prices use the scoring
+  table.
+- **The walls**: `data/solver/walls/walls_<Q>.npz` `lo_ab`, one log odds per row of `lots.npz` `pairs` that a printed
+  district line runs between the two lots, fitted without quarter Q (`city.wall_odds`; NaN is read as 10, a line).
+  `--walls DIR` reads them from another folder.
+- **The labels** (`labels.readings(Q)`): each reading of `readings_<Q>.npz` speaks for the lot under its print's text
+  (`prints.parquet` `lab_lot`); a print on an ordinary street (`streetside_<Q>.npz`: on street ground, not by a
+  freeway, a lot across) also speaks for the lot across at trust × min(`rB_st` / `rA_st`, 1). Overlay (SUD) names and
+  names of no table code are dropped.
+
+The commands, run from `pipeline/`:
+
+- `sfzmaps solver placement [--walls DIR]` fits where each label belongs (`solver/placement.py`): under its text, or
+  in a walled area within 500 ft (lots joined by borders with odds ≤ 0) that its leader points into. A conditional
+  logit over each label's options (12 features: distance, area size, a stroke of `strokes.npz` from the text into
+  the area and its width, labels already there, how well the area's lot sizes fit the code by `lotsize.npz`, …),
+  with ridge 1, fitted four times, each without the labels whose lot is in one quarter. Its answers are the owner's
+  hand leader moves (the rows of `inputs/2000-digital-zoning/label_fixes.csv` with a fix point, placed on the map
+  through each sheet's corrected warp, matched to a print of the same code within 40 page px), and elsewhere the
+  table: stay when the lot under the text has the code, else the nearest option whose lots mostly have it. It writes
+  `data/solver/solve/placement.npz` and prints each model's held-out hit rate, the hand moves' among them.
+- `sfzmaps solver solve RUN [--walls DIR] [--true-borders] [--keep-costs]` solves the city four times side by side,
+  one `sfzmaps solver solve-quarter RUN Q` process per held-out quarter (one BLAS thread each), each with that
+  quarter's walls, readings and placement model; every lot then takes its code from the solve that held its quarter
+  out. The energy charges each label once over the lots it may stand for (its top reading's trust calibrated:
+  logit = 0.128 + 1.085 logit(trust)), a different code across a border with odds < 0 its −odds, and the same code
+  across a border with odds > 0 its odds; a tiny tie-break (1e-4 × the cheapest path from each code's labels) settles
+  lots no label reaches. The search runs graph-cut expansion moves (PyMaxflow), then region moves, compound moves and
+  expansion again until the energy stops falling; a move is kept only if the exact energy falls. It is discrete and
+  the same every run. It writes `data/solver/solve/runs/RUN-<Q>.npz` and `.log`, the join `RUN.npz`, and with
+  `--keep-costs` each solve's costs (`RUN-<Q>-costs.npz`, for `holes`), then scores the run. `--true-borders` is the
+  ceiling check: the table's own borders as walls (odds ±6) must give back nearly the table.
+- `sfzmaps solver score RUN... [--with-data-errors]` scores runs by their mistakes (`solver/measures.py`): the share
+  of the table's district lines the run draws and of the lines it draws that are table lines (by count and length),
+  the share of zoning labels whose district comes out right, holes (missed runs of table line up to 100 ft that meet
+  found line at two or more places), and wrong lots grouped into incidents. The data-error parcels are left out.
+- `sfzmaps solver holes RUN [--picture PNG] [--save-data-errors]` gives each hole its cause (`solver/holes.py`,
+  `solver/borders.py`); `--save-data-errors` writes the parcels where the printed line is drawn over the parcel and
+  the table puts it on the other side (`data/solver/solve/data_errors.npz` and `data-errors-2000-digital.csv`).
+- `sfzmaps solver published [--districts PATH]` scores the pipeline's published 2000 map
+  (`data/work/2000-digital-zoning/districts_raw.parquet`) the same way, as the run `published`.
+
 Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
 
 ## Where outputs land

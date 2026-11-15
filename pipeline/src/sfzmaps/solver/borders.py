@@ -1,4 +1,4 @@
-"""The network of lot borders, and the raw scan's ink across every point of it.
+"""The network of lot borders, and the page's ink across every point of it.
 
 Borders are where the grown lot grid (every pixel -> its nearest lot) changes, so a border sits on the lot line where
 two lots touch and on the street's middle where they face each other across a street: where a district line is
@@ -6,26 +6,25 @@ expected.  Each crack between two pixels of different lots is one point (4 ft).
   paths      cracks chained through corners where only two lots meet; a path ends at a junction (3+ lots meet).
              Every path lies between one pair of lots, in order along its length.
   junctions  the corner each path end meets; borders meeting at a junction are neighbours (measures.py: holes)
-  profile    the raw scan sampled across each point, -J..J px along the path's normal (hole causes)
-Built once and kept in joint/border_paths.npz."""
+  profile    the page's ink sampled across each point, -J..J px along the path's normal (hole causes)
+Built once per process from the lots and the page."""
+from functools import lru_cache
+
 import numpy as np
 from scipy import sparse
 from scipy.sparse import csgraph
 
-from .data import OUT, city
+from sfzmaps.solver.city import city
 
 J = 20                                       # profile half-width, px (80 ft)
 SMOOTH = 3                                   # direction smoothing, points each side
-PATH = OUT / "border_paths.npz"
 
 
-def border_paths():
-    if not PATH.exists():
-        _build()
-    return np.load(PATH)
-
-
-def _build():
+@lru_cache(maxsize=1)
+def border_paths() -> dict:
+    """The border points, in order along their paths: k (the neighbour pair), touch, my/mx (the crack's middle,
+    grid rows/columns), ny/nx (its normal, from the pair's first lot to its second), prof (ink across it), pstart,
+    plen and pk (each path's first point, length and pair), jc_first/jc_last (the junction corner at each end), J."""
     C = city()
     lot, grown = C.lot_raster, C.grown_raster
     H, W = grown.shape
@@ -101,12 +100,12 @@ def _build():
     sg = np.sign(ny * ny0 + nx * nx0)
     sg[sg == 0] = 1
     ny, nx = ny * sg, nx * sg
-    ink, row0, col0 = C.scan()
+    ink = C.scan()
     PH, PW = ink.shape
     prof = np.zeros((E, 2 * J + 1), bool)
     for j in range(-J, J + 1):
-        pr = row0 - np.floor(my + j * ny).astype(np.int64)
-        pc = np.floor(mx + j * nx).astype(np.int64) - col0
+        pr = np.floor(my + j * ny).astype(np.int64)
+        pc = np.floor(mx + j * nx).astype(np.int64)
         ok = (pr >= 0) & (pr < PH) & (pc >= 0) & (pc < PW)
         v = np.zeros(E, bool)
         v[ok] = ink[pr[ok], pc[ok]]
@@ -119,11 +118,9 @@ def _build():
     first, last = pstart, pstart + plen - 1
     jc_first = np.where(plen > 1, end_corner(first, np.where(plen > 1, pstart + 1, pstart)), ci0[first])
     jc_last = np.where(plen > 1, end_corner(last, np.where(plen > 1, pstart + plen - 2, pstart)), ci1[last])
-    OUT.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(PATH, k=k.astype(np.int32), touch=touch, my=my.astype(np.float32), mx=mx.astype(np.float32),
-                        ny=ny.astype(np.float32), nx=nx.astype(np.float32), prof=prof, pstart=pstart, plen=plen,
-                        pk=pk.astype(np.int32), jc_first=jc_first, jc_last=jc_last, J=J)
-    print(f"border paths: {E:,} points, {ncomp:,} paths; saved {PATH}")
+    return dict(k=k.astype(np.int32), touch=touch, my=my.astype(np.float32), mx=mx.astype(np.float32),
+                ny=ny.astype(np.float32), nx=nx.astype(np.float32), prof=prof, pstart=pstart, plen=plen,
+                pk=pk.astype(np.int32), jc_first=jc_first, jc_last=jc_last, J=J)
 
 
 def junction_neighbours():
