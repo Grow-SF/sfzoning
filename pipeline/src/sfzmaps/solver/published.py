@@ -9,7 +9,8 @@ from sfzmaps.solver.codes import canon
 
 
 def save_published(path=None, name="published"):
-    """Write the published map (`path`, default data/work/<series>/districts_raw.parquet) as the run `name`."""
+    """Write the published map (`path`, default data/work/<series>/districts_raw.parquet) as the run `name` (in its
+    own folder under data/solver/experiments)."""
     import pandas as pd
     d = pd.read_parquet(path or config.WORK_DIR / paths.SERIES / "districts_raw.parquet")
     code = dict(zip(d["blklot"].astype(str), d["code"].fillna("").astype(str)))

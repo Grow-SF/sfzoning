@@ -291,8 +291,9 @@ def evaluate_candidates(configs, workers: int | None = None) -> list[dict]:
 def build_walls(workers: int | None = None, candidates=()) -> dict:
     """Fit the wall odds with the candidate features `candidates` (none by default) and write walls_{q}.npz and
     evaluation.json into WALLS_DIR, and text_chance.png (`textgrid.write_text_chance`) when a candidate reads it.
-    `workers`: processes for the closing paths (default half the CPUs).  Returns the evaluation and the seconds
-    taken (not written)."""
+    They are written into a fresh folder that then takes WALLS_DIR's place (`paths.fresh_folder`,
+    `paths.replace_folder`), so nothing of an earlier fit is left.  `workers`: processes for the closing paths
+    (default half the CPUs).  Returns the evaluation and the seconds taken (not written)."""
     from sfzmaps.solver import textgrid
     t0 = time.perf_counter()
     candidates = check_candidates(candidates)
@@ -303,8 +304,10 @@ def build_walls(workers: int | None = None, candidates=()) -> dict:
     evaluation["candidates"] = list(candidates)
     if inputs.letter is not None:
         evaluation["strokes_touching_text"] = int((inputs.letter > 0).sum())
-    write_walls(paths.WALLS_DIR, odds, evaluation)
+    folder = paths.fresh_folder(paths.WALLS_DIR)
+    write_walls(folder, odds, evaluation)
     if inputs.text is not None:
-        textgrid.write_text_chance(paths.WALLS_DIR, inputs.text)
+        textgrid.write_text_chance(folder, inputs.text)
+    paths.replace_folder(folder, paths.WALLS_DIR)
     return {**evaluation, "seconds": round(time.perf_counter() - t0, 1)}
 

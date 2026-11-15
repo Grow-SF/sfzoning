@@ -12,9 +12,10 @@ thousand lots: that is one mistake).
   incidents  wrong lots grouped into connected patches with the same table code and the same wrong code
 
 The table scored against is the one with the by-eye corrections (`City.table`).  Data errors (data_errors.npz in
-data/solver/solve/, from holes.py): parcels the table codes differently from what the drawing shows.  They are left
-out of the borders, labels and holes."""
+the run's own folder, from holes.py): parcels the table codes differently from what the run's drawing shows.  They
+are left out of the borders, labels and holes; each run has its own list."""
 from collections import Counter
+from pathlib import Path
 
 import numpy as np
 from scipy.sparse import coo_matrix
@@ -30,16 +31,17 @@ QUARTERS = paths.QUARTERS
 HOLE_FT = 100.0
 
 
-def data_errors_file():
-    return paths.SOLVE_DIR / "data_errors.npz"
+def data_errors_file(folder):
+    """a run's data-error list, in its folder (`paths.solve_dir`)"""
+    return Path(folder) / "data_errors.npz"
 
 
-def data_error_lots():
-    """the data-error parcels (bool per lot), none when no list was written"""
+def data_error_lots(folder):
+    """the data-error parcels of the run whose folder is `folder` (bool per lot), none when it wrote no list"""
     C = city()
     m = np.zeros(C.n, bool)
-    if data_errors_file().exists():
-        m[np.load(data_errors_file())["lots"]] = True
+    if data_errors_file(folder).exists():
+        m[np.load(data_errors_file(folder))["lots"]] = True
     return m
 
 
@@ -136,7 +138,8 @@ def incidents(codes):
 
 
 def report(name, codes, exclude_data_errors=True):
-    ex = data_error_lots() if exclude_data_errors else np.zeros(city().n, bool)
+    """print the measures of the run `name` (`codes`), leaving out its own data-error list unless told not to"""
+    ex = data_error_lots(paths.solve_dir(name)) if exclude_data_errors else np.zeros(city().n, bool)
     s = score(codes, Table(ex))
     i = incidents(codes)
     print(f"{name}: district lines drawn {s['recall']:.1%} ({s['recall_ft']:.1%} by length); drawn lines that are "

@@ -630,9 +630,11 @@ both outside the quarter; the target is that the two lots' codes in the table as
 whole-wall stage: how a line holds together along its length is left to the solve's energy. It writes
 `data/solver/walls/walls_<Q>.npz` (`lo_ab`, float32 per pair row, the odds of the fit without quarter Q) and
 `evaluation.json` (per quarter the log loss on the held-out pairs, both lots known and in the quarter, and their
-number). The closing paths run on `--workers` processes in bands of grid rows; the result is the same for any
-number, and the same inputs give the same odds. On the 2000 page: 437,000 pairs over 16.3 million border px, 60,716
-closing paths from 68,363 loose ends, in about 4 minutes and 12 GB with 6 workers.
+number). It writes them into a fresh folder beside `data/solver/walls` and renames that into its place, so nothing of
+an earlier fit (a candidates fit's `text_chance.png`) is left. The closing paths run on `--workers` processes in
+bands of grid rows; the result is the same for any number, and the same inputs give the same odds. On the 2000
+page: 437,000 pairs over 16.3 million border px, 60,716 closing paths from 68,363 loose ends, in about 4 minutes and
+12 GB with 6 workers.
 
 **Candidate wall features** (`--candidates A,B`, none by default; `walls.CANDIDATES`). Each is tried against the set
 above and kept only if it lowers the held-out log loss in at least three quarters. `--evaluate A,B` (repeatable,
@@ -673,9 +675,16 @@ R&D notes behind it. What it reads:
   freeway, a lot across) also speaks for the lot across at trust × min(`rB_st` / `rA_st`, 1). Overlay (SUD) names and
   names of no table code are dropped.
 
+**Runs and their folders** (`paths.solve_dir`). The `solver-solve` stage's run is `final`, in `data/solver/solve/`
+(shipped). Every other run is an experiment, in its own `data/solver/experiments/RUN/` (no stage's output, never
+shipped), with its own placement, runs, data errors and report. `final` is refused with `--walls` or
+`--true-borders`, and `placement` and `holes --save-data-errors` never write into it. A solve builds its run's folder
+afresh beside it (`.NAME.part`) and renames it into place, so nothing of an earlier solve is left, and nothing it
+writes holds a time.
+
 The commands, run from `pipeline/`:
 
-- `sfzmaps solver placement [--walls DIR]` fits where each label belongs (`solver/placement.py`): under its text, or
+- `sfzmaps solver placement RUN [--walls DIR]` fits where each label belongs (`solver/placement.py`): under its text, or
   in a walled area within 500 ft (lots joined by borders with odds ≤ 0) that its leader points into. A conditional
   logit over each label's options (12 features: distance, area size, a stroke of `strokes.npz` from the text into
   the area and its width, labels already there, how well the area's lot sizes fit the code by `lotsize.npz`, …),
@@ -683,9 +692,9 @@ The commands, run from `pipeline/`:
   hand leader moves (the rows of `inputs/2000-digital-zoning/label_fixes.csv` with a fix point, placed on the map
   through each sheet's corrected warp, matched to a print of the same code within 40 page px), and elsewhere the
   table: stay when the lot under the text has the code, else the nearest option whose lots mostly have it. It writes
-  `data/solver/solve/placement.npz` (with `walls`, the digest of the walls it was fitted with: `city.walls_digest`,
-  of every quarter's odds) and prints each model's held-out hit rate, the hand moves' among them. A solve refuses a
-  placement fitted on other walls.
+  `placement.npz` into the experiment's folder (with `walls`, the digest of the walls it was fitted with:
+  `city.walls_digest`, of every quarter's odds) and prints each model's held-out hit rate, the hand moves' among
+  them. A solve refuses a placement fitted on other walls.
 - `sfzmaps solver solve RUN [--walls DIR] [--true-borders]` (stage `solver-solve`, after `solver-walls`, runs
   `solve final`) fits the placement as above, solves the city, lists the data errors among the run's holes and writes
   the report. The solve runs four times side by side, one `sfzmaps solver solve-quarter RUN Q [--keep-costs]` process
@@ -695,17 +704,20 @@ The commands, run from `pipeline/`:
   different code across a border with odds < 0 its −odds, and the same code across a border with odds > 0 its odds;
   a tiny tie-break (1e-4 × the cheapest path from each code's labels) settles lots no label reaches. The search runs
   graph-cut expansion moves (PyMaxflow), then region moves, compound moves and expansion again until the energy stops
-  falling; a move is kept only if the exact energy falls. It is discrete: every lot gets the same code every run. It
-  writes `data/solver/solve/runs/RUN-<Q>.npz`, `.log` and each solve's costs (`RUN-<Q>-costs.npz`, for `holes`), the
-  join `RUN.npz`, the data errors (`data_errors.npz` and `data-errors-2000-digital.csv`, as `holes --save-data-errors`)
-  and the report (`solver/report.py`, `report.json` and `report.md`): the six measures (below) against J7's, with the
-  data-error parcels left out and with every lot; wrong lots by quarter, the largest incidents, the holes by cause,
-  the walls' held-out log loss per quarter (against the scoring table, beside J7's quoted numbers, and against the
-  table as downloaded, from their `evaluation.json`), the placement's hit rates; a check of `energy.TOP_READING_FIT`
-  on this build's held-out trust (each label's top reading, from the fit that held its lot's quarter out, against the
-  table as downloaded there: the log loss of the energy's calibration and of one fitted afresh, and stated against
-  right by trust); and what differs from J7's definitions. The report holds no times: the same run gives the same bytes.
-  `--true-borders` is the ceiling check: the table's own borders as walls (odds ±6) must give back nearly the table.
+  falling; a move is kept only if the exact energy falls. It is discrete: every lot gets the same code every run. Into
+  the run's folder it writes `placement.npz`, `runs/RUN-<Q>.npz`, `.log` (the quarter's log, with no times: each
+  solve's time is printed to the console only) and each solve's costs (`RUN-<Q>-costs.npz`, for `holes`), the join
+  `runs/RUN.npz`, the data errors (`data_errors.npz` and `data-errors-2000-digital.csv`, as `holes
+  --save-data-errors`) and the report (`solver/report.py`, `report.json` and `report.md`): the six measures (below)
+  against J7's, with the data-error parcels left out and with every lot; wrong lots by quarter, the largest
+  incidents, the holes by cause, the walls' held-out log loss per quarter (against the scoring table, beside J7's
+  quoted numbers, and against the table as downloaded, from their `evaluation.json`), the placement's hit rates; a
+  check of `energy.TOP_READING_FIT` on this build's held-out trust (each label's top reading, from the fit that held
+  its lot's quarter out, against the table as downloaded there: the log loss of the energy's calibration and of one
+  fitted afresh, and stated against right by trust); and what differs from J7's definitions. Each run leaves out its
+  own data errors, so runs of this build compare on the every-lot column; the left-out column is there for J7. The
+  report holds no times: the same run gives the same bytes. `--true-borders` is the ceiling check: the table's own
+  borders as walls (odds ±6) must give back nearly the table.
   The stage reads the lots, the merged page's `ink.png` (the holes' causes), `prints.parquet`, the labels, the
   walls, the warp's placements (the hand leader moves), `label_fixes.csv` and `table-corrections.csv`. On the 2000
   page it takes about 4 minutes (the four solves about 165 s each, side by side), up to 17 GB in one process, and
@@ -713,10 +725,12 @@ The commands, run from `pipeline/`:
 - `sfzmaps solver score RUN... [--with-data-errors]` scores runs by their mistakes (`solver/measures.py`): the share
   of the table's district lines the run draws and of the lines it draws that are table lines (by count and length),
   the share of zoning labels whose district comes out right, holes (missed runs of table line up to 100 ft that meet
-  found line at two or more places), and wrong lots grouped into incidents. The data-error parcels are left out.
+  found line at two or more places), and wrong lots grouped into incidents. Each run's own data-error parcels are
+  left out (none for a run that wrote no list, such as `published`).
 - `sfzmaps solver holes RUN [--picture PNG] [--save-data-errors]` gives each hole its cause (`solver/holes.py`,
   `solver/borders.py`); `--save-data-errors` writes the parcels where the printed line is drawn over the parcel and
-  the table puts it on the other side (`data/solver/solve/data_errors.npz` and `data-errors-2000-digital.csv`).
+  the table puts it on the other side into the run's folder (`data_errors.npz` and `data-errors-2000-digital.csv`;
+  not for `final`, whose solve writes its own).
 - `sfzmaps solver published [--districts PATH]` scores the pipeline's published 2000 map
   (`data/work/2000-digital-zoning/districts_raw.parquet`) the same way, as the run `published`.
 

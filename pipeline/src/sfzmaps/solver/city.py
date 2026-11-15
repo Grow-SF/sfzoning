@@ -1,6 +1,6 @@
 """The city the solver reads: the lots, their neighbours and the table's codes (the `solver-lots` stage's lots.npz
 and table.parquet), the page's ink on the same grid, the wall odds (the `solver-walls` stage's walls_{q}.npz), and
-the runs the solver writes (data/solver/solve/runs/)."""
+the runs the solver writes (each run's folder, `paths.solve_dir`)."""
 import hashlib
 from functools import cached_property, lru_cache
 from pathlib import Path
@@ -106,14 +106,16 @@ def city() -> City:
     return City()
 
 
-def run_file(name: str) -> Path:
-    """Where the run `name` is kept: SOLVE_DIR/runs/{name}.npz."""
-    return paths.SOLVE_DIR / "runs" / f"{name}.npz"
+def run_file(run: str, part: str = "", folder: Path | None = None) -> Path:
+    """Where a file of the run `run` is kept: <folder>/runs/{run}{part}.npz, in the run's own folder
+    (`paths.solve_dir`) unless `folder` is given.  `part`: "" for the join, "-{q}" for the solve that held out
+    quarter q, "-{q}-costs" for its costs."""
+    return Path(folder or paths.solve_dir(run)) / "runs" / f"{run}{part}.npz"
 
 
-def load_run(name: str) -> np.ndarray:
-    """A run's code per lot, in the one spelling."""
-    R = np.load(run_file(name), allow_pickle=True)
+def load_run(run: str, folder: Path | None = None) -> np.ndarray:
+    """A run's code per lot (its join), in the one spelling."""
+    R = np.load(run_file(run, folder=folder), allow_pickle=True)
     return np.array([canon(x) for x in np.asarray(R["names"]).astype(str)])[R["pred"]]
 
 

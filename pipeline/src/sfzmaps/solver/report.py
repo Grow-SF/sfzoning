@@ -5,13 +5,15 @@ The six (`measures.py` defines them): the share of the table's district lines th
 it draws that are table lines; the share of zoning labels whose district comes out right; holes; wrong-lot
 incidents; wrong lots.  Wrong lots and incidents count every scored lot in both columns, as J7's did.  J7's numbers
 are those of the R&D write-up (`docs/research/joint-solver/joint-solver.md`), where 33 data-error parcels were left
-out.
+out.  Each run's data errors come from its own holes, so the left-out set differs from run to run: runs of this
+build compare on the every-lot column, and the left-out column is there for the comparison with J7.
 
 Beside them: wrong lots by quarter, the largest incidents, the holes by cause, the walls' held-out log loss
 (`walls_evaluation`), the placement's held-out hit rates, and a check of the energy's trust calibration
 (`top_reading_calibration`).
 
-Writes report.json and report.md into SOLVE_DIR.  Nothing in them is a time: the same run gives the same bytes."""
+Writes report.json and report.md into the run's folder (`paths.solve_dir`).  Nothing in them is a time: the same
+run gives the same bytes."""
 import json
 from pathlib import Path
 
@@ -52,6 +54,8 @@ DEFINITION_CHANGES = (
     "their evaluation.json names, in one ridge logistic regression per quarter; J7's walls came from its cleaned page "
     "and its chain of graph steps.",
 )
+ONE_MEASURE = ("Each run's data errors come from its own holes, so the left-out set differs from run to run: compare "
+               "runs of this build on the every-lot column; the left-out column is there for the comparison with J7.")
 CALIBRATION_BINS = (0.0, 0.5, 0.7, 0.9, 0.97, 0.99, 1.0)     # of the top reading's trust
 CALIBRATION_STEPS = 50      # Newton steps of the refit, at most
 DIGITS = 6                  # the report's floats are rounded to this many decimals
@@ -160,12 +164,15 @@ def walls_evaluation(walls_dir: Path | None = None) -> dict:
     return out
 
 
-def build_report(run: str, placement_summary: dict, hole_causes: dict, walls_dir: Path | None = None) -> dict:
-    """The report of the run `run` (see the module): `placement_summary` is what `placement.fit` returned,
-    `hole_causes` the run's holes (data errors counted) by cause, `walls_dir` the walls it was solved with."""
+def build_report(run: str, placement_summary: dict, hole_causes: dict, walls_dir: Path | None = None,
+                 folder: Path | None = None) -> dict:
+    """The report of the run `run` (see the module), from its join and data-error list in `folder` (default the
+    run's own): `placement_summary` is what `placement.fit` returned, `hole_causes` the run's holes (data errors
+    counted) by cause, `walls_dir` the walls it was solved with."""
     C = city()
-    codes = load_run(run)
-    errors = data_error_lots()
+    folder = Path(folder or paths.solve_dir(run))
+    codes = load_run(run, folder)
+    errors = data_error_lots(folder)
     wrong = C.scored & (codes != C.table)
     biggest = incidents(codes)["biggest"]
     return {
@@ -206,6 +213,7 @@ def markdown(report: dict) -> str:
         out.append(f"| {name} | {_value(key, report['j7'][key])} | {_value(key, left_out[key])} | "
                    f"{_value(key, every[key])} |")
     out += ["",
+            f"- {ONE_MEASURE}",
             f"- By length: lines drawn {left_out['lines_drawn_by_length']:.1%}, drawn that are table lines "
             f"{left_out['drawn_are_table_lines_by_length']:.1%} (data errors left out).",
             f"- Labels: {left_out['zoning_labels']:,} zoning labels; all labels right "
@@ -258,8 +266,8 @@ def markdown(report: dict) -> str:
 
 
 def write_report(report: dict, folder: Path | None = None) -> None:
-    """Write report.json and report.md into `folder` (default SOLVE_DIR)."""
-    folder = Path(folder or paths.SOLVE_DIR)
+    """Write report.json and report.md into `folder` (default the run's own, `paths.solve_dir`)."""
+    folder = Path(folder or paths.solve_dir(report["run"]))
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "report.json").write_text(json.dumps(report, indent=1, ensure_ascii=False) + "\n")
     (folder / "report.md").write_text(markdown(report))

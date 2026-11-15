@@ -1056,28 +1056,41 @@ def solver_walls(
 _WALLS_OPTION = typer.Option(None, "--walls", help="The folder of walls_<q>.npz (default data/solver/walls).")
 
 
+def _not_the_stage_run(run: str) -> None:
+    from sfzmaps.solver import paths
+    if run == paths.FINAL_RUN:
+        raise typer.BadParameter(f"{paths.FINAL_RUN!r} is the solver-solve stage's run, made only by "
+                                 f"`sfzmaps solver solve {paths.FINAL_RUN}`", param_hint="RUN")
+
+
 @solver_app.command("placement")
-def solver_placement(walls: Path = _WALLS_OPTION) -> None:
+def solver_placement(
+    run: str = typer.Argument(..., help="The experiment's name (data/solver/experiments/RUN/); not 'final'."),
+    walls: Path = _WALLS_OPTION,
+) -> None:
     """Fit where each printed label belongs, held out by quarter (learning from the hand leader moves of
-    label_fixes.csv and the table): data/solver/solve/placement.npz."""
-    from sfzmaps.solver import placement
-    placement.fit(walls)
+    label_fixes.csv and the table): data/solver/experiments/RUN/placement.npz."""
+    from sfzmaps.solver import paths, placement
+    _not_the_stage_run(run)
+    placement.fit(paths.solve_dir(run), walls)
 
 
 @solver_app.command("solve")
 def solver_solve(
-    run: str = typer.Argument(..., help="A name for the run (data/solver/solve/runs/RUN.npz); the stage's is "
-                                        "'final'."),
+    run: str = typer.Argument(..., help="A name for the run: 'final' is the solver-solve stage's (data/solver/solve/), "
+                                        "any other an experiment (data/solver/experiments/RUN/)."),
     walls: Path = _WALLS_OPTION,
     true_borders: bool = typer.Option(False, "--true-borders",
-                                      help="The ceiling check: the table's own borders as walls."),
+                                      help="The ceiling check: the table's own borders as walls (not for 'final')."),
 ) -> None:
     """Fit the placement, solve the four held-out quarters side by side and join them, list the data errors among
-    the run's holes, and score it against J7: data/solver/solve/placement.npz, runs/RUN*.npz (with each solve's
-    costs), data_errors.npz, data-errors-2000-digital.csv, report.json and report.md."""
+    the run's holes, and score it against J7, into the run's folder made afresh: placement.npz, runs/RUN*.npz (with
+    each solve's costs), data_errors.npz, data-errors-2000-digital.csv, report.json and report.md."""
     from sfzmaps.solver import report, solve
     try:
         found = solve.solve_and_report(run, walls, true_borders)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="RUN")
     except RuntimeError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)
@@ -1091,12 +1104,14 @@ def solver_solve_quarter(
     walls: Path = _WALLS_OPTION,
     true_borders: bool = typer.Option(False, "--true-borders"),
     keep_costs: bool = typer.Option(False, "--keep-costs"),
+    folder: Path = typer.Option(None, "--folder", help="Where the run is being built (default the run's folder)."),
 ) -> None:
-    """Solve the whole city with one quarter's held-out inputs: data/solver/solve/runs/RUN-QUARTER.npz (no join)."""
+    """Solve the whole city with one quarter's held-out inputs, with the placement in the run's folder:
+    runs/RUN-QUARTER.npz there (no join)."""
     from sfzmaps.solver import paths, solve
     if quarter not in paths.QUARTERS:
         raise typer.BadParameter(f"one of {', '.join(paths.QUARTERS)}", param_hint="QUARTER")
-    solve.solve_quarter(run, quarter, walls, true_borders, keep_costs)
+    solve.solve_quarter(run, quarter, walls, true_borders, keep_costs, folder)
 
 
 @solver_app.command("score")
@@ -1104,7 +1119,8 @@ def solver_score(
     runs: list[str] = typer.Argument(..., help="Runs to score."),
     with_data_errors: bool = typer.Option(False, "--with-data-errors", help="Count the data-error parcels too."),
 ) -> None:
-    """Score runs against the April 2000 table (with its by-eye corrections)."""
+    """Score runs against the April 2000 table (with its by-eye corrections), each leaving out its own data-error
+    list (none for a run without one)."""
     _solver_score(runs, not with_data_errors)
 
 
@@ -1120,11 +1136,14 @@ def solver_holes(
     run: str = typer.Argument(..., help="A run solved with --keep-costs."),
     picture: Path = typer.Option(None, "--picture", help="Write a picture of every hole, by cause."),
     save_data_errors: bool = typer.Option(False, "--save-data-errors",
-                                          help="Write the data-error list (data/solver/solve/data_errors.npz and "
-                                               "data-errors-2000-digital.csv)."),
+                                          help="Write the data-error list into the run's folder (data_errors.npz and "
+                                               "data-errors-2000-digital.csv); not for 'final', whose solve writes "
+                                               "its own."),
 ) -> None:
     """Why each hole in a run's district lines is there, and the data errors among them."""
     from sfzmaps.solver.holes import report_causes
+    if save_data_errors:
+        _not_the_stage_run(run)
     report_causes(run, picture, save_data_errors)
 
 

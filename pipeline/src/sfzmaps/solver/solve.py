@@ -4,14 +4,16 @@ Held out by quarter: the city is solved four times, each time with wall odds and
 quarter, and every lot takes its answer from the solve that did not see its quarter.  The four solves run side by side,
 each in its own process (`sfzmaps solver solve-quarter`), with one thread each for the linear algebra.
 
-Writes, under data/solver/solve/runs/:
+Writes, under runs/ in the run's folder (`paths.solve_dir`: data/solver/solve for the stage's run `final`,
+data/solver/experiments/<run> for any other):
   {run}-{q}.npz        the solve that held out quarter q: `names` and `pred` (city.save_run)
-  {run}-{q}.log        its log
+  {run}-{q}.log        its log (no times: the same inputs give the same bytes)
   {run}-{q}-costs.npz  with keep_costs: its label costs, odds, codes and readings (for holes.py)
   {run}.npz            the join: every lot from its own quarter's solve
 
 `solve_and_report` is the `solver-solve` stage (`sfzmaps solver solve final`): the placement, the four solves, the
-join, the data errors among the run's holes and the report."""
+join, the data errors among the run's holes and the report, built in a fresh folder that then takes the run
+folder's place."""
 import os
 import subprocess
 import sys
@@ -72,11 +74,13 @@ def solve_joint(n_lots, a, b, odds, rd, options=None, label_weight=1.0, wall_wei
 
 
 def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders: bool = False,
-                  keep_costs: bool = False) -> None:
-    """Solve the whole city with holdout q's inputs (the walls of `walls_dir`, default WALLS_DIR); writes
-    runs/{run}-{q}.npz.  The scoring table (with the by-eye corrections) gives the true borders of the ceiling check
-    and the table's answer the log prices."""
-    t0 = time.time()
+                  keep_costs: bool = False, folder: Path | None = None) -> None:
+    """Solve the whole city with holdout q's inputs (the walls of `walls_dir`, default WALLS_DIR, and the placement
+    in the run's folder) and write runs/{run}-{q}.npz into `folder` (default the run's own,
+    `paths.solve_dir`).  The scoring table (with the by-eye corrections) gives the true borders of the ceiling check
+    and the table's answer the log prices.  What it prints is the quarter's log: no times."""
+    paths.check_final(run, walls_dir, true_borders)
+    folder = Path(folder or paths.solve_dir(run))
 
     def log(s):
         print(f"{q}: {s}", flush=True)
@@ -95,26 +99,27 @@ def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders:
         index.setdefault(n, i)
     table_codes = np.array([index.get(canon(c), -1) if k else -1 for c, k in zip(C.table, C.known)])
     log(f"readings {len(rd.lot):,} on {len(np.unique(rd.lot)):,} lots")
-    options = load_options(q, walls_dir)
+    options = load_options(q, folder, walls_dir)
     p, U = solve_joint(C.n, C.a, C.b, odds, rd, options, table_codes=table_codes, log=log)
     names = rd.names + [""]
-    save_run(run_file(f"{run}-{q}"), np.array(names)[p])
+    save_run(run_file(run, f"-{q}", folder), np.array(names)[p])
     if keep_costs:                                       # for hole causes
-        np.savez_compressed(run_file(f"{run}-{q}-costs"), U=U.astype(np.float32), odds=odds.astype(np.float32),
-                            codes=p, names=np.array(rd.names), table_codes=table_codes, lot=rd.lot, code=rd.code,
-                            trust=rd.trust)
-    log(f"done in {time.time() - t0:.0f} s")
+        np.savez_compressed(run_file(run, f"-{q}-costs", folder), U=U.astype(np.float32),
+                            odds=odds.astype(np.float32), codes=p, names=np.array(rd.names), table_codes=table_codes,
+                            lot=rd.lot, code=rd.code, trust=rd.trust)
+    log("done")
 
 
-def join(run: str) -> None:
-    """Every lot takes the answer of the solve that held out its quarter; writes runs/{run}.npz."""
+def join(run: str, folder: Path | None = None) -> None:
+    """Every lot takes the answer of the solve that held out its quarter; writes runs/{run}.npz into `folder`
+    (default the run's own)."""
     C = city()
     out = np.full(C.n, "", dtype=object)
     for k, q in enumerate(paths.QUARTERS):
-        R = np.load(run_file(f"{run}-{q}"), allow_pickle=True)
+        R = np.load(run_file(run, f"-{q}", folder), allow_pickle=True)
         m = C.quarter == k
         out[m] = R["names"].astype(str)[R["pred"]][m]
-    save_run(run_file(run), out)
+    save_run(run_file(run, folder=folder), out)
 
 
 def _sfzmaps() -> list[str]:
@@ -123,41 +128,60 @@ def _sfzmaps() -> list[str]:
     return [str(exe)] if exe.exists() else [sys.executable, "-m", "sfzmaps.cli"]
 
 
-def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = False, keep_costs: bool = False) -> None:
-    """The four holdouts side by side (one `sfzmaps solver solve-quarter` process each), then the join."""
-    runs = run_file(run).parent
+def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = False, keep_costs: bool = False,
+              folder: Path | None = None) -> None:
+    """The four holdouts side by side (one `sfzmaps solver solve-quarter` process each, writing into `folder`,
+    default the run's own), then the join.  It prints each quarter's log and how long each took (the times only
+    here, never in the run's folder)."""
+    paths.check_final(run, walls_dir, true_borders)
+    folder = Path(folder or paths.solve_dir(run))
+    runs = run_file(run, folder=folder).parent
     runs.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, **ONE_THREAD)
     flags = (["--true-borders"] * true_borders + ["--keep-costs"] * keep_costs
-             + (["--walls", str(walls_dir)] if walls_dir else []))
+             + (["--walls", str(walls_dir)] if walls_dir else []) + ["--folder", str(folder)])
+    t0 = time.perf_counter()
     procs = []
     for q in paths.QUARTERS:
         logf = open(runs / f"{run}-{q}.log", "w")
         cmd = _sfzmaps() + ["solver", "solve-quarter", run, q] + flags
         procs.append((q, logf, subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, env=env)))
+    seconds = {}
+    while len(seconds) < len(procs):                     # each solve's time, as it ends
+        for q, _, p in procs:
+            if q not in seconds and p.poll() is not None:
+                seconds[q] = time.perf_counter() - t0
+        time.sleep(0.5)
     failed = []
     for q, logf, p in procs:
-        if p.wait() != 0:
+        if p.returncode != 0:
             failed.append(q)
         logf.close()
         print((runs / f"{run}-{q}.log").read_text().rstrip())
+    print("solved in " + ", ".join(f"{q} {seconds[q]:.0f} s" for q in paths.QUARTERS), flush=True)
     if failed:
         raise RuntimeError(f"solve failed for {', '.join(failed)}; see {runs}/{run}-<quarter>.log")
-    join(run)
-    print(f"joined: {run_file(run)}")
+    join(run, folder)
+    print(f"joined: {run_file(run, folder=folder)}")
 
 
 def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool = False) -> dict:
-    """Everything a solve needs and makes, from the walls of `walls_dir` (default WALLS_DIR): fit the placement
-    (placement.npz), solve the four held-out quarters with their costs and join them (`solve_all`), list the data
-    errors among the run's holes (`holes.write_data_errors`: data_errors.npz and data-errors-2000-digital.csv), and
-    write the report (`report.write_report`: report.json and report.md), which scores the run with those parcels left
-    out and with every lot.  Returns the report."""
+    """Everything a solve needs and makes, from the walls of `walls_dir` (default WALLS_DIR), built in a fresh
+    folder beside the run's (`paths.fresh_folder`) that then takes its place (`paths.replace_folder`), so nothing of
+    an earlier solve is left: fit the placement (placement.npz), solve the four held-out quarters with their costs
+    and join them (`solve_all`), list the data errors among the run's holes (`holes.write_data_errors`:
+    data_errors.npz and data-errors-2000-digital.csv), and write the report (`report.write_report`: report.json and
+    report.md), which scores the run with those parcels left out and with every lot.  The stage's run (`final`) is
+    refused with other walls or the true borders (`paths.check_final`).  Returns the report."""
     from sfzmaps.solver import holes, placement, report
-    summary = placement.fit(walls_dir)
-    solve_all(run, walls_dir, true_borders, keep_costs=True)
-    rows = holes.causes(run)
-    holes.write_data_errors(holes.data_errors(rows), load_run(run))
-    found = report.build_report(run, summary, dict(Counter(r["cause"] for r in rows)), walls_dir)
-    report.write_report(found)
+    paths.check_final(run, walls_dir, true_borders)
+    target = paths.solve_dir(run)
+    folder = paths.fresh_folder(target)
+    summary = placement.fit(folder, walls_dir)
+    solve_all(run, walls_dir, true_borders, keep_costs=True, folder=folder)
+    rows = holes.causes(run, folder)
+    holes.write_data_errors(holes.data_errors(rows), load_run(run, folder), folder)
+    found = report.build_report(run, summary, dict(Counter(r["cause"] for r in rows)), walls_dir, folder)
+    report.write_report(found, folder)
+    paths.replace_folder(folder, target)
     return found

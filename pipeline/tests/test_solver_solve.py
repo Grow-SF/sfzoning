@@ -43,16 +43,28 @@ def _write_prints(lab_lot, street) -> None:
         paths.PRINTS_DIR / "prints.parquet")
 
 
+UNDER = [_lot(c, 2) for c in LABELLED]     # the lot under each print's text
+
+
+def _solved(run: str, q: str) -> np.ndarray:
+    """The codes of the run's solve that held out quarter q."""
+    R = np.load(city.run_file(run, f"-{q}"), allow_pickle=True)
+    return R["names"].astype(str)[R["pred"]]
+
+
 def _write_walls(folder, odds) -> None:
     folder.mkdir(parents=True, exist_ok=True)
     for q in paths.QUARTERS:
         np.savez(folder / f"walls_{q}.npz", lo_ab=np.asarray(odds, np.float32))
 
 
-def _write_placement(lot_under, walls_dir=None) -> None:
-    """Every label stays on the lot under its text, for each held-out model, fitted with the walls of walls_dir."""
+def _write_placement(lot_under, walls_dir=None, run=paths.FINAL_RUN) -> None:
+    """The run's placement: every label stays on the lot under its text, for each held-out model, fitted with the
+    walls of walls_dir."""
     n = len(lot_under)
-    np.savez(paths.SOLVE_DIR / "placement.npz", label=np.tile(np.arange(n), 4), lot=np.tile(lot_under, 4),
+    folder = paths.solve_dir(run)
+    folder.mkdir(parents=True, exist_ok=True)
+    np.savez(folder / "placement.npz", label=np.tile(np.arange(n), 4), lot=np.tile(lot_under, 4),
              chance=np.ones(4 * n), stay=np.ones(4 * n, bool), holdout=np.repeat(np.arange(4), n),
              walls=city.walls_digest(walls_dir))
 
@@ -62,7 +74,8 @@ def synthetic_city(tmp_path, monkeypatch):
     """A city of 40 lots (8 columns x 5 rows) in three districts by column, one print in each district read right
     with trust 0.95, every label staying on its own lot, and walls the reader never saw (NaN: a line everywhere).
     Returns the City."""
-    for name in ("PAGE_DIR", "LOTS_DIR", "PRINTS_DIR", "LABELS_DIR", "WALLS_DIR", "SOLVE_DIR", "TABLE_DIR"):
+    for name in ("PAGE_DIR", "LOTS_DIR", "PRINTS_DIR", "LABELS_DIR", "WALLS_DIR", "SOLVE_DIR", "EXPERIMENTS_DIR",
+                 "TABLE_DIR"):
         monkeypatch.setattr(paths, name, tmp_path / name.lower())
         (tmp_path / name.lower()).mkdir()
     monkeypatch.setattr(grid, "HEIGHT", SHAPE[0])
@@ -85,7 +98,6 @@ def synthetic_city(tmp_path, monkeypatch):
         _write_readings(q, NAMES, [0, 1, 2], [1, 2, 0], [0.95] * 3)
         _write_streetside(q, [-1] * 3, [False] * 3, [False] * 3, 0.8, 0.8)
     _write_walls(paths.WALLS_DIR, np.full(len(pairs), np.nan))
-    _write_placement(under)
     cv2.imwrite(str(paths.PAGE_DIR / "ink.png"), np.full(SHAPE, 255, np.uint8))      # a blank page
     city.city.cache_clear()
     borders.border_paths.cache_clear()
@@ -98,18 +110,20 @@ def test_true_border_walls_recover_the_table(synthetic_city, tmp_path):
     C = synthetic_city
     assert C.n == 40 and len(set(C.table.tolist())) == 3
     # the walls the reader never saw are a line everywhere, so the table's own borders decide
+    _write_placement(UNDER, run="tb")
     solve.solve_quarter("tb", "nw", true_borders=True)
-    np.testing.assert_array_equal(city.load_run("tb-nw"), C.table)
+    np.testing.assert_array_equal(_solved("tb", "nw"), C.table)
     # the same borders read as odds from another walls folder, with a placement fitted on them
     both = C.known[C.a] & C.known[C.b]
     odds = np.where(both & (C.table[C.a] != C.table[C.b]), 6.0, -6.0)
     _write_walls(tmp_path / "true-walls", odds)
-    _write_placement([_lot(c, 2) for c in LABELLED], tmp_path / "true-walls")
+    for run in ("walls", "walls-again"):
+        _write_placement(UNDER, tmp_path / "true-walls", run)
     solve.solve_quarter("walls", "se", walls_dir=tmp_path / "true-walls")
-    np.testing.assert_array_equal(city.load_run("walls-se"), C.table)
+    np.testing.assert_array_equal(_solved("walls", "se"), C.table)
     # discrete and seeded: a second solve gives every lot the same code
     solve.solve_quarter("walls-again", "se", walls_dir=tmp_path / "true-walls")
-    np.testing.assert_array_equal(city.load_run("walls-again-se"), city.load_run("walls-se"))
+    np.testing.assert_array_equal(_solved("walls-again", "se"), _solved("walls", "se"))
 
 
 def test_city_scores_on_the_corrected_table_and_fits_on_the_raw_one(synthetic_city):
@@ -184,7 +198,7 @@ def test_join_takes_each_lot_from_its_quarters_solve(synthetic_city):
     # each quarter's solve gives lot i the code RH-(100 k + i), k the quarter it held out
     C = synthetic_city
     for k, q in enumerate(paths.QUARTERS):
-        city.save_run(city.run_file(f"j-{q}"), np.array([f"RH-{100 * k + i}" for i in range(C.n)]))
+        city.save_run(city.run_file("j", f"-{q}"), np.array([f"RH-{100 * k + i}" for i in range(C.n)]))
     solve.join("j")
     assert set(C.quarter.tolist()) == {0, 1, 2, 3}
     assert city.load_run("j").tolist() == [f"RH-{100 * C.quarter[i] + i}" for i in range(C.n)]
@@ -193,10 +207,11 @@ def test_join_takes_each_lot_from_its_quarters_solve(synthetic_city):
 def test_a_solve_refuses_a_placement_fitted_on_other_walls(synthetic_city, tmp_path):
     odds = np.full(len(synthetic_city.a), -1.0)
     _write_walls(tmp_path / "other", odds)
+    _write_placement(UNDER, run="other")
     with pytest.raises(ValueError, match="other walls"):
         solve.solve_quarter("other", "nw", walls_dir=tmp_path / "other")
     # fitted on them, then the same odds written again: the same walls
-    _write_placement([_lot(c, 2) for c in LABELLED], tmp_path / "other")
+    _write_placement(UNDER, tmp_path / "other", "other")
     _write_walls(tmp_path / "other", odds.copy())
     solve.solve_quarter("other", "nw", walls_dir=tmp_path / "other")
     # one quarter's odds changed: other walls
@@ -205,11 +220,12 @@ def test_a_solve_refuses_a_placement_fitted_on_other_walls(synthetic_city, tmp_p
     with pytest.raises(ValueError, match="other walls"):
         solve.solve_quarter("other", "nw", walls_dir=tmp_path / "other")
     # a placement that names no walls is refused too
-    P = dict(np.load(placement.placement_file()))
+    _write_placement(UNDER, run="old")
+    P = dict(np.load(placement.placement_file(paths.solve_dir("old"))))
     del P["walls"]
-    np.savez(placement.placement_file(), **P)
+    np.savez(placement.placement_file(paths.solve_dir("old")), **P)
     with pytest.raises(ValueError, match="other walls"):
-        solve.solve_quarter("tb", "nw")
+        solve.solve_quarter("old", "nw")
 
 
 def _right_but_lot_0(C) -> None:
@@ -222,7 +238,7 @@ def _right_but_lot_0(C) -> None:
 def test_the_report_gives_six_measures_with_and_without_the_data_errors_against_j7(synthetic_city):
     C = synthetic_city
     _right_but_lot_0(C)
-    np.savez(measures.data_errors_file(), lots=np.array([0]))
+    np.savez(measures.data_errors_file(paths.solve_dir("r")), lots=np.array([0]))
     got = report.build_report("r", placement_summary={"labels": 3}, hole_causes={"BIG AREA": 0})
     left_out, every = got["measures"]["data_errors_left_out"], got["measures"]["every_lot"]
     assert set(report.J7) <= set(left_out) and set(report.J7) <= set(every) and got["j7"] == report.J7
@@ -241,12 +257,12 @@ def test_a_report_written_again_at_another_time_is_the_same_bytes(synthetic_city
     import time
     _right_but_lot_0(synthetic_city)
     report.write_report(report.build_report("r", placement_summary={"labels": 3}, hole_causes={}))
-    before = {f: (paths.SOLVE_DIR / f).read_bytes() for f in ("report.json", "report.md")}
+    before = {f: (paths.solve_dir("r") / f).read_bytes() for f in ("report.json", "report.md")}
     monkeypatch.setattr(time, "time", lambda: 4e9)
     monkeypatch.setattr(time, "perf_counter", lambda: 4e9)
     city.city.cache_clear()
     report.write_report(report.build_report("r", placement_summary={"labels": 3}, hole_causes={}))
-    assert {f: (paths.SOLVE_DIR / f).read_bytes() for f in before} == before
+    assert {f: (paths.solve_dir("r") / f).read_bytes() for f in before} == before
     assert json.loads(before["report.json"])["run"] == "r"
 
 
@@ -275,3 +291,50 @@ def test_the_report_scores_the_walls_by_quarter_against_the_scoring_table(synthe
     city.city.cache_clear()
     after = report.walls_evaluation(tmp_path / "true")["held_out_log_loss"]
     assert after["nw"] > before["nw"] and all(after[q] == before[q] for q in ("ne", "sw", "se"))
+
+
+def test_a_quarter_log_is_the_same_bytes_at_another_time(synthetic_city, capsys, monkeypatch):
+    # what solve_quarter prints is the quarter's log (runs/RUN-Q.log, in the stage's output)
+    import itertools
+    import time
+    _write_placement(UNDER, run="t")
+    solve.solve_quarter("t", "nw")
+    first = capsys.readouterr().out
+    ticks = itertools.count(1e9, 1000.0)              # the clock jumps 1000 s at every reading
+    monkeypatch.setattr(time, "time", lambda: next(ticks))
+    monkeypatch.setattr(time, "perf_counter", lambda: next(ticks))
+    solve.solve_quarter("t", "nw")
+    assert first and capsys.readouterr().out == first
+
+
+def test_an_experiment_writes_only_in_its_own_folder(synthetic_city):
+    _write_placement(UNDER, run="trial")
+    solve.solve_quarter("trial", "sw", keep_costs=True)
+    assert sorted(p.name for p in (paths.EXPERIMENTS_DIR / "trial" / "runs").iterdir()) == [
+        "trial-sw-costs.npz", "trial-sw.npz"]
+    assert not any(paths.SOLVE_DIR.iterdir())
+    # each run's data errors are its own: the stage's list leaves nothing out of an experiment's score
+    np.savez(measures.data_errors_file(paths.SOLVE_DIR), lots=np.array([0, 1]))
+    assert measures.data_error_lots(paths.solve_dir("trial")).sum() == 0
+    assert measures.data_error_lots(paths.solve_dir(paths.FINAL_RUN)).sum() == 2
+
+
+def test_the_stage_run_is_refused_other_walls_or_the_true_borders(synthetic_city, tmp_path):
+    _write_walls(tmp_path / "other", np.full(len(synthetic_city.a), -1.0))
+    for kwargs in ({"walls_dir": tmp_path / "other"}, {"true_borders": True}):
+        with pytest.raises(ValueError, match="solver-solve stage"):
+            solve.solve_and_report(paths.FINAL_RUN, **kwargs)
+        with pytest.raises(ValueError, match="solver-solve stage"):
+            solve.solve_quarter(paths.FINAL_RUN, "nw", **kwargs)
+    # nothing was written: no part-built folder, nothing in the stage's
+    assert not any(paths.SOLVE_DIR.iterdir()) and not paths.SOLVE_DIR.with_name(".solve.part").exists()
+
+
+def test_the_cli_keeps_hand_runs_out_of_the_stage_run(synthetic_city):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    for args in (["placement", "final"], ["holes", "final", "--save-data-errors"]):
+        got = CliRunner().invoke(cli.app, ["solver", *args])
+        assert got.exit_code != 0 and "solver-solve stage's run" in got.output, args
+    assert not any(paths.SOLVE_DIR.iterdir())

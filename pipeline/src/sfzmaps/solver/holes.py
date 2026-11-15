@@ -13,8 +13,8 @@ Causes, in this order:
   CHEAPER STEP                  read as a wall, no label pull: the energy prefers the step
 Data errors: a sliver, one-lot-over or on-the-line hole whose wrong lot is at least half inked.  The printed line is
 drawn over the parcel and the table puts the parcel on the other side; nothing a reader can do about it.  They are
-listed for publishing and left out of the scores (data-errors-2000-digital.csv and data_errors.npz in
-data/solver/solve/)."""
+listed for publishing and left out of the scores (data-errors-2000-digital.csv and data_errors.npz in the run's
+folder, `paths.solve_dir`)."""
 import csv
 from collections import Counter
 from pathlib import Path
@@ -50,13 +50,14 @@ def _ink_per_border(M):
             np.bincount(k, heavy, minlength=M) / n, k, win, centre)
 
 
-def causes(run):
-    """one row per hole of the run (data errors not excluded); needs the run's costs (solve --keep-costs)"""
+def causes(run, folder=None):
+    """one row per hole of the run (data errors not excluded); needs the run's costs (solve --keep-costs), read from
+    `folder` (default the run's own)"""
     import shapely
     C = city()
     a, b, L, M = C.a, C.b, C.border_ft, len(C.a)
     T = Table(np.zeros(C.n, bool))
-    codes = load_run(run)
+    codes = load_run(run, folder)
     drawn = codes[a] != codes[b]
     hole_list, _, _ = holes(T, drawn)
     ink_on, ink_off, heavy_on, k, win, centre = _ink_per_border(M)
@@ -66,7 +67,7 @@ def causes(run):
     _, wcomp = connected_components(coo_matrix((np.ones(int(wm.sum())), (a[wm], b[wm])), shape=(C.n, C.n)),
                                     directed=False)
     wsize = np.bincount(wcomp[wrong], minlength=C.n)
-    costs = {q: np.load(run_file(f"{run}-{q}-costs"), allow_pickle=True) for q in QUARTERS}
+    costs = {q: np.load(run_file(run, f"-{q}-costs", folder), allow_pickle=True) for q in QUARTERS}
     lot_ink = C.lot_ink()
     rows = []
     for ks in hole_list:
@@ -136,7 +137,7 @@ def report_causes(run, picture=None, save_data_errors=False):
     errors = data_errors(rows)
     print(f"data errors: {len(errors)} holes, {len({lot for r in errors for lot in r['wrong_lots']})} parcels")
     if save_data_errors:
-        write_data_errors(errors, load_run(run))
+        write_data_errors(errors, load_run(run), paths.solve_dir(run))
     if picture:
         _picture(rows, load_run(run), picture)
 
@@ -147,13 +148,14 @@ def data_errors(rows):
     return [r for r in rows if r["cause"] in DATA_ERROR_CAUSES and r["lot_ink"] >= DATA_ERROR_INKED]
 
 
-def write_data_errors(errors, codes):
-    """Write the data-error parcels of `errors` (the run's `codes` give each its drawing's code):
-    data-errors-2000-digital.csv and data_errors.npz in SOLVE_DIR.  Returns the parcels' lot indices."""
+def write_data_errors(errors, codes, folder):
+    """Write the data-error parcels of `errors` (the run's `codes` give each its drawing's code) into the run's
+    `folder`: data-errors-2000-digital.csv and data_errors.npz.  Returns the parcels' lot indices."""
     C = city()
     lonlat = C.lots.to_crs(4326).geometry.representative_point()
-    csv_file = paths.SOLVE_DIR / "data-errors-2000-digital.csv"
-    paths.SOLVE_DIR.mkdir(parents=True, exist_ok=True)
+    folder = Path(folder)
+    csv_file = folder / "data-errors-2000-digital.csv"
+    folder.mkdir(parents=True, exist_ok=True)
     with open(csv_file, "w", newline="") as f:
         w = csv.writer(f, lineterminator="\n")
         w.writerow(["blklot", "table_code", "drawing_code", "lot_width_ft", "lot_inked_share", "lon", "lat", "note"])
@@ -164,8 +166,8 @@ def write_data_errors(errors, codes):
                             "the printed district line is drawn over this parcel; the table puts the parcel on the "
                             "other side"])
     lots = sorted({lot for r in errors for lot in r["wrong_lots"]})
-    np.savez_compressed(data_errors_file(), lots=np.array(lots, int))
-    print(f"saved {csv_file} and {data_errors_file()} ({len(lots)} parcels)")
+    np.savez_compressed(data_errors_file(folder), lots=np.array(lots, int))
+    print(f"saved {csv_file} and {data_errors_file(folder)} ({len(lots)} parcels)")
     return lots
 
 

@@ -16,9 +16,9 @@ label's code, else the nearest option whose lots are mostly that code.  A condit
 fitted four times, each time without the labels whose lot (under the text) is in one quarter.  Every label gets each
 model's chances, so a holdout's solve uses only the model that did not see it.
 
-Writes data/solver/solve/placement.npz: per option, `label` (a prints.parquet row), `lot`, `chance`, `stay` and
-`holdout` (the quarter the model held out: nw 0, ne 1, sw 2, se 3); and `walls`, the digest of the walls it was
-fitted with (`city.walls_digest`): a solve with other walls refuses it."""
+Writes placement.npz into the run's folder (`paths.solve_dir`): per option, `label` (a prints.parquet row), `lot`,
+`chance`, `stay` and `holdout` (the quarter the model held out: nw 0, ne 1, sw 2, se 3); and `walls`, the digest of
+the walls it was fitted with (`city.walls_digest`): a solve with other walls refuses it."""
 import csv
 import json
 from collections import Counter
@@ -48,8 +48,9 @@ FEATURES = ["stay", "log distance", "log area lots", "stroke link", "link width"
             "link x distance"]
 
 
-def placement_file() -> Path:
-    return paths.SOLVE_DIR / "placement.npz"
+def placement_file(folder) -> Path:
+    """the placement of the run whose folder is `folder`"""
+    return Path(folder) / "placement.npz"
 
 
 def leader_moves(label_fixes: Path | None = None) -> dict:
@@ -191,9 +192,10 @@ def _neg_log_lik(w, X, y, ridge):
     return total + ridge * w @ w, grad + 2 * ridge * w
 
 
-def fit(walls_dir=None, log=print) -> dict:
+def fit(folder, walls_dir=None, log=print) -> dict:
     """Fit the four held-out models with the walls of `walls_dir` (default WALLS_DIR), report how often each picks
-    the answer on its held-out labels, write placement.npz.  Returns the counts and hit rates."""
+    the answer on its held-out labels, write placement.npz into the run's `folder`.  Returns the counts and hit
+    rates."""
     rows = _options(walls_dir)
     summary = {"labels": len(rows), "with_answer": sum(r[4] for r in rows),
                "hand_moves": sum(r[2] for r in rows if r[4]),
@@ -229,19 +231,19 @@ def fit(walls_dir=None, log=print) -> dict:
             summary["held_out"][name] = {"n": int(m.sum()), "right": right, "always_stay": stay}
             log(f"{name:24s} {int(m.sum()):5,}: right {right:6.1%} (always stay {stay:6.1%})")
     opts = np.array(out, dtype=object)
-    paths.SOLVE_DIR.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(placement_file(), label=opts[:, 0].astype(int), lot=opts[:, 1].astype(int),
+    Path(folder).mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(placement_file(folder), label=opts[:, 0].astype(int), lot=opts[:, 1].astype(int),
                         chance=opts[:, 2].astype(float), stay=opts[:, 3].astype(bool), holdout=opts[:, 4].astype(int),
                         walls=walls_digest(walls_dir))
     summary["options"] = len(opts)
-    log(f"saved {placement_file()}: {len(opts):,} options for {len(set(opts[:, 0].tolist())):,} labels")
+    log(f"saved {placement_file(folder)}: {len(opts):,} options for {len(set(opts[:, 0].tolist())):,} labels")
     return summary
 
 
-def load_options(q: str, walls_dir: Path | None = None) -> dict:
-    """label -> [(lot, chance, is_stay)] for holdout q, stay first.  The placement must have been fitted with the
-    walls of `walls_dir` (default WALLS_DIR): its walled areas come from them."""
-    f = placement_file()
+def load_options(q: str, folder, walls_dir: Path | None = None) -> dict:
+    """label -> [(lot, chance, is_stay)] for holdout q, stay first, from the placement in the run's `folder`.  It
+    must have been fitted with the walls of `walls_dir` (default WALLS_DIR): its walled areas come from them."""
+    f = placement_file(folder)
     if not f.is_file():
         raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver placement`")
     P = np.load(f)
