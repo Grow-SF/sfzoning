@@ -10,6 +10,8 @@ from sfzmaps.build import WARP_WORKERS
 from sfzmaps.sources import drive
 
 app = typer.Typer(no_args_is_help=True, help="Georeference historic SF zoning maps.")
+solver_app = typer.Typer(no_args_is_help=True, help="Make the 2000 solver's inputs (each is a `sfzmaps build` stage).")
+app.add_typer(solver_app, name="solver")
 # Exit status of a command stopped by llm.FATAL (quota, spend cap, missing key): `sfzmaps build`
 # reports it as "needs a paid read". Not 2, which click uses for usage errors.
 PAID_READ_EXIT = 75

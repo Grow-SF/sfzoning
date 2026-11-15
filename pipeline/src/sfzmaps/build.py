@@ -46,7 +46,8 @@ DVC = ["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc"]
 # Code that can't change a build output: the editor, the build driver, bundling, evaluation,
 # shipping (ship, cachepack, datapack, release), the toolchain check and the GIS downloads.
 CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "ship.py", "cachepack.py",
-                "datapack.py", "release.py", "toolchain.py", "downloads", "savedreads.py", "__pycache__"}
+                "datapack.py", "release.py", "toolchain.py", "downloads", "savedreads.py", "solver", "__pycache__"}
+# (solver: the 2000 solver's stages name their own code, as an import closure.)
 # The exit code of a pipeline command stopped by llm.FATAL (the $0 cap, or no API key): "needs a
 # paid read", not a bug. Same value as cli.PAID_READ_EXIT (a test keeps them equal).
 PAID_READ_EXIT = 75
@@ -68,6 +69,10 @@ class Stage:
     upstream: tuple[str, ...] = ()
     frozen: bool = False         # never run by a build or dvc repro; only `build --force NAME`
     warp: str | None = None      # the series this stage corrects (`sfzmaps warp`): a sheet-warp stage
+    command: tuple[str, ...] = ()   # the `sfzmaps` argv tail of a command stage (no old-pipeline machinery)
+    reads: tuple[str, ...] = ()     # a command stage's data and input deps, relative to pipeline/
+    writes: tuple[str, ...] = ()    # a command stage's outs
+    code: tuple[str, ...] = ()      # a command stage's entry modules; its code deps are their import closure
 
     @property
     def shared(self) -> bool:
@@ -157,7 +162,18 @@ def _code_deps() -> list[str]:
     return [f"src/sfzmaps/{p.name}" for p in sorted(src.iterdir()) if p.name not in CODE_EXCLUDE]
 
 
+def _command_stage_deps(st: Stage) -> list[str]:
+    """A command stage's deps: the source files of its entry modules' import closure, the
+    dependency pins, and its named reads."""
+    from sfzmaps import fresh
+
+    files = [p.relative_to(config.PIPELINE_DIR).as_posix() for p in fresh.code_files(list(st.code))]
+    return sorted(files) + ["pyproject.toml", "uv.lock", *st.reads]
+
+
 def stage_deps(st: Stage) -> list[str]:
+    if st.command:
+        return _command_stage_deps(st)
     if st.refdata:
         return []
     if st.saved_reads:
@@ -181,6 +197,8 @@ def stage_deps(st: Stage) -> list[str]:
 
 
 def stage_outs(st: Stage) -> list[str]:
+    if st.command:
+        return list(st.writes)
     if st.shared:
         return ["data/out/shared"]
     if st.refdata:
@@ -222,6 +240,8 @@ def dvc_yaml_path() -> Path:
 def stage_commands(name: str) -> list[list[str]]:
     """The pipeline commands a stage runs, in order (each `sfzmaps ...` argv tail)."""
     st = stages()[name]
+    if st.command:
+        return [list(st.command)]
     if st.warp:
         return [["warp", st.warp]]
     if st.shared:
@@ -359,7 +379,7 @@ def build_lock(path: Path | None = None):
 
 def needs_prepare(order: list[str], table: dict[str, Stage]) -> bool:
     """Whether prepare() is needed: only the old pipeline's stages use today's blocks and zoning."""
-    return any(not table[n].warp for n in order)
+    return any(not (table[n].warp or table[n].command) for n in order)
 
 
 def prepare() -> None:

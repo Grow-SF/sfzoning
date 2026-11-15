@@ -441,6 +441,16 @@ Only what has been checked. "The approved run" means the corrections the owner l
    decides.
 3. Move whatever reads the old pipeline's sheets onto `data/warp`.
 
+## The 2000 solver (`sfzmaps solver`)
+
+The inputs of the 2000 joint solver are made by `sfzmaps solver <part>` commands, each one a stage of
+`sfzmaps build` (a "command stage": a `Stage` with `command`, `reads`, `writes` and `code`). A command stage's
+dependencies are the source files in the import closure of its `code` modules, `pyproject.toml`, `uv.lock` and its
+`reads`; it recomputes its whole output when any of them changes, and needs no `prepare()`. Outputs go under
+`data/solver/`; `sfzmaps.solver.paths` names every location.
+
+Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
+
 ## Where outputs land
 
 Everything is under `pipeline/data/` (git-ignored; set `SFZMAPS_DATA_DIR` to move it):

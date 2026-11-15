@@ -271,6 +271,30 @@ def test_a_build_prepares_only_for_the_old_stages():
     assert build.needs_prepare(["warp-1948", "today"], t) is True
 
 
+def _command_stage():
+    return build.Stage("x", (), (), command=("solver", "page"), reads=("data/warp/2000-digital-zoning",),
+                       writes=("data/solver/page",), code=("sfzmaps.solver.paths",))
+
+
+def test_a_command_stage_depends_on_its_import_closure_and_reads(monkeypatch):
+    st = _command_stage()
+    deps = build.stage_deps(st)
+    for d in ("src/sfzmaps/solver/paths.py", "src/sfzmaps/config.py", "pyproject.toml", "uv.lock",
+              "data/warp/2000-digital-zoning"):
+        assert d in deps
+    assert not any(d.startswith("src/sfzmaps/districts") or d.endswith("sheetwarp/probabilistic.py")
+                   for d in deps)
+    assert not any(d.endswith("build.py") for d in deps)
+    assert build.stage_outs(st) == ["data/solver/page"]
+    monkeypatch.setattr(build, "stages", lambda: {"x": st})
+    assert build.stage_commands("x") == [["solver", "page"]]
+
+
+def test_needs_prepare_is_false_for_command_stages():
+    st = _command_stage()
+    assert build.needs_prepare(["x"], {"x": st}) is False
+
+
 @pytest.mark.parametrize("build_jobs, workers", [(1, 6), (2, 3), (4, 1), (8, 1)])
 def test_the_warp_stages_a_build_runs_at_once_share_one_budget_of_workers(monkeypatch, build_jobs, workers):
     monkeypatch.setenv(build.BUILD_JOBS_ENV, str(build_jobs))
