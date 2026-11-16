@@ -124,9 +124,10 @@ export default function About() {
           Source code and reuse
         </h2>
         <p>
-          The code for the map pipeline and this site is open source, licensed under the{" "}
-          <a href="https://www.gnu.org/licenses/agpl-3.0.html">GNU AGPL v3.0</a> and published{" "}
-          <a href={SOURCE_URL}>on GitHub</a>. The pipeline can align other cities&rsquo; historic maps too.
+          The code for the map pipeline and this site is open source under the{" "}
+          <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a> and published{" "}
+          <a href={SOURCE_URL}>on GitHub</a>. You can use it for any purpose, commercial or not. The pipeline can
+          align other cities&rsquo; historic maps too.
         </p>
         <p>
           The story, the research and the processed maps are licensed{" "}
