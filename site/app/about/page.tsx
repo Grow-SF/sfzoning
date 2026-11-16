@@ -126,8 +126,9 @@ export default function About() {
         <p>
           The code for the map pipeline and this site is open source under the{" "}
           <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache License 2.0</a> and published{" "}
-          <a href={SOURCE_URL}>on GitHub</a>. You can use it for any purpose, commercial or not. The pipeline can
-          align other cities&rsquo; historic maps too.
+          <a href={SOURCE_URL}>on GitHub</a>. You can use it for any purpose, commercial or not, but the story, maps
+          and data it ships with aren&rsquo;t covered by that license: to use the code commercially, replace them. The
+          pipeline can align other cities&rsquo; historic maps too.
         </p>
         <p>
           The story, the research and the processed maps are licensed{" "}
