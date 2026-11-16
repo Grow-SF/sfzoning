@@ -62,6 +62,12 @@ def test_training_excludes_answered_labels_and_their_blocks():
     held = labels.held_out_blocks(labs)
     assert held == {"100", "200", "300", "500"}
     assert not any(lab.held_out or lab.block in held for lab in train)
+    # each label knows whether its block is held out, so a list to learn from can be checked on its own: the block
+    # mates of answered labels (1: with 0; 3: an off-print case's lot; 6: with 5) are refused
+    assert [lab.index for lab in labs if lab.held_block and not lab.held_out] == [1, 3, 6]
+    labels.refuse_held(train)
+    with pytest.raises(ValueError, match="held-out block"):
+        labels.refuse_held([by_print[1]])
 
 
 def test_folds_split_each_stratum_in_half_with_a_seed():
@@ -325,7 +331,6 @@ def test_em_recovers_templates_from_synthetic_text(tmp_path):
     assert back.chars == font.chars and all(np.array_equal(back.templates[c], font.templates[c]) for c in "RHM-12")
     assert back.advance == font.advance and np.array_equal(back.noise.p, font.noise.p)
     assert 0 < back.position_sd == font.position_sd < glyphs.POSITION_SD
-    assert 0 < back.scale_sd == font.scale_sd < 0.2                     # cap heights drawn 20-28 px: a spread kept
     pose = glyphs.Pose(80, 40, 0.8, 0.0)
     assert np.array_equal(glyphs.render(back, "RH-12", pose, (80, 160)), glyphs.render(font, "RH-12", pose, (80, 160)))
 
@@ -364,15 +369,19 @@ def test_unobserved_pixels_change_nothing():
     assert [r.get("loglik") for r in a.trace] == [r.get("loglik") for r in b.trace]
 
 
-def test_learning_refuses_held_out_labels():
+@pytest.mark.parametrize("mark", ["held_out", "held_block"])
+def test_learning_refuses_held_out_labels(mark):
     labs, texts, observed, _ = _synthetic(3, seed=1)
-    labs[1].held_out = True                       # an owner's answer joined it: never learned from
-    with pytest.raises(ValueError, match="held-out"):
-        glyphs.learn_font(labs, 1, texts=texts, observed=observed, **SMALL)
-    with pytest.raises(ValueError, match="held-out"):
-        posterior.code_prior(labs, {"RH-1": "RH-1"})
-    with pytest.raises(ValueError, match="held-out"):
-        posterior.char_bigram(labs, "RH-1 ", {"RH-1": "RH-1"})
+    setattr(labs[1], mark, True)            # an owner's answer joined it, or one joined a label in its block
+    font = _reader_font("RHM-12")
+    for learn in (lambda: glyphs.learn_font(labs, 1, texts=texts, observed=observed, **SMALL),
+                  lambda: posterior.code_prior(labs, {"RH-1": "RH-1"}),
+                  lambda: posterior.form_prior(labs, {"RH-1": "RH-1"}),
+                  lambda: posterior.char_bigram(labs, "RH-1 ", {"RH-1": "RH-1"}),
+                  lambda: posterior.measure_pose_prior(labs, font, TRUE_NOISE),
+                  lambda: posterior.Prior.learn(labs, font, TRUE_NOISE, {"RH-1": "RH-1"})):
+        with pytest.raises(ValueError, match="held-out"):
+            learn()
 
 
 # --- the posterior ----------------------------------------------------------------------------------------------------
@@ -432,10 +441,46 @@ def _top(post):
     return max(post, key=post.get)
 
 
+def _measured(font, n=60, seed=7):
+    """What `measure_pose_prior` measures from the ink, measured on synthetic training labels drawn as the tests
+    draw (the true poses as the fits): each character's gain and where a word ends.  Each label a code at a cap of
+    19-27 px, a little off level; four in ten have another word on its line after it and two in ten before it, a word
+    gap (0.5-1.5 cap heights) away."""
+    rng = np.random.default_rng(seed)
+    shape = (120, 420)
+    texts, fits, labs = [], [], []
+    for i in range(n):
+        text = READ_CODES[i % len(READ_CODES)]
+        s, angle = rng.uniform(0.6, 0.85), rng.normal(0.0, 1.0)
+        pose = glyphs.Pose(210 + rng.uniform(-10, 10), 60 + rng.uniform(-4, 4), s, angle)
+        items = [(text, pose)]
+        d = glyphs.render(font, text, pose, shape)
+        xs = np.flatnonzero((d > 0).any(axis=0))
+        for side, p in ((1, 0.4), (-1, 0.2)):
+            if rng.random() < p:
+                other = READ_CODES[rng.integers(len(READ_CODES))]
+                width = glyphs.render(font, other, glyphs.Pose(210, 60, s, angle), shape)
+                ox = np.flatnonzero((width > 0).any(axis=0))
+                gap = rng.uniform(0.5, 1.5) * s * glyphs.SIZE
+                edge = xs[-1] + 1 + gap if side > 0 else xs[0] - gap
+                centre = edge + side * (ox[-1] + 1 - ox[0]) / 2
+                items.append((other, glyphs.Pose(centre, pose.y + (centre - pose.x) * math.tan(math.radians(-angle)),
+                                                 s, angle)))
+        ink, box = _draw(font, items, shape, seed=100 + i)
+        texts.append(text)
+        fits.append(type("Fit", (), {"pose": pose})())
+        labs.append(_box_label(ink, box))
+    observed = [np.ones(shape, bool)] * n
+    weights = np.ones(n)
+    return (posterior.char_gains(font, TRUE_NOISE, texts, fits, labs, observed, weights),
+            posterior.end_breaks(font, texts, fits, labs, observed, weights))
+
+
 @pytest.fixture(scope="module")
 def reader():
     font = _reader_font("".join(sorted(set("".join(READ_CODES)) | set("SUD"))))
-    return font, _prior(font, {c: c for c in READ_CODES})
+    gains, ends = _measured(font)
+    return font, _prior(font, {c: c for c in READ_CODES}, char_gain=gains, end_break=ends)
 
 
 def test_posterior_sums_to_one(reader):
@@ -541,7 +586,52 @@ def test_text_that_is_no_code_reads_other(reader):
     ink, box = _draw(font, [("SUD", glyphs.Pose(100, 55, 0.75, 0.0))], (110, 200), seed=8)
     post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, posterior.Constants(),
                                  observed=np.ones(ink.shape, bool))
-    assert _top(post) == "other"
+    assert _top(post) == "other" and post["other"] > 0.9
+
+
+def test_temperature_grid_gives_each_temperature_as_alone(reader):
+    """Evidence at a grid of temperatures is each temperature's alone (nothing pruned by one temperature's scores
+    or shared between them): on a box label and on a point label whose text sits off its point (the placement's tail)."""
+    font, prior = reader
+    ink, box = _draw(font, [("RM-2", glyphs.Pose(100, 55, 0.75, 0.0))], (110, 200), seed=2)
+    off, _ = _draw(font, [("RM-2", glyphs.Pose(150, 112, 0.75, 0.0))], (220, 260), seed=4)
+    point = labels.Label(index=0, sheet=SHEET, kind=2, point=(0.0, 0.0), crop=np.where(off, 0, 255).astype(np.uint8),
+                         centre=(126.5, 113.0))
+    for lab in (_box_label(ink, box), point):
+        obs = np.ones(lab.crop.shape, bool)
+        grid = posterior.evidence(lab, font, TRUE_NOISE, prior, (5.0, 30.0), observed=obs)
+        for i, temp in enumerate((5.0, 30.0)):
+            alone = posterior.evidence(lab, font, TRUE_NOISE, prior, (temp,), observed=obs)
+            assert abs(alone.other[0] - grid.other[i]) < 1e-9
+            assert max(abs(alone.forms[f][0] - grid.forms[f][i]) for f in grid.forms) < 1e-9
+
+
+def test_off_centre_point_reads_the_full_code(reader):
+    """Without a box, the print's point off the middle of its text: a reading that stops short of the ink (RH-1 of
+    RH-1(D), or "other" spelling the part nearest the point) pays for the ink left beside its end (`end_breaks`,
+    measured on the synthetic training labels).  The full code reads with the point a quarter or half a word height
+    either side of the middle, and up to a word height past it toward "(D)" (no code there is nearer the point)."""
+    font, prior = reader
+    shape = (220, 260)
+    ink, box = _draw(font, [("RH-1(D)", glyphs.Pose(130, 112, 0.75, 0.0))], shape, seed=4)
+    mid = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+    for off in (-0.5, -0.25, 0.25, 0.5, 0.75, 1.0):                  # word heights along the line
+        lab = labels.Label(index=0, sheet=SHEET, kind=2, point=(0.0, 0.0), crop=np.where(ink, 0, 255).astype(np.uint8),
+                           centre=(mid[0] + off * prior.pose.height, mid[1]))
+        post = posterior.score_label(lab, font, TRUE_NOISE, prior, observed=np.ones(shape, bool))
+        assert _top(post) == "RH-1(D)", (off, post)
+
+
+def test_end_breaks_measure_where_words_end():
+    """`end_breaks` on synthetic training labels: past a string's own ends the window holds paper or a word a gap
+    away, past a boundary inside it the next letter; P(end) falls as the ink past it grows, and a window is chosen
+    by the other half's log loss."""
+    font = _reader_font("".join(sorted(set("".join(READ_CODES)) | set("SUD"))))
+    _, ends = _measured(font)
+    assert tuple(ends["window"]) in posterior.END_WINDOWS and len(ends["log_loss"]) == len(posterior.END_WINDOWS)
+    p = np.array(ends["p_end"])
+    assert np.all(np.diff(p) <= 1e-12) and p[0] > 0.6 and p[-1] < 0.15
+    assert 0.2 < ends["base"] < 0.35                         # two ends per string among its boundaries
 
 
 def test_printed_variant_reads_as_its_code():
@@ -573,6 +663,9 @@ def test_code_prior_and_bigram_count_training_strings():
     prior = posterior.code_prior(labs, forms)
     assert set(prior) == {"P", "RH-1", "RM-2"} and abs(sum(prior.values()) - 1) < 1e-12
     assert prior["P"] > prior["RH-1"] > prior["RM-2"] > 0            # 3, 2 and 0 counts, smoothed
+    # p(form | code): how often the training strings print each form of a code, a half count added to each
+    weights = posterior.form_prior(labs, {"RH-1": "RH-1", "RH1": "RH-1", "P": "P"})
+    assert weights == {"P": 1.0, "RH-1": 2.5 / 3, "RH1": 0.5 / 3}
     chars = "-1DHMPRSU "
     big = posterior.char_bigram(labs, chars, forms)
     kinds = posterior.kinds_of(chars)
@@ -581,6 +674,21 @@ def test_code_prior_and_bigram_count_training_strings():
     assert np.isneginf(big[start, chars.index(" ")]) and np.isneginf(big[space, -1])     # no space first or last
     assert big[start, chars.index("S")] > big[start, chars.index("R")]   # "SUD" is the only other text; codes don't count
     assert big[letter, chars.index("U")] > big[letter, chars.index("1")]
+
+
+def test_posterior_weighs_a_codes_forms_by_how_often_they_are_printed():
+    font = _reader_font("RH-12")
+    prior = _prior(font, {"RH-2": "RH-2", "RH2": "RH-2", "RH-1": "RH-1"})
+    ev = posterior.Evidence(temperatures=(5.0,), forms={"RH-2": np.array([1.0]), "RH2": np.array([4.0]),
+                                                        "RH-1": np.array([3.0])}, other=np.array([0.0]),
+                            gain=np.array([1.0]))
+    c = posterior.Constants()
+    alike = posterior.posterior_of(ev, prior, c)                     # no weights: a code's forms alike
+    prior.form_weights = {"RH-2": 0.9, "RH2": 0.1, "RH-1": 1.0}
+    weighed = posterior.posterior_of(ev, prior, c)
+    ratio = lambda p: p["RH-2"] / p["RH-1"]
+    assert math.isclose(ratio(alike), (0.5 * math.e + 0.5 * math.e ** 4) / math.e ** 3)
+    assert math.isclose(ratio(weighed), (0.9 * math.e + 0.1 * math.e ** 4) / math.e ** 3)
 
 
 def test_mixture_fit_separates_core_tail_and_stray():

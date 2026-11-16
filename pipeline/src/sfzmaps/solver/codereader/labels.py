@@ -13,7 +13,8 @@ that joins no print is a label of its own at its point (kind -1, a point crop), 
 Held out (`held_out`): every label an answer joined, whatever the answer.  `training` leaves out those and every label
 in a held-out block: the table's block number of a held-out label's lot (`lab_lot`), and of the lot under each
 answered case's own point (through the sheet's placement, its nearest lot: `grown`), so the same code printed again on
-a neighbouring sheet is never trained on.  A label with no block is left out too.  The table's code at a label's lot
+a neighbouring sheet is never trained on.  A label with no block is left out too.  `make_labels` marks both kinds
+(`held_block`), so a list of labels to learn from can be checked without the rest.  The table's code at a label's lot
 is never read; only the table's list of code names is (`table_codes`).
 
 `fold` splits the labels with an owner's code (or "no label") into two halves for the cross-fitted calibration: in
@@ -92,6 +93,7 @@ class Label:
     answers: tuple[tuple[str, str | None, bool], ...] = ()  # the answered ones: (id, the owner's code, flagged)
     answer: str | None = None          # the owner's code ("" no code there), when the answers agree
     held_out: bool = False             # an owner's answer joined it
+    held_block: bool = False           # in a held-out block, or in none (`mark_held_blocks`): never learned from
     flagged: bool = False              # one of its answered cases was flagged on the code-check page
     case_blocks: tuple[str, ...] = ()  # the blocks under its answered cases' own points
     fold: int = -1                     # 0 or 1 for the cross-fitting (labels with an owner's code), else -1
@@ -242,6 +244,7 @@ def make_labels(prints: pd.DataFrame, terra: dict[str, list[dict]], sol: dict[st
         _answer(lab, [c], lot_block, case_lots)
         out.append(lab)
     assign_folds(out)
+    mark_held_blocks(out)
     return out
 
 
@@ -277,10 +280,28 @@ def held_out_blocks(labels: list[Label]) -> set[str]:
     return {b for lab in labels if lab.held_out for b in (lab.block, *lab.case_blocks) if b}
 
 
-def training(labels: list[Label]) -> list[Label]:
-    """The labels to learn from: not held out, with a block, and in no held-out block."""
+def mark_held_blocks(labels: list[Label]) -> None:
+    """Mark each label in a held-out block (`held_out_blocks` of these labels) or with no block (`held_block`), so
+    that a list of labels to learn from can be checked on its own."""
     held = held_out_blocks(labels)
-    return [lab for lab in labels if not lab.held_out and lab.block and lab.block not in held]
+    for lab in labels:
+        lab.held_block = not lab.block or lab.block in held
+
+
+def refuse_held(labels: list[Label]) -> None:
+    """Raise ValueError when any of the labels may not be learned from: held out, or in a held-out block or none
+    (`held_block`)."""
+    held = [lab.index for lab in labels if lab.held_out or lab.held_block]
+    if held:
+        raise ValueError(f"{len(held)} held-out labels or labels in a held-out block given to learn from (first: "
+                         f"print {held[0]}); pass labels.training(labels)")
+
+
+def training(labels: list[Label]) -> list[Label]:
+    """The labels to learn from: not held out, with a block, and in no held-out block (of these labels, nor marked
+    so by `mark_held_blocks`)."""
+    held = held_out_blocks(labels)
+    return [lab for lab in labels if not lab.held_out and not lab.held_block and lab.block and lab.block not in held]
 
 
 def _lot_blocks() -> np.ndarray:

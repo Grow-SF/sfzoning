@@ -156,7 +156,6 @@ class Font:
     counts: dict[str, float] = field(default_factory=dict)    # the weighted instances each template learned from
     spacing_sd: float = 0.0              # the gaps' spread about the advances' prediction, template px
     position_sd: float = 0.0             # the drawn text's spread about Terra's word centre, word heights (round 0)
-    scale_sd: float = 0.0                # the log of cap height over Terra's word height: its spread (the round's)
     noise: "NoiseModel | None" = None    # the noise fitted with it
     trace: list[dict] = field(default_factory=list)          # learn_font's rounds
     _laid: dict = field(default_factory=dict, repr=False)
@@ -198,7 +197,7 @@ class Font:
                             extent=np.array([self.extent.get(c, (np.nan, np.nan)) for c in chars]),
                             advance=np.array([self.advance[c] for c in chars]),
                             counts=np.array([self.counts.get(c, 0.0) for c in chars]),
-                            meta=np.array([self.slant, self.size, self.spacing_sd, self.position_sd, self.scale_sd]),
+                            meta=np.array([self.slant, self.size, self.spacing_sd, self.position_sd]),
                             noise=self.noise.p if self.noise is not None else np.zeros(0), **arrays)
 
     @classmethod
@@ -209,13 +208,12 @@ class Font:
             templates = {c: z[f"t{ord(c)}"].astype(np.float32) for c in chars if f"t{ord(c)}" in z}
             meta = z["meta"].tolist()
             slant, size, spread, position = meta[:4]
-            scale = meta[4] if len(meta) > 4 else 0.0          # fonts saved before the scale spread was kept
             noise = NoiseModel(z["noise"]) if len(z["noise"]) else None
             return cls(templates=templates, origin={c: float(a) for c, a in zip(chars, z["origin"]) if c in templates},
                        extent={c: (float(a), float(b)) for c, (a, b) in zip(chars, z["extent"]) if c in templates},
                        advance={c: float(a) for c, a in zip(chars, z["advance"])}, slant=slant, size=int(size),
                        counts={c: float(n) for c, n in zip(chars, z["counts"])}, spacing_sd=spread,
-                       position_sd=position, scale_sd=scale, noise=noise)
+                       position_sd=position, noise=noise)
 
 
 def signed_distance(shape: np.ndarray) -> np.ndarray:
@@ -712,13 +710,10 @@ def learn_font(labels: list[labels_mod.Label], iterations: int = ITERATIONS, *, 
     """The font learned from the labels' crops by hard EM (see the module).  `texts`: each label's string
     (`consensus` when None); `observed`: each crop's observed px (not on a line by `rules` when None); `charset`:
     characters the font holds besides the strings' (kept at the first font where never seen).  The font's `noise` is
-    the noise fitted with it; its `trace` holds each round's training log-likelihood and each label's weight; its
-    `scale_sd` the chosen round's measured spread of log(cap height / word height).  A held-out label (an owner's
-    answer joined it) is refused: pass `labels.training(labels)`, which also leaves out their blocks."""
-    held = [lab.index for lab in labels if lab.held_out]
-    if held:
-        raise ValueError(f"{len(held)} held-out labels given to learn from (first: print {held[0]}); "
-                         "pass labels.training(labels)")
+    the noise fitted with it; its `trace` holds each round's training log-likelihood and each label's weight (the
+    size spread the reader uses is the pose prior's, `posterior.PosePrior.ratio`).  A held-out label (an owner's
+    answer joined it), or one in a held-out block, is refused (`labels.refuse_held`): pass `labels.training(labels)`."""
+    labels_mod.refuse_held(labels)
     t0 = time.perf_counter()
     texts = [consensus(lab) for lab in labels] if texts is None else list(texts)
     observed = [~labels_mod.line_mask(lab, rules=rules) for lab in labels] if observed is None else \
@@ -805,8 +800,5 @@ def learn_font(labels: list[labels_mod.Label], iterations: int = ITERATIONS, *, 
         log.info("the font of round %d chosen", k)
     font.trace = trace
     font.position_sd = next((r["position_sd"] for r in trace if "position_sd" in r), POSITION_SD)
-    chosen = next((r for r in trace if r.get("round") == trace[-1].get("chosen")), trace[-1])
-    good_sd = chosen.get("box", {}).get("good_sd", [])
-    font.scale_sd = float(good_sd[2]) if len(good_sd) > 2 else 0.0
     log.info("font learned in %.0f s", time.perf_counter() - t0)
     return font
