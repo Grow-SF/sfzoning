@@ -1,3 +1,4 @@
+import dataclasses
 import math
 
 import cv2
@@ -589,6 +590,17 @@ def test_text_that_is_no_code_reads_other(reader):
     assert _top(post) == "other" and post["other"] > 0.9
 
 
+@pytest.mark.parametrize("code", [*READ_CODES, "M-2"])
+def test_crisp_code_on_clean_paper_reads_that_code_not_other(reader, code):
+    """A printed code alone on paper, at Terra's word: the code, not "other" spelling it (or it with a filler)."""
+    font, prior = reader
+    prior = dataclasses.replace(prior, forms={**prior.forms, "M-2": "M-2"},
+                                codes={c: 1 / (len(READ_CODES) + 1) for c in [*READ_CODES, "M-2"]})
+    ink, box = _draw(font, [(code, glyphs.Pose(110, 55, 0.75, 0.0))], (110, 230), seed=11)
+    post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, observed=np.ones(ink.shape, bool))
+    assert post[code] > 0.9, (code, post)
+
+
 def test_temperature_grid_gives_each_temperature_as_alone(reader):
     """Evidence at a grid of temperatures is each temperature's alone (nothing pruned by one temperature's scores
     or shared between them): on a box label and on a point label whose text sits off its point (the placement's tail)."""
@@ -606,20 +618,52 @@ def test_temperature_grid_gives_each_temperature_as_alone(reader):
             assert max(abs(alone.forms[f][0] - grid.forms[f][i]) for f in grid.forms) < 1e-9
 
 
-def test_off_centre_point_reads_the_full_code(reader):
-    """Without a box, the print's point off the middle of its text: a reading that stops short of the ink (RH-1 of
-    RH-1(D), or "other" spelling the part nearest the point) pays for the ink left beside its end (`end_breaks`,
-    measured on the synthetic training labels).  The full code reads with the point a quarter or half a word height
-    either side of the middle, and up to a word height past it toward "(D)" (no code there is nearer the point)."""
+@pytest.mark.parametrize("off", [
+    -0.5, -0.25, 0.25, 0.5, 0.75, 1.0,
+    pytest.param(-0.75, marks=pytest.mark.xfail(strict=True, reason=(
+        "measured: 'other' 0.666 (RH-1(D) 0.267): a string over the part nearest the point pays one end's factor, "
+        "less than the full code's placement tail costs"))),
+    pytest.param(-1.0, marks=pytest.mark.xfail(strict=True, reason=(
+        "measured: RH-1 0.901: the prefix centred near the point pays one end (~3 nats on the map's table), the full "
+        "code's centre is 2.5 tail spreads off")))])
+def test_off_centre_point_reads_the_full_code_with_the_end_term(reader, monkeypatch, off):
+    """Without a box, the print's point off the middle of its text (word heights along the line; negative: toward
+    "RH"): with the end-break term on (`END_BREAKS`; measured here on the synthetic training labels), a reading that
+    stops short of the ink pays for the ink left beside its end.  The term is off in the reader: on the map's
+    training point labels it lowered the likelihood (see the module)."""
+    monkeypatch.setattr(posterior, "END_BREAKS", True)
     font, prior = reader
     shape = (220, 260)
     ink, box = _draw(font, [("RH-1(D)", glyphs.Pose(130, 112, 0.75, 0.0))], shape, seed=4)
     mid = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
-    for off in (-0.5, -0.25, 0.25, 0.5, 0.75, 1.0):                  # word heights along the line
-        lab = labels.Label(index=0, sheet=SHEET, kind=2, point=(0.0, 0.0), crop=np.where(ink, 0, 255).astype(np.uint8),
-                           centre=(mid[0] + off * prior.pose.height, mid[1]))
-        post = posterior.score_label(lab, font, TRUE_NOISE, prior, observed=np.ones(shape, bool))
-        assert _top(post) == "RH-1(D)", (off, post)
+    lab = labels.Label(index=0, sheet=SHEET, kind=2, point=(0.0, 0.0), crop=np.where(ink, 0, 255).astype(np.uint8),
+                       centre=(mid[0] + off * prior.pose.height, mid[1]))
+    post = posterior.score_label(lab, font, TRUE_NOISE, prior, observed=np.ones(shape, bool))
+    assert _top(post) == "RH-1(D)", (off, post)
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "measured: a code printed wider spaced than the font's advances reads 'other' (M-2 with its letters 0.3 cap "
+    "heights further apart: other 0.989), which spells fillers into the gaps; codes have no letter-spacing freedom"))
+def test_widely_spaced_code_reads_that_code(reader):
+    font, prior = reader
+    prior = dataclasses.replace(prior, forms={**prior.forms, "M-2": "M-2"},
+                                codes={c: 1 / (len(READ_CODES) + 1) for c in [*READ_CODES, "M-2"]})
+    s, extra = 0.75, 0.3 * glyphs.SIZE * 0.75
+    chars, xs = font.layout("M-2")
+    rng = np.random.default_rng(3)
+    ink = np.zeros((110, 260), bool)
+    boxes = []
+    for i, (c, x) in enumerate(zip(chars, xs)):
+        d = glyphs.render(font, c, glyphs.Pose(120 + (x + font.advance[c] / 2) * s + (i - 1) * extra, 55, s, 0.0),
+                          ink.shape)
+        ink |= rng.random(ink.shape) < TRUE_NOISE.p_ink(d)
+        ys, xx = np.nonzero(d > 0)
+        boxes.append((xx.min(), ys.min(), xx.max() + 1, ys.max() + 1))
+    b = np.array(boxes, float)
+    box = (b[:, 0].min(), b[:, 1].min(), b[:, 2].max(), b[:, 3].max())
+    post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, observed=np.ones(ink.shape, bool))
+    assert post["M-2"] > 0.9, post
 
 
 def test_end_breaks_measure_where_words_end():

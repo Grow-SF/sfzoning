@@ -20,7 +20,8 @@ across the reading direction, px from the print's point) and the pen of its firs
   - "other": an open-vocabulary pass over the font's characters (a space between words), the string's probability
     by a character bigram over the previous character's kind (`char_bigram`).  The best string from each cell (it
     ends where its bigram ends it) is found by a max-product pass along the line (`_viterbi`) and stands for the sum
-    over strings there; its placement weight is judged at the end it carries.
+    over strings there; its placement weight is judged at the end it carries, not used to choose it (chosen with it,
+    "other" spelled fillers into a code printed wider spaced than the font's advances, a freedom codes lack).
   - Tempered: the px aren't independent (a stroke's edge is one event, not a run of independent px), so every ratio
     is divided by the temperature before anything is summed (a composite likelihood's magnitude adjustment; Ocular
     needed the same).  The pose prior carries a default; Task 4 fits it with the two masses.
@@ -65,10 +66,13 @@ is 1 / (1 + rho F(h)), and where the word ends comes from the ink along the line
 Where a word ends, without a box.  A reading that stops short of its word (RH-1 of RH-1(D), P on the R of RM-2)
 leaves the rest of the word beside its end, on its line.  Past each end of a hypothesis's ink, a window of the
 lettering band (`PosePrior.end_break["window"]`: a skip and a width, cap heights; leaned like the glyphs) holds some
-density of observed ink; P(a word ends | that density) is measured on the training labels' fits (their strings' own ends against the
-boundaries between their characters; isotonic, non-increasing in the density, a sample at the base rate added to
-each step; the window kept by two-fold log loss: `end_breaks`).  Each end multiplies E_h by P(end | density) / P(end); the best "other" string
-takes its last end's factor inside the Viterbi pass.  With a box Terra's word does this job.
+density of observed ink; P(a word ends | that density) is measured on the training labels' fits (their strings'
+own ends against the boundaries between their characters; isotonic, non-increasing in the density, a sample at the
+base rate added to each step; the window kept by two-fold log loss: `end_breaks`).  Each end multiplies E_h by
+P(end | density) / P(end); the best "other" string takes its last end's factor inside the Viterbi pass.  With a box
+Terra's word does this job.  The term is measured but off (END_BREAKS): it reads synthetic off-centre points right,
+but on the training point labels it lowered the likelihood (mean -log p(code) 2.55 against 2.26 without; see the
+task report).
 
 The prior over hypotheses: p(code) = (1 - none - other) x `code_prior`, a code's printed forms weighted by
 `form_prior` (how often the training strings print each), p(none), p(other): `Constants`, Task 4's to fit (two-fold
@@ -80,9 +84,9 @@ angle and cell within the placement prior's reach.  (Skipping scales and angles 
 label's best was tried and dropped: no cheap bound covers every hypothesis at every temperature, and it moved
 posteriors.)
 
-Deterministic: no randomness; torch's deterministic algorithms on THREADS threads (`settle_torch`, set by
-`evidence`); on the CPU, or the GPU in one exclusive turn (`sfzmaps.gpu.gpu_turn`, taken by `evidence`; on the 2000
-labels `mps` was far slower than the CPU).
+Deterministic: no randomness; torch's deterministic algorithms on THREADS threads (`settle_torch`, process-wide,
+set by every `evidence` call); on the CPU, or the GPU in one exclusive turn that the caller takes around its whole
+run (`sfzmaps.gpu.gpu_turn`; turns don't nest; on the 2000 labels `mps` was far slower than the CPU).
 """
 import json
 import logging
@@ -95,7 +99,6 @@ import cv2
 import numpy as np
 import torch
 
-from sfzmaps import gpu
 from sfzmaps.solver import codes
 from sfzmaps.solver.codereader import glyphs
 from sfzmaps.solver.codereader import labels as labels_mod
@@ -115,6 +118,7 @@ REACH_LOG = 12.0           # cells whose placement prior is below e^-REACH_LOG o
 END_WINDOWS = tuple((a, b) for a in (0.0, 0.1, 0.2) for b in (0.4, 0.6, 0.9, 1.3))
 SOURCES = ("sol", "turned")
 THREADS = 1                # torch's threads while scoring (labels go in parallel processes): the same sums anywhere
+END_BREAKS = False         # use the measured end-break term without a box: off, it lowered the training likelihood
 
 
 # --- constants and priors --------------------------------------------------------------------------------------------
@@ -150,7 +154,7 @@ class PosePrior:
     point_heights: tuple = ()            # the training words' heights (px) the point labels' scales span
     foreign: float = 5e-5                # other text per px^2 of crop (Terra's boxes of every kind)
     char_gain: dict = field(default_factory=dict)    # each character's mean ratio per ink px of its cell
-    end_break: dict = field(default_factory=dict)    # P(a word ends | ink density past it), without a box (`end_breaks`)
+    end_break: dict = field(default_factory=dict)    # P(a word ends | ink density past it), no box (`end_breaks`)
     temperature: float = 30.0            # Constants' default: the design effect within one character
     ratios: tuple = tuple(glyphs.RATIOS)             # the scale grid's cap/word ratios with a box
     point_quantiles: tuple = glyphs.POINT_QUANTILES  # without one: cap heights over these quantiles of the heights
@@ -875,7 +879,8 @@ def end_factor(end_break: dict, density) -> np.ndarray:
 
 
 def settle_torch() -> None:
-    """torch's deterministic algorithms (it raises on an op that has none) on THREADS threads."""
+    """torch's deterministic algorithms (it raises on an op that has none) on THREADS threads: process-wide settings,
+    set again by every `evidence` call."""
     torch.set_num_threads(THREADS)
     torch.use_deterministic_algorithms(True)
 
@@ -883,11 +888,12 @@ def settle_torch() -> None:
 def evidence(label: labels_mod.Label, font: glyphs.Font, noise: glyphs.NoiseModel, prior: Prior,
              temperatures=(None,), *, observed: np.ndarray | None = None, rules=RULES, device="cpu") -> Evidence:
     """log E_h of every printed form of `prior` and of "other" (see the module), at each temperature (None: the pose
-    prior's measured one).  `observed`: the crop's observed px (not on a line by `rules` when None).  torch runs
-    deterministic on THREADS threads (`settle_torch`); on the GPU (`device` "mps") in one exclusive turn."""
+    prior's measured one).  `observed`: the crop's observed px (not on a line by `rules` when None).  Calls
+    `settle_torch`, which is process-wide (torch's thread count and deterministic mode for the whole process).  On
+    the GPU (`device` "mps") the caller takes one exclusive turn around its whole run (`sfzmaps.gpu.gpu_turn(True,
+    device)`): turns don't nest, so this does not take one per label."""
     settle_torch()
-    with gpu.gpu_turn(True, device):
-        return _evidence(label, font, noise, prior, temperatures, observed, rules, device)
+    return _evidence(label, font, noise, prior, temperatures, observed, rules, device)
 
 
 def _evidence(label, font, noise, prior: Prior, temperatures, observed, rules, device) -> Evidence:
@@ -904,8 +910,8 @@ def _evidence(label, font, noise, prior: Prior, temperatures, observed, rules, d
     for si, s, angs, axes, ks, ts, starts, adv, lo, hi, layouts, longest, EI in sc.chunks(coarse=True):
         rows, firsts, lasts, alongs, tx0, _ = sc.placement(si, angs, axes, ks, ts, adv, lo, hi, longest)
         for ti, temp in enumerate(temps):
-            names, tot, first, last = sc.codes_at(_jitter(EI, shift_sd * s, temp), ts, starts, layouts, lo, hi,
-                                                  longest)
+            EJ = _jitter(EI, shift_sd * s, temp)
+            names, tot, first, last = sc.codes_at(EJ, ts, starts, layouts, lo, hi, longest)
             score = tot[:, 0] / temp + _place_weights(rows[0], firsts[0], lasts[0], alongs[0], tx0, ts, first, last)
             i = int(torch.argmax(score))
             if float(score.reshape(-1)[i]) > best[ti][0]:
@@ -916,7 +922,7 @@ def _evidence(label, font, noise, prior: Prior, temperatures, observed, rules, d
     acc_forms = [[] for _ in temps]
     acc_other = [[] for _ in temps]
     names = list(sc.forms)
-    breaks = sc.lab.box is None and bool(pose.end_break)
+    breaks = END_BREAKS and sc.lab.box is None and bool(pose.end_break)
     for si, s, angs, axes, ks, ts, starts, adv, lo, hi, layouts, longest, EI in sc.chunks():
         rows, firsts, lasts, alongs, tx0, log_rho = sc.placement(si, angs, axes, ks, ts, adv, lo, hi, longest)
         n_t, n_r = EI.shape[2], EI.shape[3]
@@ -926,16 +932,10 @@ def _evidence(label, font, noise, prior: Prior, temperatures, observed, rules, d
         at_lo = torch.from_numpy(np.arange(n_t)[:, None] + tx0 + np.array(lo)[None, :]).to(device).clamp(0, n_x - 1)
         at_hi = torch.from_numpy(np.arange(n_t)[:, None] + tx0 + np.array(hi)[None, :]).to(device).clamp(0, n_x - 1)
         start_w = [f[at_lo] for f in firsts]                    # each first character's start weight: [t, c, r]
-        end_w = choose = left_w = right_w = None
+        end_w = left_w = right_w = None
         if breaks:                                              # where a word ends, from the ink along the line
             left_w, right_w = sc.end_factors(s, axes, ks, int(ts[0]) - tx0, n_x)          # [tx, r] each
             end_w = right_w[at_hi].permute(0, 2, 1)                                      # [t, r, c]
-        elif lasts[0] is not None:
-            # Terra's word: the weight that chooses where the best "other" string ends (the two components mixed by
-            # their rows' weights); its exact weights are applied at the end it carries, below
-            rw = torch.stack(rows)
-            choose = torch.logsumexp(torch.stack(lasts) + rw[:, None, :], dim=0) - torch.logsumexp(rw, dim=0)
-            end_w = choose[at_hi].permute(0, 2, 1)
         for ti, temp in enumerate(temps):
             g = gains[ti] / temp
             EJ = _jitter(EI, shift_sd * s, temp)
@@ -949,15 +949,16 @@ def _evidence(label, font, noise, prior: Prior, temperatures, observed, rules, d
                 (val + _place_weights(rows[c], firsts[c], lasts[c], alongs[c], tx0, ts, first, last))
                 .reshape(len(names), -1), dim=1) for c in range(2)])
             acc_forms[ti].append(torch.logsumexp(parts, dim=0).cpu().numpy())
-            # other: the best string from each start (where its bigram, and its end's weight, end it), its own ink
-            # and its last ink px carried along; the placement's weights judged at that end
+            # other: the best string from each start (where its bigram ends it; without a box and with END_BREAKS,
+            # its end's factor too), its own ink and its last ink px carried along; the placement's weights judged at
+            # that end.  With Terra's word the end weight does not choose the path: chosen with it, "other" spelled
+            # fillers into a code's print wider spaced than the font's advances ("M-.2" for a wide M-2), a freedom a
+            # code's fixed layout lacks (see the task report)
             em = (EJ[0] - gains[ti] * EJ[1]) / temp
             V, inks, Zv = _viterbi(em, EJ[1:], adv, hi, sc.kind, sc.logq, end_w)
             V, Gv, Wv, Zv = V[starts], inks[0][starts], inks[1][starts], Zv[starts]          # [start, r, c]
             explained = g * Gv - _log_other_text(log_rho[None, :, None], g, Gv, Wv, sc.mean_gain, sc.lab.word_ink)
             at_end = (Zv.long() + tx0).clamp(0, n_x - 1)
-            if choose is not None:
-                V = V - choose[at_end, r_idx]                   # the choosing weight off: the exact ones below
             if breaks:
                 V = V + left_w[at_lo[starts]].permute(0, 2, 1)  # the start's factor (the end's is in V)
             parts = []
