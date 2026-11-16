@@ -23,6 +23,30 @@ def ci(x) -> str:
     return f"[{x[0]:.3f}, {x[1]:.3f}]"
 
 
+RULE_READERS = ("B+dir closed", "C+dir closed", "B closed", "C closed", "A+dir closed")
+
+
+def decision(res) -> list[str]:
+    """The decision rule (survey 4.6 step 5), read off the paired intervals against the generative reader (closed with
+    closed: the like-for-like measure, see score.py): "at least tied" on top-1 when the difference's interval reaches
+    0 or above, "better" on -log p when its interval lies below 0; on every label and on the unflagged (the scoring
+    set's own doubt)."""
+    pv = res["answered"]["paired_vs_generative"]
+    out = ["## Decision rule (survey 4.6 step 5), read off the intervals", "",
+           "| reader | subset | top-1 diff | at least tied | -log p diff | better |", "|---|---|---|---|---|---|"]
+    for name in RULE_READERS:
+        if name not in pv:
+            continue
+        for s in ("all", "unflagged"):
+            d = pv[name][s]
+            tied = d["top1_ci"][1] >= 0
+            better = d["nll_ci"][1] < 0
+            out.append(f"| {name} (vs {pv[name]['against']}) | {s} | {d['top1']:+.3f} {ci(d['top1_ci'])} | "
+                       f"{'yes' if tied else 'no'} | {d['nll']:+.3f} {ci(d['nll_ci'])} | {'yes' if better else 'no'} |")
+    out += ["", "A is a baseline only (docTR's weights' training data is undisclosed).", ""]
+    return out
+
+
 def main():
     res, crops, synth = j("results.json"), j("crops_summary.json"), j("synth_summary.json")
     dets = [d for d in (j(f"determinism_{r}.json") for r in ("B", "C", "A")) if d]
@@ -30,7 +54,7 @@ def main():
     out = ["# Spike S2: a small CTC reader on Terra-box crops", ""]
     if FINDINGS.exists():
         out += [FINDINGS.read_text().strip(), ""]
-    out += ["## Data", ""]
+    out += decision(res) + ["## Data", ""]
     out.append(f"- Maps: {', '.join(crops['maps'])} (the 2000 drawing's three scans). Held out on every map at once, "
                f"through each px's map point: the {crops['hold_quarter']} quarter, the validation area and the "
                f"{crops['answered_blocks']} answered blocks (a training crop touches none of them anywhere in its "
