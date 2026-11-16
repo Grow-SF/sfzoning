@@ -972,13 +972,13 @@ def test_chance_on_some_px_is_the_whole_pages_there(monkeypatch):
 # they were recorded (the owner's Mac, in a worker and not), by machine and those threads; the losses of each step,
 # within 1e-5, everywhere.  The recipe's name is held too, so a new DEFAULT_RECIPE is seen even where its first steps
 # would train alike (re-record all three when it changes).
-GUARD_RECIPE = "default"
+GUARD_RECIPE = "half_size-ink_only=ink+1px-iterations=4000-pct_start=0.1"
 GUARD_STEPS = 3
-GUARD_WEIGHTS = {("Darwin", "arm64", "1", "1"): "63c3a81eecde334c46613ff0a854dfd2d81318497b120483ca380aec7a62d726",
-                 ("Darwin", "arm64", None, None): "a96a9118a2e92d34e414d77fe3ad1f5bf874f3307ce80c73d11da5f4da6622b4"}
-GUARD_LOSSES = [[0.6314478516578674, 1.8442327976226807, 1.0988179445266724],      # text, kind, angle, each step
-                [0.5883994102478027, 2.0600595474243164, 0.9381569623947144],
-                [0.5847379565238953, 1.4276576042175293, 0.8226476907730103]]
+GUARD_WEIGHTS = {("Darwin", "arm64", "1", "1"): "4cae67dd7f6d797557d33caa1fe269fc65b4b30b6448181d83d44831f3ed4266",
+                 ("Darwin", "arm64", None, None): "226bca5d04defad7871f2496f7bbe06d3ccccd616a5aaf6ecd0e8719c2eb165b"}
+GUARD_LOSSES = [[0.9406127333641052, 2.443599224090576, 0.9502788782119751],       # text, kind, angle, each step
+                [0.7165262699127197, 1.576537847518921, 0.8786576390266418],
+                [0.6443136930465698, 1.25177800655365, 0.9018327593803406]]
 
 
 def test_the_stages_recipe_trains_the_weights_recorded(maps, monkeypatch):

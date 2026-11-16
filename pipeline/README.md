@@ -564,14 +564,18 @@ ink mask (`page.png` < 128) of each sheet's own page, unwarped.
   the 2000 drawing's three scans, and 1964 and 1968, are one drawing each: held-out sheets of one would be learned
   from another. It is a dense area on purpose: an area of sparse, simple lettering can't tell recipes apart.
   `scripts/choose_text_validation_area.py` re-derives the choice from the data.
-- **The recipe** (`train.Recipe`; the stage's is `stage.DEFAULT_RECIPE`): by default today's, 8,000 steps of 12
+- **The recipe** (`train.Recipe`): its defaults (`Recipe()`) are the quarter models' recipe, 8,000 steps of 12
   crops of 320 px (half centred on text, the rest on any ink; each scaled by 0.6–1.6 and turned by quarter turns, the
   reading angle with it); loss = text cross-entropy + 0.5 × kind cross-entropy + 0.5 × (1 − cosine) of the reading
-  direction; AdamW at 2e-3 with a one-cycle schedule. Its options are the speed candidates: the steps and the
-  schedule, the loss on ink only (`ink_only`), the network at half size on the ink folded 2 × 2 (`half_size`), the
-  text output alone (`heads`), an average of the weights (`weight_average`), batches drawn ahead in a thread
-  (`prefetch`: the same batches, the same weights) and a lighter decoder. Every draw comes from one seeded numpy
-  generator and the weights from seeded torch, with deterministic algorithms on 4 threads.
+  direction; AdamW at 2e-3 with a one-cycle schedule rising over the first 30%. Its options are the speed
+  candidates: the steps and the schedule, the batch and crop sizes, the loss on ink only (`ink_only`), the network at
+  half size on the ink folded 2 × 2 (`half_size`), the text output alone (`heads`), an average of the weights
+  (`weight_average`), batches drawn ahead in a thread (`prefetch`: the same batches, the same weights), a lighter
+  decoder and half precision (`precision="float16"`: the forward pass in float16, the weights kept in float32). The
+  stage's recipe (`stage.DEFAULT_RECIPE`), chosen by the trials below, is the network at half size, the loss on the
+  ink and the px next to it (`ink_only="ink+1px"`), 4,000 steps with the learning rate rising over the first 10%, and
+  the batches drawn ahead; the rest as `Recipe()`, in float32. Every draw comes from one seeded numpy generator and
+  the weights from seeded torch, with deterministic algorithms on 4 threads.
 
 **The detector's stage** (`sfzmaps solver text [--device cpu|mps]`, stage `solver-text`, `solver/textnet/stage.py`)
 trains `DEFAULT_RECIPE` on all 87 training sheets with the validation area included (the recipe was already chosen
@@ -615,6 +619,81 @@ seconds to find, about 4 minutes for the validation sheets, so the trials keep i
 `data/solver/experiments/line-masks/<series>/<sheet>-<digest>.npz` (packed bits, labelled with the sheet's scale, a
 digest of its ink, the two constants and a digest of the code and libraries that find the lines) and read it back
 when the label matches. The scores stage finds the lines afresh.
+
+**How the stage's recipe was chosen.** Each trial trained a recipe on the six maps with the validation area held out
+and scored it there (seed 0 unless a seed is named). A candidate was kept only if it was no worse than the best so far,
+within a tolerance, on words found and on long-line ink called text. The tolerance is twice the spread between two
+seeds of the half-size recipe at 8,000 steps, with a floor of 0.5 points on words found: 0.5 points on words found
+(the spread was 0.12), 0.11 points on long-line ink (the spread was 0.055). Minutes are the training loop's on the Mac's
+GPU. The validation area holds 6,735 of Terra's words.
+
+| Step | Recipe | Train min | Words found | Long-line ink called text | AUC | Verdict |
+|---|---|---|---|---|---|---|
+| Baseline | today's, `Recipe()` | 45.7 | 94.15% | 4.10% | 0.9911 | the bar every later recipe is held to |
+| Network and loss | half size | 12.5 | 94.80% | 4.15% | 0.9911 | kept; later bettered |
+| | half size, loss on the ink | 13.0 | 94.91% | 4.06% | 0.9918 | kept; later bettered |
+| | half size, loss on the ink and the px next to it | 13.4 | 95.01% | 4.05% | 0.9923 | kept: the best of the three |
+| Tolerance | the same, seed 1 | 12.3 | 94.89% | 4.00% | 0.9918 | gives the spread |
+| Schedule (10% rise) | 8,000 steps | 12.3 | 94.95% | 4.08% | 0.9919 | passes, but no faster |
+| | 8,000 steps at 6e-3 | 12.6 | 94.82% | 4.05% | 0.9919 | passes, but no faster |
+| | 4,000 steps | 6.2 | 94.92% | 4.15% | 0.9889 | passes |
+| | 4,000 steps at 6e-3 | 6.1 | 95.49% | 4.36% | 0.9890 | long-line ink 0.31 points worse |
+| | 2,000 steps | 3.1 | 94.97% | 4.12% | 0.9881 | passes on this seed; see the seeds below |
+| | 2,000 steps at 6e-3 | 3.1 | 93.76% | 3.90% | 0.9872 | 1.25 points fewer words |
+| | 2,000 steps, weights averaged (0.999) | 3.5 | 91.63% | 3.77% | 0.9863 | 3.3 points fewer words: the average keeps half-trained weights |
+| Outputs and drawing | 2,000 steps, the text output alone | 3.0 | 94.03% | 3.90% | 0.9900 | 0.94 points fewer words than with every output |
+| | 2,000 steps, the text output alone, weights averaged | 2.9 | 92.93% | 3.77% | 0.9889 | 2.0 points fewer words |
+| | 8,000 steps, batches drawn ahead | 12.8 | 95.01% | 4.05% | 0.9923 | the same weights bit for bit; no clear speed gain alone; kept, as it costs nothing |
+
+At 2,000 and 3,000 steps one seed proved too few: seeds of one recipe differed by up to 1.5 points on words found and
+0.24 on long-line ink. So the choice asked every seed to pass against today's recipe: words found at least 93.65%
+(94.15 − 0.5) and long-line ink called text at most 4.21% (4.10 + 0.11). The shortest schedule all of whose seeds
+pass is 4,000 steps. Words found / long-line ink called text, the stage's recipe at three lengths:
+
+| Steps | Seed 0 | Seed 1 | Seed 2 | Verdict |
+|---|---|---|---|---|
+| 2,000 | 94.97% / 4.12% | 94.65% / 4.35% | 93.63% / 4.11% | seed 1 fails on long-line ink, seed 2 on words |
+| 3,000 | 96.45% / 4.36% | 94.91% / 4.22% | not run | seeds 0 and 1 fail on long-line ink |
+| 4,000 | 94.92% / 4.15% | 94.03% / 4.12% | 94.08% / 4.12% | every seed passes: the stage's recipe |
+
+The later candidates train the same 48,000 crops as 4,000 steps of 12, or fewer px; each needs both seeds to pass the
+same bar. Their minutes were measured while a memory-heavy job ran on the CPU, when the 4,000-step recipe took 7.8–8.0
+min (6.2 idle):
+
+| Candidate | Seed 0 | Seed 1 | Train min | Verdict |
+|---|---|---|---|---|
+| 24 crops a step, 2,000 steps at 2.8e-3 | 94.67% / 4.25% | 93.23% / 4.14% | 8.2, 8.0 | slower; seed 0 fails on long-line ink, seed 1 on words |
+| 24 crops a step, 2,000 steps at 4e-3 | 95.03% / 4.39% | 94.19% / 4.12% | 8.1, 9.3 | slower; seed 0 fails on long-line ink |
+| 48 crops a step, 1,000 steps at 4e-3 | 95.07% / 4.28% | 94.18% / 4.27% | 8.6, 9.0 | slower; both fail on long-line ink |
+| the lighter decoder, 4,000 steps | 94.97% / 4.22% | 94.09% / 4.10% | 7.1, 6.9 | seed 0 fails on long-line ink, by 0.01 points |
+| 256-px crops, 4,000 steps | 96.23% / 4.38% | 94.09% / 4.15% | 5.5, 5.0 | seed 0 fails on long-line ink |
+| half precision (float16), 4,000 steps | not trained | | | no faster: a step took 104 ms in float16 against 103–107 in float32 |
+
+**One detector for both styles.** The 2,000-step recipe, trained on the three modern-lettering maps only, found 92.05%
+of the 1980 drawing's words and called 4.78% of its long-line ink text; trained on all six maps, 92.72% and 4.73%. So
+the stage trains one detector on both styles.
+
+**On the test drawings** (every px of every sheet; the 1980 drawing is 19,896 of Terra's words, 1972 and 1975 together
+29,039), words found / long-line ink called text:
+
+| Model | 1980 | 1972 and 1975 |
+|---|---|---|
+| today's recipe, the validation area held out | 91.58% / 4.86% | 93.37% / 3.35% |
+| the stage's recipe, the validation area held out | 92.67% / 4.83% | 94.16% / 3.40% |
+| the stage's model (`solver text-scores`) | 92.36% / 4.83% | 93.98% / 3.39% |
+
+The 2000-only quarter models this detector replaces were scored another way, so their numbers don't compare: the
+north-west quarter's model, on the quarter it held out of the 2000 sheets, found 96.6% of the words (a word there was
+a connected region of box px) and called 0.16% of the ink on the zoning table's district lines text.
+
+**Speed.** A training step is bound by the GPU's memory traffic, in proportion to the px trained on. A step of 12
+crops of 320 px takes about 0.1 s; 6 crops take half that, 24 twice, and 256-px crops (0.64 of the px) about
+two-thirds of it. Drawing the crops on the CPU (about 17 ms for 12) happens while the GPU works through the steps
+queued before, so it costs nothing: drawing ahead and bigger batches gain nothing. Half precision was no faster
+either. A memory-heavy job on the CPU slows training, since the Mac's CPU and GPU share memory. Two runs of the stage
+trained in 6.9 and 7.5 min and took 7.3 and 7.9 min in all, with other work on the machine. That meets the stage's
+target of about 10 min but not the training's of about 5; no faster candidate kept the scores. Both runs gave the
+same weights and chances, bit for bit.
 
 The detector trains on `mps` where there is one (else `cpu`; `--device` overrides): two 200-step runs on `mps` gave
 bit-identical weights and predicted chance (max difference 0), at 0.39 s a step against 3.1 s on `cpu` (about 52 min
