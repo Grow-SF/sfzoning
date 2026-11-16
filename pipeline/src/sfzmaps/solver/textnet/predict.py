@@ -26,6 +26,7 @@ def load_model(f: Path, device: str) -> model.TextNet:
     saved = torch.load(f, map_location="cpu")
     if "recipe" not in saved:
         raise ValueError(f"{f} holds no recipe (it was saved before recipes): train the detector again")
+    # Float32 whatever the recipe's precision: training in half precision keeps the weights in float32.
     net = train.build_net(train.Recipe(**saved["recipe"]))
     net.load_state_dict(saved["state_dict"])
     return net.to(device).eval()
