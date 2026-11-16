@@ -1,5 +1,10 @@
 # The map's labels from the scan alone
 
+> **Method under revision (2026-11-16 ~12:30).** The goal, rules and scoring here stand. The method (EAST box and
+> axis heads; the template reader on boxes) gives way to the direction from the red team and survey: boxes from the
+> existing segmentation, and a CTC recogniser trained from scratch, with location priors. See
+> `docs/superpowers/plans/2026-11-16-search-move-and-reader-spikes.md`.
+
 Design, 2026-11-16. It supersedes `2026-11-16-code-reader-read-along-the-word-design.md`, which used Terra's boxes and
 Sol's points as evidence for each word.
 

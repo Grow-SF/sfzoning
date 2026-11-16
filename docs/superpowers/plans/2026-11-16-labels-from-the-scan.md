@@ -1,5 +1,10 @@
 # The Map's Labels From the Scan Alone: Implementation Plan
 
+> **SUPERSEDED (2026-11-16 ~12:30).** Written before the red team
+> (`.superpowers/sdd/2026-11-16-labels-from-the-scan/redteam.md`) and the library survey (`survey.md`). Next:
+> `docs/superpowers/plans/2026-11-16-search-move-and-reader-spikes.md`. The reader rebuild gets a revised spec and
+> plan after its spikes.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** the 2000 solver's printed labels come from a local detector of word boxes and a reader of each box, with no

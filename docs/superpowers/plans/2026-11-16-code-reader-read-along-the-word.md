@@ -1,5 +1,9 @@
 # Code Reader, Read Along the Word: Implementation Plan
 
+> **SUPERSEDED (2026-11-16).** Replaced by `docs/superpowers/specs/2026-11-16-text-pipeline-from-the-scan-design.md`,
+> then by `docs/superpowers/plans/2026-11-16-search-move-and-reader-spikes.md`. R1 (ce828df: the generalised
+> hold-outs and the `solver-text-reader` scaffold) is kept.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** the code reader finds each label's word from a reader-only detector, then reads along it with one
