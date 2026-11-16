@@ -19,7 +19,7 @@
 - Never overwrite a Blob file (`allowOverwrite: false`); never delete a `dvc/files/md5/...` object.
 - $0: nothing here calls the OpenAI API. Not a DVC stage.
 - Remote requests: one listing call per 1,000 names, one request per uploaded file, one batch delete.
-- New dependencies must be AGPL-3.0 compatible (MIT/BSD/Apache fine).
+- New dependencies must be Apache-2.0 compatible (MIT/BSD/Apache fine; no GPL-family copyleft in shipped code).
 - Use the GDAL from `pixi.toml` (`toolchain` checks as in other commands).
 - Rollout: build everything now; do not run a real publish or `sfzmaps release` (only `--dry-run`). `/data` and its menu entry appear only when `lib/downloads.json` lists files.
 - Draft copy is marked `// DRAFT COPY — NOT REVIEWED BY THE OWNER.` like `app/about/page.tsx`.

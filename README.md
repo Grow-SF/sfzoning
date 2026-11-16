@@ -33,15 +33,15 @@ appreciate an acknowledgement of the archival work I undertook.
 
 ## License
 
-The project is licensed in two parts. See `NOTICE` for exactly what each part
-covers; the license texts govern.
+The project is licensed in two parts. See `LICENSING.md` for exactly what each
+part covers; the license texts govern.
 
 - **Code** (`pipeline/`, `site/` except the story text): open source under the
-  [GNU AGPL v3.0](LICENSE). You can use and adapt it for your own city. If you
-  distribute it, or run a modified version as a public website, you must
-  publish your source code under the same license and keep the credit
-  "Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)"
-  visible in your site's credits (an additional term under AGPL section 7).
+  [Apache License 2.0](LICENSE). You can use, adapt and sell it, including
+  inside closed-source products. If you share copies, keep `LICENSE` and
+  `NOTICE` with them; `NOTICE` carries the credit "Based on sfzoning.com by
+  Steven Bacio for GrowSF (https://growsf.org)". We ask that sites built on
+  the code show that credit.
 - **Content and data** (story text, research, map tiles, district data):
   [CC BY-NC-SA 4.0](LICENSE-content). You can remix it for non-commercial
   purposes, sharing your version under the same license and crediting it as:
@@ -50,15 +50,15 @@ covers; the license texts govern.
   > licensed CC BY-NC-SA 4.0.
 
 The content's non-commercial terms aren't an open source license, and the
-content isn't covered by the AGPL even though the site bundles it. Using the
-code commercially means replacing that content.
+content isn't covered by the Apache license even though the site bundles it.
+Using the code commercially means replacing that content.
 
 Some material isn't ours to license. The historic zoning maps are official
 San Francisco maps from the Planning Department's archives; to the best of our
 knowledge they're in the public domain, and we claim no rights in them or in
 the scans. The 1948 atlas imagery (David Rumsey Map Collection,
 CC BY-NC-SA 3.0) and the DataSF datasets (PDDL) keep their own terms. See
-`NOTICE`.
+`LICENSING.md`.
 
 ## Trademark
 
