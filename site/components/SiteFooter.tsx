@@ -15,7 +15,7 @@ export default function SiteFooter() {
           still under review.
         </p>
         <p>
-          The code is open source under the AGPL-3.0; the story, research and processed maps are licensed CC BY-NC-SA
+          The code is open source under the Apache License 2.0; the story, research and processed maps are licensed CC BY-NC-SA
           4.0 for non-commercial reuse. See the project <a href={SOURCE_URL}>on GitHub</a>, where corrections and
           contributions are welcome.
         </p>
