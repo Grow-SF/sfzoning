@@ -814,7 +814,7 @@ minutes and 12 GB with 6 workers.
 
 **Candidate wall features** (`walls.CANDIDATES`). Each is tried against the set above and kept only if it lowers the
 held-out log loss in at least three quarters; the stage fits with those kept, `walls.DEFAULT_CANDIDATES` in code
-(none yet). `--candidates A,B` fits with others as an experiment: into
+(`street_crossing` and `context`, below). `--candidates A,B` fits with others as an experiment: into
 `data/solver/experiments/walls-<the names sorted, joined by +>/` (`runs.walls_experiment_dir`), for a solve to read
 with `--walls DIR`, never over the stage's walls. `--evaluate A,B` (repeatable, `none` for the set above;
 `walls.evaluate_candidates`) scores several configurations from inputs read once and writes nothing. Most candidates
@@ -836,6 +836,27 @@ never the table's codes, so it carries nothing of a held-out quarter's codes int
   lots' centroids runs along their long axes); pairs across a street get hats of the street's width at the table's
   peaks (25 to 125 ft, then parks and water);
 - `no_city_limit` (an ablation): the city limit is no closing's end and no enclosure wall.
+
+The stage's walls use `street_crossing` and `context`: of the sets measured with `--evaluate`, they have the lowest
+held-out log loss (northwest, northeast, southwest, southeast), improving three quarters and tying the northwest.
+
+| candidates | nw | ne | sw | se |
+|---|---|---|---|---|
+| none | .0978 | .1049 | .0486 | .0635 |
+| `street_crossing` + `context` (the stage's) | .0978 | .1027 | .0452 | .0611 |
+| `street_crossing` | .0971 | .1036 | .0461 | .0616 |
+| `context` | .0983 | .1039 | .0473 | .0629 |
+| `text_weighted` | .0980 | .1040 | .0476 | .0626 |
+| `text_weighted_beside_letters` | .0978 | .1037 | .0474 | .0626 |
+| `text_discounted_enclosure` | .0982 | .1041 | .0502 | .0656 |
+| the stage's + `text_weighted_beside_letters` | .0980 | .1022 | .0449 | .0612 |
+| the stage's + `text_weighted` | .0982 | .1026 | .0452 | .0612 |
+
+The solve on these walls, against the solve on the default (none) walls, every-lot column: table lines drawn 96.3%
+against 95.7%, drawn lines that are table lines 96.6% against 96.5%, labels right 94.5% against 94.1%, holes 48
+against 52, wrong-lot incidents 868 against 884, but wrong lots 7,100 against 6,922: two new large incidents (a P
+district printed across the whole Junipero Serra roadway whose table line runs mid-road, and a placement near-tie on
+California St), neither a wall moving the wrong way.
 
 **The solve** (`solver/city.py`, `labels.py`, `placement.py`, `energy.py`, `search.py`, `solve.py`) reads the
 district of every lot from the page: one energy over every lot's code, minimised for the whole city and held out by

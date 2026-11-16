@@ -698,8 +698,8 @@ def test_a_candidates_fit_is_an_experiment_beside_the_stages_walls(tmp_path, mon
     """A fit with candidates named (`sfzmaps solver walls --candidates`) is an experiment: its walls, its candidates in
     evaluation.json and, when a candidate reads it, the text chance it fitted with go to its own folder
     (experiments/walls-<the names sorted>), which a solve reads with --walls; the stage's walls are left as they were.
-    The stage's fit (no candidates named) uses DEFAULT_CANDIDATES; with none it reads no text chance and writes none."""
-    assert walls.check_candidates(walls.DEFAULT_CANDIDATES) == tuple(walls.DEFAULT_CANDIDATES)
+    The stage's fit (no candidates named) uses DEFAULT_CANDIDATES; with none it reads no text chance and writes none (the test sets none)."""
+    assert walls.check_candidates(walls.DEFAULT_CANDIDATES) == ("street_crossing", "context")
     monkeypatch.setattr(runs, "WALLS_DIR", tmp_path / "walls")
     monkeypatch.setattr(runs, "EXPERIMENTS_DIR", tmp_path / "experiments")
     monkeypatch.setattr(walls, "DEFAULT_CANDIDATES", ())

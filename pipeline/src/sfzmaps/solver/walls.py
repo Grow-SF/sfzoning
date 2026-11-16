@@ -22,7 +22,7 @@ page's ink, and
                     between the lots' centroids runs along their long axes (the mean |cos| with each lot's minimum
                     rotated rectangle's long side: 0 side by side, 0.5 between, 1 back to back); pairs across a
                     street: hats over STREET_WIDTH_KNOTS of the street's width (the distance between the two lots)
-The stage fits with DEFAULT_CANDIDATES (none yet: the set above), set in code by the measured loop.  A fit with other
+The stage fits with DEFAULT_CANDIDATES (street_crossing and context), chosen by held-out log loss.  A fit with other
 candidates (`build_walls(candidates=...)`, `sfzmaps solver walls --candidates`) is an experiment, written to its own
 folder (`runs.walls_experiment_dir`) for a solve to read with `--walls`, never over the stage's.
 `evaluate_candidates` scores several configurations from inputs read once, and writes nothing.
@@ -66,8 +66,10 @@ CONTEXT = "context"
 CANDIDATES = (wallevidence.TEXT_WEIGHTED, wallevidence.TEXT_WEIGHTED_BESIDE_LETTERS, wallevidence.STREET_CROSSING,
               CONTEXT, wallevidence.NO_CITY_LIMIT, wallevidence.TEXT_DISCOUNTED_ENCLOSURE)
 # The candidate features the stage fits with (`build_walls()`): each kept only if it lowers the held-out log loss in
-# at least three quarters.  None yet; the measured loop sets them.
-DEFAULT_CANDIDATES: tuple[str, ...] = ()
+# at least three quarters.  Street crossing and context, the set with the lowest held-out log loss (nw/ne/sw/se
+# .0978/.1027/.0452/.0611 against .0978/.1049/.0486/.0635 with none: better in three quarters, level in nw); either
+# alone, or with a text weighting added, improves fewer quarters.
+DEFAULT_CANDIDATES: tuple[str, ...] = (wallevidence.STREET_CROSSING, CONTEXT)
 
 
 def check_candidates(names) -> tuple[str, ...]:
