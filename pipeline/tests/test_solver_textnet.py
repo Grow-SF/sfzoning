@@ -969,9 +969,13 @@ def test_chance_on_some_px_is_the_whole_pages_there(monkeypatch):
 # The weights a short fit of the stage's recipe gives on the two synthetic maps, held so that a change to how the
 # detector trains is seen.  torch's CPU kernels add up in another order on another kind of machine, or with another
 # number of threads for the maths libraries (conftest gives each pytest-xdist worker one), so the bits are held where
-# they were recorded (the owner's Mac, in a worker and not), by machine and those threads; the losses of each step,
-# within 1e-5, everywhere.  The recipe's name is held too, so a new DEFAULT_RECIPE is seen even where its first steps
-# would train alike (re-record all three when it changes).
+# they were recorded (the owner's Mac, in a worker and not), by machine and those threads; the losses everywhere: the
+# first step's (before any update: the crops, the network and the loss) within 1e-5, the later steps' within 1e-3.
+# AdamW turns the machines' tiny differences in gradients near zero into whole steps, and the loss on the ink alone
+# leaves many of those: on GitHub's Linux the second and third steps' losses differ from the Mac's by 1.3e-4 and
+# 2.2e-4, while a learning rate 10% lower moves the second step's text loss by 1.7%.  The recipe's name is
+# held too, so a new DEFAULT_RECIPE is seen even where its first steps would train alike (re-record all three when it
+# changes).
 GUARD_RECIPE = "half_size-ink_only=ink+1px-iterations=4000-pct_start=0.1"
 GUARD_STEPS = 3
 GUARD_WEIGHTS = {("Darwin", "arm64", "1", "1"): "4cae67dd7f6d797557d33caa1fe269fc65b4b30b6448181d83d44831f3ed4266",
@@ -996,7 +1000,8 @@ def test_the_stages_recipe_trains_the_weights_recorded(maps, monkeypatch):
     digest = hashlib.sha256()
     for k, v in net.state_dict().items():
         digest.update(k.encode() + v.contiguous().numpy().tobytes())
-    assert np.allclose(parts, GUARD_LOSSES, rtol=1e-5, atol=0)
+    assert np.allclose(parts[:1], GUARD_LOSSES[:1], rtol=1e-5, atol=0)
+    assert np.allclose(parts[1:], GUARD_LOSSES[1:], rtol=1e-3, atol=0)
     want = GUARD_WEIGHTS.get((platform.system(), platform.machine(), os.environ.get("OMP_NUM_THREADS"),
                               os.environ.get("VECLIB_MAXIMUM_THREADS")))
     if want is not None:
