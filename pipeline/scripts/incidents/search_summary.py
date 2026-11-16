@@ -15,7 +15,8 @@ from common import CENSUS_DIR
 from sfzmaps.solver.city import city, load_run
 
 SEARCH_INCIDENTS = (1, 7, 34, 4, 23, 9, 44, 18, 14, 21, 12, 13, 15, 42, 22)   # 22: walls, in #1's changed set
-VARIANTS = ("oracle", "qpbo", "regions", "fusion", "compound", "compound-qpbo", "starts", "anneal", "all")
+VARIANTS = ("oracle", "qpbo", "regions", "fusion", "compound", "compound-qpbo", "starts", "starts-compound", "anneal",
+            "all")
 
 
 def main(variants):

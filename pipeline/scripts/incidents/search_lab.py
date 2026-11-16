@@ -55,10 +55,11 @@ class Problem:
         return np.array([idx[canon(c)] for c in codes_by_name], int)
 
 
-def problem(q: str, run: str = runs.FINAL_RUN, true_borders: bool = False) -> Problem:
+def problem(q: str, run: str = runs.FINAL_RUN, true_borders: bool = False, drop_labels=()) -> Problem:
     """Rebuild quarter q's energy from its held-out inputs (the stage's walls, the readings, the run's placement),
     in float64, exactly as solve_quarter -> solve_joint does; the run's solved answer mapped to the same names.
-    true_borders: the ceiling check's odds (solve_quarter --true-borders), the tie-break's paths on them too."""
+    true_borders: the ceiling check's odds (solve_quarter --true-borders), the tie-break's paths on them too.
+    drop_labels: labels (print indices) whose readings are left out, as if deleted (an experiment, never an input)."""
     C = city()
     odds = wall_odds(q)
     if true_borders:
@@ -66,6 +67,10 @@ def problem(q: str, run: str = runs.FINAL_RUN, true_borders: bool = False) -> Pr
         both = C.known[C.a] & C.known[C.b]
         odds = np.where(both, np.where(C.table[C.a] != C.table[C.b], TRUE_BORDER_ODDS, -TRUE_BORDER_ODDS), odds)
     rd = readings(q, table_vocabulary(C.lots))
+    if len(drop_labels):
+        from sfzmaps.solver.labels import Readings
+        k = ~np.isin(rd.label, np.asarray(drop_labels))
+        rd = Readings(rd.lot[k], rd.code[k], rd.trust[k], rd.label[k], rd.far[k], rd.names)
     index = {}
     for i, n in enumerate(rd.names):
         index.setdefault(n, i)
