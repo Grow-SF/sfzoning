@@ -602,8 +602,9 @@ scale), file by file. Nothing in it is a time: the same chances give the same by
 
 **Trying recipes** (`sfzmaps solver text-trial [--set NAME=VALUE ...] [--recipe "NAME=VALUE ..." ...] [--seed N]
 [--reuse] [--train-series MAP,...] [--test-series MAP,...] [--device cpu|mps]`, `solver/textnet/trial.py`) is how the
-recipe is chosen; it is no stage. `--set` (repeatable) makes one recipe from settings over today's, and each
-`--recipe` another (its settings apart by spaces; `default` for today's); with neither, today's. Two that are one
+recipe is chosen; it is no stage. `--set` (repeatable) makes one recipe from settings over the old recipe (the quarter models', `Recipe()`), and each
+`--recipe` another (its settings apart by spaces; `default` for the old recipe; `stage`, alone or first, starts from the
+stage's recipe instead, as in `"stage iterations=2000"`); with neither, the old recipe. Two that are one
 recipe (prefetch aside) are a usage error: they would write one folder. The training sheets are read once with the
 validation area held out; then each recipe in turn trains and predicts in its own exclusive GPU turn (only the tiles
 holding validation px) and is scored on the validation area (the long lines found once per sheet for all of them).
@@ -612,7 +613,7 @@ some of the training maps only, `-seed=N` for a seed other than 0): `model.pt`, 
 validation area's, as above), with `--test-series` `test_scores.json` (every px of those test drawings, as the
 scores stage takes them), and `minutes.json` (load, train, predict, score and test, under `plain` or, for a run
 with `prefetch`, `prefetch`: the two train the same weights into one folder, so both runs' minutes are kept).
-`Recipe.name()` lists the settings that differ from today's, sorted (`default` for none), without `prefetch`, which
+`Recipe.name()` lists the settings that differ from the old recipe's, sorted (`default` for none), without `prefetch`, which
 never changes the weights. `--reuse` scores the `model.pt` already in each recipe's folder (that recipe's and seed's)
 instead of training, keeping the training minutes its `minutes.json` had. Each scored sheet's long-line ink takes
 seconds to find, about 4 minutes for the validation sheets, so the trials keep it in
@@ -624,12 +625,12 @@ when the label matches. The scores stage finds the lines afresh.
 and scored it there (seed 0 unless a seed is named). A candidate was kept only if it was no worse than the best so far,
 within a tolerance, on words found and on long-line ink called text. The tolerance is twice the spread between two
 seeds of the half-size recipe at 8,000 steps, with a floor of 0.5 points on words found: 0.5 points on words found
-(twice the spread, 0.12, is below the floor) and 0.11 points on long-line ink (twice 0.055). Minutes are the training loop's on the Mac's
+(the floor; twice the measured spread was 0.12) and 0.11 points on long-line ink (twice the spread of 0.055). Minutes are the training loop's on the Mac's
 GPU. The validation area holds 6,735 of Terra's words.
 
 | Step | Recipe | Train min | Words found | Long-line ink called text | AUC | Verdict |
 |---|---|---|---|---|---|---|
-| Baseline | today's, `Recipe()` | 45.7 | 94.15% | 4.10% | 0.9911 | the bar every later recipe is held to |
+| Baseline | the old recipe (the quarter models'), `Recipe()` | 45.7 | 94.15% | 4.10% | 0.9911 | the bar every later recipe is held to |
 | Network and loss | half size | 12.5 | 94.80% | 4.15% | 0.9911 | kept; later bettered |
 | | half size, loss on the ink | 13.0 | 94.91% | 4.06% | 0.9918 | kept; later bettered |
 | | half size, loss on the ink and the px next to it | 13.4 | 95.01% | 4.05% | 0.9923 | kept: the best of the three |
@@ -646,7 +647,7 @@ GPU. The validation area holds 6,735 of Terra's words.
 | | 8,000 steps, batches drawn ahead | 12.8 | 95.01% | 4.05% | 0.9923 | the same weights bit for bit; no clear speed gain alone; kept, as it costs nothing |
 
 At 2,000 and 3,000 steps one seed proved too few: seeds of one recipe differed by up to 1.5 points on words found and
-0.24 on long-line ink. So the choice asked every seed to pass against today's recipe: words found at least 93.65%
+0.24 on long-line ink. So the choice asked every seed to pass against the old recipe: words found at least 93.65%
 (94.15 − 0.5) and long-line ink called text at most 4.21% (4.10 + 0.11). The shortest schedule all of whose seeds
 pass is 4,000 steps. Words found / long-line ink called text, the stage's recipe at three lengths:
 
@@ -678,7 +679,7 @@ the stage trains one detector on both styles.
 
 | Model | 1980 | 1972 and 1975 |
 |---|---|---|
-| today's recipe, the validation area held out | 91.58% / 4.86% | 93.37% / 3.35% |
+| the old recipe, the validation area held out | 91.58% / 4.86% | 93.37% / 3.35% |
 | the stage's recipe, the validation area held out | 92.67% / 4.83% | 94.16% / 3.40% |
 | the stage's model (`solver text-scores`) | 92.36% / 4.83% | 93.98% / 3.39% |
 
@@ -696,16 +697,16 @@ target of about 10 min but not the training's of about 5; no faster candidate ke
 same weights and chances, bit for bit.
 
 The detector trains on `mps` where there is one (else `cpu`; `--device` overrides): two 200-step runs on `mps` gave
-bit-identical weights and predicted chance (max difference 0), at 0.39 s a step against 3.1 s on `cpu` (about 52 min
-against 6.9 h for 8,000 steps), once the loss avoided boolean-mask indexing, whose backward `mps` has no deterministic
+bit-identical weights and predicted chance (max difference 0), at about 0.1 s a step against 3.1 s on `cpu` for the old
+full-size recipe (0.39 s a step on `mps`), so the stage's 4,000 steps train in about 6-7 min, once the loss avoided boolean-mask indexing, whose backward `mps` has no deterministic
 kernel for (`index_put_with_accumulate_mps`). That holds only for one process on the GPU at a time: with two
 processes computing on `mps` at once, the same step on the same input gives different numbers each time (outputs off
 by up to 2.5 in a logit, training-mode batch norm by up to 3,000) and now and then a gradient that is all NaN. So
 work on `mps` takes a turn (`sfzmaps.gpu`, an `flock` on `/tmp/sfzmaps-mps.lock`, one file for the whole machine).
 macOS deletes files in `/tmp` that nobody has touched for 3 days, so every turn taken sets the file's times to now,
 and a turn whose file was deleted (and maybe made again by another process) while it waited is taken again on the
-file now at that path. The detector's stage trains and scores in one exclusive turn, its scores stage and each
-trial's recipe predict in one: nothing else computes on the GPU meanwhile. The sheet warp's fits (`sfzmaps warp`) take a shared turn: warps run beside each other, never beside a
+file now at that path. The detector's stage trains and scores in one exclusive turn, its scores stage predicts in one, and each
+trial's recipe trains and predicts in one: nothing else computes on the GPU meanwhile. The sheet warp's fits (`sfzmaps warp`) take a shared turn: warps run beside each other, never beside a
 detector. The tests hold a shared turn for their whole run, taken without waiting; while a detector has the GPU they
 never use it (the warp's fits run on the CPU and the tests marked `mps` are skipped). The loss stays on the device
 between progress lines (every 250 steps, so the GPU is not waited on each step); a mean loss there that is not finite

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from sfzmaps.solver import paths, saved
 
 TERRA_READ = "text-on-every-sheet"
+TYPICAL_HEIGHT = 14.0     # px, the text height used when a slanted box's own shape cannot give it
 SAME_TEXT_IOU = 0.3       # a box overlapping a kept box by more is the same text, read again from another tile
 PART_OF_LABEL = 0.7       # a word with more of its box than this inside a longer label holding it is part of it
 
@@ -140,3 +141,24 @@ def check_text_sheets(records: list[dict] | None = None) -> None:
         raise ValueError(f"sfzmaps.solver.paths.TEXT_SHEETS differs from the sheets of the saved answers of "
                          f"{TERRA_READ}: {'; '.join(problems)}.  Change TEXT_SHEETS and `sfzmaps build "
                          "--write-dvc-yaml`")
+
+
+def word_rect(box, angle_deg: float) -> np.ndarray:
+    """The rotated rectangle (4 page px corners, the first edge along the reading direction) of a word, from its axis
+    box (x0, y0, x1, y1) and reading angle (degrees, counter-clockwise from left-to-right)."""
+    x0, y0, x1, y1 = box
+    w, h = x1 - x0, y1 - y0
+    a = np.deg2rad(angle_deg)
+    c, s = abs(np.cos(a)), abs(np.sin(a))
+    det = c * c - s * s
+    if abs(det) > 0.25:
+        length, height = (c * w - s * h) / det, (c * h - s * w) / det
+    else:
+        height = TYPICAL_HEIGHT
+        length = (w - height * s) / c if c >= s else (h - height * c) / s
+    length, height = max(length, 2.0), max(height, 2.0)
+    v = np.array([np.cos(a), -np.sin(a)])                     # the reading direction, page coordinates (y down)
+    n = np.array([-v[1], v[0]])
+    ctr = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
+    return np.array([ctr - v * length / 2 - n * height / 2, ctr + v * length / 2 - n * height / 2,
+                     ctr + v * length / 2 + n * height / 2, ctr - v * length / 2 + n * height / 2])

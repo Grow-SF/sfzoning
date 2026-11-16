@@ -1,4 +1,4 @@
-"""Fitting the text detector, by a recipe (`Recipe`; its defaults are today's recipe, the one the 2000 detector of
+"""Fitting the text detector, by a recipe (`Recipe`; its defaults are the old recipe, the one the 2000 detector of
 each quarter of the city trained with before there was one detector).
 
 Each step takes `batch` crops of `crop` x `crop` px from the sheets' pages (`data.SheetData`), centred on a px where a
@@ -24,8 +24,8 @@ algorithms on THREADS threads.  With `prefetch` a background thread draws the ba
 and in the same order, so the weights are the same bit for bit.  On the Mac's GPU the training runs in the GPU's
 exclusive turn (`sfzmaps.gpu`), which the caller takes (`stage.build_text`, `trial.run_trials`).
 
-With `precision="float16"` the forward runs under autocast in half precision (measured 22% faster per step on the M1
-Max), with the loss in float32 and a gradient scaler; the weights stay float32, and prediction stays float32.
+With `precision="float16"` the forward runs under autocast in half precision (22% faster per step on one fixed batch with nothing else
+running, but 0-8% in the training loop, within the noise), with the loss in float32 and a gradient scaler; the weights stay float32, and prediction stays float32.
 
 `save_model` writes the weights with the recipe they came from; `predict.load_model` builds the network that recipe
 names.
@@ -70,7 +70,7 @@ NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (
 
 @dataclasses.dataclass(frozen=True)
 class Recipe:
-    """How the detector is trained.  The defaults are today's recipe (see the module).
+    """How the detector is trained.  The defaults are the old recipe, the quarter models' (see the module; the build's is `stage.DEFAULT_RECIPE`).
 
       iterations      steps
       max_lr          the one-cycle schedule's peak learning rate
@@ -131,8 +131,8 @@ class Recipe:
 
     def name(self) -> str:
         """A short id of the weights the recipe trains, the same every run (for folder names): each setting that
-        differs from today's (the defaults), sorted by name, as "name=value" (a switch turned on as its name alone),
-        joined by "-"; "default" when none differs.  The settings of NOT_IN_NAME, which never change the weights,
+        differs from the old recipe's (the defaults), sorted by name, as "name=value" (a switch turned on as its name
+        alone), joined by "-"; "default" when none differs.  The settings of NOT_IN_NAME, which never change the weights,
         are left out."""
         today = Recipe()
         changed = sorted((f.name, getattr(self, f.name)) for f in dataclasses.fields(self)

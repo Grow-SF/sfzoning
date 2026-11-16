@@ -24,8 +24,8 @@ Each sheet's long-line ink (`scores.line_ink`, minutes to find on a page) is kep
 and a digest of the code that finds it (`line_code`), and read back when both match.  Only the trials read it: the
 scores stage finds the lines afresh.
 
-A recipe is written as "name=value" settings over today's (`parse_recipe`); a recipe that runs is made afresh in a
-folder beside its own and renamed into place (`runs.replace_folder`).  With `reuse`, each recipe's folder must already
+A recipe is written as "name=value" settings over the old recipe (`parse_recipe`; over the stage's when it
+starts with "stage"); a recipe that runs is made afresh in a folder beside its own and renamed into place (`runs.replace_folder`).  With `reuse`, each recipe's folder must already
 hold its model.pt (that recipe's and that seed's): it is scored, not trained, and the minutes its training took are
 kept from the folder's minutes.json.
 """
@@ -47,7 +47,7 @@ import torch
 
 from sfzmaps import gpu
 from sfzmaps.solver import paths, runs
-from sfzmaps.solver.textnet import data, predict, scores, train
+from sfzmaps.solver.textnet import data, predict, scores, stage, train
 
 log = logging.getLogger(__name__)
 
@@ -108,13 +108,19 @@ def _value(field: dataclasses.Field, text: str):
 
 
 def parse_recipe(settings) -> train.Recipe:
-    """A recipe from settings over today's (`train.Recipe()`): "name=value" strings, a list of them or one string of
-    them apart by spaces; none (or the one word "default") is today's recipe.  A switch is true / false (yes / no,
+    """A recipe from settings over the old recipe (`train.Recipe()`, the quarter models'): "name=value" strings, a
+    list of them or one string of them apart by spaces; none (or the one word "default") is the old recipe.  When the
+    first word is "stage" the settings after it are over the stage's recipe (`stage.DEFAULT_RECIPE`) instead; "stage"
+    alone is that recipe.  A switch is true / false (yes / no,
     on / off, 1 / 0).  An unknown or repeated name, or a value the recipe refuses, is a ValueError."""
     if isinstance(settings, str):
         settings = settings.split()
-    if list(settings) == ["default"]:
+    settings = list(settings)
+    if settings == ["default"]:
         settings = []
+    base = train.Recipe()
+    if settings[:1] == ["stage"]:
+        base, settings = stage.DEFAULT_RECIPE, settings[1:]
     fields = {f.name: f for f in dataclasses.fields(train.Recipe)}
     chosen = {}
     for item in settings:
@@ -127,7 +133,7 @@ def parse_recipe(settings) -> train.Recipe:
         if name in chosen:
             raise ValueError(f"recipe: {name} is set twice")
         chosen[name] = _value(fields[name], text)
-    return train.Recipe(**chosen)
+    return dataclasses.replace(base, **chosen)
 
 
 def _write_json(f: Path, obj) -> None:
@@ -160,7 +166,7 @@ def _minutes(f: Path) -> dict:
 
 def line_masks_dir() -> Path:
     """The folder of the long-line ink kept for the trials (see the module)."""
-    return runs.EXPERIMENTS_DIR / "line-masks"
+    return runs.EXPERIMENTS_DIR / runs.LINE_MASKS
 
 
 @functools.cache

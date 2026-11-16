@@ -82,6 +82,12 @@ def test_a_solve_never_takes_the_folder_of_a_text_detector_trial():
             runs.solve_dir(folder.name)
 
 
+def test_a_solve_never_takes_the_text_detectors_cache_of_long_line_ink():
+    from sfzmaps.solver.textnet import trial
+    with pytest.raises(ValueError, match="cache"):
+        runs.solve_dir(trial.line_masks_dir().name)
+
+
 def test_a_folder_built_afresh_replaces_the_old_one_whole(tmp_path):
     folder = tmp_path / "walls"
     folder.mkdir()

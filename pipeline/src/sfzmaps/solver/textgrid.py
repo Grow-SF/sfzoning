@@ -50,7 +50,6 @@ def _read(path, shape) -> np.ndarray:
 def text_chance() -> np.ndarray:
     """The chance of text at every grid px (uint8, chance x 255, HEIGHT x WIDTH; see the module).  A missing chance
     file is an error.  Nothing is written."""
-    from sfzmaps.solver.textnet import data
     t0 = time.perf_counter()
     names = paths.check_sheets()
     files = _chance_files(names)
@@ -62,7 +61,7 @@ def text_chance() -> np.ndarray:
             raise KeyError(f"{paths.PAGE_DIR / 'frames.json'} has no frame for {name}: run `sfzmaps solver page`")
         folder = config.DATA_DIR / "warp" / paths.SERIES / name
         tr = SheetTransform.from_json(json.loads((folder / "transform.json").read_text()), folder=folder)
-        pg = data.load_page(name)
+        pg = page.load_page(name)
         dark = pg < grid.INK_BELOW
         quad = np.asarray(frames[name], float)
         crop = page.crop_mask(pg.shape, quad, cuts.get(name, []))

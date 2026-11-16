@@ -444,7 +444,9 @@ def test_the_walls_read_what_build_walls_reads_and_follow_the_one_detector():
     # detector's code only what reads its chance (no training, no scoring)
     assert [d for d in deps if d.startswith("data/solver/text")] == ["data/solver/text/chance"]
     assert not any(d.endswith(("textnet/stage.py", "textnet/train.py", "textnet/predict.py", "textnet/model.py",
-                               "textnet/scores.py", "textnet/score_stage.py", "textnet/trial.py")) for d in deps)
+                               "textnet/scores.py", "textnet/score_stage.py", "textnet/trial.py",
+                               "textnet/data.py", "textnet/model.py")) for d in deps)
+    assert [d for d in deps if "/textnet/" in d] == ["src/sfzmaps/solver/textnet/boxes.py"]
     assert not any(d in ("data/solver/prints", "data/solver/prints/prints.parquet", "data/solver/labels")
                    or d.endswith(("solver/solve.py", "solver/placement.py", "solver/search.py")) for d in deps)
     assert build.stage_outs(st) == ["data/solver/walls"]

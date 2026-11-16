@@ -276,10 +276,10 @@ def stroke_text_chance(strokes, text: np.ndarray) -> np.ndarray:
 
 
 def text_rings(boxes: list[dict], quad, cuts) -> list[np.ndarray]:
-    """A sheet's text boxes as page px rings (4, 2): each box's word rectangle (`textnet.data.word_rect`: the axis box
+    """A sheet's text boxes as page px rings (4, 2): each box's word rectangle (`textnet.boxes.word_rect`: the axis box
     turned to its reading angle), kept when its centre is inside the sheet's crop quad and in none of its cut boxes
     ([x0, y0, x1, y1], both ends inside)."""
-    from sfzmaps.solver.textnet.data import word_rect
+    from sfzmaps.solver.textnet.boxes import word_rect
     q = np.asarray(quad, float)
     out = []
     for b in boxes:

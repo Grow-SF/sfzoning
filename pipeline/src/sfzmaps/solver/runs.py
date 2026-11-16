@@ -16,19 +16,24 @@ FINAL_RUN = "final"                        # the `solver-solve` stage's run
 WALLS_PREFIX = "walls-"                    # an experiment folder of walls (`walls_experiment_dir`), never a solve's
 TEXT_PREFIX = "text-"                      # an experiment folder of the text detector's trials (`textnet.trial`)
 
+LINE_MASKS = "line-masks"                  # the text detector's trials' cache of long-line ink (`textnet.trial`)
+
 LABEL_FIXES = config.INPUTS_DIR / "2000-digital-zoning" / "label_fixes.csv"
 
 
 def solve_dir(run: str) -> Path:
     """The folder of a solve's run: SOLVE_DIR for the stage's run (FINAL_RUN), EXPERIMENTS_DIR/<run> for any
     other.  A name starting with WALLS_PREFIX or TEXT_PREFIX is refused: those folders hold walls fitted as
-    experiments or the text detector's trials, which a solve built afresh in their place would delete."""
+    experiments or the text detector's trials (and their LINE_MASKS cache), which a solve built afresh in their place would
+    delete."""
     if not run or "/" in run or run.startswith("."):
         raise ValueError(f"{run!r} is not a run name")
     if run.startswith(WALLS_PREFIX):
         raise ValueError(f"{run!r} is not a run name: {WALLS_PREFIX}* folders hold experiments' walls")
     if run.startswith(TEXT_PREFIX):
         raise ValueError(f"{run!r} is not a run name: {TEXT_PREFIX}* folders hold the text detector's trials")
+    if run == LINE_MASKS:
+        raise ValueError(f"{run!r} is not a run name: {LINE_MASKS} is the text detector's cache of long-line ink")
     return SOLVE_DIR if run == FINAL_RUN else EXPERIMENTS_DIR / run
 
 

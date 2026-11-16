@@ -25,8 +25,8 @@ log = logging.getLogger(__name__)
 # The recipe the detector trains with, chosen by trials with the validation area held out (`trial`; the steps and their
 # scores are in pipeline/README.md): the network at half size, the loss on the ink and the px next to it, 4,000 steps
 # with the learning rate rising over the first 10%, the batches drawn ahead.  On the validation area its three seeds
-# find 94.03-94.92% of the words and call 4.12-4.15% of the long-line ink text (today's recipe, `Recipe()`: 94.15% and
-# 4.10%); its trial trained in 6.2 min on the Mac's GPU, today's in 45.7.
+# find 94.03-94.92% of the words and call 4.12-4.15% of the long-line ink text (the old recipe, the quarter models', `Recipe()`:
+# 94.15% and 4.10%); its trial trained in 6.2 min on the Mac's GPU, the old one's in 45.7.
 DEFAULT_RECIPE = train.Recipe(iterations=4000, pct_start=0.1, ink_only="ink+1px", half_size=True, prefetch=True)
 
 

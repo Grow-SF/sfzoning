@@ -36,13 +36,13 @@ import numpy as np
 from sfzmaps import config
 from sfzmaps.solver import grid, paths, saved
 from sfzmaps.solver.textnet import boxes
+from sfzmaps.solver.textnet.boxes import TYPICAL_HEIGHT, word_rect  # noqa: F401  (the walls read them from boxes)
 from sfzmaps.transform import SheetTransform
 
 KINDS = {"zoning code": 0, "block number": 1, "street name": 2, "other": 3}
 NO_KIND = 255
 OTHER_PASSES = "experiments-2000/text-positions"   # the saved answers holding the other passes' boxes, page px
 READ_POINT_RADIUS = 30            # px around one of Sol's label points treated as unknown
-TYPICAL_HEIGHT = 14.0             # px, the text height used when a slanted box's own shape cannot give it
 PLACEMENT_STEP = 32               # px between the page points where the placement itself is evaluated
 # The validation area (x0, y0, x1, y1; EPSG:2227 ft): a page px is in it when its map point is (x0 <= x < x1,
 # y0 <= y < y1).  Held out of training on every map at once (so the reprints of one drawing can't teach it to each
@@ -82,27 +82,6 @@ class SheetData:
     ft_per_px: float         # the placement's scale over the page (`SheetTransform.median_scale_ft_per_px`); nan
                              # without the placement
     hold_out: bool           # VALIDATION_AREA is held out: no loss there, no crop centred there
-
-
-def word_rect(box, angle_deg: float) -> np.ndarray:
-    """The rotated rectangle (4 page px corners, the first edge along the reading direction) of a word, from its axis
-    box (x0, y0, x1, y1) and reading angle (degrees, counter-clockwise from left-to-right)."""
-    x0, y0, x1, y1 = box
-    w, h = x1 - x0, y1 - y0
-    a = np.deg2rad(angle_deg)
-    c, s = abs(np.cos(a)), abs(np.sin(a))
-    det = c * c - s * s
-    if abs(det) > 0.25:
-        length, height = (c * w - s * h) / det, (c * h - s * w) / det
-    else:
-        height = TYPICAL_HEIGHT
-        length = (w - height * s) / c if c >= s else (h - height * c) / s
-    length, height = max(length, 2.0), max(height, 2.0)
-    v = np.array([np.cos(a), -np.sin(a)])                     # the reading direction, page coordinates (y down)
-    n = np.array([-v[1], v[0]])
-    ctr = np.array([(x0 + x1) / 2, (y0 + y1) / 2])
-    return np.array([ctr - v * length / 2 - n * height / 2, ctr + v * length / 2 - n * height / 2,
-                     ctr + v * length / 2 + n * height / 2, ctr - v * length / 2 + n * height / 2])
 
 
 def reading_angle(rect: np.ndarray) -> int:
@@ -150,7 +129,8 @@ def page_world(transform, shape: tuple[int, int], step: int = PLACEMENT_STEP) ->
 
 
 def load_page(sheet: str, series: str = paths.SERIES) -> np.ndarray:
-    """A sheet's page (data/work/<series>/<sheet>/page.png), grayscale uint8."""
+    """A sheet's page (data/work/<series>/<sheet>/page.png), grayscale uint8.  `page.load_page` reads the same bytes for
+    the walls' text grid, which must not import this module."""
     f = config.WORK_DIR / series / sheet / "page.png"
     gray = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
     if gray is None:

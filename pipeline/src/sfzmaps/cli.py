@@ -1035,11 +1035,14 @@ def solver_text_scores(device: str = _DEVICE_OPTION) -> None:
 @solver_app.command("text-trial")
 def solver_text_trial(
     settings: list[str] = typer.Option(None, "--set", help="One setting of a recipe, name=value (repeatable): "
-                                                          "together, one recipe over today's."),
+                                                          "together, one recipe over the old recipe (the quarter "
+                                                          "models')."),
     recipes: list[str] = typer.Option(None, "--recipe",
                                       help="A whole recipe, its settings apart by spaces (\"half_size=True "
-                                           "ink_only=ink\"; \"default\" for today's); repeat for several, tried in "
-                                           "turn on sheets read once."),
+                                           "ink_only=ink\"; \"default\" for the old "
+                                           "recipe, \"stage\" first to start from the stage's: \"stage "
+                                           "iterations=2000\"); repeat for several, tried in turn on sheets "
+                                           "read once."),
     seed: int = typer.Option(0, "--seed", min=0, help="The seed (its folder gets -seed=N when not 0)."),
     reuse: bool = typer.Option(False, "--reuse", help="Score the model already in each recipe's folder; train "
                                                       "nothing."),
@@ -1053,7 +1056,8 @@ def solver_text_trial(
 ) -> None:
     """Try recipes for the text detector: each trained with the validation area held out on every training map and
     scored there, into data/solver/experiments/text-<recipe>/ (model.pt, recipe.json, scores.json, minutes.json).
-    With neither --set nor --recipe, today's recipe."""
+    With neither --set nor --recipe, the old recipe (the quarter models'; `stage` as a --recipe's first word starts from
+    the stage's)."""
     import logging
 
     from sfzmaps.solver.textnet import trial

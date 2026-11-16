@@ -30,6 +30,16 @@ INK_BELOW = grid.INK_BELOW     # a page px darker than this (128) is ink, as for
 OUTLINE_POINTS = 80         # points along each side of the crop when finding where on the grid it lands
 
 
+def load_page(sheet: str) -> np.ndarray:
+    """A sheet's page (data/work/<series>/<sheet>/page.png), grayscale uint8: the bytes `textnet.data.load_page` reads
+    (kept apart, so the walls' code deps hold none of the detector's training code)."""
+    f = config.WORK_DIR / paths.SERIES / sheet / "page.png"
+    gray = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+    if gray is None:
+        raise FileNotFoundError(f"can't read {f}")
+    return gray
+
+
 def load_cuts() -> dict[str, list[list[int]]]:
     """Each sheet's cut boxes from the checked-in file: [x0, y0, x1, y1] page px, both ends inside the box."""
     found = json.loads(paths.CUTS_FILE.read_text())

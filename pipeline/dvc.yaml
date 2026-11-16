@@ -2358,9 +2358,7 @@ stages:
       - src/sfzmaps/solver/saved.py
       - src/sfzmaps/solver/table.py
       - src/sfzmaps/solver/textgrid.py
-      - src/sfzmaps/solver/textnet/__init__.py
       - src/sfzmaps/solver/textnet/boxes.py
-      - src/sfzmaps/solver/textnet/data.py
       - src/sfzmaps/solver/threads.py
       - src/sfzmaps/solver/wallevidence.py
       - src/sfzmaps/solver/walls.py
