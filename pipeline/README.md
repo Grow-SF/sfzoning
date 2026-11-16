@@ -966,7 +966,7 @@ The commands, run from `pipeline/`:
 - `sfzmaps solver published [--districts PATH]` scores the pipeline's published 2000 map
   (`data/work/2000-digital-zoning/districts_raw.parquet`) the same way, as the run `published`.
 
-Dependency notes: the max-flow cuts use SciPy's `maximum_flow` (BSD-3-Clause) through `solver/mincut.py`, which scales
+Dependency notes: the max-flow cuts use OR-Tools' `SimpleMaxFlow` (Apache-2.0) through `solver/mincut.py`, which scales
 the capacities to whole numbers and reports the bound on the rounding's effect on a cut's cost.
 
 **The fresh-clone check** (`scripts/fresh_clone_check.sh [--clone DIR] [--dry-run] [STAGE...]`) shows the stages
