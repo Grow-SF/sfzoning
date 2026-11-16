@@ -492,7 +492,8 @@ def test_default_recipe_trains_as_today(maps):
     # loss on every known px, the network at full size with all seven outputs, no average, no prefetch
     assert dataclasses.asdict(train.Recipe()) == {
         "iterations": 8000, "max_lr": 2e-3, "pct_start": 0.3, "batch": 12, "crop": 320, "width": 24, "ink_only": "off",
-        "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full"}
+        "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full",
+        "precision": "float32"}
     torch.manual_seed(0)
     net = train.build_net(train.Recipe())
     assert sum(p.numel() for p in net.parameters()) == TODAYS_PARAMETERS
