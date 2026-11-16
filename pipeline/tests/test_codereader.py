@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from sfzmaps.solver.codereader import labels
+from sfzmaps.solver.codereader import glyphs, labels
 
 SHEET = "2000-digital-zoning-p01"
 
@@ -223,3 +223,138 @@ def test_line_mask_unites_the_rules_asked_for(monkeypatch):
     one, both = labels.line_mask(lab), labels.line_mask(lab, rules=("long", "run"))
     assert np.array_equal(one, labels.line_mask(lab, a))
     assert np.array_equal(both, one | labels.line_mask(lab, b))
+
+
+# --- the glyph templates and the noise --------------------------------------------------------------------------------
+
+WORDS = ("RH-1", "RH-2", "RM-1", "RM-2", "M-1", "M-2", "RH-12", "H-21")
+TRUE_NOISE = glyphs.NoiseModel(0.04 + 0.92 / (1 + np.exp(-glyphs.KNOTS / 0.6)))   # Kanungo-like: flips near edges
+SMALL = {"residuals": (-3.0, 0.0, 3.0), "ratios": (0.85, 0.95, 1.05, 1.15)}      # a small pose grid, for speed
+
+
+def _true_font():
+    """The known font the synthetic crops are drawn from: Hershey Complex (serifs; the first font is a sans), a
+    heavier stroke, leaning 12 degrees, wider spacing, crisp templates."""
+    font = glyphs.initial_font("RHM-12", slant=12.0, face=cv2.FONT_HERSHEY_COMPLEX, stroke=0.22)
+    font.templates = {c: np.where(t >= 0.5, 0.97, 0.03).astype(np.float32) for c, t in font.templates.items()}
+    font.advance = {c: 1.1 * a for c, a in font.advance.items()}
+    return font
+
+
+def _synthetic(n, seed, true=None, misplaced=()):
+    """n crops of codes drawn from the true font with TRUE_NOISE: caps 20-28 px, a few degrees off level, every fifth
+    upside down (as Terra's top-to-bottom labels come out), every third crossed by a heavy line whose px (grown by
+    one) are unobserved.  Returns the labels (Terra's word rectangle on the drawn ink, or 50 px beside it for those
+    `misplaced`), strings, observed px and the true poses."""
+    true = true or _true_font()
+    rng = np.random.default_rng(seed)
+    shape = (96, 176)
+    labs, texts, observed, poses = [], [], [], []
+    for i in range(n):
+        text = WORDS[i % len(WORDS)]
+        angle = (180.0 if i % 5 == 4 else 0.0) + rng.uniform(-2.5, 2.5)
+        pose = glyphs.Pose(88 + rng.uniform(-4, 4), 48 + rng.uniform(-4, 4), rng.uniform(20, 28) / glyphs.SIZE, angle)
+        d = glyphs.render(true, text, pose, shape)
+        ink = rng.random(shape) < TRUE_NOISE.p_ink(d)
+        obs = np.ones(shape, bool)
+        if i % 3 == 0:
+            bar = np.zeros(shape, np.uint8)
+            y = round(pose.y + rng.uniform(-8, 8))
+            cv2.line(bar, (0, y), (shape[1] - 1, y + round(rng.uniform(-20, 20))), 1, 5)
+            ink |= bar > 0
+            obs &= cv2.dilate(bar, np.ones((3, 3), np.uint8)) == 0
+        ys, xs = np.nonzero(d > 0)
+        off = 50.0 if i in misplaced else 0.0
+        labs.append(labels.Label(index=i, sheet=SHEET, kind=0, point=(0.0, 0.0),
+                                 crop=np.where(ink, 0, 255).astype(np.uint8),
+                                 code_rect=(xs.min() + off, float(ys.min()), xs.max() + 1 + off, float(ys.max() + 1))))
+        texts.append(text)
+        observed.append(obs)
+        poses.append(pose)
+    return labs, texts, observed, poses
+
+
+def _shape_iou(a, b, char):
+    """How well two fonts' shapes of a character agree, drawn alone at scale 1: the best IoU over shifts of 5 px."""
+    pose = glyphs.Pose(40, 40, 1.0, 0.0)
+    sa, sb = glyphs.render(a, char, pose, (80, 80)) > 0, glyphs.render(b, char, pose, (80, 80)) > 0
+    best = 0.0
+    for dy in range(-5, 6):
+        for dx in range(-5, 6):
+            m = np.roll(sb, (dy, dx), axis=(0, 1))
+            best = max(best, (sa & m).sum() / (sa | m).sum())
+    return best
+
+
+def test_em_recovers_templates_from_synthetic_text(tmp_path):
+    true = _true_font()
+    labs, texts, observed, poses = _synthetic(48, seed=7, true=true, misplaced=(5, 17))
+    font = glyphs.learn_font(labs, 4, texts=texts, observed=observed, **SMALL)
+    first = glyphs.initial_font("RHM-12", font.slant)
+    for c in "RHM-12":
+        got, before = _shape_iou(font, true, c), _shape_iou(first, true, c)
+        assert got > 0.8 and got > before + 0.05, (c, got, before)       # the serif font, learned from a sans
+    # the noise: the background's ink, and flips near the edges, as drawn
+    assert abs(font.noise.background - 0.04) < 0.015
+    p = font.noise.p_ink(np.array([-2.0, 0.0, 2.0]))
+    want = TRUE_NOISE.p_ink(np.array([-2.0, 0.0, 2.0]))
+    assert np.all(np.abs(p - want) < 0.12), (p, want)
+    # the rounds explain the ink better than the first font did, and the font returned is the best round's; every
+    # label is kept but the two whose word was found far from where Terra's box put it (the "mislabelled" escape)
+    rounds = [r for r in font.trace if isinstance(r["round"], int)]
+    chosen = font.trace[-1]["chosen"]
+    assert rounds[chosen]["loglik"] == max(r["loglik"] for r in rounds[1:]) > rounds[0]["loglik"]
+    assert abs(rounds[-1]["kept"] - (len(labs) - 2)) < 0.5
+    # each word, templates and spacing together, found and drawn where the true font drew it (to the small grid's
+    # scale steps of 10%); the upside-down crops aligned upside down (the half turn is part of the pose)
+    ious = []
+    for lab, text, obs, pose in zip(labs, texts, observed, poses):
+        fit = glyphs.align(font, font.noise, text, lab.ink, obs, glyphs.search_for(lab, np.array([24.0]), **SMALL))
+        assert abs((fit.pose.angle - pose.angle + 180) % 360 - 180) < 5
+        assert math.hypot(fit.pose.x - pose.x, fit.pose.y - pose.y) < 2.5
+        got = glyphs.render(font, text, fit.pose, lab.crop.shape) > 0
+        want = glyphs.render(true, text, pose, lab.crop.shape) > 0
+        ious.append((got & want).sum() / (got | want).sum())
+    assert min(ious) > 0.65 and np.median(ious) > 0.8
+    # the font, its noise and its measured position spread come back from disk as they were
+    font.save(tmp_path / "font.npz")
+    back = glyphs.Font.load(tmp_path / "font.npz")
+    assert back.chars == font.chars and all(np.array_equal(back.templates[c], font.templates[c]) for c in "RHM-12")
+    assert back.advance == font.advance and np.array_equal(back.noise.p, font.noise.p)
+    assert 0 < back.position_sd == font.position_sd < glyphs.POSITION_SD
+    pose = glyphs.Pose(80, 40, 0.8, 0.0)
+    assert np.array_equal(glyphs.render(back, "RH-12", pose, (80, 160)), glyphs.render(font, "RH-12", pose, (80, 160)))
+
+
+def test_label_weights_let_go_of_strings_found_far_from_their_label():
+    rng = np.random.default_rng(1)
+    z = np.vstack([rng.normal(0.05, 0.1, (60, 2)), [[2.5, 1.0], [-3.0, 0.5]]])     # two found elsewhere in the crop
+    w, mix = glyphs.label_weights(z, np.full(len(z), 60.0))
+    assert np.all(w[:60] > 0.95) and np.all(w[60:] < 0.01)
+    assert abs(mix["bad_share"] - 2 / 62) < 0.02
+    w, mix = glyphs.label_weights(z[:60], np.full(60, 60.0))                       # none: every label kept
+    assert np.all(w > 0.95)
+
+
+def test_unobserved_pixels_change_nothing():
+    labs, texts, observed, poses = _synthetic(12, seed=3)
+    rng = np.random.default_rng(0)
+    scribbled = []
+    for lab, obs in zip(labs, observed):
+        crop = lab.crop.copy()
+        crop[~obs] = np.where(rng.random((~obs).sum()) < 0.5, 0, 255)       # anything at all under the lines
+        scribbled.append(labels.Label(index=lab.index, sheet=SHEET, kind=0, point=(0.0, 0.0), crop=crop,
+                                      code_rect=lab.code_rect))
+    assert any((a.crop != b.crop).any() for a, b in zip(labs, scribbled))
+    # the likelihood reads the observed px only
+    d = glyphs.render(_true_font(), texts[0], poses[0], labs[0].crop.shape)
+    assert TRUE_NOISE.log_lik(d, labs[0].ink, observed[0]) == TRUE_NOISE.log_lik(d, scribbled[0].ink, observed[0])
+    every = np.ones(labs[0].crop.shape, bool)
+    assert TRUE_NOISE.log_lik(d, labs[0].ink, every) != TRUE_NOISE.log_lik(d, scribbled[0].ink, every)
+    # and so does learning: the same font, noise and fits from crops that differ only under the lines
+    a = glyphs.learn_font(labs, 1, texts=texts, observed=observed, **SMALL)
+    b = glyphs.learn_font(scribbled, 1, texts=texts, observed=observed, **SMALL)
+    assert sorted(a.templates) == sorted(b.templates)
+    assert all(np.array_equal(a.templates[c], b.templates[c]) for c in a.templates)
+    assert a.advance == b.advance and np.array_equal(a.noise.p, b.noise.p)
+    assert [r.get("loglik") for r in a.trace] == [r.get("loglik") for r in b.trace]
