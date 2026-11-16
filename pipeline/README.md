@@ -624,7 +624,7 @@ when the label matches. The scores stage finds the lines afresh.
 and scored it there (seed 0 unless a seed is named). A candidate was kept only if it was no worse than the best so far,
 within a tolerance, on words found and on long-line ink called text. The tolerance is twice the spread between two
 seeds of the half-size recipe at 8,000 steps, with a floor of 0.5 points on words found: 0.5 points on words found
-(the spread was 0.12), 0.11 points on long-line ink (the spread was 0.055). Minutes are the training loop's on the Mac's
+(twice the spread, 0.12, is below the floor) and 0.11 points on long-line ink (twice 0.055). Minutes are the training loop's on the Mac's
 GPU. The validation area holds 6,735 of Terra's words.
 
 | Step | Recipe | Train min | Words found | Long-line ink called text | AUC | Verdict |
@@ -641,7 +641,7 @@ GPU. The validation area holds 6,735 of Terra's words.
 | | 2,000 steps | 3.1 | 94.97% | 4.12% | 0.9881 | passes on this seed; see the seeds below |
 | | 2,000 steps at 6e-3 | 3.1 | 93.76% | 3.90% | 0.9872 | 1.25 points fewer words |
 | | 2,000 steps, weights averaged (0.999) | 3.5 | 91.63% | 3.77% | 0.9863 | 3.3 points fewer words: the average keeps half-trained weights |
-| Outputs and drawing | 2,000 steps, the text output alone | 3.0 | 94.03% | 3.90% | 0.9900 | 0.94 points fewer words than with every output |
+| Outputs and drawing | 2,000 steps, the text output alone | 3.0 | 94.03% | 3.90% | 0.9900 | 0.94 points fewer words than the best then, with every output; it would pass the final bar (below), but was not retried at 4,000 steps or on more seeds |
 | | 2,000 steps, the text output alone, weights averaged | 2.9 | 92.93% | 3.77% | 0.9889 | 2.0 points fewer words |
 | | 8,000 steps, batches drawn ahead | 12.8 | 95.01% | 4.05% | 0.9923 | the same weights bit for bit; no clear speed gain alone; kept, as it costs nothing |
 
