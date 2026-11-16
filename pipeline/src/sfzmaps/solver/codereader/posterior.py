@@ -64,7 +64,12 @@ shrinks inside it, is not charged for the rest (see the task report).
 The prior over hypotheses: p(code) = (1 - none - other) x `code_prior` (a code's printed forms equally likely),
 p(none), p(other): `Constants`, Task 4's to fit (two-fold on the owner's answers).
 
-Deterministic: no randomness; torch on the CPU (or the GPU in one exclusive turn: `sfzmaps.gpu.gpu_turn`).
+Two passes (`evidence`): a coarse one (every other scale, each base angle's likeliest residual) finds the label's
+print quality q, and lets the full pass skip a scale and base angle whose coarse best is below e^-PRUNE_LOG of the
+label's best (a numerical tolerance: it cannot change the sums).
+
+Deterministic: no randomness; torch on the CPU (or the GPU in one exclusive turn: `sfzmaps.gpu.gpu_turn`; on the
+2000 labels `mps` was far slower than the CPU).
 """
 import json
 import logging
