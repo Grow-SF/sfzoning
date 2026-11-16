@@ -23,6 +23,12 @@ Variants (every one deterministic; a seeded one says so):
   anneal      the stage's search, then simulated annealing over region recodes on the finer regions (seeded),
               then the solver's moves; the lowest energy seen is kept
   all         qpbo, fusion and regions together, alternated until nothing improves
+  compound    the stage's search, then only fusion's compound proposal (the compound move without its two
+              restrictions: every touching region holding the favoured code offers each of its lots its next code,
+              codes its neighbours hold included, and the fusion decides lot by lot), alternated with the solver's
+              moves
+  compound-qpbo  compound and qpbo together
+  starts-compound  starts, then compound alternated with the solver's moves
 
 Each quarter's answer goes to data/solver/experiments/incidents-search-<variant>/runs/incidents-search-<variant>-<q>.npz
 with its energy and steps in steps-<q>.json; --score joins them (solve.join) and writes measures.json and
@@ -143,8 +149,10 @@ def stage_answers(P):
             ("the end of its first same-code stage", s1)]
 
 
-def fusions(P, p, log, extra=()):
+def fusions(P, p, log, extra=(), only=None):
     for name, y in list(extra) + proposals(P, p):
+        if only and not name.startswith(only):
+            continue
         q, labelled, nvar, d = L.fuse(P, p, y, improve=True)
         log.append(["fusion: " + name, nvar, labelled, round(d, 3)])
         if d < 0:
@@ -291,7 +299,7 @@ def run_variant(variant: str, q: str) -> None:
     t0 = time.perf_counter()
     p = P.final.copy()
     e_final = P.energy(p)
-    if variant == "starts":
+    if variant in ("starts", "starts-compound"):
         K = P.U.shape[1]
         rng = np.random.default_rng(0)
         ends = []
@@ -308,12 +316,22 @@ def run_variant(variant: str, q: str) -> None:
             if d < 0:
                 p = q_
         p = solver_moves(P, p, log)
+        if variant == "starts-compound":
+            for rd in range(OUTER):
+                e0 = P.energy(p)
+                p = fusions(P, p, log, only="compound proposal")
+                p = solver_moves(P, p, log)
+                log.append(["round", rd, round(P.energy(p), 3)])
+                if P.energy(p) >= e0 - 1e-6:
+                    break
     else:
         extra = stage_answers(P) if variant in ("fusion", "all") else ()
         for rd in range(OUTER):
             e0 = P.energy(p)
-            if variant in ("qpbo", "all"):
+            if variant in ("qpbo", "all", "compound-qpbo"):
                 p = qpbo_expansions(P, p, log)
+            if variant in ("compound", "compound-qpbo"):
+                p = fusions(P, p, log, only="compound proposal")
             if variant in ("fusion", "all"):
                 p = fusions(P, p, log, extra)
             if variant in ("regions", "all"):
@@ -438,7 +456,8 @@ def score(variant: str) -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("variant", choices=["qpbo", "fusion", "starts", "regions", "anneal", "all"])
+    ap.add_argument("variant", choices=["qpbo", "fusion", "starts", "regions", "anneal", "all", "compound", "compound-qpbo",
+                                            "starts-compound"])
     ap.add_argument("quarter", nargs="?")
     ap.add_argument("--score", action="store_true")
     args = ap.parse_args()
