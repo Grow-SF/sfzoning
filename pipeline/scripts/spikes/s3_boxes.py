@@ -62,7 +62,7 @@ def ink_variants() -> list[str]:
     return [f"I{lv:.2f}" for lv in INK_LEVELS]
 
 
-SPECK_LEVELS = (0.5, 0.7, 0.8, 0.9)
+SPECK_LEVELS = (0.5, 0.7, 0.8, 0.9, 0.95)
 SPECK_MIN = (0, 5, 20, 50)
 
 
@@ -268,7 +268,7 @@ def one_sheet(job):
     variants alone, keeping the boxes of `kept` (None: none)."""
     series, sheet = job[:2]
     vlist, kept = (job[2], job[3]) if len(job) > 2 else (variants(), f"L{MID:.2f}")
-    gate = None
+    gate = ink_page = None
     sd = data.sheet_data(series, sheet, hold_out_validation=False, placement=(series == paths.SERIES))
     where = "validation" if series == paths.SERIES else "whole"
     scope = scores.scored_px(sd, where)
@@ -292,7 +292,7 @@ def one_sheet(job):
             G = terra_polys(sd)
         elif v[0] in "LI" and "m" in v:
             lv, m = v[1:].split("m")
-            if v[0] == "I" and gate is None:
+            if v[0] == "I" and ink_page is None:
                 k = 2 * INK_R + 1
                 ink_page = data.page_ink(sd)
                 gate = cv2.dilate(ink_page.view(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
@@ -304,7 +304,8 @@ def one_sheet(job):
         elif v[0] == "I":
             if gate is None:
                 k = 2 * INK_R + 1
-                gate = cv2.dilate(data.page_ink(sd).view(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                ink_page = data.page_ink(sd)
+                gate = cv2.dilate(ink_page.view(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
                                                                                                   (k, k))).view(bool)
             G = group(chance, float(v[1:]), gate=gate)
         elif v[0] == "L":
@@ -359,16 +360,18 @@ def keep_level(arg: str) -> None:
         pickle.dump(done, f)
 
 
-def measure_speck() -> None:
-    """The speck-cutoff sensitivity variants: per_sheet_speck.pkl."""
-    done = {}
-    vs = speck_variants()
+def measure_speck(levels: tuple | None = None) -> None:
+    """The speck-cutoff sensitivity variants: per_sheet_speck.pkl.  `levels`: only those levels, merged into the file
+    already there (the 0.95 rows were added afterwards)."""
+    vs = [v for v in speck_variants() if levels is None or float(v[1:].split("m")[0]) in levels]
+    f = OUT / "per_sheet_speck.pkl"
+    done = pickle.load(open(f, "rb")) if levels is not None and f.is_file() else {}
     with Pool(WORKERS) as pool:
         for (s, n), res, _ in pool.imap(one_sheet, [(s, n, vs, None) for s, n in jobs()]):
-            done[f"{s}/{n}"] = {v: res[v] for v in vs}
+            done.setdefault(f"{s}/{n}", {}).update({v: res[v] for v in vs})
             print(s, n, flush=True)
-    with open(OUT / "per_sheet_speck.pkl", "wb") as f:
-        pickle.dump(done, f)
+    with open(f, "wb") as fh:
+        pickle.dump(done, fh)
 
 
 def measure_ink() -> None:
@@ -389,7 +392,7 @@ if __name__ == "__main__":
     elif cmd == "measure":
         measure()
     elif cmd == "speck":
-        measure_speck()
+        measure_speck(tuple(float(x) for x in sys.argv[2:]) or None)
     elif cmd == "ink":
         measure_ink()
     elif cmd == "keep":
