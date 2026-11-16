@@ -23,11 +23,17 @@ def load():
         with open(f, "rb") as fh:
             for k, v in pickle.load(fh).items():
                 per[k].update(v)
+    f = OUT / "per_sheet_speck.pkl"
+    if f.is_file():
+        with open(f, "rb") as fh:
+            for k, v in pickle.load(fh).items():
+                per[k].update(v)
     return per
 
 
 def all_variants() -> list[str]:
-    return S.variants() + (S.ink_variants() if (OUT / "per_sheet_ink.pkl").is_file() else [])
+    return (S.variants() + (S.ink_variants() if (OUT / "per_sheet_ink.pkl").is_file() else [])
+            + (S.speck_variants() if (OUT / "per_sheet_speck.pkl").is_file() else []))
 
 
 def group_of(key: str) -> str:
@@ -141,8 +147,9 @@ def compute(per: dict) -> dict:
         o["boxes"]["per_terra_word"] = float(ng.sum() / max(1, sum(len(r["tbest"]) for r in rs)))
         res["variants"][v] = o
     # per group, the zoning code and all kinds at IoU 0.3 and 0.5
-    for g in [g for g, _ in S.GROUPS]:
-        mem = [i for i, gg in enumerate(groups) if gg == g]
+    TEST = "test (1980+1972+1975)"
+    for g in [g for g, _ in S.GROUPS] + [TEST]:
+        mem = [i for i, gg in enumerate(groups) if (gg == g if g != TEST else gg != "2000 val")]
         b = Boot(len(mem))
         o = {}
         for v in all_variants():
@@ -152,7 +159,10 @@ def compute(per: dict) -> dict:
                 n = np.array([s.sum() for s in sel], float)
                 hit = np.array([(r["tbest"][s] >= S.MAIN_IOU).sum() for r, s in zip(rs, sel)], float)
                 ax = [r["terr"][s][r["tbest"][s] >= S.MAIN_IOU] for r, s in zip(rs, sel)]
-                o[f"{v}/{kind}"] = {"n": int(n.sum()), "recall_0.3": b.ratio(hit, n),
+                er = [r["terr"][s] for r, s in zip(rs, sel)]
+                ok = np.array([((r["tbest"][s] >= S.MAIN_IOU) & (e <= 10)).sum() for r, s, e in zip(rs, sel, er)],
+                              float)
+                o[f"{v}/{kind}"] = {"n": int(n.sum()), "recall_0.3": b.ratio(hit, n), "usable_10": b.ratio(ok, n),
                                     "axis_median": b.quantile(ax, 50), "axis_p90": b.quantile(ax, 90)}
         res["per_group"][g] = o
         for r_ in ("r15", "r30"):
@@ -404,6 +414,90 @@ def crop_captions(tag: str) -> dict:
     }
 
 
+def headline(res: dict, w) -> None:
+    V, PG = res["variants"], res["per_group"]
+    test = "test (1980+1972+1975)"
+    w("## Headline (revised after review)\n")
+    w("What is pre-specified and what is post hoc.  Pre-specified (the brief): plain grouping L at levels 0.3 to 0.8, "
+      "by kind, over IoU 0.1 to 0.7; hysteresis H (the one optional variant).  **Post hoc, added after looking at the "
+      "crops of this same scoring data**: levels 0.9 and 0.95; the ink gate I (and its radius, 4 px); the "
+      "speck-cutoff grid; the quarter-turn and elongated analyses.  MIN_PX = 20 was set before any look and never "
+      "tuned (sensitivity below).\n")
+    w("### 1. Plain grouping, the pre-specified headline (all 105 sheets pooled, zoning code, IoU 0.3)\n")
+    w("Recall and, beside it, the share found with the axis within 10 deg (of ALL the kind's words).\n")
+    w("| level | zoning: found | zoning: found, axis within 10 deg | all kinds: found | all kinds: axis within 10 deg |"
+      "\n|---|---|---|---|---|")
+    for lv in S.LEVELS:
+        v = f"L{lv:.2f}"
+        z, a = V[v]["kinds"]["zoning code"], V[v]["kinds"]["all"]
+        tag = "" if lv <= 0.8 else " (post hoc)"
+        w(f"| {lv:.2f}{tag} | {fmt(z['recall']['0.3'])} | {fmt(z['usable']['10'])} | {fmt(a['recall']['0.3'])} | "
+          f"{fmt(a['usable']['10'])} |")
+    w("\nOver the pre-specified range 0.3 to 0.8 there is no flat part: both columns climb at every step (see the "
+      "intervals).  The curve flattens only at 0.8 to 0.9, and 0.9 is post hoc.  So plain grouping has no level at "
+      "which the cutoff does not matter within the pre-specified range.\n")
+    w("### 2. A choice made on one part, reported on the other\n")
+    w("Each family's setting is chosen on the **design** part, the 2000 map's validation area (13 sheets, 348 zoning "
+      "codes: held out of the detector's training), by the highest share of zoning codes found at IoU 0.3 with the axis "
+      "within 10 deg; the number reported is on the **test** part, the three test drawings 1980, 1972 and 1975 "
+      "pooled (92 sheets, 6,527 zoning codes), which played no part in the choice.  Settings: plain = every level "
+      "0.3 to 0.95; ink-gated (new, speck cutoff in ink px) = level x cutoff grid of the speck run.  The 2000 "
+      "validation part is small, so the choice is noisy, and the pictures that suggested the ink gate came from "
+      "the test part (the gate itself is therefore still a post-hoc idea, only its setting is held out).\n")
+    w("| family | chosen on design | design: found / axis within 10 deg | test: found | test: axis within 10 deg |"
+      "\n|---|---|---|---|---|")
+    fams = {"plain L (levels 0.3 to 0.95)": [f"L{x:.2f}" for x in S.LEVELS],
+            "plain L, pre-specified levels only (0.3 to 0.8)": [f"L{x:.2f}" for x in S.LEVELS if x <= 0.8],
+            "ink gate I, speck cutoff in ink px (level x cutoff)": [v for v in S.speck_variants() if v[0] == "I"],
+            "ink gate I as first measured (mask-px cutoff 20)": S.ink_variants()}
+    chosen = {}
+    for name, vs in fams.items():
+        vs = [v for v in vs if f"{v}/zoning code" in PG["2000 val"]]
+        if not vs:
+            continue
+        best = max(vs, key=lambda v: PG["2000 val"][f"{v}/zoning code"]["usable_10"][0] or 0)
+        chosen[name] = best
+        d, t = PG["2000 val"][f"{best}/zoning code"], PG[test][f"{best}/zoning code"]
+        w(f"| {name} | {best} | {fmt(d['recall_0.3'], True, 0)} / {fmt(d['usable_10'], True, 0)} | "
+          f"{fmt(t['recall_0.3'])} | {fmt(t['usable_10'])} |")
+    w("\nThe chosen setting on each test drawing separately (zoning code, found / axis within 10 deg):\n")
+    w("| family | " + " | ".join(S.paths.TEXT_TEST_SERIES) + " |\n|---|---|---|---|")
+    for name, best in chosen.items():
+        w(f"| {name} ({best}) | " + " | ".join(
+            f"{fmt(PG[g][f'{best}/zoning code']['recall_0.3'], True, 0)} / "
+            f"{fmt(PG[g][f'{best}/zoning code']['usable_10'], True, 0)}" for g in S.paths.TEXT_TEST_SERIES) + " |")
+    w("")
+    w("### 3. Speck cutoff sensitivity (all 105 sheets pooled)\n")
+    w("L: components of at least N px of the chance mask; I: ink-gated, components holding at least N px of INK "
+      "(see the ink-gate check below).  N = 20 for L is the cutoff used everywhere above.  Zoning code, IoU 0.3; "
+      "boxes: all grouped boxes in scope; unmatched: share with no Terra word at IoU 0.1; zoning split: share of "
+      "zoning codes cut into two or more boxes.\n")
+    w("| variant | zoning found | zoning, axis within 10 deg | all kinds found | boxes | unmatched share | zoning split |"
+      "\n|---|---|---|---|---|---|---|")
+    for k in "LI":
+        for lv in S.SPECK_LEVELS:
+            for m in S.SPECK_MIN:
+                v = f"{k}{lv:.2f}m{m}"
+                if v not in V:
+                    continue
+                z, a, b = V[v]["kinds"]["zoning code"], V[v]["kinds"]["all"], V[v]["boxes"]
+                w(f"| {v} | {fmt(z['recall']['0.3'])} | {fmt(z['usable']['10'])} | {fmt(a['recall']['0.3'])} | "
+                  f"{b['n']} | {fmt(b['unmatched_0.1_share'])} | {fmt(z['split'])} |")
+    w("")
+    if "I0.80m0" in V:
+        old = V["I0.80"]["boxes"]["n"]
+        new5 = V["I0.80m5"]["boxes"]["n"]
+        new20 = V["I0.80m20"]["boxes"]["n"]
+        w("#### Ink-gate check: do 1 to 3 px specks pass?\n")
+        w(f"Yes, as first measured: I0.80 with the 20 px cutoff counted the dilated mask (a 1 px speck of ink becomes "
+          f"a disc of about 60 px of mask, which the detector's chance fills), so it kept {old} boxes, against {new5} "
+          f"when a box must hold at least 5 ink px and {new20} at 20 ink px.  That was a flaw of the measure, not of "
+          "the detector: the cutoff now counts ink px for the I variants (variants named `I..m<N>`), and the family "
+          "'ink gate I, speck cutoff in ink px' above uses it.  `crops_unmatched_I080.png` and the I numbers in the "
+          "tables further down are the first measurement (mask-px cutoff).\n")
+    w("")
+
+
 def md(res: dict, counts: dict, mid: str) -> str:
     V = res["variants"]
     L = []
@@ -414,6 +508,7 @@ def md(res: dict, counts: dict, mid: str) -> str:
       f">= {S.SEED} (hysteresis); self = Terra's own boxes through the same code (sanity check).  Components under "
       f"{S.MIN_PX} px are dropped.  A Terra word is found at IoU t when a grouped box overlaps it with IoU >= t "
       "(rotated rectangles).\n")
+    headline(res, w)
     w("## Scope\n")
     w("| scope | sheets | scored px | Terra words (centre in scope): all / zoning code / block number / street name / "
       "other |\n|---|---|---|---|")

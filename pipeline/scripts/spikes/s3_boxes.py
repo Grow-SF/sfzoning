@@ -62,6 +62,16 @@ def ink_variants() -> list[str]:
     return [f"I{lv:.2f}" for lv in INK_LEVELS]
 
 
+SPECK_LEVELS = (0.5, 0.7, 0.8, 0.9)
+SPECK_MIN = (0, 5, 20, 50)
+
+
+def speck_variants() -> list[str]:
+    """The speck-cutoff sensitivity: L<level>m<N> (components of at least N mask px) and I<level>m<N> (ink-gated;
+    components holding at least N ink px)."""
+    return [f"{k}{lv:.2f}m{m}" for k in "LI" for lv in SPECK_LEVELS for m in SPECK_MIN]
+
+
 def variants() -> list[str]:
     return [f"L{lv:.2f}" for lv in LEVELS] + [f"H{lv:.2f}" for lv in LEVELS if lv < SEED] + ["self"]
 
@@ -100,7 +110,8 @@ def load_chance(series: str, sheet: str) -> np.ndarray:
 
 # --- grouping ----------------------------------------------------------------------------------------------------
 
-def group(chance: np.ndarray, level: float, seed: float | None = None, gate: np.ndarray | None = None) -> dict:
+def group(chance: np.ndarray, level: float, seed: float | None = None, gate: np.ndarray | None = None,
+          min_px: int = MIN_PX, ink: np.ndarray | None = None) -> dict:
     """Boxes grouped from the chance (see the module): corners (n, 4, 2) page px, axis (degrees, modulo 180, as
     Terra's reading angle), length >= height (px), mean chance, px."""
     thr = int(np.ceil(level * 255 - 1e-9))
@@ -130,7 +141,10 @@ def group(chance: np.ndarray, level: float, seed: float | None = None, gate: np.
     q = -rx * np.repeat(vy, cnt) + ry * np.repeat(vx, cnt)
     p0, p1 = np.minimum.reduceat(p, start) - 0.5, np.maximum.reduceat(p, start) + 0.5
     q0, q1 = np.minimum.reduceat(q, start) - 0.5, np.maximum.reduceat(q, start) + 0.5
-    keep = cnt >= MIN_PX
+    size = cnt
+    if ink is not None:                  # the speck cutoff counts the component's INK px, not its (dilated) mask px
+        size = np.add.reduceat(ink[yi, xi].astype(np.int64), start)
+    keep = size >= min_px
     if seed is not None:
         keep &= np.maximum.reduceat(w, start) >= seed
     v, n = np.stack([vx, vy], 1), np.stack([-vy, vx], 1)
@@ -139,7 +153,7 @@ def group(chance: np.ndarray, level: float, seed: float | None = None, gate: np.
                         c + v * p1[:, None] + n * q1[:, None], c + v * p0[:, None] + n * q1[:, None]], 1)
     axis = np.rad2deg(np.arctan2(-vy, vx)) % 180.0               # counter-clockwise from left-to-right
     return {"corners": corners[keep], "axis": axis[keep], "length": (p1 - p0)[keep], "height": (q1 - q0)[keep],
-            "mean": (m / cnt)[keep], "npx": cnt[keep]}
+            "mean": (m / cnt)[keep], "npx": size[keep]}
 
 
 def terra_polys(sd: data.SheetData) -> dict:
@@ -276,6 +290,17 @@ def one_sheet(job):
     for v in vlist:
         if v == "self":
             G = terra_polys(sd)
+        elif v[0] in "LI" and "m" in v:
+            lv, m = v[1:].split("m")
+            if v[0] == "I" and gate is None:
+                k = 2 * INK_R + 1
+                ink_page = data.page_ink(sd)
+                gate = cv2.dilate(ink_page.view(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                                                                       (k, k))).view(bool)
+            if v[0] == "I":
+                G = group(chance, float(lv), gate=gate, min_px=int(m), ink=ink_page)
+            else:
+                G = group(chance, float(lv), min_px=int(m))
         elif v[0] == "I":
             if gate is None:
                 k = 2 * INK_R + 1
@@ -334,6 +359,18 @@ def keep_level(arg: str) -> None:
         pickle.dump(done, f)
 
 
+def measure_speck() -> None:
+    """The speck-cutoff sensitivity variants: per_sheet_speck.pkl."""
+    done = {}
+    vs = speck_variants()
+    with Pool(WORKERS) as pool:
+        for (s, n), res, _ in pool.imap(one_sheet, [(s, n, vs, None) for s, n in jobs()]):
+            done[f"{s}/{n}"] = {v: res[v] for v in vs}
+            print(s, n, flush=True)
+    with open(OUT / "per_sheet_speck.pkl", "wb") as f:
+        pickle.dump(done, f)
+
+
 def measure_ink() -> None:
     """The ink-gated variants (I<level>): per_sheet_ink.pkl, merged with per_sheet.pkl by the report."""
     done = {}
@@ -351,6 +388,8 @@ if __name__ == "__main__":
         predict()
     elif cmd == "measure":
         measure()
+    elif cmd == "speck":
+        measure_speck()
     elif cmd == "ink":
         measure_ink()
     elif cmd == "keep":
