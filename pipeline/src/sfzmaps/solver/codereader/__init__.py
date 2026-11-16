@@ -6,6 +6,9 @@ own ink (glyph templates learned from the page, line pixels unobserved, a prior 
            long-line masks over it
   glyphs   the alphabet: glyph templates learned from the training labels by hard EM (from a plain sans), text
            rendered at a pose, and the noise from a rendered stroke to the scan's ink (line px unobserved)
+  posterior  each label's posterior over the codes, "none" and "other": every printed form scored from per-character
+           correlation maps over a measured placement prior, an open-vocabulary pass for other text, other text's
+           explanation of the ink compared, tempered
 
 Design: docs/superpowers/specs/2026-11-15-code-reader-design.md.
 """

@@ -3,8 +3,9 @@ import math
 import cv2
 import numpy as np
 import pandas as pd
+import pytest
 
-from sfzmaps.solver.codereader import glyphs, labels
+from sfzmaps.solver.codereader import glyphs, labels, posterior
 
 SHEET = "2000-digital-zoning-p01"
 
@@ -305,6 +306,8 @@ def test_em_recovers_templates_from_synthetic_text(tmp_path):
     chosen = font.trace[-1]["chosen"]
     assert rounds[chosen]["loglik"] == max(r["loglik"] for r in rounds[1:]) > rounds[0]["loglik"]
     assert abs(rounds[-1]["kept"] - (len(labs) - 2)) < 0.5
+    weights = np.array(rounds[-1]["weights"])
+    assert weights[[5, 17]].max() < 0.05 and np.delete(weights, [5, 17]).min() > 0.9
     # each word, templates and spacing together, found and drawn where the true font drew it (to the small grid's
     # scale steps of 10%); the upside-down crops aligned upside down (the half turn is part of the pose)
     ious = []
@@ -322,6 +325,7 @@ def test_em_recovers_templates_from_synthetic_text(tmp_path):
     assert back.chars == font.chars and all(np.array_equal(back.templates[c], font.templates[c]) for c in "RHM-12")
     assert back.advance == font.advance and np.array_equal(back.noise.p, font.noise.p)
     assert 0 < back.position_sd == font.position_sd < glyphs.POSITION_SD
+    assert 0 < back.scale_sd == font.scale_sd < 0.2                     # cap heights drawn 20-28 px: a spread kept
     pose = glyphs.Pose(80, 40, 0.8, 0.0)
     assert np.array_equal(glyphs.render(back, "RH-12", pose, (80, 160)), glyphs.render(font, "RH-12", pose, (80, 160)))
 
@@ -358,3 +362,231 @@ def test_unobserved_pixels_change_nothing():
     assert all(np.array_equal(a.templates[c], b.templates[c]) for c in a.templates)
     assert a.advance == b.advance and np.array_equal(a.noise.p, b.noise.p)
     assert [r.get("loglik") for r in a.trace] == [r.get("loglik") for r in b.trace]
+
+
+def test_learning_refuses_held_out_labels():
+    labs, texts, observed, _ = _synthetic(3, seed=1)
+    labs[1].held_out = True                       # an owner's answer joined it: never learned from
+    with pytest.raises(ValueError, match="held-out"):
+        glyphs.learn_font(labs, 1, texts=texts, observed=observed, **SMALL)
+    with pytest.raises(ValueError, match="held-out"):
+        posterior.code_prior(labs, {"RH-1": "RH-1"})
+    with pytest.raises(ValueError, match="held-out"):
+        posterior.char_bigram(labs, "RH-1 ", {"RH-1": "RH-1"})
+
+
+# --- the posterior ----------------------------------------------------------------------------------------------------
+
+READ_CODES = ("RH-1", "RH-2", "RM-1", "RM-2", "P", "M-1", "RH-1(D)")
+
+
+def _reader_font(chars):
+    """The font the posterior tests read with, and draw with: Hershey Simplex leaning 12 degrees, crisp templates, a
+    gap spread of 2 template px."""
+    font = glyphs.initial_font(chars, slant=12.0)
+    font.templates = {c: np.where(t >= 0.5, 0.97, 0.03).astype(np.float32) for c, t in font.templates.items()}
+    font.spacing_sd = 2.0
+    return font
+
+
+def _prior(font, forms, **pose):
+    """A prior over `forms` (printed form -> code): codes alike, the bigram from no reads (smoothing alone), and a
+    pose prior like the 2000 map's measured one, on a small grid.  The synthetic ink is drawn px by px independently
+    given the rendering, so its temperature is small (the map's px are not: there it is measured)."""
+    defaults = {"left": (0.0, 0.05, 0.3), "right": (0.0, 0.07, 0.4), "middle": (0.0, 0.03, 0.1), "box_tail": 0.15,
+                "ratio": (0.0, 0.1), "half_turn": {"left-to-right": 0.01, "top-to-bottom": 0.6},
+                "along": {"sol": (0.0, 0.1, 0.4)}, "across": {"sol": (0.0, 0.07, 0.2)}, "point_tail": {"sol": 0.3},
+                "point_turns": {"sol": [0.7, 0.15, 0.05, 0.1]}, "residuals": [0.02, 0.1, 0.5, 0.3, 0.08],
+                "cap": (math.log(24.0), 0.2), "height": 24.0, "point_heights": (20.0, 24.0, 28.0), "foreign": 1.2e-4,
+                "temperature": 5.0, "ratios": (0.85, 0.95, 1.05, 1.15), "point_quantiles": (0.5, 0.5),
+                "char_gain": {c: 1.5 for c in font.templates}}
+    defaults.update(pose)
+    codes = sorted(set(forms.values()))
+    return posterior.Prior(codes={c: 1 / len(codes) for c in codes}, forms=dict(forms),
+                           bigram=posterior.char_bigram([], font.chars, forms), chars=font.chars,
+                           pose=posterior.PosePrior(**defaults))
+
+
+def _draw(font, items, shape, seed):
+    """Ink of texts drawn by the font at their poses with TRUE_NOISE, and the first one's ink box (px edges)."""
+    rng = np.random.default_rng(seed)
+    ink = np.zeros(shape, bool)
+    box = None
+    for text, pose in items:
+        d = glyphs.render(font, text, pose, shape)
+        ink |= rng.random(shape) < TRUE_NOISE.p_ink(d)
+        if box is None:
+            ys, xs = np.nonzero(d > 0)
+            box = (float(xs.min()), float(ys.min()), float(xs.max() + 1), float(ys.max() + 1))
+    return ink, box
+
+
+def _box_label(ink, box, direction="left-to-right"):
+    """A label read by Terra's box `box` (the crop already reads along Terra's angle)."""
+    return labels.Label(index=0, sheet=SHEET, kind=0, point=(0.0, 0.0), box=(0.0, 0.0, 1.0, 1.0),
+                        direction=direction, crop=np.where(ink, 0, 255).astype(np.uint8), code_rect=box,
+                        centre=((box[0] + box[2]) / 2, (box[1] + box[3]) / 2))
+
+
+def _top(post):
+    return max(post, key=post.get)
+
+
+@pytest.fixture(scope="module")
+def reader():
+    font = _reader_font("".join(sorted(set("".join(READ_CODES)) | set("SUD"))))
+    return font, _prior(font, {c: c for c in READ_CODES})
+
+
+def test_posterior_sums_to_one(reader):
+    font, prior = reader
+    ink, box = _draw(font, [("RM-2", glyphs.Pose(100, 55, 0.75, 0.0))], (110, 200), seed=2)
+    post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, posterior.Constants(),
+                                 observed=np.ones(ink.shape, bool))
+    assert set(post) == set(READ_CODES) | {"none", "other"}
+    assert all(p >= 0 for p in post.values()) and abs(sum(post.values()) - 1) < 1e-9
+    assert _top(post) == "RM-2" and post["RM-2"] > 0.95
+    # Task 4's constants change the masses, and the posterior still sums to one
+    other = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior,
+                                  posterior.Constants(temperature=30.0, none_mass=0.3, other_mass=0.2),
+                                  observed=np.ones(ink.shape, bool))
+    assert abs(sum(other.values()) - 1) < 1e-9 and other["none"] > post["none"]
+
+
+def test_line_through_h_does_not_make_it_m(reader):
+    """Review Focus 2: a heavy line through the H, its px unobserved, scores RH-1 no worse than without the line."""
+    font, prior = reader
+    shape = (110, 200)
+    ink, box = _draw(font, [("RH-1", glyphs.Pose(100, 55, 0.75, 0.0))], shape, seed=3)
+    clean = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, posterior.Constants(),
+                                  observed=np.ones(shape, bool))
+    # a vertical bar 6 px wide through the middle of the H, the length of the crop: M's middle stroke
+    _, pens = font.layout("RH-1")
+    h_mid = round(100 + 0.75 * (pens[1] + font.advance["H"] / 2))
+    bar = np.zeros(shape, np.uint8)
+    bar[:, h_mid - 3:h_mid + 3] = 1
+    crossed = ink | (bar > 0)
+    unobserved = cv2.dilate(bar, np.ones((3, 3), np.uint8)) > 0
+    masked = posterior.score_label(_box_label(crossed, box), font, TRUE_NOISE, prior, posterior.Constants(),
+                                   observed=~unobserved)
+    # the line's ink neither helps nor hurts: exactly the clean label with the line's px unread
+    unread = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, posterior.Constants(),
+                                   observed=~unobserved)
+    assert masked == unread
+    assert _top(clean) == _top(masked) == "RH-1" and masked["RH-1"] > 0.8
+    # the same line read as ink (not unobserved) is what pulls towards M
+    seen = posterior.score_label(_box_label(crossed, box), font, TRUE_NOISE, prior, posterior.Constants(),
+                                 observed=np.ones(shape, bool))
+    assert seen["RM-1"] / seen["RH-1"] > 3 * masked["RM-1"] / masked["RH-1"]
+
+
+def test_sideways_code_reads(reader):
+    """Review Focus 3: a code printed bottom-to-top at Sol's point (no box) reads right, and so does a label Terra
+    read top-to-bottom whose crop therefore shows it upside down."""
+    font, prior = reader
+    shape = (220, 220)
+    ink, _ = _draw(font, [("RM-2", glyphs.Pose(110, 112, 0.75, 90.0))], shape, seed=4)
+    point = labels.Label(index=0, sheet=SHEET, kind=2, point=(0.0, 0.0), crop=np.where(ink, 0, 255).astype(np.uint8),
+                         centre=(110.5, 113.0))
+    post = posterior.score_label(point, font, TRUE_NOISE, prior, posterior.Constants(), observed=np.ones(shape, bool))
+    assert _top(post) == "RM-2" and post["RM-2"] > 0.9
+    ink, box = _draw(font, [("RH-2", glyphs.Pose(100, 55, 0.75, 180.0))], (110, 200), seed=5)
+    post = posterior.score_label(_box_label(ink, box, "top-to-bottom"), font, TRUE_NOISE, prior,
+                                 posterior.Constants(), observed=np.ones(ink.shape, bool))
+    assert _top(post) == "RH-2" and post["RH-2"] > 0.9
+
+
+def test_slanted_box_reads_whatever_its_rectangle_height(reader):
+    """A slanted Terra box gives a word rectangle far thinner than the letters (its median on the map is 14 px
+    against 27 for words read a quarter turn); the letters' size is then the map's, not the rectangle's."""
+    font, prior = reader
+    ink, box = _draw(font, [("RH-2", glyphs.Pose(100, 55, 0.75, 0.0))], (110, 200), seed=10)
+    mid = (box[1] + box[3]) / 2
+    lab = _box_label(ink, (box[0], mid - 3, box[2], mid + 3), "slanted")
+    lab.angle = 30.0
+    post = posterior.score_label(lab, font, TRUE_NOISE, prior, posterior.Constants(), observed=np.ones(ink.shape, bool))
+    assert _top(post) == "RH-2" and post["RH-2"] > 0.9
+
+
+def test_lines_only_window_prefers_none(reader):
+    """Review Focus 4: a window of lines (unobserved) and background specks holds no code."""
+    font, prior = reader
+    shape = (110, 200)
+    rng = np.random.default_rng(6)
+    ink = rng.random(shape) < TRUE_NOISE.background
+    lines = np.zeros(shape, np.uint8)
+    cv2.line(lines, (0, 40), (199, 70), 1, 6)
+    cv2.line(lines, (120, 0), (110, 109), 1, 5)
+    ink |= lines > 0
+    observed = cv2.dilate(lines, np.ones((3, 3), np.uint8)) == 0
+    post = posterior.score_label(_box_label(ink, (70.0, 43.0, 130.0, 67.0)), font, TRUE_NOISE, prior,
+                                 posterior.Constants(), observed=observed)
+    assert _top(post) == "none" and post["none"] > 0.9
+
+
+def test_code_is_not_chosen_for_covering_more_ink(reader):
+    """A small code at Terra's word with larger codes printed beside it (the next line, and further along the same
+    line) reads as itself: other text explains the neighbours' ink, so moving onto more ink gains nothing."""
+    font, prior = reader
+    shape = (150, 260)
+    ink, box = _draw(font, [("P", glyphs.Pose(110, 60, 0.75, 0.0)), ("RH-1(D)", glyphs.Pose(130, 105, 0.85, 0.0)),
+                            ("RM-2", glyphs.Pose(205, 60, 0.85, 0.0))], shape, seed=7)
+    post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, posterior.Constants(),
+                                 observed=np.ones(shape, bool))
+    assert _top(post) == "P" and post["P"] > 0.9
+
+
+def test_text_that_is_no_code_reads_other(reader):
+    font, prior = reader
+    ink, box = _draw(font, [("SUD", glyphs.Pose(100, 55, 0.75, 0.0))], (110, 200), seed=8)
+    post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, posterior.Constants(),
+                                 observed=np.ones(ink.shape, bool))
+    assert _top(post) == "other"
+
+
+def test_printed_variant_reads_as_its_code():
+    """Review Focus 5: the printed name "NOE VALLEY" is a form of 24TH-NOE VALLEY, so its ink reads as that code."""
+    forms = posterior.printed_forms({"24TH-NOE VALLEY": "24TH-NOE VALLEY", "RH-1": "RH-1", "P": "P",
+                                     "NOE VALLEY": "24TH-NOE VALLEY"})
+    font = _reader_font("".join(sorted(set("".join(forms)))))
+    prior = _prior(font, forms)
+    ink, box = _draw(font, [("NOE VALLEY", glyphs.Pose(150, 55, 0.6, 0.0))], (110, 300), seed=9)
+    post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, posterior.Constants(),
+                                 observed=np.ones(ink.shape, bool))
+    assert _top(post) == "24TH-NOE VALLEY" and post["24TH-NOE VALLEY"] > 0.9
+
+
+def test_printed_forms_come_from_the_code_names():
+    """Carried from Task 1: each named district may print "<name> NCD", derived from the names, not from reads."""
+    forms = posterior.printed_forms({"24TH-NOE VALLEY": "24TH-NOE VALLEY", "POLK": "POLK", "UNION": "UNION",
+                                     "CRNC": "CRNC", "RH-1": "RH-1", "C-3-O(SD)": "C-3-O(SD)", "SLI": "SLI",
+                                     "NOE VALLEY": "24TH-NOE VALLEY", "UPPER MARKET": "UPPER MARKET"})
+    assert forms["POLK NCD"] == "POLK" and forms["UNION NCD"] == "UNION"
+    assert forms["NOE VALLEY NCD"] == forms["24TH-NOE VALLEY NCD"] == "24TH-NOE VALLEY"
+    assert forms["UPPER MARKET NCD"] == forms["UPR MARKET"] == "UPPER MARKET"     # codes.canon's spelling too
+    assert not any(f.startswith(("CRNC ", "RH-1 ", "C-3-O(SD) ", "SLI ")) for f in forms)
+
+
+def test_code_prior_and_bigram_count_training_strings():
+    labs = [_label(i, str(i), terra=t, sol=t) for i, t in enumerate(["P", "P", "RH-1", "SUD", "RH-1", "P"])]
+    forms = {"P": "P", "RH-1": "RH-1", "RM-2": "RM-2"}
+    prior = posterior.code_prior(labs, forms)
+    assert set(prior) == {"P", "RH-1", "RM-2"} and abs(sum(prior.values()) - 1) < 1e-12
+    assert prior["P"] > prior["RH-1"] > prior["RM-2"] > 0            # 3, 2 and 0 counts, smoothed
+    chars = "-1DHMPRSU "
+    big = posterior.char_bigram(labs, chars, forms)
+    kinds = posterior.kinds_of(chars)
+    start, letter, space = kinds.index("^"), kinds.index("A"), kinds.index(" ")
+    assert np.allclose(np.exp(big).sum(axis=1), 1)
+    assert np.isneginf(big[start, chars.index(" ")]) and np.isneginf(big[space, -1])     # no space first or last
+    assert big[start, chars.index("S")] > big[start, chars.index("R")]   # "SUD" is the only other text; codes don't count
+    assert big[letter, chars.index("U")] > big[letter, chars.index("1")]
+
+
+def test_mixture_fit_separates_core_tail_and_stray():
+    rng = np.random.default_rng(3)
+    z = np.vstack([rng.normal(0.02, 0.05, (300, 2)), rng.normal(0.02, 0.4, (60, 2)), rng.uniform(-4, 4, (40, 2))])
+    fit = posterior.mixture_fit(z, np.full(len(z), 64.0), [0.01, 0.01])
+    assert np.allclose(fit["mean"], 0.02, atol=0.02)
+    assert np.allclose(fit["core"], 0.05, atol=0.01) and np.allclose(fit["tail"], 0.4, atol=0.12)
+    assert np.allclose(fit["weights"], [0.75, 0.15, 0.10], atol=0.05)
