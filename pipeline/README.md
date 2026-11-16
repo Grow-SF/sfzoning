@@ -670,9 +670,18 @@ min (6.2 idle):
 | 256-px crops, 4,000 steps | 96.23% / 4.38% | 94.09% / 4.15% | 5.5, 5.0 | seed 0 fails on long-line ink |
 | half precision (float16), 4,000 steps | not trained | | | no faster: a step took 104 ms in float16 against 103–107 in float32 |
 
-**One detector for both styles.** The 2,000-step recipe, trained on the three modern-lettering maps only, found 92.05%
-of the 1980 drawing's words and called 4.78% of its long-line ink text; trained on all six maps, 92.72% and 4.73%. So
-the stage trains one detector on both styles.
+**One detector for both styles.** The stage's recipe was also trained on the three modern-lettering maps only (2000,
+1980–90, 1990–96), and scored on the 1980 drawing beside the same recipe trained on all six maps, two seeds each:
+
+| Trained on | Seed | 1980: words found | 1980: long-line ink called text |
+|---|---|---|---|
+| the modern-lettering maps | 0 | 91.65% | 5.00% |
+| the modern-lettering maps | 1 | 91.55% | 4.69% |
+| all six maps | 0 | 92.67% | 4.83% |
+| all six maps | 1 | 92.83% | 4.79% |
+
+The older lettering costs the modern drawing nothing: about 1.1 points more of its words are found, with as much of its
+long-line ink called text. So the stage trains one detector on both styles.
 
 **On the test drawings** (every px of every sheet; the 1980 drawing is 19,896 of Terra's words, 1972 and 1975 together
 29,039), words found / long-line ink called text:
