@@ -2950,8 +2950,8 @@ stages:
       nfiles: 488
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -2966,8 +2966,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -2995,8 +2995,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -3070,8 +3070,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1921
       hash: md5
@@ -3101,8 +3101,8 @@ stages:
       nfiles: 361
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -3117,8 +3117,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3146,8 +3146,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -3221,8 +3221,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1929
       hash: md5
@@ -3252,8 +3252,8 @@ stages:
       nfiles: 420
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -3268,8 +3268,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3297,8 +3297,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -3372,8 +3372,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1935
       hash: md5
@@ -3403,8 +3403,8 @@ stages:
       nfiles: 389
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -3419,8 +3419,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3448,8 +3448,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -3523,8 +3523,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1948
       hash: md5
@@ -3554,8 +3554,8 @@ stages:
       nfiles: 380
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -3570,8 +3570,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3599,8 +3599,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -3674,8 +3674,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1960
       hash: md5
@@ -3705,8 +3705,8 @@ stages:
       nfiles: 487
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -3721,8 +3721,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3750,8 +3750,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -3825,8 +3825,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1964
       hash: md5
@@ -3856,8 +3856,8 @@ stages:
       nfiles: 615
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -3872,8 +3872,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3901,8 +3901,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -3976,8 +3976,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1968
       hash: md5
@@ -4007,8 +4007,8 @@ stages:
       nfiles: 884
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -4023,8 +4023,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4052,8 +4052,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -4127,8 +4127,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1972
       hash: md5
@@ -4158,8 +4158,8 @@ stages:
       nfiles: 891
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -4174,8 +4174,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4203,8 +4203,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -4278,8 +4278,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1975
       hash: md5
@@ -4309,8 +4309,8 @@ stages:
       nfiles: 381
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -4325,8 +4325,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4354,8 +4354,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -4429,8 +4429,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1980-1990-zoning
       hash: md5
@@ -4460,8 +4460,8 @@ stages:
       nfiles: 951
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -4476,8 +4476,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4505,8 +4505,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -4580,8 +4580,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1980
       hash: md5
@@ -4611,8 +4611,8 @@ stages:
       nfiles: 375
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -4627,8 +4627,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4656,8 +4656,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -4731,8 +4731,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1980-1990-height
       hash: md5
@@ -4762,8 +4762,8 @@ stages:
       nfiles: 485
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -4778,8 +4778,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4807,8 +4807,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -4882,8 +4882,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1990-1996-zoning
       hash: md5
@@ -4913,8 +4913,8 @@ stages:
       nfiles: 162
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -4929,8 +4929,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4958,8 +4958,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -5033,8 +5033,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1980-1990-su
       hash: md5
@@ -5064,8 +5064,8 @@ stages:
       nfiles: 310
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -5080,8 +5080,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5109,8 +5109,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -5184,8 +5184,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1990-1996-su
       hash: md5
@@ -5215,8 +5215,8 @@ stages:
       nfiles: 377
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -5231,8 +5231,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5260,8 +5260,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -5335,8 +5335,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1990-1996-height
       hash: md5
@@ -5366,8 +5366,8 @@ stages:
       nfiles: 525
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -5382,8 +5382,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5411,8 +5411,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -5486,8 +5486,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1996-2000-zoning
       hash: md5
@@ -5517,8 +5517,8 @@ stages:
       nfiles: 377
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -5533,8 +5533,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5562,8 +5562,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -5637,8 +5637,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1996-2000-height
       hash: md5
@@ -5668,8 +5668,8 @@ stages:
       nfiles: 381
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -5684,8 +5684,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5713,8 +5713,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -5788,8 +5788,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/2000-digital-zoning
       hash: md5
@@ -5819,8 +5819,8 @@ stages:
       nfiles: 567
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -5835,8 +5835,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5864,8 +5864,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -5939,8 +5939,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/1996-2000-su
       hash: md5
@@ -5970,8 +5970,8 @@ stages:
       nfiles: 377
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -5986,8 +5986,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -6015,8 +6015,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -6090,8 +6090,8 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/2000-digital-height
       hash: md5
@@ -6121,8 +6121,8 @@ stages:
       nfiles: 542
     - path: pyproject.toml
       hash: md5
-      md5: 2ef320df9bf520ec9084c718036c5751
-      size: 1438
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
     - path: src/sfzmaps/__init__.py
       hash: md5
       md5: d41d8cd98f00b204e9800998ecf8427e
@@ -6137,8 +6137,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 8fde387110266a14fe897bf77b75f063
-      size: 45020
+      md5: 6481ac6fa45a451c81d1c85f8852bfce
+      size: 63329
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -6166,8 +6166,8 @@ stages:
       size: 46718
     - path: src/sfzmaps/llm.py
       hash: md5
-      md5: 5435e148f668bdb76c22fadab702be1d
-      size: 17971
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
     - path: src/sfzmaps/manifest.py
       hash: md5
       md5: ca5f96f1062d80e0d7c2106f272ffad6
@@ -6241,11 +6241,2981 @@ stages:
       size: 22393
     - path: uv.lock
       hash: md5
-      md5: 994fb5f0d8e00f52856667a4f2c874f6
-      size: 330042
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
     outs:
     - path: data/warp/2000-digital-su
       hash: md5
       md5: 8b6664d98efc462c45f94d0914906ac5.dir
       size: 125546876
       nfiles: 152
+  solver-page:
+    cmd: uv run --frozen sfzmaps stage solver-page
+    deps:
+    - path: data/warp/2000-digital-zoning
+      hash: md5
+      md5: 1dd5374120a1801f67fb942056e9247c.dir
+      size: 88908988
+      nfiles: 104
+    - path: data/work/2000-digital-zoning
+      hash: md5
+      md5: ec17a35907cc99fb5f0d230160b4b558.dir
+      size: 74047970
+      nfiles: 381
+    - path: inputs/merged-page/2000-digital-zoning.json
+      hash: md5
+      md5: 13d80b4d9893b16b6c84852b97647134
+      size: 917
+    - path: pyproject.toml
+      hash: md5
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: 88692b30876ce3e220143a87f19e3011
+      size: 4194
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
+    outs:
+    - path: data/solver/page
+      hash: md5
+      md5: e611eafc85d7b7e39cc24a77a5ddb666.dir
+      size: 6247790
+      nfiles: 3
+  solver-lots:
+    cmd: uv run --frozen sfzmaps stage solver-lots
+    deps:
+    - path: data/solver/page
+      hash: md5
+      md5: e611eafc85d7b7e39cc24a77a5ddb666.dir
+      size: 6247790
+      nfiles: 3
+    - path: inputs/zoning-2000/april2000.geojson.gz
+      hash: md5
+      md5: b4afcaf2ce600b346fc2ed29691cd99d
+      size: 20254342
+    - path: pyproject.toml
+      hash: md5
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/codes.py
+      hash: md5
+      md5: 75cd0443d1ff7c6aa915429d7befa5cc
+      size: 1476
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/lots.py
+      hash: md5
+      md5: 7399c576690409a389991a1a56e0e826
+      size: 6551
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: 88692b30876ce3e220143a87f19e3011
+      size: 4194
+    - path: src/sfzmaps/solver/table.py
+      hash: md5
+      md5: 93f7aa72e78e358ed74f663a47b4d7e6
+      size: 4053
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
+    outs:
+    - path: data/solver/lots
+      hash: md5
+      md5: c3cd76d18fbe0909ffc1915fd6863b23.dir
+      size: 46358760
+      nfiles: 2
+  solver-prints:
+    cmd: uv run --frozen sfzmaps stage solver-prints
+    deps:
+    - path: data/solver/lots
+      hash: md5
+      md5: c3cd76d18fbe0909ffc1915fd6863b23.dir
+      size: 46358760
+      nfiles: 2
+    - path: data/solver/page
+      hash: md5
+      md5: e611eafc85d7b7e39cc24a77a5ddb666.dir
+      size: 6247790
+      nfiles: 3
+    - path: data/warp/2000-digital-zoning
+      hash: md5
+      md5: 1dd5374120a1801f67fb942056e9247c.dir
+      size: 88908988
+      nfiles: 104
+    - path: data/work/2000-digital-zoning
+      hash: md5
+      md5: ec17a35907cc99fb5f0d230160b4b558.dir
+      size: 74047970
+      nfiles: 381
+    - path: pyproject.toml
+      hash: md5
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
+    - path: saved-reads/answers
+      hash: md5
+      md5: f99293df48680f52a25545a316bd7851.dir
+      size: 7929138
+      nfiles: 19
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/llm.py
+      hash: md5
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/codes.py
+      hash: md5
+      md5: 75cd0443d1ff7c6aa915429d7befa5cc
+      size: 1476
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/lots.py
+      hash: md5
+      md5: 7399c576690409a389991a1a56e0e826
+      size: 6551
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: 88692b30876ce3e220143a87f19e3011
+      size: 4194
+    - path: src/sfzmaps/solver/prints.py
+      hash: md5
+      md5: 9b6381eb7bd93c542eb22ee4485ee4c3
+      size: 22967
+    - path: src/sfzmaps/solver/saved.py
+      hash: md5
+      md5: 5428b2e93ac078c2186cedf7b3aaaf8a
+      size: 2203
+    - path: src/sfzmaps/solver/table.py
+      hash: md5
+      md5: 93f7aa72e78e358ed74f663a47b4d7e6
+      size: 4053
+    - path: src/sfzmaps/solver/textnet/__init__.py
+      hash: md5
+      md5: 6d4312a09af9edf5054abf24e821990c
+      size: 96
+    - path: src/sfzmaps/solver/textnet/boxes.py
+      hash: md5
+      md5: 9c3059873b3916274be61844bceb5490
+      size: 8542
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
+    outs:
+    - path: data/solver/prints
+      hash: md5
+      md5: 8fdbf17edf35d3268b418063eab11ebc.dir
+      size: 2117730
+      nfiles: 3
+  solver-labels:
+    cmd: uv run --frozen sfzmaps stage solver-labels
+    deps:
+    - path: data/ref
+      hash: md5
+      md5: 197e86e6c27b43f28f2651b2cce879ca.dir
+      size: 59466886
+      nfiles: 5
+    - path: data/solver/lots
+      hash: md5
+      md5: c3cd76d18fbe0909ffc1915fd6863b23.dir
+      size: 46358760
+      nfiles: 2
+    - path: data/solver/page
+      hash: md5
+      md5: e611eafc85d7b7e39cc24a77a5ddb666.dir
+      size: 6247790
+      nfiles: 3
+    - path: data/solver/prints/prints.parquet
+      hash: md5
+      md5: a9e3454eed30890399561de94f895f90
+      size: 127060
+    - path: pyproject.toml
+      hash: md5
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/codes.py
+      hash: md5
+      md5: 75cd0443d1ff7c6aa915429d7befa5cc
+      size: 1476
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/labels_stage.py
+      hash: md5
+      md5: a06d937e603b7e2faeedd3c06c13eef3
+      size: 1063
+    - path: src/sfzmaps/solver/lots.py
+      hash: md5
+      md5: 7399c576690409a389991a1a56e0e826
+      size: 6551
+    - path: src/sfzmaps/solver/lotsize.py
+      hash: md5
+      md5: 6a457e7f8fc2080c166184eeb0c56a78
+      size: 4329
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: 88692b30876ce3e220143a87f19e3011
+      size: 4194
+    - path: src/sfzmaps/solver/streetside.py
+      hash: md5
+      md5: cec5a6c564a7c7098ba1d859094a2acd
+      size: 9557
+    - path: src/sfzmaps/solver/strokes.py
+      hash: md5
+      md5: 0e71e98705b64da5b00c87d661f0684b
+      size: 7649
+    - path: src/sfzmaps/solver/table.py
+      hash: md5
+      md5: 93f7aa72e78e358ed74f663a47b4d7e6
+      size: 4053
+    - path: src/sfzmaps/solver/trust.py
+      hash: md5
+      md5: 67c3b206db20e574117b97587df356a8
+      size: 14559
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
+    outs:
+    - path: data/solver/labels
+      hash: md5
+      md5: ed5a17743fc3bbd264742546786f7856.dir
+      size: 13282293
+      nfiles: 11
+  solver-text:
+    cmd: uv run --frozen sfzmaps stage solver-text
+    deps:
+    - path: data/work/1960/1/district_labels.json
+      hash: md5
+      md5: 779623bf5f32498719e60eaf4f4f72f8
+      size: 5657
+    - path: data/work/1960/1/page.png
+      hash: md5
+      md5: 9380891a21b9d4976bf940f86b3ee26c
+      size: 3121955
+    - path: data/work/1960/10/district_labels.json
+      hash: md5
+      md5: e9f7fe18837c0ca49e466e29f3bbe4e4
+      size: 7039
+    - path: data/work/1960/10/page.png
+      hash: md5
+      md5: 82ad3b8cf22a654bf10625e52c827f74
+      size: 3713925
+    - path: data/work/1960/11/district_labels.json
+      hash: md5
+      md5: b54c4234f1c5e3f554dbabeb3d831ef8
+      size: 9514
+    - path: data/work/1960/11/page.png
+      hash: md5
+      md5: cf79c4315361c8ed72adf6370469c116
+      size: 3837143
+    - path: data/work/1960/12/district_labels.json
+      hash: md5
+      md5: cf436893711ee8ade4bacf73607966c8
+      size: 6258
+    - path: data/work/1960/12/page.png
+      hash: md5
+      md5: bfd95aac2f8a9f14a9da5e74c412539c
+      size: 3709845
+    - path: data/work/1960/13/district_labels.json
+      hash: md5
+      md5: 7ec15db740c728d34d8d1055743f0c14
+      size: 4279
+    - path: data/work/1960/13/page.png
+      hash: md5
+      md5: 689e6b855be10b471c1348c30f8c7a8c
+      size: 2345881
+    - path: data/work/1960/2/district_labels.json
+      hash: md5
+      md5: 05a598ec26b03595d2046b4d832959a3
+      size: 14975
+    - path: data/work/1960/2/page.png
+      hash: md5
+      md5: ddcdb87c26ee340f0f8cdb2b4dd89cf9
+      size: 3152791
+    - path: data/work/1960/3/district_labels.json
+      hash: md5
+      md5: 878e41dc8f36f2ed3c35e5d11c961972
+      size: 9028
+    - path: data/work/1960/3/page.png
+      hash: md5
+      md5: 916eb2c456dc3b4395a946aac58b94cb
+      size: 2237675
+    - path: data/work/1960/4/district_labels.json
+      hash: md5
+      md5: 6bd3bf0978b46676412675aa934d4d09
+      size: 6751
+    - path: data/work/1960/4/page.png
+      hash: md5
+      md5: 8927d8d1afca78bd785b8c2dc76078c7
+      size: 1580615
+    - path: data/work/1960/5/district_labels.json
+      hash: md5
+      md5: fdc32f1483423f1dc264e43a8ba5fcb6
+      size: 7732
+    - path: data/work/1960/5/page.png
+      hash: md5
+      md5: a072f98b084afa2d4be38eba7f89983d
+      size: 2746777
+    - path: data/work/1960/6/district_labels.json
+      hash: md5
+      md5: 00fb7a975a94354c97b9fbe7fd54a5a3
+      size: 10719
+    - path: data/work/1960/6/page.png
+      hash: md5
+      md5: 51619353c358caa6925858695b43b013
+      size: 3253663
+    - path: data/work/1960/7/district_labels.json
+      hash: md5
+      md5: c44c937c14d7e662b2245e105ffc3064
+      size: 14463
+    - path: data/work/1960/7/page.png
+      hash: md5
+      md5: e0ea76001008f648a1818a982f5e6b77
+      size: 3717582
+    - path: data/work/1960/8/district_labels.json
+      hash: md5
+      md5: b58128a4577d15d179e7333a14b81476
+      size: 6239
+    - path: data/work/1960/8/page.png
+      hash: md5
+      md5: 2e5b877b4132ab17005abd5300754c33
+      size: 3022149
+    - path: data/work/1960/9/district_labels.json
+      hash: md5
+      md5: b002f7ec4d14f4dc09be563bf6dc3db3
+      size: 1288
+    - path: data/work/1960/9/page.png
+      hash: md5
+      md5: 51da675eafca8fc41ef9a9b893942c4f
+      size: 1755428
+    - path: data/work/1964/20180102105639444-p02/district_labels.json
+      hash: md5
+      md5: bc4f1ad76a44efa0a5329944b2bd3cc1
+      size: 6320
+    - path: data/work/1964/20180102105639444-p02/page.png
+      hash: md5
+      md5: 934ca9b2f21e0ee0525f6ae8a66a4d71
+      size: 3282028
+    - path: data/work/1964/20180102105639444-p03/district_labels.json
+      hash: md5
+      md5: c7177600b00a9adffc852d2c9b917c88
+      size: 15808
+    - path: data/work/1964/20180102105639444-p03/page.png
+      hash: md5
+      md5: 4ee523c6feabe44178905a9e4d83079a
+      size: 3432860
+    - path: data/work/1964/20180102105639444-p04/district_labels.json
+      hash: md5
+      md5: 6f6578a5ce4b1ab34ce08bc51677f0d4
+      size: 9394
+    - path: data/work/1964/20180102105639444-p04/page.png
+      hash: md5
+      md5: 5855f9a4254e954700a6e3710c01a896
+      size: 1978514
+    - path: data/work/1964/20180102105639444-p05/district_labels.json
+      hash: md5
+      md5: 46a76374bd9858b7debf49c296857687
+      size: 7623
+    - path: data/work/1964/20180102105639444-p05/page.png
+      hash: md5
+      md5: ea723b81bb8ea5b31a1e6f31015b5c6d
+      size: 1479087
+    - path: data/work/1964/20180102105639444-p06/district_labels.json
+      hash: md5
+      md5: 91cb6ab6067477f347f2d2325345ae83
+      size: 8334
+    - path: data/work/1964/20180102105639444-p06/page.png
+      hash: md5
+      md5: 76eacc3a87cce28baa0d1d30f2753e73
+      size: 2109347
+    - path: data/work/1964/20180102105639444-p07/district_labels.json
+      hash: md5
+      md5: 6cb7b87b709a2894e1587f9a4c7b9d36
+      size: 12651
+    - path: data/work/1964/20180102105639444-p07/page.png
+      hash: md5
+      md5: 0b7b0752a0363c4dd17f569179d357d5
+      size: 3058024
+    - path: data/work/1964/20180102105639444-p08/district_labels.json
+      hash: md5
+      md5: 2a135e5ac7e2cdd63afc0e4f46db536b
+      size: 15810
+    - path: data/work/1964/20180102105639444-p08/page.png
+      hash: md5
+      md5: 107dbb473f533786974fe2f5bdddd939
+      size: 3612594
+    - path: data/work/1964/20180102105639444-p09/district_labels.json
+      hash: md5
+      md5: dd0184c5d3aeee4d2c2257fde4dba1d2
+      size: 6417
+    - path: data/work/1964/20180102105639444-p09/page.png
+      hash: md5
+      md5: d079ac07d1a2a8a80b44a6100cbb39bb
+      size: 2554751
+    - path: data/work/1964/20180102105639444-p10/district_labels.json
+      hash: md5
+      md5: 8dac782aaf46d2e0f0f0989148f855a8
+      size: 1286
+    - path: data/work/1964/20180102105639444-p10/page.png
+      hash: md5
+      md5: 16d88cdea7443c40882a425a90f1a332
+      size: 1791142
+    - path: data/work/1964/20180102105639444-p11/district_labels.json
+      hash: md5
+      md5: 2de4b2c54a90de2588a0d94347db26ac
+      size: 8008
+    - path: data/work/1964/20180102105639444-p11/page.png
+      hash: md5
+      md5: 397533f8cff1cc499dc9c09f9ca978aa
+      size: 3567665
+    - path: data/work/1964/20180102105639444-p12/district_labels.json
+      hash: md5
+      md5: e65c64276630c0661f026eb53d37e792
+      size: 11675
+    - path: data/work/1964/20180102105639444-p12/page.png
+      hash: md5
+      md5: 9a0c2e1296e96343695fb2b2e9c80588
+      size: 3929516
+    - path: data/work/1964/20180102105639444-p13/district_labels.json
+      hash: md5
+      md5: f554bf3a0d0f88bf5d20e2dd6438b625
+      size: 7809
+    - path: data/work/1964/20180102105639444-p13/page.png
+      hash: md5
+      md5: 5010b84ab92d155b4ff321caf3601c3c
+      size: 3519957
+    - path: data/work/1964/20180102105639444-p14/district_labels.json
+      hash: md5
+      md5: b75fa9a59aca4ec82aaed2dd93473bd5
+      size: 5846
+    - path: data/work/1964/20180102105639444-p14/page.png
+      hash: md5
+      md5: 2a3e35817867466e41011a229fc31177
+      size: 2061110
+    - path: data/work/1964/20180102105639444-p15/district_labels.json
+      hash: md5
+      md5: bb7a09b1190da2e60cdaf44069adf2df
+      size: 101
+    - path: data/work/1964/20180102105639444-p15/page.png
+      hash: md5
+      md5: fb35f0abd0a96ebc0100503c50404769
+      size: 2851826
+    - path: data/work/1964/20180102105639444-p16/district_labels.json
+      hash: md5
+      md5: 662bbacf6071fc9ab71acc86ca4d453f
+      size: 638
+    - path: data/work/1964/20180102105639444-p16/page.png
+      hash: md5
+      md5: 67890fce6c01295ce813df6fe6229121
+      size: 2853395
+    - path: data/work/1964/20180102105639444-p17/district_labels.json
+      hash: md5
+      md5: 512e89ccff0bc9fd8bb8ed866095ef58
+      size: 1872
+    - path: data/work/1964/20180102105639444-p17/page.png
+      hash: md5
+      md5: f18715385d353a26311728ff770ab87d
+      size: 2924826
+    - path: data/work/1968/20180102110513967-p02/district_labels.json
+      hash: md5
+      md5: 9d3a7967a1a725dbc2af4752e264ce60
+      size: 5935
+    - path: data/work/1968/20180102110513967-p02/page.png
+      hash: md5
+      md5: 3b004d16c40165f82d239dca16e4de2e
+      size: 3284019
+    - path: data/work/1968/20180102110513967-p03/district_labels.json
+      hash: md5
+      md5: 92d80e4254523229aa388e25b57667e0
+      size: 16211
+    - path: data/work/1968/20180102110513967-p03/page.png
+      hash: md5
+      md5: 561bbd57d41a9f446b365dd1d93b217b
+      size: 3539058
+    - path: data/work/1968/20180102110513967-p04/district_labels.json
+      hash: md5
+      md5: 386b07e0f71de44905da14c1ae4378ee
+      size: 9691
+    - path: data/work/1968/20180102110513967-p04/page.png
+      hash: md5
+      md5: fee6477f5995ae2ba85baaf10390ffd7
+      size: 2077655
+    - path: data/work/1968/20180102110513967-p05/district_labels.json
+      hash: md5
+      md5: af4372ff83283d7f7f9e76b09548b413
+      size: 7426
+    - path: data/work/1968/20180102110513967-p05/page.png
+      hash: md5
+      md5: 60eddcf72586ebe11291a90b7f074288
+      size: 1564384
+    - path: data/work/1968/20180102110513967-p06/district_labels.json
+      hash: md5
+      md5: 408de7435bcc2e4125887ef97e9c405a
+      size: 8238
+    - path: data/work/1968/20180102110513967-p06/page.png
+      hash: md5
+      md5: 3818ea5bed3727528bbacb263d0b232a
+      size: 2131178
+    - path: data/work/1968/20180102110513967-p07/district_labels.json
+      hash: md5
+      md5: 59cfa0eba0624a27d556b9b654bdfd02
+      size: 12849
+    - path: data/work/1968/20180102110513967-p07/page.png
+      hash: md5
+      md5: a42fe9d7318f30081d9f1dc637aa215a
+      size: 3293770
+    - path: data/work/1968/20180102110513967-p08/district_labels.json
+      hash: md5
+      md5: 4a49164078f301ddaa751d6ab7ed3301
+      size: 16207
+    - path: data/work/1968/20180102110513967-p08/page.png
+      hash: md5
+      md5: 6324db0e752b8fb226e4cfaf130f2a17
+      size: 3710368
+    - path: data/work/1968/20180102110513967-p09/district_labels.json
+      hash: md5
+      md5: d0542cf4f43c117b0e67e4095bb0062c
+      size: 6415
+    - path: data/work/1968/20180102110513967-p09/page.png
+      hash: md5
+      md5: cc40622a6646cde58ba7abd5b6e66ef0
+      size: 2618548
+    - path: data/work/1968/20180102110513967-p10/district_labels.json
+      hash: md5
+      md5: 3119ae2b47120df60716632187028fba
+      size: 1286
+    - path: data/work/1968/20180102110513967-p10/page.png
+      hash: md5
+      md5: 7464d2438018b71b0db091a1948d17c4
+      size: 1823567
+    - path: data/work/1968/20180102110513967-p11/district_labels.json
+      hash: md5
+      md5: 984bbd00dd0d7f61bfca6a19674e0025
+      size: 8105
+    - path: data/work/1968/20180102110513967-p11/page.png
+      hash: md5
+      md5: 3c18cc66263a8e7df04df61e61ebd810
+      size: 3788266
+    - path: data/work/1968/20180102110513967-p12/district_labels.json
+      hash: md5
+      md5: 5f5493d42f336eccd1ca0ddb0d81df79
+      size: 11972
+    - path: data/work/1968/20180102110513967-p12/page.png
+      hash: md5
+      md5: 611a63b651eb6d8d62819085f063b7fb
+      size: 4174953
+    - path: data/work/1968/20180102110513967-p13/district_labels.json
+      hash: md5
+      md5: a94049351ade66ca4c5d31b0bac8f7e3
+      size: 7705
+    - path: data/work/1968/20180102110513967-p13/page.png
+      hash: md5
+      md5: 81ce667f8d0c0539f2265ea891be207c
+      size: 3679860
+    - path: data/work/1968/20180102110513967-p14/district_labels.json
+      hash: md5
+      md5: 3dd9eb0edd7bd91c4a9bf83d2b41e550
+      size: 5842
+    - path: data/work/1968/20180102110513967-p14/page.png
+      hash: md5
+      md5: b5fc5e760a6ce3c27cd78d4083dfc906
+      size: 2153734
+    - path: data/work/1968/20180102110513967-p15/district_labels.json
+      hash: md5
+      md5: 434eb5a1b733aa4212029b8f25936ee6
+      size: 393
+    - path: data/work/1968/20180102110513967-p15/page.png
+      hash: md5
+      md5: c2800e61df520bd5ab202e823c705b30
+      size: 1732676
+    - path: data/work/1968/20180102110513967-p16/district_labels.json
+      hash: md5
+      md5: 6eb0a05bad4a7c1e38de589dd33520bc
+      size: 101
+    - path: data/work/1968/20180102110513967-p16/page.png
+      hash: md5
+      md5: 3b55fae12a025b1b40b49068aa18d31d
+      size: 2793487
+    - path: data/work/1968/20180102110513967-p17/district_labels.json
+      hash: md5
+      md5: f7351cf2b660ca93c7523673b64106ee
+      size: 1681
+    - path: data/work/1968/20180102110513967-p17/page.png
+      hash: md5
+      md5: c3afd7e9e0bf712f4f65610053beffa5
+      size: 3112191
+    - path: data/work/1968/20180102110513967-p18/district_labels.json
+      hash: md5
+      md5: a827317fbe32fe288ad64a62a8859401
+      size: 1952
+    - path: data/work/1968/20180102110513967-p18/page.png
+      hash: md5
+      md5: 44d8f8c5951dff28b6abfda45e6183f1
+      size: 3119488
+    - path: data/work/1968/20180102110513967-p19/district_labels.json
+      hash: md5
+      md5: a46e2ada6ef90e718e5cc0d94b370066
+      size: 303
+    - path: data/work/1968/20180102110513967-p19/page.png
+      hash: md5
+      md5: 135d6208aa16cf7723facec25b0faa47
+      size: 1220448
+    - path: data/work/1968/20180102110513967-p20/district_labels.json
+      hash: md5
+      md5: 8b53369ba62a31a51db44dfdf7f72312
+      size: 302
+    - path: data/work/1968/20180102110513967-p20/page.png
+      hash: md5
+      md5: 6f4eb72e6cdbcceaa335b98d5d182214
+      size: 1821328
+    - path: data/work/1968/20180102110513967-p21/district_labels.json
+      hash: md5
+      md5: fc4743e2bae12d72eec8c06d583e4502
+      size: 203
+    - path: data/work/1968/20180102110513967-p21/page.png
+      hash: md5
+      md5: 17ef7f5297da400b645cd4f1e8bad3dd
+      size: 2017943
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p01/district_labels.json
+      hash: md5
+      md5: 4d0bf9bedfe89504a330d33811a641d0
+      size: 12592
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p01/page.png
+      hash: md5
+      md5: 94957d1255669a44099ff040b4b9e8bb
+      size: 663510
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p02/district_labels.json
+      hash: md5
+      md5: 012013dfc97f9b64ea27985e9857c01e
+      size: 28857
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p02/page.png
+      hash: md5
+      md5: dbc244e5852398f27d58120c49312a8d
+      size: 669754
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p03/district_labels.json
+      hash: md5
+      md5: b31a1066e0d5d1f43498641d46dd82b3
+      size: 14282
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p03/page.png
+      hash: md5
+      md5: 1b5ad15d77955bc78125126340335557
+      size: 582657
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p04/district_labels.json
+      hash: md5
+      md5: 97423994de884a1b2d8f06e29cab67a8
+      size: 8043
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p04/page.png
+      hash: md5
+      md5: a0c88b763ade1b5c286c9e8b6a0e2eef
+      size: 334198
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p05/district_labels.json
+      hash: md5
+      md5: cd84a660eaab8ed2541812b0b08b461f
+      size: 9017
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p05/page.png
+      hash: md5
+      md5: 88d6c6a863691e649f8d499b10ad441b
+      size: 563113
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p06/district_labels.json
+      hash: md5
+      md5: d4d6f22484f270c6e02708e876e45486
+      size: 14057
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p06/page.png
+      hash: md5
+      md5: 9cb5e129909fb303c70dfee7ca92ba22
+      size: 612614
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p07/district_labels.json
+      hash: md5
+      md5: 189c8b3d1ee70f8e687c2e856a6aaf6a
+      size: 30592
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p07/page.png
+      hash: md5
+      md5: 7fcaac7a547589838f9eb0b9702f0416
+      size: 697510
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p08/district_labels.json
+      hash: md5
+      md5: 0d1f0b937f5d43256f8f842df5008f43
+      size: 10317
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p08/page.png
+      hash: md5
+      md5: 87b18af05d3a55c572edecfc1b748904
+      size: 597915
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p09/district_labels.json
+      hash: md5
+      md5: 0a927c42c83e948caf492ab2c5a41b2f
+      size: 1966
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p09/page.png
+      hash: md5
+      md5: 152526042b3ba17fbc5c759a11e7fc76
+      size: 303443
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p10/district_labels.json
+      hash: md5
+      md5: 04edc033b56648536056af17551d6ddd
+      size: 10311
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p10/page.png
+      hash: md5
+      md5: 4a63518ced450ce3890c6676d41664dc
+      size: 700871
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p11/district_labels.json
+      hash: md5
+      md5: 0ec5239b1fdee70ada424f70040ba75f
+      size: 11019
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p11/page.png
+      hash: md5
+      md5: 31bab61532845b9503cfb45d987c3c98
+      size: 661011
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p12/district_labels.json
+      hash: md5
+      md5: 58610cbce07f5d28ee7bd58e68e64efa
+      size: 9572
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p12/page.png
+      hash: md5
+      md5: 896e916be1fcbdca04c3ed73410cc6fa
+      size: 678562
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p13/district_labels.json
+      hash: md5
+      md5: a82a54ab2a39a8a87dbceafd8d5394aa
+      size: 5832
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p13/page.png
+      hash: md5
+      md5: 831839a63436034701a33b5c8be5b599
+      size: 398386
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p22/district_labels.json
+      hash: md5
+      md5: 2b97d8db1cdcd8c32c832da05a1b85fd
+      size: 14726
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p22/page.png
+      hash: md5
+      md5: a5f1d9f2979d4ee8d4f6174092d4bb80
+      size: 584417
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p23/district_labels.json
+      hash: md5
+      md5: 2c6b0c417538a9a7aaf83f7d1ed96586
+      size: 28439
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p23/page.png
+      hash: md5
+      md5: b1f23e5281c174ef83179c197fee4e2c
+      size: 614106
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p24/district_labels.json
+      hash: md5
+      md5: 4444839f66695f0481bfdba3ec4edb9a
+      size: 12951
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p24/page.png
+      hash: md5
+      md5: 71003d6b253a8da18acb7223634620b1
+      size: 537325
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p25/district_labels.json
+      hash: md5
+      md5: 6776a667dd21e1c466fbec1d7d62ab4b
+      size: 8655
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p25/page.png
+      hash: md5
+      md5: cc01b8b3ffc7c8fdc72d7e0e1eda02eb
+      size: 361525
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p26/district_labels.json
+      hash: md5
+      md5: f6679ac39200c716247e843b60e9f9e1
+      size: 8945
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p26/page.png
+      hash: md5
+      md5: d547ad8e2e9d98728cd36e73844abaca
+      size: 574979
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p27/district_labels.json
+      hash: md5
+      md5: 8c7819e6bc10fc5e87eff71c7beeed86
+      size: 28269
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p27/page.png
+      hash: md5
+      md5: 1b2852a169c3c0ed0061ffa60820d97e
+      size: 697701
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p28/district_labels.json
+      hash: md5
+      md5: 00d0ee4f0d85b751eb02809572a1e5fb
+      size: 8671
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p28/page.png
+      hash: md5
+      md5: 663dd51a411396209faef2624d5eef08
+      size: 611313
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p29/district_labels.json
+      hash: md5
+      md5: 751f1568121433246d28337ee8894e37
+      size: 2269
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p29/page.png
+      hash: md5
+      md5: ab0d5587fbc78a512f537a06ca61f796
+      size: 329520
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p30/district_labels.json
+      hash: md5
+      md5: 439e68885e84c25cc129e7a309c4a0c9
+      size: 8998
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p30/page.png
+      hash: md5
+      md5: 34a3258fa1798d3d732edccaa13ea4b0
+      size: 680871
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p31/district_labels.json
+      hash: md5
+      md5: deeee5c5b23ea0a0d988d96064dc0877
+      size: 11671
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p31/page.png
+      hash: md5
+      md5: c60e8be45e5c814d9b385ebe12fadd8e
+      size: 714824
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p32/district_labels.json
+      hash: md5
+      md5: 4f1180083c200ed96e6b05e6d4a1f2d8
+      size: 8349
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p32/page.png
+      hash: md5
+      md5: c0ad8646358d717d84457f32c54131e2
+      size: 665628
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p33/district_labels.json
+      hash: md5
+      md5: b9c85266c04a394c8141ec222f640b75
+      size: 5958
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p33/page.png
+      hash: md5
+      md5: 00d10560d41cadbe6367d225e6ce90aa
+      size: 419775
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p01/district_labels.json
+      hash: md5
+      md5: c3abc7948a8ea6f2439649cbf3807796
+      size: 14194
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
+      hash: md5
+      md5: f444bc4d9cadcf56443dc06204e0d765
+      size: 576002
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p02/district_labels.json
+      hash: md5
+      md5: c4b9c9dd5f5dc76d24825b8ec6c5495a
+      size: 29228
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
+      hash: md5
+      md5: a88e18048b9ac3e2d704ba71b7b650b5
+      size: 617446
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p03/district_labels.json
+      hash: md5
+      md5: d721afa98cf3632bb3c58156110795c4
+      size: 13542
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
+      hash: md5
+      md5: 81da3a304df9d21cbfedb13a22dc0492
+      size: 521389
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p04/district_labels.json
+      hash: md5
+      md5: 3c7c0810d1eff5585515e66e126da8f5
+      size: 8470
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
+      hash: md5
+      md5: 5844ce5a064617e309baf7ed2f571e1e
+      size: 356225
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p05/district_labels.json
+      hash: md5
+      md5: efa7c75da62ebe8a0d339bfb1da44822
+      size: 9038
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
+      hash: md5
+      md5: 90770df11395057ef0f14ce16dd716aa
+      size: 561786
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p06/district_labels.json
+      hash: md5
+      md5: e891a530f3ef65cd076cfb310579aeaf
+      size: 12136
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
+      hash: md5
+      md5: dcd20c52cd6862670b8278d80eca5749
+      size: 605604
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p07/district_labels.json
+      hash: md5
+      md5: 17d00b60303f4b16210353b67727837f
+      size: 29349
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
+      hash: md5
+      md5: e009c0b4c5b5dced46af24b27caf0531
+      size: 684425
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p08/district_labels.json
+      hash: md5
+      md5: 9d186d63080201fc556dd4100aee8c99
+      size: 9466
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
+      hash: md5
+      md5: 080969337e6cab2005bb3bb5f7cd200b
+      size: 599057
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p09/district_labels.json
+      hash: md5
+      md5: de76e17b3312222200513d090e8513e5
+      size: 2269
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
+      hash: md5
+      md5: d91c9de094fe175f35818e5e148cb4a3
+      size: 329656
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p10/district_labels.json
+      hash: md5
+      md5: 561e364b45bbac81b26ac71c667b792d
+      size: 9588
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
+      hash: md5
+      md5: 84d4c608588c415064ab5fe82772e1ea
+      size: 673449
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p11/district_labels.json
+      hash: md5
+      md5: 50c495af638c4710cffb97942244f5f3
+      size: 13458
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
+      hash: md5
+      md5: cdbfa8649cee4687924b9ecdc40c729e
+      size: 706126
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p12/district_labels.json
+      hash: md5
+      md5: 91742928ab309f7e8e1940d87d668658
+      size: 8848
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
+      hash: md5
+      md5: f46c2eca3ce4778660dd40c3661182bc
+      size: 655778
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p13/district_labels.json
+      hash: md5
+      md5: 9abd351863161993a2eb83403deeea70
+      size: 5963
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
+      hash: md5
+      md5: 4cdaa95f1bce5407fc9d2f69a8c4bf24
+      size: 411197
+    - path: pyproject.toml
+      hash: md5
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
+    - path: saved-reads/answers/experiments-2000/text-positions
+      hash: md5
+      md5: 337c0c108792bca363a329c561158e88.dir
+      size: 230369
+      nfiles: 5
+    - path: saved-reads/answers/text-on-every-sheet.jsonl.gz
+      hash: md5
+      md5: 25e0d2238d64fc2a66ec75cf2bfce069
+      size: 4447671
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: 88692b30876ce3e220143a87f19e3011
+      size: 4194
+    - path: src/sfzmaps/solver/saved.py
+      hash: md5
+      md5: 5428b2e93ac078c2186cedf7b3aaaf8a
+      size: 2203
+    - path: src/sfzmaps/solver/textnet/__init__.py
+      hash: md5
+      md5: 6d4312a09af9edf5054abf24e821990c
+      size: 96
+    - path: src/sfzmaps/solver/textnet/boxes.py
+      hash: md5
+      md5: 9c3059873b3916274be61844bceb5490
+      size: 8542
+    - path: src/sfzmaps/solver/textnet/data.py
+      hash: md5
+      md5: 23777e3233f0ab350413be875a912e45
+      size: 21864
+    - path: src/sfzmaps/solver/textnet/model.py
+      hash: md5
+      md5: 838bfdbb95644c10cf39d2513c815fc7
+      size: 3851
+    - path: src/sfzmaps/solver/textnet/predict.py
+      hash: md5
+      md5: e8e73dd9017b4d4e65dcf04bf3943ab1
+      size: 3296
+    - path: src/sfzmaps/solver/textnet/stage.py
+      hash: md5
+      md5: da952d71e74f6aaf8708ad102f00bc06
+      size: 4088
+    - path: src/sfzmaps/solver/textnet/train.py
+      hash: md5
+      md5: 0c1b4bda2838082ba33a747a5ee4e3c3
+      size: 21777
+    - path: uv.lock
+      hash: md5
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
+    outs:
+    - path: data/solver/text
+      hash: md5
+      md5: c7ecad18ba719f6a7aa2f13e94a0b79e.dir
+      size: 130359366
+      nfiles: 14
+  solver-walls:
+    cmd: uv run --frozen sfzmaps stage solver-walls
+    deps:
+    - path: data/solver/labels/strokes.npz
+      hash: md5
+      md5: 8ea5ffb63634ad61ab6f65fc5f2aba32
+      size: 13126752
+    - path: data/solver/lots
+      hash: md5
+      md5: c3cd76d18fbe0909ffc1915fd6863b23.dir
+      size: 46358760
+      nfiles: 2
+    - path: data/solver/page
+      hash: md5
+      md5: e611eafc85d7b7e39cc24a77a5ddb666.dir
+      size: 6247790
+      nfiles: 3
+    - path: data/solver/prints/terra_boxes.json
+      hash: md5
+      md5: 266410cc7ba1638455f5762650ff3423
+      size: 1990351
+    - path: data/solver/text/chance
+      hash: md5
+      md5: 28e90485d344b53c4f02f0865ca48a21.dir
+      size: 119274579
+      nfiles: 13
+    - path: data/warp/2000-digital-zoning
+      hash: md5
+      md5: 1dd5374120a1801f67fb942056e9247c.dir
+      size: 88908988
+      nfiles: 104
+    - path: data/work/2000-digital-zoning
+      hash: md5
+      md5: ec17a35907cc99fb5f0d230160b4b558.dir
+      size: 74047970
+      nfiles: 381
+    - path: inputs/merged-page/2000-digital-zoning.json
+      hash: md5
+      md5: 13d80b4d9893b16b6c84852b97647134
+      size: 917
+    - path: pyproject.toml
+      hash: md5
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/codes.py
+      hash: md5
+      md5: 75cd0443d1ff7c6aa915429d7befa5cc
+      size: 1476
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/lots.py
+      hash: md5
+      md5: 7399c576690409a389991a1a56e0e826
+      size: 6551
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: 88692b30876ce3e220143a87f19e3011
+      size: 4194
+    - path: src/sfzmaps/solver/runs.py
+      hash: md5
+      md5: 6182a5bd007fc0bc6e7f9576bae355c5
+      size: 3940
+    - path: src/sfzmaps/solver/saved.py
+      hash: md5
+      md5: 5428b2e93ac078c2186cedf7b3aaaf8a
+      size: 2203
+    - path: src/sfzmaps/solver/table.py
+      hash: md5
+      md5: 93f7aa72e78e358ed74f663a47b4d7e6
+      size: 4053
+    - path: src/sfzmaps/solver/textgrid.py
+      hash: md5
+      md5: 890738deefcf211dcec82a6ed6d28f24
+      size: 4362
+    - path: src/sfzmaps/solver/textnet/boxes.py
+      hash: md5
+      md5: 9c3059873b3916274be61844bceb5490
+      size: 8542
+    - path: src/sfzmaps/solver/threads.py
+      hash: md5
+      md5: 70b7f2940d5bc2961507198af1a58ee1
+      size: 2124
+    - path: src/sfzmaps/solver/wallevidence.py
+      hash: md5
+      md5: 3233186e82d24e2911c6a2c5062d6f96
+      size: 43435
+    - path: src/sfzmaps/solver/walls.py
+      hash: md5
+      md5: d5ad28c51b8fd1c43866df79d7470ee5
+      size: 18256
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
+    outs:
+    - path: data/solver/walls
+      hash: md5
+      md5: a34f193c03871fa53c9b53db9bde17db.dir
+      size: 16389245
+      nfiles: 6
+  solver-text-scores:
+    cmd: uv run --frozen sfzmaps stage solver-text-scores
+    deps:
+    - path: data/solver/text/model.pt
+      hash: md5
+      md5: b4c320ffc05bef9f07d502cf68d5c65f
+      size: 11084787
+    - path: data/warp/1972/20180102113004574-p01/correction.npz
+      hash: md5
+      md5: 20cfa69681383597856c9b1abd91338c
+      size: 74472
+    - path: data/warp/1972/20180102113004574-p01/transform.json
+      hash: md5
+      md5: 45f6ddf334684fd1cb9ce41d72ceaa13
+      size: 174301
+    - path: data/warp/1972/20180102113004574-p02/correction.npz
+      hash: md5
+      md5: 00d4fec6d4b6bf04196df587c9e01e4b
+      size: 81384
+    - path: data/warp/1972/20180102113004574-p02/transform.json
+      hash: md5
+      md5: 2a83c49638d3d97e04fb86354f317890
+      size: 246677
+    - path: data/warp/1972/20180102113004574-p03/correction.npz
+      hash: md5
+      md5: 5f485a6b5786406988bca2ca68132b69
+      size: 65800
+    - path: data/warp/1972/20180102113004574-p03/transform.json
+      hash: md5
+      md5: 7102005d3c541236a8b06c7adeea7c4f
+      size: 87667
+    - path: data/warp/1972/20180102113004574-p04/correction.npz
+      hash: md5
+      md5: baaf02e394e4faac060f2b1bdf8c85ee
+      size: 43872
+    - path: data/warp/1972/20180102113004574-p04/transform.json
+      hash: md5
+      md5: d5d00b248b8b09c9564dc3918aa91bf7
+      size: 67620
+    - path: data/warp/1972/20180102113004574-p05/correction.npz
+      hash: md5
+      md5: 274a6ad635e55165f743446675de4a91
+      size: 73792
+    - path: data/warp/1972/20180102113004574-p05/transform.json
+      hash: md5
+      md5: 392f8c72eeb148f1656e4fcd4d76df6e
+      size: 196237
+    - path: data/warp/1972/20180102113004574-p06/correction.npz
+      hash: md5
+      md5: 6e139f17f783ee47ba5752f63d45f877
+      size: 77768
+    - path: data/warp/1972/20180102113004574-p06/transform.json
+      hash: md5
+      md5: 79ea188d88c1ea84273726fb8f85e0eb
+      size: 84241
+    - path: data/warp/1972/20180102113004574-p07/correction.npz
+      hash: md5
+      md5: 1b9667ea92e4dcf1656048b31c7c598a
+      size: 77928
+    - path: data/warp/1972/20180102113004574-p07/transform.json
+      hash: md5
+      md5: c9c1fa6feeb0d85275e162e6eaaca23a
+      size: 251111
+    - path: data/warp/1972/20180102113004574-p08/correction.npz
+      hash: md5
+      md5: a7087d7d1c8bc2fde2d6eb31b6cf8221
+      size: 70552
+    - path: data/warp/1972/20180102113004574-p08/transform.json
+      hash: md5
+      md5: 1a8b79fe63697b9dcea623cd845c9109
+      size: 103113
+    - path: data/warp/1972/20180102113004574-p09/correction.npz
+      hash: md5
+      md5: c7e1759e3f7af13493ba7f8f28b31aef
+      size: 64264
+    - path: data/warp/1972/20180102113004574-p09/transform.json
+      hash: md5
+      md5: 7a9c40176155a0e62cbd889e8d38502b
+      size: 52632
+    - path: data/warp/1972/20180102113004574-p10/correction.npz
+      hash: md5
+      md5: e8d76315c8f25f3b04773ef52a068b94
+      size: 75656
+    - path: data/warp/1972/20180102113004574-p10/transform.json
+      hash: md5
+      md5: d75d87f463c489ff559b9d3feb5a32ec
+      size: 124695
+    - path: data/warp/1972/20180102113004574-p11/correction.npz
+      hash: md5
+      md5: 9d654f72266ac54ec3a21272c10acd44
+      size: 76504
+    - path: data/warp/1972/20180102113004574-p11/transform.json
+      hash: md5
+      md5: 5326e64f1f589f42992ce9e8edc33488
+      size: 156463
+    - path: data/warp/1972/20180102113004574-p12/correction.npz
+      hash: md5
+      md5: 14856bae520d698224ced504d6193a5d
+      size: 74368
+    - path: data/warp/1972/20180102113004574-p12/transform.json
+      hash: md5
+      md5: ee57343092ac867923b1b213a50d5aff
+      size: 130275
+    - path: data/warp/1972/20180102113004574-p13/correction.npz
+      hash: md5
+      md5: d0528a44c97f5d5863f5b431bcb4aa4e
+      size: 72584
+    - path: data/warp/1972/20180102113004574-p13/transform.json
+      hash: md5
+      md5: 7438471d3fe0009464c466b66f67873b
+      size: 81510
+    - path: data/warp/1972/20180102113004574-p14/correction.npz
+      hash: md5
+      md5: 100a51457b15bb47ddbcffdef5dce195
+      size: 44856
+    - path: data/warp/1972/20180102113004574-p14/transform.json
+      hash: md5
+      md5: a7dda288abdbb73a6331e9beb1a7c3f7
+      size: 93708
+    - path: data/warp/1972/20180102113004574-p15/correction.npz
+      hash: md5
+      md5: dc1be5e0e71b373dfced782a6b957773
+      size: 67152
+    - path: data/warp/1972/20180102113004574-p15/transform.json
+      hash: md5
+      md5: 847619eaf30093115897ffff5d642f72
+      size: 22842
+    - path: data/warp/1972/20180102113004574-p16/correction.npz
+      hash: md5
+      md5: b0f33ca44a026f1512bc362f0e471fb7
+      size: 71432
+    - path: data/warp/1972/20180102113004574-p16/transform.json
+      hash: md5
+      md5: e9d1daa46ee97985b8a90cd22adea77c
+      size: 309989
+    - path: data/warp/1972/20180102113004574-p17/correction.npz
+      hash: md5
+      md5: 366c2e1fd151209c85d9a19c2a8349ad
+      size: 71416
+    - path: data/warp/1972/20180102113004574-p17/transform.json
+      hash: md5
+      md5: af399f0f9f7bfb19c1408297e29b964c
+      size: 179799
+    - path: data/warp/1972/20180102113004574-p18/correction.npz
+      hash: md5
+      md5: 85c1224bddbe3bbc07c9b4f63705d7a4
+      size: 74248
+    - path: data/warp/1972/20180102113004574-p18/transform.json
+      hash: md5
+      md5: 02e54c8a7bb163833deb7fbfd3c07dd7
+      size: 313991
+    - path: data/warp/1972/20180102113004574-p19/correction.npz
+      hash: md5
+      md5: aaf83a96de13ae5872a9d0362c93eb92
+      size: 71432
+    - path: data/warp/1972/20180102113004574-p19/transform.json
+      hash: md5
+      md5: 08736565aaf1235f3b8821d8f0b9f134
+      size: 144262
+    - path: data/warp/1972/20180102113004574-p20/correction.npz
+      hash: md5
+      md5: 5fc37d33046434da6015f44bd123daa4
+      size: 40472
+    - path: data/warp/1972/20180102113004574-p20/transform.json
+      hash: md5
+      md5: 27a03d0182c36c928791919016fd469a
+      size: 98774
+    - path: data/warp/1972/20180102113004574-p21/correction.npz
+      hash: md5
+      md5: 1e7108b92c018696701d1af1ec6afca7
+      size: 75152
+    - path: data/warp/1972/20180102113004574-p21/transform.json
+      hash: md5
+      md5: ee6b5a9068d9259af72f7411be409eed
+      size: 245673
+    - path: data/warp/1972/20180102113004574-p22/correction.npz
+      hash: md5
+      md5: 80699a196c4fff6771334f867ff0bc79
+      size: 77064
+    - path: data/warp/1972/20180102113004574-p22/transform.json
+      hash: md5
+      md5: c732f21266cc5c193f7d9a75e470217f
+      size: 130157
+    - path: data/warp/1972/20180102113004574-p23/correction.npz
+      hash: md5
+      md5: eb3088dde1648c28d7a5d860cad32db4
+      size: 77216
+    - path: data/warp/1972/20180102113004574-p23/transform.json
+      hash: md5
+      md5: f5974cd2f2aac4cb66d029fdab677361
+      size: 299619
+    - path: data/warp/1972/20180102113004574-p24/correction.npz
+      hash: md5
+      md5: d4cf4771cc003713529b018c0441f963
+      size: 76360
+    - path: data/warp/1972/20180102113004574-p24/transform.json
+      hash: md5
+      md5: b611107ce4383704ec3d230b24cf810e
+      size: 116306
+    - path: data/warp/1972/20180102113004574-p25/correction.npz
+      hash: md5
+      md5: de1a4ad833b78525d3a4d13defcfbb2b
+      size: 65712
+    - path: data/warp/1972/20180102113004574-p25/transform.json
+      hash: md5
+      md5: b3b90d1da9e8581d1c3e631adf2f4b8f
+      size: 52438
+    - path: data/warp/1972/20180102113004574-p26/correction.npz
+      hash: md5
+      md5: 86f642e0cc58a8b07101a713e9c1016e
+      size: 74808
+    - path: data/warp/1972/20180102113004574-p26/transform.json
+      hash: md5
+      md5: 4eff6a9eb2068522b5b6959169ae611b
+      size: 146140
+    - path: data/warp/1972/20180102113004574-p27/correction.npz
+      hash: md5
+      md5: f8c1374c76781d6acc01b6e74ca4c261
+      size: 75792
+    - path: data/warp/1972/20180102113004574-p27/transform.json
+      hash: md5
+      md5: da231f4fac984bcde19e70b1643eee4b
+      size: 200213
+    - path: data/warp/1972/20180102113004574-p28/correction.npz
+      hash: md5
+      md5: ef6f2f33fcc8fea49d1ac8499faf523c
+      size: 74368
+    - path: data/warp/1972/20180102113004574-p28/transform.json
+      hash: md5
+      md5: 3d19e0629b298ba314be92366529c5af
+      size: 138966
+    - path: data/warp/1972/20180102113004574-p29/correction.npz
+      hash: md5
+      md5: a391d9e0986a7c4aa73d27e9795ba79d
+      size: 73272
+    - path: data/warp/1972/20180102113004574-p29/transform.json
+      hash: md5
+      md5: 0b8d057f21651ce0579ed199bc8c32a7
+      size: 93823
+    - path: data/warp/1972/20180102113004574-p31/correction.npz
+      hash: md5
+      md5: 47303acb00844baba6ca1ce7097cad2a
+      size: 99032
+    - path: data/warp/1972/20180102113004574-p31/transform.json
+      hash: md5
+      md5: 5a34eab1f940e1cfe3730aa76a7bc72e
+      size: 18946
+    - path: data/warp/1975/20180102114142444-p02/correction.npz
+      hash: md5
+      md5: d43281b9fcd1db2fb570284c5db395cc
+      size: 73608
+    - path: data/warp/1975/20180102114142444-p02/transform.json
+      hash: md5
+      md5: 88c99da5ae9ac205e61ce7760bc06594
+      size: 175328
+    - path: data/warp/1975/20180102114142444-p03/correction.npz
+      hash: md5
+      md5: 5618a8fa8b5c2190c0b9c0ca1ff04df5
+      size: 83976
+    - path: data/warp/1975/20180102114142444-p03/transform.json
+      hash: md5
+      md5: e0cc19f7fccb014247fb41fa5befeddf
+      size: 262942
+    - path: data/warp/1975/20180102114142444-p04/correction.npz
+      hash: md5
+      md5: 2249e348ae0a709fcd1cdf2c56632e09
+      size: 65800
+    - path: data/warp/1975/20180102114142444-p04/transform.json
+      hash: md5
+      md5: 13f88fbecc47ab8319c4499422ecc21b
+      size: 91635
+    - path: data/warp/1975/20180102114142444-p05/correction.npz
+      hash: md5
+      md5: 3a2e13538196490bd9cc5ffe9705ce52
+      size: 41624
+    - path: data/warp/1975/20180102114142444-p05/transform.json
+      hash: md5
+      md5: b7366999ea2f6e1552c7bb2707c407e5
+      size: 64005
+    - path: data/warp/1975/20180102114142444-p06/correction.npz
+      hash: md5
+      md5: aacfb516d16e698a22ae3aaa4d7ff9aa
+      size: 72080
+    - path: data/warp/1975/20180102114142444-p06/transform.json
+      hash: md5
+      md5: 1950d93df240cb5f5c23868c3eed1ac1
+      size: 203002
+    - path: data/warp/1975/20180102114142444-p07/correction.npz
+      hash: md5
+      md5: d499298465619ccd59f306d5746c22a8
+      size: 75656
+    - path: data/warp/1975/20180102114142444-p07/transform.json
+      hash: md5
+      md5: 5d087c8613d319adc5dfb6d3ea03734f
+      size: 88196
+    - path: data/warp/1975/20180102114142444-p08/correction.npz
+      hash: md5
+      md5: 1fe8d3a8c18fe3a9aeb40810514292a5
+      size: 75080
+    - path: data/warp/1975/20180102114142444-p08/transform.json
+      hash: md5
+      md5: 687e19226483834293ac27590accecd7
+      size: 241868
+    - path: data/warp/1975/20180102114142444-p09/correction.npz
+      hash: md5
+      md5: 019338ae4fa88d00fe63431b31082adf
+      size: 76200
+    - path: data/warp/1975/20180102114142444-p09/transform.json
+      hash: md5
+      md5: 1813662bd09af53b5b02938e096adc63
+      size: 112274
+    - path: data/warp/1975/20180102114142444-p10/correction.npz
+      hash: md5
+      md5: 9646b9ae6028dd10ac733e33133481c2
+      size: 65712
+    - path: data/warp/1975/20180102114142444-p10/transform.json
+      hash: md5
+      md5: e941fba594fc78dbddbd39362428e79c
+      size: 51514
+    - path: data/warp/1975/20180102114142444-p11/correction.npz
+      hash: md5
+      md5: 4354b2f491d87bedb41831c6bb1bc1b6
+      size: 75656
+    - path: data/warp/1975/20180102114142444-p11/transform.json
+      hash: md5
+      md5: d5bfebdddb1e350ff3fe61022a386e29
+      size: 126235
+    - path: data/warp/1975/20180102114142444-p12/correction.npz
+      hash: md5
+      md5: da0c2e2c7abb0f006097dbeb1b07b325
+      size: 75792
+    - path: data/warp/1975/20180102114142444-p12/transform.json
+      hash: md5
+      md5: c42c857d55950bffae471b64d4153db7
+      size: 155423
+    - path: data/warp/1975/20180102114142444-p13/correction.npz
+      hash: md5
+      md5: 374c8ab1933ce316f9504b31425362a7
+      size: 74368
+    - path: data/warp/1975/20180102114142444-p13/transform.json
+      hash: md5
+      md5: 2c9af6ea2e2c74f8ed90173590e0eb6b
+      size: 127141
+    - path: data/warp/1975/20180102114142444-p14/correction.npz
+      hash: md5
+      md5: 471498c989df5666a55dad987a2402bc
+      size: 72584
+    - path: data/warp/1975/20180102114142444-p14/transform.json
+      hash: md5
+      md5: 9a4878d555f498bf2905e5d452986697
+      size: 79794
+    - path: data/warp/1975/20180102114142444-p15/correction.npz
+      hash: md5
+      md5: a3258cb82cb4ed13d54e5c4a3d50542e
+      size: 67176
+    - path: data/warp/1975/20180102114142444-p15/transform.json
+      hash: md5
+      md5: 8c59cc81d6e05fee7093f766ed6cc9aa
+      size: 183620
+    - path: data/warp/1975/20180102114142444-p16/correction.npz
+      hash: md5
+      md5: cc6023b4708f379b7ffd233ed1f2f467
+      size: 74952
+    - path: data/warp/1975/20180102114142444-p16/transform.json
+      hash: md5
+      md5: fcbc21021075963e2019f68e53ba2f10
+      size: 307541
+    - path: data/warp/1975/20180102114142444-p17/correction.npz
+      hash: md5
+      md5: e9b46469bb74eed863cd36530e3f1e9b
+      size: 73544
+    - path: data/warp/1975/20180102114142444-p17/transform.json
+      hash: md5
+      md5: 3c5966e84ca387b03879e54ef90151b9
+      size: 139452
+    - path: data/warp/1975/20180102114142444-p18/correction.npz
+      hash: md5
+      md5: bd6866ef53eada19d3672f13a0411ccf
+      size: 43872
+    - path: data/warp/1975/20180102114142444-p18/transform.json
+      hash: md5
+      md5: cbdafb77817d307e43b4a957b884f102
+      size: 96361
+    - path: data/warp/1975/20180102114142444-p19/correction.npz
+      hash: md5
+      md5: 3a0cf8d657168fb18c76777733272cab
+      size: 71880
+    - path: data/warp/1975/20180102114142444-p19/transform.json
+      hash: md5
+      md5: a7bb899753a0e5e2c9a9dcf26488dae5
+      size: 241937
+    - path: data/warp/1975/20180102114142444-p20/correction.npz
+      hash: md5
+      md5: bbab3e4183533930c5cf8be70941999d
+      size: 76504
+    - path: data/warp/1975/20180102114142444-p20/transform.json
+      hash: md5
+      md5: f7bc7988a1f0c68c67fe6f0009dd8e2d
+      size: 133213
+    - path: data/warp/1975/20180102114142444-p21/correction.npz
+      hash: md5
+      md5: bec0d928bb5544d23e87dfbdc9b35152
+      size: 80520
+    - path: data/warp/1975/20180102114142444-p21/transform.json
+      hash: md5
+      md5: eb2b9cc751695c0c814f7581e2134e9a
+      size: 292982
+    - path: data/warp/1975/20180102114142444-p22/correction.npz
+      hash: md5
+      md5: f4a2ae4a97f800abb3be741f2c45f499
+      size: 75504
+    - path: data/warp/1975/20180102114142444-p22/transform.json
+      hash: md5
+      md5: ecf9821a083fc9496ef956fdeb9e1903
+      size: 112314
+    - path: data/warp/1975/20180102114142444-p23/correction.npz
+      hash: md5
+      md5: aba4d7ec6dcd4d131c79a65d68b9aaea
+      size: 66328
+    - path: data/warp/1975/20180102114142444-p23/transform.json
+      hash: md5
+      md5: f5535da39e2f19a300deaa4868620e75
+      size: 58995
+    - path: data/warp/1975/20180102114142444-p24/correction.npz
+      hash: md5
+      md5: 8534df03d2c00bf57dbdf0cf7cbcdcb0
+      size: 75656
+    - path: data/warp/1975/20180102114142444-p24/transform.json
+      hash: md5
+      md5: a78bcaa9c6c4ccccf9780051ce5b2136
+      size: 142899
+    - path: data/warp/1975/20180102114142444-p25/correction.npz
+      hash: md5
+      md5: a45a2c1f9aedd51ec0fa2df7a33d05ee
+      size: 74952
+    - path: data/warp/1975/20180102114142444-p25/transform.json
+      hash: md5
+      md5: 5c109d34d4d366b29c4df50e6369837a
+      size: 222108
+    - path: data/warp/1975/20180102114142444-p26/correction.npz
+      hash: md5
+      md5: c6fec991e564c720417b217642035146
+      size: 74368
+    - path: data/warp/1975/20180102114142444-p26/transform.json
+      hash: md5
+      md5: 0de5f2778eda7ce81468cdcf3596ce72
+      size: 142428
+    - path: data/warp/1975/20180102114142444-p27/correction.npz
+      hash: md5
+      md5: 45cab78c30e2714e69955653d41b79c3
+      size: 74112
+    - path: data/warp/1975/20180102114142444-p27/transform.json
+      hash: md5
+      md5: d444ef3ec51837b0d036d6ee0e9902ef
+      size: 85331
+    - path: data/warp/1975/20180102114142444-p28/correction.npz
+      hash: md5
+      md5: 7b6adc88c74b877d06f0e15a72b78b3f
+      size: 78072
+    - path: data/warp/1975/20180102114142444-p28/transform.json
+      hash: md5
+      md5: f194b012fc9a2055cc02162c158d905a
+      size: 112351
+    - path: data/warp/1975/20180102114142444-p29/correction.npz
+      hash: md5
+      md5: 77298198c881d7949194a111437e2454
+      size: 67080
+    - path: data/warp/1975/20180102114142444-p29/transform.json
+      hash: md5
+      md5: b4910cc24f24150fa0fcadcc2b89a885
+      size: 83195
+    - path: data/warp/1975/20180102114142444-p30/correction.npz
+      hash: md5
+      md5: 62d63bc4661f5b17c684337d96dd3aed
+      size: 76360
+    - path: data/warp/1975/20180102114142444-p30/transform.json
+      hash: md5
+      md5: 2116173e4338d37abbb1ab9b6e67c5f5
+      size: 316593
+    - path: data/warp/1975/20180102114142444-p32/correction.npz
+      hash: md5
+      md5: 1d880606ce33345a7c895299311b0772
+      size: 84840
+    - path: data/warp/1975/20180102114142444-p32/transform.json
+      hash: md5
+      md5: 43dc3993d044fa5c30eaa8331344f8ad
+      size: 19602
+    - path: data/warp/1980/20180102115319417-p02/correction.npz
+      hash: md5
+      md5: 6d0722ceb2e7dd75d4a1d7a0131f5f13
+      size: 47112
+    - path: data/warp/1980/20180102115319417-p02/transform.json
+      hash: md5
+      md5: 1183d79b387f64307fa6218739ec4805
+      size: 126106
+    - path: data/warp/1980/20180102115319417-p03/correction.npz
+      hash: md5
+      md5: 40e22411035569dc5d610dda72a1230c
+      size: 46792
+    - path: data/warp/1980/20180102115319417-p03/transform.json
+      hash: md5
+      md5: 876c11dac1946f4385b6bb40dce6f1dd
+      size: 181359
+    - path: data/warp/1980/20180102115319417-p04/correction.npz
+      hash: md5
+      md5: 3a0c690016da070130a257c2bde6ba8d
+      size: 48200
+    - path: data/warp/1980/20180102115319417-p04/transform.json
+      hash: md5
+      md5: e895511895797ba168af7773abf53fd1
+      size: 161460
+    - path: data/warp/1980/20180102115319417-p05/correction.npz
+      hash: md5
+      md5: 314dd44f0d61f3c8bd8f287a6d1bbbb3
+      size: 50704
+    - path: data/warp/1980/20180102115319417-p05/transform.json
+      hash: md5
+      md5: 2fea56e9aad99570f3c7c15e479d5004
+      size: 264843
+    - path: data/warp/1980/20180102115319417-p06/correction.npz
+      hash: md5
+      md5: a809635f7eb9963f89b6495667e15078
+      size: 43408
+    - path: data/warp/1980/20180102115319417-p06/transform.json
+      hash: md5
+      md5: f0e0c9db4e65c56cb07674a006bc078b
+      size: 35479
+    - path: data/warp/1980/20180102115319417-p07/correction.npz
+      hash: md5
+      md5: 858a3c326bb43e87fe9bd295b017ba14
+      size: 49536
+    - path: data/warp/1980/20180102115319417-p07/transform.json
+      hash: md5
+      md5: 7e5113a5724e0c16842fdeab68f2f55a
+      size: 136557
+    - path: data/warp/1980/20180102115319417-p08/correction.npz
+      hash: md5
+      md5: 3a4dd0372d4866df95bab7165149c3ec
+      size: 27160
+    - path: data/warp/1980/20180102115319417-p08/transform.json
+      hash: md5
+      md5: 523ece737dd74fd92e2999220c7db748
+      size: 50829
+    - path: data/warp/1980/20180102115319417-p09/correction.npz
+      hash: md5
+      md5: 4d7308d4d06203862c80b8f816f3ff8c
+      size: 28896
+    - path: data/warp/1980/20180102115319417-p09/transform.json
+      hash: md5
+      md5: 55dd098f8b47b16b4a7181d35829b7a6
+      size: 95536
+    - path: data/warp/1980/20180102115319417-p10/correction.npz
+      hash: md5
+      md5: f71a08580ed279b13e086a9432654154
+      size: 42216
+    - path: data/warp/1980/20180102115319417-p10/transform.json
+      hash: md5
+      md5: c155daf9ae6cb342fd9ce28623e25d7e
+      size: 137490
+    - path: data/warp/1980/20180102115319417-p11/correction.npz
+      hash: md5
+      md5: d7f12a60d56aa9235a388478935eec44
+      size: 51432
+    - path: data/warp/1980/20180102115319417-p11/transform.json
+      hash: md5
+      md5: f3437e43b1345be60e0b318242753851
+      size: 93702
+    - path: data/warp/1980/20180102115319417-p12/correction.npz
+      hash: md5
+      md5: 371ed3cea87d16e0bd9d76a84c4d4948
+      size: 47544
+    - path: data/warp/1980/20180102115319417-p12/transform.json
+      hash: md5
+      md5: dec6279a4494c9f4a58c5e831ae99919
+      size: 54594
+    - path: data/warp/1980/20180102115319417-p13/correction.npz
+      hash: md5
+      md5: e66dd4be335e566ecbe2e296c0bbab5d
+      size: 51840
+    - path: data/warp/1980/20180102115319417-p13/transform.json
+      hash: md5
+      md5: 17f4754ce5b637fc229d0addec19f70a
+      size: 129620
+    - path: data/warp/1980/20180102115319417-p14/correction.npz
+      hash: md5
+      md5: c25ca1155d45243d58f4350604ac0230
+      size: 52568
+    - path: data/warp/1980/20180102115319417-p14/transform.json
+      hash: md5
+      md5: 52e7f821188f354a496f8071b5467f14
+      size: 129069
+    - path: data/warp/1980/20180102115319417-p15/correction.npz
+      hash: md5
+      md5: 43aaa8b2154f8ccca6c76f058b63f625
+      size: 53128
+    - path: data/warp/1980/20180102115319417-p15/transform.json
+      hash: md5
+      md5: 6c4c24127efdb94f07edd937469ae1d5
+      size: 273129
+    - path: data/warp/1980/20180102115319417-p16/correction.npz
+      hash: md5
+      md5: 60520aa8b7edda60dacacdc0ea6a1489
+      size: 53128
+    - path: data/warp/1980/20180102115319417-p16/transform.json
+      hash: md5
+      md5: c1136f93c3e0569872e7e4a14abd2d89
+      size: 85380
+    - path: data/warp/1980/20180102115319417-p17/correction.npz
+      hash: md5
+      md5: ef9f149129205e4de0ef274e137d545c
+      size: 51720
+    - path: data/warp/1980/20180102115319417-p17/transform.json
+      hash: md5
+      md5: f63b2b6eb8e8f0ee9b888a11decc454b
+      size: 119030
+    - path: data/warp/1980/20180102115319417-p18/correction.npz
+      hash: md5
+      md5: e5f10b84b8447ddf00c0978affdcd540
+      size: 25904
+    - path: data/warp/1980/20180102115319417-p18/transform.json
+      hash: md5
+      md5: d1ef99aacd264019bf9ab122e2354244
+      size: 37577
+    - path: data/warp/1980/20180102115319417-p19/correction.npz
+      hash: md5
+      md5: b83bf8dfc38dc5078b684fb4a3981a41
+      size: 34560
+    - path: data/warp/1980/20180102115319417-p19/transform.json
+      hash: md5
+      md5: 72fa2b98c681c0fd79d7969e77861018
+      size: 19399
+    - path: data/warp/1980/20180102115319417-p20/correction.npz
+      hash: md5
+      md5: 8dc514e6793dc70d82e2d5df5912e0d4
+      size: 46088
+    - path: data/warp/1980/20180102115319417-p20/transform.json
+      hash: md5
+      md5: b09bf12c8fdf448ad7422975d5bef31f
+      size: 57003
+    - path: data/warp/1980/20180102115319417-p21/correction.npz
+      hash: md5
+      md5: 6c3c89feb287d351c0e5966d59886a2b
+      size: 49784
+    - path: data/warp/1980/20180102115319417-p21/transform.json
+      hash: md5
+      md5: 6a2c3186e311df065fe4c72a72b6c1fa
+      size: 85504
+    - path: data/warp/1980/20180102115319417-p22/correction.npz
+      hash: md5
+      md5: 8ef3aeeb893b7a7f55dc05c7705abd2e
+      size: 51176
+    - path: data/warp/1980/20180102115319417-p22/transform.json
+      hash: md5
+      md5: c29009dfe63b31b453e075d770d7d479
+      size: 145707
+    - path: data/warp/1980/20180102115319417-p23/correction.npz
+      hash: md5
+      md5: 32ba01270462fc1c81cb8690e2b20796
+      size: 57120
+    - path: data/warp/1980/20180102115319417-p23/transform.json
+      hash: md5
+      md5: 51c8a68d2ba897337b2b89665a0c9311
+      size: 127738
+    - path: data/warp/1980/20180102115319417-p24/correction.npz
+      hash: md5
+      md5: 12e67709f1f5590d3d973385ccd99fa3
+      size: 51872
+    - path: data/warp/1980/20180102115319417-p24/transform.json
+      hash: md5
+      md5: 400c638aeec3b536daaff6bc348c44b2
+      size: 191464
+    - path: data/warp/1980/20180102115319417-p25/correction.npz
+      hash: md5
+      md5: 02d3a4d196346f0389e6db8fe3456860
+      size: 48664
+    - path: data/warp/1980/20180102115319417-p25/transform.json
+      hash: md5
+      md5: e25c1040e70868db5d6453761e491dbe
+      size: 112004
+    - path: data/warp/1980/20180102115319417-p26/correction.npz
+      hash: md5
+      md5: b0c07a04df7c3c613612d690312cb326
+      size: 51352
+    - path: data/warp/1980/20180102115319417-p26/transform.json
+      hash: md5
+      md5: b187e958adc5ccfd33b56cd83566299f
+      size: 126133
+    - path: data/warp/1980/20180102115319417-p27/correction.npz
+      hash: md5
+      md5: d44ef809fb49e44d2f4d0316a35b2ee4
+      size: 46504
+    - path: data/warp/1980/20180102115319417-p27/transform.json
+      hash: md5
+      md5: be79b62baf68aaede888faa2e4ec8f75
+      size: 40937
+    - path: data/warp/1980/20180102115319417-p28/correction.npz
+      hash: md5
+      md5: 9bcc20571573f84d85bd2c06cc6699e4
+      size: 51144
+    - path: data/warp/1980/20180102115319417-p28/transform.json
+      hash: md5
+      md5: fd84122e3db8963b4ecba7adeced6632
+      size: 94479
+    - path: data/warp/1980/20180102115319417-p29/correction.npz
+      hash: md5
+      md5: a0a985bec24e58ca2dab9454318e5b01
+      size: 31272
+    - path: data/warp/1980/20180102115319417-p29/transform.json
+      hash: md5
+      md5: 3cb8f7b2cdb753de527c212621b3da0d
+      size: 28704
+    - path: data/warp/1980/20180102115319417-p30/correction.npz
+      hash: md5
+      md5: 81725de46c3542ba5f757e36854b91f1
+      size: 46536
+    - path: data/warp/1980/20180102115319417-p30/transform.json
+      hash: md5
+      md5: 70b3345f96bb764b7efa71439bc09b90
+      size: 23569
+    - path: data/warp/1980/20180102115319417-p31/correction.npz
+      hash: md5
+      md5: 9839fbfee72b95697a7988029b671e75
+      size: 49992
+    - path: data/warp/1980/20180102115319417-p31/transform.json
+      hash: md5
+      md5: 6b27308787df5de796a1537e84228db9
+      size: 288778
+    - path: data/warp/1980/20180102115319417-p33/correction.npz
+      hash: md5
+      md5: db83c22bf91aded1bd8971cf29a912c9
+      size: 48336
+    - path: data/warp/1980/20180102115319417-p33/transform.json
+      hash: md5
+      md5: e3dd4a5e5a264b81d25b8fc3d785326c
+      size: 19118
+    - path: data/warp/1980/20180102115319417-p34/correction.npz
+      hash: md5
+      md5: edba7667ef1d9384c2d50e7223de96c1
+      size: 46088
+    - path: data/warp/1980/20180102115319417-p34/transform.json
+      hash: md5
+      md5: 2fe08d251bf9eff7d45c3151eeb0e319
+      size: 57045
+    - path: data/work/1972/20180102113004574-p01/district_labels.json
+      hash: md5
+      md5: c79acddd273052391fa82aa146b25ffb
+      size: 5830
+    - path: data/work/1972/20180102113004574-p01/page.png
+      hash: md5
+      md5: 2e59e8bc1cbb24a8deb51204e2437896
+      size: 3404658
+    - path: data/work/1972/20180102113004574-p02/district_labels.json
+      hash: md5
+      md5: 625ac4c63034916526ca64baecca37b1
+      size: 17115
+    - path: data/work/1972/20180102113004574-p02/page.png
+      hash: md5
+      md5: e56941f6ceda2e94b7a45dac49758e72
+      size: 3634259
+    - path: data/work/1972/20180102113004574-p03/district_labels.json
+      hash: md5
+      md5: fb4745e468bcf2748008a7746d942b2b
+      size: 10080
+    - path: data/work/1972/20180102113004574-p03/page.png
+      hash: md5
+      md5: 6df133b80f649beb05b3736fe61a0ed8
+      size: 2112593
+    - path: data/work/1972/20180102113004574-p04/district_labels.json
+      hash: md5
+      md5: ec21a7ac6f9a747a0fa328ad12ff5434
+      size: 7622
+    - path: data/work/1972/20180102113004574-p04/page.png
+      hash: md5
+      md5: ab946fdcf72f95b40129ba41fd34c7f0
+      size: 1536428
+    - path: data/work/1972/20180102113004574-p05/district_labels.json
+      hash: md5
+      md5: a819fa2fdb9e703bdb2516eedc88ac94
+      size: 8238
+    - path: data/work/1972/20180102113004574-p05/page.png
+      hash: md5
+      md5: a607dd970db7c993139151cfdfca9194
+      size: 2161502
+    - path: data/work/1972/20180102113004574-p06/district_labels.json
+      hash: md5
+      md5: 53a275706d11e477528fe0c4f9c1c17f
+      size: 13449
+    - path: data/work/1972/20180102113004574-p06/page.png
+      hash: md5
+      md5: aef6ed5b666142ebeb9a1c0bdee95c87
+      size: 3236537
+    - path: data/work/1972/20180102113004574-p07/district_labels.json
+      hash: md5
+      md5: e4a84b462940691bb5549fbdeeba8a4a
+      size: 16213
+    - path: data/work/1972/20180102113004574-p07/page.png
+      hash: md5
+      md5: 7fe7b99aa419f5ee86b6f236b5242d78
+      size: 3763375
+    - path: data/work/1972/20180102113004574-p08/district_labels.json
+      hash: md5
+      md5: e6ba91765062a4e25c2e0554060ac51d
+      size: 6614
+    - path: data/work/1972/20180102113004574-p08/page.png
+      hash: md5
+      md5: d9eb66c113b5b93e5fb44dcf1d4e1565
+      size: 2621283
+    - path: data/work/1972/20180102113004574-p09/district_labels.json
+      hash: md5
+      md5: 56ee14ac765f2bb8fbbb7656699b49d1
+      size: 1486
+    - path: data/work/1972/20180102113004574-p09/page.png
+      hash: md5
+      md5: d47ee8e2b38a8bf1a84a90b77a003e1d
+      size: 1796850
+    - path: data/work/1972/20180102113004574-p10/district_labels.json
+      hash: md5
+      md5: d6a19355a5b46cfe6360f875fcfa73e8
+      size: 8605
+    - path: data/work/1972/20180102113004574-p10/page.png
+      hash: md5
+      md5: db78f177dd6bfbaa5f04d851c476a50a
+      size: 3695355
+    - path: data/work/1972/20180102113004574-p11/district_labels.json
+      hash: md5
+      md5: 9a15e2d363547c3e6b9c1851111bbcff
+      size: 12363
+    - path: data/work/1972/20180102113004574-p11/page.png
+      hash: md5
+      md5: bdf94a2416e884a6da0bd0f130539f77
+      size: 4027261
+    - path: data/work/1972/20180102113004574-p12/district_labels.json
+      hash: md5
+      md5: f438bc2ffdc9d234bdf0c86e97d0a80d
+      size: 8009
+    - path: data/work/1972/20180102113004574-p12/page.png
+      hash: md5
+      md5: 65353dcf9b6db73344ca63922ffb095a
+      size: 3652696
+    - path: data/work/1972/20180102113004574-p13/district_labels.json
+      hash: md5
+      md5: 42b8944989c9accea3c94ba7622a4d9e
+      size: 5945
+    - path: data/work/1972/20180102113004574-p13/page.png
+      hash: md5
+      md5: 1dfd4d92cac7765afd1bc5d725894233
+      size: 2201357
+    - path: data/work/1972/20180102113004574-p14/district_labels.json
+      hash: md5
+      md5: 9623182b56ea51bf5369ad299302a23a
+      size: 393
+    - path: data/work/1972/20180102113004574-p14/page.png
+      hash: md5
+      md5: f2efbee4c48e602d1ad2d99f501c2923
+      size: 1874632
+    - path: data/work/1972/20180102113004574-p15/district_labels.json
+      hash: md5
+      md5: 2db439eaae1c3cc157acd74e4f91ccc1
+      size: 232
+    - path: data/work/1972/20180102113004574-p15/page.png
+      hash: md5
+      md5: 67a8437da6b5030ebc3dcc248d855059
+      size: 1544044
+    - path: data/work/1972/20180102113004574-p16/district_labels.json
+      hash: md5
+      md5: 1bc670c74d0d30f6558ad4c3ba6af435
+      size: 101
+    - path: data/work/1972/20180102113004574-p16/page.png
+      hash: md5
+      md5: 0c6c3c812877eab8927cd90a42cea4f7
+      size: 2946496
+    - path: data/work/1972/20180102113004574-p17/district_labels.json
+      hash: md5
+      md5: 7d52b88e6d7b22f3cc3e1b4bfbd045e9
+      size: 9288
+    - path: data/work/1972/20180102113004574-p17/page.png
+      hash: md5
+      md5: 4fb59db31d5f0f18498202253015fd3d
+      size: 3462172
+    - path: data/work/1972/20180102113004574-p18/district_labels.json
+      hash: md5
+      md5: e98d208c372195e0629e9d37bd201492
+      size: 7607
+    - path: data/work/1972/20180102113004574-p18/page.png
+      hash: md5
+      md5: f5afd20b8032ca0abe8d81650191da1e
+      size: 3449801
+    - path: data/work/1972/20180102113004574-p19/district_labels.json
+      hash: md5
+      md5: d9f06628b9a0df4747feb50eef8f50d7
+      size: 4603
+    - path: data/work/1972/20180102113004574-p19/page.png
+      hash: md5
+      md5: ef305a0c773a4a17280b2cc6c7cc2342
+      size: 3974848
+    - path: data/work/1972/20180102113004574-p20/district_labels.json
+      hash: md5
+      md5: 93ac617f38664367e582c46516effa13
+      size: 1731
+    - path: data/work/1972/20180102113004574-p20/page.png
+      hash: md5
+      md5: 5073197f6e4c3c495be895edf168c7cc
+      size: 1381778
+    - path: data/work/1972/20180102113004574-p21/district_labels.json
+      hash: md5
+      md5: 2759f592054546b92644d7062a9cb57b
+      size: 1633
+    - path: data/work/1972/20180102113004574-p21/page.png
+      hash: md5
+      md5: 715df83319c97447d249b863ad115bbb
+      size: 2152831
+    - path: data/work/1972/20180102113004574-p22/district_labels.json
+      hash: md5
+      md5: c0974ecd4ba2ff4f67e72fb53c071b9f
+      size: 5417
+    - path: data/work/1972/20180102113004574-p22/page.png
+      hash: md5
+      md5: 02a38977f4e327f0fa9b1afc0740e4bb
+      size: 3095275
+    - path: data/work/1972/20180102113004574-p23/district_labels.json
+      hash: md5
+      md5: 522ad7c5c85b1b4dac8abdec0dc28adc
+      size: 7375
+    - path: data/work/1972/20180102113004574-p23/page.png
+      hash: md5
+      md5: 2a95efdadb870200d80f38e4d71cf68e
+      size: 3513522
+    - path: data/work/1972/20180102113004574-p24/district_labels.json
+      hash: md5
+      md5: 05ab580a8a8596fcdc44297f90f31a04
+      size: 3897
+    - path: data/work/1972/20180102113004574-p24/page.png
+      hash: md5
+      md5: 4171fb2902836b6fff1ac7a297060fab
+      size: 2669216
+    - path: data/work/1972/20180102113004574-p25/district_labels.json
+      hash: md5
+      md5: ff166130a5b6c080005e93689f0d5580
+      size: 819
+    - path: data/work/1972/20180102113004574-p25/page.png
+      hash: md5
+      md5: 3e174fa8339ec8021b2f2c42a266a8f7
+      size: 2197253
+    - path: data/work/1972/20180102113004574-p26/district_labels.json
+      hash: md5
+      md5: 1d03bfcd378847ad7875c4ea737606f6
+      size: 2554
+    - path: data/work/1972/20180102113004574-p26/page.png
+      hash: md5
+      md5: 5d3cfc4e8c5086dd2e86e277b1485eb4
+      size: 3673967
+    - path: data/work/1972/20180102113004574-p27/district_labels.json
+      hash: md5
+      md5: a747dee1d81912323f14cde42af560d2
+      size: 2655
+    - path: data/work/1972/20180102113004574-p27/page.png
+      hash: md5
+      md5: 1bae531f0ec2901c23f50168e3f6dd38
+      size: 3798320
+    - path: data/work/1972/20180102113004574-p28/district_labels.json
+      hash: md5
+      md5: b3bc8258aac129d865da6511c417bad4
+      size: 3360
+    - path: data/work/1972/20180102113004574-p28/page.png
+      hash: md5
+      md5: 965a9556b878beb7ae9f195360eb1735
+      size: 3457110
+    - path: data/work/1972/20180102113004574-p29/district_labels.json
+      hash: md5
+      md5: 5392ec6709e3382d13ccbf383ff2968f
+      size: 2969
+    - path: data/work/1972/20180102113004574-p29/page.png
+      hash: md5
+      md5: 5f7b2b54f00851210412c0334d3e4dd7
+      size: 2164724
+    - path: data/work/1972/20180102113004574-p31/district_labels.json
+      hash: md5
+      md5: 0c1720fadab811980207a1c1843cb885
+      size: 198
+    - path: data/work/1972/20180102113004574-p31/page.png
+      hash: md5
+      md5: 37df92a51b9f54695a75b826f32895e9
+      size: 2119805
+    - path: data/work/1975/20180102114142444-p02/district_labels.json
+      hash: md5
+      md5: 36e1dec1008861a81bed09f4fb67c27e
+      size: 5834
+    - path: data/work/1975/20180102114142444-p02/page.png
+      hash: md5
+      md5: 6254cca920769131ec1c401010fbed14
+      size: 3304292
+    - path: data/work/1975/20180102114142444-p03/district_labels.json
+      hash: md5
+      md5: e726b5cc6616361c35d95ec5224e02a1
+      size: 16816
+    - path: data/work/1975/20180102114142444-p03/page.png
+      hash: md5
+      md5: f046b0ee6dde4203f0a7b531a005c354
+      size: 3620533
+    - path: data/work/1975/20180102114142444-p04/district_labels.json
+      hash: md5
+      md5: 7c7f7937b27a1beed4a098f1133e6348
+      size: 10277
+    - path: data/work/1975/20180102114142444-p04/page.png
+      hash: md5
+      md5: a3fe89e54960914a53272a162b47a425
+      size: 2098845
+    - path: data/work/1975/20180102114142444-p05/district_labels.json
+      hash: md5
+      md5: d90029793703fb34b6fa9332ba29ad8a
+      size: 7524
+    - path: data/work/1975/20180102114142444-p05/page.png
+      hash: md5
+      md5: 20e632a061dbf9b0683a9344cf67957a
+      size: 1542997
+    - path: data/work/1975/20180102114142444-p06/district_labels.json
+      hash: md5
+      md5: c0837b2dc90ac09555450d6f6e7d423e
+      size: 8238
+    - path: data/work/1975/20180102114142444-p06/page.png
+      hash: md5
+      md5: 695ad902e05177b2764009dc266a0952
+      size: 2075546
+    - path: data/work/1975/20180102114142444-p07/district_labels.json
+      hash: md5
+      md5: 7fa069432c2adb469089d9b025300c1f
+      size: 13448
+    - path: data/work/1975/20180102114142444-p07/page.png
+      hash: md5
+      md5: 45631bfd641a0ea47990b5ee884a3440
+      size: 3139158
+    - path: data/work/1975/20180102114142444-p08/district_labels.json
+      hash: md5
+      md5: fcb0384312b62f272fd4fa88e5b5d1e6
+      size: 16214
+    - path: data/work/1975/20180102114142444-p08/page.png
+      hash: md5
+      md5: ac97d6463863829c0fcf2dd155317519
+      size: 3699586
+    - path: data/work/1975/20180102114142444-p09/district_labels.json
+      hash: md5
+      md5: d11f3bc109d333d9ddb669ce9ddd36df
+      size: 6814
+    - path: data/work/1975/20180102114142444-p09/page.png
+      hash: md5
+      md5: dba78ddd5c80d1dba890f5d63fcda859
+      size: 2613655
+    - path: data/work/1975/20180102114142444-p10/district_labels.json
+      hash: md5
+      md5: d7c37cb998e87d7c947daae86f269088
+      size: 1486
+    - path: data/work/1975/20180102114142444-p10/page.png
+      hash: md5
+      md5: db65f8bc395c05f735069b9b23498873
+      size: 1797272
+    - path: data/work/1975/20180102114142444-p11/district_labels.json
+      hash: md5
+      md5: 9b6318106e1b93ea3175e7590fd12bcb
+      size: 8800
+    - path: data/work/1975/20180102114142444-p11/page.png
+      hash: md5
+      md5: e7168be0eca6d3869e3b1261969af652
+      size: 3571929
+    - path: data/work/1975/20180102114142444-p12/district_labels.json
+      hash: md5
+      md5: 359f63946ada055773526892b309c7a3
+      size: 12166
+    - path: data/work/1975/20180102114142444-p12/page.png
+      hash: md5
+      md5: 66d7d5cb38178eb429b5a15bd2bccf60
+      size: 3998291
+    - path: data/work/1975/20180102114142444-p13/district_labels.json
+      hash: md5
+      md5: 4f75e1ff99142e30b90866232671c1d9
+      size: 7811
+    - path: data/work/1975/20180102114142444-p13/page.png
+      hash: md5
+      md5: 1fbe7adb48b291407e3d13e4eb531515
+      size: 3570637
+    - path: data/work/1975/20180102114142444-p14/district_labels.json
+      hash: md5
+      md5: 7a00a7a2b618b1f15bbbd6ea858b3c7b
+      size: 6239
+    - path: data/work/1975/20180102114142444-p14/page.png
+      hash: md5
+      md5: 1b14f960e03099411c58dd2016c0e0b2
+      size: 2138914
+    - path: data/work/1975/20180102114142444-p15/district_labels.json
+      hash: md5
+      md5: b747ddbe2b2a2bbf6a1c2e6d27fe6c87
+      size: 8980
+    - path: data/work/1975/20180102114142444-p15/page.png
+      hash: md5
+      md5: be63d1f6ede80efc5d7a98fca127b0c1
+      size: 3446968
+    - path: data/work/1975/20180102114142444-p16/district_labels.json
+      hash: md5
+      md5: 7385f2dd70d604adf3167067b6fc0706
+      size: 7609
+    - path: data/work/1975/20180102114142444-p16/page.png
+      hash: md5
+      md5: d8520f4ff21e27eab966e02aa84e0ffa
+      size: 3351052
+    - path: data/work/1975/20180102114142444-p17/district_labels.json
+      hash: md5
+      md5: 47ce6c94a8c55dbf76e1b8b4226db812
+      size: 4602
+    - path: data/work/1975/20180102114142444-p17/page.png
+      hash: md5
+      md5: b4b524285829434cfc23b5118615a488
+      size: 2534599
+    - path: data/work/1975/20180102114142444-p18/district_labels.json
+      hash: md5
+      md5: b67b07171d7cff1e37dc717e1811f421
+      size: 1731
+    - path: data/work/1975/20180102114142444-p18/page.png
+      hash: md5
+      md5: 8d3a8befc927a972d138b16c4f6859df
+      size: 1336377
+    - path: data/work/1975/20180102114142444-p19/district_labels.json
+      hash: md5
+      md5: 32804a85f093bf11d4725177115572c0
+      size: 1634
+    - path: data/work/1975/20180102114142444-p19/page.png
+      hash: md5
+      md5: 96345a9c22bca24d5a31eceeaed3dae4
+      size: 2087076
+    - path: data/work/1975/20180102114142444-p20/district_labels.json
+      hash: md5
+      md5: 6e48599dadf71228733d68b20095a8bc
+      size: 5514
+    - path: data/work/1975/20180102114142444-p20/page.png
+      hash: md5
+      md5: dd15a8f19f826e92d7ac08fa4d9e4126
+      size: 3090149
+    - path: data/work/1975/20180102114142444-p21/district_labels.json
+      hash: md5
+      md5: 77a9d135c0bd2a0182e7da42c64dd321
+      size: 7378
+    - path: data/work/1975/20180102114142444-p21/page.png
+      hash: md5
+      md5: 1ba79593bd50fc9535a444fb43359f0d
+      size: 3575631
+    - path: data/work/1975/20180102114142444-p22/district_labels.json
+      hash: md5
+      md5: 4aa2760a0743b3a383a910417a0fc52d
+      size: 3902
+    - path: data/work/1975/20180102114142444-p22/page.png
+      hash: md5
+      md5: 9706a899fd6c8b11055d04a3e8068a54
+      size: 2715100
+    - path: data/work/1975/20180102114142444-p23/district_labels.json
+      hash: md5
+      md5: 194928e876ab3a73629f5e9925eab27c
+      size: 820
+    - path: data/work/1975/20180102114142444-p23/page.png
+      hash: md5
+      md5: 899eac82939704837bcaf64d4b217304
+      size: 2203881
+    - path: data/work/1975/20180102114142444-p24/district_labels.json
+      hash: md5
+      md5: 11914ff47b2099d7eed0ae3c45461025
+      size: 2654
+    - path: data/work/1975/20180102114142444-p24/page.png
+      hash: md5
+      md5: 8d39d644624976d90cf81f0993d4b181
+      size: 3475523
+    - path: data/work/1975/20180102114142444-p25/district_labels.json
+      hash: md5
+      md5: b65f38e0fd2de24714d7c40517da5e87
+      size: 2655
+    - path: data/work/1975/20180102114142444-p25/page.png
+      hash: md5
+      md5: d00b1580ddd5fb0ca9633a9075c9a2fb
+      size: 3745566
+    - path: data/work/1975/20180102114142444-p26/district_labels.json
+      hash: md5
+      md5: 687ffd5e846339b1041ff434626405f6
+      size: 3262
+    - path: data/work/1975/20180102114142444-p26/page.png
+      hash: md5
+      md5: 63c75befea81c9b6f78977eba7c792bf
+      size: 3467988
+    - path: data/work/1975/20180102114142444-p27/district_labels.json
+      hash: md5
+      md5: 1f455860cc0e972ab4300ab3a58bd64b
+      size: 2971
+    - path: data/work/1975/20180102114142444-p27/page.png
+      hash: md5
+      md5: abc8f8544ae80cb47800a33d9f9c841d
+      size: 2187459
+    - path: data/work/1975/20180102114142444-p28/district_labels.json
+      hash: md5
+      md5: 4dfdcbde65f2411055d668eee0750561
+      size: 3901
+    - path: data/work/1975/20180102114142444-p28/page.png
+      hash: md5
+      md5: 99d7a5bc8fc18430f63ee87e0b4b6d68
+      size: 2700481
+    - path: data/work/1975/20180102114142444-p29/district_labels.json
+      hash: md5
+      md5: ee1a6bd55c785bfdd0d52ba8ea4865c8
+      size: 101
+    - path: data/work/1975/20180102114142444-p29/page.png
+      hash: md5
+      md5: 184c2b707984a02d049612a5a3104672
+      size: 1744481
+    - path: data/work/1975/20180102114142444-p30/district_labels.json
+      hash: md5
+      md5: 3ee2a8a760c7b1162e46a685ff047c70
+      size: 201
+    - path: data/work/1975/20180102114142444-p30/page.png
+      hash: md5
+      md5: d19498b5ec05f71ffa0fe5de829d6920
+      size: 2903975
+    - path: data/work/1975/20180102114142444-p32/district_labels.json
+      hash: md5
+      md5: 5b8e7736671fb6338038295b32a5c7d5
+      size: 101
+    - path: data/work/1975/20180102114142444-p32/page.png
+      hash: md5
+      md5: 7500bd048f6479e9ebd511b3e0d572d0
+      size: 1766384
+    - path: data/work/1980/20180102115319417-p02/district_labels.json
+      hash: md5
+      md5: 4796c2c3ccff9ee0225e71888d8083f7
+      size: 13251
+    - path: data/work/1980/20180102115319417-p02/page.png
+      hash: md5
+      md5: 3cdb2f350ac62dd4f518f570db859ad7
+      size: 2658830
+    - path: data/work/1980/20180102115319417-p03/district_labels.json
+      hash: md5
+      md5: bc1d73e88ad164f1dcf4637e64a33bc4
+      size: 9180
+    - path: data/work/1980/20180102115319417-p03/page.png
+      hash: md5
+      md5: 7f39190747b8656468b1dbb55035f2bc
+      size: 2650741
+    - path: data/work/1980/20180102115319417-p04/district_labels.json
+      hash: md5
+      md5: 1f43e0cb4527d8902f764a60ef1920b1
+      size: 28637
+    - path: data/work/1980/20180102115319417-p04/page.png
+      hash: md5
+      md5: b82ed26f4308839201a8cd95d0ff5f7d
+      size: 3049964
+    - path: data/work/1980/20180102115319417-p05/district_labels.json
+      hash: md5
+      md5: a261be14f6369ece0d6f47c8f656233c
+      size: 7183
+    - path: data/work/1980/20180102115319417-p05/page.png
+      hash: md5
+      md5: 06a807ed45a2b7ba5e1045261f7979eb
+      size: 2495967
+    - path: data/work/1980/20180102115319417-p06/district_labels.json
+      hash: md5
+      md5: ab1a17188aa34415c6068b48795c32df
+      size: 13229
+    - path: data/work/1980/20180102115319417-p06/page.png
+      hash: md5
+      md5: b061c930075a3c7f1513bc4c37228d42
+      size: 2188648
+    - path: data/work/1980/20180102115319417-p07/district_labels.json
+      hash: md5
+      md5: f6075eca5d096fd560856c755855c433
+      size: 4598
+    - path: data/work/1980/20180102115319417-p07/page.png
+      hash: md5
+      md5: 6105a48f12d94590306d6f17b5136b58
+      size: 2010550
+    - path: data/work/1980/20180102115319417-p08/district_labels.json
+      hash: md5
+      md5: 46e472e1430c5bf98b40b9818c6297c9
+      size: 7754
+    - path: data/work/1980/20180102115319417-p08/page.png
+      hash: md5
+      md5: a6bef3e50da3c4de55b4a7304965b361
+      size: 1421840
+    - path: data/work/1980/20180102115319417-p09/district_labels.json
+      hash: md5
+      md5: aedae425dc54351722cd854095d54be0
+      size: 1730
+    - path: data/work/1980/20180102115319417-p09/page.png
+      hash: md5
+      md5: f31496ab4fdf0beace981699ce40b17b
+      size: 1023423
+    - path: data/work/1980/20180102115319417-p10/district_labels.json
+      hash: md5
+      md5: a6a510e52b78718deca7596b73c01f90
+      size: 8934
+    - path: data/work/1980/20180102115319417-p10/page.png
+      hash: md5
+      md5: 13ed8b85a1888295f563ba0db766306d
+      size: 2077682
+    - path: data/work/1980/20180102115319417-p11/district_labels.json
+      hash: md5
+      md5: 07a9e664e1d2f457c98485e529889d79
+      size: 1633
+    - path: data/work/1980/20180102115319417-p11/page.png
+      hash: md5
+      md5: 1e7b1dd281a753fe2627c3e59e95ae49
+      size: 1600401
+    - path: data/work/1980/20180102115319417-p12/district_labels.json
+      hash: md5
+      md5: 6a30448678715a75ec5a1042e9eb7b01
+      size: 14315
+    - path: data/work/1980/20180102115319417-p12/page.png
+      hash: md5
+      md5: 443590339f36f509e0f793c375dc2d1b
+      size: 2571692
+    - path: data/work/1980/20180102115319417-p13/district_labels.json
+      hash: md5
+      md5: 2bed54cbd83345bd1442fd262e1b1b12
+      size: 5416
+    - path: data/work/1980/20180102115319417-p13/page.png
+      hash: md5
+      md5: ecf11db1772fa041ce9443bf078eebd9
+      size: 2435396
+    - path: data/work/1980/20180102115319417-p14/district_labels.json
+      hash: md5
+      md5: b41ba9a254efe13f11456a4f770a78d1
+      size: 32265
+    - path: data/work/1980/20180102115319417-p14/page.png
+      hash: md5
+      md5: 518564ddfd8bc0c041dc1d8ae9a14295
+      size: 3238451
+    - path: data/work/1980/20180102115319417-p15/district_labels.json
+      hash: md5
+      md5: b26bf7d3446c65baf50eac604022684f
+      size: 6866
+    - path: data/work/1980/20180102115319417-p15/page.png
+      hash: md5
+      md5: bbbf58d9486bf5b6a5d40d807c489a3b
+      size: 2699051
+    - path: data/work/1980/20180102115319417-p16/district_labels.json
+      hash: md5
+      md5: 7316e6851d9def0e4aa2b27b5c5b8b64
+      size: 10353
+    - path: data/work/1980/20180102115319417-p16/page.png
+      hash: md5
+      md5: 8d09fe5e24b1da49d48b12ec503b767e
+      size: 2285672
+    - path: data/work/1980/20180102115319417-p17/district_labels.json
+      hash: md5
+      md5: 194da5b6df7721276477bd7cea4ea855
+      size: 3791
+    - path: data/work/1980/20180102115319417-p17/page.png
+      hash: md5
+      md5: 6c1cd0c575938e65d49d43634ed260b4
+      size: 2056628
+    - path: data/work/1980/20180102115319417-p18/district_labels.json
+      hash: md5
+      md5: 81afe67ff69a78e55a8d5e6cf962800c
+      size: 4608
+    - path: data/work/1980/20180102115319417-p18/page.png
+      hash: md5
+      md5: 0ecadb86176e46c93e060eed414dbc42
+      size: 1278056
+    - path: data/work/1980/20180102115319417-p19/district_labels.json
+      hash: md5
+      md5: 6cdaefc5bb0652b1a87bc5104909fbc2
+      size: 1976
+    - path: data/work/1980/20180102115319417-p19/page.png
+      hash: md5
+      md5: f286d2f051f24bbfb864d29f30dfdab5
+      size: 1379632
+    - path: data/work/1980/20180102115319417-p20/district_labels.json
+      hash: md5
+      md5: f919948db77f16aa11ab04ead960668a
+      size: 820
+    - path: data/work/1980/20180102115319417-p20/page.png
+      hash: md5
+      md5: 1224fea8e82ce42b3b65a45c6b66835a
+      size: 1727478
+    - path: data/work/1980/20180102115319417-p21/district_labels.json
+      hash: md5
+      md5: e95ea928f5200debe056c804860ceae8
+      size: 10547
+    - path: data/work/1980/20180102115319417-p21/page.png
+      hash: md5
+      md5: 34d1684c7e4ddc591d958ee46d6360ec
+      size: 2855453
+    - path: data/work/1980/20180102115319417-p22/district_labels.json
+      hash: md5
+      md5: ef50937802d2ed695e310f5db9cc2a17
+      size: 2655
+    - path: data/work/1980/20180102115319417-p22/page.png
+      hash: md5
+      md5: dd08c73ab0116e0e7ebcb9ba98a8f38a
+      size: 2741865
+    - path: data/work/1980/20180102115319417-p23/district_labels.json
+      hash: md5
+      md5: 06ec9a6be065bb3cedd0c5b0572cfd83
+      size: 12678
+    - path: data/work/1980/20180102115319417-p23/page.png
+      hash: md5
+      md5: 3de4313ea8741b3bf41152bdcef01f87
+      size: 3313699
+    - path: data/work/1980/20180102115319417-p24/district_labels.json
+      hash: md5
+      md5: 0d333b7434795a5afb031fa9ed84748f
+      size: 2756
+    - path: data/work/1980/20180102115319417-p24/page.png
+      hash: md5
+      md5: a606537572201b6c1246658a053a2228
+      size: 2990543
+    - path: data/work/1980/20180102115319417-p25/district_labels.json
+      hash: md5
+      md5: 32e879b31e9e9dd6fa1c78973b4e20ce
+      size: 9410
+    - path: data/work/1980/20180102115319417-p25/page.png
+      hash: md5
+      md5: 04a626b6c018623c3ea7781557c782da
+      size: 2936741
+    - path: data/work/1980/20180102115319417-p26/district_labels.json
+      hash: md5
+      md5: af6e2bc0c73ff73a8e1a4ef8c7df88f1
+      size: 3261
+    - path: data/work/1980/20180102115319417-p26/page.png
+      hash: md5
+      md5: e58a9bb3d9961ec2db10b5179374676d
+      size: 2751903
+    - path: data/work/1980/20180102115319417-p27/district_labels.json
+      hash: md5
+      md5: c39a261fb9a15ce448f1b2a7127f9c83
+      size: 6057
+    - path: data/work/1980/20180102115319417-p27/page.png
+      hash: md5
+      md5: de89ffd8baace70d375791cc46f4bded
+      size: 1647511
+    - path: data/work/1980/20180102115319417-p28/district_labels.json
+      hash: md5
+      md5: 845247a4b01742d98b8b653ec8741e64
+      size: 2969
+    - path: data/work/1980/20180102115319417-p28/page.png
+      hash: md5
+      md5: 0e6fe4513ebe57832df1fad5ac403ce4
+      size: 1667469
+    - path: data/work/1980/20180102115319417-p29/district_labels.json
+      hash: md5
+      md5: 8f9d53ed35e9fa6cb07bd2011fc8ae51
+      size: 393
+    - path: data/work/1980/20180102115319417-p29/page.png
+      hash: md5
+      md5: 36cafdaa15b0ade9090c27ac24ccb659
+      size: 1402021
+    - path: data/work/1980/20180102115319417-p30/district_labels.json
+      hash: md5
+      md5: 375cc92b7ed0c87bcdda010bf138c825
+      size: 101
+    - path: data/work/1980/20180102115319417-p30/page.png
+      hash: md5
+      md5: b2ffab66ae4624fc5297f1e46768e244
+      size: 1184422
+    - path: data/work/1980/20180102115319417-p31/district_labels.json
+      hash: md5
+      md5: 7eb1a3661b0392765e9df4b48a1e3a3f
+      size: 101
+    - path: data/work/1980/20180102115319417-p31/page.png
+      hash: md5
+      md5: f0f428dc9d05d433f14b4dd88f1044f5
+      size: 2191183
+    - path: data/work/1980/20180102115319417-p33/district_labels.json
+      hash: md5
+      md5: 74cb11e1d6674991902b4146522f7bd4
+      size: 101
+    - path: data/work/1980/20180102115319417-p33/page.png
+      hash: md5
+      md5: 8c47af3d1f841c41a5a75bc9a889e619
+      size: 1621404
+    - path: data/work/1980/20180102115319417-p34/district_labels.json
+      hash: md5
+      md5: 37da25c1a4876c235f168a95ef3adcb0
+      size: 820
+    - path: data/work/1980/20180102115319417-p34/page.png
+      hash: md5
+      md5: 7197d647f95ace6892497e8f2ff23e42
+      size: 1716164
+    - path: pyproject.toml
+      hash: md5
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
+    - path: saved-reads/answers/text-on-every-sheet.jsonl.gz
+      hash: md5
+      md5: 25e0d2238d64fc2a66ec75cf2bfce069
+      size: 4447671
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: 88692b30876ce3e220143a87f19e3011
+      size: 4194
+    - path: src/sfzmaps/solver/saved.py
+      hash: md5
+      md5: 5428b2e93ac078c2186cedf7b3aaaf8a
+      size: 2203
+    - path: src/sfzmaps/solver/strokes.py
+      hash: md5
+      md5: 0e71e98705b64da5b00c87d661f0684b
+      size: 7649
+    - path: src/sfzmaps/solver/textnet/__init__.py
+      hash: md5
+      md5: 6d4312a09af9edf5054abf24e821990c
+      size: 96
+    - path: src/sfzmaps/solver/textnet/boxes.py
+      hash: md5
+      md5: 9c3059873b3916274be61844bceb5490
+      size: 8542
+    - path: src/sfzmaps/solver/textnet/data.py
+      hash: md5
+      md5: 23777e3233f0ab350413be875a912e45
+      size: 21864
+    - path: src/sfzmaps/solver/textnet/model.py
+      hash: md5
+      md5: 838bfdbb95644c10cf39d2513c815fc7
+      size: 3851
+    - path: src/sfzmaps/solver/textnet/predict.py
+      hash: md5
+      md5: e8e73dd9017b4d4e65dcf04bf3943ab1
+      size: 3296
+    - path: src/sfzmaps/solver/textnet/score_stage.py
+      hash: md5
+      md5: f95793fb35869428f5234ceee77bbc76
+      size: 2438
+    - path: src/sfzmaps/solver/textnet/scores.py
+      hash: md5
+      md5: 3356ba9880e9b57b4291ab5cab8abf49
+      size: 15145
+    - path: src/sfzmaps/solver/textnet/train.py
+      hash: md5
+      md5: 0c1b4bda2838082ba33a747a5ee4e3c3
+      size: 21777
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
+    outs:
+    - path: data/solver/text-scores
+      hash: md5
+      md5: 70b3d4de09df9190139900f273041d6f.dir
+      size: 3546
+      nfiles: 1
+  solver-solve:
+    cmd: uv run --frozen sfzmaps stage solver-solve
+    deps:
+    - path: data/solver/labels
+      hash: md5
+      md5: ed5a17743fc3bbd264742546786f7856.dir
+      size: 13282293
+      nfiles: 11
+    - path: data/solver/lots
+      hash: md5
+      md5: c3cd76d18fbe0909ffc1915fd6863b23.dir
+      size: 46358760
+      nfiles: 2
+    - path: data/solver/page/ink.png
+      hash: md5
+      md5: f3f68746b8b4d652bde7eebc360d2960
+      size: 5938365
+    - path: data/solver/prints/prints.parquet
+      hash: md5
+      md5: a9e3454eed30890399561de94f895f90
+      size: 127060
+    - path: data/solver/walls
+      hash: md5
+      md5: a34f193c03871fa53c9b53db9bde17db.dir
+      size: 16389245
+      nfiles: 6
+    - path: data/warp/2000-digital-zoning
+      hash: md5
+      md5: 1dd5374120a1801f67fb942056e9247c.dir
+      size: 88908988
+      nfiles: 104
+    - path: inputs/2000-digital-zoning/label_fixes.csv
+      hash: md5
+      md5: e3cd6c6aa9fb876f7cb61d588a7573a8
+      size: 27564
+    - path: inputs/zoning-2000/table-corrections.csv
+      hash: md5
+      md5: 814fedda6f8917900ec0541d11b4e966
+      size: 13007
+    - path: pyproject.toml
+      hash: md5
+      md5: 6bf7e5e5326f524fc3fae85e8fd8fa1c
+      size: 1462
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/borders.py
+      hash: md5
+      md5: 62a71cb5efa4a4d9a235a3ab86ce4044
+      size: 7388
+    - path: src/sfzmaps/solver/city.py
+      hash: md5
+      md5: 740e8d5ef2c4d050740ed62909a08a0b
+      size: 6049
+    - path: src/sfzmaps/solver/codes.py
+      hash: md5
+      md5: 75cd0443d1ff7c6aa915429d7befa5cc
+      size: 1476
+    - path: src/sfzmaps/solver/energy.py
+      hash: md5
+      md5: 69f716fb86da4550d0ac15ea2566f232
+      size: 3773
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/holes.py
+      hash: md5
+      md5: c585564f67ddb183541046d05d3f6997
+      size: 12893
+    - path: src/sfzmaps/solver/labels.py
+      hash: md5
+      md5: 8dc704244c9e8b5396ed0fa6e8d5d291
+      size: 3501
+    - path: src/sfzmaps/solver/lots.py
+      hash: md5
+      md5: 7399c576690409a389991a1a56e0e826
+      size: 6551
+    - path: src/sfzmaps/solver/measures.py
+      hash: md5
+      md5: 7f318f8254b26b72c0061a8ece68947e
+      size: 8238
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: 88692b30876ce3e220143a87f19e3011
+      size: 4194
+    - path: src/sfzmaps/solver/placement.py
+      hash: md5
+      md5: 7959160c42e5e9094777e1bc23756aaf
+      size: 14294
+    - path: src/sfzmaps/solver/report.py
+      hash: md5
+      md5: 2fe2dbc6fdfc47a1a506d0efcdcd4fcd
+      size: 16672
+    - path: src/sfzmaps/solver/runs.py
+      hash: md5
+      md5: 6182a5bd007fc0bc6e7f9576bae355c5
+      size: 3940
+    - path: src/sfzmaps/solver/search.py
+      hash: md5
+      md5: 39f4841e301a80bc47ee2bc4c125cd0c
+      size: 8756
+    - path: src/sfzmaps/solver/solve.py
+      hash: md5
+      md5: 193f37a575ba9c6f945d657f963bcdd4
+      size: 10653
+    - path: src/sfzmaps/solver/table.py
+      hash: md5
+      md5: 93f7aa72e78e358ed74f663a47b4d7e6
+      size: 4053
+    - path: src/sfzmaps/solver/threads.py
+      hash: md5
+      md5: 70b7f2940d5bc2961507198af1a58ee1
+      size: 2124
+    - path: src/sfzmaps/solver/trust.py
+      hash: md5
+      md5: 67c3b206db20e574117b97587df356a8
+      size: 14559
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: 6e2c5b8e47a17a10a16252a8a9c87632
+      size: 333107
+    outs:
+    - path: data/solver/solve
+      hash: md5
+      md5: 96fe7a6441c09fd686e1ca4a929a4e02.dir
+      size: 115611959
+      nfiles: 18
