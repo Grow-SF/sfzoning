@@ -1,16 +1,22 @@
 """Pictures of a census incident, at 2x the grid (each grid px = 2 x 2 image px), cropped to its changed set D plus a
 margin, or to a map-ft window.
 
-    uv run python scripts/incidents/render_incident.py ID [--other RUN] [--window X0 Y0 X1 Y1] [--walls-b DIR]
+    uv run python scripts/incidents/render_incident.py ID [--other RUN] [--window X0 Y0 X1 Y1] [--walls-a DIR]
+                                                          [--walls-b DIR] [--out DIR] [--name NAME] [--ink]
+                                                          [--quarter Q]
+(ID 0 with --window and --quarter: a plain window, no incident tinted.)
 
   <ID>_lines.png   page ink grey; the table's district borders (green, widest), the run's (blue, middle) and the
                    other run's (red, thin, on top; default J7, `import_j7.py`); the incident's lots tinted yellow, the
                    rest of D orange; each label in the crop as a black dot with its top reading and trust
   <ID>_walls.png   every neighbour pair's border coloured by its wall probability under the run's walls for the
-                   incident's quarter (white 0 .. red 1); with --walls-b, by the change from those walls to DIR's
-                   (blue lower, red higher, +-0.5); the pairs whose drawn state differs between the run and the other
-                   run drawn wide
-Written into CENSUS_DIR/pictures/ (suffix _window with --window).  Reads only."""
+                   incident's quarter (white 0 .. red 1; --walls-a: another walls folder's, e.g. J7's); with
+                   --walls-b, by the change from those walls to DIR's (blue lower, red higher, +-0.5); the pairs whose
+                   drawn state differs between the run and the other run drawn wide
+  <ID>_ink.png     (--ink) the merged page's ink alone, black on white, with the labels: what is printed there
+  <ID>_text.png    (--ink) the ink coloured by the text detector's chance (the walls stage's text_chance.png)
+Written into CENSUS_DIR/pictures/ (or --out), named by the incident (or --name; suffix _window with --window).
+Reads only."""
 import argparse
 import json
 from pathlib import Path
@@ -51,9 +57,15 @@ def legend(img, lines):
     return np.vstack([strip, img])
 
 
-def main(incident: int, other: str, window, walls_b) -> None:
+def main(incident: int, other: str, window, walls_b, walls_a=None, out=None, name=None, ink_picture=False,
+         quarter=None) -> None:
     doc = json.loads((CENSUS_DIR / "incidents.json").read_text())
-    rec = next(t for t in doc["list"] if t["id"] == incident)
+    if incident == 0:           # a plain window: no incident tinted, the walls of `quarter`
+        if not (window and quarter):
+            raise SystemExit("ID 0 (no incident) needs --window and --quarter")
+        rec = {"quarter": quarter, "lots": [], "lots_count": 0, "table": "-", "solved": "-"}
+    else:
+        rec = next(t for t in doc["list"] if t["id"] == incident)
     run, q = doc["run"], rec["quarter"]
     C = city()
     a, b = C.a, C.b
@@ -61,8 +73,8 @@ def main(incident: int, other: str, window, walls_b) -> None:
     both = C.known[a] & C.known[b]
     tline = both & (C.table[a] != C.table[b])
     d_run, d_other = codes[a] != codes[b], codes_o[a] != codes_o[b]
-    I = np.array(rec["lots"])
-    D = changed_set(load_costs(run, q), I)
+    I = np.array(rec["lots"], int)
+    D = changed_set(load_costs(run, q), I) if len(I) else I
     lot, grown = C.lot_raster, C.grown_raster
     if window:
         x0, y0, x1, y1 = window
@@ -108,8 +120,34 @@ def main(incident: int, other: str, window, walls_b) -> None:
                 for col, th in (((255, 255, 255), 3), ((0, 0, 0), 1)):
                     cv2.putText(img, txt, (x + 6, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, th, cv2.LINE_AA)
 
-    out = CENSUS_DIR / "pictures"
+    out = Path(out) if out else CENSUS_DIR / "pictures"
     out.mkdir(parents=True, exist_ok=True)
+    stem = f"{name or incident}"
+    if ink_picture:
+        img = np.full((H * S, W * S, 3), 255, np.uint8)
+        img[up(ink) > 0] = (0, 0, 0)
+        for j, (c, r) in enumerate(cr):           # labels in red, so they don't hide the ink
+            if c0 <= c < c1 and r0 <= r < r1 and j in top:
+                x, y = int((c - c0) * S), int((r - r0) * S)
+                cv2.circle(img, (x, y), 4, (0, 0, 230), -1)
+                cv2.putText(img, f"{top[j][0]} {top[j][1]:.2f}", (x + 6, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45,
+                            (0, 0, 230), 1, cv2.LINE_AA)
+        img = legend(img, [(f"#{incident}: the merged page's ink as the solver reads it (grid {W * 4} x {H * 4} ft, "
+                            "2x: 1 image px = 2 ft)", None),
+                           ("red dot: a printed label, with its top reading and trust", None)])
+        cv2.imwrite(str(out / f"{stem}_ink{suffix}.png"), img)
+        tc = cv2.imread(str(runs.WALLS_DIR / "text_chance.png"), cv2.IMREAD_GRAYSCALE)
+        if tc is not None:          # the detector's text chance the walls read, on the inked px
+            t = np.kron(tc[r0:r1, c0:c1].astype(float) / 255.0, np.ones((S, S)))[..., None]
+            img = np.full((H * S, W * S, 3), 255, np.float64)
+            on = up(ink) > 0
+            col = (1 - t) * np.array([150, 150, 150]) + t * np.array([200, 60, 0])
+            img[on] = col[on]
+            img = legend(img.astype(np.uint8), [
+                (f"#{incident}: the text detector's chance on the page's ink (the walls stage's text_chance.png)",
+                 None),
+                ("grey: ink with chance 0 .. blue: chance 1", None)])
+            cv2.imwrite(str(out / f"{stem}_text{suffix}.png"), img)
     # picture 1: the lines
     img = np.full((H * S, W * S, 3), 255, np.uint8)
     inI, inD = np.zeros(C.n + 1, bool), np.zeros(C.n + 1, bool)
@@ -131,16 +169,17 @@ def main(incident: int, other: str, window, walls_b) -> None:
         ("table district border (widest)", TABLE), (f"{run}'s border (middle)", RUN),
         (f"{other}'s border (thin, on top)", OTHER),
         ("black dot: a printed label, with its top reading and trust", None)])
-    cv2.imwrite(str(out / f"{incident}_lines{suffix}.png"), img)
+    cv2.imwrite(str(out / f"{stem}_lines{suffix}.png"), img)
     # picture 2: the walls
-    lo_a = np.load(runs.WALLS_DIR / f"walls_{q}.npz")["lo_ab"].astype(float)
+    name_a = Path(walls_a).name if walls_a else "the stage's walls"
+    lo_a = np.load(Path(walls_a or runs.WALLS_DIR) / f"walls_{q}.npz")["lo_ab"].astype(float)
     if walls_b:
         v = expit(np.load(Path(walls_b) / f"walls_{q}.npz")["lo_ab"].astype(float)) - expit(lo_a)
         t = np.clip(v / 0.5, -1, 1)
-        title = f"change in wall probability: {walls_b} minus the stage's walls ({q}); blue lower, red higher"
+        title = f"change in wall probability: {Path(walls_b).name} minus {name_a} ({q}); blue lower, red higher"
     else:
         t = expit(lo_a)
-        title = f"wall probability, the stage's walls ({q}): white 0 .. red 1"
+        title = f"wall probability, {name_a} ({q}): white 0 .. red 1"
     img = np.full((H * S, W * S, 3), 255, np.uint8)
     img[up(ink) > 0] = (205, 205, 205)
     flip = d_run != d_other
@@ -158,8 +197,10 @@ def main(incident: int, other: str, window, walls_b) -> None:
     img = legend(img, [(f"#{incident}: {title}", None),
                        (f"thin: every neighbour pair; wide: pairs drawn differently by {run} and {other}", None),
                        ("grey: page ink; black dot: a printed label", None)])
-    cv2.imwrite(str(out / f"{incident}_walls{suffix}.png"), img)
-    print("wrote", out / f"{incident}_lines{suffix}.png", out / f"{incident}_walls{suffix}.png")
+    walls_name = (f"{stem}_walls" + (f"_{Path(walls_a).name}" if walls_a else "")
+                  + (f"_vs_{Path(walls_b).name}" if walls_b else ""))
+    cv2.imwrite(str(out / f"{walls_name}{suffix}.png"), img)
+    print("wrote", out / f"{stem}_lines{suffix}.png", out / f"{walls_name}{suffix}.png")
 
 
 if __name__ == "__main__":
@@ -167,6 +208,11 @@ if __name__ == "__main__":
     ap.add_argument("id", type=int)
     ap.add_argument("--other", default="j7", help="the run drawn thin on top (default J7)")
     ap.add_argument("--window", type=float, nargs=4, metavar=("X0", "Y0", "X1", "Y1"))
+    ap.add_argument("--walls-a", type=Path, help="the walls folder whose probability is drawn (default the stage's)")
     ap.add_argument("--walls-b", type=Path, help="colour the walls picture by the change to this walls folder")
+    ap.add_argument("--out", type=Path, help="the folder written into (default CENSUS_DIR/pictures)")
+    ap.add_argument("--name", help="the pictures' name stem (default the incident's id)")
+    ap.add_argument("--ink", action="store_true", help="also draw the page's ink alone")
+    ap.add_argument("--quarter", choices=("nw", "ne", "sw", "se"), help="with ID 0 (a plain window): whose walls")
     args = ap.parse_args()
-    main(args.id, args.other, args.window, args.walls_b)
+    main(args.id, args.other, args.window, args.walls_b, args.walls_a, args.out, args.name, args.ink, args.quarter)
