@@ -1,7 +1,7 @@
 """Searching for the lowest energy (energy.py).  Every move is priced with the exact energy and kept only if it
 lowers it.
 
-  expansion_moves   for each code in turn, the best set of lots to switch to it, by one minimum cut (PyMaxflow)
+  expansion_moves   for each code in turn, the best set of lots to switch to it, by one minimum cut (mincut.py)
   region_moves      whole regions (lots of one code joined across borders with no line) take another code, or two
                     touching regions swap codes
   compound_moves    a region takes the code its own labels favour while the neighbour holding that code moves to its
@@ -15,13 +15,13 @@ from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
 from sfzmaps.solver.energy import energy, wall_terms
+from sfzmaps.solver.mincut import min_cut
 
 
 def expansion_moves(U, a0, b0, odds, same_weight, start, sweeps=5, log=None):
     """switch-one-code-at-a-time minimum cuts.  The same-code cost of a border both of whose lots would switch away
     from different codes is bounded by charging it all to the side less willing to switch (exact unless that side
     switches alone); the exact energy decides whether a move is kept."""
-    import maxflow
     N, K = U.shape
     a, b, t, ra, rb, rr = wall_terms(a0, b0, odds, same_weight)
 
@@ -55,12 +55,8 @@ def expansion_moves(U, a0, b0, odds, same_weight, start, sweeps=5, log=None):
             m = np.minimum(c0, c1)
             c0 -= m
             c1 -= m
-            G = maxflow.Graph[float](N, len(a))
-            nodes = G.add_nodes(N)
-            G.add_grid_tedges(nodes, c1, c0)
-            G.add_edges(a.astype(np.int64), b.astype(np.int64), np.maximum(w, 0.0), np.zeros(len(w)))
-            G.maxflow()
-            switch = G.get_grid_segments(nodes) & ~fixed
+            sink_side, _ = min_cut(N, c1, c0, a, b, np.maximum(w, 0.0))
+            switch = sink_side & ~fixed
             if switch.any():
                 q = p.copy()
                 q[switch] = al

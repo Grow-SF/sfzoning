@@ -86,16 +86,11 @@ def overcharge(P, x, al, s):
 
 def cut_best(P, x, al):
     """the solver's own expansion cut to al from x: (lots switched, true dE, bounded dE)"""
-    import maxflow
+    from sfzmaps.solver.mincut import min_cut
     parts = L.expansion_parts(P.U, P.a, P.b, P.odds, L.SAME, x, al)
     c0, c1, ea, eb, w, const = parts
     m = np.minimum(c0, c1)
-    G = maxflow.Graph[float](len(x), len(ea))
-    nodes = G.add_nodes(len(x))
-    G.add_grid_tedges(nodes, c1 - m, c0 - m)
-    G.add_edges(ea.astype(np.int64), eb.astype(np.int64), np.maximum(w, 0.0), np.zeros(len(w)))
-    G.maxflow()
-    s = G.get_grid_segments(nodes) & (x != al)
+    s = min_cut(len(x), c1 - m, c0 - m, ea, eb, np.maximum(w, 0.0))[0] & (x != al)
     q = x.copy()
     q[s] = al
     e0 = L.bounded_energy(parts, np.zeros(len(x), bool))

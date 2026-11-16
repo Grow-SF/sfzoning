@@ -272,11 +272,11 @@ def bounded_energy(parts, s) -> float:
 def qpbo_binary(c0, c1, pa, pb, e00, e01, e10, e11, keep=None):
     """Roof duality (QPBO, Boros-Hammer; Kolmogorov-Rother 2007) for a binary energy
         sum_i c0[i] [s_i = 0] + c1[i] [s_i = 1] + sum_pairs E_{s_a s_b}
-    by one maximum flow on the doubled graph (PyMaxflow).  Returns (labels, labelled): the labels of the nodes the
+    by one maximum flow on the doubled graph (mincut.py).  Returns (labels, labelled): the labels of the nodes the
     roof dual fixes (persistency: some minimiser agrees with them there) and which nodes those are.  Unlabelled
     nodes come back as `keep` (default 0), which by autarky never raises the energy above the all-`keep`
     labelling's when keep is 0 everywhere (Kolmogorov-Rother 2007, Lempitsky et al. 2010)."""
-    import maxflow
+    from sfzmaps.solver.mincut import min_cut
     N = len(c0)
     # reparametrise each pair: E = e00 + (e10-e00) sa + (e01-e00) sb + (e11-e10-e01+e00) sa sb
     lin_a = e10 - e00
@@ -291,26 +291,22 @@ def qpbo_binary(c0, c1, pa, pb, e00, e01, e10, e11, keep=None):
     # non-submodular q sa sb (q>0) = q sa sb, on the doubled graph with the complement nodes
     np.add.at(u1, pb[sub], q[sub])
     # doubled graph: node i (x_i) and node N+i (complement, 1 - x_i)
-    G = maxflow.Graph[float](2 * N, 4 * len(pa))
-    G.add_nodes(2 * N)
     # unaries: u1 s_i  ->  half on i, half on its complement (cost u1/2 if s_i=1; on complement cost u1/2 if bar=0)
     h = u1 / 2.0
     src = np.where(h > 0, h, 0.0)        # sink segment (s=1) pays the source cap
     snk = np.where(h < 0, -h, 0.0)
     idx = np.arange(N)
-    G.add_grid_tedges(idx, src, snk)
-    G.add_grid_tedges(idx + N, snk, src)  # complement: in sink segment means bar=1 i.e. s=0, pays -h if h<0
+    src2 = np.concatenate([src, snk])   # the complements' terminal capacities are swapped
+    snk2 = np.concatenate([snk, src])   # complement: in sink segment means bar=1 i.e. s=0, pays -h if h<0
     # submodular pairs: -q (1-sa) sb  with -q >= 0: edge a->b cap -q/2, and on complements edge bar_b -> bar_a
     sa, sb, qs = pa[sub], pb[sub], -q[sub] / 2.0
-    G.add_edges(sa, sb, qs, np.zeros(len(qs)))
-    G.add_edges(sb + N, sa + N, qs, np.zeros(len(qs)))
     # non-submodular pairs: q sa sb with q > 0 = q sa (1 - bar_b): edge a -> bar_b? (a in sink=1, bar_b in source=0)
     # cost when a=1 and bar_b=0: an edge from bar_b (source side) to a (sink side) with cap q/2, and symmetric
     na, nb, qn = pa[~sub], pb[~sub], q[~sub] / 2.0
-    G.add_edges(nb + N, na, qn, np.zeros(len(qn)))
-    G.add_edges(na + N, nb, qn, np.zeros(len(qn)))
-    G.maxflow()
-    seg = G.get_grid_segments(np.arange(2 * N))
+    ea = np.concatenate([sa, sb + N, nb + N, na + N])
+    eb = np.concatenate([sb, sa + N, na, nb])
+    cap = np.concatenate([qs, qs, qn, qn])
+    seg = min_cut(2 * N, src2, snk2, ea, eb, cap)[0]
     x, xbar = seg[:N], seg[N:]
     labelled = x != xbar
     out = np.zeros(N, bool) if keep is None else keep.astype(bool).copy()

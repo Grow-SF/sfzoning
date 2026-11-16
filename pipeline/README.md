@@ -934,8 +934,8 @@ The commands, run from `pipeline/`:
   may stand for (its top reading's trust calibrated: logit = 0.128 + 1.085 logit(trust), `energy.TOP_READING_FIT`), a
   different code across a border with odds < 0 its −odds, and the same code across a border with odds > 0 its odds;
   a tiny tie-break (1e-4 × the cheapest path from each code's labels) settles lots no label reaches. The search runs
-  graph-cut expansion moves (PyMaxflow), then region moves, compound moves and expansion again until the energy stops
-  falling; a move is kept only if the exact energy falls. It is discrete: every lot gets the same code every run. Into
+  graph-cut expansion moves (a minimum cut, `solver/mincut.py`), then region moves, compound moves and expansion
+  again until the energy stops falling; a move is kept only if the exact energy falls. It is discrete: every lot gets the same code every run. Into
   the run's folder it writes `placement.npz`, `runs/RUN-<Q>.npz`, `.log` (the quarter's log: what its process
   prints, with no times; each solve's time and anything a process writes to stderr, a library's warning or a
   traceback, go to the console only) and each solve's costs (`RUN-<Q>-costs.npz`, for `holes`), the join
@@ -966,7 +966,8 @@ The commands, run from `pipeline/`:
 - `sfzmaps solver published [--districts PATH]` scores the pipeline's published 2000 map
   (`data/work/2000-digital-zoning/districts_raw.parquet`) the same way, as the run `published`.
 
-Dependency notes: the max-flow cuts use PyMaxflow (pinned in `pyproject.toml`), which is GPL-3.0 licensed.
+Dependency notes: the max-flow cuts use SciPy's `maximum_flow` (BSD-3-Clause) through `solver/mincut.py`, which scales
+the capacities to whole numbers and reports the bound on the rounding's effect on a cut's cost.
 
 **The fresh-clone check** (`scripts/fresh_clone_check.sh [--clone DIR] [--dry-run] [STAGE...]`) shows the stages
 rebuild from a clone. Push the branch first; it clones `origin`'s copy of it into `data/fresh-clone/` (git-ignored; the

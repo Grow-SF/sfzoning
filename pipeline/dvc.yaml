@@ -2782,6 +2782,7 @@ stages:
       - src/sfzmaps/solver/labels.py
       - src/sfzmaps/solver/lots.py
       - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
       - src/sfzmaps/solver/page.py
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/placement.py

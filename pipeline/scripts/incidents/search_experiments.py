@@ -380,15 +380,10 @@ def ordered_sequence(P, p0, perm):
 
 def one_expansion(P, p, al, same):
     """one of search.expansion_moves' cuts (code al, its bound on the same-code cost), kept if the energy falls"""
-    import maxflow
+    from sfzmaps.solver.mincut import min_cut
     c0, c1, ea, eb, w, _ = L.expansion_parts(P.U, P.a, P.b, P.odds, same, p, al)
     m = np.minimum(c0, c1)
-    G = maxflow.Graph[float](len(p), len(ea))
-    nodes = G.add_nodes(len(p))
-    G.add_grid_tedges(nodes, c1 - m, c0 - m)
-    G.add_edges(ea.astype(np.int64), eb.astype(np.int64), np.maximum(w, 0.0), np.zeros(len(w)))
-    G.maxflow()
-    s = G.get_grid_segments(nodes) & (p != al)
+    s = min_cut(len(p), c1 - m, c0 - m, ea, eb, np.maximum(w, 0.0))[0] & (p != al)
     if s.any():
         q = p.copy()
         q[s] = al
