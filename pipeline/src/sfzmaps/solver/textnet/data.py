@@ -4,13 +4,19 @@
   text       1 inside one of Terra's text boxes (every kind), drawn as the rotated rectangle of the word in page px
   kind       the box's kind (KINDS: 0 zoning code, 1 block number, 2 street name, 3 other), NO_KIND outside text
   angle      the reading direction in whole degrees, counter-clockwise from left-to-right, inside text (0 outside)
-  unknown    within READ_POINT_RADIUS of one of Sol's label points or, on the 2000 sheets, inside another pass's box
-             (OTHER_PASSES; the other passes read only those), but in no Terra box: text Terra may have missed, taught
-             neither as text nor as not-text
-  held out   the px whose map point, through the sheet's corrected placement, is in VALIDATION_AREA, when the sheet
-             holds it out
+  unknown    within the sheet's `point_radius` (READ_POINT_RADIUS, unless the sheet was read with another) of one of
+             Sol's label points or, on the 2000 sheets, inside another pass's box (OTHER_PASSES; the other passes read
+             only those), but in no Terra box: text Terra may have missed, taught neither as text nor as not-text
+  held out   the px whose map point, through the sheet's corrected placement, is in one of the areas the sheet holds
+             out (`SheetData.held`): VALIDATION_AREA for a trial (`VALIDATION`); a quarter of the city (`Quarter`) and
+             the answered blocks (`GridArea`) for the code reader's detectors (`reader_stage`); none for the stage's
   known      the px the loss reads: not unknown and not held out
   centres    the px a training crop may centre on: ink or text, not held out
+
+An area answers for map points whether each is in it (`contains`) and, from the placement's samples around a page
+window, whether all of the window's px are in it or none is, when that follows from the samples alone (`decided`): a
+px's map point is a weighted mean of four samples, so it lies in their bounding box.  Only where it doesn't follow is
+each px's map point found (`in_area`).
 
 The reading angle is kept in degrees, as Terra gives it; the model learns its cosine and sine.
 
@@ -22,9 +28,10 @@ as `cv2.fillPoly` / `cv2.circle` fill it on a page large enough that none is cut
 those of the whole page, cropped.
 
 A sheet's placement (`data/warp/<series>/<sheet>/transform.json`, and the correction it names) is read for the
-validation area and for the sheet's scale (`ft_per_px`, the scores' feet); a detector trained on the whole of every
+areas it holds out and for the sheet's scale (`ft_per_px`, the scores' feet); a detector trained on the whole of every
 map needs neither, and reads its sheets without it (`load_sheets(..., placement=False)`).
 """
+import dataclasses
 import json
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -42,8 +49,9 @@ from sfzmaps.transform import SheetTransform
 KINDS = {"zoning code": 0, "block number": 1, "street name": 2, "other": 3}
 NO_KIND = 255
 OTHER_PASSES = "experiments-2000/text-positions"   # the saved answers holding the other passes' boxes, page px
-READ_POINT_RADIUS = 30            # px around one of Sol's label points treated as unknown
+READ_POINT_RADIUS = 30            # px around one of Sol's label points treated as unknown (unless read with another)
 PLACEMENT_STEP = 32               # px between the page points where the placement itself is evaluated
+AREA_MARGIN = 1.0                 # ft: far more than a rounding of a px's weighted mean of samples can move its point
 # The validation area (x0, y0, x1, y1; EPSG:2227 ft): a page px is in it when its map point is (x0 <= x < x1,
 # y0 <= y < y1).  Held out of training on every map at once (so the reprints of one drawing can't teach it to each
 # other); the scores are computed on it.  Chosen once, by this rule: of the rectangles of 10% of the area the training
@@ -60,6 +68,94 @@ VALIDATION_AREA = (6000442.0, 2091727.0, 6008805.0, 2108453.0)
 BOX_FIELDS = ("words", "kinds", "angles", "other", "points")    # SheetData's arrays of boxes and points
 LOAD_THREADS = 8                  # sheets read at once
 BAND = 512                        # page rows drawn at a time when finding where crops may centre
+
+
+# --- areas of the map a sheet may hold out ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class MapRect:
+    """A rectangle of the map (EPSG:2227 ft): a map point (x, y) is in it when x0 <= x < x1 and y0 <= y < y1."""
+    x0: float
+    y0: float
+    x1: float
+    y1: float
+
+    def contains(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        return (x >= self.x0) & (x < self.x1) & (y >= self.y0) & (y < self.y1)
+
+    def decided(self, sx: np.ndarray, sy: np.ndarray) -> bool | None:
+        """From the samples around a window: False when they all lie on one side of an edge, True when they all lie
+        well inside, else None (see the module)."""
+        m = AREA_MARGIN
+        if (sx < self.x0 - m).all() or (sx >= self.x1 + m).all() or (sy < self.y0 - m).all() \
+                or (sy >= self.y1 + m).all():
+            return False
+        if ((sx >= self.x0 + m) & (sx < self.x1 - m) & (sy >= self.y0 + m) & (sy < self.y1 - m)).all():
+            return True
+        return None
+
+
+VALIDATION = MapRect(*VALIDATION_AREA)     # the trials' hold-out (`load_sheets(..., hold_out_validation=True)`)
+
+
+@dataclass(frozen=True)
+class Quarter:
+    """One quarter of the city by the solver's split (`grid.quarter_of`: nw 0, ne 1, sw 2, se 3)."""
+    q: int
+
+    def contains(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        return grid.quarter_of(np.stack([x, y], -1)).reshape(np.shape(x)) == self.q
+
+    def decided(self, sx: np.ndarray, sy: np.ndarray) -> bool | None:
+        """From the samples around a window: False when they all lie across a split line from the quarter, True when
+        they all lie well inside it, else None."""
+        m = AREA_MARGIN
+        sides = []
+        for v, split, high in ((sx, grid.QUARTER_SPLIT[0], self.q % 2 == 1), (sy, grid.QUARTER_SPLIT[1], self.q < 2)):
+            if (v >= split + m).all():
+                sides.append(high)
+            elif (v < split - m).all():
+                sides.append(not high)
+            else:
+                sides.append(None)
+        if False in sides:
+            return False
+        return True if all(sides) else None
+
+
+@dataclass(frozen=True, eq=False)
+class GridArea:
+    """Px of the solver's grid (`grid.to_grid`; grid px (col, row) covers [col, col + 1) x [row, row + 1)): a map
+    point is in the area when the grid px holding it is True in `mask`, a window of the grid whose top-left px is
+    (col0, row0); no point off the window is.  One area may be shared by many sheets."""
+    mask: np.ndarray        # bool (rows, cols)
+    col0: int = 0
+    row0: int = 0
+
+    def contains(self, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+        g = grid.to_grid(np.stack([x, y], -1))
+        col = np.floor(g[..., 0]).astype(np.int64) - self.col0
+        row = np.floor(g[..., 1]).astype(np.int64) - self.row0
+        h, w = self.mask.shape
+        on = (col >= 0) & (col < w) & (row >= 0) & (row < h)
+        out = np.zeros(np.shape(x), bool)
+        out[on] = self.mask[row[on], col[on]]
+        return out
+
+    def decided(self, sx: np.ndarray, sy: np.ndarray) -> bool | None:
+        """From the samples around a window: False when no grid px under their bounding box (grown by AREA_MARGIN) is
+        in the area, True when every one is, else None."""
+        m = AREA_MARGIN
+        (c0, r0), (c1, r1) = np.floor(grid.to_grid([[sx.min() - m, sy.max() + m], [sx.max() + m, sy.min() - m]]))
+        c0, r0, c1, r1 = int(c0) - self.col0, int(r0) - self.row0, int(c1) - self.col0 + 1, int(r1) - self.row0 + 1
+        h, w = self.mask.shape
+        k0, j0, k1, j1 = max(c0, 0), max(r0, 0), min(c1, w), min(r1, h)
+        if k0 >= k1 or j0 >= j1:
+            return False
+        under = self.mask[j0:j1, k0:k1]
+        if not under.any():
+            return False
+        return True if (k0, j0, k1, j1) == (c0, r0, c1, r1) and under.all() else None
 
 
 @dataclass
@@ -81,7 +177,8 @@ class SheetData:
                              # (0, 0, 2) when read without the placement
     ft_per_px: float         # the placement's scale over the page (`SheetTransform.median_scale_ft_per_px`); nan
                              # without the placement
-    hold_out: bool           # VALIDATION_AREA is held out: no loss there, no crop centred there
+    held: tuple = ()         # the areas held out (MapRect, Quarter, GridArea): no loss there, no crop centred there
+    point_radius: int = READ_POINT_RADIUS   # px around each of Sol's points that are unknown (outside every word)
 
 
 def reading_angle(rect: np.ndarray) -> int:
@@ -162,7 +259,7 @@ def other_boxes(sheet: str) -> list[dict]:
                                                                sheet)]
 
 
-# --- every map, compact, with the validation area held out ----------------------------------------------------------
+# --- every map, compact, with areas held out -------------------------------------------------------------------------
 
 def _corners(rects: list[np.ndarray]) -> np.ndarray:
     """Word rectangles' corners rounded to page px, int32 (n, 4, 2)."""
@@ -170,11 +267,12 @@ def _corners(rects: list[np.ndarray]) -> np.ndarray:
 
 
 def sheet_data(series: str, sheet: str, hold_out_validation: bool, terra: list[dict] | None = None,
-               others: list[dict] | None = None, placement: bool = True) -> SheetData:
-    """One sheet's SheetData (see the module).  `terra`: lines of Terra's saved answers holding the sheet's (read
-    from disk when None); `others`: the other passes' boxes of the sheet (read from disk when None, on a 2000 sheet;
-    none on another map's); `placement`: read the sheet's placement (needed to hold the validation area out:
-    ValueError without it)."""
+               others: list[dict] | None = None, placement: bool = True,
+               point_radius: int = READ_POINT_RADIUS) -> SheetData:
+    """One sheet's SheetData (see the module), holding VALIDATION out or nothing.  `terra`: lines of Terra's saved
+    answers holding the sheet's (read from disk when None); `others`: the other passes' boxes of the sheet (read from
+    disk when None, on a 2000 sheet; none on another map's); `placement`: read the sheet's placement (needed to hold
+    the validation area out: ValueError without it); `point_radius`: the px around Sol's points that are unknown."""
     if hold_out_validation and not placement:
         raise ValueError("the validation area is held out by the sheets' placements: read them (placement=True)")
     gray = load_page(sheet, series)
@@ -196,14 +294,16 @@ def sheet_data(series: str, sheet: str, hold_out_validation: bool, terra: list[d
         angles=np.array([reading_angle(r) for r in rects], np.int16),
         other=_corners([word_rect(b["box"], float(b.get("angle_deg") or 0.0)) for b in others]),
         points=np.array(points, np.int32).reshape(-1, 2),
-        world=world, ft_per_px=ft_per_px, hold_out=bool(hold_out_validation))
+        world=world, ft_per_px=ft_per_px, held=(VALIDATION,) if hold_out_validation else (),
+        point_radius=int(point_radius))
 
 
-def load_sheets(series_list, hold_out_validation: bool, placement: bool = True) -> list[SheetData]:
+def load_sheets(series_list, hold_out_validation: bool, placement: bool = True,
+                point_radius: int = READ_POINT_RADIUS) -> list[SheetData]:
     """Every sheet Terra read (`paths.TEXT_SHEETS`) of the maps in `series_list`, map by map in that order and in the
-    sheets' order, with VALIDATION_AREA held out or not, and with their placements or not (`sheet_data`);
-    LOAD_THREADS sheets at a time.  Stops (ValueError) when the sheet lists differ from the saved answers
-    (`boxes.check_text_sheets`) or a map has none."""
+    sheets' order, with VALIDATION_AREA held out or not, with their placements or not, and with `point_radius` px
+    around Sol's points unknown (`sheet_data`); LOAD_THREADS sheets at a time.  Stops (ValueError) when the sheet
+    lists differ from the saved answers (`boxes.check_text_sheets`) or a map has none."""
     if hold_out_validation and not placement:
         raise ValueError("the validation area is held out by the sheets' placements: read them (placement=True)")
     unknown = [s for s in series_list if s not in paths.TEXT_SHEETS]
@@ -224,10 +324,20 @@ def load_sheets(series_list, hold_out_validation: bool, placement: bool = True) 
     def one(job):
         s, name = job
         return sheet_data(s, name, hold_out_validation, by_sheet.get(job, []),
-                          others.get(name, []) if s == paths.SERIES else [], placement)
+                          others.get(name, []) if s == paths.SERIES else [], placement, point_radius)
 
     with ThreadPoolExecutor(LOAD_THREADS) as pool:
         return list(pool.map(one, jobs))
+
+
+def hold_out(sheets: list[SheetData], areas) -> list[SheetData]:
+    """The sheets holding `areas` out (MapRect, Quarter, GridArea), in place of what they held; everything else, the
+    arrays too, shared with `sheets`.  A sheet read without its placement can hold nothing out (ValueError)."""
+    areas = tuple(areas)
+    bare = [f"{sd.series} {sd.sheet}" for sd in sheets if areas and not sd.world.size]
+    if bare:
+        raise ValueError(f"areas are held out by the sheets' placements: {bare[0]} was read without its placement")
+    return [dataclasses.replace(sd, held=areas) for sd in sheets]
 
 
 def page_ink(sd: SheetData) -> np.ndarray:
@@ -269,31 +379,49 @@ def _paint(shapes: np.ndarray, values: np.ndarray, y0: int, x0: int, h: int, w: 
     return canvas[y0 - cy0:y0 - cy0 + h, x0 - cx0:x0 - cx0 + w]
 
 
+def _area_px(sd: SheetData, area, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+    """Which of the page px at `rows` x `cols` (ascending px indices) have their map point in `area`, bool (len(rows),
+    len(cols)): answered from the placement samples around them when that decides it (`area.decided`), else px by
+    px (`area.contains` of `_world_at`)."""
+    if not sd.world.size:
+        raise ValueError(f"{sd.series} {sd.sheet} was read without its placement: which of its px are in a held-out "
+                         "area is not known")
+    if not len(rows) or not len(cols):
+        return np.zeros((len(rows), len(cols)), bool)
+    step, (n_rows, n_cols) = PLACEMENT_STEP, sd.world.shape[:2]
+    r0, r1 = min(int(rows[0]) // step, n_rows - 2), min(int(rows[-1]) // step, n_rows - 2) + 1
+    c0, c1 = min(int(cols[0]) // step, n_cols - 2), min(int(cols[-1]) // step, n_cols - 2) + 1
+    decided = area.decided(sd.world[r0:r1 + 1, c0:c1 + 1, 0], sd.world[r0:r1 + 1, c0:c1 + 1, 1])
+    if decided is not None:
+        return np.full((len(rows), len(cols)), decided)
+    x, y = _world_at(sd.world, rows, cols, step)
+    return area.contains(x, y)
+
+
+def in_area(sd: SheetData, area, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+    """Which px of a page window (h x w px, top-left px (row y0, col x0)) have their map point in `area` (MapRect,
+    Quarter, GridArea), bool; whether or not the sheet holds it out (see the module).  ValueError for a sheet read
+    without its placement."""
+    return _area_px(sd, area, np.arange(y0, y0 + h), np.arange(x0, x0 + w))
+
+
 def in_validation(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
     """Which px of a page window (h x w px, top-left px (row y0, col x0)) have their map point in VALIDATION_AREA,
-    bool; whether or not the sheet holds it out.  A window whose placement samples all lie on one side of the area's
-    edge, or all well inside it, is answered from them alone (a px's map point is a weighted mean of four samples)."""
-    if not sd.world.size:
-        raise ValueError(f"{sd.series} {sd.sheet} was read without its placement: which of its px are in the "
-                         "validation area is not known")
-    ax0, ay0, ax1, ay1 = VALIDATION_AREA
-    step, (rows, cols) = PLACEMENT_STEP, sd.world.shape[:2]
-    r0, r1 = min(y0 // step, rows - 2), min((y0 + h - 1) // step, rows - 2) + 1
-    c0, c1 = min(x0 // step, cols - 2), min((x0 + w - 1) // step, cols - 2) + 1
-    sx, sy = sd.world[r0:r1 + 1, c0:c1 + 1, 0], sd.world[r0:r1 + 1, c0:c1 + 1, 1]
-    margin = 1.0                   # ft: far more than a rounding of the weighted mean can move it
-    if (sx < ax0 - margin).all() or (sx >= ax1 + margin).all() or (sy < ay0 - margin).all() \
-            or (sy >= ay1 + margin).all():
-        return np.zeros((h, w), bool)
-    if ((sx >= ax0 + margin) & (sx < ax1 - margin) & (sy >= ay0 + margin) & (sy < ay1 - margin)).all():
-        return np.ones((h, w), bool)
-    x, y = _world_at(sd.world, np.arange(y0, y0 + h), np.arange(x0, x0 + w), step)
-    return (x >= ax0) & (x < ax1) & (y >= ay0) & (y < ay1)
+    bool; whether or not the sheet holds it out (`in_area` of VALIDATION)."""
+    return in_area(sd, VALIDATION, y0, x0, h, w)
+
+
+def _held_px(sd: SheetData, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
+    """Which of the page px at `rows` x `cols` are held out: in one of the areas the sheet holds out."""
+    out = np.zeros((len(rows), len(cols)), bool)
+    for area in sd.held:
+        out |= _area_px(sd, area, rows, cols)
+    return out
 
 
 def _held(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
-    """The held-out px of a page window: those in VALIDATION_AREA when the sheet holds it out, else none."""
-    return in_validation(sd, y0, x0, h, w) if sd.hold_out else np.zeros((h, w), bool)
+    """The held-out px of a page window: those in one of the areas the sheet holds out (none when it holds none)."""
+    return _held_px(sd, np.arange(y0, y0 + h), np.arange(x0, x0 + w))
 
 
 def _words(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
@@ -302,9 +430,9 @@ def _words(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
 
 
 def _unknown(sd: SheetData, word: np.ndarray, y0: int, x0: int, h: int, w: int) -> np.ndarray:
-    """The unknown px of a page window, given its words (`_words`): within READ_POINT_RADIUS of one of Sol's points
-    or in another pass's box, but in no word."""
-    other = _paint(sd.other, np.ones(len(sd.other), np.int32), y0, x0, h, w, sd.points, READ_POINT_RADIUS)
+    """The unknown px of a page window, given its words (`_words`): within the sheet's `point_radius` of one of Sol's
+    points or in another pass's box, but in no word."""
+    other = _paint(sd.other, np.ones(len(sd.other), np.int32), y0, x0, h, w, sd.points, sd.point_radius)
     return (other > 0) & (word == 0)
 
 
@@ -351,7 +479,7 @@ def centres(sd: SheetData, stride: int) -> tuple[np.ndarray, np.ndarray]:
     w = sd.width
     for y0 in range(0, sd.height, band):
         h = min(band, sd.height - y0)
-        free = ~_held(sd, y0, 0, h, w)[::stride, ::stride]
+        free = ~_held_px(sd, np.arange(y0, y0 + h, stride), np.arange(0, w, stride))     # = _held(...)[::s, ::s]
         for pool, mask in ((on_text, _words(sd, y0, 0, h, w)[::stride, ::stride] > 0),
                            (on_ink, _ink_window(sd, y0, 0, h, w)[::stride, ::stride])):
             r, c = np.nonzero(mask & free)

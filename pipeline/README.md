@@ -471,7 +471,8 @@ The modules (`src/sfzmaps/solver/`):
   printed zoning code with its saved reads (`sfzmaps solver prints`);
 - `textnet/`: the text detector (`boxes`, `data`, `model`, `train`, `predict`, `stage`: `sfzmaps solver text`), its
   scores (`scores`: the one measure on the validation area and the test drawings; `score_stage`:
-  `sfzmaps solver text-scores`) and its trials (`trial`: `sfzmaps solver text-trial`);
+  `sfzmaps solver text-scores`), its trials (`trial`: `sfzmaps solver text-trial`) and the code reader's four
+  detectors, one per held-out quarter (`reader_stage`: `sfzmaps solver text-reader`);
 - `labels_stage` with `trust`, `streetside`, `lotsize`, `strokes`: what the solver knows about the labels and the ink
   (`sfzmaps solver labels`);
 - `textgrid`, `wallevidence`, `walls`: the detector's chance of text on the grid, and the wall odds
@@ -599,6 +600,29 @@ share of the ink on long straight lines called text (strokes at least 200 ft lon
 sheet's own feet: a stand-in for district-line ink called text, which needs the zoning table). It reads the model and,
 of each test sheet, `page.png`, `district_labels.json`, `transform.json` and `correction.npz` (for the sheet's
 scale), file by file. Nothing in it is a time: the same chances give the same bytes.
+
+**The code reader's detectors** (`sfzmaps solver text-reader [--device cpu|mps]`, stage `solver-text-reader`, after
+`solver-lots`, `solver-prints` and the training maps' warps; `solver/textnet/reader_stage.py`) are four more
+detectors, one per quarter of the city, for the code reader alone (`solver/codereader/`): the walls' detector trained
+on every px, so at each label its kind and direction are fitted to Terra's box, not predicted. Each is trained by the
+stage's recipe (`stage.DEFAULT_RECIPE`, seed 0) on all 87 training sheets with its quarter held out (`grid.quarter_of`,
+the solve's split), and the answered blocks held out of all four (every block the owner's code-check answers reach,
+`codereader.labels.held_out_blocks`; a px is in one when the nearest lot, `lots.npz` `grown`, of the grid px holding its
+map point is). Both are held out by map area on every training map at once, through each px's map point, as a trial
+holds the validation area out (`data.SheetData.held`). Around each of Sol's points the unknown disc reaches the longest
+printed code word, not 30 px, so a point label's whole word is taught neither way: the longest of the training maps'
+Terra words of kind "zoning code" whose centre is in no answered block, in page px, rounded up, one radius for every
+map. Then every 2000 sheet is scored, each px by the detector whose held-out quarter holds it (`predict.outputs`). It
+writes `data/solver/text-reader/`: `models/<q>.pt`; per sheet `<sheet>/chance.png` (uint8, the chance × 255),
+`kind.npz` (`kind`, the most likely kind, uint8; `p`, the four kinds' probabilities, float16 (4, h, w)) and
+`direction.npz` (`direction`, the reading direction's cosine and sine, float16 (2, h, w), unit length); `held.json`
+(the quarters, the answered blocks, the radius and the word that set it, the recipe and the seed); and `scores.json`
+(each detector on its own quarter of the 2000 sheets: words found by kind and the ink px's scores, as
+`textnet.scores` counts them, the long lines aside). The four trainings and the scoring run in one exclusive turn on
+the GPU. Its reads are each training sheet's page, Sol's points and placement (`transform.json`, `correction.npz`),
+Terra's boxes and the other passes, and for the answered blocks the prints (`prints.parquet`, `terra_boxes.json`), the
+lots (`lots.npz`, `table.parquet`) and the code-check cases and answers. The same inputs give the same bytes (the
+`.npz` files are written with a fixed date).
 
 **Trying recipes** (`sfzmaps solver text-trial [--set NAME=VALUE ...] [--recipe "NAME=VALUE ..." ...] [--seed N]
 [--reuse] [--train-series MAP,...] [--test-series MAP,...] [--device cpu|mps]`, `solver/textnet/trial.py`) is how the

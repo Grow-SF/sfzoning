@@ -452,6 +452,47 @@ def test_the_walls_read_what_build_walls_reads_and_follow_the_one_detector():
     assert build.stage_outs(st) == ["data/solver/walls"]
 
 
+def test_reader_stage_deps():
+    from sfzmaps import fresh
+    from sfzmaps.solver import paths
+    from sfzmaps.solver.codereader import labels
+    t = build.stages()
+    st = t["solver-text-reader"]
+    assert build.stage_commands("solver-text-reader") == [["solver", "text-reader"]]
+    assert build.stage_outs(st) == ["data/solver/text-reader"]
+    # after the lots, the prints and the training maps' warps
+    assert set(st.upstream) == {"solver-lots", "solver-prints", *(f"warp-{s}" for s in paths.TEXT_TRAIN_SERIES)}
+    names = list(t)
+    assert all(names.index(u) < names.index("solver-text-reader") for u in st.upstream)
+    deps = build.stage_deps(st)
+    # its code deps are its import closure, without the GPU's turns and the folder swap
+    code = [d for d in deps if d.startswith("src/")]
+    closure = fresh.code_files(["sfzmaps.solver.textnet.reader_stage"], cut=frozenset(st.cut))
+    assert code == sorted(p.relative_to(config.PIPELINE_DIR).as_posix() for p in closure)
+    for f in ("textnet/reader_stage.py", "textnet/data.py", "textnet/train.py", "textnet/predict.py",
+              "textnet/model.py", "textnet/stage.py", "codereader/labels.py", "grid.py", "paths.py"):
+        assert f"src/sfzmaps/solver/{f}" in code, f
+    assert "src/sfzmaps/transform.py" in code                   # it reads the placements
+    assert not any(d.endswith(("/gpu.py", "solver/runs.py", "textnet/trial.py", "textnet/score_stage.py"))
+                   for d in code)
+    # of each training sheet its page, Sol's points and its placement (the warp); Terra's boxes and the other passes;
+    # the prints, the lots and the owner's answers, for the answered blocks
+    rest = [d for d in deps if not d.startswith("src/")]
+    for s in paths.TEXT_TRAIN_SERIES:
+        for sheet in paths.TEXT_SHEETS[s]:
+            for f in (f"data/work/{s}/{sheet}/page.png", f"data/work/{s}/{sheet}/district_labels.json",
+                      f"data/warp/{s}/{sheet}/transform.json", f"data/warp/{s}/{sheet}/correction.npz"):
+                assert f in rest, f
+    for f in ("saved-reads/answers/text-on-every-sheet.jsonl.gz", "saved-reads/answers/experiments-2000/text-positions",
+              "data/solver/prints/prints.parquet", "data/solver/prints/terra_boxes.json", "data/solver/lots/lots.npz",
+              "data/solver/lots/table.parquet", f"inputs/{labels.CODE_CHECK}/{labels.CASES_FILE}",
+              f"inputs/{labels.CODE_CHECK}/{labels.ANSWERS_FILE}", "pyproject.toml", "uv.lock"):
+        assert f in rest, f
+    assert len(rest) == 2 + 4 * sum(len(paths.TEXT_SHEETS[s]) for s in paths.TEXT_TRAIN_SERIES) + 8
+    # nothing of the walls' detector: the reader's detectors are their own
+    assert not any(d.startswith("data/solver/text/") or d == "data/solver/text" for d in rest)
+
+
 def test_the_solve_reads_what_the_solve_and_its_report_read():
     t = build.stages()
     st = t["solver-solve"]

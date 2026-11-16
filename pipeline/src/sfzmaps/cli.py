@@ -1032,6 +1032,30 @@ def solver_text_scores(device: str = _DEVICE_OPTION) -> None:
     typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in s["seconds"].items()))
 
 
+@solver_app.command("text-reader")
+def solver_text_reader(device: str = _DEVICE_OPTION) -> None:
+    """Train the code reader's four text detectors, each with a quarter of the city and the answered blocks held out
+    on every training map, and give every 2000 sheet's px the chance of text, the kind and the reading direction of
+    the detector that never saw its quarter: data/solver/text-reader/."""
+    import logging
+
+    from sfzmaps.solver.textnet import reader_stage
+    _check_device(device)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = reader_stage.build_reader_text(device=device)
+    r = s["radius"]
+    typer.echo(f"4 x {s['iterations']:,} steps on {s['device']} over {s['trained_on']} sheets; {s['scored']} 2000 "
+               f"sheets scored; {s['blocks']} answered blocks held out")
+    typer.echo(f"unknown radius {r['px']} px: {r['longest']['text']} ({r['longest']['series']} "
+               f"{r['longest']['sheet']}, {r['longest']['length_px']} px), of {r['words']:,} code words "
+               f"({r['left_out']:,} in answered blocks left out)")
+    for name, v in s["scores"]["quarters"].items():
+        words = "; ".join(f"{k} {w['found']:,}/{w['of']:,}" for k, w in v["words"].items())
+        found = "-" if v["words_found"] is None else f"{v['words_found']:.1%}"
+        typer.echo(f"{name} on its own quarter: words found {found} ({words})")
+    typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in s["seconds"].items()))
+
+
 @solver_app.command("text-trial")
 def solver_text_trial(
     settings: list[str] = typer.Option(None, "--set", help="One setting of a recipe, name=value (repeatable): "

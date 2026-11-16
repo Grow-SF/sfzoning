@@ -42,6 +42,8 @@ TEXT_DIR = SOLVER_DIR / "text"                  # the text detector's stage: its
 TEXT_MODEL = TEXT_DIR / "model.pt"
 TEXT_CHANCE_DIR = TEXT_DIR / "chance"            # its chance of text on each 2000 sheet's page, <sheet>.png
 TEXT_SCORES_DIR = SOLVER_DIR / "text-scores"    # its scores on the test drawings
+READER_TEXT_DIR = SOLVER_DIR / "text-reader"    # the code reader's detectors, one per held-out quarter, and their
+                                                # outputs on each 2000 sheet
 LABELS_DIR = SOLVER_DIR / "labels"
 
 TABLE_DIR = config.INPUTS_DIR / "zoning-2000"

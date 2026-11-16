@@ -16,7 +16,8 @@ import torch.nn.functional as F
 
 from sfzmaps import config
 from sfzmaps.solver import grid, paths, runs
-from sfzmaps.solver.textnet import boxes, data, model, predict, score_stage, scores, stage, train, trial
+from sfzmaps.solver.textnet import (boxes, data, model, predict, reader_stage, score_stage, scores, stage, train,
+                                    trial)
 from sfzmaps.transform import SheetTransform
 
 SHEET = "2000-digital-zoning-p01"
@@ -403,7 +404,9 @@ def test_crop_targets_equal_full_page_drawing(maps):
 def test_sheet_data_holds_no_full_page_target_rasters(maps):
     for sd in data.load_sheets([paths.SERIES, OLD], hold_out_validation=True):
         fields = {f.name: getattr(sd, f.name) for f in dataclasses.fields(sd)}
-        # every field is an array or a plain value: nothing is held where its bytes would not be counted
+        # the areas held out are map areas (one shared by every sheet), no raster of the page
+        assert fields.pop("held") == (data.VALIDATION,)
+        # every other field is an array or a plain value: nothing is held where its bytes would not be counted
         assert all(isinstance(v, (np.ndarray, str, int, float, bool)) for v in fields.values())
         arrays = {k: v for k, v in fields.items() if isinstance(v, np.ndarray)}
         assert all(v.base is None or v.base.nbytes == v.nbytes for v in arrays.values())
@@ -678,7 +681,7 @@ def _in_memory_sheet(gray, ft_per_px=4.0, corner=AREA_CORNER, words=(), points=(
         words=np.round(np.array(rects, float).reshape(-1, 4, 2)).astype(np.int32),
         kinds=np.array([data.KINDS[k] for _, k, _ in words], np.uint8),
         angles=np.array([data.reading_angle(r) for r in rects], np.int16), other=np.zeros((0, 4, 2), np.int32),
-        points=np.array(points, np.int32).reshape(-1, 2), world=world, ft_per_px=float(ft_per_px), hold_out=False)
+        points=np.array(points, np.int32).reshape(-1, 2), world=world, ft_per_px=float(ft_per_px))
 
 
 def _box_mask(shape, box) -> np.ndarray:
@@ -933,7 +936,7 @@ def test_sheets_read_without_their_placements_train_alike_but_hold_nothing_out(m
     shutil.rmtree(config.DATA_DIR / "warp")                    # no placement anywhere: none is read
     bare = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False, placement=False)
     for p, b in zip(placed, bare):
-        assert b.world.shape == (0, 0, 2) and np.isnan(b.ft_per_px) and not b.hold_out
+        assert b.world.shape == (0, 0, 2) and np.isnan(b.ft_per_px) and b.held == ()
         # the same crops and the same centres as with the placement: the training reads none of it
         for y, x, size, scale, turns in ((115, 140, 64, 1.0, 0), (320, 330, 96, 1.6, 3), (470, 200, 64, 0.6, 1)):
             got, want = data.crop_targets(b, y, x, size, scale, turns), data.crop_targets(p, y, x, size, scale, turns)
@@ -1077,8 +1080,8 @@ def test_the_detector_trains_on_every_map_whole_and_scores_the_2000_sheets_in_on
     assert turns == [(True, "cpu"), None]
     assert calls == [("load_sheets", False), ("loss_fn", True), ("loss_fn", True), ("chance", True)]
     # every sheet of every training map, none with the area held out, none with its placement
-    assert [(sd.series, sd.sheet, sd.hold_out, sd.world.size) for sd in trained] == [
-        (paths.SERIES, SHEET, False, 0), (OLD, OLD_SHEET, False, 0)]
+    assert [(sd.series, sd.sheet, sd.held, sd.point_radius, sd.world.size) for sd in trained] == [
+        (paths.SERIES, SHEET, (), data.READ_POINT_RADIUS, 0), (OLD, OLD_SHEET, (), data.READ_POINT_RADIUS, 0)]
     # the model and the 2000 sheets' chances, nothing else, nothing of the last run, no part folder left
     assert sorted(_tree(built)) == ["text/chance/2000-digital-zoning-p01.png", "text/model.pt"]
     saved = torch.load(paths.TEXT_MODEL)
@@ -1185,7 +1188,8 @@ def test_trials_train_with_the_area_held_out_score_it_and_write_only_their_folde
     before = {k: v for k, v in _tree(tmp_path).items()}
     turns, calls, trained, lines = _turns(monkeypatch, trial), [], [], []
     real_fit = train.fit
-    monkeypatch.setattr(train, "fit", lambda sheets, *a: trained.append([sd.hold_out for sd in sheets])
+    monkeypatch.setattr(train, "fit", lambda sheets, *a: trained.append([sd.held == (data.VALIDATION,)
+                                                                          for sd in sheets])
                         or real_fit(sheets, *a))
     for target, name in ((data, "load_sheets"), (train, "fit"), (predict, "chance"), (scores, "score_sheets")):
         _inside(monkeypatch, target, name, turns, calls)
@@ -1431,7 +1435,9 @@ NOT_TEXT_CODE = ("solver/lots.py", "solver/table.py", "solver/codes.py", "solver
 def test_one_detector_stage_reads_its_maps_sheets_file_by_file_and_no_placement():
     from sfzmaps import build
     table = build.stages()
-    assert [n for n in table if n.startswith("solver-text")] == ["solver-text", "solver-text-scores"]
+    # one detector of the walls, its scores, and the code reader's own (`test_reader_stage_deps` in test_build)
+    assert [n for n in table if n.startswith("solver-text")] == ["solver-text", "solver-text-scores",
+                                                                  "solver-text-reader"]
     st = table["solver-text"]
     assert build.stage_commands("solver-text") == [["solver", "text"]] and build.stage_outs(st) == ["data/solver/text"]
     assert st.code == ("sfzmaps.solver.textnet.stage",) and "sfzmaps.solver.runs" in st.cut
@@ -1515,3 +1521,271 @@ def test_the_stage_recipe_word_starts_a_trial_from_the_stages_recipe():
     # without it, the old recipe: so existing trial folders keep their names
     assert trial.parse_recipe("default") == train.Recipe() == trial.parse_recipe("")
     assert trial.parse_recipe("iterations=2000") == train.Recipe(iterations=2000)
+
+
+# --- the code reader's detectors: a quarter and the answered blocks held out ------------------------------------------
+
+READER_SPLIT = (6000700.0, 2108700.0)  # the quarters' split moved through both synthetic pages: through page px
+                                       # (384.0, 257.75) of the 2000 page and (328.5, 326.0) of the 1960 page
+LOTS_ORIGIN = (4900, 3550)             # grid px (col, row) of the synthetic lots' top-left: both pages lie on them
+LOTS_SHAPE = (750, 800)                # their rows and columns
+LOT_PX = 10                            # grid px a square lot's side (40 ft)
+
+
+def _synthetic_lots():
+    """Square lots of LOT_PX grid px over a window of the grid, four to a block (2 x 2), every third block answered:
+    each grid px's nearest lot (as lots.npz `grown`), each lot's block, and the answered blocks."""
+    rows, cols = LOTS_SHAPE
+    per_row = cols // LOT_PX
+    r, c = np.mgrid[0:rows, 0:cols]
+    grown = ((r // LOT_PX) * per_row + c // LOT_PX).astype(np.int32)
+    lot_r, lot_c = np.divmod(np.arange(int(grown.max()) + 1), per_row)
+    block = (lot_r // 2) * (per_row // 2) + lot_c // 2
+    return grown, np.array([f"{b:04d}" for b in block]), {f"{b:04d}" for b in range(0, int(block.max()) + 1, 3)}
+
+
+def _reference_held(series, sheet, q, grown, lot_block, blocks):
+    """A page's px in quarter q and in an answered block, the plain way: each px's map point (`data.page_world`), its
+    quarter by READER_SPLIT, and the lot of the grid px holding it.  Returns (either, the quarter, a block), bool."""
+    gray = cv2.imread(str(config.WORK_DIR / series / sheet / "page.png"), cv2.IMREAD_GRAYSCALE)
+    folder = config.DATA_DIR / "warp" / series / sheet
+    x, y = data.page_world(SheetTransform.from_json(json.loads((folder / "transform.json").read_text()), folder),
+                           gray.shape)
+    quarter = (x >= READER_SPLIT[0]).astype(int) + np.where(y >= READER_SPLIT[1], 0, 2) == q
+    col = np.floor((x - grid.X0) / grid.FT_PER_PX).astype(int) - LOTS_ORIGIN[0]
+    row = np.floor((grid.Y1 - y) / grid.FT_PER_PX).astype(int) - LOTS_ORIGIN[1]
+    assert (col >= 0).all() and (col < LOTS_SHAPE[1]).all() and (row >= 0).all() and (row < LOTS_SHAPE[0]).all()
+    block = np.isin(lot_block[grown[row, col]], sorted(blocks))
+    return quarter | block, quarter, block
+
+
+def _crop_of(mask, y, x, size, scale, turns):
+    """A page raster's px as `data.crop_targets` crops them: moved inside the page, resized (nearest px), turned."""
+    h, w = mask.shape
+    src = int(round(size / scale))
+    y0, x0 = int(np.clip(y - src // 2, 0, h - src)), int(np.clip(x - src // 2, 0, w - src))
+    v = mask[y0:y0 + src, x0:x0 + src]
+    if src != size:
+        v = cv2.resize(v.astype(np.uint8), (size, size), interpolation=cv2.INTER_NEAREST).astype(bool)
+    return np.rot90(v, turns)
+
+
+def test_reader_detector_never_trains_on_its_quarter_or_held_blocks(maps, monkeypatch):
+    monkeypatch.setattr(grid, "QUARTER_SPLIT", READER_SPLIT)
+    grown, lot_block, blocks = _synthetic_lots()
+    area = reader_stage.block_area(blocks, lot_block, grown, *LOTS_ORIGIN)
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False)
+    real_crop, real_loss, crops, weights = data.crop_targets, train.loss_fn, [], []
+    monkeypatch.setattr(data, "crop_targets", lambda sd, *a: crops.append((sd, *a)) or real_crop(sd, *a))
+    monkeypatch.setattr(train, "loss_fn", lambda out, t, k, a, w: weights.append(w.numpy().copy())
+                        or real_loss(out, t, k, a, w))
+    recipe = dataclasses.replace(stage.DEFAULT_RECIPE, iterations=4, batch=6, crop=64, width=8, prefetch=False)
+    bitten = {"quarter": 0, "block": 0}
+    for q in range(4):
+        refs = {sd.sheet: _reference_held(sd.series, sd.sheet, q, grown, lot_block, blocks) for sd in sheets}
+        held = data.hold_out(sheets, (data.Quarter(q), area))
+        # no crop may centre on a px of the quarter or of an answered block, on text or on ink; held nothing, some do
+        some = False
+        for sd, plain in zip(held, sheets):
+            either = refs[sd.sheet][0]
+            for pool, every in zip(data.centres(sd, train.CENTRE_STRIDE), data.centres(plain, train.CENTRE_STRIDE)):
+                assert len(pool) and not either[pool[:, 0], pool[:, 1]].any()
+                some |= bool(either[every[:, 0], every[:, 1]].any())
+        assert some
+        # a fit on both maps: every crop it draws centres off them, and the loss weighs none of their px
+        crops.clear()
+        weights.clear()
+        train.fit(held, recipe, "cpu", seed=q)
+        w = np.concatenate(weights)
+        assert len(crops) == len(w) == recipe.iterations * recipe.batch
+        for (sd, y, x, size, scale, turns), wi in zip(crops, w):
+            assert sd.held[0] == data.Quarter(q) and sd.held[1] is area
+            assert not refs[sd.sheet][0][y, x]
+            either, quarter, block = (_crop_of(m, y, x, size, scale, turns) for m in refs[sd.sheet])
+            assert not real_crop(sd, y, x, size, scale, turns)["known"][either].any() and not wi[either].any()
+            # px that would have carried loss, held nothing
+            plain = next(p for p in sheets if p.sheet == sd.sheet)
+            would = train.loss_weight([real_crop(plain, y, x, size, scale, turns)], recipe.ink_only)[0]
+            bitten["quarter"] += int((would & quarter).sum())
+            bitten["block"] += int((would & block & ~quarter).sum())
+    assert bitten["quarter"] and bitten["block"]
+
+
+def test_unknown_around_sol_points_covers_the_word(maps):
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False)
+    # the radius: the longest Terra word of kind "zoning code", rounded up: R-1-D on the 1960 page, 100 px (RH-1 on the
+    # 2000 page is 80; the street names and the block number are no codes)
+    got = reader_stage.measure_radius(sheets)
+    assert (got["px"], got["longest"]["text"], got["longest"]["sheet"], got["longest"]["length_px"], got["words"],
+            got["left_out"]) == (100, "R-1-D", OLD_SHEET, 100.0, 2, 0)
+    # a word whose centre is in an area held out is not measured: R-1-D's centre, page px (250, 170) of the 1960 page,
+    # is on grid px (5310, 3772)
+    around = data.GridArea(np.ones((16, 21), bool), col0=5300, row0=3765)
+    got = reader_stage.measure_radius(sheets, (around,))
+    assert (got["px"], got["longest"]["text"], got["words"], got["left_out"]) == (80, "RH-1", 1, 1)
+    with pytest.raises(ValueError, match="no Terra word"):
+        reader_stage.measure_radius(sheets[:1], (data.GridArea(np.ones((2000, 2000), bool), 4000, 3000),))
+    # px within the radius of a point are unknown, unless in a word (text); px beyond every point's are known, unless
+    # in another pass's box.  So a word of up to the radius, the point anywhere on it, running any way, is unknown
+    radius = 100
+    rows, cols = np.mgrid[0:SIZE, 0:SIZE]
+    for wide, narrow in zip(data.load_sheets([paths.SERIES, OLD], hold_out_validation=False, point_radius=radius),
+                            sheets):
+        assert wide.point_radius == radius and narrow.point_radius == data.READ_POINT_RADIUS == 30
+        t = data.crop_targets(wide, SIZE // 2, SIZE // 2, SIZE, 1.0, 0)        # the whole page
+        known, word = t["known"], t["text"] > 0
+        other = np.zeros((SIZE, SIZE), bool)
+        for b in (data.other_boxes(wide.sheet) if wide.series == paths.SERIES else []):
+            other |= _box_mask(other.shape, b["box"])
+        dist = np.stack([np.hypot(cols - x, rows - y) for x, y in wide.points])
+        for d in dist:
+            within = (d <= radius - 1) & ~word
+            assert within.any() and not known[within].any()
+        beyond = (dist.min(axis=0) >= radius + 1) & ~other
+        assert beyond.any() and known[beyond].all()
+        # the stage's radius of 30 px left most of them known
+        short = data.crop_targets(narrow, SIZE // 2, SIZE // 2, SIZE, 1.0, 0)["known"]
+        assert short[(dist.min(axis=0) >= 31) & (dist.min(axis=0) <= radius - 1) & ~word & ~other].all()
+
+
+def test_outputs_returns_chance_kind_and_direction(monkeypatch):
+    torch.manual_seed(0)
+    net = train.build_net(train.Recipe(width=8, half_size=True)).eval()
+    ink = np.random.default_rng(3).random((100, 90)) < 0.2
+    o = predict.outputs(net, ink, "cpu")
+    assert (o.chance.shape, o.chance.dtype, o.kind.shape, o.kind.dtype) == ((100, 90), np.uint8, (100, 90), np.uint8)
+    assert (o.kind_p.shape, o.kind_p.dtype, o.direction.shape, o.direction.dtype) == (
+        (4, 100, 90), np.float16, (2, 100, 90), np.float16)
+    # the chance is `chance`'s; the kinds' probabilities sum to 1, the most likely is the kind; the direction is a
+    # unit vector
+    assert np.array_equal(o.chance, predict.chance(net, ink, "cpu"))
+    p = o.kind_p.astype(np.float32)
+    assert np.allclose(p.sum(axis=0), 1, atol=2e-3)
+    top = np.sort(p, axis=0)
+    clear = top[-1] - top[-2] > 1e-2
+    assert clear.any() and np.array_equal(o.kind[clear], p.argmax(axis=0)[clear])
+    length = np.hypot(*o.direction.astype(np.float32))
+    assert (length > 0).all() and np.allclose(length, 1, atol=2e-3)
+    # the page in one tile: the network's own outputs, the kinds by softmax and the direction scaled to unit length
+    with torch.no_grad():
+        raw = net(torch.from_numpy(np.pad(ink, ((0, (-100) % net.multiple), (0, (-90) % net.multiple)))
+                                   .astype(np.float32))[None, None])[0, :, :100, :90]
+    assert np.allclose(p, torch.softmax(raw[1:5], 0).numpy(), atol=1e-3)
+    assert np.array_equal(o.kind, torch.argmax(raw[1:5], 0).numpy().astype(np.uint8))
+    cs = raw[5:7].numpy()
+    assert np.allclose(o.direction.astype(np.float32), cs / np.hypot(*cs), atol=1e-3)
+    # tiles holding none of the px asked for are not scored: chance 0, kind NO_KIND, no probability, no direction
+    monkeypatch.setattr(predict, "TILE", 32)
+    monkeypatch.setattr(predict, "PAD", 8)
+    only = np.zeros(ink.shape, bool)
+    only[40:50, 35:70] = True
+    whole, some = predict.outputs(net, ink, "cpu"), predict.outputs(net, ink, "cpu", only=only)
+    tiles = np.zeros(ink.shape, bool)
+    tiles[32:64, 32:96] = True
+    for a, b in zip(whole, some):
+        assert np.array_equal(a[..., tiles], b[..., tiles])
+    assert not some.chance[~tiles].any() and (some.kind[~tiles] == predict.NO_KIND).all()
+    assert not some.kind_p[:, ~tiles].any() and not some.direction[:, ~tiles].any()
+    # a network trained for text alone has no kind or direction to give
+    with pytest.raises(ValueError, match="text alone"):
+        predict.outputs(train.build_net(train.Recipe(width=8, heads="text")).eval(), ink, "cpu")
+
+
+@pytest.fixture
+def reader_built(built, monkeypatch):
+    """The two synthetic maps as the reader's stage reads them: its folder in the test's, the quarters split through
+    both pages, and every third block of the synthetic lots answered."""
+    monkeypatch.setattr(paths, "READER_TEXT_DIR", built / "text-reader")
+    monkeypatch.setattr(grid, "QUARTER_SPLIT", READER_SPLIT)
+    grown, lot_block, blocks = _synthetic_lots()
+    monkeypatch.setattr(reader_stage, "held_blocks", lambda: sorted(blocks))
+    monkeypatch.setattr(reader_stage, "load_block_area",
+                        lambda b: reader_stage.block_area(b, lot_block, grown, *LOTS_ORIGIN))
+    return built, grown, lot_block, blocks
+
+
+def test_the_reader_stage_trains_four_detectors_in_one_turn_and_gives_each_px_its_quarters(reader_built, monkeypatch):
+    solver, grown, lot_block, blocks = reader_built
+    turns, calls, trained = _turns(monkeypatch, reader_stage), [], []
+    for target, name in ((data, "load_sheets"), (train, "loss_fn"), (predict, "outputs")):
+        _inside(monkeypatch, target, name, turns, calls)
+    real_fit = train.fit
+    monkeypatch.setattr(train, "fit", lambda sheets, *a: trained.append(sheets) or real_fit(sheets, *a))
+    s = reader_stage.build_reader_text("cpu", TINY)
+    # the sheets are read before the turn; the four trainings and every quarter of the sheet scored in it, the one turn
+    assert turns == [(True, "cpu"), None]
+    assert calls == [("load_sheets", False)] + [("loss_fn", True)] * 8 + [("outputs", True)] * 4
+    # each on every sheet of both maps, with its quarter and the answered blocks held out and the measured radius
+    area = reader_stage.block_area(blocks, lot_block, grown, *LOTS_ORIGIN)
+    radius = reader_stage.measure_radius(data.load_sheets([paths.SERIES, OLD], False), (area,))
+    assert len(trained) == 4
+    for q, sheets in enumerate(trained):
+        assert [(sd.series, sd.sheet, sd.point_radius) for sd in sheets] == [
+            (paths.SERIES, SHEET, radius["px"]), (OLD, OLD_SHEET, radius["px"])]
+        for sd in sheets:
+            assert sd.held[0] == data.Quarter(q) and np.array_equal(sd.held[1].mask, area.mask)
+            assert (sd.held[1].col0, sd.held[1].row0) == (area.col0, area.row0) and len(sd.held) == 2
+    # its folder, nothing else, no part folder left
+    root = paths.READER_TEXT_DIR
+    assert sorted(_tree(solver)) == sorted(
+        [f"text-reader/{SHEET}/{f}" for f in ("chance.png", "direction.npz", "kind.npz")]
+        + ["text-reader/held.json", "text-reader/scores.json"] + [f"text-reader/models/{q}.pt" for q in paths.QUARTERS])
+    # each px from the detector whose held-out quarter holds it
+    sd, = data.load_sheets([paths.SERIES], hold_out_validation=False)
+    ink = data.page_ink(sd)
+    chance = cv2.imread(str(root / SHEET / "chance.png"), cv2.IMREAD_GRAYSCALE)
+    with np.load(root / SHEET / "kind.npz") as z:
+        kind, p = z["kind"], z["p"]
+    with np.load(root / SHEET / "direction.npz") as z:
+        direction = z["direction"]
+    assert (kind.dtype, p.dtype, p.shape, direction.dtype, direction.shape) == (
+        np.uint8, np.float16, (4, SIZE, SIZE), np.float16, (2, SIZE, SIZE))
+    covered = np.zeros((SIZE, SIZE), int)
+    for q, name in enumerate(paths.QUARTERS):
+        mine = _reference_held(paths.SERIES, SHEET, q, grown, lot_block, blocks)[1]
+        covered += mine
+        saved = torch.load(root / "models" / f"{name}.pt")
+        assert train.Recipe(**saved["recipe"]) == TINY and (saved["device"], saved["seed"]) == ("cpu", 0)
+        o = predict.outputs(predict.load_model(root / "models" / f"{name}.pt", "cpu"), ink, "cpu")
+        assert mine.any() and np.array_equal(chance[mine], o.chance[mine]) and np.array_equal(kind[mine], o.kind[mine])
+        assert np.array_equal(p[:, mine], o.kind_p[:, mine])
+        assert np.array_equal(direction[:, mine], o.direction[:, mine])
+    assert (covered == 1).all()
+    # what was held out, and how the radius was measured
+    held = json.loads((root / "held.json").read_text())
+    assert held == {"quarters": list(paths.QUARTERS), "split": list(READER_SPLIT), "blocks": sorted(blocks),
+                    "block_grid_px": int(area.mask.sum()), "unknown_radius": radius,
+                    "recipe": dataclasses.asdict(TINY), "seed": 0}
+    # each detector's scores on its own quarter: every word of the 2000 page counted once, in the quarter of its centre
+    got = json.loads((root / "scores.json").read_text())
+    assert got == s["scores"] and list(got["quarters"]) == list(paths.QUARTERS)
+    assert sum(v["words"]["all"]["of"] for v in got["quarters"].values()) == 5
+    assert (s["iterations"], s["device"], s["trained_on"], s["scored"], s["blocks"], s["radius"]) == (
+        2, "cpu", 2, 1, len(blocks), radius)
+    assert list(s["seconds"]) == ["load", "train", "predict", "score"]
+    # the same inputs give the same bytes
+    before = _tree(root)
+    reader_stage.build_reader_text("cpu", TINY)
+    assert _tree(root) == before
+
+
+def test_the_text_reader_command_runs_its_stage(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    got = []
+    radius = {"px": 328, "longest": {"series": "1968", "sheet": "p18", "text": "SH", "length_px": 328.0,
+                                     "centre": [1, 2]}, "words": 6197, "left_out": 3821, "quantiles": {}}
+    quarter = {"words": {"zoning code": {"found": 9, "of": 10}, "all": {"found": 9, "of": 10}}, "words_found": 0.9}
+    monkeypatch.setattr(reader_stage, "build_reader_text", lambda device=None: got.append(device) or {
+        "iterations": 4000, "device": device, "trained_on": 87, "scored": 13, "blocks": 715, "radius": radius,
+        "scores": {"quarters": {q: quarter for q in paths.QUARTERS}},
+        "seconds": {"load": 1.0, "train": 2.0, "predict": 3.0, "score": 4.0}})
+    runner = CliRunner()
+    res = runner.invoke(cli.app, ["solver", "text-reader", "--device", "cpu"])
+    assert res.exit_code == 0, res.output
+    for said in ("715 answered blocks held out", "unknown radius 328 px: SH",
+                 "se on its own quarter: words found 90.0%"):
+        assert said in res.output
+    assert runner.invoke(cli.app, ["solver", "text-reader", "--device", "cuda"]).exit_code != 0
+    assert got == ["cpu"]

@@ -159,6 +159,21 @@ def stages() -> dict[str, Stage]:
                *_text_sheet_files("data/work", paths.TEXT_TEST_SERIES, ("page.png", "district_labels.json")),
                *_text_sheet_files("data/warp", paths.TEXT_TEST_SERIES, ("transform.json", "correction.npz")), terra),
         writes=("data/solver/text-scores",), code=("sfzmaps.solver.textnet.score_stage",), cut=text_cut)
+    # The code reader's detectors (`sfzmaps solver text-reader`): four, each with a quarter of the city and the
+    # answered blocks held out on every training map, by map area.  So they read, beside what the detector's stage
+    # reads, each training sheet's placement (the warp's transform.json and correction.npz, file by file), and for the
+    # answered blocks what `codereader.labels.load_labels` reads: the prints (prints.parquet and the Terra boxes), the
+    # lots (each grid px's nearest lot and each lot's block) and the owner's answers (the code-check cases).
+    code_check = "inputs/code-check-2000"
+    out["solver-text-reader"] = Stage(
+        "solver-text-reader", (), (), ("solver-lots", "solver-prints", *(f"warp-{s}" for s in paths.TEXT_TRAIN_SERIES)),
+        command=("solver", "text-reader"),
+        reads=(*_text_sheet_files("data/work", paths.TEXT_TRAIN_SERIES, ("page.png", "district_labels.json")),
+               *_text_sheet_files("data/warp", paths.TEXT_TRAIN_SERIES, ("transform.json", "correction.npz")), terra,
+               "saved-reads/answers/experiments-2000/text-positions", "data/solver/prints/prints.parquet",
+               "data/solver/prints/terra_boxes.json", "data/solver/lots/lots.npz", "data/solver/lots/table.parquet",
+               f"{code_check}/codecheck_cases_published.json", f"{code_check}/codecheck_answers.json"),
+        writes=("data/solver/text-reader",), code=("sfzmaps.solver.textnet.reader_stage",), cut=text_cut)
     out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
                                  # of the prints, only prints.parquet: the Terra boxes and the summary aren't read
                                  reads=("data/solver/prints/prints.parquet", "data/solver/lots", "data/solver/page",
