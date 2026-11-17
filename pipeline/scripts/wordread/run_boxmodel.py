@@ -79,6 +79,46 @@ def load_words() -> pd.DataFrame:
     return terra
 
 
+FORMS = {"offsets": tuple(B.OFFSET_FEATURES), "split": tuple(B.MERGE_FEATURES)}
+
+
+def heldout_boxes(boxes: pd.DataFrame, terra: pd.DataFrame, q: int, touch, shapes: dict) -> pd.DataFrame:
+    """Quarter q's boxes whose crop touches no answered block and that meet no answered-block word's rectangle."""
+    mine = boxes[boxes["quarter"].to_numpy() == q]
+    block = terra[terra["touch_blocks"].to_numpy(bool)]
+    keep = np.ones(len(mine), bool)
+    sheet_of = mine["sheet"].astype(str).to_numpy()
+    for sheet in sorted(set(sheet_of)):
+        idx = np.flatnonzero(sheet_of == sheet)
+        rects = mine.iloc[idx][B.T_COLS].to_numpy(float).reshape(-1, 4, 2)
+        theirs = block[block["sheet"] == sheet][B.C_COLS].to_numpy(float).reshape(-1, 4, 2)
+        if len(theirs):
+            keep[idx[np.unique(wordboxes.pairs(rects, theirs)[0])]] = False
+        for k in idx[keep[idx]]:
+            corners, length, height, axis = B._box_geometry(mine.iloc[k])
+            keep[k] = not touch(sheet, B._footprint(corners, length, height, axis, shapes[sheet]),
+                                shapes[sheet])["touch_blocks"]
+    return mine[keep]
+
+
+def merge_forms(keep, words, boxes, terra, q: int, touch, shapes, sheets) -> dict:
+    """Each merge-model form (FORMS) fitted on the fold's training boxes and words and scored by its negative log
+    likelihood on the held-out quarter's pairs (its words outside the answered blocks, labelled by its boxes that
+    touch no answered block): the choice of form is made held out."""
+    train_pairs, train_label = B.merge_data(keep, words, sheets)
+    test_words = terra[(terra["quarter"].to_numpy() == q) & ~terra["touch_blocks"].to_numpy(bool)]
+    test_pairs, test_label = B.merge_data(heldout_boxes(boxes, terra, q, touch, shapes), test_words, sheets)
+    out = {}
+    for name, feats in FORMS.items():
+        fit = B.fit_merge(train_pairs, train_label, features=feats)
+        nll = B.merge_nll(fit, test_pairs, test_label)
+        out[name] = {"train_nll": fit["nll"], "heldout_nll": nll, "heldout_pairs": int(len(test_pairs)),
+                     "heldout_merged": float(test_label.sum()), "heldout_nll_per_merged": nll / max(test_label.sum(),
+                                                                                                    1e-12),
+                     "converged": fit["converged"]}
+    return out
+
+
 def measure(args) -> None:
     from sfzmaps.solver.wordread import readercrops, review
     torch.set_num_threads(1)
@@ -137,14 +177,25 @@ def measure(args) -> None:
             ex = B.box_examples(keep, words, sheets, q, touch=touch, held_words=held)
             ex.save(B.OUT_DIR / f"examples_{qn}")
             src = ex.meta["source"].value_counts().to_dict()
+            sq = ex.meta["squeezed"].to_numpy(bool)
             out["folds"][qn]["examples"] = {"n": len(ex), "boxes": int(src.get("box", 0)),
                                             "joined": int(src.get("joined", 0)), "K": ex.K,
                                             "channels": list(ex.channels), "columns": int(ex.flat.shape[2]),
                                             "weight_sum": float(ex.weight.sum()),
+                                            "squeezed": {s: int((sq & (ex.meta["source"] == s)).sum())
+                                                         for s in ("box", "joined")},
                                             "seconds": round(time.perf_counter() - t1, 1)}
             out["folds"][qn]["merge"] = ex.info
+            out["folds"][qn]["merge_form"] = merge_forms(keep, words, boxes, terra, q, touch, shapes, sheets)
             print(qn, "examples", json.dumps(out["folds"][qn]["examples"]))
             print(qn, "merge", json.dumps(ex.info))
+            print(qn, "form", json.dumps(out["folds"][qn]["merge_form"]))
+        if args.quarters:
+            total = {form: sum(out["folds"][qn]["merge_form"][form]["heldout_nll"] for qn in args.quarters)
+                     for form in FORMS}
+            out["merge_form"] = {"heldout_nll": total, "kept": min(total, key=total.get),
+                                 "in_use": "split" if tuple(B.MERGE_FEATURES) == FORMS["split"] else "offsets"}
+            print("forms", json.dumps(out["merge_form"]))
     out["seconds"] = round(time.perf_counter() - t0, 1)
     (B.OUT_DIR / "counts.json").write_text(json.dumps(out, indent=1) + "\n")
     print(json.dumps(out["today"], indent=1))

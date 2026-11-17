@@ -52,20 +52,23 @@ The examples (`box_examples`), for the model that holds one quarter of the city 
                 8-10 word heights)
   held out     only training-quarter words outside the answered blocks: `box_examples` raises on a word whose crop
                 touches the held quarter or an answered block (`crops.TOUCH`, as `solver-text-crops` records them), on
-                a box in the held quarter and on a box whose crop touches either (`touch`).  `training_boxes` and
-                `training_words` give what may go in (a box meeting a held word's rectangle is left out: its count
-                would miss that word)
+                a box in the held quarter, on a box whose crop touches either (`touch`), and on a box meeting a held
+                word's rectangle (`held_words`, required: its count would miss that word).  `training_boxes` and
+                `training_words` give what may go in
 
-K, the largest count of the network's output, is measured: the largest count with any chance in the training
-examples (`Examples.K`).
+K is measured: the largest count with any chance in the training examples (`Examples.K`).  The count head is ordinal
+(`BoxNet`: cumulative logits on one latent score), so K sets only where its columns stop: it gives log P(count = 0..K)
+and log P(count > K), the counts above K one modelled column.  Models of different K are compared at the smallest K
+among them (`collapse_counts`).
 
 The network (`BoxNet`), in the style of the reader's backbone (`textread.model`, MobileNetV3 blocks): a smaller
 MobileNetV3 stack whose strides take a HEIGHT-px crop to one row and its width to a quarter (STRIDE px a frame), then
 dilated 1-D convolutions over the frames (each frame sees its neighbours), masked to the crop's own frames so a crop's
 output never depends on the padding of its batch beyond the 2-D stack; a boundary logit per frame (each of its STRIDE
-columns), and count logits over 0..K from the frames' masked mean, max and sum.  `fit_boxmodel` trains it by the
-recipe (`RECIPE`; Task 8 screens it), in an exclusive GPU turn, seeded.  `box_logp` reads crops one padded width at a
-time, so a crop's output is its own.
+columns), and the count's latent score from the frames' masked mean, max and sum, read through K + 1 increasing
+thresholds (cumulative logits).  `fit_boxmodel` trains it by the recipe (`RECIPE`; Task 8 screens it), in an
+exclusive GPU turn, seeded, the count's loss the cross-entropy of its exact target over 0..K (no mass above K).
+`box_logp` reads crops one padded width at a time, so a crop's output is its own.
 """
 import contextlib
 import json
@@ -80,7 +83,7 @@ import pandas as pd
 import torch
 import torch.nn.functional as F
 from scipy.optimize import minimize
-from scipy.special import expit
+from scipy.special import expit, logsumexp
 from torch import nn
 
 from sfzmaps import gpu
@@ -102,6 +105,8 @@ GAPS_FILE = OUT_DIR / "gaps.json"
 QUANTILES = (0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99)      # reported only
 MERGE_FEATURES = ("along_gap", "across_gap", "along_overlap", "across_overlap", "along_overlap_h", "across_overlap_h",
                   "angle", "height")      # a pair's geometry (`pair_geometry`)
+OFFSET_FEATURES = ("along", "across", "angle", "height")    # the plain signed offsets: the form MERGE_FEATURES beat
+#   on held-out NLL (`run_boxmodel.py measure`, counts.json "merge_form")
 MERGE_RIDGE = 1e-6               # numerical: keeps the merge model's fit finite; decides nothing
 JOIN_TRIES = 100                 # pairs drawn per wanted joined example before giving up (a guard: the held areas
 #   leave too little to draw from)
@@ -116,6 +121,8 @@ DILATIONS = (1, 2, 4, 8)         # the context convolutions over the frames
 SUM_SCALE = 16.0                 # numerical: the frames' summed features are divided by this (decides nothing)
 BN_MOMENTUM = 0.1                # torch's default: the reader's 0.01 (docTR's) leaves a short fit's running statistics
 #   far from its batches', and the network reads crops by them
+STEP_INIT = math.log(math.e - 1.0)   # the count thresholds start one logit apart (softplus of this is 1); learned
+MIN_STEP = 1e-6                  # numerical: the thresholds stay strictly increasing (decides nothing)
 # The training recipe's defaults (Task 8 screens them on the held-out outcome); `boundary_weight` weighs the boundary
 # loss against the count's.
 RECIPE = {"steps": 6000, "batch": 32, "max_lr": 2e-3, "pct_start": 0.15, "weight_decay": 1e-4, "clip": 5.0,
@@ -203,6 +210,13 @@ def layout(length: float, height: float) -> tuple[int, int]:
     w = max(4, round(length + 2 * K.PAD_X * height))
     h = max(4, round(height * (1 + 2 * K.PAD_Y)))
     return w, min(K.MAX_WIDTH, max(4, round(w * HEIGHT / h)))
+
+
+def squeezed(length: float, height: float) -> bool:
+    """Whether `crops.cut` squeezes the crop of a `length` x `height` rectangle to `crops.MAX_WIDTH` (aspect lost)."""
+    w = max(4, round(length + 2 * K.PAD_X * height))
+    h = max(4, round(height * (1 + 2 * K.PAD_Y)))
+    return max(4, round(w * HEIGHT / h)) > K.MAX_WIDTH
 
 
 def _box_geometry(b) -> tuple[np.ndarray, float, float, float]:
@@ -517,12 +531,14 @@ def merge_labels(pairs: pd.DataFrame, held: list, n_words: int) -> np.ndarray:
     return out
 
 
-def fit_merge(pairs: pd.DataFrame, label, weight=None, ridge: float = MERGE_RIDGE) -> dict:
-    """The logistic model of P(our boxes merge a pair | its geometry) (MERGE_FEATURES, `pair_geometry`), fitted by
-    maximum likelihood to the soft labels (`merge_labels`; each pair weighted by `weight`, 1 when None) on standardised
-    features (`ridge` numerical only): {"features", "intercept", "coef" (per unit of each feature), "pairs", "merged"
-    (the labels' weighted sum), "nll", "converged"}."""
-    X = pairs[list(MERGE_FEATURES)].to_numpy(float)
+def fit_merge(pairs: pd.DataFrame, label, weight=None, ridge: float = MERGE_RIDGE,
+              features: tuple[str, ...] = MERGE_FEATURES) -> dict:
+    """The logistic model of P(our boxes merge a pair | its geometry) (`features` of `pair_geometry`, MERGE_FEATURES
+    by default), fitted by maximum likelihood to the soft labels (`merge_labels`; each pair weighted by `weight`, 1 when
+    None) on standardised features (`ridge` numerical only): {"features", "intercept", "coef" (per unit of each
+    feature), "pairs", "merged" (the labels' weighted sum), "nll", "converged"}."""
+    features = tuple(features)
+    X = pairs[list(features)].to_numpy(float)
     y = np.asarray(label, float)
     w = np.ones(len(y)) if weight is None else np.asarray(weight, float)
     if not len(y) or (w * y).sum() <= 0:
@@ -542,9 +558,35 @@ def fit_merge(pairs: pd.DataFrame, label, weight=None, ridge: float = MERGE_RIDG
     start[0] = math.log(m / (1.0 - m)) if 0 < m < 1 else 0.0
     res = minimize(nll, start, jac=True, method="L-BFGS-B")
     coef = res.x[1:] / sd
-    return {"features": list(MERGE_FEATURES), "intercept": float(res.x[0] - (res.x[1:] * mu / sd).sum()),
-            "coef": dict(zip(MERGE_FEATURES, coef.tolist())), "pairs": int(len(y)), "merged": float((w * y).sum()),
+    return {"features": list(features), "intercept": float(res.x[0] - (res.x[1:] * mu / sd).sum()),
+            "coef": dict(zip(features, coef.tolist())), "pairs": int(len(y)), "merged": float((w * y).sum()),
             "nll": float(res.fun), "converged": bool(res.success)}
+
+
+def merge_nll(merge: dict, pairs: pd.DataFrame, label) -> float:
+    """The negative log likelihood of soft labels (`merge_labels`) under a fitted merge model: the sum over the pairs
+    of the cross-entropy of each label against its chance (to score a model on pairs it never saw)."""
+    X = pairs[list(merge["features"])].to_numpy(float)
+    z = merge["intercept"] + X @ np.array([merge["coef"][k] for k in merge["features"]], float)
+    y = np.asarray(label, float)
+    return float((y * np.logaddexp(0.0, -z) + (1.0 - y) * np.logaddexp(0.0, z)).sum())
+
+
+def merge_data(boxes: pd.DataFrame, terra: pd.DataFrame, sheets) -> tuple[pd.DataFrame, np.ndarray]:
+    """Every pair of `terra`'s words (`pair_geometry`) and its merge label from `boxes` (`merge_labels`, the shares
+    from `box_targets` on each sheet's ink; `sheets`: sheet -> `SheetInputs`).  No held-out check: `box_examples`
+    trains on what it makes; this also scores a fit on a held-out quarter's pairs."""
+    terra = terra.reset_index(drop=True)
+    get = _getter(sheets)
+    tsheet = terra["sheet"].astype(str).to_numpy()
+    sheet_of = boxes["sheet"].astype(str).to_numpy()
+    holds = []
+    for sheet in sorted(set(sheet_of)):
+        twords = np.flatnonzero(tsheet == sheet)
+        for t in box_targets(boxes[sheet_of == sheet], terra.iloc[twords], get(sheet).ink):
+            holds.append((twords[t["words"]], t["shares"]))
+    pairs = pair_geometry(terra)
+    return pairs, merge_labels(pairs, holds, len(terra))
 
 
 def merge_chance(merge: dict, pairs: pd.DataFrame) -> np.ndarray:
@@ -677,9 +719,10 @@ def box_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets, quarter: int,
     every word that meets a box among them; `sheets`: sheet -> `SheetInputs` (a mapping or a function); `weights`: per
     word of `terra` (Task 7's; None: 1); `touch` (`training_boxes`; `readercrops.HeldAreas` when None); `joined`: how
     many joined neighbours (None: the expected number of real boxes holding two words or more); `merge`: the merge
-    model (`fit_merge`; None: fitted here on these boxes and words); `held_words`: the held-out words (C_COLS, sheet),
-    whose rectangles a joined box may not meet.  `info`: the merge model, the pairs' and the joined boxes' geometry.
-    ValueError on a held word or box (see the module)."""
+    model (`fit_merge`; None: fitted here on these boxes and words); `held_words`: the held-out words (C_COLS, sheet;
+    REQUIRED, an empty frame when there are none), whose rectangles no box, real or joined, may meet.  `info`: the
+    merge model, the pairs' and the joined boxes' geometry.  `meta["squeezed"]`: the crop was squeezed to
+    `crops.MAX_WIDTH`.  ValueError on a held word or box (see the module)."""
     q = _need_quarter(quarter, "box_examples")
     held = _held_words(terra, q)
     if held.any():
@@ -687,6 +730,11 @@ def box_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets, quarter: int,
                          "answered block: pass training_words(...)")
     if (boxes["quarter"].to_numpy() == q).any():
         raise ValueError(f"boxes in the held quarter {paths.QUARTERS[q]}: pass training_boxes(...)")
+    if held_words is None:
+        raise ValueError("box_examples needs the held-out words (held_words; an empty frame when there are none): "
+                         "no box may meet one")
+    hs = held_words["sheet"].astype(str).to_numpy()
+    held_rects = {sh: held_words[C_COLS].to_numpy(float)[hs == sh].reshape(-1, 4, 2) for sh in set(hs)}
     terra = terra.reset_index(drop=True)
     wt = np.ones(len(terra)) if weights is None else np.asarray(weights, float).ravel()
     if len(wt) != len(terra) or (wt < 0).any() or (wt > 1).any():
@@ -704,6 +752,9 @@ def box_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets, quarter: int,
         inputs = get(sheet)
         channels = _check_channels(channels, inputs, sheet)
         mine = boxes[sheet_of == sheet]
+        if sheet in held_rects and len(wordboxes.pairs(mine[T_COLS].to_numpy(float).reshape(-1, 4, 2),
+                                                       held_rects[sheet])[0]):
+            raise ValueError(f"{sheet}: a box meets a held word's rectangle: pass training_boxes(...)")
         twords = np.flatnonzero(tsheet == sheet)
         got = box_targets(mine, terra.iloc[twords], inputs.ink)
         for (label, b), t in zip(mine.iterrows(), got):
@@ -723,7 +774,7 @@ def box_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets, quarter: int,
             holds.append((pos, s))
             meta.append({"source": "box", "sheet": sheet, "box": int(label) if np.issubdtype(type(label), np.integer)
                          else -1, "quarter": int(b["quarter"]), **blank, "support": int(len(s)),
-                         "expected": float(s.sum())})
+                         "expected": float(s.sum()), "squeezed": squeezed(length, height)})
     n_join = (int(round(sum(float(c[2:].sum()) for c in counts))) if joined is None else int(joined))
     info: dict = {}
     if n_join > 0:
@@ -742,10 +793,6 @@ def box_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets, quarter: int,
                 "today": _geometry_quantiles(pairs, label)}
         rng = np.random.default_rng([seed, 1])
         prob = p / p.sum()
-        held_rects = {}
-        if held_words is not None and len(held_words):
-            hs = held_words["sheet"].astype(str).to_numpy()
-            held_rects = {s: held_words[C_COLS].to_numpy(float)[hs == s].reshape(-1, 4, 2) for s in set(hs)}
         made: dict = {}
         drawn: list = []
         tried = 0
@@ -805,7 +852,8 @@ def _joined(inputs: SheetInputs, sheet: str, terra: pd.DataFrame, twords: np.nda
     s = t["shares"]
     pos = twords[t["words"]]
     return (crop, t["count"], boundary_target(t["spans"], s, t["w"], t["out_w"]),
-            float(np.prod(1.0 - s * (1.0 - wt[pos]))), {"support": int(len(s)), "expected": float(s.sum())})
+            float(np.prod(1.0 - s * (1.0 - wt[pos]))), {"support": int(len(s)), "expected": float(s.sum()),
+                                                         "squeezed": squeezed(length, height)})
 
 
 def terra_frame(rows: pd.DataFrame) -> pd.DataFrame:
@@ -828,9 +876,20 @@ def terra_frame(rows: pd.DataFrame) -> pd.DataFrame:
 
 # --- the network ------------------------------------------------------------------------------------------------------
 
+def _log1mexp(d: torch.Tensor) -> torch.Tensor:
+    """log(1 - exp(-d)) for d > 0, accurately."""
+    return torch.log(-torch.expm1(-d))
+
+
 class BoxNet(nn.Module):
     """The box model (see the module): `forward(x, frames)` with x (n, channels, HEIGHT, W), W a multiple of STRIDE,
-    and each crop's own frames; gives the count logits (n, k + 1) and a boundary logit per frame (n, W / STRIDE)."""
+    and each crop's own frames; gives the count's latent score f (n,) and a boundary logit per frame (n, W / STRIDE).
+
+    The count is ordinal (cumulative logits): P(count >= j) = sigmoid(f - theta_j) for j = 1..k + 1, the thresholds
+    increasing, theta_1 plus softplus increments (`thresholds`); written with the opposite sign of f, it is
+    sigmoid(theta'_j - f') with theta' decreasing.  So every count shares one scale, rare counts lean on the common
+    ones, and the mass above k is a modelled column, P(count > k) = sigmoid(f - theta_(k+1)), not a picked cap.
+    `count_logp(f)`: log P(count = 0..k) and log P(count > k) (n, k + 2)."""
 
     def __init__(self, channels: int, k: int):
         super().__init__()
@@ -851,7 +910,24 @@ class BoxNet(nn.Module):
                 m.momentum = BN_MOMENTUM
         self.context = nn.ModuleList([nn.Conv1d(LAST, LAST, 3, padding=d, dilation=d) for d in DILATIONS])
         self.boundary = nn.Conv1d(LAST, 1, 1)
-        self.count = nn.Sequential(nn.Linear(3 * LAST, LAST), nn.ReLU(inplace=True), nn.Linear(LAST, self.k + 1))
+        self.count = nn.Sequential(nn.Linear(3 * LAST, LAST), nn.ReLU(inplace=True), nn.Linear(LAST, 1))
+        self.theta_1 = nn.Parameter(torch.zeros(1))
+        self.theta_steps = nn.Parameter(torch.full((self.k,), STEP_INIT))
+
+    def thresholds(self) -> torch.Tensor:
+        """theta_1 .. theta_(k + 1), increasing (k + 1,)."""
+        steps = F.softplus(self.theta_steps).clamp(min=MIN_STEP)
+        return self.theta_1 + torch.cat([torch.zeros_like(self.theta_1), torch.cumsum(steps, 0)])
+
+    def count_logp(self, f: torch.Tensor) -> torch.Tensor:
+        """log P(count = 0), .., log P(count = k), log P(count > k) of latent scores f (n,): (n, k + 2), in f's
+        dtype."""
+        theta = self.thresholds().to(device=f.device, dtype=f.dtype)
+        a = f[:, None] - theta[None, :]                  # logit P(count >= j), j = 1..k + 1
+        ge, lt = F.logsigmoid(a), F.logsigmoid(-a)
+        # P(count = j) = sigmoid(a_j) - sigmoid(a_(j+1)) = sigmoid(a_j) sigmoid(-a_(j+1)) (1 - exp(-(a_j - a_(j+1))))
+        mid = ge[:, :-1] + lt[:, 1:] + _log1mexp(theta[1:] - theta[:-1])[None, :]
+        return torch.cat([lt[:, :1], mid, ge[:, -1:]], 1)
 
     def forward(self, x: torch.Tensor, frames: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         f = self.features(x)
@@ -868,7 +944,7 @@ class BoxNet(nn.Module):
         mean = f.sum(2) / n
         top = f.masked_fill(mask == 0, float("-inf")).amax(2)
         total = f.sum(2) / SUM_SCALE
-        return self.count(torch.cat([mean, top, total], 1)), boundary
+        return self.count(torch.cat([mean, top, total], 1))[:, 0], boundary
 
 
 def _cpu_convs(device: str):
@@ -930,10 +1006,13 @@ def fit_boxmodel(examples: Examples, recipe: dict | None = None) -> BoxNet:
             for k, i in enumerate(idx):
                 a, c = _frame_targets(examples.target(int(i))[1], int(frames[k]))
                 tf[k, :len(a)], cf[k, :len(c)] = a, c
-            count_t = torch.from_numpy(examples.count[idx].astype(np.float32)).to(device)
+            target = np.zeros((len(idx), examples.K + 2), np.float32)      # no mass above K in the targets
+            target[:, :examples.K + 1] = examples.count[idx]
+            count_t = torch.from_numpy(target).to(device)
             w = torch.from_numpy(examples.weight[idx].astype(np.float32)).to(device)
-            logits, blog = net(x.to(device), frames.to(device))
-            ce = -(count_t * F.log_softmax(logits, 1)).sum(1)
+            score, blog = net(x.to(device), frames.to(device))
+            lp = net.count_logp(score)
+            ce = -(count_t * torch.where(count_t > 0, lp, torch.zeros_like(lp))).sum(1)
             bce = F.binary_cross_entropy_with_logits(blog, torch.from_numpy(tf).to(device), reduction="none")
             cf_t = torch.from_numpy(cf).to(device)
             per = ce + rc["boundary_weight"] * (bce * cf_t).sum(1) / cf_t.sum(1)
@@ -965,13 +1044,14 @@ def fit_boxmodel(examples: Examples, recipe: dict | None = None) -> BoxNet:
 
 def box_logp(net: BoxNet, crops: list[np.ndarray], device: str = "cpu", batch: int = 64
              ) -> tuple[np.ndarray, list[np.ndarray]]:
-    """The box model's log-probabilities of crops (C, HEIGHT, W_i) (`box_crop`): the count's (n, K + 1), and per crop
-    its columns' (W_i, 2): log P(no boundary), log P(boundary).  Crops are read in batches of one padded width, so a
+    """The box model's log-probabilities of crops (C, HEIGHT, W_i) (`box_crop`): the count's (n, K + 2), log P(count =
+    0..K) and log P(count > K), K the model's (`net.k`; models of different K: `collapse_counts`), and per crop its
+    columns' (W_i, 2): log P(no boundary), log P(boundary).  Crops are read in batches of one padded width, so a
     crop's numbers are its own.  On mps, inside an exclusive GPU turn (don't call it inside another turn)."""
     if not len(crops):
-        return np.zeros((0, net.k + 1)), []
+        return np.zeros((0, net.k + 2)), []
     frames = np.array([max(2, math.ceil(c.shape[2] / STRIDE)) for c in crops])
-    count = np.zeros((len(crops), net.k + 1))
+    count = np.zeros((len(crops), net.k + 2))
     bounds: list = [None] * len(crops)
     net = net.eval()
     with gpu.gpu_turn(True, device), _cpu_convs(device), torch.no_grad():
@@ -981,14 +1061,27 @@ def box_logp(net: BoxNet, crops: list[np.ndarray], device: str = "cpu", batch: i
             for s in range(0, len(idx), batch):
                 part = idx[s:s + batch]
                 x, fr = _batch([np.asarray(crops[i], np.float32) for i in part], int(f) * STRIDE)
-                logits, blog = net(x.to(device), fr.to(device))
-                count[part] = F.log_softmax(logits.double(), 1).cpu().numpy()
+                score, blog = net(x.to(device), fr.to(device))
+                count[part] = net.count_logp(score.double().cpu()).numpy()
                 b = blog.double().cpu()
                 lp = torch.stack([F.logsigmoid(-b), F.logsigmoid(b)], 2).numpy()
                 for k, i in enumerate(part):
                     bounds[i] = np.repeat(lp[k], STRIDE, axis=0)[:crops[i].shape[2]]
         net.cpu()
     return count, bounds
+
+
+def collapse_counts(count_logp: np.ndarray, k: int) -> np.ndarray:
+    """A box model's count log-probabilities (`box_logp`: log P(count = 0..K), log P(count > K)) read at k <= K: log
+    P(count = 0..k) and log P(count > k), the columns above k summed exactly (n, k + 2).  Models of different K (each
+    run measures its own) are aligned for Task 9's choice by collapsing every model's columns to the smallest K among
+    them; a model can't be read at a k above its own K, since it gives the counts above K only as one column
+    (ValueError)."""
+    lp = np.asarray(count_logp, float)
+    top = lp.shape[1] - 2
+    if not 0 <= k <= top:
+        raise ValueError(f"a model of K = {top} can't be read at k = {k}: collapse to the smallest K of the models")
+    return np.concatenate([lp[:, :k + 1], logsumexp(lp[:, k + 1:], axis=1)[:, None]], 1)
 
 
 def save_boxnet(path: Path, net: BoxNet, **about) -> None:

@@ -14,6 +14,7 @@ from sfzmaps.solver.wordread import boxmodel as B
 
 SHEET = "s1"
 NO_TOUCH = {t: False for t in B.TOUCH}
+NO_HELD = pd.DataFrame(columns=["sheet", *B.C_COLS])         # no held-out word on the page
 
 
 def never_held(sheet, window, shape):
@@ -68,13 +69,13 @@ def test_the_count_is_the_poisson_binomial_of_each_words_share_of_ink_in_the_box
     ink = page((20, 40, 60, 60), (70, 40, 110, 60), (150, 40, 190, 60))
     terra = pd.DataFrame([word(0, 20, 40, 60, 60), word(1, 70, 40, 110, 60), word(2, 150, 40, 190, 60)])
     boxes = pd.DataFrame([box(20, 40, 90, 60)])
-    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
+    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, held_words=NO_HELD, touch=never_held, joined=0)
     assert len(ex) == 1
     assert ex.K == 2
     assert np.allclose(ex.count[0], [0.0, 0.5, 0.5])
     # a word's share counts its ink, not its rectangle: word 1 with ink in its left half only is wholly inside
     ink2 = page((20, 40, 60, 60), (70, 40, 90, 60))
-    ex2 = B.box_examples(boxes, terra, {SHEET: inputs(ink2)}, quarter=1, touch=never_held, joined=0)
+    ex2 = B.box_examples(boxes, terra, {SHEET: inputs(ink2)}, quarter=1, held_words=NO_HELD, touch=never_held, joined=0)
     assert np.allclose(ex2.count[0], [0.0, 0.0, 1.0])
 
 
@@ -83,9 +84,10 @@ def test_doubt_weights_scale_an_example_by_the_words_it_may_hold():
     terra = pd.DataFrame([word(0, 20, 40, 60, 60), word(1, 70, 40, 110, 60)])
     boxes = pd.DataFrame([box(20, 40, 90, 60)])
     sheets = {SHEET: inputs(ink)}
-    plain = B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=0)
+    plain = B.box_examples(boxes, terra, sheets, quarter=1, held_words=NO_HELD, touch=never_held, joined=0)
     assert np.allclose(plain.weight, 1.0)
-    got = B.box_examples(boxes, terra, sheets, quarter=1, weights=[0.8, 0.4], touch=never_held, joined=0)
+    got = B.box_examples(boxes, terra, sheets, quarter=1, weights=[0.8, 0.4], held_words=NO_HELD,
+                         touch=never_held, joined=0)
     # word 0 held for sure (share 1), word 1 with chance 0.5: (1 - 1 x 0.2) (1 - 0.5 x 0.6)
     assert got.weight[0] == pytest.approx(0.8 * 0.7)
 
@@ -107,7 +109,7 @@ def test_boundary_columns_are_exactly_the_gap_between_two_held_words():
     ink = page((50, 100, 110, 130), (130, 100, 170, 130))
     terra = pd.DataFrame([word(0, 50, 100, 110, 130), word(1, 130, 100, 170, 130)])
     boxes = pd.DataFrame([box(50, 100, 170, 130)])
-    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
+    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, held_words=NO_HELD, touch=never_held, joined=0)
     crop, (count, gap) = ex.crop(0), ex.target(0)
     assert np.allclose(count, np.eye(len(count))[2])
     row = crop[0, K.HEIGHT // 2]
@@ -122,7 +124,7 @@ def test_a_boundary_counts_only_as_much_as_the_words_on_both_sides_are_held():
     ink = page((50, 100, 110, 130), (130, 100, 170, 130))
     terra = pd.DataFrame([word(0, 50, 100, 110, 130), word(1, 130, 100, 170, 130)])
     boxes = pd.DataFrame([box(50, 100, 150, 130)])
-    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
+    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, held_words=NO_HELD, touch=never_held, joined=0)
     crop, (count, gap) = ex.crop(0), ex.target(0)
     assert np.allclose(count, [0, 0.5, 0.5])
     row = crop[0, K.HEIGHT // 2]
@@ -155,9 +157,11 @@ def test_crops_carry_ink_chance_and_the_word_heads_when_present():
     core = np.zeros(ink.shape, np.float32)
     core[100:130, 50:110] = 0.75
     tag = np.stack([np.full(ink.shape, 2.0, np.float32), np.full(ink.shape, -1.0, np.float32)])
-    plain = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
+    plain = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, held_words=NO_HELD,
+                           touch=never_held, joined=0)
     assert plain.channels == ("ink", "chance")
-    heads = B.box_examples(boxes, terra, {SHEET: inputs(ink, core=core, tag=tag)}, quarter=1, touch=never_held,
+    heads = B.box_examples(boxes, terra, {SHEET: inputs(ink, core=core, tag=tag)}, quarter=1,
+                           held_words=NO_HELD, touch=never_held,
                            joined=0)
     assert heads.channels == ("ink", "chance", "core", "tag0", "tag1")
     c = heads.crop(0)
@@ -175,18 +179,24 @@ def test_box_examples_raises_on_held_quarter_or_answered_block_words_and_boxes()
     for flags in ({"touch_ne": True}, {"touch_blocks": True}):
         terra = pd.DataFrame([word(0, 50, 100, 110, 130, **flags)])
         with pytest.raises(ValueError):
-            B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=0)
+            B.box_examples(boxes, terra, sheets, quarter=1, held_words=NO_HELD, touch=never_held, joined=0)
     terra = pd.DataFrame([word(0, 50, 100, 110, 130)])
     with pytest.raises(ValueError):          # a box in the held quarter
         B.box_examples(pd.DataFrame([box(50, 100, 110, 130, quarter=1)]), terra, sheets, quarter=1,
-                       touch=never_held, joined=0)
+                       held_words=NO_HELD, touch=never_held, joined=0)
     with pytest.raises(ValueError):          # a box whose crop touches an answered block
-        B.box_examples(boxes, terra, sheets, quarter=1, joined=0,
+        B.box_examples(boxes, terra, sheets, quarter=1, joined=0, held_words=NO_HELD,
                        touch=lambda s, w, sh: {**NO_TOUCH, "touch_blocks": True})
     with pytest.raises(ValueError):          # no quarter: it would train on every quarter's words
-        B.box_examples(boxes, terra, sheets, quarter=None, touch=never_held, joined=0)
+        B.box_examples(boxes, terra, sheets, quarter=None, held_words=NO_HELD, touch=never_held, joined=0)
     with pytest.raises(ValueError):          # words without their held flags can't be checked
-        B.box_examples(boxes, terra.drop(columns=["touch_blocks"]), sheets, quarter=1, touch=never_held, joined=0)
+        B.box_examples(boxes, terra.drop(columns=["touch_blocks"]), sheets, quarter=1, held_words=NO_HELD,
+                       touch=never_held, joined=0)
+    with pytest.raises(ValueError):          # the held words are required: no box may meet one
+        B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=0)
+    with pytest.raises(ValueError):          # a box meeting a held word's rectangle
+        B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=0,
+                       held_words=pd.DataFrame([word(9, 100, 110, 130, 120, touch_ne=True)]))
 
 
 def test_training_boxes_leave_out_boxes_meeting_a_held_word_or_touching_a_held_area():
@@ -269,6 +279,22 @@ def test_fit_merge_recovers_a_known_logistic():
     for k, c in true.items():
         assert got["coef"][k] == pytest.approx(c, abs=1e-2)
     assert B.merge_chance(got, pairs) == pytest.approx(label, abs=1e-3)
+    # scored on pairs it never saw, the fit beats a model off the truth
+    rng2 = np.random.default_rng([1, 5])
+    other = pd.DataFrame({k: rng2.uniform(0, 3, n) for k in B.MERGE_FEATURES})
+    y2 = 1 / (1 + np.exp(-(1.0 + sum(c * other[k].to_numpy() for k, c in true.items()))))
+    off = {**got, "coef": {**got["coef"], "along_gap": got["coef"]["along_gap"] + 0.5}}
+    assert B.merge_nll(got, other, y2) < B.merge_nll(off, other, y2)
+    # the plain-offset form fits by the same code
+    plain = pd.DataFrame({k: rng.uniform(-2, 8, n) for k in B.OFFSET_FEATURES})
+    assert B.fit_merge(plain, label, features=B.OFFSET_FEATURES)["features"] == list(B.OFFSET_FEATURES)
+
+
+def test_squeezed_crops_are_those_cut_wider_than_max_width():
+    assert not B.squeezed(100.0, 20.0)
+    assert B.squeezed(2000.0, 20.0)                 # 2016 x 28 page px would be 2304 crop px wide
+    w, out_w = B.layout(2000.0, 20.0)
+    assert out_w == K.MAX_WIDTH
 
 
 def test_union_box_is_the_box_grouping_makes_of_two_merged_words():
@@ -300,7 +326,8 @@ def test_joined_pairs_are_drawn_by_their_merge_chance_at_their_real_place():
     ink, terra = _merge_page()
     boxes = pd.DataFrame([box(20, 40, 80, 70)])
     sheets = {SHEET: inputs(ink)}
-    ex = B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=2000, merge=MERGE, seed=3)
+    ex = B.box_examples(boxes, terra, sheets, quarter=1, held_words=NO_HELD, touch=never_held, joined=2000,
+                        merge=MERGE, seed=3)
     j = np.flatnonzero(ex.meta["source"].to_numpy() == "joined")
     assert len(j) == 2000 and ex.info["drawn"] == 2000 and ex.info["merge"] == MERGE
     pairs = B.pair_geometry(terra)
@@ -323,7 +350,8 @@ def test_joined_pairs_are_drawn_by_their_merge_chance_at_their_real_place():
     # a code over its block number: their extents along the box's axis overlap, so no boundary, and still two words
     count, gap = ex.target(first(2, 3))
     assert np.allclose(count, np.eye(len(count))[2]) and np.allclose(gap, 0.0)
-    again = B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=2000, merge=MERGE, seed=3)
+    again = B.box_examples(boxes, terra, sheets, quarter=1, held_words=NO_HELD, touch=never_held, joined=2000,
+                           merge=MERGE, seed=3)
     assert np.array_equal(again.flat, ex.flat) and again.meta.equals(ex.meta)
 
 
@@ -345,7 +373,7 @@ def test_a_joined_box_never_touches_a_held_area_or_word():
 def test_box_examples_fits_the_merge_model_on_its_own_boxes():
     ink, terra = _merge_page()
     boxes = pd.DataFrame([box(20, 40, 125, 70)])                # one box holding words 0 and 1
-    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, seed=5)
+    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, held_words=NO_HELD, touch=never_held, seed=5)
     assert ex.info["merged_pairs"] == pytest.approx(1.0) and ex.info["merge"]["merged"] == pytest.approx(1.0)
     assert ex.info["pairs"] == 10
     # by default as many joined examples as the real boxes are expected to hold two words or more: one
@@ -397,11 +425,10 @@ def one_thread():
 
 def test_a_short_cpu_fit_tells_one_word_from_two(one_thread):
     train, test = _synthetic(96, 0), _synthetic(64, 1)
-    recipe = {**B.RECIPE, "steps": 100, "batch": 8, "max_lr": 3e-3, "seed": 0, "device": "cpu"}
+    recipe = {**B.RECIPE, "steps": 100, "batch": 8, "max_lr": 3e-2, "seed": 0, "device": "cpu"}
     net = B.fit_boxmodel(train, recipe)
-    assert net.k == 2 and net.channels == 2
     count_lp, gap_lp = B.box_logp(net, [test.crop(i) for i in range(len(test))])
-    assert count_lp.shape == (len(test), 3)
+    assert count_lp.shape == (len(test), 2 + 2)       # 0..K and above K
     assert np.allclose(np.exp(count_lp).sum(1), 1.0, atol=1e-5)
     words = test.meta["words"].to_numpy()
     right = (count_lp.argmax(1) == words).mean()
@@ -422,6 +449,38 @@ def test_box_logp_reads_each_crop_alone(one_thread):
     assert np.allclose(alone[1][0], batch[1][0], atol=1e-6)
     assert batch[1][0].shape == (ex.crop(0).shape[2], 2)
     assert np.allclose(np.exp(batch[1][0]).sum(1), 1.0, atol=1e-6)
+
+
+def test_the_count_is_ordinal_with_the_mass_above_k_a_column(one_thread):
+    ex = _synthetic(6, 6)
+    net = B.BoxNet(2, 4).eval()
+    with torch.no_grad():
+        net.theta_steps.copy_(torch.tensor([0.3, -1.0, 2.0, 0.1]))
+        net.theta_1.fill_(-0.7)
+    crops = [ex.crop(i) for i in range(len(ex))]
+    lp, _ = B.box_logp(net, crops)
+    assert lp.shape == (len(ex), 4 + 2) and np.allclose(np.exp(lp).sum(1), 1.0)
+    with torch.no_grad():
+        theta = net.thresholds().double().numpy()
+        score = np.concatenate([net(*B._batch([c]))[0].double().numpy() for c in crops])
+    assert (np.diff(theta) > 0).all()
+    # P(count >= j) is the sigmoid of the one score less the j-th threshold, the column above K included
+    at_least = np.exp(lp)[:, ::-1].cumsum(1)[:, ::-1][:, 1:]
+    assert np.allclose(at_least, 1 / (1 + np.exp(-(score[:, None] - theta[None, :]))), atol=1e-6)
+
+
+def test_models_of_different_k_are_compared_at_the_smallest_k(one_thread):
+    ex = _synthetic(5, 7)
+    crops = [ex.crop(i) for i in range(len(ex))]
+    big, small = B.box_logp(B.BoxNet(2, 5).eval(), crops)[0], B.box_logp(B.BoxNet(2, 2).eval(), crops)[0]
+    k = min(big.shape[1], small.shape[1]) - 2
+    a, b = B.collapse_counts(big, k), B.collapse_counts(small, k)
+    assert a.shape == b.shape == (len(ex), k + 2)
+    assert np.allclose(np.exp(a).sum(1), 1.0) and np.allclose(a[:, :k + 1], big[:, :k + 1])
+    assert np.allclose(np.exp(a[:, -1]), np.exp(big[:, k + 1:]).sum(1))
+    assert np.allclose(B.collapse_counts(small, 2), small)          # read at its own K: as it is
+    with pytest.raises(ValueError):                                # a model can't be read above its K
+        B.collapse_counts(small, 3)
 
 
 def test_a_saved_network_reads_as_before(tmp_path, one_thread):
