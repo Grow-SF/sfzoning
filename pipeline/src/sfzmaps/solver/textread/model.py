@@ -150,6 +150,17 @@ def encode(text: str) -> list[int]:
     return [VOCAB.index(c) for c in text]
 
 
+def best_path(log_probs: torch.Tensor) -> str:
+    """The best path's string of one crop's frames (frames x classes): each frame's likeliest class, repeats merged,
+    blanks dropped."""
+    out, last = [], None
+    for k in log_probs.argmax(-1).tolist():
+        if k != last and k != BLANK:
+            out.append(VOCAB[k])
+        last = k
+    return "".join(out)
+
+
 def padded(crop: np.ndarray) -> np.ndarray:
     """A crop padded with paper on the right to a whole number of CTC frames, at least two."""
     w = crop.shape[1]

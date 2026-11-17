@@ -5,9 +5,8 @@ A box's crop (`crops.box_crop`): its ink-trimmed rectangle along its axis, read 
 and at 180 (the crop turned a half turn).  Each read gives log p(form | crop) for every printed form of the code list
 (`solver-text-crops`' prior.json `forms`: the template reader's code list), log p(none | crop) (no text: the empty
 string) and p(other | crop) (every other string), exactly (`ctc`).  The reading is their mixture, with q = p(180
-degrees) from the quarter's 0/180 classifier on the 0-degree crop as a likelihood ratio on the measured direction
-prior at the box's axis (`ctc.flip_probability`, `ctc.axis_prior`).  Batch 1 on the CPU, one thread per process:
-a crop's numbers never depend on its batch or the machine's cores.
+degrees) the quarter's 0/180 classifier's probability that the 0-degree crop is upside down (`weight`).  Batch 1 on
+the CPU, one thread per process: a crop's numbers never depend on its batch or the machine's cores.
 
 Writes data/solver/text-read/ (`store.READ_DIR`):
   reads.npz      one entry per row of boxes.parquet, in its order:
@@ -16,17 +15,18 @@ Writes data/solver/text-read/ (`store.READ_DIR`):
                    log_forms (n, 2, F)     log p(form | crop) read at 0 and at 180 degrees
                    log_none (n, 2)         log p(none | crop) at 0 and 180
                    p_other (n, 2)          p(other | crop) at 0 and 180
-                   p_classifier (n,)       the classifier's p(the 0-degree crop is upside down), balanced classes
-                   prior_turn (n,)         the direction prior at the box's axis: p(it reads at 180)
-                   p_turn (n,)             q, the mixture's weight on the 180-degree read
+                   p_classifier (n,)       q: the classifier's p(the 0-degree crop is upside down), the mixture's
+                                           weight on the 180-degree read
                    post (n, F + 2)         the mixture: each form, then "other", then "none" (sums to 1)
                    log_closed (n, K)       log p(code | box, a code): the mixture's forms by code, renormalised
-  reads.parquet  one row per box: row, sheet, i, quarter, axis, best_0 and best_180 (each read's best path), p_turn,
+  reads.parquet  one row per box: row, sheet, i, quarter, axis, best_0 and best_180 (each read's best path),
+                 p_classifier,
                  p_codes (the code list's mass), p_other, p_none, top (the likeliest of the codes, "other" and
                  "none") and p_top, closed_top and closed_p (the likeliest code given a code)
   answered.parquet  each answered label: its truth, quarter, its readings at Terra's box (`terra_*`: Terra's
-                 direction, as spike S2 read it; `axis_*`: the axis alone, as our boxes are read) and at the box
-                 holding its point (`box_*`; `box_row` -1 when no box holds it)
+                 direction, as spike S2 read it; `axis_*`: the axis alone, as our boxes are read; each weighted by
+                 the classifier on its own 0-degree crop) and at the box holding its point (`box_*`; `box_row` -1
+                 when no box holds it); `<prefix>p_classifier` the weight each used
   measures.json  the measures (`measures`)
 """
 import json
@@ -97,7 +97,7 @@ def read_one(reader, direction, crop: np.ndarray, forms: list[str]) -> dict:
             x, n = model.to_input([c])
             lp = ctc.log_softmax(reader(x)[0, :n[0]].numpy())
             out["reads"].append(ctc.read(lp, forms))
-            out["best"].append(ctc.best_path(lp))
+            out["best"].append(model.best_path(lp))
             out["p_classifier"].append(float(torch.sigmoid(direction(x))[0]))
     return out
 
@@ -125,6 +125,12 @@ def _run(pool, fn, jobs) -> dict:
 
 
 # --- posteriors -----------------------------------------------------------------------------------------------------
+
+def weight(got: dict) -> float:
+    """q, the weight on a reading's second read (the crop turned a half turn): the quarter's 0/180 classifier's
+    probability that the first crop is upside down, alone."""
+    return float(got["p_classifier"][0])
+
 
 def combine(got: dict, q: float, codes: CodeList) -> dict:
     """A reading's mixture (`ctc.mixture`) and closed posterior (`ctc.closed_log`) at weight q on the second read."""
@@ -256,19 +262,19 @@ def measures(ans: pd.DataFrame) -> dict:
             "compare": {"spike_s2": SPIKE, "llm_chain": LLM_CHAIN}}
 
 
-def held_out_words(rows: pd.DataFrame, got: dict, codes: CodeList, half_turn: dict, other_rate: float) -> dict:
+def held_out_words(rows: pd.DataFrame, got: dict, codes: CodeList) -> dict:
     """Each quarter's reader on its own quarter's words at Terra's boxes on the 2000 scan (their centre in it, touching
-    no answered block; Terra's direction, its measured half-turn rate): by kind, the mean mass of the code list, of
-    "other" and of "none"; and of the code words whose Terra string is a printed form, the closed top-1 against it."""
+    no answered block; cut in Terra's direction, weighted by the classifier): by kind, the mean mass of the code list,
+    of "other" and of "none"; and of the code words whose Terra string is a printed form, the closed top-1 against
+    it."""
     out = {}
     for kind in HELD_KINDS:
         sel = rows[rows["kind"] == kind]
         mass = []
         hits = []
-        for i, d in zip(sel.index, sel["direction"]):
+        for i in sel.index:
             g = got[("held", int(i))]
-            q = float(ctc.flip_probability(g["p_classifier"][0], half_turn.get(d, other_rate)))
-            c = combine(g, q, codes)
+            c = combine(g, weight(g), codes)
             mass.append([c["post"][:-2].sum(), c["post"][-2], c["post"][-1]])
             text = rows.at[i, "text"]
             if kind == "zoning code" and text in codes.forms:
@@ -290,11 +296,6 @@ def build_read(workers: int = WORKERS) -> dict:
     """Read every box and the answered labels, measure, and write READ_DIR (see the module)."""
     t0 = time.perf_counter()
     codes = CodeList.load()
-    prior = json.loads((store.CROPS_DIR / "prior.json").read_text())["pose"]
-    half_turn, other_rate = prior["half_turn"], prior["half_turn_other"]
-    with np.load(store.TRAIN_DIR / "axis_prior.npz") as z:
-        tables = {q: z[f"table_{q}"] for q in paths.QUARTERS}
-        step = float(z["step"])
     boxes = wordboxes.load_boxes().reset_index(drop=True)
     boxes["row"] = np.arange(len(boxes))
     ans = pd.read_parquet(store.CROPS_DIR / "answered.parquet")
@@ -318,24 +319,22 @@ def build_read(workers: int = WORKERS) -> dict:
     # every box
     n, F = len(boxes), len(codes.forms)
     log_forms, log_none, p_other = np.zeros((n, 2, F)), np.zeros((n, 2)), np.zeros((n, 2))
-    p_cls, prior_turn, p_turn = np.zeros(n), np.zeros(n), np.zeros(n)
+    p_cls = np.zeros(n)
     post, log_closed = np.zeros((n, F + 2)), np.zeros((n, len(codes.codes)))
     summary = []
     for k, r in enumerate(boxes.itertuples(index=False)):
         g = got[k]
-        qn = paths.QUARTERS[int(r.quarter)]
-        r_ax = float(ctc.prior_at(tables[qn], r.axis, step))
-        q = float(ctc.flip_probability(g["p_classifier"][0], r_ax))
+        q = weight(g)
         c = combine(g, q, codes)
         for d in (0, 1):
             log_forms[k, d], log_none[k, d], p_other[k, d] = g["reads"][d]
-        p_cls[k], prior_turn[k], p_turn[k] = g["p_classifier"][0], r_ax, q
+        p_cls[k] = q
         post[k], log_closed[k] = c["post"], c["log_closed"]
         op = open_by_code(c["post"], codes)
         top = min(op.items(), key=lambda kv: (-kv[1], kv[0]))
         ct = int(np.argmax(c["log_closed"]))
         summary.append({"row": k, "sheet": r.sheet, "i": int(r.i), "quarter": int(r.quarter), "axis": float(r.axis),
-                        "best_0": g["best"][0], "best_180": g["best"][1], "p_turn": q,
+                        "best_0": g["best"][0], "best_180": g["best"][1], "p_classifier": q,
                         "p_codes": float(c["post"][:-2].sum()), "p_other": float(c["post"][-2]),
                         "p_none": float(c["post"][-1]), "top": top[0], "p_top": float(top[1]),
                         "closed_top": codes.codes[ct], "closed_p": float(np.exp(c["log_closed"][ct]))})
@@ -352,40 +351,37 @@ def build_read(workers: int = WORKERS) -> dict:
         found = {}
         if a.terra_crop >= 0:
             g = got[("ans", k)]
-            qn = paths.QUARTERS[int(a.quarter)]
-            # Terra's direction (spike S2): the classifier on the crop as cut, on Terra's direction's half-turn rate
-            q_t = float(ctc.flip_probability(g["p_classifier"][0], half_turn.get(a.direction, other_rate)))
-            found["terra_"] = (combine(g, q_t, codes), q_t)
-            # the axis alone: the 0-degree crop is the axis's, Terra's crop or its half turn
-            axis, turned = ctc.axis_and_turn(a.angle)
+            # Terra's direction (spike S2's crop): the crop as cut first, weighted by the classifier on it
+            found["terra_"] = (combine(g, weight(g), codes), weight(g))
+            # the axis alone: the 0-degree crop is the axis's, Terra's crop or its half turn, the classifier on it
+            _, turned = ctc.axis_and_turn(a.angle)
             g_axis = g if not turned else {"reads": g["reads"][::-1], "p_classifier": g["p_classifier"][::-1]}
-            q_a = float(ctc.flip_probability(g_axis["p_classifier"][0], ctc.prior_at(tables[qn], axis, step)))
-            found["axis_"] = (combine(g_axis, q_a, codes), q_a)
+            found["axis_"] = (combine(g_axis, weight(g_axis), codes), weight(g_axis))
         if a.box_row >= 0:
-            found["box_"] = ({"post": post[a.box_row], "log_closed": log_closed[a.box_row]}, p_turn[a.box_row])
+            found["box_"] = ({"post": post[a.box_row], "log_closed": log_closed[a.box_row]}, p_cls[a.box_row])
         for prefix in ("terra_", "axis_", "box_"):
             if prefix in found and truth is not None:
                 c, q = found[prefix]
                 s = label_scores(open_by_code(c["post"], codes), c["log_closed"], codes, truth)
-                s["p_turn"] = q
+                s["p_classifier"] = q
             else:
                 s = {}
             for key in ("open_top1", "open_top3", "open_nll", "open_best", "open_p", "closed_top1", "closed_top3",
-                        "closed_nll", "closed_best", "closed_p", "p_turn"):
+                        "closed_nll", "closed_best", "closed_p", "p_classifier"):
                 cols.setdefault(prefix + key, []).append(s.get(key, None if key.endswith("best") else np.nan))
     for key, v in cols.items():
         ans[key] = v
     got_measures = measures(ans)
     got_measures["held_out_quarter_words"] = {
-        qn: held_out_words(held[held["quarter"] == q], got, codes, half_turn, other_rate)
+        qn: held_out_words(held[held["quarter"] == q], got, codes)
         for q, qn in enumerate(paths.QUARTERS)}
     got_measures["boxes"] = {"n": int(n), "top": pd.Series([s["top"] for s in summary]).value_counts()
                              .head(15).to_dict(),
-                             "mean_p_turn": round(float(p_turn.mean()), 4)}
+                             "mean_p_classifier": round(float(p_cls.mean()), 4)}
     part = runs.fresh_folder(store.READ_DIR)
     store.save_npz(part / "reads.npz", row=boxes["row"].to_numpy(np.int64), forms=np.array(codes.forms),
                    form_code=np.array(codes.form_code), codes=np.array(codes.codes), log_forms=log_forms,
-                   log_none=log_none, p_other=p_other, p_classifier=p_cls, prior_turn=prior_turn, p_turn=p_turn,
+                   log_none=log_none, p_other=p_other, p_classifier=p_cls,
                    post=post, log_closed=log_closed)
     pd.DataFrame(summary).to_parquet(part / "reads.parquet", index=False)
     ans.drop(columns=["terra_crop"]).to_parquet(part / "answered.parquet", index=False)

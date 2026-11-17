@@ -96,23 +96,27 @@ def test_closed_posterior_sums_a_codes_forms_and_renormalises():
     np.testing.assert_allclose(got, want, rtol=1e-10)
 
 
-def test_flip_probability_is_the_classifiers_odds_on_the_prior():
-    assert ctc.flip_probability(0.8, 0.5) == pytest.approx(0.8)
-    assert ctc.flip_probability(0.5, 0.02) == pytest.approx(0.02)
-    # odds 4 on prior odds 1/9: posterior odds 4/9
-    assert ctc.flip_probability(0.8, 0.1) == pytest.approx(4 / 13)
+def test_the_mixture_weight_is_the_classifier_alone_on_the_first_crop():
+    forms = ["R", "RH1"]                                         # CodeList's order (sorted)
+    got = {"reads": [_reads(7, forms), _reads(8, forms)], "p_classifier": [0.25, 0.9]}
+    codes = read.CodeList({"RH1": "RH-1", "R": "R"})
+    assert read.weight(got) == 0.25
+    np.testing.assert_allclose(read.combine(got, read.weight(got), codes)["post"],
+                               ctc.mixture(0.25, tuple(got["reads"])), rtol=0, atol=0)
 
 
-def test_axis_prior_reads_each_end_of_the_axis_its_own_way():
-    # upright words: axis near 0 read as is, near 180 (sloping down) turned; sideways words mostly bottom-to-top
-    axes = np.r_[np.full(500, 0.0), np.full(300, 178.0), np.full(90, 90.0), np.full(10, 90.0)]
-    turned = np.r_[np.zeros(500, bool), np.ones(300, bool), np.zeros(90, bool), np.ones(10, bool)]
-    table = ctc.axis_prior(axes, turned)
-    at = lambda a: float(ctc.prior_at(table, a))      # noqa: E731
-    assert at(0.5) < 0.01 and at(179.5) > 0.99
-    assert at(90.0) == pytest.approx((10 + 0.5) / (100 + 1), abs=0.01)
-    assert ctc.axis_and_turn([0, 180, 270, 359])[1].tolist() == [False, True, True, True]
-    np.testing.assert_allclose(ctc.axis_and_turn([0, 180, 270, 359])[0], [0, 0, 90, 179])
+def test_an_angle_is_an_axis_and_a_turn():
+    axis, turned = ctc.axis_and_turn([0, 180, 270, 359, 90])
+    np.testing.assert_allclose(axis, [0, 0, 90, 179, 90])
+    assert turned.tolist() == [False, True, True, True, False]
+
+
+def test_the_best_path_merges_repeats_and_drops_blanks():
+    k = [model.VOCAB.index(c) for c in "RH"] + [model.BLANK]
+    frames = [k[0], k[0], k[2], k[0], k[1], k[1], k[2]]          # R R _ R H H _ -> "RRH"
+    lp = torch.full((len(frames), model.CLASSES), -9.0)
+    lp[range(len(frames)), frames] = 0.0
+    assert model.best_path(lp) == "RRH"
 
 
 def _rows(n: int = 40, seed: int = 0) -> pd.DataFrame:

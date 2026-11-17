@@ -3031,7 +3031,6 @@ stages:
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/textread/__init__.py
-      - src/sfzmaps/solver/textread/ctc.py
       - src/sfzmaps/solver/textread/model.py
       - src/sfzmaps/solver/textread/store.py
       - src/sfzmaps/solver/textread/train.py

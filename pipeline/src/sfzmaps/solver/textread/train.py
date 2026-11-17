@@ -20,12 +20,10 @@ Each training runs in its own exclusive turn on the Mac's GPU (`sfzmaps.gpu`), o
 can take the GPU between them.  Seeded (torch and numpy, SEED); spike S2 found two runs of its loop on the GPU
 identical step for step.
 
-The direction prior (`ctc.axis_prior`): for each quarter, the share of its training words (every kind, Terra's
-reading angle) that read their axis's half turn, by axis.
-
 Writes data/solver/text-train/ (`store.TRAIN_DIR`): <q>.pt and <q>_direction.pt (`model.save`, with the recipe, the
-seed and the counts), axis_prior.npz (`table_<q>`, `step`, `sd`), held.json (no times in it) and log.json (the
-steps' losses and times).
+seed and the counts), held.json (no times in it; per quarter the counts, among them the classifier's words whose
+Terra angle reads at 180 degrees or more from their axis) and log.json (the steps' losses and times).  The reading
+maths (`ctc`) is not imported here: a change to how the readers are read never retrains them.
 """
 import json
 import logging
@@ -40,7 +38,7 @@ import torch.nn.functional as F
 
 from sfzmaps import gpu
 from sfzmaps.solver import paths, runs
-from sfzmaps.solver.textread import ctc, model, store
+from sfzmaps.solver.textread import model, store
 
 log = logging.getLogger(__name__)
 
@@ -147,7 +145,7 @@ def monitor_cer(net, pool: Pool, device: str) -> float | None:
             x, frames = model.to_input([c for c, _ in part], quantize=True)
             lp = F.log_softmax(net(x.to(device)).float(), -1).cpu()
             for k, (_, text) in enumerate(part):
-                errs += edit_distance(ctc.best_path(lp[k, :frames[k]]), text)
+                errs += edit_distance(model.best_path(lp[k, :frames[k]]), text)
                 chars += max(1, len(text))
     net.train()
     return errs / chars
@@ -245,7 +243,7 @@ def build_train(device: str | None = None, quarters=None) -> dict:
     real, rows = load_inputs()
     names = list(paths.QUARTERS) if quarters is None else list(quarters)
     part = runs.fresh_folder(store.TRAIN_DIR)
-    held, logs, tables = {}, {}, {}
+    held, logs = {}, {}
     for name in names:
         q = paths.QUARTERS.index(name)
         idx = store.training_rows(rows, q)
@@ -263,8 +261,7 @@ def build_train(device: str | None = None, quarters=None) -> dict:
         dnet, dlg = fit("direction", dpool, DIRECTION, device, SEED, tag=f"{name} direction")
         model.save(part / f"{name}_direction.pt", dnet, quarter=name, recipe=DIRECTION, seed=SEED, real=dpool.n_real)
         del dnet, dpool
-        axes, turned = ctc.axis_and_turn(rows["angle"].to_numpy(float)[text_idx])
-        tables[name] = ctc.axis_prior(axes, turned)
+        turned = np.mod(rows["angle"].to_numpy(float)[text_idx], 360.0) >= 180.0
         kinds = rows["kind"].to_numpy()[idx]
         held[name] = {"quarter": q, "seed": SEED, "reader": READER, "direction": DIRECTION,
                       "real_crops": int(len(idx)),
@@ -273,8 +270,6 @@ def build_train(device: str | None = None, quarters=None) -> dict:
                       "direction_words_turned": int(turned.sum()),
                       "monitor_words": lg["monitor"], "monitor_cer_last": lg["steps"][-1].get("monitor_cer")}
         logs[name] = {"reader": lg, "direction": dlg}
-    store.save_npz(part / "axis_prior.npz", step=np.float64(ctc.AXIS_STEP), sd=np.float64(ctc.AXIS_SD),
-                   **{f"table_{n}": t for n, t in tables.items()})
     (part / "held.json").write_text(json.dumps({"quarters": names, "device": device, "train": held,
                                                 "synth_share": SYNTH_SHARE, "batch": BATCH, "bucket": BUCKET},
                                                indent=1) + "\n")

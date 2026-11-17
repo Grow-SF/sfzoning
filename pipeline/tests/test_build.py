@@ -518,13 +518,15 @@ def test_text_reader_stages_deps():
         closure = fresh.code_files(list(st.code), cut=frozenset(st.cut))
         assert code == sorted(p.relative_to(config.PIPELINE_DIR).as_posix() for p in closure)
         assert not any(d.endswith(("/gpu.py", "solver/runs.py")) for d in code)
-    # the training reads its crops alone, and only the text reader's training code can retrain it (GPU hours)
+    # the training reads its crops alone, and only the text reader's training code can retrain it (GPU hours): not
+    # the reading maths (ctc.py), which the reading stage alone imports
     assert [d for d in build.stage_deps(train) if not d.startswith("src/")] == ["pyproject.toml", "uv.lock",
                                                                                 "data/solver/text-crops"]
     assert [d for d in build.stage_deps(train) if d.startswith("src/sfzmaps/solver/")] == [
         "src/sfzmaps/solver/__init__.py", "src/sfzmaps/solver/paths.py", "src/sfzmaps/solver/textread/__init__.py",
-        "src/sfzmaps/solver/textread/ctc.py", "src/sfzmaps/solver/textread/model.py",
-        "src/sfzmaps/solver/textread/store.py", "src/sfzmaps/solver/textread/train.py"]
+        "src/sfzmaps/solver/textread/model.py", "src/sfzmaps/solver/textread/store.py",
+        "src/sfzmaps/solver/textread/train.py"]
+    assert "src/sfzmaps/solver/textread/ctc.py" in build.stage_deps(read)
     # the inputs: each scan's pages, Sol's points and placements, Terra's boxes and the other passes, the prints, the
     # lots, the owner's answers and the code reader's detectors' held-out blocks and radius
     rest = [d for d in build.stage_deps(crops) if not d.startswith("src/")]

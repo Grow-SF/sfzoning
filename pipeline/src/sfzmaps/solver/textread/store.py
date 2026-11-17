@@ -9,7 +9,7 @@
     summary.json
   data/solver/text-train/   (solver-text-train)
     <q>.pt, <q>_direction.pt   quarter q's reader and 0/180 classifier
-    held.json                  per quarter: what was trained on, the seeds and recipes, the direction prior
+    held.json                  per quarter: what was trained on, the seeds and recipes
     log.json                   the training logs
   data/solver/text-read/    (solver-text-read)
     reads.npz, reads.parquet   every word box's reading (`read`)

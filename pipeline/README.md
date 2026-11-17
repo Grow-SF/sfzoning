@@ -663,19 +663,19 @@ reader's own training crops; seeded per quarter). It writes `data/solver/text-cr
 characters and the CTC blank; docTR's `crnn_mobilenet_v3_small` re-expressed with its parameter names, so spike S2's
 weights load and give its outputs) and a 0/180 classifier, each on the crops touching neither its quarter nor an
 answered block: reader C's recipe (12,000 steps, batch 64, AdamW at a one-cycle peak of 1.5e-3, 40% synthetic) and
-classifier D's (3,000 steps), seed 0, each in its own exclusive GPU turn. It also measures the direction prior: by
-axis, the share of the quarter's training words that read the axis's half turn. It writes `data/solver/text-train/`:
-`<q>.pt`, `<q>_direction.pt`, `axis_prior.npz`, `held.json` (the counts, recipes and seeds) and `log.json` (the losses,
-the held-out quarter's character error, logged only, and the times).
+classifier D's (3,000 steps), seed 0, each in its own exclusive GPU turn. It writes `data/solver/text-train/`:
+`<q>.pt`, `<q>_direction.pt`, `held.json` (the counts, recipes and seeds) and `log.json` (the losses, the held-out
+quarter's character error, logged only, and the times). The reading maths is not in its code, so a change to how the
+readers are read never retrains them.
 
 **The text reader's readings** (`sfzmaps solver text-read [--workers N]`, stage `solver-text-read`, after
 `solver-text-train` and `solver-boxes`; `solver/textread/ctc.py`, `read.py`) read every word box with its quarter's
 reader, cut at its ink-trimmed box along its axis and read both ways (0 and 180 degrees). Each read gives, by CTC's
 exact forward sum, p(form | crop) for every printed form of the code list (`prior.json`'s `forms`), p(none) (the
-all-blank path) and p(other) (the rest). The reading is the mixture (1 − q) · read(0) + q · read(180), q from the
-classifier's odds on the direction prior at the box's axis. One crop at a time on the CPU, one thread a process. It
-writes `data/solver/text-read/`: `reads.npz` (by row of `boxes.parquet`: both reads' log p of each form and of none,
-p(other), the classifier's probability, the prior, q, the mixture over the forms, other and none, and the closed
+all-blank path) and p(other) (the rest). The reading is the mixture (1 − q) · read(0) + q · read(180), q the quarter's
+0/180 classifier's probability that the 0-degree crop is upside down. One crop at a time on the CPU, one thread a
+process. It writes `data/solver/text-read/`: `reads.npz` (by row of `boxes.parquet`: both reads' log p of each form and
+of none, p(other), the classifier's probability q, the mixture over the forms, other and none, and the closed
 posterior over the codes), `reads.parquet` (one summary row per box), `answered.parquet` and `measures.json`: on the
 owner's answers, top-1, top-3 and −log p (closed list and open) at Terra's boxes (S2's crop) and at our boxes (the box
 holding the label's point; box-found and box-missed apart), per quarter and in all, and each reader on its own
