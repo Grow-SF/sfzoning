@@ -682,11 +682,11 @@ holding the label's point; box-found and box-missed apart), per quarter and in a
 quarter's words at Terra's boxes by kind (the mass of the codes, "other" and "none").
 
 Measured (2026-11-17; 719 answered labels with a code or "no code" answer, each read by the reader that never saw
-its quarter): at Terra's boxes (662), closed top-1 0.962 [0.947, 0.976], −log p 0.142 (nw .984, ne .947, sw .978, se
-.952; unflagged 0.980), as spike S2's reader C was on the se quarter alone (0.956-0.973 over three seeds); reading by
-the axis alone, with the direction from the classifier and the prior, scores the same as Terra's direction. At our
-boxes: 633 labels found (a box holds the point), 86 missed; on the found, closed top-1 0.464 [0.425, 0.503]; on the 595
-with both boxes, 0.965 at Terra's against 0.477 at ours. The loss is the boxes': where our box's axis and size agree
+its quarter): at Terra's boxes (662), closed top-1 0.961 [0.944, 0.974], −log p 0.143 (nw .984, ne .947, sw .966, se
+.952; unflagged 0.979), as spike S2's reader C was on the se quarter alone (0.956-0.973 over three seeds); reading by
+the axis alone, with the direction from the classifier, scores the same as Terra's direction. At our boxes: 633
+labels found (a box holds the point), 86 missed; on the found, closed top-1 0.462 [0.424, 0.501]; on the 595 with both
+boxes, 0.963 at Terra's against 0.477 at ours. The loss is the boxes': where our box's axis and size agree
 with Terra's word (174 labels) it reads 0.851; boxes merged with linework read 0.185.
 
 **Trying recipes** (`sfzmaps solver text-trial [--set NAME=VALUE ...] [--recipe "NAME=VALUE ..." ...] [--seed N]
