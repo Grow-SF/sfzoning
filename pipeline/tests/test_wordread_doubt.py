@@ -5,6 +5,7 @@ right)) with no cut, and the word heads' loss weighing each word's px by its wei
 `train.word_tensors`, `train.word_loss`)."""
 import contextlib
 import dataclasses
+import json
 
 import cv2
 import numpy as np
@@ -53,9 +54,10 @@ def _map_rect(x0, y0, x1, y1) -> data.MapRect:
                         ORIGIN[0] + FT * x1 - FT / 2, ORIGIN[1] - FT * y0 + FT / 2)
 
 
-def _sheet(words, gray=None, size=(240, 320), held=(), kinds=None, sheet="s") -> data.SheetData:
+def _sheet(words, gray=None, size=(240, 320), held=(), kinds=None, sheet="s", lines=None) -> data.SheetData:
     """An in-memory sheet placed north up: Terra's `words` (axis box, reading angle), ink `gray` (default: a stroke
-    along each word's middle), the areas `held` held out, every word's core its own rectangle."""
+    along each word's middle), the areas `held` held out, every word's core its own rectangle, its line px `lines`
+    (bool page; default none)."""
     h, w = size
     if gray is None:
         gray = np.full((h, w), 255, np.uint8)
@@ -64,11 +66,13 @@ def _sheet(words, gray=None, size=(240, 320), held=(), kinds=None, sheet="s") ->
             a, b = (r[0] + r[3]) / 2, (r[1] + r[2]) / 2
             cv2.line(gray, tuple(int(v) for v in np.round(a)), tuple(int(v) for v in np.round(b)), 0, 3)
     rects = np.round(np.array([data.word_rect(b, a) for b, a in words], float).reshape(-1, 4, 2)).astype(np.int32)
+    lines = np.zeros((h, w), bool) if lines is None else lines
     return data.SheetData(
         series=paths.SERIES, sheet=sheet, height=h, width=w, ink_bits=np.packbits(gray < grid.INK_BELOW, axis=1),
         words=rects, kinds=np.zeros(len(words), np.uint8) if kinds is None else np.array(kinds, np.uint8),
         angles=np.array([data.reading_angle(r) for r in rects], np.int16), other=np.zeros((0, 4, 2), np.int32),
-        points=np.zeros((0, 2), np.int32), world=_world(h, w), ft_per_px=FT, held=tuple(held), cores=rects.copy())
+        points=np.zeros((0, 2), np.int32), world=_world(h, w), ft_per_px=FT, held=tuple(held), cores=rects.copy(),
+        line_bits=np.packbits(lines, axis=1))
 
 
 def _item(text, box, kind="zoning code", angle=0, tile=(0, 0)):
@@ -84,10 +88,10 @@ def _records(tiles, sheet="s", window="0,0,500,300"):
              "answer": {"items": [_item(t, b, k, a, tile=pb[:2]) for t, b, k, a in items]}} for pb, items in tiles]
 
 
-def _sheet_of(records, gray, sheet="s", held=()) -> data.SheetData:
+def _sheet_of(records, gray, sheet="s", held=(), lines=None) -> data.SheetData:
     found = boxes.terra_boxes(paths.SERIES, sheet, records)
     return _sheet([(f["box"], float(f["angle_deg"])) for f in found], gray=gray, size=gray.shape, held=held,
-                  kinds=[data.KINDS[f["kind"]] for f in found], sheet=sheet)
+                  kinds=[data.KINDS[f["kind"]] for f in found], sheet=sheet, lines=lines)
 
 
 # --- the features ----------------------------------------------------------------------------------------------------
@@ -99,29 +103,48 @@ def test_forced_height_is_word_rects_near_diagonal_case():
                                                                   boxes.word_rect((0, 0, 170, 190), angle))]
         assert bool(doubt.forced_height(angle)) == all(abs(h - boxes.TYPICAL_HEIGHT) < 1e-9 for h in heights), angle
     assert doubt.forced_height(45) and not doubt.forced_height(0) and not doubt.forced_height(90)
+    # the fit reads the continuous |cos^2 - sin^2| (1 along or across the page, 0 at 45 degrees), not the case
+    angles = np.arange(-180, 181)
+    a = np.deg2rad(angles)
+    assert np.allclose(doubt.axis_of(angles), np.abs(np.cos(2 * a)))
+    assert np.array_equal(doubt.forced_height(angles), doubt.axis_of(angles) <= doubt.NEAR_DIAGONAL)
 
 
-def test_ink_outside_is_the_share_of_the_words_ink_pieces_px_outside_its_box():
+def test_ink_outside_counts_the_letters_ink_and_line_share_the_line_ink_touching_the_word():
     gray = np.full((200, 300), 255, np.uint8)
+    lines = np.zeros(gray.shape, bool)
     gray[60:63, 100:140] = 0                    # a bar of 120 px, half under word 0's box (columns 100-119)
     gray[100:110, 30:34] = 0                    # word 1's letter, wholly inside its box
     gray[100:110, 40:44] = 0
     gray[150:153, 200:260] = 0                  # word 2's letters...
-    gray[140:180, 230:232] = 0                  # ... joined to a line of which 80 of 200 px fall outside its box
+    gray[140:180, 230:232] = 0                  # ... crossed by a line of 2 x 40 px, rows 140-179
+    lines[140:180, 229:233] = True              # the line's px, grown by 1 px across (as `zones.find_lines` grows them)
     words = {"HALF": (100, 55, 119, 70), "WHOLE": (25, 95, 50, 115), "LINED": (195, 145, 265, 159),
              "EMPTY": (10, 10, 40, 30)}
     recs = _records([((0, 0, 300, 200), [(t, b, "zoning code", 0) for t, b in words.items()])], window="0,0,300,200")
-    sd = _sheet_of(recs, gray)
+    sd = _sheet_of(recs, gray, lines=lines)
     f = doubt.doubt_features(sd, recs)
     assert list(f["word"]) == [0, 1, 2, 3]                     # one row per word of the sheet, in its order
     f = f.set_index("text")
     assert f.loc["HALF", "ink_outside"] == pytest.approx(0.5) and f.loc["HALF", "ink_px"] == 60
-    assert f.loc["WHOLE", "ink_outside"] == 0
-    piece = 180 + 80 - 6                                  # the letters' bar and the line (6 px shared): one piece
-    outside = 2 * ((145 - 140) + (180 - 160))             # the line's rows above and below the box (rows 145-159)
-    assert f.loc["LINED", "ink_outside"] == pytest.approx(outside / piece)
-    assert f.loc["EMPTY", "ink_px"] == 0 and f.loc["EMPTY", "ink_outside"] == 1     # no ink: all its ink is outside
-    assert not f["forced_height"].any() and set(f["kind"]) == {"zoning code"}
+    assert f.loc["HALF", "line_share"] == 0 and f.loc["WHOLE", "ink_outside"] == 0
+    # the line doesn't count as the word's ink outside its box (its letters, cut in two by the line, are inside); it
+    # is the line ink inside the rectangle (rows 145-159, columns 195-265): the line's 2 x 15 px and the bar's 2 x 3
+    # px under the grown line px, of the rectangle's 71 x 15 px and of its 180 + 30 - 6 ink px
+    assert f.loc["LINED", "ink_outside"] == 0
+    assert f.loc["LINED", "line_share"] == pytest.approx(36 / (71 * 15))
+    assert f.loc["LINED", "line_of_ink"] == pytest.approx(36 / (180 + 30 - 6))
+    # no ink: all of it is outside, and no line ink
+    assert f.loc["EMPTY", "ink_px"] == 0 and f.loc["EMPTY", "ink_outside"] == 1 and f.loc["EMPTY", "line_share"] == 0
+    assert not f["forced_height"].any() and (f["axis"] == 1).all() and set(f["kind"]) == {"zoning code"}
+    # Terra's distance from its tile's edge (the tile is the page, 300 x 200)
+    assert list(f.loc[["HALF", "WHOLE", "LINED", "EMPTY"], "edge"]) == [55, 25, 35, 10]
+    # the same page with no line px: the line is a piece of word 2's ink, 50 of its 254 px outside its box
+    plain = doubt.doubt_features(_sheet_of(recs, gray), recs).set_index("text")
+    assert plain.loc["LINED", "ink_outside"] == pytest.approx(2 * (5 + 20) / (180 + 80 - 6))
+    assert plain.loc["LINED", "line_share"] == 0
+    with pytest.raises(ValueError, match="line px"):
+        doubt.doubt_features(dataclasses.replace(sd, line_bits=np.zeros((0, 0), np.uint8)), recs)
 
 
 def test_a_word_shown_in_two_tiles_takes_the_other_tiles_best_overlapping_read():
@@ -180,38 +203,71 @@ def test_features_name_the_held_out_areas_each_word_touches_and_must_be_the_shee
 
 # --- the fit ---------------------------------------------------------------------------------------------------------
 
-TRUE = {"agree": [2.5, 2.0, 1.5, 1.0, -3.0, -1.0], "one": [-2.0, -2.5, -3.0, -2.0, -2.0, -0.5],
-        "mean": [2.0, 1.8, 1.5, 1.2, -1.5, -0.8], "precision": [3.0, 3.4, 2.4, 2.0, -1.0, -0.4]}
+# A known model over FEATURES (zoning, block, street, other, ink_outside, line_share, axis, axis2, log_edge)
+TRUE = {"paired": [1.0, 0.5, 0.8, 1.2, -1.5, -4.0, -1.0, 1.0, 0.4],
+        "agree": [0.5, 0.0, -0.2, -0.3, -1.0, -3.0, -1.0, 1.2, 0.5],
+        "one": [-3.0, -3.0, -3.5, -2.5, -1.5, -3.0, -3.0, 3.0, 0.1],
+        "same": [-1.0, -0.5, -1.5, -0.5, -1.5, -3.0, -2.0, 2.5, 0.8],
+        "mean": [3.0, 2.8, 2.6, 2.7, -0.6, -1.5, -2.0, 2.0, -0.2],
+        "precision": [3.5, 3.4, 3.0, 2.9, -0.5, -1.0, -1.0, 1.0, -0.1]}
+NEIGHBOUR = {"mean": -0.7, "precision": 1.1}
+
+
+def _sig(z):
+    return 1 / (1 + np.exp(-z))
 
 
 def _double_reads(n, seed=0) -> pd.DataFrame:
-    """Synthetic double reads drawn from the TRUE model: agreement by the logistic, the IoU 1 by the logistic `one`
-    and otherwise from Beta(mu phi, (1 - mu) phi) with logit mu by `mean` and log phi by `precision`."""
+    """Synthetic words shown twice, drawn from the TRUE model: paired by its logistic; for a pair, agreement by its
+    logistic, the IoU 1 by `one`, otherwise the same word's beta (by `same`; mean and precision by x) or a
+    neighbour's (NEIGHBOUR)."""
     rng = np.random.default_rng([seed, 7])
     kinds = np.array(list(data.KINDS))[rng.integers(4, size=n)]
-    f = pd.DataFrame({"kind": kinds, "ink_outside": rng.uniform(0, 1, n), "forced_height": rng.random(n) < 0.2})
+    axis = np.where(rng.random(n) < 0.7, 1.0, rng.uniform(0, 1, n))
+    f = pd.DataFrame({"kind": kinds, "ink_outside": rng.uniform(0, 1, n), "line_share": rng.uniform(0, 0.4, n),
+                      "axis": axis, "edge": rng.uniform(0, 300, n)})
     x = doubt.design(f)
-    sig = lambda z: 1 / (1 + np.exp(-z))                                     # noqa: E731
-    phi = np.exp(x @ TRUE["precision"])
-    mu = sig(x @ TRUE["mean"])
-    iou = np.where(rng.random(n) < sig(x @ TRUE["one"]), 1.0, rng.beta(mu * phi, (1 - mu) * phi))
-    return f.assign(read_twice=True, paired=True, agree=(rng.random(n) < sig(x @ TRUE["agree"])).astype(float),
-                    other_iou=iou, held_out=False, answered=False)
+    paired = rng.random(n) < _sig(x @ TRUE["paired"])
+    mu, phi = _sig(x @ TRUE["mean"]), np.exp(x @ TRUE["precision"])
+    m, p = _sig(NEIGHBOUR["mean"]), np.exp(NEIGHBOUR["precision"])
+    inner = np.where(rng.random(n) < _sig(x @ TRUE["same"]), rng.beta(mu * phi, (1 - mu) * phi),
+                     rng.beta(m * p, (1 - m) * p, n))
+    iou = np.where(rng.random(n) < _sig(x @ TRUE["one"]), 1.0, np.clip(inner, 1e-12, 1 - 1e-12))
+    agree = (rng.random(n) < _sig(x @ TRUE["agree"])).astype(float)
+    return f.assign(read_twice=True, paired=paired, agree=np.where(paired, agree, np.nan),
+                    other_iou=np.where(paired, iou, np.nan), held_out=False, answered=False)
 
 
-def test_the_fit_recovers_known_coefficients_on_synthetic_double_reads():
-    f = _double_reads(40000)
-    # a word read once, or shown twice and read once, says nothing about agreement: left out
-    extra = f.iloc[:500].assign(paired=False, agree=np.nan, other_iou=np.nan)
-    p = doubt.fit_doubt(pd.concat([f, extra], ignore_index=True))
-    assert p["rows"] == 40000 and p["features"] == list(doubt.FEATURES)
-    for part, tol in (("agree", 0.15), ("one", 0.3), ("mean", 0.06), ("precision", 0.15)):   # about 4 standard errors
-        got = np.array([p[part][k] for k in doubt.FEATURES])
-        assert np.abs(got - TRUE[part]).max() < tol, (part, got)
+def _params(**changed):
+    return {"features": list(doubt.FEATURES), "neighbour": dict(NEIGHBOUR),
+            **{part: dict(zip(doubt.FEATURES, map(float, changed.get(part, v)))) for part, v in TRUE.items()}}
+
+
+def test_the_fit_recovers_a_known_model_on_synthetic_words_shown_twice():
+    f = _double_reads(60000)
+    # a word read once was not shown twice: it says nothing about a second read, and the fit doesn't read it
+    once = f.iloc[:500].assign(read_twice=False, paired=False, agree=np.nan, other_iou=np.nan)
+    p = doubt.fit_doubt(pd.concat([f, once], ignore_index=True))
+    assert p["rows"] == 60000 and p["paired_rows"] == int(f["paired"].sum()) < 60000
+    assert p["features"] == list(doubt.FEATURES)
+    # every part's chance (or the interior's mean) at the words' own x, as the TRUE model gives it: the mean error
+    # within about 3 x the largest of three seeds' (measured: paired 0.0055, agree 0.0043, one 0.0020, same 0.0137,
+    # mean 0.0024, precision 2.4%, box 0.0028, string 0.0033; the neighbour's logit mean -0.56 to -0.81)
+    x = doubt.design(f)
+    for part, tol in (("paired", 0.015), ("agree", 0.015), ("one", 0.006), ("same", 0.04), ("mean", 0.008)):
+        got, want = _sig(x @ doubt._coef(p, part)), _sig(x @ np.array(TRUE[part]))
+        assert np.abs(got - want).mean() < tol, part
+    assert np.abs(np.exp(x @ doubt._coef(p, "precision")) / np.exp(x @ np.array(TRUE["precision"])) - 1).mean() < 0.08
+    assert p["neighbour"]["mean"] == pytest.approx(NEIGHBOUR["mean"], abs=0.3)
+    assert p["neighbour"]["precision"] == pytest.approx(NEIGHBOUR["precision"], abs=0.3)
+    # the weights it gives are the TRUE model's
+    box, string = doubt.weights_of(f, p)
+    true_box, true_string = doubt.weights_of(f, _params())
+    assert np.abs(box - true_box).mean() < 0.01 and np.abs(string - true_string).mean() < 0.01
 
 
 def test_fit_doubt_refuses_answered_block_or_held_quarter_words():
-    f = _double_reads(200)
+    f = _double_reads(400)
     for flag in ("held_out", "answered"):
         with pytest.raises(ValueError, match=flag):
             doubt.fit_doubt(f.drop(columns=flag))
@@ -223,26 +279,37 @@ def test_fit_doubt_refuses_answered_block_or_held_quarter_words():
 
 # --- the weights -----------------------------------------------------------------------------------------------------
 
-def _params():
-    return {"features": list(doubt.FEATURES),
-            **{part: dict(zip(doubt.FEATURES, map(float, TRUE[part]))) for part in TRUE}}
+def test_a_second_read_missed_is_doubt_the_weights_carry_p_paired():
+    f = _double_reads(50)
+    box, string = doubt.weights_of(f, _params())
+    x = doubt.design(f)
+    p_paired = _sig(x @ np.array(TRUE["paired"]))
+    p_one, p_same = _sig(x @ np.array(TRUE["one"])), _sig(x @ np.array(TRUE["same"]))
+    inner = p_same * _sig(x @ np.array(TRUE["mean"])) + (1 - p_same) * _sig(NEIGHBOUR["mean"])
+    assert np.allclose(box, p_paired * (p_one + (1 - p_one) * inner))
+    assert np.allclose(string, p_paired * _sig(x @ np.array(TRUE["agree"])))
+    # a word that is never read twice weighs nothing
+    never = _params(paired=[-60.0] * 4 + [0.0] * 5)
+    assert np.allclose(doubt.weights_of(f, never), 0)
 
 
-def test_more_ink_outside_gives_a_lower_weight_smoothly():
+def test_more_ink_outside_or_line_ink_gives_a_lower_weight_smoothly():
     grid_ = np.linspace(0, 1, 1001)
     params = _params()
+
+    def bound(feature, parts):          # the steepest the product of logistics can be: |b| / 4 per unit, each part
+        return sum(abs(params[p][feature]) for p in parts) / 4 * (grid_[1] - grid_[0]) + 1e-12
+
     for kind in data.KINDS:
-        for forced in (False, True):
-            f = pd.DataFrame({"kind": kind, "ink_outside": grid_, "forced_height": forced})
-            box, string = doubt.doubt_weights(None, params, features=f)
-            for w, part in ((box, "mean"), (string, "agree")):
-                assert ((w > 0) & (w < 1)).all()
-                step = np.diff(w)
-                assert (step < 0).all()                                 # lower with every bit more ink outside
-                # no step: never steeper than the logistics' steepest slope allows (|b| / 4 per unit, each part)
-                bound = sum(abs(params[p]["ink_outside"]) for p in ("one", "mean")) / 4 if part == "mean" \
-                    else abs(params["agree"]["ink_outside"]) / 4
-                assert np.abs(step).max() <= bound * (grid_[1] - grid_[0]) + 1e-12
+        for axis in (1.0, 0.3):
+            for feature, other in (("ink_outside", "line_share"), ("line_share", "ink_outside")):
+                f = pd.DataFrame({"kind": kind, feature: grid_, other: 0.1, "axis": axis, "edge": 120.0})
+                box, string = doubt.doubt_weights(None, params, features=f)
+                for w, parts in ((box, ("paired", "one", "same", "mean")), (string, ("paired", "agree"))):
+                    assert ((w > 0) & (w < 1)).all()
+                    step = np.diff(w)
+                    assert (step < 0).all()                             # lower with every bit more
+                    assert np.abs(step).max() <= bound(feature, parts)  # and no step
     # on a page: the box drawn shorter over the same bar of ink, its weights fall with it
     gray = np.full((100, 200), 255, np.uint8)
     gray[40:43, 50:150] = 0
@@ -256,16 +323,78 @@ def test_more_ink_outside_gives_a_lower_weight_smoothly():
     assert (np.diff(box) < 0).all() and (np.diff(string) < 0).all()
 
 
-def test_prepare_gives_each_sheet_its_words_box_weights():
+def test_the_tile_edge_is_read_as_log_1_plus_edge_with_no_clip():
+    f = pd.DataFrame({"kind": "zoning code", "ink_outside": 0.1, "line_share": 0.0, "axis": 1.0,
+                      "edge": [0.0, 10.0, 100.0, 251.0, 369.0, 1000.0]})
+    assert np.array_equal(doubt.design(f)[:, -1], np.log1p(f["edge"].to_numpy()))
+    _, string = doubt.weights_of(f, _params())
+    assert (np.diff(string) > 0).all()     # farther from its tile's edge, surer; beyond the fit's edges too (no clip)
+    with pytest.raises(ValueError, match="edge"):
+        doubt.design(f.assign(edge=-1.0))
+
+
+def test_prepare_gives_each_sheet_its_own_words_weights():
     sd = _sheet([((40, 60, 100, 80), 0), ((120, 60, 160, 80), 0)])
     other = _sheet([((40, 60, 100, 80), 0)], sheet="t")
-    got = doubt.prepare([sd, other], {f"{sd.series}/s": [0.25, 0.5], f"{sd.series}/t": [0.75]})
+
+    def entry(s, box):
+        return {"words": doubt.words_hash(s), "box": box, "string": [b / 2 for b in box]}
+
+    weights = {f"{sd.series}/s": entry(sd, [0.25, 0.5]), f"{sd.series}/t": entry(other, [0.75])}
+    got = doubt.prepare([sd, other], weights)
     assert got[0].weights.dtype == np.float32 and list(got[0].weights) == [0.25, 0.5] and list(got[1].weights) == [0.75]
     assert got[0].ink_bits is sd.ink_bits and sd.weights.shape == (0,)
+    assert list(doubt.prepare([sd], weights, which="string")[0].weights) == [0.125, 0.25]
+    # the weights fit only the words they were made for: the same number of other words is refused
+    moved = _sheet([((40, 60, 100, 80), 0), ((120, 61, 160, 80), 0)])
+    assert doubt.words_hash(moved) != doubt.words_hash(sd)
+    with pytest.raises(ValueError, match="other words"):
+        doubt.prepare([moved], weights)
     with pytest.raises(ValueError, match="2 words"):
-        doubt.prepare([sd], {f"{sd.series}/s": [0.25]})
+        doubt.prepare([sd], {f"{sd.series}/s": entry(sd, [0.25])})
     with pytest.raises(ValueError, match="no weights"):
         doubt.prepare([sd], {})
+
+
+def test_load_weights_names_a_fold_of_the_split(tmp_path):
+    f = tmp_path / "doubt.json"
+    f.write_text(json.dumps({"folds": {"ne": {"weights": {"m/s": {"words": "h", "box": [0.5], "string": [0.25]}}}}}))
+    got = doubt.load_weights("ne", f)
+    assert got["m/s"]["words"] == "h" and got["m/s"]["box"].dtype == np.float32 and list(got["m/s"]["string"]) == [0.25]
+    with pytest.raises(ValueError, match="not one of"):
+        doubt.load_weights("NE", f)
+    with pytest.raises(ValueError, match="holds no fold"):
+        doubt.load_weights("sw", f)
+
+
+def test_each_folds_fit_leaves_out_the_words_touching_its_quarter_or_an_answered_block(monkeypatch):
+    rng = np.random.default_rng(5)
+    f = _double_reads(400).drop(columns=["held_out", "answered"])
+    f["read_twice"] = rng.random(len(f)) < 0.8
+    f.loc[~f["read_twice"], ["paired", "agree", "other_iou"]] = [False, np.nan, np.nan]
+    f = f.assign(series="m", sheet=np.where(np.arange(len(f)) < 200, "a", "b"), ink_px=10, forced_height=False,
+                 line_of_ink=0.0, **{f"touch_{q}": rng.random(len(f)) < 0.3 for q in paths.QUARTERS},
+                 touch_blocks=rng.random(len(f)) < 0.1)
+    seen = {}
+
+    def fake(rows):
+        seen[len(seen)] = rows
+        return {**_params(), "rows": len(rows), "paired_rows": int(rows["paired"].sum())}
+
+    monkeypatch.setattr(doubt, "fit_doubt", fake)
+    folds = doubt.fit_folds(f, {("m", "a"): "ha", ("m", "b"): "hb"})
+    assert list(folds) == list(paths.QUARTERS)
+    for i, q in enumerate(paths.QUARTERS):
+        rows = seen[i]
+        free = ~f[f"touch_{q}"] & ~f["touch_blocks"]
+        # exactly the words touching neither the fold's quarter nor an answered block, said so in the flags
+        assert sorted(rows.index) == sorted(f.index[free])
+        assert not rows[f"touch_{q}"].any() and not rows["touch_blocks"].any()
+        assert not rows["held_out"].any() and not rows["answered"].any()
+        # and every word, held out or not, gets its weights, with its sheet's words' hash
+        w = folds[q]["weights"]
+        assert w["m/a"]["words"] == "ha" and len(w["m/a"]["box"]) == 200 and len(w["m/b"]["string"]) == 200
+        assert folds[q]["edge_support"]["fit_edge_max"] == f.loc[free & f["read_twice"], "edge"].max()
 
 
 # --- the word targets and losses -------------------------------------------------------------------------------------
