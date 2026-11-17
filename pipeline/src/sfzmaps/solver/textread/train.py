@@ -62,8 +62,9 @@ READER = {"steps": 12000, "max_lr": 1.5e-3, "pct_start": 0.15, "synth": True}   
 DIRECTION = {"steps": 3000, "max_lr": 2e-3, "pct_start": 0.15, "synth": False}      # classifier D
 # The reader's training options, each off (a recipe's own keys override them; READER leaves them out, so what the stage
 # writes is as before): `own` and `sloppy` the shares of each draw taken from the crops of our own boxes and the sloppy
-# crops of Terra's words passed to `fit` (`extra`; `wordread.readercrops` makes them), `mask` whether the own-box crops
-# are blanked outside their box's own px (`crops.mask_outside`'s rule) when drawn.
+# crops of Terra's words passed to `fit` (`extra`; `wordread.readercrops` makes them), `mask` whether every crop
+# `extra` gives a mask is blanked outside it (`crops.mask_outside`'s rule; `Pool.joined`): as our boxes are read with
+# `read.build_read(mask=True)`.
 READER_OPTIONS = {"own": 0.0, "sloppy": 0.0, "mask": False}
 WEIGHT_DECAY = 1e-4
 CLIP = 5.0
@@ -109,30 +110,46 @@ class Pool:
         self.widths = np.array([c.shape[1] for c in self.items])
         self.monitor = monitor or []
         self.n_own = self.n_sloppy = 0
+        self.row_of = np.asarray(idx, np.int64)      # each real crop's row of `rows`
+        self.own_p = None
 
     def joined(self, extra: dict, mask: bool = False) -> "Pool":
         """A new pool: this one's crops, then `extra["own"]` (crops of our own boxes), then `extra["sloppy"]` (sloppy
-        crops of Terra's words), each a list of (crop, target, meta: a dict or None), weight 1.  With `mask`, an
-        own-box crop whose meta holds "mask" (bool, the crop's shape: its box's own px) is paper outside it."""
+        crops of Terra's words), each a list of (crop, target, meta: a dict or None), weight 1.  `extra["own_p"]`
+        (optional): the chance each own-box crop is drawn by (uniform without).  With `mask`, every crop given a mask
+        (bool, the crop's shape: the px of its box, or of the components meeting Terra's word) is paper outside it:
+        an own-box or sloppy crop by its meta's "mask", a real crop by `extra["real_masks"]` ({row of `rows`:
+        mask})."""
         out = Pool.__new__(Pool)
         out.__dict__.update(self.__dict__)
         own, sloppy = list(extra.get("own") or ()), list(extra.get("sloppy") or ())
 
-        def crop(c, meta, masked):
-            m = (meta or {}).get("mask") if masked else None
-            return c if m is None else np.where(m, c, 255).astype(np.uint8)
+        def crop(c, m):
+            return c if m is None or not mask else np.where(m, c, 255).astype(np.uint8)
 
-        out.items = self.items + [crop(c, m, mask) for c, _, m in own] + [c for c, _, _ in sloppy]
+        real_masks = extra.get("real_masks") or {}
+        base = list(self.items)
+        if mask and real_masks:
+            for k, row in enumerate(self.row_of):
+                base[k] = crop(base[k], real_masks.get(int(row)))
+        out.items = base + [crop(c, (m or {}).get("mask")) for c, _, m in own + sloppy]
         out.texts = self.texts + [str(t) for _, t, _ in own] + [str(t) for _, t, _ in sloppy]
         out.weights = self.weights + [1.0] * (len(own) + len(sloppy))
         out.n_own, out.n_sloppy = len(own), len(sloppy)
         out.widths = np.array([c.shape[1] for c in out.items])
+        p = extra.get("own_p")
+        if p is not None:
+            p = np.asarray(p, float)
+            if p.shape != (len(own),) or (p < 0).any() or p.sum() <= 0:
+                raise ValueError(f"own_p: {p.shape} chances for {len(own)} own-box crops")
+            out.own_p = p / p.sum()
         return out
 
     def batches(self, rng, synth_share: float, own: float = 0.0, sloppy: float = 0.0) -> list[np.ndarray]:
         """BUCKET batches of indices, sorted by width within the draw, in a shuffled order.  With `own` or `sloppy`,
         each draw's crops are split among the real, synthetic, own-box and sloppy crops by one multinomial draw at
-        the shares (the real crops the rest); without, as before."""
+        the shares (the real crops the rest), each part drawn alike (the own-box crops by `own_p` when set); without,
+        as before."""
         n = BATCH * BUCKET
         if own or sloppy:
             synth = synth_share if self.n_synth else 0.0
@@ -140,7 +157,12 @@ class Pool:
             counts = rng.multinomial(n, shares)
             sizes = [self.n_real, self.n_synth, self.n_own, self.n_sloppy]
             starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
-            idx = np.concatenate([s + rng.integers(0, size, k) for s, size, k in zip(starts, sizes, counts) if k])
+            parts = []
+            for g, (s, size, k) in enumerate(zip(starts, sizes, counts)):
+                if k:
+                    weighted = g == 2 and self.own_p is not None
+                    parts.append(s + (rng.choice(size, k, p=self.own_p) if weighted else rng.integers(0, size, k)))
+            idx = np.concatenate(parts)
         elif self.n_synth:
             k = rng.binomial(n, synth_share)
             idx = np.concatenate([rng.integers(0, self.n_real, n - k), self.n_real + rng.integers(0, self.n_synth, k)])

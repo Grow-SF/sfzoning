@@ -109,42 +109,62 @@ def _read_job(job) -> list[dict]:
     return [{"key": key, **read_one(_M["readers"][q], _M["directions"][q], crop, forms)} for key, q, crop in job]
 
 
+def components(ink: np.ndarray, chance: np.ndarray, level: float, gate: np.ndarray | None = None) -> dict:
+    """The components `wordboxes.group` makes boxes of at `level`: 8-connected px at or above it in the held-out
+    detectors' chance and within INK_R px of ink (`gate`, made when None), holding MIN_PX ink px or more, in label
+    order (a box's `i` counts them).  `lab` the label image; per kept component its `label`, `ink_px` and `box` (x0,
+    y0, x1, y1: page px, ends excluded)."""
+    gate = wordboxes.ink_gate(ink) if gate is None else gate
+    mask = (chance >= int(np.ceil(level * 255 - 1e-9))) & gate
+    _, lab = cv2.connectedComponents(mask.view(np.uint8), connectivity=8)
+    ys, xs = np.nonzero(mask)
+    lp = lab[ys, xs]
+    order = np.argsort(lp, kind="stable")
+    lp, ys, xs = lp[order], ys[order], xs[order]
+    if not len(lp):
+        return {"lab": lab, "label": np.zeros(0, lab.dtype), "ink_px": np.zeros(0, np.int64),
+                "box": np.zeros((0, 4), np.int64)}
+    start = np.flatnonzero(np.r_[True, lp[1:] != lp[:-1]])
+    n_ink = np.add.reduceat(ink[ys, xs].astype(np.int64), start)
+    kept = np.flatnonzero(n_ink >= wordboxes.MIN_PX)
+    box = np.stack([np.minimum.reduceat(xs, start), np.minimum.reduceat(ys, start),
+                    np.maximum.reduceat(xs, start) + 1, np.maximum.reduceat(ys, start) + 1], 1).astype(np.int64)
+    return {"lab": lab, "label": lp[start][kept], "ink_px": n_ink[kept], "box": box[kept]}
+
+
+def grown(lab: np.ndarray, labels, boxes: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
+    """The px of the components `labels` of `lab` (`boxes` their x0, y0, x1, y1), grown by wordboxes.INK_R px (a
+    disc): a bool window and its top-left page px (x0, y0)."""
+    r = wordboxes.INK_R
+    h, w = lab.shape
+    boxes = np.asarray(boxes).reshape(-1, 4)
+    x0, y0 = max(int(boxes[:, 0].min()) - r, 0), max(int(boxes[:, 1].min()) - r, 0)
+    x1, y1 = min(int(boxes[:, 2].max()) + r, w), min(int(boxes[:, 3].max()) + r, h)
+    own = np.isin(lab[y0:y1, x0:x1], np.asarray(labels)).view(np.uint8)
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    return cv2.dilate(own, disc) > 0, (x0, y0)
+
+
 def word_masks(sheet: str, rows: list[dict], page: np.ndarray | None = None,
                chance: np.ndarray | None = None) -> dict:
-    """Each box's own px: the component `wordboxes.group` grouped it from (8-connected px at or above its `level` in
-    the held-out detectors' chance and within INK_R px of ink; the box's `i` counts the components holding MIN_PX ink
-    px or more, in label order), grown by wordboxes.INK_R px (a disc).  `rows`: boxes.parquet rows of `sheet` (with
-    `row`, `i`, `level`, `ink_px`); `page` and `chance` read from disk when None.  {row: (bool window, (x0, y0) its
-    top-left page px)}.  ValueError when a box's component holds another number of ink px than the box (the boxes
-    were grouped from other chance)."""
+    """Each box's own px: the component `wordboxes.group` grouped it from (`components` at its `level`, the box's
+    `i`-th), grown by wordboxes.INK_R px (`grown`).  `rows`: boxes.parquet rows of `sheet` (with `row`, `i`, `level`,
+    `ink_px`); `page` and `chance` read from disk when None.  {row: (bool window, (x0, y0) its top-left page px)}.
+    ValueError when a box's component holds another number of ink px than the box (the boxes were grouped from other
+    chance)."""
     page = data.load_page(sheet) if page is None else page
     ink = page < grid.INK_BELOW
     chance = wordboxes._read_chance(sheet, ink.shape) if chance is None else chance
     gate = wordboxes.ink_gate(ink)
-    r = wordboxes.INK_R
-    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
     out = {}
     for level in sorted({float(x["level"]) for x in rows}):
-        mask = (chance >= int(np.ceil(level * 255 - 1e-9))) & gate
-        _, lab = cv2.connectedComponents(mask.view(np.uint8), connectivity=8)
-        ys, xs = np.nonzero(mask)
-        lp = lab[ys, xs]
-        order = np.argsort(lp, kind="stable")
-        lp, ys, xs = lp[order], ys[order], xs[order]
-        start = np.flatnonzero(np.r_[True, lp[1:] != lp[:-1]]) if len(lp) else np.zeros(0, np.int64)
-        n_ink = np.add.reduceat(ink[ys, xs].astype(np.int64), start) if len(lp) else np.zeros(0, np.int64)
-        kept = np.flatnonzero(n_ink >= wordboxes.MIN_PX)
+        c = components(ink, chance, level, gate)
         for x in (x for x in rows if float(x["level"]) == level):
             i = int(x["i"])
-            if i >= len(kept) or int(n_ink[kept[i]]) != int(x["ink_px"]):
+            if i >= len(c["label"]) or int(c["ink_px"][i]) != int(x["ink_px"]):
                 raise ValueError(f"{sheet}: box {x['row']} ({x['ink_px']} ink px) is not its component {i} at level "
                                  f"{level} of this chance")
-            j = kept[i]
-            s, e = start[j], (start[j + 1] if j + 1 < len(start) else len(lp))
-            x0, y0 = max(int(xs[s:e].min()) - r, 0), max(int(ys[s:e].min()) - r, 0)
-            x1, y1 = min(int(xs[s:e].max()) + r + 1, ink.shape[1]), min(int(ys[s:e].max()) + r + 1, ink.shape[0])
-            own = (lab[y0:y1, x0:x1] == lp[s]).view(np.uint8)
-            out[x["row"]] = (cv2.dilate(own, disc) > 0, (x0, y0))
+            out[x["row"]] = grown(c["lab"], c["label"][i:i + 1], c["box"][i:i + 1])
     return out
 
 
