@@ -5,6 +5,7 @@ rule for every comparison.  CPU, $0.
 
     uv run python scripts/textlines/decide.py audit ne        # the baselines' missed-text audits on one quarter
     uv run python scripts/textlines/decide.py panel ne control-ne-s0 composites-ne-s0 composites-ne-s1 ...
+    uv run python scripts/textlines/decide.py regate-extra control-ne-s0 ...   # 1990-96 gated again (new measures)
     uv run python scripts/textlines/decide.py verdict ne --control control --variant composites [--eye-ok yes]
     uv run python scripts/textlines/decide.py verdict sw --control control --variant composites --noise ne ...
 
@@ -68,8 +69,22 @@ EXTRA_MEASURES = ("m1b_in_box", "m1c", "m2", "m2_clean_words")
 CI = 0.95
 
 # The audits counted by eye: the audit file (relative to TEXTLINES) -> how many of its drawn pieces are plainly a
-# letter or digit (text the detector missed).  Who counted, and how, is in the results note.
-EYE_AUDIT: dict[str, int] = {}
+# letter or digit (text the detector missed).  Counted by the Task 7 implementer on each contact sheet (64 tiles); a
+# piece of digits fused into a line is borderline and not counted (the borderline tiles are listed in the results
+# note).
+EYE_AUDIT: dict[str, int] = {
+    "baselines/audit/r328-ne.json": 0,
+    "baselines/audit/old-ne-ne.json": 1,           # tile 42, the T of a large "STR..."
+    "runs/control-ne-s0/audit.json": 1,            # tile 22, the 0 of "40"
+    "runs/control-ne-s1/audit.json": 0,
+    "runs/control-ne-s2/audit.json": 0,
+    "runs/composites-ne-s0/audit.json": 0,
+    "runs/composites-ne-s1/audit.json": 0,
+    "runs/composites-ne-s2/audit.json": 0,
+    "baselines/audit/r328-sw.json": 0,
+    "baselines/audit/old-sw-sw.json": 3,           # tiles 25, 39, 63: street-name letters and the T of "...CTS"
+    "runs/control-sw-s0/audit.json": 3,            # tiles 25, 38, 44: street-name letters
+}
 
 
 def _all(values) -> bool | None:
@@ -267,19 +282,17 @@ def markdown(v: dict) -> str:
             lines.append(f"| {name} | " + " | ".join(cells) + f" | {b['conditions']['audit held']} | "
                          f"{b['adoptable']} | {b['as_written']} |")
         lines.append("")
-        for name, b in a.items():
-            if isinstance(b, dict):
-                for side in ("arm", "baseline"):
-                    e = b["audit"][side]
-                    who = arm if side == "arm" else name
-                    if e is None:
-                        lines.append(f"- audit {who}: not counted by eye yet")
-                    else:
-                        lines.append(
-                            f"- audit {who}: {e['pieces']:.0f} letter-sized pieces, {e['missed']:.0f} missed; "
-                            f"{e['text']}/{e['drawn']} drawn plainly text ({e['share']:.3f} [{e['share_ci'][0]:.3f}, "
-                            f"{e['share_ci'][1]:.3f}]); missed text pieces {e['missed_text']:.1f} "
-                            f"[{e['missed_text_ci'][0]:.1f}, {e['missed_text_ci'][1]:.1f}]")
+        audits = {n: b["audit"]["baseline"] for n, b in a.items() if isinstance(b, dict)}
+        mine = next((b["audit"]["arm"] for b in a.values() if isinstance(b, dict)), None)
+        for who, e in {arm: mine, **audits}.items():
+            if e is None:
+                lines.append(f"- audit {who}: not counted by eye yet")
+            else:
+                lines.append(
+                    f"- audit {who}: {e['pieces']:.0f} letter-sized pieces, {e['missed']:.0f} missed; "
+                    f"{e['text']}/{e['drawn']} drawn plainly text ({e['share']:.3f} [{e['share_ci'][0]:.3f}, "
+                    f"{e['share_ci'][1]:.3f}]); missed text pieces {e['missed_text']:.1f} "
+                    f"[{e['missed_text_ci'][0]:.1f}, {e['missed_text_ci'][1]:.1f}]")
         lines.append("")
     if any(v["extra"].values()):
         lines += [f"### {EXTRA} (this quarter's px; no table, so no M1a)", "",
@@ -326,6 +339,29 @@ def audit_baselines(quarter: str) -> None:
         print(name, quarter, "letter-sized", total, "missed", len(cands), "->", f, flush=True)
 
 
+def regate_extra(names: list[str], series: str = EXTRA) -> None:
+    """Gate again the runs `names`' predictions on another map's sheets (their saved `chance/<series>/`), as
+    `variant.score` does, so that runs gated before a measure was added (m2_clean_words) carry it too.  The measures
+    already there must come out the same (px and share called), or it stops before writing."""
+    import variant
+
+    from sfzmaps.solver.textnet import data
+    sheets = data.load_sheets([series], hold_out_validation=False)
+    for name in names:
+        run = RUNS_DIR / name
+        quarter = _quarter_of(run)
+        out = run / "extra" / series
+        old = json.loads((out / linegate.SCORES_FILE).read_text())
+        r, t = linegate.gate_sheets(sheets, linegate.folder_source(run / "chance" / series, "flat"), (quarter,),
+                                    variant.ExtraGeo())
+        for m in ("m1b_in_box", "m1c", "m2", "overlap_band"):
+            if (old[m]["px"], old[m]["called_05"]) != (r[m]["px"], r[m]["called_05"]):
+                raise SystemExit(f"{name}: {m} differs from the gate written before ({old[m]['px']}, "
+                                 f"{old[m]['called_05']} now {r[m]['px']}, {r[m]['called_05']}): not rewritten")
+        linegate.write(r, t, out)
+        print(name, series, {m: r[m]["called_05"] for m in EXTRA_MEASURES}, flush=True)
+
+
 def compare_panel(quarter: str, names: list[str]) -> Path:
     """The picture panel with the runs `names` side by side, then r328 and the old quarter model."""
     import panel
@@ -345,6 +381,8 @@ def main() -> None:
     p = sub.add_parser("panel")
     p.add_argument("quarter", choices=paths.QUARTERS)
     p.add_argument("runs", nargs="+")
+    x = sub.add_parser("regate-extra")
+    x.add_argument("runs", nargs="+")
     v = sub.add_parser("verdict")
     v.add_argument("quarter", choices=paths.QUARTERS)
     v.add_argument("--control", default="control")
@@ -356,6 +394,8 @@ def main() -> None:
         audit_baselines(args.quarter)
     elif args.cmd == "panel":
         print(compare_panel(args.quarter, args.runs))
+    elif args.cmd == "regate-extra":
+        regate_extra(args.runs)
     else:
         control = _runs_of(args.control, args.quarter)
         variant = _runs_of(args.variant, args.quarter) if args.variant else []
