@@ -56,8 +56,8 @@ def main():
     _, blocks = np.unique(C.lots["blklot"].astype(str).str[:4].values, return_inverse=True)
     nb = int(blocks.max()) + 1
     p_pub, p_fin = cc.per_block(pub, blocks, nb), cc.per_block(fin, blocks, nb)
-    for name, pb, m in (("published", p_pub, m_pub), ("final", p_fin, m_fin)):   # the split adds up to the measures
-        check_block_split(pb, blocks, pb["label_lot"], pb["label_zoning"], pb["label_right"], m, name)
+    for name, pb, m, codes in (("published", p_pub, m_pub, pub), ("final", p_fin, m_fin, fin)):   # the split adds up to the measures
+        check_block_split(pb, blocks, codes, nothing, m, name)
     ci = cc.bootstrap(p_fin, p_pub, nb)                  # published - final
     err = cc.known_error(fin)
     diff = {"incidents": m_pub["incidents"] - m_fin["incidents"],

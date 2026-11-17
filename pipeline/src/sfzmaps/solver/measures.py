@@ -42,12 +42,15 @@ def scoring_labels() -> list[tuple[int, str]]:
             if C.quarter[lot] == k]
 
 
-def check_block_split(split, blocks, label_lot, zoning, right, measured, name="run"):
-    """Check a per-block split of the labels (`split["zoning"]`, `split["right"]`: counts per block) and of the wrong
-    lots against the measures it must add up to, and the labels' split against the labels themselves: each block's
-    count is recounted label by label (the block of the lot under it), so labels regrouped between blocks with the
-    same totals are caught, not only a wrong total.  `zoning`, `right`: per label, as `score` counts them;
-    `measured`: report.six_measures' dict.  AssertionError on a difference."""
+def check_block_split(split, blocks, codes, exclude, measured, name="run"):
+    """Check a per-block split (`split`: incidents, zoning labels, labels right and wrong lots per block, as
+    scripts/incidents/criteria_check.per_block makes it from its own working) against the measures it must add up
+    to (`measured`: report.six_measures' dict), and its labels against `score`'s own per-label answer: each block's
+    count is recounted from the lots, zoning flags and right flags that `score` gives for `codes` (leaving out the
+    lots of `exclude`), the block of the lot under each label by `blocks`.  So labels regrouped between blocks with
+    the same totals are caught, not only a wrong total.  AssertionError on a difference."""
+    s = score(codes, Table(exclude))
+    label_lot, zoning, right = s["label_lot"], s["label_zoning"], s["label_right"]
     assert round(split["incidents"].sum()) == measured["incidents"], f"{name}: incidents per block do not add up"
     assert abs(split["right"].sum() / split["zoning"].sum() - measured["labels_right"]) < 1e-5, \
         f"{name}: labels right per block do not add up"
@@ -138,6 +141,7 @@ def score(codes, T):
     counted = (T.label_district < 0) | (lots_in[d] > 0)          # misread (names no table code) counts wrong
     right = (T.label_district >= 0) & (lots_in[d] > 0) & (right_in[d] > lots_in[d] / 2)
     zoning = counted & T.label_in_vocab
+    out.update(label_lot=T.label_lot, label_zoning=zoning, label_right=right & zoning)    # per label, for the checks
     out.update(labels=right.sum() / counted.sum(), n_labels=int(counted.sum()),
                zoning_labels=(right & zoning).sum() / zoning.sum(), n_zoning_labels=int(zoning.sum()))
     hs, n_long, long_ft = holes(T, drawn)

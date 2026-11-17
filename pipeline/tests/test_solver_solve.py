@@ -313,22 +313,45 @@ def test_the_score_keeps_its_labels_when_the_solve_reads_other_ones(synthetic_ci
     assert T.label_lot.tolist() == UNDER and T.label_code.tolist() == ["RH-1", "RH-2", "NC-1"]
 
 
-def test_the_block_split_is_refused_when_labels_are_regrouped_between_blocks_with_the_same_totals():
-    blocks = np.array([0, 0, 1, 1, 2, 2])
-    label_lot = np.array([0, 2, 4])                  # one label in each of blocks 0, 1 and 2
-    flag = np.ones(3, bool)
-    measured = {"incidents": 0, "labels_right": 1.0, "wrong_lots": 0}
-    split = {"incidents": np.zeros(3), "wrong_lots": np.zeros(3), "zoning": np.array([1.0, 1.0, 1.0]),
-             "right": np.array([1.0, 1.0, 1.0])}
-    measures.check_block_split(split, blocks, label_lot, flag, flag, measured)
-    # block 0's label counted in block 1, and block 1's in block 0: every total still adds up
-    swapped = dict(split, zoning=np.array([0.0, 2.0, 1.0]), right=np.array([2.0, 0.0, 1.0]))
+def _criteria_check():
+    """scripts/incidents/criteria_check.py, whose `per_block` is the production split the check guards."""
+    import importlib.util
+    import sys
+    folder = Path(__file__).resolve().parents[1] / "scripts" / "incidents"
+    sys.path.insert(0, str(folder))
+    try:
+        spec = importlib.util.spec_from_file_location("criteria_check_under_test", folder / "criteria_check.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.remove(str(folder))
+    return module
+
+
+def test_the_block_split_is_refused_when_labels_are_regrouped_between_blocks_with_the_same_totals(synthetic_city):
+    cc = _criteria_check()
+    C = synthetic_city
+    codes = C.table.astype(object).copy()
+    codes[0] = "NC-1"                                       # one wrong lot (not a label's): the measures are real
+    codes = codes.astype(str)
+    nothing = np.zeros(C.n, bool)
+    measured = report.six_measures(codes, nothing)
+    blocks = np.arange(C.n)                                 # every lot its own block: each label alone in one
+    nb = C.n
+    split = cc.per_block(codes, blocks, nb)
+    measures.check_block_split(split, blocks, codes, nothing, measured)            # the production split passes
+    # a label counted in another block (the lot under label 0 put in the block of lot 0, which holds no label):
+    # every total in the split still adds up to the measures, but the groups are not those `score`'s labels give
+    swapped = blocks.copy()
+    swapped[measures.Table(nothing).label_lot[0]] = blocks[0]
+    regrouped = cc.per_block(codes, swapped, nb)
+    assert regrouped["zoning"].sum() == split["zoning"].sum() and regrouped["right"].sum() == split["right"].sum()
+    assert not np.array_equal(regrouped["zoning"], split["zoning"])
     with pytest.raises(AssertionError, match="grouped into blocks differently"):
-        measures.check_block_split(swapped, blocks, label_lot, flag, flag, measured)
+        measures.check_block_split(regrouped, blocks, codes, nothing, measured)
     # and a total that no longer adds up is still refused
     with pytest.raises(AssertionError, match="labels right per block"):
-        measures.check_block_split(dict(split, right=np.array([1.0, 0.0, 0.0])), blocks, label_lot, flag, flag,
-                                   measured)
+        measures.check_block_split(dict(split, right=np.zeros(nb)), blocks, codes, nothing, measured)
 
 
 def test_the_trust_check_reads_each_label_by_the_fit_that_held_its_lot_out(synthetic_city):

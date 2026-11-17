@@ -77,8 +77,7 @@ def per_block(codes, blocks, nb):
     label_block = blocks[T.label_lot]                    # the labels are Table's: one fixed scoring set, one source
     return {"incidents": inc, "zoning": np.bincount(label_block[zoning], minlength=nb).astype(float),
             "right": np.bincount(label_block[zoning & right], minlength=nb).astype(float),
-            "wrong_lots": np.bincount(blocks[wrong], minlength=nb).astype(float),
-            "label_lot": T.label_lot, "label_zoning": zoning, "label_right": right}
+            "wrong_lots": np.bincount(blocks[wrong], minlength=nb).astype(float)}
 
 
 def bootstrap(fin, new, nb):
@@ -226,8 +225,8 @@ def main(run, times, times_note, pictures, across_label_sources=False):
     # 2: the paired block bootstrap, with the table's known error
     m_fin, m_new = six_measures(fin_codes, np.zeros(C.n, bool)), six_measures(new_codes, np.zeros(C.n, bool))
     fin, new = per_block(fin_codes, blocks, nb), per_block(new_codes, blocks, nb)
-    for name, pb, m in (("final", fin, m_fin), (run, new, m_new)):     # the split per block adds up to the measures
-        check_block_split(pb, blocks, pb["label_lot"], pb["label_zoning"], pb["label_right"], m, name)
+    for name, pb, m, codes in (("final", fin, m_fin, fin_codes), (run, new, m_new, new_codes)):     # the split per block adds up to the measures
+        check_block_split(pb, blocks, codes, np.zeros(C.n, bool), m, name)
     ci = bootstrap(fin, new, nb)
     err = known_error(fin_codes)
     diff = {"incidents": m_new["incidents"] - m_fin["incidents"],
