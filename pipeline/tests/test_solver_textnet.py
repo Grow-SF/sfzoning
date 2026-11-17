@@ -406,6 +406,9 @@ def test_sheet_data_holds_no_full_page_target_rasters(maps):
         fields = {f.name: getattr(sd, f.name) for f in dataclasses.fields(sd)}
         # the areas held out are map areas (one shared by every sheet), no raster of the page
         assert fields.pop("held") == (data.VALIDATION,)
+        # no line px until the label rule "lines-unknown" asks for them (`zones.prepare`): an empty array, no bytes
+        lines = fields.pop("line_bits")
+        assert lines.dtype == np.uint8 and lines.shape == (0, 0)
         # every other field is an array or a plain value: nothing is held where its bytes would not be counted
         assert all(isinstance(v, (np.ndarray, str, int, float, bool)) for v in fields.values())
         arrays = {k: v for k, v in fields.items() if isinstance(v, np.ndarray)}
@@ -492,11 +495,12 @@ def _flip(crops, where) -> list[dict[str, np.ndarray]]:
 
 def test_default_recipe_trains_as_today(maps):
     # today's settings: 8,000 steps of 12 crops of 320 px, a one-cycle peak of 2e-3 reached 30% in, width 24, the
-    # loss on every known px, the network at full size with all seven outputs, no average, no prefetch
+    # loss on every known px, the network at full size with all seven outputs, no average, no prefetch, every px of a
+    # word box taught as text (the label rule "boxes")
     assert dataclasses.asdict(train.Recipe()) == {
         "iterations": 8000, "max_lr": 2e-3, "pct_start": 0.3, "batch": 12, "crop": 320, "width": 24, "ink_only": "off",
         "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full",
-        "precision": "float32"}
+        "precision": "float32", "labels": "boxes"}
     torch.manual_seed(0)
     net = train.build_net(train.Recipe())
     assert sum(p.numel() for p in net.parameters()) == TODAYS_PARAMETERS
@@ -1578,7 +1582,7 @@ def test_reader_detector_never_trains_on_its_quarter_or_held_blocks(maps, monkey
     area = reader_stage.block_area(blocks, lot_block, grown, *LOTS_ORIGIN)
     sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False)
     real_crop, real_loss, crops, weights = data.crop_targets, train.loss_fn, [], []
-    monkeypatch.setattr(data, "crop_targets", lambda sd, *a: crops.append((sd, *a)) or real_crop(sd, *a))
+    monkeypatch.setattr(data, "crop_targets", lambda sd, *a, **k: crops.append((sd, *a)) or real_crop(sd, *a, **k))
     monkeypatch.setattr(train, "loss_fn", lambda out, t, k, a, w: weights.append(w.numpy().copy())
                         or real_loss(out, t, k, a, w))
     recipe = dataclasses.replace(stage.DEFAULT_RECIPE, iterations=4, batch=6, crop=64, width=8, prefetch=False)

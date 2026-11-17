@@ -10,8 +10,13 @@
   held out   the px whose map point, through the sheet's corrected placement, is in one of the areas the sheet holds
              out (`SheetData.held`): VALIDATION_AREA for a trial (`VALIDATION`); a quarter of the city (`Quarter`) and
              the answered blocks (`GridArea`) for the code reader's detectors (`reader_stage`); none for the stage's
-  known      the px the loss reads: not unknown and not held out
+  known      the px the loss reads: not unknown and not held out; under the label rule "lines-unknown" also not a
+             px inside a word that is a line px (`SheetData.line_bits`: the run rule's line ink grown by 1 px)
   centres    the px a training crop may centre on: ink or text, not held out
+
+The label rule (`crop_targets(..., labels=)`, LABEL_RULES): "boxes" teaches every px of a word's rectangle as text,
+the lines through it too; "lines-unknown" leaves the line px inside a word unknown (no lesson either way).  It needs
+the sheet's line px, which `textnet.zones.prepare` fills before training, with the zones it keeps around Sol's points.
 
 An area answers for map points whether each is in it (`contains`) and, from the placement's samples around a page
 window, whether all of the window's px are in it or none is, when that follows from the samples alone (`decided`): a
@@ -68,6 +73,7 @@ VALIDATION_AREA = (6000442.0, 2091727.0, 6008805.0, 2108453.0)
 BOX_FIELDS = ("words", "kinds", "angles", "other", "points")    # SheetData's arrays of boxes and points
 LOAD_THREADS = 8                  # sheets read at once
 BAND = 512                        # page rows drawn at a time when finding where crops may centre
+LABEL_RULES = ("boxes", "lines-unknown")   # what a word box teaches (`crop_targets`; see the module)
 
 
 # --- areas of the map a sheet may hold out ---------------------------------------------------------------------------
@@ -179,6 +185,9 @@ class SheetData:
                              # without the placement
     held: tuple = ()         # the areas held out (MapRect, Quarter, GridArea): no loss there, no crop centred there
     point_radius: int = READ_POINT_RADIUS   # px around each of Sol's points that are unknown (outside every word)
+    line_bits: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 0), np.uint8))
+                             # uint8, packed as `ink_bits`: the line px (`linerules.line_px` grown by 1 px, the 8
+                             # around each), for the label rule "lines-unknown"; (0, 0) until `zones.prepare` fills it
 
 
 def reading_angle(rect: np.ndarray) -> int:
@@ -345,11 +354,26 @@ def page_ink(sd: SheetData) -> np.ndarray:
     return np.unpackbits(sd.ink_bits, axis=1, count=sd.width).view(bool)
 
 
+def _bits_window(packed: np.ndarray, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+    """The px of a page packed 8 a byte along each row (as `ink_bits`), in the window of h x w px whose top-left px is
+    (row y0, col x0), bool."""
+    b0 = x0 // 8
+    bits = np.unpackbits(packed[y0:y0 + h, b0:(x0 + w + 7) // 8], axis=1)
+    return bits[:, x0 - 8 * b0:x0 - 8 * b0 + w].view(bool)
+
+
 def _ink_window(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
     """The ink of the page window of h x w px whose top-left px is (row y0, col x0), bool."""
-    b0 = x0 // 8
-    bits = np.unpackbits(sd.ink_bits[y0:y0 + h, b0:(x0 + w + 7) // 8], axis=1)
-    return bits[:, x0 - 8 * b0:x0 - 8 * b0 + w].view(bool)
+    return _bits_window(sd.ink_bits, y0, x0, h, w)
+
+
+def line_window(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+    """The line px (`SheetData.line_bits`) of the page window of h x w px whose top-left px is (row y0, col x0), bool.
+    ValueError when the sheet holds none (`zones.prepare` fills them)."""
+    if sd.line_bits.shape != sd.ink_bits.shape:
+        raise ValueError(f"{sd.series} {sd.sheet}: no line px (SheetData.line_bits {sd.line_bits.shape}, the ink "
+                         f"{sd.ink_bits.shape}): the label rule lines-unknown needs them (textnet.zones.prepare)")
+    return _bits_window(sd.line_bits, y0, x0, h, w)
 
 
 def _paint(shapes: np.ndarray, values: np.ndarray, y0: int, x0: int, h: int, w: int,
@@ -448,17 +472,24 @@ def page_text(sd: SheetData) -> tuple[np.ndarray, np.ndarray]:
     return word > 0, _unknown(sd, word, 0, 0, sd.height, sd.width)
 
 
-def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int) -> dict[str, np.ndarray]:
+def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int,
+                 labels: str = "boxes") -> dict[str, np.ndarray]:
     """The training crop centred on page px (row y, col x), moved inside the page: size / `scale` px of page resized
     to `size` x `size` (nearest px) and turned `turns` quarter turns counter-clockwise, the reading angle with it (in
     [-180, 180) degrees on text, 0 elsewhere).  Keys: ink (bool), text (uint8), kind (uint8), angle (int16), known
-    (bool); drawn from the sheet's boxes for this crop alone."""
+    (bool); drawn from the sheet's boxes for this crop alone, by the label rule `labels` (LABEL_RULES, see the
+    module): under "lines-unknown" a px inside a word that is a line px is not known (ValueError when the sheet holds
+    no line px)."""
+    if labels not in LABEL_RULES:
+        raise ValueError(f"labels is one of {', '.join(LABEL_RULES)}, not {labels!r}")
     src = int(round(size / scale))
     y0 = int(np.clip(y - src // 2, 0, sd.height - src))
     x0 = int(np.clip(x - src // 2, 0, sd.width - src))
     word = _words(sd, y0, x0, src, src)
-    parts = {"ink": _ink_window(sd, y0, x0, src, src), "word": word,
-             "known": _known(sd, word, y0, x0, src, src)}
+    known = _known(sd, word, y0, x0, src, src)
+    if labels == "lines-unknown":
+        known &= ~((word > 0) & line_window(sd, y0, x0, src, src))
+    parts = {"ink": _ink_window(sd, y0, x0, src, src), "word": word, "known": known}
     if src != size:
         parts = {k: cv2.resize(v.view(np.uint8) if v.dtype == bool else v, (size, size),
                                interpolation=cv2.INTER_NEAREST).astype(v.dtype) for k, v in parts.items()}

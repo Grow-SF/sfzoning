@@ -5,7 +5,8 @@ Each step takes `batch` crops of `crop` x `crop` px from the sheets' pages (`dat
 crop may centre (`data.centres`, taken every CENTRE_STRIDE px each way): TEXT_SHARE of them on text, the rest on any
 ink.  Each crop is scaled by a factor drawn log-uniformly from SCALE (so small street lettering also teaches big code
 lettering) and turned a random number of quarter turns (the reading angle turns with it); its targets are drawn for it
-alone (`data.crop_targets`).
+alone (`data.crop_targets`), by the recipe's label rule (`labels`; "lines-unknown" needs the sheets' line px, which
+`zones.prepare` fills before the training).
 
 The loss is binary cross-entropy on text over the px it reads, plus KIND_WEIGHT x the cross-entropy of the kind and
 ANGLE_WEIGHT x (1 - cosine) of the reading direction, both on the text px it reads; a text-only network (`heads`
@@ -64,7 +65,7 @@ LOG_EVERY = 250         # iterations between progress lines (and reads of the lo
 PREFETCH = 2            # batches drawn ahead with `prefetch`
 HELD = 2                # steps a batch is held after its copy to the GPU was queued (`Copies`)
 CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text"), "decoder": ("full", "light"),
-           "precision": ("float32", "float16")}
+           "precision": ("float32", "float16"), "labels": data.LABEL_RULES}
 NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
 
 
@@ -90,6 +91,8 @@ class Recipe:
                       the half-precision gradients (torch 2.15 supports it on cpu and mps).  The weights, the
                       optimiser and the saved model stay float32.  The scaler's step reads its overflow check
                       back from the device each step (`.item()`), which waits for the GPU.
+      labels          what a word box teaches (`data.crop_targets`): "boxes" every px of it as text, the lines through
+                      it too; "lines-unknown" its line px unknown (the sheets' line px filled by `zones.prepare`)
     """
     iterations: int = ITERATIONS
     max_lr: float = LEARNING_RATE
@@ -104,6 +107,7 @@ class Recipe:
     prefetch: bool = False
     decoder: str = "full"
     precision: str = "float32"
+    labels: str = "boxes"
 
     def __post_init__(self):
         for f in dataclasses.fields(self):
@@ -189,13 +193,13 @@ def centre_pools(sheets: list[data.SheetData]) -> tuple[Pool, Pool]:
 def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe,
          rng: np.random.Generator) -> list[dict[str, np.ndarray]]:
     """One batch of `recipe.batch` crops: for each, text or ink, a centre from that pool, a scale and a number of
-    turns."""
+    turns; its targets by the recipe's label rule."""
     out = []
     for _ in range(recipe.batch):
         pool = pools[0] if rng.random() < TEXT_SHARE else pools[1]
         i, y, x = pool[rng.integers(len(pool))]
         scale = float(np.exp(rng.uniform(np.log(SCALE[0]), np.log(SCALE[1]))))
-        out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, int(rng.integers(4))))
+        out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, int(rng.integers(4)), labels=recipe.labels))
     return out
 
 
