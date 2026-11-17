@@ -114,14 +114,19 @@ def truth_case(name: str, text: str, cap_px: int, seed: int, draw=None) -> dict:
         x = left + int(cap_px * 0.9)
         seg((x, 0), (x, last))
     elif name == "stair-step border":
-        # lot jogs of 20-40 px: a monotone staircase down through the word
-        x, y = 0, mid - 120
+        # lot jogs of 20-40 px: a monotone staircase down, placed so its step at the word's centre column runs
+        # through the word's middle
+        cx = (left + right) // 2
+        steps, x, y = [], 0, 0
         while x < last:
             nx = min(x + int(rng.integers(20, 41)), last)
-            seg((x, y), (nx, y))
             ny = y + int(rng.integers(20, 41))
-            seg((nx, y), (nx, ny))
+            steps.append((x, nx, y, ny))
             x, y = nx, ny
+        y0 = mid - next(a_y for a_x, b_x, a_y, _ in steps if a_x <= cx <= b_x)
+        for a_x, b_x, a_y, b_y in steps:
+            seg((a_x, a_y + y0), (b_x, a_y + y0))
+            seg((b_x, a_y + y0), (b_x, b_y + y0))
     elif name == "dashed line":
         for x in range(0, SIZE, 20):
             seg((x, mid), (min(x + 11, last), mid))          # 12 on, 8 off

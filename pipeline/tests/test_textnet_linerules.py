@@ -43,6 +43,13 @@ def test_every_case_has_line_ink_and_glyph_ink_and_is_seeded():
         assert (a["ink"] == b["ink"]).all()
 
 
+def test_the_stair_step_steps_through_the_word_on_every_seed():
+    for cap in (20, 27):
+        for seed in range(4):
+            c = linerules.truth_case("stair-step border", "RM-2", cap_px=cap, seed=seed)
+            assert (c["glyph"] & dilate(c["line"], 1)).sum() > 0
+
+
 def test_chain_lines_follow_a_bent_line_but_not_short_pieces():
     ink = np.zeros((200, 200), np.uint8)
     cv2.line(ink, (0, 50), (60, 50), 1, 3)       # two 60 px runs meeting at a corner
