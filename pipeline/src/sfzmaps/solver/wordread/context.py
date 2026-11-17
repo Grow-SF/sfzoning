@@ -46,13 +46,14 @@ a string off the list with clearly stronger ink wins.  Without a pack, or with e
 The ink (`ink_logp`): log p(s | ink) exactly by CTC (`textread.ctc.string_log_probs`) at the CTC temperature tau
 (each frame's log-probabilities x tau, renormalised), mixed over the two reading directions as the reader mixes them.
 
-What is measured (`measure_spreads`, on OUR boxes matched to Terra's words, whose text is what they name; the codes on
-Terra's code words), by EM, every word refused that is in or touching an answered block or the held-out quarter:
+What is measured (`measure_spreads`, on pairs of OUR boxes and Terra's words, whose text is what they name, each pair
+weighted by the chance the box holds the word, with no IoU or other cut; the codes on Terra's code words), by weighted
+EM, every word refused that is in or touching an answered block or the held-out quarter:
   - street-name words: whether each names the street it sits by (near: weighted kernel densities f(d) g(t), each
     reflected at its ends, the bandwidth by leave-one-out likelihood) or not (far: the distance to the street its text
     names exponential, the angle uniform: misreads and renamed streets point miles away).  m = 1 - the near share, the
     words whose text no street prints counted far.
-  - EM starts from every decile split of the distances and the likeliest fixed point is kept.
+  - EM starts from every (weighted) decile split of the distances and the likeliest fixed point is kept.
   - block-number words: near when inside the block they name, else away (p_in = 1, f_out = 0).  The same EM with a
     near-outside density was tried on our boxes: only 2 or 3 of some 2,300 found words sit just outside their block,
     the rest of the outside words are misreads 75 ft to 6 miles off, and the likeliest fit moved the "near" density
@@ -61,10 +62,12 @@ Terra's code words), by EM, every word refused that is in or touching an answere
   - codes: e_code the share of code words whose text no code prints; P(form | code) the forms' shares of each code's
     words (flat for a code not seen).
 
-The fit (`fit_prior`): by maximum likelihood of Terra's string on Terra-matched words of the other three quarters
-(never the owner's answers: a word in or touching an answered block, or touching the held-out quarter, is refused),
-the ink calibrated apart from the context: tau on the ink alone, then w per kind on top; unbounded searches (log tau,
-log w), a fit running away reported.  `joint` also fits them together, for comparison.
+The fit (`fit_prior`): by maximum likelihood of Terra's string on the pairs of the other three quarters, each pair's
+log-likelihood weighted by the chance its box holds its word (never the owner's answers: a word in or touching an
+answered block, or touching the held-out quarter, is refused), the ink calibrated apart from the context: tau on the
+ink alone, then w per kind on top; unbounded searches (log tau, log w), a fit running away reported.  `joint` fits them
+together too; the two are compared by held-out NLL.  `fit_temperature`: one temperature on the combined log posterior,
+fitted on held-out predictions (`tempered` applies it).
 """
 import math
 import re
@@ -284,10 +287,15 @@ class Spreads:
 
     def summary(self) -> dict:
         def q(a, w):
-            on = w > 0.5                              # display only: the words more likely near than far
-            a = a[on]
-            qs = {f"q{p}": round(float(np.quantile(a, p / 100)), 2) for p in (50, 90, 99)} if len(a) else {}
-            return {"near_n": int(on.sum()), **qs, "max": round(float(a.max()), 2) if len(a) else None}
+            """Display only: the near weight and the near-weighted quantiles."""
+            on = w > 0
+            a, w = a[on], w[on]
+            if not len(a):
+                return {"near_weight": 0.0}
+            o = np.argsort(a)
+            cum = np.cumsum(w[o]) / w.sum()
+            qs = {f"q{p}": round(float(a[o][min(np.searchsorted(cum, p / 100), len(a) - 1)]), 2) for p in (50, 90, 99)}
+            return {"near_weight": round(float(w.sum()), 2), **qs}
         out = self.block_ft > 0
         return {"street_ft": q(self.street_ft, self.street_r), "street_deg": q(self.street_deg, self.street_r),
                 "block_outside_ft": q(self.block_ft[out], self.block_r[out]),
@@ -854,32 +862,34 @@ def word_offsets(pack: Pack, words: pd.DataFrame) -> pd.DataFrame:
 
 
 def _em(features: list[tuple[np.ndarray, float | None, float | None]], d: np.ndarray, far_angle: bool,
-        r0: np.ndarray) -> dict:
-    """One EM run from responsibilities r0: near = the product of weighted kernel densities over `features` (each
-    (values, lo, hi), leave-one-out, bandwidth by leave-one-out likelihood), far = exponential in `d` (x uniform on
-    [0, 90] when `far_angle`).  Each iteration's bandwidth search starts from the last one.  It stops when the
-    log-likelihood stops rising (by more than EM_TOL relative: numerical convergence) or no responsibility moves by
-    more than EM_TOL; the likeliest state seen is returned (the bandwidths are re-chosen each step, so the
-    log-likelihood need not rise monotonically): its r (the weights its bandwidths were chosen for), bandwidths, far
-    scale, log-likelihood, iterations and whether it converged before EM_MAX_ITER."""
+        r0: np.ndarray, v: np.ndarray | None = None) -> dict:
+    """One EM run from responsibilities r0, each point counting with weight `v` (the chance its box holds its word;
+    1 when None): near = the product of weighted kernel densities over `features` (each (values, lo, hi), weights
+    r v, leave-one-out, bandwidth by leave-one-out likelihood), far = exponential in `d` (x uniform on [0, 90] when
+    `far_angle`).  Each iteration's bandwidth search starts from the last one.  It stops when the log-likelihood stops
+    rising (by more than EM_TOL relative: numerical convergence) or no responsibility moves by more than EM_TOL; the
+    likeliest state seen is returned (the bandwidths are re-chosen each step, so the log-likelihood need not rise
+    monotonically): its r (the responsibilities its bandwidths were chosen for), bandwidths, far scale,
+    log-likelihood, iterations and whether it converged before EM_MAX_ITER."""
     r = np.asarray(r0, float).copy()
+    v = np.ones(len(d)) if v is None else np.asarray(v, float)
     hs = [math.nan] * len(features)
     best = None
     it, converged = 0, False
     for it in range(1, EM_MAX_ITER + 1):
-        pi = float(r.mean())
-        hs = [loo_bandwidth(x, r, lo, hi, start=h) for (x, lo, hi), h in zip(features, hs)]
+        pi = float((v * r).sum() / v.sum())
+        hs = [loo_bandwidth(x, r * v, lo, hi, start=h) for (x, lo, hi), h in zip(features, hs)]
         near = np.ones(len(d))
         for (x, lo, hi), h in zip(features, hs):
-            near = near * (loo_density(x, r, h, lo, hi) if math.isfinite(h) else np.zeros(len(d)))
-        far_w = 1.0 - r
+            near = near * (loo_density(x, r * v, h, lo, hi) if math.isfinite(h) else np.zeros(len(d)))
+        far_w = (1.0 - r) * v
         lam = float((far_w * d).sum() / far_w.sum()) if far_w.sum() > 0 else math.nan
         far = (np.exp(-d / lam) / lam if math.isfinite(lam) and lam > 0 else np.zeros(len(d))) / \
             (90.0 if far_angle else 1.0)
         mix = pi * near + (1 - pi) * far
         with np.errstate(invalid="ignore", divide="ignore"):
             new = np.where(mix > 0, pi * near / np.where(mix > 0, mix, 1.0), 0.0)
-            ll = float(np.log(mix).sum())
+            ll = float(np.where(v > 0, v * np.log(mix), 0.0).sum())
         rose = best is None or ll > best["ll"] + EM_TOL * abs(best["ll"])
         if best is None or ll > best["ll"]:
             best = {"r": r.copy(), "h": list(hs), "lam": lam, "ll": ll}
@@ -891,21 +901,29 @@ def _em(features: list[tuple[np.ndarray, float | None, float | None]], d: np.nda
     return {**best, "iterations": it, "converged": converged}
 
 
-def em_split(features, d: np.ndarray, far_angle: bool) -> dict:
-    """`_em` from every decile split of `d` (near below it) and from an even start; the likeliest fixed point."""
+def em_split(features, d: np.ndarray, far_angle: bool, v: np.ndarray | None = None) -> dict:
+    """`_em` (weights `v`) from every decile split of `d` (near below it) and from an even start; the likeliest fixed
+    point."""
     d = np.asarray(d, float)
     if not len(d):
         return {"r": np.zeros(0), "h": [math.nan] * len(features), "lam": math.nan, "ll": 0.0, "iterations": 0,
                 "converged": True, "start": None}
+    wv = np.ones(len(d)) if v is None else np.asarray(v, float)
+    o = np.argsort(d, kind="stable")
+    cum = np.cumsum(wv[o]) / wv.sum()
+
+    def decile(p):                                 # the v-weighted decile of d
+        return d[o][min(int(np.searchsorted(cum, p / 10)), len(d) - 1)]
+
     starts, seen = [], set()
     for name, r0 in [("even", np.full(len(d), 0.5))] + \
-            [(f"d<=q{p}", (d <= np.quantile(d, p / 10)).astype(float)) for p in range(1, 10)]:
+            [(f"d<=q{p}", (d <= decile(p)).astype(float)) for p in range(1, 10)]:
         if r0.tobytes() not in seen:               # a start like one already run would end where it did
             seen.add(r0.tobytes())
             starts.append((name, r0))
     best = None
     for name, r0 in starts:
-        got = _em(features, d, far_angle, r0)
+        got = _em(features, d, far_angle, r0, v)
         if best is None or got["ll"] > best["ll"]:
             best = {**got, "start": name}
     return best
@@ -913,40 +931,46 @@ def em_split(features, d: np.ndarray, far_angle: bool) -> dict:
 
 def measure_spreads(pack: Pack, words: pd.DataFrame, code_words: pd.DataFrame | None = None, held_blocks=None,
                     quarter: int | None = None) -> tuple[Spreads, pd.DataFrame]:
-    """The fold's `Spreads` (see the module), measured on `words` (our boxes matched to Terra's words: text, kind,
-    x, y, axis, block, quarter, touches) and, for the codes, on `code_words` (Terra's code words: text, block,
-    quarter, touches; `words`' code words when None), both refused answered blocks and the held-out quarter
-    (`refuse_answered`); and the words' offsets with their responsibilities (`r`)."""
+    """The fold's `Spreads` (see the module), measured on `words` (our boxes paired with Terra's words: text, kind,
+    x, y, axis, block, quarter, touches, and optionally `weight`, the chance the box holds the word: every share and
+    density is weighted by it) and, for the codes, on `code_words` (Terra's code words: text, block, quarter, touches;
+    `words`' code words when None), both refused answered blocks and the held-out quarter (`refuse_answered`); and the
+    words' offsets with their responsibilities (`r`)."""
     code_words = words[words["kind"] == CODE] if code_words is None else code_words
     refuse_answered(words, held_blocks, quarter)
     refuse_answered(code_words, held_blocks, quarter)
+    v_all = words["weight"].to_numpy(float) if "weight" in words else np.ones(len(words))
     off = word_offsets(pack, words).assign(r=0.0)
     found = off["found"].to_numpy(bool)
     st = (words["kind"] == STREET).to_numpy()
     bl = (words["kind"] == BLOCK).to_numpy()
     s = off[st & found]
-    em_s = em_split([(s["d_ft"].to_numpy(), 0.0, None), (s["d_deg"].to_numpy(), 0.0, 90.0)], s["d_ft"].to_numpy(), True)
+    vs = v_all[st & found]
+    em_s = em_split([(s["d_ft"].to_numpy(), 0.0, None), (s["d_deg"].to_numpy(), 0.0, 90.0)], s["d_ft"].to_numpy(),
+                    True, vs)
     off.loc[s.index, "r"] = em_s["r"]
     b = off[bl & found]
     bd = b["d_ft"].to_numpy()
     inside = bd <= 0
     off.loc[b.index[inside], "r"] = 1.0             # inside the block it names: near; outside it: away (see module)
-    near_b = float(inside.sum())
+    vb = v_all[bl & found]
+    near_b = float(vb[inside].sum())
     texts = code_words["text"].astype(str)
     listed = texts.isin(set(pack.codes))
     weights = texts[listed].map(pack.codes).to_frame("code").assign(form=texts[listed]) \
         .groupby(["code", "form"]).size()
     weights = (weights / weights.groupby(level="code").transform("sum")).droplevel("code").to_dict()
-    n_s, n_b = int(st.sum()), int(bl.sum())
+    n_s, n_b = float(v_all[st].sum()), float(v_all[bl].sum())
     if not n_s or not n_b or not len(code_words) or not near_b:
         raise ValueError(f"too few words to measure: {n_s} street, {n_b} block, {len(code_words)} code words")
     em_info = {"street": {"start": em_s["start"], "iterations": em_s["iterations"], "converged": em_s["converged"],
-                          "ll": em_s["ll"], "far_scale_ft": em_s["lam"]},
-               "block": {"inside": int(inside.sum()), "outside": int((~inside).sum()), "not_found": n_b - len(b)}}
-    sp = Spreads(street_ft=s["d_ft"].to_numpy(), street_deg=s["d_deg"].to_numpy(), street_r=em_s["r"],
+                          "ll": em_s["ll"], "far_scale_ft": em_s["lam"], "weight": n_s},
+               "block": {"inside": round(near_b, 3), "outside": round(float(vb[~inside].sum()), 3),
+                         "not_found": round(n_b - float(vb.sum()), 3)}}
+    sp = Spreads(street_ft=s["d_ft"].to_numpy(), street_deg=s["d_deg"].to_numpy(), street_r=em_s["r"] * vs,
                  street_h=em_s["h"][0], street_deg_h=em_s["h"][1],
-                 street_away=1.0 - float(em_s["r"].sum()) / n_s,
-                 block_ft=bd, block_r=off.loc[b.index, "r"].to_numpy(), block_h=math.nan,
+                 street_away=1.0 - float((em_s["r"] * vs).sum()) / n_s,
+                 block_ft=bd, block_r=off.loc[b.index, "r"].to_numpy() * vb, block_h=math.nan,
                  block_in=1.0, block_away=1.0 - near_b / n_b,
                  code_away=1.0 - float(listed.mean()), form_weights={str(k): float(v) for k, v in weights.items()},
                  em=em_info)
@@ -967,12 +991,17 @@ def _group_lse(v: np.ndarray, starts: np.ndarray) -> np.ndarray:
 
 class _Words:
     """The fit's words flattened (`posterior`'s arithmetic, vectorised): every word's named strings (its prior's and
-    its truth), each string's lift entries (kind, log1p(odds), log P(string | item)), the kinds' shares c_k, and each
-    truth's position; the ink at a temperature computed on demand (cached)."""
+    its truth), each string's lift entries (kind, log1p(odds), log P(string | item)), the kinds' shares c_k, each
+    truth's position and each word's weight (`weight`, 1 when absent); the ink at a temperature computed on demand
+    (cached), once per box (`box`: the rows of one box share its reads; each row its own when absent)."""
 
     def __init__(self, words: pd.DataFrame):
-        self.reads = list(words["reads"])
-        self.q = np.asarray(words["q"], float)
+        self.weight = words["weight"].to_numpy(float) if "weight" in words else np.ones(len(words))
+        boxes = words["box"].tolist() if "box" in words else list(range(len(words)))
+        self.box_reads: dict = {}
+        for b, r, q in zip(boxes, words["reads"], words["q"]):
+            self.box_reads.setdefault(b, (r, float(q)))
+        self.boxes = boxes
         priors = list(words["prior"])
         self.named, truth_at, word_of = [], [], []
         ent_g, ent_k, ent_l, ent_p = [], [], [], []
@@ -1020,13 +1049,19 @@ class _Words:
             else np.zeros(0, int)
         self.gg = self.grp_g[self.gg_starts] if len(self.grp_g) else np.zeros(0, int)
         self.kinds = [KIND_ORDER[j] for j in sorted(set(self.ent_k.tolist()))]
+        self.box_strings: dict = {}
+        for b, names in zip(self.boxes, self.named):
+            self.box_strings.setdefault(b, set()).update(names)
+        self.box_strings = {b: sorted(s) for b, s in self.box_strings.items()}
         self._ink: dict[float, tuple[np.ndarray, np.ndarray]] = {}
 
     def ink(self, tau: float) -> tuple[np.ndarray, np.ndarray]:
         """Every named string's ink at tau (flat) and each word's ink left for the strings it doesn't name."""
         if tau not in self._ink:
-            flat = np.concatenate([np.array(list(ink_logp(r, q, n, tau).values()), float) for r, q, n in
-                                   zip(self.reads, self.q, self.named)]) if self.named else np.zeros(0)
+            per_box = {b: ink_logp(self.box_reads[b][0], self.box_reads[b][1], s, tau)
+                       for b, s in self.box_strings.items()}
+            flat = np.concatenate([np.array([per_box[b][s] for s in names], float)
+                                   for b, names in zip(self.boxes, self.named)]) if self.named else np.zeros(0)
             with np.errstate(over="ignore"):
                 rest = 1.0 - np.add.reduceat(np.exp(flat), self.starts) if len(flat) else np.zeros(0)
             self._ink[tau] = (flat, rest)
@@ -1044,14 +1079,39 @@ class _Words:
         out[self.gg] = np.logaddexp(per_g, self.log_base[self.gg])
         return out
 
+    def scores(self, tau: float, w: dict[str, float]) -> tuple[np.ndarray, np.ndarray]:
+        """Every named string's unnormalised log posterior (flat) and each word's OTHER (log of the ink it leaves)."""
+        ink, rest = self.ink(tau)
+        with np.errstate(divide="ignore"):
+            return ink + self.lift(w), np.log(np.maximum(rest, 0.0))
+
     def loglik(self, tau: float, w: dict[str, float]) -> np.ndarray:
         """Each word's log posterior of its truth."""
-        ink, rest = self.ink(tau)
-        score = ink + self.lift(w)
-        with np.errstate(divide="ignore"):
-            log_rest = np.log(np.maximum(rest, 0.0))
+        score, log_rest = self.scores(tau, w)
         z = np.logaddexp(_group_lse(score, self.starts), log_rest)
         return score[self.truth_at] - z
+
+    def rows(self, tau: float, w: dict[str, float]) -> list[tuple[np.ndarray, int]]:
+        """Each word's log posterior over its named strings and then OTHER (normalised), and its truth's place."""
+        score, log_rest = self.scores(tau, w)
+        ends = np.r_[self.starts[1:], len(score)]
+        out = []
+        for i, (a, b) in enumerate(zip(self.starts, ends)):
+            v = np.r_[score[a:b], log_rest[i]]
+            out.append((v - float(np.logaddexp.reduce(v[np.isfinite(v)])), int(self.truth_at[i] - a)))
+        return out
+
+
+def ctc_fits(s: str, frames: int) -> bool:
+    """Whether CTC can emit `s` in `frames` frames at all (a frame a character, and a blank between two repeated
+    ones): a string that can't is impossible from that read at any temperature."""
+    return len(s) + sum(a == b for a, b in zip(s, s[1:])) <= frames
+
+
+def readable(words: pd.DataFrame) -> np.ndarray:
+    """Which rows' `truth` their box's reads can emit at all (`ctc_fits`; a row whose truth can't is a physically
+    impossible observation of that box: a box holding a fragment of a longer word)."""
+    return np.array([ctc_fits(t, int(np.shape(r[0])[0])) for t, r in zip(words["truth"], words["reads"])], bool)
 
 
 def truth_loglik(words: pd.DataFrame, tau: float, w: dict[str, float]) -> np.ndarray:
@@ -1059,16 +1119,50 @@ def truth_loglik(words: pd.DataFrame, tau: float, w: dict[str, float]) -> np.nda
     return _Words(words).loglik(tau, w)
 
 
+def truth_rows(words: pd.DataFrame, tau: float, w: dict[str, float]) -> list[tuple[np.ndarray, int]]:
+    """Each word's normalised log posterior over its named strings then OTHER, and its truth's place (`_Words.rows`)."""
+    return _Words(words).rows(tau, w)
+
+
+def tempered(logpost: np.ndarray, temperature: float) -> np.ndarray:
+    """A log posterior (over hypotheses) divided by a temperature and renormalised (1: unchanged)."""
+    v = np.asarray(logpost, float) / temperature
+    fin = np.isfinite(v)
+    return v - (float(np.logaddexp.reduce(v[fin])) if fin.any() else 0.0)
+
+
+def fit_temperature(rows: list[tuple[np.ndarray, int]], weights=None) -> dict:
+    """One temperature on the combined log posterior, by maximum likelihood of each row's truth (`rows` as
+    `truth_rows` gives them; `weights` per row, 1 when None): unbounded search in log T (Brent from 1)."""
+    v = np.ones(len(rows)) if weights is None else np.asarray(weights, float)
+
+    def nll(u):
+        t = math.exp(u)
+        return -float(sum(vi * tempered(lp, t)[k] for (lp, k), vi in zip(rows, v)))
+
+    res = optimize.minimize_scalar(nll, bracket=(-0.5, 0.0), method="brent")
+    return {"temperature": float(math.exp(res.x)), "nll": float(res.fun), "nll_at_1": nll(0.0),
+            "converged": bool(res.success)}
+
+
 def fit_prior(words: pd.DataFrame, held_blocks=None, quarter: int | None = None, joint: bool = False) -> dict:
     """The ink's temperature and the kinds' weights by maximum likelihood of each word's `truth` (Terra's string),
     the ink calibrated apart from the context: tau first, on the ink alone (the reader's p(truth | ink) at tau), then w
-    per kind on top of it (`posterior`).  `words`: per Terra-matched word, `truth`, `reads` (its two reads'
-    log-probabilities), `q`, `prior` (a `Prior`), `block`, `touch_blocks` and, with `quarter`, `quarter` and its touch
-    column; refused when any is the owner's or the held-out quarter's (`refuse_answered`).  Unbounded searches: log tau
+    per kind on top of it (`posterior`).  `words`: per pair of one of our boxes and a Terra word, `truth` (the word's
+    string), `reads` (the box's two reads' log-probabilities), `q`, `prior` (a `Prior`), `block`, `touch_blocks`,
+    optionally `box` (rows of one box share its ink) and `weight` (the chance the box holds the word: each pair's
+    log-likelihood counts that much) and, with `quarter`, `quarter` and its touch column; refused when any is the
+    owner's or the held-out quarter's (`refuse_answered`).  A pair whose truth its box can't emit at all (`readable`)
+    is left out and counted (`impossible`).  Unbounded searches: log tau
     by Brent from tau 1, log w by BFGS from w 1.  With `joint`, also tau and w fitted together (each tau's best w),
     reported under "joint".  Returns tau, w, the log-likelihood with them, with the ink as read (tau 1, no prior) and
     with the ink at tau alone, counts, and whether each search converged."""
     refuse_answered(words, held_blocks, quarter)
+    can = readable(words)
+    impossible = {"pairs": int((~can).sum()),
+                  "weight": float(words["weight"].to_numpy(float)[~can].sum()) if "weight" in words else
+                  float((~can).sum())}
+    words = words[can]
     if not len(words):
         raise ValueError("no words to fit on")
     data = _Words(words)
@@ -1079,7 +1173,7 @@ def fit_prior(words: pd.DataFrame, held_blocks=None, quarter: int | None = None,
     def best_w(tau: float):
         if tau not in inner:
             def nll(u):
-                return -float(data.loglik(tau, dict(zip(kinds, np.exp(u)))).sum())
+                return -float((data.weight * data.loglik(tau, dict(zip(kinds, np.exp(u))))).sum())
             if kinds:
                 res = optimize.minimize(nll, np.zeros(len(kinds)), method="BFGS")
                 inner[tau] = (res.x, float(res.fun), (bool(res.success), str(res.message)))
@@ -1091,13 +1185,14 @@ def fit_prior(words: pd.DataFrame, held_blocks=None, quarter: int | None = None,
         u, fun, ok = best_w(tau)
         return {"tau": tau, "w": {k: float(math.exp(v)) for k, v in zip(kinds, u)},
                 "log_w": dict(zip(kinds, map(float, u))), "loglik": -fun,
-                "loglik_ink_at_tau": float(data.loglik(tau, zero).sum()), "tau_converged": outer_ok,
+                "loglik_ink_at_tau": float((data.weight * data.loglik(tau, zero)).sum()), "tau_converged": outer_ok,
                 "w_converged": ok[0], "w_message": ok[1]}
 
-    ink_only = optimize.minimize_scalar(lambda v: -float(data.loglik(math.exp(v), zero).sum()),
+    ink_only = optimize.minimize_scalar(lambda v: -float((data.weight * data.loglik(math.exp(v), zero)).sum()),
                                         bracket=(math.log(0.5), 0.0), method="brent")
     out = {**result(float(math.exp(ink_only.x)), bool(ink_only.success)),
-           "loglik_ink_as_read": float(data.loglik(1.0, zero).sum()), "n": int(len(words)),
+           "loglik_ink_as_read": float((data.weight * data.loglik(1.0, zero)).sum()), "n": int(len(words)),
+           "weight": float(data.weight.sum()), "impossible": impossible,
            "truth_listed": int(sum(t in (p.strings if p is not None else [])
                                    for t, p in zip(words["truth"], words["prior"])))}
     if joint:

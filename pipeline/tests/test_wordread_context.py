@@ -317,6 +317,56 @@ def test_fit_prior_finds_tau_and_a_weight_no_worse_than_the_ink_alone():
     assert got["w"][C.CODE] > 0.1 and got["tau_converged"]
 
 
+def test_a_truth_its_box_cannot_emit_is_left_out_of_the_fit_and_counted():
+    assert C.ctc_fits("AB", 2) and not C.ctc_fits("AA", 2) and C.ctc_fits("AA", 3) and C.ctc_fits("", 0)
+    words = _fit_words(6)
+    long = words.iloc[[0]].assign(truth="SAN FRANCISCO MUNICIPAL CODE", block="b99", weight=0.2)
+    both = pd.concat([words.assign(weight=1.0), long], ignore_index=True)
+    assert C.readable(both).tolist() == [True] * 6 + [False]
+    got = C.fit_prior(both, held_blocks=set(), quarter=3)
+    assert got["impossible"] == {"pairs": 1, "weight": pytest.approx(0.2)} and got["n"] == 6
+    assert math.isfinite(got["loglik"])
+
+
+def test_a_pairs_weight_counts_like_that_many_copies_and_one_boxs_rows_share_its_ink():
+    words = _fit_words(3)
+    w = {C.CODE: 1.7}
+    twice = pd.concat([words, words.iloc[[0]]], ignore_index=True)
+    weighted = words.assign(weight=[2.0, 1.0, 1.0])
+    a, b = C._Words(twice), C._Words(weighted)
+    assert float((a.weight * a.loglik(0.8, w)).sum()) == pytest.approx(float((b.weight * b.loglik(0.8, w)).sum()))
+    # two Terra words held by one box: one read, each row its own truth
+    pair = pd.concat([words.iloc[[0]], words.iloc[[0]].assign(truth="RH-1")], ignore_index=True).assign(box=[7, 7])
+    got = C.truth_loglik(pair, 0.8, w)
+    alone = [C.truth_loglik(pair.iloc[[k]].drop(columns="box"), 0.8, w)[0] for k in range(2)]
+    assert got == pytest.approx(alone)
+
+
+def test_weighted_em_ignores_a_pair_of_weight_zero():
+    rng = np.random.default_rng([0, 6])
+    d = np.r_[rng.exponential(4.0, 60), rng.uniform(1000, 9000, 10)]
+    deg = np.r_[np.abs(rng.normal(0, 2.0, 60)), rng.uniform(0, 90, 10)]
+    feats = [(d, 0.0, None), (deg, 0.0, 90.0)]
+    base = C.em_split(feats, d, True)
+    extra_d, extra_deg = np.r_[d, 3000.0], np.r_[deg, 1.0]
+    zero = C.em_split([(extra_d, 0.0, None), (extra_deg, 0.0, 90.0)], extra_d, True, np.r_[np.ones(70), 0.0])
+    assert zero["ll"] == pytest.approx(base["ll"]) and zero["h"] == pytest.approx(base["h"])
+
+
+def test_a_temperature_on_the_combined_posterior_undoes_overconfidence():
+    rng = np.random.default_rng([0, 7])
+    rows = []
+    for _ in range(400):
+        right = rng.random() < 0.7               # the top hypothesis is right 70% of the time, posterior says 99%
+        lp = np.log(np.array([0.99, 0.005, 0.005]))
+        rows.append((lp, 0 if right else int(rng.integers(1, 3))))
+    got = C.fit_temperature(rows)
+    assert got["temperature"] > 1.5 and got["nll"] < got["nll_at_1"]
+    p_top = math.exp(C.tempered(rows[0][0], got["temperature"])[0])
+    assert p_top == pytest.approx(0.7, abs=0.05)
+    assert C.tempered(rows[0][0], 1.0) == pytest.approx(rows[0][0])
+
+
 # --- the pack file ----------------------------------------------------------------------------------------------------
 
 def test_a_pack_round_trips_through_its_file(tmp_path):
