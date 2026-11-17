@@ -500,7 +500,8 @@ def test_default_recipe_trains_as_today(maps):
     assert dataclasses.asdict(train.Recipe()) == {
         "iterations": 8000, "max_lr": 2e-3, "pct_start": 0.3, "batch": 12, "crop": 320, "width": 24, "ink_only": "off",
         "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full",
-        "precision": "float32", "labels": "boxes", "composites": 0.0}
+        "precision": "float32", "labels": "boxes", "composites": 0.0,
+        "input": "ink"}
     torch.manual_seed(0)
     net = train.build_net(train.Recipe())
     assert sum(p.numel() for p in net.parameters()) == TODAYS_PARAMETERS

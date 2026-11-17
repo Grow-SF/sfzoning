@@ -1,6 +1,7 @@
 """The text detector's data: each sheet's own page (`page.png`, the scan before any warp), with what it learns.
 
-  ink        page < `grid.INK_BELOW` (128), the model's only input
+  ink        page < `grid.INK_BELOW` (128), the model's input (or, for a recipe with input "grey", the page's grey
+             levels over 255, `SheetData.grey_bits`; the ink is still what the loss's px rules read)
   text       1 inside one of Terra's text boxes (every kind), drawn as the rotated rectangle of the word in page px
   kind       the box's kind (KINDS: 0 zoning code, 1 block number, 2 street name, 3 other), NO_KIND outside text
   angle      the reading direction in whole degrees, counter-clockwise from left-to-right, inside text (0 outside)
@@ -217,6 +218,10 @@ class SheetData:
     weights: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(0, np.float32))
                              # float32 (n,): each word's weight in the word heads' loss (Terra's doubt, in the order of
                              # `words`); none (the default) is every word weighing 1; `wordread.doubt.prepare` fills it
+    grey_bits: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 0), np.uint8))
+                             # uint8 (height, width): the scan's own grey levels (`load_page`), for a detector that
+                             # reads them (`train.Recipe.input="grey"`); (0, 0), the default, until
+                             # `sheet_data(grey=True)`.  Not bits (the plan's name): a byte a px, 8 x `ink_bits`
 
 
 def reading_angle(rect: np.ndarray) -> int:
@@ -306,8 +311,8 @@ def _corners(rects: list[np.ndarray]) -> np.ndarray:
 
 def sheet_data(series: str, sheet: str, hold_out_validation: bool, terra: list[dict] | None = None,
                others: list[dict] | None = None, placement: bool = True,
-               point_radius: int = READ_POINT_RADIUS) -> SheetData:
-    """One sheet's SheetData (see the module), holding VALIDATION out or nothing.  `terra`: lines of Terra's saved
+               point_radius: int = READ_POINT_RADIUS, grey: bool = False) -> SheetData:
+    """One sheet's SheetData (see the module), with the page's grey levels kept too when `grey` (`SheetData.grey_bits`), holding VALIDATION out or nothing.  `terra`: lines of Terra's saved
     answers holding the sheet's (read from disk when None); `others`: the other passes' boxes of the sheet (read from
     disk when None, on a 2000 sheet; none on another map's); `placement`: read the sheet's placement (needed to hold
     the validation area out: ValueError without it); `point_radius`: the px around Sol's points that are unknown."""
@@ -333,14 +338,14 @@ def sheet_data(series: str, sheet: str, hold_out_validation: bool, terra: list[d
         other=_corners([word_rect(b["box"], float(b.get("angle_deg") or 0.0)) for b in others]),
         points=np.array(points, np.int32).reshape(-1, 2),
         world=world, ft_per_px=ft_per_px, held=(VALIDATION,) if hold_out_validation else (),
-        point_radius=int(point_radius))
+        point_radius=int(point_radius), **({"grey_bits": gray} if grey else {}))
 
 
 def load_sheets(series_list, hold_out_validation: bool, placement: bool = True,
-                point_radius: int = READ_POINT_RADIUS) -> list[SheetData]:
+                point_radius: int = READ_POINT_RADIUS, grey: bool = False) -> list[SheetData]:
     """Every sheet Terra read (`paths.TEXT_SHEETS`) of the maps in `series_list`, map by map in that order and in the
     sheets' order, with VALIDATION_AREA held out or not, with their placements or not, and with `point_radius` px
-    around Sol's points unknown (`sheet_data`); LOAD_THREADS sheets at a time.  Stops (ValueError) when the sheet
+    around Sol's points unknown, and each sheet's grey levels kept with `grey` (`sheet_data`); LOAD_THREADS sheets at a time.  Stops (ValueError) when the sheet
     lists differ from the saved answers (`boxes.check_text_sheets`) or a map has none."""
     if hold_out_validation and not placement:
         raise ValueError("the validation area is held out by the sheets' placements: read them (placement=True)")
@@ -362,7 +367,7 @@ def load_sheets(series_list, hold_out_validation: bool, placement: bool = True,
     def one(job):
         s, name = job
         return sheet_data(s, name, hold_out_validation, by_sheet.get(job, []),
-                          others.get(name, []) if s == paths.SERIES else [], placement, point_radius)
+                          others.get(name, []) if s == paths.SERIES else [], placement, point_radius, grey)
 
     with ThreadPoolExecutor(LOAD_THREADS) as pool:
         return list(pool.map(one, jobs))
@@ -574,7 +579,7 @@ def _turn_offsets(dx: np.ndarray, dy: np.ndarray, turns: int) -> tuple[np.ndarra
 
 
 def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int,
-                 labels: str = "boxes", words: bool = False) -> dict[str, np.ndarray]:
+                 labels: str = "boxes", words: bool = False, grey: bool = False) -> dict[str, np.ndarray]:
     """The training crop centred on page px (row y, col x), moved inside the page: size / `scale` px of page resized
     to `size` x `size` (nearest px) and turned `turns` quarter turns counter-clockwise, the reading angle with it (in
     [-180, 180) degrees on text, 0 elsewhere).  Keys: ink (bool), text (uint8), kind (uint8), angle (int16), known
@@ -582,13 +587,19 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     module): under "lines-unknown" a px inside a word that is a line px is not known (ValueError when the sheet holds
     no line px).  With `words`, also the word targets core (uint8), tag_id (int32), geo (float32 (5, size, size)) and
     geo_known (uint8), from the sheet's cores (see the module; ValueError when it holds none for its words), and, when
-    the sheet holds word weights, weight (float32; ValueError unless one weight per word, each a number at least 0)."""
+    the sheet holds word weights, weight (float32; ValueError unless one weight per word, each a number at least 0).
+    With `grey`, also grey (float32 (size, size)): the same window of the page's grey levels (`SheetData.grey_bits`)
+    over 255, resized bilinearly (`cv2.INTER_LINEAR`, as the ink is by nearest px) and turned with the rest;
+    ValueError when the sheet holds none.  The other keys are the same with or without it."""
     if labels not in LABEL_RULES:
         raise ValueError(f"labels is one of {', '.join(LABEL_RULES)}, not {labels!r}")
     if words and len(sd.weights) and (sd.weights.shape != (len(sd.words),) or not np.isfinite(sd.weights).all()
                                       or (sd.weights < 0).any()):
         raise ValueError(f"{sd.series} {sd.sheet}: SheetData.weights {sd.weights.shape} must be one number at least 0 "
                          f"per word ({len(sd.words)}; wordread.doubt.prepare)")
+    if grey and sd.grey_bits.shape != (sd.height, sd.width):
+        raise ValueError(f"{sd.series} {sd.sheet}: no grey levels (SheetData.grey_bits {sd.grey_bits.shape}, the page "
+                         f"{(sd.height, sd.width)}): a detector that reads grey needs them (load_sheets(grey=True))")
     src = int(round(size / scale))
     y0 = int(np.clip(y - src // 2, 0, sd.height - src))
     x0 = int(np.clip(x - src // 2, 0, sd.width - src))
@@ -603,6 +614,9 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     if src != size:
         parts = {k: cv2.resize(v.view(np.uint8) if v.dtype == bool else v, (size, size),
                                interpolation=cv2.INTER_NEAREST).astype(v.dtype) for k, v in parts.items()}
+    if grey:
+        page = sd.grey_bits[y0:y0 + src, x0:x0 + src].astype(np.float32) / 255
+        parts["grey"] = page if src == size else cv2.resize(page, (size, size), interpolation=cv2.INTER_LINEAR)
     word = parts.pop("word")
     # each word's kind and turned reading angle, looked up by word (index 0: no word)
     kind = np.concatenate([[NO_KIND], sd.kinds]).astype(np.uint8)

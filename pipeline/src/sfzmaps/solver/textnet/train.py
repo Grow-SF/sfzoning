@@ -109,7 +109,7 @@ MASS_EPS = 1e-12       # the least a weighted sum divides by: no weight gives 0 
 PARTS = ("text", "kind", "angle")
 WORD_PARTS = ("core", "dice", "centre", "size", "axis", "tag")
 CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words"), "decoder": ("full", "light"),
-           "precision": ("float32", "float16"), "labels": data.LABEL_RULES}
+           "precision": ("float32", "float16"), "labels": data.LABEL_RULES, "input": ("ink", "grey")}
 NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
 
 
@@ -142,6 +142,12 @@ class Recipe:
                       it too; "lines-unknown" its line px unknown (the sheets' line px filled by `zones.prepare`)
       composites      the share of crops that are composites (`composite.Bank.crop`: real clean words onto real line
                       work, real line pieces across clean words, exact masks); 0 none, and no draw for it
+      input           what the network reads: "ink" the 1-bit ink (1 on ink, 0 on paper), or "grey" the page's grey
+                      levels over 255 (0 black, 1 white paper; `data.crop_targets(..., grey=True)`, bilinear when a
+                      crop is scaled; the sheets must hold them, `load_sheets(grey=True)`).  Targets and the loss's
+                      px rules are those of "ink" (the loss's ink is still the 1-bit ink).  A network at full size
+                      (`half_size` off, the default) reads every px of the page; the full-size option needs no
+                      other setting
     """
     iterations: int = ITERATIONS
     max_lr: float = LEARNING_RATE
@@ -158,6 +164,7 @@ class Recipe:
     precision: str = "float32"
     labels: str = "boxes"
     composites: float = 0.0
+    input: str = "ink"
 
     def __post_init__(self):
         for f in dataclasses.fields(self):
@@ -183,6 +190,9 @@ class Recipe:
         if self.half_size and self.crop % model.FOLD:
             raise ValueError(f"recipe: half_size folds each crop {model.FOLD} x {model.FOLD}, so the crop must be "
                              f"even, not {self.crop}")
+        if self.input == "grey" and self.composites > 0:
+            raise ValueError(f"recipe: composites are drawn as ink, with no grey levels: composites must be 0 with "
+                             f"input grey, not {self.composites}")
         if self.heads == "words" and self.composites > 0:
             raise ValueError(f"recipe: the word heads learn from data.crop_targets' word targets, which composites "
                              f"don't make: composites must be 0 with heads words, not {self.composites}")
@@ -253,6 +263,8 @@ def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe,
     if recipe.composites > 0 and bank is None:
         raise ValueError(f"a recipe with composites ({recipe.composites}) draws them from a bank: none was given")
     extra = {"words": True} if recipe.heads == "words" else {}
+    if recipe.input == "grey":
+        extra["grey"] = True
     out = []
     for _ in range(recipe.batch):
         pool = pools[0] if rng.random() < TEXT_SHARE else pools[1]
@@ -287,18 +299,22 @@ def loss_weight(crops: list[dict[str, np.ndarray]], ink_only: str = "off") -> np
     return known & (_next_to(ink) if ink_only == "ink+1px" else ink)
 
 
-def batch_tensors(crops: list[dict[str, np.ndarray]], ink_only: str = "off") -> tuple[torch.Tensor, ...]:
-    """A batch's input and targets on the CPU: ink (n, 1, h, w) float, text float, kind int64, angle (degrees) float
-    and the loss weight (`loss_weight`) float."""
+def batch_tensors(crops: list[dict[str, np.ndarray]], ink_only: str = "off",
+                  input: str = "ink") -> tuple[torch.Tensor, ...]:
+    """A batch's input and targets on the CPU: the input (n, 1, h, w) float (the ink, or with `input` "grey" the
+    crops' grey levels over 255; see `Recipe.input`), text float, kind int64, angle (degrees) float and the loss weight
+    (`loss_weight`) float."""
     def stack(key, dtype):
         return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype))
-    return (stack("ink", np.float32)[:, None], stack("text", np.float32), stack("kind", np.int64),
-            stack("angle", np.float32), torch.from_numpy(loss_weight(crops, ink_only).astype(np.float32)))
+    return (stack("grey" if input == "grey" else "ink", np.float32)[:, None], stack("text", np.float32),
+            stack("kind", np.int64), stack("angle", np.float32),
+            torch.from_numpy(loss_weight(crops, ink_only).astype(np.float32)))
 
 
-def to_tensors(crops: list[dict[str, np.ndarray]], device, ink_only: str = "off") -> tuple[torch.Tensor, ...]:
+def to_tensors(crops: list[dict[str, np.ndarray]], device, ink_only: str = "off",
+               input: str = "ink") -> tuple[torch.Tensor, ...]:
     """`batch_tensors` on `device`."""
-    return tuple(v.to(device) for v in batch_tensors(crops, ink_only))
+    return tuple(v.to(device) for v in batch_tensors(crops, ink_only, input))
 
 
 def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor,
@@ -507,9 +523,10 @@ def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Rec
     same order).  An error in that thread is raised where the batch is asked for."""
     def make():
         crops = draw(sheets, pools, recipe, rng, bank)
+        grey = {"input": "grey"} if recipe.input == "grey" else {}     # the ink recipe's call is today's
         if recipe.heads == "words":
-            return batch_tensors(crops, recipe.ink_only) + word_tensors(crops)
-        return batch_tensors(crops, recipe.ink_only)
+            return batch_tensors(crops, recipe.ink_only, **grey) + word_tensors(crops)
+        return batch_tensors(crops, recipe.ink_only, **grey)
 
     if not recipe.prefetch:
         yield (make() for _ in range(recipe.iterations))
