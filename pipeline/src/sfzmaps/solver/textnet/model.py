@@ -6,7 +6,7 @@ text-only network has channel 0 alone.  A network with the word heads (`train.Re
 channels) has those seven, then (`data.crop_targets(..., words=True)`):
   CORE  7      the logit of the px being in a word's core
   GEO   8-11   the distances to its word's top, bottom, start and end edges, as log(distance / GEO_UNIT) (`distances`)
-  TAG   12-15  the px's word tag, a vector that is near its word's and far from other words' (PAN)
+  TAG   12-15  the px's word tag, a vector classified to its own word's mean tag among its crop's words' (`train`)
 The word's reading direction is channels 5-6.  The number of channels of each recipe's heads: HEAD_OUTPUTS.
 
 At half size the ink is folded first (`fold`: each 2 x 2 block of px into 4 channels at one px, every px kept), the
@@ -25,8 +25,10 @@ GEO = slice(8, 12)
 TAG = slice(12, 16)
 WORD_OUTPUTS = 16
 HEAD_OUTPUTS = {"all": OUTPUTS, "text": 1, "words": WORD_OUTPUTS}    # channels, by `train.Recipe.heads`
-GEO_UNIT = 8.0                 # px: a distance output of 0 is this many px
-GEO_LIMIT = 20.0               # the distance outputs are read within +-this (a distance stays finite in float32)
+GEO_UNIT = 8.0                 # px a distance output of 0 stands for: the distances' parameterisation (their unit,
+                               # where the network starts), not a decision; any value is learned around
+GEO_LIMIT = 20.0               # a numerical guard, not a decision: the distance outputs are read within +-this so a
+                               # distance stays finite in float32 (8 e^20 px is far beyond any page)
 FOLD = 2          # px each way folded into channels at half size
 MULTIPLE = 2 ** (LEVELS - 1)   # a page side the levels halve evenly is a multiple of this (at full size)
 

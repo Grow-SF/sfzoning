@@ -185,10 +185,26 @@ def test_word_targets_need_the_cores_and_change_nothing_else():
     plain = data.crop_targets(sd, 65, 150, 64, 0.8, 3)
     for got in (data.crop_targets(prepared, 65, 150, 64, 0.8, 3),
                 {k: v for k, v in data.crop_targets(prepared, 65, 150, 64, 0.8, 3, words=True).items()
-                 if k not in ("core", "geo", "tag_id")}):
+                 if k not in ("core", "geo", "tag_id", "geo_known")}):
         assert sorted(got) == sorted(plain) == ["angle", "ink", "kind", "known", "text"]
         for k in plain:
             assert got[k].dtype == plain[k].dtype and np.array_equal(got[k], plain[k])
+
+
+def test_which_words_reach_a_held_out_area_is_found_once_per_sheet(monkeypatch):
+    sd, = shrink.prepare([_sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0)])])
+    calls = []
+    monkeypatch.setattr(data, "_touch_held", lambda s, words: calls.append(len(words)) or np.array([True, False]))
+    crops = [data.crop_targets(sd, 70, 100, 64, 1.0, turns, words=True) for turns in range(3)]
+    assert calls == [2]                                   # every word, once, for the three crops
+    t = crops[0]
+    reach, free = t["tag_id"] == 1, t["tag_id"] == 2
+    assert t["geo_known"].dtype == np.uint8 and not t["geo_known"][reach].any() and t["geo_known"][free].all()
+    assert not t["geo"][:4][:, reach].any() and (t["geo"][0] + t["geo"][1])[free].min() > 0
+    assert not t["geo_known"][t["core"] == 0].any()
+    # a sheet holding other areas is another SheetData: found again for it
+    data.crop_targets(dataclasses.replace(sd, held=()), 70, 100, 64, 1.0, 0, words=True)
+    assert calls == [2, 2]
 
 
 # --- the network and its loss ----------------------------------------------------------------------------------------
@@ -214,57 +230,104 @@ def _word_batch():
 def test_word_tensors_number_each_crops_tags_from_one():
     crops = _word_batch()
     crops[1]["known"][:] = False                       # a crop held out: no tag, no core lesson
-    core, geo, tag, known, groups = train.word_tensors(crops)
-    assert core.dtype == geo.dtype == known.dtype == torch.float32 and tag.dtype == torch.int64
+    core, geo, tag, known, geo_known, groups = train.word_tensors(crops)
+    assert core.dtype == geo.dtype == known.dtype == geo_known.dtype == torch.float32 and tag.dtype == torch.int64
     assert geo.shape == (2, 5, 64, 64) and tag.shape == (2, 64, 64)
     assert set(tag[0].unique().tolist()) == {0, 1, 2, 3} and not tag[1].any()
     assert torch.equal(groups, torch.arange(1, 4))
-    assert torch.equal(tag[0] > 0, core[0] > 0)
+    assert torch.equal(tag[0] > 0, core[0] > 0) and torch.equal(geo_known, core)      # nothing held: all known
 
 
-def test_hard_negatives_are_the_top_three_per_positive_ties_shared():
+def test_the_core_cross_entropy_weighs_each_class_by_the_inverse_of_its_weight():
     target = torch.zeros(1, 4, 4)
-    target[0, 0, :2] = 1                                # two positives
+    target[0, 0, :2] = 1                                # two core px, thirteen others known, one not known
     known = torch.ones(1, 4, 4)
     known[0, 3, 3] = 0
-    logit = torch.linspace(-3, 3, 16).reshape(1, 4, 4)        # the negatives' four highest: 2.6, 2.2, 1.8, 1.4
-    logit[0, 2, 0] = logit[0, 2, 1] = logit[0, 2, 2] = 1.0     # three tied for the last two of the six places
-    got = train._ohem_bce(logit, target, known)
+    logit = torch.linspace(-3, 3, 16).reshape(1, 4, 4)
     bce = F.binary_cross_entropy_with_logits(logit, target, reduction="none")
-    neg = bce[(target == 0) & (known > 0)]
-    top = torch.sort(neg, descending=True).values[:6]
-    want = (bce[target > 0].sum() + top.sum()) / 8
-    assert torch.allclose(got, want)
-    # no positive: no negative is read either
-    assert train._ohem_bce(logit, torch.zeros_like(target), known) == 0
+    got = train._balanced_bce(logit, target, known)
+    assert torch.allclose(got, (bce[0, 0, :2].mean() + bce[(target == 0) & (known > 0)].mean()) / 2)
+    # each class weighs the inverse of its weight: more background, or heavier background, changes nothing
+    heavier = known * torch.where(target > 0, 1.0, 5.0)
+    assert torch.allclose(train._balanced_bce(logit, target, heavier), got)
+    # a batch with no core px: the background's mean alone
+    none = torch.zeros_like(target)
+    alone = F.binary_cross_entropy_with_logits(logit, none, reduction="none")[known > 0].mean()
+    assert torch.allclose(train._balanced_bce(logit, none, known), alone)
 
 
-def test_word_loss_is_zero_for_a_perfect_answer_and_pushes_tags_apart():
+def test_word_loss_is_zero_for_a_perfect_answer_and_its_tags_are_classified_among_the_crops_words():
     crops = _word_batch()
-    core, geo, tag, known, groups = train.word_tensors(crops)
+    core, geo, tag, known, geo_known, groups = train.word_tensors(crops)
     out = torch.zeros(2, 16, 64, 64)
     out[:, model.CORE] = torch.where(core > 0, 30.0, -30.0)
     out[:, model.GEO] = torch.log(geo[:, :4].clamp(min=1e-3) / model.GEO_UNIT)
     rad = torch.deg2rad(geo[:, 4])
     out[:, 5], out[:, 6] = torch.cos(rad), torch.sin(rad)
-    for c in range(4):                                   # each word's tag at 3 x its local number, on one axis
-        out[:, model.TAG.start + c] = 3.0 * tag * (c == 0)
-    loss, parts = train.word_loss(out, core, geo, tag, known, groups)
+    out[:, model.TAG.start] = 10.0 * tag                 # each word's tag far from the others' and the background's
+    _, parts = train.word_loss(out, core, geo, tag, known, geo_known, groups)
     names = dict(zip(train.WORD_PARTS, parts.tolist()))
-    assert sorted(names) == sorted(("core", "dice", "iou", "direction", "pull", "push"))
-    assert names["core"] < 1e-6 and names["dice"] < 1e-6 and names["iou"] < 1e-5 and names["direction"] < 1e-6
-    assert names["pull"] == 0 and names["push"] == 0
-    # every word's tag the same: each pair pushed by log(1 + 3^2)
+    assert sorted(names) == sorted(("core", "dice", "iou", "direction", "tag"))
+    assert all(v < 1e-5 for v in names.values()), names
+    # every tag the same: each core px is any of its crop's classes alike, log(classes) (its words and background)
     out[:, model.TAG] = 0
-    _, parts = train.word_loss(out, core, geo, tag, known, groups)
-    assert dict(zip(train.WORD_PARTS, parts.tolist()))["push"] == pytest.approx(np.log(10))
-    # the total is the parts by their weights
+    _, parts = train.word_loss(out, core, geo, tag, known, geo_known, groups)
+    classes = [int(tag[c].max()) + int(((core[c] == 0) & (known[c] > 0)).any()) for c in range(2)]
+    on = known * (tag > 0)
+    want = sum(np.log(classes[c]) * float(on[c].sum()) for c in range(2)) / float(on.sum())
+    assert dict(zip(train.WORD_PARTS, parts.tolist()))["tag"] == pytest.approx(want, rel=1e-6)
+    # tags one apart: a warmer temperature makes the classes harder to tell apart
+    out[:, model.TAG.start] = 1.0 * tag
+
+    def tag_part(t):
+        return train.word_loss(out, core, geo, tag, known, geo_known, groups, log_temp=torch.tensor(t))[1][-1]
+    assert tag_part(0.0) < tag_part(1.0) < tag_part(2.0)
+
+
+def test_the_word_terms_are_added_by_learned_log_variances():
+    crops = _word_batch()
+    targets = train.word_tensors(crops)
     out = torch.randn(2, 16, 64, 64, generator=torch.Generator().manual_seed(1))
-    loss, p = train.word_loss(out, core, geo, tag, known, groups)
-    assert torch.allclose(loss, p[0] + p[1] + p[2] + 10 * p[3] + 0.25 * (p[4] + p[5]))
+    s = torch.tensor([0.5, -1.0, 0.0, 2.0, -0.3])
+    loss, p = train.word_loss(out, *targets, log_var=s)
+    assert torch.allclose(loss, (torch.exp(-s) * p + s / 2).sum())
+    assert torch.allclose(train.word_loss(out, *targets)[0], p.sum())       # at their start, 0: the plain sum
+    # the module holds them, and the loss reaches each, the temperature and every word output
+    crit, net = train.WordLoss(), train.build_net(train.Recipe(heads="words", width=4))
+    loss, _ = crit(net(train.batch_tensors(crops)[0]), *targets)
+    loss.backward()
+    assert (crit.log_var.grad != 0).all() and crit.log_temp.grad != 0
+    assert (net.head.weight.grad.flatten(1).abs().sum(1)[model.CORE:] > 0).all()
 
 
-def test_a_word_heads_fit_trains_the_per_ink_head_by_todays_loss_and_repeats(monkeypatch):
+def _fixed_batch():
+    """One 6 x 8 crop: word 1 (rows 1-2, cols 1-3, read at 0 deg), word 2 (rows 1-3, cols 5-6, read at 90 deg, its
+    distances not known), px (5, 7) not known, the rest background; the outputs a fixed sine."""
+    core, tag = torch.zeros(1, 6, 8), torch.zeros(1, 6, 8, dtype=torch.int64)
+    core[0, 1:3, 1:4], tag[0, 1:3, 1:4] = 1, 1
+    core[0, 1:4, 5:7], tag[0, 1:4, 5:7] = 1, 2
+    known = torch.ones(1, 6, 8)
+    known[0, 5, 7] = 0
+    geo = torch.zeros(1, 5, 6, 8)
+    geo[0, :4, 1:3, 1:4] = torch.tensor([2.0, 3.0, 4.0, 5.0])[:, None, None]
+    geo[0, 4, 1:4, 5:7] = 90.0
+    geo_known = torch.zeros(1, 6, 8)
+    geo_known[0, 1:3, 1:4] = 1
+    out = torch.sin(torch.arange(16 * 6 * 8, dtype=torch.float32) * 0.37).reshape(1, 16, 6, 8)
+    return out, core, geo, tag, known, geo_known, torch.arange(1, 3)
+
+
+def test_word_loss_fixed_values():
+    # pinned from the implementation, and equal within 1e-7 to a float64 numpy reference written from the module's
+    # formulas (balanced cross-entropy, Dice, EAST's IoU, 1 - cos, the tag softmax at T = e^0.2; Kendall's sum)
+    total, parts = train.word_loss(*_fixed_batch(), log_var=torch.tensor([0.1, -0.2, 0.3, 0.0, 0.5]),
+                                   log_temp=torch.tensor(0.2))
+    assert parts.tolist() == pytest.approx([0.794277489, 0.680517197, 2.02493262, 1.13685882, 1.09964228], rel=1e-5)
+    assert total.item() == pytest.approx(5.20381021, rel=1e-5)
+
+
+def test_a_word_heads_fit_trains_the_per_ink_head_by_todays_loss_learns_its_weights_and_repeats(monkeypatch,
+                                                                                                 tmp_path):
     sheets = shrink.prepare([_sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0), ((160, 40, 180, 160), 90)]),
                              _sheet([((20, 20, 120, 50), 30), ((60, 150, 200, 175), 0)], sheet="t")])
     recipe = train.Recipe(heads="words", iterations=2, batch=3, crop=48, width=4)
@@ -275,9 +338,13 @@ def test_a_word_heads_fit_trains_the_per_ink_head_by_todays_loss_and_repeats(mon
     assert seen == [(3, 16, 48, 48)] * 4
     for (name, a), b in zip(first.state_dict().items(), again.state_dict().values()):
         assert torch.equal(a, b), name
-    # the word loss reaches every word output
-    net = train.build_net(recipe)
-    crops = train.draw(sheets, train.centre_pools(sheets), recipe, np.random.default_rng(0))
-    loss, _ = train.word_loss(net(train.batch_tensors(crops)[0]), *train.word_tensors(crops))
-    loss.backward()
-    assert (net.head.weight.grad.flatten(1).abs().sum(1)[model.CORE:] > 0).all()
+    # the word terms' weights and the temperature were trained from their start (log-variance 0: weight 1), the same
+    # both times, kept on the network and saved beside its weights
+    learned = first.learned_word_loss
+    assert learned == again.learned_word_loss and sorted(learned["weight"]) == sorted(train.WORD_PARTS)
+    assert all(w != 1 for w in learned["weight"].values()) and learned["temperature"] != 1
+    saved = torch.load(train.save_model(tmp_path / "m.pt", first, recipe, "cpu"), weights_only=False)
+    assert saved["word_loss"] == learned
+    plain = train.Recipe(width=4)
+    assert "word_loss" not in torch.load(train.save_model(tmp_path / "plain.pt", train.build_net(plain), plain, "cpu"),
+                                         weights_only=False)

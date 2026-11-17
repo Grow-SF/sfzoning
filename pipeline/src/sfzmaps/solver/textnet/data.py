@@ -29,8 +29,10 @@ before training):
              start and end along the reading direction, top and bottom across it (the top on the letters' upper side);
              each is the furthest of the rectangle's corners that way.  Distances are measured at page px and scaled
              by the crop's scale; the quarter turns leave them as they are.  A word whose rectangle holds a held-out
-             px has no geometry: its four distances are 0 at its core px (no box; the loss reads the geometry only
-             where the distances make one), as they would tell how far it reaches into the held-out area.
+             px has no geometry: its four distances are 0 at its core px, as they would tell how far it reaches into
+             the held-out area (its angle is kept: it is read off the word's px outside the area too)
+  geo_known  1 at the core px of a word whose distances are known (its rectangle holds no held-out px), 0 elsewhere:
+             the px the loss reads the distances at; which words reach into a held-out area is found once per sheet
   weight     float32, only when the sheet holds word weights (`SheetData.weights`, Terra's doubt, which
              `wordread.doubt.prepare` fills before training): at a core px its word's weight, 1 elsewhere.  With none,
              every word weighs 1 and the key is absent (the targets are those without weights, byte for byte).
@@ -521,10 +523,21 @@ def _touch_held(sd: SheetData, words: np.ndarray) -> np.ndarray:
     return out
 
 
+def _held_words(sd: SheetData) -> np.ndarray:
+    """Which of the sheet's words reach into an area it holds out (`_touch_held` of every word), bool (n,): found once
+    per sheet and kept on it beside its fields (a sheet holding other areas is another SheetData, `hold_out`, and finds
+    its own; kept with the areas and words it was found for, so it is found again if either is set anew)."""
+    kept = getattr(sd, "_held_words_found", None)
+    if kept is None or kept[0] is not sd.held or kept[1] is not sd.words:
+        kept = (sd.held, sd.words, _touch_held(sd, np.arange(len(sd.words))))
+        sd._held_words_found = kept
+    return kept[2]
+
+
 def _geometry(sd: SheetData, tag: np.ndarray, y0: int, x0: int) -> np.ndarray:
     """At each core px of a page window (`_cores`), the distances in page px to its word's top, bottom, start and end
     edges, and its reading angle (see the module): float32 (h, w, 5), 0 off the cores.  A word whose rectangle holds
-    a held-out px has its distances 0 (no box), its angle kept."""
+    a held-out px (`_held_words`) has its distances 0 (no box), its angle kept."""
     out = np.zeros((*tag.shape, 5), np.float32)
     rows, cols = np.nonzero(tag)
     if not len(rows):
@@ -539,11 +552,8 @@ def _geometry(sd: SheetData, tag: np.ndarray, y0: int, x0: int) -> np.ndarray:
     pa, pb = (p * along).sum(-1), (p * up).sum(-1)
     out[rows, cols, :4] = np.maximum(np.stack([b.max(-1) - pb, pb - b.min(-1), pa - a.min(-1), a.max(-1) - pa], -1), 0)
     out[rows, cols, 4] = sd.angles[j]
-    if sd.held:
-        present = np.unique(j)
-        unseen = present[_touch_held(sd, present)]
-        if len(unseen):
-            out[rows[np.isin(j, unseen)], cols[np.isin(j, unseen)], :4] = 0
+    unseen = _held_words(sd)[j]
+    out[rows[unseen], cols[unseen], :4] = 0
     return out
 
 
@@ -554,9 +564,9 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     [-180, 180) degrees on text, 0 elsewhere).  Keys: ink (bool), text (uint8), kind (uint8), angle (int16), known
     (bool); drawn from the sheet's boxes for this crop alone, by the label rule `labels` (LABEL_RULES, see the
     module): under "lines-unknown" a px inside a word that is a line px is not known (ValueError when the sheet holds
-    no line px).  With `words`, also the word targets core (uint8), tag_id (int32) and geo (float32 (5, size, size)),
-    from the sheet's cores (see the module; ValueError when it holds none for its words), and, when the sheet holds
-    word weights, weight (float32; ValueError unless one weight per word, each a number at least 0)."""
+    no line px).  With `words`, also the word targets core (uint8), tag_id (int32), geo (float32 (5, size, size)) and
+    geo_known (uint8), from the sheet's cores (see the module; ValueError when it holds none for its words), and, when
+    the sheet holds word weights, weight (float32; ValueError unless one weight per word, each a number at least 0)."""
     if labels not in LABEL_RULES:
         raise ValueError(f"labels is one of {', '.join(LABEL_RULES)}, not {labels!r}")
     if words and len(sd.weights) and (sd.weights.shape != (len(sd.words),) or not np.isfinite(sd.weights).all()
@@ -590,6 +600,7 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     geo[..., 4] = np.where(on, (geo[..., 4].astype(np.int32) + 90 * turns + 180) % 360 - 180, 0)
     out["core"] = on.view(np.uint8)
     out["geo"] = np.moveaxis(geo, -1, 0)
+    out["geo_known"] = np.concatenate([[0], ~_held_words(sd)]).astype(np.uint8)[out["tag_id"]]
     if len(sd.weights):
         out["weight"] = np.concatenate([[1], sd.weights]).astype(np.float32)[out["tag_id"]]
     return {k: np.rot90(v, turns, axes=(1, 2) if k == "geo" else (0, 1)) for k, v in out.items()}

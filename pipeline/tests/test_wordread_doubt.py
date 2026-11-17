@@ -308,6 +308,8 @@ def test_a_word_reaching_into_a_held_out_area_has_no_geometry():
     assert np.array_equal(b["geo"][4], a["geo"][4])
     two = b["tag_id"] == 2
     assert np.array_equal(b["geo"][:, two], a["geo"][:, two])    # word 1 touches nothing held
+    # which px's distances the loss may read: word 1's, not word 0's (without the hold-out, both)
+    assert not b["geo_known"][zero].any() and b["geo_known"][two].all() and np.array_equal(a["geo_known"], a["core"])
 
 
 def _batch(weights=None, turns=(0, 1)):
@@ -323,7 +325,7 @@ def test_word_tensors_weigh_each_words_px_and_leave_a_weightless_word_untagged()
     ones = train.word_tensors(_batch([1, 1, 1]))
     for p, o in zip(plain, ones):
         assert p.dtype == o.dtype and torch.equal(p, o)
-    core, geo, tag, known, groups = train.word_tensors(_batch([0.5, 0, 1]))
+    core, geo, tag, known, geo_known, groups = train.word_tensors(_batch([0.5, 0, 1]))
     crops = _batch([0.5, 0, 1])
     ids = torch.from_numpy(np.stack([c["tag_id"] for c in crops]).astype(np.int64))
     assert torch.equal(known, torch.tensor([1.0, 0.5, 0.0, 1.0])[ids] * plain[3])
@@ -366,42 +368,46 @@ def test_word_losses_scale_with_the_weights_and_a_weightless_word_gives_no_gradi
         assert parts(weights)[part] == pytest.approx(want, rel=1e-5)
 
 
-def test_pull_is_each_crops_weighted_mean_of_its_words():
-    # one crop holding two words: its pull is their pulls weighed by their weights
+def test_the_tag_term_weighs_each_core_px_by_its_words_weight():
+    # one crop holding two words: the tag term is the mean of the core px's cross-entropies, each px weighing its
+    # word's weight.  So with weights (a, b) it is (a X + b Y) / (a n0 + b n1), X and Y the words' summed
+    # cross-entropies and n0, n1 their px: two weightings find X and Y, a third must agree; and weights scaled alike
+    # change nothing
     sd = _sheet([((40, 60, 100, 80), 0), ((110, 60, 170, 80), 0)])
     out = torch.randn(1, 16, 96, 96, generator=torch.Generator().manual_seed(3))
 
-    def pull(w):
+    def tag(w):
         crop = data.crop_targets(dataclasses.replace(sd, weights=np.array(w, np.float32)), 70, 105, 96, 1.0, 0,
                                  words=True)
-        return dict(zip(train.WORD_PARTS, train.word_loss(out, *train.word_tensors([crop]))[1].tolist()))
+        return train.word_loss(out, *train.word_tensors([crop]))[1][-1].item()
 
-    a, b = pull([1, 0])["pull"], pull([0, 1])["pull"]
-    assert pull([0.3, 0.6])["pull"] == pytest.approx((0.3 * a + 0.6 * b) / 0.9, rel=1e-5)
-    assert pull([0.3, 0.6])["push"] == pytest.approx(pull([1, 1])["push"], rel=1e-6)
-    assert pull([0, 1])["push"] == 0
+    crop = data.crop_targets(sd, 70, 105, 96, 1.0, 0, words=True)
+    n0, n1 = float((crop["tag_id"] == 1).sum()), float((crop["tag_id"] == 2).sum())
+    xy = np.linalg.solve([[1, 1], [0.3, 0.6]], [tag([1, 1]) * (n0 + n1), tag([0.3, 0.6]) * (0.3 * n0 + 0.6 * n1)])
+    assert tag([0.9, 0.2]) == pytest.approx((0.9 * xy[0] + 0.2 * xy[1]) / (0.9 * n0 + 0.2 * n1), rel=1e-5)
+    assert tag([0.6, 1.2]) == pytest.approx(tag([0.3, 0.6]), rel=1e-6)
 
 
-def test_a_word_with_no_geometry_teaches_its_core_but_not_its_box():
+def test_a_word_with_no_geometry_teaches_its_core_and_direction_but_not_its_box():
     crops = _batch()
-    core, geo, tag, known, groups = train.word_tensors(crops)
+    core, geo, tag, known, geo_known, groups = train.word_tensors(crops)
     ids = torch.from_numpy(np.stack([c["tag_id"] for c in crops]).astype(np.int64))
-    geo = geo.clone()
-    geo[:, :4] = torch.where((ids == 1)[:, None], torch.zeros_like(geo[:, :4]), geo[:, :4])   # word 0: no distances
+    geo_known = torch.where(ids == 1, torch.zeros_like(geo_known), geo_known)      # word 0: its distances not known
     out = _out().requires_grad_()
-    loss, _ = train.word_loss(out, core, geo, tag, known, groups)
+    loss, _ = train.word_loss(out, core, geo, tag, known, geo_known, groups)
     loss.backward()
     on = ids == 1
-    assert not out.grad[:, model.GEO].abs().sum(1)[on].any() and not out.grad[:, 5:7].abs().sum(1)[on].any()
+    assert not out.grad[:, model.GEO].abs().sum(1)[on].any()
+    assert (out.grad[:, 5:7].abs().sum(1)[on] > 0).all()                    # its angle is kept
     assert (out.grad[:, model.CORE][on] != 0).any() and (out.grad[:, model.GEO].abs().sum(1)[ids == 2] > 0).all()
 
 
-def test_hard_negatives_count_a_weighted_positive_by_its_weight():
+def test_the_core_cross_entropy_counts_a_weighted_core_px_by_its_weight():
     target = torch.zeros(1, 2, 4)
-    target[0, 0, 0] = 1
+    target[0, 0, :2] = 1
     known = torch.ones(1, 2, 4)
-    known[0, 0, 0] = 0.5                                  # one positive of weight 0.5: k = 1.5 negatives
+    known[0, 0, 0] = 0.5                                  # two core px, weights 0.5 and 1; six background px
     logit = torch.tensor([[[0.0, 3.0, 2.0, 1.0], [-1.0, -2.0, -3.0, -4.0]]])
     bce = torch.nn.functional.binary_cross_entropy_with_logits(logit, target, reduction="none")
-    want = (0.5 * bce[0, 0, 0] + bce[0, 0, 1] + 0.5 * bce[0, 0, 2]) / 2.0
-    assert torch.allclose(train._ohem_bce(logit, target, known), want)
+    want = ((0.5 * bce[0, 0, 0] + bce[0, 0, 1]) / 1.5 + bce[target == 0].mean()) / 2
+    assert torch.allclose(train._balanced_bce(logit, target, known), want)

@@ -18,25 +18,35 @@ is only ever read at ink), or the known ink and the px next to it, the 8 around 
 (WEIGHT_DECAY) with a one-cycle schedule rising to `max_lr` over the first `pct_start` of the steps.  With
 `weight_average` the model kept is the moving average of the weights over the steps (`WeightAverage`).
 
-With the word heads (`heads` "words": `model.WORD_OUTPUTS` channels; the sheets' word cores filled by
-`wordread.shrink.prepare` before the training), each crop also has its word targets (`data.crop_targets(...,
-words=True)`), and the loss adds, to the per-ink head's (channels 0-6, the same terms as "all"), WORD_PARTS:
-  core       binary cross-entropy of the core over the known px, all its positives and the hardest negatives, at most
-             OHEM_RATIO per positive over the batch (DBNet's hard-negative mining; a tie at the last place shares it)
+With the word heads (`heads` "words": `model.WORD_OUTPUTS` channels; the sheets' word cores, each word's own labelled
+rectangle, filled by `wordread.shrink.prepare` before the training), each crop also has its word targets
+(`data.crop_targets(..., words=True)`), and the loss adds, to the per-ink head's (channels 0-6, the same terms as
+"all"), the word terms WORD_PARTS.  Each is a weighted mean over the px it reads, a px weighing `word_tensors`' known:
+0 where the px is not known, else 1, or, with word weights (`data.SheetData.weights`, Terra's doubt from
+`wordread.doubt.prepare`; none by default), its word's weight at a core px; a word of weight 0 adds nothing.
+  core       binary cross-entropy of the core over the known px, each class weighed by the inverse of its weight in
+             the batch (the batch's own counts, no measuring pass and no mining): the mean over the core px plus the
+             mean over the other px, divided by the number of the two the batch holds
   dice       1 - Dice of the core's chance over the known px
-  iou        -log((I + 1) / (U + 1)) of the box each known core px puts about itself (its four distances,
-             `model.distances`) against its word's (EAST), the mean over those px
-  direction  1 - cosine of the reading direction (channels 5-6) at the known core px, x GEO_ANGLE_WEIGHT
-  pull       PAN's aggregation, x TAG_WEIGHT: each known core px's tag pulled to within PULL of its word's mean tag
-             (log(1 + max(0, |tag - mean| - PULL)^2), a word's px averaged, then the crop's words)
-  push       PAN's discrimination, x TAG_WEIGHT: two words' mean tags in one crop pushed PUSH apart or more
-             (log(1 + max(0, PUSH - |mean - mean'|)^2), over the crop's pairs)
-each part averaged over the crops that have it (pull, push) or the batch (the rest).  Every term is dense (masked sums
-and products, no indexing in the backward), so it runs on the Mac's GPU in deterministic mode.  With word weights
-(`data.SheetData.weights`, Terra's doubt from `wordread.doubt.prepare`; none by default), each word's px count by its
-weight in all six (`word_tensors`): weighted sums and means, the hard negatives' number set by the positives' weight,
-a word of weight 0 adding nothing.  The geometry (iou, direction) is read only where the target's distances make a box:
-a word reaching into a held-out area has none (`data.crop_targets`).
+  iou        -log((I + 1) / (U + 1)) of the box each core px puts about itself (its four distances, `model.distances`)
+             against its word's (EAST), over the known core px whose distances are known (`geo_known`: not a word
+             reaching into a held-out area)
+  direction  1 - cosine of the reading direction (channels 5-6) against its word's, over the known core px (a word
+             reaching into a held-out area keeps its angle)
+  tag        each known core px's tag (channels 12-15) classified among its crop's classes: each of the crop's words,
+             by its mean tag over its core px, and the background, by the mean tag over the crop's known px off the
+             cores.  A softmax of -|tag - mean|^2 / T over the classes the crop has, T a learned temperature
+             (exp of `WordLoss.log_temp`), and the cross-entropy to the px's own word: no margins
+The terms are added by learned weights (homoscedastic uncertainty: Kendall, Gal & Cipolla, CVPR 2018), one learned
+log-variance s_i a term (`WordLoss.log_var`):
+    L_words = sum_i ( exp(-s_i) L_i + s_i / 2 )
+their eq. 7 with s = log sigma^2: 1/sigma^2 L + log sigma, a classification term's form; a regression term's 1/2 in
+front of L is a shift of s by log 2, so the one form serves every term.  The log-variances and the log-temperature
+start at 0 and are trained with the network (AdamW, no weight decay on them, the one-cycle schedule); `fit` keeps
+their last values on the network it returns (`learned_word_loss`), and `save_model` writes them beside the weights.
+Every term is dense (masked sums, products and one cross-entropy, no indexing in the backward), so it runs on the
+Mac's GPU in deterministic mode.  DICE_EPS and MASS_EPS are numerical guards (a sum divided by nothing), not
+decisions.
 
 The parts of the loss stay on the device, summed; every LOG_EVERY steps (and at the last) their mean over those steps
 is read, logged and checked, so the device is waited on only then.  A mean that is not finite stops the training.
@@ -87,16 +97,10 @@ THREADS = 4
 LOG_EVERY = 250         # iterations between progress lines (and reads of the loss from the device)
 PREFETCH = 2            # batches drawn ahead with `prefetch`
 HELD = 2                # steps a batch is held after its copy to the GPU was queued (`Copies`)
-OHEM_RATIO = 3         # the word core's hard negatives: at most this many per positive
-GEO_ANGLE_WEIGHT = 10.0
-TAG_WEIGHT = 0.25
-PULL = 0.5             # PAN: a core px's tag is pulled to within this of its word's mean
-PUSH = 3.0             # PAN: two words' mean tags are pushed at least this far apart
-DICE_EPS = 1e-6
-NORM_EPS = 1e-12       # under the square root of a tag distance (its gradient stays finite at 0)
+DICE_EPS = 1e-6        # added to Dice's denominator: no px gives 0 / it (numerical; decides nothing)
 MASS_EPS = 1e-12       # the least a weighted sum divides by: no weight gives 0 / it = 0 (numerical; decides nothing)
 PARTS = ("text", "kind", "angle")
-WORD_PARTS = ("core", "dice", "iou", "direction", "pull", "push")
+WORD_PARTS = ("core", "dice", "iou", "direction", "tag")
 CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words"), "decoder": ("full", "light"),
            "precision": ("float32", "float16"), "labels": data.LABEL_RULES}
 NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
@@ -117,6 +121,7 @@ class Recipe:
                       crops must be even
       heads           "all" outputs (text, kind, reading direction), "text" alone, or "words": all with the word heads
                       (core, distances, tag; see the module), their sheets' cores filled by `wordread.shrink.prepare`
+                      and the word terms added by learned weights (`WordLoss`)
       weight_average  the decay of the moving average of the weights kept as the model (`WeightAverage`); 0 is off
       prefetch        the next batches drawn in a background thread (the same batches)
       decoder         "full" two convolutions per block up, or "light" one
@@ -311,11 +316,11 @@ def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor
 
 def word_tensors(crops: list[dict[str, np.ndarray]]) -> tuple[torch.Tensor, ...]:
     """A batch's word targets on the CPU (`data.crop_targets(..., words=True)`): core (n, h, w) float, geo (n, 5, h,
-    w) float, tag (n, h, w) int64, known (n, h, w) float, and groups.  known is each px's weight in the word terms: 0
-    where the px is not known, else 1, or, for a crop with word weights (`weight`, from `SheetData.weights`), its
-    word's weight at a core px.  A crop's tags are its core px of weight above 0, their words numbered 1, 2, ... in the
-    order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so the loss knows their number
-    without reading the device."""
+    w) float, tag (n, h, w) int64, known (n, h, w) float, geo_known (n, h, w) float, and groups.  known is each px's
+    weight in the word terms: 0 where the px is not known, else 1, or, for a crop with word weights (`weight`, from
+    `SheetData.weights`), its word's weight at a core px.  A crop's tags are its core px of weight above 0, their words
+    numbered 1, 2, ... in the order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so the
+    loss knows their number without reading the device."""
     def stack(key, dtype):
         return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype))
     tags, weights = [], []
@@ -329,89 +334,102 @@ def word_tensors(crops: list[dict[str, np.ndarray]]) -> tuple[torch.Tensor, ...]
         weights.append(w)
     most = max((int(t.max()) for t in tags), default=0)
     return (stack("core", np.float32), stack("geo", np.float32), torch.from_numpy(np.stack(tags).astype(np.int64)),
-            torch.from_numpy(np.stack(weights)), torch.arange(1, most + 1, dtype=torch.int64))
+            torch.from_numpy(np.stack(weights)), stack("geo_known", np.float32),
+            torch.arange(1, most + 1, dtype=torch.int64))
 
 
-def _ohem_bce(logit: torch.Tensor, target: torch.Tensor, known: torch.Tensor) -> torch.Tensor:
-    """Binary cross-entropy over the known px (`known` each px's weight): every positive by its weight, and the k =
-    min(negatives, OHEM_RATIO x the positives' weight) negatives of the highest loss; the negatives tied with the
-    ceil(k)-th share its remaining places equally (so the loss is the top k's whichever of them a sort would put
-    first; a fractional k gives the last place its fraction).  Divided by the positives' weight + k; 0 with no
-    positive.  The k-th loss is found by a sort without reading the device."""
+def _balanced_bce(logit: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """Binary cross-entropy weighted by the inverse of each class's weight in the batch (`weight` each px's): the
+    weighted mean over the core px plus the weighted mean over the other px, divided by the number of the two
+    classes the batch holds (0 with none)."""
     bce = F.binary_cross_entropy_with_logits(logit, target, reduction="none")
-    pos = target * known
-    neg = (1 - target) * known
-    n_pos = pos.sum()
-    k = torch.minimum(neg.sum(), OHEM_RATIO * n_pos)
-    with torch.no_grad():
-        ranked = torch.sort(torch.where(neg > 0, bce, -torch.ones_like(bce)).flatten(), descending=True).values
-        last = ranked.index_select(0, (torch.ceil(k).long() - 1).clamp(min=0).reshape(1))
-        above = ((neg > 0) & (bce > last)).float()
-        tied = ((neg > 0) & (bce == last)).float()
-        share = (k - above.sum()) / tied.sum().clamp(min=1)
-        hard = (above + tied * share) * (k > 0).float()
-    return (bce * (pos + hard)).sum() / (n_pos + k).clamp(min=MASS_EPS)
+    pos, neg = target * weight, (1 - target) * weight
+    mass_pos, mass_neg = pos.sum(), neg.sum()
+    classes = (mass_pos > 0).to(bce.dtype) + (mass_neg > 0).to(bce.dtype)
+    means = (bce * pos).sum() / mass_pos.clamp(min=MASS_EPS) + (bce * neg).sum() / mass_neg.clamp(min=MASS_EPS)
+    return means / classes.clamp(min=1)
 
 
-def _tag_parts(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor,
-               weight: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
-    """PAN's aggregation and discrimination (see the module) of the tag outputs (n, c, h, w) by the crops' word tags
-    (`word_tensors`), each crop's words found by a one-hot over `groups` (matrix products, no indexing).  With
-    `weight` (n, h, w; `word_tensors`' known), each word weighs its px's mean weight: a crop's pull is its words'
-    pulls weighed by their weights, a pair's push by the product of the two, and each crop counts by its words' (or
-    pairs') mean weight; with weights of 1 these are the plain means."""
+def _tag_ce(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor, weight: torch.Tensor,
+            core: torch.Tensor, log_temp: torch.Tensor) -> torch.Tensor:
+    """The tag term (see the module): the weighted mean over the tagged core px of the cross-entropy of classifying
+    each px's tag (`tag_out` (n, c, h, w)) among its crop's classes, class 0 the background (the crop's known px off
+    the cores, `weight` above 0 and `core` 0) and class k its k-th word (`tag`, `groups`: `word_tensors`), by the
+    softmax of -|tag - class mean|^2 / exp(`log_temp`) over the classes the crop holds.  Each class's px are found by
+    a one-hot (matrix products, no indexing); a class a crop doesn't hold takes no part."""
     n, c, h, w = tag_out.shape
-    zero = tag_out.sum() * 0
     if groups.numel() == 0:
-        return zero, zero
-    hot = (tag[:, None] == groups[None, :, None, None]).to(tag_out.dtype).reshape(n, len(groups), h * w)
-    count = hot.sum(-1)                                                     # (n, K) px of each word
-    present = (count > 0).to(tag_out.dtype)
-    held = present if weight is None else torch.bmm(hot, weight.reshape(n, h * w, 1).to(tag_out.dtype))[..., 0] \
-        / count.clamp(min=1)                                                # (n, K) each word's weight
-    vec = tag_out.reshape(n, c, h * w).transpose(1, 2)                      # (n, P, c)
-    mean = torch.bmm(hot, vec) / count.clamp(min=1)[..., None]              # (n, K, c)
-    own = torch.bmm(hot.transpose(1, 2), mean)                              # (n, P, c): its word's mean, 0 off cores
-    far = ((vec - own) ** 2).sum(-1).add(NORM_EPS).sqrt()
-    pulled = torch.log1p(F.relu(far - PULL) ** 2)                           # (n, P)
-    per_word = torch.bmm(hot, pulled[..., None])[..., 0] / count.clamp(min=1)
-    words = present.sum(-1).clamp(min=1)
-    pull = ((per_word * held).sum(-1) / words).sum() / (held.sum(-1) / words).sum().clamp(min=MASS_EPS)
-    apart = ((mean[:, :, None] - mean[:, None]) ** 2).sum(-1).add(NORM_EPS).sqrt()      # (n, K, K)
-    other = 1 - torch.eye(len(groups), dtype=tag_out.dtype, device=tag_out.device)
-    pairs = (present[:, :, None] * present[:, None, :] * other).sum((1, 2)).clamp(min=1)
-    pair = held[:, :, None] * held[:, None, :] * other
-    pushed = torch.log1p(F.relu(PUSH - apart) ** 2) * pair
-    push = (pushed.sum((1, 2)) / pairs).sum() / (pair.sum((1, 2)) / pairs).sum().clamp(min=MASS_EPS)
-    return pull, push
+        return tag_out.sum() * 0
+    size = h * w
+    words = (tag[:, None] == groups[None, :, None, None]).to(tag_out.dtype).reshape(n, len(groups), size)
+    back = ((1 - core) * (weight > 0).to(core.dtype)).to(tag_out.dtype).reshape(n, 1, size)
+    hot = torch.cat([back, words], 1)                                       # (n, 1 + K, P)
+    count = hot.sum(-1)                                                     # (n, 1 + K) px of each class
+    vec = tag_out.reshape(n, c, size).transpose(1, 2)                       # (n, P, c)
+    mean = torch.bmm(hot, vec) / count.clamp(min=1)[..., None]              # (n, 1 + K, c); 0 for a class of no px
+    far = ((vec ** 2).sum(-1)[..., None] - 2 * torch.bmm(vec, mean.transpose(1, 2))
+           + (mean ** 2).sum(-1)[:, None, :]).clamp(min=0)                  # (n, P, 1 + K): |tag - mean|^2
+    logit = torch.where((count > 0)[:, None, :], -far * torch.exp(-log_temp), torch.full_like(far, -torch.inf))
+    on = (tag > 0).reshape(n, size)
+    logit = torch.where(on[..., None], logit, torch.zeros_like(logit))      # px off the cores: read by nothing
+    ce = F.cross_entropy(logit.transpose(1, 2), tag.reshape(n, size), reduction="none")
+    m = weight.reshape(n, size) * on.to(weight.dtype)
+    return (ce * m).sum() / m.sum().clamp(min=MASS_EPS)
 
 
 def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: torch.Tensor, known: torch.Tensor,
-              groups: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """The word heads' loss of a batch (see the module) and its parts (WORD_PARTS, unweighted) as one tensor on the
-    batch's device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`.  Each px counts by its weight
-    (`known`): the core's cross-entropy and Dice, the geometry's and the tags' means are weighted.  The geometry
-    (iou, direction) is read only at core px whose distances make a box (`geo` has none for a word reaching into a
-    held-out area, `data.crop_targets`)."""
+              geo_known: torch.Tensor, groups: torch.Tensor, log_var: torch.Tensor | None = None,
+              log_temp: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+    """The word heads' loss of a batch (see the module): sum_i exp(-s_i) L_i + s_i / 2 over the WORD_PARTS L_i, by
+    the log-variances `log_var` (s, one a part) and the tag's log-temperature `log_temp` (both 0, their start, when
+    not given: `WordLoss` holds the learned ones), and the parts themselves (unweighted) as one tensor on the batch's
+    device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`.  Each px counts by its weight
+    (`known`).  The distances are read only at core px where they are known (`geo_known`), the direction at every
+    known core px."""
+    if log_var is None:
+        log_var = out.new_zeros(len(WORD_PARTS))
+    if log_temp is None:
+        log_temp = out.new_zeros(())
     logit = out[:, model.CORE]
-    lc = _ohem_bce(logit, core, known)
+    lc = _balanced_bce(logit, core, known)
     p = torch.sigmoid(logit)
     ld = 1 - 2 * (p * core * known).sum() / ((p * known).sum() + (core * known).sum() + DICE_EPS)
-    g = geo[:, :4]
-    m = core * known * ((g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) > 0).to(core.dtype)
-    n = m.sum().clamp(min=MASS_EPS)
-    d = model.distances(out[:, model.GEO])
+    on = core * known
+    boxed = on * geo_known
+    g, d = geo[:, :4], model.distances(out[:, model.GEO])
     inter = ((torch.minimum(d[:, 0], g[:, 0]) + torch.minimum(d[:, 1], g[:, 1]))
              * (torch.minimum(d[:, 2], g[:, 2]) + torch.minimum(d[:, 3], g[:, 3])))
     union = (d[:, 0] + d[:, 1]) * (d[:, 2] + d[:, 3]) + (g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) - inter
-    li = (-torch.log((inter + 1) / (union + 1)) * m).sum() / n
+    li = (-torch.log((inter + 1) / (union + 1)) * boxed).sum() / boxed.sum().clamp(min=MASS_EPS)
     cs = out[:, 5:7]
     rad = torch.deg2rad(geo[:, 4])
     cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
-    la = ((1 - cosine) * m).sum() / n
-    pull, push = _tag_parts(out[:, model.TAG], tag, groups, known)
-    total = lc + ld + li + GEO_ANGLE_WEIGHT * la + TAG_WEIGHT * (pull + push)
-    return total, torch.stack([lc, ld, li, la, pull, push])
+    la = ((1 - cosine) * on).sum() / on.sum().clamp(min=MASS_EPS)
+    lt = _tag_ce(out[:, model.TAG], tag, groups, known, core, log_temp)
+    parts = torch.stack([lc, ld, li, la, lt])
+    return (torch.exp(-log_var) * parts + log_var / 2).sum(), parts
+
+
+class WordLoss(torch.nn.Module):
+    """The word terms' learned settings (see the module), trained with the network: `log_var` (one log-variance s_i
+    a part of WORD_PARTS, its weight exp(-s_i)) and `log_temp` (the tag's log-temperature), all starting at 0.
+    Calling it gives `word_loss` by them."""
+
+    def __init__(self):
+        super().__init__()
+        self.log_var = torch.nn.Parameter(torch.zeros(len(WORD_PARTS)))
+        self.log_temp = torch.nn.Parameter(torch.zeros(()))
+
+    def forward(self, out: torch.Tensor, *targets: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        return word_loss(out, *targets, log_var=self.log_var, log_temp=self.log_temp)
+
+    @torch.no_grad()
+    def learned(self) -> dict:
+        """The settings as plain numbers (reading them waits for the device): each part's log-variance and weight
+        exp(-s), and the tag's temperature."""
+        s = self.log_var.detach().cpu().double().tolist()
+        return {"log_var": dict(zip(WORD_PARTS, s)), "weight": {k: float(np.exp(-v)) for k, v in zip(WORD_PARTS, s)},
+                "temperature": float(np.exp(float(self.log_temp.detach().cpu())))}
 
 
 class WeightAverage:
@@ -538,7 +556,10 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
     rng = np.random.default_rng(seed)
     pools = centre_pools(sheets)
     net = build_net(recipe).to(device)
-    opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=WEIGHT_DECAY)
+    crit = WordLoss().to(device) if recipe.heads == "words" else None
+    trained = net.parameters() if crit is None else [{"params": net.parameters()},
+                                                      {"params": crit.parameters(), "weight_decay": 0.0}]
+    opt = torch.optim.AdamW(trained, lr=recipe.max_lr, weight_decay=WEIGHT_DECAY)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.iterations,
                                                 pct_start=recipe.pct_start)
     average = WeightAverage(net, recipe.weight_average) if recipe.weight_average else None
@@ -555,7 +576,7 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
             out = out.float()                                   # the loss in float32, outside the autocast
             loss, parts = loss_fn(out, t, k, a, w)
             if words:
-                more, word_parts = word_loss(out, *words)
+                more, word_parts = crit(out, *words)
                 loss, parts = loss + more, torch.cat([parts, word_parts])
             opt.zero_grad()
             scaler.scale(loss).backward()
@@ -572,18 +593,28 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
                                              + ", ".join(f"{n} {v}" for n, v in zip(names, mean)) + ")")
                 log.info("iterations %d-%d: " + ", ".join(f"{n} %.4f" for n in names) + " (%.1f s)", first, it,
                          *mean, time.perf_counter() - t0)
+                if crit is not None:
+                    got = crit.learned()
+                    log.info("word terms' learned weights %s, tag temperature %.4g",
+                             ", ".join(f"{k} {v:.4g}" for k, v in got["weight"].items()), got["temperature"])
                 sums.zero_()
                 first = it + 1
     if average is not None:
         average.put_into(net)
+    if crit is not None:
+        net.learned_word_loss = crit.learned()      # a plain attribute: not in the state, kept by `save_model`
     return net
 
 
 def save_model(out: Path, net: model.TextNet, recipe: Recipe, device: str, seed: int = 0) -> Path:
     """Write a trained detector to `out` (its folder made): the weights (`state_dict`, on the CPU) and the recipe they
-    came from (as a dict), with its iterations, the device and the seed.  Returns `out`."""
+    came from (as a dict), with its iterations, the device and the seed; with the word heads, also the word terms'
+    learned weights and temperature (`word_loss`, from `fit`'s `learned_word_loss`).  Returns `out`."""
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save({"state_dict": {k: v.cpu() for k, v in net.state_dict().items()}, "recipe": dataclasses.asdict(recipe),
-                "iterations": recipe.iterations, "device": device, "seed": seed}, out)
+    saved = {"state_dict": {k: v.cpu() for k, v in net.state_dict().items()}, "recipe": dataclasses.asdict(recipe),
+             "iterations": recipe.iterations, "device": device, "seed": seed}
+    if getattr(net, "learned_word_loss", None) is not None:
+        saved["word_loss"] = net.learned_word_loss
+    torch.save(saved, out)
     return out
