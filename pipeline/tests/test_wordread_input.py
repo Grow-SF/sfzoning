@@ -45,7 +45,8 @@ def test_default_recipe_is_ink_and_unnamed():
     assert dataclasses.asdict(r) == {
         "iterations": 8000, "max_lr": 2e-3, "pct_start": 0.3, "batch": 12, "crop": 320, "width": 24, "ink_only": "off",
         "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full",
-        "precision": "float32", "labels": "boxes", "composites": 0.0, "input": "ink"}
+        "precision": "float32", "labels": "boxes", "composites": 0.0, "input": "ink",
+        "scenes": 0.0}
 
 
 def test_recipe_input_is_ink_or_grey():

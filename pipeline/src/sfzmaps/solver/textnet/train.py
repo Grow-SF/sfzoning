@@ -9,7 +9,11 @@ alone (`data.crop_targets`), by the recipe's label rule (`labels`; "lines-unknow
 `zones.prepare` fills before the training).  With `composites` p > 0, each crop is a composite with chance p, made by
 the bank handed to `fit` (`composite.Bank`, built before the training; any object with `.crop(rng, sd, y, x, size,
 scale, turns)`) from the same crop's centre, scale and turns and the same generator; with p = 0 that chance is never
-drawn, so the batches are those of a recipe without composites, byte for byte.
+drawn, so the batches are those of a recipe without composites, byte for byte.  With `scenes` p > 0, each crop that is
+not a composite is a map-like synthetic scene with chance p (`wordread.scenes.SceneBank`: DataSF geometry drawn as the
+maps draw it, real words pasted where the maps print labels, exact masks for every head), made by the same bank object
+(any object with `.scene(rng, size, scale, turns)`) at the crop's scale and turns from the same generator; with p = 0
+that chance is never drawn either.
 
 The loss is binary cross-entropy on text over the px it reads, plus KIND_WEIGHT x the cross-entropy of the kind and
 ANGLE_WEIGHT x (1 - cosine) of the reading direction, both on the text px it reads; a text-only network (`heads`
@@ -142,6 +146,9 @@ class Recipe:
                       it too; "lines-unknown" its line px unknown (the sheets' line px filled by `zones.prepare`)
       composites      the share of crops that are composites (`composite.Bank.crop`: real clean words onto real line
                       work, real line pieces across clean words, exact masks); 0 none, and no draw for it
+      scenes          the share of the other crops that are map-like synthetic scenes (`.scene` of the bank handed to
+                      `fit`, `wordread.scenes.SceneBank`: the keys of the word targets, exact masks); 0 none, and no
+                      draw for it.  Drawn as ink, so not with input "grey"
       input           what the network reads: "ink" the 1-bit ink (1 on ink, 0 on paper), or "grey" the page's grey
                       levels over 255 (0 black, 1 white paper; `data.crop_targets(..., grey=True)`, bilinear when a
                       crop is scaled; the sheets must hold them, `load_sheets(grey=True)`).  Targets and the loss's
@@ -165,6 +172,7 @@ class Recipe:
     labels: str = "boxes"
     composites: float = 0.0
     input: str = "ink"
+    scenes: float = 0.0
 
     def __post_init__(self):
         for f in dataclasses.fields(self):
@@ -184,7 +192,8 @@ class Recipe:
                                ("width", self.width >= 1, "at least 1"), ("max_lr", self.max_lr > 0, "above 0"),
                                ("pct_start", 0 < self.pct_start < 1, "between 0 and 1"),
                                ("weight_average", 0 <= self.weight_average < 1, "at least 0 and below 1"),
-                               ("composites", 0 <= self.composites <= 1, "between 0 and 1")):
+                               ("composites", 0 <= self.composites <= 1, "between 0 and 1"),
+                               ("scenes", 0 <= self.scenes <= 1, "between 0 and 1")):
             if not ok:
                 raise ValueError(f"recipe: {name} must be {rule}, not {getattr(self, name)}")
         if self.half_size and self.crop % model.FOLD:
@@ -193,6 +202,9 @@ class Recipe:
         if self.input == "grey" and self.composites > 0:
             raise ValueError(f"recipe: composites are drawn as ink, with no grey levels: composites must be 0 with "
                              f"input grey, not {self.composites}")
+        if self.input == "grey" and self.scenes > 0:
+            raise ValueError(f"recipe: scenes are drawn as ink, with no grey levels: scenes must be 0 with input grey, "
+                             f"not {self.scenes}")
         if self.heads == "words" and self.composites > 0:
             raise ValueError(f"recipe: the word heads learn from data.crop_targets' word targets, which composites "
                              f"don't make: composites must be 0 with heads words, not {self.composites}")
@@ -257,14 +269,21 @@ def centre_pools(sheets: list[data.SheetData]) -> tuple[Pool, Pool]:
     return pools
 
 
+def _need_bank(recipe: Recipe, bank) -> None:
+    """ValueError for a recipe with composites or scenes and no bank to draw them from."""
+    for what in ("composites", "scenes"):
+        if getattr(recipe, what) > 0 and bank is None:
+            raise ValueError(f"a recipe with {what} ({getattr(recipe, what)}) draws them from a bank: none was given")
+
+
 def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator,
          bank=None) -> list[dict[str, np.ndarray]]:
     """One batch of `recipe.batch` crops: for each, text or ink, a centre from that pool, a scale and a number of
     turns; its targets by the recipe's label rule (and, with the word heads, its word targets), or, with chance
-    `recipe.composites` (drawn only when it is above 0), a composite of `bank` from the same centre, scale and turns
-    (ValueError without a bank)."""
-    if recipe.composites > 0 and bank is None:
-        raise ValueError(f"a recipe with composites ({recipe.composites}) draws them from a bank: none was given")
+    `recipe.composites` (drawn only when it is above 0), a composite of `bank` from the same centre, scale and turns,
+    or else, with chance `recipe.scenes` (drawn only when it is above 0), a scene of `bank` (`bank.scene`) at the same
+    scale and turns (ValueError without a bank)."""
+    _need_bank(recipe, bank)
     extra = {"words": True} if recipe.heads == "words" else {}
     if recipe.input == "grey":
         extra["grey"] = True
@@ -276,6 +295,8 @@ def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe,
         turns = int(rng.integers(4))
         if recipe.composites > 0 and rng.random() < recipe.composites:
             out.append(bank.crop(rng, sheets[i], y, x, recipe.crop, scale, turns))
+        elif recipe.scenes > 0 and rng.random() < recipe.scenes:
+            out.append(bank.scene(rng, recipe.crop, scale, turns))
         else:
             out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, turns, labels=recipe.labels, **extra))
     return out
@@ -571,12 +592,11 @@ def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Rec
 
 def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None, seed: int = 0,
         bank=None) -> model.TextNet:
-    """A TextNet fitted on the sheets by `recipe` on `device` (default `default_device()`), its composites (if the
-    recipe has any) from `bank`; see the module.  On `mps` the caller holds the GPU's exclusive turn (`gpu.gpu_turn`).
-    ValueError, before any training, for a recipe with composites and no bank.  Raises FloatingPointError at the first
-    log whose mean loss over the steps since the last is not finite."""
-    if recipe.composites > 0 and bank is None:
-        raise ValueError(f"a recipe with composites ({recipe.composites}) draws them from a bank: none was given")
+    """A TextNet fitted on the sheets by `recipe` on `device` (default `default_device()`), its composites and scenes
+    (if the recipe has any) from `bank`; see the module.  On `mps` the caller holds the GPU's exclusive turn
+    (`gpu.gpu_turn`).  ValueError, before any training, for a recipe with composites or scenes and no bank.  Raises
+    FloatingPointError at the first log whose mean loss over the steps since the last is not finite."""
+    _need_bank(recipe, bank)
     device = device or default_device()
     settle_torch()
     torch.manual_seed(seed)

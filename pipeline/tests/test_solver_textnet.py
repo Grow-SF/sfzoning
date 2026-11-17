@@ -496,12 +496,12 @@ def _flip(crops, where) -> list[dict[str, np.ndarray]]:
 def test_default_recipe_trains_as_today(maps):
     # today's settings: 8,000 steps of 12 crops of 320 px, a one-cycle peak of 2e-3 reached 30% in, width 24, the
     # loss on every known px, the network at full size with all seven outputs, no average, no prefetch, every px of a
-    # word box taught as text (the label rule "boxes"), no composites
+    # word box taught as text (the label rule "boxes"), no composites, no scenes
     assert dataclasses.asdict(train.Recipe()) == {
         "iterations": 8000, "max_lr": 2e-3, "pct_start": 0.3, "batch": 12, "crop": 320, "width": 24, "ink_only": "off",
         "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full",
         "precision": "float32", "labels": "boxes", "composites": 0.0,
-        "input": "ink"}
+        "input": "ink", "scenes": 0.0}
     torch.manual_seed(0)
     net = train.build_net(train.Recipe())
     assert sum(p.numel() for p in net.parameters()) == TODAYS_PARAMETERS
