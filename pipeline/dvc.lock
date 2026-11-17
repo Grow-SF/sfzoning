@@ -12164,3 +12164,233 @@ stages:
       md5: d251f9dd38123f07c889f4632575424e.dir
       size: 35577237
       nfiles: 11
+  solver-text-read:
+    cmd: uv run --frozen sfzmaps stage solver-text-read
+    deps:
+    - path: data/solver/boxes/boxes.parquet
+      hash: md5
+      md5: 7ba73d17d24475935f4d2e434661bb38
+      size: 2631407
+    - path: data/solver/text-crops/answered.npz
+      hash: md5
+      md5: a670bf188618dc87b44212cfd1939ad0
+      size: 643663
+    - path: data/solver/text-crops/answered.parquet
+      hash: md5
+      md5: 072f763e910ef78fb65f5bdc2b08232d
+      size: 64937
+    - path: data/solver/text-crops/crops.npz
+      hash: md5
+      md5: 4a300ffda0458fbdfd9c974c2254cf00
+      size: 39277398
+    - path: data/solver/text-crops/crops.parquet
+      hash: md5
+      md5: 0108aa958961b05d4fbfbffead71db2b
+      size: 1499652
+    - path: data/solver/text-crops/prior.json
+      hash: md5
+      md5: e96d62ece9b3b420d851277ea8069ff5
+      size: 28477
+    - path: data/solver/text-train
+      hash: md5
+      md5: d251f9dd38123f07c889f4632575424e.dir
+      size: 35577237
+      nfiles: 11
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
+      hash: md5
+      md5: f444bc4d9cadcf56443dc06204e0d765
+      size: 576002
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
+      hash: md5
+      md5: a88e18048b9ac3e2d704ba71b7b650b5
+      size: 617446
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
+      hash: md5
+      md5: 81da3a304df9d21cbfedb13a22dc0492
+      size: 521389
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
+      hash: md5
+      md5: 5844ce5a064617e309baf7ed2f571e1e
+      size: 356225
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
+      hash: md5
+      md5: 90770df11395057ef0f14ce16dd716aa
+      size: 561786
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
+      hash: md5
+      md5: dcd20c52cd6862670b8278d80eca5749
+      size: 605604
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
+      hash: md5
+      md5: e009c0b4c5b5dced46af24b27caf0531
+      size: 684425
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
+      hash: md5
+      md5: 080969337e6cab2005bb3bb5f7cd200b
+      size: 599057
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
+      hash: md5
+      md5: d91c9de094fe175f35818e5e148cb4a3
+      size: 329656
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
+      hash: md5
+      md5: 84d4c608588c415064ab5fe82772e1ea
+      size: 673449
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
+      hash: md5
+      md5: cdbfa8649cee4687924b9ecdc40c729e
+      size: 706126
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
+      hash: md5
+      md5: f46c2eca3ce4778660dd40c3661182bc
+      size: 655778
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
+      hash: md5
+      md5: 4cdaa95f1bce5407fc9d2f69a8c4bf24
+      size: 411197
+    - path: pyproject.toml
+      hash: md5
+      md5: 6791af9e671517b73efecac175f80096
+      size: 1464
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/llm.py
+      hash: md5
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/codereader/__init__.py
+      hash: md5
+      md5: 13f77d32329a3b4b3b238de87a5d80a8
+      size: 1051
+    - path: src/sfzmaps/solver/codereader/labels.py
+      hash: md5
+      md5: efdd2709f69dfd7b5f83dfe49683dc80
+      size: 32967
+    - path: src/sfzmaps/solver/codes.py
+      hash: md5
+      md5: 75cd0443d1ff7c6aa915429d7befa5cc
+      size: 1476
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/lots.py
+      hash: md5
+      md5: 7399c576690409a389991a1a56e0e826
+      size: 6551
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: aedf730eb73fad4377ecd8ee72bca25b
+      size: 4386
+    - path: src/sfzmaps/solver/prints.py
+      hash: md5
+      md5: 9b6381eb7bd93c542eb22ee4485ee4c3
+      size: 22967
+    - path: src/sfzmaps/solver/saved.py
+      hash: md5
+      md5: 5428b2e93ac078c2186cedf7b3aaaf8a
+      size: 2203
+    - path: src/sfzmaps/solver/strokes.py
+      hash: md5
+      md5: 0e71e98705b64da5b00c87d661f0684b
+      size: 7649
+    - path: src/sfzmaps/solver/table.py
+      hash: md5
+      md5: 93f7aa72e78e358ed74f663a47b4d7e6
+      size: 4053
+    - path: src/sfzmaps/solver/textnet/__init__.py
+      hash: md5
+      md5: 6d4312a09af9edf5054abf24e821990c
+      size: 96
+    - path: src/sfzmaps/solver/textnet/boxes.py
+      hash: md5
+      md5: 9c3059873b3916274be61844bceb5490
+      size: 8542
+    - path: src/sfzmaps/solver/textnet/data.py
+      hash: md5
+      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
+      size: 28436
+    - path: src/sfzmaps/solver/textnet/model.py
+      hash: md5
+      md5: 838bfdbb95644c10cf39d2513c815fc7
+      size: 3851
+    - path: src/sfzmaps/solver/textnet/predict.py
+      hash: md5
+      md5: 6d54442b40dc6b9022c806eb44c338b4
+      size: 6860
+    - path: src/sfzmaps/solver/textnet/reader_stage.py
+      hash: md5
+      md5: e4d2bb8a2cbd158aa3e8ef1af4ac8106
+      size: 15798
+    - path: src/sfzmaps/solver/textnet/scores.py
+      hash: md5
+      md5: 3356ba9880e9b57b4291ab5cab8abf49
+      size: 15145
+    - path: src/sfzmaps/solver/textnet/stage.py
+      hash: md5
+      md5: da952d71e74f6aaf8708ad102f00bc06
+      size: 4088
+    - path: src/sfzmaps/solver/textnet/train.py
+      hash: md5
+      md5: 0c1b4bda2838082ba33a747a5ee4e3c3
+      size: 21777
+    - path: src/sfzmaps/solver/textread/__init__.py
+      hash: md5
+      md5: 317f64bff6ff4ee48d988b1b4c44e831
+      size: 1146
+    - path: src/sfzmaps/solver/textread/crops.py
+      hash: md5
+      md5: fec945b94d94588c427969968ce5e959
+      size: 17847
+    - path: src/sfzmaps/solver/textread/ctc.py
+      hash: md5
+      md5: fee7e3c8b938e866d7f81864db96fef9
+      size: 6436
+    - path: src/sfzmaps/solver/textread/model.py
+      hash: md5
+      md5: 3ba7209d5a8220f2525b622646fe158b
+      size: 8813
+    - path: src/sfzmaps/solver/textread/read.py
+      hash: md5
+      md5: 1cddddc8e3322fc55286d16011c77ece
+      size: 21950
+    - path: src/sfzmaps/solver/textread/store.py
+      hash: md5
+      md5: 7c1b868d69295d02732a4f1f2a1d6726
+      size: 3864
+    - path: src/sfzmaps/solver/wordboxes.py
+      hash: md5
+      md5: ddf5f9d37f0df4848df83183d5bec213
+      size: 20380
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: b038b7f427cf66546c731cc1433bb62d
+      size: 338100
+    outs:
+    - path: data/solver/text-read
+      hash: md5
+      md5: 7c044cd892903b6d1041af247188516b.dir
+      size: 23050546
+      nfiles: 4
