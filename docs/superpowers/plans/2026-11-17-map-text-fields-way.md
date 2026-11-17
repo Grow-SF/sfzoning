@@ -299,13 +299,12 @@ A kept variant is then confirmed on all four folds at seed 0.
 
 **Interfaces:**
 - **Produces:**
-  - `shrink.measure_r(words_by_sheet) -> dict`: the largest r in [0.3, 0.7] (step 0.05) at which at most 1% of
-    neighbouring Terra-word pairs on the training quarters have overlapping cores. Cores are shrunk by
-    D = A(1−r²)/L.
-  - `shrink.core(rect, r) -> np.ndarray`, the shrunk rotated rectangle's corners;
-    `shrink.unclip(core_rect, r) -> np.ndarray`, its inverse.
+  - **Amended (owner, 11-17: no picked core size):** NO shrink ratio. `shrink.prepare(sheets)` fills
+    `SheetData.cores` with each word's own labelled rectangle. Touching words are separated by the learned tags, the
+    geometry votes (Task 6) and the learned box model (Task 15). `measure_r`, `core` and `unclip` (built in
+    87f3d82/da3a149) stay only as a record of the overlap measurement; nothing uses r.
   - **`crop_targets(..., words=True)`** adds:
-    - `core` (uint8, all px in a shrunk word);
+    - `core` (uint8, all px in a word's rectangle);
     - `geo` (float32 (5, h, w) at core px: distances to the word's top, bottom, start and end edges in crop px, plus
       the reading angle, the semantic edges taken from the word's reading angle);
     - `tag_id` (int32 word id at core px, 0 elsewhere).
@@ -319,14 +318,12 @@ A kept variant is then confirmed on all four folds at seed 0.
     The per-ink text head (channels 0-6) is trained exactly as today.
   - `heads="all"` (the default) stays byte-identical.
 - [ ] **Step 1: Write the failing tests:**
-  - `unclip(core(rect, r), r)` returns `rect` within 0.5 px;
-  - two touching words get disjoint cores at the measured r;
+  - (amended) `prepare` fills each word's core with its own rectangle;
   - `geo` at a core px of a 0° word gives the right four distances;
   - the default recipe's batches and the `GUARD_WEIGHTS` are unchanged;
   - `test_build.py` passes.
 - [ ] **Step 2: Run them to verify they fail.**
-- [ ] **Step 3: Implement.** Measure r on the training quarters, and save it to
-  `experiments/wordread/detector/shrink.json`.
+- [ ] **Step 3: Implement.** (The overlap curve stays recorded in `experiments/wordread/detector/shrink.json`.)
 - [ ] **Step 4: Run the tests to verify they pass.**
 - [ ] **Step 5: Commit.**
 
@@ -335,21 +332,30 @@ A kept variant is then confirmed on all four folds at seed 0.
 **Files:** Create `pipeline/src/sfzmaps/solver/wordread/words.py`; Test `pipeline/tests/test_wordread_words.py`.
 
 **Interfaces:**
-- **Consumes:** Task 5's outputs (predicted core, geo, tag) and `shrink.unclip`.
-- **Produces:**
-  - `core_words(core, geo, tag, ink, level, r, refine: str) -> pd.DataFrame`, in `wordboxes.COLUMNS` with the same
-    meaning (so reading runs unchanged), plus `form`, `core_px` and `tag_spread`.
-    - Words are the components of `core ≥ level`. A component whose px tags fall into two clusters more than 3 apart
-      is split.
-    - `refine="unclip"`: each component's minimum-area rectangle, unclipped by r.
-    - `refine="votes"`: the components' geometry votes merged by score-weighted locality-aware NMS.
-  - `choose_level(...)`: per quarter on the other three quarters, by Task 1's headline over Terra-matched words (not
-    the owner's answers).
-- [ ] **Step 1: Write the failing tests** on synthetic maps:
-  - two touching cores become two words;
-  - a line touching a word doesn't extend its box (votes and unclip both);
+- **Consumes:** Task 5's outputs (predicted core chance, geo distances, tag vectors).
+- **Produces (amended, owner 11-17: no level, no IoU merge, no r, no one-box-per-component):**
+  - `core_words(core, geo, tag, ink, spreads, word_prior) -> pd.DataFrame`, in `wordboxes.COLUMNS` with the same
+    meaning, plus `p_word`, `core_mass` and `tag_spread`.
+    - Each px votes for a box (its four distances and angle, Task 5's `_geometry` inverted exactly) and carries its
+      tag. A vote's weight is the px's core chance; there is no level.
+    - Words are the components of a mixture over the weighted votes: each word is a box and a tag mean, and its votes
+      are Gaussian about them with the spreads `spreads` (corner and tag spreads, measured in Task 8 on the
+      training quarters' predictions against Terra's boxes). Spatial correlation between neighbouring px is
+      accounted for (an effective number of independent votes per word, measured), so the likelihood does not grow
+      with word size alone.
+    - The number of words is decided by that one likelihood with `word_prior` (a fitted log prior per extra word):
+      one model for splitting and joining, no split-then-rejoin.
+    - Every box keeps `p_word` (its share of the weighted vote mass); weak boxes are kept with their probability,
+      never discarded by a rule.
+  - `measure_spreads(...)` and `fit_word_prior(...)`: for Task 8, on the training quarters' predictions against
+    Terra's words (never the owner's answers).
+- [ ] **Step 1: Write the failing tests** on synthetic maps, one per failure kind:
+  - two touching words become two boxes;
+  - a noisy single word stays one word;
+  - a line touching a word doesn't extend its box;
+  - a strong minority cluster of votes (a real second word) becomes its own box;
   - a core at the page edge gives a clipped box;
-  - a core whose tags split in two gives two words.
+  - rotated words (30, 90, 150, −45, 180°) come back exactly from unrounded votes.
 - [ ] **Step 2: Run them to verify they fail.**
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run the tests to verify they pass.**
@@ -357,20 +363,29 @@ A kept variant is then confirmed on all four folds at seed 0.
 
 ### Task 7: Doubt weights for Terra words (item 6, `wordread/doubt.py`, `crop_targets` option)
 
-**Files:** Create `pipeline/src/sfzmaps/solver/wordread/doubt.py`; Modify `textnet/data.py` (`SheetData.doubt`,
-default empty; under `words=True` a doubtful word's px are unknown); Test `pipeline/tests/test_wordread_doubt.py`.
+**Files:** Create `pipeline/src/sfzmaps/solver/wordread/doubt.py`; Modify `textnet/data.py` (`SheetData.weights`,
+default empty = 1) and `textnet/train.py` (the word losses weight each word's px by it); Test
+`pipeline/tests/test_wordread_doubt.py`.
 
-**Interfaces:**
-- **Produces:** `doubt_flags(sd) -> pd.DataFrame`, per Terra word: `ink_outside` (the share of its ink pieces' px
-  outside its box), `forced_height` (`boxes.word_rect`'s near-45° case), `contradicted` (another pass's box at
-  IoU ≥ 0.5 with a different normalised string), and `doubtful`.
-  - `ink_outside`'s cut is the 99th percentile of that share over all Terra words, as measured.
-  - `doubtful = ink_outside > cut or forced_height or contradicted`.
-  - The counts per series and kind are saved to `experiments/wordread/detector/doubt.json`.
+**Interfaces (amended, owner 11-17: weights, not a q99 cut or flags):**
+- **Produces:**
+  - `doubt_features(sd) -> pd.DataFrame`, per Terra word: `ink_outside` (the share of its ink pieces' px outside its
+    box), `forced_height` (`boxes.word_rect`'s near-45° case), kind, and, for words Terra read twice (tile seams),
+    the other read: the overlapping word of the other pass with the highest IoU (argmax, no IoU cut), the pair's
+    IoU, and whether the normalised strings agree.
+  - `fit_doubt(features) -> dict`: on the training quarters' double-read words outside the answered blocks,
+    a logistic model of P(strings agree) and a beta regression of the pair's box IoU, from `ink_outside`,
+    `forced_height` and kind.
+  - `doubt_weights(sd, params) -> (box_weight, string_weight)` per word: the expected box IoU (for the detector's
+    word targets) and P(string right) (for the reader's targets). No cut, no in/out flag.
+  - Weights and fitted parameters are saved to `experiments/wordread/detector/doubt.json`.
+- Also (Task 5's review): geometry targets are unknown for words whose rectangle touches a held px; remove the test
+  that restates `HEAD_OUTPUTS`.
 - [ ] **Step 1: Write the failing tests:**
-  - a word whose ink runs out of its box past the cut is doubtful;
-  - a contradicted word is doubtful;
-  - doubtful words' core and geometry px are unknown under `words=True`;
+  - more ink outside the box gives a lower weight, smoothly (no step);
+  - the fit recovers known coefficients on synthetic double reads;
+  - the word losses scale with the weights (weight 0 = no gradient from that word);
+  - `fit_doubt` refuses answered-block or held-quarter words;
   - with `words=False`, the targets are unchanged.
 - [ ] **Step 2: Run them to verify they fail.**
 - [ ] **Step 3: Implement,** then write the counts.
@@ -390,11 +405,15 @@ on its boxes via Task 4's `run`, then the measures); Test `pipeline/tests/test_w
   control's noise against today's best per-ink run;
 - the controller's look at the review page agrees.
 
-Arms:
+Arms (amended, owner 11-17):
 - `base`: today's recipe, with words from connected ink and the Task 4 reader;
-- (a) `heads=words` with `refine=unclip`;
-- (b) `heads=words` with `refine=votes`;
-- (c) the better of (a)/(b) plus `doubt`.
+- (a) `heads=words`, words by Task 6's weighted vote mixture;
+- (b) (a) plus Task 7's doubt weights;
+- (c) the better of (a)/(b) plus Task 15's box model in Task 9's choice.
+
+Before (a): measure Task 6's spreads and fit its word prior on the training quarters' predictions; place the boxes
+(`quarter`, x/y, lot) with the code `wordboxes.sheet_boxes` uses (shared, not copied); stitch tiles so a word on a
+tile edge is one box. The first mps run checks that two short runs repeat and records peak memory (Task 5's review).
 
 A kept variant is confirmed on all four folds at seed 0.
 
@@ -417,6 +436,10 @@ A kept variant is confirmed on all four folds at seed 0.
     - `trim_start` and `trim_end` (each by the measured median character width of its kind).
   - `choose(box, cands, read_fn, prior_fn=None) -> tuple[str, dict]`: the candidate with the highest log posterior,
     with `prior_fn` (Task 10) or the ink alone.
+  - **As built (d4b62c2, ea52c04):** a fitted conditional logit over the candidates (no windows or minimum gaps).
+    **Amended (owner 11-17):** `choice_features` also takes Task 15's box-model log-probabilities (the word count of
+    each candidate box, and the boundary at a split) as optional inputs, fitted like the others; added when Task 15
+    lands.
 - [ ] **Step 1: Write the failing tests:**
   - a box holding two words is split when the halves read better;
   - a word cut in two is joined;
@@ -553,3 +576,49 @@ scenes come in through the bank object, as composites do); Test `pipeline/tests/
 - [ ] **Step 5: Commit the note** (after the pgrep check).
 
 Stop here. Adoption into the shipped stages, and T4/T5 of the text-reader plan, wait for the owner.
+
+### Task 15: The learned box model (added by the owner, 11-17; built alongside Tasks 6-7, run in Task 8 arm (c))
+
+The owner: "there are things you can learn about boxes and how many words they hold ... Don't just hardcode these
+... There is a hidden function that you should be able to learn automatically." So no hand features (ink density,
+the ink centroid against the box centre, gaps): a small network learns them from the box's own pixels.
+
+**Files:** Create `pipeline/src/sfzmaps/solver/wordread/boxmodel.py`, `pipeline/scripts/wordread/run_boxmodel.py`;
+Test `pipeline/tests/test_wordread_boxmodel.py`.
+
+**Interfaces:**
+- **Consumes:** boxes in `wordboxes.COLUMNS` form (today's, Task 6's, or Task 9's candidates); the page ink; the
+  detector's per-ink text chance and, when present, its word-head outputs (core chance, tags); Terra's words
+  (`textnet/boxes.py` `terra_boxes`); Task 7's weights when present; `textread/crops.py`'s rectification.
+- **Produces:**
+  - `box_examples(boxes, terra, sheets, quarter, weights=None) -> Examples`: per box, the rectified crop with the
+    reader crops' own margin (`crops.py`; no new margin constant). Channels: ink, text chance, and the word-head
+    outputs when present. Targets, with no cut:
+    - the word count as a distribution: each Terra word contributes its share of ink inside the box, so the count is
+      the Poisson-binomial of those shares;
+    - per column along the box, whether it lies in the gap between two consecutive held Terra words (exact columns
+      from their ends).
+    - Plus joined real neighbours: two real Terra word crops on one line, the gap drawn from the measured
+      distribution of real same-line gaps, the targets known by construction.
+    - Only training-quarter words outside the answered blocks; it raises otherwise.
+  - `BoxNet`: plain torch, like the reader's backbone. Outputs: count logits over 0..K (K = the largest count in the
+    training examples, measured) and a boundary logit per column.
+  - `fit_boxmodel(examples, recipe) -> model` inside `gpu.gpu_turn`; deterministic seeds.
+  - `box_logp(model, crops) -> (count_logp, boundary_logp)`, for Task 9's `choice_features`.
+- **The keep rule** (written now): on NE over seeds 0 and 1, Task 9's choice with the box model's log-probabilities
+  against without:
+  - the headline rises with the paired label interval excluding zero;
+  - the held-out box numbers' `merged_with_word` count falls (Mission sheet: 293 today);
+  - the review page agrees.
+
+  A kept model is confirmed on all four folds at seed 0.
+- [ ] **Step 1: Write the failing tests:**
+  - the count target is the exact Poisson-binomial of the ink shares;
+  - the boundary columns are exactly the gaps between held Terra words;
+  - `box_examples` raises on held-quarter or answered-block words;
+  - a short CPU fit on synthetic one-word and two-word crops separates them well above chance;
+  - joined-neighbour gaps follow the measured distribution.
+- [ ] **Step 2: Run them to verify they fail.**
+- [ ] **Step 3: Implement.** No training runs in this step (Task 8 arm (c) trains it).
+- [ ] **Step 4: Run the tests to verify they pass.**
+- [ ] **Step 5: Commit.**

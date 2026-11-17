@@ -137,6 +137,22 @@ The owner asked for an approach that implements and tests all eight items in the
   The rule and its counts are reported, as DBNet's ignore mask does. A CRAFT-style check of letter count against
   spelling, if the builder finds a sound letter count.
 
+- **Amended by the owner (2026-11-17, about 11:20):**
+  - **No picked core size.** "The R core size measure is still arbitrary numbers that you've picked, not a learned
+    distribution." Cores are each word's labelled rectangle. Touching words are separated by the learned tags, the
+    geometry votes and the learned box model below.
+  - **Words from the weighted votes.** Each px votes for a box and carries a tag, weighted by its core chance.
+    Words are the components of a mixture over those votes, with measured spreads and a fitted per-word prior.
+    There is no core level, no IoU merge, and no one-box-per-component.
+  - **Doubt as weights.** Each Terra word's weight is its fitted probability of being right. It is learned from the
+    words Terra read twice, with no cut and no flag.
+  - **A learned box model.** "There are things you can learn about boxes and how many words they hold ... There is
+    a hidden function that you should be able to learn automatically."
+    - A small network reads a box's own pixels and gives the number of words it holds and where they divide.
+    - It is trained on the training quarters' boxes against the Terra words they hold, plus real neighbouring words
+      joined.
+    - It feeds the choice between a box, its split, its join and its trims.
+
 ### 3. Context packs and choosing the box
 - **A context pack** (optional; one file per map) holds:
   - street names with centrelines;
