@@ -33,6 +33,11 @@ def by_kind(cands):
     return dict(cands)
 
 
+def feat(cands, name):
+    c = next(c for c in cands if c.name == name)
+    return c.along, c.across
+
+
 def read_by_span(table, default=-30.0):
     """A stub reader: the log posterior of the best string for a word, by (rounded left, rounded right)."""
     def read(corners, box):
@@ -85,13 +90,14 @@ def test_split_follows_a_slanted_axis():
 def test_join_takes_the_nearest_box_however_far_and_its_distance_is_the_gap():
     box = make_box(10, 50)                      # height 10
     near, far, off = make_box(56, 90), make_box(70, 100), make_box(54, 90, 40, 50)
-    c = by_kind(C.candidates(box, page_with((10, 50)), [far, near, off], WIDTHS))
+    cands = C.candidates(box, page_with((10, 50)), [far, near, off], WIDTHS)
+    c = by_kind(cands)
     assert c["join_nearest"][0][:, 0].min() == pytest.approx(10)
     assert c["join_nearest"][0][:, 0].max() == pytest.approx(90)
-    assert c["join_nearest"].gap == pytest.approx(6)
+    assert feat(cands, "join_nearest") == pytest.approx((6 / 8, 0))
     # no window: a box 450 px away is joined when it is the only one
-    c = by_kind(C.candidates(box, page_with((10, 50)), [make_box(500, 540)], WIDTHS))
-    assert c["join_nearest"].gap == pytest.approx(450)
+    assert feat(C.candidates(box, page_with((10, 50)), [make_box(500, 540)], WIDTHS), "join_nearest")[0] \
+        == pytest.approx(450 / 8)
 
 
 def test_trim_cuts_the_kinds_median_character_width_from_either_end():
@@ -144,7 +150,7 @@ def test_equal_reads_keep_as_found():
     assert len(cands) == 5
     flat = lambda corners, b: {"R-1": math.log(0.5), "none": math.log(0.25), "other": math.log(0.25)}   # noqa: E731
     assert C.choose(box, cands, flat)[0] == "as_found"
-    assert C.choose(box, [c for c in cands if c[0] != "split_gap"], flat)[0] == "as_found"
+    assert C.choose(box, [c for c in cands if c.name != "split_gap"], flat)[0] == "as_found"
 
 
 def test_a_two_word_candidate_scores_the_sum_of_its_words_log_posteriors():
@@ -166,7 +172,7 @@ def test_a_split_does_not_win_a_tie_of_word_posteriors():
 
 def test_the_prior_renormalises_each_words_posterior():
     box = make_box(10, 50)
-    cands = [(k, c) for k, c in C.candidates(box, page_with((10, 50)), [], WIDTHS) if k in ("as_found", "trim_end")]
+    cands = [c for c in C.candidates(box, page_with((10, 50)), [], WIDTHS) if c.name in ("as_found", "trim_end")]
 
     def read(corners, b):
         return {"P": math.log(0.6), "Q": math.log(0.3), "none": math.log(0.05), "other": math.log(0.05)}
@@ -210,13 +216,14 @@ def test_a_vertical_box_splits_and_joins_along_its_axis():
     ink = np.zeros((200, 100), bool)
     ink[20:50, 46:54] = True
     ink[80:110, 46:54] = True
-    c = by_kind(C.candidates(vbox(20, 110), ink, [vbox(116, 150)], WIDTHS))
+    cands = C.candidates(vbox(20, 110), ink, [vbox(116, 150)], WIDTHS)
+    c = by_kind(cands)
     halves = c["split_gap"]
     assert halves[0][:, 1].min() == pytest.approx(20) and halves[0][:, 1].max() == pytest.approx(50)
     assert halves[1][:, 1].min() == pytest.approx(80) and halves[1][:, 1].max() == pytest.approx(110)
-    assert c["split_gap"].gap == pytest.approx(30)
+    assert feat(cands, "split_gap")[0] == pytest.approx(30 / 8)
     assert c["join_nearest"][0][:, 1].max() == pytest.approx(150)
-    assert c["join_nearest"].gap == pytest.approx(6)
+    assert feat(cands, "join_nearest") == pytest.approx((6 / 8, 0))
     assert c["trim_start"][0][:, 1].min() == pytest.approx(28)
 
 
@@ -231,9 +238,9 @@ def synthetic_rows(n=400, seed=0, ink_scores=True):
         gap = rng.uniform(0.05, 3.0)
         split = rng.random() < 1 / (1 + math.exp(-3 * (gap - 1.5)))
         a, s = rng.normal(-0.5, 0.3), rng.normal(-0.7, 0.3)
-        out += [{"box": b, "cand": "as_found", "score": a, "gap": 0.0, "label": not split},
-                {"box": b, "cand": "split_gap", "score": s, "gap": gap, "label": split}]
-    return pd.DataFrame(out)
+        out += [{"box": b, "cand": "as_found", "score": a, "gap": 0.0, "across": 0.0, "label": not split},
+                {"box": b, "cand": "split_gap", "score": s, "gap": gap, "across": 0.0, "label": split}]
+    return pd.DataFrame(out).assign(held_out=False, answered=False)
 
 
 def test_the_fit_recovers_a_positive_gap_weight_when_splits_are_right_only_with_a_large_gap():
@@ -247,7 +254,7 @@ def test_the_chosen_version_flips_with_the_gap():
     read = read_by_span({(10, 100): ("A B", math.log(0.9))}, default=math.log(0.8))
     pick = lambda gap: C.choose(   # noqa: E731
         make_box(10, 100), C.candidates(make_box(10, 100), page_with((10, 40), (40 + gap, 100)), [], WIDTHS),
-        read, params=params, widths=WIDTHS)
+        read, params=params)
     big, small = pick(26), pick(1)
     assert big[0] == "split_gap" and big[1]["prob"] > 0.5
     assert small[0] == "as_found"
@@ -260,7 +267,7 @@ def test_a_merged_box_reading_other_with_confidence_loses_to_a_split_with_a_larg
     half = {"R-1": math.log(0.9), "other": math.log(0.05), "none": math.log(0.05)}
     read = lambda corners, b: merged if corners[:, 0].max() - corners[:, 0].min() > 80 else half   # noqa: E731
     assert C.choose(box, cands, read)[0] == "as_found"           # the raw sum: the confident "other" wins
-    kind, info = C.choose(box, cands, read, params=C.fit_choice(synthetic_rows()), widths=WIDTHS)
+    kind, info = C.choose(box, cands, read, params=C.fit_choice(synthetic_rows()))
     assert kind == "split_gap" and info["prob"] > 0.5
 
 
@@ -268,12 +275,12 @@ def test_a_one_pixel_letter_gap_does_not_split():
     box = make_box(10, 100)
     ink = page_with((10, 50), (51, 100))
     cands = C.candidates(box, ink, [], WIDTHS)
-    assert by_kind(cands)["split_gap"].gap == pytest.approx(1)
+    assert feat(cands, "split_gap")[0] == pytest.approx(1 / 8)
     half = {"R-1": math.log(0.95), "other": math.log(0.025), "none": math.log(0.025)}
     whole = {"R-1": math.log(0.5), "other": math.log(0.4), "none": math.log(0.1)}
     read = lambda corners, b: whole if corners[:, 0].max() - corners[:, 0].min() > 80 else half   # noqa: E731
     assert C.choose(box, cands, read)[0] == "split_gap"           # raw: two clear halves beat the whole's doubt
-    kind, _ = C.choose(box, cands, read, params=C.fit_choice(synthetic_rows()), widths=WIDTHS)
+    kind, _ = C.choose(box, cands, read, params=C.fit_choice(synthetic_rows()))
     assert kind == "as_found"
 
 
@@ -281,7 +288,7 @@ def test_choice_features_are_one_row_per_version_with_the_gap_in_character_width
     box = make_box(10, 100, kind="block")
     cands = C.candidates(box, page_with((10, 40), (70, 100)), [], WIDTHS)
     read = lambda corners, b: {"A": math.log(0.9), "none": math.log(0.05), "other": math.log(0.05)}   # noqa: E731
-    f = C.choice_features(box, cands, read, WIDTHS)
+    f = C.choice_features(box, cands, read)
     assert list(f["cand"]) == [k for k, _ in cands]
     assert f.loc[f["cand"] == "split_gap", "gap"].item() == pytest.approx(30 / 6.0)
     assert (f.loc[f["cand"] != "split_gap", "gap"] == 0).all()
@@ -297,12 +304,71 @@ def test_label_of_is_the_version_that_best_matches_terras_words():
     assert C.label_of(cands, [(500, 500, 540, 520)]) is None
 
 
+def test_label_of_uses_the_rotated_rectangle_not_its_bounding_box():
+    a = math.radians(45)
+    u, v = np.array([math.cos(a), math.sin(a)]), np.array([-math.sin(a), math.cos(a)])
+    c0 = np.array([100.0, 100.0])
+    box = {"axis": 45.0, "t_length": 80.0, "t_height": 6.0, **{f"p_{k}": 0.0 for k in KINDS}, "p_zoning": 1.0}
+    for i, (p, q) in enumerate([(-40, -3), (40, -3), (40, 3), (-40, 3)]):
+        box[f"t{i}x"], box[f"t{i}y"] = c0 + p * u + q * v
+    cands = C.candidates(box, np.zeros((200, 200), bool), [], WIDTHS)
+    rotated = np.array([c0 + p * u + q * v for p, q in ((-40, -3), (40, -3), (40, 3), (-40, 3))])
+    assert C.label_of(cands, [rotated]) == "as_found"
+    # a word's axis-aligned bounding box is mostly empty paper: the same rectangle as an upright box matches the
+    # as_found version at a low IoU (the rotated rectangle's area over the bounding box's), well below 1
+    r0 = C._iou(C._poly(rotated), C._poly((rotated[:, 0].min(), rotated[:, 1].min(), rotated[:, 0].max(),
+                                           rotated[:, 1].max())))
+    assert r0 < 0.2
+
+
 def test_fit_refuses_held_out_and_answered_rows():
     rows = synthetic_rows(20)
     for flag in ("held_out", "answered"):
         with pytest.raises(ValueError):
             C.fit_choice(rows.assign(**{flag: [False] * (len(rows) - 1) + [True]}))
-    assert C.fit_choice(rows.assign(held_out=False, answered=False))["boxes"] == 20
+        with pytest.raises(ValueError):           # a missing column is refused, not assumed False
+            C.fit_choice(rows.drop(columns=flag))
+    assert C.fit_choice(rows)["boxes"] == 20
+
+
+def test_a_separated_fit_stays_finite_because_beta_has_the_ridge():
+    rows = synthetic_rows(60)
+    rows["score"] = np.where(rows["label"], 0.0, -50.0)            # the score alone separates the labels
+    p = C.fit_choice(rows)
+    assert np.isfinite(p["beta"]) and abs(p["beta"]) < 1e3
+
+
+def test_a_candidate_pickles_and_its_features_go_to_a_table():
+    import pickle
+    box = make_box(10, 100)
+    cands = C.candidates(box, page_with((10, 40), (70, 100)), [make_box(106, 130)], WIDTHS)
+    back = pickle.loads(pickle.dumps(cands))
+    assert [(c.name, c.along, c.across) for c in back] == [(c.name, c.along, c.across) for c in cands]
+    read = lambda corners, b: {"A": math.log(0.9), "none": math.log(0.05), "other": math.log(0.05)}   # noqa: E731
+    f = C.choice_features(box, back, read)
+    assert pd.DataFrame(f).to_parquet() and (f["gap"] > 0).any()
+
+
+def test_a_next_line_box_has_lower_join_odds_than_a_same_line_box_at_the_same_distance():
+    rng = np.random.default_rng(1)
+    rows = []
+    for b in range(500):          # joins are right only on the same line (across 0); distances are drawn alike
+        d = rng.uniform(0.2, 3.0)
+        same = rng.random() < 0.5
+        rows += [{"box": 2 * b, "cand": "as_found", "score": rng.normal(-0.5, 0.2), "gap": 0.0, "across": 0.0,
+                  "label": not same},
+                 {"box": 2 * b, "cand": "join_nearest", "score": rng.normal(-0.5, 0.2), "gap": d if same else 0.0,
+                  "across": 0.0 if same else d / 2, "label": same}]
+    params = C.fit_choice(pd.DataFrame(rows).assign(held_out=False, answered=False))
+    assert params["gamma_across"]["join_nearest"] < params["gamma"]["join_nearest"]
+    box = make_box(10, 50)
+    read = lambda corners, b: {"A": math.log(0.8), "none": math.log(0.1), "other": math.log(0.1)}   # noqa: E731
+    ink = page_with((10, 50))
+    same_line = C.candidates(box, ink, [make_box(56, 90)], WIDTHS)               # 6 px along, 0 across
+    next_line = C.candidates(box, ink, [make_box(10, 50, 36, 46)], WIDTHS)       # 0 along, 6 px across
+    p_same = C.choose(box, same_line, read, params=params)[1]["probs"]["join_nearest"]
+    p_next = C.choose(box, next_line, read, params=params)[1]["probs"]["join_nearest"]
+    assert p_next < p_same
 
 
 def test_choose_needs_as_found_first():
