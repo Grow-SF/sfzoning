@@ -322,7 +322,9 @@ def test_a_line_across_a_word_is_ink_not_text_and_the_word_stays_text(bank_fx):
         assert (new_ink & in_rect).any()                       # across the word's box
 
 
-def test_a_line_onto_a_word_teaches_its_long_strokes_as_text(bank_with_one_huge_word):
+def test_a_line_onto_a_word_teaches_all_its_ink_even_px_the_label_rule_leaves_unknown(bank_with_one_huge_word):
+    # a drawn word whose strokes the run rule calls line: the mechanism only (on the real maps no clean code holds a
+    # run-rule px in its box; the new lessons there are letter px touching or under line ink, below)
     fx = bank_with_one_huge_word
     words = fx.bank.words[SERIES]
     huge = np.flatnonzero(words.kind == data.KINDS["zoning code"])
@@ -333,6 +335,87 @@ def test_a_line_onto_a_word_teaches_its_long_strokes_as_text(bank_with_one_huge_
     glyph = _glyphs("RM-2", (200, 420), scale=3.0, thick=6)[y0:y0 + src, x0:x0 + src]
     assert (~base["known"] & glyph).sum() > 100             # the label rule leaves its long strokes unknown
     assert c["text"][glyph].all() and c["known"][glyph].all()
+
+
+# --- the kinds clean words are drawn in --------------------------------------------------------------------------
+
+def test_kind_weights_draw_clean_words_in_the_words_mix_and_the_crossed_words_mix():
+    words = np.array([10, 60, 30, 0])
+    crossed = np.array([6, 12, 18, 0])
+    clean = np.array([5, 90, 1, 4])
+    w = composite._kind_weights(words, crossed, clean)
+    # the clean words drawn by these weights come in the words' mix, for (a), and the crossed words' mix, for (b)
+    assert np.allclose(clean * w["a"] / (clean * w["a"]).sum(), words / words.sum())
+    assert np.allclose(clean * w["b"] / (clean * w["b"]).sum(), crossed / crossed.sum())
+    assert w["a"][3] == 0 and w["b"][3] == 0               # "other": clean words, but no word of it to stand for
+    # a kind crossed but with no clean word can't be drawn: the others keep their mix among themselves
+    w = composite._kind_weights(words, np.array([6, 12, 18, 9]), np.array([5, 90, 1, 0]))
+    drawn = np.array([5, 90, 1, 0]) * w["b"]
+    assert w["b"][3] == 0 and np.allclose(drawn / drawn.sum(), [6 / 36, 12 / 36, 18 / 36, 0])
+    # no crossed word of a kind with clean words: (b) takes the words' mix
+    w = composite._kind_weights(words, np.array([0, 0, 0, 7]), np.array([5, 90, 1, 0]))
+    assert np.array_equal(w["b"], w["a"]) and w["a"][0] > 0
+
+
+def test_the_bank_draws_its_clean_words_by_kind_weight(bank_fx):
+    bank = bank_fx.bank
+    kind = bank.words[SERIES].kind
+    code, block, street = (data.KINDS[k] for k in ("zoning code", "block number", "street name"))
+    # its words: three codes (one crossed), a block number, a street name; clean: two codes, the block number, the
+    # street name.  (a): the words' mix (codes 3/5); (b): the crossed words' mix (codes alone)
+    a = bank.word_chances(SERIES, "a")
+    assert a[kind == code].sum() == pytest.approx(0.6) and a[kind == block].sum() == pytest.approx(0.2)
+    assert a[kind == street].sum() == pytest.approx(0.2)
+    b = bank.word_chances(SERIES, "b")
+    assert b[kind == code].sum() == pytest.approx(1.0)
+    rng = np.random.default_rng(0)
+    for mode, chances in (("a", a), ("b", b)):
+        picks = np.bincount([bank._pick(rng, SERIES, bank.words[SERIES], mode) for _ in range(4000)],
+                            minlength=len(kind))
+        assert np.abs(picks / 4000 - chances).max() < 0.03
+    alike = dataclasses.replace(bank, weighted=False)
+    assert np.allclose(alike.word_chances(SERIES, "b"), 0.25)
+    assert bank.sizes()[SERIES]["kind_weights"]["b"]["zoning code"] == pytest.approx(2.0)
+
+
+# --- the new lessons -------------------------------------------------------------------------------------------------
+
+def test_new_lessons_are_text_px_on_line_px_which_the_label_rule_never_teaches(bank_fx):
+    y0, x0 = CENTRE[0] - 64, CENTRE[1] - 64
+    line = data.line_window(bank_fx.sd, y0, x0, 128, 128)
+    base = data.crop_targets(bank_fx.sd, *CENTRE, 128, 1.0, 0, labels="lines-unknown")
+    assert not (base["text"].astype(bool) & base["known"] & line).any()     # the control: none
+    on = _forced(bank_fx.bank, a_share=1.0, cross=1.0)
+    seen = 0
+    for seed in range(10):
+        c = on.crop(np.random.default_rng(seed), bank_fx.sd, *CENTRE, 128, 1.0, 0)
+        new = int((c["text"].astype(bool) & c["known"] & line).sum())
+        assert on.last["new_lesson_px"] == new and new <= on.last["word_px"]
+        assert on.last["box_line_not_text_px"] > 0                # the line under the word, off its letters
+        seen += new
+    assert seen and on.tally["new_lesson_px:a"] >= seen
+    across = _forced(bank_fx.bank, a_share=0.0)
+    lessons = 0
+    for seed in range(10):
+        c = across.crop(np.random.default_rng(seed), bank_fx.sd, *CENTRE, 128, 1.0, 0)
+        info = across.last
+        wy0, wx0, src = info["window"]
+        base = data.crop_targets(across.sheets[info["sheet"]], *info["centre"], 128, 1.0, 0, labels="lines-unknown")
+        pieces = across.pieces[SERIES]
+        k = info["piece"]
+        piece = np.rot90(composite.piece_mask(across.sheets[pieces.sheet[k]], pieces.box[k], pieces.seed[k]),
+                         info["piece_turns"])
+        oy, ox, ph, pw = info["placed"]
+        canvas = np.zeros((src + 2 * ph, src + 2 * pw), bool)    # the piece where it was placed, cut to the window
+        canvas[oy + ph:oy + 2 * ph, ox + pw:ox + 2 * pw] = piece
+        placed = canvas[ph:ph + src, pw:pw + src]
+        assert (placed <= c["ink"]).all() and not (placed & ~base["ink"] & c["text"].astype(bool)).any()
+        # the piece's px, grown by 1 px as line px are, join the crop's line px
+        grown = cv2.dilate(placed.view(np.uint8), np.ones((3, 3), np.uint8)) > 0
+        lines = data.line_window(across.sheets[info["sheet"]], wy0, wx0, src, src) | grown
+        assert info["new_lesson_px"] == int((c["text"].astype(bool) & c["known"] & lines).sum())
+        lessons += info["new_lesson_px"]
+    assert lessons
 
 
 # --- the page-scale path ---------------------------------------------------------------------------------------------

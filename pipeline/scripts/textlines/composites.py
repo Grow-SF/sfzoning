@@ -6,22 +6,28 @@ CPU, sheets 4 at a time, one thread each:
 Writes to `data/solver/experiments/textlines/`:
   distributions.json  `composite.measure` of the 2000 sheets with each quarter and the owner's answered blocks held out
                       (`by_held_quarter`); at the top NE's, the quarter the composites run first (`cross_by_kind`,
-                      `cross_by_kind_ink`, `clean_words`, `clean_word_texture`, `line_texture`); `p` per quarter, the
-                      word-weighted share of words crossed over all kinds (the composites' share, `--composites`);
-                      `banks` per quarter, each map's bank (`Bank.sizes`: clean words, pieces, words crossed by kind)
+                      `cross_by_kind_line_px`, `clean_words`, `clean_word_texture`, `line_texture`); `p` per quarter,
+                      the word-weighted share of words crossed over all kinds (the composites' share, `--composites`);
+                      `banks` per quarter, each map's bank (`Bank.sizes`: clean words, pieces, words crossed by kind,
+                      kind weights)
   composites.json     100 batches of `train.draw` (stage.DEFAULT_RECIPE with the label rule lines-unknown, seed 0)
                       timed at composites p and at 0, alone and with `batch_tensors` (the prefetch thread's work); what
-                      the composites were (`Bank.tally`); the texture check: `texture_stats` of the text ink of
-                      composites and of the real crops at the same centres (page scale, not turned), and of clean words
+                      the composites were (`Bank.tally`); `sample`: SAMPLE composites drawn as `train.draw` draws them,
+                      the clean words drawn by kind weight ("weighted", as the training does) and alike ("alike", as
+                      before the weights), each with the composites' kind mix, the draws per clean word (`repeats`)
+                      and the new lessons (`Bank.tally`'s, per composite: text px on line px, line ink in the word's
+                      box taught not text); the texture check: `texture_stats` of the text ink of composites and of
+                      the real crops at the same centres (page scale, not turned), and of clean words
   composites.png      24 composites as the training sees them (12 word onto lines, 12 line onto a word): text red, other
                       ink grey, px with no lesson (unknown) tinted blue, the pasted word's frame or the clean word's box
-                      green
+                      green; each caption ends with the composite's new lessons ("new" px, page scale)
 """
 import os
 
 for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS",
            "OPENCV_FOR_THREADS_NUM"):
     os.environ.setdefault(_k, "1")
+import collections  # noqa: E402
 import dataclasses  # noqa: E402
 import logging  # noqa: E402
 import time  # noqa: E402
@@ -41,6 +47,8 @@ BATCHES = 100             # batches timed
 SEED = 0
 PICTURES = 12             # composites of each kind in the picture
 CHECKS = 150              # composites of each kind (and real crops) in the texture check
+SAMPLE = 2000             # composites in the sample of kinds, repeats and new lessons
+KIND_NAMES = composite.KIND_NAMES
 log = logging.getLogger("composites")
 
 
@@ -110,7 +118,7 @@ def picture(sheets, pools, bank, recipe, out) -> list[dict]:
     """PICTURES composites of each kind (`picture`'s rng seeded 5), drawn as `train.draw` would, to `out`."""
     rng = np.random.default_rng(5)
     tiles, made = [], []
-    kinds = {v: k for k, v in data.KINDS.items()}
+    short = {"zoning code": "code", "block number": "block", "street name": "street", "other": "other"}
     for mode, share in (("a", 1.0), ("b", 0.0)):
         forced = dataclasses.replace(bank, a_share=share)
         n = 0
@@ -120,13 +128,15 @@ def picture(sheets, pools, bank, recipe, out) -> list[dict]:
             info = forced.last
             if info["mode"] != mode:
                 continue
-            words = forced.words[sheets[i].series]
-            kind = kinds[int(words.kind[info["word"]])]
+            kind = KIND_NAMES[info["kind"]]
             where = ("on line" if info["on_line"] else "off line") if mode == "a" else "line across"
-            caption = f"({mode}) {where}, {kind}, {sheets[i].series[:9]}, x{scale:.2f}, {turns} turn"
+            caption = (f"({mode}) {where}, {short[kind]}, {sheets[i].series[:9]}, x{scale:.2f}, {turns} turn, "
+                       f"new {info['new_lesson_px']}")
             tiles.append(_tile(c, info, forced, recipe.crop, turns, caption))
             made.append({"mode": mode, "series": sheets[i].series, "kind": kind, "scale": round(scale, 3),
-                         "turns": turns, **{k: v for k, v in info.items() if k in ("on_line", "window")}})
+                         "turns": turns, **{k: v for k, v in info.items()
+                                            if k in ("on_line", "window", "word", "word_px", "new_lesson_px",
+                                                     "box_line_not_text_px")}})
             n += 1
     gap = 6
     rows = []
@@ -137,6 +147,64 @@ def picture(sheets, pools, bank, recipe, out) -> list[dict]:
     if not cv2.imwrite(str(out), sheet):
         raise OSError(f"can't write {out}")
     return made
+
+
+def _mix(rows, key=lambda r: True) -> dict:
+    """The share of each kind among the composites of `rows` for which `key` holds (None without any)."""
+    kinds = [r["kind"] for r in rows if key(r)]
+    return {n: round(kinds.count(k) / len(kinds), 4) if kinds else None for k, n in enumerate(KIND_NAMES)}
+
+
+def _lessons(rows) -> dict:
+    """The new lessons of composites (`Bank._lessons`): how many have any, and the px per composite and per px of the
+    composited word's ink."""
+    new = np.array([r["new_lesson_px"] for r in rows], float)
+    word = np.array([r["word_px"] for r in rows], float)
+    under = np.array([r["box_line_not_text_px"] for r in rows], float)
+    return {"composites": len(rows), "with_any": round(float((new > 0).mean()), 4) if len(rows) else None,
+            "new_lesson_px": int(new.sum()), "mean_px": round(float(new.mean()), 1) if len(rows) else None,
+            "share_of_word_ink": round(float(new.sum() / word.sum()), 4) if word.sum() else None,
+            "box_line_not_text_px": int(under.sum())}
+
+
+def sample(sheets, pools, bank, recipe, weighted: bool) -> dict:
+    """SAMPLE composites drawn as `train.draw` draws them (centre, scale, turns, then `Bank.crop`; rng seeded 21), the
+    clean words drawn by kind weight or alike: the kind mix (by kind of composite, in all, and per map), the draws per
+    clean word per map and kind (`repeats`: the bank's words, the draws, the words drawn, the mean draws per word of
+    the bank and the most draws of one word), and the new lessons (in all, per kind of composite, per map and kind)."""
+    bank = dataclasses.replace(bank, weighted=weighted, tally=collections.Counter())
+    rng = np.random.default_rng(21)
+    rows, left = [], 0
+    while len(rows) < SAMPLE:
+        i, y, x, scale, turns = _centre(pools, rng)
+        bank.crop(rng, sheets[i], y, x, recipe.crop, scale, turns)
+        info = bank.last
+        if info["mode"] == "none":
+            left += 1
+            continue
+        rows.append({k: info[k] for k in ("mode", "series", "word", "kind", "word_px", "new_lesson_px",
+                                          "box_line_not_text_px")})
+    series = list(dict.fromkeys(r["series"] for r in rows))
+    repeats = {}
+    for s in series:
+        repeats[s] = {}
+        for k, name in enumerate(KIND_NAMES):
+            mine = [r["word"] for r in rows if r["series"] == s and r["kind"] == k]
+            n_words = int((bank.words[s].kind == k).sum())
+            counts = np.bincount(mine) if mine else np.zeros(0, int)
+            repeats[s][name] = {"bank_words": n_words, "draws": len(mine), "words_drawn": int((counts > 0).sum()),
+                                "mean_per_word": round(len(mine) / n_words, 2) if n_words else None,
+                                "max_per_word": int(counts.max()) if len(counts) else 0}
+    return {
+        "weighted": weighted, "composites": len(rows), "left_as_is": left,
+        "kind_mix": {"all": _mix(rows), **{m: _mix(rows, lambda r, m=m: r["mode"] == m) for m in ("a", "b")}},
+        "kind_mix_by_series": {s: _mix(rows, lambda r, s=s: r["series"] == s) for s in series},
+        "repeats": repeats,
+        "new_lessons": {"all": _lessons(rows), **{m: _lessons([r for r in rows if r["mode"] == m]) for m in "ab"},
+                        "by_series_and_kind": {s: {name: _lessons([r for r in rows if r["series"] == s
+                                                                   and r["kind"] == k])
+                                                   for k, name in enumerate(KIND_NAMES)} for s in series}},
+    }
 
 
 def texture_check(sheets, pools, bank) -> dict:
@@ -191,7 +259,7 @@ def main() -> None:
         "held_out": f"the quarter {FIRST} and the answered blocks (reader_stage.held_blocks); by_held_quarter for each",
         "rules": {"cross_px": composite.CROSS_PX, "clean_px": composite.CLEAN_PX, "piece_px": composite.PIECE_PX,
                   "tile": composite.TILE, "line_px": "SheetData.line_bits (linerules.line_px grown by 1 px)"},
-        **{k: first[k] for k in ("cross_by_kind", "cross_by_kind_ink", "clean_words", "clean_word_texture",
+        **{k: first[k] for k in ("cross_by_kind", "cross_by_kind_line_px", "clean_words", "clean_word_texture",
                                  "line_texture", "sheets")},
         "p": p, "by_held_quarter": by_quarter, "banks": banks, "seconds": seconds})
     log.info("wrote %s: p %s", OUT / "distributions.json", p)
@@ -208,10 +276,14 @@ def main() -> None:
     log.info("draw: %s", timing)
     bank.tally.clear()
     shown = picture(held, pools, bank, with_p, OUT / "composites.png")
+    sampled = {"weighted": sample(held, pools, bank, with_p, True), "alike": sample(held, pools, bank, with_p, False)}
+    log.info("sample: kind mix weighted %s, alike %s", sampled["weighted"]["kind_mix"]["all"],
+             sampled["alike"]["kind_mix"]["all"])
     check = texture_check(held, pools, bank)
     zones._write_json(OUT / "composites.json", {
         "recipe": dataclasses.asdict(with_p), "timing": timing, "gpu_step_ms": 95,
         "composites_made_in_timing": made, "pools_seconds": round(pooled, 1), "picture": shown,
+        "picture_new_lessons": _lessons(shown), "sample": sampled,
         "texture_check": check, "clean_word_texture": first["clean_word_texture"]})
     log.info("wrote %s and %s", OUT / "composites.json", OUT / "composites.png")
 

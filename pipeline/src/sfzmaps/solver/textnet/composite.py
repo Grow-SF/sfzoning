@@ -1,46 +1,61 @@
 """Composites inside real crops, for the text detector's training (`train.Recipe.composites`): real clean words ORed
-onto real line work and real line pieces ORed across clean words, with exact masks, so the detector learns letters
-(whole, their long strokes too) apart from the line ink through and beside them.
+onto real line work and real line pieces ORed across clean words, with exact masks, so the detector learns that letter
+px touching or under line ink are text and the line ink through and beside letters is not: lessons the label rule
+"lines-unknown" never gives (it leaves every line px inside a word unknown).
 
   clean word   a Terra word whose ink pieces all lie inside its box, with no line px (`data.SheetData.line_bits`, the
                run rule's px grown by 1 px) within CLEAN_PX px outside it (`linegate.clean_word_mask`, the gate's
-               m2_clean_words): its ink is an exact mask of text, with the scan's own texture
+               m2_clean_words): its ink is an exact mask of text, with the scan's own texture.  On the real maps a
+               clean word holds (nearly) no run-rule px inside its box either (NE held out: no code or block number
+               does), so the composites do not teach the long strokes the label rule leaves unknown; they teach letter
+               px touching or under line ink
   line piece   a connected piece of line ink (the line px that are ink) more than CLEAN_PX px from every Terra word,
                other pass's box, unmatched zone and held-out px (`free_line_ink`), cut by a grid of TILE px tiles,
                whose bounding diagonal is at least PIECE_PX px (`line_pieces`)
-  crossed      a word with at least CROSS_PX line px inside its box (`crossings`)
+  crossed      a word with at least CROSS_PX px of line ink (line px that are ink) inside its box (`crossings`)
 
 The bank (`Bank.build`) holds references only: each clean word as (sheet, rectangle, kind, angle), each line piece as
 (sheet, box, a seed px of it), per map, none from an area held out (a held-out quarter, the answered blocks), and per
-map and kind the share of words crossed (`cross_by_kind`), measured on its own sheets, the words whose centre is in an
-area held out left out.  Its own generator (`default_rng([seed, 1])`) draws only where each sheet's tile grid starts.
+map and kind the words in a training area (their centre not held out), those crossed and the clean words it holds.
+From them, per map: the share of words crossed by kind (`cross`), and the weight each kind's clean words are drawn by
+(`kind_weights`), so the kinds come in the map's own mix: for (a) a kind's share of the map's words over its share of
+the clean words; for (b), which always crosses, its share of the crossed words over its share of the clean words (the
+words' mix where no word is crossed).  A kind with no clean word can't be drawn: the others share its weight.  Its own
+generator (`default_rng([seed, 1])`) draws only where each sheet's tile grid starts.
 
 A composite (`Bank.crop`, drawn from the batch thread's generator alone) starts from the real crop the batch drew, as
 `data.crop_targets(..., labels="lines-unknown")` makes it, and changes it at page scale, before the resize and the
 turns, one of two ways (A_SHARE of them the first):
 
-  (a) word onto lines   a clean word of the crop's map is ORed in, as it is printed (its own size and angle).  With
-                        its kind's crossing share it goes on the crop's line ink (a px of its rectangle on a line ink
-                        px, and CROSS_PX line px or more inside its rectangle), else off it (no line px within
-                        CLEAN_PX px of its rectangle); and only where its rectangle and CLEAN_PX px around it hold no
-                        Terra word, no other pass's box, no unmatched zone and no held-out px, inside the crop.  TRIES
-                        places are tried, then the next clean word is drawn; after WORDS words the crop is left as it
-                        is.  Its ink is text, known, with its kind and angle (where it overlaps line ink too); the line
-                        ink under its rectangle off its letters stays as the crop had it: not text, known.
-  (b) line onto a word  the crop is moved to centre on a clean word of the crop's map (on its own sheet), whose ink is
-                        all text and known (its long strokes too, which the label rule leaves unknown), and a line
-                        piece of that map, turned a random number of quarter turns, is ORed across it (a px of the
-                        piece on a px of the word's rectangle).  The piece's px that were paper become ink, not text,
-                        known as the px was (never where it was held out or unknown); those on the word's ink stay
-                        text (the overlap: text, with weight 1, there being no measured weight); those on other ink
-                        keep their targets.
+  (a) word onto lines   a clean word of the crop's map (drawn by its kind's weight) is ORed in, as it is printed (its
+                        own size and angle).  With its kind's crossing share it goes on the crop's line ink (a px of
+                        its rectangle on a line ink px, and CROSS_PX px of line ink or more inside its rectangle), else
+                        off it (no line px within CLEAN_PX px of its rectangle); and only where its rectangle and
+                        CLEAN_PX px around it hold no Terra word, no other pass's box, no unmatched zone and no
+                        held-out px, inside the crop.  TRIES places are tried, then the next clean word is drawn; after
+                        WORDS words the crop is left as it is.  Its ink is text, known, with its kind and angle (where
+                        it overlaps line ink too); the line ink under its rectangle off its letters stays as the crop
+                        had it: not text, known.
+  (b) line onto a word  the crop is moved to centre on a clean word of the crop's map (drawn by its kind's weight, on
+                        its own sheet), whose ink is all text and known, and a line piece of that map, turned a random
+                        number of quarter turns, is ORed across it (a px of the piece on a px of the word's
+                        rectangle).  The piece's px that were paper become ink, not text, known as the px was (never
+                        where it was held out or unknown); those on the word's ink stay text (the overlap: text, with
+                        weight 1, there being no measured weight); those on other ink keep their targets.  The piece's
+                        px, grown by 1 px as the line px are, join the crop's line px.
 
 A composite's masks are exact, so its text is only ever ink: the paper inside a word box there (the pasted word's
 rectangle's too) is unknown, a lesson neither of text nor of not-text (in the real crops it is text, by the box rule).
 
+`Bank.tally` counts what the composites were and, per kind of composite, the new lessons: `new_lesson_px` the px
+taught as text that are line px (text, known and a line px: a letter px on or next to line ink, which the label rule
+leaves unknown inside a word) and `box_line_not_text_px` the line ink inside the composited word's box taught as not
+text, at page scale; `last` holds the same for the last composite.
+
 `measure` gives what the bank's rules rest on: on sheets with areas left out, the share of words crossed by kind
-(`cross_by_kind`), the clean words, their texture (`texture_stats`) and the texture of straight line pieces
-(`line_texture`), which drawn lines would have to match (none is drawn: real line pieces only).
+(`cross_by_kind`; `cross_by_kind_line_px` counting every line px, ink or not), the clean words, their texture
+(`texture_stats`) and the texture of straight line pieces (`line_texture`), which drawn lines would have to match
+(none is drawn: real line pieces only).
 
 No stage imports this module (`train` takes the bank as any object with `.crop`), so no stage's import closure
 changes with it.
@@ -70,6 +85,7 @@ LAGS = (1, 2, 4)                # line_texture's autocorrelation lags, px along 
 DISTRIBUTIONS = zones.TEXTLINES_DIR / "distributions.json"
 KIND_NAMES = tuple(data.KINDS)                    # by kind index
 _REACH = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * CLEAN_PX + 1, 2 * CLEAN_PX + 1))
+_GROW = np.ones((2 * zones.GROW_PX + 1, 2 * zones.GROW_PX + 1), np.uint8)    # line px grow as `zones.find_lines`'s
 
 
 # --- what the bank holds ---------------------------------------------------------------------------------------------
@@ -344,20 +360,21 @@ def _share(words: int, crossed: int) -> dict:
 
 def _sheet_counts(sd: data.SheetData, line: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Per word of a sheet whose `held` are the areas left out: in a training area (its centre px not held out),
-    crossed (by line px, and by line ink), and clean (`linegate.clean_word_mask` with the line px)."""
+    crossed (CROSS_PX px of line ink inside its box), crossed counting every line px (ink or not), and clean
+    (`linegate.clean_word_mask` with the line px)."""
     train = np.array([not _held_at(sd, *_centre(sd, r)) for r in sd.words], bool).reshape(-1)
     cross = crossings(sd) >= CROSS_PX
-    return train, cross[:, 0], cross[:, 1], linegate.clean_word_mask(sd, line)
+    return train, cross[:, 1], cross[:, 0], linegate.clean_word_mask(sd, line)
 
 
 def _sheet_measure(sd: data.SheetData) -> tuple:
     """One sheet's part of `measure` (its held areas the areas left out)."""
     line = _line_page(sd)
-    train, cross, cross_ink, clean = _sheet_counts(sd, line)
+    train, cross, cross_line_px, clean = _sheet_counts(sd, line)
     del line
     kinds = sd.kinds.astype(np.int64)
     k = len(KIND_NAMES)
-    counts = [np.bincount(kinds[train & m], minlength=k) for m in (train, cross, cross_ink, clean)]
+    counts = [np.bincount(kinds[train & m], minlength=k) for m in (train, cross, cross_line_px, clean)]
     clean_ink = [m for m in (_word_ink(sd, r) for r in sd.words[train & clean]) if m is not None]
     pieces = [mask for tile in _tiles(sd) for _, _, mask in _tile_pieces(sd, *tile)]
     return counts, clean_ink, pieces
@@ -366,24 +383,24 @@ def _sheet_measure(sd: data.SheetData) -> tuple:
 def measure(sheets: list[data.SheetData], areas=(), threads: int = 1) -> dict:
     """What the composites rest on, on `sheets` (with their line px) with `areas` left out (the words whose centre is
     in one, the line ink in or within CLEAN_PX px of one): `cross_by_kind` per kind and over all ("all", word-weighted)
-    the words, those crossed (CROSS_PX line px or more inside the box) and their share (None without words);
-    `cross_by_kind_ink` the same counting only line px that are ink; `clean_words` per kind; `clean_word_texture`
-    (`texture_stats` of the clean words' ink); `line_texture` of the line pieces (`line_texture`, tile grid at the
-    page's corner).  `threads` sheets at a time."""
+    the words, those crossed (CROSS_PX px of line ink or more inside the box) and their share (None without words);
+    `cross_by_kind_line_px` the same counting every line px (ink or not); `clean_words` per kind;
+    `clean_word_texture` (`texture_stats` of the clean words' ink); `line_texture` of the line pieces (`line_texture`,
+    tile grid at the page's corner).  `threads` sheets at a time."""
     sheets = data.hold_out(sheets, areas) if tuple(areas) else sheets
     if threads > 1:
         with ThreadPoolExecutor(threads) as ex:
             parts = list(ex.map(_sheet_measure, sheets))
     else:
         parts = [_sheet_measure(sd) for sd in sheets]
-    words, crossed, crossed_ink, clean_n = (sum(p[0][i] for p in parts) for i in range(4)) if parts else \
+    words, crossed, crossed_line_px, clean_n = (sum(p[0][i] for p in parts) for i in range(4)) if parts else \
         (np.zeros(len(KIND_NAMES), np.int64) for _ in range(4))
     clean_ink = [m for p in parts for m in p[1]]
     return {
         "cross_by_kind": {**{n: _share(words[i], crossed[i]) for i, n in enumerate(KIND_NAMES)},
                           "all": _share(words.sum(), crossed.sum())},
-        "cross_by_kind_ink": {**{n: _share(words[i], crossed_ink[i]) for i, n in enumerate(KIND_NAMES)},
-                              "all": _share(words.sum(), crossed_ink.sum())},
+        "cross_by_kind_line_px": {**{n: _share(words[i], crossed_line_px[i]) for i, n in enumerate(KIND_NAMES)},
+                                  "all": _share(words.sum(), crossed_line_px.sum())},
         "clean_words": {n: int(clean_n[i]) for i, n in enumerate(KIND_NAMES)},
         "clean_word_texture": texture_stats(clean_ink),
         "line_texture": line_texture(m for p in parts for m in p[2]),
@@ -482,17 +499,42 @@ class _Sprite:
     angle: int
 
 
+def _mix_weights(mix: np.ndarray, clean: np.ndarray) -> np.ndarray | None:
+    """Per kind, the weight that makes clean words drawn by it come in the kinds' mix `mix` (counts per kind): the
+    kind's share of `mix` over its share of the clean words (`clean`, counts per kind); 0 for a kind with no clean
+    word.  None when no kind with clean words has any of `mix`."""
+    out = np.zeros(len(KIND_NAMES))
+    have = clean > 0
+    if not have.any() or mix[have].sum() == 0:
+        return None
+    out[have] = (mix[have] / mix.sum()) / (clean[have] / clean.sum())
+    return out
+
+
+def _kind_weights(words: np.ndarray, crossed: np.ndarray, clean: np.ndarray) -> dict[str, np.ndarray]:
+    """A map's kind weights (see the module) from its words in a training area, those crossed and its clean words,
+    each counted per kind: "a" in the words' mix, "b" in the crossed words' mix (the words' where none is crossed)."""
+    a = _mix_weights(words, clean)
+    a = np.zeros(len(KIND_NAMES)) if a is None else a
+    b = _mix_weights(crossed, clean)
+    return {"a": a, "b": a if b is None else b}
+
+
 @dataclasses.dataclass
 class Bank:
     """Clean words and line pieces by reference, per map (series), with the sheets they are on (holding the bank's
-    areas out) and per map and kind the share of words crossed; `crop` makes a composite (see the module).  `tally`
-    counts what the composites were; `last` says what the last one was made of (for pictures and tests)."""
+    areas out) and per map and kind the share of words crossed and the weights clean words are drawn by; `crop` makes
+    a composite (see the module).  With `weighted` False the clean words are drawn alike (for comparison).  `tally`
+    counts what the composites were and their new lessons; `last` says what the last one was made of (for pictures,
+    measures and tests)."""
     sheets: list
     words: dict
     pieces: dict
     cross: dict
     crossing: dict
+    kind_weights: dict
     a_share: float = A_SHARE
+    weighted: bool = True
     tally: collections.Counter = dataclasses.field(default_factory=collections.Counter, compare=False)
     last: dict = dataclasses.field(default_factory=dict, compare=False)
 
@@ -510,7 +552,7 @@ class Bank:
                 parts = list(ex.map(lambda j: _sheet_bank(held[j], j, phases[j]), jobs))
         else:
             parts = [_sheet_bank(held[j], j, phases[j]) for j in jobs]
-        words, pieces, cross, crossing = {}, {}, {}, {}
+        words, pieces, cross, crossing, weights = {}, {}, {}, {}, {}
         for series in dict.fromkeys(sd.series for sd in held):
             mine = [p for p, sd in zip(parts, held, strict=True) if sd.series == series]
             words[series] = Words.join([p[0] for p in mine])
@@ -519,12 +561,44 @@ class Bank:
             c = sum(p[3] for p in mine)
             crossing[series] = {KIND_NAMES[k]: _share(n[k], c[k]) for k in range(len(KIND_NAMES))}
             cross[series] = {k: float(c[k] / n[k]) if n[k] else 0.0 for k in range(len(KIND_NAMES))}
-        return cls(sheets=held, words=words, pieces=pieces, cross=cross, crossing=crossing)
+            weights[series] = _kind_weights(n, c, np.bincount(words[series].kind, minlength=len(KIND_NAMES)))
+        return cls(sheets=held, words=words, pieces=pieces, cross=cross, crossing=crossing, kind_weights=weights)
 
     def sizes(self) -> dict:
-        """Per map: the clean words per kind, the line pieces, and the crossing counts and shares by kind."""
+        """Per map: the clean words per kind, the line pieces, the crossing counts and shares by kind, and the kind
+        weights of (a) and (b)."""
         return {s: {"clean_words": {n: int((w.kind == k).sum()) for k, n in enumerate(KIND_NAMES)},
-                    "pieces": len(self.pieces[s]), "crossing": self.crossing[s]} for s, w in self.words.items()}
+                    "pieces": len(self.pieces[s]), "crossing": self.crossing[s],
+                    "kind_weights": {m: {n: round(float(v[k]), 4) for k, n in enumerate(KIND_NAMES)}
+                                     for m, v in self.kind_weights[s].items()}}
+                for s, w in self.words.items()}
+
+    def word_chances(self, series: str, mode: str, words: Words | None = None) -> np.ndarray:
+        """The chance each clean word of a map (`words`, default the bank's) is drawn for a composite of kind `mode`
+        ("a" or "b"): its kind's weight over the sum of all the words' (alike with `weighted` False); zeros when no
+        word has weight."""
+        words = self.words[series] if words is None else words
+        w = self.kind_weights[series][mode][words.kind] if self.weighted else np.ones(len(words))
+        return w / w.sum() if w.sum() > 0 else np.zeros(len(words))
+
+    def _pick(self, rng: np.random.Generator, series: str, words: Words, mode: str) -> int:
+        """A clean word's index for a composite of kind `mode`, by `word_chances` (one draw of `rng`; with `weighted`
+        False, `rng.integers`); -1 when no word has weight."""
+        if not self.weighted:
+            return int(rng.integers(len(words)))
+        cum = np.cumsum(self.kind_weights[series][mode][words.kind])
+        if not len(cum) or cum[-1] <= 0:
+            return -1
+        return int(np.searchsorted(cum, rng.random() * cum[-1], side="right"))
+
+    def _lessons(self, page: _Page, mode: str, kind: int, word_px: int, box_line_not_text: int) -> dict:
+        """Count a finished composite: its kind of composite and word, and its new lessons (see the module)."""
+        new = int(((page.text > 0) & page.known & page.line).sum())
+        self.tally[mode] += 1
+        self.tally[f"{mode}:{KIND_NAMES[kind]}"] += 1
+        self.tally[f"new_lesson_px:{mode}"] += new
+        self.tally[f"box_line_not_text_px:{mode}"] += box_line_not_text
+        return {"kind": kind, "word_px": word_px, "new_lesson_px": new, "box_line_not_text_px": box_line_not_text}
 
     def _sprite(self, words: Words, j: int) -> _Sprite:
         sd, rect = self.sheets[int(words.sheet[j])], words.rect[j]
@@ -556,10 +630,13 @@ class Bank:
             return self._as_it_is(page, size, turns, "no clean words")
         src = page.src
         forbidden = (page.text > 0) | ~page.known
-        targets = np.flatnonzero(page.line & page.ink & ~forbidden)
+        line_ink = page.line & page.ink
+        targets = np.flatnonzero(line_ink & ~forbidden)
         cross = self.cross[sd.series]
         for _ in range(WORDS):
-            j = int(rng.integers(len(words)))
+            j = self._pick(rng, sd.series, words, "a")
+            if j < 0:
+                return self._as_it_is(page, size, turns, "no clean word with weight")
             sprite = self._sprite(words, j)
             on = bool(rng.random() < cross.get(sprite.kind, 0.0))
             fh, fw = sprite.rect.shape
@@ -578,7 +655,7 @@ class Bank:
                     win = (slice(oy, oy + fh), slice(ox, ox + fw))
                     if (forbidden[win] & sprite.grown).any():
                         continue
-                    if on and (page.line[win] & sprite.rect).sum() < CROSS_PX:
+                    if on and (line_ink[win] & sprite.rect).sum() < CROSS_PX:
                         continue
                     if not on and (page.line[win] & sprite.grown).any():
                         continue
@@ -598,10 +675,11 @@ class Bank:
             page.has_angle[win][ink] = True
             page.known[win][sprite.rect & ~page.ink[win]] = False     # the pasted box's paper: unknown
             _exact(page)
-            self.tally["a"] += 1
+            under = int((line_ink[win] & sprite.rect & ~(page.text[win] > 0) & page.known[win]).sum())
             self.tally["a_on" if on else "a_off"] += 1
-            self.last = {"mode": "a", "word": j, "on_line": on, "placed": (oy, ox, fh, fw),
-                         "window": (page.y0, page.x0, src)}
+            self.last = {"mode": "a", "series": sd.series, "word": j, "on_line": on, "placed": (oy, ox, fh, fw),
+                         "window": (page.y0, page.x0, src),
+                         **self._lessons(page, "a", sprite.kind, int(ink.sum()), under)}
             return _finish(page, size, turns)
         return self._as_it_is(page, size, turns, "no place")
 
@@ -609,7 +687,9 @@ class Bank:
         pieces = self.pieces.get(sd.series)
         if words is None or not len(words) or pieces is None or not len(pieces):
             return self._as_it_is(_page_parts(sd, y, x, size, scale), size, turns, "no clean words or pieces")
-        j = int(rng.integers(len(words)))
+        j = self._pick(rng, sd.series, words, "b")
+        if j < 0:
+            return self._as_it_is(_page_parts(sd, y, x, size, scale), size, turns, "no clean word with weight")
         wsd, rect = self.sheets[int(words.sheet[j])], words.rect[j]
         cx, cy = _centre(wsd, rect)
         page = _page_parts(wsd, cy, cx, size, scale)
@@ -622,8 +702,8 @@ class Bank:
         page.angle[word] = _normal(words.angle[j])
         page.has_angle[word] = True
         k = int(rng.integers(len(pieces)))
-        piece = np.rot90(piece_mask(self.sheets[int(pieces.sheet[k])], pieces.box[k], pieces.seed[k]),
-                         int(rng.integers(4)))
+        turned = int(rng.integers(4))
+        piece = np.rot90(piece_mask(self.sheets[int(pieces.sheet[k])], pieces.box[k], pieces.seed[k]), turned)
         ph, pw = piece.shape
         on_piece = np.flatnonzero(piece)
         ay, ax = divmod(int(on_piece[rng.integers(len(on_piece))]), pw)
@@ -637,7 +717,11 @@ class Bank:
         page.ink[win] |= line
         page.text[win][paper] = 0
         _exact(page)
-        self.tally["b"] += 1
-        self.last = {"mode": "b", "word": j, "sheet": int(words.sheet[j]), "centre": (cy, cx), "piece": k,
-                     "placed": (oy, ox, ph, pw), "window": (page.y0, page.x0, src)}
+        placed = np.zeros((src, src), bool)
+        placed[win] = line
+        page.line[cv2.dilate(placed.view(np.uint8), _GROW) > 0] = True      # the piece's line px, as line_bits grow
+        across = int((placed & in_rect & ~(page.text > 0) & page.known).sum())
+        self.last = {"mode": "b", "series": sd.series, "word": j, "sheet": int(words.sheet[j]), "centre": (cy, cx),
+                     "piece": k, "piece_turns": turned, "placed": (oy, ox, ph, pw), "window": (page.y0, page.x0, src),
+                     **self._lessons(page, "b", int(words.kind[j]), int(word.sum()), across)}
         return _finish(page, size, turns)
