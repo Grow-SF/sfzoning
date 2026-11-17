@@ -1,6 +1,11 @@
-"""Word cores: each Terra word's rectangle shrunk by DBNet's offset (`core`), its inverse (`unclip`), the ratio r they
-are shrunk by (`measure_r`), and the sheets with their cores (`prepare`) for the detector's word heads
-(`data.crop_targets(..., words=True)`, `train.Recipe.heads="words"`).
+"""The word heads' cores (`prepare`): each Terra word's OWN labelled rectangle (`data.SheetData.words`), as
+`data.crop_targets(..., words=True)` paints them for `train.Recipe.heads="words"`.  No shrink ratio (the owner,
+2026-11-17: no picked core size): words that touch are told apart by the learned tags, the geometry votes (Task 6)
+and the learned box model (Task 15), not by cores cut smaller by a chosen number.
+
+Kept only as a record of the overlap measurement made before that ruling (commits 87f3d82, da3a149; its numbers in
+SHRINK_FILE, experiments/wordread/detector/shrink.json): `core`, `unclip`, `cores_px`, `measure_r`, `choose`, `pool`
+and `write_r`.  NOTHING USES r: no target, training or reading reads it.  What they computed:
 
 A rectangle (4 corners (x, y), in order around it, the first edge along the reading direction, as `boxes.word_rect`
 makes them) of length w along its first edge and height h is shrunk by D = A (1 - r^2) / L on every side, A = w h its
@@ -10,12 +15,12 @@ still runs along the reading direction.  As h - 2D = h (h + w r^2) / (w + h), a 
 a core back by the D whose shrink gives it (the positive root of 4 (1 + r^2) D^2 + 2 r^2 (w' + h') D - (1 - r^2) w' h'
 = 0, w' x h' the core): `unclip(core(rect, r), r)` is `rect`.
 
-r (`measure_r`, `choose`): the largest of R_GRID (0.3 to 0.7 by 0.05) at which at most MAX_SHARE (1%) of the
-neighbouring pairs of words have cores that overlap NEWLY: at that r but not at the grid's first, 0.3.  The pairs whose
-cores already overlap at 0.3 (the floor) overlap at every r: they are Terra's box errors (a word read twice across a
-tile seam, a box grown over the next word), which no shrink separates and the doubt flags are for; the rule is that
-shrinking must not merge words Terra keeps apart.  Two words of a sheet are neighbours when the gap between their
-rectangles (0 when they touch or overlap) is at most one word height: the smaller of the two words' heights (the
+r (`measure_r`, `choose`; record only): the largest of R_GRID (0.3 to 0.7 by 0.05) at which at most MAX_SHARE (1%) of
+the neighbouring pairs of words have cores that overlap NEWLY: at that r but not at the grid's first, 0.3.  The pairs
+whose cores already overlap at 0.3 (the floor) overlap at every r: they are Terra's box errors (a word read twice
+across a tile seam, a box grown over the next word), which no shrink separates and the doubt flags are for; the rule
+is that shrinking must not merge words Terra keeps apart.  Two words of a sheet are neighbours when the gap between
+their rectangles (0 when they touch or overlap) is at most one word height: the smaller of the two words' heights (the
 second edge's length).  Two cores overlap when a px is filled by both, each painted as the detector learns it (its
 corners rounded to px, filled as `cv2.fillPoly` fills them, `data._paint`); `touching` also counts a px of one next to
 (the 8 around) a px of the other, the cores the connected px would join.  A core lies inside its word, so only words
@@ -24,8 +29,8 @@ whose rectangles overlap, or come within TOUCH_GAP px of each other, can have ov
 `write_r` measures the curve on the training maps' sheets (`paths.TEXT_TRAIN_SERIES`) once per fold of the reader's
 split (`paths.QUARTERS`), the words whose centre px is in the fold's quarter or an answered block
 (`reader_stage.held_blocks`) left out, as `reader_stage.measure_radius` leaves them out; the folds' counts are pooled
-(`pool`: their pairs and new overlaps summed) into the one r every fold uses; written to SHRINK_FILE (`python -m
-sfzmaps.solver.wordread.shrink`).
+(`pool`: their pairs and new overlaps summed) into one r; written to SHRINK_FILE (`python -m
+sfzmaps.solver.wordread.shrink`).  Measured: r 0.40, the floor 12.6% of the pairs.
 
 Neither `textnet.data` nor `textnet.train` imports this module (their stages' import closure is unchanged): the
 cores reach the detector in `data.SheetData.cores`, filled by `prepare` before the training.
@@ -114,10 +119,11 @@ def cores_px(words: np.ndarray, r: float) -> np.ndarray:
     return np.round(core(words, r)).reshape(-1, 4, 2).astype(np.int32)
 
 
-def prepare(sheets: list[data.SheetData], r: float) -> list[data.SheetData]:
-    """The sheets with their words' cores at `r` (`data.SheetData.cores`, `cores_px`), for the word heads' targets
-    (`data.crop_targets(..., words=True)`); everything else shared with `sheets`.  Run it before the training."""
-    return [dataclasses.replace(sd, cores=cores_px(sd.words, r)) for sd in sheets]
+def prepare(sheets: list[data.SheetData]) -> list[data.SheetData]:
+    """The sheets with their words' cores (`data.SheetData.cores`) for the word heads' targets
+    (`data.crop_targets(..., words=True)`): each word's own labelled rectangle, `words`, unshrunk (see the module);
+    everything else shared with `sheets`.  Run it before the training."""
+    return [dataclasses.replace(sd, cores=sd.words) for sd in sheets]
 
 
 # --- which r ---------------------------------------------------------------------------------------------------------

@@ -1,5 +1,6 @@
 """The detector's word heads (`train.Recipe.heads="words"`) and their targets (`data.crop_targets(..., words=True)`,
-`wordread.shrink`): shrunk word cores (DBNet), the box each core px votes for (EAST) and word tags (PAN)."""
+`wordread.shrink.prepare`): word cores (each word's own rectangle, no shrink), the box each core px votes for (EAST)
+and word tags (PAN); and the record-only overlap measurement of shrunk cores (`shrink.core`, `unclip`, `measure_r`)."""
 import contextlib
 import dataclasses
 
@@ -124,31 +125,27 @@ def test_r_is_chosen_by_the_pairs_newly_overlapping_beyond_the_first_r_and_folds
     assert {c["r"]: c["new"] for c in pooled["curve"]}[0.55] == 2 and pooled["r"] == 0.7
 
 
-def test_touching_words_get_disjoint_cores_at_the_measured_r():
+def test_prepare_fills_each_core_with_its_own_rectangle():
     words = [((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0),          # R-4 | RH-2, touching
              ((160, 40, 180, 160), 90),                                  # a street name read upward, touching both
-             ((40, 81, 160, 101), 0)]                                    # a line of text right under them
+             ((40, 81, 160, 101), 30)]                                   # slanted text right under them
     sd = _sheet(words)
-    r = shrink.measure_r({sd.sheet: sd.words})["r"]
-    (prepared,) = shrink.prepare([sd], r)
-    t = data.crop_targets(prepared, 100, 120, 200, 1.0, 0, words=True)
-    tag = t["tag_id"]
-    assert set(np.unique(tag)) == {0, 1, 2, 3, 4}
-    # each core alone, as painted: no px of one is on or next to (8 around) a px of another
-    alone = [data._paint(prepared.cores[j:j + 1], np.ones(1, np.int32), 0, 0, sd.height, sd.width) > 0
-             for j in range(len(words))]
-    for i in range(len(alone)):
-        for j in range(i + 1, len(alone)):
-            grown = cv2.dilate(alone[i].view(np.uint8), np.ones((3, 3), np.uint8)) > 0
-            assert not (grown & alone[j]).any(), (i, j)
-    n, _ = cv2.connectedComponents(t["core"], connectivity=8)
-    assert n - 1 == len(words)
+    (prepared,) = shrink.prepare([sd])
+    # no shrink: each word's core is its own labelled rectangle, the rest of the sheet shared, the input left as it was
+    assert np.array_equal(prepared.cores, sd.words) and prepared.cores.dtype == np.int32
+    assert prepared.ink_bits is sd.ink_bits and sd.cores.shape == (0, 4, 2)
+    # so the core targets are the words' own px, each tagged with its own word (the later one on a shared edge),
+    # the touching words told apart only by their tags
+    t = data.crop_targets(prepared, 100, 120, 200, 1.0, 0, words=True)          # the window's top-left px is (0, 20)
+    assert np.array_equal(t["core"], t["text"])
+    assert np.array_equal(t["tag_id"], data._words(sd, 0, 20, 200, 200))
+    assert set(np.unique(t["tag_id"])) == {0, 1, 2, 3, 4}
 
 
 # --- the targets -----------------------------------------------------------------------------------------------------
 
 def test_geo_at_a_core_px_gives_the_distances_to_the_words_four_sides():
-    sd, = shrink.prepare([_sheet([((100, 50, 200, 80), 0), ((230, 40, 260, 140), 90)])], 0.5)
+    sd, = shrink.prepare([_sheet([((100, 50, 200, 80), 0), ((230, 40, 260, 140), 90)])])
     t = data.crop_targets(sd, 65, 150, 64, 1.0, 0, words=True)        # the window's top-left px is (33, 118)
     assert t["geo"].dtype == np.float32 and t["geo"].shape == (5, 64, 64)
     assert t["core"].dtype == np.uint8 and t["tag_id"].dtype == np.int32
@@ -166,7 +163,7 @@ def test_geo_at_a_core_px_gives_the_distances_to_the_words_four_sides():
 
 
 def test_geo_scales_with_the_crop_and_turns_with_it():
-    sd, = shrink.prepare([_sheet([((100, 50, 200, 80), 0)])], 0.5)
+    sd, = shrink.prepare([_sheet([((100, 50, 200, 80), 0)])])
     flat = data.crop_targets(sd, 65, 150, 64, 1.0, 0, words=True)
     big = data.crop_targets(sd, 65, 150, 128, 2.0, 0, words=True)        # the same 64 page px, twice the size
     assert np.allclose(big["geo"][:4, 64, 64], 2 * flat["geo"][:4, 32, 32]) and big["geo"][4, 64, 64] == 0
@@ -182,7 +179,7 @@ def test_word_targets_need_the_cores_and_change_nothing_else():
     sd = _sheet([((100, 50, 200, 80), 0)])
     with pytest.raises(ValueError, match="shrink.prepare"):
         data.crop_targets(sd, 65, 150, 64, 1.0, 0, words=True)
-    prepared, = shrink.prepare([sd], 0.5)
+    prepared, = shrink.prepare([sd])
     assert prepared.cores.dtype == np.int32 and prepared.cores.shape == (1, 4, 2)
     assert sd.cores.shape == (0, 4, 2)                                    # the default: none
     plain = data.crop_targets(sd, 65, 150, 64, 0.8, 3)
@@ -200,7 +197,6 @@ def test_the_word_heads_are_a_recipe_choice_off_by_default():
     assert train.Recipe().heads == "all" and train.CHOICES["heads"] == ("all", "text", "words")
     recipe = train.Recipe(heads="words", width=4, crop=32)
     assert recipe.name() == "crop=32-heads=words-width=4"
-    assert model.HEAD_OUTPUTS == {"all": 7, "text": 1, "words": 7 + 1 + 4 + 4}
     out = train.build_net(recipe)(torch.zeros(2, 1, 32, 32))
     assert out.shape == (2, 16, 32, 32)
     half = train.build_net(dataclasses.replace(recipe, half_size=True))(torch.zeros(2, 1, 32, 32))
@@ -210,8 +206,7 @@ def test_the_word_heads_are_a_recipe_choice_off_by_default():
 
 
 def _word_batch():
-    sd, = shrink.prepare([_sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0), ((160, 40, 180, 160), 90)])],
-                         0.5)
+    sd, = shrink.prepare([_sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0), ((160, 40, 180, 160), 90)])])
     return [data.crop_targets(sd, 90, 110, 64, 0.5, 0, words=True), data.crop_targets(sd, 100, 150, 64, 1.3, 1,
                                                                                          words=True)]
 
@@ -271,7 +266,7 @@ def test_word_loss_is_zero_for_a_perfect_answer_and_pushes_tags_apart():
 
 def test_a_word_heads_fit_trains_the_per_ink_head_by_todays_loss_and_repeats(monkeypatch):
     sheets = shrink.prepare([_sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0), ((160, 40, 180, 160), 90)]),
-                             _sheet([((20, 20, 120, 50), 30), ((60, 150, 200, 175), 0)], sheet="t")], 0.5)
+                             _sheet([((20, 20, 120, 50), 30), ((60, 150, 200, 175), 0)], sheet="t")])
     recipe = train.Recipe(heads="words", iterations=2, batch=3, crop=48, width=4)
     real, seen = train.loss_fn, []
     monkeypatch.setattr(train, "loss_fn", lambda out, t, k, a, w: seen.append(out.shape) or real(out, t, k, a, w))
