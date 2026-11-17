@@ -5,12 +5,30 @@ the trust fit that held quarter q out.  A reading speaks for the lot under the l
 `lab_lot`).  A label printed on an ordinary street also speaks for the lot across the street (streetside_{q}.npz
 `lotB`), at its trust x min(rB_st / rA_st, 1): a far-side copy."""
 from dataclasses import dataclass
+from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 
-from sfzmaps.solver import paths
+from sfzmaps.solver import runs
 from sfzmaps.solver.codes import canon, is_overlay
 from sfzmaps.solver.trust import load_prints
+
+
+class Source(NamedTuple):
+    """Where one set of labels is read from: the prints table and the folder of readings_{q}.npz / streetside_{q}.npz."""
+    prints_file: Path
+    labels_dir: Path
+
+
+def solve_source() -> Source:
+    """The labels the solve reads (`runs.SOLVE_*`)."""
+    return Source(runs.SOLVE_PRINTS_FILE, runs.SOLVE_LABELS_DIR)
+
+
+def scoring_source() -> Source:
+    """The labels the score counts (`runs.SCORING_*`): fixed whatever the solve reads."""
+    return Source(runs.SCORING_PRINTS_FILE, runs.SCORING_LABELS_DIR)
 
 
 @dataclass
@@ -23,22 +41,24 @@ class Readings:
     names: list            # code names in the one spelling; a reading's code is the first name with its spelling
 
 
-def _load(q: str):
+def _load(q: str, source: Source):
     """readings_{q}.npz's names, print, code and trust per reading, and the lot under each print's text."""
-    f = paths.LABELS_DIR / f"readings_{q}.npz"
+    f = source.labels_dir / f"readings_{q}.npz"
     if not f.is_file():
         raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver labels`")
     R = np.load(f)
-    under = load_prints()["lab_lot"].to_numpy(np.int64)
+    under = load_prints(source.prints_file)["lab_lot"].to_numpy(np.int64)
     return (list(R["names"].astype(str)), R["print_index"].astype(np.int64), R["code_index"].astype(np.int64),
             R["trust"].astype(float), under)
 
 
-def readings(q: str, vocabulary=None) -> Readings:
-    """Every reading of holdout q, with the far-side copies.  Overlay (SUD) names are dropped; so are readings naming
-    no code in vocabulary (when given: overlay text such as 'NORTH OF', 'RES.' is not a zoning code)."""
-    raw_names, lab, code, trust, under = _load(q)
-    S = np.load(paths.LABELS_DIR / f"streetside_{q}.npz")
+def readings(q: str, vocabulary=None, source: Source | None = None) -> Readings:
+    """Every reading of holdout q, with the far-side copies, from `source` (default: the solve's labels).  Overlay
+    (SUD) names are dropped; so are readings naming no code in vocabulary (when given: overlay text such as
+    'NORTH OF', 'RES.' is not a zoning code)."""
+    source = source or solve_source()
+    raw_names, lab, code, trust, under = _load(q, source)
+    S = np.load(source.labels_dir / f"streetside_{q}.npz")
     rA, rB = float(S["rA_st"]), float(S["rB_st"])
     ratio = min(rB / rA, 1.0) if rA > 0 else 0.0
     across = S["onst"] & ~S["isfw"] & (S["lotB"] >= 0)
@@ -59,10 +79,11 @@ def readings(q: str, vocabulary=None) -> Readings:
     return Readings(lot[keep], code[keep], trust[keep], label[keep], far[keep], names)
 
 
-def top_readings(q: str) -> list[tuple[int, int, str]]:
-    """(label, lot under its text, top reading's code) for every label of holdout q whose top reading (its most
-    trusted; the first in row order on a tie) is not an overlay name."""
-    raw_names, lab, code, trust, under = _load(q)
+def top_readings(q: str, source: Source) -> list[tuple[int, int, str]]:
+    """(label, lot under its text, top reading's code) for every label of holdout q in `source` whose top reading (its
+    most trusted; the first in row order on a tie) is not an overlay name.  `source` is required: a score takes
+    `scoring_source()`, never the solve's."""
+    raw_names, lab, code, trust, under = _load(q, source)
     o = np.lexsort((-trust, lab))
     first = np.r_[True, lab[o][1:] != lab[o][:-1]]
     out = []

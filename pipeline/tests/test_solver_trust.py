@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize
 
-from sfzmaps.solver import lots, paths, prints, trust
+from sfzmaps.solver import lots, paths, prints, runs, trust
 
 NW, NE, SW, SE = range(4)
 
@@ -161,6 +161,7 @@ def test_build_readings_writes_every_quarter(tmp_path, monkeypatch):
     found = _prints([found.iloc[i].to_dict() for i in [0, 1, 2, 3, 4] * 6])
     for name in ("PRINTS_DIR", "LOTS_DIR", "LABELS_DIR"):
         monkeypatch.setattr(paths, name, tmp_path / name)
+    monkeypatch.setattr(runs, "SOLVE_PRINTS_FILE", paths.PRINTS_DIR / "prints.parquet")
     paths.PRINTS_DIR.mkdir()
     paths.LOTS_DIR.mkdir()
     found.to_parquet(paths.PRINTS_DIR / "prints.parquet", index=False)

@@ -1,5 +1,5 @@
 """Where the walls and the solve read and write: the stages' folders, the experiments' (each in its own folder, never
-a stage's output), the hand leader moves the placement learns from, and building a folder afresh.  Kept apart from
+a stage's output), where the solve and the score read their printed labels, the hand leader moves the placement learns from, and building a folder afresh.  Kept apart from
 `paths` (what the earlier stages and the text detector read) so that a change here reruns only the walls and the
 solve."""
 import os
@@ -17,6 +17,17 @@ WALLS_PREFIX = "walls-"                    # an experiment folder of walls (`wal
 TEXT_PREFIX = "text-"                      # an experiment folder of the text detector's trials (`textnet.trial`)
 
 LINE_MASKS = "line-masks"                  # the text detector's trials' cache of long-line ink (`textnet.trial`)
+
+# Where the printed labels come from.  Two uses, kept apart so that the labels the solve reads can change without
+# changing what "labels right" means.
+#   The SOLVE's labels: the prints table (one row per label: its point, `lab_lot`, `street`) and the folder of the
+#   readings and street sides (readings_{q}.npz, streetside_{q}.npz).  A change of label source is these two lines.
+SOLVE_PRINTS_FILE = paths.PRINTS_DIR / "prints.parquet"
+SOLVE_LABELS_DIR = paths.LABELS_DIR
+#   The SCORING labels: the 1,881 labels of the saved-reads chain (`solver-prints`, `solver-labels`), the same
+#   whatever the solve reads, so that every run is scored on one set.  Not changed by a change of label source.
+SCORING_PRINTS_FILE = paths.PRINTS_DIR / "prints.parquet"
+SCORING_LABELS_DIR = paths.LABELS_DIR
 
 LABEL_FIXES = config.INPUTS_DIR / "2000-digital-zoning" / "label_fixes.csv"
 

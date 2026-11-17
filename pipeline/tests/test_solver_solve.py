@@ -27,22 +27,22 @@ def _quarter(column: int, row: int) -> int:
     return (row >= 2) * 2 + (column >= 4)
 
 
-def _write_readings(q: str, names, print_index, code_index, trust) -> None:
-    np.savez(paths.LABELS_DIR / f"readings_{q}.npz", names=np.asarray(names), print_index=np.asarray(print_index),
+def _write_readings(q: str, names, print_index, code_index, trust, folder=None) -> None:
+    np.savez((folder or paths.LABELS_DIR) / f"readings_{q}.npz", names=np.asarray(names), print_index=np.asarray(print_index),
              code_index=np.asarray(code_index), trust=np.asarray(trust, float))
 
 
-def _write_streetside(q: str, lot_b, on_street, freeway, r_a: float, r_b: float) -> None:
-    np.savez(paths.LABELS_DIR / f"streetside_{q}.npz", lotB=np.asarray(lot_b, np.int64),
+def _write_streetside(q: str, lot_b, on_street, freeway, r_a: float, r_b: float, folder=None) -> None:
+    np.savez((folder or paths.LABELS_DIR) / f"streetside_{q}.npz", lotB=np.asarray(lot_b, np.int64),
              onst=np.asarray(on_street, bool), isfw=np.asarray(freeway, bool), rA_st=r_a, rB_st=r_b, rA_fw=0.5,
              rB_fw=0.5)
 
 
-def _write_prints(lab_lot, street) -> None:
+def _write_prints(lab_lot, street, file=None) -> None:
     n = len(lab_lot)
     pd.DataFrame({"sheet": ["p01"] * n, "x": np.zeros(n), "y": np.zeros(n),
                   "lab_lot": np.asarray(lab_lot, np.int32), "street": np.asarray(street, bool)}).to_parquet(
-        paths.PRINTS_DIR / "prints.parquet")
+        file or paths.PRINTS_DIR / "prints.parquet")
 
 
 UNDER = [_lot(c, 2) for c in LABELLED]     # the lot under each print's text
@@ -80,6 +80,9 @@ def synthetic_city(tmp_path, monkeypatch):
                          (runs, "WALLS_DIR"), (runs, "SOLVE_DIR"), (runs, "EXPERIMENTS_DIR"), (paths, "TABLE_DIR")):
         monkeypatch.setattr(module, name, tmp_path / name.lower())
         (tmp_path / name.lower()).mkdir()
+    for name in ("SOLVE", "SCORING"):                  # both label sources are the chain's, as in the repository
+        monkeypatch.setattr(runs, f"{name}_PRINTS_FILE", paths.PRINTS_DIR / "prints.parquet")
+        monkeypatch.setattr(runs, f"{name}_LABELS_DIR", paths.LABELS_DIR)
     monkeypatch.setattr(grid, "HEIGHT", SHAPE[0])
     monkeypatch.setattr(grid, "WIDTH", SHAPE[1])
     cells = [(c, r) for r in range(ROWS) for c in range(COLUMNS)]
@@ -281,6 +284,51 @@ def test_a_report_written_again_at_another_time_is_the_same_bytes(synthetic_city
     report.write_report(report.build_report("r", placement_summary={"labels": 3}, hole_causes={}))
     assert {f: (runs.solve_dir("r") / f).read_bytes() for f in before} == before
     assert json.loads(before["report.json"])["run"] == "r"
+
+
+def _other_solve_labels(tmp_path, monkeypatch):
+    """The solve reads other labels than the chain's: two prints (lots 8 and 20) read as RH-2 and NC-1."""
+    folder = tmp_path / "other-labels"
+    folder.mkdir()
+    monkeypatch.setattr(runs, "SOLVE_LABELS_DIR", folder)
+    monkeypatch.setattr(runs, "SOLVE_PRINTS_FILE", folder / "prints.parquet")
+    _write_prints([8, 20], [False, False], folder / "prints.parquet")
+    for q in paths.QUARTERS:
+        _write_readings(q, NAMES, [0, 1], [2, 0], [0.9, 0.9], folder)
+        _write_streetside(q, [-1, -1], [False, False], [False, False], 0.8, 0.8, folder)
+
+
+def test_the_score_keeps_its_labels_when_the_solve_reads_other_ones(synthetic_city, tmp_path, monkeypatch):
+    before = measures.scoring_labels()
+    calibration = report.top_reading_calibration()
+    assert [lot for lot, _ in before] == UNDER and [code for _, code in before] == ["RH-1", "RH-2", "NC-1"]
+    _other_solve_labels(tmp_path, monkeypatch)
+    # the solve's labels moved ...
+    assert sorted(labels.readings("nw").lot.tolist()) == [8, 20]
+    assert labels.solve_source().labels_dir != labels.scoring_source().labels_dir
+    # ... the score's did not: the same labels, in the same table, whichever labels the solve reads
+    assert measures.scoring_labels() == before
+    assert report.top_reading_calibration() == calibration
+    T = measures.Table(np.zeros(synthetic_city.n, bool))
+    assert T.label_lot.tolist() == UNDER and T.label_code.tolist() == ["RH-1", "RH-2", "NC-1"]
+
+
+def test_the_block_split_is_refused_when_labels_are_regrouped_between_blocks_with_the_same_totals():
+    blocks = np.array([0, 0, 1, 1, 2, 2])
+    label_lot = np.array([0, 2, 4])                  # one label in each of blocks 0, 1 and 2
+    flag = np.ones(3, bool)
+    measured = {"incidents": 0, "labels_right": 1.0, "wrong_lots": 0}
+    split = {"incidents": np.zeros(3), "wrong_lots": np.zeros(3), "zoning": np.array([1.0, 1.0, 1.0]),
+             "right": np.array([1.0, 1.0, 1.0])}
+    measures.check_block_split(split, blocks, label_lot, flag, flag, measured)
+    # block 0's label counted in block 1, and block 1's in block 0: every total still adds up
+    swapped = dict(split, zoning=np.array([0.0, 2.0, 1.0]), right=np.array([2.0, 0.0, 1.0]))
+    with pytest.raises(AssertionError, match="grouped into blocks differently"):
+        measures.check_block_split(swapped, blocks, label_lot, flag, flag, measured)
+    # and a total that no longer adds up is still refused
+    with pytest.raises(AssertionError, match="labels right per block"):
+        measures.check_block_split(dict(split, right=np.array([1.0, 0.0, 0.0])), blocks, label_lot, flag, flag,
+                                   measured)
 
 
 def test_the_trust_check_reads_each_label_by_the_fit_that_held_its_lot_out(synthetic_city):

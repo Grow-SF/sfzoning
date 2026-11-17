@@ -42,7 +42,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from sfzmaps.solver import paths
+from sfzmaps.solver import paths, runs
 from sfzmaps.solver.lots import Lots, load_lots
 
 READS = ("sol_code", "terra_code", "third_code", "recheck_code", "turned_code")   # a print's reads, in this order
@@ -249,9 +249,9 @@ def log_loss(chance: np.ndarray, target: np.ndarray) -> float:
     return float(-np.mean(np.where(target, np.log(p), np.log(1 - p)))) if len(p) else float("nan")
 
 
-def load_prints() -> pd.DataFrame:
-    """Read prints.parquet (made by `sfzmaps solver prints`)."""
-    f = paths.PRINTS_DIR / "prints.parquet"
+def load_prints(f=None) -> pd.DataFrame:
+    """Read the prints the solve uses (`runs.SOLVE_PRINTS_FILE`, made by `sfzmaps solver prints`), or the file `f`."""
+    f = runs.SOLVE_PRINTS_FILE if f is None else f
     if not f.is_file():
         raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver prints`")
     return pd.read_parquet(f)

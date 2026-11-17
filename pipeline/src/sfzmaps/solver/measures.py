@@ -25,10 +25,37 @@ from scipy.spatial import cKDTree
 from sfzmaps.solver import paths, runs
 from sfzmaps.solver.borders import junction_neighbours
 from sfzmaps.solver.city import city
-from sfzmaps.solver.labels import top_readings
+from sfzmaps.solver.labels import scoring_source, top_readings
 
 QUARTERS = paths.QUARTERS
 HOLE_FT = 100.0
+
+
+def scoring_labels() -> list[tuple[int, str]]:
+    """(lot under the text, top reading's code) of each label the score counts, in order: the labels of the fixed
+    scoring set (`labels.scoring_source`: today's saved-reads chain), by the quarter of the lot under them, whichever
+    labels the solve itself reads.  The one place the score's labels are chosen: `Table`, the per-block split of
+    scripts/incidents/criteria_check.py and the calibration all take them from here."""
+    C = city()
+    source = scoring_source()
+    return [(lot, code) for k, q in enumerate(QUARTERS) for _, lot, code in top_readings(q, source)
+            if C.quarter[lot] == k]
+
+
+def check_block_split(split, blocks, label_lot, zoning, right, measured, name="run"):
+    """Check a per-block split of the labels (`split["zoning"]`, `split["right"]`: counts per block) and of the wrong
+    lots against the measures it must add up to, and the labels' split against the labels themselves: each block's
+    count is recounted label by label (the block of the lot under it), so labels regrouped between blocks with the
+    same totals are caught, not only a wrong total.  `zoning`, `right`: per label, as `score` counts them;
+    `measured`: report.six_measures' dict.  AssertionError on a difference."""
+    assert round(split["incidents"].sum()) == measured["incidents"], f"{name}: incidents per block do not add up"
+    assert abs(split["right"].sum() / split["zoning"].sum() - measured["labels_right"]) < 1e-5, \
+        f"{name}: labels right per block do not add up"
+    assert split["wrong_lots"].sum() == measured["wrong_lots"], f"{name}: wrong lots per block do not add up"
+    for key, flag in (("zoning", zoning), ("right", right)):
+        again = Counter(int(blocks[lot]) for lot, f in zip(label_lot, flag) if f)
+        got = {int(b): int(split[key][b]) for b in np.flatnonzero(split[key])}
+        assert got == dict(again), f"{name}: the {key} labels are grouped into blocks differently from the labels'"
 
 
 def data_errors_file(folder):
@@ -66,8 +93,8 @@ class Table:
                 return -1
             return self.district[trees[code][1][trees[code][0].query(xy)[1]]]
 
-        labels = [(lot, code) for k, q in enumerate(QUARTERS) for _, lot, code in top_readings(q)
-                  if C.quarter[lot] == k]
+        labels = scoring_labels()
+        self.label_lot = np.array([lot for lot, _ in labels], int)      # the lot under each label's text, in order
         vocab = set(C.table[C.known].tolist()) - {""}
         self.label_code = np.array([c for _, c in labels])
         self.label_in_vocab = np.array([c in vocab for c in self.label_code])

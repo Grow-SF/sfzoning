@@ -2718,6 +2718,7 @@ stages:
       - src/sfzmaps/solver/lotsize.py
       - src/sfzmaps/solver/page.py
       - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/runs.py
       - src/sfzmaps/solver/streetside.py
       - src/sfzmaps/solver/strokes.py
       - src/sfzmaps/solver/table.py

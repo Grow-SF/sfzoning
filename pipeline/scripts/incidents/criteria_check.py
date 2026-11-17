@@ -1,7 +1,11 @@
 """The compound fusion move's acceptance criteria, fixed with the owner before it was measured (2026-11-16), checked
 on an experiment run made with it (`sfzmaps solver solve RUN --compound-fusion`) against the stage's run `final`:
 
-  1. the solver's energy goes down in every quarter (each quarter log's "solved" energy against final's);
+  1. the solver's energy goes down in every quarter (each quarter log's "solved" energy against final's).  This one
+     compares the energy of two runs of the SAME labels and walls: once the labels or the walls differ (another label
+     source, another walls fit) the energies are of different functions and the comparison means nothing.  Pass
+     --across-label-sources for such a comparison: criterion 1 is then reported as "not comparable", left out of the
+     verdict, and only criterion 2 gates;
   2. wrong-lot incidents and labels right are not worse beyond the measured noise: a paired bootstrap over blocks
      (blocks drawn with replacement, the same draw for both runs, 1,000 draws, seed 0) gives a 95% interval on
      (run - final), with report.six_measures' definitions on every lot; beside it the scoring table's known error
@@ -16,7 +20,10 @@ census's search incidents, the share of each right; each quarter's time (given w
 it: the run's folder holds no times).
 
     uv run python scripts/incidents/criteria_check.py RUN [--times nw=305,ne=327,sw=329,se=407] [--times-note TEXT]
-                                                          [--no-pictures]
+                                                          [--no-pictures] [--across-label-sources]
+
+The labels right and the per-block split count the one fixed scoring set of labels (`measures.scoring_labels`: the
+saved-reads chain's 1,881), whatever label source the run solved with.
 
 Writes data/solver/experiments/RUN/criteria.json and criteria.md (and pictures/ there).  Reads only otherwise."""
 import argparse
@@ -35,7 +42,7 @@ from common import CENSUS_DIR
 from sfzmaps.solver import energy as E
 from sfzmaps.solver import paths, runs
 from sfzmaps.solver.city import city, load_run, run_file
-from sfzmaps.solver.measures import Table
+from sfzmaps.solver.measures import Table, check_block_split
 from sfzmaps.solver.report import six_measures
 
 DRAWS, SEED = 1000, 0
@@ -67,18 +74,11 @@ def per_block(codes, blocks, nb):
     counted = (T.label_district < 0) | (lots_in[d] > 0)
     right = (T.label_district >= 0) & (lots_in[d] > 0) & (right_in[d] > lots_in[d] / 2)
     zoning = counted & T.label_in_vocab
-    label_block = blocks[label_lots()]
+    label_block = blocks[T.label_lot]                    # the labels are Table's: one fixed scoring set, one source
     return {"incidents": inc, "zoning": np.bincount(label_block[zoning], minlength=nb).astype(float),
             "right": np.bincount(label_block[zoning & right], minlength=nb).astype(float),
-            "wrong_lots": np.bincount(blocks[wrong], minlength=nb).astype(float)}
-
-
-def label_lots():
-    """the lot of each label measures.Table counts, in its order"""
-    from sfzmaps.solver.labels import top_readings
-    C = city()
-    return np.array([lot for k, q in enumerate(paths.QUARTERS) for _, lot, _ in top_readings(q)
-                     if C.quarter[lot] == k], int)
+            "wrong_lots": np.bincount(blocks[wrong], minlength=nb).astype(float),
+            "label_lot": T.label_lot, "label_zoning": zoning, "label_right": right}
 
 
 def bootstrap(fin, new, nb):
@@ -210,7 +210,7 @@ def search_incidents(new_codes, fin_codes):
     return rows
 
 
-def main(run, times, times_note, pictures):
+def main(run, times, times_note, pictures, across_label_sources=False):
     folder = runs.solve_dir(run)
     C = city()
     fin_codes, new_codes = load_run("final"), load_run(run, folder)
@@ -221,14 +221,13 @@ def main(run, times, times_note, pictures):
     energy = {q: {"final": solved_energy("final", q), "run": solved_energy(run, q)} for q in paths.QUARTERS}
     for v in energy.values():
         v["change"] = round(v["run"] - v["final"], 1)
-    c1 = all(v["run"] < v["final"] for v in energy.values())
+    # across label sources (or walls) the two energies are of different functions: not comparable, not gated
+    c1 = None if across_label_sources else all(v["run"] < v["final"] for v in energy.values())
     # 2: the paired block bootstrap, with the table's known error
     m_fin, m_new = six_measures(fin_codes, np.zeros(C.n, bool)), six_measures(new_codes, np.zeros(C.n, bool))
     fin, new = per_block(fin_codes, blocks, nb), per_block(new_codes, blocks, nb)
     for name, pb, m in (("final", fin, m_fin), (run, new, m_new)):     # the split per block adds up to the measures
-        assert round(pb["incidents"].sum()) == m["incidents"], name
-        assert abs(pb["right"].sum() / pb["zoning"].sum() - m["labels_right"]) < 1e-5, name
-        assert pb["wrong_lots"].sum() == m["wrong_lots"], name
+        check_block_split(pb, blocks, pb["label_lot"], pb["label_zoning"], pb["label_right"], m, name)
     ci = bootstrap(fin, new, nb)
     err = known_error(fin_codes)
     diff = {"incidents": m_new["incidents"] - m_fin["incidents"],
@@ -240,7 +239,10 @@ def main(run, times, times_note, pictures):
     out = {"run": run, "compared_with": "final",
            "measure": "report.six_measures on every lot (no data errors left out)",
            "criteria": {
-               "1_energy_lower_every_quarter": {"verdict": "pass" if c1 else "fail", "energy": energy},
+               "1_energy_lower_every_quarter": {
+                   "verdict": "not comparable" if c1 is None else "pass" if c1 else "fail", "energy": energy,
+                   **({"why": "run and final differ in labels or walls: their energies are of different functions"}
+                      if c1 is None else {})},
                "2_not_worse_beyond_noise": {
                    "verdict": "pass" if c2 else "fail", "difference_run_minus_final": diff,
                    "bootstrap_95": ci, "draws": DRAWS, "seed": SEED, "blocks": int(nb),
@@ -345,6 +347,9 @@ if __name__ == "__main__":
     ap.add_argument("--times", default="", help="each quarter's solve time in seconds, e.g. nw=305,ne=327")
     ap.add_argument("--times-note", default="")
     ap.add_argument("--no-pictures", action="store_true")
+    ap.add_argument("--across-label-sources", action="store_true",
+                    help="the run solved with other labels (or walls) than final: leave out criterion 1 (energy "
+                         "lower in every quarter), which compares the energies of two different functions")
     args = ap.parse_args()
     t = dict(kv.split("=") for kv in args.times.split(",") if kv)
-    main(args.run, {k: float(v) for k, v in t.items()}, args.times_note, not args.no_pictures)
+    main(args.run, {k: float(v) for k, v in t.items()}, args.times_note, not args.no_pictures, args.across_label_sources)

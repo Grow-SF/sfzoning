@@ -25,6 +25,7 @@ import criteria_check as cc
 from sfzmaps import config
 from sfzmaps.solver import paths, runs
 from sfzmaps.solver.city import city, load_run
+from sfzmaps.solver.measures import check_block_split
 from sfzmaps.solver.published import save_published
 from sfzmaps.solver.report import six_measures
 
@@ -56,9 +57,7 @@ def main():
     nb = int(blocks.max()) + 1
     p_pub, p_fin = cc.per_block(pub, blocks, nb), cc.per_block(fin, blocks, nb)
     for name, pb, m in (("published", p_pub, m_pub), ("final", p_fin, m_fin)):   # the split adds up to the measures
-        assert round(pb["incidents"].sum()) == m["incidents"], name
-        assert abs(pb["right"].sum() / pb["zoning"].sum() - m["labels_right"]) < 1e-5, name
-        assert pb["wrong_lots"].sum() == m["wrong_lots"], name
+        check_block_split(pb, blocks, pb["label_lot"], pb["label_zoning"], pb["label_right"], m, name)
     ci = cc.bootstrap(p_fin, p_pub, nb)                  # published - final
     err = cc.known_error(fin)
     diff = {"incidents": m_pub["incidents"] - m_fin["incidents"],

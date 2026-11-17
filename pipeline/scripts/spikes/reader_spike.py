@@ -57,7 +57,7 @@ from sfzmaps.solver import labels as labels_mod  # noqa: E402
 from sfzmaps.solver import paths, report, runs, solve, threads  # noqa: E402
 from sfzmaps.solver.city import city, load_run, run_file, save_run, wall_odds  # noqa: E402
 from sfzmaps.solver.codes import canon, is_overlay, table_vocabulary  # noqa: E402
-from sfzmaps.solver.labels import Readings, top_readings  # noqa: E402
+from sfzmaps.solver.labels import Readings, scoring_source, top_readings  # noqa: E402
 from sfzmaps.solver.measures import Table, data_error_lots  # noqa: E402
 from sfzmaps.solver.placement import load_options  # noqa: E402
 from sfzmaps.solver.trust import READS, load_prints  # noqa: E402
@@ -378,7 +378,8 @@ def quarter_codes() -> dict:
     voc = vocabulary()
     out = {}
     for k, q in enumerate(QUARTERS):
-        n = Counter(code for _, lot, code in top_readings(q) if C.quarter[lot] == k and code in voc)
+        n = Counter(code for _, lot, code in top_readings(q, scoring_source())
+                if C.quarter[lot] == k and code in voc)
         out[k] = (sorted(n), np.array([n[c] for c in sorted(n)], float))
     return out
 
@@ -759,7 +760,8 @@ class Blocks:
         self.ids, self.of_lot = np.unique(blk, return_inverse=True)
         self.nb = len(self.ids)
         self.T = Table(np.zeros(C.n, bool))
-        labels = [lot for k, q in enumerate(QUARTERS) for _, lot, _ in top_readings(q) if C.quarter[lot] == k]
+        labels = [lot for k, q in enumerate(QUARTERS) for _, lot, _ in top_readings(q, scoring_source())
+                  if C.quarter[lot] == k]
         if len(labels) != len(self.T.label_code):
             raise ValueError("labels differ from measures.Table's")
         self.label_block = self.of_lot[np.array(labels, int)]

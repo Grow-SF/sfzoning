@@ -103,7 +103,7 @@ def _options(walls_dir=None):
     moves = leader_moves()
     rows = []
     for qi, q in enumerate(paths.QUARTERS):
-        R = np.load(paths.LABELS_DIR / f"readings_{q}.npz")
+        R = np.load(runs.SOLVE_LABELS_DIR / f"readings_{q}.npz")
         names = [canon(n) for n in R["names"].astype(str)]
         top, top_trust = {}, {}
         for j, k, t in zip(R["print_index"], R["code_index"], R["trust"]):

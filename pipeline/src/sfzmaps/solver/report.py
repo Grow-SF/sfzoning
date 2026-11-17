@@ -23,7 +23,7 @@ from scipy.special import expit
 from sfzmaps.solver import energy, paths, runs
 from sfzmaps.solver.city import city, load_run, wall_odds
 from sfzmaps.solver.codes import table_vocabulary
-from sfzmaps.solver.labels import readings
+from sfzmaps.solver.labels import readings, scoring_source
 from sfzmaps.solver.measures import Table, data_error_lots, incidents, score
 
 J7 = {"lines_drawn": 0.963, "drawn_are_table_lines": 0.969, "labels_right": 0.950, "holes": 15, "incidents": 824,
@@ -103,7 +103,7 @@ def top_reading_calibration() -> dict:
     vocabulary = table_vocabulary(C.lots)
     trust, right = [], []
     for k, q in enumerate(paths.QUARTERS):
-        rd = readings(q, vocabulary)
+        rd = readings(q, vocabulary, scoring_source())
         best, lot_of = {}, {}
         for r in np.flatnonzero(~rd.far):
             label = int(rd.label[r])
