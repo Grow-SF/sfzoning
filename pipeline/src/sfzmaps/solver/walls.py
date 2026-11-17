@@ -3,10 +3,12 @@ that a printed district line runs between them, fitted held out by quarter.
 
 The features (`design`): the border evidence of `wallevidence` (F), F again times "the pair faces across a street"
 (no touching px), and the lots' character: hats of the difference of their log areas (AREA_DIFFERENCE_KNOTS), the
-same times across a street, and hats of the smaller log area (SMALLER_AREA_KNOTS; areas in square feet).  The
-letter share of each stroke comes from Terra's text boxes (`prints/terra_boxes.json`, every kind), each drawn as its
-word's rectangle on the sheet's page, kept when its centre is inside the sheet's crop (`page/frames.json`) and in no
-cut box, and put on the grid through the sheet's corrected placement.
+same times across a street, and hats of the smaller log area (SMALLER_AREA_KNOTS; areas in square feet).  Where a
+stroke is text the stage reads the detector's chance of text (`text_weighted`: the held-out detectors of stage
+`solver-text-reader`, `textgrid`), never Terra's boxes.  Only an experiment that leaves `text_weighted` out still
+reads them: Terra's letter share of each stroke (`terra_text`, from `prints/terra_boxes.json`, every kind, each drawn
+as its word's rectangle on the sheet's page, kept when its centre is inside the sheet's crop (`page/frames.json`) and
+in no cut box, and put on the grid through the sheet's corrected placement).
 
 One ridge logistic regression per quarter q (`fit_quarter`: Newton's method from zero, RIDGE on every weight, at
 most MAX_STEPS steps, stopping when no weight moves TOLERANCE).  Its target is that the two lots' codes in the
@@ -16,13 +18,14 @@ is left to the solve's energy.
 
 Candidate features (CANDIDATES, in the order they are tried): the five of `wallevidence.OPTIONS` (text_weighted,
 text_weighted_beside_letters, street_crossing, no_city_limit, text_discounted_enclosure), read through the detector's
-text chance on the grid (`textgrid.text_chance`, from the one detector's chance on each sheet's page) and the merged
-page's ink, and
+text chance on the grid (`textgrid.text_chance`, from the held-out detectors' chance on each sheet's page) and the
+merged page's ink, and
   context           (`context`, after the lots' character) touching pairs: hats over KIND_KNOTS of how the line
                     between the lots' centroids runs along their long axes (the mean |cos| with each lot's minimum
                     rotated rectangle's long side: 0 side by side, 0.5 between, 1 back to back); pairs across a
                     street: hats over STREET_WIDTH_KNOTS of the street's width (the distance between the two lots)
-The stage fits with DEFAULT_CANDIDATES (street_crossing and context), chosen by held-out log loss.  A fit with other
+The stage fits with DEFAULT_CANDIDATES (street_crossing, context and text_weighted): the first two chosen by held-out
+log loss, the third because it ties it without Terra's boxes.  A fit with other
 candidates (`build_walls(candidates=...)`, `sfzmaps solver walls --candidates`) is an experiment, written to its own
 folder (`runs.walls_experiment_dir`) for a solve to read with `--walls`, never over the stage's.
 `evaluate_candidates` scores several configurations from inputs read once, and writes nothing.
@@ -68,8 +71,10 @@ CANDIDATES = (wallevidence.TEXT_WEIGHTED, wallevidence.TEXT_WEIGHTED_BESIDE_LETT
 # The candidate features the stage fits with (`build_walls()`): each kept only if it lowers the held-out log loss in
 # at least three quarters.  Street crossing and context, the set with the lowest held-out log loss (nw/ne/sw/se
 # .0978/.1027/.0452/.0611 against .0978/.1049/.0486/.0635 with none: better in three quarters, level in nw); either
-# alone, or with a text weighting added, improves fewer quarters.
-DEFAULT_CANDIDATES: tuple[str, ...] = (wallevidence.STREET_CROSSING, CONTEXT)
+# alone, or with a text weighting added, improves fewer quarters.  `text_weighted` is added so that the walls read no
+# output of Terra (an LLM): with it the held-out log loss ties (README), and the text chance it reads is the held-out
+# detectors' (`textgrid`).
+DEFAULT_CANDIDATES: tuple[str, ...] = (wallevidence.TEXT_WEIGHTED, wallevidence.STREET_CROSSING, CONTEXT)
 
 
 def check_candidates(names) -> tuple[str, ...]:

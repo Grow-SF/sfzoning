@@ -258,6 +258,7 @@ def _text_folders(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WORK_DIR", tmp_path / "work")
     monkeypatch.setattr(paths, "SOLVER_DIR", tmp_path / "solver")
     monkeypatch.setattr(paths, "TEXT_CHANCE_DIR", tmp_path / "solver" / "text" / "chance")
+    monkeypatch.setattr(paths, "READER_TEXT_DIR", tmp_path / "solver" / "text-reader")
     monkeypatch.setattr(paths, "PAGE_DIR", tmp_path / "page")
     monkeypatch.setattr(runs, "WALLS_DIR", tmp_path / "walls")
     (tmp_path / "cuts.json").write_text("{}")
@@ -293,8 +294,8 @@ def _sheet(tmp_path, name, col0, row0, page_image, chance):
     last = SHEET_PX - 1
     frames[name] = [[0, 0], [last, 0], [last, last], [0, last]]
     (tmp_path / "page" / "frames.json").write_text(json.dumps(frames))
-    paths.TEXT_CHANCE_DIR.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(paths.TEXT_CHANCE_DIR / f"{name}.png"), np.ascontiguousarray(chance))
+    (paths.READER_TEXT_DIR / name).mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(paths.READER_TEXT_DIR / name / "chance.png"), np.ascontiguousarray(chance))
 
 
 def test_text_chance_takes_the_largest_chance_of_the_sheets_that_inked_each_px(tmp_path, monkeypatch):
@@ -339,12 +340,33 @@ def test_text_chance_takes_the_largest_chance_of_the_sheets_that_inked_each_px(t
     assert not runs.WALLS_DIR.exists()                     # computed, not written
     # a sheet the detector did not score is an error naming its stage; so is a sheet the warp placed but the
     # detector's list does not name
-    (paths.TEXT_CHANCE_DIR / f"{b}.png").unlink()
-    with pytest.raises(FileNotFoundError, match="solver-text"):
+    (paths.READER_TEXT_DIR / b / "chance.png").unlink()
+    with pytest.raises(FileNotFoundError, match="solver-text-reader"):
         textgrid.text_chance()
     monkeypatch.setattr(paths, "SHEETS", (a,))
     with pytest.raises(ValueError, match="placed but not listed: " + b):
         textgrid.text_chance()
+
+
+def test_each_px_takes_its_chance_from_the_held_out_detectors_not_the_one_trained_on_every_px(tmp_path, monkeypatch):
+    """The chance a grid px takes is the reader stage's per-sheet chance (each page px from the detector that never saw
+    its quarter), not `solver-text`'s, which trained on these sheets: with both on disk, only the reader's reaches the
+    grid."""
+    _text_folders(tmp_path, monkeypatch)
+    a = f"{paths.SERIES}-p01"
+    monkeypatch.setattr(paths, "SHEETS", (a,))
+    col, row = SPLIT_COL - 100, SPLIT_ROW - 100
+    page_a = np.zeros((SHEET_PX, SHEET_PX), np.uint8)
+    held_out = np.full((SHEET_PX, SHEET_PX), 90, np.uint8)
+    held_out[:, 100:] = 30                                  # another detector's px: the east half
+    _sheet(tmp_path, a, col, row, page_a, held_out)
+    paths.TEXT_CHANCE_DIR.mkdir(parents=True)
+    cv2.imwrite(str(paths.TEXT_CHANCE_DIR / f"{a}.png"), np.full((SHEET_PX, SHEET_PX), 250, np.uint8))
+    got = textgrid.text_chance()[row:row + SHEET_PX, col:col + SHEET_PX]
+    assert (got[10:190, 10:90] == 90).all() and (got[10:190, 110:190] == 30).all()
+    assert got.max() == 90                                  # nothing of the 250 of solver-text's chance
+    from sfzmaps.solver.textnet import reader_stage
+    assert textgrid.CHANCE_FILE == reader_stage.CHANCE_FILE   # the file the reader stage writes in each sheet's folder
 
 
 def test_text_chance_is_written_whole(tmp_path):
@@ -699,7 +721,7 @@ def test_a_candidates_fit_is_an_experiment_beside_the_stages_walls(tmp_path, mon
     evaluation.json and, when a candidate reads it, the text chance it fitted with go to its own folder
     (experiments/walls-<the names sorted>), which a solve reads with --walls; the stage's walls are left as they were.
     The stage's fit (no candidates named) uses DEFAULT_CANDIDATES; with none it reads no text chance and writes none (the test sets none)."""
-    assert walls.check_candidates(walls.DEFAULT_CANDIDATES) == ("street_crossing", "context")
+    assert walls.check_candidates(walls.DEFAULT_CANDIDATES) == ("text_weighted", "street_crossing", "context")
     monkeypatch.setattr(runs, "WALLS_DIR", tmp_path / "walls")
     monkeypatch.setattr(runs, "EXPERIMENTS_DIR", tmp_path / "experiments")
     monkeypatch.setattr(walls, "DEFAULT_CANDIDATES", ())
@@ -760,3 +782,30 @@ def test_the_walls_command_fits_in_a_process_pinned_to_one_thread(monkeypatch):
     assert reruns == [["solver", "walls", "--workers", "3"], ["solver", "walls", "--candidates", "context"],
                       ["solver", "walls", "--evaluate", "none", "--evaluate", "context"]]
     assert len(fits) == 3 and len(evaluations) == 1
+
+
+def test_the_stages_walls_read_no_terra_boxes(tmp_path, monkeypatch):
+    """The stage's candidates include text_weighted, so `load_inputs` never builds Terra's letter share (it would read
+    prints/terra_boxes.json); the text chance it reads instead is the held-out detectors' (`textgrid.text_chance`).  An
+    experiment that leaves text_weighted out still reads Terra's boxes."""
+    import geopandas as gpd
+    from shapely.geometry import box
+    L, ink, _, _ = _district_city()
+    s = strokes.strokes(ink)
+    monkeypatch.setattr(paths, "LABELS_DIR", tmp_path / "labels")
+    monkeypatch.setattr(paths, "LOTS_DIR", tmp_path / "lots")
+    (tmp_path / "labels").mkdir()
+    (tmp_path / "lots").mkdir()
+    np.savez(tmp_path / "labels" / "strokes.npz", **s)
+    gpd.GeoDataFrame(geometry=[box(0, 0, 40, 40)] * L.n).to_parquet(tmp_path / "lots" / "table.parquet")
+    chance = np.full(ink.shape, 9, np.uint8)
+    reads = []
+    monkeypatch.setattr(walls.lots, "load_lots", lambda: L)
+    monkeypatch.setattr(walls.page, "load_sheets", lambda: np.ones(ink.shape, np.uint8))
+    monkeypatch.setattr(walls.page, "load_ink", lambda: ink)
+    monkeypatch.setattr(textgrid, "text_chance", lambda: chance)
+    monkeypatch.setattr(walls, "terra_text", lambda shape: reads.append(shape) or np.zeros(shape, bool))
+    got = walls.load_inputs([list(walls.DEFAULT_CANDIDATES)])
+    assert reads == [] and got.letter is None and got.text is chance
+    walls.load_inputs([["street_crossing"]])               # an experiment without text_weighted
+    assert len(reads) == 1

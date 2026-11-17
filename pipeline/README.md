@@ -792,11 +792,12 @@ lot sizes and the strokes (`solver/labels_stage.py`). Nothing asks a model, and 
   `spur`, `dega`, `degb`). On the 2000 page: about 172,000 strokes and 3,240 miles, in about 25 s and 3 GB.
 
 **The walls** (`sfzmaps solver walls [--workers N] [--candidates A,B] [--evaluate A,B ...]`, stage `solver-walls`,
-after `solver-labels` and `solver-text`; `solver/wallevidence.py` and `solver/walls.py`) give every pair of
+after `solver-labels` and `solver-text-reader`; `solver/wallevidence.py` and `solver/walls.py`) give every pair of
 neighbouring lots (each row of `lots.npz` `pairs`) the log odds that a printed district line runs between them. The
-stage reads what they read: the merged page (with `frames.json`), the cut boxes, the lots, `strokes.npz`,
-`terra_boxes.json` and the warp's placements, and for the text discount the detector's `chance/` and the sheets'
-pages (`data/work/2000-digital-zoning`) it is read on.
+stage reads what they read: the merged page (with `frames.json`), the cut boxes, the lots, `strokes.npz` and the
+warp's placements, and for the text discount the held-out detectors' chance (each sheet's
+`data/solver/text-reader/<sheet>/chance.png`) and the sheets' pages (`data/work/2000-digital-zoning`) it is read on.
+They read no output of Terra: not its boxes, and not the chance of the detector trained on every px.
 Nothing in them decides: every measure is a feature, and one fit weighs them all. The ink is read through the raw
 page's strokes (`strokes.npz`; no cleaned page, no line chain). A pair's border px are both px of every 4-neighbour
 px pair where `grown` changes between its lots, and each feature is a mean over them; distances enter as hat
@@ -804,10 +805,12 @@ functions over 0 / 6 / 14 / 26 / 42 / 64 ft. The 208 border features, in `wallev
 
 - **stroke evidence** (60): the nearest stroke (the widest on top where strokes cross): its distance × hats of its
   median width (0–40 ft), and its distance × its letter share, log length, steadiness (width spread over median
-  width, capped at 3) and spur tag. The letter share is the share of the stroke's points inside Terra's text boxes
-  (`prints/terra_boxes.json`, every kind, each the word's rectangle turned to its reading angle), kept when the box's
-  centre is inside the sheet's crop (`page/frames.json`) and in no cut box (`inputs/merged-page/`), and put on the
-  grid through the sheet's corrected placement;
+  width, capped at 3) and spur tag. The stage's `text_weighted` reads, where the letter share was, the detector's
+  chance of text near the stroke (below). The letter share itself, only in an experiment that leaves `text_weighted`
+  out, is the share of the stroke's points inside Terra's text boxes (`prints/terra_boxes.json`, every kind, each the
+  word's rectangle turned to its reading angle), kept when the box's centre is inside the sheet's crop
+  (`page/frames.json`) and in no cut box (`inputs/merged-page/`), and put on the grid through the sheet's corrected
+  placement;
 - **whole line** (30): the nearest stroke's whole line (strokes joined at each node, the straightest pairing first):
   its length, whether it closes on itself, the strokes of other lines ending on it, its sharpest turn, its width;
 - **straight closing** (30): from every loose stroke end, the straight gap to the nearest point of another stroke
@@ -838,16 +841,17 @@ minutes and 12 GB with 6 workers.
 
 **Candidate wall features** (`walls.CANDIDATES`). Each is tried against the set above and kept only if it lowers the
 held-out log loss in at least three quarters; the stage fits with those kept, `walls.DEFAULT_CANDIDATES` in code
-(`street_crossing` and `context`, below). `--candidates A,B` fits with others as an experiment: into
+(`street_crossing` and `context`, below, and `text_weighted`, which ties and leaves Terra's boxes unread). `--candidates A,B` fits with others as an experiment: into
 `data/solver/experiments/walls-<the names sorted, joined by +>/` (`runs.walls_experiment_dir`), for a solve to read
 with `--walls DIR`, never over the stage's walls. `--evaluate A,B` (repeatable, `none` for the set above;
 `walls.evaluate_candidates`) scores several configurations from inputs read once and writes nothing. Most candidates
-read the text detector's chance of text on the grid (`solver/textgrid.py`, computed afresh each time; a fit writes the
+read the text detectors' chance of text on the grid (`solver/textgrid.py`, computed afresh each time; a fit writes the
 one it fitted with to its folder's `text_chance.png`, never read back).
 Each sheet's chance is read through its corrected placement at the same page px as the merged page reads its ink
 (`page.sheet_px`, the same crop); a grid px takes the largest chance among the sheets that inked it, 0 where none did.
-The detector trained on all of every map, these sheets too: it learns only where text is printed, from Terra's boxes,
-never the table's codes, so it carries nothing of a held-out quarter's codes into the walls' fits.
+The chance is the four held-out detectors' (stage `solver-text-reader`): each page px comes from the detector that
+never saw its quarter of the city or the answered blocks. (Until 2026-11-16 it was the one detector of `solver-text`,
+trained on every px of these sheets.)
 
 - `text_weighted`: the stroke evidence and the profile weigh each border px's nearest stroke px by (1 − its text
   chance), and read that chance where Terra's letter share was (the same 208 columns);

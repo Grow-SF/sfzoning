@@ -20,7 +20,7 @@ census's search incidents, the share of each right; each quarter's time (given w
 it: the run's folder holds no times).
 
     uv run python scripts/incidents/criteria_check.py RUN [--times nw=305,ne=327,sw=329,se=407] [--times-note TEXT]
-                                                          [--no-pictures] [--across-label-sources]
+                                                          [--no-pictures] [--across-label-sources] [--baseline FOLDER]
 
 The labels right and the per-block split count the one fixed scoring set of labels (`measures.scoring_labels`: the
 saved-reads chain's 1,881), whatever label source the run solved with.
@@ -49,8 +49,8 @@ DRAWS, SEED = 1000, 0
 SEARCH_INCIDENTS = (1, 7, 34, 4, 23, 9, 44, 18, 14, 21, 12, 13, 15, 42, 22)   # the search report's table
 
 
-def solved_energy(run, q):
-    log = (run_file(run, f"-{q}", runs.solve_dir(run)).with_suffix(".log")).read_text()
+def solved_energy(run, q, folder=None):
+    log = (run_file(run, f"-{q}", folder or runs.solve_dir(run)).with_suffix(".log")).read_text()
     return float(re.search(r"solved ([\d,\.]+)", log).group(1).replace(",", ""))
 
 
@@ -124,7 +124,7 @@ def patches(mask, key):
     return comp, sizes
 
 
-def broken(run, fin_codes, new_codes):
+def broken(run, fin_codes, new_codes, baseline=None):
     """the lots right in final and wrong in the run, by patch (same table, final and run codes), each with the energy
     of both answers in its quarter's energy: the run's quarter answer, and it with final's quarter answer put back
     on the changed lots joined to the patch"""
@@ -142,7 +142,7 @@ def broken(run, fin_codes, new_codes):
         if q not in cache:
             z = np.load(run_file(run, f"-{q}-costs", runs.solve_dir(run)))
             names = [str(n) for n in z["names"]]
-            F = np.load(run_file("final", f"-{q}"), allow_pickle=True)
+            F = np.load(run_file("final", f"-{q}", baseline), allow_pickle=True)
             fq = np.array([names.index(n) for n in np.asarray(F["names"]).astype(str)])[F["pred"]]
             cache[q] = (z["U"].astype(float), z["odds"].astype(float), z["codes"], fq)
         U, odds, xq, fq = cache[q]
@@ -209,15 +209,16 @@ def search_incidents(new_codes, fin_codes):
     return rows
 
 
-def main(run, times, times_note, pictures, across_label_sources=False):
+def main(run, times, times_note, pictures, across_label_sources=False, baseline=None):
     folder = runs.solve_dir(run)
+    baseline = Path(baseline) if baseline else None
     C = city()
-    fin_codes, new_codes = load_run("final"), load_run(run, folder)
+    fin_codes, new_codes = load_run("final", baseline), load_run(run, folder)
     blocks_name = C.lots["blklot"].astype(str).str[:4].values
     _, blocks = np.unique(blocks_name, return_inverse=True)
     nb = blocks.max() + 1
     # 1: the energy per quarter
-    energy = {q: {"final": solved_energy("final", q), "run": solved_energy(run, q)} for q in paths.QUARTERS}
+    energy = {q: {"final": solved_energy("final", q, baseline), "run": solved_energy(run, q)} for q in paths.QUARTERS}
     for v in energy.values():
         v["change"] = round(v["run"] - v["final"], 1)
     # across label sources (or walls) the two energies are of different functions: not comparable, not gated
@@ -251,7 +252,7 @@ def main(run, times, times_note, pictures, across_label_sources=False):
                    "why": "Ruling R7: the solver exists only for 2000-digital-zoning (paths.SERIES); measuring it on "
                           "1996-2000-zoning needs the whole solver generalised to a second series"}},
            "measures_every_lot": {"final": m_fin, run: m_new},
-           "broken": broken(run, fin_codes, new_codes),
+           "broken": broken(run, fin_codes, new_codes, baseline),
            "changed_sets": changed_sets(fin_codes, new_codes),
            "search_incidents": search_incidents(new_codes, fin_codes),
            "times_s": times, "times_note": times_note}
@@ -349,6 +350,10 @@ if __name__ == "__main__":
     ap.add_argument("--across-label-sources", action="store_true",
                     help="the run solved with other labels (or walls) than final: leave out criterion 1 (energy "
                          "lower in every quarter), which compares the energies of two different functions")
+    ap.add_argument("--baseline", help="a folder holding a copy of an earlier stage run `final` (its runs/final*.npz and "
+                                        "logs) to compare against, in place of data/solver/solve; the pictures still "
+                                        "draw the stage's own final, so give --no-pictures with it")
     args = ap.parse_args()
     t = dict(kv.split("=") for kv in args.times.split(",") if kv)
-    main(args.run, {k: float(v) for k, v in t.items()}, args.times_note, not args.no_pictures, args.across_label_sources)
+    main(args.run, {k: float(v) for k, v in t.items()}, args.times_note, not args.no_pictures, args.across_label_sources,
+         args.baseline)

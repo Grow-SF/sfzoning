@@ -427,22 +427,28 @@ def test_the_page_and_the_lots_read_only_the_inputs_file_they_use():
         assert inputs == [f"inputs/{used}"], name
 
 
-def test_the_walls_read_what_build_walls_reads_and_follow_the_one_detector():
+def test_the_walls_read_what_build_walls_reads_and_follow_the_held_out_detectors():
+    from sfzmaps.solver import paths
     t = build.stages()
     st = t["solver-walls"]
     assert build.stage_commands("solver-walls") == [["solver", "walls"]]
-    assert set(st.upstream) == {"solver-labels", "solver-text"}
+    assert set(st.upstream) == {"solver-labels", "solver-text-reader"}
     deps = build.stage_deps(st)
     for d in ("data/solver/page", "data/solver/lots", "data/solver/labels/strokes.npz",
-              "data/solver/prints/terra_boxes.json", "data/solver/text/chance",
+              "data/solver/text-reader/2000-digital-zoning-p01/chance.png",     # each sheet's held-out chance
+              "data/solver/text-reader/2000-digital-zoning-p13/chance.png",
               "data/work/2000-digital-zoning",                  # the sheets' pages, where the text chance is read
               "data/warp/2000-digital-zoning", "src/sfzmaps/solver/walls.py", "src/sfzmaps/solver/wallevidence.py",
               "src/sfzmaps/solver/textgrid.py"):
         assert d in deps, d
     assert [d for d in deps if d.startswith("inputs/")] == ["inputs/merged-page/2000-digital-zoning.json"]
+    # no output of Terra (an LLM): its boxes are not read, and the walls' stage is not downstream of the detector
+    # trained on every px
+    assert not any("terra_boxes" in d for d in deps) and "solver-text" not in st.upstream
     # not the prints' table, the detector's weights or scores, the rest of the labels, or the solve's code; of the
     # detector's code only what reads its chance (no training, no scoring)
-    assert [d for d in deps if d.startswith("data/solver/text")] == ["data/solver/text/chance"]
+    assert [d for d in deps if d.startswith("data/solver/text")] == [
+        f"data/solver/text-reader/{s}/chance.png" for s in paths.SHEETS]
     assert not any(d.endswith(("textnet/stage.py", "textnet/train.py", "textnet/predict.py", "textnet/model.py",
                                "textnet/scores.py", "textnet/score_stage.py", "textnet/trial.py",
                                "textnet/data.py", "textnet/model.py")) for d in deps)

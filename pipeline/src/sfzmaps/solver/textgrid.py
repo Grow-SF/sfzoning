@@ -1,5 +1,6 @@
-"""The text detector's chance of text on the solver's grid, from the one detector (stage `solver-text`) and its chance
-on each 2000 sheet's page (`paths.TEXT_CHANCE_DIR/<sheet>.png`, uint8 chance x 255 in its page px).
+"""The text detector's chance of text on the solver's grid, from the four held-out detectors (stage
+`solver-text-reader`) and their chance on each 2000 sheet's page (`paths.READER_TEXT_DIR/<sheet>/chance.png`, uint8
+chance x 255 in its page px, each px from the detector that never saw its quarter of the city or the answered blocks).
 
 Each sheet's chance is read through the sheet's corrected placement exactly as the merged page reads its ink
 (`page.sheet_px`: the same crop, the frame of `page/frames.json` minus the cut boxes, and the same page px for every
@@ -26,15 +27,16 @@ from sfzmaps.transform import SheetTransform
 log = logging.getLogger(__name__)
 
 TEXT_CHANCE_FILE = "text_chance.png"
+CHANCE_FILE = "chance.png"        # a sheet's chance in the reader stage's folder (`textnet.reader_stage.CHANCE_FILE`)
 
 
 def _chance_files(names) -> dict[str, Path]:
-    """The detector's chance file of each sheet; a missing one is an error naming its stage."""
-    files = {name: paths.TEXT_CHANCE_DIR / f"{name}.png" for name in names}
+    """The held-out detectors' chance file of each sheet; a missing one is an error naming its stage."""
+    files = {name: paths.READER_TEXT_DIR / name / CHANCE_FILE for name in names}
     missing = [str(f) for f in files.values() if not f.is_file()]
     if missing:
         raise FileNotFoundError(f"can't read {missing[0]} ({len(missing)} of {len(names)} sheets missing): train the "
-                                "detector first (`sfzmaps solver text`, stage solver-text)")
+                                "detectors first (`sfzmaps solver text-reader`, stage solver-text-reader)")
     return files
 
 
