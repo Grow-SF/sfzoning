@@ -6,7 +6,10 @@ crop may centre (`data.centres`, taken every CENTRE_STRIDE px each way): TEXT_SH
 ink.  Each crop is scaled by a factor drawn log-uniformly from SCALE (so small street lettering also teaches big code
 lettering) and turned a random number of quarter turns (the reading angle turns with it); its targets are drawn for it
 alone (`data.crop_targets`), by the recipe's label rule (`labels`; "lines-unknown" needs the sheets' line px, which
-`zones.prepare` fills before the training).
+`zones.prepare` fills before the training).  With `composites` p > 0, each crop is a composite with chance p, made by
+the bank handed to `fit` (`composite.Bank`, built before the training; any object with `.crop(rng, sd, y, x, size,
+scale, turns)`) from the same crop's centre, scale and turns and the same generator; with p = 0 that chance is never
+drawn, so the batches are those of a recipe without composites, byte for byte.
 
 The loss is binary cross-entropy on text over the px it reads, plus KIND_WEIGHT x the cross-entropy of the kind and
 ANGLE_WEIGHT x (1 - cosine) of the reading direction, both on the text px it reads; a text-only network (`heads`
@@ -93,6 +96,8 @@ class Recipe:
                       back from the device each step (`.item()`), which waits for the GPU.
       labels          what a word box teaches (`data.crop_targets`): "boxes" every px of it as text, the lines through
                       it too; "lines-unknown" its line px unknown (the sheets' line px filled by `zones.prepare`)
+      composites      the share of crops that are composites (`composite.Bank.crop`: real clean words onto real line
+                      work, real line pieces across clean words, exact masks); 0 none, and no draw for it
     """
     iterations: int = ITERATIONS
     max_lr: float = LEARNING_RATE
@@ -108,6 +113,7 @@ class Recipe:
     decoder: str = "full"
     precision: str = "float32"
     labels: str = "boxes"
+    composites: float = 0.0
 
     def __post_init__(self):
         for f in dataclasses.fields(self):
@@ -126,7 +132,8 @@ class Recipe:
                                ("batch", self.batch >= 1, "at least 1"), ("crop", self.crop >= 1, "at least 1"),
                                ("width", self.width >= 1, "at least 1"), ("max_lr", self.max_lr > 0, "above 0"),
                                ("pct_start", 0 < self.pct_start < 1, "between 0 and 1"),
-                               ("weight_average", 0 <= self.weight_average < 1, "at least 0 and below 1")):
+                               ("weight_average", 0 <= self.weight_average < 1, "at least 0 and below 1"),
+                               ("composites", 0 <= self.composites <= 1, "between 0 and 1")):
             if not ok:
                 raise ValueError(f"recipe: {name} must be {rule}, not {getattr(self, name)}")
         if self.half_size and self.crop % model.FOLD:
@@ -190,16 +197,23 @@ def centre_pools(sheets: list[data.SheetData]) -> tuple[Pool, Pool]:
     return pools
 
 
-def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe,
-         rng: np.random.Generator) -> list[dict[str, np.ndarray]]:
+def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator,
+         bank=None) -> list[dict[str, np.ndarray]]:
     """One batch of `recipe.batch` crops: for each, text or ink, a centre from that pool, a scale and a number of
-    turns; its targets by the recipe's label rule."""
+    turns; its targets by the recipe's label rule, or, with chance `recipe.composites` (drawn only when it is above 0),
+    a composite of `bank` from the same centre, scale and turns (ValueError without a bank)."""
+    if recipe.composites > 0 and bank is None:
+        raise ValueError(f"a recipe with composites ({recipe.composites}) draws them from a bank: none was given")
     out = []
     for _ in range(recipe.batch):
         pool = pools[0] if rng.random() < TEXT_SHARE else pools[1]
         i, y, x = pool[rng.integers(len(pool))]
         scale = float(np.exp(rng.uniform(np.log(SCALE[0]), np.log(SCALE[1]))))
-        out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, int(rng.integers(4)), labels=recipe.labels))
+        turns = int(rng.integers(4))
+        if recipe.composites > 0 and rng.random() < recipe.composites:
+            out.append(bank.crop(rng, sheets[i], y, x, recipe.crop, scale, turns))
+        else:
+            out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, turns, labels=recipe.labels))
     return out
 
 
@@ -317,12 +331,14 @@ class Copies:
 
 
 @contextlib.contextmanager
-def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator):
-    """The training's batches (`batch_tensors` of `draw`), one per step, from `rng` in order: drawn when asked for or,
-    with `recipe.prefetch`, by a background thread up to PREFETCH ahead (which alone uses `rng` meanwhile: the same
-    batches, in the same order).  An error in that thread is raised where the batch is asked for."""
+def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator,
+             bank=None):
+    """The training's batches (`batch_tensors` of `draw`, composites from `bank`), one per step, from `rng` in order:
+    drawn when asked for or, with `recipe.prefetch`, by a background thread up to PREFETCH ahead (which alone uses `rng`
+    and the bank meanwhile: the same batches, in the same order).  An error in that thread is raised where the batch is
+    asked for."""
     def make():
-        return batch_tensors(draw(sheets, pools, recipe, rng), recipe.ink_only)
+        return batch_tensors(draw(sheets, pools, recipe, rng, bank), recipe.ink_only)
 
     if not recipe.prefetch:
         yield (make() for _ in range(recipe.iterations))
@@ -362,10 +378,14 @@ def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Rec
         worker.join()
 
 
-def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None, seed: int = 0) -> model.TextNet:
-    """A TextNet fitted on the sheets by `recipe` on `device` (default `default_device()`); see the module.  On `mps`
-    the caller holds the GPU's exclusive turn (`gpu.gpu_turn`).  Raises FloatingPointError at the first log whose
-    mean loss over the steps since the last is not finite."""
+def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None, seed: int = 0,
+        bank=None) -> model.TextNet:
+    """A TextNet fitted on the sheets by `recipe` on `device` (default `default_device()`), its composites (if the
+    recipe has any) from `bank`; see the module.  On `mps` the caller holds the GPU's exclusive turn (`gpu.gpu_turn`).
+    ValueError, before any training, for a recipe with composites and no bank.  Raises FloatingPointError at the first
+    log whose mean loss over the steps since the last is not finite."""
+    if recipe.composites > 0 and bank is None:
+        raise ValueError(f"a recipe with composites ({recipe.composites}) draws them from a bank: none was given")
     device = device or default_device()
     settle_torch()
     torch.manual_seed(seed)
@@ -380,7 +400,7 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
     copies = Copies(device)
     half = recipe.precision == "float16"
     scaler = torch.amp.GradScaler(torch.device(device).type, enabled=half)
-    with _batches(sheets, pools, recipe, rng) as batches, contextlib.closing(copies):
+    with _batches(sheets, pools, recipe, rng, bank) as batches, contextlib.closing(copies):
         for it, batch in enumerate(batches, 1):
             x, t, k, a, w = copies(batch)
             with torch.autocast(torch.device(device).type, dtype=torch.float16, enabled=half):

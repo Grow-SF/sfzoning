@@ -4,6 +4,12 @@ missed-text audit.  What it is for: trying a training change on one held-out qua
 
     uv run python scripts/textlines/variant.py control --quarter ne --seed 0 --labels lines-unknown \
         --extra 1990-1996-zoning
+    uv run python scripts/textlines/variant.py composites --quarter ne --seed 0 --labels lines-unknown \
+        --composites P --extra 1990-1996-zoning
+
+With `--composites P` (and the label rule lines-unknown, which the composites start from) the bank of clean words and
+line pieces (`composite.Bank.build`) is built from the training sheets with the quarter and the answered blocks held
+out, seeded by the run's seed, before the GPU's turn, and handed to the training.
 
 Writes `data/solver/experiments/textlines/runs/<name>-<quarter>-s<seed>/`:
   model.pt        the detector (`train.save_model`)
@@ -15,7 +21,8 @@ Writes `data/solver/experiments/textlines/runs/<name>-<quarter>-s<seed>/`:
   panel.png, audit.png, audit.json   `panel.render` (this run beside the held-out detectors and the old quarter
                   models) and `audit.sheet` (64 missed letter-sized pieces in the quarter)
   run.json        the recipe, seed, device, the minutes training and predicting took, git head, `git status
-                  --porcelain -- src` at the start
+                  --porcelain -- src` at the start; with composites the bank's sizes (`Bank.sizes`) and what the
+                  composites were (`Bank.tally`)
 
 One process, one GPU turn around the training and the prediction (nothing else computes on the GPU meanwhile); the gate
 runs after it, on the CPU, one thread, about 7 GB at the peak: never two at once.
@@ -42,12 +49,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from sfzmaps import gpu  # noqa: E402
 from sfzmaps.solver import paths, runs  # noqa: E402
-from sfzmaps.solver.textnet import data, linegate, predict, reader_stage, stage, train, zones  # noqa: E402
+from sfzmaps.solver.textnet import composite, data, linegate, predict, reader_stage, stage, train, zones  # noqa: E402
 
 RUNS_DIR = runs.EXPERIMENTS_DIR / "textlines" / "runs"
 BASELINES = runs.EXPERIMENTS_DIR / "textlines" / "baselines"
 LINES = zones.LINES_DIR
 AUDIT_N = 64
+BANK_THREADS = 4          # sheets the bank is built from at once
 
 
 def run_name(name: str, quarter: str, seed: int) -> str:
@@ -116,9 +124,14 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
     """Train `recipe` with `quarter` and `areas` (default: the answered blocks) held out on `sheets` (default: every
     sheet Terra read of the training maps), predict the quarter's px of the 2000 sheets (0 elsewhere) and of
     `extra_series`' sheets, and score them with `score(out, quarter, scored, chances, extra)` (default `score`: the gate,
-    the panel and the audit).  Returns the run's folder (see the module)."""
-    if bank is not None:
-        raise NotImplementedError("composites (a bank) are Task 6's: this run has none")
+    the panel and the audit).  With `recipe.composites` the composites come from `bank`, or (None) from the bank of
+    the training sheets with the same areas held out (`composite.Bank.build`, seeded `seed`), built before the GPU's
+    turn.  Returns the run's folder (see the module)."""
+    if recipe.composites > 0 and recipe.labels != "lines-unknown":
+        raise ValueError("composites start from the crops of the label rule lines-unknown (and its sheets' line px): "
+                         f"run them with labels lines-unknown, not {recipe.labels}")
+    if bank is not None and not recipe.composites:
+        raise ValueError("a bank is for a recipe with composites: this one has none")
     if quarter not in paths.QUARTERS:
         raise ValueError(f"quarters are {paths.QUARTERS}, not {quarter!r}")
     score = globals()["score"] if score is None else score
@@ -145,11 +158,15 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
         raise ValueError(f"no sheets of {', '.join(missing) or paths.SERIES} among the sheets given")
     quarters = {(sd.series, sd.sheet): reader_stage.page_quarters(sd) == q for sd in [*scored, *extra]}
     loaded = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    if recipe.composites > 0 and bank is None:
+        bank = composite.Bank.build(prepared, areas, seed, threads=BANK_THREADS)
+    banked = time.perf_counter() - t0
     out.mkdir(parents=True, exist_ok=True)
     chances: dict[tuple[str, str], np.ndarray] = {}
     with gpu.gpu_turn(True, device):
         t0 = time.perf_counter()
-        net = train.fit(data.hold_out(prepared, areas), recipe, device, seed)
+        net = train.fit(data.hold_out(prepared, areas), recipe, device, seed, bank=bank)
         train.save_model(out / "model.pt", net, recipe, device, seed)
         trained = time.perf_counter() - t0
         t0 = time.perf_counter()
@@ -174,8 +191,10 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
     (out / "run.json").write_text(json.dumps({
         "name": name, "quarter": quarter, "seed": seed, "device": device, "recipe": dataclasses.asdict(recipe),
         "extra_series": list(extra_series), "git_head": head, "git_status_src": dirty,
-        "minutes": {"load": round(loaded / 60, 2), "train": round(trained / 60, 2), "predict": round(predicted / 60, 2),
-                    "score": round(scoring / 60, 2)}}, indent=1) + "\n")
+        "bank": None if bank is None else bank.sizes(),
+        "composites_made": None if bank is None else dict(sorted(bank.tally.items())),
+        "minutes": {"load": round(loaded / 60, 2), "bank": round(banked / 60, 2), "train": round(trained / 60, 2),
+                    "predict": round(predicted / 60, 2), "score": round(scoring / 60, 2)}}, indent=1) + "\n")
     return out
 
 
@@ -185,14 +204,15 @@ def main() -> None:
     ap.add_argument("--quarter", required=True, choices=paths.QUARTERS)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--labels", default="boxes", choices=("boxes", "lines-unknown"))
-    ap.add_argument("--composites", type=float, default=0.0, help="Task 6's: not yet")
+    ap.add_argument("--composites", type=float, default=0.0,
+                    help="the share of crops that are composites (needs --labels lines-unknown)")
     ap.add_argument("--extra", action="append", default=[], help="another map's series to predict and gate too")
     a = ap.parse_args()
-    if a.composites:
-        sys.exit("--composites is Task 6's: this recipe has no such field yet")
+    if a.composites and a.labels != "lines-unknown":
+        sys.exit("--composites start from the crops of the label rule lines-unknown: add --labels lines-unknown")
     import logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    recipe = dataclasses.replace(stage.DEFAULT_RECIPE, labels=a.labels)
+    recipe = dataclasses.replace(stage.DEFAULT_RECIPE, labels=a.labels, composites=a.composites)
     print(run(a.name, recipe, a.quarter, a.seed, extra_series=tuple(a.extra)))
 
 
