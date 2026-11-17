@@ -275,10 +275,14 @@ folder contents with a 2-step CPU recipe on synthetic crops).
 - the reading at Terra's boxes doesn't fall by more than its seed noise;
 - the controller's look at the review page agrees.
 
-Variants, each against the current reader (run first as `base`):
-- (a) `own=0.3`;
-- (b) (a) + `sloppy=0.3`;
-- (c) the best of (a)/(b) + `mask=True`.
+Variants, each against the current reader (run first as `base`). **Amended (owner's rule, 11-17): no picked
+shares.** The reader reads only our boxes, so its training inputs are drawn as read time sees them:
+- (a) the read-time distribution: every training Terra word cut with our boxes' measured offsets (`sloppy_crop`; an
+  offset near zero, a clean Terra crop, comes up at its measured frequency), plus every real own-box crop, each
+  example at its natural count (no share parameter), kinds by `kind_weights="terra"` (measured);
+- (b) (a) + `mask=True`.
+
+`run` takes the pools and samples them by their counts; `own`/`sloppy` shares are not set by hand.
 
 A kept variant is then confirmed on all four folds at seed 0.
 
