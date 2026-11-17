@@ -208,87 +208,55 @@ def test_a_word_mask_is_cut_as_the_box_is():
         np.testing.assert_array_equal(K.box_mask(win, corners, 100, height, axis, origin=(10, 20)), whole)
 
 
-RECTS = ((0, 0, 12, 12), (15, 25, 86, 55), (115, 55, 205, 80))    # x0, y0, x1, y1 of the high chance
+def _mask_page():
+    """A word (thin bars, joined by the INK_R gate) with a line running through it and on far past both ends, a
+    neighbouring word apart from it, and a stray mark in the margin."""
+    page = np.full((100, 260), 255, np.uint8)
+    page[30:50, 60:120:3] = 0                            # the word: bars in 58..120 x 30..50
+    page[40, 20:130] = 0                                 # a line through it, ending 10 px short of the neighbour
+    page[30:50, 140:160:3] = 0                           # a neighbouring word, 20 px right of the word's last bar
+    page[85:88, 70:73] = 0                               # a stray mark below
+    return page
 
 
-def _comp_page():
-    """Ink: a speck (fewer than MIN_PX px) first in row order, then two words; a line runs through the first and on
-    past it, where the chance is low (the detector's line).  The chance is high only in RECTS."""
-    page = np.full((100, 220), 255, np.uint8)
-    page[5:8, 5:8] = 0                                   # 9 px: a speck
-    page[30:50, 20:80:3] = 0                             # word one: thin bars, joined by the INK_R gate
-    page[40, :] = 0                                      # the line through it
-    page[60:70, 120:200:4] = 0                           # word two
-    chance = np.zeros(page.shape, np.uint8)
-    for x0, y0, x1, y1 in RECTS:
-        chance[y0:y1, x0:x1] = 255
-    return page, chance
+WORD = np.array([[59.5, 29.5], [119.5, 29.5], [119.5, 49.5], [59.5, 49.5]])     # its rectangle, px index corners
 
 
-def _grouped(page, chance):
+def test_kept_ink_keeps_all_ink_touching_the_rectangle_and_blanks_what_lies_wholly_outside():
+    page = _mask_page()
+    keep = read.kept_ink(page, (0, 0), WORD)
     ink = page < 128
-    g = wordboxes.group(chance, ink, wordboxes.ink_gate(ink), 0.99)
-    rows = []
-    for k in range(len(g["axis"])):
-        rows.append({"row": 10 + k, "i": k, "level": 0.99, "ink_px": int(g["ink_px"][k]), "axis": float(g["axis"][k]),
-                     "t_length": float(g["t_length"][k]), "t_height": float(g["t_height"][k]),
-                     **{f"t{j}{a}": float(g["t"][k, j, n]) for j in range(4) for n, a in enumerate("xy")}})
-    return rows
+    assert keep[ink & read.in_rect(page.shape, (0, 0), WORD)].all()          # no ink of the word is ever blanked
+    assert keep[40, 20:130].all()                                             # the line, however far it runs
+    assert not keep[30:50, 140:160].any() and not keep[85:88, 70:73].any()   # the neighbour and the stray mark
+    # the same from a window, its origin given
+    np.testing.assert_array_equal(read.kept_ink(page[10:95, 5:250], (5, 10), WORD), keep[10:95, 5:250])
 
 
-def test_each_box_is_masked_by_its_own_component_grown_by_ink_r():
-    page, chance = _comp_page()
-    rows = _grouped(page, chance)
-    assert len(rows) == 2
-    got = read.word_masks("s", rows, page=page, chance=chance)
-    ink = page < 128
-    gate = wordboxes.ink_gate(ink)
-    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * wordboxes.INK_R + 1, 2 * wordboxes.INK_R + 1))
-    rects = []
-    for x0, y0, x1, y1 in RECTS[1:]:
-        r = np.zeros(ink.shape, bool)
-        r[y0:y1, x0:x1] = True
-        rects.append(r)
-    for r, rect, other in zip(rows, rects, rects[::-1]):
-        m, (x0, y0) = got[r["row"]]
-        full = np.zeros(ink.shape, bool)
-        full[y0:y0 + m.shape[0], x0:x0 + m.shape[1]] = m
-        np.testing.assert_array_equal(full, cv2.dilate((rect & gate).view(np.uint8), disc) > 0)
-        assert full[ink & rect].all() and not full[ink & other].any()
-    with pytest.raises(ValueError, match="ink"):
-        read.word_masks("s", [{**rows[0], "ink_px": rows[0]["ink_px"] + 1}], page=page, chance=chance)
+def _rows_mask():
+    corners = WORD + 0.5                                                      # a box's corners: px edge coordinates
+    return [{"row": 7, "axis": 0.0, "t_length": 60.0, "t_height": 20.0,
+             **{f"t{j}{a}": float(corners[j, n]) for j in range(4) for n, a in enumerate("xy")}}]
 
 
-def test_reading_unmasked_cuts_todays_crops_and_masked_blanks_outside_the_word():
-    page, chance = _comp_page()
-    rows = _grouped(page, chance)
-    plain = read.box_crops(page, rows)
-    for r, c in zip(rows, plain):
-        corners = np.array([[r[f"t{i}x"], r[f"t{i}y"]] for i in range(4)])
-        np.testing.assert_array_equal(c, K.box_crop(page, corners, r["t_length"], r["t_height"], r["axis"]))
-    masks = read.word_masks("s", rows, page=page, chance=chance)
-    masked = read.box_crops(page, rows, masks)
-    for r, c, m in zip(rows, plain, masked):
-        corners = np.array([[r[f"t{i}x"], r[f"t{i}y"]] for i in range(4)])
-        win, origin = masks[r["row"]]
-        keep = K.box_mask(win, corners, r["t_length"], r["t_height"], r["axis"], origin=origin)
-        np.testing.assert_array_equal(m, K.mask_outside(c, keep))
-    assert (masked[0] != plain[0]).any()                 # the line's ends past word one are blanked
+def test_reading_unmasked_cuts_todays_crops_and_masked_blanks_only_ink_apart_from_the_box():
+    page = _mask_page()
+    rows = _rows_mask()
+    corners = WORD + 0.5
+    plain = read.box_crops(page, rows)[0]
+    np.testing.assert_array_equal(plain, K.box_crop(page, corners, 60.0, 20.0, 0.0))
+    masked = read.box_crops(page, rows, mask=True)[0]
+    crop, a, shape = K.box_cut(page, corners, 60.0, 20.0, 0.0)
+    x0, y0, x1, y1 = K._footprint(a, shape, page.shape)
+    keep = read.kept_ink(page[y0:y1, x0:x1], (x0, y0), WORD)
+    np.testing.assert_array_equal(masked, K.mask_outside(crop, K.box_mask(keep, corners, 60.0, 20.0, 0.0, (x0, y0))))
+    # nothing here lies wholly outside the box within the crop but the line's own ink: the masked crop is the plain one
+    np.testing.assert_array_equal(masked, plain)
+    # without the line, a mark in the crop's padding 10 px past the last bar (their INK_R growths apart): blanked
+    page[40, :] = 255
+    page[32:40, 127:129] = 0
+    assert (read.box_crops(page, rows, mask=True)[0] != read.box_crops(page, rows)[0]).any()
 
-
-def test_word_masks_hold_every_box_of_a_real_sheet():
-    """A real-data check: every box of one sheet finds its component (its ink px count) from today's chance."""
-    f = wordboxes.BOXES_DIR / "boxes.parquet"
-    if not f.is_file() or not (paths.READER_TEXT_DIR / paths.SHEETS[0] / "chance.png").is_file():
-        pytest.skip("solver-boxes has not run")
-    boxes = wordboxes.load_boxes().reset_index(drop=True)
-    boxes["row"] = np.arange(len(boxes))
-    rows = boxes[boxes["sheet"] == paths.SHEETS[0]].to_dict("records")
-    got = read.word_masks(paths.SHEETS[0], rows)
-    assert len(got) == len(rows) and all(m.any() for m, _ in got.values())
-
-
-# --- own boxes and sloppy crops on a synthetic page -------------------------------------------------------------------
 
 SHEET = "s"
 BLOCKS = (120, 170, 260, 260)        # x0, y0, x1, y1: the answered blocks' px
@@ -326,7 +294,7 @@ KINDS = {"A": "zoning code", "B": "zoning code", "C": "zoning code", "D": "zonin
 
 def _terra(boxes, line=None):
     """crops.parquet-like rows of the words: A (nw), B (ne, read upside down), C (nw, in the answered blocks),
-    D (ne), E (nw, a block number right of A).  `line`: per word (line ink px, word ink px, line thickness)."""
+    D (ne), E (nw, a block number 2 px right of A).  `line`: per word its RC.LINE_COLUMNS."""
     rows = []
     for k, (name, text, angle) in enumerate((("A", "RH-1", 0.0), ("B", "C-2", 180.0), ("C", "P", 0.0),
                                              ("D", "M-1", 0.0), ("E", "NC", 0.0))):
@@ -335,7 +303,7 @@ def _terra(boxes, line=None):
                      "text": text, "angle": angle, "box_x0": x0, "box_y0": y0, "box_x1": x1, "box_y1": y1,
                      "length": float(x1 - x0), "height": float(y1 - y0), "weight": 1.0,
                      **_touch(SHEET, (x0, y0, x1, y1), None), "quarter": int(x0 >= SPLIT), "block": "",
-                     **(dict(zip(("line_ink", "word_ink", "line_thick"), line[k])) if line else {})})
+                     **(dict(zip(RC.LINE_COLUMNS, line[k])) if line else {})})
     rows.append({**rows[0], "series": "1980-1990-zoning"})          # another map's word: not ours to match
     rows.append({**rows[0], "word": -1, "kind": "none", "text": ""})  # a non-text window
     return RC.terra_frame(pd.DataFrame(rows))
@@ -398,32 +366,31 @@ def test_own_box_crops_carry_the_matched_terra_string_and_only_training_quarter_
 def test_own_box_crops_carry_their_mask_turned_with_them():
     page, where = _page()
     terra, boxes = _terra(where), _boxes(where)
-    ink = page < 128
-
-    def masks(sheet, rows):
-        return {r["row"]: (ink[40:90, 60:460], (60, 40)) for r in rows}
-
-    got = RC.own_box_crops(boxes, terra, quarter=2, pages={SHEET: page}, touch=_touch, word_masks=masks)
+    got = RC.own_box_crops(boxes, terra, quarter=2, pages={SHEET: page}, touch=_touch, mask=True)
     assert len(got) == 2
     for crop, _, meta in got:
         b = boxes.loc[meta["row"]]
         corners = b[[f"t{j}{a}" for j in range(4) for a in "xy"]].to_numpy(float).reshape(4, 2)
-        m = K.box_mask(ink[40:90, 60:460], corners, b["t_length"], b["t_height"], b["axis"], origin=(60, 40))
+        _, a, shape = K.box_cut(page, corners, b["t_length"], b["t_height"], b["axis"])
+        x0, y0, x1, y1 = K._footprint(a, shape, page.shape)
+        keep = read.kept_ink(page[y0:y1, x0:x1], (x0, y0), corners - 0.5)
+        m = K.box_mask(keep, corners, b["t_length"], b["t_height"], b["axis"], (x0, y0))
         np.testing.assert_array_equal(meta["mask"], np.rot90(m, 2) if meta["turned"] else m)
         assert meta["mask"].shape == crop.shape
 
 
-LINE = [(5, 50, 4.0), (0, 56, 0.0), (0, 0, 0.0), (0, 0, 0.0), (0, 0, 0.0)]   # A crossed: 5 of its 50 ink px, 4 px
+LINE = [(5, 5, 50, 4.0), (6, 0, 56, 0.0), (0, 0, 0, 0.0), (0, 0, 0, 0.0), (0, 0, 0, 0.0)]
+# A: 5 line px of its 50 ink px, all of a line crossing it, 4 px thick; B: 6 line px, all of a letter's stroke
 
 
 def test_offset_distribution_measures_ends_cross_angle_height_lines_neighbours_and_kinds():
     """A's box starts 3 px early, ends 6 px late, sits 2.4 px low and is 30 px tall (A: 36 x 24); B's (reading at 180
-    degrees) runs 2 px past B's end (its left).  A holds line ink and a quarter of E (beside A, not on it); B
-    neither."""
+    degrees) runs 2 px past B's end (its left).  A is crossed by a line and holds a quarter of E (touching A's ink);
+    B's line px are a letter's stroke, not a crossing."""
     page, where = _page()
     terra = _terra(where, line=LINE)
     boxes = pd.DataFrame([_box(101.0, 68.9, 45, 30), _box(418.5, 66.5, 38, 24, quarter=1)])
-    d = RC.offset_distribution(boxes, terra, quarter=2)
+    d = RC.offset_distribution(boxes, terra, quarter=2, pages={SHEET: page})
     assert d["n"] == 2
     off = d["offsets"]
     np.testing.assert_allclose(off["start"], [-3 / 24, 0.0], atol=1e-9)
@@ -432,17 +399,41 @@ def test_offset_distribution_measures_ends_cross_angle_height_lines_neighbours_a
     np.testing.assert_allclose(off["angle"], [0.0, 0.0], atol=1e-9)
     np.testing.assert_allclose(off["height_ratio"], [1.25, 1.0], atol=1e-9)
     np.testing.assert_allclose(off["neighbour"], [0.25, 0.0], atol=1e-9)        # drawn with its pair's offsets
+    assert off["neighbour_ink"] == [1.0, None]          # E's ink is 3 px from A's: one ink component with it
+    assert off["neighbour_on"] == [0.0, None]           # ... and none of it on A's letters
     np.testing.assert_allclose(d["mean"]["start"], -3 / 48, atol=1e-9)
-    assert d["line_share"] == 0.5
-    assert d["line_thickness"]["q99"] == 4.0 and d["line_cover"]["q99"] == pytest.approx(0.1)
-    assert d["neighbour_share"] == 0.5
+    assert d["line_share"] == 0.5 and d["line_share_any"] == 1.0                # B's stroke counted once, not now
+    assert d["line_thickness"]["values"] == [4.0] and d["line_cover"]["values"] == [pytest.approx(0.1)]
+    assert d["neighbour_share"] == 0.5 and d["neighbour_ink"]["values"] == [1.0]
     np.testing.assert_allclose(d["neighbour_part"], [0.25], atol=1e-9)
-    assert d["neighbour_on_word"]["q99"] == 0.0
     # the kinds of the training quarters' Terra words (C is in the answered blocks; quarter 1 holds B and D out)
     assert d["kind_shares"] == {"zoning code": 0.75, "block number": 0.25, "street name": 0.0, "other": 0.0}
     assert RC.offset_distribution(boxes, terra, quarter=1)["kind_shares"]["block number"] == 0.5
+    assert RC.offset_distribution(boxes, terra, quarter=2)["offsets"]["neighbour_ink"] == [None, None]  # no pages
+    assert d["neighbour_on"]["values"] == [0.0]
     with pytest.raises(ValueError, match="quarter"):
         RC.offset_distribution(boxes, terra, quarter=None)
+
+
+def test_ink_overlaps_are_of_ink_touching_and_on_the_word_not_of_loose_rectangles():
+    """A neighbour's rectangle wholly inside a loose word rectangle, its ink apart from the word's letters: touching 0,
+    on 0; joined to the letters by a stroke: touching 1, on 0; printed over the letters: on 1."""
+    page = np.full((60, 200), 255, np.uint8)
+    page[20:40, 20:60:3] = 0                                      # the word's letters
+    word = np.array([[15.5, 15.5], [130.5, 15.5], [130.5, 44.5], [15.5, 44.5]])    # loose: holds the neighbour too
+    nb = np.array([[100.5, 20.5], [125.5, 20.5], [125.5, 39.5], [100.5, 39.5]])
+    page[22:38, 102:124:3] = 0                                    # the neighbour, 45 px right of the letters
+    assert RC.ink_overlaps(page, (0, 0), word, nb, 0.0) == (0.0, 0.0)
+    joined = page.copy()
+    joined[30, 57:104] = 0                                        # joined to the word's ink by a stroke
+    assert RC.ink_overlaps(joined, (0, 0), word, nb, 0.0) == (1.0, 0.0)
+    over = page.copy()
+    over[22:38, 102:124:3] = 255
+    over[22:38, 30:52:3] = 0                                      # the neighbour printed over the letters
+    on_nb = nb - [70.0, 0.0]
+    touch, on = RC.ink_overlaps(over, (0, 0), word, on_nb, 0.0)
+    assert touch == 1.0 and on == 1.0
+    assert RC.ink_overlaps(np.full((60, 200), 255, np.uint8), (0, 0), word, nb, 0.0) == (None, None)
 
 
 def test_a_sloppy_crop_drawn_at_a_pairs_own_offsets_is_that_boxs_own_crop():
@@ -480,16 +471,19 @@ def test_a_tilted_box_measures_its_tilt_counter_clockwise_and_is_cut_back_the_sa
         assert np.abs(got.astype(int) - crop.astype(int)).max() <= 1
 
 
-def _dist(rows=200, line=0.0, neighbour=0.0, seed=0, cover=None):
-    """Offsets drawn well away from 0; a `neighbour` share of the rows hold a neighbour (a tenth or 0.3 of it)."""
+def _dist(rows=200, line=0.0, neighbour=0.0, seed=0):
+    """Offsets drawn well away from 0; a `neighbour` share of the rows hold a neighbour (a tenth or 0.3 of it, its
+    ink apart from the word's)."""
     rng = np.random.default_rng(seed)
     off = {"start": rng.normal(-0.4, 0.1, rows), "end": rng.normal(0.5, 0.1, rows),
            "cross": rng.normal(0.2, 0.05, rows), "angle": rng.normal(5.0, 2.0, rows),
            "height_ratio": rng.normal(1.3, 0.1, rows)}
     mean = {k: float(np.mean(v)) for k, v in off.items()}
     off["neighbour"] = np.where(rng.random(rows) < neighbour, rng.choice([0.1, 0.3], rows), 0.0)
-    return {"n": rows, "offsets": {k: v.tolist() for k, v in off.items()}, "mean": mean, "line_share": line,
-            "line_cover": {"q99": cover}, "neighbour_on_word": {"q99": 0.0}}
+    out = {k: v.tolist() for k, v in off.items()}
+    out["neighbour_ink"] = [0.0 if v > 0 else None for v in off["neighbour"]]
+    out["neighbour_on"] = [0.0 if v > 0 else None for v in off["neighbour"]]
+    return {"n": rows, "offsets": out, "mean": mean, "line_share": line}
 
 
 def _line_piece():
@@ -506,30 +500,34 @@ def test_sloppy_crops_offsets_follow_the_distribution():
     page, where = _page()
     terra = RC.with_neighbours(_terra(where))
     word = terra[terra["word"] == 0].iloc[0]
-    dist = _dist(line=0.3, neighbour=0.4, cover=0.3)
+    dist = _dist(line=0.3, neighbour=0.4)
     held = np.mean(np.array(dist["offsets"]["neighbour"]) > 0)
+    lines = RC.Lines([_line_piece(), _blob()], np.array([2.0, 40.0]), np.array([0.5, 0.5]), np.array([0.0, 0.3, 1.0]),
+                     np.array([1.0, 0.0]))
     rng = np.random.default_rng(5)
     drawn = []
     for _ in range(500):
         info = {}
-        crop = RC.sloppy_crop(page, word, dist, [_line_piece(), _blob()], rng, info)
+        crop = RC.sloppy_crop(page, word, dist, lines, rng, info)
         assert crop.dtype == np.uint8 and crop.shape[0] == model.HEIGHT
         drawn.append(info)
     got = pd.DataFrame(drawn)
     for k, m in dist["mean"].items():
         assert abs(got[k].mean() - m) <= 0.1 * abs(m), k
-    # a rejected line piece is drawn again: the line rate stays line_share
+    # a draw not kept is drawn again: the line rate stays line_share
     for k, p in (("line", 0.3), ("neighbour", held)):
         assert abs(got[k].mean() - p) < 4 * math.sqrt(p * (1 - p) / len(got)), k
     assert got["line_rejected"].sum() > 0 and not got["line_gave_up"].any()
     assert (got.loc[got["line"], "line_cover"] <= 0.3).all()
-    assert (got.loc[got["neighbour"], "on_word"] <= 1e-9).all()        # never on the word
+    assert (got.loc[got["neighbour"], "ink_got"] == 0.0).all()       # drawn apart from the word, as measured
+    assert (got.loc[got["neighbour"], "on_got"] == 0.0).all()
 
 
-def _zero(line=0.0, neighbour=0.0, end=0.0, cover=0.3):
+def _zero(line=0.0, neighbour=0.0, ink=None, on=None, end=0.0):
     return {"n": 1, "offsets": {k: [v] for k, v in (("start", 0.0), ("end", end), ("cross", 0.0), ("angle", 0.0),
-                                                     ("height_ratio", 1.0), ("neighbour", neighbour))},
-            "line_share": line, "line_cover": {"q99": cover}, "neighbour_on_word": {"q99": 0.0}}
+                                                     ("height_ratio", 1.0), ("neighbour", neighbour),
+                                                     ("neighbour_ink", ink), ("neighbour_on", on))},
+            "line_share": line}
 
 
 def test_a_line_piece_goes_through_the_letters():
@@ -542,52 +540,109 @@ def test_a_line_piece_goes_through_the_letters():
     for seed in range(5):
         info = {}
         got = RC.sloppy_crop(page, word, _zero(line=1.0), [_line_piece()], np.random.default_rng(seed), info)
-        assert info["line"] and not info["neighbour"] and info["line_rejected"] == 0
+        assert info["line"] and not info["neighbour"] and info["line_rejected"] == 0 and info["line_thick"] == 2.0
         x, y = info["line_at"]
         x0, y0, x1, y1 = where["A"]
         assert page[y, x] < 128 and x0 <= x < x1 and y0 <= y < y1      # on a letter of the word
-        assert (got < 128).sum() > (plain < 128).sum()
+        assert (got <= plain).all() and (got < plain).any()             # ORed in: only darker, somewhere
     np.testing.assert_array_equal(page, before)                     # the page is untouched
 
 
-def test_a_line_piece_covering_more_of_the_word_than_measured_is_drawn_again():
+def test_a_line_draw_is_kept_with_its_covers_chance_and_drawn_again_otherwise():
     page, where = _page()
     word = RC.with_neighbours(_terra(where)).iloc[0]
+    keep_thin = RC.Lines([_line_piece(), _blob()], np.array([2.0, 40.0]), np.array([0.5, 0.5]),
+                         np.array([0.0, 0.3, 1.0]), np.array([1.0, 0.0]))
     rejected = 0
     for seed in range(20):
         info = {}
-        RC.sloppy_crop(page, word, _zero(line=1.0), [_line_piece(), _blob()], np.random.default_rng(seed), info)
+        RC.sloppy_crop(page, word, _zero(line=1.0), keep_thin, np.random.default_rng(seed), info)
         assert info["line"] and info["line_cover"] <= 0.3
         rejected += info["line_rejected"]
     assert rejected > 0
-    # a piece always covers its own letter px: at a cap of 0 every draw is rejected, and the word is left clean
+    # no cover kept: every draw is drawn again, LINE_TRIES times, and the word is left clean
+    none = RC.Lines([_line_piece()], np.array([2.0]), np.array([1.0]), np.array([0.0, 1.0]), np.array([0.0]))
     info = {}
-    got = RC.sloppy_crop(page, word, _zero(line=1.0, cover=0.0), [_line_piece()], np.random.default_rng(0), info)
+    got = RC.sloppy_crop(page, word, _zero(line=1.0), none, np.random.default_rng(0), info)
     assert not info["line"] and info["line_gave_up"] and info["line_rejected"] == RC.LINE_TRIES
     np.testing.assert_array_equal(got, K.rectify(page, where["A"], 0.0)[0])
 
 
-def test_a_neighbour_is_moved_beside_the_word_never_onto_it():
-    """A's box runs half a height past A's end and holds a quarter of a word: E (right of A) is moved along the
-    reading axis until a quarter of it is inside the box, all of it off A; its old place is paper."""
+def _band(width, length=60):
+    p = np.full((length, width + 2), 255, np.uint8)
+    p[:, 1:1 + width] = 0
+    return p
+
+
+def test_calibrated_lines_follow_the_measured_thickness_and_cover():
+    """A bank of bands 1, 3 and 5 px wide (thicknesses 2, 4, 6) and 21 px (thickness 22, no crossing has it): the
+    measured crossings are 1 and 3 px bands, in shares 0.7 and 0.3, their covers those of such draws.  The calibrated
+    draws take no 21 px band and come in the measured shares and covers."""
+    page, where = _page()
+    words = _terra(where)
+    pages = {SHEET: page}
+    bank = [_band(1), _band(3), _band(5), _band(21)]
+    assert [RC.thickness(p < 255) for p in bank] == [2.0, 4.0, 6.0, 22.0]
+    # the measured crossings: draws of the 1 and 3 px bands (0.7 : 0.3) on these words
+    measured = RC.Lines([_band(1), _band(3)], np.array([2.0, 4.0]), np.array([0.7, 0.3]))
+    rng = np.random.default_rng(11)
+    thick, cover = [], []
+    prep = []
+    for _, t in words.iterrows():
+        win, origin = RC._window(page, [RC._word_rect(t)], 0)
+        prep.append((win, *RC._letters(win, origin, t)))
+    for _ in range(600):
+        win, inside, ys, xs = prep[int(rng.integers(len(prep)))]
+        _, c, j, _, _ = RC._propose(win, inside, ys, xs, measured, rng)
+        thick.append(measured.thick[j])
+        cover.append(c)
+    dist = {"line_thickness": {"values": thick}, "line_cover": {"values": cover}}
+    lines = RC.calibrate_lines(bank, dist, words, pages=pages, seed=1, proposals=6000, rounds=4)
+    assert lines.p[3] == 0.0 and lines.p[:3].sum() == pytest.approx(1.0)
+    r = lines.report
+    assert r["thickness_tv"] < 0.05 and r["cover_tv"] < 0.1, r
+    assert r["measured_thickness_unreached"] == 0.0
+    # drawn through sloppy_crop: the kept draws' thicknesses come in the measured shares
+    rng = np.random.default_rng(2)
+    kept = []
+    for _ in range(400):
+        info = {}
+        RC.sloppy_crop(page, words.iloc[0], _zero(line=1.0), lines, rng, info)
+        if info["line"]:
+            kept.append(info["line_thick"])
+    kept = np.array(kept)
+    assert len(kept) == 400
+    assert abs((kept == 2.0).mean() - 0.7) < 4 * math.sqrt(0.21 / 400) + r["thickness_tv"]
+    assert (kept == 22.0).sum() == 0
+
+
+def test_a_neighbour_is_moved_to_the_place_nearest_its_pairs_share_and_ink_overlap():
+    """A's box runs half a height past A's end and holds a quarter of E (right of A), none of it on A's letters.  With
+    E's ink measured touching A's, E is moved along the reading axis to where a quarter of it is inside the box (6 px
+    right: 8 px from A's ink, within reach); with it measured apart, to the nearest place where it is apart (7 px
+    right).  Its old place is paper.  Asked for all of it inside a box with no room beside A, touching A and not on
+    its letters, it stays beside A."""
     page, where = _page()
     before = page.copy()
     word = RC.with_neighbours(_terra(where)).iloc[0]
     assert word["n_word"] == 4                                          # A's nearest word is E
-    info = {}
-    got = RC.sloppy_crop(page, word, _zero(neighbour=0.25, end=0.5), [], np.random.default_rng(0), info)
-    assert info["neighbour"] and info["side"] == "along" and info["part"] == 0.25
-    assert abs(info["part_got"] - 0.25) < 0.05 and info["on_word"] <= 1e-9
-    assert info["shift"] == (6, 0)
-    moved = page.copy()
     x0, y0, x1, y1 = where["E"]
-    moved[y0:y1, x0:x1] = 255
-    moved[y0:y1, x0 + 6:x1 + 6] = np.minimum(moved[y0:y1, x0 + 6:x1 + 6], page[y0:y1, x0:x1])
-    np.testing.assert_array_equal(got, K.cut(moved, *info["frame"])[0])
-    # no room beside A inside its box: the drawn share is not reached, and A is still not covered
-    info = {}
-    RC.sloppy_crop(page, word, _zero(neighbour=0.5), [], np.random.default_rng(0), info)
-    assert info["neighbour"] and info["on_word"] <= 1e-9 and info["part_got"] < 0.5
+    for ink, shift in ((1.0, 6), (0.0, 7)):
+        info = {}
+        got = RC.sloppy_crop(page, word, _zero(neighbour=0.25, ink=ink, on=0.0, end=0.5), [],
+                             np.random.default_rng(0), info)
+        assert info["neighbour"] and info["side"] == "along" and info["part"] == 0.25 and info["ink"] == ink
+        assert info["shift"] == (shift, 0) and info["ink_got"] == ink and info["on_got"] == 0.0
+        assert abs(info["part_got"] - 0.25) <= 1 / 16 + 1e-9
+        moved = page.copy()
+        moved[y0:y1, x0:x1] = 255
+        moved[y0:y1, x0 + shift:x1 + shift] = np.minimum(moved[y0:y1, x0 + shift:x1 + shift], page[y0:y1, x0:x1])
+        np.testing.assert_array_equal(got, K.cut(moved, *info["frame"])[0])
+    # no room beside A inside its box: kept off A's letters, the share given up
+    for ink in (0.0, 1.0):
+        info = {}
+        RC.sloppy_crop(page, word, _zero(neighbour=1.0, ink=ink, on=0.0), [], np.random.default_rng(0), info)
+        assert info["neighbour"] and info["ink_got"] == ink and info["on_got"] == 0.0 and info["part_got"] < 0.5
     np.testing.assert_array_equal(page, before)
 
 
@@ -624,23 +679,16 @@ def test_sloppy_crops_hold_out_the_quarter_and_the_answered_blocks():
         RC.sloppy_crops(terra, dist, [], seed=3, quarter=None, pages={SHEET: page}, touch=_touch)
 
 
-def test_sloppy_crops_carry_the_mask_of_their_words_components_cut_as_the_crop():
+def test_a_sloppy_crops_mask_keeps_the_line_pasted_through_its_letters():
+    """A and E are one ink component (3 px apart) and a pasted line runs through A's letters: the mask, made after
+    the paste from the drawn rectangle, blanks none of it."""
     page, where = _page()
-    ink = page < 128
-
-    def masks(sheet, words):
-        return {int(w): (ink[30:110, 50:200], (50, 30)) for w in words["word"] if w == 0}
-
-    got = RC.sloppy_crops(_terra(where), _dist(), [], seed=3, quarter=1, pages={SHEET: page}, touch=_touch,
-                          masks=masks)
+    got = RC.sloppy_crops(_terra(where), _dist(line=1.0), [_line_piece()], seed=3, quarter=1, pages={SHEET: page},
+                          touch=_touch, mask=True)
     assert {m["word"] for _, _, m in got} == {0, 4}
     for crop, _, meta in got:
-        if meta["word"] == 0:
-            np.testing.assert_array_equal(meta["mask"], K.cut(ink[30:110, 50:200], *meta["frame"], fill=False,
-                                                              origin=(50, 30))[0])
-            assert meta["mask"].shape == crop.shape
-        else:
-            assert "mask" not in meta                         # no component meets E: left as cut
+        assert meta["line"] and meta["mask"].shape == crop.shape
+        np.testing.assert_array_equal(K.mask_outside(crop, meta["mask"]), crop)
 
 
 def _bank(held):
@@ -650,17 +698,17 @@ def _bank(held):
     return SimpleNamespace(sheets=[sd], pieces={paths.SERIES: pieces})
 
 
-def test_line_pieces_come_from_a_bank_holding_the_areas_out_and_no_thicker_than_measured():
+def test_line_pieces_come_from_a_bank_holding_the_areas_out():
     page = np.full((80, 200), 255, np.uint8)
-    page[10:20, 10:190] = 0                              # 10 px thick: kept
-    page[40:60, 10:190] = 0                              # 20 px thick: thicker than the measured crossings
+    page[10:20, 10:190] = 0
+    page[40:60, 10:190] = 0
     area = data.GridArea(np.ones((2, 2), bool), 5, 7)
-    kw = {"pages": {SHEET: page}, "block_area": area, "max_thickness": 11.0,
+    kw = {"pages": {SHEET: page}, "block_area": area,
           "piece_mask": lambda sd, box, seed: page[box[1]:box[3], box[0]:box[2]] < 128}
     info = {}
     got = RC.piece_patches(_bank((data.Quarter(1), area)), quarter=1, info=info, **kw)
-    assert len(got) == 1 and info == {"pieces": 2, "kept": 1, "too_thick": 1}
-    np.testing.assert_array_equal(got[0], page[10:20, 10:190])
+    assert len(got) == 2 and info == {"pieces": 2}               # no filter: calibrate_lines weighs them
+    np.testing.assert_array_equal(got[1], page[40:60, 10:190])
     assert RC.thickness(page[10:20, 10:190] < 128) == 10.0
     for bank, quarter in ((_bank((data.Quarter(1), area)), 0), (_bank((data.Quarter(1),)), 1),
                           (_bank((data.Quarter(1), data.GridArea(np.ones((2, 2), bool), 0, 0))), 1)):
@@ -693,7 +741,7 @@ def test_kind_weights_draw_own_crops_in_terras_kind_shares(monkeypatch):
     assert abs(z / (z + b) - 0.625) < 4 * math.sqrt(0.625 * 0.375 / (z + b))
 
 
-def test_a_masked_training_blanks_terras_and_the_sloppy_crops_by_their_components_too():
+def test_a_masked_training_blanks_terras_and_the_sloppy_crops_by_their_masks_too():
     pool = _pool()
     rng = np.random.default_rng(9)
     real_masks = {k: rng.random(pool.items[k].shape) < 0.5 for k in (3, 10)}
@@ -711,28 +759,20 @@ def test_a_masked_training_blanks_terras_and_the_sloppy_crops_by_their_component
         np.testing.assert_array_equal(plain.items[base + j], c)
 
 
-def _rows_for(page_boxes, quarter=0):
-    rows = []
-    for k, (x0, y0, x1, y1) in enumerate(page_boxes):
-        rows.append({"series": paths.SERIES, "sheet": "s", "word": k, "kind": "zoning code", "text": "X",
-                     "angle": 0.0, "box_x0": x0, "box_y0": y0, "box_x1": x1, "box_y1": y1,
-                     "length": float(x1 - x0), "height": float(y1 - y0), "quarter": quarter})
-    rows.append({**rows[0], "series": "1980-1990-zoning"})        # another map's: no components, never masked
-    return pd.DataFrame(rows)
-
-
-def test_terras_crops_are_masked_by_the_components_meeting_their_rectangle():
-    page, chance = _comp_page()
-    rows = _rows_for([(20, 30, 78, 50), (150, 5, 200, 20)])        # word one; blank paper
-    got = RC.real_masks(rows, pages={"s": page}, chances={"s": chance}, levels={paths.QUARTERS[0]: 0.99})
-    assert set(got) == {0}
-    ink = page < 128
-    x0, y0, x1, y1 = RECTS[1]
-    comp = np.zeros(ink.shape, bool)
-    comp[y0:y1, x0:x1] = True
-    comp &= wordboxes.ink_gate(ink)
-    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * wordboxes.INK_R + 1, 2 * wordboxes.INK_R + 1))
-    grown = cv2.dilate(comp.view(np.uint8), disc) > 0
-    crop = K.rectify(page, (20, 30, 78, 50), 0.0)[0]
-    np.testing.assert_array_equal(got[0], K.cut(grown, (48.5, 39.5), 58, 20, 0.0, fill=False)[0])
+def test_terras_crops_are_masked_by_the_ink_touching_their_rectangle_on_every_map():
+    page = _mask_page()
+    rows = pd.DataFrame([{"series": s, "sheet": "s", "word": 0, "box_x0": 60, "box_y0": 30, "box_x1": 120,
+                          "box_y1": 50, "length": 60.0, "height": 20.0, "angle": 0.0}
+                         for s in (paths.SERIES, "1980-1990-zoning")]
+                        + [{"series": paths.SERIES, "sheet": "s", "word": 1, "box_x0": 200, "box_y0": 60,
+                            "box_x1": 240, "box_y1": 75, "length": 40.0, "height": 15.0, "angle": 0.0}])
+    got = RC.real_masks(rows, pages={"s": page})
+    assert set(got) == {0, 1}                                       # the blank rectangle has none
+    crop = K.rectify(page, (60, 30, 120, 50), 0.0)[0]
+    a, shape = K.frame_of((89.5, 39.5), 60.0, 20.0, 0.0)
+    x0, y0, x1, y1 = K._footprint(a, shape, page.shape)
+    want = K.cut(read.kept_ink(page[y0:y1, x0:x1], (x0, y0), WORD), (89.5, 39.5), 60.0, 20.0, 0.0, fill=False,
+                 origin=(x0, y0))[0]
+    np.testing.assert_array_equal(got[0], want)
+    np.testing.assert_array_equal(got[1], want)
     assert got[0].shape == crop.shape

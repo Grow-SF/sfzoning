@@ -3,7 +3,7 @@ and masking outside the word.  The reader reads 96% of the owner's answered labe
 41% in our own (`wordread.measures`): it has never practised on boxes like ours.  Nothing here changes what a stage
 does: `textread.train.fit` takes these crops as `extra` (`extra_pool`), behind its off-by-default options
 (`READER_OPTIONS`).  Every function that makes or measures crops for a reader takes its held-out quarter, and stops
-without one.
+without one.  No cap or cutoff is set by hand: what a sloppy crop holds is drawn to match what was measured.
 
   Terra's words   (`terra_frame`) the 2000 sheets' words from `solver-text-crops`' rows: Terra's string as the reader
                   learns it, its rectangle as `crops.rectify` cuts it (`cx`, `cy` its centre's page px index, `length`,
@@ -20,30 +20,39 @@ without one.
                   heights H, in our box's own frame (its reading direction the axis turned towards Terra's): our
                   trimmed box's start and end along it, each minus Terra's (`start`, `end`; Terra's word from -L/2 to
                   L/2 about its centre), its centre's offset down the letters (`cross`), its angle minus Terra's
-                  (`angle`, degrees in [-90, 90]), its height over Terra's (`height_ratio`), and the largest share of
-                  another Terra word's rectangle inside the box (`neighbour`, 0 for none): cutting Terra's word with
-                  one pair's offsets cuts that box's own crop.  Also: the share of matched words holding line ink
-                  (`line_share`: at least `composite.CROSS_PX` line px that are ink inside Terra's rectangle), the
-                  thickness of that line ink (`line_thickness`, `thickness` on the sheet's line ink) and its share of
-                  the word's ink (`line_cover`); how much of a held neighbour lies on the word's own rectangle
-                  (`neighbour_on_word`); and the kinds' shares of the training quarters' Terra words (`kind_shares`)
-  sloppy crops    (`sloppy_crop`) Terra's word cut with one matched pair's offsets, its neighbour share with them
-                  (drawn together: their spread and their ties are the measured ones), as Weinman's synthesizer makes
-                  its words.  With probability `line_share` a real line piece (a `composite.Bank`'s, no thicker than
-                  the measured crossings' 99th percentile, `piece_patches`), turned a random number of quarter turns,
-                  is ORed through a letter px of the word; a draw whose piece covers more of the word's ink than the
-                  crossings' 99th percentile (`line_cover`) is drawn again, so the line rate stays `line_share`.  When
-                  the pair held a neighbour, the nearest other word (`with_neighbours`) is moved (its old place made
-                  paper) along the word's reading axis or across it, on its own side first, until the pair's share of
-                  it lies inside the crop's rectangle, never on the word's rectangle (ON_WORD; as near as it may come
-                  when the crop holds no room beside the word).  The page itself is never changed.  `sloppy_crops`
-                  makes them for a reader: only of words, and with neighbours, touching neither its held-out quarter
-                  nor the answered blocks, and kept only when the crop's footprint touches neither
-  masking         (`mask_outside`; `crops.box_mask`, `textread.read.word_masks`) px outside a box's own px (the
-                  component it was grouped from, grown by `wordboxes.INK_R`) are paper (Mask TextSpotter v3).  For
-                  training with the mask, Terra's crops (`real_masks`) and the sloppy crops (`terra_masks`) are masked
-                  by the components meeting Terra's rectangle (`rect_masks`; the level of the word's quarter), so the
-                  reader learns and reads the same kind of crop; a word no component meets is left as cut
+                  (`angle`, degrees in [-90, 90]), its height over Terra's (`height_ratio`), the largest share of
+                  another Terra word's rectangle inside the box (`neighbour`, 0 for none) and that neighbour's ink
+                  against the word's (`neighbour_ink` touching it, `neighbour_on` on its letters; `ink_overlaps`):
+                  cutting Terra's word with one pair's offsets cuts that box's own crop.  The line ink crossing a word
+                  (`line_measures`): the line px that are ink inside its rectangle, in line ink components that run
+                  on outside it (a crossing line; a letter's straight stroke stays inside); a word holding any is
+                  crossed (`line_share`), with that ink's
+                  thickness (`line_thickness`, `thickness` on the sheet's line ink) and share of the word's ink
+                  (`line_cover`); and the kinds' shares of the training quarters' Terra words (`kind_shares`)
+  ink overlap     (`ink_overlaps`) touching: the share of a neighbour's ink (in its rectangle and off the word's; all
+                  of it when its rectangle lies in the word's) in ink components (`read.ink_components`) that also
+                  hold the word's own ink (in the word's rectangle, off the neighbour's); on: the share of the
+                  neighbour's ink inside the extent of the word's own ink along and across its reading direction.  Of
+                  ink, not of the loose rectangles
+  sloppy crops    (`sloppy_crop`) Terra's word cut with one matched pair's offsets, its neighbour share and ink overlaps
+                  with them (drawn together: their spread and their ties are the measured ones), as Weinman's
+                  synthesizer makes its words.  With probability `line_share` a real line piece (`Lines`: a
+                  `composite.Bank`'s pieces, `piece_patches`, drawn by `calibrate_lines`' weights so the pasted
+                  pieces' thickness and their cover of the word's ink both follow the crossings' measured
+                  distributions, a draw kept with its cover's chance and drawn again otherwise, so the line rate stays
+                  `line_share`), turned a random number of quarter turns, is ORed through a letter px of the word.
+                  When the pair held a neighbour, the nearest other word (`with_neighbours`) is moved (its old place
+                  made paper) to the whole-px place along the word's reading axis or across it (its own side first on
+                  ties) whose ink overlaps with the word, and then whose share inside the crop's rectangle, are
+                  nearest the pair's.
+                  The page itself is never changed.  `sloppy_crops` makes them for a reader: only of words, and with
+                  neighbours, touching neither its held-out quarter nor the answered blocks, and kept only when the
+                  crop's footprint touches neither
+  masking         (`mask_outside`; `read.kept_ink`, `crops.box_mask`) a crop is paper outside the ink components that
+                  hold ink in its own rectangle (our box's, Terra's, or a sloppy crop's drawn one): ink touching the
+                  word is never blanked, a neighbouring word or stray mark wholly outside is; no detector's call is in
+                  it.  Terra's crops (`real_masks`, every map) and the sloppy crops are masked so too in a training
+                  with the mask, and our boxes when read with it (`read.build_read(mask=True)`)
 
 `build_offsets` measures the offsets for each held-out quarter (the pairs whose box is outside it and whose word
 touches neither it nor an answered block) from today's boxes and writes OFFSETS_FILE
@@ -75,14 +84,11 @@ log = logging.getLogger(__name__)
 
 IOU = 0.5
 OFFSETS = ("start", "end", "cross", "angle", "height_ratio")
-QUANTILES = (0.05, 0.25, 0.5, 0.75, 0.95, 0.99)
-CAP = 0.99                        # the quantile of the measured crossings a pasted line may reach
-LINE_TRIES = 100                  # line draws for one crop before it is left without (a guard; counted)
-BISECT = 40                       # halvings of a neighbour's move
-STEP = 0.5                        # px between the places a neighbour is tried along its way in
-ON_WORD = 0.0                     # the most of a moved neighbour's rectangle on the word's: never on the word.  (The
-#   measured `neighbour_on_word` is no guide: its 95th percentile is 1, block numbers lying wholly inside a slanted
-#   code's loose Terra rectangle, not on its letters.)
+QUANTILES = (0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99)
+REACH = 2 * wordboxes.INK_R + 2   # px: ink farther apart than this never shares an ink component (each grows INK_R)
+LINE_TRIES = 100                  # line draws for one crop before it is left without (a loop's guard; counted)
+PROPOSALS = 20000                 # line draws simulated per round of `calibrate_lines`
+ROUNDS = 4                        # rounds of `calibrate_lines`' raking of the piece weights
 KIND_NAMES = tuple(data.KINDS)    # zoning code, block number, street name, other
 OFFSETS_FILE = runs.EXPERIMENTS_DIR / "wordread" / "reader" / "offsets.json"
 TOUCH = store.TOUCH
@@ -105,9 +111,16 @@ def _rect(cx: float, cy: float, length: float, height: float, angle: float) -> n
     return np.array([c - u - v, c + u - v, c + u + v, c - u + v])
 
 
+def _word_rect(t) -> np.ndarray:
+    return _rect(t["cx"], t["cy"], t["length"], t["height"], t["angle"])
+
+
+LINE_COLUMNS = ("line_ink", "cross_ink", "word_ink", "line_thick")
+
+
 def terra_frame(rows: pd.DataFrame) -> pd.DataFrame:
     """Terra's words on the 2000 sheets with a target, from rows of `solver-text-crops`' crops.parquet (see the
-    module), positions 0..n-1; `line_ink`, `word_ink` and `line_thick` too when the rows have them."""
+    module), positions 0..n-1; LINE_COLUMNS too when the rows have them."""
     w = rows[(rows["series"] == paths.SERIES) & (rows["word"] >= 0) & rows["text"].notna()]
     w = w[w["text"].astype(str) != ""].reset_index(drop=True)
     box = w[["box_x0", "box_y0", "box_x1", "box_y1"]].to_numpy(float)
@@ -121,7 +134,7 @@ def terra_frame(rows: pd.DataFrame) -> pd.DataFrame:
                         "length": w["length"].to_numpy(float), "height": w["height"].to_numpy(float),
                         **{t: w[t].astype(bool).to_numpy() for t in TOUCH},
                         **dict(zip(measures.C_COLS, rects.reshape(-1, 8).T))})
-    for c in ("line_ink", "word_ink", "line_thick"):
+    for c in LINE_COLUMNS:
         if c in w:
             out[c] = w[c].to_numpy()
     return out
@@ -151,6 +164,72 @@ def with_neighbours(terra: pd.DataFrame) -> pd.DataFrame:
 def _training_words(terra: pd.DataFrame, quarter: int) -> np.ndarray:
     """Which words of `terra` touch neither `quarter` nor an answered block, bool."""
     return ~terra["touch_blocks"].to_numpy(bool) & ~terra[f"touch_{paths.QUARTERS[quarter]}"].to_numpy(bool)
+
+
+class DiskPages:
+    """The 2000 pages read from disk by sheet (`pages[sheet]`), the last one kept."""
+
+    def __init__(self):
+        self._last: dict = {}
+
+    def __getitem__(self, sheet: str) -> np.ndarray:
+        if sheet not in self._last:
+            self._last.clear()
+            self._last[sheet] = data.load_page(sheet)
+        return self._last[sheet]
+
+
+def _pages(pages):
+    """A page getter: `pages[sheet]`, or each 2000 page read from disk (`DiskPages`)."""
+    pages = DiskPages() if pages is None else pages
+    return lambda sheet: pages[sheet]
+
+
+def _window(page: np.ndarray, rects, margin: int) -> tuple[np.ndarray, tuple[int, int]]:
+    """The page window holding rectangles (each 4 x 2, page px index coordinates) and `margin` px around them, cut to
+    the page, and its top-left px (x0, y0)."""
+    allc = np.concatenate([np.asarray(r, float).reshape(-1, 2) for r in rects])
+    x0, y0 = max(int(np.floor(allc[:, 0].min())) - margin, 0), max(int(np.floor(allc[:, 1].min())) - margin, 0)
+    x1 = min(int(np.ceil(allc[:, 0].max())) + margin + 1, page.shape[1])
+    y1 = min(int(np.ceil(allc[:, 1].max())) + margin + 1, page.shape[0])
+    return page[y0:max(y0, y1), x0:max(x0, x1)], (x0, y0)
+
+
+def ink_overlaps(win: np.ndarray, origin, word: np.ndarray, neighbour: np.ndarray, angle: float,
+                 word_ink: np.ndarray | None = None) -> tuple[float | None, float | None]:
+    """A neighbour's ink against a word's, on a grey window (see the module): `word` and `neighbour` their rectangles
+    (4 x 2, page px index coordinates), `angle` the word's reading angle.  `touch`: the share of the neighbour's ink
+    (in its rectangle and off the word's; all of it when its rectangle lies in the word's) in ink components
+    (`read.ink_components`) that also hold the word's own ink (in the word's rectangle, off the neighbour's).  `on`:
+    the share of the neighbour's ink (in its rectangle) inside the extent of the word's own ink along and across its
+    reading direction: on the word's letters, not merely inside its loose rectangle.  The word's own ink is, on a real
+    page, its rectangle's ink off the neighbour's (the best the one ink layer allows); for a neighbour pasted in, the
+    word's ink before the paste (`word_ink`, bool, the window's shape).  (None, None) when the neighbour has no ink in
+    the window."""
+    ink, lab = read.ink_components(win)
+    w_in = read.in_rect(win.shape, origin, word)
+    n_in = read.in_rect(win.shape, origin, neighbour)
+    own = n_in & ~w_in & ink
+    if not own.any():
+        own = n_in & ink
+    if not own.any():
+        return None, None
+    word_ink = w_in & ~n_in & ink if word_ink is None else word_ink & ink
+    mine = np.unique(lab[word_ink])
+    touch = float(np.isin(lab[own], mine[mine > 0]).mean())
+    if not word_ink.any():
+        return touch, 0.0
+    (ux, uy), (vx, vy) = L._axes(float(angle))
+    cx, cy = np.asarray(word, float).mean(0) - np.asarray(origin, float)
+
+    def frame(m):
+        ys, xs = np.nonzero(m)
+        return (xs - cx) * ux + (ys - cy) * uy, (xs - cx) * vx + (ys - cy) * vy
+
+    p, q = frame(word_ink)
+    np_, nq = frame(n_in & ink)
+    on = ((np_ >= p.min() - 0.5) & (np_ <= p.max() + 0.5) & (nq >= q.min() - 0.5) & (nq <= q.max() + 0.5))
+    return touch, float(on.mean())
 
 
 # --- our boxes against Terra's words ----------------------------------------------------------------------------------
@@ -190,13 +269,14 @@ def _held(flags, quarter: int) -> bool:
     return bool(flags["touch_blocks"]) or bool(flags[f"touch_{paths.QUARTERS[quarter]}"])
 
 
-def _summary(x) -> dict:
-    """`n`, `quantiles` (QUANTILES) and `q99` (the CAP quantile) of measured values (None without any)."""
-    x = np.asarray(x, float)
-    if not len(x):
-        return {"n": 0, "quantiles": None, "q99": None}
-    return {"n": int(len(x)), "quantiles": dict(zip(map(str, QUANTILES), np.quantile(x, QUANTILES).tolist())),
-            "q99": float(np.quantile(x, CAP))}
+def _summary(x, values: bool = False) -> dict:
+    """`n` and `quantiles` (QUANTILES) of measured values (None without any); with `values`, the values too."""
+    x = np.asarray([v for v in x if v is not None and np.isfinite(v)], float)
+    out = {"n": int(len(x)),
+           "quantiles": dict(zip(map(str, QUANTILES), np.quantile(x, QUANTILES).tolist())) if len(x) else None}
+    if values:
+        out["values"] = x.tolist()
+    return out
 
 
 def _area(r: np.ndarray) -> float:
@@ -208,12 +288,15 @@ def _meet(a: np.ndarray, b: np.ndarray) -> float:
     return float(cv2.intersectConvexConvex(np.asarray(a, np.float32), np.asarray(b, np.float32))[0])
 
 
-def offset_distribution(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: int, iou: float = IOU) -> dict:
+def offset_distribution(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: int, iou: float = IOU,
+                        pages=None) -> dict:
     """The measured spread of our matched boxes against Terra's words for the reader holding `quarter` out (see the
-    module): `n` pairs, `offsets` (each a list, pair by pair, `neighbour` too), the offsets' `mean`, `sd` and
-    `quantiles`, `turned` (pairs read a half turn from the axis), `line_share` (None without `line_ink`),
-    `line_thickness` and `line_cover` (`_summary`; with `word_ink` and `line_thick`), `neighbour_share`,
-    `neighbour_part`, `neighbour_on_word` (`_summary`) and `kind_shares`.  Left out: pairs whose word touches an
+    module): `n` pairs, `offsets` (each a list, pair by pair, `neighbour` and `neighbour_ink` too), the offsets'
+    `mean`, `sd` and `quantiles`, `turned` (pairs read a half turn from the axis), `line_share` (with `cross_ink`),
+    `line_thickness` and `line_cover` (`_summary` with the values; with `word_ink` and `line_thick`), for comparison
+    `line_share_any` and `line_cover_any` (every line px in the rectangle, a word crossed at composite.CROSS_PX of
+    them: the first measure), `neighbour_share`, `neighbour_part`, `neighbour_ink` (`_summary` with the values;
+    measured on `pages`, sheet -> page, None for none) and `kind_shares`.  Left out: pairs whose word touches an
     answered block or the quarter, or whose box is in it.  ValueError without a quarter."""
     quarter = _need_quarter(quarter, "offset_distribution")
     m = matches(boxes, terra, iou)
@@ -231,19 +314,23 @@ def offset_distribution(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: in
            "turned": int(sum(_turned(terra.iloc[w]["angle"], boxes.iloc[p]["axis"])
                              for p, w in zip(m["box"], words)))}
     out["line_share"], out["line_words"] = None, None
-    out["line_thickness"], out["line_cover"] = _summary([]), _summary([])
-    if "line_ink" in terra:
-        crossed = terra["line_ink"].to_numpy()[words] >= composite.CROSS_PX
+    out["line_thickness"], out["line_cover"] = _summary([], True), _summary([], True)
+    if "cross_ink" in terra:
+        crossed = terra["cross_ink"].to_numpy()[words] > 0
         out["line_share"] = float(crossed.mean()) if len(m) else None
         out["line_words"] = int(crossed.sum())
-        if "word_ink" in terra and "line_thick" in terra:
-            mine = words[crossed]
-            out["line_thickness"] = _summary(terra["line_thick"].to_numpy(float)[mine])
-            ink = terra["word_ink"].to_numpy(float)[mine]
-            out["line_cover"] = _summary(terra["line_ink"].to_numpy(float)[mine][ink > 0] / ink[ink > 0])
-    # each matched box's largest share of another Terra word's rectangle inside its trimmed box, and how much of that
-    # word lies on the matched word's own rectangle
-    part, on_word = np.zeros(len(m)), np.zeros(len(m))
+        mine = words[crossed]
+        ink = terra["word_ink"].to_numpy(float)[mine]
+        out["line_thickness"] = _summary(terra["line_thick"].to_numpy(float)[mine], True)
+        out["line_cover"] = _summary(terra["cross_ink"].to_numpy(float)[mine] / np.maximum(ink, 1), True)
+    if "line_ink" in terra:
+        old = terra["line_ink"].to_numpy()[words] >= composite.CROSS_PX
+        out["line_share_any"] = float(old.mean()) if len(m) else None
+        ink = terra["word_ink"].to_numpy(float)[words[old]]
+        out["line_cover_any"] = _summary(terra["line_ink"].to_numpy(float)[words[old]] / np.maximum(ink, 1))
+    # each matched box's largest share of another Terra word's rectangle inside its trimmed box, and that word's ink
+    # overlap with the matched word
+    part, nb = np.zeros(len(m)), np.full(len(m), -1)
     sheet_of = boxes["sheet"].astype(str).to_numpy()
     tsheet = terra["sheet"].astype(str).to_numpy()
     geo = terra[["cx", "cy", "length", "height", "angle"]].to_numpy(float)
@@ -257,13 +344,22 @@ def offset_distribution(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: in
         for a, b, s in zip(i, j, share):
             k = mine[a]
             if others[b] != words[k] and s > part[k]:
-                part[k] = s
-                on_word[k] = _meet(theirs[b], _rect(*geo[words[k]])) / max(_area(theirs[b]), 1e-9)
+                part[k], nb[k] = s, others[b]
     holds = part > 0
+    touch: list = [None] * len(m)
+    on: list = [None] * len(m)
+    if pages is not None:
+        for k in np.flatnonzero(holds):
+            wr, nr = _rect(*geo[words[k]]), _rect(*geo[nb[k]])
+            win, origin = _window(pages[tsheet[words[k]]], [wr, nr], REACH)
+            touch[k], on[k] = ink_overlaps(win, origin, wr, nr, geo[words[k], 4])
     out["offsets"]["neighbour"] = part.tolist()
+    out["offsets"]["neighbour_ink"] = touch
+    out["offsets"]["neighbour_on"] = on
     out["neighbour_share"] = float(holds.mean()) if len(m) else None
     out["neighbour_part"] = part[holds].tolist()
-    out["neighbour_on_word"] = _summary(on_word[holds])
+    out["neighbour_ink"] = _summary(touch, True)
+    out["neighbour_on"] = _summary(on, True)
     kinds = collections.Counter(terra.loc[_training_words(terra, quarter), "kind"])
     total = sum(kinds.values())
     out["kind_shares"] = {k: kinds.get(k, 0) / total if total else 0.0 for k in KIND_NAMES}
@@ -293,32 +389,17 @@ class HeldAreas:
         return dict(zip(TOUCH, K._areas(sd, self.held, x0, y0, x1, y1)))
 
 
-def _pages(pages):
-    """A page getter: `pages[sheet]`, or each 2000 page read from disk (the last one kept)."""
-    if pages is not None:
-        return lambda sheet: pages[sheet]
-    last: dict = {}
-
-    def get(sheet):
-        if sheet not in last:
-            last.clear()
-            last[sheet] = data.load_page(sheet)
-        return last[sheet]
-    return get
-
-
 # --- crops of our own boxes -------------------------------------------------------------------------------------------
 
 def own_box_crops(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: int, iou: float = IOU, pages=None,
-                  touch=None, word_masks=None) -> list[tuple[np.ndarray, str, dict]]:
+                  touch=None, mask: bool = False) -> list[tuple[np.ndarray, str, dict]]:
     """Our boxes matched to a Terra word at `iou`, each cut as `crops.box_crop` cuts it (turned a half turn when
     Terra's word reads the other way), with Terra's string: (crop, string, meta), by sheet and box, for the reader
     holding `quarter` out.  Left out: a box whose crop's footprint or whose word touches an answered block or the
-    quarter.  `pages`: sheet -> page (read from disk when None); `touch`: `HeldAreas` (made when None); `word_masks`:
-    (sheet, rows) -> {row: (bool window, origin)} (`textread.read.word_masks`), when given each meta's `mask` is the
-    box's own px cut as the crop (turned with it).  meta: `sheet`, `row` (the box's index label), `word` (Terra's word
-    on the sheet), `iou`, `turned`, `kind`, `quarter` (the box's) and the TOUCH flags (crop or word).  ValueError
-    without a quarter."""
+    quarter.  `pages`: sheet -> page (read from disk when None); `touch`: `HeldAreas` (made when None); with `mask`,
+    each meta's `mask` is the ink touching the box's rectangle (`read.kept_ink`) cut as the crop (turned with it), as
+    `read.box_crops` masks it.  meta: `sheet`, `row` (the box's index label), `word` (Terra's word on the sheet),
+    `iou`, `turned`, `kind`, `quarter` (the box's) and the TOUCH flags (crop or word).  ValueError without a quarter."""
     quarter = _need_quarter(quarter, "own_box_crops")
     touch = HeldAreas() if touch is None else touch
     page_of = _pages(pages)
@@ -328,13 +409,13 @@ def own_box_crops(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: int, iou
     for sheet in sorted(set(sheet_of[m["box"]])):
         mine = m[sheet_of[m["box"]] == sheet].sort_values("box")
         page = page_of(sheet)
-        rows = [{**boxes.iloc[p].to_dict(), "row": boxes.index[p]} for p in mine["box"]]
-        masks = word_masks(sheet, rows) if word_masks is not None else None
-        for (_, w, v), r in zip(mine.itertuples(index=False), rows, strict=True):
+        for p, w, v in mine.itertuples(index=False):
+            r = {**boxes.iloc[int(p)].to_dict(), "row": boxes.index[int(p)]}
             t = terra.iloc[w]
             corners = _corners(r)
             crop, a, shape = K.box_cut(page, corners, r["t_length"], r["t_height"], r["axis"])
-            flags = touch(sheet, K._footprint(a, shape, page.shape), page.shape)
+            window = K._footprint(a, shape, page.shape)
+            flags = touch(sheet, window, page.shape)
             flags = {k: bool(flags[k]) or bool(t[k]) for k in TOUCH}
             if _held(flags, quarter):
                 continue
@@ -343,9 +424,10 @@ def own_box_crops(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: int, iou
                 crop = np.ascontiguousarray(np.rot90(crop, 2))
             meta = {"sheet": sheet, "row": r["row"], "word": int(t["word"]), "iou": float(v), "turned": turned,
                     "kind": t["kind"], "quarter": int(r["quarter"]), **flags}
-            if masks is not None:
-                win, origin = masks[r["row"]]
-                mk = K.box_mask(win, corners, r["t_length"], r["t_height"], r["axis"], origin)
+            if mask:
+                x0, y0, x1, y1 = window
+                keep = read.kept_ink(page[y0:y1, x0:x1], (x0, y0), corners - 0.5)
+                mk = K.box_mask(keep, corners, r["t_length"], r["t_height"], r["axis"], (x0, y0))
                 meta["mask"] = np.ascontiguousarray(np.rot90(mk, 2)) if turned else mk
             out.append((crop, str(t["text"]), meta))
     return out
@@ -381,77 +463,40 @@ def extra_pool(own: list, sloppy: list = (), kind_weights: str | None = None, ki
     return out
 
 
-# --- masks of Terra's words -------------------------------------------------------------------------------------------
+def real_masks(rows: pd.DataFrame, pages=None) -> dict:
+    """The masks of `solver-text-crops`' crops (rows of crops.parquet, every map; words and non-text windows): the ink
+    touching each crop's rectangle (`read.kept_ink`, within the px the crop reads), cut as the crop was
+    (`crops.rectify`), keyed by the row's position; a crop with no ink in its rectangle has none.  `pages`: sheet ->
+    page (each read from disk, by its series, when None)."""
+    last: dict = {}
 
-def _levels() -> dict:
-    """The boxes' level per quarter name (`solver-boxes`' levels.json)."""
-    return json.loads((wordboxes.BOXES_DIR / "levels.json").read_text())["level"]
+    def page_of(series, sheet):
+        if pages is not None:
+            return pages[sheet]
+        if sheet not in last:
+            last.clear()
+            last[sheet] = data.load_page(sheet, series)
+        return last[sheet]
 
-
-def rect_masks(sheet: str, rects: list[tuple], page: np.ndarray | None = None, chance: np.ndarray | None = None,
-               levels: dict | None = None) -> dict:
-    """For word rectangles (key, cx, cy, length, height, angle, quarter) of a 2000 sheet: the components our boxes
-    are made of (`read.components`, at the level of the rectangle's quarter) that hold a px of the rectangle, grown by
-    wordboxes.INK_R (`read.grown`): {key: (bool window, (x0, y0))}; a rectangle no component meets has none.  `page`,
-    `chance` and `levels` read from disk when None."""
-    page = data.load_page(sheet) if page is None else page
-    ink = page < grid.INK_BELOW
-    chance = wordboxes._read_chance(sheet, ink.shape) if chance is None else chance
-    levels = _levels() if levels is None else levels
-    gate = wordboxes.ink_gate(ink)
-    by_level: dict = {}
-    for r in rects:
-        by_level.setdefault(float(levels[paths.QUARTERS[int(r[6])]]), []).append(r)
+    box = rows[["box_x0", "box_y0", "box_x1", "box_y1"]].to_numpy(float)
+    length, height = rows["length"].to_numpy(float), rows["height"].to_numpy(float)
+    angle = rows["angle"].to_numpy(float)
     out = {}
-    h, w = ink.shape
-    for level in sorted(by_level):
-        c = read.components(ink, chance, level, gate)
-        index = {int(label): i for i, label in enumerate(c["label"])}
-        for key, cx, cy, length, height, angle, _ in by_level[level]:
-            corners = _rect(cx, cy, length, height, angle)
-            x0, y0 = max(int(np.floor(corners[:, 0].min())), 0), max(int(np.floor(corners[:, 1].min())), 0)
-            x1 = min(int(np.ceil(corners[:, 0].max())) + 1, w)
-            y1 = min(int(np.ceil(corners[:, 1].max())) + 1, h)
+    for (series, sheet), idx in sorted(rows.groupby(["series", "sheet"], sort=True).indices.items()):
+        page = page_of(series, sheet)
+        for p in idx:
+            centre = ((box[p, 0] + box[p, 2] - 1) / 2, (box[p, 1] + box[p, 3] - 1) / 2)
+            a, shape = K.frame_of(centre, length[p], height[p], angle[p])
+            x0, y0, x1, y1 = K._footprint(a, shape, page.shape)
             if x1 <= x0 or y1 <= y0:
                 continue
-            inside = _inside((y1 - y0, x1 - x0), (x0, y0), cx, cy, length, height, angle)
-            found = [index[int(v)] for v in np.unique(c["lab"][y0:y1, x0:x1][inside]) if int(v) in index]
-            if found:
-                out[key] = read.grown(c["lab"], c["label"][found], c["box"][found])
+            keep = read.kept_ink(page[y0:y1, x0:x1], (x0, y0), _rect(*centre, length[p], height[p], angle[p]))
+            if keep.any():
+                out[int(p)] = K.cut(keep, centre, length[p], height[p], angle[p], fill=False, origin=(x0, y0))[0]
     return out
 
 
-def terra_masks(sheet: str, words: pd.DataFrame, **kw) -> dict:
-    """`rect_masks` of Terra's words (rows of `terra_frame`), keyed by their `word`: `sloppy_crops`' `masks`."""
-    rects = [(int(t["word"]), t["cx"], t["cy"], t["length"], t["height"], t["angle"], int(t["quarter"]))
-             for _, t in words.iterrows()]
-    return rect_masks(sheet, rects, **kw)
-
-
-def real_masks(rows: pd.DataFrame, pages=None, chances=None, levels=None) -> dict:
-    """The masks of the 2000 sheets' crops of `solver-text-crops` (words and non-text windows; rows of crops.parquet):
-    the components meeting each crop's rectangle (`rect_masks`), cut as the crop was (`crops.rectify`), keyed by the
-    row's position; a crop no component meets has none, nor has another map's.  `pages`, `chances`: sheet -> array
-    (read from disk when None); `levels`: quarter name -> level."""
-    page_of = _pages(pages)
-    pos = np.flatnonzero((rows["series"] == paths.SERIES).to_numpy())
-    sheet_of = rows["sheet"].astype(str).to_numpy()
-    box = rows[["box_x0", "box_y0", "box_x1", "box_y1"]].to_numpy(float)
-    geo = {int(p): ((box[p, 0] + box[p, 2] - 1) / 2, (box[p, 1] + box[p, 3] - 1) / 2,
-                    float(rows["length"].iat[p]), float(rows["height"].iat[p]), float(rows["angle"].iat[p]))
-           for p in pos}
-    out = {}
-    for sheet in sorted(set(sheet_of[pos])):
-        mine = pos[sheet_of[pos] == sheet]
-        rects = [(int(p), *geo[int(p)], int(rows["quarter"].iat[p])) for p in mine]
-        got = rect_masks(sheet, rects, page_of(sheet), None if chances is None else chances[sheet], levels)
-        for p, (win, origin) in got.items():
-            cx, cy, length, height, angle = geo[p]
-            out[p] = K.cut(win, (cx, cy), length, height, angle, fill=False, origin=origin)[0]
-    return out
-
-
-# --- sloppy crops of Terra's words ------------------------------------------------------------------------------------
+# --- line pieces ------------------------------------------------------------------------------------------------------
 
 def _place(dst: np.ndarray, src: np.ndarray, top: int, left: int, op) -> None:
     """dst = op(dst, src) where `src` lies on `dst` at (top, left), cut to `dst`."""
@@ -477,53 +522,196 @@ def thickness(mask: np.ndarray) -> float:
     return 2.0 * float(cv2.distanceTransform(m, cv2.DIST_L2, 5).max()) if m.any() else 0.0
 
 
-def _line_through(win, origin, t, pieces, rng, cover_cap) -> dict:
-    """OR a line piece (drawn, turned a random number of quarter turns) through a letter px of Terra's word `t`: a
-    px of the piece's ink on an ink px of the word inside the window (any px of its rectangle when it has none).  A
-    draw whose piece px are more than `cover_cap` of the ink inside the word's rectangle is drawn again (up to
-    LINE_TRIES draws)."""
+@dataclasses.dataclass
+class Lines:
+    """Line pieces ready for `sloppy_crop`: the patches (`piece_patches`), each one's thickness (`thickness`), the
+    chance each is drawn by (`p`), and per bin of cover (`cover_edges`) the chance a draw of that cover is kept
+    (`accept`; None: every draw).  `calibrate_lines` sets them; `uniform` draws every piece alike and keeps all."""
+    patches: list
+    thick: np.ndarray
+    p: np.ndarray
+    cover_edges: np.ndarray | None = None
+    accept: np.ndarray | None = None
+    report: dict = dataclasses.field(default_factory=dict)
+
+    @classmethod
+    def uniform(cls, patches) -> "Lines":
+        patches = list(patches)
+        n = len(patches)
+        return cls(patches, np.array([thickness(p < 255) for p in patches], float),
+                   np.full(n, 1.0 / n) if n else np.zeros(0))
+
+    def __len__(self) -> int:
+        return len(self.patches)
+
+    def draw(self, rng) -> int:
+        return int(rng.choice(len(self.p), p=self.p))
+
+    def keep(self, cover: float) -> float:
+        if self.accept is None:
+            return 1.0
+        k = int(np.clip(np.searchsorted(self.cover_edges, cover, side="right") - 1, 0, len(self.accept) - 1))
+        return float(self.accept[k])
+
+
+def _letters(win, origin, t):
+    """Terra's word's rectangle in the window, and the px a line piece may be anchored on: its ink px (any px of its
+    rectangle when it has none)."""
     inside = _inside(win.shape, origin, t["cx"], t["cy"], t["length"], t["height"], t["angle"])
     ys, xs = np.nonzero(inside & (win < grid.INK_BELOW))
     if not len(ys):
         ys, xs = np.nonzero(inside)
+    return inside, ys, xs
+
+
+def _propose(win, inside, ys, xs, lines: Lines, rng):
+    """One line draw: a letter px, a piece (by `lines.p`), its quarter turns and a px of its ink on the letter px;
+    the window with it ORed in, and its cover: the piece's px inside the word's rectangle over the ink there."""
+    k = int(rng.integers(len(ys)))
+    j, turns = lines.draw(rng), int(rng.integers(4))
+    patch = np.rot90(lines.patches[j], turns)
+    py, px = np.nonzero(patch < 255)
+    m = int(rng.integers(len(py)))
+    top, left = int(ys[k] - py[m]), int(xs[k] - px[m])
+    trial = win.copy()
+    _place(trial, patch, top, left, np.minimum)
+    on = np.zeros(win.shape, bool)
+    _place(on, patch < 255, top, left, np.logical_or)
+    cover = float((on & inside).sum() / max(((trial < grid.INK_BELOW) & inside).sum(), 1))
+    return trial, cover, j, turns, k
+
+
+def _wquantiles(x, w, qs) -> list[float]:
+    x, w = np.asarray(x, float), np.asarray(w, float)
+    order = np.argsort(x, kind="stable")
+    cw = np.cumsum(w[order])
+    if not len(x) or cw[-1] <= 0:
+        return [None] * len(qs)
+    return [float(x[order][min(np.searchsorted(cw, q * cw[-1]), len(x) - 1)]) for q in qs]
+
+
+def calibrate_lines(pieces, dist: dict, words: pd.DataFrame, pages=None, seed: int = 0,
+                    proposals: int = PROPOSALS, rounds: int = ROUNDS) -> Lines:
+    """`Lines` whose pasted pieces follow the measured crossings (`dist`'s `line_thickness` and `line_cover` values,
+    `offset_distribution`): each piece weighted by the measured share of its thickness over the bank's (the
+    thicknesses take the distance transform's own values: matched value for value; a piece of a thickness no
+    crossing has is never drawn), and each draw kept with the chance that makes the kept covers follow the measured
+    histogram (Freedman-Diaconis bins on [0, 1]): the measured share of its bin over the drawn share, the largest
+    such ratio kept always.  Keeping draws by cover moves the thicknesses kept, so the piece weights are raked by the
+    kept thicknesses' shares, `rounds` times, each round simulating `proposals` draws on `words` (Terra's words the
+    crops are made of, on `pages`).  `report`: the measured and the realised (kept) quantiles of both, the mean chance
+    a draw is kept, and the measured mass the bank or the draws cannot reach."""
+    lines = pieces if isinstance(pieces, Lines) else Lines.uniform(pieces)
+    real_t = np.round(np.asarray(dist["line_thickness"]["values"], float), 6)
+    real_c = np.asarray(dist["line_cover"]["values"], float)
+    values, counts = np.unique(real_t, return_counts=True)
+    real_tp = counts / counts.sum()
+    piece_v = np.round(lines.thick, 6)
+    slot = np.array([int(np.searchsorted(values, v)) if v in set(values) else -1 for v in piece_v])
+    bank_tp = np.bincount(slot[slot >= 0], minlength=len(values)) / max(len(slot), 1)
+    w = np.where(slot >= 0, real_tp[np.maximum(slot, 0)] / np.maximum(bank_tp[np.maximum(slot, 0)], 1e-12), 0.0)
+    if w.sum() <= 0:
+        raise ValueError("no line piece has a thickness a measured crossing has")
+    edges = np.histogram_bin_edges(real_c, bins="fd", range=(0.0, 1.0))
+    real_cp = np.histogram(real_c, edges)[0] / len(real_c)
+    page_of = _pages(pages)
+    prep = []
+    for _, t in words.iterrows():
+        win, origin = _window(page_of(t["sheet"]), [_word_rect(t)], 0)
+        if win.size:
+            inside, ys, xs = _letters(win, origin, t)
+            if len(ys):
+                prep.append((win, inside, ys, xs))
+    if not prep:
+        raise ValueError("no word to simulate line draws on")
+    rng = np.random.default_rng([seed, 3])
+    for r in range(rounds + 1):
+        lines.p = w / w.sum()
+        drawn_t, drawn_c = np.zeros(proposals, int), np.zeros(proposals)
+        for n in range(proposals):
+            win, inside, ys, xs = prep[int(rng.integers(len(prep)))]
+            _, drawn_c[n], j, _, _ = _propose(win, inside, ys, xs, lines, rng)
+            drawn_t[n] = slot[j]
+        cb = np.clip(np.searchsorted(edges, drawn_c, side="right") - 1, 0, len(real_cp) - 1)
+        prop_cp = np.bincount(cb, minlength=len(real_cp)) / proposals
+        a = np.where(prop_cp > 0, real_cp / np.maximum(prop_cp, 1e-12), 0.0)
+        a = a / a.max()
+        kept = a[cb]
+        if r == rounds:
+            break
+        kept_tp = np.bincount(drawn_t, weights=kept, minlength=len(values))
+        kept_tp = kept_tp / kept_tp.sum()
+        ratio = np.where(kept_tp > 0, real_tp / np.maximum(kept_tp, 1e-12), 1.0)
+        w = np.where(slot >= 0, w * ratio[np.maximum(slot, 0)], 0.0)
+    lines.cover_edges, lines.accept = edges, a
+    qs = (0.1, 0.5, 0.9, 0.99)
+    kept_tp = np.bincount(drawn_t, weights=kept, minlength=len(values)) / kept.sum()
+    kept_cp = np.bincount(cb, weights=kept, minlength=len(real_cp)) / kept.sum()
+    lines.report = {
+        "thickness_tv": float(np.abs(kept_tp - real_tp).sum() / 2),
+        "cover_tv": float(np.abs(kept_cp - real_cp).sum() / 2),
+        "thickness_shares": {str(v): [float(m), float(k)] for v, m, k in zip(values, real_tp, kept_tp)},
+        "thickness": {"measured": np.quantile(real_t, qs).tolist(), "realised": _wquantiles(values[drawn_t], kept, qs)},
+        "cover": {"measured": np.quantile(real_c, qs).tolist(), "realised": _wquantiles(drawn_c, kept, qs)},
+        "quantiles": list(qs), "mean_keep": float(kept.mean()), "cover_bins": int(len(real_cp)),
+        "measured_cover_unreached": float(real_cp[prop_cp == 0].sum()),
+        "measured_thickness_unreached": float(real_tp[np.bincount(slot[slot >= 0], minlength=len(values)) == 0].sum()),
+        "pieces_drawable": int((lines.p > 0).sum()), "pieces": len(lines), "words": len(prep),
+        "proposals": proposals, "rounds": rounds}
+    return lines
+
+
+def _line_through(win, origin, t, lines: Lines, rng) -> dict:
+    """OR a line piece through a letter px of Terra's word `t` (`_propose`), each draw kept with its cover's chance
+    (`Lines.keep`) and drawn again otherwise, up to LINE_TRIES draws."""
+    inside, ys, xs = _letters(win, origin, t)
     if not len(ys):
         return {}
     rejected = 0
     for _ in range(LINE_TRIES):
-        k = int(rng.integers(len(ys)))
-        j, turns = int(rng.integers(len(pieces))), int(rng.integers(4))
-        patch = np.rot90(pieces[j], turns)
-        py, px = np.nonzero(patch < 255)
-        m = int(rng.integers(len(py)))
-        top, left = int(ys[k] - py[m]), int(xs[k] - px[m])
-        trial = win.copy()
-        _place(trial, patch, top, left, np.minimum)
-        on = np.zeros(win.shape, bool)
-        _place(on, patch < 255, top, left, np.logical_or)
-        cover = float((on & inside).sum() / max(((trial < grid.INK_BELOW) & inside).sum(), 1))
-        if cover_cap is not None and cover > cover_cap:
+        trial, cover, j, turns, k = _propose(win, inside, ys, xs, lines, rng)
+        if lines.accept is not None and rng.random() >= lines.keep(cover):
             rejected += 1
             continue
         win[:] = trial
         return {"line": True, "piece": j, "turns": turns, "line_at": (int(xs[k] + origin[0]), int(ys[k] + origin[1])),
-                "line_cover": cover, "line_rejected": rejected}
+                "line_cover": cover, "line_thick": float(lines.thick[j]), "line_rejected": rejected}
     return {"line": False, "line_gave_up": True, "line_rejected": rejected}
 
 
-def _neighbour_into(win, origin, page, t, rect, f, cap) -> dict:
-    """Move the nearest other word (its rectangle's px, as printed; its old place in the window made paper, off the
-    word's own rectangle) along the word's reading axis or across it, on the neighbour's own side first, to the
-    farthest place where a share `f` of its rectangle lies inside the crop's rectangle `rect` (centre, length, height,
-    angle) and at most `cap` of it on the word's rectangle; when no direction reaches `f`, to the place of the most
-    share within the cap.  To the nearest px, never past the cap."""
+# --- the neighbour ----------------------------------------------------------------------------------------------------
+
+def _neighbour_into(win, origin, page, t, rect, part: float, touch: float | None, on: float | None) -> dict:
+    """Move the nearest other word into the window (see the module): its rectangle's px off the word's own ink
+    components, its old place made paper, to the whole-px place along the word's reading axis or across it (its own
+    side, then the other axis, then their opposites, farthest first: the order ties go by) whose share of its
+    rectangle inside the crop's rectangle `rect` (centre, length, height, angle) and ink against the word's
+    (`ink_overlaps`: touching it, on its letters; each not asked when None) are nearest the pair's `part`, `touch` and
+    `on`: the ink first (the sum of its two differences; print does not lay one label on another, and the measured
+    `on` is all but 0, always reached by moving out), then, of those as near, the share."""
     n = np.array([t["n_cx"], t["n_cy"]], float)
     nl, nh, na = float(t["n_length"]), float(t["n_height"]), float(t["n_angle"])
     n0 = _rect(n[0], n[1], nl, nh, na)
     area = max(nl * nh, 1e-9)
     wc = np.array([t["cx"], t["cy"]], float)
-    word = _rect(wc[0], wc[1], t["length"], t["height"], t["angle"])
+    word = _word_rect(t)
     centre, length, height, angle = rect
     crop = _rect(centre[0], centre[1], length, height, angle)
+    # the neighbour as printed: its rectangle's px off the word's (as `ink_overlaps` takes its ink); when its rectangle
+    # lies in the word's, its px less the ink components holding the word's own ink
+    src, so = _window(page, [n0, word], REACH)
+    ink_s, lab_s = read.ink_components(src)
+    w_in, n_in = read.in_rect(src.shape, so, word), read.in_rect(src.shape, so, n0)
+    moving = n_in & ~w_in
+    if not (moving & ink_s).any():
+        own = np.unique(lab_s[w_in & ~n_in & ink_s])
+        moving = n_in & ~np.isin(lab_s, own[own > 0])
+    patch = np.where(moving, src, 255).astype(np.uint8)
+    base = win.copy()
+    erase = np.zeros(win.shape, bool)
+    _place(erase, moving, so[1] - origin[1], so[0] - origin[0], np.logical_or)
+    base[erase] = 255
+    word_ink = (base < grid.INK_BELOW) & read.in_rect(win.shape, origin, word)     # the word's ink, before the paste
     (ux, uy), (vx, vy) = L._axes(float(t["angle"]))
     real = n - wc
     pu, pv = real @ [ux, uy], real @ [vx, vy]
@@ -531,77 +719,61 @@ def _neighbour_into(win, origin, page, t, rect, f, cap) -> dict:
     across = (np.array([vx, vy]) * (1 if pv >= 0 else -1), "across")
     order = [along, across] if abs(pu) >= abs(pv) else [across, along]
     order += [(-d, side) for d, side in order]
-    far = (float(np.hypot(*(np.asarray(centre) - wc))) + (length + height + nl + nh + t["length"] + t["height"]) / 2
-           + 2.0)
-
-    def shares(shift) -> tuple[float, float]:
-        moved = n0 + shift
-        return _meet(crop, moved) / area, _meet(word, moved) / area
-
-    best = None
+    far = int(np.ceil(np.hypot(*(np.asarray(centre) - wc)) + (np.hypot(length, height) + np.hypot(nl, nh)) / 2)) + 1
+    cands, seen = [], set()
     for d, side in order:
-        at = lambda s, d=d: wc + d * s - n                          # noqa: E731
-        lo, hi = 0.0, far                                            # the nearest place within the cap
-        if shares(at(0.0))[1] > cap:
-            for _ in range(BISECT):
-                mid = (lo + hi) / 2
-                lo, hi = (mid, hi) if shares(at(mid))[1] > cap else (lo, mid)
-            lo = hi
-        s_cap = lo
-        grid_s = np.arange(far, s_cap - STEP, -STEP)
-        grid_s = np.append(grid_s[grid_s > s_cap], s_cap)
-        inside = np.array([shares(at(s))[0] for s in grid_s])
-        reach = np.flatnonzero(inside >= f)
-        if len(reach):                                               # the farthest place holding f inside
-            k = int(reach[0])
-            a, b = grid_s[k], (grid_s[k - 1] if k else grid_s[k])
-            for _ in range(BISECT):
-                mid = (a + b) / 2
-                a, b = (mid, b) if shares(at(mid))[0] >= f else (a, mid)
-            best = (d, side, a)
-            break
-        k = int(np.argmax(inside))
-        if best is None or inside[k] > best[3]:
-            best = (d, side, float(grid_s[k]), float(inside[k]))
-    d, side, s = best[:3]
-    shift = np.rint(wc + d * s - n)
-    for _ in range(int(far / STEP) + 1):                           # to the nearest px, then out past the cap if need be
-        if shares(shift)[1] <= cap + 1e-9:
-            break
-        s += STEP
-        shift = np.rint(wc + d * s - n)
-    dx, dy = int(shift[0]), int(shift[1])
-    bx0, by0 = max(int(np.floor(n0[:, 0].min())), 0), max(int(np.floor(n0[:, 1].min())), 0)
-    bx1 = min(int(np.ceil(n0[:, 0].max())) + 1, page.shape[1])
-    by1 = min(int(np.ceil(n0[:, 1].max())) + 1, page.shape[0])
-    if bx1 > bx0 and by1 > by0:
-        sub = page[by0:by1, bx0:bx1]
-        own = _inside(sub.shape, (bx0, by0), n[0], n[1], nl, nh, na)
-        off_word = ~_inside(sub.shape, (bx0, by0), wc[0], wc[1], t["length"], t["height"], t["angle"])
-        _place(win, np.where(own & off_word, 0, 255).astype(np.uint8), by0 - origin[1], bx0 - origin[0],
-               lambda a, b: np.where(b == 0, np.uint8(255), a))           # its old place: paper
-        _place(win, np.where(own, sub, 255).astype(np.uint8), by0 + dy - origin[1], bx0 + dx - origin[0], np.minimum)
-    inside_got, on_word = shares(shift)
-    return {"neighbour": True, "part": float(f), "part_got": inside_got, "on_word": on_word, "side": side,
-            "shift": (dx, dy), "n_word": int(t["n_word"])}
+        for s in range(far, -1, -1):
+            shift = tuple(int(v) for v in np.rint(wc + d * s - n))
+            if shift not in seen:
+                seen.add(shift)
+                cands.append((shift, side))
+    moved = np.array([n0 + np.array(sh, float) for sh, _ in cands])
+    near = shapely.distance(shapely.polygons(moved), shapely.polygons(word)) <= REACH
+    best = None
+    asked = touch is not None or on is not None
+    for (shift, side), mr, close in zip(cands, moved, near):
+        got_part = _meet(crop, mr) / area
+        got_touch, got_on = 0.0, 0.0                 # farther from the word than ink can reach: neither
+        if asked and close:
+            trial = base.copy()
+            _place(trial, patch, so[1] + shift[1] - origin[1], so[0] + shift[0] - origin[0], np.minimum)
+            got_touch, got_on = (v or 0.0 for v in ink_overlaps(trial, origin, word, mr, t["angle"], word_ink))
+        cost = (round((abs(got_touch - touch) if touch is not None else 0.0)
+                      + (abs(got_on - on) if on is not None else 0.0), 9), round(abs(got_part - part), 9))
+        if best is None or cost < best[0]:
+            best = (cost, shift, side, got_part, got_touch, got_on)
+    _, shift, side, got_part, got_touch, got_on = best
+    win[:] = base
+    _place(win, patch, so[1] + shift[1] - origin[1], so[0] + shift[0] - origin[0], np.minimum)
+    return {"neighbour": True, "part": float(part), "part_got": got_part, "ink": touch, "ink_got": got_touch,
+            "on": on, "on_got": got_on, "side": side, "shift": shift, "n_word": int(t["n_word"])}
 
 
-def sloppy_crop(page: np.ndarray, terra_word, dist: dict, pieces: list[np.ndarray], rng,
-                info: dict | None = None) -> np.ndarray:
+# --- sloppy crops of Terra's words ------------------------------------------------------------------------------------
+
+def sloppy_crop(page: np.ndarray, terra_word, dist: dict, pieces, rng, info: dict | None = None,
+                with_mask: bool = False) -> np.ndarray:
     """A sloppy crop of Terra's word `terra_word` (a row of `terra_frame`, with `with_neighbours`' columns for a
     neighbour) on `page` (see the module): one pair of `dist` (`offset_distribution`): its offsets, and its neighbour
-    share when the word has a neighbour; a line piece of `pieces` (uint8 patches, paper 255 off the piece,
-    `piece_patches`) with probability `dist["line_share"]`, its cover capped at `dist["line_cover"]["q99"]`; the
-    neighbour never on the word (ON_WORD); each from `rng` alone.
-    `info` (a dict) gets what was drawn: the offsets, `draw`, `frame` (centre, length, height, angle: `crops.cut`'s),
-    `window` (the page px the crop reads), `line` (and `piece`, `turns`, `line_at`, `line_cover`, `line_rejected`,
-    `line_gave_up`), `neighbour` (and `part`, `part_got`, `on_word`, `side`, `shift`, `n_word`)."""
+    share and ink overlap when the word has a neighbour; a line piece of `pieces` (`Lines`, or patches drawn alike and
+    all kept) with probability `dist["line_share"]`; each from `rng` alone.  With `with_mask`, `info["mask"]` is the
+    ink touching the drawn rectangle (`read.kept_ink`, the pasted ink too) cut as the crop.  `info` (a dict) gets what
+    was drawn: the offsets, `draw`, `frame` (centre, length, height, angle: `crops.cut`'s), `window` (the page px the
+    crop reads), `line` (and `piece`, `turns`, `line_at`, `line_cover`, `line_thick`, `line_rejected`,
+    `line_gave_up`), `neighbour` (and `part`, `part_got`, `ink`, `ink_got` (touching), `on`, `on_got`, `side`,
+    `shift`, `n_word`)."""
     t = terra_word
+    lines = pieces if isinstance(pieces, Lines) else Lines.uniform(pieces)
     cx, cy, length0, height0, angle0 = (float(t[k]) for k in ("cx", "cy", "length", "height", "angle"))
     off = dist["offsets"]
     k = int(rng.integers(len(off["start"])))
     s, e, x, da, r = (float(off[n][k]) for n in OFFSETS)
     part = float(off["neighbour"][k]) if "neighbour" in off else 0.0
+    def drawn(key):
+        v = off[key][k] if key in off else None
+        return None if v is None or not np.isfinite(v) else float(v)
+
+    touch, on = drawn("neighbour_ink"), drawn("neighbour_on")
     angle = angle0 + da
     (ux, uy), (vx, vy) = L._axes(angle)
     length, height = max(length0 + (e - s) * height0, 1.0), max(r * height0, 1.0)
@@ -616,47 +788,45 @@ def sloppy_crop(page: np.ndarray, terra_word, dist: dict, pieces: list[np.ndarra
         crop = K.cut(page, centre, length, height, angle)[0]
     else:
         win = page[y0:y1, x0:x1].copy()
-        if u_line < float(dist.get("line_share") or 0.0) and len(pieces):
-            got.update(_line_through(win, (x0, y0), t, pieces, rng, (dist.get("line_cover") or {}).get("q99")))
+        if u_line < float(dist.get("line_share") or 0.0) and len(lines):
+            got.update(_line_through(win, (x0, y0), t, lines, rng))
         if part > 0 and int(t.get("n_word", -1)) >= 0:
-            got.update(_neighbour_into(win, (x0, y0), page, t, (centre, length, height, angle), part, ON_WORD))
+            got.update(_neighbour_into(win, (x0, y0), page, t, (centre, length, height, angle), part, touch, on))
         crop = K.cut(win, centre, length, height, angle, origin=(x0, y0))[0]
+        if with_mask:
+            keep = read.kept_ink(win, (x0, y0), _rect(centre[0], centre[1], length, height, angle))
+            got["mask"] = K.cut(keep, centre, length, height, angle, fill=False, origin=(x0, y0))[0]
     if info is not None:
         info.update(got)
     return crop
 
 
-def sloppy_crops(terra: pd.DataFrame, dist: dict, pieces: list[np.ndarray], seed: int, *, quarter: int,
-                 copies: int = 1, pages=None, touch=None, masks=None) -> list[tuple[np.ndarray, str, dict]]:
+def sloppy_crops(terra: pd.DataFrame, dist: dict, pieces, seed: int, *, quarter: int, copies: int = 1, pages=None,
+                 touch=None, mask: bool = False) -> list[tuple[np.ndarray, str, dict]]:
     """`copies` sloppy crops of every word of `terra` touching neither the answered blocks nor `quarter`, its
     neighbour the nearest such word, each from its own generator (`default_rng([seed, sheet, word, copy])`); a crop
-    whose footprint touches either is left out.  (crop, string, meta: `sheet`, `word`, `copy`, `n_word`, what was
-    drawn, the TOUCH flags, and with `masks` ((sheet, words) -> {word: (bool window, origin)}, `terra_masks`) the
-    `mask` of its word's components cut as the crop), by sheet and word.  `pieces` must hold no held-out ink
-    (`piece_patches` checks its bank).  ValueError without a quarter."""
+    whose footprint touches either is left out.  (crop, string, meta: `sheet`, `word`, `copy`, `n_word`, `kind`, what
+    was drawn, the TOUCH flags, and with `mask` its `mask`, `sloppy_crop`'s), by sheet and word.  `pieces` (`Lines`
+    or patches) must hold no held-out ink (`piece_patches` checks its bank).  ValueError without a quarter."""
     quarter = _need_quarter(quarter, "sloppy_crops")
     touch = HeldAreas() if touch is None else touch
     page_of = _pages(pages)
+    lines = pieces if isinstance(pieces, Lines) else Lines.uniform(pieces)
     t = with_neighbours(terra[_training_words(terra, quarter)])
     out = []
     for sheet in sorted(set(t["sheet"])):
         page = page_of(sheet)
-        mine = t[t["sheet"] == sheet]
-        found = masks(sheet, mine) if masks is not None else {}
-        for _, row in mine.iterrows():
+        for _, row in t[t["sheet"] == sheet].iterrows():
             for c in range(copies):
                 rng = np.random.default_rng([seed, K.hash_name(sheet), int(row["word"]), c])
                 info: dict = {}
-                crop = sloppy_crop(page, row, dist, pieces, rng, info)
+                crop = sloppy_crop(page, row, dist, lines, rng, info, with_mask=mask)
                 flags = touch(sheet, info["window"], page.shape)
                 if _held(flags, quarter):
                     continue
-                meta = {"sheet": sheet, "word": int(row["word"]), "copy": c, "n_word": int(row["n_word"]),
-                        "kind": row["kind"], **info, **{k: bool(v) for k, v in flags.items()}}
-                if int(row["word"]) in found:
-                    win, origin = found[int(row["word"])]
-                    meta["mask"] = K.cut(win, *info["frame"], fill=False, origin=origin)[0]
-                out.append((crop, str(row["text"]), meta))
+                out.append((crop, str(row["text"]), {"sheet": sheet, "word": int(row["word"]), "copy": c,
+                                                     "n_word": int(row["n_word"]), "kind": row["kind"], **info,
+                                                     **{k: bool(v) for k, v in flags.items()}}))
     return out
 
 
@@ -665,13 +835,12 @@ def _same_area(a, b) -> bool:
             and np.shape(a.mask) == np.shape(b.mask) and np.array_equal(a.mask, b.mask))
 
 
-def piece_patches(bank, *, quarter: int, max_thickness: float, pages=None, piece_mask=None, block_area=None,
+def piece_patches(bank, *, quarter: int, pages=None, piece_mask=None, block_area=None,
                   info: dict | None = None) -> list[np.ndarray]:
-    """The 2000 sheets' line pieces of a `composite.Bank` as patches for `sloppy_crop`: each piece's box of its page,
-    the piece's px as printed, paper elsewhere; a piece thicker than `max_thickness` (`thickness`; the measured
-    crossings' `line_thickness` q99) is dropped.  ValueError unless every sheet of the bank holds out `quarter` and the
-    answered blocks (`block_area`, read when None).  `piece_mask`: `composite.piece_mask` (for tests); `info` gets
-    the counts."""
+    """The 2000 sheets' line pieces of a `composite.Bank` as patches: each piece's box of its page, the piece's px as
+    printed, paper elsewhere (`calibrate_lines` weights them).  ValueError unless every sheet of the bank holds out
+    `quarter` and the answered blocks (`block_area`, read when None).  `piece_mask`: `composite.piece_mask` (for
+    tests); `info` gets the count."""
     quarter = _need_quarter(quarter, "piece_patches")
     block_area = reader_stage.load_block_area(reader_stage.held_blocks()) if block_area is None else block_area
     for sd in bank.sheets:
@@ -682,56 +851,67 @@ def piece_patches(bank, *, quarter: int, max_thickness: float, pages=None, piece
     piece_mask = composite.piece_mask if piece_mask is None else piece_mask
     page_of = _pages(pages)
     p = bank.pieces[paths.SERIES]
-    out, thick = [], 0
+    out = []
     for j in range(len(p)):
         sd = bank.sheets[int(p.sheet[j])]
         x0, y0, x1, y1 = (int(v) for v in p.box[j])
         mask = piece_mask(sd, p.box[j], p.seed[j])
-        if thickness(mask) > max_thickness:
-            thick += 1
-            continue
         out.append(np.where(mask, page_of(sd.sheet)[y0:y1, x0:x1], 255).astype(np.uint8))
     if info is not None:
-        info.update(pieces=len(p), kept=len(out), too_thick=thick)
+        info.update(pieces=len(out))
     return out
 
 
 # --- the measured offsets ---------------------------------------------------------------------------------------------
 
 def line_measures(terra: pd.DataFrame) -> pd.DataFrame:
-    """Per word of `terra` (its rectangle as `data.SheetData.words`): `line_ink` the line px that are ink inside it
-    (`composite.crossings`' second count; the line px of `zones.sheet_lines`, kept in `zones.LINES_DIR`), `word_ink`
-    the ink px inside it, and `line_thick` the thickness of that line ink (twice the largest distance to paper of
-    one of its px, on the sheet's whole line ink; 0 without)."""
-    n_line, n_ink, thick = np.zeros(len(terra), np.int64), np.zeros(len(terra), np.int64), np.zeros(len(terra))
+    """Per word of `terra` (its rectangle as `data.SheetData.words`), on the sheet's line ink (the line px of
+    `zones.sheet_lines`, kept in `zones.LINES_DIR`, that are ink; 8-connected): `line_ink` the line ink inside the
+    rectangle (`composite.crossings`' second count), `cross_ink` that of it in line ink components running on outside
+    the rectangle grown by zones.GROW_PX (the line px's own growth), `word_ink` the ink inside the rectangle, and
+    `line_thick` the thickness of the crossing ink (twice the largest distance to paper of one of its px, on the
+    sheet's whole line ink; 0 without)."""
+    cols = {c: np.zeros(len(terra)) for c in LINE_COLUMNS}
     recs = textboxes.terra_records()
+    g = zones.GROW_PX
+    grow = np.ones((2 * g + 1, 2 * g + 1), np.uint8)
     for sheet in sorted(set(terra["sheet"])):
         sd = data.sheet_data(paths.SERIES, sheet, hold_out_validation=False, terra=recs, placement=True)
         sd = dataclasses.replace(sd, line_bits=zones.sheet_lines(sd, zones.LINES_DIR))
         line_ink = composite._line_page(sd) & np.unpackbits(sd.ink_bits, axis=1, count=sd.width).view(bool)
         dist = cv2.distanceTransform(np.pad(line_ink, 1).view(np.uint8), cv2.DIST_L2, 5)[1:-1, 1:-1]
-        mine = np.flatnonzero(terra["sheet"].to_numpy() == sheet)
-        for k in mine:
+        _, lab, stats, _ = cv2.connectedComponentsWithStats(line_ink.view(np.uint8), connectivity=8)
+        for k in np.flatnonzero(terra["sheet"].to_numpy() == sheet):
             j = int(terra["word"].iat[k])
             if j >= len(sd.words):
                 raise ValueError(f"{sheet}: Terra's words of crops.parquet are not the sheet's ({len(sd.words)})")
-            box = composite._clipped_box(sd, sd.words[j])
-            if box is None:
+            rect = sd.words[j]
+            x0, y0 = max(int(rect[:, 0].min()) - g - 1, 0), max(int(rect[:, 1].min()) - g - 1, 0)
+            x1, y1 = min(int(rect[:, 0].max()) + g + 2, sd.width), min(int(rect[:, 1].max()) + g + 2, sd.height)
+            if x1 <= x0 or y1 <= y0:
                 continue
-            y0, x0, h, w = box
-            inside = composite._rect_in(sd.words[j], *box)
-            ink = inside & data._ink_window(sd, *box)
-            li = ink & line_ink[y0:y0 + h, x0:x0 + w]
-            n_line[k], n_ink[k] = int(li.sum()), int(ink.sum())
-            thick[k] = 2.0 * float(dist[y0:y0 + h, x0:x0 + w][li].max()) if li.any() else 0.0
-    return pd.DataFrame({"line_ink": n_line, "word_ink": n_ink, "line_thick": thick}, index=terra.index)
+            inside = composite._rect_in(rect, y0, x0, y1 - y0, x1 - x0)
+            ink = inside & data._ink_window(sd, y0, x0, y1 - y0, x1 - x0)
+            lw = lab[y0:y1, x0:x1]
+            li = ink & (lw > 0)
+            grown = cv2.dilate(inside.view(np.uint8), grow) > 0
+            beyond = set(np.unique(lw[~grown & (lw > 0)]).tolist())
+            crossing = [int(v) for v in np.unique(lw[li])
+                        if v in beyond or stats[v, 0] < x0 or stats[v, 1] < y0
+                        or stats[v, 0] + stats[v, 2] > x1 or stats[v, 1] + stats[v, 3] > y1]
+            cross = li & np.isin(lw, crossing)
+            cols["line_ink"][k], cols["cross_ink"][k], cols["word_ink"][k] = li.sum(), cross.sum(), ink.sum()
+            cols["line_thick"][k] = 2.0 * float(dist[y0:y1, x0:x1][cross].max()) if cross.any() else 0.0
+    return pd.DataFrame(cols, index=terra.index)
 
 
-def _rounded(d: dict, places: int = 6) -> dict:
-    out = dict(d)
-    out["offsets"] = {k: [round(v, places) for v in vs] for k, vs in d["offsets"].items()}
-    out["neighbour_part"] = [round(v, places) for v in d["neighbour_part"]]
-    return out
+def _rounded(d, places: int = 6):
+    """Floats rounded to `places` throughout (lists and dicts walked; None and other values kept)."""
+    if isinstance(d, dict):
+        return {k: _rounded(v, places) for k, v in d.items()}
+    if isinstance(d, list):
+        return [_rounded(v, places) for v in d]
+    return round(d, places) if isinstance(d, float) and math.isfinite(d) else d
 
 
 def build_offsets(out: Path = OFFSETS_FILE) -> dict:
@@ -740,13 +920,14 @@ def build_offsets(out: Path = OFFSETS_FILE) -> dict:
     t0 = time.perf_counter()
     boxes = wordboxes.load_boxes().reset_index(drop=True)
     terra = terra_frame(pd.read_parquet(store.CROPS_DIR / "crops.parquet"))
-    terra[["line_ink", "word_ink", "line_thick"]] = line_measures(terra)
-    got = {name: _rounded(offset_distribution(boxes, terra, quarter=q)) for q, name in enumerate(paths.QUARTERS)}
+    terra[list(LINE_COLUMNS)] = line_measures(terra)
+    pages = DiskPages()
+    got = {name: _rounded(offset_distribution(boxes, terra, quarter=q, pages=pages))
+           for q, name in enumerate(paths.QUARTERS)}
     result = {"what": "our boxes (solver-boxes) matched to Terra's 2000 words at IoU >= 0.5, per held-out quarter "
                       "(pairs whose box is outside it and whose word touches neither it nor an answered block); "
                       "offsets in Terra's word heights (see wordread.readercrops)",
-              "iou": IOU, "boxes": int(len(boxes)), "terra_words": int(len(terra)),
-              "cross_px": composite.CROSS_PX, "cap_quantile": CAP, "quarters": got}
+              "iou": IOU, "boxes": int(len(boxes)), "terra_words": int(len(terra)), "quarters": got}
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=1) + "\n")
     log.info("offsets of %s pairs written to %s in %.0f s", {q: d["n"] for q, d in got.items()}, out,

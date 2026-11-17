@@ -117,7 +117,7 @@ class Pool:
         """A new pool: this one's crops, then `extra["own"]` (crops of our own boxes), then `extra["sloppy"]` (sloppy
         crops of Terra's words), each a list of (crop, target, meta: a dict or None), weight 1.  `extra["own_p"]`
         (optional): the chance each own-box crop is drawn by (uniform without).  With `mask`, every crop given a mask
-        (bool, the crop's shape: the px of its box, or of the components meeting Terra's word) is paper outside it:
+        (bool, the crop's shape: the ink touching its rectangle, `read.kept_ink`) is paper outside it:
         an own-box or sloppy crop by its meta's "mask", a real crop by `extra["real_masks"]` ({row of `rows`:
         mask})."""
         out = Pool.__new__(Pool)

@@ -2,7 +2,7 @@
 read by the reader of its quarter (the one that never saw that quarter), both ways along its axis, and the measures.
 
 A box's crop (`crops.box_crop`): its ink-trimmed rectangle along its axis, read at 0 degrees (the axis's own angle)
-and at 180 (the crop turned a half turn); for trials only, blanked outside the box's own px first (`mask`).  Each
+and at 180 (the crop turned a half turn); for trials only, blanked outside the ink touching it first (`mask`).  Each
 read gives log p(form | crop) for every printed form of the code list (`solver-text-crops`' prior.json `forms`: the
 template reader's code list), log p(none | crop) (no text: the empty string) and p(other | crop) (every other
 string), exactly (`ctc`).  The reading is their mixture, with q = p(180 degrees) the quarter's 0/180 classifier's
@@ -109,87 +109,61 @@ def _read_job(job) -> list[dict]:
     return [{"key": key, **read_one(_M["readers"][q], _M["directions"][q], crop, forms)} for key, q, crop in job]
 
 
-def components(ink: np.ndarray, chance: np.ndarray, level: float, gate: np.ndarray | None = None) -> dict:
-    """The components `wordboxes.group` makes boxes of at `level`: 8-connected px at or above it in the held-out
-    detectors' chance and within INK_R px of ink (`gate`, made when None), holding MIN_PX ink px or more, in label
-    order (a box's `i` counts them).  `lab` the label image; per kept component its `label`, `ink_px` and `box` (x0,
-    y0, x1, y1: page px, ends excluded)."""
-    gate = wordboxes.ink_gate(ink) if gate is None else gate
-    mask = (chance >= int(np.ceil(level * 255 - 1e-9))) & gate
-    _, lab = cv2.connectedComponents(mask.view(np.uint8), connectivity=8)
-    ys, xs = np.nonzero(mask)
-    lp = lab[ys, xs]
-    order = np.argsort(lp, kind="stable")
-    lp, ys, xs = lp[order], ys[order], xs[order]
-    if not len(lp):
-        return {"lab": lab, "label": np.zeros(0, lab.dtype), "ink_px": np.zeros(0, np.int64),
-                "box": np.zeros((0, 4), np.int64)}
-    start = np.flatnonzero(np.r_[True, lp[1:] != lp[:-1]])
-    n_ink = np.add.reduceat(ink[ys, xs].astype(np.int64), start)
-    kept = np.flatnonzero(n_ink >= wordboxes.MIN_PX)
-    box = np.stack([np.minimum.reduceat(xs, start), np.minimum.reduceat(ys, start),
-                    np.maximum.reduceat(xs, start) + 1, np.maximum.reduceat(ys, start) + 1], 1).astype(np.int64)
-    return {"lab": lab, "label": lp[start][kept], "ink_px": n_ink[kept], "box": box[kept]}
+def in_rect(shape, origin, corners: np.ndarray) -> np.ndarray:
+    """Which px of a window (h, w; its px (0, 0) the page's px `origin`) have their centre in a convex quadrilateral
+    `corners` (4 x 2, page px index coordinates; its edges included), bool."""
+    c = np.asarray(corners, float).reshape(4, 2) - np.asarray(origin, float)
+    yy, xx = np.mgrid[0:shape[0], 0:shape[1]]
+    side = []
+    for k in range(4):
+        (ax, ay), (bx, by) = c[k], c[(k + 1) % 4]
+        side.append((bx - ax) * (yy - ay) - (by - ay) * (xx - ax))
+    side = np.stack(side)
+    return (side >= -1e-9).all(0) | (side <= 1e-9).all(0)
 
 
-def grown(lab: np.ndarray, labels, boxes: np.ndarray) -> tuple[np.ndarray, tuple[int, int]]:
-    """The px of the components `labels` of `lab` (`boxes` their x0, y0, x1, y1), grown by wordboxes.INK_R px (a
-    disc): a bool window and its top-left page px (x0, y0)."""
-    r = wordboxes.INK_R
-    h, w = lab.shape
-    boxes = np.asarray(boxes).reshape(-1, 4)
-    x0, y0 = max(int(boxes[:, 0].min()) - r, 0), max(int(boxes[:, 1].min()) - r, 0)
-    x1, y1 = min(int(boxes[:, 2].max()) + r, w), min(int(boxes[:, 3].max()) + r, h)
-    own = np.isin(lab[y0:y1, x0:x1], np.asarray(labels)).view(np.uint8)
-    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
-    return cv2.dilate(own, disc) > 0, (x0, y0)
+def ink_components(win: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """A grey window's ink (px darker than grid.INK_BELOW) and its ink components, as `wordboxes` groups ink but with
+    no chance level: the px within wordboxes.INK_R px of ink (`wordboxes.ink_gate`), 8-connected (0 off them)."""
+    ink = win < grid.INK_BELOW
+    _, lab = cv2.connectedComponents(wordboxes.ink_gate(ink).view(np.uint8), connectivity=8)
+    return ink, lab
 
 
-def word_masks(sheet: str, rows: list[dict], page: np.ndarray | None = None,
-               chance: np.ndarray | None = None) -> dict:
-    """Each box's own px: the component `wordboxes.group` grouped it from (`components` at its `level`, the box's
-    `i`-th), grown by wordboxes.INK_R px (`grown`).  `rows`: boxes.parquet rows of `sheet` (with `row`, `i`, `level`,
-    `ink_px`); `page` and `chance` read from disk when None.  {row: (bool window, (x0, y0) its top-left page px)}.
-    ValueError when a box's component holds another number of ink px than the box (the boxes were grouped from other
-    chance)."""
-    page = data.load_page(sheet) if page is None else page
-    ink = page < grid.INK_BELOW
-    chance = wordboxes._read_chance(sheet, ink.shape) if chance is None else chance
-    gate = wordboxes.ink_gate(ink)
-    out = {}
-    for level in sorted({float(x["level"]) for x in rows}):
-        c = components(ink, chance, level, gate)
-        for x in (x for x in rows if float(x["level"]) == level):
-            i = int(x["i"])
-            if i >= len(c["label"]) or int(c["ink_px"][i]) != int(x["ink_px"]):
-                raise ValueError(f"{sheet}: box {x['row']} ({x['ink_px']} ink px) is not its component {i} at level "
-                                 f"{level} of this chance")
-            out[x["row"]] = grown(c["lab"], c["label"][i:i + 1], c["box"][i:i + 1])
-    return out
+def kept_ink(win: np.ndarray, origin, corners: np.ndarray) -> np.ndarray:
+    """The px of a grey window (its px (0, 0) the page's px `origin`) in the ink components (`ink_components`) that
+    hold an ink px whose centre is in the rectangle `corners` (page px index coordinates): every ink touching the word,
+    however far it runs, and none of the components wholly outside it (a neighbouring word, a stray mark), bool."""
+    ink, lab = ink_components(win)
+    keep = np.unique(lab[ink & in_rect(win.shape, origin, corners)])
+    return np.isin(lab, keep[keep > 0])
 
 
-def box_crops(page: np.ndarray, rows: list[dict], masks: dict | None = None) -> list[np.ndarray]:
-    """The crops of boxes (boxes.parquet rows with `row`) of one page (`crops.box_crop`); with `masks`
-    (`word_masks`), each paper outside its box's own px (`crops.mask_outside` of the mask cut as the box is)."""
+def box_crops(page: np.ndarray, rows: list[dict], mask: bool = False) -> list[np.ndarray]:
+    """The crops of boxes (boxes.parquet rows) of one page (`crops.box_crop`); with `mask`, each paper outside the ink
+    components holding ink in the box's own (trimmed) rectangle (`kept_ink`, within the px the crop reads; cut as
+    the box is, `crops.box_mask`)."""
     out = []
     for r in rows:
         corners = np.array([[r[f"t{i}x"], r[f"t{i}y"]] for i in range(4)], float)
-        crop = K.box_crop(page, corners, r["t_length"], r["t_height"], r["axis"])
-        if masks is not None:
-            win, origin = masks[r["row"]]
-            crop = K.mask_outside(crop, K.box_mask(win, corners, r["t_length"], r["t_height"], r["axis"], origin))
-        out.append(crop)
+        if not mask:
+            out.append(K.box_crop(page, corners, r["t_length"], r["t_height"], r["axis"]))
+            continue
+        crop, a, shape = K.box_cut(page, corners, r["t_length"], r["t_height"], r["axis"])
+        x0, y0, x1, y1 = K._footprint(a, shape, page.shape)
+        keep = kept_ink(page[y0:y1, x0:x1], (x0, y0), corners - 0.5)
+        out.append(K.mask_outside(crop, K.box_mask(keep, corners, r["t_length"], r["t_height"], r["axis"],
+                                                   (x0, y0))))
     return out
 
 
 def _box_job(args) -> list[dict]:
-    """Every box of one sheet (rows of boxes.parquet), cut from its page (with a third item True: blanked outside its
-    own px, `word_masks`) and read."""
+    """Every box of one sheet (rows of boxes.parquet), cut from its page (with a third item True: blanked outside the
+    ink touching the box, `box_crops`) and read."""
     sheet, rows, *mask = args
     page = data.load_page(sheet)
-    masks = word_masks(sheet, rows, page) if mask and mask[0] else None
     return _read_job([(r["row"], paths.QUARTERS[int(r["quarter"])], c)
-                      for r, c in zip(rows, box_crops(page, rows, masks), strict=True)])
+                      for r, c in zip(rows, box_crops(page, rows, bool(mask and mask[0])), strict=True)])
 
 
 def _run(pool, fn, jobs) -> dict:
@@ -366,8 +340,7 @@ def held_out_words(rows: pd.DataFrame, got: dict, codes: CodeList) -> dict:
 
 def build_read(workers: int = WORKERS, mask: bool = False) -> dict:
     """Read every box and the answered labels, measure, and write READ_DIR (see the module).  `mask` (for trials, off
-    in the stage): each box's crop blanked outside its own px (`word_masks`, which reads the held-out detectors'
-    chance) before it is read."""
+    in the stage): each box's crop blanked outside the ink touching its box (`box_crops`) before it is read."""
     t0 = time.perf_counter()
     codes = CodeList.load()
     boxes = wordboxes.load_boxes().reset_index(drop=True)
