@@ -109,3 +109,20 @@ Each decides part of the reader's rebuild:
   - `2026-11-16-code-reader-read-along-the-word.md` (R1–R4);
   - the spec `2026-11-16-text-pipeline-from-the-scan-design.md` stands for its goal and rules, but its method sections
     (EAST heads, the template reader on boxes) are replaced by the direction above.
+
+## Added 2026-11-16 evening (owner): toward publishing a better 2000 map
+
+Owner: "It's okay to just be better. It doesn't have to be perfect. Ultimately we need to get to a point where we've
+finished this work and we produce a map that we can publish because the current published map has a lot of errors."
+The owner's answers on the path: finish this plan; turn the compound move on; score the published map; feed the
+solve's codes into the published 2000 districts, highlighting where it differs from the published map.
+
+- **Task S-D: the compound move on in the stage.** The owner waived criterion 3 for this ("Turn it on"). The stage
+  run `final` solves with `compound_fusion=True`. Rebuild `solver-solve`, then commit `dvc.lock`. Expected to match
+  the experiment `search-compound`: 4,543 wrong lots.
+- **Task S-E: the published map scored the same way.** Load today's published 2000 map as a run
+  (`solver/published.py`). Give its six measures beside the stage's, with the same paired block bootstrap as
+  `criteria_check.py`.
+- **Task S-F: the solve's codes in the published 2000 districts, with a page of where they differ.** Brief written
+  after S-E, from how the 2000 series' districts reach the tiles. The owner checks the differences by eye before
+  shipping. The owner ships and merges.
