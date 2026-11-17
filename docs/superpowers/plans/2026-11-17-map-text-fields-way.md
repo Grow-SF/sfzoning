@@ -25,6 +25,16 @@ Background:
 
 ## Global Constraints
 
+- **No hand-set cutoffs (the owner's standing rule; reviewers treat a breach as Important):**
+  - nothing that decides is a fixed number: no match, split, join, filter, cap, search window, flag or in/out rule;
+  - a percentile (q99, "the 99th") or a value read off a measured histogram and used as a cut is STILL a cutoff;
+  - a published method's constant (PAN's 3, DBNet's 0.4, a 1% rule) is not exempt;
+  - model each decision as a probability: a likelihood with measured spreads, a fitted logit or prior, a per-item
+    weight, or a draw matching a whole measured distribution;
+  - a setting that can't be a probability (e.g. a shrink ratio) is screened by the held-out outcome;
+  - hard rules only for the physically impossible;
+  - report-only measures (IoU 0.5 / 0.3 for the top-line, the review page's reason labels) are display, not decisions;
+  - if this brief's text gives a cutoff, stop and report it, don't build it.
 - **$0:** no LLM calls. Never print, log, copy or commit `pipeline/.env`, `site/.env.local` or any token.
 - **One GPU (mps) process on the machine at a time:** every training or prediction inside `gpu.gpu_turn(True, device)`.
   Load near 20: ≤ 4 workers × 1 thread. Don't run pytest while a training runs (the session takes a GPU turn).

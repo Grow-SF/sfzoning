@@ -76,8 +76,12 @@ The owner asked for an approach that implements and tests all eight items in the
 
 - **The answer key in a prior:** the 2000 table's code at a lot in any 2000 prior, or any measure that reads the same
   rule it trains on.
-- **A parameter guessed or taken from a maximum:** prior strengths and thresholds are fitted on held-out quarters or
-  measured.
+- **A hand-set cutoff (the owner's standing rule):** no decision (a match, split, join, filter, cap, search window,
+  flag or in/out rule) is made by a fixed number, and a percentile or value read off a measured distribution and used
+  as a cut is still a cutoff. Each decision is a probability: a likelihood with measured spreads, a fitted logit or
+  prior, a weight, or a draw matching a whole measured distribution. A setting that cannot be a probability is screened
+  by the held-out outcome. (This line first said "thresholds are fitted or measured", which let measured cutoffs in.)
+- **A parameter guessed or taken from a maximum:** prior strengths are fitted on held-out quarters or measured.
 - **A verdict from one seed, from wrong-lot counts, or changed after seeing the results.**
 - **A claim with no picture behind it:** the review page and the panel go with every kept step.
 - **LLM output at inference; GPL-family code.**
