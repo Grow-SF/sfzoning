@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development. Steps use checkbox (`- [ ]`) syntax.
 
-**Status, 2026-11-16 evening:** written for the owner's review. Do not build until the owner says go.
+**Status, 2026-11-16 ~21:00:** the owner said go ("Ok go on the plan"). On the owner questions below: "For release,
+we will regenerate all maps when we're ready." So this plan builds the 2000 wiring and the page of differences at $0.
+The release rebuild of every map (the stale district stages, heights, the 1996-2000 twin) is the owner's later step.
 
 ## Goal
 
