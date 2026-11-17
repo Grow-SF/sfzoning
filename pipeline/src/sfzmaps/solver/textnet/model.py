@@ -2,7 +2,12 @@
 
 Outputs per px (OUTPUTS channels): 0 the text logit; 1-4 the kind logits among text (data.KINDS: zoning code, block
 number, street name, other); 5-6 the reading direction's cosine and sine (any length; only the direction counts).  A
-text-only network has channel 0 alone.
+text-only network has channel 0 alone.  A network with the word heads (`train.Recipe.heads="words"`, WORD_OUTPUTS
+channels) has those seven, then (`data.crop_targets(..., words=True)`):
+  CORE  7      the logit of the px being in a word's core
+  GEO   8-11   the distances to its word's top, bottom, start and end edges, as log(distance / GEO_UNIT) (`distances`)
+  TAG   12-15  the px's word tag, a vector that is near its word's and far from other words' (PAN)
+The word's reading direction is channels 5-6.  The number of channels of each recipe's heads: HEAD_OUTPUTS.
 
 At half size the ink is folded first (`fold`: each 2 x 2 block of px into 4 channels at one px, every px kept), the
 U-Net runs on that at half the px each way, and its head gives 4 x the outputs, unfolded (`unfold`) back to one set of
@@ -15,8 +20,20 @@ import torch.nn.functional as F
 WIDTH = 24        # channels at full resolution
 LEVELS = 5        # resolutions, each half the one before
 OUTPUTS = 7
+CORE = 7                       # the word heads' channels (see the module)
+GEO = slice(8, 12)
+TAG = slice(12, 16)
+WORD_OUTPUTS = 16
+HEAD_OUTPUTS = {"all": OUTPUTS, "text": 1, "words": WORD_OUTPUTS}    # channels, by `train.Recipe.heads`
+GEO_UNIT = 8.0                 # px: a distance output of 0 is this many px
+GEO_LIMIT = 20.0               # the distance outputs are read within +-this (a distance stays finite in float32)
 FOLD = 2          # px each way folded into channels at half size
 MULTIPLE = 2 ** (LEVELS - 1)   # a page side the levels halve evenly is a multiple of this (at full size)
+
+
+def distances(raw: torch.Tensor) -> torch.Tensor:
+    """The word heads' distance outputs (GEO channels) in px: GEO_UNIT x exp(raw), raw read within +-GEO_LIMIT."""
+    return GEO_UNIT * torch.exp(raw.clamp(-GEO_LIMIT, GEO_LIMIT))
 
 
 def fold(x: torch.Tensor) -> torch.Tensor:
@@ -48,8 +65,9 @@ def _light_block(i: int, o: int) -> nn.Sequential:
 class TextNet(nn.Module):
     """The U-Net: LEVELS blocks down (channels `width`, 2, 4, 8 and 8 x `width`, max-pooled between), LEVELS - 1 blocks
     up (nearest upsampling, each joined to the block down at its resolution; two convolutions each, or one with
-    `decoder` "light"), and a 1 x 1 head of `outputs` channels (OUTPUTS, or 1 for text alone).  With `half_size` the
-    ink is folded before the blocks and the head's outputs unfolded after (see the module).
+    `decoder` "light"), and a 1 x 1 head of `outputs` channels (OUTPUTS, 1 for text alone, WORD_OUTPUTS with the word
+    heads).  With `half_size` the ink is folded before the blocks and the head's outputs unfolded after (see the
+    module).
     Input: (n, 1, h, w) ink as 1, paper as 0; output (n, outputs, h, w)."""
 
     def __init__(self, width: int = WIDTH, outputs: int = OUTPUTS, half_size: bool = False, decoder: str = "full"):

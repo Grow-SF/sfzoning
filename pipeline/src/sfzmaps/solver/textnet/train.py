@@ -18,6 +18,22 @@ is only ever read at ink), or the known ink and the px next to it, the 8 around 
 (WEIGHT_DECAY) with a one-cycle schedule rising to `max_lr` over the first `pct_start` of the steps.  With
 `weight_average` the model kept is the moving average of the weights over the steps (`WeightAverage`).
 
+With the word heads (`heads` "words": `model.WORD_OUTPUTS` channels; the sheets' word cores filled by
+`wordread.shrink.prepare` before the training), each crop also has its word targets (`data.crop_targets(...,
+words=True)`), and the loss adds, to the per-ink head's (channels 0-6, the same terms as "all"), WORD_PARTS:
+  core       binary cross-entropy of the core over the known px, all its positives and the hardest negatives, at most
+             OHEM_RATIO per positive over the batch (DBNet's hard-negative mining; a tie at the last place shares it)
+  dice       1 - Dice of the core's chance over the known px
+  iou        -log((I + 1) / (U + 1)) of the box each known core px puts about itself (its four distances,
+             `model.distances`) against its word's (EAST), the mean over those px
+  direction  1 - cosine of the reading direction (channels 5-6) at the known core px, x GEO_ANGLE_WEIGHT
+  pull       PAN's aggregation, x TAG_WEIGHT: each known core px's tag pulled to within PULL of its word's mean tag
+             (log(1 + max(0, |tag - mean| - PULL)^2), a word's px averaged, then the crop's words)
+  push       PAN's discrimination, x TAG_WEIGHT: two words' mean tags in one crop pushed PUSH apart or more
+             (log(1 + max(0, PUSH - |mean - mean'|)^2), over the crop's pairs)
+each part averaged over the crops that have it (pull, push) or the batch (the rest).  Every term is dense (masked sums
+and products, no indexing in the backward), so it runs on the Mac's GPU in deterministic mode.
+
 The parts of the loss stay on the device, summed; every LOG_EVERY steps (and at the last) their mean over those steps
 is read, logged and checked, so the device is waited on only then.  A mean that is not finite stops the training.
 Each batch goes to the device without waiting for it either (`Copies`): a waiting copy to the Mac's GPU first waits
@@ -67,7 +83,16 @@ THREADS = 4
 LOG_EVERY = 250         # iterations between progress lines (and reads of the loss from the device)
 PREFETCH = 2            # batches drawn ahead with `prefetch`
 HELD = 2                # steps a batch is held after its copy to the GPU was queued (`Copies`)
-CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text"), "decoder": ("full", "light"),
+OHEM_RATIO = 3         # the word core's hard negatives: at most this many per positive
+GEO_ANGLE_WEIGHT = 10.0
+TAG_WEIGHT = 0.25
+PULL = 0.5             # PAN: a core px's tag is pulled to within this of its word's mean
+PUSH = 3.0             # PAN: two words' mean tags are pushed at least this far apart
+DICE_EPS = 1e-6
+NORM_EPS = 1e-12       # under the square root of a tag distance (its gradient stays finite at 0)
+PARTS = ("text", "kind", "angle")
+WORD_PARTS = ("core", "dice", "iou", "direction", "pull", "push")
+CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words"), "decoder": ("full", "light"),
            "precision": ("float32", "float16"), "labels": data.LABEL_RULES}
 NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
 
@@ -85,7 +110,8 @@ class Recipe:
                       the px next to it
       half_size       the network runs at half the px each way, on the ink folded 2 x 2 into channels (`model.fold`);
                       crops must be even
-      heads           "all" outputs (text, kind, reading direction) or "text" alone
+      heads           "all" outputs (text, kind, reading direction), "text" alone, or "words": all with the word heads
+                      (core, distances, tag; see the module), their sheets' cores filled by `wordread.shrink.prepare`
       weight_average  the decay of the moving average of the weights kept as the model (`WeightAverage`); 0 is off
       prefetch        the next batches drawn in a background thread (the same batches)
       decoder         "full" two convolutions per block up, or "light" one
@@ -139,6 +165,9 @@ class Recipe:
         if self.half_size and self.crop % model.FOLD:
             raise ValueError(f"recipe: half_size folds each crop {model.FOLD} x {model.FOLD}, so the crop must be "
                              f"even, not {self.crop}")
+        if self.heads == "words" and self.composites > 0:
+            raise ValueError(f"recipe: the word heads learn from data.crop_targets' word targets, which composites "
+                             f"don't make: composites must be 0 with heads words, not {self.composites}")
 
     def name(self) -> str:
         """A short id of the weights the recipe trains, the same every run (for folder names): each setting that
@@ -152,8 +181,8 @@ class Recipe:
 
 
 def build_net(recipe: Recipe) -> model.TextNet:
-    """The (untrained) network a recipe names: its width, size, outputs and decoder."""
-    return model.TextNet(width=recipe.width, outputs=model.OUTPUTS if recipe.heads == "all" else 1,
+    """The (untrained) network a recipe names: its width, size, outputs (`model.HEAD_OUTPUTS`) and decoder."""
+    return model.TextNet(width=recipe.width, outputs=model.HEAD_OUTPUTS[recipe.heads],
                          half_size=recipe.half_size, decoder=recipe.decoder)
 
 
@@ -200,10 +229,12 @@ def centre_pools(sheets: list[data.SheetData]) -> tuple[Pool, Pool]:
 def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator,
          bank=None) -> list[dict[str, np.ndarray]]:
     """One batch of `recipe.batch` crops: for each, text or ink, a centre from that pool, a scale and a number of
-    turns; its targets by the recipe's label rule, or, with chance `recipe.composites` (drawn only when it is above 0),
-    a composite of `bank` from the same centre, scale and turns (ValueError without a bank)."""
+    turns; its targets by the recipe's label rule (and, with the word heads, its word targets), or, with chance
+    `recipe.composites` (drawn only when it is above 0), a composite of `bank` from the same centre, scale and turns
+    (ValueError without a bank)."""
     if recipe.composites > 0 and bank is None:
         raise ValueError(f"a recipe with composites ({recipe.composites}) draws them from a bank: none was given")
+    extra = {"words": True} if recipe.heads == "words" else {}
     out = []
     for _ in range(recipe.batch):
         pool = pools[0] if rng.random() < TEXT_SHARE else pools[1]
@@ -213,7 +244,7 @@ def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe,
         if recipe.composites > 0 and rng.random() < recipe.composites:
             out.append(bank.crop(rng, sheets[i], y, x, recipe.crop, scale, turns))
         else:
-            out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, turns, labels=recipe.labels))
+            out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, turns, labels=recipe.labels, **extra))
     return out
 
 
@@ -269,6 +300,98 @@ def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor
     cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
     la = ((1 - cosine) * m).sum() / n
     return lt + KIND_WEIGHT * lk + ANGLE_WEIGHT * la, torch.stack([lt, lk, la])
+
+
+# --- the word heads --------------------------------------------------------------------------------------------------
+
+def word_tensors(crops: list[dict[str, np.ndarray]]) -> tuple[torch.Tensor, ...]:
+    """A batch's word targets on the CPU (`data.crop_targets(..., words=True)`): core (n, h, w) float, geo (n, 5, h,
+    w) float, tag (n, h, w) int64, known (n, h, w) float, and groups.  A crop's tags are its known core px's words
+    numbered 1, 2, ... in the order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so
+    the loss knows their number without reading the device."""
+    def stack(key, dtype):
+        return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype))
+    tags = []
+    for c in crops:
+        ids = np.where(c["known"], c["tag_id"], 0)
+        words = np.unique(ids[ids > 0])
+        tags.append(np.where(ids > 0, np.searchsorted(words, ids) + 1, 0))
+    most = max((int(t.max()) for t in tags), default=0)
+    return (stack("core", np.float32), stack("geo", np.float32), torch.from_numpy(np.stack(tags).astype(np.int64)),
+            stack("known", np.float32), torch.arange(1, most + 1, dtype=torch.int64))
+
+
+def _ohem_bce(logit: torch.Tensor, target: torch.Tensor, known: torch.Tensor) -> torch.Tensor:
+    """Binary cross-entropy over the known px: every positive, and the k = min(negatives, OHEM_RATIO x positives)
+    negatives of the highest loss; the negatives tied with the k-th share its remaining places equally (so the loss is
+    the top k's whichever of them a sort would put first).  Divided by positives + k; 0 with no positive.  The k-th
+    loss is found by a sort without reading the device."""
+    bce = F.binary_cross_entropy_with_logits(logit, target, reduction="none")
+    pos = target * known
+    neg = (1 - target) * known
+    n_pos = pos.sum()
+    k = torch.minimum(neg.sum(), OHEM_RATIO * n_pos)
+    with torch.no_grad():
+        ranked = torch.sort(torch.where(neg > 0, bce, -torch.ones_like(bce)).flatten(), descending=True).values
+        last = ranked.index_select(0, (k.long() - 1).clamp(min=0).reshape(1))
+        above = ((neg > 0) & (bce > last)).float()
+        tied = ((neg > 0) & (bce == last)).float()
+        share = (k - above.sum()) / tied.sum().clamp(min=1)
+        hard = (above + tied * share) * (k > 0).float()
+    return (bce * (pos + hard)).sum() / (n_pos + k).clamp(min=1)
+
+
+def _tag_parts(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """PAN's aggregation and discrimination (see the module) of the tag outputs (n, c, h, w) by the crops' word tags
+    (`word_tensors`), each crop's words found by a one-hot over `groups` (matrix products, no indexing)."""
+    n, c, h, w = tag_out.shape
+    zero = tag_out.sum() * 0
+    if groups.numel() == 0:
+        return zero, zero
+    hot = (tag[:, None] == groups[None, :, None, None]).to(tag_out.dtype).reshape(n, len(groups), h * w)
+    count = hot.sum(-1)                                                     # (n, K) px of each word
+    present = (count > 0).to(tag_out.dtype)
+    vec = tag_out.reshape(n, c, h * w).transpose(1, 2)                      # (n, P, c)
+    mean = torch.bmm(hot, vec) / count.clamp(min=1)[..., None]              # (n, K, c)
+    own = torch.bmm(hot.transpose(1, 2), mean)                              # (n, P, c): its word's mean, 0 off cores
+    far = ((vec - own) ** 2).sum(-1).add(NORM_EPS).sqrt()
+    pulled = torch.log1p(F.relu(far - PULL) ** 2)                           # (n, P)
+    per_word = torch.bmm(hot, pulled[..., None])[..., 0] / count.clamp(min=1)
+    words = present.sum(-1)
+    crops = (words > 0).to(tag_out.dtype)
+    pull = ((per_word * present).sum(-1) / words.clamp(min=1) * crops).sum() / crops.sum().clamp(min=1)
+    apart = ((mean[:, :, None] - mean[:, None]) ** 2).sum(-1).add(NORM_EPS).sqrt()      # (n, K, K)
+    pair = present[:, :, None] * present[:, None, :] * (1 - torch.eye(len(groups), dtype=tag_out.dtype,
+                                                                      device=tag_out.device))
+    pushed = torch.log1p(F.relu(PUSH - apart) ** 2) * pair
+    pairs = pair.sum((1, 2))
+    two = (pairs > 0).to(tag_out.dtype)
+    push = (pushed.sum((1, 2)) / pairs.clamp(min=1) * two).sum() / two.sum().clamp(min=1)
+    return pull, push
+
+
+def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: torch.Tensor, known: torch.Tensor,
+              groups: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """The word heads' loss of a batch (see the module) and its parts (WORD_PARTS, unweighted) as one tensor on the
+    batch's device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`."""
+    logit = out[:, model.CORE]
+    lc = _ohem_bce(logit, core, known)
+    p = torch.sigmoid(logit)
+    ld = 1 - 2 * (p * core * known).sum() / ((p * known).sum() + (core * known).sum() + DICE_EPS)
+    m = core * known
+    n = m.sum().clamp(min=1)
+    d, g = model.distances(out[:, model.GEO]), geo[:, :4]
+    inter = ((torch.minimum(d[:, 0], g[:, 0]) + torch.minimum(d[:, 1], g[:, 1]))
+             * (torch.minimum(d[:, 2], g[:, 2]) + torch.minimum(d[:, 3], g[:, 3])))
+    union = (d[:, 0] + d[:, 1]) * (d[:, 2] + d[:, 3]) + (g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) - inter
+    li = (-torch.log((inter + 1) / (union + 1)) * m).sum() / n
+    cs = out[:, 5:7]
+    rad = torch.deg2rad(geo[:, 4])
+    cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
+    la = ((1 - cosine) * m).sum() / n
+    pull, push = _tag_parts(out[:, model.TAG], tag, groups)
+    total = lc + ld + li + GEO_ANGLE_WEIGHT * la + TAG_WEIGHT * (pull + push)
+    return total, torch.stack([lc, ld, li, la, pull, push])
 
 
 class WeightAverage:
@@ -333,12 +456,15 @@ class Copies:
 @contextlib.contextmanager
 def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator,
              bank=None):
-    """The training's batches (`batch_tensors` of `draw`, composites from `bank`), one per step, from `rng` in order:
-    drawn when asked for or, with `recipe.prefetch`, by a background thread up to PREFETCH ahead (which alone uses `rng`
-    and the bank meanwhile: the same batches, in the same order).  An error in that thread is raised where the batch is
-    asked for."""
+    """The training's batches (`batch_tensors` of `draw`, composites from `bank`; with the word heads followed by
+    `word_tensors`), one per step, from `rng` in order: drawn when asked for or, with `recipe.prefetch`, by a
+    background thread up to PREFETCH ahead (which alone uses `rng` and the bank meanwhile: the same batches, in the
+    same order).  An error in that thread is raised where the batch is asked for."""
     def make():
-        return batch_tensors(draw(sheets, pools, recipe, rng, bank), recipe.ink_only)
+        crops = draw(sheets, pools, recipe, rng, bank)
+        if recipe.heads == "words":
+            return batch_tensors(crops, recipe.ink_only) + word_tensors(crops)
+        return batch_tensors(crops, recipe.ink_only)
 
     if not recipe.prefetch:
         yield (make() for _ in range(recipe.iterations))
@@ -396,16 +522,21 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.iterations,
                                                 pct_start=recipe.pct_start)
     average = WeightAverage(net, recipe.weight_average) if recipe.weight_average else None
-    sums, first, t0 = torch.zeros(3, device=device), 1, time.perf_counter()
+    names = PARTS + (WORD_PARTS if recipe.heads == "words" else ())
+    sums, first, t0 = torch.zeros(len(names), device=device), 1, time.perf_counter()
     copies = Copies(device)
     half = recipe.precision == "float16"
     scaler = torch.amp.GradScaler(torch.device(device).type, enabled=half)
     with _batches(sheets, pools, recipe, rng, bank) as batches, contextlib.closing(copies):
         for it, batch in enumerate(batches, 1):
-            x, t, k, a, w = copies(batch)
+            x, t, k, a, w, *words = copies(batch)
             with torch.autocast(torch.device(device).type, dtype=torch.float16, enabled=half):
                 out = net(x)
-            loss, parts = loss_fn(out.float(), t, k, a, w)      # the loss in float32, outside the autocast
+            out = out.float()                                   # the loss in float32, outside the autocast
+            loss, parts = loss_fn(out, t, k, a, w)
+            if words:
+                more, word_parts = word_loss(out, *words)
+                loss, parts = loss + more, torch.cat([parts, word_parts])
             opt.zero_grad()
             scaler.scale(loss).backward()
             scaler.step(opt)
@@ -417,10 +548,10 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
             if it % LOG_EVERY == 0 or it == recipe.iterations:
                 mean = (sums / (it - first + 1)).cpu().numpy()
                 if not np.isfinite(mean).all():
-                    raise FloatingPointError(f"iterations {first}-{it}: the loss is not finite (mean text {mean[0]}, "
-                                             f"kind {mean[1]}, angle {mean[2]})")
-                log.info("iterations %d-%d: text %.4f, kind %.4f, angle %.4f (%.1f s)", first, it, *mean,
-                         time.perf_counter() - t0)
+                    raise FloatingPointError(f"iterations {first}-{it}: the loss is not finite (mean "
+                                             + ", ".join(f"{n} {v}" for n, v in zip(names, mean)) + ")")
+                log.info("iterations %d-%d: " + ", ".join(f"{n} %.4f" for n in names) + " (%.1f s)", first, it,
+                         *mean, time.perf_counter() - t0)
                 sums.zero_()
                 first = it + 1
     if average is not None:

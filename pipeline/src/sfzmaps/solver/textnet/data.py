@@ -18,6 +18,17 @@ The label rule (`crop_targets(..., labels=)`, LABEL_RULES): "boxes" teaches ever
 the lines through it too; "lines-unknown" leaves the line px inside a word unknown (no lesson either way).  It needs
 the sheet's line px, which `textnet.zones.prepare` fills before training, with the zones it keeps around Sol's points.
 
+The word targets (`crop_targets(..., words=True)`, for the word heads `train.Recipe.heads="words"`), drawn from each
+word's core (`SheetData.cores`, its rectangle shrunk, which `wordread.shrink.prepare` fills before training):
+  core       1 on the px of a word's core (filled as the words are, later over earlier), 0 elsewhere
+  tag_id     1 + the index of the word whose core holds the px (int32), 0 elsewhere
+  geo        float32 (5, h, w), at core px only (0 elsewhere): the distances in crop px from the px to its word's top,
+             bottom, start and end edges, and its reading angle turned with the crop (as `angle`).  The edges are
+             those of the word's whole rectangle (`SheetData.words`), taken by its reading angle (`SheetData.angles`):
+             start and end along the reading direction, top and bottom across it (the top on the letters' upper side);
+             each is the furthest of the rectangle's corners that way.  Distances are measured at page px and scaled
+             by the crop's scale; the quarter turns leave them as they are.
+
 An area answers for map points whether each is in it (`contains`) and, from the placement's samples around a page
 window, whether all of the window's px are in it or none is, when that follows from the samples alone (`decided`): a
 px's map point is a weighted mean of four samples, so it lies in their bounding box.  Only where it doesn't follow is
@@ -70,7 +81,7 @@ AREA_MARGIN = 1.0                 # ft: far more than a rounding of a px's weigh
 # Park: 99.7% inside every training map's sheets, with 10-13% of each training map's box area (7-16% of each kind it
 # prints).  `pipeline/scripts/choose_text_validation_area.py` re-derives the candidates and this choice from the data.
 VALIDATION_AREA = (6000442.0, 2091727.0, 6008805.0, 2108453.0)
-BOX_FIELDS = ("words", "kinds", "angles", "other", "points")    # SheetData's arrays of boxes and points
+BOX_FIELDS = ("words", "kinds", "angles", "other", "points", "cores")    # SheetData's arrays of boxes and points
 LOAD_THREADS = 8                  # sheets read at once
 BAND = 512                        # page rows drawn at a time when finding where crops may centre
 LABEL_RULES = ("boxes", "lines-unknown")   # what a word box teaches (`crop_targets`; see the module)
@@ -188,6 +199,9 @@ class SheetData:
     line_bits: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 0), np.uint8))
                              # uint8, packed as `ink_bits`: the line px (`linerules.line_px` grown by 1 px, the 8
                              # around each), for the label rule "lines-unknown"; (0, 0) until `zones.prepare` fills it
+    cores: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 4, 2), np.int32))
+                             # int32 (n, 4, 2): each word's core (its rectangle shrunk, corners rounded to px, in the
+                             # order of `words`), for the word targets; none until `wordread.shrink.prepare` fills it
 
 
 def reading_angle(rect: np.ndarray) -> int:
@@ -472,14 +486,44 @@ def page_text(sd: SheetData) -> tuple[np.ndarray, np.ndarray]:
     return word > 0, _unknown(sd, word, 0, 0, sd.height, sd.width)
 
 
+def _cores(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+    """The page window's word cores: 1 + the index of the last word whose core is drawn on each px (0 on none), int32.
+    ValueError when the sheet holds no core for each of its words (`wordread.shrink.prepare` fills them)."""
+    if sd.cores.shape != sd.words.shape:
+        raise ValueError(f"{sd.series} {sd.sheet}: no word cores (SheetData.cores {sd.cores.shape}, the words "
+                         f"{sd.words.shape}): the word targets need them (wordread.shrink.prepare)")
+    return _paint(sd.cores, np.arange(1, len(sd.cores) + 1), y0, x0, h, w).astype(np.int32)
+
+
+def _geometry(sd: SheetData, tag: np.ndarray, y0: int, x0: int) -> np.ndarray:
+    """At each core px of a page window (`_cores`), the distances in page px to its word's top, bottom, start and end
+    edges, and its reading angle (see the module): float32 (h, w, 5), 0 off the cores."""
+    out = np.zeros((*tag.shape, 5), np.float32)
+    rows, cols = np.nonzero(tag)
+    if not len(rows):
+        return out
+    j = tag[rows, cols] - 1
+    theta = np.deg2rad(sd.angles[j].astype(float))
+    along = np.stack([np.cos(theta), -np.sin(theta)], -1)       # the reading direction (page px, y down)
+    up = np.stack([-np.sin(theta), -np.cos(theta)], -1)         # across it, towards the letters' tops
+    corners = sd.words[j].astype(float)                         # (m, 4, 2)
+    p = np.stack([x0 + cols, y0 + rows], -1).astype(float)
+    a, b = (corners * along[:, None]).sum(-1), (corners * up[:, None]).sum(-1)
+    pa, pb = (p * along).sum(-1), (p * up).sum(-1)
+    out[rows, cols, :4] = np.maximum(np.stack([b.max(-1) - pb, pb - b.min(-1), pa - a.min(-1), a.max(-1) - pa], -1), 0)
+    out[rows, cols, 4] = sd.angles[j]
+    return out
+
+
 def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int,
-                 labels: str = "boxes") -> dict[str, np.ndarray]:
+                 labels: str = "boxes", words: bool = False) -> dict[str, np.ndarray]:
     """The training crop centred on page px (row y, col x), moved inside the page: size / `scale` px of page resized
     to `size` x `size` (nearest px) and turned `turns` quarter turns counter-clockwise, the reading angle with it (in
     [-180, 180) degrees on text, 0 elsewhere).  Keys: ink (bool), text (uint8), kind (uint8), angle (int16), known
     (bool); drawn from the sheet's boxes for this crop alone, by the label rule `labels` (LABEL_RULES, see the
     module): under "lines-unknown" a px inside a word that is a line px is not known (ValueError when the sheet holds
-    no line px)."""
+    no line px).  With `words`, also the word targets core (uint8), tag_id (int32) and geo (float32 (5, size, size)),
+    from the sheet's cores (see the module; ValueError when it holds none for its words)."""
     if labels not in LABEL_RULES:
         raise ValueError(f"labels is one of {', '.join(LABEL_RULES)}, not {labels!r}")
     src = int(round(size / scale))
@@ -490,6 +534,9 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     if labels == "lines-unknown":
         known &= ~((word > 0) & line_window(sd, y0, x0, src, src))
     parts = {"ink": _ink_window(sd, y0, x0, src, src), "word": word, "known": known}
+    if words:
+        parts["tag_id"] = _cores(sd, y0, x0, src, src)
+        parts["geo"] = _geometry(sd, parts["tag_id"], y0, x0)
     if src != size:
         parts = {k: cv2.resize(v.view(np.uint8) if v.dtype == bool else v, (size, size),
                                interpolation=cv2.INTER_NEAREST).astype(v.dtype) for k, v in parts.items()}
@@ -498,7 +545,15 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     kind = np.concatenate([[NO_KIND], sd.kinds]).astype(np.uint8)
     angle = np.concatenate([[0], (sd.angles.astype(np.int32) + 90 * turns + 180) % 360 - 180]).astype(np.int16)
     out = {**parts, "text": (word > 0).view(np.uint8), "kind": kind[word], "angle": angle[word]}
-    return {k: np.rot90(v, turns) for k, v in out.items()}
+    if not words:
+        return {k: np.rot90(v, turns) for k, v in out.items()}
+    geo = out.pop("geo")
+    on = out["tag_id"] > 0
+    geo[..., :4] *= size / src
+    geo[..., 4] = np.where(on, (geo[..., 4].astype(np.int32) + 90 * turns + 180) % 360 - 180, 0)
+    out["core"] = on.view(np.uint8)
+    out["geo"] = np.moveaxis(geo, -1, 0)
+    return {k: np.rot90(v, turns, axes=(1, 2) if k == "geo" else (0, 1)) for k, v in out.items()}
 
 
 def centres(sd: SheetData, stride: int) -> tuple[np.ndarray, np.ndarray]:
