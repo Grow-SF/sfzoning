@@ -1,13 +1,13 @@
 """The learned box model (`wordread.boxmodel`): its targets, its held-out rule, its joined neighbours and a short CPU
 fit, on synthetic pages."""
 import itertools
+from collections import Counter
 
 import numpy as np
 import pandas as pd
 import pytest
 import torch
 
-from sfzmaps.solver.codereader import labels as L
 from sfzmaps.solver.textnet import boxes as textboxes
 from sfzmaps.solver.textread import crops as K
 from sfzmaps.solver.wordread import boxmodel as B
@@ -109,7 +109,7 @@ def test_boundary_columns_are_exactly_the_gap_between_two_held_words():
     boxes = pd.DataFrame([box(50, 100, 170, 130)])
     ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
     crop, (count, gap) = ex.crop(0), ex.target(0)
-    assert np.allclose(count, [0, 0, 1])
+    assert np.allclose(count, np.eye(len(count))[2])
     row = crop[0, K.HEIGHT // 2]
     inside = _between(row)
     assert inside.any() and (gap[inside] > 0.99).sum() >= 1
@@ -203,15 +203,7 @@ def test_training_boxes_leave_out_boxes_meeting_a_held_word_or_touching_a_held_a
     assert list(words["word"]) == [0, 2]
 
 
-# --- joined neighbours ------------------------------------------------------------------------------------------------
-
-def test_draws_follow_the_measured_gap_distribution():
-    dist = {"gap": [-0.1, 0.3, 0.8], "weight": [1.0, 2.0, 1.0]}
-    got = B.draw_gaps(dist, 8000, np.random.default_rng([0, 1]))
-    assert set(np.unique(got)) <= {-0.1, 0.3, 0.8}
-    share = np.array([(got == g).mean() for g in dist["gap"]])
-    assert np.allclose(share, [0.25, 0.5, 0.25], atol=0.02)
-
+# --- the gaps record --------------------------------------------------------------------------------------------------
 
 def test_same_line_gaps_measure_the_space_to_the_next_word_on_the_line():
     # three words on one line (gaps 10 and 25 px, heights 20) and one word read across the line, ahead of the last
@@ -233,92 +225,131 @@ def test_same_line_gaps_measure_the_space_to_the_next_word_on_the_line():
     assert sorted(dist["gap"]) == sorted(got["gap"].tolist()) and dist["n"] == len(got)
 
 
-def test_the_gaps_are_between_consecutive_words_on_one_line_of_a_box():
-    # a box (rows 95..125, its centre line at 110) over three words along its axis (gaps 10 and 15 px; heights 20,
-    # 40, 30), word 1 sticking out of it across the line so that the box holds 25 of its 40 rows of ink.  Across the
-    # line the words span [-10, 10], [-30, 10] and [-15, 15]: lines shared 1 (0, 1), 25/30 (1, 2), 1 (0, 2)
-    ink = page((10, 100, 60, 120), (70, 80, 110, 120), (125, 95, 175, 125))
-    terra = pd.DataFrame([word(0, 10, 100, 60, 120), word(1, 70, 80, 110, 120), word(2, 125, 95, 175, 125)])
-    got = B.held_pair_gaps(pd.DataFrame([box(10, 95, 175, 125)]), terra, ink)
-    s1, l12 = (120 - 95) / 40, 25 / 30
-    by = {(r.word, r.next): r for r in got.itertuples()}
-    assert set(by) == {(0, 1), (1, 2), (0, 2)}
-    assert by[(0, 1)].gap == pytest.approx(10 / 30) and by[(0, 1)].weight == pytest.approx(s1)
-    assert by[(1, 2)].gap == pytest.approx(15 / 35) and by[(1, 2)].weight == pytest.approx(s1 * l12)
-    # 0 and 2 are consecutive on their line unless word 1 is held and on it
-    assert by[(0, 2)].gap == pytest.approx(65 / 25) and by[(0, 2)].weight == pytest.approx(1 - s1 * min(1.0, l12))
-    dist = B.gap_distribution(got)
-    assert sorted(dist["gap"]) == sorted(got["gap"].tolist()) and dist["n"] == 3
-    # two words stacked in one box (a code over its block number) are not on one line: no gap
-    ink2 = page((10, 60, 70, 80), (20, 90, 50, 105))
-    terra2 = pd.DataFrame([word(0, 10, 60, 70, 80), word(1, 20, 90, 50, 105)])
-    assert B.held_pair_gaps(pd.DataFrame([box(10, 60, 70, 105)]), terra2, ink2).empty
+# --- the merges our boxes make ----------------------------------------------------------------------------------------
+
+def test_pair_geometry_is_the_space_between_two_words_in_the_first_ones_frame():
+    terra = pd.DataFrame([word(0, 10, 100, 60, 120), word(1, 70, 100, 100, 120),       # side by side, 10 px apart
+                          word(2, 10, 140, 70, 160), word(3, 20, 170, 50, 185),        # stacked, 10 px apart
+                          word(4, 200, 60, 220, 160, angle=90.0)])                     # read across
+    g = B.pair_geometry(terra)
+    assert len(g) == 10 and (g["a"] < g["b"]).all()
+    by = {(r.a, r.b): r for r in g.itertuples()}
+    side = by[(0, 1)]
+    assert side.along == pytest.approx(10 / 20) and side.across == pytest.approx(-20 / 20)
+    assert side.along_gap == pytest.approx(10 / 20) and side.across_gap == 0.0
+    assert side.along_overlap == 0.0 and side.across_overlap == pytest.approx(1.0)
+    assert side.along_overlap_h == 0.0 and side.across_overlap_h == pytest.approx(1.0)
+    assert side.angle == 0.0 and side.height == pytest.approx(0.0)
+    stack = by[(2, 3)]                 # along the line word 3 (30 px) lies wholly within word 2's extent (60 px)
+    assert stack.along == pytest.approx(-30 / 17.5) and stack.across == pytest.approx(10 / 17.5)
+    assert stack.along_overlap == pytest.approx(1.0) and stack.along_overlap_h == pytest.approx(30 / 17.5)
+    assert stack.across_gap == pytest.approx(10 / 17.5) and stack.across_overlap == 0.0
+    assert stack.height == pytest.approx(abs(np.log(15 / 20)))
+    assert by[(0, 4)].angle == 1.0
 
 
-def test_the_gap_is_along_the_words_reading_direction_whatever_the_boxs_axis():
-    # two level words side by side (a gap of 10 px, heights 20) in a box grouped at 30 degrees that holds them both
-    ink = page((100, 100, 150, 120), (160, 100, 190, 120))
-    terra = pd.DataFrame([word(0, 100, 100, 150, 120), word(1, 160, 100, 190, 120)])
-    (ux, uy), (vx, vy) = L._axes(30.0)
-    u, v = np.array([ux, uy]) * 60, np.array([vx, vy]) * 45
-    c = np.array([145.0, 110.0])
-    tilted = box(0, 0, 1, 1)
-    for i, corner in enumerate([c - u - v, c + u - v, c + u + v, c - u + v]):
-        tilted[f"t{i}x"], tilted[f"t{i}y"] = corner
-    tilted.update(axis=30.0, t_length=120.0, t_height=90.0)
-    got = B.held_pair_gaps(pd.DataFrame([tilted]), terra, ink)
-    assert len(got) == 1
-    assert got["gap"].iloc[0] == pytest.approx(10 / 20) and got["weight"].iloc[0] == pytest.approx(1.0)
-    # a word read across the line shares no line of text with it
-    terra["angle"] = [0.0, 90.0]
-    assert B.held_pair_gaps(pd.DataFrame([tilted]), terra, ink).empty
+def test_merge_labels_are_the_chance_one_box_holds_both():
+    pairs = pd.DataFrame({"a": [0, 0, 1, 0], "b": [1, 2, 2, 3]})
+    held = [(np.array([0, 1]), np.array([1.0, 0.5])), (np.array([2, 0, 1]), np.array([1.0, 0.25, 0.4]))]
+    got = B.merge_labels(pairs, held, 4)
+    assert got == pytest.approx([1 - (1 - 0.5) * (1 - 0.25 * 0.4), 0.25, 0.4, 0.0])
+    assert B.merge_labels(pairs, [(np.array([1, 0]), np.array([1.0, 1.0]))], 4)[0] == 1.0
 
 
-def test_overlapping_joined_words_keep_both_words_ink():
-    a = np.zeros((2, K.HEIGHT, 40), np.float32)
-    a[:, 10:22, 6:34] = 1.0                       # the word spans columns 6..34
-    b = np.zeros((2, K.HEIGHT, 30), np.float32)
-    b[:, 12:20, 6:24] = 0.5
-    crop, target, got = B.join((a, (6.0, 34.0), 20.0), (b, (6.0, 24.0), 20.0), gap=-0.2)
-    assert got["gap_px"] == pytest.approx(-4.0)
-    assert np.allclose(target, 0.0)              # no column between them
-    assert crop.shape[2] == 6 + 28 - 4 + 18 + 6
-    # A's ink is all there, and B's wherever A has none
-    assert np.allclose(crop[:, 10:22, 6:34], 1.0)
-    assert np.allclose(crop[:, 12:20, 34:48], 0.5)
-    spaced, target, got = B.join((a, (6.0, 34.0), 20.0), (b, (6.0, 24.0), 20.0), gap=0.5)
-    assert got["gap_px"] == pytest.approx(10.0) and target.sum() == pytest.approx(10.0)
-    assert np.allclose(spaced[:, :, 34:44], 0.0)  # paper across the gap
+def test_fit_merge_recovers_a_known_logistic():
+    rng = np.random.default_rng([0, 5])
+    n = 4000
+    pairs = pd.DataFrame({"a": np.arange(n), "b": np.arange(n) + n,
+                          **{k: rng.uniform(0, 3, n) for k in B.MERGE_FEATURES}})
+    true = dict(zip(B.MERGE_FEATURES, (-1.5, -2.0, 1.0, 0.5, -0.3, -0.2, -0.5, 0.4)))
+    z = 1.0 + sum(c * pairs[k].to_numpy() for k, c in true.items())
+    label = 1 / (1 + np.exp(-z))                 # the exact chances: the likelihood is greatest at the truth
+    got = B.fit_merge(pairs, label)
+    assert got["converged"] and got["intercept"] == pytest.approx(1.0, abs=1e-2)
+    for k, c in true.items():
+        assert got["coef"][k] == pytest.approx(c, abs=1e-2)
+    assert B.merge_chance(got, pairs) == pytest.approx(label, abs=1e-3)
 
 
-def test_joined_neighbours_take_their_gaps_from_the_distribution_and_know_their_targets():
-    ink = page((20, 40, 80, 60), (120, 40, 150, 60), (20, 120, 60, 140), (200, 120, 260, 140), shape=(200, 300))
-    terra = pd.DataFrame([word(0, 20, 40, 80, 60), word(1, 120, 40, 150, 60), word(2, 20, 120, 60, 140),
-                          word(3, 200, 120, 260, 140)])
-    boxes = pd.DataFrame([box(20, 40, 80, 60)])
-    gaps = {"gap": [0.5, 1.5], "weight": [1.0, 1.0]}
-    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=40, gaps=gaps,
-                        turned=0.0, seed=3)
+def test_union_box_is_the_box_grouping_makes_of_two_merged_words():
+    ink = page((50, 100, 110, 120), (120, 100, 150, 120))
+    r0, r1 = (textboxes.word_rect(b, 0.0) for b in ((50, 100, 110, 120), (120, 100, 150, 120)))
+    row = B.union_box(ink, (ink * 200).astype(np.uint8), r0, r1)
+    assert row["axis"] % 180 == pytest.approx(0.0, abs=1e-9)
+    assert row["t_length"] == pytest.approx(100.0) and row["t_height"] == pytest.approx(20.0)
+    xs, ys = [row[f"t{i}x"] for i in range(4)], [row[f"t{i}y"] for i in range(4)]
+    assert min(xs) == pytest.approx(50) and max(xs) == pytest.approx(150)
+    assert min(ys) == pytest.approx(100) and max(ys) == pytest.approx(120)
+    assert B.union_box(ink, ink.astype(np.uint8), r0, textboxes.word_rect((300, 10, 340, 30), 0.0)) is None
+
+
+def _merge_page():
+    """Words side by side (0, 1; 15 px apart), a code over its block number (2, 3), and a word far away (4)."""
+    ink = page((20, 40, 80, 70), (95, 40, 125, 70), (20, 150, 120, 170), (40, 175, 90, 190), (300, 150, 360, 180),
+               shape=(300, 400))
+    terra = pd.DataFrame([word(0, 20, 40, 80, 70), word(1, 95, 40, 125, 70), word(2, 20, 150, 120, 170),
+                          word(3, 40, 175, 90, 190), word(4, 300, 150, 360, 180)])
+    return ink, terra
+
+
+MERGE = {"features": list(B.MERGE_FEATURES), "intercept": 0.0,
+         "coef": {k: -1.0 if k in ("along_gap", "across_gap") else 0.0 for k in B.MERGE_FEATURES}}
+
+
+def test_joined_pairs_are_drawn_by_their_merge_chance_at_their_real_place():
+    ink, terra = _merge_page()
+    boxes = pd.DataFrame([box(20, 40, 80, 70)])
+    sheets = {SHEET: inputs(ink)}
+    ex = B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=2000, merge=MERGE, seed=3)
     j = np.flatnonzero(ex.meta["source"].to_numpy() == "joined")
-    assert len(j) == 40
-    drawn = ex.meta["gap"].to_numpy()[j]
-    assert set(np.unique(drawn)) <= {0.5, 1.5} and len(np.unique(drawn)) == 2
+    assert len(j) == 2000 and ex.info["drawn"] == 2000 and ex.info["merge"] == MERGE
+    pairs = B.pair_geometry(terra)
+    want = B.merge_chance(MERGE, pairs)
+    want = want / want.sum()
+    drawn = Counter(zip(ex.meta["word_a"].to_numpy()[j], ex.meta["word_b"].to_numpy()[j]))
+    for a, b, w in zip(pairs["a"], pairs["b"], want):
+        assert drawn.get((a, b), 0) / len(j) == pytest.approx(w, abs=0.04)
     for i in j:
-        count, gap = ex.target(i)
-        assert np.allclose(count, [0, 0, 1])
-        m = ex.meta.iloc[i]
-        # the boundary columns are the realised gap, in crop px; it is the drawn gap to the rounding of a px
-        assert gap.sum() == pytest.approx(m["gap_px"], abs=1e-4)      # float32 targets
-        assert m["gap_px"] / m["unit_px"] == pytest.approx(m["gap"], abs=0.5 / m["unit_px"] + 1e-9)
-        # the gap is paper: the ink in a boundary column is the part of it outside the gap
-        row = ex.crop(i)[0, K.HEIGHT // 2]
-        assert np.allclose(row[gap >= 1.0], 0.0)
-    # the joined words are training words, two different ones
-    assert (ex.meta["word_a"].to_numpy()[j] != ex.meta["word_b"].to_numpy()[j]).all()
-    # the same seed, the same examples
-    again = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=40, gaps=gaps,
-                           turned=0.0, seed=3)
+        assert ex.count[i][2:].sum() == pytest.approx(1.0)      # both words are wholly in their box
+    first = lambda a, b: j[(ex.meta["word_a"].to_numpy()[j] == a) & (ex.meta["word_b"].to_numpy()[j] == b)][0]  # noqa
+    # side by side: count 2, the boundary between them where it is not ink (as for a real box)
+    i = first(0, 1)
+    count, gap = ex.target(i)
+    assert np.allclose(count, np.eye(len(count))[2])
+    row = ex.crop(i)[0, K.HEIGHT // 2]
+    inside = _between(row)
+    assert (gap[inside] > 0.99).any() and np.allclose(gap[inside], 1.0 - row[inside], atol=1e-5)
+    assert np.allclose(gap[~inside], 0.0)
+    # a code over its block number: their extents along the box's axis overlap, so no boundary, and still two words
+    count, gap = ex.target(first(2, 3))
+    assert np.allclose(count, np.eye(len(count))[2]) and np.allclose(gap, 0.0)
+    again = B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=2000, merge=MERGE, seed=3)
     assert np.array_equal(again.flat, ex.flat) and again.meta.equals(ex.meta)
+
+
+def test_a_joined_box_never_touches_a_held_area_or_word():
+    ink, terra = _merge_page()
+    boxes = pd.DataFrame([box(20, 40, 80, 70)])
+
+    def touch(sheet, window, shape):              # the far word's place is held
+        return {**NO_TOUCH, "touch_blocks": window[2] > 250}
+    held = pd.DataFrame([word(9, 100, 160, 110, 165)])           # a held word inside the code's box
+    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=touch, joined=300, merge=MERGE,
+                        held_words=held, seed=4)
+    j = np.flatnonzero(ex.meta["source"].to_numpy() == "joined")
+    words = set(ex.meta["word_a"].to_numpy()[j]) | set(ex.meta["word_b"].to_numpy()[j])
+    assert len(j) == 300 and 4 not in words and 2 not in words
+    assert ex.info["tried"] > 300
+
+
+def test_box_examples_fits_the_merge_model_on_its_own_boxes():
+    ink, terra = _merge_page()
+    boxes = pd.DataFrame([box(20, 40, 125, 70)])                # one box holding words 0 and 1
+    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, seed=5)
+    assert ex.info["merged_pairs"] == pytest.approx(1.0) and ex.info["merge"]["merged"] == pytest.approx(1.0)
+    assert ex.info["pairs"] == 10
+    # by default as many joined examples as the real boxes are expected to hold two words or more: one
+    assert (ex.meta["source"] == "joined").sum() == 1
 
 
 # --- the network ------------------------------------------------------------------------------------------------------

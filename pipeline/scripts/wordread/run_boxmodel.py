@@ -1,15 +1,15 @@
 """Measure the learned box model's targets on today's boxes, and build or fit its examples
 (`sfzmaps.solver.wordread.boxmodel`), writing data/solver/experiments/wordread/boxmodel/:
 
-  gaps.json            per held-out quarter, the real same-line gaps of its training words (`boxmodel.same_line_gaps`:
-                       to the next word on each word's line of text, weighted by the chance it is that): the
-                       distribution the joined neighbours' gaps are drawn from
+  gaps.json            per held-out quarter, the same-line gaps of its training words (`boxmodel.same_line_gaps`: to
+                       the next word on each word's line of text, weighted by the chance it is that); a record only,
+                       the joined neighbours don't use them
   counts.json          today's boxes (data/solver/boxes) against every Terra word: the expected number of boxes holding
                        0, 1, 2 and 3+ words (the sums of their Poisson-binomial count distributions; also the counts by
                        each box's likeliest count, for display), overall, by quarter and on the Mission Street sheet;
                        per held-out quarter what its model trains on (boxes, joined neighbours, K), the quantiles of its
-                       same-line gaps, and for comparison those of the gaps between words its boxes hold together
-                       (`boxmodel.held_pair_gaps`; reported only)
+                       same-line gaps, and with `--examples` its merge model (`boxmodel.fit_merge`'s coefficients, its
+                       chance's tail mass by separation) and the geometry of today's merges against the joined pairs'
   examples_<q>.npz     (`--examples`) the examples of the model holding q out, and their .parquet
   <q>_seed<s>.pt       (`fit`; Task 8's arm (c)) a fitted box model, and its log <q>_seed<s>.json
 
@@ -87,7 +87,7 @@ def measure(args) -> None:
     terra = load_words()
     boxes = wordboxes.load_boxes().reset_index(drop=True)
     sheets = Sheets()
-    shapes, dists, pairs = {}, [None] * len(boxes), [None] * len(boxes)
+    shapes, dists = {}, [None] * len(boxes)
     turned_s = turned_n = 0.0
     for sheet in sorted(set(boxes["sheet"])):
         inputs = sheets[sheet]
@@ -96,7 +96,6 @@ def measure(args) -> None:
         got = B.box_targets(mine, terra[terra["sheet"] == sheet], inputs.ink)
         for label, t in zip(mine.index, got):
             dists[label] = t["count"]
-            pairs[label] = [(g, w) for _, _, g, w in B.pair_gaps(t)]
             turned_s += float((t["shares"] * t["turned"]).sum())
             turned_n += float(t["shares"].sum())
     mission = review.mission_sheet()
@@ -117,15 +116,11 @@ def measure(args) -> None:
         keep = B.training_boxes(boxes, terra, quarter=q, touch=touch, shapes=shapes)
         d = [dists[i] for i in keep.index]
         gaps[qn] = B.gap_distribution(B.same_line_gaps(words))
-        held = B.gap_distribution(pd.DataFrame([gw for i in keep.index for gw in pairs[i]],
-                                               columns=["gap", "weight"]))
         out["folds"][qn] = {"training_words": int(len(words)), "boxes": int(len(keep)), **binned(d),
                             "joined": int(round(sum(float(x[2:].sum()) for x in d))),
                             "K": int(max([len(x) - 1 for x in d] + [2])),
                             "same_line_gaps": {"pairs": gaps[qn]["n"], "weight_sum": round(gaps[qn]["weight_sum"], 2),
-                                               "quantiles": gaps[qn]["quantiles"]},
-                            "held_pair_gaps": {"pairs": held["n"], "weight_sum": round(held["weight_sum"], 2),
-                                               "quantiles": held["quantiles"]}}
+                                               "quantiles": gaps[qn]["quantiles"]}}
         print(qn, json.dumps(out["folds"][qn]))
     B.OUT_DIR.mkdir(parents=True, exist_ok=True)
     if args.quarters:
@@ -138,7 +133,8 @@ def measure(args) -> None:
             t1 = time.perf_counter()
             words = B.training_words(terra, q)
             keep = B.training_boxes(boxes, terra, quarter=q, touch=touch, shapes=shapes)
-            ex = B.box_examples(keep, words, sheets, q, touch=touch, gaps=gaps[qn])
+            held = terra[~terra.index.isin(words.index)]
+            ex = B.box_examples(keep, words, sheets, q, touch=touch, held_words=held)
             ex.save(B.OUT_DIR / f"examples_{qn}")
             src = ex.meta["source"].value_counts().to_dict()
             out["folds"][qn]["examples"] = {"n": len(ex), "boxes": int(src.get("box", 0)),
@@ -146,7 +142,9 @@ def measure(args) -> None:
                                             "channels": list(ex.channels), "columns": int(ex.flat.shape[2]),
                                             "weight_sum": float(ex.weight.sum()),
                                             "seconds": round(time.perf_counter() - t1, 1)}
+            out["folds"][qn]["merge"] = ex.info
             print(qn, "examples", json.dumps(out["folds"][qn]["examples"]))
+            print(qn, "merge", json.dumps(ex.info))
     out["seconds"] = round(time.perf_counter() - t0, 1)
     (B.OUT_DIR / "counts.json").write_text(json.dumps(out, indent=1) + "\n")
     print(json.dumps(out["today"], indent=1))
