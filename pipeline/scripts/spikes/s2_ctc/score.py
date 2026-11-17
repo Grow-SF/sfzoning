@@ -46,6 +46,24 @@ On the held-out quarter (2000 scan, never trained on): best-path character and w
 kind (95% bootstrap intervals over words); and the mean p(code), p(other), p(none) on code, street, block, other and
 non-text crops (explaining away), and code top-1 against Terra's own string where it names a code.
 Writes results.json, reliability.png, disagreements.png and .json (report.py writes results.md).
+
+CHOSEN AFTER SEEING RESULTS (review S2, I4).  The first scoring (v1 crops) had the CTC posterior at T alone, open
+(none / other live), and D's output as q.  These were added after its numbers and the answered misses were seen:
+  - the closed-list framing ("closed") and the CTC prior weights ("+w"): B's first numbers showed "other" taking the
+    mass of near-miss reads ("C-3R"); the survey had named the prior weight, the closed framing is this script's;
+  - the direction rate prior (q on the measured half-turn rate): D alone flipped 19 of 574 upright answered crops;
+  - (in crops.py) the slanted-height floor, found by looking at C's answered misses.
+v1, scored with this same code, is kept in v1/ (a tie on both measures).
+The two closed posteriors differ in their prior (review M4): the CTC's has no code prior and sums a code's forms
+unweighted (CTC's own string prior stands, beta = 0), so a code with more printed forms gets their summed mass;
+the generative reader's applies prior3's p(code) and p(form | code), as that reader is built.
+The generative reader's closed temperature is at its grid's edge (T = 16 chosen on both folds, -log p still falling).
+Its records hold each form's tempered log evidence at the four temperatures only, and the temperature acts inside the
+sums over placements and the other-text term, so its evidence at a lower T can't be computed from them (rescoring is
+the 3.6 h run).  As a sensitivity check only, "gen-fix1 closed, T extrapolated (approx)" fits each form's log
+evidence as a + b / T over the four recorded temperatures (the fit's residuals are reported) and extrapolates it to
+EXTRAP_T, cross-fitted with the recorded temperatures; it is not the reader's evidence at those temperatures.
+Seed replicates (review I3): frames of "<R>s<seed>" models (train_seeds.sh) are scored like their reader.
 """
 import json
 import math
@@ -65,6 +83,10 @@ from sfzmaps.solver.codereader import labels as L  # noqa: E402
 from sfzmaps.solver.codereader import posterior as P  # noqa: E402
 
 READERS = ("A", "B", "C")
+SEED_REPLICATES = ("Bs1", "Bs2", "Cs1", "Cs2")      # train_seeds.sh: B and C again with seeds 1 and 2
+EXTRAP_T = (6.0, 8.0, 11.0)
+CITED = (241, 1810, 1594, 1651, 1249, 1630, 1220, 1401, 326, 232, 387, 699,     # C wrong, generative right
+         91, 602, 1359, 1428, 1558, 1820)                                     # C right on clean prints                          # the generative reader's extrapolated temperatures (approx)
 GRID_T = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0)
 W_OTHER = (1.0, 0.3, 0.1, 0.03, 0.01, 3e-3, 1e-3, 3e-4, 1e-4, 3e-5, 1e-5, 1e-6)
 W_NONE = (1.0, 0.1, 0.01, 1e-3, 1e-4)
@@ -143,6 +165,40 @@ def ctc_closed(fr: Frames, i: int, forms: dict, temp: float, q: float | None) ->
     for st, v in zip(strings, lp):
         by.setdefault(forms[st], []).append(float(v))
     return _softmax({c: float(np.logaddexp.reduce(v)) for c, v in by.items()})
+
+
+def extrapolated(ev) -> tuple[dict, float]:
+    """Each form's log evidence fitted as a + b / T over the recorded temperatures (least squares): {form: (a, b)}
+    (None for a form not finite at every temperature), and the largest absolute residual of the fit."""
+    x = 1 / np.array(ev.temperatures, float)
+    a_ = np.c_[np.ones_like(x), x]
+    out, worst = {}, 0.0
+    for f, v in ev.forms.items():
+        v = np.asarray(v, float)
+        if not np.isfinite(v).all():
+            out[f] = None
+            continue
+        coef, *_ = np.linalg.lstsq(a_, v, rcond=None)
+        out[f] = (float(coef[0]), float(coef[1]))
+        worst = max(worst, float(np.abs(a_ @ coef - v).max()))
+    return out, worst
+
+
+def gen_closed_extrapolated(fits: dict, prior, temp: float) -> dict:
+    """`gen_closed` with each form's log evidence from its a + b / T fit at `temp` (approximate; see the module)."""
+    by_code: dict[str, list[tuple[float, float]]] = {}
+    for f, ab in fits.items():
+        if ab is not None:
+            by_code.setdefault(prior.forms[f], []).append((ab[0] + ab[1] / temp, prior.form_weights.get(f, 1.0)))
+    logs = {}
+    for code, p in prior.codes.items():
+        vals = by_code.get(code)
+        if not vals or p <= 0:
+            logs[code] = float("-inf")
+            continue
+        w = np.array([x for _, x in vals], float)
+        logs[code] = math.log(p) + float(np.logaddexp.reduce([v + math.log(x / w.sum()) for (v, _), x in zip(vals, w)]))
+    return _softmax(logs)
 
 
 def gen_closed(ev, prior, temp) -> dict:
@@ -300,7 +356,7 @@ def main():
             rate = prior.pose.half_turn.get(meta.at[i, "direction"], prior.pose.half_turn_other)
             lr = pd_ / (1 - pd_)
             q_of[i] = rate * lr / (rate * lr + 1 - rate)
-    frames = {r: Frames(r) for r in READERS if (C.OUT / f"frames_{r}.npz").exists()}
+    frames = {r: Frames(r) for r in READERS + SEED_REPLICATES if (C.OUT / f"frames_{r}.npz").exists()}
     results: dict = {"readers": sorted(frames), "llm_yardstick": LLM_YARDSTICK}
 
     # --- the owner's answered labels, box-found ---
@@ -348,6 +404,21 @@ def main():
         measures[f"gen-{g} closed"] = m
         chosen[f"gen-{g} closed"] = ch
         closed_posts[f"gen-{g}"] = [closed[ch[str(f)]][k] for k, f in enumerate(folds)]
+        if g == "fix1":     # sensitivity only: the closed posterior at extrapolated lower temperatures (see module)
+            fitted = [extrapolated(e) for e in evs]
+            resid = np.array([r for _, r in fitted])
+            ext = dict(closed)
+            for t in EXTRAP_T:
+                ext[t] = [gen_closed_extrapolated(fx, prior, t) for fx, _ in fitted]
+            m, ch = crossfit(lambda t: ext[t], tuple(EXTRAP_T) + tuple(temps), folds, truths)
+            measures["gen-fix1 closed, T extrapolated (approx)"] = m
+            chosen["gen-fix1 closed, T extrapolated (approx)"] = ch
+            results["answered"]["extrapolation_residual_nats"] = {
+                "median": round(float(np.median(resid)), 3), "q90": round(float(np.quantile(resid, 0.9)), 3),
+                "max": round(float(resid.max()), 3),
+                "per_temperature": {str(t): {"top1": round(float(per_label(ext[t], truths)["top1"].mean()), 4),
+                                             "nll": round(float(per_label(ext[t], truths)["nll"].mean()), 4)}
+                                    for t in tuple(EXTRAP_T) + tuple(temps)}}
     # the CTC readers
     for r, fr in frames.items():
         for use_dir in (False, True) if q_of is not None else (False,):
@@ -390,6 +461,13 @@ def main():
         llm[reader] = {s: {k: v for k, v in summary(m, mask & read).items() if not k.startswith(("nll", "top3"))}
                        for s, mask in subsets.items()}
     results["answered"]["llm_reads"] = llm
+    # the labels the first report cited (the generative reader right, C wrong on a digit crossed by a line; and C's
+    # clean wins): each closed reader's top-1 there, seeds included (review I3)
+    where = {int(i): k for k, i in enumerate(rows["index"])}
+    results["answered"]["cited_labels"] = {
+        str(i): {"owner": truths[where[i]], "flagged": bool(flagged[where[i]]),
+                 **{n: str(measures[n]["best"][where[i]]) for n in measures if n.endswith("closed")}}
+        for i in CITED if i in where}
     results["answered"]["measures"] = table
     results["answered"]["constants"] = chosen
     # each CTC variant against the generative reader's like variant: closed with closed, open cross-fitted (+w or T
@@ -403,6 +481,15 @@ def main():
     results["answered"]["paired_vs_generative"] = {
         name: {"against": like(name), **{s: paired(m, measures[like(name)], mask) for s, mask in subsets.items()}}
         for name, m in measures.items() if not name.startswith("gen") and like(name) in measures}
+    ext_name = "gen-fix1 closed, T extrapolated (approx)"
+    results["answered"]["paired_vs_generative_extrapolated"] = {
+        name: {"against": ext_name, **{s: paired(m, measures[ext_name], mask) for s, mask in subsets.items()}}
+        for name, m in measures.items() if name.endswith(" closed") and not name.startswith("gen")
+        and ext_name in measures}
+    results["answered"]["paired_c_vs_a"] = {
+        f"{c} vs {a}": {"against": a, **{s: paired(measures[c], measures[a], mask) for s, mask in subsets.items()}}
+        for c, a in (("C+dir closed", "A+dir closed"), ("C closed", "A closed"), ("Cs1+dir closed", "A+dir closed"),
+                     ("Cs2+dir closed", "A+dir closed")) if c in measures and a in measures}
     if "fix2" in gen_recs:      # the partial c626e46 run: its labels only, beside fix1 and the CTC readers there
         part = have["fix2"]
         recs2 = gen_recs["fix2"]
@@ -490,7 +577,7 @@ def main():
 def pictures(crops, rows, idx, truths, measures, flagged):
     import cv2
     # the reliability diagram: every reader with intervals' worth of labels per bin
-    names = [n for n in measures if n.endswith("closed")]
+    names = [n for n in measures if n.endswith("closed") and (n.startswith("gen") or n[1] in "+ ")]
     h, w = 420, 520
     img = np.full((h, w, 3), 255, np.uint8)
     x0, y0, s = 50, 380, 330
@@ -513,7 +600,7 @@ def pictures(crops, rows, idx, truths, measures, flagged):
                 (0, 0, 0), 1, cv2.LINE_AA)
     cv2.imwrite(str(C.OUT / "reliability.png"), img)
     # the disagreements: the best CTC reader (cross-fitted, by mean -log p on all answered) vs the generative reader
-    ctc = [n for n in measures if n.endswith("closed") and not n.startswith(("gen", "A"))]
+    ctc = [n for n in measures if n.endswith("closed") and n[0] in "BC" and n[1] in "+ "]
     if not ctc or "gen-fix1 closed" not in measures:
         return
     best = min(ctc, key=lambda n: measures[n]["nll"].mean())

@@ -31,7 +31,10 @@ SPLITS = ("quarter", "answered")
 
 
 def load(reader: str):
-    model = T.build(reader) if reader != "A" else _bare_A()
+    """A trained reader by its model name: "A", "B", "C", "D", or a seed replicate such as "Cs1" (its letter's
+    architecture)."""
+    arch = reader[0]
+    model = T.build(arch) if arch != "A" else _bare_A()
     model.load_state_dict(torch.load(C.OUT / "models" / f"{reader}.pt", map_location="cpu"))
     model.eval()
     return model

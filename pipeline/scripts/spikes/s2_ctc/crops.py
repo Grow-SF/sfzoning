@@ -14,8 +14,10 @@ A slanted word's height (any angle but a quarter turn) is solved from Terra's ax
 that inversion is ill-conditioned: a loose box gives a height of 2-7 px (a quarter of the training street names under
 8 px), and the crop is a sliver of one stroke.  So a slanted word's height is floored at its kind's FLOOR_QUANTILE
 quantile of the training split's quarter-turn words (whose heights are their box's sides, exact), and its length then
-follows from the box and that height as `word_rect` lays out a near-diagonal word (`word_geometry`).  (The first run,
-v1/, cut slivers; its numbers are kept beside these.)
+follows from the box and that height as `word_rect` lays out a near-diagonal word (`word_geometry`).
+CHOSEN AFTER SEEING RESULTS (review S2, I4): the floor was found by looking at reader C's misses on the owner's
+answered labels in the first run (v1/, which cut slivers and was a tie with the generative reader on both measures),
+and every reader was retrained on these crops.  v1's crops and numbers are kept in v1/.
 
 The maps: the 2000 drawing's three scans (MAPS: the 2000 digital scan and its two earlier scans, one modern lettering),
 every word Terra boxed (every kind).  Hold-outs exactly as R1's `SheetData.held` (`textnet.reader_stage`), on every map

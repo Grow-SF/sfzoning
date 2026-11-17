@@ -17,6 +17,7 @@ scripts/spikes/s2_ctc/train_all.sh B C A D repro
 $DOCTR scripts/spikes/s2_ctc/infer.py frames B C A D > $OUT/logs/infer.log 2>&1
 $DOCTR scripts/spikes/s2_ctc/infer.py check C > $OUT/logs/check_C.log 2>&1
 $DOCTR scripts/spikes/s2_ctc/infer.py check B > $OUT/logs/check_B.log 2>&1
+scripts/spikes/s2_ctc/train_seeds.sh > $OUT/logs/train_seeds.log 2>&1
 $DOCTR scripts/spikes/s2_ctc/score.py > $OUT/logs/score.log 2>&1
 uv run python scripts/spikes/s2_ctc/report.py > $OUT/logs/report.log 2>&1
 echo "spike S2 done"

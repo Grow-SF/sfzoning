@@ -263,7 +263,9 @@ def train(reader: str, steps: int | None, seed: int, device: str, tag: str | Non
 
 
 def first_losses(reader: str, steps: int, seed: int, device: str) -> list[float]:
-    """The loss of each of the first `steps` steps, read every step (for the reproducibility check)."""
+    """The loss of each of the first `steps` steps, read every step (for the reproducibility check).  A simplified
+    loop (lr / 10, no schedule, no clipping, no weights): it checks that the GPU gives the same numbers twice, not
+    that `train`'s own loop does (review M5)."""
     from sfzmaps import gpu
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
@@ -315,7 +317,8 @@ def main():
         (C.OUT / "models" / "repro.json").write_text(json.dumps(res, indent=1) + "\n")
         print(res, flush=True)
         return
-    train(a.reader, a.steps, a.seed, a.device)
+    # seed 0 keeps the reader's own name (A.pt ...); another seed is a training-variance replicate, "<reader>s<seed>"
+    train(a.reader, a.steps, a.seed, a.device, tag=a.reader if a.seed == 0 else f"{a.reader}s{a.seed}")
 
 
 if __name__ == "__main__":
