@@ -20,6 +20,9 @@ by the px's map point) is one of those asked for:
   m2            text found: ink inside a Terra word box that is not a run-rule px and not within 1 px of one (its 8
                 neighbours); m2_by_kind by the kind of the word drawn last on the px (as the detector learns it), and
                 m2_answered on the owner's answered labels' words (`Geo.answered`; None for a geo without it)
+  m2_clean_words  text found on clean words: ALL ink inside the box of a clean word (`clean_word_mask`), with no line
+                rule applied inside the word, so long letter strokes (big P and M stems, bold letters joined to a
+                hyphen) count; m2_clean_words_by_kind by the kind of the word drawn last on the px
   overlap_band  ink inside a word box that is a run-rule px or within 1 px of one: reported on its own, never in m2
 
 "In box": inside a Terra word's rectangle (`data.SheetData.words`, filled as `data._paint` fills them); "near": in
@@ -76,6 +79,7 @@ CALLED_09 = 230           # a chance of at least 0.9 (229.5 of 255)
 NEAR_PX = 30              # page px from a word box that are "near" it
 POINT_BINS = (("0-30", 30.0), ("30-100", 100.0), ("100+", np.inf))   # px to the nearest Sol point, upper ends kept
 KINDS = tuple(data.KINDS)                                              # m2_by_kind, in data.KINDS' order
+CLEAN_PX = 3              # a clean word has no run-rule ink within this many px outside its box
 CLIP = 1e-4               # the chance is clipped to CLIP .. 1 - CLIP in the log loss
 BOOT_CHUNK = 100          # bootstrap draws made at a time
 FIELDS = ("px", "called_05", "called_09", "chance", "log_loss")       # the sums per block (float64)
@@ -87,7 +91,8 @@ M1A = ("m1a", "m1a_in_box", "m1a_near", "m1a_far")
 CONTEXT = ("m1a_context", "m1a_in_box_context")          # the weight beyond the cut: a diagnostic, in no verdict
 WEIGHTED = (*M1A, *CONTEXT)                               # px are the sum of a weight
 M1B = ("m1b_in_box", "m1b_near", "m1b_far", *(f"m1b_by_point:{b}" for b, _ in POINT_BINS))
-M2 = ("m2", *(f"m2_by_kind:{k}" for k in KINDS), "m2_answered")
+M2 = ("m2", *(f"m2_by_kind:{k}" for k in KINDS), "m2_answered",
+      "m2_clean_words", *(f"m2_clean_words_by_kind:{k}" for k in KINDS))
 MEASURES = (*M1A, *CONTEXT, *M1B, "m1c", *M2, "overlap_band")
 TARGET = {m: ("text" if m.startswith("m2") or m == "overlap_band" else "not text") for m in MEASURES}
 WHAT = {
@@ -110,6 +115,8 @@ WHAT = {
     "m2_by_kind:street name": "the same, in a street name's box",
     "m2_by_kind:other": "the same, in another word's box",
     "m2_answered": "the same, in an owner-answered label's box",
+    "m2_clean_words": "all ink in the box of a clean word (no run rule applied inside it)",
+    **{f"m2_clean_words_by_kind:{k}": f"the same, in a clean {k}'s box" for k in KINDS},
     "overlap_band": "in-box ink that is run-rule ink or within 1 px of it",
 }
 # What each measure would miss (the spec: a gate states what it would miss), one line per family, in scores.md.
@@ -126,6 +133,8 @@ MISSES = {
     "m2, m2_by_kind, m2_answered": "counts as text the lines the run rule misses inside boxes (stair-step and dashed "
     "lines); leaves out glyph ink within 1 px of a run-rule line (in the overlap band); m2_answered only the answered "
     "labels with a Terra box",
+    "m2_clean_words, m2_clean_words_by_kind": "words touching or crossed by lines are left out; it measures letters, "
+    "including long strokes, on clean words only",
     "overlap_band": "mixes line and glyph ink, so neither target is right; its log loss is against text",
 }
 _PROB = np.clip(np.arange(256) / 255.0, CLIP, 1 - CLIP)
@@ -441,6 +450,36 @@ def _page_raster(a, sd: data.SheetData, what: str, dtype) -> np.ndarray:
     return a.astype(dtype, copy=False)
 
 
+def clean_word_mask(sd: data.SheetData, line: np.ndarray) -> np.ndarray:
+    """Which of the sheet's Terra words are clean, bool (len(sd.words),): every 8-connected piece of ink that touches
+    the word's box lies wholly inside it, and no run-rule px (`line`, `linerules.line_px`) is within CLEAN_PX px outside
+    the box (a line's px inside the box are in a crossing piece, caught by the first test; a long letter stroke inside
+    the box is no reason to leave the word out).  Task 6's composites use the same words."""
+    out = np.zeros(len(sd.words), bool)
+    if not len(sd.words):
+        return out
+    ink = data.page_ink(sd)
+    n, label = cv2.connectedComponents(ink.view(np.uint8), connectivity=8)
+    size = np.bincount(label.ravel(), minlength=n)
+    reach = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * CLEAN_PX + 1, 2 * CLEAN_PX + 1))
+    for j, rect in enumerate(sd.words):
+        lo = np.maximum(rect.min(axis=0) - CLEAN_PX, 0)
+        hi = np.minimum(rect.max(axis=0) + CLEAN_PX + 1, [sd.width, sd.height])
+        if (hi <= lo).any():
+            continue
+        shape = (hi[1] - lo[1], hi[0] - lo[0])
+        box = np.zeros(shape, np.uint8)
+        cv2.fillPoly(box, [(rect - lo).reshape(-1, 1, 2)], 1)
+        window = (slice(lo[1], hi[1]), slice(lo[0], hi[0]))
+        ring = (cv2.dilate(box, reach) > 0) & (box == 0)
+        if line[window][ring].any():
+            continue
+        inside = label[window][(box > 0) & ink[window]]
+        pieces, got = np.unique(inside, return_counts=True)
+        out[j] = bool((size[pieces] == got).all())
+    return out
+
+
 def _add_sheet(sums: dict[str, _Sums], sd: data.SheetData, chance: np.ndarray, quarter_ix: np.ndarray, geo) -> None:
     """Add one sheet's px to every measure's sums (see the module)."""
     if not np.isfinite(sd.ft_per_px):
@@ -500,6 +539,10 @@ def _add_sheet(sums: dict[str, _Sums], sd: data.SheetData, chance: np.ndarray, q
         add(f"m2_by_kind:{name}", base & (kind == data.KINDS[name]))
     if "m2_answered" in sums:
         add("m2_answered", base & _page_raster(geo.answered(sd), sd, "answered words", bool))
+    clean = np.concatenate([[False], clean_word_mask(sd, line)])[word]
+    add("m2_clean_words", scope & clean)
+    for name in KINDS:
+        add(f"m2_clean_words_by_kind:{name}", scope & clean & (kind == data.KINDS[name]))
     add("overlap_band", scope & in_box & by_line)
 
 
@@ -582,7 +625,7 @@ def gate_sheets(sheets: list[data.SheetData], source: ChanceSource, quarters: tu
             result[m] = summary.get(m)
     result["m1a_weight"] = getattr(geo, "weight_table", None)
     result["block_key"] = getattr(geo, "block_key", None)
-    result["rules"] = {"rule": "the run rule (linerules.line_px): defines m1b, m2's base and the overlap band",
+    result["rules"] = {"rule": "the run rule (linerules.line_px): defines m1b, m2's base, the overlap band and which words are clean",
                        "putText": rule_table()}
     return result, tallies
 

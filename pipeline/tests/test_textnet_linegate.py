@@ -268,3 +268,54 @@ def test_page_to_grid_round_trip_within_one_px():
         seen |= mine
     assert seen.all()
     assert np.abs(back_y - ys).max() <= 1 and np.abs(back_x - xs).max() <= 1
+
+
+def _page_with_words(strokes, boxes, kinds):
+    """A page of drawn ink (rectangles filled (x0, y0, x1, y1) in `strokes`) and Terra words at `boxes`."""
+    ink = np.zeros((H, W), bool)
+    for x0, y0, x1, y1 in strokes:
+        ink[y0:y1 + 1, x0:x1 + 1] = True
+    words = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]] for x0, y0, x1, y1 in boxes], np.int32)
+    sd = data.SheetData(series=paths.SERIES, sheet="2000-digital-zoning-p99", height=H, width=W,
+                        ink_bits=np.packbits(ink, axis=1), words=words, kinds=np.array(kinds, np.uint8),
+                        angles=np.zeros(len(boxes), np.int16), other=np.zeros((0, 4, 2), np.int32),
+                        points=np.zeros((0, 2), np.int32), world=np.zeros((0, 0, 2)), ft_per_px=FT_PER_PX)
+    geo = FakeGeo(np.full((H, W), NE, np.uint8), np.zeros((H, W), np.int32), np.zeros((H, W), np.float32),
+                  np.zeros((H, W), bool), np.zeros((H, W), np.float32))
+    return sd, geo, ink
+
+
+def test_a_clean_words_long_stroke_the_run_rule_calls_line_still_counts_in_m2_clean_words():
+    # a big stem (4 px x 100 rows: 400 ft long, a run-rule line) and a short letter, both inside one box with 4 px to
+    # spare: the word is clean, so its stem counts; m2 leaves the stem out as line ink
+    stem, letter = (30, 30, 33, 129), (40, 100, 47, 107)
+    sd, geo, ink = _page_with_words([stem, letter], [(26, 26, 51, 133)], [data.KINDS["zoning code"]])
+    line = linerules.line_px(ink, FT_PER_PX)
+    assert line[30:130, 30:34].all(), "the run rule no longer calls this stem line"
+    assert linegate.clean_word_mask(sd, line).tolist() == [True]
+    r, _ = linegate.gate_sheets([sd], lambda s: np.full((H, W), 255, np.uint8), ("ne",), geo, boot=10)
+    assert r["m2_clean_words"]["px"] == int(ink.sum())
+    assert r["m2_clean_words"]["called_05"] == 1.0
+    assert r["m2_clean_words_by_kind"]["zoning code"]["px"] == int(ink.sum())
+    assert r["m2_clean_words_by_kind"]["street name"]["px"] == 0
+    assert r["m2"]["px"] < r["m2_clean_words"]["px"]
+
+
+def test_a_word_touched_by_a_line_is_left_out_of_m2_clean_words(crossed_word):
+    sd = crossed_word.sd
+    line = linerules.line_px(crossed_word.ink, FT_PER_PX)
+    assert linegate.clean_word_mask(sd, line).tolist() == [False]
+    r, _ = linegate.gate_sheets([sd], crossed_word.all_box_text, ("ne",), crossed_word.geo, boot=10)
+    assert r["m2_clean_words"]["px"] == 0
+
+
+def test_a_word_whose_ink_runs_out_of_its_box_is_not_clean_and_a_word_a_line_nears_is_not_either():
+    # word 0: a piece reaching past the box; word 1: whole inside, a line (50+ px run) 2 px from its box; word 2: clean
+    pieces = [(10, 20, 30, 24), (30, 20, 70, 24),                  # word 0's piece runs from x 10 to 70, box ends at 40
+              (100, 20, 106, 26), (90, 50, 200, 53),               # word 1: letter; line below at 24 px... see box
+              (220, 20, 226, 26)]
+    boxes = [(8, 18, 40, 28), (96, 16, 112, 48), (216, 16, 232, 30)]
+    sd, geo, ink = _page_with_words(pieces, boxes, [0, 0, 0])
+    line = linerules.line_px(ink, FT_PER_PX)
+    assert line[50:54, 90:201].any()
+    assert linegate.clean_word_mask(sd, line).tolist() == [False, False, True]
