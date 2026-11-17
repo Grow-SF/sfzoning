@@ -3,11 +3,17 @@
 Outputs per px (OUTPUTS channels): 0 the text logit; 1-4 the kind logits among text (data.KINDS: zoning code, block
 number, street name, other); 5-6 the reading direction's cosine and sine (any length; only the direction counts).  A
 text-only network has channel 0 alone.  A network with the word heads (`train.Recipe.heads="words"`, WORD_OUTPUTS
-channels) has those seven, then (`data.crop_targets(..., words=True)`):
-  CORE  7      the logit of the px being in a word's core
-  GEO   8-11   the distances to its word's top, bottom, start and end edges, as log(distance / GEO_UNIT) (`distances`)
-  TAG   12-15  the px's word tag, a vector classified to its own word's mean tag among its crop's words' (`train`)
-The word's reading direction is channels 5-6.  The number of channels of each recipe's heads: HEAD_OUTPUTS.
+channels) has no sign and no side order in its geometry (a word's reading sign can't be told under the training's
+quarter turns), so its channels are (`data.crop_targets(..., words=True)`):
+  0          the text logit, 1-4 the kind logits (as above)
+  AXIS 5-6   the reading AXIS: (cos 2t, sin 2t) of its angle t (any length; only the direction counts), t taken modulo
+             180 degrees: a word read either way has one axis
+  CORE 7     the logit of the px being in a word's core
+  GEO  8-11  8, 9: dx, dy, the offset from the px to its word's centre in image px (x right, y down) over the word's
+             height; 10, 11: the log of the word's length and of its height in px (along its axis and across it)
+  TAG  12-15 the px's word tag, a vector classified to its own word's mean tag among its crop's words' (`train`)
+`word_geometry` decodes AXIS and GEO into px and degrees.  The number of channels of each recipe's heads:
+HEAD_OUTPUTS.
 
 At half size the ink is folded first (`fold`: each 2 x 2 block of px into 4 channels at one px, every px kept), the
 U-Net runs on that at half the px each way, and its head gives 4 x the outputs, unfolded (`unfold`) back to one set of
@@ -20,22 +26,27 @@ import torch.nn.functional as F
 WIDTH = 24        # channels at full resolution
 LEVELS = 5        # resolutions, each half the one before
 OUTPUTS = 7
-CORE = 7                       # the word heads' channels (see the module)
+AXIS = slice(5, 7)             # the word heads' channels (see the module)
+CORE = 7
 GEO = slice(8, 12)
 TAG = slice(12, 16)
 WORD_OUTPUTS = 16
 HEAD_OUTPUTS = {"all": OUTPUTS, "text": 1, "words": WORD_OUTPUTS}    # channels, by `train.Recipe.heads`
-GEO_UNIT = 8.0                 # px a distance output of 0 stands for: the distances' parameterisation (their unit,
-                               # where the network starts), not a decision; any value is learned around
-GEO_LIMIT = 20.0               # a numerical guard, not a decision: the distance outputs are read within +-this so a
-                               # distance stays finite in float32 (8 e^20 px is far beyond any page)
+GEO_LIMIT = 20.0               # a numerical guard, not a decision: the log sizes are read within +-this when decoded,
+                               # so a size stays finite in float32 (e^20 px is far beyond any page)
 FOLD = 2          # px each way folded into channels at half size
 MULTIPLE = 2 ** (LEVELS - 1)   # a page side the levels halve evenly is a multiple of this (at full size)
 
 
-def distances(raw: torch.Tensor) -> torch.Tensor:
-    """The word heads' distance outputs (GEO channels) in px: GEO_UNIT x exp(raw), raw read within +-GEO_LIMIT."""
-    return GEO_UNIT * torch.exp(raw.clamp(-GEO_LIMIT, GEO_LIMIT))
+def word_geometry(out: torch.Tensor) -> torch.Tensor:
+    """The word heads' geometry decoded from a word network's outputs (`out` (..., WORD_OUTPUTS, h, w), the channels
+    third from last): (..., 5, h, w) of each px's word centre offset from the px in px (x right, y down: dx and dy
+    times the height), the word's length and height in px, and its axis in degrees in [0, 180) (half the angle of
+    AXIS's (cos 2t, sin 2t))."""
+    g = out[..., GEO, :, :]
+    length, height = torch.exp(g[..., 2:4, :, :].clamp(-GEO_LIMIT, GEO_LIMIT)).unbind(-3)
+    axis = torch.rad2deg(torch.atan2(out[..., AXIS.start + 1, :, :], out[..., AXIS.start, :, :])) / 2 % 180
+    return torch.stack([g[..., 0, :, :] * height, g[..., 1, :, :] * height, length, height, axis], -3)
 
 
 def fold(x: torch.Tensor) -> torch.Tensor:

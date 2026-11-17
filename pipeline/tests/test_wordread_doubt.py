@@ -432,7 +432,7 @@ def test_a_word_reaching_into_a_held_out_area_has_no_geometry():
     b = data.crop_targets(held, 90, 70, 64, 1.0, 0, words=True)
     assert b["known"].all() and np.array_equal(a["core"], b["core"]) and np.array_equal(a["tag_id"], b["tag_id"])
     zero = b["tag_id"] == 1
-    assert zero.any() and (a["geo"][0] + a["geo"][1])[zero].min() > 0       # without the hold-out: a box at each px
+    assert zero.any() and a["geo"][3][zero].min() > 0           # without the hold-out: a word's size at each px
     assert not b["geo"][:4][:, zero].any()                       # word 0: no distances, the angle kept
     assert np.array_equal(b["geo"][4], a["geo"][4])
     two = b["tag_id"] == 2
@@ -491,7 +491,7 @@ def test_word_losses_scale_with_the_weights_and_a_weightless_word_gives_no_gradi
     single = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
     weights = [0.2, 0.5, 0.9]
     mass = [px(s) for s in single]
-    for part in ("iou", "direction"):
+    for part in ("centre", "size", "axis"):
         want = sum(w * m * parts(s)[part] for w, m, s in zip(weights, mass, single)) / sum(
             w * m for w, m in zip(weights, mass))
         assert parts(weights)[part] == pytest.approx(want, rel=1e-5)

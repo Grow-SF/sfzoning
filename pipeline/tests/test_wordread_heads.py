@@ -1,6 +1,7 @@
 """The detector's word heads (`train.Recipe.heads="words"`) and their targets (`data.crop_targets(..., words=True)`,
-`wordread.shrink.prepare`): word cores (each word's own rectangle, no shrink), the box each core px votes for (EAST)
-and word tags (PAN); and the record-only overlap measurement of shrunk cores (`shrink.core`, `unclip`, `measure_r`)."""
+`wordread.shrink.prepare`): word cores (each word's own rectangle, no shrink), the sign-free geometry each core px
+gives (its word's centre over its height, log sizes and axis), and word tags; and the record-only overlap measurement
+of shrunk cores (`shrink.core`, `unclip`, `measure_r`)."""
 import contextlib
 import dataclasses
 
@@ -144,35 +145,85 @@ def test_prepare_fills_each_core_with_its_own_rectangle():
 
 # --- the targets -----------------------------------------------------------------------------------------------------
 
-def test_geo_at_a_core_px_gives_the_distances_to_the_words_four_sides():
+def test_geo_is_the_offset_to_the_words_centre_over_its_height_its_log_sizes_and_its_axis():
     sd, = shrink.prepare([_sheet([((100, 50, 200, 80), 0), ((230, 40, 260, 140), 90)])])
     t = data.crop_targets(sd, 65, 150, 64, 1.0, 0, words=True)        # the window's top-left px is (33, 118)
     assert t["geo"].dtype == np.float32 and t["geo"].shape == (5, 64, 64)
     assert t["core"].dtype == np.uint8 and t["tag_id"].dtype == np.int32
-    # page px (150, 65): 15 px below the top edge, 15 above the bottom, 50 from the start and 50 from the end
+    # word 1, 100 x 30 px, centre (150, 65): at page px (150, 65) no offset; at (120, 60) the centre is 30 px right
+    # and 5 px down, over the height 30
     assert t["core"][32, 32] == 1 and t["tag_id"][32, 32] == 1
-    assert np.allclose(t["geo"][:, 32, 32], [15, 15, 50, 50, 0])
-    # page px (120, 60)
-    assert np.allclose(t["geo"][:, 60 - 33, 120 - 118], [10, 20, 20, 80, 0])
+    assert np.allclose(t["geo"][:, 32, 32], [0, 0, np.log(100), np.log(30), 0])
+    assert np.allclose(t["geo"][:, 60 - 33, 120 - 118], [1, 5 / 30, np.log(100), np.log(30), 0])
     # off the cores: nothing
     assert t["core"][0, 0] == 0 and t["tag_id"][0, 0] == 0 and not t["geo"][:, 0, 0].any()
-    # a word read bottom to top: its top is on the left, its start at the bottom
+    # word 2, read bottom to top: 100 long (up the page) and 30 high (across), centre (245, 90), axis 90; at page px
+    # (240, 120) the centre is 5 px right and 30 up
     up = data.crop_targets(sd, 90, 245, 64, 1.0, 0, words=True)      # top-left px (58, 213)
     assert up["tag_id"][120 - 58, 240 - 213] == 2
-    assert np.allclose(up["geo"][:, 120 - 58, 240 - 213], [10, 20, 20, 80, 90])
+    assert np.allclose(up["geo"][:, 120 - 58, 240 - 213], [5 / 30, -1, np.log(100), np.log(30), 90])
 
 
-def test_geo_scales_with_the_crop_and_turns_with_it():
-    sd, = shrink.prepare([_sheet([((100, 50, 200, 80), 0)])])
-    flat = data.crop_targets(sd, 65, 150, 64, 1.0, 0, words=True)
-    big = data.crop_targets(sd, 65, 150, 128, 2.0, 0, words=True)        # the same 64 page px, twice the size
-    assert np.allclose(big["geo"][:4, 64, 64], 2 * flat["geo"][:4, 32, 32]) and big["geo"][4, 64, 64] == 0
-    assert np.array_equal(big["tag_id"][::2, ::2], flat["tag_id"])
-    turned = data.crop_targets(sd, 65, 150, 64, 1.0, 1, words=True)      # a quarter turn counter-clockwise
-    for k in ("core", "tag_id"):
-        assert np.array_equal(turned[k], np.rot90(flat[k]))
-    assert np.array_equal(turned["geo"][:4], np.rot90(flat["geo"][:4], axes=(1, 2)))
-    assert np.array_equal(turned["geo"][4], np.where(np.rot90(flat["core"]) > 0, 90, 0))
+def _votes(t, word):
+    """Where each core px of `word` puts its word's centre in the crop (x, y): the px plus its offset times the
+    height."""
+    rows, cols = np.nonzero(t["tag_id"] == word)
+    height = np.exp(t["geo"][3][rows, cols])
+    return np.c_[cols + t["geo"][0][rows, cols] * height, rows + t["geo"][1][rows, cols] * height]
+
+
+AT_ANGLE = {0: (110, 95, 210, 145),       # 100 long, 50 high
+            30: (112, 86, 209, 153),      # the axis box of a word about 101 long and 19 high read at 30 degrees
+            90: (135, 70, 185, 170),      # read bottom to top: 100 long (up the page), 50 high (across)
+            179: (110, 95, 210, 145), 181: (110, 95, 210, 145)}
+
+
+@pytest.mark.parametrize("angle", sorted(AT_ANGLE))
+def test_geo_at_any_angle_puts_every_core_px_on_the_words_centre_with_its_sizes_and_axis(angle):
+    sd, = shrink.prepare([_sheet([(AT_ANGLE[angle], angle)])])
+    rect = sd.words[0].astype(float)                    # its corners in order: the first edge its length
+    length, height = np.linalg.norm(rect[1] - rect[0]), np.linalg.norm(rect[3] - rect[0])
+    t = data.crop_targets(sd, 120, 160, 128, 1.0, 0, words=True)        # top-left px (56, 96): the whole word
+    assert np.allclose(_votes(t, 1), rect.mean(0) - [96, 56], atol=1.0)
+    on = t["core"] > 0
+    assert np.allclose(np.exp(t["geo"][2][on]), length, atol=1.0)
+    assert np.allclose(np.exp(t["geo"][3][on]), height, atol=1.0)
+    assert np.allclose(t["geo"][4][on], sd.angles[0] % 180) and sd.angles[0] % 180 == angle % 180
+
+
+def test_geo_is_continuous_across_180_degrees():
+    # a word read at 179 degrees and one at 181 (-179) in the same box: the same geometry within their 2 degrees'
+    # difference, and axes 179 and 1, two degrees apart on the axis circle (2t: 358 and 362 = 2)
+    a, b = (data.crop_targets(shrink.prepare([_sheet([(AT_ANGLE[r], r)])])[0], 120, 160, 128, 1.0, 0, words=True)
+            for r in (179, 181))
+    both = (a["core"] > 0) & (b["core"] > 0)
+    assert both.sum() > 4000
+    assert np.abs(a["geo"][:4][:, both] - b["geo"][:4][:, both]).max() < 0.05
+    assert set(np.unique(a["geo"][4][both])) == {179} and set(np.unique(b["geo"][4][both])) == {1}
+    t = np.deg2rad(2 * np.array([179.0, 1.0]))
+    assert np.hypot(np.cos(t[0]) - np.cos(t[1]), np.sin(t[0]) - np.sin(t[1])) < 0.08
+
+
+@pytest.mark.parametrize("turns", [1, 2, 3])
+def test_geo_turns_as_a_vector_with_the_crop_and_its_axis_by_a_right_angle(turns):
+    sd, = shrink.prepare([_sheet([(AT_ANGLE[30], 30)])])
+    flat = data.crop_targets(sd, 120, 160, 128, 1.0, 0, words=True)
+    turned = data.crop_targets(sd, 120, 160, 128, 1.0, turns, words=True)
+    for k in ("core", "tag_id", "geo_known"):
+        assert np.array_equal(turned[k], np.rot90(flat[k], turns))
+    # every core px of the turned crop puts the centre where the turn takes it: (x, y) to (y, size - 1 - x) a turn
+    x, y = _votes(flat, 1).mean(0)
+    for _ in range(turns):
+        x, y = y, 127 - x
+    assert np.allclose(_votes(turned, 1), [x, y], atol=1e-3)
+    on = turned["core"] > 0
+    assert np.allclose(turned["geo"][2:4], np.rot90(flat["geo"][2:4], turns, axes=(1, 2)))     # the sizes stay
+    assert np.allclose(turned["geo"][4][on], (30 + 90 * turns) % 180)
+    # twice the scale: the sizes grow by log 2, the offsets (over the height) stay
+    big = data.crop_targets(sd, 120, 160, 256, 2.0, 0, words=True)
+    pick = flat["core"] > 0
+    assert np.allclose(big["geo"][2:4][:, ::2, ::2][:, pick], flat["geo"][2:4][:, pick] + np.log(2))
+    assert np.allclose(big["geo"][0:2][:, ::2, ::2][:, pick], flat["geo"][0:2][:, pick])
 
 
 def test_word_targets_need_the_cores_and_change_nothing_else():
@@ -200,7 +251,7 @@ def test_which_words_reach_a_held_out_area_is_found_once_per_sheet(monkeypatch):
     t = crops[0]
     reach, free = t["tag_id"] == 1, t["tag_id"] == 2
     assert t["geo_known"].dtype == np.uint8 and not t["geo_known"][reach].any() and t["geo_known"][free].all()
-    assert not t["geo"][:4][:, reach].any() and (t["geo"][0] + t["geo"][1])[free].min() > 0
+    assert not t["geo"][:4][:, reach].any() and t["geo"][3][free].min() > 0
     assert not t["geo_known"][t["core"] == 0].any()
     # a sheet holding other areas is another SheetData: found again for it
     data.crop_targets(dataclasses.replace(sd, held=()), 70, 100, 64, 1.0, 0, words=True)
@@ -261,13 +312,13 @@ def test_word_loss_is_zero_for_a_perfect_answer_and_its_tags_are_classified_amon
     core, geo, tag, known, geo_known, groups = train.word_tensors(crops)
     out = torch.zeros(2, 16, 64, 64)
     out[:, model.CORE] = torch.where(core > 0, 30.0, -30.0)
-    out[:, model.GEO] = torch.log(geo[:, :4].clamp(min=1e-3) / model.GEO_UNIT)
-    rad = torch.deg2rad(geo[:, 4])
+    out[:, model.GEO] = geo[:, :4]
+    rad = torch.deg2rad(2 * geo[:, 4])                   # the axis as (cos 2t, sin 2t)
     out[:, 5], out[:, 6] = torch.cos(rad), torch.sin(rad)
     out[:, model.TAG.start] = 10.0 * tag                 # each word's tag far from the others' and the background's
     _, parts = train.word_loss(out, core, geo, tag, known, geo_known, groups)
     names = dict(zip(train.WORD_PARTS, parts.tolist()))
-    assert sorted(names) == sorted(("core", "dice", "iou", "direction", "tag"))
+    assert sorted(names) == sorted(("core", "dice", "centre", "size", "axis", "tag"))
     assert all(v < 1e-5 for v in names.values()), names
     # every tag the same: each core px is any of its crop's classes alike, log(classes) (its words and background)
     out[:, model.TAG] = 0
@@ -288,7 +339,7 @@ def test_the_word_terms_are_added_by_learned_log_variances():
     crops = _word_batch()
     targets = train.word_tensors(crops)
     out = torch.randn(2, 16, 64, 64, generator=torch.Generator().manual_seed(1))
-    s = torch.tensor([0.5, -1.0, 0.0, 2.0, -0.3])
+    s = torch.tensor([0.5, -1.0, 0.0, 2.0, -0.3, 0.7])
     loss, p = train.word_loss(out, *targets, log_var=s)
     assert torch.allclose(loss, (torch.exp(-s) * p + s / 2).sum())
     assert torch.allclose(train.word_loss(out, *targets)[0], p.sum())       # at their start, 0: the plain sum
@@ -300,16 +351,37 @@ def test_the_word_terms_are_added_by_learned_log_variances():
     assert (net.head.weight.grad.flatten(1).abs().sum(1)[model.CORE:] > 0).all()
 
 
+def test_word_geometry_decodes_the_centre_in_px_the_sizes_and_the_axis():
+    sd, = shrink.prepare([_sheet([(AT_ANGLE[90], 90)])])
+    t = data.crop_targets(sd, 120, 160, 128, 1.0, 1, words=True)       # a turned crop
+    out = torch.zeros(16, 128, 128)
+    out[model.GEO] = torch.from_numpy(t["geo"][:4].copy())
+    twice = torch.deg2rad(2 * torch.from_numpy(t["geo"][4].copy()))
+    out[model.AXIS] = 3.0 * torch.stack([torch.cos(twice), torch.sin(twice)])      # any length
+    got = model.word_geometry(out).numpy()
+    rows, cols = np.nonzero(t["core"])
+    assert got.shape == (5, 128, 128)
+    assert np.allclose(np.c_[cols + got[0][rows, cols], rows + got[1][rows, cols]], _votes(t, 1), atol=1e-4)
+    assert np.allclose(got[2:4][:, rows, cols], np.exp(t["geo"][2:4][:, rows, cols]), rtol=1e-5)
+    assert np.allclose(np.cos(np.deg2rad(2 * got[4][rows, cols])), 1, atol=1e-6)     # 90 turned: axis 0 (= 180)
+    # a batch, and axes either side of 0 / 180 degrees
+    axis = torch.tensor([179.0, 1.0, 90.0])
+    batch = torch.zeros(3, 16, 1, 1)
+    batch[:, 5, 0, 0], batch[:, 6, 0, 0] = torch.cos(torch.deg2rad(2 * axis)), torch.sin(torch.deg2rad(2 * axis))
+    assert torch.allclose(model.word_geometry(batch)[:, 4, 0, 0], axis, atol=1e-3)
+
+
 def _fixed_batch():
-    """One 6 x 8 crop: word 1 (rows 1-2, cols 1-3, read at 0 deg), word 2 (rows 1-3, cols 5-6, read at 90 deg, its
-    distances not known), px (5, 7) not known, the rest background; the outputs a fixed sine."""
+    """One 6 x 8 crop: word 1 (rows 1-2, cols 1-3, axis 0 deg, every px given dx 0.5, dy -0.25, length 3, height 2),
+    word 2 (rows 1-3, cols 5-6, axis 90 deg, its geometry not known), px (5, 7) not known, the rest background; the
+    outputs a fixed sine."""
     core, tag = torch.zeros(1, 6, 8), torch.zeros(1, 6, 8, dtype=torch.int64)
     core[0, 1:3, 1:4], tag[0, 1:3, 1:4] = 1, 1
     core[0, 1:4, 5:7], tag[0, 1:4, 5:7] = 1, 2
     known = torch.ones(1, 6, 8)
     known[0, 5, 7] = 0
     geo = torch.zeros(1, 5, 6, 8)
-    geo[0, :4, 1:3, 1:4] = torch.tensor([2.0, 3.0, 4.0, 5.0])[:, None, None]
+    geo[0, :4, 1:3, 1:4] = torch.tensor([0.5, -0.25, float(np.log(3)), float(np.log(2))])[:, None, None]
     geo[0, 4, 1:4, 5:7] = 90.0
     geo_known = torch.zeros(1, 6, 8)
     geo_known[0, 1:3, 1:4] = 1
@@ -319,12 +391,13 @@ def _fixed_batch():
 
 def test_word_loss_fixed_values():
     # pinned from the implementation, and equal within 1e-7 to a float64 numpy reference written from the module's
-    # formulas (balanced cross-entropy, Dice, EAST's IoU without its +1 (-log(I / U) at the px read: 2.0466076 here,
-    # where EAST's (I + 1) / (U + 1) gave 2.0249325), 1 - cos, the tag softmax at T = e^0.2; Kendall's sum)
-    total, parts = train.word_loss(*_fixed_batch(), log_var=torch.tensor([0.1, -0.2, 0.3, 0.0, 0.5]),
+    # formulas (balanced cross-entropy, Dice, the centre's and the size's mean r^2 / 2 over their two coordinates at
+    # the px whose geometry is known, 1 - cos 2(t' - t) of the axis, the tag softmax at T = e^0.2; Kendall's sum)
+    total, parts = train.word_loss(*_fixed_batch(), log_var=torch.tensor([0.1, -0.2, 0.3, 0.0, 0.5, -0.4]),
                                    log_temp=torch.tensor(0.2))
-    assert parts.tolist() == pytest.approx([0.794277489, 0.680517197, 2.04660763, 1.13685882, 1.09964228], rel=1e-5)
-    assert total.item() == pytest.approx(5.21986738, rel=1e-5)
+    assert parts.tolist() == pytest.approx(
+        [0.794277489, 0.680517197, 0.302051008, 0.755115211, 0.914711177, 1.09964228], rel=1e-5)
+    assert total.item() == pytest.approx(4.87403154, rel=1e-5)
 
 
 def test_a_word_heads_fit_trains_the_per_ink_head_by_todays_loss_learns_its_weights_and_repeats(monkeypatch,
@@ -332,11 +405,17 @@ def test_a_word_heads_fit_trains_the_per_ink_head_by_todays_loss_learns_its_weig
     sheets = shrink.prepare([_sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0), ((160, 40, 180, 160), 90)]),
                              _sheet([((20, 20, 120, 50), 30), ((60, 150, 200, 175), 0)], sheet="t")])
     recipe = train.Recipe(heads="words", iterations=2, batch=3, crop=48, width=4)
-    real, seen = train.loss_fn, []
-    monkeypatch.setattr(train, "loss_fn", lambda out, t, k, a, w: seen.append(out.shape) or real(out, t, k, a, w))
+    real, seen, given, drawn = train.loss_fn, [], [], []
+    monkeypatch.setattr(train, "loss_fn", lambda out, t, k, a, w: seen.append(out.shape) or given.append(a)
+                        or real(out, t, k, a, w))
+    real_tensors = train.batch_tensors
+    monkeypatch.setattr(train, "batch_tensors", lambda crops, ink_only: drawn.append(
+        real_tensors(crops, ink_only)) or drawn[-1])
     first = train.fit(sheets, recipe, "cpu", seed=0)
     again = train.fit(sheets, recipe, "cpu", seed=0)
     assert seen == [(3, 16, 48, 48)] * 4
+    # the per-ink terms read channels 5-6 as the axis: today's loss is given twice each px's reading angle
+    assert len(drawn) == len(given) == 4 and all(torch.equal(a, 2 * b[3]) for a, b in zip(given, drawn))
     for (name, a), b in zip(first.state_dict().items(), again.state_dict().values()):
         assert torch.equal(a, b), name
     # the word terms' weights and the temperature were trained from their start (log-variance 0: weight 1), the same

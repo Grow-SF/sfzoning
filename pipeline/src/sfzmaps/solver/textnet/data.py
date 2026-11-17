@@ -23,16 +23,20 @@ word's core (`SheetData.cores`: the word's own labelled rectangle, no shrink, wh
 before training):
   core       1 on the px of a word's core (filled as the words are, later over earlier), 0 elsewhere
   tag_id     1 + the index of the word whose core holds the px (int32), 0 elsewhere
-  geo        float32 (5, h, w), at core px only (0 elsewhere): the distances in crop px from the px to its word's top,
-             bottom, start and end edges, and its reading angle turned with the crop (as `angle`).  The edges are
-             those of the word's whole rectangle (`SheetData.words`), taken by its reading angle (`SheetData.angles`):
-             start and end along the reading direction, top and bottom across it (the top on the letters' upper side);
-             each is the furthest of the rectangle's corners that way.  Distances are measured at page px and scaled
-             by the crop's scale; the quarter turns leave them as they are.  A word whose rectangle holds a held-out
-             px has no geometry: its four distances are 0 at its core px, as they would tell how far it reaches into
-             the held-out area (its angle is kept: it is read off the word's px outside the area too)
-  geo_known  1 at the core px of a word whose distances are known (its rectangle holds no held-out px), 0 elsewhere:
-             the px the loss reads the distances at; which words reach into a held-out area is found once per sheet
+  geo        float32 (5, h, w), at core px only (0 elsewhere), the word's geometry with no sign and no side order:
+               0, 1  dx, dy: the offset from the px to the centre of the word's whole rectangle (`SheetData.words`),
+                     in the crop's px (x right, y down), divided by the word's height: free of the crop's scale;
+                     a quarter turn of the crop turns it as a vector, (dx, dy) to (dy, -dx)
+               2, 3  the log of the word's length and of its height in crop px (page px scaled by the crop's scale;
+                     the turns leave them): its extents along its reading axis and across it, each the furthest
+                     of the rectangle's corners that way, by its reading angle (`SheetData.angles`)
+               4     its axis in degrees, in [0, 180): the reading angle modulo 180, turned with the crop
+             All are continuous in the word's angle: a word at 179 and one at 181 degrees have nearly the same.  A
+             word whose rectangle holds a held-out px has no geometry: its first four are 0 at its core px, as they
+             would tell how far it reaches into the held-out area (its axis is kept: it is read off the word's px
+             outside the area too)
+  geo_known  1 at the core px of a word whose geometry is known (its rectangle holds no held-out px), 0 elsewhere:
+             the px the loss reads geo's first four at; which words reach into a held-out area is found once a sheet
   weight     float32, only when the sheet holds word weights (`SheetData.weights`, Terra's doubt, which
              `wordread.doubt.prepare` fills before training): at a core px its word's weight, 1 elsewhere.  With none,
              every word weighs 1 and the key is absent (the targets are those without weights, byte for byte).
@@ -535,26 +539,38 @@ def _held_words(sd: SheetData) -> np.ndarray:
 
 
 def _geometry(sd: SheetData, tag: np.ndarray, y0: int, x0: int) -> np.ndarray:
-    """At each core px of a page window (`_cores`), the distances in page px to its word's top, bottom, start and end
-    edges, and its reading angle (see the module): float32 (h, w, 5), 0 off the cores.  A word whose rectangle holds
-    a held-out px (`_held_words`) has its distances 0 (no box), its angle kept."""
+    """At each core px of a page window (`_cores`), its word's geometry at page scale, unturned (see the module): the
+    offset from the px to the word's centre over the word's height (x, y), the log of the word's length and of its
+    height in page px, and its axis in degrees, in [0, 180); float32 (h, w, 5), 0 off the cores.  A word whose
+    rectangle holds a held-out px (`_held_words`) has its first four 0, its axis kept."""
     out = np.zeros((*tag.shape, 5), np.float32)
     rows, cols = np.nonzero(tag)
     if not len(rows):
         return out
     j = tag[rows, cols] - 1
     theta = np.deg2rad(sd.angles[j].astype(float))
-    along = np.stack([np.cos(theta), -np.sin(theta)], -1)       # the reading direction (page px, y down)
-    up = np.stack([-np.sin(theta), -np.cos(theta)], -1)         # across it, towards the letters' tops
+    along = np.stack([np.cos(theta), -np.sin(theta)], -1)       # the reading axis (page px, y down)
+    across = np.stack([-np.sin(theta), -np.cos(theta)], -1)     # across it
     corners = sd.words[j].astype(float)                         # (m, 4, 2)
-    p = np.stack([x0 + cols, y0 + rows], -1).astype(float)
-    a, b = (corners * along[:, None]).sum(-1), (corners * up[:, None]).sum(-1)
-    pa, pb = (p * along).sum(-1), (p * up).sum(-1)
-    out[rows, cols, :4] = np.maximum(np.stack([b.max(-1) - pb, pb - b.min(-1), pa - a.min(-1), a.max(-1) - pa], -1), 0)
-    out[rows, cols, 4] = sd.angles[j]
+    a, b = (corners * along[:, None]).sum(-1), (corners * across[:, None]).sum(-1)
+    centre = (along * ((a.max(-1) + a.min(-1)) / 2)[:, None] + across * ((b.max(-1) + b.min(-1)) / 2)[:, None])
+    # a word under 1 px long or high is no word on a scan (the rectangles are at least 2 px each way): the floor
+    # only keeps the log and the division defined
+    length, height = np.maximum(a.max(-1) - a.min(-1), 1.0), np.maximum(b.max(-1) - b.min(-1), 1.0)
+    offset = (centre - np.stack([x0 + cols, y0 + rows], -1)) / height[:, None]
+    out[rows, cols, :4] = np.stack([offset[:, 0], offset[:, 1], np.log(length), np.log(height)], -1)
+    out[rows, cols, 4] = np.mod(sd.angles[j], 180)
     unseen = _held_words(sd)[j]
     out[rows[unseen], cols[unseen], :4] = 0
     return out
+
+
+def _turn_offsets(dx: np.ndarray, dy: np.ndarray, turns: int) -> tuple[np.ndarray, np.ndarray]:
+    """An image offset (x right, y down) after the picture is turned `turns` quarter turns counter-clockwise
+    (`np.rot90`): each turn takes (dx, dy) to (dy, -dx)."""
+    for _ in range(turns % 4):
+        dx, dy = dy, -dx
+    return dx, dy
 
 
 def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int,
@@ -596,11 +612,13 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
         return {k: np.rot90(v, turns) for k, v in out.items()}
     geo = out.pop("geo")
     on = out["tag_id"] > 0
-    geo[..., :4] *= size / src
-    geo[..., 4] = np.where(on, (geo[..., 4].astype(np.int32) + 90 * turns + 180) % 360 - 180, 0)
+    known_geo = np.concatenate([[0], ~_held_words(sd)]).astype(np.uint8)[out["tag_id"]]
+    geo[..., 0], geo[..., 1] = _turn_offsets(geo[..., 0], geo[..., 1], turns)     # over the height: no scale
+    geo[..., 2:4] += np.where(known_geo > 0, np.float32(np.log(size / src)), np.float32(0))[..., None]
+    geo[..., 4] = np.where(on, np.mod(geo[..., 4] + 90 * turns, 180), 0)
     out["core"] = on.view(np.uint8)
     out["geo"] = np.moveaxis(geo, -1, 0)
-    out["geo_known"] = np.concatenate([[0], ~_held_words(sd)]).astype(np.uint8)[out["tag_id"]]
+    out["geo_known"] = known_geo
     if len(sd.weights):
         out["weight"] = np.concatenate([[1], sd.weights]).astype(np.float32)[out["tag_id"]]
     return {k: np.rot90(v, turns, axes=(1, 2) if k == "geo" else (0, 1)) for k, v in out.items()}

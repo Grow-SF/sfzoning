@@ -20,21 +20,26 @@ is only ever read at ink), or the known ink and the px next to it, the 8 around 
 
 With the word heads (`heads` "words": `model.WORD_OUTPUTS` channels; the sheets' word cores, each word's own labelled
 rectangle, filled by `wordread.shrink.prepare` before the training), each crop also has its word targets
-(`data.crop_targets(..., words=True)`), and the loss adds, to the per-ink head's (channels 0-6, the same terms as
-"all"), the word terms WORD_PARTS.  Each is a weighted mean over the px it reads, a px weighing `word_tensors`' known:
-0 where the px is not known, else 1, or, with word weights (`data.SheetData.weights`, Terra's doubt from
-`wordread.doubt.prepare`; none by default), its word's weight at a core px; a word of weight 0 adds nothing.
+(`data.crop_targets(..., words=True)`), and the loss adds, to the per-ink head's (channels 0-6), the word terms
+WORD_PARTS.  The geometry has no sign and no side order (`model`'s word layout): a word's reading sign can't be told
+under the quarter turns, and a signed target gave the axis no gradient.  So with the word heads channels 5-6 are the
+reading AXIS, (cos 2t, sin 2t), in the per-ink terms too: the per-ink head's terms are those of "all" (`loss_fn`,
+unchanged) given twice the reading angle, so its 1 - cosine is 1 - cos 2(t' - t), the axis's.  Each word term is a
+weighted mean over the px it reads, a px weighing `word_tensors`' known: 0 where the px is not known, else 1, or, with
+word weights (`data.SheetData.weights`, Terra's doubt from `wordread.doubt.prepare`; none by default), its word's
+weight at a core px; a word of weight 0 adds nothing.
   core       binary cross-entropy of the core over the known px, each class weighed by the inverse of its weight in
              the batch (the batch's own counts, no measuring pass and no mining): the mean over the core px plus the
              mean over the other px, divided by the number of the two the batch holds
   dice       1 - Dice of the core's chance over the known px
-  iou        -log(I / U) of the box each core px puts about itself (its four distances, `model.distances`) against
-             its word's (EAST's IoU loss, without its +1 smoothing), over the known core px whose distances are known
-             (`geo_known`: not a word reaching into a held-out area).  At those px I > 0 (a word's box has height and
-             length, and the distances are above 0); at every other px, where I and U may be 0, both are taken as 1,
-             so the term there is 0 and passes no gradient (a guard for 0 / 0, not a change to any read px's loss)
-  direction  1 - cosine of the reading direction (channels 5-6) against its word's, over the known core px (a word
-             reaching into a held-out area keeps its angle)
+  centre     the Gaussian regression of the offset to the word's centre over its height (GEO 8-9 against geo's dx,
+             dy): the mean over the coordinates and the px of (prediction - target)^2 / 2, so that with its learned
+             weight below, exp(-s) L + s / 2 is the mean Gaussian negative log-likelihood of a coordinate (up to its
+             constant) with the learned variance e^s; over the known core px whose geometry is known (`geo_known`:
+             not a word reaching into a held-out area)
+  size       the same of the log length and log height (GEO 10-11), its own learned variance
+  axis       1 - cos 2(t' - t) of the axis (channels 5-6, read as (cos 2t, sin 2t)) against its word's, over the known
+             core px (a word reaching into a held-out area keeps its axis)
   tag        each known core px's tag (channels 12-15) classified among its crop's classes: each of the crop's words,
              by its mean tag over its core px, and the background, by the mean tag over the crop's known px off the
              cores.  A softmax of -|tag - mean|^2 / T over the classes the crop has, T a learned temperature
@@ -102,7 +107,7 @@ HELD = 2                # steps a batch is held after its copy to the GPU was qu
 DICE_EPS = 1e-6        # added to Dice's denominator: no px gives 0 / it (numerical; decides nothing)
 MASS_EPS = 1e-12       # the least a weighted sum divides by: no weight gives 0 / it = 0 (numerical; decides nothing)
 PARTS = ("text", "kind", "angle")
-WORD_PARTS = ("core", "dice", "iou", "direction", "tag")
+WORD_PARTS = ("core", "dice", "centre", "size", "axis", "tag")
 CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words"), "decoder": ("full", "light"),
            "precision": ("float32", "float16"), "labels": data.LABEL_RULES}
 NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
@@ -122,7 +127,8 @@ class Recipe:
       half_size       the network runs at half the px each way, on the ink folded 2 x 2 into channels (`model.fold`);
                       crops must be even
       heads           "all" outputs (text, kind, reading direction), "text" alone, or "words": all with the word heads
-                      (core, distances, tag; see the module), their sheets' cores filled by `wordread.shrink.prepare`
+                      (axis, core, centre and size, tag; see the module), their sheets' cores filled by
+                      `wordread.shrink.prepare`
                       and the word terms added by learned weights (`WordLoss`)
       weight_average  the decay of the moving average of the weights kept as the model (`WeightAverage`); 0 is off
       prefetch        the next batches drawn in a background thread (the same batches)
@@ -386,7 +392,7 @@ def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: tor
     the log-variances `log_var` (s, one a part) and the tag's log-temperature `log_temp` (both 0, their start, when
     not given: `WordLoss` holds the learned ones), and the parts themselves (unweighted) as one tensor on the batch's
     device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`.  Each px counts by its weight
-    (`known`).  The distances are read only at core px where they are known (`geo_known`), the direction at every
+    (`known`).  The centre and size are read only at core px whose geometry is known (`geo_known`), the axis at every
     known core px."""
     if log_var is None:
         log_var = out.new_zeros(len(WORD_PARTS))
@@ -398,19 +404,16 @@ def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: tor
     ld = 1 - 2 * (p * core * known).sum() / ((p * known).sum() + (core * known).sum() + DICE_EPS)
     on = core * known
     boxed = on * geo_known
-    g, d = geo[:, :4], model.distances(out[:, model.GEO])
-    inter = ((torch.minimum(d[:, 0], g[:, 0]) + torch.minimum(d[:, 1], g[:, 1]))
-             * (torch.minimum(d[:, 2], g[:, 2]) + torch.minimum(d[:, 3], g[:, 3])))
-    union = (d[:, 0] + d[:, 1]) * (d[:, 2] + d[:, 3]) + (g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) - inter
-    read = boxed > 0                    # the px the term reads; elsewhere 0 / 0 is guarded, not computed
-    li = (-torch.log(torch.where(read, inter, 1.0) / torch.where(read, union, 1.0)) * boxed).sum() \
-        / boxed.sum().clamp(min=MASS_EPS)
-    cs = out[:, 5:7]
-    rad = torch.deg2rad(geo[:, 4])
+    mass = boxed.sum().clamp(min=MASS_EPS)
+    half_sq = (out[:, model.GEO] - geo[:, :4]) ** 2 / 2                     # (n, 4, h, w)
+    lcentre = (half_sq[:, 0:2].mean(1) * boxed).sum() / mass
+    lsize = (half_sq[:, 2:4].mean(1) * boxed).sum() / mass
+    cs = out[:, model.AXIS]
+    rad = torch.deg2rad(2 * geo[:, 4])
     cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
     la = ((1 - cosine) * on).sum() / on.sum().clamp(min=MASS_EPS)
     lt = _tag_ce(out[:, model.TAG], tag, groups, known, core, log_temp)
-    parts = torch.stack([lc, ld, li, la, lt])
+    parts = torch.stack([lc, ld, lcentre, lsize, la, lt])
     return (torch.exp(-log_var) * parts + log_var / 2).sum(), parts
 
 
@@ -578,7 +581,8 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
             with torch.autocast(torch.device(device).type, dtype=torch.float16, enabled=half):
                 out = net(x)
             out = out.float()                                   # the loss in float32, outside the autocast
-            loss, parts = loss_fn(out, t, k, a, w)
+            # with the word heads channels 5-6 are the axis: the per-ink terms are given twice the angle (the module)
+            loss, parts = loss_fn(out, t, k, 2 * a if words else a, w)
             if words:
                 more, word_parts = crit(out, *words)
                 loss, parts = loss + more, torch.cat([parts, word_parts])
