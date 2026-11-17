@@ -7,16 +7,24 @@ The plan is `docs/superpowers/plans/2026-11-17-text-detector-text-vs-line.md` (T
 
 ## Summary for the owner
 
-- **What the label fix does (control 0: line ink inside a word box is "unknown" in training, not "text").**
+- **What "control 0" is, and what "against the old model" means.** Control 0 is the label rule: zones (84 px, around
+  unmatched points only) plus the in-box rule (line ink inside a word box is "unknown" in training, not "text"). Every
+  "control vs old-ne" or "control vs old-sw" number in this note also carries a change of recipe: the old quarter
+  model (`data/solver/text-ne/model.pt`) is the old `Recipe()` (8000 steps, full size, loss on all known px), while
+  the control uses `stage.DEFAULT_RECIPE` (4000 steps, half size, ink+1px). So those differences mix three changes:
+  the recipe, the zones and the in-box rule. See "Post hoc decomposition" below for a partial split on NE.
+- **What the label fix does (control 0 against the old NE model; recipe, zones and in-box rule together).**
   - On the held-out NE quarter it calls much less line ink inside labels text than the old NE quarter model does.
   - District-border ink in word boxes (M1a in box): 0.63 to 0.40, a change of -0.225 [-0.257, -0.194].
   - All straight-line ink in word boxes (M1b in box): 0.82 to 0.55, a change of -0.272 [-0.291, -0.245].
-  - Against today's held-out detectors (r328), which call almost all ink text, the changes are -0.59 and -0.42.
-  - In the pictures, block, street and district lines through labels turn grey and the letters stay red.
+  - Against today's held-out detectors (r328), which call nearly all in-box ink text (its M1c is 0.37-0.55), the
+    changes are -0.59 and -0.42.
+  - In the pictures, in the panel windows, block, street and district lines through labels turn grey and the letters
+    stay red. Over all boxes M1b in box is still about 0.55.
   - On SW (one seed, the control only), against the old SW model:
     - M1a in box: 0.73 to 0.41, a change of -0.319 [-0.384, -0.255];
     - M1b in box: 0.80 to 0.52, a change of -0.275 [-0.297, -0.214].
-- **What it costs, against the old NE model:**
+- **What it costs, against the old NE model** (again recipe, zones and in-box rule together):
   - **Letters of clean words** (words no line touches) called text: 0.957 to 0.930, a change of -0.027
     [-0.040, +0.003]. That is beyond the noise (0.021).
     - Post hoc: most of this is in words of the kind "other" (-0.050).
@@ -24,16 +32,21 @@ The plan is `docs/superpowers/plans/2026-11-17-text-detector-text-vs-line.md` (T
       [-0.039, -0.028].
   - **Ink outside every box** called text: 0.025 to 0.052, a change of +0.027 [+0.017, +0.037]. That is beyond the
     noise (0.021).
-  - **The dashed pier-head line** is now called text in every run. It is grey in r328 and in the old model.
-  - Glyph ink in boxes away from lines (M2) is unchanged against the old model: -0.005 [-0.023, +0.010].
-- **What it costs on SW, against the old SW model:**
+  - **The dashed pier-head line** is red in all six runs. It is grey in r328, old-ne, all-sheets and the trial.
+  - Glyph ink in boxes away from lines (M2) is within the noise against the old model: -0.005 [-0.023, +0.010].
+    M2's base is, by construction, the complement of what the control leaves unknown (glyph ink off the run rule's
+    line px and more than 1 px from them), so M2 cannot see the in-box rule's cost. That cost shows in
+    `m2_clean_words` and in the per-kind numbers (codes, below).
+- **What it costs on SW, against the old SW model** (same mix of recipe, zones and in-box rule):
   - Clean-word letters: 0.981 to 0.909, a change of -0.072 [-0.098, +0.001] (noise 0.049).
     - Post hoc: nearly all of it is in "other" words in 5 blocks.
   - M2: -0.014 [-0.027, -0.008]. That is just beyond its noise (0.0136).
     - Post hoc: street-name letters -0.048 and zoning codes -0.018.
     - In the picture, street names written inside curved road bands are grey, as in the old SW model.
   - Ink outside boxes does not rise on SW: +0.001.
-- **The composites (variant 1) add nothing measurable.**
+- **The composites (variant 1): no change beyond the seed noise.** The block intervals of M1c (-0.0094) and M2
+  (+0.0017) exclude 0 but sit inside the seed noise. M1c is what lets the variant pass old-ne as written (+0.018, inside
+  the noise, against the control's +0.027, beyond it).
   - Variant less control, three seeds each:
     - M1a in box +0.006 [-0.006, +0.018];
     - M1b in box -0.004 [-0.012, +0.002];
@@ -42,9 +55,9 @@ The plan is `docs/superpowers/plans/2026-11-17-text-detector-text-vs-line.md` (T
     - clean words +0.0005.
   - All of these are inside the noise. The controller saw no visible difference.
 - **By the rule written in advance, nothing is adoptable**, so the downstream preview (Task 8) does not run.
-  - On NE and on SW, both recipes fail "M2 not lower than r328's beyond the noise". That condition cannot pass for a
-    detector that stops calling line ink text: r328 calls 99.9% of the glyph ink and 97% of the line ink in boxes text.
-    See the post-hoc section.
+  - On NE both recipes fail "M2 not lower than r328's beyond the noise"; on SW the control (the only run there) does.
+    That condition did not pass for any line-aware detector here, and is unlikely to: r328 calls 99.9% of the glyph
+    ink and 97% of the line ink in boxes text. See the post-hoc section.
   - Against the old quarter model alone (post hoc):
     - on NE the control also fails ink outside boxes and the clean-word guard;
     - on NE the variant fails only the clean-word guard;
@@ -140,7 +153,9 @@ Each composite run made about 8,100 (a) and 8,100 (b) composites out of 48,000 c
 | variant vs r328 | -0.582 [-0.614, -0.546] | -0.428 [-0.478, -0.386] | -0.0300 [-0.0430, -0.0196] (0.0136) **fails** | -0.505 [-0.638, -0.365] (0.136) | -0.0540 [-0.0796, +0.0003] (0.0400) **fails** | held | no | no |
 | variant vs old-ne | -0.219 [-0.247, -0.188] | -0.277 [-0.294, -0.252] | -0.0033 [-0.0205, +0.0113] (0.0159) | +0.0176 [+0.0116, +0.0227] (0.0211) | -0.0261 [-0.0391, +0.0022] (0.0206) **fails** | held | yes | no |
 
-Neither recipe is adoptable on NE: each needs every baseline, and both fail M2 against r328.
+Neither recipe is adoptable on NE: each needs every baseline, and both fail M2 against r328. In the "vs old-ne" rows
+the arm and the old model differ in recipe as well as in label rule (see the summary), so those rows measure the whole
+change, not the label rule alone.
 
 ## SW (control only, seed 0; noise from the NE control seeds)
 
@@ -159,8 +174,8 @@ Neither recipe is adoptable on NE: each needs every baseline, and both fail M2 a
 | r328 | -0.567 [-0.630, -0.498] | -0.453 [-0.580, -0.404] | -0.0297 [-0.0549, -0.0166] (0.0191) **fails** | -0.239 [-0.382, -0.137] (0.123) | -0.0892 [-0.1209, -0.0002] (0.0604) **fails** | **fails** (37.5 missed text pieces vs r328's bound 24.9) | no | no |
 | old-sw | -0.319 [-0.384, -0.255] | -0.275 [-0.297, -0.214] | -0.0142 [-0.0274, -0.0082] (0.0136) **fails** | +0.0014 [-0.0048, +0.0052] (0.0211) | -0.0719 [-0.0977, +0.0006] (0.0491) **fails** | held | no | no |
 
-- **Verdict SW: the control is not adoptable.** It fails on M2 against both baselines (by a hair against old-sw), on
-  the clean-word guard, and on the audit against r328.
+- **Verdict SW: the control does not pass the rule on one seed (M2 -0.0142 vs noise 0.0136).** It fails on M2
+  against both baselines (by a hair against old-sw), on the clean-word guard, and on the audit against r328.
 - **Reading this.**
   - The line gain repeats on SW: M1a in box -0.319 (NE -0.225) and M1b in box -0.275 (NE -0.272).
   - M1c does not rise on SW.
@@ -176,8 +191,9 @@ The controller looked at `runs/compare-ne.png`: all six runs, r328 and old-ne.
   verdict stays `control`, by the numbers, as you computed.
 - **The big vertical "RM-2" (rm2a) is red in all six runs, the control included.** The controller's earlier note
   (Task 5) that it went grey was a misreading of a downscaled picture. Record that correction plainly.
-- **The dashed pier-head line (window "dashed") is called text in all six runs,** and grey in r328 and old-ne. This
-  is a new over-call by the label rule, consistent with m1c rising against old-ne.
+- **The dashed pier-head line (window "dashed") is red in all six runs,** and grey in r328, old-ne, all-sheets and
+  the trial. This is a new over-call, consistent with m1c rising against old-ne. Its cause is not established; see
+  "What remains open".
 - **Control s0 only:** parts of "UNION" (residential) are grey. The other runs keep it red.
 
 **Correction, stated plainly:**
@@ -191,8 +207,8 @@ The controller looked at `runs/compare-ne.png`: all six runs, r328 and old-ne.
 ## Noticed after the runs (post hoc; the verdicts above are as written and unchanged)
 
 - **The r328 M2 condition is uninformative.**
-  - "M2 not lower beyond the noise against r328" cannot pass for any detector that stops calling line ink text.
-    r328 calls nearly all ink text: M2 0.9994, M1b in box 0.97, M1c 0.55 on NE.
+  - "M2 not lower beyond the noise against r328" did not pass for any line-aware detector here, and is unlikely to.
+    r328 calls nearly all in-box ink text: M2 0.9994, M1b in box 0.97, M1c 0.55 on NE.
   - A detector that leaves line ink grey also loses some glyph ink next to lines. Passing would need M2 >= 0.986 on
     NE, which no line-aware detector here reaches (the old NE model has 0.973).
   - So against r328, M2 says nothing about whether letters were lost.
@@ -225,6 +241,33 @@ The controller looked at `runs/compare-ne.png`: all six runs, r328 and old-ne.
   - On SW: codes -0.018 [-0.035, -0.010], block numbers -0.010, street names -0.048 [-0.057, -0.039]. The street
     names written inside curved road bands are grey in `runs/compare-sw.png` (window sw_dense), as they are for old-sw.
 
+## Post hoc decomposition of control against old-ne (NE units; the trial baseline)
+
+"Control vs old-ne" changes three things at once (see the summary). `baselines/trial` is a third point between them:
+the new recipe (`DEFAULT_RECIPE`), the boxes rule (no in-box rule) and 30-px zones. It was trained on every sheet, so
+it is mostly in-sample on NE: read its numbers as an upper bound on what the recipe does for NE, not as held-out
+values. Each row is a `linegate.paired` difference (95% interval over the NE blocks; 1000 draws, seed 0). The three
+columns are exact: trial less old-ne, control less trial, and their sum (control less old-ne).
+
+| measure | trial less old-ne (recipe, boxes rule, 30-px zones) | control less trial (84-px zones + in-box rule) | control less old-ne |
+|---|---|---|---|
+| m1c (ink outside boxes) | +0.0161 [+0.0131, +0.0195] | +0.0109 [-0.0015, +0.0230] | +0.0270 [+0.0167, +0.0366] |
+| m1a_in_box | -0.0060 [-0.0334, +0.0249] | -0.2193 [-0.2466, -0.1925] | -0.2253 [-0.2567, -0.1943] |
+| m1b_in_box | -0.0147 [-0.0273, -0.0057] | -0.2577 [-0.2806, -0.2275] | -0.2724 [-0.2911, -0.2447] |
+| m2_clean_words | +0.0286 [-0.0012, +0.0421] | -0.0552 [-0.0821, +0.0017] | -0.0266 [-0.0401, +0.0025] |
+| m2_by_kind codes | +0.0012 [-0.0017, +0.0045] | -0.0344 [-0.0396, -0.0294] | -0.0332 [-0.0389, -0.0280] |
+
+Reading:
+- **Over half of the rise outside boxes goes with the recipe:** +0.016 of the +0.027. The trial has the old rule's
+  boxes and the new recipe and already rises beyond its interval; the remaining +0.011 has an interval that includes 0.
+- **The line gain and the code-letter loss are the label rule's** (zones plus the in-box rule, not separated here):
+  M1a in box -0.219 and M1b in box -0.258 of the -0.225 and -0.272, and codes -0.034 of -0.033. The recipe alone
+  moves M1a in box by nothing measurable and M1b in box by -0.015.
+- **Clean words** move the other way under the recipe (+0.029, interval includes 0) and fall under the label rule
+  (-0.055, interval includes 0), so the control's -0.027 is a small net of two larger moves.
+- The decomposition is partial: the trial's zones (30 px) differ from the control's (84 px), so "the label rule" here
+  is zones plus the in-box rule. Which of the two does what is not separated. The trial is in-sample on NE.
+
 ## Audits (missed letter-sized pieces outside every box, judged by eye)
 
 - **How they were made.** A run's own audit draws 64 of its missed pieces (mean chance below 0.5) on its quarter. The
@@ -247,7 +290,13 @@ The controller looked at `runs/compare-ne.png`: all six runs, r328 and old-ne.
 - The audit condition holds everywhere except control SW against r328. There the control has 37.5 estimated missed
   text pieces, against r328's upper bound of 24.9: 3 in 64 against 0 in 64.
 - Almost every missed letter-sized piece is a line fragment, a corner or a junction stub, for every detector.
-- The detectors that leave lines grey miss about 3x as many such pieces as r328 does, and they are lines too.
+- The detectors that leave lines grey miss more such pieces than r328 does. Ratios of the missed pools, per quarter
+  (recomputed from the audits' `missed_below_0.5`; the seeds of an arm averaged):
+  - NE, against r328's 449: control 1257 (2.8x), composites 1269 (2.8x), old-ne 1379 (3.1x);
+  - SW, against r328's 445: control 799 (1.8x), old-sw 821 (1.8x).
+
+  So it is about 2.8x to 3.1x on NE and 1.8x on SW, not a flat 3x. That "they are lines too" is one person's count of
+  64 tiles per source (see the table), not a measured share of the pool.
 
 ## 1990-96 (sheets 22-33, the quarter's px; there is no table, so no M1a; no baselines)
 
@@ -286,9 +335,14 @@ All paths are under `pipeline/data/solver/experiments/textlines/`.
 
 ## What remains open
 
-- **The dashed pier-head line is a new over-call.**
-  - The run rule does not mark dashes (recall 0.02), so the label rule leaves them as "text" where a box covers them.
-  - Nothing in training says otherwise. M1c rises by +0.027 against old-ne.
+- **The dashed pier-head line is a new over-call.** What is seen:
+  - The "dashed" window (p02 rows 770-1010, cols 1930-2170) holds no Terra box, other-pass box, zone or Sol point.
+  - The dashes are red in all six runs, and grey in r328, old-ne, all-sheets and the trial, so the cause is not the
+    recipe's.
+  - One untested hypothesis: dashes inside boxes elsewhere are still taught as text (the run rule's recall on
+    dashes is 0.02, so the label rule does not mark them unknown there).
+  - It is unknown which control change (the zones or the in-box rule) causes it. M1c rises by +0.027 against
+    old-ne, of which the recipe's share is shown above.
 - **Half the straight-line ink in boxes is still called text** (M1b in box 0.51-0.59).
   - The label rule leaves that ink unknown, with no loss on it, so nothing pushes the detector off it.
   - The composites were meant to give that push. They did not move it (-0.004).
@@ -299,7 +353,8 @@ All paths are under `pipeline/data/solver/experiments/textlines/`.
 
   Which strokes these are has not been looked at word by word. The clean-word guard is dominated by a few large
   "other" words.
-- **The adoption bar.** The rule as written requires parity with r328 on M2, which no line-aware detector can meet.
+- **The adoption bar.** The rule as written requires parity with r328 on M2, which no line-aware detector here met
+  and none is likely to.
   Whether to judge against the old quarter models alone is the owner's call. Even then, the clean-word guard fails on
   NE for both recipes.
 - **One-seed SW.** SW is one seed, with the noise taken from the NE seeds.
@@ -309,7 +364,25 @@ All paths are under `pipeline/data/solver/experiments/textlines/`.
   - A_SHARE 0.5 is not measured;
   - line pieces are cut on a 256-px grid.
 
+  - the composites' domain check compared unlike sets (known text ink against all text ink);
+  - `baselines/r328` is a copy that `copy_today` will not refresh after a rebuild of `solver-text-reader`.
+
   A composite recipe closer to the real rates is untested.
+
+## Stages left stale by this plan
+
+`solver-text`, `solver-text-scores`, `solver-text-reader`, `solver-boxes`, `solver-text-crops` and `solver-text-read`
+list `textnet/data.py` and `textnet/train.py` as code deps, and those files changed (new defaults for the label rule
+and composites). Under the defaults the behaviour is byte-identical: the `GUARD_WEIGHTS` digest in
+`tests/test_solver_textnet.py` and the pinned-batch tests show it. Nothing was rebuilt.
+- A rebuild would retrain on the GPU and cascade downstream.
+- `asdict(recipe)` now carries `labels` and `composites`, so a rebuilt `held.json` and `model.pt` would differ in
+  bytes even with identical weights, and `held.json` feeds `solver-text-crops`.
+
+The owner's options (none taken):
+- (a) re-record without rerunning (the R8 path), with the digest as the evidence;
+- (b) rebuild;
+- (c) keep these hooks off the branch until a recipe is adopted.
 
 ## How to reproduce (from `pipeline/`, $0)
 

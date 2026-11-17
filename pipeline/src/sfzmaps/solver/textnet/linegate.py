@@ -454,7 +454,9 @@ def clean_word_mask(sd: data.SheetData, line: np.ndarray) -> np.ndarray:
     """Which of the sheet's Terra words are clean, bool (len(sd.words),): every 8-connected piece of ink that touches
     the word's box lies wholly inside it, and no run-rule px (`line`, `linerules.line_px`) is within CLEAN_PX px outside
     the box (a line's px inside the box are in a crossing piece, caught by the first test; a long letter stroke inside
-    the box is no reason to leave the word out).  Task 6's composites use the same words."""
+    the box is no reason to leave the word out).  The composites pick their clean words with the same test, but run it
+    with the run rule's px grown by 1 px (`SheetData.line_bits`) where this gate passes the raw `line_px`, so their
+    clean words are a subset of these."""
     out = np.zeros(len(sd.words), bool)
     if not len(sd.words):
         return out

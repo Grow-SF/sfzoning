@@ -3,6 +3,7 @@ ORed across clean words, with exact masks; the bank of references they come from
 measures the bank rests on; and their way into `train.draw` (none when the recipe's share is 0)."""
 import dataclasses
 import hashlib
+import platform
 import threading
 from types import SimpleNamespace
 
@@ -14,8 +15,10 @@ from test_solver_textnet import OLD, TINY, maps  # noqa: F401
 from sfzmaps.solver import grid, paths
 from sfzmaps.solver.textnet import composite, data, train, zones
 
-# sha256 (`_digest`) of draw_n(maps, train.Recipe(), seed=3) with train.py at 102f422, before composites existed
-PINNED_BATCHES_SEED3 = "dd2f5a8193a451c7b9774f45bb76b9d8beeccea87465456dd8af6c0935517820"
+# sha256 (`_digest`) of draw_n(maps, train.Recipe(), seed=3) with train.py at 102f422, before composites existed.
+# Computed on macOS arm64 only (like test_solver_textnet.GUARD_WEIGHTS): the crops' bytes (resampling, rotation) are not
+# promised to match on other platforms, so the exact hash is applied there alone and skipped elsewhere.
+PINNED_BATCHES_SEED3 = {("Darwin", "arm64"): "dd2f5a8193a451c7b9774f45bb76b9d8beeccea87465456dd8af6c0935517820"}
 FT_PER_PX = 4.0           # the run rule's length is round(200 / 4) = 50 px here
 ORIGIN = (6000000.0, 2100000.0)                 # the map point (EPSG:2227 ft) of page px (0, 0)
 PAGE = 640
@@ -174,7 +177,19 @@ def test_a_word_onto_lines_keeps_exact_masks(bank_fx, rng):
 
 
 def test_composites_zero_leaves_batches_unchanged(maps):  # noqa: F811
-    assert batches_equal(draw_n(maps, train.Recipe(composites=0.0), seed=3), PINNED_BATCHES_SEED3)
+    want = PINNED_BATCHES_SEED3.get((platform.system(), platform.machine()))
+    if want is None:
+        pytest.skip(f"the pinned hash was computed on macOS arm64 only, not on {platform.system()} {platform.machine()}")
+    assert batches_equal(draw_n(maps, train.Recipe(composites=0.0), seed=3), want)
+
+
+def test_composites_zero_draws_what_no_bank_draws(maps):  # noqa: F811
+    """On every platform: with the share at 0 a bank changes nothing, byte for byte, and is never asked."""
+    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
+    pools, recipe, bank = train.centre_pools(sheets), train.Recipe(batch=6, crop=64, composites=0.0), _FakeBank()
+    plain = train.draw(sheets, pools, recipe, np.random.default_rng(3))
+    banked = train.draw(sheets, pools, recipe, np.random.default_rng(3), bank=bank)
+    assert bank.calls == [] and batches_equal([plain], [banked])
 
 
 def test_composites_repeat_from_the_seed(bank_fx):
