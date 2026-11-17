@@ -49,6 +49,19 @@ def test_colour_compares_normalised_strings_and_reads_a_printed_form_as_its_code
     assert review.colour("24TH MISSION", "24TH-MISSION NCD") == "purple"
 
 
+def test_colour_folds_a_trailing_full_stop_and_doubled_spaces():
+    assert review.colour("ST", "ST.") == "green" and review.colour("ST.", "ST") == "green"
+    assert review.colour("VALENCIA ST", "VALENCIA  ST.") == "green"
+    assert review.colour("RH 2", "RH-2") == "purple" and review.colour("S.T", "ST") == "purple"
+
+
+def test_red_is_ink_at_chance_half_or_more():
+    chance = np.round(np.array([[0.0, 0.49, 0.5, 1.0]]) * 255).astype(np.uint8)
+    ink = np.ones_like(chance, bool)
+    assert review.text_ink_of(ink, chance).tolist() == [[False, False, True, True]]
+    assert not review.text_ink_of(~ink, chance).any()                 # paper is never red
+
+
 def test_a_word_inside_a_long_line_component_is_merged_into_line():
     r, d = review.miss_reason(WORD, CHANCE_HIGH, INK_WORD_ON_LINE, COMPONENTS_LINE, 0.99)
     assert r == "merged_into_line" and d["component_px"] > 3 * d["word_length_px"]
@@ -88,8 +101,32 @@ def test_a_word_merged_with_its_neighbour_names_it():
                           for t, r in (("RH-2", (40, 50, 96, 62)), ("12", (99, 50, 120, 62)))])
     got = review.miss_reasons(terra, CHANCE_HIGH, ink, {"nw": 0.5, "ne": 0.99, "sw": 0.5, "se": 0.5},
                               np.ones(2, bool), [0, 1])
+    assert got[0][0] == got[1][0] == "merged_with_word"
+    assert got[0][1]["merged_with"] == ["12"] and got[1][1]["merged_with"] == ["RH-2"]
     assert got[0][1]["shares_component_with"] == ["12"] and got[1][1]["shares_component_with"] == ["RH-2"]
     assert got[0][1]["level"] == 0.99                                  # the word's quarter's level
+
+
+def test_two_words_joined_by_one_component_are_merged_with_word_before_line_or_level():
+    ink = INK_WORD_ON_LINE | _bars([150, 158, 166])                    # a second word on the same long line
+    comps = review.components(CHANCE_HIGH, ink, 0.99)
+    other = np.array([[[146, 50], [172, 50], [172, 62], [146, 62]]], float)
+    r, d = review.miss_reason(WORD, CHANCE_HIGH, ink, comps, 0.99, others=other, other_names=["12"], on_map=False)
+    assert r == "merged_with_word" and d["merged_with"] == ["12"]
+
+
+def test_a_word_on_a_long_line_with_no_other_word_on_it_is_merged_into_line():
+    ink = INK_WORD_ON_LINE | _bars([204, 212, 220], 92, 100)           # another word, off the line
+    comps = review.components(CHANCE_HIGH, ink, 0.99)
+    other = np.array([[[200, 90], [226, 90], [226, 102], [200, 102]]], float)
+    r, d = review.miss_reason(WORD, CHANCE_HIGH, ink, comps, 0.99, others=other, other_names=["12"])
+    assert r == "merged_into_line" and d["merged_with"] == []
+
+
+def test_a_neighbours_rectangle_overlapping_the_word_is_not_a_merge():
+    other = np.array([[[90, 50], [130, 50], [130, 62], [90, 62]]], float)    # overlaps the word's last glyph; no ink
+    r, d = review.miss_reason(WORD, CHANCE_HIGH, INK_WORD, COMPONENTS_WORD, 0.99, others=other, other_names=["x"])
+    assert r == "wrong_size" and d["merged_with"] == []
 
 
 def test_the_mission_sheet_holds_the_longest_stretch_of_mission_street():

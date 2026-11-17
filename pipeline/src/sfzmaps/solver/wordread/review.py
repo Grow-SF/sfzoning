@@ -25,14 +25,20 @@ fold reader that never saw the box's quarter); for "none", nothing.  It is compa
 `textread.crops.norm_text`, and a printed form of the code list counts as its code (`colour`).
 
 Why a word was missed (`miss_reason`): from the detector's own chance on the word's ink, at the level its quarter's
-boxes were grouped at (`wordboxes`: the connected px at or above the level within INK_R px of ink, the components):
+boxes were grouped at (`wordboxes`: the connected px at or above the level within INK_R px of ink, the components).
+The component holding most of its above-level ink is its main component.
+  merged_with_word  the main component also holds another Terra word: MERGE_PART or more of that word's ink at the
+                    level outside this word's rectangle, or most of that word's own above-level ink
+  merged_into_line  the main component, holding no other word, is more than LINE_RATIO times the word's length
   outside_map       its centre is off the sheet's footprint or the mapped area: a box there is dropped
   below_level       less than BELOW_SHARE of its ink reaches the level (or it has no ink)
-  merged_into_line  the component holding most of its above-level ink is more than LINE_RATIO times its length
   split             its above-level ink falls in two or more components, each holding SPLIT_PART of it or more
-  wrong_size        one component holds it, but the box it makes doesn't fit the word
-in that order.  The details give the highest and the mean chance on its ink, the share of its ink at or above the
-level, the swallowing component's length and ink px, and the reader's reading at Terra's box when it is given.
+  wrong_size        the rest: one component holds it, alone and not a line, but its box doesn't fit the word
+in that order (the controller's ruling, Task 2 fix round 1).  The details give the highest and the mean chance on its
+ink, the share of its ink at or above the level, the main component's length and ink px, the other words it holds,
+and the reader's reading at Terra's box when it is given.
+
+The green/purple comparison folds a trailing "." and runs of spaces (`colour`), so "ST" is Terra's "ST.".
 """
 import base64
 import html
@@ -61,16 +67,19 @@ PANEL_IOU = (0.5, 0.3)
 BELOW_SHARE = 0.5          # a word with less of its ink at or above the level is below it
 LINE_RATIO = 3.0           # a component this many times a word's length is a line
 SPLIT_PART = measures.SPLIT_PART
-REASONS = ("outside_map", "below_level", "merged_into_line", "split", "wrong_size")
-REASON_SHORT = {"outside_map": "off the map", "below_level": "below level", "merged_into_line": "merged into a line",
-                "split": "split", "wrong_size": "wrong size"}
+MERGE_PART = 0.1           # a component holds another word when it holds this share of that word's ink
+REASONS = ("merged_with_word", "merged_into_line", "outside_map", "below_level", "split", "wrong_size")
+REASON_SHORT = {"merged_with_word": "merged with a word", "merged_into_line": "merged into a line",
+                "outside_map": "off the map", "below_level": "below level", "split": "split",
+                "wrong_size": "wrong size"}
 REASON_TEXT = {
+    "merged_with_word": "its ink joined a component that also holds another Terra word",
+    "merged_into_line": f"its ink joined a component more than {LINE_RATIO:g}x the word's length, holding no other "
+                        "word (a line read as text)",
     "outside_map": "its centre is off the sheet's footprint or the mapped area, where boxes are dropped",
     "below_level": "most of its ink is below the level its quarter's boxes are grouped at",
-    "merged_into_line": f"its ink joined a component more than {LINE_RATIO:g}x the word's length (a line read as "
-                        "text)",
     "split": "its ink at the level fell into two or more components",
-    "wrong_size": "one component holds it, but its box doesn't fit the word",
+    "wrong_size": "one component holds it, alone and not a line, but its box doesn't fit the word",
 }
 KIND_SHORT = {"zoning": "code", "block": "block", "street": "street", "other": "other"}
 TILE = 2048                # px: the image is cut into tiles at most this big each way
@@ -136,20 +145,21 @@ def level_threshold(level: float) -> int:
 @dataclass
 class Components:
     """A page's components at a level: `labels` int32 (h, w), 0 off every component; per label (index 0 unused):
-    `length`, the extent of its px along its chance-weighted major axis (px, as `wordboxes.group` measures a box), and
-    `ink_px`."""
+    `length`, the extent of its px along its chance-weighted major axis (px, as `wordboxes.group` measures a box),
+    `ink_px`, and `bbox` (x0, y0, x1, y1: its px's first and last column and row)."""
     labels: np.ndarray
     length: np.ndarray
     ink_px: np.ndarray
+    bbox: np.ndarray
 
     @classmethod
     def of_labels(cls, labels: np.ndarray, chance: np.ndarray, ink: np.ndarray) -> "Components":
         labels = np.asarray(labels)
         n = int(labels.max()) + 1 if labels.size else 1
-        length, ink_px = np.zeros(n), np.zeros(n, np.int64)
+        length, ink_px, bbox = np.zeros(n), np.zeros(n, np.int64), np.zeros((n, 4), np.int64)
         ys, xs = np.nonzero(labels)
         if not len(ys):
-            return cls(labels, length, ink_px)
+            return cls(labels, length, ink_px, bbox)
         lab = labels[ys, xs].astype(np.int64)
         w = np.maximum(chance[ys, xs] / 255.0, 1e-3)
         x, y = xs + 0.5, ys + 0.5
@@ -166,7 +176,10 @@ class Components:
         ids = ls[start]
         length[ids] = np.maximum.reduceat(ps, start) - np.minimum.reduceat(ps, start) + 1.0
         ink_px[:] = np.bincount(lab, ink[ys, xs].astype(np.int64), n)
-        return cls(labels, length, ink_px)
+        xo, yo = xs[order], ys[order]
+        bbox[ids] = np.stack([np.minimum.reduceat(xo, start), np.minimum.reduceat(yo, start),
+                              np.maximum.reduceat(xo, start), np.maximum.reduceat(yo, start)], 1)
+        return cls(labels, length, ink_px, bbox)
 
 
 def components(chance: np.ndarray, ink: np.ndarray, level: float, gate: np.ndarray | None = None) -> Components:
@@ -191,12 +204,44 @@ def _rect_mask(rect: np.ndarray, shape) -> tuple[np.ndarray, int, int]:
     return m.astype(bool), int(y0), int(x0)
 
 
+def _poly_in(rect: np.ndarray, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+    """A quadrilateral's px (as `_rect_mask` fills it) in the h x w window whose top-left px is (y0, x0)."""
+    m = np.zeros((h, w), np.uint8)
+    cv2.fillPoly(m, [np.round(np.asarray(rect, float).reshape(-1, 2)).astype(np.int32) - [x0, y0]], 1)
+    return m.astype(bool)
+
+
+def _held_words(rect, main: int, comps: "Components", chance, ink, thr: int, others, names) -> list:
+    """The names of the `others` (rects (m, 4, 2)) whose ink at or above the level, outside `rect`, lies MERGE_PART or
+    more in component `main`."""
+    if not main or others is None or not len(others):
+        return []
+    o = np.asarray(others, float).reshape(-1, 4, 2)
+    x0, y0, x1, y1 = comps.bbox[main]
+    lo, hi = o.min(1), o.max(1)
+    out = []
+    for k in np.flatnonzero((lo[:, 0] <= x1 + 1) & (hi[:, 0] >= x0) & (lo[:, 1] <= y1 + 1) & (hi[:, 1] >= y0)):
+        m, oy, ox = _rect_mask(o[k], ink.shape)
+        if not m.size:
+            continue
+        win = (slice(oy, oy + m.shape[0]), slice(ox, ox + m.shape[1]))
+        theirs = m & ink[win] & ~_poly_in(rect, oy, ox, *m.shape)
+        n = int(theirs.sum())
+        held = theirs & (chance[win] >= thr) & (comps.labels[win] == main)
+        if n and held.sum() >= MERGE_PART * n:
+            out.append(names[k] if names is not None else int(k))
+    return out
+
+
 def miss_reason(word_rect, chance: np.ndarray, ink: np.ndarray, components, level: float, *, on_map: bool = True,
-                reading: dict | None = None) -> tuple[str, dict]:
+                reading: dict | None = None, others=None, other_names=None, shares=()) -> tuple[str, dict]:
     """Why a Terra word (`word_rect`: its 4 corners in page px, the first edge along its reading direction) has no
     box: one of REASONS (see the module) and the details.  `chance` uint8 (chance x 255) and `ink` bool, the page's;
     `components` the page's `Components` at `level` (or their bare label image); `on_map` whether its centre is
-    placed where boxes are kept; `reading` the reader's reading at Terra's box, copied into the details."""
+    placed where boxes are kept; `reading` the reader's reading at Terra's box, copied into the details; `others`
+    the page's other Terra words (rects (m, 4, 2)) and `other_names` their names, to find the words its main component
+    holds (`merged_with`); `shares` the names of the other words whose own main component is this one's
+    (`miss_reasons` finds them)."""
     comps = components if isinstance(components, Components) else Components.of_labels(components, chance, ink)
     rect = np.asarray(word_rect, float).reshape(4, 2)
     length = float(np.hypot(*(rect[1] - rect[0])))
@@ -205,7 +250,8 @@ def miss_reason(word_rect, chance: np.ndarray, ink: np.ndarray, components, leve
     win = (slice(y0, y0 + inside.shape[0]), slice(x0, x0 + inside.shape[1]))
     word_ink = inside & ink[win]
     c = chance[win][word_ink]
-    above = c >= level_threshold(level)
+    thr = level_threshold(level)
+    above = c >= thr
     n_ink, n_above = int(word_ink.sum()), int(above.sum())
     labs = comps.labels[win][word_ink][above]
     ids, counts = np.unique(labs[labs > 0], return_counts=True)
@@ -217,14 +263,21 @@ def miss_reason(word_rect, chance: np.ndarray, ink: np.ndarray, components, leve
                "component_px": float(comps.length[main]) if main else 0.0,
                "component_ink_px": int(comps.ink_px[main]) if main else 0,
                "component_share": float(counts.max()) / n_above if len(ids) else 0.0}
+    held = _held_words(rect, main, comps, chance, ink, thr, others, other_names)
+    shares = list(shares) if main else []
+    details["merged_with"] = (held + [s for s in shares if s not in held])[:5]
+    details["shares_component_with"] = shares[:5]
+    details["on_map"] = bool(on_map)
     if reading is not None:
         details["reading"] = reading
+    if details["merged_with"]:
+        return "merged_with_word", details
+    if details["component_px"] > LINE_RATIO * length:
+        return "merged_into_line", details
     if not on_map:
         return "outside_map", details
     if not n_ink or details["share_above"] < BELOW_SHARE:
         return "below_level", details
-    if details["component_px"] > LINE_RATIO * length:
-        return "merged_into_line", details
     if int((counts >= SPLIT_PART * n_above).sum()) >= 2:
         return "split", details
     return "wrong_size", details
@@ -233,28 +286,28 @@ def miss_reason(word_rect, chance: np.ndarray, ink: np.ndarray, components, leve
 def miss_reasons(terra: pd.DataFrame, chance: np.ndarray, ink: np.ndarray, levels: dict, on_map, words,
                  terra_reads: dict | None = None) -> dict[int, tuple[str, dict]]:
     """`miss_reason` of each of Terra's words at positions `words` (of `terra`; its quarter's level from `levels`,
-    quarter name -> level), the page's components found once per level.  Each one's details also name the other
-    Terra words whose ink the same component holds most of (`shares_component_with`, at most 5): a word merged with
-    its neighbour rather than with a line says so."""
+    quarter name -> level), the page's components found once per level, every other word of `terra` the `others`
+    and, of those, the words whose own main component is this word's its `shares`."""
     gate = wordboxes.ink_gate(ink)
     found: dict[float, Components] = {}
-    out = {}
     rects = terra[measures.C_COLS].to_numpy(float).reshape(-1, 4, 2)
+    names = [str(s) for s in terra["text"]]
+    level = [float(levels[paths.QUARTERS[int(q)]]) for q in terra["quarter"]]
     held_by: dict[tuple, list[int]] = {}
-    words = {int(t) for t in words}
+    main = []
     for t in range(len(terra)):
-        level = float(levels[paths.QUARTERS[int(terra["quarter"].iloc[t])]])
-        if level not in found:
-            found[level] = components(chance, ink, level, gate)
-        reason, det = miss_reason(rects[t], chance, ink, found[level], level, on_map=bool(on_map[t]),
-                                  reading=(terra_reads or {}).get(t))
-        if det["component"]:
-            held_by.setdefault((level, det["component"]), []).append(t)
-        if t in words:
-            out[t] = (reason, det)
-    for t, (_, det) in out.items():
-        others = [o for o in held_by.get((det["level"], det["component"]), []) if o != t] if det["component"] else []
-        det["shares_component_with"] = [str(terra["text"].iloc[o]) for o in others[:5]]
+        if level[t] not in found:
+            found[level[t]] = components(chance, ink, level[t], gate)
+        main.append(miss_reason(rects[t], chance, ink, found[level[t]], level[t])[1]["component"])
+        if main[t]:
+            held_by.setdefault((level[t], main[t]), []).append(t)
+    out = {}
+    for t in sorted({int(t) for t in words}):
+        shares = [names[o] for o in held_by.get((level[t], main[t]), []) if o != t] if main[t] else []
+        keep = np.arange(len(terra)) != t
+        out[t] = miss_reason(rects[t], chance, ink, found[level[t]], level[t], on_map=bool(on_map[t]),
+                             reading=(terra_reads or {}).get(t), others=rects[keep],
+                             other_names=[n for n, k in zip(names, keep) if k], shares=shares)
     return out
 
 
@@ -269,13 +322,19 @@ def _norm(s) -> str:
     return t if t is not None else " ".join(str(s).replace("\u200b", "").upper().split())
 
 
+def _fold(s) -> str:
+    """`_norm`, then a trailing "." dropped and runs of spaces made one (the green/purple comparison only)."""
+    return " ".join(_norm(s).rstrip(".").split())
+
+
 def colour(ours: str, terra: str | None, forms: dict | None = None) -> str:
-    """"green" when our reading is Terra's string (both normalised; with `forms`, printed form -> code, a printed form
+    """"green" when our reading is Terra's string (both `_fold`ed; with `forms`, printed form -> code, a printed form
     counts as its code), "purple" when it isn't, "none" with no Terra word."""
     if terra is None:
         return "none"
-    a, b = _norm(ours), _norm(terra)
-    if a == b or (forms and b in forms and _norm(forms[b]) == a):
+    a, b = _fold(ours), _fold(terra)
+    code = forms.get(_norm(terra), forms.get(b)) if forms else None
+    if a == b or (code is not None and _fold(code) == a):
         return "green"
     return "purple"
 
@@ -410,6 +469,11 @@ def _jsonable(x):
     return json.loads(json.dumps(x, default=lambda o: o.item() if hasattr(o, "item") else dict(o)))
 
 
+def text_ink_of(ink: np.ndarray, chance: np.ndarray) -> np.ndarray:
+    """The ink the page draws red: ink whose chance (uint8, chance x 255) is TEXT_CHANCE or more."""
+    return ink & (chance >= level_threshold(TEXT_CHANCE))
+
+
 def matching(boxes: pd.DataFrame, terra: pd.DataFrame):
     """`measures`' matching of our boxes (positions) and Terra's words (positions): each box's best word (-1: none)
     and the IoU with it; each word's best box (-1: none) and the IoU with it."""
@@ -518,7 +582,7 @@ def page_data(sheet: str, boxes: pd.DataFrame, reads: dict, terra: pd.DataFrame,
         yellow_polys.append(rects[t])
 
     # the numbers
-    text_ink = ink & (chance >= level_threshold(TEXT_CHANCE))
+    text_ink = text_ink_of(ink, chance)
     numbers = {"boxes": measures.box_numbers(boxes, terra, reads, iou=tuple(sorted(levels_used, reverse=True)),
                                              reason_fn=lambda t, *a: reasons[t][0] if t in reasons else
                                              measures.geometric_reason(t, *a)),
@@ -628,14 +692,12 @@ def _overlay(d: dict) -> str:
         line1 = (f'{REASON_SHORT[m["reason"]]} · max {det["max_chance"] or 0.0:.2f} · '
                  f'{round(100 * (det["share_above"] or 0.0))}% ≥ {det["level"]:g}')
         bits = []
-        shares = det.get("shares_component_with") or []
-        joined = f' with {_e(", ".join(shares[:2]))}' if shares else ""
-        if m["reason"] == "merged_into_line":
-            bits.append(f'line {round(det["component_px"])} px{joined}')
+        if m["reason"] == "merged_with_word":
+            bits.append(f'with {_e(", ".join(det.get("merged_with", [])[:2]))} ({round(det["component_px"])} px)')
+        elif m["reason"] == "merged_into_line":
+            bits.append(f'line {round(det["component_px"])} px')
         elif m["reason"] == "split":
             bits.append(f'{det["components"]} parts')
-        elif m["reason"] == "wrong_size" and joined:
-            bits.append(joined.strip())
         rd = det.get("reading")
         if rd:
             said = rd.get("text") or "∅"
@@ -691,7 +753,6 @@ def _panels(d: dict) -> str:
     b = nb[lv]
     delta = d["delta"]
     rd = d["numbers"]["reads"]["all"]
-    code = d["numbers"]["reads"].get("zoning code", {"matched": 0, "same": 0, "differs": 0})
     alt = "".join(f' · at IoU ≥ {k}: matched <b>{_n(nb[k]["matched"])}</b>, missed {_n(nb[k]["missed"])}, '
                   f'ratio {_n(nb[k]["matched_to_missed"])} : 1' for k in other)
     rows = [(f'Terra saw <b>{_n(b["terra"])}</b> words · we found <b>{_n(b["ours"])}</b> boxes '
@@ -713,10 +774,16 @@ def _panels(d: dict) -> str:
     hl, tr = d["numbers"].get("headline"), d["numbers"].get("terra_right")
     shared = (f' (they meet {_n(b["matched"])} words: a word met by two boxes is read twice)'
               if rd["matched"] != b["matched"] else "")
-    trows = [(f'Read on matched boxes <b>{_n(rd["matched"])}</b>{shared} · same as Terra <b>{_n(rd["same"])}</b> '
-              f'({_pct(rd["same"], rd["matched"])}, green) · different <b>{_n(rd["differs"])}</b> (purple)'),
-             (f'Zoning-code words: matched {_n(code["matched"])} · same <b>{_n(code["same"])}</b> · different '
-              f'<b>{_n(code["differs"])}</b>')]
+    cf = d["numbers"].get("codes") or {}
+    cva = cf.get("codes_right_vs_answers") or {}
+    on_labels = (f' · on the owner\'s labels whose box is matched: ours {_n(cva["ours"])} / {_n(cva["n"])}, Terra\'s '
+                 f'{_n(cva["terra"])} / {_n(cva["n"])}' if cva else "")
+    trows = [(f'All matched boxes, any kind, string vs Terra\'s: <b>{_n(rd["matched"])}</b> boxes{shared} · same '
+              f'<b>{_n(rd["same"])}</b> ({_pct(rd["same"], rd["matched"])}, green) · different '
+              f'<b>{_n(rd["differs"])}</b> (purple)'),
+             (f'Zoning-code forms only (Terra\'s string a printed form of the code list, our likeliest code): same '
+              f'<b>{_n(cf.get("same_as_terra"))}</b> · different <b>{_n(cf.get("differs"))}</b> · '
+              f'{_n(cf.get("not_a_form"))} other matched boxes{on_labels}')]
     if hl:
         ci = hl.get("ci") or [None, None]
         trows.append(f'The owner\'s answered labels on this sheet: <b>{_n(hl["right"])} / {_n(hl["n"])}</b> codes '
@@ -725,8 +792,11 @@ def _panels(d: dict) -> str:
                      f'({_signed(hl["right"] - tr) if tr is not None else "–"} against Terra)')
     if delta:
         dr = _get(delta, "reads", "all") or {}
-        trows.append(f'vs last run: same <b>{_signed(dr.get("same"))}</b> · different {_signed(dr.get("differs"))}'
-                     f' · codes right {_signed(_get(delta, "headline", "right"))}')
+        dc = _get(delta, "codes") or {}
+        trows.append(f'vs last run: any kind same <b>{_signed(dr.get("same"))}</b>, different '
+                     f'{_signed(dr.get("differs"))} · code forms same <b>{_signed(dc.get("same_as_terra"))}</b>, '
+                     f'different {_signed(dc.get("differs"))} · codes right '
+                     f'{_signed(_get(delta, "headline", "right"))}')
     else:
         trows.append("vs last run: none yet")
     reasons = b.get("missed_reasons") or {}
@@ -735,8 +805,8 @@ def _panels(d: dict) -> str:
     legend = (f'<span class="sw" style="background:rgb{COLOURS["text_ink"]}"></span> ink the detector calls text '
               f'(chance ≥ {TEXT_CHANCE})<br>'
               f'<span class="sw" style="background:rgb{COLOURS["other_ink"]}"></span> other ink<br>'
-              '<span class="chip" style="border:2px solid var(--ink)">box</span> our box; arrow = reading direction; tag '
-              '= kind · chance · angle<br>'
+              '<span class="chip" style="border:2px solid var(--ink)">box</span> our box; arrow = reading direction; '
+              'tag = kind · chance · angle<br>'
               f'<b style="color:var(--match)">RH-2</b> our reading = Terra\'s<br>'
               f'<b style="color:var(--diff)">NC-2</b> <span style="color:var(--text)">(Terra: NC-3)</span> our reading '
               'differs<br>'
@@ -924,8 +994,8 @@ SCRIPT = """
           Math.round(d.component_px) + ' px long (the word ' + Math.round(d.word_length_px) + ' × ' +
           Math.round(d.word_height_px) + ' px), ' + d.component_ink_px + ' ink px, ' + pc(d.component_share) +
           ' of its ink' : '')) +
-      row('that component also holds', (d.shares_component_with || []).length ?
-          (d.shares_component_with || []).map(t => '“' + esc(t) + '”').join(', ') : 'no other Terra word') +
+      row('that component also holds', (d.merged_with || []).length ?
+          (d.merged_with || []).map(t => '“' + esc(t) + '”').join(', ') : 'no other Terra word') +
       row('our best box', m.best_box ? esc(m.best_box) + ' · IoU ' + f2(m.best_iou) : 'none overlaps') +
       row('reader at Terra\\'s box', r ? '“' + esc(r.text) + '” · ' + esc(r.top) + ' ' + f2(r.p_top) +
           ' · code ' + esc(r.code) + ' ' + f2(r.p_code) + ' · p(180°) ' + f2(r.p_180) : '–') +
@@ -980,7 +1050,8 @@ def render(d: dict, out: Path) -> Path:
         f'<h1>The Mission Street sheet: our text reader against Terra</h1>'
         f'<p class="sub">Sheet <b>{_e(d["sheet"])}</b>{run} · {w:,} × {h:,} px at full resolution · '
         f'boxes matched to Terra\'s words at IoU ≥ {d["iou"]} · {len(d["boxes"]):,} boxes, '
-        f'{len(d["missed"]):,} missed words drawn.</p>'
+        f'{len(d["missed"]):,} missed words drawn. The image is the page\'s ink binarised (px darker than '
+        f'{grid.INK_BELOW}, the detector\'s own input) and drawn grey or red, not the scan\'s grey levels.</p>'
         f"{_panels(d)}"
         '<div class="viewer"><div class="bar"><button id="zin" aria-label="Zoom in">+</button>'
         '<button id="zout" aria-label="Zoom out">−</button><button id="zfit">Fit</button><span id="zl" '
