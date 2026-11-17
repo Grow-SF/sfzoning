@@ -1,66 +1,70 @@
 """Context packs: what a place knows, supplied at read time to shift the reader's probabilities (item 4 of the map-text
 plan).  Optional: without a pack the reader reads the ink alone.  Nothing here trains a model; the reader's weights
-hold no place.
+hold no place.  No number here decides by hand: every spread, share and weight is measured or fitted by likelihood.
 
 A pack (`Pack`, one parquet file per map, under PACKS_DIR) holds, in map coordinates (EPSG:2227 ft):
   streets  `name` (DataSF's `streetname`, "MISSION ST"), `street` (its base name), `type` (`st_type`, "" for none),
            `active`, and the centreline: one LineString a row, as DataSF cuts them
   blocks   `number` (the Assessor's block, "0767") and its outline (the union of the block's lots)
-  codes    the era's code list: printed form -> code (each code also a form of itself), and each form's measured
-           share of its code, P(form | code) (`form_weights`; flat when not measured)
-  spreads  where printed words sit relative to what they name (`Spreads`), measured on Terra's words: "all" (every
-           quarter) and, per quarter name, measured with that quarter left out
+  codes    the era's code list: printed form -> code (each code also a form of itself)
+  spreads  what is measured per fold (`Spreads`): "all" (every quarter) and, per quarter name, with that quarter left
+           out: where printed words sit relative to what they name, the share of each kind's words off the pack's
+           list (its escape), and each code's printed forms' shares P(form | code)
 It never holds a code at a lot: on the 2000 map that is the answer key.  `build_sf_pack` refuses to add one, and a
 pack's frames take no column but their own.
 
-The prior (`prior`): p(s | kind, place), mixed over the box's kind probabilities `kind_p` (KIND_ORDER, the detector's
-`textnet.data.KINDS` order):
-  zoning code   the era list, flat over codes; a code's mass is shared by its printed forms by P(form | code)
-  street name   which street the box names, by Bayes on where it sits.  For each street j near the box, by its
-                nearest centreline (d_j ft from the box's centre; t_j the angle between the box's axis and the
-                centreline there, 0 to 90 degrees), and for a street the pack doesn't hold (0):
-                    P(j | box) ~ (1 - m) f(d_j) g(t_j) / (2 L)          P(0 | box) ~ m / (90 A)
-                f and g the measured densities of street-name words' distance and angle to their own street; m the
-                measured share of street-name words that name no street where they sit; L the pack's centreline
-                length (a street is named in proportion to its length, its label either side) and A the map's area
-                (the blocks' convex hull): a word naming no pack street sits anywhere, at any angle
-  block number  the same for blocks:
-                    P(b | box) ~ (1 - m_b) / N  x  p_in / area_b inside b,  (1 - p_in) f_out(d) / perimeter_b at d ft
-                                                   outside it
-                    P(0 | box) ~ m_b / A
-                N the pack's blocks, p_in the measured share of block-number words inside their own block, f_out the
-                density of the others' distance outside it
-  other         no list
-An item's P(item | box) of its kind's mass goes to its printed forms, flat; P(0 | box) of it goes to the escape.  So a
-box far from every street gives the street-name kind's mass to the escape, never to the nearest street; a kind with no
-list gives it all.  `prior` returns log masses: each listed string, and ESCAPE (every string not listed).
+The prior (`prior`, a `Prior`): for each kind (KIND_ORDER, the detector's `textnet.data.KINDS` order), its items, each
+with its odds against the kind's escape ("a string the pack doesn't list here") and its printed forms' shares, and the
+escape's mass E_k:
+  zoning code   each code of the era list, flat: odds (1 - e_code) / (N e_code), e_code the measured share of code
+                words off the list; its forms by the measured P(form | code)
+  street name   each street j near the box, by Bayes on where the box sits (its nearest centreline: d ft from the box's
+                centre, t the angle between the box's axis and the centreline there, 0 to 90 degrees):
+                    odds_j = (1 - m) / m x f(d) g(t) / (2 L)  /  (1 / (90 A))
+                f, g the measured densities of street-name words' distance and angle to the street they name, m the
+                measured share of street-name words that name no street where they sit, L the pack's centreline length
+                (a street named in proportion to its length, its label either side), A the map's area (the blocks'
+                convex hull): a word naming no street here sits anywhere, at any angle.  Its forms flat.
+  block number  each block b near the box:
+                    odds_b = (1 - m_b) / m_b x (A / N) x [p_in / area_b inside b;  (1 - p_in) f_out(d) / (perimeter_b +
+                             2 pi d) at d ft outside it]
+                N the pack's blocks, p_in the measured share of block-number words inside the block they name, f_out the
+                density of the others' distance outside it, spread over the ring at that distance.
+  other         no list (E = 1)
+The kind's escape mass is E_k = 1 / (1 + sum odds).  An item whose odds don't change 1 + odds in float64 is the escape's
+(exactly: it would lift nothing), which bounds how far streets and blocks are looked for (`Pack.reach`).
 
-The spreads (`measure_spreads`, on Terra's words; no width, reach or cutoff is chosen by hand):
-  - A word's own street (block) is the nearest one whose printed forms hold its text.  It names that street where it
-    sits when it is also the nearest street (block) of all; the rest, and the words whose text no street (block)
-    prints, make m (m_b).  (Misreads and renamed streets name a far one: 8% of the 2000 street words, 6% of the block
-    numbers, from 100 ft to 6 miles away.)
-  - f, f_out: Gaussian kernel densities of log(1 + d) (Scott's rule), as densities of d; g: of the angle, reflected
-    at 0 and 90 degrees.
-  - A string whose mass is below MIN_MASS is not listed (its mass goes to the escape): the posterior's floor E reads
-    it as the ink alone anyway, to within (1 - e) MIN_MASS / E.  So streets and blocks are looked for only within
-    the distance past which even the best-placed one (aligned; the smallest block) would fall below it (`reach`).
+The posterior (`posterior`), with a weight w_k per kind (fitted):
+    log p(s | ink) + log lift(s),      lift(s) = sum_k c_k Lift_k(s) / sum_k c_k,   c_k = kind_p[k] E_k
+    Lift_k(s) = 1 + sum_items P(s | item) ((1 + odds_item)^w_k - 1)
+normalised over the strings named in `ink_logp` and OTHER (every string not named: its ink is 1 - the named strings',
+its lift 1).  At w = 1 this is the plain mixture of the kinds' priors (each string's prior E_k + its items' masses),
+over the escape's level; w tempers each item's odds as a whole before its forms share it, so a code printed several
+ways is not marked down for it.  A string off the lists has lift 1 and a listed one more: the pack only ever lifts, so
+a string off the list with clearly stronger ink wins.  Without a pack, or with every w 0, the posterior is the ink.
 
-The posterior (`posterior`): log p(s | ink) + w log prior'(s), normalised over the strings named in `ink_logp` and
-OTHER (every string not named, its ink 1 - the named strings' ink), where
-    any string s:        prior'(s) = E,                       E = (1 - e) prior(ESCAPE) + e
-    a listed string s:   prior'(s) = E + (1 - e) prior(s)
-The escape is flat over strings (the ink alone tells them apart), and every string has its level E: a share e of the
-prior always goes to it, whatever the pack says, and a listed string has its pack mass on top.  So the pack only ever
-lifts the strings it lists: a listed string it hardly favours (a street a mile away) is read as by the ink alone,
-never pushed below it, and a string off the list with clearly stronger ink wins (e > 0).  Without a pack (prior None),
-or at e = 1 or w = 0, the posterior is the ink alone.  The reader gives `ink_logp` exactly by CTC
-(`textread.ctc.string_log_probs`, mixed over the two reading directions) for every listed string, and for any other
-strings it wants named.
+The ink (`ink_logp`): log p(s | ink) exactly by CTC (`textread.ctc.string_log_probs`) at the CTC temperature tau
+(each frame's log-probabilities x tau, renormalised), mixed over the two reading directions as the reader mixes them.
 
-The weight w and escape e (`fit_prior`): by maximum likelihood of Terra's string on Terra-matched words of the other
-three quarters.  Never on the owner's answers: a word in or touching an answered block is refused (it raises), and so
-is a word of the held-out quarter.  The spreads are refused the same words.
+What is measured (`measure_spreads`, on OUR boxes matched to Terra's words, whose text is what they name; the codes on
+Terra's code words), by EM, every word refused that is in or touching an answered block or the held-out quarter:
+  - street-name words: whether each names the street it sits by (near: weighted kernel densities f(d) g(t), each
+    reflected at its ends, the bandwidth by leave-one-out likelihood) or not (far: the distance to the street its text
+    names exponential, the angle uniform: misreads and renamed streets point miles away).  m = 1 - the near share, the
+    words whose text no street prints counted far.
+  - EM starts from every decile split of the distances and the likeliest fixed point is kept.
+  - block-number words: near when inside the block they name, else away (p_in = 1, f_out = 0).  The same EM with a
+    near-outside density was tried on our boxes: only 2 or 3 of some 2,300 found words sit just outside their block,
+    the rest of the outside words are misreads 75 ft to 6 miles off, and the likeliest fit moved the "near" density
+    onto them (bandwidth 1,340 ft, reach 8 miles).  Near-outside is not identifiable from these words, so a box outside
+    every block it might name is read by its ink alone (lift 1), never filtered.
+  - codes: e_code the share of code words whose text no code prints; P(form | code) the forms' shares of each code's
+    words (flat for a code not seen).
+
+The fit (`fit_prior`): by maximum likelihood of Terra's string on Terra-matched words of the other three quarters
+(never the owner's answers: a word in or touching an answered block, or touching the held-out quarter, is refused),
+the ink calibrated apart from the context: tau on the ink alone, then w per kind on top; unbounded searches (log tau,
+log w), a fit running away reported.  `joint` also fits them together, for comparison.
 """
 import math
 import re
@@ -72,26 +76,27 @@ import geopandas as gpd
 import numpy as np
 import pandas as pd
 import shapely
-from scipy import optimize, stats
+from scipy import optimize
 
 from sfzmaps.solver import paths
 
 CRS = "EPSG:2227"
 PACKS_DIR = paths.SOLVER_DIR / "experiments" / "wordread" / "packs"
 KIND_ORDER = ("zoning code", "block number", "street name", "other")   # kind_p's order: textnet.data.KINDS'
-ESCAPE = "escape"          # the prior's key for every string off its lists (lower case: never a reader's string)
-OTHER = "other"            # the posterior's key for the escape's members not named in `ink_logp`
+CODE, BLOCK, STREET, OTHER_KIND = KIND_ORDER
+OTHER = "other"            # the posterior's key for every string not named in `ink_logp` (never a reader's string)
 FOLDS = ("all", *paths.QUARTERS)   # a pack's spreads: every quarter, then each quarter left out
 STREET_COLS = ("name", "street", "type", "active")
 BLOCK_COLS = ("number",)
-SPREAD_ARRAYS = ("street_ft", "street_deg", "block_ft")
-SPREAD_SHARES = ("street_away", "block_away")
-W_MAX = 64.0               # the weight is searched in [0, W_MAX] (a fit at the bound is reported: the prior rules)
-E_LOGIT = (-16.0, 16.0)    # the escape mass is searched in logit space between these
-TANGENT_FT = 1.0           # a centreline's direction at a point: from this far before it to this far after
-MIN_MASS = 1e-12           # a string with less of the prior's mass than this is not listed
-REACH_GRID = np.geomspace(0.1, 1e6, 1201)   # ft: where `reach` looks for the last distance an item keeps MIN_MASS
+SPREAD_ARRAYS = ("street_ft", "street_deg", "street_r", "block_ft", "block_r")
+SPREAD_SCALARS = ("street_h", "street_deg_h", "street_away", "block_h", "block_in", "block_away", "code_away")
+KERNEL_ZERO = math.sqrt(-2.0 * math.log(np.finfo(float).tiny * np.finfo(float).eps))   # a Gaussian kernel is exactly
+#                            0.0 in float64 past this many bandwidths
+EM_TOL = 1e-10             # EM stops when its log-likelihood rises by less (relative) or no responsibility moves more
+EM_MAX_ITER = 2000         # ... or after this many iterations (reported when reached)
+REACH_STEPS = 4096         # the geometric grid `Pack.reach` scans (numerical; the reach is rounded outward)
 VOCAB = " &'(),-./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"   # the reader's alphabet (`textread.model.VOCAB`)
+SQRT2PI = math.sqrt(2.0 * math.pi)
 
 ONES = ("", "FIRST", "SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH", "SEVENTH", "EIGHTH", "NINTH", "TENTH", "ELEVENTH",
         "TWELFTH", "THIRTEENTH", "FOURTEENTH", "FIFTEENTH", "SIXTEENTH", "SEVENTEENTH", "EIGHTEENTH", "NINETEENTH")
@@ -147,87 +152,149 @@ def block_forms(number: str) -> list[str]:
     return [s] if _readable(s) else []
 
 
-# --- the measured spreads ---------------------------------------------------------------------------------------------
+# --- weighted kernel densities ----------------------------------------------------------------------------------------
 
-class _LogKDE:
-    """A density of d >= 0 (per ft) from a Gaussian kernel density of log(1 + d) (Scott's rule); 0 everywhere when
-    fewer than two distinct values were measured."""
+def _kernels(at: np.ndarray, x: np.ndarray, h: float, lo, hi) -> np.ndarray:
+    """Gaussian kernels of bandwidth h at `at` (rows) from `x` (columns), reflected at lo and hi (None: open)."""
+    def k(c):
+        z = (at[:, None] - c[None, :]) / h
+        return np.exp(-0.5 * z * z) / (h * SQRT2PI)
+    out = k(x)
+    if lo is not None:
+        out = out + k(2.0 * lo - x)
+    if hi is not None:
+        out = out + k(2.0 * hi - x)
+    return out
 
-    def __init__(self, sample: np.ndarray):
-        u = np.log1p(np.asarray(sample, float))
-        self.kde = stats.gaussian_kde(u) if len(np.unique(u)) >= 2 else None
+
+def loo_density(x: np.ndarray, w: np.ndarray, h: float, lo=None, hi=None) -> np.ndarray:
+    """The weighted kernel density at each x_i from every other point (leave-one-out)."""
+    k = _kernels(x, x, h, lo, hi) * w[None, :]
+    np.fill_diagonal(k, 0.0)
+    rest = w.sum() - w
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(rest > 0, k.sum(1) / np.where(rest > 0, rest, 1.0), 0.0)
+
+
+def loo_bandwidth(x: np.ndarray, w: np.ndarray, lo=None, hi=None, start: float | None = None) -> float:
+    """The bandwidth that maximises the weighted leave-one-out log-likelihood, sum_i w_i log f_-i(x_i), searched
+    without bounds in log h (Brent, from `start` or the weighted spread); nan when fewer than two points carry weight
+    or they don't spread."""
+    x, w = np.asarray(x, float), np.asarray(w, float)
+    on = w > 0
+    if on.sum() < 2:
+        return math.nan
+    x, w = x[on], w[on]
+    sd = math.sqrt(float(np.average((x - np.average(x, weights=w)) ** 2, weights=w)))
+    if not sd > 0:
+        return math.nan
+
+    def nll(u):
+        f = loo_density(x, w, math.exp(u), lo, hi)
+        with np.errstate(divide="ignore"):
+            v = -float((w * np.log(f)).sum())
+        return v if math.isfinite(v) else 1e100      # a bandwidth leaving a point at density 0: worse than any other
+
+    at = math.log(start) if start is not None and math.isfinite(start) and start > 0 else None
+    bracket = (at - 0.25, at) if at is not None else (math.log(sd) - 3.0, math.log(sd))
+    res = optimize.minimize_scalar(nll, bracket=bracket, method="brent")
+    return float(math.exp(res.x))
+
+
+@dataclass(frozen=True)
+class Density:
+    """A weighted Gaussian kernel density on [lo, hi] (None: open), reflected at its ends; the kernels of weight 0
+    are dropped (they add exactly nothing).  Zero everywhere when the bandwidth is nan."""
+    x: np.ndarray
+    w: np.ndarray
+    h: float
+    lo: float | None = 0.0
+    hi: float | None = None
+
+    @cached_property
+    def _on(self) -> tuple[np.ndarray, np.ndarray]:
+        on = np.asarray(self.w) > 0
+        return np.asarray(self.x, float)[on], np.asarray(self.w, float)[on]
+
+    def __call__(self, at) -> np.ndarray:
+        at = np.asarray(at, float)
+        x, w = self._on
+        if not math.isfinite(self.h) or not len(x) or not at.size:
+            return np.zeros(at.shape)
+        flat = at.reshape(-1)
+        out = np.concatenate([(_kernels(flat[i:i + 4096], x, self.h, self.lo, self.hi) * w).sum(1)
+                              for i in range(0, len(flat), 4096)]) / w.sum()
+        return out.reshape(at.shape)
 
     @property
-    def width(self) -> float:
-        return float(np.sqrt(self.kde.covariance[0, 0])) if self.kde is not None else 0.0
-
-    def __call__(self, d) -> np.ndarray:
-        d = np.asarray(d, float)
-        if self.kde is None or not d.size:
-            return np.zeros(d.shape)
-        return self.kde(np.log1p(d).reshape(1, -1)).reshape(d.shape) / (1.0 + d)
+    def top(self) -> float:
+        """Past this, every kernel is exactly 0.0 in float64 (KERNEL_ZERO bandwidths beyond the farthest point)."""
+        x, _ = self._on
+        return float(x.max() + KERNEL_ZERO * self.h) if len(x) and math.isfinite(self.h) else 0.0
 
 
-class _AngleKDE:
-    """A density of an angle in [0, 90] degrees (per degree) from a Gaussian kernel density reflected at 0 and 90."""
-
-    def __init__(self, sample: np.ndarray):
-        a = np.asarray(sample, float)
-        self.kde = stats.gaussian_kde(a) if len(np.unique(a)) >= 2 else None
-
-    def __call__(self, t) -> np.ndarray:
-        t = np.asarray(t, float)
-        if self.kde is None or not t.size:
-            return np.zeros(t.shape)
-        flat = t.reshape(-1)
-        return (self.kde(flat) + self.kde(-flat) + self.kde(180.0 - flat)).reshape(t.shape)
-
+# --- what is measured per fold ----------------------------------------------------------------------------------------
 
 @dataclass
 class Spreads:
-    """Where printed words sit relative to what they name (see the module), measured on the words that name their
-    street (block) where they sit: street-name words' distance (ft) from their street's centreline and their axis'
-    angle to it (degrees, 0 to 90); block-number words' distance outside their block (ft, 0 inside); and the shares
-    of words that name no street (block) where they sit."""
+    """What a fold measures (see the module).  Streets: each found street-name word's distance (ft) and angle (deg) to
+    the street its text names and its responsibility of naming the street it sits by (`street_r`), the near
+    densities' bandwidths, and m (`street_away`).  Blocks: each found block-number word's distance outside the block
+    it names (0 inside) and its responsibility, the near-outside bandwidth, p_in (`block_in`) and m_b
+    (`block_away`).  Codes: e_code (`code_away`) and P(form | code) (`form_weights`).  `em`: the fits' diagnostics."""
     street_ft: np.ndarray
     street_deg: np.ndarray
-    block_ft: np.ndarray
+    street_r: np.ndarray
+    street_h: float
+    street_deg_h: float
     street_away: float
+    block_ft: np.ndarray
+    block_r: np.ndarray
+    block_h: float
+    block_in: float
     block_away: float
+    code_away: float
+    form_weights: dict[str, float] = field(default_factory=dict)
+    em: dict = field(default_factory=dict)
 
     def __post_init__(self):
         for k in SPREAD_ARRAYS:
-            setattr(self, k, np.sort(np.asarray(getattr(self, k), float)))
-        for k in SPREAD_SHARES:
-            v = float(getattr(self, k))
+            setattr(self, k, np.asarray(getattr(self, k), float))
+        for k in SPREAD_SCALARS:
+            setattr(self, k, float(getattr(self, k)))
+        for k in ("street_away", "block_away", "code_away"):
+            v = getattr(self, k)
             if not 0 < v < 1:
-                raise ValueError(f"{k} must be a share strictly between 0 and 1, not {v}")
-            setattr(self, k, v)
+                raise ValueError(f"{k} must be a share strictly between 0 and 1, not {v}: the data can't support it")
+        if not 0 <= self.block_in <= 1:
+            raise ValueError(f"block_in must be a share, not {self.block_in}")
 
     @cached_property
-    def street_density(self) -> _LogKDE:
-        return _LogKDE(self.street_ft)
+    def street_density(self) -> Density:
+        return Density(self.street_ft, self.street_r, self.street_h, 0.0, None)
 
     @cached_property
-    def angle_density(self) -> _AngleKDE:
-        return _AngleKDE(self.street_deg)
+    def angle_density(self) -> Density:
+        return Density(self.street_deg, self.street_r, self.street_deg_h, 0.0, 90.0)
 
     @cached_property
-    def block_out_density(self) -> _LogKDE:
-        return _LogKDE(self.block_ft[self.block_ft > 0])
-
-    @property
-    def block_in(self) -> float:
-        """p_in: the share of the measured block-number words inside their block."""
-        return float((self.block_ft == 0).mean()) if len(self.block_ft) else 0.0
+    def block_out_density(self) -> Density:
+        out = self.block_ft > 0
+        return Density(self.block_ft[out], self.block_r[out], self.block_h, 0.0, None)
 
     def summary(self) -> dict:
-        def q(a):
-            return {"n": int(len(a)), **({f"q{p}": round(float(np.quantile(a, p / 100)), 2) for p in (50, 90, 99)}
-                                        if len(a) else {}), "max": round(float(a[-1]), 2) if len(a) else None}
-        return {"street_ft": q(self.street_ft), "street_deg": q(self.street_deg), "block_ft": q(self.block_ft),
-                "street_away": round(self.street_away, 4), "block_away": round(self.block_away, 4),
-                "block_in": round(self.block_in, 4)}
+        def q(a, w):
+            on = w > 0.5                              # display only: the words more likely near than far
+            a = a[on]
+            qs = {f"q{p}": round(float(np.quantile(a, p / 100)), 2) for p in (50, 90, 99)} if len(a) else {}
+            return {"near_n": int(on.sum()), **qs, "max": round(float(a.max()), 2) if len(a) else None}
+        out = self.block_ft > 0
+        return {"street_ft": q(self.street_ft, self.street_r), "street_deg": q(self.street_deg, self.street_r),
+                "block_outside_ft": q(self.block_ft[out], self.block_r[out]),
+                "street_bandwidth_ft": self.street_h, "street_bandwidth_deg": self.street_deg_h,
+                "block_bandwidth_ft": self.block_h, "street_away": round(self.street_away, 4),
+                "block_away": round(self.block_away, 4), "block_in": round(self.block_in, 4),
+                "code_away": round(self.code_away, 4), "forms_weighted": len(self.form_weights), "em": self.em}
 
 
 # --- the pack ---------------------------------------------------------------------------------------------------------
@@ -251,7 +318,6 @@ class Pack:
     blocks: gpd.GeoDataFrame
     codes: dict[str, str]
     spreads: dict[str, Spreads] = field(default_factory=dict)
-    form_weights: dict[str, float] = field(default_factory=dict)   # P(form | code), measured; none: flat
 
     def __post_init__(self):
         self.streets = _frame(self.streets, STREET_COLS, "streets").reset_index(drop=True)
@@ -259,9 +325,7 @@ class Pack:
         if "active" not in self.streets:
             self.streets["active"] = True
         self.codes = dict(sorted(self.codes.items()))
-        self.form_weights = {f: float(v) for f, v in sorted(self.form_weights.items()) if f in self.codes}
 
-    # caches for the prior
     @cached_property
     def street_tree(self) -> shapely.STRtree:
         return shapely.STRtree(self.streets.geometry.values)
@@ -298,6 +362,10 @@ class Pack:
         return [block_forms(n) for n in self.blocks["number"]]
 
     @cached_property
+    def named_blocks(self) -> int:
+        return sum(bool(f) for f in self.forms_of_block)
+
+    @cached_property
     def block_area(self) -> np.ndarray:
         return shapely.area(self.blocks.geometry.values)
 
@@ -320,30 +388,31 @@ class Pack:
                 out.setdefault(code, []).append(form)
         return out
 
-    @cached_property
-    def code_form_shares(self) -> dict[str, dict[str, float]]:
-        """Each code's printed forms with their share of its mass: the measured P(form | code) (`form_weights`) when
-        every form of the code has one, else flat."""
+    def form_shares(self, sp: "Spreads") -> dict[str, dict[str, float]]:
+        """Each code's forms with their share P(form | code) under spreads `sp` (flat for a code it didn't see)."""
         out = {}
         for code, forms in self.code_forms.items():
-            w = np.array([self.form_weights.get(f, np.nan) for f in forms], float)
-            ok = np.isfinite(w).all() and (w >= 0).all() and w.sum() > 0
-            out[code] = dict(zip(forms, (w / w.sum() if ok else np.full(len(forms), 1.0 / len(forms))).tolist()))
+            w = np.array([sp.form_weights.get(f, 0.0) for f in forms], float)
+            share = w / w.sum() if w.sum() > 0 else np.full(len(forms), 1.0 / len(forms))
+            out[code] = {f: float(s) for f, s in zip(forms, share) if s > 0}
         return out
 
     def reach(self, sp: Spreads) -> tuple[float, float]:
-        """How far (ft) streets and blocks are looked for under spreads `sp`: past it, even an aligned street or the
-        smallest block would have odds below MIN_MASS (`street_odds`, `block_odds`), so less than MIN_MASS of its
-        kind."""
+        """How far (ft) streets and blocks are looked for under `sp`: past it even an aligned street, or the smallest
+        block, has odds that leave 1 + odds unchanged in float64 (`street_odds`, `block_odds`): it would lift nothing.
+        Scanned on a geometric grid out to where every kernel is exactly 0, rounded outward."""
         key = id(sp)
         if key not in self._reaches:
-            def last(odds):
-                keep = np.flatnonzero(odds >= MIN_MASS)
-                return float(REACH_GRID[min(keep[-1] + 1, len(REACH_GRID) - 1)]) if len(keep) else 0.0
-            best_deg = np.linspace(0.0, 90.0, 181)[int(np.argmax(sp.angle_density(np.linspace(0.0, 90.0, 181))))]
-            street = last(street_odds(self, sp, REACH_GRID, np.full(len(REACH_GRID), best_deg)))
+            def last(grid, odds):
+                keep = np.flatnonzero(1.0 + odds != 1.0)
+                return float(grid[min(keep[-1] + 1, len(grid) - 1)]) if len(keep) else 0.0
+            deg = np.linspace(0.0, 90.0, 721)
+            best_deg = float(deg[int(np.argmax(sp.angle_density(deg)))])
+            g = np.geomspace(1e-3, max(sp.street_density.top, 1e-3) * 1.001, REACH_STEPS)
+            street = last(g, street_odds(self, sp, g, np.full(len(g), best_deg)))
             small = float(self.block_perimeter.min()) if len(self.blocks) else 1.0
-            block = last(block_odds(self, sp, REACH_GRID, np.full(len(REACH_GRID), small), np.ones(len(REACH_GRID))))
+            g = np.geomspace(1e-3, max(sp.block_out_density.top, 1e-3) * 1.001, REACH_STEPS)
+            block = last(g, block_odds(self, sp, g, np.full(len(g), small), np.ones(len(g))))
             self._reaches[key] = (sp, (street, block))     # sp kept: its id stays its own
         return self._reaches[key][1]
 
@@ -361,20 +430,20 @@ class Pack:
                 "spreads": {k: {**s.summary(), "reach_ft": dict(zip(("street", "block"), self.reach(s)))}
                             for k, s in self.spreads.items()}}
 
-    # the file: one parquet, a row per street centreline, block, code form and measured spread value
+    # the file: one parquet, a row per street centreline, block, code form and measured value
     def save(self, f: Path) -> None:
         rows = [{"layer": "meta", "name": "year", "value": float(self.year)}]
         rows += [{"layer": "street", "name": r.name, "street": r.street, "type": r.type, "active": bool(r.active),
                   "geometry": r.geometry} for r in self.streets.itertuples(index=False)]
         rows += [{"layer": "block", "name": r.number, "geometry": r.geometry}
                  for r in self.blocks.itertuples(index=False)]
-        rows += [{"layer": "code", "name": code, "form": form, "value": self.form_weights.get(form, np.nan)}
-                 for form, code in self.codes.items()]
+        rows += [{"layer": "code", "name": code, "form": form} for form, code in self.codes.items()]
         for fold, s in self.spreads.items():
-            for quantity in SPREAD_ARRAYS:
-                rows += [{"layer": "spread", "name": quantity, "fold": fold, "value": float(v)}
-                         for v in getattr(s, quantity)]
-            rows += [{"layer": "spread", "name": k, "fold": fold, "value": getattr(s, k)} for k in SPREAD_SHARES]
+            for k in SPREAD_ARRAYS:
+                rows += [{"layer": "spread", "name": k, "fold": fold, "value": float(v)} for v in getattr(s, k)]
+            rows += [{"layer": "spread", "name": k, "fold": fold, "value": getattr(s, k)} for k in SPREAD_SCALARS]
+            rows += [{"layer": "form_weight", "fold": fold, "form": f, "value": float(v)}
+                     for f, v in sorted(s.form_weights.items())]
         cols = ["layer", "name", "street", "type", "active", "form", "fold", "value", "geometry"]
         df = pd.DataFrame(rows, columns=cols)
         df["geometry"] = [g if isinstance(g, shapely.Geometry) else None for g in df["geometry"]]
@@ -398,36 +467,36 @@ class Pack:
         blocks = gpd.GeoDataFrame({"number": bl["name"].to_numpy(object)}, geometry=bl.geometry.values, crs=df.crs)
         co = df[df["layer"] == "code"]
         codes = dict(zip(co["form"], co["name"]))
-        weights = {f: float(v) for f, v in zip(co["form"], co["value"]) if np.isfinite(v)}
-        sp = df[df["layer"] == "spread"]
+        sp, fw = df[df["layer"] == "spread"], df[df["layer"] == "form_weight"]
         spreads = {}
-        for fold in [f for f in FOLDS if f in set(sp["fold"])] + sorted(set(sp["fold"]) - set(FOLDS)):
-            mine = sp[sp["fold"] == fold]
-            spreads[fold] = Spreads(**{q: mine.loc[mine["name"] == q, "value"].to_numpy(float) for q in SPREAD_ARRAYS},
-                                    **{k: float(mine.loc[mine["name"] == k, "value"].iloc[0]) for k in SPREAD_SHARES})
-        return cls(year=year, streets=streets, blocks=blocks, codes=codes, spreads=spreads, form_weights=weights)
+        names = set(sp["fold"])
+        for fold in [f for f in FOLDS if f in names] + sorted(names - set(FOLDS)):
+            mine, w = sp[sp["fold"] == fold], fw[fw["fold"] == fold]
+            spreads[fold] = Spreads(
+                **{k: mine.loc[mine["name"] == k, "value"].to_numpy(float) for k in SPREAD_ARRAYS},
+                **{k: float(mine.loc[mine["name"] == k, "value"].iloc[0]) for k in SPREAD_SCALARS},
+                form_weights=dict(zip(w["form"], w["value"].astype(float))))
+        return cls(year=year, streets=streets, blocks=blocks, codes=codes, spreads=spreads)
 
 
 # --- building San Francisco's pack ------------------------------------------------------------------------------------
 
-def era_codes(year: int) -> tuple[dict[str, str], dict[str, float]]:
-    """The era's code list as printed form -> code, and each form's P(form | code).  2000: the April 2000 table's
-    code names (`codereader.labels.table_codes`: the list alone, never a code at a lot), each as itself, with the
-    reader's printed forms of them and their weights (`text-crops/prior.json` `forms` and `form_weights`, measured on
-    the training labels, the answered ones refused).  No other era's list is held: an empty list (the codes' kind goes
+def era_codes(year: int) -> dict[str, str]:
+    """The era's code list as printed form -> code.  2000: the April 2000 table's code names
+    (`codereader.labels.table_codes`: the list alone, never a code at a lot), each as itself, with the reader's printed
+    forms of them (`text-crops/prior.json` `forms`).  No other era's list is held: an empty list (the codes' kind goes
     to the escape)."""
     if year != 2000:
-        return {}, {}
+        return {}
     import json
 
     from sfzmaps.solver.codereader import labels
     from sfzmaps.solver.textread import store
     names = set(labels.table_codes())
-    prior_json = json.loads((store.CROPS_DIR / "prior.json").read_text())
     out = {n: n for n in names}
-    out.update({f: c for f, c in prior_json["forms"].items() if c in names})
-    weights = {f: float(w) for f, w in prior_json.get("form_weights", {}).items() if f in out}
-    return dict(sorted(out.items())), weights
+    out.update({f: c for f, c in json.loads((store.CROPS_DIR / "prior.json").read_text())["forms"].items()
+                if c in names})
+    return dict(sorted(out.items()))
 
 
 def sf_blocks(lots_table: Path | None = None) -> gpd.GeoDataFrame:
@@ -457,15 +526,14 @@ def sf_streets(path: Path | None = None) -> gpd.GeoDataFrame:
 
 def build_sf_pack(year: int, lot_codes: bool = False, codes: dict[str, str] | None = None) -> Pack:
     """San Francisco's pack for `year`'s map: today's DataSF centrelines (`sf_streets`) and the Assessor's blocks
-    (`sf_blocks`), and the era's code list with its forms' weights (`era_codes`; or `codes`, its forms flat).  No
-    spreads (`measure_spreads` adds them).
-    ValueError when asked for lot codes: on the 2000 map they are the answer key, and no other era's are held."""
+    (`sf_blocks`), and the era's code list (`era_codes`, or `codes`).  No spreads (`measure_spreads` adds them, per
+    fold).  ValueError when asked for lot codes: on the 2000 map they are the answer key, and no other era's are
+    held."""
     if lot_codes:
         if year == 2000:
             raise ValueError("a 2000 pack never holds the 2000 table's codes at lots: that is the answer key")
         raise ValueError(f"no lot codes are held for {year}; a pack holds streets, blocks and the code list only")
-    listed, weights = era_codes(year) if codes is None else (codes, {})
-    return Pack(year=year, streets=sf_streets(), blocks=sf_blocks(), codes=listed, form_weights=weights)
+    return Pack(year=year, streets=sf_streets(), blocks=sf_blocks(), codes=era_codes(year) if codes is None else codes)
 
 
 # --- a box on the map -------------------------------------------------------------------------------------------------
@@ -493,12 +561,16 @@ def _angle_between(a, b) -> np.ndarray:
 
 
 def _line_axes(lines, at: np.ndarray) -> np.ndarray:
-    """Each centreline's axis (degrees modulo 180) at distance `at` along it."""
-    length = shapely.length(lines)
-    a = shapely.line_interpolate_point(lines, np.clip(at - TANGENT_FT, 0, length))
-    b = shapely.line_interpolate_point(lines, np.clip(at + TANGENT_FT, 0, length))
-    d = shapely.get_coordinates(b) - shapely.get_coordinates(a)
-    return np.rad2deg(np.arctan2(d[:, 1], d[:, 0])) % 180.0
+    """Each centreline's axis (degrees modulo 180) at distance `at` along it: the direction of the straight piece
+    holding that point (the first, at a vertex)."""
+    out = np.zeros(len(lines))
+    for i, (line, s) in enumerate(zip(lines, np.asarray(at, float))):
+        xy = shapely.get_coordinates(line)
+        step = np.diff(xy, axis=0)
+        ends = np.cumsum(np.hypot(step[:, 0], step[:, 1]))
+        k = min(int(np.searchsorted(ends, s, side="left")), len(step) - 1)
+        out[i] = np.rad2deg(np.arctan2(step[k, 1], step[k, 0])) % 180.0
+    return out
 
 
 def street_offsets(pack: Pack, x: float, y: float, axis: float, rows=None, reach: float = 0.0):
@@ -528,10 +600,27 @@ def block_offsets(pack: Pack, x: float, y: float, rows=None, reach: float = 0.0)
 
 # --- the prior --------------------------------------------------------------------------------------------------------
 
-def _shares(odds: np.ndarray) -> tuple[np.ndarray, float]:
-    """P(item | box) from each item's odds against "none of them", and P(none | box)."""
-    z = 1.0 + float(odds.sum())
-    return odds / z, 1.0 / z
+@dataclass
+class Prior:
+    """A box's prior (see the module): `kind_p` (KIND_ORDER, normalised), `escape` E_k per kind, and per kind its
+    items: (odds against the escape, {form: P(form | item)})."""
+    kind_p: np.ndarray
+    escape: np.ndarray
+    items: dict[str, list[tuple[float, dict[str, float]]]]
+
+    @cached_property
+    def strings(self) -> list[str]:
+        """Every string an item prints (sorted): the strings the reader scores."""
+        return sorted({f for its in self.items.values() for _, forms in its for f in forms})
+
+    def mass(self, kind: str) -> dict[str, float]:
+        """The kind's prior mass of each listed string at w = 1 (item mass E_k odds, shared by its forms)."""
+        e = float(self.escape[KIND_ORDER.index(kind)])
+        out: dict[str, float] = {}
+        for odds, forms in self.items.get(kind, []):
+            for f, p in forms.items():
+                out[f] = out.get(f, 0.0) + e * odds * p
+        return out
 
 
 def street_odds(pack: Pack, sp: Spreads, d, deg) -> np.ndarray:
@@ -546,154 +635,164 @@ def block_odds(pack: Pack, sp: Spreads, d, perimeter, area) -> np.ndarray:
     """A block's odds against "a block the pack doesn't hold" at distance d (ft, 0 inside) from a block of this
     perimeter and area (see the module)."""
     d = np.asarray(d, float)
-    n = sum(bool(f) for f in pack.forms_of_block)
-    if not n or pack.area <= 0:
+    if not pack.named_blocks or pack.area <= 0:
         return np.zeros(d.shape)
-    p_in = sp.block_in
     with np.errstate(divide="ignore", invalid="ignore"):
-        inside = np.where(d <= 0, p_in / np.asarray(area, float), 0.0)
-        outside = np.where(d > 0, (1 - p_in) * sp.block_out_density(d) / np.asarray(perimeter, float), 0.0)
-    return (1 - sp.block_away) / sp.block_away * (pack.area / n) * (inside + outside)
+        inside = np.where(d <= 0, sp.block_in / np.asarray(area, float), 0.0)
+        ring = np.asarray(perimeter, float) + 2.0 * math.pi * d
+        outside = np.where(d > 0, (1 - sp.block_in) * sp.block_out_density(d) / ring, 0.0)
+    return (1 - sp.block_away) / sp.block_away * (pack.area / pack.named_blocks) * (inside + outside)
 
 
-def street_shares(pack: Pack, sp: Spreads, x: float, y: float, axis: float) -> tuple[dict[str, float], float]:
-    """P(j | box) for each street name j near the box, and P(0 | box) (see the module)."""
-    rows, d, deg = street_offsets(pack, x, y, axis, reach=pack.reach(sp)[0])
-    keep = pack.named_street[rows]
-    rows, d, deg = rows[keep], d[keep], deg[keep]
-    nearest: dict[str, int] = {}                 # each street by its nearest centreline
-    for k, r in enumerate(rows):
-        name = pack.street_names[r]
-        if name not in nearest or d[k] < d[nearest[name]]:
-            nearest[name] = k
-    names = sorted(nearest)
-    idx = np.array([nearest[n] for n in names], np.int64)
-    if not len(idx):
-        return {}, 1.0
-    share, none = _shares(street_odds(pack, sp, d[idx], deg[idx]))
-    return dict(zip(names, share.tolist())), none
+def _kind(odds: np.ndarray, forms: list[dict[str, float]]) -> tuple[float, list]:
+    """A kind's escape mass and its items: those whose odds lift anything in float64 (1 + odds != 1); the rest are
+    the escape's."""
+    odds = np.asarray(odds, float)
+    e = 1.0 / (1.0 + float(odds.sum())) if len(odds) else 1.0
+    return e, [(float(o), f) for o, f in zip(odds, forms) if 1.0 + o != 1.0 and f]
 
 
-def block_shares(pack: Pack, sp: Spreads, x: float, y: float) -> tuple[dict[int, float], float]:
-    """P(b | box) for each block row b near the box, and P(0 | box) (see the module)."""
-    rows, d = block_offsets(pack, x, y, reach=pack.reach(sp)[1])
-    keep = np.array([bool(pack.forms_of_block[r]) for r in rows], bool)
-    rows, d = rows[keep], d[keep]
-    if not len(rows):
-        return {}, 1.0
-    share, none = _shares(block_odds(pack, sp, d, pack.block_perimeter[rows], pack.block_area[rows]))
-    return dict(zip(rows.tolist(), share.tolist())), none
-
-
-def prior(pack: Pack | None, box_map: dict, kind_p, spreads: Spreads | None = None) -> dict[str, float]:
-    """The log prior over the strings a box may print (see the module): each listed string and ESCAPE.  `box_map`:
-    the box's centre `x`, `y` and `axis` on the map (`box_on_map`); `kind_p`: its kind probabilities (KIND_ORDER;
-    normalised here); `spreads`: the pack's "all" when None.  No pack: every mass on the escape."""
+def prior(pack: Pack | None, box_map: dict, kind_p, spreads: Spreads | None) -> Prior | None:
+    """The box's prior (see the module).  `box_map`: the box's centre `x`, `y` and `axis` on the map (`box_on_map`);
+    `kind_p`: its kind probabilities (KIND_ORDER; normalised here); `spreads`: the fold's measured spreads (required:
+    a prior is scored on the quarter its spreads left out).  No pack: None (the ink alone)."""
     kp = np.asarray(kind_p, float).reshape(-1)
     if kp.shape != (len(KIND_ORDER),) or not np.isfinite(kp).all() or (kp < 0).any() or kp.sum() <= 0:
         raise ValueError(f"kind_p must be {len(KIND_ORDER)} non-negative numbers ({KIND_ORDER}), not {kind_p}")
-    kp = kp / kp.sum()
     if pack is None:
-        return {ESCAPE: 0.0}
-    sp = spreads if spreads is not None else pack.spreads.get("all")
-    if sp is None:
-        raise ValueError("a prior needs the pack's measured spreads (`measure_spreads`)")
+        return None
+    if spreads is None:
+        raise ValueError("a prior needs the fold's measured spreads (`measure_spreads`)")
+    sp = spreads
+    kp = kp / kp.sum()
     x, y, axis = float(box_map["x"]), float(box_map["y"]), float(box_map["axis"])
-    mass: dict[str, float] = {}
-    escape = 0.0
+    escape = np.ones(len(KIND_ORDER))
+    items: dict[str, list] = {}
+    if kp[0] > 0 and pack.code_forms:            # a kind the box can't be (kind_p 0) has no say: not built
+        shares = pack.form_shares(sp)
+        odds = (1 - sp.code_away) / (len(shares) * sp.code_away)
+        escape[0], items[CODE] = _kind(np.full(len(shares), odds), list(shares.values()))
+    rows, d = block_offsets(pack, x, y, reach=pack.reach(sp)[1]) if kp[1] > 0 else (np.zeros(0, int), np.zeros(0))
+    if len(rows):
+        named = np.array([bool(pack.forms_of_block[r]) for r in rows], bool)
+        rows, d = rows[named], d[named]
+        odds = block_odds(pack, sp, d, pack.block_perimeter[rows], pack.block_area[rows])
+        forms = [{f: 1.0 / len(pack.forms_of_block[r]) for f in pack.forms_of_block[r]} for r in rows]
+        escape[1], items[BLOCK] = _kind(odds, forms)
+    rows, d, deg = street_offsets(pack, x, y, axis, reach=pack.reach(sp)[0]) if kp[2] > 0 else \
+        (np.zeros(0, int), np.zeros(0), np.zeros(0))
+    if len(rows):
+        keep = pack.named_street[rows]
+        rows, d, deg = rows[keep], d[keep], deg[keep]
+        nearest: dict[str, int] = {}                 # each street by its nearest centreline
+        for k, r in enumerate(rows):
+            name = pack.street_names[r]
+            if name not in nearest or d[k] < d[nearest[name]]:
+                nearest[name] = k
+        names = sorted(nearest)
+        idx = np.array([nearest[n] for n in names], np.int64)
+        if len(idx):
+            odds = street_odds(pack, sp, d[idx], deg[idx])
+            forms = [{f: 1.0 / len(pack.forms_of_street[n]) for f in pack.forms_of_street[n]} for n in names]
+            escape[2], items[STREET] = _kind(odds, forms)
+    return Prior(kind_p=kp, escape=escape, items={k: v for k, v in items.items() if v})
 
-    def add(forms, m):
-        for f in forms:
-            mass[f] = mass.get(f, 0.0) + m / len(forms)
 
-    def add_shares(shares, m):
-        for f, sh in shares.items():
-            mass[f] = mass.get(f, 0.0) + m * sh
+# --- the ink ----------------------------------------------------------------------------------------------------------
 
-    k = kp[KIND_ORDER.index("zoning code")]
-    if k > 0:
-        if pack.code_forms:
-            for shares in pack.code_form_shares.values():
-                add_shares(shares, k / len(pack.code_form_shares))
-        else:
-            escape += k
-    k = kp[KIND_ORDER.index("block number")]
-    if k > 0:
-        share, none = block_shares(pack, sp, x, y)
-        for r, s in share.items():
-            add(pack.forms_of_block[r], k * s)
-        escape += k * none
-    k = kp[KIND_ORDER.index("street name")]
-    if k > 0:
-        share, none = street_shares(pack, sp, x, y, axis)
-        for name, s in share.items():
-            add(pack.forms_of_street[name], k * s)
-        escape += k * none
-    escape += kp[KIND_ORDER.index("other")]
-    escape += sum(m for m in mass.values() if m < MIN_MASS)
-    out = {s: math.log(m) for s, m in sorted(mass.items()) if m >= MIN_MASS}
-    out[ESCAPE] = math.log(escape) if escape > 0 else -math.inf
-    return out
+def ink_logp(reads, q: float, strings, tau: float = 1.0) -> dict[str, float]:
+    """log p(s | ink) for each of `strings`, exactly by CTC (`textread.ctc.string_log_probs`) at temperature `tau`
+    (each frame's log-probabilities x tau, renormalised; 1: as read), mixed over the two reading directions as the
+    reader mixes them (`textread.ctc.mixture`): `reads` the crop's log-probabilities read as cut and turned a half
+    turn (frames x classes each), `q` the classifier's p(the crop as cut is upside down)."""
+    import torch
+
+    from sfzmaps.solver.textread import ctc
+    strings = list(strings)
+    out = []
+    for r in reads:
+        lp = torch.as_tensor(np.asarray(r, np.float64))
+        if tau != 1.0:
+            lp = torch.log_softmax(lp * tau, -1)
+        out.append(ctc.string_log_probs(lp, strings))
+    with np.errstate(divide="ignore"):
+        ink = np.logaddexp(np.log(1.0 - q) + out[0], np.log(q) + out[1])
+    return dict(zip(strings, ink.tolist()))
 
 
 # --- the posterior ----------------------------------------------------------------------------------------------------
 
-def ink_logp(reads, q: float, strings) -> dict[str, float]:
-    """log p(s | ink) for each of `strings`, exactly by CTC (`textread.ctc.string_log_probs`), mixed over the two
-    reading directions as the reader mixes them (`textread.ctc.mixture`): `reads` the crop's log-probabilities read
-    as cut and turned a half turn (frames x classes each), `q` the classifier's p(the crop as cut is upside down)."""
-    from sfzmaps.solver.textread import ctc
-    strings = list(strings)
-    lp0, lp180 = (ctc.string_log_probs(r, strings) for r in reads)
+def _log_expm1(a: np.ndarray) -> np.ndarray:
+    """log(exp(a) - 1) for a >= 0 (-inf at 0), without overflow."""
+    a = np.asarray(a, float)
     with np.errstate(divide="ignore"):
-        ink = np.logaddexp(np.log(1.0 - q) + lp0, np.log(q) + lp180)
-    return dict(zip(strings, ink.tolist()))
+        return np.where(a > 0, a + np.log(-np.expm1(-np.maximum(a, 1e-300))), -np.inf)
 
 
-def _wlog(w: float, x: float) -> float:
-    """w x, with 0 x (-inf) = 0: a prior with no weight says nothing, even of an impossible string."""
-    return 0.0 if w == 0 else w * x
+def log_lift(prior: Prior | None, strings, w: dict[str, float]) -> np.ndarray:
+    """log lift(s) of each of `strings` (see the module) at the kinds' weights `w` (a weight for every kind that
+    lists anything; KeyError otherwise)."""
+    strings = list(strings)
+    if prior is None:
+        return np.zeros(len(strings))
+    col = {s: i for i, s in enumerate(strings)}
+    c = prior.kind_p * prior.escape
+    total = float(c.sum())
+    if not total > 0:
+        raise ValueError("every kind's escape mass is 0: the prior lists everything with certainty")
+    c = c / total
+    terms = [[] for _ in strings]              # per string: (kind index, log Lift_k - 0)
+    for kind, its in prior.items.items():
+        k = KIND_ORDER.index(kind)
+        if c[k] == 0:
+            continue
+        wk = float(w[kind])
+        logs = [[] for _ in strings]
+        for odds, forms in its:
+            a = _log_expm1(np.array([wk * math.log1p(odds)]))[0]
+            for f, p in forms.items():
+                if f in col and p > 0:
+                    logs[col[f]].append(math.log(p) + a)
+        for i, ls in enumerate(logs):
+            if ls:
+                terms[i].append((k, float(np.logaddexp(0.0, np.logaddexp.reduce(ls)))))
+    out = np.zeros(len(strings))
+    for i, t in enumerate(terms):
+        if t:
+            base = 1.0 - sum(c[k] for k, _ in t)
+            parts = [math.log(c[k]) + lk for k, lk in t] + ([math.log(base)] if base > 0 else [])
+            out[i] = float(np.logaddexp.reduce(parts))
+    return out
 
 
-def _lse(v) -> float:
-    v = np.asarray(v, float)
-    m = v.max() if len(v) else -math.inf
-    return float(m + np.log(np.exp(v - m).sum())) if np.isfinite(m) else -math.inf
-
-
-def posterior(ink_logp: dict[str, float], prior: dict[str, float] | None, w: float, e: float) -> dict[str, float]:
-    """The log posterior (see the module) of every string of `ink_logp` and of OTHER (every string neither listed nor
-    named).  `ink_logp`: log p(s | ink) by CTC for every listed string of `prior` (ValueError when one is missing)
-    and any others; `prior`: `prior`'s output, or None for none (the ink alone); `w` >= 0; 0 < e <= 1."""
-    if not 0 < e <= 1:
-        raise ValueError(f"the escape mass e must be in (0, 1], not {e}: a prior with no escape filters")
-    if w < 0:
-        raise ValueError(f"the prior's weight w must be >= 0, not {w}")
-    if ESCAPE in ink_logp or OTHER in ink_logp:
-        raise ValueError(f"{ESCAPE!r} and {OTHER!r} are the posterior's own keys, not strings")
-    pr = {ESCAPE: 0.0} if prior is None else prior
-    listed = [s for s in pr if s != ESCAPE]
-    missing = [s for s in listed if s not in ink_logp]
-    if missing:
-        raise ValueError(f"no ink for {len(missing)} listed strings (e.g. {missing[:3]}): the reader scores them all")
-    log_e = math.log((1 - e) * math.exp(pr.get(ESCAPE, -math.inf)) + e)
-    log_keep = math.log(1 - e) if e < 1 else -math.inf
-    score = {}
-    for s, lp in ink_logp.items():
-        score[s] = lp + _wlog(w, float(np.logaddexp(log_e, log_keep + pr[s])) if s in pr else log_e)
+def posterior(ink_logp: dict[str, float], prior: Prior | None, w: dict[str, float]) -> dict[str, float]:
+    """The log posterior (see the module) of every string of `ink_logp` and of OTHER (every string not named).
+    `ink_logp`: log p(s | ink) for every listed string of `prior` (ValueError when one is missing) and any others;
+    `prior`: `prior`'s output, None for none (the ink alone); `w`: each listing kind's weight (>= 0)."""
+    if OTHER in ink_logp:
+        raise ValueError(f"{OTHER!r} is the posterior's own key, not a string")
+    if any(v < 0 for v in w.values()):
+        raise ValueError(f"the weights must be >= 0, not {w}")
+    if prior is not None:
+        missing = [s for s in prior.strings if s not in ink_logp]
+        if missing:
+            raise ValueError(f"no ink for {len(missing)} listed strings (e.g. {missing[:3]}): the reader scores them")
+    names = list(ink_logp)
+    ink = np.array([ink_logp[s] for s in names], float)
+    score = ink + log_lift(prior, names, w)
     with np.errstate(over="ignore"):
-        rest = 1.0 - float(np.exp(np.array(list(ink_logp.values()), float)).sum())
-    score[OTHER] = (math.log(rest) if rest > 0 else -math.inf) + _wlog(w, log_e)
-    z = _lse(list(score.values()))
-    return {s: v - z for s, v in score.items()}
+        rest = 1.0 - float(np.exp(ink).sum())
+    allv = np.r_[score, math.log(rest) if rest > 0 else -math.inf]
+    z = float(np.logaddexp.reduce(allv[np.isfinite(allv)])) if np.isfinite(allv).any() else 0.0
+    return {**{s: float(v - z) for s, v in zip(names, score)}, OTHER: float(allv[-1] - z)}
 
 
 # --- holding the answers out ------------------------------------------------------------------------------------------
 
 def refuse_answered(words: pd.DataFrame, held_blocks=None, quarter: int | None = None) -> None:
     """ValueError when any word is in or touches an answered block (`block` in `held_blocks`, default
-    `textnet.reader_stage.held_blocks()`; or `touch_blocks`), or lies in the held-out `quarter`: a prior is never
-    fitted on the owner's answers, nor on the quarter it is scored on."""
+    `textnet.reader_stage.held_blocks()`; or `touch_blocks`), or lies in or touches the held-out `quarter` (`quarter`,
+    `touch_<q>`): nothing is fitted on the owner's answers, nor on the quarter it is scored on."""
     if "block" not in words:
         raise ValueError("each word needs its block (`block`) so that answered blocks can be refused")
     if held_blocks is None:
@@ -707,13 +806,16 @@ def refuse_answered(words: pd.DataFrame, held_blocks=None, quarter: int | None =
     if "touch_blocks" in words and words["touch_blocks"].astype(bool).any():
         raise ValueError(f"{int(words['touch_blocks'].astype(bool).sum())} words touch an answered block")
     if quarter is not None:
-        if "quarter" not in words:
-            raise ValueError("each word needs its quarter to keep the held-out quarter out")
+        touch = f"touch_{paths.QUARTERS[int(quarter)]}"
+        if "quarter" not in words or touch not in words:
+            raise ValueError(f"each word needs its quarter and `{touch}` to keep the held-out quarter out")
         if (words["quarter"].astype(int) == int(quarter)).any():
             raise ValueError(f"words of the held-out quarter {quarter}: fit on the other three quarters")
+        if words[touch].astype(bool).any():
+            raise ValueError(f"{int(words[touch].astype(bool).sum())} words touch the held-out quarter {quarter}")
 
 
-# --- the spreads, measured --------------------------------------------------------------------------------------------
+# --- measuring: the offsets, EM and the code list ---------------------------------------------------------------------
 
 def _street_rows_by_form(pack: Pack) -> dict[str, np.ndarray]:
     names: dict[str, list[str]] = {}
@@ -725,134 +827,282 @@ def _street_rows_by_form(pack: Pack) -> dict[str, np.ndarray]:
 
 
 def word_offsets(pack: Pack, words: pd.DataFrame) -> pd.DataFrame:
-    """Each Terra word against what it names (see the module): `found` (a street, or block, prints its text), its own
-    one (the nearest that does), `here` (that is also the nearest of all), `d_ft` (from its own street's centreline,
-    or outside its own block) and `d_deg` (its axis to its own street's centreline).  `words`: text, kind, x, y, axis
-    (`box_on_map`)."""
+    """Each word against what its text names: `found` (a street, or block, prints it), and from the nearest that does,
+    `d_ft` (from its centreline, or outside the block: 0 inside) and `d_deg` (the word's axis to the centreline there).
+    `words`: text, kind, x, y, axis (`box_on_map`)."""
     by_form = _street_rows_by_form(pack)
-    named_rows = np.flatnonzero(pack.named_street)
-    named_tree = shapely.STRtree(pack.streets.geometry.values[named_rows])
     block_rows: dict[str, list[int]] = {}
     for r, forms in enumerate(pack.forms_of_block):
         for f in forms:
             block_rows.setdefault(f, []).append(r)
     out = []
     for w in words.itertuples(index=False):
-        rec = {"found": False, "here": False, "d_ft": np.nan, "d_deg": np.nan}
+        rec = {"found": False, "d_ft": np.nan, "d_deg": np.nan}
         pt = shapely.Point(w.x, w.y)
-        if w.kind == "street name" and w.text in by_form:
+        if w.kind == STREET and w.text in by_form:
             rows = by_form[w.text]
             d = shapely.distance(pack.streets.geometry.values[rows], pt)
             k = int(np.argmin(d))
             _, dk, deg = street_offsets(pack, w.x, w.y, w.axis, rows=rows[k:k + 1])
-            near = named_rows[int(named_tree.query_nearest(pt, all_matches=False)[0])]
-            rec = {"found": True, "here": bool(pack.street_names[near] == pack.street_names[rows[k]]),
-                   "d_ft": float(dk[0]), "d_deg": float(deg[0])}
-        elif w.kind == "block number" and w.text in block_rows:
+            rec = {"found": True, "d_ft": float(dk[0]), "d_deg": float(deg[0])}
+        elif w.kind == BLOCK and w.text in block_rows:
             rows = np.array(block_rows[w.text], np.int64)
-            d = shapely.distance(pack.blocks.geometry.values[rows], pt)
-            k = int(np.argmin(d))
-            near = int(pack.block_tree.query_nearest(pt, all_matches=False)[0]) if d[k] > 0 else int(rows[k])
-            here = near == rows[k] or pack.blocks.geometry.values[near].distance(pt) >= d[k]   # a tie is its own
-            rec = {"found": True, "here": bool(here), "d_ft": float(d[k]), "d_deg": np.nan}
+            rec = {"found": True, "d_ft": float(shapely.distance(pack.blocks.geometry.values[rows], pt).min()),
+                   "d_deg": np.nan}
         out.append(rec)
-    return pd.DataFrame(out, index=words.index, columns=["found", "here", "d_ft", "d_deg"])
+    return pd.DataFrame(out, index=words.index, columns=["found", "d_ft", "d_deg"])
 
 
-def measure_spreads(pack: Pack, words: pd.DataFrame, held_blocks=None, quarter: int | None = None) -> tuple:
-    """The spreads (`Spreads`, see the module) measured on Terra's `words` (`word_offsets`), refusing answered-block
-    words and the held-out `quarter` (`refuse_answered`); and the offsets per word."""
+def _em(features: list[tuple[np.ndarray, float | None, float | None]], d: np.ndarray, far_angle: bool,
+        r0: np.ndarray) -> dict:
+    """One EM run from responsibilities r0: near = the product of weighted kernel densities over `features` (each
+    (values, lo, hi), leave-one-out, bandwidth by leave-one-out likelihood), far = exponential in `d` (x uniform on
+    [0, 90] when `far_angle`).  Each iteration's bandwidth search starts from the last one.  It stops when the
+    log-likelihood stops rising (by more than EM_TOL relative: numerical convergence) or no responsibility moves by
+    more than EM_TOL; the likeliest state seen is returned (the bandwidths are re-chosen each step, so the
+    log-likelihood need not rise monotonically): its r (the weights its bandwidths were chosen for), bandwidths, far
+    scale, log-likelihood, iterations and whether it converged before EM_MAX_ITER."""
+    r = np.asarray(r0, float).copy()
+    hs = [math.nan] * len(features)
+    best = None
+    it, converged = 0, False
+    for it in range(1, EM_MAX_ITER + 1):
+        pi = float(r.mean())
+        hs = [loo_bandwidth(x, r, lo, hi, start=h) for (x, lo, hi), h in zip(features, hs)]
+        near = np.ones(len(d))
+        for (x, lo, hi), h in zip(features, hs):
+            near = near * (loo_density(x, r, h, lo, hi) if math.isfinite(h) else np.zeros(len(d)))
+        far_w = 1.0 - r
+        lam = float((far_w * d).sum() / far_w.sum()) if far_w.sum() > 0 else math.nan
+        far = (np.exp(-d / lam) / lam if math.isfinite(lam) and lam > 0 else np.zeros(len(d))) / \
+            (90.0 if far_angle else 1.0)
+        mix = pi * near + (1 - pi) * far
+        with np.errstate(invalid="ignore", divide="ignore"):
+            new = np.where(mix > 0, pi * near / np.where(mix > 0, mix, 1.0), 0.0)
+            ll = float(np.log(mix).sum())
+        rose = best is None or ll > best["ll"] + EM_TOL * abs(best["ll"])
+        if best is None or ll > best["ll"]:
+            best = {"r": r.copy(), "h": list(hs), "lam": lam, "ll": ll}
+        moved = float(np.max(np.abs(new - r))) if len(r) else 0.0
+        r = new
+        if not rose or moved <= EM_TOL:
+            converged = True
+            break
+    return {**best, "iterations": it, "converged": converged}
+
+
+def em_split(features, d: np.ndarray, far_angle: bool) -> dict:
+    """`_em` from every decile split of `d` (near below it) and from an even start; the likeliest fixed point."""
+    d = np.asarray(d, float)
+    if not len(d):
+        return {"r": np.zeros(0), "h": [math.nan] * len(features), "lam": math.nan, "ll": 0.0, "iterations": 0,
+                "converged": True, "start": None}
+    starts, seen = [], set()
+    for name, r0 in [("even", np.full(len(d), 0.5))] + \
+            [(f"d<=q{p}", (d <= np.quantile(d, p / 10)).astype(float)) for p in range(1, 10)]:
+        if r0.tobytes() not in seen:               # a start like one already run would end where it did
+            seen.add(r0.tobytes())
+            starts.append((name, r0))
+    best = None
+    for name, r0 in starts:
+        got = _em(features, d, far_angle, r0)
+        if best is None or got["ll"] > best["ll"]:
+            best = {**got, "start": name}
+    return best
+
+
+def measure_spreads(pack: Pack, words: pd.DataFrame, code_words: pd.DataFrame | None = None, held_blocks=None,
+                    quarter: int | None = None) -> tuple[Spreads, pd.DataFrame]:
+    """The fold's `Spreads` (see the module), measured on `words` (our boxes matched to Terra's words: text, kind,
+    x, y, axis, block, quarter, touches) and, for the codes, on `code_words` (Terra's code words: text, block,
+    quarter, touches; `words`' code words when None), both refused answered blocks and the held-out quarter
+    (`refuse_answered`); and the words' offsets with their responsibilities (`r`)."""
+    code_words = words[words["kind"] == CODE] if code_words is None else code_words
     refuse_answered(words, held_blocks, quarter)
-    off = word_offsets(pack, words)
-    out = {}
-    for kind, key in (("street name", "street"), ("block number", "block")):
-        mine = (words["kind"] == kind).to_numpy()
-        here = mine & off["here"].to_numpy(bool)
-        if not here.any() or here.sum() == mine.sum():
-            raise ValueError(f"can't measure the {kind} spreads: {int(here.sum())} of {int(mine.sum())} words name "
-                             "what they sit by")
-        out[f"{key}_away"] = 1.0 - here.sum() / mine.sum()
-        out[f"{key}_ft"] = off.loc[here, "d_ft"].to_numpy()
-        if key == "street":
-            out["street_deg"] = off.loc[here, "d_deg"].to_numpy()
-    return Spreads(**out), off
+    refuse_answered(code_words, held_blocks, quarter)
+    off = word_offsets(pack, words).assign(r=0.0)
+    found = off["found"].to_numpy(bool)
+    st = (words["kind"] == STREET).to_numpy()
+    bl = (words["kind"] == BLOCK).to_numpy()
+    s = off[st & found]
+    em_s = em_split([(s["d_ft"].to_numpy(), 0.0, None), (s["d_deg"].to_numpy(), 0.0, 90.0)], s["d_ft"].to_numpy(), True)
+    off.loc[s.index, "r"] = em_s["r"]
+    b = off[bl & found]
+    bd = b["d_ft"].to_numpy()
+    inside = bd <= 0
+    off.loc[b.index[inside], "r"] = 1.0             # inside the block it names: near; outside it: away (see module)
+    near_b = float(inside.sum())
+    texts = code_words["text"].astype(str)
+    listed = texts.isin(set(pack.codes))
+    weights = texts[listed].map(pack.codes).to_frame("code").assign(form=texts[listed]) \
+        .groupby(["code", "form"]).size()
+    weights = (weights / weights.groupby(level="code").transform("sum")).droplevel("code").to_dict()
+    n_s, n_b = int(st.sum()), int(bl.sum())
+    if not n_s or not n_b or not len(code_words) or not near_b:
+        raise ValueError(f"too few words to measure: {n_s} street, {n_b} block, {len(code_words)} code words")
+    em_info = {"street": {"start": em_s["start"], "iterations": em_s["iterations"], "converged": em_s["converged"],
+                          "ll": em_s["ll"], "far_scale_ft": em_s["lam"]},
+               "block": {"inside": int(inside.sum()), "outside": int((~inside).sum()), "not_found": n_b - len(b)}}
+    sp = Spreads(street_ft=s["d_ft"].to_numpy(), street_deg=s["d_deg"].to_numpy(), street_r=em_s["r"],
+                 street_h=em_s["h"][0], street_deg_h=em_s["h"][1],
+                 street_away=1.0 - float(em_s["r"].sum()) / n_s,
+                 block_ft=bd, block_r=off.loc[b.index, "r"].to_numpy(), block_h=math.nan,
+                 block_in=1.0, block_away=1.0 - near_b / n_b,
+                 code_away=1.0 - float(listed.mean()), form_weights={str(k): float(v) for k, v in weights.items()},
+                 em=em_info)
+    return sp, off
 
 
-# --- fitting w and e --------------------------------------------------------------------------------------------------
+# --- fitting tau and w ------------------------------------------------------------------------------------------------
 
-def _arrays(words: pd.DataFrame):
-    """Per word, padded: the listed strings' ink (n, K; -inf pads) and log prior (n, K; 0 pads), the escape class's ink
-    (log(1 - the listed ink)), prior(ESCAPE), and the truth: its listed column (-1 off the list) and its ink."""
-    n = len(words)
-    rows = list(zip(words["truth"], words["ink"], words["prior"]))
-    K = max([len([s for s in pr if s != ESCAPE]) for _, _, pr in rows] + [1])
-    A, B = np.full((n, K), -np.inf), np.zeros((n, K))
-    esc_ink, esc_pr, col, t_ink = np.zeros(n), np.zeros(n), np.full(n, -1), np.zeros(n)
-    for i, (truth, ink, pr) in enumerate(rows):
-        listed = [s for s in pr if s != ESCAPE]
-        if truth not in ink:
-            raise ValueError(f"word {i}: no ink for its truth {truth!r}")
-        missing = [s for s in listed if s not in ink]
-        if missing:
-            raise ValueError(f"word {i}: no ink for listed strings {missing[:3]}")
-        A[i, :len(listed)] = [ink[s] for s in listed]
-        B[i, :len(listed)] = [pr[s] for s in listed]
-        with np.errstate(over="ignore"):
-            rest = 1.0 - float(np.exp(A[i, :len(listed)]).sum())
-        esc_ink[i] = math.log(rest) if rest > 0 else -math.inf
-        esc_pr[i] = math.exp(pr.get(ESCAPE, -math.inf))
-        col[i] = listed.index(truth) if truth in listed else -1
-        t_ink[i] = ink[truth]
-    return A, B, esc_ink, esc_pr, col, t_ink
-
-
-def _loglik(params, arrays) -> np.ndarray:
-    """log posterior of each word's truth at (w, e) (`posterior`'s, vectorised)."""
-    w, e = params
-    A, B, esc_ink, esc_pr, col, t_ink = arrays
-    log_keep = math.log(1 - e) if e < 1 else -math.inf
-    log_e = np.log((1 - e) * esc_pr + e)
-    listed = A + (w * np.logaddexp(log_e[:, None], log_keep + B) if w else 0.0)
-    escape = esc_ink + w * log_e
-    m = np.maximum(listed.max(1), escape)
-    m = np.where(np.isfinite(m), m, 0.0)
+def _group_lse(v: np.ndarray, starts: np.ndarray) -> np.ndarray:
+    """logsumexp of each run of `v` beginning at `starts` (v sorted by run; every run non-empty)."""
+    if not len(starts):
+        return np.zeros(0)
+    m = np.maximum.reduceat(v, starts)
+    safe = np.where(np.isfinite(m), m, 0.0)
     with np.errstate(divide="ignore"):
-        z = m + np.log(np.exp(listed - m[:, None]).sum(1) + np.exp(escape - m))
-    on = col >= 0
-    num = np.where(on, listed[np.arange(len(col)), np.maximum(col, 0)], t_ink + w * log_e)
-    return num - z
+        return safe + np.log(np.add.reduceat(np.exp(v - np.repeat(safe, np.diff(np.r_[starts, len(v)]))), starts))
 
 
-def truth_loglik(words: pd.DataFrame, w: float, e: float) -> np.ndarray:
-    """Each word's log posterior of its `truth` at (w, e) (`posterior`; `words` as `fit_prior` takes them).  w = 0 is
-    the ink alone."""
-    return _loglik((w, e), _arrays(words))
+class _Words:
+    """The fit's words flattened (`posterior`'s arithmetic, vectorised): every word's named strings (its prior's and
+    its truth), each string's lift entries (kind, log1p(odds), log P(string | item)), the kinds' shares c_k, and each
+    truth's position; the ink at a temperature computed on demand (cached)."""
+
+    def __init__(self, words: pd.DataFrame):
+        self.reads = list(words["reads"])
+        self.q = np.asarray(words["q"], float)
+        priors = list(words["prior"])
+        self.named, truth_at, word_of = [], [], []
+        ent_g, ent_k, ent_l, ent_p = [], [], [], []
+        c_rows = []
+        g0 = 0
+        for i, (truth, pr) in enumerate(zip(words["truth"], priors)):
+            names = sorted(set(pr.strings if pr is not None else []) | {truth})
+            col = {s: g0 + j for j, s in enumerate(names)}
+            self.named.append(names)
+            truth_at.append(col[truth])
+            word_of += [i] * len(names)
+            c = np.zeros(len(KIND_ORDER))
+            if pr is not None:
+                c = pr.kind_p * pr.escape
+                c = c / c.sum()
+                for kind, its in pr.items.items():
+                    k = KIND_ORDER.index(kind)
+                    if c[k] == 0:
+                        continue
+                    for odds, forms in its:
+                        for f, p in forms.items():
+                            if p > 0:
+                                ent_g.append(col[f])
+                                ent_k.append(k)
+                                ent_l.append(math.log1p(odds))
+                                ent_p.append(math.log(p))
+            c_rows.append(c)
+            g0 += len(names)
+        self.truth_at = np.array(truth_at, np.int64)
+        self.word_of = np.array(word_of, np.int64)
+        self.starts = np.flatnonzero(np.r_[True, self.word_of[1:] != self.word_of[:-1]]) if g0 else np.zeros(0, int)
+        c = np.array(c_rows, float).reshape(-1, len(KIND_ORDER))
+        order = np.lexsort((np.array(ent_k, np.int64), np.array(ent_g, np.int64)))
+        g, k = np.array(ent_g, np.int64)[order], np.array(ent_k, np.int64)[order]
+        self.ent_k, self.ent_l, self.ent_p = k, np.array(ent_l, float)[order], np.array(ent_p, float)[order]
+        key = g * len(KIND_ORDER) + k
+        self.grp_starts = np.flatnonzero(np.r_[True, key[1:] != key[:-1]]) if len(key) else np.zeros(0, int)
+        self.grp_g, grp_k = g[self.grp_starts], k[self.grp_starts]
+        self.grp_logc = np.log(c[self.word_of[self.grp_g], grp_k]) if len(self.grp_g) else np.zeros(0)
+        base = np.ones(g0)                    # 1 - the shares of the kinds that list each string
+        np.subtract.at(base, self.grp_g, c[self.word_of[self.grp_g], grp_k])
+        with np.errstate(divide="ignore"):
+            self.log_base = np.log(np.maximum(base, 0.0))
+        self.gg_starts = np.flatnonzero(np.r_[True, self.grp_g[1:] != self.grp_g[:-1]]) if len(self.grp_g) \
+            else np.zeros(0, int)
+        self.gg = self.grp_g[self.gg_starts] if len(self.grp_g) else np.zeros(0, int)
+        self.kinds = [KIND_ORDER[j] for j in sorted(set(self.ent_k.tolist()))]
+        self._ink: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+
+    def ink(self, tau: float) -> tuple[np.ndarray, np.ndarray]:
+        """Every named string's ink at tau (flat) and each word's ink left for the strings it doesn't name."""
+        if tau not in self._ink:
+            flat = np.concatenate([np.array(list(ink_logp(r, q, n, tau).values()), float) for r, q, n in
+                                   zip(self.reads, self.q, self.named)]) if self.named else np.zeros(0)
+            with np.errstate(over="ignore"):
+                rest = 1.0 - np.add.reduceat(np.exp(flat), self.starts) if len(flat) else np.zeros(0)
+            self._ink[tau] = (flat, rest)
+        return self._ink[tau]
+
+    def lift(self, w: dict[str, float]) -> np.ndarray:
+        """log lift of every named string (flat) at the kinds' weights."""
+        out = np.zeros(len(self.word_of))
+        if not len(self.ent_k):
+            return out
+        wk = np.array([float(w.get(k, 0.0)) for k in KIND_ORDER])[self.ent_k]
+        log_s = _group_lse(self.ent_p + _log_expm1(wk * self.ent_l), self.grp_starts)
+        terms = self.grp_logc + np.logaddexp(0.0, log_s)
+        per_g = _group_lse(terms, self.gg_starts)
+        out[self.gg] = np.logaddexp(per_g, self.log_base[self.gg])
+        return out
+
+    def loglik(self, tau: float, w: dict[str, float]) -> np.ndarray:
+        """Each word's log posterior of its truth."""
+        ink, rest = self.ink(tau)
+        score = ink + self.lift(w)
+        with np.errstate(divide="ignore"):
+            log_rest = np.log(np.maximum(rest, 0.0))
+        z = np.logaddexp(_group_lse(score, self.starts), log_rest)
+        return score[self.truth_at] - z
 
 
-def fit_prior(words: pd.DataFrame, held_blocks=None, quarter: int | None = None, w_max: float = W_MAX) -> dict:
-    """w and e by maximum likelihood of each word's `truth` (Terra's string) under `posterior` (see the module).
-    `words`: per Terra-matched word, `truth`, `ink` (log p(s | ink) for the truth and every listed string), `prior`
-    (`prior`'s output), `block` and, optionally, `touch_blocks` and `quarter`; refused when any is the owner's
-    (`refuse_answered`, with `held_blocks` and the held-out `quarter`).  A coarse grid, then L-BFGS-B from its best:
-    deterministic.  Returns w, e, the summed log-likelihood with them and with the ink alone, counts and whether
-    either sits at its search bound."""
+def truth_loglik(words: pd.DataFrame, tau: float, w: dict[str, float]) -> np.ndarray:
+    """Each word's log posterior of its `truth` at (tau, w) (`words` as `fit_prior` takes them)."""
+    return _Words(words).loglik(tau, w)
+
+
+def fit_prior(words: pd.DataFrame, held_blocks=None, quarter: int | None = None, joint: bool = False) -> dict:
+    """The ink's temperature and the kinds' weights by maximum likelihood of each word's `truth` (Terra's string),
+    the ink calibrated apart from the context: tau first, on the ink alone (the reader's p(truth | ink) at tau), then w
+    per kind on top of it (`posterior`).  `words`: per Terra-matched word, `truth`, `reads` (its two reads'
+    log-probabilities), `q`, `prior` (a `Prior`), `block`, `touch_blocks` and, with `quarter`, `quarter` and its touch
+    column; refused when any is the owner's or the held-out quarter's (`refuse_answered`).  Unbounded searches: log tau
+    by Brent from tau 1, log w by BFGS from w 1.  With `joint`, also tau and w fitted together (each tau's best w),
+    reported under "joint".  Returns tau, w, the log-likelihood with them, with the ink as read (tau 1, no prior) and
+    with the ink at tau alone, counts, and whether each search converged."""
     refuse_answered(words, held_blocks, quarter)
     if not len(words):
         raise ValueError("no words to fit on")
-    arrays = _arrays(words)
+    data = _Words(words)
+    kinds = data.kinds
+    zero = dict.fromkeys(kinds, 0.0)
+    inner: dict[float, tuple[np.ndarray, float, bool]] = {}
 
-    def nll(v):
-        return -float(_loglik((v[0], 1.0 / (1.0 + math.exp(-v[1]))), arrays).sum())
+    def best_w(tau: float):
+        if tau not in inner:
+            def nll(u):
+                return -float(data.loglik(tau, dict(zip(kinds, np.exp(u)))).sum())
+            if kinds:
+                res = optimize.minimize(nll, np.zeros(len(kinds)), method="BFGS")
+                inner[tau] = (res.x, float(res.fun), (bool(res.success), str(res.message)))
+            else:
+                inner[tau] = (np.zeros(0), nll(np.zeros(0)), (True, "no kind lists anything"))
+        return inner[tau]
 
-    grid = [(w, z) for w in np.r_[0.0, np.geomspace(0.01, w_max, 48)] for z in np.linspace(*E_LOGIT, 33)]
-    vals = [nll(g) for g in grid]
-    start = grid[int(np.argmin(vals))]
-    res = optimize.minimize(nll, np.array(start, float), method="L-BFGS-B", bounds=[(0.0, w_max), E_LOGIT])
-    best = res.x if res.fun <= min(vals) else np.array(start, float)
-    w, e = float(best[0]), 1.0 / (1.0 + math.exp(-float(best[1])))
-    ll = _loglik((w, e), arrays)
-    ink_only = _loglik((0.0, 0.5), arrays)
-    return {"w": round(w, 4), "e": float(f"{e:.4g}"), "loglik": float(ll.sum()), "loglik_ink_only":
-            float(ink_only.sum()), "n": int(len(words)), "truth_listed": int((arrays[4] >= 0).sum()),
-            "w_at_bound": bool(w <= 1e-6 or w >= w_max - 1e-6),
-            "e_at_bound": bool(best[1] <= E_LOGIT[0] + 1e-6 or best[1] >= E_LOGIT[1] - 1e-6)}
+    def result(tau, outer_ok):
+        u, fun, ok = best_w(tau)
+        return {"tau": tau, "w": {k: float(math.exp(v)) for k, v in zip(kinds, u)},
+                "log_w": dict(zip(kinds, map(float, u))), "loglik": -fun,
+                "loglik_ink_at_tau": float(data.loglik(tau, zero).sum()), "tau_converged": outer_ok,
+                "w_converged": ok[0], "w_message": ok[1]}
+
+    ink_only = optimize.minimize_scalar(lambda v: -float(data.loglik(math.exp(v), zero).sum()),
+                                        bracket=(math.log(0.5), 0.0), method="brent")
+    out = {**result(float(math.exp(ink_only.x)), bool(ink_only.success)),
+           "loglik_ink_as_read": float(data.loglik(1.0, zero).sum()), "n": int(len(words)),
+           "truth_listed": int(sum(t in (p.strings if p is not None else [])
+                                   for t, p in zip(words["truth"], words["prior"])))}
+    if joint:
+        both = optimize.minimize_scalar(lambda v: best_w(math.exp(v))[1], bracket=(math.log(0.5), 0.0),
+                                        method="brent")
+        out["joint"] = result(float(math.exp(both.x)), bool(both.success))
+    out["tau_evaluations"] = len(data._ink)
+    return out
