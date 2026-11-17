@@ -6558,6 +6558,10 @@ stages:
       hash: md5
       md5: aedf730eb73fad4377ecd8ee72bca25b
       size: 4386
+    - path: src/sfzmaps/solver/runs.py
+      hash: md5
+      md5: a42cb40b049e482ea1ffbae6f9437189
+      size: 4792
     - path: src/sfzmaps/solver/streetside.py
       hash: md5
       md5: cec5a6c564a7c7098ba1d859094a2acd
@@ -6572,8 +6576,8 @@ stages:
       size: 4053
     - path: src/sfzmaps/solver/trust.py
       hash: md5
-      md5: 67c3b206db20e574117b97587df356a8
-      size: 14559
+      md5: 8bfbb4f9ec4b0d3f7574d0b22bfd1866
+      size: 14632
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: c83192f3d3941fae99387dafd628e159
@@ -7457,8 +7461,8 @@ stages:
       size: 4386
     - path: src/sfzmaps/solver/runs.py
       hash: md5
-      md5: 6182a5bd007fc0bc6e7f9576bae355c5
-      size: 3940
+      md5: a42cb40b049e482ea1ffbae6f9437189
+      size: 4792
     - path: src/sfzmaps/solver/saved.py
       hash: md5
       md5: 5428b2e93ac078c2186cedf7b3aaaf8a
@@ -9155,16 +9159,16 @@ stages:
       size: 12893
     - path: src/sfzmaps/solver/labels.py
       hash: md5
-      md5: 8dc704244c9e8b5396ed0fa6e8d5d291
-      size: 3501
+      md5: cb2bd4266c3bc63e390679c6c55b10a3
+      size: 4370
     - path: src/sfzmaps/solver/lots.py
       hash: md5
       md5: 7399c576690409a389991a1a56e0e826
       size: 6551
     - path: src/sfzmaps/solver/measures.py
       hash: md5
-      md5: 7f318f8254b26b72c0061a8ece68947e
-      size: 8238
+      md5: 861bc824d5631a3f0dcdd9558e726965
+      size: 10265
     - path: src/sfzmaps/solver/mincut.py
       hash: md5
       md5: 75298f2138afd9c5db4a3b723ba502e8
@@ -9179,20 +9183,20 @@ stages:
       size: 4386
     - path: src/sfzmaps/solver/placement.py
       hash: md5
-      md5: 7959160c42e5e9094777e1bc23756aaf
-      size: 14294
+      md5: fb022d8220dcf7d9b1a1ba42ce4fe2ae
+      size: 14299
     - path: src/sfzmaps/solver/qpbo.py
       hash: md5
       md5: 7959060a86147d729af6ce6ab5144d91
       size: 4547
     - path: src/sfzmaps/solver/report.py
       hash: md5
-      md5: 2fe2dbc6fdfc47a1a506d0efcdcd4fcd
-      size: 16672
+      md5: 18eeb1e702a1e875862ce345d51cf580
+      size: 16706
     - path: src/sfzmaps/solver/runs.py
       hash: md5
-      md5: 6182a5bd007fc0bc6e7f9576bae355c5
-      size: 3940
+      md5: a42cb40b049e482ea1ffbae6f9437189
+      size: 4792
     - path: src/sfzmaps/solver/search.py
       hash: md5
       md5: b46af2b70d4d5ca411858391af8a1bc8
@@ -9211,8 +9215,8 @@ stages:
       size: 2124
     - path: src/sfzmaps/solver/trust.py
       hash: md5
-      md5: 67c3b206db20e574117b97587df356a8
-      size: 14559
+      md5: 8bfbb4f9ec4b0d3f7574d0b22bfd1866
+      size: 14632
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: c83192f3d3941fae99387dafd628e159
