@@ -13,6 +13,15 @@ is uint8, the chance of text x 255.
 same numbers as `chance`), the kind (`data.KINDS`: the softmax of the four kind logits, float16, and the most likely,
 from the logits in float32) and the reading direction (the direction output scaled to unit length, float16 cosine and
 sine).  The px of a tile not scored get chance 0, kind NO_KIND (255), probabilities 0 and direction (0, 0).
+
+`word_outputs` is for a network with the word heads (`train.Recipe(heads="words")`, `model.WORD_OUTPUTS` channels):
+the arrays `wordread.words.core_words` takes (`WordOutputs`), the page's tiles stitched into one page.  Each tile is
+seen with `context` px of page around it, the network's whole reach (its receptive field), not PAD: so every px kept
+gets the numbers one pass over the whole page would give it (the tile's own edges and the paper it is padded with
+are beyond its reach), and a word on a tile's edge is one word's votes on both sides.  The tile's corner and the
+context are multiples of the network's `multiple`, so its pooling falls on the whole page's grid, and its end is
+padded as the whole page's is.  A px of a tile not scored is not a word's: its core logit is NOT_SCORED (a chance of
+exactly 0 in double precision), its other outputs 0.  `chance` and `outputs` are unchanged.
 """
 from pathlib import Path
 from typing import NamedTuple
@@ -113,4 +122,81 @@ def outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndarray |
             cs = o[5:7]
             out.direction[:, y:y + th, x:x + tw] = (cs / cs.norm(dim=0, keepdim=True).clamp(min=TINY)).cpu().numpy() \
                 .astype(np.float16)
+    return out
+
+
+# --- the word heads ---------------------------------------------------------------------------------------------------
+
+NOT_SCORED = -1e4    # the core logit of a px not scored: sigmoid(-1e4) is 0 in double precision (no word's), finite
+#                      so a log of it stays a number; float16 holds it exactly
+
+
+class WordOutputs(NamedTuple):
+    """A word-heads network's outputs at every px of a page (see the module), as `wordread.words.core_words` takes
+    them."""
+    chance: np.ndarray       # uint8 (h, w): the chance of text x 255 (channel 0), as `chance` gives it
+    kind_p: np.ndarray       # float16 (4, h, w): each kind's probability (the softmax of the kind logits)
+    core: np.ndarray         # float32 (h, w): the word-core logit (`model.CORE`); NOT_SCORED where not scored
+    geo: np.ndarray          # float32 (6, h, w): the distances in px to the word's top, bottom, start and end edges
+    #                          (`model.distances` of `model.GEO`), then the reading direction's cosine and sine as the
+    #                          network gives them (channels 5-6, any length)
+    tag: np.ndarray          # float32 (k, h, w): the word tag (`model.TAG`)
+
+
+def context(net: model.TextNet) -> int:
+    """The px of page each side of a px that can move its outputs (the network's receptive field's reach), rounded
+    up to the network's `multiple`: per level, its convolutions (one px each at that level's px, two a block down, two
+    or one a block up), its 2 x 2 pooling (one px of the level before) and its nearest upsampling (one px of the level
+    below); at half size all of it at twice the px, and the fold's one px more."""
+    convs_up = 2 if isinstance(net.up[0], torch.nn.Sequential) and len(net.up[0]) == 6 else 1
+    levels = len(net.down)
+    reach = sum(2 * 2 ** i for i in range(levels))                    # the blocks down
+    reach += sum(2 ** (i - 1) for i in range(1, levels))              # the poolings before them
+    reach += sum(convs_up * 2 ** i for i in range(levels - 1))        # the blocks up
+    reach += sum(2 ** i for i in range(levels - 1))                   # the upsamplings before them
+    if net.half_size:
+        reach = model.FOLD * reach + 1
+    return -(-reach // net.multiple) * net.multiple
+
+
+@torch.no_grad()
+def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndarray | None = None,
+                 tile: int = TILE) -> WordOutputs:
+    """A word-heads network's outputs (`WordOutputs`) at every px of a page's ink (bool), `tile` x `tile` px at a time
+    (a multiple of the network's `multiple`), each tile seen with `context(net)` px of page around it and the tiles
+    stitched (see the module).  `only` (bool, the page's shape): the px wanted; a tile with none of them is not scored.
+    A network without the word heads is refused (ValueError)."""
+    h, w = ink.shape
+    if only is not None and only.shape != ink.shape:
+        raise ValueError(f"the px wanted are {only.shape}, the page {ink.shape}")
+    if tile % net.multiple:
+        raise ValueError(f"a tile is a multiple of the network's {net.multiple} px, not {tile}")
+    pad = context(net)
+    k = model.TAG.stop - model.TAG.start
+    out = WordOutputs(np.zeros((h, w), np.uint8), np.zeros((4, h, w), np.float16),
+                      np.full((h, w), NOT_SCORED, np.float32), np.zeros((6, h, w), np.float32),
+                      np.zeros((k, h, w), np.float32))
+    for y in range(0, h, tile):
+        for x in range(0, w, tile):
+            if only is not None and not only[y:y + tile, x:x + tile].any():
+                continue
+            y0, x0 = max(y - pad, 0), max(x - pad, 0)
+            y1, x1 = min(y + tile + pad, h), min(x + tile + pad, w)
+            win = ink[y0:y1, x0:x1]
+            ph, pw = (-win.shape[0]) % net.multiple, (-win.shape[1]) % net.multiple
+            xin = torch.from_numpy(np.pad(win, ((0, ph), (0, pw))).astype(np.float32)).to(device)[None, None]
+            o = net(xin)[0]
+            if o.shape[0] != model.WORD_OUTPUTS:
+                raise ValueError(f"the network has {o.shape[0]} outputs, not {model.WORD_OUTPUTS}: it has no word "
+                                 "heads")
+            cy, cx = y - y0, x - x0
+            th, tw = min(tile, h - y), min(tile, w - x)
+            o = o[:, cy:cy + th, cx:cx + tw].float()
+            win_out = (slice(y, y + th), slice(x, x + tw))
+            out.chance[win_out] = np.round(255 * torch.sigmoid(o[0]).cpu().numpy()).astype(np.uint8)
+            out.kind_p[(slice(None), *win_out)] = torch.softmax(o[1:5], 0).cpu().numpy().astype(np.float16)
+            out.core[win_out] = o[model.CORE].cpu().numpy()
+            out.geo[(slice(0, 4), *win_out)] = model.distances(o[model.GEO]).cpu().numpy()
+            out.geo[(slice(4, 6), *win_out)] = o[5:7].cpu().numpy()
+            out.tag[(slice(None), *win_out)] = o[model.TAG].cpu().numpy()
     return out

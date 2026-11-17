@@ -28,9 +28,11 @@ rectangle, filled by `wordread.shrink.prepare` before the training), each crop a
              the batch (the batch's own counts, no measuring pass and no mining): the mean over the core px plus the
              mean over the other px, divided by the number of the two the batch holds
   dice       1 - Dice of the core's chance over the known px
-  iou        -log((I + 1) / (U + 1)) of the box each core px puts about itself (its four distances, `model.distances`)
-             against its word's (EAST), over the known core px whose distances are known (`geo_known`: not a word
-             reaching into a held-out area)
+  iou        -log(I / U) of the box each core px puts about itself (its four distances, `model.distances`) against
+             its word's (EAST's IoU loss, without its +1 smoothing), over the known core px whose distances are known
+             (`geo_known`: not a word reaching into a held-out area).  At those px I > 0 (a word's box has height and
+             length, and the distances are above 0); at every other px, where I and U may be 0, both are taken as 1,
+             so the term there is 0 and passes no gradient (a guard for 0 / 0, not a change to any read px's loss)
   direction  1 - cosine of the reading direction (channels 5-6) against its word's, over the known core px (a word
              reaching into a held-out area keeps its angle)
   tag        each known core px's tag (channels 12-15) classified among its crop's classes: each of the crop's words,
@@ -400,7 +402,9 @@ def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: tor
     inter = ((torch.minimum(d[:, 0], g[:, 0]) + torch.minimum(d[:, 1], g[:, 1]))
              * (torch.minimum(d[:, 2], g[:, 2]) + torch.minimum(d[:, 3], g[:, 3])))
     union = (d[:, 0] + d[:, 1]) * (d[:, 2] + d[:, 3]) + (g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) - inter
-    li = (-torch.log((inter + 1) / (union + 1)) * boxed).sum() / boxed.sum().clamp(min=MASS_EPS)
+    read = boxed > 0                    # the px the term reads; elsewhere 0 / 0 is guarded, not computed
+    li = (-torch.log(torch.where(read, inter, 1.0) / torch.where(read, union, 1.0)) * boxed).sum() \
+        / boxed.sum().clamp(min=MASS_EPS)
     cs = out[:, 5:7]
     rad = torch.deg2rad(geo[:, 4])
     cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)

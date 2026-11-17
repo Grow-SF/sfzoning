@@ -11,6 +11,12 @@ With `--composites P` (and the label rule lines-unknown, which the composites st
 line pieces (`composite.Bank.build`) is built from the training sheets with the quarter and the answered blocks held
 out, seeded by the run's seed, before the GPU's turn, and handed to the training.
 
+With `--heads words` the detector has the word heads too (`train.Recipe.heads="words"`): the training sheets get their
+word cores (`wordread.shrink.prepare`, each word's own rectangle) and, with `--doubt`, Terra's doubt as each word's
+weight (`wordread.doubt.prepare` of the quarter's "box" weights, `doubt.load_weights`); after the chance, in the same
+GPU turn, every 2000 sheet's whole page is scored by the word heads (`predict.word_outputs`) and written to words/
+for the word formation (`scripts/wordread/run_detector.py`).  `--root` writes the run under another folder.
+
 Writes `data/solver/experiments/textlines/runs/<name>-<quarter>-s<seed>/`:
   model.pt        the detector (`train.save_model`)
   chance/         the chance of text x 255 of each 2000 sheet, `<sheet>.png`, in the quarter's px and 0 elsewhere; each
@@ -22,7 +28,9 @@ Writes `data/solver/experiments/textlines/runs/<name>-<quarter>-s<seed>/`:
                   models) and `audit.sheet` (64 missed letter-sized pieces in the quarter)
   run.json        the recipe, seed, device, the minutes training and predicting took, git head, `git status
                   --porcelain -- src` at the start; with composites the bank's sizes (`Bank.sizes`) and what the
-                  composites were (`Bank.tally`)
+                  composites were (`Bank.tally`); `doubt`; on the Mac's GPU the most memory the training held
+                  (`mps_peak`, sampled)
+  words/<sheet>.npz   with the word heads: the word heads' outputs over the whole page (`save_word_outputs`)
 
 One process, one GPU turn around the training and the prediction (nothing else computes on the GPU meanwhile); the gate
 runs after it, on the CPU, one thread, about 7 GB at the peak: never two at once.
@@ -52,6 +60,8 @@ from sfzmaps.solver import paths, runs  # noqa: E402
 from sfzmaps.solver.textnet import composite, data, linegate, predict, reader_stage, stage, train, zones  # noqa: E402
 
 RUNS_DIR = runs.EXPERIMENTS_DIR / "textlines" / "runs"
+WORDS = "words"           # the run's folder of the word heads' outputs
+PEAK_EVERY = 0.05         # s between samples of the GPU's memory while training (a record only)
 BASELINES = runs.EXPERIMENTS_DIR / "textlines" / "baselines"
 LINES = zones.LINES_DIR
 AUDIT_N = 64
@@ -79,6 +89,51 @@ class ExtraGeo:
 
     def border_weight(self, sd: data.SheetData) -> np.ndarray:
         return np.zeros((sd.height, sd.width), np.float32)
+
+
+class Peak:
+    """The most memory torch's GPU allocator held (`torch.mps.current_allocated_memory` and
+    `driver_allocated_memory`), sampled every PEAK_EVERY s by a thread while the body runs: a record, deciding
+    nothing.  Off the Mac's GPU it samples nothing."""
+
+    def __init__(self, device):
+        self.on = gpu.on_gpu(device)
+        self.most = {"allocated_gb": 0.0, "driver_gb": 0.0}
+
+    def __enter__(self):
+        import threading
+        self.stop = threading.Event()
+        if self.on:
+            self.thread = threading.Thread(target=self._sample, daemon=True)
+            self.thread.start()
+        return self
+
+    def _sample(self):
+        import torch
+        while not self.stop.wait(PEAK_EVERY):
+            self.most["allocated_gb"] = max(self.most["allocated_gb"], torch.mps.current_allocated_memory() / 1e9)
+            self.most["driver_gb"] = max(self.most["driver_gb"], torch.mps.driver_allocated_memory() / 1e9)
+
+    def __exit__(self, *exc):
+        self.stop.set()
+        if self.on:
+            self.thread.join()
+        return False
+
+
+def save_word_outputs(f: Path, out) -> None:
+    """A page's word outputs (`predict.WordOutputs`) as one .npz: chance (uint8), kind_p, core and tag in float16,
+    geo in float32 (a distance may run past float16's range)."""
+    f.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(f, chance=out.chance, kind_p=out.kind_p.astype(np.float16), core=out.core.astype(np.float16),
+                        geo=out.geo.astype(np.float32), tag=out.tag.astype(np.float16))
+
+
+def load_word_outputs(f: Path) -> predict.WordOutputs:
+    """`save_word_outputs`' file back, the floats as float32."""
+    with np.load(f) as z:
+        return predict.WordOutputs(z["chance"], z["kind_p"], z["core"].astype(np.float32),
+                                   z["geo"].astype(np.float32), z["tag"].astype(np.float32))
 
 
 def _by_sheet(chances: dict[tuple[str, str], np.ndarray], series: str) -> linegate.ChanceSource:
@@ -120,13 +175,17 @@ def score(out: Path, quarter: str, scored: list[data.SheetData], chances: dict, 
 
 def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | None = None,
         sheets: list[data.SheetData] | None = None, areas: tuple | None = None, score=None, bank=None,
-        extra_series: tuple[str, ...] = ()) -> Path:
+        extra_series: tuple[str, ...] = (), doubt: bool = False, root: Path | None = None,
+        doubt_weights=None) -> Path:
     """Train `recipe` with `quarter` and `areas` (default: the answered blocks) held out on `sheets` (default: every
     sheet Terra read of the training maps), predict the quarter's px of the 2000 sheets (0 elsewhere) and of
     `extra_series`' sheets, and score them with `score(out, quarter, scored, chances, extra)` (default `score`: the gate,
     the panel and the audit).  With `recipe.composites` the composites come from `bank`, or (None) from the bank of
     the training sheets with the same areas held out (`composite.Bank.build`, seeded `seed`), built before the GPU's
-    turn.  Returns the run's folder (see the module)."""
+    turn.  With the word heads (`recipe.heads` "words") the sheets get their cores (`wordread.shrink.prepare`) and,
+    with `doubt`, the quarter's "box" doubt weights (`doubt_weights`, or `wordread.doubt.load_weights(quarter)` when
+    None); the 2000 sheets' word outputs are written to words/.  `root`: the folder the run's folder is made in
+    (RUNS_DIR when None).  Returns the run's folder (see the module)."""
     if recipe.composites > 0 and recipe.labels != "lines-unknown":
         raise ValueError("composites start from the crops of the label rule lines-unknown (and its sheets' line px): "
                          f"run them with labels lines-unknown, not {recipe.labels}")
@@ -134,10 +193,13 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
         raise ValueError("a bank is for a recipe with composites: this one has none")
     if quarter not in paths.QUARTERS:
         raise ValueError(f"quarters are {paths.QUARTERS}, not {quarter!r}")
+    words = recipe.heads == "words"
+    if doubt and not words:
+        raise ValueError("doubt weighs the words in the word heads' loss: give a recipe with heads words")
     score = globals()["score"] if score is None else score
     q = paths.QUARTERS.index(quarter)
     device = device or train.default_device()
-    out = RUNS_DIR / run_name(name, quarter, seed)
+    out = (RUNS_DIR if root is None else Path(root)) / run_name(name, quarter, seed)
     head = _git("rev-parse", "HEAD")
     dirty = _git("status", "--porcelain", "--", "src")
     t0 = time.perf_counter()
@@ -151,6 +213,13 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
     else:
         radius = reader_stage.measure_radius(sheets, areas)["px"]
         prepared = [dataclasses.replace(sd, point_radius=radius) for sd in sheets]
+    if words:
+        from sfzmaps.solver.wordread import doubt as doubt_mod
+        from sfzmaps.solver.wordread import shrink
+        prepared = shrink.prepare(prepared)
+        if doubt:
+            weights = doubt_mod.load_weights(quarter) if doubt_weights is None else doubt_weights
+            prepared = doubt_mod.prepare(prepared, weights, "box")
     scored = [sd for sd in sheets if sd.series == paths.SERIES]
     extra = [sd for sd in sheets if sd.series in extra_series]
     missing = [s for s in extra_series if not any(sd.series == s for sd in sheets)]
@@ -164,9 +233,11 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
     banked = time.perf_counter() - t0
     out.mkdir(parents=True, exist_ok=True)
     chances: dict[tuple[str, str], np.ndarray] = {}
+    worded = 0.0
     with gpu.gpu_turn(True, device):
         t0 = time.perf_counter()
-        net = train.fit(data.hold_out(prepared, areas), recipe, device, seed, bank=bank)
+        with Peak(device) as peak:
+            net = train.fit(data.hold_out(prepared, areas), recipe, device, seed, bank=bank)
         train.save_model(out / "model.pt", net, recipe, device, seed)
         trained = time.perf_counter() - t0
         t0 = time.perf_counter()
@@ -179,6 +250,11 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
             if not cv2.imwrite(str(f), chance):
                 raise OSError(f"can't write {f}")
         predicted = time.perf_counter() - t0
+        if words:
+            t0 = time.perf_counter()
+            for sd in scored:
+                save_word_outputs(out / WORDS / f"{sd.sheet}.npz", predict.word_outputs(net, data.page_ink(sd), device))
+            worded = time.perf_counter() - t0
         del net
         gc.collect()
         if gpu.on_gpu(device):
@@ -191,10 +267,12 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
     (out / "run.json").write_text(json.dumps({
         "name": name, "quarter": quarter, "seed": seed, "device": device, "recipe": dataclasses.asdict(recipe),
         "extra_series": list(extra_series), "git_head": head, "git_status_src": dirty,
-        "bank": None if bank is None else bank.sizes(),
+        "bank": None if bank is None else bank.sizes(), "doubt": bool(doubt),
+        "mps_peak": {k: round(v, 3) for k, v in peak.most.items()} if peak.on else None,
         "composites_made": None if bank is None else dict(sorted(bank.tally.items())),
         "minutes": {"load": round(loaded / 60, 2), "bank": round(banked / 60, 2), "train": round(trained / 60, 2),
-                    "predict": round(predicted / 60, 2), "score": round(scoring / 60, 2)}}, indent=1) + "\n")
+                    "predict": round(predicted / 60, 2), "word_outputs": round(worded / 60, 2),
+                    "score": round(scoring / 60, 2)}}, indent=1) + "\n")
     return out
 
 
@@ -207,13 +285,18 @@ def main() -> None:
     ap.add_argument("--composites", type=float, default=0.0,
                     help="the share of crops that are composites (needs --labels lines-unknown)")
     ap.add_argument("--extra", action="append", default=[], help="another map's series to predict and gate too")
+    ap.add_argument("--heads", default=None, choices=train.CHOICES["heads"],
+                    help="the recipe's heads (default: the stage's); words adds the word heads")
+    ap.add_argument("--doubt", action="store_true", help="Terra's doubt weighs each word (needs --heads words)")
+    ap.add_argument("--root", type=Path, default=None, help="the folder the run's folder is made in")
     a = ap.parse_args()
     if a.composites and a.labels != "lines-unknown":
         sys.exit("--composites start from the crops of the label rule lines-unknown: add --labels lines-unknown")
     import logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    recipe = dataclasses.replace(stage.DEFAULT_RECIPE, labels=a.labels, composites=a.composites)
-    print(run(a.name, recipe, a.quarter, a.seed, extra_series=tuple(a.extra)))
+    recipe = dataclasses.replace(stage.DEFAULT_RECIPE, labels=a.labels, composites=a.composites,
+                                 **({"heads": a.heads} if a.heads else {}))
+    print(run(a.name, recipe, a.quarter, a.seed, extra_series=tuple(a.extra), doubt=a.doubt, root=a.root))
 
 
 if __name__ == "__main__":

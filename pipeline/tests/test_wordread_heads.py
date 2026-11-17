@@ -319,11 +319,12 @@ def _fixed_batch():
 
 def test_word_loss_fixed_values():
     # pinned from the implementation, and equal within 1e-7 to a float64 numpy reference written from the module's
-    # formulas (balanced cross-entropy, Dice, EAST's IoU, 1 - cos, the tag softmax at T = e^0.2; Kendall's sum)
+    # formulas (balanced cross-entropy, Dice, EAST's IoU without its +1 (-log(I / U) at the px read: 2.0466076 here,
+    # where EAST's (I + 1) / (U + 1) gave 2.0249325), 1 - cos, the tag softmax at T = e^0.2; Kendall's sum)
     total, parts = train.word_loss(*_fixed_batch(), log_var=torch.tensor([0.1, -0.2, 0.3, 0.0, 0.5]),
                                    log_temp=torch.tensor(0.2))
-    assert parts.tolist() == pytest.approx([0.794277489, 0.680517197, 2.02493262, 1.13685882, 1.09964228], rel=1e-5)
-    assert total.item() == pytest.approx(5.20381021, rel=1e-5)
+    assert parts.tolist() == pytest.approx([0.794277489, 0.680517197, 2.04660763, 1.13685882, 1.09964228], rel=1e-5)
+    assert total.item() == pytest.approx(5.21986738, rel=1e-5)
 
 
 def test_a_word_heads_fit_trains_the_per_ink_head_by_todays_loss_learns_its_weights_and_repeats(monkeypatch,

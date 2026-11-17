@@ -40,6 +40,12 @@ ink, the share of its ink at or above the level, the main component's length and
 and the reader's reading at Terra's box when it is given.
 
 The green/purple comparison folds a trailing "." and runs of spaces (`colour`), so "ST" is Terra's "ST.".
+
+For boxes that are not grouped from components of the chance (the word heads' boxes, Task 8), `page_data` takes
+`comps`, the components the reasons read in place of the chance's at each level (e.g. the px of each box,
+`box_components`), with the `reason_text` that says so; `visible`, the px drawn as they are (the rest of the page faded:
+paper and ink in FADED's colours, under no box or missed word); and `notes`, text written on the page (e.g. over a
+faded quarter).  Left out, the page is drawn as before, byte for byte.
 """
 import base64
 import html
@@ -92,6 +98,9 @@ MAX_SCALE = 24.0
 COLOURS = {"paper": (255, 255, 255), "green_paper": (201, 234, 211), "yellow_paper": (250, 236, 166),
            "both_paper": (198, 220, 145), "other_ink": (154, 154, 154), "text_ink": (221, 34, 34)}
 INDEX = {name: k for k, name in enumerate(COLOURS)}
+FADED = {"faded_paper": (238, 238, 234), "faded_ink": (206, 206, 202)}     # `page_data(..., visible=)`: the rest
+FADED_INDEX = {name: len(COLOURS) + k for k, name in enumerate(FADED)}
+NOTE = "#8a8a84"           # the overlay's notes (`page_data(..., notes=)`)
 # the overlay's colours (on the white map, in both themes)
 MATCH, DIFF, TERRA_RED, BOX, FOUND, JUNK, MISSED, MISSED_TEXT = (
     "#1a8a3a", "#7b3fbf", "#d22222", "#333333", "#2a8a4a", "#9a9a9a", "#b08a00", "#5a4600")
@@ -181,6 +190,17 @@ class Components:
         bbox[ids] = np.stack([np.minimum.reduceat(xo, start), np.minimum.reduceat(yo, start),
                               np.maximum.reduceat(xo, start), np.maximum.reduceat(yo, start)], 1)
         return cls(labels, length, ink_px, bbox)
+
+
+def box_components(boxes: pd.DataFrame, chance: np.ndarray, ink: np.ndarray) -> Components:
+    """The components of boxes that are not grouped from the chance (the word heads' boxes): each box's px (its
+    grouped rectangle `g`, filled as `cv2.fillPoly` fills it), later boxes over earlier ones, numbered 1, 2, ... in
+    the order of `boxes`."""
+    labels = np.zeros(ink.shape, np.int32)
+    g = boxes[measures.G_COLS].to_numpy(float).reshape(-1, 4, 2)
+    for k, poly in enumerate(g, 1):
+        cv2.fillPoly(labels, [np.round(poly).astype(np.int32).reshape(-1, 1, 2)], k)
+    return Components.of_labels(labels, chance, ink)
 
 
 def components(chance: np.ndarray, ink: np.ndarray, level: float, gate: np.ndarray | None = None) -> Components:
@@ -285,10 +305,11 @@ def miss_reason(word_rect, chance: np.ndarray, ink: np.ndarray, components, leve
 
 
 def miss_reasons(terra: pd.DataFrame, chance: np.ndarray, ink: np.ndarray, levels: dict, on_map, words,
-                 terra_reads: dict | None = None) -> dict[int, tuple[str, dict]]:
+                 terra_reads: dict | None = None, comps: "Components | None" = None) -> dict[int, tuple[str, dict]]:
     """`miss_reason` of each of Terra's words at positions `words` (of `terra`; its quarter's level from `levels`,
-    quarter name -> level), the page's components found once per level, every other word of `terra` the `others`
-    and, of those, the words whose own main component is this word's its `shares`."""
+    quarter name -> level), the page's components found once per level (`comps`, when given, at every level),
+    every other word of `terra` the `others` and, of those, the words whose own main component is this word's its
+    `shares`."""
     gate = wordboxes.ink_gate(ink)
     found: dict[float, Components] = {}
     rects = terra[measures.C_COLS].to_numpy(float).reshape(-1, 4, 2)
@@ -298,7 +319,7 @@ def miss_reasons(terra: pd.DataFrame, chance: np.ndarray, ink: np.ndarray, level
     main = []
     for t in range(len(terra)):
         if level[t] not in found:
-            found[level[t]] = components(chance, ink, level[t], gate)
+            found[level[t]] = components(chance, ink, level[t], gate) if comps is None else comps
         main.append(miss_reason(rects[t], chance, ink, found[level[t]], level[t])[1]["component"])
         if main[t]:
             held_by.setdefault((level[t], main[t]), []).append(t)
@@ -503,14 +524,17 @@ def missed_words(boxes: pd.DataFrame, terra: pd.DataFrame, iou: float = MATCH_IO
 def page_data(sheet: str, boxes: pd.DataFrame, reads: dict, terra: pd.DataFrame, chance: np.ndarray,
               before: dict | None = None, *, ink: np.ndarray | None = None, levels: dict | None = None,
               on_map: np.ndarray | None = None, terra_reads: dict | None = None, answers: pd.DataFrame | None = None,
-              forms: dict | None = None, models=(), run: str = "", iou: float = MATCH_IOU) -> dict:
+              forms: dict | None = None, models=(), run: str = "", iou: float = MATCH_IOU,
+              comps: Components | None = None, visible: np.ndarray | None = None, reason_text: dict | None = None,
+              notes=()) -> dict:
     """Everything the page draws for `sheet`: `boxes` our boxes (wordboxes' columns; the index is the row `reads` is
     keyed by), `reads` their readings (`reads_for_page`), `terra` Terra's words (`measures.terra_words`' columns),
     `chance` the sheet's chance of text (uint8, chance x 255), `before` the numbers of the run before (None: none).
     Read from disk when None: `ink` (the page < grid.INK_BELOW), `levels` (quarter name -> grouping level), `on_map`
     (each Terra word's centre placed where boxes are kept), `forms` (printed form -> code).  `terra_reads`: Terra word
     position -> the reading at Terra's box; `answers`: the owner's answered labels on the sheet
-    (`measures.answers_from_store`' columns); `models`: lines naming the models that drew it.
+    (`measures.answers_from_store`' columns); `models`: lines naming the models that drew it.  `comps`, `visible`,
+    `reason_text` and `notes`: see the module (None, None, None and none: the page as before).
 
     Returns {"sheet", "run", "shape", "pixels" (`palette_image`), "text_ink_px", "boxes", "missed", "numbers",
     "delta" (`measures.compare` with `before`, or None), "models", "iou", "levels"}."""
@@ -531,7 +555,7 @@ def page_data(sheet: str, boxes: pd.DataFrame, reads: dict, terra: pd.DataFrame,
     levels_used = sorted({iou, *PANEL_IOU})
     won, matched = matched_at(word, best, len(terra), iou)
     _, matched_hi = matched_at(word, best, len(terra), max(levels_used))
-    reasons = miss_reasons(terra, chance, ink, levels, on_map, np.flatnonzero(~matched_hi), terra_reads)
+    reasons = miss_reasons(terra, chance, ink, levels, on_map, np.flatnonzero(~matched_hi), terra_reads, comps)
 
     # our boxes
     kinds = [k for k in KIND_SHORT if f"p_{k}" in boxes.columns]
@@ -596,8 +620,18 @@ def page_data(sheet: str, boxes: pd.DataFrame, reads: dict, terra: pd.DataFrame,
     numbers = _jsonable(numbers)
     for lv in numbers["boxes"].values():
         lv.pop("by_quarter", None)
-    return {"sheet": sheet, "run": run, "shape": list(ink.shape),
-            "pixels": palette_image(ink, text_ink, green_polys, yellow_polys), "text_ink_px": int(text_ink.sum()),
+    pixels = palette_image(ink, text_ink, green_polys, yellow_polys)
+    extra = {}
+    if visible is not None:
+        pixels[~visible & ~ink] = FADED_INDEX["faded_paper"]
+        pixels[~visible & ink] = FADED_INDEX["faded_ink"]
+        extra["faded"] = True
+    if reason_text is not None:
+        extra["reason_text"] = {**REASON_TEXT, **reason_text}
+    if notes:
+        extra["notes"] = [[float(x), float(y), str(t)] for x, y, t in notes]
+    return {**extra, "sheet": sheet, "run": run, "shape": list(ink.shape),
+            "pixels": pixels, "text_ink_px": int(text_ink[visible].sum() if visible is not None else text_ink.sum()),
             "boxes": recs, "missed": missed, "numbers": numbers,
             "delta": measures.compare(numbers, before) if before else None, "models": list(models), "iou": iou,
             "levels": {k: float(v_) for k, v_ in levels.items()}}
@@ -610,9 +644,9 @@ def red_px_of(d: dict) -> int:
 
 # --- the page -----------------------------------------------------------------------------------------------------
 
-def _png_b64(idx: np.ndarray) -> str:
+def _png_b64(idx: np.ndarray, faded: bool = False) -> str:
     im = Image.fromarray(idx, "P")
-    im.putpalette([c for rgb in COLOURS.values() for c in rgb])
+    im.putpalette([c for rgb in [*COLOURS.values(), *(FADED.values() if faded else ())] for c in rgb])
     buf = io.BytesIO()
     im.save(buf, "PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode("ascii")
@@ -715,7 +749,11 @@ def _overlay(d: dict) -> str:
                    f'stroke-width="{width}"/>')
         out.append(f'<path class="ln lbl" d="{"".join(arrows[status])}" fill="none" stroke="{stroke}" '
                    f'stroke-width="{width}"/>')
-    out.append('<g class="lbl">' + "".join(words) + "</g></svg>")
+    out.append('<g class="lbl">' + "".join(words) + "</g>")
+    for x, y, text in d.get("notes", ()):
+        out.append(f'<text x="{_f(x)}" y="{_f(y)}" font-size="72" fill="{NOTE}" text-anchor="middle" '
+                   f'font-family="-apple-system,Helvetica,Arial,sans-serif">{_e(text)}</text>')
+    out.append("</svg>")
     return "".join(out)
 
 
@@ -802,7 +840,7 @@ def _panels(d: dict) -> str:
         trows.append("vs last run: none yet")
     reasons = b.get("missed_reasons") or {}
     rrows = "".join(f'<tr><td><b>{_e(r.replace("_", " "))}</b></td><td class="num">{_n(reasons.get(r, 0))}</td>'
-                    f'<td>{_e(REASON_TEXT[r])}</td></tr>' for r in REASONS)
+                    f'<td>{_e(d.get("reason_text", REASON_TEXT)[r])}</td></tr>' for r in REASONS)
     legend = (f'<span class="sw" style="background:rgb{COLOURS["text_ink"]}"></span> ink the detector calls text '
               f'(chance ≥ {TEXT_CHANCE})<br>'
               f'<span class="sw" style="background:rgb{COLOURS["other_ink"]}"></span> other ink<br>'
@@ -1039,8 +1077,9 @@ def render(d: dict, out: Path) -> Path:
             part = d["pixels"][y0:y0 + TILE, x0:x0 + TILE]
             tiles.append(f'<img class="tile" alt="" data-x="{x0}" data-y="{y0}" width="{part.shape[1]}" '
                          f'height="{part.shape[0]}" style="left:{x0}px;top:{y0}px" '
-                         f'src="data:image/png;base64,{_png_b64(part)}">')
-    js_data = {"shape": d["shape"], "boxes": d["boxes"], "missed": d["missed"], "reasons": REASON_TEXT}
+                         f'src="data:image/png;base64,{_png_b64(part, bool(d.get("faded")))}">')
+    js_data = {"shape": d["shape"], "boxes": d["boxes"], "missed": d["missed"],
+               "reasons": d.get("reason_text", REASON_TEXT)}
     payload = json.dumps(js_data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     models = "".join(f"<div>{_e(m)}</div>" for m in d["models"])
     run = f' · run <b>{_e(d["run"])}</b>' if d.get("run") else ""

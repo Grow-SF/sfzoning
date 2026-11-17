@@ -197,6 +197,31 @@ def _load_shared() -> None:
     _SHARED["terra"] = textboxes.terra_records()
 
 
+def placement(sheet: str):
+    """A 2000 sheet's corrected placement and footprint, as the warp wrote them (transform.json and
+    warped.footprint.geojson): (SheetTransform, shapely footprint in map ft)."""
+    warp = config.DATA_DIR / "warp" / paths.SERIES / sheet
+    transform = SheetTransform.from_json(json.loads((warp / "transform.json").read_text()), folder=warp)
+    return transform, shapely.from_geojson((warp / "warped.footprint.geojson").read_text())
+
+
+def place(centres: np.ndarray, sheet: str, transform, footprint, lot_rasters, mapped) -> dict:
+    """Boxes placed on the map as the prints are (`prints._place`): those whose centre (page px, (n, 2)) lands inside
+    the sheet's footprint and on the mapped area, in order.  Each kept box's position in `centres` (`i`), its centre
+    (`page_x`, `page_y`), its quarter (`grid.quarter_of` of its map point), its map point (`x`, `y`), the lot under
+    it (`lab_lot`) and whether it is in a street; lists of the kept boxes (quarter an array).  The placement of every
+    box of `sheet_boxes`, and of any other boxes on a 2000 sheet."""
+    found = [{"page_x": float(c[0]), "page_y": float(c[1]), "i": k}
+             for k, c in enumerate(np.asarray(centres, float).reshape(-1, 2))]
+    placed = prints._place(found, sheet, transform, footprint, lot_rasters, mapped)
+    k = np.array([p["i"] for p in placed], int)
+    return {"i": k, "page_x": [p["page_x"] for p in placed], "page_y": [p["page_y"] for p in placed],
+            "quarter": grid.quarter_of(np.array([[p["x"], p["y"]] for p in placed])) if len(k)
+            else np.zeros(0, np.int8),
+            "x": [p["x"] for p in placed], "y": [p["y"] for p in placed],
+            "lab_lot": [p["lab_lot"] for p in placed], "street": [p["street"] for p in placed]}
+
+
 def _read_chance(sheet: str, shape) -> np.ndarray:
     f = paths.READER_TEXT_DIR / sheet / "chance.png"
     c = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
@@ -217,9 +242,7 @@ def sheet_boxes(sheet: str) -> dict:
     chance = _read_chance(sheet, ink.shape)
     with np.load(paths.READER_TEXT_DIR / sheet / "kind.npz") as z:
         kind_p = z["p"]
-    warp = config.DATA_DIR / "warp" / paths.SERIES / sheet
-    transform = SheetTransform.from_json(json.loads((warp / "transform.json").read_text()), folder=warp)
-    footprint = shapely.from_geojson((warp / "warped.footprint.geojson").read_text())
+    transform, footprint = placement(sheet)
     found_words = [b for b in textboxes.terra_boxes(paths.SERIES, sheet, _SHARED["terra"])
                    if data.KINDS.get(b["kind"], data.KINDS["other"]) == KIND]
     rects = [data.word_rect(b["box"], float(b.get("angle_deg") or 0.0)) for b in found_words]
@@ -233,21 +256,18 @@ def sheet_boxes(sheet: str) -> dict:
         best, err = best_axis_match(words, word_axis, G["g"], G["axis"])
         tbest, _ = best_axis_match(words, word_axis, G["t"], G["axis"])
         out["words"][name] = pd.DataFrame({"quarter": wq, "best": best, "err": err, "tbest": tbest})
-        found = [{"page_x": float(c[0]), "page_y": float(c[1]), "i": k} for k, c in enumerate(G["g"].mean(1))]
-        placed = prints._place(found, sheet, transform, footprint, _SHARED["lots"], _SHARED["mapped"])
-        out["off_map"][name] = len(found) - len(placed)
-        k = np.array([p["i"] for p in placed], int)
-        df = pd.DataFrame({"sheet": sheet, "i": k, "level": level,
-                           "quarter": grid.quarter_of(np.array([[p["x"], p["y"]] for p in placed])) if len(k)
-                           else np.zeros(0, np.int8),
-                           "page_x": [p["page_x"] for p in placed], "page_y": [p["page_y"] for p in placed]})
+        placed = place(G["g"].mean(1), sheet, transform, footprint, _SHARED["lots"], _SHARED["mapped"])
+        k = placed["i"]
+        out["off_map"][name] = len(G["g"]) - len(k)
+        df = pd.DataFrame({"sheet": sheet, "i": k, "level": level, "quarter": placed["quarter"],
+                           "page_x": placed["page_x"], "page_y": placed["page_y"]})
         df["axis"], df["length"], df["height"] = G["axis"][k], G["length"][k], G["height"][k]
         df["t_length"], df["t_height"] = G["t_length"][k], G["t_height"][k]
         df["mean_chance"], df["ink_px"] = G["mean"][k], G["ink_px"][k]
         for c, nm in enumerate(KIND_NAMES):
             df[f"p_{nm}"] = G["kind"][k, c]
-        df["x"], df["y"] = [p["x"] for p in placed], [p["y"] for p in placed]
-        df["lab_lot"], df["street"] = [p["lab_lot"] for p in placed], [p["street"] for p in placed]
+        df["x"], df["y"] = placed["x"], placed["y"]
+        df["lab_lot"], df["street"] = placed["lab_lot"], placed["street"]
         for key, arr in (("g", G["g"]), ("t", G["t"])):
             flat = arr[k].reshape(len(k), 8)
             for c in range(8):
