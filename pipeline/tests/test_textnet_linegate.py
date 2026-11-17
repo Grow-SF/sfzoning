@@ -309,13 +309,34 @@ def test_a_word_touched_by_a_line_is_left_out_of_m2_clean_words(crossed_word):
     assert r["m2_clean_words"]["px"] == 0
 
 
-def test_a_word_whose_ink_runs_out_of_its_box_is_not_clean_and_a_word_a_line_nears_is_not_either():
-    # word 0: a piece reaching past the box; word 1: whole inside, a line (50+ px run) 2 px from its box; word 2: clean
-    pieces = [(10, 20, 30, 24), (30, 20, 70, 24),                  # word 0's piece runs from x 10 to 70, box ends at 40
-              (100, 20, 106, 26), (90, 50, 200, 53),               # word 1: letter; line below at 24 px... see box
-              (220, 20, 226, 26)]
-    boxes = [(8, 18, 40, 28), (96, 16, 112, 48), (216, 16, 232, 30)]
-    sd, geo, ink = _page_with_words(pieces, boxes, [0, 0, 0])
+def test_ink_that_runs_out_of_the_box_without_being_line_makes_a_word_unclean_by_the_piece_test_alone():
+    # word 0: one 36 px piece (under the run rule's 50 px) runs from inside the box to 5 px past it; word 1 is plain
+    sd, geo, ink = _page_with_words([(10, 20, 45, 24), (120, 20, 126, 26)], [(8, 18, 40, 28), (116, 16, 132, 30)],
+                                    [0, 0])
     line = linerules.line_px(ink, FT_PER_PX)
-    assert line[50:54, 90:201].any()
-    assert linegate.clean_word_mask(sd, line).tolist() == [False, False, True]
+    assert not line.any(), "the run rule calls this piece line: the ring test would reject it"
+    assert linegate.clean_word_mask(sd, line).tolist() == [False, True]
+
+
+def test_a_line_3_px_from_the_box_makes_the_word_unclean_and_one_4_px_away_does_not():
+    # box rows 16..48; a 4 px thick, 140 px long line whose top row is 3 px (rejected) or 4 px (clean) below the box
+    for gap, clean in ((3, False), (4, True)):
+        top = 48 + gap
+        sd, geo, ink = _page_with_words([(100, 20, 106, 26), (60, top, 199, top + 3)], [(96, 16, 112, 48)], [0])
+        line = linerules.line_px(ink, FT_PER_PX)
+        assert line[top:top + 4, 100:110].all(), "the run rule no longer calls this line"
+        assert linegate.clean_word_mask(sd, line).tolist() == [clean], gap
+
+
+def test_a_rotated_box_is_judged_by_its_own_edges_not_its_bounding_rectangle():
+    # a diamond box (corners 100,60 / 120,80 / 100,100 / 80,80) with a block inside; a line 15 px off its edge but
+    # inside the bounding rectangle grown by 3 px is no reason to reject it; the same line across it is
+    diamond = np.array([[[100, 60], [120, 80], [100, 100], [80, 80]]], np.int32)
+    sd, geo, ink = _page_with_words([(96, 76, 104, 84), (122, 58, 200, 61)], [(80, 60, 120, 100)], [0])
+    sd = dataclasses.replace(sd, words=diamond)
+    line = linerules.line_px(ink, FT_PER_PX)
+    assert line[58:62, 130:190].all()
+    assert linegate.clean_word_mask(sd, line).tolist() == [True]
+    sd2, _, ink2 = _page_with_words([(96, 76, 104, 84), (60, 58, 200, 61)], [(80, 60, 120, 100)], [0])
+    sd2 = dataclasses.replace(sd2, words=diamond)
+    assert linegate.clean_word_mask(sd2, linerules.line_px(ink2, FT_PER_PX)).tolist() == [False]
