@@ -35,13 +35,14 @@ COMPOUND_FUSION_ROUNDS = 8  #   and with the compound fusion move in it (solve_j
 
 
 def check_run(run: str, walls_dir: Path | None = None, true_borders: bool = False,
-              compound_fusion: bool = False) -> None:
-    """runs.check_final, and the stage's run (FINAL_RUN) keeps the stage's search: refuse it with the compound fusion
-    move (solve_joint's compound_fusion, which the stage leaves off: Ruling R7)."""
+              compound_fusion: bool = True) -> None:
+    """runs.check_final, and the stage's run (FINAL_RUN) keeps the stage's search: refuse it without the compound
+    fusion move (solve_joint's compound_fusion, on in the stage since the owner's ruling of 11-16; an experiment can
+    turn it off to compare)."""
     runs.check_final(run, walls_dir, true_borders)
-    if run == runs.FINAL_RUN and compound_fusion:
-        raise ValueError(f"the run {runs.FINAL_RUN!r} is the solver-solve stage's: solve it without --compound-fusion "
-                         "(the stage leaves the compound fusion move off), or give the experiment another name")
+    if run == runs.FINAL_RUN and not compound_fusion:
+        raise ValueError(f"the run {runs.FINAL_RUN!r} is the solver-solve stage's: solve it with the compound fusion "
+                         "move (the default; not --no-compound-fusion), or give the experiment another name")
 
 
 def costs(n_lots, a, b, odds, rd, options=None, label_weight=1.0, tie_break=1e-4):
@@ -71,14 +72,14 @@ def polish(U, a, b, odds, same, p, compound_fusion=False, steps=None):
 
 
 def solve_joint(n_lots, a, b, odds, rd, options=None, label_weight=1.0, wall_weight=1.0, same_weight=1.0,
-                tie_break=1e-4, table_codes=None, log=print, compound_fusion=False):
+                tie_break=1e-4, table_codes=None, log=print, compound_fusion=True):
     """the lowest-energy code per lot (an index into rd.names).
     tie_break x each code's cheapest-path cost only breaks ties in areas no label stands for; it must stay tiny, as
     it is charged per lot.  table_codes (index per lot, -1 unknown): also report the energy of the table's answer
     (lots the table leaves blank take the solve's codes).  A diagnostic: misread walls and misread or misplaced labels
     charge the table's answer, so it can cost more than the solve's even when the solve is mostly right.
     compound_fusion: the search's loop also runs search.compound_fusion_moves after the compound moves, for up to
-    COMPOUND_FUSION_ROUNDS rounds instead of ROUNDS (off in the stage's run: the owner decides when it goes on)."""
+    COMPOUND_FUSION_ROUNDS rounds instead of ROUNDS (on by default, and in the stage's run; False for a comparison)."""
     U, n_labels, n_terms = costs(n_lots, a, b, odds, rd, options, label_weight, tie_break)
     odds = wall_weight * odds
     same = same_weight / wall_weight
@@ -102,7 +103,7 @@ def solve_joint(n_lots, a, b, odds, rd, options=None, label_weight=1.0, wall_wei
 
 
 def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders: bool = False,
-                  keep_costs: bool = False, folder: Path | None = None, compound_fusion: bool = False) -> None:
+                  keep_costs: bool = False, folder: Path | None = None, compound_fusion: bool = True) -> None:
     """Solve the whole city with holdout q's inputs (the walls of `walls_dir`, default WALLS_DIR, and the placement
     in the run's folder) and write runs/{run}-{q}.npz into `folder` (default the run's own,
     `runs.solve_dir`).  The scoring table (with the by-eye corrections) gives the true borders of the ceiling check
@@ -153,7 +154,7 @@ def join(run: str, folder: Path | None = None) -> None:
 
 
 def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = False, keep_costs: bool = False,
-              folder: Path | None = None, compound_fusion: bool = False) -> None:
+              folder: Path | None = None, compound_fusion: bool = True) -> None:
     """The four holdouts side by side (one `sfzmaps solver solve-quarter` process each, pinned to one thread
     (`threads`), writing into `folder`, default the run's own), then the join.  A quarter's log (runs/RUN-Q.log) is
     what its process prints; what it writes to stderr (a library's warning, a traceback) goes to the console, never
@@ -165,7 +166,7 @@ def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = Fals
     logs.mkdir(parents=True, exist_ok=True)
     env = threads.environment()
     flags = (["--true-borders"] * true_borders + ["--keep-costs"] * keep_costs
-             + ["--compound-fusion"] * compound_fusion
+             + ["--compound-fusion" if compound_fusion else "--no-compound-fusion"]
              + (["--walls", str(walls_dir)] if walls_dir else []) + ["--folder", str(folder)])
     t0 = time.perf_counter()
     procs = []
@@ -194,14 +195,14 @@ def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = Fals
 
 
 def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool = False,
-                     compound_fusion: bool = False) -> dict:
+                     compound_fusion: bool = True) -> dict:
     """Everything a solve needs and makes, from the walls of `walls_dir` (default WALLS_DIR), built in a fresh
     folder beside the run's (`runs.fresh_folder`) that then takes its place (`runs.replace_folder`), so nothing of
     an earlier solve is left: fit the placement (placement.npz), solve the four held-out quarters with their costs
     and join them (`solve_all`), list the data errors among the run's holes (`holes.write_data_errors`:
     data_errors.npz and data-errors-2000-digital.csv), and write the report (`report.write_report`: report.json and
     report.md), which scores the run with those parcels left out and with every lot.  compound_fusion: solve_joint's.
-    The stage's run (`final`) is refused with other walls, the true borders or the compound fusion
+    The stage's run (`final`) is refused with other walls, the true borders or without the compound fusion
     (`check_run`).  The placement and the report are computed in
     this process: `sfzmaps solver solve` runs it pinned to one thread (`threads`).  Returns the report."""
     import logging

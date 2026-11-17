@@ -1168,8 +1168,8 @@ def solver_walls(
 
 _WALLS_OPTION = typer.Option(None, "--walls", help="The folder of walls_<q>.npz (default data/solver/walls).")
 _COMPOUND_FUSION_OPTION = typer.Option(
-    False, "--compound-fusion",
-    help="Add the compound fusion move to the search (search.compound_fusion_moves; not for 'final').")
+    True, "--compound-fusion/--no-compound-fusion",
+    help="The compound fusion move in the search (search.compound_fusion_moves; on by default; 'final' needs it on).")
 
 
 def _not_the_stage_run(run: str) -> None:
@@ -1216,7 +1216,7 @@ def solver_solve(
         raise typer.BadParameter(str(e), param_hint="RUN")
     _in_one_thread(["solver", "solve", run, *(["--walls", str(walls)] if walls else []),
                     *(["--true-borders"] if true_borders else []),
-                    *(["--compound-fusion"] if compound_fusion else [])])
+                    "--compound-fusion" if compound_fusion else "--no-compound-fusion"])
     try:
         found = solve.solve_and_report(run, walls, true_borders, compound_fusion=compound_fusion)
     except ValueError as e:
