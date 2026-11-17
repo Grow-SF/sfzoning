@@ -1127,6 +1127,24 @@ def _in_one_thread(argv: list[str]) -> None:
         raise typer.Exit(threads.run_pinned(argv))
 
 
+@solver_app.command("boxes")
+def solver_boxes(workers: int = typer.Option(4, "--workers", help="Sheets grouped at once, one thread each.")) -> None:
+    """Word boxes on every 2000 sheet, grouped from the held-out detectors' chance (no outside input): each quarter's
+    level chosen on the other three, boxes with their trimmed extent, kind probabilities and map place:
+    data/solver/boxes/."""
+    import logging
+
+    from sfzmaps.solver import wordboxes
+    _in_one_thread(["solver", "boxes", "--workers", str(workers)])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = wordboxes.build_boxes(workers=workers)
+    typer.echo(f"{s['boxes']:,} boxes kept; seconds {s['seconds']}")
+    for q, v in s["quarters"].items():
+        typer.echo(f"{q}: level {v['level']}, {v['words']:,} code words, found {v['recall']:.1%}, "
+                   f"axis within 10 degrees {v['axis_within_10']:.1%}")
+    typer.echo(f"answered labels: {s['answered']}")
+
+
 @solver_app.command("walls")
 def solver_walls(
     workers: int = typer.Option(None, "--workers", help="Processes for the closing paths (default half the CPUs)."),

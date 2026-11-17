@@ -174,6 +174,22 @@ def stages() -> dict[str, Stage]:
                "data/solver/prints/terra_boxes.json", "data/solver/lots/lots.npz", "data/solver/lots/table.parquet",
                f"{code_check}/codecheck_cases_published.json", f"{code_check}/codecheck_answers.json"),
         writes=("data/solver/text-reader",), code=("sfzmaps.solver.textnet.reader_stage",), cut=text_cut)
+    # the word boxes (`solver/wordboxes.py`): grouped from the held-out detectors' chance and kind (each sheet's
+    # chance.png and kind.npz) on the sheets' pages, placed through the warp's placements, the lots and the mapped
+    # area.  The level is chosen and scored on Terra's boxes (so they are read, never as input to the boxes) and the
+    # owner's answers are counted (through `codereader.labels.load_labels`, as the reader's stage reads them).
+    out["solver-boxes"] = Stage(
+        "solver-boxes", (), (), ("solver-lots", "solver-prints", "solver-page", "solver-text-reader"),
+        command=("solver", "boxes"),
+        reads=(*(f"data/solver/text-reader/{s}/{n}" for s in paths.SHEETS for n in ("chance.png", "kind.npz")),
+               *_text_sheet_files("data/work", (paths.SERIES,), ("page.png",)),
+               *_text_sheet_files("data/warp", (paths.SERIES,), ("transform.json", "correction.npz",
+                                                                  "warped.footprint.geojson")),
+               terra, "data/solver/page/sheets.png", "data/solver/prints/prints.parquet",
+               "data/solver/prints/terra_boxes.json",
+               "data/solver/lots/lots.npz", "data/solver/lots/table.parquet",
+               f"{code_check}/codecheck_cases_published.json", f"{code_check}/codecheck_answers.json"),
+        writes=("data/solver/boxes",), code=("sfzmaps.solver.wordboxes",), cut=text_cut)
     out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
                                  # of the prints, only prints.parquet: the Terra boxes and the summary aren't read
                                  reads=("data/solver/prints/prints.parquet", "data/solver/lots", "data/solver/page",

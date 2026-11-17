@@ -624,6 +624,23 @@ Terra's boxes and the other passes, and for the answered blocks the prints (`pri
 lots (`lots.npz`, `table.parquet`) and the code-check cases and answers. The same inputs give the same bytes (the
 `.npz` files are written with a fixed date).
 
+**The word boxes** (`sfzmaps solver boxes [--workers N]`, stage `solver-boxes`, after `solver-text-reader` and the
+prints and lots; `solver/wordboxes.py`) find the printed words on every 2000 sheet from our own detector's chance, with
+no outside input: a box is a connected component (8-connectivity) of the px whose chance (the held-out detectors',
+`text-reader/<sheet>/chance.png`) is at the level and within 4 px of ink, with at least 20 ink px. Its axis is the
+major axis of its px weighted by chance (degrees counter-clockwise from left-to-right, modulo 180); beside the grouped
+box it records the box trimmed to the ink inside it (the chance spreads a few px past the glyphs), the kinds'
+mean probabilities over its ink px, its quarter, and its map place as the prints have it (`prints._place`: `x`, `y`,
+`lab_lot`, `street`; a box off the sheet's footprint or the mapped area is dropped and counted). The level is chosen per quarter
+from 0.5 to 1.0 by the share of Terra's zoning-code words found (IoU 0.3) on the other three quarters; Terra's boxes
+choose the level and score it, and are not input to any box. It writes `data/solver/boxes/`: `boxes.parquet` (one row per
+box: `sheet`, `i`, `level`, `quarter`, page centre `page_x`/`page_y`, `axis`, grouped `length`/`height`, ink-trimmed
+`t_length`/`t_height`, `mean_chance`, `ink_px`, `p_zoning`/`p_block`/`p_street`/`p_other`, `x`, `y`, `lab_lot`, `street`,
+and the corners `g<i>x`/`g<i>y` (grouped) and `t<i>x`/`t<i>y` (trimmed), page px), `levels.json` (the chosen levels and
+the recall on the other quarters at each level) and `summary.json` (per quarter the zoning-code words found, found
+with the axis within 10 degrees, found by the trimmed box, and how many of the owner's answered labels get a box).
+Nothing in it is a time.
+
 **Trying recipes** (`sfzmaps solver text-trial [--set NAME=VALUE ...] [--recipe "NAME=VALUE ..." ...] [--seed N]
 [--reuse] [--train-series MAP,...] [--test-series MAP,...] [--device cpu|mps]`, `solver/textnet/trial.py`) is how the
 recipe is chosen; it is no stage. `--set` (repeatable) makes one recipe from settings over the old recipe (the quarter models', `Recipe()`), and each
