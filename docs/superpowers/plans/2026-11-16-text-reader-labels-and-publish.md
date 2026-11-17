@@ -28,9 +28,9 @@
 
 ## Where things stand
 
-Sources: the survey of where LLM output enters (saved at
-`.superpowers/sdd/2026-11-16-search-move-and-reader-spikes/text-reader-survey.md`), and the spikes' results:
-`pipeline/data/solver/experiments/spike-s{0,1,2,3}/`.
+Sources: the survey of where LLM output enters (`docs/research/joint-solver/notes/2026-11-16-text-reader-survey.md`,
+with file:line references), the spikes' results (`pipeline/data/solver/experiments/spike-s{0,1,2,3}/`), and the
+previous plan's results note (`docs/research/joint-solver/notes/2026-11-16-search-move-and-reader-spikes.md`).
 
 **LLM output still used to make the solve's answer** (at inference):
 - The prints (`solver-prints`) are positions from Terra's boxes and Sol's points.
@@ -70,6 +70,12 @@ Sources: the survey of where LLM output enters (saved at
   - The solve's own labels get their own location: `trust.load_prints`, `labels.py`, `streetside.py` and
     `placement.py` read from it.
   - `prints.parquet` stays as is: `solver-text-reader` uses it to define its held-out blocks.
+- **Also (the previous plan's final review):**
+  - `criteria_check.label_lots` repeats the label source in `measures.Table`. Make both read the one fixed scoring
+    set.
+  - The per-block totals check is weak (it can't catch a regrouping). Strengthen it.
+  - The energy criterion ("energy lower in every quarter") means nothing once walls or labels change. Say so in
+    `criteria_check`, and leave it out of comparisons across label sources.
 - **Measure:** re-solving `final` gives a byte-identical `report.json`.
 
 ### T1: The walls without Terra's boxes, from the honest per-quarter text chance
@@ -120,6 +126,13 @@ Sources: the survey of where LLM output enters (saved at
   - It writes `readings_{q}.npz` in today's format.
   - Street sides and placement refit as they do today.
   - Fix the `leader_moves` quirk: it matches on the read code, not `fix_code`, in 21 of 101 rows.
+  - **`TOP_READING_FIT`** (`energy.py:12,49`) maps a label's top trust through constants fitted to the LLM chain's
+    trust. The new calibration fills the same slot. Refit it, held out by quarter, on the new readings, or set it to
+    identity on purpose because the calibration is already a probability. Don't leave the old mapping in silently.
+  - **Readings per label.** Today a print has about 1.24 readings. The tie-break's path search (`energy.py:66-75`)
+    starts from every lot with any reading of a code, and the leftover mass per label (`41-52`) depends on how many
+    codes are written. Write only the codes with real mass, and report the number per label. Keep the `names` list,
+    which decides the codes the solve can output.
 - **Measure:**
   - the six measures against `final`, with intervals (expected somewhat worse; "better than published" is the bar);
   - the calibration's held-out log loss;
@@ -127,6 +140,12 @@ Sources: the survey of where LLM output enters (saved at
 
 ### T5: Publish the solve's codes on the 2000 map, with a page of differences
 
+- **First (the previous plan's final review):** 16 district stages (`edition-*`, `period-*`, `today`, `shared`) have
+  been stale since 11-02, before this branch. Their recorded `warp.py`, `transform.py`, `fresh.py` and `llm.py`
+  predate 7 commits, and their lock entries lack the `sheetwarp` dep.
+  - Rebuilding `period-2000-digital` would mix those changes into the page of differences.
+  - Find what rebuilding them changes, with `sfzmaps estimate` and cache-only: the `llm.py` change may move cache
+    keys, so a rebuild might want paid reads. Bring the result to the owner before any rebuild.
 - **What:** the `period-2000-digital` stage takes its codes from the solve (`solver-solve` upstream, a DVC link)
   instead of `districts_raw`'s, keeping its other steps (unzoned, overrides, heights, parks). It handles:
   - **lots:** today's table lots are mapped to DataSF's 2000-era lots by majority area;
