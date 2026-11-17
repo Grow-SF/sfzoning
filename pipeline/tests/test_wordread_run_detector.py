@@ -159,7 +159,7 @@ def _box(x0, y0, x1, y1):
     return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float)
 
 
-def _perfect(sd, like=None):
+def _perfect(sd):
     """What a net would give on the sheet: inside each word a core logit of 10, the exact distances to its edges
     (`data._geometry`), its direction and a tag 5 k on the first channel; outside -10, distances of 8 px, tags 0."""
     from sfzmaps.solver.wordread import shrink
@@ -176,8 +176,10 @@ def _perfect(sd, like=None):
     return predict.WordOutputs(np.zeros((h, w), np.uint8), np.full((4, h, w), 0.25, np.float16), core, geo, tag)
 
 
-SPREADS = words.Spreads(distance=0.5, angle=1.0, tag=0.3, reversed=0.01, cell=1.0, background_distance=8.0,
-                        background_tag=1.0, background_tag_mean=(0.0, 0.0, 0.0, 0.0))
+# test values of the measured spreads, for the fields `words.Spreads` has (`edge`: where a word's px end about its box)
+_SPREAD_VALUES = {"distance": 0.5, "angle": 1.0, "tag": 0.3, "reversed": 0.01, "cell": 1.0, "edge": 0.5,
+                  "background_distance": 8.0, "background_tag": 1.0, "background_tag_mean": (0.0, 0.0, 0.0, 0.0)}
+SPREADS = words.Spreads(**{f.name: _SPREAD_VALUES[f.name] for f in words.dataclasses.fields(words.Spreads)})
 PRIOR = words.WordPrior(slope=1.0, log_prior=-60.0)
 
 
