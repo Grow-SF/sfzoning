@@ -159,6 +159,18 @@ def test_codes_are_flat_over_the_era_list_and_kinds_mix():
     assert sum(math.exp(v) for v in pr.values()) == pytest.approx(1.0)
 
 
+def test_a_codes_mass_goes_to_its_forms_by_their_measured_weights(tmp_path):
+    base = _pack()
+    codes = {"BROADWAY": "BROADWAY", "BROADWAY NCD": "BROADWAY", "RH-1": "RH-1", "RH-2": "RH-2", "RH 2": "RH-2"}
+    pack = C.Pack(year=1980, streets=base.streets, blocks=base.blocks, codes=codes, spreads=base.spreads,
+                  form_weights={"BROADWAY": 0.25, "BROADWAY NCD": 0.75, "RH-2": 1.0})     # RH 2 unmeasured: flat
+    pr = C.prior(pack, {"x": 0.0, "y": 2000.0, "axis": 0.0}, CODE_ONLY)
+    assert {s: math.exp(v) for s, v in pr.items() if s != C.ESCAPE} == \
+        pytest.approx({"BROADWAY": 1 / 12, "BROADWAY NCD": 0.25, "RH-1": 1 / 3, "RH-2": 1 / 6, "RH 2": 1 / 6})
+    pack.save(tmp_path / "p.parquet")
+    assert C.Pack.load(tmp_path / "p.parquet").form_weights == pack.form_weights
+
+
 def test_posterior_needs_ink_for_every_listed_string_and_a_positive_escape():
     pr = C.prior(_pack(), {"x": 0.0, "y": 0.0, "axis": 0.0}, CODE_ONLY)
     with pytest.raises(ValueError, match="ink"):

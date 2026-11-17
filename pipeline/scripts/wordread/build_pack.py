@@ -311,9 +311,19 @@ def fit(*sheets: str) -> dict:
 
 
 def refit() -> dict:
-    """`fit` again from the kept read words (no reading)."""
+    """`fit` again from the kept read words (no reading), their priors recomputed from the pack as it is now; refused
+    when the pack now lists a string the kept ink doesn't cover (run `fit`)."""
     t0 = time.perf_counter()
+    pack = C.Pack.load(PACK_FILE)
     words = load_words(WORDS_FILE)
+    for qn in paths.QUARTERS:
+        words[f"prior_{qn}"] = [C.prior(pack, {"x": x, "y": y, "axis": a}, kp, pack.spreads[qn])
+                                for x, y, a, kp in zip(words["x"], words["y"], words["axis"], words["kind_p"])]
+        bare = sum(any(s not in ink for s in pr if s != C.ESCAPE)
+                   for pr, ink in zip(words[f"prior_{qn}"], words["ink"]))
+        if bare:
+            raise ValueError(f"{bare} words' {qn} priors list strings with no kept ink: run `fit`")
+    save_words(words, WORDS_FILE)
     out = json.loads(FIT_FILE.read_text()) if FIT_FILE.is_file() else {}
     out.update(fit_folds(words, _held_blocks()))
     out["refit_seconds"] = round(time.perf_counter() - t0, 1)

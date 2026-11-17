@@ -6,7 +6,8 @@ A pack (`Pack`, one parquet file per map, under PACKS_DIR) holds, in map coordin
   streets  `name` (DataSF's `streetname`, "MISSION ST"), `street` (its base name), `type` (`st_type`, "" for none),
            `active`, and the centreline: one LineString a row, as DataSF cuts them
   blocks   `number` (the Assessor's block, "0767") and its outline (the union of the block's lots)
-  codes    the era's code list: printed form -> code (each code also a form of itself)
+  codes    the era's code list: printed form -> code (each code also a form of itself), and each form's measured
+           share of its code, P(form | code) (`form_weights`; flat when not measured)
   spreads  where printed words sit relative to what they name (`Spreads`), measured on Terra's words: "all" (every
            quarter) and, per quarter name, measured with that quarter left out
 It never holds a code at a lot: on the 2000 map that is the answer key.  `build_sf_pack` refuses to add one, and a
@@ -14,7 +15,7 @@ pack's frames take no column but their own.
 
 The prior (`prior`): p(s | kind, place), mixed over the box's kind probabilities `kind_p` (KIND_ORDER, the detector's
 `textnet.data.KINDS` order):
-  zoning code   the era list, flat over codes; a code's mass is shared by its printed forms
+  zoning code   the era list, flat over codes; a code's mass is shared by its printed forms by P(form | code)
   street name   which street the box names, by Bayes on where it sits.  For each street j near the box, by its
                 nearest centreline (d_j ft from the box's centre; t_j the angle between the box's axis and the
                 centreline there, 0 to 90 degrees), and for a street the pack doesn't hold (0):
@@ -250,6 +251,7 @@ class Pack:
     blocks: gpd.GeoDataFrame
     codes: dict[str, str]
     spreads: dict[str, Spreads] = field(default_factory=dict)
+    form_weights: dict[str, float] = field(default_factory=dict)   # P(form | code), measured; none: flat
 
     def __post_init__(self):
         self.streets = _frame(self.streets, STREET_COLS, "streets").reset_index(drop=True)
@@ -257,6 +259,7 @@ class Pack:
         if "active" not in self.streets:
             self.streets["active"] = True
         self.codes = dict(sorted(self.codes.items()))
+        self.form_weights = {f: float(v) for f, v in sorted(self.form_weights.items()) if f in self.codes}
 
     # caches for the prior
     @cached_property
@@ -317,6 +320,17 @@ class Pack:
                 out.setdefault(code, []).append(form)
         return out
 
+    @cached_property
+    def code_form_shares(self) -> dict[str, dict[str, float]]:
+        """Each code's printed forms with their share of its mass: the measured P(form | code) (`form_weights`) when
+        every form of the code has one, else flat."""
+        out = {}
+        for code, forms in self.code_forms.items():
+            w = np.array([self.form_weights.get(f, np.nan) for f in forms], float)
+            ok = np.isfinite(w).all() and (w >= 0).all() and w.sum() > 0
+            out[code] = dict(zip(forms, (w / w.sum() if ok else np.full(len(forms), 1.0 / len(forms))).tolist()))
+        return out
+
     def reach(self, sp: Spreads) -> tuple[float, float]:
         """How far (ft) streets and blocks are looked for under spreads `sp`: past it, even an aligned street or the
         smallest block would have odds below MIN_MASS (`street_odds`, `block_odds`), so less than MIN_MASS of its
@@ -354,7 +368,8 @@ class Pack:
                   "geometry": r.geometry} for r in self.streets.itertuples(index=False)]
         rows += [{"layer": "block", "name": r.number, "geometry": r.geometry}
                  for r in self.blocks.itertuples(index=False)]
-        rows += [{"layer": "code", "name": code, "form": form} for form, code in self.codes.items()]
+        rows += [{"layer": "code", "name": code, "form": form, "value": self.form_weights.get(form, np.nan)}
+                 for form, code in self.codes.items()]
         for fold, s in self.spreads.items():
             for quantity in SPREAD_ARRAYS:
                 rows += [{"layer": "spread", "name": quantity, "fold": fold, "value": float(v)}
@@ -383,33 +398,36 @@ class Pack:
         blocks = gpd.GeoDataFrame({"number": bl["name"].to_numpy(object)}, geometry=bl.geometry.values, crs=df.crs)
         co = df[df["layer"] == "code"]
         codes = dict(zip(co["form"], co["name"]))
+        weights = {f: float(v) for f, v in zip(co["form"], co["value"]) if np.isfinite(v)}
         sp = df[df["layer"] == "spread"]
         spreads = {}
         for fold in [f for f in FOLDS if f in set(sp["fold"])] + sorted(set(sp["fold"]) - set(FOLDS)):
             mine = sp[sp["fold"] == fold]
             spreads[fold] = Spreads(**{q: mine.loc[mine["name"] == q, "value"].to_numpy(float) for q in SPREAD_ARRAYS},
                                     **{k: float(mine.loc[mine["name"] == k, "value"].iloc[0]) for k in SPREAD_SHARES})
-        return cls(year=year, streets=streets, blocks=blocks, codes=codes, spreads=spreads)
+        return cls(year=year, streets=streets, blocks=blocks, codes=codes, spreads=spreads, form_weights=weights)
 
 
 # --- building San Francisco's pack ------------------------------------------------------------------------------------
 
-def era_codes(year: int) -> dict[str, str]:
-    """The era's code list as printed form -> code.  2000: the April 2000 table's code names
-    (`codereader.labels.table_codes`: the list alone, never a code at a lot), each as itself, with the reader's printed
-    forms of them (`text-crops/prior.json` `forms`).  No other era's list is held: an empty list (the codes' kind goes
+def era_codes(year: int) -> tuple[dict[str, str], dict[str, float]]:
+    """The era's code list as printed form -> code, and each form's P(form | code).  2000: the April 2000 table's
+    code names (`codereader.labels.table_codes`: the list alone, never a code at a lot), each as itself, with the
+    reader's printed forms of them and their weights (`text-crops/prior.json` `forms` and `form_weights`, measured on
+    the training labels, the answered ones refused).  No other era's list is held: an empty list (the codes' kind goes
     to the escape)."""
     if year != 2000:
-        return {}
+        return {}, {}
     import json
 
     from sfzmaps.solver.codereader import labels
     from sfzmaps.solver.textread import store
     names = set(labels.table_codes())
-    forms = json.loads((store.CROPS_DIR / "prior.json").read_text())["forms"]
+    prior_json = json.loads((store.CROPS_DIR / "prior.json").read_text())
     out = {n: n for n in names}
-    out.update({f: c for f, c in forms.items() if c in names})
-    return dict(sorted(out.items()))
+    out.update({f: c for f, c in prior_json["forms"].items() if c in names})
+    weights = {f: float(w) for f, w in prior_json.get("form_weights", {}).items() if f in out}
+    return dict(sorted(out.items())), weights
 
 
 def sf_blocks(lots_table: Path | None = None) -> gpd.GeoDataFrame:
@@ -439,13 +457,15 @@ def sf_streets(path: Path | None = None) -> gpd.GeoDataFrame:
 
 def build_sf_pack(year: int, lot_codes: bool = False, codes: dict[str, str] | None = None) -> Pack:
     """San Francisco's pack for `year`'s map: today's DataSF centrelines (`sf_streets`) and the Assessor's blocks
-    (`sf_blocks`), and the era's code list (`era_codes`, or `codes`).  No spreads (`measure_spreads` adds them).
+    (`sf_blocks`), and the era's code list with its forms' weights (`era_codes`; or `codes`, its forms flat).  No
+    spreads (`measure_spreads` adds them).
     ValueError when asked for lot codes: on the 2000 map they are the answer key, and no other era's are held."""
     if lot_codes:
         if year == 2000:
             raise ValueError("a 2000 pack never holds the 2000 table's codes at lots: that is the answer key")
         raise ValueError(f"no lot codes are held for {year}; a pack holds streets, blocks and the code list only")
-    return Pack(year=year, streets=sf_streets(), blocks=sf_blocks(), codes=era_codes(year) if codes is None else codes)
+    listed, weights = era_codes(year) if codes is None else (codes, {})
+    return Pack(year=year, streets=sf_streets(), blocks=sf_blocks(), codes=listed, form_weights=weights)
 
 
 # --- a box on the map -------------------------------------------------------------------------------------------------
@@ -586,11 +606,15 @@ def prior(pack: Pack | None, box_map: dict, kind_p, spreads: Spreads | None = No
         for f in forms:
             mass[f] = mass.get(f, 0.0) + m / len(forms)
 
+    def add_shares(shares, m):
+        for f, sh in shares.items():
+            mass[f] = mass.get(f, 0.0) + m * sh
+
     k = kp[KIND_ORDER.index("zoning code")]
     if k > 0:
         if pack.code_forms:
-            for forms in pack.code_forms.values():
-                add(forms, k / len(pack.code_forms))
+            for shares in pack.code_form_shares.values():
+                add_shares(shares, k / len(pack.code_form_shares))
         else:
             escape += k
     k = kp[KIND_ORDER.index("block number")]
