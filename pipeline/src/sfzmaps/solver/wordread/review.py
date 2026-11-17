@@ -27,14 +27,15 @@ fold reader that never saw the box's quarter); for "none", nothing.  It is compa
 Why a word was missed (`miss_reason`): from the detector's own chance on the word's ink, at the level its quarter's
 boxes were grouped at (`wordboxes`: the connected px at or above the level within INK_R px of ink, the components).
 The component holding most of its above-level ink is its main component.
+  outside_map       its centre is off the sheet's footprint or the mapped area: a box there is dropped
+  below_level       less than BELOW_SHARE of its ink reaches the level (or it has no ink)
   merged_with_word  the main component also holds another Terra word: MERGE_PART or more of that word's ink at the
                     level outside this word's rectangle, or most of that word's own above-level ink
   merged_into_line  the main component, holding no other word, is more than LINE_RATIO times the word's length
-  outside_map       its centre is off the sheet's footprint or the mapped area: a box there is dropped
-  below_level       less than BELOW_SHARE of its ink reaches the level (or it has no ink)
   split             its above-level ink falls in two or more components, each holding SPLIT_PART of it or more
   wrong_size        the rest: one component holds it, alone and not a line, but its box doesn't fit the word
-in that order (the controller's ruling, Task 2 fix round 1).  The details give the highest and the mean chance on its
+in that order (the controller's ruling: a box never forming off the map or below the level comes first; a merge
+matters only once the ink was called text).  The details give the highest and the mean chance on its
 ink, the share of its ink at or above the level, the main component's length and ink px, the other words it holds,
 and the reader's reading at Terra's box when it is given.
 
@@ -68,7 +69,7 @@ BELOW_SHARE = 0.5          # a word with less of its ink at or above the level i
 LINE_RATIO = 3.0           # a component this many times a word's length is a line
 SPLIT_PART = measures.SPLIT_PART
 MERGE_PART = 0.1           # a component holds another word when it holds this share of that word's ink
-REASONS = ("merged_with_word", "merged_into_line", "outside_map", "below_level", "split", "wrong_size")
+REASONS = ("outside_map", "below_level", "merged_with_word", "merged_into_line", "split", "wrong_size")
 REASON_SHORT = {"merged_with_word": "merged with a word", "merged_into_line": "merged into a line",
                 "outside_map": "off the map", "below_level": "below level", "split": "split",
                 "wrong_size": "wrong size"}
@@ -270,14 +271,14 @@ def miss_reason(word_rect, chance: np.ndarray, ink: np.ndarray, components, leve
     details["on_map"] = bool(on_map)
     if reading is not None:
         details["reading"] = reading
-    if details["merged_with"]:
-        return "merged_with_word", details
-    if details["component_px"] > LINE_RATIO * length:
-        return "merged_into_line", details
     if not on_map:
         return "outside_map", details
     if not n_ink or details["share_above"] < BELOW_SHARE:
         return "below_level", details
+    if details["merged_with"]:
+        return "merged_with_word", details
+    if details["component_px"] > LINE_RATIO * length:
+        return "merged_into_line", details
     if int((counts >= SPLIT_PART * n_above).sum()) >= 2:
         return "split", details
     return "wrong_size", details

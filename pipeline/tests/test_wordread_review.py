@@ -107,12 +107,25 @@ def test_a_word_merged_with_its_neighbour_names_it():
     assert got[0][1]["level"] == 0.99                                  # the word's quarter's level
 
 
-def test_two_words_joined_by_one_component_are_merged_with_word_before_line_or_level():
+def test_two_words_joined_by_one_component_are_merged_with_word_before_line():
     ink = INK_WORD_ON_LINE | _bars([150, 158, 166])                    # a second word on the same long line
     comps = review.components(CHANCE_HIGH, ink, 0.99)
     other = np.array([[[146, 50], [172, 50], [172, 62], [146, 62]]], float)
-    r, d = review.miss_reason(WORD, CHANCE_HIGH, ink, comps, 0.99, others=other, other_names=["12"], on_map=False)
-    assert r == "merged_with_word" and d["merged_with"] == ["12"]
+    r, d = review.miss_reason(WORD, CHANCE_HIGH, ink, comps, 0.99, others=other, other_names=["12"])
+    assert r == "merged_with_word" and d["merged_with"] == ["12"] and d["component_px"] > 3 * d["word_length_px"]
+
+
+def test_off_the_map_and_below_the_level_come_before_a_merge():
+    ink = INK_WORD | _bars([100, 108, 116])                           # the word's last glyph joins the next word
+    chance = CHANCE_HIGH.copy()
+    chance[:, 40:88] = 200                                              # 6 of its 7 glyphs below the 0.99 level
+    comps = review.components(chance, ink, 0.99)
+    other = np.array([[[98, 50], [122, 50], [122, 62], [98, 62]]], float)
+    r, d = review.miss_reason(WORD, chance, ink, comps, 0.99, others=other, other_names=["12"])
+    assert r == "below_level" and d["share_above"] < 0.5 and d["merged_with"] == ["12"]
+    r, d = review.miss_reason(WORD, CHANCE_HIGH, ink, review.components(CHANCE_HIGH, ink, 0.99), 0.99,
+                              others=other, other_names=["12"], on_map=False)
+    assert r == "outside_map" and d["merged_with"] == ["12"]
 
 
 def test_a_word_on_a_long_line_with_no_other_word_on_it_is_merged_into_line():
