@@ -878,7 +878,14 @@ held-out log loss (northwest, northeast, southwest, southeast), improving three 
 | `text_weighted_beside_letters` | .0978 | .1037 | .0474 | .0626 |
 | `text_discounted_enclosure` | .0982 | .1041 | .0502 | .0656 |
 | the stage's + `text_weighted_beside_letters` | .0980 | .1022 | .0449 | .0612 |
-| the stage's + `text_weighted` | .0982 | .1026 | .0452 | .0612 |
+| the stage's + `text_weighted` (the one detector's chance, trained on every px) | .0982 | .1026 | .0452 | .0612 |
+| the stage's + `text_weighted` (the held-out detectors' chance: what the stage now fits) | .1011 | .1069 | .0487 | .0658 |
+
+The stage's walls now include `text_weighted` so that they read no output of Terra, and its chance is the held-out
+detectors': an honest chance, weaker than the in-sample one, so the held-out log loss is worse than the stage's former
+set in every quarter (and than none of the candidates in the northeast, southwest and southeast). The solve on them
+(every-lot column, against the former walls): labels right 94.05% against 94.79%, incidents 921 against 862, wrong lots
+7,001 against 4,543, table lines drawn 95.69% against 96.43%; kept for the no-LLM rule, not chased.
 
 The solve on these walls, against the solve on the default (none) walls, every-lot column: table lines drawn 96.3%
 against 95.7%, drawn lines that are table lines 96.6% against 96.5%, labels right 94.5% against 94.1%, holes 48

@@ -7396,15 +7396,58 @@ stages:
       md5: e611eafc85d7b7e39cc24a77a5ddb666.dir
       size: 6247790
       nfiles: 3
-    - path: data/solver/prints/terra_boxes.json
+    - path: data/solver/text-reader/2000-digital-zoning-p01/chance.png
       hash: md5
-      md5: 266410cc7ba1638455f5762650ff3423
-      size: 1990351
-    - path: data/solver/text/chance
+      md5: 6f53efb19b83c23ee57bfc574514104d
+      size: 10182870
+    - path: data/solver/text-reader/2000-digital-zoning-p02/chance.png
       hash: md5
-      md5: 28e90485d344b53c4f02f0865ca48a21.dir
-      size: 119274579
-      nfiles: 13
+      md5: 178bb7e723c9a5a068173cca9987fb26
+      size: 9405237
+    - path: data/solver/text-reader/2000-digital-zoning-p03/chance.png
+      hash: md5
+      md5: 0c38bc5b758580fd6c60b0ab9359f800
+      size: 9438858
+    - path: data/solver/text-reader/2000-digital-zoning-p04/chance.png
+      hash: md5
+      md5: 508d199d80362aefda327c0acedf6538
+      size: 7849862
+    - path: data/solver/text-reader/2000-digital-zoning-p05/chance.png
+      hash: md5
+      md5: 89b3d7bc2c98888a3616fec9234e991b
+      size: 8980660
+    - path: data/solver/text-reader/2000-digital-zoning-p06/chance.png
+      hash: md5
+      md5: 506c4dad9a0885692699198db4dd2af4
+      size: 9328035
+    - path: data/solver/text-reader/2000-digital-zoning-p07/chance.png
+      hash: md5
+      md5: ff01d83815e6983156eac9216c79993c
+      size: 9741005
+    - path: data/solver/text-reader/2000-digital-zoning-p08/chance.png
+      hash: md5
+      md5: f8188149164a387433096a807c27f982
+      size: 10224415
+    - path: data/solver/text-reader/2000-digital-zoning-p09/chance.png
+      hash: md5
+      md5: fa465c4b4e0013f70f11a497a9e63f9c
+      size: 10030661
+    - path: data/solver/text-reader/2000-digital-zoning-p10/chance.png
+      hash: md5
+      md5: 88fd2fa7e07a641b88c7c1bf3ff55a9d
+      size: 10468173
+    - path: data/solver/text-reader/2000-digital-zoning-p11/chance.png
+      hash: md5
+      md5: 8a37419a97e2dd5251ea1a9ce33d4c08
+      size: 10356130
+    - path: data/solver/text-reader/2000-digital-zoning-p12/chance.png
+      hash: md5
+      md5: e513c71dbd529dc8f261fa774340d325
+      size: 9493227
+    - path: data/solver/text-reader/2000-digital-zoning-p13/chance.png
+      hash: md5
+      md5: 8951917320bd82d292f481dbdd798ab6
+      size: 8220787
     - path: data/warp/2000-digital-zoning
       hash: md5
       md5: 1dd5374120a1801f67fb942056e9247c.dir
@@ -7473,8 +7516,8 @@ stages:
       size: 4053
     - path: src/sfzmaps/solver/textgrid.py
       hash: md5
-      md5: 890738deefcf211dcec82a6ed6d28f24
-      size: 4362
+      md5: e76a8e9aee5446d36fdbe572043fd61f
+      size: 4626
     - path: src/sfzmaps/solver/textnet/boxes.py
       hash: md5
       md5: 9c3059873b3916274be61844bceb5490
@@ -7489,8 +7532,8 @@ stages:
       size: 43435
     - path: src/sfzmaps/solver/walls.py
       hash: md5
-      md5: d5ad28c51b8fd1c43866df79d7470ee5
-      size: 18256
+      md5: 096440d7319887c93d2ad70ea7335f37
+      size: 18805
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: c83192f3d3941fae99387dafd628e159
@@ -7502,8 +7545,8 @@ stages:
     outs:
     - path: data/solver/walls
       hash: md5
-      md5: a34f193c03871fa53c9b53db9bde17db.dir
-      size: 16389245
+      md5: c1192b0504d4959916a455189a080fc5.dir
+      size: 20517158
       nfiles: 6
   solver-text-scores:
     cmd: uv run --frozen sfzmaps stage solver-text-scores
@@ -9097,8 +9140,8 @@ stages:
       size: 127060
     - path: data/solver/walls
       hash: md5
-      md5: a34f193c03871fa53c9b53db9bde17db.dir
-      size: 16389245
+      md5: c1192b0504d4959916a455189a080fc5.dir
+      size: 20517158
       nfiles: 6
     - path: data/warp/2000-digital-zoning
       hash: md5
@@ -9228,8 +9271,8 @@ stages:
     outs:
     - path: data/solver/solve
       hash: md5
-      md5: 5a68e0214bbcdef7af433b42203b10ba.dir
-      size: 115601958
+      md5: a580bcecaed11dce9a39241272e398e6.dir
+      size: 115584106
       nfiles: 18
   solver-text-reader:
     cmd: uv run --frozen sfzmaps stage solver-text-reader
