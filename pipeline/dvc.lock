@@ -12136,24 +12136,20 @@ stages:
       size: 4386
     - path: src/sfzmaps/solver/textread/__init__.py
       hash: md5
-      md5: 317f64bff6ff4ee48d988b1b4c44e831
-      size: 1146
-    - path: src/sfzmaps/solver/textread/ctc.py
-      hash: md5
-      md5: fee7e3c8b938e866d7f81864db96fef9
-      size: 6436
+      md5: 1b8a10d530f0402ac643e573d2e31499
+      size: 1133
     - path: src/sfzmaps/solver/textread/model.py
       hash: md5
-      md5: 3ba7209d5a8220f2525b622646fe158b
-      size: 8813
+      md5: 0348b4d37c9c454f4cccd76f08a2a5fb
+      size: 9182
     - path: src/sfzmaps/solver/textread/store.py
       hash: md5
-      md5: 7c1b868d69295d02732a4f1f2a1d6726
-      size: 3864
+      md5: d498e0b1bfc45b901a0801c3cbea370a
+      size: 3843
     - path: src/sfzmaps/solver/textread/train.py
       hash: md5
-      md5: 079510cb372bed928b56b6afc0be97cb
-      size: 14666
+      md5: 72da1873662aec4ceebdc5704aa2a380
+      size: 14442
     - path: uv.lock
       hash: md5
       md5: b038b7f427cf66546c731cc1433bb62d
@@ -12161,9 +12157,9 @@ stages:
     outs:
     - path: data/solver/text-train
       hash: md5
-      md5: d251f9dd38123f07c889f4632575424e.dir
-      size: 35577237
-      nfiles: 11
+      md5: 36fa3f26495e2912212170a9d3330275.dir
+      size: 35524760
+      nfiles: 10
   solver-text-read:
     cmd: uv run --frozen sfzmaps stage solver-text-read
     deps:
