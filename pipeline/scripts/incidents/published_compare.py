@@ -16,6 +16,7 @@ Writes data/solver/experiments/published-compare/compare.json, compare.md and di
 final code, table code, quarter).  Reads only otherwise (it saves the published map as the run `published`)."""
 import csv
 import json
+import textwrap
 
 import numpy as np
 import pandas as pd
@@ -38,8 +39,8 @@ KEYS = (("lines_drawn", "Table district lines the map draws", "{:.2%}"),
 SCORING = ("A lot counts wrong when it is scored and its code differs from the table's (measures.incidents: "
            "codes != table), so a blank code on a scored lot counts as wrong; the final has no blanks. Labels right: "
            "computed the same way for both maps on the same 1,881 zoning labels: the table district under a label "
-           "counts right when more than half of its scored lots carry the table's code in that map (it does not "
-           "read the published map's own labels).")
+           "counts right when more than half of its scored lots carry the table's code in that map (it looks only at "
+           "the codes each map gives those lots, never at a label's reading).")
 COLUMNS = ("published", "final", "final_before_compound_fusion", "search-compound")
 
 
@@ -65,7 +66,7 @@ def main():
             "wrong_lots": m_pub["wrong_lots"] - m_fin["wrong_lots"]}
     # the lots where published != final, by what the table says (the scored lots; the rest the table does not score)
     # a published blank is one of two things: the lot is in districts_raw with no code (a blank in the read), or
-    # today's lot is not in districts_raw at all (the read is on the era's lot IDs; save_published gives it "")
+    # today's lot is not in districts_raw at all (save_published gives it "")
     raw = pd.read_parquet(config.WORK_DIR / paths.SERIES / "districts_raw.parquet", columns=["blklot", "code"])
     ids = pd.Series(C.lots["blklot"].astype(str).values)
     in_raw = ids.isin(set(raw["blklot"].astype(str))).values
@@ -94,6 +95,9 @@ def main():
               "published_blank_no_matching_lot_id_not_in_site_parcels": int((d & blank & ~in_raw & ~in_site).sum())}
     assert counts["final_right"] + counts["published_right"] + counts["neither_right"] == counts["differ_scored"]
     assert counts["differ_scored"] + counts["not_scored"] == counts["differ"]
+    counts["published_wrong_code"] = counts["differ"] - counts["published_blank"]      # a code, and not final's
+    assert (counts["published_wrong_code"] + counts["published_blank_in_read"]
+            + counts["published_blank_no_matching_lot_id"]) == counts["differ"]
     OUT.mkdir(parents=True, exist_ok=True)
     blk = C.lots["blklot"].astype(str).values
     with open(OUT / "differences.csv", "w", newline="") as f:
@@ -129,11 +133,13 @@ def markdown(o):
           "| Kind | Scored wrong lots |", "|---|---|",
           f"| A code that differs from the table's | {sp['wrong_code']:,} |",
           f"| Blank in the read (the lot is in `districts_raw` with no code) | {sp['wrong_blank_in_read']:,} |",
-          f"| No matching lot ID (today's lot is not in `districts_raw`, which is on 2000-era lot IDs; "
-          f"{sp['wrong_no_matching_lot_id_not_in_site_parcels']:,} of these are also missing from the site's "
-          f"`parcels.fgb`) | {sp['wrong_no_matching_lot_id']:,} |", "",
+          f"| No matching lot ID (today's lots missing from `districts_raw`) | "
+          f"{sp['wrong_no_matching_lot_id']:,} |", "",
+          f"Of the {sp['wrong_no_matching_lot_id']:,} with no matching lot ID, "
+          f"{sp['wrong_no_matching_lot_id_not_in_site_parcels']:,} are also missing from the site's `parcels.fgb`.",
+          "",
           f"The two blank kinds count as wrong ({sp['wrong_blank_in_read'] + sp['wrong_no_matching_lot_id']:,} "
-          "together); the site may show a code over a no-matching-ID spot (the era lot covering it). The final has "
+          "together). The final has "
           f"no blank lots ({sp['final_blank_lots']:,}).", "",
           "## Published against the new final (paired block bootstrap)", "",
           f"{o['draws']:,} draws over {o['blocks']:,} blocks (`criteria_check.py`'s: assessor blocks, the same "
@@ -162,12 +168,14 @@ def markdown(o):
           f"| Neither right | {n['neither_right']:,} |",
           f"| Not scored (the table gives no code, or a data error) | {n['not_scored']:,} |",
           f"| Total | {n['differ']:,} |", "",
-          f"Among all that differ, {n['published_blank']:,} have no published code: "
-          f"{n['published_blank_in_read']:,} blank in the read and {n['published_blank_no_matching_lot_id']:,} with "
-          f"no matching lot ID ({n['published_blank_no_matching_lot_id_not_in_site_parcels']:,} of them also missing "
-          f"from the site's `parcels.fgb`); the final has {n['final_blank']:,} blanks. The per-lot table is `differences.csv` (blklot, published, final, table, table_scored, "
+          f"By kind, the {n['differ']:,} that differ are: a published code that is not final's "
+          f"{n['published_wrong_code']:,}; blank in the read {n['published_blank_in_read']:,}; no matching lot ID "
+          f"{n['published_blank_no_matching_lot_id']:,} "
+          f"({n['published_blank_no_matching_lot_id_not_in_site_parcels']:,} of them also missing from the site's "
+          f"`parcels.fgb`). The final has {n['final_blank']:,} blanks. The per-lot table is `differences.csv` (blklot, published, final, table, table_scored, "
           "quarter)."]
-    return "\n".join(L) + "\n"
+    wrap = textwrap.TextWrapper(width=119, break_long_words=False, break_on_hyphens=False)
+    return "\n".join(x if x[:1] in "|#" or len(x) <= 119 else wrap.fill(x) for x in L) + "\n"
 
 
 if __name__ == "__main__":
