@@ -82,6 +82,27 @@ BOOT_SEED = 20261116
 PINNED_COMMIT = "ed4cf98"
 PINNED_SRC = S1_DIR / "code" / PINNED_COMMIT / "pipeline" / "src"
 UNPINNED_RUNS = ("control", "s0", "s0-mix")
+# The final every comparison is against: solver-solve's output at 44dffb1, solved with ed4cf98's search, the search
+# every spike solve runs (R6).  The stage was rebuilt at 7cce81a (11-16, 18:04) with the compound fusion move on, so
+# data/solver/solve no longer holds it; this is its copy from the DVC cache (dvc.lock at 44dffb1: data/solver/solve
+# 65e317b6392a98a43c8747b4bdeb6244.dir), each file checked by its md5 there.
+BASELINE_DIR = S0_DIR / "final-44dffb1"
+BASELINE_MD5 = {"data_errors.npz": "c55765a5055501dbc08589dc931a2254", "placement.npz": "5b2b2e4f14176a0ca18d90c9eaf7b5c2",
+                "report.json": "40ca9eed534be6edd15060e005c7a085", "runs/final.npz": "51e49dcc967dfac02d758eec5795cef0",
+                "runs/final-nw.npz": "271197d3f3fcd4fa1024c77115b8012c",
+                "runs/final-ne.npz": "6e22db442b48db31a5495cb4b0f229e2",
+                "runs/final-sw.npz": "9b02ac294b057d089db2d0ef48580918",
+                "runs/final-se.npz": "92a82f147f9b007b2f4ed5f96a13ecc6"}
+
+
+@lru_cache(maxsize=1)
+def baseline_dir() -> Path:
+    """BASELINE_DIR, every file checked against its md5 in the DVC cache's record of 44dffb1's solve."""
+    for rel, md5 in BASELINE_MD5.items():
+        f = BASELINE_DIR / rel
+        if not f.is_file() or hashlib.md5(f.read_bytes()).hexdigest() != md5:
+            raise FileNotFoundError(f"{f}: missing or not 44dffb1's (md5 {md5}); copy it from the DVC cache")
+    return BASELINE_DIR
 SOLVER_FILES = ("search.py", "solve.py", "energy.py", "mincut.py", "labels.py", "placement.py", "city.py")
 # the uniform share of the energy function's most confident P: a reading of trust 1 - 1e-3 (its clip) is right
 # with q = expit(a + b logit(0.999)); the rest, 1 - q, is spread evenly.  The posterior is floored by the same
@@ -383,11 +404,12 @@ def draws(seed: int, n_prints: int) -> np.ndarray:
     return np.random.default_rng(seed).random((3, n_prints))
 
 
-def degrade(raw: Raw, q: str, m: float, r: float, seed: int, model=None, fallback=None) -> tuple[Raw, dict]:
+def degrade(raw: Raw, q: str, m: float, r: float, seed: int, model=None, fallback=None, detail: bool = False):
     """The readings of holdout q with the labels missed and misread (rates as fractions of the charged labels,
     `eligible`): a missed label loses every reading; a misread label's top reading (its largest trust among the kept
     readings; the first on a tie) names the replacement code (`replacement`), its trust kept.  A missed label is
-    not also misread, so the misread share among all labels is r (1 - m)."""
+    not also misread, so the misread share among all labels is r (1 - m).  Returns (raw, info), and with `detail`
+    also {misread label: (its top code, the code it now reads)}."""
     C = city()
     model = confusion() if model is None else model
     fallback = quarter_codes() if fallback is None else fallback
@@ -401,16 +423,83 @@ def degrade(raw: Raw, q: str, m: float, r: float, seed: int, model=None, fallbac
         first_raw.setdefault(canon(n), i)
     code = raw.code.copy()
     fell = 0
+    swaps = {}
     for label in sorted(misread):
         rows = np.flatnonzero((raw.lab == label) & ok)
         top = rows[int(np.argmax(raw.trust[rows]))]
         new, fb = replacement(canon(raw.names[code[top]]), float(u[2, label]), int(C.quarter[raw.under[label]]),
                               model, fallback)
+        swaps[int(label)] = (canon(raw.names[code[top]]), new)
         code[top] = first_raw[new]
         fell += fb
     keep = ~np.isin(raw.lab, list(missed))
     out = Raw(raw.names, raw.lab[keep], code[keep], raw.trust[keep], raw.under)
-    return out, {"labels": int(len(labels)), "missed": len(missed), "misread": len(misread), "fallback": fell}
+    info = {"labels": int(len(labels)), "missed": len(missed), "misread": len(misread), "fallback": fell}
+    return (out, info, swaps) if detail else (out, info)
+
+
+# --- S1 with unsure misreads (fix round 1, I4) -------------------------------------------------------------------------
+
+UNSURE_SUFFIX = "-u"
+
+
+@lru_cache(maxsize=1)
+def reader_misread_masses() -> tuple:
+    """The template reader's own misreads on the owner's answered labels the solver charges (its top a code, not
+    the answer): (its mass on that wrong code, its mass on the answer), in print order.  65 pairs: the wrong code's
+    mass averages 0.46, the answer's 0.15."""
+    post, _ = posteriors()
+    charged = charged_labels()
+    out = []
+    for lab in sorted(pickle.load(open(INPUTS / "labs.pkl", "rb")), key=lambda lab: lab.index):
+        if not lab.answer or lab.index not in charged:
+            continue
+        p = post[lab.index]
+        top = max(p, key=p.get)
+        truth = canon(lab.answer)
+        if top in ("none", "other") or canon(top) == truth:
+            continue
+        out.append((float(p[top]), float(sum(v for h, v in p.items() if h not in ("none", "other")
+                                              and canon(h) == truth))))
+    return tuple(out)
+
+
+def unsure_P(new: str, old: str, wrong: float, right: float, names: list, ratio: float = 1.0) -> np.ndarray:
+    """A misread label's P as the template reader misreads: the wrong code `new` at mass `wrong`, the code it
+    replaced (the label's top reading) at `right`, the rest spread evenly over the K names; a far-side copy's masses
+    times `ratio`, what that takes off spread evenly too; then the floor, as `posterior_P`."""
+    K = len(names)
+    first = {}
+    for i, n in enumerate(names):
+        first.setdefault(n, i)
+    P = np.zeros(K)
+    P[first[new]] += ratio * wrong
+    P[first[old]] += ratio * right
+    P = P + (1.0 - P.sum()) / K
+    return (1.0 - FLOOR) * P + FLOOR / K
+
+
+def unsure_problem(q: str, m: float, r: float, seed: int):
+    """Quarter q of an S1 point with unsure misreads: the same misses, misread labels and replacement codes as the
+    sure run of that point and seed (the same draws), the readings to the tie-break's paths as there; each misread
+    label's own-lot and far-side charges get `unsure_P`, its (wrong, right) masses one of the reader's own misreads
+    (`reader_misread_masses`, picked by a fourth uniform per print from the seed's own generator); every other
+    charge keeps the function's P from its readings (`function_P`)."""
+    raw, info, swaps = degrade(stage_raw(q), q, m, r, seed, detail=True)
+    rd = readings_from(q, raw, vocabulary())
+    K = len(rd.names)
+    pairs = reader_misread_masses()
+    u4 = np.random.default_rng([seed, 4]).random(len(raw.under))
+    ratio = far_ratio(q)
+    charges = []
+    for label, far, own, T in groups_of(rd):
+        if label in swaps:
+            old, new = swaps[label]
+            wrong, right = pairs[min(int(u4[label] * len(pairs)), len(pairs) - 1)]
+            charges.append((label, far, own, unsure_P(new, old, wrong, right, rd.names, ratio if far else 1.0)))
+        else:
+            charges.append((label, far, own, function_P(T, K)))
+    return charges, rd, info
 
 
 # --- solving ---------------------------------------------------------------------------------------------------------
@@ -418,9 +507,13 @@ def degrade(raw: Raw, q: str, m: float, r: float, seed: int, model=None, fallbac
 def kind_of(run: str) -> tuple[str, Path]:
     if run in ("control", "control-pinned", "s0", "s0-mix"):
         return run.split("-pinned")[0], S0_DIR
+    if run == "control-s0path":             # the stage's readings through S0's path (fix round 1, M1)
+        return "control-s0path", S0_DIR
     if RUN_RE.match(run):
         return "s1", S1_DIR
-    raise ValueError(f"{run!r}: not a spike run (control, s0, s0-mix, m<M>-r<R>-s<SEED>)")
+    if run.endswith(UNSURE_SUFFIX) and RUN_RE.match(run[:-len(UNSURE_SUFFIX)]):
+        return "s1u", S1_DIR
+    raise ValueError(f"{run!r}: not a spike run (control, s0, s0-mix, m<M>-r<R>-s<SEED>[-u])")
 
 
 def solver_hashes() -> dict:
@@ -433,7 +526,7 @@ def quarter_energy(run: str, q: str):
     row's minimum; the walls' odds), and its code names."""
     C = city()
     odds = wall_odds(q)
-    options = load_options(q, runs.SOLVE_DIR)
+    options = load_options(q, baseline_dir())
     kind, _ = kind_of(run)
     voc = vocabulary()
     if kind == "control":
@@ -444,6 +537,10 @@ def quarter_energy(run: str, q: str):
         rd = readings_from(q, degrade(stage_raw(q), q, float(g["m"]) / 100, float(g["r"]) / 100, int(g["seed"]))[0],
                            voc)
         U, _, _ = E.label_costs(C.n, len(rd.names), rd, options, 1.0)
+    elif kind == "s1u":
+        g = RUN_RE.match(run[:-len(UNSURE_SUFFIX)])
+        charges, rd, _ = unsure_problem(q, float(g["m"]) / 100, float(g["r"]) / 100, int(g["seed"]))
+        U, _, _ = label_costs_from(C.n, len(rd.names), charges, options, 1.0)
     else:
         charges, rd, _ = s0_problem(q, mixed=(kind == "s0-mix"))
         U, _, _ = label_costs_from(C.n, len(rd.names), charges, options, 1.0)
@@ -459,7 +556,7 @@ def solve_tie_break() -> float:
 
 def answer_index(run: str, q: str, names: list) -> np.ndarray:
     """A run's quarter-q solve (the whole city) as indices into `names` (a code at its first name)."""
-    folder = runs.SOLVE_DIR if run == runs.FINAL_RUN else kind_of(run)[1]
+    folder = baseline_dir() if run == runs.FINAL_RUN else kind_of(run)[1]
     Z = np.load(run_file(run, f"-{q}", folder), allow_pickle=True)
     first = {}
     for i, n in enumerate(names):
@@ -469,8 +566,10 @@ def answer_index(run: str, q: str, names: list) -> np.ndarray:
 
 def search_gap(run: str, q: str) -> dict:
     """The run's own quarter-q energy at final's quarter-q answer, minus at the run's answer.  Below 0: the run's
-    search stopped at an answer worse, by its own energy, than final's map, which its readings would have kept; the
-    gap is then the search's doing, not the readings'.  Written to runs/{run}-{q}.gap.json."""
+    search stopped above a map (final's) that its own energy prefers.  That is all it shows: it splits no wrong lots
+    between the search and the readings, and says nothing of where the run's own optimum lies.  It can only show a
+    miss where final's map is a low-energy answer under the run's readings, as it stays when labels are dropped but
+    not when they are misread.  Written to runs/{run}-{q}.gap.json."""
     C = city()
     U, odds, names = quarter_energy(run, q)
     x, xf = answer_index(run, q, names), answer_index(runs.FINAL_RUN, q, names)
@@ -505,17 +604,25 @@ def solve_one(run: str, q: str) -> dict:
         g = RUN_RE.match(run)
         raw, info = degrade(stage_raw(q), q, float(g["m"]) / 100, float(g["r"]) / 100, int(g["seed"]))
         rd = readings_from(q, raw, voc)
+    elif kind == "s1u":
+        g = RUN_RE.match(run[:-len(UNSURE_SUFFIX)])
+        charges, rd, info = unsure_problem(q, float(g["m"]) / 100, float(g["r"]) / 100, int(g["seed"]))
+        U, n_labels, n_terms = label_costs_from(C.n, len(rd.names), charges, load_options(q, baseline_dir()), 1.0)
+    elif kind == "control-s0path":
+        rd = readings_from(q, stage_raw(q), voc)
+        charges = [(lab, far, own, function_P(T, len(rd.names))) for lab, far, own, T in groups_of(rd)]
+        U, n_labels, n_terms = label_costs_from(C.n, len(rd.names), charges, load_options(q, baseline_dir()), 1.0)
     else:
         charges, rd, info["no_record"] = s0_problem(q, mixed=(kind == "s0-mix"))
         info["charges"] = len(charges)
-        options = load_options(q, runs.SOLVE_DIR)
+        options = load_options(q, baseline_dir())
         U, n_labels, n_terms = label_costs_from(C.n, len(rd.names), charges, options, 1.0)
     index = {}
     for i, n in enumerate(rd.names):
         index.setdefault(n, i)
     table_codes = np.array([index.get(canon(c), -1) if k else -1 for c, k in zip(C.table, C.known)])
     log(f"readings {len(rd.lot):,} on {len(np.unique(rd.lot)):,} lots")
-    options = load_options(q, runs.SOLVE_DIR)
+    options = load_options(q, baseline_dir())
     t0 = time.perf_counter()
     if U is None:
         p, Uused = solve.solve_joint(C.n, C.a, C.b, odds, rd, options, table_codes=table_codes, log=log)
@@ -559,7 +666,8 @@ def in_progress(run: str, q: str) -> bool:
     return subprocess.run(["pgrep", "-f", f"reader_spike.py solve {run} {q}$"], capture_output=True).returncode == 0
 
 
-def run_jobs(jobs: list[tuple[str, str]], max_procs: int = MAX_PROCS, load_start: float = LOAD_START) -> None:
+def run_jobs(jobs: list[tuple[str, str]], max_procs: int = MAX_PROCS, load_start: float = LOAD_START,
+             min_procs: int = MIN_PROCS) -> None:
     """Solve each (run, q) not yet solved nor being solved, one pinned process each (`pinned_environment`), at most
     max_procs at once on the machine (counting every runner's solves), one start per START_EVERY s, while the
     1-minute load is below load_start or fewer than MIN_PROCS spike solves run (other agents' load must not stop
@@ -580,7 +688,7 @@ def run_jobs(jobs: list[tuple[str, str]], max_procs: int = MAX_PROCS, load_start
                 print(f"[{time.time() - t0:6.0f} s] {j[0]} {j[1]} {'done' if p.returncode == 0 else 'FAILED'} "
                       f"(load {os.getloadavg()[0]:.1f}, {len(live)} running, {len(todo)} waiting)", flush=True)
         running = max(len(live), solving())
-        if todo and running < max_procs and (os.getloadavg()[0] < load_start or running < MIN_PROCS):
+        if todo and running < max_procs and (os.getloadavg()[0] < load_start or running < min_procs):
             j = todo.pop(0)
             if done(*j) or in_progress(*j):                 # another runner took it meanwhile
                 continue
@@ -606,7 +714,7 @@ def run_jobs(jobs: list[tuple[str, str]], max_procs: int = MAX_PROCS, load_start
 def codes_of(run: str) -> np.ndarray:
     """A run's code per lot: 'final' (the stage's) or a spike run's join."""
     if run == runs.FINAL_RUN:
-        return load_run(run, runs.SOLVE_DIR)
+        return load_run(run, baseline_dir())
     return load_run(run, kind_of(run)[1])
 
 
@@ -700,6 +808,57 @@ def interval(x: np.ndarray) -> list[float]:
     return [float(np.percentile(x, 2.5)), float(np.percentile(x, 97.5))]
 
 
+# --- honest intervals for wrong lots (fix round 1, I1) ---------------------------------------------------------------
+
+CLUSTER_SEED = BOOT_SEED + 2
+
+
+def changed_sets_of(codes: np.ndarray, base: np.ndarray) -> list[np.ndarray]:
+    """The lots whose code differs between two answers, joined through any border into connected sets (one search
+    outcome each): the units a wrong-lot difference is made of (a lot with the same code in both is wrong in both
+    or in neither)."""
+    C = city()
+    diff = codes != base
+    m = diff[C.a] & diff[C.b]
+    _, comp = connected_components(coo_matrix((np.ones(int(m.sum())), (C.a[m], C.b[m])), shape=(C.n, C.n)),
+                                   directed=False)
+    ix = np.flatnonzero(diff)
+    order = np.argsort(comp[ix], kind="stable")
+    return [g for g in np.split(ix[order], np.flatnonzero(np.diff(comp[ix][order])) + 1) if len(g)]
+
+
+def set_deltas(codes: np.ndarray, base: np.ndarray, keep: np.ndarray | None = None) -> np.ndarray:
+    """Per changed set (`changed_sets_of`): scored wrong lots of `codes` minus of `base`, counting only the lots of
+    `keep` (all when None)."""
+    C = city()
+    w = C.scored & (codes != C.table)
+    wb = C.scored & (base != C.table)
+    k = np.ones(C.n, bool) if keep is None else keep
+    return np.array([int((w[g] & k[g]).sum()) - int((wb[g] & k[g]).sum()) for g in changed_sets_of(codes, base)])
+
+
+def cluster_interval(deltas: np.ndarray, draws: int = BOOT_DRAWS, seed: int = CLUSTER_SEED) -> list[float]:
+    """95% percentile interval of a wrong-lot difference with its changed sets resampled with replacement (one set:
+    one search outcome, so a district recoloured by one outcome counts once, not as many independent blocks).  It
+    covers which outcomes happened, given the run; not the seed (which labels were degraded), which only more runs
+    measure."""
+    if not len(deltas):
+        return [0.0, 0.0]
+    rng = np.random.default_rng(seed)
+    sums = np.array([deltas[rng.integers(0, len(deltas), len(deltas))].sum() for _ in range(draws)])
+    return interval(sums)
+
+
+def t_interval(values) -> list[float]:
+    """The mean's 95% t interval over independent replicates (seeds): mean ± t(0.975, n - 1) sd / sqrt(n)."""
+    from scipy.stats import t
+    v = np.asarray(values, float)
+    if len(v) < 2:
+        return [float("nan"), float("nan")]
+    h = float(t.ppf(0.975, len(v) - 1) * v.std(ddof=1) / np.sqrt(len(v)))
+    return [float(v.mean() - h), float(v.mean() + h)]
+
+
 def paired(W: np.ndarray, s_run: dict, s_base: dict) -> dict:
     """run - base per draw (the same resample for both): the 95% percentile interval of each difference, and each
     run's own interval."""
@@ -722,7 +881,7 @@ def check() -> None:
                 raise AssertionError(f"{q}: readings_from's {f} differs")
         if a.names != b.names:
             raise AssertionError(f"{q}: names differ")
-        options = load_options(q, runs.SOLVE_DIR)
+        options = load_options(q, baseline_dir())
         K = len(b.names)
         U1, n1, t1 = E.label_costs(C.n, K, b, options, 1.0)
         U2, n2, t2 = label_costs_from(C.n, K, [(lab, far, own, function_P(T, K)) for lab, far, own, T in
@@ -760,6 +919,19 @@ def check() -> None:
     if got != want:
         raise AssertionError(f"block split {got} != measures {want}")
     print(f"blocks: {B.nb:,}; the split sums to final's wrong lots, incidents and labels right {want}")
+    labs = pickle.load(open(INPUTS / "labs.pkl", "rb"))
+    pr = load_prints()
+    bad = [lab.index for lab in labs if lab.index >= 0 and (lab.sheet != pr["sheet"].iloc[lab.index] or
+                                                             tuple(lab.point) != (float(pr["page_x"].iloc[lab.index]),
+                                                                                  float(pr["page_y"].iloc[lab.index])))]
+    if bad:
+        raise AssertionError(f"code-reader labels whose sheet or point differ from prints.parquet: {bad[:5]}")
+    print(f"labs.pkl: every label's sheet and point equal prints.parquet's row ({len(labs):,} labels)")
+    final = codes_of(runs.FINAL_RUN)
+    d = set_deltas(codes_of("s0"), final) if done("s0", "se") else np.zeros(0)
+    if len(d) and int(d.sum()) != six("s0")["wrong_lots"] - six(runs.FINAL_RUN)["wrong_lots"]:
+        raise AssertionError("the changed sets' wrong-lot differences don't sum to the run's")
+    print(f"changed sets: s0's {len(d)} sets sum to its wrong-lot difference ({int(d.sum()):+,})")
 
 
 if __name__ == "__main__":

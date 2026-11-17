@@ -62,18 +62,29 @@ def check_control() -> dict:
     out = {"quarters_equal": {}}
     for q in R.QUARTERS:
         a = load_run_q("control", q, R.S0_DIR)
-        b = load_run_q(runs.FINAL_RUN, q, runs.SOLVE_DIR)
+        b = load_run_q(runs.FINAL_RUN, q, R.baseline_dir())
         out["quarters_equal"][q] = bool(np.array_equal(a, b))
     out["join_equal"] = bool(np.array_equal(R.codes_of("control"), R.codes_of(runs.FINAL_RUN)))
-    rep = json.loads((runs.SOLVE_DIR / "report.json").read_text())["measures"]
+    rep = json.loads((R.baseline_dir() / "report.json").read_text())["measures"]
     every = R.six("control")
-    left = report_mod.six_measures(R.codes_of("control"), data_error_lots(runs.SOLVE_DIR))
+    left = report_mod.six_measures(R.codes_of("control"), data_error_lots(R.baseline_dir()))
     out["every_lot_equal"] = every == rep["every_lot"]
     out["left_out_equal"] = left == rep["data_errors_left_out"]
     out["every_lot"] = {k: every[k] for k in KEY}
     if not (all(out["quarters_equal"].values()) and out["join_equal"] and out["every_lot_equal"]
             and out["left_out_equal"]):
         raise SystemExit(f"the control does not reproduce final: {out}")
+    return out
+
+
+def check_control_s0path() -> dict:
+    """The control through S0's path (`control-s0path`): every quarter and the join against final, lot for lot."""
+    out = {"quarters_equal": {q: bool(np.array_equal(load_run_q("control-s0path", q, R.S0_DIR),
+                                                     load_run_q(runs.FINAL_RUN, q, R.baseline_dir())))
+                              for q in R.QUARTERS}}
+    out["join_equal"] = bool(np.array_equal(R.codes_of("control-s0path"), R.codes_of(runs.FINAL_RUN)))
+    if not (all(out["quarters_equal"].values()) and out["join_equal"]):
+        raise SystemExit(f"the control through S0's path does not reproduce final: {out}")
     return out
 
 
@@ -230,16 +241,16 @@ class Energies:
         from sfzmaps.solver.placement import load_options
         C = city()
         odds = wall_odds(q)
-        options = load_options(q, runs.SOLVE_DIR)
+        options = load_options(q, R.baseline_dir())
         if run == runs.FINAL_RUN:
             rd = labels_mod.readings(q, R.vocabulary())
             U, _, _ = E.label_costs(C.n, len(rd.names), rd, options, 1.0)
-            folder = runs.SOLVE_DIR
+            folder = R.baseline_dir()
         else:
             charges, rd, _ = R.s0_problem(q, mixed=(run == "s0-mix"))
             U, _, _ = R.label_costs_from(C.n, len(rd.names), charges, options, 1.0)
             folder = R.S0_DIR
-        U = U + 1e-4 * E.path_costs(C.n, len(rd.names), C.a, C.b, odds, rd)    # solve_joint's tie-break
+        U = U + R.solve_tie_break() * E.path_costs(C.n, len(rd.names), C.a, C.b, odds, rd)    # its tie-break
         U -= U.min(1, keepdims=True)
         Z = np.load(run_file(run, f"-{q}", folder), allow_pickle=True)
         first = {}
@@ -251,10 +262,11 @@ class Energies:
 
 
 def energy_test(cs: dict, E_: Energies, run: str = "s0") -> dict:
-    """For a changed set (its lots in its quarter q): s0's energy of s0's quarter-q answer with the set's lots given
-    final's codes, minus that of s0's own answer (below 0: s0's energy prefers final's codes there, so s0's search
-    missed them: the search, not the reading); and final's energy of final's answer with s0's codes there, minus
-    final's (below 0: final's search missed s0's answer)."""
+    """For a changed set (its lots in its quarter q): the run's energy of its quarter-q answer with the set's lots
+    given final's codes, minus that of its own answer (below 0: the run's energy prefers final's codes on the whole
+    set, so its search stopped above them there); and final's energy of final's answer with the run's codes there,
+    minus final's (below 0: final's search stopped above the run's codes).  A whole-set swap: it can't tell a part
+    of a set from the rest, so a set counted "readings" may still hold a search miss."""
     from sfzmaps.solver import energy as E
     C = city()
     q = cs["quarter"]
@@ -268,6 +280,58 @@ def energy_test(cs: dict, E_: Energies, run: str = "s0") -> dict:
                                                         - E.energy(Us, C.a, C.b, odds, xs, 1.0), 3),
             "final_energy_of_s0_codes_minus_own": round(E.energy(Uf, C.a, C.b, odds, yf, 1.0)
                                                         - E.energy(Uf, C.a, C.b, odds, xf, 1.0), 3)}
+
+
+def symmetric_change(run: str, E_: "Energies") -> dict:
+    """The wrong-lot change with both runs' search misses left out (fix round 1, I5): every changed set between the
+    run and final in which the run's own energy prefers final's codes (the run's search missed them) or final's
+    energy prefers the run's codes (final's search did), by `energy_test` on the set's lots in its main quarter.
+    The change over the other sets, and its changed-set interval (`reader_spike.cluster_interval`)."""
+    kept, dropped = [], {"run_search": [0, 0], "final_search": [0, 0]}
+    for cs in changed_sets(run):
+        if cs["added_wrong"] == 0:
+            continue
+        et = energy_test(cs, E_, run)
+        if et["s0_energy_of_final_codes_minus_own"] < 0:
+            dropped["run_search"][0] += 1
+            dropped["run_search"][1] += cs["added_wrong"]
+        elif et["final_energy_of_s0_codes_minus_own"] < 0:
+            dropped["final_search"][0] += 1
+            dropped["final_search"][1] += cs["added_wrong"]
+        else:
+            kept.append(cs["added_wrong"])
+    kept = np.array(kept, int)
+    return {"change": int(kept.sum()), "changed_set_interval": R.cluster_interval(kept), "sets_kept": int(len(kept)),
+            "dropped": {k: {"sets": v[0], "wrong_lots_change": v[1]} for k, v in dropped.items()}}
+
+
+def fix2_overlap() -> dict:
+    """The reader's fix round 2 (c626e46, aimed at the wide-print "other" failure) against the records S0 uses
+    (df61853's): on the labels both scored (fix 2's partial `full_fix2held.records`, solver labels only), how many
+    of fix 1's none/other tops fix 2 reads as a code, and whether it scored S0's worst-set prints."""
+    from sfzmaps.solver.codereader import posterior as P
+    prior = P.Prior.load(R.INPUTS / R.PRIOR)
+
+    def tops(name):
+        out = {}
+        with open(R.INPUTS / name, "rb") as fh:
+            while True:
+                try:
+                    rec = pickle.load(fh)
+                except EOFError:
+                    break
+                if rec[0][0] >= 0:
+                    p = P.posterior_of(rec[3], prior, P.Constants())
+                    out[rec[0][0]] = max(p, key=p.get)
+        return out
+
+    f1, f2 = tops("full_fix1held.records"), tops("full_fix2held.records")
+    shared = sorted(set(f1) & set(f2))
+    no1 = [k for k in shared if f1[k] in ("none", "other")]
+    return {"shared_labels": len(shared), "fix1_none_other": len(no1),
+            "fix2_reads_a_code_of_those": sum(f2[k] not in ("none", "other") for k in no1),
+            "fix2_none_other": sum(f2[k] in ("none", "other") for k in shared),
+            "fix2_scored": {str(i): i in f2 for i in (1861, 1440)}}
 
 
 # --- where s0 is worse -----------------------------------------------------------------------------------------------
@@ -320,6 +384,7 @@ def picture(cs: dict, rank: int, post: dict, tops: dict, out: Path, run: str = "
     ink = C.scan()[r0:r1, c0:c1]
     L, G = lot[r0:r1, c0:c1], grown[r0:r1, c0:c1]
     H, W = L.shape
+    fs = max(1.0, W * S / 1600)          # label text grows with the crop, so it stays readable when shown whole
     keys = a.astype(np.int64) * C.n + b
     pair_px = np.full((H, W), -1, np.int64)
     for gA, gB, s1, s2 in ((G[:, :-1], G[:, 1:], (slice(None), slice(0, W - 1)), (slice(None), slice(1, W))),
@@ -365,9 +430,11 @@ def picture(cs: dict, rank: int, post: dict, tops: dict, out: Path, run: str = "
         if not (st and st[0] == rt):
             differ.append({"print": j, "stage": st[0] if st else None, "trust": round(st[1], 3) if st else None,
                            "reader": rt, "mass": round(float(p[top]), 3)})
-        cv2.circle(img, (x, y), 4, colour, -1)
+        cv2.circle(img, (x, y), max(4, int(4 * fs)), colour, -1)
         for col, th in (((255, 255, 255), 3), (colour, 1)):
-            cv2.putText(img, txt, (x + 6, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, th, cv2.LINE_AA)
+            cv2.putText(img, txt, (x + 6, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.45 * fs, col, th * max(1, int(fs)),
+                        cv2.LINE_AA)
+    differ_text = "; ".join(f"{d['print']}: {d['stage']} {d['trust']} | {d['reader']} {d['mass']}" for d in differ)
     lines = [(f"S0 {tag} #{rank}: {cs['n']} changed lots (quarter {cs['quarter']}, blocks "
               f"{', '.join(cs['blocks'])}); wrong: final {cs['wrong_base']}, S0 {cs['wrong_run']} "
               f"({cs['added_wrong']:+}); mostly table {cs['table']}, final {cs['base_code']}, S0 {cs['run_code']}",
@@ -378,13 +445,18 @@ def picture(cs: dict, rank: int, post: dict, tops: dict, out: Path, run: str = "
              ("S0's border (thin, on top)", RUN),
              ("dot + text: a label: the stage's top reading and trust | the template reader's top and its mass; "
               "red where they differ", None)]
-    strip = np.full((22 * len(lines) + 8, img.shape[1], 3), 255, np.uint8)
+    for i in range(0, len(differ_text), 150):           # the differing labels, readable at any crop size
+        lines.append(((("labels that differ (print: stage | reader): " if i == 0 else "  ")
+                       + differ_text[i:i + 150]), None))
+    lh = int(22 * fs)                                   # the caption grows with the picture, as the labels do
+    strip = np.full((lh * len(lines) + int(8 * fs), img.shape[1], 3), 255, np.uint8)
     for i, (text, col) in enumerate(lines):
-        yy, xx = 20 + 22 * i, 6
+        yy, xx = int(20 * fs) + lh * i, 6
         if col is not None:
-            cv2.rectangle(strip, (xx, yy - 12), (xx + 22, yy + 2), col, -1)
-            xx += 30
-        cv2.putText(strip, text, (xx, yy), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1, cv2.LINE_AA)
+            cv2.rectangle(strip, (xx, yy - int(12 * fs)), (xx + int(22 * fs), yy + 2), col, -1)
+            xx += int(30 * fs)
+        cv2.putText(strip, text, (xx, yy), cv2.FONT_HERSHEY_SIMPLEX, 0.5 * fs, (0, 0, 0), max(1, int(fs)),
+                    cv2.LINE_AA)
     img = np.vstack([strip, img])
     out.mkdir(parents=True, exist_ok=True)
     f = out / f"s0_{tag}_{rank}.png"
@@ -400,6 +472,7 @@ def fmt(k, v):
 
 def build() -> dict:
     ctl = check_control()
+    ctl["through_s0_path"] = check_control_s0path()
     post, temperature = R.posteriors()
     B = R.Blocks()
     W = B.weights()
@@ -426,6 +499,11 @@ def build() -> dict:
                                                               if v["hashes_after"] != v["solver_sha256"])}
         if run != "control":
             entry["vs_final"] = R.paired(W, B.stats(R.codes_of(run)), s_final)
+            final_codes = R.codes_of(runs.FINAL_RUN)
+            for k, keep in (("wrong_lots", None), ("wrong_lots_outside_1", ~R.final_largest_incident())):
+                d = R.set_deltas(R.codes_of(run), final_codes, keep)
+                entry["vs_final"][k]["changed_set_interval"] = R.cluster_interval(d)
+                entry["vs_final"][k]["changed_sets"] = int(len(d))
         res["runs"][run] = entry
     res["reader"] = reader_on_answers(post)
     res["reader_none_other_by_size"] = none_other_by_size(post)
@@ -459,6 +537,12 @@ def build() -> dict:
         a["sets"] += 1
         a["wrong_lots"] += abs(cs["added_wrong"])
     res["attribution"] = att
+    res["symmetric"] = {r: symmetric_change(r, E_) for r in ("s0", "s0-mix")}
+    w2 = sets[1]
+    sub = w2["lots"][(R.codes_of(runs.FINAL_RUN)[w2["lots"]] == "RM-1")]
+    res["worse_2_rm1_patch"] = {"lots": int(len(sub)), "s0_codes": dict(Counter(R.codes_of("s0")[sub].tolist())),
+                                "energy_test": energy_test({"quarter": w2["quarter"], "lots": sub}, E_)}
+    res["fix2_overlap"] = fix2_overlap()
     res["changed_sets"]["net_without_largest_better"] = (res["changed_sets"]["added_by_worse"]
                                                          - res["changed_sets"]["removed_by_better"]
                                                          - better[0]["added_wrong"])
@@ -474,11 +558,20 @@ def markdown(res: dict) -> str:
            "**Caveat: the reader's letter shapes and priors were learned from training labels across the whole city "
            "(the owner's answered labels and their blocks held out), not held out by quarter as the trust fit is.** "
            "The labels themselves (where the prints are) still come from the saved reads' boxes and points.", "",
+           "**\"final\" here is the stage's solve at 44dffb1** (ed4cf98's search, the search every spike solve "
+           "runs): the stage was rebuilt at 7cce81a with the compound fusion move on (4,543 wrong lots), so its copy "
+           "from the DVC cache in final-44dffb1/, each file checked by md5, is the baseline (`reader_spike."
+           "baseline_dir`).", "",
            "## The control", "",
            f"The stage's readings through this script's path give `final` exactly: each quarter's solve lot for lot "
            f"({', '.join(f'{q} {v}' for q, v in res['control']['quarters_equal'].items())}), the join "
            f"({res['control']['join_equal']}), the six measures every lot ({res['control']['every_lot_equal']}) and "
            f"with final's data errors left out ({res['control']['left_out_equal']}).", "",
+           "Through S0's own path too (fix round 1): the stage's P from `function_P`, charged by "
+           "`label_costs_from`, handed to `solve_joint` by `label_costs_given`, the stage's readings for the "
+           "tie-break's paths (`control-s0path`, on the pinned copy): each quarter equals final lot for lot "
+           f"({', '.join(f'{q} {v}' for q, v in res['control']['through_s0_path']['quarters_equal'].items())}), "
+           f"the join ({res['control']['through_s0_path']['join_equal']}).", "",
            "## The six measures (every lot scored)", "",
            "| Measure | final | control | S0 (posterior direct) | S0-mix (function's mixing) |", "|---|---|---|---|---|"]
     for k in KEY:
@@ -489,33 +582,54 @@ def markdown(res: dict) -> str:
     out += ["", "Paired block bootstrap (blocks resampled, the same draw for both runs; "
             f"{res['bootstrap']['draws']:,} draws over {res['bootstrap']['blocks']:,} blocks, seed "
             f"{res['bootstrap']['seed']}); 95% intervals:", "",
-            "| Measure | run | run − final | interval of the difference | run's own interval |", "|---|---|---|---|---|"]
+            "| Measure | run | run − final | blocks' interval (lot sampling only) | changed sets' interval (wrong lots) "
+            "| run's own interval (blocks) |", "|---|---|---|---|---|---|"]
     names = {"wrong_lots": "wrong lots", "wrong_lots_outside_1": "wrong lots outside final's largest incident",
              "incidents": "incidents", "labels_right": "labels right"}
     for r in ("s0", "s0-mix"):
         for k, nm in names.items():
             v = runs_[r]["vs_final"][k]
             d = runs_[r]["measures"][k] - f[k]
+            ci = v.get("changed_set_interval")
+            cs_txt = f"[{ci[0]:+,.0f}, {ci[1]:+,.0f}] ({v['changed_sets']} sets)" if ci else "–"
             if k == "labels_right":
                 out.append(f"| {nm} | {r} | {d * 100:+.2f} pt | [{v['diff_interval'][0] * 100:+.2f}, "
-                           f"{v['diff_interval'][1] * 100:+.2f}] pt | [{v['run_interval'][0]:.2%}, "
+                           f"{v['diff_interval'][1] * 100:+.2f}] pt | – | [{v['run_interval'][0]:.2%}, "
                            f"{v['run_interval'][1]:.2%}] |")
             else:
                 out.append(f"| {nm} | {r} | {d:+,} | [{v['diff_interval'][0]:+,.0f}, {v['diff_interval'][1]:+,.0f}]"
-                           f" | [{v['run_interval'][0]:,.0f}, {v['run_interval'][1]:,.0f}] |")
+                           f" | {cs_txt} | [{v['run_interval'][0]:,.0f}, {v['run_interval'][1]:,.0f}] |")
     rd = res["reader"]
     rt = rd["rates_on_charged_answered"]
     base_w = runs_["s0"]["vs_final"]["wrong_lots"]["base_interval"]
     out += ["", f"Final's own block-bootstrap interval: wrong lots [{base_w[0]:,.0f}, {base_w[1]:,.0f}], labels right "
             f"[{runs_['s0']['vs_final']['labels_right']['base_interval'][0]:.2%}, "
             f"{runs_['s0']['vs_final']['labels_right']['base_interval'][1]:.2%}].", "",
-            "The companion measure leaves out the 1,838 lots of final's largest incident (RH-1 coded RH-1(S), the "
-            "Mission-strip district behind Mission St), a fixed lot set taken from final for every run. That incident "
-            "is a search trap under final's readings (final's energy prefers the table's map there: big-incidents "
-            "note, #1); whether a run falls into it moves wrong lots by about 1,800 at once, so the companion shows "
-            "the rest.", "",
-            "Search check: each run's own energy at final's quarter answer minus at its own (below 0: its search "
-            "stopped above final's map): " + "; ".join(
+            "Two intervals for wrong lots. The blocks' resamples each block as independent, so it covers lot "
+            "sampling only: one search outcome recolours a district over many blocks. The changed sets' resamples "
+            "the connected sets of lots whose code differs from final (one search outcome each): it covers which "
+            "outcomes the run happened to reach. Neither covers the run-to-run noise of the search, which a single "
+            "S0 solve can't measure (S1's seeds show it is thousands of lots).", "",
+            "**The companion was chosen after seeing S0** (post hoc). It leaves out the 1,838 lots of final's largest "
+            "incident (RH-1 coded RH-1(S), the Mission-strip district behind Mission St), a lot set fixed from final "
+            "for every run: a search trap under final's readings (final's energy prefers the table's map there: "
+            "big-incidents note, #1), which S0 escapes. **It is one-sided:** it removes final's trap but keeps S0's "
+            "own search misses. S0's total change and the companion bracket it from the two sides.", "",
+            "The symmetric version leaves out both runs' search misses: every changed set where the run's own energy "
+            "prefers final's codes, or final's energy prefers the run's (the set test below):", "",
+            "| run | wrong lots − final, both runs' search misses left out | changed sets' interval | sets kept | "
+            "left out: the run's search misses (sets, wrong-lot change) | left out: final's (sets, change) |",
+            "|---|---|---|---|---|---|"]
+    for r in ("s0", "s0-mix"):
+        sy = res["symmetric"][r]
+        out.append(f"| {r} | {sy['change']:+,} | [{sy['changed_set_interval'][0]:+,.0f}, "
+                   f"{sy['changed_set_interval'][1]:+,.0f}] | {sy['sets_kept']} | "
+                   f"{sy['dropped']['run_search']['sets']}, {sy['dropped']['run_search']['wrong_lots_change']:+,} | "
+                   f"{sy['dropped']['final_search']['sets']}, {sy['dropped']['final_search']['wrong_lots_change']:+,} |")
+    out += ["",
+            "Search check (each run's own energy at final's quarter answer minus at its own; below 0 its search "
+            "stopped above a map its own energy prefers; it splits no wrong lots between the search and the "
+            "readings): " + "; ".join(
                 f"{r} " + ", ".join(f"{q} {v:+.1f}" for q, v in runs_[r]["search_gap"].items()) for r in RUNS) + ".",
             "",
             "## How the posterior enters the energy", "",
@@ -582,16 +696,27 @@ def markdown(res: dict) -> str:
     eb = res["better_sets"][0]["energy_test"]
     out += ["", "The energy columns (each run's own energy for its quarter, solve_joint's terms): S0's energy of S0's "
             "answer with the set given final's codes, minus S0's own; and final's energy of final's answer with S0's "
-            "codes there, minus final's own. A positive S0 column means S0's readings really prefer S0's worse map "
-            "there (the reader's doing); a negative one means S0's search missed a lower-energy answer (the "
-            "search's doing). For the largest better set: S0's column "
+            "codes there, minus final's own. A negative S0 column: S0's search stopped above final's codes on that "
+            "set, which its own energy prefers. A positive one: S0's energy prefers its own codes on the set as a "
+            "whole. It is a whole-set swap, so a part of a set can still be a search miss (worse #2 below): the "
+            "\"search\" counts are a lower bound. For the largest better set: S0's column "
             f"{eb['s0_energy_of_final_codes_minus_own']:+.1f}, final's {eb['final_energy_of_s0_codes_minus_own']:+.1f}.",
+            "", f"Worse #2's RM-1 patch alone (its {res['worse_2_rm1_patch']['lots']} lots that final codes RM-1; S0 "
+            f"codes them {', '.join(f'{c} {n}' for c, n in sorted(res['worse_2_rm1_patch']['s0_codes'].items()))}): "
+            f"S0's column {res['worse_2_rm1_patch']['energy_test']['s0_energy_of_final_codes_minus_own']:+.1f}, "
+            f"final's {res['worse_2_rm1_patch']['energy_test']['final_energy_of_s0_codes_minus_own']:+.1f}.",
+            "", "The reader's fix round 2 (c626e46, after these records: aimed at the wide-print \"other\" failure) "
+            f"scored only part of the labels: of the {res['fix2_overlap']['shared_labels']} labels both scored, fix 1 "
+            f"reads {res['fix2_overlap']['fix1_none_other']} as none/other and fix 2 reads "
+            f"{res['fix2_overlap']['fix2_reads_a_code_of_those']} of those as a code (fix 2 has "
+            f"{res['fix2_overlap']['fix2_none_other']} none/other tops there). It did not score prints 1861 and 1440 "
+            "(worse #1 and #2): whether it reads them is open.",
             "", "Over every changed set that moves wrong lots (the same test on each, its lots in its main quarter): "
             + "; ".join(f"S0 {side}: " + ", ".join(f"{c} {v['sets']} sets / {v['wrong_lots']:,} lots"
                                                   for c, v in sorted(d.items()))
                         for side, d in sorted(res["attribution"].items()))
-            + ". \"search\": S0's own energy is lower with final's codes there (S0's search missed it); \"readings\": "
-            "S0's energy prefers S0's codes there."]
+            + ". \"search\": S0's own energy is lower with final's codes on the set (S0's search stopped above "
+            "them); \"readings\": S0's energy prefers S0's codes on the set as a whole."]
     out += ["", "Each picture shows one changed set, to see why S0 coded it differently from final: grey page ink, "
             "the set's lots tinted orange, the table's district borders green (widest), final's blue, S0's red "
             "(thin, on top), and each label with the stage's top reading and trust | the reader's top and its mass "
