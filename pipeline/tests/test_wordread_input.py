@@ -167,3 +167,45 @@ def test_the_runs_change_one_setting_of_the_kept_recipe():
     assert run_input.item_recipe(kept, "full") == dataclasses.replace(kept, half_size=False)
     with pytest.raises(ValueError, match="item is one of"):
         run_input.item_recipe(kept, "rgb")
+
+
+# --- reading a page ----------------------------------------------------------------------------------------------
+
+def _net(**changes):
+    torch.manual_seed(0)
+    return train.build_net(train.Recipe(width=4, heads="words", **changes)).eval()
+
+
+def test_the_net_carries_the_recipes_input():
+    from sfzmaps.solver.textnet import predict
+    assert _net().input == "ink" and _net(input="grey").input == "grey"
+    assert predict._grey(_net(input="grey")) and not predict._grey(_net())
+
+
+@pytest.mark.parametrize("half", [False, True])
+def test_a_grey_net_reads_the_page_over_255_with_white_padding(half):
+    from sfzmaps.solver.textnet import predict
+    net = _net(input="grey", half_size=half)
+    page = _page()[:101, :93]                      # odd edges: padded to the network's multiple
+    got = predict.word_outputs(net, page, "cpu", tile=net.multiple * 4)
+    ph, pw = (-101) % net.multiple, (-93) % net.multiple
+    xin = torch.from_numpy(np.pad(page.astype(np.float32) / 255, ((0, ph), (0, pw)), constant_values=1.0))[None, None]
+    with torch.no_grad():
+        want = net(xin)[0, :, :101, :93]
+    # whole-page vs tiled-with-context passes agree where the tile sees the same reach (the page is one tile's context
+    # at the centre), so compare the centre
+    c = (slice(40, 60), slice(40, 50))
+    assert np.allclose(got.core[c], want[model.CORE].numpy()[c], atol=1e-4)
+    assert got.core.min() > predict.NOT_SCORED
+
+
+def test_a_grey_net_refuses_ink_and_an_ink_net_is_unchanged():
+    from sfzmaps.solver.textnet import predict
+    ink = _page() < grid.INK_BELOW
+    with pytest.raises(ValueError, match="uint8 grey levels"):
+        predict.chance(_net(input="grey"), ink, "cpu")
+    net = _net()
+    a = predict.chance(net, ink, "cpu")
+    net.input = "ink"
+    assert np.array_equal(a, predict.chance(net, ink, "cpu"))
+    assert not predict.chance(net, np.zeros_like(ink), "cpu").any()          # an ink-free page is skipped, as ever

@@ -14,6 +14,10 @@ same numbers as `chance`), the kind (`data.KINDS`: the softmax of the four kind 
 from the logits in float32) and the reading direction (the direction output scaled to unit length, float16 cosine and
 sine).  The px of a tile not scored get chance 0, kind NO_KIND (255), probabilities 0 and direction (0, 0).
 
+A network whose recipe has `input="grey"` (`train.build_net` sets `net.input`) is given the page's grey levels (uint8)
+in the `ink` argument of `chance`, `outputs` and `word_outputs`: over 255 as training gives them, a tile's padding white
+paper, and no tile skipped for having no ink (a grey page has none to look for).
+
 `word_outputs` is for a network with the word heads (`train.Recipe(heads="words")`, `model.WORD_OUTPUTS` channels):
 the arrays `wordread.words.core_words` takes (`WordOutputs`), the page's tiles stitched into one page.  Each tile is
 seen with `context` px of page around it, the network's whole reach (its receptive field), not PAD: so every px kept
@@ -51,6 +55,25 @@ def load_model(f: Path, device: str) -> model.TextNet:
     return net.to(device).eval()
 
 
+def _grey(net: model.TextNet) -> bool:
+    """Whether the network reads the page's grey levels (its recipe's `input`), not the 1-bit ink."""
+    return getattr(net, "input", "ink") == "grey"
+
+
+def _tile_input(net: model.TextNet, win: np.ndarray, device: str) -> torch.Tensor:
+    """A tile's input (1, 1, h, w) on `device`, padded to the network's `multiple`.  An ink network's is the ink
+    (bool) as 1 and 0, padded with paper (0), as ever.  A grey network's is the page's grey levels (uint8: ValueError
+    otherwise) over 255, as training gives them (`data.crop_targets(..., grey=True)`), padded with white paper (1)."""
+    ph, pw = (-win.shape[0]) % net.multiple, (-win.shape[1]) % net.multiple
+    if _grey(net):
+        if win.dtype != np.uint8:
+            raise ValueError(f"a network trained on grey levels reads the page's uint8 grey levels, not {win.dtype}")
+        arr = np.pad(win.astype(np.float32) / 255, ((0, ph), (0, pw)), constant_values=1.0)
+    else:
+        arr = np.pad(win, ((0, ph), (0, pw))).astype(np.float32)
+    return torch.from_numpy(arr).to(device)[None, None]
+
+
 @torch.no_grad()
 def chance(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndarray | None = None) -> np.ndarray:
     """The chance of text at every px of a page's ink (bool), as uint8 0..255.  `only` (bool, the page's shape): the
@@ -67,10 +90,9 @@ def chance(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndarray | 
             y0, x0 = max(y - PAD, 0), max(x - PAD, 0)
             y1, x1 = min(y + TILE + PAD, h), min(x + TILE + PAD, w)
             win = ink[y0:y1, x0:x1]
-            if not win.any():
+            if not _grey(net) and not win.any():
                 continue
-            ph, pw = (-win.shape[0]) % net.multiple, (-win.shape[1]) % net.multiple
-            xin = torch.from_numpy(np.pad(win, ((0, ph), (0, pw))).astype(np.float32)).to(device)[None, None]
+            xin = _tile_input(net, win, device)
             p = torch.sigmoid(net(xin)[0, 0, :win.shape[0], :win.shape[1]]).cpu().numpy()
             cy, cx = y - y0, x - x0
             th, tw = min(TILE, h - y), min(TILE, w - x)
@@ -103,10 +125,9 @@ def outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndarray |
             y0, x0 = max(y - PAD, 0), max(x - PAD, 0)
             y1, x1 = min(y + TILE + PAD, h), min(x + TILE + PAD, w)
             win = ink[y0:y1, x0:x1]
-            if not win.any():
+            if not _grey(net) and not win.any():
                 continue
-            ph, pw = (-win.shape[0]) % net.multiple, (-win.shape[1]) % net.multiple
-            xin = torch.from_numpy(np.pad(win, ((0, ph), (0, pw))).astype(np.float32)).to(device)[None, None]
+            xin = _tile_input(net, win, device)
             o = net(xin)[0]
             if o.shape[0] != model.OUTPUTS:
                 raise ValueError(f"the network has {o.shape[0]} output, not {model.OUTPUTS}: it was trained for text "
@@ -183,8 +204,7 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
             y0, x0 = max(y - pad, 0), max(x - pad, 0)
             y1, x1 = min(y + tile + pad, h), min(x + tile + pad, w)
             win = ink[y0:y1, x0:x1]
-            ph, pw = (-win.shape[0]) % net.multiple, (-win.shape[1]) % net.multiple
-            xin = torch.from_numpy(np.pad(win, ((0, ph), (0, pw))).astype(np.float32)).to(device)[None, None]
+            xin = _tile_input(net, win, device)
             o = net(xin)[0]
             if o.shape[0] != model.WORD_OUTPUTS:
                 raise ValueError(f"the network has {o.shape[0]} outputs, not {model.WORD_OUTPUTS}: it has no word "

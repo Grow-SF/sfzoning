@@ -209,9 +209,12 @@ class Recipe:
 
 
 def build_net(recipe: Recipe) -> model.TextNet:
-    """The (untrained) network a recipe names: its width, size, outputs (`model.HEAD_OUTPUTS`) and decoder."""
-    return model.TextNet(width=recipe.width, outputs=model.HEAD_OUTPUTS[recipe.heads],
-                         half_size=recipe.half_size, decoder=recipe.decoder)
+    """The (untrained) network a recipe names: its width, size, outputs (`model.HEAD_OUTPUTS`) and decoder; its
+    `input` attribute is the recipe's (what `predict` feeds it: the ink, or the page's grey levels)."""
+    net = model.TextNet(width=recipe.width, outputs=model.HEAD_OUTPUTS[recipe.heads],
+                        half_size=recipe.half_size, decoder=recipe.decoder)
+    net.input = recipe.input
+    return net
 
 
 def default_device() -> str:
