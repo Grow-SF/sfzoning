@@ -207,7 +207,8 @@ def box_numbers(boxes: pd.DataFrame, terra: pd.DataFrame, reads: dict, iou=(0.5,
     `matched` (a box is matched to its best word only, and only when it meets it at the IoU: a merged box matches one
     word; a Terra word is matched when some box is), `missed` (the rest, each counted once) with `missed_reasons` (a
     Counter), `ours_unmatched_text` and `ours_unmatched_none` (boxes matched to no word, read as text or as no text),
-    `matched_to_missed` (of those, the boxes that meet a missed word at IoU >= SPLIT_PART), and `by_quarter` (the same
+    `ours_near_missed` (of those, the boxes that meet a missed word at IoU >= SPLIT_PART), `matched_to_missed` (the
+    plain ratio matched / missed; None when none is missed), and `by_quarter` (the same
     by quarter name, from the `quarter` columns of both).
 
     The reasons are "split", "merged", "none" and "other" (`geometric_reason`); with `reason_fn(t, ti, bj, iou,
@@ -238,7 +239,9 @@ def box_numbers(boxes: pd.DataFrame, terra: pd.DataFrame, reads: dict, iou=(0.5,
                     "missed_reasons": Counter(r for t, r in reasons.items() if wsel[t]),
                     "ours_unmatched_text": int((~won & bsel & is_text).sum()),
                     "ours_unmatched_none": int((~won & bsel & ~is_text).sum()),
-                    "matched_to_missed": int((~won & bsel & near_missed).sum())}
+                    "ours_near_missed": int((~won & bsel & near_missed).sum()),
+                    "matched_to_missed": (round(float((matched & wsel).sum()) / float((~matched & wsel).sum()), 4)
+                                          if (~matched & wsel).any() else None)}
 
         res = count(np.ones(len(terra), bool), np.ones(nb, bool))
         if tq is not None and bq is not None:
@@ -311,8 +314,8 @@ def compare(now: dict, before: dict) -> dict:
 def paired_labels(a: pd.DataFrame, b: pd.DataFrame, boot: int = BOOT, seed: int = 0) -> dict:
     """Two arms' right-or-wrong per answered label (columns `right` and `block`; the same labels in the same order) as
     a difference of shares (a minus b) with its 95% interval, resampling whole blocks: `diff`, `lo`, `hi`."""
-    if len(a) != len(b):
-        raise ValueError("the two arms must score the same labels")
+    if len(a) != len(b) or (a["block"].to_numpy(str) != b["block"].to_numpy(str)).any():
+        raise ValueError("the two arms must score the same labels, in the same blocks")
     ra, rb = a["right"].to_numpy(float), b["right"].to_numpy(float)
     names, inv = np.unique(a["block"].to_numpy(str), return_inverse=True)
     gain = np.bincount(inv, weights=ra - rb, minlength=len(names))

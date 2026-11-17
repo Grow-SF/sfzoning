@@ -101,3 +101,24 @@ def test_read_numbers_count_same_and_different_codes_on_matched_boxes():
 def test_compare_is_now_minus_before():
     d = measures.compare({"a": {"n": 5, "x": "s"}, "b": 1.5}, {"a": {"n": 3}, "b": 1.0, "c": 9})
     assert d == {"a": {"n": 2}, "b": 0.5}
+
+
+def test_matched_to_missed_is_the_plain_ratio():
+    b = measures.box_numbers(BOXES_MERGED, TERRA_TWO, READS_MERGED)
+    assert b[0.5]["matched_to_missed"] == 1.0
+    three = _terra((0, 0, 100, 10), (500, 0, 600, 10), (700, 0, 800, 10))
+    b = measures.box_numbers(_boxes((0, 0, 100, 10)), three, READS_ONE)
+    assert b[0.5]["matched_to_missed"] == 0.5 and b[0.5]["ours_near_missed"] == 0
+    assert measures.box_numbers(BOXES_ONE, TERRA_ONE, READS_ONE)[0.5]["matched_to_missed"] is None
+
+
+def test_paired_labels_diff_is_a_minus_b():
+    worse = ARM.assign(right=0.0)
+    assert measures.paired_labels(ARM, worse, boot=50)["diff"] == 0.5
+    assert measures.paired_labels(worse, ARM, boot=50)["diff"] == -0.5
+
+
+def test_paired_labels_refuses_arms_with_different_blocks():
+    import pytest
+    with pytest.raises(ValueError):
+        measures.paired_labels(ARM, ARM.assign(block=["x"] * 6), boot=50)
