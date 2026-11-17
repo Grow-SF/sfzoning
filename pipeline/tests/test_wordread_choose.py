@@ -82,13 +82,16 @@ def test_split_follows_a_slanted_axis():
     assert mids[0] < -10 < 10 < mids[1]
 
 
-def test_join_takes_the_nearest_box_within_one_word_height_along_the_axis():
+def test_join_takes_the_nearest_box_however_far_and_its_distance_is_the_gap():
     box = make_box(10, 50)                      # height 10
     near, far, off = make_box(56, 90), make_box(70, 100), make_box(54, 90, 40, 50)
     c = by_kind(C.candidates(box, page_with((10, 50)), [far, near, off], WIDTHS))
     assert c["join_nearest"][0][:, 0].min() == pytest.approx(10)
     assert c["join_nearest"][0][:, 0].max() == pytest.approx(90)
-    assert "join_nearest" not in by_kind(C.candidates(box, page_with((10, 50)), [far, off], WIDTHS))
+    assert c["join_nearest"].gap == pytest.approx(6)
+    # no window: a box 450 px away is joined when it is the only one
+    c = by_kind(C.candidates(box, page_with((10, 50)), [make_box(500, 540)], WIDTHS))
+    assert c["join_nearest"].gap == pytest.approx(450)
 
 
 def test_trim_cuts_the_kinds_median_character_width_from_either_end():
@@ -97,8 +100,8 @@ def test_trim_cuts_the_kinds_median_character_width_from_either_end():
     assert c["trim_end"][0][:, 0].max() == pytest.approx(84) and c["trim_end"][0][:, 0].min() == pytest.approx(10)
 
 
-def test_no_trim_of_a_box_not_longer_than_two_characters():
-    c = by_kind(C.candidates(make_box(10, 24), page_with((10, 24)), [], WIDTHS))
+def test_no_trim_of_a_box_not_longer_than_one_character():
+    c = by_kind(C.candidates(make_box(10, 18), page_with((10, 18)), [], WIDTHS))
     assert "trim_start" not in c and "trim_end" not in c
 
 
@@ -174,6 +177,132 @@ def test_the_prior_renormalises_each_words_posterior():
     want = math.log(0.3) - math.log(0.3 + 0.05 + 0.05 + 0.6 * math.exp(-20))
     assert info["scores"]["as_found"] == pytest.approx(want, abs=1e-9)
     assert info["words"] == ["Q"]
+
+
+def test_candidates_need_the_widths():
+    with pytest.raises(ValueError):
+        C.candidates(make_box(10, 90), page_with((10, 90)), [], None)
+
+
+def test_a_box_of_unknown_kind_has_no_trims():
+    box = make_box(10, 90)
+    for k in KINDS:
+        box[f"p_{k}"] = 0.0
+    names = [k for k, _ in C.candidates(box, page_with((10, 90)), [], WIDTHS)]
+    assert names == ["as_found"]
+
+
+def test_join_leaves_out_the_box_itself_and_an_overlapping_neighbour():
+    box = make_box(10, 50)
+    names = lambda ns: [k for k, _ in C.candidates(box, page_with((10, 50)), ns, WIDTHS)]   # noqa: E731
+    assert "join_nearest" not in names([dict(box)])
+    assert "join_nearest" not in names([make_box(40, 80)])
+    assert "join_nearest" in names([make_box(40, 80), make_box(56, 90)])
+
+
+def test_a_vertical_box_splits_and_joins_along_its_axis():
+    def vbox(y0, y1, x=50.0):
+        row = {"axis": 90.0, "t_length": y1 - y0, "t_height": 10.0, **{f"p_{k}": 0.0 for k in KINDS}, "p_zoning": 1.0}
+        for i, (cx, cy) in enumerate([(x + 5, y0), (x + 5, y1), (x - 5, y1), (x - 5, y0)]):
+            row[f"t{i}x"], row[f"t{i}y"] = cx, cy
+        return row
+
+    ink = np.zeros((200, 100), bool)
+    ink[20:50, 46:54] = True
+    ink[80:110, 46:54] = True
+    c = by_kind(C.candidates(vbox(20, 110), ink, [vbox(116, 150)], WIDTHS))
+    halves = c["split_gap"]
+    assert halves[0][:, 1].min() == pytest.approx(20) and halves[0][:, 1].max() == pytest.approx(50)
+    assert halves[1][:, 1].min() == pytest.approx(80) and halves[1][:, 1].max() == pytest.approx(110)
+    assert c["split_gap"].gap == pytest.approx(30)
+    assert c["join_nearest"][0][:, 1].max() == pytest.approx(150)
+    assert c["join_nearest"].gap == pytest.approx(6)
+    assert c["trim_start"][0][:, 1].min() == pytest.approx(28)
+
+
+# --- the fitted choice --------------------------------------------------------------------------------------------
+
+def synthetic_rows(n=400, seed=0, ink_scores=True):
+    """Boxes with an as_found and a split_gap; the split is right with a chance rising with the gap (in character
+    widths), and the reads' scores say nothing about which."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for b in range(n):
+        gap = rng.uniform(0.05, 3.0)
+        split = rng.random() < 1 / (1 + math.exp(-3 * (gap - 1.5)))
+        a, s = rng.normal(-0.5, 0.3), rng.normal(-0.7, 0.3)
+        out += [{"box": b, "cand": "as_found", "score": a, "gap": 0.0, "label": not split},
+                {"box": b, "cand": "split_gap", "score": s, "gap": gap, "label": split}]
+    return pd.DataFrame(out)
+
+
+def test_the_fit_recovers_a_positive_gap_weight_when_splits_are_right_only_with_a_large_gap():
+    p = C.fit_choice(synthetic_rows())
+    assert p["gamma"]["split_gap"] > 1.5 and p["alpha"]["split_gap"] < -2
+    assert p["gamma"]["as_found"] == 0 and p["alpha"]["as_found"] == 0
+
+
+def test_the_chosen_version_flips_with_the_gap():
+    params = C.fit_choice(synthetic_rows())
+    read = read_by_span({(10, 100): ("A B", math.log(0.9))}, default=math.log(0.8))
+    pick = lambda gap: C.choose(   # noqa: E731
+        make_box(10, 100), C.candidates(make_box(10, 100), page_with((10, 40), (40 + gap, 100)), [], WIDTHS),
+        read, params=params, widths=WIDTHS)
+    big, small = pick(26), pick(1)
+    assert big[0] == "split_gap" and big[1]["prob"] > 0.5
+    assert small[0] == "as_found"
+
+
+def test_a_merged_box_reading_other_with_confidence_loses_to_a_split_with_a_large_gap():
+    box = make_box(10, 100)
+    cands = C.candidates(box, page_with((10, 40), (70, 100)), [], WIDTHS)
+    merged = {"other": math.log(0.95), "none": math.log(0.025), "A": math.log(0.025)}
+    half = {"R-1": math.log(0.9), "other": math.log(0.05), "none": math.log(0.05)}
+    read = lambda corners, b: merged if corners[:, 0].max() - corners[:, 0].min() > 80 else half   # noqa: E731
+    assert C.choose(box, cands, read)[0] == "as_found"           # the raw sum: the confident "other" wins
+    kind, info = C.choose(box, cands, read, params=C.fit_choice(synthetic_rows()), widths=WIDTHS)
+    assert kind == "split_gap" and info["prob"] > 0.5
+
+
+def test_a_one_pixel_letter_gap_does_not_split():
+    box = make_box(10, 100)
+    ink = page_with((10, 50), (51, 100))
+    cands = C.candidates(box, ink, [], WIDTHS)
+    assert by_kind(cands)["split_gap"].gap == pytest.approx(1)
+    half = {"R-1": math.log(0.95), "other": math.log(0.025), "none": math.log(0.025)}
+    whole = {"R-1": math.log(0.5), "other": math.log(0.4), "none": math.log(0.1)}
+    read = lambda corners, b: whole if corners[:, 0].max() - corners[:, 0].min() > 80 else half   # noqa: E731
+    assert C.choose(box, cands, read)[0] == "split_gap"           # raw: two clear halves beat the whole's doubt
+    kind, _ = C.choose(box, cands, read, params=C.fit_choice(synthetic_rows()), widths=WIDTHS)
+    assert kind == "as_found"
+
+
+def test_choice_features_are_one_row_per_version_with_the_gap_in_character_widths():
+    box = make_box(10, 100, kind="block")
+    cands = C.candidates(box, page_with((10, 40), (70, 100)), [], WIDTHS)
+    read = lambda corners, b: {"A": math.log(0.9), "none": math.log(0.05), "other": math.log(0.05)}   # noqa: E731
+    f = C.choice_features(box, cands, read, WIDTHS)
+    assert list(f["cand"]) == [k for k, _ in cands]
+    assert f.loc[f["cand"] == "split_gap", "gap"].item() == pytest.approx(30 / 6.0)
+    assert (f.loc[f["cand"] != "split_gap", "gap"] == 0).all()
+    assert f.loc[f["cand"] == "split_gap", "score"].item() == pytest.approx(2 * math.log(0.9))
+
+
+def test_label_of_is_the_version_that_best_matches_terras_words():
+    box = make_box(10, 100)
+    cands = C.candidates(box, page_with((10, 40), (70, 100)), [], WIDTHS)
+    assert C.label_of(cands, [(10, 20, 40, 30), (70, 20, 100, 30)]) == "split_gap"
+    assert C.label_of(cands, [(10, 20, 100, 30)]) == "as_found"
+    assert C.label_of(cands, [(10, 20, 92, 30)]) == "trim_end"
+    assert C.label_of(cands, [(500, 500, 540, 520)]) is None
+
+
+def test_fit_refuses_held_out_and_answered_rows():
+    rows = synthetic_rows(20)
+    for flag in ("held_out", "answered"):
+        with pytest.raises(ValueError):
+            C.fit_choice(rows.assign(**{flag: [False] * (len(rows) - 1) + [True]}))
+    assert C.fit_choice(rows.assign(held_out=False, answered=False))["boxes"] == 20
 
 
 def test_choose_needs_as_found_first():
