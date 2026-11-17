@@ -137,9 +137,9 @@ class WordOutputs(NamedTuple):
     chance: np.ndarray       # uint8 (h, w): the chance of text x 255 (channel 0), as `chance` gives it
     kind_p: np.ndarray       # float16 (4, h, w): each kind's probability (the softmax of the kind logits)
     core: np.ndarray         # float32 (h, w): the word-core logit (`model.CORE`); NOT_SCORED where not scored
-    geo: np.ndarray          # float32 (6, h, w): the distances in px to the word's top, bottom, start and end edges
-    #                          (`model.distances` of `model.GEO`), then the reading direction's cosine and sine as the
-    #                          network gives them (channels 5-6, any length)
+    geo: np.ndarray          # float32 (5, h, w): `model.word_geometry`: the offset in px from the px to its word's
+    #                          centre (x right, y down), the word's length and height in px, and its axis in degrees in
+    #                          [0, 180) (no reading sign: 0/180 is the reader's)
     tag: np.ndarray          # float32 (k, h, w): the word tag (`model.TAG`)
 
 
@@ -174,7 +174,7 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
     pad = context(net)
     k = model.TAG.stop - model.TAG.start
     out = WordOutputs(np.zeros((h, w), np.uint8), np.zeros((4, h, w), np.float16),
-                      np.full((h, w), NOT_SCORED, np.float32), np.zeros((6, h, w), np.float32),
+                      np.full((h, w), NOT_SCORED, np.float32), np.zeros((5, h, w), np.float32),
                       np.zeros((k, h, w), np.float32))
     for y in range(0, h, tile):
         for x in range(0, w, tile):
@@ -196,7 +196,6 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
             out.chance[win_out] = np.round(255 * torch.sigmoid(o[0]).cpu().numpy()).astype(np.uint8)
             out.kind_p[(slice(None), *win_out)] = torch.softmax(o[1:5], 0).cpu().numpy().astype(np.float16)
             out.core[win_out] = o[model.CORE].cpu().numpy()
-            out.geo[(slice(0, 4), *win_out)] = model.distances(o[model.GEO]).cpu().numpy()
-            out.geo[(slice(4, 6), *win_out)] = o[5:7].cpu().numpy()
+            out.geo[(slice(None), *win_out)] = model.word_geometry(o).cpu().numpy()
             out.tag[(slice(None), *win_out)] = o[model.TAG].cpu().numpy()
     return out

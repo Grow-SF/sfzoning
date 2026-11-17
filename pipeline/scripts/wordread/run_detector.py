@@ -247,14 +247,16 @@ def masked_inputs(o, area: np.ndarray, wid: np.ndarray | None = None):
 
 def reach_window(area: np.ndarray, geo: np.ndarray) -> tuple[int, int, int, int]:
     """The window (y0, x0, y1, x1) of the page that holds every box the votes of `area` can make: the area's
-    bounding box grown by the reach of its votes (sqrt 2 x the longest distance any of them gives: a vote's box, and
-    the edges it implies along any axis, lie within that of its px), cut to the page.  Outside it no vote is the
-    area's, every one weighs 0, so the words formed in it are the page's (to the EMs' numerical stopping)."""
+    bounding box grown by the reach of its votes (`geo` as `predict.WordOutputs` holds it: a vote's box is centred
+    its offset (geo 0-1) from its px, of its length and height (geo 2-3) at any axis, so it lies within |offset| +
+    half its diagonal of the px; the reach is the most of that over the area), cut to the page.  Outside it no vote
+    is the area's, every one weighs 0, so the words formed in it are the page's (to the EMs' numerical stopping)."""
     ys, xs = np.nonzero(area)
     h, w = area.shape
     if not len(ys):
         return 0, 0, 0, 0
-    reach = int(np.ceil(np.sqrt(2) * float(geo[:4, ys, xs].max())))
+    g = geo[:4, ys, xs].astype(np.float64)
+    reach = int(np.ceil(float((np.hypot(g[0], g[1]) + 0.5 * np.hypot(g[2], g[3])).max())))
     return (max(int(ys.min()) - reach, 0), max(int(xs.min()) - reach, 0), min(int(ys.max()) + 1 + reach, h),
             min(int(xs.max()) + 1 + reach, w))
 
@@ -275,7 +277,7 @@ def sheet_decisions(run, name, quarters, spreads, prior, blocks, sheet_fn=load_s
     win = (slice(y0, y1), slice(x0, x1))
     d = words.prior_decisions(core[win], o.geo[(slice(None), *win)], o.tag[(slice(None), *win)], spreads, wid[win],
                               prior)
-    outside = (d["kind"] == "word") & (d["gain"] == 0.0) & (d["label"] == 0.0)
+    outside = d["kind"].isin(["proposal", "word"]) & (d["gain"] == 0.0) & (d["label"] == 0.0)
     d = d[~outside].reset_index(drop=True)
     d["sheet"], d["source"] = name, Path(run).name
     return d
@@ -343,7 +345,7 @@ def load_fit(folder: Path):
     """`fit`'s spreads and prior back from its folder."""
     from sfzmaps.solver.wordread import words
     sp = json.loads((Path(folder) / "spreads.json").read_text())
-    sp["background_tag_mean"] = tuple(sp["background_tag_mean"])
+    sp = {k: tuple(v) if isinstance(v, list) else v for k, v in sp.items()}      # JSON's lists: the tuples back
     return words.Spreads(**sp), words.WordPrior(**json.loads((Path(folder) / "prior.json").read_text())["prior"])
 
 
