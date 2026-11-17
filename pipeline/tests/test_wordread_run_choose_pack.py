@@ -111,7 +111,7 @@ def test_fold_fit_uses_only_the_other_quarters_outside_the_answered_blocks():
         q = box_id % 3                                                    # quarters 0, 1, 2
         for cand, extra in (("as_found", 0.0), ("split_gap", 1.0)):
             out.append({"box": box_id, "quarter": q, "cand": cand, "score": float(rng.normal() + extra), "gap": extra,
-                        "across": 0.0, "label": cand == ("split_gap" if box_id % 2 else "as_found"),
+                        "across": 0.0, "weight": float(cand == ("split_gap" if box_id % 2 else "as_found")),
                         "answered": box_id < 6, **{h: q == 1 and box_id % 5 == 0 for h in RC.HOLD[:1]},
                         **{h: False for h in RC.HOLD[1:]}})
     rows = pd.DataFrame(out)
@@ -212,3 +212,22 @@ def test_reader_path_prefers_the_runs_own_reader_else_the_stages(tmp_path):
     (tmp_path / "base-ne-s1" / "reader.pt").write_bytes(b"x")
     assert RC.reader_path("ne", "ne", 1, "base", tmp_path) == tmp_path / "base-ne-s1" / "reader.pt"
     assert RC.reader_path("nw", "ne", 1, "base", tmp_path).name == "nw.pt"
+
+
+def test_feature_rows_weigh_each_version_by_the_ink_of_terras_words():
+    b = box(0, 10, 90)
+    cands = versions_for(b)
+    ent = entry(cands, {c.name: got({"R1": 0.5}) for c in cands})
+    ink = np.zeros((60, 200), bool)
+    ink[22:28, 10:40] = True
+    ink[22:28, 60:90] = True
+
+    def word(x0, x1):
+        return {"sheet": "s", "touch_blocks": False, **{h: False for h in RC.HOLD},
+                **dict(zip(RC.C_COLS, (x0, 20, x1, 20, x1, 30, x0, 30)))}
+
+    terra = pd.DataFrame([word(10, 40), word(60, 90)])
+    rows = RC.feature_rows(pd.DataFrame([b]), {0: ent}, terra, CODES, ink_of=lambda sheet: ink)
+    w = dict(zip(rows["cand"], rows["weight"]))
+    assert w["split_gap"] > 0.9 and w["as_found"] < 0.1             # two words in the box: only the split holds one each
+    assert not rows["answered"].any() and (rows["box"] == 0).all()

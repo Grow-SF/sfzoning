@@ -10,7 +10,7 @@ nearest box, a character trimmed at either end), each version's words are read b
 quarter (CPU, one thread per worker), and the version is chosen.  Two arms are scored against reading the boxes as found:
   plain   the version whose words' log posteriors sum highest (`choose(params=None)`: no fitted weight at all);
   fitted  the conditional logit (`choose.fit_choice`), fitted per fold on the TRAINING quarters' boxes outside the
-          answered blocks, labelled by Terra's words (`choose.label_of`), never by the owner's answers.
+          answered blocks, soft-labelled by Terra's words' ink (`choose.label_weights`), never by the owner's answers.
 Every box is read once by its own quarter's reader (the run's reader for the held-out quarter: `--reader-name`, at the
 run's seed, else the stage's `<q>.pt`), so a training quarter's scores are as out-of-sample as the held-out quarter's.
 `--boxes-dir`, `--reader-name` and `--reader-root` take another run's boxes and readers (Task 8's).
@@ -222,24 +222,28 @@ def terra_near(index: dict, sheet: str, cands) -> list[int]:
     return sorted(int(pos[i]) for i in tree.query(hull, predicate="intersects"))
 
 
-def feature_rows(boxes: pd.DataFrame, versions: dict, terra: pd.DataFrame, codes: R.CodeList) -> pd.DataFrame:
+def feature_rows(boxes: pd.DataFrame, versions: dict, terra: pd.DataFrame, codes: R.CodeList, ink_of=None) -> pd.DataFrame:
     """One row per version of every box in `versions`, `choice_features`'s columns plus `box` (the row), `quarter`,
-    `label` (`choose.label_of`: the version Terra's words match), `answered` (some Terra word meeting the box touches
-    an answered block) and `touch_<q>` (some touches quarter q), for the fold fits."""
+    `weight` (`choose.label_weights`: each version's chance of holding exactly one Terra word, by ink), `answered` (some
+    Terra word meeting the box touches an answered block) and `touch_<q>` (some touches quarter q), for the fold fits.
+    `ink_of(sheet)` the page's ink (default: the page's px darker than grid.INK_BELOW)."""
+    ink_of = ink_of or (lambda sheet: data.load_page(sheet) < grid.INK_BELOW)
     index = terra_index(terra)
     by_row = boxes.set_index("row", drop=False)
     out = []
-    for row in sorted(versions):
-        box, e = by_row.loc[row].to_dict(), versions[row]
-        near = terra_near(index, box["sheet"], e["cands"])
-        sub = terra.loc[near] if near else terra.iloc[:0]
-        label = C.label_of(e["cands"], [r.reshape(4, 2) for r in sub[C_COLS].to_numpy(float)]) if near else None
-        f = C.choice_features(box, e["cands"], read_fn_of(e, codes))
-        f["box"], f["quarter"], f["label"] = row, int(box["quarter"]), f["cand"] == label
-        f["answered"] = bool(sub["touch_blocks"].any()) if near else False
-        for h in HOLD:
-            f[h] = bool(sub[h].any()) if near else False
-        out.append(f)
+    for sheet in sorted(set(boxes.loc[sorted(versions), "sheet"])):
+        ink = ink_of(sheet)
+        for row in sorted(r for r in versions if by_row.loc[r, "sheet"] == sheet):
+            box, e = by_row.loc[row].to_dict(), versions[row]
+            near = terra_near(index, sheet, e["cands"])
+            sub = terra.loc[near] if near else terra.iloc[:0]
+            w = C.label_weights(e["cands"], [r.reshape(4, 2) for r in sub[C_COLS].to_numpy(float)], ink)
+            f = C.choice_features(box, e["cands"], read_fn_of(e, codes))
+            f["box"], f["quarter"], f["weight"] = row, int(box["quarter"]), [w[c] for c in f["cand"]]
+            f["answered"] = bool(sub["touch_blocks"].any()) if near else False
+            for h in HOLD:
+                f[h] = bool(sub[h].any()) if near else False
+            out.append(f)
     return pd.concat(out, ignore_index=True)
 
 
@@ -248,7 +252,7 @@ def fold_fit(rows: pd.DataFrame, q: int) -> dict:
     meeting a Terra word that touches quarter q."""
     use = rows[(rows["quarter"] != q) & ~rows["answered"] & ~rows[HOLD[q]]].copy()
     use["held_out"] = False
-    return C.fit_choice(use[["box", "cand", "score", "gap", "across", "label", "held_out", "answered"]])
+    return C.fit_choice(use[["box", "cand", "score", "gap", "across", "weight", "held_out", "answered"]])
 
 
 # --- the chosen boxes ---------------------------------------------------------------------------------------------------
@@ -463,12 +467,12 @@ def run(name: str, quarter: str, seed: int, boxes_dir: Path | None = None, reade
               for arm in ("plain", "fitted")}
     wins = {arm: dict(Counter(c for r, c in picks[arm].items() if int(boxes["quarter"].iloc[r]) == q))
             for arm in ARMS}
-    truth_kind = Counter(rows[rows["label"] & (rows["quarter"] == q)]["cand"])
+    truth_kind = rows[rows["quarter"] == q].groupby("cand")["weight"].sum().round(1).to_dict()
     info = {"name": name, "quarter": quarter, "seed": seed, "preliminary": True, "boxes": str(boxes_dir),
             "readers": {k: str(v) for k, v in readers.items()}, "params": params[quarter],
             "headline": {a: {k: result[a]["headline"][k] for k in ("n", "right", "share", "ci", "with_box")}
                          for a in ARMS},
-            "paired_vs_without": paired, "wins": wins, "terra_label_kind": dict(truth_kind),
+            "paired_vs_without": paired, "wins": wins, "terra_label_weight": truth_kind,
             "box_numbers": {a: {str(i): {k: result[a]["box_numbers"][i][k] for k in
                                          ("terra", "ours", "matched", "missed", "missed_reasons",
                                           "ours_unmatched_text", "ours_unmatched_none")} for i in (0.5, 0.3)}
