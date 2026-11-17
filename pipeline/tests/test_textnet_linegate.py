@@ -25,12 +25,13 @@ REAL_DATA = (data.warp_dir(REAL_SHEET) / "transform.json").is_file() and \
 
 @dataclasses.dataclass
 class FakeGeo:
-    """A geo of fixed page rasters: the quarter (index into paths.QUARTERS), the block, the border weight and the
-    answered labels' px."""
+    """A geo of fixed page rasters: the quarter (index into paths.QUARTERS), the block, the border weight, the
+    answered labels' px and the context weight (the border weight beyond the cut)."""
     quarters: np.ndarray
     blocks: np.ndarray
     weight: np.ndarray
     answered_px: np.ndarray
+    context: np.ndarray
 
     def quarter(self, sd):
         return self.quarters
@@ -43,6 +44,9 @@ class FakeGeo:
 
     def answered(self, sd):
         return self.answered_px
+
+    def context_weight(self, sd):
+        return self.context
 
 
 @dataclasses.dataclass
@@ -89,7 +93,8 @@ def crossed_word() -> Crossed:
                         ft_per_px=FT_PER_PX)
     blocks = np.zeros((H, W), np.int32)
     blocks[:, W // 2:] = 1
-    geo = FakeGeo(np.full((H, W), NE, np.uint8), blocks, line.astype(np.float32), box.copy())
+    geo = FakeGeo(np.full((H, W), NE, np.uint8), blocks, line.astype(np.float32), box.copy(),
+                  np.zeros((H, W), np.float32))
     return Crossed(sd, geo, ink, glyph, line, box, int((ink & box & ~near_line).sum()))
 
 
@@ -113,6 +118,18 @@ def test_border_ink_inside_a_box_is_split_out(crossed_word):
     assert r["m1a_in_box"]["px"] == float((crossed_word.line & crossed_word.box).sum())
     assert r["m1a"]["px"] == pytest.approx(r["m1a_in_box"]["px"] + r["m1a_near"]["px"] + r["m1a_far"]["px"])
     assert r["m1a_in_box"]["called_05"] == 1.0 and r["m1a_far"]["called_05"] == 0.0
+
+
+def test_the_weight_beyond_the_cut_is_reported_apart(crossed_word):
+    # the profile's tail weighting the letters (label ink near a district border) goes to the context measures alone
+    letters = crossed_word.glyph & ~crossed_word.line
+    geo = dataclasses.replace(crossed_word.geo, context=np.where(letters, 0.5, 0.0).astype(np.float32))
+    r, _ = linegate.gate_sheets([crossed_word.sd], crossed_word.all_box_text, ("ne",), geo, boot=10)
+    base, _ = linegate.gate_sheets([crossed_word.sd], crossed_word.all_box_text, ("ne",), crossed_word.geo, boot=10)
+    assert all(r[m] == base[m] for m in linegate.M1A)
+    assert r["m1a_in_box_context"]["px"] == pytest.approx(0.5 * (letters & crossed_word.box).sum())
+    assert r["m1a_context"]["called_05"] == 1.0
+    assert base["m1a_context"]["px"] == 0.0 and base["m1a_context"]["called_05"] is None
 
 
 def test_m1a_weighs_each_px_by_the_border_weight(crossed_word):
@@ -164,6 +181,36 @@ def test_paired_difference_is_the_second_arm_less_the_first(tmp_path, crossed_wo
     p = linegate.paired([tmp_path / "calls"], [tmp_path / "none"], "m1b_in_box", boot=50)
     assert p["diff"] == -1.0 and p["lo"] == -1.0 and p["hi"] == -1.0
     assert (tmp_path / "none" / "scores.md").read_text().count("m1b_in_box") >= 1
+
+
+def test_paired_stops_on_runs_scored_on_different_px(tmp_path, crossed_word):
+    r, t = linegate.gate_sheets([crossed_word.sd], crossed_word.all_box_text, ("ne",), crossed_word.geo, boot=10)
+    linegate.write(r, t, tmp_path / "a")
+    geo = dataclasses.replace(crossed_word.geo, weight=np.where(crossed_word.line, 0.25, 0.0).astype(np.float32))
+    r, t = linegate.gate_sheets([crossed_word.sd], crossed_word.all_box_text, ("ne",), geo, boot=10)
+    linegate.write(r, t, tmp_path / "b")
+    with pytest.raises(ValueError, match="px differ"):
+        linegate.paired([tmp_path / "a"], [tmp_path / "b"], "m1a", boot=10)
+    assert linegate.paired([tmp_path / "a"], [tmp_path / "b"], "m1b_in_box", boot=10)["diff"] == 0
+
+
+def test_the_weight_ends_where_the_lines_own_excess_ends():
+    # falling to the far-field level (the median of the outer third, d = 10 .. 14): ends at the first d at or below it
+    falls = [0.74, 0.72, 0.64, 0.46, 0.27, 0.13, 0.06, 0.03, 0.019, 0.016, 0.013, 0.011, 0.024, 0.025, 0.028]
+    assert linegate.weight_cut(np.array(falls)) == (8, 0.024)
+    # falling to a dip, then a second feature's bump (block outlines across a street): ends at the dip, though the
+    # far-field level (-0.01) is reached only past the bump
+    bump = [0.60, 0.59, 0.53, 0.37, 0.17, 0.03, 0.001, 0.013, 0.056, 0.10, 0.07, 0.04, -0.01, -0.011, -0.012]
+    assert linegate.weight_cut(np.array(bump)) == (6, -0.01)
+    # the table: w below the cut, the same formula beyond it as context; a 3 px line and, at offset +3 on every crack,
+    # another feature's ink
+    J = 4
+    prof = np.zeros((8, 2 * J + 1), bool)
+    prof[:4, J - 1:J + 2] = True
+    prof[:4, J + 3] = True
+    touch, district = np.ones(8, bool), np.r_[np.ones(4, bool), np.zeros(4, bool)]
+    t = linegate.weight_table(prof, touch, district, ~district, J)["touch"]
+    assert t["cut"] == 2 and t["w"] == [1.0, 1.0, 0.0, 0.0, 0.0] and t["w_context"] == [0.0, 0.0, 0.0, 1.0, 0.0]
 
 
 def test_the_border_weight_is_the_nearest_district_cracks_excess_ink_by_distance():

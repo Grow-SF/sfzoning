@@ -7,8 +7,12 @@ it never scores fewer px.  Every measure is taken on the ink px (page < `grid.IN
 by the px's map point) is one of those asked for:
 
   m1a           district-border ink called text: every ink px, weighted by w(d), the share of the ink d grid px from
-                the nearest district crack that the district line adds (below).  No ink rule and no Terra box define
-                it.  m1a is the total; m1a_in_box, m1a_near and m1a_far split it by box
+                the nearest district crack that the district line adds, inside the line's own reach (the cut, below).
+                No ink rule and no Terra box define it.  m1a is the total; m1a_in_box, m1a_near and m1a_far split it
+                by box
+  m1a_context   a diagnostic, in no verdict: the same weight beyond the cut (the profile's tail: ink near district
+                borders that is not the line's own), m1a_context and m1a_in_box_context (`Geo.context_weight`; None for
+                a geo without it)
   m1b_*         straight-line ink called text: the run rule's px (`linerules.line_px` at the sheet's scale), split by
                 box (in_box, near, far) and by the distance to the nearest of Sol's label points (m1b_by_point:
                 0-30, 30-100, 100+ px)
@@ -35,7 +39,12 @@ M1a's weight (`CityGeo`), as the plan's red team set it:
                    (`measures.Table.line`'s rule, `C.table`); the other cracks with both lots known are the baseline
   f_D(d), f_L(d)   the ink share of the cracks' profile (`prof`) at offsets +d and -d (their mean), over the district
                    cracks and over the other both-known cracks, for touching lots and across a street apart
-  w(d)             max(0, f_D(d) - f_L(d)) / f_D(d) for d <= J (`borders.J`), 0 beyond
+  w(d)             max(0, f_D(d) - f_L(d)) / f_D(d) for d below the class's cut, 0 from it on (`weight_cut`)
+  the cut          where the line's own excess e(d) = f_D(d) - f_L(d) ends, per class: the first d past the excess's
+                   peak at which it has fallen to the class's far-field level (the median excess over the outer third
+                   of d = 0 .. J, J = `borders.J`) or stops falling (e(d + 1) > e(d): another feature's ink begins,
+                   as the block outlines along district streets do across a street).  Beyond it, up to J, the same
+                   formula gives the context weight (m1a_context)
   d                the distance, in grid px and rounded, from a grid px to the nearest district crack, each crack drawn
                    at the px where its profile reads offset 0 (the floor of its middle), so the px of a straight border
                    d rows away on either side are at offset +d or -d; the table used is the nearest crack's (touch or
@@ -46,6 +55,7 @@ inside the sheet's crop on the merged page (the page whose ink the weight was me
 """
 import hashlib
 import json
+import math
 from collections.abc import Callable
 from functools import lru_cache, reduce
 from pathlib import Path
@@ -74,15 +84,19 @@ SCORES_FILE, MARKDOWN_FILE, BLOCKS_FILE = "scores.json", "scores.md", "blocks.np
 LEARNED_RULES = paths.SOLVER_DIR / "experiments" / "textlines" / "rules.json"   # `scripts/textlines/rules.py`
 
 M1A = ("m1a", "m1a_in_box", "m1a_near", "m1a_far")
+CONTEXT = ("m1a_context", "m1a_in_box_context")          # the weight beyond the cut: a diagnostic, in no verdict
+WEIGHTED = (*M1A, *CONTEXT)                               # px are the sum of a weight
 M1B = ("m1b_in_box", "m1b_near", "m1b_far", *(f"m1b_by_point:{b}" for b, _ in POINT_BINS))
 M2 = ("m2", *(f"m2_by_kind:{k}" for k in KINDS), "m2_answered")
-MEASURES = (*M1A, *M1B, "m1c", *M2, "overlap_band")
+MEASURES = (*M1A, *CONTEXT, *M1B, "m1c", *M2, "overlap_band")
 TARGET = {m: ("text" if m.startswith("m2") or m == "overlap_band" else "not text") for m in MEASURES}
 WHAT = {
     "m1a": "ink, weighted by w(d) to the nearest district crack",
     "m1a_in_box": "the same, inside a Terra word box",
     "m1a_near": "the same, within 30 px of a box",
     "m1a_far": "the same, farther",
+    "m1a_context": "diagnostic: ink weighted by w(d) beyond the cut",
+    "m1a_in_box_context": "diagnostic: the same, inside a box",
     "m1b_in_box": "run-rule line ink inside a box",
     "m1b_near": "run-rule line ink within 30 px of a box",
     "m1b_far": "run-rule line ink farther",
@@ -97,6 +111,22 @@ WHAT = {
     "m2_by_kind:other": "the same, in another word's box",
     "m2_answered": "the same, in an owner-answered label's box",
     "overlap_band": "in-box ink that is run-rule ink or within 1 px of it",
+}
+# What each measure would miss (the spec: a gate states what it would miss), one line per family, in scores.md.
+MISSES = {
+    "m1a, m1a_in_box, m1a_near, m1a_far": "weight 0 on the margins, the cut boxes and other series' sheets (not on "
+    "the merged page) and beyond each class's cut; ink within the cut is weighted by the city's average, so label ink "
+    "touching a district border carries some weight too",
+    "m1a_context, m1a_in_box_context": "a diagnostic only: mostly ink near district borders that is not the line's own "
+    "(labels, block outlines); in no verdict",
+    "m1b_*": "lines the run rule misses (stair-step district lines: recall 0.08; dashed: 0.02); a few glyph px it calls "
+    "line (the table below)",
+    "m1c": "counts as not-text the ink in the other passes' boxes (`sd.other`, unknown in training), text Terra missed "
+    "(near Sol's points, unknown in training too) and the margins' text",
+    "m2, m2_by_kind, m2_answered": "counts as text the lines the run rule misses inside boxes (stair-step and dashed "
+    "lines); leaves out glyph ink within 1 px of a run-rule line (in the overlap band); m2_answered only the answered "
+    "labels with a Terra box",
+    "overlap_band": "mixes line and glyph ink, so neither target is right; its log loss is against text",
 }
 _PROB = np.clip(np.arange(256) / 255.0, CLIP, 1 - CLIP)
 _LOSS = {"text": -np.log(_PROB), "not text": -np.log1p(-_PROB)}       # by chance x 255
@@ -139,9 +169,10 @@ class Geo(Protocol):
     """What the gate needs of the map behind a sheet's page, as page rasters (read at ink px only):
       quarter(sd)        uint8, the index into `paths.QUARTERS`, 255 where the px has no map point
       block(sd)          int32, the block (-1: none)
-      border_weight(sd)  float32, M1a's weight
-    and, optionally, `answered(sd)` (bool, the px of the owner's answered labels' words), `weight_table` (the weight's
-    table, for scores.md) and `block_key` (what identifies the block numbering, for `paired`)."""
+      border_weight(sd)  float32, M1a's weight (inside the cut)
+    and, optionally, `context_weight(sd)` (float32, the weight beyond the cut: m1a_context), `answered(sd)` (bool, the
+    px of the owner's answered labels' words), `weight_table` (the weight's table, for scores.md) and `block_key`
+    (what identifies the block numbering, for `paired`)."""
 
     def quarter(self, sd: data.SheetData) -> np.ndarray: ...
 
@@ -176,14 +207,33 @@ def excess_weight(f_district: np.ndarray, f_other: np.ndarray) -> np.ndarray:
     return out
 
 
+def weight_cut(excess: np.ndarray) -> tuple[int, float]:
+    """Where a district line's own excess ink ends (see the module), from its excess e(d) = f_D(d) - f_L(d), d = 0 ..
+    J: (the cut, the far-field level).  The far-field level is the median of e over the outer third of d (the last
+    ceil((J + 1) / 3) values); the cut is the first d past e's peak at which e is at most that level, or at which e
+    stops falling (e(d + 1) > e(d)); J + 1 when neither happens.  The weight is kept for d below the cut."""
+    e = np.nan_to_num(np.asarray(excess, float), nan=0.0)
+    n = len(e)
+    far = float(np.median(e[n - math.ceil(n / 3):]))
+    for d in range(int(np.argmax(e)) + 1, n):
+        if e[d] <= far or (d + 1 < n and e[d + 1] > e[d]):
+            return d, far
+    return n, far
+
+
 def weight_table(prof: np.ndarray, touch: np.ndarray, district: np.ndarray, other: np.ndarray, J: int) -> dict:
-    """M1a's table (see the module): per class ("touch", "across"), the cracks counted, f_D, f_L and w by d."""
+    """M1a's table (see the module): per class ("touch", "across"), the cracks counted, f_D, f_L, the far-field level
+    and the cut (`weight_cut`), w by d inside the cut (0 from it on) and the context weight beyond it (0 before)."""
     out: dict = {"J": int(J)}
     for name, cls in (("touch", True), ("across", False)):
         d_sel, o_sel = district & (touch == cls), other & (touch == cls)
         fd, fl = ink_shares(prof[d_sel], J), ink_shares(prof[o_sel], J)
+        w = excess_weight(fd, fl)
+        cut, far = weight_cut(fd - fl)
         out[name] = {"district_cracks": int(d_sel.sum()), "other_cracks": int(o_sel.sum()),
-                     "f_district": fd.tolist(), "f_other": fl.tolist(), "w": excess_weight(fd, fl).tolist()}
+                     "f_district": fd.tolist(), "f_other": fl.tolist(), "far_level": far, "cut": cut,
+                     "w": np.where(np.arange(J + 1) < cut, w, 0.0).tolist(),
+                     "w_context": np.where(np.arange(J + 1) >= cut, w, 0.0).tolist()}
     return out
 
 
@@ -197,15 +247,12 @@ def _distance_to(shape: tuple[int, int], r: np.ndarray, c: np.ndarray) -> np.nda
     return cv2.distanceTransform(src, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
 
 
-def district_weight(shape: tuple[int, int], my: np.ndarray, mx: np.ndarray, touch: np.ndarray,
-                    w_touch: np.ndarray, w_across: np.ndarray) -> np.ndarray:
-    """M1a's weight on a raster of `shape` (float32): each district crack (its middle (my, mx), grid rows and columns;
-    touching lots or across a street) drawn at px (floor my, floor mx); each px gets the table (`w_touch` or
-    `w_across`, w(d) for d = 0 .. J) of the nearest crack at its distance rounded, 0 past J."""
-    w_touch, w_across = np.asarray(w_touch, np.float32), np.asarray(w_across, np.float32)
-    if len(w_touch) != len(w_across):
-        raise ValueError("the two classes' tables differ in length")
-    J = len(w_touch) - 1
+def district_distance(shape: tuple[int, int], my: np.ndarray, mx: np.ndarray, touch: np.ndarray,
+                      J: int) -> tuple[np.ndarray, np.ndarray]:
+    """Each px's distance to the nearest district crack and that crack's class, on a raster of `shape`: each crack
+    (its middle (my, mx), grid rows and columns; touching lots or across a street) drawn at px (floor my, floor mx).
+    Returns d (uint8, the distance rounded, J + 1 for anything farther) and touch (bool, the nearest crack touches;
+    touch where the classes tie)."""
     h, w = shape
     r, c = np.floor(np.asarray(my)).astype(np.int64), np.floor(np.asarray(mx)).astype(np.int64)
     touch = np.asarray(touch, bool)
@@ -216,13 +263,29 @@ def district_weight(shape: tuple[int, int], my: np.ndarray, mx: np.ndarray, touc
     np.minimum(d_touch, d_across, out=d_touch)
     del d_across
     np.rint(d_touch, out=d_touch)
-    d = np.minimum(d_touch, J + 1).astype(np.uint8)
-    del d_touch
+    return np.minimum(d_touch, J + 1).astype(np.uint8), use_touch
+
+
+def weight_at(d: np.ndarray, touch: np.ndarray, w_touch, w_across) -> np.ndarray:
+    """The weight (float32) at distances `d` (uint8, J + 1 for farther) from cracks of class `touch`: `w_touch` or
+    `w_across` (w(d), d = 0 .. J) by class, 0 past J."""
+    w_touch, w_across = np.asarray(w_touch, np.float32), np.asarray(w_across, np.float32)
+    if len(w_touch) != len(w_across):
+        raise ValueError("the two classes' tables differ in length")
+    J = len(w_touch) - 1
     lut_touch, lut_across = np.zeros(J + 2, np.float32), np.zeros(J + 2, np.float32)
     lut_touch[:J + 1], lut_across[:J + 1] = w_touch, w_across
     out = lut_across[d]
-    out[use_touch] = lut_touch[d[use_touch]]
+    out[touch] = lut_touch[d[touch]]
     return out
+
+
+def district_weight(shape: tuple[int, int], my: np.ndarray, mx: np.ndarray, touch: np.ndarray,
+                    w_touch: np.ndarray, w_across: np.ndarray) -> np.ndarray:
+    """A weight on a raster of `shape` (float32): each px gets the table (`w_touch` or `w_across`, w(d) for d = 0 ..
+    J) of the nearest district crack at its distance (`district_distance`), 0 past J."""
+    d, near_touch = district_distance(shape, my, mx, touch, len(w_touch) - 1)
+    return weight_at(d, near_touch, w_touch, w_across)
 
 
 class CityGeo:
@@ -230,11 +293,12 @@ class CityGeo:
     `data.BAND` rows), its quarter (`grid.quarter_of`, every px), and at the ink px the merged page reads (inside the
     sheet's crop: its frame quad in the page stage's frames.json minus the cut boxes, `page.crop_mask`) the grid px
     holding it (`grid_px`), its block (`C.grown_raster`'s lot -> that lot's `block_num` in lots/table.parquet,
-    numbered in sorted order) and M1a's weight (see the module).  Other px (the margins and cut boxes, whose ink is not
-    the grid's ink the weight was measured on; px off the grid; every px of a sheet not on the merged page) have block
-    -1 and weight 0.  The city's rasters and the weight are built on first use (`borders.border_paths()`, about 15 s);
-    one sheet's rasters are kept at a time.  `answered`: the words (Terra's box and reading angle, `data.word_rect`) of
-    the labels an owner's answer joined (`codereader.labels.load_labels`, `held_out`)."""
+    numbered in sorted order) and M1a's weights, inside the cut and beyond it (see the module).  Other px (the margins
+    and cut boxes, whose ink is not the grid's ink the weight was measured on; px off the grid; every px of a sheet not
+    on the merged page) have block -1 and weight 0.  The city's rasters and the distances are built on first use
+    (`borders.border_paths()`, about 15 s); one sheet's rasters are kept at a time.  `answered`: the words (Terra's
+    box and reading angle, `data.word_rect`) of the labels an owner's answer joined (`codereader.labels.load_labels`,
+    `held_out`)."""
 
     def __init__(self):
         self._city: dict | None = None
@@ -250,10 +314,10 @@ class CityGeo:
             both = C.known[a] & C.known[b]
             district = both & (C.table[a] != C.table[b])
             table = weight_table(Z["prof"], Z["touch"], district, both & ~district, J)
-            weight = district_weight(C.grown_raster.shape, Z["my"][district], Z["mx"][district], Z["touch"][district],
-                                     table["touch"]["w"], table["across"]["w"])
+            d, near_touch = district_distance(C.grown_raster.shape, Z["my"][district], Z["mx"][district],
+                                              Z["touch"][district], J)
             names, lot_block = np.unique(C.lots["block_num"].astype(str).to_numpy(), return_inverse=True)
-            self._city = {"table": table, "weight": weight, "grown": C.grown_raster,
+            self._city = {"table": table, "d": d, "touch": near_touch, "grown": C.grown_raster,
                           "lot_block": lot_block.astype(np.int32), "names": names,
                           "frames": json.loads((paths.PAGE_DIR / "frames.json").read_text()), "cuts": page.load_cuts()}
         return self._city
@@ -273,7 +337,7 @@ class CityGeo:
         names = self.block_names
         return f"{len(names)}:{hashlib.sha256(chr(10).join(names).encode()).hexdigest()[:16]}"
 
-    def _rasters(self, sd: data.SheetData) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    def _rasters(self, sd: data.SheetData) -> tuple[np.ndarray, ...]:
         if not sd.world.size:
             raise ValueError(f"{sd.series} {sd.sheet} was read without its placement: its map points are not known")
         key = (sd.series, sd.sheet, sd.height, sd.width,
@@ -281,10 +345,12 @@ class CityGeo:
         if self._last is not None and self._last[0] == key:
             return self._last[1]
         B = self._built()
+        table = B["table"]
         h, w = sd.height, sd.width
         quarter = np.full((h, w), 255, np.uint8)
         block = np.full((h, w), -1, np.int32)
         weight = np.zeros((h, w), np.float32)
+        context = np.zeros((h, w), np.float32)
         quad = B["frames"].get(sd.sheet) if sd.series == paths.SERIES else None
         mapped = np.zeros((h, w), bool) if quad is None else \
             page.crop_mask((h, w), np.asarray(quad, float), B["cuts"].get(sd.sheet, []))
@@ -303,11 +369,14 @@ class CityGeo:
             on = (col >= 0) & (col < gw) & (row >= 0) & (row < gh)
             bl = np.full(len(col), -1, np.int32)
             bl[on] = B["lot_block"][B["grown"][row[on], col[on]]]
-            ww = np.zeros(len(col), np.float32)
-            ww[on] = B["weight"][row[on], col[on]]
+            dd, tt = B["d"][row[on], col[on]], B["touch"][row[on], col[on]]
+            ww, cw = np.zeros(len(col), np.float32), np.zeros(len(col), np.float32)
+            ww[on] = weight_at(dd, tt, table["touch"]["w"], table["across"]["w"])
+            cw[on] = weight_at(dd, tt, table["touch"]["w_context"], table["across"]["w_context"])
             block[band][m] = bl
             weight[band][m] = ww
-        self._last = (key, (quarter, block, weight))
+            context[band][m] = cw
+        self._last = (key, (quarter, block, weight, context))
         return self._last[1]
 
     def quarter(self, sd: data.SheetData) -> np.ndarray:
@@ -318,6 +387,9 @@ class CityGeo:
 
     def border_weight(self, sd: data.SheetData) -> np.ndarray:
         return self._rasters(sd)[2]
+
+    def context_weight(self, sd: data.SheetData) -> np.ndarray:
+        return self._rasters(sd)[3]
 
     def answered(self, sd: data.SheetData) -> np.ndarray:
         if self._answered is None:
@@ -391,17 +463,22 @@ def _add_sheet(sums: dict[str, _Sums], sd: data.SheetData, chance: np.ndarray, q
         near = np.zeros((h, w), bool)
     line = linerules.line_px(ink, sd.ft_per_px)
     by_line = cv2.dilate(line.view(np.uint8), np.ones((3, 3), np.uint8)) > 0
-    q, blk, c, wt = quarter.ravel(), block.ravel(), chance.ravel(), weight.ravel()
+    q, blk, c = quarter.ravel(), block.ravel(), chance.ravel()
 
-    def add(name: str, mask: np.ndarray, weighted: bool = False) -> None:
+    def add(name: str, mask: np.ndarray, weight: np.ndarray | None = None) -> None:
         i = np.flatnonzero(mask)
-        sums[name].add(q[i], blk[i], c[i], wt[i] if weighted else None)
+        sums[name].add(q[i], blk[i], c[i], None if weight is None else weight.ravel()[i])
 
     split = {"in_box": in_box, "near": near, "far": ~in_box & ~near}
     border = scope & (weight > 0)
-    add("m1a", border, True)
+    add("m1a", border, weight)
     for part, where in split.items():
-        add(f"m1a_{part}", border & where, True)
+        add(f"m1a_{part}", border & where, weight)
+    if "m1a_context" in sums:
+        context = _page_raster(geo.context_weight(sd), sd, "context weight", np.float32)
+        beyond = scope & (context > 0)
+        add("m1a_context", beyond, context)
+        add("m1a_in_box_context", beyond & in_box, context)
     on_line = scope & line
     for part, where in split.items():
         add(f"m1b_{part}", on_line & where)
@@ -484,17 +561,18 @@ def gate_sheets(sheets: list[data.SheetData], source: ChanceSource, quarters: tu
     if not quarters or unknown:
         raise ValueError(f"quarters are some of {paths.QUARTERS}, not {quarters}")
     quarter_ix = np.array([paths.QUARTERS.index(q) for q in quarters], np.uint8)
-    answered = callable(getattr(geo, "answered", None))
-    sums = {m: _Sums(TARGET[m]) for m in MEASURES if answered or m != "m2_answered"}
+    optional = {"m2_answered": callable(getattr(geo, "answered", None)),
+                **{m: callable(getattr(geo, "context_weight", None)) for m in CONTEXT}}
+    sums = {m: _Sums(TARGET[m]) for m in MEASURES if optional.get(m, True)}
     for sd in sheets:
         _add_sheet(sums, sd, _chance(source, sd), quarter_ix, geo)
     tallies = {m: s.table() for m, s in sums.items()}
-    summary = {m: _summary(t, m in M1A, boot, seed) for m, t in tallies.items()}
+    summary = {m: _summary(t, m in WEIGHTED, boot, seed) for m, t in tallies.items()}
     result = {
         "quarters": list(quarters), "sheets": [sd.sheet for sd in sheets],
         "called": {"0.5": CALLED_05, "0.9": CALLED_09}, "near_px": NEAR_PX,
         "point_bins": [name for name, _ in POINT_BINS], "boot": boot, "seed": seed,
-        "targets": {m: TARGET[m] for m in MEASURES},
+        "targets": {m: TARGET[m] for m in MEASURES}, "misses": MISSES,
     }
     for m in MEASURES:
         if ":" in m:
@@ -540,7 +618,8 @@ def markdown(result: dict) -> str:
            (f"Quarters: {', '.join(result['quarters'])}. Sheets: {len(result['sheets'])}. Called: chance >= 0.5 "
            f"({result['called']['0.5']} of 255) and >= 0.9 ({result['called']['0.9']} of 255). Interval: 95%, "
            f"{result['boot']} bootstrap draws over blocks (a block in a quarter), seed {result['seed']}. "
-           "Every px is ink; M1a's px are the sum of its weights."), "",
+           "Every px is ink; M1a's px are the sum of its weights. m1a_context and m1a_in_box_context are "
+           "diagnostics, in no verdict."), "",
            "| measure | ink | target | px | called >= 0.5 | 95% interval | called >= 0.9 | mean chance | log loss |",
            "|---|---|---|---|---|---|---|---|---|"]
     for m in MEASURES:
@@ -553,6 +632,8 @@ def markdown(result: dict) -> str:
         ci = "-" if r["ci_05"] is None else f"[{r['ci_05'][0]:.4f}, {r['ci_05'][1]:.4f}]"
         out.append(f"| {m} | {WHAT[m]} | {TARGET[m]} | {_px(r['px'])} | {_f(r['called_05'])} | {ci} | "
                    f"{_f(r['called_09'])} | {_f(r['mean'])} | {_f(r['log_loss'])} |")
+    out += ["", "## What each measure misses", ""]
+    out += [f"- **{family}:** {line}." for family, line in result.get("misses", MISSES).items()]
     out += ["", "## M1a's weight w(d)", ""]
     table = result.get("m1a_weight")
     if not table:
@@ -560,13 +641,23 @@ def markdown(result: dict) -> str:
     else:
         t, a = table["touch"], table["across"]
         out += [(f"d: grid px (4 ft) from the nearest district crack. Touching lots: {t['district_cracks']:,} district "
-                f"cracks, {t['other_cracks']:,} other both-known cracks; across a street: {a['district_cracks']:,} "
-                f"and {a['other_cracks']:,}. w(d) = max(0, f_D - f_L) / f_D; 0 past d = {table['J']}."), "",
-                "| d | touching f_D | touching f_L | touching w | across f_D | across f_L | across w |",
-                "|---|---|---|---|---|---|---|"]
+                 f"cracks, {t['other_cracks']:,} other both-known cracks; across a street: {a['district_cracks']:,} "
+                 f"and {a['other_cracks']:,}. w(d) = max(0, f_D - f_L) / f_D below the class's cut, 0 from it on; "
+                 f"beyond the cut (up to d = {table['J']}) the same formula is the context weight (m1a_context)."), "",
+                ("The cut, per class: the first d past the excess's peak (excess e(d) = f_D - f_L) at which e is at "
+                 "most the far-field level, the median e over the outer third of d = 0 .. J, or at which e stops "
+                 "falling (e(d + 1) > e(d): another feature's ink begins). "
+                 f"Touching lots: far-field level {t['far_level']:+.4f}, cut at d = {t['cut']} (weight on d <= "
+                 f"{t['cut'] - 1}). Across a street: far-field level {a['far_level']:+.4f}, cut at d = {a['cut']} "
+                 f"(weight on d <= {a['cut'] - 1})."), "",
+                "| d | touching f_D | f_L | excess | w | beyond the cut | across f_D | f_L | excess | w | beyond the cut |",
+                "|---|---|---|---|---|---|---|---|---|---|---|"]
         for d in range(table["J"] + 1):
-            out.append(f"| {d} | {_f(t['f_district'][d], 3)} | {_f(t['f_other'][d], 3)} | {_f(t['w'][d], 3)} | "
-                       f"{_f(a['f_district'][d], 3)} | {_f(a['f_other'][d], 3)} | {_f(a['w'][d], 3)} |")
+            cells = []
+            for c in (t, a):
+                cells += [_f(c["f_district"][d], 3), _f(c["f_other"][d], 3),
+                          f"{c['f_district'][d] - c['f_other'][d]:+.4f}", _f(c["w"][d], 3), _f(c["w_context"][d], 3)]
+            out.append(f"| {d} | " + " | ".join(cells) + " |")
     rules = result["rules"]
     out += ["", "## The run rule's accuracy on exact-truth cases", "", f"{rules['rule']}.", ""]
     for glyphs in ("putText", "font.npz"):
@@ -608,7 +699,9 @@ def paired(a: list[Path], b: list[Path], measure: str, boot: int = 1000, seed: i
     """The difference in `measure`'s `stat` (called_05, called_09, mean or log_loss) of the runs `b` less the runs `a`
     (each a folder `write` wrote), on the blocks (quarter, block) every run of both has px in: each arm's value is the
     mean over its runs of the ratio of sums; each bootstrap draw resamples those blocks once, the same draw for both
-    arms.  Returns {"diff", "lo", "hi"} (the 95% interval) with each arm's value and the blocks used."""
+    arms.  Returns {"diff", "lo", "hi"} (the 95% interval) with each arm's value and the blocks used.  A block's px
+    do not depend on the chance, so px that differ between runs on a block both scored stop it (ValueError): the runs
+    were scored on different sheets, code or geo."""
     if not a or not b:
         raise ValueError("both arms need at least one run")
     if stat not in STATS:
@@ -630,6 +723,13 @@ def paired(a: list[Path], b: list[Path], measure: str, boot: int = 1000, seed: i
         order = np.argsort(u)
         at = order[np.searchsorted(u, common, sorter=order)]
         cols.append((t["px"][at], t[field][at]))
+    folders = [*a, *b]
+    for (px, _), folder in zip(cols[1:], folders[1:]):
+        if not np.allclose(px, cols[0][0]):
+            bad = int(np.flatnonzero(~np.isclose(px, cols[0][0]))[0])
+            raise ValueError(f"{measure}'s px differ between {folders[0]} and {folder} on a block both scored "
+                             f"(quarter {int(common[bad] >> 32)}, block {int((common[bad] & 0xFFFFFFFF) - 1)}): px do "
+                             "not depend on the chance, so the runs were scored on different sheets, code or geo")
     n_a = len(a)
 
     def arms(idx=None):
