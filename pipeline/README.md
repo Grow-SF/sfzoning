@@ -934,8 +934,12 @@ The commands, run from `pipeline/`:
   may stand for (its top reading's trust calibrated: logit = 0.128 + 1.085 logit(trust), `energy.TOP_READING_FIT`), a
   different code across a border with odds < 0 its −odds, and the same code across a border with odds > 0 its odds;
   a tiny tie-break (1e-4 × the cheapest path from each code's labels) settles lots no label reaches. The search runs
-  graph-cut expansion moves (a minimum cut, `solver/mincut.py`), then region moves, compound moves and expansion
-  again until the energy stops falling; a move is kept only if the exact energy falls. It is discrete: every lot gets the same code every run. Into
+  graph-cut expansion moves (a minimum cut, `solver/mincut.py`), then region moves, compound moves, compound fusion
+  moves (`search.compound_fusion_moves`, solved by roof duality, `solver/qpbo.py`) and expansion again until the energy
+  stops falling (at most 8 rounds); a move is kept only if the exact energy falls. The compound fusion move is on by
+  default and in the stage (the owner's ruling, 2026-11-16); `sfzmaps solver solve RUN --no-compound-fusion` turns it
+  off for an experiment's comparison, and `final` refuses that. On the 2000 page it takes the stage's every-lot wrong
+  lots from 7,100 to 4,543, incidents 868 to 862, labels right 94.47% to 94.79%. It is discrete: every lot gets the same code every run. Into
   the run's folder it writes `placement.npz`, `runs/RUN-<Q>.npz`, `.log` (the quarter's log: what its process
   prints, with no times; each solve's time and anything a process writes to stderr, a library's warning or a
   traceback, go to the console only) and each solve's costs (`RUN-<Q>-costs.npz`, for `holes`), the join
@@ -952,7 +956,7 @@ The commands, run from `pipeline/`:
   borders as walls (odds ±6) must give back nearly the table.
   The stage reads the lots, the merged page's `ink.png` (the holes' causes), `prints.parquet`, the labels, the
   walls, the warp's placements (the hand leader moves), `label_fixes.csv` and `table-corrections.csv`. On the 2000
-  page it takes about 4 minutes (the four solves about 165 s each, side by side), up to 17 GB in one process, and
+  page it takes about 6 minutes with the compound fusion move (the four solves side by side), up to 17 GB in one process, and
   writes about 110 MB, most of it the solves' costs.
 - `sfzmaps solver score RUN... [--with-data-errors]` scores runs by their mistakes (`solver/measures.py`): the share
   of the table's district lines the run draws and of the lines it draws that are table lines (by count and length),
