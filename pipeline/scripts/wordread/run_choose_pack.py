@@ -9,8 +9,10 @@ Item (5), box choice (`wordread.choose`): each box gets its versions (as found, 
 nearest box, a character trimmed at either end), each version's words are read by the reader that never saw the box's
 quarter (CPU, one thread per worker), and the version is chosen.  Two arms are scored against reading the boxes as found:
   plain   the version whose words' log posteriors sum highest (`choose(params=None)`: no fitted weight at all);
-  fitted  the conditional logit (`choose.fit_choice`), fitted per fold on the TRAINING quarters' boxes outside the
-          answered blocks, soft-labelled by Terra's words' ink (`choose.label_weights`), never by the owner's answers.
+  fitted  each version's own quality (`choose.fit_quality`: a fractional logistic regression of its label weight on
+          its features, a split's quality the product of its halves'; the version of the highest quality is kept, no
+          shares between versions), fitted per fold on the TRAINING quarters' boxes outside the answered blocks,
+          soft-labelled by Terra's words' ink (`choose.label_weights`), never by the owner's answers.
 Every box is read once by its own quarter's reader (the run's reader for the held-out quarter: `--reader-name`, at the
 run's seed, else the stage's `<q>.pt`), so a training quarter's scores are as out-of-sample as the held-out quarter's.
 `--boxes-dir`, `--reader-name` and `--reader-root` take another run's boxes and readers (Task 8's).
@@ -247,18 +249,32 @@ def feature_rows(boxes: pd.DataFrame, versions: dict, terra: pd.DataFrame, codes
     return pd.concat(out, ignore_index=True)
 
 
+FIT_COLS = ["box", "cand", "word_scores", "gap", "across", "kind", "weight", "held_out", "answered"]
+
+
 def fold_fit(rows: pd.DataFrame, q: int) -> dict:
-    """Fold q's choice parameters: `fit_choice` on the boxes of the other quarters outside the answered blocks and not
-    meeting a Terra word that touches quarter q."""
+    """Fold q's quality parameters: `fit_quality` on the boxes of the other quarters outside the answered blocks and not
+    meeting a Terra word that touches quarter q (with the box model's `word_count1` when the rows carry it)."""
     use = rows[(rows["quarter"] != q) & ~rows["answered"] & ~rows[HOLD[q]]].copy()
     use["held_out"] = False
-    return C.fit_choice(use[["box", "cand", "score", "gap", "across", "weight", "held_out", "answered"]])
+    return C.fit_quality(use[FIT_COLS + [c for c in ("word_count1",) if c in use]])
+
+
+def calibration(params: dict, rows: pd.DataFrame) -> dict:
+    """Per version: the mean predicted quality (`choose.predict_quality`) against the mean label weight, and the
+    count, over `rows` (a report, decides nothing)."""
+    q = C.predict_quality(params, rows.reset_index(drop=True))
+    d = pd.DataFrame({"cand": rows["cand"].to_numpy(), "quality": q, "weight": rows["weight"].to_numpy(float)})
+    g = d.groupby("cand")
+    return {c: {"mean_quality": round(float(g["quality"].mean()[c]), 4),
+                "mean_weight": round(float(g["weight"].mean()[c]), 4), "n": int(g.size()[c])} for c in g.groups}
 
 
 # --- the chosen boxes ---------------------------------------------------------------------------------------------------
 
 def choose_all(boxes: pd.DataFrame, versions: dict, codes: R.CodeList, params: dict | None) -> dict[int, str]:
-    """The version every box in `versions` keeps (`choose.choose`; `params` None: the plain sum of log posteriors)."""
+    """The version every box in `versions` keeps (`choose.choose`: with `params` the highest quality; None: the plain
+    sum of log posteriors)."""
     by_row = boxes.set_index("row", drop=False)
     return {row: C.choose(by_row.loc[row].to_dict(), e["cands"], read_fn_of(e, codes), params=params)[0]
             for row, e in versions.items()}
@@ -449,6 +465,9 @@ def run(name: str, quarter: str, seed: int, boxes_dir: Path | None = None, reade
         mine = {r: e for r, e in versions.items() if int(boxes["quarter"].iloc[r]) == qi}
         fitted.update(choose_all(boxes, mine, codes, params[qn]))
     picks["fitted"] = fitted
+    order = sorted(versions)
+    pd.DataFrame({"row": order, "quarter": boxes["quarter"].to_numpy()[order],
+                  **{arm: [picks[arm][r] for r in order] for arm in ARMS}}).to_parquet(out / "picks.parquet", index=False)
 
     answers = measures.answers_from_store()
     answers = answers[answers["quarter"] == q].reset_index(drop=True)
@@ -479,6 +498,9 @@ def run(name: str, quarter: str, seed: int, boxes_dir: Path | None = None, reade
                             for a in ARMS},
             "read_numbers": {a: result[a]["read_numbers"] for a in ARMS},
             "fit_boxes": {qn: params[qn]["boxes"] for qn in paths.QUARTERS},
+            "calibration": {"training": calibration(params[quarter], rows[(rows["quarter"] != q) & ~rows["answered"]
+                                                                          & ~rows[HOLD[q]]]),
+                            "held_out": calibration(params[quarter], rows[rows["quarter"] == q])},
             "git": _git("rev-parse", "HEAD"), "seconds": round(time.perf_counter() - t0, 1)}
     (out / "run.json").write_text(json.dumps(info, indent=1, default=float) + "\n")
     base = ROOT / "runs" / run_name(reader_name, quarter, seed) / "labels.parquet"

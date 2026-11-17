@@ -15,8 +15,15 @@ rectangles' corners in page px (edge coordinates):
   trim_end        the same at the other end (needs a box longer than one such width)
 
 No fixed threshold decides anything here: the split's gap and the join's distance (in the kind's character widths) are
-features of the fitted choice (`fit_choice`, `choose(params=...)`), the character widths are measured, and the only
-constants are numerical (a tie tolerance, a tiny ridge).
+features of the fitted quality (`fit_quality`, `choose(params=...)`), the character widths are measured, and the only
+constants are numerical (a tie tolerance, a tiny ridge, a floor under log(1 - quality)).
+
+The fitted choice (`fit_quality`) models each version's OWN quality, the chance it holds exactly one whole word
+(`label_weights`, by Terra's words' ink), from its words' read scores, its gap features, the box's kind, the version
+as a fitted offset and, when given, Task 15's box model's log P(count = 1) of each word's crop; a split's quality is
+the product of its halves'.  `choose` keeps the version of the highest quality.  The versions do not compete for
+shares of one box's probability (a conditional logit did, and near-copies, as found and its two trims, split their
+outcome's share three ways against a lone join: Task 11's NE run picked the join for 64% of boxes).
 
 `choose` reads each word of each version with `read_fn(corners, box)`, which returns the log posterior (over the ink
 alone) of each hypothesis: the strings it can read, and "other" and "none".  A word's score is the log of its best
@@ -206,25 +213,39 @@ def word_score(log_post: dict[str, float], box: dict, prior_fn=None) -> tuple[st
     return names[k], float(post[k])
 
 
-def _scored(box: dict, cands, read_fn, prior_fn=None) -> tuple[dict, dict]:
-    """Every version's score (the sum of its words' `word_score`) and its words' best hypotheses."""
+def _scored(box: dict, cands, read_fn, prior_fn=None) -> tuple[dict, dict, dict]:
+    """Every version's score (the sum of its words' `word_score`), its words' best hypotheses and its words' own
+    scores."""
     if not cands or cands[0].name != "as_found":
         raise ValueError("the candidates must start with as_found")
-    scores, words = {}, {}
+    scores, words, each = {}, {}, {}
     for name, rects in cands:
         got = [word_score(read_fn(r, box), box, prior_fn) for r in rects]
-        scores[name] = float(sum(s for _, s in got))
+        each[name] = [float(s) for _, s in got]
+        scores[name] = float(sum(each[name]))
         words[name] = [h for h, _ in got]
-    return scores, words
+    return scores, words, each
 
 
-def choice_features(box: dict, cands, read_fn, prior_fn=None) -> pd.DataFrame:
-    """One row per version for the choice model: `cand` (name), `score` (the sum of its words' log posteriors), `gap`
-    (the split's gap or the join's space along the axis, in the kind's character widths) and `across` (the join's
-    space across the axis, in word heights); 0 for as_found and the trims."""
-    scores, _ = _scored(box, cands, read_fn, prior_fn)
-    return pd.DataFrame({"cand": [c.name for c in cands], "score": [scores[c.name] for c in cands],
-                         "gap": [c.along for c in cands], "across": [c.across for c in cands]})
+def _features(box: dict, cands, scores: dict, each: dict, count_fn=None) -> pd.DataFrame:
+    f = pd.DataFrame({"cand": [c.name for c in cands], "score": [scores[c.name] for c in cands],
+                      "word_scores": [list(each[c.name]) for c in cands], "gap": [c.along for c in cands],
+                      "across": [c.across for c in cands]})
+    f["kind"] = box_kind(box) or "unknown"
+    if count_fn is not None:
+        f["word_count1"] = [[float(count_fn(r, box)) for r in c.rects] for c in cands]
+    return f
+
+
+def choice_features(box: dict, cands, read_fn, prior_fn=None, count_fn=None) -> pd.DataFrame:
+    """One row per version for the quality model: `cand` (name), `score` (the sum of its words' log posteriors, the
+    plain choice's), `word_scores` (each word's own log posterior: one for most versions, two for a split), `gap` (the
+    split's gap or the join's space along the axis, in the kind's character widths), `across` (the join's space across
+    the axis, in word heights; both 0 for as_found and the trims) and `kind` (the box's, `box_kind`; "unknown" without
+    one).  With `count_fn(corners, box)` (Task 15's box model: a word rectangle's log P(count = 1), e.g.
+    `boxmodel.box_logp` of its `boxmodel.box_crop`) also `word_count1`, each word's."""
+    scores, _, each = _scored(box, cands, read_fn, prior_fn)
+    return _features(box, cands, scores, each, count_fn)
 
 
 def _corners(word) -> np.ndarray:
@@ -258,96 +279,156 @@ def label_weights(cands: list[Candidate], terra_words: list, ink: np.ndarray) ->
     return out
 
 
-NON_BASE = ("split_gap", "join_nearest", "trim_start", "trim_end")      # the versions with an alpha (as_found: 0)
-GAPPED = ("split_gap", "join_nearest")                                    # the versions with a gamma (along)
-ACROSS = ("join_nearest",)                                                # the versions with a gamma across
+TYPES = ("as_found", "split_gap", "join_nearest", "trim_start", "trim_end")
+NON_BASE = TYPES[1:]                                       # the versions with an offset alpha (as_found's: the intercept)
+GAPPED = ("split_gap", "join_nearest")                     # the versions with a gamma (along)
+ACROSS = ("join_nearest",)                                 # the versions with a gamma across
+KIND_OFFSETS = ("block", "street", "other", "unknown")     # the box kinds with an offset (zoning's: the intercept)
+NEED = ("box", "cand", "word_scores", "gap", "across", "kind", "weight")
+TINY = 1e-300              # numerical: keeps log(1 - quality) finite at a quality of exactly 1; decides nothing
 
 
-def fit_choice(rows: pd.DataFrame, ridge: float = RIDGE) -> dict:
-    """The conditional logit P(c) proportional to exp(beta score_c + alpha_c + gamma_c along_c + gamma'_c across_c) over a box's versions,
-    fitted by maximum likelihood (L-BFGS, with a tiny numerical ridge of `ridge` on every weight, so a version never seen
-    stays at 0 and a fit separated by score stays finite).  alpha and gamma of as_found are 0.  `rows`: one per version of each
-    box, `choice_features`'s columns plus `box` (an id) and `weight` (the version's `label_weights`: a SOFT target).
-    A box's targets are its weights over their sum, and the box counts with the sum capped at 1, so a box none of whose
-    versions holds one word contributes about nothing, through its weights and by no rule.  Rows may come only from the training quarters' Terra-matched boxes
+def _pieces(rows: pd.DataFrame, count: bool) -> tuple[np.ndarray, np.ndarray]:
+    """The design matrix of every word of every version (one row per word: a split has two) and the version (position
+    in `rows`) each word belongs to.  Columns: the intercept, alpha per NON_BASE, gamma (along) per GAPPED, gamma
+    across per ACROSS, the offset per KIND_OFFSETS, the word's score (beta) and, with `count`, its log P(count = 1)."""
+    ws = [np.asarray(w, float).ravel() for w in rows["word_scores"]]
+    owner = np.repeat(np.arange(len(rows)), [len(w) for w in ws]).astype(int)
+    names = rows["cand"].to_numpy(dtype=object)[owner]
+    kinds = rows["kind"].to_numpy(dtype=object)[owner]
+    along, across = rows["gap"].to_numpy(float)[owner], rows["across"].to_numpy(float)[owner]
+    cols = [np.ones(len(owner))]
+    cols += [(names == t).astype(float) for t in NON_BASE]
+    cols += [np.where(names == t, along, 0.0) for t in GAPPED]
+    cols += [np.where(names == t, across, 0.0) for t in ACROSS]
+    cols += [(kinds == k).astype(float) for k in KIND_OFFSETS]
+    cols.append(np.concatenate(ws) if ws else np.zeros(0))
+    if count:
+        c1 = [np.asarray(c, float).ravel() for c in rows["word_count1"]]
+        if any(len(c) != len(w) for c, w in zip(c1, ws)):
+            raise ValueError("word_count1 needs one value per word, as word_scores")
+        cols.append(np.concatenate(c1) if c1 else np.zeros(0))
+    return np.stack(cols, 1), owner
+
+
+def _unpack(th: np.ndarray, count: bool) -> dict:
+    k = 1
+    al = dict(zip(NON_BASE, th[k:k + len(NON_BASE)]))
+    k += len(NON_BASE)
+    ga = dict(zip(GAPPED, th[k:k + len(GAPPED)]))
+    k += len(GAPPED)
+    gx = dict(zip(ACROSS, th[k:k + len(ACROSS)]))
+    k += len(ACROSS)
+    kd = dict(zip(KIND_OFFSETS, th[k:k + len(KIND_OFFSETS)]))
+    k += len(KIND_OFFSETS)
+    return {"intercept": float(th[0]), "beta": float(th[k]), "count1": float(th[k + 1]) if count else None,
+            "alpha": {"as_found": 0.0, **{n: float(v) for n, v in al.items()}},
+            "gamma": {"as_found": 0.0, **{n: float(v) for n, v in ga.items()}},
+            "gamma_across": {"as_found": 0.0, **{n: float(v) for n, v in gx.items()}},
+            "kind": {KIND_NAMES[0]: 0.0, **{n: float(v) for n, v in kd.items()}}}
+
+
+def _theta(params: dict) -> np.ndarray:
+    th = [params["intercept"], *(params["alpha"].get(n, 0.0) for n in NON_BASE),
+          *(params["gamma"].get(n, 0.0) for n in GAPPED), *(params["gamma_across"].get(n, 0.0) for n in ACROSS),
+          *(params["kind"].get(k, 0.0) for k in KIND_OFFSETS), params["beta"]]
+    if params.get("count1") is not None:
+        th.append(params["count1"])
+    return np.array(th, float)
+
+
+def _log_quality(X: np.ndarray, owner: np.ndarray, n: int, th: np.ndarray):
+    """Each word's eta and each version's log quality (the sum over its words of log sigmoid(eta))."""
+    eta = X @ th
+    return eta, np.bincount(owner, -np.logaddexp(0.0, -eta), minlength=n)
+
+
+def predict_quality(params: dict, rows: pd.DataFrame) -> np.ndarray:
+    """Each version's (row's) quality under `params` (`fit_quality`): the product over its words of sigmoid(eta)."""
+    count = params.get("count1") is not None
+    if count and "word_count1" not in rows:
+        raise ValueError("these params weigh the box model's log P(count = 1): the rows need `word_count1` "
+                         "(choose: pass count_fn)")
+    X, owner = _pieces(rows.reset_index(drop=True), count)
+    return np.exp(_log_quality(X, owner, len(rows), _theta(params))[1])
+
+
+def fit_quality(rows: pd.DataFrame, ridge: float = RIDGE) -> dict:
+    """Each version's own quality: a fractional logistic regression of its label weight w (`label_weights`: the chance
+    it holds exactly one whole Terra word, a SOFT target in [0, 1]) on its features, every version its own observation
+    (versions do not compete for shares: near-copies such as as_found and its trims can't split a vote).  A word's
+    eta = intercept + alpha_version + gamma_version along + gamma'_version across + kind_offset + beta score_word
+    (+ count1 log P(count = 1)_word when the rows carry `word_count1`, Task 15's box model; fitted only then); a
+    version's quality is the product over its words of sigmoid(eta) (a split's: its halves', as its weight is), fitted
+    by maximum quasi-likelihood, sum of w log q + (1 - w) log(1 - q), by L-BFGS with its exact gradient and a tiny
+    numerical ridge `ridge` on every weight (a version or kind never seen stays at 0, a separated fit stays finite).
+    alpha, gamma and gamma' of as_found and the offset of a zoning box are 0.
+
+    `rows`: one per version of each box, `choice_features`'s columns (`cand`, `word_scores`, `gap`, `across`, `kind`;
+    `word_count1` optional) plus `box` (an id) and `weight`.  Rows may come only from the training quarters' boxes
     outside the answered blocks: the columns `held_out` and `answered` are REQUIRED (ValueError when missing) and a
-    true one is refused.  Columns: `score`, `gap` (along), `across`.  The ridge is on beta too.  Returns {"beta",
-    "alpha": {version: value}, "gamma": {version: along weight}, "gamma_across": {version: across weight}, "boxes",
-    "nll"}."""
+    true one is refused.  Returns {"intercept", "beta", "count1" (None without the column), "alpha", "gamma",
+    "gamma_across" ({version: value}), "kind" ({kind: value}), "boxes", "versions", "nll", "converged",
+    "iterations"}."""
     for flag in ("held_out", "answered"):
         if flag not in rows:
-            raise ValueError(f"fit_choice: rows need a `{flag}` column (False for a row that may be used)")
+            raise ValueError(f"fit_quality: rows need a `{flag}` column (False for a row that may be used)")
         if rows[flag].astype(bool).any():
-            raise ValueError(f"fit_choice: rows flagged {flag} may not be used to fit")
+            raise ValueError(f"fit_quality: rows flagged {flag} may not be used to fit")
+    missing = [c for c in NEED if c not in rows]
+    if missing or not len(rows):
+        raise ValueError(f"fit_quality: needs rows with the columns {NEED} (missing {missing})")
     rows = rows.reset_index(drop=True)
-    if not len(rows) or "weight" not in rows:
-        raise ValueError("fit_choice: needs rows with a `weight` column")
-    total = rows.groupby("box")["weight"].transform("sum").to_numpy(float)
-    target = np.where(total > 0, rows["weight"].to_numpy(float) / np.where(total > 0, total, 1.0), 0.0) \
-        * np.minimum(total, 1.0)
-    ids, grp = np.unique(rows["box"].to_numpy(), return_inverse=True)
-    score, gap, across = (rows[c].to_numpy(float) for c in ("score", "gap", "across"))
-    names = rows["cand"].to_numpy()
-    where = {n: np.flatnonzero(names == n) for n in NON_BASE}
-
-    def unpack(th):
-        k = 1 + len(NON_BASE)
-        return (th[0], dict(zip(NON_BASE, th[1:k])), dict(zip(GAPPED, th[k:k + len(GAPPED)])),
-                dict(zip(ACROSS, th[k + len(GAPPED):])))
+    count = "word_count1" in rows
+    X, owner = _pieces(rows, count)
+    w = np.clip(rows["weight"].to_numpy(float), 0.0, 1.0)
+    n = len(rows)
 
     def nll(th):
-        beta, al, ga, gx = unpack(th)
-        u = beta * score
-        for n in NON_BASE:
-            u[where[n]] += al[n]
-        for n in GAPPED:
-            u[where[n]] += ga[n] * gap[where[n]]
-        for n in ACROSS:
-            u[where[n]] += gx[n] * across[where[n]]
-        m = np.full(len(ids), -np.inf)
-        np.maximum.at(m, grp, u)
-        z = np.zeros(len(ids))
-        np.add.at(z, grp, np.exp(u - m[grp]))
-        pen = ridge * (beta * beta + sum(v * v for v in (*al.values(), *ga.values(), *gx.values())))
-        return float(-(target * (u - m[grp] - np.log(z[grp]))).sum() + pen)
+        eta, lq = _log_quality(X, owner, n, th)
+        l1q = np.log(np.maximum(-np.expm1(lq), TINY))                       # log(1 - quality)
+        f = float(-(w * lq + (1.0 - w) * l1q).sum() + ridge * th @ th)
+        # d f / d eta_word = -(w - q) sigmoid(-eta_word) / (1 - q), the ratio <= 1 (it is 1 for a one-word version)
+        ratio = np.exp(np.minimum(-np.logaddexp(0.0, eta) - l1q[owner], 0.0))
+        return f, X.T @ (-(w - np.exp(lq))[owner] * ratio) + 2.0 * ridge * th
 
-    res = minimize(nll, np.zeros(1 + len(NON_BASE) + len(GAPPED) + len(ACROSS)),
-                   method="L-BFGS-B")
-    beta, al, ga, gx = unpack(res.x)
-    return {"beta": float(beta), "alpha": {"as_found": 0.0, **{k: float(v) for k, v in al.items()}},
-            "gamma": {"as_found": 0.0, **{k: float(v) for k, v in ga.items()}},
-            "gamma_across": {"as_found": 0.0, **{k: float(v) for k, v in gx.items()}}, "boxes": int(len(ids)),
-            "nll": float(res.fun)}
+    res = minimize(nll, np.zeros(X.shape[1]), jac=True, method="L-BFGS-B", options={"maxiter": 10_000})
+    out = _unpack(res.x, count)
+    out.update(boxes=int(rows["box"].nunique()), versions=int(n), nll=float(res.fun), converged=bool(res.success),
+               iterations=int(res.nit))
+    return out
 
 
-def choose(box: dict, cands: list[Candidate], read_fn, prior_fn=None, params: dict | None = None
+def choose(box: dict, cands: list[Candidate], read_fn, prior_fn=None, params: dict | None = None, count_fn=None
            ) -> tuple[str, dict]:
     """The version of `box` to keep, and a dict: `scores` (every version's), `words` (the chosen version's best
     hypothesis per word).  `read_fn(corners, box)` reads one word rectangle (4, 2) and returns {hypothesis: log
     posterior}, "other" and "none" among them.
 
     `params` None: the version with the highest score (the sum over its words of `word_score`), the first of equal
-    scores winning, so `cands` must start with as_found.  `params` (`fit_choice`; the gaps are in the candidates): the
-    argmax of the fitted logit over the versions, the same tie-break; the dict then also holds `probs` (every
-    version's) and `prob` (the chosen one's)."""
-    scores, words = _scored(box, cands, read_fn, prior_fn)
+    scores winning, so `cands` must start with as_found.  `params` (`fit_quality`; the gaps are in the candidates): the
+    version of the highest predicted quality (each version's own, `predict_quality`: a split's the product of its
+    halves'), the same tie-break; the dict then also holds `quality` (every version's) and `prob` (the chosen one's).
+    Params fitted with the box model's column need `count_fn(corners, box)`, its log P(count = 1) of a word rectangle
+    (ValueError without)."""
+    scores, words, each = _scored(box, cands, read_fn, prior_fn)
     best = cands[0].name
     if params is None:
         for name in (c.name for c in cands[1:]):
             if scores[name] > scores[best] + EPS:
                 best = name
         return best, {"scores": scores, "words": words[best]}
-    u = np.array([params["beta"] * scores[c.name] + params["alpha"].get(c.name, 0.0)
-                  + params["gamma"].get(c.name, 0.0) * c.along
-                  + params.get("gamma_across", {}).get(c.name, 0.0) * c.across for c in cands])
-    p = np.exp(u - _logsumexp(u))
+    count = params.get("count1") is not None
+    if count and count_fn is None:
+        raise ValueError("these params weigh the box model's log P(count = 1): pass count_fn")
+    q = predict_quality(params, _features(box, cands, scores, each, count_fn if count else None))
     k = 0
     for i in range(1, len(cands)):
-        if p[i] > p[k] + EPS:
+        if q[i] > q[k] + EPS:
             k = i
     best = cands[k].name
-    return best, {"scores": scores, "words": words[best], "probs": dict(zip((c.name for c in cands), p.tolist())),
-                  "prob": float(p[k])}
+    return best, {"scores": scores, "words": words[best], "quality": dict(zip((c.name for c in cands), q.tolist())),
+                  "prob": float(q[k])}
 
 
 # --- measuring the character widths -------------------------------------------------------------------------------------

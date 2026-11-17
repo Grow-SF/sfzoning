@@ -110,17 +110,22 @@ def test_fold_fit_uses_only_the_other_quarters_outside_the_answered_blocks():
     for box_id in range(60):
         q = box_id % 3                                                    # quarters 0, 1, 2
         for cand, extra in (("as_found", 0.0), ("split_gap", 1.0)):
-            out.append({"box": box_id, "quarter": q, "cand": cand, "score": float(rng.normal() + extra), "gap": extra,
-                        "across": 0.0, "weight": float(cand == ("split_gap" if box_id % 2 else "as_found")),
+            s = [float(rng.normal() + extra) / (1 + extra)] * int(1 + extra)
+            out.append({"box": box_id, "quarter": q, "cand": cand, "score": sum(s), "word_scores": s, "gap": extra,
+                        "across": 0.0, "kind": "zoning",
+                        "weight": float(cand == ("split_gap" if box_id % 2 else "as_found")),
                         "answered": box_id < 6, **{h: q == 1 and box_id % 5 == 0 for h in RC.HOLD[:1]},
                         **{h: False for h in RC.HOLD[1:]}})
     rows = pd.DataFrame(out)
     fit = RC.fold_fit(rows, 1)
-    held = rows[(rows["quarter"] != 1) & ~rows["answered"]]["box"].nunique()
-    assert fit["boxes"] == held
-    assert set(fit) >= {"beta", "alpha", "gamma", "gamma_across"}
+    held = rows[(rows["quarter"] != 1) & ~rows["answered"]]
+    assert fit["boxes"] == held["box"].nunique() and fit["versions"] == len(held)
+    assert set(fit) >= {"intercept", "beta", "alpha", "gamma", "gamma_across", "kind", "count1"}
+    assert fit["count1"] is None                                           # no box model's column: no count weight
+    fit_count = RC.fold_fit(rows.assign(word_count1=[[-1.0] * len(w) for w in rows["word_scores"]]), 1)
+    assert fit_count["count1"] is not None
     with pytest.raises(ValueError):
-        C.fit_choice(rows.assign(held_out=False).iloc[:10].assign(answered=True))
+        C.fit_quality(rows.assign(held_out=False).iloc[:10].assign(answered=True))
 
 
 def _lp(text: str, frames: int = 24, hit: float = 0.97) -> np.ndarray:
@@ -231,3 +236,4 @@ def test_feature_rows_weigh_each_version_by_the_ink_of_terras_words():
     w = dict(zip(rows["cand"], rows["weight"]))
     assert w["split_gap"] > 0.9 and w["as_found"] < 0.1             # two words in the box: only the split holds one each
     assert not rows["answered"].any() and (rows["box"] == 0).all()
+    assert (rows["kind"] == "zoning").all() and [len(w) for w in rows["word_scores"]] == [len(c.rects) for c in cands]
