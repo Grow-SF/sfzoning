@@ -84,9 +84,10 @@ from sfzmaps.solver.codereader import posterior as P  # noqa: E402
 
 READERS = ("A", "B", "C")
 SEED_REPLICATES = ("Bs1", "Bs2", "Cs1", "Cs2")      # train_seeds.sh: B and C again with seeds 1 and 2
-EXTRAP_T = (6.0, 8.0, 11.0)
-CITED = (241, 1810, 1594, 1651, 1249, 1630, 1220, 1401, 326, 232, 387, 699,     # C wrong, generative right
-         91, 602, 1359, 1428, 1558, 1820)                                     # C right on clean prints                          # the generative reader's extrapolated temperatures (approx)
+EXTRAP_T = (6.0, 8.0, 11.0)                          # the generative reader's extrapolated temperatures (approx)
+# the labels the first report cited: C wrong and the generative reader right (12), then C right on clean prints (6)
+CITED = (241, 1810, 1594, 1651, 1249, 1630, 1220, 1401, 326, 232, 387, 699,
+         91, 602, 1359, 1428, 1558, 1820)
 GRID_T = (0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0)
 W_OTHER = (1.0, 0.3, 0.1, 0.03, 0.01, 3e-3, 1e-3, 3e-4, 1e-4, 3e-5, 1e-5, 1e-6)
 W_NONE = (1.0, 0.1, 0.01, 1e-3, 1e-4)

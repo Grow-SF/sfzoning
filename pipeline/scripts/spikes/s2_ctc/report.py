@@ -21,8 +21,8 @@ REASONS = [
     "directions, about 0.02 s) against the generative reader's median 16 s per box label (its records)",
     "determinism: CPU frames and posteriors byte-identical twice and at 1 vs 8 threads (B and C)",
     "provenance: from-scratch weights (B, C) trained only on Terra's strings and the generative reader's own font; "
-    "A's docTR weights (undisclosed training data) are not needed to match the generative reader, though A stays a "
-    "little ahead of C at two of C's three seeds",
+    "A's docTR weights (undisclosed training data) are not needed to match the generative reader.  Against A: "
+    "{c_vs_a}",
     "explaining away is direct: the CTC remainder is 'other' and the empty string is 'none' (held-out quarter, C at "
     "T = 1: non-text p(none) 0.985, street names p(other) 0.982, block numbers p(other) 0.999)",
     "the owner accepts a somewhat worse reader than the LLM reads, and C is not worse than the generative reader",
@@ -159,46 +159,69 @@ def findings(res: dict) -> list[str]:
                     f"{d['all']['top1']:+.3f} {ci(d['all']['top1_ci'])}, -log p {d['all']['nll']:+.3f} "
                     f"{ci(d['all']['nll_ci'])}; unflagged {d['unflagged']['top1']:+.3f} "
                     f"{ci(d['unflagged']['top1_ci'])}, {d['unflagged']['nll']:+.3f} {ci(d['unflagged']['nll_ci'])}."]
-    # the outcome: the rule passes for a reader only on every label AND the unflagged, at every seed, against the
-    # recorded and the extrapolated temperatures
-    verdict = {}
-    for letter in ("C", "B"):
-        checks = []
-        for tag in SEEDS[letter]:
-            name = f"{tag}+dir closed"
-            for table in (pv, px):
-                if name in table:
-                    checks += [all(passes(table[name][s])) for s in ("all", "unflagged")]
-        verdict[letter] = bool(checks) and all(checks)
-        verdict[letter + "_checks"] = (sum(checks), len(checks))
-    a_pass = "A+dir closed" in pv and all(all(passes(pv["A+dir closed"][s])) for s in ("all", "unflagged"))
-    if verdict["C"] or verdict["B"]:
-        line = "ADOPT the CTC likelihood: the rule passes on every label and the unflagged, at every seed."
-    elif a_pass:
-        pairs = {tag: a.get("paired_c_vs_a", {}).get(f"{tag}+dir closed vs A+dir closed") for tag in SEEDS["C"]}
-        tied = [tag for tag, ca in pairs.items() if ca is not None and all(
-            d[k][0] <= 0 <= d[k][1] for d in (ca["all"], ca["unflagged"]) for k in ("top1_ci", "nll_ci"))]
-        below = [tag for tag, ca in pairs.items() if ca is not None and tag not in tied]
-        if not tied and not below:
-            c_vs_a = "not measured against A"
-        elif not below:
-            c_vs_a = "tied with A by every interval at every seed"
+    # the outcome.  A check is one (seed, subset): it passes when the reader is at least tied on top-1 and better on
+    # -log p against the generative reader at its recorded temperatures and, where scored, at the extrapolated ones
+    # (the two are one check, not two).  The brief's rule (step 5) reads every label; the spike's stricter reading
+    # adds the unflagged answers, at every seed.
+    def check(name: str, subset: str) -> bool | None:
+        got = [all(passes(t[name][subset])) for t in (pv, px) if name in t]
+        return all(got) if got else None
+
+    def outcome(letter: str) -> dict:
+        names = [f"{tag}+dir closed" for tag in SEEDS[letter] if f"{tag}+dir closed" in pv]
+        every = [check(n, "all") for n in names]
+        both = [c for n in names for c in (check(n, "all"), check(n, "unflagged"))]
+        return {"seeds": len(names), "rule": sum(every), "strict": sum(both), "strict_of": len(both)}
+
+    oc = {letter: outcome(letter) for letter in ("C", "B")}
+    a_strict = "A+dir closed" in pv and all(check("A+dir closed", s) for s in ("all", "unflagged"))
+    # C against A, seed by seed: behind when an interval lies wholly on A's side, ahead when wholly on C's
+    seed_name = {"C": "seed 0", "Cs1": "seed 1", "Cs2": "seed 2"}
+    behind, ahead, leads = [], [], []
+    for tag in SEEDS["C"]:
+        ca = a.get("paired_c_vs_a", {}).get(f"{tag}+dir closed vs A+dir closed")
+        if ca is None:
+            continue
+        leads.append((ca["all"]["top1"], ca["all"]["nll"]))
+        if any(d["top1_ci"][1] < 0 or d["nll_ci"][0] > 0 for d in (ca["all"], ca["unflagged"])):
+            behind.append(seed_name[tag])
+        elif any(d["top1_ci"][0] > 0 or d["nll_ci"][1] < 0 for d in (ca["all"], ca["unflagged"])):
+            ahead.append(seed_name[tag])
+    if leads:
+        mean_top1 = sum(x for x, _ in leads) / len(leads)
+        mean_nll = sum(y for _, y in leads) / len(leads)
+        sp = spread.get("C")
+        if sp:
+            size = ("within about one" if abs(mean_top1) <= sp["top1_sd"] * 1.5 and abs(mean_nll) <= sp["nll_sd"] * 1.5
+                    else "larger than C's")
+            size_txt = (f"; C minus A averaged over C's seeds: top-1 {mean_top1:+.3f}, -log p {mean_nll:+.3f}, "
+                        f"{size} seed spread (sd {sp['top1_sd']:.3f} / {sp['nll_sd']:.3f})")
         else:
-            seed = {"C": "seed 0", "Cs1": "seed 1", "Cs2": "seed 2"}
-            c_vs_a = (f"tied with A at {', '.join(seed[t] for t in tied) or 'no seed'} and behind A at "
-                      f"{', '.join(seed[t] for t in below)} on some interval (table above): A's lead over C is about "
-                      f"the size of C's seed spread")
-        line = (f"TIE for the from-scratch readers by the owner's rule, to be broken by looking.  Only A (docTR's "
-                f"weights, a baseline that can't ship) passes on every label and the unflagged, so by the letter of "
-                f"step 5 this is the 'only A wins' case: the remaining gap is pretraining data, and the fix to try is "
-                f"the synthetic stream (C has one; its known faults, below, come first).  C is {c_vs_a}.")
+            size_txt = ""
+        c_vs_a = (f"C is behind A on some interval at {len(behind)} of {len(leads)} seeds"
+                  + (f" ({', '.join(behind)})" if behind else "") + (f", ahead at {', '.join(ahead)}" if ahead else "")
+                  + size_txt)
     else:
-        line = "TIE by the owner's rule, to be broken by looking."
-    out += ["", f"**Outcome: {line}**  (C+dir closed passes {verdict['C_checks'][0]} of {verdict['C_checks'][1]} "
-                f"checks: every label and the unflagged, each seed, recorded and extrapolated T; B+dir closed "
-                f"{verdict['B_checks'][0]} of {verdict['B_checks'][1]}.)",
-            "", "Reasons to prefer the CTC reader apart from the rule (reasons, not a rule pass):", ""]
-    out += [f"- {r}" for r in REASONS]
+        c_vs_a = "C not measured against A"
+    reasons = [r.format(c_vs_a=c_vs_a) for r in REASONS]
+    c, b = oc["C"], oc["B"]
+    if c["strict"] == c["strict_of"] and c["strict_of"]:
+        line = ("ADOPT the CTC likelihood: C passes the rule on every label and on the unflagged answers, at every "
+                "seed.")
+    else:
+        rule_txt = ("passes at every seed" if c["rule"] == c["seeds"]
+                    else f"passes at {c['rule']} of {c['seeds']} seed{'s' if c['seeds'] > 1 else ''}")
+        caveat = ("; provisional, because the -log p wins are against the generative reader at T = 16, the edge of "
+                  "its recorded grid (lower temperatures only extrapolated, not scored)" if c["rule"] else "")
+        line = (f"TIE, to be broken by looking.  By the brief's rule (step 5: at least tied on top-1 and better on "
+                f"-log p, on every label), C {rule_txt} and B at {b['rule']} of {b['seeds']}{caveat}.  By this "
+                f"spike's own stricter reading (the unflagged answers as well, at every seed; not the rule's letter), "
+                f"it is a tie: C passes {c['strict']} of {c['strict_of']} checks, B {b['strict']} of {b['strict_of']}"
+                + (", and only A (docTR's weights, a baseline that can't ship) passes them all" if a_strict else "")
+                + f".  {c_vs_a[0].upper() + c_vs_a[1:]}.")
+    out += ["", f"**Outcome: {line}**", "",
+            "Reasons to prefer the CTC reader apart from the rule (reasons, not a rule pass):", ""]
+    out += [f"- {r}" for r in reasons]
     cited = a.get("cited_labels", {})
     if cited:
         names = [n for n in ("gen-fix1 closed", "C+dir closed", "Cs1+dir closed", "Cs2+dir closed")
