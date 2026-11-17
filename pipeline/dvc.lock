@@ -3570,8 +3570,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 27d0b9bf5838216258fce11801b64005
-      size: 66284
+      md5: b23656cc0ab01279f1568b78f2915bf9
+      size: 69371
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3721,8 +3721,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 27d0b9bf5838216258fce11801b64005
-      size: 66284
+      md5: b23656cc0ab01279f1568b78f2915bf9
+      size: 69371
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3872,8 +3872,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 27d0b9bf5838216258fce11801b64005
-      size: 66284
+      md5: b23656cc0ab01279f1568b78f2915bf9
+      size: 69371
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4325,8 +4325,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 27d0b9bf5838216258fce11801b64005
-      size: 66284
+      md5: b23656cc0ab01279f1568b78f2915bf9
+      size: 69371
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4778,8 +4778,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 27d0b9bf5838216258fce11801b64005
-      size: 66284
+      md5: b23656cc0ab01279f1568b78f2915bf9
+      size: 69371
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5684,8 +5684,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: 27d0b9bf5838216258fce11801b64005
-      size: 66284
+      md5: b23656cc0ab01279f1568b78f2915bf9
+      size: 69371
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -11295,3 +11295,814 @@ stages:
       md5: a57de18852d6d79e47cb5f1cab1041ef.dir
       size: 2634053
       nfiles: 3
+  solver-text-crops:
+    cmd: uv run --frozen sfzmaps stage solver-text-crops
+    deps:
+    - path: data/solver/lots/lots.npz
+      hash: md5
+      md5: e46edc844437134b7589ff7106c23560
+      size: 25443533
+    - path: data/solver/lots/table.parquet
+      hash: md5
+      md5: df2c74b00cb26315c49f66fa011f7579
+      size: 20915227
+    - path: data/solver/prints/prints.parquet
+      hash: md5
+      md5: a9e3454eed30890399561de94f895f90
+      size: 127060
+    - path: data/solver/prints/terra_boxes.json
+      hash: md5
+      md5: 266410cc7ba1638455f5762650ff3423
+      size: 1990351
+    - path: data/solver/text-reader/held.json
+      hash: md5
+      md5: 1a12f9c46f113dce804129aab0a6a0ec
+      size: 7929
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p01/correction.npz
+      hash: md5
+      md5: 99d937d158fed033d9662bbed73621cf
+      size: 41384
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p01/transform.json
+      hash: md5
+      md5: 27035d5d562313a978b8b9dc5a95e208
+      size: 115631
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p02/correction.npz
+      hash: md5
+      md5: 5229ffcfeaa61119ed8158ef68ef2ecd
+      size: 45944
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p02/transform.json
+      hash: md5
+      md5: 96d4ae8d17b30dd82b2e8b26a660e45f
+      size: 171342
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p03/correction.npz
+      hash: md5
+      md5: 7ff82cb708b50aeaa35c6f3323c34046
+      size: 40664
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p03/transform.json
+      hash: md5
+      md5: e46f13fecf5ea27d27b665d9b527e86e
+      size: 33409
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p04/correction.npz
+      hash: md5
+      md5: 775811fca9876da6b7a1768baefb49ca
+      size: 20584
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p04/transform.json
+      hash: md5
+      md5: 295d84d3b0f98ebe1ec7f448817ebc5c
+      size: 59811
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p05/correction.npz
+      hash: md5
+      md5: f3832e81f4245c9dc7022c64874e77d0
+      size: 24824
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p05/transform.json
+      hash: md5
+      md5: 0f07d535d7fb974ad299328291c781e7
+      size: 127527
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p06/correction.npz
+      hash: md5
+      md5: 67bdd19d7ab97ffff093a86e1187426d
+      size: 40744
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p06/transform.json
+      hash: md5
+      md5: 5c014bd65980b9a04b238552cafc0a4f
+      size: 52391
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p07/correction.npz
+      hash: md5
+      md5: 751294d51da9ef6229a17c4b3350c0cc
+      size: 40744
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p07/transform.json
+      hash: md5
+      md5: 2d43f94b96ca1a8f4f50781ace7a9926
+      size: 160893
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p08/correction.npz
+      hash: md5
+      md5: 645012f0e113aa6573aad4e8e4e7f024
+      size: 39256
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p08/transform.json
+      hash: md5
+      md5: cef4c5cc3bd6f8ff8ce386a316f3f31d
+      size: 81003
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p09/correction.npz
+      hash: md5
+      md5: 61a3ae87499b96b1d0e0ff27b42a3c5f
+      size: 32680
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p09/transform.json
+      hash: md5
+      md5: 95d09ac5499ece0365c5f601c0362b30
+      size: 17692
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p10/correction.npz
+      hash: md5
+      md5: ebd70680ea37f831cfa481b4cc7e1de4
+      size: 36584
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p10/transform.json
+      hash: md5
+      md5: 92018d75da5ee420b4e4136b8d183044
+      size: 86542
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p11/correction.npz
+      hash: md5
+      md5: 29d31d2bcd9063960ddca671ef8a13cb
+      size: 32984
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p11/transform.json
+      hash: md5
+      md5: 9f446dfb451edbb8010f7ad11d690263
+      size: 95824
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p12/correction.npz
+      hash: md5
+      md5: 2f23590dcab2416a0561101f6945248f
+      size: 36104
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p12/transform.json
+      hash: md5
+      md5: fa75c7d0facead4cafd26ce17d1b9257
+      size: 82142
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p13/correction.npz
+      hash: md5
+      md5: d8c023b7d0b6e7056043f6a896f7bfaf
+      size: 34736
+    - path: data/warp/1980-1990-zoning/1980-1990-zoning-p13/transform.json
+      hash: md5
+      md5: f3bf397f285033ce505b856538fa4dfd
+      size: 41920
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p22/correction.npz
+      hash: md5
+      md5: 06dba3b1398820b69941bd3f93b549d7
+      size: 34216
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p22/transform.json
+      hash: md5
+      md5: 8cc58d45ce5d23d0b21eb343efb0459f
+      size: 113344
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p23/correction.npz
+      hash: md5
+      md5: 781a7314a0c712a707cbc562938c9cb7
+      size: 36104
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p23/transform.json
+      hash: md5
+      md5: e4536cdc9d6837d7ae9357067fa19717
+      size: 147502
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p24/correction.npz
+      hash: md5
+      md5: c1c007ab76a696a118112ed14e5974c6
+      size: 32264
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p24/transform.json
+      hash: md5
+      md5: 5e2bf831cece05ecd3c629a586372850
+      size: 49879
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p25/correction.npz
+      hash: md5
+      md5: 217f0943fda1cd3c49f9faa0f77a9787
+      size: 21480
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p25/transform.json
+      hash: md5
+      md5: dae38d73e61adffa13f4fb1541427121
+      size: 52339
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p26/correction.npz
+      hash: md5
+      md5: 5fd48497b5a6fccf88006c5f5d247cab
+      size: 30744
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p26/transform.json
+      hash: md5
+      md5: 08c6bb894d9f321eb9af49c387896774
+      size: 133556
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p27/correction.npz
+      hash: md5
+      md5: bedb8d3782b5213d453892542db0ed5c
+      size: 37272
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p27/transform.json
+      hash: md5
+      md5: dece0b7cbbd048e592feedc8bc233123
+      size: 113364
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p28/correction.npz
+      hash: md5
+      md5: c41c17e7673500bf53a78314f70999e8
+      size: 36744
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p28/transform.json
+      hash: md5
+      md5: 34e3380dee0c30fb9eb62faa6448122c
+      size: 74718
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p29/correction.npz
+      hash: md5
+      md5: 4bafaca6ba53e734d73c963d1ea7904c
+      size: 23592
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p29/transform.json
+      hash: md5
+      md5: b0dbe9116b23a6ea6d0c5c51ff8a2c19
+      size: 18855
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p30/correction.npz
+      hash: md5
+      md5: 3aad383bc263fa478d2f720faed0a335
+      size: 31976
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p30/transform.json
+      hash: md5
+      md5: f97cb6b2783d5fdb5df23481ce78c642
+      size: 74157
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p31/correction.npz
+      hash: md5
+      md5: 9cc5ac0a787f0033289a6793d7a93a33
+      size: 37272
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p31/transform.json
+      hash: md5
+      md5: 35c05b436704947ccc48e6a55333a76c
+      size: 66341
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p32/correction.npz
+      hash: md5
+      md5: 4b0bb904b67c6b1940c6e6c982b478e2
+      size: 32528
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p32/transform.json
+      hash: md5
+      md5: 518f2f0f00177250c150c9f819f7931b
+      size: 59640
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p33/correction.npz
+      hash: md5
+      md5: 8481a77f2dae1407fda20bc7f082536f
+      size: 30216
+    - path: data/warp/1990-1996-zoning/1990-1996-zoning-p33/transform.json
+      hash: md5
+      md5: e2053bbea0bdce45a68f872c9859b0f6
+      size: 27504
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p01/correction.npz
+      hash: md5
+      md5: 82ddb5746661dd0885004e38571da896
+      size: 30440
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p01/transform.json
+      hash: md5
+      md5: 3fa3747ee4bdb64cc4f3768eef867225
+      size: 120002
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p02/correction.npz
+      hash: md5
+      md5: 963a310450c2e3981f8de4b2e1ad1fbc
+      size: 35048
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p02/transform.json
+      hash: md5
+      md5: 36c51f23e9e53cfb28665579d4ea0ac5
+      size: 144236
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p03/correction.npz
+      hash: md5
+      md5: 9974935e3310e5a145383c27da079227
+      size: 31272
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p03/transform.json
+      hash: md5
+      md5: 372c922eb14b33c7301dd28a2ad641b3
+      size: 53627
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p04/correction.npz
+      hash: md5
+      md5: da71ddaef9c7176434cbad565f515bce
+      size: 17936
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p04/transform.json
+      hash: md5
+      md5: 520bb850ad98975c245f47fe38b0e162
+      size: 51324
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p05/correction.npz
+      hash: md5
+      md5: 53f565a8e5022eff44dd8182a20deb95
+      size: 30320
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p05/transform.json
+      hash: md5
+      md5: 73840a275269f3032b654f07bf744603
+      size: 141875
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p06/correction.npz
+      hash: md5
+      md5: aee717204f6e5dbde0ba61722d66ded9
+      size: 33160
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p06/transform.json
+      hash: md5
+      md5: d6bac9792c0c54609a5016ac2ad3c2d5
+      size: 59524
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p07/correction.npz
+      hash: md5
+      md5: a9417335c1eb4c1a6c34f1cc528b5f33
+      size: 36776
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p07/transform.json
+      hash: md5
+      md5: a39dc7b159f7f61da41928112f260135
+      size: 135716
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p08/correction.npz
+      hash: md5
+      md5: 349600a9cfa2a774d7cef1fbaf7de6cf
+      size: 36104
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p08/transform.json
+      hash: md5
+      md5: ba6ee97ee6c151ea9d0eb36d00297698
+      size: 66234
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p09/correction.npz
+      hash: md5
+      md5: 9d2089399d8b14336b143ca658f697e2
+      size: 22800
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p09/transform.json
+      hash: md5
+      md5: 0e7a7da4680b8e7dac3b9f55270fae56
+      size: 21339
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p10/correction.npz
+      hash: md5
+      md5: d078bce01f6aac651ec82b094883387a
+      size: 31488
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p10/transform.json
+      hash: md5
+      md5: 3f80efc52d405cc6fbcf9aaf49346fa2
+      size: 64162
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p11/correction.npz
+      hash: md5
+      md5: d066dae67f0eb6a68ab41db9aa220e71
+      size: 36200
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p11/transform.json
+      hash: md5
+      md5: 26714de1e820a9d21004042d013ddc45
+      size: 85217
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p12/correction.npz
+      hash: md5
+      md5: 4675764a06078462ba5fce4e7ae86794
+      size: 31528
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p12/transform.json
+      hash: md5
+      md5: 544cde5f7fbc5b6b395f06647272eac5
+      size: 63712
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p13/correction.npz
+      hash: md5
+      md5: 8028b0cc0c0efdff04059b97069919cc
+      size: 29736
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p13/transform.json
+      hash: md5
+      md5: d530f1dc6817318b52d030441d36b1f7
+      size: 26882
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p01/district_labels.json
+      hash: md5
+      md5: 4d0bf9bedfe89504a330d33811a641d0
+      size: 12592
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p01/page.png
+      hash: md5
+      md5: 94957d1255669a44099ff040b4b9e8bb
+      size: 663510
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p02/district_labels.json
+      hash: md5
+      md5: 012013dfc97f9b64ea27985e9857c01e
+      size: 28857
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p02/page.png
+      hash: md5
+      md5: dbc244e5852398f27d58120c49312a8d
+      size: 669754
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p03/district_labels.json
+      hash: md5
+      md5: b31a1066e0d5d1f43498641d46dd82b3
+      size: 14282
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p03/page.png
+      hash: md5
+      md5: 1b5ad15d77955bc78125126340335557
+      size: 582657
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p04/district_labels.json
+      hash: md5
+      md5: 97423994de884a1b2d8f06e29cab67a8
+      size: 8043
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p04/page.png
+      hash: md5
+      md5: a0c88b763ade1b5c286c9e8b6a0e2eef
+      size: 334198
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p05/district_labels.json
+      hash: md5
+      md5: cd84a660eaab8ed2541812b0b08b461f
+      size: 9017
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p05/page.png
+      hash: md5
+      md5: 88d6c6a863691e649f8d499b10ad441b
+      size: 563113
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p06/district_labels.json
+      hash: md5
+      md5: d4d6f22484f270c6e02708e876e45486
+      size: 14057
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p06/page.png
+      hash: md5
+      md5: 9cb5e129909fb303c70dfee7ca92ba22
+      size: 612614
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p07/district_labels.json
+      hash: md5
+      md5: 189c8b3d1ee70f8e687c2e856a6aaf6a
+      size: 30592
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p07/page.png
+      hash: md5
+      md5: 7fcaac7a547589838f9eb0b9702f0416
+      size: 697510
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p08/district_labels.json
+      hash: md5
+      md5: 0d1f0b937f5d43256f8f842df5008f43
+      size: 10317
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p08/page.png
+      hash: md5
+      md5: 87b18af05d3a55c572edecfc1b748904
+      size: 597915
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p09/district_labels.json
+      hash: md5
+      md5: 0a927c42c83e948caf492ab2c5a41b2f
+      size: 1966
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p09/page.png
+      hash: md5
+      md5: 152526042b3ba17fbc5c759a11e7fc76
+      size: 303443
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p10/district_labels.json
+      hash: md5
+      md5: 04edc033b56648536056af17551d6ddd
+      size: 10311
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p10/page.png
+      hash: md5
+      md5: 4a63518ced450ce3890c6676d41664dc
+      size: 700871
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p11/district_labels.json
+      hash: md5
+      md5: 0ec5239b1fdee70ada424f70040ba75f
+      size: 11019
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p11/page.png
+      hash: md5
+      md5: 31bab61532845b9503cfb45d987c3c98
+      size: 661011
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p12/district_labels.json
+      hash: md5
+      md5: 58610cbce07f5d28ee7bd58e68e64efa
+      size: 9572
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p12/page.png
+      hash: md5
+      md5: 896e916be1fcbdca04c3ed73410cc6fa
+      size: 678562
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p13/district_labels.json
+      hash: md5
+      md5: a82a54ab2a39a8a87dbceafd8d5394aa
+      size: 5832
+    - path: data/work/1980-1990-zoning/1980-1990-zoning-p13/page.png
+      hash: md5
+      md5: 831839a63436034701a33b5c8be5b599
+      size: 398386
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p22/district_labels.json
+      hash: md5
+      md5: 2b97d8db1cdcd8c32c832da05a1b85fd
+      size: 14726
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p22/page.png
+      hash: md5
+      md5: a5f1d9f2979d4ee8d4f6174092d4bb80
+      size: 584417
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p23/district_labels.json
+      hash: md5
+      md5: 2c6b0c417538a9a7aaf83f7d1ed96586
+      size: 28439
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p23/page.png
+      hash: md5
+      md5: b1f23e5281c174ef83179c197fee4e2c
+      size: 614106
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p24/district_labels.json
+      hash: md5
+      md5: 4444839f66695f0481bfdba3ec4edb9a
+      size: 12951
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p24/page.png
+      hash: md5
+      md5: 71003d6b253a8da18acb7223634620b1
+      size: 537325
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p25/district_labels.json
+      hash: md5
+      md5: 6776a667dd21e1c466fbec1d7d62ab4b
+      size: 8655
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p25/page.png
+      hash: md5
+      md5: cc01b8b3ffc7c8fdc72d7e0e1eda02eb
+      size: 361525
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p26/district_labels.json
+      hash: md5
+      md5: f6679ac39200c716247e843b60e9f9e1
+      size: 8945
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p26/page.png
+      hash: md5
+      md5: d547ad8e2e9d98728cd36e73844abaca
+      size: 574979
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p27/district_labels.json
+      hash: md5
+      md5: 8c7819e6bc10fc5e87eff71c7beeed86
+      size: 28269
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p27/page.png
+      hash: md5
+      md5: 1b2852a169c3c0ed0061ffa60820d97e
+      size: 697701
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p28/district_labels.json
+      hash: md5
+      md5: 00d0ee4f0d85b751eb02809572a1e5fb
+      size: 8671
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p28/page.png
+      hash: md5
+      md5: 663dd51a411396209faef2624d5eef08
+      size: 611313
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p29/district_labels.json
+      hash: md5
+      md5: 751f1568121433246d28337ee8894e37
+      size: 2269
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p29/page.png
+      hash: md5
+      md5: ab0d5587fbc78a512f537a06ca61f796
+      size: 329520
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p30/district_labels.json
+      hash: md5
+      md5: 439e68885e84c25cc129e7a309c4a0c9
+      size: 8998
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p30/page.png
+      hash: md5
+      md5: 34a3258fa1798d3d732edccaa13ea4b0
+      size: 680871
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p31/district_labels.json
+      hash: md5
+      md5: deeee5c5b23ea0a0d988d96064dc0877
+      size: 11671
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p31/page.png
+      hash: md5
+      md5: c60e8be45e5c814d9b385ebe12fadd8e
+      size: 714824
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p32/district_labels.json
+      hash: md5
+      md5: 4f1180083c200ed96e6b05e6d4a1f2d8
+      size: 8349
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p32/page.png
+      hash: md5
+      md5: c0ad8646358d717d84457f32c54131e2
+      size: 665628
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p33/district_labels.json
+      hash: md5
+      md5: b9c85266c04a394c8141ec222f640b75
+      size: 5958
+    - path: data/work/1990-1996-zoning/1990-1996-zoning-p33/page.png
+      hash: md5
+      md5: 00d10560d41cadbe6367d225e6ce90aa
+      size: 419775
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p01/district_labels.json
+      hash: md5
+      md5: c3abc7948a8ea6f2439649cbf3807796
+      size: 14194
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
+      hash: md5
+      md5: f444bc4d9cadcf56443dc06204e0d765
+      size: 576002
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p02/district_labels.json
+      hash: md5
+      md5: c4b9c9dd5f5dc76d24825b8ec6c5495a
+      size: 29228
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
+      hash: md5
+      md5: a88e18048b9ac3e2d704ba71b7b650b5
+      size: 617446
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p03/district_labels.json
+      hash: md5
+      md5: d721afa98cf3632bb3c58156110795c4
+      size: 13542
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
+      hash: md5
+      md5: 81da3a304df9d21cbfedb13a22dc0492
+      size: 521389
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p04/district_labels.json
+      hash: md5
+      md5: 3c7c0810d1eff5585515e66e126da8f5
+      size: 8470
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
+      hash: md5
+      md5: 5844ce5a064617e309baf7ed2f571e1e
+      size: 356225
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p05/district_labels.json
+      hash: md5
+      md5: efa7c75da62ebe8a0d339bfb1da44822
+      size: 9038
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
+      hash: md5
+      md5: 90770df11395057ef0f14ce16dd716aa
+      size: 561786
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p06/district_labels.json
+      hash: md5
+      md5: e891a530f3ef65cd076cfb310579aeaf
+      size: 12136
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
+      hash: md5
+      md5: dcd20c52cd6862670b8278d80eca5749
+      size: 605604
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p07/district_labels.json
+      hash: md5
+      md5: 17d00b60303f4b16210353b67727837f
+      size: 29349
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
+      hash: md5
+      md5: e009c0b4c5b5dced46af24b27caf0531
+      size: 684425
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p08/district_labels.json
+      hash: md5
+      md5: 9d186d63080201fc556dd4100aee8c99
+      size: 9466
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
+      hash: md5
+      md5: 080969337e6cab2005bb3bb5f7cd200b
+      size: 599057
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p09/district_labels.json
+      hash: md5
+      md5: de76e17b3312222200513d090e8513e5
+      size: 2269
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
+      hash: md5
+      md5: d91c9de094fe175f35818e5e148cb4a3
+      size: 329656
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p10/district_labels.json
+      hash: md5
+      md5: 561e364b45bbac81b26ac71c667b792d
+      size: 9588
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
+      hash: md5
+      md5: 84d4c608588c415064ab5fe82772e1ea
+      size: 673449
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p11/district_labels.json
+      hash: md5
+      md5: 50c495af638c4710cffb97942244f5f3
+      size: 13458
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
+      hash: md5
+      md5: cdbfa8649cee4687924b9ecdc40c729e
+      size: 706126
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p12/district_labels.json
+      hash: md5
+      md5: 91742928ab309f7e8e1940d87d668658
+      size: 8848
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
+      hash: md5
+      md5: f46c2eca3ce4778660dd40c3661182bc
+      size: 655778
+    - path: 
+        data/work/2000-digital-zoning/2000-digital-zoning-p13/district_labels.json
+      hash: md5
+      md5: 9abd351863161993a2eb83403deeea70
+      size: 5963
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
+      hash: md5
+      md5: 4cdaa95f1bce5407fc9d2f69a8c4bf24
+      size: 411197
+    - path: inputs/code-check-2000/codecheck_answers.json
+      hash: md5
+      md5: 08a82daf6e705bbe71a3620ca1514116
+      size: 49665
+    - path: inputs/code-check-2000/codecheck_cases_published.json
+      hash: md5
+      md5: ab0632cb5e7f1f54ab5eba271aa87742
+      size: 146151
+    - path: pyproject.toml
+      hash: md5
+      md5: 6791af9e671517b73efecac175f80096
+      size: 1464
+    - path: saved-reads/answers/experiments-2000/text-positions
+      hash: md5
+      md5: 337c0c108792bca363a329c561158e88.dir
+      size: 230369
+      nfiles: 5
+    - path: saved-reads/answers/text-on-every-sheet.jsonl.gz
+      hash: md5
+      md5: 25e0d2238d64fc2a66ec75cf2bfce069
+      size: 4447671
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/llm.py
+      hash: md5
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/codereader/__init__.py
+      hash: md5
+      md5: 13f77d32329a3b4b3b238de87a5d80a8
+      size: 1051
+    - path: src/sfzmaps/solver/codereader/glyphs.py
+      hash: md5
+      md5: d49284bc7122e20a29ca17b742e54119
+      size: 47553
+    - path: src/sfzmaps/solver/codereader/labels.py
+      hash: md5
+      md5: efdd2709f69dfd7b5f83dfe49683dc80
+      size: 32967
+    - path: src/sfzmaps/solver/codereader/posterior.py
+      hash: md5
+      md5: 1ad6153cb95f7298e9d989b75dabe9bf
+      size: 86152
+    - path: src/sfzmaps/solver/codes.py
+      hash: md5
+      md5: 75cd0443d1ff7c6aa915429d7befa5cc
+      size: 1476
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/lots.py
+      hash: md5
+      md5: 7399c576690409a389991a1a56e0e826
+      size: 6551
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: aedf730eb73fad4377ecd8ee72bca25b
+      size: 4386
+    - path: src/sfzmaps/solver/prints.py
+      hash: md5
+      md5: 9b6381eb7bd93c542eb22ee4485ee4c3
+      size: 22967
+    - path: src/sfzmaps/solver/saved.py
+      hash: md5
+      md5: 5428b2e93ac078c2186cedf7b3aaaf8a
+      size: 2203
+    - path: src/sfzmaps/solver/strokes.py
+      hash: md5
+      md5: 0e71e98705b64da5b00c87d661f0684b
+      size: 7649
+    - path: src/sfzmaps/solver/table.py
+      hash: md5
+      md5: 93f7aa72e78e358ed74f663a47b4d7e6
+      size: 4053
+    - path: src/sfzmaps/solver/textnet/__init__.py
+      hash: md5
+      md5: 6d4312a09af9edf5054abf24e821990c
+      size: 96
+    - path: src/sfzmaps/solver/textnet/boxes.py
+      hash: md5
+      md5: 9c3059873b3916274be61844bceb5490
+      size: 8542
+    - path: src/sfzmaps/solver/textnet/data.py
+      hash: md5
+      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
+      size: 28436
+    - path: src/sfzmaps/solver/textnet/model.py
+      hash: md5
+      md5: 838bfdbb95644c10cf39d2513c815fc7
+      size: 3851
+    - path: src/sfzmaps/solver/textnet/predict.py
+      hash: md5
+      md5: 6d54442b40dc6b9022c806eb44c338b4
+      size: 6860
+    - path: src/sfzmaps/solver/textnet/reader_stage.py
+      hash: md5
+      md5: e4d2bb8a2cbd158aa3e8ef1af4ac8106
+      size: 15798
+    - path: src/sfzmaps/solver/textnet/scores.py
+      hash: md5
+      md5: 3356ba9880e9b57b4291ab5cab8abf49
+      size: 15145
+    - path: src/sfzmaps/solver/textnet/stage.py
+      hash: md5
+      md5: da952d71e74f6aaf8708ad102f00bc06
+      size: 4088
+    - path: src/sfzmaps/solver/textnet/train.py
+      hash: md5
+      md5: 0c1b4bda2838082ba33a747a5ee4e3c3
+      size: 21777
+    - path: src/sfzmaps/solver/textread/__init__.py
+      hash: md5
+      md5: 317f64bff6ff4ee48d988b1b4c44e831
+      size: 1146
+    - path: src/sfzmaps/solver/textread/crops.py
+      hash: md5
+      md5: fec945b94d94588c427969968ce5e959
+      size: 17847
+    - path: src/sfzmaps/solver/textread/inputs.py
+      hash: md5
+      md5: c9aaa7e79c15fc6314e7ec7a9f509741
+      size: 4584
+    - path: src/sfzmaps/solver/textread/model.py
+      hash: md5
+      md5: 3ba7209d5a8220f2525b622646fe158b
+      size: 8813
+    - path: src/sfzmaps/solver/textread/store.py
+      hash: md5
+      md5: 7c1b868d69295d02732a4f1f2a1d6726
+      size: 3864
+    - path: src/sfzmaps/solver/textread/synth.py
+      hash: md5
+      md5: 5398d0adaebde155559b4b5c20c31b3a
+      size: 13189
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: b038b7f427cf66546c731cc1433bb62d
+      size: 338100
+    outs:
+    - path: data/solver/text-crops
+      hash: md5
+      md5: e34bb16e4af3180cd52759de5b3ca5ef.dir
+      size: 337526073
+      nfiles: 15
