@@ -3570,8 +3570,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: 27d0b9bf5838216258fce11801b64005
+      size: 66284
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3721,8 +3721,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: 27d0b9bf5838216258fce11801b64005
+      size: 66284
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3872,8 +3872,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: 27d0b9bf5838216258fce11801b64005
+      size: 66284
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4325,8 +4325,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: 27d0b9bf5838216258fce11801b64005
+      size: 66284
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4778,8 +4778,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: 27d0b9bf5838216258fce11801b64005
+      size: 66284
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5684,8 +5684,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: 27d0b9bf5838216258fce11801b64005
+      size: 66284
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -10833,3 +10833,465 @@ stages:
       md5: 6203b72d2d129b11fad550bf67e42c97.dir
       size: 1902233227
       nfiles: 45
+  solver-boxes:
+    cmd: uv run --frozen sfzmaps stage solver-boxes
+    deps:
+    - path: data/solver/lots/lots.npz
+      hash: md5
+      md5: e46edc844437134b7589ff7106c23560
+      size: 25443533
+    - path: data/solver/lots/table.parquet
+      hash: md5
+      md5: df2c74b00cb26315c49f66fa011f7579
+      size: 20915227
+    - path: data/solver/page/sheets.png
+      hash: md5
+      md5: cce78272a0d3f0de10d61f83f91ff8fd
+      size: 306244
+    - path: data/solver/prints/prints.parquet
+      hash: md5
+      md5: a9e3454eed30890399561de94f895f90
+      size: 127060
+    - path: data/solver/prints/terra_boxes.json
+      hash: md5
+      md5: 266410cc7ba1638455f5762650ff3423
+      size: 1990351
+    - path: data/solver/text-reader/2000-digital-zoning-p01/chance.png
+      hash: md5
+      md5: 6f53efb19b83c23ee57bfc574514104d
+      size: 10182870
+    - path: data/solver/text-reader/2000-digital-zoning-p01/kind.npz
+      hash: md5
+      md5: 894c9a6a8f5320de1e3be61ec4126b45
+      size: 91483861
+    - path: data/solver/text-reader/2000-digital-zoning-p02/chance.png
+      hash: md5
+      md5: 178bb7e723c9a5a068173cca9987fb26
+      size: 9405237
+    - path: data/solver/text-reader/2000-digital-zoning-p02/kind.npz
+      hash: md5
+      md5: 7455b4ed323d664417586a806e31b7c1
+      size: 96556695
+    - path: data/solver/text-reader/2000-digital-zoning-p03/chance.png
+      hash: md5
+      md5: 0c38bc5b758580fd6c60b0ab9359f800
+      size: 9438858
+    - path: data/solver/text-reader/2000-digital-zoning-p03/kind.npz
+      hash: md5
+      md5: c9dc83590cebcf7d85d02b38331e9465
+      size: 90439013
+    - path: data/solver/text-reader/2000-digital-zoning-p04/chance.png
+      hash: md5
+      md5: 508d199d80362aefda327c0acedf6538
+      size: 7849862
+    - path: data/solver/text-reader/2000-digital-zoning-p04/kind.npz
+      hash: md5
+      md5: d6f00e6306ce1abad7cc07e6525c551c
+      size: 71898070
+    - path: data/solver/text-reader/2000-digital-zoning-p05/chance.png
+      hash: md5
+      md5: 89b3d7bc2c98888a3616fec9234e991b
+      size: 8980660
+    - path: data/solver/text-reader/2000-digital-zoning-p05/kind.npz
+      hash: md5
+      md5: c1f294f6dacef173b6eda41ee98e288d
+      size: 90775076
+    - path: data/solver/text-reader/2000-digital-zoning-p06/chance.png
+      hash: md5
+      md5: 506c4dad9a0885692699198db4dd2af4
+      size: 9328035
+    - path: data/solver/text-reader/2000-digital-zoning-p06/kind.npz
+      hash: md5
+      md5: 740664a72a8831b3f46ace800529b83f
+      size: 93314609
+    - path: data/solver/text-reader/2000-digital-zoning-p07/chance.png
+      hash: md5
+      md5: ff01d83815e6983156eac9216c79993c
+      size: 9741005
+    - path: data/solver/text-reader/2000-digital-zoning-p07/kind.npz
+      hash: md5
+      md5: 23c69bf0082c5b947e73be65bb2da993
+      size: 97494664
+    - path: data/solver/text-reader/2000-digital-zoning-p08/chance.png
+      hash: md5
+      md5: f8188149164a387433096a807c27f982
+      size: 10224415
+    - path: data/solver/text-reader/2000-digital-zoning-p08/kind.npz
+      hash: md5
+      md5: ad55f9f61cb9ef4bc2b3d2868e03870a
+      size: 95934254
+    - path: data/solver/text-reader/2000-digital-zoning-p09/chance.png
+      hash: md5
+      md5: fa465c4b4e0013f70f11a497a9e63f9c
+      size: 10030661
+    - path: data/solver/text-reader/2000-digital-zoning-p09/kind.npz
+      hash: md5
+      md5: 78641eb1b35e818723376413ed1ef66f
+      size: 75140453
+    - path: data/solver/text-reader/2000-digital-zoning-p10/chance.png
+      hash: md5
+      md5: 88fd2fa7e07a641b88c7c1bf3ff55a9d
+      size: 10468173
+    - path: data/solver/text-reader/2000-digital-zoning-p10/kind.npz
+      hash: md5
+      md5: f852e355dd0b6c2c875b830e9439f46b
+      size: 90856141
+    - path: data/solver/text-reader/2000-digital-zoning-p11/chance.png
+      hash: md5
+      md5: 8a37419a97e2dd5251ea1a9ce33d4c08
+      size: 10356130
+    - path: data/solver/text-reader/2000-digital-zoning-p11/kind.npz
+      hash: md5
+      md5: 61e6816a6de5e67820b6857e41aa4f80
+      size: 94547562
+    - path: data/solver/text-reader/2000-digital-zoning-p12/chance.png
+      hash: md5
+      md5: e513c71dbd529dc8f261fa774340d325
+      size: 9493227
+    - path: data/solver/text-reader/2000-digital-zoning-p12/kind.npz
+      hash: md5
+      md5: 263a2f10d4f9054559dd0e53d45bf970
+      size: 92059909
+    - path: data/solver/text-reader/2000-digital-zoning-p13/chance.png
+      hash: md5
+      md5: 8951917320bd82d292f481dbdd798ab6
+      size: 8220787
+    - path: data/solver/text-reader/2000-digital-zoning-p13/kind.npz
+      hash: md5
+      md5: 511d26936b76d1791720d05bfc521404
+      size: 85754510
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p01/correction.npz
+      hash: md5
+      md5: 82ddb5746661dd0885004e38571da896
+      size: 30440
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p01/transform.json
+      hash: md5
+      md5: 3fa3747ee4bdb64cc4f3768eef867225
+      size: 120002
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p01/warped.footprint.geojson
+      hash: md5
+      md5: 91eb72161b17d171818c1931cd8b6ff7
+      size: 6586
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p02/correction.npz
+      hash: md5
+      md5: 963a310450c2e3981f8de4b2e1ad1fbc
+      size: 35048
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p02/transform.json
+      hash: md5
+      md5: 36c51f23e9e53cfb28665579d4ea0ac5
+      size: 144236
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p02/warped.footprint.geojson
+      hash: md5
+      md5: 5ff92f0a925315ffe942940ea8517cdb
+      size: 6258
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p03/correction.npz
+      hash: md5
+      md5: 9974935e3310e5a145383c27da079227
+      size: 31272
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p03/transform.json
+      hash: md5
+      md5: 372c922eb14b33c7301dd28a2ad641b3
+      size: 53627
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p03/warped.footprint.geojson
+      hash: md5
+      md5: bea19e5eaff6a9e43df7a6082e84d92d
+      size: 10070
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p04/correction.npz
+      hash: md5
+      md5: da71ddaef9c7176434cbad565f515bce
+      size: 17936
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p04/transform.json
+      hash: md5
+      md5: 520bb850ad98975c245f47fe38b0e162
+      size: 51324
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p04/warped.footprint.geojson
+      hash: md5
+      md5: b26e830f099b5deaac35043fb8d19f2d
+      size: 6537
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p05/correction.npz
+      hash: md5
+      md5: 53f565a8e5022eff44dd8182a20deb95
+      size: 30320
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p05/transform.json
+      hash: md5
+      md5: 73840a275269f3032b654f07bf744603
+      size: 141875
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p05/warped.footprint.geojson
+      hash: md5
+      md5: fae292e8be81f020f5033a3c68ee5a5b
+      size: 7321
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p06/correction.npz
+      hash: md5
+      md5: aee717204f6e5dbde0ba61722d66ded9
+      size: 33160
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p06/transform.json
+      hash: md5
+      md5: d6bac9792c0c54609a5016ac2ad3c2d5
+      size: 59524
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p06/warped.footprint.geojson
+      hash: md5
+      md5: 5667d9d0adcda83b232b3f820ec13c1b
+      size: 6810
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p07/correction.npz
+      hash: md5
+      md5: a9417335c1eb4c1a6c34f1cc528b5f33
+      size: 36776
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p07/transform.json
+      hash: md5
+      md5: a39dc7b159f7f61da41928112f260135
+      size: 135716
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p07/warped.footprint.geojson
+      hash: md5
+      md5: 4e8aa64402fcf38305a32c1d7cf25b55
+      size: 7415
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p08/correction.npz
+      hash: md5
+      md5: 349600a9cfa2a774d7cef1fbaf7de6cf
+      size: 36104
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p08/transform.json
+      hash: md5
+      md5: ba6ee97ee6c151ea9d0eb36d00297698
+      size: 66234
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p08/warped.footprint.geojson
+      hash: md5
+      md5: a571de8d80a96c708387118a79cbf89b
+      size: 9479
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p09/correction.npz
+      hash: md5
+      md5: 9d2089399d8b14336b143ca658f697e2
+      size: 22800
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p09/transform.json
+      hash: md5
+      md5: 0e7a7da4680b8e7dac3b9f55270fae56
+      size: 21339
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p09/warped.footprint.geojson
+      hash: md5
+      md5: 88b73b81525164d063e280d78fd8360d
+      size: 4364
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p10/correction.npz
+      hash: md5
+      md5: d078bce01f6aac651ec82b094883387a
+      size: 31488
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p10/transform.json
+      hash: md5
+      md5: 3f80efc52d405cc6fbcf9aaf49346fa2
+      size: 64162
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p10/warped.footprint.geojson
+      hash: md5
+      md5: 45ac5c7055dbf3c9301c54f57b277249
+      size: 6874
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p11/correction.npz
+      hash: md5
+      md5: d066dae67f0eb6a68ab41db9aa220e71
+      size: 36200
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p11/transform.json
+      hash: md5
+      md5: 26714de1e820a9d21004042d013ddc45
+      size: 85217
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p11/warped.footprint.geojson
+      hash: md5
+      md5: ab18bf297eed7175b152e2e1e1b532b2
+      size: 8010
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p12/correction.npz
+      hash: md5
+      md5: 4675764a06078462ba5fce4e7ae86794
+      size: 31528
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p12/transform.json
+      hash: md5
+      md5: 544cde5f7fbc5b6b395f06647272eac5
+      size: 63712
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p12/warped.footprint.geojson
+      hash: md5
+      md5: 97471b94950724bb1d63f4b646763d6c
+      size: 5496
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p13/correction.npz
+      hash: md5
+      md5: 8028b0cc0c0efdff04059b97069919cc
+      size: 29736
+    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p13/transform.json
+      hash: md5
+      md5: d530f1dc6817318b52d030441d36b1f7
+      size: 26882
+    - path: 
+        data/warp/2000-digital-zoning/2000-digital-zoning-p13/warped.footprint.geojson
+      hash: md5
+      md5: cb5f80c1c052741985a4c200d15aae92
+      size: 10469
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
+      hash: md5
+      md5: f444bc4d9cadcf56443dc06204e0d765
+      size: 576002
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
+      hash: md5
+      md5: a88e18048b9ac3e2d704ba71b7b650b5
+      size: 617446
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
+      hash: md5
+      md5: 81da3a304df9d21cbfedb13a22dc0492
+      size: 521389
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
+      hash: md5
+      md5: 5844ce5a064617e309baf7ed2f571e1e
+      size: 356225
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
+      hash: md5
+      md5: 90770df11395057ef0f14ce16dd716aa
+      size: 561786
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
+      hash: md5
+      md5: dcd20c52cd6862670b8278d80eca5749
+      size: 605604
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
+      hash: md5
+      md5: e009c0b4c5b5dced46af24b27caf0531
+      size: 684425
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
+      hash: md5
+      md5: 080969337e6cab2005bb3bb5f7cd200b
+      size: 599057
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
+      hash: md5
+      md5: d91c9de094fe175f35818e5e148cb4a3
+      size: 329656
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
+      hash: md5
+      md5: 84d4c608588c415064ab5fe82772e1ea
+      size: 673449
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
+      hash: md5
+      md5: cdbfa8649cee4687924b9ecdc40c729e
+      size: 706126
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
+      hash: md5
+      md5: f46c2eca3ce4778660dd40c3661182bc
+      size: 655778
+    - path: data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
+      hash: md5
+      md5: 4cdaa95f1bce5407fc9d2f69a8c4bf24
+      size: 411197
+    - path: inputs/code-check-2000/codecheck_answers.json
+      hash: md5
+      md5: 08a82daf6e705bbe71a3620ca1514116
+      size: 49665
+    - path: inputs/code-check-2000/codecheck_cases_published.json
+      hash: md5
+      md5: ab0632cb5e7f1f54ab5eba271aa87742
+      size: 146151
+    - path: pyproject.toml
+      hash: md5
+      md5: 6791af9e671517b73efecac175f80096
+      size: 1464
+    - path: saved-reads/answers/text-on-every-sheet.jsonl.gz
+      hash: md5
+      md5: 25e0d2238d64fc2a66ec75cf2bfce069
+      size: 4447671
+    - path: src/sfzmaps/__init__.py
+      hash: md5
+      md5: d41d8cd98f00b204e9800998ecf8427e
+      size: 0
+    - path: src/sfzmaps/config.py
+      hash: md5
+      md5: ed5d5538cef63f43a599ed253dba3c21
+      size: 8041
+    - path: src/sfzmaps/llm.py
+      hash: md5
+      md5: 13e016f27a38dd734a7489f8462a9549
+      size: 18450
+    - path: src/sfzmaps/solver/__init__.py
+      hash: md5
+      md5: 56d5987d876e17a20920364df6a6d402
+      size: 107
+    - path: src/sfzmaps/solver/codereader/__init__.py
+      hash: md5
+      md5: 13f77d32329a3b4b3b238de87a5d80a8
+      size: 1051
+    - path: src/sfzmaps/solver/codereader/labels.py
+      hash: md5
+      md5: efdd2709f69dfd7b5f83dfe49683dc80
+      size: 32967
+    - path: src/sfzmaps/solver/codes.py
+      hash: md5
+      md5: 75cd0443d1ff7c6aa915429d7befa5cc
+      size: 1476
+    - path: src/sfzmaps/solver/frame.py
+      hash: md5
+      md5: d3ffc046960ae8d19dce2cdc92fada51
+      size: 6847
+    - path: src/sfzmaps/solver/grid.py
+      hash: md5
+      md5: 4ca66adc6cb23b3833854e6358dde8be
+      size: 1934
+    - path: src/sfzmaps/solver/lots.py
+      hash: md5
+      md5: 7399c576690409a389991a1a56e0e826
+      size: 6551
+    - path: src/sfzmaps/solver/page.py
+      hash: md5
+      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+      size: 8912
+    - path: src/sfzmaps/solver/paths.py
+      hash: md5
+      md5: aedf730eb73fad4377ecd8ee72bca25b
+      size: 4386
+    - path: src/sfzmaps/solver/prints.py
+      hash: md5
+      md5: 9b6381eb7bd93c542eb22ee4485ee4c3
+      size: 22967
+    - path: src/sfzmaps/solver/saved.py
+      hash: md5
+      md5: 5428b2e93ac078c2186cedf7b3aaaf8a
+      size: 2203
+    - path: src/sfzmaps/solver/strokes.py
+      hash: md5
+      md5: 0e71e98705b64da5b00c87d661f0684b
+      size: 7649
+    - path: src/sfzmaps/solver/table.py
+      hash: md5
+      md5: 93f7aa72e78e358ed74f663a47b4d7e6
+      size: 4053
+    - path: src/sfzmaps/solver/textnet/__init__.py
+      hash: md5
+      md5: 6d4312a09af9edf5054abf24e821990c
+      size: 96
+    - path: src/sfzmaps/solver/textnet/boxes.py
+      hash: md5
+      md5: 9c3059873b3916274be61844bceb5490
+      size: 8542
+    - path: src/sfzmaps/solver/textnet/data.py
+      hash: md5
+      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
+      size: 28436
+    - path: src/sfzmaps/solver/textnet/scores.py
+      hash: md5
+      md5: 3356ba9880e9b57b4291ab5cab8abf49
+      size: 15145
+    - path: src/sfzmaps/solver/wordboxes.py
+      hash: md5
+      md5: ddf5f9d37f0df4848df83183d5bec213
+      size: 20380
+    - path: src/sfzmaps/transform.py
+      hash: md5
+      md5: c83192f3d3941fae99387dafd628e159
+      size: 19908
+    - path: uv.lock
+      hash: md5
+      md5: b038b7f427cf66546c731cc1433bb62d
+      size: 338100
+    outs:
+    - path: data/solver/boxes
+      hash: md5
+      md5: a57de18852d6d79e47cb5f1cab1041ef.dir
+      size: 2634053
+      nfiles: 3
