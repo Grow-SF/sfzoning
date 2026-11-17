@@ -190,6 +190,37 @@ def stages() -> dict[str, Stage]:
                "data/solver/lots/lots.npz", "data/solver/lots/table.parquet",
                f"{code_check}/codecheck_cases_published.json", f"{code_check}/codecheck_answers.json"),
         writes=("data/solver/boxes",), code=("sfzmaps.solver.wordboxes",), cut=text_cut)
+    # The text reader (`solver/textread/`).  Its inputs (`sfzmaps solver text-crops`): crops at Terra's words and
+    # non-text windows on the 2000 drawing's three scans (their pages, Sol's points and placements, file by file;
+    # Terra's boxes and the other passes' boxes), each with the quarters and the answered blocks it touches (the
+    # answered blocks through `codereader.labels.load_labels`, as the code reader's detectors' stage reads them, checked
+    # against its held.json, whose unknown radius it takes); the template reader's font and prior learned from the
+    # training labels; each quarter's synthetic code crops.  Its training (`text-train`) reads those alone, so a change
+    # to the boxes never retrains it.  Its reading (`text-read`) reads them, the networks, the word boxes and the pages.
+    reader_maps = ("2000-digital-zoning", "1980-1990-zoning", "1990-1996-zoning")
+    out["solver-text-crops"] = Stage(
+        "solver-text-crops", (), (), ("solver-lots", "solver-prints", "solver-text-reader",
+                                      *(f"warp-{s}" for s in reader_maps)),
+        command=("solver", "text-crops"),
+        reads=(*_text_sheet_files("data/work", reader_maps, ("page.png", "district_labels.json")),
+               *_text_sheet_files("data/warp", reader_maps, ("transform.json", "correction.npz")), terra,
+               "saved-reads/answers/experiments-2000/text-positions", "data/solver/prints/prints.parquet",
+               "data/solver/prints/terra_boxes.json", "data/solver/lots/lots.npz", "data/solver/lots/table.parquet",
+               "data/solver/text-reader/held.json",
+               f"{code_check}/codecheck_cases_published.json", f"{code_check}/codecheck_answers.json"),
+        writes=("data/solver/text-crops",), code=("sfzmaps.solver.textread.inputs",), cut=text_cut)
+    out["solver-text-train"] = Stage(
+        "solver-text-train", (), (), ("solver-text-crops",), command=("solver", "text-train"),
+        reads=("data/solver/text-crops",), writes=("data/solver/text-train",),
+        code=("sfzmaps.solver.textread.train",), cut=text_cut)
+    out["solver-text-read"] = Stage(
+        "solver-text-read", (), (), ("solver-text-crops", "solver-text-train", "solver-boxes"),
+        command=("solver", "text-read"),
+        reads=(*(f"data/solver/text-crops/{n}" for n in ("crops.npz", "crops.parquet", "answered.npz",
+                                                         "answered.parquet", "prior.json")),
+               "data/solver/text-train", "data/solver/boxes/boxes.parquet",
+               *_text_sheet_files("data/work", (paths.SERIES,), ("page.png",))),
+        writes=("data/solver/text-read",), code=("sfzmaps.solver.textread.read",), cut=text_cut)
     out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
                                  # of the prints, only prints.parquet: the Terra boxes and the summary aren't read
                                  reads=("data/solver/prints/prints.parquet", "data/solver/lots", "data/solver/page",

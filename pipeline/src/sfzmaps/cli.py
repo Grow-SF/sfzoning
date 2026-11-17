@@ -1145,6 +1145,59 @@ def solver_boxes(workers: int = typer.Option(4, "--workers", help="Sheets groupe
     typer.echo(f"answered labels: {s['answered']}")
 
 
+@solver_app.command("text-crops")
+def solver_text_crops(workers: int = typer.Option(4, "--workers", help="Sheets cropped at once, one thread each.")
+                      ) -> None:
+    """The text reader's inputs: crops at Terra's words and non-text windows on the 2000 drawing's three scans, each
+    with the quarters and answered blocks it touches; the answered labels' crops; the template reader's font and
+    prior; each quarter's synthetic code crops: data/solver/text-crops/."""
+    import logging
+
+    from sfzmaps.solver.textread import inputs
+    _in_one_thread(["solver", "text-crops", "--workers", str(workers)])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = inputs.build_inputs(workers=workers)
+    typer.echo(f"{s['crops']['crops']:,} crops ({s['crops']['by_kind']}); {s['crops']['answered']} answered labels, "
+               f"{s['crops']['answered_with_terra_box']} with Terra's box")
+    typer.echo(f"template reader: {s['template']['training_labels']} training labels, {s['template']['forms']} forms "
+               f"over {s['template']['codes']} codes; training crops per quarter {s['training_crops']}")
+    typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in s["seconds"].items()))
+
+
+@solver_app.command("text-train")
+def solver_text_train(device: str = _DEVICE_OPTION) -> None:
+    """Train the text reader: for each quarter a CTC reader and a 0/180 classifier that never saw that quarter or an
+    answered block (each in its own GPU turn): data/solver/text-train/."""
+    import logging
+
+    from sfzmaps.solver.textread import train
+    _check_device(device)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = train.build_train(device=device)
+    for name, h in s["held"].items():
+        typer.echo(f"{name}: {h['real_crops']:,} real + {h['synthetic_crops']:,} synthetic crops; monitor CER "
+                   f"{h['monitor_cer_last']}")
+    typer.echo(f"on {s['device']} in {s['seconds']:.0f} s")
+
+
+@solver_app.command("text-read")
+def solver_text_read(workers: int = typer.Option(4, "--workers", help="Processes reading, one thread each.")) -> None:
+    """Read every word box (solver-boxes) with the text reader of its quarter, both ways along its axis, and measure
+    on the owner's answers at Terra's boxes and at ours: data/solver/text-read/."""
+    import logging
+
+    from sfzmaps.solver.textread import read
+    _in_one_thread(["solver", "text-read", "--workers", str(workers)])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = read.build_read(workers=workers)
+    t, o = s["terra_boxes"]["all"], s["our_boxes"]["all"]
+    typer.echo(f"Terra's boxes, closed top-1: Terra's direction {t['terra_direction'].get('closed_top1')}, axis only "
+               f"{t['axis_only'].get('closed_top1')} (n {t['axis_only']['n']})")
+    typer.echo(f"our boxes: {o['box_found']} found, {o['box_missed']} missed; closed top-1 on found "
+               f"{o['found'].get('closed_top1')}, every label {o['every_label_closed_top1']}")
+    typer.echo(f"seconds {s['seconds']}")
+
+
 @solver_app.command("walls")
 def solver_walls(
     workers: int = typer.Option(None, "--workers", help="Processes for the closing paths (default half the CPUs)."),

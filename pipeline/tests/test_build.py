@@ -499,6 +499,53 @@ def test_reader_stage_deps():
     assert not any(d.startswith("data/solver/text/") or d == "data/solver/text" for d in rest)
 
 
+def test_text_reader_stages_deps():
+    from sfzmaps import fresh
+    from sfzmaps.solver import paths
+    t = build.stages()
+    names = list(t)
+    maps = ("2000-digital-zoning", "1980-1990-zoning", "1990-1996-zoning")
+    crops, train, read = t["solver-text-crops"], t["solver-text-train"], t["solver-text-read"]
+    assert build.stage_commands("solver-text-crops") == [["solver", "text-crops"]]
+    assert build.stage_commands("solver-text-train") == [["solver", "text-train"]]
+    assert build.stage_commands("solver-text-read") == [["solver", "text-read"]]
+    assert set(crops.upstream) == {"solver-lots", "solver-prints", "solver-text-reader", *(f"warp-{s}" for s in maps)}
+    assert train.upstream == ("solver-text-crops",)
+    assert set(read.upstream) == {"solver-text-crops", "solver-text-train", "solver-boxes"}
+    for st in (crops, train, read):
+        assert all(names.index(u) < names.index(st.name) for u in st.upstream)
+        code = [d for d in build.stage_deps(st) if d.startswith("src/")]
+        closure = fresh.code_files(list(st.code), cut=frozenset(st.cut))
+        assert code == sorted(p.relative_to(config.PIPELINE_DIR).as_posix() for p in closure)
+        assert not any(d.endswith(("/gpu.py", "solver/runs.py")) for d in code)
+    # the training reads its crops alone, and only the text reader's training code can retrain it (GPU hours)
+    assert [d for d in build.stage_deps(train) if not d.startswith("src/")] == ["pyproject.toml", "uv.lock",
+                                                                                "data/solver/text-crops"]
+    assert [d for d in build.stage_deps(train) if d.startswith("src/sfzmaps/solver/")] == [
+        "src/sfzmaps/solver/__init__.py", "src/sfzmaps/solver/paths.py", "src/sfzmaps/solver/textread/__init__.py",
+        "src/sfzmaps/solver/textread/ctc.py", "src/sfzmaps/solver/textread/model.py",
+        "src/sfzmaps/solver/textread/store.py", "src/sfzmaps/solver/textread/train.py"]
+    # the inputs: each scan's pages, Sol's points and placements, Terra's boxes and the other passes, the prints, the
+    # lots, the owner's answers and the code reader's detectors' held-out blocks and radius
+    rest = [d for d in build.stage_deps(crops) if not d.startswith("src/")]
+    for s in maps:
+        for sheet in paths.TEXT_SHEETS[s]:
+            for f in (f"data/work/{s}/{sheet}/page.png", f"data/work/{s}/{sheet}/district_labels.json",
+                      f"data/warp/{s}/{sheet}/transform.json", f"data/warp/{s}/{sheet}/correction.npz"):
+                assert f in rest, f
+    for f in ("data/solver/text-reader/held.json", "data/solver/prints/prints.parquet", "data/solver/lots/lots.npz"):
+        assert f in rest, f
+    assert not any(d.startswith("data/solver/text/") for d in rest)
+    # the reading: the crops' scoring files, the networks, the boxes and the 2000 pages
+    rest = [d for d in build.stage_deps(read) if not d.startswith("src/")]
+    assert "data/solver/text-train" in rest and "data/solver/boxes/boxes.parquet" in rest
+    assert all(f"data/work/{paths.SERIES}/{sheet}/page.png" in rest for sheet in paths.SHEETS)
+    assert not any(d.startswith("data/solver/text-crops/synth") for d in rest)
+    assert [build.stage_outs(st) for st in (crops, train, read)] == [["data/solver/text-crops"],
+                                                                     ["data/solver/text-train"],
+                                                                     ["data/solver/text-read"]]
+
+
 def test_the_solve_reads_what_the_solve_and_its_report_read():
     t = build.stages()
     st = t["solver-solve"]

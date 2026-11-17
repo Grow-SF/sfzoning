@@ -641,6 +641,46 @@ the recall on the other quarters at each level) and `summary.json` (per quarter 
 with the axis within 10 degrees, found by the trimmed box, and how many of the owner's answered labels get a box).
 Nothing in it is a time.
 
+**The text reader's inputs** (`sfzmaps solver text-crops [--workers N]`, stage `solver-text-crops`, after
+`solver-text-reader`, the prints, the lots and the warps of the 2000 drawing's three scans; `solver/textread/crops.py`,
+`synth.py`, `inputs.py`) are what the text reader (spike S2's reader C: a CTC recogniser in plain torch) learns from
+and is scored on, all from primary sources. The real crops: every word Terra boxed on the three scans (2000, 1980-1990,
+1990-1996), rectified along Terra's angle and cut 32 px tall with 0.4 / 0.2 word heights of page around it (a slanted
+word's height floored at its kind's 10% quantile of the quarter-turn words), and windows of non-text on ink (target
+"", weighted 1 − Terra's miss rate). Each records the quarters and the answered blocks its page footprint touches,
+through each px's map point (the answered blocks and the unknown radius as `solver-text-reader` holds them); a
+quarter's reader trains only on crops touching neither. The owner's answered labels are cropped at Terra's box for
+scoring only. The template reader's font (`codereader.glyphs.learn_font`) and prior (`codereader.posterior.Prior.learn`:
+the code list's printed forms from the table's code names, the aliases and the training reads; p(code); the pose prior)
+are learned from the training labels outside the answered blocks, one for the whole map. Each quarter's reader gets
+50,000 synthetic code crops drawn with them (S2's recipe; the heights, the line share and the line windows from that
+reader's own training crops; seeded per quarter). It writes `data/solver/text-crops/`: `crops.npz` / `crops.parquet`,
+`answered.npz` / `answered.parquet`, `font.npz`, `prior.json`, `synth_<q>.npz` / `.parquet` and `summary.json`.
+
+**The text reader** (`sfzmaps solver text-train [--device cpu|mps]`, stage `solver-text-train`, after
+`solver-text-crops`; `solver/textread/model.py`, `train.py`) trains, for each quarter, a recogniser
+(MobileNetV3-small features with strides (2, 1) at layers 2, 4 and 9, a 2-layer BiLSTM of 128, a linear layer to the 45
+characters and the CTC blank; docTR's `crnn_mobilenet_v3_small` re-expressed with its parameter names, so spike S2's
+weights load and give its outputs) and a 0/180 classifier, each on the crops touching neither its quarter nor an
+answered block: reader C's recipe (12,000 steps, batch 64, AdamW at a one-cycle peak of 1.5e-3, 40% synthetic) and
+classifier D's (3,000 steps), seed 0, each in its own exclusive GPU turn. It also measures the direction prior: by
+axis, the share of the quarter's training words that read the axis's half turn. It writes `data/solver/text-train/`:
+`<q>.pt`, `<q>_direction.pt`, `axis_prior.npz`, `held.json` (the counts, recipes and seeds) and `log.json` (the losses,
+the held-out quarter's character error, logged only, and the times).
+
+**The text reader's readings** (`sfzmaps solver text-read [--workers N]`, stage `solver-text-read`, after
+`solver-text-train` and `solver-boxes`; `solver/textread/ctc.py`, `read.py`) read every word box with its quarter's
+reader, cut at its ink-trimmed box along its axis and read both ways (0 and 180 degrees). Each read gives, by CTC's
+exact forward sum, p(form | crop) for every printed form of the code list (`prior.json`'s `forms`), p(none) (the
+all-blank path) and p(other) (the rest). The reading is the mixture (1 − q) · read(0) + q · read(180), q from the
+classifier's odds on the direction prior at the box's axis. One crop at a time on the CPU, one thread a process. It
+writes `data/solver/text-read/`: `reads.npz` (by row of `boxes.parquet`: both reads' log p of each form and of none,
+p(other), the classifier's probability, the prior, q, the mixture over the forms, other and none, and the closed
+posterior over the codes), `reads.parquet` (one summary row per box), `answered.parquet` and `measures.json`: on the
+owner's answers, top-1, top-3 and −log p (closed list and open) at Terra's boxes (S2's crop) and at our boxes (the box
+holding the label's point; box-found and box-missed apart), per quarter and in all, and each reader on its own
+quarter's words at Terra's boxes by kind (the mass of the codes, "other" and "none").
+
 **Trying recipes** (`sfzmaps solver text-trial [--set NAME=VALUE ...] [--recipe "NAME=VALUE ..." ...] [--seed N]
 [--reuse] [--train-series MAP,...] [--test-series MAP,...] [--device cpu|mps]`, `solver/textnet/trial.py`) is how the
 recipe is chosen; it is no stage. `--set` (repeatable) makes one recipe from settings over the old recipe (the quarter models', `Recipe()`), and each
