@@ -6,14 +6,23 @@ lowers it.
                     touching regions swap codes
   compound_moves    a region takes the code its own labels favour while the neighbour holding that code moves to its
                     own next best code
+  compound_fusion_moves
+                    the compound move made a fusion move (Lempitsky et al. 2010): every region whose labels favour
+                    another code offers it, and every touching region holding that code offers each of its lots that
+                    lot's own next code (codes its neighbours hold included); roof duality (qpbo.py) then takes only
+                    the lots that lower the energy, so a few lots can leave a large region (solve_joint's
+                    compound_fusion option; off in the stage)
 One-code-at-a-time cuts cannot fix two neighbouring districts holding each other's codes: either switch alone pays
-the same-code-across-a-line cost against the other.  The region and compound moves can."""
+the same-code-across-a-line cost against the other.  The region and compound moves can, for whole regions; the
+compound fusion move also when only part of a region must move with the district (a strip's tip joined across weak
+borders to a large region holding the district's code)."""
 from collections import Counter
 
 import numpy as np
 from scipy.sparse import coo_matrix
 from scipy.sparse.csgraph import connected_components
 
+from sfzmaps.solver import qpbo
 from sfzmaps.solver.energy import energy, wall_terms
 from sfzmaps.solver.mincut import min_cut
 
@@ -187,3 +196,105 @@ def compound_moves(U, a, b, odds, same_weight, p, passes=6, log=None):
         if kept == 0:
             break
     return p
+
+
+def fusion_move(U, a, b, odds, same_weight, x, y):
+    """(answer, decided): the fusion of answers x and y (Lempitsky et al. 2010), each lot keeping x's code or taking
+    y's, by roof duality on the exact binary problem (no bound).  Only the lots where x and y differ are variables;
+    a pair with one of them folds into that lot's costs.  The lots roof duality leaves open keep x's code, then each
+    connected piece of them takes y's whole when that lowers the energy (qpbo.improve).  The answer is kept only if
+    the exact energy falls, else x is returned.  decided: roof duality labelled every variable (then the answer is
+    the best mix of x and y)."""
+    x = np.asarray(x)
+    diff = x != y
+    if not diff.any():
+        return x.copy(), True
+    N = len(x)
+    da, db, dc, sa, sb, sc = wall_terms(a, b, odds, same_weight)
+    pa, pb = np.r_[da, sa], np.r_[db, sb]
+    w = np.r_[dc, sc]
+    is_same = np.r_[np.zeros(len(da), bool), np.ones(len(sa), bool)]
+
+    def V(la, lb):                                       # a pair's cost with codes la, lb
+        return np.where(is_same, w * (la == lb), w * (la != lb))
+
+    e00, e01, e10, e11 = V(x[pa], x[pb]), V(x[pa], y[pb]), V(y[pa], x[pb]), V(y[pa], y[pb])
+    var = np.flatnonzero(diff)
+    pos = np.full(N, -1)
+    pos[var] = np.arange(len(var))
+    u0, u1 = U[var, x[var]].astype(float), U[var, y[var]].astype(float)
+    va, vb = diff[pa], diff[pb]
+    one = va & ~vb                                       # b fixed (x_b == y_b): its side is the 0 side
+    np.add.at(u0, pos[pa[one]], e00[one])
+    np.add.at(u1, pos[pa[one]], e10[one])
+    one = vb & ~va
+    np.add.at(u0, pos[pb[one]], e00[one])
+    np.add.at(u1, pos[pb[one]], e01[one])
+    two = va & vb
+    terms = (u0, u1, pos[pa[two]], pos[pb[two]], e00[two], e01[two], e10[two], e11[two])
+    s, labelled = qpbo.roof_dual(*terms)
+
+    def answer(s_):
+        q_ = x.copy()
+        q_[var[s_]] = y[var[s_]]
+        return q_
+
+    q = answer(s)
+    e_q = energy(U, a, b, odds, q, same_weight)
+    if not labelled.all():
+        t = qpbo.improve(*terms, s, labelled)
+        if (t != s).any():
+            q2 = answer(t)
+            e_q2 = energy(U, a, b, odds, q2, same_weight)
+            if e_q2 < e_q - 1e-6:
+                q, e_q = q2, e_q2
+    if e_q < energy(U, a, b, odds, x, same_weight) - 1e-6:
+        return q, bool(labelled.all())
+    return x.copy(), bool(labelled.all())
+
+
+def compound_proposal(U, a, b, odds, p):
+    """The compound move as one proposal, without its two restrictions.  Regions (as region_moves) in order of how
+    much their labels favour another code (gain over 1e-3, as compound_moves): each takes the code its labels favour,
+    and each touching region holding that code offers each of its lots that lot's own cheapest code but that one
+    (codes its neighbours hold included).  A region is offered at most once, as the first to claim it."""
+    N, K = U.shape
+    reg, R = _regions(a, b, odds, p)
+    rc = np.zeros(R, int)
+    rc[reg] = p
+    SU = np.zeros((R, K))
+    np.add.at(SU, reg, U)
+    want = SU.argmin(1)
+    gain = SU[np.arange(R), rc] - SU[np.arange(R), want]
+    x = reg[a] != reg[b]
+    nbr = coo_matrix((np.ones(int(x.sum())), (reg[a[x]], reg[b[x]])), shape=(R, R)).tocsr()
+    nbr = ((nbr + nbr.T) > 0).tocsr()
+    o = np.argsort(reg, kind="stable")
+    st = np.searchsorted(reg[o], np.arange(R + 1))
+    cand = np.flatnonzero((want != rc) & (gain > 1e-3))
+    cand = cand[np.argsort(-gain[cand], kind="stable")]
+    y = p.copy()
+    taken = np.zeros(R, bool)
+    for r_ in cand:
+        if taken[r_]:
+            continue
+        y[o[st[r_]:st[r_ + 1]]] = want[r_]
+        taken[r_] = True
+        for n_ in nbr.indices[nbr.indptr[r_]:nbr.indptr[r_ + 1]]:
+            if rc[n_] != want[r_] or taken[n_]:
+                continue
+            lots = o[st[n_]:st[n_ + 1]]
+            Un = U[lots].copy()
+            Un[:, want[r_]] = np.inf
+            y[lots] = Un.argmin(1)
+            taken[n_] = True
+    return y
+
+
+def compound_fusion_moves(U, a, b, odds, same_weight, p, log=None):
+    """the compound proposal (compound_proposal) fused into p (fusion_move): only the lots that lower the energy
+    move.  One proposal per call; the energy never rises."""
+    q, _ = fusion_move(U, a, b, odds, same_weight, p, compound_proposal(U, a, b, odds, p))
+    if log is not None:
+        log.append(("compound fusion", 0, int((q != p).sum()), energy(U, a, b, odds, q, same_weight)))
+    return q

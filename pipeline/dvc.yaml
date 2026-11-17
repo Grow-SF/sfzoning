@@ -2786,6 +2786,7 @@ stages:
       - src/sfzmaps/solver/page.py
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
       - src/sfzmaps/solver/report.py
       - src/sfzmaps/solver/runs.py
       - src/sfzmaps/solver/search.py

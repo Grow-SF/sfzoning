@@ -71,3 +71,40 @@ def test_deterministic_and_huge_capacities_stay_in_range():
     a2 = min_cut(*args)
     assert np.array_equal(a1[0], a2[0]) and a1[1] == a2[1]
     assert cut_cost(a1[0], *args[1:]) <= brute_force(*args) + a1[1]
+
+
+def test_a_node_nothing_pulls_stays_on_the_source_side():
+    # node 0 is pulled to the source side, node 2 to the sink side.  Node 1 has only a zero edge, node 3 only an
+    # edge 2 -> 3 (paid when 2 is on the source side, which it is not): both cost nothing on either side and stay
+    # on the source side, so the expansion move never switches a lot nothing pulls.  Node 4's edge 4 -> 2 is paid
+    # when 4 is on the source side: it goes with 2
+    side, _ = min_cut(5, np.array([2.0, 0.0, 0.0, 0.0, 0.0]), np.array([0.0, 0.0, 5.0, 0.0, 0.0]),
+                      np.array([0, 2, 4]), np.array([1, 3, 2]), np.array([0.0, 4.0, 1.0]))
+    assert side.tolist() == [False, False, True, False, True]
+    # a tie between the two sides goes to the source side too: node 1 pays 3 on either side
+    side, _ = min_cut(2, np.array([3.0, 0.0]), np.array([0.0, 3.0]), np.array([0]), np.array([1]), np.array([0.0]))
+    assert side.tolist() == [False, True]
+    side, _ = min_cut(1, np.array([3.0]), np.array([3.0]), np.zeros(0, int), np.zeros(0, int), np.zeros(0))
+    assert side.tolist() == [False]
+
+
+@pytest.mark.parametrize("bad", ["negative", "nan", "inf", "index", "negative_index", "lengths"])
+def test_bad_capacities_or_indices_are_refused(bad):
+    n, src, snk, ea, eb, cab, cba = random_graph(3)
+    src, cab = src.copy(), cab.copy()
+    if bad == "negative":
+        cab[0] = -1e-3
+    elif bad == "nan":
+        src[0] = np.nan
+    elif bad == "inf":
+        cab[0] = np.inf
+    elif bad == "index":
+        eb = eb.copy()
+        eb[0] = n
+    elif bad == "negative_index":
+        ea = ea.copy()
+        ea[0] = -1
+    else:
+        cab = cab[:-1]
+    with pytest.raises(ValueError):
+        min_cut(n, src, snk, ea, eb, cab, cba)

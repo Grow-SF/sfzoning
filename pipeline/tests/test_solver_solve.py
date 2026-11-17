@@ -338,7 +338,7 @@ def test_an_experiment_writes_only_in_its_own_folder(synthetic_city):
 
 def test_the_stage_run_is_refused_other_walls_or_the_true_borders(synthetic_city, tmp_path):
     _write_walls(tmp_path / "other", np.full(len(synthetic_city.a), -1.0))
-    for kwargs in ({"walls_dir": tmp_path / "other"}, {"true_borders": True}):
+    for kwargs in ({"walls_dir": tmp_path / "other"}, {"true_borders": True}, {"compound_fusion": True}):
         with pytest.raises(ValueError, match="solver-solve stage"):
             solve.solve_and_report(runs.FINAL_RUN, **kwargs)
         with pytest.raises(ValueError, match="solver-solve stage"):
@@ -366,8 +366,8 @@ def test_the_solve_and_the_placement_run_in_a_process_pinned_to_one_thread(synth
     from sfzmaps import cli
     from sfzmaps.solver import threads
     solved, placed, reruns = [], [], []
-    monkeypatch.setattr(solve, "solve_and_report", lambda run, walls, true_borders: solved.append(
-        (run, walls, true_borders)) or {"run": run})
+    monkeypatch.setattr(solve, "solve_and_report", lambda run, walls, true_borders, compound_fusion=False:
+                        solved.append((run, walls, true_borders, compound_fusion)) or {"run": run})
     monkeypatch.setattr(report, "markdown", lambda found: "the report")
     monkeypatch.setattr(placement, "fit", lambda folder, walls: placed.append((folder, walls)))
     monkeypatch.setattr(threads, "run_pinned", lambda argv: reruns.append(argv) or 0)
@@ -376,14 +376,19 @@ def test_the_solve_and_the_placement_run_in_a_process_pinned_to_one_thread(synth
         monkeypatch.setenv(k, v)
     assert runner.invoke(cli.app, ["solver", "solve", "final"]).exit_code == 0
     assert runner.invoke(cli.app, ["solver", "placement", "trial", "--walls", "w"]).exit_code == 0
-    assert solved == [("final", None, False)] and placed == [(runs.solve_dir("trial"), Path("w"))] and not reruns
+    assert runner.invoke(cli.app, ["solver", "solve", "trial", "--compound-fusion"]).exit_code == 0
+    assert solved == [("final", None, False, False), ("trial", None, False, True)]
+    assert placed == [(runs.solve_dir("trial"), Path("w"))] and not reruns
     monkeypatch.delenv("OMP_NUM_THREADS")
     assert runner.invoke(cli.app, ["solver", "solve", "trial", "--walls", "w", "--true-borders"]).exit_code == 0
     assert runner.invoke(cli.app, ["solver", "placement", "trial"]).exit_code == 0
-    assert reruns == [["solver", "solve", "trial", "--walls", "w", "--true-borders"], ["solver", "placement", "trial"]]
-    for args in (["solve", "final", "--walls", "w"], ["solve", "walls-context"], ["placement", "final"]):
+    assert runner.invoke(cli.app, ["solver", "solve", "trial", "--compound-fusion"]).exit_code == 0
+    assert reruns == [["solver", "solve", "trial", "--walls", "w", "--true-borders"], ["solver", "placement", "trial"],
+                      ["solver", "solve", "trial", "--compound-fusion"]]
+    for args in (["solve", "final", "--walls", "w"], ["solve", "walls-context"], ["placement", "final"],
+                 ["solve", "final", "--compound-fusion"]):
         assert runner.invoke(cli.app, ["solver", *args]).exit_code != 0, args
-    assert len(reruns) == 2 and len(solved) == 1 and len(placed) == 1
+    assert len(reruns) == 3 and len(solved) == 2 and len(placed) == 1
 
 FAKE_QUARTER = '''
 import os, sys
@@ -412,3 +417,56 @@ def test_a_quarters_log_holds_what_it_prints_and_its_warnings_go_to_the_console(
     err = capfd.readouterr().err
     assert all(f"{q}: a library's warning" in err for q in paths.QUARTERS)
     assert city.load_run("t", tmp_path / "out").tolist() == ["RH-1"] * synthetic_city.n
+
+
+def test_the_compound_fusion_option_adds_its_move_to_the_search_loop_and_eight_rounds(monkeypatch):
+    """solve_joint's loop: region, compound and expansion moves, at most 4 rounds; with compound_fusion the compound
+    fusion move after the compound moves, at most 8 rounds.  Off, the move is never called."""
+    from sfzmaps.solver import search
+    calls = []
+    for name in ("region_moves", "compound_moves", "compound_fusion_moves", "expansion_moves"):
+        monkeypatch.setattr(search, name, lambda *args, name=name, **kw: calls.append(name) or args[5])
+    falling = iter(range(10 ** 6, 0, -1))                # the energy falls at every look: the loop runs to its cap
+    monkeypatch.setattr(solve.E, "energy", lambda *args: float(next(falling)))
+    rd = labels.Readings(np.array([0]), np.array([0]), np.array([0.9]), np.array([0]), np.array([False]),
+                         ["RH-1", "RH-2"])
+    a, b, odds = np.array([0]), np.array([1]), np.array([-1.0])
+    for on, rounds in ((False, 4), (True, 8)):
+        calls.clear()
+        solve.solve_joint(2, a, b, odds, rd, compound_fusion=on, log=lambda s: None)
+        one_round = ["region_moves", "compound_moves"] + ["compound_fusion_moves"] * on + ["expansion_moves"]
+        assert calls == ["expansion_moves"] * 2 + one_round * rounds     # the two expansion stages, then the loop
+
+
+FAKE_QUARTER_ARGS = '''
+import os, sys
+import numpy as np
+run, q, folder = sys.argv[3], sys.argv[4], sys.argv[sys.argv.index("--folder") + 1]
+os.makedirs(os.path.join(folder, "runs"), exist_ok=True)
+np.savez(os.path.join(folder, "runs", f"{run}-{q}.npz"), names=np.array(["RH-1"]),
+         pred=np.zeros(int(os.environ["FAKE_LOTS"]), np.int64))
+print(f"{q}: " + " ".join(a for a in sys.argv[5:] if a.startswith("--") and a != "--folder"))
+'''
+
+
+def test_each_quarters_process_gets_the_compound_fusion_option(synthetic_city, tmp_path, monkeypatch):
+    import sys
+    script = tmp_path / "fake_quarter.py"
+    script.write_text(FAKE_QUARTER_ARGS)
+    monkeypatch.setattr(solve.threads, "sfzmaps_command", lambda: [sys.executable, str(script)])
+    monkeypatch.setenv("FAKE_LOTS", str(synthetic_city.n))
+    for on, flags in ((False, ""), (True, "--compound-fusion")):
+        solve.solve_all("t", compound_fusion=on, folder=tmp_path / "out")
+        for q in paths.QUARTERS:
+            assert (tmp_path / "out" / "runs" / f"t-{q}.log").read_text() == f"{q}: {flags}\n"
+
+
+def test_the_cli_passes_the_compound_fusion_option_to_a_quarters_solve(synthetic_city, monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    got = []
+    monkeypatch.setattr(solve, "solve_quarter", lambda *args, **kw: got.append((args, kw)))
+    for extra, on in (([], False), (["--compound-fusion"], True)):
+        assert CliRunner().invoke(cli.app, ["solver", "solve-quarter", "trial", "nw", *extra]).exit_code == 0
+        assert got[-1][1].get("compound_fusion", False) is on

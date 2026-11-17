@@ -1167,6 +1167,9 @@ def solver_walls(
 
 
 _WALLS_OPTION = typer.Option(None, "--walls", help="The folder of walls_<q>.npz (default data/solver/walls).")
+_COMPOUND_FUSION_OPTION = typer.Option(
+    False, "--compound-fusion",
+    help="Add the compound fusion move to the search (search.compound_fusion_moves; not for 'final').")
 
 
 def _not_the_stage_run(run: str) -> None:
@@ -1200,20 +1203,22 @@ def solver_solve(
     walls: Path = _WALLS_OPTION,
     true_borders: bool = typer.Option(False, "--true-borders",
                                       help="The ceiling check: the table's own borders as walls (not for 'final')."),
+    compound_fusion: bool = _COMPOUND_FUSION_OPTION,
 ) -> None:
     """Fit the placement, solve the four held-out quarters side by side and join them, list the data errors among
     the run's holes, and score it against J7, into the run's folder made afresh: placement.npz, runs/RUN*.npz (with
     each solve's costs), data_errors.npz, data-errors-2000-digital.csv, report.json and report.md."""
     from sfzmaps.solver import report, runs, solve
     try:
-        runs.check_final(run, walls, true_borders)
+        runs.check_final(run, walls, true_borders, compound_fusion)
         runs.solve_dir(run)
     except ValueError as e:
         raise typer.BadParameter(str(e), param_hint="RUN")
     _in_one_thread(["solver", "solve", run, *(["--walls", str(walls)] if walls else []),
-                    *(["--true-borders"] if true_borders else [])])
+                    *(["--true-borders"] if true_borders else []),
+                    *(["--compound-fusion"] if compound_fusion else [])])
     try:
-        found = solve.solve_and_report(run, walls, true_borders)
+        found = solve.solve_and_report(run, walls, true_borders, compound_fusion=compound_fusion)
     except ValueError as e:
         raise typer.BadParameter(str(e), param_hint="RUN")
     except RuntimeError as e:
@@ -1230,13 +1235,14 @@ def solver_solve_quarter(
     true_borders: bool = typer.Option(False, "--true-borders"),
     keep_costs: bool = typer.Option(False, "--keep-costs"),
     folder: Path = typer.Option(None, "--folder", help="Where the run is being built (default the run's folder)."),
+    compound_fusion: bool = _COMPOUND_FUSION_OPTION,
 ) -> None:
     """Solve the whole city with one quarter's held-out inputs, with the placement in the run's folder:
     runs/RUN-QUARTER.npz there (no join)."""
     from sfzmaps.solver import paths, solve
     if quarter not in paths.QUARTERS:
         raise typer.BadParameter(f"one of {', '.join(paths.QUARTERS)}", param_hint="QUARTER")
-    solve.solve_quarter(run, quarter, walls, true_borders, keep_costs, folder)
+    solve.solve_quarter(run, quarter, walls, true_borders, keep_costs, folder, compound_fusion=compound_fusion)
 
 
 @solver_app.command("score")
