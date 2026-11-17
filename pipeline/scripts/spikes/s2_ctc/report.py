@@ -20,8 +20,9 @@ REASONS = [
     "speed: about 90 crops a second on one CPU thread with the code list's exact scores (a box label, both "
     "directions, about 0.02 s) against the generative reader's median 16 s per box label (its records)",
     "determinism: CPU frames and posteriors byte-identical twice and at 1 vs 8 threads (B and C)",
-    "provenance: from-scratch weights (B, C) trained only on Terra's strings and the generative reader's own font; A's "
-    "docTR weights (undisclosed training data) are not needed: C is within noise of A",
+    "provenance: from-scratch weights (B, C) trained only on Terra's strings and the generative reader's own font; "
+    "A's docTR weights (undisclosed training data) are not needed to match the generative reader, though A stays a "
+    "little ahead of C at two of C's three seeds",
     "explaining away is direct: the CTC remainder is 'other' and the empty string is 'none' (held-out quarter, C at "
     "T = 1: non-text p(none) 0.985, street names p(other) 0.982, block numbers p(other) 0.999)",
     "the owner accepts a somewhat worse reader than the LLM reads, and C is not worse than the generative reader",
@@ -174,15 +175,23 @@ def findings(res: dict) -> list[str]:
     if verdict["C"] or verdict["B"]:
         line = "ADOPT the CTC likelihood: the rule passes on every label and the unflagged, at every seed."
     elif a_pass:
-        ca = a.get("paired_c_vs_a", {}).get("C+dir closed vs A+dir closed")
-        if ca is None:
-            c_vs_a = "not measured"
+        pairs = {tag: a.get("paired_c_vs_a", {}).get(f"{tag}+dir closed vs A+dir closed") for tag in SEEDS["C"]}
+        tied = [tag for tag, ca in pairs.items() if ca is not None and all(
+            d[k][0] <= 0 <= d[k][1] for d in (ca["all"], ca["unflagged"]) for k in ("top1_ci", "nll_ci"))]
+        below = [tag for tag, ca in pairs.items() if ca is not None and tag not in tied]
+        if not tied and not below:
+            c_vs_a = "not measured against A"
+        elif not below:
+            c_vs_a = "tied with A by every interval at every seed"
         else:
-            zero_in = all(d[k][0] <= 0 <= d[k][1] for d in (ca["all"], ca["unflagged"]) for k in ("top1_ci", "nll_ci"))
-            c_vs_a = "tied with A by every interval" if zero_in else "not tied with A (see the table)"
+            seed = {"C": "seed 0", "Cs1": "seed 1", "Cs2": "seed 2"}
+            c_vs_a = (f"tied with A at {', '.join(seed[t] for t in tied) or 'no seed'} and behind A at "
+                      f"{', '.join(seed[t] for t in below)} on some interval (table above): A's lead over C is about "
+                      f"the size of C's seed spread")
         line = (f"TIE for the from-scratch readers by the owner's rule, to be broken by looking.  Only A (docTR's "
-                f"weights, a baseline that can't ship) passes on every label and the unflagged; C is {c_vs_a}, so "
-                f"the 'only A wins' branch (the gap is pretraining data) is not established either.")
+                f"weights, a baseline that can't ship) passes on every label and the unflagged, so by the letter of "
+                f"step 5 this is the 'only A wins' case: the remaining gap is pretraining data, and the fix to try is "
+                f"the synthetic stream (C has one; its known faults, below, come first).  C is {c_vs_a}.")
     else:
         line = "TIE by the owner's rule, to be broken by looking."
     out += ["", f"**Outcome: {line}**  (C+dir closed passes {verdict['C_checks'][0]} of {verdict['C_checks'][1]} "
@@ -199,6 +208,13 @@ def findings(res: dict) -> list[str]:
         for i, row in cited.items():
             out.append(f"| #{i} | {row['owner']} | {'yes' if row['flagged'] else ''} | "
                        + " | ".join(row[n] for n in names) + " |")
+        c_names = [n for n in names if n.startswith("C")]
+        misses = list(cited.items())[:12]          # score.CITED: the first 12 are C's cited misses
+        always = [f"#{i}" for i, row in misses if all(row[n] != row["owner"] for n in c_names)]
+        out += ["", f"Of the {len(misses)} labels the first report cited as C's misses (digits crossed by lines), "
+                    f"{len(always)} are wrong at all {len(c_names)} of C's seeds ({', '.join(always) or 'none'}); "
+                    f"the rest are right at one seed or more, so most of those misses are training variance, not a "
+                    f"pattern."]
     out += ["", "Caveats:", ""] + [f"- {c}" for c in CAVEATS] + [""]
     return out
 
