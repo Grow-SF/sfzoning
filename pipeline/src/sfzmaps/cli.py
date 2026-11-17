@@ -1210,7 +1210,7 @@ def solver_solve(
     each solve's costs), data_errors.npz, data-errors-2000-digital.csv, report.json and report.md."""
     from sfzmaps.solver import report, runs, solve
     try:
-        runs.check_final(run, walls, true_borders, compound_fusion)
+        solve.check_run(run, walls, true_borders, compound_fusion)
         runs.solve_dir(run)
     except ValueError as e:
         raise typer.BadParameter(str(e), param_hint="RUN")

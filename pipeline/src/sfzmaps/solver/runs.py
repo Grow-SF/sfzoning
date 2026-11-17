@@ -45,13 +45,12 @@ def walls_experiment_dir(candidates) -> Path:
     return EXPERIMENTS_DIR / f"{WALLS_PREFIX}{'+'.join(names) or 'none'}"
 
 
-def check_final(run: str, walls_dir=None, true_borders: bool = False, compound_fusion: bool = False) -> None:
-    """The stage's run (FINAL_RUN) is shipped, so it is solved only with the stage's own walls (WALLS_DIR) and
-    search, and never as the ceiling check: refuse it with other walls, the true borders or the compound fusion
-    move (solve.solve_joint's compound_fusion, which the stage leaves off)."""
-    if run == FINAL_RUN and (walls_dir is not None or true_borders or compound_fusion):
-        raise ValueError(f"the run {FINAL_RUN!r} is the solver-solve stage's: solve it without --walls, "
-                         "--true-borders and --compound-fusion, or give the experiment another name")
+def check_final(run: str, walls_dir=None, true_borders: bool = False) -> None:
+    """The stage's run (FINAL_RUN) is shipped, so it is solved only with the stage's own walls (WALLS_DIR) and never
+    as the ceiling check: refuse it with other walls or with the true borders."""
+    if run == FINAL_RUN and (walls_dir is not None or true_borders):
+        raise ValueError(f"the run {FINAL_RUN!r} is the solver-solve stage's: solve it without --walls and "
+                         "--true-borders, or give the experiment another name")
 
 
 def fresh_folder(folder: Path) -> Path:

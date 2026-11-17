@@ -34,6 +34,16 @@ ROUNDS = 4                  # the search's loop of region, compound and expansio
 COMPOUND_FUSION_ROUNDS = 8  #   and with the compound fusion move in it (solve_joint's compound_fusion)
 
 
+def check_run(run: str, walls_dir: Path | None = None, true_borders: bool = False,
+              compound_fusion: bool = False) -> None:
+    """runs.check_final, and the stage's run (FINAL_RUN) keeps the stage's search: refuse it with the compound fusion
+    move (solve_joint's compound_fusion, which the stage leaves off: Ruling R7)."""
+    runs.check_final(run, walls_dir, true_borders)
+    if run == runs.FINAL_RUN and compound_fusion:
+        raise ValueError(f"the run {runs.FINAL_RUN!r} is the solver-solve stage's: solve it without --compound-fusion "
+                         "(the stage leaves the compound fusion move off), or give the experiment another name")
+
+
 def costs(n_lots, a, b, odds, rd, options=None, label_weight=1.0, tie_break=1e-4):
     """(U, labels, label terms): U[lot, code], the label costs (energy.label_costs) plus tie_break x each code's
     cheapest-path cost (energy.path_costs), less each lot's row minimum: the costs solve_joint minimises"""
@@ -98,7 +108,7 @@ def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders:
     `runs.solve_dir`).  The scoring table (with the by-eye corrections) gives the true borders of the ceiling check
     and the table's answer the log prices.  compound_fusion: solve_joint's.  What it prints is the quarter's log: no
     times."""
-    runs.check_final(run, walls_dir, true_borders, compound_fusion)
+    check_run(run, walls_dir, true_borders, compound_fusion)
     folder = Path(folder or runs.solve_dir(run))
 
     def log(s):
@@ -149,7 +159,7 @@ def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = Fals
     what its process prints; what it writes to stderr (a library's warning, a traceback) goes to the console, never
     into the run's folder.  It prints each quarter's log and how long each took (the times only here, never in the
     run's folder).  compound_fusion: solve_joint's, in every quarter."""
-    runs.check_final(run, walls_dir, true_borders, compound_fusion)
+    check_run(run, walls_dir, true_borders, compound_fusion)
     folder = Path(folder or runs.solve_dir(run))
     logs = run_file(run, folder=folder).parent
     logs.mkdir(parents=True, exist_ok=True)
@@ -192,12 +202,12 @@ def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool
     data_errors.npz and data-errors-2000-digital.csv), and write the report (`report.write_report`: report.json and
     report.md), which scores the run with those parcels left out and with every lot.  compound_fusion: solve_joint's.
     The stage's run (`final`) is refused with other walls, the true borders or the compound fusion
-    (`runs.check_final`).  The placement and the report are computed in
+    (`check_run`).  The placement and the report are computed in
     this process: `sfzmaps solver solve` runs it pinned to one thread (`threads`).  Returns the report."""
     import logging
 
     from sfzmaps.solver import holes, placement, report
-    runs.check_final(run, walls_dir, true_borders, compound_fusion)
+    check_run(run, walls_dir, true_borders, compound_fusion)
     target = runs.solve_dir(run)
     threads.warn_unless_pinned(logging.getLogger(__name__), "the placement and the report")
     folder = runs.fresh_folder(target)
