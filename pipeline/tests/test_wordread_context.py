@@ -317,6 +317,37 @@ def test_fit_prior_finds_tau_and_a_weight_no_worse_than_the_ink_alone():
     assert got["w"][C.CODE] > 0.1 and got["tau_converged"]
 
 
+def test_a_box_holding_part_of_a_word_is_asked_only_for_the_part_inside_it():
+    assert C.substring_targets("RH-2", [1, 1, 1, 1]) == [("RH-2", 1.0)]          # a whole word: unchanged
+    got = dict(C.substring_targets("ABCD", [1.0, 1.0, 0.5, 0.0]))
+    assert got == pytest.approx({"AB": 0.5, "ABC": 0.5})
+    # a space at a run's end prints nothing: "MISSION" and "MISSION " are one target
+    shares = [1.0] * 7 + [0.5] + [0.0] * 3
+    assert dict(C.substring_targets("MISSION ST.", shares)) == pytest.approx({"MISSION": 1.0})
+    assert C.substring_targets("AB", [0.0, 0.0]) == []
+    # the characters' shares from the word's ink: A's ink inside the box, B's outside, the space by its area
+    word = np.array([[0, 0], [30, 0], [30, 2], [0, 2]], float)
+    box = np.array([[-1, -1], [12, -1], [12, 3], [-1, 3]], float)
+    xs = np.r_[np.linspace(1, 9, 9), np.linspace(21, 29, 9)]
+    got = C.char_shares("A B", word, box, xs, np.ones(len(xs)))
+    assert got == pytest.approx([1.0, 0.2, 0.0])
+
+
+def test_the_fit_scores_a_fragment_by_its_expected_part():
+    words = _fit_words(2)
+    tg = [("RH-1", 0.25), ("RH-2", 0.75)]
+    rows = words.assign(targets=[tg, [("RH-2", 1.0)]])
+    w = {C.CODE: 1.3}
+    got = C.truth_loglik(rows, 0.9, w)
+    r = words.iloc[0]
+    names = sorted(set(r["prior"].strings) | {"RH-1", "RH-2"})
+    post = C.posterior(C.ink_logp(r["reads"], r["q"], names, 0.9), r["prior"], w)
+    assert got[0] == pytest.approx(math.log(0.25 * math.exp(post["RH-1"]) + 0.75 * math.exp(post["RH-2"])))
+    assert got[1] == pytest.approx(C.truth_loglik(words.iloc[[1]], 0.9, w)[0])
+    lp, targets = C.truth_rows(rows, 0.9, w)[0]
+    assert C.target_logp(lp, targets) == pytest.approx(got[0])
+
+
 def test_a_truth_its_box_cannot_emit_is_left_out_of_the_fit_and_counted():
     assert C.ctc_fits("AB", 2) and not C.ctc_fits("AA", 2) and C.ctc_fits("AA", 3) and C.ctc_fits("", 0)
     words = _fit_words(6)

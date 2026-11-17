@@ -10,7 +10,10 @@ at most 2 processes x 1 thread, $0.
 No IoU anywhere: every pair of one of our boxes and a Terra word on its sheet counts with the chance the box holds the
 word, the product of the word's share of its ink inside our box's (trimmed) rectangle and our box's share of its ink
 inside the word's rectangle (`wordread.boxmodel.ink_shares` both ways, on the page's ink, `grid.INK_BELOW`); a pair
-whose product is 0 adds nothing.
+whose product is 0 adds nothing.  A pair's target is the part of Terra's string inside our box: its characters spread
+evenly along the word's rectangle (no per-character widths are measured), each inside by the share of its ink px in our
+box (`context.char_shares`), the likelihood the expectation over the contiguous runs they make
+(`context.substring_targets`); a word wholly inside keeps its whole string.
 
 Everything lands in data/solver/experiments/wordread/packs/ (never committed):
   sf-2000.parquet        the pack; after `fit`, with the spreads of every fold and of "all"
@@ -31,8 +34,9 @@ Everything lands in data/solver/experiments/wordread/packs/ (never committed):
                              when OTHER wins; the ink at tau over the same strings; the best path), the reliability
                              (the decode's posterior in display bins against agreement), the off-list strings whose
                              ink beats every listed string (kept?), and the brief's example on q's code-pair priors.
-  block_disagreements/   the held-out block-number pairs whose Terra string is off the list with stronger ink and
-                         that the pack overrules: their edge distances and how their numbers relate to today's blocks
+  block_disagreements/   the held-out block-number pairs holding their whole word, Terra's string off the list and its
+                         ink stronger, that the pack overrules: their edge distances, how their numbers relate to today's
+                         blocks
                          (summary.json), and 10 example crops (ours and the page around it, with index.json)
 
 Terra's strings are agreement, not truth: these numbers say how the pack moves the reads toward Terra's, never how
@@ -154,6 +158,17 @@ def _sheet_job(job) -> dict:
     box_share = dict(zip(zip(bi2.tolist(), wj2.tolist()), s_box.tolist()))
     pairs = [(int(b), int(w), float(s) * box_share.get((int(b), int(w)), 0.0)) for b, w, s in zip(bi, wj, s_word)]
     pairs = [p for p in pairs if p[2] > 0]
+    truths = terra["truth"].tolist()
+    word_ink: dict[int, tuple] = {}
+    targets = []
+    for b, w, _ in pairs:                       # the part of the word inside the box (`context.substring_targets`)
+        t = truths[w]
+        if not isinstance(t, str) or not t:
+            targets.append([])
+            continue
+        if w not in word_ink:
+            word_ink[w] = boxmodel._ink_of(words[w], ink)
+        targets.append(C.substring_targets(t, C.char_shares(t, words[w], rects[b], *word_ink[w])))
     reads = {}
     for b in sorted({p[0] for p in pairs}):
         r = boxes.iloc[b]
@@ -169,8 +184,8 @@ def _sheet_job(job) -> dict:
                 best.append(model.best_path(lp))
                 p_cls.append(float(torch.sigmoid(_M["directions"][quarter](x))[0]))
         reads[int(boxes.index[b])] = {"reads": lps, "q": p_cls[0], "best": best[0] if p_cls[0] < 0.5 else best[1]}
-    return {"sheet": sheet, "pairs": [(int(boxes.index[b]), int(terra.index[w]), s) for b, w, s in pairs],
-            "reads": reads}
+    return {"sheet": sheet, "pairs": [(int(boxes.index[b]), int(terra.index[w]), s, json.dumps(tg))
+                                      for (b, w, s), tg in zip(pairs, targets)], "reads": reads}
 
 
 def read() -> dict:
@@ -193,15 +208,16 @@ def read() -> dict:
         for fut in as_completed([pool.submit(_sheet_job, j) for j in jobs]):
             got.append(fut.result())
     reads = {k: v for g in got for k, v in g["reads"].items()}
-    pairs = pd.DataFrame([p for g in got for p in g["pairs"]], columns=["box", "word", "weight"])
+    pairs = pd.DataFrame([p for g in got for p in g["pairs"]], columns=["box", "word", "weight", "targets"])
     pairs = pairs.sort_values(["box", "word"]).reset_index(drop=True)
     t = terra.loc[pairs["word"]].reset_index(drop=True)
     bx = boxes.loc[pairs["box"]].reset_index(drop=True)
-    out = pd.DataFrame({"box": pairs["box"], "word": pairs["word"], "weight": pairs["weight"], "sheet": bx["sheet"],
+    out = pd.DataFrame({"box": pairs["box"], "word": pairs["word"], "weight": pairs["weight"],
+                        "targets": pairs["targets"], "sheet": bx["sheet"],
                         "box_quarter": bx["quarter"].astype(int), "text": t["truth"], "kind": t["kind"],
                         "block": t["block"].fillna("").astype(str), "quarter": t["word_quarter"].astype(int),
                         **{c: t[c].astype(bool) for c in TOUCH}})
-    out = out[out["text"].notna() & (out["text"] != "")].reset_index(drop=True)
+    out = out[out["text"].notna() & (out["text"] != "") & (out["targets"] != "[]")].reset_index(drop=True)
     on_map = []
     for sheet, part in boxes.loc[sorted(set(out["box"]))].groupby("sheet", sort=True):
         g = part[measures.G_COLS].to_numpy(float).reshape(-1, 4, 2)
@@ -218,8 +234,11 @@ def read() -> dict:
                         one=np.concatenate([reads[k]["reads"][0] for k in keys]).astype(np.float64),
                         two=np.concatenate([reads[k]["reads"][1] for k in keys]).astype(np.float64))
     out.to_parquet(PAIRS_FILE, index=False)
+    whole = [json.loads(tg) == [[s, 1.0]] for tg, s in zip(out["targets"], out["text"])]
     return {"pairs": int(len(out)), "boxes": int(out["box"].nunique()), "words": int(out["word"].nunique()),
-            "weight": round(float(out["weight"].sum()), 1), "seconds": round(time.perf_counter() - t0, 1)}
+            "weight": round(float(out["weight"].sum()), 1), "whole_word_pairs": int(sum(whole)),
+            "whole_word_weight": round(float(out.loc[whole, "weight"].sum()), 1),
+            "seconds": round(time.perf_counter() - t0, 1)}
 
 
 def load_pairs() -> pd.DataFrame:
@@ -231,6 +250,8 @@ def load_pairs() -> pd.DataFrame:
     by = {int(k): (one[o1[i]:o1[i + 1]], two[o2[i]:o2[i + 1]]) for i, k in enumerate(keys)}
     pairs["reads"] = [by[int(b)] for b in pairs["box"]]
     pairs["kind_p"] = list(pairs[[f"kind_p_{c}" for c in C.KIND_ORDER]].to_numpy(float))
+    pairs["targets"] = [[(s, float(p)) for s, p in json.loads(tg)] for tg in pairs["targets"]]
+    pairs["truth"] = [tg[0][0] for tg in pairs["targets"]]       # the likeliest part (the word itself when whole)
     return pairs
 
 
@@ -265,9 +286,15 @@ def _decode(labels: list, logpost: np.ndarray, best: str) -> tuple[str, float]:
     return (best if top == C.OTHER else top), float(math.exp(logpost[order[0]]))
 
 
+def _agree(top: str, r: dict) -> float:
+    """How far a decode agrees with Terra at this pair: the chance of the part of the word it holds that it equals."""
+    return float(sum(p for s, p in r["parts"] if s == top))
+
+
 def held_out(test: pd.DataFrame, tau: float, w: dict) -> dict:
-    """q's own pairs under (tau, w): per row the log posterior over its listed strings and the truth then OTHER (the
-    NLL), the decode's posterior over the listed strings then OTHER (`posterior`), and the facts the scores need."""
+    """q's own pairs under (tau, w): per row the log posterior over its listed strings and its targets then OTHER
+    (the NLL of the expected target), the decode's posterior over the listed strings then OTHER (`posterior`), and
+    the facts the scores need (the off-list facts of the likeliest target, `truth`)."""
     rows = C.truth_rows(test, tau, w)
     out = []
     for (lp, k), r in zip(rows, test.itertuples(index=False)):
@@ -279,7 +306,8 @@ def held_out(test: pd.DataFrame, tau: float, w: dict) -> dict:
         off = r.truth not in names
         margin = (ink[r.truth] - max(listed.values()) if listed else math.inf) if off else -math.inf
         named = C.posterior(ink, r.prior, w)
-        out.append({"lp": lp, "k": k, "labels": list(post), "post": np.array(list(post.values())),
+        out.append({"lp": lp, "k": k, "parts": list(r.targets), "labels": list(post),
+                    "post": np.array(list(post.values())),
                     "ink_top": _decode(list(alone), np.array(list(alone.values())), r.best)[0],
                     "best": r.best, "truth": r.truth, "kind": r.kind, "weight": float(r.weight), "off": off,
                     "margin": margin,
@@ -295,9 +323,9 @@ def score(rows: list[dict], temperature: float = 1.0) -> dict:
     if not rows:
         return {}
     v = np.array([r["weight"] for r in rows])
-    nll = np.array([-C.tempered(r["lp"], temperature)[r["k"]] for r in rows])
+    nll = np.array([-C.target_logp(C.tempered(r["lp"], temperature), r["k"]) for r in rows])
     dec = [_decode(r["labels"], C.tempered(r["post"], temperature), r["best"]) for r in rows]
-    right = np.array([d[0] == r["truth"] for d, r in zip(dec, rows)], float)
+    right = np.array([_agree(d[0], r) for d, r in zip(dec, rows)], float)
     p = np.array([d[1] for d in dec])
     out = {"pairs": len(rows), "weight": round(float(v.sum()), 2), "nll": _wmean(nll, v), "by_kind": {}}
     for kind in ["all", *C.KIND_ORDER]:
@@ -306,9 +334,8 @@ def score(rows: list[dict], temperature: float = 1.0) -> dict:
             continue
         out["by_kind"][kind] = {"weight": round(float(v[sel].sum()), 2), "nll": _wmean(nll[sel], v[sel]),
                                 "top1_pack": _wmean(right[sel], v[sel]),
-                                "top1_ink": _wmean([r["ink_top"] == r["truth"] for r, s in zip(rows, sel) if s],
-                                                   v[sel]),
-                                "top1_best": _wmean([r["best"] == r["truth"] for r, s in zip(rows, sel) if s], v[sel])}
+                                "top1_ink": _wmean([_agree(r["ink_top"], r) for r, s in zip(rows, sel) if s], v[sel]),
+                                "top1_best": _wmean([_agree(r["best"], r) for r, s in zip(rows, sel) if s], v[sel])}
     idx = np.clip(np.digitize(p, BINS) - 1, 0, len(BINS) - 2)
     out["reliability"] = [{"bin": [float(BINS[i]), float(BINS[i + 1])], "weight": round(float(v[idx == i].sum()), 2),
                            "mean_p": _wmean(p[idx == i], v[idx == i]), "agree": _wmean(right[idx == i], v[idx == i])}
@@ -347,8 +374,8 @@ def _fit_job(q) -> dict:
     if q is None:
         return {"fold": "all", "spreads": sp}
     test = _scored(words, held, q).copy()
-    train = train.assign(prior=_priors(pack, train, sp), truth=train["text"])
-    test["prior"], test["truth"] = _priors(pack, test, sp), test["text"]
+    train = train.assign(prior=_priors(pack, train, sp))
+    test["prior"] = _priors(pack, test, sp)
     can = C.readable(test)              # a truth the box can't emit at all is no observation of it (counted)
     impossible = {"pairs": int((~can).sum()), "weight": round(float(test.loc[~can, "weight"].sum()), 3)}
     test = test[can]
@@ -407,7 +434,7 @@ def fit() -> dict:
                            "temperature": temps[f], "held_out_tempered": tempered_scores[f],
                            "brief_example": g["brief_example"], "seconds": g["seconds"]}
     out["pooled"] = {m: score(pooled[m]) for m in MODES}
-    out["pooled_tempered"] = {"nll": _wmean([-C.tempered(r["lp"], temps[f]["temperature"])[r["k"]]
+    out["pooled_tempered"] = {"nll": _wmean([-C.target_logp(C.tempered(r["lp"], temps[f]["temperature"]), r["k"])
                                              for f in folds for r in got[f]["held_out"][mode]["rows"]],
                                             [r["weight"] for r in tempered_rows]),
                               "reliability": _pooled_reliability(got, folds, mode, temps)}
@@ -427,7 +454,7 @@ def _pooled_reliability(got, folds, mode, temps) -> list[dict]:
         for r in got[f]["held_out"][mode]["rows"]:
             top, pr = _decode(r["labels"], C.tempered(r["post"], t), r["best"])
             p.append(pr)
-            right.append(float(top == r["truth"]))
+            right.append(_agree(top, r))
             v.append(r["weight"])
     p, right, v = np.array(p), np.array(right), np.array(v)
     idx = np.clip(np.digitize(p, BINS) - 1, 0, len(BINS) - 2)
@@ -444,9 +471,9 @@ def _digits(s: str) -> tuple[str, str]:
 
 
 def blocks() -> dict:
-    """The held-out block-number pairs whose Terra string is off the list with stronger ink and that the kept mode
-    overrules (see the module): how near the box sits to its block's edge, how Terra's number relates to the block the
-    pack chose and to today's blocks, and EXAMPLES crops (the heaviest pairs)."""
+    """The held-out block-number pairs holding their whole word, whose Terra string is off the list with stronger ink
+    and that the kept mode overrules (see the module): how near the box sits to its block's edge, how Terra's number
+    relates to the block the pack chose and to today's blocks, and EXAMPLES crops (the heaviest pairs)."""
     import cv2
     import shapely
 
@@ -460,7 +487,7 @@ def blocks() -> dict:
     for f in paths.QUARTERS:
         g = pickle.loads((JOBS_DIR / f"{f}.pkl").read_bytes())
         rows += [r for r in g["held_out"][mode]["rows"] if r["kind"] == C.BLOCK and r["off"] and r["margin"] > 0
-                 and not r["keeps"]]
+                 and not r["keeps"] and r["parts"] == [(r["truth"], 1.0)]]      # the whole word in the box
     numbers = {}
     for r_, forms in enumerate(pack.forms_of_block):
         for fm in forms:

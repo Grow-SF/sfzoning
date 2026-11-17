@@ -63,7 +63,9 @@ EM, every word refused that is in or touching an answered block or the held-out 
     words (flat for a code not seen).
 
 The fit (`fit_prior`): by maximum likelihood of Terra's string on the pairs of the other three quarters, each pair's
-log-likelihood weighted by the chance its box holds its word (never the owner's answers: a word in or touching an
+target the part of the string inside its box (`char_shares`, `substring_targets`: the expectation over the contiguous
+runs of characters inside), its log-likelihood weighted by the chance its box holds its word (never the owner's
+answers: a word in or touching an
 answered block, or touching the held-out quarter, is refused), the ink calibrated apart from the context: tau on the
 ink alone, then w per kind on top; unbounded searches (log tau, log w), a fit running away reported.  `joint` fits them
 together too; the two are compared by held-out NLL.  `fit_temperature`: one temperature on the combined log posterior,
@@ -1003,15 +1005,23 @@ class _Words:
             self.box_reads.setdefault(b, (r, float(q)))
         self.boxes = boxes
         priors = list(words["prior"])
-        self.named, truth_at, word_of = [], [], []
+        targets = list(words["targets"]) if "targets" in words else [[(t, 1.0)] for t in words["truth"]]
+        self.named, word_of = [], []
+        tg_g, tg_lp, tg_row = [], [], []
         ent_g, ent_k, ent_l, ent_p = [], [], [], []
         c_rows = []
         g0 = 0
-        for i, (truth, pr) in enumerate(zip(words["truth"], priors)):
-            names = sorted(set(pr.strings if pr is not None else []) | {truth})
+        for i, (tg, pr) in enumerate(zip(targets, priors)):
+            tg = [(s, float(p)) for s, p in tg if p > 0]
+            if not tg:
+                raise ValueError(f"row {i} has no target with a chance above 0")
+            names = sorted(set(pr.strings if pr is not None else []) | {s for s, _ in tg})
             col = {s: g0 + j for j, s in enumerate(names)}
             self.named.append(names)
-            truth_at.append(col[truth])
+            for s, p in tg:
+                tg_g.append(col[s])
+                tg_lp.append(math.log(p))
+                tg_row.append(i)
             word_of += [i] * len(names)
             c = np.zeros(len(KIND_ORDER))
             if pr is not None:
@@ -1030,7 +1040,9 @@ class _Words:
                                 ent_p.append(math.log(p))
             c_rows.append(c)
             g0 += len(names)
-        self.truth_at = np.array(truth_at, np.int64)
+        self.tg_g, self.tg_lp = np.array(tg_g, np.int64), np.array(tg_lp, float)
+        tg_row = np.array(tg_row, np.int64)
+        self.tg_starts = np.flatnonzero(np.r_[True, tg_row[1:] != tg_row[:-1]]) if len(tg_row) else np.zeros(0, int)
         self.word_of = np.array(word_of, np.int64)
         self.starts = np.flatnonzero(np.r_[True, self.word_of[1:] != self.word_of[:-1]]) if g0 else np.zeros(0, int)
         c = np.array(c_rows, float).reshape(-1, len(KIND_ORDER))
@@ -1086,19 +1098,23 @@ class _Words:
             return ink + self.lift(w), np.log(np.maximum(rest, 0.0))
 
     def loglik(self, tau: float, w: dict[str, float]) -> np.ndarray:
-        """Each word's log posterior of its truth."""
+        """Each word's log posterior of its target: log sum_t P(t) post(t) over its targets."""
         score, log_rest = self.scores(tau, w)
         z = np.logaddexp(_group_lse(score, self.starts), log_rest)
-        return score[self.truth_at] - z
+        return _group_lse(self.tg_lp + score[self.tg_g], self.tg_starts) - z
 
-    def rows(self, tau: float, w: dict[str, float]) -> list[tuple[np.ndarray, int]]:
-        """Each word's log posterior over its named strings and then OTHER (normalised), and its truth's place."""
+    def rows(self, tau: float, w: dict[str, float]) -> list[tuple[np.ndarray, list]]:
+        """Each word's log posterior over its named strings and then OTHER (normalised), and its targets: (place in
+        that vector, log P(target))."""
         score, log_rest = self.scores(tau, w)
         ends = np.r_[self.starts[1:], len(score)]
+        tg_ends = np.r_[self.tg_starts[1:], len(self.tg_g)]
         out = []
         for i, (a, b) in enumerate(zip(self.starts, ends)):
             v = np.r_[score[a:b], log_rest[i]]
-            out.append((v - float(np.logaddexp.reduce(v[np.isfinite(v)])), int(self.truth_at[i] - a)))
+            sel = slice(self.tg_starts[i], tg_ends[i])
+            out.append((v - float(np.logaddexp.reduce(v[np.isfinite(v)])),
+                        [(int(g - a), float(lp)) for g, lp in zip(self.tg_g[sel], self.tg_lp[sel])]))
         return out
 
 
@@ -1109,19 +1125,84 @@ def ctc_fits(s: str, frames: int) -> bool:
 
 
 def readable(words: pd.DataFrame) -> np.ndarray:
-    """Which rows' `truth` their box's reads can emit at all (`ctc_fits`; a row whose truth can't is a physically
-    impossible observation of that box: a box holding a fragment of a longer word)."""
-    return np.array([ctc_fits(t, int(np.shape(r[0])[0])) for t, r in zip(words["truth"], words["reads"])], bool)
+    """Which rows have a target their box's reads can emit at all (`ctc_fits`; `targets`, or `truth` when absent):
+    a row with none is a physically impossible observation of that box."""
+    targets = list(words["targets"]) if "targets" in words else [[(t, 1.0)] for t in words["truth"]]
+    return np.array([any(p > 0 and ctc_fits(s, int(np.shape(r[0])[0])) for s, p in tg)
+                     for tg, r in zip(targets, words["reads"])], bool)
+
+
+def _in_quad(quad, x, y) -> np.ndarray:
+    """Which points lie inside a convex quadrilateral (4, 2) (its edges included)."""
+    c = np.asarray(quad, float).reshape(4, 2)
+    cross = np.stack([(c[(k + 1) % 4, 0] - c[k, 0]) * (np.asarray(y) - c[k, 1])
+                      - (c[(k + 1) % 4, 1] - c[k, 1]) * (np.asarray(x) - c[k, 0]) for k in range(4)])
+    return (cross >= 0).all(0) | (cross <= 0).all(0)
+
+
+def char_shares(text: str, word_rect, box_rect, ink_x, ink_y) -> np.ndarray:
+    """Each character of a word's `text`, its extent the word's rectangle (4, 2; the first edge along the reading)
+    divided evenly along the reading (no per-character widths are measured): the share of its ink px (the word's ink
+    px centres `ink_x`, `ink_y`, each a character's by where it projects on the reading) inside our box's rectangle,
+    or, for a character with no ink px (a space), the share of its extent's area inside it."""
+    n = len(text)
+    c = np.asarray(word_rect, float).reshape(4, 2)
+    a = c[1] - c[0]
+    x, y = np.asarray(ink_x, float), np.asarray(ink_y, float)
+    u = ((x - c[0, 0]) * a[0] + (y - c[0, 1]) * a[1]) / max(float(a @ a), 1e-12)
+    idx = np.clip(np.floor(u * n).astype(int), 0, n - 1) if n else np.zeros(0, int)
+    inside = _in_quad(box_rect, x, y) if len(x) else np.zeros(0, bool)
+    box = shapely.Polygon(np.asarray(box_rect, float).reshape(4, 2))
+    out = np.zeros(n)
+    for i in range(n):
+        mine = idx == i
+        if mine.any():
+            out[i] = float(inside[mine].mean())
+        else:
+            ch = shapely.Polygon([c[0] + a * i / n, c[0] + a * (i + 1) / n, c[3] + a * (i + 1) / n, c[3] + a * i / n])
+            out[i] = float(ch.intersection(box).area / ch.area) if ch.area > 0 else 0.0
+    return out
+
+
+def substring_targets(text: str, shares) -> list[tuple[str, float]]:
+    """The parts of a word our box may hold, with their chances: every contiguous run of its characters, each
+    character inside by its share (independently), conditioned on the box holding a contiguous, non-empty run:
+    P(run) ~ prod_inside share x prod_outside (1 - share).  Spaces at a run's ends are dropped (they print nothing);
+    equal strings add.  A run with chance exactly 0 is no target, so a word wholly inside (every share 1) has just
+    itself."""
+    s = np.clip(np.asarray(shares, float), 0.0, 1.0)
+    n = len(text)
+    with np.errstate(divide="ignore"):
+        lin, lout = np.log(s), np.log1p(-s)
+    got: dict[str, float] = {}
+    for a in range(n):
+        for b in range(a + 1, n + 1):
+            lp = float(lin[a:b].sum() + lout[:a].sum() + lout[b:].sum())
+            sub = text[a:b].strip()
+            if not np.isfinite(lp) or not sub:
+                continue
+            got[sub] = float(np.logaddexp(got.get(sub, -np.inf), lp))
+    if not got:
+        return []
+    z = float(np.logaddexp.reduce(list(got.values())))
+    return sorted(((k, math.exp(v - z)) for k, v in got.items()), key=lambda kv: (-kv[1], kv[0]))
 
 
 def truth_loglik(words: pd.DataFrame, tau: float, w: dict[str, float]) -> np.ndarray:
-    """Each word's log posterior of its `truth` at (tau, w) (`words` as `fit_prior` takes them)."""
+    """Each word's log posterior of its target at (tau, w) (`words` as `fit_prior` takes them)."""
     return _Words(words).loglik(tau, w)
 
 
-def truth_rows(words: pd.DataFrame, tau: float, w: dict[str, float]) -> list[tuple[np.ndarray, int]]:
-    """Each word's normalised log posterior over its named strings then OTHER, and its truth's place (`_Words.rows`)."""
+def truth_rows(words: pd.DataFrame, tau: float, w: dict[str, float]) -> list[tuple[np.ndarray, list]]:
+    """Each word's normalised log posterior over its named strings then OTHER, and its targets (`_Words.rows`)."""
     return _Words(words).rows(tau, w)
+
+
+def target_logp(logpost: np.ndarray, targets) -> float:
+    """log sum_t P(t) post(t) of a row's targets (an int: one target at that place)."""
+    if isinstance(targets, (int, np.integer)):
+        return float(logpost[targets])
+    return float(np.logaddexp.reduce([lp + logpost[k] for k, lp in targets]))
 
 
 def tempered(logpost: np.ndarray, temperature: float) -> np.ndarray:
@@ -1131,14 +1212,15 @@ def tempered(logpost: np.ndarray, temperature: float) -> np.ndarray:
     return v - (float(np.logaddexp.reduce(v[fin])) if fin.any() else 0.0)
 
 
-def fit_temperature(rows: list[tuple[np.ndarray, int]], weights=None) -> dict:
-    """One temperature on the combined log posterior, by maximum likelihood of each row's truth (`rows` as
-    `truth_rows` gives them; `weights` per row, 1 when None): unbounded search in log T (Brent from 1)."""
+def fit_temperature(rows: list[tuple[np.ndarray, object]], weights=None) -> dict:
+    """One temperature on the combined log posterior, by maximum likelihood of each row's target (`rows` as
+    `truth_rows` gives them, or (log posterior, place); `weights` per row, 1 when None): unbounded search in log T
+    (Brent from 1)."""
     v = np.ones(len(rows)) if weights is None else np.asarray(weights, float)
 
     def nll(u):
         t = math.exp(u)
-        return -float(sum(vi * tempered(lp, t)[k] for (lp, k), vi in zip(rows, v)))
+        return -float(sum(vi * target_logp(tempered(lp, t), k) for (lp, k), vi in zip(rows, v)))
 
     res = optimize.minimize_scalar(nll, bracket=(-0.5, 0.0), method="brent")
     return {"temperature": float(math.exp(res.x)), "nll": float(res.fun), "nll_at_1": nll(0.0),
