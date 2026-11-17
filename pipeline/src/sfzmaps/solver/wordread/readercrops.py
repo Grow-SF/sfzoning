@@ -84,7 +84,6 @@ IOU = 0.5
 OFFSETS = ("start", "end", "cross", "angle", "height_ratio")
 QUANTILES = (0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99)
 REACH = 2 * wordboxes.INK_R + 2   # px: ink farther apart than this never shares an ink component (each grows INK_R)
-LINE_TRIES = 100                  # line draws for one crop before it is left without (a loop's guard; counted)
 PROPOSALS = 20000                 # line draws simulated per round of `calibrate_lines`
 ROUNDS = 4                        # rounds of `calibrate_lines`' raking of the piece weights
 KIND_NAMES = tuple(data.KINDS)    # zoning code, block number, street name, other
@@ -217,7 +216,7 @@ def neighbour_pose(page: np.ndarray, word_geo, nb_geo) -> dict | None:
     angle) of the word and of the neighbour (page px index).  {"side": +1 past the word's end or -1 before its start,
     "h": the word's height, "p0", "q0": the grid's first place (px, from the end along, from the centre across),
     "cells": [[i, j], ...] the grid's ink, "rect": the neighbour's rectangle's corners in the same frame}; None when
-    the neighbour has no ink of its own."""
+    the neighbour has no ink of its own, or no place of the grid falls on it."""
     cx, cy, length, height, angle = (float(v) for v in word_geo)
     word, nb = _rect(*word_geo), _rect(*nb_geo)
     win, (ox, oy) = _window(page, [word, nb], REACH)
@@ -245,6 +244,8 @@ def neighbour_pose(page: np.ndarray, word_geo, nb_geo) -> dict | None:
     ok = (xi >= 0) & (yi >= 0) & (xi < win.shape[1]) & (yi < win.shape[0])
     hit = np.zeros(ii.shape, bool)
     hit[ok] = moving[yi[ok], xi[ok]]
+    if not hit.any():                               # the grid's places all fall off its ink: nothing to draw
+        return None
     rx, ry = nb[:, 0] - cx, nb[:, 1] - cy
     return {"side": side, "h": height, "p0": p0, "q0": q0,
             "cells": np.stack([ii[hit], jj[hit]], 1).astype(int).tolist(),
@@ -566,6 +567,11 @@ class Lines:
         return cls(patches, np.array([thickness(p < 255) for p in patches], float),
                    np.full(n, 1.0 / n) if n else np.zeros(0))
 
+    def __post_init__(self):
+        if self.accept is not None and not (len(self.accept) and float(np.max(self.accept)) == 1.0):
+            raise ValueError("Lines.accept must keep some cover always (its largest chance 1): a draw is drawn again "
+                             "until one is kept")
+
     def __len__(self) -> int:
         return len(self.patches)
 
@@ -580,12 +586,10 @@ class Lines:
 
 
 def _letters(win, origin, t):
-    """Terra's word's rectangle in the window, and the px a line piece may be anchored on: its ink px (any px of its
-    rectangle when it has none)."""
+    """Terra's word's rectangle in the window, and the px a line piece may be anchored on: its ink px (none when the
+    rectangle holds no ink: there are no letters to cross, and the word gets no line)."""
     inside = _inside(win.shape, origin, t["cx"], t["cy"], t["length"], t["height"], t["angle"])
     ys, xs = np.nonzero(inside & (win < grid.INK_BELOW))
-    if not len(ys):
-        ys, xs = np.nonzero(inside)
     return inside, ys, xs
 
 
@@ -669,6 +673,7 @@ def calibrate_lines(pieces, dist: dict, words: pd.DataFrame, pages=None, seed: i
         ratio = np.where(kept_tp > 0, real_tp / np.maximum(kept_tp, 1e-12), 1.0)
         w = np.where(slot >= 0, w * ratio[np.maximum(slot, 0)], 0.0)
     lines.cover_edges, lines.accept = edges, a
+    lines.__post_init__()
     qs = (0.1, 0.5, 0.9, 0.99)
     kept_tp = np.bincount(drawn_t, weights=kept, minlength=len(values)) / kept.sum()
     kept_cp = np.bincount(cb, weights=kept, minlength=len(real_cp)) / kept.sum()
@@ -688,20 +693,19 @@ def calibrate_lines(pieces, dist: dict, words: pd.DataFrame, pages=None, seed: i
 
 def _line_through(win, origin, t, lines: Lines, rng) -> dict:
     """OR a line piece through a letter px of Terra's word `t` (`_propose`), each draw kept with its cover's chance
-    (`Lines.keep`) and drawn again otherwise, up to LINE_TRIES draws."""
+    (`Lines.keep`) and drawn again otherwise, until one is kept."""
     inside, ys, xs = _letters(win, origin, t)
     if not len(ys):
         return {}
     rejected = 0
-    for _ in range(LINE_TRIES):
+    while True:
         trial, cover, j, turns, k = _propose(win, inside, ys, xs, lines, rng)
-        if lines.accept is not None and rng.random() >= lines.keep(cover):
-            rejected += 1
-            continue
-        win[:] = trial
-        return {"line": True, "piece": j, "turns": turns, "line_at": (int(xs[k] + origin[0]), int(ys[k] + origin[1])),
-                "line_cover": cover, "line_thick": float(lines.thick[j]), "line_rejected": rejected}
-    return {"line": False, "line_gave_up": True, "line_rejected": rejected}
+        if lines.accept is None or rng.random() < lines.keep(cover):
+            break
+        rejected += 1
+    win[:] = trial
+    return {"line": True, "piece": j, "turns": turns, "line_at": (int(xs[k] + origin[0]), int(ys[k] + origin[1])),
+            "line_cover": cover, "line_thick": float(lines.thick[j]), "line_rejected": rejected}
 
 
 # --- the neighbour ----------------------------------------------------------------------------------------------------
@@ -746,9 +750,9 @@ def sloppy_crop(page: np.ndarray, terra_word, dist: dict, pieces, rng, info: dic
     alone.  With `with_mask`, `info["mask"]` is the
     ink touching the drawn rectangle (`read.kept_ink`, the pasted ink too) cut as the crop.  `info` (a dict) gets what
     was drawn: the offsets, `draw`, `frame` (centre, length, height, angle: `crops.cut`'s), `window` (the page px the
-    crop reads), `line` (and `piece`, `turns`, `line_at`, `line_cover`, `line_thick`, `line_rejected`,
-    `line_gave_up`), `neighbour` (and the pair's measured `part`, `ink` (touching) and `on`, and as pasted
-    `part_got`, `ink_got`, `on_got`; `side`, `scale`, `rect`)."""
+    crop reads), `line` (and `piece`, `turns`, `line_at`, `line_cover`, `line_thick`, `line_rejected`), `neighbour`
+    (and the pair's measured `part`, `ink` (touching) and `on`, and as pasted `part_got`, `ink_got`, `on_got`;
+    `side`, `scale`, `rect`)."""
     t = terra_word
     lines = pieces if isinstance(pieces, Lines) else Lines.uniform(pieces)
     cx, cy, length0, height0, angle0 = (float(t[k]) for k in ("cx", "cy", "length", "height", "angle"))
@@ -769,7 +773,7 @@ def sloppy_crop(page: np.ndarray, terra_word, dist: dict, pieces, rng, info: dic
     a, shape = K.frame_of(centre, length, height, angle)
     x0, y0, x1, y1 = K._footprint(a, shape, page.shape)
     got = {"draw": k, **dict(zip(OFFSETS, (s, e, x, da, r))), "frame": (centre, length, height, angle),
-           "window": (x0, y0, x1, y1), "line": False, "line_rejected": 0, "line_gave_up": False, "neighbour": False}
+           "window": (x0, y0, x1, y1), "line": False, "line_rejected": 0, "neighbour": False}
     u_line = rng.random()
     if x1 <= x0 or y1 <= y0:                     # off the page: paper
         crop = K.cut(page, centre, length, height, angle)[0]

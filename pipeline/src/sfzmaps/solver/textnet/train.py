@@ -32,7 +32,11 @@ words=True)`), and the loss adds, to the per-ink head's (channels 0-6, the same 
   push       PAN's discrimination, x TAG_WEIGHT: two words' mean tags in one crop pushed PUSH apart or more
              (log(1 + max(0, PUSH - |mean - mean'|)^2), over the crop's pairs)
 each part averaged over the crops that have it (pull, push) or the batch (the rest).  Every term is dense (masked sums
-and products, no indexing in the backward), so it runs on the Mac's GPU in deterministic mode.
+and products, no indexing in the backward), so it runs on the Mac's GPU in deterministic mode.  With word weights
+(`data.SheetData.weights`, Terra's doubt from `wordread.doubt.prepare`; none by default), each word's px count by its
+weight in all six (`word_tensors`): weighted sums and means, the hard negatives' number set by the positives' weight,
+a word of weight 0 adding nothing.  The geometry (iou, direction) is read only where the target's distances make a box:
+a word reaching into a held-out area has none (`data.crop_targets`).
 
 The parts of the loss stay on the device, summed; every LOG_EVERY steps (and at the last) their mean over those steps
 is read, logged and checked, so the device is waited on only then.  A mean that is not finite stops the training.
@@ -90,6 +94,7 @@ PULL = 0.5             # PAN: a core px's tag is pulled to within this of its wo
 PUSH = 3.0             # PAN: two words' mean tags are pushed at least this far apart
 DICE_EPS = 1e-6
 NORM_EPS = 1e-12       # under the square root of a tag distance (its gradient stays finite at 0)
+MASS_EPS = 1e-12       # the least a weighted sum divides by: no weight gives 0 / it = 0 (numerical; decides nothing)
 PARTS = ("text", "kind", "angle")
 WORD_PARTS = ("core", "dice", "iou", "direction", "pull", "push")
 CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words"), "decoder": ("full", "light"),
@@ -306,26 +311,33 @@ def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor
 
 def word_tensors(crops: list[dict[str, np.ndarray]]) -> tuple[torch.Tensor, ...]:
     """A batch's word targets on the CPU (`data.crop_targets(..., words=True)`): core (n, h, w) float, geo (n, 5, h,
-    w) float, tag (n, h, w) int64, known (n, h, w) float, and groups.  A crop's tags are its known core px's words
-    numbered 1, 2, ... in the order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so
-    the loss knows their number without reading the device."""
+    w) float, tag (n, h, w) int64, known (n, h, w) float, and groups.  known is each px's weight in the word terms: 0
+    where the px is not known, else 1, or, for a crop with word weights (`weight`, from `SheetData.weights`), its
+    word's weight at a core px.  A crop's tags are its core px of weight above 0, their words numbered 1, 2, ... in the
+    order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so the loss knows their number
+    without reading the device."""
     def stack(key, dtype):
         return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype))
-    tags = []
+    tags, weights = [], []
     for c in crops:
-        ids = np.where(c["known"], c["tag_id"], 0)
+        w = c["known"].astype(np.float32)
+        if "weight" in c:
+            w = w * c["weight"]
+        ids = np.where(w > 0, c["tag_id"], 0)
         words = np.unique(ids[ids > 0])
         tags.append(np.where(ids > 0, np.searchsorted(words, ids) + 1, 0))
+        weights.append(w)
     most = max((int(t.max()) for t in tags), default=0)
     return (stack("core", np.float32), stack("geo", np.float32), torch.from_numpy(np.stack(tags).astype(np.int64)),
-            stack("known", np.float32), torch.arange(1, most + 1, dtype=torch.int64))
+            torch.from_numpy(np.stack(weights)), torch.arange(1, most + 1, dtype=torch.int64))
 
 
 def _ohem_bce(logit: torch.Tensor, target: torch.Tensor, known: torch.Tensor) -> torch.Tensor:
-    """Binary cross-entropy over the known px: every positive, and the k = min(negatives, OHEM_RATIO x positives)
-    negatives of the highest loss; the negatives tied with the k-th share its remaining places equally (so the loss is
-    the top k's whichever of them a sort would put first).  Divided by positives + k; 0 with no positive.  The k-th
-    loss is found by a sort without reading the device."""
+    """Binary cross-entropy over the known px (`known` each px's weight): every positive by its weight, and the k =
+    min(negatives, OHEM_RATIO x the positives' weight) negatives of the highest loss; the negatives tied with the
+    ceil(k)-th share its remaining places equally (so the loss is the top k's whichever of them a sort would put
+    first; a fractional k gives the last place its fraction).  Divided by the positives' weight + k; 0 with no
+    positive.  The k-th loss is found by a sort without reading the device."""
     bce = F.binary_cross_entropy_with_logits(logit, target, reduction="none")
     pos = target * known
     neg = (1 - target) * known
@@ -333,17 +345,21 @@ def _ohem_bce(logit: torch.Tensor, target: torch.Tensor, known: torch.Tensor) ->
     k = torch.minimum(neg.sum(), OHEM_RATIO * n_pos)
     with torch.no_grad():
         ranked = torch.sort(torch.where(neg > 0, bce, -torch.ones_like(bce)).flatten(), descending=True).values
-        last = ranked.index_select(0, (k.long() - 1).clamp(min=0).reshape(1))
+        last = ranked.index_select(0, (torch.ceil(k).long() - 1).clamp(min=0).reshape(1))
         above = ((neg > 0) & (bce > last)).float()
         tied = ((neg > 0) & (bce == last)).float()
         share = (k - above.sum()) / tied.sum().clamp(min=1)
         hard = (above + tied * share) * (k > 0).float()
-    return (bce * (pos + hard)).sum() / (n_pos + k).clamp(min=1)
+    return (bce * (pos + hard)).sum() / (n_pos + k).clamp(min=MASS_EPS)
 
 
-def _tag_parts(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+def _tag_parts(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor,
+               weight: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """PAN's aggregation and discrimination (see the module) of the tag outputs (n, c, h, w) by the crops' word tags
-    (`word_tensors`), each crop's words found by a one-hot over `groups` (matrix products, no indexing)."""
+    (`word_tensors`), each crop's words found by a one-hot over `groups` (matrix products, no indexing).  With
+    `weight` (n, h, w; `word_tensors`' known), each word weighs its px's mean weight: a crop's pull is its words'
+    pulls weighed by their weights, a pair's push by the product of the two, and each crop counts by its words' (or
+    pairs') mean weight; with weights of 1 these are the plain means."""
     n, c, h, w = tag_out.shape
     zero = tag_out.sum() * 0
     if groups.numel() == 0:
@@ -351,36 +367,40 @@ def _tag_parts(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor) -
     hot = (tag[:, None] == groups[None, :, None, None]).to(tag_out.dtype).reshape(n, len(groups), h * w)
     count = hot.sum(-1)                                                     # (n, K) px of each word
     present = (count > 0).to(tag_out.dtype)
+    held = present if weight is None else torch.bmm(hot, weight.reshape(n, h * w, 1).to(tag_out.dtype))[..., 0] \
+        / count.clamp(min=1)                                                # (n, K) each word's weight
     vec = tag_out.reshape(n, c, h * w).transpose(1, 2)                      # (n, P, c)
     mean = torch.bmm(hot, vec) / count.clamp(min=1)[..., None]              # (n, K, c)
     own = torch.bmm(hot.transpose(1, 2), mean)                              # (n, P, c): its word's mean, 0 off cores
     far = ((vec - own) ** 2).sum(-1).add(NORM_EPS).sqrt()
     pulled = torch.log1p(F.relu(far - PULL) ** 2)                           # (n, P)
     per_word = torch.bmm(hot, pulled[..., None])[..., 0] / count.clamp(min=1)
-    words = present.sum(-1)
-    crops = (words > 0).to(tag_out.dtype)
-    pull = ((per_word * present).sum(-1) / words.clamp(min=1) * crops).sum() / crops.sum().clamp(min=1)
+    words = present.sum(-1).clamp(min=1)
+    pull = ((per_word * held).sum(-1) / words).sum() / (held.sum(-1) / words).sum().clamp(min=MASS_EPS)
     apart = ((mean[:, :, None] - mean[:, None]) ** 2).sum(-1).add(NORM_EPS).sqrt()      # (n, K, K)
-    pair = present[:, :, None] * present[:, None, :] * (1 - torch.eye(len(groups), dtype=tag_out.dtype,
-                                                                      device=tag_out.device))
+    other = 1 - torch.eye(len(groups), dtype=tag_out.dtype, device=tag_out.device)
+    pairs = (present[:, :, None] * present[:, None, :] * other).sum((1, 2)).clamp(min=1)
+    pair = held[:, :, None] * held[:, None, :] * other
     pushed = torch.log1p(F.relu(PUSH - apart) ** 2) * pair
-    pairs = pair.sum((1, 2))
-    two = (pairs > 0).to(tag_out.dtype)
-    push = (pushed.sum((1, 2)) / pairs.clamp(min=1) * two).sum() / two.sum().clamp(min=1)
+    push = (pushed.sum((1, 2)) / pairs).sum() / (pair.sum((1, 2)) / pairs).sum().clamp(min=MASS_EPS)
     return pull, push
 
 
 def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: torch.Tensor, known: torch.Tensor,
               groups: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """The word heads' loss of a batch (see the module) and its parts (WORD_PARTS, unweighted) as one tensor on the
-    batch's device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`."""
+    batch's device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`.  Each px counts by its weight
+    (`known`): the core's cross-entropy and Dice, the geometry's and the tags' means are weighted.  The geometry
+    (iou, direction) is read only at core px whose distances make a box (`geo` has none for a word reaching into a
+    held-out area, `data.crop_targets`)."""
     logit = out[:, model.CORE]
     lc = _ohem_bce(logit, core, known)
     p = torch.sigmoid(logit)
     ld = 1 - 2 * (p * core * known).sum() / ((p * known).sum() + (core * known).sum() + DICE_EPS)
-    m = core * known
-    n = m.sum().clamp(min=1)
-    d, g = model.distances(out[:, model.GEO]), geo[:, :4]
+    g = geo[:, :4]
+    m = core * known * ((g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) > 0).to(core.dtype)
+    n = m.sum().clamp(min=MASS_EPS)
+    d = model.distances(out[:, model.GEO])
     inter = ((torch.minimum(d[:, 0], g[:, 0]) + torch.minimum(d[:, 1], g[:, 1]))
              * (torch.minimum(d[:, 2], g[:, 2]) + torch.minimum(d[:, 3], g[:, 3])))
     union = (d[:, 0] + d[:, 1]) * (d[:, 2] + d[:, 3]) + (g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) - inter
@@ -389,7 +409,7 @@ def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: tor
     rad = torch.deg2rad(geo[:, 4])
     cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
     la = ((1 - cosine) * m).sum() / n
-    pull, push = _tag_parts(out[:, model.TAG], tag, groups)
+    pull, push = _tag_parts(out[:, model.TAG], tag, groups, known)
     total = lc + ld + li + GEO_ANGLE_WEIGHT * la + TAG_WEIGHT * (pull + push)
     return total, torch.stack([lc, ld, li, la, pull, push])
 

@@ -19,7 +19,8 @@ the lines through it too; "lines-unknown" leaves the line px inside a word unkno
 the sheet's line px, which `textnet.zones.prepare` fills before training, with the zones it keeps around Sol's points.
 
 The word targets (`crop_targets(..., words=True)`, for the word heads `train.Recipe.heads="words"`), drawn from each
-word's core (`SheetData.cores`, its rectangle shrunk, which `wordread.shrink.prepare` fills before training):
+word's core (`SheetData.cores`: the word's own labelled rectangle, no shrink, which `wordread.shrink.prepare` fills
+before training):
   core       1 on the px of a word's core (filled as the words are, later over earlier), 0 elsewhere
   tag_id     1 + the index of the word whose core holds the px (int32), 0 elsewhere
   geo        float32 (5, h, w), at core px only (0 elsewhere): the distances in crop px from the px to its word's top,
@@ -27,7 +28,12 @@ word's core (`SheetData.cores`, its rectangle shrunk, which `wordread.shrink.pre
              those of the word's whole rectangle (`SheetData.words`), taken by its reading angle (`SheetData.angles`):
              start and end along the reading direction, top and bottom across it (the top on the letters' upper side);
              each is the furthest of the rectangle's corners that way.  Distances are measured at page px and scaled
-             by the crop's scale; the quarter turns leave them as they are.
+             by the crop's scale; the quarter turns leave them as they are.  A word whose rectangle holds a held-out
+             px has no geometry: its four distances are 0 at its core px (no box; the loss reads the geometry only
+             where the distances make one), as they would tell how far it reaches into the held-out area.
+  weight     float32, only when the sheet holds word weights (`SheetData.weights`, Terra's doubt, which
+             `wordread.doubt.prepare` fills before training): at a core px its word's weight, 1 elsewhere.  With none,
+             every word weighs 1 and the key is absent (the targets are those without weights, byte for byte).
 
 An area answers for map points whether each is in it (`contains`) and, from the placement's samples around a page
 window, whether all of the window's px are in it or none is, when that follows from the samples alone (`decided`): a
@@ -81,7 +87,7 @@ AREA_MARGIN = 1.0                 # ft: far more than a rounding of a px's weigh
 # Park: 99.7% inside every training map's sheets, with 10-13% of each training map's box area (7-16% of each kind it
 # prints).  `pipeline/scripts/choose_text_validation_area.py` re-derives the candidates and this choice from the data.
 VALIDATION_AREA = (6000442.0, 2091727.0, 6008805.0, 2108453.0)
-BOX_FIELDS = ("words", "kinds", "angles", "other", "points", "cores")    # SheetData's arrays of boxes and points
+BOX_FIELDS = ("words", "kinds", "angles", "other", "points", "cores", "weights")  # SheetData's arrays of boxes, points
 LOAD_THREADS = 8                  # sheets read at once
 BAND = 512                        # page rows drawn at a time when finding where crops may centre
 LABEL_RULES = ("boxes", "lines-unknown")   # what a word box teaches (`crop_targets`; see the module)
@@ -200,8 +206,11 @@ class SheetData:
                              # uint8, packed as `ink_bits`: the line px (`linerules.line_px` grown by 1 px, the 8
                              # around each), for the label rule "lines-unknown"; (0, 0) until `zones.prepare` fills it
     cores: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 4, 2), np.int32))
-                             # int32 (n, 4, 2): each word's core (its rectangle shrunk, corners rounded to px, in the
-                             # order of `words`), for the word targets; none until `wordread.shrink.prepare` fills it
+                             # int32 (n, 4, 2): each word's core (its own labelled rectangle, no shrink, in the order
+                             # of `words`), for the word targets; none until `wordread.shrink.prepare` fills it
+    weights: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(0, np.float32))
+                             # float32 (n,): each word's weight in the word heads' loss (Terra's doubt, in the order of
+                             # `words`); none (the default) is every word weighing 1; `wordread.doubt.prepare` fills it
 
 
 def reading_angle(rect: np.ndarray) -> int:
@@ -495,9 +504,27 @@ def _cores(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
     return _paint(sd.cores, np.arange(1, len(sd.cores) + 1), y0, x0, h, w).astype(np.int32)
 
 
+def _touch_held(sd: SheetData, words: np.ndarray) -> np.ndarray:
+    """Which of the sheet's `words` (indices) have a px of their rectangle (as `_paint` fills it) in an area the sheet
+    holds out, bool; none when it holds none."""
+    out = np.zeros(len(words), bool)
+    if not sd.held:
+        return out
+    for n, j in enumerate(words):
+        (wx0, wy0), (wx1, wy1) = np.maximum(sd.words[j].min(0), 0), np.minimum(sd.words[j].max(0) + 1,
+                                                                                [sd.width, sd.height])
+        if wx1 <= wx0 or wy1 <= wy0:
+            continue
+        h, w = int(wy1 - wy0), int(wx1 - wx0)
+        rect = _paint(sd.words[j:j + 1], np.ones(1, np.int32), int(wy0), int(wx0), h, w) > 0
+        out[n] = bool((_held(sd, int(wy0), int(wx0), h, w) & rect).any())
+    return out
+
+
 def _geometry(sd: SheetData, tag: np.ndarray, y0: int, x0: int) -> np.ndarray:
     """At each core px of a page window (`_cores`), the distances in page px to its word's top, bottom, start and end
-    edges, and its reading angle (see the module): float32 (h, w, 5), 0 off the cores."""
+    edges, and its reading angle (see the module): float32 (h, w, 5), 0 off the cores.  A word whose rectangle holds
+    a held-out px has its distances 0 (no box), its angle kept."""
     out = np.zeros((*tag.shape, 5), np.float32)
     rows, cols = np.nonzero(tag)
     if not len(rows):
@@ -512,6 +539,11 @@ def _geometry(sd: SheetData, tag: np.ndarray, y0: int, x0: int) -> np.ndarray:
     pa, pb = (p * along).sum(-1), (p * up).sum(-1)
     out[rows, cols, :4] = np.maximum(np.stack([b.max(-1) - pb, pb - b.min(-1), pa - a.min(-1), a.max(-1) - pa], -1), 0)
     out[rows, cols, 4] = sd.angles[j]
+    if sd.held:
+        present = np.unique(j)
+        unseen = present[_touch_held(sd, present)]
+        if len(unseen):
+            out[rows[np.isin(j, unseen)], cols[np.isin(j, unseen)], :4] = 0
     return out
 
 
@@ -523,9 +555,14 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     (bool); drawn from the sheet's boxes for this crop alone, by the label rule `labels` (LABEL_RULES, see the
     module): under "lines-unknown" a px inside a word that is a line px is not known (ValueError when the sheet holds
     no line px).  With `words`, also the word targets core (uint8), tag_id (int32) and geo (float32 (5, size, size)),
-    from the sheet's cores (see the module; ValueError when it holds none for its words)."""
+    from the sheet's cores (see the module; ValueError when it holds none for its words), and, when the sheet holds
+    word weights, weight (float32; ValueError unless one weight per word, each a number at least 0)."""
     if labels not in LABEL_RULES:
         raise ValueError(f"labels is one of {', '.join(LABEL_RULES)}, not {labels!r}")
+    if words and len(sd.weights) and (sd.weights.shape != (len(sd.words),) or not np.isfinite(sd.weights).all()
+                                      or (sd.weights < 0).any()):
+        raise ValueError(f"{sd.series} {sd.sheet}: SheetData.weights {sd.weights.shape} must be one number at least 0 "
+                         f"per word ({len(sd.words)}; wordread.doubt.prepare)")
     src = int(round(size / scale))
     y0 = int(np.clip(y - src // 2, 0, sd.height - src))
     x0 = int(np.clip(x - src // 2, 0, sd.width - src))
@@ -553,6 +590,8 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     geo[..., 4] = np.where(on, (geo[..., 4].astype(np.int32) + 90 * turns + 180) % 360 - 180, 0)
     out["core"] = on.view(np.uint8)
     out["geo"] = np.moveaxis(geo, -1, 0)
+    if len(sd.weights):
+        out["weight"] = np.concatenate([[1], sd.weights]).astype(np.float32)[out["tag_id"]]
     return {k: np.rot90(v, turns, axes=(1, 2) if k == "geo" else (0, 1)) for k, v in out.items()}
 
 

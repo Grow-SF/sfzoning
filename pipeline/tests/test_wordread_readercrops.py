@@ -528,7 +528,7 @@ def test_sloppy_crops_offsets_follow_the_distribution():
     # a draw not kept is drawn again: the line rate stays line_share
     for k, p in (("line", 0.3), ("neighbour", held)):
         assert abs(got[k].mean() - p) < 4 * math.sqrt(p * (1 - p) / len(got)), k
-    assert got["line_rejected"].sum() > 0 and not got["line_gave_up"].any()
+    assert got["line_rejected"].sum() > 0
     assert (got.loc[got["line"], "line_cover"] <= 0.3).all()
     assert (got.loc[got["neighbour"], "scale"] == 1.0).all() and (got.loc[got["neighbour"], "side"] == 1).all()
 
@@ -570,12 +570,15 @@ def test_a_line_draw_is_kept_with_its_covers_chance_and_drawn_again_otherwise():
         assert info["line"] and info["line_cover"] <= 0.3
         rejected += info["line_rejected"]
     assert rejected > 0
-    # no cover kept: every draw is drawn again, LINE_TRIES times, and the word is left clean
-    none = RC.Lines([_line_piece()], np.array([2.0]), np.array([1.0]), np.array([0.0, 1.0]), np.array([0.0]))
+    # a draw is drawn again until one is kept: some cover must always be kept
+    with pytest.raises(ValueError, match="kept"):
+        RC.Lines([_line_piece()], np.array([2.0]), np.array([1.0]), np.array([0.0, 1.0]), np.array([0.5]))
+    # a word whose rectangle holds no ink has no letters to cross: no line (every draw's cover would be 1, a cover no
+    # crossing has, kept never)
+    blank = np.full(page.shape, 255, np.uint8)
     info = {}
-    got = RC.sloppy_crop(page, word, _zero(line=1.0), none, np.random.default_rng(0), info)
-    assert not info["line"] and info["line_gave_up"] and info["line_rejected"] == RC.LINE_TRIES
-    np.testing.assert_array_equal(got, K.rectify(page, where["A"], 0.0)[0])
+    got = RC.sloppy_crop(blank, word, _zero(line=1.0), keep_thin, np.random.default_rng(0), info)
+    assert not info["line"] and (got == 255).all()
 
 
 def _band(width, length=60):
@@ -794,3 +797,33 @@ def test_terras_crops_are_masked_by_the_ink_touching_their_rectangle_on_every_ma
     np.testing.assert_array_equal(got[0], want)
     np.testing.assert_array_equal(got[1], want)
     assert got[0].shape == crop.shape
+
+
+def test_a_pose_always_holds_ink_and_a_neighbour_without_ink_of_its_own_has_none(monkeypatch):
+    """At any slant the pose's grid runs through the neighbour's first ink px along the word and within half a px of
+    it across, so a pose always holds a cell and is drawn; a neighbour with no ink of its own has no pose, nor one
+    whose grid were to fall off its ink (forced here by sampling off the window), so nothing empty is ever drawn."""
+    rng = np.random.default_rng(0)
+    for _ in range(200):
+        angle = float(rng.uniform(-89.0, 89.0))
+        page = np.full((120, 160), 255, np.uint8)
+        word, nb = (50.0, 60.0, 40.0, 12.0, angle), (95.0, 60.0, 10.0, 8.0, angle)
+        for _ in range(int(rng.integers(1, 4))):
+            page[int(rng.integers(55, 66)), int(rng.integers(90, 101))] = 0
+        win, origin = RC._window(page, [RC._rect(*word), RC._rect(*nb)], RC.REACH)
+        own = ((win < 128) & read.in_rect(win.shape, origin, RC._rect(*nb))
+               & ~read.in_rect(win.shape, origin, RC._rect(*word)))
+        pose = RC.neighbour_pose(page, word, nb)
+        assert (pose is not None) == bool(own.any())
+        if pose is not None:
+            assert len(pose["cells"]) >= 1
+            t = pd.Series(dict(zip(("cx", "cy", "length", "height", "angle"), word)))
+            info = RC._paste_neighbour(page.copy(), (0, 0), t, pose, ((50.0, 60.0), 40.0, 12.0, angle))
+            assert info["neighbour"]
+    assert RC.neighbour_pose(np.full((120, 160), 255, np.uint8), word, nb) is None
+    page = np.full((120, 160), 255, np.uint8)
+    page[60, 95] = 0
+    assert RC.neighbour_pose(page, (50.0, 60.0, 40.0, 12.0, 0.0), (95.0, 60.0, 10.0, 8.0, 0.0)) is not None
+    real_rint = np.rint
+    monkeypatch.setattr(RC.np, "rint", lambda a, *k: real_rint(a, *k) + 10_000)
+    assert RC.neighbour_pose(page, (50.0, 60.0, 40.0, 12.0, 0.0), (95.0, 60.0, 10.0, 8.0, 0.0)) is None
