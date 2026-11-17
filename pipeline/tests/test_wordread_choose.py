@@ -238,8 +238,8 @@ def synthetic_rows(n=400, seed=0, ink_scores=True):
         gap = rng.uniform(0.05, 3.0)
         split = rng.random() < 1 / (1 + math.exp(-3 * (gap - 1.5)))
         a, s = rng.normal(-0.5, 0.3), rng.normal(-0.7, 0.3)
-        out += [{"box": b, "cand": "as_found", "score": a, "gap": 0.0, "across": 0.0, "label": not split},
-                {"box": b, "cand": "split_gap", "score": s, "gap": gap, "across": 0.0, "label": split}]
+        out += [{"box": b, "cand": "as_found", "score": a, "gap": 0.0, "across": 0.0, "weight": float(not split)},
+                {"box": b, "cand": "split_gap", "score": s, "gap": gap, "across": 0.0, "weight": float(split)}]
     return pd.DataFrame(out).assign(held_out=False, answered=False)
 
 
@@ -295,30 +295,98 @@ def test_choice_features_are_one_row_per_version_with_the_gap_in_character_width
     assert f.loc[f["cand"] == "split_gap", "score"].item() == pytest.approx(2 * math.log(0.9))
 
 
-def test_label_of_is_the_version_that_best_matches_terras_words():
+def ink_page(*spans):
+    ink = np.zeros((60, 200), bool)
+    for a, b in spans:
+        ink[22:28, a:b] = True
+    return ink
+
+
+def word(x0, x1):
+    return (x0, 20, x1, 30)
+
+
+def test_a_short_box_beside_a_different_word_labels_as_found_not_the_join():
+    box = make_box(10, 40)                                   # Terra's word runs 10 to 50: our box is short
+    ink = ink_page((10, 50), (56, 90))
+    cands = C.candidates(box, ink, [make_box(56, 90)], WIDTHS)
+    w = C.label_weights(cands, [word(10, 50), word(56, 90)], ink)
+    assert w["as_found"] == pytest.approx(0.75, abs=0.02)
+    assert w["join_nearest"] < 0.3 and w["as_found"] > 2 * w["join_nearest"]
+    assert max(w, key=w.get) == "as_found"
+
+
+def test_a_word_split_across_two_boxes_labels_the_join():
+    box = make_box(10, 50)
+    ink = ink_page((10, 50), (56, 90))
+    cands = C.candidates(box, ink, [make_box(56, 90)], WIDTHS)
+    w = C.label_weights(cands, [word(10, 90)], ink)
+    assert w["join_nearest"] == pytest.approx(1.0) and w["as_found"] < 0.6
+    assert max(w, key=w.get) == "join_nearest"
+
+
+def test_a_box_holding_two_words_labels_the_split():
     box = make_box(10, 100)
-    cands = C.candidates(box, page_with((10, 40), (70, 100)), [], WIDTHS)
-    assert C.label_of(cands, [(10, 20, 40, 30), (70, 20, 100, 30)]) == "split_gap"
-    assert C.label_of(cands, [(10, 20, 100, 30)]) == "as_found"
-    assert C.label_of(cands, [(10, 20, 92, 30)]) == "trim_end"
-    assert C.label_of(cands, [(500, 500, 540, 520)]) is None
+    ink = ink_page((10, 40), (70, 100))
+    cands = C.candidates(box, ink, [], WIDTHS)
+    w = C.label_weights(cands, [word(10, 40), word(70, 100)], ink)
+    assert w["split_gap"] == pytest.approx(1.0) and w["as_found"] == pytest.approx(0.0)
 
 
-def test_label_of_uses_the_rotated_rectangle_not_its_bounding_box():
+def test_a_box_with_no_word_in_it_weighs_nothing_in_every_version():
+    box = make_box(10, 50)
+    ink = ink_page((10, 50))
+    cands = C.candidates(box, ink, [], WIDTHS)
+    assert all(v == 0 for v in C.label_weights(cands, [word(150, 190)], ink).values())
+    assert all(v == 0 for v in C.label_weights(cands, [], ink).values())
+
+
+def test_label_weights_take_a_slanted_word_as_its_rotated_rectangle():
     a = math.radians(45)
     u, v = np.array([math.cos(a), math.sin(a)]), np.array([-math.sin(a), math.cos(a)])
     c0 = np.array([100.0, 100.0])
+    corners = np.array([c0 + p * u + q * v for p, q in ((-40, -3), (40, -3), (40, 3), (-40, 3))])
+    ink = np.zeros((200, 200), bool)
+    for p in range(-40, 40):
+        for q in range(-2, 3):
+            x, y = c0 + p * u + q * v
+            ink[int(y), int(x)] = True
     box = {"axis": 45.0, "t_length": 80.0, "t_height": 6.0, **{f"p_{k}": 0.0 for k in KINDS}, "p_zoning": 1.0}
-    for i, (p, q) in enumerate([(-40, -3), (40, -3), (40, 3), (-40, 3)]):
-        box[f"t{i}x"], box[f"t{i}y"] = c0 + p * u + q * v
-    cands = C.candidates(box, np.zeros((200, 200), bool), [], WIDTHS)
-    rotated = np.array([c0 + p * u + q * v for p, q in ((-40, -3), (40, -3), (40, 3), (-40, 3))])
-    assert C.label_of(cands, [rotated]) == "as_found"
-    # a word's axis-aligned bounding box is mostly empty paper: the same rectangle as an upright box matches the
-    # as_found version at a low IoU (the rotated rectangle's area over the bounding box's), well below 1
-    r0 = C._iou(C._poly(rotated), C._poly((rotated[:, 0].min(), rotated[:, 1].min(), rotated[:, 0].max(),
-                                           rotated[:, 1].max())))
-    assert r0 < 0.2
+    for i, (x, y) in enumerate(corners):
+        box[f"t{i}x"], box[f"t{i}y"] = x, y
+    cands = C.candidates(box, ink, [], WIDTHS)
+    w = C.label_weights(cands, [corners], ink)
+    assert w["as_found"] == pytest.approx(1.0, abs=0.02)
+
+
+def test_the_soft_target_fit_recovers_known_coefficients():
+    true = {"beta": 0.8, "alpha": {"split_gap": -1.5, "trim_end": -0.7}, "gamma": {"split_gap": 1.2}}
+    rng = np.random.default_rng(3)
+    rows = []
+    for b in range(600):
+        gap = rng.uniform(0.0, 3.0)
+        sc = {"as_found": rng.normal(-1, 0.8), "split_gap": rng.normal(-1.5, 0.8), "trim_end": rng.normal(-1.2, 0.8)}
+        gp = {"as_found": 0.0, "split_gap": gap, "trim_end": 0.0}
+        u = {n: true["beta"] * sc[n] + true["alpha"].get(n, 0.0) + true["gamma"].get(n, 0.0) * gp[n] for n in sc}
+        z = sum(math.exp(x) for x in u.values())
+        for n in sc:
+            rows.append({"box": b, "cand": n, "score": sc[n], "gap": gp[n], "across": 0.0,
+                         "weight": math.exp(u[n]) / z})
+    p = C.fit_choice(pd.DataFrame(rows).assign(held_out=False, answered=False))
+    assert p["beta"] == pytest.approx(0.8, abs=0.02)
+    assert p["alpha"]["split_gap"] == pytest.approx(-1.5, abs=0.03) and p["alpha"]["trim_end"] == pytest.approx(-0.7,
+                                                                                                             abs=0.03)
+    assert p["gamma"]["split_gap"] == pytest.approx(1.2, abs=0.03)
+
+
+def test_a_box_whose_versions_all_weigh_nothing_adds_nothing_to_the_fit():
+    rows = synthetic_rows(60)
+    base = C.fit_choice(rows)
+    dead = rows.copy()
+    dead["box"] = dead["box"] + 1000
+    dead["weight"] = 1e-9
+    more = C.fit_choice(pd.concat([rows, dead], ignore_index=True))
+    assert more["gamma"]["split_gap"] == pytest.approx(base["gamma"]["split_gap"], abs=1e-3)
 
 
 def test_fit_refuses_held_out_and_answered_rows():
@@ -333,7 +401,7 @@ def test_fit_refuses_held_out_and_answered_rows():
 
 def test_a_separated_fit_stays_finite_because_beta_has_the_ridge():
     rows = synthetic_rows(60)
-    rows["score"] = np.where(rows["label"], 0.0, -50.0)            # the score alone separates the labels
+    rows["score"] = np.where(rows["weight"] > 0, 0.0, -50.0)            # the score alone separates the labels
     p = C.fit_choice(rows)
     assert np.isfinite(p["beta"]) and abs(p["beta"]) < 1e3
 
@@ -356,9 +424,9 @@ def test_a_next_line_box_has_lower_join_odds_than_a_same_line_box_at_the_same_di
         d = rng.uniform(0.2, 3.0)
         same = rng.random() < 0.5
         rows += [{"box": 2 * b, "cand": "as_found", "score": rng.normal(-0.5, 0.2), "gap": 0.0, "across": 0.0,
-                  "label": not same},
+                  "weight": float(not same)},
                  {"box": 2 * b, "cand": "join_nearest", "score": rng.normal(-0.5, 0.2), "gap": d if same else 0.0,
-                  "across": 0.0 if same else d / 2, "label": same}]
+                  "across": 0.0 if same else d / 2, "weight": float(same)}]
     params = C.fit_choice(pd.DataFrame(rows).assign(held_out=False, answered=False))
     assert params["gamma_across"]["join_nearest"] < params["gamma"]["join_nearest"]
     box = make_box(10, 50)

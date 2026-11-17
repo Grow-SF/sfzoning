@@ -39,10 +39,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import shapely
 from scipy.optimize import minimize
 
 from sfzmaps.solver import paths
+from sfzmaps.solver.wordread import boxmodel
 
 KIND_NAMES = ("zoning", "block", "street", "other")        # wordboxes.KIND_NAMES, copied: no import of wordboxes
 TERRA_KINDS = {"zoning code": "zoning", "block number": "block", "street name": "street", "other": "other"}
@@ -227,42 +227,35 @@ def choice_features(box: dict, cands, read_fn, prior_fn=None) -> pd.DataFrame:
                          "gap": [c.along for c in cands], "across": [c.across for c in cands]})
 
 
-def _poly(shape) -> shapely.Polygon:
-    """A word's polygon: (x0, y0, x1, y1) is an axis-aligned box, an array (4, 2) its corners (a slanted word's
-    rotated rectangle)."""
-    a = np.asarray(shape, float)
-    return shapely.box(*a) if a.shape == (4,) else shapely.Polygon(a.reshape(-1, 2))
+def _corners(word) -> np.ndarray:
+    """A Terra word as corners (4, 2): (x0, y0, x1, y1) is an upright box, an array (4, 2) a slanted word's rotated
+    rectangle."""
+    a = np.asarray(word, float)
+    if a.shape == (4,):
+        x0, y0, x1, y1 = a
+        return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]])
+    return a.reshape(4, 2)
 
 
-def _iou(a: shapely.Polygon, b: shapely.Polygon) -> float:
-    i = a.intersection(b).area
-    u = a.area + b.area - i
-    return float(i / u) if u > 0 else 0.0
-
-
-def label_of(cands, terra_words: list) -> str | None:
-    """The version whose rectangles best match Terra's words (page px, each word used once; (x0, y0, x1, y1) for an
-    upright word, its (4, 2) corners for a slanted one: the IoU is that of rotated rectangles): the
-    highest mean over the version's rectangles of the IoU with their (greedily, best first) assigned word, so a
-    split matches two Terra words and a split of one word matches worse than the whole.  None when no version
-    overlaps a word at all (no minimum IoU); the earlier version wins a tie."""
-    words = [_poly(w) for w in terra_words]
-    best, best_m = None, EPS
-    for name, rects in cands:
-        left, got = list(range(len(terra_words))), []
-        for r in rects:
-            b = _poly(r)
-            ious = [(_iou(b, words[k]), k) for k in left]
-            if ious:
-                m, k = max(ious)
-                got.append(m)
-                left.remove(k)
-            else:
-                got.append(0.0)
-        m = float(np.mean(got))
-        if m > best_m + EPS:
-            best, best_m = name, m
-    return best
+def label_weights(cands: list[Candidate], terra_words: list, ink: np.ndarray) -> dict[str, float]:
+    """Each version's chance of holding exactly one Terra word, by ink and not by rectangles: for every rectangle of the
+    version, each overlapping word's share of its own ink inside the rectangle (`boxmodel.ink_shares`) are independent
+    chances, and the rectangle holds exactly one word with the Poisson-binomial P(count = 1) of them
+    (`boxmodel.poisson_binomial`); a version of several rectangles (a split) holds one word in each with the product.
+    `terra_words`: the training Terra words (page px; see `_corners`), `ink` the page's ink (bool).  A version holding
+    no word, or two, weighs about 0; no IoU anywhere."""
+    words = np.array([_corners(w) for w in terra_words], float).reshape(-1, 4, 2)
+    rects = np.concatenate([np.asarray(c.rects, float) for c in cands])
+    ri, _, share = boxmodel.ink_shares(rects, words, ink) if len(words) else (np.zeros(0, int), None, np.zeros(0))
+    out, at = {}, 0
+    for c in cands:
+        w = 1.0
+        for k in range(len(c.rects)):
+            pb = boxmodel.poisson_binomial(share[ri == at + k])
+            w *= float(pb[1]) if len(pb) > 1 else 0.0
+        out[c.name] = w
+        at += len(c.rects)
+    return out
 
 
 NON_BASE = ("split_gap", "join_nearest", "trim_start", "trim_end")      # the versions with an alpha (as_found: 0)
@@ -274,8 +267,9 @@ def fit_choice(rows: pd.DataFrame, ridge: float = RIDGE) -> dict:
     """The conditional logit P(c) proportional to exp(beta score_c + alpha_c + gamma_c along_c + gamma'_c across_c) over a box's versions,
     fitted by maximum likelihood (L-BFGS, with a tiny numerical ridge of `ridge` on every weight, so a version never seen
     stays at 0 and a fit separated by score stays finite).  alpha and gamma of as_found are 0.  `rows`: one per version of each
-    box, `choice_features`'s columns plus `box` (an id) and `label` (bool: the version `label_of` gave, one per box;
-    a box without exactly one is not used).  Rows may come only from the training quarters' Terra-matched boxes
+    box, `choice_features`'s columns plus `box` (an id) and `weight` (the version's `label_weights`: a SOFT target).
+    A box's targets are its weights over their sum, and the box counts with the sum capped at 1, so a box none of whose
+    versions holds one word contributes about nothing, through its weights and by no rule.  Rows may come only from the training quarters' Terra-matched boxes
     outside the answered blocks: the columns `held_out` and `answered` are REQUIRED (ValueError when missing) and a
     true one is refused.  Columns: `score`, `gap` (along), `across`.  The ridge is on beta too.  Returns {"beta",
     "alpha": {version: value}, "gamma": {version: along weight}, "gamma_across": {version: across weight}, "boxes",
@@ -285,15 +279,16 @@ def fit_choice(rows: pd.DataFrame, ridge: float = RIDGE) -> dict:
             raise ValueError(f"fit_choice: rows need a `{flag}` column (False for a row that may be used)")
         if rows[flag].astype(bool).any():
             raise ValueError(f"fit_choice: rows flagged {flag} may not be used to fit")
-    ok = rows.groupby("box")["label"].transform(lambda x: x.astype(bool).sum()) == 1
-    rows = rows[ok].reset_index(drop=True)
-    if not len(rows):
-        raise ValueError("fit_choice: no box with exactly one labelled version")
+    rows = rows.reset_index(drop=True)
+    if not len(rows) or "weight" not in rows:
+        raise ValueError("fit_choice: needs rows with a `weight` column")
+    total = rows.groupby("box")["weight"].transform("sum").to_numpy(float)
+    target = np.where(total > 0, rows["weight"].to_numpy(float) / np.where(total > 0, total, 1.0), 0.0) \
+        * np.minimum(total, 1.0)
     ids, grp = np.unique(rows["box"].to_numpy(), return_inverse=True)
     score, gap, across = (rows[c].to_numpy(float) for c in ("score", "gap", "across"))
     names = rows["cand"].to_numpy()
     where = {n: np.flatnonzero(names == n) for n in NON_BASE}
-    lab = rows["label"].to_numpy(bool)
 
     def unpack(th):
         k = 1 + len(NON_BASE)
@@ -314,7 +309,7 @@ def fit_choice(rows: pd.DataFrame, ridge: float = RIDGE) -> dict:
         z = np.zeros(len(ids))
         np.add.at(z, grp, np.exp(u - m[grp]))
         pen = ridge * (beta * beta + sum(v * v for v in (*al.values(), *ga.values(), *gx.values())))
-        return float(-(u[lab] - m[grp[lab]] - np.log(z[grp[lab]])).sum() + pen)
+        return float(-(target * (u - m[grp] - np.log(z[grp]))).sum() + pen)
 
     res = minimize(nll, np.zeros(1 + len(NON_BASE) + len(GAPPED) + len(ACROSS)),
                    method="L-BFGS-B")
