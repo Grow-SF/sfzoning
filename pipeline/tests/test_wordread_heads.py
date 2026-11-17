@@ -104,6 +104,26 @@ def test_measure_r_is_the_largest_r_whose_cores_overlap_on_at_most_one_percent_o
     assert shrink.measure_r({"a": far})["pairs"] == 1
 
 
+def test_r_is_chosen_by_the_pairs_newly_overlapping_beyond_the_first_r_and_folds_pool():
+    # ten pairs overlapping by 600 px, cores overlapping at every r (2D <= 152 px): Terra's box errors, the floor
+    floor = _pairs(10, 0, o=600)
+    got = shrink.measure_r({"a": floor, "b": _pairs(2, 88)})
+    assert got["pairs"] == 100 and got["floor"] == 10 and got["floor_share"] == pytest.approx(0.1)
+    curve = {c["r"]: c for c in got["curve"]}
+    assert [curve[r]["overlapping"] for r in shrink.R_GRID] == [10] * 5 + [12] * 4
+    assert [curve[r]["new"] for r in shrink.R_GRID] == [0] * 5 + [2] * 4
+    assert curve[0.55]["new_share"] == pytest.approx(0.02) and curve[0.3]["share"] == pytest.approx(0.1)
+    # the floor is above 1% at every r, yet r is chosen by the new pairs alone: 2% from 0.55, 1% allowed
+    assert got["r"] == 0.5
+    assert shrink.measure_r({"a": floor, "b": _pairs(1, 89)})["r"] == 0.7
+    # folds pooled: their pairs, floors and new overlaps summed, r from the sums (2 new of 200)
+    other = shrink.measure_r({"a": _pairs(0, 100)})
+    pooled = shrink.pool([got, other])
+    assert pooled["pairs"] == 200 and pooled["floor"] == 10 and pooled["pooled"] == 2
+    assert pooled["floor_share"] == pytest.approx(0.05)
+    assert {c["r"]: c["new"] for c in pooled["curve"]}[0.55] == 2 and pooled["r"] == 0.7
+
+
 def test_touching_words_get_disjoint_cores_at_the_measured_r():
     words = [((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0),          # R-4 | RH-2, touching
              ((160, 40, 180, 160), 90),                                  # a street name read upward, touching both

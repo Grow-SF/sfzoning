@@ -10,18 +10,22 @@ still runs along the reading direction.  As h - 2D = h (h + w r^2) / (w + h), a 
 a core back by the D whose shrink gives it (the positive root of 4 (1 + r^2) D^2 + 2 r^2 (w' + h') D - (1 - r^2) w' h'
 = 0, w' x h' the core): `unclip(core(rect, r), r)` is `rect`.
 
-r (`measure_r`): the largest of R_GRID (0.3 to 0.7 by 0.05) at which at most MAX_SHARE (1%) of the neighbouring
-pairs of words have overlapping cores.  Two words of a sheet are neighbours when the gap between their rectangles (0
-when they touch or overlap) is at most one word height: the smaller of the two words' heights (the second edge's
-length).  Two cores overlap when a px is filled by both, each painted as the detector learns it (its corners rounded
-to px, filled as `cv2.fillPoly` fills them, `data._paint`); `touching` also counts a px of one next to (the 8 around)
-a px of the other, the cores the connected px would join.  A core lies inside its word, so only words whose
-rectangles overlap, or come within TOUCH_GAP px of each other, can have overlapping or touching cores.
+r (`measure_r`, `choose`): the largest of R_GRID (0.3 to 0.7 by 0.05) at which at most MAX_SHARE (1%) of the
+neighbouring pairs of words have cores that overlap NEWLY: at that r but not at the grid's first, 0.3.  The pairs whose
+cores already overlap at 0.3 (the floor) overlap at every r: they are Terra's box errors (a word read twice across a
+tile seam, a box grown over the next word), which no shrink separates and the doubt flags are for; the rule is that
+shrinking must not merge words Terra keeps apart.  Two words of a sheet are neighbours when the gap between their
+rectangles (0 when they touch or overlap) is at most one word height: the smaller of the two words' heights (the
+second edge's length).  Two cores overlap when a px is filled by both, each painted as the detector learns it (its
+corners rounded to px, filled as `cv2.fillPoly` fills them, `data._paint`); `touching` also counts a px of one next to
+(the 8 around) a px of the other, the cores the connected px would join.  A core lies inside its word, so only words
+whose rectangles overlap, or come within TOUCH_GAP px of each other, can have overlapping or touching cores.
 
-`write_r` measures r on the training maps' sheets (`paths.TEXT_TRAIN_SERIES`), once per fold of the reader's split
-(`paths.QUARTERS`): the words whose centre px is in the fold's quarter or an answered block
-(`reader_stage.held_blocks`) left out, as `reader_stage.measure_radius` leaves them out; written to SHRINK_FILE
-(`python -m sfzmaps.solver.wordread.shrink`).
+`write_r` measures the curve on the training maps' sheets (`paths.TEXT_TRAIN_SERIES`) once per fold of the reader's
+split (`paths.QUARTERS`), the words whose centre px is in the fold's quarter or an answered block
+(`reader_stage.held_blocks`) left out, as `reader_stage.measure_radius` leaves them out; the folds' counts are pooled
+(`pool`: their pairs and new overlaps summed) into the one r every fold uses; written to SHRINK_FILE (`python -m
+sfzmaps.solver.wordread.shrink`).
 
 Neither `textnet.data` nor `textnet.train` imports this module (their stages' import closure is unchanged): the
 cores reach the detector in `data.SheetData.cores`, filled by `prepare` before the training.
@@ -190,9 +194,11 @@ def _meet(c1: np.ndarray, c2: np.ndarray) -> tuple[bool, bool]:
 
 def measure_r(words_by_sheet) -> dict:
     """r (see the module) from the words of each sheet (`words_by_sheet`: {sheet: int32 (n, 4, 2) rectangles}, or
-    a list of them): `r` the largest of R_GRID whose overlapping share is at most MAX_SHARE (None when none is);
-    `curve` per r of R_GRID: the pairs whose cores overlap and its share, and those whose cores touch or overlap and
-    its share; `pairs` the neighbouring pairs, `words` the words and `close_pairs` those within TOUCH_GAP px."""
+    a list of them): `r` the largest of R_GRID whose new share is at most MAX_SHARE (`choose`); `curve` per r of
+    R_GRID: the pairs whose cores overlap (`overlapping`, `share`), those of them that do not at the grid's first r
+    (`new`, `new_share`), and those whose cores touch or overlap (`touching`, `touching_share`); `floor` the pairs
+    overlapping at the first r and `floor_share`; `pairs` the neighbouring pairs, `words` the words and `close_pairs`
+    those within TOUCH_GAP px."""
     sheets = list(words_by_sheet.values()) if isinstance(words_by_sheet, Mapping) else list(words_by_sheet)
     total_words, close = 0, []          # (sheet's words, i, j) of the neighbours close enough to share a px
     pairs = 0
@@ -202,25 +208,57 @@ def measure_r(words_by_sheet) -> dict:
         ij, g = neighbour_pairs(words)
         pairs += len(ij)
         close += [(words, int(i), int(j)) for (i, j), gap in zip(ij, g) if gap < TOUCH_GAP]
-    curve = []
+    met = []                            # per r of R_GRID: each close pair's (overlap, touch)
     for r in R_GRID:
-        over = touch = 0
         cores = {}
+        found = []
         for words, i, j in close:
             key = id(words)
             if key not in cores:
                 cores[key] = cores_px(words, r)
-            o, t = _meet(cores[key][i], cores[key][j])
-            over += o
-            touch += t
-        curve.append({"r": r, "overlapping": over, "share": over / pairs if pairs else 0.0,
-                      "touching": touch, "touching_share": touch / pairs if pairs else 0.0})
-    ok = [c["r"] for c in curve if c["share"] <= MAX_SHARE]
-    return {"r": max(ok) if ok else None, "max_share": MAX_SHARE, "grid": list(R_GRID), "pairs": pairs,
-            "words": total_words, "close_pairs": len(close), "curve": curve,
-            "rule": "the largest r of the grid at which at most max_share of the neighbouring pairs (rectangles at "
-                    "most the smaller word height apart) have cores sharing a painted px; cores shrunk by "
-                    "D = A (1 - r^2) / L, corners rounded to px"}
+            found.append(_meet(cores[key][i], cores[key][j]))
+        met.append(np.array(found, bool).reshape(-1, 2))
+    floor = met[0][:, 0]
+    curve = [{"r": r, "overlapping": int(m[:, 0].sum()), "new": int((m[:, 0] & ~floor).sum()),
+              "touching": int(m[:, 1].sum())} for r, m in zip(R_GRID, met)]
+    return {**_shares({"pairs": pairs, "words": total_words, "close_pairs": len(close), "floor": int(floor.sum()),
+                       "curve": curve}), "max_share": MAX_SHARE, "grid": list(R_GRID), "rule": RULE}
+
+
+RULE = ("the largest r of the grid at which at most max_share of the neighbouring pairs (rectangles at most the "
+        "smaller word height apart) have cores sharing a painted px that do not at the grid's first r (the floor: "
+        "Terra's box errors, overlapping at every r); cores shrunk by D = A (1 - r^2) / L, corners rounded to px")
+
+
+def _shares(m: dict) -> dict:
+    """A measurement's counts with their shares of its pairs, and its r (`choose`)."""
+    n = m["pairs"]
+
+    def share(k):
+        return k / n if n else 0.0
+    curve = [{**c, "share": share(c["overlapping"]), "new_share": share(c["new"]),
+              "touching_share": share(c["touching"])} for c in m["curve"]]
+    return {**m, "r": choose(curve), "floor_share": share(m["floor"]), "curve": curve}
+
+
+def choose(curve: list[dict]) -> float | None:
+    """The largest r of a curve whose new share is at most MAX_SHARE (None when none is)."""
+    ok = [c["r"] for c in curve if c["new_share"] <= MAX_SHARE]
+    return max(ok) if ok else None
+
+
+def pool(measured) -> dict:
+    """Measurements (`measure_r`, e.g. one per fold) as one: their pairs, words, close pairs, floors and each r's
+    counts summed, the shares and r (`choose`) taken from the sums."""
+    measured = list(measured)
+    grids = {tuple(m["grid"]) for m in measured}
+    if len(grids) != 1:
+        raise ValueError(f"the measurements were taken on {len(grids)} grids of r; pooling needs one")
+    total = {k: sum(m[k] for m in measured) for k in ("pairs", "words", "close_pairs", "floor")}
+    curve = [{"r": c["r"], **{k: sum(m["curve"][i][k] for m in measured) for k in ("overlapping", "new", "touching")}}
+             for i, c in enumerate(measured[0]["curve"])]
+    return {**_shares({**total, "curve": curve}), "max_share": MAX_SHARE, "grid": list(grids.pop()), "rule": RULE,
+            "pooled": len(measured)}
 
 
 # --- measured on the training maps -----------------------------------------------------------------------------------
@@ -236,7 +274,8 @@ def _kept_words(sd: data.SheetData, areas) -> np.ndarray:
 
 
 def write_r(out=SHRINK_FILE) -> dict:
-    """Measure r on the training maps, per fold (see the module), and write it to `out` (its folder made)."""
+    """Measure the curve on the training maps per fold, pool the folds into r (see the module), and write both to
+    `out` (its folder made)."""
     from sfzmaps.solver.textnet import reader_stage    # torch and the lots: only for this measurement
 
     blocks = reader_stage.held_blocks()
@@ -247,10 +286,11 @@ def write_r(out=SHRINK_FILE) -> dict:
         areas = (data.Quarter(q), area)
         words = {f"{sd.series}/{sd.sheet}": _kept_words(sd, areas) for sd in sheets}
         folds[name] = measure_r(words)
-        log.info("fold %s held out: r %s over %d pairs of %d words", name, folds[name]["r"], folds[name]["pairs"],
-                 folds[name]["words"])
+        log.info("fold %s held out: r %s over %d pairs of %d words (floor %.4f)", name, folds[name]["r"],
+                 folds[name]["pairs"], folds[name]["words"], folds[name]["floor_share"])
+    pooled = pool(folds.values())
     rs = {name: f["r"] for name, f in folds.items()}
-    got = {"r": rs["ne"], "r_by_fold": rs, "same_every_fold": len(set(rs.values())) == 1,
+    got = {"r": pooled["r"], "pooled": pooled, "r_by_fold": rs, "same_every_fold": len(set(rs.values())) == 1,
            "series": list(paths.TEXT_TRAIN_SERIES), "sheets": len(sheets), "blocks_held": len(blocks),
            "left_out": "words whose centre px is in the fold's quarter or an answered block", "folds": folds}
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -262,4 +302,7 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     data.LOAD_THREADS = 1          # one page decoded at a time: the machine is shared
     result = write_r()
-    print(json.dumps({k: v for k, v in result.items() if k != "folds"}, indent=1))
+    print(json.dumps({k: v for k, v in result.items() if k not in ("folds", "pooled")}, indent=1))
+    p = result["pooled"]
+    print(f"pooled: {p['pairs']} pairs, floor {p['floor']} ({p['floor_share']:.4f}); new by r:",
+          ", ".join(f"{c['r']}: {c['new']} ({c['new_share']:.4f})" for c in p["curve"]))
