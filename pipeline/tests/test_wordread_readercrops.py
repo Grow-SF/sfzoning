@@ -401,6 +401,15 @@ def test_offset_distribution_measures_ends_cross_angle_height_lines_neighbours_a
     np.testing.assert_allclose(off["neighbour"], [0.25, 0.0], atol=1e-9)        # drawn with its pair's offsets
     assert off["neighbour_ink"] == [1.0, None]          # E's ink is 3 px from A's: one ink component with it
     assert off["neighbour_on"] == [0.0, None]           # ... and none of it on A's letters
+    pose = off["neighbour_pose"][0]                     # E in A's frame, past A's end, as printed
+    x0, y0, x1, y1 = where["E"]
+    assert off["neighbour_pose"][1] is None and pose["side"] == 1 and pose["h"] == 24.0
+    assert len(pose["cells"]) == int((page[y0:y1, x0:x1] < 128).sum())
+    np.testing.assert_allclose(np.min(pose["rect"], 0), [x0 - 0.5 - 117.5, -12.0])   # 2 px past A's end
+    held = terra.copy()
+    held.loc[held["word"] == 4, "touch_blocks"] = True              # E in the answered blocks: never drawn
+    d2 = RC.offset_distribution(boxes, held, quarter=2, pages={SHEET: page})
+    assert d2["offsets"]["neighbour"][0] == 0.25 and d2["offsets"]["neighbour_pose"] == [None, None]
     np.testing.assert_allclose(d["mean"]["start"], -3 / 48, atol=1e-9)
     assert d["line_share"] == 0.5 and d["line_share_any"] == 1.0                # B's stroke counted once, not now
     assert d["line_thickness"]["values"] == [4.0] and d["line_cover"]["values"] == [pytest.approx(0.1)]
@@ -471,9 +480,9 @@ def test_a_tilted_box_measures_its_tilt_counter_clockwise_and_is_cut_back_the_sa
         assert np.abs(got.astype(int) - crop.astype(int)).max() <= 1
 
 
-def _dist(rows=200, line=0.0, neighbour=0.0, seed=0):
+def _dist(rows=200, line=0.0, neighbour=0.0, seed=0, pose=None):
     """Offsets drawn well away from 0; a `neighbour` share of the rows hold a neighbour (a tenth or 0.3 of it, its
-    ink apart from the word's)."""
+    ink apart from the word's; drawn as `pose`)."""
     rng = np.random.default_rng(seed)
     off = {"start": rng.normal(-0.4, 0.1, rows), "end": rng.normal(0.5, 0.1, rows),
            "cross": rng.normal(0.2, 0.05, rows), "angle": rng.normal(5.0, 2.0, rows),
@@ -483,6 +492,7 @@ def _dist(rows=200, line=0.0, neighbour=0.0, seed=0):
     out = {k: v.tolist() for k, v in off.items()}
     out["neighbour_ink"] = [0.0 if v > 0 else None for v in off["neighbour"]]
     out["neighbour_on"] = [0.0 if v > 0 else None for v in off["neighbour"]]
+    out["neighbour_pose"] = [pose if v > 0 else None for v in off["neighbour"]]
     return {"n": rows, "offsets": out, "mean": mean, "line_share": line}
 
 
@@ -498,9 +508,10 @@ def _blob():
 
 def test_sloppy_crops_offsets_follow_the_distribution():
     page, where = _page()
-    terra = RC.with_neighbours(_terra(where))
+    terra = _terra(where)
     word = terra[terra["word"] == 0].iloc[0]
-    dist = _dist(line=0.3, neighbour=0.4)
+    pose = _pair_with_e(page, where, _terra(where))["offsets"]["neighbour_pose"][0]
+    dist = _dist(line=0.3, neighbour=0.4, pose=pose)
     held = np.mean(np.array(dist["offsets"]["neighbour"]) > 0)
     lines = RC.Lines([_line_piece(), _blob()], np.array([2.0, 40.0]), np.array([0.5, 0.5]), np.array([0.0, 0.3, 1.0]),
                      np.array([1.0, 0.0]))
@@ -519,8 +530,7 @@ def test_sloppy_crops_offsets_follow_the_distribution():
         assert abs(got[k].mean() - p) < 4 * math.sqrt(p * (1 - p) / len(got)), k
     assert got["line_rejected"].sum() > 0 and not got["line_gave_up"].any()
     assert (got.loc[got["line"], "line_cover"] <= 0.3).all()
-    assert (got.loc[got["neighbour"], "ink_got"] == 0.0).all()       # drawn apart from the word, as measured
-    assert (got.loc[got["neighbour"], "on_got"] == 0.0).all()
+    assert (got.loc[got["neighbour"], "scale"] == 1.0).all() and (got.loc[got["neighbour"], "side"] == 1).all()
 
 
 def _zero(line=0.0, neighbour=0.0, ink=None, on=None, end=0.0):
@@ -532,7 +542,7 @@ def _zero(line=0.0, neighbour=0.0, ink=None, on=None, end=0.0):
 
 def test_a_line_piece_goes_through_the_letters():
     page, where = _page()
-    terra = RC.with_neighbours(_terra(where))
+    terra = _terra(where)
     word = terra[terra["word"] == 0].iloc[0]
     before = page.copy()
     plain = RC.sloppy_crop(page, word, _zero(), [_line_piece()], np.random.default_rng(1))
@@ -550,7 +560,7 @@ def test_a_line_piece_goes_through_the_letters():
 
 def test_a_line_draw_is_kept_with_its_covers_chance_and_drawn_again_otherwise():
     page, where = _page()
-    word = RC.with_neighbours(_terra(where)).iloc[0]
+    word = _terra(where).iloc[0]
     keep_thin = RC.Lines([_line_piece(), _blob()], np.array([2.0, 40.0]), np.array([0.5, 0.5]),
                          np.array([0.0, 0.3, 1.0]), np.array([1.0, 0.0]))
     rejected = 0
@@ -616,45 +626,54 @@ def test_calibrated_lines_follow_the_measured_thickness_and_cover():
     assert (kept == 22.0).sum() == 0
 
 
-def test_a_neighbour_is_moved_to_the_place_nearest_its_pairs_share_and_ink_overlap():
-    """A's box runs half a height past A's end and holds a quarter of E (right of A), none of it on A's letters.  With
-    E's ink measured touching A's, E is moved along the reading axis to where a quarter of it is inside the box (6 px
-    right: 8 px from A's ink, within reach); with it measured apart, to the nearest place where it is apart (7 px
-    right).  Its old place is paper.  Asked for all of it inside a box with no room beside A, touching A and not on
-    its letters, it stays beside A."""
+def _pair_with_e(page, where, terra):
+    """A's matched pair holding a quarter of E (A's box 3 px early, 6 px late, 2.4 px low, 30 px tall), as measured."""
+    boxes = pd.DataFrame([_box(101.0, 68.9, 45, 30)])
+    d = RC.offset_distribution(boxes, terra, quarter=2, pages={SHEET: page})
+    d.update(line_share=0.0)
+    return d
+
+
+def test_a_drawn_neighbour_comes_at_its_pairs_place_with_its_share_and_ink_from_the_same_example():
+    """A's pair drawn for D (D as A, elsewhere): E comes 2 px past D's end as it was past A's, the crop is D's with E
+    there, and its share inside the box and its ink against the word come out as measured on A."""
     page, where = _page()
     before = page.copy()
-    word = RC.with_neighbours(_terra(where)).iloc[0]
-    assert word["n_word"] == 4                                          # A's nearest word is E
+    terra = _terra(where)
+    d = _pair_with_e(page, where, terra)
+    word = terra[terra["word"] == 3].iloc[0]                                    # D
+    info = {}
+    got = RC.sloppy_crop(page, word, d, [], np.random.default_rng(0), info)
+    assert info["neighbour"] and info["side"] == 1 and info["scale"] == 1.0
+    assert info["part_got"] == pytest.approx(d["offsets"]["neighbour"][0], abs=1e-9)
+    assert (info["ink_got"], info["on_got"]) == (d["offsets"]["neighbour_ink"][0], d["offsets"]["neighbour_on"][0])
     x0, y0, x1, y1 = where["E"]
-    for ink, shift in ((1.0, 6), (0.0, 7)):
-        info = {}
-        got = RC.sloppy_crop(page, word, _zero(neighbour=0.25, ink=ink, on=0.0, end=0.5), [],
-                             np.random.default_rng(0), info)
-        assert info["neighbour"] and info["side"] == "along" and info["part"] == 0.25 and info["ink"] == ink
-        assert info["shift"] == (shift, 0) and info["ink_got"] == ink and info["on_got"] == 0.0
-        assert abs(info["part_got"] - 0.25) <= 1 / 16 + 1e-9
-        moved = page.copy()
-        moved[y0:y1, x0:x1] = 255
-        moved[y0:y1, x0 + shift:x1 + shift] = np.minimum(moved[y0:y1, x0 + shift:x1 + shift], page[y0:y1, x0:x1])
-        np.testing.assert_array_equal(got, K.cut(moved, *info["frame"])[0])
-    # no room beside A inside its box: kept off A's letters, the share given up
-    for ink in (0.0, 1.0):
-        info = {}
-        RC.sloppy_crop(page, word, _zero(neighbour=1.0, ink=ink, on=0.0), [], np.random.default_rng(0), info)
-        assert info["neighbour"] and info["ink_got"] == ink and info["on_got"] == 0.0 and info["part_got"] < 0.5
+    dx0, dy0, dx1, _ = where["D"]
+    want = page.copy()
+    gap = x0 - where["A"][2]
+    want[dy0:dy0 + y1 - y0, dx1 + gap:dx1 + gap + x1 - x0] = np.minimum(
+        want[dy0:dy0 + y1 - y0, dx1 + gap:dx1 + gap + x1 - x0], page[y0:y1, x0:x1])
+    np.testing.assert_array_equal(got, K.cut(want, *info["frame"])[0])
     np.testing.assert_array_equal(page, before)
 
 
-def test_neighbours_are_the_nearest_other_word_of_the_frame_given():
+def test_a_drawn_neighbour_takes_the_words_scale_and_reading_direction():
     page, where = _page()
     terra = _terra(where)
-    t = RC.with_neighbours(terra)
-    by = dict(zip(t["word"], t["n_word"]))
-    assert by[0] == 4 and by[4] == 0
-    alone = RC.with_neighbours(terra[terra["word"].isin([0, 1])])
-    assert dict(zip(alone["word"], alone["n_word"])) == {0: 1, 1: 0}
-    assert RC.with_neighbours(terra[terra["word"] == 0])["n_word"].tolist() == [-1]
+    d = _pair_with_e(page, where, terra)
+    big = terra[terra["word"] == 3].iloc[0].copy()
+    big["length"], big["height"] = 72.0, 48.0                                 # a word twice A's size
+    info = {}
+    RC.sloppy_crop(page, big, d, [], np.random.default_rng(0), info)
+    r = np.array(info["rect"])
+    assert info["scale"] == 2.0
+    np.testing.assert_allclose(np.ptp(r, 0), [32.0, 48.0])                     # E's 16 x 24 rectangle, doubled
+    assert r[:, 0].min() == pytest.approx(big["cx"] + 36 + 2 * 2.0)          # 4 px past the end: the gap doubled
+    # B reads at 180 degrees: its end is on its left on the page, and E comes there, turned with it
+    info = {}
+    RC.sloppy_crop(page, terra[terra["word"] == 1].iloc[0], d, [], np.random.default_rng(0), info)
+    r = np.array(info["rect"])
+    assert r[:, 0].max() == pytest.approx(where["B"][0] - 0.5 - 2.0)
 
 
 def test_sloppy_crops_hold_out_the_quarter_and_the_answered_blocks():
@@ -668,7 +687,6 @@ def test_sloppy_crops_hold_out_the_quarter_and_the_answered_blocks():
         assert len(got) == 4
         for crop, text, meta in got:
             assert not meta["touch_blocks"] and not meta[f"touch_{paths.QUARTERS[quarter]}"]
-            assert meta["n_word"] in want                     # the neighbour pasted in is a training word too
             assert text == terra.loc[terra["word"] == meta["word"], "text"].iloc[0]
             assert "mask" not in meta
     again = RC.sloppy_crops(terra, dist, [_line_piece()], seed=3, quarter=1, copies=2, pages={SHEET: page},

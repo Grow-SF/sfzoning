@@ -41,13 +41,12 @@ without one.  No cap or cutoff is set by hand: what a sloppy crop holds is drawn
                   pieces' thickness and their cover of the word's ink both follow the crossings' measured
                   distributions, a draw kept with its cover's chance and drawn again otherwise, so the line rate stays
                   `line_share`), turned a random number of quarter turns, is ORed through a letter px of the word.
-                  When the pair held a neighbour, the nearest other word (`with_neighbours`) is moved (its old place
-                  made paper) to the whole-px place along the word's reading axis or across it (its own side first on
-                  ties) whose ink overlaps with the word, and then whose share inside the crop's rectangle, are
-                  nearest the pair's.
-                  The page itself is never changed.  `sloppy_crops` makes them for a reader: only of words, and with
-                  neighbours, touching neither its held-out quarter nor the answered blocks, and kept only when the
-                  crop's footprint touches neither
+                  When the pair held a neighbour, that real neighbour (`neighbour_pose`, a training word's) is ORed in
+                  at its own place, angle and scale in the word's frame: its share inside the box and its ink on the
+                  word's letters come together from the same real example (the empirical joint; nothing is fitted
+                  or searched).  The page itself is never changed.  `sloppy_crops` makes them for a reader: only of
+                  words touching neither its held-out quarter nor the answered blocks, and kept only when the crop's
+                  footprint touches neither
   masking         (`mask_outside`; `read.kept_ink`, `crops.box_mask`) a crop is paper outside the ink components that
                   hold ink in its own rectangle (our box's, Terra's, or a sloppy crop's drawn one): ink touching the
                   word is never blanked, a neighbouring word or stray mark wholly outside is; no detector's call is in
@@ -70,7 +69,6 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 import pandas as pd
-import shapely
 
 from sfzmaps.solver import grid, paths, runs, wordboxes
 from sfzmaps.solver.codereader import labels as L
@@ -137,27 +135,6 @@ def terra_frame(rows: pd.DataFrame) -> pd.DataFrame:
     for c in LINE_COLUMNS:
         if c in w:
             out[c] = w[c].to_numpy()
-    return out
-
-
-def with_neighbours(terra: pd.DataFrame) -> pd.DataFrame:
-    """`terra` with each word's nearest other word of the frame on its sheet (by the gap between their rectangles,
-    `rectify`'s): `n_word` (-1 when it has none) and its `n_cx`, `n_cy`, `n_length`, `n_height`, `n_angle`."""
-    out = terra.reset_index(drop=True).copy()
-    near = np.full(len(out), -1)
-    sheets = out["sheet"].to_numpy()
-    geo = out[["cx", "cy", "length", "height", "angle"]].to_numpy(float)
-    for sheet in sorted(set(sheets)):
-        idx = np.flatnonzero(sheets == sheet)
-        if len(idx) < 2:
-            continue
-        polys = shapely.polygons([_rect(*g) for g in geo[idx]])
-        src, dst = shapely.STRtree(polys).query_nearest(polys, exclusive=True, all_matches=False)
-        near[idx[src]] = idx[dst]
-    has = near >= 0
-    out["n_word"] = np.where(has, out["word"].to_numpy()[np.maximum(near, 0)], -1)
-    for k, c in enumerate(("n_cx", "n_cy", "n_length", "n_height", "n_angle")):
-        out[c] = np.where(has, geo[np.maximum(near, 0), k], np.nan)
     return out
 
 
@@ -230,6 +207,48 @@ def ink_overlaps(win: np.ndarray, origin, word: np.ndarray, neighbour: np.ndarra
     np_, nq = frame(n_in & ink)
     on = ((np_ >= p.min() - 0.5) & (np_ <= p.max() + 0.5) & (nq >= q.min() - 0.5) & (nq <= q.max() + 0.5))
     return touch, float(on.mean())
+
+
+def neighbour_pose(page: np.ndarray, word_geo, nb_geo) -> dict | None:
+    """A real pair's neighbour in its word's own frame, to be drawn whole with that pair (`sloppy_crop`): the
+    neighbour's ink (its rectangle's px off the word's; when its rectangle lies in the word's, its px less the ink
+    components holding the word's own ink) sampled on a whole-px grid along the word's reading direction and down its
+    letters, from the word's nearer end, and its rectangle there.  `word_geo`, `nb_geo`: (cx, cy, length, height,
+    angle) of the word and of the neighbour (page px index).  {"side": +1 past the word's end or -1 before its start,
+    "h": the word's height, "p0", "q0": the grid's first place (px, from the end along, from the centre across),
+    "cells": [[i, j], ...] the grid's ink, "rect": the neighbour's rectangle's corners in the same frame}; None when
+    the neighbour has no ink of its own."""
+    cx, cy, length, height, angle = (float(v) for v in word_geo)
+    word, nb = _rect(*word_geo), _rect(*nb_geo)
+    win, (ox, oy) = _window(page, [word, nb], REACH)
+    ink, lab = read.ink_components(win)
+    w_in, n_in = read.in_rect(win.shape, (ox, oy), word), read.in_rect(win.shape, (ox, oy), nb)
+    moving = n_in & ~w_in & ink
+    if not moving.any():
+        own = np.unique(lab[w_in & ~n_in & ink])
+        moving = n_in & ink & ~np.isin(lab, own[own > 0])
+    if not moving.any():
+        return None
+    (ux, uy), (vx, vy) = L._axes(angle)
+    ys, xs = np.nonzero(moving)
+    dx, dy = xs + ox - cx, ys + oy - cy
+    p, q = dx * ux + dy * uy, dx * vx + dy * vy
+    side = 1 if p.mean() >= 0 else -1
+    end = side * length / 2
+    p0, q0 = float((p - end).min()), float(q.min())
+    gi = np.arange(int(np.ceil((p - end).max() - p0)) + 1)
+    gj = np.arange(int(np.ceil(q.max() - q0)) + 1)
+    ii, jj = np.meshgrid(gi, gj)
+    pr, qq = p0 + ii + end, q0 + jj                 # each cell's centre in the word's frame (exact at a quarter turn)
+    xi = np.rint(cx + pr * ux + qq * vx - ox).astype(int)
+    yi = np.rint(cy + pr * uy + qq * vy - oy).astype(int)
+    ok = (xi >= 0) & (yi >= 0) & (xi < win.shape[1]) & (yi < win.shape[0])
+    hit = np.zeros(ii.shape, bool)
+    hit[ok] = moving[yi[ok], xi[ok]]
+    rx, ry = nb[:, 0] - cx, nb[:, 1] - cy
+    return {"side": side, "h": height, "p0": p0, "q0": q0,
+            "cells": np.stack([ii[hit], jj[hit]], 1).astype(int).tolist(),
+            "rect": np.stack([rx * ux + ry * uy - end, rx * vx + ry * vy], 1).tolist()}
 
 
 # --- our boxes against Terra's words ----------------------------------------------------------------------------------
@@ -348,14 +367,20 @@ def offset_distribution(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: in
     holds = part > 0
     touch: list = [None] * len(m)
     on: list = [None] * len(m)
+    pose: list = [None] * len(m)
     if pages is not None:
         for k in np.flatnonzero(holds):
             wr, nr = _rect(*geo[words[k]]), _rect(*geo[nb[k]])
-            win, origin = _window(pages[tsheet[words[k]]], [wr, nr], REACH)
+            page = pages[tsheet[words[k]]]
+            win, origin = _window(page, [wr, nr], REACH)
             touch[k], on[k] = ink_overlaps(win, origin, wr, nr, geo[words[k], 4])
+            if not _held(terra.iloc[nb[k]], quarter):         # a neighbour in a held-out area is never drawn
+                pose[k] = neighbour_pose(page, geo[words[k]], geo[nb[k]])
     out["offsets"]["neighbour"] = part.tolist()
     out["offsets"]["neighbour_ink"] = touch
     out["offsets"]["neighbour_on"] = on
+    out["offsets"]["neighbour_pose"] = pose
+    out["neighbour_poses"] = int(sum(v is not None for v in pose))
     out["neighbour_share"] = float(holds.mean()) if len(m) else None
     out["neighbour_part"] = part[holds].tolist()
     out["neighbour_ink"] = _summary(touch, True)
@@ -681,87 +706,49 @@ def _line_through(win, origin, t, lines: Lines, rng) -> dict:
 
 # --- the neighbour ----------------------------------------------------------------------------------------------------
 
-def _neighbour_into(win, origin, page, t, rect, part: float, touch: float | None, on: float | None) -> dict:
-    """Move the nearest other word into the window (see the module): its rectangle's px off the word's own ink
-    components, its old place made paper, to the whole-px place along the word's reading axis or across it (its own
-    side, then the other axis, then their opposites, farthest first: the order ties go by) whose share of its
-    rectangle inside the crop's rectangle `rect` (centre, length, height, angle) and ink against the word's
-    (`ink_overlaps`: touching it, on its letters; each not asked when None) are nearest the pair's `part`, `touch` and
-    `on`: the ink first (the sum of its two differences; print does not lay one label on another, and the measured
-    `on` is all but 0, always reached by moving out), then, of those as near, the share."""
-    n = np.array([t["n_cx"], t["n_cy"]], float)
-    nl, nh, na = float(t["n_length"]), float(t["n_height"]), float(t["n_angle"])
-    n0 = _rect(n[0], n[1], nl, nh, na)
-    area = max(nl * nh, 1e-9)
-    wc = np.array([t["cx"], t["cy"]], float)
+def _paste_neighbour(win, origin, t, pose: dict, rect) -> dict:
+    """OR a real pair's neighbour (`neighbour_pose`) into the window at its place, angle and scale in the frame of
+    Terra's word `t` (its height over the pair's word's; past the same end), as printed (nearest px); its share of its
+    rectangle inside the crop's rectangle `rect` (centre, length, height, angle) and its ink against the word's
+    (`ink_overlaps`) as they came out."""
+    cx, cy, length, height, angle = (float(t[k]) for k in ("cx", "cy", "length", "height", "angle"))
+    scale = height / float(pose["h"])
+    end = int(pose["side"]) * length / 2
+    (ux, uy), (vx, vy) = L._axes(angle)
+    cells = np.asarray(pose["cells"], int).reshape(-1, 2)
+    patch = np.zeros((cells[:, 1].max() + 1, cells[:, 0].max() + 1), np.uint8)
+    patch[cells[:, 1], cells[:, 0]] = 255
+    ox, oy = origin
+    p0, q0 = float(pose["p0"]), float(pose["q0"])
+    to_patch = np.array([[ux / scale, uy / scale, ((ox - cx) * ux + (oy - cy) * uy - end) / scale - p0],
+                         [vx / scale, vy / scale, ((ox - cx) * vx + (oy - cy) * vy) / scale - q0]])
+    ink = cv2.warpAffine(patch, to_patch, (win.shape[1], win.shape[0]), flags=cv2.INTER_NEAREST | cv2.WARP_INVERSE_MAP,
+                         borderMode=cv2.BORDER_CONSTANT, borderValue=0) > 0
     word = _word_rect(t)
-    centre, length, height, angle = rect
-    crop = _rect(centre[0], centre[1], length, height, angle)
-    # the neighbour as printed: its rectangle's px off the word's (as `ink_overlaps` takes its ink); when its rectangle
-    # lies in the word's, its px less the ink components holding the word's own ink
-    src, so = _window(page, [n0, word], REACH)
-    ink_s, lab_s = read.ink_components(src)
-    w_in, n_in = read.in_rect(src.shape, so, word), read.in_rect(src.shape, so, n0)
-    moving = n_in & ~w_in
-    if not (moving & ink_s).any():
-        own = np.unique(lab_s[w_in & ~n_in & ink_s])
-        moving = n_in & ~np.isin(lab_s, own[own > 0])
-    patch = np.where(moving, src, 255).astype(np.uint8)
-    base = win.copy()
-    erase = np.zeros(win.shape, bool)
-    _place(erase, moving, so[1] - origin[1], so[0] - origin[0], np.logical_or)
-    base[erase] = 255
-    word_ink = (base < grid.INK_BELOW) & read.in_rect(win.shape, origin, word)     # the word's ink, before the paste
-    (ux, uy), (vx, vy) = L._axes(float(t["angle"]))
-    real = n - wc
-    pu, pv = real @ [ux, uy], real @ [vx, vy]
-    along = (np.array([ux, uy]) * (1 if pu >= 0 else -1), "along")
-    across = (np.array([vx, vy]) * (1 if pv >= 0 else -1), "across")
-    order = [along, across] if abs(pu) >= abs(pv) else [across, along]
-    order += [(-d, side) for d, side in order]
-    far = int(np.ceil(np.hypot(*(np.asarray(centre) - wc)) + (np.hypot(length, height) + np.hypot(nl, nh)) / 2)) + 1
-    cands, seen = [], set()
-    for d, side in order:
-        for s in range(far, -1, -1):
-            shift = tuple(int(v) for v in np.rint(wc + d * s - n))
-            if shift not in seen:
-                seen.add(shift)
-                cands.append((shift, side))
-    moved = np.array([n0 + np.array(sh, float) for sh, _ in cands])
-    near = shapely.distance(shapely.polygons(moved), shapely.polygons(word)) <= REACH
-    best = None
-    asked = touch is not None or on is not None
-    for (shift, side), mr, close in zip(cands, moved, near):
-        got_part = _meet(crop, mr) / area
-        got_touch, got_on = 0.0, 0.0                 # farther from the word than ink can reach: neither
-        if asked and close:
-            trial = base.copy()
-            _place(trial, patch, so[1] + shift[1] - origin[1], so[0] + shift[0] - origin[0], np.minimum)
-            got_touch, got_on = (v or 0.0 for v in ink_overlaps(trial, origin, word, mr, t["angle"], word_ink))
-        cost = (round((abs(got_touch - touch) if touch is not None else 0.0)
-                      + (abs(got_on - on) if on is not None else 0.0), 9), round(abs(got_part - part), 9))
-        if best is None or cost < best[0]:
-            best = (cost, shift, side, got_part, got_touch, got_on)
-    _, shift, side, got_part, got_touch, got_on = best
-    win[:] = base
-    _place(win, patch, so[1] + shift[1] - origin[1], so[0] + shift[0] - origin[0], np.minimum)
-    return {"neighbour": True, "part": float(part), "part_got": got_part, "ink": touch, "ink_got": got_touch,
-            "on": on, "on_got": got_on, "side": side, "shift": shift, "n_word": int(t["n_word"])}
+    before = (win < grid.INK_BELOW) & read.in_rect(win.shape, origin, word)
+    win[ink] = 0
+    pr = np.asarray(pose["rect"], float) * scale
+    nb = np.stack([cx + (pr[:, 0] + end) * ux + pr[:, 1] * vx, cy + (pr[:, 0] + end) * uy + pr[:, 1] * vy], 1)
+    centre, clen, cheight, cangle = rect
+    got_part = _meet(_rect(centre[0], centre[1], clen, cheight, cangle), nb) / max(_area(nb), 1e-9)
+    got_touch, got_on = ink_overlaps(win, origin, word, nb, angle, before)
+    return {"neighbour": True, "part_got": got_part, "ink_got": got_touch, "on_got": got_on,
+            "side": int(pose["side"]), "scale": scale, "rect": nb.tolist()}
 
 
 # --- sloppy crops of Terra's words ------------------------------------------------------------------------------------
 
 def sloppy_crop(page: np.ndarray, terra_word, dist: dict, pieces, rng, info: dict | None = None,
                 with_mask: bool = False) -> np.ndarray:
-    """A sloppy crop of Terra's word `terra_word` (a row of `terra_frame`, with `with_neighbours`' columns for a
-    neighbour) on `page` (see the module): one pair of `dist` (`offset_distribution`): its offsets, and its neighbour
-    share and ink overlap when the word has a neighbour; a line piece of `pieces` (`Lines`, or patches drawn alike and
-    all kept) with probability `dist["line_share"]`; each from `rng` alone.  With `with_mask`, `info["mask"]` is the
+    """A sloppy crop of Terra's word `terra_word` (a row of `terra_frame`) on `page` (see the module): one pair of
+    `dist` (`offset_distribution`): its offsets, and its neighbour when it held one (`neighbour_pose`); a line piece of
+    `pieces` (`Lines`, or patches drawn alike and all kept) with probability `dist["line_share"]`; each from `rng`
+    alone.  With `with_mask`, `info["mask"]` is the
     ink touching the drawn rectangle (`read.kept_ink`, the pasted ink too) cut as the crop.  `info` (a dict) gets what
     was drawn: the offsets, `draw`, `frame` (centre, length, height, angle: `crops.cut`'s), `window` (the page px the
     crop reads), `line` (and `piece`, `turns`, `line_at`, `line_cover`, `line_thick`, `line_rejected`,
-    `line_gave_up`), `neighbour` (and `part`, `part_got`, `ink`, `ink_got` (touching), `on`, `on_got`, `side`,
-    `shift`, `n_word`)."""
+    `line_gave_up`), `neighbour` (and the pair's measured `part`, `ink` (touching) and `on`, and as pasted
+    `part_got`, `ink_got`, `on_got`; `side`, `scale`, `rect`)."""
     t = terra_word
     lines = pieces if isinstance(pieces, Lines) else Lines.uniform(pieces)
     cx, cy, length0, height0, angle0 = (float(t[k]) for k in ("cx", "cy", "length", "height", "angle"))
@@ -790,8 +777,10 @@ def sloppy_crop(page: np.ndarray, terra_word, dist: dict, pieces, rng, info: dic
         win = page[y0:y1, x0:x1].copy()
         if u_line < float(dist.get("line_share") or 0.0) and len(lines):
             got.update(_line_through(win, (x0, y0), t, lines, rng))
-        if part > 0 and int(t.get("n_word", -1)) >= 0:
-            got.update(_neighbour_into(win, (x0, y0), page, t, (centre, length, height, angle), part, touch, on))
+        pose = off["neighbour_pose"][k] if "neighbour_pose" in off else None
+        if pose is not None:
+            got.update(part=part, ink=touch, on=on)
+            got.update(_paste_neighbour(win, (x0, y0), t, pose, (centre, length, height, angle)))
         crop = K.cut(win, centre, length, height, angle, origin=(x0, y0))[0]
         if with_mask:
             keep = read.kept_ink(win, (x0, y0), _rect(centre[0], centre[1], length, height, angle))
@@ -803,16 +792,16 @@ def sloppy_crop(page: np.ndarray, terra_word, dist: dict, pieces, rng, info: dic
 
 def sloppy_crops(terra: pd.DataFrame, dist: dict, pieces, seed: int, *, quarter: int, copies: int = 1, pages=None,
                  touch=None, mask: bool = False) -> list[tuple[np.ndarray, str, dict]]:
-    """`copies` sloppy crops of every word of `terra` touching neither the answered blocks nor `quarter`, its
-    neighbour the nearest such word, each from its own generator (`default_rng([seed, sheet, word, copy])`); a crop
-    whose footprint touches either is left out.  (crop, string, meta: `sheet`, `word`, `copy`, `n_word`, `kind`, what
+    """`copies` sloppy crops of every word of `terra` touching neither the answered blocks nor `quarter`, each from its
+    own generator (`default_rng([seed, sheet, word, copy])`); a crop whose footprint touches either is left out (the
+    neighbours `dist` holds are training words').  (crop, string, meta: `sheet`, `word`, `copy`, `kind`, what
     was drawn, the TOUCH flags, and with `mask` its `mask`, `sloppy_crop`'s), by sheet and word.  `pieces` (`Lines`
     or patches) must hold no held-out ink (`piece_patches` checks its bank).  ValueError without a quarter."""
     quarter = _need_quarter(quarter, "sloppy_crops")
     touch = HeldAreas() if touch is None else touch
     page_of = _pages(pages)
     lines = pieces if isinstance(pieces, Lines) else Lines.uniform(pieces)
-    t = with_neighbours(terra[_training_words(terra, quarter)])
+    t = terra[_training_words(terra, quarter)]
     out = []
     for sheet in sorted(set(t["sheet"])):
         page = page_of(sheet)
@@ -825,7 +814,7 @@ def sloppy_crops(terra: pd.DataFrame, dist: dict, pieces, seed: int, *, quarter:
                 if _held(flags, quarter):
                     continue
                 out.append((crop, str(row["text"]), {"sheet": sheet, "word": int(row["word"]), "copy": c,
-                                                     "n_word": int(row["n_word"]), "kind": row["kind"], **info,
+                                                     "kind": row["kind"], **info,
                                                      **{k: bool(v) for k, v in flags.items()}}))
     return out
 
