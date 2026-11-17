@@ -2,11 +2,12 @@
 read by the reader of its quarter (the one that never saw that quarter), both ways along its axis, and the measures.
 
 A box's crop (`crops.box_crop`): its ink-trimmed rectangle along its axis, read at 0 degrees (the axis's own angle)
-and at 180 (the crop turned a half turn).  Each read gives log p(form | crop) for every printed form of the code list
-(`solver-text-crops`' prior.json `forms`: the template reader's code list), log p(none | crop) (no text: the empty
-string) and p(other | crop) (every other string), exactly (`ctc`).  The reading is their mixture, with q = p(180
-degrees) the quarter's 0/180 classifier's probability that the 0-degree crop is upside down (`weight`).  Batch 1 on
-the CPU, one thread per process: a crop's numbers never depend on its batch or the machine's cores.
+and at 180 (the crop turned a half turn); for trials only, blanked outside the box's own px first (`mask`).  Each
+read gives log p(form | crop) for every printed form of the code list (`solver-text-crops`' prior.json `forms`: the
+template reader's code list), log p(none | crop) (no text: the empty string) and p(other | crop) (every other
+string), exactly (`ctc`).  The reading is their mixture, with q = p(180 degrees) the quarter's 0/180 classifier's
+probability that the 0-degree crop is upside down (`weight`).  Batch 1 on the CPU, one thread per process: a crop's
+numbers never depend on its batch or the machine's cores.
 
 Writes data/solver/text-read/ (`store.READ_DIR`):
   reads.npz      one entry per row of boxes.parquet, in its order:
@@ -40,7 +41,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from sfzmaps.solver import paths, runs, wordboxes
+from sfzmaps.solver import grid, paths, runs, wordboxes
 from sfzmaps.solver.textnet import data
 from sfzmaps.solver.textread import crops as K
 from sfzmaps.solver.textread import ctc, model, store
@@ -108,16 +109,67 @@ def _read_job(job) -> list[dict]:
     return [{"key": key, **read_one(_M["readers"][q], _M["directions"][q], crop, forms)} for key, q, crop in job]
 
 
-def _box_job(args) -> list[dict]:
-    """Every box of one sheet (rows of boxes.parquet), cut from its page and read."""
-    sheet, rows = args
-    page = data.load_page(sheet)
-    job = []
+def word_masks(sheet: str, rows: list[dict], page: np.ndarray | None = None,
+               chance: np.ndarray | None = None) -> dict:
+    """Each box's own px: the component `wordboxes.group` grouped it from (8-connected px at or above its `level` in
+    the held-out detectors' chance and within INK_R px of ink; the box's `i` counts the components holding MIN_PX ink
+    px or more, in label order), grown by wordboxes.INK_R px (a disc).  `rows`: boxes.parquet rows of `sheet` (with
+    `row`, `i`, `level`, `ink_px`); `page` and `chance` read from disk when None.  {row: (bool window, (x0, y0) its
+    top-left page px)}.  ValueError when a box's component holds another number of ink px than the box (the boxes
+    were grouped from other chance)."""
+    page = data.load_page(sheet) if page is None else page
+    ink = page < grid.INK_BELOW
+    chance = wordboxes._read_chance(sheet, ink.shape) if chance is None else chance
+    gate = wordboxes.ink_gate(ink)
+    r = wordboxes.INK_R
+    disc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    out = {}
+    for level in sorted({float(x["level"]) for x in rows}):
+        mask = (chance >= int(np.ceil(level * 255 - 1e-9))) & gate
+        _, lab = cv2.connectedComponents(mask.view(np.uint8), connectivity=8)
+        ys, xs = np.nonzero(mask)
+        lp = lab[ys, xs]
+        order = np.argsort(lp, kind="stable")
+        lp, ys, xs = lp[order], ys[order], xs[order]
+        start = np.flatnonzero(np.r_[True, lp[1:] != lp[:-1]]) if len(lp) else np.zeros(0, np.int64)
+        n_ink = np.add.reduceat(ink[ys, xs].astype(np.int64), start) if len(lp) else np.zeros(0, np.int64)
+        kept = np.flatnonzero(n_ink >= wordboxes.MIN_PX)
+        for x in (x for x in rows if float(x["level"]) == level):
+            i = int(x["i"])
+            if i >= len(kept) or int(n_ink[kept[i]]) != int(x["ink_px"]):
+                raise ValueError(f"{sheet}: box {x['row']} ({x['ink_px']} ink px) is not its component {i} at level "
+                                 f"{level} of this chance")
+            j = kept[i]
+            s, e = start[j], (start[j + 1] if j + 1 < len(start) else len(lp))
+            x0, y0 = max(int(xs[s:e].min()) - r, 0), max(int(ys[s:e].min()) - r, 0)
+            x1, y1 = min(int(xs[s:e].max()) + r + 1, ink.shape[1]), min(int(ys[s:e].max()) + r + 1, ink.shape[0])
+            own = (lab[y0:y1, x0:x1] == lp[s]).view(np.uint8)
+            out[x["row"]] = (cv2.dilate(own, disc) > 0, (x0, y0))
+    return out
+
+
+def box_crops(page: np.ndarray, rows: list[dict], masks: dict | None = None) -> list[np.ndarray]:
+    """The crops of boxes (boxes.parquet rows with `row`) of one page (`crops.box_crop`); with `masks`
+    (`word_masks`), each paper outside its box's own px (`crops.mask_outside` of the mask cut as the box is)."""
+    out = []
     for r in rows:
         corners = np.array([[r[f"t{i}x"], r[f"t{i}y"]] for i in range(4)], float)
-        job.append((r["row"], paths.QUARTERS[int(r["quarter"])],
-                    K.box_crop(page, corners, r["t_length"], r["t_height"], r["axis"])))
-    return _read_job(job)
+        crop = K.box_crop(page, corners, r["t_length"], r["t_height"], r["axis"])
+        if masks is not None:
+            win, origin = masks[r["row"]]
+            crop = K.mask_outside(crop, K.box_mask(win, corners, r["t_length"], r["t_height"], r["axis"], origin))
+        out.append(crop)
+    return out
+
+
+def _box_job(args) -> list[dict]:
+    """Every box of one sheet (rows of boxes.parquet), cut from its page (with a third item True: blanked outside its
+    own px, `word_masks`) and read."""
+    sheet, rows, *mask = args
+    page = data.load_page(sheet)
+    masks = word_masks(sheet, rows, page) if mask and mask[0] else None
+    return _read_job([(r["row"], paths.QUARTERS[int(r["quarter"])], c)
+                      for r, c in zip(rows, box_crops(page, rows, masks), strict=True)])
 
 
 def _run(pool, fn, jobs) -> dict:
@@ -292,8 +344,10 @@ def held_out_words(rows: pd.DataFrame, got: dict, codes: CodeList) -> dict:
 
 # --- the stage ------------------------------------------------------------------------------------------------------
 
-def build_read(workers: int = WORKERS) -> dict:
-    """Read every box and the answered labels, measure, and write READ_DIR (see the module)."""
+def build_read(workers: int = WORKERS, mask: bool = False) -> dict:
+    """Read every box and the answered labels, measure, and write READ_DIR (see the module).  `mask` (for trials, off
+    in the stage): each box's crop blanked outside its own px (`word_masks`, which reads the held-out detectors'
+    chance) before it is read."""
     t0 = time.perf_counter()
     codes = CodeList.load()
     boxes = wordboxes.load_boxes().reset_index(drop=True)
@@ -304,7 +358,7 @@ def build_read(workers: int = WORKERS) -> dict:
     real = store.Crops.load(store.CROPS_DIR / "crops.npz")
     held = rows[(rows["series"] == paths.SERIES) & ~rows["touch_blocks"].astype(bool)
                 & rows["kind"].isin(HELD_KINDS)]
-    jobs_boxes = [(s, part.to_dict("records")) for s, part in boxes.groupby("sheet", sort=True)]
+    jobs_boxes = [(s, part.to_dict("records"), mask) for s, part in boxes.groupby("sheet", sort=True)]
     ans_job = [(("ans", int(k)), paths.QUARTERS[int(q)], ans_crops[int(c)])
                for k, (q, c) in enumerate(zip(ans["quarter"], ans["crop"])) if c >= 0]
     held_job = [(("held", int(i)), paths.QUARTERS[int(q)], real[int(i)]) for i, q in zip(held.index, held["quarter"])]

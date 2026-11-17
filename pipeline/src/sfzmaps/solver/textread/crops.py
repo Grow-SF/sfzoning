@@ -12,7 +12,8 @@ slanted word's height (any angle but a quarter turn) is solved from the axis box
 ill-conditioned (a loose box gives 2-7 px), so it is floored at its kind's FLOOR_QUANTILE quantile of the quarter-turn
 words outside the answered blocks (exact: their box's sides), its length then following from the box (`word_geometry`).
 Our boxes (`box_crop`): the ink-trimmed rectangle (`wordboxes`' t corners, its `t_length` and `t_height`) along the
-box's axis: the glyphs fill the crop's height as Terra's tight boxes do.
+box's axis: the glyphs fill the crop's height as Terra's tight boxes do.  A box's own px (a page mask) are cut the same
+way (`box_mask`), and a crop can be blanked outside them (`mask_outside`; reading with `read.build_read(mask=True)`).
 
 The words (`sheet_crops`): every word Terra boxed (every kind) on the 2000 drawing's three scans (MAPS), and windows
 of non-text: a word's size and angle centred on ink outside every Terra word and every unknown px (Sol's points within
@@ -76,15 +77,28 @@ def word_geometry(box, angle: float, floor: float = 0.0) -> tuple[float, float]:
     return float(length), float(height)
 
 
-def cut(page: np.ndarray, centre: tuple[float, float], length: float, height: float, angle: float):
-    """The crop of a word of `length` x `height` page px centred on the page px index `centre`, reading at `angle`
-    (see the module); its page frame (`labels.frame`) and its page-px shape before resizing."""
+def frame_of(centre: tuple[float, float], length: float, height: float, angle: float):
+    """The page frame (`labels.frame`) and the page-px shape (h, w) of the crop of a word of `length` x `height` page
+    px centred on the page px index `centre`, reading at `angle` (see the module)."""
     w = max(4, round(length + 2 * PAD_X * height))
     h = max(4, round(height * (1 + 2 * PAD_Y)))
-    a = L.frame(centre, w, h, angle)
-    raw = L.sample(page, a, (h, w), 255)
+    return L.frame(centre, w, h, angle), (h, w)
+
+
+def cut(page: np.ndarray, centre: tuple[float, float], length: float, height: float, angle: float, fill=255,
+        origin=(0, 0)):
+    """The crop of a word of `length` x `height` page px centred on the page px index `centre`, reading at `angle`
+    (see the module); its page frame (`labels.frame`) and its page-px shape before resizing.  `page` may be a window
+    of the page whose px (0, 0) is the page's px `origin` (holding every px the crop reads: the same crop), and a bool
+    image (a mask: True where any px the crop's px reads is True; `fill` False)."""
+    a, (h, w) = frame_of(centre, length, height, angle)
+    raw = L.sample(page, a, (h, w), fill, origin)
     out_w = min(MAX_WIDTH, max(4, round(w * HEIGHT / h)))
-    crop = cv2.resize(raw, (out_w, HEIGHT), interpolation=cv2.INTER_AREA if h > HEIGHT else cv2.INTER_LINEAR)
+    how = cv2.INTER_AREA if h > HEIGHT else cv2.INTER_LINEAR
+    if raw.dtype == bool:
+        crop = cv2.resize(raw.view(np.uint8) * np.uint8(255), (out_w, HEIGHT), interpolation=how) > 0
+    else:
+        crop = cv2.resize(raw, (out_w, HEIGHT), interpolation=how)
     return crop, a, (h, w)
 
 
@@ -96,11 +110,34 @@ def rectify(page: np.ndarray, box, angle: float, floor: float = 0.0):
     return crop, a, shape, (length, height)
 
 
+def box_cut(page: np.ndarray, corners: np.ndarray, length: float, height: float, axis: float, fill=255,
+            origin=(0, 0)):
+    """`box_crop`, with its page frame and page-px shape (`cut`'s three), from the page or a window of it (`cut`)."""
+    cx, cy = np.asarray(corners, float).reshape(4, 2).mean(0) - 0.5
+    return cut(page, (float(cx), float(cy)), max(float(length), 1.0), max(float(height), 1.0), float(axis), fill,
+               origin)
+
+
 def box_crop(page: np.ndarray, corners: np.ndarray, length: float, height: float, axis: float) -> np.ndarray:
     """One of our word boxes' crop, read at its axis (0 degrees): `corners` its trimmed rectangle (4 x 2, page px edge
     coordinates), `length` and `height` that rectangle's sides along and across the axis (degrees)."""
-    cx, cy = np.asarray(corners, float).reshape(4, 2).mean(0) - 0.5
-    return cut(page, (float(cx), float(cy)), max(float(length), 1.0), max(float(height), 1.0), float(axis))[0]
+    return box_cut(page, corners, length, height, axis)[0]
+
+
+def box_mask(mask: np.ndarray, corners: np.ndarray, length: float, height: float, axis: float,
+             origin=(0, 0)) -> np.ndarray:
+    """A page mask (bool; the whole page, or a window of it whose px (0, 0) is the page's px `origin`) cut as
+    `box_crop` cuts the page: bool, the crop's shape, True where any px the crop's px reads is True (False beyond the
+    mask)."""
+    return box_cut(mask, corners, length, height, axis, False, origin)[0]
+
+
+def mask_outside(crop: np.ndarray, word_mask: np.ndarray) -> np.ndarray:
+    """The crop with every px outside `word_mask` (bool, the crop's shape) paper (255): the word alone, as Mask
+    TextSpotter v3 reads it.  ValueError when the shapes differ."""
+    if np.shape(word_mask) != np.shape(crop):
+        raise ValueError(f"a mask of {np.shape(word_mask)} for a crop of {np.shape(crop)}")
+    return np.where(word_mask, crop, 255).astype(np.uint8)
 
 
 def _footprint(a, shape, page_shape):

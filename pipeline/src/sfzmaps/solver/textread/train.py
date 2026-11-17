@@ -16,6 +16,10 @@ fixed number of steps (no early stopping, nothing chosen on held-out crops).  Ev
 logged, and for a reader the best-path character error on up to MONITOR words of the held-out quarter on the 2000 scan
 (logged only: nothing is chosen by it).
 
+For trials, `fit` also takes crops of our own word boxes and sloppy crops of Terra's words (`extra`, made by
+`wordread.readercrops`; never imported here), drawn at the recipe's shares and masked outside the box's own px when it
+asks (READER_OPTIONS, all off: the stage's training is as before, draw for draw).
+
 Each training runs in its own exclusive turn on the Mac's GPU (`sfzmaps.gpu`), one after another, so a waiting process
 can take the GPU between them.  Seeded (torch and numpy, SEED); spike S2 found two runs of its loop on the GPU
 identical step for step.
@@ -56,6 +60,11 @@ SEED = 0
 THREADS = 4              # torch's CPU threads while training (spike S2's)
 READER = {"steps": 12000, "max_lr": 1.5e-3, "pct_start": 0.15, "synth": True}       # reader C
 DIRECTION = {"steps": 3000, "max_lr": 2e-3, "pct_start": 0.15, "synth": False}      # classifier D
+# The reader's training options, each off (a recipe's own keys override them; READER leaves them out, so what the stage
+# writes is as before): `own` and `sloppy` the shares of each draw taken from the crops of our own boxes and the sloppy
+# crops of Terra's words passed to `fit` (`extra`; `wordread.readercrops` makes them), `mask` whether the own-box crops
+# are blanked outside their box's own px (`crops.mask_outside`'s rule) when drawn.
+READER_OPTIONS = {"own": 0.0, "sloppy": 0.0, "mask": False}
 WEIGHT_DECAY = 1e-4
 CLIP = 5.0
 
@@ -99,11 +108,40 @@ class Pool:
             self.n_synth = len(synth)
         self.widths = np.array([c.shape[1] for c in self.items])
         self.monitor = monitor or []
+        self.n_own = self.n_sloppy = 0
 
-    def batches(self, rng, synth_share: float) -> list[np.ndarray]:
-        """BUCKET batches of indices, sorted by width within the draw, in a shuffled order."""
+    def joined(self, extra: dict, mask: bool = False) -> "Pool":
+        """A new pool: this one's crops, then `extra["own"]` (crops of our own boxes), then `extra["sloppy"]` (sloppy
+        crops of Terra's words), each a list of (crop, target, meta: a dict or None), weight 1.  With `mask`, an
+        own-box crop whose meta holds "mask" (bool, the crop's shape: its box's own px) is paper outside it."""
+        out = Pool.__new__(Pool)
+        out.__dict__.update(self.__dict__)
+        own, sloppy = list(extra.get("own") or ()), list(extra.get("sloppy") or ())
+
+        def crop(c, meta, masked):
+            m = (meta or {}).get("mask") if masked else None
+            return c if m is None else np.where(m, c, 255).astype(np.uint8)
+
+        out.items = self.items + [crop(c, m, mask) for c, _, m in own] + [c for c, _, _ in sloppy]
+        out.texts = self.texts + [str(t) for _, t, _ in own] + [str(t) for _, t, _ in sloppy]
+        out.weights = self.weights + [1.0] * (len(own) + len(sloppy))
+        out.n_own, out.n_sloppy = len(own), len(sloppy)
+        out.widths = np.array([c.shape[1] for c in out.items])
+        return out
+
+    def batches(self, rng, synth_share: float, own: float = 0.0, sloppy: float = 0.0) -> list[np.ndarray]:
+        """BUCKET batches of indices, sorted by width within the draw, in a shuffled order.  With `own` or `sloppy`,
+        each draw's crops are split among the real, synthetic, own-box and sloppy crops by one multinomial draw at
+        the shares (the real crops the rest); without, as before."""
         n = BATCH * BUCKET
-        if self.n_synth:
+        if own or sloppy:
+            synth = synth_share if self.n_synth else 0.0
+            shares = [1.0 - synth - own - sloppy, synth, own, sloppy]
+            counts = rng.multinomial(n, shares)
+            sizes = [self.n_real, self.n_synth, self.n_own, self.n_sloppy]
+            starts = np.concatenate([[0], np.cumsum(sizes)[:-1]])
+            idx = np.concatenate([s + rng.integers(0, size, k) for s, size, k in zip(starts, sizes, counts) if k])
+        elif self.n_synth:
             k = rng.binomial(n, synth_share)
             idx = np.concatenate([rng.integers(0, self.n_real, n - k), self.n_real + rng.integers(0, self.n_synth, k)])
         else:
@@ -151,15 +189,28 @@ def monitor_cer(net, pool: Pool, device: str) -> float | None:
     return errs / chars
 
 
-def fit(kind: str, pool: Pool, recipe: dict, device: str, seed: int = SEED, tag: str = "") -> tuple:
+def fit(kind: str, pool: Pool, recipe: dict, device: str, seed: int = SEED, tag: str = "",
+        extra: dict | None = None) -> tuple:
     """One network ("reader" or "direction") trained on `pool` by `recipe` (see the module), in its own exclusive GPU
-    turn on mps.  Returns the network (on the CPU, in eval mode) and its log."""
+    turn on mps.  `extra`: crops of our own boxes and sloppy crops (`Pool.joined`), drawn at the recipe's `own` and
+    `sloppy` shares and masked by its `mask` (READER_OPTIONS; at their defaults the draws are as without them).
+    Returns the network (on the CPU, in eval mode) and its log."""
+    opts = {k: recipe.get(k, v) for k, v in READER_OPTIONS.items()}
+    if extra is not None:
+        pool = pool.joined(extra, mask=bool(opts["mask"]))
+    for name, have in (("own", pool.n_own), ("sloppy", pool.n_sloppy)):
+        if opts[name] < 0 or (opts[name] > 0 and not have):
+            raise ValueError(f"{tag}: a share {opts[name]} of {name} crops, and {have} of them passed in (extra)")
+    if opts["own"] + opts["sloppy"] + (SYNTH_SHARE if pool.n_synth else 0.0) > 1.0:
+        raise ValueError(f"{tag}: the shares of own-box, sloppy and synthetic crops sum past 1")
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     net = model.Reader() if kind == "reader" else model.Direction()
     steps = recipe["steps"]
     out = {"kind": kind, "recipe": recipe, "seed": seed, "device": device, "batch": BATCH, "real": pool.n_real,
            "synth": pool.n_synth, "monitor": len(pool.monitor), "torch": torch.__version__, "steps": []}
+    if extra is not None:
+        out.update(own=pool.n_own, sloppy=pool.n_sloppy)
     with gpu.gpu_turn(True, device):
         t0 = time.perf_counter()
         net = net.to(device)
@@ -171,7 +222,7 @@ def fit(kind: str, pool: Pool, recipe: dict, device: str, seed: int = SEED, tag:
         run_loss, run_n = 0.0, 0
         for step in range(1, steps + 1):
             if not queue:
-                queue = pool.batches(rng, SYNTH_SHARE)
+                queue = pool.batches(rng, SYNTH_SHARE, opts["own"], opts["sloppy"])
             idx = queue.pop()
             crops = [augment(pool.items[i], rng) for i in idx]
             if kind == "direction":
