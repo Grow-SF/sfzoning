@@ -38,11 +38,16 @@ only (its footprint, `load_footprint`, less the held-out areas):
            and ONE sigma for every kind (the placement that moves the lines is one), by EM (`fit_near`).  (Tried first:
            an offset mu and a sigma per kind.  The offset came out 0 for block and lot lines on every map; and a
            centreline's own spread, fitted alone, covered the whole street on the 1980-2000 maps (sigma 17-21 px
-           against 0.8-1.0 px for the blocks and lots): the street's untranscribed text, not a line.)  Each edge's
-           INKED FRACTION: its own px (the responsibilities of the skeleton px nearest it) out of its px outside
-           every word's box (at most 1: a line covers no more than itself); the kind's measured distribution of it,
-           one value an edge, is what scenes draw from (the length-weighted share reported beside it).  The thickness: the own px' thickness (2
-           x the distance to paper at the skeleton - 1), explained as a mixture of the thicknesses `cv2.line` draws
+           against 0.8-1.0 px for the blocks and lots): the street's untranscribed text, not a line.)  Ink near an edge
+           may cross it rather than run along it (a district line across a lot line): each skeleton px's local
+           orientation, the structure tensor's at the kind's measured stroke width (`line_widths`, from a first pass
+           by distance alone; `_orientation_gap`), and its angle to its edge; per kind, a mixture of the edge's own ink
+           (a von Mises about 0, its concentration fitted) and crossing ink (uniform on 0-90 degrees), the own share
+           fitted (`fit_angles`).  A px is the edge's own by its distance responsibility x P(own | angle), no cut.
+           Each edge's INKED FRACTION: its own px out of its px outside every word's box (at most 1: a line covers no
+           more than itself); the kind's measured distribution of it, one value an edge, is what scenes draw from
+           (the length-weighted share reported beside it).  The thickness: the own px' thickness (2 x the distance
+           to paper at the skeleton - 1), explained as a mixture of the thicknesses `cv2.line` draws
            (`thickness_shares`; each thickness's profile measured by drawing it at every angle)
   codes    each zoning-code word's centre less the centroid of the lot nearest it (ft); its rate per lot
   blocks   each block-number word that lies in the block its text names (`context.block_forms`): its centre less
@@ -66,7 +71,9 @@ A scene (`SceneBank.crop(rng, size, scale, turns)`), from the generator alone:
     `window_affine`)
   - lines: the edges of every usable item reaching the window (`page_edges`), each inked over a fraction drawn from
     its kind's measured per-edge inked fractions, as one contiguous run at a uniform position along the edge (a kind
-    whose fractions sit at 0 and 1 draws whole edges or none), at a thickness drawn from its kind's thickness shares
+    whose fractions sit at 0 and 1 draws whole edges or none), its px a whole number whose expectation is the
+    fraction's (`run_px`: a run of a hundredth of a px inks a px one time in a hundred, as the measure counts it), at a
+    thickness drawn from its kind's thickness shares
   - labels: each usable block with the block rate (at its centroid plus a measured block offset), each lot of a
     usable block with the code rate (at its centroid plus a measured code offset), and along each usable named
     centreline a Poisson count at the near street rate x its length (uniform along it, offset across it by a
@@ -98,7 +105,7 @@ from functools import cached_property, lru_cache
 import cv2
 import numpy as np
 import shapely
-from scipy import optimize
+from scipy import optimize, special
 from scipy.interpolate import LinearNDInterpolator
 from skimage.morphology import skeletonize
 
@@ -772,12 +779,97 @@ def fit_far(d: np.ndarray) -> dict:
     return best
 
 
+def fit_angles(theta: np.ndarray, weight: np.ndarray) -> dict:
+    """The angle between ink's local orientation and its edge (`theta`, radians in [0, pi/2], each distinct value once,
+    with its weight): a mixture of the edge's own ink, a von Mises about 0 on the axis (density exp(kappa cos 2 theta)
+    / ((pi / 2) I0(kappa)) on [0, pi/2], kappa fitted), and crossing ink, uniform on [0, pi/2]; the own share and
+    kappa by EM from every decile split of the angles and from every px its edge's own, the likeliest kept, with each
+    angle's P(own | angle) as r."""
+    theta, weight = np.asarray(theta, float), np.asarray(weight, float)
+    if not len(theta) or not weight.sum() > 0:
+        return {"share": 0.0, "kappa": math.nan, "r": np.zeros(len(theta)), "loglik": 0.0, "iterations": 0}
+    c2, total = np.cos(2 * theta), weight.sum()
+    flat = 2 / math.pi
+
+    def kappa_for(mean):
+        """The kappa whose mean of cos 2 theta is `mean` (I1/I0 = mean); 0 when it is not above 0."""
+        if not mean > 0:
+            return 0.0
+        a = lambda k: special.i1e(k) / special.i0e(k) - mean            # noqa: E731
+        hi = 1.0
+        while a(hi) < 0:
+            if special.i1e(2 * hi) / special.i0e(2 * hi) == special.i1e(hi) / special.i0e(hi):
+                return hi                                                   # float64 can't tell kappa further
+            hi *= 2
+        return optimize.brentq(a, 0.0, hi) if a(0.0) < 0 else 0.0
+
+    def estep(share, kappa):
+        log_f = kappa * c2 - math.log(math.pi / 2) - (math.log(special.i0e(kappa)) + kappa)
+        own = share * np.exp(log_f)
+        tot = own + (1 - share) * flat
+        with np.errstate(divide="ignore"):
+            return own / tot, float((weight * np.log(tot)).sum())
+
+    order = np.argsort(theta)
+    cum = np.cumsum(weight[order]) / total
+    starts = [("own", np.ones(len(theta)))] + [
+        (float(q), (theta <= theta[order][min(int(np.searchsorted(cum, q)), len(theta) - 1)]).astype(float))
+        for q in DECILES]
+    best = None
+    for name, r in starts:
+        last, ll, it, share, kappa = -np.inf, -np.inf, 0, 0.0, 0.0
+        for it in range(1, EM_MAX_ITER + 1):
+            share = float((weight * r).sum() / total)
+            if not share > 0:
+                break
+            kappa = kappa_for(float((weight * r * c2).sum() / (weight * r).sum()))
+            r, ll = estep(share, kappa)
+            if ll - last <= EM_TOL * max(1.0, abs(ll)):
+                break
+            last = ll
+        if it == EM_MAX_ITER:
+            log.warning("fit_angles: %d iterations from the %s start", EM_MAX_ITER, name)
+        if share > 0 and math.isfinite(ll) and (best is None or ll > best["loglik"]):
+            best = {"share": share, "kappa": kappa, "r": r, "loglik": ll, "iterations": it, "start": name}
+    return best or {"share": 0.0, "kappa": math.nan, "r": np.zeros(len(theta)), "loglik": 0.0, "iterations": 0}
+
+
+def _orientation_gap(line: np.ndarray, ys, xs, width: float, edge_dir: np.ndarray) -> np.ndarray:
+    """At ink px (ys, xs): the angle (radians, 0 to pi/2) between the ink's local orientation and its edge's
+    direction (`edge_dir`, (n, 2) vectors).  The orientation is the structure tensor's: Scharr gradients of the line
+    ink, their products integrated by a Gaussian whose width (2 sigma) is the line's measured stroke width `width`
+    px: the window reaches both sides of the stroke from its centre line and no further (a corner or a crossing
+    shows in it only within a stroke's width), the line running across the dominant gradient."""
+    img = line.astype(np.float32)
+    gx = cv2.Scharr(img, cv2.CV_32F, 1, 0)
+    gy = cv2.Scharr(img, cv2.CV_32F, 0, 1)
+    del img
+    out = []
+    for a, b in ((gx, gx), (gx, gy), (gy, gy)):
+        j = cv2.GaussianBlur(a * b, (0, 0), float(width) / 2)
+        out.append(j[ys, xs].astype(np.float64))
+    jxx, jxy, jyy = out
+    along = 0.5 * np.arctan2(2 * jxy, jxx - jyy) + math.pi / 2       # across the dominant gradient (image axes)
+    edge = np.arctan2(edge_dir[:, 1], edge_dir[:, 0])
+    gap = np.mod(along - edge, math.pi)
+    return np.minimum(gap, math.pi - gap)
+
+
 def inked_fractions(own: np.ndarray, length: np.ndarray) -> np.ndarray:
     """Each edge's inked fraction: its own ink px (soft counts) over its px, at most 1 (a line covers no more than
     itself); edges with no px measured are left out."""
     own, length = np.asarray(own, float), np.asarray(length, float)
     on = length > 0
     return np.minimum(own[on] / length[on], 1.0)
+
+
+def run_px(length: np.ndarray, fraction: np.ndarray, u: np.ndarray) -> np.ndarray:
+    """How many px of an edge (`length` px long) its run inks, a whole number whose expectation is fraction x
+    length: the whole px and one more with the chance of the remainder (`u` uniform in [0, 1)).  A run of a hundredth
+    of a px inks a px one time in a hundred (as the measure counts it), never a dot every time."""
+    want = np.asarray(fraction, float) * np.asarray(length, float)
+    whole = np.floor(want)
+    return (whole + (np.asarray(u, float) < want - whole)).astype(np.int64)
 
 
 def edge_runs(edges: np.ndarray, fraction: np.ndarray, start: np.ndarray) -> np.ndarray:
@@ -833,25 +925,27 @@ def _sheet_edges(sd: data.SheetData, geo: Geometry, inv: _ToPage) -> tuple[np.nd
     return edges, np.concatenate(kinds)[owner]
 
 
-def _sheet_lines(sd: data.SheetData, geo: Geometry, inv, train: np.ndarray) -> dict:
+def _sheet_lines(sd: data.SheetData, geo: Geometry, inv, train: np.ndarray, widths=None) -> dict:
     """One sheet's part of the line measures, on its training px outside every Terra word's and other pass's box (the
     box itself; `train` less the boxes): the edges (`_sheet_edges`) drawn 1 px wide, each px its edge's (a block
     outline's over a lot line's over a centreline's where they meet); each such px's nearest edge and distance; per
     kind, the distinct squared distances (px) of those px (background) and, over the line ink's skeleton, the counts
-    per (edge, squared distance, thickness key); and each edge's kind and px there."""
+    per (edge, squared distance, thickness key, angle key); and each edge's kind and px there.  With `widths` (the
+    map's measured stroke width per kind, px), the angle key is the angle between each skeleton px's local
+    orientation (`_orientation_gap`, at its nearest edge's kind's width) and that edge, in tenths of a degree; without
+    them (or for a kind with no width) it is -1."""
     boxes_ = np.concatenate([sd.words, sd.other]).reshape(-1, 4, 2)
     train = train & ~(data._paint(boxes_, np.ones(len(boxes_), np.int32), 0, 0, sd.height, sd.width) > 0)
     line = data.page_ink(sd) & train            # every word's box (Terra's, the other passes'), the box itself, out
     skel, tkey = _thickness_key(line)
-    del line
     edges, kind = _sheet_edges(sd, geo, inv)
     drawn = np.zeros((sd.height, sd.width), np.int32)
     for e in np.argsort(-kind.astype(np.int64), kind="stable"):        # centrelines, then lot lines, outlines last
         p, q = np.rint(edges[e] * 2 ** SHIFT).astype(np.int64)
         cv2.line(drawn, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), int(e) + 1, 1, cv2.LINE_8, SHIFT)
     out = {"edge_kind": kind, "edge_len": np.bincount(drawn[train & (drawn > 0)] - 1, minlength=len(kind)),
-           "background": [], "skeleton": (np.zeros(0, np.int32), np.zeros(0, np.int32), np.zeros(0, np.int64),
-                                          np.zeros(0, np.int64))}
+           "background": [], "skeleton": (np.zeros(0, np.int32), np.zeros(0, np.int64), np.zeros(0, np.int64),
+                                          np.zeros(0, np.int64), np.zeros(0, np.int64))}
     if not len(kind) or not (drawn > 0).any():
         out["background"] = [(np.zeros(0, np.int64), np.zeros(0, np.int64)) for _ in LINE_KINDS]
         return out
@@ -866,10 +960,18 @@ def _sheet_lines(sd: data.SheetData, geo: Geometry, inv, train: np.ndarray) -> d
     near_kind = kind[nearest]
     for k in range(len(LINE_KINDS)):
         out["background"].append(_counts(d2[train & (near_kind == k)]))
-    at = skel & train
-    u, n = np.unique(np.stack([nearest[at].astype(np.int64), d2[at], tkey[at]], 1), axis=0, return_counts=True)
-    u = u.reshape(-1, 3)
-    out["skeleton"] = (u[:, 0].astype(np.int32), u[:, 1], u[:, 2], n.astype(np.int64))
+    ys, xs = np.nonzero(skel & train)
+    e = nearest[ys, xs].astype(np.int64)
+    akey = np.full(len(ys), -1, np.int64)
+    if widths is not None:
+        for k in range(len(LINE_KINDS)):
+            sel = kind[e] == k
+            if sel.any() and np.isfinite(widths[k]) and widths[k] > 0:
+                gap = _orientation_gap(line, ys[sel], xs[sel], widths[k], edges[e[sel], 1] - edges[e[sel], 0])
+                akey[sel] = np.rint(np.degrees(gap) * 10).astype(np.int64)
+    u, n = np.unique(np.stack([e, d2[ys, xs], tkey[ys, xs], akey], 1), axis=0, return_counts=True)
+    u = u.reshape(-1, 4)
+    out["skeleton"] = (u[:, 0].astype(np.int32), u[:, 1], u[:, 2], u[:, 3], n.astype(np.int64))
     return out
 
 
@@ -988,32 +1090,88 @@ class Measured:
         return float(max((p.max() for p in parts if len(p)), default=0.0))
 
 
-def measure_map(lines: list[dict], labels: list[dict]) -> Measured:
-    """One map's measures from its sheets' parts (`_sheet_lines`, `_sheet_labels`)."""
-    inked, thick, line_summary = [], [], {}
+def _distance_fit(lines: list[dict]) -> tuple[dict, list]:
+    """The line-ink mixture by distance over a map's sheets' parts (`fit_near`), with each kind's distinct squared
+    distances (the background's keys) the responsibilities are read at."""
     data_k = []
     for k in range(len(LINE_KINDS)):
         bkey, bn = _merge([p["background"][k] for p in lines])
         n_s = np.zeros(len(bkey))
         for p in lines:
-            e, d2, _, n = p["skeleton"]
+            e, d2, _, _, n = p["skeleton"]
             mine = p["edge_kind"][e] == k
             np.add.at(n_s, np.searchsorted(bkey, d2[mine]), n[mine])
         data_k.append((bkey, bn, n_s))
-    fit = fit_near([(np.sqrt(b.astype(float)), n_s, bn) for b, bn, n_s in data_k])
-    own, length, ekind, tkeys, tweights = [], [], [], [], [[] for _ in LINE_KINDS]
+    return fit_near([(np.sqrt(b.astype(float)), n_s, bn) for b, bn, n_s in data_k]), data_k
+
+
+def _distance_weights(p: dict, fit: dict, data_k: list) -> np.ndarray:
+    """Each skeleton entry's distance responsibility (its kind's r at its squared distance)."""
+    e, d2, _, _, _ = p["skeleton"]
+    kind = p["edge_kind"]
+    r = np.zeros(len(e))
+    for k in range(len(LINE_KINDS)):
+        mine = kind[e] == k
+        if mine.any():
+            r[mine] = fit["r"][k][np.searchsorted(data_k[k][0], d2[mine])]
+    return r
+
+
+def line_widths(lines: list[dict]) -> np.ndarray:
+    """Each kind's measured stroke width on a map (px): the median thickness (2 x the distance to paper at the
+    skeleton - 1) of its skeleton px, each weighed by its distance responsibility (`fit_near`); nan for a kind with
+    no ink of its own."""
+    fit, data_k = _distance_fit(lines)
+    keys, weights = [[] for _ in LINE_KINDS], [[] for _ in LINE_KINDS]
     for p in lines:
-        e, d2, tk, n = p["skeleton"]
-        kind = p["edge_kind"]
-        r = np.zeros(len(e))
+        e, _, tk, _, n = p["skeleton"]
+        r = _distance_weights(p, fit, data_k) * n
+        kind = p["edge_kind"][e]
         for k in range(len(LINE_KINDS)):
-            mine = kind[e] == k
+            keys[k].append(tk[kind == k])
+            weights[k].append(r[kind == k])
+    out = np.full(len(LINE_KINDS), math.nan)
+    for k in range(len(LINE_KINDS)):
+        q = _quantiles(2 * np.sqrt(np.concatenate(keys[k]).astype(float)) - 1, np.concatenate(weights[k])) \
+            if keys[k] else None
+        if q:
+            out[k] = q["q50"]
+    return out
+
+
+def measure_map(lines: list[dict], labels: list[dict], widths=None) -> Measured:
+    """One map's measures from its sheets' parts (`_sheet_lines` with the map's `widths`, `_sheet_labels`): each
+    skeleton px counts toward its edge's inked fraction by its distance responsibility x P(own | angle) (`fit_angles`
+    per kind; a kind whose px carry no angle by the distance alone)."""
+    inked, thick, line_summary = [], [], {}
+    fit, data_k = _distance_fit(lines)
+    rd = [_distance_weights(p, fit, data_k) for p in lines]
+    angles = []
+    for k in range(len(LINE_KINDS)):
+        keys = np.concatenate([p["skeleton"][3][p["edge_kind"][p["skeleton"][0]] == k] for p in lines]) \
+            if lines else np.zeros(0, np.int64)
+        w = np.concatenate([(r * p["skeleton"][4])[p["edge_kind"][p["skeleton"][0]] == k]
+                            for p, r in zip(lines, rd, strict=True)]) if lines else np.zeros(0)
+        on = keys >= 0
+        u, inv_ = np.unique(keys[on], return_inverse=True)
+        a = fit_angles(np.radians(u / 10.0), np.bincount(inv_, weights=w[on], minlength=len(u))) if len(u) else \
+            fit_angles(np.zeros(0), np.zeros(0))
+        angles.append((u, a))
+    own, length, ekind, tkeys = [], [], [], []
+    for p, r in zip(lines, rd, strict=True):
+        e, _, tk, ak, n = p["skeleton"]
+        kind = p["edge_kind"]
+        p_own = np.ones(len(e))
+        for k in range(len(LINE_KINDS)):
+            u, a = angles[k]
+            mine = (kind[e] == k) & (ak >= 0)
             if mine.any():
-                r[mine] = fit["r"][k][np.searchsorted(data_k[k][0], d2[mine])]
-        own.append(np.bincount(e, weights=r * n, minlength=len(kind)))
+                p_own[mine] = a["r"][np.searchsorted(u, ak[mine])]
+        weight = r * p_own * n
+        own.append(np.bincount(e, weights=weight, minlength=len(kind)))
         length.append(p["edge_len"])
         ekind.append(kind)
-        tkeys.append((tk, kind[e], r * n))
+        tkeys.append((tk, kind[e], weight))
     own, length, ekind = (np.concatenate(v) if v else np.zeros(0) for v in (own, length, ekind))
     for k, name in enumerate(LINE_KINDS):
         on = (ekind == k) & (length > 0)
@@ -1025,10 +1183,15 @@ def measure_map(lines: list[dict], labels: list[dict]) -> Measured:
         tw = np.bincount(inv_, weights=tw, minlength=len(keys)) if len(keys) else np.zeros(0)
         shares = thickness_shares(keys, tw)
         thick.append((np.array(shares["thickness"], np.int64), np.array(shares["share"], float)))
+        a = angles[k][1]
         line_summary[name] = {
-            "skeleton_px": int(data_k[k][2].sum()), "own_share_a": round(fit["a"][k], 4),
-            "sigma_px (every kind's)": _round(fit["sigma"]), "own_px": round(float(own[ekind == k].sum()), 1),
-            "length_px": int(length[ekind == k].sum()),
+            "skeleton_px": int(data_k[k][2].sum()), "own_share_a (distance)": round(fit["a"][k], 4),
+            "sigma_px (every kind's)": _round(fit["sigma"]),
+            "stroke_width_px (the orientation's scale)": _round(widths[k]) if widths is not None else None,
+            "angle_own_share": round(a["share"], 4), "angle_kappa": _round(a["kappa"]),
+            "angle_own_deg_sd": _round(math.degrees(0.5 / math.sqrt(a["kappa"])))
+            if a["kappa"] and math.isfinite(a["kappa"]) and a["kappa"] > 0 else None,
+            "own_px": round(float(own[ekind == k].sum()), 1), "length_px": int(length[ekind == k].sum()),
             "inked_share_by_length": round(float(np.minimum(own[on], length[on]).sum() / length[on].sum())
                                            if on.any() else 0.0, 4),
             "edges": int(len(f)), "inked_fraction_mean_by_edge": round(float(f.mean()), 4) if len(f) else None,
@@ -1082,7 +1245,7 @@ def _sheet_part(sd: data.SheetData, j: int, geo: Geometry, texts: list[str], blo
     `footprint`): its pasteable words, measures and crop centres."""
     inv = page_from_world(sd)
     content = content_mask(sd, footprint, inv)
-    lines = _sheet_lines(sd, geo, inv, ~_held_page(sd) & content)
+    lines = _sheet_lines(sd, geo, inv, ~_held_page(sd) & content)       # by distance alone: for the stroke widths
     labels = _sheet_labels(sd, geo, texts, inv, block_ok, line_ok, content)
     found = [f for f in pasteable(sd) if _at(content, sd.words[f[0]].mean(axis=0)[None])[0]]
     idx = np.array([f[0] for f in found], np.int64)
@@ -1134,20 +1297,35 @@ class SceneBank:
         texts = terra_texts(held) if texts is None else texts
         block_ok, line_ok = usable(geometry, areas)
 
+        def footprint_of(sd):
+            return load_footprint(sd) if footprints is None else footprints.get((sd.series, sd.sheet))
+
         def one(j):
             sd = held[j]
-            footprint = load_footprint(sd) if footprints is None else footprints.get((sd.series, sd.sheet))
-            return _sheet_part(sd, j, geometry, texts[sd.series, sd.sheet], block_ok, line_ok, stride, footprint)
-        if threads > 1:
-            with ThreadPoolExecutor(threads) as ex:
-                parts = list(ex.map(one, range(len(held))))
-        else:
-            parts = [one(j) for j in range(len(held))]
+            return _sheet_part(sd, j, geometry, texts[sd.series, sd.sheet], block_ok, line_ok, stride, footprint_of(sd))
+
+        def angled(j):
+            sd = held[j]
+            inv = page_from_world(sd)
+            area = ~_held_page(sd) & content_mask(sd, footprint_of(sd), inv)
+            return _sheet_lines(sd, geometry, inv, area, widths[sd.series])
+
+        def each(fn):
+            if threads > 1:
+                with ThreadPoolExecutor(threads) as ex:
+                    return list(ex.map(fn, range(len(held))))
+            return [fn(j) for j in range(len(held))]
+        parts = each(one)
+        series_list = list(dict.fromkeys(sd.series for sd in held))
+        widths = {s: line_widths([p["lines"] for p, sd in zip(parts, held, strict=True) if sd.series == s])
+                  for s in series_list}
+        lines = each(angled)                    # again, with each px's orientation at its kind's stroke width
         words, measured = {}, {}
-        for series in dict.fromkeys(sd.series for sd in held):
-            mine = [p for p, sd in zip(parts, held, strict=True) if sd.series == series]
-            words[series] = Words.join([p["words"] for p in mine])
-            measured[series] = measure_map([p["lines"] for p in mine], [p["labels"] for p in mine])
+        for series in series_list:
+            mine = [j for j, sd in enumerate(held) if sd.series == series]
+            words[series] = Words.join([parts[j]["words"] for j in mine])
+            measured[series] = measure_map([lines[j] for j in mine], [parts[j]["labels"] for j in mine],
+                                           widths[series])
         centres = ([p["centres"][0] for p in parts], [p["centres"][1] for p in parts])
         if not sum(map(len, centres[0])) or not sum(map(len, centres[1])):
             raise ValueError("scenes centre as the real crops do: no text or no ink px to centre on outside the areas "
@@ -1218,19 +1396,22 @@ class SceneBank:
             items.append(idx)
         edges, owner = page_edges(np.concatenate(geoms), lambda xy: _apply(back, xy) - [x0, y0])
         kind, item = np.concatenate(kinds)[owner], np.concatenate(items)[owner]
-        pick, start, u = rng.random(len(edges)), rng.random(len(edges)), rng.random(len(edges))
+        pick, start, u, whole = (rng.random(len(edges)) for _ in range(4))
         fraction = np.zeros(len(edges))
         for k in range(len(LINE_KINDS)):
             here, f = kind == k, m.inked[k]
             if here.any() and len(f):
                 fraction[here] = f[np.minimum((pick[here] * len(f)).astype(np.int64), len(f) - 1)]
         length = np.hypot(*(edges[:, 1] - edges[:, 0]).T)
+        px = run_px(length, fraction, whole)            # the run's px along the edge (its centre line's)
         for k in range(len(LINE_KINDS)):
             here = kind == k
             self.tally[f"edge_px:{series}:{LINE_KINDS[k]}"] += float(length[here].sum())
-            self.tally[f"inked_px:{series}:{LINE_KINDS[k]}"] += float((fraction * length)[here].sum())
-        on = fraction > 0
-        edges = edge_runs(edges[on], fraction[on], start[on])
+            self.tally[f"inked_px:{series}:{LINE_KINDS[k]}"] += float(px[here].sum())
+        on = px > 0
+        # a run of n px spans n - 1 px from its first px's centre to its last's
+        span = np.divide(np.maximum(px - 1, 0), length, out=np.zeros(len(length)), where=length > 0)
+        edges = edge_runs(edges[on], np.minimum(span[on], 1.0), start[on])
         kind, item, u, fraction = kind[on], item[on], u[on], fraction[on]
         thick = np.ones(len(edges), np.int64)
         for k in range(len(LINE_KINDS)):

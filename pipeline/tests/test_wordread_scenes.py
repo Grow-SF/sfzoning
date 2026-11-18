@@ -191,6 +191,14 @@ def _city():
     put("ZZ-9", "zoning code", (x0 + x1) // 2, y1 - 12)
     x0, y0, x1, y1 = _block_px(0, 3)
     put("RC-3", "zoning code", x0 + 14, y1 - 4)
+    # a line on no geometry, across block 112's lot lines' spine (between two of its lot side lines): crossing ink;
+    # and block 132's first lot side line printed, 1 px on its geometry (a district line along a lot line: lot lines
+    # with ink of their own)
+    x0, y0, x1, y1 = _block_px(2, 1)
+    cv2.line(lines, (x0 + 8, y0 + 4), (x0 + 8, y1 - 4), 1, 2)
+    x0, y0, x1, y1 = _block_px(2, 3)
+    side = int(round((x0 + (x1 - x0) / 4) * 16))
+    cv2.line(lines, (side, y0 * 16), (side, y1 * 16), 1, 1, cv2.LINE_8, 4)
     ink |= lines > 0
     frames = (gpd.GeoDataFrame(lots, geometry="geometry", crs="EPSG:2227"),
               gpd.GeoDataFrame(streets, geometry="geometry", crs="EPSG:2227"))
@@ -316,6 +324,11 @@ def test_an_edge_is_inked_over_its_drawn_fraction_as_one_run_along_it():
     assert (t >= 0).all() and (t <= 1).all() and np.allclose(off[:, 0] * along[1] - off[:, 1] * along[0], 0)
     # an edge's fraction: its own ink px over its px, at most 1; no px, no fraction
     assert np.array_equal(scenes.inked_fractions([5, 12, 3], [10, 10, 0]), [0.5, 1.0])
+    # a run's px: whole, with the fraction's expectation (a tiny fraction inks a px rarely, never a dot each time)
+    assert scenes.run_px(np.array([40.0, 40.0]), np.array([0.25, 0.25]), np.array([0.0, 0.99])).tolist() == [10, 10]
+    u = np.random.default_rng(0).random(100000)
+    tiny = scenes.run_px(np.full(len(u), 20.0), np.full(len(u), 0.001), u)
+    assert set(np.unique(tiny)) == {0, 1} and tiny.mean() == pytest.approx(0.02, abs=0.002)
 
 
 def test_a_straight_side_with_a_vertex_at_every_lot_is_one_edge_on_the_page():
@@ -325,17 +338,52 @@ def test_a_straight_side_with_a_vertex_at_every_lot_is_one_edge_on_the_page():
     assert len(edges) == 2 and (owner == 0).all()
 
 
+def test_a_von_mises_of_own_ink_is_told_from_uniform_crossings():
+    from sfzmaps.solver.wordread import scenes
+    rng = np.random.default_rng(4)
+    own = np.abs(rng.vonmises(0.0, 30.0, 7000)) / 2                 # the axis gap of ink along its edge, kappa 30
+    cross = rng.uniform(0, np.pi / 2, 3000)
+    theta = np.round(np.degrees(np.r_[own, cross]) * 10)           # tenths of a degree, as measured
+    u, n = np.unique(theta, return_counts=True)
+    fit = scenes.fit_angles(np.radians(u / 10), n.astype(float))
+    assert fit["share"] == pytest.approx(0.7, abs=0.02) and fit["kappa"] == pytest.approx(30, rel=0.1)
+    p = fit["r"][np.searchsorted(u, np.round(np.degrees(np.r_[own, cross]) * 10))]
+    assert p[:7000].mean() > 0.9 and p[7000:][np.r_[own, cross][7000:] > np.radians(30)].max() < 0.01
+
+
 def test_the_bank_measures_the_city_it_was_given(bank):
     m = bank.measured[SCENE_SERIES]
     # the outlines are printed, edge by edge; no lot line or centreline is, though the street names sit on the
-    # centrelines (their boxes are out of the measure)
-    assert np.median(m.inked[0]) > 0.9 and m.inked[1].mean() < 0.05 and m.inked[2].mean() < 0.05
+    # centrelines (their boxes are out of the measure) and a line crosses one block's lot lines (crossing ink,
+    # across its edge: not the edge's own, by its orientation).  The synthetic outlines are perfectly straight: their
+    # orientation is exactly the edge's along each side, and the von Mises fit puts its own mass there (kappa runs to
+    # float64's limit), so the px within a stroke's width of a corner, turned by the corner, fall to crossing: a fully
+    # printed outline measures about 3/4 inked here (the real maps' ink spreads its angles: kappa 177 on 2000 p05/p08)
+    assert np.median(m.inked[0]) > 0.7 and m.inked[2].mean() < 0.05
+    lot = m.inked[1]
+    assert (lot > 0.5).any()                                          # block 132's printed lot line
+    assert not ((lot > 0.05) & (lot < 0.5)).any()                     # no edge partly inked by the crossing
     t, q = m.thickness[0]
     assert t[np.argmax(q)] in (2, 3)
     # every block number lies in its block, near its centre; codes sit in lots
     assert m.block_rate == pytest.approx(1.0) and np.hypot(*m.block_offsets.T).max() < 2 * FT
     assert len(m.code_offsets) == sum(1 for w in bank.sheets[0].kinds if w == data.KINDS["zoning code"])
     assert m.street_rate > 0 and np.isfinite(m.angle_bandwidth)
+
+
+def test_crossing_ink_counts_by_distance_alone_and_not_by_orientation(city):
+    from sfzmaps.solver.wordread import scenes
+    sd, geo = city["sheet"], city["geometry"]
+    inv = scenes.page_from_world(sd)
+    area = np.ones((sd.height, sd.width), bool)
+    labels = scenes._sheet_labels(sd, geo, city["texts"][SCENE_SERIES, SCENE_SHEET], inv,
+                                  np.ones(len(geo.block_poly), bool), np.ones(len(geo.lines), bool), area)
+    plain = scenes._sheet_lines(sd, geo, inv, area)
+    widths = scenes.line_widths([plain])
+    alone = scenes.measure_map([plain], [labels]).inked[1]
+    angled = scenes.measure_map([scenes._sheet_lines(sd, geo, inv, area, widths)], [labels], widths).inked[1]
+    partly = (alone > 0.05) & (alone < 0.5)                          # the spine edges the crossing line passes
+    assert partly.any() and (angled[partly] < 0.05).all()
 
 
 def _cores_disjoint(rects, shape) -> bool:
