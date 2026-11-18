@@ -122,18 +122,19 @@ class Peak:
 
 
 def save_word_outputs(f: Path, out) -> None:
-    """A page's word outputs (`predict.WordOutputs`) as one .npz: chance (uint8), kind_p, core and tag in float16,
-    geo in float32 (a distance may run past float16's range)."""
+    """A page's word outputs (`predict.WordOutputs`) as one .npz: chance (uint8), geo in float32 (a distance may run
+    past float16's range), every other field the outputs hold (not None) in float16."""
     f.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(f, chance=out.chance, kind_p=out.kind_p.astype(np.float16), core=out.core.astype(np.float16),
-                        geo=out.geo.astype(np.float32), tag=out.tag.astype(np.float16))
+    arrays = {k: v for k, v in out._asdict().items() if v is not None}
+    np.savez_compressed(f, **{k: v if k == "chance" else v.astype(np.float32 if k == "geo" else np.float16)
+                              for k, v in arrays.items()})
 
 
 def load_word_outputs(f: Path) -> predict.WordOutputs:
     """`save_word_outputs`' file back, the floats as float32."""
     with np.load(f) as z:
-        return predict.WordOutputs(z["chance"], z["kind_p"], z["core"].astype(np.float32),
-                                   z["geo"].astype(np.float32), z["tag"].astype(np.float32))
+        return predict.WordOutputs(**{k: z[k] if k == "chance" else z[k].astype(np.float32)
+                                      for k in predict.WordOutputs._fields if k in z.files})
 
 
 def _by_sheet(chances: dict[tuple[str, str], np.ndarray], series: str) -> linegate.ChanceSource:
@@ -193,7 +194,7 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
         raise ValueError("a bank is for a recipe with composites: this one has none")
     if quarter not in paths.QUARTERS:
         raise ValueError(f"quarters are {paths.QUARTERS}, not {quarter!r}")
-    words = recipe.heads == "words"
+    words = recipe.heads in ("words", "words_aff")
     if doubt and not words:
         raise ValueError("doubt weighs the words in the word heads' loss: give a recipe with heads words")
     score = globals()["score"] if score is None else score

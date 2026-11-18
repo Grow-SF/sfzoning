@@ -78,9 +78,13 @@ def run_dir(name: str, quarter: str, seed: int, root: Path | None = None) -> Pat
     return (root or RUNS) / run_name(name, quarter, seed)
 
 
+WORD_HEADS = ("words", "words_aff")      # train.Recipe.heads with the word heads (words_aff: + the affinity)
+
+
 def word_recipe(**changes) -> train.Recipe:
-    """The stage's recipe with the word heads, the per-ink head by the label rule lines-unknown (ruling R2)."""
-    return dataclasses.replace(stage.DEFAULT_RECIPE, labels="lines-unknown", heads="words", **changes)
+    """The stage's recipe with the word heads (`heads` "words" unless changed), the per-ink head by the label rule
+    lines-unknown (ruling R2)."""
+    return dataclasses.replace(stage.DEFAULT_RECIPE, **{"labels": "lines-unknown", "heads": "words", **changes})
 
 
 def held_areas(quarter: str) -> tuple:
@@ -145,7 +149,7 @@ def train_run(name: str, quarter: str, seed: int, doubt: bool = False, recipe: t
               doubt_weights=None) -> Path:
     """`variant.run` of the word recipe (or `recipe`) with the fold's areas held out, into RUNS (or `root`)."""
     recipe = word_recipe() if recipe is None else recipe
-    if recipe.heads != "words":
+    if recipe.heads not in WORD_HEADS:
         raise ValueError(f"a detector run here has the word heads, not heads {recipe.heads!r}")
     return variant.run(name, recipe, quarter, seed, device=device, sheets=sheets, areas=areas, score=score,
                        doubt=doubt, root=root or RUNS, doubt_weights=doubt_weights)
@@ -184,28 +188,6 @@ def fit_area(sd: data.SheetData, quarters, blocks) -> np.ndarray:
     return out
 
 
-def windows(mask: np.ndarray) -> list[tuple[int, int, int, int]]:
-    """Rectangles (y0, x0, h, w) that cover the px of `mask` exactly, each wholly inside it: the page cut in four,
-    and each part again, until a part is wholly in or wholly out (a summed-area table counts its px)."""
-    h, w = mask.shape
-    sat = np.zeros((h + 1, w + 1), np.int64)
-    sat[1:, 1:] = mask.astype(np.int64).cumsum(0).cumsum(1)
-    out, todo = [], [(0, 0, h, w)]
-    while todo:
-        y0, x0, y1, x1 = todo.pop()
-        n = sat[y1, x1] - sat[y0, x1] - sat[y1, x0] + sat[y0, x0]
-        if n == 0:
-            continue
-        if n == (y1 - y0) * (x1 - x0):
-            out.append((y0, x0, y1 - y0, x1 - x0))
-            continue
-        ym, xm = (y0 + y1) // 2, (x0 + x1) // 2
-        for a, b, c, d in ((y0, x0, ym, xm), (y0, xm, ym, x1), (ym, x0, y1, xm), (ym, xm, y1, x1)):
-            if c > a and d > b:
-                todo.append((a, b, c, d))
-    return sorted(out)
-
-
 def word_ids(sd: data.SheetData) -> np.ndarray:
     """1 + the Terra word whose rectangle holds each px of the page (later over earlier), 0 on none: the word
     targets' tag_id over the whole page (the cores are the words' own rectangles, `shrink.prepare`)."""
@@ -218,10 +200,11 @@ def word_ids(sd: data.SheetData) -> np.ndarray:
 _SHARED: dict = {}      # read once before the workers fork
 
 
-def spread_pages(sources, sheets, blocks, sheet_fn=load_sheet, outputs_fn=outputs):
-    """`words.measure_spreads`' pages: of each source (run folder, quarter numbers) and sheet, the windows of the
-    page the fit may read (`fit_area`, `windows`) with the word heads' geo and tag there, Terra's word ids and its
-    rectangles (moved into the window)."""
+def spread_pages(sources, sheets, blocks, sheet_fn=load_sheet, outputs_fn=outputs, tally: dict | None = None):
+    """`words.measure_spreads`' pages: of each source (run folder, quarter numbers) and sheet, the whole page's
+    word heads' geo, tag and core logit, Terra's word ids and rectangles, and the px the fit may read as the page's mask
+    (`fit_area`: a word with a px outside it is left out whole, the background is the mask's px in no word).
+    `tally` collects, per source and sheet, the area's px and the Terra words wholly inside it and across its edge."""
     for run, quarters in sources:
         for name in sheets:
             sd = sheet_fn(name)
@@ -231,10 +214,13 @@ def spread_pages(sources, sheets, blocks, sheet_fn=load_sheet, outputs_fn=output
             o = outputs_fn(run, name)
             wid = word_ids(sd)
             rects = sd.words.astype(np.float64)
-            for y0, x0, h, w in windows(area):
-                win = (slice(y0, y0 + h), slice(x0, x0 + w))
-                yield {"geo": o.geo[(slice(None), *win)], "tag": o.tag[(slice(None), *win)], "word_id": wid[win],
-                       "words": rects - [x0, y0]}
+            if tally is not None:
+                inside, outside = np.unique(wid[area & (wid > 0)]), np.unique(wid[~area & (wid > 0)])
+                across = np.intersect1d(inside, outside)
+                tally[f"{Path(run).name}/{name}"] = {"area_px": int(area.sum()),
+                                                     "words": int(len(inside) - len(across)),
+                                                     "across_edge": int(len(across))}
+            yield {"geo": o.geo, "tag": o.tag, "core": o.core, "word_id": wid, "words": rects, "mask": area}
 
 
 def masked_inputs(o, area: np.ndarray, wid: np.ndarray | None = None):
@@ -303,18 +289,19 @@ def _pool_map(fn, jobs, workers):
 
 
 def fit(out: Path, sources, sheets=paths.SHEETS, workers: int = WORKERS, blocks="answered",
-        sheet_fn=load_sheet, outputs_fn=outputs) -> dict:
+        sheet_fn=load_sheet, outputs_fn=outputs, rounds: int = 2) -> dict:
     """The word model's spreads and prior (see the module) from `sources` ((run folder, quarter numbers) each: the
     run's predictions on those quarters of `sheets`), the answered blocks (`blocks`, a `data.GridArea`; "answered":
-    `reader_stage`'s) never read.  Writes `out`/{spreads.json, prior.json, decisions.parquet}; returns {"spreads",
-    "prior"}."""
+    `reader_stage`'s) never read.  `rounds` 1: the first prior alone (a draft's; the search's decisions not taken).
+    Writes `out`/{spreads.json, prior.json, decisions.parquet}; returns {"spreads", "prior"}."""
     import pandas as pd
     from sfzmaps.solver.wordread import words
     if isinstance(blocks, str):
         blocks = reader_stage.load_block_area(reader_stage.held_blocks())
     sources = [(Path(r), tuple(int(q) for q in qs)) for r, qs in sources]
     t0 = time.perf_counter()
-    spreads = words.measure_spreads(spread_pages(sources, sheets, blocks, sheet_fn, outputs_fn))
+    tally: dict = {}
+    spreads = words.measure_spreads(spread_pages(sources, sheets, blocks, sheet_fn, outputs_fn, tally))
     measured = time.perf_counter() - t0
     log.info("spreads %s (%.0f s)", spreads, measured)
     _SHARED.update(blocks=blocks, sheet_fn=sheet_fn, outputs_fn=outputs_fn)
@@ -324,9 +311,12 @@ def fit(out: Path, sources, sheets=paths.SHEETS, workers: int = WORKERS, blocks=
     first_prior = words.fit_word_prior(first["gain"], first["label"])
     log.info("first prior %s from %d word decisions (%.0f s)", first_prior, len(first), time.perf_counter() - t0)
     t0 = time.perf_counter()
-    every = pd.concat(_pool_map(_decisions_job, [(*j, spreads, first_prior) for j in jobs], workers),
-                      ignore_index=True)
-    prior = words.fit_word_prior(every["gain"], every["label"])
+    if rounds == 1:
+        every, prior = first, first_prior
+    else:
+        every = pd.concat(_pool_map(_decisions_job, [(*j, spreads, first_prior) for j in jobs], workers),
+                          ignore_index=True)
+        prior = words.fit_word_prior(every["gain"], every["label"])
     log.info("prior %s from %d decisions (%.0f s)", prior, len(every), time.perf_counter() - t0)
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
@@ -335,7 +325,10 @@ def fit(out: Path, sources, sheets=paths.SHEETS, workers: int = WORKERS, blocks=
         "prior": dataclasses.asdict(prior), "first_prior": dataclasses.asdict(first_prior),
         "sources": [[str(r), [paths.QUARTERS[q] for q in qs]] for r, qs in sources],
         "decisions": {k: int(v) for k, v in every["kind"].value_counts().items()},
-        "first_decisions": len(first), "seconds": {"spreads": round(measured, 1)}}, indent=1) + "\n")
+        "first_decisions": len(first), "seconds": {"spreads": round(measured, 1)},
+        "spread_words": {"whole_in_area": sum(c["words"] for c in tally.values()),
+                         "across_edge": sum(c["across_edge"] for c in tally.values()), "by_page": tally}},
+        indent=1) + "\n")
     pd.concat([first.assign(round=1), every.assign(round=2)], ignore_index=True).to_parquet(
         out / "decisions.parquet", index=False)
     return {"spreads": spreads, "prior": prior}
@@ -344,8 +337,9 @@ def fit(out: Path, sources, sheets=paths.SHEETS, workers: int = WORKERS, blocks=
 def load_fit(folder: Path):
     """`fit`'s spreads and prior back from its folder."""
     from sfzmaps.solver.wordread import words
-    sp = json.loads((Path(folder) / "spreads.json").read_text())
-    sp = {k: tuple(v) if isinstance(v, list) else v for k, v in sp.items()}      # JSON's lists: the tuples back
+    def tuples(v):                                         # JSON's lists, nested too: the tuples back
+        return tuple(tuples(x) for x in v) if isinstance(v, list) else v
+    sp = {k: tuples(v) for k, v in json.loads((Path(folder) / "spreads.json").read_text()).items()}
     return words.Spreads(**sp), words.WordPrior(**json.loads((Path(folder) / "prior.json").read_text())["prior"])
 
 
@@ -496,6 +490,91 @@ def measure(run: Path, quarter: str, reads_dir: Path | None = None, terra=None) 
     return {"headline": head, "box_numbers": bn, "read_numbers": rn}
 
 
+def vs_today(run: Path, quarter: str | None, reads_dir: Path | None = None, terra=None, sheets=None) -> dict:
+    """The run's boxes against today's (data/solver/boxes, read by the same current fold readers, text-read) in the
+    quarter, over the same answered labels: both headlines, the paired difference (run minus today) with its 95%
+    interval resampling whole blocks (`measures.paired_labels`), and both box numbers against Terra's words (on
+    `sheets`, every 2000 sheet when None: give the sheets the run's boxes cover).  `quarter` None: every quarter (the
+    headline over every answered label with a code, by quarter too).  Writes `run`/vs_today.json."""
+    from sfzmaps.solver import wordboxes
+    from sfzmaps.solver.textread import store
+    from sfzmaps.solver.wordread import measures
+    qs = list(range(len(paths.QUARTERS))) if quarter is None else [paths.QUARTERS.index(quarter)]
+    reads_dir = Path(reads_dir or Path(run) / "read")
+    sheets = list(sheets or paths.SHEETS)
+    answers = measures.answers_from_store(reads_dir)
+    answers = answers[answers["quarter"].isin(qs) & answers["sheet"].isin(sheets)].reset_index(drop=True)
+    today_answers = measures.answers_from_store(store.READ_DIR)
+    today_answers = today_answers[today_answers["quarter"].isin(qs)
+                                  & today_answers["sheet"].isin(sheets)].reset_index(drop=True)
+    if not answers[["sheet", "point_x", "point_y", "truth"]].equals(today_answers[["sheet", "point_x", "point_y",
+                                                                                     "truth"]]):
+        raise ValueError("the run's answered labels are not today's, in the same order")
+    boxes = run_boxes(run)
+    boxes = boxes[boxes["sheet"].isin(sheets)]
+    reads = measures.reads_from_store(reads_dir)
+    today = wordboxes.load_boxes().reset_index(drop=True)
+    today["row"] = np.arange(len(today))
+    today = today.set_index("row", drop=False)
+    today = today[today["sheet"].isin(sheets)]           # every quarter's: the labels' holding box as today
+    today_reads = measures.reads_from_store(store.READ_DIR)
+    mine = measures.label_right(boxes, reads, answers)
+    theirs = measures.label_right(today, today_reads, answers)
+    terra = measures.terra_words(sheets) if terra is None else terra
+    terra = terra[terra["quarter"].isin(qs) & terra["sheet"].isin(sheets)].reset_index(drop=True)
+    out = {"quarter": quarter or "all", "sheets": sheets, "labels": int(len(mine)),
+           "headline": measures.headline(boxes, reads, answers, paths.QUARTERS),
+           "today_headline": measures.headline(today, today_reads, answers, paths.QUARTERS),
+           "paired_run_minus_today": measures.paired_labels(mine, theirs),
+           "boxes": measures.box_numbers(boxes, terra, reads)[0.5],
+           "today_boxes": measures.box_numbers(today[today["quarter"].isin(qs)], terra, today_reads)[0.5]}
+    if quarter is not None:
+        for key in ("boxes", "today_boxes"):
+            out[key].pop("by_quarter", None)
+    else:
+        out["paired_by_quarter"] = {qn: measures.paired_labels(mine[mine["quarter"] == k].reset_index(drop=True),
+                                                               theirs[theirs["quarter"] == k].reset_index(drop=True))
+                                    for k, qn in enumerate(paths.QUARTERS) if (mine["quarter"] == k).any()}
+    (Path(run) / "vs_today.json").write_text(json.dumps(out, indent=1, default=float) + "\n")
+    return out
+
+
+def vs_run(run: Path, other: Path, quarter: str | None, terra=None, sheets=None) -> dict:
+    """The run's boxes against another run's (each read by its own read store) over the same answered labels in the
+    quarter (None: every quarter): both headlines, the paired difference (run minus other, `measures.paired_labels`,
+    by quarter too with every quarter) and both box numbers against Terra's words.  Writes `run`/vs_<other>.json."""
+    from sfzmaps.solver.wordread import measures
+    qs = list(range(len(paths.QUARTERS))) if quarter is None else [paths.QUARTERS.index(quarter)]
+    sheets = list(sheets or paths.SHEETS)
+    sides = {}
+    for key, r in (("run", Path(run)), ("other", Path(other))):
+        ans = measures.answers_from_store(r / "read")
+        ans = ans[ans["quarter"].isin(qs) & ans["sheet"].isin(sheets)].reset_index(drop=True)
+        boxes = run_boxes(r)
+        sides[key] = (ans, boxes[boxes["sheet"].isin(sheets)], measures.reads_from_store(r / "read"))
+    cols = ["sheet", "point_x", "point_y", "truth"]
+    if not sides["run"][0][cols].equals(sides["other"][0][cols]):
+        raise ValueError(f"{Path(run).name} and {Path(other).name}: not the same answered labels in the same order")
+    answers = sides["run"][0]
+    right = {k: measures.label_right(b, rd, answers) for k, (_, b, rd) in sides.items()}
+    terra = measures.terra_words(sheets) if terra is None else terra
+    terra = terra[terra["quarter"].isin(qs) & terra["sheet"].isin(sheets)].reset_index(drop=True)
+    out = {"quarter": quarter or "all", "run": Path(run).name, "other": Path(other).name, "labels": len(answers),
+           "headline": measures.headline(sides["run"][1], sides["run"][2], answers, paths.QUARTERS),
+           "other_headline": measures.headline(sides["other"][1], sides["other"][2], answers, paths.QUARTERS),
+           "paired_run_minus_other": measures.paired_labels(right["run"], right["other"]),
+           "boxes": measures.box_numbers(sides["run"][1], terra, sides["run"][2])[0.5],
+           "other_boxes": measures.box_numbers(sides["other"][1][sides["other"][1]["quarter"].isin(qs)], terra,
+                                               sides["other"][2])[0.5]}
+    if quarter is None:
+        mine, theirs = right["run"], right["other"]
+        out["paired_by_quarter"] = {qn: measures.paired_labels(mine[mine["quarter"] == k].reset_index(drop=True),
+                                                               theirs[theirs["quarter"] == k].reset_index(drop=True))
+                                    for k, qn in enumerate(paths.QUARTERS) if (mine["quarter"] == k).any()}
+    (Path(run) / f"vs_{Path(other).name}.json").write_text(json.dumps(out, indent=1, default=float) + "\n")
+    return out
+
+
 # --- the review page -------------------------------------------------------------------------------------------------
 
 WORD_REASONS = {
@@ -608,6 +687,378 @@ def build_page(run: Path, name: str, quarter: str, fit_note: str, sheet: str | N
     return out
 
 
+# --- the draft page: every quarter of one sheet from its own held-out detector --------------------------------------
+
+DRAFT = ROOT / "draft"
+DRAFT_FIT_PAGES = {"se": "2000-digital-zoning-p10", "nw": "2000-digital-zoning-p04", "sw": "2000-digital-zoning-p13"}
+DRAFT_NOTE = ("DRAFT, not final: the word heads' centre votes are uninformative (each px votes for about itself); "
+              "the spreads and the prior are provisional (measured and fitted on one page per source fold, the SE, "
+              "NW and SW detectors each on its own held-out quarter, never NE or an answered block; the first prior "
+              "only, from the proposals); Task 6's vote calibration (round 5) is pending")
+
+
+def draft(sheet: str = "2000-digital-zoning-p07", name: str = "a", seed: int = 0, workers: int = WORKERS,
+          fit_dir: Path | None = None, tag: str = "", note: str = DRAFT_NOTE) -> Path:
+    """A draft of the review page for `sheet` (see DRAFT_NOTE): the spreads and the first prior on DRAFT_FIT_PAGES
+    (or `fit_dir`'s), every quarter's words formed from its own held-out detector (the quarters in parallel), placed,
+    read by the current fold readers, and the page written to review/draft-boxes/ (with `tag`, draft-<tag>/ and
+    review/draft-boxes-<tag>/); `note` says on the page what is not final."""
+    from sfzmaps.solver import lots, page
+    out = DRAFT if not tag else ROOT / f"draft-{tag}"
+    if fit_dir is None:
+        fit_dir = out / "fit"
+        if not (fit_dir / "prior.json").is_file():
+            sources = [(run_dir(name, q, seed), (paths.QUARTERS.index(q),)) for q in DRAFT_FIT_PAGES]
+            fit(fit_dir, sources, sheets=tuple(DRAFT_FIT_PAGES.values()), workers=min(workers, 3), rounds=1)
+    spreads, prior = load_fit(fit_dir)
+    sd = load_sheet(sheet)
+    present = np.unique(reader_stage.page_quarters(sd))
+    runs_ = {int(k): run_dir(name, paths.QUARTERS[k], seed) for k in present}
+    _SHARED["lots"], _SHARED["mapped"] = lots.load_lots(), page.load_sheets() > 0
+    _SHARED.update(sheet_fn=load_sheet, outputs_fn=outputs, placer=wordboxes_placer)
+    t0 = time.perf_counter()
+    got = _pool_map(_words_job, [(runs_[k], sheet, k, spreads, prior) for k in runs_], workers)
+    from sfzmaps.solver import wordboxes
+    from sfzmaps.solver.wordread import words
+    import pandas as pd
+    tables = [t for _, t, _ in got if len(t)]
+    boxes = pd.concat(tables, ignore_index=True) if tables else words._table([])
+    boxes = boxes.sort_values(["quarter", "i"], kind="stable").reset_index(drop=True)[
+        [*wordboxes.COLUMNS, *words.EXTRA_COLUMNS]]
+    (out / "boxes").mkdir(parents=True, exist_ok=True)
+    boxes.to_parquet(out / "boxes" / "boxes.parquet", index=False)
+    (out / "boxes" / "summary.json").write_text(json.dumps({
+        "sheet": sheet, "boxes": len(boxes), "by_quarter": {paths.QUARTERS[k]: c for k, (_, _, c) in
+                                                             zip(runs_, got)},
+        "detectors": {paths.QUARTERS[k]: r.name for k, r in runs_.items()}, "fit": str(fit_dir),
+        "seconds": round(time.perf_counter() - t0, 1)}, indent=1) + "\n")
+    log.info("draft words: %d boxes (%.0f s)", len(boxes), time.perf_counter() - t0)
+    read(out, min(workers, 4))
+    return build_draft_page(out, sheet, runs_, "draft-boxes" + (f"-{tag}" if tag else ""), note)
+
+
+def build_draft_page(folder: Path, sheet: str, runs_: dict, page_name: str = "draft-boxes",
+                     note: str = DRAFT_NOTE) -> Path:
+    """The draft page (see `draft`): every quarter's boxes from its own detector, red = ink whose word-core chance
+    (from the px's quarter's detector) is 0.5 or more, the reasons read on the boxes' px (`review.box_components`),
+    "before" = today's numbers on the whole sheet (review/baseline)."""
+    from sfzmaps.solver import grid
+    from sfzmaps.solver.textread import store
+    from sfzmaps.solver.wordread import measures, review
+    boxes = run_boxes(folder)
+    boxes = boxes[boxes["sheet"] == sheet]
+    terra = review.terra_on_sheet(sheet)
+    sd = load_sheet(sheet)
+    quarters = reader_stage.page_quarters(sd)
+    core = np.zeros(quarters.shape, np.uint8)
+    for k, run in runs_.items():
+        mine = quarters == k
+        o = outputs(run, sheet)
+        core[mine] = np.round(255 / (1 + np.exp(-o.core[mine].astype(np.float64)))).astype(np.uint8)
+        del o
+    ink = data.load_page(sheet) < grid.INK_BELOW
+    comps = review.box_components(boxes, core, ink)
+    on_map = review.on_the_map(sheet, terra[measures.C_COLS].to_numpy(float).reshape(-1, 4, 2).mean(1))
+    missed = review.missed_words(boxes, terra, review.MATCH_IOU)
+    terra_reads = review.terra_box_reads(sheet, terra, missed, store.TRAIN_DIR)
+    answers = measures.answers_from_store(folder / "read")
+    answers = answers[answers["sheet"] == sheet].reset_index(drop=True)
+    root = review.experiments_dir()
+    before = json.loads((root / "baseline" / "numbers.json").read_text())
+    lines = [note + ".",
+             "Red ink and our boxes: each quarter from its own held-out detector with the sign-free word heads (arm "
+             "a, seed 0: " + ", ".join(f"{paths.QUARTERS[k].upper()} {r.name}" for k, r in runs_.items())
+             + "), trained with that quarter and the answered blocks held out.  Red: ink whose word-core chance is 0.5 "
+             "or more.",
+             "Words: the vote mixture of the word heads (wordread.words.core_words), placed as today's boxes are.",
+             "Readings: the current fold readers (data/solver/text-train) and their 0/180 classifiers; the missed "
+             "words read at Terra's box by the same readers.",
+             "Numbers 'vs last run' are against today's boxes and reads on the whole sheet (review/baseline)."]
+    d = review.page_data(sheet, boxes, review.reads_for_page(folder / "read"), terra, core, before, ink=ink,
+                         levels={qn: review.TEXT_CHANCE for qn in paths.QUARTERS}, on_map=on_map,
+                         terra_reads=terra_reads, answers=answers, forms=review.load_forms(), models=lines,
+                         run="DRAFT boxes from the word heads (not final; before: today)", comps=comps,
+                         reason_text=WORD_REASONS)
+    out = root / page_name
+    page_path = review.render(d, out / "review.html")
+    text = page_path.read_text(encoding="utf-8")
+    banner = ('<p class="sub" style="color:var(--text);font-weight:600">' + review._e(note) + ".</p>")
+    page_path.write_text(text.replace("<div class=\"wrap\">", "<div class=\"wrap\">" + banner, 1), encoding="utf-8")
+    (out / "numbers.json").write_text(json.dumps(d["numbers"], indent=1) + "\n")
+    (out / "missed.json").write_text(json.dumps(d["missed"], indent=1, ensure_ascii=False) + "\n")
+    b = d["numbers"]["boxes"]["0.5"]
+    print(json.dumps({"page": str(page_path), "mb": round(page_path.stat().st_size / 1e6, 2),
+                      "boxes": {k: b[k] for k in ("terra", "ours", "matched", "missed", "missed_reasons",
+                                                  "ours_unmatched_text", "ours_unmatched_none")},
+                      "headline": d["numbers"].get("headline", {}).get("share")}, indent=1))
+    return page_path
+
+
+# --- crude-map: words as the core head's even-odds components (a lower-bound check; no tags, no votes) -------------
+
+CRUDE_NOTE = ("crude-map: each word is a connected component (8 px around) of the px the core head gives even odds "
+              "or better (P(core) > 1/2, the MAP decision, no picked level); its box the smallest rectangle of the "
+              "component's px along the core-weighted mean of the learned axis; no tags and no votes, so touching "
+              "words merge: a lower-bound check of whether the new detector's boxes can move the headline")
+
+
+# --- crude-tags: crude-map's components split by their tags --------------------------------------------------------
+
+TAGS_NOTE = ("crude-tags: crude-map's components (P(core) > 1/2, 8 px around) each split by the word tags: mean-shift "
+             "in tag space with a Gaussian kernel whose sd is the within-word tag spread measured for that detector on "
+             "its own training quarters' Terra words (answered blocks out); each cluster's 8-connected pieces one "
+             "word, "
+             "its box the smallest rectangle along its px' core-weighted mean axis; no votes")
+MS_STEPS = 500          # numerical only: mean-shift stops after this many steps ...
+MS_TOL = 1e-4           # ... or once no point moves by this share of the bandwidth
+MS_SAME = 1e-2          # numerical only: points whose modes lie within this share of the bandwidth share a mode (a
+#                         point stops within MS_TOL of its mode; two modes of a Gaussian kernel density lie at least
+#                         about a bandwidth apart, so any share between the two gives the same clusters)
+BIN = 0.5               # numerical only: tags are pooled in cells of this share of the bandwidth (their weighted means
+#                         the data), so the kernel's sums are over cells, not px
+
+
+def tag_spread(run, quarters, blocks, sheets=paths.SHEETS, sheet_fn=load_sheet, outputs_fn=outputs) -> dict:
+    """The within-word tag spread of a detector on `quarters` (its training quarters) outside the answered blocks: the
+    root mean square, per channel, of each Terra word's core px' tags about the word's core-weighted mean tag
+    (weighted by core chance), over every word with a px in the area."""
+    num = den = 0.0
+    words_n = 0
+    for name in sheets:
+        sd = sheet_fn(name)
+        area = fit_area(sd, quarters, blocks)
+        wid = word_ids(sd)
+        on = area & (wid > 0)
+        if not on.any():
+            continue
+        o = outputs_fn(run, name)
+        ys, xs = np.nonzero(on)
+        j = wid[ys, xs]
+        order = np.argsort(j, kind="stable")
+        j, ys, xs = j[order], ys[order], xs[order]
+        start = np.flatnonzero(np.r_[True, j[1:] != j[:-1]])
+        w = 1 / (1 + np.exp(-o.core[ys, xs].astype(np.float64)))
+        t = o.tag[:, ys, xs].astype(np.float64)
+        sw = np.add.reduceat(w, start)
+        cnt = np.diff(np.r_[start, len(j)])
+        mean = np.stack([np.add.reduceat(w * t[c], start) / sw for c in range(len(t))])
+        r = t - np.repeat(mean, cnt, axis=1)
+        num += float((w * (r ** 2).sum(0)).sum())
+        den += float(w.sum()) * len(t)
+        words_n += len(start)
+    return {"sigma": float(np.sqrt(num / den)), "words": words_n}
+
+
+def mean_shift(points: np.ndarray, weights: np.ndarray, sigma: float) -> np.ndarray:
+    """Cluster labels (0, 1, ...) of `points` (n, k) by Gaussian mean-shift of bandwidth `sigma` over the weighted
+    points: every point climbs to its mode; points whose modes coincide (MS_SAME) share a label."""
+    x = points.copy()
+    for _ in range(MS_STEPS):
+        d2 = ((x[:, None, :] - points[None, :, :]) ** 2).sum(-1)
+        kern = weights[None, :] * np.exp(-d2 / (2 * sigma ** 2))
+        new = kern @ points / kern.sum(1, keepdims=True)
+        moved = float(np.abs(new - x).max())
+        x = new
+        if moved < MS_TOL * sigma:
+            break
+    labels = np.full(len(x), -1)
+    k = 0
+    for i in range(len(x)):
+        if labels[i] >= 0:
+            continue
+        same = (np.abs(x - x[i]).max(1) < MS_SAME * sigma) & (labels < 0)
+        labels[same] = k
+        k += 1
+    return labels
+
+
+def split_by_tags(lab: np.ndarray, tag: np.ndarray, w_core: np.ndarray, sigma: float) -> np.ndarray:
+    """crude-tags' words: each component of `lab` (int, 0 off them) split by mean-shift of its px' tags (pooled in
+    cells of BIN bandwidths, weighted by core chance), each cluster's 8-connected pieces one word; a new label image
+    (0 off the words)."""
+    import cv2
+    out = np.zeros_like(lab)
+    ys, xs = np.nonzero(lab)
+    comp = lab[ys, xs]
+    order = np.argsort(comp, kind="stable")
+    ys, xs, comp = ys[order], xs[order], comp[order]
+    start = np.r_[np.flatnonzero(np.r_[True, comp[1:] != comp[:-1]]), len(comp)]
+    nxt = 1
+    for a, b in zip(start[:-1], start[1:]):
+        yy, xx = ys[a:b], xs[a:b]
+        t = tag[:, yy, xx].T.astype(np.float64)
+        w = w_core[yy, xx].astype(np.float64)
+        cell = np.floor(t / (BIN * sigma)).astype(np.int64)
+        keys, inv = np.unique(cell, axis=0, return_inverse=True)
+        inv = inv.ravel()
+        cw = np.bincount(inv, w, len(keys))
+        cm = np.stack([np.bincount(inv, w * t[:, c], len(keys)) for c in range(t.shape[1])], 1) / cw[:, None]
+        cl = mean_shift(cm, cw, sigma)[inv] if len(keys) > 1 else np.zeros(len(inv), int)
+        y0, x0 = yy.min(), xx.min()
+        for c in np.unique(cl):
+            sel = cl == c
+            m = np.zeros((yy.max() - y0 + 1, xx.max() - x0 + 1), np.uint8)
+            m[yy[sel] - y0, xx[sel] - x0] = 1
+            n, pieces = cv2.connectedComponents(m, connectivity=8)
+            for p in range(1, n):
+                py, px = np.nonzero(pieces == p)
+                out[py + y0, px + x0] = nxt
+                nxt += 1
+    return out
+
+
+# --- crude-aff: the core px joined by the learned same-word affinity ------------------------------------------------
+
+AFF_NOTE = ("crude-aff: the px the core head gives even odds or better (P(core) > 1/2) joined to their right and "
+            "lower neighbours where the affinity head gives even odds or better that the two are of one word "
+            "(P(same) > 1/2, the even-odds call); each word a connected component of that graph (4 px around: the "
+            "head has no diagonal pairs), its box the smallest rectangle along its px' core-weighted mean axis; no "
+            "tags and no votes")
+AFF_FIELD = "aff"       # predict.WordOutputs' field of the affinity logits (2, h, w): to its right, to the px below
+
+
+def aff_labels(on: np.ndarray, right: np.ndarray, down: np.ndarray) -> np.ndarray:
+    """crude-aff's words: the connected components of the graph whose nodes are the `on` px and whose edges join a
+    px to its right neighbour where `right` (logit) > 0 and to the px below where `down` > 0, both ends on; a label
+    image (0 off them, 1 ... in the order of each component's first px, row by row)."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.csgraph import connected_components
+    h, w = on.shape
+    idx = np.full((h, w), -1, np.int64)
+    n = int(on.sum())
+    idx[on] = np.arange(n)
+    er = on[:, :-1] & on[:, 1:] & (right[:, :-1] > 0)
+    ed = on[:-1] & on[1:] & (down[:-1] > 0)
+    a = np.r_[idx[:, :-1][er], idx[:-1][ed]]
+    b = np.r_[idx[:, 1:][er], idx[1:][ed]]
+    _, comp = connected_components(coo_matrix((np.ones(len(a), np.int8), (a, b)), shape=(n, n)), directed=False)
+    first = np.full(comp.max() + 1 if n else 0, n, np.int64)
+    np.minimum.at(first, comp, np.arange(n))
+    rank = np.empty(len(first), np.int64)
+    rank[np.argsort(first, kind="stable")] = np.arange(len(first))
+    out = np.zeros((h, w), np.int32)
+    out[on] = rank[comp] + 1
+    return out
+
+
+def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outputs, placer=wordboxes_placer,
+                    sigma: float | None = None, aff: bool = False):
+    """One page's crude-map words in quarter `q` (CRUDE_NOTE; with `sigma`, the tag bandwidth, crude-tags'
+    (TAGS_NOTE); with `aff`, crude-aff's (AFF_NOTE)), placed as `wordboxes` places its boxes; the boxes whose map point
+    is in the quarter kept.  The table (wordboxes.COLUMNS) and its counts."""
+    import cv2
+    import pandas as pd
+    from sfzmaps.solver import wordboxes
+    from sfzmaps.solver.wordread import words
+    sd = sheet_fn(name)
+    inq = reader_stage.page_quarters(sd) == q
+    o = outputs_fn(run, name)
+    on = inq & (o.core > 0)                      # sigmoid(core) > 1/2
+    if not on.any():
+        return pd.DataFrame(columns=wordboxes.COLUMNS), {"formed": 0, "off_map": 0, "other_quarter": 0, "kept": 0}
+    ink = data.page_ink(sd)
+    if aff:
+        same = getattr(o, AFF_FIELD)
+        lab = aff_labels(on, same[0], same[1])
+    else:
+        _, lab = cv2.connectedComponents(on.astype(np.uint8), connectivity=8)
+    if sigma is not None:
+        lab = split_by_tags(lab, o.tag, 1 / (1 + np.exp(-o.core.astype(np.float64))), sigma)
+    ys, xs = np.nonzero(lab)
+    comp = lab[ys, xs]
+    order = np.argsort(comp, kind="stable")
+    ys, xs, comp = ys[order], xs[order], comp[order]
+    start = np.flatnonzero(np.r_[True, comp[1:] != comp[:-1]])
+    count = np.diff(np.r_[start, len(comp)])
+    w = 1 / (1 + np.exp(-o.core[ys, xs].astype(np.float64)))
+    two = np.radians(2 * o.geo[4, ys, xs].astype(np.float64))
+    theta = 0.5 * np.arctan2(np.add.reduceat(w * np.sin(two), start), np.add.reduceat(w * np.cos(two), start))
+    theta = np.mod(theta, np.pi)
+    th = np.repeat(theta, count)
+    px, py = xs + 0.5, ys + 0.5                  # px centres, as wordboxes.group measures its boxes
+    a = px * np.cos(th) - py * np.sin(th)        # along u = (cos, -sin), the axis (y down)
+    b = px * np.sin(th) + py * np.cos(th)        # along f = (sin, cos), towards the letters' feet
+    a0, a1 = np.minimum.reduceat(a, start) - 0.5, np.maximum.reduceat(a, start) + 0.5
+    b0, b1 = np.minimum.reduceat(b, start) - 0.5, np.maximum.reduceat(b, start) + 0.5
+    mean_w = np.add.reduceat(w, start) / count
+    rows = []
+    for k in range(len(start)):
+        u = np.array([np.cos(theta[k]), -np.sin(theta[k])])
+        f = np.array([np.sin(theta[k]), np.cos(theta[k])])
+        g = np.array([u * a0[k] + f * b0[k], u * a1[k] + f * b0[k], u * a1[k] + f * b1[k], u * a0[k] + f * b1[k]])
+        t, ink_px, kinds = words._inked(g, ink, o.kind_p)
+        centre = g.mean(0)
+        _, _, _, (ta0, ta1, tb0, tb1) = words._frame(t)
+        rows.append({"sheet": name, "i": k, "level": 0.5, "quarter": -1, "page_x": float(centre[0]),
+                     "page_y": float(centre[1]), "axis": float(np.degrees(theta[k])), "length": float(a1[k] - a0[k]),
+                     "height": float(b1[k] - b0[k]), "t_length": float(ta1 - ta0), "t_height": float(tb1 - tb0),
+                     "mean_chance": float(mean_w[k]), "ink_px": int(ink_px),
+                     **{f"p_{kn}": float(kinds[c]) for c, kn in enumerate(wordboxes.KIND_NAMES)},
+                     "x": np.nan, "y": np.nan, "lab_lot": -1, "street": False,
+                     **dict(zip(wordboxes.CORNER_COLS, [*g.reshape(8).tolist(), *t.reshape(8).tolist()]))})
+    t = pd.DataFrame(rows, columns=wordboxes.COLUMNS)
+    placed = placer(name, t[["page_x", "page_y"]].to_numpy(float))
+    kept = t.iloc[np.asarray(placed["i"], int)].copy()
+    for c in ("quarter", "x", "y", "lab_lot", "street"):
+        kept[c] = np.asarray(placed[c])
+    kept = kept.astype({"i": "int32", "quarter": "int8", "lab_lot": "int32", "street": bool, "x": "float64",
+                        "y": "float64", "ink_px": "int64"})
+    mine = kept[kept["quarter"] == q]
+    return mine, {"formed": len(t), "off_map": len(t) - len(kept), "other_quarter": len(kept) - len(mine),
+                  "kept": len(mine)}
+
+
+def _crude_job(args):
+    import cv2
+    cv2.setNumThreads(1)
+    run, name, q, sigma, aff = args
+    t0 = time.perf_counter()
+    t, counts = crude_map_words(run, name, q, _SHARED["sheet_fn"], _SHARED["outputs_fn"], _SHARED["placer"],
+                                sigma, aff)
+    counts["seconds"] = round(time.perf_counter() - t0, 1)
+    log.info("crude %s %s: %s", Path(run).name, name, counts)
+    return name, t, counts
+
+
+def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WORKERS, tags: bool = False,
+          aff: bool = False, against: str | None = None) -> dict:
+    """The crude-map chain (CRUDE_NOTE; crude-tags' with `tags`, crude-aff's with `aff`) on the quarter's every sheet
+    from `name`'s held-out detector: words, placed, read by the current fold readers, and against today's
+    (`vs_today`); with `against` (a run folder's name) against that run's boxes too (`vs_run`).  Writes
+    runs/crude-<map|tags|aff>-<quarter>-s<seed>/."""
+    if tags and aff:
+        raise ValueError("crude: tags or aff, not both")
+    import pandas as pd
+    from sfzmaps.solver import lots, page, wordboxes
+    quarters = paths.QUARTERS if quarter == "all" else (quarter,)
+    srcs = {paths.QUARTERS.index(qn): run_dir(name, qn, seed) for qn in quarters}
+    out = RUNS / f"crude-{'tags' if tags else 'aff' if aff else 'map'}-{quarter}-s{seed}"
+    sigmas = {}
+    if tags:
+        blocks = reader_stage.load_block_area(reader_stage.held_blocks())
+        for q, src in srcs.items():
+            sigmas[q] = tag_spread(src, tuple(k for k in range(len(paths.QUARTERS)) if k != q), blocks)
+            log.info("%s: within-word tag spread %s", src.name, sigmas[q])
+    _SHARED["lots"], _SHARED["mapped"] = lots.load_lots(), page.load_sheets() > 0
+    _SHARED.update(sheet_fn=load_sheet, outputs_fn=outputs, placer=wordboxes_placer)
+    got = _pool_map(_crude_job, [(src, s, q, sigmas[q]["sigma"] if tags else None, aff) for q, src in srcs.items()
+                                 for s in paths.SHEETS], workers)
+    tables = [t for _, t, _ in got if len(t)]
+    boxes = pd.concat(tables, ignore_index=True).sort_values(["sheet", "i"], kind="stable").reset_index(drop=True)
+    (out / "boxes").mkdir(parents=True, exist_ok=True)
+    boxes[wordboxes.COLUMNS].to_parquet(out / "boxes" / "boxes.parquet", index=False)
+    (out / "boxes" / "summary.json").write_text(json.dumps({
+        "note": TAGS_NOTE if tags else AFF_NOTE if aff else CRUDE_NOTE,
+        "detectors": {paths.QUARTERS[q]: r.name for q, r in srcs.items()},
+        "tag_spread": {paths.QUARTERS[q]: v for q, v in sigmas.items()}, "boxes": len(boxes),
+        "sheets": [[n, c] for n, _, c in got]}, indent=1) + "\n")
+    read(out, workers)
+    got = vs_today(out, None if quarter == "all" else quarter)
+    if against:
+        got["vs_" + against] = vs_run(out, RUNS / against, None if quarter == "all" else quarter)
+    return got
+
+
 # --- the command line ------------------------------------------------------------------------------------------------
 
 def main() -> None:
@@ -619,6 +1070,20 @@ def main() -> None:
     c.add_argument("--steps", type=int, default=CHECK_STEPS)
     c.add_argument("--then-train", default=None, help="train this arm's run after the check (same sheets)")
     c.add_argument("--seed", type=int, default=0)
+    cr = sub.add_parser("crude")
+    cr.add_argument("--quarter", default="ne", choices=(*paths.QUARTERS, "all"))
+    cr.add_argument("--seed", type=int, default=0)
+    cr.add_argument("--workers", type=int, default=WORKERS)
+    cr.add_argument("--tags", action="store_true", help="crude-tags: split the components by the word tags")
+    cr.add_argument("--aff", action="store_true", help="crude-aff: join the core px by the learned affinity")
+    cr.add_argument("--name", default="a", help="the detector arm (its folds' runs <name>-<quarter>-s<seed>)")
+    cr.add_argument("--against", default=None, help="a run folder's name: paired against its boxes too")
+    dr = sub.add_parser("draft")
+    dr.add_argument("--sheet", default="2000-digital-zoning-p07")
+    dr.add_argument("--workers", type=int, default=WORKERS)
+    dr.add_argument("--fit-dir", type=Path, default=None)
+    dr.add_argument("--tag", default="")
+    dr.add_argument("--note", default=DRAFT_NOTE)
     parsers = {k: sub.add_parser(k) for k in ("train", "fit", "words", "read", "measure", "page")}
     for p in parsers.values():
         p.add_argument("--name", required=True)
@@ -626,15 +1091,22 @@ def main() -> None:
         p.add_argument("--seed", type=int, default=0)
         p.add_argument("--workers", type=int, default=WORKERS)
     parsers["train"].add_argument("--doubt", action="store_true")
+    parsers["train"].add_argument("--heads", default="words", choices=WORD_HEADS)
     parsers["fit"].add_argument("--own", action="store_true",
                                 help="this run's own predictions on its training quarters (Phase 1, optimistic)")
     parsers["fit"].add_argument("--from", dest="sources", nargs="*", default=[],
                                 help="other folds' runs (folder names), each read on its own held-out quarter")
+    parsers["fit"].add_argument("--sheets", nargs="*", default=None, help="these 2000 sheets only (default every one)")
+    parsers["fit"].add_argument("--rounds", type=int, default=2, choices=(1, 2),
+                                help="1: the first prior alone (a draft's)")
     parsers["words"].add_argument("--sheets", nargs="*", default=None,
                                   help="these 2000 sheets only (default every one)")
     parsers["words"].add_argument("--add", action="store_true", help="keep the other sheets' boxes already made")
     parsers["words"].add_argument("--fit-dir", type=Path, default=None,
                                   help="the spreads and prior from this folder (default the run's fit/)")
+    parsers["measure"].add_argument("--today", action="store_true",
+                                    help="against today's boxes over the same labels (vs_today.json)")
+    parsers["measure"].add_argument("--sheets", nargs="*", default=None)
     parsers["page"].add_argument("--page-name", default=None)
     parsers["page"].add_argument("--fit-note", default="")
     a = ap.parse_args()
@@ -645,10 +1117,24 @@ def main() -> None:
         if a.then_train:
             print(train_run(a.then_train, a.quarter, a.seed, sheets=sheets))
         return
+    if a.cmd == "crude":
+        got = crude(a.name, a.quarter, a.seed, a.workers, a.tags, a.aff, a.against)
+        print(json.dumps({"labels": got["labels"], "paired_run_minus_today": got["paired_run_minus_today"],
+                          "run": {k: got["headline"][k] for k in ("n", "right", "share", "ci", "with_box")},
+                          "today": {k: got["today_headline"][k] for k in ("n", "right", "share", "ci", "with_box")},
+                          "boxes": {k: got["boxes"][k] for k in ("terra", "ours", "matched", "missed",
+                                                                 "missed_reasons")},
+                          "today_boxes": {k: got["today_boxes"][k] for k in ("terra", "ours", "matched", "missed",
+                                                                             "missed_reasons")}},
+                         indent=1, default=float))
+        return
+    if a.cmd == "draft":
+        print(draft(a.sheet, workers=a.workers, fit_dir=a.fit_dir, tag=a.tag, note=a.note))
+        return
     run = run_dir(a.name, a.quarter, a.seed)
     q = paths.QUARTERS.index(a.quarter)
     if a.cmd == "train":
-        print(train_run(a.name, a.quarter, a.seed, a.doubt))
+        print(train_run(a.name, a.quarter, a.seed, a.doubt, recipe=word_recipe(heads=a.heads)))
     elif a.cmd == "fit":
         if a.own == bool(a.sources):
             sys.exit("fit: give --own or --from <runs>, one of the two")
@@ -661,7 +1147,7 @@ def main() -> None:
                 if other == a.quarter:
                     sys.exit(f"fit: {r} held out {other}, this fold's own quarter")
                 sources.append((RUNS / r, (paths.QUARTERS.index(other),)))
-        got = fit(run / "fit", sources, workers=a.workers)
+        got = fit(run / "fit", sources, sheets=tuple(a.sheets or paths.SHEETS), workers=a.workers, rounds=a.rounds)
         print(json.dumps({k: dataclasses.asdict(v) for k, v in got.items()}, indent=1))
     elif a.cmd == "words":
         spreads, prior = load_fit(a.fit_dir or run / "fit")
@@ -670,6 +1156,13 @@ def main() -> None:
     elif a.cmd == "read":
         print(read(run, a.workers))
     elif a.cmd == "measure":
+        if a.today:
+            got = vs_today(run, a.quarter, sheets=a.sheets or None)
+            print(json.dumps({k: got[k] for k in ("labels", "paired_run_minus_today")}, indent=1, default=float))
+            print(json.dumps({"run": {k: got["headline"][k] for k in ("n", "right", "share", "ci")},
+                              "today": {k: got["today_headline"][k] for k in ("n", "right", "share", "ci")}},
+                             indent=1, default=float))
+            return
         got = measure(run, a.quarter)
         print(json.dumps({"headline": {k: v for k, v in got["headline"].items() if k != "by_quarter"},
                           "boxes": got["box_numbers"]}, indent=1, default=float))
