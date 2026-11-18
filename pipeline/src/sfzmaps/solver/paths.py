@@ -4,7 +4,7 @@ detector, the labels).  The walls' and the solve's folders are in `runs`, so a c
 The solver solves one series at a time: SERIES, the 2000 map (SERIES_2000) unless the environment names another in
 SERIES_ENV (`sfzmaps solver --series S` sets it and starts the command again in a process that reads it, so every
 module, and every process a command starts, sees the same series).  The 2000 map's folders are data/solver/; another
-series' are data/solver/experiments/all-years/<series>/ (`solver_dir`), in the same layout.  Another series is solved
+series' are data/solver/<series>/ (`solver_dir`, `districts.solved.default_root`), in the same layout.  Another series is solved
 with the models fitted on the 2000 map (its walls, trust, placement, street sides and lot sizes: TRANSFER_DIR, made by
 `sfzmaps solver transfer-models`), never with a fit on a table of its own."""
 import os
@@ -31,6 +31,14 @@ TABLE_SCORED_SERIES = (SERIES_2000, "1996-2000-zoning")
 FRAME_SERIES = (SERIES_2000, "2000-digital-height", "2000-digital-su", "1996-2000-zoning", "1996-2000-height",
                 "1996-2000-su", "1990-1996-zoning", "1990-1996-height", "1990-1996-su", "1980-1990-zoning",
                 "1980-1990-height", "1980-1990-su")
+# The pattern maps: their districts are fill patterns keyed to a legend, with no printed codes (see prints).
+PATTERN_SERIES = ("1921", "1929", "1935", "1948")
+# Every series solved besides 2000, each by its own `solver-<part>-<series>` stages: the zoning editions and periods
+# (1921-1948 from their pattern reads, `prints.PATTERN_SERIES`) and the height maps.  The SU maps have no read of any
+# of their sheets, so no prints: none is solved.
+ALL_YEARS = ("1921", "1929", "1935", "1948", "1960", "1964", "1968", "1972", "1975", "1980", "1980-1990-zoning",
+             "1990-1996-zoning", "1996-2000-zoning", "1980-1990-height", "1990-1996-height", "1996-2000-height",
+             "2000-digital-height")
 
 
 def is_2000() -> bool:
@@ -43,11 +51,14 @@ def has_table() -> bool:
     return SERIES in TABLE_SERIES
 
 
+SOLVER_ROOT = config.DATA_DIR / "solver"     # every series' solver folders: 2000's stage folders, and <series>/
+
+
 def solver_dir(series: str):
-    """The folder of a series' solver outputs: data/solver for the 2000 map, data/solver/experiments/all-years/<series>
+    """The folder of a series' solver outputs: data/solver for the 2000 map, data/solver/<series>
     for any other."""
-    root = config.DATA_DIR / "solver"
-    return root if series == SERIES_2000 else root / "experiments" / "all-years" / series
+    root = SOLVER_ROOT
+    return root if series == SERIES_2000 else root / series
 
 
 def _pages(prefix: str, numbers) -> tuple[str, ...]:
@@ -90,7 +101,7 @@ TABLE_DIR = config.INPUTS_DIR / "zoning-2000"
 CUTS_FILE = config.INPUTS_DIR / "merged-page" / f"{SERIES}.json"   # none for most series: `page.load_cuts`
 SAVED_ANSWERS = config.PIPELINE_DIR / "saved-reads" / "answers"
 # The models fitted on the 2000 map that solve every other series (`transfer`), made from the 2000 map's stages.
-TRANSFER_DIR = config.DATA_DIR / "solver" / "experiments" / "all-years" / "models-2000"
+TRANSFER_DIR = config.DATA_DIR / "solver" / "models-2000"
 
 
 def sheet_names() -> list[str]:

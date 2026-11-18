@@ -248,8 +248,8 @@ def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool
         # comparison with J7 are the 2000 table's); it is scored by `scripts/all_years/score_series.py`.
         import json
 
-        from sfzmaps.solver import prints, transfer
-        if paths.SERIES in prints.PATTERN_SERIES:
+        from sfzmaps.solver import transfer
+        if paths.SERIES in paths.PATTERN_SERIES:
             # A pattern map's prints are its reader's reads of each lot: each stands for its own lot (no leaders).
             from sfzmaps.solver.city import walls_digest
             e = np.zeros(0)

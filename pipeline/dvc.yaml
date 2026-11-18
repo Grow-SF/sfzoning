@@ -543,7 +543,27 @@ stages:
     outs:
       - data/work/1980-1990-zoning:
           persist: true
-      - data/out/1980-1990-zoning:
+      - data/out/1980-1990-zoning/1980-1990-zoning.pmtiles:
+          persist: true
+      - data/out/1980-1990-zoning/1980-1990-zoning.inputs.json:
+          persist: true
+      - data/out/1980-1990-zoning/1980-1990-zoning-paper.pmtiles:
+          persist: true
+      - data/out/1980-1990-zoning/1980-1990-zoning-paper.inputs.json:
+          persist: true
+      - data/out/1980-1990-zoning/changes.wgs84.geojson:
+          persist: true
+      - data/out/1980-1990-zoning/manifest.json:
+          persist: true
+      - data/out/1980-1990-zoning/review.html:
+          persist: true
+      - data/out/1980-1990-zoning/districts/height.json:
+          persist: true
+      - data/out/1980-1990-zoning/districts/height.parquet:
+          persist: true
+      - data/out/1980-1990-zoning/districts/height.parquet.answers:
+          persist: true
+      - data/out/1980-1990-zoning/districts/height.parquet.inputs.json:
           persist: true
       - data/work/1980-1990-height:
           persist: true
@@ -601,7 +621,27 @@ stages:
     outs:
       - data/work/1990-1996-zoning:
           persist: true
-      - data/out/1990-1996-zoning:
+      - data/out/1990-1996-zoning/1990-1996-zoning.pmtiles:
+          persist: true
+      - data/out/1990-1996-zoning/1990-1996-zoning.inputs.json:
+          persist: true
+      - data/out/1990-1996-zoning/1990-1996-zoning-paper.pmtiles:
+          persist: true
+      - data/out/1990-1996-zoning/1990-1996-zoning-paper.inputs.json:
+          persist: true
+      - data/out/1990-1996-zoning/changes.wgs84.geojson:
+          persist: true
+      - data/out/1990-1996-zoning/manifest.json:
+          persist: true
+      - data/out/1990-1996-zoning/review.html:
+          persist: true
+      - data/out/1990-1996-zoning/districts/height.json:
+          persist: true
+      - data/out/1990-1996-zoning/districts/height.parquet:
+          persist: true
+      - data/out/1990-1996-zoning/districts/height.parquet.answers:
+          persist: true
+      - data/out/1990-1996-zoning/districts/height.parquet.inputs.json:
           persist: true
       - data/work/1990-1996-height:
           persist: true
@@ -659,7 +699,27 @@ stages:
     outs:
       - data/work/1996-2000-zoning:
           persist: true
-      - data/out/1996-2000-zoning:
+      - data/out/1996-2000-zoning/1996-2000-zoning.pmtiles:
+          persist: true
+      - data/out/1996-2000-zoning/1996-2000-zoning.inputs.json:
+          persist: true
+      - data/out/1996-2000-zoning/1996-2000-zoning-paper.pmtiles:
+          persist: true
+      - data/out/1996-2000-zoning/1996-2000-zoning-paper.inputs.json:
+          persist: true
+      - data/out/1996-2000-zoning/changes.wgs84.geojson:
+          persist: true
+      - data/out/1996-2000-zoning/manifest.json:
+          persist: true
+      - data/out/1996-2000-zoning/review.html:
+          persist: true
+      - data/out/1996-2000-zoning/districts/height.json:
+          persist: true
+      - data/out/1996-2000-zoning/districts/height.parquet:
+          persist: true
+      - data/out/1996-2000-zoning/districts/height.parquet.answers:
+          persist: true
+      - data/out/1996-2000-zoning/districts/height.parquet.inputs.json:
           persist: true
       - data/work/1996-2000-height:
           persist: true
@@ -1677,12 +1737,17 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/frame.py
       - src/sfzmaps/solver/grid.py
       - src/sfzmaps/solver/page.py
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - data/warp/2000-digital-zoning
@@ -1696,6 +1761,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/codes.py
       - src/sfzmaps/solver/frame.py
@@ -1705,6 +1774,7 @@ stages:
       - src/sfzmaps/solver/paths.py
       - src/sfzmaps/solver/table.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - inputs/zoning-2000/april2000.geojson.gz
@@ -1717,7 +1787,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
       - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/codes.py
       - src/sfzmaps/solver/frame.py
@@ -1731,6 +1804,7 @@ stages:
       - src/sfzmaps/solver/textnet/__init__.py
       - src/sfzmaps/solver/textnet/boxes.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - saved-reads/answers
@@ -1943,6 +2017,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/frame.py
       - src/sfzmaps/solver/grid.py
@@ -1959,6 +2037,7 @@ stages:
       - src/sfzmaps/solver/textnet/scores.py
       - src/sfzmaps/solver/textnet/train.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - data/solver/text/model.pt
@@ -2339,7 +2418,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
       - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/codereader/__init__.py
       - src/sfzmaps/solver/codereader/labels.py
@@ -2363,6 +2445,7 @@ stages:
       - src/sfzmaps/solver/textnet/stage.py
       - src/sfzmaps/solver/textnet/train.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
@@ -2729,7 +2812,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
       - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/codereader/__init__.py
       - src/sfzmaps/solver/codereader/labels.py
@@ -2749,6 +2835,7 @@ stages:
       - src/sfzmaps/solver/textnet/scores.py
       - src/sfzmaps/solver/wordboxes.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - data/solver/text-reader/2000-digital-zoning-p01/chance.png
@@ -2845,7 +2932,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
       - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/codereader/__init__.py
       - src/sfzmaps/solver/codereader/glyphs.py
@@ -2877,6 +2967,7 @@ stages:
       - src/sfzmaps/solver/textread/store.py
       - src/sfzmaps/solver/textread/synth.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
@@ -3065,7 +3156,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
       - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/codereader/__init__.py
       - src/sfzmaps/solver/codereader/labels.py
@@ -3096,6 +3190,7 @@ stages:
       - src/sfzmaps/solver/textread/store.py
       - src/sfzmaps/solver/wordboxes.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - data/solver/text-crops/crops.npz
@@ -3126,6 +3221,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/codes.py
       - src/sfzmaps/solver/frame.py
@@ -3141,6 +3240,7 @@ stages:
       - src/sfzmaps/solver/table.py
       - src/sfzmaps/solver/trust.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - data/solver/prints/prints.parquet
@@ -3155,6 +3255,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/codes.py
       - src/sfzmaps/solver/frame.py
@@ -3171,6 +3275,7 @@ stages:
       - src/sfzmaps/solver/wallevidence.py
       - src/sfzmaps/solver/walls.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - data/solver/page
@@ -3189,6 +3294,10 @@ stages:
     deps:
       - src/sfzmaps/__init__.py
       - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
       - src/sfzmaps/solver/__init__.py
       - src/sfzmaps/solver/borders.py
       - src/sfzmaps/solver/city.py
@@ -3213,6 +3322,7 @@ stages:
       - src/sfzmaps/solver/threads.py
       - src/sfzmaps/solver/trust.py
       - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
       - pyproject.toml
       - uv.lock
       - data/solver/lots
@@ -3225,6 +3335,5233 @@ stages:
       - inputs/zoning-2000/table-corrections.csv
     outs:
       - data/solver/solve:
+          persist: true
+  solver-transfer:
+    cmd: uv run --frozen sfzmaps stage solver-transfer
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/lots
+      - data/solver/prints/prints.parquet
+      - data/solver/labels
+      - data/solver/walls
+      - data/solver/page
+      - data/solver/text/chance
+      - data/work/2000-digital-zoning
+      - data/warp/2000-digital-zoning
+      - inputs/hand-labels-2000/label_fixes.csv
+    outs:
+      - data/solver/models-2000:
+          persist: true
+  solver-page-1921:
+    cmd: uv run --frozen sfzmaps stage solver-page-1921
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1921
+      - data/work/1921
+      - inputs/1921
+    outs:
+      - data/solver/1921/page:
+          persist: true
+  solver-lots-1921:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1921
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1921/page
+    outs:
+      - data/solver/1921/lots:
+          persist: true
+  solver-prints-1921:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1921
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1921
+      - data/warp/1921
+      - data/solver/1921/lots
+      - data/solver/1921/page
+    outs:
+      - data/solver/1921/prints:
+          persist: true
+  solver-text-chance-1921:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1921
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1921
+    outs:
+      - data/solver/1921/text:
+          persist: true
+  solver-labels-1921:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1921
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1921/prints/prints.parquet
+      - data/solver/1921/lots
+      - data/solver/1921/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1921/labels:
+          persist: true
+  solver-walls-1921:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1921
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1921/page
+      - data/solver/1921/lots
+      - data/solver/1921/labels/strokes.npz
+      - data/solver/1921/text/chance
+      - data/work/1921
+      - data/warp/1921
+      - inputs/1921
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1921/walls:
+          persist: true
+  solver-solve-1921:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1921
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1921/lots
+      - data/solver/1921/page/ink.png
+      - data/solver/1921/prints/prints.parquet
+      - data/solver/1921/labels
+      - data/solver/1921/walls
+      - data/solver/models-2000
+      - data/work/1921/districts_raw.parquet
+    outs:
+      - data/solver/1921/solve:
+          persist: true
+  solver-page-1929:
+    cmd: uv run --frozen sfzmaps stage solver-page-1929
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1929
+      - data/work/1929
+      - inputs/1929
+    outs:
+      - data/solver/1929/page:
+          persist: true
+  solver-lots-1929:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1929
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1929/page
+    outs:
+      - data/solver/1929/lots:
+          persist: true
+  solver-prints-1929:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1929
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1929
+      - data/warp/1929
+      - data/solver/1929/lots
+      - data/solver/1929/page
+    outs:
+      - data/solver/1929/prints:
+          persist: true
+  solver-text-chance-1929:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1929
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1929
+    outs:
+      - data/solver/1929/text:
+          persist: true
+  solver-labels-1929:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1929
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1929/prints/prints.parquet
+      - data/solver/1929/lots
+      - data/solver/1929/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1929/labels:
+          persist: true
+  solver-walls-1929:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1929
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1929/page
+      - data/solver/1929/lots
+      - data/solver/1929/labels/strokes.npz
+      - data/solver/1929/text/chance
+      - data/work/1929
+      - data/warp/1929
+      - inputs/1929
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1929/walls:
+          persist: true
+  solver-solve-1929:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1929
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1929/lots
+      - data/solver/1929/page/ink.png
+      - data/solver/1929/prints/prints.parquet
+      - data/solver/1929/labels
+      - data/solver/1929/walls
+      - data/solver/models-2000
+      - data/work/1929/districts_raw.parquet
+    outs:
+      - data/solver/1929/solve:
+          persist: true
+  solver-page-1935:
+    cmd: uv run --frozen sfzmaps stage solver-page-1935
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1935
+      - data/work/1935
+      - inputs/1935
+    outs:
+      - data/solver/1935/page:
+          persist: true
+  solver-lots-1935:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1935
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1935/page
+    outs:
+      - data/solver/1935/lots:
+          persist: true
+  solver-prints-1935:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1935
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1935
+      - data/warp/1935
+      - data/solver/1935/lots
+      - data/solver/1935/page
+    outs:
+      - data/solver/1935/prints:
+          persist: true
+  solver-text-chance-1935:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1935
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1935
+    outs:
+      - data/solver/1935/text:
+          persist: true
+  solver-labels-1935:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1935
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1935/prints/prints.parquet
+      - data/solver/1935/lots
+      - data/solver/1935/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1935/labels:
+          persist: true
+  solver-walls-1935:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1935
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1935/page
+      - data/solver/1935/lots
+      - data/solver/1935/labels/strokes.npz
+      - data/solver/1935/text/chance
+      - data/work/1935
+      - data/warp/1935
+      - inputs/1935
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1935/walls:
+          persist: true
+  solver-solve-1935:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1935
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1935/lots
+      - data/solver/1935/page/ink.png
+      - data/solver/1935/prints/prints.parquet
+      - data/solver/1935/labels
+      - data/solver/1935/walls
+      - data/solver/models-2000
+      - data/work/1935/districts_raw.parquet
+    outs:
+      - data/solver/1935/solve:
+          persist: true
+  solver-page-1948:
+    cmd: uv run --frozen sfzmaps stage solver-page-1948
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1948
+      - data/work/1948
+      - inputs/1948
+    outs:
+      - data/solver/1948/page:
+          persist: true
+  solver-lots-1948:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1948
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1948/page
+    outs:
+      - data/solver/1948/lots:
+          persist: true
+  solver-prints-1948:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1948
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1948
+      - data/warp/1948
+      - data/solver/1948/lots
+      - data/solver/1948/page
+    outs:
+      - data/solver/1948/prints:
+          persist: true
+  solver-text-chance-1948:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1948
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1948
+    outs:
+      - data/solver/1948/text:
+          persist: true
+  solver-labels-1948:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1948
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1948/prints/prints.parquet
+      - data/solver/1948/lots
+      - data/solver/1948/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1948/labels:
+          persist: true
+  solver-walls-1948:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1948
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1948/page
+      - data/solver/1948/lots
+      - data/solver/1948/labels/strokes.npz
+      - data/solver/1948/text/chance
+      - data/work/1948
+      - data/warp/1948
+      - inputs/1948
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1948/walls:
+          persist: true
+  solver-solve-1948:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1948
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1948/lots
+      - data/solver/1948/page/ink.png
+      - data/solver/1948/prints/prints.parquet
+      - data/solver/1948/labels
+      - data/solver/1948/walls
+      - data/solver/models-2000
+      - data/work/1948/districts_raw.parquet
+    outs:
+      - data/solver/1948/solve:
+          persist: true
+  solver-page-1960:
+    cmd: uv run --frozen sfzmaps stage solver-page-1960
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1960
+      - data/work/1960
+      - inputs/1960
+    outs:
+      - data/solver/1960/page:
+          persist: true
+  solver-lots-1960:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1960
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1960/page
+    outs:
+      - data/solver/1960/lots:
+          persist: true
+  solver-prints-1960:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1960
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1960
+      - data/warp/1960
+      - data/solver/1960/lots
+      - data/solver/1960/page
+    outs:
+      - data/solver/1960/prints:
+          persist: true
+  solver-text-chance-1960:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1960
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1960
+    outs:
+      - data/solver/1960/text:
+          persist: true
+  solver-labels-1960:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1960
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1960/prints/prints.parquet
+      - data/solver/1960/lots
+      - data/solver/1960/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1960/labels:
+          persist: true
+  solver-walls-1960:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1960
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1960/page
+      - data/solver/1960/lots
+      - data/solver/1960/labels/strokes.npz
+      - data/solver/1960/text/chance
+      - data/work/1960
+      - data/warp/1960
+      - inputs/1960
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1960/walls:
+          persist: true
+  solver-solve-1960:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1960
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1960/lots
+      - data/solver/1960/page/ink.png
+      - data/solver/1960/prints/prints.parquet
+      - data/solver/1960/labels
+      - data/solver/1960/walls
+      - data/solver/models-2000
+      - data/work/1960/districts_raw.parquet
+    outs:
+      - data/solver/1960/solve:
+          persist: true
+  solver-page-1964:
+    cmd: uv run --frozen sfzmaps stage solver-page-1964
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1964
+      - data/work/1964
+      - inputs/1964
+    outs:
+      - data/solver/1964/page:
+          persist: true
+  solver-lots-1964:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1964
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1964/page
+    outs:
+      - data/solver/1964/lots:
+          persist: true
+  solver-prints-1964:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1964
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1964
+      - data/warp/1964
+      - data/solver/1964/lots
+      - data/solver/1964/page
+    outs:
+      - data/solver/1964/prints:
+          persist: true
+  solver-text-chance-1964:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1964
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1964
+    outs:
+      - data/solver/1964/text:
+          persist: true
+  solver-labels-1964:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1964
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1964/prints/prints.parquet
+      - data/solver/1964/lots
+      - data/solver/1964/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1964/labels:
+          persist: true
+  solver-walls-1964:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1964
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1964/page
+      - data/solver/1964/lots
+      - data/solver/1964/labels/strokes.npz
+      - data/solver/1964/text/chance
+      - data/work/1964
+      - data/warp/1964
+      - inputs/1964
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1964/walls:
+          persist: true
+  solver-solve-1964:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1964
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1964/lots
+      - data/solver/1964/page/ink.png
+      - data/solver/1964/prints/prints.parquet
+      - data/solver/1964/labels
+      - data/solver/1964/walls
+      - data/solver/models-2000
+      - data/work/1964/districts_raw.parquet
+    outs:
+      - data/solver/1964/solve:
+          persist: true
+  solver-page-1968:
+    cmd: uv run --frozen sfzmaps stage solver-page-1968
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1968
+      - data/work/1968
+      - inputs/1968
+    outs:
+      - data/solver/1968/page:
+          persist: true
+  solver-lots-1968:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1968
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1968/page
+    outs:
+      - data/solver/1968/lots:
+          persist: true
+  solver-prints-1968:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1968
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1968
+      - data/warp/1968
+      - data/solver/1968/lots
+      - data/solver/1968/page
+    outs:
+      - data/solver/1968/prints:
+          persist: true
+  solver-text-chance-1968:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1968
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1968
+    outs:
+      - data/solver/1968/text:
+          persist: true
+  solver-labels-1968:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1968
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1968/prints/prints.parquet
+      - data/solver/1968/lots
+      - data/solver/1968/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1968/labels:
+          persist: true
+  solver-walls-1968:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1968
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1968/page
+      - data/solver/1968/lots
+      - data/solver/1968/labels/strokes.npz
+      - data/solver/1968/text/chance
+      - data/work/1968
+      - data/warp/1968
+      - inputs/1968
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1968/walls:
+          persist: true
+  solver-solve-1968:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1968
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1968/lots
+      - data/solver/1968/page/ink.png
+      - data/solver/1968/prints/prints.parquet
+      - data/solver/1968/labels
+      - data/solver/1968/walls
+      - data/solver/models-2000
+      - data/work/1968/districts_raw.parquet
+    outs:
+      - data/solver/1968/solve:
+          persist: true
+  solver-page-1972:
+    cmd: uv run --frozen sfzmaps stage solver-page-1972
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1972
+      - data/work/1972
+      - inputs/1972
+    outs:
+      - data/solver/1972/page:
+          persist: true
+  solver-lots-1972:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1972
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1972/page
+    outs:
+      - data/solver/1972/lots:
+          persist: true
+  solver-prints-1972:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1972
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1972
+      - data/warp/1972
+      - data/solver/1972/lots
+      - data/solver/1972/page
+    outs:
+      - data/solver/1972/prints:
+          persist: true
+  solver-text-chance-1972:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1972
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1972
+    outs:
+      - data/solver/1972/text:
+          persist: true
+  solver-labels-1972:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1972
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1972/prints/prints.parquet
+      - data/solver/1972/lots
+      - data/solver/1972/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1972/labels:
+          persist: true
+  solver-walls-1972:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1972
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1972/page
+      - data/solver/1972/lots
+      - data/solver/1972/labels/strokes.npz
+      - data/solver/1972/text/chance
+      - data/work/1972
+      - data/warp/1972
+      - inputs/1972
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1972/walls:
+          persist: true
+  solver-solve-1972:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1972
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1972/lots
+      - data/solver/1972/page/ink.png
+      - data/solver/1972/prints/prints.parquet
+      - data/solver/1972/labels
+      - data/solver/1972/walls
+      - data/solver/models-2000
+      - data/work/1972/districts_raw.parquet
+    outs:
+      - data/solver/1972/solve:
+          persist: true
+  solver-page-1975:
+    cmd: uv run --frozen sfzmaps stage solver-page-1975
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1975
+      - data/work/1975
+      - inputs/1975
+    outs:
+      - data/solver/1975/page:
+          persist: true
+  solver-lots-1975:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1975
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1975/page
+    outs:
+      - data/solver/1975/lots:
+          persist: true
+  solver-prints-1975:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1975
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1975
+      - data/warp/1975
+      - data/solver/1975/lots
+      - data/solver/1975/page
+    outs:
+      - data/solver/1975/prints:
+          persist: true
+  solver-text-chance-1975:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1975
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1975
+    outs:
+      - data/solver/1975/text:
+          persist: true
+  solver-labels-1975:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1975
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1975/prints/prints.parquet
+      - data/solver/1975/lots
+      - data/solver/1975/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1975/labels:
+          persist: true
+  solver-walls-1975:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1975
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1975/page
+      - data/solver/1975/lots
+      - data/solver/1975/labels/strokes.npz
+      - data/solver/1975/text/chance
+      - data/work/1975
+      - data/warp/1975
+      - inputs/1975
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1975/walls:
+          persist: true
+  solver-solve-1975:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1975
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1975/lots
+      - data/solver/1975/page/ink.png
+      - data/solver/1975/prints/prints.parquet
+      - data/solver/1975/labels
+      - data/solver/1975/walls
+      - data/solver/models-2000
+      - data/work/1975/districts_raw.parquet
+    outs:
+      - data/solver/1975/solve:
+          persist: true
+  solver-page-1980:
+    cmd: uv run --frozen sfzmaps stage solver-page-1980
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1980
+      - data/work/1980
+      - inputs/1980
+    outs:
+      - data/solver/1980/page:
+          persist: true
+  solver-lots-1980:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1980
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1980/page
+    outs:
+      - data/solver/1980/lots:
+          persist: true
+  solver-prints-1980:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1980
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1980
+      - data/warp/1980
+      - data/solver/1980/lots
+      - data/solver/1980/page
+    outs:
+      - data/solver/1980/prints:
+          persist: true
+  solver-text-chance-1980:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1980
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1980
+    outs:
+      - data/solver/1980/text:
+          persist: true
+  solver-labels-1980:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1980
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1980/prints/prints.parquet
+      - data/solver/1980/lots
+      - data/solver/1980/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1980/labels:
+          persist: true
+  solver-walls-1980:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1980
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1980/page
+      - data/solver/1980/lots
+      - data/solver/1980/labels/strokes.npz
+      - data/solver/1980/text/chance
+      - data/work/1980
+      - data/warp/1980
+      - inputs/1980
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1980/walls:
+          persist: true
+  solver-solve-1980:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1980
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1980/lots
+      - data/solver/1980/page/ink.png
+      - data/solver/1980/prints/prints.parquet
+      - data/solver/1980/labels
+      - data/solver/1980/walls
+      - data/solver/models-2000
+      - data/work/1980/districts_raw.parquet
+    outs:
+      - data/solver/1980/solve:
+          persist: true
+  solver-page-1980-1990-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-page-1980-1990-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1980-1990-zoning
+      - data/work/1980-1990-zoning
+      - inputs/1980-1990-zoning
+    outs:
+      - data/solver/1980-1990-zoning/page:
+          persist: true
+  solver-lots-1980-1990-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1980-1990-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1980-1990-zoning/page
+    outs:
+      - data/solver/1980-1990-zoning/lots:
+          persist: true
+  solver-prints-1980-1990-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1980-1990-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1980-1990-zoning
+      - data/warp/1980-1990-zoning
+      - data/solver/1980-1990-zoning/lots
+      - data/solver/1980-1990-zoning/page
+    outs:
+      - data/solver/1980-1990-zoning/prints:
+          persist: true
+  solver-text-chance-1980-1990-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1980-1990-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1980-1990-zoning
+    outs:
+      - data/solver/1980-1990-zoning/text:
+          persist: true
+  solver-labels-1980-1990-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1980-1990-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1980-1990-zoning/prints/prints.parquet
+      - data/solver/1980-1990-zoning/lots
+      - data/solver/1980-1990-zoning/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1980-1990-zoning/labels:
+          persist: true
+  solver-walls-1980-1990-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1980-1990-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1980-1990-zoning/page
+      - data/solver/1980-1990-zoning/lots
+      - data/solver/1980-1990-zoning/labels/strokes.npz
+      - data/solver/1980-1990-zoning/text/chance
+      - data/work/1980-1990-zoning
+      - data/warp/1980-1990-zoning
+      - inputs/1980-1990-zoning
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1980-1990-zoning/walls:
+          persist: true
+  solver-solve-1980-1990-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1980-1990-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1980-1990-zoning/lots
+      - data/solver/1980-1990-zoning/page/ink.png
+      - data/solver/1980-1990-zoning/prints/prints.parquet
+      - data/solver/1980-1990-zoning/labels
+      - data/solver/1980-1990-zoning/walls
+      - data/solver/models-2000
+      - data/work/1980-1990-zoning/districts_raw.parquet
+    outs:
+      - data/solver/1980-1990-zoning/solve:
+          persist: true
+  solver-page-1990-1996-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-page-1990-1996-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1990-1996-zoning
+      - data/work/1990-1996-zoning
+      - inputs/1990-1996-zoning
+    outs:
+      - data/solver/1990-1996-zoning/page:
+          persist: true
+  solver-lots-1990-1996-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1990-1996-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1990-1996-zoning/page
+    outs:
+      - data/solver/1990-1996-zoning/lots:
+          persist: true
+  solver-prints-1990-1996-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1990-1996-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1990-1996-zoning
+      - data/warp/1990-1996-zoning
+      - data/solver/1990-1996-zoning/lots
+      - data/solver/1990-1996-zoning/page
+    outs:
+      - data/solver/1990-1996-zoning/prints:
+          persist: true
+  solver-text-chance-1990-1996-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1990-1996-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1990-1996-zoning
+    outs:
+      - data/solver/1990-1996-zoning/text:
+          persist: true
+  solver-labels-1990-1996-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1990-1996-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1990-1996-zoning/prints/prints.parquet
+      - data/solver/1990-1996-zoning/lots
+      - data/solver/1990-1996-zoning/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1990-1996-zoning/labels:
+          persist: true
+  solver-walls-1990-1996-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1990-1996-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1990-1996-zoning/page
+      - data/solver/1990-1996-zoning/lots
+      - data/solver/1990-1996-zoning/labels/strokes.npz
+      - data/solver/1990-1996-zoning/text/chance
+      - data/work/1990-1996-zoning
+      - data/warp/1990-1996-zoning
+      - inputs/1990-1996-zoning
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1990-1996-zoning/walls:
+          persist: true
+  solver-solve-1990-1996-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1990-1996-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1990-1996-zoning/lots
+      - data/solver/1990-1996-zoning/page/ink.png
+      - data/solver/1990-1996-zoning/prints/prints.parquet
+      - data/solver/1990-1996-zoning/labels
+      - data/solver/1990-1996-zoning/walls
+      - data/solver/models-2000
+      - data/work/1990-1996-zoning/districts_raw.parquet
+    outs:
+      - data/solver/1990-1996-zoning/solve:
+          persist: true
+  solver-page-1996-2000-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-page-1996-2000-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1996-2000-zoning
+      - data/work/1996-2000-zoning
+      - inputs/1996-2000-zoning
+    outs:
+      - data/solver/1996-2000-zoning/page:
+          persist: true
+  solver-lots-1996-2000-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1996-2000-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1996-2000-zoning/page
+    outs:
+      - data/solver/1996-2000-zoning/lots:
+          persist: true
+  solver-prints-1996-2000-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1996-2000-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1996-2000-zoning
+      - data/warp/1996-2000-zoning
+      - data/solver/1996-2000-zoning/lots
+      - data/solver/1996-2000-zoning/page
+    outs:
+      - data/solver/1996-2000-zoning/prints:
+          persist: true
+  solver-text-chance-1996-2000-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1996-2000-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1996-2000-zoning
+    outs:
+      - data/solver/1996-2000-zoning/text:
+          persist: true
+  solver-labels-1996-2000-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1996-2000-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1996-2000-zoning/prints/prints.parquet
+      - data/solver/1996-2000-zoning/lots
+      - data/solver/1996-2000-zoning/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1996-2000-zoning/labels:
+          persist: true
+  solver-walls-1996-2000-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1996-2000-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1996-2000-zoning/page
+      - data/solver/1996-2000-zoning/lots
+      - data/solver/1996-2000-zoning/labels/strokes.npz
+      - data/solver/1996-2000-zoning/text/chance
+      - data/work/1996-2000-zoning
+      - data/warp/1996-2000-zoning
+      - inputs/1996-2000-zoning
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1996-2000-zoning/walls:
+          persist: true
+  solver-solve-1996-2000-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1996-2000-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1996-2000-zoning/lots
+      - data/solver/1996-2000-zoning/page/ink.png
+      - data/solver/1996-2000-zoning/prints/prints.parquet
+      - data/solver/1996-2000-zoning/labels
+      - data/solver/1996-2000-zoning/walls
+      - data/solver/models-2000
+      - data/work/1996-2000-zoning/districts_raw.parquet
+    outs:
+      - data/solver/1996-2000-zoning/solve:
+          persist: true
+  solver-page-1980-1990-height:
+    cmd: uv run --frozen sfzmaps stage solver-page-1980-1990-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1980-1990-height
+      - data/work/1980-1990-height
+      - inputs/1980-1990-height
+    outs:
+      - data/solver/1980-1990-height/page:
+          persist: true
+  solver-lots-1980-1990-height:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1980-1990-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1980-1990-height/page
+    outs:
+      - data/solver/1980-1990-height/lots:
+          persist: true
+  solver-prints-1980-1990-height:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1980-1990-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1980-1990-height
+      - data/warp/1980-1990-height
+      - data/solver/1980-1990-height/lots
+      - data/solver/1980-1990-height/page
+    outs:
+      - data/solver/1980-1990-height/prints:
+          persist: true
+  solver-text-chance-1980-1990-height:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1980-1990-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1980-1990-height
+    outs:
+      - data/solver/1980-1990-height/text:
+          persist: true
+  solver-labels-1980-1990-height:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1980-1990-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1980-1990-height/prints/prints.parquet
+      - data/solver/1980-1990-height/lots
+      - data/solver/1980-1990-height/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1980-1990-height/labels:
+          persist: true
+  solver-walls-1980-1990-height:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1980-1990-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1980-1990-height/page
+      - data/solver/1980-1990-height/lots
+      - data/solver/1980-1990-height/labels/strokes.npz
+      - data/solver/1980-1990-height/text/chance
+      - data/work/1980-1990-height
+      - data/warp/1980-1990-height
+      - inputs/1980-1990-height
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1980-1990-height/walls:
+          persist: true
+  solver-solve-1980-1990-height:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1980-1990-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1980-1990-height/lots
+      - data/solver/1980-1990-height/page/ink.png
+      - data/solver/1980-1990-height/prints/prints.parquet
+      - data/solver/1980-1990-height/labels
+      - data/solver/1980-1990-height/walls
+      - data/solver/models-2000
+      - data/out/1980-1990-zoning/districts/height.parquet
+    outs:
+      - data/solver/1980-1990-height/solve:
+          persist: true
+  solver-page-1990-1996-height:
+    cmd: uv run --frozen sfzmaps stage solver-page-1990-1996-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1990-1996-height
+      - data/work/1990-1996-height
+      - inputs/1990-1996-height
+    outs:
+      - data/solver/1990-1996-height/page:
+          persist: true
+  solver-lots-1990-1996-height:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1990-1996-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1990-1996-height/page
+    outs:
+      - data/solver/1990-1996-height/lots:
+          persist: true
+  solver-prints-1990-1996-height:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1990-1996-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1990-1996-height
+      - data/warp/1990-1996-height
+      - data/solver/1990-1996-height/lots
+      - data/solver/1990-1996-height/page
+    outs:
+      - data/solver/1990-1996-height/prints:
+          persist: true
+  solver-text-chance-1990-1996-height:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1990-1996-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1990-1996-height
+    outs:
+      - data/solver/1990-1996-height/text:
+          persist: true
+  solver-labels-1990-1996-height:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1990-1996-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1990-1996-height/prints/prints.parquet
+      - data/solver/1990-1996-height/lots
+      - data/solver/1990-1996-height/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1990-1996-height/labels:
+          persist: true
+  solver-walls-1990-1996-height:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1990-1996-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1990-1996-height/page
+      - data/solver/1990-1996-height/lots
+      - data/solver/1990-1996-height/labels/strokes.npz
+      - data/solver/1990-1996-height/text/chance
+      - data/work/1990-1996-height
+      - data/warp/1990-1996-height
+      - inputs/1990-1996-height
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1990-1996-height/walls:
+          persist: true
+  solver-solve-1990-1996-height:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1990-1996-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1990-1996-height/lots
+      - data/solver/1990-1996-height/page/ink.png
+      - data/solver/1990-1996-height/prints/prints.parquet
+      - data/solver/1990-1996-height/labels
+      - data/solver/1990-1996-height/walls
+      - data/solver/models-2000
+      - data/out/1990-1996-zoning/districts/height.parquet
+    outs:
+      - data/solver/1990-1996-height/solve:
+          persist: true
+  solver-page-1996-2000-height:
+    cmd: uv run --frozen sfzmaps stage solver-page-1996-2000-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/1996-2000-height
+      - data/work/1996-2000-height
+      - inputs/1996-2000-height
+    outs:
+      - data/solver/1996-2000-height/page:
+          persist: true
+  solver-lots-1996-2000-height:
+    cmd: uv run --frozen sfzmaps stage solver-lots-1996-2000-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/1996-2000-height/page
+    outs:
+      - data/solver/1996-2000-height/lots:
+          persist: true
+  solver-prints-1996-2000-height:
+    cmd: uv run --frozen sfzmaps stage solver-prints-1996-2000-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/1996-2000-height
+      - data/warp/1996-2000-height
+      - data/solver/1996-2000-height/lots
+      - data/solver/1996-2000-height/page
+    outs:
+      - data/solver/1996-2000-height/prints:
+          persist: true
+  solver-text-chance-1996-2000-height:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-1996-2000-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/1996-2000-height
+    outs:
+      - data/solver/1996-2000-height/text:
+          persist: true
+  solver-labels-1996-2000-height:
+    cmd: uv run --frozen sfzmaps stage solver-labels-1996-2000-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1996-2000-height/prints/prints.parquet
+      - data/solver/1996-2000-height/lots
+      - data/solver/1996-2000-height/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/1996-2000-height/labels:
+          persist: true
+  solver-walls-1996-2000-height:
+    cmd: uv run --frozen sfzmaps stage solver-walls-1996-2000-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1996-2000-height/page
+      - data/solver/1996-2000-height/lots
+      - data/solver/1996-2000-height/labels/strokes.npz
+      - data/solver/1996-2000-height/text/chance
+      - data/work/1996-2000-height
+      - data/warp/1996-2000-height
+      - inputs/1996-2000-height
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/1996-2000-height/walls:
+          persist: true
+  solver-solve-1996-2000-height:
+    cmd: uv run --frozen sfzmaps stage solver-solve-1996-2000-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/1996-2000-height/lots
+      - data/solver/1996-2000-height/page/ink.png
+      - data/solver/1996-2000-height/prints/prints.parquet
+      - data/solver/1996-2000-height/labels
+      - data/solver/1996-2000-height/walls
+      - data/solver/models-2000
+      - data/out/1996-2000-zoning/districts/height.parquet
+    outs:
+      - data/solver/1996-2000-height/solve:
+          persist: true
+  solver-page-2000-digital-height:
+    cmd: uv run --frozen sfzmaps stage solver-page-2000-digital-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/warp/2000-digital-height
+      - data/work/2000-digital-height
+      - inputs/2000-digital-height
+    outs:
+      - data/solver/2000-digital-height/page:
+          persist: true
+  solver-lots-2000-digital-height:
+    cmd: uv run --frozen sfzmaps stage solver-lots-2000-digital-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - inputs/zoning-2000/april2000.geojson.gz
+      - data/solver/2000-digital-height/page
+    outs:
+      - data/solver/2000-digital-height/lots:
+          persist: true
+  solver-prints-2000-digital-height:
+    cmd: uv run --frozen sfzmaps stage solver-prints-2000-digital-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/prints.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - saved-reads/answers
+      - data/work/2000-digital-height
+      - data/warp/2000-digital-height
+      - data/solver/2000-digital-height/lots
+      - data/solver/2000-digital-height/page
+    outs:
+      - data/solver/2000-digital-height/prints:
+          persist: true
+  solver-text-chance-2000-digital-height:
+    cmd: uv run --frozen sfzmaps stage solver-text-chance-2000-digital-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/text/model.pt
+      - data/work/2000-digital-height
+    outs:
+      - data/solver/2000-digital-height/text:
+          persist: true
+  solver-labels-2000-digital-height:
+    cmd: uv run --frozen sfzmaps stage solver-labels-2000-digital-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/2000-digital-height/prints/prints.parquet
+      - data/solver/2000-digital-height/lots
+      - data/solver/2000-digital-height/page
+      - data/ref
+      - data/solver/models-2000
+    outs:
+      - data/solver/2000-digital-height/labels:
+          persist: true
+  solver-walls-2000-digital-height:
+    cmd: uv run --frozen sfzmaps stage solver-walls-2000-digital-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/2000-digital-height/page
+      - data/solver/2000-digital-height/lots
+      - data/solver/2000-digital-height/labels/strokes.npz
+      - data/solver/2000-digital-height/text/chance
+      - data/work/2000-digital-height
+      - data/warp/2000-digital-height
+      - inputs/2000-digital-height
+      - data/solver/models-2000
+      - data/solver/labels/strokes.npz
+    outs:
+      - data/solver/2000-digital-height/walls:
+          persist: true
+  solver-solve-2000-digital-height:
+    cmd: uv run --frozen sfzmaps stage solver-solve-2000-digital-height
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/borders.py
+      - src/sfzmaps/solver/city.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/energy.py
+      - src/sfzmaps/solver/frame.py
+      - src/sfzmaps/solver/grid.py
+      - src/sfzmaps/solver/holes.py
+      - src/sfzmaps/solver/labels.py
+      - src/sfzmaps/solver/lots.py
+      - src/sfzmaps/solver/measures.py
+      - src/sfzmaps/solver/mincut.py
+      - src/sfzmaps/solver/page.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/placement.py
+      - src/sfzmaps/solver/qpbo.py
+      - src/sfzmaps/solver/report.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/solver/saved.py
+      - src/sfzmaps/solver/search.py
+      - src/sfzmaps/solver/solve.py
+      - src/sfzmaps/solver/streetside.py
+      - src/sfzmaps/solver/strokes.py
+      - src/sfzmaps/solver/table.py
+      - src/sfzmaps/solver/textgrid.py
+      - src/sfzmaps/solver/textnet/__init__.py
+      - src/sfzmaps/solver/textnet/boxes.py
+      - src/sfzmaps/solver/textnet/data.py
+      - src/sfzmaps/solver/textnet/model.py
+      - src/sfzmaps/solver/textnet/predict.py
+      - src/sfzmaps/solver/textnet/train.py
+      - src/sfzmaps/solver/threads.py
+      - src/sfzmaps/solver/transfer.py
+      - src/sfzmaps/solver/trust.py
+      - src/sfzmaps/solver/wallevidence.py
+      - src/sfzmaps/solver/walls.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/solver/2000-digital-height/lots
+      - data/solver/2000-digital-height/page/ink.png
+      - data/solver/2000-digital-height/prints/prints.parquet
+      - data/solver/2000-digital-height/labels
+      - data/solver/2000-digital-height/walls
+      - data/solver/models-2000
+      - data/out/2000-digital-zoning/districts/height.parquet
+    outs:
+      - data/solver/2000-digital-height/solve:
+          persist: true
+  solver-publish-1980-1990-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-publish-1980-1990-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/__init__.py
+      - src/sfzmaps/districts/assemble.py
+      - src/sfzmaps/districts/categories.py
+      - src/sfzmaps/districts/labels.py
+      - src/sfzmaps/districts/lots.py
+      - src/sfzmaps/districts/pattern.py
+      - src/sfzmaps/districts/read.py
+      - src/sfzmaps/districts/regionread.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/sampling.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/districts/solved.py
+      - src/sfzmaps/districts/today.py
+      - src/sfzmaps/fresh.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/linework.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/manifest.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
+      - src/sfzmaps/placement.py
+      - src/sfzmaps/pointsfile.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/refine.py
+      - src/sfzmaps/runner.py
+      - src/sfzmaps/score.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/sources/__init__.py
+      - src/sfzmaps/sources/datasf.py
+      - src/sfzmaps/stitch.py
+      - src/sfzmaps/tiles.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/work/1980-1990-zoning/districts_raw.parquet
+      - data/work/1980-1990-zoning/districts_raw.json
+      - data/out/1980-1990-zoning/districts/height.parquet
+      - data/out/1980-1990-zoning/districts/height.json
+      - inputs/1980-1990-zoning
+      - inputs/1980-1990-height
+      - inputs/parks.csv
+      - inputs/park_maps.csv
+      - data/ref/parcels.parquet
+      - ../docs/research/zoning-districts.csv
+      - data/solver/1980-1990-zoning/solve/runs/final.npz
+      - data/solver/1980-1990-zoning/solve/report.json
+      - data/solver/1980-1990-zoning/lots/table.parquet
+      - data/solver/1980-1990-zoning/lots/lots.npz
+    outs:
+      - data/out/1980-1990-zoning/districts/parcels.fgb:
+          persist: true
+      - data/out/1980-1990-zoning/districts/districts.fgb:
+          persist: true
+      - data/out/1980-1990-zoning/districts/stats.json:
+          persist: true
+      - data/out/1980-1990-zoning/districts/stats.json.inputs.json:
+          persist: true
+      - data/out/1980-1990-zoning/districts/unknown_codes.json:
+          persist: true
+  solver-publish-1990-1996-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-publish-1990-1996-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/__init__.py
+      - src/sfzmaps/districts/assemble.py
+      - src/sfzmaps/districts/categories.py
+      - src/sfzmaps/districts/labels.py
+      - src/sfzmaps/districts/lots.py
+      - src/sfzmaps/districts/pattern.py
+      - src/sfzmaps/districts/read.py
+      - src/sfzmaps/districts/regionread.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/sampling.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/districts/solved.py
+      - src/sfzmaps/districts/today.py
+      - src/sfzmaps/fresh.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/linework.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/manifest.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
+      - src/sfzmaps/placement.py
+      - src/sfzmaps/pointsfile.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/refine.py
+      - src/sfzmaps/runner.py
+      - src/sfzmaps/score.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/sources/__init__.py
+      - src/sfzmaps/sources/datasf.py
+      - src/sfzmaps/stitch.py
+      - src/sfzmaps/tiles.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/work/1990-1996-zoning/districts_raw.parquet
+      - data/work/1990-1996-zoning/districts_raw.json
+      - data/out/1990-1996-zoning/districts/height.parquet
+      - data/out/1990-1996-zoning/districts/height.json
+      - inputs/1990-1996-zoning
+      - inputs/1990-1996-height
+      - inputs/parks.csv
+      - inputs/park_maps.csv
+      - data/ref/parcels.parquet
+      - ../docs/research/zoning-districts.csv
+      - data/solver/1990-1996-zoning/solve/runs/final.npz
+      - data/solver/1990-1996-zoning/solve/report.json
+      - data/solver/1990-1996-zoning/lots/table.parquet
+      - data/solver/1990-1996-zoning/lots/lots.npz
+    outs:
+      - data/out/1990-1996-zoning/districts/parcels.fgb:
+          persist: true
+      - data/out/1990-1996-zoning/districts/districts.fgb:
+          persist: true
+      - data/out/1990-1996-zoning/districts/stats.json:
+          persist: true
+      - data/out/1990-1996-zoning/districts/stats.json.inputs.json:
+          persist: true
+      - data/out/1990-1996-zoning/districts/unknown_codes.json:
+          persist: true
+  solver-publish-1996-2000-zoning:
+    cmd: uv run --frozen sfzmaps stage solver-publish-1996-2000-zoning
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/__init__.py
+      - src/sfzmaps/districts/assemble.py
+      - src/sfzmaps/districts/categories.py
+      - src/sfzmaps/districts/labels.py
+      - src/sfzmaps/districts/lots.py
+      - src/sfzmaps/districts/pattern.py
+      - src/sfzmaps/districts/read.py
+      - src/sfzmaps/districts/regionread.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/sampling.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/districts/solved.py
+      - src/sfzmaps/districts/today.py
+      - src/sfzmaps/fresh.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/linework.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/manifest.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
+      - src/sfzmaps/placement.py
+      - src/sfzmaps/pointsfile.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/refine.py
+      - src/sfzmaps/runner.py
+      - src/sfzmaps/score.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/sources/__init__.py
+      - src/sfzmaps/sources/datasf.py
+      - src/sfzmaps/stitch.py
+      - src/sfzmaps/tiles.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/work/1996-2000-zoning/districts_raw.parquet
+      - data/work/1996-2000-zoning/districts_raw.json
+      - data/out/1996-2000-zoning/districts/height.parquet
+      - data/out/1996-2000-zoning/districts/height.json
+      - inputs/1996-2000-zoning
+      - inputs/1996-2000-height
+      - inputs/parks.csv
+      - inputs/park_maps.csv
+      - data/ref/parcels.parquet
+      - ../docs/research/zoning-districts.csv
+      - data/solver/1996-2000-zoning/solve/runs/final.npz
+      - data/solver/1996-2000-zoning/solve/report.json
+      - data/solver/1996-2000-zoning/lots/table.parquet
+      - data/solver/1996-2000-zoning/lots/lots.npz
+    outs:
+      - data/out/1996-2000-zoning/districts/parcels.fgb:
+          persist: true
+      - data/out/1996-2000-zoning/districts/districts.fgb:
+          persist: true
+      - data/out/1996-2000-zoning/districts/stats.json:
+          persist: true
+      - data/out/1996-2000-zoning/districts/stats.json.inputs.json:
+          persist: true
+      - data/out/1996-2000-zoning/districts/unknown_codes.json:
           persist: true
   solver-publish:
     cmd: uv run --frozen sfzmaps stage solver-publish

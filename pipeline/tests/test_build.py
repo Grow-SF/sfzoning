@@ -62,11 +62,17 @@ def test_status_keys_with_or_without_a_path_prefix():
 
 def test_plan_adds_downstream_and_limits_to_targets():
     t = build.stages()
-    assert build.plan_run({"warp-1948"}, None, t) == ["warp-1948"]
+    # an SU map's warp: no solver reads it (every other warp has its series' solver stages downstream)
+    su, su2 = "warp-1980-1990-su", "warp-1990-1996-su"
+    assert build.plan_run({su}, None, t) == [su]
     assert build.plan_run({"edition-1948"}, None, t) == []        # the old stages are frozen
-    assert build.plan_run({"warp-1948", "warp-1975"}, ["warp-1948"], t) == ["warp-1948"]
-    assert build.plan_run(set(), ["warp-1948"], t) == []
-    assert build.plan_run(set(), ["warp-1948"], t, force=True) == ["warp-1948"]
+    assert build.plan_run({su, su2}, [su], t) == [su]
+    assert build.plan_run(set(), [su], t) == []
+    assert build.plan_run(set(), [su], t, force=True) == [su]
+    # a series' warp reruns its solver
+    assert build.plan_run({"warp-1948"}, None, t) == ["warp-1948", *(f"solver-{p}-1948" for p in
+                                                                    ("page", "lots", "prints", "labels", "walls",
+                                                                     "solve"))]
     with pytest.raises(ValueError):
         build.plan_run(set(), ["edition-1999"], t)
 
@@ -624,10 +630,6 @@ def _with_a_solve(series, monkeypatch):
     from sfzmaps.districts import solved
     t = build.stages()
     owner = {s: n for n, st in t.items() for s in st.series}
-    root = solved.default_root(series).relative_to(config.PIPELINE_DIR).as_posix()
-    t[f"solver-solve-{series}"] = build.Stage(
-        f"solver-solve-{series}", (), (), (f"warp-{series}",), command=("solver", "solve", "final"),
-        reads=(f"data/warp/{series}",), writes=(f"{root}/lots", f"{root}/solve"), code=("sfzmaps.solver.solve",))
     monkeypatch.setattr(solved, "SOLVED", solved.SOLVED | {series})
     st = build.publish_stage(series, t, owner)
     shared = t.pop("shared")
@@ -643,7 +645,7 @@ def test_a_series_published_from_its_solve_gets_its_own_stage_and_its_edition_ha
     t = _with_a_solve(series, monkeypatch)
     st = t[f"solver-publish-{series}"]
     assert st.command == ("solver", "publish", "--series", series)
-    assert st.upstream == ("refdata", owner, f"solver-solve-{series}")
+    assert st.upstream == ("refdata", owner, f"solver-lots-{series}", f"solver-solve-{series}")
     deps = build.stage_deps(st)
     root = f"data/solver/{series}"
     assert [d for d in deps if d.startswith("data/solver/")] == [
@@ -669,7 +671,9 @@ def test_a_series_published_from_its_solve_gets_its_own_stage_and_its_edition_ha
 
 def test_a_series_in_solved_before_its_solver_has_stages_stops_the_stage_table(monkeypatch):
     from sfzmaps.districts import solved
+    from sfzmaps.solver import paths
     monkeypatch.setattr(solved, "SOLVED", solved.SOLVED | {"1948"})
+    monkeypatch.setattr(paths, "ALL_YEARS", tuple(s for s in paths.ALL_YEARS if s != "1948"))
     with pytest.raises(ValueError, match="1948 is in districts.solved.SOLVED but no stage writes data/solver/1948/"):
         build.stages()
 

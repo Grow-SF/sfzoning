@@ -47,7 +47,7 @@ SERIES = "2000-digital-zoning"     # the first series published from a solve, an
 # The zoning series published from a solve.  Each has a publish stage (`stage_name`) and its edition or period stage
 # hands its zoning publish over to it (build.stages).  Add a series once its solver's stages write its root
 # (`default_root`), then `sfzmaps build --write-dvc-yaml`; the build's tests check the wiring.
-SOLVED = frozenset({SERIES})
+SOLVED = frozenset({SERIES, "1996-2000-zoning", "1990-1996-zoning", "1980-1990-zoning"})
 # what a publish stage writes in out/<series>/districts/: assemble.PUBLISHED and the publish's fingerprint
 PUBLISHED = ("parcels.fgb", "districts.fgb", "stats.json", "stats.json.inputs.json", "unknown_codes.json")
 # The named Neighborhood Commercial Districts of the April 2000 table, in the one spelling: each is published as

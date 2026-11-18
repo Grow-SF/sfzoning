@@ -29,7 +29,7 @@ def main() -> None:
 @solver_app.callback()
 def solver_main(series: str = typer.Option(None, "--series",
                                            help="The series to solve (default the 2000 map, data/solver/); another "
-                                                "series' outputs go to data/solver/experiments/all-years/<series>/.")
+                                                "series' outputs go to data/solver/<series>/.")
                 ) -> None:
     """The solver of one series: the 2000 map unless --series names another."""
     import os
@@ -1354,7 +1354,7 @@ def solver_text_chance(device: str = _DEVICE_OPTION) -> None:
 def solver_transfer_models(
         workers: int = typer.Option(2, "--workers", help="Processes for the walls' closing paths.")) -> None:
     """Fit, on the 2000 map, the models every other series is solved with (walls, trust, street sides, lot sizes,
-    placement): data/solver/experiments/all-years/models-2000/."""
+    placement): data/solver/models-2000/."""
     import logging
 
     from sfzmaps.solver import transfer

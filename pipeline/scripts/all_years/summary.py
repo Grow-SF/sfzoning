@@ -16,8 +16,12 @@ def main():
         s = json.loads(f.read_text())
         t = s.get("table_solve")
         p = s.get("table_published_site")
+        root = f.parent
+        ev = json.loads((root / "walls" / "evaluation.json").read_text()) if (root / "walls" / "evaluation.json").is_file() else {}
+        tr = json.loads((root / "labels" / "trust.json").read_text()) if (root / "labels" / "trust.json").is_file() else {}
         rows.append({
-            "series": s["series"],
+            "series": s["series"], "prints": tr.get("prints"), "reads": tr.get("read_set"),
+            "width_scale": ev.get("width_scale"),
             "agree_lots": s["agree_share_lots"], "agree_area": s["agree_share_area"],
             "differing_lots": s["differing_lots"], "differing_areas": s["differing_areas"],
             "own_labels_solve/published": (lambda o: o and f"{o.get('solve')}/{o.get('published')} of {o.get('labels')}")(

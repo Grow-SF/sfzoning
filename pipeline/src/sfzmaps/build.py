@@ -249,7 +249,10 @@ def stages() -> dict[str, Stage]:
                                        "data/solver/prints/prints.parquet", "data/solver/labels", "data/solver/walls",
                                        "data/warp/2000-digital-zoning", "inputs/hand-labels-2000/label_fixes.csv",
                                        "inputs/zoning-2000/table-corrections.csv"),
-                                writes=("data/solver/solve",), code=("sfzmaps.solver.solve",))
+                                writes=("data/solver/solve",), code=("sfzmaps.solver.solve",),
+                                # the 2000 models applied to another series (`transfer`) are another series' alone
+                                cut=(*OUTPUT_NEUTRAL, "sfzmaps.solver.transfer"))
+    out.update(_all_years_stages(owner))
     # Each map published from its solve (`districts/solved.py`, the series of `solved.SOLVED`): the read's lots with
     # the solve's codes, then unzoned blocks, overrides, heights and parks as for every series.  Not in the edition's or
     # period's stage, which makes the sheets the solver reads (a cycle): that stage reads the zoning (and the heights),
@@ -263,6 +266,59 @@ def stages() -> dict[str, Stage]:
             out[st.name] = st
             publishers.append(st.name)
     out["shared"] = Stage("shared", (), (), (*old, *publishers), frozen=True)
+    return out
+
+
+ALL_YEARS_WALL_WORKERS = 2      # processes for a series' closing paths: several series' walls run at once
+
+
+def _all_years_stages(owner: dict[str, str]) -> dict[str, Stage]:
+    """Every other series' solver, 2000's chain per series (`sfzmaps solver --series S <part>`), into data/solver/<S>
+    (`paths.solver_dir`), and the 2000 map's models they are solved with (`solver-transfer`: data/solver/models-2000,
+    from the 2000 stages' outputs).  Per series: the merged page, the table's lots (no codes), the prints (its saved
+    reads, or a pattern map's lot reads), the one detector's chance of text on its sheets, the labels and the walls by
+    the 2000 models, and the solve.  The solve reads the series' code list from its read (`transfer.series_vocabulary`:
+    districts_raw.parquet, or a height map's period's published heights)."""
+    from sfzmaps.districts.series import SERIES as INFO
+    from sfzmaps.solver import paths
+    out = {}
+    models = "data/solver/models-2000"
+    out["solver-transfer"] = Stage(
+        "solver-transfer", (), (), ("solver-labels", "solver-walls", "solver-text"), command=("solver", "transfer-models"),
+        reads=("data/solver/lots", "data/solver/prints/prints.parquet", "data/solver/labels", "data/solver/walls",
+               "data/solver/page", "data/solver/text/chance", "data/work/2000-digital-zoning",
+               "data/warp/2000-digital-zoning", "inputs/hand-labels-2000/label_fixes.csv"),
+        writes=(models,), code=("sfzmaps.solver.transfer",))
+    for s in paths.ALL_YEARS:
+        root = f"data/solver/{s}"
+
+        def stage(part, upstream, reads, code, extra=()):
+            name = f"solver-{part}-{s}"
+            out[name] = Stage(name, (), (), upstream, command=("solver", "--series", s, part, *extra), reads=reads,
+                              writes=(f"{root}/{'text' if part == 'text-chance' else part}",), code=(code,))
+        stage("page", (f"warp-{s}",), (f"data/warp/{s}", f"data/work/{s}", f"inputs/{s}"), "sfzmaps.solver.page")
+        stage("lots", (f"solver-page-{s}",), ("inputs/zoning-2000/april2000.geojson.gz", f"{root}/page"),
+              "sfzmaps.solver.lots")
+        stage("prints", (f"solver-lots-{s}",), ("saved-reads/answers", f"data/work/{s}", f"data/warp/{s}",
+                                                f"{root}/lots", f"{root}/page"), "sfzmaps.solver.prints")
+        stage("text-chance", ("solver-text", owner[s]), ("data/solver/text/model.pt", f"data/work/{s}"),
+              "sfzmaps.solver.transfer")
+        stage("labels", (f"solver-prints-{s}", "solver-transfer"),
+              (f"{root}/prints/prints.parquet", f"{root}/lots", f"{root}/page", "data/ref", models),
+              "sfzmaps.solver.transfer")
+        stage("walls", (f"solver-labels-{s}", f"solver-text-chance-{s}", "solver-transfer"),
+              (f"{root}/page", f"{root}/lots", f"{root}/labels/strokes.npz", f"{root}/text/chance", f"data/work/{s}",
+               f"data/warp/{s}", f"inputs/{s}", models, "data/solver/labels/strokes.npz"),
+              "sfzmaps.solver.transfer", ("--workers", str(ALL_YEARS_WALL_WORKERS)))
+        info = INFO[s]
+        vocabulary = (f"data/out/{info.period}-zoning/districts/height.parquet",) if info.role == "height" else \
+            (f"data/work/{s}/districts_raw.parquet",)
+        stage("solve", (f"solver-walls-{s}", owner[s] if info.role != "height" else owner[f"{info.period}-zoning"]),
+              (f"{root}/lots", f"{root}/page/ink.png", f"{root}/prints/prints.parquet", f"{root}/labels",
+               f"{root}/walls", models, *vocabulary), "sfzmaps.solver.solve", ())
+        st = out[f"solver-solve-{s}"]
+        out[st.name] = Stage(st.name, (), (), st.upstream, command=("solver", "--series", s, "solve", "final"),
+                             reads=st.reads, writes=st.writes, code=st.code)
     return out
 
 

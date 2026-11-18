@@ -338,7 +338,7 @@ def _frame(rows: list[dict]) -> pd.DataFrame:
 
 
 # The pattern maps: their districts are fill patterns keyed to a legend, with no printed codes for Terra or Sol to read.
-PATTERN_SERIES = ("1921", "1929", "1935", "1948")
+PATTERN_SERIES = paths.PATTERN_SERIES
 PATTERN_SKIP = ("off_sheet", "no_tile")       # pattern reads with no tile of the lot behind them
 
 
