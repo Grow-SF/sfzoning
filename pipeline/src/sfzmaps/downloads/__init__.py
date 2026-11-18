@@ -30,7 +30,9 @@ DATA_CODE: dict[str, list[Path]] = {
     "districts": [_HERE / "vectors.py", _HERE / "fields.py"],
 }
 # fields.py is in both: it shapes the data files and the README's field table shows it.
-TEXT_CODE = [_HERE / "readme.py", _HERE / "readme-template.txt", _HERE / "package.py", _HERE / "fields.py"]
+# __init__.py is here for latest_name/_EXT, which feed the README's NEWEST URLs.
+TEXT_CODE = [_HERE / "readme.py", _HERE / "readme-template.txt", _HERE / "package.py", _HERE / "fields.py",
+             _HERE / "__init__.py"]
 
 VECTOR_FORMATS = ("geojson", "gpkg", "shp")
 _EXT = {"geojson": "geojson.zip", "gpkg": "gpkg.zip", "shp": "shp.zip", "cog": "tif"}
@@ -99,6 +101,8 @@ def data_fingerprint(item: Item, exporter_version: str) -> str:
         h.update(f"{rel}\0{digest}\n".encode())
     for p in DATA_CODE[item.layer]:
         h.update(f"code:{p.name}\0{stitch._sha256(p)}\n".encode())
+    # TIFFTAG_COPYRIGHT (rasters.py) also carries config.RUMSEY_CREDIT, which is deliberately not
+    # hashed here: if that credit changes, bump EXPORTER_VERSION to re-run the images.
     h.update(f"exporter:{exporter_version}".encode())
     return h.hexdigest()
 
@@ -108,6 +112,7 @@ def fingerprint(item: Item, exporter_version: str) -> str:
     h = hashlib.sha256(data_fingerprint(item, exporter_version).encode())
     for p in TEXT_CODE:
         h.update(f"text:{p.name}\0{stitch._sha256(p)}\n".encode())
+    h.update(f"rumsey:{config.RUMSEY_CREDIT}".encode())  # feeds the README credit
     return h.hexdigest()
 
 
@@ -175,28 +180,48 @@ def run(series: list[str] | None = None, log=lambda line: None) -> dict:
             log(f"same   {item.key}")
             continue
         out.parent.mkdir(parents=True, exist_ok=True)
-        if reusable and item.layer == "citywide":  # text only: the image stays as it is
+        rel_path = f"{item.series}/{item.filename}"
+        have_old = bool(old and out.exists() and old.get("path") == rel_path)
+        if item.layer == "citywide":
+            new_readme = package.item_readme(item, updated, commit)
+            if reusable:  # text only: the image stays as it is
+                tmp_img, size, sha = None, old["bytes"], old["sha256"]
+            else:
+                tmp_img = out.with_name(out.name + ".next")  # the old image survives for comparison
+                rasters.write_image(item, tmp_img)
+                size, sha = tmp_img.stat().st_size, _sha256_file(tmp_img)
+            if have_old and extra_ok and sha == old["sha256"] and package.sidecar_text(out, item) == (
+                    _undated(new_readme), package.LICENSE_TEXT):
+                if tmp_img:
+                    tmp_img.unlink()
+                files[item.key] = {**old, "data_fingerprint": dfp, "fingerprint": fp}
+                log(f"same   {item.key}  (content unchanged)")
+                continue
+            if tmp_img:
+                if have_old and sha == old["sha256"]:
+                    tmp_img.unlink()  # same pixels: keep the published file as it is
+                    size = old["bytes"]
+                else:
+                    os.replace(tmp_img, out)
             extra = package.write_sidecars(out, item, updated, commit)
-            size, sha = old["bytes"], old["sha256"]
-            log(f"text   {item.key}")
-        elif reusable:  # text only: the same data members in a fresh zip
-            package.write_zip(out, package.data_members(out), item, updated, commit)
-            extra, size, sha = [], out.stat().st_size, _sha256_file(out)
-            log(f"text   {item.key}  ({size:,} bytes)")
+            log(f"{'text  ' if reusable else 'wrote '} {item.key}")
         else:
-            if item.layer == "citywide":
-                rasters.write_image(item, out)
-                extra = package.write_sidecars(out, item, updated, commit)
+            if reusable:  # text only: the same data members
+                members = package.data_members(out)
             else:
                 with tempfile.TemporaryDirectory() as t:
                     members = {p.name: p.read_bytes() for p in vectors.write_layers(item, Path(t))}
-                package.write_zip(out, members, item, updated, commit)
-                extra = []
-            size, sha = out.stat().st_size, _sha256_file(out)
-            log(f"wrote  {item.key}  ({size:,} bytes)")
+            if have_old and package.zip_content(out) == (
+                    members, _undated(package.item_readme(item, updated, commit)), package.LICENSE_TEXT):
+                files[item.key] = {**old, "data_fingerprint": dfp, "fingerprint": fp}
+                log(f"same   {item.key}  (content unchanged)")
+                continue
+            package.write_zip(out, members, item, updated, commit)
+            extra, size, sha = [], out.stat().st_size, _sha256_file(out)
+            log(f"{'text  ' if reusable else 'wrote '} {item.key}  ({size:,} bytes)")
         files[item.key] = {
             "series": item.series, "layer": item.layer, "fmt": item.fmt,
-            "path": f"{item.series}/{item.filename}", "data_fingerprint": dfp, "fingerprint": fp,
+            "path": rel_path, "data_fingerprint": dfp, "fingerprint": fp,
             "bytes": size, "sha256": sha, "extra": extra, "made": updated,
         }
     for s in sorted(wanted & everything):

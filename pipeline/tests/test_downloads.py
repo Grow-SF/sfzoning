@@ -127,7 +127,8 @@ def test_exporter_code_is_the_real_exporter_files():
     assert {k: [p.name for p in v] for k, v in downloads.DATA_CODE.items()} == {
         "citywide": ["rasters.py"], "lots": ["vectors.py", "fields.py"],
         "districts": ["vectors.py", "fields.py"]}
-    assert [p.name for p in downloads.TEXT_CODE] == ["readme.py", "readme-template.txt", "package.py", "fields.py"]
+    assert [p.name for p in downloads.TEXT_CODE] == ["readme.py", "readme-template.txt", "package.py", "fields.py",
+                                                      "__init__.py"]
     assert all(p.exists() for v in downloads.DATA_CODE.values() for p in v)
     assert all(p.exists() for p in downloads.TEXT_CODE)
 
@@ -346,14 +347,13 @@ def test_citywide_image_is_deterministic_and_dateless(tmp_data, monkeypatch):
     item = {i.key: i for i in downloads.catalog()}["1948/citywide.cog"]
     (tmp_data / "dl").mkdir()
     shas = []
-    for day in ("2026-11-04", "2027-02-09"):
-        monkeypatch.setattr(downloads, "_today", lambda day=day: day)
-        out = tmp_data / "dl" / f"{day.replace('-', '')[4:]}.tif"
+    for n in (1, 2):  # two separate GDAL runs
+        out = tmp_data / "dl" / f"run{n}.tif"
         rasters.write_image(item, out)
         shas.append(hashlib.sha256(out.read_bytes()).hexdigest())
         info = subprocess.run(["gdalinfo", str(out)], check=True, capture_output=True, text=True).stdout
-        assert "TIFFTAG_IMAGEDESCRIPTION=1948 edition" in info
-        assert day[:4] not in info.replace(str(out), "")
+        assert [l.strip() for l in info.splitlines() if "IMAGEDESCRIPTION" in l] == [
+            "TIFFTAG_IMAGEDESCRIPTION=1948 edition"]
     assert shas[0] == shas[1]
 
 
@@ -425,7 +425,7 @@ def fake_exports(tmp_data, monkeypatch):
     def layers(item, tmp):
         written.append((item.key, downloads._today()))
         f = tmp / f"{item.series}-{item.layer}.{item.fmt}.dat"
-        f.write_bytes(f"{item.key}".encode())
+        f.write_bytes(f"{item.key}".encode() + item.sources[0].read_bytes())
         g = tmp / f"{item.series}-{item.layer}.aux"
         g.write_bytes(b"aux")
         return [f, g]
@@ -696,3 +696,113 @@ def test_fields_change_reruns_vector_data_but_not_images(fake_exports, tmp_data,
     downloads.run()
     keys = sorted(k for k, _ in fake_exports)
     assert keys == sorted(f"1948/{l}.{f}" for l in ("lots", "districts") for f in ("geojson", "gpkg", "shp"))
+
+
+# --- identical content keeps the published file and its date ------------------
+
+def _tree(root):
+    return {str(p): (p.read_bytes(), p.stat().st_mtime_ns) for p in root.rglob("*")
+            if p.is_file() and p.name != "index.json"}
+
+
+def test_undated_strips_the_whole_last_updated_line():
+    a = readme("1948", "citywide", "2026-11-04", "abc1234", "cog")
+    b = readme("1948", "citywide", "2027-01-09", "def5678", "cog")
+    assert a != b and downloads._undated(a) == downloads._undated(b)
+    assert "abc1234" not in downloads._undated(a) and "2026-11-04" not in downloads._undated(a)
+
+
+def test_text_code_change_with_same_readme_text_rewrites_nothing(fake_exports, tmp_data, monkeypatch):
+    edit = _text_only_change(monkeypatch, tmp_data)
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-11-20")
+    first = downloads.run()
+    root = tmp_data / "downloads"
+    before = _tree(root)
+    edit()  # fingerprint changes, README text does not
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-12-01")
+    monkeypatch.setattr(downloads, "_commit", lambda: "zzz9999")
+    fake_exports.clear()
+    second = downloads.run()
+    assert fake_exports == [] and _tree(root) == before
+    for k, e in second["files"].items():
+        assert (e["made"], e["sha256"], e["bytes"]) == (
+            first["files"][k]["made"], first["files"][k]["sha256"], first["files"][k]["bytes"])
+        assert e["fingerprint"] != first["files"][k]["fingerprint"]
+    assert downloads.run() == second  # and the new fingerprint makes the next run a no-op
+
+
+def test_full_rebuild_with_identical_image_keeps_made_and_sidecars(fake_exports, tmp_data, monkeypatch):
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-11-20")
+    first = downloads.run()
+    root = tmp_data / "downloads"
+    before = _tree(root)
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-12-01")
+    monkeypatch.setattr(downloads, "_commit", lambda: "zzz9999")
+    monkeypatch.setattr(downloads, "EXPORTER_VERSION", "99")  # forces a full rebuild of everything
+    fake_exports.clear()
+    second = downloads.run()
+    assert len(fake_exports) == 7  # the writers did run
+    assert _tree(root) == before  # but nothing published changed, no stray temp file left
+    city = second["files"]["1948/citywide.cog"]
+    assert city["made"] == "2026-11-20" and city["sha256"] == first["files"]["1948/citywide.cog"]["sha256"]
+    assert city["data_fingerprint"] != first["files"]["1948/citywide.cog"]["data_fingerprint"]
+    assert second["files"]["1948/lots.shp"]["made"] == "2026-11-20"
+    assert downloads.run() == second
+
+
+def test_real_readme_text_change_rewrites_sidecars_and_made(fake_exports, tmp_data, monkeypatch):
+    edit = _text_only_change(monkeypatch, tmp_data)
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-11-20")
+    first = downloads.run()
+    root = tmp_data / "downloads"
+    edit()
+    _new_readme_text(monkeypatch)
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-12-01")
+    second = downloads.run()
+    city = second["files"]["1948/citywide.cog"]
+    assert city["made"] == "2026-12-01" and city["sha256"] == first["files"]["1948/citywide.cog"]["sha256"]
+    text = (root / city["extra"][0]).read_text()
+    assert "NEW WORDS" in text and "2026-12-01" in text
+
+
+def test_real_readme_text_change_with_full_rebuild_rewrites_sidecars(fake_exports, tmp_data, monkeypatch):
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-11-20")
+    first = downloads.run()
+    root = tmp_data / "downloads"
+    img = root / first["files"]["1948/citywide.cog"]["path"]
+    _new_readme_text(monkeypatch)
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-12-01")
+    monkeypatch.setattr(downloads, "EXPORTER_VERSION", "99")
+    second = downloads.run()
+    city = second["files"]["1948/citywide.cog"]
+    assert city["made"] == "2026-12-01" and "NEW WORDS" in (root / city["extra"][0]).read_text()
+    assert img.read_bytes() == b"cog" and not list(root.rglob("*.next"))
+
+
+def test_vector_zip_same_content_is_untouched_and_real_text_change_rezips(fake_exports, tmp_data, monkeypatch):
+    edit = _text_only_change(monkeypatch, tmp_data)
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-11-20")
+    first = downloads.run()
+    root = tmp_data / "downloads"
+    path = root / first["files"]["1948/lots.geojson"]["path"]
+    zbytes, zmtime = path.read_bytes(), path.stat().st_mtime_ns
+    edit()
+    monkeypatch.setattr(downloads, "_today", lambda: "2026-12-01")
+    same = downloads.run()
+    assert path.read_bytes() == zbytes and path.stat().st_mtime_ns == zmtime
+    assert same["files"]["1948/lots.geojson"]["made"] == "2026-11-20"
+    assert same["files"]["1948/lots.geojson"]["sha256"] == first["files"]["1948/lots.geojson"]["sha256"]
+    _touch(tmp_data / "textcode" / "package.py", b"v3")
+    _new_readme_text(monkeypatch)
+    changed = downloads.run()
+    e = changed["files"]["1948/lots.geojson"]
+    assert e["made"] == "2026-12-01" and e["sha256"] != first["files"]["1948/lots.geojson"]["sha256"]
+    with zipfile.ZipFile(path) as z:
+        assert z.read("README.txt").endswith(b"NEW WORDS")
+
+
+def test_rumsey_credit_feeds_the_text_fingerprint_only(tmp_data, monkeypatch):
+    city = {i.key: i for i in downloads.catalog()}["1948/citywide.cog"]
+    d, f = downloads.data_fingerprint(city, "1"), downloads.fingerprint(city, "1")
+    monkeypatch.setattr(config, "RUMSEY_CREDIT", config.RUMSEY_CREDIT + " (changed)")
+    assert downloads.data_fingerprint(city, "1") == d and downloads.fingerprint(city, "1") != f
