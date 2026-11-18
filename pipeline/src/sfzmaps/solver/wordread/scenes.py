@@ -11,7 +11,8 @@ never a code), the blocks (the union of each block's lots) and DataSF's street c
   street   a centreline (the maps draw few: district lines down a street)
 On a page they are cut into EDGES (`page_edges`): straight runs between the vertices the page can show (DataSF puts a
 vertex at every lot corner along a block's straight side, half of them within 0.003 ft of the line; a vertex within
-SIMPLIFY_PX of the line through its neighbours is dropped: the page's px grid, not a decision about the data).
+SIMPLIFY_PX of the line through its neighbours is dropped: less than half a px off the line, it can't make a visible
+corner at the page's resolution, a physical limit).
 
 What is held out (`usable`): the areas (a quarter, the answered blocks) as shapes on the map; a block is usable when
 its outline (and so every lot in it) meets none, a centreline when it meets none.  An answered-blocks area
@@ -37,10 +38,10 @@ only (its footprint, `load_footprint`, less the held-out areas):
            and ONE sigma for every kind (the placement that moves the lines is one), by EM (`fit_near`).  (Tried first:
            an offset mu and a sigma per kind.  The offset came out 0 for block and lot lines on every map; and a
            centreline's own spread, fitted alone, covered the whole street on the 1980-2000 maps (sigma 17-21 px
-           against 0.8-1.0 px for the blocks and lots): the street's untranscribed text, not a line.)  Each edge's own
-           px (the responsibilities of the skeleton px nearest it) out of its px: the share of a kind's EDGES that are
-           drawn, by a binomial mixture of drawn and not-drawn edges (`fit_edges`; the maps leave whole edges out,
-           they do not dash them); the length share is reported beside it.  The thickness: the own px' thickness (2
+           against 0.8-1.0 px for the blocks and lots): the street's untranscribed text, not a line.)  Each edge's
+           INKED FRACTION: its own px (the responsibilities of the skeleton px nearest it) out of its px outside
+           every word's box (at most 1: a line covers no more than itself); the kind's measured distribution of it,
+           one value an edge, is what scenes draw from (the length-weighted share reported beside it).  The thickness: the own px' thickness (2
            x the distance to paper at the skeleton - 1), explained as a mixture of the thicknesses `cv2.line` draws
            (`thickness_shares`; each thickness's profile measured by drawing it at every angle)
   codes    each zoning-code word's centre less the centroid of the lot nearest it (ft); its rate per lot
@@ -63,8 +64,9 @@ A scene (`SceneBank.crop(rng, size, scale, turns)`), from the generator alone:
     the sheets with the areas held out, on the printed map), its window of size / scale page px (moved inside the
     page), and the sheet's placement over the window as one affine map (least squares on its samples there,
     `window_affine`)
-  - lines: the edges of every usable item reaching the window (`page_edges`), each drawn whole or left out with its
-    kind's drawn share by edge, at a thickness drawn from its kind's thickness shares
+  - lines: the edges of every usable item reaching the window (`page_edges`), each inked over a fraction drawn from
+    its kind's measured per-edge inked fractions, as one contiguous run at a uniform position along the edge (a kind
+    whose fractions sit at 0 and 1 draws whole edges or none), at a thickness drawn from its kind's thickness shares
   - labels: each usable block with the block rate (at its centroid plus a measured block offset), each lot of a
     usable block with the code rate (at its centroid plus a measured code offset), and along each usable named
     centreline a Poisson count at the near street rate x its length (uniform along it, offset across it by a
@@ -96,7 +98,7 @@ from functools import cached_property, lru_cache
 import cv2
 import numpy as np
 import shapely
-from scipy import optimize, special
+from scipy import optimize
 from scipy.interpolate import LinearNDInterpolator
 from skimage.morphology import skeletonize
 
@@ -116,8 +118,9 @@ EM_MAX_ITER = 5000           # ... or after this many iterations (reported when 
 ANGLE_GRID = np.linspace(0.0, 90.0, 9001)   # the street angle density's table (0.01 degree; numerical)
 DECILES = np.arange(1, 10) / 10              # fit_far's starts
 BIG = 1e9                    # ft: a quarter's shape reaches this far past the split (beyond the city; numerical)
-SIMPLIFY_PX = 0.5            # px: a vertex this close to the straight line through its neighbours is one the page
-#                              can't show (its px grid); the drawing's own resolution, not a decision about the data
+SIMPLIFY_PX = 0.5            # px: a vertex less than half a px off the straight line through its neighbours can't
+#                              make a visible corner at the page's resolution (the px grid): a physical limit of the
+#                              drawing, not a decision about the data
 
 
 def norm(text) -> str:
@@ -769,52 +772,20 @@ def fit_far(d: np.ndarray) -> dict:
     return best
 
 
-def fit_edges(own: np.ndarray, length: np.ndarray) -> dict:
-    """The share of a kind's edges that are drawn: each edge's own ink px (`own`, soft counts; at most its length,
-    a line covering no more than itself) out of its px (`length`) is binomial at p_on when it is drawn and at p_off
-    when not (the stray ink of other things), the drawn share pi by EM from every decile split of the edges'
-    coverage, the likeliest kept, with each edge's responsibility r.  The drawn component is the one of the larger
-    p.  With no ink on any edge the share is 0; with one component (pi at an end) the edges are alike and the share
-    is their mean coverage."""
-    n = np.asarray(length, float)
-    x = np.minimum(np.asarray(own, float), n)
-    if not len(n) or not x.sum():
-        return {"share": 0.0, "p_on": math.nan, "p_off": math.nan, "r": np.zeros(len(n)), "loglik": 0.0, "edges": 0}
+def inked_fractions(own: np.ndarray, length: np.ndarray) -> np.ndarray:
+    """Each edge's inked fraction: its own ink px (soft counts) over its px, at most 1 (a line covers no more than
+    itself); edges with no px measured are left out."""
+    own, length = np.asarray(own, float), np.asarray(length, float)
+    on = length > 0
+    return np.minimum(own[on] / length[on], 1.0)
 
-    def loglik(p):
-        return special.xlogy(x, p) + special.xlogy(n - x, 1 - p)
 
-    best = None
-    cover = x / n
-    for q in DECILES:
-        r = (cover >= np.quantile(cover, q)).astype(float)
-        last, ll, it, pi = -np.inf, -np.inf, 0, float(r.mean())
-        if not 0 < pi < 1:
-            continue
-        for it in range(1, EM_MAX_ITER + 1):
-            pi = float(r.mean())
-            if not 0 < pi < 1:
-                break
-            p1 = float((r * x).sum() / (r * n).sum())
-            p0 = float(((1 - r) * x).sum() / ((1 - r) * n).sum())
-            a, b = math.log(pi) + loglik(p1), math.log(1 - pi) + loglik(p0)
-            top = np.maximum(a, b)
-            tot = top + np.log(np.exp(a - top) + np.exp(b - top))
-            r, ll = np.exp(a - tot), float(tot.sum())
-            if ll - last <= EM_TOL * max(1.0, abs(ll)):
-                break
-            last = ll
-        if 0 < pi < 1 and math.isfinite(ll) and (best is None or ll > best["loglik"]):
-            if p1 < p0:
-                pi, p1, p0, r = 1 - pi, p0, p1, 1 - r
-            best = {"share": pi, "p_on": p1, "p_off": p0, "r": r, "loglik": ll, "iterations": it, "start": float(q)}
-    one = float(x.sum() / n.sum())
-    whole = float(loglik(one).sum())
-    if best is None or whole >= best["loglik"]:
-        best = {"share": one, "p_on": one, "p_off": one, "r": np.ones(len(n)), "loglik": whole, "iterations": 0,
-                "start": "one component"}
-    best["edges"] = int(len(n))
-    return best
+def edge_runs(edges: np.ndarray, fraction: np.ndarray, start: np.ndarray) -> np.ndarray:
+    """The inked run of each edge ((n, 2, 2) ends): the `fraction` of it beginning at `start` x (1 - fraction) of the
+    way along (start uniform in [0, 1): a run placed uniformly along the edge)."""
+    a = (start * (1 - fraction))[:, None]
+    d = edges[:, 1] - edges[:, 0]
+    return np.stack([edges[:, 0] + a * d, edges[:, 0] + (a + fraction[:, None]) * d], 1)
 
 
 def _line_frame(lines, at) -> tuple[np.ndarray, np.ndarray]:
@@ -863,14 +834,14 @@ def _sheet_edges(sd: data.SheetData, geo: Geometry, inv: _ToPage) -> tuple[np.nd
 
 
 def _sheet_lines(sd: data.SheetData, geo: Geometry, inv, train: np.ndarray) -> dict:
-    """One sheet's part of the line measures: the edges (`_sheet_edges`) drawn 1 px wide, each px its edge's (a block
-    outline's over a lot line's over a centreline's where they meet); each training px's nearest edge and distance;
-    per kind, the distinct squared distances (px) of its training px (background) and, over the line ink's skeleton,
-    the counts per (edge, squared distance, thickness key); and each edge's kind and px on the training px."""
+    """One sheet's part of the line measures, on its training px outside every Terra word's and other pass's box (the
+    box itself; `train` less the boxes): the edges (`_sheet_edges`) drawn 1 px wide, each px its edge's (a block
+    outline's over a lot line's over a centreline's where they meet); each such px's nearest edge and distance; per
+    kind, the distinct squared distances (px) of those px (background) and, over the line ink's skeleton, the counts
+    per (edge, squared distance, thickness key); and each edge's kind and px there."""
     boxes_ = np.concatenate([sd.words, sd.other]).reshape(-1, 4, 2)
-    words = data._paint(boxes_, np.ones(len(boxes_), np.int32), 0, 0, sd.height, sd.width) > 0
-    line = data.page_ink(sd) & ~words & train
-    del words
+    train = train & ~(data._paint(boxes_, np.ones(len(boxes_), np.int32), 0, 0, sd.height, sd.width) > 0)
+    line = data.page_ink(sd) & train            # every word's box (Terra's, the other passes'), the box itself, out
     skel, tkey = _thickness_key(line)
     del line
     edges, kind = _sheet_edges(sd, geo, inv)
@@ -987,7 +958,7 @@ def _quantiles(x, w=None) -> dict | None:
 @dataclasses.dataclass
 class Measured:
     """What one map's scenes are drawn from (see the module)."""
-    drawn: np.ndarray            # (3,) per LINE_KINDS: the chance a segment is drawn
+    inked: list                  # per LINE_KINDS kind: the measured inked fraction of each edge (one value an edge)
     thickness: list              # per kind: (thicknesses (int), shares)
     code_rate: float             # code words per lot
     code_offsets: np.ndarray     # (n, 2) ft
@@ -1019,7 +990,7 @@ class Measured:
 
 def measure_map(lines: list[dict], labels: list[dict]) -> Measured:
     """One map's measures from its sheets' parts (`_sheet_lines`, `_sheet_labels`)."""
-    drawn, thick, line_summary = np.zeros(len(LINE_KINDS)), [], {}
+    inked, thick, line_summary = [], [], {}
     data_k = []
     for k in range(len(LINE_KINDS)):
         bkey, bn = _merge([p["background"][k] for p in lines])
@@ -1046,8 +1017,8 @@ def measure_map(lines: list[dict], labels: list[dict]) -> Measured:
     own, length, ekind = (np.concatenate(v) if v else np.zeros(0) for v in (own, length, ekind))
     for k, name in enumerate(LINE_KINDS):
         on = (ekind == k) & (length > 0)
-        edges = fit_edges(own[on], length[on])
-        drawn[k] = edges["share"]
+        f = inked_fractions(own[on], length[on])
+        inked.append(f)
         tk = np.concatenate([t[0][t[1] == k] for t in tkeys]) if tkeys else np.zeros(0, np.int64)
         tw = np.concatenate([t[2][t[1] == k] for t in tkeys]) if tkeys else np.zeros(0)
         keys, inv_ = np.unique(tk, return_inverse=True)
@@ -1058,9 +1029,13 @@ def measure_map(lines: list[dict], labels: list[dict]) -> Measured:
             "skeleton_px": int(data_k[k][2].sum()), "own_share_a": round(fit["a"][k], 4),
             "sigma_px (every kind's)": _round(fit["sigma"]), "own_px": round(float(own[ekind == k].sum()), 1),
             "length_px": int(length[ekind == k].sum()),
-            "drawn_share_by_length": round(float(own[on].sum() / length[on].sum()) if on.any() else 0.0, 4),
-            "edges": edges["edges"], "drawn_share_by_edge": round(drawn[k], 4), "p_on": _round(edges["p_on"]),
-            "p_off": _round(edges["p_off"]), "edge_fit": edges.get("start"), "em_iterations": fit["iterations"],
+            "inked_share_by_length": round(float(np.minimum(own[on], length[on]).sum() / length[on].sum())
+                                           if on.any() else 0.0, 4),
+            "edges": int(len(f)), "inked_fraction_mean_by_edge": round(float(f.mean()), 4) if len(f) else None,
+            "inked_fraction_by_edge": _quantiles(f), "edges_at_0": round(float((f == 0).mean()), 4) if len(f) else None,
+            "edges_at_1": round(float((f == 1).mean()), 4) if len(f) else None,
+            "inked_fraction_histogram": [int(v) for v in np.histogram(f, bins=10, range=(0.0, 1.0))[0]],
+            "em_iterations": fit["iterations"],
             "thickness_measured_px": _quantiles(2 * np.sqrt(keys) - 1, tw),
             "cv2_thickness_shares": {int(t): round(s, 4) for t, s in zip(*thick[-1], strict=True) if round(s, 4)},
             "thickness_unexplained": round(shares["unexplained"], 5)}
@@ -1073,7 +1048,7 @@ def measure_map(lines: list[dict], labels: list[dict]) -> Measured:
     r = np.asarray(far["r"], float)
     h = context.loo_bandwidth(street[:, 1], r, 0.0, 90.0) if len(street) else math.nan
     m = Measured(
-        drawn=np.minimum(drawn, 1.0), thickness=thick,
+        inked=inked, thickness=thick,
         code_rate=len(code) / lots if lots else 0.0, code_offsets=code,
         block_rate=len(block) / blocks if blocks else 0.0, block_offsets=block,
         street_rate=float(r.sum()) / street_ft if street_ft else 0.0, street_offsets=street[:, 0],
@@ -1211,23 +1186,25 @@ class SceneBank:
         corners = _apply(fwd, [[x0, y0], [x0 + src, y0], [x0, y0 + src], [x0 + src, y0 + src]])
         ft = math.sqrt(abs(np.linalg.det(fwd[:, :2])))
         ink = np.zeros((src, src), bool)
-        segs = self._draw_lines(rng, ink, corners, ft, back, x0, y0, m)
+        segs = self._draw_lines(rng, ink, corners, ft, back, x0, y0, m, sd.series)
         props = self._propose(rng, corners, ft, fwd, m, words)
         placed = self._place(rng, ink, props, back, x0, y0, words)
         out = self._targets(sd, ink, placed, words, size, scale, turns, src)
         self.tally["scenes"] += 1
         for p in placed:
             self.tally[f"label:{p['what']}"] += 1
-            self.tally[f"label:{p['what']}:{'stand-in' if p['standin'] else 'its own string'}"] += 1
+            how = "any code word" if p["what"] == "code" else "stand-in" if p["standin"] else "its own string"
+            self.tally[f"label:{p['what']}:{how}"] += 1
         self.last = {"sheet": j, "series": sd.series, "window": (y0, x0, src), "segments": segs, "labels": placed,
                      "proposed": len(props), "own": out.pop("_own")}
         return out
 
     # the parts of a scene
 
-    def _draw_lines(self, rng, ink, corners, ft, back, x0, y0, m: Measured) -> dict:
+    def _draw_lines(self, rng, ink, corners, ft, back, x0, y0, m: Measured, series: str) -> dict:
         """Every usable item reaching the window as edges on the page (`page_edges` through the window's affine map),
-        each edge drawn whole or left out with its kind's drawn share, at a thickness drawn from its kind's shares."""
+        each inked over a fraction drawn from its kind's measured per-edge fractions as one run at a uniform position
+        along it (`edge_runs`), at a thickness drawn from its kind's shares."""
         top = max((int(t.max()) for t, _ in m.thickness if len(t)), default=1)
         grow = (top / 2 + 2) * ft
         (lx, ly), (hx, hy) = corners.min(0) - grow, corners.max(0) + grow
@@ -1241,9 +1218,20 @@ class SceneBank:
             items.append(idx)
         edges, owner = page_edges(np.concatenate(geoms), lambda xy: _apply(back, xy) - [x0, y0])
         kind, item = np.concatenate(kinds)[owner], np.concatenate(items)[owner]
-        on = rng.random(len(edges)) < m.drawn[kind]
-        u = rng.random(len(edges))
-        edges, kind, item, u = edges[on], kind[on], item[on], u[on]
+        pick, start, u = rng.random(len(edges)), rng.random(len(edges)), rng.random(len(edges))
+        fraction = np.zeros(len(edges))
+        for k in range(len(LINE_KINDS)):
+            here, f = kind == k, m.inked[k]
+            if here.any() and len(f):
+                fraction[here] = f[np.minimum((pick[here] * len(f)).astype(np.int64), len(f) - 1)]
+        length = np.hypot(*(edges[:, 1] - edges[:, 0]).T)
+        for k in range(len(LINE_KINDS)):
+            here = kind == k
+            self.tally[f"edge_px:{series}:{LINE_KINDS[k]}"] += float(length[here].sum())
+            self.tally[f"inked_px:{series}:{LINE_KINDS[k]}"] += float((fraction * length)[here].sum())
+        on = fraction > 0
+        edges = edge_runs(edges[on], fraction[on], start[on])
+        kind, item, u, fraction = kind[on], item[on], u[on], fraction[on]
         thick = np.ones(len(edges), np.int64)
         for k in range(len(LINE_KINDS)):
             t, q = m.thickness[k]
@@ -1256,8 +1244,8 @@ class SceneBank:
             cv2.line(canvas, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), 1, int(t), cv2.LINE_8, SHIFT)
         ink |= canvas > 0
         for k in kind:
-            self.tally[f"edges:{LINE_KINDS[int(k)]}"] += 1
-        return {"edges": edges, "kind": kind, "item": item, "thickness": thick}
+            self.tally[f"edges inked:{LINE_KINDS[int(k)]}"] += 1
+        return {"edges": edges, "kind": kind, "item": item, "thickness": thick, "fraction": fraction}
 
     def _propose(self, rng, corners, ft, fwd, m: Measured, words: Words) -> list[dict]:
         """The labels the scene would print, before placing: (what, the map point, the word)."""
@@ -1328,7 +1316,8 @@ class SceneBank:
                 w = int(pool[min(int(np.searchsorted(cum, rng.random() * cum[-1], side="right")), len(pool) - 1)])
             out.append({"what": what, "item": int(item), "at": np.asarray(at, float), "word": w,
                         "standin": is_standin})
-            self.tally[f"proposed:{what}:{'stand-in' if is_standin else 'its own string'}"] += 1
+            how = "any code word" if what == "code" else "stand-in" if is_standin else "its own string"
+            self.tally[f"proposed:{what}:{how}"] += 1
             used = True
             break
         if not used:

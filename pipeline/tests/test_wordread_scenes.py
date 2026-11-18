@@ -303,16 +303,19 @@ def test_street_offsets_separate_misreads_far_away():
     assert fit["r"][:800].mean() > 0.95 and fit["r"][800:].mean() < 0.1
 
 
-def test_drawn_edges_are_told_from_stray_ink_by_edge():
+def test_an_edge_is_inked_over_its_drawn_fraction_as_one_run_along_it():
     from sfzmaps.solver.wordread import scenes
-    rng = np.random.default_rng(3)
-    n = rng.integers(5, 200, 1000).astype(float)
-    drawn = rng.random(1000) < 0.7                              # 70% of the edges drawn, 90% of their px inked
-    own = np.where(drawn, rng.binomial(n.astype(int), 0.9), rng.binomial(n.astype(int), 0.03)).astype(float)
-    fit = scenes.fit_edges(own, n)
-    assert fit["share"] == pytest.approx(0.7, abs=0.03) and fit["p_on"] == pytest.approx(0.9, abs=0.01)
-    assert fit["r"][drawn].mean() > 0.97 and fit["r"][~drawn].mean() < 0.03
-    assert scenes.fit_edges(np.zeros(5), np.full(5, 10.0))["share"] == 0.0
+    edges = np.array([[[0.0, 0.0], [100.0, 0.0]], [[10.0, 10.0], [10.0, 50.0]], [[0.0, 0.0], [30.0, 40.0]]])
+    fraction, start = np.array([0.25, 1.0, 0.5]), np.array([0.0, 0.7, 0.999])
+    runs = scenes.edge_runs(edges, fraction, start)
+    whole = np.hypot(*(edges[:, 1] - edges[:, 0]).T)
+    assert np.allclose(np.hypot(*(runs[:, 1] - runs[:, 0]).T), fraction * whole)
+    assert np.allclose(runs[0], [[0, 0], [25, 0]]) and np.allclose(runs[1], edges[1])     # a whole edge is whole
+    t = ((runs[2] - edges[2, 0]) @ (edges[2, 1] - edges[2, 0])) / whole[2] ** 2          # on the edge, inside it
+    off, along = runs[2] - edges[2, 0], edges[2, 1] - edges[2, 0]
+    assert (t >= 0).all() and (t <= 1).all() and np.allclose(off[:, 0] * along[1] - off[:, 1] * along[0], 0)
+    # an edge's fraction: its own ink px over its px, at most 1; no px, no fraction
+    assert np.array_equal(scenes.inked_fractions([5, 12, 3], [10, 10, 0]), [0.5, 1.0])
 
 
 def test_a_straight_side_with_a_vertex_at_every_lot_is_one_edge_on_the_page():
@@ -324,8 +327,9 @@ def test_a_straight_side_with_a_vertex_at_every_lot_is_one_edge_on_the_page():
 
 def test_the_bank_measures_the_city_it_was_given(bank):
     m = bank.measured[SCENE_SERIES]
-    # the outlines are printed, edge by edge; no lot line or centreline is
-    assert m.drawn[0] > 0.9 and m.drawn[1] < 0.05 and m.drawn[2] < 0.05
+    # the outlines are printed, edge by edge; no lot line or centreline is, though the street names sit on the
+    # centrelines (their boxes are out of the measure)
+    assert np.median(m.inked[0]) > 0.9 and m.inked[1].mean() < 0.05 and m.inked[2].mean() < 0.05
     t, q = m.thickness[0]
     assert t[np.argmax(q)] in (2, 3)
     # every block number lies in its block, near its centre; codes sit in lots
@@ -459,6 +463,7 @@ def test_a_label_with_no_word_of_its_string_takes_a_word_of_its_kind(city):
                 seen.add(geo.block_number[p["item"]] if p["what"] == "block" else geo.line_forms[p["item"]][0])
     assert "0120" in seen and any(f.startswith("ALPHA") for f in seen)
     assert b.tally["label:block:stand-in"] > 0 and b.tally["label:street:stand-in"] > 0
+    assert b.tally["label:code:any code word"] == b.tally["label:code"] > 0
 
 
 def test_scenes_train_with_the_word_heads(bank):
