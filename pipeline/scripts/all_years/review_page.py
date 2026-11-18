@@ -59,7 +59,7 @@ def area_box(C, lots_, shape, pad=50, cap=900):
     return max(r0, 0), min(r1, shape[0]), max(c0, 0), min(c1, shape[1])
 
 
-def series_data(s, C, n_areas, px, to_ll):
+def series_data(s, C, n_areas, px, to_ll, reference=None):
     folder = paths.solver_dir(s)
     run = folder / "solve" / "runs" / "final.npz"
     if not run.is_file():
@@ -69,7 +69,7 @@ def series_data(s, C, n_areas, px, to_ll):
         post = z["posterior"] if "posterior" in z.files else np.full(len(solve), np.nan)
     blk = C.lots["blklot"].astype(str).values
     area = shapely.area(C.lots.geometry.values)
-    pub = sc.published_codes(s, blk)
+    pub = sc.published_codes(s, blk, (reference or {}).get("use"))
     both = (solve != "") & (pub != "")
     out = {"series": s, "state": "PUBLISHED-FROM-SOLVE" if s in solved.SOLVED else "NEEDS-OWNER-LOOK",
            "role": INFO[s].role, "lots_compared": int(both.sum()),
@@ -136,8 +136,8 @@ def main():
     (out_dir / "data").mkdir(parents=True, exist_ok=True)
     index_file = out_dir / "series.json"
     index = json.loads(index_file.read_text()) if index_file.is_file() else {}
-    for s in a.series or paths.ALL_YEARS:
-        d = series_data(s, C, a.areas, a.px, tr.transform)
+    for s in a.series or (paths.SERIES_2000, *paths.ALL_YEARS):
+        d = series_data(s, C, a.areas, a.px, tr.transform, old.get(s))
         if d is not None:
             d["reference"] = old.get(s)
         if d is None:
@@ -149,7 +149,7 @@ def main():
         print(s, d["state"], f"agree {d['agree_lots']:.1%}", f"own labels {d['own_labels']}",
               f"{f.stat().st_size / 1e6:.1f} MB")
     index_file.write_text(json.dumps(index, indent=1) + "\n")
-    order = [s for s in paths.ALL_YEARS if s in index]
+    order = [s for s in (paths.SERIES_2000, *paths.ALL_YEARS) if s in index]
     html = (Path(__file__).parent / "review_template.html").read_text()
     html = html.replace("/*SERIES_INDEX*/null", json.dumps({"order": order, "series": index}, separators=(",", ":")))
     (out_dir / "index.html").write_text(html)

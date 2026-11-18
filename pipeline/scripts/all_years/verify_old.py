@@ -45,13 +45,21 @@ def main():
     lock = yaml.safe_load(Path(sys.argv[1]).read_text())
     cache = Path(sys.argv[2])
     out = {}
-    for s in paths.ALL_YEARS:
+    keep = config.DATA_DIR / "solver" / "experiments" / "all-years" / "old-maps"
+    for s in (paths.SERIES_2000, *paths.ALL_YEARS):
         rel = published_file(s)
         f = config.PIPELINE_DIR / rel
         here = hashlib.md5(f.read_bytes()).hexdigest() if f.is_file() else None
         want = lock_md5(lock, cache, rel)
-        out[s] = {"file": rel, "lock": want, "here": here, "match": bool(want and here == want)}
-        print(s, rel, "match" if out[s]["match"] else f"DIFFERS (lock {want}, here {here})")
+        out[s] = {"file": rel, "lock": want, "here": here, "match": bool(want and here == want), "use": str(f)}
+        if want and here != want:                   # this checkout holds another map: take the lock's from the cache
+            cached = cache / "files" / "md5" / want[:2] / want[2:]
+            if cached.is_file():
+                keep.mkdir(parents=True, exist_ok=True)
+                copy = keep / f"{s}{Path(rel).suffix}"
+                copy.write_bytes(cached.read_bytes())
+                out[s].update(use=str(copy), match=True, source="the DVC cache, by main's md5")
+        print(s, rel, "match" if out[s]["match"] else f"DIFFERS (lock {want}, here {here})", out[s]["use"])
     if "--json" in sys.argv:
         Path(sys.argv[sys.argv.index("--json") + 1]).write_text(json.dumps(out, indent=1) + "\n")
 
