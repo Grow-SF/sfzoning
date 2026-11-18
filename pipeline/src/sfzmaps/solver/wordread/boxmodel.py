@@ -140,15 +140,20 @@ def _need_quarter(quarter, what: str) -> int:
 @dataclass(frozen=True)
 class SheetInputs:
     """One sheet's px the box model reads: `ink` bool (h, w); `chance` uint8 (h, w), the detector's per-ink text
-    chance x 255; optional word heads: `core` float (h, w) in [0, 1] and `tag` float (k, h, w)."""
+    chance x 255; optional word heads: `core` float (h, w) in [0, 1] (the core chance), `axis` float (h, w), each px's
+    word axis in degrees modulo 180 (`textnet.model.word_geometry`'s), and `tag` float (k, h, w).  Arrays may be memory
+    maps: a crop reads its window only.  The axis becomes two channels, the cosine and sine of twice its angle to the
+    crop's own axis (sign-free, and turned with the crop: `_cut`)."""
     ink: np.ndarray
     chance: np.ndarray
     core: np.ndarray | None = None
     tag: np.ndarray | None = None
+    axis: np.ndarray | None = None
 
     def __post_init__(self):
         shape = np.shape(self.ink)
-        if np.shape(self.chance) != shape or (self.core is not None and np.shape(self.core) != shape) or (
+        plain = (self.core, self.axis)
+        if np.shape(self.chance) != shape or any(a is not None and np.shape(a) != shape for a in plain) or (
                 self.tag is not None and np.shape(self.tag)[1:] != shape):
             raise ValueError("every layer of a sheet must be the page's shape")
 
@@ -161,17 +166,18 @@ class SheetInputs:
         out = ["ink", "chance"]
         if self.core is not None:
             out.append("core")
+        if self.axis is not None:
+            out += ["axis_cos", "axis_sin"]
         if self.tag is not None:
             out += [f"tag{k}" for k in range(len(self.tag))]
         return tuple(out)
 
     def layers(self) -> list[tuple[np.ndarray, float]]:
-        """Each channel's page array and the factor its px are multiplied by (float32 crops)."""
+        """Each plain channel's page array and the factor its px are multiplied by (float32 crops); the axis is
+        `_cut`'s."""
         out = [(self.ink, 1.0), (self.chance, 1.0 / 255.0)]
         if self.core is not None:
             out.append((self.core, 1.0))
-        if self.tag is not None:
-            out += [(t, 1.0) for t in self.tag]
         return out
 
 
@@ -193,14 +199,25 @@ def _getter(sheets):
 
 def _cut(inputs: SheetInputs, centre, length: float, height: float, angle: float) -> np.ndarray:
     """Every layer of the crop `crops.cut` makes of the rectangle (centre a page px index), float32 (C, HEIGHT, W):
-    each layer's window under the crop made float first, so the resize averages px exactly."""
+    each layer's window under the crop made float first, so the resize averages px exactly.  The axis: cos and sin of
+    twice each px's axis are cut (they interpolate where an angle can't), then turned by twice the crop's angle, so
+    the two channels are cos 2d and sin 2d of the px's axis d degrees from the crop's."""
     a, shape = K.frame_of(centre, length, height, angle)
     x0, y0, x1, y1 = L._footprint(a, shape, 2, inputs.shape)
-    out = []
-    for arr, scale in inputs.layers():
-        win = np.asarray(arr)[y0:y1, x0:x1].astype(np.float32) * np.float32(scale)
-        out.append(K.cut(win, centre, length, height, angle, 0, origin=(x0, y0))[0].astype(np.float32))
-    return np.stack(out)
+
+    def one(win):
+        return K.cut(win, centre, length, height, angle, 0, origin=(x0, y0))[0].astype(np.float32)
+
+    out = [one(np.asarray(arr)[y0:y1, x0:x1].astype(np.float32) * np.float32(scale)) for arr, scale in
+           inputs.layers()]
+    if inputs.axis is not None:
+        t = np.deg2rad(2.0 * np.asarray(inputs.axis)[y0:y1, x0:x1].astype(np.float64))
+        c, s = one(np.cos(t).astype(np.float32)), one(np.sin(t).astype(np.float32))
+        r = math.radians(2.0 * float(angle))
+        out += [c * math.cos(r) + s * math.sin(r), s * math.cos(r) - c * math.sin(r)]
+    if inputs.tag is not None:
+        out += [one(np.asarray(t)[y0:y1, x0:x1].astype(np.float32)) for t in inputs.tag]
+    return np.stack(out).astype(np.float32)
 
 
 def layout(length: float, height: float) -> tuple[int, int]:
@@ -856,6 +873,34 @@ def _joined(inputs: SheetInputs, sheet: str, terra: pd.DataFrame, twords: np.nda
                                                          "squeezed": squeezed(length, height)})
 
 
+def held_out_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets) -> Examples:
+    """The crops and exact targets of `boxes` against `terra` (`box_targets`, `box_crop`), no joined neighbours and no
+    held-out check: to SCORE a model on the quarter it held out (never to train one: `box_examples` does that).
+    `meta`: sheet, box (index label), quarter, support, expected, squeezed."""
+    get = _getter(sheets)
+    terra = terra.reset_index(drop=True)
+    tsheet = terra["sheet"].astype(str).to_numpy()
+    sheet_of = boxes["sheet"].astype(str).to_numpy()
+    crops, counts, bounds, meta = [], [], [], []
+    channels = None
+    for sheet in sorted(set(sheet_of)):
+        inputs = get(sheet)
+        channels = _check_channels(channels, inputs, sheet)
+        mine = boxes[sheet_of == sheet]
+        twords = np.flatnonzero(tsheet == sheet)
+        for (label, b), t in zip(mine.iterrows(), box_targets(mine, terra.iloc[twords], inputs.ink)):
+            corners, length, height, axis = _box_geometry(b)
+            crops.append(box_crop(inputs, corners, length, height, axis))
+            counts.append(t["count"])
+            bounds.append(boundary_target(t["spans"], t["shares"], t["w"], t["out_w"]))
+            meta.append({"source": "held_out", "sheet": sheet, "box": int(label), "quarter": int(b["quarter"]),
+                         "support": int(len(t["shares"])), "expected": float(t["shares"].sum()),
+                         "squeezed": squeezed(length, height)})
+    if channels is None:
+        raise ValueError("no box to score")
+    return Examples.of(crops, counts, bounds, np.ones(len(crops)), pd.DataFrame(meta), channels)
+
+
 def terra_frame(rows: pd.DataFrame) -> pd.DataFrame:
     """Every Terra word of the 2000 sheets (any kind and string) from rows of `solver-text-crops`' crops.parquet, as
     `box_examples` takes them: sheet, word (its number on the sheet), kind, text (Terra's), quarter, angle, the axis
@@ -996,7 +1041,7 @@ def fit_boxmodel(examples: Examples, recipe: dict | None = None) -> BoxNet:
         opt = torch.optim.AdamW(net.parameters(), lr=rc["max_lr"], weight_decay=rc["weight_decay"])
         sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=rc["max_lr"], total_steps=int(rc["steps"]),
                                                     pct_start=rc["pct_start"])
-        run, runs_n = 0.0, 0
+        run, runs_n = None, 0
         for step in range(1, int(rc["steps"]) + 1):
             idx = rng.integers(0, len(examples), int(rc["batch"]))
             idx = idx[np.argsort(widths[idx], kind="stable")]
@@ -1015,22 +1060,27 @@ def fit_boxmodel(examples: Examples, recipe: dict | None = None) -> BoxNet:
             ce = -(count_t * torch.where(count_t > 0, lp, torch.zeros_like(lp))).sum(1)
             bce = F.binary_cross_entropy_with_logits(blog, torch.from_numpy(tf).to(device), reduction="none")
             cf_t = torch.from_numpy(cf).to(device)
-            per = ce + rc["boundary_weight"] * (bce * cf_t).sum(1) / cf_t.sum(1)
-            loss = (per * w).sum() / w.sum().clamp(min=1e-12)
+            col = (bce * cf_t).sum(1) / cf_t.sum(1)
+            per = ce + rc["boundary_weight"] * col
+            ws = w.sum().clamp(min=1e-12)
+            loss = (per * w).sum() / ws
             opt.zero_grad(set_to_none=True)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), rc["clip"])
             opt.step()
             sched.step()
-            run += float(loss.detach().cpu())
+            parts = torch.stack([loss.detach(), (ce.detach() * w).sum() / ws, (col.detach() * w).sum() / ws])
+            run = parts if run is None else run + parts             # summed on the device, read at each log
             runs_n += 1
             if step % int(rc["log_every"]) == 0 or step == int(rc["steps"]):
-                mean = run / runs_n
+                mean, count_ce, boundary_bce = (float(v) / runs_n for v in run.cpu())
                 if not math.isfinite(mean):
                     raise FloatingPointError(f"box model: loss {mean} at step {step}")
-                log["steps"].append({"step": step, "loss": round(mean, 5), "lr": sched.get_last_lr()[0],
+                log["steps"].append({"step": step, "loss": round(mean, 5), "count_ce": round(count_ce, 5),
+                                     "boundary_bce": round(boundary_bce, 5), "lr": sched.get_last_lr()[0],
+                                     "thresholds": [round(float(v), 3) for v in net.thresholds().detach().cpu()],
                                      "seconds": round(time.perf_counter() - t0, 1)})
-                run, runs_n = 0.0, 0
+                run, runs_n = None, 0
         if gpu.on_gpu(device):
             torch.mps.synchronize()
         log["train_seconds"] = round(time.perf_counter() - t0, 1)

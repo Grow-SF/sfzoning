@@ -170,6 +170,20 @@ def test_crops_carry_ink_chance_and_the_word_heads_when_present():
     assert mid[3] == pytest.approx(2.0) and mid[4] == pytest.approx(-1.0)
 
 
+def test_the_axis_channels_are_twice_its_angle_to_the_crops_axis():
+    ink = page((50, 100, 110, 130))
+    level = box(50, 100, 110, 130)
+    upright = {**level, "axis": 90.0, "t_length": 30.0, "t_height": 60.0}     # the same rectangle, read upward
+    for px_axis, crop_axis, want in ((0.0, level, (1.0, 0.0)), (45.0, level, (0.0, 1.0)), (90.0, level, (-1.0, 0.0)),
+                                     (90.0, upright, (1.0, 0.0)), (135.0, upright, (0.0, 1.0))):
+        inputs_ = B.SheetInputs(ink=ink, chance=np.zeros(ink.shape, np.uint8), axis=np.full(ink.shape, px_axis))
+        assert inputs_.channels == ("ink", "chance", "axis_cos", "axis_sin")
+        corners, length, height, axis = B._box_geometry(crop_axis)
+        c = B.box_crop(inputs_, corners, length, height, axis)
+        mid = c[:, K.HEIGHT // 2, c.shape[2] // 2]
+        assert mid[2:] == pytest.approx(want, abs=1e-5)
+
+
 # --- held out ---------------------------------------------------------------------------------------------------------
 
 def test_box_examples_raises_on_held_quarter_or_answered_block_words_and_boxes():
@@ -197,6 +211,18 @@ def test_box_examples_raises_on_held_quarter_or_answered_block_words_and_boxes()
     with pytest.raises(ValueError):          # a box meeting a held word's rectangle
         B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=0,
                        held_words=pd.DataFrame([word(9, 100, 110, 130, 120, touch_ne=True)]))
+
+
+def test_held_out_examples_score_a_quarter_as_the_training_examples_are_made():
+    ink = page((20, 40, 60, 60), (70, 40, 110, 60))
+    terra = pd.DataFrame([word(0, 20, 40, 60, 60), word(1, 70, 40, 110, 60)])
+    sheets = {SHEET: inputs(ink)}
+    train = B.box_examples(pd.DataFrame([box(20, 40, 90, 60)]), terra, sheets, quarter=1, held_words=NO_HELD,
+                           touch=never_held, joined=0)
+    scored = B.held_out_examples(pd.DataFrame([box(20, 40, 90, 60, quarter=1)]), terra, sheets)   # in quarter 1
+    assert np.array_equal(scored.flat, train.flat) and np.array_equal(scored.count, train.count)
+    assert np.array_equal(scored.boundary, train.boundary)
+    assert scored.meta["quarter"].tolist() == [1] and not scored.meta["squeezed"].any()
 
 
 def test_training_boxes_leave_out_boxes_meeting_a_held_word_or_touching_a_held_area():
