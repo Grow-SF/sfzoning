@@ -118,7 +118,8 @@ def page(width: int, height: int, fragments: int, seed: int):
 
 
 def area(c) -> float:
-    return 0.5 * abs(float(np.cross(c[1] - c[0], c[3] - c[0])))
+    a, b = c[1] - c[0], c[3] - c[0]
+    return 0.5 * abs(float(a[0] * b[1] - a[1] * b[0]))
 
 
 def inter(a, b) -> float:
@@ -244,15 +245,15 @@ def main(argv=None):
     finally:
         for name, fn in real.items():
             setattr(words, name, fn)
+    out = OUT / str(args.seed)
+    out.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(out / "boxes.parquet", index=False)              # kept before the matching, which may take long
     boxes = df[[f"g{i}{a}" for i in range(4) for a in "xy"]].to_numpy(float).reshape(-1, 4, 2)
     matched = match(boxes, painted)
     matched["pairs_sharing_a_word"] = joins(kept["V"], kept["final"], boxes, matched["pairs_sharing_a_word"])
     summary = {"stages": stages, "match": matched, "spreads": SPREADS.__dict__, "prior": PRIOR.__dict__,
                "page": [args.width, args.height], "seed": args.seed}
-    out = OUT / str(args.seed)
-    out.mkdir(parents=True, exist_ok=True)
     (out / "summary.json").write_text(json.dumps(summary, indent=1, default=float) + "\n")
-    df.to_parquet(out / "boxes.parquet", index=False)
     log.info("match: %s", {k: v for k, v in summary["match"].items()
                            if k not in ("pairs_sharing_a_word", "boxes_across")})
     for pair in matched["pairs_sharing_a_word"]:
