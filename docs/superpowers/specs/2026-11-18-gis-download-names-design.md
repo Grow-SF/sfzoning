@@ -109,12 +109,15 @@ under the readable name instead (Blob's server-side `copy()`, no re-upload), bec
 DVC object would save the file under a hash name.
 
 **Manifest.** `site/lib/downloads.json` stays the current set: what the /data page shows and what
-`latest` links resolve to. There is no history file to look versioned names up in: a versioned name
-maps to its Blob path by rule (`<series>/<name>` → `downloads/<series>/<name>`), so the route needs no
-lookup. That makes the store itself the record of every version, and a publish from a PR branch
-works the same as one from `main` (its versioned links work everywhere at once; its `latest` links
-follow that branch's manifest until it merges). *(My call, from the builder check: a committed
-history file would conflict between branches and lag behind the store.)*
+`latest` links resolve to. A versioned name maps to its Blob path by rule (`<series>/<name>` →
+`downloads/<series>/<name>`), so the files route needs no lookup and a dated link works as soon as
+its file is uploaded.
+
+**Version history** (owner approved): `site/lib/download-versions.json`, every version ever
+released (versioned name, series, layer, format, date, bytes, full SHA-256), written by the publish
+script, append-only: entries are added, never changed or removed. The versions pages are generated
+from it at deploy. The owner is the only publisher; if two branches both publish, merging means
+keeping both sides' entries.
 
 **Routes.**
 - `/data/files/[series]/[name]`: a well-formed versioned name (pattern above, known series) → 308
@@ -132,18 +135,17 @@ history file would conflict between branches and lag behind the store.)*
 `/data/versions/1921/citywide`, `/data/versions/1921/sheet-01`) lists every version released, newest
 first, one row per version: the date, `(latest)` on the current one, and per format a download link
 to that version's dated file, its size, and its 8-hex hash (from the name) linking to its checksum
-file. Every dated file gets a checksum file beside it on Blob, `<versioned name>.sha256`, in
-`sha256sum -c` format, uploaded by the publish script, so the page needs no extra requests. Built from
-one Blob `list()` of `downloads/<series>/` with the layer's name prefix, cached for an hour (ISR
-`revalidate = 3600`); a new release appears within the hour or on the next deploy. Ends with the same
+file, and the full SHA-256. Static pages, generated at deploy from the version history; a new release
+appears with the deploy that includes it. Every dated file also gets a checksum file beside it on
+Blob, `<versioned name>.sha256`, in `sha256sum -c` format, uploaded by the publish script. Ends with the same
 note as the /data page. `/data/versions/<series>` lists that series' layers with links to each
 versions page; the sheet zip's README links there. *(My call: the zip has no per-layer page.)*
 
 ```
 1948 lots: every version released
 
-2026-12-02  (latest)  GeoJSON 41 MB 3f9a2c1b · GeoPackage 38 MB 9be0417d · Shapefile 35 MB 0c7e55a2
-2026-11-20            GeoJSON 41 MB 81d0e7a4 · GeoPackage 38 MB 22f6b1c9 · Shapefile 35 MB e4a09d13
+2026-12-02  (latest)  GeoJSON 41 MB · GeoPackage 38 MB · Shapefile 35 MB   (each with its SHA-256)
+2026-11-20            GeoJSON 41 MB · GeoPackage 38 MB · Shapefile 35 MB   (each with its SHA-256)
 
 Use the latest links to always get the newest data. A dated link always returns exactly that version.
 ```
@@ -169,7 +171,7 @@ every vector and citywide file once ($0); published versions are never rewritten
 README gets the same section with the zip's `latest` link.
 
 **Publishing.** `site/scripts/publish-downloads.mjs` computes names, uploads (or copies) what the
-store's listing lacks, updates the current manifest and `sheet-numbers.json`. Still one
+store's listing lacks, updates the current manifest, appends to `download-versions.json`, and updates `sheet-numbers.json`. Still one
 listing pass, no per-file requests, never overwrites.
 
 ## Constraints
