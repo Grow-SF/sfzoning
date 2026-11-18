@@ -21,9 +21,9 @@ The keep rule (written before the runs; brief of Task 11): (5) is kept if, on NE
 headline rises with the paired label interval excluding zero and the review page agrees.  `decide` prints those numbers
 and decides nothing: a run of today's boxes and readers is PRELIMINARY.
 
-Item (4), the pack (`pack_read_fn`, `make_prior_fn`): a word's reading is `context.posterior` over the ink's strings and
-the box's prior, its place on the map taken from each version's own rectangle; `choose(..., read_fn=pack_read_fn(...))`.
-Built and tested on synthetic data; it waits for Task 10's final fit and is not run on real data here.
+Item (4), the pack (`pack_read_fn`): a word's reading is `context.read_posterior` (Task 10's recipe: the prior at the word's own
+place on the map, its fold's tau, w and temperature); `choose(..., read_fn=pack_read_fn(...))`.
+Run on today's NE boxes as found (`run_choose_pack.py pack`, `pack --page`): PRELIMINARY.
 """
 import os
 
@@ -370,42 +370,142 @@ def write_text_read(table: pd.DataFrame, gots: dict, codes: R.CodeList, folder: 
 
 # --- the pack (item 4) --------------------------------------------------------------------------------------------------
 
-def read_lp(reader, direction, crop: np.ndarray) -> tuple[list, float]:
-    """A crop's log-probabilities as cut and turned a half turn (frames x classes each) and the classifier's p(upside
-    down): what `context.ink_logp` takes."""
+def read_lp(reader, direction, crop: np.ndarray) -> tuple[list, float, list[str]]:
+    """A crop's log-probabilities as cut and turned a half turn (frames x classes each), the classifier's p(upside down)
+    of the crop as cut, and each read's best path: what `context.ink_logp` and the recipe's `strings` take."""
     from sfzmaps.solver.textread import ctc
     out = []
     with torch.inference_mode():
         for c in (crop, np.ascontiguousarray(np.rot90(crop, 2))):
             x, n = model.to_input([c])
-            out.append(ctc.log_softmax(reader(x)[0, :n[0]].numpy()).numpy())
+            out.append(ctc.log_softmax(reader(x)[0, :n[0]].numpy()))
             if len(out) == 1:
                 q = float(torch.sigmoid(direction(x))[0])
-    return out, q
+    return out, q, [model.best_path(lp) for lp in out]
 
 
-def pack_read_fn(lp_fn, prior_fn, weights: dict[str, float], tau: float = 1.0, base_strings=()):
-    """`choose`'s `read_fn` with the context pack: a word's log posterior over the strings the reader scores and
-    "other" (`context.posterior`), the prior at the word's own place.  `lp_fn(corners, box)` returns
-    (the two reads' log-probabilities, q); `prior_fn(corners, box)` the word's `context.Prior` (or None: the ink alone);
-    `weights` the kinds' weights `w` and `tau` the ink's temperature (Task 10's fit of the fold); `base_strings` the
-    strings always scored (the code list's printed forms).  Pass no `prior_fn` to `choose`: the prior is in here."""
+def box_kind_p(box: dict) -> np.ndarray:
+    """The box's kind probabilities in `context.KIND_ORDER` (the detector's `p_<kind>`)."""
+    return np.array([float(box.get(f"p_{k}", 0.0)) for k in C.KIND_NAMES])
+
+
+def pack_read_fn(lp_fn, pack, transforms: dict, base_strings=()):
+    """`choose`'s `read_fn` with the context pack, by Task 10's recipe (`context.read_posterior`): a word's calibrated
+    log posterior over the strings its prior lists, `base_strings` and the reader's best paths, and OTHER.
+    `lp_fn(corners, box)` returns (the two reads' log-probabilities, q, the two best paths); the word is placed on the
+    map through `transforms[box["sheet"]]` and read with its box's own quarter's fit (`box["quarter"]`).  Give no
+    `prior_fn` to `choose`: the prior is in here."""
     def read(corners, box):
-        reads, q = lp_fn(corners, box)
-        prior = prior_fn(corners, box)
-        strings = sorted(set(base_strings) | (set(prior.strings) if prior is not None else set()))
-        return context.posterior(context.ink_logp(reads, q, strings, tau), prior, weights)
+        reads, q, best = lp_fn(corners, box)
+        return context.read_posterior(
+            pack, paths.QUARTERS[int(box["quarter"])], lambda names, tau: context.ink_logp(reads, q, names, tau),
+            {**context.box_on_map(corners, transforms[box["sheet"]]), "kind_p": box_kind_p(box)},
+            sorted(set(base_strings) | set(best)))
     return read
 
 
-def make_prior_fn(pack, spreads, transforms: dict, kind_of=C.box_kind):
-    """`pack_read_fn`'s `prior_fn`: the box's version placed on the map through its sheet's transform
-    (`context.box_on_map`: `transforms[sheet].to_world`), its kind probabilities the box's `p_<kind>`, the pack, and the
-    fold's measured spreads."""
-    def prior(corners, box):
-        kp = np.array([float(box.get(f"p_{k}", 0.0)) for k in C.KIND_NAMES])
-        return context.prior(pack, context.box_on_map(corners, transforms[box["sheet"]]), kp, spreads)
-    return prior
+def pack_job(args) -> dict:
+    """One sheet's boxes of one quarter (rows of boxes.parquet) read as found, once: `read.read_one`'s dict by the row
+    (`got`, as the stage reads), the pack's posterior (`post`: string -> log p, OTHER included) and the two best paths."""
+    sheet, qname, rows, mine = args
+    page = data.load_page(sheet)
+    reader, direction = _W["readers"][qname], _W["directions"][qname]
+    forms, pack, transforms = _W["forms"], _W["pack"], _W["transforms"]
+    from sfzmaps.solver.textread import ctc
+    base = [*forms, ""]
+    out = {}
+    for k in mine:
+        b = rows[k]
+        corners = np.array([[b[f"t{i}x"], b[f"t{i}y"]] for i in range(4)], float)
+        crop = K.box_crop(page, corners, b["t_length"], b["t_height"], b["axis"])
+        reads, q, best = read_lp(reader, direction, crop)
+        got = {"reads": [ctc.read(lp, forms) for lp in reads], "best": best, "p_classifier": [q, float("nan")]}
+        fn = pack_read_fn(lambda c, bx: (reads, q, best), pack, transforms, base)
+        out[int(b["row"])] = {"got": got, "post": fn(corners, b), "best": best, "q": q}
+    return out
+
+
+def top_text(post: dict, best: list, q: float) -> str | None:
+    """What a pack posterior reads: its likeliest named string ("" for no text), None when OTHER is likeliest (the
+    pack names none of the strings); a posterior None: the best path in the classifier's direction."""
+    if post is None:
+        return best[1] if q > 0.5 else best[0]
+    k = max(sorted(post), key=lambda h: post[h])
+    return None if k == context.OTHER else k
+
+
+def pack_reads(post: dict, codes: R.CodeList) -> dict:
+    """`measures`' read of a pack posterior: `closed` the codes' probability (their forms' posterior renormalised over
+    the codes), `top` "none" (the empty string likeliest), else the likeliest string (OTHER: "other")."""
+    mass = np.zeros(len(codes.codes))
+    for form, c in zip(codes.forms, codes.code_of):
+        if form in post:
+            mass[c] += math.exp(post[form])
+    tot = float(mass.sum())
+    closed = mass / tot if tot > 0 else np.full(len(codes.codes), 1.0 / len(codes.codes))
+    k = max(sorted(post), key=lambda h: post[h])
+    return {"closed": dict(zip(codes.codes, closed.tolist())), "top": "none" if k == "" else
+            ("other" if k == context.OTHER else k)}
+
+
+TERRA_KIND = {"street name": "street", "block number": "block", "zoning code": "code"}
+
+
+def norm_text(t) -> str:
+    return " ".join(str(t).replace("\u200b", "").upper().split())
+
+
+def text_numbers(boxes_q: pd.DataFrame, terra_q: pd.DataFrame, texts: dict[str, dict], iou: float = 0.5) -> dict:
+    """Against Terra's words, per kind (street names, block numbers, zoning codes): of the boxes matched to a Terra word of
+    that kind at `iou` (each box to its best word: `measures`' rule), how many read exactly its string.  `texts`:
+    {arm: {box row: the string read, or None}}; `boxes_q` indexed by row."""
+    ti, bj, v = measures._overlaps(boxes_q, terra_q)
+    word, best = measures._best_word(ti, bj, v, len(boxes_q))
+    out = {}
+    for arm, tx in texts.items():
+        res = {k: {"matched": 0, "same": 0} for k in TERRA_KIND.values()}
+        for pos in np.flatnonzero((best >= iou) & (word >= 0)):
+            kind = TERRA_KIND.get(terra_q["kind"].iloc[word[pos]])
+            if kind is None:
+                continue
+            res[kind]["matched"] += 1
+            read = tx.get(int(boxes_q.index[pos]))
+            res[kind]["same"] += int(read is not None and norm_text(read) == norm_text(terra_q["text"].iloc[word[pos]]))
+        out[arm] = res
+    return out
+
+
+def write_pack_text_read(boxes: pd.DataFrame, found: dict, codes: R.CodeList, folder: Path) -> Path:
+    """A text-read folder (`review_page.py --reads`) of the pack's reads of the boxes in `found` (row -> `pack_job`'s
+    entry): each box's posterior over the codes' forms, "other" (OTHER and every string that is no code form's) and "none"
+    (the empty string); `best_0`/`best_180` hold what the pack reads (`top_text`; the best path where OTHER is likeliest),
+    so the page's text is the pack's."""
+    rows = sorted(found)
+    F = len(codes.forms)
+    post, log_closed, pc, summary = np.zeros((len(rows), F + 2)), np.zeros((len(rows), len(codes.codes))), \
+        np.zeros(len(rows)), []
+    for k, r in enumerate(rows):
+        e = found[r]
+        p = e["post"]
+        pr = np.array([math.exp(p[f]) if f in p else 0.0 for f in codes.forms])
+        none = math.exp(p[""]) if "" in p else 0.0
+        post[k, :F], post[k, F], post[k, F + 1] = pr, max(0.0, 1.0 - float(pr.sum()) - none), none
+        read = pack_reads(p, codes)
+        log_closed[k] = np.log(np.maximum(list(read["closed"].values()), 1e-300))
+        pc[k] = e["q"]
+        text = top_text(p, e["best"], e["q"])
+        text = text if text is not None else (e["best"][1] if e["q"] > 0.5 else e["best"][0])
+        b = boxes.loc[r]
+        summary.append({"row": r, "sheet": b["sheet"], "i": int(b["i"]), "quarter": int(b["quarter"]),
+                        "axis": float(b["axis"]), "best_0": text, "best_180": text, "p_classifier": e["q"],
+                        "top": read["top"], "p_top": float(max(post[k]))})
+    folder.mkdir(parents=True, exist_ok=True)
+    store.save_npz(folder / "reads.npz", row=np.array(rows, np.int64), forms=np.array(codes.forms),
+                   form_code=np.array(codes.form_code), codes=np.array(codes.codes), post=post, log_closed=log_closed,
+                   p_classifier=pc)
+    pd.DataFrame(summary).to_parquet(folder / "reads.parquet", index=False)
+    pd.read_parquet(store.READ_DIR / "answered.parquet").to_parquet(folder / "answered.parquet", index=False)
+    return folder
 
 
 # --- the run ------------------------------------------------------------------------------------------------------------
@@ -514,6 +614,105 @@ def run(name: str, quarter: str, seed: int, boxes_dir: Path | None = None, reade
     return out
 
 
+def run_pack(name: str, quarter: str, seed: int, boxes_dir: Path | None = None, reader_name: str = "base",
+             reader_root: Path | None = None, pack_file: Path | None = None, workers: int = WORKERS,
+             out_root: Path | None = None) -> Path:
+    """Item (4) on fold `quarter` at `seed`, the boxes as found: every box of the quarter (and every box of the review sheet
+    in the other quarters) read once by its own quarter's reader, and read again with the context pack
+    (`context.read_posterior`, the box's own quarter's fit).  Writes <out_root or OUT>/<name>-<quarter>-s<seed>/:
+    labels_{without,pack}.parquet, run.json (headline, paired, the read numbers against Terra, the labels changed) and
+    the posteriors (`found.pkl`) for the review page."""
+    from sfzmaps.solver.wordread import review
+    from sfzmaps.transform import SheetTransform
+    q = paths.QUARTERS.index(quarter)
+    t0 = time.perf_counter()
+    out = (out_root or OUT) / run_name(name, quarter, seed)
+    out.mkdir(parents=True, exist_ok=True)
+    boxes_dir = Path(boxes_dir) if boxes_dir else paths.SOLVER_DIR / "boxes"
+    reader_root = Path(reader_root) if reader_root else ROOT / "runs"
+    pack_file = Path(pack_file) if pack_file else context.PACKS_DIR / "sf-2000.parquet"
+    boxes = pd.read_parquet(boxes_dir / "boxes.parquet").reset_index(drop=True)
+    boxes["row"] = np.arange(len(boxes))
+    codes = R.CodeList.load()
+    pack = context.Pack.load(pack_file)
+    transforms = {}
+    for sheet in sorted(set(boxes["sheet"])):
+        wd = config.DATA_DIR / "warp" / paths.SERIES / sheet
+        transforms[sheet] = SheetTransform.from_json(json.loads((wd / "transform.json").read_text()), folder=wd)
+    page_sheet = review.mission_sheet()
+    torch.set_num_threads(1)
+    found: dict = {}
+    for qi, qname in enumerate(paths.QUARTERS):
+        _W.update(readers={qname: model.load(reader_path(qname, quarter, seed, reader_name, reader_root))},
+                  directions={qname: model.load(store.TRAIN_DIR / f"{qname}_direction.pt", "direction")},
+                  forms=codes.forms, pack=pack, transforms=transforms)
+        jobs = []
+        for sheet, part in boxes.groupby("sheet", sort=True):
+            rows = part.to_dict("records")
+            mine = [k for k, r in enumerate(rows) if int(r["quarter"]) == qi and (qi == q or sheet == page_sheet)]
+            if mine:
+                jobs.append((sheet, qname, rows, mine))
+        with get_context("fork").Pool(workers, initializer=_init) as pool:
+            for part in pool.imap(pack_job, jobs):
+                found.update(part)
+        log.info("%s: %d boxes read with the pack (%.0f s)", qname, sum(1 for r in found if boxes["quarter"].iloc[r] == qi),
+                 time.perf_counter() - t0)
+    pickle.dump(found, (out / "found.pkl").open("wb"))
+    answers = measures.answers_from_store()
+    answers = answers[answers["quarter"] == q].reset_index(drop=True)
+    terra = measures.terra_words(sorted(set(boxes["sheet"])))
+    terra = terra[terra["quarter"] == q].reset_index(drop=True)
+    bq = boxes[boxes["quarter"] == q].set_index("row", drop=False)
+    rows_q = [int(r) for r in bq["row"]]
+    reads = {"without": reads_of({r: found[r]["got"] for r in rows_q}, codes),
+             "pack": {r: pack_reads(found[r]["post"], codes) for r in rows_q}}
+    res = {}
+    for arm in ("without", "pack"):
+        labels = measures.label_right(bq, reads[arm], answers)
+        labels.to_parquet(out / f"labels_{arm}.parquet", index=False)
+        res[arm] = {"labels": labels, "headline": measures.headline(bq, reads[arm], answers, paths.QUARTERS),
+                    "box_numbers": measures.box_numbers(bq, terra, reads[arm]),
+                    "read_numbers": {str(i): measures.read_numbers(bq, terra, reads[arm], forms=dict(zip(
+                        codes.forms, codes.form_code)), answers=answers, iou=i) for i in (0.5, 0.3)}}
+    texts = {"without": {r: top_text(None, found[r]["best"], found[r]["q"]) for r in rows_q},
+             "pack": {r: top_text(found[r]["post"], found[r]["best"], found[r]["q"]) for r in rows_q}}
+    w, p = res["without"]["labels"], res["pack"]["labels"]
+    info = {"name": name, "quarter": quarter, "seed": seed, "preliminary": True, "boxes": str(boxes_dir),
+            "pack": str(pack_file), "fit": {k: [v.mode, v.tau, v.temperature, v.w] for k, v in pack.fits.items()},
+            "headline": {a: {k: res[a]["headline"][k] for k in ("n", "right", "share", "ci", "with_box")}
+                         for a in res},
+            "paired_pack_vs_without": measures.paired_labels(p, w),
+            "labels_changed": {"right_to_wrong": int(((w["right"] == 1) & (p["right"] == 0)).sum()),
+                               "wrong_to_right": int(((w["right"] == 0) & (p["right"] == 1)).sum())},
+            "text_numbers_vs_terra": {str(i): text_numbers(bq, terra, texts, i) for i in (0.5, 0.3)},
+            "pack_other_likeliest": float(np.mean([texts["pack"][r] is None for r in rows_q])),
+            "read_numbers": {a: res[a]["read_numbers"] for a in res},
+            "box_numbers": {a: {str(i): {k: res[a]["box_numbers"][i][k] for k in
+                                         ("matched", "ours_unmatched_text", "ours_unmatched_none")} for i in (0.5, 0.3)}
+                            for a in res},
+            "git": _git("rev-parse", "HEAD"), "seconds": round(time.perf_counter() - t0, 1)}
+    base = ROOT / "runs" / run_name(reader_name, quarter, seed) / "labels.parquet"
+    if base.is_file():
+        info["without_matches_reader_run_labels"] = bool((pd.read_parquet(base)["right"].to_numpy()
+                                                          == w["right"].to_numpy()).all())
+    (out / "run.json").write_text(json.dumps(info, indent=1, default=float) + "\n")
+    log.info("%s: without %s, pack %s of %s (%.0f s)", out.name, res["without"]["headline"]["right"],
+             res["pack"]["headline"]["right"], res["without"]["headline"]["n"], time.perf_counter() - t0)
+    return out
+
+
+def pack_page(name: str, quarter: str, seed: int, boxes_dir: Path | None = None, run_page: str = "pack-prelim") -> None:
+    """The Mission sheet's review page of the pack's reads of the boxes as found."""
+    d = OUT / run_name(name, quarter, seed)
+    boxes_dir = Path(boxes_dir) if boxes_dir else paths.SOLVER_DIR / "boxes"
+    boxes = pd.read_parquet(boxes_dir / "boxes.parquet").reset_index(drop=True)
+    found = pickle.loads((d / "found.pkl").read_bytes())
+    folder = write_pack_text_read(boxes, found, R.CodeList.load(), d / "text-read")
+    subprocess.run([sys.executable, str(Path(__file__).parent / "review_page.py"), "--run", run_page, "--boxes",
+                    str(boxes_dir / "boxes.parquet"), "--reads", str(folder), "--before", "baseline"], check=True,
+                   cwd=config.PIPELINE_DIR)
+
+
 def decide(name: str, quarter: str = "ne", seeds=(0, 1), root: Path | None = None) -> dict:
     """The keep rule's numbers for (5) on `quarter` over `seeds`: each arm's headline against reading as found, the
     paired label interval on the mean of the seeds and at each seed.  The rule's other condition (the review page agrees)
@@ -561,7 +760,16 @@ def main() -> None:
     p.add_argument("--quarter", default="ne")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--run", default="choose-prelim")
-    sub.add_parser("pack")
+    k = sub.add_parser("pack")
+    k.add_argument("--name", default="pack")
+    k.add_argument("--quarter", default="ne")
+    k.add_argument("--seed", type=int, default=0)
+    k.add_argument("--boxes-dir", type=Path, default=None)
+    k.add_argument("--reader-name", default="base")
+    k.add_argument("--reader-root", type=Path, default=None)
+    k.add_argument("--pack", type=Path, default=None)
+    k.add_argument("--workers", type=int, default=WORKERS)
+    k.add_argument("--page", action="store_true", help="build the review page from an existing run")
     args = ap.parse_args()
     if args.cmd == "choose":
         print(run(args.name, args.quarter, args.seed, args.boxes_dir, args.reader_name, args.reader_root, args.workers))
@@ -569,9 +777,11 @@ def main() -> None:
         print(json.dumps(decide(args.name, args.quarter), indent=1, default=float))
     elif args.cmd == "page":
         page(args.name, args.quarter, args.seed, args.run)
+    elif args.page:
+        pack_page(args.name, args.quarter, args.seed, args.boxes_dir)
     else:
-        raise SystemExit("item (4) waits for Task 10's final fit: pack_read_fn / make_prior_fn are built and tested, "
-                         "not run on real data")
+        print(run_pack(args.name, args.quarter, args.seed, args.boxes_dir, args.reader_name, args.reader_root, args.pack,
+                       args.workers))
 
 
 if __name__ == "__main__":

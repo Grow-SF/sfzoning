@@ -139,58 +139,82 @@ def _lp(text: str, frames: int = 24, hit: float = 0.97) -> np.ndarray:
     return lp - np.logaddexp.reduce(lp, axis=1, keepdims=True)
 
 
-def test_pack_read_fn_is_the_ink_alone_without_a_prior_and_lifts_a_listed_string_with_one():
-    reads = [_lp("R1"), _lp("R1")]
-    base = ["R1", "C2"]
-    plain = RC.pack_read_fn(lambda c, b: (reads, 0.0), lambda c, b: None, {}, base_strings=base)(None, {})
-    ink = context.ink_logp(reads, 0.0, base)
-    assert plain["R1"] == pytest.approx(ink["R1"] - np.logaddexp.reduce(np.r_[list(ink.values()),
-                                                                        math.log(max(1e-300, 1 - sum(np.exp(
-                                                                            list(ink.values())))))]), abs=1e-6)
-    prior = context.Prior(kind_p=np.array([0.0, 0.0, 1.0, 0.0]), escape=np.array([1.0, 1.0, 0.2, 1.0]),
-                          items={"street name": [(30.0, {"C2": 1.0})]})
-    withp = RC.pack_read_fn(lambda c, b: (reads, 0.0), lambda c, b: prior, {"street name": 1.0},
-                            base_strings=base)(None, {})
-    assert withp["C2"] > plain["C2"] and withp["R1"] < plain["R1"]
-    assert context.OTHER in withp
-    assert np.exp(list(withp.values())).sum() == pytest.approx(1.0, abs=1e-6)
+class Identity:
+    def to_world(self, p):
+        return np.asarray(p, float)
 
 
-def test_choose_takes_the_pack_read_function_and_the_place_of_each_version():
-    b = box(0, 10, 90)
+def _pack():
+    import geopandas as gpd
+    import shapely
+    streets = gpd.GeoDataFrame({"name": ["MISSION ST"], "street": ["MISSION"], "type": ["ST"], "active": [True]},
+                               geometry=[shapely.LineString([(0, 0), (1000, 0)])], crs=context.CRS)
+    blocks = gpd.GeoDataFrame({"number": ["0767"]}, geometry=[shapely.box(100, 100, 300, 300)], crs=context.CRS)
+    sp = context.Spreads(street_ft=np.arange(0.0, 55.0, 5.0), street_deg=np.arange(0.0, 11.0, 1.0),
+                         street_r=np.ones(11), street_h=4.0, street_deg_h=1.5, street_away=0.1,
+                         block_ft=np.r_[np.zeros(18), 10.0, 20.0], block_r=np.ones(20), block_h=3.0, block_in=0.9,
+                         block_away=0.1, code_away=0.05, form_weights={})
+    pack = context.Pack(year=2000, streets=streets, blocks=blocks, codes={"R1": "R1", "C2": "C2"},
+                        spreads={"all": sp, "ne": sp})
+    pack.fits = {"ne": context.ReadFit(mode="joint", tau=0.8, w={context.CODE: 3.0, context.BLOCK: 2.0,
+                                                                  context.STREET: 1.5}, temperature=2.0)}
+    return pack
+
+
+def test_pack_read_fn_calls_the_read_recipe_with_the_boxes_own_quarter_and_place():
+    pack = _pack()
+    b = box(0, 10, 90, y0=-5, y1=5, quarter=1)                  # on MISSION ST, axis 0: a street name for sure
+    b.update(p_zoning=0.0, p_street=1.0)
+    corners = C.candidates(b, np.zeros((60, 200), bool), [], {k: 8.0 for k in KINDS})[0].rects[0]
+    reads = [_lp("MISSION ST", frames=48)] * 2
+    fn = RC.pack_read_fn(lambda c, bx: (reads, 0.0, ["MISSION ST", "MISSION ST"]), pack, {"s": Identity()}, ["R1"])
+    got = fn(corners, b)
+    want = context.read_posterior(
+        pack, "ne", lambda names, tau: context.ink_logp(reads, 0.0, names, tau),
+        {**context.box_on_map(corners, Identity()), "kind_p": np.array([0.0, 0.0, 1.0, 0.0])},
+        ["MISSION ST", "R1"])
+    assert list(got) == list(want) and list(got.values()) == pytest.approx(list(want.values()))
+    assert "MISSION ST" in got and "R1" in got and context.OTHER in got           # the best path and base strings named
+    b["quarter"] = 0
+    with pytest.raises(ValueError, match="no fit"):
+        fn(corners, b)
+
+
+def test_choose_takes_the_pack_read_function():
+    pack = _pack()
+    b = box(0, 10, 90, quarter=1)
     cands = versions_for(b)
     seen = []
 
     def lp_fn(corners, box_):
         seen.append(float(np.asarray(corners)[:, 0].min()))
-        return [_lp("R1")] * 2, 0.0
+        return [_lp("R1")] * 2, 0.0, ["R1", "R1"]
 
-    def prior_fn(corners, box_):
-        return None
-
-    fn = RC.pack_read_fn(lp_fn, prior_fn, {}, base_strings=["R1", "C2"])
-    name, info = C.choose(b, cands, fn)
+    name, info = C.choose(b, cands, RC.pack_read_fn(lp_fn, pack, {"s": Identity()}, ["R1", "C2"]))
     assert name in {c.name for c in cands} and set(info["scores"]) == {c.name for c in cands}
     assert len(set(seen)) > 1                                             # each version's own rectangle was read
 
 
-def test_make_prior_fn_places_the_version_on_the_map_and_takes_the_box_kinds():
-    class Moved:
-        def to_world(self, p):
-            return np.asarray(p, float) * 2.0
+def test_pack_reads_and_text_follow_the_posterior():
+    post = {"R1": math.log(0.6), "C2": math.log(0.1), "": math.log(0.05), context.OTHER: math.log(0.25)}
+    read = RC.pack_reads(post, CODES)
+    assert read["top"] == "R1" and read["closed"]["R1"] == pytest.approx(0.6 / 0.7)
+    assert RC.top_text(post, ["x", "y"], 0.1) == "R1"
+    assert RC.top_text({context.OTHER: 0.0, "R1": -3.0}, ["x", "y"], 0.1) is None
+    assert RC.top_text(None, ["x", "y"], 0.9) == "y" and RC.top_text(None, ["x", "y"], 0.1) == "x"
+    assert RC.pack_reads({"": 0.0, context.OTHER: -5.0}, CODES)["top"] == "none"
 
-    calls = []
-    real = context.prior
-    try:
-        context.prior = lambda pack, on_map, kp, sp: calls.append((on_map, kp, sp)) or None
-        b = box(0, 10, 90)
-        RC.make_prior_fn("pack", "spreads", {"s": Moved()})(C.candidates(b, np.zeros((60, 200), bool), [],
-                                                                         {k: 8.0 for k in KINDS})[0].rects[0], b)
-    finally:
-        context.prior = real
-    on_map, kp, sp = calls[0]
-    assert on_map["x"] == pytest.approx(100.0) and on_map["y"] == pytest.approx(50.0) and sp == "spreads"
-    assert list(kp) == [1.0, 0.0, 0.0, 0.0]
+
+def test_text_numbers_count_the_boxes_matched_to_a_word_of_each_kind_that_read_its_string():
+    def rect(x0, x1):
+        return [x0, 0, x1, 0, x1, 10, x0, 10]
+    boxes = pd.DataFrame([dict(zip(RC.G_COLS, rect(0, 40))), dict(zip(RC.G_COLS, rect(100, 140)))])
+    boxes["sheet"], boxes["row"] = "s", [0, 1]
+    terra = pd.DataFrame([dict(zip(RC.C_COLS, rect(0, 40)), sheet="s", text="MISSION ST", kind="street name"),
+                          dict(zip(RC.C_COLS, rect(100, 140)), sheet="s", text="0767", kind="block number")])
+    got = RC.text_numbers(boxes, terra, {"a": {0: "mission  st", 1: None}, "b": {0: "x", 1: "0767"}})
+    assert got["a"]["street"] == {"matched": 1, "same": 1} and got["a"]["block"] == {"matched": 1, "same": 0}
+    assert got["b"]["street"]["same"] == 0 and got["b"]["block"]["same"] == 1 and got["b"]["code"]["matched"] == 0
 
 
 def test_decide_pairs_each_arm_with_reading_as_found(tmp_path):
