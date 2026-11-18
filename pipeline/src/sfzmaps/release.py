@@ -3,7 +3,8 @@
 Checks (tree clean, HEAD is origin/main, DVC data matches dvc.lock, this commit's cache is
 shipped), then the GIS downloads export, the tile publish and the downloads publish (site/scripts,
 with the Blob token from the env file `ship` uses), then a branch and pull request carrying the
-two manifests they changed (site/lib/published.json, site/lib/downloads.json). Merging that PR
+files they changed (site/lib/published.json, downloads.json, download-versions.json and
+sheet-numbers.json). Merging that PR
 deploys. All git, gh, node and DVC calls go through `Deps`, so tests inject them.
 """
 from __future__ import annotations
@@ -17,7 +18,8 @@ from zoneinfo import ZoneInfo
 
 from sfzmaps import config, ship
 
-MANIFESTS = ["site/lib/published.json", "site/lib/downloads.json"]
+MANIFESTS = ["site/lib/published.json", "site/lib/downloads.json",
+             "site/lib/download-versions.json", "site/lib/sheet-numbers.json"]
 SCRIPTS = ["publish-tiles.mjs", "publish-downloads.mjs"]
 PR_FOOTER = "🤖 Generated with [Claude Code](https://claude.com/claude-code)"
 DVC_STATUS = ["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc", "status", "--json"]
@@ -63,8 +65,6 @@ class Deps:
 class Summary:
     files: int = 0
     bytes: int = 0
-    superseded: int = 0
-    deleted: int = 0
     pr_url: str | None = None
     branch: str | None = None
 
@@ -116,13 +116,10 @@ def _tally(script: str, out: str, s: Summary) -> None:
             s.files += 1
             s.bytes += int(m.group(1))
     else:
-        m = re.search(r"to upload now: (\d+) file\(s\), (\d+) bytes; superseded: (\d+); "
-                      r"expired to delete: (\d+)", out)
+        m = re.search(r"^to upload: (\d+) file\(s\), (\d+) bytes; to copy on the store: \d+$", out, re.M)
         if m:
             s.files += int(m.group(1))
             s.bytes += int(m.group(2))
-            s.superseded += int(m.group(3))
-            s.deleted += int(m.group(4))
 
 
 SAFE = ("\nUploads already made are safe (content-hashed, never overwritten); a re-run skips them. "
@@ -177,7 +174,7 @@ def release(dry_run: bool = False, no_pr: bool = False, d: Deps | None = None) -
     s.branch = f"release/{date}-{sha}"
     title = f"Release {date}"
     body = (f"Published to the Blob store: {s.files} file(s), {s.bytes:,} bytes; "
-            f"{s.superseded} superseded, {s.deleted} expired file(s) deleted.\n\n"
+            f"Nothing published is ever deleted.\n\n"
             f"Manifests updated: {', '.join(MANIFESTS)}. Merging deploys.\n\n{PR_FOOTER}")
     step = "creating the branch"
     try:
@@ -209,6 +206,6 @@ def release(dry_run: bool = False, no_pr: bool = False, d: Deps | None = None) -
             d.git("checkout", before)
         except (subprocess.CalledProcessError, OSError):
             pass
-    d.echo(f"uploaded {s.files} file(s), {s.bytes:,} bytes; superseded {s.superseded}, "
-           f"deleted {s.deleted}" + (f"; PR {s.pr_url}" if s.pr_url else ""))
+    d.echo(f"uploaded {s.files} file(s), {s.bytes:,} bytes"
+           + (f"; PR {s.pr_url}" if s.pr_url else ""))
     return s
