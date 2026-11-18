@@ -90,6 +90,8 @@ def build_lots() -> dict:
     t0 = time.perf_counter()
     lots = table.load_table()
     known, codes = table.known_and_codes(lots)
+    if not paths.has_table():                # another series gets the table's lots, never its codes
+        lots["zoning"] = ""
     lot, grown = lot_rasters(lots)
     pairs = neighbour_pairs(lot, grown)
     mapped = page.load_sheets() > 0

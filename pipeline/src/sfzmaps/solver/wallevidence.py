@@ -61,9 +61,10 @@ from scipy import ndimage
 from scipy.spatial import cKDTree
 from skimage.graph import MCP_Geometric
 
-from sfzmaps.solver import grid
+from sfzmaps.solver import grid, threads
 
 log = logging.getLogger(__name__)
+threads.limit_pools()      # also in the spawned workers, which import this module
 
 DISTANCE_KNOTS = np.array([0.0, 6.0, 14.0, 26.0, 42.0, 64.0])   # ft from a border px to a stroke or closing
 WIDTH_KNOTS = np.array([0.0, 8.0, 14.0, 20.0, 28.0, 40.0])      # ft, a stroke's median width

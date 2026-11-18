@@ -9,11 +9,11 @@ shift
 here=$(cd "$(dirname "$0")/../.." && pwd)
 logs="$here/data/solver/experiments/all-years/logs"
 mkdir -p "$logs"
-export SFZMAPS_MAX_USD=0 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1
+export SFZMAPS_MAX_USD=0 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 MKL_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1
 cd "$here"
 for step in "$@"; do
   case "$step" in
-    walls) args=(walls --workers 2) ;;
+    walls) args=(walls --workers "${WALL_WORKERS:-2}") ;;
     solve) args=(solve final) ;;
     *) args=("$step") ;;
   esac

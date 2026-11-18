@@ -242,20 +242,17 @@ def build_text_chance(device: str | None = None) -> dict:
 
 
 def series_vocabulary() -> set[str]:
-    """The codes a series' labels may name (the solve drops readings of any other): on a series with the table, the
-    table's (`codes.table_vocabulary`); on any other, the codes of its published map (the pipeline's reader, held to
-    the era's legend and code list) with every code read on its prints that the era's research list knows
-    (`districts.rules.rule_for` in the series' year)."""
+    """The codes a series' labels may name (the solve drops readings of any other): the codes of its published map
+    (the pipeline's reader, held to the era's legend and code list) with every code read on its prints that the era's
+    research list knows (`districts.rules.rule_for` in the series' year); on a height map, the period's published
+    heights and Sol's reads of that form.  Never the April 2000 table's codes."""
     import pandas as pd
 
     from sfzmaps import config
     from sfzmaps.districts.rules import rule_for
     from sfzmaps.districts.series import SERIES
-    from sfzmaps.solver.codes import canon, table_vocabulary
-    from sfzmaps.solver.city import city
+    from sfzmaps.solver.codes import canon
     from sfzmaps.solver.trust import READS, load_prints
-    if paths.has_table():
-        return table_vocabulary(city().lots)
     if paths.SERIES.endswith("-height"):             # a height map: the period's published heights, and Sol's reads
         period = SERIES[paths.SERIES].period          # of the same form (a number, a dash and a letter; OS)
         import re

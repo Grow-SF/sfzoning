@@ -11,6 +11,9 @@ from pathlib import Path
 
 ONE_THREAD = {"OMP_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1", "VECLIB_MAXIMUM_THREADS": "1",
               "MKL_NUM_THREADS": "1"}
+# Not read by the maths libraries the numbers depend on, so not part of `pinned`; set beside ONE_THREAD so a pinned
+# process and its children start no thread pools of their own (numexpr's; OpenCV's and torch's: `limit_pools`).
+QUIET_POOLS = {"NUMEXPR_NUM_THREADS": "1"}
 
 
 def pinned() -> bool:
@@ -19,9 +22,24 @@ def pinned() -> bool:
     return all(os.environ.get(k) == v for k, v in ONE_THREAD.items())
 
 
+def limit_pools() -> None:
+    """In a pinned process, one thread for OpenCV's and (when loaded) torch's own pools, which read no environment
+    variable: a worker of a pinned process then uses one core."""
+    if not pinned():
+        return
+    try:
+        import cv2
+        cv2.setNumThreads(1)
+    except ImportError:
+        pass
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        torch.set_num_threads(1)
+
+
 def environment() -> dict[str, str]:
     """This process's environment with ONE_THREAD: for a process to start pinned."""
-    return {**os.environ, **ONE_THREAD}
+    return {**os.environ, **ONE_THREAD, **QUIET_POOLS}
 
 
 def sfzmaps_command() -> list[str]:

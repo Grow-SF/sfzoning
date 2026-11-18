@@ -131,7 +131,8 @@ def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders:
     index = {}
     for i, n in enumerate(rd.names):
         index.setdefault(n, i)
-    table_codes = np.array([index.get(canon(c), -1) if k else -1 for c, k in zip(C.table, C.known)])
+    table_codes = (np.array([index.get(canon(c), -1) if k else -1 for c, k in zip(C.table, C.known)])
+                   if paths.is_2000() else None)          # only the 2000 map's log prices the table's answer
     log(f"readings {len(rd.lot):,} on {len(np.unique(rd.lot)):,} lots")
     options = load_options(q, folder, walls_dir)
     p, U = solve_joint(C.n, C.a, C.b, odds, rd, options, table_codes=table_codes, log=log,
@@ -198,6 +199,32 @@ def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = Fals
     print(f"joined: {run_file(run, folder=folder)}")
 
 
+def posterior(run: str, folder: Path) -> np.ndarray:
+    """Each lot's chance of its solved code under the energy, its neighbours' codes held at the solve's (the Gibbs
+    conditional): softmax over codes c of -(U[lot, c] + the wall costs c would pay against each neighbour's solved
+    code), from the solve that held the lot's quarter out (runs/RUN-Q-costs.npz)."""
+    C = city()
+    out = np.zeros(C.n)
+    for k, q in enumerate(paths.QUARTERS):
+        R = np.load(run_file(run, f"-{q}-costs", folder))
+        U, odds, x = R["U"].astype(np.float64), R["odds"].astype(np.float64), R["codes"].astype(np.int64)
+        K = U.shape[1]
+        cost = U.copy()
+        differ = np.maximum(-odds, 0)                # paid when the codes differ (odds < 0)
+        same = np.maximum(odds, 0)                   # paid when they are the same (odds > 0)
+        # a lot pays a border's `differ` for every code but its neighbour's, which pays `same` instead: the sum of
+        # `differ` is the same for every code, so only the difference at the neighbour's code changes the chance
+        for i, j in ((C.a, C.b), (C.b, C.a)):
+            np.add.at(cost, (i, np.minimum(x[j], K - 1)), np.where(x[j] < K, same - differ, 0.0))
+        cost -= cost.min(1, keepdims=True)
+        p = np.exp(-cost)
+        p /= p.sum(1, keepdims=True)
+        m = C.quarter == k
+        xi = np.minimum(x, K - 1)
+        out[m] = np.where(x[m] < K, p[np.flatnonzero(m), xi[m]], 0.0)
+    return out
+
+
 def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool = False,
                      compound_fusion: bool = True) -> dict:
     """Everything a solve needs and makes, from the walls of `walls_dir` (default WALLS_DIR), built in a fresh
@@ -231,10 +258,17 @@ def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool
             summary = {"labels": 0, "note": "pattern map: every read stands for its own lot"}
         else:
             summary = placement.fit(folder, walls_dir, models=transfer.placement_models())
-        solve_all(run, walls_dir, true_borders, keep_costs=False, folder=folder, compound_fusion=compound_fusion)
+        solve_all(run, walls_dir, true_borders, keep_costs=True, folder=folder, compound_fusion=compound_fusion)
+        codes = load_run(run, folder)
+        chance = posterior(run, folder)
+        names, pred = np.unique(codes.astype(str), return_inverse=True)
+        np.savez_compressed(run_file(run, folder=folder), pred=pred, names=names, posterior=chance)
+        for q in paths.QUARTERS:                     # the costs are big and only make the posterior
+            run_file(run, f"-{q}-costs", folder).unlink(missing_ok=True)
         found = {"run": run, "series": paths.SERIES, "placement": summary,
-                 "codes": dict(Counter(load_run(run, folder).tolist()).most_common())}
-        (folder / "summary.json").write_text(json.dumps(found, indent=1) + "\n")
+                 "posterior_mean": round(float(chance.mean()), 4),
+                 "codes": dict(Counter(codes.tolist()).most_common())}
+        (folder / "report.json").write_text(json.dumps(found, indent=1) + "\n")
         runs.replace_folder(folder, target)
         return found
     summary = placement.fit(folder, walls_dir)

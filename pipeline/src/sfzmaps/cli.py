@@ -36,6 +36,7 @@ def solver_main(series: str = typer.Option(None, "--series",
     import sys
 
     from sfzmaps.solver import paths, threads
+    threads.limit_pools()
     if series is None or series == paths.SERIES:
         return
     if not (config.DATA_DIR / "warp" / series).is_dir():

@@ -19,9 +19,13 @@ QUARTERS = ("nw", "ne", "sw", "se")
 # Fixed here rather than listed from data/warp, so that dvc.yaml (whose deps are made from it) is the same in a fresh
 # clone before anything is pulled; `check_sheets` stops a stage that reads them when the warp has placed other sheets.
 SHEETS_2000 = tuple(f"{SERIES_2000}-p{i:02d}" for i in range(1, 14))
-# The series whose lots have a table of their codes to score against: the 2000 map's own (the April 2000 table) and
-# the 1996-2000 scan of the same drawing, scored on the same table.  Every series is solved on the table's lots.
-TABLE_SERIES = (SERIES_2000, "1996-2000-zoning")
+# Every series is solved on the April 2000 table's lots; only the 2000 map's solve reads the table's codes (its fits
+# learn from them).  For every other series `table.known_and_codes` gives no lot a code and `lots` writes the table
+# without them, so the codes are no evidence or prior there: the series is solved with the 2000 map's models as they
+# were fitted (`transfer`).  The 1996-2000 scan of the same drawing is scored on the table afterwards, outside the
+# solve (TABLE_SCORED_SERIES; `scripts/all_years/score_series.py`, on the 2000 map's paths).
+TABLE_SERIES = (SERIES_2000,)
+TABLE_SCORED_SERIES = (SERIES_2000, "1996-2000-zoning")
 # The series printed on the 2000 drawing's sheets (the same frame and layout): their crop is the printed frame
 # (`frame.find_frame`); every other series' is its neatline interior as the warp finds it (`page.sheet_crop`).
 FRAME_SERIES = (SERIES_2000, "2000-digital-height", "2000-digital-su", "1996-2000-zoning", "1996-2000-height",
@@ -35,7 +39,7 @@ def is_2000() -> bool:
 
 
 def has_table() -> bool:
-    """The series being solved is scored on the April 2000 table (TABLE_SERIES)."""
+    """The series being solved reads the April 2000 table's codes (TABLE_SERIES: the 2000 map alone)."""
     return SERIES in TABLE_SERIES
 
 

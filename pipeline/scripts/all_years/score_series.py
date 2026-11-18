@@ -185,7 +185,7 @@ def main():
     grown = np.load(paths.LOTS_DIR / "lots.npz")["grown"]
     out["label_fixes"] = label_fix_agreement(series, solve, grown)
     out["label_fixes_published"] = label_fix_agreement(series, pub, grown)
-    if series in paths.TABLE_SERIES:                 # the 1996-2000 scan: the April 2000 table, as the twin's score
+    if series in paths.TABLE_SCORED_SERIES:          # the 1996-2000 scan: the April 2000 table, as the twin's score
         from sfzmaps.solver.report import six_measures
         nothing = np.zeros(C.n, bool)
         for key, codes in (("table_solve", solve), ("table_published_raw_read", raw), ("table_published_site", pub)):

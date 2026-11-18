@@ -71,8 +71,8 @@ def load_table() -> gpd.GeoDataFrame:
 
 def known_and_codes(table: gpd.GeoDataFrame) -> tuple[np.ndarray, np.ndarray]:
     """`known`: lots whose zoning is a single district (not blank, no "/").  `codes`: each lot's code in the one
-    spelling, "" where not known.  For a series the table does not describe (`paths.has_table`: every series but the
-    2000 map and its 1996-2000 scan) no lot is known: the table gives such a series its lots, never their codes."""
+    spelling, "" where not known.  For any series but the 2000 map (`paths.has_table`) no lot is known: the table
+    gives such a series its lots, never their codes."""
     tidied = table["zoning"].map(codes.tidy)
     known = ((tidied != "") & ~tidied.str.contains("/")).values
     if not paths.has_table():
