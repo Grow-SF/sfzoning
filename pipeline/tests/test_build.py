@@ -558,7 +558,7 @@ def test_the_solve_reads_what_the_solve_and_its_report_read():
         assert d in deps, d
     # the hand leader moves and the by-eye corrections the score counts against; not the table file (the lots'
     # table.parquet carries it) or a README
-    assert [d for d in deps if d.startswith("inputs/")] == ["inputs/2000-digital-zoning/label_fixes.csv",
+    assert [d for d in deps if d.startswith("inputs/")] == ["inputs/hand-labels-2000/label_fixes.csv",
                                                             "inputs/zoning-2000/table-corrections.csv"]
     # the walls' and the detector's code reach the solve only through the walls they wrote
     assert not any(d.endswith(("solver/walls.py", "solver/wallevidence.py", "solver/textgrid.py"))

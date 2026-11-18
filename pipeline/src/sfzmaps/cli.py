@@ -1263,7 +1263,7 @@ def solver_placement(
     walls: Path = _WALLS_OPTION,
 ) -> None:
     """Fit where each printed label belongs, held out by quarter (learning from the hand leader moves of
-    label_fixes.csv and the table): data/solver/experiments/RUN/placement.npz."""
+    inputs/hand-labels-2000/label_fixes.csv and the table): data/solver/experiments/RUN/placement.npz."""
     from sfzmaps.solver import placement, runs
     _not_the_stage_run(run)
     try:

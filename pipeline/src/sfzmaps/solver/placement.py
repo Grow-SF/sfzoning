@@ -10,7 +10,8 @@ text into the area and its width; labels already in the area (same code / anothe
 lot sizes fit the code (lotsize.npz); for stay: another code's label in the label's own area, the label printed in a
 street, its trust.
 
-Answers: the hand-checked leader moves (the rows of label_fixes.csv with a fix point, placed on the map through each
+Answers: the hand-checked leader moves (the rows of the owner's hand labels, inputs/hand-labels-2000/label_fixes.csv,
+with a fix point, placed on the map through each
 sheet's corrected warp) where they match; otherwise the table as downloaded: stay if the lot under the text has the
 label's code, else the nearest option whose lots are mostly that code.  A conditional logit with a small ridge,
 fitted four times, each time without the labels whose lot (under the text) is in one quarter.  Every label gets each

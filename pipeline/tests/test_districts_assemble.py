@@ -527,3 +527,18 @@ def test_series_read_names_every_answer_it_used_the_same_on_every_run(data, monk
     first = answers.read(assemble._raw_path("1960"))
     assemble.run_series("1960")
     assert first == answers.read(assemble._raw_path("1960")) == sorted(["llm/" + "1" * 64 + ".json", own])
+
+
+def test_a_twin_scans_read_depends_on_its_twins_label_fixes():
+    """The 2000 drawing's two scans each register their twin's lines through the twin's label reads, which apply the
+    twin's label_fixes.csv: so a change to that file reads the series again (it once did not, and a read the twin's
+    fixes had changed stayed current).  Another series' read does not depend on it."""
+    from sfzmaps import inputs
+    from sfzmaps.districts import labels
+    a, b = labels.TWIN_SERIES
+    for s in (a, b, "1990-1996-zoning"):
+        inputs.label_fixes_path(s).parent.mkdir(parents=True, exist_ok=True)
+        inputs.label_fixes_path(s).write_text("sheet,x,y,code,fix_code,fix_x,fix_y,note\n")
+    for series, twin in ((a, b), (b, a)):
+        assert inputs.label_fixes_path(twin) in assemble.read_inputs(series)
+    assert inputs.label_fixes_path(b) not in assemble.read_inputs("1990-1996-zoning")

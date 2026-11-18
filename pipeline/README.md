@@ -999,7 +999,7 @@ The commands, run from `pipeline/`:
   logit over each label's options (12 features: distance, area size, a stroke of `strokes.npz` from the text into
   the area and its width, labels already there, how well the area's lot sizes fit the code by `lotsize.npz`, …),
   with ridge 1, fitted four times, each without the labels whose lot is in one quarter. Its answers are the owner's
-  hand leader moves (the rows of `inputs/2000-digital-zoning/label_fixes.csv` with a fix point, placed on the map
+  hand leader moves (the rows of `inputs/hand-labels-2000/label_fixes.csv` with a fix point, placed on the map
   through each sheet's corrected warp, matched to a print of the same code within 40 page px), and elsewhere the
   table: stay when the lot under the text has the code, else the nearest option whose lots mostly have it. It writes
   `placement.npz` into the experiment's folder (with `walls`, the digest of the walls it was fitted with:
@@ -1034,7 +1034,8 @@ The commands, run from `pipeline/`:
   report holds no times: the same run gives the same bytes. `--true-borders` is the ceiling check: the table's own
   borders as walls (odds ±6) must give back nearly the table.
   The stage reads the lots, the merged page's `ink.png` (the holes' causes), `prints.parquet`, the labels, the
-  walls, the warp's placements (the hand leader moves), `label_fixes.csv` and `table-corrections.csv`. On the 2000
+  walls, the warp's placements (the hand leader moves), `inputs/hand-labels-2000/label_fixes.csv` and
+  `table-corrections.csv`. On the 2000
   page it takes about 6 minutes with the compound fusion move (the four solves side by side), up to 17 GB in one process, and
   writes about 110 MB, most of it the solves' costs.
 - `sfzmaps solver score RUN... [--with-data-errors]` scores runs by their mistakes (`solver/measures.py`): the share

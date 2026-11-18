@@ -182,7 +182,9 @@ def read_inputs(series: str) -> list[Path]:
     """Everything a full read of a series is made from: its sheets' files (work/<series>/<sheet>/),
     its hand-made inputs except the overrides (applied when publishing), the label scale, the
     parcels, the legend boxes and the code the read runs (districts.read and what it imports);
-    for the legend-pattern reader (A), also the research table, whose codes it matches."""
+    for the legend-pattern reader (A), also the research table, whose codes it matches; for a series
+    whose sheets join their twin scan's lines (labels.TWIN_SERIES), the twin's pages, label reads and
+    label_fixes.csv too."""
     from sfzmaps.districts import pattern
 
     root = config.WORK_DIR / series
@@ -197,6 +199,8 @@ def read_inputs(series: str) -> list[Path]:
         twin = labels.TWIN_SERIES[1 - labels.TWIN_SERIES.index(series)]
         sheets += sorted(p for n in ("page.png", "district_labels.json")
                          for p in (config.WORK_DIR / twin).glob(f"*/{n}"))
+        # the twin's labels register its lines onto this sheet, read with the twin's label_fixes.csv applied
+        made.append(inputs.label_fixes_path(twin))
     files = [*sheets, *made, inputs.label_scale_path(), config.REF_DIR / "parcels.parquet",
              *([_rules_csv()] if info is None or info.reader == "A" else []), pattern.LEGENDS_JSON,
              *fresh.code_files(["sfzmaps.districts.read"], cut=SHEET_PRODUCERS | _OTHER_READER[

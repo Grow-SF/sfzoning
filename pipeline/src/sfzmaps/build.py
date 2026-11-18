@@ -245,7 +245,7 @@ def stages() -> dict[str, Stage]:
     out["solver-solve"] = Stage("solver-solve", (), (), ("solver-walls",), command=("solver", "solve", "final"),
                                 reads=("data/solver/lots", "data/solver/page/ink.png",
                                        "data/solver/prints/prints.parquet", "data/solver/labels", "data/solver/walls",
-                                       "data/warp/2000-digital-zoning", "inputs/2000-digital-zoning/label_fixes.csv",
+                                       "data/warp/2000-digital-zoning", "inputs/hand-labels-2000/label_fixes.csv",
                                        "inputs/zoning-2000/table-corrections.csv"),
                                 writes=("data/solver/solve",), code=("sfzmaps.solver.solve",))
     # The 2000 map's zoning published from the solve (`districts/solved.py`): the read's lots with the solve's codes,
