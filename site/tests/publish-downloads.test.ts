@@ -135,6 +135,56 @@ describe("plan: vector and citywide files", () => {
   });
 });
 
+describe("plan: citywide sidecars", () => {
+  const CITY_README = "1921/1921-citywide.README.txt";
+  const CITY_LICENSE = "1921/1921-citywide.LICENSE.txt";
+  const cityIndex = (made: string, readme = "a".repeat(64), license = "b".repeat(64)) => ({
+    files: { "1921/citywide.cog": { ...city, made } },
+    sheets: {},
+    readme: { "1948": "R" },
+    license: "L",
+    sidecars: { [CITY_README]: { sha256: readme, bytes: 7 }, [CITY_LICENSE]: { sha256: license, bytes: 8 } },
+  });
+  const cityName = (date: string, ext: string) => versionedName({ series: "1921", layer: "citywide", date, sha256: SHA2, ext });
+
+  it("keeps a citywide entry whose image and sidecars are unchanged: no upload, no new version", () => {
+    const first = run(cityIndex("2026-11-03"));
+    expect(first.files["1921/citywide.cog"].extraSha256).toEqual({ "README.txt": "a".repeat(64), "LICENSE.txt": "b".repeat(64) });
+    const manifest = { files: first.files, sheets: {} };
+    const again = run(cityIndex("2026-11-03"), manifest, { versions: first.newVersions }, {}, new Map(), "2026-11-18");
+    expect(again.uploads).toEqual([]);
+    expect(again.newVersions).toEqual([]);
+    expect(again.files).toEqual(manifest.files);
+  });
+
+  it("a changed README with the same image publishes image, README and LICENSE anew under the new made date, and records one version", () => {
+    const first = run(cityIndex("2026-11-03"));
+    const next = run(cityIndex("2026-11-10", "c".repeat(64)), { files: first.files, sheets: {} }, { versions: first.newVersions });
+    const stem = cityName("2026-11-10", "tif");
+    const readme = cityName("2026-11-10", "README.txt");
+    const license = cityName("2026-11-10", "LICENSE.txt");
+    const entry = next.files["1921/citywide.cog"];
+    expect(entry).toMatchObject({ name: stem, updated: "2026-11-10", extra: { "README.txt": readme, "LICENSE.txt": license } });
+    expect(entry.extraSha256).toEqual({ "README.txt": "c".repeat(64), "LICENSE.txt": "b".repeat(64) });
+    const to = next.uploads.map((u) => u.to);
+    for (const n of [stem, readme, license]) {
+      expect(to).toContain(blobPath("1921", n));
+      expect(to).toContain(blobPath("1921", `${n}.sha256`));
+    }
+    expect(next.uploads).toHaveLength(6);
+    expect(next.newVersions.map((v) => v.name)).toEqual([stem]);
+  });
+
+  it("an entry written before extraSha256 existed is versioned anew, even when every hash matches", () => {
+    const first = run(cityIndex("2026-11-03"));
+    const { extraSha256: _old, ...oldEntry } = first.files["1921/citywide.cog"];
+    void _old;
+    const next = run(cityIndex("2026-11-03"), { files: { "1921/citywide.cog": oldEntry }, sheets: {} }, { versions: first.newVersions });
+    expect(next.uploads.length).toBeGreaterThan(0);
+    expect(next.files["1921/citywide.cog"].extraSha256).toEqual({ "README.txt": "a".repeat(64), "LICENSE.txt": "b".repeat(64) });
+  });
+});
+
 describe("plan: sheets", () => {
   const sheetName = (date: string, sha = SHA2, number = "01") =>
     versionedName({ series: "1948", layer: `sheet-${number}`, date, sha256: sha, ext: "tif" });

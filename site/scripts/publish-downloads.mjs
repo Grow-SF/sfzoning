@@ -50,6 +50,14 @@ export const today = () => new Date().toLocaleDateString("en-CA", { timeZone: "A
 /** An entry already published under a versioned name (the 2026-11-04 shape had a url and a plain name). */
 const isVersioned = (series, entry) => Boolean(entry?.name && parseName(series, entry.name) && !parseName(series, entry.name).latest);
 
+/** "README.txt" or "LICENSE.txt" for a citywide sidecar path, or undefined. */
+const sidecarKind = (rel) => Object.keys(SIDECARS).find((k) => rel.endsWith(SIDECARS[k]));
+
+/** Two sidecar sha256 maps ({ "README.txt": sha, ... }) hold the same hashes; a missing map counts as empty. */
+export function sameSidecars(old = {}, next = {}) {
+  return [...new Set([...Object.keys(old), ...Object.keys(next)])].every((k) => old[k] === next[k]);
+}
+
 const dvcPath = (md5) => `dvc/files/md5/${md5.slice(0, 2)}/${md5.slice(2)}`;
 
 /**
@@ -61,8 +69,11 @@ const dvcPath = (md5) => `dvc/files/md5/${md5.slice(0, 2)}/${md5.slice(2)}`;
  * version gets.
  *
  * A file whose sha256 matches the manifest's (and whose `name` is a versioned one; the 2026-11-04
- * shape had a url and a plain name, so it counts as absent) is kept as it is. Anything else gets a versioned name, an upload
- * (or, for a sheet whose DVC object is on the store, a server-side copy), and a `.sha256` beside it,
+ * shape had a url and a plain name, so it counts as absent) is kept as it is, unless a citywide
+ * README or LICENSE changed: the pipeline can rewrite a sidecar without touching the image, so the
+ * manifest's `extraSha256` must match the index's sidecar hashes too (an entry without it counts as
+ * changed). Anything else gets a versioned name, an upload (or, for a sheet whose DVC object is on
+ * the store, a server-side copy), and a `.sha256` beside it,
  * unless the listing shows that name at the right size already. A name listed at another size throws.
  * With `local`, nothing is uploaded: entries carry the path under the base they can be read from.
  */
@@ -97,7 +108,8 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
   for (const [key, e] of Object.entries(index.files ?? {})) {
     if (!e.made) throw new Error(`${key}: index.json has no "made" date; run \`uv run sfzmaps downloads\` in pipeline/ first`);
     const old = manifest.files?.[key];
-    if (isVersioned(e.series, old) && old.sha256 === e.sha256) {
+    const sidecarSha = Object.fromEntries((e.extra ?? []).map((rel) => [sidecarKind(rel), index.sidecars?.[rel]?.sha256]));
+    if (isVersioned(e.series, old) && old.sha256 === e.sha256 && sameSidecars(old.extraSha256, sidecarSha)) {
       files[key] = old;
       // A kept entry is recorded too (a no-op when history has it), so a lost history repairs itself.
       version({ series: e.series, layer: e.layer, fmt: e.fmt, name: old.name, date: old.updated, bytes: old.bytes, sha256: old.sha256 });
@@ -120,8 +132,9 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
     if (e.extra?.length) {
       f.extra = {};
       if (local) f.extraLocal = {};
+      else f.extraSha256 = {};
       for (const rel of e.extra) {
-        const kind = Object.keys(SIDECARS).find((k) => rel.endsWith(SIDECARS[k]));
+        const kind = sidecarKind(rel);
         if (!kind) throw new Error(`${key}: ${rel} is not a README.txt or LICENSE.txt sidecar`);
         const n = versionedName({ series: e.series, layer: e.layer, date: e.made, sha256: e.sha256, ext: kind });
         f.extra[kind] = n;
@@ -129,6 +142,7 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
         else {
           const side = index.sidecars?.[rel];
           if (!side) throw new Error(`${key}: no sha256 for ${rel}`);
+          f.extraSha256[kind] = side.sha256;
           publish(rel, n, side.bytes, side.sha256);
         }
       }

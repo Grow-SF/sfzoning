@@ -24,6 +24,8 @@ function fileLinks(series: string, layer: string, fmt: string, name: string): Fi
 export type ManifestFile = {
   series: string; layer: string; fmt: string; name: string; bytes: number; sha256: string;
   fingerprint: string; updated: string; extra?: Record<"README.txt" | "LICENSE.txt", string>;
+  /** Citywide only: the sha256 of each sidecar named in `extra`, so a rewritten README counts as a change. */
+  extraSha256?: Record<"README.txt" | "LICENSE.txt", string>;
   /** --local manifests only: the path under the base the file can be read from. */
   local?: string; extraLocal?: Record<string, string>;
 };
