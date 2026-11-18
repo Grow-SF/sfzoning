@@ -8,6 +8,7 @@
 // production build (`ALLOW_LOCAL_TILES=1 npm run build`) use the local tile server.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { parseName } from "../lib/downloadNames.mjs";
 import { BASE } from "./publish-tiles.mjs";
 
 /** @returns {string | null} an error message, or null when the build may go ahead. */
@@ -46,12 +47,13 @@ export function checkDownloadsManifest(env, manifest, base = BASE) {
   if (!production || env.ALLOW_LOCAL_TILES === "1") return null;
   const fix = "restore it with `git checkout site/lib/downloads.json`";
   if (manifest.local) return `lib/downloads.json is a local manifest (links to a local server); ${fix}.`;
-  const urls = [
-    ...Object.values(manifest.files ?? {}).flatMap((f) => [f.url, ...Object.values(f.extra ?? {})]),
-    ...Object.values(manifest.sheets ?? {}).flatMap((s) => (s.items ?? []).map((i) => i.url)),
+  if (manifest.base !== base) return `lib/downloads.json is for ${manifest.base}, not ${base}; ${fix}.`;
+  const names = [
+    ...Object.values(manifest.files ?? {}).flatMap((f) => [[f.series, f.name], ...Object.values(f.extra ?? {}).map((n) => [f.series, n])]),
+    ...Object.entries(manifest.sheets ?? {}).flatMap(([series, s]) => (s.items ?? []).map((i) => [series, i.name])),
   ];
-  const bad = urls.find((u) => !u.startsWith(`${base}/`));
-  return bad ? `lib/downloads.json has a url outside ${base} (${bad}); ${fix}.` : null;
+  const bad = names.find(([series, name]) => !parseName(series, name));
+  return bad ? `lib/downloads.json has a name that is not a download name (${bad[1]}); ${fix}.` : null;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
