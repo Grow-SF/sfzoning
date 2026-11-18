@@ -127,14 +127,25 @@ describe("filesResponse", () => {
     for (const n of [LOTS, `${LOTS}.sha256`]) {
       const res = await filesResponse(manifest, "1948", n, never);
       expect(res.status).toBe(308);
-      expect(res.headers.get("location")).toBe(`${B}/downloads/1948/${n}`);
+      expect(res.headers.get("location")).toBe(`${B}/downloads/1948/${n}${n === LOTS ? "?download=1" : ""}`);
     }
   });
   it("redirects an older version that is no longer in the manifest", async () => {
     const old = V("1948", "lots", "geojson.zip", "2026-10-01");
     const res = await filesResponse(manifest, "1948", old, never);
     expect(res.status).toBe(308);
-    expect(res.headers.get("location")).toBe(`${B}/downloads/1948/${old}`);
+    expect(res.headers.get("location")).toBe(`${B}/downloads/1948/${old}?download=1`);
+  });
+  it("still redirects a dated name of a series dropped from the manifest, if history has it; its latest name 404s", async () => {
+    const history = { versions: [{ series: "1900", layer: "lots", fmt: "geojson", name: V("1900", "lots", "geojson.zip"), date: "2026-11-01", bytes: 1, sha256: "x" }] };
+    const name = V("1900", "lots", "geojson.zip");
+    const res = await filesResponse(manifest, "1900", name, never, undefined, history);
+    expect(res.status).toBe(308);
+    expect(res.headers.get("location")).toBe(`${B}/downloads/1900/${name}?download=1`);
+    expect((await filesResponse(manifest, "1900", "sfzoning-1900-lots-latest.geojson.zip", never, undefined, history)).status).toBe(404);
+    for (const s of ["constructor", "__proto__"]) {
+      expect((await filesResponse(manifest, s, `sfzoning-${s}-lots-2026-11-01-3f9a2c1b.gpkg.zip`, never, undefined, history)).status).toBe(404);
+    }
   });
   it("sends a latest name to the current versioned name, never cached", async () => {
     const res = await filesResponse(manifest, "1948", "sfzoning-1948-lots-latest.geojson.zip", never);

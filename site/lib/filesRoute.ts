@@ -3,6 +3,7 @@
 import { EXTS, blobPath, parseName } from "./downloadNames.mjs";
 import { fileUrl, type Manifest } from "./downloadRows";
 import { sheetsZipResponse } from "./sheetZip";
+import type { VersionHistory } from "./versions";
 
 type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 
@@ -28,8 +29,10 @@ function currents(m: Manifest, series: string): Current[] {
 }
 
 /**
- * The response for /data/files/<series>/<name>. Only a series in the manifest and a name that
- * parseName accepts get any further; everything else is a 404 before anything is fetched.
+ * The response for /data/files/<series>/<name>. Only a series in the manifest (or, for a dated
+ * name, one that ever had a release in `history`) and a name that parseName accepts get any
+ * further; everything else is a 404 before anything is fetched. A redirect that ends at Blob
+ * (not for a .sha256, which should display) asks for a download, so browsers save the file.
  */
 export async function filesResponse(
   manifest: Manifest,
@@ -37,11 +40,14 @@ export async function filesResponse(
   name: string,
   fetchFn: FetchFn = fetch,
   signal?: AbortSignal,
+  history: VersionHistory = { versions: [] },
 ): Promise<Response> {
-  const known = Object.hasOwn(manifest.sheets, series) || Object.values(manifest.files).some((f) => f.series === series);
-  if (!known) return notFound();
-  const p = parseName(series, name) as { layer: string; ext: string; latest: boolean } | null;
+  const current = Object.hasOwn(manifest.sheets, series) || Object.values(manifest.files).some((f) => f.series === series);
+  const everReleased = history.versions.some((v) => v.series === series);
+  const p = parseName(series, name) as { layer: string; ext: string; latest: boolean; checksum: boolean } | null;
   if (!p) return notFound();
+  // A latest name needs a current series; a dated one stays valid after its series is dropped.
+  if (!(current || (!p.latest && everReleased))) return notFound();
   const { base } = manifest;
 
   if (manifest.local) {
@@ -60,5 +66,6 @@ export async function filesResponse(
   }
   // Older versions stay valid, so a versioned name needs no entry in the current manifest.
   if (!base) return notFound();
-  return redirect(308, `${base}/${blobPath(series, name)}`, "public, max-age=31536000, immutable");
+  const to = `${base}/${blobPath(series, name)}${p.checksum ? "" : "?download=1"}`;
+  return redirect(308, to, "public, max-age=31536000, immutable");
 }
