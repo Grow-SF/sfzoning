@@ -1295,7 +1295,7 @@ def solver_placement(
     walls: Path = _WALLS_OPTION,
 ) -> None:
     """Fit where each printed label belongs, held out by quarter (learning from the hand leader moves of
-    label_fixes.csv and the table): data/solver/experiments/RUN/placement.npz."""
+    inputs/hand-labels-2000/label_fixes.csv and the table): data/solver/experiments/RUN/placement.npz."""
     from sfzmaps.solver import placement, runs
     _not_the_stage_run(run)
     try:
@@ -1425,11 +1425,22 @@ def solver_published(
 
 
 @solver_app.command("publish")
-def solver_publish(force: bool = typer.Option(False, "--force", help="Publish even when the outputs are current.")
-                   ) -> None:
-    """Publish the 2000 map's zoning from the solve (the solver-publish stage): out/2000-digital-zoning/districts/,
-    each lot of the read with the solve's code (districts/solved.py), then unzoned blocks, overrides, heights and
-    parks as for every series.  Fails if a lot of the read has no code or a code has no category."""
+def solver_publish(
+    series: str = typer.Option("2000-digital-zoning", "--series",
+                               help="The zoning series to publish from its solve (1921 ... 2000-digital-zoning)."),
+    root: Path = typer.Option(None, "--root", help="The series' solver outputs, in 2000's layout (solve/runs/final.npz, "
+                              "solve/report.json, lots/table.parquet, lots/lots.npz); default data/solver for 2000, "
+                              "data/solver/<series> for another."),
+    page: Path = typer.Option(None, "--page", help="Then write the page of differences against the site's map into "
+                              "this folder (index.html, crops/)."),
+    published: str = typer.Option("shared", "--published", help="With --page: the map to compare against: 'shared' "
+                                  "(the site's archive, data/out/shared) or a parcels.fgb."),
+    force: bool = typer.Option(False, "--force", help="Publish even when the outputs are current."),
+) -> None:
+    """Publish a zoning map from its series' solve (the solver-publish stages): out/<series>/districts/, each lot of
+    the read with the solve's code (districts/solved.py), then unzoned blocks, overrides, heights and parks as for
+    every series.  Fails if a lot of the read outside the unzoned blocks has no code, or a code has no category.
+    With --page, then the page of the areas where it differs from the site's map (solver/differences.py)."""
     import logging
 
     import pandas as pd
@@ -1437,22 +1448,40 @@ def solver_publish(force: bool = typer.Option(False, "--force", help="Publish ev
 
     from sfzmaps import llm
     from sfzmaps.districts import assemble, solved
+    from sfzmaps.districts.series import SERIES
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     llm.CACHE_ONLY = True                 # nothing here may reach the network
+    if SERIES.get(series) is None or SERIES[series].role != "use":
+        typer.echo(f"{series} is not a zoning series: {', '.join(s for s, i in SERIES.items() if i.role == 'use')}",
+                   err=True)
+        raise typer.Exit(2)
+    if series not in solved.SOLVED:
+        typer.echo(f"note: {series} is not in districts.solved.SOLVED, so its edition or period stage still owns "
+                   f"data/out/{series}: add it there and `sfzmaps build --write-dvc-yaml` for a build to record this "
+                   "publish", err=True)
     try:
-        d = solved.publish(force=force)
-    except ValueError as e:
+        d = solved.publish(series, force=force, root=root)
+        with solved.rooted(series, root):
+            source = solved.confidence_source(series)
+    except (ValueError, FileNotFoundError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)
     unknown = json.loads((d / "unknown_codes.json").read_text())
     g = pyogrio.read_dataframe(d / "parcels.fgb", columns=["blklot", "code"], read_geometry=False)
-    read = pd.read_parquet(assemble._raw_path(solved.SERIES), columns=["blklot"])["blklot"].astype(str)
-    blank = read[read.isin(set(g.loc[g["code"].isna() | (g["code"] == ""), "blklot"].astype(str)))]
-    typer.echo(f"{solved.SERIES}: {d}; {g['code'].notna().sum():,} of {len(g):,} lots coded; the read's lots "
-               f"{len(read):,}, {len(blank):,} of them with no code; codes with no category {len(unknown)}")
+    read = pd.read_parquet(assemble._raw_path(series), columns=["blklot"])["blklot"].astype(str)
+    year = SERIES[series].year
+    unzoned = assemble.blocks_of(read).map(lambda b: year < assemble.UNZONED_UNTIL.get(b, 0)).to_numpy(bool)
+    blank = read[read.isin(set(g.loc[g["code"].isna() | (g["code"] == ""), "blklot"].astype(str))) & ~unzoned]
+    typer.echo(f"{series}: {d}; {g['code'].notna().sum():,} of {len(g):,} lots coded; the read's lots "
+               f"{len(read):,}, {len(blank):,} of them with no code; codes with no category {len(unknown)}; "
+               f"confidence from the solve's {source}")
     if unknown or len(blank):
         typer.echo(f"no category: {unknown}; no code: {list(blank[:10])}", err=True)
         raise typer.Exit(1)
+    if page is not None:
+        from sfzmaps.solver import differences
+        out = differences.make(series, root=root, published=published, page_dir=page, new_dir=d)
+        typer.echo(f"the page of differences: {out}")
 
 
 if __name__ == "__main__":

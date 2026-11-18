@@ -401,6 +401,7 @@ def test_a_scenes_masks_are_exact(bank, scale, turns):
     size = 96
     real = data.crop_targets(bank.sheets[0], 100, 100, size, scale, turns, words=True)
     labelled = 0
+    cut_cores = whole_cores = 0
     for _ in range(12):
         t = bank.crop(rng, size, scale, turns)
         assert t.keys() == real.keys() and all(t[k].dtype == real[k].dtype and t[k].shape == real[k].shape for k in t)
@@ -415,12 +416,19 @@ def test_a_scenes_masks_are_exact(bank, scale, turns):
         assert _cores_disjoint([r + 200 for r in rects], (src + 400, src + 400))
         # a core px is its word's, the paper inside a word's rectangle is unknown, and a line px in it known not text
         assert np.array_equal(t["core"] > 0, t["tag_id"] > 0)
-        assert (t["geo_known"][t["core"] > 0] == 1).all()
+        # geometry is known exactly for the words the scene shows whole: a word whose rectangle reaches outside the
+        # scene's page window (0..src, its far end not in the input) has none (dadc5d1), however it is turned
+        cut = np.array([bool((r.min(axis=0) < 0).any() or (r.max(axis=0) >= src).any()) for r in rects] + [False])
+        core = t["core"] > 0
+        assert np.array_equal(t["geo_known"][core] == 1, ~cut[t["tag_id"][core] - 1])
+        assert not t["geo_known"][~core].any()
+        cut_cores += int(sum(((t["tag_id"] == i + 1) & core).any() for i in np.flatnonzero(cut[:-1])))
+        whole_cores += int(sum(((t["tag_id"] == i + 1) & core).any() for i in np.flatnonzero(~cut[:-1])))
         assert not t["known"][(t["core"] > 0) & ~t["ink"]].any()
         assert t["known"][~(t["core"] > 0)].all()
         assert (t["kind"][~text] == data.NO_KIND).all() and (t["angle"][~text] == 0).all()
         labelled += len(rects)
-    assert labelled > 0
+    assert labelled > 0 and whole_cores > 0 and cut_cores > 0
 
 
 def test_the_same_seed_gives_the_same_scene(city):

@@ -29,7 +29,9 @@ SOLVE_LABELS_DIR = paths.LABELS_DIR
 SCORING_PRINTS_FILE = paths.PRINTS_DIR / "prints.parquet"
 SCORING_LABELS_DIR = paths.LABELS_DIR
 
-LABEL_FIXES = config.INPUTS_DIR / "2000-digital-zoning" / "label_fixes.csv"
+# The owner's hand labels for the 2000 map (its leader moves teach the placement).  Their own folder: the old district
+# reader applies inputs/<series>/label_fixes.csv, and through its twin fuse the 1996-2000 scan too.
+LABEL_FIXES = config.INPUTS_DIR / "hand-labels-2000" / "label_fixes.csv"
 
 
 def solve_dir(run: str) -> Path:

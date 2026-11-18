@@ -14,10 +14,11 @@ def test_every_series_is_in_exactly_one_stage():
     assert sorted(owned) == sorted(SERIES) and len(owned) == len(set(owned))
     # shared comes last and needs the old stages only: not the saved reads' images (no output is made
     # from them), not the warp stages (the old pipeline's merge doesn't read them) and not the solver's,
-    # but the 2000 map it publishes
+    # but the maps it publishes from their solves
+    from sfzmaps.districts import solved
     assert list(table)[-1] == "shared" and set(table["shared"].upstream) == {
         n for n in table if n not in ("shared", "saved-reads") and not n.startswith("warp-")
-        and not table[n].command} | {"solver-publish"}
+        and not table[n].command} | {solved.stage_name(s) for s in solved.SOLVED}
 
 
 def test_a_period_reads_heights_before_zoning_and_never_special_use():
@@ -558,7 +559,7 @@ def test_the_solve_reads_what_the_solve_and_its_report_read():
         assert d in deps, d
     # the hand leader moves and the by-eye corrections the score counts against; not the table file (the lots'
     # table.parquet carries it) or a README
-    assert [d for d in deps if d.startswith("inputs/")] == ["inputs/2000-digital-zoning/label_fixes.csv",
+    assert [d for d in deps if d.startswith("inputs/")] == ["inputs/hand-labels-2000/label_fixes.csv",
                                                             "inputs/zoning-2000/table-corrections.csv"]
     # the walls' and the detector's code reach the solve only through the walls they wrote
     assert not any(d.endswith(("solver/walls.py", "solver/wallevidence.py", "solver/textgrid.py"))
@@ -594,8 +595,11 @@ def _overlaps(a: str, b: str) -> bool:
 
 
 def test_no_two_stages_write_one_path_and_no_stage_reads_its_own_downstream():
-    # what DVC refuses: one path written by two stages, and a cycle (a stage reading what its own outputs feed)
-    t = build.stages()
+    _assert_dvc_accepts(build.stages())
+
+
+def _assert_dvc_accepts(t):
+    """What DVC refuses: one path written by two stages, and a cycle (a stage reading what its own outputs feed)."""
     outs = {n: build.stage_outs(st) for n, st in t.items()}
     names = list(t)
     for i, a in enumerate(names):
@@ -612,6 +616,62 @@ def test_no_two_stages_write_one_path_and_no_stage_reads_its_own_downstream():
                 seen.add(m)
                 todo.extend(after[m])
         assert n not in seen, n
+
+
+def _with_a_solve(series, monkeypatch):
+    """The stage table once `series` is in districts.solved.SOLVED, with a stand-in for its solver's stages (writing
+    its root's lots and solve after its warp), as stages() makes it."""
+    from sfzmaps.districts import solved
+    t = build.stages()
+    owner = {s: n for n, st in t.items() for s in st.series}
+    root = solved.default_root(series).relative_to(config.PIPELINE_DIR).as_posix()
+    t[f"solver-solve-{series}"] = build.Stage(
+        f"solver-solve-{series}", (), (), (f"warp-{series}",), command=("solver", "solve", "final"),
+        reads=(f"data/warp/{series}",), writes=(f"{root}/lots", f"{root}/solve"), code=("sfzmaps.solver.solve",))
+    monkeypatch.setattr(solved, "SOLVED", solved.SOLVED | {series})
+    st = build.publish_stage(series, t, owner)
+    shared = t.pop("shared")
+    t[st.name] = st
+    t["shared"] = build.Stage("shared", (), (), (*shared.upstream, st.name), frozen=True)
+    return t
+
+
+@pytest.mark.parametrize("series, owner, height", [("1960", "edition-1960", None),
+                                                   ("1990-1996-zoning", "period-1990-1996", "1990-1996-height")])
+def test_a_series_published_from_its_solve_gets_its_own_stage_and_its_edition_hands_over(series, owner, height,
+                                                                                         monkeypatch):
+    t = _with_a_solve(series, monkeypatch)
+    st = t[f"solver-publish-{series}"]
+    assert st.command == ("solver", "publish", "--series", series)
+    assert st.upstream == ("refdata", owner, f"solver-solve-{series}")
+    deps = build.stage_deps(st)
+    root = f"data/solver/{series}"
+    assert [d for d in deps if d.startswith("data/solver/")] == [
+        f"{root}/solve/runs/final.npz", f"{root}/solve/report.json", f"{root}/lots/table.parquet",
+        f"{root}/lots/lots.npz"]
+    for d in (f"data/work/{series}/districts_raw.parquet", f"inputs/{series}", "inputs/parks.csv",
+              "data/ref/parcels.parquet", "../docs/research/zoning-districts.csv", "src/sfzmaps/districts/solved.py"):
+        assert d in deps, d
+    assert (f"data/out/{series}/districts/height.parquet" in deps) == bool(height)
+    assert (f"inputs/{height}" in deps) if height else not any(d.endswith("-height") for d in deps)
+    assert build.stage_outs(st) == [f"data/out/{series}/districts/{n}" for n in
+                                    ("parcels.fgb", "districts.fgb", "stats.json", "stats.json.inputs.json",
+                                     "unknown_codes.json")]
+    # its edition or period keeps its sheets, tiles and heights, and hands it the published files
+    outs = build.stage_outs(t[owner])
+    assert f"data/work/{series}" in outs and f"data/out/{series}" not in outs
+    assert f"data/out/{series}/{series}.pmtiles" in outs and f"data/out/{series}/review.html" in outs
+    assert (f"data/out/{series}/districts/height.parquet" in outs) == bool(height)
+    assert not any(o.startswith(f"data/out/{series}/districts/") and "height" not in o for o in outs)
+    assert st.name in t["shared"].upstream
+    _assert_dvc_accepts(t)
+
+
+def test_a_series_in_solved_before_its_solver_has_stages_stops_the_stage_table(monkeypatch):
+    from sfzmaps.districts import solved
+    monkeypatch.setattr(solved, "SOLVED", solved.SOLVED | {"1948"})
+    with pytest.raises(ValueError, match="1948 is in districts.solved.SOLVED but no stage writes data/solver/1948/"):
+        build.stages()
 
 
 def test_needs_prepare_is_false_for_command_stages():

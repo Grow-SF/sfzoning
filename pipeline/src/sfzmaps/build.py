@@ -19,6 +19,8 @@ into one tracked folder, and a height series' districts write into its zoning se
   solver-<part> one of the 2000 solver's inputs (sfzmaps solver <part>), after the 2000 warp
   solver-publish  the 2000 map's zoning from the solve (sfzmaps solver publish): the published files of
                 out/2000-digital-zoning/districts/, which its period's stage leaves to it
+  solver-publish-<S>  the same for each other series published from its solve (districts.solved.SOLVED;
+                sfzmaps solver publish --series S), after its edition or period and the stages writing its solve
 
 The old pipeline's stages (edition-*, period-*, today, shared) are frozen: the sheet warp replaces
 them, so a build runs only the warp-* stages (`build --force NAME` still runs an old one).
@@ -245,36 +247,79 @@ def stages() -> dict[str, Stage]:
     out["solver-solve"] = Stage("solver-solve", (), (), ("solver-walls",), command=("solver", "solve", "final"),
                                 reads=("data/solver/lots", "data/solver/page/ink.png",
                                        "data/solver/prints/prints.parquet", "data/solver/labels", "data/solver/walls",
-                                       "data/warp/2000-digital-zoning", "inputs/2000-digital-zoning/label_fixes.csv",
+                                       "data/warp/2000-digital-zoning", "inputs/hand-labels-2000/label_fixes.csv",
                                        "inputs/zoning-2000/table-corrections.csv"),
                                 writes=("data/solver/solve",), code=("sfzmaps.solver.solve",))
-    # The 2000 map's zoning published from the solve (`districts/solved.py`): the read's lots with the solve's codes,
-    # then unzoned blocks, overrides, heights and parks as for every series.  Not in the period's stage, which makes
-    # the sheets the solver reads (a cycle): that stage reads the zoning and the heights, and this one writes the
-    # published files of its districts folder (`solved.PUBLISHED`, `_period_out_files`).
+    # Each map published from its solve (`districts/solved.py`, the series of `solved.SOLVED`): the read's lots with
+    # the solve's codes, then unzoned blocks, overrides, heights and parks as for every series.  Not in the edition's or
+    # period's stage, which makes the sheets the solver reads (a cycle): that stage reads the zoning (and the heights),
+    # and the publish stage writes the published files of its districts folder (`solved.PUBLISHED`,
+    # `_period_out_files`).  Last but `shared`, after whatever stages write the series' solve.
     from sfzmaps.districts import solved
-    s = solved.SERIES
-    height = next(h for h in out[owner[s]].series if SERIES[h].role == "height")
-    out["solver-publish"] = Stage(
-        "solver-publish", (), (), ("refdata", owner[s], "solver-lots", "solver-solve"), command=("solver", "publish"),
-        reads=(f"data/work/{s}/districts_raw.parquet", f"data/work/{s}/districts_raw.json",
-               f"data/out/{s}/districts/height.parquet", f"data/out/{s}/districts/height.json",
-               f"inputs/{s}/overrides.csv", f"inputs/{height}", "inputs/parks.csv", "inputs/park_maps.csv",
-               "data/ref/parcels.parquet", "../docs/research/zoning-districts.csv",
-               "data/solver/solve/runs/final.npz", "data/solver/solve/report.json",
-               "data/solver/lots/table.parquet", "data/solver/lots/lots.npz"),
-        writes=tuple(f"data/out/{s}/districts/{n}" for n in solved.PUBLISHED), code=("sfzmaps.districts.solved",))
-    out["shared"] = Stage("shared", (), (), (*old, "solver-publish"), frozen=True)
+    publishers = []
+    for s in SERIES:
+        if s in solved.SOLVED:
+            st = publish_stage(s, out, owner)
+            out[st.name] = st
+            publishers.append(st.name)
+    out["shared"] = Stage("shared", (), (), (*old, *publishers), frozen=True)
     return out
 
 
+def _height_series(series: str) -> str | None:
+    """The period's height series of a zoning series (assemble.height_series_of, without importing the publish)."""
+    from sfzmaps.districts.series import SERIES
+
+    period = SERIES[series].period
+    return next((h for h, i in SERIES.items() if i.period == period and i.role == "height"), None)
+
+
+def publish_stage(series: str, table: dict[str, Stage], owner: dict[str, str]) -> Stage:
+    """The stage publishing `series` from its solve (`sfzmaps solver publish --series S`; 2000's, `solver-publish`,
+    without --series).  It reads what its edition's or period's stage read (districts_raw) and, in a period, the
+    heights; the series' overrides; the parks, the parcels and the research table's categories; and the solve's files
+    under the series' root (`solved.solve_of`).  Its upstream: refdata, that stage, and every command stage writing one
+    of the solve's files.  ValueError when no stage writes one of them (a series put in SOLVED before its solver's
+    stages exist)."""
+    from sfzmaps.districts import solved
+    from sfzmaps.districts.series import SERIES
+
+    s = series
+    if SERIES[s].role != "use":
+        raise ValueError(f"{s} is not a zoning series: only a zoning map is published from a solve")
+    height = _height_series(s)
+    # 2000's overrides.csv as its stage was first recorded; another series' inputs folder (tracked for every series),
+    # since DVC needs every dep to exist and 1921-1948 have no overrides.csv yet
+    overrides = f"inputs/{s}/overrides.csv" if s == solved.SERIES else f"inputs/{s}"
+    solve = [p.relative_to(config.PIPELINE_DIR).as_posix() for p in solved.solve_of(s).inputs()]
+    reads = (f"data/work/{s}/districts_raw.parquet", f"data/work/{s}/districts_raw.json",
+             *((f"data/out/{s}/districts/height.parquet", f"data/out/{s}/districts/height.json") if height else ()),
+             overrides, *((f"inputs/{height}",) if height else ()), "inputs/parks.csv", "inputs/park_maps.csv",
+             "data/ref/parcels.parquet", "../docs/research/zoning-districts.csv", *solve)
+    writers = [n for n, st in table.items() if st.command and any(_overlaps(r, o) for r in solve for o in st.writes)]
+    missing = [r for r in solve if not any(_overlaps(r, o) for n in writers for o in table[n].writes)]
+    if missing:
+        raise ValueError(f"{s} is in districts.solved.SOLVED but no stage writes {', '.join(missing)}: add its "
+                         "solver's stages first (they write under solved.default_root)")
+    return Stage(solved.stage_name(s), (), (), ("refdata", owner[s], *writers),
+                 command=("solver", "publish") if s == solved.SERIES else ("solver", "publish", "--series", s),
+                 reads=reads, writes=tuple(f"data/out/{s}/districts/{n}" for n in solved.PUBLISHED),
+                 code=("sfzmaps.districts.solved",))
+
+
+def _overlaps(a: str, b: str) -> bool:
+    """Two pipeline paths: the same, or one inside the other."""
+    return a == b or a.startswith(b + "/") or b.startswith(a + "/")
+
+
 def _period_out_files(series: str) -> tuple[str, ...]:
-    """What a period's stage writes in out/<series> of a series published from the solve (districts.solved.SOLVED):
-    its tiles, manifest and review page, and the read of its heights in districts/; the rest of districts/ is
-    solver-publish's (DVC lets no two stages write one folder)."""
+    """What an edition's or period's stage writes in out/<series> of a series published from its solve
+    (districts.solved.SOLVED): its tiles, manifest and review page, and in a period the read of its heights in
+    districts/; the rest of districts/ is the series' publish stage's (DVC lets no two stages write one folder)."""
+    heights = ("districts/height.json", "districts/height.parquet", "districts/height.parquet.answers",
+               "districts/height.parquet.inputs.json") if _height_series(series) else ()
     return (f"{series}.pmtiles", f"{series}.inputs.json", f"{series}-paper.pmtiles", f"{series}-paper.inputs.json",
-            "changes.wgs84.geojson", "manifest.json", "review.html", "districts/height.json",
-            "districts/height.parquet", "districts/height.parquet.answers", "districts/height.parquet.inputs.json")
+            "changes.wgs84.geojson", "manifest.json", "review.html", *heights)
 
 
 def _text_sheet_files(root: str, series_list, names: tuple[str, ...]) -> tuple[str, ...]:

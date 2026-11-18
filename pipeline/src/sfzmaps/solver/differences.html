@@ -1,11 +1,12 @@
-<title>New 2000 Map Differences</title>
+<title>__TITLE__</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Public+Sans:wght@400;600;700&display=swap">
 <style>
-/* Layout: one calm column for a phone: the score, filter chips, then every area as a row that opens in place to show
-   the scan. Blue is the area's tint on the scan; green, red and amber say which map the April 2000 table backs. */
+/* Layout: one calm column for a phone: the scores, filter chips, then every area as a row that opens in place to show
+   the scan. Blue is the area's tint on the scan; green, red and amber say which map the ground truth backs (the April
+   2000 table, or the readers' corrections). */
 :root {
   --bg: #f3f5f8;
   --surface: #ffffff;
@@ -33,36 +34,36 @@
 }
 * { box-sizing: border-box; }
 body {
-  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  margin: 0; background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
-  padding-block: 20px 48px;
+  padding-block: 20px 48px; overflow-x: hidden;
 }
-.wrap { max-width: 760px; margin: 0 auto; display: grid; gap: 28px; }
+.wrap { max-width: 760px; margin: 0 auto; display: grid; gap: 28px; min-width: 0; }
 header { display: grid; gap: 8px; }
 .eyebrow { margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
 h1 { margin: 0; font-size: 26px; line-height: 1.2; font-weight: 700; text-wrap: balance; }
 h2 { margin: 0; font-size: 15px; font-weight: 700; }
 p { margin: 0; max-width: 65ch; }
 .lede { color: var(--fg); }
-code, .code { font-family: var(--font-code); font-weight: 500; font-size: .92em; }
+code, .code { font-family: var(--font-code); font-weight: 500; font-size: .92em; overflow-wrap: anywhere; }
 .num { font-variant-numeric: tabular-nums; }
 
-.score { display: grid; gap: 12px; }
+.score { display: grid; gap: 12px; min-width: 0; }
 .measures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.measure { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: grid; gap: 6px; min-width: 0; }
+.measure { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: grid; gap: 6px; min-width: 0; align-content: start; }
 .measure .label { font-size: 13px; color: var(--muted); }
 .measure .vals { display: flex; flex-wrap: wrap; gap: 4px 14px; font-variant-numeric: tabular-nums; }
 .measure .vals span { font-size: 13px; color: var(--muted); }
 .measure .vals b { display: block; font-size: 20px; color: var(--fg); font-weight: 700; }
 .measure .vals .was b { color: var(--muted); font-weight: 600; }
-.measure .diff { font-size: 13px; color: var(--good); font-weight: 600; font-variant-numeric: tabular-nums; }
+.measure .diff { font-size: 13px; color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
 .measure .ci { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .note { font-size: 13px; color: var(--muted); }
 
 .filters { display: flex; flex-wrap: wrap; gap: 8px; }
 .filters button {
   font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--surface); color: var(--fg);
-  border-radius: 999px; padding: 6px 12px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center;
+  border-radius: 999px; padding: 6px 12px; min-height: 36px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center;
 }
 .filters button .n { color: var(--muted); font-variant-numeric: tabular-nums; }
 .filters button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
@@ -86,7 +87,7 @@ summary::-webkit-details-marker { display: none; }
 .lots { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .sub { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 13px; color: var(--muted); min-width: 0; }
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; }
-.badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; flex: none; }
 .badge.new { color: var(--good); }
 .badge.published { color: var(--bad); }
 .badge.neither { color: var(--mixed); }
@@ -94,8 +95,8 @@ summary::-webkit-details-marker { display: none; }
 .badge.none::before { background: transparent; border: 1.5px solid currentColor; width: 7px; height: 7px; }
 details[open] summary { padding-bottom: 8px; }
 
-.detail { display: grid; gap: 12px; padding: 0 2px 18px; }
-figure { margin: 0; display: grid; gap: 6px; }
+.detail { display: grid; gap: 12px; padding: 0 2px 18px; min-width: 0; }
+figure { margin: 0; display: grid; gap: 6px; min-width: 0; }
 .scan { overflow: auto; max-height: 80vh; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); cursor: zoom-in; }
 .scan img { display: block; width: 100%; height: auto; max-width: 100%; }
 .scan.full { cursor: zoom-out; }
@@ -119,15 +120,21 @@ dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 
 <main class="wrap">
   <header>
-    <p class="eyebrow">2000 digital zoning map · solver against the site</p>
-    <h1>Where the new 2000 map differs from the one on the site</h1>
+    <p class="eyebrow" id="eyebrow"></p>
+    <h1 id="title"></h1>
     <p class="lede" id="lede"></p>
   </header>
 
-  <section class="score" aria-labelledby="score-h">
+  <section class="score" aria-labelledby="score-h" id="score" hidden>
     <h2 id="score-h">Scored against the April 2000 table</h2>
     <div class="measures" id="measures"></div>
     <p class="note" id="note"></p>
+  </section>
+
+  <section class="score" aria-labelledby="fix-h">
+    <h2 id="fix-h">Checked against readers' corrections</h2>
+    <div class="measures" id="fixes"></div>
+    <p class="note" id="fix-note"></p>
   </section>
 
   <section class="score" aria-labelledby="areas-h">
@@ -144,12 +151,15 @@ dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 const SUMMARY = __SUMMARY__;
 const ROWS = __ROWS__;
 const PER_CHUNK = 100;
+const STRIP = 14;
 const fmt = new Intl.NumberFormat("en-US");
+const pct = (a, b) => b ? `${(100 * a / b).toFixed(1)}%` : "–";
+const TRUTH = SUMMARY.table ? "Table" : "Corrections";
 const VERDICT = {
-  new: "Table backs the new code",
-  published: "Table backs the site's code",
-  neither: "Table backs neither",
-  none: "No table code here",
+  new: `${TRUTH} back${SUMMARY.table ? "s" : ""} the new code`,
+  published: `${TRUTH} back${SUMMARY.table ? "s" : ""} the site's code`,
+  neither: `${TRUTH} back${SUMMARY.table ? "s" : ""} neither`,
+  none: SUMMARY.table ? "No table code here" : "No corrections here",
 };
 
 function el(tag, attrs, ...kids) {
@@ -161,35 +171,66 @@ function el(tag, attrs, ...kids) {
   return e;
 }
 const code = (c, cls) => el("code", { class: cls || "", text: c || "none" });
-
-document.getElementById("lede").textContent =
-  `The new map takes each lot's code from the solver instead of the old map reader. These are the ${fmt.format(SUMMARY.areas)} ` +
-  `areas, ${fmt.format(SUMMARY.lots)} lots in all, where its code is not the one on the site today. Tap an area to see the scan.`;
-
-const measures = document.getElementById("measures");
-for (const [label, was, now, diff, ci] of SUMMARY.rows) {
-  measures.append(el("div", { class: "measure" },
+function measure(label, was, now, diff, foot) {
+  return el("div", { class: "measure" },
     el("div", { class: "label", text: label }),
     el("div", { class: "vals" },
       el("span", { class: "was" }, "On the site", el("b", { text: was })),
       el("span", {}, "New map", el("b", { text: now }))),
-    el("div", { class: "diff", text: diff }),
-    el("div", { class: "ci", text: `95% interval ${ci}` })));
+    diff ? el("div", { class: "diff", text: diff }) : null,
+    foot ? el("div", { class: "ci", text: foot }) : null);
 }
-const [sw, sl, si] = SUMMARY.solve;
-document.getElementById("note").textContent =
-  `Each map reaches the table's lots by lot ID, the measure that gave the site's map its ${SUMMARY.rows[0][1]} wrong lots; ` +
-  `${fmt.format(SUMMARY.noId)} scored table lots have no lot of their ID on the map's lots and count wrong for both. ` +
-  `By majority area instead: ${fmt.format(SUMMARY.byArea[0])} wrong lots on the site, ${fmt.format(SUMMARY.byArea[1])} on the new map. ` +
-  `The solve on the table's own lots: ${fmt.format(sw)} wrong lots, ${(sl * 100).toFixed(1)}% of labels right, ${fmt.format(si)} incidents. ` +
-  `Intervals: paired bootstrap over assessor blocks, 1,000 draws. ` +
-  (SUMMARY.coded === SUMMARY.readLots ? `Every one of the ${fmt.format(SUMMARY.readLots)} lots has a code`
+
+const L = SUMMARY.label;
+document.getElementById("eyebrow").textContent = `${L} zoning map · solver against the site`;
+document.getElementById("title").textContent = `Where the new ${L} map differs from the one on the site`;
+document.getElementById("lede").textContent = SUMMARY.areas
+  ? `The new map takes each lot's code from the solver instead of the old map reader. These are the ${fmt.format(SUMMARY.areas)} ` +
+    `${SUMMARY.areas === 1 ? "area" : "areas"}, ${fmt.format(SUMMARY.lots)} ${SUMMARY.lots === 1 ? "lot" : "lots"} in all, where its code is not the one on the site today. Tap an area to see the scan.`
+  : "The new map gives every lot the code the site shows today: there is nothing to compare.";
+
+const conf = SUMMARY.confidence.from === "score"
+  ? `A solved lot's confidence is ${SUMMARY.confidence.value}, the solve's share of scored lots right.`
+  : `A solved lot's confidence is the solve's own posterior for its code (${SUMMARY.confidence.value} on average).`;
+const coverage = (SUMMARY.coded === SUMMARY.readLots ? `Every one of the ${fmt.format(SUMMARY.readLots)} lots has a code`
     : `${fmt.format(SUMMARY.readLots - SUMMARY.coded)} of the ${fmt.format(SUMMARY.readLots)} lots have no code`) +
-  (SUMMARY.unknown ? `, ${SUMMARY.unknown} codes have no category` : " and every code has a category") +
-  `. A solved lot's confidence is ${SUMMARY.confidence}, the solve's share of scored lots right.`;
+  (SUMMARY.unknown ? `, ${SUMMARY.unknown} codes have no category` : " and every code has a category") + ". ";
+
+// the April 2000 table's measures (2000 and 1996-2000)
+if (SUMMARY.table) {
+  document.getElementById("score").hidden = false;
+  const box = document.getElementById("measures");
+  for (const [label, was, now, diff, ci] of SUMMARY.rows) box.append(measure(label, was, now, diff, `95% interval ${ci}`));
+  const solve = SUMMARY.solve
+    ? `The solve on the table's own lots: ${fmt.format(SUMMARY.solve[0])} wrong lots, ${(SUMMARY.solve[1] * 100).toFixed(1)}% of labels right, ${fmt.format(SUMMARY.solve[2])} incidents. ` : "";
+  document.getElementById("note").textContent =
+    `Each map reaches the table's lots by majority area: each table lot takes the code covering most of it. ` +
+    (SUMMARY.series !== "2000-digital-zoning" ? `The table is of April 2000, so it also counts the rezonings since this map as wrong on both maps. ` : "") +
+    solve + `Intervals: paired bootstrap over assessor blocks, 1,000 draws. ` + coverage + conf;
+}
+
+// the readers' corrections (every series)
+{
+  const F = SUMMARY.fixes;
+  const box = document.getElementById("fixes");
+  if (F.override_lots) box.append(measure("Corrected lots: the read before the correction is right",
+    pct(F.override_read_right, F.override_lots), pct(F.override_solve_right, F.override_lots), null,
+    `${fmt.format(F.override_read_right)} and ${fmt.format(F.override_solve_right)} of ${fmt.format(F.override_lots)} lots`));
+  if (F.label_fix_lots) box.append(measure("Corrected labels: the map's code under them is right",
+    pct(F.label_fix_site_right, F.label_fix_lots), pct(F.label_fix_new_right, F.label_fix_lots), null,
+    `${fmt.format(F.label_fix_site_right)} and ${fmt.format(F.label_fix_new_right)} of ${fmt.format(F.label_fix_lots)} lots`));
+  const unplaced = F.label_fixes - F.label_fixes_placed;
+  document.getElementById("fix-note").textContent = (F.override_lots || F.label_fix_lots)
+    ? `Corrections are the site's overrides (applied to both maps, so the read is scored before them: the old reader's code against the solve's) ` +
+      `and the corrected labels that give a code, placed on the map through each sheet's warp` +
+      (unplaced ? ` (${fmt.format(unplaced)} of ${fmt.format(F.label_fixes)} fall on no lot or have no warp)` : "") + ". " +
+      (SUMMARY.table ? "" : coverage + conf)
+    : `This map has no readers' corrections yet. ` + (SUMMARY.table ? "" : coverage + conf);
+}
 
 // filters
-const FILTERS = [["all", "All"], ["new", "Table backs new"], ["published", "Table backs the site"], ["other", "Neither or no table code"]];
+const FILTERS = [["all", "All"], ["new", `${TRUTH} back${SUMMARY.table ? "s" : ""} new`],
+  ["published", `${TRUTH} back${SUMMARY.table ? "s" : ""} the site`], ["other", `Neither or ${SUMMARY.table ? "no table code" : "no corrections"}`]];
 const counts = { all: ROWS.length, new: 0, published: 0, other: 0 };
 for (const r of ROWS) counts[r.v === "new" || r.v === "published" ? r.v : "other"]++;
 let filter = "all";
@@ -210,7 +251,7 @@ for (const r of ROWS) {
     el("span", { class: "codes" }, code(r.p, "was"), el("span", { class: "arrow", "aria-label": "becomes", text: "→" }), code(r.w, "now")),
     el("span", { class: "lots", text: `${fmt.format(r.n)} ${r.n === 1 ? "lot" : "lots"}` }),
     el("span", { class: "sub" },
-      el("span", {}, "Table ", code(r.t)),
+      r.k ? el("span", {}, `${TRUTH} `, code(r.t)) : null,
       el("span", { class: `badge ${r.v}`, text: VERDICT[r.v] })));
   const details = el("details", {}, summary);
   details.addEventListener("toggle", () => { if (details.open) openRow(details, r); });
@@ -218,7 +259,7 @@ for (const r of ROWS) {
   items.push([li, r]);
   list.append(li);
 }
-const empty = el("li", { class: "empty", text: "No areas match this filter." });
+const empty = el("li", { class: "empty", text: ROWS.length ? "No areas match this filter." : "No differences." });
 list.append(empty);
 
 function applyFilter() {
@@ -248,41 +289,49 @@ function chunk(n) {
 
 function openRow(details, r) {
   if (details.querySelector(".detail")) return;
-  const scan = el("div", { class: "scan", tabindex: "0", role: "button", "aria-label": "Show the scan at full size" },
-    el("div", { class: "wait", text: "Loading the scan…" }));
   const plural = r.n === 1 ? "lot" : "lots";
-  const fig = el("figure", {}, scan,
-    el("figcaption", { text: `The 2000 sheets as scanned, 4 ft per pixel, ${fmt.format(r.cw * 4)} × ${fmt.format((r.ch - 14) * 4)} ft. ` +
-      `Tinted blue: the area's ${fmt.format(r.n)} ${plural}. The bar below the scan is ${r.bar} ft. Tap the scan for full size.` }));
-  const tableChips = el("div", { class: "chips" },
+  const parts = [];
+  if (SUMMARY.scan) {
+    const scan = el("div", { class: "scan", tabindex: "0", role: "button", "aria-label": "Show the scan at full size" },
+      el("div", { class: "wait", text: "Loading the scan…" }));
+    parts.push(el("figure", {}, scan,
+      el("figcaption", { text: `The ${L} sheets as scanned, 4 ft per pixel, ${fmt.format(r.cw * 4)} × ${fmt.format((r.ch - STRIP) * 4)} ft. ` +
+        `Tinted blue: the area's ${fmt.format(r.n)} ${plural}. The bar below the scan is ${r.bar} ft. Tap the scan for full size.` })));
+    const toggle = () => {
+      scan.classList.toggle("full");
+      scan.setAttribute("aria-label", scan.classList.contains("full") ? "Fit the scan to the width" : "Show the scan at full size");
+    };
+    scan.addEventListener("click", toggle);
+    scan.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+    chunk(Math.floor((r.r - 1) / PER_CHUNK)).then(data => {
+      const img = el("img", { alt: `Scan around area ${r.r}: ${r.n} ${plural} tinted blue`, width: String(r.cw), height: String(r.ch) });
+      img.addEventListener("load", () => { if (img.naturalWidth < scan.clientWidth) img.classList.add("px"); });
+      img.src = data[String(r.r)];
+      scan.replaceChildren(img);
+    }).catch(err => {
+      scan.replaceChildren(el("div", { class: "wait", text: `The scan didn't load (${err.message}). Open the page from its published link or a local web server, beside its crops folder.` }));
+    });
+  } else {
+    parts.push(el("p", { class: "note", text: "No scan: this series' solve has no merged page beside it." }));
+  }
+  const truthChips = r.tc.length ? el("div", { class: "chips" },
     ...r.tc.map(([c, n]) => el("span", {}, code(c), ` ${fmt.format(n)}`)),
-    r.tx ? el("span", { text: `+${r.tx} more` }) : null);
+    r.tx ? el("span", { text: `+${r.tx} more` }) : null) : document.createTextNode(SUMMARY.table ? "none" : "none on these lots");
   const backs = r.k
-    ? `the new code on ${fmt.format(r.bn)}, the site's on ${fmt.format(r.bp)}, of ${fmt.format(r.k)} lots it codes`
-    : "it gives these lots no single code";
+    ? `the new code on ${fmt.format(r.bn)}, the site's on ${fmt.format(r.bp)}, of ${fmt.format(r.k)} lots ${SUMMARY.table ? "it codes" : "corrected"}`
+    : (SUMMARY.table ? "it gives these lots no single code" : "no lot here is corrected");
+  const fixChips = r.fx.length ? el("div", { class: "chips" },
+    ...r.fx.map(([c, n]) => el("span", { text: `${c} ${fmt.format(n)}` }))) : null;
   const facts = el("dl", { class: "facts" },
     el("dt", { text: "On the site" }), el("dd", {}, code(r.p)),
     el("dt", { text: "New map" }), el("dd", {}, code(r.w)),
-    el("dt", { text: "Table" }), el("dd", {}, tableChips),
-    el("dt", { text: "Table backs" }), el("dd", { text: backs }),
+    el("dt", { text: TRUTH }), el("dd", {}, truthChips),
+    el("dt", { text: `${TRUTH} back${SUMMARY.table ? "s" : ""}` }), el("dd", { text: backs }),
+    SUMMARY.table && fixChips ? el("dt", { text: "Corrections" }) : null, SUMMARY.table && fixChips ? el("dd", {}, fixChips) : null,
     el("dt", { text: "Lots" }), el("dd", { class: "num", text: fmt.format(r.n) }),
     el("dt", { text: "Blocks" }), el("dd", { class: "num" }, r.b.join(", ") + (r.bx ? ` and ${r.bx} more` : "")),
     el("dt", { text: "Quarter" }), el("dd", { text: r.q.toUpperCase() }));
-  details.append(el("div", { class: "detail" }, fig, facts));
-  const toggle = () => {
-    scan.classList.toggle("full");
-    scan.setAttribute("aria-label", scan.classList.contains("full") ? "Fit the scan to the width" : "Show the scan at full size");
-  };
-  scan.addEventListener("click", toggle);
-  scan.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
-  chunk(Math.floor((r.r - 1) / PER_CHUNK)).then(data => {
-    const img = el("img", { alt: `Scan around area ${r.r}: ${r.n} ${plural} tinted blue`, width: String(r.cw), height: String(r.ch) });
-    img.addEventListener("load", () => { if (img.naturalWidth < scan.clientWidth) img.classList.add("px"); });
-    img.src = data[String(r.r)];
-    scan.replaceChildren(img);
-  }).catch(err => {
-    scan.replaceChildren(el("div", { class: "wait", text: `The scan didn't load (${err.message}). Open the page from its published link or a local web server, beside its crops folder.` }));
-  });
+  details.append(el("div", { class: "detail" }, ...parts, facts));
 }
 
 // #area-N opens that area (a link to one area)

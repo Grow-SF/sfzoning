@@ -1,0 +1,330 @@
+sheet,x,y,code,fix_code,fix_x,fix_y,note
+2000-digital-zoning-p11,1002,1514,NC-2,,1039,1522,"Glen Park, block 6739: a bracket after this NC-2 points into the slim strip east of it; the rest is RH-1"
+2000-digital-zoning-p12,2178,1792,NC-2,NC-1,,,"Monterey Blvd, Gennessee to Foerster: NC-1 printed across the street (scan reads NC-1 clearly)"
+2000-digital-zoning-p03,1832,3066,RH-2,,1798,3089,"Clement at Arguello: a leader arrow takes this RH-2 to the small box south of Clement; the frontage is Inner Clement NCD"
+2000-digital-zoning-p04,674,3388,RM-2,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p10,1452,1474,P,RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p11,2526,1624,RH-1,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p03,2314,2978,RH-1,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p03,2834,2774,NC-3,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p07,1934,2442,RH-2,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p06,2104,1674,RM-1,,2148,1655,leader end
+2000-digital-zoning-p01,1134,1258,P,-,,,code check: nothing printed here
+2000-digital-zoning-p08,612,1538,RH-2,,590,1544,leader end
+2000-digital-zoning-p05,2198,1728,RH-3,,2157,1754,leader end
+2000-digital-zoning-p11,3018,2908,P,,3005,2928,leader end
+2000-digital-zoning-p10,1438,1122,C-2,C-M,,,code check: a person read C-M
+2000-digital-zoning-p11,688,1492,RH-1,-,,,code check: nothing printed here
+2000-digital-zoning-p06,2736,2872,RH-2,RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p07,2166,2356,P,-,,,code check: nothing printed here
+2000-digital-zoning-p02,1214,2864,RH-3,,1185,2901,leader end
+2000-digital-zoning-p04,2342,3336,NC-1,,2302,3344,leader end
+2000-digital-zoning-p01,1328,2138,CVR,CMNC,,,code check: a person read CMNC
+2000-digital-zoning-p02,2592,1936,RM-2,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p10,1900,2356,RH-1,-,,,code check: nothing printed here
+2000-digital-zoning-p07,2190,2458,RH-3,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p07,1500,1744,RH-2,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p01,1356,2050,CVR,-,,,code check: nothing printed here
+2000-digital-zoning-p12,2836,1306,RH-1(D),RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p02,1320,3318,NC-1,,1300,3291,leader end
+2000-digital-zoning-p07,1820,1298,RH-3,RM-3,,,code check: a person read RM-3
+2000-digital-zoning-p07,1638,3228,RM-1,NC-1,,,code check: a person read NC-1
+2000-digital-zoning-p05,638,1546,RM-2,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p02,1304,1068,RM-3,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p07,1484,1016,RH-3,,1466,1026,leader end
+2000-digital-zoning-p02,1790,1898,RNC,RH-3,1757,1898,code check: a person read RH-3; leader end
+2000-digital-zoning-p02,2752,2080,RM-2,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p02,1644,2246,RM-1,,1604,2238,leader end
+2000-digital-zoning-p10,1678,1926,RM-2,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p10,976,3640,RH-3,NC-3,,,code check: a person read NC-3
+2000-digital-zoning-p07,1582,1338,RM-1,RM-3,,,code check: a person read RM-3
+2000-digital-zoning-p10,2482,2216,RH-2,-,,,code check: nothing printed here
+2000-digital-zoning-p02,966,3284,RC-3,RM-3,,,code check: a person read RM-3
+2000-digital-zoning-p10,1720,2124,NC-3,3RD & A. A.F. SUD,,,code check: a person read 3RD & A. A.F. SUD
+2000-digital-zoning-p02,2106,2538,RM-2,RM-3,,,code check: a person read RM-3
+2000-digital-zoning-p02,2254,1552,RC-2,C-2,2226,1555,code check: a person read C-2; leader end
+2000-digital-zoning-p01,2252,2816,M-1,-,,,code check: nothing printed here
+2000-digital-zoning-p02,1488,2180,RH-3,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p12,748,3264,NC-1,-,,,code check: nothing printed here
+2000-digital-zoning-p02,2210,2170,RM-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p02,2596,1860,RM-2,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p10,2322,2136,P,-,,,code check: nothing printed here
+2000-digital-zoning-p10,866,1680,NC-1,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p07,2220,2338,RH-3,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p07,2600,2692,NC-2,NC-1,,,code check: a person read NC-1
+2000-digital-zoning-p01,774,2186,RM-2,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p01,910,2020,RH-3,RM-1,964,2023,code check: a person read RM-1; leader end
+2000-digital-zoning-p08,1602,2838,P,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p10,2850,1562,RH-2,RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p03,2082,3704,NC-S,RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p02,852,2616,RM-3,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p03,2868,3040,RH-2,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p01,1158,3248,C-3-O,,1116,3262,leader end
+2000-digital-zoning-p05,1440,2486,RH-3,RH-2,1441,2509,code check: a person read RH-2; leader end
+2000-digital-zoning-p01,526,1540,RH-2,RM-2,582,1535,code check: a person read RM-2; leader end
+2000-digital-zoning-p01,1072,2020,RM-2,P,1080,2008,code check: a person read P; leader end
+2000-digital-zoning-p01,876,2064,PACIFIC AVENUE NCD,RC-3,,,code check: a person read RC-3
+2000-digital-zoning-p01,708,2070,POLK NCD,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p01,878,2130,RH-1,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p01,1452,2136,NC-S,NC,,,code check: a person read NC
+2000-digital-zoning-p01,992,3586,SSO,RED,,,code check: a person read RED
+2000-digital-zoning-p02,760,1218,RM-3,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p02,2238,1332,NC-1,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p02,1396,1434,RM-3,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p02,1616,1516,RM-3,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p02,1354,1704,RH-1,P,,,code check: a person read P
+2000-digital-zoning-p02,1678,1896,RNC,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p02,1550,1920,RM-2,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p02,2154,2266,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p02,1140,3332,RM-1,RM-3,,,code check: a person read RM-3
+2000-digital-zoning-p02,1346,3370,RM-1,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p02,1516,3582,P,RM-4,,,code check: a person read RM-4
+2000-digital-zoning-p02,1124,3684,RC-3,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p03,1400,2640,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p03,2248,2690,RH-1,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p03,2116,2788,RM-1,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p03,2392,2884,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p03,2210,2926,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p03,728,3130,RM-1,RH-3,654,3092,code check: a person read RH-3; leader end
+2000-digital-zoning-p03,1890,3352,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p03,2604,3422,RH-3,RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p03,1516,3588,NC-3,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p04,788,2818,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p04,876,2938,RM-1,RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p04,2382,3078,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p04,1486,3328,NC-1,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p04,2104,3406,RH-1,P,,,code check: a person read P
+2000-digital-zoning-p05,2356,1506,RH-1,RH-1(D),,,code check: a person read RH-1(D)
+2000-digital-zoning-p05,778,1880,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p06,2608,886,RM-2,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p06,2608,1022,NC-2,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p06,872,1698,RM-1,RM-4,,,code check: a person read RM-4
+2000-digital-zoning-p06,2704,2834,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p06,1944,3414,RM-1,RM-3,,,code check: a person read RM-3
+2000-digital-zoning-p07,2752,824,C-3-G,C-3-S,,,code check: a person read C-3-S
+2000-digital-zoning-p07,2068,856,HAYES NCD,HAYES-GOUGH NCD,,,code check: a person read HAYES-GOUGH NCD
+2000-digital-zoning-p07,2004,1316,M-1,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p07,1478,1346,RH-2,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p07,1874,1450,RM-3,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p07,1478,1584,RH-2,P,,,code check: a person read P
+2000-digital-zoning-p07,1838,1604,RH-3,RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p07,1712,1608,RH-3,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p07,2232,1756,RH-3,RC-4,,,code check: a person read RC-4
+2000-digital-zoning-p07,1678,1924,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p07,2572,2356,RH-3,-,,,code check: nothing printed here
+2000-digital-zoning-p07,2034,2536,P,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p07,566,2780,RH-1,-,,,code check: nothing printed here
+2000-digital-zoning-p07,1682,2802,RH-3,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p07,2582,2876,RH-3,-,,,code check: nothing printed here
+2000-digital-zoning-p07,2642,2916,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p07,2040,3072,RM-1,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p07,2344,3162,RM-1,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p07,594,3322,RM-3,RM-4,,,code check: a person read RM-4
+2000-digital-zoning-p07,1680,3336,RM-1,NC-1,1617,3348,code check: a person read NC-1; leader end
+2000-digital-zoning-p07,2560,3392,RM-1,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p07,1490,3714,RM-1,NC-1,,,code check: a person read NC-1
+2000-digital-zoning-p08,476,2786,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p09,1280,1736,M-2,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p10,2752,1392,RM-2,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p10,1024,1660,NC-3,NC-1,1002,1685,code check: a person read NC-1; leader end
+2000-digital-zoning-p10,1390,1714,NC-3,NC-1,1365,1745,code check: a person read NC-1; leader end
+2000-digital-zoning-p10,1150,1880,NC-2,NC-1,1096,1867,code check: a person read NC-1; leader end
+2000-digital-zoning-p10,2188,1900,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p11,2962,806,R-1,RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p11,694,846,RH-2,RH-1,,,code check: a person read RH-1
+2000-digital-zoning-p11,1618,1478,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p11,696,1788,M-1,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p11,470,2566,NC-2,NC-1,,,code check: a person read NC-1
+2000-digital-zoning-p11,700,2858,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p12,2244,3194,RH-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p12,2160,3774,RH-1,-,,,code check: nothing printed here
+2000-digital-zoning-p13,852,1334,RM-3,RM-2,799,1351,code check: a person read RM-2; leader end
+2000-digital-zoning-p13,976,1096,RH-2,RM-2,942,1131,code check: a person read RM-2; leader end
+2000-digital-zoning-p08,1936,3486,M-1,-,,,code check: nothing printed here
+2000-digital-zoning-p02,1670,1272,NC-3,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p07,2270,2862,RH-3,,2224,2863,leader end
+2000-digital-zoning-p02,906,3788,P,,891,3789,leader end
+2000-digital-zoning-p11,2474,758,RH-1(D),,2415,774,leader end
+2000-digital-zoning-p02,882,3448,RH-1,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p02,764,3196,RM-3,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p13,2088,3876,RH-1(D),,2032,3852,leader end
+2000-digital-zoning-p02,1136,3442,RM-4,-,,,code check: nothing printed here
+2000-digital-zoning-p03,750,3094,NC-3,NC-1,,,code check: a person read NC-1
+2000-digital-zoning-p06,472,2412,RM-2,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p11,1734,2484,NC-1,,1770,2458,leader end
+2000-digital-zoning-p07,1482,2176,RH-2,-,,,code check: nothing printed here
+2000-digital-zoning-p04,2630,2712,RH-2,-,,,code check: nothing printed here
+2000-digital-zoning-p02,850,3046,RM-1,,886,3073,leader end
+2000-digital-zoning-p07,1624,2800,RH-1,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p02,1548,1312,RM-2,RM-3,,,code check: a person read RM-3
+2000-digital-zoning-p05,2764,3376,RH-1,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p07,1998,1114,RM-4,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p07,466,3210,RM-2,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p02,2738,1424,NC-1,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p07,1376,1890,RH-3,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p05,2622,3352,RM-1,,2571,3354,leader end
+2000-digital-zoning-p13,534,1228,NC-1,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p11,320,2796,RH-1,,349,2770,leader end
+2000-digital-zoning-p02,1772,2242,RM-1,RH-2,1769,2204,code check: a person read RH-2; leader end
+2000-digital-zoning-p05,2622,3418,RM-1,,2570,3425,leader end
+2000-digital-zoning-p07,2238,778,HAYES-GOUGH NCD,,2182,830,leader end
+2000-digital-zoning-p11,862,2842,RH-3,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p07,2382,2788,RH-3,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p07,2196,1460,RH-3,RM-1,,,code check: a person read RM-1
+2000-digital-zoning-p03,2814,2944,RH-2,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p12,1904,3902,NC-2,,1908,3880,leader end
+2000-digital-zoning-p03,806,3022,RM-1,,761,3050,leader end
+2000-digital-zoning-p02,1224,1532,NC-2,C-2-O FINANCIAL...,,,code check: a person read C-2-O FINANCIAL...
+2000-digital-zoning-p04,2606,3648,RM-3,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p11,858,3066,RH-1(S),,822,3104,leader end
+2000-digital-zoning-p05,1510,1802,RH-2,,1504,1760,leader end
+2000-digital-zoning-p08,1240,2740,NC-1,RC-1,1185,2740,code check: a person read RC-1; leader end
+2000-digital-zoning-p08,566,3206,NC-3,NC-1,,,code check: a person read NC-1
+2000-digital-zoning-p03,1194,3748,NC-1,,1170,3768,leader end
+2000-digital-zoning-p08,1374,2244,NC-1,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p07,2362,1124,P,-,,,code check: nothing printed here
+2000-digital-zoning-p02,2740,3508,C-3-G,,2714,3460,leader end
+2000-digital-zoning-p13,1646,1090,RH-3,,1617,1098,leader end
+2000-digital-zoning-p11,666,562,RH-1(D),,610,576,leader end
+2000-digital-zoning-p05,844,2526,RH-3,,802,2495,leader end
+2000-digital-zoning-p02,890,3886,RC-3,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p02,1140,3424,RH-1,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p03,2812,2510,RH-2,,2799,2550,leader end
+2000-digital-zoning-p03,1264,3902,NC-1,,1294,3909,leader end
+2000-digital-zoning-p02,1644,2068,RM-1,,1596,2076,leader end
+2000-digital-zoning-p10,1232,896,C-M,M-1,,,code check: a person read M-1
+2000-digital-zoning-p07,1872,1212,RM-3,,1924,1215,leader end
+2000-digital-zoning-p02,1224,2896,RH-1,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p07,2210,1928,RH-2,,2160,1913,leader end
+2000-digital-zoning-p03,2800,2552,RH-1,RH-2,2800,2546,code check: a person read RH-2; leader end
+2000-digital-zoning-p03,582,3586,P,NC-1,,,code check: a person read NC-1
+2000-digital-zoning-p03,500,3280,P,,478,3298,leader end
+2000-digital-zoning-p08,1498,1966,RM-2,RH-2,,,code check: a person read RH-2
+2000-digital-zoning-p11,940,1746,NC-3,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p13,1552,1062,RH-2,,1527,1094,leader end
+2000-digital-zoning-p09,1324,1650,C-M,-,,,code check: nothing printed here
+2000-digital-zoning-p09,1144,1618,M-1,-,,,code check: nothing printed here
+2000-digital-zoning-p07,2246,2560,RH-3,,2212,2568,leader end
+2000-digital-zoning-p02,1812,2678,RH-2,RM-1,1835,2652,code check: a person read RM-1; leader end
+2000-digital-zoning-p07,2290,2792,RH-3,,2338,2786,leader end
+2000-digital-zoning-p02,2044,1708,RM-2,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p12,1932,3702,NC-3,NC-1,,,code check: Terra and Sol both read NC-1
+2000-digital-zoning-p10,1344,3426,NC-3,NC-S,,,code check: Terra and Sol both read NC-S
+2000-digital-zoning-p04,1164,2970,NC-1,RC-1,,,code check: Terra and Sol both read RC-1
+2000-digital-zoning-p08,1872,2026,RH-3,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p04,1476,3584,NC-1,P,,,code check: Terra and Sol both read P
+2000-digital-zoning-p08,1220,2894,RH-1,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p12,884,1174,WEST PORTAL AVENUE NCD,WEST PORTAL NCD,,,code check: Terra and Sol both read WEST PORTAL NCD
+2000-digital-zoning-p11,832,1600,RH-1,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p02,2812,3368,C-3-G,C-3-O,,,code check: Terra and Sol both read C-3-O
+2000-digital-zoning-p07,1262,3904,RH-1(D),RH-1(S),1196,3858,code check: Terra and Sol both read RH-1(S); leader end
+2000-digital-zoning-p02,892,1682,RH-2,RM-2,,,code check: Terra and Sol both read RM-2
+2000-digital-zoning-p06,616,1626,RM-2,,578,1660,leader end
+2000-digital-zoning-p07,996,2696,RM-1,RH-3,,,code check: Terra and Sol both read RH-3
+2000-digital-zoning-p07,448,2370,RH-1(S),,576,2447,leader end
+2000-digital-zoning-p07,1666,1604,RH-2,RH-3,,,code check: Terra and Sol both read RH-3
+2000-digital-zoning-p05,2624,3316,RH-2,,2572,3323,leader end
+2000-digital-zoning-p09,990,1876,M-2,NC-2,,,code check: Terra and Sol both read NC-2
+2000-digital-zoning-p07,732,2470,RH-1,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p10,1446,1066,RH-2,,1396,1084,leader end
+2000-digital-zoning-p07,1524,1842,RM-2,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p02,814,1372,RM-3,RM-2,,,code check: Terra and Sol both read RM-2
+2000-digital-zoning-p12,2118,3512,NC-3,NC-S,,,code check: Terra and Sol both read NC-S
+2000-digital-zoning-p08,1634,2812,RH-2,,1595,2838,leader end
+2000-digital-zoning-p03,1970,3338,RH-2,RH-1,,,code check: Terra and Sol both read RH-1
+2000-digital-zoning-p07,1292,1838,UPPER MARKET NCD,UPPER MARKET,,,code check: Terra and Sol both read UPPER MARKET
+2000-digital-zoning-p10,1270,3540,NC-1,,1234,3517,leader end
+2000-digital-zoning-p04,856,3278,RM-2,,803,3272,leader end
+2000-digital-zoning-p02,1262,2596,RM-1,RM-2,,,code check: Terra and Sol both read RM-2
+2000-digital-zoning-p10,2726,2086,NC-1,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p03,660,3098,P,-,,,code check: nothing printed here
+2000-digital-zoning-p07,650,2600,RH-1,RM-2,,,code check: Terra and Sol both read RM-2
+2000-digital-zoning-p04,2350,2678,RM-1,RH-1(S),2330,2652,code check: Terra and Sol both read RH-1(S); leader end
+2000-digital-zoning-p05,2242,1818,RH-3,,2208,1789,leader end
+2000-digital-zoning-p01,522,1454,RH-2,,578,1450,leader end
+2000-digital-zoning-p02,516,3758,RC-3,RH-3,,,code check: a person read RH-3
+2000-digital-zoning-p07,1400,2998,24TH-NOE VALLEY,24TH-NOE VALLEY NCD,,,code check: Terra and Sol both read 24TH-NOE VALLEY NCD
+2000-digital-zoning-p11,722,780,RH-1,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p07,1990,1954,NC-1,RM-2,,,code check: Terra and Sol both read RM-2
+2000-digital-zoning-p07,502,1196,NC-1,NCD,,,code check: Terra and Sol both read NCD
+2000-digital-zoning-p12,1404,3322,RH-2,,1333,3324,leader end
+2000-digital-zoning-p02,776,1752,P,-,,,code check: nothing printed here
+2000-digital-zoning-p11,1104,2430,NC-1,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p08,552,2848,BAYSHORE NCD,-,,,code check: nothing printed here
+2000-digital-zoning-p07,2174,1878,RH-3,RC-3,,,code check: Terra and Sol both read RC-3
+2000-digital-zoning-p02,1620,3608,NC-1,,1572,3622,leader end
+2000-digital-zoning-p03,1504,3864,NC-1,,1548,3870,leader end
+2000-digital-zoning-p02,2082,3786,HAYES-GOUGH NCD,-,,,code check: nothing printed here
+2000-digital-zoning-p01,1154,2510,P,RM-3,,,code check: Terra and Sol both read RM-3
+2000-digital-zoning-p12,2248,1748,RM-2,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p11,1442,1586,RH-2,RH-1,,,code check: Terra and Sol both read RH-1
+2000-digital-zoning-p03,2558,2574,RH-2,,2533,2610,leader end
+2000-digital-zoning-p08,678,2972,RH-1,M-1,,,code check: Terra and Sol both read M-1
+2000-digital-zoning-p04,1944,2758,NC-3,NC-S,,,code check: Terra and Sol both read NC-S
+2000-digital-zoning-p08,820,2932,RH-1,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p07,2014,1548,NC-1,,1964,1537,leader end
+2000-digital-zoning-p02,2296,1570,RH-3,,2336,1570,leader end
+2000-digital-zoning-p05,684,2840,RH-1,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p07,1668,2910,P,-,,,code check: nothing printed here
+2000-digital-zoning-p07,1430,1424,RH-2,,1382,1417,leader end
+2000-digital-zoning-p02,1268,1450,RM-2,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p01,1410,1950,BROADWAY NCD,-,,,code check: nothing printed here
+2000-digital-zoning-p02,768,1594,NC-1,-,,,code check: nothing printed here
+2000-digital-zoning-p02,2018,2574,RM-2,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p07,2266,1900,RM-2,,2215,1883,leader end
+2000-digital-zoning-p07,1460,3288,NC-1,NC-2,,,code check: Terra and Sol both read NC-2
+2000-digital-zoning-p02,1082,1694,RM-1,RM-2,,,code check: a person read RM-2
+2000-digital-zoning-p02,430,3792,RM-1,,484,3788,leader end
+2000-digital-zoning-p01,1634,3680,P,,1614,3702,leader end
+2000-digital-zoning-p13,2580,1072,RH-1,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p10,1384,1714,NC-S,NC-1,1345,1724,code check: Terra and Sol both read NC-1; leader end
+2000-digital-zoning-p10,780,708,RH-1,,818,701,leader end
+2000-digital-zoning-p12,2504,1938,RH-1,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p07,2520,3842,RH-1(D),,2464,3821,leader end
+2000-digital-zoning-p01,1024,2002,RM-1,-,,,code check: nothing printed here
+2000-digital-zoning-p01,638,2176,P,RH-3,,,code check: Terra and Sol both read RH-3
+2000-digital-zoning-p07,2004,814,RM-2,,1962,845,leader end
+2000-digital-zoning-p06,2096,1066,RH-3,,2150,1064,leader end
+2000-digital-zoning-p02,1804,3898,RH-3,,1761,3867,leader end
+2000-digital-zoning-p06,2306,1088,RH-1,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p11,1180,2494,NC-1,,1130,2519,leader end
+2000-digital-zoning-p03,2854,3024,RM-3,-,,,code check: nothing printed here
+2000-digital-zoning-p06,1564,1742,RH-1,,1510,1753,leader end
+2000-digital-zoning-p07,1970,3518,RM-1,RH-3,,,code check: Terra and Sol both read RH-3
+2000-digital-zoning-p04,2568,2654,NC-1,,2534,2652,leader end
+2000-digital-zoning-p06,2518,984,RM-4,RM-1,2550,969,code check: Terra and Sol both read RM-1; leader end
+2000-digital-zoning-p07,1934,2362,RH-3,RM-2,,,code check: Terra and Sol both read RM-2
+2000-digital-zoning-p02,2128,2696,RM-1,RM-4,,,code check: a person read RM-4
+2000-digital-zoning-p06,2164,2054,RH-1,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p11,1202,3566,NC-1,,1192,3591,leader end
+2000-digital-zoning-p07,916,906,RH-3,,888,937,leader end
+2000-digital-zoning-p01,2052,3570,RED,SPD,,,code check: Terra and Sol both read SPD
+2000-digital-zoning-p11,1438,1712,RH-3,RH-1,,,code check: Terra and Sol both read RH-1
+2000-digital-zoning-p08,1506,1808,RH-3,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p07,2680,2710,RH-2,RM-2,,,code check: Terra and Sol both read RM-2
+2000-digital-zoning-p02,1856,3498,NC-1,,1808,3518,leader end
+2000-digital-zoning-p02,2142,2760,RH-3,,2168,2714,leader end
+2000-digital-zoning-p02,2078,2721,,RH-3,,,second leader end
+2000-digital-zoning-p07,2110,1248,M-1,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p04,1882,3038,RM-2,,1858,3010,leader end
+2000-digital-zoning-p02,1730,3260,NC-1,NC-S,,,code check: Terra and Sol both read NC-S
+2000-digital-zoning-p02,1136,2320,RM-1,,1094,2326,leader end
+2000-digital-zoning-p02,1040,3308,RC-3,NC-2,,,code check: a person read NC-2
+2000-digital-zoning-p07,1996,2294,RH-3,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p01,1136,2014,RM-2,RM-4,,,code check: Terra and Sol both read RM-4
+2000-digital-zoning-p06,2114,1272,NC-1,,2174,1270,leader end
+2000-digital-zoning-p06,1720,3328,NC-1,,1655,3336,leader end
+2000-digital-zoning-p11,1692,1558,RH-3,RH-2,,,code check: Terra and Sol both read RH-2
+2000-digital-zoning-p04,2844,2798,OUTER CLEMENT NCD,-,,,code check: nothing printed here
+2000-digital-zoning-p07,866,2982,NC-1,,832,2988,leader end
+2000-digital-zoning-p08,958,2810,RH-1,RM-2,,,code check: Terra and Sol both read RM-2
+2000-digital-zoning-p02,2192,3234,RC-4,,2226,3240,leader end
+2000-digital-zoning-p06,2876,2576,RH-1,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p02,2662,1834,RM-2,NC-1,,,code check: a person read NC-1
+2000-digital-zoning-p02,1770,2120,RH-3,,1744,2152,leader end
+2000-digital-zoning-p07,1470,850,RM-3,,1399,898,leader end
+2000-digital-zoning-p09,1410,1804,M-1,-,,,code check: nothing printed here
+2000-digital-zoning-p03,2826,2878,RH-1,RM-1,,,code check: Terra and Sol both read RM-1
+2000-digital-zoning-p11,1596,1626,NC-1,NC-3,,,code check: Terra and Sol both read NC-3
+2000-digital-zoning-p06,1074,3940,WEST PORTAL NCD,,1219,3908,leader end
+2000-digital-zoning-p11,2893,870,,RH-2,,,"rotated RH-2 printed in the street between blocks 5637 and 5638, not read (owner, 2026-11-09)"
