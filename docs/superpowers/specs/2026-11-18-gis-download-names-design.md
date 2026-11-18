@@ -128,6 +128,26 @@ history file would conflict between branches and lag behind the store.)*
   URLs per sheet.
 - `/data/downloads.json` lists both links for every current file.
 
+**Versions pages** (owner approved). `/data/versions/<series>/<layer>` (e.g. `/data/versions/1948/lots`,
+`/data/versions/1921/citywide`, `/data/versions/1921/sheet-01`) lists every version released, newest
+first, one row per version: the date, `(latest)` on the current one, and per format a download link
+to that version's dated file, its size, and its 8-hex hash (from the name) linking to its checksum
+file. Every dated file gets a checksum file beside it on Blob, `<versioned name>.sha256`, in
+`sha256sum -c` format, uploaded by the publish script, so the page needs no extra requests. Built from
+one Blob `list()` of `downloads/<series>/` with the layer's name prefix, cached for an hour (ISR
+`revalidate = 3600`); a new release appears within the hour or on the next deploy. Ends with the same
+note as the /data page. `/data/versions/<series>` lists that series' layers with links to each
+versions page; the sheet zip's README links there. *(My call: the zip has no per-layer page.)*
+
+```
+1948 lots: every version released
+
+2026-12-02  (latest)  GeoJSON 41 MB 3f9a2c1b · GeoPackage 38 MB 9be0417d · Shapefile 35 MB 0c7e55a2
+2026-11-20            GeoJSON 41 MB 81d0e7a4 · GeoPackage 38 MB 22f6b1c9 · Shapefile 35 MB e4a09d13
+
+Use the latest links to always get the newest data. A dated link always returns exactly that version.
+```
+
 **/data page.** Download buttons use the `latest` links (the saved file still gets the versioned name
 through the redirect). Each file also shows its versioned link for citing. A short note: "Use the
 `latest` links to always get the newest data; a dated link always returns exactly that version."
@@ -139,9 +159,11 @@ change). The owner approved this section, after LAST UPDATED:
 GETTING THE NEWEST VERSION
 For the newest version of this file, use:
   https://sfzoning.com/data/files/1948/sfzoning-1948-lots-latest.gpkg.zip
+Every version released so far:
+  https://sfzoning.com/data/versions/1948/lots
 ```
 
-The README can't name its own hash, so it gives only the `latest` link. Changing the README template
+The README can't name its own hash, so it gives only the `latest` link and the versions page. Changing the README template
 changes the downloads fingerprint (`EXPORTER_CODE`), so the next `sfzmaps downloads` re-exports
 every vector and citywide file once ($0); published versions are never rewritten. The sheet zip's
 README gets the same section with the zip's `latest` link.
