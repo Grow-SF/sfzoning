@@ -1439,7 +1439,8 @@ def solver_publish(
 ) -> None:
     """Publish a zoning map from its series' solve (the solver-publish stages): out/<series>/districts/, each lot of
     the read with the solve's code (districts/solved.py), then unzoned blocks, overrides, heights and parks as for
-    every series.  Fails if a lot of the read outside the unzoned blocks has no code, or a code has no category.
+    every series.  Fails if a lot of the read outside the unzoned blocks has no code, or (2000 only) a code has no
+    category; another series lists such codes in unknown_codes.json, as the old reader's publish does.
     With --page, then the page of the areas where it differs from the site's map (solver/differences.py)."""
     import logging
 
@@ -1475,8 +1476,12 @@ def solver_publish(
     typer.echo(f"{series}: {d}; {g['code'].notna().sum():,} of {len(g):,} lots coded; the read's lots "
                f"{len(read):,}, {len(blank):,} of them with no code; codes with no category {len(unknown)}; "
                f"confidence from the solve's {source}")
-    if unknown or len(blank):
-        typer.echo(f"no category: {unknown}; no code: {list(blank[:10])}", err=True)
+    if unknown:
+        typer.echo(f"no category: {unknown}", err=True)
+    # 2000 must publish every code with a category; another series keeps a code its era's research table can't
+    # place, with category unknown and listed in unknown_codes.json, as the old reader's publish does
+    if (unknown and series == solved.SERIES) or len(blank):
+        typer.echo(f"no code: {list(blank[:10])}", err=True)
         raise typer.Exit(1)
     if page is not None:
         from sfzmaps.solver import differences
