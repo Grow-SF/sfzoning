@@ -122,12 +122,19 @@ def _row(page_x, page_y, kind, box=None, terra_code="", sol_code="", sol_confide
             "recheck_found": False}
 
 
+def label_kind() -> str:
+    """The kind of Sol's label points that are the series' prints: "height" on a height map (`<period>-height`),
+    "use" (zoning) on every other."""
+    return "height" if paths.SERIES.endswith("-height") else "use"
+
+
 def match_prints(boxes: list[dict], labels: list[dict]) -> list[dict]:
     """One sheet's prints in page px from its Terra boxes (`terra_boxes`) and Sol's labels (district_labels.json's
     "labels"): each zoning-code box, with the read of the Sol point inside it nearest its centre (kind 0) or none
-    (kind 1), then each of Sol's "use" points inside no zoning-code box (kind 2).  Points on a box's edge are inside
-    it."""
-    use = [lab for lab in labels if lab.get("kind", "use") == "use"]
+    (kind 1), then each of Sol's "use" points (`label_kind`: "height" on a height map) inside no zoning-code box
+    (kind 2).  Points on a box's edge are inside it."""
+    kind = label_kind()
+    use = [lab for lab in labels if lab.get("kind", "use") == kind]
     pts = np.array([[lab["x"], lab["y"]] for lab in use], float).reshape(-1, 2)
     used = np.zeros(len(use), bool)
     rows = []

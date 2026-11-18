@@ -32,15 +32,24 @@ KEYS = ("wrong_lots", "labels_right", "incidents", "lines_drawn", "drawn_are_tab
 
 
 def published_codes(series: str, blklots: np.ndarray) -> np.ndarray:
-    """The site's code of each lot (by lot ID; "" for a lot it does not list or leaves blank), in the one spelling."""
-    d = pyogrio.read_dataframe(config.OUT_DIR / series / "districts" / "parcels.fgb", columns=["blklot", "code"],
-                               read_geometry=False)
+    """The site's code of each lot (by lot ID; "" for a lot it does not list or leaves blank), in the one spelling.
+    For a height map, the period's published heights."""
+    if series.endswith("-height"):
+        import pandas as pd
+        from sfzmaps.districts.series import SERIES
+        d = pd.read_parquet(config.OUT_DIR / f"{SERIES[series].period}-zoning" / "districts" / "height.parquet",
+                            columns=["blklot", "height_code"]).rename(columns={"height_code": "code"})
+    else:
+        d = pyogrio.read_dataframe(config.OUT_DIR / series / "districts" / "parcels.fgb", columns=["blklot", "code"],
+                                   read_geometry=False)
     code = dict(zip(d["blklot"].astype(str), d["code"].fillna("").astype(str)))
     return np.array([canon(code[b]) if code.get(b, "") else "" for b in blklots])
 
 
 def raw_codes(series: str, blklots: np.ndarray) -> np.ndarray:
     import pandas as pd
+    if series.endswith("-height"):
+        return published_codes(series, blklots)
     d = pd.read_parquet(config.WORK_DIR / series / "districts_raw.parquet", columns=["blklot", "code"])
     code = dict(zip(d["blklot"].astype(str), d["code"].fillna("").astype(str)))
     return np.array([canon(code[b]) if code.get(b, "") else "" for b in blklots])

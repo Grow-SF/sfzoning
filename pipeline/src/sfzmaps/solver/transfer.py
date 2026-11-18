@@ -192,11 +192,11 @@ def build_walls(workers: int = 2) -> dict:
     the text chance it read (text_chance.png)."""
     from sfzmaps.solver import runs, textgrid, walls
     t0 = time.perf_counter()
+    inputs = walls.load_inputs([list(TRANSFER_WALLS)])
+    X = walls.candidate_design(inputs, list(TRANSFER_WALLS), workers)
     W = _models("walls.npz")
     if tuple(W["candidates"].astype(str)) != TRANSFER_WALLS:
         raise ValueError("the 2000 walls model was fitted with other candidates: rerun `sfzmaps solver transfer-models`")
-    inputs = walls.load_inputs([list(TRANSFER_WALLS)])
-    X = walls.candidate_design(inputs, list(TRANSFER_WALLS), workers)
     if X.shape[1] != W["weights"].shape[1]:
         raise ValueError(f"{X.shape[1]} wall features, the 2000 model has {W['weights'].shape[1]}")
     y = walls.table_lines(inputs.lots)
@@ -256,6 +256,16 @@ def series_vocabulary() -> set[str]:
     from sfzmaps.solver.trust import READS, load_prints
     if paths.has_table():
         return table_vocabulary(city().lots)
+    if paths.SERIES.endswith("-height"):             # a height map: the period's published heights, and Sol's reads
+        period = SERIES[paths.SERIES].period          # of the same form (a number, a dash and a letter; OS)
+        import re
+        heights = pd.read_parquet(config.OUT_DIR / f"{period}-zoning" / "districts" / "height.parquet",
+                                  columns=["height_code"])["height_code"].dropna().astype(str)
+        out = {canon(c) for c in heights if c}
+        prints = load_prints()
+        out |= {canon(c) for c in set(prints["sol_code"].astype(str)) - {""}
+                if re.fullmatch(r"\d+(-[A-Z])?|OS", canon(c))}
+        return out
     year = SERIES[paths.SERIES].year
     out = set()
     f = config.WORK_DIR / paths.SERIES / "districts_raw.parquet"
