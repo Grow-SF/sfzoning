@@ -1,0 +1,299 @@
+<title>New 2000 Map Differences</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=Public+Sans:wght@400;600;700&display=swap">
+<style>
+/* Layout: one calm column for a phone: the score, filter chips, then every area as a row that opens in place to show
+   the scan. Blue is the area's tint on the scan; green, red and amber say which map the April 2000 table backs. */
+:root {
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --fg: #1a1f26;
+  --muted: #5a6573;
+  --line: #d8dde5;
+  --accent: #1f5fbf;
+  --good: #22744a;
+  --bad: #b1372b;
+  --mixed: #8a6410;
+  --chip: #e8ecf2;
+  --paper: #f5f0e5;
+  --font-body: "Public Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-code: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111418; --surface: #191d23; --fg: #e6e9ee; --muted: #9ba5b1; --line: #2c333c; --accent: #79a8f2;
+    --good: #6cc391; --bad: #f08a7e; --mixed: #dcb45c; --chip: #242a32; --paper: #e9e3d6; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111418; --surface: #191d23; --fg: #e6e9ee; --muted: #9ba5b1; --line: #2c333c; --accent: #79a8f2;
+  --good: #6cc391; --bad: #f08a7e; --mixed: #dcb45c; --chip: #242a32; --paper: #e9e3d6; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15px; line-height: 1.5;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 20px 48px;
+}
+.wrap { max-width: 760px; margin: 0 auto; display: grid; gap: 28px; }
+header { display: grid; gap: 8px; }
+.eyebrow { margin: 0; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 { margin: 0; font-size: 26px; line-height: 1.2; font-weight: 700; text-wrap: balance; }
+h2 { margin: 0; font-size: 15px; font-weight: 700; }
+p { margin: 0; max-width: 65ch; }
+.lede { color: var(--fg); }
+code, .code { font-family: var(--font-code); font-weight: 500; font-size: .92em; }
+.num { font-variant-numeric: tabular-nums; }
+
+.score { display: grid; gap: 12px; }
+.measures { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.measure { background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 12px; display: grid; gap: 6px; min-width: 0; }
+.measure .label { font-size: 13px; color: var(--muted); }
+.measure .vals { display: flex; flex-wrap: wrap; gap: 4px 14px; font-variant-numeric: tabular-nums; }
+.measure .vals span { font-size: 13px; color: var(--muted); }
+.measure .vals b { display: block; font-size: 20px; color: var(--fg); font-weight: 700; }
+.measure .vals .was b { color: var(--muted); font-weight: 600; }
+.measure .diff { font-size: 13px; color: var(--good); font-weight: 600; font-variant-numeric: tabular-nums; }
+.measure .ci { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.note { font-size: 13px; color: var(--muted); }
+
+.filters { display: flex; flex-wrap: wrap; gap: 8px; }
+.filters button {
+  font: inherit; font-size: 13px; border: 1px solid var(--line); background: var(--surface); color: var(--fg);
+  border-radius: 999px; padding: 6px 12px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center;
+}
+.filters button .n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.filters button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
+.filters button[aria-pressed="true"] .n { color: var(--bg); opacity: .75; }
+button:focus-visible, summary:focus-visible, .scan:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.list-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.count { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+ol.areas { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+ol.areas > li { border-bottom: 1px solid var(--line); }
+summary {
+  list-style: none; cursor: pointer; display: grid; grid-template-columns: 3.4em minmax(0, 1fr) auto;
+  column-gap: 10px; row-gap: 2px; padding: 12px 2px; align-items: baseline;
+}
+summary::-webkit-details-marker { display: none; }
+.rank { grid-row: span 2; color: var(--muted); font-size: 13px; font-variant-numeric: tabular-nums; }
+.codes { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; min-width: 0; }
+.codes .was { color: var(--muted); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--muted) 60%, transparent); }
+.codes .now { color: var(--fg); font-weight: 600; }
+.arrow { color: var(--muted); }
+.lots { font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sub { grid-column: 2 / 4; display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; font-size: 13px; color: var(--muted); min-width: 0; }
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; }
+.badge::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.badge.new { color: var(--good); }
+.badge.published { color: var(--bad); }
+.badge.neither { color: var(--mixed); }
+.badge.none { color: var(--muted); }
+.badge.none::before { background: transparent; border: 1.5px solid currentColor; width: 7px; height: 7px; }
+details[open] summary { padding-bottom: 8px; }
+
+.detail { display: grid; gap: 12px; padding: 0 2px 18px; }
+figure { margin: 0; display: grid; gap: 6px; }
+.scan { overflow: auto; max-height: 80vh; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); cursor: zoom-in; }
+.scan img { display: block; width: 100%; height: auto; max-width: 100%; }
+.scan.full { cursor: zoom-out; }
+.scan.full img { width: auto; max-width: none; }
+.scan img.px { image-rendering: pixelated; }
+.scan .wait { padding: 24px 12px; color: #5a6573; font-size: 13px; }
+figcaption { font-size: 12px; color: var(--muted); }
+dl.facts { margin: 0; display: grid; grid-template-columns: 7.5em minmax(0, 1fr); gap: 6px 12px; font-size: 14px; }
+dl.facts dt { color: var(--muted); }
+dl.facts dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chips span { background: var(--chip); border-radius: 4px; padding: 1px 6px; font-size: 13px; }
+.chips span code { font-size: 12.5px; }
+.empty { padding: 24px 2px; color: var(--muted); }
+@media (max-width: 640px) {
+  .measures { grid-template-columns: minmax(0, 1fr); }
+  h1 { font-size: 22px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<main class="wrap">
+  <header>
+    <p class="eyebrow">2000 digital zoning map · solver against the site</p>
+    <h1>Where the new 2000 map differs from the one on the site</h1>
+    <p class="lede" id="lede"></p>
+  </header>
+
+  <section class="score" aria-labelledby="score-h">
+    <h2 id="score-h">Scored against the April 2000 table</h2>
+    <div class="measures" id="measures"></div>
+    <p class="note" id="note"></p>
+  </section>
+
+  <section class="score" aria-labelledby="areas-h">
+    <div class="list-head">
+      <h2 id="areas-h">Areas, largest first</h2>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="filters" id="filters" role="group" aria-label="Which areas to show"></div>
+    <ol class="areas" id="areas"></ol>
+  </section>
+</main>
+
+<script>
+const SUMMARY = __SUMMARY__;
+const ROWS = __ROWS__;
+const PER_CHUNK = 100;
+const fmt = new Intl.NumberFormat("en-US");
+const VERDICT = {
+  new: "Table backs the new code",
+  published: "Table backs the site's code",
+  neither: "Table backs neither",
+  none: "No table code here",
+};
+
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v; else if (k === "text") e.textContent = v; else e.setAttribute(k, v);
+  }
+  for (const k of kids) if (k != null) e.append(k);
+  return e;
+}
+const code = (c, cls) => el("code", { class: cls || "", text: c || "none" });
+
+document.getElementById("lede").textContent =
+  `The new map takes each lot's code from the solver instead of the old map reader. These are the ${fmt.format(SUMMARY.areas)} ` +
+  `areas, ${fmt.format(SUMMARY.lots)} lots in all, where its code is not the one on the site today. Tap an area to see the scan.`;
+
+const measures = document.getElementById("measures");
+for (const [label, was, now, diff, ci] of SUMMARY.rows) {
+  measures.append(el("div", { class: "measure" },
+    el("div", { class: "label", text: label }),
+    el("div", { class: "vals" },
+      el("span", { class: "was" }, "On the site", el("b", { text: was })),
+      el("span", {}, "New map", el("b", { text: now }))),
+    el("div", { class: "diff", text: diff }),
+    el("div", { class: "ci", text: `95% interval ${ci}` })));
+}
+const [sw, sl, si] = SUMMARY.solve;
+document.getElementById("note").textContent =
+  `Each map reaches the table's lots by lot ID, the measure that gave the site's map its ${SUMMARY.rows[0][1]} wrong lots; ` +
+  `${fmt.format(SUMMARY.noId)} scored table lots have no lot of their ID on the map's lots and count wrong for both. ` +
+  `By majority area instead: ${fmt.format(SUMMARY.byArea[0])} wrong lots on the site, ${fmt.format(SUMMARY.byArea[1])} on the new map. ` +
+  `The solve on the table's own lots: ${fmt.format(sw)} wrong lots, ${(sl * 100).toFixed(1)}% of labels right, ${fmt.format(si)} incidents. ` +
+  `Intervals: paired bootstrap over assessor blocks, 1,000 draws. ` +
+  (SUMMARY.coded === SUMMARY.readLots ? `Every one of the ${fmt.format(SUMMARY.readLots)} lots has a code`
+    : `${fmt.format(SUMMARY.readLots - SUMMARY.coded)} of the ${fmt.format(SUMMARY.readLots)} lots have no code`) +
+  (SUMMARY.unknown ? `, ${SUMMARY.unknown} codes have no category` : " and every code has a category") +
+  `. A solved lot's confidence is ${SUMMARY.confidence}, the solve's share of scored lots right.`;
+
+// filters
+const FILTERS = [["all", "All"], ["new", "Table backs new"], ["published", "Table backs the site"], ["other", "Neither or no table code"]];
+const counts = { all: ROWS.length, new: 0, published: 0, other: 0 };
+for (const r of ROWS) counts[r.v === "new" || r.v === "published" ? r.v : "other"]++;
+let filter = "all";
+const filtersEl = document.getElementById("filters");
+for (const [key, label] of FILTERS) {
+  const b = el("button", { type: "button", id: `filter-${key}`, "aria-pressed": String(key === filter) },
+    label, el("span", { class: "n", text: fmt.format(counts[key]) }));
+  b.addEventListener("click", () => { filter = key; applyFilter(); });
+  filtersEl.append(b);
+}
+
+// rows
+const list = document.getElementById("areas");
+const items = [];
+for (const r of ROWS) {
+  const summary = el("summary", {},
+    el("span", { class: "rank", text: `#${r.r}` }),
+    el("span", { class: "codes" }, code(r.p, "was"), el("span", { class: "arrow", "aria-label": "becomes", text: "→" }), code(r.w, "now")),
+    el("span", { class: "lots", text: `${fmt.format(r.n)} ${r.n === 1 ? "lot" : "lots"}` }),
+    el("span", { class: "sub" },
+      el("span", {}, "Table ", code(r.t)),
+      el("span", { class: `badge ${r.v}`, text: VERDICT[r.v] })));
+  const details = el("details", {}, summary);
+  details.addEventListener("toggle", () => { if (details.open) openRow(details, r); });
+  const li = el("li", { id: `area-${r.r}` }, details);
+  items.push([li, r]);
+  list.append(li);
+}
+const empty = el("li", { class: "empty", text: "No areas match this filter." });
+list.append(empty);
+
+function applyFilter() {
+  let shown = 0;
+  for (const [li, r] of items) {
+    const key = r.v === "new" || r.v === "published" ? r.v : "other";
+    li.hidden = !(filter === "all" || filter === key);
+    if (!li.hidden) shown++;
+  }
+  empty.hidden = shown > 0;
+  for (const b of filtersEl.children) b.setAttribute("aria-pressed", String(b.id === `filter-${filter}`));
+  document.getElementById("count").textContent = `${fmt.format(shown)} shown`;
+}
+applyFilter();
+
+
+// a row's detail, made on first open; its scan comes from the chunk file holding it
+const chunks = new Map();
+function chunk(n) {
+  const name = `crops/chunk-${String(n).padStart(3, "0")}.json`;
+  if (!chunks.has(n)) chunks.set(n, fetch(name).then(res => {
+    if (!res.ok) throw new Error(`${name}: ${res.status}`);
+    return res.json();
+  }).catch(err => { chunks.delete(n); throw err; }));
+  return chunks.get(n);
+}
+
+function openRow(details, r) {
+  if (details.querySelector(".detail")) return;
+  const scan = el("div", { class: "scan", tabindex: "0", role: "button", "aria-label": "Show the scan at full size" },
+    el("div", { class: "wait", text: "Loading the scan…" }));
+  const plural = r.n === 1 ? "lot" : "lots";
+  const fig = el("figure", {}, scan,
+    el("figcaption", { text: `The 2000 sheets as scanned, 4 ft per pixel, ${fmt.format(r.cw * 4)} × ${fmt.format((r.ch - 14) * 4)} ft. ` +
+      `Tinted blue: the area's ${fmt.format(r.n)} ${plural}. The bar below the scan is ${r.bar} ft. Tap the scan for full size.` }));
+  const tableChips = el("div", { class: "chips" },
+    ...r.tc.map(([c, n]) => el("span", {}, code(c), ` ${fmt.format(n)}`)),
+    r.tx ? el("span", { text: `+${r.tx} more` }) : null);
+  const backs = r.k
+    ? `the new code on ${fmt.format(r.bn)}, the site's on ${fmt.format(r.bp)}, of ${fmt.format(r.k)} lots it codes`
+    : "it gives these lots no single code";
+  const facts = el("dl", { class: "facts" },
+    el("dt", { text: "On the site" }), el("dd", {}, code(r.p)),
+    el("dt", { text: "New map" }), el("dd", {}, code(r.w)),
+    el("dt", { text: "Table" }), el("dd", {}, tableChips),
+    el("dt", { text: "Table backs" }), el("dd", { text: backs }),
+    el("dt", { text: "Lots" }), el("dd", { class: "num", text: fmt.format(r.n) }),
+    el("dt", { text: "Blocks" }), el("dd", { class: "num" }, r.b.join(", ") + (r.bx ? ` and ${r.bx} more` : "")),
+    el("dt", { text: "Quarter" }), el("dd", { text: r.q.toUpperCase() }));
+  details.append(el("div", { class: "detail" }, fig, facts));
+  const toggle = () => {
+    scan.classList.toggle("full");
+    scan.setAttribute("aria-label", scan.classList.contains("full") ? "Fit the scan to the width" : "Show the scan at full size");
+  };
+  scan.addEventListener("click", toggle);
+  scan.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(); } });
+  chunk(Math.floor((r.r - 1) / PER_CHUNK)).then(data => {
+    const img = el("img", { alt: `Scan around area ${r.r}: ${r.n} ${plural} tinted blue`, width: String(r.cw), height: String(r.ch) });
+    img.addEventListener("load", () => { if (img.naturalWidth < scan.clientWidth) img.classList.add("px"); });
+    img.src = data[String(r.r)];
+    scan.replaceChildren(img);
+  }).catch(err => {
+    scan.replaceChildren(el("div", { class: "wait", text: `The scan didn't load (${err.message}). Open the page from its published link or a local web server, beside its crops folder.` }));
+  });
+}
+
+// #area-N opens that area (a link to one area)
+function openFromHash() {
+  const m = /^#area-(\d+)$/.exec(location.hash);
+  const li = m && document.getElementById(`area-${m[1]}`);
+  if (!li) return;
+  if (li.hidden) { filter = "all"; applyFilter(); }
+  li.querySelector("details").open = true;
+  li.scrollIntoView({ block: "start" });
+}
+window.addEventListener("hashchange", openFromHash);
+openFromHash();
+</script>
