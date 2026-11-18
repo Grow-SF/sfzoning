@@ -2966,8 +2966,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3117,8 +3117,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3268,8 +3268,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3419,8 +3419,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3570,8 +3570,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: b23656cc0ab01279f1568b78f2915bf9
-      size: 69371
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3721,8 +3721,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: b23656cc0ab01279f1568b78f2915bf9
-      size: 69371
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -3872,8 +3872,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: b23656cc0ab01279f1568b78f2915bf9
-      size: 69371
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4023,8 +4023,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4174,8 +4174,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4325,8 +4325,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: b23656cc0ab01279f1568b78f2915bf9
-      size: 69371
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4476,8 +4476,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4627,8 +4627,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4778,8 +4778,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: b23656cc0ab01279f1568b78f2915bf9
-      size: 69371
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -4929,8 +4929,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5080,8 +5080,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5231,8 +5231,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5382,8 +5382,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5533,8 +5533,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5684,8 +5684,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: b23656cc0ab01279f1568b78f2915bf9
-      size: 69371
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5835,8 +5835,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -5986,8 +5986,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -6137,8 +6137,8 @@ stages:
       size: 5035
     - path: src/sfzmaps/cli.py
       hash: md5
-      md5: fd29014efaee0df32555629b9404deaf
-      size: 65311
+      md5: ae67cf802fdaef4c14deed1bcc5a4a3f
+      size: 69988
     - path: src/sfzmaps/config.py
       hash: md5
       md5: ed5d5538cef63f43a599ed253dba3c21
@@ -6560,8 +6560,8 @@ stages:
       size: 4386
     - path: src/sfzmaps/solver/runs.py
       hash: md5
-      md5: a42cb40b049e482ea1ffbae6f9437189
-      size: 4792
+      md5: 273cb81877f538f1604095420867a88b
+      size: 4958
     - path: src/sfzmaps/solver/streetside.py
       hash: md5
       md5: cec5a6c564a7c7098ba1d859094a2acd
@@ -7396,58 +7396,15 @@ stages:
       md5: e611eafc85d7b7e39cc24a77a5ddb666.dir
       size: 6247790
       nfiles: 3
-    - path: data/solver/text-reader/2000-digital-zoning-p01/chance.png
+    - path: data/solver/prints/terra_boxes.json
       hash: md5
-      md5: 6f53efb19b83c23ee57bfc574514104d
-      size: 10182870
-    - path: data/solver/text-reader/2000-digital-zoning-p02/chance.png
+      md5: 266410cc7ba1638455f5762650ff3423
+      size: 1990351
+    - path: data/solver/text/chance
       hash: md5
-      md5: 178bb7e723c9a5a068173cca9987fb26
-      size: 9405237
-    - path: data/solver/text-reader/2000-digital-zoning-p03/chance.png
-      hash: md5
-      md5: 0c38bc5b758580fd6c60b0ab9359f800
-      size: 9438858
-    - path: data/solver/text-reader/2000-digital-zoning-p04/chance.png
-      hash: md5
-      md5: 508d199d80362aefda327c0acedf6538
-      size: 7849862
-    - path: data/solver/text-reader/2000-digital-zoning-p05/chance.png
-      hash: md5
-      md5: 89b3d7bc2c98888a3616fec9234e991b
-      size: 8980660
-    - path: data/solver/text-reader/2000-digital-zoning-p06/chance.png
-      hash: md5
-      md5: 506c4dad9a0885692699198db4dd2af4
-      size: 9328035
-    - path: data/solver/text-reader/2000-digital-zoning-p07/chance.png
-      hash: md5
-      md5: ff01d83815e6983156eac9216c79993c
-      size: 9741005
-    - path: data/solver/text-reader/2000-digital-zoning-p08/chance.png
-      hash: md5
-      md5: f8188149164a387433096a807c27f982
-      size: 10224415
-    - path: data/solver/text-reader/2000-digital-zoning-p09/chance.png
-      hash: md5
-      md5: fa465c4b4e0013f70f11a497a9e63f9c
-      size: 10030661
-    - path: data/solver/text-reader/2000-digital-zoning-p10/chance.png
-      hash: md5
-      md5: 88fd2fa7e07a641b88c7c1bf3ff55a9d
-      size: 10468173
-    - path: data/solver/text-reader/2000-digital-zoning-p11/chance.png
-      hash: md5
-      md5: 8a37419a97e2dd5251ea1a9ce33d4c08
-      size: 10356130
-    - path: data/solver/text-reader/2000-digital-zoning-p12/chance.png
-      hash: md5
-      md5: e513c71dbd529dc8f261fa774340d325
-      size: 9493227
-    - path: data/solver/text-reader/2000-digital-zoning-p13/chance.png
-      hash: md5
-      md5: 8951917320bd82d292f481dbdd798ab6
-      size: 8220787
+      md5: 28e90485d344b53c4f02f0865ca48a21.dir
+      size: 119274579
+      nfiles: 13
     - path: data/warp/2000-digital-zoning
       hash: md5
       md5: 1dd5374120a1801f67fb942056e9247c.dir
@@ -7504,8 +7461,8 @@ stages:
       size: 4386
     - path: src/sfzmaps/solver/runs.py
       hash: md5
-      md5: a42cb40b049e482ea1ffbae6f9437189
-      size: 4792
+      md5: 273cb81877f538f1604095420867a88b
+      size: 4958
     - path: src/sfzmaps/solver/saved.py
       hash: md5
       md5: 5428b2e93ac078c2186cedf7b3aaaf8a
@@ -7516,8 +7473,8 @@ stages:
       size: 4053
     - path: src/sfzmaps/solver/textgrid.py
       hash: md5
-      md5: e76a8e9aee5446d36fdbe572043fd61f
-      size: 4626
+      md5: 842138bfc6e91d5a7a7a28e3809c4707
+      size: 5970
     - path: src/sfzmaps/solver/textnet/boxes.py
       hash: md5
       md5: 9c3059873b3916274be61844bceb5490
@@ -7532,8 +7489,8 @@ stages:
       size: 43435
     - path: src/sfzmaps/solver/walls.py
       hash: md5
-      md5: 096440d7319887c93d2ad70ea7335f37
-      size: 18805
+      md5: f1979e8fb18e8f93eeeabf975f67e1e3
+      size: 19683
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: c83192f3d3941fae99387dafd628e159
@@ -7545,8 +7502,8 @@ stages:
     outs:
     - path: data/solver/walls
       hash: md5
-      md5: c1192b0504d4959916a455189a080fc5.dir
-      size: 20517158
+      md5: a34f193c03871fa53c9b53db9bde17db.dir
+      size: 16389245
       nfiles: 6
   solver-text-scores:
     cmd: uv run --frozen sfzmaps stage solver-text-scores
@@ -9081,16 +9038,16 @@ stages:
       size: 8542
     - path: src/sfzmaps/solver/textnet/data.py
       hash: md5
-      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
-      size: 28436
+      md5: ef8cb74f8990b42e5e9b61241ab9c7b3
+      size: 46900
     - path: src/sfzmaps/solver/textnet/model.py
       hash: md5
-      md5: 838bfdbb95644c10cf39d2513c815fc7
-      size: 3851
+      md5: f924f11c0f15a421e485a204b2ce4c79
+      size: 7492
     - path: src/sfzmaps/solver/textnet/predict.py
       hash: md5
-      md5: 6d54442b40dc6b9022c806eb44c338b4
-      size: 6860
+      md5: 4cdc30b45e70bec2357b4ed21e37d7b3
+      size: 16351
     - path: src/sfzmaps/solver/textnet/score_stage.py
       hash: md5
       md5: f95793fb35869428f5234ceee77bbc76
@@ -9101,8 +9058,8 @@ stages:
       size: 15145
     - path: src/sfzmaps/solver/textnet/train.py
       hash: md5
-      md5: 0c1b4bda2838082ba33a747a5ee4e3c3
-      size: 21777
+      md5: c844b2d1b600bf7de432b5f7fc217304
+      size: 48580
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: c83192f3d3941fae99387dafd628e159
@@ -9140,8 +9097,8 @@ stages:
       size: 127060
     - path: data/solver/walls
       hash: md5
-      md5: c1192b0504d4959916a455189a080fc5.dir
-      size: 20517158
+      md5: a34f193c03871fa53c9b53db9bde17db.dir
+      size: 16389245
       nfiles: 6
     - path: data/warp/2000-digital-zoning
       hash: md5
@@ -9238,8 +9195,8 @@ stages:
       size: 16706
     - path: src/sfzmaps/solver/runs.py
       hash: md5
-      md5: a42cb40b049e482ea1ffbae6f9437189
-      size: 4792
+      md5: 273cb81877f538f1604095420867a88b
+      size: 4958
     - path: src/sfzmaps/solver/search.py
       hash: md5
       md5: b46af2b70d4d5ca411858391af8a1bc8
@@ -9271,8 +9228,8 @@ stages:
     outs:
     - path: data/solver/solve
       hash: md5
-      md5: a580bcecaed11dce9a39241272e398e6.dir
-      size: 115584106
+      md5: 5a68e0214bbcdef7af433b42203b10ba.dir
+      size: 115601958
       nfiles: 18
   solver-text-reader:
     cmd: uv run --frozen sfzmaps stage solver-text-reader
@@ -11271,16 +11228,16 @@ stages:
       size: 8542
     - path: src/sfzmaps/solver/textnet/data.py
       hash: md5
-      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
-      size: 28436
+      md5: ef8cb74f8990b42e5e9b61241ab9c7b3
+      size: 46900
     - path: src/sfzmaps/solver/textnet/scores.py
       hash: md5
       md5: 3356ba9880e9b57b4291ab5cab8abf49
       size: 15145
     - path: src/sfzmaps/solver/wordboxes.py
       hash: md5
-      md5: ddf5f9d37f0df4848df83183d5bec213
-      size: 20380
+      md5: a5d3f13a7a3f90b32ae39b554b94e9c8
+      size: 21606
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: c83192f3d3941fae99387dafd628e159
@@ -12322,16 +12279,16 @@ stages:
       size: 8542
     - path: src/sfzmaps/solver/textnet/data.py
       hash: md5
-      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
-      size: 28436
+      md5: ef8cb74f8990b42e5e9b61241ab9c7b3
+      size: 46900
     - path: src/sfzmaps/solver/textnet/model.py
       hash: md5
-      md5: 838bfdbb95644c10cf39d2513c815fc7
-      size: 3851
+      md5: f924f11c0f15a421e485a204b2ce4c79
+      size: 7492
     - path: src/sfzmaps/solver/textnet/predict.py
       hash: md5
-      md5: 6d54442b40dc6b9022c806eb44c338b4
-      size: 6860
+      md5: 4cdc30b45e70bec2357b4ed21e37d7b3
+      size: 16351
     - path: src/sfzmaps/solver/textnet/reader_stage.py
       hash: md5
       md5: e4d2bb8a2cbd158aa3e8ef1af4ac8106
@@ -12346,16 +12303,16 @@ stages:
       size: 4088
     - path: src/sfzmaps/solver/textnet/train.py
       hash: md5
-      md5: 0c1b4bda2838082ba33a747a5ee4e3c3
-      size: 21777
+      md5: c844b2d1b600bf7de432b5f7fc217304
+      size: 48580
     - path: src/sfzmaps/solver/textread/__init__.py
       hash: md5
       md5: 1b8a10d530f0402ac643e573d2e31499
       size: 1133
     - path: src/sfzmaps/solver/textread/crops.py
       hash: md5
-      md5: fec945b94d94588c427969968ce5e959
-      size: 17847
+      md5: 57ab96359f22aa1ec28cbc514ff394c7
+      size: 20039
     - path: src/sfzmaps/solver/textread/ctc.py
       hash: md5
       md5: 7b4f2cd8b29208ab175b8ba513665900
@@ -12366,16 +12323,16 @@ stages:
       size: 9182
     - path: src/sfzmaps/solver/textread/read.py
       hash: md5
-      md5: 61afbb6ab3983a71e01f41a9f0623a97
-      size: 21191
+      md5: 89fa755969f74451c61f687a2a06f744
+      size: 24058
     - path: src/sfzmaps/solver/textread/store.py
       hash: md5
       md5: d498e0b1bfc45b901a0801c3cbea370a
       size: 3843
     - path: src/sfzmaps/solver/wordboxes.py
       hash: md5
-      md5: ddf5f9d37f0df4848df83183d5bec213
-      size: 20380
+      md5: a5d3f13a7a3f90b32ae39b554b94e9c8
+      size: 21606
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: c83192f3d3941fae99387dafd628e159
