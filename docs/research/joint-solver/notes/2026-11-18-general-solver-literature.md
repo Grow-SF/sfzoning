@@ -54,8 +54,9 @@ Coming labels: a few hundred lot-level answers from the owner on one class B map
    41% → 81% jump agrees. For class C it cannot help much.
 5. **Hatching (class C) needs its own evidence.** That means texture matched against the legend's swatches, and
    walls from a change of texture across a border. The best published legend-guided systems, from the DARPA mineral
-   maps work, are built around colour. A 2026 thesis from that group still lists hatching patterns as future work. A
-   one-colour hatched map is not a solved problem.
+   maps work, are built around colour. A 2026 thesis from that group still lists hatching patterns as future work
+   (Lin 2026, section 6.3 "Future Direction", p. 128; checked in the owner's copy on 11-18). We found no published
+   method for one-colour hatched maps; that is not proof that none exists.
 6. **A few hundred answers give few border examples.** The answers should come in contiguous patches, so that both
    lots of many pairs are known. A random, area-blocked part should be kept back for scoring only. Expect roughly
    ±3-4 points of accuracy at 95% from 300 scored lots. Compare methods paired on the same lots.
