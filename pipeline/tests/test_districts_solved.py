@@ -1,4 +1,4 @@
-"""The 2000 map published from the solve (districts/solved.py, the solver-publish stage)."""
+"""Maps published from their series' solve (districts/solved.py, the solver-publish stages), 2000's first."""
 import json
 
 import geopandas as gpd
@@ -179,3 +179,126 @@ def test_the_stage_command_publishes_and_fails_on_a_code_with_no_category(city):
                                                  ("9999001", (1000, 1000, 1100, 1100))])
     res = CliRunner().invoke(cli.app, ["solver", "publish"])
     assert res.exit_code == 1 and "M-2 (MB)" in res.output
+
+
+# --- any series: its solve under its root ---------------------------------------------------
+
+@pytest.mark.parametrize("name, year, published", [
+    ("1R", 1921, "1R"), ("C2", 1964, "C-2"), ("R-1-D", 1960, "R-1-D"), ("NOE VALLEY NCD", 1990, "NOE VALLEY NCD"),
+    ("HAYES NCD", 1990, "HAYES-GOUGH NCD"), ("UPR MARKET", 1996, "UPPER MARKET NCD")])
+def test_a_solved_code_is_spelled_and_categorised_in_its_series_era(name, year, published):
+    assert solved.published_code(name, year) == published
+    assert category_for(published, year) != "unknown"
+
+
+@pytest.mark.parametrize("name, year", [("R-C-1", 1960), ("VALENCIA NCT", 1990), ("RM", 1980)])
+def test_a_code_the_era_has_no_category_for_stops_the_publish(name, year):
+    with pytest.raises(ValueError, match="no category"):
+        solved.published_code(name, year)
+
+
+E = "1960"
+# 1960's lots: the city fixture's, and a Port lot (block 9900, unzoned until 1969)
+ERA_PARCELS = {**PARCELS, "9900001": (600, 0, 700, 100)}
+
+
+def _solve_at(root, names, pred, table, posterior=None, scored=None, wrong=None):
+    """A series' solver files under `root`, in 2000's layout: unscored unless `scored` and `wrong` are given."""
+    (root / "lots").mkdir(parents=True, exist_ok=True)
+    (root / "solve" / "runs").mkdir(parents=True, exist_ok=True)
+    gpd.GeoDataFrame({"blklot": [b for b, _ in table], "zoning": [""] * len(table)},
+                     geometry=[box(*g) for _, g in table], crs="EPSG:2227").to_parquet(root / "lots" / "table.parquet")
+    run = {"names": np.array(names), "pred": np.array(pred)}
+    if posterior is not None:
+        run["posterior"] = np.array(posterior, float)
+    np.savez_compressed(root / "solve" / "runs" / "final.npz", **run)
+    np.savez_compressed(root / "lots" / "lots.npz", scored=np.array(scored or [False] * len(table)),
+                        pairs=np.array([[0, 1, 1, 0], [2, 3, 1, 0], [3, 4, 1, 0]]))
+    report = {"measures": {"every_lot": {"wrong_lots": wrong}}} if wrong is not None else {"measures": {}}
+    (root / "solve" / "report.json").write_text(json.dumps(report))
+
+
+# 1000001 under R-1 (0.9); 1000002 40% R-1, 60% C2 (0.6); 1001001 20% M-1 at 0.8 and 80% M-1 at 0.4; 1001002 under
+# R-1-D (0.7); 1002001 under none, nearest C2; the Port lot under none, nearest the blank solve lot, which takes no part
+ERA_TABLE = [("a", (0, 0, 140, 100)), ("b", (140, 0, 200, 100)), ("c", (0, 200, 10, 300)), ("d", (10, 200, 50, 300)),
+             ("e", (50, 200, 100, 300)), ("f", (650, 0, 700, 50))]
+ERA_SOLVE = (["R-1", "C2", "M-1", "R-1-D", ""], [0, 1, 2, 2, 3, 4], [0.9, 0.6, 0.8, 0.4, 0.7, np.nan])
+
+
+@pytest.fixture
+def era(city, tmp_path, monkeypatch):
+    """1960 read by the old reader (its own codes) and published from that read, and its solve at the default root of
+    a series other than 2000."""
+    monkeypatch.setattr(paths, "SOLVER_DIR", tmp_path / "solver")
+    parcels = gpd.GeoDataFrame({"blklot": list(ERA_PARCELS), "block_num": [b[:4] for b in ERA_PARCELS],
+                                "active": True}, geometry=[box(*g) for g in ERA_PARCELS.values()], crs="EPSG:2227")
+    monkeypatch.setattr(assemble, "load_parcels", lambda *a, **k: parcels.copy())
+    raw = pd.DataFrame({"blklot": list(ERA_PARCELS), "code": pd.Series(["R-2"] * 6, dtype=object),
+                        "height_code": pd.Series([None] * 6, dtype=object), "confidence": 0.5,
+                        "source_sheet": ["s1", "s1", "s2", "s2", "s3", "s3"]})
+    monkeypatch.setattr(assemble, "read_raw", lambda s, **k: raw.copy())
+    _solve_at(solved.default_root(E), *ERA_SOLVE[:2], ERA_TABLE, posterior=ERA_SOLVE[2])
+    assemble.run_series(E)                  # 1960 is not in SOLVED: the old reader's map is published
+    return solved.default_root(E)
+
+
+def test_another_series_is_published_from_its_solve_with_its_posterior(era):
+    assert era == paths.SOLVER_DIR / E
+    d = solved.publish(E)
+    g = gpd.read_file(d / "parcels.fgb").set_index("blklot")
+    assert g["code"].fillna("").to_dict() == {"1000001": "R-1", "1000002": "C-2", "1001001": "M-1",
+                                              "1001002": "R-1-D", "1002001": "C-2", "9900001": ""}   # the Port: unzoned
+    conf = g["confidence"].to_dict()
+    assert conf["1000001"] == 0.9 and conf["1000002"] == 0.6 and conf["1001002"] == 0.7
+    assert conf["1001001"] == pytest.approx(0.2 * 0.8 + 0.8 * 0.4)    # weighted by each solve lot's overlap
+    assert conf["1002001"] == 0.6                                      # the nearest solve lot's
+    assert g.loc["1000002", "category"] == "commercial_light" and g.loc["1000001", "source_sheet"] == "s1"
+    assert json.loads((d / "unknown_codes.json").read_text()) == {}
+    codes = json.loads((d / "stats.json").read_text())["provenance"]["codes"]
+    assert codes["source"] == "the 1960 solver's run final" and codes["confidence_from"] == "posterior"
+    assert "confidence" not in codes
+
+
+def test_a_scored_solve_gives_its_share_right_even_with_a_posterior(era):
+    _solve_at(era, *ERA_SOLVE[:2], ERA_TABLE, posterior=ERA_SOLVE[2], scored=[True] * 4 + [False] * 2, wrong=1)
+    d = solved.publish(E)
+    g = gpd.read_file(d / "parcels.fgb").set_index("blklot")
+    assert g.loc["1001001", "confidence"] == 0.75 and g.loc["1000002", "confidence"] == 0.75     # 1 wrong of 4
+    assert json.loads((d / "stats.json").read_text())["provenance"]["codes"]["confidence"] == 0.75
+
+
+def test_a_solve_with_no_score_and_no_posterior_stops_the_publish(era):
+    _solve_at(era, *ERA_SOLVE[:2], ERA_TABLE)
+    with pytest.raises(ValueError, match="no score .* and no posterior"):
+        solved.publish(E, force=True)
+
+
+def test_a_solve_under_another_root_is_published_from_there(era, tmp_path):
+    other = tmp_path / "elsewhere"
+    _solve_at(other, ["R-3"], [0] * 6, ERA_TABLE, posterior=[0.5] * 6)
+    d = solved.publish(E, root=other)
+    assert set(gpd.read_file(d / "parcels.fgb")["code"].dropna()) == {"R-3"}
+    assert not solved.is_solved(E)                 # only for the length of the publish
+
+
+def test_a_series_in_solved_hands_its_publish_to_its_own_stage(era, monkeypatch):
+    monkeypatch.setattr(solved, "SOLVED", solved.SOLVED | {E})
+    for n in assemble.PUBLISHED:
+        (assemble.out_dir(E) / n).unlink()
+    assemble.run_series(E, force=True)            # reads, and leaves the publish to solver-publish-1960
+    assert not any((assemble.out_dir(E) / n).exists() for n in assemble.PUBLISHED)
+    assemble.republish(E)                          # `districts --republish`: from the solve
+    assert gpd.read_file(assemble.out_dir(E) / "parcels.fgb").set_index("blklot").loc["1000002", "code"] == "C-2"
+
+
+def test_the_publish_command_takes_any_zoning_series(era):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    res = CliRunner().invoke(cli.app, ["solver", "publish", "--series", E])
+    assert res.exit_code == 0, res.output
+    # the Port lot has no code in 1960 and doesn't count against it
+    assert "the read's lots 6, 0 of them with no code; codes with no category 0; confidence from the solve's " \
+           "posterior" in res.output
+    assert CliRunner().invoke(cli.app, ["solver", "publish", "--series", "1960-height"]).exit_code == 2
