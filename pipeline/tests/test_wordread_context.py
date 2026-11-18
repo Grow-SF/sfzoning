@@ -329,122 +329,61 @@ def test_fit_prior_finds_tau_and_a_weight_no_worse_than_the_ink_alone():
     assert got["w"][C.CODE] > 0.1 and got["tau_converged"]
 
 
+def _parts(text, shares, frames=None):
+    return dict(C.part_targets(text, shares, frames)["targets"])
+
+
 def test_a_box_holding_part_of_a_word_is_asked_only_for_the_part_inside_it():
-    assert C.substring_targets("RH-2", [1, 1, 1, 1]) == [("RH-2", 1.0)]          # a whole word: unchanged
-    got = dict(C.substring_targets("ABCD", [1.0, 1.0, 0.5, 0.0]))
-    assert got == pytest.approx({"AB": 0.5, "ABC": 0.5})
+    assert C.part_targets("RH-2", [1, 1, 1, 1]) == {"targets": [("RH-2", 1.0)], "dropped": 0.0}   # whole: unchanged
+    assert _parts("ABCD", [1.0, 1.0, 0.5, 0.0]) == pytest.approx({"AB": 0.5, "ABC": 0.5})
+    # every contiguous run by prod inside x prod outside, conditioned on a non-empty run
+    s = [0.9, 0.4, 0.7]
+    raw = {"A": 0.9 * 0.6 * 0.3, "B": 0.1 * 0.4 * 0.3, "C": 0.1 * 0.6 * 0.7, "AB": 0.9 * 0.4 * 0.3,
+           "BC": 0.1 * 0.4 * 0.7, "ABC": 0.9 * 0.4 * 0.7}
+    assert _parts("ABC", s) == pytest.approx({k: v / sum(raw.values()) for k, v in raw.items()})
     # a space at a run's end prints nothing: "MISSION" and "MISSION " are one target
     shares = [1.0] * 7 + [0.5] + [0.0] * 3
-    assert dict(C.substring_targets("MISSION ST.", shares)) == pytest.approx({"MISSION": 1.0})
-    assert C.substring_targets("AB", [0.0, 0.0]) == []
+    assert _parts("MISSION ST.", shares) == pytest.approx({"MISSION": 1.0})
+    assert C.part_targets("AB", [0.0, 0.0]) == {"targets": [], "dropped": 0.0}
+    with pytest.raises(ValueError, match="shares"):
+        C.part_targets("AB", [1.0])
     # the characters' shares from the word's ink: A's ink inside the box, B's outside, the space by its area
     word = np.array([[0, 0], [30, 0], [30, 2], [0, 2]], float)
     box = np.array([[-1, -1], [12, -1], [12, 3], [-1, 3]], float)
     xs = np.r_[np.linspace(1, 9, 9), np.linspace(21, 29, 9)]
     got = C.char_shares("A B", word, box, xs, np.ones(len(xs)))
     assert got == pytest.approx([1.0, 0.2, 0.0])
-    # along the reading only: a box over the lower half of the line holds the same characters; the rest is across
+    # along the reading only: a box over the lower half of the line holds the same characters
     low = np.array([[-1, 1], [12, 1], [12, 3], [-1, 3]], float)
     ys = np.repeat([0.5, 1.5], 9)
     xs2 = np.tile(np.linspace(1, 9, 9), 2)
     assert C.char_shares("A", np.array([[0, 0], [10, 0], [10, 2], [0, 2]], float), low, xs2, ys) == pytest.approx([1.0])
-    assert C.across_share(word, low, xs2, ys) == pytest.approx(0.5)
 
 
-def _rect(x0, y0, x1, y1):
-    """A word or box rectangle reading left to right (page px, y down: the first edge along the top)."""
-    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float)
-
-
-def _inked(text, rect):
-    """(text, rect, ink x, ink y): ink px centres filling the rectangle."""
-    r = np.asarray(rect, float)
-    xs, ys = np.meshgrid(np.arange(r[:, 0].min() + 0.5, r[:, 0].max()), np.arange(r[:, 1].min() + 0.5, r[:, 1].max()))
-    return (text, r, xs.ravel(), ys.ravel())
-
-
-def test_a_box_over_two_words_is_asked_for_both_in_reading_order():
-    mission, st = _inked("MISSION", _rect(0, 0, 70, 10)), _inked("ST.", _rect(80, 0, 110, 10))
-    box = _rect(-2, -2, 112, 12)
-    got = C.box_targets([mission, st], box)
-    assert got["targets"] == [("MISSION ST.", pytest.approx(1.0))] and got["p_nonempty"] == pytest.approx(1.0)
-    assert C.box_targets([st, mission], box)["targets"][0][0] == "MISSION ST."        # any order given
-    turned = box[[2, 3, 0, 1]]                       # our box's axis the other way: Terra's reading still decides
-    assert C.box_targets([mission, st], turned)["targets"][0][0] == "MISSION ST."
-    # a box over MISSION alone, ending in the gap: the gap's space prints nothing, ST. is outside
-    assert C.box_targets([mission, st], _rect(-2, -2, 72, 12))["targets"] == [("MISSION", pytest.approx(1.0))]
-    # one word: the same expectation as `substring_targets` of its shares along the reading
-    one = C.box_targets([mission], _rect(-2, -2, 35, 12))
-    shares = C.char_shares("MISSION", mission[1], _rect(-2, -2, 35, 12), mission[2], mission[3])
-    assert dict(one["targets"]) == pytest.approx(dict(C.substring_targets("MISSION", shares)))
-
-
-def test_a_word_barely_in_the_boxs_line_is_held_by_its_share_across():
-    mission = _inked("MISSION", _rect(0, 0, 70, 10))
-    above = _inked("767", _rect(20, -12, 50, -2))   # the line above, its lowest px row inside the box's band
-    box = _rect(-2, -2.5, 72, 12)
-    a = C.across_share(above[1], box, above[2], above[3])
-    assert a == pytest.approx(0.1)
-    # the read line's place is drawn from the box's ink: MISSION's 700 px, 767's lowest row of 30
-    ink = [np.r_[mission[k], above[k][above[3] >= -2.5]] for k in (2, 3)]
-    got = C.box_targets([mission, above], box, box_ink=ink)
-    p_above, p_mission = 30 / 730, 700 / 730
-    assert dict(got["targets"]) == pytest.approx({"MISSION": p_mission / (p_mission + a * p_above),
-                                                  "767": a * p_above / (p_mission + a * p_above)})
-    assert got["p_nonempty"] == pytest.approx(p_mission + a * p_above)        # one line never holds both
-    # a single word partly in the line: the target is the word, the chance it is held at all is its share across
-    alone = C.box_targets([above], box, box_ink=[above[k][above[3] >= -2.5] for k in (2, 3)])
-    assert alone["targets"] == [("767", pytest.approx(1.0))] and alone["p_nonempty"] == pytest.approx(a)
-    # without the box's ink, the line's place is drawn over the box's width across, where the words span it
-    assert C.box_targets([mission], box)["targets"] == [("MISSION", pytest.approx(1.0))]
-
-
-def test_loose_rectangles_of_stacked_labels_do_not_join_their_lines():
-    code, block = _inked("P", _rect(10, 0, 20, 10)), _inked("625", _rect(0, 12, 30, 22))
-    loose = (code[0], _rect(8, -2, 22, 16), code[2], code[3])     # Terra's rectangle reaching into the next line
-    box = _rect(-2, -1, 32, 23)
-    ink = (np.r_[code[2], block[2]], np.r_[code[3], block[3]])
-    got = dict(C.box_targets([loose, block], box, box_ink=ink)["targets"])
-    assert set(got) == {"P", "625"}
-
-
-def test_a_small_label_printed_inside_a_big_one_is_read_apart_from_it():
-    big, small = _inked("RH-3", _rect(0, 0, 80, 20)), _inked("1265", _rect(50, 4, 70, 12))
-    big = (big[0], big[1], *[v[~C._in_quad(small[1], big[2], big[3])] for v in big[2:]])   # its ink around the small
-    box = _rect(-2, -2, 82, 22)
-    ink = (np.r_[big[2], small[2]], np.r_[big[3], small[3]])
-    got = C.box_targets([big, small], box, box_ink=ink)
-    n_big, n_small = len(big[2]), len(small[2])                       # 1440 and 160 px
-    both = (8 * 80) / (n_big + n_small)            # the line's place within the small one's 8 rows: both there
-    assert dict(got["targets"]) == pytest.approx({"RH-3": 1 - both + both * n_big / (n_big + n_small),
-                                                  "1265": both * n_small / (n_big + n_small)})
-    assert "RH-3 1265" not in dict(got["targets"])
-    assert C._apart((0, 1, 2), [[0, 10], [5, 15], [12, 20]]) == [(0, 2), (1,)]
-
-
-def test_labels_stacked_in_one_box_are_read_one_line_at_a_time():
-    code, block = _inked("RH-3", _rect(0, 0, 40, 10)), _inked("1265", _rect(0, 12, 60, 22))
-    box = _rect(-2, -1, 62, 23)                      # a box over both lines
-    ink = (np.r_[code[2], block[2]], np.r_[code[3], block[3]])
-    got = C.box_targets([code, block], box, box_ink=ink)
-    share = len(code[2]) / (len(code[2]) + len(block[2]))     # the line's place drawn from the box's ink
-    assert dict(got["targets"]) == pytest.approx({"RH-3": share, "1265": 1 - share})
-    assert got["p_nonempty"] == pytest.approx(1.0)
-    # a word beside the code on its line joins it, in reading order
-    beside = _inked("P", _rect(48, 0, 56, 10))
-    two = C.box_targets([beside, code, block], box, box_ink=(np.r_[ink[0], beside[2]], np.r_[ink[1], beside[3]]))
-    assert {s for s, _ in two["targets"]} == {"RH-3 P", "1265"}
+def test_a_pairs_weight_is_the_chance_its_box_holds_that_word_and_no_other():
+    from sfzmaps.solver.wordread import boxmodel
+    assert C.pair_weights([0.6]).tolist() == pytest.approx([0.6])               # one word: its own share
+    assert C.pair_weights([1.0, 1.0]).tolist() == [0.0, 0.0]          # "MISSION" and "ST." both whole: neither alone
+    assert C.pair_weights([1.0, 0.1]).tolist() == pytest.approx([0.9, 0.0])     # a grazing word of the next line
+    assert C.pair_weights([0.5, 0.2]).tolist() == pytest.approx([0.5 * 0.8, 0.2 * 0.5])
+    rng = np.random.default_rng([0, 9])
+    for n in (1, 2, 5, 12):                      # the pairs sum to P(exactly one word), so never above 1
+        s = rng.uniform(0, 1, n)
+        assert C.pair_weights(s).sum() == pytest.approx(boxmodel.poisson_binomial(s)[1], rel=1e-12)
+    assert C.pair_weights([]).tolist() == []
+    with pytest.raises(ValueError, match="chances"):
+        C.pair_weights([0.5, 1.2])
 
 
 def test_a_part_no_read_can_be_is_dropped_and_counted():
-    mission, st = _inked("MISSION", _rect(0, 0, 70, 10)), _inked("ST.", _rect(80, 0, 110, 10))
-    box = _rect(-2, -2, 112, 12)
-    assert C.box_targets([mission, st], box, frames=8)["targets"] == []          # "MISSION ST." needs 11 frames
-    got = C.box_targets([mission, st], box, frames=8)
-    assert got["dropped"] == pytest.approx(1.0) and got["p_nonempty"] == pytest.approx(1.0)
-    half = C.box_targets([mission], _rect(30, -2, 72, 12), frames=3)              # "ION" or "SION" (doubled S)
+    got = C.part_targets("MISSION ST.", [1.0] * 11, frames=8)          # "MISSION ST." needs 11 frames
+    assert got == {"targets": [], "dropped": pytest.approx(1.0)}
+    shares = [0.0, 0.0, 0.0, 0.5, 1.0, 1.0, 1.0]                      # "SION" (4 frames) or "ION" (3)
+    half = C.part_targets("MISSION", shares, frames=3)
+    assert half["targets"] == [("ION", pytest.approx(0.5))] and half["dropped"] == pytest.approx(0.5)
+    assert _parts("MISSION", shares) == pytest.approx({"ION": 0.5, "SION": 0.5})      # no frames: every run listed
     assert all(C.ctc_fits(s, 3) for s, _ in half["targets"])
-    assert sum(p for _, p in half["targets"]) + half["dropped"] == pytest.approx(1.0)
+    assert C.part_targets("SS", [1.0, 1.0], frames=2)["dropped"] == pytest.approx(1.0)   # a blank between the two S
 
 
 def test_the_fit_scores_a_fragment_by_its_expected_part():
@@ -505,7 +444,8 @@ def test_a_temperature_on_the_combined_posterior_undoes_overconfidence():
         right = rng.random() < 0.7               # the top hypothesis is right 70% of the time, posterior says 99%
         lp = np.log(np.array([0.99, 0.005, 0.005]))
         rows.append((lp, 0 if right else int(rng.integers(1, 3))))
-    got = C.fit_temperature(rows, pd.DataFrame([_word(block=f"b{i}") for i in range(len(rows))]), held_blocks=set())
+    got = C.fit_temperature(rows, pd.DataFrame([_word(block=f"b{i}") for i in range(len(rows))]), held_blocks=set(),
+                            quarter=3)
     assert got["temperature"] > 1.5 and got["nll"] < got["nll_at_1"]
     p_top = math.exp(C.tempered(rows[0][0], got["temperature"])[0])
     assert p_top == pytest.approx(0.7, abs=0.05)
@@ -515,15 +455,21 @@ def test_a_temperature_on_the_combined_posterior_undoes_overconfidence():
 def test_the_temperature_never_sees_an_answered_or_held_out_row():
     rows = [(np.log(np.array([0.9, 0.1])), 0)] * 2
     with pytest.raises(ValueError, match="answered block"):
-        C.fit_temperature(rows, pd.DataFrame([_word(block="0767"), _word()]), held_blocks={"0767"})
+        C.fit_temperature(rows, pd.DataFrame([_word(block="0767"), _word()]), held_blocks={"0767"}, quarter=3)
     with pytest.raises(ValueError, match="answered block"):
         C.fit_temperature(rows, pd.DataFrame([_word(), _word()]).assign(blocks=[["1000"], ["1000", "0767"]]),
-                          held_blocks={"0767"})
+                          held_blocks={"0767"}, quarter=3)
     with pytest.raises(ValueError, match="held-out quarter"):
         C.fit_temperature(rows, pd.DataFrame([_word(quarter=2), _word(quarter=0, sw=True)]), held_blocks=set(),
                           quarter=2)
     with pytest.raises(ValueError, match="rows"):
-        C.fit_temperature(rows, pd.DataFrame([_word()]), held_blocks=set())
+        C.fit_temperature(rows, pd.DataFrame([_word()]), held_blocks=set(), quarter=3)
+    words = pd.DataFrame([_word(), _word()])
+    with pytest.raises(TypeError, match="quarter"):            # the quarter it will read is required
+        C.fit_temperature(rows, words, held_blocks=set())
+    for bad in (None, 4, -1):
+        with pytest.raises(ValueError, match="one held-out quarter"):
+            C.fit_temperature(rows, words, held_blocks=set(), quarter=bad)
 
 
 def test_a_target_off_the_read_time_hypotheses_is_scored_at_other():
@@ -568,6 +514,14 @@ def test_the_read_recipe_applies_its_own_quarters_tau_w_and_temperature():
         C.read_posterior(pack, "nw", ink, box)
     alone = C.read_posterior(None, "nw", ink, box, ["XYZ", "RH-1"])
     assert alone == pytest.approx(C.posterior(C.ink_logp(reads, 0.2, ["RH-1", "XYZ"]), None, {}))
+    for k in C.BOX_KEYS:                       # a box without its place or kinds: named, not a KeyError deep inside
+        part = {key: v for key, v in box.items() if key != k}
+        for p in (pack, None):
+            with pytest.raises(ValueError, match=f"no '{k}'"):
+                C.read_posterior(p, "ne", ink, part)
+    assert C.read_posterior(pack, "ne", ink, {**box, "year": pack.year}, ["XYZ"]) == pytest.approx(got)
+    with pytest.raises(ValueError, match="1948 map read with the 1980"):
+        C.read_posterior(pack, "ne", ink, {**box, "year": 1948})
 
 
 # --- the pack file ----------------------------------------------------------------------------------------------------
