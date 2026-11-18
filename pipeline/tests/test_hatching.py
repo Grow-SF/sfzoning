@@ -98,20 +98,34 @@ def test_seam_once():
     assert len(keys) == len(wa) + len(wb)
 
 
+def white_rings(ink: np.ndarray) -> list[np.ndarray]:
+    """Every white region the ink encloses, as the line work traces them (blocks_px.geojson): each connected region
+    of paper with its territory into the lines around it (here one px), its outer boundary, page px."""
+    n, lab = cv2.connectedComponents((ink == 0).astype(np.uint8), connectivity=4)
+    rings = []
+    for i in range(1, n):
+        grown = cv2.dilate((lab == i).astype(np.uint8), np.ones((3, 3), np.uint8))
+        cs, _ = cv2.findContours(grown, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        c = max(cs, key=cv2.contourArea).reshape(-1, 2)
+        if len(c) >= 3:
+            rings.append(np.vstack([c, c[:1]]).astype(float))
+    return rings
+
+
 def test_lots_off_the_print_keep_the_outline_out():
-    # a blank block: its printed outline 3 px wide around page px 40-119, traced along its middle; the lots that mark
-    # the block sit k px off the print, so they reach over the outline on two sides
+    # a blank block: its printed outline 3 px wide around page px 39-120, its paper traced as one ring; the lots that
+    # mark the block sit k px off the print, so they reach over the outline on two sides
     shape = (170, 170)
     ink = np.zeros(shape, np.uint8)
     ink[39:121, 39:121] = 1
     ink[42:118, 42:118] = 0
-    ring = np.array([[40, 40], [119, 40], [119, 119], [40, 119], [40, 40]], float)
-    stroke = hatching.stroke_width(ink, [ring])
+    rings = white_rings(ink)
+    stroke = hatching.stroke_width(ink, rings)
     assert stroke == 3
     for k in (4, 8, 16):
         in_blocks = np.zeros(shape, np.uint8)
         in_blocks[40 + k:120 + k, 40 + k:120 + k] = 1
-        inblock = hatching.inblock_mask(in_blocks, [ring], stroke, np.ones(shape, bool))
+        inblock = hatching.inblock_mask(in_blocks, ink, rings, stroke, np.ones(shape, bool))
         seen = 0
         for box in hatching.patch_grid(shape, 12.0):
             f = hatching.measure_patch(ink, inblock, box, hatching.Frame(period=12.0, taper=stroke))
@@ -120,6 +134,49 @@ def test_lots_off_the_print_keep_the_outline_out():
                 assert f["periodicity"] < 0.1, (k, box)
                 assert np.hypot(f["m2_re"], f["m2_im"]) < 0.2, (k, box)
         assert seen
+
+
+@pytest.mark.parametrize("traced", ["every strip", "every other strip"])
+def test_hatched_block_keeps_its_hatch(traced):
+    # a 1R block: outline 3 px wide around page px 39-160, -45 degree hatch 12 px apart inside; the line work traces
+    # each strip of paper between two hatch lines as a ring of its own (and the street round the block as another),
+    # or on the scans only some of them (the rest fail its size and shape tests)
+    shape = (200, 200)
+    ink = np.zeros(shape, np.uint8)
+    ink[39:161, 39:161] = 1
+    ink[42:158, 42:158] = hatch(shape, 12)[42:158, 42:158]
+    rings = white_rings(ink)
+    assert len(rings) > 10
+    stroke = hatching.stroke_width(ink, rings)
+    if traced == "every other strip":
+        rings = rings[::2]
+    on = np.ones(shape, bool)
+    frame = hatching.Frame(period=12.0, taper=stroke, wave_1r=np.pi / 4)
+    for k in (0, 6):                                          # lots on the print, and 6 px off it
+        in_blocks = np.zeros(shape, np.uint8)
+        in_blocks[40 + k:160 + k, 40 + k:160 + k] = 1
+        mask = hatching.inblock_mask(in_blocks, ink, rings, stroke, on)
+        plain = cv2.erode(in_blocks, hatching.disk(stroke)).astype(bool)     # the lots alone, no outline taken out
+        hatched = hatch(shape, 12) > 0
+        outline = (ink > 0) & ~hatched & plain
+        # the outline goes (a px may stay where a hatch line meets it: its end notches the paper's edge)
+        assert (mask & outline).sum() <= 0.02 * outline.sum()
+        inside = plain & hatched & (ink > 0)
+        assert (mask & inside).sum() / inside.sum() > 0.85                   # the hatch stays (the old band: 0)
+        if k == 0:                                                           # lots on the print: all of it inside
+            inner = np.zeros(shape, bool)
+            inner[42 + 2 * stroke:158 - 2 * stroke, 42 + 2 * stroke:158 - 2 * stroke] = True
+            assert (mask[inner] == plain[inner]).all()
+        got, ref = [], []
+        for box in hatching.patch_grid(shape, 12.0):
+            x0, y0, x1, y1 = box
+            if plain[y0:y1, x0:x1].all():
+                got.append(hatching.measure_patch(ink, mask, box, frame))
+                ref.append(hatching.measure_patch(ink, plain, box, frame))
+        assert len(got) > 10
+        for key in ("periodicity", "dir1r_acf", "dir1r_share"):
+            a, b = np.median([g[key] for g in got]), np.median([r[key] for r in ref])
+            assert abs(a - b) < 0.05, (k, key, a, b)
 
 
 def test_turned_sheet_same_grid():

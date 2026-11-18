@@ -24,11 +24,13 @@ Every number is measured on the scans, derived from such a measure, or is a binn
             1R swatch (`fallback_period`).
   patches   squares of side 2 x period (two periods: the least that shows a period) at a stride of one period
             (`patch_grid`), so every px away from the page's edge lies in four.
-  stroke    the printed block outline's width (`stroke_width`, on the outlines the line work traced: blocks_px.geojson).
-            The in-block mask (`inblock_mask`) leaves out those traced outlines widened by it on each side, which
-            keeps the outline's ink out of the measure however far the solver's lots sit from the print (the lots'
-            own mask, which is also eroded by it, does not: they sit up to tens of px off it).  It is also the width
-            of the taper at a region's edge (the spike's TAPER_PX), so the cut edge adds no lines.
+  stroke    the printed line's width (`stroke_width`, across the edges of the white regions the line work traced:
+            blocks_px.geojson).  The in-block mask (`inblock_mask`) leaves out the band within one stroke of the
+            printed block outlines, found on the scan (`outline_mask`: the outer edge of the blocks' paper, the
+            regions of paper lying mostly on the solver's blocks, joined across one stroke; the lines inside a block,
+            its hatch, stay), so the outline's ink stays out of the measure however far the solver's lots sit from the
+            print (the lots' own mask, which is also eroded by it, does not: they sit up to tens of px off it).  It is
+            also the width of the taper at a region's edge (the spike's TAPER_PX), so the cut edge adds no lines.
   band      the hatch band runs from the legend's finest period / 2 (`legend_scale`: the finest hatch the map uses,
             measured on the hatched swatches of the legend, `LEGENDS_FILE`, on sheet 20180102094142210; in px of
             that sheet, the same on every sheet) to 2 x period.
@@ -97,10 +99,11 @@ N_ORI = 12                                # orientation bins of 15 degrees
 WHITE_R = (1, 2, 3, 5)                    # the morphology's scales (disk radii, px)
 BLACK_R = (1, 2, 3)
 LATTICE = page.STEP                       # page px between the points where a placement is evaluated
-# A patch's spectrum is padded to 4 x its side: 2 x so its autocorrelation does not wrap round, and 2 x again so its
-# frequency step is half the window's own resolution (1 / (2 side)), so whether its strongest period is at most half
-# the side (`spectrum`) is decided by the ink, not by where the bins fall: at 2 x, a 1R hatch a little finer than the
-# limit often landed on the bin beyond it and its periodicity was read at a harmonic.
+# A patch's spectrum is padded to PAD x its side (at least 2 x, so its autocorrelation does not wrap round).  PAD is
+# where the measure has converged: at 2 x a 1R hatch a little finer than the half-side limit (`spectrum`) often landed
+# on the bin beyond it and its periodicity was read at a harmonic; the review measured the periodicity AUC (1R against
+# 2R, a sample of one sheet's patches) at 0.806, 0.800 and 0.803 for PAD 4, 8 and 16, and the 90th percentile of
+# |periodicity(PAD 4) - periodicity(PAD 8)| at 0.016.
 PAD = 4
 INK_BELOW = grid.INK_BELOW
 
@@ -804,23 +807,65 @@ def legend_scale(src: Sources, frames: dict) -> dict:
             "boxes": leg["swatches"]}
 
 
-def outline_mask(shape: tuple[int, int], rings: list[np.ndarray], stroke: int) -> np.ndarray:
-    """The printed block outlines' ink: the traced outlines (`rings`, page px) drawn one px wide and widened by the
-    measured stroke on each side, so the whole stroke is inside wherever along it the tracing ran."""
-    m = np.zeros(shape, np.uint8)
-    pts = [np.round(np.asarray(r, float)[:, :2] * 16).astype(np.int32) for r in rings
-           if len(r) >= 2 and np.isfinite(np.asarray(r, float)[:, :2]).all()]
-    if pts:
-        cv2.polylines(m, pts, True, 1, 1, lineType=cv2.LINE_8, shift=4)
-    return cv2.dilate(m, disk(int(stroke))).astype(bool)
+def _ring_points(r) -> np.ndarray | None:
+    r = np.asarray(r, float)[:, :2]
+    if len(r) < 3 or not np.isfinite(r).all():
+        return None
+    return np.round(r * 16).astype(np.int32)
 
 
-def inblock_mask(in_blocks: np.ndarray, rings: list[np.ndarray], stroke: int, crop: np.ndarray) -> np.ndarray:
+def block_paper(ink: np.ndarray, rings: list[np.ndarray], in_blocks: np.ndarray) -> np.ndarray:
+    """The paper inside the printed blocks: each connected region of paper on the scan (4-neighbours: a blank block,
+    one strip between two hatch lines, one cell of a cross-hatch, a street) that lies mostly on the solver's blocks
+    (`in_blocks`), and each white region the line work traced (`rings`, page px) that does.  The traced regions mend
+    blocks whose paper runs into the street through a gap in their outline (the line work closes such gaps); the scan's
+    own regions hold the strips it left untraced.  A street lies mostly off the blocks, however far the lots sit from
+    the print, unless they cover more than half of it."""
+    on = np.asarray(in_blocks, bool)
+    n, lab = cv2.connectedComponents((ink == 0).astype(np.uint8), connectivity=4)
+    total = np.bincount(lab.ravel(), minlength=n)
+    inside = np.bincount(lab[on], minlength=n)
+    owned = inside > total - inside
+    owned[0] = False                                         # label 0 is the ink
+    out = owned[lab]
+    h, w = ink.shape
+    for r in rings:
+        pts = _ring_points(r)
+        if pts is None:
+            continue
+        x0, y0 = np.maximum(pts.min(0) // 16 - 1, 0)
+        x1, y1 = np.minimum(pts.max(0) // 16 + 2, [w, h])
+        if x1 <= x0 or y1 <= y0:
+            continue
+        m = np.zeros((y1 - y0, x1 - x0), np.uint8)
+        cv2.fillPoly(m, [pts - np.array([x0, y0]) * 16], 1, lineType=cv2.LINE_8, shift=4)
+        m = m > 0
+        k = int(on[y0:y1, x0:x1][m].sum())
+        if k > int(m.sum()) - k:
+            out[y0:y1, x0:x1] |= m
+    return out
+
+
+def outline_mask(ink: np.ndarray, rings: list[np.ndarray], stroke: int, in_blocks: np.ndarray) -> np.ndarray:
+    """The printed block outlines' ink, and only that: the band within one stroke of the outer edge of the blocks'
+    paper (`block_paper`) joined across one line of ink (closed by one stroke, so the strips on either side of a
+    hatch line, or the cells of a cross-hatch, make one block) with its holes filled.  The lines inside a block stay.
+    Two blocks don't join across a street: it is at least two outlines and some paper wide, more than one closing
+    bridges."""
+    s = int(stroke)
+    paper = block_paper(ink, rings, in_blocks).astype(np.uint8)
+    joined = cv2.morphologyEx(paper, cv2.MORPH_CLOSE, disk(s))
+    filled = ndimage.binary_fill_holes(joined > 0).astype(np.uint8)
+    return (cv2.dilate(filled, disk(s)) > 0) & ~(cv2.erode(filled, disk(s)) > 0)
+
+
+def inblock_mask(in_blocks: np.ndarray, ink: np.ndarray, rings: list[np.ndarray], stroke: int,
+                 crop: np.ndarray) -> np.ndarray:
     """The page px a patch measures: in a block by the solver's lots (`in_blocks`, eroded by the stroke), inside the
-    neatline (`crop`) and off the printed outlines the line work traced on the scan (`outline_mask`).  The outlines
-    are measured on the scan itself, so they stay out however far the lots sit from the print."""
+    neatline (`crop`) and off the printed block outlines found on the scan itself (`outline_mask`), so the outlines
+    stay out however far the lots sit from the print, and a block's hatch stays in."""
     eroded = cv2.erode(np.asarray(in_blocks, np.uint8), disk(int(stroke))).astype(bool)
-    return eroded & np.asarray(crop, bool) & ~outline_mask(np.asarray(crop).shape, rings, stroke)
+    return eroded & np.asarray(crop, bool) & ~outline_mask(ink, rings, stroke, in_blocks)
 
 
 def _setup(src: Sources, sheet: str, quad, lots: np.ndarray, blocks: np.ndarray, offset) -> dict:
@@ -833,7 +878,7 @@ def _setup(src: Sources, sheet: str, quad, lots: np.ndarray, blocks: np.ndarray,
     lot_px, in_blocks = page_values(pw, ink.shape, [(lots, -1), (blocks.astype(np.uint8), 0)], offset)
     rings = printed_rings(src, sheet)
     stroke = stroke_width(ink, rings)
-    inblock = inblock_mask(in_blocks, rings, stroke, crop)
+    inblock = inblock_mask(in_blocks, ink, rings, stroke, crop)
     return {"ink": ink, "tr": tr, "crop": crop, "pw": pw, "lot_px": lot_px, "stroke": stroke, "inblock": inblock,
             "turn": paper_turn(quad)}
 
