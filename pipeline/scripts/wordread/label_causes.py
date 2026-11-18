@@ -20,7 +20,7 @@ Each label also gets the largest ink share in its box of any Terra word it does 
 
     uv run python scripts/wordread/label_causes.py --run crude-map-all-s0 [--examples 5]
 
-Writes experiments/wordread/causes/: causes.json (counts per quarter and in total, the run's and today's),
+Writes experiments/wordread/causes/: causes-<run>.json (counts per quarter and in total, the run's and today's),
 labels-<run>.parquet and labels-today.parquet (each wrong label), and per cause up to `examples` crops of the run's
 wrong labels (ink grey, Terra's words blue and the code word green, the box red, the label's point a cross) with
 index.html."""
@@ -286,7 +286,7 @@ def main() -> None:
     moves = {f"{a_} -> {b_}": int(v) for (a_, b_), v in both.groupby(["cause_today", "cause_run"]).size().items()}
     res = {"run": a.run, "note": __doc__.split("\n\n")[1], "run_causes": counts(mine, n_labels),
            "today_causes": counts(theirs, n_labels), "today_to_run": moves}
-    (OUT / "causes.json").write_text(json.dumps(res, indent=1, default=float) + "\n")
+    (OUT / f"causes-{a.run}.json").write_text(json.dumps(res, indent=1, default=float) + "\n")
     page = write_examples(mine, terra, ink_fn, a.examples, OUT / a.run, f"Why labels are wrong: {a.run}",
                          res["run_causes"])
     write_examples(theirs, terra, ink_fn, a.examples, OUT / "today", "Why labels are wrong: today's boxes",

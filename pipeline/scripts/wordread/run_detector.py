@@ -971,11 +971,86 @@ def aff_counts(run, quarters, blocks, sheets=paths.SHEETS, sheet_fn=load_sheet, 
     return n
 
 
+# --- crude-kind: crude-map's components split where the kind head's MAP kind changes --------------------------------
+
+KIND_NOTE = ("crude-kind: the px the core head gives even odds or better (P(core) > 1/2) joined to their 8 neighbours "
+             "only when both have the same MAP kind (the argmax of the per-ink head's kinds: zoning code, block "
+             "number, street name, other; with the nearest-ink variant, each px takes the MAP kind of its nearest "
+             "ink px, an exact Euclidean distance transform); each word a connected component of that graph, its box "
+             "the smallest rectangle along its px' core-weighted mean axis; no tags, no votes, no threshold")
+KIND_MODES = ("map", "nearest-ink")
+
+
+def kind_map(kind_p: np.ndarray, ink: np.ndarray, mode: str = "map") -> np.ndarray:
+    """Each px's MAP kind (uint8 (h, w), `data.KINDS`' order: the argmax of `kind_p` (4, h, w), the softmax of the
+    per-ink head's kind channels 1-4); with `mode` "nearest-ink", each px's kind is that of the ink px nearest it (exact
+    Euclidean distance; ties as `scipy.ndimage.distance_transform_edt` breaks them), the ink's own kept."""
+    from scipy import ndimage
+    if mode not in KIND_MODES:
+        raise ValueError(f"kind mode is one of {', '.join(KIND_MODES)}, not {mode!r}")
+    k = np.argmax(kind_p, axis=0).astype(np.uint8)
+    if mode == "map" or not ink.any():
+        return k
+    _, (iy, ix) = ndimage.distance_transform_edt(~ink, return_indices=True)
+    return k[iy, ix]
+
+
+def kind_labels(on: np.ndarray, kinds: np.ndarray) -> np.ndarray:
+    """crude-kind's words: the connected components (8 px around) of the `on` px joined only to neighbours of the same
+    kind (`kinds`), a label image (int32, 0 off them): each kind's own components, numbered kind by kind."""
+    import cv2
+    out = np.zeros(on.shape, np.int32)
+    nxt = 0
+    for k in np.unique(kinds[on]):
+        n, lab = cv2.connectedComponents((on & (kinds == k)).astype(np.uint8), connectivity=8)
+        sel = lab > 0
+        out[sel] = lab[sel] + nxt
+        nxt += n - 1
+    return out
+
+
+def kind_check(name: str = "a", quarter: str = "ne", seed: int = 0) -> dict:
+    """The kind head's MAP kind against Terra's on the held-out quarter's px inside Terra's words (a word's px as
+    `data._paint` fills its rectangle, the later word's where two meet): on the ink px, on the core px that are not
+    ink (P(core) > 1/2), and each mode of `kind_map`; per kind of Terra word too.  Writes runs/kind-check-<run>.json."""
+    from sfzmaps.solver.textnet import data as D
+    q = paths.QUARTERS.index(quarter)
+    run = run_dir(name, quarter, seed)
+    tally = {m: {w: np.zeros((4, 4), np.int64) for w in ("ink", "core_not_ink")} for m in KIND_MODES}
+    for sheet in paths.SHEETS:
+        sd = load_sheet(sheet)
+        inq = reader_stage.page_quarters(sd) == q
+        if not inq.any():
+            continue
+        word = D._words(sd, 0, 0, sd.height, sd.width)
+        terra = np.concatenate([[255], sd.kinds]).astype(np.uint8)[word]
+        o = outputs(run, sheet)
+        ink = data.page_ink(sd)
+        at = {"ink": inq & (word > 0) & ink, "core_not_ink": inq & (word > 0) & ~ink & (o.core > 0)}
+        for m in KIND_MODES:
+            k = kind_map(o.kind_p, ink, m)
+            for w, sel in at.items():
+                np.add.at(tally[m][w], (terra[sel].astype(int), k[sel].astype(int)), 1)
+    names = list(D.KINDS)
+    out = {"run": run.name, "quarter": quarter}
+    for m in KIND_MODES:
+        for w, c in tally[m].items():
+            out[f"{m}/{w}"] = {"px": int(c.sum()), "agree": round(float(np.trace(c) / max(c.sum(), 1)), 4),
+                               "by_terra_kind": {names[i]: {"px": int(c[i].sum()),
+                                                            "agree": round(float(c[i, i] / max(c[i].sum(), 1)), 4)}
+                                                 for i in range(4)},
+                               "confusion_rows_terra_cols_map": c.tolist()}
+    (RUNS / f"kind-check-{run.name}.json").write_text(json.dumps(out, indent=1) + "\n")
+    return out
+
+
 def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outputs, placer=wordboxes_placer,
-                    sigma: float | None = None, aff: bool = False, aff_prior: float = 0.0):
+                    sigma: float | None = None, aff: bool = False, aff_prior: float = 0.0,
+                    kind: str | None = None):
     """One page's crude-map words in quarter `q` (CRUDE_NOTE; with `sigma`, the tag bandwidth, crude-tags'
     (TAGS_NOTE); with `aff`, crude-aff's (AFF_NOTE), the affinity logits plus `aff_prior` (the class prior's log odds,
-    `aff_counts`)), placed as `wordboxes` places its boxes; the boxes whose map point is in the quarter kept.  The
+    `aff_counts`); with `kind` (a `kind_map` mode), crude-kind's (KIND_NOTE)), placed as `wordboxes` places its
+    boxes; the boxes whose map point is in the quarter kept.  The
     table (wordboxes.COLUMNS) and its counts."""
     import cv2
     import pandas as pd
@@ -991,6 +1066,8 @@ def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outp
     if aff:
         same = getattr(o, AFF_FIELD)
         lab = aff_labels(on, same[0] + aff_prior, same[1] + aff_prior)
+    elif kind is not None:
+        lab = kind_labels(on, kind_map(o.kind_p, ink, kind))
     else:
         _, lab = cv2.connectedComponents(on.astype(np.uint8), connectivity=8)
     if sigma is not None:
@@ -1042,17 +1119,18 @@ def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outp
 def _crude_job(args):
     import cv2
     cv2.setNumThreads(1)
-    run, name, q, sigma, aff, aff_prior = args
+    run, name, q, sigma, aff, aff_prior, *kind = args
     t0 = time.perf_counter()
     t, counts = crude_map_words(run, name, q, _SHARED["sheet_fn"], _SHARED["outputs_fn"], _SHARED["placer"],
-                                sigma, aff, aff_prior)
+                                sigma, aff, aff_prior, kind[0] if kind else None)
     counts["seconds"] = round(time.perf_counter() - t0, 1)
     log.info("crude %s %s: %s", Path(run).name, name, counts)
     return name, t, counts
 
 
 def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WORKERS, tags: bool = False,
-          aff: bool = False, against: str | None = None, prior: str | None = None, read_max: int | None = None) -> dict:
+          aff: bool = False, against: str | None = None, prior: str | None = None, read_max: int | None = None,
+          kind: str | None = None) -> dict:
     """The crude-map chain (CRUDE_NOTE; crude-tags' with `tags`, crude-aff's with `aff`) on the quarter's every sheet
     from `name`'s held-out detector: words, placed, read by the current fold readers, and against today's
     (`vs_today`); with `against` (a run folder's name) against that run's boxes too (`vs_run`).  crude-aff with
@@ -1060,15 +1138,16 @@ def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WO
     quarters (`aff_counts`: every taught pair, or those of two core px).  `read_max`: no read nor score when the
     boxes number more (the boxes and their counts kept).  Writes runs/crude-<map|tags|aff>[-prior-<prior>]-<quarter>-
     s<seed>/."""
-    if tags and aff:
-        raise ValueError("crude: tags or aff, not both")
+    if sum((tags, aff, kind is not None)) > 1:
+        raise ValueError("crude: one of tags, aff and kind")
     import pandas as pd
     from sfzmaps.solver import lots, page, wordboxes
     quarters = paths.QUARTERS if quarter == "all" else (quarter,)
     srcs = {paths.QUARTERS.index(qn): run_dir(name, qn, seed) for qn in quarters}
-    kind = "tags" if tags else (f"aff-prior-{prior}" if prior else "aff") if aff else "map"
+    what = ("tags" if tags else (f"aff-prior-{prior}" if prior else "aff") if aff
+            else f"kind-{kind}" if kind is not None else "map")
     usual = "aff" if aff else "a"                         # the arm each kind was first run from: no suffix
-    out = RUNS / f"crude-{kind}{'' if name == usual else '-from-' + name}-{quarter}-s{seed}"
+    out = RUNS / f"crude-{what}{'' if name == usual else '-from-' + name}-{quarter}-s{seed}"
     priors = {}
     if aff and prior:
         blocks = reader_stage.load_block_area(reader_stage.held_blocks())
@@ -1084,14 +1163,15 @@ def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WO
     _SHARED["lots"], _SHARED["mapped"] = lots.load_lots(), page.load_sheets() > 0
     _SHARED.update(sheet_fn=load_sheet, outputs_fn=outputs, placer=wordboxes_placer)
     shift = {q: (v["log_odds_core"] if prior == "core" else v["log_odds"]) for q, v in priors.items()}
-    got = _pool_map(_crude_job, [(src, s, q, sigmas[q]["sigma"] if tags else None, aff, shift.get(q, 0.0))
+    got = _pool_map(_crude_job, [(src, s, q, sigmas[q]["sigma"] if tags else None, aff, shift.get(q, 0.0), kind)
                                  for q, src in srcs.items() for s in paths.SHEETS], workers)
     tables = [t for _, t, _ in got if len(t)]
     boxes = pd.concat(tables, ignore_index=True).sort_values(["sheet", "i"], kind="stable").reset_index(drop=True)
     (out / "boxes").mkdir(parents=True, exist_ok=True)
     boxes[wordboxes.COLUMNS].to_parquet(out / "boxes" / "boxes.parquet", index=False)
     (out / "boxes" / "summary.json").write_text(json.dumps({
-        "note": TAGS_NOTE if tags else AFF_NOTE if aff else CRUDE_NOTE,
+        "note": TAGS_NOTE if tags else AFF_NOTE if aff else KIND_NOTE if kind is not None else CRUDE_NOTE,
+        "kind_mode": kind,
         "detectors": {paths.QUARTERS[q]: r.name for q, r in srcs.items()},
         "tag_spread": {paths.QUARTERS[q]: v for q, v in sigmas.items()},
         "affinity_pairs": {paths.QUARTERS[q]: v for q, v in priors.items()}, "prior": prior, "boxes": len(boxes),
@@ -1164,25 +1244,27 @@ def words_in(component: np.ndarray, words: np.ndarray) -> list[int]:
     return out
 
 
-def spot(run: Path, quarter: str, against: tuple = ()) -> dict:
-    """Code spotting (SPOT_NOTE) on the quarter's answered code labels from the run's word outputs: the headline, the
-    paired difference against today's boxes and reads and against each of `against` (run folders' names, their boxes
-    and reads), the wrong labels by cause (no code at the point; a wrong code in a component holding at most one of
-    Terra's words; a wrong code in a component holding two or more, merged) and the right ones in merged components.
-    Writes `run`/spot.json and spot_labels.parquet."""
+def spot(run, quarter: str | None, against: tuple = (), out: Path | None = None) -> dict:
+    """Code spotting (SPOT_NOTE) on the quarter's answered code labels from the run's word outputs (`run` a folder;
+    or {quarter number: folder}, each quarter's labels from its own run, `quarter` None): the headline, the paired
+    difference against today's boxes and reads and against each of `against` (run folders' names, their boxes and
+    reads; by quarter too with several quarters), the wrong labels by cause (no code at the point; a wrong code in a
+    component holding at most one of Terra's words; a wrong code in a component holding two or more, merged) and the
+    right ones in merged components.  Writes spot.json and spot_labels.parquet in `out` (`run` when None)."""
     import pandas as pd
     from sfzmaps.solver import wordboxes
     from sfzmaps.solver.textread import store
     from sfzmaps.solver.wordread import codes, measures
-    q = paths.QUARTERS.index(quarter)
+    runs = dict(run) if isinstance(run, dict) else {paths.QUARTERS.index(quarter): Path(run)}
+    out_dir = Path(out or run)
     names = codes.classes()
     answers = measures.answers_from_store(store.READ_DIR)
-    answers = answers[answers["quarter"] == q].reset_index(drop=True)
+    answers = answers[answers["quarter"].isin(list(runs))].reset_index(drop=True)
     rows = []
-    for sheet, a in answers.groupby("sheet", sort=True):
-        o = outputs(run, sheet)
+    for (sheet, q), a in answers.groupby(["sheet", "quarter"], sort=True):
+        o = outputs(runs[q], sheet)
         if o.code is None:
-            raise ValueError(f"{Path(run).name}: its word outputs hold no code (heads words_code)")
+            raise ValueError(f"{Path(runs[q]).name}: its word outputs hold no code (heads words_code)")
         sd = load_sheet(sheet)
         cache: dict = {}
         for k, lab in a.iterrows():
@@ -1191,7 +1273,7 @@ def spot(run: Path, quarter: str, against: tuple = ()) -> dict:
             inside = words_in(comp, sd.words)
             got = names[c] if codes.FIRST_CODE <= c < len(names) else None
             rows.append({"label": int(k), "sheet": sheet, "point_x": lab["point_x"], "point_y": lab["point_y"],
-                         "truth": lab["truth"], "terra": lab["terra"], "block": lab["block"], "quarter": q,
+                         "truth": lab["truth"], "terra": lab["terra"], "block": lab["block"], "quarter": int(q),
                          "class": c, "code": got, "p": float(o.code_p[int(np.floor(lab["point_y"])),
                                                                      int(np.floor(lab["point_x"]))]),
                          "component_px": int(comp.sum()) if comp is not None else 0,
@@ -1204,7 +1286,7 @@ def spot(run: Path, quarter: str, against: tuple = ()) -> dict:
     mine = pd.DataFrame({"label": t["label"], "row": -1, "right": t["right"],
                          "block": [b if isinstance(b, str) and b else f"label{k}" for k, b in zip(t["label"],
                                                                                                    t["block"])],
-                         "quarter": q})
+                         "quarter": t["quarter"]})
     today = wordboxes.load_boxes().reset_index(drop=True)
     today["row"] = np.arange(len(today))
     today = today.set_index("row", drop=False)
@@ -1212,20 +1294,32 @@ def spot(run: Path, quarter: str, against: tuple = ()) -> dict:
     for other in against:
         r = RUNS / other
         theirs = measures.answers_from_store(r / "read")
-        theirs = theirs[theirs["quarter"] == q].reset_index(drop=True)
+        theirs = theirs[theirs["quarter"].isin(list(runs))].reset_index(drop=True)
         cols = ["sheet", "point_x", "point_y", "truth"]
         if not theirs[cols].equals(answers[cols]):
             raise ValueError(f"{other}: not the same answered labels in the same order")
         sides[other] = measures.label_right(run_boxes(r), measures.reads_from_store(r / "read"), answers)
-    out = {"note": SPOT_NOTE, "run": Path(run).name, "quarter": quarter, "labels": len(t),
+    out = {"note": SPOT_NOTE, "runs": {paths.QUARTERS[q]: Path(r).name for q, r in runs.items()},
+           "quarter": quarter or "all", "labels": len(t),
            "right": int(t["right"].sum()), "share": round(float(t["right"].mean()), 4),
            "ci": measures.cluster_interval(mine["right"].to_numpy(float), mine["block"].to_numpy(str)),
            "causes": {k: int(v) for k, v in t["cause"].value_counts().items()},
            "others": {k: {"right": int(d["right"].sum()), "share": round(float(d["right"].mean()), 4)}
                       for k, d in sides.items()},
            "paired_minus": {k: measures.paired_labels(mine, d) for k, d in sides.items()}}
-    t.to_parquet(Path(run) / "spot_labels.parquet", index=False)
-    (Path(run) / "spot.json").write_text(json.dumps(out, indent=1, default=float) + "\n")
+    if len(runs) > 1:
+        out["by_quarter"] = {
+            paths.QUARTERS[q]: {"labels": int((t["quarter"] == q).sum()), "right": int(t.loc[t["quarter"] == q,
+                                                                                            "right"].sum()),
+                                "causes": {k: int(v) for k, v in t.loc[t["quarter"] == q, "cause"].value_counts()
+                                           .items()},
+                                **{f"paired_minus_{k}": measures.paired_labels(
+                                    mine[mine["quarter"] == q].reset_index(drop=True),
+                                    d[d["quarter"] == q].reset_index(drop=True)) for k, d in sides.items()}}
+            for q in runs}
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t.to_parquet(out_dir / "spot_labels.parquet", index=False)
+    (out_dir / "spot.json").write_text(json.dumps(out, indent=1, default=float) + "\n")
     return out
 
 
@@ -1252,6 +1346,159 @@ def code_counts(quarter: str) -> dict:
             "all_words": {names[k]: int(allw[k]) for k in range(len(names))}}
 
 
+# --- the crude-kind review page: three box sets at one zoom -----------------------------------------------------------
+
+KIND_STROKE = {"zoning code": "#0b62d6", "block number": "#e07b00", "street name": "#008b8b", "other": "#8c564b"}
+SETS = (("kind", "crude-kind"), ("map", "crude-map"), ("today", "today"))
+
+
+def split_kinds(run, sheet: str, q: int, mode: str = "map") -> list[str]:
+    """The kind crude-kind gave each of a page's words in quarter `q` (by `i`, the order `crude_map_words` numbers
+    them: by label), `data.KINDS`' names."""
+    sd = load_sheet(sheet)
+    o = outputs(run, sheet)
+    on = (reader_stage.page_quarters(sd) == q) & (o.core > 0)
+    kinds = kind_map(o.kind_p, data.page_ink(sd), mode)
+    flat = kind_labels(on, kinds).ravel()
+    sel = flat > 0
+    _, first = np.unique(flat[sel], return_index=True)
+    names = list(data.KINDS)
+    return [names[int(k)] for k in kinds.ravel()[sel][first]]
+
+
+def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "crude-kind-map-all-s0",
+                    map_run: str = "crude-map-all-s0", page_name: str = "crude-kind") -> Path:
+    """The review page of crude-kind's boxes on `sheet` (every quarter from its own a-*-s0 detector and fold reader),
+    the outlines coloured by the kind the split gave each word, the boxes read as no text faint; buttons flip the
+    overlay (and what a tap tells) to crude-map's boxes or today's at the same zoom.  One image under all three (the
+    ink, red where the word-core chance is 0.5 or more); the panels are crude-kind's against today's."""
+    import html as H
+    from sfzmaps.solver import grid, wordboxes
+    from sfzmaps.solver.textread import store
+    from sfzmaps.solver.wordread import measures, review
+    root = review.experiments_dir()
+    terra = review.terra_on_sheet(sheet)
+    sd = load_sheet(sheet)
+    quarters = reader_stage.page_quarters(sd)
+    runs_ = {k: run_dir("a", qn, 0) for k, qn in enumerate(paths.QUARTERS)}
+    core = np.zeros(quarters.shape, np.uint8)
+    for k, run in runs_.items():
+        mine = quarters == k
+        o = outputs(run, sheet)
+        core[mine] = np.round(255 / (1 + np.exp(-o.core[mine].astype(np.float64)))).astype(np.uint8)
+        del o
+    ink = data.load_page(sheet) < grid.INK_BELOW
+    on_map = review.on_the_map(sheet, terra[measures.C_COLS].to_numpy(float).reshape(-1, 4, 2).mean(1))
+    kind_dir, map_dir = RUNS / kind_run, RUNS / map_run
+    today = wordboxes.load_boxes().reset_index(drop=True)
+    today["row"] = np.arange(len(today))
+    today = today.set_index("row", drop=False)
+    sets = {"kind": (run_boxes(kind_dir), review.reads_for_page(kind_dir / "read")),
+            "map": (run_boxes(map_dir), review.reads_for_page(map_dir / "read")),
+            "today": (today, review.reads_for_page(store.READ_DIR))}
+    sets = {k: (b[b["sheet"] == sheet], r) for k, (b, r) in sets.items()}
+    missed = sorted(set().union(*(review.missed_words(b, terra, review.MATCH_IOU) for b, _ in sets.values())))
+    terra_reads = review.terra_box_reads(sheet, terra, np.array(missed, int), store.TRAIN_DIR)
+    answers = measures.answers_from_store(kind_dir / "read")
+    answers = answers[answers["sheet"] == sheet].reset_index(drop=True)
+    before = json.loads((root / "baseline" / "numbers.json").read_text())
+    forms = review.load_forms()
+    lines = [KIND_NOTE + ".",
+             "Red ink: the word-core chance 0.5 or more, each quarter from its own held-out detector (arm a, seed 0: "
+             + ", ".join(f"{paths.QUARTERS[k].upper()} {r.name}" for k, r in runs_.items()) + ").",
+             "Readings: the current fold readers (data/solver/text-train) and their 0/180 classifiers; the missed "
+             "words read at Terra's box by the same readers.  Today's boxes: data/solver/boxes, read as the store "
+             "holds them.",
+             "The panels: crude-kind against today's boxes on this sheet (review/baseline)."]
+    ds = {}
+    for key, title in SETS:
+        b, r = sets[key]
+        ds[key] = review.page_data(sheet, b, r, terra, core, before, ink=ink,
+                                   levels={qn: review.TEXT_CHANCE for qn in paths.QUARTERS}, on_map=on_map,
+                                   terra_reads=terra_reads, answers=answers, forms=forms, models=lines,
+                                   run=f"{title} (each quarter from its own held-out detector)",
+                                   comps=review.box_components(b, core, ink), reason_text=WORD_REASONS)
+        ds[key]["faint_none"] = True
+    # crude-kind's outlines by the kind its split gave each word
+    kb = sets["kind"][0]
+    given = {}
+    for k, run in runs_.items():
+        names = split_kinds(run, sheet, k)
+        for row, i in kb.loc[kb["quarter"] == k, "i"].items():
+            given[int(row)] = names[int(i)]
+    for rec in ds["kind"]["boxes"]:
+        rec["split_kind"] = given.get(int(rec["row"]))
+        if rec["split_kind"]:
+            rec["kind"] = {"zoning code": "zoning", "block number": "block", "street name": "street",
+                           "other": "other"}[rec["split_kind"]]
+    ds["kind"]["stroke_by_kind"] = KIND_STROKE
+    plain = review.palette_image(ink, review.text_ink_of(ink, core), [], [])
+    ds["kind"]["pixels"] = plain
+    out = root / page_name
+    page = review.render(ds["kind"], out / "review.html")
+    text = page.read_text(encoding="utf-8")
+    # the other two overlays, hidden, and their boxes for the taps
+    extra = "".join(review._overlay(ds[k], f"ov-{k}").replace(f'<svg id="ov-{k}"', f'<svg id="ov-{k}" '
+                                                              'style="display:none"', 1) for k in ("map", "today"))
+    anchor = '</svg></div><div id="info"></div>'
+    assert text.count(anchor) == 1
+    text = text.replace(anchor, "</svg>" + extra + '</div><div id="info"></div>', 1)
+    hook = "const D = JSON.parse(document.getElementById('data').textContent);"
+    assert text.count(hook) == 1
+    text = text.replace(hook, hook + " window.__reviewD = D;", 1)
+    sets_json = json.dumps({k: {"boxes": ds[k]["boxes"], "missed": ds[k]["missed"]} for k, _ in SETS},
+                           ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    full = {"kind": json.loads((kind_dir / "vs_today.json").read_text()),
+            "map": json.loads((map_dir / "vs_today.json").read_text())}
+    vs_map = json.loads((kind_dir / f"vs_{map_run}.json").read_text())
+    rows = []
+    for key, title in SETS:
+        n = ds[key]["numbers"]
+        bx, hd = n["boxes"]["0.5"], n.get("headline", {})
+        whole = (full["kind"]["headline"] if key == "kind" else full["map"]["headline"] if key == "map"
+                 else full["kind"]["today_headline"])
+        rows.append(f"<tr><th>{title}</th><td>{hd.get('right', '–')}/{hd.get('n', '–')}</td>"
+                    f"<td>{whole['right']}/{whole['n']}</td><td>{bx['ours']:,}</td><td>{bx['matched']:,}</td>"
+                    f"<td>{bx['missed']:,}</td><td>{bx['missed_reasons'].get('merged_with_word', 0):,}</td>"
+                    f"<td>{bx['ours_unmatched_none']:,}</td></tr>")
+    pk, pm = full["kind"]["paired_run_minus_today"], vs_map["paired_run_minus_other"]
+    legend = "".join(f'<span style="display:inline-block;margin-right:12px"><i style="display:inline-block;'
+                     f'width:18px;height:3px;background:{c};vertical-align:middle;margin-right:4px"></i>{H.escape(k)}'
+                     f"</span>" for k, c in KIND_STROKE.items())
+    banner = (
+        '<p class="sub" style="color:var(--text);font-weight:600">' + H.escape(KIND_NOTE) + ".</p>"
+        '<p class="sub"><b>Box outlines (crude-kind):</b> coloured by the kind the split gave each word: ' + legend
+        + " Solid: matched to a Terra word; dashed: read as text, no Terra word; faint grey: fragments the reader "
+        "calls no text.  The buttons above the map flip the boxes (and what a tap tells) to crude-map's or today's at "
+        "the same zoom; the image under them is one (red: ink whose word-core chance is 0.5 or more).</p>"
+        '<table class="sub" style="border-collapse:collapse;margin:6px 0"><tr><th></th><th>labels right, this '
+        "sheet</th><th>labels right, all 699</th><th>boxes</th><th>matched (IoU 0.5)</th><th>missed</th>"
+        "<th>merged with a word</th><th>read as no text</th></tr>" + "".join(rows) + "</table>"
+        f'<p class="sub">All 699 labels, paired by whole blocks: crude-kind minus today {pk["diff"]:+.3f} '
+        f'[{pk["lo"]:+.3f}, {pk["hi"]:+.3f}]; minus crude-map {pm["diff"]:+.3f} '
+        f'[{pm["lo"]:+.3f}, {pm["hi"]:+.3f}].</p>')
+    text = text.replace('<div class="wrap">', '<div class="wrap">' + banner, 1)
+    buttons = ('<span class="hint" style="margin-left:8px">Boxes:</span>'
+               + "".join(f'<button class="setb" data-set="{k}" aria-pressed="{str(k == "kind").lower()}"'
+                         f'{" style=" + chr(34) + "font-weight:700" + chr(34) if k == "kind" else ""}>{t}</button>'
+                         for k, t in SETS))
+    bar = '<button id="zfit">Fit</button>'
+    assert text.count(bar) == 1
+    text = text.replace(bar, bar + buttons, 1)
+    toggle = ("<script>(function(){const S=JSON.parse(document.getElementById('sets').textContent);"
+              "const ids={kind:'ov',map:'ov-map',today:'ov-today'};"
+              "document.querySelectorAll('.setb').forEach(b=>b.onclick=()=>{const k=b.dataset.set;"
+              "Object.entries(ids).forEach(([n,i])=>{document.getElementById(i).style.display=n===k?'':'none';});"
+              "window.__reviewD.boxes=S[k].boxes;window.__reviewD.missed=S[k].missed;"
+              "document.getElementById('info').classList.remove('on');"
+              "document.querySelectorAll('.setb').forEach(x=>{const on=x===b;x.setAttribute('aria-pressed',on);"
+              "x.style.fontWeight=on?'700':'';});});})();</script>\n")
+    text = text.rstrip("\n") + "\n" + f'<script type="application/json" id="sets">{sets_json}</script>\n' + toggle
+    page.write_text(text, encoding="utf-8")
+    (out / "numbers.json").write_text(json.dumps({k: ds[k]["numbers"] for k, _ in SETS}, indent=1) + "\n")
+    return page
+
+
 # --- the command line ------------------------------------------------------------------------------------------------
 
 def main() -> None:
@@ -1265,7 +1512,7 @@ def main() -> None:
     c.add_argument("--seed", type=int, default=0)
     sp = sub.add_parser("spot")
     sp.add_argument("--name", default="code")
-    sp.add_argument("--quarter", default="ne", choices=paths.QUARTERS)
+    sp.add_argument("--quarter", default="ne", choices=(*paths.QUARTERS, "all"))
     sp.add_argument("--seed", type=int, default=0)
     sp.add_argument("--against", nargs="*", default=[])
     cc = sub.add_parser("code-counts")
@@ -1281,6 +1528,14 @@ def main() -> None:
     cr.add_argument("--prior", default=None, choices=("all", "core"),
                     help="crude-aff: add the class prior's log odds measured on the training quarters' pairs")
     cr.add_argument("--read-max", type=int, default=None, help="read and score only up to this many boxes")
+    cr.add_argument("--kind", default=None, choices=KIND_MODES,
+                    help="crude-kind: join core px only to neighbours of the same MAP kind (this kind map)")
+    kp = sub.add_parser("kind-page")
+    kp.add_argument("--sheet", default="2000-digital-zoning-p07")
+    kc = sub.add_parser("kind-check")
+    kc.add_argument("--name", default="a")
+    kc.add_argument("--quarter", default="ne", choices=paths.QUARTERS)
+    kc.add_argument("--seed", type=int, default=0)
     dr = sub.add_parser("draft")
     dr.add_argument("--sheet", default="2000-digital-zoning-p07")
     dr.add_argument("--workers", type=int, default=WORKERS)
@@ -1320,9 +1575,20 @@ def main() -> None:
         if a.then_train:
             print(train_run(a.then_train, a.quarter, a.seed, sheets=sheets))
         return
+    if a.cmd == "kind-page":
+        p = build_kind_page(a.sheet)
+        print(json.dumps({"page": str(p), "mb": round(p.stat().st_size / 1e6, 2)}))
+        return
+    if a.cmd == "kind-check":
+        print(json.dumps(kind_check(a.name, a.quarter, a.seed), indent=1))
+        return
     if a.cmd == "spot":
-        print(json.dumps(spot(run_dir(a.name, a.quarter, a.seed), a.quarter, tuple(a.against)), indent=1,
-                         default=float))
+        if a.quarter == "all":
+            got = spot({q: run_dir(a.name, qn, a.seed) for q, qn in enumerate(paths.QUARTERS)}, None,
+                       tuple(a.against), RUNS / f"spot-{a.name}-all-s{a.seed}")
+        else:
+            got = spot(run_dir(a.name, a.quarter, a.seed), a.quarter, tuple(a.against))
+        print(json.dumps(got, indent=1, default=float))
         return
     if a.cmd == "code-counts":
         got = code_counts(a.quarter)
@@ -1330,7 +1596,7 @@ def main() -> None:
         print(json.dumps(got, indent=1))
         return
     if a.cmd == "crude":
-        got = crude(a.name, a.quarter, a.seed, a.workers, a.tags, a.aff, a.against, a.prior, a.read_max)
+        got = crude(a.name, a.quarter, a.seed, a.workers, a.tags, a.aff, a.against, a.prior, a.read_max, a.kind)
         if got.get("not_read"):
             print(json.dumps(got))
             return

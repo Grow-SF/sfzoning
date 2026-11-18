@@ -682,16 +682,24 @@ def _text(xy, angle, size, fill, body, cls="") -> str:
             f'fill="{fill}">{body}</text>')
 
 
-def _overlay(d: dict) -> str:
-    """The SVG overlay (page px): outlines and arrows as a few paths, the words as text."""
+def _overlay(d: dict, svg_id: str = "ov") -> str:
+    """The SVG overlay (page px): outlines and arrows as a few paths, the words as text.  Options in `d` (absent: the
+    page as before): `stroke_by_kind` ({kind: colour}) draws each box read as text or matched in the colour of its
+    `split_kind` (matched solid, the others dashed); `faint_none` draws the boxes read as no text, and their tags,
+    faint.  `svg_id`: the element's id (one overlay of several)."""
     h, w = d["shape"]
-    out = [(f'<svg id="ov" xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" viewBox="0 0 {w} {h}" '
-            'font-family="ui-monospace,Menlo,Consolas,monospace">')]
+    by_kind, faint = d.get("stroke_by_kind"), bool(d.get("faint_none"))
+    cls = "" if svg_id == "ov" else ' class="ovl"'
+    out = [(f'<svg id="{svg_id}"{cls} xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+            f'viewBox="0 0 {w} {h}" font-family="ui-monospace,Menlo,Consolas,monospace">')]
     outlines = {"matched": [], "text": [], "none": []}
     arrows = {"matched": [], "text": [], "none": []}
-    words = []
+    kind_lines: dict = {}
+    words, faint_words = [], []
     for b in d["boxes"]:
         outlines[b["status"]].append(b["poly"])
+        if by_kind and b["status"] != "none":
+            kind_lines.setdefault((b["status"], b.get("split_kind")), []).append(b["poly"])
         c, v, n, length, height = _frame(b)
         base = c + n * (height / 2 + 1.5)
         a0, a1 = base - v * length * 0.35, base + v * length * 0.35
@@ -705,7 +713,8 @@ def _overlay(d: dict) -> str:
         tag = f'{kind} · {b["chance"] or 0.0:.2f} · {round(b["angle"]) % 360}°'
         tag_at = c - v * length / 2 + n * (height / 2 + 3.0 + ts)
         tag_fill = {"matched": BOX, "text": FOUND, "none": JUNK}[b["status"]]
-        words.append(_text(tag_at, b["angle"], ts, tag_fill, _e(tag), "tag"))
+        (faint_words if faint and b["status"] == "none" else words).append(
+            _text(tag_at, b["angle"], ts, tag_fill, _e(tag), "tag"))
         if b["status"] == "none":
             continue
         top_at = c - v * length / 2 - n * (height / 2 + 2.0)
@@ -745,11 +754,21 @@ def _overlay(d: dict) -> str:
     out.append(f'<path class="ln" d="{_path([m["poly"] for m in d["missed"]])}" fill="none" stroke="{MISSED}" '
                'stroke-width="1.5" stroke-dasharray="5 3"/>')
     for status, stroke, width in (("none", JUNK, 0.8), ("text", FOUND, 1.4), ("matched", BOX, 1.4)):
-        out.append(f'<path class="ln" d="{_path(outlines[status])}" fill="none" stroke="{stroke}" '
-                   f'stroke-width="{width}"/>')
+        more = ' stroke-opacity="0.3"' if faint and status == "none" else ""
+        if by_kind and status != "none":
+            for (st, kind), polys in sorted(kind_lines.items(), key=lambda kv: str(kv[0])):
+                if st == status:
+                    dash = "" if status == "matched" else ' stroke-dasharray="4 2"'
+                    out.append(f'<path class="ln" d="{_path(polys)}" fill="none" '
+                               f'stroke="{by_kind.get(kind, stroke)}" stroke-width="1.6"{dash}/>')
+        else:
+            out.append(f'<path class="ln" d="{_path(outlines[status])}" fill="none" stroke="{stroke}" '
+                       f'stroke-width="{width}"{more}/>')
         out.append(f'<path class="ln lbl" d="{"".join(arrows[status])}" fill="none" stroke="{stroke}" '
-                   f'stroke-width="{width}"/>')
+                   f'stroke-width="{width}"{more}/>')
     out.append('<g class="lbl">' + "".join(words) + "</g>")
+    if faint_words:
+        out.append('<g class="lbl" opacity="0.3">' + "".join(faint_words) + "</g>")
     for x, y, text in d.get("notes", ()):
         out.append(f'<text x="{_f(x)}" y="{_f(y)}" font-size="72" fill="{NOTE}" text-anchor="middle" '
                    f'font-family="-apple-system,Helvetica,Arial,sans-serif">{_e(text)}</text>')
@@ -899,8 +918,8 @@ td.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 1
 #vp.drag { cursor: grabbing; }
 #stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; background: #fff; }
 #stage img { position: absolute; image-rendering: pixelated; pointer-events: none; -webkit-user-drag: none; }
-#ov { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
-#ov .ln { vector-effect: non-scaling-stroke; }
+#ov, .ovl { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+#ov .ln, .ovl .ln { vector-effect: non-scaling-stroke; }
 #stage.far .lbl, #stage.mid .tag { display: none; }
 #info { position: absolute; left: 8px; right: 8px; bottom: 8px; max-height: 46%; overflow: auto; display: none;
   background: var(--paper); color: var(--ink); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px;

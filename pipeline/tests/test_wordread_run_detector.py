@@ -525,3 +525,23 @@ def test_code_spotting_reads_the_class_under_a_labels_point_and_its_component():
     assert RD.words_in(comp, words) == [0, 1]
     assert RD.words_in(RD.code_component(code, 10.5, 30.5, cache), words) == [2]
     assert RD.words_in(None, words) == []
+
+
+def test_crude_kind_joins_core_px_only_to_neighbours_of_the_same_map_kind():
+    kind_p = np.zeros((4, 20, 30), np.float32)
+    kind_p[0] = 0.6                                    # a code everywhere ...
+    kind_p[1, :, 15:] = 0.9                            # ... but a block number from column 15 on
+    ink = np.zeros((20, 30), bool)
+    ink[5:15, 3:12] = True
+    kinds = RD.kind_map(kind_p, ink, "map")
+    assert (kinds[:, :15] == 0).all() and (kinds[:, 15:] == 1).all()
+    on = np.zeros((20, 30), bool)
+    on[5:15, 3:27] = True                              # one core component across both kinds
+    lab = RD.kind_labels(on, kinds)
+    assert (lab[~on] == 0).all() and len(np.unique(lab[on])) == 2 and lab[10, 14] != lab[10, 15]
+    assert len(np.unique(lab[5:15, 3:15])) == 1 and len(np.unique(lab[5:15, 15:27])) == 1
+    # the nearest-ink kinds: every px takes the kind of the ink px nearest it (here all code ink)
+    near = RD.kind_map(kind_p, ink, "nearest-ink")
+    assert (near == 0).all() and np.array_equal(near[ink], kinds[ink])
+    with pytest.raises(ValueError, match="kind mode"):
+        RD.kind_map(kind_p, ink, "box")
