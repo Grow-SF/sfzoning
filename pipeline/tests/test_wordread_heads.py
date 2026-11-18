@@ -246,7 +246,7 @@ def test_which_words_reach_a_held_out_area_is_found_once_per_sheet(monkeypatch):
     sd, = shrink.prepare([_sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0)])])
     calls = []
     monkeypatch.setattr(data, "_touch_held", lambda s, words: calls.append(len(words)) or np.array([True, False]))
-    crops = [data.crop_targets(sd, 70, 100, 64, 1.0, turns, words=True) for turns in range(3)]
+    crops = [data.crop_targets(sd, 70, 100, 160, 1.0, turns, words=True) for turns in range(3)]   # both words whole
     assert calls == [2]                                   # every word, once, for the three crops
     t = crops[0]
     reach, free = t["tag_id"] == 1, t["tag_id"] == 2
@@ -254,8 +254,30 @@ def test_which_words_reach_a_held_out_area_is_found_once_per_sheet(monkeypatch):
     assert not t["geo"][:4][:, reach].any() and t["geo"][3][free].min() > 0
     assert not t["geo_known"][t["core"] == 0].any()
     # a sheet holding other areas is another SheetData: found again for it
-    data.crop_targets(dataclasses.replace(sd, held=()), 70, 100, 64, 1.0, 0, words=True)
+    data.crop_targets(dataclasses.replace(sd, held=()), 70, 100, 160, 1.0, 0, words=True)
     assert calls == [2, 2]
+
+
+@pytest.mark.parametrize("turns", [0, 1])
+def test_a_word_the_crop_cuts_has_no_geometry_to_read_but_keeps_its_axis(turns):
+    # the crop shows page columns and rows 68-131: word 1 ends on column 131 (whole), word 2 on column 132 (cut by
+    # one px), word 3 is read upward and starts above row 68 (cut)
+    sd, = shrink.prepare([_sheet([((80, 90, 131, 110), 0), ((80, 115, 132, 125), 0), ((120, 60, 130, 85), 90)])])
+    t = data.crop_targets(sd, 100, 100, 64, 1.0, turns, words=True)
+    whole, cut, up = (t["tag_id"] == k for k in (1, 2, 3))
+    assert whole.any() and cut.any() and up.any()
+    assert t["geo_known"][whole].all() and not t["geo_known"][cut].any() and not t["geo_known"][up].any()
+    # the cut words keep their geometry (the crop hides it; it is no held-out word's) and their axis, read as before
+    assert np.allclose(np.exp(t["geo"][2][cut]), 52) and np.allclose(t["geo"][4][cut], (0 + 90 * turns) % 180)
+    assert np.allclose(t["geo"][4][up], (90 + 90 * turns) % 180)
+    # a crop that shows them whole reads them: the same targets, now known
+    big = data.crop_targets(sd, 100, 100, 160, 1.0, turns, words=True)
+    for k in (1, 2, 3):
+        assert big["geo_known"][big["tag_id"] == k].all()
+    assert np.array_equal(big["geo_known"], big["core"])
+    # at another scale the rule is the same, on the page px the crop shows
+    small = data.crop_targets(sd, 100, 100, 128, 2.0, turns, words=True)        # the same 64 page px
+    assert np.array_equal(small["geo_known"][::2, ::2], t["geo_known"])
 
 
 # --- the network and its loss ----------------------------------------------------------------------------------------
@@ -286,7 +308,11 @@ def test_word_tensors_number_each_crops_tags_from_one():
     assert geo.shape == (2, 5, 64, 64) and tag.shape == (2, 64, 64)
     assert set(tag[0].unique().tolist()) == {0, 1, 2, 3} and not tag[1].any()
     assert torch.equal(groups, torch.arange(1, 4))
-    assert torch.equal(tag[0] > 0, core[0] > 0) and torch.equal(geo_known, core)      # nothing held: all known
+    assert torch.equal(tag[0] > 0, core[0] > 0)
+    # nothing held: the geometry is known on the one word the first crop shows whole (its 2nd; the 1st and 3rd run
+    # out of its page window, columns 46-173), on none of the second's (it shows no word whole)
+    whole = torch.from_numpy(np.ascontiguousarray(crops[0]["tag_id"]) == 2)
+    assert torch.equal(geo_known[0], core[0] * whole) and whole.any() and not geo_known[1].any()
 
 
 def test_the_core_cross_entropy_weighs_each_class_by_the_inverse_of_its_weight():

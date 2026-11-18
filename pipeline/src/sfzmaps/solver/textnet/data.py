@@ -36,8 +36,13 @@ before training):
              word whose rectangle holds a held-out px has no geometry: its first four are 0 at its core px, as they
              would tell how far it reaches into the held-out area (its axis is kept: it is read off the word's px
              outside the area too)
-  geo_known  1 at the core px of a word whose geometry is known (its rectangle holds no held-out px), 0 elsewhere:
-             the px the loss reads geo's first four at; which words reach into a held-out area is found once a sheet
+  geo_known  1 at the core px of a word whose geometry can be known from the crop, 0 elsewhere: the px the loss reads
+             geo's first four at.  A word's is 0 when its rectangle holds a held-out px (which words do is found once a
+             sheet), and when its rectangle reaches outside the crop's page window (any px of it, as `_paint` fills
+             it, outside the size / scale px of page the crop shows): its far end is not in the input, so its centre
+             and length can't be told from it (half the core px of the training's crops are such words', and their
+             offsets, unpredictable, kept the centre from being learned at all; the controller's test, Task 5's
+             report).  Its first four are kept (it has a geometry; the crop only hides it), and its axis is read.
   weight     float32, only when the sheet holds word weights (`SheetData.weights`, Terra's doubt, which
              `wordread.doubt.prepare` fills before training): at a core px its word's weight, 1 elsewhere.  With none,
              every word weighs 1 and the key is absent (the targets are those without weights, byte for byte).
@@ -626,13 +631,16 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
         return {k: np.rot90(v, turns) for k, v in out.items()}
     geo = out.pop("geo")
     on = out["tag_id"] > 0
-    known_geo = np.concatenate([[0], ~_held_words(sd)]).astype(np.uint8)[out["tag_id"]]
+    unheld = ~_held_words(sd)                           # the words with geometry at all (`_geometry`)
+    has_geo = np.concatenate([[False], unheld])[out["tag_id"]]
+    lo, hi = sd.words.min(axis=1), sd.words.max(axis=1)    # each word's px as `_paint` fills them: lo..hi inclusive
+    inside = (lo[:, 0] >= x0) & (lo[:, 1] >= y0) & (hi[:, 0] < x0 + src) & (hi[:, 1] < y0 + src)
     geo[..., 0], geo[..., 1] = _turn_offsets(geo[..., 0], geo[..., 1], turns)     # over the height: no scale
-    geo[..., 2:4] += np.where(known_geo > 0, np.float32(np.log(size / src)), np.float32(0))[..., None]
+    geo[..., 2:4] += np.where(has_geo, np.float32(np.log(size / src)), np.float32(0))[..., None]
     geo[..., 4] = np.where(on, np.mod(geo[..., 4] + 90 * turns, 180), 0)
     out["core"] = on.view(np.uint8)
     out["geo"] = np.moveaxis(geo, -1, 0)
-    out["geo_known"] = known_geo
+    out["geo_known"] = np.concatenate([[0], unheld & inside]).astype(np.uint8)[out["tag_id"]]
     if len(sd.weights):
         out["weight"] = np.concatenate([[1], sd.weights]).astype(np.float32)[out["tag_id"]]
     return {k: np.rot90(v, turns, axes=(1, 2) if k == "geo" else (0, 1)) for k, v in out.items()}

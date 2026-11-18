@@ -437,8 +437,13 @@ def test_a_word_reaching_into_a_held_out_area_has_no_geometry():
     assert np.array_equal(b["geo"][4], a["geo"][4])
     two = b["tag_id"] == 2
     assert np.array_equal(b["geo"][:, two], a["geo"][:, two])    # word 1 touches nothing held
-    # which px's distances the loss may read: word 1's, not word 0's (without the hold-out, both)
-    assert not b["geo_known"][zero].any() and b["geo_known"][two].all() and np.array_equal(a["geo_known"], a["core"])
+    # both words run out of this crop (to column 120): neither's geometry is read in it, held or not
+    assert not a["geo_known"].any() and not b["geo_known"].any()
+    # a crop showing both whole (page columns 6-133): word 1's geometry is read, word 0's not (held); without the
+    # hold-out, both
+    c, d = (data.crop_targets(s, 90, 70, 128, 1.0, 0, words=True) for s in (held, free))
+    assert not c["geo_known"][c["tag_id"] == 1].any() and c["geo_known"][c["tag_id"] == 2].all()
+    assert np.array_equal(d["geo_known"], d["core"])
 
 
 def _batch(weights=None, turns=(0, 1)):
@@ -484,14 +489,15 @@ def test_word_losses_scale_with_the_weights_and_a_weightless_word_gives_no_gradi
     def parts(w):
         return dict(zip(train.WORD_PARTS, train.word_loss(_out(), *train.word_tensors(_batch(w)))[1].tolist()))
 
-    def px(w):
-        return float(train.word_tensors(_batch(w))[3].mul(torch.from_numpy(
-            np.stack([c["core"] for c in _batch(w)]).astype(np.float32))).sum())
+    def px(w, geometry):
+        """The word's weighted core px the part reads: all of them (axis), or those whose geometry is known."""
+        t = train.word_tensors(_batch(w))
+        return float((t[3] * t[0] * (t[4] if geometry else 1)).sum())
 
     single = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
     weights = [0.2, 0.5, 0.9]
-    mass = [px(s) for s in single]
     for part in ("centre", "size", "axis"):
+        mass = [px(s, part != "axis") for s in single]
         want = sum(w * m * parts(s)[part] for w, m, s in zip(weights, mass, single)) / sum(
             w * m for w, m in zip(weights, mass))
         assert parts(weights)[part] == pytest.approx(want, rel=1e-5)
@@ -528,7 +534,9 @@ def test_a_word_with_no_geometry_teaches_its_core_and_direction_but_not_its_box(
     on = ids == 1
     assert not out.grad[:, model.GEO].abs().sum(1)[on].any()
     assert (out.grad[:, 5:7].abs().sum(1)[on] > 0).all()                    # its angle is kept
-    assert (out.grad[:, model.CORE][on] != 0).any() and (out.grad[:, model.GEO].abs().sum(1)[ids == 2] > 0).all()
+    shown = (ids == 2) & (geo_known > 0)                 # word 1's px where the crop shows it whole
+    assert (out.grad[:, model.CORE][on] != 0).any() and shown.any()
+    assert (out.grad[:, model.GEO].abs().sum(1)[shown] > 0).all()
 
 
 def test_the_core_cross_entropy_counts_a_weighted_core_px_by_its_weight():
