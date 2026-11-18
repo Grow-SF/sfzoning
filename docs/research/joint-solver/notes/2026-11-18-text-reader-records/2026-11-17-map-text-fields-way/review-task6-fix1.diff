@@ -1,0 +1,1749 @@
+commit f7819c9adbaa24147ba394a5189aca2ffa6348c6
+Author: Steven Bacio <steven.buss@gmail.com>
+Date:   Tue Nov 17 11:15:54 2026 -0800
+
+    wordread words, fix round 1 (the owner's amendment): words are a mixture over the core-weighted votes (each px's four distances, direction and tag; Gaussian about its word's implied distances, direction and mean tag at measured spreads, either reading; background half-normal distances, any direction; log likelihood over cell, the effective px per independent vote; word_prior per word); proposals the basins of the votes' centres, kept and then joined or split greedily by that one score; p_word, core_mass, tag_spread; no level, merge IoU, r, unclip or one-box-per-component; measure_spreads, word_gain, extra_word_gain and fit_word_prior for Task 8; choose_level gone
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01UjTgrnx2j4PhzZErrad25Q
+---
+ pipeline/src/sfzmaps/solver/wordread/words.py | 985 +++++++++++++++-----------
+ pipeline/tests/test_wordread_words.py         | 598 ++++++++--------
+ 2 files changed, 890 insertions(+), 693 deletions(-)
+
+diff --git a/pipeline/src/sfzmaps/solver/wordread/words.py b/pipeline/src/sfzmaps/solver/wordread/words.py
+index aa0b934..ed32330 100644
+--- a/pipeline/src/sfzmaps/solver/wordread/words.py
++++ b/pipeline/src/sfzmaps/solver/wordread/words.py
+@@ -1,11 +1,12 @@
+ """Word boxes from the detector's word heads (`textnet.train.Recipe.heads="words"`, `textnet.model` CORE, GEO, TAG):
+-a word is a component of the word-core chance, split where its px tags say two words, grown back to the word by
+-DBNet's unclip or rebuilt from its px's geometry votes (EAST's locality-aware NMS).  Not by connected ink: two words
+-whose ink touches keep separate cores, and a line touching a word is not in its core.
+-
+-`core_words(core, geo, tag, ink, level, r, refine, ...)` works on one page's arrays (the net's outputs over the page
+-are `Task 8`'s: `textnet.predict` is not used here):
+-  core   float (h, w): the chance a px is in a word's core (the CORE logit's sigmoid), in [0, 1]
++every px votes for its word's box and carries its word's tag, weighted by its core chance, and the words are the
++components of a mixture over those votes.  No level on the core chance, no merge IoU, no shrink ratio, and no rule
++drops a box: each keeps its chance.
++
++`core_words(core, geo, tag, ink, spreads, word_prior)` works on one page's arrays (the net's outputs over a page,
++tiles stitched, are Task 8's):
++  core   float (h, w): each px's chance of being in a word (the CORE logit's sigmoid; the core is the word's whole
++         labelled rectangle, `shrink.prepare`), in [0, 1]
+   geo    float (5, h, w) or (6, h, w): the distances in px from a px to its word's top, bottom, start and end edges
+          (`textnet.model.distances` of GEO), then its reading direction: the angle in degrees counter-clockwise from
+          left-to-right (as `data.crop_targets(..., words=True)`'s geo), or its cosine and sine (the net's channels 5-6,
+@@ -13,209 +14,490 @@ are `Task 8`'s: `textnet.predict` is not used here):
+   tag    float (k, h, w): each px's word tag (TAG)
+   ink    bool (h, w): the page's ink
+ 
+-1. The words: the 8-connected components of the px with core >= `level`.
+-2. The split (PAN's tags, as a likelihood): a word's px tags are Gaussian about the word's mean tag, the same spread
+-   `tag_sigma` on every channel.  A component is split when a model of two words (a two-part mixture of such
+-   Gaussians, fitted by EM: `two_word_llr`) is likelier than one word, the second word's extra parameters charged as
+-   `split_prior`, the log prior odds of two words against one: split when log L2 - log L1 + split_prior > 0.  Each
+-   px goes to the word it is likelier in; each word's px fall into 8-connected pieces, and every piece is a component
+-   tested again (a chain of three words splits twice).  Then the pieces are decided by the same model: two touching
+-   pieces are joined while one word is at least as likely as two (the two means against one, `split_prior` charged
+-   for the second), the likeliest join first.  So px the mixture put on the wrong side, a few at a time (each piece
+-   of them a would-be word), join the word around them, and two words stay apart only on a word's worth of evidence.
+-   `tag_sigma` and `split_prior` are measured on the training quarters' predictions (Task 8); nothing here fixes a
+-   distance between tags.
+-3. The box, by `refine`:
+-   - "unclip" (DBNet): the minimum-area rectangle of the word's core px, grown by the D whose shrink at `r` gives it
+-     (`shrink.unclip`).  Its first edge is the rectangle's side nearest the word's reading direction (the
+-     core-chance-weighted sum of its px's directions).
+-   - "votes" (EAST): every core px votes for its word's rectangle (its distances to the four edges along its own
+-     reading direction: `data._geometry` inverted).  The votes are laid with their first edge nearest the word's
+-     reading direction, then merged by score-weighted locality-aware NMS, the score each px's core chance: in px
+-     order (row by row) a vote merges into the running box when their IoU exceeds `merge_iou` (the corners averaged,
+-     weighted by score, the scores summed), else the running box is set aside and the vote starts the next; the boxes
+-     set aside are then merged, in falling score, into the first kept box they meet at above `merge_iou`.  The word's
+-     box is the one with the most score (a minority of px voting for something else, a core run on along a line, is
+-     outvoted, never averaged in).  The merged corners are squared up to a rectangle (its centre, the mean direction
+-     of its two long edges, their mean lengths).  `merge_iou` is measured in Task 8.
+-   Either box is clipped to the page: a box running off the page keeps its axes and becomes the extent along them of
+-   its part on the page (never wrapped, never dropped); a box with no area keeps its corners moved onto the page.
+-
+-Coordinates.  The cores were painted from rectangles with corners at px numbers (`data._paint`, as `cv2.fillPoly`
+-fills them) and the distances measured from a px's numbers (col, row) (`data._geometry`), both in the frame of
+-Terra's rectangles; so here a core px stands at (col, row), and the boxes come back in that frame: page px edge
+-coordinates (a px is [i, i + 1)), as `wordboxes`' boxes and Terra's words are compared.  The ink px (edge coordinates,
+-its centre at (col + 0.5, row + 0.5), a px wide) give the trimmed box.
++The model (one likelihood for every decision).  Each px with core chance w > 0 casts a vote: its four distances, its
++reading direction and its tag, as the net gives them (a vote's box is the rectangle they give from the px's (col,
++row), `data._geometry` inverted exactly).
++  - With chance w the px is a word px, and its vote is one word's (the words share the votes by their mixture
++    weights).  A word is a reading direction phi, its four edges along phi's axes, and a mean tag.  At px p the word
++    implies the distances from p to its edges along its own axes, and its direction; the vote's distances differ from
++    those by Gaussian errors of sd `spreads.distance` px each, its direction by a Gaussian error of sd `spreads.angle`
++    degrees, its tag from the word's by sd `spreads.tag` each channel.  A vote may read the word the other way round
++    (its start at the word's end, its top at the word's foot): either reading, a half each.
++  - Otherwise the px is background: each distance is half-normal of sd `spreads.background_distance`, the direction
++    is any, and the tag is Gaussian about 0 of sd `spreads.background_tag`.
++  - Neighbouring px's votes are not independent (the net's outputs are smooth): a word's n votes carry about
++    n / `spreads.cell` independent votes' evidence, so the log likelihood is divided by `cell`.
++  - The score of a set of words: that log likelihood plus `word_prior` (a fitted log prior) for each word.
++  The errors are modelled on the distances and the direction, as the net makes them, not on the box's corners: a
++  vote's 8 corner coordinates come from its 4 distances and 1 direction, so they are not 8 independent errors (a
++  corner model of them gains likelihood from splitting one word, more the bigger the word).
++All six spreads are measured on the training quarters' predictions against Terra's words (`measure_spreads`), and
++`word_prior` is fitted on the same decisions this module makes, one word over none and two over one (`word_gain`,
++`extra_word_gain`, `fit_word_prior`); Task 8 runs both.
++
++The fit (tractable, every decision by the score):
++  1. Proposals: the basins of the votes' centres.  Each px adds its core chance at its vote's box's centre (at the
++     page's own px); the sum is smoothed by a Gaussian of the distance spread; each px of the page climbs to its
++     highest 8-neighbour until none is higher (steepest ascent), and the px whose votes land in one basin are one
++     proposal.  A word's votes share a centre, so a word is a basin, or a few when its votes are noisy; touching
++     words are separate basins; the background's votes, about their own px, make many small basins.
++  2. Each proposal is fitted as one word (EM, background in the model) and is a word when that raises the score
++     (its gain in log likelihood / cell + word_prior > 0).
++  3. Then, while some move raises the score, the best one is made: two words whose boxes' bounds meet are joined
++     (one word against the two-word mixture on their px), or a word is split (the two-word mixture, started at the
++     word and at its vote it explains worst, against one word).  Proposals that never paid stay background.
++  The search is greedy (its moves are local); the likelihood decides each one.
+ 
+ The table (`wordboxes.COLUMNS`, the same meaning, so the reader reads these boxes unchanged; then EXTRA_COLUMNS):
+-  g corners       the box (4 corners, the first edge along the reading direction, the second towards the letters'
+-                  feet, as `boxes.word_rect` lays a word)
+-  t corners       the trimmed box: the box's axes, the extent of the ink px inside the box (each a px wide), within
+-                  the box; the box itself when it holds no ink
++  g corners       the word's box, its first edge along its reading direction (the side nearest the chance-weighted
++                  sum of its px's directions), the second towards the letters' feet; clipped to the page (a box
++                  running off the page keeps its axes and becomes the extent of its part on the page: never wrapped,
++                  never dropped)
++  t corners       the trimmed box: the box's axes, the extent of the ink px inside it (each a px wide; their centres at
++                  (col + 0.5, row + 0.5)), within the box; the box itself when it holds no ink
+   axis            the first edge's direction, degrees counter-clockwise from left-to-right, modulo 180
+   length, height  the box's sides along and across it; t_length, t_height the trimmed box's
+   page_x, page_y  the box's centre
+   ink_px          the ink px inside the box; p_<kind> their mean kind probabilities (`kind_p`, else 0)
+-  mean_chance     the word's chance: the mean core chance over its core px (as p_word)
+-  sheet, i, level the sheet given, the box's number on the page (the words in the order of their first px, row by
+-                  row), the level
+-  quarter, x, y, lab_lot, street   not placed yet: -1, NaN, NaN, -1, False.  Place the boxes as
++  mean_chance     as p_word
++  sheet, i        the sheet given; the box's number on the page (the words in the order of their first px, row by row)
++  level           NaN: there is no level
++  quarter, x, y, lab_lot, street   not placed: -1, NaN, NaN, -1, False.  Task 8 places the boxes as
+                   `wordboxes.sheet_boxes` does (`prints._place` of page_x, page_y; `grid.quarter_of`) before reading.
+-  form            "unclip" or "votes"; "+split" when the word was cut from a larger component by its tags
+-  core_px         the word's core px
+-  tag_spread      the spread of the word's own px tags about their mean (the root mean square over px and channels:
+-                  the one-word model's fitted sigma), what `tag_sigma` is measured from
+-  p_word          the word's chance (the mean core chance over its core px): later steps weigh a box by it rather
+-                  than drop it
+-  split_llr       of a word cut from a larger component, the log-likelihood ratio of it standing apart from its
+-                  likeliest touching word against the two joined (their two mean tags against one, under
+-                  `tag_sigma`); above -split_prior by the rule; NaN for a whole component
+-
+-`choose_level(boxes, reads, terra, forms)`: the level of each quarter of the city, chosen on the other three quarters
+-by Task 1's headline (`measures.label_right`: read right at our boxes, the box holding the point, the reader's surest
+-of several; no box is wrong) over Terra's code words (Terra's string as the truth, its rectangle's centre as the
+-point), never the owner's answers.  Ties go to the higher level.  The levels are the caller's: none is fixed here.
++  p_word          the word's share of the weighted vote mass: its votes (each px's posterior of voting for it) weighted
++                  by core chance, over the votes; a weak word keeps its low chance, no rule drops it
++  core_mass       its votes weighted by core chance (the numerator of p_word)
++  tag_spread      the spread of its px's tags about its mean tag (root mean square per channel, votes weighted)
++
++Coordinates: the distances were measured from a px's numbers (col, row) to the corners of Terra's rectangles
++(`data._geometry`), so the boxes come back in the frame of Terra's rectangles, as `wordboxes`' boxes and Terra's words
++are compared.
++
++Fixed numbers here are numerical only: EM_STEPS and EM_TOL (when an EM stops), CHUNK_PX (px per pass of the
++proposals' fits: memory, the results do not depend on it) and the Gaussian smoothing's extent (OpenCV's: 4 sd).
+ """
++import dataclasses
+ import math
+ 
+ import cv2
+ import numpy as np
+ import pandas as pd
++from scipy.optimize import brentq
++
++from sfzmaps.solver import wordboxes
++
++EXTRA_COLUMNS = ("p_word", "core_mass", "tag_spread")
++EM_STEPS = 200        # numerical only: an EM stops after this many steps ...
++EM_TOL = 1e-7         # ... or once its log likelihood rises by less than this per vote
++CHUNK_PX = 1 << 20    # votes per pass of the proposals' fits (memory only: the results do not depend on it)
++_LOG2 = math.log(2.0)
++
++
++@dataclasses.dataclass(frozen=True)
++class Spreads:
++    """The measured spreads of the model (see the module; `measure_spreads`)."""
++    distance: float             # px: sd of a word vote's distance to an edge about the distance its word implies
++    angle: float                # degrees: sd of a word vote's reading direction about its word's
++    tag: float                  # sd of a word px's tag channel about its word's mean tag
++    cell: float                 # px: a word's n votes carry n / cell independent votes' evidence
++    background_distance: float  # px: sd of a background px's (half-normal) distances
++    background_tag: float       # sd of a background px's tag channel about 0
++
++    def check(self) -> None:
++        bad = {k: v for k, v in dataclasses.asdict(self).items() if not (v > 0 and math.isfinite(v))}
++        if bad:
++            raise ValueError(f"every spread is a positive number, not {bad}")
++
++
++# --- votes --------------------------------------------------------------------------------------------------------
++
++def _wrap(x):
++    """Angles (radians) into [-pi, pi)."""
++    return (np.asarray(x) + math.pi) % (2 * math.pi) - math.pi
+ 
+-from sfzmaps.solver import paths, wordboxes
+-from sfzmaps.solver.wordread import measures, shrink
+-
+-REFINES = ("unclip", "votes")
+-EXTRA_COLUMNS = ("form", "core_px", "tag_spread", "p_word", "split_llr")
+-EM_STEPS = 100        # numerical only: the two-word fit stops after this many EM steps ...
+-EM_TOL = 1e-9         # ... or once its log likelihood rises by less than this per px
+-
+-
+-# --- the tag split -------------------------------------------------------------------------------------------------
+-
+-def two_word_llr(tags: np.ndarray, sigma: float) -> tuple[float, np.ndarray]:
+-    """log L(two words) - log L(one word) of px tags (n, k), each word's tags Gaussian about its mean with sd `sigma`
+-    on every channel; the two-word model a two-part mixture (its weight and both means fitted by EM, started at the
+-    tag farthest from the mean and the tag farthest from that).  Also each px's chance of being in the first word.
+-    0 and ones for fewer than 2 px."""
+-    t = np.asarray(tags, np.float64).reshape(len(tags), -1)
+-    n = len(t)
+-    if n < 2:
+-        return 0.0, np.ones(n)
+-    inv = 1.0 / (2.0 * sigma * sigma)
+-    mean = t.mean(0)
+-    ss1 = float(((t - mean) ** 2).sum())
+-    m1 = t[int(np.argmax(((t - mean) ** 2).sum(1)))]
+-    m2 = t[int(np.argmax(((t - m1) ** 2).sum(1)))]
+-    w = 0.5
++
++def _axes(phi):
++    """A reading direction's axes in page px (y down): along (cos, -sin) and up, towards the letters' tops (-sin,
++    -cos); each (..., 2)."""
++    c, s = np.cos(phi), np.sin(phi)
++    return np.stack([c, -s], -1), np.stack([-s, -c], -1)
++
++
++def _psi(geo: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> np.ndarray:
++    """Each px's reading direction (radians, counter-clockwise from left-to-right), from geo's angle or its cosine
++    and sine."""
++    if geo.shape[0] == 5:
++        return np.deg2rad(geo[4, ys, xs].astype(np.float64))
++    return np.arctan2(geo[5, ys, xs].astype(np.float64), geo[4, ys, xs].astype(np.float64))
++
++
++def _box(prm: np.ndarray) -> np.ndarray:
++    """A word's rectangle (4, 2) from its parameters (phi, a0, a1, b0, b1): corners in `boxes.word_rect`'s order
++    (start-top, end-top, end-foot, start-foot)."""
++    v, up = _axes(prm[0])
++    a0, a1, b0, b1 = prm[1:]
++    return np.array([a0 * v + b1 * up, a1 * v + b1 * up, a1 * v + b0 * up, a0 * v + b0 * up])
++
++
++def _own(p: np.ndarray, d: np.ndarray, psi: np.ndarray) -> np.ndarray:
++    """The parameters (n, 5) of the boxes the votes give along their own directions."""
++    v, up = _axes(psi)
++    pa, pb = (p * v).sum(-1), (p * up).sum(-1)
++    t, b, s, e = d.T
++    return np.stack([psi, pa - s, pa + e, pb - b, pb + t], -1)
++
++
++def _implied(v: dict, prm: np.ndarray):
++    """For words `prm` (5,) or one per vote (n, 5): the edges each vote (p, d, psi) implies along the word's axes,
++    read as is and the other way round ((n, 4) each, as (a0, a1, b0, b1)), and its direction's error each way
++    (radians)."""
++    prm = np.broadcast_to(prm, (len(v["psi"]), 5))
++    along, up = _axes(prm[:, 0])
++    pa, pb = (v["p"] * along).sum(-1), (v["p"] * up).sum(-1)
++    t, b, s, e = v["d"].T
++    same = np.stack([pa - s, pa + e, pb - b, pb + t], -1)
++    other = np.stack([pa - e, pa + s, pb - t, pb + b], -1)
++    return same, other, _wrap(v["psi"] - prm[:, 0]), _wrap(v["psi"] + math.pi - prm[:, 0])
++
++
++class _Votes:
++    """The votes of the px with core chance above 0, read from the arrays when asked (`take`)."""
++
++    def __init__(self, core, geo, tag, spreads: Spreads, mask=None):
++        self.geo, self.tag = geo, tag
++        on = core > 0 if mask is None else (core > 0) & mask
++        self.ys, self.xs = np.nonzero(on)
++        self.w = core[self.ys, self.xs].astype(np.float64)
++        self.k = tag.shape[0]
++        sa = math.radians(spreads.angle)
++        self.id, self.ia, self.it = 1 / (2 * spreads.distance ** 2), 1 / (2 * sa ** 2), 1 / (2 * spreads.tag ** 2)
++        self.norm = (2 * math.log(2 * math.pi * spreads.distance ** 2) + 0.5 * math.log(2 * math.pi * sa ** 2)
++                     + self.k / 2 * math.log(2 * math.pi * spreads.tag ** 2) + _LOG2)
++        self.bd, self.bt = 1 / (2 * spreads.background_distance ** 2), 1 / (2 * spreads.background_tag ** 2)
++        self.bnorm = (4 * (0.5 * math.log(2 * math.pi * spreads.background_distance ** 2) - _LOG2)
++                      + math.log(2 * math.pi) + self.k / 2 * math.log(2 * math.pi * spreads.background_tag ** 2))
++
++    def __len__(self):
++        return len(self.ys)
++
++    def take(self, idx) -> dict:
++        """The votes of px `idx`: p (n, 2), d (n, 4) (top, bottom, start, end), psi (n,), tags t (n, k), w, log w,
++        log(1 - w), and the background's log density of each vote."""
++        ys, xs = self.ys[idx], self.xs[idx]
++        d = np.moveaxis(self.geo[:4, ys, xs].astype(np.float64), 0, -1)
++        t = np.moveaxis(self.tag[:, ys, xs].astype(np.float64), 0, -1)
++        w = self.w[idx]
++        with np.errstate(divide="ignore"):
++            lnw = np.log1p(-w)
++        lbg = -(d ** 2).sum(1) * self.bd - (t ** 2).sum(1) * self.bt - self.bnorm
++        return {"p": np.stack([xs, ys], -1).astype(np.float64), "d": d, "psi": _psi(self.geo, ys, xs), "t": t,
++                "w": w, "lw": np.log(w), "lnw": lnw, "lbg": lbg}
++
++    def centres(self) -> np.ndarray:
++        """Each vote's box's centre (n, 2), CHUNK_PX votes at a time."""
++        out = np.empty((len(self), 2))
++        for lo in range(0, len(self), CHUNK_PX):
++            v = self.take(slice(lo, lo + CHUNK_PX))
++            own = _own(v["p"], v["d"], v["psi"])
++            along, up = _axes(own[:, 0])
++            out[lo:lo + CHUNK_PX] = (along * ((own[:, 1] + own[:, 2]) / 2)[:, None]
++                                     + up * ((own[:, 3] + own[:, 4]) / 2)[:, None])
++        return out
++
++    def log_word(self, v: dict, prm: np.ndarray, tag_mean: np.ndarray):
++        """log N(vote | a word) of each vote (`prm` (5,) or (n, 5), `tag_mean` (k,) or (n, k)), and whether it reads
++        the word the other way round (the likelier reading)."""
++        same, other, ds, do = _implied(v, prm)
++        edges = np.broadcast_to(prm, (len(v["w"]), 5))[:, 1:]
++        ls = -((same - edges) ** 2).sum(1) * self.id - ds ** 2 * self.ia
++        lo = -((other - edges) ** 2).sum(1) * self.id - do ** 2 * self.ia
++        return np.logaddexp(ls, lo) - ((v["t"] - tag_mean) ** 2).sum(1) * self.it - self.norm, lo > ls
++
++    def updated(self, v: dict, r: np.ndarray, prm: np.ndarray, flip: np.ndarray, group=None, count=1):
++        """The words' parameters refitted to votes weighted by r (each vote in its likelier reading `flip`): the
++        direction moved by the weighted mean error, then the edges the weighted means of the edges the votes imply
++        along it.  `group` (n,) and `count`: one word per group (prm (count, 5)); else one word (prm (5,))."""
++        g = np.zeros(len(r), np.int64) if group is None else group
++        prm = np.atleast_2d(np.array(prm, np.float64))
++        mass = np.bincount(g, r, count)
++        on = mass > 0
++        _, _, ds, do = _implied(v, prm[g])
++        err = np.where(flip, do, ds)
++        prm[on, 0] = prm[on, 0] + np.bincount(g, r * err, count)[on] / mass[on]
++        same, other, _, _ = _implied(v, prm[g])
++        edges = np.where(flip[:, None], other, same)
++        for j in range(4):
++            prm[on, 1 + j] = np.bincount(g, r * edges[:, j], count)[on] / mass[on]
++        return prm if group is not None else prm[0]
++
++
++# --- the mixture ----------------------------------------------------------------------------------------------------
++
++def _em(V: _Votes, v: dict, prms: np.ndarray, tags: np.ndarray) -> dict:
++    """The mixture of len(prms) words and the background over votes `v`, fitted by EM from `prms` (K, 5) and `tags`
++    (K, k): its log likelihood (not yet divided by cell), the words' parameters and tags, and each vote's posterior
++    of being each word's (n, K)."""
++    prms, tags = np.array(prms, np.float64), np.array(tags, np.float64)
++    n, kk = len(v["w"]), len(prms)
++    log_pi = np.full(kk, -math.log(kk))
++    back = v["lnw"] + v["lbg"]
+     prev = -math.inf
+     for _ in range(EM_STEPS):
+-        la = (math.log(w) if w > 0 else -math.inf) - ((t - m1) ** 2).sum(1) * inv
+-        lb = (math.log(1 - w) if w < 1 else -math.inf) - ((t - m2) ** 2).sum(1) * inv
+-        ll = float(np.logaddexp(la, lb).sum())
+-        with np.errstate(invalid="ignore"):
+-            resp = 0.5 * (1.0 + np.tanh(np.nan_to_num(la - lb, nan=0.0) / 2))     # sigmoid(la - lb), stable
++        lj = np.empty((n, kk))
++        flips = np.empty((n, kk), bool)
++        for j in range(kk):
++            ln, flips[:, j] = V.log_word(v, prms[j], tags[j])
++            lj[:, j] = v["lw"] + log_pi[j] + ln
++        lp = np.logaddexp(np.logaddexp.reduce(lj, axis=1), back)
++        ll = float(lp.sum())
++        resp = np.exp(lj - lp[:, None])
+         if ll - prev <= EM_TOL * n:
+             break
+         prev = ll
+-        n1 = float(resp.sum())
+-        if n1 <= 0 or n1 >= n:
+-            break                            # one part took every px: one word
+-        w = n1 / n
+-        m1 = (resp[:, None] * t).sum(0) / n1
+-        m2 = ((1 - resp)[:, None] * t).sum(0) / (n - n1)
+-    return ll + ss1 * inv, resp
+-
+-
+-def _pieces(idx: np.ndarray, ys: np.ndarray, xs: np.ndarray) -> list[np.ndarray]:
+-    """The 8-connected pieces of the px idx (ascending indices into ys, xs), each ascending, in the order of their
+-    first px."""
+-    y, x = ys[idx], xs[idx]
+-    y0, x0 = int(y.min()), int(x.min())
+-    canvas = np.zeros((int(y.max()) - y0 + 1, int(x.max()) - x0 + 1), np.uint8)
+-    canvas[y - y0, x - x0] = 1
+-    count, lab = cv2.connectedComponents(canvas, connectivity=8)
+-    if count == 2:
+-        return [idx]
+-    own = lab[y - y0, x - x0]
+-    order = np.argsort(own, kind="stable")
+-    parts = np.split(idx[order], np.flatnonzero(np.diff(own[order])) + 1)
+-    return sorted(parts, key=lambda p: int(p[0]))
+-
+-
+-_SHIFTS = ((0, 1), (1, -1), (1, 0), (1, 1))     # each 8-neighbour pair of px once
+-
+-
+-def _touching(pieces: list[np.ndarray], ys, xs) -> set[tuple[int, int]]:
+-    """The pairs (a < b) of pieces (disjoint px index arrays) with a px of one among the 8 around a px of the other."""
+-    every = np.concatenate(pieces)
+-    y0, x0 = int(ys[every].min()), int(xs[every].min())
+-    canvas = np.full((int(ys[every].max()) - y0 + 1, int(xs[every].max()) - x0 + 1), -1, np.int64)
+-    for k, p in enumerate(pieces):
+-        canvas[ys[p] - y0, xs[p] - x0] = k
+-    h, w = canvas.shape
+-    pairs = set()
+-    for dy, dx in _SHIFTS:
+-        a = canvas[0:h - dy, max(0, -dx):w - max(0, dx)]
+-        b = canvas[dy:h, max(0, dx):w - max(0, -dx)]
+-        hit = (a >= 0) & (b >= 0) & (a != b)
+-        pairs |= {(int(min(i, j)), int(max(i, j))) for i, j in zip(a[hit], b[hit])}
+-    return pairs
+-
+-
+-def _apart(n_a: int, sum_a: np.ndarray, n_b: int, sum_b: np.ndarray, inv: float) -> float:
+-    """log L(two words) - log L(one word) of two px sets' tags under the one spread (the two means against one: Ward's
+-    cost n_a n_b / (n_a + n_b) |mean_a - mean_b|^2 / (2 sigma^2))."""
+-    d = sum_a / n_a - sum_b / n_b
+-    return n_a * n_b / (n_a + n_b) * float(d @ d) * inv
+-
+-
+-def _split(idx: np.ndarray, ys, xs, tags: np.ndarray, sigma: float, prior: float) -> list[tuple]:
+-    """A component's words (see the module): (px indices, the log-likelihood ratio of the word standing apart from
+-    its likeliest touching word, NaN for a whole component).
+-
+-    Proposed by splitting: wherever the two-word mixture is likelier (`two_word_llr` + prior > 0), each px goes to
+-    the part it is likelier in and each part's 8-connected pieces are tested again.  Then decided on the pieces: two
+-    touching pieces are joined while one word is at least as likely as two (`_apart` + prior <= 0), the likeliest
+-    join first.  So a few px the mixture put on the wrong side (they make pieces of their own) join the word around
+-    them unless they are a word's worth of evidence apart, and nothing but `sigma` and `prior` decides."""
+-    pieces, stack = [], [idx]
+-    while stack:
+-        cur = stack.pop()
+-        llr, first = two_word_llr(tags[cur], sigma)
+-        first = first > 0.5
+-        if llr + prior > 0 and first.any() and not first.all():
+-            for part in (cur[first], cur[~first]):
+-                stack.extend(reversed(_pieces(part, ys, xs)))
++        mass = resp.sum(0)
++        for j in np.flatnonzero(mass > 0):
++            prms[j] = V.updated(v, resp[:, j], prms[j], flips[:, j])
++            tags[j] = (resp[:, j, None] * v["t"]).sum(0) / mass[j]
++        with np.errstate(divide="ignore"):
++            log_pi = np.log(mass / mass.sum())
++    return {"ll": ll, "prms": prms, "tags": tags, "resp": resp}
++
++
++def _worst(V: _Votes, v: dict, one: dict) -> tuple[np.ndarray, np.ndarray]:
++    """The vote a one-word fit explains worst, as a word of its own (its box and tag): the most of (its posterior of
++    being the word's) x (minus its log density under the word)."""
++    ln, _ = V.log_word(v, one["prms"][0], one["tags"][0])
++    j = int(np.argmax(one["resp"][:, 0] * (-ln)))
++    return _own(v["p"][j:j + 1], v["d"][j:j + 1], v["psi"][j:j + 1])[0], v["t"][j]
++
++
++def _two(V: _Votes, v: dict, one: dict) -> dict:
++    """The two-word mixture over votes `v`, started at the one-word fit `one` and at the vote it explains worst."""
++    prm, tag = _worst(V, v, one)
++    return _em(V, v, np.stack([one["prms"][0], prm]), np.stack([one["tags"][0], tag]))
++
++
++def _start(v: dict) -> tuple[np.ndarray, np.ndarray]:
++    """A one-word fit's start: the vote of the px with the highest core chance (the first of equals)."""
++    j = int(np.argmax(v["w"]))
++    return _own(v["p"][j:j + 1], v["d"][j:j + 1], v["psi"][j:j + 1]), v["t"][j:j + 1]
++
++
++def word_gain(core, geo, tag, spreads: Spreads, mask) -> float:
++    """The gain in log likelihood (divided by cell) of one word over none (every vote the background's) on the votes
++    of the px in `mask`: the decision a proposal is a word by, with `word_prior` added (infinite when a px is surely a
++    word px, core chance 1).  Task 8 computes it on the training quarters' Terra words (a real word) and on the
++    proposals away from them (none) for `fit_word_prior`, beside `extra_word_gain`."""
++    spreads.check()
++    V = _Votes(np.asarray(core), np.asarray(geo), np.asarray(tag), spreads, np.asarray(mask, bool))
++    if not len(V):
++        return 0.0
++    v = V.take(slice(None))
++    return (_em(V, v, *_start(v))["ll"] - float((v["lnw"] + v["lbg"]).sum())) / spreads.cell
++
++
++def extra_word_gain(core, geo, tag, spreads: Spreads, mask) -> float:
++    """The gain in log likelihood (divided by cell) of two words over one on the votes of the px in `mask`: the
++    decision `core_words` makes by adding `word_prior` (split when it is above 0).  The two-word mixture holds the
++    one-word fit, so the gain is at least 0.  Task 8 computes it on the training quarters' Terra words (one word each:
++    no real extra word) and pairs of touching words (a real one) for `fit_word_prior`."""
++    spreads.check()
++    V = _Votes(np.asarray(core), np.asarray(geo), np.asarray(tag), spreads, np.asarray(mask, bool))
++    if len(V) < 2:
++        return 0.0
++    v = V.take(slice(None))
++    one = _em(V, v, *_start(v))
++    return max(_two(V, v, one)["ll"] - one["ll"], 0.0) / spreads.cell
++
++
++def fit_word_prior(gains, real) -> float:
++    """The log prior of a word, fitted on decisions whose answer is known: each extra word's gain (`word_gain`: one
++    word over none; `extra_word_gain`: two over one) and whether it was real (Terra holds a word there; Terra holds
++    two, not one).  The decision `core_words` makes, as a
++    probability: P(real) = sigmoid(gain + word_prior); the maximum-likelihood word_prior (the log likelihood is
++    concave in it).  ValueError when every decision is of one kind (no finite prior)."""
++    g = np.asarray(gains, np.float64)
++    y = np.asarray(real, bool)
++    if len(g) != len(y) or not len(g):
++        raise ValueError(f"gains and real are one per decision, not {len(g)} and {len(y)}")
++    if y.all() or not y.any():
++        raise ValueError("every decision is of one kind: no finite word prior fits them")
++
++    def slope(rho):                     # d log L / d rho: falls with rho, above 0 far below, below 0 far above
++        return float((y - 0.5 * (1 + np.tanh((g + rho) / 2))).sum())
++
++    lo, hi = -1.0, 1.0
++    while slope(lo) <= 0:
++        lo *= 2
++    while slope(hi) >= 0:
++        hi *= 2
++    return float(brentq(slope, lo, hi, xtol=1e-12, rtol=4 * np.finfo(float).eps))
++
++
++# --- proposals ------------------------------------------------------------------------------------------------------
++
++def _basins(centres: np.ndarray, w: np.ndarray, shape: tuple[int, int], sigma: float) -> np.ndarray:
++    """Each vote's basin (see the module), numbered from 0: the core-chance-weighted sum of votes at their centres'
++    px (clipped onto the page), smoothed by a Gaussian of sd `sigma`, climbed by steepest ascent over 8-neighbours."""
++    h, wd = shape
++    ix = np.clip(np.rint(centres[:, 0]), 0, wd - 1).astype(np.int64)
++    iy = np.clip(np.rint(centres[:, 1]), 0, h - 1).astype(np.int64)
++    cell = iy * wd + ix
++    acc = np.bincount(cell, w, h * wd).reshape(h, wd)
++    smooth = cv2.GaussianBlur(acc, (0, 0), sigma, borderType=cv2.BORDER_CONSTANT)
++    pad = np.pad(smooth, 1, constant_values=-np.inf)
++    best = smooth.copy()
++    here = np.arange(h * wd, dtype=np.int64).reshape(h, wd)
++    step = here.copy()
++    for dy in (-1, 0, 1):
++        for dx in (-1, 0, 1):
++            if dy or dx:
++                nb = pad[1 + dy:1 + dy + h, 1 + dx:1 + dx + wd]
++                higher = nb > best
++                best = np.where(higher, nb, best)
++                step = np.where(higher, here + dy * wd + dx, step)
++    top = step.ravel()
++    while True:
++        nxt = top[top]
++        if np.array_equal(nxt, top):
++            break
++        top = nxt
++    return np.unique(top[cell], return_inverse=True)[1]
++
++
++def _proposals(V: _Votes, shape, spreads: Spreads, word_prior: float) -> list[dict]:
++    """The basins that pay as a word (see the module): per basin its votes' px indices and its one-word fit.  Fitted
++    all at once, a pass at a time over whole basins."""
++    basin = _basins(V.centres(), V.w, shape, spreads.distance)
++    order = np.lexsort((-V.w, basin))               # by basin, the highest core chance first
++    bs = basin[order]
++    first = np.flatnonzero(np.r_[True, bs[1:] != bs[:-1]])
++    ends = np.r_[first[1:], len(order)]
++    out = []
++    lo = 0
++    while lo < len(first):
++        hi = lo + 1
++        while hi < len(first) and ends[hi] - first[lo] <= CHUNK_PX:
++            hi += 1
++        idx = order[first[lo]:ends[hi - 1]]
++        out += _fit_basins(V, idx, bs[first[lo]:ends[hi - 1]] - bs[first[lo]], first[lo:hi] - first[lo], spreads,
++                           word_prior)
++        lo = hi
++    return out
++
++
++def _fit_basins(V: _Votes, idx, group, starts, spreads: Spreads, word_prior: float) -> list[dict]:
++    """One word fitted to each basin's votes at once (EM per basin, background in the model), started at its vote of
++    the highest core chance; the basins whose word raises the score.  Each basin's EM stops on its own (EM_STEPS,
++    EM_TOL), and only the basins still moving are computed."""
++    v = V.take(idx)
++    nb, n = len(starts), len(idx)
++    prms = _own(v["p"][starts], v["d"][starts], v["psi"][starts])
++    tags = v["t"][starts].copy()
++    back = v["lnw"] + v["lbg"]
++    count = np.bincount(group, minlength=nb)
++    lp = np.empty(n)
++    prev = np.full(nb, -math.inf)
++    moving = np.ones(nb, bool)
++    for _ in range(EM_STEPS):
++        sel = np.flatnonzero(moving[group])
++        if not len(sel):
++            break
++        vs, g = {key: a[sel] for key, a in v.items()}, group[sel]
++        ln, flip = V.log_word(vs, prms[g], tags[g])
++        word = vs["lw"] + ln
++        lp[sel] = np.logaddexp(word, back[sel])
++        ll = np.bincount(g, lp[sel], nb)
++        moving &= ll - prev > EM_TOL * count
++        prev = np.where(moving | (prev == -math.inf), ll, prev)
++        keep = moving[g]
++        if not keep.any():
++            break
++        vk, gk = {key: a[keep] for key, a in vs.items()}, g[keep]
++        r = np.exp(word[keep] - lp[sel][keep])
++        prms = V.updated(vk, r, prms, flip[keep], gk, nb)
++        mass = np.bincount(gk, r, nb)
++        on = mass > 0
++        for ch in range(V.k):
++            tags[on, ch] = np.bincount(gk, r * vk["t"][:, ch], nb)[on] / mass[on]
++    ll_b = np.bincount(group, lp, nb)
++    gain = ll_b - np.bincount(group, back, nb)
++    ends = np.r_[starts[1:], n]
++    return [{"idx": np.sort(idx[starts[b]:ends[b]]), "prms": prms[b:b + 1].copy(), "tags": tags[b:b + 1].copy(),
++             "ll": float(ll_b[b])} for b in np.flatnonzero(gain / spreads.cell + word_prior > 0)]
++
++
++# --- the search -----------------------------------------------------------------------------------------------------
++
++def _search(V: _Votes, found: list[dict], spreads: Spreads, word_prior: float) -> list[dict]:
++    """Join and split words while a move raises the score, the best move first (see the module)."""
++    words = dict(enumerate(found))
++    next_id = len(words)
++    splits, joins = {}, {}
++
++    def split(k):
++        v = V.take(words[k]["idx"])
++        if len(v["w"]) < 2:
++            return -math.inf, None
++        one = _em(V, v, words[k]["prms"], words[k]["tags"])
++        two = _two(V, v, one)
++        return (two["ll"] - one["ll"]) / spreads.cell + word_prior, two
++
++    def join(a, b):
++        idx = np.union1d(words[a]["idx"], words[b]["idx"])
++        v = V.take(idx)
++        bigger = a if len(words[a]["idx"]) >= len(words[b]["idx"]) else b
++        one = _em(V, v, words[bigger]["prms"], words[bigger]["tags"])
++        two = _em(V, v, np.concatenate([words[a]["prms"], words[b]["prms"]]),
++                  np.concatenate([words[a]["tags"], words[b]["tags"]]))
++        return (one["ll"] - two["ll"]) / spreads.cell - word_prior, (idx, one)
++
++    while True:
++        ids = sorted(words)
++        for k in ids:
++            if k not in splits:
++                splits[k] = split(k)
++        live = []
++        if len(ids) > 1:
++            boxes = np.array([_box(words[k]["prms"][0]) for k in ids])
++            lo, hi = boxes.min(1), boxes.max(1)
++            meet = (lo[:, None] <= hi[None, :]).all(-1) & (lo[None, :] <= hi[:, None]).all(-1)
++            live = [(ids[i], ids[j]) for i, j in zip(*np.nonzero(np.triu(meet, 1)))]
++            for key in live:
++                if key not in joins:
++                    joins[key] = join(*key)
++        moves = [(d, 0, k) for k, (d, _) in splits.items()] + [(joins[key][0], 1, key) for key in live]
++        if not moves:
++            break
++        best, kind, key = max(moves, key=lambda m: (m[0], -m[1]))
++        if not best > 0:
++            break
++        if kind == 0:
++            two = splits[key][1]
++            mine = two["resp"].argmax(1)
++            parts = [words[key]["idx"][mine == j] for j in (0, 1)]
++            if not all(len(p) for p in parts):
++                splits[key] = (-math.inf, None)
++                continue
++            old, new = [key], []
++            for j, p in enumerate(parts):
++                fit = _em(V, V.take(p), two["prms"][j:j + 1], two["tags"][j:j + 1])
++                new.append({"idx": p, "prms": fit["prms"], "tags": fit["tags"], "ll": fit["ll"]})
+         else:
+-            pieces.append(cur)
+-    if len(pieces) == 1:
+-        return [(idx, math.nan)]
+-    inv = 1.0 / (2.0 * sigma * sigma)
+-    pieces.sort(key=lambda p: int(p[0]))
+-    members = {k: [p] for k, p in enumerate(pieces)}
+-    count = {k: len(p) for k, p in enumerate(pieces)}
+-    total = {k: tags[p].sum(0) for k, p in enumerate(pieces)}
+-    touch = _touching(pieces, ys, xs)
+-    while touch:
+-        cost, (a, b) = min((_apart(count[a], total[a], count[b], total[b], inv), (a, b)) for a, b in sorted(touch))
+-        if cost + prior > 0:
+-            break                               # every touching pair is likelier as two words
+-        members[a] += members.pop(b)
+-        count[a] += count.pop(b)
+-        total[a] = total[a] + total.pop(b)
+-        renamed = ((a if i == b else i, a if j == b else j) for i, j in touch)       # b is now part of a
+-        touch = {(min(i, j), max(i, j)) for i, j in renamed if i != j}
+-    if len(members) == 1:
+-        return [(idx, math.nan)]
+-    apart = {k: math.inf for k in members}      # each word against its likeliest touching word
+-    for i, j in touch:
+-        cost = _apart(count[i], total[i], count[j], total[j], inv)
+-        apart[i], apart[j] = min(apart[i], cost), min(apart[j], cost)
+-    return [(np.sort(np.concatenate(parts)), apart[k]) for k, parts in members.items()]
+-
+-
+-# --- rectangles ----------------------------------------------------------------------------------------------------
++            idx, one = joins[key][1]
++            old = list(key)
++            new = [{"idx": idx, "prms": one["prms"], "tags": one["tags"], "ll": one["ll"]}]
++        for k in old:
++            del words[k]
++            splits.pop(k, None)
++        joins = {pair: j for pair, j in joins.items() if not set(pair) & set(old)}
++        for w in new:
++            words[next_id] = w
++            next_id += 1
++    return [words[k] for k in sorted(words)]
++
++
++# --- rectangles -----------------------------------------------------------------------------------------------------
+ 
+ def _rect(c, v, n, a0, a1, b0, b1) -> np.ndarray:
+     """The rectangle of centre c, axes v (along) and n (across, towards the feet), extents [a0, a1] x [b0, b1]: its
+@@ -235,128 +517,32 @@ def _frame(rect: np.ndarray):
+     return c, v, n, (a.min(), a.max(), b.min(), b.max())
+ 
+ 
+-def _oriented(c, sides: list[tuple[np.ndarray, float]], ref: np.ndarray) -> np.ndarray:
+-    """A rectangle of centre c given as its two axes with their lengths ((unit vector, length), twice), laid with its
+-    first edge along the axis direction nearest `ref` (with no `ref`, the longer side, left to right or upwards)."""
+-    cands = []
+-    for k, (u, length) in enumerate(sides):
+-        other = sides[1 - k][1]
+-        for sgn in (1.0, -1.0):
+-            cands.append((sgn * u, length, other))
+-    if ref @ ref > 0:
+-        v, along, across = max(cands, key=lambda cd: float(cd[0] @ ref))
+-    else:
+-        v, along, across = max(cands, key=lambda cd: (cd[1], float(cd[0][0]), -float(cd[0][1])))
+-    n = np.array([-v[1], v[0]])
+-    return _rect(c, v, n, -along / 2, along / 2, -across / 2, across / 2)
+-
+-
+-def _unclip_box(px: np.ndarray, ref: np.ndarray, r: float) -> np.ndarray:
+-    """DBNet's box of a word's core px (m, 2) (x, y): their minimum-area rectangle, laid by the reading direction,
+-    unclipped at r."""
+-    p0, p1, p2, _ = cv2.boxPoints(cv2.minAreaRect(px.astype(np.float32))).astype(np.float64)
+-    sides = []
+-    for e in (p1 - p0, p2 - p1):
+-        length = math.hypot(*e)
+-        sides.append((e / length if length > 0 else None, length))
+-    if sides[0][0] is None and sides[1][0] is None:
+-        sides = [(np.array([1.0, 0.0]), 0.0), (np.array([0.0, 1.0]), 0.0)]
+-    elif sides[0][0] is None:
+-        u = sides[1][0]
+-        sides[0] = (np.array([-u[1], u[0]]), 0.0)
+-    elif sides[1][0] is None:
+-        u = sides[0][0]
+-        sides[1] = (np.array([-u[1], u[0]]), 0.0)
+-    return shrink.unclip(_oriented((p0 + p2) / 2, sides, ref), r)
+-
+-
+-def _areas(q: np.ndarray) -> np.ndarray:
+-    x, y = q[..., 0], q[..., 1]
+-    return 0.5 * np.abs((x * np.roll(y, -1, -1) - np.roll(x, -1, -1) * y).sum(-1))
+-
+-
+-def _iou(a32: np.ndarray, b32: np.ndarray, area_a: float, area_b: float) -> float:
+-    inter = cv2.intersectConvexConvex(a32, b32)[0]
+-    union = area_a + area_b - inter
+-    return float(inter / union) if union > 0 else 0.0
+-
+-
+-def _lanms(quads: np.ndarray, score: np.ndarray, merge_iou: float) -> np.ndarray:
+-    """The votes (m, 4, 2), in px order, merged by score-weighted locality-aware NMS (see the module): the merged box
+-    with the most score (its corners, not yet squared up)."""
+-    q32 = quads.astype(np.float32)
+-    area = _areas(quads)
+-    groups = []                                     # [score-weighted corner sum, score]
+-    total, weight = quads[0] * score[0], float(score[0])
+-    cur32, cur_area = q32[0], float(area[0])
+-    for k in range(1, len(quads)):
+-        if _iou(cur32, q32[k], cur_area, float(area[k])) > merge_iou:
+-            total = total + quads[k] * score[k]
+-            weight += float(score[k])
+-            cur = total / weight
+-            cur32, cur_area = cur.astype(np.float32), float(_areas(cur))
+-        else:
+-            groups.append([total, weight])
+-            total, weight = quads[k] * score[k], float(score[k])
+-            cur32, cur_area = q32[k], float(area[k])
+-    groups.append([total, weight])
+-    kept = []                                       # [corner sum, score, box, box32, area]
+-    for total, weight in sorted(groups, key=lambda gr: -gr[1]):
+-        box = total / weight
+-        box32, box_area = box.astype(np.float32), float(_areas(box))
+-        for kk in kept:
+-            if _iou(kk[3], box32, kk[4], box_area) > merge_iou:
+-                kk[0] = kk[0] + total
+-                kk[1] += weight
+-                kk[2] = kk[0] / kk[1]
+-                kk[3], kk[4] = kk[2].astype(np.float32), float(_areas(kk[2]))
+-                break
+-        else:
+-            kept.append([total, weight, box, box32, box_area])
+-    return max(kept, key=lambda kk: kk[1])[2]      # the first of equal scores
+-
+-
+-def _squared(q: np.ndarray, ref: np.ndarray) -> np.ndarray:
+-    """A merged quadrilateral of votes as a rectangle: its corners' centre, the mean direction of its first and third
+-    edges, their mean lengths, and the mean lengths of the other two; read the way of `ref`."""
+-    e = (q[1] - q[0]) + (q[2] - q[3])
+-    norm = math.hypot(*e)
+-    v = e / norm if norm > 0 else np.array([1.0, 0.0])
+-    if ref @ v < 0:
+-        v = -v
+-    n = np.array([-v[1], v[0]])
+-    along = abs(float(((q[1] - q[0]) @ v + (q[2] - q[3]) @ v) / 2))
+-    across = abs(float(((q[3] - q[0]) @ n + (q[2] - q[1]) @ n) / 2))
+-    return _rect(q.mean(0), v, n, -along / 2, along / 2, -across / 2, across / 2)
+-
+-
+-def _votes(px: np.ndarray, along: np.ndarray, dist: np.ndarray, ref: np.ndarray) -> np.ndarray:
+-    """Each core px's vote (m, 4, 2): its word's rectangle from its distances (top, bottom, start, end) along its own
+-    reading direction (`data._geometry` inverted), laid with the first edge nearest `ref`."""
+-    up = np.stack([along[:, 1], -along[:, 0]], -1)              # (-sin, -cos): towards the letters' tops
+-    top, bottom, start, end = dist.T
+-    a = np.stack([-start, end, end, -start], -1)[..., None]
+-    b = np.stack([top, top, -bottom, -bottom], -1)[..., None]
+-    q = px[:, None, :] + a * along[:, None, :] + b * up[:, None, :]
+-    if ref @ ref > 0:
+-        e = np.roll(q, -1, 1) - q
+-        norm = np.linalg.norm(e, axis=-1)
+-        dots = (e @ ref) / np.where(norm > 0, norm, np.inf)
+-        k = np.argmax(dots, 1)
+-        q = np.take_along_axis(q, ((np.arange(4)[None, :] + k[:, None]) % 4)[..., None], 1)
+-    return q
++def _clip_polygon(poly: np.ndarray, width: int, height: int) -> np.ndarray:
++    """A convex polygon cut to the page [0, width] x [0, height] (Sutherland-Hodgman, float64)."""
++    for axis, bound, below in ((0, 0.0, False), (0, float(width), True), (1, 0.0, False), (1, float(height), True)):
++        if not len(poly):
++            break
++        inside = poly[:, axis] <= bound if below else poly[:, axis] >= bound
++        out = []
++        for k in range(len(poly)):
++            a, b = poly[k], poly[(k + 1) % len(poly)]
++            if inside[k]:
++                out.append(a)
++            if inside[k] != inside[(k + 1) % len(poly)]:
++                out.append(a + (bound - a[axis]) / (b[axis] - a[axis]) * (b - a))
++        poly = np.array(out).reshape(-1, 2)
++    return poly
+ 
+ 
+ def _on_page(rect: np.ndarray, width: int, height: int) -> np.ndarray:
+-    """The box clipped to the page [0, width] x [0, height] (see the module)."""
++    """The box clipped to the page (see the module); a box with nothing on the page keeps its corners moved onto
++    it."""
+     if (rect >= 0).all() and (rect[:, 0] <= width).all() and (rect[:, 1] <= height).all():
+         return rect
+-    page = np.array([[0, 0], [width, 0], [width, height], [0, height]], np.float32)
+-    area, poly = cv2.intersectConvexConvex(rect.astype(np.float32), page)
+-    if poly is None or area <= 0:
++    pts = _clip_polygon(rect, width, height)
++    if not len(pts):
+         return np.clip(rect, 0, [width, height])
+     c, v, n, _ = _frame(rect)
+-    pts = poly.reshape(-1, 2).astype(np.float64)
+     a, b = (pts - c) @ v, (pts - c) @ n
+     return _rect(c, v, n, a.min(), a.max(), b.min(), b.max())
+ 
+@@ -390,129 +576,124 @@ def _table(rows: list[dict]) -> pd.DataFrame:
+     """The words' rows as the table (wordboxes.COLUMNS then EXTRA_COLUMNS), typed as `wordboxes.build_boxes` types
+     them."""
+     floats = ("level", "page_x", "page_y", "axis", "length", "height", "t_length", "t_height", "mean_chance", "x",
+-              "y", "tag_spread", "p_word", "split_llr", *wordboxes.CORNER_COLS,
++              "y", "p_word", "core_mass", "tag_spread", *wordboxes.CORNER_COLS,
+               *[f"p_{k}" for k in wordboxes.KIND_NAMES])
+     return pd.DataFrame(rows, columns=[*wordboxes.COLUMNS, *EXTRA_COLUMNS]).astype(
+-        {"i": "int32", "quarter": "int8", "lab_lot": "int32", "street": bool, "ink_px": "int64", "core_px": "int64",
++        {"i": "int32", "quarter": "int8", "lab_lot": "int32", "street": bool, "ink_px": "int64",
+          **{c: "float64" for c in floats}})
+ 
+ 
+-def core_words(core, geo, tag, ink, level: float, r: float, refine: str, *, tag_sigma: float, split_prior: float,
+-               merge_iou: float | None = None, kind_p: np.ndarray | None = None, sheet: str = "") -> pd.DataFrame:
++def core_words(core, geo, tag, ink, spreads: Spreads, word_prior: float, *, kind_p: np.ndarray | None = None,
++               sheet: str = "") -> pd.DataFrame:
+     """One page's word boxes from the word heads (see the module): `core` (h, w), `geo` (5 or 6, h, w), `tag` (k, h,
+-    w), `ink` (h, w) bool; `level` the core chance a word's px reach; `r` the shrink ratio of the cores; `refine`
+-    "unclip" or "votes"; `tag_sigma` the within-word spread of the tags and `split_prior` the log prior odds of two
+-    words against one (both measured, Task 8); `merge_iou` the IoU above which two votes merge (measured, Task 8;
+-    needed by "votes"); `kind_p` (4, h, w) the kinds' probabilities (optional); `sheet` written to the table.
+-    A DataFrame of wordboxes.COLUMNS then EXTRA_COLUMNS, one row per word."""
+-    if refine not in REFINES:
+-        raise ValueError(f"refine is one of {', '.join(REFINES)}, not {refine!r}")
+-    if refine == "votes" and merge_iou is None:
+-        raise ValueError("refine='votes' needs merge_iou, the IoU above which two votes merge (measured, Task 8)")
+-    if not 0 < level <= 1:
+-        raise ValueError(f"level is a core chance in (0, 1], not {level}")
+-    if not tag_sigma > 0:
+-        raise ValueError(f"tag_sigma is a spread, above 0, not {tag_sigma}")
++    w), `ink` (h, w) bool; `spreads` and `word_prior` measured and fitted (Task 8); `kind_p` (4, h, w) the kinds'
++    probabilities (optional); `sheet` written to the table.  A DataFrame of wordboxes.COLUMNS then EXTRA_COLUMNS, one
++    row per word."""
++    spreads.check()
++    if not math.isfinite(word_prior):
++        raise ValueError(f"word_prior is a finite log prior, not {word_prior}")
+     core = np.asarray(core)
+     height, width = core.shape
+-    geo = np.asarray(geo)
+-    if geo.shape[0] not in (5, 6) or geo.shape[1:] != core.shape:
++    geo, tag = np.asarray(geo), np.asarray(tag)
++    if geo.ndim != 3 or geo.shape[0] not in (5, 6) or geo.shape[1:] != core.shape:
+         raise ValueError(f"geo is (5 or 6, {height}, {width}), not {geo.shape}")
+-    tag = np.asarray(tag)
+     if tag.ndim != 3 or tag.shape[1:] != core.shape:
+         raise ValueError(f"tag is (k, {height}, {width}), not {tag.shape}")
+     ink = np.asarray(ink, bool)
+-
+-    mask = np.ascontiguousarray(core >= level)
+-    ys, xs = np.nonzero(mask)
+-    if not len(ys):
++    V = _Votes(core, geo, tag, spreads)
++    if not len(V):
+         return _table([])
+-    _, lab = cv2.connectedComponents(mask.view(np.uint8), connectivity=8)
+-    chance = core[ys, xs].astype(np.float64)
+-    dist = np.moveaxis(geo[:4, ys, xs].astype(np.float64), 0, -1)
+-    if geo.shape[0] == 5:
+-        theta = np.deg2rad(geo[4, ys, xs].astype(np.float64))
+-    else:
+-        theta = np.arctan2(geo[5, ys, xs].astype(np.float64), geo[4, ys, xs].astype(np.float64))
+-    along = np.stack([np.cos(theta), -np.sin(theta)], -1)          # the reading direction, page px (y down)
+-    tags = np.moveaxis(tag[:, ys, xs].astype(np.float64), 0, -1)
+-    px = np.stack([xs, ys], -1).astype(np.float64)
+-
+-    own = lab[ys, xs]
+-    order = np.argsort(own, kind="stable")
+-    found = []
+-    for comp in np.split(order, np.flatnonzero(np.diff(own[order])) + 1):
+-        found += _split(np.sort(comp), ys, xs, tags, tag_sigma, split_prior)
+-    found.sort(key=lambda f: int(f[0][0]))
++    found = _search(V, _proposals(V, core.shape, spreads, word_prior), spreads, word_prior)
+ 
+     rows = []
+-    for i, (idx, llr) in enumerate(found):
+-        s = chance[idx]
+-        ref = (s[:, None] * along[idx]).sum(0)
+-        if refine == "unclip":
+-            box = _unclip_box(px[idx], ref, r)
+-        else:
+-            box = _squared(_lanms(_votes(px[idx], along[idx], dist[idx], ref), s, merge_iou), ref)
++    for word in sorted(found, key=lambda wd: int((V.ys[wd["idx"]] * width + V.xs[wd["idx"]]).min())):
++        v = V.take(word["idx"])
++        fit = _em(V, v, word["prms"], word["tags"])
++        r = fit["resp"][:, 0]
++        box = _box(fit["prms"][0])
++        along, _ = _axes(v["psi"])
++        if (((r * v["w"])[:, None] * along).sum(0) @ (box[1] - box[0])) < 0:
++            box = np.roll(box, 2, 0)                # the votes, weighted, read it the other way round
+         g = _on_page(box, width, height)
+         t, ink_px, kinds = _inked(g, ink, kind_p)
+-        _, v, _, (a0, a1, b0, b1) = _frame(g)
++        _, vv, _, (a0, a1, b0, b1) = _frame(g)
+         _, _, _, (ta0, ta1, tb0, tb1) = _frame(t)
+-        spread = float(np.sqrt(((tags[idx] - tags[idx].mean(0)) ** 2).mean()))
+-        p_word = float(s.mean())
++        votes = float(r.sum())
++        mass = float((r * v["w"]).sum())
++        p_word = mass / votes if votes > 0 else 0.0
++        spread = (math.sqrt(float((r * ((v["t"] - fit["tags"][0]) ** 2).sum(1)).sum()) / (votes * V.k))
++                  if votes > 0 else 0.0)
+         centre = g.mean(0)
+-        rows.append({"sheet": sheet, "i": i, "level": float(level), "quarter": -1,
++        rows.append({"sheet": sheet, "i": len(rows), "level": math.nan, "quarter": -1,
+                      "page_x": float(centre[0]), "page_y": float(centre[1]),
+-                     "axis": float(np.rad2deg(np.arctan2(-v[1], v[0])) % 180.0),
++                     "axis": float(np.rad2deg(np.arctan2(-vv[1], vv[0])) % 180.0),
+                      "length": float(a1 - a0), "height": float(b1 - b0),
+                      "t_length": float(ta1 - ta0), "t_height": float(tb1 - tb0),
+                      "mean_chance": p_word, "ink_px": ink_px,
+                      **{f"p_{k}": float(kinds[c]) for c, k in enumerate(wordboxes.KIND_NAMES)},
+                      "x": math.nan, "y": math.nan, "lab_lot": -1, "street": False,
+                      **dict(zip(wordboxes.CORNER_COLS, [*g.reshape(8).tolist(), *t.reshape(8).tolist()])),
+-                     "form": refine if math.isnan(llr) else f"{refine}+split", "core_px": len(idx),
+-                     "tag_spread": spread, "p_word": p_word, "split_llr": float(llr)})
++                     "p_word": p_word, "core_mass": mass, "tag_spread": spread})
+     return _table(rows)
+ 
+ 
+-# --- the level -----------------------------------------------------------------------------------------------------
+-
+-def terra_labels(terra: pd.DataFrame, forms: dict | None = None) -> pd.DataFrame:
+-    """Terra's code words as labels for the headline (`measures.label_right`): sheet, point_x, point_y (the centre of
+-    its rectangle), truth (the code its string is a printed form of, `forms`; None: the string itself) and quarter;
+-    words whose string is no code are left out."""
+-    code = [measures._code_of(t, forms) for t in terra["text"]]
+-    keep = np.array([c is not None for c in code], bool)
+-    centre = terra[measures.C_COLS].to_numpy(float).reshape(-1, 4, 2).mean(1)
+-    return pd.DataFrame({"sheet": terra["sheet"].to_numpy()[keep], "point_x": centre[keep, 0],
+-                         "point_y": centre[keep, 1], "truth": [c for c, k in zip(code, keep) if k],
+-                         "quarter": terra["quarter"].to_numpy()[keep].astype(int)})
+-
+-
+-def _right(boxes: pd.DataFrame, reads: dict, labels: pd.DataFrame) -> np.ndarray:
+-    """Each label read right (1) or not (0, a label with no box too), by `measures.label_right`, a sheet at a time."""
+-    out = np.zeros(len(labels))
+-    for sheet, lab in labels.groupby("sheet", sort=True):
+-        mine = boxes[boxes["sheet"] == sheet]
+-        d = measures.label_right(mine, reads, lab.reset_index(drop=True))
+-        out[lab.index.to_numpy()[d["label"].to_numpy(int)]] = d["right"].to_numpy(float)
+-    return out
+-
+-
+-def choose_level(boxes: dict, reads: dict, terra: pd.DataFrame, forms: dict | None = None,
+-                 quarters: tuple[str, ...] = paths.QUARTERS) -> dict:
+-    """The level of each quarter (see the module): `boxes` {level: the boxes at that level (sheet, g corners; their
+-    index the reads' keys)}, `reads` {level: {box index: reading}} (`measures` readings), `terra` Terra's words
+-    (`measures.terra_words`), `forms` printed form -> code.  {"level": {quarter: level}, "right_on_others": {quarter:
+-    {level name: share right}}, "words_on_others": {quarter: Terra code words of the other quarters}}."""
+-    labels = terra_labels(terra, forms)
+-    levels = sorted(boxes)
+-    right = {lv: _right(boxes[lv], reads[lv], labels) for lv in levels}
+-    q = labels["quarter"].to_numpy()
+-    table, counts = {}, {}
+-    for k, name in enumerate(quarters):
+-        others = q != k
+-        counts[name] = int(others.sum())
+-        table[name] = {wordboxes.level_name(lv): float(right[lv][others].mean()) if others.any() else 0.0
+-                       for lv in levels}
+-    chosen = {name: max(levels, key=lambda lv: (table[name][wordboxes.level_name(lv)], lv)) for name in quarters}
+-    return {"level": chosen, "right_on_others": table, "words_on_others": counts}
++# --- measuring the spreads (Task 8's, on the training quarters) ----------------------------------------------------
++
++def measure_spreads(pages) -> Spreads:
++    """The spreads (see the module) measured on predictions against Terra's words, never the owner's answers.
++    `pages`: dicts of core, geo, tag (as `core_words` takes them), word_id (int (h, w): 1 + the Terra word whose
++    rectangle holds the px, later over earlier, 0 on none: the targets' `tag_id`) and words (float (n, 4, 2): Terra's
++    rectangles, the first edge along the reading direction).  Each word px's vote is read the way nearer its word's
++    direction (as the model reads it).
++      distance    the root mean square, over every word px's four distances, of its distance minus the one its word
++                  implies at the px (`data._geometry`'s)
++      angle       the root mean square of a word px's direction minus its word's (degrees)
++      tag         the root mean square, over every channel of every word px, of its tag minus its word's mean tag
++      cell        how many px make one independent vote: the mean over words of n |mean distance error|^2 / (4
++                  distance^2) (votes of independent errors give 1; votes alike in blocks of m px give m)
++      background_distance, background_tag   the root mean square of a background px's distances, and of its tags"""
++    sq_d = n_d = sq_a = n_a = sq_t = n_t = sq_bd = n_bd = sq_bt = n_bt = 0.0
++    per_word = []                       # (n, |mean distance error|^2)
++    for page in pages:
++        geo, tag = np.asarray(page["geo"]), np.asarray(page["tag"])
++        word_id = np.asarray(page["word_id"])
++        rects = np.asarray(page["words"], np.float64).reshape(-1, 4, 2)
++        phi = np.arctan2(-(rects[:, 1, 1] - rects[:, 0, 1]), rects[:, 1, 0] - rects[:, 0, 0])
++        along, up = _axes(phi)
++        a, b = np.einsum("nkc,nc->nk", rects, along), np.einsum("nkc,nc->nk", rects, up)
++        truth = np.stack([phi, a.min(1), a.max(1), b.min(1), b.max(1)], -1)
++        ys, xs = np.nonzero(word_id > 0)
++        if len(ys):
++            j = word_id[ys, xs].astype(np.int64) - 1
++            v = {"p": np.stack([xs, ys], -1).astype(np.float64),
++                 "d": np.moveaxis(geo[:4, ys, xs].astype(np.float64), 0, -1), "psi": _psi(geo, ys, xs)}
++            same, other, ds, do = _implied(v, truth[j])
++            flip = np.abs(do) < np.abs(ds)
++            err = np.where(flip[:, None], other, same) - truth[j, 1:]
++            sq_d += float((err ** 2).sum())
++            n_d += err.size
++            ang = np.where(flip, do, ds)
++            sq_a += float((np.rad2deg(ang) ** 2).sum())
++            n_a += len(ang)
++            t = np.moveaxis(tag[:, ys, xs].astype(np.float64), 0, -1)
++            for word in np.unique(j):
++                mine = j == word
++                dev = t[mine] - t[mine].mean(0)
++                sq_t += float((dev ** 2).sum())
++                n_t += dev.size
++                per_word.append((int(mine.sum()), float((err[mine].mean(0) ** 2).sum())))
++        rows = max(1, CHUNK_PX // max(1, word_id.shape[1]))
++        for y0 in range(0, word_id.shape[0], rows):
++            by, bx = np.nonzero(word_id[y0:y0 + rows] == 0)
++            by = by + y0
++            sq_bd += float((geo[:4, by, bx].astype(np.float64) ** 2).sum())
++            n_bd += 4 * len(by)
++            sq_bt += float((tag[:, by, bx].astype(np.float64) ** 2).sum())
++            n_bt += tag.shape[0] * len(by)
++    if not (n_d and n_t and n_bd and per_word):
++        raise ValueError("the pages hold no word px or no background px to measure")
++    distance = math.sqrt(sq_d / n_d)
++    n, e2 = np.array(per_word, np.float64).T
++    return Spreads(distance=distance, angle=math.sqrt(sq_a / n_a), tag=math.sqrt(sq_t / n_t),
++                   cell=float((n * e2).mean() / (4 * distance ** 2)),
++                   background_distance=math.sqrt(sq_bd / n_bd), background_tag=math.sqrt(sq_bt / n_bt))
+diff --git a/pipeline/tests/test_wordread_words.py b/pipeline/tests/test_wordread_words.py
+index 0a55346..f31f2dd 100644
+--- a/pipeline/tests/test_wordread_words.py
++++ b/pipeline/tests/test_wordread_words.py
+@@ -1,13 +1,11 @@
+-"""Word boxes from the detector's word heads (`wordread.words`): the components of the core chance, split where a
+-two-word model of their px tags is likelier than a one-word model (PAN's tags, Gaussian about each word's mean), each
+-grown back by DBNet's unclip or rebuilt from its px's geometry votes (EAST's locality-aware NMS), and the level chosen
+-per quarter by the headline over Terra's code words.
+-
+-The maps are synthetic: Terra-like words on a blank page, and the outputs a perfect net would give, drawn by the
+-detector's own target code (`data.crop_targets(..., words=True)`: the cores, and the distances from each core px to
+-its word's sides), so a box that comes back right has inverted exactly what the heads learn."""
+-import dataclasses
+-
++"""Words from the detector's word heads (`wordread.words`): every px votes for its word's box (its four distances
++along its reading direction) and carries its tag, weighted by its core chance; the words are a mixture over those
++votes with measured spreads and a fitted log prior per word, with no level, no merge IoU and no unclip.
++
++The maps are synthetic.  `_maps` draws what a net would give: inside each word (a float rectangle at a float angle),
++the exact distances from each px to the word's edges (`data._geometry`'s, from the px's (col, row)), optionally with
++noise, the word's tag, and a core chance; outside, a lower core chance with votes about the px itself (the background
++the model expects).  One test reads Task 5's own targets (`data.crop_targets(..., words=True)`)."""
+ import cv2
+ import numpy as np
+ import pandas as pd
+@@ -17,13 +15,10 @@ from sfzmaps.solver import grid, paths, wordboxes
+ from sfzmaps.solver.textnet import data
+ from sfzmaps.solver.wordread import shrink, words
+ 
+-R = 0.4           # the ruled shrink ratio
+-SIZE = 240        # the synthetic pages are SIZE x SIZE px
+-LEVEL = 0.5
+-REFINES = ("unclip", "votes")
+-# the measured parameters, here test values: the within-word tag spread, the log prior odds of a second word, the IoU
+-# at which two votes are merged (Task 8 measures all three on the training quarters' predictions)
+-KW = {"tag_sigma": 0.3, "split_prior": -20.0, "merge_iou": 0.5}
++SIZE = 240
++# test values of the measured parameters (Task 8 measures them on the training quarters' predictions)
++EXACT = words.Spreads(distance=0.5, angle=1.0, tag=0.3, cell=1.0, background_distance=8.0, background_tag=1.0)
++PRIOR = -20.0
+ 
+ 
+ def _rect(cx, cy, length, height, angle=0.0) -> np.ndarray:
+@@ -36,42 +31,60 @@ def _rect(cx, cy, length, height, angle=0.0) -> np.ndarray:
+                      c + v * length / 2 + n * height / 2, c - v * length / 2 + n * height / 2])
+ 
+ 
+-def _sheet(rects, lines=(), cores=None) -> data.SheetData:
+-    """An in-memory sheet: each word's ink a block inside it (its glyphs), plus `lines` ((x0, y0), (x1, y1),
+-    thickness) of ink; the words' cores shrunk at R unless `cores` are given."""
+-    gray = np.full((SIZE, SIZE), 255, np.uint8)
+-    for r in rects:                                 # the glyphs: the word's middle 60% of height, 3 px in from each end
+-        c = r.mean(0)
++def _maps(rects, angles, tags=None, noise=0.0, tag_noise=0.0, angle_noise=0.0, w_in=1.0, w_out=0.0, block=1,
++          lines=(), seed=0, size=SIZE):
++    """core, geo (5, h, w), tag (4, h, w), ink, word_id for words `rects` read at `angles` (degrees).  Inside a word
++    (its px (col, row) in the rectangle; later words over earlier): core `w_in`, the exact distances to its edges plus
++    Gaussian noise of sd `noise` px, its angle plus noise of sd `angle_noise` degrees (one draw per `block` x `block`
++    px: correlated votes), its tag (`tags[k]`, else 10 k on the first channel) plus noise of sd `tag_noise`.  Outside:
++    core `w_out`, half-normal distances of sd 8 px, any direction and tags of sd 1 (the background's votes).  Ink: a
++    block inside each word and `lines`.  geo is float64: the votes unrounded."""
++    rng = np.random.default_rng([seed, 3])
++    h = w = size
++    rows, cols = np.mgrid[0:h, 0:w]
++    p = np.stack([cols, rows], -1).astype(float)
++    word_id = np.zeros((h, w), np.int32)
++    for k, r in enumerate(rects):
++        inside = cv2.pointPolygonTest
++        poly = np.asarray(r, np.float32).reshape(-1, 1, 2)
++        y0, x0 = np.maximum(np.floor(np.asarray(r).min(0)[::-1]).astype(int) - 1, 0)
++        y1, x1 = np.minimum(np.ceil(np.asarray(r).max(0)[::-1]).astype(int) + 2, [h, w])
++        for y in range(y0, y1):
++            for x in range(x0, x1):
++                if inside(poly, (float(x), float(y)), False) >= 0:
++                    word_id[y, x] = k + 1
++    core = np.where(word_id > 0, w_in, w_out).astype(np.float32)
++    geo = np.zeros((5, h, w), np.float64)
++    tag = rng.normal(0, 1.0, (4, h, w))
++    n_words = len(rects)
++    vecs = np.asarray(tags, float) if tags is not None else np.c_[10.0 * np.arange(n_words), np.zeros((n_words, 3))]
++    nb = (h + block - 1) // block, (w + block - 1) // block
++    dn = rng.normal(0, 1.0, (4, *nb)).repeat(block, 1).repeat(block, 2)[:, :h, :w] * noise
++    tn = rng.normal(0, 1.0, (4, *nb)).repeat(block, 1).repeat(block, 2)[:, :h, :w] * tag_noise
++    an = rng.normal(0, 1.0, nb).repeat(block, 0).repeat(block, 1)[:h, :w] * angle_noise
++    for k, r in enumerate(rects):
++        on = word_id == k + 1
++        a = np.deg2rad(angles[k])
++        along, up = np.array([np.cos(a), -np.sin(a)]), np.array([-np.sin(a), -np.cos(a)])
++        ca, cb = np.asarray(r) @ along, np.asarray(r) @ up
++        pa, pb = p[on] @ along, p[on] @ up
++        geo[:4, on] = np.stack([cb.max() - pb, pb - cb.min(), pa - ca.min(), ca.max() - pa]) + dn[:, on]
++        geo[4, on] = angles[k] + an[on]
++        tag[:, on] = vecs[k][:, None] + tn[:, on]
++    off = word_id == 0
++    geo[:4, off] = np.abs(rng.normal(0, 8.0, (4, int(off.sum()))))
++    geo[4, off] = rng.uniform(-180.0, 180.0, int(off.sum()))
++    gray = np.full((h, w), 255, np.uint8)
++    for r in rects:
++        c = np.asarray(r).mean(0)
+         v, n = r[1] - r[0], r[3] - r[0]
+-        half_l, half_h = np.linalg.norm(v) / 2 - 3, np.linalg.norm(n) * 0.3
++        hl, hh = np.linalg.norm(v) / 2 - 3, np.linalg.norm(n) * 0.3
+         v, n = v / np.linalg.norm(v), n / np.linalg.norm(n)
+-        inner = [c - v * half_l - n * half_h, c + v * half_l - n * half_h, c + v * half_l + n * half_h,
+-                 c - v * half_l + n * half_h]
+-        cv2.fillPoly(gray, [np.round(inner).astype(np.int32)], 0)
+-    for p, q, thick in lines:
+-        cv2.line(gray, p, q, 0, thick)
+-    rects = np.round(np.array(rects, float).reshape(-1, 4, 2)).astype(np.int32)
+-    sd = data.SheetData(
+-        series=paths.SERIES, sheet="s", height=SIZE, width=SIZE, ink_bits=np.packbits(gray < grid.INK_BELOW, axis=1),
+-        words=rects, kinds=np.zeros(len(rects), np.uint8),
+-        angles=np.array([data.reading_angle(r) for r in rects], np.int16), other=np.zeros((0, 4, 2), np.int32),
+-        points=np.zeros((0, 2), np.int32), world=np.zeros((0, 0, 2)), ft_per_px=float("nan"))
+-    if cores is None:
+-        return shrink.prepare([sd], R)[0]
+-    return dataclasses.replace(sd, cores=np.asarray(cores, np.int32).reshape(-1, 4, 2))
+-
+-
+-def _heads(sd: data.SheetData, tags=None, noise=0.0, seed=0):
+-    """What a perfect net gives on the sheet: core chance, geo (the four distances and the reading angle), tags (one
+-    vector per word: `tags[k]`, or the word's number x 10 on the first channel; plus Gaussian noise of sd `noise` on
+-    every px, seeded), ink."""
+-    t = data.crop_targets(sd, SIZE // 2, SIZE // 2, SIZE, 1.0, 0, words=True)
+-    n = len(sd.words)
+-    vecs = np.zeros((n + 1, 4), np.float32)
+-    vecs[1:] = np.asarray(tags, np.float32) if tags is not None else np.c_[10.0 * np.arange(n), np.zeros((n, 3))]
+-    tag = np.moveaxis(vecs[t["tag_id"]], -1, 0)
+-    tag += noise * np.random.default_rng([seed, 1]).standard_normal(tag.shape).astype(np.float32)
+-    return t["core"].astype(np.float32), t["geo"].astype(np.float32), tag, t["ink"]
++        cv2.fillPoly(gray, [np.round([c - v * hl - n * hh, c + v * hl - n * hh, c + v * hl + n * hh,
++                                      c - v * hl + n * hh]).astype(np.int32)], 0)
++    for a, b, thick in lines:
++        cv2.line(gray, a, b, 0, thick)
++    return core, geo, tag.astype(np.float32), gray < grid.INK_BELOW, word_id
+ 
+ 
+ def _g(df: pd.DataFrame, k: int, key="g") -> np.ndarray:
+@@ -89,285 +102,288 @@ def _turn(a, b) -> float:
+     return abs((a - b + 180) % 360 - 180)
+ 
+ 
+-def _matches(df, rects):
+-    """Each rectangle's box (the best IoU) and that IoU."""
+-    out = []
+-    for r in rects:
+-        ious = [_iou(_g(df, k), r) for k in range(len(df))]
+-        out.append((int(np.argmax(ious)), max(ious)))
+-    return out
++def _box_of(df, rect) -> int:
++    """The row of the box meeting `rect` best."""
++    return int(np.argmax([_iou(_g(df, k), rect) for k in range(len(df))]))
+ 
+ 
+-def _right_words(df, sd, refine):
+-    """Each word has its own box: by its votes, the word's rectangle; by unclip, its core grown back at R (these
+-    tests' cores touch, so they are drawn by hand, not shrunk at R: unclip grows what the net would give)."""
+-    want = sd.words.astype(float) if refine == "votes" else shrink.unclip(sd.cores.astype(float), R)
+-    found = _matches(df, want)
+-    assert sorted(k for k, _ in found) == list(range(len(want)))
+-    for (k, iou), r in zip(found, want):
+-        if refine == "votes":
+-            assert np.abs(_g(df, k) - r).max() < 1e-3
+-        else:
+-            assert iou > 0.9            # the painted px of a core (one column of each pair shared) grown back
++def _same_box(df, rect, tol):
++    """`rect`'s box, its corners within `tol` px of `rect`'s (the same corner order)."""
++    k = _box_of(df, rect)
++    assert np.abs(_g(df, k) - rect).max() < tol
++    return k
+ 
+ 
+-# --- words that touch --------------------------------------------------------------------------------------------
++# --- one failure kind each ------------------------------------------------------------------------------------------
+ 
+-@pytest.mark.parametrize("refine", REFINES)
+-def test_two_touching_words_whose_ink_joins_become_two_boxes(refine):
+-    rects = [_rect(70, 70, 60, 20), _rect(130, 70, 60, 20)]      # side by side, their glyphs joined by a stroke
+-    sd = _sheet(rects, lines=[((90, 70), (110, 70), 3)])
+-    core, geo, tag, ink = _heads(sd)
+-    _, lab = cv2.connectedComponents(ink.view(np.uint8), connectivity=8)
+-    assert len(np.unique(lab[ink])) == 1                           # one connected piece of ink: today's one box
++def test_two_touching_words_become_two_boxes():
++    rects = [_rect(80, 80, 60, 20), _rect(140, 80, 60, 20)]     # side by side, the same tags: the votes part them
++    core, geo, tag, ink, _ = _maps(rects, [0, 0], tags=[[0, 0, 0, 0]] * 2)
++    df = words.core_words(core, geo, tag, ink, EXACT, PRIOR)
++    assert len(df) == 2
++    for r in rects:
++        _same_box(df, r, 1e-6)
+ 
+-    df = words.core_words(core, geo, tag, ink, LEVEL, R, refine, **KW)
+ 
+-    assert len(df) == 2
+-    for (k, iou), r in zip(_matches(df, sd.words.astype(float)), sd.words.astype(float)):
+-        # votes: the targets' own rectangle; unclip: the painted core grown back (px-rounded), within 1 px
+-        assert np.abs(_g(df, k) - r).max() < (1e-3 if refine == "votes" else 1.0)
+-    assert sorted(_matches(df, sd.words.astype(float))[i][0] for i in range(2)) == [0, 1]
+-
+-
+-@pytest.mark.parametrize("refine", REFINES)
+-def test_touching_cores_split_when_two_tag_clouds_are_likelier_than_one(refine):
+-    rects = [_rect(70, 70, 60, 20), _rect(130, 70, 60, 20)]
+-    cores = [_rect(71, 70, 58, 12), _rect(129, 70, 58, 12)]         # meeting at x = 100: one component of core
+-    sd = _sheet(rects, cores=np.round(cores))
+-    # two clouds of tags 2 apart, each spread 0.3 about its word's mean
+-    core, geo, tag, ink = _heads(sd, tags=[[0, 0, 0, 0], [2, 0, 0, 0]], noise=0.3)
+-    _, lab = cv2.connectedComponents((core >= LEVEL).view(np.uint8), connectivity=8)
+-    assert lab.max() == 1
+-
+-    # the separation is large against the measured spread: two words
+-    df = words.core_words(core, geo, tag, ink, LEVEL, R, refine, **KW)
+-    assert len(df) == 2
+-    assert set(df["form"]) == {f"{refine}+split"}
+-    assert (df["split_llr"] > -KW["split_prior"]).all()
+-    assert df["tag_spread"].to_numpy() == pytest.approx([0.3, 0.3], rel=0.1)       # each word's own px: sd 0.3
+-    _right_words(df, sd, refine)
+-
+-    # the same clouds, the spread measured large (3): one word
+-    one = words.core_words(core, geo, tag, ink, LEVEL, R, refine, **{**KW, "tag_sigma": 3.0})
+-    assert len(one) == 1
+-    assert one["form"].tolist() == [refine]
+-    assert np.isnan(one["split_llr"].iloc[0])
+-    # ... and with a second word a priori far less likely than the clouds make it: one word
+-    assert len(words.core_words(core, geo, tag, ink, LEVEL, R, refine, **{**KW, "split_prior": -1e9})) == 1
+-
+-
+-@pytest.mark.parametrize("refine", REFINES)
+-def test_a_core_whose_tags_split_in_three_gives_three_words(refine):
+-    rects = [_rect(50, 70, 50, 20), _rect(100, 70, 50, 20), _rect(150, 70, 50, 20)]
+-    cores = [_rect(51, 70, 48, 12), _rect(100, 70, 50, 12), _rect(149, 70, 48, 12)]     # one strip of core
+-    sd = _sheet(rects, cores=np.round(cores))
+-    core, geo, tag, ink = _heads(sd, tags=[[0, 0, 0, 0], [0, 2, 0, 0], [0, 4, 0, 0]], noise=0.3)
+-    df = words.core_words(core, geo, tag, ink, LEVEL, R, refine, **KW)
++def test_three_noisy_touching_words_become_three_boxes():
++    """The chain that once came apart into 51 pieces: votes and tags noisy on every px."""
++    rects = [_rect(55, 80, 50, 20), _rect(105, 80, 50, 20), _rect(155, 80, 50, 20)]
++    spreads = words.Spreads(distance=1.0, angle=2.0, tag=0.3, cell=1.0, background_distance=8.0, background_tag=1.0)
++    core, geo, tag, ink, _ = _maps(rects, [0, 0, 0], tags=[[0, 0, 0, 0], [0, 2, 0, 0], [0, 4, 0, 0]], noise=1.0,
++                                   tag_noise=0.3, angle_noise=2.0)
++    df = words.core_words(core, geo, tag, ink, spreads, PRIOR)
+     assert len(df) == 3
+-    _right_words(df, sd, refine)
+-    assert (df["split_llr"] > -KW["split_prior"]).all()
+-    assert df["tag_spread"].to_numpy() == pytest.approx([0.3] * 3, rel=0.1)
+-
++    for r in rects:
++        _same_box(df, r, 0.5)
+ 
+-# --- lines ---------------------------------------------------------------------------------------------------------
+ 
+-@pytest.mark.parametrize("refine", REFINES)
+-def test_a_line_touching_or_crossing_a_word_neither_extends_its_box_nor_splits_it(refine):
+-    rect = _rect(120, 100, 80, 24)
+-    lines = [((0, 112), (SIZE - 1, 112), 2),        # along the word's foot, across the whole page
+-             ((120, 0), (120, SIZE - 1), 2)]        # crossing the word's middle, top to bottom
+-    sd = _sheet([rect], lines=lines)
+-    core, geo, tag, ink = _heads(sd)
+-    df = words.core_words(core, geo, tag, ink, LEVEL, R, refine, **KW)
++def test_a_noisy_single_word_stays_one_word():
++    """Votes and tags noisy on every px, and the background's own votes all around at core chance 0.001."""
++    rect = _rect(120, 120, 100, 24)
++    spreads = words.Spreads(distance=1.5, angle=2.0, tag=0.3, cell=1.0, background_distance=8.0, background_tag=1.0)
++    core, geo, tag, ink, _ = _maps([rect], [0], noise=1.5, tag_noise=0.3, angle_noise=2.0, w_out=1e-3)
++    df = words.core_words(core, geo, tag, ink, spreads, PRIOR)
+     assert len(df) == 1
+-    assert np.abs(_g(df, 0) - sd.words[0]).max() < (1e-3 if refine == "votes" else 1.0)
+-    t = _g(df, 0, "t")
+-    lo, hi = sd.words[0].min(0), sd.words[0].max(0)
+-    assert (t.min(0) >= lo - 1e-6).all() and (t.max(0) <= hi + 1e-6).all()     # the trimmed box stays in the word
+-    assert df["ink_px"].iloc[0] > 0
++    _same_box(df, rect, 0.5)
++    assert df["p_word"].iloc[0] == pytest.approx(1.0, abs=1e-3)
++
++
++def test_a_long_word_whose_votes_scatter_comes_back_as_one_box():
++    """A long word, its px's directions off by 5 degrees (sd): an end px's box turns about the px, so the votes'
++    centres scatter and the proposals are several basins (12 here); joined by the likelihood, one box."""
++    rect = _rect(120, 120, 220, 24)
++    spreads = words.Spreads(distance=1.0, angle=5.0, tag=0.3, cell=1.0, background_distance=8.0, background_tag=1.0)
++    core, geo, tag, ink, _ = _maps([rect], [0], noise=1.0, tag_noise=0.3, angle_noise=5.0)
++    assert len(words._proposals(words._Votes(core, geo, tag, spreads), core.shape, spreads, PRIOR)) > 1
++    df = words.core_words(core, geo, tag, ink, spreads, PRIOR)
++    assert len(df) == 1
++    assert _iou(_g(df, 0), rect) > 0.99
+ 
+ 
+-def test_votes_keep_the_word_when_the_core_bleeds_onto_a_line():
+-    """The core runs on along a line touching the word (above the level), its px voting for thin boxes along the line:
+-    the votes of the word's own px still decide its box."""
+-    rect = _rect(100, 100, 80, 24)
+-    sd = _sheet([rect], lines=[((140, 104), (220, 104), 2)])
+-    core, geo, tag, ink = _heads(sd)
+-    bleed = np.zeros_like(core, bool)
+-    bleed[103:106, 133:200] = True                  # touches the core (x 133...) and runs 60 px on along the line
+-    bleed &= core < LEVEL
+-    core[bleed] = 0.9
+-    geo[:4, bleed] = np.array([1.0, 1.0, 30.0, 30.0], np.float32)[:, None]     # thin boxes 60 px long, on the line
+-    geo[4, bleed] = 0
+-    tag[:, bleed] = 0
+-    _, lab = cv2.connectedComponents((core >= LEVEL).view(np.uint8), connectivity=8)
+-    assert lab.max() == 1
+-    df = words.core_words(core, geo, tag, ink, LEVEL, R, "votes", **KW)
++def test_a_word_whose_votes_are_alike_in_blocks_stays_one_word_by_its_measured_cell():
++    """Votes alike over 4 x 4 px blocks (16 px a draw): taken as independent (cell 1) the word's likelihood grows with
++    its px and it comes apart; at the cell its votes have (16) it is one word."""
++    rect = _rect(120, 120, 160, 30)
++    core, geo, tag, ink, _ = _maps([rect], [0], noise=1.5, tag_noise=0.3, angle_noise=2.0, block=4)
++    measured = words.Spreads(distance=1.5, angle=2.0, tag=0.3, cell=16.0, background_distance=8.0, background_tag=1.0)
++    df = words.core_words(core, geo, tag, ink, measured, PRIOR)
+     assert len(df) == 1
+-    assert np.abs(_g(df, 0) - sd.words[0]).max() < 1e-3
++    _same_box(df, rect, 1.0)
++    independent = words.Spreads(**{**measured.__dict__, "cell": 1.0})
++    assert len(words.core_words(core, geo, tag, ink, independent, PRIOR)) > 1
++
++
++def test_votes_reading_the_word_the_other_way_round_stay_in_it():
++    """A third of the word's px read it backwards (their direction turned a half turn, so their start is the word's
++    end and their top its foot): one word, read the way most of its px read it."""
++    rect = _rect(120, 120, 100, 24)
++    core, geo, tag, ink, word_id = _maps([rect], [0])
++    ys, xs = np.nonzero(word_id > 0)
++    back = np.random.default_rng([0, 9]).random(len(ys)) < 1 / 3
++    ys, xs = ys[back], xs[back]
++    t, b, s, e = geo[:4, ys, xs]
++    geo[:4, ys, xs] = np.stack([b, t, e, s])
++    geo[4, ys, xs] = 180.0
++    df = words.core_words(core, geo, tag, ink, EXACT, PRIOR)
++    assert len(df) == 1
++    _same_box(df, rect, 1e-6)
++    assert data.reading_angle(_g(df, 0)) == 0
+ 
+ 
+-# --- the page edge ---------------------------------------------------------------------------------------------------
++def test_a_line_touching_a_word_does_not_extend_its_box():
++    """A line runs on from the word's foot; its px have core 0.6 and vote for thin boxes along the line."""
++    rect = _rect(100, 100, 80, 24)
++    core, geo, tag, ink, word_id = _maps([rect], [0], lines=[((140, 110), (230, 110), 2)])
++    on_line = np.zeros_like(core, bool)
++    on_line[109:112, 140:231] = True
++    on_line &= word_id == 0
++    core[on_line] = 0.6
++    ys, xs = np.nonzero(on_line)
++    geo[0, on_line], geo[1, on_line] = ys - 109.0, 111.0 - ys     # each votes for one thin box, 90 x 2 px, the line's
++    geo[2, on_line], geo[3, on_line] = xs - 140.0, 230.0 - xs
++    geo[4, on_line] = 0
++    tag[:, on_line] = 0
++    df = words.core_words(core, geo, tag, ink, EXACT, PRIOR)
++    k = _same_box(df, rect, 1e-6)
++    t = _g(df, k, "t")
++    assert t[:, 0].max() <= rect[:, 0].max() + 1e-6                 # the trimmed box stops at the word too
++    others = df.drop(index=df.index[k])
++    assert len(others) == 1                                          # the line's votes: a box of their own ...
++    assert others["p_word"].iloc[0] == pytest.approx(0.6, abs=1e-3)  # ... kept with its chance
++
++
++def test_a_strong_minority_cluster_of_votes_becomes_its_own_box():
++    """A code printed on a street name, centred on it: its px (15% of the name's) vote for the code's own box, the
++    rest for the name's; the two have one centre and one tag."""
++    name, code = _rect(120, 120, 120, 30), _rect(120, 120, 40, 14)
++    core, geo, tag, ink, _ = _maps([name, code], [0, 0], tags=[[0, 0, 0, 0]] * 2)
++    df = words.core_words(core, geo, tag, ink, EXACT, PRIOR)
++    assert len(df) == 2
++    _same_box(df, name, 1e-6)
++    _same_box(df, code, 1e-6)
++
+ 
+-@pytest.mark.parametrize("refine", REFINES)
+ @pytest.mark.parametrize("where", ["left", "bottom"])
+-def test_a_core_at_the_page_edge_gives_a_clipped_box(refine, where):
+-    rect = _rect(10, 70, 60, 20) if where == "left" else _rect(120, SIZE - 2, 60, 20)    # part off the page
+-    sd = _sheet([rect])
+-    core, geo, tag, ink = _heads(sd)
+-    df = words.core_words(core, geo, tag, ink, LEVEL, R, refine, **KW)
+-    assert len(df) == 1                             # not dropped
++def test_a_core_at_the_page_edge_gives_a_clipped_box(where):
++    rect = _rect(10, 70, 60, 20) if where == "left" else _rect(120, SIZE - 2, 60, 20)     # part off the page
++    core, geo, tag, ink, _ = _maps([rect], [0])
++    df = words.core_words(core, geo, tag, ink, EXACT, PRIOR)
++    assert len(df) == 1                                              # not dropped
+     g, t = _g(df, 0), _g(df, 0, "t")
+-    for box in (g, t):                              # clipped: never past the page, never wrapped to its far side
+-        assert (box >= -1e-6).all() and (box <= SIZE + 1e-6).all()
+-    word = sd.words[0].astype(float)
+-    # the other sides: votes give the word's own; unclip grows a core the page cut by less than the word's D
+-    tol = 1e-3 if refine == "votes" else 2.0
++    for box in (g, t):                                               # never past the page, never wrapped
++        assert (box >= -1e-9).all() and (box <= SIZE + 1e-9).all()
+     if where == "left":
+-        assert g[:, 0].min() == pytest.approx(0.0, abs=1e-6)
+-        assert g[:, 0].max() == pytest.approx(word[:, 0].max(), abs=tol)
+-        assert g[:, 1].min() == pytest.approx(word[:, 1].min(), abs=tol)
++        assert g[:, 0].min() == pytest.approx(0.0, abs=1e-9)
++        assert g[:, 0].max() == pytest.approx(rect[:, 0].max(), abs=1e-6)
+     else:
+-        assert g[:, 1].max() == pytest.approx(SIZE, abs=1e-6)
+-        assert g[:, 1].min() == pytest.approx(word[:, 1].min(), abs=tol)
+-        assert g[:, 0].min() == pytest.approx(word[:, 0].min(), abs=tol)
++        assert g[:, 1].max() == pytest.approx(SIZE, abs=1e-9)
++        assert g[:, 1].min() == pytest.approx(rect[:, 1].min(), abs=1e-6)
+     assert df["ink_px"].iloc[0] > 0
+-    assert data.reading_angle(g) == 0               # still read left to right
+-
++    assert data.reading_angle(g) == 0
+ 
+-# --- rotated words ---------------------------------------------------------------------------------------------------
+ 
+ @pytest.mark.parametrize("angle", [30, 90, 150, -45, 180])
+-def test_a_rotated_words_box_comes_back_from_its_votes(angle):
+-    """Within 1 px per corner of the rectangle the targets were drawn from (its corners rounded to px, so not quite a
+-    rectangle: each vote gives the rectangle at the word's whole-degree angle around those corners), the first edge
+-    along the reading direction."""
++def test_rotated_words_come_back_exactly_from_unrounded_votes(angle):
+     rect = _rect(120, 120, 100, 24, angle)
+-    sd = _sheet([rect])
+-    core, geo, tag, ink = _heads(sd)
+-    df = words.core_words(core, geo, tag, ink, LEVEL, R, "votes", **KW)
++    core, geo, tag, ink, _ = _maps([rect], [angle])
++    df = words.core_words(core, geo, tag, ink, EXACT, PRIOR)
+     assert len(df) == 1
+     g = _g(df, 0)
+-    assert np.abs(g - sd.words[0]).max() < 1.0
+-    assert _turn(data.reading_angle(g), angle) <= 1
+-    assert wordboxes.axis_error(df["axis"].iloc[0], angle) < 1.0
+-    # unclip: the painted core grown back, oriented by the predicted reading direction
+-    un = words.core_words(core, geo, tag, ink, LEVEL, R, "unclip", **KW)
+-    assert _iou(_g(un, 0), sd.words[0]) > 0.85
+-    assert _turn(data.reading_angle(_g(un, 0)), angle) <= 1
++    assert np.abs(g - rect).max() < 1e-6                             # the same corners, in the same order
++    assert _turn(data.reading_angle(g), angle) <= 0.5
++    assert wordboxes.axis_error(df["axis"].iloc[0], angle) < 1e-6
++
++
++# --- the targets, the inputs and the table ---------------------------------------------------------------------------
++
++def test_task_5s_targets_come_back_as_their_rectangles():
++    """Votes painted by `data.crop_targets(..., words=True)` from rounded rectangles (cores the words' own,
++    `shrink.prepare`), two words touching: each rectangle comes back exactly."""
++    rects = [_rect(80, 80, 60, 20), _rect(140, 80, 60, 20), _rect(170, 170, 70, 22, 90)]
++    rounded = np.round(np.array(rects)).astype(np.int32)
++    sd = data.SheetData(series=paths.SERIES, sheet="s", height=SIZE, width=SIZE,
++                        ink_bits=np.packbits(np.zeros((SIZE, SIZE), bool), axis=1), words=rounded,
++                        kinds=np.zeros(3, np.uint8),
++                        angles=np.array([data.reading_angle(r) for r in rounded], np.int16),
++                        other=np.zeros((0, 4, 2), np.int32), points=np.zeros((0, 2), np.int32),
++                        world=np.zeros((0, 0, 2)), ft_per_px=float("nan"))
++    sd, = shrink.prepare([sd])
++    t = data.crop_targets(sd, SIZE // 2, SIZE // 2, SIZE, 1.0, 0, words=True)
++    vecs = np.zeros((4, 4), np.float32)
++    vecs[1:, 0] = [0, 0, 10]
++    tag = np.moveaxis(vecs[t["tag_id"]], -1, 0)
++    df = words.core_words(t["core"].astype(np.float32), t["geo"], tag, t["ink"], EXACT, PRIOR)
++    assert len(df) == 3
++    for r in rounded.astype(float):
++        _same_box(df, r, 1e-6)
+ 
+ 
+ def test_the_direction_given_as_cos_and_sin_reads_the_same_as_degrees():
+     rects = [_rect(80, 80, 90, 22, 30), _rect(170, 170, 70, 20, -60)]
+-    sd = _sheet(rects)
+-    core, geo, tag, ink = _heads(sd)
+-    a = np.deg2rad(geo[4])
++    core, geo, tag, ink, _ = _maps(rects, [30, -60], noise=0.5, tag_noise=0.1)
++    a = np.deg2rad(geo[4].astype(np.float64))
+     six = np.concatenate([geo[:4], 3 * np.cos(a)[None], 3 * np.sin(a)[None]])     # any length: the net's channels 5-6
+-    for refine in REFINES:
+-        pd.testing.assert_frame_equal(words.core_words(core, geo, tag, ink, LEVEL, R, refine, **KW),
+-                                      words.core_words(core, six, tag, ink, LEVEL, R, refine, **KW), atol=1e-6)
++    spreads = words.Spreads(distance=0.5, angle=1.0, tag=0.1, cell=1.0, background_distance=8.0, background_tag=1.0)
++    pd.testing.assert_frame_equal(words.core_words(core, geo, tag, ink, spreads, PRIOR),
++                                  words.core_words(core, six, tag, ink, spreads, PRIOR), atol=1e-5)
+ 
+ 
+-# --- the table ---------------------------------------------------------------------------------------------------
+-
+ def test_the_boxes_table_has_the_word_boxes_columns_with_their_meaning():
+     rects = [_rect(70, 70, 60, 20), _rect(160, 160, 100, 26, 90)]
+-    sd = _sheet(rects)
+-    core, geo, tag, ink = _heads(sd)
++    core, geo, tag, ink, word_id = _maps(rects, [0, 90], w_in=0.8)
+     kind_p = np.zeros((4, SIZE, SIZE), np.float32)
+-    kind_p[0] = 0.75
+-    kind_p[2] = 0.25
+-    df = words.core_words(core, geo, tag, ink, LEVEL, R, "votes", kind_p=kind_p, sheet="p07", **KW)
++    kind_p[0], kind_p[2] = 0.75, 0.25
++    df = words.core_words(core, geo, tag, ink, EXACT, PRIOR, kind_p=kind_p, sheet="p07")
+     assert list(df.columns) == [*wordboxes.COLUMNS, *words.EXTRA_COLUMNS]
+-    assert words.EXTRA_COLUMNS == ("form", "core_px", "tag_spread", "p_word", "split_llr")
+-    assert df["sheet"].tolist() == ["p07", "p07"]
+-    assert df["i"].tolist() == [0, 1]
+-    assert (df["level"] == LEVEL).all()
+-    assert df["form"].tolist() == ["votes", "votes"]
+-    tag_id = data.crop_targets(sd, SIZE // 2, SIZE // 2, SIZE, 1.0, 0, words=True)["tag_id"]
+-    assert df["core_px"].tolist() == [int((tag_id == k + 1).sum()) for k in range(2)]
+-    # not placed on the map yet: the caller places the boxes (`prints._place`, as `wordboxes.sheet_boxes` does)
++    assert words.EXTRA_COLUMNS == ("p_word", "core_mass", "tag_spread")
++    assert df["sheet"].tolist() == ["p07", "p07"] and df["i"].tolist() == [0, 1]
++    # not placed on the map yet: Task 8 places the boxes (`prints._place`, as `wordboxes.sheet_boxes` does)
+     assert (df["quarter"] == -1).all() and df["x"].isna().all() and (df["lab_lot"] == -1).all()
+-    assert not df["street"].any()
+-    for k in range(2):
+-        g, t = _g(df, k), _g(df, k, "t")
+-        assert (df["page_x"].iloc[k], df["page_y"].iloc[k]) == pytest.approx(tuple(g.mean(0)))
+-        assert df["length"].iloc[k] == pytest.approx(np.linalg.norm(g[1] - g[0]))
+-        assert df["height"].iloc[k] == pytest.approx(np.linalg.norm(g[3] - g[0]))
+-        assert df["t_length"].iloc[k] == pytest.approx(np.linalg.norm(t[1] - t[0]))
+-        assert df["t_height"].iloc[k] == pytest.approx(np.linalg.norm(t[3] - t[0]))
+-        assert df["t_length"].iloc[k] < df["length"].iloc[k]        # the glyphs, trimmed inside the box
+-        assert wordboxes.axis_error(df["axis"].iloc[k], data.reading_angle(g)) < 0.5
+-        assert df["mean_chance"].iloc[k] == df["p_word"].iloc[k] == pytest.approx(1.0)
+-        assert np.isnan(df["split_llr"].iloc[k]) and df["tag_spread"].iloc[k] == 0
+-        assert (df["p_zoning"].iloc[k], df["p_street"].iloc[k]) == pytest.approx((0.75, 0.25))
+-    assert wordboxes.axis_error(df["axis"].to_numpy(), [0.0, 90.0]).max() < 0.5
+-
+-
+-def test_refine_must_be_unclip_or_votes_and_votes_need_their_merge_iou():
+-    sd = _sheet([_rect(70, 70, 60, 20)])
+-    core, geo, tag, ink = _heads(sd)
+-    with pytest.raises(ValueError, match="refine"):
+-        words.core_words(core, geo, tag, ink, LEVEL, R, "both", **KW)
+-    with pytest.raises(ValueError, match="merge_iou"):
+-        words.core_words(core, geo, tag, ink, LEVEL, R, "votes", tag_sigma=0.3, split_prior=-20.0)
+-
+-
+-def test_no_core_gives_an_empty_table():
++    assert not df["street"].any() and df["level"].isna().all()
++    for k, r in enumerate(rects):
++        row = _box_of(df, r)
++        g, t = _g(df, row), _g(df, row, "t")
++        assert (df["page_x"].iloc[row], df["page_y"].iloc[row]) == pytest.approx(tuple(g.mean(0)))
++        assert df["length"].iloc[row] == pytest.approx(np.linalg.norm(g[1] - g[0]))
++        assert df["height"].iloc[row] == pytest.approx(np.linalg.norm(g[3] - g[0]))
++        assert df["t_length"].iloc[row] == pytest.approx(np.linalg.norm(t[1] - t[0]))
++        assert df["t_length"].iloc[row] < df["length"].iloc[row]          # the glyphs, trimmed inside the box
++        assert wordboxes.axis_error(df["axis"].iloc[row], data.reading_angle(g)) < 1e-6
++        # every px of the word votes for it, each at core chance 0.8: its share of the weighted mass, and the mass
++        assert df["p_word"].iloc[row] == df["mean_chance"].iloc[row] == pytest.approx(0.8)
++        assert df["core_mass"].iloc[row] == pytest.approx(0.8 * (word_id == k + 1).sum(), rel=1e-6)
++        assert df["tag_spread"].iloc[row] == pytest.approx(0.0, abs=1e-6)
++        assert (df["p_zoning"].iloc[row], df["p_street"].iloc[row]) == pytest.approx((0.75, 0.25))
++
++
++def test_bad_inputs_are_refused_and_no_core_gives_an_empty_table():
+     z = np.zeros((SIZE, SIZE), np.float32)
+-    df = words.core_words(z, np.zeros((5, SIZE, SIZE), np.float32), np.zeros((4, SIZE, SIZE), np.float32),
+-                          z > 0, LEVEL, R, "votes", **KW)
+-    assert len(df) == 0
+-    assert list(df.columns) == [*wordboxes.COLUMNS, *words.EXTRA_COLUMNS]
+-
++    df = words.core_words(z, np.zeros((5, SIZE, SIZE), np.float32), np.zeros((4, SIZE, SIZE), np.float32), z > 0,
++                          EXACT, PRIOR)
++    assert len(df) == 0 and list(df.columns) == [*wordboxes.COLUMNS, *words.EXTRA_COLUMNS]
++    with pytest.raises(ValueError, match="geo"):
++        words.core_words(z, np.zeros((4, SIZE, SIZE)), np.zeros((4, SIZE, SIZE)), z > 0, EXACT, PRIOR)
++    with pytest.raises(ValueError, match="spread"):
++        words.core_words(z, np.zeros((5, SIZE, SIZE)), np.zeros((4, SIZE, SIZE)), z > 0,
++                         words.Spreads(0.0, 1.0, 0.3, 1.0, 8.0, 1.0), PRIOR)
++
++
++# --- measuring the spreads and fitting the prior (Task 8's, on the training quarters) --------------------------------
++
++@pytest.mark.parametrize("block", [1, 3])
++def test_measure_spreads_finds_the_spreads_the_votes_were_drawn_with(block):
++    """Noise of sd 1.5 px on every distance, 2 degrees on the direction and 0.3 on every tag; drawn once per px, or
++    once per 3 x 3 px (9 px a draw: a word's votes are worth n / 9 independent ones)."""
++    rects = [_rect(60 + 60 * (k % 3), 50 + 50 * (k // 3), 50, 18) for k in range(12)]
++    pages = []
++    for seed in range(3):
++        core, geo, tag, ink, word_id = _maps(rects, [0] * 12, noise=1.5, tag_noise=0.3, angle_noise=2.0, w_out=1e-3,
++                                             block=block, seed=seed)
++        pages.append({"core": core, "geo": geo, "tag": tag, "word_id": word_id, "words": np.array(rects)})
++    got = words.measure_spreads(pages)
++    assert got.distance == pytest.approx(1.5, rel=0.05)
++    assert got.angle == pytest.approx(2.0, rel=0.05)
++    assert got.tag == pytest.approx(0.3, rel=0.05)
++    assert got.cell == pytest.approx(block * block, rel=0.35)
++    assert got.background_distance == pytest.approx(8.0, rel=0.05)    # half-normal of sd 8: root mean square 8
++    assert got.background_tag == pytest.approx(1.0, rel=0.05)
++
++
++def test_fit_word_prior_recovers_the_prior_the_decisions_were_drawn_with():
++    """Each extra word's gain in log likelihood, and whether it was real, drawn from the decision the words are made
++    by: P(real) = sigmoid(gain + prior)."""
++    rng = np.random.default_rng([0, 5])
++    true = -6.0
++    gains = rng.exponential(8.0, 3000)
++    real = rng.random(3000) < 1 / (1 + np.exp(-(gains + true)))
++    assert words.fit_word_prior(gains, real) == pytest.approx(true, abs=0.4)
++
++
++def test_fit_word_prior_refuses_decisions_of_one_kind():
++    with pytest.raises(ValueError, match="finite"):
++        words.fit_word_prior(np.array([1.0, 5.0, 30.0]), np.array([True, True, True]))
++
++
++def test_an_extra_words_gain_is_large_for_two_words_and_small_for_one():
++    """`extra_word_gain`, what Task 8 fits the prior on: the px of two touching words (a real extra word) against a
++    noisy single word's (none)."""
++    spreads = words.Spreads(distance=1.0, angle=2.0, tag=0.3, cell=1.0, background_distance=8.0, background_tag=1.0)
++    two = [_rect(80, 80, 60, 20), _rect(140, 80, 60, 20)]
++    core, geo, tag, ink, word_id = _maps(two, [0, 0], noise=1.0, tag_noise=0.3, angle_noise=2.0)
++    real = words.extra_word_gain(core, geo, tag, spreads, word_id > 0)
++    core, geo, tag, ink, word_id = _maps([_rect(110, 80, 120, 20)], [0], noise=1.0, tag_noise=0.3, angle_noise=2.0)
++    none = words.extra_word_gain(core, geo, tag, spreads, word_id > 0)
++    assert real > 1000 and 0 <= none < -PRIOR
++
++
++def test_a_words_gain_over_none_is_large_on_a_word_and_small_on_the_background():
++    """`word_gain`, the other decision the prior is fitted on: a word's px (core 0.9) against background px only
++    (core 0.001, their votes the background's)."""
++    spreads = words.Spreads(distance=1.0, angle=2.0, tag=0.3, cell=1.0, background_distance=8.0, background_tag=1.0)
++    core, geo, tag, ink, word_id = _maps([_rect(110, 80, 120, 20)], [0], noise=1.0, tag_noise=0.3, angle_noise=2.0,
++                                         w_in=0.9, w_out=1e-3)
++    assert words.word_gain(core, geo, tag, spreads, word_id > 0) > 1000
++    away = np.zeros_like(word_id, bool)
++    away[150:200, 20:70] = True                                       # 2,500 background px, far from the word
++    assert words.word_gain(core, geo, tag, spreads, away) < -PRIOR
+ 
+-# --- the level -------------------------------------------------------------------------------------------------------
+-
+-def _terra_and_boxes():
+-    """Terra's words on one sheet, two code words a quarter (and a street name, not a code), and each level's boxes
+-    and reads.  Level 0.5 reads right: nw 2/2, ne 0/2 (one word has no box at all), sw 1/2, se 1/2; level 0.7: nw 0/2,
+-    ne 2/2, sw 1/2, se 1/2."""
+-    rows, centres = [], []
+-    for q in range(4):
+-        for j in range(2):
+-            cx, cy = 100 + 200 * q, 100 + 100 * j
+-            r = _rect(cx, cy, 40, 16)
+-            rows.append({"sheet": "s", "text": "RH-2", "kind": "zoning code", "quarter": q,
+-                         **dict(zip(words.measures.C_COLS, r.reshape(8).tolist()))})
+-            centres.append((cx, cy))
+-    street = _rect(1000, 100, 120, 20)
+-    rows.append({"sheet": "s", "text": "MISSION ST", "kind": "street name", "quarter": 0,
+-                 **dict(zip(words.measures.C_COLS, street.reshape(8).tolist()))})
+-    terra = pd.DataFrame(rows)
+-    right = {0.5: [1, 1, 0, None, 1, 0, 1, 0], 0.7: [0, 0, 1, 1, 1, 0, 1, 0]}     # None: no box holds the word
+-    boxes, reads = {}, {}
+-    for level, marks in right.items():
+-        kept = [(k, m) for k, m in enumerate(marks) if m is not None] + [(8, 1)]    # the street name has a box too
+-        g = [(_rect(*centres[k], 44, 20) if k < 8 else _rect(1000, 100, 124, 24)).reshape(8) for k, _ in kept]
+-        df = pd.DataFrame(np.array(g), columns=words.measures.G_COLS, index=[10 * k + 3 for k, _ in kept])
+-        df.insert(0, "sheet", "s")
+-        boxes[level] = df
+-        reads[level] = {10 * k + 3: {"closed": {"RH-2": 0.9 if m else 0.1, "NC-3": 0.1 if m else 0.9}, "top": "RH-2"}
+-                        for k, m in kept}
+-    return terra, boxes, reads
+-
+-
+-def test_choose_level_scores_each_quarter_on_the_other_three_with_a_missed_box_wrong():
+-    terra, boxes, reads = _terra_and_boxes()
+-    got = words.choose_level(boxes, reads, terra, forms={"RH-2": "RH-2", "NC-3": "NC-3"})
+-    # nw on ne, sw, se: 0.5 gets 2/6, 0.7 gets 4/6; ne on nw, sw, se: 4/6 against 2/6; sw and se: 3/6 each (the
+-    # word with no box counted wrong; dropped, 0.5 would get 3/5 on sw and se): a tie, to the higher level
+-    assert got["level"] == {"nw": 0.7, "ne": 0.5, "sw": 0.7, "se": 0.7}
+-    assert got["right_on_others"]["nw"] == {"0.500": pytest.approx(2 / 6), "0.700": pytest.approx(4 / 6)}
+-    assert got["right_on_others"]["sw"] == {"0.500": pytest.approx(3 / 6), "0.700": pytest.approx(3 / 6)}
+-    assert got["words_on_others"] == {"nw": 6, "ne": 6, "sw": 6, "se": 6}       # the street name is not a code
+-
+-
+-def test_choose_level_reads_terras_words_not_the_owners_answers():
+-    terra, boxes, reads = _terra_and_boxes()
+-    flipped = terra.assign(text=terra["text"].replace({"RH-2": "NC-3"}))       # Terra's strings decide what is right
+-    got = words.choose_level(boxes, reads, flipped, forms={"RH-2": "RH-2", "NC-3": "NC-3"})
+-    # every read right before is now wrong and the other way round; the word with no box stays wrong
+-    assert got["right_on_others"]["nw"] == {"0.500": pytest.approx(3 / 6), "0.700": pytest.approx(2 / 6)}
+-    assert got["level"]["nw"] == 0.5

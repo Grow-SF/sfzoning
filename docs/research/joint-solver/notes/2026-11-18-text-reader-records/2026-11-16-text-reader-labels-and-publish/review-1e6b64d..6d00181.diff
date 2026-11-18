@@ -1,0 +1,1443 @@
+# Review package: 1e6b64d..6d00181
+
+## Commits
+6d00181 T2: dvc.lock after building solver-boxes (the warp stages re-recorded for the cli.py edit, their outputs unchanged)
+5e5b0c5 T2: solver-boxes: word boxes grouped from the held-out detectors' chance, level chosen per quarter on the other three
+
+## Files changed
+ pipeline/README.md                       |  17 ++
+ pipeline/dvc.lock                        | 486 ++++++++++++++++++++++++++++++-
+ pipeline/dvc.yaml                        | 116 ++++++++
+ pipeline/src/sfzmaps/build.py            |  16 +
+ pipeline/src/sfzmaps/cli.py              |  18 ++
+ pipeline/src/sfzmaps/solver/wordboxes.py | 373 ++++++++++++++++++++++++
+ pipeline/tests/test_wordboxes.py         | 147 ++++++++++
+ 7 files changed, 1161 insertions(+), 12 deletions(-)
+
+## Diff
+diff --git a/pipeline/README.md b/pipeline/README.md
+index ed72835..7087adf 100644
+--- a/pipeline/README.md
++++ b/pipeline/README.md
+@@ -617,20 +617,37 @@ writes `data/solver/text-reader/`: `models/<q>.pt`; per sheet `<sheet>/chance.pn
+ `kind.npz` (`kind`, the most likely kind, uint8; `p`, the four kinds' probabilities, float16 (4, h, w)) and
+ `direction.npz` (`direction`, the reading direction's cosine and sine, float16 (2, h, w), unit length); `held.json`
+ (the quarters, the answered blocks, the radius and the word that set it, the recipe and the seed); and `scores.json`
+ (each detector on its own quarter of the 2000 sheets: words found by kind and the ink px's scores, as
+ `textnet.scores` counts them, the long lines aside). The four trainings and the scoring run in one exclusive turn on
+ the GPU. Its reads are each training sheet's page, Sol's points and placement (`transform.json`, `correction.npz`),
+ Terra's boxes and the other passes, and for the answered blocks the prints (`prints.parquet`, `terra_boxes.json`), the
+ lots (`lots.npz`, `table.parquet`) and the code-check cases and answers. The same inputs give the same bytes (the
+ `.npz` files are written with a fixed date).
+ 
++**The word boxes** (`sfzmaps solver boxes [--workers N]`, stage `solver-boxes`, after `solver-text-reader` and the
++prints and lots; `solver/wordboxes.py`) find the printed words on every 2000 sheet from our own detector's chance, with
++no outside input: a box is a connected component (8-connectivity) of the px whose chance (the held-out detectors',
++`text-reader/<sheet>/chance.png`) is at the level and within 4 px of ink, with at least 20 ink px. Its axis is the
++major axis of its px weighted by chance (degrees counter-clockwise from left-to-right, modulo 180); beside the grouped
++box it records the box trimmed to the ink inside it (the chance spreads a few px past the glyphs), the kinds'
++mean probabilities over its ink px, its quarter, and its map place as the prints have it (`prints._place`: `x`, `y`,
++`lab_lot`, `street`; a box off the sheet's footprint or the mapped area is dropped and counted). The level is chosen per quarter
++from 0.5 to 1.0 by the share of Terra's zoning-code words found (IoU 0.3) on the other three quarters; Terra's boxes
++choose the level and score it, and are not input to any box. It writes `data/solver/boxes/`: `boxes.parquet` (one row per
++box: `sheet`, `i`, `level`, `quarter`, page centre `page_x`/`page_y`, `axis`, grouped `length`/`height`, ink-trimmed
++`t_length`/`t_height`, `mean_chance`, `ink_px`, `p_zoning`/`p_block`/`p_street`/`p_other`, `x`, `y`, `lab_lot`, `street`,
++and the corners `g<i>x`/`g<i>y` (grouped) and `t<i>x`/`t<i>y` (trimmed), page px), `levels.json` (the chosen levels and
++the recall on the other quarters at each level) and `summary.json` (per quarter the zoning-code words found, found
++with the axis within 10 degrees, found by the trimmed box, and how many of the owner's answered labels get a box).
++Nothing in it is a time.
++
+ **Trying recipes** (`sfzmaps solver text-trial [--set NAME=VALUE ...] [--recipe "NAME=VALUE ..." ...] [--seed N]
+ [--reuse] [--train-series MAP,...] [--test-series MAP,...] [--device cpu|mps]`, `solver/textnet/trial.py`) is how the
+ recipe is chosen; it is no stage. `--set` (repeatable) makes one recipe from settings over the old recipe (the quarter models', `Recipe()`), and each
+ `--recipe` another (its settings apart by spaces; `default` for the old recipe; `stage`, alone or first, starts from the
+ stage's recipe instead, as in `"stage iterations=2000"`); with neither, the old recipe. Two that are one
+ recipe (prefetch aside) are a usage error: they would write one folder. The training sheets are read once with the
+ validation area held out; then each recipe in turn trains and predicts in its own exclusive GPU turn (only the tiles
+ holding validation px) and is scored on the validation area (the long lines found once per sheet for all of them).
+ Each writes `data/solver/experiments/text-<Recipe.name()>/` (`-train=<maps>` after it when `--train-series` names
+ some of the training maps only, `-seed=N` for a seed other than 0): `model.pt`, `recipe.json`, `scores.json` (the
+diff --git a/pipeline/dvc.lock b/pipeline/dvc.lock
+index c331cd7..dbe9736 100644
+--- a/pipeline/dvc.lock
++++ b/pipeline/dvc.lock
+@@ -3563,22 +3563,22 @@ stages:
+     - path: src/sfzmaps/anchors.py
+       hash: md5
+       md5: eb24d15a4c52b7986c1489ce10cc7544
+       size: 11993
+     - path: src/sfzmaps/answers.py
+       hash: md5
+       md5: c8b35eb418d0f08dfc0fd83f55a788b2
+       size: 5035
+     - path: src/sfzmaps/cli.py
+       hash: md5
+-      md5: fd29014efaee0df32555629b9404deaf
+-      size: 65311
++      md5: 27d0b9bf5838216258fce11801b64005
++      size: 66284
+     - path: src/sfzmaps/config.py
+       hash: md5
+       md5: ed5d5538cef63f43a599ed253dba3c21
+       size: 8041
+     - path: src/sfzmaps/crossref.py
+       hash: md5
+       md5: 4c8350cb85103909ee304b5ff97087ba
+       size: 8949
+     - path: src/sfzmaps/districts
+       hash: md5
+@@ -3714,22 +3714,22 @@ stages:
+     - path: src/sfzmaps/anchors.py
+       hash: md5
+       md5: eb24d15a4c52b7986c1489ce10cc7544
+       size: 11993
+     - path: src/sfzmaps/answers.py
+       hash: md5
+       md5: c8b35eb418d0f08dfc0fd83f55a788b2
+       size: 5035
+     - path: src/sfzmaps/cli.py
+       hash: md5
+-      md5: fd29014efaee0df32555629b9404deaf
+-      size: 65311
++      md5: 27d0b9bf5838216258fce11801b64005
++      size: 66284
+     - path: src/sfzmaps/config.py
+       hash: md5
+       md5: ed5d5538cef63f43a599ed253dba3c21
+       size: 8041
+     - path: src/sfzmaps/crossref.py
+       hash: md5
+       md5: 4c8350cb85103909ee304b5ff97087ba
+       size: 8949
+     - path: src/sfzmaps/districts
+       hash: md5
+@@ -3865,22 +3865,22 @@ stages:
+     - path: src/sfzmaps/anchors.py
+       hash: md5
+       md5: eb24d15a4c52b7986c1489ce10cc7544
+       size: 11993
+     - path: src/sfzmaps/answers.py
+       hash: md5
+       md5: c8b35eb418d0f08dfc0fd83f55a788b2
+       size: 5035
+     - path: src/sfzmaps/cli.py
+       hash: md5
+-      md5: fd29014efaee0df32555629b9404deaf
+-      size: 65311
++      md5: 27d0b9bf5838216258fce11801b64005
++      size: 66284
+     - path: src/sfzmaps/config.py
+       hash: md5
+       md5: ed5d5538cef63f43a599ed253dba3c21
+       size: 8041
+     - path: src/sfzmaps/crossref.py
+       hash: md5
+       md5: 4c8350cb85103909ee304b5ff97087ba
+       size: 8949
+     - path: src/sfzmaps/districts
+       hash: md5
+@@ -4318,22 +4318,22 @@ stages:
+     - path: src/sfzmaps/anchors.py
+       hash: md5
+       md5: eb24d15a4c52b7986c1489ce10cc7544
+       size: 11993
+     - path: src/sfzmaps/answers.py
+       hash: md5
+       md5: c8b35eb418d0f08dfc0fd83f55a788b2
+       size: 5035
+     - path: src/sfzmaps/cli.py
+       hash: md5
+-      md5: fd29014efaee0df32555629b9404deaf
+-      size: 65311
++      md5: 27d0b9bf5838216258fce11801b64005
++      size: 66284
+     - path: src/sfzmaps/config.py
+       hash: md5
+       md5: ed5d5538cef63f43a599ed253dba3c21
+       size: 8041
+     - path: src/sfzmaps/crossref.py
+       hash: md5
+       md5: 4c8350cb85103909ee304b5ff97087ba
+       size: 8949
+     - path: src/sfzmaps/districts
+       hash: md5
+@@ -4771,22 +4771,22 @@ stages:
+     - path: src/sfzmaps/anchors.py
+       hash: md5
+       md5: eb24d15a4c52b7986c1489ce10cc7544
+       size: 11993
+     - path: src/sfzmaps/answers.py
+       hash: md5
+       md5: c8b35eb418d0f08dfc0fd83f55a788b2
+       size: 5035
+     - path: src/sfzmaps/cli.py
+       hash: md5
+-      md5: fd29014efaee0df32555629b9404deaf
+-      size: 65311
++      md5: 27d0b9bf5838216258fce11801b64005
++      size: 66284
+     - path: src/sfzmaps/config.py
+       hash: md5
+       md5: ed5d5538cef63f43a599ed253dba3c21
+       size: 8041
+     - path: src/sfzmaps/crossref.py
+       hash: md5
+       md5: 4c8350cb85103909ee304b5ff97087ba
+       size: 8949
+     - path: src/sfzmaps/districts
+       hash: md5
+@@ -5677,22 +5677,22 @@ stages:
+     - path: src/sfzmaps/anchors.py
+       hash: md5
+       md5: eb24d15a4c52b7986c1489ce10cc7544
+       size: 11993
+     - path: src/sfzmaps/answers.py
+       hash: md5
+       md5: c8b35eb418d0f08dfc0fd83f55a788b2
+       size: 5035
+     - path: src/sfzmaps/cli.py
+       hash: md5
+-      md5: fd29014efaee0df32555629b9404deaf
+-      size: 65311
++      md5: 27d0b9bf5838216258fce11801b64005
++      size: 66284
+     - path: src/sfzmaps/config.py
+       hash: md5
+       md5: ed5d5538cef63f43a599ed253dba3c21
+       size: 8041
+     - path: src/sfzmaps/crossref.py
+       hash: md5
+       md5: 4c8350cb85103909ee304b5ff97087ba
+       size: 8949
+     - path: src/sfzmaps/districts
+       hash: md5
+@@ -10826,10 +10826,472 @@ stages:
+     - path: uv.lock
+       hash: md5
+       md5: b038b7f427cf66546c731cc1433bb62d
+       size: 338100
+     outs:
+     - path: data/solver/text-reader
+       hash: md5
+       md5: 6203b72d2d129b11fad550bf67e42c97.dir
+       size: 1902233227
+       nfiles: 45
++  solver-boxes:
++    cmd: uv run --frozen sfzmaps stage solver-boxes
++    deps:
++    - path: data/solver/lots/lots.npz
++      hash: md5
++      md5: e46edc844437134b7589ff7106c23560
++      size: 25443533
++    - path: data/solver/lots/table.parquet
++      hash: md5
++      md5: df2c74b00cb26315c49f66fa011f7579
++      size: 20915227
++    - path: data/solver/page/sheets.png
++      hash: md5
++      md5: cce78272a0d3f0de10d61f83f91ff8fd
++      size: 306244
++    - path: data/solver/prints/prints.parquet
++      hash: md5
++      md5: a9e3454eed30890399561de94f895f90
++      size: 127060
++    - path: data/solver/prints/terra_boxes.json
++      hash: md5
++      md5: 266410cc7ba1638455f5762650ff3423
++      size: 1990351
++    - path: data/solver/text-reader/2000-digital-zoning-p01/chance.png
++      hash: md5
++      md5: 6f53efb19b83c23ee57bfc574514104d
++      size: 10182870
++    - path: data/solver/text-reader/2000-digital-zoning-p01/kind.npz
++      hash: md5
++      md5: 894c9a6a8f5320de1e3be61ec4126b45
++      size: 91483861
++    - path: data/solver/text-reader/2000-digital-zoning-p02/chance.png
++      hash: md5
++      md5: 178bb7e723c9a5a068173cca9987fb26
++      size: 9405237
++    - path: data/solver/text-reader/2000-digital-zoning-p02/kind.npz
++      hash: md5
++      md5: 7455b4ed323d664417586a806e31b7c1
++      size: 96556695
++    - path: data/solver/text-reader/2000-digital-zoning-p03/chance.png
++      hash: md5
++      md5: 0c38bc5b758580fd6c60b0ab9359f800
++      size: 9438858
++    - path: data/solver/text-reader/2000-digital-zoning-p03/kind.npz
++      hash: md5
++      md5: c9dc83590cebcf7d85d02b38331e9465
++      size: 90439013
++    - path: data/solver/text-reader/2000-digital-zoning-p04/chance.png
++      hash: md5
++      md5: 508d199d80362aefda327c0acedf6538
++      size: 7849862
++    - path: data/solver/text-reader/2000-digital-zoning-p04/kind.npz
++      hash: md5
++      md5: d6f00e6306ce1abad7cc07e6525c551c
++      size: 71898070
++    - path: data/solver/text-reader/2000-digital-zoning-p05/chance.png
++      hash: md5
++      md5: 89b3d7bc2c98888a3616fec9234e991b
++      size: 8980660
++    - path: data/solver/text-reader/2000-digital-zoning-p05/kind.npz
++      hash: md5
++      md5: c1f294f6dacef173b6eda41ee98e288d
++      size: 90775076
++    - path: data/solver/text-reader/2000-digital-zoning-p06/chance.png
++      hash: md5
++      md5: 506c4dad9a0885692699198db4dd2af4
++      size: 9328035
++    - path: data/solver/text-reader/2000-digital-zoning-p06/kind.npz
++      hash: md5
++      md5: 740664a72a8831b3f46ace800529b83f
++      size: 93314609
++    - path: data/solver/text-reader/2000-digital-zoning-p07/chance.png
++      hash: md5
++      md5: ff01d83815e6983156eac9216c79993c
++      size: 9741005
++    - path: data/solver/text-reader/2000-digital-zoning-p07/kind.npz
++      hash: md5
++      md5: 23c69bf0082c5b947e73be65bb2da993
++      size: 97494664
++    - path: data/solver/text-reader/2000-digital-zoning-p08/chance.png
++      hash: md5
++      md5: f8188149164a387433096a807c27f982
++      size: 10224415
++    - path: data/solver/text-reader/2000-digital-zoning-p08/kind.npz
++      hash: md5
++      md5: ad55f9f61cb9ef4bc2b3d2868e03870a
++      size: 95934254
++    - path: data/solver/text-reader/2000-digital-zoning-p09/chance.png
++      hash: md5
++      md5: fa465c4b4e0013f70f11a497a9e63f9c
++      size: 10030661
++    - path: data/solver/text-reader/2000-digital-zoning-p09/kind.npz
++      hash: md5
++      md5: 78641eb1b35e818723376413ed1ef66f
++      size: 75140453
++    - path: data/solver/text-reader/2000-digital-zoning-p10/chance.png
++      hash: md5
++      md5: 88fd2fa7e07a641b88c7c1bf3ff55a9d
++      size: 10468173
++    - path: data/solver/text-reader/2000-digital-zoning-p10/kind.npz
++      hash: md5
++      md5: f852e355dd0b6c2c875b830e9439f46b
++      size: 90856141
++    - path: data/solver/text-reader/2000-digital-zoning-p11/chance.png
++      hash: md5
++      md5: 8a37419a97e2dd5251ea1a9ce33d4c08
++      size: 10356130
++    - path: data/solver/text-reader/2000-digital-zoning-p11/kind.npz
++      hash: md5
++      md5: 61e6816a6de5e67820b6857e41aa4f80
++      size: 94547562
++    - path: data/solver/text-reader/2000-digital-zoning-p12/chance.png
++      hash: md5
++      md5: e513c71dbd529dc8f261fa774340d325
++      size: 9493227
++    - path: data/solver/text-reader/2000-digital-zoning-p12/kind.npz
++      hash: md5
++      md5: 263a2f10d4f9054559dd0e53d45bf970
++      size: 92059909
++    - path: data/solver/text-reader/2000-digital-zoning-p13/chance.png
++      hash: md5
++      md5: 8951917320bd82d292f481dbdd798ab6
++      size: 8220787
++    - path: data/solver/text-reader/2000-digital-zoning-p13/kind.npz
++      hash: md5
++      md5: 511d26936b76d1791720d05bfc521404
++      size: 85754510
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p01/correction.npz
++      hash: md5
++      md5: 82ddb5746661dd0885004e38571da896
++      size: 30440
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p01/transform.json
++      hash: md5
++      md5: 3fa3747ee4bdb64cc4f3768eef867225
++      size: 120002
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p01/warped.footprint.geojson
++      hash: md5
++      md5: 91eb72161b17d171818c1931cd8b6ff7
++      size: 6586
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p02/correction.npz
++      hash: md5
++      md5: 963a310450c2e3981f8de4b2e1ad1fbc
++      size: 35048
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p02/transform.json
++      hash: md5
++      md5: 36c51f23e9e53cfb28665579d4ea0ac5
++      size: 144236
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p02/warped.footprint.geojson
++      hash: md5
++      md5: 5ff92f0a925315ffe942940ea8517cdb
++      size: 6258
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p03/correction.npz
++      hash: md5
++      md5: 9974935e3310e5a145383c27da079227
++      size: 31272
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p03/transform.json
++      hash: md5
++      md5: 372c922eb14b33c7301dd28a2ad641b3
++      size: 53627
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p03/warped.footprint.geojson
++      hash: md5
++      md5: bea19e5eaff6a9e43df7a6082e84d92d
++      size: 10070
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p04/correction.npz
++      hash: md5
++      md5: da71ddaef9c7176434cbad565f515bce
++      size: 17936
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p04/transform.json
++      hash: md5
++      md5: 520bb850ad98975c245f47fe38b0e162
++      size: 51324
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p04/warped.footprint.geojson
++      hash: md5
++      md5: b26e830f099b5deaac35043fb8d19f2d
++      size: 6537
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p05/correction.npz
++      hash: md5
++      md5: 53f565a8e5022eff44dd8182a20deb95
++      size: 30320
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p05/transform.json
++      hash: md5
++      md5: 73840a275269f3032b654f07bf744603
++      size: 141875
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p05/warped.footprint.geojson
++      hash: md5
++      md5: fae292e8be81f020f5033a3c68ee5a5b
++      size: 7321
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p06/correction.npz
++      hash: md5
++      md5: aee717204f6e5dbde0ba61722d66ded9
++      size: 33160
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p06/transform.json
++      hash: md5
++      md5: d6bac9792c0c54609a5016ac2ad3c2d5
++      size: 59524
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p06/warped.footprint.geojson
++      hash: md5
++      md5: 5667d9d0adcda83b232b3f820ec13c1b
++      size: 6810
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p07/correction.npz
++      hash: md5
++      md5: a9417335c1eb4c1a6c34f1cc528b5f33
++      size: 36776
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p07/transform.json
++      hash: md5
++      md5: a39dc7b159f7f61da41928112f260135
++      size: 135716
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p07/warped.footprint.geojson
++      hash: md5
++      md5: 4e8aa64402fcf38305a32c1d7cf25b55
++      size: 7415
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p08/correction.npz
++      hash: md5
++      md5: 349600a9cfa2a774d7cef1fbaf7de6cf
++      size: 36104
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p08/transform.json
++      hash: md5
++      md5: ba6ee97ee6c151ea9d0eb36d00297698
++      size: 66234
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p08/warped.footprint.geojson
++      hash: md5
++      md5: a571de8d80a96c708387118a79cbf89b
++      size: 9479
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p09/correction.npz
++      hash: md5
++      md5: 9d2089399d8b14336b143ca658f697e2
++      size: 22800
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p09/transform.json
++      hash: md5
++      md5: 0e7a7da4680b8e7dac3b9f55270fae56
++      size: 21339
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p09/warped.footprint.geojson
++      hash: md5
++      md5: 88b73b81525164d063e280d78fd8360d
++      size: 4364
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p10/correction.npz
++      hash: md5
++      md5: d078bce01f6aac651ec82b094883387a
++      size: 31488
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p10/transform.json
++      hash: md5
++      md5: 3f80efc52d405cc6fbcf9aaf49346fa2
++      size: 64162
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p10/warped.footprint.geojson
++      hash: md5
++      md5: 45ac5c7055dbf3c9301c54f57b277249
++      size: 6874
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p11/correction.npz
++      hash: md5
++      md5: d066dae67f0eb6a68ab41db9aa220e71
++      size: 36200
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p11/transform.json
++      hash: md5
++      md5: 26714de1e820a9d21004042d013ddc45
++      size: 85217
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p11/warped.footprint.geojson
++      hash: md5
++      md5: ab18bf297eed7175b152e2e1e1b532b2
++      size: 8010
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p12/correction.npz
++      hash: md5
++      md5: 4675764a06078462ba5fce4e7ae86794
++      size: 31528
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p12/transform.json
++      hash: md5
++      md5: 544cde5f7fbc5b6b395f06647272eac5
++      size: 63712
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p12/warped.footprint.geojson
++      hash: md5
++      md5: 97471b94950724bb1d63f4b646763d6c
++      size: 5496
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p13/correction.npz
++      hash: md5
++      md5: 8028b0cc0c0efdff04059b97069919cc
++      size: 29736
++    - path: data/warp/2000-digital-zoning/2000-digital-zoning-p13/transform.json
++      hash: md5
++      md5: d530f1dc6817318b52d030441d36b1f7
++      size: 26882
++    - path: 
++        data/warp/2000-digital-zoning/2000-digital-zoning-p13/warped.footprint.geojson
++      hash: md5
++      md5: cb5f80c1c052741985a4c200d15aae92
++      size: 10469
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
++      hash: md5
++      md5: f444bc4d9cadcf56443dc06204e0d765
++      size: 576002
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
++      hash: md5
++      md5: a88e18048b9ac3e2d704ba71b7b650b5
++      size: 617446
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
++      hash: md5
++      md5: 81da3a304df9d21cbfedb13a22dc0492
++      size: 521389
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
++      hash: md5
++      md5: 5844ce5a064617e309baf7ed2f571e1e
++      size: 356225
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
++      hash: md5
++      md5: 90770df11395057ef0f14ce16dd716aa
++      size: 561786
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
++      hash: md5
++      md5: dcd20c52cd6862670b8278d80eca5749
++      size: 605604
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
++      hash: md5
++      md5: e009c0b4c5b5dced46af24b27caf0531
++      size: 684425
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
++      hash: md5
++      md5: 080969337e6cab2005bb3bb5f7cd200b
++      size: 599057
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
++      hash: md5
++      md5: d91c9de094fe175f35818e5e148cb4a3
++      size: 329656
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
++      hash: md5
++      md5: 84d4c608588c415064ab5fe82772e1ea
++      size: 673449
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
++      hash: md5
++      md5: cdbfa8649cee4687924b9ecdc40c729e
++      size: 706126
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
++      hash: md5
++      md5: f46c2eca3ce4778660dd40c3661182bc
++      size: 655778
++    - path: data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
++      hash: md5
++      md5: 4cdaa95f1bce5407fc9d2f69a8c4bf24
++      size: 411197
++    - path: inputs/code-check-2000/codecheck_answers.json
++      hash: md5
++      md5: 08a82daf6e705bbe71a3620ca1514116
++      size: 49665
++    - path: inputs/code-check-2000/codecheck_cases_published.json
++      hash: md5
++      md5: ab0632cb5e7f1f54ab5eba271aa87742
++      size: 146151
++    - path: pyproject.toml
++      hash: md5
++      md5: 6791af9e671517b73efecac175f80096
++      size: 1464
++    - path: saved-reads/answers/text-on-every-sheet.jsonl.gz
++      hash: md5
++      md5: 25e0d2238d64fc2a66ec75cf2bfce069
++      size: 4447671
++    - path: src/sfzmaps/__init__.py
++      hash: md5
++      md5: d41d8cd98f00b204e9800998ecf8427e
++      size: 0
++    - path: src/sfzmaps/config.py
++      hash: md5
++      md5: ed5d5538cef63f43a599ed253dba3c21
++      size: 8041
++    - path: src/sfzmaps/llm.py
++      hash: md5
++      md5: 13e016f27a38dd734a7489f8462a9549
++      size: 18450
++    - path: src/sfzmaps/solver/__init__.py
++      hash: md5
++      md5: 56d5987d876e17a20920364df6a6d402
++      size: 107
++    - path: src/sfzmaps/solver/codereader/__init__.py
++      hash: md5
++      md5: 13f77d32329a3b4b3b238de87a5d80a8
++      size: 1051
++    - path: src/sfzmaps/solver/codereader/labels.py
++      hash: md5
++      md5: efdd2709f69dfd7b5f83dfe49683dc80
++      size: 32967
++    - path: src/sfzmaps/solver/codes.py
++      hash: md5
++      md5: 75cd0443d1ff7c6aa915429d7befa5cc
++      size: 1476
++    - path: src/sfzmaps/solver/frame.py
++      hash: md5
++      md5: d3ffc046960ae8d19dce2cdc92fada51
++      size: 6847
++    - path: src/sfzmaps/solver/grid.py
++      hash: md5
++      md5: 4ca66adc6cb23b3833854e6358dde8be
++      size: 1934
++    - path: src/sfzmaps/solver/lots.py
++      hash: md5
++      md5: 7399c576690409a389991a1a56e0e826
++      size: 6551
++    - path: src/sfzmaps/solver/page.py
++      hash: md5
++      md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
++      size: 8912
++    - path: src/sfzmaps/solver/paths.py
++      hash: md5
++      md5: aedf730eb73fad4377ecd8ee72bca25b
++      size: 4386
++    - path: src/sfzmaps/solver/prints.py
++      hash: md5
++      md5: 9b6381eb7bd93c542eb22ee4485ee4c3
++      size: 22967
++    - path: src/sfzmaps/solver/saved.py
++      hash: md5
++      md5: 5428b2e93ac078c2186cedf7b3aaaf8a
++      size: 2203
++    - path: src/sfzmaps/solver/strokes.py
++      hash: md5
++      md5: 0e71e98705b64da5b00c87d661f0684b
++      size: 7649
++    - path: src/sfzmaps/solver/table.py
++      hash: md5
++      md5: 93f7aa72e78e358ed74f663a47b4d7e6
++      size: 4053
++    - path: src/sfzmaps/solver/textnet/__init__.py
++      hash: md5
++      md5: 6d4312a09af9edf5054abf24e821990c
++      size: 96
++    - path: src/sfzmaps/solver/textnet/boxes.py
++      hash: md5
++      md5: 9c3059873b3916274be61844bceb5490
++      size: 8542
++    - path: src/sfzmaps/solver/textnet/data.py
++      hash: md5
++      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
++      size: 28436
++    - path: src/sfzmaps/solver/textnet/scores.py
++      hash: md5
++      md5: 3356ba9880e9b57b4291ab5cab8abf49
++      size: 15145
++    - path: src/sfzmaps/solver/wordboxes.py
++      hash: md5
++      md5: ddf5f9d37f0df4848df83183d5bec213
++      size: 20380
++    - path: src/sfzmaps/transform.py
++      hash: md5
++      md5: c83192f3d3941fae99387dafd628e159
++      size: 19908
++    - path: uv.lock
++      hash: md5
++      md5: b038b7f427cf66546c731cc1433bb62d
++      size: 338100
++    outs:
++    - path: data/solver/boxes
++      hash: md5
++      md5: a57de18852d6d79e47cb5f1cab1041ef.dir
++      size: 2634053
++      nfiles: 3
+diff --git a/pipeline/dvc.yaml b/pipeline/dvc.yaml
+index a6bf74b..36bd1cd 100644
+--- a/pipeline/dvc.yaml
++++ b/pipeline/dvc.yaml
+@@ -2697,20 +2697,136 @@ stages:
+       - saved-reads/answers/experiments-2000/text-positions
+       - data/solver/prints/prints.parquet
+       - data/solver/prints/terra_boxes.json
+       - data/solver/lots/lots.npz
+       - data/solver/lots/table.parquet
+       - inputs/code-check-2000/codecheck_cases_published.json
+       - inputs/code-check-2000/codecheck_answers.json
+     outs:
+       - data/solver/text-reader:
+           persist: true
++  solver-boxes:
++    cmd: uv run --frozen sfzmaps stage solver-boxes
++    deps:
++      - src/sfzmaps/__init__.py
++      - src/sfzmaps/config.py
++      - src/sfzmaps/llm.py
++      - src/sfzmaps/solver/__init__.py
++      - src/sfzmaps/solver/codereader/__init__.py
++      - src/sfzmaps/solver/codereader/labels.py
++      - src/sfzmaps/solver/codes.py
++      - src/sfzmaps/solver/frame.py
++      - src/sfzmaps/solver/grid.py
++      - src/sfzmaps/solver/lots.py
++      - src/sfzmaps/solver/page.py
++      - src/sfzmaps/solver/paths.py
++      - src/sfzmaps/solver/prints.py
++      - src/sfzmaps/solver/saved.py
++      - src/sfzmaps/solver/strokes.py
++      - src/sfzmaps/solver/table.py
++      - src/sfzmaps/solver/textnet/__init__.py
++      - src/sfzmaps/solver/textnet/boxes.py
++      - src/sfzmaps/solver/textnet/data.py
++      - src/sfzmaps/solver/textnet/scores.py
++      - src/sfzmaps/solver/wordboxes.py
++      - src/sfzmaps/transform.py
++      - pyproject.toml
++      - uv.lock
++      - data/solver/text-reader/2000-digital-zoning-p01/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p01/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p02/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p02/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p03/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p03/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p04/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p04/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p05/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p05/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p06/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p06/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p07/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p07/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p08/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p08/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p09/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p09/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p10/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p10/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p11/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p11/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p12/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p12/kind.npz
++      - data/solver/text-reader/2000-digital-zoning-p13/chance.png
++      - data/solver/text-reader/2000-digital-zoning-p13/kind.npz
++      - data/work/2000-digital-zoning/2000-digital-zoning-p01/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p02/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p03/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p04/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p05/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p06/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p07/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p08/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p09/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p10/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p11/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p12/page.png
++      - data/work/2000-digital-zoning/2000-digital-zoning-p13/page.png
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p01/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p02/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p03/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p04/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p05/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p06/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p07/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p08/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p09/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p10/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p11/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p12/warped.footprint.geojson
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/transform.json
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/correction.npz
++      - data/warp/2000-digital-zoning/2000-digital-zoning-p13/warped.footprint.geojson
++      - saved-reads/answers/text-on-every-sheet.jsonl.gz
++      - data/solver/page/sheets.png
++      - data/solver/prints/prints.parquet
++      - data/solver/prints/terra_boxes.json
++      - data/solver/lots/lots.npz
++      - data/solver/lots/table.parquet
++      - inputs/code-check-2000/codecheck_cases_published.json
++      - inputs/code-check-2000/codecheck_answers.json
++    outs:
++      - data/solver/boxes:
++          persist: true
+   solver-labels:
+     cmd: uv run --frozen sfzmaps stage solver-labels
+     deps:
+       - src/sfzmaps/__init__.py
+       - src/sfzmaps/config.py
+       - src/sfzmaps/solver/__init__.py
+       - src/sfzmaps/solver/codes.py
+       - src/sfzmaps/solver/frame.py
+       - src/sfzmaps/solver/grid.py
+       - src/sfzmaps/solver/labels_stage.py
+diff --git a/pipeline/src/sfzmaps/build.py b/pipeline/src/sfzmaps/build.py
+index 9689b49..c83f1e1 100644
+--- a/pipeline/src/sfzmaps/build.py
++++ b/pipeline/src/sfzmaps/build.py
+@@ -167,20 +167,36 @@ def stages() -> dict[str, Stage]:
+     code_check = "inputs/code-check-2000"
+     out["solver-text-reader"] = Stage(
+         "solver-text-reader", (), (), ("solver-lots", "solver-prints", *(f"warp-{s}" for s in paths.TEXT_TRAIN_SERIES)),
+         command=("solver", "text-reader"),
+         reads=(*_text_sheet_files("data/work", paths.TEXT_TRAIN_SERIES, ("page.png", "district_labels.json")),
+                *_text_sheet_files("data/warp", paths.TEXT_TRAIN_SERIES, ("transform.json", "correction.npz")), terra,
+                "saved-reads/answers/experiments-2000/text-positions", "data/solver/prints/prints.parquet",
+                "data/solver/prints/terra_boxes.json", "data/solver/lots/lots.npz", "data/solver/lots/table.parquet",
+                f"{code_check}/codecheck_cases_published.json", f"{code_check}/codecheck_answers.json"),
+         writes=("data/solver/text-reader",), code=("sfzmaps.solver.textnet.reader_stage",), cut=text_cut)
++    # the word boxes (`solver/wordboxes.py`): grouped from the held-out detectors' chance and kind (each sheet's
++    # chance.png and kind.npz) on the sheets' pages, placed through the warp's placements, the lots and the mapped
++    # area.  The level is chosen and scored on Terra's boxes (so they are read, never as input to the boxes) and the
++    # owner's answers are counted (through `codereader.labels.load_labels`, as the reader's stage reads them).
++    out["solver-boxes"] = Stage(
++        "solver-boxes", (), (), ("solver-lots", "solver-prints", "solver-page", "solver-text-reader"),
++        command=("solver", "boxes"),
++        reads=(*(f"data/solver/text-reader/{s}/{n}" for s in paths.SHEETS for n in ("chance.png", "kind.npz")),
++               *_text_sheet_files("data/work", (paths.SERIES,), ("page.png",)),
++               *_text_sheet_files("data/warp", (paths.SERIES,), ("transform.json", "correction.npz",
++                                                                  "warped.footprint.geojson")),
++               terra, "data/solver/page/sheets.png", "data/solver/prints/prints.parquet",
++               "data/solver/prints/terra_boxes.json",
++               "data/solver/lots/lots.npz", "data/solver/lots/table.parquet",
++               f"{code_check}/codecheck_cases_published.json", f"{code_check}/codecheck_answers.json"),
++        writes=("data/solver/boxes",), code=("sfzmaps.solver.wordboxes",), cut=text_cut)
+     out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
+                                  # of the prints, only prints.parquet: the Terra boxes and the summary aren't read
+                                  reads=("data/solver/prints/prints.parquet", "data/solver/lots", "data/solver/page",
+                                         "data/ref"),
+                                  writes=("data/solver/labels",), code=("sfzmaps.solver.labels_stage",))
+     # the walls read what `walls.build_walls` reads: the merged page (and its frames), the cut boxes, the lots, the
+     # strokes, the warp's placements, and for the text discount the held-out detectors' chance (each sheet's
+     # chance.png, not their weights or other outputs) and the sheets' pages it is read on.  Not the Terra boxes: the
+     # walls read no LLM output.
+     out["solver-walls"] = Stage("solver-walls", (), (), ("solver-labels", "solver-text-reader"),
+diff --git a/pipeline/src/sfzmaps/cli.py b/pipeline/src/sfzmaps/cli.py
+index b9b2486..b58fcc3 100644
+--- a/pipeline/src/sfzmaps/cli.py
++++ b/pipeline/src/sfzmaps/cli.py
+@@ -1120,20 +1120,38 @@ def solver_text_trial(
+ def _in_one_thread(argv: list[str]) -> None:
+     """Unless this process is pinned to one thread for the maths libraries (`sfzmaps.solver.threads`), run
+     `sfzmaps <argv>` again in a process that is, and exit with its status: the libraries read their thread count
+     only as they load, and the walls', the placement's and the report's numbers must not depend on how many cores
+     the machine has."""
+     from sfzmaps.solver import threads
+     if not threads.pinned():
+         raise typer.Exit(threads.run_pinned(argv))
+ 
+ 
++@solver_app.command("boxes")
++def solver_boxes(workers: int = typer.Option(4, "--workers", help="Sheets grouped at once, one thread each.")) -> None:
++    """Word boxes on every 2000 sheet, grouped from the held-out detectors' chance (no outside input): each quarter's
++    level chosen on the other three, boxes with their trimmed extent, kind probabilities and map place:
++    data/solver/boxes/."""
++    import logging
++
++    from sfzmaps.solver import wordboxes
++    _in_one_thread(["solver", "boxes", "--workers", str(workers)])
++    logging.basicConfig(level=logging.INFO, format="%(message)s")
++    s = wordboxes.build_boxes(workers=workers)
++    typer.echo(f"{s['boxes']:,} boxes kept; seconds {s['seconds']}")
++    for q, v in s["quarters"].items():
++        typer.echo(f"{q}: level {v['level']}, {v['words']:,} code words, found {v['recall']:.1%}, "
++                   f"axis within 10 degrees {v['axis_within_10']:.1%}")
++    typer.echo(f"answered labels: {s['answered']}")
++
++
+ @solver_app.command("walls")
+ def solver_walls(
+     workers: int = typer.Option(None, "--workers", help="Processes for the closing paths (default half the CPUs)."),
+     candidates: str = typer.Option(None, "--candidates",
+                                    help="Fit with these candidate features (comma-separated, walls.CANDIDATES; 'none' "
+                                         "for none) as an experiment, into data/solver/experiments/walls-<names>/ "
+                                         "(for `solve RUN --walls`), never over the stage's walls."),
+     evaluate: list[str] = typer.Option(None, "--evaluate",
+                                        help="Only score a configuration (comma-separated candidates; 'none' for the "
+                                             "default set) and print its held-out log loss; repeat for several, all "
+diff --git a/pipeline/src/sfzmaps/solver/wordboxes.py b/pipeline/src/sfzmaps/solver/wordboxes.py
+new file mode 100644
+index 0000000..8b3589e
+--- /dev/null
++++ b/pipeline/src/sfzmaps/solver/wordboxes.py
+@@ -0,0 +1,373 @@
++"""Word boxes on every 2000 sheet, grouped from our own text detector's chance (stage `solver-boxes`,
++`sfzmaps solver boxes`).  No outside input: the boxes come from the held-out detectors' per-px chance
++(`paths.READER_TEXT_DIR/<sheet>/{chance.png, kind.npz}`, each px from the detector that never saw its quarter of the
++city or the answered blocks) and the page's ink.  Terra's saved boxes are read to CHOOSE and to SCORE, never as input to
++the boxes (see "The level").
++
++A box is one connected component (8-connectivity) of the px that are at or above the LEVEL in chance and within INK_R px
++of ink (the detector reads ink only, so its chance on blank paper is no evidence), among components holding at least
++MIN_PX ink px.  The component's px, weighted by chance, give its centre and second moments; the AXIS is the major
++axis (degrees counter-clockwise from left-to-right, modulo 180, as Terra's reading angle); the grouped box is the
++extent of the component's px along and across the axis.  The detector's chance spreads a few px past the ink, so each
++box also records the TRIMMED box: the same axes, the extent of the component's ink px alone (the glyphs, which is
++what the reader should crop).  The ports of spike S3's grouping (`scripts/spikes/s3_boxes.py`, level "I0.80").
++
++The level, chosen per quarter of the city (`paths.QUARTERS`) from LEVELS: the level that finds most of Terra's
++zoning-code words (centre in the quarter's complement, IoU >= IOU) on the OTHER three quarters; ties go to the higher
++level.  The boxes whose centre's map point is in quarter q are then the boxes of q's level.  Terra's words are used
++for this choice and for the scores only.
++
++Each kept box is placed on the map as the prints are (`prints._place`: its centre must be inside the sheet's footprint
++and on the mapped area; others are dropped and counted): `x`, `y`, `lab_lot` (the lot under it) and `street`.
++
++Writes data/solver/boxes/:
++  boxes.parquet  one row per box (columns in COLUMNS)
++  levels.json    the chosen level per quarter and the table it was chosen from
++  summary.json   per quarter: the zoning-code words found (IoU >= IOU), with the axis within AXIS_OK degrees, the
++                 trimmed box's recall; the boxes kept and dropped off the map; how many of the owner's answered labels
++                 get a box.  Nothing in it is a time.
++"""
++import json
++import logging
++import time
++from multiprocessing import get_context
++
++import cv2
++import numpy as np
++import pandas as pd
++import shapely
++
++from sfzmaps import config
++from sfzmaps.solver import grid, lots, page, paths, prints, runs
++from sfzmaps.solver.textnet import boxes as textboxes
++from sfzmaps.solver.textnet import data
++from sfzmaps.transform import SheetTransform
++
++log = logging.getLogger(__name__)
++
++BOXES_DIR = paths.SOLVER_DIR / "boxes"
++LEVELS = (0.5, 0.7, 0.8, 0.9, 0.95, 0.98, 0.99, 0.995, 1.0)   # the chance levels tried: the held-out detectors' chance
++#   is near 1 on most ink, so the useful levels sit high (spike S3's 0.5 to 0.9 found 20 to 60% of the codes)
++INK_R = 4          # px: the chance counts only within this of ink
++MIN_PX = 20        # a component with fewer ink px is a speck
++TOUCH_IOU = 0.1    # a word is "touched" by a box at this IoU (a looser find: what the misses overlap at all)
++IOU = 0.3          # a word is found when a box meets it at this IoU
++AXIS_OK = 10.0     # degrees: a found word's axis is usable within this
++WORKERS = 4
++KIND_NAMES = ("zoning", "block", "street", "other")        # data.KINDS' order
++KIND = data.KINDS["zoning code"]
++
++CORNER_COLS = [f"{k}{i}{a}" for k in "gt" for i in range(4) for a in "xy"]    # g: the grouped box, t: the trimmed
++COLUMNS = (["sheet", "i", "level", "quarter", "page_x", "page_y", "axis", "length", "height", "t_length", "t_height",
++            "mean_chance", "ink_px", *[f"p_{k}" for k in KIND_NAMES], "x", "y", "lab_lot", "street"] + CORNER_COLS)
++
++
++def level_name(level: float) -> str:
++    return f"{level:.3f}"
++
++
++# --- grouping ---------------------------------------------------------------------------------------------------
++
++def ink_gate(ink: np.ndarray, radius: int = INK_R) -> np.ndarray:
++    """The px within `radius` px of ink (an ellipse of the diameter 2 radius + 1), bool."""
++    k = 2 * radius + 1
++    return cv2.dilate(ink.view(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))).view(bool)
++
++
++def group(chance: np.ndarray, ink: np.ndarray, gate: np.ndarray, level: float, kind_p: np.ndarray | None = None,
++          min_px: int = MIN_PX) -> dict:
++    """The boxes of one page at one level (see the module): `chance` uint8 (chance x 255), `ink` and `gate` bool,
++    `kind_p` (4, h, w) the kinds' probabilities (None: not asked).  Arrays over the boxes: `g` and `t` the grouped and
++    the trimmed corners (n, 4, 2) in page px (edge coordinates: a px is [i, i + 1)), `axis` degrees modulo 180, `length`
++    along the axis and `height` across it (the grouped box), `t_length` and `t_height` (the trimmed), `mean`
++    the mean chance and `kind` the mean kind probabilities over the box's ink px, `ink_px`."""
++    thr = int(np.ceil(level * 255 - 1e-9))
++    mask = (chance >= thr) & gate
++    _, lab = cv2.connectedComponents(mask.view(np.uint8), connectivity=8)
++    ys, xs = np.nonzero(mask)
++    n0 = np.zeros(0)
++    empty = {"g": np.zeros((0, 4, 2)), "t": np.zeros((0, 4, 2)), "axis": n0, "length": n0, "height": n0,
++             "t_length": n0, "t_height": n0, "mean": n0, "kind": np.zeros((0, 4)), "ink_px": np.zeros(0, int)}
++    if not len(ys):
++        return empty
++    lab_px = lab[ys, xs]
++    order = np.argsort(lab_px, kind="stable")
++    lab_px, xi, yi = lab_px[order], xs[order], ys[order]
++    xs, ys = xi + 0.5, yi + 0.5
++    w = chance[yi, xi] / 255.0
++    on_ink = ink[yi, xi]
++    start = np.flatnonzero(np.r_[True, lab_px[1:] != lab_px[:-1]])
++    cnt = np.diff(np.r_[start, len(lab_px)])
++    rep = lambda a: np.repeat(a, cnt)       # noqa: E731
++    m = np.add.reduceat(w, start)
++    cx, cy = np.add.reduceat(w * xs, start) / m, np.add.reduceat(w * ys, start) / m
++    rx, ry = xs - rep(cx), ys - rep(cy)
++    sxx, syy, sxy = (np.add.reduceat(w * a, start) / m for a in (rx * rx, ry * ry, rx * ry))
++    th = 0.5 * np.arctan2(2 * sxy, sxx - syy)                    # the major axis, image coordinates (y down)
++    vx, vy = np.cos(th), np.sin(th)
++    p = rx * rep(vx) + ry * rep(vy)
++    q = -rx * rep(vy) + ry * rep(vx)
++    p0, p1 = np.minimum.reduceat(p, start) - 0.5, np.maximum.reduceat(p, start) + 0.5
++    q0, q1 = np.minimum.reduceat(q, start) - 0.5, np.maximum.reduceat(q, start) + 0.5
++    n_ink = np.add.reduceat(on_ink.astype(np.int64), start)
++    keep = n_ink >= min_px
++    # the ink alone (a kept component holds at least min_px >= 1 ink px)
++    big = np.inf
++    pi0 = np.minimum.reduceat(np.where(on_ink, p, big), start) - 0.5
++    pi1 = np.maximum.reduceat(np.where(on_ink, p, -big), start) + 0.5
++    qi0 = np.minimum.reduceat(np.where(on_ink, q, big), start) - 0.5
++    qi1 = np.maximum.reduceat(np.where(on_ink, q, -big), start) + 0.5
++    with np.errstate(invalid="ignore"):
++        mean = np.add.reduceat(np.where(on_ink, w, 0.0), start) / np.maximum(n_ink, 1)
++        kind = np.zeros((len(start), 4))
++        if kind_p is not None:
++            for k in range(4):
++                kind[:, k] = np.add.reduceat(np.where(on_ink, kind_p[k][yi, xi].astype(np.float64), 0.0),
++                                             start) / np.maximum(n_ink, 1)
++    v, nrm = np.stack([vx, vy], 1), np.stack([-vy, vx], 1)
++    c = np.stack([cx, cy], 1)
++
++    def corners(a0, a1, b0, b1):
++        return np.stack([c + v * a0[:, None] + nrm * b0[:, None], c + v * a1[:, None] + nrm * b0[:, None],
++                         c + v * a1[:, None] + nrm * b1[:, None], c + v * a0[:, None] + nrm * b1[:, None]], 1)
++
++    g = corners(p0, p1, q0, q1)
++    t = corners(np.where(keep, pi0, 0), np.where(keep, pi1, 0), np.where(keep, qi0, 0), np.where(keep, qi1, 0))
++    axis = np.rad2deg(np.arctan2(-vy, vx)) % 180.0               # counter-clockwise from left-to-right
++    return {"g": g[keep], "t": t[keep], "axis": axis[keep], "length": (p1 - p0)[keep], "height": (q1 - q0)[keep],
++            "t_length": (pi1 - pi0)[keep], "t_height": (qi1 - qi0)[keep], "mean": mean[keep], "kind": kind[keep],
++            "ink_px": n_ink[keep]}
++
++
++# --- matching Terra's words ---------------------------------------------------------------------------------------
++
++def poly_area(c: np.ndarray) -> np.ndarray:
++    """The areas of polygons (n, k, 2)."""
++    if not len(c):
++        return np.zeros(0)
++    x, y = c[..., 0], c[..., 1]
++    return 0.5 * np.abs((x * np.roll(y, -1, 1) - np.roll(x, -1, 1) * y).sum(1))
++
++
++def pairs(a: np.ndarray, b: np.ndarray):
++    """For every convex quadrilateral of `a` and of `b` (n, 4, 2) that overlap: their indices and the overlap's area."""
++    if not len(a) or not len(b):
++        return np.zeros(0, int), np.zeros(0, int), np.zeros(0)
++    al, ah, bl, bh = a.min(1), a.max(1), b.min(1), b.max(1)
++    hit = ((al[:, None, 0] < bh[None, :, 0]) & (ah[:, None, 0] > bl[None, :, 0])
++           & (al[:, None, 1] < bh[None, :, 1]) & (ah[:, None, 1] > bl[None, :, 1]))
++    ia, ib = np.nonzero(hit)
++    a32, b32 = a.astype(np.float32), b.astype(np.float32)
++    inter = np.array([cv2.intersectConvexConvex(a32[i], b32[j])[0] for i, j in zip(ia, ib)])
++    pos = inter > 0
++    return ia[pos], ib[pos], inter[pos]
++
++
++def axis_error(a, b):
++    """The angle between two axes (degrees, modulo 180), in [0, 90]."""
++    d = np.abs(np.asarray(a) - np.asarray(b)) % 180.0
++    return np.minimum(d, 180.0 - d)
++
++
++def best_axis_match(words: np.ndarray, word_axes: np.ndarray, found: np.ndarray, axes: np.ndarray):
++    """`best_match` with the axis error to the best polygon: (best IoU (n,), axis error (n,), NaN where none)."""
++    n = len(words)
++    best, err = np.zeros(n), np.full(n, np.nan)
++    if not n or not len(found):
++        return best, err
++    wa, fa = poly_area(words), poly_area(found)
++    i, j, inter = pairs(words, found)
++    iou = inter / (wa[i] + fa[j] - inter)
++    bj = np.full(n, -1)
++    for k in np.argsort(iou):
++        best[i[k]], bj[i[k]] = iou[k], j[k]
++    has = bj >= 0
++    err[has] = axis_error(word_axes[has], axes[bj[has]])
++    return best, err
++
++
++# --- a sheet ------------------------------------------------------------------------------------------------------
++
++_SHARED: dict = {}      # the lots and the mapped area, read once before the workers fork
++
++
++def _load_shared() -> None:
++    _SHARED["lots"] = lots.load_lots()
++    _SHARED["mapped"] = page.load_sheets() > 0
++    _SHARED["terra"] = textboxes.terra_records()
++
++
++def _read_chance(sheet: str, shape) -> np.ndarray:
++    f = paths.READER_TEXT_DIR / sheet / "chance.png"
++    c = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
++    if c is None:
++        raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver text-reader`")
++    if c.shape != tuple(shape):
++        raise ValueError(f"{f} is {c.shape[1]} x {c.shape[0]} px, its page {shape[1]} x {shape[0]}")
++    return c
++
++
++def sheet_boxes(sheet: str) -> dict:
++    """One sheet's boxes at every level, placed on the map, and Terra's zoning-code words scored against them:
++    {"levels": {level name: DataFrame (COLUMNS) of the placed boxes}, "off_map": {level name: boxes dropped},
++    "words": {level name: DataFrame, one row per zoning-code word: quarter, best IoU of the grouped box, its axis error,
++    the best IoU of the trimmed box}}."""
++    ink = data.load_page(sheet) < grid.INK_BELOW
++    gate = ink_gate(ink)
++    chance = _read_chance(sheet, ink.shape)
++    with np.load(paths.READER_TEXT_DIR / sheet / "kind.npz") as z:
++        kind_p = z["p"]
++    warp = config.DATA_DIR / "warp" / paths.SERIES / sheet
++    transform = SheetTransform.from_json(json.loads((warp / "transform.json").read_text()), folder=warp)
++    footprint = shapely.from_geojson((warp / "warped.footprint.geojson").read_text())
++    found_words = [b for b in textboxes.terra_boxes(paths.SERIES, sheet, _SHARED["terra"])
++                   if data.KINDS.get(b["kind"], data.KINDS["other"]) == KIND]
++    rects = [data.word_rect(b["box"], float(b.get("angle_deg") or 0.0)) for b in found_words]
++    words = np.array(rects, float).reshape(-1, 4, 2)
++    word_axis = np.array([data.reading_angle(r) for r in rects], float) % 180.0
++    wq = (grid.quarter_of(transform.to_world(words.mean(1))) if len(words) else np.zeros(0, np.int8))
++    out = {"levels": {}, "off_map": {}, "words": {}}
++    for level in LEVELS:
++        name = level_name(level)
++        G = group(chance, ink, gate, level, kind_p)
++        best, err = best_axis_match(words, word_axis, G["g"], G["axis"])
++        tbest, _ = best_axis_match(words, word_axis, G["t"], G["axis"])
++        out["words"][name] = pd.DataFrame({"quarter": wq, "best": best, "err": err, "tbest": tbest})
++        found = [{"page_x": float(c[0]), "page_y": float(c[1]), "i": k} for k, c in enumerate(G["g"].mean(1))]
++        placed = prints._place(found, sheet, transform, footprint, _SHARED["lots"], _SHARED["mapped"])
++        out["off_map"][name] = len(found) - len(placed)
++        k = np.array([p["i"] for p in placed], int)
++        df = pd.DataFrame({"sheet": sheet, "i": k, "level": level,
++                           "quarter": grid.quarter_of(np.array([[p["x"], p["y"]] for p in placed])) if len(k)
++                           else np.zeros(0, np.int8),
++                           "page_x": [p["page_x"] for p in placed], "page_y": [p["page_y"] for p in placed]})
++        df["axis"], df["length"], df["height"] = G["axis"][k], G["length"][k], G["height"][k]
++        df["t_length"], df["t_height"] = G["t_length"][k], G["t_height"][k]
++        df["mean_chance"], df["ink_px"] = G["mean"][k], G["ink_px"][k]
++        for c, nm in enumerate(KIND_NAMES):
++            df[f"p_{nm}"] = G["kind"][k, c]
++        df["x"], df["y"] = [p["x"] for p in placed], [p["y"] for p in placed]
++        df["lab_lot"], df["street"] = [p["lab_lot"] for p in placed], [p["street"] for p in placed]
++        for key, arr in (("g", G["g"]), ("t", G["t"])):
++            flat = arr[k].reshape(len(k), 8)
++            for c in range(8):
++                df[f"{key}{c // 2}{'xy'[c % 2]}"] = flat[:, c]
++        out["levels"][name] = df
++    return out
++
++
++def _job(sheet: str) -> dict:
++    cv2.setNumThreads(1)
++    return sheet_boxes(sheet)
++
++
++# --- the level ----------------------------------------------------------------------------------------------------
++
++def choose_levels(words: dict[str, pd.DataFrame]) -> dict:
++    """The level of each quarter and the table it was chosen from.  `words`: level name -> every sheet's
++    zoning-code words (quarter, best).  A quarter's level is the one with the highest recall (best >= IOU) on the words
++    of the other quarters; ties to the higher level.  {"level": {quarter: level}, "recall_on_others": {quarter:
++    {level name: recall}}}."""
++    table = {}
++    for q, qn in enumerate(paths.QUARTERS):
++        table[qn] = {}
++        for name, w in words.items():
++            o = w[w["quarter"] != q]
++            table[qn][name] = float((o["best"] >= IOU).mean()) if len(o) else 0.0
++    chosen = {qn: max(LEVELS, key=lambda lv: (t[level_name(lv)], lv)) for qn, t in table.items()}
++    return {"level": chosen, "recall_on_others": table}
++
++
++def keep_chosen(boxes: dict[str, pd.DataFrame], levels: dict[str, float]) -> pd.DataFrame:
++    """The boxes whose quarter's level is their own: `boxes` level name -> every sheet's placed boxes at that level,
++    `levels` quarter name -> level."""
++    parts = []
++    for q, qn in enumerate(paths.QUARTERS):
++        df = boxes[level_name(levels[qn])]
++        parts.append(df[df["quarter"] == q])
++    return pd.concat(parts, ignore_index=True)
++
++
++def quarter_measures(words: dict[str, pd.DataFrame], levels: dict[str, float]) -> dict:
++    """Per quarter, on its own zoning-code words at its level: the words, the share found (IoU >= IOU) by the
++    grouped box and by the trimmed box, the share touched at TOUCH_IOU, and the share found with the axis within
++    AXIS_OK degrees."""
++    out = {}
++    for q, qn in enumerate(paths.QUARTERS):
++        w = words[level_name(levels[qn])]
++        w = w[w["quarter"] == q]
++        n = len(w)
++        found = w["best"] >= IOU
++        out[qn] = {"level": levels[qn], "words": int(n), "found": int(found.sum()),
++                   "recall": float(found.mean()) if n else None,
++                   "trimmed_recall": float((w["tbest"] >= IOU).mean()) if n else None,
++                   "touched": float((w["best"] >= TOUCH_IOU).mean()) if n else None,
++                   "axis_within_10": float((found & (w["err"] <= AXIS_OK)).mean()) if n else None}
++    return out
++
++
++def answered_with_box(df: pd.DataFrame) -> dict:
++    """How many of the owner's answered labels (`codereader.labels`; used here only to count) get a box among the
++    kept boxes `df`: of those with a Terra box, how many meet it at IOU; of all answered, how many have a box
++    holding their point."""
++    from sfzmaps.solver.codereader import labels
++    held = [lab for lab in labels.load_labels(crops=False) if lab.held_out]
++    with_terra = [lab for lab in held if lab.box is not None]
++    hit_iou = hit_point = 0
++    for lab in held:
++        mine = df[df["sheet"] == lab.sheet]
++        g = mine[[f"g{i}{a}" for i in range(4) for a in "xy"]].to_numpy(float).reshape(-1, 4, 2)
++        px, py = lab.point
++        if len(g) and any(cv2.pointPolygonTest(c.astype(np.float32).reshape(-1, 1, 2), (float(px), float(py)),
++                                               False) >= 0 for c in g[(np.abs(g.mean(1) - [px, py]).max(1) < 400)]):
++            hit_point += 1
++        if lab.box is not None and len(g):
++            rect = data.word_rect(lab.box, float(lab.angle)).astype(float).reshape(1, 4, 2)
++            best, _ = best_axis_match(rect, np.zeros(1), g, np.zeros(len(g)))
++            hit_iou += int(best[0] >= IOU)
++    return {"answered": len(held), "with_terra_box": len(with_terra), "terra_box_met_at_iou": hit_iou,
++            "point_inside_a_box": hit_point, "iou": IOU}
++
++
++# --- the stage ----------------------------------------------------------------------------------------------------
++
++def build_boxes(workers: int = WORKERS) -> dict:
++    """Group every 2000 sheet's boxes, choose each quarter's level, and write BOXES_DIR (see the module).  Returns the
++    summary and the seconds taken."""
++    t0 = time.perf_counter()
++    names = paths.check_sheets()
++    _load_shared()
++    ctx = get_context("fork")
++    with ctx.Pool(min(workers, len(names))) as pool:
++        results = pool.map(_job, names, chunksize=1)
++    log.info("grouped %d sheets at %d levels in %.0f s", len(names), len(LEVELS), time.perf_counter() - t0)
++    words = {level_name(lv): pd.concat([r["words"][level_name(lv)] for r in results], ignore_index=True)
++             for lv in LEVELS}
++    chosen = choose_levels(words)
++    levels = chosen["level"]
++    kept = keep_chosen({level_name(lv): pd.concat([r["levels"][level_name(lv)] for r in results], ignore_index=True)
++                        for lv in LEVELS}, levels)
++    kept = kept.sort_values(["sheet", "quarter", "i"], kind="stable").reset_index(drop=True)[COLUMNS]
++    kept["quarter"] = kept["quarter"].astype("int8")
++    kept["street"] = kept["street"].astype(bool)
++    kept["lab_lot"] = kept["lab_lot"].astype("int32")
++    kept["i"] = kept["i"].astype("int32")
++    off_map = {level_name(lv): int(sum(r["off_map"][level_name(lv)] for r in results)) for lv in LEVELS}
++    summary = {"quarters": quarter_measures(words, levels), "boxes": int(len(kept)),
++               "boxes_by_quarter": {qn: int((kept["quarter"] == q).sum()) for q, qn in enumerate(paths.QUARTERS)},
++               "off_map_by_level": off_map, "answered": answered_with_box(kept),
++               "min_ink_px": MIN_PX, "ink_radius_px": INK_R}
++    part = runs.fresh_folder(BOXES_DIR)
++    kept.to_parquet(part / "boxes.parquet", index=False)
++    (part / "levels.json").write_text(json.dumps(chosen, indent=1) + "\n")
++    (part / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
++    runs.replace_folder(part, BOXES_DIR)
++    return {**summary, "seconds": round(time.perf_counter() - t0, 1)}
++
++
++def load_boxes() -> pd.DataFrame:
++    """Read boxes.parquet."""
++    f = BOXES_DIR / "boxes.parquet"
++    if not f.is_file():
++        raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver boxes` (stage solver-boxes)")
++    return pd.read_parquet(f)
+diff --git a/pipeline/tests/test_wordboxes.py b/pipeline/tests/test_wordboxes.py
+new file mode 100644
+index 0000000..3baaba7
+--- /dev/null
++++ b/pipeline/tests/test_wordboxes.py
+@@ -0,0 +1,147 @@
++"""The word boxes (`solver/wordboxes.py`) on small synthetic chance and ink pages."""
++import cv2
++import numpy as np
++import pandas as pd
++
++from sfzmaps.solver import paths, wordboxes as W
++
++
++def _page(h=120, w=200):
++    return np.zeros((h, w), np.uint8), np.zeros((h, w), bool)
++
++
++def _bar(ink, x0, y0, x1, y1):
++    ink[y0:y1, x0:x1] = True
++
++
++def _group(chance, ink, level=0.5, kind_p=None, min_px=20):
++    return W.group(chance, ink, W.ink_gate(ink), level, kind_p, min_px)
++
++
++def _spread(ink, value=255):
++    """The detector's chance: `value` on the ink and within 3 px of it (it spreads past the ink)."""
++    return np.where(W.ink_gate(ink, 3), value, 0).astype(np.uint8)
++
++
++def test_two_words_are_two_boxes():
++    chance, ink = _page()
++    _bar(ink, 10, 20, 60, 30)
++    _bar(ink, 100, 20, 150, 30)          # 40 px of paper between them: more than twice the ink radius
++    G = _group(_spread(ink), ink)
++    assert len(G["g"]) == 2
++    assert sorted(np.round(G["g"].mean(1)[:, 0])) == [35, 125]
++
++
++def test_one_word_whose_gaps_are_under_the_ink_radius_is_one_box():
++    chance, ink = _page()
++    _bar(ink, 10, 20, 30, 30)
++    _bar(ink, 34, 20, 54, 30)            # a 4 px gap, as between letters
++    assert len(_group(_spread(ink), ink)["g"]) == 1
++
++
++def test_axis_is_modulo_180_counter_clockwise_from_left_to_right():
++    for angle in (0.0, 30.0, 90.0, 150.0):
++        chance, ink = _page(200, 200)
++        r = np.deg2rad(angle)
++        for t in np.linspace(-40, 40, 400):
++            x, y = 100 + t * np.cos(r), 100 - t * np.sin(r)        # y grows downwards: counter-clockwise is up
++            ink[int(round(y)) - 2:int(round(y)) + 3, int(round(x)) - 2:int(round(x)) + 3] = True
++        G = _group(_spread(ink), ink)
++        assert len(G["g"]) == 1
++        assert 0 <= G["axis"][0] < 180
++        assert W.axis_error(G["axis"][0], angle) < 3, (angle, G["axis"][0])
++        assert G["length"][0] > G["height"][0]
++
++
++def test_trimmed_box_is_the_ink_and_the_grouped_box_runs_past_it():
++    chance, ink = _page()
++    _bar(ink, 50, 40, 110, 52)            # 60 x 12 ink px
++    G = _group(_spread(ink), ink)
++    assert abs(G["t_length"][0] - 60) < 1.5 and abs(G["t_height"][0] - 12) < 1.5
++    assert G["length"][0] > 64 and G["height"][0] > 16
++    assert G["t"].shape == (1, 4, 2)
++    assert (G["t"].min(1) >= G["g"].min(1) - 1e-6).all() and (G["t"].max(1) <= G["g"].max(1) + 1e-6).all()
++
++
++def test_specks_under_the_ink_count_are_dropped_and_blank_paper_makes_no_box():
++    chance, ink = _page()
++    _bar(ink, 10, 10, 13, 13)             # 9 ink px
++    chance[60:90, 60:140] = 255            # chance on blank paper, no ink within the radius
++    assert len(_group(chance, ink)["g"]) == 0
++    _bar(ink, 100, 20, 140, 30)
++    assert len(_group(_spread(ink), ink)["g"]) == 1
++
++
++def test_level_is_a_threshold_on_the_chance():
++    chance, ink = _page()
++    _bar(ink, 50, 40, 110, 52)
++    c = _spread(ink, 200)                  # chance 0.78 everywhere it is called text
++    assert len(_group(c, ink, level=0.7)["g"]) == 1
++    assert len(_group(c, ink, level=0.9)["g"]) == 0
++
++
++def test_kind_and_chance_are_means_over_the_boxes_ink():
++    chance, ink = _page()
++    _bar(ink, 50, 40, 110, 52)
++    p = np.zeros((4, *ink.shape), np.float16)
++    p[0] = 0.75
++    p[2] = 0.25
++    p[0][~ink] = 0.0                       # off the ink the detector gives nothing: it must not dilute the mean
++    G = _group(_spread(ink, 230), ink, kind_p=p)
++    assert np.allclose(G["kind"][0], [0.75, 0, 0.25, 0], atol=1e-3)
++    assert abs(G["mean"][0] - 230 / 255) < 1e-6
++    assert G["ink_px"][0] == 60 * 12
++
++
++def test_a_box_found_by_a_word_at_its_own_angle():
++    word = np.array([[[0, 0], [40, 0], [40, 10], [0, 10]]], float)
++    same = cv2.boxPoints(((20.0, 5.0), (40.0, 10.0), 0.0))[None]
++    best, err = W.best_axis_match(word, np.array([0.0]), same, np.array([180.0]))
++    assert best[0] > 0.99 and err[0] < 1e-9                  # 180 degrees is 0 modulo 180
++    far = word + [100, 0]
++    best, err = W.best_axis_match(word, np.array([0.0]), far, np.array([0.0]))
++    assert best[0] == 0 and np.isnan(err[0])
++    half = word + [20, 0]
++    best, _ = W.best_axis_match(word, np.array([0.0]), half, np.array([90.0]))
++    assert abs(best[0] - 1 / 3) < 1e-6
++
++
++def _words(quarter, best):
++    return pd.DataFrame({"quarter": quarter, "best": best, "err": 0.0, "tbest": best})
++
++
++def test_a_quarters_level_is_chosen_on_the_other_three_quarters_only():
++    names = {W.level_name(lv): lv for lv in W.LEVELS}
++    low, high = W.level_name(W.LEVELS[0]), W.level_name(W.LEVELS[-1])
++    words = {n: _words([0, 1, 2, 3] * 5, [0.5] * 20) for n in names}
++    # level `low` finds quarter 0's words only; `high` finds every other quarter's words only
++    words[low] = _words([0, 1, 2, 3] * 5, [0.9 if q == 0 else 0.0 for q in [0, 1, 2, 3] * 5])
++    words[high] = _words([0, 1, 2, 3] * 5, [0.0 if q == 0 else 0.9 for q in [0, 1, 2, 3] * 5])
++    chosen = W.choose_levels(words)
++    assert chosen["level"]["nw"] == W.LEVELS[-1]             # judged on ne, sw, se: `high` finds them
++    assert chosen["recall_on_others"]["ne"][high] == (10 / 15)       # nw's words are not found by `high`
++    # quarter 0's own words never decide its level
++    assert chosen["recall_on_others"]["nw"][low] == 0.0
++    assert chosen["recall_on_others"]["ne"][low] == (5 / 15)
++
++
++def test_ties_go_to_the_higher_level():
++    words = {W.level_name(lv): _words([0, 1, 2, 3], [0.5] * 4) for lv in W.LEVELS}
++    assert set(W.choose_levels(words)["level"].values()) == {W.LEVELS[-1]}
++
++
++def test_each_box_is_kept_at_its_quarters_level():
++    def boxes(level, quarters):
++        return pd.DataFrame({"level": level, "quarter": np.array(quarters, np.int8), "i": range(len(quarters))})
++    lo, hi = W.LEVELS[0], W.LEVELS[-1]
++    per = {W.level_name(lv): boxes(lv, [0, 1, 2, 3]) for lv in W.LEVELS}
++    kept = W.keep_chosen(per, {"nw": lo, "ne": hi, "sw": lo, "se": hi})
++    assert sorted(zip(kept["quarter"], kept["level"])) == [(0, lo), (1, hi), (2, lo), (3, hi)]
++
++
++def test_quarter_measures_count_a_quarters_own_words_at_its_level():
++    lv = {q: W.LEVELS[0] for q in paths.QUARTERS}
++    words = {W.level_name(l): _words([0, 0, 1, 2], [0.9, 0.0, 0.9, 0.9]) for l in W.LEVELS}
++    m = W.quarter_measures(words, lv)
++    assert m["nw"]["words"] == 2 and m["nw"]["recall"] == 0.5
++    assert m["se"]["words"] == 0 and m["se"]["recall"] is None

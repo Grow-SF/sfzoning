@@ -1,0 +1,1194 @@
+# Review package: 59b9cf7..87f3d82
+
+## Commits
+87f3d82 wordread: the detector's word heads, off by default (Recipe heads=words: a word-core logit by hard-negative BCE at 3:1 plus Dice, the four distances to the word's sides by IoU loss with 10 x (1 - cos) of the direction, PAN's tag pulled and pushed x 0.25); crop_targets(words=True) paints core and tag_id from SheetData.cores and computes geo from the full rectangles; shrink.core/unclip/measure_r/prepare; r by the 1% rule is none on Terra's words (tile-seam double reads)
+
+## Files changed
+ pipeline/src/sfzmaps/solver/textnet/data.py    |  63 +++++-
+ pipeline/src/sfzmaps/solver/textnet/model.py   |  24 ++-
+ pipeline/src/sfzmaps/solver/textnet/train.py   | 169 ++++++++++++++--
+ pipeline/src/sfzmaps/solver/wordread/shrink.py | 265 ++++++++++++++++++++++++
+ pipeline/tests/test_wordread_heads.py          | 268 +++++++++++++++++++++++++
+ 5 files changed, 763 insertions(+), 26 deletions(-)
+
+## Diff
+diff --git a/pipeline/src/sfzmaps/solver/textnet/data.py b/pipeline/src/sfzmaps/solver/textnet/data.py
+index 2c623ec..b99bddd 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/data.py
++++ b/pipeline/src/sfzmaps/solver/textnet/data.py
+@@ -11,20 +11,31 @@
+              out (`SheetData.held`): VALIDATION_AREA for a trial (`VALIDATION`); a quarter of the city (`Quarter`) and
+              the answered blocks (`GridArea`) for the code reader's detectors (`reader_stage`); none for the stage's
+   known      the px the loss reads: not unknown and not held out; under the label rule "lines-unknown" also not a
+              px inside a word that is a line px (`SheetData.line_bits`: the run rule's line ink grown by 1 px)
+   centres    the px a training crop may centre on: ink or text, not held out
+ 
+ The label rule (`crop_targets(..., labels=)`, LABEL_RULES): "boxes" teaches every px of a word's rectangle as text,
+ the lines through it too; "lines-unknown" leaves the line px inside a word unknown (no lesson either way).  It needs
+ the sheet's line px, which `textnet.zones.prepare` fills before training, with the zones it keeps around Sol's points.
+ 
++The word targets (`crop_targets(..., words=True)`, for the word heads `train.Recipe.heads="words"`), drawn from each
++word's core (`SheetData.cores`, its rectangle shrunk, which `wordread.shrink.prepare` fills before training):
++  core       1 on the px of a word's core (filled as the words are, later over earlier), 0 elsewhere
++  tag_id     1 + the index of the word whose core holds the px (int32), 0 elsewhere
++  geo        float32 (5, h, w), at core px only (0 elsewhere): the distances in crop px from the px to its word's top,
++             bottom, start and end edges, and its reading angle turned with the crop (as `angle`).  The edges are
++             those of the word's whole rectangle (`SheetData.words`), taken by its reading angle (`SheetData.angles`):
++             start and end along the reading direction, top and bottom across it (the top on the letters' upper side);
++             each is the furthest of the rectangle's corners that way.  Distances are measured at page px and scaled
++             by the crop's scale; the quarter turns leave them as they are.
++
+ An area answers for map points whether each is in it (`contains`) and, from the placement's samples around a page
+ window, whether all of the window's px are in it or none is, when that follows from the samples alone (`decided`): a
+ px's map point is a weighted mean of four samples, so it lies in their bounding box.  Only where it doesn't follow is
+ each px's map point found (`in_area`).
+ 
+ The reading angle is kept in degrees, as Terra gives it; the model learns its cosine and sine.
+ 
+ The detector of every map (`load_sheets`, `crop_targets`) learns from the sheets Terra read (`paths.TEXT_SHEETS`) of
+ the training maps, Terra's boxes decoded from its saved answers (`boxes.terra_boxes`), and holds out VALIDATION_AREA
+ on every map at once.  A sheet is kept compact (`SheetData`): its ink as packed bits and its boxes, points and
+@@ -63,21 +74,21 @@ AREA_MARGIN = 1.0                 # ft: far more than a rounding of a px's weigh
+ # maps' Terra sheets cover together (the union of their warped footprints, 50.2 sq mi: so 5.0 sq mi) that lie inside
+ # every training map's sheets (at least 99.5% inside their intersection, 38.7 sq mi; corners on a 250 ft grid, width
+ # to height 1:2 to 2:1), the one whose share of each training map's Terra box area is nearest 10%: in all and, at half
+ # weight, of each kind the map prints (5% of its boxes or more; the older maps print no block numbers).  The rule's
+ # best was the residential south-west (Parkside, Lakeshore, Ingleside; score 0.022), but its lettering is sparse and
+ # simple: an easy area can't tell training recipes apart, and the scores are to be taken on dense areas, never only the
+ # simple west.  So this is the runner-up (score 0.030), the central strip through the Mission, Noe Valley and Glen
+ # Park: 99.7% inside every training map's sheets, with 10-13% of each training map's box area (7-16% of each kind it
+ # prints).  `pipeline/scripts/choose_text_validation_area.py` re-derives the candidates and this choice from the data.
+ VALIDATION_AREA = (6000442.0, 2091727.0, 6008805.0, 2108453.0)
+-BOX_FIELDS = ("words", "kinds", "angles", "other", "points")    # SheetData's arrays of boxes and points
++BOX_FIELDS = ("words", "kinds", "angles", "other", "points", "cores")    # SheetData's arrays of boxes and points
+ LOAD_THREADS = 8                  # sheets read at once
+ BAND = 512                        # page rows drawn at a time when finding where crops may centre
+ LABEL_RULES = ("boxes", "lines-unknown")   # what a word box teaches (`crop_targets`; see the module)
+ 
+ 
+ # --- areas of the map a sheet may hold out ---------------------------------------------------------------------------
+ 
+ @dataclass(frozen=True)
+ class MapRect:
+     """A rectangle of the map (EPSG:2227 ft): a map point (x, y) is in it when x0 <= x < x1 and y0 <= y < y1."""
+@@ -181,20 +192,23 @@ class SheetData:
+     points: np.ndarray       # int32 (p, 2): Sol's label points (x, y), rounded to px
+     world: np.ndarray        # float64 (rows, cols, 2): the map point of every PLACEMENT_STEP-th page px each way;
+                              # (0, 0, 2) when read without the placement
+     ft_per_px: float         # the placement's scale over the page (`SheetTransform.median_scale_ft_per_px`); nan
+                              # without the placement
+     held: tuple = ()         # the areas held out (MapRect, Quarter, GridArea): no loss there, no crop centred there
+     point_radius: int = READ_POINT_RADIUS   # px around each of Sol's points that are unknown (outside every word)
+     line_bits: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 0), np.uint8))
+                              # uint8, packed as `ink_bits`: the line px (`linerules.line_px` grown by 1 px, the 8
+                              # around each), for the label rule "lines-unknown"; (0, 0) until `zones.prepare` fills it
++    cores: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 4, 2), np.int32))
++                             # int32 (n, 4, 2): each word's core (its rectangle shrunk, corners rounded to px, in the
++                             # order of `words`), for the word targets; none until `wordread.shrink.prepare` fills it
+ 
+ 
+ def reading_angle(rect: np.ndarray) -> int:
+     """A word rectangle's reading direction (its first edge) in whole degrees, counter-clockwise from left-to-right."""
+     dx, dy = rect[1] - rect[0]
+     return int(round(np.rad2deg(np.arctan2(-dy, dx))))
+ 
+ 
+ def _between(i: np.ndarray, step: int, count: int) -> tuple[np.ndarray, np.ndarray]:
+     """For page px `i` and samples every `step` px from 0 (`count` of them, the last at or past the page's last px):
+@@ -465,47 +479,88 @@ def _known(sd: SheetData, word: np.ndarray, y0: int, x0: int, h: int, w: int) ->
+     return ~_unknown(sd, word, y0, x0, h, w) & ~_held(sd, y0, x0, h, w)
+ 
+ 
+ def page_text(sd: SheetData) -> tuple[np.ndarray, np.ndarray]:
+     """A sheet's whole page of text px (in one of Terra's words) and of unknown px, bool each, as the detector learns
+     them (`crop_targets`), whether or not the sheet holds the area out: for its scores."""
+     word = _words(sd, 0, 0, sd.height, sd.width)
+     return word > 0, _unknown(sd, word, 0, 0, sd.height, sd.width)
+ 
+ 
++def _cores(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
++    """The page window's word cores: 1 + the index of the last word whose core is drawn on each px (0 on none), int32.
++    ValueError when the sheet holds no core for each of its words (`wordread.shrink.prepare` fills them)."""
++    if sd.cores.shape != sd.words.shape:
++        raise ValueError(f"{sd.series} {sd.sheet}: no word cores (SheetData.cores {sd.cores.shape}, the words "
++                         f"{sd.words.shape}): the word targets need them (wordread.shrink.prepare)")
++    return _paint(sd.cores, np.arange(1, len(sd.cores) + 1), y0, x0, h, w).astype(np.int32)
++
++
++def _geometry(sd: SheetData, tag: np.ndarray, y0: int, x0: int) -> np.ndarray:
++    """At each core px of a page window (`_cores`), the distances in page px to its word's top, bottom, start and end
++    edges, and its reading angle (see the module): float32 (h, w, 5), 0 off the cores."""
++    out = np.zeros((*tag.shape, 5), np.float32)
++    rows, cols = np.nonzero(tag)
++    if not len(rows):
++        return out
++    j = tag[rows, cols] - 1
++    theta = np.deg2rad(sd.angles[j].astype(float))
++    along = np.stack([np.cos(theta), -np.sin(theta)], -1)       # the reading direction (page px, y down)
++    up = np.stack([-np.sin(theta), -np.cos(theta)], -1)         # across it, towards the letters' tops
++    corners = sd.words[j].astype(float)                         # (m, 4, 2)
++    p = np.stack([x0 + cols, y0 + rows], -1).astype(float)
++    a, b = (corners * along[:, None]).sum(-1), (corners * up[:, None]).sum(-1)
++    pa, pb = (p * along).sum(-1), (p * up).sum(-1)
++    out[rows, cols, :4] = np.maximum(np.stack([b.max(-1) - pb, pb - b.min(-1), pa - a.min(-1), a.max(-1) - pa], -1), 0)
++    out[rows, cols, 4] = sd.angles[j]
++    return out
++
++
+ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int,
+-                 labels: str = "boxes") -> dict[str, np.ndarray]:
++                 labels: str = "boxes", words: bool = False) -> dict[str, np.ndarray]:
+     """The training crop centred on page px (row y, col x), moved inside the page: size / `scale` px of page resized
+     to `size` x `size` (nearest px) and turned `turns` quarter turns counter-clockwise, the reading angle with it (in
+     [-180, 180) degrees on text, 0 elsewhere).  Keys: ink (bool), text (uint8), kind (uint8), angle (int16), known
+     (bool); drawn from the sheet's boxes for this crop alone, by the label rule `labels` (LABEL_RULES, see the
+     module): under "lines-unknown" a px inside a word that is a line px is not known (ValueError when the sheet holds
+-    no line px)."""
++    no line px).  With `words`, also the word targets core (uint8), tag_id (int32) and geo (float32 (5, size, size)),
++    from the sheet's cores (see the module; ValueError when it holds none for its words)."""
+     if labels not in LABEL_RULES:
+         raise ValueError(f"labels is one of {', '.join(LABEL_RULES)}, not {labels!r}")
+     src = int(round(size / scale))
+     y0 = int(np.clip(y - src // 2, 0, sd.height - src))
+     x0 = int(np.clip(x - src // 2, 0, sd.width - src))
+     word = _words(sd, y0, x0, src, src)
+     known = _known(sd, word, y0, x0, src, src)
+     if labels == "lines-unknown":
+         known &= ~((word > 0) & line_window(sd, y0, x0, src, src))
+     parts = {"ink": _ink_window(sd, y0, x0, src, src), "word": word, "known": known}
++    if words:
++        parts["tag_id"] = _cores(sd, y0, x0, src, src)
++        parts["geo"] = _geometry(sd, parts["tag_id"], y0, x0)
+     if src != size:
+         parts = {k: cv2.resize(v.view(np.uint8) if v.dtype == bool else v, (size, size),
+                                interpolation=cv2.INTER_NEAREST).astype(v.dtype) for k, v in parts.items()}
+     word = parts.pop("word")
+     # each word's kind and turned reading angle, looked up by word (index 0: no word)
+     kind = np.concatenate([[NO_KIND], sd.kinds]).astype(np.uint8)
+     angle = np.concatenate([[0], (sd.angles.astype(np.int32) + 90 * turns + 180) % 360 - 180]).astype(np.int16)
+     out = {**parts, "text": (word > 0).view(np.uint8), "kind": kind[word], "angle": angle[word]}
+-    return {k: np.rot90(v, turns) for k, v in out.items()}
++    if not words:
++        return {k: np.rot90(v, turns) for k, v in out.items()}
++    geo = out.pop("geo")
++    on = out["tag_id"] > 0
++    geo[..., :4] *= size / src
++    geo[..., 4] = np.where(on, (geo[..., 4].astype(np.int32) + 90 * turns + 180) % 360 - 180, 0)
++    out["core"] = on.view(np.uint8)
++    out["geo"] = np.moveaxis(geo, -1, 0)
++    return {k: np.rot90(v, turns, axes=(1, 2) if k == "geo" else (0, 1)) for k, v in out.items()}
+ 
+ 
+ def centres(sd: SheetData, stride: int) -> tuple[np.ndarray, np.ndarray]:
+     """Where a training crop may centre on a sheet: every `stride`-th page px each way (rows and columns 0, stride,
+     2 stride, ...) on text, and on ink, that is not held out.  Two int32 (n, 2) arrays of (row, col); the page drawn
+     BAND rows at a time."""
+     on_text, on_ink = [], []
+     band = max(stride, BAND - BAND % stride)
+     w = sd.width
+     for y0 in range(0, sd.height, band):
+diff --git a/pipeline/src/sfzmaps/solver/textnet/model.py b/pipeline/src/sfzmaps/solver/textnet/model.py
+index dc946e2..5d10f47 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/model.py
++++ b/pipeline/src/sfzmaps/solver/textnet/model.py
+@@ -1,31 +1,48 @@
+ """The text detector's network: a U-Net over the ink mask, every px scored at the page's own resolution.
+ 
+ Outputs per px (OUTPUTS channels): 0 the text logit; 1-4 the kind logits among text (data.KINDS: zoning code, block
+ number, street name, other); 5-6 the reading direction's cosine and sine (any length; only the direction counts).  A
+-text-only network has channel 0 alone.
++text-only network has channel 0 alone.  A network with the word heads (`train.Recipe.heads="words"`, WORD_OUTPUTS
++channels) has those seven, then (`data.crop_targets(..., words=True)`):
++  CORE  7      the logit of the px being in a word's core
++  GEO   8-11   the distances to its word's top, bottom, start and end edges, as log(distance / GEO_UNIT) (`distances`)
++  TAG   12-15  the px's word tag, a vector that is near its word's and far from other words' (PAN)
++The word's reading direction is channels 5-6.  The number of channels of each recipe's heads: HEAD_OUTPUTS.
+ 
+ At half size the ink is folded first (`fold`: each 2 x 2 block of px into 4 channels at one px, every px kept), the
+ U-Net runs on that at half the px each way, and its head gives 4 x the outputs, unfolded (`unfold`) back to one set of
+ outputs per page px.  So a side must be even, and the multiple a side is padded to (`TextNet.multiple`) doubles.
+ """
+ import torch
+ import torch.nn as nn
+ import torch.nn.functional as F
+ 
+ WIDTH = 24        # channels at full resolution
+ LEVELS = 5        # resolutions, each half the one before
+ OUTPUTS = 7
++CORE = 7                       # the word heads' channels (see the module)
++GEO = slice(8, 12)
++TAG = slice(12, 16)
++WORD_OUTPUTS = 16
++HEAD_OUTPUTS = {"all": OUTPUTS, "text": 1, "words": WORD_OUTPUTS}    # channels, by `train.Recipe.heads`
++GEO_UNIT = 8.0                 # px: a distance output of 0 is this many px
++GEO_LIMIT = 20.0               # the distance outputs are read within +-this (a distance stays finite in float32)
+ FOLD = 2          # px each way folded into channels at half size
+ MULTIPLE = 2 ** (LEVELS - 1)   # a page side the levels halve evenly is a multiple of this (at full size)
+ 
+ 
++def distances(raw: torch.Tensor) -> torch.Tensor:
++    """The word heads' distance outputs (GEO channels) in px: GEO_UNIT x exp(raw), raw read within +-GEO_LIMIT."""
++    return GEO_UNIT * torch.exp(raw.clamp(-GEO_LIMIT, GEO_LIMIT))
++
++
+ def fold(x: torch.Tensor) -> torch.Tensor:
+     """(n, c, h, w) into (n, c * FOLD², h / FOLD, w / FOLD): each FOLD x FOLD block of px into channels, every px kept
+     once.  h and w must be multiples of FOLD."""
+     return F.pixel_unshuffle(x, FOLD)
+ 
+ 
+ def unfold(x: torch.Tensor) -> torch.Tensor:
+     """`fold` undone: (n, c * FOLD², h, w) into (n, c, h * FOLD, w * FOLD)."""
+     return F.pixel_shuffle(x, FOLD)
+ 
+@@ -41,22 +58,23 @@ def _block(i: int, o: int) -> nn.Sequential:
+ 
+ 
+ def _light_block(i: int, o: int) -> nn.Sequential:
+     """One 3 x 3 convolution with batch norm and ReLU."""
+     return nn.Sequential(*_conv(i, o))
+ 
+ 
+ class TextNet(nn.Module):
+     """The U-Net: LEVELS blocks down (channels `width`, 2, 4, 8 and 8 x `width`, max-pooled between), LEVELS - 1 blocks
+     up (nearest upsampling, each joined to the block down at its resolution; two convolutions each, or one with
+-    `decoder` "light"), and a 1 x 1 head of `outputs` channels (OUTPUTS, or 1 for text alone).  With `half_size` the
+-    ink is folded before the blocks and the head's outputs unfolded after (see the module).
++    `decoder` "light"), and a 1 x 1 head of `outputs` channels (OUTPUTS, 1 for text alone, WORD_OUTPUTS with the word
++    heads).  With `half_size` the ink is folded before the blocks and the head's outputs unfolded after (see the
++    module).
+     Input: (n, 1, h, w) ink as 1, paper as 0; output (n, outputs, h, w)."""
+ 
+     def __init__(self, width: int = WIDTH, outputs: int = OUTPUTS, half_size: bool = False, decoder: str = "full"):
+         super().__init__()
+         if decoder not in ("full", "light"):
+             raise ValueError(f"decoder is full or light, not {decoder!r}")
+         self.half_size = half_size
+         self.multiple = MULTIPLE * (FOLD if half_size else 1)
+         cells = FOLD * FOLD if half_size else 1
+         ch = [width * min(2 ** i, 8) for i in range(LEVELS)]
+diff --git a/pipeline/src/sfzmaps/solver/textnet/train.py b/pipeline/src/sfzmaps/solver/textnet/train.py
+index 43d59e2..5da019a 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/train.py
++++ b/pipeline/src/sfzmaps/solver/textnet/train.py
+@@ -11,20 +11,36 @@ the bank handed to `fit` (`composite.Bank`, built before the training; any objec
+ scale, turns)`) from the same crop's centre, scale and turns and the same generator; with p = 0 that chance is never
+ drawn, so the batches are those of a recipe without composites, byte for byte.
+ 
+ The loss is binary cross-entropy on text over the px it reads, plus KIND_WEIGHT x the cross-entropy of the kind and
+ ANGLE_WEIGHT x (1 - cosine) of the reading direction, both on the text px it reads; a text-only network (`heads`
+ "text") has the text's alone.  It reads the known px (`ink_only` "off"), only the known ink ("ink": the chance of text
+ is only ever read at ink), or the known ink and the px next to it, the 8 around each ink px ("ink+1px").  AdamW
+ (WEIGHT_DECAY) with a one-cycle schedule rising to `max_lr` over the first `pct_start` of the steps.  With
+ `weight_average` the model kept is the moving average of the weights over the steps (`WeightAverage`).
+ 
++With the word heads (`heads` "words": `model.WORD_OUTPUTS` channels; the sheets' word cores filled by
++`wordread.shrink.prepare` before the training), each crop also has its word targets (`data.crop_targets(...,
++words=True)`), and the loss adds, to the per-ink head's (channels 0-6, the same terms as "all"), WORD_PARTS:
++  core       binary cross-entropy of the core over the known px, all its positives and the hardest negatives, at most
++             OHEM_RATIO per positive over the batch (DBNet's hard-negative mining; a tie at the last place shares it)
++  dice       1 - Dice of the core's chance over the known px
++  iou        -log((I + 1) / (U + 1)) of the box each known core px puts about itself (its four distances,
++             `model.distances`) against its word's (EAST), the mean over those px
++  direction  1 - cosine of the reading direction (channels 5-6) at the known core px, x GEO_ANGLE_WEIGHT
++  pull       PAN's aggregation, x TAG_WEIGHT: each known core px's tag pulled to within PULL of its word's mean tag
++             (log(1 + max(0, |tag - mean| - PULL)^2), a word's px averaged, then the crop's words)
++  push       PAN's discrimination, x TAG_WEIGHT: two words' mean tags in one crop pushed PUSH apart or more
++             (log(1 + max(0, PUSH - |mean - mean'|)^2), over the crop's pairs)
++each part averaged over the crops that have it (pull, push) or the batch (the rest).  Every term is dense (masked sums
++and products, no indexing in the backward), so it runs on the Mac's GPU in deterministic mode.
++
+ The parts of the loss stay on the device, summed; every LOG_EVERY steps (and at the last) their mean over those steps
+ is read, logged and checked, so the device is waited on only then.  A mean that is not finite stops the training.
+ Each batch goes to the device without waiting for it either (`Copies`): a waiting copy to the Mac's GPU first waits
+ for all the work queued before it, so every step would wait for the last.
+ 
+ Every draw comes from one numpy generator and the weights from torch's, both seeded; torch runs deterministic
+ algorithms on THREADS threads.  With `prefetch` a background thread draws the batches ahead, from that one generator
+ and in the same order, so the weights are the same bit for bit.  On the Mac's GPU the training runs in the GPU's
+ exclusive turn (`sfzmaps.gpu`), which the caller takes (`stage.build_text`, `trial.run_trials`).
+ 
+@@ -60,39 +76,49 @@ PCT_START = 0.3         # the share of the steps the learning rate rises over
+ TEXT_SHARE = 0.5        # the share of crops centred on text (the others on any ink)
+ SCALE = (0.6, 1.6)      # the range of the factor each crop is scaled by
+ CENTRE_STRIDE = 4       # crops centre on every this-many-th px each way
+ WEIGHT_DECAY = 1e-4
+ KIND_WEIGHT = 0.5
+ ANGLE_WEIGHT = 0.5
+ THREADS = 4
+ LOG_EVERY = 250         # iterations between progress lines (and reads of the loss from the device)
+ PREFETCH = 2            # batches drawn ahead with `prefetch`
+ HELD = 2                # steps a batch is held after its copy to the GPU was queued (`Copies`)
+-CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text"), "decoder": ("full", "light"),
++OHEM_RATIO = 3         # the word core's hard negatives: at most this many per positive
++GEO_ANGLE_WEIGHT = 10.0
++TAG_WEIGHT = 0.25
++PULL = 0.5             # PAN: a core px's tag is pulled to within this of its word's mean
++PUSH = 3.0             # PAN: two words' mean tags are pushed at least this far apart
++DICE_EPS = 1e-6
++NORM_EPS = 1e-12       # under the square root of a tag distance (its gradient stays finite at 0)
++PARTS = ("text", "kind", "angle")
++WORD_PARTS = ("core", "dice", "iou", "direction", "pull", "push")
++CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words"), "decoder": ("full", "light"),
+            "precision": ("float32", "float16"), "labels": data.LABEL_RULES}
+ NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
+ 
+ 
+ @dataclasses.dataclass(frozen=True)
+ class Recipe:
+     """How the detector is trained.  The defaults are the old recipe, the quarter models' (see the module; the build's is `stage.DEFAULT_RECIPE`).
+ 
+       iterations      steps
+       max_lr          the one-cycle schedule's peak learning rate
+       pct_start       the share of the steps the learning rate rises over
+       batch, crop     crops per step, and their side in px
+       width           the network's channels at full resolution (`model.TextNet`)
+       ink_only        the px the loss reads: "off" every known px, "ink" the known ink, "ink+1px" the known ink and
+                       the px next to it
+       half_size       the network runs at half the px each way, on the ink folded 2 x 2 into channels (`model.fold`);
+                       crops must be even
+-      heads           "all" outputs (text, kind, reading direction) or "text" alone
++      heads           "all" outputs (text, kind, reading direction), "text" alone, or "words": all with the word heads
++                      (core, distances, tag; see the module), their sheets' cores filled by `wordread.shrink.prepare`
+       weight_average  the decay of the moving average of the weights kept as the model (`WeightAverage`); 0 is off
+       prefetch        the next batches drawn in a background thread (the same batches)
+       decoder         "full" two convolutions per block up, or "light" one
+       precision       "float32", or "float16": the forward under `torch.autocast` in half precision, the output cast to
+                       float32 before the loss, and the loss scaled by a `torch.amp.GradScaler` against underflow of
+                       the half-precision gradients (torch 2.15 supports it on cpu and mps).  The weights, the
+                       optimiser and the saved model stay float32.  The scaler's step reads its overflow check
+                       back from the device each step (`.item()`), which waits for the GPU.
+       labels          what a word box teaches (`data.crop_targets`): "boxes" every px of it as text, the lines through
+                       it too; "lines-unknown" its line px unknown (the sheets' line px filled by `zones.prepare`)
+@@ -132,35 +158,38 @@ class Recipe:
+                                ("batch", self.batch >= 1, "at least 1"), ("crop", self.crop >= 1, "at least 1"),
+                                ("width", self.width >= 1, "at least 1"), ("max_lr", self.max_lr > 0, "above 0"),
+                                ("pct_start", 0 < self.pct_start < 1, "between 0 and 1"),
+                                ("weight_average", 0 <= self.weight_average < 1, "at least 0 and below 1"),
+                                ("composites", 0 <= self.composites <= 1, "between 0 and 1")):
+             if not ok:
+                 raise ValueError(f"recipe: {name} must be {rule}, not {getattr(self, name)}")
+         if self.half_size and self.crop % model.FOLD:
+             raise ValueError(f"recipe: half_size folds each crop {model.FOLD} x {model.FOLD}, so the crop must be "
+                              f"even, not {self.crop}")
++        if self.heads == "words" and self.composites > 0:
++            raise ValueError(f"recipe: the word heads learn from data.crop_targets' word targets, which composites "
++                             f"don't make: composites must be 0 with heads words, not {self.composites}")
+ 
+     def name(self) -> str:
+         """A short id of the weights the recipe trains, the same every run (for folder names): each setting that
+         differs from the old recipe's (the defaults), sorted by name, as "name=value" (a switch turned on as its name
+         alone), joined by "-"; "default" when none differs.  The settings of NOT_IN_NAME, which never change the weights,
+         are left out."""
+         today = Recipe()
+         changed = sorted((f.name, getattr(self, f.name)) for f in dataclasses.fields(self)
+                          if f.name not in NOT_IN_NAME and getattr(self, f.name) != getattr(today, f.name))
+         return "-".join(k if v is True else f"{k}={v}" for k, v in changed) or "default"
+ 
+ 
+ def build_net(recipe: Recipe) -> model.TextNet:
+-    """The (untrained) network a recipe names: its width, size, outputs and decoder."""
+-    return model.TextNet(width=recipe.width, outputs=model.OUTPUTS if recipe.heads == "all" else 1,
++    """The (untrained) network a recipe names: its width, size, outputs (`model.HEAD_OUTPUTS`) and decoder."""
++    return model.TextNet(width=recipe.width, outputs=model.HEAD_OUTPUTS[recipe.heads],
+                          half_size=recipe.half_size, decoder=recipe.decoder)
+ 
+ 
+ def default_device() -> str:
+     """The device the detector trains on unless told: "mps" where available, else "cpu"."""
+     return "mps" if torch.backends.mps.is_available() else "cpu"
+ 
+ 
+ def settle_torch() -> None:
+     """Pin torch's threads and make it use deterministic algorithms only (it raises on an op that has none)."""
+@@ -193,34 +222,36 @@ def centre_pools(sheets: list[data.SheetData]) -> tuple[Pool, Pool]:
+     pools = Pool([f[0] for f in found]), Pool([f[1] for f in found])
+     if not len(pools[0]) or not len(pools[1]):
+         raise ValueError(f"nothing to train on: {len(pools[0])} text and {len(pools[1])} ink px where a crop may "
+                          "centre")
+     return pools
+ 
+ 
+ def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator,
+          bank=None) -> list[dict[str, np.ndarray]]:
+     """One batch of `recipe.batch` crops: for each, text or ink, a centre from that pool, a scale and a number of
+-    turns; its targets by the recipe's label rule, or, with chance `recipe.composites` (drawn only when it is above 0),
+-    a composite of `bank` from the same centre, scale and turns (ValueError without a bank)."""
++    turns; its targets by the recipe's label rule (and, with the word heads, its word targets), or, with chance
++    `recipe.composites` (drawn only when it is above 0), a composite of `bank` from the same centre, scale and turns
++    (ValueError without a bank)."""
+     if recipe.composites > 0 and bank is None:
+         raise ValueError(f"a recipe with composites ({recipe.composites}) draws them from a bank: none was given")
++    extra = {"words": True} if recipe.heads == "words" else {}
+     out = []
+     for _ in range(recipe.batch):
+         pool = pools[0] if rng.random() < TEXT_SHARE else pools[1]
+         i, y, x = pool[rng.integers(len(pool))]
+         scale = float(np.exp(rng.uniform(np.log(SCALE[0]), np.log(SCALE[1]))))
+         turns = int(rng.integers(4))
+         if recipe.composites > 0 and rng.random() < recipe.composites:
+             out.append(bank.crop(rng, sheets[i], y, x, recipe.crop, scale, turns))
+         else:
+-            out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, turns, labels=recipe.labels))
++            out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, turns, labels=recipe.labels, **extra))
+     return out
+ 
+ 
+ def _next_to(ink: np.ndarray) -> np.ndarray:
+     """Each px of (n, h, w) bool crops that is ink or one of the 8 px around an ink px of its crop."""
+     h, w = ink.shape[1:]
+     p = np.pad(ink, ((0, 0), (1, 1), (1, 1)))
+     out = np.zeros_like(ink)
+     for dy in range(3):
+         for dx in range(3):
+@@ -264,20 +295,112 @@ def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor
+     m = ((t > 0) & (w > 0)).float()
+     n = m.sum().clamp(min=1)
+     lk = (F.cross_entropy(out[:, 1:5], torch.where(m > 0, k, torch.zeros_like(k)), reduction="none") * m).sum() / n
+     cs = out[:, 5:7]
+     rad = torch.deg2rad(a)
+     cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
+     la = ((1 - cosine) * m).sum() / n
+     return lt + KIND_WEIGHT * lk + ANGLE_WEIGHT * la, torch.stack([lt, lk, la])
+ 
+ 
++# --- the word heads --------------------------------------------------------------------------------------------------
++
++def word_tensors(crops: list[dict[str, np.ndarray]]) -> tuple[torch.Tensor, ...]:
++    """A batch's word targets on the CPU (`data.crop_targets(..., words=True)`): core (n, h, w) float, geo (n, 5, h,
++    w) float, tag (n, h, w) int64, known (n, h, w) float, and groups.  A crop's tags are its known core px's words
++    numbered 1, 2, ... in the order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so
++    the loss knows their number without reading the device."""
++    def stack(key, dtype):
++        return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype))
++    tags = []
++    for c in crops:
++        ids = np.where(c["known"], c["tag_id"], 0)
++        words = np.unique(ids[ids > 0])
++        tags.append(np.where(ids > 0, np.searchsorted(words, ids) + 1, 0))
++    most = max((int(t.max()) for t in tags), default=0)
++    return (stack("core", np.float32), stack("geo", np.float32), torch.from_numpy(np.stack(tags).astype(np.int64)),
++            stack("known", np.float32), torch.arange(1, most + 1, dtype=torch.int64))
++
++
++def _ohem_bce(logit: torch.Tensor, target: torch.Tensor, known: torch.Tensor) -> torch.Tensor:
++    """Binary cross-entropy over the known px: every positive, and the k = min(negatives, OHEM_RATIO x positives)
++    negatives of the highest loss; the negatives tied with the k-th share its remaining places equally (so the loss is
++    the top k's whichever of them a sort would put first).  Divided by positives + k; 0 with no positive.  The k-th
++    loss is found by a sort without reading the device."""
++    bce = F.binary_cross_entropy_with_logits(logit, target, reduction="none")
++    pos = target * known
++    neg = (1 - target) * known
++    n_pos = pos.sum()
++    k = torch.minimum(neg.sum(), OHEM_RATIO * n_pos)
++    with torch.no_grad():
++        ranked = torch.sort(torch.where(neg > 0, bce, -torch.ones_like(bce)).flatten(), descending=True).values
++        last = ranked.index_select(0, (k.long() - 1).clamp(min=0).reshape(1))
++        above = ((neg > 0) & (bce > last)).float()
++        tied = ((neg > 0) & (bce == last)).float()
++        share = (k - above.sum()) / tied.sum().clamp(min=1)
++        hard = (above + tied * share) * (k > 0).float()
++    return (bce * (pos + hard)).sum() / (n_pos + k).clamp(min=1)
++
++
++def _tag_parts(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
++    """PAN's aggregation and discrimination (see the module) of the tag outputs (n, c, h, w) by the crops' word tags
++    (`word_tensors`), each crop's words found by a one-hot over `groups` (matrix products, no indexing)."""
++    n, c, h, w = tag_out.shape
++    zero = tag_out.sum() * 0
++    if groups.numel() == 0:
++        return zero, zero
++    hot = (tag[:, None] == groups[None, :, None, None]).to(tag_out.dtype).reshape(n, len(groups), h * w)
++    count = hot.sum(-1)                                                     # (n, K) px of each word
++    present = (count > 0).to(tag_out.dtype)
++    vec = tag_out.reshape(n, c, h * w).transpose(1, 2)                      # (n, P, c)
++    mean = torch.bmm(hot, vec) / count.clamp(min=1)[..., None]              # (n, K, c)
++    own = torch.bmm(hot.transpose(1, 2), mean)                              # (n, P, c): its word's mean, 0 off cores
++    far = ((vec - own) ** 2).sum(-1).add(NORM_EPS).sqrt()
++    pulled = torch.log1p(F.relu(far - PULL) ** 2)                           # (n, P)
++    per_word = torch.bmm(hot, pulled[..., None])[..., 0] / count.clamp(min=1)
++    words = present.sum(-1)
++    crops = (words > 0).to(tag_out.dtype)
++    pull = ((per_word * present).sum(-1) / words.clamp(min=1) * crops).sum() / crops.sum().clamp(min=1)
++    apart = ((mean[:, :, None] - mean[:, None]) ** 2).sum(-1).add(NORM_EPS).sqrt()      # (n, K, K)
++    pair = present[:, :, None] * present[:, None, :] * (1 - torch.eye(len(groups), dtype=tag_out.dtype,
++                                                                      device=tag_out.device))
++    pushed = torch.log1p(F.relu(PUSH - apart) ** 2) * pair
++    pairs = pair.sum((1, 2))
++    two = (pairs > 0).to(tag_out.dtype)
++    push = (pushed.sum((1, 2)) / pairs.clamp(min=1) * two).sum() / two.sum().clamp(min=1)
++    return pull, push
++
++
++def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: torch.Tensor, known: torch.Tensor,
++              groups: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
++    """The word heads' loss of a batch (see the module) and its parts (WORD_PARTS, unweighted) as one tensor on the
++    batch's device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`."""
++    logit = out[:, model.CORE]
++    lc = _ohem_bce(logit, core, known)
++    p = torch.sigmoid(logit)
++    ld = 1 - 2 * (p * core * known).sum() / ((p * known).sum() + (core * known).sum() + DICE_EPS)
++    m = core * known
++    n = m.sum().clamp(min=1)
++    d, g = model.distances(out[:, model.GEO]), geo[:, :4]
++    inter = ((torch.minimum(d[:, 0], g[:, 0]) + torch.minimum(d[:, 1], g[:, 1]))
++             * (torch.minimum(d[:, 2], g[:, 2]) + torch.minimum(d[:, 3], g[:, 3])))
++    union = (d[:, 0] + d[:, 1]) * (d[:, 2] + d[:, 3]) + (g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) - inter
++    li = (-torch.log((inter + 1) / (union + 1)) * m).sum() / n
++    cs = out[:, 5:7]
++    rad = torch.deg2rad(geo[:, 4])
++    cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
++    la = ((1 - cosine) * m).sum() / n
++    pull, push = _tag_parts(out[:, model.TAG], tag, groups)
++    total = lc + ld + li + GEO_ANGLE_WEIGHT * la + TAG_WEIGHT * (pull + push)
++    return total, torch.stack([lc, ld, li, la, pull, push])
++
++
+ class WeightAverage:
+     """The exponential moving average of a network's state, taken after every step (`Recipe.weight_average`, the
+     decay d): every floating-point entry, the weights and the batch norms' running statistics.  After t steps it is
+     sum over steps s of (1 - d) d^(t - s) w_s, divided by 1 - d^t so the steps' shares sum to 1 (the untrained state
+     has none).  Whole-number entries (the batch norms' step counts) stay the network's own."""
+ 
+     def __init__(self, net: model.TextNet, decay: float):
+         self.decay, self.steps = decay, 0
+         self.sums = {k: torch.zeros_like(v) for k, v in net.state_dict().items() if v.is_floating_point()}
+ 
+@@ -326,26 +449,29 @@ class Copies:
+         del batch
+ 
+     def close(self) -> None:
+         while self.held:
+             self._let_go()
+ 
+ 
+ @contextlib.contextmanager
+ def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator,
+              bank=None):
+-    """The training's batches (`batch_tensors` of `draw`, composites from `bank`), one per step, from `rng` in order:
+-    drawn when asked for or, with `recipe.prefetch`, by a background thread up to PREFETCH ahead (which alone uses `rng`
+-    and the bank meanwhile: the same batches, in the same order).  An error in that thread is raised where the batch is
+-    asked for."""
++    """The training's batches (`batch_tensors` of `draw`, composites from `bank`; with the word heads followed by
++    `word_tensors`), one per step, from `rng` in order: drawn when asked for or, with `recipe.prefetch`, by a
++    background thread up to PREFETCH ahead (which alone uses `rng` and the bank meanwhile: the same batches, in the
++    same order).  An error in that thread is raised where the batch is asked for."""
+     def make():
+-        return batch_tensors(draw(sheets, pools, recipe, rng, bank), recipe.ink_only)
++        crops = draw(sheets, pools, recipe, rng, bank)
++        if recipe.heads == "words":
++            return batch_tensors(crops, recipe.ink_only) + word_tensors(crops)
++        return batch_tensors(crops, recipe.ink_only)
+ 
+     if not recipe.prefetch:
+         yield (make() for _ in range(recipe.iterations))
+         return
+     ready, stop = queue.Queue(PREFETCH), threading.Event()
+ 
+     def put(item) -> bool:
+         while not stop.is_set():
+             try:
+                 ready.put(item, timeout=0.1)
+@@ -389,45 +515,50 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
+     device = device or default_device()
+     settle_torch()
+     torch.manual_seed(seed)
+     rng = np.random.default_rng(seed)
+     pools = centre_pools(sheets)
+     net = build_net(recipe).to(device)
+     opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=WEIGHT_DECAY)
+     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.iterations,
+                                                 pct_start=recipe.pct_start)
+     average = WeightAverage(net, recipe.weight_average) if recipe.weight_average else None
+-    sums, first, t0 = torch.zeros(3, device=device), 1, time.perf_counter()
++    names = PARTS + (WORD_PARTS if recipe.heads == "words" else ())
++    sums, first, t0 = torch.zeros(len(names), device=device), 1, time.perf_counter()
+     copies = Copies(device)
+     half = recipe.precision == "float16"
+     scaler = torch.amp.GradScaler(torch.device(device).type, enabled=half)
+     with _batches(sheets, pools, recipe, rng, bank) as batches, contextlib.closing(copies):
+         for it, batch in enumerate(batches, 1):
+-            x, t, k, a, w = copies(batch)
++            x, t, k, a, w, *words = copies(batch)
+             with torch.autocast(torch.device(device).type, dtype=torch.float16, enabled=half):
+                 out = net(x)
+-            loss, parts = loss_fn(out.float(), t, k, a, w)      # the loss in float32, outside the autocast
++            out = out.float()                                   # the loss in float32, outside the autocast
++            loss, parts = loss_fn(out, t, k, a, w)
++            if words:
++                more, word_parts = word_loss(out, *words)
++                loss, parts = loss + more, torch.cat([parts, word_parts])
+             opt.zero_grad()
+             scaler.scale(loss).backward()
+             scaler.step(opt)
+             scaler.update()
+             sched.step()
+             if average is not None:
+                 average.update(net)
+             sums += parts.detach()
+             if it % LOG_EVERY == 0 or it == recipe.iterations:
+                 mean = (sums / (it - first + 1)).cpu().numpy()
+                 if not np.isfinite(mean).all():
+-                    raise FloatingPointError(f"iterations {first}-{it}: the loss is not finite (mean text {mean[0]}, "
+-                                             f"kind {mean[1]}, angle {mean[2]})")
+-                log.info("iterations %d-%d: text %.4f, kind %.4f, angle %.4f (%.1f s)", first, it, *mean,
+-                         time.perf_counter() - t0)
++                    raise FloatingPointError(f"iterations {first}-{it}: the loss is not finite (mean "
++                                             + ", ".join(f"{n} {v}" for n, v in zip(names, mean)) + ")")
++                log.info("iterations %d-%d: " + ", ".join(f"{n} %.4f" for n in names) + " (%.1f s)", first, it,
++                         *mean, time.perf_counter() - t0)
+                 sums.zero_()
+                 first = it + 1
+     if average is not None:
+         average.put_into(net)
+     return net
+ 
+ 
+ def save_model(out: Path, net: model.TextNet, recipe: Recipe, device: str, seed: int = 0) -> Path:
+     """Write a trained detector to `out` (its folder made): the weights (`state_dict`, on the CPU) and the recipe they
+     came from (as a dict), with its iterations, the device and the seed.  Returns `out`."""
+diff --git a/pipeline/src/sfzmaps/solver/wordread/shrink.py b/pipeline/src/sfzmaps/solver/wordread/shrink.py
+new file mode 100644
+index 0000000..3eb8a62
+--- /dev/null
++++ b/pipeline/src/sfzmaps/solver/wordread/shrink.py
+@@ -0,0 +1,265 @@
++"""Word cores: each Terra word's rectangle shrunk by DBNet's offset (`core`), its inverse (`unclip`), the ratio r they
++are shrunk by (`measure_r`), and the sheets with their cores (`prepare`) for the detector's word heads
++(`data.crop_targets(..., words=True)`, `train.Recipe.heads="words"`).
++
++A rectangle (4 corners (x, y), in order around it, the first edge along the reading direction, as `boxes.word_rect`
++makes them) of length w along its first edge and height h is shrunk by D = A (1 - r^2) / L on every side, A = w h its
++area and L = 2 (w + h) its perimeter (DBNet, Liao et al. 2020; the closed form of Vatti clipping for a rectangle): the
++core is (w - 2D) x (h - 2D), with the same centre, the same axes and its corners in the same order, so its first edge
++still runs along the reading direction.  As h - 2D = h (h + w r^2) / (w + h), a core never vanishes.  `unclip` grows
++a core back by the D whose shrink gives it (the positive root of 4 (1 + r^2) D^2 + 2 r^2 (w' + h') D - (1 - r^2) w' h'
++= 0, w' x h' the core): `unclip(core(rect, r), r)` is `rect`.
++
++r (`measure_r`): the largest of R_GRID (0.3 to 0.7 by 0.05) at which at most MAX_SHARE (1%) of the neighbouring
++pairs of words have overlapping cores.  Two words of a sheet are neighbours when the gap between their rectangles (0
++when they touch or overlap) is at most one word height: the smaller of the two words' heights (the second edge's
++length).  Two cores overlap when a px is filled by both, each painted as the detector learns it (its corners rounded
++to px, filled as `cv2.fillPoly` fills them, `data._paint`); `touching` also counts a px of one next to (the 8 around)
++a px of the other, the cores the connected px would join.  A core lies inside its word, so only words whose
++rectangles overlap, or come within TOUCH_GAP px of each other, can have overlapping or touching cores.
++
++`write_r` measures r on the training maps' sheets (`paths.TEXT_TRAIN_SERIES`), once per fold of the reader's split
++(`paths.QUARTERS`): the words whose centre px is in the fold's quarter or an answered block
++(`reader_stage.held_blocks`) left out, as `reader_stage.measure_radius` leaves them out; written to SHRINK_FILE
++(`python -m sfzmaps.solver.wordread.shrink`).
++
++Neither `textnet.data` nor `textnet.train` imports this module (their stages' import closure is unchanged): the
++cores reach the detector in `data.SheetData.cores`, filled by `prepare` before the training.
++"""
++import dataclasses
++import json
++import logging
++from collections.abc import Mapping
++
++import cv2
++import numpy as np
++
++from sfzmaps.solver import paths
++from sfzmaps.solver.textnet import data
++
++log = logging.getLogger(__name__)
++
++R_GRID = tuple(round(0.3 + 0.05 * i, 2) for i in range(9))    # 0.3, 0.35, ..., 0.7
++MAX_SHARE = 0.01           # of the neighbouring pairs, at most this share may have overlapping cores
++TOUCH_GAP = 4.0            # px: words this far apart or more can't have cores sharing or touching a px
++PAIR_CHUNK = 256           # words compared against all the others at a time when finding neighbours
++SHRINK_FILE = paths.SOLVER_DIR / "experiments" / "wordread" / "detector" / "shrink.json"
++_EIGHT = np.ones((3, 3), np.uint8)
++
++
++# --- shrinking and growing -------------------------------------------------------------------------------------------
++
++def _frame(rect) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
++    """A rectangle's (or many's, (..., 4, 2)) centre, axes and size: the unit vector along its first edge (u1), the
++    one across it towards its last corner (u2), its extents along each (w, h), and its centre (the middle of those
++    extents).  A first edge of no length runs left to right."""
++    rect = np.asarray(rect, float)
++    e1 = rect[..., 1, :] - rect[..., 0, :]
++    n1 = np.linalg.norm(e1, axis=-1, keepdims=True)
++    u1 = np.where(n1 > 0, e1 / np.where(n1 > 0, n1, 1), [1.0, 0.0])
++    side = rect[..., 3, :] - rect[..., 0, :]
++    across = side - (side * u1).sum(-1, keepdims=True) * u1
++    n2 = np.linalg.norm(across, axis=-1, keepdims=True)
++    perp = np.stack([-u1[..., 1], u1[..., 0]], -1)
++    u2 = np.where(n2 > 1e-9, across / np.where(n2 > 1e-9, n2, 1), perp)
++    a = (rect * u1[..., None, :]).sum(-1)               # each corner along u1, (..., 4)
++    b = (rect * u2[..., None, :]).sum(-1)
++    w, h = a.max(-1) - a.min(-1), b.max(-1) - b.min(-1)
++    centre = (u1 * ((a.max(-1) + a.min(-1)) / 2)[..., None] + u2 * ((b.max(-1) + b.min(-1)) / 2)[..., None])
++    return centre, u1, u2, w, h
++
++
++_SIGNS = np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]], float)    # each corner's side of the centre, along u1 and u2
++
++
++def _rebuild(centre, u1, u2, w, h) -> np.ndarray:
++    """The rectangle (..., 4, 2) of that centre, axes and size, its corners in `_frame`'s order."""
++    half = np.stack([w / 2, h / 2], -1)[..., None, :] * _SIGNS          # (..., 4, 2): along u1, along u2
++    return centre[..., None, :] + half[..., :1] * u1[..., None, :] + half[..., 1:] * u2[..., None, :]
++
++
++def offset(w, h, r: float) -> np.ndarray:
++    """DBNet's shrink offset D = A (1 - r^2) / L of a w x h rectangle (0 for one of no perimeter)."""
++    w, h = np.asarray(w, float), np.asarray(h, float)
++    perimeter = 2 * (w + h)
++    return np.where(perimeter > 0, w * h * (1 - r * r) / np.where(perimeter > 0, perimeter, 1), 0.0)
++
++
++def core(rect, r: float) -> np.ndarray:
++    """The core of a word's rectangle (4 corners (x, y), or many, (..., 4, 2)): shrunk by `offset` on every side,
++    float corners in the same order (see the module)."""
++    centre, u1, u2, w, h = _frame(rect)
++    d = offset(w, h, r)
++    return _rebuild(centre, u1, u2, np.maximum(w - 2 * d, 0), np.maximum(h - 2 * d, 0))
++
++
++def unclip(core_rect, r: float) -> np.ndarray:
++    """The rectangle whose `core` at `r` is `core_rect` (4 corners, or (..., 4, 2)): grown by the D that shrink took
++    (see the module), float corners in the same order."""
++    centre, u1, u2, w, h = _frame(core_rect)
++    r2 = r * r
++    s, p = w + h, w * h
++    d = (-2 * r2 * s + np.sqrt(4 * r2 * r2 * s * s + 16 * (1 + r2) * (1 - r2) * p)) / (8 * (1 + r2))
++    return _rebuild(centre, u1, u2, w + 2 * d, h + 2 * d)
++
++
++def cores_px(words: np.ndarray, r: float) -> np.ndarray:
++    """The cores of words (int32 (n, 4, 2), `data.SheetData.words`) as the detector learns them: corners rounded to
++    page px, int32 (n, 4, 2)."""
++    words = np.asarray(words).reshape(-1, 4, 2)
++    return np.round(core(words, r)).reshape(-1, 4, 2).astype(np.int32)
++
++
++def prepare(sheets: list[data.SheetData], r: float) -> list[data.SheetData]:
++    """The sheets with their words' cores at `r` (`data.SheetData.cores`, `cores_px`), for the word heads' targets
++    (`data.crop_targets(..., words=True)`); everything else shared with `sheets`.  Run it before the training."""
++    return [dataclasses.replace(sd, cores=cores_px(sd.words, r)) for sd in sheets]
++
++
++# --- which r ---------------------------------------------------------------------------------------------------------
++
++def heights(words: np.ndarray) -> np.ndarray:
++    """Each word's height: its rectangle's second edge's length."""
++    w = np.asarray(words, float).reshape(-1, 4, 2)
++    return np.linalg.norm(w[:, 2] - w[:, 1], axis=-1)
++
++
++def _point_segment(p: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
++    """The distance from points p to segments a-b, (..., 2) each."""
++    ab = b - a
++    t = np.clip(((p - a) * ab).sum(-1) / np.maximum((ab * ab).sum(-1), 1e-12), 0, 1)
++    return np.linalg.norm(p - (a + t[..., None] * ab), axis=-1)
++
++
++def gaps(a: np.ndarray, b: np.ndarray) -> np.ndarray:
++    """The gap between convex quadrilaterals a[k] and b[k] ((m, 4, 2) each): 0 when they touch or overlap (no axis
++    of their 8 edges separates them), else the shortest distance from a corner of one to an edge of the other."""
++    a, b = np.asarray(a, float), np.asarray(b, float)
++    edges = np.concatenate([np.roll(a, -1, 1) - a, np.roll(b, -1, 1) - b], 1)        # (m, 8, 2)
++    normals = np.stack([-edges[..., 1], edges[..., 0]], -1)
++    pa = np.einsum("mkc,mjc->mkj", normals, a)                                        # (m, 8 axes, 4 corners)
++    pb = np.einsum("mkc,mjc->mkj", normals, b)
++    apart = (pa.max(-1) < pb.min(-1)) | (pb.max(-1) < pa.min(-1))
++    meet = ~apart.any(-1)
++    ends = [(x, np.roll(x, -1, 1)) for x in (a, b)]
++    d = np.full(len(a), np.inf)
++    for pts, (s0, s1) in ((a, ends[1]), (b, ends[0])):
++        dist = _point_segment(pts[:, :, None, :], s0[:, None, :, :], s1[:, None, :, :])   # (m, 4, 4)
++        d = np.minimum(d, dist.reshape(len(a), -1).min(-1))
++    return np.where(meet, 0.0, d)
++
++
++def neighbour_pairs(words: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
++    """A sheet's neighbouring pairs of words (see the module): (i, j) with i < j, int (m, 2), and the gap between
++    each pair's rectangles."""
++    w = np.asarray(words, float).reshape(-1, 4, 2)
++    n = len(w)
++    hgt = heights(w)
++    lo, hi = w.min(1), w.max(1)
++    found, found_gaps = [], []
++    for i0 in range(0, n, PAIR_CHUNK):
++        i = np.arange(i0, min(i0 + PAIR_CHUNK, n))
++        # the axis boxes' gap is at most the rectangles': a cheap first cut
++        gx = np.maximum(np.maximum(lo[None, :, 0] - hi[i, None, 0], lo[i, None, 0] - hi[None, :, 0]), 0)
++        gy = np.maximum(np.maximum(lo[None, :, 1] - hi[i, None, 1], lo[i, None, 1] - hi[None, :, 1]), 0)
++        reach = np.minimum(hgt[i, None], hgt[None, :])
++        ii, jj = np.nonzero((np.hypot(gx, gy) <= reach) & (np.arange(n)[None, :] > i[:, None]))
++        ii = i[ii]
++        if not len(ii):
++            continue
++        g = gaps(w[ii], w[jj])
++        keep = g <= np.minimum(hgt[ii], hgt[jj])
++        found.append(np.c_[ii[keep], jj[keep]])
++        found_gaps.append(g[keep])
++    if not found:
++        return np.zeros((0, 2), np.int64), np.zeros(0)
++    return np.concatenate(found).astype(np.int64), np.concatenate(found_gaps)
++
++
++def _meet(c1: np.ndarray, c2: np.ndarray) -> tuple[bool, bool]:
++    """Whether two cores (int32 (4, 2) page px) share a px when painted, and whether a px of one is on or next to
++    (the 8 around) a px of the other."""
++    lo = np.minimum(c1.min(0), c2.min(0)) - 1
++    hi = np.maximum(c1.max(0), c2.max(0)) + 2
++    a = np.zeros((hi[1] - lo[1], hi[0] - lo[0]), np.uint8)
++    b = np.zeros_like(a)
++    cv2.fillPoly(a, [(c1 - lo).reshape(-1, 1, 2).astype(np.int32)], 1)
++    cv2.fillPoly(b, [(c2 - lo).reshape(-1, 1, 2).astype(np.int32)], 1)
++    return bool((a & b).any()), bool((cv2.dilate(a, _EIGHT) & b).any())
++
++
++def measure_r(words_by_sheet) -> dict:
++    """r (see the module) from the words of each sheet (`words_by_sheet`: {sheet: int32 (n, 4, 2) rectangles}, or
++    a list of them): `r` the largest of R_GRID whose overlapping share is at most MAX_SHARE (None when none is);
++    `curve` per r of R_GRID: the pairs whose cores overlap and its share, and those whose cores touch or overlap and
++    its share; `pairs` the neighbouring pairs, `words` the words and `close_pairs` those within TOUCH_GAP px."""
++    sheets = list(words_by_sheet.values()) if isinstance(words_by_sheet, Mapping) else list(words_by_sheet)
++    total_words, close = 0, []          # (sheet's words, i, j) of the neighbours close enough to share a px
++    pairs = 0
++    for words in sheets:
++        words = np.asarray(words).reshape(-1, 4, 2)
++        total_words += len(words)
++        ij, g = neighbour_pairs(words)
++        pairs += len(ij)
++        close += [(words, int(i), int(j)) for (i, j), gap in zip(ij, g) if gap < TOUCH_GAP]
++    curve = []
++    for r in R_GRID:
++        over = touch = 0
++        cores = {}
++        for words, i, j in close:
++            key = id(words)
++            if key not in cores:
++                cores[key] = cores_px(words, r)
++            o, t = _meet(cores[key][i], cores[key][j])
++            over += o
++            touch += t
++        curve.append({"r": r, "overlapping": over, "share": over / pairs if pairs else 0.0,
++                      "touching": touch, "touching_share": touch / pairs if pairs else 0.0})
++    ok = [c["r"] for c in curve if c["share"] <= MAX_SHARE]
++    return {"r": max(ok) if ok else None, "max_share": MAX_SHARE, "grid": list(R_GRID), "pairs": pairs,
++            "words": total_words, "close_pairs": len(close), "curve": curve,
++            "rule": "the largest r of the grid at which at most max_share of the neighbouring pairs (rectangles at "
++                    "most the smaller word height apart) have cores sharing a painted px; cores shrunk by "
++                    "D = A (1 - r^2) / L, corners rounded to px"}
++
++
++# --- measured on the training maps -----------------------------------------------------------------------------------
++
++def _kept_words(sd: data.SheetData, areas) -> np.ndarray:
++    """A sheet's words whose centre px (the corners' mean, rounded, kept on the page) is in none of `areas`."""
++    keep = []
++    for j, rect in enumerate(sd.words.astype(float)):
++        x, y = np.clip(np.rint(rect.mean(axis=0)).astype(int), 0, [sd.width - 1, sd.height - 1])
++        if not any(data.in_area(sd, a, int(y), int(x), 1, 1)[0, 0] for a in areas):
++            keep.append(j)
++    return sd.words[np.array(keep, int)].reshape(-1, 4, 2)
++
++
++def write_r(out=SHRINK_FILE) -> dict:
++    """Measure r on the training maps, per fold (see the module), and write it to `out` (its folder made)."""
++    from sfzmaps.solver.textnet import reader_stage    # torch and the lots: only for this measurement
++
++    blocks = reader_stage.held_blocks()
++    area = reader_stage.load_block_area(blocks)
++    sheets = data.load_sheets(paths.TEXT_TRAIN_SERIES, hold_out_validation=False)
++    folds = {}
++    for q, name in enumerate(paths.QUARTERS):
++        areas = (data.Quarter(q), area)
++        words = {f"{sd.series}/{sd.sheet}": _kept_words(sd, areas) for sd in sheets}
++        folds[name] = measure_r(words)
++        log.info("fold %s held out: r %s over %d pairs of %d words", name, folds[name]["r"], folds[name]["pairs"],
++                 folds[name]["words"])
++    rs = {name: f["r"] for name, f in folds.items()}
++    got = {"r": rs["ne"], "r_by_fold": rs, "same_every_fold": len(set(rs.values())) == 1,
++           "series": list(paths.TEXT_TRAIN_SERIES), "sheets": len(sheets), "blocks_held": len(blocks),
++           "left_out": "words whose centre px is in the fold's quarter or an answered block", "folds": folds}
++    out.parent.mkdir(parents=True, exist_ok=True)
++    out.write_text(json.dumps(got, indent=1) + "\n")
++    return got
++
++
++if __name__ == "__main__":
++    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
++    data.LOAD_THREADS = 1          # one page decoded at a time: the machine is shared
++    result = write_r()
++    print(json.dumps({k: v for k, v in result.items() if k != "folds"}, indent=1))
+diff --git a/pipeline/tests/test_wordread_heads.py b/pipeline/tests/test_wordread_heads.py
+new file mode 100644
+index 0000000..c9a3de0
+--- /dev/null
++++ b/pipeline/tests/test_wordread_heads.py
+@@ -0,0 +1,268 @@
++"""The detector's word heads (`train.Recipe.heads="words"`) and their targets (`data.crop_targets(..., words=True)`,
++`wordread.shrink`): shrunk word cores (DBNet), the box each core px votes for (EAST) and word tags (PAN)."""
++import contextlib
++import dataclasses
++
++import cv2
++import numpy as np
++import pytest
++import torch
++import torch.nn.functional as F
++
++from sfzmaps.solver import grid, paths
++from sfzmaps.solver.textnet import data, model, train
++from sfzmaps.solver.wordread import shrink
++
++
++@contextlib.contextmanager
++def _torch_kept():
++    threads = torch.get_num_threads()
++    deterministic = torch.are_deterministic_algorithms_enabled()
++    warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
++    rng = torch.get_rng_state()
++    try:
++        yield
++    finally:
++        torch.set_num_threads(threads)
++        torch.use_deterministic_algorithms(deterministic, warn_only=warn_only)
++        torch.set_rng_state(rng)
++
++
++@pytest.fixture(autouse=True)
++def _torch_as_it_was():
++    with _torch_kept():
++        yield
++
++
++def _rect(x0, y0, x1, y1, angle=0.0) -> np.ndarray:
++    return data.word_rect([x0, y0, x1, y1], angle)
++
++
++def _sheet(words, size=(240, 320), sheet="s") -> data.SheetData:
++    """An in-memory sheet, no placement and nothing held out: a blank page with a stroke of ink along each word's
++    middle, and Terra's `words` (axis box (x0, y0, x1, y1), reading angle)."""
++    h, w = size
++    gray = np.full((h, w), 255, np.uint8)
++    rects = [_rect(*box, angle) for box, angle in words]
++    for r in rects:
++        a, b = (r[0] + r[3]) / 2, (r[1] + r[2]) / 2
++        cv2.line(gray, tuple(int(v) for v in np.round(a)), tuple(int(v) for v in np.round(b)), 0, 3)
++    return data.SheetData(
++        series=paths.SERIES, sheet=sheet, height=h, width=w, ink_bits=np.packbits(gray < grid.INK_BELOW, axis=1),
++        words=np.round(np.array(rects, float).reshape(-1, 4, 2)).astype(np.int32),
++        kinds=np.zeros(len(words), np.uint8), angles=np.array([data.reading_angle(r) for r in rects], np.int16),
++        other=np.zeros((0, 4, 2), np.int32), points=np.zeros((0, 2), np.int32), world=np.zeros((0, 0, 2)),
++        ft_per_px=float("nan"))
++
++
++# --- shrinking and unclipping ----------------------------------------------------------------------------------------
++
++@pytest.mark.parametrize("r", [0.3, 0.4, 0.55, 0.7])
++def test_unclip_undoes_core_within_half_a_px(r):
++    rects = np.array([_rect(10, 20, 70, 40), _rect(100, 50, 140, 210, 90), _rect(0, 0, 300, 300, 30),
++                      _rect(5, 5, 9, 60, -45), _rect(50, 60, 250, 90, 170), _rect(0, 0, 2.5, 2.5)])
++    for rect in rects:
++        assert np.abs(shrink.unclip(shrink.core(rect, r), r) - rect).max() < 0.5
++    # many at once, the same numbers
++    assert np.allclose(shrink.unclip(shrink.core(rects, r), r), rects, atol=1e-6)
++
++
++def test_core_is_the_word_shrunk_by_dbnets_offset_and_keeps_its_reading_direction():
++    rect = _rect(100, 100, 160, 120)                    # 60 x 20 px, read left to right
++    got = shrink.core(rect, 0.4)
++    d = 60 * 20 * (1 - 0.4 ** 2) / (2 * (60 + 20))     # D = A (1 - r^2) / L = 6.3 px
++    assert np.allclose(got, [[100 + d, 100 + d], [160 - d, 100 + d], [160 - d, 120 - d], [100 + d, 120 - d]])
++    turned = _rect(300, 100, 330, 300, 90)              # read bottom to top
++    assert data.reading_angle(shrink.core(turned, 0.5)) == data.reading_angle(turned) == 90
++
++
++def _pairs(overlapping: int, touching: int, w=1000, h=200, o=120) -> np.ndarray:
++    """`touching` pairs of w x h words side by side, and `overlapping` pairs whose second word starts `o` px inside
++    the first; each pair a row of its own, rows 1.5 h apart (beyond one word height: no neighbours across rows)."""
++    words = []
++    for i in range(overlapping + touching):
++        y = i * (h + 300)
++        shift = o if i < overlapping else 0
++        words += [_rect(0, y, w, y + h), _rect(w - shift, y, 2 * w - shift, y + h)]
++    return np.round(np.array(words)).astype(np.int32)
++
++
++def test_measure_r_is_the_largest_r_whose_cores_overlap_on_at_most_one_percent_of_neighbouring_pairs():
++    # two 1000 x 200 words overlapping by 120 px: shrunk by D = 83.3 (1 - r^2) each, their cores are 5 px apart at
++    # r = 0.5 and overlap by 3.75 px at 0.55
++    two = shrink.measure_r({"a": _pairs(2, 58), "b": _pairs(0, 40)})
++    assert two["pairs"] == 100 and two["words"] == 200
++    assert two["r"] == 0.5
++    curve = {c["r"]: c for c in two["curve"]}
++    assert sorted(curve) == [0.3, 0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65, 0.7]
++    assert [curve[r]["overlapping"] for r in sorted(curve)] == [0] * 5 + [2] * 4
++    assert curve[0.55]["share"] == pytest.approx(0.02)
++    # one in a hundred is allowed
++    assert shrink.measure_r({"a": _pairs(1, 99)})["r"] == 0.7
++    # words further apart than one word height are not neighbours: 201 px apart, no; 200 px, yes
++    far = np.round([_rect(0, 0, 1000, 200), _rect(1201, 0, 2201, 200), _rect(2401, 0, 3401, 200)]).astype(np.int32)
++    assert shrink.measure_r({"a": far})["pairs"] == 1
++
++
++def test_touching_words_get_disjoint_cores_at_the_measured_r():
++    words = [((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0),          # R-4 | RH-2, touching
++             ((160, 40, 180, 160), 90),                                  # a street name read upward, touching both
++             ((40, 81, 160, 101), 0)]                                    # a line of text right under them
++    sd = _sheet(words)
++    r = shrink.measure_r({sd.sheet: sd.words})["r"]
++    (prepared,) = shrink.prepare([sd], r)
++    t = data.crop_targets(prepared, 100, 120, 200, 1.0, 0, words=True)
++    tag = t["tag_id"]
++    assert set(np.unique(tag)) == {0, 1, 2, 3, 4}
++    # each core alone, as painted: no px of one is on or next to (8 around) a px of another
++    alone = [data._paint(prepared.cores[j:j + 1], np.ones(1, np.int32), 0, 0, sd.height, sd.width) > 0
++             for j in range(len(words))]
++    for i in range(len(alone)):
++        for j in range(i + 1, len(alone)):
++            grown = cv2.dilate(alone[i].view(np.uint8), np.ones((3, 3), np.uint8)) > 0
++            assert not (grown & alone[j]).any(), (i, j)
++    n, _ = cv2.connectedComponents(t["core"], connectivity=8)
++    assert n - 1 == len(words)
++
++
++# --- the targets -----------------------------------------------------------------------------------------------------
++
++def test_geo_at_a_core_px_gives_the_distances_to_the_words_four_sides():
++    sd, = shrink.prepare([_sheet([((100, 50, 200, 80), 0), ((230, 40, 260, 140), 90)])], 0.5)
++    t = data.crop_targets(sd, 65, 150, 64, 1.0, 0, words=True)        # the window's top-left px is (33, 118)
++    assert t["geo"].dtype == np.float32 and t["geo"].shape == (5, 64, 64)
++    assert t["core"].dtype == np.uint8 and t["tag_id"].dtype == np.int32
++    # page px (150, 65): 15 px below the top edge, 15 above the bottom, 50 from the start and 50 from the end
++    assert t["core"][32, 32] == 1 and t["tag_id"][32, 32] == 1
++    assert np.allclose(t["geo"][:, 32, 32], [15, 15, 50, 50, 0])
++    # page px (120, 60)
++    assert np.allclose(t["geo"][:, 60 - 33, 120 - 118], [10, 20, 20, 80, 0])
++    # off the cores: nothing
++    assert t["core"][0, 0] == 0 and t["tag_id"][0, 0] == 0 and not t["geo"][:, 0, 0].any()
++    # a word read bottom to top: its top is on the left, its start at the bottom
++    up = data.crop_targets(sd, 90, 245, 64, 1.0, 0, words=True)      # top-left px (58, 213)
++    assert up["tag_id"][120 - 58, 240 - 213] == 2
++    assert np.allclose(up["geo"][:, 120 - 58, 240 - 213], [10, 20, 20, 80, 90])
++
++
++def test_geo_scales_with_the_crop_and_turns_with_it():
++    sd, = shrink.prepare([_sheet([((100, 50, 200, 80), 0)])], 0.5)
++    flat = data.crop_targets(sd, 65, 150, 64, 1.0, 0, words=True)
++    big = data.crop_targets(sd, 65, 150, 128, 2.0, 0, words=True)        # the same 64 page px, twice the size
++    assert np.allclose(big["geo"][:4, 64, 64], 2 * flat["geo"][:4, 32, 32]) and big["geo"][4, 64, 64] == 0
++    assert np.array_equal(big["tag_id"][::2, ::2], flat["tag_id"])
++    turned = data.crop_targets(sd, 65, 150, 64, 1.0, 1, words=True)      # a quarter turn counter-clockwise
++    for k in ("core", "tag_id"):
++        assert np.array_equal(turned[k], np.rot90(flat[k]))
++    assert np.array_equal(turned["geo"][:4], np.rot90(flat["geo"][:4], axes=(1, 2)))
++    assert np.array_equal(turned["geo"][4], np.where(np.rot90(flat["core"]) > 0, 90, 0))
++
++
++def test_word_targets_need_the_cores_and_change_nothing_else():
++    sd = _sheet([((100, 50, 200, 80), 0)])
++    with pytest.raises(ValueError, match="shrink.prepare"):
++        data.crop_targets(sd, 65, 150, 64, 1.0, 0, words=True)
++    prepared, = shrink.prepare([sd], 0.5)
++    assert prepared.cores.dtype == np.int32 and prepared.cores.shape == (1, 4, 2)
++    assert sd.cores.shape == (0, 4, 2)                                    # the default: none
++    plain = data.crop_targets(sd, 65, 150, 64, 0.8, 3)
++    for got in (data.crop_targets(prepared, 65, 150, 64, 0.8, 3),
++                {k: v for k, v in data.crop_targets(prepared, 65, 150, 64, 0.8, 3, words=True).items()
++                 if k not in ("core", "geo", "tag_id")}):
++        assert sorted(got) == sorted(plain) == ["angle", "ink", "kind", "known", "text"]
++        for k in plain:
++            assert got[k].dtype == plain[k].dtype and np.array_equal(got[k], plain[k])
++
++
++# --- the network and its loss ----------------------------------------------------------------------------------------
++
++def test_the_word_heads_are_a_recipe_choice_off_by_default():
++    assert train.Recipe().heads == "all" and train.CHOICES["heads"] == ("all", "text", "words")
++    recipe = train.Recipe(heads="words", width=4, crop=32)
++    assert recipe.name() == "crop=32-heads=words-width=4"
++    assert model.HEAD_OUTPUTS == {"all": 7, "text": 1, "words": 7 + 1 + 4 + 4}
++    out = train.build_net(recipe)(torch.zeros(2, 1, 32, 32))
++    assert out.shape == (2, 16, 32, 32)
++    half = train.build_net(dataclasses.replace(recipe, half_size=True))(torch.zeros(2, 1, 32, 32))
++    assert half.shape == (2, 16, 32, 32)
++    with pytest.raises(ValueError, match="composites"):
++        train.Recipe(heads="words", composites=0.5)
++
++
++def _word_batch():
++    sd, = shrink.prepare([_sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0), ((160, 40, 180, 160), 90)])],
++                         0.5)
++    return [data.crop_targets(sd, 90, 110, 64, 0.5, 0, words=True), data.crop_targets(sd, 100, 150, 64, 1.3, 1,
++                                                                                         words=True)]
++
++
++def test_word_tensors_number_each_crops_tags_from_one():
++    crops = _word_batch()
++    crops[1]["known"][:] = False                       # a crop held out: no tag, no core lesson
++    core, geo, tag, known, groups = train.word_tensors(crops)
++    assert core.dtype == geo.dtype == known.dtype == torch.float32 and tag.dtype == torch.int64
++    assert geo.shape == (2, 5, 64, 64) and tag.shape == (2, 64, 64)
++    assert set(tag[0].unique().tolist()) == {0, 1, 2, 3} and not tag[1].any()
++    assert torch.equal(groups, torch.arange(1, 4))
++    assert torch.equal(tag[0] > 0, core[0] > 0)
++
++
++def test_hard_negatives_are_the_top_three_per_positive_ties_shared():
++    target = torch.zeros(1, 4, 4)
++    target[0, 0, :2] = 1                                # two positives
++    known = torch.ones(1, 4, 4)
++    known[0, 3, 3] = 0
++    logit = torch.linspace(-3, 3, 16).reshape(1, 4, 4)        # the negatives' four highest: 2.6, 2.2, 1.8, 1.4
++    logit[0, 2, 0] = logit[0, 2, 1] = logit[0, 2, 2] = 1.0     # three tied for the last two of the six places
++    got = train._ohem_bce(logit, target, known)
++    bce = F.binary_cross_entropy_with_logits(logit, target, reduction="none")
++    neg = bce[(target == 0) & (known > 0)]
++    top = torch.sort(neg, descending=True).values[:6]
++    want = (bce[target > 0].sum() + top.sum()) / 8
++    assert torch.allclose(got, want)
++    # no positive: no negative is read either
++    assert train._ohem_bce(logit, torch.zeros_like(target), known) == 0
++
++
++def test_word_loss_is_zero_for_a_perfect_answer_and_pushes_tags_apart():
++    crops = _word_batch()
++    core, geo, tag, known, groups = train.word_tensors(crops)
++    out = torch.zeros(2, 16, 64, 64)
++    out[:, model.CORE] = torch.where(core > 0, 30.0, -30.0)
++    out[:, model.GEO] = torch.log(geo[:, :4].clamp(min=1e-3) / model.GEO_UNIT)
++    rad = torch.deg2rad(geo[:, 4])
++    out[:, 5], out[:, 6] = torch.cos(rad), torch.sin(rad)
++    for c in range(4):                                   # each word's tag at 3 x its local number, on one axis
++        out[:, model.TAG.start + c] = 3.0 * tag * (c == 0)
++    loss, parts = train.word_loss(out, core, geo, tag, known, groups)
++    names = dict(zip(train.WORD_PARTS, parts.tolist()))
++    assert sorted(names) == sorted(("core", "dice", "iou", "direction", "pull", "push"))
++    assert names["core"] < 1e-6 and names["dice"] < 1e-6 and names["iou"] < 1e-5 and names["direction"] < 1e-6
++    assert names["pull"] == 0 and names["push"] == 0
++    # every word's tag the same: each pair pushed by log(1 + 3^2)
++    out[:, model.TAG] = 0
++    _, parts = train.word_loss(out, core, geo, tag, known, groups)
++    assert dict(zip(train.WORD_PARTS, parts.tolist()))["push"] == pytest.approx(np.log(10))
++    # the total is the parts by their weights
++    out = torch.randn(2, 16, 64, 64, generator=torch.Generator().manual_seed(1))
++    loss, p = train.word_loss(out, core, geo, tag, known, groups)
++    assert torch.allclose(loss, p[0] + p[1] + p[2] + 10 * p[3] + 0.25 * (p[4] + p[5]))
++
++
++def test_a_word_heads_fit_trains_the_per_ink_head_by_todays_loss_and_repeats(monkeypatch):
++    sheets = shrink.prepare([_sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0), ((160, 40, 180, 160), 90)]),
++                             _sheet([((20, 20, 120, 50), 30), ((60, 150, 200, 175), 0)], sheet="t")], 0.5)
++    recipe = train.Recipe(heads="words", iterations=2, batch=3, crop=48, width=4)
++    real, seen = train.loss_fn, []
++    monkeypatch.setattr(train, "loss_fn", lambda out, t, k, a, w: seen.append(out.shape) or real(out, t, k, a, w))
++    first = train.fit(sheets, recipe, "cpu", seed=0)
++    again = train.fit(sheets, recipe, "cpu", seed=0)
++    assert seen == [(3, 16, 48, 48)] * 4
++    for (name, a), b in zip(first.state_dict().items(), again.state_dict().values()):
++        assert torch.equal(a, b), name
++    # the word loss reaches every word output
++    net = train.build_net(recipe)
++    crops = train.draw(sheets, train.centre_pools(sheets), recipe, np.random.default_rng(0))
++    loss, _ = train.word_loss(net(train.batch_tensors(crops)[0]), *train.word_tensors(crops))
++    loss.backward()
++    assert (net.head.weight.grad.flatten(1).abs().sum(1)[model.CORE:] > 0).all()

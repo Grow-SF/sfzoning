@@ -1,0 +1,936 @@
+# Review package: 4aceaa3..d489e38
+
+## Commits
+d489e38 textlines: variant 1 against control 0 on NE and SW, the decision as written, results note
+f5bc3aa textlines: decide.py, the verdict between control and variant by the rule written before the runs
+
+## Files changed
+ .../notes/2026-11-17-text-vs-line-results.md       | 330 ++++++++++++++++
+ pipeline/scripts/textlines/decide.py               | 414 +++++++++++++++++++++
+ pipeline/tests/test_textlines_decide.py            | 161 ++++++++
+ 3 files changed, 905 insertions(+)
+
+## Diff
+diff --git a/docs/research/joint-solver/notes/2026-11-17-text-vs-line-results.md b/docs/research/joint-solver/notes/2026-11-17-text-vs-line-results.md
+new file mode 100644
+index 0000000..cae8586
+--- /dev/null
++++ b/docs/research/joint-solver/notes/2026-11-17-text-vs-line-results.md
+@@ -0,0 +1,330 @@
++# Text detector, text vs line: results of the deciding runs (2026-11-17)
++
++The plan is `docs/superpowers/plans/2026-11-17-text-detector-text-vs-line.md` (Task 7) and the spec is
++`docs/superpowers/specs/2026-11-17-text-detector-text-vs-line-design.md`. The verdicts come from
++`pipeline/scripts/textlines/decide.py`; its rule was written before the runs. Run outputs are in
++`pipeline/data/solver/experiments/textlines/` and are not committed. Cost: $0, with no LLM calls.
++
++## Summary for the owner
++
++- **What the label fix does (control 0: line ink inside a word box is "unknown" in training, not "text").**
++  - On the held-out NE quarter it calls much less line ink inside labels text than the old NE quarter model does.
++  - District-border ink in word boxes (M1a in box): 0.63 to 0.40, a change of -0.225 [-0.257, -0.194].
++  - All straight-line ink in word boxes (M1b in box): 0.82 to 0.55, a change of -0.272 [-0.291, -0.245].
++  - Against today's held-out detectors (r328), which call almost all ink text, the changes are -0.59 and -0.42.
++  - In the pictures, block, street and district lines through labels turn grey and the letters stay red.
++  - On SW (one seed, the control only), against the old SW model:
++    - M1a in box: 0.73 to 0.41, a change of -0.319 [-0.384, -0.255];
++    - M1b in box: 0.80 to 0.52, a change of -0.275 [-0.297, -0.214].
++- **What it costs, against the old NE model:**
++  - **Letters of clean words** (words no line touches) called text: 0.957 to 0.930, a change of -0.027
++    [-0.040, +0.003]. That is beyond the noise (0.021).
++    - Post hoc: most of this is in words of the kind "other" (-0.050).
++    - Post hoc: zoning-code letters off the lines (M2 for codes) fall 0.984 to 0.951, a change of -0.033
++      [-0.039, -0.028].
++  - **Ink outside every box** called text: 0.025 to 0.052, a change of +0.027 [+0.017, +0.037]. That is beyond the
++    noise (0.021).
++  - **The dashed pier-head line** is now called text in every run. It is grey in r328 and in the old model.
++  - Glyph ink in boxes away from lines (M2) is unchanged against the old model: -0.005 [-0.023, +0.010].
++- **What it costs on SW, against the old SW model:**
++  - Clean-word letters: 0.981 to 0.909, a change of -0.072 [-0.098, +0.001] (noise 0.049).
++    - Post hoc: nearly all of it is in "other" words in 5 blocks.
++  - M2: -0.014 [-0.027, -0.008]. That is just beyond its noise (0.0136).
++    - Post hoc: street-name letters -0.048 and zoning codes -0.018.
++    - In the picture, street names written inside curved road bands are grey, as in the old SW model.
++  - Ink outside boxes does not rise on SW: +0.001.
++- **The composites (variant 1) add nothing measurable.**
++  - Variant less control, three seeds each:
++    - M1a in box +0.006 [-0.006, +0.018];
++    - M1b in box -0.004 [-0.012, +0.002];
++    - M2 +0.002;
++    - M1c -0.009;
++    - clean words +0.0005.
++  - All of these are inside the noise. The controller saw no visible difference.
++- **By the rule written in advance, nothing is adoptable**, so the downstream preview (Task 8) does not run.
++  - On NE and on SW, both recipes fail "M2 not lower than r328's beyond the noise". That condition cannot pass for a
++    detector that stops calling line ink text: r328 calls 99.9% of the glyph ink and 97% of the line ink in boxes text.
++    See the post-hoc section.
++  - Against the old quarter model alone (post hoc):
++    - on NE the control also fails ink outside boxes and the clean-word guard;
++    - on NE the variant fails only the clean-word guard;
++    - on SW the control fails M2 by a hair and the clean-word guard.
++- **What remains open** is listed at the end:
++  - the dashed-line over-call;
++  - half the line ink in boxes is still called text;
++  - the code-letter loss;
++  - a fair adoption bar.
++
++## The rule (written before the runs; `decide.py`)
++
++- Each measure is the share of its ink called text (chance >= 0.5). An arm's value is the mean over its runs.
++  - A difference is the variant less the control (or an arm less a baseline), on the blocks both scored.
++  - It comes with the 95% paired bootstrap interval over blocks (`linegate.paired`, 1000 draws).
++- **Noise** = max(the control's largest pairwise seed difference, the paired interval's half-width).
++- **Variant over control** requires all of:
++  - M1a-in-box lower, with the interval below 0;
++  - M2 not lower by more than the noise;
++  - M1c not higher by more than the noise;
++  - m2_clean_words not lower by more than its noise (the controller's ruling for this task);
++  - `eye_ok`.
++
++  The verdict is `pending-eye` without the eye check. It is `mixed` on any split (for example M1b falls and M1a
++  does not), and `control` or `variant` otherwise.
++- **Adoptable**, for an arm against r328 and the old model of its quarter:
++  - M1a-in-box and M1b-in-box lower, with the intervals below 0;
++  - M2 not lower, and M1c not higher, by more than the noise;
++  - the audit's text pieces called text not lower beyond the binomial interval. Concretely, the arm's estimated missed
++    text pieces are at most the baseline's Clopper-Pearson 95% upper bound.
++
++  The table reports this rule both as written and with the clean-word guard added. The all-sheets detector is a
++  reference only, being in-sample.
++- **SW:** the NE winner and the control at seed 0 each. The NE winner is the control, so only the control runs. The
++  seed noise comes from the NE control seeds.
++
++## Baselines (Task 3; NE values are on NE blocks)
++
++| source | m1a_in_box | m1b_in_box | m2 | m1c | m2_clean_words | m1a |
++|---|---|---|---|---|---|---|
++| r328, all quarters | 0.987 [0.983, 0.992] | 0.975 [0.959, 0.984] | 0.999 | 0.366 | 0.995 | 0.668 |
++| r328, NE blocks | 0.9922 | 0.9694 | 0.9994 | 0.5474 | 0.9845 | 0.8110 |
++| old-ne (own quarter) | 0.6294 | 0.8177 | 0.9727 | 0.0252 | 0.9565 | 0.0380 |
++| r328, SW blocks | 0.9811 | 0.9734 | 0.9987 | 0.2736 | 0.9985 | 0.5167 |
++| old-sw (own quarter) | 0.7333 | 0.7950 | 0.9832 | 0.0336 | 0.9812 | 0.0387 |
++| all-sheets (in-sample, reference) | 0.579 | 0.804 | 0.983 | 0.036 | 0.9956 | 0.046 |
++
++## NE: every run
++
++Recipe: DEFAULT_RECIPE with labels `lines-unknown`. The variant adds composites 0.3396 (P is the ink-only crossing
++rate, NE held out). Each run trains 6.4 min on mps. The variant's runs had `git_status_src` empty and head f5bc3aa.
++Each composite run made about 8,100 (a) and 8,100 (b) composites out of 48,000 crops (33.8%).
++
++| run | m1a_in_box | m1b_in_box | m2 | m1c | m2_clean_words | m1a | overlap_band |
++|---|---|---|---|---|---|---|---|
++| control-ne-s0 | 0.3925 | 0.5102 | 0.9653 | 0.0405 | 0.9271 | 0.0389 | 0.5450 |
++| control-ne-s1 | 0.4095 | 0.5936 | 0.9756 | 0.0616 | 0.9352 | 0.0538 | 0.6272 |
++| control-ne-s2 | 0.4105 | 0.5320 | 0.9620 | 0.0545 | 0.9275 | 0.0506 | 0.5643 |
++| composites-ne-s0 | 0.3992 | 0.5364 | 0.9717 | 0.0402 | 0.9288 | 0.0407 | 0.5738 |
++| composites-ne-s1 | 0.4197 | 0.5540 | 0.9705 | 0.0412 | 0.9329 | 0.0462 | 0.5894 |
++| composites-ne-s2 | 0.4123 | 0.5328 | 0.9660 | 0.0472 | 0.9297 | 0.0561 | 0.5673 |
++
++**Noise** is the control's largest pairwise seed difference on NE:
++
++| m1a_in_box | m1b_in_box | m2 | m1c | m2_clean_words | m1a |
++|---|---|---|---|---|---|
++| 0.0180 | 0.0834 | 0.0136 | 0.0211 | 0.0082 | 0.0149 |
++
++**Variant less control** (three seeds each, 713 blocks):
++
++| measure | diff [95%] | half-width | noise | outcome |
++|---|---|---|---|---|
++| m1a_in_box | +0.0063 [-0.0060, +0.0184] | 0.0122 | 0.0180 | does not fall |
++| m1b_in_box | -0.0042 [-0.0119, +0.0018] | 0.0069 | 0.0834 | does not fall |
++| m2 | +0.0017 [+0.0003, +0.0038] | 0.0018 | 0.0136 | held |
++| m1c | -0.0094 [-0.0147, -0.0039] | 0.0054 | 0.0211 | held (falls) |
++| m2_clean_words | +0.0005 [-0.0009, +0.0010] | 0.0010 | 0.0082 | held |
++| m1a (diagnostic) | -0.0001 [-0.0031, +0.0032] | 0.0031 | 0.0149 | |
++| m1a_in_box_context (diagnostic) | +0.0058 [-0.0002, +0.0128] | 0.0065 | 0.0572 | |
++| m1b_near (diagnostic) | -0.0058 [-0.0078, -0.0040] | 0.0019 | 0.0157 | |
++| m1b_far (diagnostic) | -0.0126 [-0.0227, +0.0015] | 0.0121 | 0.0251 | |
++
++**Verdict NE: `control`.**
++- The variant gains on neither line measure, and no guard fails.
++- With `eye_ok` True (the controller's) the rule gives `control`.
++
++**Adoptable on NE** (arm less baseline, 95% interval; the noise of each guard in brackets):
++
++| arm vs baseline | m1a_in_box | m1b_in_box | m2 | m1c | m2_clean_words | audit | as written | with clean guard |
++|---|---|---|---|---|---|---|---|---|
++| control vs r328 | -0.588 [-0.620, -0.554] | -0.424 [-0.473, -0.383] | -0.0317 [-0.0454, -0.0207] (0.0136) **fails** | -0.495 [-0.632, -0.350] (0.141) | -0.0545 [-0.0806, +0.0006] (0.0406) **fails** | held | no | no |
++| control vs old-ne | -0.225 [-0.257, -0.194] | -0.272 [-0.291, -0.245] | -0.0051 [-0.0231, +0.0104] (0.0167) | +0.0270 [+0.0167, +0.0366] (0.0211) **fails** | -0.0266 [-0.0401, +0.0025] (0.0213) **fails** | held | no | no |
++| variant vs r328 | -0.582 [-0.614, -0.546] | -0.428 [-0.478, -0.386] | -0.0300 [-0.0430, -0.0196] (0.0136) **fails** | -0.505 [-0.638, -0.365] (0.136) | -0.0540 [-0.0796, +0.0003] (0.0400) **fails** | held | no | no |
++| variant vs old-ne | -0.219 [-0.247, -0.188] | -0.277 [-0.294, -0.252] | -0.0033 [-0.0205, +0.0113] (0.0159) | +0.0176 [+0.0116, +0.0227] (0.0211) | -0.0261 [-0.0391, +0.0022] (0.0206) **fails** | held | yes | no |
++
++Neither recipe is adoptable on NE: each needs every baseline, and both fail M2 against r328.
++
++## SW (control only, seed 0; noise from the NE control seeds)
++
++- **The run.** `runs/control-sw-s0` trained 6.4 min on mps, at head f5bc3aa, with `git_status_src` empty.
++- **Its values.**
++
++  | m1a_in_box | m1b_in_box | m2 | m1c | m2_clean_words | m1a | overlap_band |
++  |---|---|---|---|---|---|---|
++  | 0.4138 | 0.5203 | 0.9690 | 0.0350 | 0.9093 | 0.0314 | 0.5431 |
++
++- **Adoptable on SW** (control less baseline; one seed; the noise of each guard in brackets, from the NE seeds or the
++  half-width, whichever is larger):
++
++| baseline | m1a_in_box | m1b_in_box | m2 | m1c | m2_clean_words | audit | as written | with clean guard |
++|---|---|---|---|---|---|---|---|---|
++| r328 | -0.567 [-0.630, -0.498] | -0.453 [-0.580, -0.404] | -0.0297 [-0.0549, -0.0166] (0.0191) **fails** | -0.239 [-0.382, -0.137] (0.123) | -0.0892 [-0.1209, -0.0002] (0.0604) **fails** | **fails** (37.5 missed text pieces vs r328's bound 24.9) | no | no |
++| old-sw | -0.319 [-0.384, -0.255] | -0.275 [-0.297, -0.214] | -0.0142 [-0.0274, -0.0082] (0.0136) **fails** | +0.0014 [-0.0048, +0.0052] (0.0211) | -0.0719 [-0.0977, +0.0006] (0.0491) **fails** | held | no | no |
++
++- **Verdict SW: the control is not adoptable.** It fails on M2 against both baselines (by a hair against old-sw), on
++  the clean-word guard, and on the audit against r328.
++- **Reading this.**
++  - The line gain repeats on SW: M1a in box -0.319 (NE -0.225) and M1b in box -0.275 (NE -0.272).
++  - M1c does not rise on SW.
++  - The control on SW is one seed, so a verdict that hinges on M2 -0.0142 against a noise of 0.0136 is a near-tie.
++  - The audit against r328 rests on 3 against 0 text pieces in 64, by one eye.
++
++## The controller's eye notes (verbatim)
++
++The controller looked at `runs/compare-ne.png`: all six runs, r328 and old-ne.
++
++- **eye_ok = True for the variant's own panels.** Line ink through and under labels is grey (rm2b, rm2c, the block
++  line through RH-2), and the letters stay red. But the variant shows NO visible difference from the control. The
++  verdict stays `control`, by the numbers, as you computed.
++- **The big vertical "RM-2" (rm2a) is red in all six runs, the control included.** The controller's earlier note
++  (Task 5) that it went grey was a misreading of a downscaled picture. Record that correction plainly.
++- **The dashed pier-head line (window "dashed") is called text in all six runs,** and grey in r328 and old-ne. This
++  is a new over-call by the label rule, consistent with m1c rising against old-ne.
++- **Control s0 only:** parts of "UNION" (residential) are grey. The other runs keep it red.
++
++**Correction, stated plainly:**
++- The Task 5 report and the controller's Task 5 note said the big vertical "RM-2" in window rm2a was missed (grey)
++  by the control.
++- That was wrong. It is red in `runs/control-ne-s0/panel.png` (the file is unchanged since its run) and in every
++  other run.
++- The Task 6 review's caution ("composites do not restore long letter strokes of real codes") therefore had no
++  regression to explain in this window.
++
++## Noticed after the runs (post hoc; the verdicts above are as written and unchanged)
++
++- **The r328 M2 condition is uninformative.**
++  - "M2 not lower beyond the noise against r328" cannot pass for any detector that stops calling line ink text.
++    r328 calls nearly all ink text: M2 0.9994, M1b in box 0.97, M1c 0.55 on NE.
++  - A detector that leaves line ink grey also loses some glyph ink next to lines. Passing would need M2 >= 0.986 on
++    NE, which no line-aware detector here reaches (the old NE model has 0.973).
++  - So against r328, M2 says nothing about whether letters were lost.
++- **Against the old quarter model alone:**
++  - NE, control: fails M1c by +0.027 (noise 0.021) and the clean-word guard by -0.027 (noise 0.021). It passes M1a,
++    M1b, M2 and the audit.
++  - NE, variant: fails only the clean-word guard, by -0.026 (noise 0.021). M1c is +0.018, inside the noise. It is
++    adoptable against old-ne by the rule as written, which has no clean-word guard.
++  - SW, control:
++    - fails M2 by -0.0142 (noise 0.0136) and the clean-word guard by -0.072 (noise 0.049);
++    - passes M1a, M1b, M1c (+0.001) and the audit.
++
++    So, against the old quarter models alone:
++    - with the clean-word guard, nothing passes;
++    - as written, only the variant on NE passes, and the variant was not run on SW. The NE winner was the control.
++- **Where the clean-word loss lies** (NE, control less old-ne, by the kind of the word):
++  - "other" -0.050 [-0.057, +0.023]. Half of the clean-word ink is in "other" words; the bootstrap interval is skewed
++    over 32 blocks.
++  - Zoning codes -0.009 [-0.013, +0.000].
++  - Block numbers -0.0002.
++  - Street names -0.0001.
++  - On SW the loss is "other" words -0.171 (0.955 to 0.784, in 5 blocks; 42% of the clean-word ink). Codes are
++    -0.004, block numbers -0.0004 and street names -0.002.
++  - So the clean-word guard mostly measures a few large "other" words (titles, legends or notes: not looked at word
++    by word). The clean code and number letters lose under 1%.
++- **Zoning-code letters away from lines** (m2_by_kind for codes) fall from 0.984 to 0.951: -0.033
++  [-0.039, -0.028] for the control and -0.029 for the variant. Block numbers fall -0.008 [-0.012, -0.005].
++  - These losses are on code letters, the text the reader needs.
++  - The pictures do not show them as whole missed words.
++  - On SW: codes -0.018 [-0.035, -0.010], block numbers -0.010, street names -0.048 [-0.057, -0.039]. The street
++    names written inside curved road bands are grey in `runs/compare-sw.png` (window sw_dense), as they are for old-sw.
++
++## Audits (missed letter-sized pieces outside every box, judged by eye)
++
++- **How they were made.** A run's own audit draws 64 of its missed pieces (mean chance below 0.5) on its quarter. The
++  baselines' audits on one quarter come from `decide.py audit <q>`, with the same pool and draw.
++- **What was counted.** "Plainly text" means the boxed piece is a letter or digit. Pieces of digits fused into a line
++  were counted as borderline, not as text. One person counted (the Task 7 implementer); there is no second judge.
++- **The estimate.** Missed text pieces = missed × the share judged text, with Clopper-Pearson 95% bounds. The seeds of
++  an arm are pooled.
++
++| source | pool | missed | text / drawn | share [95%] | missed text pieces [95%] | borderline tiles |
++|---|---|---|---|---|---|---|
++| control NE s0/s1/s2 | 1459 | 1279 / 1246 / 1246 | 1/192 (s0 tile 22, the "0" of "40") | 0.005 [0.000, 0.029] | 6.5 [0.2, 36.0] | s0: 5, 8, 29; s1: 30, 42; s2: 41, 47 |
++| composites NE s0/s1/s2 | 1459 | 1275 / 1284 / 1248 | 0/192 | 0.000 [0.000, 0.019] | 0.0 [0.0, 24.1] | s0: 15, 26; s1: 8, 23, 41, 45, 63; s2: 15, 24, 25 |
++| r328 on NE | 1459 | 449 | 0/64 | 0.000 [0.000, 0.056] | 0.0 [0.0, 25.1] | none |
++| old-ne on NE | 1459 | 1379 | 1/64 (tile 42, the "T" of a large "STR...") | 0.016 [0.000, 0.084] | 21.5 [0.5, 115.9] | 9 |
++| control SW s0 | 1032 | 799 | 3/64 (tiles 25, 38, 44: street-name letters) | 0.047 [0.010, 0.131] | 37.5 [7.8, 104.6] | 27, 50, 51 |
++| r328 on SW | 1032 | 445 | 0/64 | 0.000 [0.000, 0.056] | 0.0 [0.0, 24.9] | none |
++| old-sw on SW | 1032 | 821 | 3/64 (tiles 25, 39, 63: street-name letters, the "T" of "...CTS") | 0.047 [0.010, 0.131] | 38.5 [8.0, 107.5] | 7, 10, 18, 47, 49, 50 |
++
++- The audit condition holds everywhere except control SW against r328. There the control has 37.5 estimated missed
++  text pieces, against r328's upper bound of 24.9: 3 in 64 against 0 in 64.
++- Almost every missed letter-sized piece is a line fragment, a corner or a junction stub, for every detector.
++- The detectors that leave lines grey miss about 3x as many such pieces as r328 does, and they are lines too.
++
++## 1990-96 (sheets 22-33, the quarter's px; there is no table, so no M1a; no baselines)
++
++- The NE control runs' `extra/` folders were gated again with `decide.py regate-extra` so they carry
++  m2_clean_words. Their older measures came out identical, which was checked before writing.
++- The variant tracks the control: it is a little lower on M1c and a little higher on M2.
++
++| run | m1b_in_box | m1c | m2 | m2_clean_words |
++|---|---|---|---|---|
++| control-ne-s0 | 0.5253 | 0.0442 | 0.9687 | 0.9542 |
++| control-ne-s1 | 0.6044 | 0.0680 | 0.9773 | 0.9569 |
++| control-ne-s2 | 0.5432 | 0.0611 | 0.9632 | 0.9534 |
++| composites-ne-s0 | 0.5514 | 0.0441 | 0.9731 | 0.9535 |
++| composites-ne-s1 | 0.5712 | 0.0468 | 0.9738 | 0.9574 |
++| composites-ne-s2 | 0.5539 | 0.0525 | 0.9702 | 0.9535 |
++| control-sw-s0 (SW px) | 0.5061 | 0.0387 | 0.9774 | 0.8994 |
++
++## Pictures
++
++All paths are under `pipeline/data/solver/experiments/textlines/`.
++- Panels, one per run:
++  - `runs/control-ne-s{0,1,2}/panel.png`;
++  - `runs/composites-ne-s{0,1,2}/panel.png`;
++  - `runs/control-sw-s0/panel.png`.
++
++  Each panel shows the run, r328 and the old quarter model.
++- Side by side:
++  - `runs/compare-ne.png`: control s0-s2, composites s0-s2, r328 and old-ne;
++  - `runs/compare-sw.png`: control-sw-s0, r328 and old-sw.
++- Audits:
++  - `runs/<run>/audit.png`;
++  - `baselines/audit/{r328,old-ne}-ne.png`;
++  - `baselines/audit/{r328,old-sw}-sw.png`.
++- Baselines: `baselines/panel.png`, `baselines/audit/{r328,old-quarters}.png`.
++- Composites: `composites.png` (Task 6).
++
++## What remains open
++
++- **The dashed pier-head line is a new over-call.**
++  - The run rule does not mark dashes (recall 0.02), so the label rule leaves them as "text" where a box covers them.
++  - Nothing in training says otherwise. M1c rises by +0.027 against old-ne.
++- **Half the straight-line ink in boxes is still called text** (M1b in box 0.51-0.59).
++  - The label rule leaves that ink unknown, with no loss on it, so nothing pushes the detector off it.
++  - The composites were meant to give that push. They did not move it (-0.004).
++- **Letters away from lines are lost** against the old models:
++  - zoning codes: -0.033 on NE, -0.018 on SW;
++  - street names: -0.048 on SW;
++  - clean "other" words: -0.05 on NE, -0.17 on SW.
++
++  Which strokes these are has not been looked at word by word. The clean-word guard is dominated by a few large
++  "other" words.
++- **The adoption bar.** The rule as written requires parity with r328 on M2, which no line-aware detector can meet.
++  Whether to judge against the old quarter models alone is the owner's call. Even then, the clean-word guard fails on
++  NE for both recipes.
++- **One-seed SW.** SW is one seed, with the noise taken from the NE seeds.
++- **The audits** were counted by one eye.
++- **Composites, deferred from Task 6:**
++  - the realised crossed share is about 0.72 against 0.34-0.38 on real maps;
++  - A_SHARE 0.5 is not measured;
++  - line pieces are cut on a 256-px grid.
++
++  A composite recipe closer to the real rates is untested.
++
++## How to reproduce (from `pipeline/`, $0)
++
++```
++uv run python scripts/textlines/variant.py composites --quarter ne --seed N --labels lines-unknown \
++    --composites 0.3396 --extra 1990-1996-zoning          # N = 0, 1, 2, one at a time
++uv run python scripts/textlines/variant.py control --quarter sw --seed 0 --labels lines-unknown \
++    --extra 1990-1996-zoning
++uv run python scripts/textlines/decide.py audit ne        # and sw: the baselines' audits on one quarter
++uv run python scripts/textlines/decide.py regate-extra control-ne-s0 control-ne-s1 control-ne-s2
++uv run python scripts/textlines/decide.py panel ne control-ne-s0 control-ne-s1 control-ne-s2 \
++    composites-ne-s0 composites-ne-s1 composites-ne-s2
++uv run python scripts/textlines/decide.py panel sw control-sw-s0
++uv run python scripts/textlines/decide.py verdict ne --control control --variant composites --eye-ok yes
++uv run python scripts/textlines/decide.py verdict sw --control control --noise ne
++```
++
++`verdict` writes `runs/verdict-<name>-<q>.{json,md}`. The eye counts of the audits are `decide.EYE_AUDIT`.
+diff --git a/pipeline/scripts/textlines/decide.py b/pipeline/scripts/textlines/decide.py
+new file mode 100644
+index 0000000..2ef3219
+--- /dev/null
++++ b/pipeline/scripts/textlines/decide.py
+@@ -0,0 +1,414 @@
++"""Decide between the control and a variant of the text detector's training by the rule written before the runs (the
++plan 2026-11-17-text-detector-text-vs-line, Task 7), and whether either is adoptable against the held-out detectors
++(r328) and the old quarter model of the quarter.  What it is for: one verdict with every condition's numbers, by one
++rule for every comparison.  CPU, $0.
++
++    uv run python scripts/textlines/decide.py audit ne        # the baselines' missed-text audits on one quarter
++    uv run python scripts/textlines/decide.py panel ne control-ne-s0 composites-ne-s0 composites-ne-s1 ...
++    uv run python scripts/textlines/decide.py regate-extra control-ne-s0 ...   # 1990-96 gated again (new measures)
++    uv run python scripts/textlines/decide.py verdict ne --control control --variant composites [--eye-ok yes]
++    uv run python scripts/textlines/decide.py verdict sw --control control --variant composites --noise ne ...
++
++The rule (written before the runs; the m2_clean_words guard is the controller's ruling for Task 7):
++- A measure's value is the share of its ink called text (chance >= 0.5); an arm's value is the mean over its runs.
++  A difference is the variant less the control (an arm less a baseline) on the blocks both scored, with the 95%
++  paired bootstrap interval over blocks (`linegate.paired`).
++- The noise of a measure in a comparison = max(the largest difference between two of the noise runs (the control's
++  seeds), the half-width of the comparison's paired interval).
++- Variant over control needs all of: m1a_in_box lower with the interval below 0 (M1a carries the line verdict, since
++  M1b shares the training's line rule); m2 not lower by more than its noise; m1c not higher by more than its noise;
++  m2_clean_words not lower by more than its noise; eye_ok True (the controller looked at both panels).
++- The verdict: "pending-eye" when eye_ok is None (`numbers_say` holds what it would be with eye_ok True); "variant"
++  when every condition holds; "mixed" when the variant gains on a line measure (m1a_in_box or m1b_in_box lower, the
++  interval below 0) and a condition fails (M1b falls and M1a does not; better lines, less text; the eye says no);
++  "control" when it gains on neither.
++- Adoptable, for each arm against each baseline (r328 and old-<quarter>; the all-sheets detector is in-sample, a
++  reference only): m1a_in_box and m1b_in_box lower, the intervals below 0; m2 not lower and m1c not higher by more
++  than the noise; m2_clean_words not lower by more than its noise (the ruling: `as_written` leaves it out); the
++  audit's text pieces called text not lower beyond the baseline's binomial interval, i.e. the arm's estimate of the
++  text pieces it misses (missed letter-sized pieces x the share of the drawn ones judged plainly text by eye) at most
++  the baseline's Clopper-Pearson 95% upper bound.  An audit not yet counted by eye leaves it None (pending).
++
++`verdict ...` writes `runs/verdict-<variant>-<quarter>.{json,md}`; `audit q` writes `baselines/audit/<name>-<q>.{json,
++png}` for r328 and old-<q> on that quarter only (the same pool and draw as a run's own audit); `panel` writes
++`runs/compare-<q>.png`.  The eye counts of the audits are EYE_AUDIT below.
++"""
++import os
++
++for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS",
++           "OPENCV_FOR_THREADS_NUM"):
++    os.environ.setdefault(_k, "1")
++import argparse  # noqa: E402
++import itertools  # noqa: E402
++import json  # noqa: E402
++import sys  # noqa: E402
++from collections.abc import Mapping  # noqa: E402
++from pathlib import Path  # noqa: E402
++
++import numpy as np  # noqa: E402
++from scipy.stats import beta  # noqa: E402
++
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++
++from sfzmaps.solver import paths, runs  # noqa: E402
++from sfzmaps.solver.textnet import linegate  # noqa: E402
++
++TEXTLINES = runs.EXPERIMENTS_DIR / "textlines"
++RUNS_DIR = TEXTLINES / "runs"
++BASELINES = TEXTLINES / "baselines"
++EXTRA = "1990-1996-zoning"
++
++VERDICT = ("m1a_in_box", "m1b_in_box", "m2", "m1c", "m2_clean_words")
++LOWER_IS_BETTER = {"m1a_in_box": True, "m1b_in_box": True, "m1c": True, "m2": False, "m2_clean_words": False,
++                   "m1a": True, "m1a_in_box_context": True, "m1a_context": True, "m1b_near": True, "m1b_far": True,
++                   "overlap_band": False}
++LINES = ("m1a_in_box", "m1b_in_box")              # a fall here is a gain
++GUARDS = ("m2", "m1c", "m2_clean_words")          # these must not move the wrong way beyond the noise
++DIAGNOSTICS = ("m1a", "m1a_in_box_context", "m1a_context", "m1b_near", "m1b_far", "overlap_band")   # in no verdict
++EXTRA_MEASURES = ("m1b_in_box", "m1c", "m2", "m2_clean_words")
++CI = 0.95
++
++# The audits counted by eye: the audit file (relative to TEXTLINES) -> how many of its drawn pieces are plainly a
++# letter or digit (text the detector missed).  Counted by the Task 7 implementer on each contact sheet (64 tiles); a
++# piece of digits fused into a line is borderline and not counted (the borderline tiles are listed in the results
++# note).
++EYE_AUDIT: dict[str, int] = {
++    "baselines/audit/r328-ne.json": 0,
++    "baselines/audit/old-ne-ne.json": 1,           # tile 42, the T of a large "STR..."
++    "runs/control-ne-s0/audit.json": 1,            # tile 22, the 0 of "40"
++    "runs/control-ne-s1/audit.json": 0,
++    "runs/control-ne-s2/audit.json": 0,
++    "runs/composites-ne-s0/audit.json": 0,
++    "runs/composites-ne-s1/audit.json": 0,
++    "runs/composites-ne-s2/audit.json": 0,
++    "baselines/audit/r328-sw.json": 0,
++    "baselines/audit/old-sw-sw.json": 3,           # tiles 25, 39, 63: street-name letters and the T of "...CTS"
++    "runs/control-sw-s0/audit.json": 3,            # tiles 25, 38, 44: street-name letters
++}
++
++
++def _all(values) -> bool | None:
++    """False when any is False, else None when any is None, else True."""
++    values = list(values)
++    if any(v is False for v in values):
++        return False
++    if any(v is None for v in values):
++        return None
++    return True
++
++
++def value(folder: Path, measure: str, quarter: str | None = None) -> float | None:
++    """`measure`'s share called text (chance >= 0.5) in the run or baseline `folder` (its blocks.npz), on `quarter`'s
++    blocks only when given; None when it has no px there."""
++    with np.load(Path(folder) / linegate.BLOCKS_FILE) as z:
++        px, called, q = z[f"{measure}.px"], z[f"{measure}.called_05"], z[f"{measure}.quarter"]
++    if quarter is not None:
++        keep = q == paths.QUARTERS.index(quarter)
++        px, called = px[keep], called[keep]
++    return float(called.sum() / px.sum()) if px.sum() > 0 else None
++
++
++def seed_noise(noise_runs: list[Path], measure: str) -> float:
++    """The largest difference in `measure` between two of `noise_runs` (0 for one run)."""
++    vals = [value(r, measure) for r in noise_runs]
++    return max((abs(a - b) for a, b in itertools.combinations(vals, 2)), default=0.0)
++
++
++def compare(a: list[Path], b: list[Path], measure: str, noise_runs: list[Path], boot: int, seed: int) -> dict:
++    """`linegate.paired` (b less a) with the noise and which way it moved: `falls` / `rises` when the interval lies
++    below / above 0, `held` when it did not move the wrong way by more than the noise (lower-is-better measures may
++    rise by the noise at most, the others fall by it at most)."""
++    p = linegate.paired(a, b, measure, boot, seed)
++    half = (p["hi"] - p["lo"]) / 2
++    seeds = seed_noise(noise_runs, measure)
++    noise = max(seeds, half)
++    held = p["diff"] <= noise if LOWER_IS_BETTER[measure] else p["diff"] >= -noise
++    return p | {"half_width": half, "seed_noise": seeds, "noise": noise, "falls": p["hi"] < 0, "rises": p["lo"] > 0,
++                "held": bool(held)}
++
++
++def clopper_pearson(k: int, n: int) -> tuple[float, float]:
++    lo = 0.0 if k == 0 else float(beta.ppf((1 - CI) / 2, k, n - k + 1))
++    hi = 1.0 if k == n else float(beta.ppf(1 - (1 - CI) / 2, k + 1, n - k))
++    return lo, hi
++
++
++def baseline_audit_file(folder: Path, quarter: str) -> Path:
++    """Where `audit` writes a baseline's audit on one quarter: <baselines>/audit/<name>-<quarter>.json."""
++    folder = Path(folder)
++    return folder.parent / "audit" / f"{folder.name}-{quarter}.json"
++
++
++def audit_estimate(files: list[Path], counts: Mapping) -> dict | None:
++    """The missed text pieces of an arm (`files`: each run's audit.json) by its eye counts (`counts`: file -> plainly
++    text among its drawn pieces): the mean missed letter-sized pieces x the pooled share judged text, with its
++    Clopper-Pearson interval.  None when a file is not counted (or missing)."""
++    counts = {Path(k).resolve(): v for k, v in counts.items()}
++    got = []
++    for f in files:
++        f = Path(f).resolve()
++        if f not in counts or not f.is_file():
++            return None
++        a = json.loads(f.read_text())
++        got.append((a["letter_sized_pieces"], a["missed_below_0.5"], len(a["items"]), int(counts[f])))
++    pieces, missed = float(np.mean([g[0] for g in got])), float(np.mean([g[1] for g in got]))
++    n, k = sum(g[2] for g in got), sum(g[3] for g in got)
++    lo, hi = clopper_pearson(k, n)
++    return {"pieces": pieces, "missed": missed, "drawn": n, "text": k, "share": k / n, "share_ci": [lo, hi],
++            "missed_text": missed * k / n, "missed_text_ci": [missed * lo, missed * hi]}
++
++
++def adoptable(arm: list[Path], baselines: Mapping[str, Path], quarter: str | None, noise_runs: list[Path],
++              audit_counts: Mapping, boot: int, seed: int) -> dict:
++    """The adoptable rule (the module) for one arm against each baseline; `adoptable` (with the clean-word guard) and
++    `as_written` (without it) are True, False or None (pending: only the eye counts of the audit are missing; also
++    None when no baseline is given)."""
++    out: dict = {}
++    mine = audit_estimate([r / "audit.json" for r in arm], audit_counts)
++    for name, folder in baselines.items():
++        d = {m: compare([folder], arm, m, noise_runs, boot, seed) for m in VERDICT}
++        theirs = audit_estimate([baseline_audit_file(folder, quarter)], audit_counts) if quarter else None
++        audit_ok = None if mine is None or theirs is None else mine["missed_text"] <= theirs["missed_text_ci"][1]
++        cond = {"m1a_in_box falls": d["m1a_in_box"]["falls"], "m1b_in_box falls": d["m1b_in_box"]["falls"],
++                "m2 held": d["m2"]["held"], "m1c held": d["m1c"]["held"], "audit held": audit_ok,
++                "m2_clean_words held": d["m2_clean_words"]["held"]}
++        out[name] = {"diffs": d, "audit": {"arm": mine, "baseline": theirs}, "conditions": cond,
++                     "as_written": _all(v for k, v in cond.items() if k != "m2_clean_words held"),
++                     "adoptable": _all(cond.values())}
++    every = list(out.values())
++    out["as_written"] = _all(o["as_written"] for o in every) if every else None
++    out["adoptable"] = _all(o["adoptable"] for o in every) if every else None
++    return out
++
++
++def _quarter_of(folder: Path) -> str | None:
++    f = Path(folder) / "run.json"
++    return json.loads(f.read_text()).get("quarter") if f.is_file() else None
++
++
++def extra_values(folder: Path, series: str = EXTRA) -> dict | None:
++    """A run's headline scores on another map's sheets (`extra/<series>/scores.json`), called >= 0.5; None if none."""
++    f = Path(folder) / "extra" / series / linegate.SCORES_FILE
++    if not f.is_file():
++        return None
++    s = json.loads(f.read_text())
++    return {m: (s[m]["called_05"] if isinstance(s.get(m), dict) else None) for m in EXTRA_MEASURES} | {
++        "px": {m: (s[m]["px"] if isinstance(s.get(m), dict) else None) for m in EXTRA_MEASURES}}
++
++
++def _numbers_say(d: dict, cond: dict) -> str:
++    gains = any(d[m]["falls"] for m in LINES)
++    if all(v for k, v in cond.items() if k != "eye_ok"):
++        return "variant"
++    return "mixed" if gains else "control"
++
++
++def verdict(control: list[Path], variant: list[Path], baselines: Mapping[str, Path], eye_ok: bool | None, *,
++            quarter: str | None = None, noise_runs: list[Path] | None = None, audit_counts: Mapping | None = None,
++            boot: int = 1000, seed: int = 0) -> dict:
++    """The decision (the module's rule) between the runs `control` and `variant` (run folders of one quarter), and
++    each arm's adoptability against `baselines` (name -> folder).  `noise_runs` (default `control`) give the seed
++    noise; `audit_counts` (audit file -> plainly text among its drawn pieces) the audits' eye counts.  With no variant
++    runs only the control's adoptability is decided (`verdict` None)."""
++    control, variant = [Path(p) for p in control], [Path(p) for p in variant]
++    noise_runs = [Path(p) for p in (noise_runs or control)]
++    quarter = quarter or _quarter_of(control[0])
++    audit_counts = audit_counts or {}
++    base = {n: Path(f) for n, f in baselines.items()}
++    out: dict = {"quarter": quarter, "control": [str(p) for p in control], "variant": [str(p) for p in variant],
++                 "baselines": {n: str(f) for n, f in base.items()}, "noise_runs": [str(p) for p in noise_runs],
++                 "eye_ok": eye_ok, "boot": boot, "seed": seed,
++                 "values": {p.name: {m: value(p, m) for m in (*VERDICT, *DIAGNOSTICS)} for p in [*control, *variant]}
++                 | {n: {m: value(f, m, quarter) for m in (*VERDICT, *DIAGNOSTICS)} for n, f in base.items()},
++                 "seed_noise": {m: seed_noise(noise_runs, m) for m in (*VERDICT, *DIAGNOSTICS)},
++                 "extra": {p.name: extra_values(p) for p in [*control, *variant]}}
++    arms = {"control": control} | ({"variant": variant} if variant else {})
++    out["adoptable"] = {a: adoptable(r, base, quarter, noise_runs, audit_counts, boot, seed) for a, r in arms.items()}
++    if not variant:
++        return out | {"verdict": None, "numbers_say": None}
++    d = {m: compare(control, variant, m, noise_runs, boot, seed) for m in (*VERDICT, *DIAGNOSTICS)}
++    cond = {"m1a_in_box falls": d["m1a_in_box"]["falls"], "m2 held": d["m2"]["held"], "m1c held": d["m1c"]["held"],
++            "m2_clean_words held": d["m2_clean_words"]["held"], "eye_ok": eye_ok}
++    says = _numbers_say(d, cond)
++    if eye_ok is None:
++        v = "pending-eye"
++    elif says == "variant" and eye_ok is False:
++        v = "mixed"
++    else:
++        v = says
++    return out | {"variant_vs_control": d, "conditions": cond, "numbers_say": says, "verdict": v}
++
++
++# --- the write-up ----------------------------------------------------------------------------------------------------
++
++def _n(v, digits: int = 4) -> str:
++    return "-" if v is None else f"{v:.{digits}f}"
++
++
++def _diff(p: dict) -> str:
++    return f"{p['diff']:+.4f} [{p['lo']:+.4f}, {p['hi']:+.4f}]"
++
++
++def markdown(v: dict) -> str:
++    """The verdict as tables: every run's and baseline's values, the paired differences with their intervals and
++    noise, the conditions, adoptability, the audits and the 1990-96 numbers."""
++    ms = (*VERDICT, *DIAGNOSTICS)
++    lines = [(f"## Quarter {v['quarter']}: verdict {v['verdict']} (the numbers say {v['numbers_say']}; eye_ok "
++              f"{v['eye_ok']})"), "",
++             ("Share of each measure's ink called text (chance >= 0.5). Lower is better for m1a*, m1b*, m1c; higher "
++              "for m2, m2_clean_words, overlap_band. Baselines on this quarter's blocks."), "",
++             "| run | " + " | ".join(ms) + " |", "|---|" + "---|" * len(ms)]
++    for name, vals in v["values"].items():
++        lines.append(f"| {name} | " + " | ".join(_n(vals[m]) for m in ms) + " |")
++    lines += ["", f"Seed noise (largest difference between two of {', '.join(Path(p).name for p in v['noise_runs'])}): "
++              + ", ".join(f"{m} {_n(v['seed_noise'][m])}" for m in ms), ""]
++    if v.get("variant_vs_control"):
++        lines += ["### Variant less control (mean of each arm's runs; 95% paired interval over blocks)", "",
++                  "| measure | diff [95%] | half-width | seed noise | noise | falls | rises | held |",
++                  "|---|---|---|---|---|---|---|---|"]
++        for m, p in v["variant_vs_control"].items():
++            lines.append(f"| {m}{'' if m in VERDICT else ' (diagnostic)'} | {_diff(p)} | {_n(p['half_width'])} | "
++                         f"{_n(p['seed_noise'])} | {_n(p['noise'])} | {p['falls']} | {p['rises']} | {p['held']} |")
++        lines += ["", "Conditions: " + "; ".join(f"{k}: {c}" for k, c in v["conditions"].items()), ""]
++    for arm, a in v["adoptable"].items():
++        lines += [(f"### Adoptable: {arm} (with the clean-word guard: {a['adoptable']}; as written: "
++                   f"{a['as_written']})"), "",
++                  "| baseline | " + " | ".join(VERDICT) + " | audit held | adoptable | as written |",
++                  "|---|" + "---|" * (len(VERDICT) + 3)]
++        for name, b in a.items():
++            if not isinstance(b, dict):
++                continue
++            cells = [f"{_diff(b['diffs'][m])} noise {_n(b['diffs'][m]['noise'])}" for m in VERDICT]
++            lines.append(f"| {name} | " + " | ".join(cells) + f" | {b['conditions']['audit held']} | "
++                         f"{b['adoptable']} | {b['as_written']} |")
++        lines.append("")
++        audits = {n: b["audit"]["baseline"] for n, b in a.items() if isinstance(b, dict)}
++        mine = next((b["audit"]["arm"] for b in a.values() if isinstance(b, dict)), None)
++        for who, e in {arm: mine, **audits}.items():
++            if e is None:
++                lines.append(f"- audit {who}: not counted by eye yet")
++            else:
++                lines.append(
++                    f"- audit {who}: {e['pieces']:.0f} letter-sized pieces, {e['missed']:.0f} missed; "
++                    f"{e['text']}/{e['drawn']} drawn plainly text ({e['share']:.3f} [{e['share_ci'][0]:.3f}, "
++                    f"{e['share_ci'][1]:.3f}]); missed text pieces {e['missed_text']:.1f} "
++                    f"[{e['missed_text_ci'][0]:.1f}, {e['missed_text_ci'][1]:.1f}]")
++        lines.append("")
++    if any(v["extra"].values()):
++        lines += [f"### {EXTRA} (this quarter's px; no table, so no M1a)", "",
++                  "| run | " + " | ".join(EXTRA_MEASURES) + " |", "|---|" + "---|" * len(EXTRA_MEASURES)]
++        for name, e in v["extra"].items():
++            if e:
++                lines.append(f"| {name} | " + " | ".join(_n(e[m]) for m in EXTRA_MEASURES) + " |")
++        lines.append("")
++    return "\n".join(lines) + "\n"
++
++
++# --- the command line ------------------------------------------------------------------------------------------------
++
++def _runs_of(name: str, quarter: str) -> list[Path]:
++    found = sorted(p for p in RUNS_DIR.glob(f"{name}-{quarter}-s*") if (p / linegate.BLOCKS_FILE).is_file())
++    if not found:
++        raise SystemExit(f"no scored runs {name}-{quarter}-s* in {RUNS_DIR}")
++    return found
++
++
++def baseline_sources(quarter: str) -> dict[str, Path]:
++    return {"r328": BASELINES / "r328", f"old-{quarter}": BASELINES / f"old-{quarter}"}
++
++
++def audit_baselines(quarter: str) -> None:
++    """r328's and old-<quarter>'s missed-text audits on one quarter: the same pool, draw and picture as a run's own
++    audit (`variant.score`), written to baselines/audit/<name>-<quarter>.{json,png}.  One CityGeo: about 7 GB."""
++    import audit
++    import variant
++
++    from sfzmaps.solver.textnet import data
++    sheets = data.load_sheets([paths.SERIES], hold_out_validation=False)
++    geo = linegate.CityGeo()
++    srcs = {"r328": linegate.folder_source(BASELINES / "r328", "nested"),
++            f"old-{quarter}": linegate.folder_source(paths.SOLVER_DIR / f"text-{quarter}" / "chance", "flat")}
++    ink_of = lambda sheet: data.page_ink(next(sd for sd in sheets if sd.sheet == sheet))  # noqa: E731
++    for name, src in srcs.items():
++        cands, total = audit.candidates(sheets, src, (quarter,), geo)
++        items = audit.draw(cands, variant.AUDIT_N, 0)
++        f = baseline_audit_file(BASELINES / name, quarter)
++        audit.sheet(items, f.with_suffix(".png"), ink_of)
++        f.write_text(json.dumps({"letter_sized_pieces": total, "missed_below_0.5": len(cands), "items": items},
++                                indent=1) + "\n")
++        print(name, quarter, "letter-sized", total, "missed", len(cands), "->", f, flush=True)
++
++
++def regate_extra(names: list[str], series: str = EXTRA) -> None:
++    """Gate again the runs `names`' predictions on another map's sheets (their saved `chance/<series>/`), as
++    `variant.score` does, so that runs gated before a measure was added (m2_clean_words) carry it too.  The measures
++    already there must come out the same (px and share called), or it stops before writing."""
++    import variant
++
++    from sfzmaps.solver.textnet import data
++    sheets = data.load_sheets([series], hold_out_validation=False)
++    for name in names:
++        run = RUNS_DIR / name
++        quarter = _quarter_of(run)
++        out = run / "extra" / series
++        old = json.loads((out / linegate.SCORES_FILE).read_text())
++        r, t = linegate.gate_sheets(sheets, linegate.folder_source(run / "chance" / series, "flat"), (quarter,),
++                                    variant.ExtraGeo())
++        for m in ("m1b_in_box", "m1c", "m2", "overlap_band"):
++            if (old[m]["px"], old[m]["called_05"]) != (r[m]["px"], r[m]["called_05"]):
++                raise SystemExit(f"{name}: {m} differs from the gate written before ({old[m]['px']}, "
++                                 f"{old[m]['called_05']} now {r[m]['px']}, {r[m]['called_05']}): not rewritten")
++        linegate.write(r, t, out)
++        print(name, series, {m: r[m]["called_05"] for m in EXTRA_MEASURES}, flush=True)
++
++
++def compare_panel(quarter: str, names: list[str]) -> Path:
++    """The picture panel with the runs `names` side by side, then r328 and the old quarter model."""
++    import panel
++    srcs = {n: linegate.folder_source(RUNS_DIR / n / "chance", "flat") for n in names}
++    srcs |= {"r328": linegate.folder_source(BASELINES / "r328", "nested"),
++             f"old-{quarter}": linegate.folder_source(paths.SOLVER_DIR / f"text-{quarter}" / "chance", "flat")}
++    out = RUNS_DIR / f"compare-{quarter}.png"
++    return panel.render(srcs, out, f"red = ink called text (chance >= 0.5), grey = other ink; runs are 0 outside "
++                                   f"{quarter}")
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
++    sub = ap.add_subparsers(dest="cmd", required=True)
++    a = sub.add_parser("audit")
++    a.add_argument("quarter", choices=paths.QUARTERS)
++    p = sub.add_parser("panel")
++    p.add_argument("quarter", choices=paths.QUARTERS)
++    p.add_argument("runs", nargs="+")
++    x = sub.add_parser("regate-extra")
++    x.add_argument("runs", nargs="+")
++    v = sub.add_parser("verdict")
++    v.add_argument("quarter", choices=paths.QUARTERS)
++    v.add_argument("--control", default="control")
++    v.add_argument("--variant", default=None, help="the variant's run name (none: only the control's adoptability)")
++    v.add_argument("--noise", default=None, help="the quarter of the control runs that give the seed noise")
++    v.add_argument("--eye-ok", choices=("yes", "no"), default=None)
++    args = ap.parse_args()
++    if args.cmd == "audit":
++        audit_baselines(args.quarter)
++    elif args.cmd == "panel":
++        print(compare_panel(args.quarter, args.runs))
++    elif args.cmd == "regate-extra":
++        regate_extra(args.runs)
++    else:
++        control = _runs_of(args.control, args.quarter)
++        variant = _runs_of(args.variant, args.quarter) if args.variant else []
++        noise = _runs_of(args.control, args.noise) if args.noise else None
++        eye = None if args.eye_ok is None else args.eye_ok == "yes"
++        counts = {TEXTLINES / k: n for k, n in EYE_AUDIT.items()}
++        r = verdict(control, variant, baseline_sources(args.quarter), eye, quarter=args.quarter, noise_runs=noise,
++                    audit_counts=counts)
++        stem = RUNS_DIR / f"verdict-{args.variant or args.control}-{args.quarter}"
++        stem.with_suffix(".json").write_text(json.dumps(r, indent=1) + "\n")
++        stem.with_suffix(".md").write_text(markdown(r))
++        print(markdown(r))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/pipeline/tests/test_textlines_decide.py b/pipeline/tests/test_textlines_decide.py
+new file mode 100644
+index 0000000..99d936e
+--- /dev/null
++++ b/pipeline/tests/test_textlines_decide.py
+@@ -0,0 +1,161 @@
++"""scripts/textlines/decide.py: the verdict between a control and a variant, by the rule written before the runs, on
++fake run folders (synthetic blocks.npz in the gate's layout)."""
++import json
++import sys
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "textlines"))
++import decide  # noqa: E402
++import numpy as np  # noqa: E402
++import pytest  # noqa: E402
++
++from sfzmaps.solver.textnet import linegate  # noqa: E402
++
++BLOCKS = 300
++PX = 1000.0
++NE = 1                                   # paths.QUARTERS.index("ne")
++# The control's three seeds, near Task 5's NE values; the spread between seeds (0.01) is the seed noise.
++CONTROL = [{"m1a_in_box": 0.40, "m1b_in_box": 0.52, "m1c": 0.050, "m2": 0.965, "m2_clean_words": 0.930},
++           {"m1a_in_box": 0.41, "m1b_in_box": 0.53, "m1c": 0.055, "m2": 0.970, "m2_clean_words": 0.935},
++           {"m1a_in_box": 0.405, "m1b_in_box": 0.525, "m1c": 0.052, "m2": 0.960, "m2_clean_words": 0.925}]
++OLD_NE = {"m1a_in_box": 0.63, "m1b_in_box": 0.82, "m1c": 0.025, "m2": 0.968, "m2_clean_words": 0.957}
++
++
++def fake_run(folder: Path, rates: dict, seed: int, quarter: str = "ne") -> Path:
++    """A folder as `linegate.write` leaves it: every measure's sums per block, the share called near `rates[m]` (0.5
++    for a measure not given), each block off by an amount shared by every run (the block's own difficulty) plus a
++    little of the run's own."""
++    shared = np.random.default_rng(99)
++    own = np.random.default_rng(seed)
++    arrays = {}
++    for m in linegate.MEASURES:
++        r = np.clip(rates.get(m, 0.5) + shared.normal(0, 0.01, BLOCKS) + own.normal(0, 0.01, BLOCKS), 0, 1)
++        called = np.round(r * PX)
++        arrays |= {f"{m}.quarter": np.full(BLOCKS, NE, np.int8), f"{m}.block": np.arange(BLOCKS, dtype=np.int32),
++                   f"{m}.px": np.full(BLOCKS, PX), f"{m}.called_05": called, f"{m}.called_09": called * 0.9,
++                   f"{m}.chance": called, f"{m}.log_loss": PX - called}
++    folder.mkdir(parents=True)
++    np.savez(folder / linegate.BLOCKS_FILE, block_key=np.array("test blocks"), **arrays)
++    (folder / "run.json").write_text(json.dumps({"quarter": quarter, "seed": seed}))
++    return folder
++
++
++def arm(root: Path, name: str, seeds_rates: list[dict]) -> list[Path]:
++    return [fake_run(root / f"{name}-ne-s{s}", r, 10 * s + len(name)) for s, r in enumerate(seeds_rates)]
++
++
++def changed(rates: list[dict], **new) -> list[dict]:
++    return [r | new for r in rates]
++
++
++def flat_lines(rates: list[dict]) -> list[dict]:
++    """The control's line measures a little higher (0.003, far under the noise), so they cannot fall by chance."""
++    return [r | {"m1a_in_box": r["m1a_in_box"] + 0.003, "m1b_in_box": r["m1b_in_box"] + 0.003} for r in rates]
++
++
++ADOPTABLE = changed(CONTROL, m1a_in_box=0.30, m1b_in_box=0.45, m1c=0.026, m2=0.968, m2_clean_words=0.955)
++
++
++@pytest.fixture
++def control(tmp_path):
++    return arm(tmp_path / "runs", "control", CONTROL)
++
++
++@pytest.fixture
++def baselines(tmp_path):
++    return {"old-ne": fake_run(tmp_path / "baselines" / "old-ne", OLD_NE, 1000)}
++
++
++def test_better_lines_with_the_same_text_and_the_eye_ok_is_the_variant(tmp_path, control, baselines):
++    variant = arm(tmp_path / "runs", "composites", changed(CONTROL, m1a_in_box=0.30, m1b_in_box=0.45))
++    v = decide.verdict(control, variant, baselines, True, boot=200)
++    assert v["verdict"] == "variant"
++    assert all(v["conditions"].values())
++    d = v["variant_vs_control"]["m1a_in_box"]
++    assert d["diff"] == pytest.approx(-0.105, abs=0.005) and d["hi"] < 0
++    # the noise is the control's seed spread (0.01), wider here than the paired interval
++    assert v["variant_vs_control"]["m2"]["noise"] == pytest.approx(0.010, abs=2e-3)
++    assert v["variant_vs_control"]["m2"]["seed_noise"] >= v["variant_vs_control"]["m2"]["half_width"]
++
++
++def test_less_text_beyond_the_noise_is_mixed(tmp_path, control, baselines):
++    variant = arm(tmp_path / "runs", "composites", changed(CONTROL, m1a_in_box=0.30, m2=0.90))
++    v = decide.verdict(control, variant, baselines, True, boot=200)
++    assert v["verdict"] == "mixed"
++    assert v["conditions"]["m1a_in_box falls"] and not v["conditions"]["m2 held"]
++
++
++def test_clean_words_lost_beyond_the_noise_is_mixed(tmp_path, control, baselines):
++    """The controller's ruling: m2_clean_words guards the verdict as m2 does."""
++    variant = arm(tmp_path / "runs", "composites", changed(CONTROL, m1a_in_box=0.30, m2_clean_words=0.88))
++    v = decide.verdict(control, variant, baselines, True, boot=200)
++    assert v["verdict"] == "mixed"
++    assert v["conditions"]["m2 held"] and not v["conditions"]["m2_clean_words held"]
++
++
++def test_no_eye_yet_is_pending_and_says_what_the_numbers_say(tmp_path, control, baselines):
++    variant = arm(tmp_path / "runs", "composites", changed(CONTROL, m1a_in_box=0.30, m1b_in_box=0.45))
++    v = decide.verdict(control, variant, baselines, None, boot=200)
++    assert v["verdict"] == "pending-eye"
++    assert v["numbers_say"] == "variant"
++    no = decide.verdict(control, variant, baselines, False, boot=200)
++    assert no["verdict"] == "mixed"          # the numbers gain, the eye says no: a split
++
++
++def test_m1b_down_with_m1a_flat_is_mixed(tmp_path, control, baselines):
++    variant = arm(tmp_path / "runs", "composites", changed(flat_lines(CONTROL), m1b_in_box=0.40))
++    v = decide.verdict(control, variant, baselines, True, boot=200)
++    assert v["verdict"] == "mixed"
++    assert v["variant_vs_control"]["m1b_in_box"]["hi"] < 0 and not v["conditions"]["m1a_in_box falls"]
++
++
++def test_a_variant_that_gains_nothing_leaves_the_control(tmp_path, control, baselines):
++    variant = arm(tmp_path / "runs", "composites", changed(flat_lines(CONTROL), m1c=0.10))
++    v = decide.verdict(control, variant, baselines, True, boot=200)
++    assert v["verdict"] == "control"
++
++
++def test_adoptable_needs_every_condition_against_the_baseline(tmp_path, control, baselines):
++    """The control loses m1c to old-ne (0.05 vs 0.025) beyond the noise; a variant that keeps m1c, m2 and the clean
++    words at old-ne's level and lowers both line measures is adoptable, pending until the audit is counted by eye."""
++    variant = arm(tmp_path / "runs", "composites", ADOPTABLE)
++    v = decide.verdict(control, variant, baselines, True, boot=200)
++    c, w = v["adoptable"]["control"], v["adoptable"]["variant"]
++    assert c["old-ne"]["conditions"]["m1c held"] is False and c["adoptable"] is False
++    assert w["old-ne"]["conditions"]["m1a_in_box falls"] and w["old-ne"]["conditions"]["m1b_in_box falls"]
++    assert w["old-ne"]["conditions"]["audit held"] is None and w["adoptable"] is None
++
++
++def write_audit(f: Path, missed: int, pieces: int = 1000, drawn: int = 64) -> Path:
++    f.parent.mkdir(parents=True, exist_ok=True)
++    f.write_text(json.dumps({"letter_sized_pieces": pieces, "missed_below_0.5": missed,
++                             "items": [{"sheet": "s", "x": i, "y": 0} for i in range(drawn)]}))
++    return f
++
++
++def test_the_audit_holds_unless_more_missed_text_than_the_baselines_upper_bound(tmp_path, control, baselines):
++    variant = arm(tmp_path / "runs", "composites", ADOPTABLE)
++    base = write_audit(decide.baseline_audit_file(baselines["old-ne"], "ne"), missed=900)
++    runs = [write_audit(r / "audit.json", missed=800) for r in variant]
++    # 2 of the baseline's 64 drawn are text: about 28 missed text pieces, at most 0.108 x 900 = 97 at 95%
++    few = {base: 2} | {r: 2 for r in runs}
++    v = decide.verdict(control, variant, baselines, True, audit_counts=few, boot=200)
++    a = v["adoptable"]["variant"]["old-ne"]
++    assert a["audit"]["arm"]["missed_text"] == pytest.approx(800 * 6 / 192)
++    assert a["audit"]["baseline"]["missed_text_ci"][1] == pytest.approx(900 * 0.1084, rel=0.01)
++    assert a["conditions"]["audit held"] is True and v["adoptable"]["variant"]["adoptable"] is True
++    many = {base: 2} | {r: 20 for r in runs}  # 250 missed text pieces
++    v = decide.verdict(control, variant, baselines, True, audit_counts=many, boot=200)
++    assert v["adoptable"]["variant"]["old-ne"]["conditions"]["audit held"] is False
++    assert v["adoptable"]["variant"]["adoptable"] is False
++
++
++def test_a_single_seed_comparison_takes_its_noise_from_the_noise_runs(tmp_path, control):
++    """On SW one seed each: the seed noise comes from the control's NE seeds."""
++    sw_c = [fake_run(tmp_path / "runs" / "control-sw-s0", CONTROL[0], 1, "sw")]
++    sw_v = [fake_run(tmp_path / "runs" / "composites-sw-s0", CONTROL[0] | {"m1a_in_box": 0.30}, 2, "sw")]
++    v = decide.verdict(sw_c, sw_v, {}, True, noise_runs=control, boot=200)
++    assert v["variant_vs_control"]["m2"]["seed_noise"] == pytest.approx(0.010, abs=2e-3)
++    assert v["adoptable"]["variant"]["adoptable"] is None          # no baseline given: nothing to adopt against
++    alone = decide.verdict(sw_c, sw_v, {}, True, boot=200)
++    assert alone["variant_vs_control"]["m2"]["seed_noise"] == 0.0

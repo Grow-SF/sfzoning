@@ -1,0 +1,1841 @@
+# Review package: 891ce2e..8518d6c
+
+## Commits
+8518d6c textnet: composites inside real crops (real clean words onto real lines, real line pieces across clean words) at the measured crossing rate
+
+## Files changed
+ pipeline/scripts/textlines/composites.py         | 220 ++++++++
+ pipeline/scripts/textlines/variant.py            |  44 +-
+ pipeline/src/sfzmaps/solver/textnet/composite.py | 643 +++++++++++++++++++++++
+ pipeline/src/sfzmaps/solver/textnet/train.py     |  52 +-
+ pipeline/tests/test_solver_textnet.py            |   4 +-
+ pipeline/tests/test_textlines_variant.py         |  34 +-
+ pipeline/tests/test_textnet_composite.py         | 450 ++++++++++++++++
+ 7 files changed, 1416 insertions(+), 31 deletions(-)
+
+## Diff
+diff --git a/pipeline/scripts/textlines/composites.py b/pipeline/scripts/textlines/composites.py
+new file mode 100644
+index 0000000..9e87450
+--- /dev/null
++++ b/pipeline/scripts/textlines/composites.py
+@@ -0,0 +1,220 @@
++"""The composites' measures and checks on the training maps (`textnet.composite`), made before a composites run, on the
++CPU, sheets 4 at a time, one thread each:
++
++    uv run python scripts/textlines/composites.py
++
++Writes to `data/solver/experiments/textlines/`:
++  distributions.json  `composite.measure` of the 2000 sheets with each quarter and the owner's answered blocks held out
++                      (`by_held_quarter`); at the top NE's, the quarter the composites run first (`cross_by_kind`,
++                      `cross_by_kind_ink`, `clean_words`, `clean_word_texture`, `line_texture`); `p` per quarter, the
++                      word-weighted share of words crossed over all kinds (the composites' share, `--composites`);
++                      `banks` per quarter, each map's bank (`Bank.sizes`: clean words, pieces, words crossed by kind)
++  composites.json     100 batches of `train.draw` (stage.DEFAULT_RECIPE with the label rule lines-unknown, seed 0)
++                      timed at composites p and at 0, alone and with `batch_tensors` (the prefetch thread's work); what
++                      the composites were (`Bank.tally`); the texture check: `texture_stats` of the text ink of
++                      composites and of the real crops at the same centres (page scale, not turned), and of clean words
++  composites.png      24 composites as the training sees them (12 word onto lines, 12 line onto a word): text red, other
++                      ink grey, px with no lesson (unknown) tinted blue, the pasted word's frame or the clean word's box
++                      green
++"""
++import os
++
++for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS",
++           "OPENCV_FOR_THREADS_NUM"):
++    os.environ.setdefault(_k, "1")
++import dataclasses  # noqa: E402
++import logging  # noqa: E402
++import time  # noqa: E402
++
++import cv2  # noqa: E402
++import numpy as np  # noqa: E402
++
++cv2.setNumThreads(1)
++
++from sfzmaps.solver import paths  # noqa: E402
++from sfzmaps.solver.textnet import composite, data, reader_stage, stage, train, zones  # noqa: E402
++
++OUT = zones.TEXTLINES_DIR
++THREADS = 4
++FIRST = "ne"              # the quarter the composites run first: its numbers are the file's top level
++BATCHES = 100             # batches timed
++SEED = 0
++PICTURES = 12             # composites of each kind in the picture
++CHECKS = 150              # composites of each kind (and real crops) in the texture check
++log = logging.getLogger("composites")
++
++
++def _p(m: dict) -> float:
++    return m["cross_by_kind"]["all"]["share"]
++
++
++def _centre(pools, rng):
++    """A crop's centre, scale and turns as `train.draw` draws them."""
++    pool = pools[0] if rng.random() < train.TEXT_SHARE else pools[1]
++    i, y, x = pool[rng.integers(len(pool))]
++    scale = float(np.exp(rng.uniform(np.log(train.SCALE[0]), np.log(train.SCALE[1]))))
++    return i, y, x, scale, int(rng.integers(4))
++
++
++def time_draw(sheets, pools, recipe, bank) -> dict:
++    """BATCHES batches of `train.draw` from `default_rng(SEED)`, timed (ms a batch), alone and with `batch_tensors`."""
++    rng = np.random.default_rng(SEED)
++    t0 = time.perf_counter()
++    batches = [train.draw(sheets, pools, recipe, rng, bank) for _ in range(BATCHES)]
++    drawn = time.perf_counter() - t0
++    t0 = time.perf_counter()
++    for b in batches:
++        train.batch_tensors(b, recipe.ink_only)
++    tensors = time.perf_counter() - t0
++    return {"composites": recipe.composites, "batches": BATCHES, "batch": recipe.batch, "crop": recipe.crop,
++            "draw_ms_per_batch": round(1000 * drawn / BATCHES, 1),
++            "draw_and_tensors_ms_per_batch": round(1000 * (drawn + tensors) / BATCHES, 1)}
++
++
++def _to_crop(r: float, c: float, page: tuple, size: int, turns: int) -> tuple[float, float]:
++    """A window px (row, col) of a crop's page window (y0, x0, src) where it lies in the finished crop: resized to
++    size and turned `turns` quarter turns counter-clockwise."""
++    _, _, src = page
++    r, c = r * size / src, c * size / src
++    for _ in range(turns % 4):
++        r, c = size - 1 - c, r
++    return r, c
++
++
++def _tile(c: dict, info: dict, bank, size: int, turns: int, caption: str) -> np.ndarray:
++    ink, text, known = c["ink"], c["text"].astype(bool), c["known"]
++    img = np.full((*ink.shape, 3), 255, np.uint8)
++    img[~known & ~ink] = (255, 228, 205)                       # no lesson, paper: pale blue (BGR)
++    img[ink & ~text] = (125, 125, 125)                         # ink, not text: grey
++    img[ink & ~text & ~known] = (200, 170, 150)                # ink with no lesson: blue-grey
++    img[text & known] = (40, 40, 225)                          # text: red
++    img[text & ~known] = (150, 150, 235)
++    if info.get("mode") == "a":
++        oy, ox, fh, fw = info["placed"]
++        corners = [(oy, ox), (oy, ox + fw - 1), (oy + fh - 1, ox + fw - 1), (oy + fh - 1, ox)]
++    elif info.get("mode") == "b":
++        y0, x0, _ = info["window"]
++        rect = bank.words[bank.sheets[info["sheet"]].series].rect[info["word"]]
++        corners = [(float(py - y0), float(px - x0)) for px, py in rect]
++    else:
++        corners = []
++    if corners:
++        pts = np.array([_to_crop(r, cc, info["window"], size, turns)[::-1] for r, cc in corners], np.int32)
++        cv2.polylines(img, [pts.reshape(-1, 1, 2)], True, (0, 150, 0), 1)
++    band = np.full((22, ink.shape[1], 3), 255, np.uint8)
++    cv2.putText(band, caption, (4, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 1, cv2.LINE_AA)
++    return np.vstack([img, band])
++
++
++def picture(sheets, pools, bank, recipe, out) -> list[dict]:
++    """PICTURES composites of each kind (`picture`'s rng seeded 5), drawn as `train.draw` would, to `out`."""
++    rng = np.random.default_rng(5)
++    tiles, made = [], []
++    kinds = {v: k for k, v in data.KINDS.items()}
++    for mode, share in (("a", 1.0), ("b", 0.0)):
++        forced = dataclasses.replace(bank, a_share=share)
++        n = 0
++        while n < PICTURES:
++            i, y, x, scale, turns = _centre(pools, rng)
++            c = forced.crop(rng, sheets[i], y, x, recipe.crop, scale, turns)
++            info = forced.last
++            if info["mode"] != mode:
++                continue
++            words = forced.words[sheets[i].series]
++            kind = kinds[int(words.kind[info["word"]])]
++            where = ("on line" if info["on_line"] else "off line") if mode == "a" else "line across"
++            caption = f"({mode}) {where}, {kind}, {sheets[i].series[:9]}, x{scale:.2f}, {turns} turn"
++            tiles.append(_tile(c, info, forced, recipe.crop, turns, caption))
++            made.append({"mode": mode, "series": sheets[i].series, "kind": kind, "scale": round(scale, 3),
++                         "turns": turns, **{k: v for k, v in info.items() if k in ("on_line", "window")}})
++            n += 1
++    gap = 6
++    rows = []
++    for r in range(0, len(tiles), 6):
++        row = tiles[r:r + 6]
++        rows.append(np.hstack([np.pad(t, ((0, gap), (0, gap), (0, 0)), constant_values=255) for t in row]))
++    sheet = np.vstack(rows)
++    if not cv2.imwrite(str(out), sheet):
++        raise OSError(f"can't write {out}")
++    return made
++
++
++def texture_check(sheets, pools, bank) -> dict:
++    """`texture_stats` of the text ink of CHECKS composites of each kind and of the real crops (lines-unknown, text
++    ink with a lesson) at the same centres, at page scale and not turned (320 px)."""
++    out = {}
++    for mode, share in (("a", 1.0), ("b", 0.0)):
++        forced = dataclasses.replace(bank, a_share=share)
++        rng = np.random.default_rng(11)
++        comp, real = [], []
++        while len(comp) < CHECKS:
++            i, y, x, _, _ = _centre(pools, rng)
++            c = forced.crop(rng, sheets[i], y, x, 320, 1.0, 0)
++            if forced.last["mode"] != mode:
++                continue
++            comp.append(c["ink"] & c["text"].astype(bool))
++            if mode == "b":
++                y, x = forced.last["centre"]
++                i = forced.last["sheet"]
++            r = data.crop_targets(bank.sheets[i], y, x, 320, 1.0, 0, labels="lines-unknown")
++            real.append(r["ink"] & r["text"].astype(bool) & r["known"])
++        out[mode] = {"composites": composite.texture_stats(comp), "real crops": composite.texture_stats(real)}
++    return out
++
++
++def main() -> None:
++    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
++    t0 = time.perf_counter()
++    sheets = data.load_sheets(paths.TEXT_TRAIN_SERIES, hold_out_validation=False)
++    blocks = reader_stage.load_block_area(reader_stage.held_blocks())
++    log.info("loaded %d sheets in %.0f s", len(sheets), time.perf_counter() - t0)
++    by_quarter, banks, seconds = {}, {}, {}
++    keep = None
++    for q, name in enumerate(paths.QUARTERS):
++        areas = (data.Quarter(q), blocks)
++        prepared = zones.prepare(sheets, areas, zones.LINES_DIR, THREADS)
++        t0 = time.perf_counter()
++        by_quarter[name] = composite.measure([sd for sd in prepared if sd.series == paths.SERIES], areas, THREADS)
++        t1 = time.perf_counter()
++        bank = composite.Bank.build(prepared, areas, SEED, THREADS)
++        seconds[name] = {"measure": round(t1 - t0, 1), "bank": round(time.perf_counter() - t1, 1)}
++        banks[name] = bank.sizes()
++        log.info("%s held: p %.4f, bank %s (%.0f s)", name, _p(by_quarter[name]),
++                 {s: (sum(v["clean_words"].values()), v["pieces"]) for s, v in banks[name].items()},
++                 time.perf_counter() - t0)
++        if name == FIRST:
++            keep = (prepared, areas, bank)
++        del prepared, bank
++    first = by_quarter[FIRST]
++    p = {name: _p(m) for name, m in by_quarter.items()}
++    zones._write_json(OUT / "distributions.json", {
++        "held_out": f"the quarter {FIRST} and the answered blocks (reader_stage.held_blocks); by_held_quarter for each",
++        "rules": {"cross_px": composite.CROSS_PX, "clean_px": composite.CLEAN_PX, "piece_px": composite.PIECE_PX,
++                  "tile": composite.TILE, "line_px": "SheetData.line_bits (linerules.line_px grown by 1 px)"},
++        **{k: first[k] for k in ("cross_by_kind", "cross_by_kind_ink", "clean_words", "clean_word_texture",
++                                 "line_texture", "sheets")},
++        "p": p, "by_held_quarter": by_quarter, "banks": banks, "seconds": seconds})
++    log.info("wrote %s: p %s", OUT / "distributions.json", p)
++
++    prepared, areas, bank = keep
++    held = data.hold_out(prepared, areas)
++    t0 = time.perf_counter()
++    pools = train.centre_pools(held)
++    pooled = time.perf_counter() - t0
++    base = dataclasses.replace(stage.DEFAULT_RECIPE, labels="lines-unknown")
++    with_p = dataclasses.replace(base, composites=round(p[FIRST], 4))
++    timing = [time_draw(held, pools, with_p, bank), time_draw(held, pools, base, None)]
++    made = dict(sorted(bank.tally.items()))
++    log.info("draw: %s", timing)
++    bank.tally.clear()
++    shown = picture(held, pools, bank, with_p, OUT / "composites.png")
++    check = texture_check(held, pools, bank)
++    zones._write_json(OUT / "composites.json", {
++        "recipe": dataclasses.asdict(with_p), "timing": timing, "gpu_step_ms": 95,
++        "composites_made_in_timing": made, "pools_seconds": round(pooled, 1), "picture": shown,
++        "texture_check": check, "clean_word_texture": first["clean_word_texture"]})
++    log.info("wrote %s and %s", OUT / "composites.json", OUT / "composites.png")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/pipeline/scripts/textlines/variant.py b/pipeline/scripts/textlines/variant.py
+index ca3d5e3..072c197 100644
+--- a/pipeline/scripts/textlines/variant.py
++++ b/pipeline/scripts/textlines/variant.py
+@@ -1,28 +1,35 @@
+ """Train one detector with one quarter (and the owner's answered blocks) held out, predict that quarter's px on the 2000
+ sheets (and on other maps' sheets, `--extra`), gate it on the text-vs-line gate, and draw the picture panel and the
+ missed-text audit.  What it is for: trying a training change on one held-out quarter, scored on what it did not see.
+ 
+     uv run python scripts/textlines/variant.py control --quarter ne --seed 0 --labels lines-unknown \
+         --extra 1990-1996-zoning
++    uv run python scripts/textlines/variant.py composites --quarter ne --seed 0 --labels lines-unknown \
++        --composites P --extra 1990-1996-zoning
++
++With `--composites P` (and the label rule lines-unknown, which the composites start from) the bank of clean words and
++line pieces (`composite.Bank.build`) is built from the training sheets with the quarter and the answered blocks held
++out, seeded by the run's seed, before the GPU's turn, and handed to the training.
+ 
+ Writes `data/solver/experiments/textlines/runs/<name>-<quarter>-s<seed>/`:
+   model.pt        the detector (`train.save_model`)
+   chance/         the chance of text x 255 of each 2000 sheet, `<sheet>.png`, in the quarter's px and 0 elsewhere; each
+                   extra map's sheets in `<series>/<sheet>.png`
+   scores.json, scores.md, blocks.npz   the gate (`linegate.write`) on the quarter's px of the 2000 sheets
+   extra/<series>/{scores.json, scores.md, blocks.npz}   the gate on each extra map's px in the quarter: it has no table,
+                   so no block and no M1a (block -1, weight 0): read its M1b, M1c and M2
+   panel.png, audit.png, audit.json   `panel.render` (this run beside the held-out detectors and the old quarter
+                   models) and `audit.sheet` (64 missed letter-sized pieces in the quarter)
+   run.json        the recipe, seed, device, the minutes training and predicting took, git head, `git status
+-                  --porcelain -- src` at the start
++                  --porcelain -- src` at the start; with composites the bank's sizes (`Bank.sizes`) and what the
++                  composites were (`Bank.tally`)
+ 
+ One process, one GPU turn around the training and the prediction (nothing else computes on the GPU meanwhile); the gate
+ runs after it, on the CPU, one thread, about 7 GB at the peak: never two at once.
+ """
+ import os
+ 
+ for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS",
+            "OPENCV_FOR_THREADS_NUM"):
+     os.environ.setdefault(_k, "1")
+ import argparse  # noqa: E402
+@@ -35,26 +42,27 @@ import time  # noqa: E402
+ from pathlib import Path  # noqa: E402
+ 
+ import cv2  # noqa: E402
+ import numpy as np  # noqa: E402
+ 
+ cv2.setNumThreads(1)
+ sys.path.insert(0, str(Path(__file__).resolve().parent))
+ 
+ from sfzmaps import gpu  # noqa: E402
+ from sfzmaps.solver import paths, runs  # noqa: E402
+-from sfzmaps.solver.textnet import data, linegate, predict, reader_stage, stage, train, zones  # noqa: E402
++from sfzmaps.solver.textnet import composite, data, linegate, predict, reader_stage, stage, train, zones  # noqa: E402
+ 
+ RUNS_DIR = runs.EXPERIMENTS_DIR / "textlines" / "runs"
+ BASELINES = runs.EXPERIMENTS_DIR / "textlines" / "baselines"
+ LINES = zones.LINES_DIR
+ AUDIT_N = 64
++BANK_THREADS = 4          # sheets the bank is built from at once
+ 
+ 
+ def run_name(name: str, quarter: str, seed: int) -> str:
+     return f"{name}-{quarter}-s{seed}"
+ 
+ 
+ def _git(*args: str) -> str:
+     return subprocess.run(["git", *args], capture_output=True, text=True, check=False,
+                           cwd=Path(__file__).resolve().parents[2]).stdout.strip()
+ 
+@@ -109,23 +117,28 @@ def score(out: Path, quarter: str, scored: list[data.SheetData], chances: dict,
+     (out / "audit.json").write_text(json.dumps({"letter_sized_pieces": total, "missed_below_0.5": len(cands),
+                                                 "items": items}, indent=1) + "\n")
+ 
+ 
+ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | None = None,
+         sheets: list[data.SheetData] | None = None, areas: tuple | None = None, score=None, bank=None,
+         extra_series: tuple[str, ...] = ()) -> Path:
+     """Train `recipe` with `quarter` and `areas` (default: the answered blocks) held out on `sheets` (default: every
+     sheet Terra read of the training maps), predict the quarter's px of the 2000 sheets (0 elsewhere) and of
+     `extra_series`' sheets, and score them with `score(out, quarter, scored, chances, extra)` (default `score`: the gate,
+-    the panel and the audit).  Returns the run's folder (see the module)."""
+-    if bank is not None:
+-        raise NotImplementedError("composites (a bank) are Task 6's: this run has none")
++    the panel and the audit).  With `recipe.composites` the composites come from `bank`, or (None) from the bank of
++    the training sheets with the same areas held out (`composite.Bank.build`, seeded `seed`), built before the GPU's
++    turn.  Returns the run's folder (see the module)."""
++    if recipe.composites > 0 and recipe.labels != "lines-unknown":
++        raise ValueError("composites start from the crops of the label rule lines-unknown (and its sheets' line px): "
++                         f"run them with labels lines-unknown, not {recipe.labels}")
++    if bank is not None and not recipe.composites:
++        raise ValueError("a bank is for a recipe with composites: this one has none")
+     if quarter not in paths.QUARTERS:
+         raise ValueError(f"quarters are {paths.QUARTERS}, not {quarter!r}")
+     score = globals()["score"] if score is None else score
+     q = paths.QUARTERS.index(quarter)
+     device = device or train.default_device()
+     out = RUNS_DIR / run_name(name, quarter, seed)
+     head = _git("rev-parse", "HEAD")
+     dirty = _git("status", "--porcelain", "--", "src")
+     t0 = time.perf_counter()
+     if sheets is None:
+@@ -138,25 +151,29 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str |
+     else:
+         radius = reader_stage.measure_radius(sheets, areas)["px"]
+         prepared = [dataclasses.replace(sd, point_radius=radius) for sd in sheets]
+     scored = [sd for sd in sheets if sd.series == paths.SERIES]
+     extra = [sd for sd in sheets if sd.series in extra_series]
+     missing = [s for s in extra_series if not any(sd.series == s for sd in sheets)]
+     if missing or not scored:
+         raise ValueError(f"no sheets of {', '.join(missing) or paths.SERIES} among the sheets given")
+     quarters = {(sd.series, sd.sheet): reader_stage.page_quarters(sd) == q for sd in [*scored, *extra]}
+     loaded = time.perf_counter() - t0
++    t0 = time.perf_counter()
++    if recipe.composites > 0 and bank is None:
++        bank = composite.Bank.build(prepared, areas, seed, threads=BANK_THREADS)
++    banked = time.perf_counter() - t0
+     out.mkdir(parents=True, exist_ok=True)
+     chances: dict[tuple[str, str], np.ndarray] = {}
+     with gpu.gpu_turn(True, device):
+         t0 = time.perf_counter()
+-        net = train.fit(data.hold_out(prepared, areas), recipe, device, seed)
++        net = train.fit(data.hold_out(prepared, areas), recipe, device, seed, bank=bank)
+         train.save_model(out / "model.pt", net, recipe, device, seed)
+         trained = time.perf_counter() - t0
+         t0 = time.perf_counter()
+         for sd in [*scored, *extra]:
+             chance = predict.chance(net, data.page_ink(sd), device, only=quarters[sd.series, sd.sheet])
+             chance[~quarters[sd.series, sd.sheet]] = 0
+             chances[sd.series, sd.sheet] = chance
+             f = out / "chance" / (f"{sd.sheet}.png" if sd.series == paths.SERIES else f"{sd.series}/{sd.sheet}.png")
+             f.parent.mkdir(parents=True, exist_ok=True)
+             if not cv2.imwrite(str(f), chance):
+@@ -167,34 +184,37 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str |
+         if gpu.on_gpu(device):
+             import torch
+             torch.mps.empty_cache()
+     del prepared
+     t0 = time.perf_counter()
+     score(out, quarter, scored, chances, extra)
+     scoring = time.perf_counter() - t0
+     (out / "run.json").write_text(json.dumps({
+         "name": name, "quarter": quarter, "seed": seed, "device": device, "recipe": dataclasses.asdict(recipe),
+         "extra_series": list(extra_series), "git_head": head, "git_status_src": dirty,
+-        "minutes": {"load": round(loaded / 60, 2), "train": round(trained / 60, 2), "predict": round(predicted / 60, 2),
+-                    "score": round(scoring / 60, 2)}}, indent=1) + "\n")
++        "bank": None if bank is None else bank.sizes(),
++        "composites_made": None if bank is None else dict(sorted(bank.tally.items())),
++        "minutes": {"load": round(loaded / 60, 2), "bank": round(banked / 60, 2), "train": round(trained / 60, 2),
++                    "predict": round(predicted / 60, 2), "score": round(scoring / 60, 2)}}, indent=1) + "\n")
+     return out
+ 
+ 
+ def main() -> None:
+     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+     ap.add_argument("name")
+     ap.add_argument("--quarter", required=True, choices=paths.QUARTERS)
+     ap.add_argument("--seed", type=int, default=0)
+     ap.add_argument("--labels", default="boxes", choices=("boxes", "lines-unknown"))
+-    ap.add_argument("--composites", type=float, default=0.0, help="Task 6's: not yet")
++    ap.add_argument("--composites", type=float, default=0.0,
++                    help="the share of crops that are composites (needs --labels lines-unknown)")
+     ap.add_argument("--extra", action="append", default=[], help="another map's series to predict and gate too")
+     a = ap.parse_args()
+-    if a.composites:
+-        sys.exit("--composites is Task 6's: this recipe has no such field yet")
++    if a.composites and a.labels != "lines-unknown":
++        sys.exit("--composites start from the crops of the label rule lines-unknown: add --labels lines-unknown")
+     import logging
+     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+-    recipe = dataclasses.replace(stage.DEFAULT_RECIPE, labels=a.labels)
++    recipe = dataclasses.replace(stage.DEFAULT_RECIPE, labels=a.labels, composites=a.composites)
+     print(run(a.name, recipe, a.quarter, a.seed, extra_series=tuple(a.extra)))
+ 
+ 
+ if __name__ == "__main__":
+     main()
+diff --git a/pipeline/src/sfzmaps/solver/textnet/composite.py b/pipeline/src/sfzmaps/solver/textnet/composite.py
+new file mode 100644
+index 0000000..aabdcbd
+--- /dev/null
++++ b/pipeline/src/sfzmaps/solver/textnet/composite.py
+@@ -0,0 +1,643 @@
++"""Composites inside real crops, for the text detector's training (`train.Recipe.composites`): real clean words ORed
++onto real line work and real line pieces ORed across clean words, with exact masks, so the detector learns letters
++(whole, their long strokes too) apart from the line ink through and beside them.
++
++  clean word   a Terra word whose ink pieces all lie inside its box, with no line px (`data.SheetData.line_bits`, the
++               run rule's px grown by 1 px) within CLEAN_PX px outside it (`linegate.clean_word_mask`, the gate's
++               m2_clean_words): its ink is an exact mask of text, with the scan's own texture
++  line piece   a connected piece of line ink (the line px that are ink) more than CLEAN_PX px from every Terra word,
++               other pass's box, unmatched zone and held-out px (`free_line_ink`), cut by a grid of TILE px tiles,
++               whose bounding diagonal is at least PIECE_PX px (`line_pieces`)
++  crossed      a word with at least CROSS_PX line px inside its box (`crossings`)
++
++The bank (`Bank.build`) holds references only: each clean word as (sheet, rectangle, kind, angle), each line piece as
++(sheet, box, a seed px of it), per map, none from an area held out (a held-out quarter, the answered blocks), and per
++map and kind the share of words crossed (`cross_by_kind`), measured on its own sheets, the words whose centre is in an
++area held out left out.  Its own generator (`default_rng([seed, 1])`) draws only where each sheet's tile grid starts.
++
++A composite (`Bank.crop`, drawn from the batch thread's generator alone) starts from the real crop the batch drew, as
++`data.crop_targets(..., labels="lines-unknown")` makes it, and changes it at page scale, before the resize and the
++turns, one of two ways (A_SHARE of them the first):
++
++  (a) word onto lines   a clean word of the crop's map is ORed in, as it is printed (its own size and angle).  With
++                        its kind's crossing share it goes on the crop's line ink (a px of its rectangle on a line ink
++                        px, and CROSS_PX line px or more inside its rectangle), else off it (no line px within
++                        CLEAN_PX px of its rectangle); and only where its rectangle and CLEAN_PX px around it hold no
++                        Terra word, no other pass's box, no unmatched zone and no held-out px, inside the crop.  TRIES
++                        places are tried, then the next clean word is drawn; after WORDS words the crop is left as it
++                        is.  Its ink is text, known, with its kind and angle (where it overlaps line ink too); the line
++                        ink under its rectangle off its letters stays as the crop had it: not text, known.
++  (b) line onto a word  the crop is moved to centre on a clean word of the crop's map (on its own sheet), whose ink is
++                        all text and known (its long strokes too, which the label rule leaves unknown), and a line
++                        piece of that map, turned a random number of quarter turns, is ORed across it (a px of the
++                        piece on a px of the word's rectangle).  The piece's px that were paper become ink, not text,
++                        known as the px was (never where it was held out or unknown); those on the word's ink stay
++                        text (the overlap: text, with weight 1, there being no measured weight); those on other ink
++                        keep their targets.
++
++A composite's masks are exact, so its text is only ever ink: the paper inside a word box there (the pasted word's
++rectangle's too) is unknown, a lesson neither of text nor of not-text (in the real crops it is text, by the box rule).
++
++`measure` gives what the bank's rules rest on: on sheets with areas left out, the share of words crossed by kind
++(`cross_by_kind`), the clean words, their texture (`texture_stats`) and the texture of straight line pieces
++(`line_texture`), which drawn lines would have to match (none is drawn: real line pieces only).
++
++No stage imports this module (`train` takes the bank as any object with `.crop`), so no stage's import closure
++changes with it.
++"""
++import collections
++import dataclasses
++import logging
++from concurrent.futures import ThreadPoolExecutor
++
++import cv2
++import numpy as np
++
++from sfzmaps.solver.textnet import data, linegate, zones
++
++log = logging.getLogger(__name__)
++
++CLEAN_PX = linegate.CLEAN_PX    # px around a clean word, a pasted word and a line piece kept clear (3)
++CROSS_PX = 3                    # line px inside a word's box that make it crossed
++PIECE_PX = 100                  # a line piece's least bounding diagonal, px
++TILE = 256                      # px: line pieces are cut by a grid of tiles this size
++TRIES = 20                      # places tried for one clean word
++WORDS = 8                       # clean words tried before a crop is left as it is
++A_SHARE = 0.5                   # the share of composites that are (a) word onto lines; the rest (b)
++GAP_PX = 1.5                    # line_texture: px between two px across a piece that make them two strokes
++WIDTH_TOP = 6                   # line_texture's width classes: 1 .. WIDTH_TOP - 1 px, and WIDTH_TOP px or more
++LAGS = (1, 2, 4)                # line_texture's autocorrelation lags, px along the piece
++DISTRIBUTIONS = zones.TEXTLINES_DIR / "distributions.json"
++KIND_NAMES = tuple(data.KINDS)                    # by kind index
++_REACH = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * CLEAN_PX + 1, 2 * CLEAN_PX + 1))
++
++
++# --- what the bank holds ---------------------------------------------------------------------------------------------
++
++@dataclasses.dataclass(frozen=True)
++class Words:
++    """Clean words by reference: the sheet's index in the bank, the rectangle's corners (page px, as
++    `SheetData.words`), the kind and the reading angle."""
++    sheet: np.ndarray       # int32 (n,)
++    rect: np.ndarray        # int32 (n, 4, 2)
++    kind: np.ndarray        # uint8 (n,)
++    angle: np.ndarray       # int16 (n,)
++
++    def __len__(self) -> int:
++        return len(self.sheet)
++
++    def take(self, idx) -> "Words":
++        return Words(self.sheet[idx], self.rect[idx], self.kind[idx], self.angle[idx])
++
++    @staticmethod
++    def join(parts: list["Words"]) -> "Words":
++        if not parts:
++            return Words(np.zeros(0, np.int32), np.zeros((0, 4, 2), np.int32), np.zeros(0, np.uint8),
++                         np.zeros(0, np.int16))
++        return Words(*(np.concatenate([getattr(p, f.name) for p in parts]) for f in dataclasses.fields(Words)))
++
++
++@dataclasses.dataclass(frozen=True)
++class Pieces:
++    """Line pieces by reference: the sheet's index in the bank, the piece's box (x0, y0, x1, y1; page px, the far
++    edges excluded) and one px of it (x, y), which names it among the line ink in its box (`piece_mask`)."""
++    sheet: np.ndarray       # int32 (m,)
++    box: np.ndarray         # int32 (m, 4)
++    seed: np.ndarray        # int32 (m, 2)
++
++    def __len__(self) -> int:
++        return len(self.sheet)
++
++    @staticmethod
++    def join(parts: list["Pieces"]) -> "Pieces":
++        if not parts:
++            return Pieces(np.zeros(0, np.int32), np.zeros((0, 4), np.int32), np.zeros((0, 2), np.int32))
++        return Pieces(*(np.concatenate([getattr(p, f.name) for p in parts]) for f in dataclasses.fields(Pieces)))
++
++
++# --- the sheets' words and line ink ----------------------------------------------------------------------------------
++
++def _line_page(sd: data.SheetData) -> np.ndarray:
++    """A sheet's whole page of line px, bool.  ValueError when the sheet holds none (`zones.prepare` fills them)."""
++    if sd.line_bits.shape != sd.ink_bits.shape:
++        raise ValueError(f"{sd.series} {sd.sheet}: no line px (SheetData.line_bits {sd.line_bits.shape}): composites "
++                         "need them (textnet.zones.prepare)")
++    return np.unpackbits(sd.line_bits, axis=1, count=sd.width).view(bool)
++
++
++def _rect_in(rect: np.ndarray, y0: int, x0: int, h: int, w: int) -> np.ndarray:
++    """A word rectangle's px in a page window (h x w px, top-left px (row y0, col x0)), filled as `data._paint` fills
++    it (as on a page large enough), bool."""
++    return data._paint(rect[None], np.ones(1, np.int32), y0, x0, h, w) > 0
++
++
++def _clipped_box(sd: data.SheetData, rect: np.ndarray) -> tuple[int, int, int, int] | None:
++    """A rectangle's bounding px on the page (y0, x0, h, w), cut to it; None when none is on it."""
++    lo = np.maximum(rect.min(axis=0), 0)
++    hi = np.minimum(rect.max(axis=0) + 1, [sd.width, sd.height])
++    if (hi <= lo).any():
++        return None
++    return int(lo[1]), int(lo[0]), int(hi[1] - lo[1]), int(hi[0] - lo[0])
++
++
++def crossings(sd: data.SheetData) -> np.ndarray:
++    """Per Terra word of the sheet, int64 (n, 2): the line px inside its box (filled as `data._paint` fills it) and
++    those of them that are ink.  ValueError for a sheet without its line px."""
++    _line_page(sd)
++    out = np.zeros((len(sd.words), 2), np.int64)
++    for j, rect in enumerate(sd.words):
++        box = _clipped_box(sd, rect)
++        if box is None:
++            continue
++        inside = _rect_in(rect, *box) & data.line_window(sd, *box)
++        out[j] = inside.sum(), (inside & data._ink_window(sd, *box)).sum()
++    return out
++
++
++def _held_at(sd: data.SheetData, x: int, y: int) -> bool:
++    return bool(data._held(sd, y, x, 1, 1)[0, 0])
++
++
++def _centre(sd: data.SheetData, rect: np.ndarray) -> tuple[int, int]:
++    """A word's centre px (x, y): its rectangle's corners' mean, rounded, kept on the page (as `zones.zone_radius`)."""
++    x, y = np.clip(np.rint(rect.astype(float).mean(axis=0)).astype(int), 0, [sd.width - 1, sd.height - 1])
++    return int(x), int(y)
++
++
++def _forbidden(sd: data.SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
++    """The px of a page window where nothing may be pasted and no line piece taken: in a Terra word, another pass's
++    box or an unmatched zone, or held out."""
++    word = data._words(sd, y0, x0, h, w)
++    return (word > 0) | data._unknown(sd, word, y0, x0, h, w) | data._held(sd, y0, x0, h, w)
++
++
++def free_line_ink(sd: data.SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
++    """The line ink (line px that are ink) of a page window that is more than CLEAN_PX px from every forbidden px
++    (`_forbidden`, found on the window grown by CLEAN_PX, so the same whichever window holds a px), bool."""
++    c = CLEAN_PX
++    py0, px0 = max(y0 - c, 0), max(x0 - c, 0)
++    py1, px1 = min(y0 + h + c, sd.height), min(x0 + w + c, sd.width)
++    bad = _forbidden(sd, py0, px0, py1 - py0, px1 - px0)
++    near = cv2.dilate(bad.view(np.uint8), _REACH)[y0 - py0:y0 - py0 + h, x0 - px0:x0 - px0 + w] > 0
++    return data.line_window(sd, y0, x0, h, w) & data._ink_window(sd, y0, x0, h, w) & ~near
++
++
++def _tile_pieces(sd: data.SheetData, y0: int, x0: int, h: int, w: int):
++    """The line pieces of one tile: (box (x0, y0, x1, y1), seed (x, y), mask in the box) of each 8-connected piece of
++    the tile's free line ink whose bounding diagonal is at least PIECE_PX px; the seed is its first px row by row."""
++    free = np.ascontiguousarray(free_line_ink(sd, y0, x0, h, w))
++    if not free.any():
++        return
++    n, label, stats, _ = cv2.connectedComponentsWithStats(free.view(np.uint8), connectivity=8)
++    diag = np.hypot(stats[:, cv2.CC_STAT_WIDTH], stats[:, cv2.CC_STAT_HEIGHT])
++    keep = [k for k in range(1, n) if diag[k] >= PIECE_PX]
++    if not keep:
++        return
++    found, first = np.unique(label.ravel(), return_index=True)
++    first_of = dict(zip(found.tolist(), first.tolist(), strict=True))
++    for k in keep:
++        bx, by, bw, bh = (int(v) for v in stats[k, :4])
++        sy, sx = divmod(int(first_of[k]), w)
++        yield ((x0 + bx, y0 + by, x0 + bx + bw, y0 + by + bh), (x0 + sx, y0 + sy),
++               label[by:by + bh, bx:bx + bw] == k)
++
++
++def _tiles(sd: data.SheetData, phase=(0, 0)):
++    """The tiles of TILE px the page is cut into, the grid starting `phase` (row, col) px before the page's corner:
++    (y0, x0, h, w), cut to the page."""
++    for ty in range(-int(phase[0]), sd.height, TILE):
++        for tx in range(-int(phase[1]), sd.width, TILE):
++            y0, x0 = max(ty, 0), max(tx, 0)
++            y1, x1 = min(ty + TILE, sd.height), min(tx + TILE, sd.width)
++            if y1 > y0 and x1 > x0:
++                yield y0, x0, y1 - y0, x1 - x0
++
++
++def line_pieces(sd: data.SheetData, phase=(0, 0)) -> tuple[np.ndarray, np.ndarray]:
++    """A sheet's line pieces (see the module), its tile grid starting `phase` (row, col) px before the page's corner:
++    boxes int32 (m, 4) (x0, y0, x1, y1) and seeds int32 (m, 2) (x, y).  The sheet's held areas give none."""
++    _line_page(sd)
++    boxes, seeds = [], []
++    for tile in _tiles(sd, phase):
++        for box, seed, _ in _tile_pieces(sd, *tile):
++            boxes.append(box)
++            seeds.append(seed)
++    return np.array(boxes, np.int32).reshape(-1, 4), np.array(seeds, np.int32).reshape(-1, 2)
++
++
++def piece_mask(sd: data.SheetData, box, seed) -> np.ndarray:
++    """A line piece's px in its box (bool (y1 - y0, x1 - x0)): the 8-connected piece of the box's free line ink that
++    holds the seed px; the same piece `line_pieces` found (connectivity inside a part of a tile is the tile's)."""
++    x0, y0, x1, y1 = (int(v) for v in box)
++    free = np.ascontiguousarray(free_line_ink(sd, y0, x0, y1 - y0, x1 - x0))
++    _, label = cv2.connectedComponents(free.view(np.uint8), connectivity=8)
++    k = label[int(seed[1]) - y0, int(seed[0]) - x0]
++    if k == 0:
++        raise ValueError(f"{sd.series} {sd.sheet}: no line ink at the piece's seed {tuple(seed)} in {tuple(box)}")
++    return label == k
++
++
++# --- the measures ----------------------------------------------------------------------------------------------------
++
++def texture_stats(masks) -> dict:
++    """The texture of ink masks (bool arrays; paper beyond their edges): `isolated_share` the share of ink px with no
++    ink among their 8 neighbours, `pinholes_per_1000` the paper px whose 4 neighbours are all ink per 1,000 ink px,
++    `pieces_per_word` the mean count of 8-connected pieces of ink per mask; with `masks` and `ink_px` counted."""
++    n = ink = isolated = pinholes = pieces = 0
++    for m in masks:
++        n += 1
++        m = np.asarray(m, bool)
++        if not m.any():
++            continue
++        p = np.pad(m, 1)
++        four = (p[:-2, 1:-1].astype(np.uint8) + p[2:, 1:-1] + p[1:-1, :-2] + p[1:-1, 2:])
++        eight = four + p[:-2, :-2] + p[:-2, 2:] + p[2:, :-2] + p[2:, 2:]
++        ink += int(m.sum())
++        isolated += int((m & (eight == 0)).sum())
++        pinholes += int((~m & (four == 4)).sum())
++        pieces += cv2.connectedComponents(np.ascontiguousarray(m).view(np.uint8), connectivity=8)[0] - 1
++    return {"masks": n, "ink_px": ink, "isolated_share": isolated / ink if ink else None,
++            "pinholes_per_1000": 1000 * pinholes / ink if ink else None, "pieces_per_word": pieces / n if n else None}
++
++
++def _edges(mask: np.ndarray):
++    """A straight piece's width and its two edges' offsets from their straight fits, or None when the piece is not one
++    straight stroke.  Its px are taken along its main axis (the px' principal direction) in steps of 1 px (each px at
++    its rounded distance along); across it, at each step, the farthest px each way is an edge.  One straight stroke:
++    every step holds px, none holds two runs (px more than GAP_PX apart across), and neither edge strays more than the
++    width (the median of the steps' spans, plus 1) from its least-squares line."""
++    ys, xs = np.nonzero(mask)
++    if len(ys) < 3:
++        return None
++    p = np.c_[xs, ys].astype(float)
++    p -= p.mean(axis=0)
++    _, vec = np.linalg.eigh(p.T @ p)
++    s, t = p @ vec[:, 1], p @ vec[:, 0]
++    step = np.rint(s - s.min()).astype(np.int64)
++    order = np.lexsort((t, step))
++    ss, ts = step[order], t[order]
++    if ((ss[1:] == ss[:-1]) & (np.diff(ts) > GAP_PX)).any():
++        return None
++    count = np.bincount(step)
++    if (count == 0).any() or len(count) < 3:
++        return None
++    top = np.full(len(count), -np.inf)
++    np.maximum.at(top, step, t)
++    bottom = np.full(len(count), np.inf)
++    np.minimum.at(bottom, step, t)
++    width = float(np.median(top - bottom)) + 1
++    along = np.arange(len(count), dtype=float)
++    res = [e - np.polyval(np.polyfit(along, e, 1), along) for e in (top, bottom)]
++    if max(float(np.abs(r).max()) for r in res) > width:
++        return None
++    return width, res
++
++
++def _width_class(width: float) -> str:
++    w = int(round(width))
++    return str(max(w, 1)) if w < WIDTH_TOP else f"{WIDTH_TOP}+"
++
++
++def line_texture(pieces) -> dict:
++    """The texture of straight line pieces (bool masks), by width class (`_width_class` of `_edges`' width): `pieces`,
++    `edge_px` (the steps along their edges, two a step), `sd` the SD of each edge's offset from its straight fit
++    (pooled over every edge of the class), and `ac1`, `ac2`, `ac4` its autocorrelation at lags of 1, 2 and 4 px along
++    the piece (the pooled lagged products over the pooled squares, each a mean; None when the offsets are all 0);
++    `not_straight` counts the pieces left out (`_edges`)."""
++    sums: dict[str, dict] = {}
++    skipped = 0
++    for mask in pieces:
++        found = _edges(mask)
++        if found is None:
++            skipped += 1
++            continue
++        width, res = found
++        c = sums.setdefault(_width_class(width), {"pieces": 0, "n": 0, "sq": 0.0,
++                                                  **{f"lag{k}": [0.0, 0] for k in LAGS}})
++        c["pieces"] += 1
++        for r in res:
++            c["n"] += len(r)
++            c["sq"] += float((r * r).sum())
++            for k in LAGS:
++                if len(r) > k:
++                    c[f"lag{k}"][0] += float((r[:-k] * r[k:]).sum())
++                    c[f"lag{k}"][1] += len(r) - k
++    out: dict = {}
++    for cls in sorted(sums, key=lambda v: int(v.rstrip("+"))):
++        c = sums[cls]
++        var = c["sq"] / c["n"]
++        out[cls] = {"pieces": c["pieces"], "edge_px": c["n"], "sd": float(np.sqrt(var)),
++                    **{f"ac{k}": (c[f"lag{k}"][0] / c[f"lag{k}"][1] / var if var > 0 and c[f"lag{k}"][1] else None)
++                       for k in LAGS}}
++    out["not_straight"] = skipped
++    return out
++
++
++def _word_ink(sd: data.SheetData, rect: np.ndarray) -> np.ndarray | None:
++    box = _clipped_box(sd, rect)
++    return None if box is None else data._ink_window(sd, *box) & _rect_in(rect, *box)
++
++
++def _share(words: int, crossed: int) -> dict:
++    return {"words": int(words), "crossed": int(crossed), "share": crossed / words if words else None}
++
++
++def _sheet_counts(sd: data.SheetData, line: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
++    """Per word of a sheet whose `held` are the areas left out: in a training area (its centre px not held out),
++    crossed (by line px, and by line ink), and clean (`linegate.clean_word_mask` with the line px)."""
++    train = np.array([not _held_at(sd, *_centre(sd, r)) for r in sd.words], bool).reshape(-1)
++    cross = crossings(sd) >= CROSS_PX
++    return train, cross[:, 0], cross[:, 1], linegate.clean_word_mask(sd, line)
++
++
++def _sheet_measure(sd: data.SheetData) -> tuple:
++    """One sheet's part of `measure` (its held areas the areas left out)."""
++    line = _line_page(sd)
++    train, cross, cross_ink, clean = _sheet_counts(sd, line)
++    del line
++    kinds = sd.kinds.astype(np.int64)
++    k = len(KIND_NAMES)
++    counts = [np.bincount(kinds[train & m], minlength=k) for m in (train, cross, cross_ink, clean)]
++    clean_ink = [m for m in (_word_ink(sd, r) for r in sd.words[train & clean]) if m is not None]
++    pieces = [mask for tile in _tiles(sd) for _, _, mask in _tile_pieces(sd, *tile)]
++    return counts, clean_ink, pieces
++
++
++def measure(sheets: list[data.SheetData], areas=(), threads: int = 1) -> dict:
++    """What the composites rest on, on `sheets` (with their line px) with `areas` left out (the words whose centre is
++    in one, the line ink in or within CLEAN_PX px of one): `cross_by_kind` per kind and over all ("all", word-weighted)
++    the words, those crossed (CROSS_PX line px or more inside the box) and their share (None without words);
++    `cross_by_kind_ink` the same counting only line px that are ink; `clean_words` per kind; `clean_word_texture`
++    (`texture_stats` of the clean words' ink); `line_texture` of the line pieces (`line_texture`, tile grid at the
++    page's corner).  `threads` sheets at a time."""
++    sheets = data.hold_out(sheets, areas) if tuple(areas) else sheets
++    if threads > 1:
++        with ThreadPoolExecutor(threads) as ex:
++            parts = list(ex.map(_sheet_measure, sheets))
++    else:
++        parts = [_sheet_measure(sd) for sd in sheets]
++    words, crossed, crossed_ink, clean_n = (sum(p[0][i] for p in parts) for i in range(4)) if parts else \
++        (np.zeros(len(KIND_NAMES), np.int64) for _ in range(4))
++    clean_ink = [m for p in parts for m in p[1]]
++    return {
++        "cross_by_kind": {**{n: _share(words[i], crossed[i]) for i, n in enumerate(KIND_NAMES)},
++                          "all": _share(words.sum(), crossed.sum())},
++        "cross_by_kind_ink": {**{n: _share(words[i], crossed_ink[i]) for i, n in enumerate(KIND_NAMES)},
++                              "all": _share(words.sum(), crossed_ink.sum())},
++        "clean_words": {n: int(clean_n[i]) for i, n in enumerate(KIND_NAMES)},
++        "clean_word_texture": texture_stats(clean_ink),
++        "line_texture": line_texture(m for p in parts for m in p[2]),
++        "sheets": len(sheets),
++    }
++
++
++# --- the bank and its composites -------------------------------------------------------------------------------------
++
++def _sheet_bank(sd: data.SheetData, j: int, phase) -> tuple[Words, Pieces, np.ndarray, np.ndarray]:
++    """One sheet's part of the bank (its held areas the bank's): its clean words wholly clear of every held-out px
++    (their rectangle's bounding box and CLEAN_PX px around it on the page), its line pieces, and per kind the words in
++    a training area and those crossed."""
++    line = _line_page(sd)
++    train, cross, _, clean = _sheet_counts(sd, line)
++    del line
++    keep = []
++    c = CLEAN_PX
++    for i in np.flatnonzero(clean):
++        lo, hi = sd.words[i].min(axis=0) - c, sd.words[i].max(axis=0) + 1 + c
++        if (lo < 0).any() or hi[0] > sd.width or hi[1] > sd.height:
++            continue
++        if data._held(sd, int(lo[1]), int(lo[0]), int(hi[1] - lo[1]), int(hi[0] - lo[0])).any():
++            continue
++        keep.append(i)
++    keep = np.array(keep, np.int64)
++    words = Words(np.full(len(keep), j, np.int32), sd.words[keep].astype(np.int32), sd.kinds[keep].astype(np.uint8),
++                  sd.angles[keep].astype(np.int16))
++    boxes, seeds = line_pieces(sd, phase)
++    pieces = Pieces(np.full(len(boxes), j, np.int32), boxes, seeds)
++    kinds = sd.kinds.astype(np.int64)
++    k = len(KIND_NAMES)
++    return words, pieces, np.bincount(kinds[train], minlength=k), np.bincount(kinds[train & cross], minlength=k)
++
++
++@dataclasses.dataclass(frozen=True)
++class _Page:
++    """A crop's targets at page scale (`_page_parts`), the window it is of, its line px and which px carry a word's
++    reading angle."""
++    ink: np.ndarray
++    text: np.ndarray
++    kind: np.ndarray
++    angle: np.ndarray
++    known: np.ndarray
++    has_angle: np.ndarray
++    line: np.ndarray
++    y0: int
++    x0: int
++    src: int
++
++
++def _page_parts(sd: data.SheetData, y: int, x: int, size: int, scale: float) -> _Page:
++    """The crop `data.crop_targets(sd, y, x, size, scale, turns, labels="lines-unknown")` draws, at page scale and not
++    turned (its src x src px of page, src = round(size / scale)), writable, with the window's line px."""
++    src = int(round(size / scale))
++    y0 = int(np.clip(y - src // 2, 0, sd.height - src))
++    x0 = int(np.clip(x - src // 2, 0, sd.width - src))
++    t = data.crop_targets(sd, y, x, src, 1.0, 0, labels="lines-unknown")
++    return _Page(ink=np.array(t["ink"]), text=np.array(t["text"]), kind=np.array(t["kind"]),
++                 angle=np.array(t["angle"]), known=np.array(t["known"]), has_angle=t["text"] > 0,
++                 line=data.line_window(sd, y0, x0, src, src), y0=y0, x0=x0, src=src)
++
++
++def _finish(page: _Page, size: int, turns: int) -> dict[str, np.ndarray]:
++    """A page-scale crop as `data.crop_targets` hands one over: resized to size x size (nearest px), turned `turns`
++    quarter turns counter-clockwise, the reading angle with it (in [-180, 180) where a word's, 0 elsewhere)."""
++    parts = {k: getattr(page, k) for k in ("ink", "text", "kind", "angle", "known", "has_angle")}
++    if page.src != size:
++        parts = {k: cv2.resize(v.view(np.uint8) if v.dtype == bool else v, (size, size),
++                               interpolation=cv2.INTER_NEAREST).astype(v.dtype) for k, v in parts.items()}
++    has = parts.pop("has_angle")
++    parts["angle"] = np.where(has, (parts["angle"].astype(np.int32) + 90 * turns + 180) % 360 - 180,
++                              0).astype(np.int16)
++    return {k: np.rot90(v, turns) for k, v in parts.items()}
++
++
++def _exact(page: _Page) -> None:
++    """A composite's masks are exact: the paper inside a word box is neither text nor not-text (unknown)."""
++    paper = (page.text > 0) & ~page.ink
++    page.text[paper] = 0
++    page.known[paper] = False
++
++
++def _normal(angle: int) -> int:
++    return (int(angle) + 180) % 360 - 180
++
++
++@dataclasses.dataclass
++class _Sprite:
++    """A clean word ready to paste: its frame (its rectangle's bounding box and CLEAN_PX px around it), the rectangle
++    and the px within CLEAN_PX px of it in that frame, its ink there, its kind and angle."""
++    rect: np.ndarray
++    grown: np.ndarray
++    ink: np.ndarray
++    kind: int
++    angle: int
++
++
++@dataclasses.dataclass
++class Bank:
++    """Clean words and line pieces by reference, per map (series), with the sheets they are on (holding the bank's
++    areas out) and per map and kind the share of words crossed; `crop` makes a composite (see the module).  `tally`
++    counts what the composites were; `last` says what the last one was made of (for pictures and tests)."""
++    sheets: list
++    words: dict
++    pieces: dict
++    cross: dict
++    crossing: dict
++    a_share: float = A_SHARE
++    tally: collections.Counter = dataclasses.field(default_factory=collections.Counter, compare=False)
++    last: dict = dataclasses.field(default_factory=dict, compare=False)
++
++    @classmethod
++    def build(cls, sheets: list[data.SheetData], areas, seed: int, threads: int = 1) -> "Bank":
++        """The bank of `sheets` (with their line px, `zones.prepare`) with `areas` held out (see the module); its own
++        generator `default_rng([seed, 1])` draws each sheet's tile grid's start; `threads` sheets at a time.
++        ValueError for a sheet without its line px."""
++        held = data.hold_out(sheets, tuple(areas))
++        rng = np.random.default_rng([seed, 1])
++        phases = rng.integers(0, TILE, (len(held), 2))
++        jobs = range(len(held))
++        if threads > 1:
++            with ThreadPoolExecutor(threads) as ex:
++                parts = list(ex.map(lambda j: _sheet_bank(held[j], j, phases[j]), jobs))
++        else:
++            parts = [_sheet_bank(held[j], j, phases[j]) for j in jobs]
++        words, pieces, cross, crossing = {}, {}, {}, {}
++        for series in dict.fromkeys(sd.series for sd in held):
++            mine = [p for p, sd in zip(parts, held, strict=True) if sd.series == series]
++            words[series] = Words.join([p[0] for p in mine])
++            pieces[series] = Pieces.join([p[1] for p in mine])
++            n = sum(p[2] for p in mine)
++            c = sum(p[3] for p in mine)
++            crossing[series] = {KIND_NAMES[k]: _share(n[k], c[k]) for k in range(len(KIND_NAMES))}
++            cross[series] = {k: float(c[k] / n[k]) if n[k] else 0.0 for k in range(len(KIND_NAMES))}
++        return cls(sheets=held, words=words, pieces=pieces, cross=cross, crossing=crossing)
++
++    def sizes(self) -> dict:
++        """Per map: the clean words per kind, the line pieces, and the crossing counts and shares by kind."""
++        return {s: {"clean_words": {n: int((w.kind == k).sum()) for k, n in enumerate(KIND_NAMES)},
++                    "pieces": len(self.pieces[s]), "crossing": self.crossing[s]} for s, w in self.words.items()}
++
++    def _sprite(self, words: Words, j: int) -> _Sprite:
++        sd, rect = self.sheets[int(words.sheet[j])], words.rect[j]
++        lo = rect.min(axis=0) - CLEAN_PX
++        h, w = (int(v) for v in (rect.max(axis=0) + 1 + CLEAN_PX - lo)[::-1])
++        inside = _rect_in(rect, int(lo[1]), int(lo[0]), h, w)
++        return _Sprite(rect=inside, grown=cv2.dilate(inside.view(np.uint8), _REACH) > 0,
++                       ink=data._ink_window(sd, int(lo[1]), int(lo[0]), h, w) & inside, kind=int(words.kind[j]),
++                       angle=_normal(words.angle[j]))
++
++    def crop(self, rng: np.random.Generator, sd: data.SheetData, y: int, x: int, size: int, scale: float,
++             turns: int) -> dict[str, np.ndarray]:
++        """A composite in place of `data.crop_targets(sd, y, x, size, scale, turns)`: the keys of a crop, from `rng`
++        alone (see the module)."""
++        words = self.words.get(sd.series)
++        if rng.random() < self.a_share:
++            return self._word_onto_lines(rng, sd, y, x, size, scale, turns, words)
++        return self._line_onto_word(rng, sd, y, x, size, scale, turns, words)
++
++    def _as_it_is(self, page: _Page, size: int, turns: int, why: str) -> dict[str, np.ndarray]:
++        self.tally["left_as_is"] += 1
++        self.tally[f"left_as_is:{why}"] += 1
++        self.last = {"mode": "none", "why": why, "window": (page.y0, page.x0, page.src)}
++        return _finish(page, size, turns)
++
++    def _word_onto_lines(self, rng, sd, y, x, size, scale, turns, words) -> dict[str, np.ndarray]:
++        page = _page_parts(sd, y, x, size, scale)
++        if words is None or not len(words):
++            return self._as_it_is(page, size, turns, "no clean words")
++        src = page.src
++        forbidden = (page.text > 0) | ~page.known
++        targets = np.flatnonzero(page.line & page.ink & ~forbidden)
++        cross = self.cross[sd.series]
++        for _ in range(WORDS):
++            j = int(rng.integers(len(words)))
++            sprite = self._sprite(words, j)
++            on = bool(rng.random() < cross.get(sprite.kind, 0.0))
++            fh, fw = sprite.rect.shape
++            placed = None
++            if fh <= src and fw <= src and (len(targets) or not on):
++                rect_px = np.flatnonzero(sprite.rect)
++                for _ in range(TRIES):
++                    if on:
++                        ty, tx = divmod(int(targets[rng.integers(len(targets))]), src)
++                        ry, rx = divmod(int(rect_px[rng.integers(len(rect_px))]), fw)
++                        oy, ox = ty - ry, tx - rx
++                        if not (0 <= oy <= src - fh and 0 <= ox <= src - fw):
++                            continue
++                    else:
++                        oy, ox = int(rng.integers(src - fh + 1)), int(rng.integers(src - fw + 1))
++                    win = (slice(oy, oy + fh), slice(ox, ox + fw))
++                    if (forbidden[win] & sprite.grown).any():
++                        continue
++                    if on and (page.line[win] & sprite.rect).sum() < CROSS_PX:
++                        continue
++                    if not on and (page.line[win] & sprite.grown).any():
++                        continue
++                    placed = (oy, ox)
++                    break
++            if placed is None:
++                self.tally["words_failed"] += 1
++                continue
++            oy, ox = placed
++            win = (slice(oy, oy + fh), slice(ox, ox + fw))
++            ink = sprite.ink
++            page.ink[win] |= ink
++            page.text[win][ink] = 1
++            page.kind[win][ink] = sprite.kind
++            page.angle[win][ink] = sprite.angle
++            page.known[win][ink] = True
++            page.has_angle[win][ink] = True
++            page.known[win][sprite.rect & ~page.ink[win]] = False     # the pasted box's paper: unknown
++            _exact(page)
++            self.tally["a"] += 1
++            self.tally["a_on" if on else "a_off"] += 1
++            self.last = {"mode": "a", "word": j, "on_line": on, "placed": (oy, ox, fh, fw),
++                         "window": (page.y0, page.x0, src)}
++            return _finish(page, size, turns)
++        return self._as_it_is(page, size, turns, "no place")
++
++    def _line_onto_word(self, rng, sd, y, x, size, scale, turns, words) -> dict[str, np.ndarray]:
++        pieces = self.pieces.get(sd.series)
++        if words is None or not len(words) or pieces is None or not len(pieces):
++            return self._as_it_is(_page_parts(sd, y, x, size, scale), size, turns, "no clean words or pieces")
++        j = int(rng.integers(len(words)))
++        wsd, rect = self.sheets[int(words.sheet[j])], words.rect[j]
++        cx, cy = _centre(wsd, rect)
++        page = _page_parts(wsd, cy, cx, size, scale)
++        src = page.src
++        in_rect = _rect_in(rect, page.y0, page.x0, src, src)
++        word = in_rect & page.ink
++        page.text[word] = 1
++        page.known[word] = True
++        page.kind[word] = int(words.kind[j])
++        page.angle[word] = _normal(words.angle[j])
++        page.has_angle[word] = True
++        k = int(rng.integers(len(pieces)))
++        piece = np.rot90(piece_mask(self.sheets[int(pieces.sheet[k])], pieces.box[k], pieces.seed[k]),
++                         int(rng.integers(4)))
++        ph, pw = piece.shape
++        on_piece = np.flatnonzero(piece)
++        ay, ax = divmod(int(on_piece[rng.integers(len(on_piece))]), pw)
++        rect_px = np.flatnonzero(in_rect)
++        by, bx = divmod(int(rect_px[rng.integers(len(rect_px))]), src)
++        oy, ox = by - ay, bx - ax
++        y0, y1, x0, x1 = max(oy, 0), min(oy + ph, src), max(ox, 0), min(ox + pw, src)
++        line = piece[y0 - oy:y1 - oy, x0 - ox:x1 - ox]
++        win = (slice(y0, y1), slice(x0, x1))
++        paper = line & ~page.ink[win]
++        page.ink[win] |= line
++        page.text[win][paper] = 0
++        _exact(page)
++        self.tally["b"] += 1
++        self.last = {"mode": "b", "word": j, "sheet": int(words.sheet[j]), "centre": (cy, cx), "piece": k,
++                     "placed": (oy, ox, ph, pw), "window": (page.y0, page.x0, src)}
++        return _finish(page, size, turns)
+diff --git a/pipeline/src/sfzmaps/solver/textnet/train.py b/pipeline/src/sfzmaps/solver/textnet/train.py
+index d82bb38..43d59e2 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/train.py
++++ b/pipeline/src/sfzmaps/solver/textnet/train.py
+@@ -1,19 +1,22 @@
+ """Fitting the text detector, by a recipe (`Recipe`; its defaults are the old recipe, the one the 2000 detector of
+ each quarter of the city trained with before there was one detector).
+ 
+ Each step takes `batch` crops of `crop` x `crop` px from the sheets' pages (`data.SheetData`), centred on a px where a
+ crop may centre (`data.centres`, taken every CENTRE_STRIDE px each way): TEXT_SHARE of them on text, the rest on any
+ ink.  Each crop is scaled by a factor drawn log-uniformly from SCALE (so small street lettering also teaches big code
+ lettering) and turned a random number of quarter turns (the reading angle turns with it); its targets are drawn for it
+ alone (`data.crop_targets`), by the recipe's label rule (`labels`; "lines-unknown" needs the sheets' line px, which
+-`zones.prepare` fills before the training).
++`zones.prepare` fills before the training).  With `composites` p > 0, each crop is a composite with chance p, made by
++the bank handed to `fit` (`composite.Bank`, built before the training; any object with `.crop(rng, sd, y, x, size,
++scale, turns)`) from the same crop's centre, scale and turns and the same generator; with p = 0 that chance is never
++drawn, so the batches are those of a recipe without composites, byte for byte.
+ 
+ The loss is binary cross-entropy on text over the px it reads, plus KIND_WEIGHT x the cross-entropy of the kind and
+ ANGLE_WEIGHT x (1 - cosine) of the reading direction, both on the text px it reads; a text-only network (`heads`
+ "text") has the text's alone.  It reads the known px (`ink_only` "off"), only the known ink ("ink": the chance of text
+ is only ever read at ink), or the known ink and the px next to it, the 8 around each ink px ("ink+1px").  AdamW
+ (WEIGHT_DECAY) with a one-cycle schedule rising to `max_lr` over the first `pct_start` of the steps.  With
+ `weight_average` the model kept is the moving average of the weights over the steps (`WeightAverage`).
+ 
+ The parts of the loss stay on the device, summed; every LOG_EVERY steps (and at the last) their mean over those steps
+ is read, logged and checked, so the device is waited on only then.  A mean that is not finite stops the training.
+@@ -86,54 +89,58 @@ class Recipe:
+       weight_average  the decay of the moving average of the weights kept as the model (`WeightAverage`); 0 is off
+       prefetch        the next batches drawn in a background thread (the same batches)
+       decoder         "full" two convolutions per block up, or "light" one
+       precision       "float32", or "float16": the forward under `torch.autocast` in half precision, the output cast to
+                       float32 before the loss, and the loss scaled by a `torch.amp.GradScaler` against underflow of
+                       the half-precision gradients (torch 2.15 supports it on cpu and mps).  The weights, the
+                       optimiser and the saved model stay float32.  The scaler's step reads its overflow check
+                       back from the device each step (`.item()`), which waits for the GPU.
+       labels          what a word box teaches (`data.crop_targets`): "boxes" every px of it as text, the lines through
+                       it too; "lines-unknown" its line px unknown (the sheets' line px filled by `zones.prepare`)
++      composites      the share of crops that are composites (`composite.Bank.crop`: real clean words onto real line
++                      work, real line pieces across clean words, exact masks); 0 none, and no draw for it
+     """
+     iterations: int = ITERATIONS
+     max_lr: float = LEARNING_RATE
+     pct_start: float = PCT_START
+     batch: int = BATCH
+     crop: int = CROP
+     width: int = model.WIDTH
+     ink_only: str = "off"
+     half_size: bool = False
+     heads: str = "all"
+     weight_average: float = 0.0
+     prefetch: bool = False
+     decoder: str = "full"
+     precision: str = "float32"
+     labels: str = "boxes"
++    composites: float = 0.0
+ 
+     def __post_init__(self):
+         for f in dataclasses.fields(self):
+             v = getattr(self, f.name)
+             if f.type is bool and not isinstance(v, bool):
+                 raise ValueError(f"recipe: {f.name} is True or False, not {v!r}")
+             if f.type is int and (isinstance(v, bool) or not isinstance(v, (int, np.integer))):
+                 raise ValueError(f"recipe: {f.name} is a whole number, not {v!r}")
+             if f.type is float and (isinstance(v, bool) or not isinstance(v, (int, float, np.integer, np.floating))):
+                 raise ValueError(f"recipe: {f.name} is a number, not {v!r}")
+             if f.type in (int, float):
+                 object.__setattr__(self, f.name, f.type(v))     # one type per setting: one name, one saved form
+             if f.name in CHOICES and v not in CHOICES[f.name]:
+                 raise ValueError(f"recipe: {f.name} is one of {', '.join(CHOICES[f.name])}, not {v!r}")
+         for name, ok, rule in (("iterations", self.iterations >= 1, "at least 1"),
+                                ("batch", self.batch >= 1, "at least 1"), ("crop", self.crop >= 1, "at least 1"),
+                                ("width", self.width >= 1, "at least 1"), ("max_lr", self.max_lr > 0, "above 0"),
+                                ("pct_start", 0 < self.pct_start < 1, "between 0 and 1"),
+-                               ("weight_average", 0 <= self.weight_average < 1, "at least 0 and below 1")):
++                               ("weight_average", 0 <= self.weight_average < 1, "at least 0 and below 1"),
++                               ("composites", 0 <= self.composites <= 1, "between 0 and 1")):
+             if not ok:
+                 raise ValueError(f"recipe: {name} must be {rule}, not {getattr(self, name)}")
+         if self.half_size and self.crop % model.FOLD:
+             raise ValueError(f"recipe: half_size folds each crop {model.FOLD} x {model.FOLD}, so the crop must be "
+                              f"even, not {self.crop}")
+ 
+     def name(self) -> str:
+         """A short id of the weights the recipe trains, the same every run (for folder names): each setting that
+         differs from the old recipe's (the defaults), sorted by name, as "name=value" (a switch turned on as its name
+         alone), joined by "-"; "default" when none differs.  The settings of NOT_IN_NAME, which never change the weights,
+@@ -183,30 +190,37 @@ def centre_pools(sheets: list[data.SheetData]) -> tuple[Pool, Pool]:
+     data.LOAD_THREADS sheets at a time.  Stops (ValueError) when either pool is empty."""
+     with ThreadPoolExecutor(data.LOAD_THREADS) as ex:
+         found = list(ex.map(lambda sd: data.centres(sd, CENTRE_STRIDE), sheets))
+     pools = Pool([f[0] for f in found]), Pool([f[1] for f in found])
+     if not len(pools[0]) or not len(pools[1]):
+         raise ValueError(f"nothing to train on: {len(pools[0])} text and {len(pools[1])} ink px where a crop may "
+                          "centre")
+     return pools
+ 
+ 
+-def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe,
+-         rng: np.random.Generator) -> list[dict[str, np.ndarray]]:
++def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator,
++         bank=None) -> list[dict[str, np.ndarray]]:
+     """One batch of `recipe.batch` crops: for each, text or ink, a centre from that pool, a scale and a number of
+-    turns; its targets by the recipe's label rule."""
++    turns; its targets by the recipe's label rule, or, with chance `recipe.composites` (drawn only when it is above 0),
++    a composite of `bank` from the same centre, scale and turns (ValueError without a bank)."""
++    if recipe.composites > 0 and bank is None:
++        raise ValueError(f"a recipe with composites ({recipe.composites}) draws them from a bank: none was given")
+     out = []
+     for _ in range(recipe.batch):
+         pool = pools[0] if rng.random() < TEXT_SHARE else pools[1]
+         i, y, x = pool[rng.integers(len(pool))]
+         scale = float(np.exp(rng.uniform(np.log(SCALE[0]), np.log(SCALE[1]))))
+-        out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, int(rng.integers(4)), labels=recipe.labels))
++        turns = int(rng.integers(4))
++        if recipe.composites > 0 and rng.random() < recipe.composites:
++            out.append(bank.crop(rng, sheets[i], y, x, recipe.crop, scale, turns))
++        else:
++            out.append(data.crop_targets(sheets[i], y, x, recipe.crop, scale, turns, labels=recipe.labels))
+     return out
+ 
+ 
+ def _next_to(ink: np.ndarray) -> np.ndarray:
+     """Each px of (n, h, w) bool crops that is ink or one of the 8 px around an ink px of its crop."""
+     h, w = ink.shape[1:]
+     p = np.pad(ink, ((0, 0), (1, 1), (1, 1)))
+     out = np.zeros_like(ink)
+     for dy in range(3):
+         for dx in range(3):
+@@ -310,26 +324,28 @@ class Copies:
+         batch, done = self.held.popleft()
+         done.synchronize()          # the copy has read the batch: only now may its memory go
+         del batch
+ 
+     def close(self) -> None:
+         while self.held:
+             self._let_go()
+ 
+ 
+ @contextlib.contextmanager
+-def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator):
+-    """The training's batches (`batch_tensors` of `draw`), one per step, from `rng` in order: drawn when asked for or,
+-    with `recipe.prefetch`, by a background thread up to PREFETCH ahead (which alone uses `rng` meanwhile: the same
+-    batches, in the same order).  An error in that thread is raised where the batch is asked for."""
++def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe, rng: np.random.Generator,
++             bank=None):
++    """The training's batches (`batch_tensors` of `draw`, composites from `bank`), one per step, from `rng` in order:
++    drawn when asked for or, with `recipe.prefetch`, by a background thread up to PREFETCH ahead (which alone uses `rng`
++    and the bank meanwhile: the same batches, in the same order).  An error in that thread is raised where the batch is
++    asked for."""
+     def make():
+-        return batch_tensors(draw(sheets, pools, recipe, rng), recipe.ink_only)
++        return batch_tensors(draw(sheets, pools, recipe, rng, bank), recipe.ink_only)
+ 
+     if not recipe.prefetch:
+         yield (make() for _ in range(recipe.iterations))
+         return
+     ready, stop = queue.Queue(PREFETCH), threading.Event()
+ 
+     def put(item) -> bool:
+         while not stop.is_set():
+             try:
+                 ready.put(item, timeout=0.1)
+@@ -355,39 +371,43 @@ def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Rec
+ 
+     worker = threading.Thread(target=produce, name="textnet-prefetch", daemon=True)
+     worker.start()
+     try:
+         yield consume()
+     finally:
+         stop.set()
+         worker.join()
+ 
+ 
+-def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None, seed: int = 0) -> model.TextNet:
+-    """A TextNet fitted on the sheets by `recipe` on `device` (default `default_device()`); see the module.  On `mps`
+-    the caller holds the GPU's exclusive turn (`gpu.gpu_turn`).  Raises FloatingPointError at the first log whose
+-    mean loss over the steps since the last is not finite."""
++def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None, seed: int = 0,
++        bank=None) -> model.TextNet:
++    """A TextNet fitted on the sheets by `recipe` on `device` (default `default_device()`), its composites (if the
++    recipe has any) from `bank`; see the module.  On `mps` the caller holds the GPU's exclusive turn (`gpu.gpu_turn`).
++    ValueError, before any training, for a recipe with composites and no bank.  Raises FloatingPointError at the first
++    log whose mean loss over the steps since the last is not finite."""
++    if recipe.composites > 0 and bank is None:
++        raise ValueError(f"a recipe with composites ({recipe.composites}) draws them from a bank: none was given")
+     device = device or default_device()
+     settle_torch()
+     torch.manual_seed(seed)
+     rng = np.random.default_rng(seed)
+     pools = centre_pools(sheets)
+     net = build_net(recipe).to(device)
+     opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=WEIGHT_DECAY)
+     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.iterations,
+                                                 pct_start=recipe.pct_start)
+     average = WeightAverage(net, recipe.weight_average) if recipe.weight_average else None
+     sums, first, t0 = torch.zeros(3, device=device), 1, time.perf_counter()
+     copies = Copies(device)
+     half = recipe.precision == "float16"
+     scaler = torch.amp.GradScaler(torch.device(device).type, enabled=half)
+-    with _batches(sheets, pools, recipe, rng) as batches, contextlib.closing(copies):
++    with _batches(sheets, pools, recipe, rng, bank) as batches, contextlib.closing(copies):
+         for it, batch in enumerate(batches, 1):
+             x, t, k, a, w = copies(batch)
+             with torch.autocast(torch.device(device).type, dtype=torch.float16, enabled=half):
+                 out = net(x)
+             loss, parts = loss_fn(out.float(), t, k, a, w)      # the loss in float32, outside the autocast
+             opt.zero_grad()
+             scaler.scale(loss).backward()
+             scaler.step(opt)
+             scaler.update()
+             sched.step()
+diff --git a/pipeline/tests/test_solver_textnet.py b/pipeline/tests/test_solver_textnet.py
+index 21b02d3..d65547d 100644
+--- a/pipeline/tests/test_solver_textnet.py
++++ b/pipeline/tests/test_solver_textnet.py
+@@ -489,25 +489,25 @@ def _fixed_batch(sheets, size=64) -> list[dict[str, np.ndarray]]:
+ def _flip(crops, where) -> list[dict[str, np.ndarray]]:
+     """The crops with their text, kind and reading-angle targets changed at the px `where` (one mask per crop)."""
+     return [{**c, "text": np.where(m, 1 - c["text"], c["text"]).astype(np.uint8),
+              "kind": np.where(m, 2, c["kind"]).astype(np.uint8),
+              "angle": np.where(m, 45, c["angle"]).astype(np.int16)} for c, m in zip(crops, where)]
+ 
+ 
+ def test_default_recipe_trains_as_today(maps):
+     # today's settings: 8,000 steps of 12 crops of 320 px, a one-cycle peak of 2e-3 reached 30% in, width 24, the
+     # loss on every known px, the network at full size with all seven outputs, no average, no prefetch, every px of a
+-    # word box taught as text (the label rule "boxes")
++    # word box taught as text (the label rule "boxes"), no composites
+     assert dataclasses.asdict(train.Recipe()) == {
+         "iterations": 8000, "max_lr": 2e-3, "pct_start": 0.3, "batch": 12, "crop": 320, "width": 24, "ink_only": "off",
+         "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full",
+-        "precision": "float32", "labels": "boxes"}
++        "precision": "float32", "labels": "boxes", "composites": 0.0}
+     torch.manual_seed(0)
+     net = train.build_net(train.Recipe())
+     assert sum(p.numel() for p in net.parameters()) == TODAYS_PARAMETERS
+     # on a fixed batch, the loss is today's: the weight is the known px, and the loss of the outputs is the same
+     crops = _fixed_batch(data.load_sheets([paths.SERIES, OLD], hold_out_validation=True))
+     x, t, k, a, w = train.to_tensors(crops, "cpu", train.Recipe().ink_only)
+     known = torch.from_numpy(np.stack([c["known"] for c in crops]).astype(np.float32))
+     assert torch.equal(w, known) and (t * w).sum() > 0 and (w == 0).any()
+     out = net(x)
+     assert out.shape == (4, 7, 64, 64)
+diff --git a/pipeline/tests/test_textlines_variant.py b/pipeline/tests/test_textlines_variant.py
+index 45f3401..4617e60 100644
+--- a/pipeline/tests/test_textlines_variant.py
++++ b/pipeline/tests/test_textlines_variant.py
+@@ -1,23 +1,25 @@
+ """scripts/textlines/variant.py on the synthetic `maps` fixture: a 2-step CPU training and a stub for the gate."""
++import contextlib
+ import json
+ import sys
+ from pathlib import Path
+ 
+ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "textlines"))
+ import cv2  # noqa: E402
+ import numpy as np  # noqa: E402
++import pytest  # noqa: E402
+ import variant  # noqa: E402
+ from test_solver_textnet import OLD, TINY, maps  # noqa: E402,F401
+ 
+ from sfzmaps.solver import paths  # noqa: E402
+-from sfzmaps.solver.textnet import data, reader_stage  # noqa: E402
++from sfzmaps.solver.textnet import composite, data, reader_stage  # noqa: E402
+ 
+ 
+ def test_a_run_makes_its_folder(maps, monkeypatch):  # noqa: F811
+     monkeypatch.setattr(variant, "RUNS_DIR", maps / "runs")
+     monkeypatch.setattr(variant, "LINES", maps / "lines")
+     sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False)
+     sd = next(s for s in sheets if s.series == paths.SERIES)
+     counts = [(reader_stage.page_quarters(sd) == i).sum() for i in range(4)]
+     q = int(np.argmax(counts))           # the synthetic pages lie in the quarter their placement puts them in
+     quarter = paths.QUARTERS[q]
+@@ -32,10 +34,40 @@ def test_a_run_makes_its_folder(maps, monkeypatch):  # noqa: F811
+                       extra_series=(OLD,))
+     assert out.name == f"t-{quarter}-s0"
+     run = json.loads((out / "run.json").read_text())
+     assert (out / "model.pt").is_file() and (out / "scores.json").is_file()
+     assert run["seed"] == 0 and run["recipe"]["labels"] == "lines-unknown" and "git_head" in run
+     assert seen == {"quarter": quarter, "extra": [OLD]}
+     chance = cv2.imread(str(out / "chance" / f"{sd.sheet}.png"), cv2.IMREAD_UNCHANGED)
+     assert chance.shape == (sd.height, sd.width)
+     assert not chance[reader_stage.page_quarters(sd) != q].any()
+     assert (out / "chance" / OLD / "3.png").is_file()
++
++
++def test_a_composites_run_builds_its_bank_before_the_gpu_turn(maps, monkeypatch):  # noqa: F811
++    monkeypatch.setattr(variant, "RUNS_DIR", maps / "runs")
++    monkeypatch.setattr(variant, "LINES", maps / "lines")
++    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False)
++    order = []
++    build = composite.Bank.build
++
++    def recorded(prepared, areas, seed, threads=1):
++        order.append(("bank", tuple(areas), seed, all(sd.line_bits.shape == sd.ink_bits.shape for sd in prepared)))
++        return build(prepared, areas, seed, threads)
++
++    @contextlib.contextmanager
++    def turn(exclusive, device):
++        order.append("gpu")
++        yield
++
++    monkeypatch.setattr(composite.Bank, "build", recorded)
++    monkeypatch.setattr(variant.gpu, "gpu_turn", turn)
++    area = data.Quarter(0)
++    recipe = variant.dataclasses.replace(TINY, labels="lines-unknown", composites=0.5)
++    out = variant.run("c", recipe, "nw", 1, device="cpu", sheets=sheets, areas=(area,),
++                      score=lambda out, *a: (out / "scores.json").write_text("{}"))
++    assert order == [("bank", (area,), 1, True), "gpu"]
++    run = json.loads((out / "run.json").read_text())
++    assert run["recipe"]["composites"] == 0.5 and set(run["bank"]) == {paths.SERIES, OLD}
++    assert run["composites_made"] is not None and "bank" in run["minutes"]
++    with pytest.raises(ValueError, match="lines-unknown"):
++        variant.run("c", variant.dataclasses.replace(TINY, composites=0.5), "nw", 1, device="cpu", sheets=sheets)
+diff --git a/pipeline/tests/test_textnet_composite.py b/pipeline/tests/test_textnet_composite.py
+new file mode 100644
+index 0000000..99f7eb5
+--- /dev/null
++++ b/pipeline/tests/test_textnet_composite.py
+@@ -0,0 +1,450 @@
++"""Composites inside real crops (`textnet.composite`): real clean words ORed onto real line work, and real line pieces
++ORed across clean words, with exact masks; the bank of references they come from, which holds nothing held out; the
++measures the bank rests on; and their way into `train.draw` (none when the recipe's share is 0)."""
++import dataclasses
++import hashlib
++import threading
++from types import SimpleNamespace
++
++import cv2
++import numpy as np
++import pytest
++from test_solver_textnet import OLD, TINY, maps  # noqa: F401
++
++from sfzmaps.solver import grid, paths
++from sfzmaps.solver.textnet import composite, data, train, zones
++
++# sha256 (`_digest`) of draw_n(maps, train.Recipe(), seed=3) with train.py at 102f422, before composites existed
++PINNED_BATCHES_SEED3 = "dd2f5a8193a451c7b9774f45bb76b9d8beeccea87465456dd8af6c0935517820"
++FT_PER_PX = 4.0           # the run rule's length is round(200 / 4) = 50 px here
++ORIGIN = (6000000.0, 2100000.0)                 # the map point (EPSG:2227 ft) of page px (0, 0)
++PAGE = 640
++SHEET = "2000-digital-zoning-p01"
++LINES = (200, 440)        # rows and columns of the printed line grid, 2 px
++CLEAN = (("RM-2", (40, 100), "zoning code"), ("RH-1", (250, 100), "zoning code"),
++         ("12", (70, 330), "block number"), ("ELM ST", (250, 330), "street name"))
++CROSSED = ("RC-3", (470, 100), "zoning code")   # a line through its middle: not clean
++ZONE_POINT = (490, 490)   # (x, y): one of Sol's points on no word, so it keeps an unknown zone
++CENTRE = (440, 440)       # (row, col): a crop of 128 px here holds the lines' crossing, part of the zone, no word
++SERIES = paths.SERIES
++
++
++# --- helpers ---------------------------------------------------------------------------------------------------------
++
++def _digest(batches) -> str:
++    """sha256 of batches of crops: every key, dtype, shape and byte, in order."""
++    h = hashlib.sha256()
++    for batch in batches:
++        for crop in batch:
++            for k in sorted(crop):
++                v = np.ascontiguousarray(crop[k])
++                h.update(f"{k}|{v.dtype.str}|{v.shape}|".encode())
++                h.update(v.tobytes())
++    return h.hexdigest()
++
++
++def batches_equal(a, b) -> bool:
++    """Whether two lists of batches (or their `_digest`s) are the same, byte for byte."""
++    return (a if isinstance(a, str) else _digest(a)) == (b if isinstance(b, str) else _digest(b))
++
++
++def draw_n(maps_or_sheets, recipe, seed, bank=None, n=3) -> list:
++    """`n` batches drawn by `train.draw` from one generator seeded `seed`, on the given sheets or (a fixture's folder)
++    on the `maps` fixture's two sheets with the validation area held out."""
++    sheets = maps_or_sheets if isinstance(maps_or_sheets, list) else \
++        data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
++    pools = train.centre_pools(sheets)
++    rng = np.random.default_rng(seed)
++    extra = {} if bank is None else {"bank": bank}
++    return [train.draw(sheets, pools, recipe, rng, **extra) for _ in range(n)]
++
++
++def _sheet(gray, words=(), points=(), sheet=SHEET) -> data.SheetData:
++    """A 2000 SheetData made in memory: the page `gray`, placed north up at FT_PER_PX ft per page px with page px
++    (0, 0) at ORIGIN; Terra's `words` (axis box, kind, reading angle) and Sol's `points` (x, y)."""
++    h, w = gray.shape
++    step = data.PLACEMENT_STEP
++    gx, gy = np.meshgrid(np.arange(0, w - 1 + step, step, dtype=float), np.arange(0, h - 1 + step, step, dtype=float))
++    world = np.stack([ORIGIN[0] + FT_PER_PX * gx, ORIGIN[1] - FT_PER_PX * gy], -1)
++    rects = [data.word_rect(box, angle) for box, _, angle in words]
++    return data.SheetData(
++        series=SERIES, sheet=sheet, height=h, width=w, ink_bits=np.packbits(gray < grid.INK_BELOW, axis=1),
++        words=np.round(np.array(rects, float).reshape(-1, 4, 2)).astype(np.int32),
++        kinds=np.array([data.KINDS[k] for _, k, _ in words], np.uint8),
++        angles=np.array([data.reading_angle(r) for r in rects], np.int16), other=np.zeros((0, 4, 2), np.int32),
++        points=np.array(points, np.int32).reshape(-1, 2), world=world, ft_per_px=FT_PER_PX)
++
++
++def _glyphs(text, org, scale=0.8, thick=2) -> np.ndarray:
++    """A word's glyphs alone (cv2.putText, Hershey simplex), bool PAGE x PAGE."""
++    pg = np.full((PAGE, PAGE), 255, np.uint8)
++    cv2.putText(pg, text, org, cv2.FONT_HERSHEY_SIMPLEX, scale, 0, thick)
++    return pg < grid.INK_BELOW
++
++
++def _box_of(mask, margin=2) -> list[int]:
++    """The axis box (x0, y0, x1, y1) of a mask's px, grown by `margin`: a word box as Terra gives one."""
++    rows, cols = np.nonzero(mask)
++    return [int(cols.min()) - margin, int(rows.min()) - margin, int(cols.max()) + margin, int(rows.max()) + margin]
++
++
++def _centre(box) -> tuple[int, int]:
++    return (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
++
++
++def _grid_lines() -> np.ndarray:
++    pg = np.full((PAGE, PAGE), 255, np.uint8)
++    for v in LINES:
++        cv2.line(pg, (0, v), (PAGE - 1, v), 0, 2)
++        cv2.line(pg, (v, 0), (v, PAGE - 1), 0, 2)
++    return pg < grid.INK_BELOW
++
++
++def _prepared(gray, words, points) -> data.SheetData:
++    return zones.prepare([_sheet(gray, words, points)], (), cache=None)[0]
++
++
++def _distance_to(mask: np.ndarray) -> np.ndarray:
++    """Each px's distance (px, Euclidean) to the nearest px of `mask` (inf with none)."""
++    if not mask.any():
++        return np.full(mask.shape, np.inf)
++    return cv2.distanceTransform((~mask).view(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
++
++
++@pytest.fixture
++def rng():
++    return np.random.default_rng(0)
++
++
++@pytest.fixture
++def bank_fx():
++    """One 2000 sheet: a grid of printed lines, four clean words (two codes, a block number, a street name) inside the
++    grid's cells, a code crossed by a line, Sol's points on every word and one on none (a zone); its bank."""
++    ink = _grid_lines()
++    words, points, clean_ink = [], [], []
++    for text, org, kind in (*CLEAN, CROSSED):
++        g = _glyphs(text, org)
++        ink |= g
++        box = _box_of(g)
++        words.append((box, kind, 0))
++        points.append(_centre(box))
++        if (text, org, kind) != CROSSED:
++            clean_ink.append(g[box[1]:box[3] + 1, box[0]:box[2] + 1])
++    row = _centre(words[-1][0])[1]
++    line = np.full((PAGE, PAGE), 255, np.uint8)
++    cv2.line(line, (450, row), (630, row), 0, 2)
++    ink |= line < grid.INK_BELOW
++    sd = _prepared(np.where(ink, 0, 255).astype(np.uint8), words, [*points, ZONE_POINT])
++    bank = composite.Bank.build([sd], (), seed=0)
++    return SimpleNamespace(sd=sd, sheets=[sd], bank=bank, centre=CENTRE, words=words,
++                           real_texture=composite.texture_stats(clean_ink))
++
++
++@pytest.fixture
++def bank_with_one_huge_word():
++    """A sheet with two clean words: one too big for a 64 px crop (its strokes long enough for the run rule) and a
++    small one; a printed line far from both; the page's top-left 64 x 64 px blank."""
++    huge = _glyphs("RM-2", (200, 420), scale=3.0, thick=6)
++    small = _glyphs("12", (100, 200))
++    ink = huge | small
++    ink[600:602, 20:620] = True
++    words = [(_box_of(huge), "zoning code", 0), (_box_of(small), "block number", 0)]
++    sd = _prepared(np.where(ink, 0, 255).astype(np.uint8), words, [_centre(b) for b, _, _ in words])
++    bank = composite.Bank.build([sd], (), seed=0)
++    return SimpleNamespace(sd=sd, bank=bank, huge=_box_of(huge), small=_box_of(small))
++
++
++def _forced(bank, a_share=None, cross=None):
++    """The bank making only composites of kind (a) (a_share 1) or (b) (0), and placing words on line ink with the
++    share `cross` for every kind."""
++    changes = {}
++    if a_share is not None:
++        changes["a_share"] = a_share
++    if cross is not None:
++        changes["cross"] = {s: {k: cross for k in data.KINDS.values()} for s in bank.cross}
++    return dataclasses.replace(bank, **changes)
++
++
++# --- the brief's tests -----------------------------------------------------------------------------------------------
++
++def test_a_word_onto_lines_keeps_exact_masks(bank_fx, rng):
++    c = bank_fx.bank.crop(rng, bank_fx.sd, *bank_fx.centre, 128, 1.0, 0)
++    assert (c["text"].astype(bool) <= c["ink"]).all()
++    assert (c["ink"] & ~c["text"].astype(bool) & c["known"]).any()
++
++
++def test_composites_zero_leaves_batches_unchanged(maps):  # noqa: F811
++    assert batches_equal(draw_n(maps, train.Recipe(composites=0.0), seed=3), PINNED_BATCHES_SEED3)
++
++
++def test_composites_repeat_from_the_seed(bank_fx):
++    r = train.Recipe(composites=0.5)
++    assert batches_equal(draw_n(bank_fx.sheets, r, 7, bank_fx.bank), draw_n(bank_fx.sheets, r, 7, bank_fx.bank))
++
++
++def test_composite_word_ink_is_real_word_ink(bank_fx, rng):
++    c = bank_fx.bank.crop(rng, bank_fx.sd, *bank_fx.centre, 128, 1.0, 0)
++    t = composite.texture_stats([c["ink"] & c["text"].astype(bool)])
++    assert t["pinholes_per_1000"] <= 3 * max(bank_fx.real_texture["pinholes_per_1000"], 1)
++
++
++def test_a_word_that_fits_nowhere_takes_the_next_candidate(bank_with_one_huge_word, rng):
++    fx = bank_with_one_huge_word
++    bank = _forced(fx.bank, a_share=1.0)
++    before = bank.tally["words_failed"]
++    for _ in range(12):
++        c = bank.crop(rng, fx.sd, 32, 32, 64, 1.0, 0)
++        # every crop got the small word, the huge one never fitting
++        assert c["text"].sum() == (_glyphs("12", (100, 200))).sum()
++    assert bank.tally["words_failed"] > before
++
++
++# --- the bank --------------------------------------------------------------------------------------------------------
++
++def test_the_bank_holds_the_clean_words_and_long_line_pieces_by_reference(bank_fx):
++    words = bank_fx.bank.words[SERIES]
++    assert sorted(words.kind.tolist()) == sorted(data.KINDS[k] for _, _, k in CLEAN)
++    assert words.rect.shape == (4, 4, 2) and set(words.sheet.tolist()) == {0}
++    pieces = bank_fx.bank.pieces[SERIES]
++    assert len(pieces) > 0
++    for (x0, y0, x1, y1), (sx, sy) in zip(pieces.box, pieces.seed, strict=True):
++        assert np.hypot(x1 - x0, y1 - y0) >= composite.PIECE_PX and x0 <= sx < x1 and y0 <= sy < y1
++        m = composite.piece_mask(bank_fx.sd, (x0, y0, x1, y1), (sx, sy))
++        assert m.shape == (y1 - y0, x1 - x0) and m[sy - y0, sx - x0]
++        # a piece is line ink and nothing else
++        assert (data._ink_window(bank_fx.sd, y0, x0, y1 - y0, x1 - x0) >= m).all()
++        assert (data.line_window(bank_fx.sd, y0, x0, y1 - y0, x1 - x0) >= m).all()
++    # the crossed code is the share crossed: one code of three, no block number, no street name
++    assert bank_fx.bank.cross[SERIES][data.KINDS["zoning code"]] == pytest.approx(1 / 3)
++    assert bank_fx.bank.cross[SERIES][data.KINDS["block number"]] == 0.0
++    sizes = bank_fx.bank.sizes()
++    assert sizes[SERIES]["clean_words"]["zoning code"] == 2 and sizes[SERIES]["pieces"] == len(pieces)
++
++
++def test_the_bank_takes_nothing_from_an_area_held_out(bank_fx):
++    right = data.MapRect(ORIGIN[0] + FT_PER_PX * 320, ORIGIN[1] - FT_PER_PX * 1000, ORIGIN[0] + FT_PER_PX * 1000,
++                         ORIGIN[1] + 10)              # page columns 320 on
++    bank = composite.Bank.build(bank_fx.sheets, (right,), seed=0)
++    words = bank.words[SERIES]
++    assert len(words) and (words.rect[..., 0].max(axis=1) + composite.CLEAN_PX < 320).all()
++    assert len(words) < len(bank_fx.bank.words[SERIES])
++    pieces = bank.pieces[SERIES]
++    assert len(pieces) and (pieces.box[:, 2] <= 320 - composite.CLEAN_PX).all()
++    # the crossing share counts only the words whose centre is outside it: the crossed code is in it
++    assert bank.cross[SERIES][data.KINDS["zoning code"]] == 0.0
++    # a composite made of it holds the area out too: no lesson there
++    held = data.in_area(bank.sheets[0], right, 0, 0, PAGE, PAGE)
++    only_b = _forced(bank, a_share=0.0)
++    for seed in range(6):
++        c = only_b.crop(np.random.default_rng(seed), bank_fx.sd, *CENTRE, 512, 1.0, 0)
++        assert only_b.last["mode"] == "b"
++        y0, x0, src = only_b.last["window"]
++        assert held[y0:y0 + src, x0:x0 + src].sum() > 1000
++        assert not c["known"][held[y0:y0 + src, x0:x0 + src]].any()
++
++
++def test_a_bank_needs_the_sheets_line_px():
++    sd = _sheet(np.full((PAGE, PAGE), 255, np.uint8))
++    with pytest.raises(ValueError, match="line px"):
++        composite.Bank.build([sd], (), seed=0)
++
++
++def test_a_bank_with_no_word_that_fits_leaves_the_crop_as_it_is(bank_with_one_huge_word, rng):
++    fx = bank_with_one_huge_word
++    words = fx.bank.words[SERIES]
++    only_huge = dataclasses.replace(fx.bank, a_share=1.0,
++                                    words={SERIES: words.take(np.flatnonzero(words.kind == data.KINDS["zoning code"]))})
++    c = only_huge.crop(rng, fx.sd, 32, 32, 64, 1.0, 0)
++    base = data.crop_targets(fx.sd, 32, 32, 64, 1.0, 0, labels="lines-unknown")
++    assert all(np.array_equal(c[k], base[k]) for k in base)
++    assert only_huge.last["mode"] == "none"
++
++
++# --- (a) a word onto lines -------------------------------------------------------------------------------------------
++
++def test_a_word_goes_on_line_ink_clear_of_words_boxes_and_zones(bank_fx):
++    bank = _forced(bank_fx.bank, a_share=1.0, cross=1.0)
++    base = data.crop_targets(bank_fx.sd, *CENTRE, 128, 1.0, 0, labels="lines-unknown")
++    y0, x0 = CENTRE[0] - 64, CENTRE[1] - 64
++    line_ink = data.line_window(bank_fx.sd, y0, x0, 128, 128) & base["ink"]
++    to_forbidden = _distance_to((base["text"] > 0) | ~base["known"])
++    assert np.isfinite(to_forbidden).any()      # the zone reaches into the crop
++    overlaps = 0
++    for seed in range(10):
++        c = bank.crop(np.random.default_rng(seed), bank_fx.sd, *CENTRE, 128, 1.0, 0)
++        assert bank.last["mode"] == "a" and bank.last["on_line"]
++        new = c["text"].astype(bool) & ~base["text"].astype(bool)
++        assert new.any() and (new <= c["ink"]).all() and c["known"][new].all()
++        assert to_forbidden[new].min() > composite.CLEAN_PX
++        word = bank.words[SERIES]
++        assert set(c["kind"][new].tolist()) == {int(word.kind[bank.last["word"]])}
++        # on the line: line ink under the word's box, taught not text where the letters are not
++        py, px, ph, pw = bank.last["placed"]
++        assert line_ink[py:py + ph, px:px + pw].any()
++        assert (c["known"] & line_ink & ~c["text"].astype(bool)).any()
++        overlaps += int((new & line_ink).any())
++    assert overlaps                              # some letters lie on the line: those px are text
++
++
++def test_a_word_off_the_lines_keeps_clear_of_line_px(bank_fx):
++    bank = _forced(bank_fx.bank, a_share=1.0, cross=0.0)
++    base = data.crop_targets(bank_fx.sd, *CENTRE, 128, 1.0, 0, labels="lines-unknown")
++    to_line = _distance_to(data.line_window(bank_fx.sd, CENTRE[0] - 64, CENTRE[1] - 64, 128, 128))
++    placed = 0
++    for seed in range(10):
++        c = bank.crop(np.random.default_rng(seed), bank_fx.sd, *CENTRE, 128, 1.0, 0)
++        new = c["text"].astype(bool) & ~base["text"].astype(bool)
++        if bank.last["mode"] == "a":
++            placed += 1
++            assert not bank.last["on_line"] and to_line[new].min() > composite.CLEAN_PX
++    assert placed
++
++
++# --- (b) a line onto a word ------------------------------------------------------------------------------------------
++
++def test_a_line_across_a_word_is_ink_not_text_and_the_word_stays_text(bank_fx):
++    bank = _forced(bank_fx.bank, a_share=0.0)
++    for seed in range(10):
++        c = bank.crop(np.random.default_rng(seed), bank_fx.sd, *CENTRE, 128, 1.0, 0)
++        info = bank.last
++        assert info["mode"] == "b"
++        y0, x0, src = info["window"]
++        wsd = bank.sheets[info["sheet"]]
++        base = data.crop_targets(wsd, info["centre"][0], info["centre"][1], 128, 1.0, 0, labels="lines-unknown")
++        rect = bank.words[SERIES].rect[info["word"]]
++        in_rect = data._paint(rect[None], np.ones(1, np.int32), y0, x0, src, src) > 0
++        word_ink = base["ink"] & in_rect
++        new_ink = c["ink"] & ~base["ink"]
++        assert new_ink.any()                                   # the piece, ORed in
++        assert not c["text"][new_ink].any() and c["known"][new_ink].all()
++        assert c["text"][word_ink].all() and c["known"][word_ink].all()
++        assert (c["text"].astype(bool) <= c["ink"]).all()
++        assert (new_ink & in_rect).any()                       # across the word's box
++
++
++def test_a_line_onto_a_word_teaches_its_long_strokes_as_text(bank_with_one_huge_word):
++    fx = bank_with_one_huge_word
++    words = fx.bank.words[SERIES]
++    huge = np.flatnonzero(words.kind == data.KINDS["zoning code"])
++    bank = dataclasses.replace(fx.bank, a_share=0.0, words={SERIES: words.take(huge)})
++    c = bank.crop(np.random.default_rng(1), fx.sd, 32, 32, 320, 1.0, 0)
++    y0, x0, src = bank.last["window"]
++    base = data.crop_targets(fx.sd, *bank.last["centre"], 320, 1.0, 0, labels="lines-unknown")
++    glyph = _glyphs("RM-2", (200, 420), scale=3.0, thick=6)[y0:y0 + src, x0:x0 + src]
++    assert (~base["known"] & glyph).sum() > 100             # the label rule leaves its long strokes unknown
++    assert c["text"][glyph].all() and c["known"][glyph].all()
++
++
++# --- the page-scale path ---------------------------------------------------------------------------------------------
++
++def test_the_page_scale_path_is_crop_targets(bank_fx):
++    for size, scale, turns in ((128, 1.0, 0), (128, 0.6, 1), (96, 1.6, 2), (101, 1.3, 3)):
++        parts = composite._page_parts(bank_fx.sd, *CENTRE, size, scale)
++        got = composite._finish(parts, size, turns)
++        want = data.crop_targets(bank_fx.sd, *CENTRE, size, scale, turns, labels="lines-unknown")
++        assert sorted(got) == sorted(want)
++        assert all(got[k].dtype == want[k].dtype and np.array_equal(got[k], want[k]) for k in want)
++
++
++# --- the measures ----------------------------------------------------------------------------------------------------
++
++def test_measure_counts_the_words_crossed_and_the_clean_words_by_kind(bank_fx):
++    m = composite.measure(bank_fx.sheets)
++    cross = m["cross_by_kind"]
++    assert cross["zoning code"] == {"words": 3, "crossed": 1, "share": pytest.approx(1 / 3)}
++    assert cross["block number"] == {"words": 1, "crossed": 0, "share": 0.0}
++    assert cross["other"] == {"words": 0, "crossed": 0, "share": None}
++    assert cross["all"] == {"words": 5, "crossed": 1, "share": pytest.approx(0.2)}
++    assert m["clean_words"] == {"zoning code": 2, "block number": 1, "street name": 1, "other": 0}
++    assert m["clean_word_texture"]["masks"] == 4
++    assert m["line_texture"]["3"]["pieces"] >= 4         # the grid's lines (cv2.line at thickness 2 draws 3 px)
++    right = data.MapRect(ORIGIN[0] + FT_PER_PX * 320, ORIGIN[1] - FT_PER_PX * 1000, ORIGIN[0] + FT_PER_PX * 1000,
++                         ORIGIN[1] + 10)
++    m = composite.measure(bank_fx.sheets, (right,))
++    assert m["cross_by_kind"]["zoning code"] == {"words": 2, "crossed": 0, "share": 0.0}
++
++
++def test_texture_stats_counts_isolated_px_pinholes_and_pieces():
++    a = np.zeros((20, 20), bool)
++    a[2:12, 2:12] = True
++    a[6, 6] = False               # a pinhole
++    a[16, 16] = True              # an isolated px
++    b = np.zeros((5, 5), bool)
++    b[1:4, 1:4] = True
++    t = composite.texture_stats([a, b])
++    ink = 99 + 1 + 9
++    assert t["masks"] == 2 and t["ink_px"] == ink
++    assert t["isolated_share"] == pytest.approx(1 / ink)
++    assert t["pinholes_per_1000"] == pytest.approx(1000 / ink)
++    assert t["pieces_per_word"] == pytest.approx(1.5)
++
++
++def _bar(top_bumps: np.ndarray, width=4, length=200) -> np.ndarray:
++    """A horizontal bar `width` px thick and `length` px long, its top edge raised 1 px at the columns where
++    `top_bumps` is 1."""
++    m = np.zeros((width + 6, length + 4), bool)
++    m[3:3 + width, 2:2 + length] = True
++    m[2, 2:2 + length] = top_bumps.astype(bool)
++    return m
++
++
++def test_line_texture_is_the_edges_offsets_from_a_straight_fit():
++    straight = composite.line_texture([_bar(np.zeros(200))])
++    assert straight["4"]["pieces"] == 1 and straight["4"]["sd"] == pytest.approx(0.0, abs=1e-6)
++    bumps = (np.random.default_rng(0).random(200) < 0.2).astype(float)
++    t = composite.line_texture([_bar(bumps)])["4"]
++    # pooled over the two edges: the top's offsets from its fit (the bumps less their mean), the bottom's none
++    assert t["sd"] == pytest.approx(np.sqrt(np.var(bumps) / 2), rel=0.05)
++    assert abs(t["ac1"]) < 0.25
++    blocky = np.repeat((np.random.default_rng(1).random(25) < 0.3).astype(float), 8)
++    assert composite.line_texture([_bar(blocky)])["4"]["ac1"] > 0.6
++    # a piece that is not one straight stroke (an L) is left out, and counted
++    ell = np.zeros((120, 120), bool)
++    ell[100:104, 0:110] = True
++    ell[0:104, 100:104] = True
++    t = composite.line_texture([ell])
++    assert t["not_straight"] == 1 and not any(v["pieces"] for k, v in t.items() if k != "not_straight")
++
++
++# --- into the training -----------------------------------------------------------------------------------------------
++
++def test_the_composite_share_is_a_recipe_setting_named_only_when_set():
++    assert train.Recipe().composites == 0.0 and train.Recipe().name() == "default"
++    assert train.Recipe(composites=0.25).name() == "composites=0.25"
++    for bad in (-0.1, 1.5):
++        with pytest.raises(ValueError, match="composites"):
++            train.Recipe(composites=bad)
++
++
++class _FakeBank:
++    """Any object with `.crop(rng, sd, y, x, size, scale, turns)`: records its calls and draws once from the rng."""
++
++    def __init__(self):
++        self.calls = []
++
++    def crop(self, rng, sd, y, x, size, scale, turns):
++        self.calls.append((threading.current_thread().name, sd.sheet, y, x, size, scale, turns))
++        rng.random()
++        return data.crop_targets(sd, y, x, size, scale, turns)
++
++
++def test_draw_asks_the_bank_for_a_share_of_its_crops(maps):  # noqa: F811
++    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
++    pools = train.centre_pools(sheets)
++    bank = _FakeBank()
++    train.draw(sheets, pools, train.Recipe(batch=6, crop=64, composites=0.0), np.random.default_rng(0), bank=bank)
++    assert bank.calls == []
++    train.draw(sheets, pools, train.Recipe(batch=6, crop=64, composites=1.0), np.random.default_rng(0), bank=bank)
++    assert len(bank.calls) == 6 and all(size == 64 and 0.6 <= scale <= 1.6 for *_, size, scale, _ in bank.calls)
++    with pytest.raises(ValueError, match="bank"):
++        train.draw(sheets, pools, train.Recipe(batch=6, crop=64, composites=1.0), np.random.default_rng(0))
++
++
++def test_fit_with_composites_needs_a_bank_and_trains_with_one(bank_fx):
++    recipe = dataclasses.replace(TINY, composites=0.5, labels="lines-unknown")
++    with pytest.raises(ValueError, match="bank"):
++        train.fit(bank_fx.sheets, recipe, device="cpu", seed=0)
++    before = bank_fx.bank.tally["a"] + bank_fx.bank.tally["b"]
++    net = train.fit(bank_fx.sheets, recipe, device="cpu", seed=0, bank=bank_fx.bank)
++    assert all(np.isfinite(v.numpy()).all() for v in net.state_dict().values() if v.is_floating_point())
++    assert bank_fx.bank.tally["a"] + bank_fx.bank.tally["b"] > before
