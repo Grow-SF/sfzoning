@@ -615,20 +615,35 @@ def _near_line(V: _Votes, v: dict, *prms) -> np.ndarray:
 def _move(V: _Votes, v: dict, lq, lf, la, j: int, near: np.ndarray):
     """value(prm, tag): the log likelihood of the votes `near` (of `v`) with word j at (prm, tag), the other words
     held (lq, lf their terms on `v`, la the log weights); and word j's terms there.  Off those votes word j's terms
-    are -inf at every (prm, tag) it is asked of (`_near_line`), so only theirs change."""
-    vn = _sub(v, near)
-    nq, nf = lq[near], lf[near]
+    are -inf at every (prm, tag) it is asked of (`_near_line`), so only theirs change.  The other words' parts of
+    `_mixture` (their prod (1 - q), sum a q and sum a q (1 - outlier) f) are summed once, so each value costs word j's
+    terms alone: the same sums as `_mixture`'s, in another order."""
+    vn = {key: v[key][near] for key in ("p", "o", "ll", "lh", "th", "t")}
+    lin, none = v["lin"][near], v["lout"][near] + v["lbg"][near]
+    stray = V.leps + v["lbg"][near]
+    oq, of, oa = np.delete(lq[near], j, 1), np.delete(lf[near], j, 1), np.delete(la, j)
+    rest = _log1m_exp(oq).sum(1) if oq.shape[1] else np.zeros(len(near))
+    lw = oq + oa[None, :]
+    others = _lse(lw)
+    with np.errstate(invalid="ignore"):
+        others_joint = _lse(lw + V.lkeep + of)
+    aj = float(la[j])
 
     def value(prm, tag):
         lqj, lfj = np.full(len(near), -np.inf), np.full(len(near), -np.inf)
         inside = V.inside(vn["p"], prm)
         if inside.any():
-            sv = _sub(vn, inside)
+            sv = {key: a[inside] for key, a in vn.items()}
             lqj[inside] = V.log_q(sv["p"], prm)
             lfj[inside] = V.log_vote(sv, prm, tag)
-        cq, cf = nq.copy(), nf.copy()
-        cq[:, j], cf[:, j] = lqj, lfj
-        return float(_mixture(vn, cq, cf, V, la)[0].sum()), lqj, lfj
+        log_rest = rest + _log1m_exp(lqj)
+        log_c = _log1m_exp(log_rest)
+        wj = lqj + aj
+        total = np.logaddexp(others, wj)
+        with np.errstate(invalid="ignore"):
+            words_ = np.where(np.isfinite(total), np.logaddexp(others_joint, wj + V.lkeep + lfj) - total, -np.inf)
+        num = np.logaddexp(lin + log_c + np.logaddexp(words_, stray), log_rest + none)
+        return float((num - none).sum()), lqj, lfj
 
     return value
 
