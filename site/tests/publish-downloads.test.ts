@@ -186,6 +186,16 @@ describe("plan: citywide sidecars", () => {
     expect(next.files["1921/citywide.cog"].extraSha256).toEqual({ "README.txt": "a".repeat(64), "LICENSE.txt": "b".repeat(64) });
   });
 
+  it("a legacy entry (no extraSha256) on the same made date proceeds without the collision error and records extraSha256", () => {
+    const first = run(cityIndex("2026-11-03"));
+    const { extraSha256: _old, ...oldEntry } = first.files["1921/citywide.cog"];
+    void _old;
+    const next = run(cityIndex("2026-11-03"), { files: { "1921/citywide.cog": oldEntry }, sheets: {} }, { versions: first.newVersions });
+    expect(next.files["1921/citywide.cog"]).toMatchObject({ name: cityName("2026-11-03", "tif") });
+    expect(next.files["1921/citywide.cog"].extraSha256).toEqual({ "README.txt": "a".repeat(64), "LICENSE.txt": "b".repeat(64) });
+    expect(next.newVersions).toEqual([]);
+  });
+
   it("a sidecar change on the same made date as the published image stops with a clear error instead of colliding on names", () => {
     const first = run(cityIndex("2026-11-03"));
     expect(() => run(cityIndex("2026-11-03", "c".repeat(64)), { files: first.files, sheets: {} }, { versions: first.newVersions })).toThrow(
