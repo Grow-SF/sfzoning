@@ -1,0 +1,4225 @@
+{
+ "versions": [
+  {
+   "series": "1921",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1921-citywide-2026-11-18-e5541153.tif",
+   "date": "2026-11-18",
+   "bytes": 129656656,
+   "sha256": "e55411533867bda7e3375d1666c43bda5c89aa68ac62a6e3eb47cb79f009b552"
+  },
+  {
+   "series": "1921",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1921-districts-2026-11-18-2dc16a87.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2992603,
+   "sha256": "2dc16a871fbebdafd033d467d705ddecd881bace5c7cddeec8be238b56a36d97"
+  },
+  {
+   "series": "1921",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1921-districts-2026-11-18-f691bda2.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15356849,
+   "sha256": "f691bda25b007afb69966d4f5bd4ac04638c33a1ec56de5b165c3842f7f10551"
+  },
+  {
+   "series": "1921",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1921-districts-2026-11-18-49457985.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7422640,
+   "sha256": "494579855729c5ac96d84256b3df5e43d0155ee194836e6740d03d14aef2176f"
+  },
+  {
+   "series": "1921",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1921-lots-2026-11-18-87cff7d4.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6196857,
+   "sha256": "87cff7d4ab9cbf525de938052a431af05e0d0568fce991116f09eaeb0762ea03"
+  },
+  {
+   "series": "1921",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1921-lots-2026-11-18-0de51a01.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 34395770,
+   "sha256": "0de51a0109d5dcbb84dfecc31e641824f3b20000b651cd5e46b31a51d9873fb7"
+  },
+  {
+   "series": "1921",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1921-lots-2026-11-18-8a9f07d4.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 13763087,
+   "sha256": "8a9f07d438f11b1d5f35cddefb0a98885d74a75ea8c4e738f492d205a009fb93"
+  },
+  {
+   "series": "1929",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1929-citywide-2026-11-18-f825097e.tif",
+   "date": "2026-11-18",
+   "bytes": 142596142,
+   "sha256": "f825097e4fe2efd43d9cbc0be38ec72278fc4f91bdbf1125be575e945e6b1fe0"
+  },
+  {
+   "series": "1929",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1929-districts-2026-11-18-27b758e9.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2381585,
+   "sha256": "27b758e94cfa164ac44718d11a18ed475045d91c92ea106383cd1c0e72bcbfd9"
+  },
+  {
+   "series": "1929",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1929-districts-2026-11-18-cfd2c03a.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 11996787,
+   "sha256": "cfd2c03ae9c0934f72ca103a853ab149204db6a2f302cb5aeb89be6d66d32a42"
+  },
+  {
+   "series": "1929",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1929-districts-2026-11-18-68d89129.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 5798881,
+   "sha256": "68d8912969b3abe9905acab373dadb5170e23aefed29768454df06e21267b2bd"
+  },
+  {
+   "series": "1929",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1929-lots-2026-11-18-99f57c87.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 5205850,
+   "sha256": "99f57c8722d0813f3762967f5dc4a15864bff7affcefe3e33ce553d8343fad9d"
+  },
+  {
+   "series": "1929",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1929-lots-2026-11-18-a72d9ca0.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 28707198,
+   "sha256": "a72d9ca0c11c101b7431ba5e203c7ffbeb19136cd82d299cf85ecf8951d473a5"
+  },
+  {
+   "series": "1929",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1929-lots-2026-11-18-39cb5825.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 11385392,
+   "sha256": "39cb5825154f0077c6b8dfc0dd84785d23c720decc03a8f16d72e30270c29830"
+  },
+  {
+   "series": "1935",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1935-citywide-2026-11-18-72973b61.tif",
+   "date": "2026-11-18",
+   "bytes": 176568961,
+   "sha256": "72973b6181f4b120cad93f488ed5f9ae556b95e3b5ca30b4ff3014a22b2c189c"
+  },
+  {
+   "series": "1935",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1935-districts-2026-11-18-7d666974.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2932252,
+   "sha256": "7d66697431453a47bbbd5d00b68a599f4d3632a6c72821723d2064a6ebf59a89"
+  },
+  {
+   "series": "1935",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1935-districts-2026-11-18-918dc198.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15259108,
+   "sha256": "918dc198d3524130cb4734c68944a80cc76eea9484d60f26d6fa9cb8b29ec0a5"
+  },
+  {
+   "series": "1935",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1935-districts-2026-11-18-5e2dc835.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7384396,
+   "sha256": "5e2dc8356008bdfff337b3eea767a6e483c7cb7d85e90ac5f4c768e628915836"
+  },
+  {
+   "series": "1935",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1935-lots-2026-11-18-3f9be010.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6265333,
+   "sha256": "3f9be010a305e37727bd73d15e342d19dcb3300f98444a8127ed49a5d72a7637"
+  },
+  {
+   "series": "1935",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1935-lots-2026-11-18-1b634b22.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 35020255,
+   "sha256": "1b634b225cd8cf8df7c012192332838c2c81e271d9d9b0ddfe9fab2dbad09770"
+  },
+  {
+   "series": "1935",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1935-lots-2026-11-18-4f406d6a.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14035026,
+   "sha256": "4f406d6a70b96fe68c153b98b11b68fb1f98e2833ae797c10a7fc854167445fe"
+  },
+  {
+   "series": "1948",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1948-citywide-2026-11-18-0fcfc3c9.tif",
+   "date": "2026-11-18",
+   "bytes": 891233462,
+   "sha256": "0fcfc3c9b5f8734664379aa934e238014f97d09c82106bfc2dbb020a59203415"
+  },
+  {
+   "series": "1948",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1948-districts-2026-11-18-73990756.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 3040667,
+   "sha256": "739907569ef40a58350599dc481fb70581a3edb7230a29764c6df8b1943b6ea2"
+  },
+  {
+   "series": "1948",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1948-districts-2026-11-18-188b1a8a.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15753516,
+   "sha256": "188b1a8acd8c1f7758f324c97ebb77790356a14390373ae1fd5b985f886448f0"
+  },
+  {
+   "series": "1948",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1948-districts-2026-11-18-10686b57.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7616573,
+   "sha256": "10686b573ab7bfa7abc2da0ab5f45c1701664bc8f24b1458212170bb9f761ed7"
+  },
+  {
+   "series": "1948",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1948-lots-2026-11-18-40d76a2c.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6261013,
+   "sha256": "40d76a2c0a4d2dea3a611fb5a6faaeb8956c7f976a17ca692bbc1cf83353583f"
+  },
+  {
+   "series": "1948",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1948-lots-2026-11-18-4d1d9b44.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 34847057,
+   "sha256": "4d1d9b44c93fcdef785e2dee92b541b902adf1b94154a8d84b6d1e46da5cfa31"
+  },
+  {
+   "series": "1948",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1948-lots-2026-11-18-4e9bad32.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14048125,
+   "sha256": "4e9bad3293b0ec2a4985f267cc350e5806431ea8c60b66591f344d4321d6bdff"
+  },
+  {
+   "series": "1960",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1960-citywide-2026-11-18-e9c5e20f.tif",
+   "date": "2026-11-18",
+   "bytes": 111604234,
+   "sha256": "e9c5e20f143656f61f485daba7a4f3fbd4af482c470a663eacc488bfb9bc8a31"
+  },
+  {
+   "series": "1960",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1960-districts-2026-11-18-fa965ef8.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2850336,
+   "sha256": "fa965ef8765afb78ee47698c3eb161a4a49660a635f91c7324c48b7ffb14965d"
+  },
+  {
+   "series": "1960",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1960-districts-2026-11-18-8d00b4c7.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 14965965,
+   "sha256": "8d00b4c7712a15cd798d2e19075e1dcece468a27ccfd5a932de588c3a515c4f8"
+  },
+  {
+   "series": "1960",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1960-districts-2026-11-18-3cff0350.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7255523,
+   "sha256": "3cff035057c8d159a40b078cb33ea0df1b10311fd0a6dc3dfbb65016385027ca"
+  },
+  {
+   "series": "1960",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1960-lots-2026-11-18-6245ec3e.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6157594,
+   "sha256": "6245ec3ea8f79912f3ba4c53ab195adc5471f28f0ecdd5321fdcca6f04009a4d"
+  },
+  {
+   "series": "1960",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1960-lots-2026-11-18-a4f19c5e.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 34887240,
+   "sha256": "a4f19c5eed13aae060178bf6b32df9f1ec527a770273988180aa9c6519d72b82"
+  },
+  {
+   "series": "1960",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1960-lots-2026-11-18-2becc266.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14025600,
+   "sha256": "2becc266e370a68011a1db307f16d51825295dbc5ca7e19ba550a2ffce6aedb3"
+  },
+  {
+   "series": "1964",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1964-citywide-2026-11-18-34124441.tif",
+   "date": "2026-11-18",
+   "bytes": 109050214,
+   "sha256": "3412444141957e24d30bcafbf17bba6ff5153d5aee6bba4db40db6c697454046"
+  },
+  {
+   "series": "1964",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1964-districts-2026-11-18-eef992b9.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2861783,
+   "sha256": "eef992b9422e8f9a883dbcc6fe7cbac4196f4aa8aa5200f927177906721f5ad2"
+  },
+  {
+   "series": "1964",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1964-districts-2026-11-18-80325f36.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15033040,
+   "sha256": "80325f36efaea7d10518c5ae07e2bc18613f93dbbca7e366589c81daff776824"
+  },
+  {
+   "series": "1964",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1964-districts-2026-11-18-5c68df39.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7287996,
+   "sha256": "5c68df39c6dde89546a8537bb49e613fe30bf8c4f8b8673ddc1090cd1195e644"
+  },
+  {
+   "series": "1964",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1964-lots-2026-11-18-35d9d0b6.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6218811,
+   "sha256": "35d9d0b61b91e42d6517d7f675386f8e8a82ee7673b25e54dd7336d1e2bbcf08"
+  },
+  {
+   "series": "1964",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1964-lots-2026-11-18-80c54b64.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 35274488,
+   "sha256": "80c54b64ce48fbc6a428bae3ebf65386e5dd7166e92d843ff012d0f2b623c08a"
+  },
+  {
+   "series": "1964",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1964-lots-2026-11-18-81fd4763.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14100224,
+   "sha256": "81fd47639dc4af6a74209b5dd132d881c6c8c929ff4b4f5f01c676d387fe0d3a"
+  },
+  {
+   "series": "1968",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1968-citywide-2026-11-18-5e3a3cac.tif",
+   "date": "2026-11-18",
+   "bytes": 114347861,
+   "sha256": "5e3a3cacdff3b0a7f2a41017427237c265b62ce58f9c84f006fe0456f10d139e"
+  },
+  {
+   "series": "1968",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1968-districts-2026-11-18-a7a3eb80.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2858140,
+   "sha256": "a7a3eb80720c325c2e7010c826f294f04cecb3a638f021054263eac0f89ade3b"
+  },
+  {
+   "series": "1968",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1968-districts-2026-11-18-a8807311.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15001610,
+   "sha256": "a8807311b91a779bb7c87b6b7c7aad4b1213eaf7a43be39c12c441e95de05686"
+  },
+  {
+   "series": "1968",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1968-districts-2026-11-18-69a3fb58.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7272087,
+   "sha256": "69a3fb5894e6d972721b3b12fc6f622f4a61579a4113ffc0cb7f1b758e79c89e"
+  },
+  {
+   "series": "1968",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1968-lots-2026-11-18-5a7396c5.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6225771,
+   "sha256": "5a7396c5d3deba45dab873ddda41ebf29d77879c7d533032bdd7058dc682e815"
+  },
+  {
+   "series": "1968",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1968-lots-2026-11-18-5968c64b.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 35274469,
+   "sha256": "5968c64bedac30e2123bbeb8d09de84f17bedc9b6d66550dee4a4b7bc74c7222"
+  },
+  {
+   "series": "1968",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1968-lots-2026-11-18-48d7cd4e.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14097668,
+   "sha256": "48d7cd4e92293ec9eb2705e653c2d3788430de5f6e3ab3d4b0b143e59dc71c54"
+  },
+  {
+   "series": "1972",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1972-citywide-2026-11-18-2e0e5dd6.tif",
+   "date": "2026-11-18",
+   "bytes": 114034380,
+   "sha256": "2e0e5dd6a7156b096edb88ffe7d8b9487dd7bba1c0081d3b1d16902b31c7b15f"
+  },
+  {
+   "series": "1972",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1972-districts-2026-11-18-18b59b41.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2881294,
+   "sha256": "18b59b416c72078e0886fb5c353b87af3c62b2e3b2289ccf25912da6b6acc4f5"
+  },
+  {
+   "series": "1972",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1972-districts-2026-11-18-a6b87041.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15147047,
+   "sha256": "a6b87041038666bf0b3d4ac4638babf5eb7a72363ff9c508daaef0b818bbf1ef"
+  },
+  {
+   "series": "1972",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1972-districts-2026-11-18-79942e51.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7342962,
+   "sha256": "79942e51dd31d37d2744abace022305eff596bc2d99257ded8fea543887c1631"
+  },
+  {
+   "series": "1972",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1972-lots-2026-11-18-44c2dcd6.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6253068,
+   "sha256": "44c2dcd68191fddaa0ff6769a3f597820458c647547cbb33fb7173d9720d213a"
+  },
+  {
+   "series": "1972",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1972-lots-2026-11-18-48484957.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 35371016,
+   "sha256": "48484957439fbf824903dc1e208cef03ebadc9d9bdc515c0bb715ef385c51dbc"
+  },
+  {
+   "series": "1972",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1972-lots-2026-11-18-c1e04178.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14130504,
+   "sha256": "c1e041783228c26c746140c23934a6a05d3cb5417a90a34c8a4d13e777119813"
+  },
+  {
+   "series": "1975",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1975-citywide-2026-11-18-907c3365.tif",
+   "date": "2026-11-18",
+   "bytes": 113848725,
+   "sha256": "907c33651b793834986ff5dd231e6de0af4f88ef8108785a51a9befef3115388"
+  },
+  {
+   "series": "1975",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1975-districts-2026-11-18-205dcee1.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2879553,
+   "sha256": "205dcee159e0b9cac74ee44bc16e0e640e83fe3d11a25e688a6c0f3228c1fe9e"
+  },
+  {
+   "series": "1975",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1975-districts-2026-11-18-5c36e213.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15136679,
+   "sha256": "5c36e2139d23d2843371b5634867645c90ab3e0f62999fddaa4d85c61e2778a7"
+  },
+  {
+   "series": "1975",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1975-districts-2026-11-18-5ef6386c.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7337195,
+   "sha256": "5ef6386cabbf2526490630c53f097e0e1a3d477a7a9c3ef39322e646cf1ec977"
+  },
+  {
+   "series": "1975",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1975-lots-2026-11-18-f1e098d8.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6256166,
+   "sha256": "f1e098d8a6fd739e91dc7665596aee1165bdaebb73a07b08d4c63bf2184f8df7"
+  },
+  {
+   "series": "1975",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1975-lots-2026-11-18-3715ceb5.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 35366523,
+   "sha256": "3715ceb510d3f273f786faa8b15cc78f96e5f02344681fe691c96864ac9ae0c8"
+  },
+  {
+   "series": "1975",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1975-lots-2026-11-18-6e3a59c8.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14129569,
+   "sha256": "6e3a59c831965ff60c04dcdd7acfc256872b174c0e10a8bb45d27a669e0087b1"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-citywide-2026-11-18-82cbac8d.tif",
+   "date": "2026-11-18",
+   "bytes": 62936753,
+   "sha256": "82cbac8dd54b727e390a4c78cc1627e00b20053d2030484869dadb1d33af6b08"
+  },
+  {
+   "series": "1980-1990-su",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-su-citywide-2026-11-18-3fa04235.tif",
+   "date": "2026-11-18",
+   "bytes": 44157958,
+   "sha256": "3fa0423561f3cdd364106b51fa15247efa3d80b4f3a4b63e066c16c0ce5069bf"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-citywide-2026-11-18-34d9e1ec.tif",
+   "date": "2026-11-18",
+   "bytes": 82730359,
+   "sha256": "34d9e1ec29368f80c08606eaa3f8fe3eeeefa6fbbd21593e6b8d877d44d8a691"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1980-1990-zoning-districts-2026-11-18-0a3ca47e.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2954077,
+   "sha256": "0a3ca47ea624ac35c788a73d1c60eebff57ec78828df75e698960514a6cbd575"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1980-1990-zoning-districts-2026-11-18-bc9ec59a.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15438785,
+   "sha256": "bc9ec59afc9cccb97d7a8b806b3b2b6e6ace18657baab1bc039a84ff72e4a6c6"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1980-1990-zoning-districts-2026-11-18-733ffc31.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7482504,
+   "sha256": "733ffc31ec4b1a5520051ad9a2f6a8a29845b08ce0b9863a4ea4a69a1ecd161a"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1980-1990-zoning-lots-2026-11-18-e71fe865.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6162975,
+   "sha256": "e71fe86576a7804a9d2bf3e41cdf30d1b490df535722cc9ae88766f33e069003"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1980-1990-zoning-lots-2026-11-18-2dcfde73.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 34977004,
+   "sha256": "2dcfde73cbb1c41b49a44c9a8a6ab0b32c04dcda1b5dd98373a689ef854231c8"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1980-1990-zoning-lots-2026-11-18-dcfb2b26.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14034530,
+   "sha256": "dcfb2b26a61c39da27cba6829618be8b5783395a89f2c2928e23c85575b0bbe0"
+  },
+  {
+   "series": "1980",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1980-citywide-2026-11-18-cb3e8f56.tif",
+   "date": "2026-11-18",
+   "bytes": 116070350,
+   "sha256": "cb3e8f5695f916c39566e544e2375971cdf5058765b088b09ebf0f84fcffa027"
+  },
+  {
+   "series": "1980",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1980-districts-2026-11-18-c8f87b37.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2909216,
+   "sha256": "c8f87b374fe54e71d3e437ecc4f6b433e985bcca062db14221eea8bf74f1fdc0"
+  },
+  {
+   "series": "1980",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1980-districts-2026-11-18-697134f2.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15203583,
+   "sha256": "697134f2c28d6943b5194575aeab1f69b5a8a402be4ad695bcf5ec5abc793805"
+  },
+  {
+   "series": "1980",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1980-districts-2026-11-18-3c90e97f.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7369113,
+   "sha256": "3c90e97fa458a193bfda1749650b067497ffd935c7f0cc493edb6e6ffa1d6db6"
+  },
+  {
+   "series": "1980",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1980-lots-2026-11-18-c964a511.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6342715,
+   "sha256": "c964a511bc30d60c9c5b5b5e42bfe82cd6dc9a94e7de26978bd7892bdd475d0a"
+  },
+  {
+   "series": "1980",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1980-lots-2026-11-18-4eedc9a3.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 35618793,
+   "sha256": "4eedc9a3044e0075099104070d86e5db853b9687d7f55d97d4fd1e34070ac51f"
+  },
+  {
+   "series": "1980",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1980-lots-2026-11-18-5a399100.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14227839,
+   "sha256": "5a3991005fdabedbc5771e19cf72e604403b1ba2caba4a6c0ae2c9d86ec8d72c"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-citywide-2026-11-18-cd167920.tif",
+   "date": "2026-11-18",
+   "bytes": 56455252,
+   "sha256": "cd1679208a3e6c7b4da5f84e1e8e9af626538690c3ce5408e1ba51c587465549"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-citywide-2026-11-18-43b945c2.tif",
+   "date": "2026-11-18",
+   "bytes": 44495342,
+   "sha256": "43b945c279e04d9575f81014b20da8d3579cd48f9aba5b61018008bb5a0d8928"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-citywide-2026-11-18-461d15a8.tif",
+   "date": "2026-11-18",
+   "bytes": 59882980,
+   "sha256": "461d15a8bd4f46273a15d25f69a67157a0eeb9ce513591951117ae39bd79d935"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1990-1996-zoning-districts-2026-11-18-f0a17d77.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2556393,
+   "sha256": "f0a17d77acebe218ea64351788e95fbb57e294a413d883011b6499cc06174bda"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1990-1996-zoning-districts-2026-11-18-9cdf56ff.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 13288546,
+   "sha256": "9cdf56ff917afae9bc664cd5916a2b0f1e11982018e5be029b732311a612a1f6"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1990-1996-zoning-districts-2026-11-18-21b6b3ad.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 6434752,
+   "sha256": "21b6b3ad1d436f5418ffbb7d68182c0a40b36f3724809cb3dc2b109e1f47ea7e"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1990-1996-zoning-lots-2026-11-18-548393ce.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 5500768,
+   "sha256": "548393cec794762493d57c11215352c724bf22da32cc19e13c34cff5c8e747f0"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1990-1996-zoning-lots-2026-11-18-6c6628a3.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 31197335,
+   "sha256": "6c6628a389e8afc696800dbfecb9d325948b1747082175038dbf932178628695"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1990-1996-zoning-lots-2026-11-18-234c9a9a.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 12425131,
+   "sha256": "234c9a9a1c19e14d22ac9428ce16aa9224fec334fff279ae67d87ce304acb321"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-citywide-2026-11-18-cf5226d8.tif",
+   "date": "2026-11-18",
+   "bytes": 55448459,
+   "sha256": "cf5226d80063804b0b235f61af5dd7cbb2374cd6da87be2e1e6750663501ac1e"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-citywide-2026-11-18-58dcb16f.tif",
+   "date": "2026-11-18",
+   "bytes": 93127805,
+   "sha256": "58dcb16f0cb843b621d91343824af55365a7497ac175cbbe7f95709b0c1d97bc"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-citywide-2026-11-18-e8b1f25c.tif",
+   "date": "2026-11-18",
+   "bytes": 65454394,
+   "sha256": "e8b1f25caa0e4e6c34e247793fa09e1b9e51b090728368931614677d7dc154cb"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-1996-2000-zoning-districts-2026-11-18-45681bd4.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2992812,
+   "sha256": "45681bd4d3868252cdbeb97f8c9df6e9d6becfaacd2ab7d451779a8ea6ecfa4b"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-1996-2000-zoning-districts-2026-11-18-cb7f36e5.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15623597,
+   "sha256": "cb7f36e59e402af78a65796ce15d427d0c7feca8ef746a5b9545363026176708"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-1996-2000-zoning-districts-2026-11-18-7d6868a2.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7568788,
+   "sha256": "7d6868a28ace1e8f1d67fb101e6239fa5dbcac7b5ef338a37b8bbf52d5069041"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-1996-2000-zoning-lots-2026-11-18-bb009d3c.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6206795,
+   "sha256": "bb009d3c69c755e21ff2881b173b113ee752446911478e1a517fd5d59cee5c39"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-1996-2000-zoning-lots-2026-11-18-23f5c0eb.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 35197775,
+   "sha256": "23f5c0eb0e25e00d224f4009003a74103a2125f272cd76a1481076561a9438ea"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-1996-2000-zoning-lots-2026-11-18-71023642.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14104722,
+   "sha256": "710236420e2ec0cba43722d848523cf9c0adb1f6ba01acf1d6d1730e6376972c"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-citywide-2026-11-18-a1efc386.tif",
+   "date": "2026-11-18",
+   "bytes": 53196167,
+   "sha256": "a1efc386d4eb00225d4c7de0bb1aa8d9bca8f3ca5ea62183a337d8a582966095"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-citywide-2026-11-18-475e1690.tif",
+   "date": "2026-11-18",
+   "bytes": 93249117,
+   "sha256": "475e1690de23eed1d8bd23154c1df3e7840e3f2acdd5be4510ab018d07b56947"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "citywide",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-citywide-2026-11-18-7b1d8523.tif",
+   "date": "2026-11-18",
+   "bytes": 64910412,
+   "sha256": "7b1d85239a73674713f3555b841a32d1df1cfd9036a9389dc0073ee2f98d155d"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-2000-digital-zoning-districts-2026-11-18-ae413b96.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 2982132,
+   "sha256": "ae413b96b4712cb3d906e7ec0595a97c35642a206b01d306122db3cf5ae50aec"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-2000-digital-zoning-districts-2026-11-18-cb42ce3f.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 15544296,
+   "sha256": "cb42ce3f5c5ad632485bfbc2a8befedee693a361c283dab82c09ffa54fa74239"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-2000-digital-zoning-districts-2026-11-18-d1dc3560.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7532409,
+   "sha256": "d1dc3560a7f957344cb51b8bde4af52732d3d252f024d3993b584647dc3bcdc6"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-2000-digital-zoning-lots-2026-11-18-233af6f2.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6121778,
+   "sha256": "233af6f2aa52e453981c14c2db806b1629cc600d982f360d04a4aa2e101a350b"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-2000-digital-zoning-lots-2026-11-18-93e79823.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 34939701,
+   "sha256": "93e7982315e08e1e98beadbcd6d0d365c0b965cf442843519bc61b750b879b49"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-2000-digital-zoning-lots-2026-11-18-5afc7900.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 14021848,
+   "sha256": "5afc7900d764fcb139dec64249ff6e08c1bb7bf458b8953d18092940afbb1fbc"
+  },
+  {
+   "series": "today",
+   "layer": "districts",
+   "fmt": "geojson",
+   "name": "sfzoning-today-districts-2026-11-18-6fcd0aa5.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 3159672,
+   "sha256": "6fcd0aa59366fec20e06dd43e6b5aec535f2e88e93dc20e2e2c05d5ef635a280"
+  },
+  {
+   "series": "today",
+   "layer": "districts",
+   "fmt": "gpkg",
+   "name": "sfzoning-today-districts-2026-11-18-0c9684cb.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 16368105,
+   "sha256": "0c9684cb3d90e6f8df6d2697d4ba66441abb45f165197376b5a30ceb00702492"
+  },
+  {
+   "series": "today",
+   "layer": "districts",
+   "fmt": "shp",
+   "name": "sfzoning-today-districts-2026-11-18-1e35838b.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 7922055,
+   "sha256": "1e35838b8e05b5da1074a050c1a3d6fe72d049cae3b8e155444006fb8cda0aa2"
+  },
+  {
+   "series": "today",
+   "layer": "lots",
+   "fmt": "geojson",
+   "name": "sfzoning-today-lots-2026-11-18-4631d60a.geojson.zip",
+   "date": "2026-11-18",
+   "bytes": 6874421,
+   "sha256": "4631d60ac20c420b91049f649e013261b497f9422c34764f9e40880ae35d05eb"
+  },
+  {
+   "series": "today",
+   "layer": "lots",
+   "fmt": "gpkg",
+   "name": "sfzoning-today-lots-2026-11-18-9d914f78.gpkg.zip",
+   "date": "2026-11-18",
+   "bytes": 37695133,
+   "sha256": "9d914f7879975aad06032579fe384e5fa4a788316a3aa563c11febc8a7f9f298"
+  },
+  {
+   "series": "today",
+   "layer": "lots",
+   "fmt": "shp",
+   "name": "sfzoning-today-lots-2026-11-18-db93965b.shp.zip",
+   "date": "2026-11-18",
+   "bytes": 15275852,
+   "sha256": "db93965bb108b422f06c41ccee9e4bf58d88d525c8e92efaf6b782797359a22f"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-01",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-01-2026-11-04-71679fcd.tif",
+   "date": "2026-11-04",
+   "bytes": 3024629,
+   "sha256": "71679fcde68354b436209864e5be9ada7a7fd76df74356f6d2bb93f3413b6891"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-02",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-02-2026-11-04-4439bb8e.tif",
+   "date": "2026-11-04",
+   "bytes": 4056367,
+   "sha256": "4439bb8e0c7347e7dba02895699856e11287093e9203ac6b3d56b0acd0190023"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-03",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-03-2026-11-04-1a9535c7.tif",
+   "date": "2026-11-04",
+   "bytes": 2395024,
+   "sha256": "1a9535c717ed782ffded6a74a37e19ab43dd21142af1fc524b2416303ceca7de"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-04",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-04-2026-11-04-ba6d033a.tif",
+   "date": "2026-11-04",
+   "bytes": 2166575,
+   "sha256": "ba6d033ad848e9309e19d727f875c7912f8fcc9881586a331f84e32f39c27842"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-05",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-05-2026-11-04-4f9032a9.tif",
+   "date": "2026-11-04",
+   "bytes": 3447708,
+   "sha256": "4f9032a97ab352560f7ec64afe21e976ae18a62bf88f38561e9da1cceb83cc47"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-06",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-06-2026-11-04-14b27a83.tif",
+   "date": "2026-11-04",
+   "bytes": 4552753,
+   "sha256": "14b27a83edc591454ce398cef4ca9e54f7b6b50a57fc416077caf73608fd8acf"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-07",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-07-2026-11-04-11dc73a6.tif",
+   "date": "2026-11-04",
+   "bytes": 4433216,
+   "sha256": "11dc73a66f1b08112a50c3d5d22906a0443ebd58a31b753bb4b062de2427f1db"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-08",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-08-2026-11-04-079d8a43.tif",
+   "date": "2026-11-04",
+   "bytes": 4730438,
+   "sha256": "079d8a439d65c89f3701ffb1e61d83b3d077d547fc9588161978a74798586acd"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-09",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-09-2026-11-04-a10e6fb8.tif",
+   "date": "2026-11-04",
+   "bytes": 5402411,
+   "sha256": "a10e6fb8ac98d00d14e4b8c32b72da87e984551e7190df6a1053e102abe21d94"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-10",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-10-2026-11-04-a6a5d101.tif",
+   "date": "2026-11-04",
+   "bytes": 4150688,
+   "sha256": "a6a5d101f7b0d7baabc1a9696cf693264b1f30c7dcd1d1cb340a43a6b27251e4"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-11",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-11-2026-11-04-1f049090.tif",
+   "date": "2026-11-04",
+   "bytes": 5429675,
+   "sha256": "1f0490904d8030140a40ba05f57753ab826674dcd51b836dcdb5368c28577a2c"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-12",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-12-2026-11-04-eb3e5144.tif",
+   "date": "2026-11-04",
+   "bytes": 5286595,
+   "sha256": "eb3e5144e80ef3aef74e3f26c1a2638dacfa37c80516c96b14918cc4044c5bdf"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-13",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-13-2026-11-04-67a0bea0.tif",
+   "date": "2026-11-04",
+   "bytes": 5506483,
+   "sha256": "67a0bea032251b7c801d5353ef78c507df4e83106870705e0ed2e1f28bc76fdf"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-14",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-14-2026-11-04-796016be.tif",
+   "date": "2026-11-04",
+   "bytes": 1532576,
+   "sha256": "796016beef61c4744df9fa85f675d450762124fb57c4cc7e9ea0e71cbf666b7f"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-15",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-15-2026-11-04-9f5814cf.tif",
+   "date": "2026-11-04",
+   "bytes": 10964169,
+   "sha256": "9f5814cff05011da58c38965b859df4ab0a851d2410f7bc8d39a02798369e859"
+  },
+  {
+   "series": "1921",
+   "layer": "sheet-16",
+   "fmt": "cog",
+   "name": "sfzoning-1921-sheet-16-2026-11-04-8d38c634.tif",
+   "date": "2026-11-04",
+   "bytes": 11138276,
+   "sha256": "8d38c6347bd72ce2a5f6e9c326a4b956649ade2f3216fb58f7cc2b83465b3b3a"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p05-2026-11-04-a622e78c.tif",
+   "date": "2026-11-04",
+   "bytes": 7120822,
+   "sha256": "a622e78cd7b765f3f6c511409e749af157415fa1f8412a60c0831673da29ac1a"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p06-2026-11-04-ef43d7ab.tif",
+   "date": "2026-11-04",
+   "bytes": 11004981,
+   "sha256": "ef43d7ab79317ba8b12d37c875f525013790ff717399c5f8585c2f01039c50dd"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p07-2026-11-04-93616866.tif",
+   "date": "2026-11-04",
+   "bytes": 6580692,
+   "sha256": "93616866250facf49bbf5058bef8ea0fc31c1b3faa1823f43e8d0eaf0d094713"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p08-2026-11-04-2e5658c4.tif",
+   "date": "2026-11-04",
+   "bytes": 5263280,
+   "sha256": "2e5658c423592f23f65d3673b9e75593c208502cb09fa1b29c3a915da7961ebd"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p09-2026-11-04-76ba4b73.tif",
+   "date": "2026-11-04",
+   "bytes": 8608857,
+   "sha256": "76ba4b73cc464976decd3e4d108e99a0326b1bdc139ee2bac310f882c73093e8"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p10-2026-11-04-b4b20d34.tif",
+   "date": "2026-11-04",
+   "bytes": 12407904,
+   "sha256": "b4b20d34b3c52927f970843b1f4d8914ed32bbdbb3f945829fe4d6268190eee6"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p11-2026-11-04-912fd30c.tif",
+   "date": "2026-11-04",
+   "bytes": 10399429,
+   "sha256": "912fd30cd5ac46f9bad8a3a73ceccac463430fbbde18225d275f72bc1339cd09"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p12-2026-11-04-bfca6605.tif",
+   "date": "2026-11-04",
+   "bytes": 13201151,
+   "sha256": "bfca6605261063843a33a40a3d887ec711378c7f7ee4dd70f937aefc7f47d43a"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p13-2026-11-04-aa56462f.tif",
+   "date": "2026-11-04",
+   "bytes": 12012639,
+   "sha256": "aa56462f3273e4ebecddbe4cbd1df8808060aa4a4fabc9c573c943fd6b41d4e0"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p14",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p14-2026-11-04-09718b5d.tif",
+   "date": "2026-11-04",
+   "bytes": 11536597,
+   "sha256": "09718b5d88e8c1fa408584cfcff871f7616c0f2e32638dda3892776cbf605eae"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p15",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p15-2026-11-04-7c1f872e.tif",
+   "date": "2026-11-04",
+   "bytes": 10575169,
+   "sha256": "7c1f872ee688d0dab58ae1de12b15f25418e38defc4d0e3bae9c6abe929249f8"
+  },
+  {
+   "series": "1929",
+   "layer": "sheet-p16",
+   "fmt": "cog",
+   "name": "sfzoning-1929-sheet-p16-2026-11-04-a33235cd.tif",
+   "date": "2026-11-04",
+   "bytes": 10396619,
+   "sha256": "a33235cd29103891a0a2431af55a235e9eebc398eeb8937488b119f20029de1c"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p01-2026-11-04-21bc62a0.tif",
+   "date": "2026-11-04",
+   "bytes": 8346972,
+   "sha256": "21bc62a0763421bbb3a5e7b0d42ad0d42ab50a89c3e6a6ba858394b9ea9f588c"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p02-2026-11-04-1d888562.tif",
+   "date": "2026-11-04",
+   "bytes": 10987398,
+   "sha256": "1d888562c230f756f08f185f11f7ca8f8e3cc877bac2926505453317f7657a9f"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p03-2026-11-04-506048b3.tif",
+   "date": "2026-11-04",
+   "bytes": 6179013,
+   "sha256": "506048b382d00c87eadbb6968788da1ad5137cb8f8f0d32324d800ed01c14921"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p04-2026-11-04-2678f189.tif",
+   "date": "2026-11-04",
+   "bytes": 5475196,
+   "sha256": "2678f189e7402a53a990e24f1a973d40c404fe1ff98575204bfa1fa3869a9873"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p05-2026-11-04-7d074dc5.tif",
+   "date": "2026-11-04",
+   "bytes": 9469794,
+   "sha256": "7d074dc5d6e52dd398f0c24acfe898d1b1c518841f8c1b494b1fa541956ddfe5"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p06-2026-11-04-65ead98b.tif",
+   "date": "2026-11-04",
+   "bytes": 12858845,
+   "sha256": "65ead98be4a7f539e979f46674b02752e693674d3b3cbc8111f12365dcc7b40a"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p07-2026-11-04-476c2b23.tif",
+   "date": "2026-11-04",
+   "bytes": 10711670,
+   "sha256": "476c2b23d09e848672f7344bec32dc540305ea39bab43b8889d0a33ace812b9c"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p08-2026-11-04-a13656b7.tif",
+   "date": "2026-11-04",
+   "bytes": 13017112,
+   "sha256": "a13656b7dcb8eefc78f0ef9cf93077e5e5a3ddd1ff81f14de0d3f04f33964e5a"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p09-2026-11-04-cec61732.tif",
+   "date": "2026-11-04",
+   "bytes": 12721711,
+   "sha256": "cec61732e7405c4319afd2a3d6cb358e431cbba4f66a7f1265727800586f4d0f"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p10-2026-11-04-8226c21e.tif",
+   "date": "2026-11-04",
+   "bytes": 11421864,
+   "sha256": "8226c21e3062176592d1755fa820a4c93bcf2a72f428152791ccbaeceb729858"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p11-2026-11-04-4719e706.tif",
+   "date": "2026-11-04",
+   "bytes": 12053933,
+   "sha256": "4719e706dde4bdeff06812058b4f53dd132b5defe6a691226edeac7390c60158"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p12-2026-11-04-05a9c3b2.tif",
+   "date": "2026-11-04",
+   "bytes": 10935266,
+   "sha256": "05a9c3b20ff8302d1fec65944c747c0207d2dc4f76c9587c09a9002e181cb871"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p13-2026-11-04-430fb092.tif",
+   "date": "2026-11-04",
+   "bytes": 12874340,
+   "sha256": "430fb09278f7529abbef40e1abafa72cf83c8049f57397234624f8117fd52505"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p14",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p14-2026-11-04-ec7cbf48.tif",
+   "date": "2026-11-04",
+   "bytes": 4617169,
+   "sha256": "ec7cbf482a40889800a4a84e0b0b4e15db4191087ad5693297748f1a03de6e24"
+  },
+  {
+   "series": "1935",
+   "layer": "sheet-p15",
+   "fmt": "cog",
+   "name": "sfzoning-1935-sheet-p15-2026-11-04-7e1df7c3.tif",
+   "date": "2026-11-04",
+   "bytes": 6650459,
+   "sha256": "7e1df7c3688cc2e5dcaabdb6133b883335f4b14ea6764e7977dfb14386eb5e2b"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-01",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-01-2026-11-04-bc66ddc4.tif",
+   "date": "2026-11-04",
+   "bytes": 48959297,
+   "sha256": "bc66ddc4ffb03f71f0bb97abf22c29b39717e3a94a24914ae6017c208e776580"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-02",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-02-2026-11-04-3b8b5c09.tif",
+   "date": "2026-11-04",
+   "bytes": 51833091,
+   "sha256": "3b8b5c09b6aaf2572ed8e34b9b9dfe3614da7846827e9f9907fdf240f8eb6812"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-03",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-03-2026-11-04-b141373f.tif",
+   "date": "2026-11-04",
+   "bytes": 40774559,
+   "sha256": "b141373fb2edb087860d04e09dd8a5c56aa4fe97467dbdfab807091a9cb2521c"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-04",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-04-2026-11-04-c7da7a9d.tif",
+   "date": "2026-11-04",
+   "bytes": 45081685,
+   "sha256": "c7da7a9d10a840c61748a2e16c01fa5203dd4f2d0e6789ada59cef0b556335b2"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-05",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-05-2026-11-04-c3603216.tif",
+   "date": "2026-11-04",
+   "bytes": 55064399,
+   "sha256": "c36032165d3cc86154ba6e50a0c8512b5080fe6184488960975e977b5f4cb08c"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-06",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-06-2026-11-04-b7af7e54.tif",
+   "date": "2026-11-04",
+   "bytes": 56537532,
+   "sha256": "b7af7e5468fa1cc0d48f335a28d012a136fcd7c0f5aa27c6d2fedab07302ee74"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-07",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-07-2026-11-04-0f2a050b.tif",
+   "date": "2026-11-04",
+   "bytes": 54895273,
+   "sha256": "0f2a050b7c4e05975637b9fbaf16be5bab522f37f8a773ddf6a37fec0734828e"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-08",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-08-2026-11-04-fdd32188.tif",
+   "date": "2026-11-04",
+   "bytes": 56011216,
+   "sha256": "fdd321883786abdbfba3ed097ebb13d828b001d37c623e2234f9975be3f30489"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-09",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-09-2026-11-04-4de51f6b.tif",
+   "date": "2026-11-04",
+   "bytes": 58727825,
+   "sha256": "4de51f6bc513c4d2e657413932e45f3a3d1d8ebcd38bf2c5239cf8fe25b02a03"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-10",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-10-2026-11-04-e0d44381.tif",
+   "date": "2026-11-04",
+   "bytes": 45703157,
+   "sha256": "e0d44381d09c01caa06c86aa1409592ee36a6c04d14359995d734cb41fca307a"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-11",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-11-2026-11-04-ede68805.tif",
+   "date": "2026-11-04",
+   "bytes": 60339019,
+   "sha256": "ede68805d44a61ca3353bd4a231ffdb56f6e370ed624073b43b74b3976971e56"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-12",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-12-2026-11-04-811dd69d.tif",
+   "date": "2026-11-04",
+   "bytes": 59846206,
+   "sha256": "811dd69d4c4b42e3ee70b2e0f13d2f3e758bd53b3fa7324fe5a2f34df71c6d31"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-13",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-13-2026-11-04-9680c1f8.tif",
+   "date": "2026-11-04",
+   "bytes": 63760840,
+   "sha256": "9680c1f8deaafda2ea009a0ed1e14668434866a80ba3714cb3613d6d48adfef8"
+  },
+  {
+   "series": "1948",
+   "layer": "sheet-14",
+   "fmt": "cog",
+   "name": "sfzoning-1948-sheet-14-2026-11-04-05e65269.tif",
+   "date": "2026-11-04",
+   "bytes": 43355482,
+   "sha256": "05e6526942cda6edd7850ddbf0acf808c5bd3a8d2917d885251b8f3cd8cb86d2"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-01",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-01-2026-11-04-502764f2.tif",
+   "date": "2026-11-04",
+   "bytes": 8231712,
+   "sha256": "502764f21cc280570771fe66af92be9ebd2bffe611fe654dff5986ef6d269ada"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-02",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-02-2026-11-04-ac3885fb.tif",
+   "date": "2026-11-04",
+   "bytes": 9521192,
+   "sha256": "ac3885fbcfe8b0e8db4b89021d7243b1ae4a3bc4aea2b9c97a46c2dd9606955d"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-03",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-03-2026-11-04-9aa86a76.tif",
+   "date": "2026-11-04",
+   "bytes": 5999111,
+   "sha256": "9aa86a762594715f68401eab94573c57a278793d27a30b8fbe07243872d2d733"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-04",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-04-2026-11-04-37103d37.tif",
+   "date": "2026-11-04",
+   "bytes": 3927238,
+   "sha256": "37103d37f30da952e73e0c895cbb290504d9c27218135b56dfdbdf2d07531704"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-05",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-05-2026-11-04-fcf11b63.tif",
+   "date": "2026-11-04",
+   "bytes": 7316748,
+   "sha256": "fcf11b6346cea80022de3806a0b35bec6060756a316778b2ee93149be392015c"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-06",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-06-2026-11-04-c40b900e.tif",
+   "date": "2026-11-04",
+   "bytes": 8843515,
+   "sha256": "c40b900e8d7bca117e4d3cbad44aa4578017d019b6045a19e5dde9627e1aae03"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-07",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-07-2026-11-04-af4e999f.tif",
+   "date": "2026-11-04",
+   "bytes": 10450070,
+   "sha256": "af4e999ff0d6933f4e636ade9cbb2022e019e1ff22a8844cadc6b1b9e687728c"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-08",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-08-2026-11-04-90f85b35.tif",
+   "date": "2026-11-04",
+   "bytes": 7888741,
+   "sha256": "90f85b356b095cbff5239af30aeaf4e6ea22f4965c571bef029210a67275f161"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-09",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-09-2026-11-04-2b507a4e.tif",
+   "date": "2026-11-04",
+   "bytes": 4207591,
+   "sha256": "2b507a4ee207270506395f243984877d8ee416dcc54971702e3e8fdaa781f054"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-10",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-10-2026-11-04-f65de613.tif",
+   "date": "2026-11-04",
+   "bytes": 9546702,
+   "sha256": "f65de61320f2b9c12fa6064812128bd276209fae884dde3ef28fd708fe217d39"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-11",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-11-2026-11-04-9bc1e00d.tif",
+   "date": "2026-11-04",
+   "bytes": 10315398,
+   "sha256": "9bc1e00d8de5b7a7d764417fb8653d12e9997fe5e1b1a6799b8de5f62fd9b984"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-12",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-12-2026-11-04-79267f72.tif",
+   "date": "2026-11-04",
+   "bytes": 9938671,
+   "sha256": "79267f729c966a67b9520e0c3d343286772ca43f684f8a925c2f8efb8e5ea786"
+  },
+  {
+   "series": "1960",
+   "layer": "sheet-13",
+   "fmt": "cog",
+   "name": "sfzoning-1960-sheet-13-2026-11-04-f4735027.tif",
+   "date": "2026-11-04",
+   "bytes": 6113149,
+   "sha256": "f4735027e9823bec21679727068549b23e73f6dceb9e43eee202acef6022f9bf"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p02-2026-11-04-b64557e9.tif",
+   "date": "2026-11-04",
+   "bytes": 8244864,
+   "sha256": "b64557e9386b5d7c411b8cff101a0542b41ce409724daa0d1986df51dd4e099e"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p03-2026-11-04-67b9f0e0.tif",
+   "date": "2026-11-04",
+   "bytes": 9437029,
+   "sha256": "67b9f0e067b16a1c90cbd084e781f71ec29ce7b1dc6558e7df68f1517181ebf4"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p04-2026-11-04-1069e246.tif",
+   "date": "2026-11-04",
+   "bytes": 5593995,
+   "sha256": "1069e246d72b04c41f4ea7ea017cffc6651a6c549a73520e43f9f2c62108c088"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p05-2026-11-04-39f623e8.tif",
+   "date": "2026-11-04",
+   "bytes": 3929811,
+   "sha256": "39f623e894e380302ce830c767b7f037de8cd9f00b62843ebee19843ee532876"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p06-2026-11-04-f9d4c375.tif",
+   "date": "2026-11-04",
+   "bytes": 7393334,
+   "sha256": "f9d4c375c5711806005d3f28ca0c0d2c91ecbf0cde5080914b41bb2bd4d47041"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p07-2026-11-04-811164c7.tif",
+   "date": "2026-11-04",
+   "bytes": 8792891,
+   "sha256": "811164c743caf8fe7581876d30c5892e9009cbb3b3f8ddc0d73063cc570c3efb"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p08-2026-11-04-876e345d.tif",
+   "date": "2026-11-04",
+   "bytes": 10386081,
+   "sha256": "876e345d2d05f6b72e9e60d1cb1e757b173173f53dd220980f65aa0abd4100dd"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p09-2026-11-04-ec50f6fc.tif",
+   "date": "2026-11-04",
+   "bytes": 7460954,
+   "sha256": "ec50f6fc87d4d4b2c31b1bb7a58b9062a6a49c63b06a032cbf5ef3e3cf615479"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p10-2026-11-04-8705c55f.tif",
+   "date": "2026-11-04",
+   "bytes": 4132891,
+   "sha256": "8705c55fe23673a8d2cfc719466ed3052062bb075639105342293de174a8ce41"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p11-2026-11-04-9c6dc867.tif",
+   "date": "2026-11-04",
+   "bytes": 9524206,
+   "sha256": "9c6dc867396f5761a3ef7eae18d2d1440fe937afde2b5ff361895d3b52f500ac"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p12-2026-11-04-d6c923cb.tif",
+   "date": "2026-11-04",
+   "bytes": 10261780,
+   "sha256": "d6c923cb54f136343fb6f31e593dfa2835b606308408175f845eafffcfc33737"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p13-2026-11-04-9dc59486.tif",
+   "date": "2026-11-04",
+   "bytes": 9839779,
+   "sha256": "9dc59486229a62760a099704719a2ff59a7fed7fddf22459348c8dd1bb8be2c2"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p14",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p14-2026-11-04-50b503a2.tif",
+   "date": "2026-11-04",
+   "bytes": 6158406,
+   "sha256": "50b503a2d60b659a3cadabaa6ce5ada3293aedae5e7cf71c71f52e98da81bce8"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p15",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p15-2026-11-04-d9a4b6a1.tif",
+   "date": "2026-11-04",
+   "bytes": 7595016,
+   "sha256": "d9a4b6a12d84dad00b06e65b313e778a7d51998b057c68ba7da7cf58344976e2"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p16",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p16-2026-11-04-2d32c068.tif",
+   "date": "2026-11-04",
+   "bytes": 7645405,
+   "sha256": "2d32c068e70d0dca34c86c7e348f4a8eaf2963e0ee76227d572f6f393853f84d"
+  },
+  {
+   "series": "1964",
+   "layer": "sheet-p17",
+   "fmt": "cog",
+   "name": "sfzoning-1964-sheet-p17-2026-11-04-8086f6a4.tif",
+   "date": "2026-11-04",
+   "bytes": 8212593,
+   "sha256": "8086f6a41e33e218f9b501d0e45cc17b64a8604f77612dae36f28e85b762a188"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p02-2026-11-04-c055d6c2.tif",
+   "date": "2026-11-04",
+   "bytes": 8196938,
+   "sha256": "c055d6c23aa7fcdc33d3ac3131fc1b42287a9b5649a97891f499aadb17304001"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p03-2026-11-04-0b2474ec.tif",
+   "date": "2026-11-04",
+   "bytes": 9472800,
+   "sha256": "0b2474ec387c99f2c471bd5abe2524c5428c06ab979394961be074ec26581cf8"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p04-2026-11-04-c38fb8e0.tif",
+   "date": "2026-11-04",
+   "bytes": 5630128,
+   "sha256": "c38fb8e066e4a864f153b11480e66b5c3f8fdc1ab5f48642643b9582393bd747"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p05-2026-11-04-e808342e.tif",
+   "date": "2026-11-04",
+   "bytes": 4016383,
+   "sha256": "e808342ef4036139e795ec088d66c4f1f2acfeb82ddadd73a07aed33e9f7e6ea"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p06-2026-11-04-960340b3.tif",
+   "date": "2026-11-04",
+   "bytes": 7450229,
+   "sha256": "960340b3352649bca0469317f8818886db24c8813ccd4e500f3e836af1c2a1df"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p07-2026-11-04-c19ea753.tif",
+   "date": "2026-11-04",
+   "bytes": 9176811,
+   "sha256": "c19ea7535765e1361fe5ed9ab5b653152050b0dacddf1e8d3d8f8907eef33bb5"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p08-2026-11-04-867fe556.tif",
+   "date": "2026-11-04",
+   "bytes": 10414946,
+   "sha256": "867fe5569fbfd451735a5229993baa1199174782b4bbc9e3212ae3598ed41b94"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p09-2026-11-04-5a3acfd4.tif",
+   "date": "2026-11-04",
+   "bytes": 7624950,
+   "sha256": "5a3acfd4827ba6c4a91633839398ed40601513b65b9b82c875e628692fae946e"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p10-2026-11-04-b87b05be.tif",
+   "date": "2026-11-04",
+   "bytes": 3767998,
+   "sha256": "b87b05bed38d365f44d080a2560f6361479e50edbfef6be2cf4b2610ac26299a"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p11-2026-11-04-736b8f97.tif",
+   "date": "2026-11-04",
+   "bytes": 9858819,
+   "sha256": "736b8f977f53140123ebedbfce493d442d76e19546034a08d98bddea50b4cce6"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p12-2026-11-04-29cc31e5.tif",
+   "date": "2026-11-04",
+   "bytes": 10765114,
+   "sha256": "29cc31e58150d59739076c70c1c6865324fad5e9739b839bfef22acfa1d198e5"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p13-2026-11-04-7fe1e48f.tif",
+   "date": "2026-11-04",
+   "bytes": 9920087,
+   "sha256": "7fe1e48faf89369e0ec480b7941b5529c9b5e1a7be02beab51bd4a165bc8d2d3"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p14",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p14-2026-11-04-93cf8440.tif",
+   "date": "2026-11-04",
+   "bytes": 6360589,
+   "sha256": "93cf84400af75bd9eca5ae5042dcc30cc3916b2899ceacc72d8c68ef03998cb3"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p15",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p15-2026-11-04-39f78ed3.tif",
+   "date": "2026-11-04",
+   "bytes": 4504639,
+   "sha256": "39f78ed3c3cfc52e96774e5a33653090e8dcc636251939d24eeb880b32bf9fbf"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p16",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p16-2026-11-04-49bed3e5.tif",
+   "date": "2026-11-04",
+   "bytes": 7830031,
+   "sha256": "49bed3e56391bf7bb1f831cdd90bfab3f548cbbd727e247bb4a6e857c4a894dd"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p17",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p17-2026-11-04-bbc3d6d5.tif",
+   "date": "2026-11-04",
+   "bytes": 7942082,
+   "sha256": "bbc3d6d55d0a90d721356e9ff9d4abd05cb4648b4a4dd83e06f885a6f72387e0"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p18",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p18-2026-11-04-f713dee3.tif",
+   "date": "2026-11-04",
+   "bytes": 8337528,
+   "sha256": "f713dee3ea00ce66cb59ca33be2df2d051817aa8f418113f8e575fab4968fa6b"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p19",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p19-2026-11-04-09fafe33.tif",
+   "date": "2026-11-04",
+   "bytes": 3246896,
+   "sha256": "09fafe33dac18a26d080f46d784e27b25c75aadf14c5b6c61ad0588e7bd06a1e"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p20",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p20-2026-11-04-add9b48e.tif",
+   "date": "2026-11-04",
+   "bytes": 6837509,
+   "sha256": "add9b48ecb4d80ead17a187b3703ec1060d2662b9e108ef4e456ccbab5236c5a"
+  },
+  {
+   "series": "1968",
+   "layer": "sheet-p21",
+   "fmt": "cog",
+   "name": "sfzoning-1968-sheet-p21-2026-11-04-fd923b23.tif",
+   "date": "2026-11-04",
+   "bytes": 5593091,
+   "sha256": "fd923b23e89e6b5a686dff7945a6afcb06e4bd9c5d5c209c4caeec39c135807c"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p01-2026-11-04-f566b3c4.tif",
+   "date": "2026-11-04",
+   "bytes": 8176071,
+   "sha256": "f566b3c429a833bca28e9991333cb0558477a31c463c722c13553d007d5ea76c"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p02-2026-11-04-e52e7973.tif",
+   "date": "2026-11-04",
+   "bytes": 9784588,
+   "sha256": "e52e7973156cf72858998c633819c154133de4841aa75cd81a0771565c11ed5e"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p03-2026-11-04-ff5ce07a.tif",
+   "date": "2026-11-04",
+   "bytes": 5669967,
+   "sha256": "ff5ce07a2215894e20ad18900e727d08ec55fc603c1f7805592406303630a6a5"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p04-2026-11-04-216c65f1.tif",
+   "date": "2026-11-04",
+   "bytes": 3983721,
+   "sha256": "216c65f16d1b1cf7c5627976386d8559624a6e6368df4ea0b07b36c60e64bf65"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p05-2026-11-04-7f2a4443.tif",
+   "date": "2026-11-04",
+   "bytes": 7243322,
+   "sha256": "7f2a44434cbf05c690904872280e483754586e0c7ab080c36539c7f0357fcdba"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p06-2026-11-04-7fb9b78d.tif",
+   "date": "2026-11-04",
+   "bytes": 8994056,
+   "sha256": "7fb9b78d9508d30fc83c8f7e2ed4a3ccca6aa7dbcf247f6d514afe07bd4f17ec"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p07-2026-11-04-12c1f585.tif",
+   "date": "2026-11-04",
+   "bytes": 10458129,
+   "sha256": "12c1f58533c1143a2d92ca66c903e83616acb297ff434c2198776de06a8dfd3e"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p08-2026-11-04-f65cd75b.tif",
+   "date": "2026-11-04",
+   "bytes": 7423074,
+   "sha256": "f65cd75b04ef6dbffc736e7c9a7cba949d4db78145724ca7e7d4f310a1f7184d"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p09-2026-11-04-803349da.tif",
+   "date": "2026-11-04",
+   "bytes": 4175815,
+   "sha256": "803349da28fd1c5ae4d218a520aec78b887e5c23c64ebae0c213a16ddc4ef5df"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p10-2026-11-04-58ae47e4.tif",
+   "date": "2026-11-04",
+   "bytes": 9560946,
+   "sha256": "58ae47e400dc25eb78844e47e47831abd3d614db63f2f1ecc4405e9435f3747b"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p11-2026-11-04-4855b393.tif",
+   "date": "2026-11-04",
+   "bytes": 10483311,
+   "sha256": "4855b39320014b8a49837c19d79472c94f4a7a36896e486dba169c1c5ced1ebd"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p12-2026-11-04-a921a20a.tif",
+   "date": "2026-11-04",
+   "bytes": 9813995,
+   "sha256": "a921a20ab399d69e018be3bbc9716d46bbf3dfb8070776431841e09bcaa3ca7c"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p13-2026-11-04-6b2cbcfc.tif",
+   "date": "2026-11-04",
+   "bytes": 5986387,
+   "sha256": "6b2cbcfc2310e81cdaa11521819dbad48ddcc77c5a58c677b4e5dd070b679214"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p14",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p14-2026-11-04-f89c685d.tif",
+   "date": "2026-11-04",
+   "bytes": 4437187,
+   "sha256": "f89c685d6e54f2a8638c36c8286cc6cbb4ecbed2594d9f65bc1e84e554d83644"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p15",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p15-2026-11-04-fb3c5a3e.tif",
+   "date": "2026-11-04",
+   "bytes": 3651765,
+   "sha256": "fb3c5a3e0c0e90aaef5a978d34d04ebdb6178e39271ba95703c8426ac033de32"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p16",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p16-2026-11-04-ed8acc5a.tif",
+   "date": "2026-11-04",
+   "bytes": 7748836,
+   "sha256": "ed8acc5a36715be8bed88a9f5040513eef90eee417963ddc87d52846ebc091a1"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p17",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p17-2026-11-04-98e50009.tif",
+   "date": "2026-11-04",
+   "bytes": 8601400,
+   "sha256": "98e5000922623f67f76fb454240c208e2bd70bfdd5fea50e6870778d8128ce35"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p18",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p18-2026-11-04-1059c177.tif",
+   "date": "2026-11-04",
+   "bytes": 9079855,
+   "sha256": "1059c1777a58d567f8e53fc8b1e9dc0ae1407a2b647f6a14cdc84ff4d3e3033b"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p19",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p19-2026-11-04-b6fb68a8.tif",
+   "date": "2026-11-04",
+   "bytes": 5530372,
+   "sha256": "b6fb68a8087c2180db137af13db39a191a8d5c3a871a0a762ff38d10901558c5"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p20",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p20-2026-11-04-e7a50d52.tif",
+   "date": "2026-11-04",
+   "bytes": 3672642,
+   "sha256": "e7a50d52580c13f9edf6a70f2f7b04f09aaca07f7b3288446cd730e9a6c8d10d"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p21",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p21-2026-11-04-e527d46f.tif",
+   "date": "2026-11-04",
+   "bytes": 7314710,
+   "sha256": "e527d46fb66e26903362088195fef3b1278215dc98b54b714befae448e7810dc"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p22",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p22-2026-11-04-d3725f6a.tif",
+   "date": "2026-11-04",
+   "bytes": 8832906,
+   "sha256": "d3725f6a94f05c9f814f41968be39161c1ed6531d9765b7dfe6dd505c38aba14"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p23",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p23-2026-11-04-47ccfe52.tif",
+   "date": "2026-11-04",
+   "bytes": 9977617,
+   "sha256": "47ccfe52d32feb67cf413f90f4193e5dc6127ee795bd48fb976d4916ac48e9f1"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p24",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p24-2026-11-04-29233d38.tif",
+   "date": "2026-11-04",
+   "bytes": 7638468,
+   "sha256": "29233d380cddc88b916fd8c8a7081dc7e6c34edea4330f2bec9ee75c71498e8d"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p25",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p25-2026-11-04-642a4ad7.tif",
+   "date": "2026-11-04",
+   "bytes": 5217507,
+   "sha256": "642a4ad7739e014ef1a4fb6a6947137ab7ae29c55db7b0b2a30890515b4fd846"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p26",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p26-2026-11-04-cac2ecfc.tif",
+   "date": "2026-11-04",
+   "bytes": 9168558,
+   "sha256": "cac2ecfcbdc674f2cafbe2babec74eb20de2b5a6604529e991d877926ed3fccf"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p27",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p27-2026-11-04-9624cac0.tif",
+   "date": "2026-11-04",
+   "bytes": 9925310,
+   "sha256": "9624cac0acfcb04575145fb8cf7198bfcf0fbd56f03652ecd162fc68fc4b952d"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p28",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p28-2026-11-04-8ddb8fb4.tif",
+   "date": "2026-11-04",
+   "bytes": 9648313,
+   "sha256": "8ddb8fb4ad9b294044347a017e0f461eddae905b6c2919154ad83f08a36caeb2"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p29",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p29-2026-11-04-2879156e.tif",
+   "date": "2026-11-04",
+   "bytes": 6109627,
+   "sha256": "2879156e73e8a7cc4271630a24bef07cdac5bff8df09754a343370723573a258"
+  },
+  {
+   "series": "1972",
+   "layer": "sheet-p31",
+   "fmt": "cog",
+   "name": "sfzoning-1972-sheet-p31-2026-11-04-3d4c1363.tif",
+   "date": "2026-11-04",
+   "bytes": 5610767,
+   "sha256": "3d4c136303bd453cbdfb4a5215d2f2a780d6a9fafd465323df6b831680a98f22"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p02-2026-11-04-636092eb.tif",
+   "date": "2026-11-04",
+   "bytes": 8175323,
+   "sha256": "636092eb92e38c7b47519614dca55ef9f708f8010a1ca58921af8e4c3d02b978"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p03-2026-11-04-24908267.tif",
+   "date": "2026-11-04",
+   "bytes": 9942354,
+   "sha256": "249082678f8fda3bf5470a031fd143a78a60ad83b91e129d0c44f39490cda0a7"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p04-2026-11-04-3de7f5fc.tif",
+   "date": "2026-11-04",
+   "bytes": 5630477,
+   "sha256": "3de7f5fc14bebc5fa4eb0c17928a7bb52228c8b1febf899101e3170bc92b9cd1"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p05-2026-11-04-9f67c4c8.tif",
+   "date": "2026-11-04",
+   "bytes": 3998343,
+   "sha256": "9f67c4c8001404b19eae5435cebc11269108224bcc3f7456ffcbe6d330dc28d9"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p06-2026-11-04-55a3c541.tif",
+   "date": "2026-11-04",
+   "bytes": 7092178,
+   "sha256": "55a3c54173bd9e67b6bcd255d322f882e14a3e25da4c67e2350562df39eb8cbe"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p07-2026-11-04-d2cff1c1.tif",
+   "date": "2026-11-04",
+   "bytes": 8912233,
+   "sha256": "d2cff1c15bc53be9ffe96b152d18d049c3ec72940d3903510e5ba361b132994e"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p08-2026-11-04-de9a4b64.tif",
+   "date": "2026-11-04",
+   "bytes": 10416015,
+   "sha256": "de9a4b643fb29a9e6083344b17ca25c3bcda75075e704acc19ef149d44a7334a"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p09-2026-11-04-197d2e79.tif",
+   "date": "2026-11-04",
+   "bytes": 7408813,
+   "sha256": "197d2e79c9e9bf6c385538932e29ea27205c8466121234ca100e3953e95dc7cc"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p10-2026-11-04-72f6e67f.tif",
+   "date": "2026-11-04",
+   "bytes": 4139222,
+   "sha256": "72f6e67ff483594b83c9c2ce1e3b98b671571dd0bc2e1c9cc8f3ce7ac372b4b7"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p11-2026-11-04-87453fac.tif",
+   "date": "2026-11-04",
+   "bytes": 9433990,
+   "sha256": "87453fac59b7d0dba9fce1c70def2589d7dbe3405468256b38a0cb75c6933104"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p12-2026-11-04-dac7c53e.tif",
+   "date": "2026-11-04",
+   "bytes": 10218455,
+   "sha256": "dac7c53e139e7b0f1b2812ac38ff91c42dd0d7b33f04094e47f6630c836cdb4c"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p13-2026-11-04-fd7687a8.tif",
+   "date": "2026-11-04",
+   "bytes": 9423356,
+   "sha256": "fd7687a8fb017d9d47f8bea25cb2d79f43ecb097188139088b654996416ee57f"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p14",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p14-2026-11-04-a825bf38.tif",
+   "date": "2026-11-04",
+   "bytes": 6210301,
+   "sha256": "a825bf38802bebf76350aefc540853bbfdba8be37da5bc5fe38e9802451ea8d5"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p15",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p15-2026-11-04-67dd418f.tif",
+   "date": "2026-11-04",
+   "bytes": 8625762,
+   "sha256": "67dd418f3d038df6809f6646d03b8ba66cf8f45baa287d5e892f39fb88eac1c9"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p16",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p16-2026-11-04-91a46474.tif",
+   "date": "2026-11-04",
+   "bytes": 9005920,
+   "sha256": "91a46474ccfc90a157781f490c0b3df7dafb5e82767e52fb0b38da2d2e0c49e1"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p17",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p17-2026-11-04-373e6b7d.tif",
+   "date": "2026-11-04",
+   "bytes": 7383419,
+   "sha256": "373e6b7d23ddee90afb321150182035f545d69fa123447456d53ab0b45366a10"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p18",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p18-2026-11-04-b33e5fc0.tif",
+   "date": "2026-11-04",
+   "bytes": 3729404,
+   "sha256": "b33e5fc03819a75dc1df7b42e6509f5ed43648d51dd1ec59e380f57fe49c9859"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p19",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p19-2026-11-04-cef75037.tif",
+   "date": "2026-11-04",
+   "bytes": 7224455,
+   "sha256": "cef7503727742477bd9aac3a4e8dc6d86ea85f6f516134eafb5207794232f7fc"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p20",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p20-2026-11-04-d4ee08ff.tif",
+   "date": "2026-11-04",
+   "bytes": 8693570,
+   "sha256": "d4ee08ff81744fa49814fe9cd078b6fc06264dec3a3018b2b61de4042d1e1884"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p21",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p21-2026-11-04-3f3a6df3.tif",
+   "date": "2026-11-04",
+   "bytes": 10059880,
+   "sha256": "3f3a6df30a414821975f13f9cdc5c116b89b8601b8c6e4dadb2dc9285f99954d"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p22",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p22-2026-11-04-a8a88d07.tif",
+   "date": "2026-11-04",
+   "bytes": 7629402,
+   "sha256": "a8a88d07fda2e2f9e5b2cf0fc1a03bfd00b108e49cb7cdb0eab1e297d0e722bf"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p23",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p23-2026-11-04-5ec61086.tif",
+   "date": "2026-11-04",
+   "bytes": 4688181,
+   "sha256": "5ec6108614d3e69aae6d20965240190d87234e1873f7f29f06b7a3d80e1c0820"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p24",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p24-2026-11-04-3aeb851e.tif",
+   "date": "2026-11-04",
+   "bytes": 8980242,
+   "sha256": "3aeb851ea7144c4e51a01b15c5fd6c2b1763e3cf06bdf7dc967a76f0dad3f9f2"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p25",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p25-2026-11-04-7cc21f55.tif",
+   "date": "2026-11-04",
+   "bytes": 9712294,
+   "sha256": "7cc21f55b75817aeae4d332c7f87b3a73b42d5caed64219f509d209281c3edca"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p26",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p26-2026-11-04-9f3adbae.tif",
+   "date": "2026-11-04",
+   "bytes": 9542842,
+   "sha256": "9f3adbaebde4ac8940c24e2697a3782429ce36f094a521836f89382b357ce96f"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p27",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p27-2026-11-04-2080586b.tif",
+   "date": "2026-11-04",
+   "bytes": 6218083,
+   "sha256": "2080586be1d29a022e9162b37eb3d50e4e2fee34692aa1fbc904b84daad5b8be"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p28",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p28-2026-11-04-66ab7f7b.tif",
+   "date": "2026-11-04",
+   "bytes": 7622711,
+   "sha256": "66ab7f7b320ec51ff8c053bdf5aeba05ae4a8d0bdea4c572c9921abc52d8a0ff"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p29",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p29-2026-11-04-e95f87e0.tif",
+   "date": "2026-11-04",
+   "bytes": 3636389,
+   "sha256": "e95f87e02962f7b6be621f9ced3f4929afedeb798de96b963b56be167762e1cc"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p30",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p30-2026-11-04-cda46997.tif",
+   "date": "2026-11-04",
+   "bytes": 7886325,
+   "sha256": "cda46997317109f26fe22d1a5e1c799fe0d7a3012e3623a75357918d3422e56c"
+  },
+  {
+   "series": "1975",
+   "layer": "sheet-p32",
+   "fmt": "cog",
+   "name": "sfzoning-1975-sheet-p32-2026-11-04-c3db368c.tif",
+   "date": "2026-11-04",
+   "bytes": 4358073,
+   "sha256": "c3db368c7b4271b98812cc309ad5ee7d2bc71e88062fe68110bef246c85756de"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p02-2026-11-04-6981b593.tif",
+   "date": "2026-11-04",
+   "bytes": 6170877,
+   "sha256": "6981b5936d0702a5b8d0e16d9cdf11868ce5a32edfd5e9ec33efaca3168f57c6"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p03-2026-11-04-d0e5e3b2.tif",
+   "date": "2026-11-04",
+   "bytes": 6691292,
+   "sha256": "d0e5e3b2c8305b4fac9ab3b62527d9f088ad1f2c7dc1bcc36a89df6d903c9d12"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p04-2026-11-04-ffa13dd4.tif",
+   "date": "2026-11-04",
+   "bytes": 7776945,
+   "sha256": "ffa13dd4b444412f9654ade2aea814bbeaab16ecbc6fd51ac62a4459fdebccff"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p05-2026-11-04-96c33150.tif",
+   "date": "2026-11-04",
+   "bytes": 6804385,
+   "sha256": "96c33150bfab848ec15740a4f71c8e38cc00487d5d13a122d7f38e07e2f67070"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p06-2026-11-04-0d72450e.tif",
+   "date": "2026-11-04",
+   "bytes": 5778799,
+   "sha256": "0d72450e2905c5635b86dcee9d7699c09d7e101732cdd0f26d8a406b8bc88a23"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p07-2026-11-04-fdeaee40.tif",
+   "date": "2026-11-04",
+   "bytes": 5686448,
+   "sha256": "fdeaee409275378fe41ac3d4156d7158546394de073b62e4321a02d1d011829e"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p08-2026-11-04-5cf1af08.tif",
+   "date": "2026-11-04",
+   "bytes": 3593546,
+   "sha256": "5cf1af0873ff33f34813d8dd4f069d0fed56e023181cc304de1a27716236de02"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p09-2026-11-04-c3264dc9.tif",
+   "date": "2026-11-04",
+   "bytes": 2843685,
+   "sha256": "c3264dc9b76517e2015558d3432df38223a56ff4f80f66d19f718aac4ca285f1"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p10-2026-11-04-88ce3799.tif",
+   "date": "2026-11-04",
+   "bytes": 6410948,
+   "sha256": "88ce379964da1d48312a4611b65998b9a844841bcde277d1db303b62195d8acd"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p11-2026-11-04-dd65f991.tif",
+   "date": "2026-11-04",
+   "bytes": 5890907,
+   "sha256": "dd65f991c55d1b51a64f835281fa29c504c3f1c3a438677e2e54fa701e4815b3"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p12-2026-11-04-96420431.tif",
+   "date": "2026-11-04",
+   "bytes": 6823138,
+   "sha256": "96420431968561b8035fd8281994314a027ed89c1174a25d9f7828d39b41d5ea"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p13-2026-11-04-8c98a2cb.tif",
+   "date": "2026-11-04",
+   "bytes": 6862704,
+   "sha256": "8c98a2cbcfc2f126f2afc136db5bd1115300a5d57b655abf3c39e6dbea7703e7"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p14",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p14-2026-11-04-1fb36c6b.tif",
+   "date": "2026-11-04",
+   "bytes": 8571238,
+   "sha256": "1fb36c6bbd2a5d8806fc31142572139f571994f12bd9214eb9eeaa0deff444c8"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p15",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p15-2026-11-04-b8572392.tif",
+   "date": "2026-11-04",
+   "bytes": 7789051,
+   "sha256": "b85723927c944171dd96716cbb54caea0f3e96e71c8a53bdc91241d869f5d9de"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p16",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p16-2026-11-04-9babffb5.tif",
+   "date": "2026-11-04",
+   "bytes": 6349443,
+   "sha256": "9babffb5f47b182fd0036f129975f23834132d391770c378163e4d70dc033615"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p17",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p17-2026-11-04-01bcb6ca.tif",
+   "date": "2026-11-04",
+   "bytes": 5995516,
+   "sha256": "01bcb6ca73d72eb51f12d264c2867134e1a653845a96fa769bd1f58a6378454e"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p18",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p18-2026-11-04-b88fee68.tif",
+   "date": "2026-11-04",
+   "bytes": 3511521,
+   "sha256": "b88fee68a7790c9ce2dcabfd687172838099be362685d311a3922d1b7a526575"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p19",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p19-2026-11-04-0d5e5e18.tif",
+   "date": "2026-11-04",
+   "bytes": 3035540,
+   "sha256": "0d5e5e181df773e69443d3671f5ad834369ba62a25fb865679b936150e3d913b"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p20",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p20-2026-11-04-6fcb5310.tif",
+   "date": "2026-11-04",
+   "bytes": 4157387,
+   "sha256": "6fcb5310569988d87c5786bbea764edaf0feb4e173b9005e4289c136daaad6e7"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p21",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p21-2026-11-04-185955ca.tif",
+   "date": "2026-11-04",
+   "bytes": 6985466,
+   "sha256": "185955ca2f8ad6377fa1d652ccf56ca755fa9b4f81085c82432a597ac903d054"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p22",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p22-2026-11-04-1a033d19.tif",
+   "date": "2026-11-04",
+   "bytes": 7024456,
+   "sha256": "1a033d190f04c112633dcfcb8ef1acdd9df9fc355c4400c60afad790ab9ca089"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p23",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p23-2026-11-04-858938ee.tif",
+   "date": "2026-11-04",
+   "bytes": 8060581,
+   "sha256": "858938ee4feead3dc6da8d94b496263ef308d6ba728352b929f386e4671b7817"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p24",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p24-2026-11-04-df03fa50.tif",
+   "date": "2026-11-04",
+   "bytes": 7591512,
+   "sha256": "df03fa5068e4c55a0d112469ddb6911f24c70941b22ea8c56aa97b848830faf6"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p25",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p25-2026-11-04-60c15018.tif",
+   "date": "2026-11-04",
+   "bytes": 7600653,
+   "sha256": "60c150186a95faec642b99f94ab4eb39987aa2ab7022d6cba40985a243e64b87"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p26",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p26-2026-11-04-0b01daf5.tif",
+   "date": "2026-11-04",
+   "bytes": 7511919,
+   "sha256": "0b01daf5f2fb46e89c684b21604a1a9793f456d77db91a14dbba8b7a6c540ce3"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p27",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p27-2026-11-04-0a2a15a6.tif",
+   "date": "2026-11-04",
+   "bytes": 4177704,
+   "sha256": "0a2a15a6b0f3940dab6f6847bfddc77d970d07f58311a7502dca91becb50c750"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p28",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p28-2026-11-04-e5fe7256.tif",
+   "date": "2026-11-04",
+   "bytes": 4718489,
+   "sha256": "e5fe72568e28c26463bceea2c412d61d7c94c6947f38fc99efcc2e238f3fcabe"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p29",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p29-2026-11-04-f07382a9.tif",
+   "date": "2026-11-04",
+   "bytes": 3533824,
+   "sha256": "f07382a965ec3f915c99956a42785dddf1120711023eaaf65dbeecbb80a995ab"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p30",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p30-2026-11-04-a14e2443.tif",
+   "date": "2026-11-04",
+   "bytes": 2894246,
+   "sha256": "a14e2443be35725780a83962a3ebf12716b535b20d05c2e1db179c96dab0cce5"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p31",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p31-2026-11-04-5fb58daa.tif",
+   "date": "2026-11-04",
+   "bytes": 5997185,
+   "sha256": "5fb58daa886f445abfb4eefb3297276d2a4ad113f26a029d5e76c28dafab589f"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p33",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p33-2026-11-04-5ebb27dc.tif",
+   "date": "2026-11-04",
+   "bytes": 4107664,
+   "sha256": "5ebb27dc12fce6fb2525b4e442770aca55036ce5b6739f9439b4d638f58ff9b2"
+  },
+  {
+   "series": "1980",
+   "layer": "sheet-p34",
+   "fmt": "cog",
+   "name": "sfzoning-1980-sheet-p34-2026-11-04-82905a87.tif",
+   "date": "2026-11-04",
+   "bytes": 4125110,
+   "sha256": "82905a8709641fdc29c25231c08ad418787c5bc26afc6cff1570267432e5e598"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p01-2026-11-04-fa54d5cf.tif",
+   "date": "2026-11-04",
+   "bytes": 4428825,
+   "sha256": "fa54d5cf6ee4fddf444ef91962e3fcce918a242d0587c747476b2f28ddeed14d"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p02-2026-11-04-bb21059a.tif",
+   "date": "2026-11-04",
+   "bytes": 3867850,
+   "sha256": "bb21059aec3a6a0e28534a4b722f68855ce96a84c89b154c146e2b3ec3519ed9"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p03-2026-11-04-2279907e.tif",
+   "date": "2026-11-04",
+   "bytes": 3408515,
+   "sha256": "2279907e3e7698617daa9b84c78aa136855c6b93a70b841bb87801a4344b5727"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p04-2026-11-04-b21eb0e6.tif",
+   "date": "2026-11-04",
+   "bytes": 1634223,
+   "sha256": "b21eb0e6c7a00b487baa5258a5465bf19652231350926957f81e5687014794b4"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p05-2026-11-04-38f3927a.tif",
+   "date": "2026-11-04",
+   "bytes": 2985123,
+   "sha256": "38f3927a3ed5ecde6d445460d21b6d122304258915c48a8966f6bf1840d76562"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p06-2026-11-04-4d10ecd7.tif",
+   "date": "2026-11-04",
+   "bytes": 3460425,
+   "sha256": "4d10ecd7cede92910c949a31b02886f0d8a0657941f5fd12a0c6893d973f8650"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p07-2026-11-04-395d4669.tif",
+   "date": "2026-11-04",
+   "bytes": 4380341,
+   "sha256": "395d46696d7e88e56eed81c0922a3b46b3c9231d3847ac08d58d65a1fccdad61"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p08-2026-11-04-0b318bbb.tif",
+   "date": "2026-11-04",
+   "bytes": 3575920,
+   "sha256": "0b318bbbfc4e66c63632311d5480ceaf68fb67bf96eea7000ab7cfa01954b566"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p09-2026-11-04-0b20c05b.tif",
+   "date": "2026-11-04",
+   "bytes": 2633506,
+   "sha256": "0b20c05b5b3e513a6dc22d6d6a006595236fd9340ee4690c2b581e3910251e89"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p10-2026-11-04-b9f4e163.tif",
+   "date": "2026-11-04",
+   "bytes": 4363861,
+   "sha256": "b9f4e163b8f1a647dec5e5a1ec2ff23089e16a5a68ecd74b1e9e5bc4d883f661"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p11-2026-11-04-c0f36519.tif",
+   "date": "2026-11-04",
+   "bytes": 4153282,
+   "sha256": "c0f36519626384cf400da69f8f5a7cd75358e95f9a09cdf75ae1962ae6023365"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p12-2026-11-04-5609f987.tif",
+   "date": "2026-11-04",
+   "bytes": 4371649,
+   "sha256": "5609f987ec615a7d4c29a874a118862dbe805ae10d3fd33e8af872a03fddfccd"
+  },
+  {
+   "series": "1980-1990-height",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-height-sheet-p13-2026-11-04-edabeb70.tif",
+   "date": "2026-11-04",
+   "bytes": 2886838,
+   "sha256": "edabeb703beb05cf0b703fa9dcab99dd19657625cf7275c2805631180ab0737f"
+  },
+  {
+   "series": "1980-1990-su",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-su-sheet-p01-2026-11-04-bc2db8f0.tif",
+   "date": "2026-11-04",
+   "bytes": 1961344,
+   "sha256": "bc2db8f0e9310d9c8b653417919a5c997a7bb37ee866751fd81ac88498ff7e73"
+  },
+  {
+   "series": "1980-1990-su",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-su-sheet-p02-2026-11-04-5772f830.tif",
+   "date": "2026-11-04",
+   "bytes": 1743439,
+   "sha256": "5772f83074d6af91cd788805d07038a47875257c62d3bdc9bea7923e31b50ecf"
+  },
+  {
+   "series": "1980-1990-su",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-su-sheet-p03-2026-11-04-f07c2160.tif",
+   "date": "2026-11-04",
+   "bytes": 3387780,
+   "sha256": "f07c2160551d2ec9272688782a66ab11e98a74d0e82609c71fd255557e687576"
+  },
+  {
+   "series": "1980-1990-su",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-su-sheet-p04-2026-11-04-4d6fe0c5.tif",
+   "date": "2026-11-04",
+   "bytes": 3700930,
+   "sha256": "4d6fe0c5f65d976f188789968c3d7ed752d7b56becfd2419620be233d58071ff"
+  },
+  {
+   "series": "1980-1990-su",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-su-sheet-p05-2026-11-04-189eebed.tif",
+   "date": "2026-11-04",
+   "bytes": 7899637,
+   "sha256": "189eebedf395d0b9af64e98400e428b58b13af13bbd3d99d49afad13b68e073d"
+  },
+  {
+   "series": "1980-1990-su",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-su-sheet-p06-2026-11-04-317adc39.tif",
+   "date": "2026-11-04",
+   "bytes": 2309641,
+   "sha256": "317adc39976b95133dd9a326fdac5c4293fa46c1cdba978caa3d9e61cef28d77"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p01-2026-11-04-dbf7059f.tif",
+   "date": "2026-11-04",
+   "bytes": 4059485,
+   "sha256": "dbf7059f81b25525ecd0238fa1153de7b2c004729953023908a2d5eb1be14244"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p02-2026-11-04-e57682f4.tif",
+   "date": "2026-11-04",
+   "bytes": 4818082,
+   "sha256": "e57682f4649f97948d70705da40b3e31a422ea9aae94330d5eb2746474542a6a"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p03-2026-11-04-f810df58.tif",
+   "date": "2026-11-04",
+   "bytes": 3810896,
+   "sha256": "f810df589d13b1b0d4cf0aa29a785c349e7f93933f5db7f20421539116dc4f19"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p04-2026-11-04-68fe7d06.tif",
+   "date": "2026-11-04",
+   "bytes": 2043387,
+   "sha256": "68fe7d063214285c5fbcb5b92398822b1bb059d50e123af704191fcf6ee8bc09"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p05-2026-11-04-e4bf4ff4.tif",
+   "date": "2026-11-04",
+   "bytes": 3459660,
+   "sha256": "e4bf4ff4818e1700d3864d6731189d97fd5042f222746921fa583e59515beb44"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p06-2026-11-04-ebc73ed8.tif",
+   "date": "2026-11-04",
+   "bytes": 4009589,
+   "sha256": "ebc73ed802a9f047dbd367c92c009ee299d7428cf69418d32f2b94a75282bbe3"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p07-2026-11-04-842d5c16.tif",
+   "date": "2026-11-04",
+   "bytes": 4755676,
+   "sha256": "842d5c165d8195254ad425076be521020213b36a1891328b382928fbbc8eedbb"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p08-2026-11-04-4d0d5404.tif",
+   "date": "2026-11-04",
+   "bytes": 3738089,
+   "sha256": "4d0d5404ef0eef9f054881a680f8a631e5058d1678cce77485a7760c8a329cda"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p09-2026-11-04-e0a288f8.tif",
+   "date": "2026-11-04",
+   "bytes": 1853809,
+   "sha256": "e0a288f83c42de2aa95fb7cfb21f831851fc348e257f9f3444986298ea43b02c"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p10-2026-11-04-d75b8891.tif",
+   "date": "2026-11-04",
+   "bytes": 4272266,
+   "sha256": "d75b8891e15754940f21da441452deed0d06b199397db16fd40ef8dd1d3a1440"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p11-2026-11-04-5144f366.tif",
+   "date": "2026-11-04",
+   "bytes": 4359294,
+   "sha256": "5144f366e14ec6daece68e3c4e5cf23347429ef3a907763df30d8fafe740efb4"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p12-2026-11-04-753f4525.tif",
+   "date": "2026-11-04",
+   "bytes": 4426742,
+   "sha256": "753f45251b50d05772988c8ea75cfef7880de846702ee279fafa71e16127e463"
+  },
+  {
+   "series": "1980-1990-zoning",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1980-1990-zoning-sheet-p13-2026-11-04-a602cd01.tif",
+   "date": "2026-11-04",
+   "bytes": 2421445,
+   "sha256": "a602cd017ee2aee22a611c31fad7bc0ae7321ac71a3569d869065c9250138b15"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p01-2026-11-04-96cd90f4.tif",
+   "date": "2026-11-04",
+   "bytes": 3862167,
+   "sha256": "96cd90f40be67cba91079f0d28779ddb8ba32d9b971c4e86733e9395cb7c9287"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p02-2026-11-04-528b3289.tif",
+   "date": "2026-11-04",
+   "bytes": 3869921,
+   "sha256": "528b32897a64e8dc44b83d27978b4c99007210fddd9500405cf87b0afd8ee026"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p03-2026-11-04-c171f3fe.tif",
+   "date": "2026-11-04",
+   "bytes": 3291676,
+   "sha256": "c171f3fe654489de2d7d57574a37a596bafed0cf7ff6abadeb7a74412d39eacf"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p04-2026-11-04-8ab3985a.tif",
+   "date": "2026-11-04",
+   "bytes": 1650751,
+   "sha256": "8ab3985a55269ed4cccd3568dc22862432af3af32d0a0d75407922142e859b5f"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p05-2026-11-04-bf8f4c36.tif",
+   "date": "2026-11-04",
+   "bytes": 3314224,
+   "sha256": "bf8f4c3634ebaccc265ac56f950257cd24f0a8f66a02193135bc6b94060ca998"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p06-2026-11-04-3c119601.tif",
+   "date": "2026-11-04",
+   "bytes": 4073141,
+   "sha256": "3c11960129bab99e46827cb8b2e2d4fd0d2220331caab7858b78a75f4fba023a"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p07-2026-11-04-d31cc1fc.tif",
+   "date": "2026-11-04",
+   "bytes": 4502884,
+   "sha256": "d31cc1fc8409889697bb19b813a6e1b7b85860233761aaeed0d21a9fb72ca5bf"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p08-2026-11-04-f1cd2299.tif",
+   "date": "2026-11-04",
+   "bytes": 3616008,
+   "sha256": "f1cd2299616612b288e0cec4aee0f44b1d2ea7f126d3d364b70582c766606d00"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p09-2026-11-04-c8cd9a2e.tif",
+   "date": "2026-11-04",
+   "bytes": 2433478,
+   "sha256": "c8cd9a2e96e4b3a7bac26518857ee23dc4041141bce6d9f263126d79efc21c44"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p10-2026-11-04-c78095ee.tif",
+   "date": "2026-11-04",
+   "bytes": 4200491,
+   "sha256": "c78095eebc3066c24ea73a19b6f9a5cbbd23eb67b77cc20d8d5fd7997030e38a"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p11-2026-11-04-bc489a72.tif",
+   "date": "2026-11-04",
+   "bytes": 4589801,
+   "sha256": "bc489a722c2a3d7a5e17d1f9a23cf4b95d74c57cb08e82821d2bb4d4736556d1"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p12-2026-11-04-63ffd2de.tif",
+   "date": "2026-11-04",
+   "bytes": 4546768,
+   "sha256": "63ffd2deb430e9d6f3c76f5d2745d609f81d4c3040a1eb12311efaced24ac119"
+  },
+  {
+   "series": "1990-1996-height",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-height-sheet-p13-2026-11-04-654cdba9.tif",
+   "date": "2026-11-04",
+   "bytes": 2960331,
+   "sha256": "654cdba9260e80b70b4c33ee7049bbe82f875eb92fc81a81c59b4743e1e70121"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p01-2026-11-04-3446095d.tif",
+   "date": "2026-11-04",
+   "bytes": 3112814,
+   "sha256": "3446095df7d3c5145dbdc384a24930cddb325df974b5630a152c0be5e950e45b"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p02-2026-11-04-e45910e4.tif",
+   "date": "2026-11-04",
+   "bytes": 3028965,
+   "sha256": "e45910e4e5f7a73c827ec8c4bc9586c3bc98f8897f478f49c84b3d22141c1192"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p03-2026-11-04-4151940a.tif",
+   "date": "2026-11-04",
+   "bytes": 2682482,
+   "sha256": "4151940a7b56516a16d798eed1a047e7999fcbf3f8d449fa9cb78154c68feb48"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p04-2026-11-04-7272b207.tif",
+   "date": "2026-11-04",
+   "bytes": 1612513,
+   "sha256": "7272b207238036438e48b9471d69fd209112777619fce91cc52bbe80b8091b9d"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p05-2026-11-04-68fe51b8.tif",
+   "date": "2026-11-04",
+   "bytes": 2864328,
+   "sha256": "68fe51b869164c69507e09c2e2b256edbd9f023b2ca6cb207dc1b78dc9bc4340"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p06-2026-11-04-daa3069f.tif",
+   "date": "2026-11-04",
+   "bytes": 3195211,
+   "sha256": "daa3069f1c4ae017f8da3a2561c4ff082ae430119b279902a4a9493e62f2dd8b"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p07-2026-11-04-756b5073.tif",
+   "date": "2026-11-04",
+   "bytes": 3451355,
+   "sha256": "756b5073260dd37880e3279892e96e0b86841ee13160190af690132a83983858"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p08-2026-11-04-cce2c3ef.tif",
+   "date": "2026-11-04",
+   "bytes": 3052389,
+   "sha256": "cce2c3ef692e5cfd7bdd9a9fba00d7b566ec7fc38d1029e1e459b8daab2384af"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p09-2026-11-04-ec7b94d9.tif",
+   "date": "2026-11-04",
+   "bytes": 3588258,
+   "sha256": "ec7b94d9654e505543a34a7211b22ce7051bedcf1ac3acdf34208fb6f506b966"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p10-2026-11-04-466fd532.tif",
+   "date": "2026-11-04",
+   "bytes": 1949207,
+   "sha256": "466fd53232b4363796ce54e376b887c8e3583a250e4a0b3f4d2e3dfeb3e5e19e"
+  },
+  {
+   "series": "1990-1996-su",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-su-sheet-p12-2026-11-04-1de011dd.tif",
+   "date": "2026-11-04",
+   "bytes": 2664244,
+   "sha256": "1de011dd87dd1246dd946b995baa89784f2a78731729b74eead219bd90503ceb"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p22",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p22-2026-11-04-90e3648d.tif",
+   "date": "2026-11-04",
+   "bytes": 3319233,
+   "sha256": "90e3648d8987c3613d57934b0c5b25dadcf0f4e7d8700d344e032131e146f44c"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p23",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p23-2026-11-04-d9769254.tif",
+   "date": "2026-11-04",
+   "bytes": 3939074,
+   "sha256": "d97692546f6a8bc287856ac261633fad560c53439c60308086ea80c6cf134a79"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p24",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p24-2026-11-04-9e5bb2d0.tif",
+   "date": "2026-11-04",
+   "bytes": 3094911,
+   "sha256": "9e5bb2d04e62dcdb402f0c3c4cd06c7e4e9b48050aea50417bac4455b461eb92"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p25",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p25-2026-11-04-9ea4b650.tif",
+   "date": "2026-11-04",
+   "bytes": 1849930,
+   "sha256": "9ea4b65067ee3459ebb4cbbe0791737fec383c8021e880ed734e6753d1047c0d"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p26",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p26-2026-11-04-b24ac55f.tif",
+   "date": "2026-11-04",
+   "bytes": 3220733,
+   "sha256": "b24ac55f790799fa311c509976a6539700b116957c1d82f419deddde8184fde4"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p27",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p27-2026-11-04-9545dc7a.tif",
+   "date": "2026-11-04",
+   "bytes": 4200009,
+   "sha256": "9545dc7aac5caa40ab2d121783e37d0c9675eec9733640970c46bc1664fbb34f"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p28",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p28-2026-11-04-5803a734.tif",
+   "date": "2026-11-04",
+   "bytes": 3353319,
+   "sha256": "5803a7347ffb3da42797737b20b0f5fed33d038b9b31727264da1372d5b6ad02"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p29",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p29-2026-11-04-7366bcf0.tif",
+   "date": "2026-11-04",
+   "bytes": 1623244,
+   "sha256": "7366bcf06ec4b47afc4210f810d595dbfb7924fa5720211cfbf0b102699b3f8b"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p30",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p30-2026-11-04-35128ef2.tif",
+   "date": "2026-11-04",
+   "bytes": 3849608,
+   "sha256": "35128ef2d42ad31f6ec8e915009a427b98bffa1729f9b043cbeadb90fe0329ee"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p31",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p31-2026-11-04-c0e9a0c5.tif",
+   "date": "2026-11-04",
+   "bytes": 4220274,
+   "sha256": "c0e9a0c5c59a6075320300519dea34cc69dd32d418f172aea95ee2c02043b542"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p32",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p32-2026-11-04-ad7d5822.tif",
+   "date": "2026-11-04",
+   "bytes": 3960478,
+   "sha256": "ad7d5822f0be2bd82019395c51b4915c0123533b2981a1b556348e18ae060181"
+  },
+  {
+   "series": "1990-1996-zoning",
+   "layer": "sheet-p33",
+   "fmt": "cog",
+   "name": "sfzoning-1990-1996-zoning-sheet-p33-2026-11-04-915140c9.tif",
+   "date": "2026-11-04",
+   "bytes": 2210466,
+   "sha256": "915140c91ced6d4a8c662ab763fae13e2c7862b018e04c61d9ffb07bbd120d24"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p01-2026-11-04-98006110.tif",
+   "date": "2026-11-04",
+   "bytes": 3829100,
+   "sha256": "98006110f3ad054f6669a419a483511680f82ac21261836e3d7944007ae80576"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p02-2026-11-04-61ce33da.tif",
+   "date": "2026-11-04",
+   "bytes": 3870704,
+   "sha256": "61ce33dac01d18b0ed8bab7be6e37c64575cacd5539347ed76f561a2ab06c305"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p03-2026-11-04-cd3fb0e6.tif",
+   "date": "2026-11-04",
+   "bytes": 3259793,
+   "sha256": "cd3fb0e69c0b0e8b3cae011a31cce689af989600a659a321ddde097dd91842ae"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p04-2026-11-04-2885a4dc.tif",
+   "date": "2026-11-04",
+   "bytes": 1618203,
+   "sha256": "2885a4dcbad745336450022cd42eaaa0604f36d52bd4b66717dc45455cd5e8e7"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p05-2026-11-04-818cd9bc.tif",
+   "date": "2026-11-04",
+   "bytes": 3189982,
+   "sha256": "818cd9bc3a0f445e62d4ac0b5fe40b53d1d84afcd0940329e9a5fe19b1cb3c5a"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p06-2026-11-04-cac882c0.tif",
+   "date": "2026-11-04",
+   "bytes": 4112899,
+   "sha256": "cac882c0147e9904505549674984b4f1a2404e37541a74be14c062cb73df874f"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p07-2026-11-04-e60f971e.tif",
+   "date": "2026-11-04",
+   "bytes": 4495430,
+   "sha256": "e60f971e890567b0323b555fbc1dbf50b5e9226c477bc5dc8c173dd4b3d62baf"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p08-2026-11-04-ed95eb81.tif",
+   "date": "2026-11-04",
+   "bytes": 3726275,
+   "sha256": "ed95eb814a45162aeb490901c3b5cb646418384e2a6c339b2903845e03279297"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p09-2026-11-04-971c3875.tif",
+   "date": "2026-11-04",
+   "bytes": 2458039,
+   "sha256": "971c38750537114557421c5f593f5849d5195a3afb43c712b015c615a94a2365"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p10-2026-11-04-289cf581.tif",
+   "date": "2026-11-04",
+   "bytes": 4402922,
+   "sha256": "289cf581d635be7251d70b660fefe54a1ba4bad04c6c91d68dc20127f5387c86"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p11-2026-11-04-789cc7ae.tif",
+   "date": "2026-11-04",
+   "bytes": 4618318,
+   "sha256": "789cc7aed50a691d502c0f118f6eb3c3827331a3b57af5064bbe20486e75d1d6"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p12-2026-11-04-38f775ab.tif",
+   "date": "2026-11-04",
+   "bytes": 4644089,
+   "sha256": "38f775ab2b056f3d11e55c5adb1ca798efbe74a889c165ba225d80d3eab18d1a"
+  },
+  {
+   "series": "1996-2000-height",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-height-sheet-p13-2026-11-04-610f5f0f.tif",
+   "date": "2026-11-04",
+   "bytes": 2846164,
+   "sha256": "610f5f0f1b72637252af2c886054ab3ef73bfcc0295c8be8d61bad3e077a319f"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p01-2026-11-04-9c81a32e.tif",
+   "date": "2026-11-04",
+   "bytes": 3076667,
+   "sha256": "9c81a32e988aa8620999dcfd4bfb287da7ad7a5b9c2a9cd1c4f05071124b2e23"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p02-2026-11-04-bac3217b.tif",
+   "date": "2026-11-04",
+   "bytes": 3149438,
+   "sha256": "bac3217bf14e12ca2a17f8b342c7fe0d81f3ab448240ef3fbcfd342f3c34937e"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p03-2026-11-04-c7e4c9af.tif",
+   "date": "2026-11-04",
+   "bytes": 2632472,
+   "sha256": "c7e4c9af343d7d9088413e75ab2a0eac69628153d2f679e8c82668799ca750f6"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p05-2026-11-04-6b47e71b.tif",
+   "date": "2026-11-04",
+   "bytes": 2813137,
+   "sha256": "6b47e71bf72ea6f4d93e41cf25e8a991b50b91ae705844e71cf4269b153ba313"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p06-2026-11-04-217d9e2c.tif",
+   "date": "2026-11-04",
+   "bytes": 3185754,
+   "sha256": "217d9e2c04ea285233377f89865106473da5c4b6b20df0453a9bd39ddc64de2a"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p07-2026-11-04-629d41d2.tif",
+   "date": "2026-11-04",
+   "bytes": 3559614,
+   "sha256": "629d41d24a14b24420228c17436b4bb7bbf0696c90edf28cac03739e92856cad"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p08-2026-11-04-326b6948.tif",
+   "date": "2026-11-04",
+   "bytes": 3075608,
+   "sha256": "326b694837b74e78a5b8da920bc31c0dcead29917f5168868be3d44fd4b3b83c"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p09-2026-11-04-60c7114c.tif",
+   "date": "2026-11-04",
+   "bytes": 1555050,
+   "sha256": "60c7114ca427154eb0754bfd379957cc64d3abfaf6a703a601b673b3bb07c07f"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p10-2026-11-04-3e9c373a.tif",
+   "date": "2026-11-04",
+   "bytes": 3614747,
+   "sha256": "3e9c373a67783f331f965c6cb8101f6832b51058b6dbb395944340d1b2530957"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p11-2026-11-04-06190a24.tif",
+   "date": "2026-11-04",
+   "bytes": 3523858,
+   "sha256": "06190a24051a6b0854071b86cba7edada4e16e81dd6a1d23e381e882ac390b3d"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p12-2026-11-04-ebe9f64b.tif",
+   "date": "2026-11-04",
+   "bytes": 4041834,
+   "sha256": "ebe9f64b6e3805977bed9311340e07803f78f59d4ff3a8551b4d4456817cf726"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p13-2026-11-04-a9950d56.tif",
+   "date": "2026-11-04",
+   "bytes": 3758642,
+   "sha256": "a9950d5628d8eb06d98f466adcee2d40af51f7c4b7e6dfbedf906507e2d1d83d"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p14",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p14-2026-11-04-5943277e.tif",
+   "date": "2026-11-04",
+   "bytes": 1964081,
+   "sha256": "5943277ec81dcb64f5eafe009e0d99d173a7a0952719636c8f87a930a0be98fc"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p16",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p16-2026-11-04-39f0b425.tif",
+   "date": "2026-11-04",
+   "bytes": 2623181,
+   "sha256": "39f0b425afbd827d5af78616a4553103f70d210f29e4e0a2842b1ca348801abd"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p17",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p17-2026-11-04-221a22e7.tif",
+   "date": "2026-11-04",
+   "bytes": 2879650,
+   "sha256": "221a22e7a60f517e2277844e39d9217fa07f61736e240c353415f8b3893e4e3b"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p18",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p18-2026-11-04-9bd315bd.tif",
+   "date": "2026-11-04",
+   "bytes": 3087276,
+   "sha256": "9bd315bd7aa0e2f8c61310e0b839f62c232cf193ed8b921b8a2a265eae371c63"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p19",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p19-2026-11-04-abbe6dd6.tif",
+   "date": "2026-11-04",
+   "bytes": 3447611,
+   "sha256": "abbe6dd6b91d9a7fe6833f5da97336e397e8384fe45bc83e754391b958dc57bb"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p20",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p20-2026-11-04-5e60a741.tif",
+   "date": "2026-11-04",
+   "bytes": 3303889,
+   "sha256": "5e60a741d8beac9230c5da723863ba7cf5361aca31174c9087cfae03dcf2eddc"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p21",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p21-2026-11-04-36cb6487.tif",
+   "date": "2026-11-04",
+   "bytes": 4556647,
+   "sha256": "36cb64871abca9d0836be43f5ee272c4ed761988efe5efe24c81b2809cd86c44"
+  },
+  {
+   "series": "1996-2000-su",
+   "layer": "sheet-p22",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-su-sheet-p22-2026-11-04-584e2d22.tif",
+   "date": "2026-11-04",
+   "bytes": 5755698,
+   "sha256": "584e2d224d957810dcc3346c0b64e3023e4341e108189d9d97e81960caacc0ed"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p25",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p25-2026-11-04-15d80490.tif",
+   "date": "2026-11-04",
+   "bytes": 3242207,
+   "sha256": "15d804903c5ed1cbc1fb02fb511ac6d75ca3300dd0de74a0c32e1423d4894030"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p26",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p26-2026-11-04-3bde6c43.tif",
+   "date": "2026-11-04",
+   "bytes": 3913661,
+   "sha256": "3bde6c43d59c55eb2c14fbe8944d54369cb6f07fb1823f489b7eac8b403863c2"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p27",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p27-2026-11-04-845c2a14.tif",
+   "date": "2026-11-04",
+   "bytes": 3088297,
+   "sha256": "845c2a147d3e4730cedb5ffcb3d741ec8858f88d841c1eb5ddf94a9d972ed1d0"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p28",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p28-2026-11-04-973316c0.tif",
+   "date": "2026-11-04",
+   "bytes": 1838913,
+   "sha256": "973316c0c6d6e195fcb406afc4905c9cfd8a25cc9b97def9601f6f5728de08d2"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p29",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p29-2026-11-04-7c4ca8a9.tif",
+   "date": "2026-11-04",
+   "bytes": 3218701,
+   "sha256": "7c4ca8a90f703bf8b28e8f60d44e2bd904da8d43c24f70ecdb3b528ce5dd02e8"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p30",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p30-2026-11-04-b918224a.tif",
+   "date": "2026-11-04",
+   "bytes": 3539049,
+   "sha256": "b918224a2faf083bfccfc8b6dee136973adf21bdfe2334b358a7ea1cdc64f441"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p31",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p31-2026-11-04-87c9a8bc.tif",
+   "date": "2026-11-04",
+   "bytes": 4236979,
+   "sha256": "87c9a8bc2d5f4aec218f050e3a15a8c9902fbdc709b6b1198f6c37ecb3c396f7"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p32",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p32-2026-11-04-037e2ebe.tif",
+   "date": "2026-11-04",
+   "bytes": 3507239,
+   "sha256": "037e2ebe278dcbd9a77fa86920d96802da114ce4f2510f03b97272f8349ba889"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p33",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p33-2026-11-04-d9e5e47f.tif",
+   "date": "2026-11-04",
+   "bytes": 1610929,
+   "sha256": "d9e5e47f17845e5470b59b1cbec526716686c7d399e803e5e032889ce7b8fd72"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p34",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p34-2026-11-04-8e630132.tif",
+   "date": "2026-11-04",
+   "bytes": 3874424,
+   "sha256": "8e6301323acd381c0d905badab5a903e40923cedaaf2bbb81eb2e68fdf2d35fe"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p35",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p35-2026-11-04-abef6055.tif",
+   "date": "2026-11-04",
+   "bytes": 4292301,
+   "sha256": "abef6055d3e0496085820c3492039ede096de4369ce6638f0bca8647813898f7"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p36",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p36-2026-11-04-bab399ae.tif",
+   "date": "2026-11-04",
+   "bytes": 3985847,
+   "sha256": "bab399ae88a8a578562d007ddd4fa8c60942a3023f3168d29c90182240460fe6"
+  },
+  {
+   "series": "1996-2000-zoning",
+   "layer": "sheet-p37",
+   "fmt": "cog",
+   "name": "sfzoning-1996-2000-zoning-sheet-p37-2026-11-04-7125a215.tif",
+   "date": "2026-11-04",
+   "bytes": 2107182,
+   "sha256": "7125a215e65a99fa9ff5d2a58981f4e4c1d9c83ab964d54b2ec3ad7172892093"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p01-2026-11-04-0fdd7b76.tif",
+   "date": "2026-11-04",
+   "bytes": 3708241,
+   "sha256": "0fdd7b768511fbbd234832b51b9af9a59ad6f1cfc25feb152cf8068e1b1aa384"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p02-2026-11-04-2b5915be.tif",
+   "date": "2026-11-04",
+   "bytes": 3630832,
+   "sha256": "2b5915bef14985bdc7cfcfa179833ea072f06fd40ae65d64b0d523018f461639"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p03-2026-11-04-eae888ec.tif",
+   "date": "2026-11-04",
+   "bytes": 3068560,
+   "sha256": "eae888ec841eaf180204a0b8b406eef4bc5ecb77a67b958f1aeb394a3ba7809c"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p04-2026-11-04-60a751ef.tif",
+   "date": "2026-11-04",
+   "bytes": 1547605,
+   "sha256": "60a751ef88358d482905bd4cec60c95ac4dbe10a6d81c4a35d1bb0483accced1"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p05-2026-11-04-3c63b619.tif",
+   "date": "2026-11-04",
+   "bytes": 3057539,
+   "sha256": "3c63b6195a9d9e9a166f4fa4ae66976c83fdb5fb8d440d6c4511941c45cb57ab"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p06-2026-11-04-5ea771bd.tif",
+   "date": "2026-11-04",
+   "bytes": 3835857,
+   "sha256": "5ea771bd70f5a2464bd2261f717385270cd7bbc0eeac1d695b4a4ccc48edd738"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p07-2026-11-04-4b0e0c59.tif",
+   "date": "2026-11-04",
+   "bytes": 4188624,
+   "sha256": "4b0e0c59e7dc9a78b390599f9b3b2d613af5f6d4f08b3ab59089b1173fc88caa"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p08-2026-11-04-1ce2c9fd.tif",
+   "date": "2026-11-04",
+   "bytes": 3161573,
+   "sha256": "1ce2c9fd1abbc08c57c4d282bcd875c05dcd5efad0b7a545fd56762476361839"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p09-2026-11-04-0b5fb6d7.tif",
+   "date": "2026-11-04",
+   "bytes": 2281513,
+   "sha256": "0b5fb6d705715b84970151b5c673eccd2b34e0672f54c8e2fc195b89861941d2"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p10-2026-11-04-4d6531ee.tif",
+   "date": "2026-11-04",
+   "bytes": 4101079,
+   "sha256": "4d6531ee63570204352185382a63502b91451c58c5888b44f96852e5814abd44"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p11-2026-11-04-f8b17331.tif",
+   "date": "2026-11-04",
+   "bytes": 4471152,
+   "sha256": "f8b17331cba16a449ec7b353540c3cfbc95d5ef8aee3331b7b29c21b4c49ba35"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p12-2026-11-04-dc495e08.tif",
+   "date": "2026-11-04",
+   "bytes": 4282823,
+   "sha256": "dc495e087e6984df0f9eb3350293c6b3bc7ed25868a74c20432e0f2e4c35c910"
+  },
+  {
+   "series": "2000-digital-height",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-height-sheet-p13-2026-11-04-5abac179.tif",
+   "date": "2026-11-04",
+   "bytes": 2759448,
+   "sha256": "5abac17982ca4394ded2417df2f2b7fd1a0728a6157e43a1080b9fcd072cc348"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p01-2026-11-04-08749e67.tif",
+   "date": "2026-11-04",
+   "bytes": 3069761,
+   "sha256": "08749e67b9b2c87d7e2cf5c92186ca5b2e3a42c43f57f9df82e6337727e5b8d2"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p02-2026-11-04-006e54ba.tif",
+   "date": "2026-11-04",
+   "bytes": 2961524,
+   "sha256": "006e54ba179b9b9b95af678a4bd90e0541a489cab5afbcee343ad39a3acd0c3f"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p03-2026-11-04-e8dc3900.tif",
+   "date": "2026-11-04",
+   "bytes": 2630513,
+   "sha256": "e8dc3900d90afad43af9059b5040d9082b14407a175fa037def16b8386b8bae3"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p04-2026-11-04-2e9e1ccf.tif",
+   "date": "2026-11-04",
+   "bytes": 1562871,
+   "sha256": "2e9e1ccf2c398fb2aeb1f288b62b13ade9d5c56bdfd77fc01f41bb1b27850e18"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p05-2026-11-04-3b57099f.tif",
+   "date": "2026-11-04",
+   "bytes": 2853498,
+   "sha256": "3b57099f7693bfb0da07ac9b57dc225cfec73352849a77518b93ab21e49b9e2c"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p06-2026-11-04-cf3ce91e.tif",
+   "date": "2026-11-04",
+   "bytes": 3176324,
+   "sha256": "cf3ce91e5cce3941555770b7abda48228179ce84e3b387001ea02efdf801c17a"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p07-2026-11-04-8e9647b4.tif",
+   "date": "2026-11-04",
+   "bytes": 3497428,
+   "sha256": "8e9647b4b73e79f0bd4779922b671044f564d111add8a30bc83c6d27993c0343"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p08-2026-11-04-f573b9fb.tif",
+   "date": "2026-11-04",
+   "bytes": 3026189,
+   "sha256": "f573b9fb484d1d75887b0fb097fc81fb28cbd7091b9bfa13503b3b0ba322df92"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p09-2026-11-04-f4eae12f.tif",
+   "date": "2026-11-04",
+   "bytes": 1542660,
+   "sha256": "f4eae12fa4679368174b31c7948a9f8ba532f1aa32f35d4c12b329db2bc629d9"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p10-2026-11-04-61870e23.tif",
+   "date": "2026-11-04",
+   "bytes": 3483408,
+   "sha256": "61870e232bbdb80ad07e0cb1dbf54170092467a539c1a1598a312b4eb8625618"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p11-2026-11-04-cfe54209.tif",
+   "date": "2026-11-04",
+   "bytes": 3975544,
+   "sha256": "cfe5420965b6101b25eeb46b6a14843c659cf57d0e056f0fddfd084a774e60b6"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p12-2026-11-04-edac4fc5.tif",
+   "date": "2026-11-04",
+   "bytes": 3680326,
+   "sha256": "edac4fc5c5e869a8c551813e477c2c592b86a4e3312f100e68936de694655aa9"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p13-2026-11-04-725f91e4.tif",
+   "date": "2026-11-04",
+   "bytes": 1963158,
+   "sha256": "725f91e4b186b2887487f51d859ad7b088aec5d90a7b3a72e379ad012a3d399b"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p16",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p16-2026-11-04-6cd0dce6.tif",
+   "date": "2026-11-04",
+   "bytes": 2842336,
+   "sha256": "6cd0dce69f756cb78815c578a56896ff84a2f09ee1f2c1dc35f7f8cb863113e8"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p17",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p17-2026-11-04-8df9923f.tif",
+   "date": "2026-11-04",
+   "bytes": 3074840,
+   "sha256": "8df9923f6c0bd9d331afc876140f929379c04bd4f35d8595eeb4fd14f1214cff"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p18",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p18-2026-11-04-793fa76b.tif",
+   "date": "2026-11-04",
+   "bytes": 3396586,
+   "sha256": "793fa76be9da9cf06c3a8c97ceb68c0a01493a0f4eb3c320816fe136903d82c1"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p19",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p19-2026-11-04-106ef08b.tif",
+   "date": "2026-11-04",
+   "bytes": 3345177,
+   "sha256": "106ef08b293de57d19660f2477751c98f4a2f8b99d9bdc3bc707a1190f8bde1e"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p20",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p20-2026-11-04-240a35a9.tif",
+   "date": "2026-11-04",
+   "bytes": 4539161,
+   "sha256": "240a35a9767803faee0d75e0274e64ead483dcd8134da84d590186e827746b53"
+  },
+  {
+   "series": "2000-digital-su",
+   "layer": "sheet-p21",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-su-sheet-p21-2026-11-04-b794b0c0.tif",
+   "date": "2026-11-04",
+   "bytes": 5844798,
+   "sha256": "b794b0c0a281fbecaefe6390f28778ccaa8acd876b41e7d42e3426b4f280d0b6"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p01",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p01-2026-11-04-dcd04fd4.tif",
+   "date": "2026-11-04",
+   "bytes": 3232739,
+   "sha256": "dcd04fd4fdbf0ca6070d36e86a210411e1cc3fbde2f70f60437b78f8fe1c7bdc"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p02",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p02-2026-11-04-c86500a8.tif",
+   "date": "2026-11-04",
+   "bytes": 3883142,
+   "sha256": "c86500a82f4781dd56bf18defa7d0cbb80c4ed5c4962213ca8696f6397fad18b"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p03",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p03-2026-11-04-c9ba7492.tif",
+   "date": "2026-11-04",
+   "bytes": 3074494,
+   "sha256": "c9ba749235a85b63a7e74ff49423a809994351937aa10c443c87bf694176abd6"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p04",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p04-2026-11-04-4c0cdfd9.tif",
+   "date": "2026-11-04",
+   "bytes": 1832749,
+   "sha256": "4c0cdfd938e51353a14b399913529e627586a1fb7bf27c67ec82c932673b5f68"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p05",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p05-2026-11-04-fab0bdb8.tif",
+   "date": "2026-11-04",
+   "bytes": 3217032,
+   "sha256": "fab0bdb83137d00ca36d57beb6d317d3d9d956c26517b723ba3203a8a14d6612"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p06",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p06-2026-11-04-ab6a2fd0.tif",
+   "date": "2026-11-04",
+   "bytes": 3534772,
+   "sha256": "ab6a2fd0dbf7bf98fff6d88f4abe5557788de5c14384cc0e266f62885ac9af8b"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p07",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p07-2026-11-04-f297cb1d.tif",
+   "date": "2026-11-04",
+   "bytes": 4203948,
+   "sha256": "f297cb1da5064c29423879f26ab91e8e74e77b01c959db19ff71c3cac7ee0675"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p08",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p08-2026-11-04-e7d4b746.tif",
+   "date": "2026-11-04",
+   "bytes": 3274547,
+   "sha256": "e7d4b7466ae18d443ed848cbe534ae8ab378de709b155343e1b147eb222f6208"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p09",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p09-2026-11-04-63a85c62.tif",
+   "date": "2026-11-04",
+   "bytes": 1612441,
+   "sha256": "63a85c622e4b391c0522ea71dcbe399832c1c94ae722198ae721e440be9040c2"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p10",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p10-2026-11-04-fc06cd26.tif",
+   "date": "2026-11-04",
+   "bytes": 3871618,
+   "sha256": "fc06cd26d4b290f7327e3f8725cf080ca7ec11b175e438e42efde229fc994918"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p11",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p11-2026-11-04-16b88678.tif",
+   "date": "2026-11-04",
+   "bytes": 4340950,
+   "sha256": "16b886788a67552c4ec4b03f90c0fec17a4c1fe22042d32985ef5a89df45d18e"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p12",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p12-2026-11-04-7f18180c.tif",
+   "date": "2026-11-04",
+   "bytes": 3933907,
+   "sha256": "7f18180c5a88c8a794aae37f5fe501bec5d1efad4bb3df8458f3d6d4055d0a50"
+  },
+  {
+   "series": "2000-digital-zoning",
+   "layer": "sheet-p13",
+   "fmt": "cog",
+   "name": "sfzoning-2000-digital-zoning-sheet-p13-2026-11-04-b5d96a0e.tif",
+   "date": "2026-11-04",
+   "bytes": 2180095,
+   "sha256": "b5d96a0e489b2485dbfff7633c0ed85053cb07e36f022c005b3f636300996579"
+  }
+ ]
+}

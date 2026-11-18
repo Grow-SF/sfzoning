@@ -1,18 +1,29 @@
-import { formatBytes, rows, type Cell, type Manifest, type ScanCell } from "@/lib/downloadRows";
+import { formatBytes, rows, type Cell, type FileLinks, type Manifest, type ScanCell } from "@/lib/downloadRows";
 import SheetDownload from "./SheetDownload";
 import styles from "./downloads.module.css";
+
+/** One file: its latest link (what the label downloads), its dated name for citing, and its versions page. */
+function FileItem({ label, file }: { label: string; file: FileLinks & { bytes: number; updated: string } }) {
+  const datedName = file.versionedUrl.slice(file.versionedUrl.lastIndexOf("/") + 1);
+  return (
+    <span className={styles.item}>
+      <a href={file.latestUrl}>{label}</a>
+      <span className={styles.meta}>
+        {formatBytes(file.bytes)} · {file.updated}
+      </span>
+      <span className={styles.meta}>
+        <a href={file.versionedUrl}>{datedName}</a> · <a href={file.versionsUrl}>versions</a>
+      </span>
+    </span>
+  );
+}
 
 function Links({ cells }: { cells: Cell[] }) {
   if (!cells.length) return <span className={styles.none}>Not yet published</span>;
   return (
     <span className={styles.cell}>
       {cells.map((c) => (
-        <span key={c.fmt} className={styles.item}>
-          <a href={c.url}>{c.label}</a>
-          <span className={styles.meta}>
-            {formatBytes(c.bytes)} · {c.updated}
-          </span>
-        </span>
+        <FileItem key={c.fmt} label={c.label} file={c} />
       ))}
     </span>
   );
@@ -23,12 +34,7 @@ function Scan({ scan, manifest }: { scan: ScanCell; manifest: Manifest }) {
     <div className={styles.scan}>
       {scan.label && <span className={styles.label}>{scan.label}</span>}
       {scan.citywide && (
-        <span className={styles.item}>
-          <a href={scan.citywide.url}>Citywide image (GeoTIFF)</a>
-          <span className={styles.meta}>
-            {formatBytes(scan.citywide.bytes)} · {scan.citywide.updated}
-          </span>
-        </span>
+        <FileItem label="Citywide image (GeoTIFF)" file={scan.citywide} />
       )}
       {/* The client component gets only this series' sheets, not the whole manifest. */}
       {scan.sheets && (

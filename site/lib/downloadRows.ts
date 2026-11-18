@@ -1,25 +1,48 @@
 import { DATA_CREDIT, DATA_LICENSE, RUMSEY_CREDIT, RUMSEY_LICENSE } from "./credits";
 import { ERAS, type Era } from "./eras";
-import { latestRedirects, latestUrl } from "./latestRedirects.mjs";
+import { EXTS, latestName } from "./downloadNames.mjs";
 
-export { latestRedirects, latestUrl };
+/** The site path of a published file; the files route redirects it to Blob. The one definition of that path. */
+export const fileUrl = (series: string, name: string): string => `/data/files/${series}/${name}`;
+
+/** The versions page of one layer (the sheet zip and the CSV have none). */
+export const versionsUrl = (series: string, layer: string): string => `/data/versions/${series}/${layer}`;
+
+/** The three links a file shows: the latest one (for downloads), its dated name, and its versions page. */
+export type FileLinks = { latestUrl: string; versionedUrl: string; versionsUrl: string };
+
+/** The links of a current file: `name` is its versioned name, `layer` and `fmt` decide its latest name. */
+function fileLinks(series: string, layer: string, fmt: string, name: string): FileLinks {
+  return {
+    latestUrl: fileUrl(series, latestName({ series, layer, ext: EXTS[fmt as keyof typeof EXTS] })),
+    versionedUrl: fileUrl(series, name),
+    versionsUrl: versionsUrl(series, layer),
+  };
+}
+
 
 export type ManifestFile = {
-  series: string; layer: string; fmt: string; url: string; bytes: number; sha256: string;
-  fingerprint: string; updated: string; extra?: Record<string, string>;
+  series: string; layer: string; fmt: string; name: string; bytes: number; sha256: string;
+  fingerprint: string; updated: string; extra?: Record<"README.txt" | "LICENSE.txt", string>;
+  /** Citywide only: the sha256 of each sidecar named in `extra`, so a rewritten README counts as a change. */
+  extraSha256?: Record<"README.txt" | "LICENSE.txt", string>;
+  /** --local manifests only: the path under the base the file can be read from. */
+  local?: string; extraLocal?: Record<string, string>;
 };
-export type ManifestSheet = { sheet: string; name: string; url: string; bytes: number; md5: string; updated: string };
+export type ManifestSheet = {
+  sheet: string; number: string; name: string; bytes: number; md5: string; sha256: string; updated: string; local?: string;
+};
 export type Manifest = {
   files: Record<string, ManifestFile>;
   sheets: Record<string, { updated: string; readme: string; items: ManifestSheet[] }>;
-  superseded: unknown[];
   license?: string;
   generated?: string;
   base?: string;
   local?: boolean;
 };
+export type Version = { series: string; layer: string; fmt: string; name: string; date: string; bytes: number; sha256: string };
 
-export type Cell = { fmt: string; label: "GeoJSON" | "GeoPackage" | "Shapefile"; url: string; bytes: number; updated: string };
+export type Cell = FileLinks & { fmt: string; label: "GeoJSON" | "GeoPackage" | "Shapefile"; bytes: number; updated: string };
 export type ScanCell = {
   series: string;
   label: "Zoning" | "Height" | "Special use" | "";
@@ -38,7 +61,7 @@ function vectorCells(m: Manifest, series: string, layer: string): Cell[] {
   const cells: Cell[] = [];
   for (const [fmt, label] of VECTOR_FORMATS) {
     const f = m.files[`${series}/${layer}.${fmt}`];
-    if (f) cells.push({ fmt, label, url: f.url, bytes: f.bytes, updated: f.updated });
+    if (f) cells.push({ fmt, label, ...fileLinks(series, layer, fmt, f.name), bytes: f.bytes, updated: f.updated });
   }
   return cells;
 }
@@ -58,7 +81,7 @@ function scanSeries(era: Era): { series: string; label: ScanCell["label"] }[] {
 function scanCell(m: Manifest, series: string, label: ScanCell["label"]): ScanCell {
   const cell: ScanCell = { series, label };
   const c = m.files[`${series}/citywide.cog`];
-  if (c) cell.citywide = { fmt: "cog", url: c.url, bytes: c.bytes, updated: c.updated };
+  if (c) cell.citywide = { fmt: "cog", ...fileLinks(series, "citywide", "cog", c.name), bytes: c.bytes, updated: c.updated };
   const s = m.sheets[series];
   if (s && s.items.length) {
     cell.sheets = {
@@ -111,11 +134,44 @@ export const sheetLicense = (series: string) =>
 export const sheetCredit = (series: string) =>
   series === "1948" ? `${DATA_CREDIT}; imagery: ${RUMSEY_CREDIT}` : DATA_CREDIT;
 
+const SITE = "https://sfzoning.com";
+const abs = (series: string, name: string) => SITE + fileUrl(series, name);
+
+/** The latest name of one current sheet. */
+export const sheetLatestName = (series: string, i: ManifestSheet): string =>
+  latestName({ series, layer: `sheet-${i.number}`, ext: "tif" });
+
 /** The per-sheet index of a series as CSV. A single sheet carries no README, so each row names its license and credit. */
 export function sheetsCsv(m: Manifest, series: string): string {
-  const header = "sheet,name,url,bytes,md5,updated,license,credit";
-  const lines = (m.sheets[series]?.items ?? []).map((i) =>
-    [i.sheet, i.name, i.url, i.bytes, i.md5, i.updated, sheetLicense(series), sheetCredit(series)].map(csvField).join(","),
+  const header = "sheet,number,name,url,latest_url,bytes,md5,sha256,updated,license,credit";
+  const lines = (Object.hasOwn(m.sheets, series) ? m.sheets[series].items : []).map((i) =>
+    [
+      i.sheet, i.number, i.name, abs(series, i.name), abs(series, sheetLatestName(series, i)),
+      i.bytes, i.md5, i.sha256, i.updated, sheetLicense(series), sheetCredit(series),
+    ].map(csvField).join(","),
   );
   return [header, ...lines].join("\n");
+}
+
+/** The manifest for scripts: each current file and sheet with its absolute `url` (versioned) and `latest` links. */
+export function downloadsJson(m: Manifest) {
+  return {
+    ...m,
+    files: Object.fromEntries(
+      Object.entries(m.files).map(([k, f]) => [
+        k,
+        { ...f, url: abs(f.series, f.name), latest: abs(f.series, latestName({ series: f.series, layer: f.layer, ext: EXTS[f.fmt as keyof typeof EXTS] })) },
+      ]),
+    ),
+    sheets: Object.fromEntries(
+      Object.entries(m.sheets).map(([series, s]) => [
+        series,
+        {
+          ...s,
+          latest: abs(series, latestName({ series, layer: "sheets", ext: "zip" })),
+          items: s.items.map((i) => ({ ...i, url: abs(series, i.name), latest: abs(series, sheetLatestName(series, i)) })),
+        },
+      ]),
+    ),
+  };
 }

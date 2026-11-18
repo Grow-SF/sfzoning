@@ -1,11 +1,16 @@
-// Sheet downloads, served by the site's routes (app/data/sheets/[series]/zip and .../sheet/[sheet]):
-// an edition's sheets as a zip built while it streams, or one sheet under its readable name.
-// Nothing is stored twice: the sheets are read from the DVC objects already on Blob.
+// The sheet zip, served by the files route (sfzoning-<series>-sheets-latest.zip): an edition's
+// sheets as a zip built while it streams, each sheet read from its versioned file on Blob.
 import { makeZip, predictLength } from "client-zip";
 import type { Manifest, ManifestSheet } from "./downloadRows";
+import { blobPath, latestName } from "./downloadNames.mjs";
 
 /** Just what the sheet downloads need: the license and the series' sheets. */
-export type SheetSource = Pick<Manifest, "sheets" | "license">;
+export type SheetSource = Pick<Manifest, "sheets" | "license" | "base">;
+
+/** Where a sheet is read from: its place on the store (a --local manifest names its own path under the base). */
+function sheetUrl(src: SheetSource, series: string, item: ManifestSheet): string {
+  return item.local ? `${src.base}/${item.local}` : `${src.base}/${blobPath(series, item.name)}`;
+}
 export type ZipEntry = { name: string; input: string | ReadableStream<Uint8Array>; lastModified: Date; size?: number };
 type FetchFn = (url: string, init?: RequestInit) => Promise<Response>;
 type Options = { signal?: AbortSignal; onSheetDone?: (done: number) => void };
@@ -52,7 +57,7 @@ export async function* zipEntries(
   for (const item of s.items) {
     let res: Response;
     try {
-      res = await fetchFn(item.url, { signal });
+      res = await fetchFn(sheetUrl(src, series, item), { signal });
     } catch (e) {
       if (signal?.aborted) throw e;
       throw new Error(`Could not download sheet ${item.name}: ${message(e)}`);
@@ -99,35 +104,13 @@ function attachment(name: string): string {
  * the download failed instead of saving a short file.
  */
 export function sheetsZipResponse(src: SheetSource, series: string, fetchFn: FetchFn = fetch, signal?: AbortSignal): Response {
-  if (!src.sheets[series] || !src.license) return missing();
+  if (!Object.hasOwn(src.sheets, series) || !src.license) return missing();
   return new Response(makeZip(zipEntries(src, series, fetchFn, { signal })), {
     headers: {
       "content-type": "application/zip",
-      "content-disposition": attachment(`${series}-sheets.zip`),
+      "content-disposition": attachment(latestName({ series, layer: "sheets", ext: "zip" })),
       "content-length": String(zipLength(src, series)),
-      "cache-control": "public, max-age=3600",
-    },
-  });
-}
-
-/** One sheet, passed through from Blob under its readable name (Blob's own name may be a hash). */
-export async function sheetResponse(
-  src: SheetSource,
-  series: string,
-  sheet: string,
-  fetchFn: FetchFn = fetch,
-  signal?: AbortSignal,
-): Promise<Response> {
-  const item = src.sheets[series]?.items.find((i) => i.sheet === sheet);
-  if (!item) return missing();
-  const res = await fetchFn(item.url, { signal });
-  if (!res.ok || !res.body) return new Response(`Could not fetch sheet ${item.name}.`, { status: 502 });
-  return new Response(sized(res.body, item), {
-    headers: {
-      "content-type": "image/tiff",
-      "content-disposition": attachment(item.name),
-      "content-length": String(item.bytes),
-      "cache-control": "public, max-age=3600",
+      "cache-control": "no-store",
     },
   });
 }
