@@ -123,10 +123,13 @@ def main():
     ap.add_argument("--series", nargs="*")
     ap.add_argument("--solve-root", type=Path, help="the folder holding each series' solver folder (default data/solver; the build's, read only)")
     ap.add_argument("--out", type=Path, default=OUT, help="where the page goes")
+    ap.add_argument("--old-maps", type=Path, default=OUT.parent / "old-maps.json",
+                    help="verify_old.py's check that each published map is the one main's dvc.lock records")
     a = ap.parse_args()
     if a.solve_root:
         paths.SOLVER_ROOT = a.solve_root.resolve()
     out_dir = a.out
+    old = json.loads(a.old_maps.read_text()) if a.old_maps.is_file() else {}
     from pyproj import Transformer
     tr = Transformer.from_crs("EPSG:2227", "EPSG:4326", always_xy=True)
     C = city()
@@ -135,6 +138,8 @@ def main():
     index = json.loads(index_file.read_text()) if index_file.is_file() else {}
     for s in a.series or paths.ALL_YEARS:
         d = series_data(s, C, a.areas, a.px, tr.transform)
+        if d is not None:
+            d["reference"] = old.get(s)
         if d is None:
             print(s, "no solve yet")
             continue

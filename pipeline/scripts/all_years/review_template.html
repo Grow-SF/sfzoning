@@ -47,7 +47,7 @@ main .wrap { padding-block: 16px 48px; display: flex; flex-direction: column; ga
 .scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .score { background: var(--surface); padding: 10px 12px; min-width: 0; }
 .score dt { font-size: var(--step--1); color: var(--muted); }
-.score dd { margin: 2px 0 0; font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: var(--step-0); }
+.score dd { margin: 2px 0 0; font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: var(--step-0); overflow-wrap: anywhere; }
 .score dd .vs { color: var(--muted); }
 .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: var(--step--1); color: var(--muted); }
 .sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 5px; }
@@ -111,6 +111,8 @@ function scores(d) {
     ["Differing lots / areas", `${num(d.differing_lots)} <span class="vs">in</span> ${num(d.differing_areas)}`],
     ["Prints read / reads", `${num(d.prints)} <span class="vs">${esc(d.reads || "")}</span>`],
     ["Stroke-width scale", d.width_scale == null ? "1" : String(d.width_scale)],
+    ["Published map compared with", d.reference ? `${esc(d.reference.file)} <span class="vs">${d.reference.match ?
+      "the file main's dvc.lock records, md5 " + esc(String(d.reference.lock).slice(0, 10)) : "NOT the file main's dvc.lock records"}</span>` : "unchecked"],
   ];
   if (d.table) {
     const t = d.table;
