@@ -7,6 +7,7 @@ The maps are synthetic.  `_maps` draws what a net would give: inside each word (
 each px's exact offset to the word's centre in the word's heights, the word's log length and log height and its axis,
 optionally with noise and a per-word offset, the word's tag, and a core logit; outside, a low core logit with the
 background's votes (offsets about 0, log sizes about their means, any axis, tags about a mean)."""
+import dataclasses
 import math
 
 import cv2
@@ -493,6 +494,81 @@ def test_measure_spreads_finds_the_cell_of_votes_alike_in_blocks():
     got = words.measure_spreads(_pages(block=3))
     assert got.cell == pytest.approx(9.0, rel=0.35)
     assert got.centre == pytest.approx(0.1, rel=0.1)
+
+
+def _masked(pages, keep):
+    """`pages` with a mask each: `keep(page)`, the px that may be read."""
+    return [{**p, "mask": keep(p)} for p in pages]
+
+
+def _left(cols):
+    def keep(p):
+        m = np.zeros(p["word_id"].shape, bool)
+        m[:, :cols] = True
+        return m
+    return keep
+
+
+def test_measure_spreads_on_a_masked_page_is_the_page_without_the_masked_out_words():
+    """A mask over the pages' top left, its edges between words (four words whole in it, the rest wholly out): the
+    spreads are those of that part of the pages alone, its words and its background, the core share counted on it."""
+    pages = _pages()
+
+    def keep(p):
+        m = np.zeros(p["word_id"].shape, bool)
+        m[:125, :150] = True
+        return m
+
+    cropped = [{"geo": p["geo"][:, :125, :150], "tag": p["tag"][:, :125, :150], "word_id": p["word_id"][:125, :150],
+                "words": p["words"]} for p in pages]
+    assert np.unique(cropped[0]["word_id"]).tolist() == [0, 1, 2, 4, 5]          # four words, none cut
+    assert words.measure_spreads(_masked(pages, keep)) == words.measure_spreads(cropped)
+
+
+def test_a_word_with_a_px_outside_the_mask_is_left_out_whole():
+    """A mask whose edge cuts the second column of words (x 95 to 145, cut at 120): each is left out with all its px,
+    no part of a word fitted; its px inside the mask are no background either, but are word px in the core share.  So
+    the spreads are those with those words wholly outside the mask, but for the core share; and not those of the page
+    cut there (its parts of words fitted as words)."""
+    pages = _pages()
+    cut = np.intersect1d(np.unique(pages[0]["word_id"][:, :120]), np.unique(pages[0]["word_id"][:, 120:]))
+    cut = cut[cut > 0]
+    assert len(cut) == 4
+
+    def without_cut(p):
+        return _left(120)(p) & ~np.isin(p["word_id"], cut)
+
+    got, apart = words.measure_spreads(_masked(pages, _left(120))), words.measure_spreads(_masked(pages, without_cut))
+    assert dataclasses.replace(got, core_share=apart.core_share) == apart
+    masks = [_left(120)(p) for p in pages]
+    share = (sum(int((m & (p["word_id"] > 0)).sum()) for m, p in zip(masks, pages))
+             / sum(int(m.sum()) for m in masks))
+    assert got.core_share == share and got.core_share > apart.core_share
+    parts = [{"geo": p["geo"][:, :, :120], "tag": p["tag"][:, :, :120], "word_id": p["word_id"][:, :120],
+              "words": p["words"]} for p in pages]
+    assert words.measure_spreads(parts) != got
+
+
+def test_measure_spreads_with_a_mask_of_every_px_is_the_page_without_one():
+    pages = _pages()
+    assert (words.measure_spreads(_masked(pages, lambda p: np.ones(p["word_id"].shape, bool)))
+            == words.measure_spreads(pages))
+    with pytest.raises(ValueError, match="mask"):
+        words.measure_spreads(_masked(pages, lambda p: np.ones((3, 3), bool)))
+
+
+def test_a_one_px_fragment_whose_vote_cannot_place_its_height_keeps_it():
+    """A 1 px word (a fragment, as a window's edge leaves one) whose vote points at its own px (no offset: the centre
+    puts no curvature on the height) and whose chance of being the word's own is the least double: the height's
+    curvature underflows to 0, so the vote cannot place it and it keeps its height (once a division by 0)."""
+    model = words._Model(_spreads(height=2.0), 4)
+    v = {"p": np.array([[10.0, 20.0]]), "o": np.zeros((1, 2)), "ll": np.array([math.log(30.0)]),
+         "lh": np.array([math.log(12.0)]), "th": np.array([0.1]), "t": np.ones((1, 4))}
+    prm = np.array([10.0, 20.0, math.log(30.0), math.log(10.0), 0.0])
+    new, tag = model.own_update(v, np.array([np.nextafter(0.0, 1.0)]), prm)
+    assert new[3] == prm[3] and np.isfinite(new).all() and (tag == 1.0).all()
+    new, _ = model.own_update(v, np.ones(1), prm)                 # with its whole mass, the vote places it
+    assert new[3] == pytest.approx(math.log(12.0))
 
 
 def test_fit_word_prior_recovers_the_logit_the_labels_were_drawn_with():

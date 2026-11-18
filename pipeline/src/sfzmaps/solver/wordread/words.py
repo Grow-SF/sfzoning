@@ -346,7 +346,8 @@ class _Model:
         """The votes' own update of a word's parameters and tag, weighted by r (no spatial term): the axis moved by
         the votes' mean error (modulo a half turn), the log length their mean, the centre (the mean of the centres
         the votes point to at the word's height) and the log height (a Gauss-Newton step on its two terms) in turn
-        (SHAPE_STEPS), the tag their mean.  None when r holds no mass."""
+        (SHAPE_STEPS), the tag their mean.  None when r holds no mass.  Where the votes cannot place the height (its
+        curvature 0, as a vote's mass underflows, or the step past float range) the height keeps its value."""
         mass = float(r.sum())
         if not mass > 0:
             return None
@@ -360,8 +361,10 @@ class _Model:
             res = v["o"] - u
             grad = (2 * self.ic * float((r * (res * u).sum(1)).sum())
                     - 2 * self.ih * float((r * (v["lh"] - new[3])).sum()))
-            curve = 2 * self.ic * float((r * (u ** 2).sum(1)).sum()) + 2 * self.ih * mass
-            new[3] = new[3] - grad / curve
+            curve = 2 * self.ic * float((r * (u ** 2).sum(1)).sum()) + 2 * self.ih * mass   # a sum of terms >= 0
+            step = grad / curve if curve > 0 else math.nan
+            if math.isfinite(step):          # else its votes cannot place its height (curve 0, or past float range)
+                new[3] = new[3] - step
         return new, (r[:, None] * v["t"]).sum(0) / mass
 
 
@@ -1352,8 +1355,10 @@ def _own_fit(v: dict, rect: np.ndarray, model: _Model | None):
 def measure_spreads(pages) -> Spreads:
     """The spreads (see the module), measured on predictions against Terra's words, never the owner's answers.
     `pages`: dicts of geo, tag (as `core_words` takes them: geo as `model.word_geometry` decodes it), word_id (int
-    (h, w): 1 + the Terra word whose rectangle holds the px, later over earlier, 0 on none: the targets' `tag_id`) and
-    words (float (n, 4, 2): Terra's rectangles).
+    (h, w): 1 + the Terra word whose rectangle holds the px, later over earlier, 0 on none: the targets' `tag_id`),
+    words (float (n, 4, 2): Terra's rectangles) and, optionally, mask (bool (h, w): the px that may be read; none,
+    every px).  Only the mask's px are read: a word with a px outside it is left out whole (a part of a word is no
+    word's fit), the background is the px of the mask in no word, and the core share is counted on the mask's px.
       core_share  the share of the pages' px in Terra's words (the core head's base rate)
       centre_bias, length_bias, height_bias, angle_bias   each vote dimension's mean error against its Terra word over
                   every word px: its offset in heights less (c - p) / H, its log length and log height less the
@@ -1382,16 +1387,29 @@ def measure_spreads(pages) -> Spreads:
     err = np.zeros(5)                  # summed over word px: offset x, offset y, log length, log height, axis
     acc = {"o": np.zeros(2), "o2": np.zeros(2), "n": 0, "ll": 0.0, "ll2": 0.0, "lh": 0.0, "lh2": 0.0, "t": None,
            "t2": None}
-    n_word = n_all = 0
+    n_word = n_in = n_all = 0          # px of the words measured; of the mask in words; of the mask
     channels = None
     for page in pages:
         geo, tag = np.asarray(page["geo"]), np.asarray(page["tag"])
         word_id = np.asarray(page["word_id"])
+        on = page.get("mask")
+        on = np.ones(word_id.shape, bool) if on is None else np.asarray(on, bool)
+        if on.shape != word_id.shape:
+            raise ValueError(f"a page's mask is the page's shape {word_id.shape}, not {on.shape}")
         rects = np.asarray(page["words"], np.float64).reshape(-1, 4, 2)
         channels = tag.shape[0]
-        n_all += word_id.size
-        for j in np.unique(word_id[word_id > 0]):
-            ys, xs = np.nonzero(word_id == j)
+        n_all += int(on.sum())
+        n_in += int((on & (word_id > 0)).sum())
+        # the words, each whole: a word with a px outside the mask is left out with all its px (each word's px in
+        # row order, as np.nonzero gives them)
+        wy, wx = np.nonzero(word_id > 0)
+        ids = word_id[wy, wx]
+        whole = ~np.isin(ids, np.unique(word_id[~on & (word_id > 0)]))
+        order = np.argsort(ids[whole], kind="stable")
+        wy, wx, ids = wy[whole][order], wx[whole][order], ids[whole][order]
+        starts = np.flatnonzero(np.r_[True, ids[1:] != ids[:-1]]) if len(ids) else np.zeros(0, np.int64)
+        for j, lo, hi in zip(ids[starts], starts, np.r_[starts[1:], len(ids)]):
+            ys, xs = wy[lo:hi], wx[lo:hi]
             g = geo[:, ys, xs].astype(np.float64)
             v = {"p": np.stack([xs, ys], -1).astype(np.float64), "o": (g[:2] / g[3]).T, "ll": np.log(g[2]),
                  "lh": np.log(g[3]), "th": np.deg2rad(g[4]),
@@ -1406,7 +1424,7 @@ def measure_spreads(pages) -> Spreads:
             m = np.zeros((ys.max() - y0 + 1, xs.max() - x0 + 1))
             m[ys - y0, xs - x0] = 1
             per_word.append((v, rects[j - 1], m, (ys - y0, xs - x0), np.rint(_corr(m, m))))
-        by, bx = np.nonzero(word_id == 0)
+        by, bx = np.nonzero((word_id == 0) & on)
         for lo in range(0, len(by), CHUNK_PX):
             yy, xx = by[lo:lo + CHUNK_PX], bx[lo:lo + CHUNK_PX]
             g = geo[:4, yy, xx].astype(np.float64)
@@ -1436,7 +1454,7 @@ def measure_spreads(pages) -> Spreads:
     o_mean = acc["o"] / n                                   # the background's offsets about 0, the bias taken off
     o_sq = acc["o2"] / n - 2 * bias[:2] * o_mean + bias[:2] ** 2
     tmean = acc["t"] / n
-    fixed = {"core_share": n_word / n_all, "centre_bias": (float(bias[0]), float(bias[1])),
+    fixed = {"core_share": n_in / n_all, "centre_bias": (float(bias[0]), float(bias[1])),
              "length_bias": float(bias[2]), "height_bias": float(bias[3]), "angle_bias": math.degrees(bias[4]),
              "background_centre": math.sqrt(float(o_sq.sum()) / 2),
              "background_length": mean_sd(acc["ll"], acc["ll2"], bias[2]),
