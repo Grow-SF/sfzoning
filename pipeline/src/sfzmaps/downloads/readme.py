@@ -3,6 +3,7 @@ import textwrap
 from pathlib import Path
 
 from sfzmaps import config
+from sfzmaps.downloads import latest_name
 
 # Beside the code, not under templates/: that directory is a DVC code dependency of the stages.
 TEMPLATE = Path(__file__).with_name("readme-template.txt")
@@ -108,7 +109,25 @@ def _fields(series: str, layer: str) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def readme(series: str, layer: str, updated: str, commit: str) -> str:
+def _newest(series: str, layer: str, fmt: str | None) -> str:
+    """The GETTING THE NEWEST VERSION block: the latest link and the versions page."""
+    if layer == "sheets":
+        file_url = f"https://sfzoning.com/data/files/{series}/sfzoning-{series}-sheets-latest.zip"
+        versions = f"https://sfzoning.com/data/versions/{series}"
+    else:
+        file_url = f"https://sfzoning.com/data/files/{series}/{latest_name(series, layer, fmt)}"
+        versions = f"https://sfzoning.com/data/versions/{series}/{layer}"
+    return ("GETTING THE NEWEST VERSION\n"
+            "For the newest version of this file, use:\n"
+            f"  {file_url}\n"
+            "Every version released so far:\n"
+            f"  {versions}")
+
+
+def readme(series: str, layer: str, updated: str, commit: str, fmt: str | None = None) -> str:
+    """`fmt` (geojson, gpkg, shp or cog) names the file the README sits in; sheets need none."""
+    if fmt is None and layer != "sheets":
+        raise ValueError(f"readme for {series} {layer} needs a fmt")
     text = TEMPLATE.read_text().split("\n", 1)[1]  # drop the "draft copy" marker line
     today = series == "today"
     credits = "".join(_wrap(c) + "\n" for c, on in ((_RUMSEY, series == "1948"),
@@ -124,6 +143,7 @@ def readme(series: str, layer: str, updated: str, commit: str) -> str:
         "CONFIDENCE": _wrap(_CONFIDENCE_TODAY if today else _CONFIDENCE),
         "UPDATED": updated,
         "COMMIT": commit,
+        "NEWEST": _newest(series, layer, fmt),
         "LICENSE": LICENSE_TEXT.strip(),
         "CREDITS": credits,
     }.items():

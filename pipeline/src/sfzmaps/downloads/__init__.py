@@ -45,6 +45,11 @@ def _item(series: str, layer: str, fmt: str, sources: list[Path]) -> Item:
                 f"{series}-{layer}.{_EXT[fmt]}", sources)
 
 
+def latest_name(series: str, layer: str, fmt: str) -> str:
+    """The permanent name of the newest file: sfzoning-<series>-<layer>-latest.<ext>."""
+    return f"sfzoning-{series}-{layer}-latest.{_EXT[fmt]}"
+
+
 def citywide_sources(series: str) -> list[Path]:
     """Every placed sheet's warped_paper.tif and footprint, plus the stitching code."""
     tifs = sorted((config.WORK_DIR / series).glob("*/warped_paper.tif"))
@@ -160,6 +165,7 @@ def run(series: list[str] | None = None, log=lambda line: None) -> dict:
             "series": item.series, "layer": item.layer, "fmt": item.fmt,
             "path": f"{item.series}/{item.filename}", "fingerprint": fp,
             "bytes": out.stat().st_size, "sha256": _sha256_file(out), "extra": extra,
+            "made": updated,
         }
         log(f"wrote  {item.key}  ({out.stat().st_size:,} bytes)")
     for s in sorted(wanted & everything):

@@ -73,19 +73,19 @@ def test_fingerprint_changes_with_source_bytes_and_version(tmp_data):
 
 
 def test_readme_has_attribution_license_and_rumsey_only_for_1948():
-    r = " ".join(readme("1948", "citywide", "2026-11-04", "abc1234").split())
+    r = " ".join(readme("1948", "citywide", "2026-11-04", "abc1234", "cog").split())
     assert "Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)" in r
     assert "CC BY-NC-SA 4.0" in r and config.RUMSEY_CREDIT in r and "2026-11-04" in r
-    assert config.RUMSEY_CREDIT not in readme("1960", "lots", "2026-11-04", "abc1234")
-    assert "not an official record" in readme("1960", "lots", "2026-11-04", "abc1234")
+    assert config.RUMSEY_CREDIT not in readme("1960", "lots", "2026-11-04", "abc1234", "geojson")
+    assert "not an official record" in readme("1960", "lots", "2026-11-04", "abc1234", "geojson")
     assert "DRAFT COPY" not in r and "{{" not in r
 
 
 def test_readme_field_table_only_for_vector_layers():
-    r = readme("1960", "lots", "d", "c")
+    r = readme("1960", "lots", "d", "c", "geojson")
     row = next(l for l in r.splitlines() if l.startswith("height_code"))
     assert row.split()[1] == "height" and "height_cd" not in r
-    assert "FIELDS" not in readme("1960", "citywide", "d", "c")
+    assert "FIELDS" not in readme("1960", "citywide", "d", "c", "cog")
 
 
 def _flat(text):
@@ -93,11 +93,11 @@ def _flat(text):
 
 
 def test_readme_crs_text_per_layer():
-    lots = _flat(readme("1960", "lots", "d", "c"))
+    lots = _flat(readme("1960", "lots", "d", "c", "geojson"))
     assert "GeoJSON and Shapefile are in WGS 84 (EPSG:4326)" in lots
     assert "`lots_ca_spcs`" in lots and "EPSG:2227" in lots
-    assert "`districts_ca_spcs`" in readme("1960", "districts", "d", "c")
-    city = readme("1960", "citywide", "d", "c")
+    assert "`districts_ca_spcs`" in readme("1960", "districts", "d", "c", "geojson")
+    city = readme("1960", "citywide", "d", "c", "cog")
     assert "EPSG:2227" in city and "4326" not in city
 
 
@@ -124,11 +124,11 @@ def test_exporter_code_is_the_real_exporter_files():
 
 def test_today_readme_credits_datasf_zoning_not_a_scan():
     for layer in ("lots", "districts"):
-        r = _flat(readme("today", layer, "d", "c"))
+        r = _flat(readme("today", layer, "d", "c", "geojson"))
         assert "3i4a-hu95" in r and "Zoning Districts" in r
         assert "read from the scans" not in r and "read from the map" not in r
         assert "flagged for review" not in r
-    lots = readme("today", "lots", "d", "c")
+    lots = readme("today", "lots", "d", "c", "geojson")
     row = next(l for l in lots.splitlines() if l.startswith("source_sheet"))
     assert "datasf" in row
     lots = _flat(lots)
@@ -137,20 +137,20 @@ def test_today_readme_credits_datasf_zoning_not_a_scan():
 
 
 def test_historic_confidence_names_overrides_and_hand_added_labels():
-    r = _flat(readme("1960", "lots", "d", "c"))
+    r = _flat(readme("1960", "lots", "d", "c", "geojson"))
     assert "inputs/<series>/overrides.csv" in r and "inputs/<series>/label_fixes.csv" in r
     assert "3i4a-hu95" not in r
 
 
 def test_scan_readmes_describe_the_warp_honestly():
     for layer in ("citywide", "sheets"):
-        r = readme("1960", layer, "d", "c")
+        r = readme("1960", layer, "d", "c", "cog")
         flat = _flat(r)
         assert "not resampled" not in flat and "no warping" not in flat
         assert "thin plate spline" in flat and "today's street corners" in flat
         assert "tinted to the paper colour" in flat and "binding shadows" in flat
         assert "Nothing is vectorized or drawn" in flat
-    assert "finest sheet" in _flat(readme("1960", "citywide", "d", "c"))
+    assert "finest sheet" in _flat(readme("1960", "citywide", "d", "c", "cog"))
 
 
 def test_citywide_sources_skip_missing_footprint(tmp_data):
@@ -477,3 +477,42 @@ def test_run_limited_to_series_keeps_other_entries(fake_exports, tmp_data):
     downloads.run()
     idx = downloads.run(["1948"])
     assert any(k.startswith("today/") for k in idx["files"])
+
+
+# --- GIS download names, versions link, made date ----------------------------
+
+def test_latest_name():
+    from sfzmaps.downloads import latest_name
+    assert latest_name("1948", "lots", "gpkg") == "sfzoning-1948-lots-latest.gpkg.zip"
+    assert latest_name("1921", "citywide", "cog") == "sfzoning-1921-citywide-latest.tif"
+
+
+def test_readme_points_to_latest_and_versions():
+    from sfzmaps.downloads import readme as readme_mod
+    t = readme_mod.readme("1948", "lots", "2026-11-20", "abc1234", "gpkg")
+    assert ("GETTING THE NEWEST VERSION\nFor the newest version of this file, use:\n"
+            "  https://sfzoning.com/data/files/1948/sfzoning-1948-lots-latest.gpkg.zip\n"
+            "Every version released so far:\n  https://sfzoning.com/data/versions/1948/lots\n") in t
+    assert t.index("LAST UPDATED") < t.index("GETTING THE NEWEST VERSION") < t.index("LICENSE\n")
+
+
+def test_sheets_readme_points_to_latest_zip_and_series_versions():
+    from sfzmaps.downloads import readme as readme_mod
+    t = readme_mod.readme("1921", "sheets", "2026-11-20", "abc1234")
+    assert "https://sfzoning.com/data/files/1921/sfzoning-1921-sheets-latest.zip" in t
+    assert "https://sfzoning.com/data/versions/1921\n" in t
+
+
+def test_index_records_made_date_and_keeps_it(fake_exports, tmp_data, monkeypatch):
+    monkeypatch.setattr("sfzmaps.downloads._today", lambda: "2026-11-20")
+    first = downloads.run()
+    assert first["files"]["1948/lots.geojson"]["made"] == "2026-11-20"
+    monkeypatch.setattr("sfzmaps.downloads._today", lambda: "2026-12-01")
+    fake_exports.clear()
+    second = downloads.run()
+    assert fake_exports == []
+    assert second["files"]["1948/lots.geojson"]["made"] == "2026-11-20"
+    _touch(tmp_data / "out" / "1948" / "districts" / "parcels.fgb", b"changed")
+    third = downloads.run()
+    assert third["files"]["1948/lots.geojson"]["made"] == "2026-12-01"
+    assert third["files"]["1948/districts.geojson"]["made"] == "2026-11-20"

@@ -38,7 +38,7 @@ def export_citywide(item: Item, out: Path, updated: str, commit: str) -> None:
         raise
     part.replace(out)
     stem = out.name.removesuffix(out.suffix)
-    out.with_name(f"{stem}.README.txt").write_text(readme(item.series, "citywide", updated, commit))
+    out.with_name(f"{stem}.README.txt").write_text(readme(item.series, "citywide", updated, commit, item.fmt))
     out.with_name(f"{stem}.LICENSE.txt").write_text(LICENSE_TEXT)
 
 

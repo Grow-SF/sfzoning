@@ -55,7 +55,7 @@ def export_vector(item: Item, out: Path, updated: str, commit: str) -> None:
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
         members = {p.name: p.read_bytes() for p in _write_data(item, tmp)}
-    members["README.txt"] = readme(item.series, item.layer, updated, commit).encode()
+    members["README.txt"] = readme(item.series, item.layer, updated, commit, item.fmt).encode()
     members["LICENSE.txt"] = LICENSE_TEXT.encode()
     tmp_out = out.with_name(out.name + ".part")
     with zipfile.ZipFile(tmp_out, "w", zipfile.ZIP_DEFLATED) as z:
