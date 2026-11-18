@@ -1,23 +1,32 @@
 import { DATA_CREDIT, DATA_LICENSE, RUMSEY_CREDIT, RUMSEY_LICENSE } from "./credits";
 import { ERAS, type Era } from "./eras";
-import { latestRedirects, latestUrl } from "./latestRedirects.mjs";
+import { latestRedirects as redirectsFor, latestUrl as urlFor } from "./latestRedirects.mjs";
 
-export { latestRedirects, latestUrl };
+/** The site path of a published file; the files route redirects it to Blob. The one definition of that path. */
+export const fileUrl = (series: string, name: string): string => `/data/files/${series}/${name}`;
+
+export const latestRedirects = (manifest: Parameters<typeof redirectsFor>[0]) => redirectsFor(manifest, fileUrl);
+export const latestUrl = (manifest: Parameters<typeof urlFor>[0], series: string, file: string) =>
+  urlFor(manifest, series, file, fileUrl);
 
 export type ManifestFile = {
-  series: string; layer: string; fmt: string; url: string; bytes: number; sha256: string;
-  fingerprint: string; updated: string; extra?: Record<string, string>;
+  series: string; layer: string; fmt: string; name: string; bytes: number; sha256: string;
+  fingerprint: string; updated: string; extra?: Record<"README.txt" | "LICENSE.txt", string>;
+  /** --local manifests only: the path under the base the file can be read from. */
+  local?: string; extraLocal?: Record<string, string>;
 };
-export type ManifestSheet = { sheet: string; name: string; url: string; bytes: number; md5: string; updated: string };
+export type ManifestSheet = {
+  sheet: string; number: string; name: string; bytes: number; md5: string; sha256: string; updated: string; local?: string;
+};
 export type Manifest = {
   files: Record<string, ManifestFile>;
   sheets: Record<string, { updated: string; readme: string; items: ManifestSheet[] }>;
-  superseded: unknown[];
   license?: string;
   generated?: string;
   base?: string;
   local?: boolean;
 };
+export type Version = { series: string; layer: string; fmt: string; name: string; date: string; bytes: number; sha256: string };
 
 export type Cell = { fmt: string; label: "GeoJSON" | "GeoPackage" | "Shapefile"; url: string; bytes: number; updated: string };
 export type ScanCell = {
@@ -38,7 +47,7 @@ function vectorCells(m: Manifest, series: string, layer: string): Cell[] {
   const cells: Cell[] = [];
   for (const [fmt, label] of VECTOR_FORMATS) {
     const f = m.files[`${series}/${layer}.${fmt}`];
-    if (f) cells.push({ fmt, label, url: f.url, bytes: f.bytes, updated: f.updated });
+    if (f) cells.push({ fmt, label, url: fileUrl(series, f.name), bytes: f.bytes, updated: f.updated });
   }
   return cells;
 }
@@ -58,7 +67,7 @@ function scanSeries(era: Era): { series: string; label: ScanCell["label"] }[] {
 function scanCell(m: Manifest, series: string, label: ScanCell["label"]): ScanCell {
   const cell: ScanCell = { series, label };
   const c = m.files[`${series}/citywide.cog`];
-  if (c) cell.citywide = { fmt: "cog", url: c.url, bytes: c.bytes, updated: c.updated };
+  if (c) cell.citywide = { fmt: "cog", url: fileUrl(series, c.name), bytes: c.bytes, updated: c.updated };
   const s = m.sheets[series];
   if (s && s.items.length) {
     cell.sheets = {
@@ -115,7 +124,7 @@ export const sheetCredit = (series: string) =>
 export function sheetsCsv(m: Manifest, series: string): string {
   const header = "sheet,name,url,bytes,md5,updated,license,credit";
   const lines = (m.sheets[series]?.items ?? []).map((i) =>
-    [i.sheet, i.name, i.url, i.bytes, i.md5, i.updated, sheetLicense(series), sheetCredit(series)].map(csvField).join(","),
+    [i.sheet, i.name, fileUrl(series, i.name), i.bytes, i.md5, i.updated, sheetLicense(series), sheetCredit(series)].map(csvField).join(","),
   );
   return [header, ...lines].join("\n");
 }

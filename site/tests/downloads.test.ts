@@ -5,10 +5,11 @@ import { menuItems } from "../lib/menuItems";
 import { makeZip } from "client-zip";
 import { sheetResponse, sheetsZipResponse, zipEntries, zipLength } from "../lib/sheetZip";
 
-const B = "https://blob.example/downloads";
+const B = "https://blob.example";
+const sh = (sheet: string, name: string, bytes: number, updated = "2026-11-04") => ({ sheet, number: "01", name, bytes, md5: "m", sha256: "x", updated });
 const file = (series: string, layer: string, fmt: string, name: string, bytes: number, updated: string) => ({
-  series, layer, fmt, url: `${B}/abc/${name}`, bytes, sha256: "x", fingerprint: "f", updated,
-  extra: { [`${series}-${layer}.README.txt`]: `${B}/abc/${series}-${layer}.README.txt` },
+  series, layer, fmt, name, bytes, sha256: "x", fingerprint: "f", updated,
+  extra: { "README.txt": `${name}.README.txt`, "LICENSE.txt": `${name}.LICENSE.txt` },
 });
 const manifest: Manifest = {
   files: {
@@ -22,10 +23,9 @@ const manifest: Manifest = {
   sheets: {
     "1948": {
       updated: "2026-11-04", readme: "",
-      items: [{ sheet: "p01", name: "1948-p01.tif", url: `${B}/sheets/p01.tif`, bytes: 100, md5: "m", updated: "2026-11-04" }],
+      items: [sh("p01", "1948-p01.tif", 100)],
     },
   },
-  superseded: [],
 };
 
 describe("rows", () => {
@@ -62,7 +62,7 @@ describe("helpers", () => {
   it("writes the sheet csv, each row carrying its license and credit (Rumsey for 1948)", () => {
     expect(sheetsCsv(manifest, "1948").split("\n")).toEqual([
       "sheet,name,url,bytes,md5,updated,license,credit",
-      `p01,1948-p01.tif,${B}/sheets/p01.tif,100,m,2026-11-04,` +
+      "p01,1948-p01.tif,/data/files/1948/1948-p01.tif,100,m,2026-11-04," +
         "CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/); 1948 imagery CC BY-NC-SA 3.0 (https://creativecommons.org/licenses/by-nc-sa/3.0/)," +
         `"Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org); imagery: David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries"`,
     ]);
@@ -72,26 +72,26 @@ describe("helpers", () => {
     expect(sheetCredit("1960")).toBe("Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)");
   });
   it("quotes csv fields with commas, quotes and carriage returns", () => {
-    const m: Manifest = { files: {}, superseded: [], sheets: { s: { updated: "d", readme: "", items: [
-      { sheet: "a", name: 'x,"y"', url: "u", bytes: 1, md5: "m\r", updated: "d" },
+    const m: Manifest = { files: {}, sheets: { s: { updated: "d", readme: "", items: [
+      { ...sh("a", 'x,"y"', 1, "d"), md5: "m\r" },
     ] } } };
-    expect(sheetsCsv(m, "s").split("\n")[1]).toMatch(/^a,"x,""y""",u,1,"m\r",d,/);
+    expect(sheetsCsv(m, "s").split("\n")[1]).toMatch(/^a,"x,""y""","\/data\/files\/s\/x,""y""",1,"m\r",d,/);
   });
   it("maps stable links to current urls", () => {
     const r = latestRedirects(manifest);
     expect(r).toContainEqual({
-      source: "/data/latest/1948/1948-lots.geojson.zip", destination: `${B}/abc/1948-lots.geojson.zip`, permanent: false,
+      source: "/data/latest/1948/1948-lots.geojson.zip", destination: "/data/files/1948/1948-lots.geojson.zip", permanent: false,
     });
-    expect(r.map((x) => x.source)).toContain("/data/latest/1948/1948-lots.README.txt");
+    expect(r.map((x) => x.source)).toContain("/data/latest/1948/1948-lots.geojson.zip.README.txt");
     expect(r.map((x) => x.source)).toContain("/data/latest/1948/1948-p01.tif");
   });
 });
 
 describe("latestUrl", () => {
   it("finds files, sidecars and sheets, and nothing else", () => {
-    expect(latestUrl(manifest, "1948", "1948-lots.geojson.zip")).toBe(`${B}/abc/1948-lots.geojson.zip`);
-    expect(latestUrl(manifest, "1948", "1948-citywide.README.txt")).toBe(`${B}/abc/1948-citywide.README.txt`);
-    expect(latestUrl(manifest, "1948", "1948-p01.tif")).toBe(`${B}/sheets/p01.tif`);
+    expect(latestUrl(manifest, "1948", "1948-lots.geojson.zip")).toBe("/data/files/1948/1948-lots.geojson.zip");
+    expect(latestUrl(manifest, "1948", "1948-citywide.tif.README.txt")).toBe("/data/files/1948/1948-citywide.tif.README.txt");
+    expect(latestUrl(manifest, "1948", "1948-p01.tif")).toBe("/data/files/1948/1948-p01.tif");
     expect(latestUrl(manifest, "1948", "nope.zip")).toBeNull();
     expect(latestUrl(manifest, "1921", "1948-lots.geojson.zip")).toBeNull();
   });
@@ -106,10 +106,10 @@ describe("menuItems", () => {
 
 describe("zipEntries", () => {
   const src = {
-    license: "LICENSE TEXT",
+    license: "LICENSE TEXT", base: B,
     sheets: { "1948": { updated: "2026-11-04", readme: "README TEXT", items: [
-      { sheet: "p01", name: "1948-p01.tif", url: `${B}/sheets/p01.tif`, bytes: 1, md5: "m", updated: "2026-11-04" },
-      { sheet: "p02", name: "1948-p02.tif", url: `${B}/sheets/p02.tif`, bytes: 1, md5: "m", updated: "2026-11-04" },
+      sh("p01", "1948-p01.tif", 1),
+      sh("p02", "1948-p02.tif", 1),
     ] } },
   };
   it("yields the README and LICENSE, then each sheet fetched in order", async () => {
@@ -122,7 +122,7 @@ describe("zipEntries", () => {
       if (e.name === "LICENSE.txt") expect(e.input).toBe("LICENSE TEXT");
     }
     expect(names).toEqual(["README.txt", "LICENSE.txt", "1948-p01.tif", "1948-p02.tif"]);
-    expect(urls).toEqual([`${B}/sheets/p01.tif`, `${B}/sheets/p02.tif`]);
+    expect(urls).toEqual([`${B}/downloads/1948/1948-p01.tif`, `${B}/downloads/1948/1948-p02.tif`]);
   });
   it("names the sheet that failed", async () => {
     const fetchFn = async (url: string | URL | Request) =>
@@ -148,11 +148,11 @@ describe("zipEntries", () => {
     await expect(new Response(makeZip(zipEntries(src, "1948", fetchFn))).arrayBuffer()).resolves.toBeInstanceOf(ArrayBuffer);
   });
   it("predicts the zip's exact length", async () => {
-    const s = { license: "Licence ©", sheets: { a: { updated: "2026-11-04", readme: "Zoning, café — “1948”\n", items: [
-      { sheet: "1", name: "a-1.tif", url: "u1", bytes: 1234, md5: "m", updated: "2026-11-04" },
-      { sheet: "2", name: "a-2é.tif", url: "u2", bytes: 7, md5: "m", updated: "2026-11-03" },
+    const s = { license: "Licence ©", base: B, sheets: { a: { updated: "2026-11-04", readme: "Zoning, café — “1948”\n", items: [
+      sh("1", "a-1.tif", 1234),
+      sh("2", "a-2é.tif", 7, "2026-11-03"),
     ] } } };
-    const fetchFn = async (url: string) => new Response(new Uint8Array(url === "u1" ? 1234 : 7));
+    const fetchFn = async (url: string) => new Response(new Uint8Array(url.endsWith("a-1.tif") ? 1234 : 7));
     const zip = await new Response(makeZip(zipEntries(s, "a", fetchFn))).arrayBuffer();
     expect(zipLength(s, "a")).toBe(zip.byteLength);
   });
@@ -164,13 +164,13 @@ describe("zipEntries", () => {
 
 describe("server downloads", () => {
   const src = {
-    license: "LICENSE TEXT",
+    license: "LICENSE TEXT", base: B,
     sheets: { "1948": { updated: "2026-11-04", readme: "README TEXT", items: [
-      { sheet: "p01", name: "1948-p01.tif", url: "u1", bytes: 3, md5: "m", updated: "2026-11-04" },
-      { sheet: "p02", name: "1948-p02é.tif", url: "u2", bytes: 2, md5: "m", updated: "2026-11-04" },
+      sh("p01", "1948-p01.tif", 3),
+      sh("p02", "1948-p02é.tif", 2),
     ] } },
   };
-  const fetchFn = async (url: string) => new Response(new Uint8Array(url === "u1" ? 3 : 2));
+  const fetchFn = async (url: string) => new Response(new Uint8Array(url.endsWith("p01.tif") ? 3 : 2));
   it("answers the sheets zip as an attachment of its predicted length", async () => {
     const res = sheetsZipResponse(src, "1948", fetchFn);
     expect(res.status).toBe(200);
