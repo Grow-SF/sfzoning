@@ -482,3 +482,27 @@ def test_crude_aff_splits_touching_words_the_affinity_parts(halves):
     assert np.allclose(t[["length", "height"]].to_numpy(float), [[25, 41], [21, 41]])
     merged, _ = RD.crude_map_words("run", "s", 1, lambda n: sd, lambda r, n: oa, _placer())
     assert len(merged) == 1
+    # the class prior's log odds join the seam's pairs again once they outweigh its logit
+    joined, _ = RD.crude_map_words("run", "s", 1, lambda n: sd, lambda r, n: oa, _placer(), aff=True, aff_prior=3.5)
+    assert len(joined) == 1
+
+
+def test_the_affinity_prior_counts_the_training_quarters_taught_pairs_outside_the_blocks(halves, monkeypatch):
+    rects = [_box(20, 40, 60, 70), _box(60, 40, 100, 70), _box(140, 40, 220, 70)]    # two touching words; the other
+    sd = _sheet(rects, [0, 0, 0])                                                    # quarter's one
+    o = _perfect(sd)
+    monkeypatch.setattr(RD.data, "in_area", lambda s, area, y0, x0, h, w: np.zeros((h, w), bool))
+    n = RD.aff_counts("run", (0,), object(), sheets=("s",), sheet_fn=lambda n: sd, outputs_fn=lambda r, n: o)
+    wid = RD.word_ids(sd)
+    left = np.arange(SIDE)[None, :] < SIDE // 2
+    same = apart = 0
+    for a, b, ina in ((wid[:, :-1], wid[:, 1:], left[:, :-1] & left[:, 1:]), (wid[:-1], wid[1:], np.ones_like(
+            wid[:-1], bool) & left)):
+        same += int((ina & (a > 0) & (a == b)).sum())
+        apart += int((ina & ((a > 0) | (b > 0)) & (a != b)).sum())
+    assert (n["same"], n["apart"]) == (same, apart) and same > 0 and apart > 0
+    # both px core: the words' own px (the perfect outputs' cores), so the pairs beside the background drop out and
+    # only the touching words' seam stays apart
+    seam = int(((wid[:, :-1] == 1) & (wid[:, 1:] == 2)).sum())
+    assert (n["same_core"], n["apart_core"]) == (same, seam)
+    assert np.isclose(n["log_odds"], np.log(same / apart)) and np.isclose(n["log_odds_core"], np.log(same / seam))

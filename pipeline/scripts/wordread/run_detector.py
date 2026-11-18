@@ -941,11 +941,42 @@ def aff_labels(on: np.ndarray, right: np.ndarray, down: np.ndarray) -> np.ndarra
     return out
 
 
+def aff_counts(run, quarters, blocks, sheets=paths.SHEETS, sheet_fn=load_sheet, outputs_fn=outputs) -> dict:
+    """The affinity's taught px pairs (right and down neighbours) on `quarters` (a detector's training quarters)
+    outside the answered blocks, both px in that area: "same" both px of one Terra word, "apart" a word px beside the
+    background or another word (background beside background is not taught, as in training); all of them, and those
+    whose two px are both core px (P(core) > 1/2, as crude-aff reads them).  With the log odds log(same / apart) of
+    each: the class prior the balanced loss leaves out (its logit is the odds under equal classes)."""
+    n = {"same": 0, "apart": 0, "same_core": 0, "apart_core": 0}
+    for name in sheets:
+        sd = sheet_fn(name)
+        area = fit_area(sd, quarters, blocks)
+        if not area.any():
+            continue
+        wid = word_ids(sd)
+        on = outputs_fn(run, name).core > 0
+        for sa, sb in (((slice(None), slice(None, -1)), (slice(None), slice(1, None))),
+                       ((slice(None, -1), slice(None)), (slice(1, None), slice(None)))):
+            a, b = wid[sa], wid[sb]
+            both = area[sa] & area[sb]
+            core = on[sa] & on[sb]
+            same = both & (a > 0) & (a == b)
+            apart = both & ((a > 0) | (b > 0)) & (a != b)
+            n["same"] += int(same.sum())
+            n["apart"] += int(apart.sum())
+            n["same_core"] += int((same & core).sum())
+            n["apart_core"] += int((apart & core).sum())
+    n["log_odds"] = float(np.log(n["same"] / n["apart"]))
+    n["log_odds_core"] = float(np.log(n["same_core"] / n["apart_core"]))
+    return n
+
+
 def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outputs, placer=wordboxes_placer,
-                    sigma: float | None = None, aff: bool = False):
+                    sigma: float | None = None, aff: bool = False, aff_prior: float = 0.0):
     """One page's crude-map words in quarter `q` (CRUDE_NOTE; with `sigma`, the tag bandwidth, crude-tags'
-    (TAGS_NOTE); with `aff`, crude-aff's (AFF_NOTE)), placed as `wordboxes` places its boxes; the boxes whose map point
-    is in the quarter kept.  The table (wordboxes.COLUMNS) and its counts."""
+    (TAGS_NOTE); with `aff`, crude-aff's (AFF_NOTE), the affinity logits plus `aff_prior` (the class prior's log odds,
+    `aff_counts`)), placed as `wordboxes` places its boxes; the boxes whose map point is in the quarter kept.  The
+    table (wordboxes.COLUMNS) and its counts."""
     import cv2
     import pandas as pd
     from sfzmaps.solver import wordboxes
@@ -959,7 +990,7 @@ def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outp
     ink = data.page_ink(sd)
     if aff:
         same = getattr(o, AFF_FIELD)
-        lab = aff_labels(on, same[0], same[1])
+        lab = aff_labels(on, same[0] + aff_prior, same[1] + aff_prior)
     else:
         _, lab = cv2.connectedComponents(on.astype(np.uint8), connectivity=8)
     if sigma is not None:
@@ -1011,28 +1042,39 @@ def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outp
 def _crude_job(args):
     import cv2
     cv2.setNumThreads(1)
-    run, name, q, sigma, aff = args
+    run, name, q, sigma, aff, aff_prior = args
     t0 = time.perf_counter()
     t, counts = crude_map_words(run, name, q, _SHARED["sheet_fn"], _SHARED["outputs_fn"], _SHARED["placer"],
-                                sigma, aff)
+                                sigma, aff, aff_prior)
     counts["seconds"] = round(time.perf_counter() - t0, 1)
     log.info("crude %s %s: %s", Path(run).name, name, counts)
     return name, t, counts
 
 
 def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WORKERS, tags: bool = False,
-          aff: bool = False, against: str | None = None) -> dict:
+          aff: bool = False, against: str | None = None, prior: str | None = None, read_max: int | None = None) -> dict:
     """The crude-map chain (CRUDE_NOTE; crude-tags' with `tags`, crude-aff's with `aff`) on the quarter's every sheet
     from `name`'s held-out detector: words, placed, read by the current fold readers, and against today's
-    (`vs_today`); with `against` (a run folder's name) against that run's boxes too (`vs_run`).  Writes
-    runs/crude-<map|tags|aff>-<quarter>-s<seed>/."""
+    (`vs_today`); with `against` (a run folder's name) against that run's boxes too (`vs_run`).  crude-aff with
+    `prior` "all" or "core": the affinity logits plus the class prior's log odds measured on each detector's training
+    quarters (`aff_counts`: every taught pair, or those of two core px).  `read_max`: no read nor score when the
+    boxes number more (the boxes and their counts kept).  Writes runs/crude-<map|tags|aff>[-prior-<prior>]-<quarter>-
+    s<seed>/."""
     if tags and aff:
         raise ValueError("crude: tags or aff, not both")
     import pandas as pd
     from sfzmaps.solver import lots, page, wordboxes
     quarters = paths.QUARTERS if quarter == "all" else (quarter,)
     srcs = {paths.QUARTERS.index(qn): run_dir(name, qn, seed) for qn in quarters}
-    out = RUNS / f"crude-{'tags' if tags else 'aff' if aff else 'map'}-{quarter}-s{seed}"
+    kind = "tags" if tags else (f"aff-prior-{prior}" if prior else "aff") if aff else "map"
+    usual = "aff" if aff else "a"                         # the arm each kind was first run from: no suffix
+    out = RUNS / f"crude-{kind}{'' if name == usual else '-from-' + name}-{quarter}-s{seed}"
+    priors = {}
+    if aff and prior:
+        blocks = reader_stage.load_block_area(reader_stage.held_blocks())
+        for q, src in srcs.items():
+            priors[q] = aff_counts(src, tuple(k for k in range(len(paths.QUARTERS)) if k != q), blocks)
+            log.info("%s: affinity pairs on its training quarters %s", src.name, priors[q])
     sigmas = {}
     if tags:
         blocks = reader_stage.load_block_area(reader_stage.held_blocks())
@@ -1041,8 +1083,9 @@ def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WO
             log.info("%s: within-word tag spread %s", src.name, sigmas[q])
     _SHARED["lots"], _SHARED["mapped"] = lots.load_lots(), page.load_sheets() > 0
     _SHARED.update(sheet_fn=load_sheet, outputs_fn=outputs, placer=wordboxes_placer)
-    got = _pool_map(_crude_job, [(src, s, q, sigmas[q]["sigma"] if tags else None, aff) for q, src in srcs.items()
-                                 for s in paths.SHEETS], workers)
+    shift = {q: (v["log_odds_core"] if prior == "core" else v["log_odds"]) for q, v in priors.items()}
+    got = _pool_map(_crude_job, [(src, s, q, sigmas[q]["sigma"] if tags else None, aff, shift.get(q, 0.0))
+                                 for q, src in srcs.items() for s in paths.SHEETS], workers)
     tables = [t for _, t, _ in got if len(t)]
     boxes = pd.concat(tables, ignore_index=True).sort_values(["sheet", "i"], kind="stable").reset_index(drop=True)
     (out / "boxes").mkdir(parents=True, exist_ok=True)
@@ -1050,8 +1093,12 @@ def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WO
     (out / "boxes" / "summary.json").write_text(json.dumps({
         "note": TAGS_NOTE if tags else AFF_NOTE if aff else CRUDE_NOTE,
         "detectors": {paths.QUARTERS[q]: r.name for q, r in srcs.items()},
-        "tag_spread": {paths.QUARTERS[q]: v for q, v in sigmas.items()}, "boxes": len(boxes),
+        "tag_spread": {paths.QUARTERS[q]: v for q, v in sigmas.items()},
+        "affinity_pairs": {paths.QUARTERS[q]: v for q, v in priors.items()}, "prior": prior, "boxes": len(boxes),
         "sheets": [[n, c] for n, _, c in got]}, indent=1) + "\n")
+    if read_max is not None and len(boxes) > read_max:
+        log.info("%s: %d boxes, over %d: not read", out.name, len(boxes), read_max)
+        return {"boxes_made": len(boxes), "not_read": True}
     read(out, workers)
     got = vs_today(out, None if quarter == "all" else quarter)
     if against:
@@ -1078,6 +1125,9 @@ def main() -> None:
     cr.add_argument("--aff", action="store_true", help="crude-aff: join the core px by the learned affinity")
     cr.add_argument("--name", default="a", help="the detector arm (its folds' runs <name>-<quarter>-s<seed>)")
     cr.add_argument("--against", default=None, help="a run folder's name: paired against its boxes too")
+    cr.add_argument("--prior", default=None, choices=("all", "core"),
+                    help="crude-aff: add the class prior's log odds measured on the training quarters' pairs")
+    cr.add_argument("--read-max", type=int, default=None, help="read and score only up to this many boxes")
     dr = sub.add_parser("draft")
     dr.add_argument("--sheet", default="2000-digital-zoning-p07")
     dr.add_argument("--workers", type=int, default=WORKERS)
@@ -1118,7 +1168,10 @@ def main() -> None:
             print(train_run(a.then_train, a.quarter, a.seed, sheets=sheets))
         return
     if a.cmd == "crude":
-        got = crude(a.name, a.quarter, a.seed, a.workers, a.tags, a.aff, a.against)
+        got = crude(a.name, a.quarter, a.seed, a.workers, a.tags, a.aff, a.against, a.prior, a.read_max)
+        if got.get("not_read"):
+            print(json.dumps(got))
+            return
         print(json.dumps({"labels": got["labels"], "paired_run_minus_today": got["paired_run_minus_today"],
                           "run": {k: got["headline"][k] for k in ("n", "right", "share", "ci", "with_box")},
                           "today": {k: got["today_headline"][k] for k in ("n", "right", "share", "ci", "with_box")},
