@@ -226,9 +226,12 @@ WIDTH_SCALE_ENV = "SFZMAPS_WALL_WIDTH_SCALE"
 
 def width_scale(strokes) -> float:
     """How much wider the 2000 drawing's pen is than the series' (WIDTH_SCALE_ENV: "auto" for the ratio of the two
-    pages' length-weighted mean stroke widths, measured on the ink alone; a number for that; unset or "1" for none).
-    The 2000 walls weigh stroke widths in feet, and the older drawings print every line thinner."""
-    v = os.environ.get(WIDTH_SCALE_ENV, "1")
+    pages' length-weighted mean stroke widths, measured on the ink alone; a number for that; "1" for none).  Unset:
+    none for a scan of the 2000 drawing (paths.FRAME_SERIES: the same pen), "auto" for any other drawing.  The 2000
+    walls weigh stroke widths in feet, and the older drawings print every line thinner.  Measured: on 1960 the share
+    of its own labels the solve keeps rose from 41% to 82% (scale 1.32); on the 1996-2000 scan (scale 1.05) the
+    table's wrong lots rose from 15,974 to 20,169, so a scan of the 2000 drawing is not scaled."""
+    v = os.environ.get(WIDTH_SCALE_ENV) or ("1" if paths.SERIES in paths.FRAME_SERIES else "auto")
     if v != "auto":
         return float(v)
     ref = np.load(paths.solver_dir(paths.SERIES_2000) / "labels" / "strokes.npz")
