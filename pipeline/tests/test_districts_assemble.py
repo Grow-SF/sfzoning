@@ -13,6 +13,14 @@ from sfzmaps.districts import assemble
 X0, Y0 = 6006000, 2110000  # San Francisco, EPSG:2227
 
 
+@pytest.fixture(autouse=True)
+def _periods_read_by_the_old_reader(monkeypatch):
+    """These tests publish periods (1996-2000 and its heights) through the old reader: here only the 2000 map is
+    published from its solve, whatever districts.solved.SOLVED holds today."""
+    from sfzmaps.districts import solved
+    monkeypatch.setattr(solved, "SOLVED", frozenset({solved.SERIES}))
+
+
 def box(a, b, c, d):
     return _box(a + X0, b + Y0, c + X0, d + Y0)
 

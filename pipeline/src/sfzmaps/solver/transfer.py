@@ -268,12 +268,15 @@ def build_text_chance(device: str | None = None) -> dict:
 
 
 def era_canon(code: str) -> str:
-    """A code in the one spelling of the series' era: the pipeline's era-aware spelling (`districts.rules.
-    normalise_code` in the series' year: 'C 1' and 'C1' are C-1) where it knows the code, else `codes.canon`."""
+    """A code in the one spelling of the series' era: on a scan of the 2000 drawing (paths.FRAME_SERIES) or a height
+    map, the 2000 map's (`codes.canon`, which keeps each named Neighborhood Commercial District's name); on an older
+    drawing, the pipeline's era-aware spelling (`districts.rules.normalise_code` in the series' year: 'C 1' and 'C1'
+    are C-1) where it knows the code, else `codes.canon`.  (normalise_code turns every named NCD into "NCD", which
+    on 1996-2000 dropped every named district's label from the solve: 20,613 wrong lots on the table, not 15,974.)"""
     from sfzmaps.districts.rules import normalise_code
     from sfzmaps.districts.series import SERIES
     from sfzmaps.solver.codes import canon
-    if paths.SERIES.endswith("-height"):
+    if paths.SERIES.endswith("-height") or paths.SERIES in paths.FRAME_SERIES:
         return canon(code)
     return normalise_code(code, SERIES[paths.SERIES].year) or canon(code)
 

@@ -31,17 +31,17 @@ from sfzmaps.solver.codes import canon
 KEYS = ("wrong_lots", "labels_right", "incidents", "lines_drawn", "drawn_are_table_lines", "holes")
 
 
-def published_codes(series: str, blklots: np.ndarray) -> np.ndarray:
+def published_codes(series: str, blklots: np.ndarray, path=None) -> np.ndarray:
     """The site's code of each lot (by lot ID; "" for a lot it does not list or leaves blank), in the one spelling.
-    For a height map, the period's published heights."""
+    For a height map, the period's published heights.  `path`: read that file instead (the same kind)."""
     if series.endswith("-height"):
         import pandas as pd
         from sfzmaps.districts.series import SERIES
-        d = pd.read_parquet(config.OUT_DIR / f"{SERIES[series].period}-zoning" / "districts" / "height.parquet",
+        d = pd.read_parquet(path or config.OUT_DIR / f"{SERIES[series].period}-zoning" / "districts" / "height.parquet",
                             columns=["blklot", "height_code"]).rename(columns={"height_code": "code"})
     else:
-        d = pyogrio.read_dataframe(config.OUT_DIR / series / "districts" / "parcels.fgb", columns=["blklot", "code"],
-                                   read_geometry=False)
+        d = pyogrio.read_dataframe(path or config.OUT_DIR / series / "districts" / "parcels.fgb",
+                                   columns=["blklot", "code"], read_geometry=False)
     code = dict(zip(d["blklot"].astype(str), d["code"].fillna("").astype(str)))
     return np.array([canon(code[b]) if code.get(b, "") else "" for b in blklots])
 

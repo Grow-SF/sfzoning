@@ -1,0 +1,178 @@
+<title>All-Years Solve Review</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: a ledger of map disagreements. A sticky series bar, the series' scores as a compact strip, then its largest
+   differing areas as cards, each the scan with the area outlined, the published code and the solve's code. */
+:root {
+  --bg: #f5f6f8; --surface: #ffffff; --fg: #1b2230; --muted: #5d6676; --line: #d9dde4;
+  --accent: #2456a6; --old: #a85d00; --new: #0b7a6a; --ok: #1e7a3c; --warn: #9a5b00; --chip-ok: #e3f3e8; --chip-warn: #fbefdc;
+  --font-ui: "Public Sans", "Helvetica Neue", Arial, sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --step--1: 0.8rem; --step-0: 0.95rem; --step-1: 1.15rem; --step-2: 1.5rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12161d; --surface: #1a2029; --fg: #e3e7ee; --muted: #9aa3b2; --line: #2c3442;
+    --accent: #7ea6e8; --old: #f0a54a; --new: #4fd1b8; --ok: #6fd08f; --warn: #f0b45a; --chip-ok: #173326; --chip-warn: #3a2a12;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12161d; --surface: #1a2029; --fg: #e3e7ee; --muted: #9aa3b2; --line: #2c3442;
+  --accent: #7ea6e8; --old: #f0a54a; --new: #4fd1b8; --ok: #6fd08f; --warn: #f0b45a; --chip-ok: #173326; --chip-warn: #3a2a12;
+  color-scheme: dark;
+}
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: var(--step-0); line-height: 1.5; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+.wrap { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); max-width: 1280px; margin: 0 auto; }
+header.top { padding-block: 20px 8px; }
+h1 { font-size: var(--step-2); font-weight: 700; margin: 0; text-wrap: balance; letter-spacing: -0.01em; }
+.lede { color: var(--muted); max-width: 68ch; margin: 6px 0 0; }
+.bar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--surface); border-bottom: 1px solid var(--line); }
+.bar .wrap { display: flex; flex-direction: column; gap: 8px; padding-block: 10px; }
+.group { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.group-label { font-size: var(--step--1); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin-right: 4px; }
+.pick { font: inherit; font-size: var(--step--1); border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 4px 8px; cursor: pointer; display: inline-flex; gap: 6px; align-items: baseline; }
+.pick .pct { font-family: var(--font-data); color: var(--muted); }
+.pick[aria-current="true"] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.pick:focus-visible, a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+main .wrap { padding-block: 16px 48px; display: flex; flex-direction: column; gap: 18px; }
+.head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.head h2 { margin: 0; font-size: var(--step-1); font-family: var(--font-data); }
+.chip { font-size: var(--step--1); font-weight: 600; letter-spacing: 0.04em; border-radius: 999px; padding: 2px 10px; }
+.chip.ok { background: var(--chip-ok); color: var(--ok); }
+.chip.warn { background: var(--chip-warn); color: var(--warn); }
+.scores { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 190px), 1fr)); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin: 0; }
+.score { padding: 10px 12px; min-width: 0; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); margin: 0 -1px -1px 0; }
+.score dt { font-size: var(--step--1); color: var(--muted); }
+.score dd { margin: 2px 0 0; font-family: var(--font-data); font-variant-numeric: tabular-nums; font-size: var(--step-0); overflow-wrap: anywhere; }
+.score dd .vs { color: var(--muted); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: var(--step--1); color: var(--muted); }
+.sw { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 5px; }
+.sw.area { background: rgba(235, 70, 70, 0.55); outline: 1px solid #c81414; }
+.sw.other { background: rgba(240, 170, 40, 0.5); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 14px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex; flex-direction: column; min-width: 0; }
+.card img { display: block; width: 100%; height: auto; background: var(--surface); }
+.card .body { padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; font-size: var(--step--1); color: var(--muted); }
+.row .rank { font-family: var(--font-data); color: var(--fg); font-weight: 600; }
+.codes { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-family: var(--font-data); font-size: var(--step--1); }
+.codes .k { color: var(--muted); font-family: var(--font-ui); }
+.codes .old { color: var(--old); overflow-wrap: anywhere; }
+.codes .new { color: var(--new); overflow-wrap: anywhere; }
+.codes .tbl { color: var(--fg); overflow-wrap: anywhere; }
+a { color: var(--accent); }
+.note { color: var(--muted); font-size: var(--step--1); max-width: 72ch; }
+.status { color: var(--muted); padding: 24px 0; }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<header class="top"><div class="wrap">
+  <h1>All-Years Solve Review</h1>
+  <p class="lede">Every year's zoning map read again by the 2000 solver's models, against the map the site publishes now.
+  Each card is one area where the two disagree, largest first, on the scan of that year's own map.</p>
+</div></header>
+
+<nav class="bar" aria-label="Series"><div class="wrap" id="picker"></div></nav>
+
+<main><div class="wrap" id="view"><p class="status">Loading the series…</p></div></main>
+
+<script>
+const INDEX = /*SERIES_INDEX*/null;
+const cache = new Map();
+const pct = v => v == null ? "–" : (100 * v).toFixed(1) + "%";
+const num = v => v == null ? "–" : Number(v).toLocaleString("en-US");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
+const codes = list => list.map(([c, n]) => `${esc(c || "blank")} <span class="vs">×${n}</span>`).join(", ");
+
+function picker(current) {
+  const groups = [["PUBLISHED-FROM-SOLVE", "Published from the solve"], ["NEEDS-OWNER-LOOK", "Needs the owner's look"]];
+  document.getElementById("picker").innerHTML = groups.map(([state, label]) => {
+    const names = INDEX.order.filter(s => INDEX.series[s].state === state);
+    if (!names.length) return "";
+    return `<div class="group"><span class="group-label">${label}</span>` + names.map(s =>
+      `<button class="pick" id="pick-${s}" data-s="${s}" aria-current="${s === current}">${esc(s)}` +
+      `<span class="pct">${pct(INDEX.series[s].agree_lots)}</span></button>`).join("") + `</div>`;
+  }).join("");
+  document.querySelectorAll(".pick").forEach(b => b.addEventListener("click", () => { location.hash = "s-" + b.dataset.s; }));
+}
+
+function scores(d) {
+  const o = d.own_labels || {}, ov = d.overrides || {}, lf = d.label_fixes || {}, lfp = d.label_fixes_published || {};
+  const cells = [
+    [d.pattern ? "Pattern reader's lot reads kept (solve vs published)" : "Own printed labels kept (solve vs published)", `${pct(o.solve)} <span class="vs">vs</span> ${pct(o.published)} <span class="vs">of ${num(o.labels)}</span>`],
+    ["Lots agreeing with the published map", `${pct(d.agree_lots)} <span class="vs">of ${num(d.lots_compared)}</span>`],
+    ["Area agreeing with the published map", pct(d.agree_area)],
+    ["Site overrides the solve agrees with", ov.on_solve_lots ? `${num(ov.agree)} <span class="vs">of ${num(ov.on_solve_lots)}</span>` : "none"],
+    ["Hand label fixes kept (solve vs published)", lf.rows ? `${lf.agree} <span class="vs">vs</span> ${lfp.agree} <span class="vs">of ${lf.rows}</span>` : "none"],
+    ["Differing lots / areas", `${num(d.differing_lots)} <span class="vs">in</span> ${num(d.differing_areas)}`],
+    ["Prints read / reads", `${num(d.prints)} <span class="vs">${esc(d.reads || "")}</span>`],
+    ["Stroke-width scale", d.width_scale == null ? "1" : String(d.width_scale)],
+    ["Published map compared with", d.reference ? `${esc(d.reference.file)} <span class="vs">${d.reference.match ?
+      "the file main's dvc.lock records, md5 " + esc(String(d.reference.lock).slice(0, 10)) : "NOT the file main's dvc.lock records"}</span>` : "unchecked"],
+  ];
+  if (d.table) {
+    const t = d.table;
+    cells.unshift(
+      ["Wrong lots on the April 2000 table (solve vs published)", `${num(t.solve.wrong_lots)} <span class="vs">vs</span> ${num(t.published.wrong_lots)}`],
+      ["Table labels right (solve vs published)", `${pct(t.solve.labels_right)} <span class="vs">vs</span> ${pct(t.published.labels_right)}`],
+      ["Wrong-lot incidents (solve vs published)", `${num(t.solve.incidents)} <span class="vs">vs</span> ${num(t.published.incidents)}`]);
+  }
+  return `<dl class="scores">` + cells.map(([k, v]) => `<div class="score"><dt>${k}</dt><dd>${v}</dd></div>`).join("") + `</dl>`;
+}
+
+function card(a) {
+  const tbl = a.table ? `<span class="k">table</span><span class="tbl">${codes(a.table) || "none"}</span>` : "";
+  return `<article class="card">
+    <img src="${a.img}" alt="Scan around area ${a.rank}: published ${esc(a.old.map(x => x[0]).join(", "))}, solve ${esc(a.new.map(x => x[0]).join(", "))}" loading="lazy" decoding="async">
+    <div class="body">
+      <div class="row"><span class="rank">#${a.rank}</span><span>${num(a.lots)} lots</span><span>${a.acres} acres</span>
+        <span>posterior ${a.posterior ?? "–"}</span><span>blocks ${esc(a.blocks.join(" "))}</span></div>
+      <div class="codes"><span class="k">published</span><span class="old">${codes(a.old)}</span>
+        <span class="k">solve</span><span class="new">${codes(a.new)}</span>${tbl}</div>
+      <div class="row"><a href="https://www.google.com/maps?q=${a.lat},${a.lon}" target="_blank" rel="noopener">${a.lat}, ${a.lon}</a></div>
+    </div></article>`;
+}
+
+async function show(s) {
+  picker(s);
+  const view = document.getElementById("view");
+  const info = INDEX.series[s];
+  const ok = info.state === "PUBLISHED-FROM-SOLVE";
+  view.innerHTML = `<div class="head"><h2>${esc(s)}</h2><span class="chip ${ok ? "ok" : "warn"}">${info.state}</span></div>` +
+    scores(info) + `<p class="status">Loading its areas…</p>`;
+  let d = cache.get(s);
+  if (!d) {
+    try {
+      const r = await fetch(`data/${encodeURIComponent(s)}.json`);
+      if (!r.ok) throw new Error(r.status);
+      d = await r.json();
+      cache.set(s, d);
+    } catch (e) {
+      view.querySelector(".status").textContent = `Couldn't load data/${s}.json (${e.message}). Reload the page to try again.`;
+      return;
+    }
+  }
+  if (location.hash.slice(3) !== s && location.hash) return;
+  view.querySelector(".status").outerHTML =
+    `<div class="legend"><span><i class="sw area"></i>this area's lots</span><span><i class="sw other"></i>other lots where the two maps differ</span>` +
+    `<span>${d.areas.length} largest of ${num(d.differing_areas)} areas, by acreage</span></div>` +
+    `<p class="note">Published: the code the site shows today. Solve: the code the solver read with the 2000 map's models.` +
+    (d.table ? ` Table: the April 2000 table's code, the answer key for this scan of the 2000 drawing.` : "") + `</p>` +
+    `<div class="grid">${d.areas.map(card).join("")}</div>`;
+}
+
+function route() {
+  const want = location.hash.startsWith("#s-") ? location.hash.slice(3) : "";
+  show(INDEX.series[want] ? want : INDEX.order[0]);
+}
+if (!INDEX || !INDEX.order.length) {
+  document.getElementById("view").innerHTML = `<p class="status">No series has been solved yet.</p>`;
+} else {
+  window.addEventListener("hashchange", route);
+  route();
+}
+</script>
