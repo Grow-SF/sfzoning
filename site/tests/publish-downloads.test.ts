@@ -261,3 +261,52 @@ describe("sha256File and writeJsonAtomic", () => {
     expect(existsSync(`${dir}/j.json.part`)).toBe(false);
   });
 });
+
+describe("multipart parts", () => {
+  const { Readable } = require("node:stream") as typeof import("node:stream");
+  const split = script.splitParts as (s: AsyncIterable<Buffer>, n: number) => AsyncGenerator<Buffer>;
+  const up = script.uploadInParts as (u: unknown, s: AsyncIterable<Buffer>, n: number) => Promise<unknown>;
+  const stream = (total: number, chunk: number) =>
+    Readable.from(Array.from({ length: Math.ceil(total / chunk) }, (_, i) => Buffer.alloc(Math.min(chunk, total - i * chunk), i)));
+  const sizes = async (s: AsyncIterable<Buffer>, n: number) => {
+    const out: number[] = [];
+    for await (const p of split(s, n)) out.push(p.length);
+    return out;
+  };
+
+  it("yields equal parts and a shorter last one, whatever the chunking", async () => {
+    expect(await sizes(stream(25, 7), 10)).toEqual([10, 10, 5]);
+    expect(await sizes(stream(25, 100), 10)).toEqual([10, 10, 5]);
+  });
+  it("yields no empty trailing part for an exact multiple", async () => {
+    expect(await sizes(stream(30, 4), 10)).toEqual([10, 10, 10]);
+  });
+  it("keeps every byte in order", async () => {
+    const parts: Buffer[] = [];
+    for await (const p of split(stream(25, 7), 10)) parts.push(p);
+    expect(Buffer.concat(parts).equals(Buffer.concat(await Readable.from(stream(25, 7)).toArray()))).toBe(true);
+  });
+  it("creates once, uploads parts 1..n in order one at a time, then completes", async () => {
+    const calls: string[] = [];
+    let busy = false;
+    const uploader = {
+      async uploadPart(n: number, body: Buffer) {
+        expect(busy).toBe(false);
+        busy = true;
+        await new Promise((r) => setTimeout(r, 1));
+        calls.push(`part ${n} ${body.length}`);
+        busy = false;
+        return { etag: `e${n}`, partNumber: n };
+      },
+      async complete(parts: unknown) {
+        calls.push(`complete ${JSON.stringify(parts)}`);
+        return { url: "u" };
+      },
+    };
+    await up(uploader, stream(25, 7), 10);
+    expect(calls).toEqual([
+      "part 1 10", "part 2 10", "part 3 5",
+      'complete [{"etag":"e1","partNumber":1},{"etag":"e2","partNumber":2},{"etag":"e3","partNumber":3}]',
+    ]);
+  });
+});

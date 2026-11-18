@@ -41,7 +41,7 @@ const MANIFEST = path.join(SITE, "lib/downloads.json");
 const HISTORY = path.join(SITE, "lib/download-versions.json");
 const NUMBERS = path.join(SITE, "lib/sheet-numbers.json");
 const MULTIPART_MIN = 50_000_000;
-const PART_BYTES = 8 * 1024 * 1024;
+const PART_BYTES = 64 * 1024 * 1024; // fewer requests than the SDK's fixed 8 MB parts (minimum is 5 MB)
 const SIDECARS = { "README.txt": ".README.txt", "LICENSE.txt": ".LICENSE.txt" };
 
 /** Today's calendar date in San Francisco (the owner's day), not UTC's. */
@@ -203,6 +203,38 @@ async function listSizes(list, prefix, sizes, counter) {
 const localPath = (u) => path.join(u.root === "work" ? WORK : DOWNLOADS, u.local);
 const requestsFor = (bytes) => (bytes > MULTIPART_MIN ? 2 + Math.ceil(bytes / PART_BYTES) : 1);
 
+/** Cut a readable stream into Buffers of exactly `size` bytes; only the last may be shorter, and none is empty. */
+export async function* splitParts(stream, size = PART_BYTES) {
+  let held = [];
+  let n = 0;
+  for await (const chunk of stream) {
+    let c = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    while (n + c.length >= size) {
+      const cut = size - n;
+      yield Buffer.concat([...held, c.subarray(0, cut)]);
+      held = [];
+      n = 0;
+      c = c.subarray(cut);
+    }
+    if (c.length) {
+      held.push(c);
+      n += c.length;
+    }
+  }
+  if (n) yield Buffer.concat(held);
+}
+
+/** One create, each part in order (no concurrency), then complete. `uploader` is from createMultipartUploader. */
+export async function uploadInParts(uploader, stream, size = PART_BYTES) {
+  const done = [];
+  let number = 0;
+  for await (const part of splitParts(stream, size)) {
+    number += 1;
+    done.push(await uploader.uploadPart(number, part));
+  }
+  return uploader.complete(done);
+}
+
 /** sha256 of a file, streamed (files run to ~130 MB). */
 export function sha256File(file) {
   return new Promise((resolve, reject) => {
@@ -283,7 +315,7 @@ async function main() {
   if (bad) throw new Error(`refusing to publish: ${bad}`);
   const history = readJson(HISTORY, { versions: [] });
   const numbers = readJson(NUMBERS, {});
-  const { list, put, copy } = await import("@vercel/blob");
+  const { list, put, copy, createMultipartUploader } = await import("@vercel/blob");
   const sizes = new Map();
   const counter = { n: 0 };
   await listSizes(list, "downloads/", sizes, counter);
@@ -311,14 +343,21 @@ async function main() {
       if (problem) throw new Error(`stopping before uploading ${u.to}: ${problem}`);
     }
     console.log(`upload ${u.to} (${u.bytes} bytes)`);
-    await put(u.to, u.text ?? createReadStream(localPath(u)), {
+    const options = {
       access: "public",
       addRandomSuffix: false,
       allowOverwrite: false, // the store itself refuses to replace a file
       cacheControlMaxAge: ONE_YEAR,
-      multipart: u.bytes > MULTIPART_MIN,
-      ...(u.text !== undefined ? { contentType: "text/plain; charset=utf-8" } : {}),
-    });
+    };
+    if (u.text === undefined && u.bytes > MULTIPART_MIN) {
+      const uploader = await createMultipartUploader(u.to, options);
+      await uploadInParts(uploader, createReadStream(localPath(u), { highWaterMark: 1024 * 1024 }));
+    } else {
+      await put(u.to, u.text ?? createReadStream(localPath(u)), {
+        ...options,
+        ...(u.text !== undefined ? { contentType: "text/plain; charset=utf-8" } : {}),
+      });
+    }
   }
   for (const c of p.copies) {
     console.log(`copy ${c.from} -> ${c.to}`);
