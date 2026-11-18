@@ -295,8 +295,10 @@ def _all_years_stages(owner: dict[str, str]) -> dict[str, Stage]:
         def stage(part, upstream, reads, code, extra=()):
             name = f"solver-{part}-{s}"
             out[name] = Stage(name, (), (), upstream, command=("solver", "--series", s, part, *extra), reads=reads,
-                              writes=(f"{root}/{'text' if part == 'text-chance' else part}",), code=(code,))
-        stage("page", (f"warp-{s}",), (f"data/warp/{s}", f"data/work/{s}", f"inputs/{s}"), "sfzmaps.solver.page")
+                              writes=(f"{root}/{'text' if part == 'text-chance' else part}",),
+                              code=code if isinstance(code, tuple) else (code,))
+        stage("page", (f"warp-{s}",), (f"data/warp/{s}", f"data/work/{s}", f"inputs/{s}"),
+              ("sfzmaps.solver.page", "sfzmaps.solver.sheetcrop"))
         stage("lots", (f"solver-page-{s}",), ("inputs/zoning-2000/april2000.geojson.gz", f"{root}/page"),
               "sfzmaps.solver.lots")
         stage("prints", (f"solver-lots-{s}",), ("saved-reads/answers", f"data/work/{s}", f"data/warp/{s}",

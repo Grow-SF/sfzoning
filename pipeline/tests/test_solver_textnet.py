@@ -1442,9 +1442,9 @@ def test_one_detector_stage_reads_its_maps_sheets_file_by_file_and_no_placement(
     table = build.stages()
     # one detector of the walls, its scores, and the code reader's own (`test_reader_stage_deps` in test_build); then
     # the text reader's three (`test_text_reader_stages_deps` in test_build)
-    assert [n for n in table if n.startswith("solver-text")] == ["solver-text", "solver-text-scores",
-                                                                  "solver-text-reader", "solver-text-crops",
-                                                                  "solver-text-train", "solver-text-read"]
+    assert [n for n in table if n.startswith("solver-text") and not n.startswith("solver-text-chance-")] == [
+        "solver-text", "solver-text-scores",
+        "solver-text-reader", "solver-text-crops", "solver-text-train", "solver-text-read"]
     st = table["solver-text"]
     assert build.stage_commands("solver-text") == [["solver", "text"]] and build.stage_outs(st) == ["data/solver/text"]
     assert st.code == ("sfzmaps.solver.textnet.stage",) and "sfzmaps.solver.runs" in st.cut

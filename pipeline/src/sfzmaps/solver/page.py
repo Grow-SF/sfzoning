@@ -48,12 +48,17 @@ def load_cuts() -> dict[str, list[list[int]]]:
     if paths.CUTS_FILE.is_file():
         found = json.loads(paths.CUTS_FILE.read_text())
         return {name: [c["box"] for c in cuts] for name, cuts in found.items()}
-    from sfzmaps import reading
-    out = {}
-    for name in paths.sheet_names():
-        boxes = reading.load_page(config.WORK_DIR / paths.SERIES / name / "page.json").mask_boxes
-        out[name] = [[b.x0, b.y0, b.x1 - 1, b.y1 - 1] for b in boxes]      # page.json's ends are past the box
-    return out
+    return other_series().page_json_cuts(paths.sheet_names())
+
+
+OTHER_SERIES = "sfzmaps.solver.sheetcrop"
+
+
+def other_series():
+    """The crops and cuts of another series' sheets (`sheetcrop`), loaded by name: they read the pipeline's page
+    reads and run its warp code, which the 2000 map's stages never do."""
+    import importlib
+    return importlib.import_module(OTHER_SERIES)
 
 
 def frame_series() -> bool:
@@ -96,17 +101,7 @@ def sheet_crop(name: str, pg: np.ndarray, cuts: dict) -> tuple[np.ndarray, np.nd
         if quad is not None:
             return quad, crop_mask(pg.shape, quad, cuts.get(name, []))
         log.warning("%s: no printed frame of the 2000 drawing's size found; cropped to its neatline", name)
-    from sfzmaps import reading, warp
-    folder = config.WORK_DIR / paths.SERIES / name
-    img = cv2.imread(str(folder / "page.png"), cv2.IMREAD_UNCHANGED)
-    if img.ndim == 3 and img.shape[2] == 4:
-        img = img[..., :3]
-    if img.dtype != np.uint8:
-        img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-    crop = ~warp.inset_exclusion(img, reading.load_page(folder / "page.json").mask_boxes)
-    ys, xs = np.nonzero(crop)
-    x0, x1, y0, y1 = float(xs.min()), float(xs.max()), float(ys.min()), float(ys.max())
-    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]), crop
+    return other_series().neatline_crop(name)
 
 
 def load_crop(name: str, shape, quad, cuts: dict) -> np.ndarray:
