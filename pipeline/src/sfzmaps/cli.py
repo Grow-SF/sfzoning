@@ -26,6 +26,27 @@ def main() -> None:
     """Georeference historic SF zoning maps."""
 
 
+@solver_app.callback()
+def solver_main(series: str = typer.Option(None, "--series",
+                                           help="The series to solve (default the 2000 map, data/solver/); another "
+                                                "series' outputs go to data/solver/experiments/all-years/<series>/.")
+                ) -> None:
+    """The solver of one series: the 2000 map unless --series names another."""
+    import os
+    import sys
+
+    from sfzmaps.solver import paths, threads
+    if series is None or series == paths.SERIES:
+        return
+    if not (config.DATA_DIR / "warp" / series).is_dir():
+        raise typer.BadParameter(f"no warped sheets of {series} under {config.DATA_DIR / 'warp'}",
+                                 param_hint="--series")
+    # Every module reads the series once, as it loads (`paths.SERIES`): start the command again in a process whose
+    # environment names it, as do the processes it starts.
+    cmd = threads.sfzmaps_command() + sys.argv[1:]
+    os.execve(cmd[0], cmd, {**os.environ, paths.SERIES_ENV: series})
+
+
 @app.command()
 def fetch(
     only: str = typer.Option(
@@ -967,8 +988,13 @@ def solver_prints() -> None:
 @solver_app.command("labels")
 def solver_labels() -> None:
     """Fit what the solver knows about the printed labels (no model is asked): data/solver/labels/readings_<q>.npz,
-    trust.json, streetside_<q>.npz, lotsize.npz and strokes.npz."""
-    from sfzmaps.solver import labels_stage
+    trust.json, streetside_<q>.npz, lotsize.npz and strokes.npz.  On a series other than 2000, from the 2000 map's
+    models (`transfer`)."""
+    from sfzmaps.solver import labels_stage, paths
+    if not paths.is_2000():
+        from sfzmaps.solver import transfer
+        typer.echo(json.dumps(transfer.build_labels(), indent=1))
+        return
     s = labels_stage.build_labels()
     t, side, size, ink = s["trust"], s["streetside"], s["lotsize"], s["strokes"]
     typer.echo(f"trust: {t['readings']:,} readings of {t['prints']:,} prints, {t['names']} names; held-out log loss "
@@ -1231,6 +1257,11 @@ def solver_walls(
     def names(text: str) -> list[str]:
         return [c.strip() for c in text.split(",") if c.strip() and c.strip() != "none"]
 
+    from sfzmaps.solver import paths
+    if not paths.is_2000():                     # another series: the 2000 map's weights on its own features
+        from sfzmaps.solver import transfer
+        typer.echo(json.dumps(transfer.build_walls(workers or 2), indent=1))
+        return
     if evaluate:
         results = walls.evaluate_candidates([names(c) for c in evaluate], workers, chance)
     else:
@@ -1302,7 +1333,33 @@ def solver_solve(
     except RuntimeError as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1)
-    typer.echo(report.markdown(found))
+    from sfzmaps.solver import paths
+    typer.echo(report.markdown(found) if paths.is_2000() else json.dumps(found, indent=1))
+
+
+@solver_app.command("text-chance")
+def solver_text_chance(device: str = _DEVICE_OPTION) -> None:
+    """Score every sheet of the series with the one text detector (the 2000 map's solver-text model), in one
+    exclusive GPU turn: <series' solver folder>/text/chance/<sheet>.png."""
+    import logging
+
+    from sfzmaps.solver import transfer
+    _check_device(device)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    typer.echo(json.dumps(transfer.build_text_chance(device)))
+
+
+@solver_app.command("transfer-models")
+def solver_transfer_models(
+        workers: int = typer.Option(2, "--workers", help="Processes for the walls' closing paths.")) -> None:
+    """Fit, on the 2000 map, the models every other series is solved with (walls, trust, street sides, lot sizes,
+    placement): data/solver/experiments/all-years/models-2000/."""
+    import logging
+
+    from sfzmaps.solver import transfer
+    _in_one_thread(["solver", "transfer-models", "--workers", str(workers)])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    typer.echo(json.dumps(transfer.build_models(workers), indent=1))
 
 
 @solver_app.command("solve-quarter")

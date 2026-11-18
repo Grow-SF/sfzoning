@@ -85,6 +85,8 @@ def _options(walls_dir=None):
     N, a, b, cen = C.n, C.a, C.b, C.centroid
     lot_tree = cKDTree(cen)
     found = load_prints()
+    if not len(found):
+        return []
     lx, ly = found["x"].to_numpy(float), found["y"].to_numpy(float)
     sheet = found["sheet"].astype(str).to_numpy()
     under = found["lab_lot"].to_numpy(np.int64)
@@ -100,7 +102,7 @@ def _options(walls_dir=None):
     lz_code = {c: i for i, c in enumerate(LZ["codes"].astype(str))}
     size_bin = np.clip(np.digitize(np.log(np.maximum(shapely.area(C.lots.geometry.values), 1.0)), LZ["edges"]) - 1, 0,
                        LZ["PMI"].shape[2] - 1)
-    moves = leader_moves()
+    moves = leader_moves() if paths.is_2000() else {}    # the hand leader moves are the 2000 sheets'
     rows = []
     for qi, q in enumerate(paths.QUARTERS):
         R = np.load(runs.SOLVE_LABELS_DIR / f"readings_{q}.npz")
@@ -192,37 +194,45 @@ def _neg_log_lik(w, X, y, ridge):
     return total + ridge * w @ w, grad + 2 * ridge * w
 
 
-def fit(folder, walls_dir=None, log=print) -> dict:
+def fit_model(rows, qi: int):
+    """The model fitted without quarter qi: (mu, sd, w), the features' means and spreads over its training options
+    and the standardised weights."""
+    train = [r for r in rows if r[1] != qi and r[4]]
+    X = [np.array([f[0] for f in r[3]], float) for r in train]
+    y = [int(np.flatnonzero([f[1] for f in r[3]])[0]) for r in train]
+    mu = np.mean(np.vstack(X), 0)
+    sd = np.std(np.vstack(X), 0) + 1e-9
+    w = minimize(_neg_log_lik, np.zeros(len(FEATURES)), args=([(x - mu) / sd for x in X], y, RIDGE), jac=True,
+                 method="L-BFGS-B").x
+    return mu, sd, w
+
+
+def fit(folder, walls_dir=None, log=print, models=None) -> dict:
     """Fit the four held-out models with the walls of `walls_dir` (default WALLS_DIR), report how often each picks
     the answer on its held-out labels, write placement.npz into the run's `folder`.  Returns the counts and hit
-    rates."""
+    rates.  `models` (four (mu, sd, w), nw ne sw se: the 2000 map's, `transfer`): apply them instead of fitting,
+    for a series with no answers of its own."""
     rows = _options(walls_dir)
     summary = {"labels": len(rows), "with_answer": sum(r[4] for r in rows),
                "hand_moves": sum(r[2] for r in rows if r[4]),
-               "median_options": int(np.median([len(r[3]) for r in rows]))}
+               "median_options": int(np.median([len(r[3]) for r in rows])) if rows else 0}
     log(f"labels {summary['labels']:,}; with an answer {summary['with_answer']:,} (hand moves "
         f"{summary['hand_moves']}); options per label median {summary['median_options']}")
     out, scored = [], []
     for qi in range(4):
-        train = [r for r in rows if r[1] != qi and r[4]]
-        X = [np.array([f[0] for f in r[3]], float) for r in train]
-        y = [int(np.flatnonzero([f[1] for f in r[3]])[0]) for r in train]
-        mu = np.mean(np.vstack(X), 0)
-        sd = np.std(np.vstack(X), 0) + 1e-9
-        w = minimize(_neg_log_lik, np.zeros(len(FEATURES)), args=([(x - mu) / sd for x in X], y, RIDGE), jac=True,
-                     method="L-BFGS-B").x
+        mu, sd, w = fit_model(rows, qi) if models is None else models[qi]
         for r in rows:                                   # every label, by the model fitted without quarter qi
             s = ((np.array([f[0] for f in r[3]], float) - mu) / sd) @ w
             p = np.exp(s - s.max())
             p /= p.sum()
             for oi, f in enumerate(r[3]):
                 out.append((r[0], f[2], p[oi], oi == 0, qi))
-            if r[1] == qi and r[4]:
+            if r[1] == qi and r[4] and models is None:
                 scored.append((r[1], r[2], int(np.flatnonzero([f[1] for f in r[3]])[0]), int(np.argmax(p))))
         if qi == 0:
             log("weights without the north-west (standardised): "
                 + ", ".join(f"{n} {v:+.2f}" for n, v in zip(FEATURES, w)))
-    R = np.array(scored)
+    R = np.array(scored).reshape(-1, 4)
     summary["held_out"] = {}
     for name, m in (("labels with an answer", np.ones(len(R), bool)), ("answer = move", R[:, 2] != 0),
                     ("answer = stay", R[:, 2] == 0), ("hand moves", R[:, 1] == 1)):

@@ -123,7 +123,11 @@ def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders:
     if true_borders:
         both = C.known[C.a] & C.known[C.b]
         odds = np.where(both, np.where(C.table[C.a] != C.table[C.b], TRUE_BORDER_ODDS, -TRUE_BORDER_ODDS), odds)
-    rd = readings(q, table_vocabulary(C.lots))
+    if paths.is_2000():
+        rd = readings(q, table_vocabulary(C.lots))
+    else:                                                # the era's codes (`transfer.series_vocabulary`)
+        from sfzmaps.solver import transfer
+        rd = readings(q, transfer.series_vocabulary())
     index = {}
     for i, n in enumerate(rd.names):
         index.setdefault(n, i)
@@ -212,6 +216,19 @@ def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool
     target = runs.solve_dir(run)
     threads.warn_unless_pinned(logging.getLogger(__name__), "the placement and the report")
     folder = runs.fresh_folder(target)
+    if not paths.is_2000():
+        # Another series: the 2000 map's placement models, the solve, and no report (its holes, data errors and the
+        # comparison with J7 are the 2000 table's); it is scored by `scripts/all_years/score_series.py`.
+        import json
+
+        from sfzmaps.solver import transfer
+        summary = placement.fit(folder, walls_dir, models=transfer.placement_models())
+        solve_all(run, walls_dir, true_borders, keep_costs=False, folder=folder, compound_fusion=compound_fusion)
+        found = {"run": run, "series": paths.SERIES, "placement": summary,
+                 "codes": dict(Counter(load_run(run, folder).tolist()).most_common())}
+        (folder / "summary.json").write_text(json.dumps(found, indent=1) + "\n")
+        runs.replace_folder(folder, target)
+        return found
     summary = placement.fit(folder, walls_dir)
     solve_all(run, walls_dir, true_borders, keep_costs=True, folder=folder, compound_fusion=compound_fusion)
     rows = holes.causes(run, folder)

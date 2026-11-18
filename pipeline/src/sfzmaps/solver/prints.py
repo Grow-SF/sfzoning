@@ -339,7 +339,9 @@ def build_prints() -> dict:
         raise FileNotFoundError(f"no warped sheets under {config.DATA_DIR / 'warp' / paths.SERIES}: "
                                 f"run the warp-{paths.SERIES} stage first")
     terra = saved.answers(TERRA_READ)
-    turned = saved.answers(TURNED_POSITIONS)
+    # The turned pass and the third reads were asked of the 2000 sheets alone; another series' prints are Terra's
+    # boxes and Sol's points, where they read its sheets (a sheet neither read has no prints).
+    turned = saved.answers(TURNED_POSITIONS) if paths.is_2000() else []
     lot_rasters = lots.load_lots()
     mapped = page.load_sheets() > 0
     boxes, placed, rows = {}, {}, []
@@ -349,22 +351,25 @@ def build_prints() -> dict:
         footprint = shapely.from_geojson((warp / "warped.footprint.geojson").read_text())
         boxes[name] = terra_boxes(name, terra)
         placed[name] = transform, footprint
-        rows += _place(match_prints(boxes[name], saved.sol_labels(name)), name, transform, footprint, lot_rasters,
-                        mapped)
+        has_sol = paths.is_2000() or (config.WORK_DIR / paths.SERIES / name / "district_labels.json").is_file()
+        rows += _place(match_prints(boxes[name], saved.sol_labels(name) if has_sol else []), name, transform,
+                       footprint, lot_rasters, mapped)
     codes_known = set(lot_rasters.codes[lot_rasters.known]) | {p["sol_code"] for p in rows if p["sol_code"]}
     new = []
     for name in names:
         found = join_turned([p for p in rows if p["sheet"] == name], [b for b in turned if b["sheet"] == name],
                             codes_known)
         new += _place(found, name, *placed[name], lot_rasters, mapped)
-    pages = {}
-    for name in names:
-        page_file = config.WORK_DIR / paths.SERIES / name / "page.png"
-        pages[name] = cv2.imread(str(page_file), cv2.IMREAD_GRAYSCALE)
-        if pages[name] is None:
-            raise FileNotFoundError(f"can't read {page_file}")
-    counts = third_reads(rows, pages, saved.by_key(THIRD_READ), saved.by_key(RECHECK_READ))
-    check_key_match(counts)
+    counts = {}
+    if paths.is_2000():
+        pages = {}
+        for name in names:
+            page_file = config.WORK_DIR / paths.SERIES / name / "page.png"
+            pages[name] = cv2.imread(str(page_file), cv2.IMREAD_GRAYSCALE)
+            if pages[name] is None:
+                raise FileNotFoundError(f"can't read {page_file}")
+        counts = third_reads(rows, pages, saved.by_key(THIRD_READ), saved.by_key(RECHECK_READ))
+        check_key_match(counts)
     df = _frame(rows + new)
     summary = {"prints": len(df), "by_kind": {str(k): int((df["kind"] == k).sum()) for k in range(4)},
                "saved_answers": counts}

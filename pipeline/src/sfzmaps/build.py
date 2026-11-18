@@ -183,9 +183,9 @@ def stages() -> dict[str, Stage]:
     out["solver-boxes"] = Stage(
         "solver-boxes", (), (), ("solver-lots", "solver-prints", "solver-page", "solver-text-reader"),
         command=("solver", "boxes"),
-        reads=(*(f"data/solver/text-reader/{s}/{n}" for s in paths.SHEETS for n in ("chance.png", "kind.npz")),
-               *_text_sheet_files("data/work", (paths.SERIES,), ("page.png",)),
-               *_text_sheet_files("data/warp", (paths.SERIES,), ("transform.json", "correction.npz",
+        reads=(*(f"data/solver/text-reader/{s}/{n}" for s in paths.SHEETS_2000 for n in ("chance.png", "kind.npz")),
+               *_text_sheet_files("data/work", (paths.SERIES_2000,), ("page.png",)),
+               *_text_sheet_files("data/warp", (paths.SERIES_2000,), ("transform.json", "correction.npz",
                                                                   "warped.footprint.geojson")),
                terra, "data/solver/page/sheets.png", "data/solver/prints/prints.parquet",
                "data/solver/prints/terra_boxes.json",
@@ -221,7 +221,7 @@ def stages() -> dict[str, Stage]:
         reads=(*(f"data/solver/text-crops/{n}" for n in ("crops.npz", "crops.parquet", "answered.npz",
                                                          "answered.parquet", "prior.json")),
                "data/solver/text-train", "data/solver/boxes/boxes.parquet",
-               *_text_sheet_files("data/work", (paths.SERIES,), ("page.png",))),
+               *_text_sheet_files("data/work", (paths.SERIES_2000,), ("page.png",))),
         writes=("data/solver/text-read",), code=("sfzmaps.solver.textread.read",), cut=text_cut)
     out["solver-labels"] = Stage("solver-labels", (), (), ("solver-prints",), command=("solver", "labels"),
                                  # of the prints, only prints.parquet: the Terra boxes and the summary aren't read

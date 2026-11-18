@@ -88,7 +88,7 @@ def text_chance(source: str | None = None) -> np.ndarray:
         pg = page.load_page(name)
         dark = pg < grid.INK_BELOW
         quad = np.asarray(frames[name], float)
-        crop = page.crop_mask(pg.shape, quad, cuts.get(name, []))
+        crop = page.load_crop(name, pg.shape, quad, cuts)
         chance = _read(files[name], pg.shape)
         del pg
         for rows, cols, on, yi, xi in page.sheet_px(tr, crop, out.shape, page.grid_box(tr, quad, out.shape)):

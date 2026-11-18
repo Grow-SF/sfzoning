@@ -41,9 +41,83 @@ def load_page(sheet: str) -> np.ndarray:
 
 
 def load_cuts() -> dict[str, list[list[int]]]:
-    """Each sheet's cut boxes from the checked-in file: [x0, y0, x1, y1] page px, both ends inside the box."""
-    found = json.loads(paths.CUTS_FILE.read_text())
-    return {name: [c["box"] for c in cuts] for name, cuts in found.items()}
+    """Each sheet's cut boxes: [x0, y0, x1, y1] page px, both ends inside the box.  From the checked-in file
+    (`paths.CUTS_FILE`, picked by eye: the 2000 map's); for a series with none, the mask boxes of each sheet's
+    page.json with its hand-made patch (`reading.load_page`: the notes, legend and north arrow the pipeline's page
+    read found, the boxes the warp leaves out of the published sheets)."""
+    if paths.CUTS_FILE.is_file():
+        found = json.loads(paths.CUTS_FILE.read_text())
+        return {name: [c["box"] for c in cuts] for name, cuts in found.items()}
+    from sfzmaps import reading
+    out = {}
+    for name in paths.sheet_names():
+        boxes = reading.load_page(config.WORK_DIR / paths.SERIES / name / "page.json").mask_boxes
+        out[name] = [[b.x0, b.y0, b.x1 - 1, b.y1 - 1] for b in boxes]      # page.json's ends are past the box
+    return out
+
+
+def frame_series() -> bool:
+    """The series is printed on the 2000 drawing's sheets (`paths.FRAME_SERIES`): its crop is the printed frame."""
+    return paths.SERIES in paths.FRAME_SERIES
+
+
+def crop_file(name: str):
+    """Where the page stage keeps a sheet's crop when it is no frame quad (a series not in FRAME_SERIES)."""
+    return paths.PAGE_DIR / "crops" / f"{name}.png"
+
+
+def _frame_or_none(pg: np.ndarray):
+    """The printed frame (`frame.find_frame`) when it is found and is the 2000 drawing's (FRAME_WIDTH_PX by
+    FRAME_HEIGHT_PX, as on every 2000 sheet); else None."""
+    try:
+        with np.errstate(all="ignore"):
+            quad = frame.find_frame(pg)
+    except (ValueError, np.linalg.LinAlgError, IndexError):
+        return None
+    w = np.hypot(*(quad[1] - quad[0])), np.hypot(*(quad[2] - quad[3]))
+    h = np.hypot(*(quad[3] - quad[0])), np.hypot(*(quad[2] - quad[1]))
+    ok = all(FRAME_WIDTH_PX[0] <= v <= FRAME_WIDTH_PX[1] for v in w) and \
+        all(FRAME_HEIGHT_PX[0] <= v <= FRAME_HEIGHT_PX[1] for v in h)
+    return quad if ok and np.isfinite(quad).all() else None
+
+
+# The 2000 drawing's printed frame, page px: on the 13 2000 sheets 3,080-3,095 wide and 3,445-3,525 high.
+FRAME_WIDTH_PX = (3000.0, 3150.0)
+FRAME_HEIGHT_PX = (3350.0, 3600.0)
+
+
+def sheet_crop(name: str, pg: np.ndarray, cuts: dict) -> tuple[np.ndarray, np.ndarray]:
+    """A sheet's crop: (quad, mask).  For a series on the 2000 drawing's sheets, the printed frame (`frame.find_frame`)
+    minus the cut boxes, where the frame is found and has the 2000 drawing's size; otherwise (any other series, or a
+    sheet whose frame isn't found) the neatline interior less the page.json mask boxes, exactly the area the warp
+    shows of the sheet (`warp.inset_exclusion` on the page as the warp reads it), with the quad its bounding box."""
+    if frame_series():
+        quad = frame.find_frame(pg) if paths.is_2000() else _frame_or_none(pg)
+        if quad is not None:
+            return quad, crop_mask(pg.shape, quad, cuts.get(name, []))
+        log.warning("%s: no printed frame of the 2000 drawing's size found; cropped to its neatline", name)
+    from sfzmaps import reading, warp
+    folder = config.WORK_DIR / paths.SERIES / name
+    img = cv2.imread(str(folder / "page.png"), cv2.IMREAD_UNCHANGED)
+    if img.ndim == 3 and img.shape[2] == 4:
+        img = img[..., :3]
+    if img.dtype != np.uint8:
+        img = cv2.normalize(img, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+    crop = ~warp.inset_exclusion(img, reading.load_page(folder / "page.json").mask_boxes)
+    ys, xs = np.nonzero(crop)
+    x0, x1, y0, y1 = float(xs.min()), float(xs.max()), float(ys.min()), float(ys.max())
+    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]), crop
+
+
+def load_crop(name: str, shape, quad, cuts: dict) -> np.ndarray:
+    """A sheet's crop as the page stage made it: for the 2000 map, the frame quad minus the cut boxes; for any other
+    series, the mask the page stage saved (`crop_file`)."""
+    if paths.is_2000():
+        return crop_mask(shape, np.asarray(quad, float), cuts.get(name, []))
+    crop = _read(crop_file(name)) > 0
+    if crop.shape != tuple(shape):
+        raise ValueError(f"{crop_file(name)} is {crop.shape}, its page {tuple(shape)}")
+    return crop
 
 
 def crop_mask(shape: tuple[int, int], quad: np.ndarray, cuts: list) -> np.ndarray:
@@ -142,10 +216,12 @@ def build_page() -> dict:
         pg = cv2.imread(str(page_file), cv2.IMREAD_GRAYSCALE)
         if pg is None:
             raise FileNotFoundError(f"can't read {page_file}")
-        quad = frame.find_frame(pg)
-        crop = crop_mask(pg.shape, quad, cuts.get(name, []))
+        quad, crop = sheet_crop(name, pg, cuts)
         lay_sheet(tr, pg, crop, ink, sheets, grid_box(tr, quad, ink.shape))
         frames[name] = quad.tolist()
+        if not paths.is_2000():
+            crop_file(name).parent.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(crop_file(name)), crop.astype(np.uint8) * 255)
         log.info("%s laid (%.0f s)", name, time.perf_counter() - t0)
     paths.PAGE_DIR.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(paths.PAGE_DIR / "ink.png"), np.where(ink, 0, 255).astype(np.uint8))

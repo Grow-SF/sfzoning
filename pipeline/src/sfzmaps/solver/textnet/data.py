@@ -361,7 +361,7 @@ def sheet_data(series: str, sheet: str, hold_out_validation: bool, terra: list[d
     found = boxes.terra_boxes(series, sheet, terra)
     rects = [word_rect(b["box"], float(b.get("angle_deg") or 0.0)) for b in found]
     if others is None:
-        others = other_boxes(sheet) if series == paths.SERIES else []
+        others = other_boxes(sheet) if series == paths.SERIES_2000 else []
     points = [(int(round(lb["x"])), int(round(lb["y"]))) for lb in saved.sol_labels(sheet, series)]
     return SheetData(
         series=series, sheet=sheet, height=gray.shape[0], width=gray.shape[1],
@@ -391,7 +391,7 @@ def load_sheets(series_list, hold_out_validation: bool, placement: bool = True,
     for r in records:
         by_sheet.setdefault((r["series"], r["sheet"]), []).append(r)
     others: dict[str, list[dict]] = {}
-    if paths.SERIES in series_list:
+    if paths.SERIES_2000 in series_list:
         for f in _other_files():
             for b in saved.answers(f"{OTHER_PASSES}/{f.name.removesuffix('.jsonl.gz')}"):
                 others.setdefault(b.get("sheet"), []).append(b)
@@ -400,7 +400,7 @@ def load_sheets(series_list, hold_out_validation: bool, placement: bool = True,
     def one(job):
         s, name = job
         return sheet_data(s, name, hold_out_validation, by_sheet.get(job, []),
-                          others.get(name, []) if s == paths.SERIES else [], placement, point_radius, grey)
+                          others.get(name, []) if s == paths.SERIES_2000 else [], placement, point_radius, grey)
 
     with ThreadPoolExecutor(LOAD_THREADS) as pool:
         return list(pool.map(one, jobs))
