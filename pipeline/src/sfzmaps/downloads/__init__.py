@@ -18,13 +18,18 @@ from sfzmaps import config, stitch
 from sfzmaps.districts.series import SERIES
 
 DOWNLOADS_DIR = config.DATA_DIR / "downloads"
-# Bump by hand only to force a refresh the exporter code below doesn't show (say, a GDAL option
-# that changes output while the code stays the same): the fingerprint already covers that code.
+# Bump by hand only to force a refresh the code below doesn't show (say, a GDAL option that
+# changes output while the code stays the same): the fingerprints already cover that code.
 EXPORTER_VERSION = "2"
 _HERE = Path(__file__).parent
-# The code that writes the downloads: a change to any of it (README text included) refreshes them.
-EXPORTER_CODE = [_HERE / "readme.py", _HERE / "readme-template.txt", _HERE / "vectors.py",
-                 _HERE / "rasters.py"]
+# Two change checks per item. A change to the data code (or sources) re-runs GDAL/ogr2ogr; a change
+# only to the README/LICENSE/packaging code rewrites the text files and leaves the data alone.
+DATA_CODE: dict[str, list[Path]] = {
+    "citywide": [_HERE / "rasters.py"],
+    "lots": [_HERE / "vectors.py"],
+    "districts": [_HERE / "vectors.py"],
+}
+TEXT_CODE = [_HERE / "readme.py", _HERE / "readme-template.txt", _HERE / "package.py"]
 
 VECTOR_FORMATS = ("geojson", "gpkg", "shp")
 _EXT = {"geojson": "geojson.zip", "gpkg": "gpkg.zip", "shp": "shp.zip", "cog": "tif"}
@@ -86,13 +91,22 @@ def _rel(p: Path) -> str:
     return p.name
 
 
-def fingerprint(item: Item, exporter_version: str) -> str:
+def data_fingerprint(item: Item, exporter_version: str) -> str:
+    """The item's sources, the code that writes its data, and the exporter version."""
     h = hashlib.sha256()
     for rel, digest in sorted((_rel(p), stitch._sha256(p)) for p in item.sources):
         h.update(f"{rel}\0{digest}\n".encode())
-    for p in EXPORTER_CODE:
+    for p in DATA_CODE[item.layer]:
         h.update(f"code:{p.name}\0{stitch._sha256(p)}\n".encode())
     h.update(f"exporter:{exporter_version}".encode())
+    return h.hexdigest()
+
+
+def fingerprint(item: Item, exporter_version: str) -> str:
+    """The data fingerprint plus the README/LICENSE/packaging code."""
+    h = hashlib.sha256(data_fingerprint(item, exporter_version).encode())
+    for p in TEXT_CODE:
+        h.update(f"text:{p.name}\0{stitch._sha256(p)}\n".encode())
     return h.hexdigest()
 
 
@@ -121,9 +135,12 @@ def run(series: list[str] | None = None, log=lambda line: None) -> dict:
     """Write what is out of date under DOWNLOADS_DIR and return (and write) index.json.
 
     An item whose fingerprint equals the previous index entry, and whose file exists, is left alone
-    (not even its date changes). `series` limits the work; entries of other series are kept.
+    (not even its date changes). If only the README/LICENSE code changed (same data_fingerprint), just
+    the text files are rewritten; GDAL does not run. `series` limits the work; entries of other series are kept.
     """
-    from sfzmaps.downloads import rasters, readme as readme_mod, vectors
+    import tempfile
+
+    from sfzmaps.downloads import package, rasters, readme as readme_mod, sheets as sheets_mod, vectors
 
     root = DOWNLOADS_DIR
     root.mkdir(parents=True, exist_ok=True)
@@ -145,31 +162,44 @@ def run(series: list[str] | None = None, log=lambda line: None) -> dict:
     for item in items:
         if item.series not in wanted:
             continue
+        dfp = data_fingerprint(item, EXPORTER_VERSION)
         fp = fingerprint(item, EXPORTER_VERSION)
         out = root / item.series / item.filename
         old = prev_files.get(item.key)
         extra_ok = all((root / e).exists() for e in (old or {}).get("extra", []))
-        if old and old.get("fingerprint") == fp and out.exists() and extra_ok and old.get("path") == f"{item.series}/{item.filename}":
+        reusable = bool(old and old.get("data_fingerprint") == dfp and out.exists() and extra_ok
+                        and old.get("path") == f"{item.series}/{item.filename}")
+        if reusable and old.get("fingerprint") == fp:
             files[item.key] = old
             log(f"same   {item.key}")
             continue
         out.parent.mkdir(parents=True, exist_ok=True)
-        if item.layer == "citywide":
-            rasters.export_citywide(item, out, updated, commit)
-            stem = out.name.removesuffix(out.suffix)
-            extra = [f"{item.series}/{stem}.README.txt", f"{item.series}/{stem}.LICENSE.txt"]
+        if reusable and item.layer == "citywide":  # text only: the image stays as it is
+            extra = package.write_sidecars(out, item, updated, commit)
+            size, sha = old["bytes"], old["sha256"]
+            log(f"text   {item.key}")
+        elif reusable:  # text only: the same data members in a fresh zip
+            package.write_zip(out, package.data_members(out), item, updated, commit)
+            extra, size, sha = [], out.stat().st_size, _sha256_file(out)
+            log(f"text   {item.key}  ({size:,} bytes)")
         else:
-            vectors.export_vector(item, out, updated, commit)
-            extra = []
+            if item.layer == "citywide":
+                rasters.write_image(item, out)
+                extra = package.write_sidecars(out, item, updated, commit)
+            else:
+                with tempfile.TemporaryDirectory() as t:
+                    members = {p.name: p.read_bytes() for p in vectors.write_layers(item, Path(t))}
+                package.write_zip(out, members, item, updated, commit)
+                extra = []
+            size, sha = out.stat().st_size, _sha256_file(out)
+            log(f"wrote  {item.key}  ({size:,} bytes)")
         files[item.key] = {
             "series": item.series, "layer": item.layer, "fmt": item.fmt,
-            "path": f"{item.series}/{item.filename}", "fingerprint": fp,
-            "bytes": out.stat().st_size, "sha256": _sha256_file(out), "extra": extra,
-            "made": updated,
+            "path": f"{item.series}/{item.filename}", "data_fingerprint": dfp, "fingerprint": fp,
+            "bytes": size, "sha256": sha, "extra": extra, "made": updated,
         }
-        log(f"wrote  {item.key}  ({out.stat().st_size:,} bytes)")
     for s in sorted(wanted & everything):
-        entries = rasters.sheet_entries(s, prev.get("sheets", {}).get(s))
+        entries = sheets_mod.sheet_entries(s, prev.get("sheets", {}).get(s))
         if not entries:
             continue
         sheets[s] = entries

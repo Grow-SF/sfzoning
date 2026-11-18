@@ -1,19 +1,16 @@
 """Lot and district downloads: GeoJSON, GeoPackage and Shapefile zips built with ogr2ogr.
 
-The source is the pipeline's FlatGeobuf in EPSG:2227. No geometry is simplified. Zips are
-deterministic (fixed member dates, sorted entries) so unchanged data gives identical bytes.
+The source is the pipeline's FlatGeobuf in EPSG:2227. No geometry is simplified.
+Packing them into a zip with a README is package.py.
 """
 from __future__ import annotations
 
-import tempfile
-import zipfile
 from pathlib import Path
 
 from sfzmaps.downloads import Item, run_tool
-from sfzmaps.downloads.readme import DISTRICT_FIELDS, LICENSE_TEXT, LOT_FIELDS, readme
+from sfzmaps.downloads.readme import DISTRICT_FIELDS, LOT_FIELDS
 
 _FIELDS = {"lots": LOT_FIELDS, "districts": DISTRICT_FIELDS}
-_FIXED_DATE = (1980, 1, 1, 0, 0, 0)
 
 
 def _ogr(*args: str) -> None:
@@ -25,7 +22,8 @@ def _select(layer: str, src: Path, rename: bool) -> str:
     return f"SELECT {cols} FROM {src.stem}"
 
 
-def _write_data(item: Item, tmp: Path) -> list[Path]:
+def write_layers(item: Item, tmp: Path) -> list[Path]:
+    """Write the GIS data files for one lots/districts item into `tmp`; return them (no zip, no README)."""
     src = item.sources[0]
     layer = item.layer
     base = f"{item.series}-{layer}"
@@ -48,20 +46,3 @@ def _write_data(item: Item, tmp: Path) -> list[Path]:
              "-sql", _select(layer, src, True), "-nln", f"{base}", str(tmp), str(src))
         return sorted(p for p in tmp.glob(f"{base}.*"))
     raise ValueError(f"not a vector format: {item.fmt}")
-
-
-def export_vector(item: Item, out: Path, updated: str, commit: str) -> None:
-    """Write the zip for one lots/districts item at `out`."""
-    with tempfile.TemporaryDirectory() as t:
-        tmp = Path(t)
-        members = {p.name: p.read_bytes() for p in _write_data(item, tmp)}
-    members["README.txt"] = readme(item.series, item.layer, updated, commit, item.fmt).encode()
-    members["LICENSE.txt"] = LICENSE_TEXT.encode()
-    tmp_out = out.with_name(out.name + ".part")
-    with zipfile.ZipFile(tmp_out, "w", zipfile.ZIP_DEFLATED) as z:
-        for name in sorted(members):
-            info = zipfile.ZipInfo(name, _FIXED_DATE)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            info.external_attr = 0o644 << 16
-            z.writestr(info, members[name])
-    tmp_out.replace(out)
