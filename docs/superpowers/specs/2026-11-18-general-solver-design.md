@@ -50,6 +50,16 @@ The special-use maps are out of scope: none of their sheets were ever read.
    - Each lot's district: the legend swatch whose hatching (orientation, spacing, density) the lot's interior best
      matches, measured per scan from that scan's printed legend.
    - Walls: a change of hatching across a border.
+   - Hatch orientation is measured both against each block's major axis and against fixed map north. The owner noticed
+     that hatch lines on rectangular districts tend to run along the block's major axis, but alignment is a
+     PROBABILISTIC signal, not a rule (owner: "use alignment with an axis as a probabilistic signal not as a hard
+     rule"). The model learns how strongly hatching follows the block axis, given the block's elongation and the
+     district: a learned mixture of "follows the block axis" and "fixed map orientation". First fit and the owner
+     agree for 1921: 1R's hatching has a fixed map orientation, and the other districts' tends to follow the block axis
+     (owner: "I think that's right on r1, but not the others"). 2R is plain white, with no hatching; it is told apart by
+     the absence of periodic ink, and orientation evidence is weighted by how strongly periodic a lot's ink is.
+   - 1921 evidence so far: of the owner's first 68 checks of the old pattern reader's least confident reads, 62 were
+     wrong. The most common miss was 1R read where the lot is LI (20 times).
 4. **The owner's answers.** The owner will give hundreds of answers per map, on 1960 and on 1921. There are two kinds:
    - Training: small patches of neighbouring lots, answered whole ("every lot in this patch is R-1-D").
    - Scoring: random lots, held out by area and never trained on.
@@ -65,6 +75,54 @@ The special-use maps are out of scope: none of their sheets were ever read.
 6. **Publishing.** When the general solver beats today's map on a class's answered map, it replaces today's maps for
    every year of that class. Owner: "when the general solver starts winning, it should replace as much as it can."
    Class A already publishes from the solver (2000, 1996-2000, 1990-1996, 1980-1990).
+
+## Wild land and water on the early maps: 2R, then a display rule
+
+The 1921 ordinance (No. 5464, Section 2) divides the whole City and County into six classes of district, as shown on
+the zone maps, with no unzoned class. White on the map is the legend's 2R, even for wild land or lake shore such as
+Laguna Merced (the owner's example: 1921 block 7278, contours and no street grid). The solver and the answers follow
+the map: white is 2R. Owner: "we should detect it as 2R even though it's not 2R. I'm not sure we have another signal."
+
+Known bodies of water are a display override, in the same layer as parks and rights-of-way. A lot mostly inside an
+authoritative water polygon (Lake Merced, Pine Lake, Mountain Lake…, from DataSF or USGS, never traced from the scan)
+shows as water. Lots that later pushed out toward a lake stay 2R as the map has them. The few answers saved as
+"unzoned" before the button was removed mean "2R on the map; water or wild land for the display rule".
+
+## Lots that an old district line cuts
+
+Some modern lots straddle an old district edge. The owner's example: 1921 lot 2365001, one DataSF parcel of two long
+strips down both sides of a block, whose south end lies in the commercial band while the rest is 2R. One code per lot
+can't be right there. The solve should report, per lot, when a district edge crosses it (from the walls inside the
+lot), and publishing splits such lots as PR #56 ("Corrections: draw an area; publishing splits a lot an old district
+line cuts", open) does. Check pages answer such lots by the district covering most of them.
+
+## Must carry: labels with leaders
+
+Some codes are printed in a street or beside a small lot, with a leader line or a drawn ARROW into the lot they name.
+The owner flagged a clear 1960 example: a C-2 in the street with an arrowhead pointing across the heavy line into its
+lot (1960 low-confidence labels, case 124, sheet 6, block 2030). Handling for these already exists; build on it, don't
+re-detect leaders from scratch:
+- the hand-checked leader moves (`fix_x`/`fix_y` in 2000's hand labels, now `inputs/hand-labels-2000/`);
+- the arrow step (R&D `k8/relink3.py`): a fitted choice, per empty lot, among every print within reach and "none".
+
+The general solver carries the arrow step as a named step for every class with printed labels.
+
+## Rights-of-way: a display rule, not learned
+
+Modern lots that are rights-of-way (old railroad strips, streets, and the like) take whatever zoning the old map's
+pattern or district gives them. The solver and the training answers treat them like any other lot. A separate exclusion
+rule at final display recodes modern rights-of-way. Owner: "we can have exclusion rules on the final map - we shouldn't
+learn this behavior here. We can map the old zoning to modern rights-of-way and recode them during final display."
+
+Lots in DataSF's pseudo-blocks (`VACS`, vacated streets such as alleys; `PARK`) are rights-of-way or parks by the
+dataset's own designation. They are left out of training and out of check lists. On 1921, 13 lots: 9 VACS, 4 PARK.
+
+Parks are handled by the same display rule. The old maps code park land such as Golden Gate Park and the Presidio as
+R-1-D (owner: "we'll need to do the same thing with parks, since the old maps coded them as R-1-D"). The solver and the
+answers keep the printed code. At display, long-standing parks show as park in every era. That is the owner's 11-02
+decision, still pending; the list is Golden Gate Park, the Presidio, Lincoln Park, McLaren, Stern Grove, Lake Merced and
+Harding, Sutro Heights, Buena Vista and Twin Peaks. Later parks keep their era's zoning on earlier maps. Today the build
+only makes a park lot public from the first map that shows it as public (`inputs/park_maps.csv`).
 
 ## Non-goals
 
