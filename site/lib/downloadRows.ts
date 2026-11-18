@@ -1,13 +1,10 @@
 import { DATA_CREDIT, DATA_LICENSE, RUMSEY_CREDIT, RUMSEY_LICENSE } from "./credits";
 import { ERAS, type Era } from "./eras";
-import { latestRedirects as redirectsFor, latestUrl as urlFor } from "./latestRedirects.mjs";
+import { EXTS, latestName } from "./downloadNames.mjs";
 
 /** The site path of a published file; the files route redirects it to Blob. The one definition of that path. */
 export const fileUrl = (series: string, name: string): string => `/data/files/${series}/${name}`;
 
-export const latestRedirects = (manifest: Parameters<typeof redirectsFor>[0]) => redirectsFor(manifest, fileUrl);
-export const latestUrl = (manifest: Parameters<typeof urlFor>[0], series: string, file: string) =>
-  urlFor(manifest, series, file, fileUrl);
 
 export type ManifestFile = {
   series: string; layer: string; fmt: string; name: string; bytes: number; sha256: string;
@@ -120,11 +117,44 @@ export const sheetLicense = (series: string) =>
 export const sheetCredit = (series: string) =>
   series === "1948" ? `${DATA_CREDIT}; imagery: ${RUMSEY_CREDIT}` : DATA_CREDIT;
 
+const SITE = "https://sfzoning.com";
+const abs = (series: string, name: string) => SITE + fileUrl(series, name);
+
+/** The latest name of one current sheet. */
+export const sheetLatestName = (series: string, i: ManifestSheet): string =>
+  latestName({ series, layer: `sheet-${i.number}`, ext: "tif" });
+
 /** The per-sheet index of a series as CSV. A single sheet carries no README, so each row names its license and credit. */
 export function sheetsCsv(m: Manifest, series: string): string {
-  const header = "sheet,name,url,bytes,md5,updated,license,credit";
+  const header = "sheet,number,name,url,latest_url,bytes,md5,sha256,updated,license,credit";
   const lines = (m.sheets[series]?.items ?? []).map((i) =>
-    [i.sheet, i.name, fileUrl(series, i.name), i.bytes, i.md5, i.updated, sheetLicense(series), sheetCredit(series)].map(csvField).join(","),
+    [
+      i.sheet, i.number, i.name, abs(series, i.name), abs(series, sheetLatestName(series, i)),
+      i.bytes, i.md5, i.sha256, i.updated, sheetLicense(series), sheetCredit(series),
+    ].map(csvField).join(","),
   );
   return [header, ...lines].join("\n");
+}
+
+/** The manifest for scripts: each current file and sheet with its absolute `url` (versioned) and `latest` links. */
+export function downloadsJson(m: Manifest) {
+  return {
+    ...m,
+    files: Object.fromEntries(
+      Object.entries(m.files).map(([k, f]) => [
+        k,
+        { ...f, url: abs(f.series, f.name), latest: abs(f.series, latestName({ series: f.series, layer: f.layer, ext: EXTS[f.fmt as keyof typeof EXTS] })) },
+      ]),
+    ),
+    sheets: Object.fromEntries(
+      Object.entries(m.sheets).map(([series, s]) => [
+        series,
+        {
+          ...s,
+          latest: abs(series, latestName({ series, layer: "sheets", ext: "zip" })),
+          items: s.items.map((i) => ({ ...i, url: abs(series, i.name), latest: abs(series, sheetLatestName(series, i)) })),
+        },
+      ]),
+    ),
+  };
 }

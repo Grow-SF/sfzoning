@@ -1,9 +1,8 @@
-// Sheet downloads, served by the site's routes (app/data/sheets/[series]/zip and .../sheet/[sheet]):
-// an edition's sheets as a zip built while it streams, or one sheet under its readable name.
-// Nothing is stored twice: the sheets are read from the DVC objects already on Blob.
+// The sheet zip, served by the files route (sfzoning-<series>-sheets-latest.zip): an edition's
+// sheets as a zip built while it streams, each sheet read from its versioned file on Blob.
 import { makeZip, predictLength } from "client-zip";
 import type { Manifest, ManifestSheet } from "./downloadRows";
-import { blobPath } from "./downloadNames.mjs";
+import { blobPath, latestName } from "./downloadNames.mjs";
 
 /** Just what the sheet downloads need: the license and the series' sheets. */
 export type SheetSource = Pick<Manifest, "sheets" | "license" | "base">;
@@ -109,31 +108,9 @@ export function sheetsZipResponse(src: SheetSource, series: string, fetchFn: Fet
   return new Response(makeZip(zipEntries(src, series, fetchFn, { signal })), {
     headers: {
       "content-type": "application/zip",
-      "content-disposition": attachment(`${series}-sheets.zip`),
+      "content-disposition": attachment(latestName({ series, layer: "sheets", ext: "zip" })),
       "content-length": String(zipLength(src, series)),
-      "cache-control": "public, max-age=3600",
-    },
-  });
-}
-
-/** One sheet, passed through from Blob under its readable name (Blob's own name may be a hash). */
-export async function sheetResponse(
-  src: SheetSource,
-  series: string,
-  sheet: string,
-  fetchFn: FetchFn = fetch,
-  signal?: AbortSignal,
-): Promise<Response> {
-  const item = src.sheets[series]?.items.find((i) => i.sheet === sheet);
-  if (!item) return missing();
-  const res = await fetchFn(sheetUrl(src, series, item), { signal });
-  if (!res.ok || !res.body) return new Response(`Could not fetch sheet ${item.name}.`, { status: 502 });
-  return new Response(sized(res.body, item), {
-    headers: {
-      "content-type": "image/tiff",
-      "content-disposition": attachment(item.name),
-      "content-length": String(item.bytes),
-      "cache-control": "public, max-age=3600",
+      "cache-control": "no-store",
     },
   });
 }

@@ -1,13 +1,14 @@
 // DRAFT COPY — NOT REVIEWED BY THE OWNER. Link and license wording are first drafts.
 import { DATA_CREDIT, RUMSEY_CREDIT } from "@/lib/credits";
-import { formatBytes, type Manifest } from "@/lib/downloadRows";
+import { latestName } from "@/lib/downloadNames.mjs";
+import { fileUrl, formatBytes, sheetLatestName, type Manifest } from "@/lib/downloadRows";
 import styles from "./downloads.module.css";
 
 type Props = { series: string; sheets: Manifest["sheets"][string]; license?: string };
 
 /**
  * The sheets of one series: all of them as a zip, or one at a time. Both are ordinary downloads
- * served by the site (app/data/sheets/[series]/zip and .../sheet/[sheet]), so the browser shows
+ * served by the files route (app/data/files/[series]/[name]), so the browser shows
  * its usual progress and saves to the downloads folder.
  */
 export default function SheetDownload({ series, sheets, license }: Props) {
@@ -16,7 +17,7 @@ export default function SheetDownload({ series, sheets, license }: Props) {
   return (
     <span className={styles.item}>
       {license ? (
-        <a className={styles.button} href={`${base}/zip`} download={`${series}-sheets.zip`}>
+        <a className={styles.button} href={fileUrl(series, latestName({ series, layer: "sheets", ext: "zip" }))}>
           All {sheets.items.length} sheets ({formatBytes(total)}, zip)
         </a>
       ) : (
@@ -43,7 +44,7 @@ export default function SheetDownload({ series, sheets, license }: Props) {
         <ul className={styles.sheetList}>
           {sheets.items.map((i) => (
             <li key={i.sheet}>
-              <a href={`${base}/sheet/${encodeURIComponent(i.sheet)}`} download={i.name}>
+              <a href={fileUrl(series, sheetLatestName(series, i))}>
                 {i.name}
               </a>{" "}
               <span className={styles.size}>{formatBytes(i.bytes)}</span>
