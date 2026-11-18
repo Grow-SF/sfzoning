@@ -20,6 +20,8 @@ def main():
             "series": s["series"],
             "agree_lots": s["agree_share_lots"], "agree_area": s["agree_share_area"],
             "differing_lots": s["differing_lots"], "differing_areas": s["differing_areas"],
+            "own_labels_solve/published": (lambda o: o and f"{o.get('solve')}/{o.get('published')} of {o.get('labels')}")(
+                s.get("own_labels_right")),
             "overrides": f"{s['overrides'].get('agree', '-')}/{s['overrides'].get('on_solve_lots', 0)}",
             "label_fixes": f"{s['label_fixes'].get('agree', '-')}/{s['label_fixes'].get('rows', 0)}",
             "label_fixes_published": f"{s['label_fixes_published'].get('agree', '-')}/"

@@ -8,6 +8,7 @@ here=$(cd "$(dirname "$0")/../.." && pwd)
 root="$here/data/solver/experiments/all-years"
 series=$1
 shift
+case "$series" in @*) series=$(cat "${series#@}") ;; esac     # @FILE: the series listed in FILE
 for s in $series; do
   if [ ! -f "$root/$s/lots/lots.npz" ] && [ "$s" != "1996-2000-zoning" ]; then
     mkdir -p "$root/$s/lots"

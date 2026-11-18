@@ -98,6 +98,26 @@ def label_fix_agreement(series: str, solve: np.ndarray, grown: np.ndarray) -> di
             "disagree": [f"{a} -> solve {b}" for a, b in out if a != b][:20]}
 
 
+def own_labels(folder: Path, pub: np.ndarray, maps: dict) -> dict:
+    """The series' own printed labels as a check both maps take alike: each print not on street ground whose read
+    (Sol's, else Terra's) is a code of the published map, and the share of them whose lot under the text has that
+    code in each map.  The solve read these labels, so it is favoured; the published map was read from the same
+    sheets by another reader.  A large shortfall still shows a solve gone wrong."""
+    import pandas as pd
+    f = folder / "prints" / "prints.parquet"
+    if not f.is_file():
+        return {}
+    p = pd.read_parquet(f)
+    read = np.where(p["sol_code"].astype(str) != "", p["sol_code"].astype(str), p["terra_code"].astype(str))
+    vocab = set(pub) - {""}
+    lot = p["lab_lot"].to_numpy(np.int64)
+    keep = (lot >= 0) & ~p["street"].to_numpy(bool) & np.array([r in vocab for r in read])
+    out = {"labels": int(keep.sum())}
+    for name, codes in maps.items():
+        out[name] = round(float((codes[lot[keep]] == read[keep]).mean()), 4) if keep.any() else None
+    return out
+
+
 def differing_areas(C, solve, pub, area):
     """Connected areas (lots joined where they touch) whose solve code and published code are both given and differ,
     largest by area first: (lots, area sq ft, published majority, solve majority)."""
@@ -185,7 +205,8 @@ def main():
     grown = np.load(paths.LOTS_DIR / "lots.npz")["grown"]
     out["label_fixes"] = label_fix_agreement(series, solve, grown)
     out["label_fixes_published"] = label_fix_agreement(series, pub, grown)
-    if series in paths.TABLE_SCORED_SERIES:          # the 1996-2000 scan: the April 2000 table, as the twin's score
+    out["own_labels_right"] = own_labels(folder, pub, {"solve": solve, "published": pub})
+    if series in paths.TABLE_SCORED_SERIES:         # the 1996-2000 scan: the April 2000 table, as the twin's score
         from sfzmaps.solver.report import six_measures
         nothing = np.zeros(C.n, bool)
         for key, codes in (("table_solve", solve), ("table_published_raw_read", raw), ("table_published_site", pub)):
