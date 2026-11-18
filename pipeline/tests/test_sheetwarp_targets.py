@@ -63,6 +63,13 @@ def test_the_distance_transform_equals_scipys(shape, paper_share):
                           np.minimum(ndimage.distance_transform_edt(mask), 255))
 
 
+def test_the_distance_transform_equals_scipys_just_under_the_exact_limit():
+    mask = np.ones((360, 360), bool)
+    mask[0, 0] = False                   # the far corner is ~509 px away, just under EXACT_DISTANCE_BELOW_PX
+    assert 500 < ndimage.distance_transform_edt(mask).max() < sheet.EXACT_DISTANCE_BELOW_PX
+    assert np.array_equal(sheet.distance_transform(mask), ndimage.distance_transform_edt(mask))
+
+
 def test_the_distance_transform_of_a_mask_without_paper_or_ink_equals_scipys():
     for mask in (np.ones((40, 60), bool), np.zeros((40, 60), bool)):
         assert np.array_equal(sheet.distance_transform(mask), ndimage.distance_transform_edt(mask))

@@ -80,8 +80,10 @@ check every scan crop before applying anything.
 
 Keep the attribution "Based on sfzoning.com by Steven Bacio for GrowSF
 (https://growsf.org)", the David Rumsey credit wherever 1948 imagery shows,
-and the license notices. See `NOTICE`. Don't add dependencies under licenses
-incompatible with AGPL-3.0.
+and the license notices. See `NOTICE` and `LICENSING.md`. Shipped code
+(`pipeline/`, `site/`) must not combine GPL-family (copyleft) dependencies that
+would put the code under their terms; MIT, BSD, ISC and Apache-2.0 are fine,
+and LGPL only as a separate library.
 
 ## Checking your work
 
