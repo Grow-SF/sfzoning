@@ -108,8 +108,8 @@ are reused, so most work doesn't need it.
 ## Licenses
 
 By contributing, you agree that your contribution is distributed under the
-project's licenses: code under AGPL-3.0-only (`LICENSE`), content and data
-under CC BY-NC-SA 4.0 (`LICENSE-content`). See `NOTICE` for which is which.
+project's licenses: code under Apache-2.0 (`LICENSE`), content and data under
+CC BY-NC-SA 4.0 (`LICENSE-content`). See `LICENSING.md` for which is which.
 
 If your contribution includes material you didn't write, such as code from
 another project, data or images, say so in the pull request and give its
@@ -121,4 +121,4 @@ source and license.
 - Don't commit generated data (`pipeline/data/`). It's shared through the
   processed bundle instead.
 - Keep the credits: the attribution to Steven Bacio and GrowSF, and the
-  third-party credits in `NOTICE`, must stay.
+  third-party credits in `LICENSING.md`, must stay.

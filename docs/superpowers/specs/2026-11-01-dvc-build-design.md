@@ -129,7 +129,7 @@ inheritance (an anti-goal).
   `data/ref`, `data/cache` to the main checkout, point DVC at the main checkout's cache
   (`dvc cache dir --local`), and `dvc checkout`, so `work/` and `out/` match the worktree's
   `dvc.lock` exactly, as private copy-on-write files.
-- DVC is a dev dependency (Apache-2.0, AGPL-compatible) so `uv sync` installs it.
+- DVC is a dev dependency (Apache-2.0) so `uv sync` installs it.
 
 ### 6. Adoption
 
