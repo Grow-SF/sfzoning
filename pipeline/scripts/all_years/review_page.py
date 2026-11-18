@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import score_series as sc  # noqa: E402
 
 OUT = config.DATA_DIR / "solver" / "experiments" / "all-years" / "review"
+JPEG_QUALITY = 50        # the crops: about 60 MB for every series at 150 areas each
 KEYS = ("wrong_lots", "labels_right", "incidents", "lines_drawn", "drawn_are_table_lines", "holes")
 
 
@@ -44,7 +45,7 @@ def crop(ink, lot, lots_, differ, box, px):
     s = px / max(view.shape[:2])
     if s < 1:
         view = cv2.resize(view, None, fx=s, fy=s, interpolation=cv2.INTER_AREA)
-    ok, buf = cv2.imencode(".jpg", view, [cv2.IMWRITE_JPEG_QUALITY, 55])
+    ok, buf = cv2.imencode(".jpg", view, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
     return buf.tobytes()
 
 
@@ -119,7 +120,7 @@ def series_data(s, C, n_areas, px, to_ll, reference=None):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--areas", type=int, default=150)
-    ap.add_argument("--px", type=int, default=360)
+    ap.add_argument("--px", type=int, default=320)
     ap.add_argument("--series", nargs="*")
     ap.add_argument("--solve-root", type=Path, help="the folder holding each series' solver folder (default data/solver; the build's, read only)")
     ap.add_argument("--out", type=Path, default=OUT, help="where the page goes")
@@ -139,7 +140,7 @@ def main():
     for s in a.series or (paths.SERIES_2000, *paths.ALL_YEARS):
         d = series_data(s, C, a.areas, a.px, tr.transform, old.get(s))
         if d is not None:
-            d["reference"] = old.get(s)
+            d["reference"] = {k: v for k, v in (old.get(s) or {}).items() if k != "use"} or None   # no local paths
         if d is None:
             print(s, "no solve yet")
             continue
