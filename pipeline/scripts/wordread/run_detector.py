@@ -1043,11 +1043,12 @@ def kind_check(name: str = "a", quarter: str = "ne", seed: int = 0) -> dict:
 
 def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outputs, placer=wordboxes_placer,
                     sigma: float | None = None, aff: bool = False, aff_prior: float = 0.0,
-                    kind: str | None = None):
+                    kind: str | None = None, links: str | None = None):
     """One page's crude-map words in quarter `q` (CRUDE_NOTE; with `sigma`, the tag bandwidth, crude-tags'
     (TAGS_NOTE); with `aff`, crude-aff's (AFF_NOTE), the affinity logits plus `aff_prior` (the class prior's log odds,
-    `aff_counts`); with `kind` (a `kind_map` mode), crude-kind's (KIND_NOTE)), placed as `wordboxes` places its
-    boxes; the boxes whose map point is in the quarter kept.  The
+    `aff_counts`); with `kind` (a `kind_map` mode), crude-kind's (KIND_NOTE); with `links` (the fold's quarter),
+    learned-links' (links.py)), placed as `wordboxes` places its boxes; the boxes whose map point is in the quarter
+    kept.  The
     table (wordboxes.COLUMNS) and its counts."""
     import cv2
     import pandas as pd
@@ -1065,6 +1066,9 @@ def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outp
         lab = aff_labels(on, same[0] + aff_prior, same[1] + aff_prior)
     elif kind is not None:
         lab = kind_labels(on, kind_map(o.kind_p, ink, kind))
+    elif links is not None:
+        import links as links_mod
+        lab = links_mod.link_labels(on, o, links)
     else:
         _, lab = cv2.connectedComponents(on.astype(np.uint8), connectivity=8)
     if sigma is not None:
@@ -1116,10 +1120,10 @@ def crude_map_words(run, name: str, q: int, sheet_fn=load_sheet, outputs_fn=outp
 def _crude_job(args):
     import cv2
     cv2.setNumThreads(1)
-    run, name, q, sigma, aff, aff_prior, *kind = args
+    run, name, q, sigma, aff, aff_prior, kind, links = args
     t0 = time.perf_counter()
     t, counts = crude_map_words(run, name, q, _SHARED["sheet_fn"], _SHARED["outputs_fn"], _SHARED["placer"],
-                                sigma, aff, aff_prior, kind[0] if kind else None)
+                                sigma, aff, aff_prior, kind, links)
     counts["seconds"] = round(time.perf_counter() - t0, 1)
     log.info("crude %s %s: %s", Path(run).name, name, counts)
     return name, t, counts
@@ -1127,7 +1131,7 @@ def _crude_job(args):
 
 def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WORKERS, tags: bool = False,
           aff: bool = False, against: str | None = None, prior: str | None = None, read_max: int | None = None,
-          kind: str | None = None) -> dict:
+          kind: str | None = None, links: bool = False) -> dict:
     """The crude-map chain (CRUDE_NOTE; crude-tags' with `tags`, crude-aff's with `aff`) on the quarter's every sheet
     from `name`'s held-out detector: words, placed, read by the current fold readers, and against today's
     (`vs_today`); with `against` (a run folder's name) against that run's boxes too (`vs_run`).  crude-aff with
@@ -1135,14 +1139,14 @@ def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WO
     quarters (`aff_counts`: every taught pair, or those of two core px).  `read_max`: no read nor score when the
     boxes number more (the boxes and their counts kept).  Writes runs/crude-<map|tags|aff>[-prior-<prior>]-<quarter>-
     s<seed>/."""
-    if sum((tags, aff, kind is not None)) > 1:
-        raise ValueError("crude: one of tags, aff and kind")
+    if sum((tags, aff, kind is not None, links)) > 1:
+        raise ValueError("crude: one of tags, aff, kind and links")
     import pandas as pd
     from sfzmaps.solver import lots, page, wordboxes
     quarters = paths.QUARTERS if quarter == "all" else (quarter,)
     srcs = {paths.QUARTERS.index(qn): run_dir(name, qn, seed) for qn in quarters}
     what = ("tags" if tags else (f"aff-prior-{prior}" if prior else "aff") if aff
-            else f"kind-{kind}" if kind is not None else "map")
+            else f"kind-{kind}" if kind is not None else "links" if links else "map")
     usual = "aff" if aff else "a"                         # the arm each kind was first run from: no suffix
     out = RUNS / f"crude-{what}{'' if name == usual else '-from-' + name}-{quarter}-s{seed}"
     priors = {}
@@ -1160,14 +1164,16 @@ def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WO
     _SHARED["lots"], _SHARED["mapped"] = lots.load_lots(), page.load_sheets() > 0
     _SHARED.update(sheet_fn=load_sheet, outputs_fn=outputs, placer=wordboxes_placer)
     shift = {q: (v["log_odds_core"] if prior == "core" else v["log_odds"]) for q, v in priors.items()}
-    got = _pool_map(_crude_job, [(src, s, q, sigmas[q]["sigma"] if tags else None, aff, shift.get(q, 0.0), kind)
+    got = _pool_map(_crude_job, [(src, s, q, sigmas[q]["sigma"] if tags else None, aff, shift.get(q, 0.0), kind,
+                                  paths.QUARTERS[q] if links else None)
                                  for q, src in srcs.items() for s in paths.SHEETS], workers)
     tables = [t for _, t, _ in got if len(t)]
     boxes = pd.concat(tables, ignore_index=True).sort_values(["sheet", "i"], kind="stable").reset_index(drop=True)
     (out / "boxes").mkdir(parents=True, exist_ok=True)
     boxes[wordboxes.COLUMNS].to_parquet(out / "boxes" / "boxes.parquet", index=False)
     (out / "boxes" / "summary.json").write_text(json.dumps({
-        "note": TAGS_NOTE if tags else AFF_NOTE if aff else KIND_NOTE if kind is not None else CRUDE_NOTE,
+        "note": (TAGS_NOTE if tags else AFF_NOTE if aff else KIND_NOTE if kind is not None
+                 else "learned-links (links.py)" if links else CRUDE_NOTE),
         "kind_mode": kind,
         "detectors": {paths.QUARTERS[q]: r.name for q, r in srcs.items()},
         "tag_spread": {paths.QUARTERS[q]: v for q, v in sigmas.items()},
@@ -1375,12 +1381,13 @@ def label_causes_of(name: str, sheet: str):
 
 
 def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "crude-kind-map-all-s0",
-                    map_run: str = "crude-map-all-s0", page_name: str = "crude-kind") -> Path:
+                    map_run: str = "crude-map-all-s0", page_name: str = "crude-kind",
+                    links_run: str = "crude-links-all-s0") -> Path:
     """The review page of crude-kind's boxes on `sheet` (every quarter from its own a-*-s0 detector and fold reader),
     the outlines coloured by the kind the split gave each word; a segmented control flips the boxes (and what a tap
     tells, and the wrong labels with their causes) to crude-map's or today's at the same zoom.  One image under all
     three (the ink; the text ink layer red where the word-core chance is 0.5 or more); the folded panels are
-    crude-kind's against today's."""
+    crude-kind's against today's.  learned-links' boxes (`links_run`) are a fourth version when they have been read."""
     import html as H
     from sfzmaps.solver import grid, wordboxes
     from sfzmaps.solver.textread import store
@@ -1405,6 +1412,11 @@ def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "cru
     sets = {"kind": (run_boxes(kind_dir), review.reads_for_page(kind_dir / "read")),
             "map": (run_boxes(map_dir), review.reads_for_page(map_dir / "read")),
             "today": (today, review.reads_for_page(store.READ_DIR))}
+    links_dir = RUNS / links_run
+    versions = list(SETS)
+    if (links_dir / "vs_today.json").is_file():
+        sets["links"] = (run_boxes(links_dir), review.reads_for_page(links_dir / "read"))
+        versions.append(("links", "learned-links"))
     sets = {k: (b[b["sheet"] == sheet], r) for k, (b, r) in sets.items()}
     missed = sorted(set().union(*(review.missed_words(b, terra, review.MATCH_IOU) for b, _ in sets.values())))
     terra_reads = review.terra_box_reads(sheet, terra, np.array(missed, int), store.TRAIN_DIR)
@@ -1413,7 +1425,7 @@ def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "cru
     before = json.loads((root / "baseline" / "numbers.json").read_text())
     forms = review.load_forms()
     causes = {"kind": label_causes_of(kind_run, sheet), "map": label_causes_of(map_run, sheet),
-              "today": label_causes_of("today", sheet)}
+              "today": label_causes_of("today", sheet), "links": label_causes_of(links_run, sheet)}
     lines = [KIND_NOTE + ".",
              "Text ink: the word-core chance 0.5 or more, each quarter from its own held-out detector (arm a, seed 0: "
              + ", ".join(f"{paths.QUARTERS[k].upper()} {r.name}" for k, r in runs_.items()) + ").",
@@ -1423,7 +1435,7 @@ def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "cru
              "Wrong labels' causes: label_causes.py (experiments/wordread/causes/labels-<run>.parquet).",
              "The panels: crude-kind against today's boxes on this sheet (review/baseline)."]
     ds = {}
-    for key, title in SETS:
+    for key, title in versions:
         b, r = sets[key]
         ds[key] = review.page_data(sheet, b, r, terra, core, before, ink=ink,
                                    levels={qn: review.TEXT_CHANCE for qn in paths.QUARTERS}, on_map=on_map,
@@ -1446,18 +1458,28 @@ def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "cru
     ds["kind"]["pixels"] = review.palette_image(ink, review.text_ink_of(ink, core), [], [])
     full = {"kind": json.loads((kind_dir / "vs_today.json").read_text()),
             "map": json.loads((map_dir / "vs_today.json").read_text())}
+    if "links" in sets:
+        full["links"] = json.loads((links_dir / "vs_today.json").read_text())
     vs_map = json.loads((kind_dir / f"vs_{map_run}.json").read_text())
     rows = []
-    for key, title in SETS:
+    for key, title in versions:
         n = ds[key]["numbers"]
         bx, hd = n["boxes"]["0.5"], n.get("headline", {})
-        whole = (full["kind"]["headline"] if key == "kind" else full["map"]["headline"] if key == "map"
-                 else full["kind"]["today_headline"])
+        whole = full["kind"]["today_headline"] if key == "today" else full[key]["headline"]
         rows.append(f"<tr><th>{title}</th><td>{hd.get('right', '–')}/{hd.get('n', '–')}</td>"
                     f"<td>{whole['right']}/{whole['n']}</td><td>{bx['ours']:,}</td><td>{bx['matched']:,}</td>"
                     f"<td>{bx['missed']:,}</td><td>{bx['missed_reasons'].get('merged_with_word', 0):,}</td>"
                     f"<td>{bx['ours_unmatched_none']:,}</td></tr>")
     pk, pm = full["kind"]["paired_run_minus_today"], vs_map["paired_run_minus_other"]
+    links_note = ""
+    if "links" in sets:
+        lt = full["links"]["paired_run_minus_today"]
+        lk = json.loads((links_dir / f"vs_{kind_run}.json").read_text())["paired_run_minus_other"]
+        links_note = (f"<p>learned-links (links.py): a learned same-word decision between neighbouring core px, "
+                      f"each fold's model trained on the other three quarters (outside the answered blocks), an edge "
+                      f"kept at the even odds after the Bayes correction by the measured pair counts.  All 699 labels: "
+                      f'minus today {lt["diff"]:+.3f} [{lt["lo"]:+.3f}, {lt["hi"]:+.3f}]; minus crude-kind '
+                      f'{lk["diff"]:+.3f} [{lk["lo"]:+.3f}, {lk["hi"]:+.3f}].</p>')
     about = (
         f"<h3>The versions</h3><p>{H.escape(KIND_NOTE)}.</p>"
         "<p>crude-kind's outlines take the kind its split gave each word; crude-map's and today's the box's likeliest "
@@ -1467,11 +1489,11 @@ def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "cru
         "<th>read as no text</th></tr>" + "".join(rows) + "</table></div>"
         f'<p>All 699 labels, paired by whole blocks: crude-kind minus today {pk["diff"]:+.3f} '
         f'[{pk["lo"]:+.3f}, {pk["hi"]:+.3f}]; minus crude-map {pm["diff"]:+.3f} [{pm["lo"]:+.3f}, {pm["hi"]:+.3f}].</p>'
-        "<h3>crude-kind against today's boxes</h3>")
+        + links_note + "<h3>crude-kind against today's boxes</h3>")
     out = root / page_name
-    page = review.render(ds["kind"], out / "review.html", sets=[(k, t, ds[k]) for k, t in SETS], title=PAGE_TITLE,
+    page = review.render(ds["kind"], out / "review.html", sets=[(k, t, ds[k]) for k, t in versions], title=PAGE_TITLE,
                          about=about)
-    (out / "numbers.json").write_text(json.dumps({k: ds[k]["numbers"] for k, _ in SETS}, indent=1) + "\n")
+    (out / "numbers.json").write_text(json.dumps({k: ds[k]["numbers"] for k, _ in versions}, indent=1) + "\n")
     return page
 
 
@@ -1504,6 +1526,7 @@ def main() -> None:
     cr.add_argument("--prior", default=None, choices=("all", "core"),
                     help="crude-aff: add the class prior's log odds measured on the training quarters' pairs")
     cr.add_argument("--read-max", type=int, default=None, help="read and score only up to this many boxes")
+    cr.add_argument("--links", action="store_true", help="learned-links: the fold's learned same-word links")
     cr.add_argument("--kind", default=None, choices=KIND_MODES,
                     help="crude-kind: join core px only to neighbours of the same MAP kind (this kind map)")
     kp = sub.add_parser("kind-page")
@@ -1572,7 +1595,8 @@ def main() -> None:
         print(json.dumps(got, indent=1))
         return
     if a.cmd == "crude":
-        got = crude(a.name, a.quarter, a.seed, a.workers, a.tags, a.aff, a.against, a.prior, a.read_max, a.kind)
+        got = crude(a.name, a.quarter, a.seed, a.workers, a.tags, a.aff, a.against, a.prior, a.read_max, a.kind,
+                    a.links)
         if got.get("not_read"):
             print(json.dumps(got))
             return
