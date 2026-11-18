@@ -194,7 +194,16 @@ def test_a_solved_code_is_spelled_and_categorised_in_its_series_era(name, year, 
 
 
 @pytest.mark.parametrize("name, year", [("R-C-1", 1960), ("VALENCIA NCT", 1990), ("RM", 1980)])
-def test_a_code_the_era_has_no_category_for_stops_the_publish(name, year):
+def test_a_code_the_era_has_no_category_for_stops_the_2000_publish(name, year):
+    with pytest.raises(ValueError, match="no category"):
+        solved.published_code(name, year)
+
+
+@pytest.mark.parametrize("name, year, published", [("RM-1-S", 1990, "RM-1-S"), ("MB-CF", 1996, "MB-CF")])
+def test_another_series_publishes_a_code_its_era_has_no_category_for_as_unknown(name, year, published):
+    # as the old reader's publish does: the published 1996-2000 map itself carries MB-CF with category unknown
+    assert solved.published_code(name, year, strict=False) == published
+    assert category_for(published, year) == "unknown"
     with pytest.raises(ValueError, match="no category"):
         solved.published_code(name, year)
 

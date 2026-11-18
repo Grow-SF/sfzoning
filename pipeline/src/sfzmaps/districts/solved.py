@@ -15,7 +15,9 @@ takes:
   - in the one spelling (`solver.codes.canon`), with " NCD" put back on a named Neighborhood Commercial District (the
     2000 table writes 'UPR MARKET', the research table knows 'UPPER MARKET NCD'; a solve that writes 'NOE VALLEY NCD'
     keeps it), so every code has its category in the series' era (`categories.category_for` at the series' year, as
-    the old reader's codes get theirs) and unknown_codes.json stays empty.  A code with no category stops the publish.
+    the old reader's codes get theirs) and unknown_codes.json stays empty.  A code with no category stops the 2000
+    publish; another series publishes it with category unknown, listed in unknown_codes.json, as the old reader's
+    publish does.
 
 Solve lots the solve left blank take part in none of this.  A lot's confidence (`confidence_source`):
   - "score": the solve's measured share of scored lots right (report.json's every-lot wrong lots over lots.npz's
@@ -217,10 +219,12 @@ def provenance(series: str = SERIES) -> dict:
     return out
 
 
-def published_code(name: str, year: int) -> str | None:
+def published_code(name: str, year: int, *, strict: bool = True) -> str | None:
     """The published spelling of a solved code: the one spelling, a named NCD with ' NCD' after it (one of the 2000
-    table's NAMED_NCDS, or a code written with ' NCD').  None for no code; ValueError for a code the research table
-    can't place in the series' era (it would land in unknown_codes.json)."""
+    table's NAMED_NCDS, or a code written with ' NCD').  None for no code.  A code the research table can't place in
+    the series' era raises ValueError when `strict` (the 2000 map, whose unknown_codes.json must stay empty); otherwise
+    it is published as it is and lands in unknown_codes.json with category unknown, as the old reader's publish does
+    (the published 1996-2000 map itself carries MB-CF so)."""
     from sfzmaps.districts.categories import category_for
     from sfzmaps.solver.codes import tidy
 
@@ -229,7 +233,7 @@ def published_code(name: str, year: int) -> str | None:
         return None
     if c in NAMED_NCDS or tidy(name).split(" & ")[0].strip().endswith(" NCD"):
         c = f"{c} NCD"
-    if category_for(c, year) == "unknown":
+    if strict and category_for(c, year) == "unknown":
         raise ValueError(f"the solved code {c!r} has no published spelling: the research table has no category for it "
                          f"in {year}")
     return c
@@ -315,7 +319,7 @@ def solved_read(raw: pd.DataFrame, parcels, year: int, series: str = SERIES) -> 
     lots = geom.reindex(raw["blklot"].astype(str)).to_numpy()
     code, _, post = _majority(lots, table.geometry.to_numpy(), codes,
                               posterior(series) if source == "posterior" else None)
-    spelled = {c: published_code(c, year) for c in set(code) if c}
+    spelled = {c: published_code(c, year, strict=series == SERIES) for c in set(code) if c}
     out = raw.copy()
     out["code"] = pd.Series([spelled.get(c) for c in code], index=out.index, dtype=object)
     given = score(series) if source == "score" else post
