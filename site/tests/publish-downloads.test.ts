@@ -175,25 +175,21 @@ describe("plan: citywide sidecars", () => {
     expect(next.newVersions.map((v) => v.name)).toEqual([stem]);
   });
 
-  it("an entry written before extraSha256 existed is versioned anew under a later made date, even when every hash matches", () => {
-    const first = run(cityIndex("2026-11-03"));
-    const { extraSha256: _old, ...oldEntry } = first.files["1921/citywide.cog"];
-    void _old;
-    const next = run(cityIndex("2026-11-10"), { files: { "1921/citywide.cog": oldEntry }, sheets: {} }, { versions: first.newVersions });
-    const stem = cityName("2026-11-10", "tif");
-    expect(next.files["1921/citywide.cog"]).toMatchObject({ name: stem, updated: "2026-11-10" });
-    expect(next.uploads.map((u) => u.to)).toContain(blobPath("1921", stem));
-    expect(next.files["1921/citywide.cog"].extraSha256).toEqual({ "README.txt": "a".repeat(64), "LICENSE.txt": "b".repeat(64) });
-  });
-
-  it("a legacy entry (no extraSha256) on the same made date proceeds without the collision error and records extraSha256", () => {
-    const first = run(cityIndex("2026-11-03"));
-    const { extraSha256: _old, ...oldEntry } = first.files["1921/citywide.cog"];
-    void _old;
-    const next = run(cityIndex("2026-11-03"), { files: { "1921/citywide.cog": oldEntry }, sheets: {} }, { versions: first.newVersions });
+  it("an old 11-04-shape citywide entry (url, no name) is minted anew, with extraSha256 recorded", () => {
+    const old = { series: "1921", url: "u", sha256: SHA2, fingerprint: "e".repeat(64), updated: "2026-11-03" };
+    const next = run(cityIndex("2026-11-03"), { files: { "1921/citywide.cog": old }, sheets: {} });
     expect(next.files["1921/citywide.cog"]).toMatchObject({ name: cityName("2026-11-03", "tif") });
     expect(next.files["1921/citywide.cog"].extraSha256).toEqual({ "README.txt": "a".repeat(64), "LICENSE.txt": "b".repeat(64) });
-    expect(next.newVersions).toEqual([]);
+    expect(next.uploads.length).toBeGreaterThan(0);
+  });
+
+  it("a versioned citywide entry without extraSha256 throws, whatever the dates or hashes", () => {
+    const first = run(cityIndex("2026-11-03"));
+    const { extraSha256: _old, ...oldEntry } = first.files["1921/citywide.cog"];
+    void _old;
+    const stop = /1921\/citywide\.cog.*predates extraSha256.*restore site\/lib\/downloads\.json from git/;
+    expect(() => run(cityIndex("2026-11-03"), { files: { "1921/citywide.cog": oldEntry }, sheets: {} }, { versions: first.newVersions })).toThrow(stop);
+    expect(() => run(cityIndex("2026-11-10"), { files: { "1921/citywide.cog": oldEntry }, sheets: {} }, { versions: first.newVersions })).toThrow(stop);
   });
 
   it("a sidecar change on the same made date as the published image stops with a clear error instead of colliding on names", () => {

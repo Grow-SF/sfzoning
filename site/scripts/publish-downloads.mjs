@@ -108,6 +108,12 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
   for (const [key, e] of Object.entries(index.files ?? {})) {
     if (!e.made) throw new Error(`${key}: index.json has no "made" date; run \`uv run sfzmaps downloads\` in pipeline/ first`);
     const old = manifest.files?.[key];
+    // A versioned citywide entry always has extraSha256 (every build that wrote one also wrote the other);
+    // one without it was not made by this script, so neither keep nor mint can be trusted for it.
+    if (isVersioned(e.series, old) && e.extra?.length && !old.extraSha256) {
+      throw new Error(`${key}: manifest entry predates extraSha256 (made by an unreleased build of this script); ` +
+        "restore site/lib/downloads.json from git and rerun");
+    }
     const sidecarSha = Object.fromEntries((e.extra ?? []).map((rel) => [sidecarKind(rel), index.sidecars?.[rel]?.sha256]));
     if (isVersioned(e.series, old) && old.sha256 === e.sha256 && sameSidecars(old.extraSha256, sidecarSha)) {
       files[key] = old;
@@ -125,7 +131,7 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
     }));
     const sameNames = e.extra?.length && Object.keys(sidecarNames).length === Object.keys(old?.extra ?? {}).length &&
       Object.entries(sidecarNames).every(([kind, n]) => old?.extra?.[kind] === n);
-    if (isVersioned(e.series, old) && old.extraSha256 && old.name === name && sameNames) {
+    if (isVersioned(e.series, old) && old.name === name && sameNames) {
       throw new Error(`${key}: README/LICENSE changed but the image and its date are the same as the published version; ` +
         "names would collide. Publish on a later day.");
     }
