@@ -116,6 +116,16 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
       continue;
     }
     const name = versionedName({ series: e.series, layer: e.layer, date: e.made, sha256: e.sha256, ext: EXTS[e.fmt] });
+    // Only a sidecar can change while the image name stays the same (same made date, same image hash):
+    // the new names would equal the published ones, so stop rather than skip uploads or overwrite.
+    const extraNames = Object.fromEntries((e.extra ?? []).map((rel) => {
+      const kind = sidecarKind(rel);
+      return [kind, versionedName({ series: e.series, layer: e.layer, date: e.made, sha256: e.sha256, ext: kind })];
+    }));
+    if (isVersioned(e.series, old) && old.name === name && e.extra?.length && sameSidecars(old.extra, extraNames)) {
+      throw new Error(`${key}: README/LICENSE changed but the image and its date are the same as the published version; ` +
+        "names would collide. Publish on a later day.");
+    }
     const f = {
       series: e.series, layer: e.layer, fmt: e.fmt, name, bytes: e.bytes, sha256: e.sha256,
       fingerprint: e.fingerprint, updated: e.made,

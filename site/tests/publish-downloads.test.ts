@@ -175,13 +175,22 @@ describe("plan: citywide sidecars", () => {
     expect(next.newVersions.map((v) => v.name)).toEqual([stem]);
   });
 
-  it("an entry written before extraSha256 existed is versioned anew, even when every hash matches", () => {
+  it("an entry written before extraSha256 existed is versioned anew under a later made date, even when every hash matches", () => {
     const first = run(cityIndex("2026-11-03"));
     const { extraSha256: _old, ...oldEntry } = first.files["1921/citywide.cog"];
     void _old;
-    const next = run(cityIndex("2026-11-03"), { files: { "1921/citywide.cog": oldEntry }, sheets: {} }, { versions: first.newVersions });
-    expect(next.uploads.length).toBeGreaterThan(0);
+    const next = run(cityIndex("2026-11-10"), { files: { "1921/citywide.cog": oldEntry }, sheets: {} }, { versions: first.newVersions });
+    const stem = cityName("2026-11-10", "tif");
+    expect(next.files["1921/citywide.cog"]).toMatchObject({ name: stem, updated: "2026-11-10" });
+    expect(next.uploads.map((u) => u.to)).toContain(blobPath("1921", stem));
     expect(next.files["1921/citywide.cog"].extraSha256).toEqual({ "README.txt": "a".repeat(64), "LICENSE.txt": "b".repeat(64) });
+  });
+
+  it("a sidecar change on the same made date as the published image stops with a clear error instead of colliding on names", () => {
+    const first = run(cityIndex("2026-11-03"));
+    expect(() => run(cityIndex("2026-11-03", "c".repeat(64)), { files: first.files, sheets: {} }, { versions: first.newVersions })).toThrow(
+      /1921\/citywide\.cog.*names would collide.*later day/,
+    );
   });
 });
 
