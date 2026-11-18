@@ -70,13 +70,13 @@ The fit (tractable; every decision by the score):
   Each fit step: an E-step gives each word's votes' own update (the axis by the votes' mean error, the log length by
   their mean, the centre and log height alternately, the tag by its mean); each tag goes to its update at once (its
   exact CM step); the words' weights take a Newton step on the likelihood (exact gradient and Hessian); then each
-  word in turn takes a Newton step on the likelihood in its box's parameters (gradient and Hessian by finite
-  differences, the Hessian's eigenvalues taken as their size and no less than the votes' curvature, within a trust
-  region: this sees the spatial terms the votes' update does not, such as the core px ending where the word does
-  against long length votes) and then moves its box towards its votes' own update.  Each move goes to the first
-  point of its line, its end, half way, a quarter, ..., that raises the log likelihood of the whole model (every
-  other word held, the spatial terms included), none if none does; so no step lowers the likelihood itself (the
-  expected complete log likelihood is no guide to the boxes: a vote at a support's edge, given a tiny chance of
+  word in turn takes a Newton step on the likelihood in its box's parameters (the gradient exact, the Hessian by its
+  finite differences, the Hessian's eigenvalues taken as their size and no less than the votes' curvature, within a
+  trust region: this sees the spatial terms the votes' update does not, such as the core px ending where the word
+  does against long length votes) and then moves its box towards its votes' own update.  Each move goes to the
+  first point of its line, its end, half way, a quarter, ..., that raises the log likelihood of the whole model
+  (every other word held, the spatial terms included), none if none does; so no step lowers the likelihood itself
+  (the expected complete log likelihood is no guide to the boxes: a vote at a support's edge, given a tiny chance of
   being the word's, makes it -inf as soon as the box turns off it), and a fall beyond float noise (LL_NOISE) raises,
   as a bug.
 
@@ -109,11 +109,11 @@ frame of Terra's rectangles, as `wordboxes`' boxes and Terra's words are compare
 Fixed numbers here are numerical only: EM_STEPS and EM_TOL (when an EM stops), LL_NOISE (the float noise a
 likelihood may fall by), FIT_STEPS (the prior's Newton steps), SPREAD_ROUNDS and SPREAD_TOL (the spreads' fixed
 point), SHAPE_STEPS (the centre and height's alternations in a word's own update), LINE_TOL (the shortest share of a
-step tried), FD_STEP (the finite differences' step), TRUST (a Newton step's trust region: the steps repeat, so where
-they end does not depend on it), the weights' Newton step's numerical 0 (eigenvalues below sqrt(eps) of the
-largest), CHUNK_PX (votes per pass: memory, the results do not depend on it), EDGE_SDS (where a word's spatial term
-falls below double precision of its value inside), the variogram's scale bounds (1/100 px to the longest lag), the
-lattice sum's span (to underflow) and the Gaussian smoothing's extent (OpenCV's: 4 sd).
+step tried), FD_STEP (the gradient's finite differences' step), TRUST (a Newton step's trust region: the steps
+repeat, so where they end does not depend on it), the weights' Newton step's numerical 0 (eigenvalues below
+sqrt(eps) of the largest), CHUNK_PX (votes per pass: memory, the results do not depend on it), EDGE_SDS (where a
+word's spatial term falls below double precision of its value inside), the variogram's scale bounds (1/100 px to the
+longest lag), the lattice sum's span (to underflow) and the Gaussian smoothing's extent (OpenCV's: 4 sd).
 """
 import dataclasses
 import math
@@ -138,7 +138,7 @@ CHUNK_PX = 1 << 20    # votes per pass (memory only: the results do not depend o
 EDGE_SDS = float(-ndtri(2.0 ** -53))   # 8.21: beyond, a word's spatial term < double precision of its value inside
 SHAPE_STEPS = 3       # numerical only: the centre and log height's alternations in the votes' own update
 LINE_TOL = 1e-6       # numerical only: a step is halved down to this share of itself
-FD_STEP = float(np.finfo(np.float64).eps ** 0.25)   # numerical only: the finite differences' step (px, log, rad)
+FD_STEP = float(np.sqrt(np.finfo(np.float64).eps))   # numerical only: the gradient's differences' step
 TRUST = 1.0           # numerical only: a Newton step moves at most this many box lengths, log sizes and radians
 _LOG2PI = math.log(2 * math.pi)
 _LOG2 = math.log(2.0)
@@ -245,6 +245,14 @@ def _log_interval(x: np.ndarray, lo, hi, s: float) -> np.ndarray:
         if mid.any():
             out[mid] = np.log1p(-(ndtr(-u0[mid]) + ndtr(u1[mid])))
     return out
+
+
+def _log_interval_d(x: np.ndarray, half: np.ndarray, s: float):
+    """`_log_interval(x, -half, half, s)` and its derivatives in x and in half."""
+    lz = _log_interval(x, -half, half, s)
+    u0, u1 = (x + half) / s, (x - half) / s
+    p0, p1 = np.exp(-u0 ** 2 / 2 - _LOG2PI / 2 - lz), np.exp(-u1 ** 2 / 2 - _LOG2PI / 2 - lz)
+    return lz, (p0 - p1) / s, (p0 + p1) / s
 
 
 def _lse(a: np.ndarray) -> np.ndarray:
@@ -645,13 +653,53 @@ def _move(V: _Votes, v: dict, lq, lf, la, j: int, near: np.ndarray):
         num = np.logaddexp(lin + log_c + np.logaddexp(words_, stray), log_rest + none)
         return float((num - none).sum()), lqj, lfj
 
+    def gradient(prm, tag) -> np.ndarray:
+        """The log likelihood's gradient in word j's parameters (cx, cy, log length, log height, theta), exact: per
+        vote, d/d log q_j = R q_j (exp(lin) (sum + stray) - exp(none)) / L + r - s m (R the others' prod (1 - q), s its
+        share, r its chance of being the word's, m of being any word's) and d/d log f_j = r, through q_j's frame
+        and f_j's terms."""
+        g = np.zeros(5)
+        inside = V.inside(vn["p"], prm)
+        if not inside.any():
+            return g
+        sv = {key: a[inside] for key, a in vn.items()}
+        pa, pb, half_a, half_b = V._frame(sv["p"], prm)
+        lqa, dqa_x, dqa_half = _log_interval_d(pa, half_a, V.edge)
+        lqb, dqb_x, dqb_half = _log_interval_d(pb, half_b, V.edge)
+        lqj, lfj = lqa + lqb, V.log_vote(sv, prm, tag)
+        rest_i, lin_i, stray_i, none_i = rest[inside], lin[inside], stray[inside], none[inside]
+        log_rest = rest_i + _log1m_exp(lqj)
+        log_c = _log1m_exp(log_rest)
+        wj = lqj + aj
+        total = np.logaddexp(others[inside], wj)
+        words_ = np.logaddexp(others_joint[inside], wj + V.lkeep + lfj) - total
+        both = np.logaddexp(words_, stray_i)
+        num = np.logaddexp(lin_i + log_c + both, log_rest + none_i)
+        r = np.exp(lin_i + log_c + wj + V.lkeep + lfj - total - num)
+        dq = (np.exp(rest_i + lqj) * (np.exp(lin_i + both - num) - np.exp(none_i - num)) + r
+              - np.exp(wj - total) * np.exp(lin_i + log_c + words_ - num))
+        along, up = _axes(prm[4])
+        da, db = dq * dqa_x, dq * dqb_x
+        g[:2] = -(da.sum() * along + db.sum() * up)
+        g[2] = float((dq * dqa_half).sum()) * math.exp(prm[2]) / 2
+        g[3] = float((dq * dqb_half).sum()) * math.exp(prm[3]) / 2
+        g[4] = float((da * pb - db * pa).sum())
+        u = (prm[:2] - sv["p"]) * math.exp(-prm[3])
+        off = sv["o"] - u
+        g[:2] += 2 * V.ic * math.exp(-prm[3]) * (r[:, None] * off).sum(0)
+        g[2] += 2 * V.il * float((r * (sv["ll"] - prm[2])).sum())
+        g[3] += float((r * (2 * V.ih * (sv["lh"] - prm[3]) - 2 * V.ic * (off * u).sum(1))).sum())
+        g[4] += 2 * V.ia * float((r * _half(sv["th"] - prm[4])).sum())
+        return g
+
+    value.gradient = gradient
     return value
 
 
 def _newton(V: _Votes, v: dict, lq, lf, la, j: int, w: dict, r: np.ndarray):
     """Word j's Newton step on the log likelihood in its parameters (the spatial terms included, which the votes' own
-    update does not see): the gradient and the Hessian by finite differences (FD_STEP; central for the gradient and
-    the diagonal, forward for the cross terms), each of the Hessian's eigenvalues taken as its size and no less than
+    update does not see): the gradient exact (`_move`), the Hessian by its finite differences (FD_STEP, made
+    symmetric), each of the Hessian's eigenvalues taken as its size and no less than
     the votes' curvature along its eigenvector (Gauss-Newton, `r` their chances of being the word's), so the step
     climbs where the likelihood does not curve down.  None where there is no step (no gradient, or past float
     range)."""
@@ -659,17 +707,11 @@ def _newton(V: _Votes, v: dict, lq, lf, la, j: int, w: dict, r: np.ndarray):
     near = np.flatnonzero(V.inside(v["p"], prm, 1.0))     # every support within FD_STEP of prm's (< 1 px away)
     if not len(near):
         return None
-    value = _move(V, v, lq, lf, la, j, near)
-    f0 = value(prm, tag)[0]
-    h = FD_STEP
-    e = np.eye(5) * h
-    up = np.array([value(prm + e[i], tag)[0] for i in range(5)])
-    down = np.array([value(prm - e[i], tag)[0] for i in range(5)])
-    grad = (up - down) / (2 * h)
-    hess = np.diag((up - 2 * f0 + down) / h ** 2)
-    for i in range(5):
-        for k in range(i + 1, 5):
-            hess[i, k] = hess[k, i] = (value(prm + e[i] + e[k], tag)[0] - up[i] - up[k] + f0) / h ** 2
+    gradient = _move(V, v, lq, lf, la, j, near).gradient
+    grad = gradient(prm, tag)
+    e = np.eye(5) * FD_STEP
+    hess = np.array([(gradient(prm + e[i], tag) - grad) / FD_STEP for i in range(5)])
+    hess = (hess + hess.T) / 2
     if not (np.isfinite(grad).all() and np.isfinite(hess).all()):
         return None
     lam, vec = np.linalg.eigh(-hess)
