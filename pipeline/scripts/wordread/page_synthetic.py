@@ -35,7 +35,7 @@ from sfzmaps.solver.wordread import words
 log = logging.getLogger("page_synthetic")
 OUT = paths.SOLVER_DIR / "experiments" / "wordread" / "page_synthetic"
 SPREADS = words.Spreads(centre=0.1, length=0.05, height=0.05, angle=3.0, tag=0.3, cell=4.0, edge=0.3,
-                        core_share=0.15, outlier=0.01, centre_bias=(0.0, 0.0), length_bias=0.0, height_bias=0.0,
+                        core_share=0.15, centre_bias=(0.0, 0.0), length_bias=0.0, height_bias=0.0,
                         angle_bias=0.0,
                         background_centre=1.0, background_length=(math.log(20.0), 0.5),
                         background_height=(math.log(10.0), 0.5), background_tag=1.0,

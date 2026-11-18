@@ -21,8 +21,9 @@ height), its log length, log height and axis, and its tag.
     and a mean tag.  Where its px lie: in its box, each edge uncertain by `spreads.edge` px (measured), so a px at p
     is in word k's box with chance q_k(p): its box grown by a px's half width (a px is a unit square at its numbers,
     so one centred on the box's edge is in it), convolved with that Gaussian (1 inside, a half on that edge, falling
-    outside), the Gaussian taken to EDGE_SDS spreads (where it is below double precision of its peak) and 0 beyond:
-    the word's support.
+    outside), taken out to the page's reach and 0 beyond: the word's support.  The reach is where q times the most
+    any vote of the page can favour a word over the background (K: its core evidence and its vote's density at a
+    word's peak over the background's) falls below double precision, so what the cut leaves out is below it.
   - The core head's output is evidence of where boxes are: w = sigmoid(core_logit) is its chance that the px is in
     a word's box, at a base rate of `spreads.core_share` (measured), so the px's output is w / core_share as likely
     in a box as on average, and (1 - w) / (1 - core_share) out of every box.  A px is in some word's box with chance
@@ -32,29 +33,38 @@ height), its log length, log height and axis, and its tag.
     covering px the head calls background pays for each (a long length vote cannot stretch a box over them), far from
     every word a px is the background's, and a copy of a word gains nothing from the shares (the copies' weights
     split its own) and next to nothing from C (no higher where q is 1).
-  - A word px's vote is its word's with chance 1 - `spreads.outlier`, else an outlier with the background's
-    density (measured: the net's votes have heavy tails), so a box may hold a few votes it cannot explain.
-  - Each vote dimension is first corrected by its measured mean bias against Terra's words (`spreads.centre_bias`,
-    `length_bias`, `height_bias`, `angle_bias`).
-  - A word's vote: its offset (dx, dy) differs from (c - p) / H (H the word's height) by Gaussian errors of sd
-    `spreads.centre` heights each way, its log length and log height from the word's by sd `spreads.length` and
-    `spreads.height`, its axis from the word's (the difference taken modulo 180 degrees) by sd `spreads.angle`
-    degrees, its tag from the word's by sd `spreads.tag` each channel.
+  - A word's vote, each dimension calibrated against Terra's words (measured: pred = alpha + beta true + error): its
+    offset (dx, dy) in heights is alpha + beta (c - p) / H (H the word's height; alpha `spreads.centre_bias`, beta
+    `spreads.centre_slope`, each way), its log length and log height alpha + beta times the word's (`length_bias`,
+    `length_slope`; `height_bias`, `height_slope`), its axis the word's + `angle_bias` (modulo 180 degrees), its tag
+    the word's mean tag; each plus the word's own shared error u (one per word and dimension, Gaussian about 0 of sd
+    `spreads.centre_word`, `length_word`, `height_word`, `angle_word`: the votes of one word share part of their
+    error) and the vote's own error, a Student-t of scale `spreads.centre`, `length`, `height`, `angle`, `tag` and
+    degrees of freedom `spreads.centre_dof`, ... (heavy tails, measured; a Gaussian at infinite dof).  So the
+    likelihood reads each vote as the calibrated vote (pred - alpha) / beta at scale s / |beta|, and a dimension the
+    net does not know (beta near 0) carries next to no information, by its measurement, with no rule.  A word's u is
+    fitted with it, its prior counted once per word (cell times in the votes' units: see below).
   - The background's vote: its offset Gaussian about 0 of sd `spreads.background_centre` each way, its log length and
     log height Gaussian of mean and sd `spreads.background_length` and `spreads.background_height`, its axis any, its
-    tag Gaussian about `spreads.background_tag_mean` of sd `spreads.background_tag`.
+    tag Gaussian about `spreads.background_tag_mean` of sd `spreads.background_tag` (the votes as the net gives them).
   - Neighbouring px's votes are not independent (the net's outputs are smooth): n votes carry about n / `spreads.cell`
     independent votes' evidence, so the log likelihood is divided by `cell`.
-  - The score of a set of words: prior.slope x (the log likelihood / cell) + prior.log_prior for each word; the
-    slope and the log prior fitted on the decisions this module makes (`prior_decisions`, `fit_word_prior`).
+  - The score of a set of words: prior.slope x (the log likelihood / cell - sum over words of u^2 / 2 sd^2) +
+    prior.log_prior for each word; the slope and the log prior fitted on the decisions this module makes
+    (`prior_decisions`, `fit_word_prior`).  (u is fitted, its prior's log ratio to u = 0 counted, no Occam factor: a
+    word's best u gains at most about half a log of (1 + sd^2 x its votes' precision) a dimension, which the fitted
+    logit takes up.)
   The score is a sum over px of log L_p - log b_p (b_p the background's density of the px's vote), which is 0 off
   every word's support; so each move's change is exact on the union of the supports of the words it changes.
 All the spreads are measured on the training quarters' predictions against Terra's words (`measure_spreads`); Task 8
 runs it and the prior's fit.
 
 The fit (tractable; every decision by the score):
-  1. Proposals: the basins of the votes' centres.  Each px adds its core chance at the centre its vote points to (at
-     the page's own px); the sum is smoothed by a Gaussian of the centre spread (in px at the votes' median height);
+  1. Proposals: the basins of the votes' centres.  Each px adds its core chance at the centre its vote places (the
+     point placement: the inverse calibration a + b pred, the true value's mean given the vote, from the forward one
+     and the true values' spread over word px, `spreads.centre_truth`; at b near 0 a px places its word's centre about
+     itself) at the page's own px; the sum is smoothed by a Gaussian of that placement's spread (in px at the votes'
+     core-weighted median height);
      each px of the page climbs to its highest 8-neighbour until none is higher (steepest ascent), and the px whose
      votes land in one basin are one proposal, fitted as one word on its own votes (EM per basin, all basins at once).
      A basin is proposed as a word when its own votes alone could pay for one (its own-vote gain x slope / cell + log
@@ -67,9 +77,11 @@ The fit (tractable; every decision by the score):
      raises it, so the search ends.
   3. Every connected set of words whose supports overlap (sets that do not overlap do not interact: the likelihood
      factorises over them) is refitted jointly.
-  Each fit step: an E-step gives each word's votes' own update (the axis by the votes' mean error, the log length by
-  their mean, the centre and log height alternately, the tag by its mean); each tag goes to its update at once (its
-  exact CM step); the words' weights take a Newton step on the likelihood (exact gradient and Hessian); then each
+  Each fit step: an E-step gives each word's votes' own update (each dimension's Gauss-Newton step on the votes'
+  errors weighted by the t's weights, (dof + 1) / (dof + z^2): the axis, the log length, then the centre and log
+  height alternately; the tag their weighted mean); each tag goes to its update at once, and each word's shared
+  errors u to theirs given its box (both exact CM steps of the t as a scale mixture of Gaussians); the words' weights
+  take a Newton step on the likelihood (exact gradient and Hessian); then each
   word in turn takes a Newton step on the likelihood in its box's parameters (the gradient exact, the Hessian by its
   finite differences, the Hessian's eigenvalues taken as their size and no less than the votes' curvature, within a
   trust region: this sees the spatial terms the votes' update does not, such as the core px ending where the word
@@ -111,9 +123,13 @@ likelihood may fall by), FIT_STEPS (the prior's Newton steps), SPREAD_ROUNDS and
 point), SHAPE_STEPS (the centre and height's alternations in a word's own update), LINE_TOL (the shortest share of a
 step tried), FD_STEP (the gradient's finite differences' step), TRUST (a Newton step's trust region: the steps
 repeat, so where they end does not depend on it), the weights' Newton step's numerical 0 (eigenvalues below
-sqrt(eps) of the largest), CHUNK_PX (votes per pass: memory, the results do not depend on it), EDGE_SDS (where a
-word's spatial term falls below double precision of its value inside), the variogram's scale bounds (1/100 px to the
-longest lag), the lattice sum's span (to underflow) and the Gaussian smoothing's extent (OpenCV's: 4 sd).
+sqrt(eps) of the largest), CHUNK_PX (votes per pass: memory, the results do not depend on it), INDEX_CELL (the grid
+words and moves are found by: speed, the results do not depend on it), PRECISION (2^-53:
+the reach, where what a support leaves out falls below double precision), the variogram's scale bounds (1/100 px to
+the longest lag), DOF_BOUNDS (the t's degrees of freedom searched between them, a reach past any tail measured: a
+fit at a bound is reported, not taken), the edge's search bounds (1/1000 px to the longest box side), the lattice
+sum's span (to underflow), RECT_FLOOR (a degenerate rectangle's side, to keep its log finite) and the Gaussian
+smoothing's extent (OpenCV's: 4 sd).
 """
 import dataclasses
 import math
@@ -123,7 +139,7 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
 from scipy.signal import fftconvolve
-from scipy.special import log_ndtr, ndtr, ndtri
+from scipy.special import gammaln, log_ndtr, ndtr, ndtri_exp
 
 from sfzmaps.solver import wordboxes
 
@@ -132,39 +148,62 @@ EM_STEPS = 200        # numerical only: an EM stops after this many steps ...
 EM_TOL = 1e-7         # ... or once its log likelihood rises by less than this per vote
 LL_NOISE = 1e-9       # numerical only: a likelihood falling by more than this share of itself is a bug
 FIT_STEPS = 100       # numerical only: the prior's fit takes at most this many Newton steps
-SPREAD_ROUNDS = 50    # numerical only: the spreads' fixed point stops after this many rounds ...
-SPREAD_TOL = 1e-6     # ... or once no spread moves by this share of itself
+SPREAD_ROUNDS = 200   # numerical only: the spreads' fixed point raises if it has not settled after this many rounds,
+SPREAD_TOL = 1e-6     # ... settled once no spread moves by this share of itself
 CHUNK_PX = 1 << 20    # votes per pass (memory only: the results do not depend on it)
-EDGE_SDS = float(-ndtri(2.0 ** -53))   # 8.21: beyond, a word's spatial term < double precision of its value inside
-SHAPE_STEPS = 3       # numerical only: the centre and log height's alternations in the votes' own update
+PRECISION = 2.0 ** -53   # double precision: a support leaves out less than this of any vote's likelihood
+DOF_BOUNDS = (1e-2, 1e8)   # numerical only: the t's degrees of freedom are searched between these
+RECT_FLOOR = 1e-12    # numerical only: a degenerate rectangle's side, so its log stays finite
+INDEX_CELL = 256      # px: the cells words and moves are found by (speed only: the results do not depend on it)
+SHAPE_STEPS = 3      # numerical only: the centre and log height's alternations in the votes' own update
 LINE_TOL = 1e-6       # numerical only: a step is halved down to this share of itself
 FD_STEP = float(np.sqrt(np.finfo(np.float64).eps))   # numerical only: the gradient's differences' step
 TRUST = 1.0           # numerical only: a Newton step moves at most this many box lengths, log sizes and radians
 _LOG2PI = math.log(2 * math.pi)
 _LOG2 = math.log(2.0)
+_DIMS = ("centre", "length", "height", "angle", "tag")
+MEASURED: dict = {}   # the last `measure_spreads`' counts: words measured, words left out of the edge's measure
 
 
 @dataclasses.dataclass(frozen=True)
 class Spreads:
-    """The measured spreads of the model (see the module; `measure_spreads`)."""
-    centre: float               # heights: sd of a word vote's offset to its word's centre, each way
-    length: float               # sd of a word vote's log length about its word's
-    height: float               # sd of a word vote's log height about its word's
-    angle: float                # degrees: sd of a word vote's axis about its word's (modulo 180)
-    tag: float                  # sd of a word px's tag channel about its word's mean tag
+    """The measured spreads of the model (see the module; `measure_spreads`).  A vote's dimension is calibrated
+    against Terra's words, pred = alpha (the *_bias) + beta (the *_slope) x true + the word's shared error (sd the
+    *_word) + the vote's own error (a Student-t of scale the field itself and dof the *_dof); the defaults are a vote
+    that is its word's value (slope 1, no shared error) with Gaussian errors, and no knowledge of the true values'
+    spread (the point placements then the calibrated vote itself)."""
+    centre: float               # heights: the t scale of a word vote's offset (x and y) about its calibrated value
+    length: float               # the t scale of a word vote's log length about its calibrated value
+    height: float               # the t scale of a word vote's log height about its calibrated value
+    angle: float                # degrees: the t scale of a word vote's axis about its word's + angle_bias (mod 180)
+    tag: float                  # the t scale of a word px's tag channel about its word's mean tag
     cell: float                 # px: n votes carry n / cell independent votes' evidence
-    edge: float                 # px: sd of where a word's px end about its box's edges (the spatial prior)
+    edge: float                 # px: sd of where a word's core px end about its box's edges (the spatial prior)
     core_share: float           # the share of px in words: the core head's base rate (its evidence is w / core_share)
-    outlier: float              # the share of a word's px whose vote is no vote for it (the background's density)
-    centre_bias: tuple          # heights: the votes' mean offset error (x, y) against Terra's words, taken off
-    length_bias: float          # the votes' mean log length error against Terra's words, taken off
-    height_bias: float          # the votes' mean log height error against Terra's words, taken off
-    angle_bias: float           # degrees: the votes' mean axis error (modulo 180) against Terra's words, taken off
+    centre_bias: tuple          # heights: alpha of the offset (x, y)
+    length_bias: float          # alpha of the log length
+    height_bias: float          # alpha of the log height
+    angle_bias: float           # degrees: the votes' mean axis error (modulo 180) against Terra's words
     background_centre: float    # heights: sd of a background vote's offset about 0, each way
     background_length: tuple    # (mean, sd) of a background vote's log length
     background_height: tuple    # (mean, sd) of a background vote's log height
     background_tag: float       # sd of a background px's tag channel about its mean
     background_tag_mean: tuple  # a background px's mean tag, one per channel
+    centre_slope: tuple = (1.0, 1.0)    # beta of the offset (x, y)
+    length_slope: float = 1.0           # beta of the log length
+    height_slope: float = 1.0           # beta of the log height
+    centre_dof: float = math.inf        # the t's degrees of freedom of each dimension (inf: a Gaussian)
+    length_dof: float = math.inf
+    height_dof: float = math.inf
+    angle_dof: float = math.inf
+    tag_dof: float = math.inf
+    centre_word: float = 0.0            # heights: sd of a word's shared offset error (x and y; 0: none)
+    length_word: float = 0.0            # sd of a word's shared log length error
+    height_word: float = 0.0            # sd of a word's shared log height error
+    angle_word: float = 0.0             # degrees: sd of a word's shared axis error
+    centre_truth: tuple = ((0.0, math.inf), (0.0, math.inf))   # the true offsets' (x, y) mean and sd over word px
+    length_truth: tuple = (0.0, math.inf)                      # the true log lengths' mean and sd over word px
+    height_truth: tuple = (0.0, math.inf)                      # the true log heights' mean and sd over word px
 
     def check(self, channels: int | None = None) -> None:
         sds = {k: getattr(self, k) for k in ("centre", "length", "height", "angle", "tag", "cell", "edge",
@@ -173,12 +212,24 @@ class Spreads:
         bad = {k: v for k, v in sds.items() if not (v > 0 and math.isfinite(v))}
         if bad:
             raise ValueError(f"every spread is a positive number, not {bad}")
-        for name in ("core_share", "outlier"):
-            if not 0 < getattr(self, name) < 1:
-                raise ValueError(f"{name} is a share strictly between 0 and 1, not {getattr(self, name)}")
-        biases = (*self.centre_bias, self.length_bias, self.height_bias, self.angle_bias)
-        if len(self.centre_bias) != 2 or not all(math.isfinite(b) for b in biases):
-            raise ValueError(f"the biases are finite numbers (centre_bias two), not {biases}")
+        if not 0 < self.core_share < 1:
+            raise ValueError(f"core_share is a share strictly between 0 and 1, not {self.core_share}")
+        biases = (*self.centre_bias, self.length_bias, self.height_bias, self.angle_bias, *self.centre_slope,
+                  self.length_slope, self.height_slope)
+        if len(self.centre_bias) != 2 or len(self.centre_slope) != 2 or not all(math.isfinite(b) for b in biases):
+            raise ValueError(f"the calibrations are finite numbers (centre's two each), not {biases}")
+        dofs = {k: getattr(self, f"{k}_dof") for k in _DIMS}
+        if not all(d > 0 for d in dofs.values()):
+            raise ValueError(f"every dof is positive (inf: a Gaussian), not {dofs}")
+        shared = {k: getattr(self, f"{k}_word") for k in _DIMS[:4]}
+        if not all(s >= 0 and math.isfinite(s) for s in shared.values()):
+            raise ValueError(f"every shared error's sd is a finite number >= 0, not {shared}")
+        truths = (*self.centre_truth, self.length_truth, self.height_truth)
+        if len(self.centre_truth) != 2 or not all(math.isfinite(m) and s > 0 for m, s in truths):
+            raise ValueError(f"every truth is a finite mean and a positive sd (inf: unknown), not {truths}")
+        slopes = (*self.centre_slope, self.length_slope, self.height_slope)
+        if any(beta == 0 and math.isinf(sd) for beta, (_, sd) in zip(slopes, truths)):
+            raise ValueError("a slope of 0 places nothing from a vote: its truth's sd is needed (the placement's)")
         if channels is not None and len(self.background_tag_mean) != channels:
             raise ValueError(f"background_tag_mean has {len(self.background_tag_mean)} channels, the tags {channels}")
 
@@ -218,13 +269,39 @@ def _box(prm: np.ndarray, grow: float = 0.0) -> np.ndarray:
     return np.array([c - v * a + up * b, c + v * a + up * b, c + v * a - up * b, c - v * a - up * b])
 
 
-def _own(v: dict) -> np.ndarray:
-    """The parameters (n, 5) of the boxes the votes give."""
-    return np.c_[v["p"] + np.exp(v["lh"])[:, None] * v["o"], v["ll"], v["lh"], v["th"]]
-
-
 def _sub(v: dict, sel) -> dict:
     return {key: a[sel] for key, a in v.items()}
+
+
+def _t_log_norm(dof: float) -> float:
+    """log of a unit-scale Student-t's density at 0 (the Gaussian's at dof inf)."""
+    if math.isinf(dof):
+        return -0.5 * _LOG2PI
+    return float(gammaln((dof + 1) / 2) - gammaln(dof / 2) - 0.5 * math.log(dof * math.pi))
+
+
+def _t_rho(z2: np.ndarray, dof: float) -> np.ndarray:
+    """minus a unit-scale t's log density at z, less its value at 0: (dof + 1) / 2 log(1 + z^2 / dof) (z^2 / 2 at dof
+    inf), from z^2."""
+    return 0.5 * z2 if math.isinf(dof) else (dof + 1) / 2 * np.log1p(z2 / dof)
+
+
+def _t_weight(z2: np.ndarray, dof: float) -> np.ndarray:
+    """A t's weight at z: (dof + 1) / (dof + z^2), so d rho / dz = weight z (1 at dof inf), from z^2."""
+    return np.ones_like(z2) if math.isinf(dof) else (dof + 1) / (dof + z2)
+
+
+def _placement(alpha: float, beta: float, scale: float, truth: tuple) -> tuple[float, float, float]:
+    """A dimension's point placement from one vote: the inverse calibration true ~ a + b pred and its sd, from the
+    forward one (pred = alpha + beta true + an error of sd `scale`) and the true values' mean and sd (`truth`): the
+    true value's mean given the vote (Gaussian); with no known spread of the true values (sd inf), the calibrated vote
+    (pred - alpha) / beta itself."""
+    mean, sd = truth
+    if math.isinf(sd):
+        return -alpha / beta, 1 / beta, scale / abs(beta)
+    v = sd * sd
+    b = v * beta / (v * beta * beta + scale * scale)
+    return mean - b * (alpha + beta * mean), b, math.sqrt(v * scale * scale / (v * beta * beta + scale * scale))
 
 
 def _log_interval(x: np.ndarray, lo, hi, s: float) -> np.ndarray:
@@ -247,12 +324,23 @@ def _log_interval(x: np.ndarray, lo, hi, s: float) -> np.ndarray:
     return out
 
 
+def _log_out(x: np.ndarray, half, s: float) -> np.ndarray:
+    """log(1 - interval) of `_log_interval(x, -half, half, s)`: log(Phi(-(x + half) / s) + Phi((x - half) / s)),
+    exact in both tails (deep inside, where 1 - q is far below double precision of 1, too)."""
+    return np.logaddexp(log_ndtr(-(x + half) / s), log_ndtr((x - half) / s))
+
+
 def _log_interval_d(x: np.ndarray, half: np.ndarray, s: float):
-    """`_log_interval(x, -half, half, s)` and its derivatives in x and in half."""
+    """`_log_interval(x, -half, half, s)` (log q) and `_log_out` (log t, t = 1 - q), and their derivatives in x and in
+    half: log q, d log q / dx, d log q / d half, log t, d log t / dx, d log t / d half (each finite: a normal density
+    over its tail's mass)."""
     lz = _log_interval(x, -half, half, s)
+    lt = _log_out(x, half, s)
     u0, u1 = (x + half) / s, (x - half) / s
-    p0, p1 = np.exp(-u0 ** 2 / 2 - _LOG2PI / 2 - lz), np.exp(-u1 ** 2 / 2 - _LOG2PI / 2 - lz)
-    return lz, (p0 - p1) / s, (p0 + p1) / s
+    l0, l1 = -u0 ** 2 / 2 - _LOG2PI / 2, -u1 ** 2 / 2 - _LOG2PI / 2
+    p0, p1 = np.exp(l0 - lz), np.exp(l1 - lz)
+    t0, t1 = np.exp(l0 - lt), np.exp(l1 - lt)
+    return lz, (p0 - p1) / s, (p0 + p1) / s, lt, (t1 - t0) / s, -(t0 + t1) / s
 
 
 def _lse(a: np.ndarray) -> np.ndarray:
@@ -278,42 +366,76 @@ class _Model:
     def __init__(self, spreads: Spreads, channels: int):
         spreads.check(channels)
         self.k = channels
-        sa = math.radians(spreads.angle)
-        self.ic, self.il, self.ih = (1 / (2 * spreads.centre ** 2), 1 / (2 * spreads.length ** 2),
-                                     1 / (2 * spreads.height ** 2))
-        self.ia, self.it = 1 / (2 * sa ** 2), 1 / (2 * spreads.tag ** 2)
-        self.norm = (_LOG2PI + 2 * math.log(spreads.centre) + 0.5 * (_LOG2PI + 2 * math.log(spreads.length))
-                     + 0.5 * (_LOG2PI + 2 * math.log(spreads.height)) + 0.5 * (_LOG2PI + 2 * math.log(sa))
-                     + channels / 2 * (_LOG2PI + 2 * math.log(spreads.tag)))
+        self.cell = spreads.cell
+        self.ac = np.asarray(spreads.centre_bias, np.float64)
+        self.bc = np.asarray(spreads.centre_slope, np.float64)
+        self.al, self.bl, self.ah, self.bh = (spreads.length_bias, spreads.length_slope, spreads.height_bias,
+                                              spreads.height_slope)
+        self.aa = math.radians(spreads.angle_bias)
+        self.sc, self.sl, self.sh = spreads.centre, spreads.length, spreads.height
+        self.sa, self.st = math.radians(spreads.angle), spreads.tag
+        self.nc, self.nl, self.nh, self.na, self.nt = (spreads.centre_dof, spreads.length_dof, spreads.height_dof,
+                                                       spreads.angle_dof, spreads.tag_dof)
+        # each word's shared errors' sds (cx, cy, log length, log height, axis): 0 holds that error at 0
+        self.tau = np.array([spreads.centre_word, spreads.centre_word, spreads.length_word, spreads.height_word,
+                             math.radians(spreads.angle_word)])
+        self.norm = (2 * (math.log(self.sc) - _t_log_norm(self.nc)) + math.log(self.sl) - _t_log_norm(self.nl)
+                     + math.log(self.sh) - _t_log_norm(self.nh) + math.log(self.sa) - _t_log_norm(self.na)
+                     + channels * (math.log(self.st) - _t_log_norm(self.nt)))
         self.edge = spreads.edge
-        self.reach = EDGE_SDS * spreads.edge
+        self.reach = None                     # the support's reach: a page's (`_Votes`)
         self.lpi, self.lnpi = math.log(spreads.core_share), math.log1p(-spreads.core_share)
-        self.leps, self.lkeep = math.log(spreads.outlier), math.log1p(-spreads.outlier)
-        self.bias_c = np.asarray(spreads.centre_bias, np.float64)
-        self.bias_l, self.bias_h = spreads.length_bias, spreads.height_bias
-        self.bias_a = math.radians(spreads.angle_bias)
         bl, bh = spreads.background_length, spreads.background_height
-        self.bc, self.bl_mean, self.bl, self.bh_mean, self.bh = (1 / (2 * spreads.background_centre ** 2), bl[0],
+        self.gc, self.gl_mean, self.gl, self.gh_mean, self.gh = (1 / (2 * spreads.background_centre ** 2), bl[0],
                                                                  1 / (2 * bl[1] ** 2), bh[0], 1 / (2 * bh[1] ** 2))
-        self.bt = 1 / (2 * spreads.background_tag ** 2)
-        self.bmean = np.asarray(spreads.background_tag_mean, np.float64)
-        self.bnorm = (_LOG2PI + 2 * math.log(spreads.background_centre) + 0.5 * (_LOG2PI + 2 * math.log(bl[1]))
+        self.gt = 1 / (2 * spreads.background_tag ** 2)
+        self.gmean = np.asarray(spreads.background_tag_mean, np.float64)
+        self.gnorm = (_LOG2PI + 2 * math.log(spreads.background_centre) + 0.5 * (_LOG2PI + 2 * math.log(bl[1]))
                       + 0.5 * (_LOG2PI + 2 * math.log(bh[1])) + math.log(math.pi)
                       + channels / 2 * (_LOG2PI + 2 * math.log(spreads.background_tag)))
+        # the point placements (`_placement`): (a, b, sd) of the offset x, y, the log length and the log height, a
+        # vote's error the t's scale and its word's shared error together
+        self.place = [_placement(self.ac[i], self.bc[i], math.hypot(self.sc, spreads.centre_word),
+                                 spreads.centre_truth[i]) for i in (0, 1)] + [
+            _placement(self.al, self.bl, math.hypot(self.sl, spreads.length_word), spreads.length_truth),
+            _placement(self.ah, self.bh, math.hypot(self.sh, spreads.height_word), spreads.height_truth)]
 
     def log_background(self, v: dict) -> np.ndarray:
         """The background's log density of each vote."""
-        return (-(v["o"] ** 2).sum(1) * self.bc - (v["ll"] - self.bl_mean) ** 2 * self.bl
-                - (v["lh"] - self.bh_mean) ** 2 * self.bh - ((v["t"] - self.bmean) ** 2).sum(1) * self.bt
-                - self.bnorm)
+        return (-(v["o"] ** 2).sum(1) * self.gc - (v["ll"] - self.gl_mean) ** 2 * self.gl
+                - (v["lh"] - self.gh_mean) ** 2 * self.gh - ((v["t"] - self.gmean) ** 2).sum(1) * self.gt
+                - self.gnorm)
 
-    def log_vote(self, v: dict, prm: np.ndarray, tag_mean: np.ndarray) -> np.ndarray:
-        """log density of each vote under a word (`prm` (5,) or (n, 5), `tag_mean` (k,) or (n, k))."""
-        prm = np.broadcast_to(prm, (len(v["ll"]), 5))
-        off = v["o"] - (prm[:, :2] - v["p"]) * np.exp(-prm[:, 3])[:, None]
-        return (-(off ** 2).sum(1) * self.ic - (v["ll"] - prm[:, 2]) ** 2 * self.il
-                - (v["lh"] - prm[:, 3]) ** 2 * self.ih - _half(v["th"] - prm[:, 4]) ** 2 * self.ia
-                - ((v["t"] - tag_mean) ** 2).sum(1) * self.it - self.norm)
+    def errors(self, v: dict, prm: np.ndarray, u: np.ndarray | None = None):
+        """Each vote's errors under a word (`prm` (5,) or (n, 5), its shared errors `u` the same, None: 0): the
+        offset's (n, 2) in heights, the log length's, the log height's, the axis's (radians, modulo a half turn); and
+        the word's (c - p) / H (n, 2)."""
+        n = len(v["ll"])
+        prm = np.broadcast_to(prm, (n, 5))
+        u = np.zeros((n, 5)) if u is None else np.broadcast_to(u, (n, 5))
+        x = (prm[:, :2] - v["p"]) * np.exp(-prm[:, 3])[:, None]
+        return (v["o"] - self.ac - self.bc * x - u[:, :2], v["ll"] - self.al - self.bl * prm[:, 2] - u[:, 2],
+                v["lh"] - self.ah - self.bh * prm[:, 3] - u[:, 3], _half(v["th"] - self.aa - prm[:, 4] - u[:, 4]), x)
+
+    def log_vote(self, v: dict, prm: np.ndarray, tag_mean: np.ndarray, u: np.ndarray | None = None) -> np.ndarray:
+        """log density of each vote under a word (`prm` (5,) or (n, 5), `tag_mean` (k,) or (n, k), its shared errors
+        `u` (5,) or (n, 5), None: 0)."""
+        ec, el, eh, ea, _ = self.errors(v, prm, u)
+        return -(_t_rho((ec / self.sc) ** 2, self.nc).sum(1) + _t_rho((el / self.sl) ** 2, self.nl)
+                 + _t_rho((eh / self.sh) ** 2, self.nh) + _t_rho((ea / self.sa) ** 2, self.na)
+                 + _t_rho(((v["t"] - tag_mean) / self.st) ** 2, self.nt).sum(1) + self.norm)
+
+    def weights(self, ec, el, eh, ea):
+        """The t's weights of the errors (`errors`): offset (n, 2), log length, log height, axis."""
+        return (_t_weight((ec / self.sc) ** 2, self.nc), _t_weight((el / self.sl) ** 2, self.nl),
+                _t_weight((eh / self.sh) ** 2, self.nh), _t_weight((ea / self.sa) ** 2, self.na))
+
+    def log_q(self, p: np.ndarray, prm: np.ndarray) -> np.ndarray:
+        """log q and log(1 - q) (see the module) of points `p`, (n, 2): the chance a px there is in the word's box and
+        not, each exact (1 - q = (1 - q_a) + q_a (1 - q_b), its logs from each axis's tails)."""
+        pa, pb, a, b = self._frame(p, prm)
+        lqa, lqb = _log_interval(pa, -a, a, self.edge), _log_interval(pb, -b, b, self.edge)
+        return np.stack([lqa + lqb, np.logaddexp(_log_out(pa, a, self.edge), lqa + _log_out(pb, b, self.edge))], -1)
 
     def _frame(self, p: np.ndarray, prm: np.ndarray):
         """Points in the word's frame, and the half sides of the box its px lie in: its box grown by a px's half
@@ -323,49 +445,114 @@ class _Model:
         return rel @ along, rel @ up, math.exp(prm[2]) / 2 + 0.5, math.exp(prm[3]) / 2 + 0.5
 
     def inside(self, p: np.ndarray, prm: np.ndarray, grow: float = 0.0) -> np.ndarray:
-        """Which points lie in the word's numerical support (its box grown by EDGE_SDS edge spreads), its edges moved
-        out by `grow` px."""
+        """Which points lie in the word's support (its box grown by the reach), its edges moved out by `grow` px."""
         pa, pb, a, b = self._frame(p, prm)
         return (np.abs(pa) <= a + self.reach + grow) & (np.abs(pb) <= b + self.reach + grow)
 
-    def log_q(self, p: np.ndarray, prm: np.ndarray) -> np.ndarray:
-        """log q (see the module) of points `p`: the chance a px there is in the word's box."""
-        pa, pb, a, b = self._frame(p, prm)
-        return _log_interval(pa, -a, a, self.edge) + _log_interval(pb, -b, b, self.edge)
-
-    def vote_curvature(self, v: dict, r: np.ndarray, prm: np.ndarray) -> np.ndarray:
-        """The curvature (Gauss-Newton: minus the second derivative) of the votes' log densities weighted by r in each
+    def vote_curvature(self, v: dict, r: np.ndarray, prm: np.ndarray, u: np.ndarray | None = None) -> np.ndarray:
+        """The curvature (Gauss-Newton, the t's weights at `prm`) of the votes' log densities weighted by r in each
         of a word's parameters (cx, cy, log length, log height, theta)."""
-        mass = float(r.sum())
-        u = (prm[:2] - v["p"]) * math.exp(-prm[3])
+        ec, el, eh, ea, x = self.errors(v, prm, u)
+        wc, wl, wh, wa = self.weights(ec, el, eh, ea)
         ih2 = math.exp(-2 * prm[3])
-        return np.array([2 * self.ic * mass * ih2, 2 * self.ic * mass * ih2, 2 * self.il * mass,
-                         2 * self.ic * float((r * (u ** 2).sum(1)).sum()) + 2 * self.ih * mass, 2 * self.ia * mass])
+        rc = r[:, None] * wc * self.bc ** 2
+        return np.array([float(rc[:, 0].sum()) * ih2 / self.sc ** 2, float(rc[:, 1].sum()) * ih2 / self.sc ** 2,
+                         float((r * wl).sum()) * self.bl ** 2 / self.sl ** 2,
+                         float((rc * x ** 2).sum()) / self.sc ** 2 + float((r * wh).sum()) * self.bh ** 2 / self.sh ** 2,
+                         float((r * wa).sum()) / self.sa ** 2])
 
-    def own_update(self, v: dict, r: np.ndarray, prm: np.ndarray):
-        """The votes' own update of a word's parameters and tag, weighted by r (no spatial term): the axis moved by
-        the votes' mean error (modulo a half turn), the log length their mean, the centre (the mean of the centres
-        the votes point to at the word's height) and the log height (a Gauss-Newton step on its two terms) in turn
-        (SHAPE_STEPS), the tag their mean.  None when r holds no mass.  Where the votes cannot place the height (its
-        curvature 0, as a vote's mass underflows, or the step past float range) the height keeps its value."""
-        mass = float(r.sum())
-        if not mass > 0:
+    def own_update(self, v: dict, r: np.ndarray, prm: np.ndarray, tag: np.ndarray, u: np.ndarray | None = None):
+        """The votes' own update of a word's parameters and tag, weighted by r (no spatial term; `_own_updates` of
+        one word).  None when r holds no mass."""
+        if not float(r.sum()) > 0:
             return None
-        new = np.array(prm, np.float64)
-        new[4] = prm[4] + float((r * _half(v["th"] - prm[4])).sum()) / mass
-        new[2] = float((r * v["ll"]).sum()) / mass
-        for _ in range(SHAPE_STEPS):
-            height = math.exp(new[3])
-            new[:2] = (r[:, None] * (v["p"] + height * v["o"])).sum(0) / mass
-            u = (new[:2] - v["p"]) / height                     # (c - p) / H: d/d log H is -u
-            res = v["o"] - u
-            grad = (2 * self.ic * float((r * (res * u).sum(1)).sum())
-                    - 2 * self.ih * float((r * (v["lh"] - new[3])).sum()))
-            curve = 2 * self.ic * float((r * (u ** 2).sum(1)).sum()) + 2 * self.ih * mass   # a sum of terms >= 0
-            step = grad / curve if curve > 0 else math.nan
-            if math.isfinite(step):          # else its votes cannot place its height (curve 0, or past float range)
-                new[3] = new[3] - step
-        return new, (r[:, None] * v["t"]).sum(0) / mass
+        u = np.zeros((1, 5)) if u is None else np.asarray(u, np.float64).reshape(1, 5)
+        new, tags = _own_updates(self, v, r, np.asarray(prm, np.float64)[None], np.asarray(tag, np.float64)[None],
+                                 u, np.zeros(len(r), np.int64), 1)
+        return new[0], tags[0]
+
+    def shared_update(self, v: dict, r: np.ndarray, prm: np.ndarray, u: np.ndarray) -> np.ndarray:
+        """A word's shared errors u given its box (`prm`), weighted by r: each dimension's (with a shared error)
+        weighted mean of its votes' errors with u's prior, sum r w e / s^2 / (sum r w / s^2 + cell / tau^2) (the t's
+        weights w at u: an exact CM step of the t as a scale mixture of Gaussians, the prior counted once per word,
+        cell times in the votes' units)."""
+        u = np.array(u, np.float64)
+        ec, el, eh, ea, _ = self.errors(v, prm, u)
+        wc, wl, wh, wa = self.weights(ec, el, eh, ea)
+        errs = (ec[:, 0] + u[0], ec[:, 1] + u[1], el + u[2], eh + u[3], ea + u[4])     # each error without its u
+        ws = (wc[:, 0], wc[:, 1], wl, wh, wa)
+        scales = (self.sc, self.sc, self.sl, self.sh, self.sa)
+        for d in range(5):
+            if self.tau[d] > 0:
+                prec = float((r * ws[d]).sum()) / scales[d] ** 2
+                mean = float((r * ws[d] * errs[d]).sum()) / scales[d] ** 2
+                u[d] = mean / (prec + self.cell / self.tau[d] ** 2)
+        return u
+
+    def shared_prior(self, words: list[dict]) -> float:
+        """The words' shared errors' log prior against none, in the votes' units (cell times the once-per-word
+        -u^2 / 2 tau^2)."""
+        total = 0.0
+        for w in words:
+            u = w.get("u")
+            if u is not None:
+                on = self.tau > 0
+                total -= float((np.asarray(u)[on] ** 2 / (2 * self.tau[on] ** 2)).sum())
+        return self.cell * total
+
+    def placements(self, v: dict) -> np.ndarray:
+        """The parameters (n, 5) of the boxes the votes place (each dimension's point placement)."""
+        (ax, bx, _), (ay, by, _), (al, bl, _), (ah, bh, _) = self.place
+        lh = ah + bh * v["lh"]
+        off = np.stack([ax + bx * v["o"][:, 0], ay + by * v["o"][:, 1]], -1)
+        return np.c_[v["p"] + np.exp(lh)[:, None] * off, al + bl * v["ll"], lh, v["th"] - self.aa]
+
+
+def _own_updates(m: _Model, v: dict, r: np.ndarray, prms: np.ndarray, tags: np.ndarray, us: np.ndarray,
+                 group: np.ndarray, count: int):
+    """The votes' own update of each group's word (no spatial term), its votes weighted by r: each dimension a
+    Gauss-Newton step on the votes' errors weighted by r and the t's weights at the current values (the axis, the log
+    length, then the centre and the log height in turn, SHAPE_STEPS; each step exact for the t's weights held); the
+    tag the votes' t-weighted mean.  A group with no mass, or a parameter its votes cannot place (no curvature, or a
+    step past float range), keeps its value."""
+    prms, tags = np.array(prms, np.float64), np.array(tags, np.float64)
+    on = np.bincount(group, r, count) > 0
+    U = us[group]
+
+    def step(num, den, i):
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            d = num / den
+        ok = on & (den > 0) & np.isfinite(d)
+        prms[ok, i] += d[ok]
+
+    def errs():
+        ec, el, eh, ea, x = m.errors(v, prms[group], U)
+        return (ec, el, eh, ea, x), m.weights(ec, el, eh, ea)
+
+    wt = r[:, None] * _t_weight(((v["t"] - tags[group]) / m.st) ** 2, m.nt)
+    for ch in range(m.k):
+        den = np.bincount(group, wt[:, ch], count)
+        num = np.bincount(group, wt[:, ch] * v["t"][:, ch], count)
+        ok = on & (den > 0)
+        tags[ok, ch] = num[ok] / den[ok]
+    (_, _, _, ea, _), (_, _, _, wa) = errs()
+    step(np.bincount(group, r * wa * ea, count), np.bincount(group, r * wa, count), 4)
+    (_, el, _, _, _), (_, wl, _, _) = errs()
+    step(np.bincount(group, r * wl * el, count) * m.bl, np.bincount(group, r * wl, count) * m.bl ** 2, 2)
+    for _ in range(SHAPE_STEPS):
+        (ec, _, _, _, _), (wc, _, _, _) = errs()
+        ih = np.exp(-prms[group, 3])
+        for a in (0, 1):
+            rw = r * wc[:, a] * m.bc[a]
+            step(np.bincount(group, rw * ec[:, a] * ih, count), np.bincount(group, rw * m.bc[a] * ih * ih, count), a)
+        (ec, _, eh, _, x), (wc, _, wh, _) = errs()
+        rc = r[:, None] * wc * m.bc
+        num = (np.bincount(group, -(rc * ec * x).sum(1), count) / m.sc ** 2
+               + np.bincount(group, r * wh * eh, count) * m.bh / m.sh ** 2)
+        den = (np.bincount(group, (rc * m.bc * x * x).sum(1), count) / m.sc ** 2
+               + np.bincount(group, r * wh, count) * m.bh ** 2 / m.sh ** 2)
+        step(num, den, 3)
+    return prms, tags
 
 
 class _Votes(_Model):
@@ -381,6 +568,15 @@ class _Votes(_Model):
         self.index = np.full((h, w), -1, np.int64)
         self.index[self.ys, self.xs] = np.arange(len(self.ys))
         self.x = core_logit[self.ys, self.xs].astype(np.float64)
+        # the reach: q at the reach times the most any vote can favour a word (its core evidence, a word's peak
+        # density of its vote over the background's) is double precision, so a support leaves out less than that
+        most = -math.inf
+        for lo in range(0, len(self), CHUNK_PX):
+            v = self.take(np.arange(lo, min(lo + CHUNK_PX, len(self))))
+            most = max(most, float((v["lin"] - v["lout"] - v["lbg"]).max()))
+        log_k = most - self.norm
+        self.reach = (self.edge * max(-float(ndtri_exp(min(math.log(PRECISION) - log_k, 0.0))), 0.0)
+                      if len(self) else 0.0)
 
     def __len__(self):
         return len(self.ys)
@@ -389,30 +585,34 @@ class _Votes(_Model):
         return 0.5 * (1 + np.tanh(self.x[idx] / 2))
 
     def take(self, idx) -> dict:
-        """The votes `idx`, each dimension less its measured bias: p (n, 2), the offset o (n, 2) in heights, log
-        length ll, log height lh, axis th (radians, modulo a half turn), tags t (n, k), the core chance w, the core
-        head's evidence in a word's box and out of every one (log w / core_share and log (1 - w) / (1 - core_share),
-        from the logit: never infinite), and the background's log density of each vote."""
+        """The votes `idx` as the net gives them: p (n, 2), the offset o (n, 2) in heights, log length ll, log height
+        lh, axis th (radians), tags t (n, k), the core chance w, the core head's evidence in a word's box and out of
+        every one (log w / core_share and log (1 - w) / (1 - core_share), from the logit: never infinite), and the
+        background's log density of each vote."""
         ys, xs = self.ys[idx], self.xs[idx]
         g = self.geo[:, ys, xs].astype(np.float64)
         x = self.x[idx]
         lw, lnw = -np.logaddexp(0, -x), -np.logaddexp(0, x)
-        v = {"p": np.stack([xs, ys], -1).astype(np.float64), "o": (g[:2] / g[3]).T - self.bias_c,
-             "ll": np.log(g[2]) - self.bias_l, "lh": np.log(g[3]) - self.bias_h, "th": np.deg2rad(g[4]) - self.bias_a,
+        v = {"p": np.stack([xs, ys], -1).astype(np.float64), "o": (g[:2] / g[3]).T,
+             "ll": np.log(g[2]), "lh": np.log(g[3]), "th": np.deg2rad(g[4]),
              "t": np.moveaxis(self.tag[:, ys, xs].astype(np.float64), 0, -1),
              "w": 0.5 * (1 + np.tanh(x / 2)), "lin": lw - self.lpi, "lout": lnw - self.lnpi}
         v["lbg"] = self.log_background(v)
         return v
 
-    def centres(self) -> np.ndarray:
-        """The centre each vote points to (n, 2), its biases taken off, CHUNK_PX votes at a time."""
-        out = np.empty((len(self), 2))
+    def centres(self) -> tuple[np.ndarray, np.ndarray]:
+        """The centre each vote places (n, 2) and the height it places (n,) (`placements`), CHUNK_PX votes at a
+        time."""
+        out, heights = np.empty((len(self), 2)), np.empty(len(self))
+        (ax, bx, _), (ay, by, _), _, (ah, bh, _) = self.place
         for lo in range(0, len(self), CHUNK_PX):
             ys, xs = self.ys[lo:lo + CHUNK_PX], self.xs[lo:lo + CHUNK_PX]
             g = self.geo[:4, ys, xs].astype(np.float64)
-            height = g[3] * math.exp(-self.bias_h)
-            out[lo:lo + CHUNK_PX] = np.stack([xs, ys], -1) + height[:, None] * ((g[:2] / g[3]).T - self.bias_c)
-        return out
+            height = np.exp(ah + bh * np.log(g[3]))
+            off = np.stack([ax + bx * g[0] / g[3], ay + by * g[1] / g[3]], -1)
+            out[lo:lo + CHUNK_PX] = np.stack([xs, ys], -1) + height[:, None] * off
+            heights[lo:lo + CHUNK_PX] = height
+        return out, heights
 
     def region(self, lo, hi) -> np.ndarray:
         """The votes of the page px in [lo, hi] (x, y; clipped to the page)."""
@@ -444,16 +644,18 @@ def _weights(words: list[dict]) -> np.ndarray:
 
 
 def _terms(V: _Votes, v: dict, words: list[dict]):
-    """For votes `v` and each word: log q (-inf off its support) and the vote's log density (-inf off it)."""
+    """For votes `v` and each word: log q and log(1 - q) ((n, K, 2); -inf and 0 off its support) and the vote's log
+    density (-inf off it)."""
     n, kk = len(v["w"]), len(words)
-    lq = np.full((n, kk), -np.inf)
+    lq = np.zeros((n, kk, 2))
+    lq[..., 0] = -np.inf
     lf = np.full((n, kk), -np.inf)
     for j, word in enumerate(words):
         inside = V.inside(v["p"], word["prm"])
         if inside.any():
             sv = _sub(v, inside)
             lq[inside, j] = V.log_q(sv["p"], word["prm"])
-            lf[inside, j] = V.log_vote(sv, word["prm"], word["tag"])
+            lf[inside, j] = V.log_vote(sv, word["prm"], word["tag"], word.get("u"))
     return lq, lf
 
 
@@ -465,16 +667,17 @@ def _log1m_exp(x: np.ndarray) -> np.ndarray:
 
 
 def _cover(lq: np.ndarray):
-    """Per vote, from the words' log q (n, K): log C (the chance its px is in some word's box, 1 - prod(1 - q)) and
-    log(1 - C)."""
-    s = _log1m_exp(lq).sum(1) if lq.shape[1] else np.zeros(lq.shape[0])
+    """Per vote, from the words' log q and log(1 - q) (n, K, 2): log C (the chance its px is in some word's box,
+    1 - prod(1 - q)) and log(1 - C)."""
+    s = lq[..., 1].sum(1) if lq.shape[1] else np.zeros(lq.shape[0])
     return _log1m_exp(s), s
 
 
 def _shares(lq: np.ndarray, la: np.ndarray) -> np.ndarray:
     """log of each word's share of each vote's px among the words whose boxes may hold it, a_k q_k / sum a q (`la`
-    the log weights a); -inf off its support, and for every word where none of them holds any weight."""
-    lw = lq + la[None, :]
+    the log weights a; `lq` (n, K, 2) as `_terms` gives it); -inf off its support, and for every word where none of
+    them holds any weight."""
+    lw = lq[..., 0] + la[None, :]
     with np.errstate(invalid="ignore"):
         return np.where(np.isfinite(lw), lw - _lse(lw)[:, None], -np.inf)
 
@@ -482,15 +685,14 @@ def _shares(lq: np.ndarray, la: np.ndarray) -> np.ndarray:
 def _mixture(v: dict, lq: np.ndarray, lf: np.ndarray, model: "_Model", la: np.ndarray):
     """Each vote's score term (log L less its value with no word: 0 where no word's support reaches) and its chance
     of being each word's.  See the module: in some word's box with chance C = 1 - prod(1 - q_k), word k's among them
-    by its weight's share a_k q_k / sum a q (`la` the log weights), the core evidence w / core_share, the vote word
-    k's with chance 1 - outlier or the background's density's with chance outlier; out of every box with chance
-    1 - C, the core evidence (1 - w) / (1 - core_share) and the background's vote."""
+    by its weight's share a_k q_k / sum a q (`la` the log weights), the core evidence w / core_share and the vote
+    word k's; out of every box with chance 1 - C, the core evidence (1 - w) / (1 - core_share) and the background's
+    vote."""
     log_c, log_rest = _cover(lq)
     share = _shares(lq, la)
-    joint = v["lin"][:, None] + log_c[:, None] + share + model.lkeep + lf
-    stray = v["lin"] + log_c + model.leps + v["lbg"]           # in a box, its vote an outlier
+    joint = v["lin"][:, None] + log_c[:, None] + share + lf
     none = v["lout"] + v["lbg"]
-    num = np.logaddexp(np.logaddexp(_lse(joint), stray), log_rest + none)
+    num = np.logaddexp(_lse(joint), log_rest + none)
     with np.errstate(invalid="ignore"):
         resp = np.nan_to_num(np.exp(joint - num[:, None]))
     return num - none, resp
@@ -536,8 +738,10 @@ def _span(V: _Votes, idx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
             np.array([V.xs[idx].max(), V.ys[idx].max()], np.float64))
 
 
-def _near(V: _Votes, words: list[dict], lo, hi) -> list[dict]:
-    """The words whose supports' bounds meet [lo, hi] (the others cannot touch a px there)."""
+def _near(V: _Votes, words, lo, hi) -> list[dict]:
+    """The words (a list, or a `_Words`) whose supports' bounds meet [lo, hi] (the others cannot touch a px there)."""
+    if isinstance(words, _Words):
+        return words.near(lo, hi)
     out = []
     for word in words:
         blo, bhi = V.bounds(word["prm"])
@@ -551,26 +755,36 @@ def _supports(V: _Votes, words: list[dict]) -> np.ndarray:
 
 
 def _score(V: _Votes, region: np.ndarray, words: list[dict], held: list[dict]) -> float:
-    """The log likelihood of the votes of `region` (less the background's), words `words` and the held words near."""
+    """The log likelihood of the votes of `region` (less the background's), words `words` and the held words near,
+    with the words' shared errors' prior (`_Model.shared_prior`; the held words' is the same either way)."""
     v = V.take(region)
     every = words + _near(V, held, *_span(V, region))
     lq, lf = _terms(V, v, every)
-    return float(_mixture(v, lq, lf, V, _weights(every))[0].sum())
+    return float(_mixture(v, lq, lf, V, _weights(every))[0].sum()) + V.shared_prior(words)
 
 
 def _reach_of(V: _Votes, prm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Bounds holding the support of a word with these parameters and of any word on a line from them to others of
-    no bigger box (its circumscribed circle, grown by the support's reach)."""
+    """Bounds holding the support of a word with these parameters, at any axis (its circumscribed circle, grown by
+    the support's reach)."""
     radius = 0.5 * math.hypot(math.exp(prm[2]) + 1, math.exp(prm[3]) + 1) + V.reach
     return prm[:2] - radius, prm[:2] + radius
 
 
+def _lines_reach(V: _Votes, *prms) -> tuple[np.ndarray, np.ndarray]:
+    """Bounds holding the support of a word at every point of the lines between `prms` (each point's centre between
+    theirs and its sizes no bigger than the larger end's: the bounds of every end's `_reach_of`)."""
+    spans = [_reach_of(V, prm) for prm in prms]
+    return np.min([a for a, _ in spans], 0), np.max([b for _, b in spans], 0)
+
+
 def _fit(V: _Votes, start: list[dict], held: list[dict], trace: list | None = None) -> list[dict]:
-    """Words `start` fitted (see the module) with the words `held` held.  `trace` collects each step's log likelihood
-    before and after its moves (tags, weights and boxes), on the step's region.  RuntimeError when a step lowers it
-    beyond float noise (a bug)."""
+    """Words `start` fitted (see the module) with the words `held` held.  `trace` collects each step's gain of the
+    words (the log likelihood with them less without them, the held words there either way, with their shared
+    errors' prior) before and after its moves (tags, shared errors, weights and boxes): the same on any region that
+    holds their supports, so one step's after is the next one's before.  RuntimeError when a step lowers it beyond
+    float noise (a bug)."""
     words = [{"prm": np.array(w["prm"], np.float64), "tag": np.array(w["tag"], np.float64),
-              "a": float(w.get("a", 0.0))} for w in start]
+              "a": float(w.get("a", 0.0)), "u": np.array(w.get("u", np.zeros(5)), np.float64)} for w in start]
     n = len(words)
     for _ in range(EM_STEPS):
         region = _supports(V, words)
@@ -579,25 +793,31 @@ def _fit(V: _Votes, start: list[dict], held: list[dict], trace: list | None = No
         lq, lf = _terms(V, v, every)
         la = _weights(every)
         _, resp = _mixture(v, lq, lf, V, la)
-        targets = [V.own_update(v, resp[:, j], w["prm"]) for j, w in enumerate(words)]
-        # the tags' exact CM step from this E-step (each its votes' mean: it raises the expected complete log
-        # likelihood, so the likelihood), before any other move; the box's moves then hold it
-        old = [w["tag"] for w in words]
-        for w, target in zip(words, targets):
+        # the tags' and the shared errors' exact CM steps from this E-step (they raise the expected complete log
+        # likelihood, so the likelihood), before any other move; the box's moves then hold them
+        old = [(w["tag"], w["u"]) for w in words]
+        for j, w in enumerate(words):
+            target = V.own_update(v, resp[:, j], w["prm"], w["tag"], w["u"])
             if target is not None:
                 w["tag"] = target[1]
+            w["u"] = V.shared_update(v, resp[:, j], w["prm"], w["u"])
+        targets = [V.own_update(v, resp[:, j], w["prm"], w["tag"], w["u"]) for j, w in enumerate(words)]
         lf[:, :n] = _terms(V, v, words)[1]
         steps = [_newton(V, v, lq, lf, la, j, w, resp[:, j]) for j, w in enumerate(words)]
-        # the step's region: every point of every word's lines (its Newton step's and to its votes' update)
-        ends = ([w["prm"] for w in words] + [t[0] for t in targets if t is not None]
-                + [w["prm"] + d for w, d in zip(words, steps) if d is not None])
-        region = np.union1d(region, np.concatenate([V.region(*_reach_of(V, e)) for e in ends]))
+        # the step's region: every point of every word's lines (to its Newton step's end, then to its votes' update)
+        spans = []
+        for w, target, d in zip(words, targets, steps):
+            ends = [w["prm"]] + ([w["prm"] + d] if d is not None else []) + ([target[0]] if target is not None else [])
+            spans.append(V.region(*_lines_reach(V, *ends)))
+        region = np.union1d(region, np.concatenate(spans))
         v = V.take(region)
         every = words + _near(V, held, *_span(V, region))
         lq, lf = _terms(V, v, every)
         la = _weights(every)
-        before = float(_mixture(v, lq, np.hstack([_terms(V, v, [{**w, "tag": t} for w, t in zip(words, old)])[1],
-                                                  lf[:, n:]]), V, la)[0].sum())
+        before_words = [{**w, "tag": t, "u": u} for w, (t, u) in zip(words, old)]
+        base = float(_mixture(v, lq[:, n:], lf[:, n:], V, la[n:])[0].sum())          # the held words alone
+        before = (float(_mixture(v, lq, np.hstack([_terms(V, v, before_words)[1], lf[:, n:]]), V, la)[0].sum())
+                  - base + V.shared_prior(before_words))
         la[:n] = _weight_step(v, lq, lf, la, n, V)
         for j, w in enumerate(words):
             w["a"] = float(la[j])
@@ -606,7 +826,7 @@ def _fit(V: _Votes, start: list[dict], held: list[dict], trace: list | None = No
                 _climb(V, v, lq, lf, la, j, w, w["prm"] + d, w["tag"])
             if target is not None:                               # then to the votes' own update
                 _climb(V, v, lq, lf, la, j, w, target[0], w["tag"])
-        after = float(_mixture(v, lq, lf, V, la)[0].sum())
+        after = float(_mixture(v, lq, lf, V, la)[0].sum()) - base + V.shared_prior(words)
         if trace is not None:
             trace.append((before, after))
         if after < before - LL_NOISE * max(1.0, abs(before)):
@@ -617,82 +837,99 @@ def _fit(V: _Votes, start: list[dict], held: list[dict], trace: list | None = No
 
 
 def _near_line(V: _Votes, v: dict, *prms) -> np.ndarray:
-    """The votes of `v` a word's support can touch at any point of the line between `prms` (every end's reach)."""
-    spans = [_reach_of(V, prm) for prm in prms]
-    lo, hi = np.min([a for a, _ in spans], 0), np.max([b for _, b in spans], 0)
+    """The votes of `v` a word's support can touch at any point of the line between `prms` (`_lines_reach`)."""
+    lo, hi = _lines_reach(V, *prms)
     return np.flatnonzero(((v["p"] >= lo) & (v["p"] <= hi)).all(1))
 
 
-def _move(V: _Votes, v: dict, lq, lf, la, j: int, near: np.ndarray):
-    """value(prm, tag): the log likelihood of the votes `near` (of `v`) with word j at (prm, tag), the other words
-    held (lq, lf their terms on `v`, la the log weights); and word j's terms there.  Off those votes word j's terms
-    are -inf at every (prm, tag) it is asked of (`_near_line`), so only theirs change.  The other words' parts of
-    `_mixture` (their prod (1 - q), sum a q and sum a q (1 - outlier) f) are summed once, so each value costs word j's
-    terms alone: the same sums as `_mixture`'s, in another order."""
+def _move(V: _Votes, v: dict, lq, lf, la, j: int, near: np.ndarray, u: np.ndarray | None = None):
+    """value(prm, tag): the log likelihood of the votes `near` (of `v`) with word j at (prm, tag) (its shared errors
+    `u` held), the other words held (lq, lf their terms on `v`, la the log weights); and word j's terms there.  Off
+    those votes word j's terms are -inf at every (prm, tag) it is asked of (`_near_line`), so only theirs change.  The
+    other words' parts of `_mixture` (their prod (1 - q), sum a q and sum a q f) are summed once, so each value costs
+    word j's terms alone: the same sums as `_mixture`'s, in another order."""
     vn = {key: v[key][near] for key in ("p", "o", "ll", "lh", "th", "t")}
     lin, none = v["lin"][near], v["lout"][near] + v["lbg"][near]
-    stray = V.leps + v["lbg"][near]
     oq, of, oa = np.delete(lq[near], j, 1), np.delete(lf[near], j, 1), np.delete(la, j)
-    rest = _log1m_exp(oq).sum(1) if oq.shape[1] else np.zeros(len(near))
-    lw = oq + oa[None, :]
+    rest = oq[..., 1].sum(1) if oq.shape[1] else np.zeros(len(near))
+    lw = oq[..., 0] + oa[None, :]
     others = _lse(lw)
     with np.errstate(invalid="ignore"):
-        others_joint = _lse(lw + V.lkeep + of)
+        others_joint = _lse(lw + of)
     aj = float(la[j])
 
     def value(prm, tag):
-        lqj, lfj = np.full(len(near), -np.inf), np.full(len(near), -np.inf)
+        lqj, lfj = np.zeros((len(near), 2)), np.full(len(near), -np.inf)
+        lqj[:, 0] = -np.inf
         inside = V.inside(vn["p"], prm)
         if inside.any():
             sv = {key: a[inside] for key, a in vn.items()}
             lqj[inside] = V.log_q(sv["p"], prm)
-            lfj[inside] = V.log_vote(sv, prm, tag)
-        log_rest = rest + _log1m_exp(lqj)
+            lfj[inside] = V.log_vote(sv, prm, tag, u)
+        log_rest = rest + lqj[:, 1]
         log_c = _log1m_exp(log_rest)
-        wj = lqj + aj
+        wj = lqj[:, 0] + aj
         total = np.logaddexp(others, wj)
         with np.errstate(invalid="ignore"):
-            words_ = np.where(np.isfinite(total), np.logaddexp(others_joint, wj + V.lkeep + lfj) - total, -np.inf)
-        num = np.logaddexp(lin + log_c + np.logaddexp(words_, stray), log_rest + none)
+            words_ = np.where(np.isfinite(total), np.logaddexp(others_joint, wj + lfj) - total, -np.inf)
+        num = np.logaddexp(lin + log_c + words_, log_rest + none)
         return float((num - none).sum()), lqj, lfj
 
     def gradient(prm, tag) -> np.ndarray:
-        """The log likelihood's gradient in word j's parameters (cx, cy, log length, log height, theta), exact: per
-        vote, d/d log q_j = R q_j (exp(lin) (sum + stray) - exp(none)) / L + r - s m (R the others' prod (1 - q), s its
-        share, r its chance of being the word's, m of being any word's) and d/d log f_j = r, through q_j's frame
-        and f_j's terms."""
+        """The log likelihood's gradient in word j's parameters (cx, cy, log length, log height, theta), exact.  Per
+        vote (L its likelihood, R_t = prod (1 - q) over every word, A the words' share-weighted density, s word j's
+        share, r its chance of being the vote's, m any word's): dL / L = (exp(none) - exp(lin) A) R_t / L d log(1 - q_j)
+        + (r - s m) d log q_j + r d log f_j.  Where q_j < 1/2 the first term is read through d log(1 - q_j) =
+        -q_j / (1 - q_j) d log q_j, else through each axis's tail: d log(1 - q) / d pa = q_b (1 - q_a) / (1 - q)
+        d log(1 - q_a) / d pa (and likewise); so every factor stays within float range (a px a box must hold whose
+        vote it cannot explain gives a large gradient, not an overflow).  Then through q_j's frame and f_j's terms
+        (each dimension's error times its t weight over its scale squared, times the error's derivative)."""
         g = np.zeros(5)
         inside = V.inside(vn["p"], prm)
         if not inside.any():
             return g
         sv = {key: a[inside] for key, a in vn.items()}
         pa, pb, half_a, half_b = V._frame(sv["p"], prm)
-        lqa, dqa_x, dqa_half = _log_interval_d(pa, half_a, V.edge)
-        lqb, dqb_x, dqb_half = _log_interval_d(pb, half_b, V.edge)
-        lqj, lfj = lqa + lqb, V.log_vote(sv, prm, tag)
-        rest_i, lin_i, stray_i, none_i = rest[inside], lin[inside], stray[inside], none[inside]
-        log_rest = rest_i + _log1m_exp(lqj)
+        lqa, dqa_x, dqa_half, lta, dta_x, dta_half = _log_interval_d(pa, half_a, V.edge)
+        lqb, dqb_x, dqb_half, ltb, dtb_x, dtb_half = _log_interval_d(pb, half_b, V.edge)
+        lqj = lqa + lqb
+        l1q = np.logaddexp(lta, lqa + ltb)
+        lfj = V.log_vote(sv, prm, tag, u)
+        rest_i, lin_i, none_i = rest[inside], lin[inside], none[inside]
+        log_rest = rest_i + l1q
         log_c = _log1m_exp(log_rest)
         wj = lqj + aj
         total = np.logaddexp(others[inside], wj)
-        words_ = np.logaddexp(others_joint[inside], wj + V.lkeep + lfj) - total
-        both = np.logaddexp(words_, stray_i)
-        num = np.logaddexp(lin_i + log_c + both, log_rest + none_i)
-        r = np.exp(lin_i + log_c + wj + V.lkeep + lfj - total - num)
-        dq = (np.exp(rest_i + lqj) * (np.exp(lin_i + both - num) - np.exp(none_i - num)) + r
-              - np.exp(wj - total) * np.exp(lin_i + log_c + words_ - num))
+        words_ = np.logaddexp(others_joint[inside], wj + lfj) - total
+        num = np.logaddexp(lin_i + log_c + words_, log_rest + none_i)
+        r = np.exp(lin_i + log_c + wj + lfj - total - num)
+        sm = np.exp(wj - total + lin_i + log_c + words_ - num)
+        low = lqj < -_LOG2                                    # q_j < 1/2: the first term through d log q_j
+        dq = r - sm                                           # on d log q_j
+        lo_, hi_ = np.flatnonzero(low), np.flatnonzero(~low)
+        dq[lo_] += (np.exp(lin_i[lo_] + words_[lo_] + rest_i[lo_] + lqj[lo_] - num[lo_])
+                    - np.exp(none_i[lo_] + rest_i[lo_] + lqj[lo_] - num[lo_]))
+        dt = np.zeros(len(lqj))                               # on d log(1 - q_j)
+        dt[hi_] = (np.exp(none_i[hi_] + log_rest[hi_] - num[hi_])
+                   - np.exp(lin_i[hi_] + words_[hi_] + log_rest[hi_] - num[hi_]))
+        # d log(1 - q) through each axis: its share of 1 - q times its tail's log derivative
+        sa_, sb_ = np.exp(lqb + lta - l1q), np.exp(lqa + ltb - l1q)
+        da = dq * dqa_x + dt * sa_ * dta_x                    # d / d pa
+        db = dq * dqb_x + dt * sb_ * dtb_x                    # d / d pb
+        dha = dq * dqa_half + dt * sa_ * dta_half             # d / d half_a
+        dhb = dq * dqb_half + dt * sb_ * dtb_half             # d / d half_b
         along, up = _axes(prm[4])
-        da, db = dq * dqa_x, dq * dqb_x
         g[:2] = -(da.sum() * along + db.sum() * up)
-        g[2] = float((dq * dqa_half).sum()) * math.exp(prm[2]) / 2
-        g[3] = float((dq * dqb_half).sum()) * math.exp(prm[3]) / 2
+        g[2] = float(dha.sum()) * math.exp(prm[2]) / 2
+        g[3] = float(dhb.sum()) * math.exp(prm[3]) / 2
         g[4] = float((da * pb - db * pa).sum())
-        u = (prm[:2] - sv["p"]) * math.exp(-prm[3])
-        off = sv["o"] - u
-        g[:2] += 2 * V.ic * math.exp(-prm[3]) * (r[:, None] * off).sum(0)
-        g[2] += 2 * V.il * float((r * (sv["ll"] - prm[2])).sum())
-        g[3] += float((r * (2 * V.ih * (sv["lh"] - prm[3]) - 2 * V.ic * (off * u).sum(1))).sum())
-        g[4] += 2 * V.ia * float((r * _half(sv["th"] - prm[4])).sum())
+        ec, el, eh, ea, x = V.errors(sv, prm, u)
+        wc, wl, wh, wa = V.weights(ec, el, eh, ea)
+        rc = r[:, None] * wc * V.bc
+        g[:2] += math.exp(-prm[3]) * (rc * ec).sum(0) / V.sc ** 2
+        g[2] += V.bl * float((r * wl * el).sum()) / V.sl ** 2
+        g[3] += -float((rc * ec * x).sum()) / V.sc ** 2 + V.bh * float((r * wh * eh).sum()) / V.sh ** 2
+        g[4] += float((r * wa * ea).sum()) / V.sa ** 2
         return g
 
     value.gradient = gradient
@@ -710,7 +947,7 @@ def _newton(V: _Votes, v: dict, lq, lf, la, j: int, w: dict, r: np.ndarray):
     near = np.flatnonzero(V.inside(v["p"], prm, 1.0))     # every support within FD_STEP of prm's (< 1 px away)
     if not len(near):
         return None
-    gradient = _move(V, v, lq, lf, la, j, near).gradient
+    gradient = _move(V, v, lq, lf, la, j, near, w.get("u")).gradient
     grad = gradient(prm, tag)
     e = np.eye(5) * FD_STEP
     hess = np.array([(gradient(prm + e[i], tag) - grad) / FD_STEP for i in range(5)])
@@ -718,7 +955,7 @@ def _newton(V: _Votes, v: dict, lq, lf, la, j: int, w: dict, r: np.ndarray):
     if not (np.isfinite(grad).all() and np.isfinite(hess).all()):
         return None
     lam, vec = np.linalg.eigh(-hess)
-    votes = V.vote_curvature(_sub(v, near), r[near], prm)
+    votes = V.vote_curvature(_sub(v, near), r[near], prm, w.get("u"))
     lam = np.maximum(np.abs(lam), (vec ** 2 * votes[:, None]).sum(0))
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         step = vec @ np.where(lam > 0, (vec.T @ grad) / np.where(lam > 0, lam, 1.0), 0.0)
@@ -735,7 +972,7 @@ def _climb(V: _Votes, v: dict, lq, lf, la, j: int, w: dict, prm_to: np.ndarray, 
     does.  Each point's box at least a px long and high (log sizes >= 0)."""
     prm, tag = w["prm"], w["tag"]
     near = _near_line(V, v, prm, prm_to)
-    value = _move(V, v, lq, lf, la, j, near)
+    value = _move(V, v, lq, lf, la, j, near, w.get("u"))
     f0 = value(prm, tag)[0]
     share = 1.0
     while share >= LINE_TOL:
@@ -815,10 +1052,22 @@ class _Proposals:
         return np.sort(self.order[self.first[b]:self.end[b]])
 
 
+def _weighted_median(x: np.ndarray, w: np.ndarray) -> float:
+    """The median of `x` weighted by `w` (the first value whose cumulative weight reaches half)."""
+    order = np.argsort(x, kind="stable")
+    cum = np.cumsum(w[order])
+    return float(x[order][min(int(np.searchsorted(cum, cum[-1] / 2)), len(x) - 1)])
+
+
 def _proposals(V: _Votes, spreads: Spreads) -> _Proposals:
-    """Every basin with its one-word fit on its own votes, all at once, a pass at a time over whole basins."""
-    sigma = spreads.centre * float(np.median(V.geo[3]))              # the centre spread at the median height
-    basin = _basins(V.centres(), V.chance(), V.shape, sigma)
+    """Every basin with its one-word fit on its own votes, all at once, a pass at a time over whole basins.  The
+    basins' smoothing: the centre placement's spread (heights, the root mean square of its two ways) at the placed
+    heights' median weighted by core chance (the word px's)."""
+    centres, heights = V.centres()
+    w = V.chance()
+    spread = math.sqrt((V.place[0][2] ** 2 + V.place[1][2] ** 2) / 2)
+    sigma = spread * _weighted_median(heights, w) if len(w) else 1.0
+    basin = _basins(centres, w, V.shape, sigma)
     order = np.lexsort((-V.x, basin))               # by basin, the highest core chance first
     bs = basin[order]
     first = np.flatnonzero(np.r_[True, bs[1:] != bs[:-1]])
@@ -839,30 +1088,14 @@ def _proposals(V: _Votes, spreads: Spreads) -> _Proposals:
 
 
 def _group_step(V: _Votes, v: dict, r: np.ndarray, prms, tags, group, count):
-    """The one-word-per-group M-step on the votes alone (a basin's own fit): each group's votes' own update
-    (`_Model.own_update`, vectorised), kept where it raises the group's expected vote log density (else no change)."""
+    """The one-word-per-group M-step on the votes alone (a basin's own fit, no shared errors): each group's votes' own
+    update (`_own_updates`), kept where it raises the group's expected vote log density (else no change)."""
     prms, tags = np.array(prms, np.float64), np.array(tags, np.float64)
-    mass = np.bincount(group, r, count)
-    on = mass > 0
-    safe = np.where(on, mass, 1.0)
-    new, new_tags = prms.copy(), tags.copy()
-    for ch in range(V.k):
-        new_tags[on, ch] = np.bincount(group, r * v["t"][:, ch], count)[on] / mass[on]
-    new[on, 4] = prms[on, 4] + (np.bincount(group, r * _half(v["th"] - prms[group, 4]), count) / safe)[on]
-    new[on, 2] = (np.bincount(group, r * v["ll"], count) / safe)[on]
-    for _ in range(SHAPE_STEPS):
-        height = np.exp(new[group, 3])
-        for a in (0, 1):
-            new[on, a] = (np.bincount(group, r * (v["p"][:, a] + height * v["o"][:, a]), count) / safe)[on]
-        u = (new[group, :2] - v["p"]) / height[:, None]
-        res = v["o"] - u
-        grad = (2 * V.ic * np.bincount(group, r * (res * u).sum(1), count)
-                - 2 * V.ih * np.bincount(group, r * (v["lh"] - new[group, 3]), count))
-        curve = 2 * V.ic * np.bincount(group, r * (u ** 2).sum(1), count) + 2 * V.ih * mass
-        new[on, 3] = new[on, 3] - (grad / np.where(on, curve, 1.0))[on]
+    new, new_tags = _own_updates(V, v, r, prms, tags, np.zeros((count, 5)), group, count)
     q_old = np.bincount(group, r * V.log_vote(v, prms[group], tags[group]), count)
-    q_new = np.bincount(group, r * V.log_vote(v, new[group], new_tags[group]), count)
-    keep = on & (q_new > q_old)
+    with np.errstate(invalid="ignore", over="ignore"):
+        q_new = np.bincount(group, r * V.log_vote(v, new[group], new_tags[group]), count)
+    keep = q_new > q_old
     prms[keep], tags[keep] = new[keep], new_tags[keep]
     return prms, tags
 
@@ -870,12 +1103,18 @@ def _group_step(V: _Votes, v: dict, r: np.ndarray, prms, tags, group, count):
 def _fit_basins(V: _Votes, idx, group, starts):
     """One word fitted to each basin's own votes at once (EM per basin on the votes alone, the background in the
     model, no spatial term: each vote in the word's box or out of every one, by the core evidence and its vote: the
-    proposals' own fit), started at its vote of the highest core chance; each basin's EM
-    stops on its own and only the basins still moving are computed.  The words' parameters and tags, and each basin's
-    log likelihood with its word and with none."""
+    proposals' own fit), started at the box its vote of the highest core chance places, centred at its votes' placed
+    centres' mean weighted by core chance (where the offsets say little, the core px's middle); each basin's EM stops
+    on its own and only the basins still moving are computed.  The words' parameters and tags, and each basin's log
+    likelihood with its word and with none."""
     v = V.take(idx)
     nb, n = len(starts), len(idx)
-    prms = _own(_sub(v, starts))
+    prms = V.placements(_sub(v, starts))
+    placed = V.placements(v)[:, :2]
+    mass = np.bincount(group, v["w"], nb)
+    for a in (0, 1):
+        mean = np.bincount(group, v["w"] * placed[:, a], nb)
+        prms[mass > 0, a] = mean[mass > 0] / mass[mass > 0]
     tags = v["t"][starts].copy()
     back = v["lout"] + v["lbg"]
     count = np.bincount(group, minlength=nb)
@@ -887,7 +1126,7 @@ def _fit_basins(V: _Votes, idx, group, starts):
         if not len(sel):
             break
         vs, g = _sub(v, sel), group[sel]
-        word = vs["lin"] + np.logaddexp(V.lkeep + V.log_vote(vs, prms[g], tags[g]), V.leps + vs["lbg"])
+        word = vs["lin"] + V.log_vote(vs, prms[g], tags[g])
         lp[sel] = np.logaddexp(word, back[sel])
         ll = np.bincount(g, lp[sel], nb)
         moving &= ll - prev > EM_TOL * count
@@ -895,8 +1134,7 @@ def _fit_basins(V: _Votes, idx, group, starts):
         keep = moving[g]
         if not keep.any():
             break
-        ln = V.log_vote(_sub(vs, keep), prms[g[keep]], tags[g[keep]])      # not an outlier: the word's own vote
-        r = np.exp(vs["lin"][keep] + V.lkeep + ln - lp[sel][keep])
+        r = np.exp(word[keep] - lp[sel][keep])
         prms, tags = _group_step(V, _sub(vs, keep), r, prms, tags, g[keep], nb)
     return prms, tags, np.bincount(group, lp, nb), np.bincount(group, back, nb)
 
@@ -904,11 +1142,69 @@ def _fit_basins(V: _Votes, idx, group, starts):
 # --- the search -----------------------------------------------------------------------------------------------------
 
 def _overlap(V: _Votes, a: np.ndarray, b: np.ndarray) -> bool:
-    """Whether two words' supports (their boxes grown by EDGE_SDS edge spreads) share area."""
+    """Whether two words' supports (their boxes grown by the reach) share area."""
     pa, pb = _box(a, V.reach + 0.5), _box(b, V.reach + 0.5)
     if (pa.max(0) < pb.min(0)).any() or (pb.max(0) < pa.min(0)).any():
         return False
     return cv2.intersectConvexConvex(pa.astype(np.float32), pb.astype(np.float32))[0] > 0
+
+
+class _Grid:
+    """Keys by the axis-aligned bounds they cover, in square cells of INDEX_CELL px (speed only: a query returns
+    exactly the keys a scan of every key's bounds would)."""
+
+    def __init__(self):
+        self.cells: dict[tuple, set] = {}
+        self.spans: dict = {}
+
+    def _cells(self, lo, hi):
+        x0, y0 = (math.floor(float(lo[0]) / INDEX_CELL), math.floor(float(lo[1]) / INDEX_CELL))
+        x1, y1 = (math.floor(float(hi[0]) / INDEX_CELL), math.floor(float(hi[1]) / INDEX_CELL))
+        return [(i, j) for i in range(x0, x1 + 1) for j in range(y0, y1 + 1)]
+
+    def add(self, key, lo, hi) -> None:
+        self.spans[key] = (np.asarray(lo, np.float64), np.asarray(hi, np.float64))
+        for c in self._cells(lo, hi):
+            self.cells.setdefault(c, set()).add(key)
+
+    def remove(self, key) -> None:
+        lo, hi = self.spans.pop(key)
+        for c in self._cells(lo, hi):
+            self.cells[c].discard(key)
+
+    def meeting(self, lo, hi) -> set:
+        """The keys whose bounds meet [lo, hi]."""
+        found = set()
+        for c in self._cells(lo, hi):
+            found |= self.cells.get(c, set())
+        return {k for k in found if (self.spans[k][0] <= hi).all() and (lo <= self.spans[k][1]).all()}
+
+
+class _Words:
+    """Words by id, with their supports' bounds in a `_Grid`; `without(ids)` a view leaving some out.  `_near` reads it
+    as it reads a list (the same words, in the order of their ids)."""
+
+    def __init__(self, V: _Votes):
+        self.V, self.words, self.grid, self.left_out = V, {}, _Grid(), frozenset()
+
+    def add(self, k, word) -> None:
+        self.words[k] = word
+        self.grid.add(k, *self.V.bounds(word["prm"]))
+
+    def remove(self, k) -> None:
+        del self.words[k]
+        self.grid.remove(k)
+
+    def without(self, ids) -> "_Words":
+        view = _Words.__new__(_Words)
+        view.V, view.words, view.grid, view.left_out = self.V, self.words, self.grid, frozenset(ids)
+        return view
+
+    def near(self, lo, hi) -> list[dict]:
+        return [self.words[k] for k in sorted(self.grid.meeting(lo, hi) - self.left_out)]
+
+    def ids_near(self, lo, hi) -> list:
+        return sorted(self.grid.meeting(lo, hi) - self.left_out)
 
 
 def _total(V: _Votes, words: list[dict], prior: WordPrior, spreads: Spreads) -> float:
@@ -920,21 +1216,28 @@ def _total(V: _Votes, words: list[dict], prior: WordPrior, spreads: Spreads) -> 
 def _search(V: _Votes, P: _Proposals, spreads: Spreads, prior: WordPrior, record: list | None = None,
             scores: list | None = None) -> list[dict]:
     """The words (see the module): from none, add, split and join moves while one raises the total score, the best
-    first, each move's change exact (its words refitted with every other word held).  `record` collects every move
-    weighed: (kind, gain of the extra word (log likelihood / cell), [(votes, chances) of each part]).  `scores` collects
-    the total score recomputed from the words' parameters at the start and after every move."""
+    first (of equals, the first weighed), each move's change exact (its words refitted with every other word held).
+    A move is weighed once and kept until a move made changes the votes it was weighed on (its region meets the
+    changed one) or takes one of its words; then it is weighed again.  Words never change in place (a move makes new
+    ones), so a pair whose supports do not meet is tested once.  `record` collects every move weighed: (kind, gain of
+    the extra word (log likelihood / cell), [(votes, chances) of each part]).  `scores` collects the total score
+    recomputed from the words' parameters at the start and after every move."""
+    import heapq
     scale = prior.slope / spreads.cell
     proposed = [int(b) for b in np.argsort(-(P.ll - P.ll0), kind="stable")
                 if scale * (P.ll[b] - P.ll0[b]) + prior.log_prior > 0]
-    words: dict[int, dict] = {}
+    open_ = set(proposed)                           # proposals not yet made words
+    index = _Words(V)
     next_id = 0
-    moves: dict = {}
-
-    def held(exclude=()) -> list[dict]:
-        return [w for k, w in words.items() if k not in exclude]
+    moves: dict = {}                                # key: (delta, change, region, sequence)
+    spans = _Grid()                                 # the moves by their regions' bounds
+    of_word: dict = {}                              # word id: its moves' keys
+    heap: list = []
+    sequence = 0
+    to_add, to_split, to_join = set(proposed), set(), set()
 
     def add(b):
-        H = held()
+        H = index.without(())
         new = _fit(V, [{"prm": P.prms[b], "tag": P.tags[b]}], H)
         d, region = _change(V, [], new, H)
         if record is not None:
@@ -942,8 +1245,8 @@ def _search(V: _Votes, P: _Proposals, spreads: Spreads, prior: WordPrior, record
         return scale * d + prior.log_prior, ([], new), region
 
     def split(k):
-        H = held((k,))
-        word = words[k]
+        H = index.without((k,))
+        word = index.words[k]
         region = V.support(word["prm"])
         if len(region) < 2:
             return -math.inf, None, region
@@ -955,7 +1258,7 @@ def _search(V: _Votes, P: _Proposals, spreads: Spreads, prior: WordPrior, record
         # whose vote no word holds: this word cannot, nor any other); of equals, the one it explains worst
         left = v["w"] * np.clip(1 - resp.sum(1), 0, 1)
         j = int(np.lexsort((np.where(np.isfinite(lf[:, 0]), lf[:, 0], 0.0), -left))[0])
-        seed = {"prm": _own(_sub(v, slice(j, j + 1)))[0], "tag": v["t"][j], "a": float(word.get("a", 0.0))}
+        seed = {"prm": V.placements(_sub(v, slice(j, j + 1)))[0], "tag": v["t"][j], "a": float(word.get("a", 0.0))}
         new = _fit(V, [word, seed], H)
         d, region = _change(V, [word], new, H)
         if record is not None:
@@ -963,63 +1266,89 @@ def _search(V: _Votes, P: _Proposals, spreads: Spreads, prior: WordPrior, record
         return scale * d + prior.log_prior, ([k], new), region
 
     def join(a, b):
-        H = held((a, b))
+        H = index.without((a, b))
+        wa, wb = index.words[a], index.words[b]
         best = None
-        for start in (words[a], words[b]):          # the one word, from each start; the better kept
+        for start in (wa, wb):                      # the one word, from each start; the better kept
             new = _fit(V, [start], H)
-            d, region = _change(V, [words[a], words[b]], new, H)
+            d, region = _change(V, [wa, wb], new, H)
             if best is None or d > best[0]:
                 best = (d, new, region)
         d, new, region = best
         if record is not None:
-            record.append(("join", -d / spreads.cell, _parts(V, region, [words[a], words[b]], H)))
+            record.append(("join", -d / spreads.cell, _parts(V, region, [wa, wb], H)))
         return scale * d - prior.log_prior, ([a, b], new), region     # joining: d, and one word fewer
+
+    def keep(key, got):
+        nonlocal sequence
+        delta, change, region = got
+        moves[key] = (delta, change, region, sequence)
+        spans.add(key, *_span(V, region))
+        for k in key[1:] if key[0] != "add" else ():
+            of_word.setdefault(k, set()).add(key)
+        heapq.heappush(heap, (-delta, sequence, key))
+        sequence += 1
+
+    def drop(key):
+        moves.pop(key)
+        spans.remove(key)
+        for k in key[1:] if key[0] != "add" else ():
+            of_word.get(k, set()).discard(key)
 
     if scores is not None:
         scores.append(_total(V, [], prior, spreads))
     while True:
-        for b in proposed:
-            if ("add", b) not in moves:
-                moves[("add", b)] = add(b)
-        ids = sorted(words)
-        for k in ids:
-            if ("split", k) not in moves:
-                moves[("split", k)] = split(k)
-        for i, a in enumerate(ids):
-            for b in ids[i + 1:]:
-                if ("join", a, b) not in moves and _overlap(V, words[a]["prm"], words[b]["prm"]):
-                    moves[("join", a, b)] = join(a, b)
-        if not moves:
+        for b in [b for b in proposed if b in to_add and b in open_]:
+            keep(("add", b), add(b))
+        for k in sorted(to_split):
+            if k in index.words:
+                keep(("split", k), split(k))
+        for a, b in sorted(to_join):
+            if a in index.words and b in index.words and _overlap(V, index.words[a]["prm"], index.words[b]["prm"]):
+                keep(("join", a, b), join(a, b))
+        to_add, to_split, to_join = set(), set(), set()
+        best = None
+        while heap:
+            neg, seq, key = heap[0]
+            if key in moves and moves[key][3] == seq:
+                best = key
+                break
+            heapq.heappop(heap)
+        if best is None or not moves[best][0] > 0:
             break
-        key, (delta, change, region) = max(moves.items(), key=lambda kv: kv[1][0])   # the first of equals
-        if not delta > 0:
-            break
-        old, new = change
-        if key[0] == "add":
-            proposed.remove(key[1])
-        changed = np.union1d(region, _supports(V, [words[k] for k in old]))
+        delta, (old, new), region, _ = moves[best]
+        if best[0] == "add":
+            open_.discard(best[1])
+        changed = np.union1d(region, _supports(V, [index.words[k] for k in old]))
         lo, hi = _span(V, changed)
+        stale = {best} | spans.meeting(lo, hi)
         for k in old:
-            del words[k]
+            stale |= of_word.pop(k, set())
+            index.remove(k)
+        for key in stale:
+            if key in moves:
+                drop(key)
+            if key[0] == "add":
+                to_add.add(key[1])
+            elif key[0] == "split":
+                to_split.add(key[1])
+            else:
+                to_join.add(key[1:])
         for w in new:
-            words[next_id] = w
+            index.add(next_id, w)
+            to_split.add(next_id)
+            for k in index.ids_near(*index.grid.spans[next_id]):
+                if k != next_id:
+                    to_join.add((min(k, next_id), max(k, next_id)))
             next_id += 1
-
-        def stale(mkey, mval):
-            if any(k in old for k in mkey[1:]) and mkey[0] != "add":
-                return True
-            mlo, mhi = _span(V, mval[2])
-            return bool((mlo <= hi).all() and (lo <= mhi).all())
-
-        moves = {m: val for m, val in moves.items() if m != key and not stale(m, val)}
         if scores is not None:
-            scores.append(_total(V, list(words.values()), prior, spreads))
-    return [words[k] for k in sorted(words)]
+            scores.append(_total(V, list(index.words.values()), prior, spreads))
+    return [index.words[k] for k in sorted(index.words)]
 
 
 def _final(V: _Votes, found: list[dict]) -> list[dict]:
-    """The words refitted jointly, each connected set of words whose supports overlap at once (the likelihood
-    factorises over the sets)."""
+    """The words refitted jointly, each connected set of words whose supports overlap at once, every other word held
+    as it stands (a set's fit may move a support onto another set's px)."""
     n = len(found)
     parent = list(range(n))
 
@@ -1029,18 +1358,23 @@ def _final(V: _Votes, found: list[dict]) -> list[dict]:
             i = parent[i]
         return i
 
+    index = _Words(V)
+    for i, w in enumerate(found):
+        index.add(i, w)
     for i in range(n):
-        for j in range(i + 1, n):
-            if _overlap(V, found[i]["prm"], found[j]["prm"]):
+        for j in index.ids_near(*index.grid.spans[i]):
+            if j > i and _overlap(V, found[i]["prm"], found[j]["prm"]):
                 parent[root(i)] = root(j)
     groups: dict[int, list[int]] = {}
     for i in range(n):
         groups.setdefault(root(i), []).append(i)
     out = list(found)
     for members in groups.values():
-        fitted = _fit(V, [found[i] for i in members], [])
+        fitted = _fit(V, [out[i] for i in members], index.without(members))
         for i, w in zip(members, fitted):
             out[i] = w
+            index.remove(i)
+            index.add(i, w)
     return out
 
 
@@ -1141,7 +1475,17 @@ def _inputs(core_logit, geo, tag) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
                          f"axis degrees), not {geo.shape}")
     if tag.ndim != 3 or tag.shape[1:] != core_logit.shape:
         raise ValueError(f"tag is (k, {h}, {w}), not {tag.shape}")
+    _check_geo(geo)
     return core_logit, geo, tag
+
+
+def _check_geo(geo: np.ndarray) -> None:
+    """A vote's offset and axis are finite numbers and its length and height positive finite ones (their logs are
+    read)."""
+    for lo in range(0, geo.shape[1], max(CHUNK_PX // max(geo.shape[2], 1), 1)):
+        g = geo[:, lo:lo + max(CHUNK_PX // max(geo.shape[2], 1), 1)]
+        if not (np.isfinite(g).all() and (g[2:4] > 0).all()):
+            raise ValueError("geo's offsets and axis are finite and its lengths and heights positive and finite")
 
 
 def core_words(core_logit, geo, tag, ink, spreads: Spreads, prior: WordPrior, *, kind_p: np.ndarray | None = None,
@@ -1157,10 +1501,13 @@ def core_words(core_logit, geo, tag, ink, spreads: Spreads, prior: WordPrior, *,
     ink = np.asarray(ink, bool)
     V = _Votes(core_logit, geo, tag, spreads)
     found = _final(V, _search(V, _proposals(V, spreads), spreads, prior))
+    index = _Words(V)
+    for k, word in enumerate(found):
+        index.add(k, word)
     rows, order = [], []
     for k, word in enumerate(found):
         region = V.support(word["prm"])
-        others = found[:k] + found[k + 1:]
+        others = index.without((k,))
         (idx, r), = _parts(V, region, [word], others)
         with_k = _score(V, region, [word], others)
         without = _score(V, region, [], others)
@@ -1309,47 +1656,132 @@ def _corr(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 def _rect_params(rect: np.ndarray) -> np.ndarray:
     """A rectangle's parameters (cx, cy, log length, log height, theta): its centre, its first edge's length and
-    direction (modulo a half turn), its second edge's length."""
+    direction (modulo a half turn), its second edge's length (a degenerate side RECT_FLOOR, numerical)."""
     e1, e2 = rect[1] - rect[0], rect[3] - rect[0]
     theta = math.atan2(-e1[1], e1[0])
-    return np.r_[rect.mean(0), math.log(max(math.hypot(*e1), 1e-12)), math.log(max(math.hypot(*e2), 1e-12)), theta]
+    return np.r_[rect.mean(0), math.log(max(math.hypot(*e1), RECT_FLOOR)), math.log(max(math.hypot(*e2), RECT_FLOOR)),
+                 theta]
 
 
-def _own_fit(v: dict, rect: np.ndarray, model: _Model | None):
-    """A Terra word's own fit on its votes (all of them a word's px): with `model`, by EM over each vote's chance of
-    being the word's own rather than an outlier (the background's density at the share `outlier`), each step along
-    the line from where it is to the votes' own update to the most log likelihood (the model's M-step without the
-    spatial terms); without, the votes' means (the first round).  The parameters, the tag and each vote's chance of
-    being the word's own."""
-    prm = _rect_params(rect)
-    if model is None:
-        prm[4] = prm[4] + float(_half(v["th"] - prm[4]).mean())
-        prm[2], prm[3] = float(v["ll"].mean()), float(v["lh"].mean())
-        prm[:2] = (v["p"] + math.exp(prm[3]) * v["o"]).mean(0)
-        return prm, v["t"].mean(0), np.ones(len(v["ll"]))
-    tag = v["t"].mean(0)
-    stray = model.leps + model.log_background(v)
-    prev = -math.inf
-    for _ in range(EM_STEPS):
-        own = model.lkeep + model.log_vote(v, prm, tag)
-        r = np.exp(own - np.logaddexp(own, stray))
-        target = model.own_update(v, r, prm)
-        if target is None:
-            break
+def _t_fit(dev: np.ndarray, dof_count: float, scale: float, dof: float):
+    """A Student-t's scale and dof by maximum likelihood on deviations `dev` (each about its word's location),
+    from (scale, dof): one EM pass of the scale (the t's weights at the current values; the deviations' degrees of
+    freedom `dof_count`, not their number, as each word's location took some), then the dof at that scale: its
+    search on its log between DOF_BOUNDS, or the Gaussian (inf) where that is likelier (the supremum past the
+    bound).  The scale, the dof, the weights and the log likelihood."""
+    w = _t_weight((dev / scale) ** 2, dof)
+    scale = math.sqrt(float((w * dev ** 2).sum()) / dof_count)
+    z2 = (dev / scale) ** 2
 
-        def value(share, prm=prm, tag=tag, target=target):
-            ln = model.lkeep + model.log_vote(v, _between(prm, target[0], share), tag + share * (target[1] - tag))
-            return float(np.logaddexp(ln, stray).sum())
+    def nll(d):
+        return -(len(dev) * (_t_log_norm(d) - math.log(scale)) - float(_t_rho(z2, d).sum()))
 
-        inner = minimize_scalar(lambda x: -value(x), bounds=(0.0, 1.0), method="bounded").x
-        share = max((0.0, 1.0, inner), key=value)
-        prm, tag = _between(prm, target[0], share), tag + share * (target[1] - tag)
-        now = value(0.0, prm, tag, target)
-        if now - prev <= EM_TOL * len(r):
-            break
-        prev = now
-    own = model.lkeep + model.log_vote(v, prm, tag)
-    return prm, tag, np.exp(own - np.logaddexp(own, stray))
+    lo, hi = math.log(DOF_BOUNDS[0]), math.log(DOF_BOUNDS[1])
+    dof = math.exp(minimize_scalar(lambda x: nll(math.exp(x)), bounds=(lo, hi), method="bounded").x)
+    if nll(math.inf) <= nll(dof):
+        dof = math.inf
+    return scale, dof, _t_weight(z2, dof), -nll(dof)
+
+
+def _locations(e: np.ndarray, w: np.ndarray, word: np.ndarray, count: int, axis: bool = False) -> np.ndarray:
+    """Each word's location of its errors `e`, weighted by `w` (the axis's taken as a turn's half, about each word's
+    first error)."""
+    if axis:
+        ref = np.zeros(count)
+        first = np.unique(word, return_index=True)[1]
+        ref[word[first]] = e[first]
+        d = _half(e - ref[word])
+        return ref + np.bincount(word, w * d, count) / np.bincount(word, w, count)
+    return np.bincount(word, w * e, count) / np.bincount(word, w, count)
+
+
+def _edge_terms(p: np.ndarray, prm: np.ndarray, edge: float, a_in: np.ndarray, a_out: np.ndarray):
+    """A word's core px's log likelihood about its box (`prm`) at edge spread `edge`: each px in the box with chance
+    q, its core evidence a_in = log w / core_share in it and `a_out` out of it, so log(q e^a_in + (1 - q) e^a_out);
+    and its gradient in the box's parameters.  (`_measure_edge` gives as a_out the evidence of a px out of this box,
+    which may be in another at the base rate.)"""
+    along, up = _axes(prm[4])
+    rel = p - prm[:2]
+    pa, pb = rel @ along, rel @ up
+    half_a, half_b = math.exp(prm[2]) / 2 + 0.5, math.exp(prm[3]) / 2 + 0.5
+    lqa, dqa_x, dqa_half, lta, dta_x, dta_half = _log_interval_d(pa, half_a, edge)
+    lqb, dqb_x, dqb_half, ltb, dtb_x, dtb_half = _log_interval_d(pb, half_b, edge)
+    lq = lqa + lqb
+    l1q = np.logaddexp(lta, lqa + ltb)
+    num = np.logaddexp(lq + a_in, l1q + a_out)
+    value = float(num.sum())
+    # dL / L = q e^a_in / L d log q + (1 - q) e^a_out / L d log(1 - q), the second through each axis's tail
+    wq, wt = np.exp(lq + a_in - num), np.exp(l1q + a_out - num)
+    sa_, sb_ = np.exp(lqb + lta - l1q), np.exp(lqa + ltb - l1q)
+    da = wq * dqa_x + wt * sa_ * dta_x
+    db = wq * dqb_x + wt * sb_ * dtb_x
+    g = np.empty(5)
+    g[:2] = -(da.sum() * along + db.sum() * up)
+    g[2] = float((wq * dqa_half + wt * sa_ * dta_half).sum()) * math.exp(prm[2]) / 2
+    g[3] = float((wq * dqb_half + wt * sb_ * dtb_half).sum()) * math.exp(prm[3]) / 2
+    g[4] = float((da * pb - db * pa).sum())
+    return value, g
+
+
+def _measure_edge(items: list[tuple], core_share: float) -> tuple[float, int]:
+    """The edge spread (see `measure_spreads`): sqrt(1/12 + b^2), a px's own extent (a unit square, its position
+    uniform within it: 1/12 px^2 a side) and b, the spread of the core px's ends about the boxes beyond it.  Each word's
+    box fitted to its core px at the edge spread (L-BFGS-B on `_edge_terms`, from Terra's rectangle), then b to the
+    most likelihood over every word at those boxes (its log searched between 1/1000 px and the longest box side), in
+    turn until the likelihood moves by no more than EM_TOL a px (RuntimeError after SPREAD_ROUNDS).  Each word's px
+    are those of Terra's rectangle grown by its height that are in the mask and in no other Terra word, read as
+    `core_words` reads them (in the box, or in none).  A word whose reach at the spread found (where q times the most
+    any of its px not its own can favour its box, as the px past them may, falls below double precision) passes the
+    px gathered is left out, as a word cut by the mask is (its evidence not wholly read), and the spread found again
+    without it.  The spread and the number of words left out."""
+    from scipy.optimize import minimize
+    lpi, lnpi = math.log(core_share), math.log1p(-core_share)
+    prepared = []
+    for p, x, own, start, margin in items:
+        a_in = -np.logaddexp(0, -x) - lpi
+        a_out = -np.logaddexp(0, x) - lnpi
+        # the most a px about the word (not its own) can favour a box: what the px past the margin may do
+        with np.errstate(invalid="ignore"):
+            k = a_in[~own] - a_out[~own]
+        most = float(np.nanmax(k)) if len(k) and np.isfinite(k).any() else -math.inf
+        prepared.append((p, a_in, a_out, np.array(start, np.float64), margin, most))
+    left_out = 0
+    while True:
+        boxes = [s for _, _, _, s, _, _ in prepared]
+        longest = max(math.exp(max(b[2], b[3])) for b in boxes)
+        n_px = sum(len(p) for p, *_ in prepared)
+
+        def total(edge):
+            return sum(_edge_terms(p, boxes[k], edge, a_in, a_out)[0]
+                       for k, (p, a_in, a_out, *_) in enumerate(prepared))
+
+        edge = math.sqrt(1 / 12)
+        ll = -math.inf
+        for _ in range(SPREAD_ROUNDS):
+            for k, (p, a_in, a_out, *_) in enumerate(prepared):
+                got = minimize(lambda prm: tuple(-x for x in _edge_terms(p, prm, edge, a_in, a_out)), boxes[k],
+                               jac=True, method="L-BFGS-B")
+                if got.fun <= -_edge_terms(p, boxes[k], edge, a_in, a_out)[0]:
+                    boxes[k] = got.x
+            log_b = minimize_scalar(lambda lb: -total(math.sqrt(1 / 12 + math.exp(2 * lb))),
+                                    bounds=(math.log(1e-3), math.log(longest)), method="bounded").x
+            edge = math.sqrt(1 / 12 + math.exp(2 * log_b))
+            new = total(edge)
+            settled = abs(new - ll) <= EM_TOL * n_px
+            ll = new
+            if settled:
+                break
+        else:
+            raise RuntimeError(f"the edge spread did not settle in {SPREAD_ROUNDS} rounds (last {edge})")
+        whole = [item for item in prepared
+                 if not (math.isfinite(item[5])
+                         and edge * -float(ndtri_exp(min(math.log(PRECISION) - item[5], 0.0))) > item[4])]
+        if len(whole) == len(prepared):
+            return edge, left_out
+        if not whole:
+            raise ValueError("every word's reach passes the px gathered about it: no edge to measure")
+        left_out += len(prepared) - len(whole)
+        prepared = whole
 
 
 def measure_spreads(pages) -> Spreads:
@@ -1357,37 +1789,40 @@ def measure_spreads(pages) -> Spreads:
     `pages`: dicts of geo, tag (as `core_words` takes them: geo as `model.word_geometry` decodes it), word_id (int
     (h, w): 1 + the Terra word whose rectangle holds the px, later over earlier, 0 on none: the targets' `tag_id`),
     words (float (n, 4, 2): Terra's rectangles) and, optionally, mask (bool (h, w): the px that may be read; none,
-    every px).  Only the mask's px are read: a word with a px outside it is left out whole (a part of a word is no
-    word's fit), the background is the px of the mask in no word, and the core share is counted on the mask's px.
+    every px) and core (float (h, w): the core logit, for the edge; none, a px's core chance is 1 in a word, 0 out).
+    Only the mask's px are read: a word with a px outside it is left out whole (a part of a word is no word's
+    measure), the background is the px of the mask in no word, and the core share is counted on the mask's px.
       core_share  the share of the pages' px in Terra's words (the core head's base rate)
-      centre_bias, length_bias, height_bias, angle_bias   each vote dimension's mean error against its Terra word over
-                  every word px: its offset in heights less (c - p) / H, its log length and log height less the
-                  word's, its axis less the word's (modulo 180); taken off every vote (word and background) before
-                  anything below, as `core_words` takes them off
-      Each Terra word's own fit is the one-word model's on its votes (all its px a word's), as `core_words` fits it
-      (its M-step without the spatial terms, each vote the word's own or an outlier by EM); the spreads it reads with
-      are the ones being measured, to a fixed point (SPREAD_ROUNDS, SPREAD_TOL), the first round on the votes' means.
-      A vote's residuals: its offset less (c - p) / H, its log length, log height, axis (modulo a half turn) and tag
-      less the fit's; each weighted by its chance of being the word's own below.
-      outlier     the share of word px whose vote is an outlier: the mean of that chance's complement
-      centre, cell    from the variogram of the offset residuals within words, over every lag (differences within one
-                  word): half the mean squared difference at lag (dy, dx) is sigma^2 (1 - rho), rho Gaussian in the
-                  lag of scale ell, fitted by least squares weighted by the pairs (ell searched between numerical
-                  bounds: 1/100 px and the longest lag); centre = sigma, cell = the sum of rho over the lattice
-                  (independent votes give 1)
-      length, height, angle, tag   the root mean square of those residuals, each word's degrees of freedom n less its
-                  correlated share (the sum of rho over its px pairs / n)
-      edge        where a word's px end about its box: the root mean square, over the edges of every word, of its
-                  own fit's edge less Terra's rectangle's (both along the fit's axes), with a px's own extent (1/12
-                  px^2 a side, its position uniform within it) added in quadrature
+      calibration each of the offset x and y (in heights: (c - p) / H true), the log length and the log height
+                  against Terra's words over every word px: the forward fit pred = alpha + beta true by least squares
+                  (`*_bias`, `*_slope`), and the true values' mean and sd (`*_truth`, the point placements); the axis
+                  its mean error modulo 180 (`angle_bias`).  ValueError where the true values do not vary (no slope).
+      Each vote's error e = pred - alpha - beta true (the axis's modulo a half turn; the tag's the tag itself) is a
+      word's shared error plus the vote's own: each word's location of its errors (the t-weighted mean) and the
+      deviations about it, per dimension:
+      scale, dof  the Student-t of the deviations by maximum likelihood (`_t_fit`), each word's degrees of freedom n
+                  less its correlated share (the sum of rho over its px pairs / n); the locations and the t in turn
+                  until their log likelihood moves by no more than EM_TOL a deviation (RuntimeError after
+                  SPREAD_ROUNDS): `centre`
+                  (x and y pooled), `length`, `height`, `angle`, `tag` (channels pooled) and their `*_dof`
+      *_word      the shared errors' sd: the words' locations' mean square less their noise's (the t location's
+                  variance s^2 (dof + 3) / (dof + 1) times the word's sum of rho / n^2), at least 0; not for the tag
+                  (a word's mean tag is its own)
+      cell        from the variogram of the offset's deviations within words, over every lag: half the mean squared
+                  difference at lag (dy, dx) is sigma^2 (1 - rho), rho Gaussian in the lag of scale ell, fitted by
+                  least squares weighted by the pairs (ell searched between numerical bounds: 1/100 px and the
+                  longest lag); cell = the sum of rho over the lattice (independent votes give 1)
+      edge        where a word's core px end about its box (`_measure_edge`): the core head's evidence about each
+                  word's box fitted to it, as `core_words` reads it (a px in the box with chance q, convolved with the
+                  edge spread), the spread that makes the core px likeliest: a px's own extent (1/12 px^2) and the
+                  core px's ends' spread beyond it, in quadrature
       background_centre, background_length, background_height, background_tag_mean, background_tag   a background
                   px's offsets' root mean square about 0; its log length's and log height's mean and sd; its tags'
-                  mean and root mean square about it"""
-    per_word = []                      # (v, Terra's rectangle, mask, its px within the mask, pair counts)
-    err = np.zeros(5)                  # summed over word px: offset x, offset y, log length, log height, axis
-    acc = {"o": np.zeros(2), "o2": np.zeros(2), "n": 0, "ll": 0.0, "ll2": 0.0, "lh": 0.0, "lh2": 0.0, "t": None,
-           "t2": None}
-    n_word = n_in = n_all = 0          # px of the words measured; of the mask in words; of the mask
+                  mean and root mean square about it (the votes as the net gives them)"""
+    per_word = []                      # (v, Terra's parameters, mask, its px within the mask, pair counts)
+    edge_items = []                    # (px, core logit, the word's own px, Terra's parameters, margin)
+    acc = {"o2": 0.0, "n": 0, "ll": 0.0, "ll2": 0.0, "lh": 0.0, "lh2": 0.0, "t": None, "t2": None}
+    n_in = n_all = 0
     channels = None
     for page in pages:
         geo, tag = np.asarray(page["geo"]), np.asarray(page["tag"])
@@ -1396,10 +1831,14 @@ def measure_spreads(pages) -> Spreads:
         on = np.ones(word_id.shape, bool) if on is None else np.asarray(on, bool)
         if on.shape != word_id.shape:
             raise ValueError(f"a page's mask is the page's shape {word_id.shape}, not {on.shape}")
+        core = page.get("core")
+        if core is not None and np.shape(core) != word_id.shape:
+            raise ValueError(f"a page's core is the page's shape {word_id.shape}, not {np.shape(core)}")
         rects = np.asarray(page["words"], np.float64).reshape(-1, 4, 2)
         channels = tag.shape[0]
         n_all += int(on.sum())
         n_in += int((on & (word_id > 0)).sum())
+        h_page, w_page = word_id.shape
         # the words, each whole: a word with a px outside the mask is left out with all its px (each word's px in
         # row order, as np.nonzero gives them)
         wy, wx = np.nonzero(word_id > 0)
@@ -1411,27 +1850,34 @@ def measure_spreads(pages) -> Spreads:
         for j, lo, hi in zip(ids[starts], starts, np.r_[starts[1:], len(ids)]):
             ys, xs = wy[lo:hi], wx[lo:hi]
             g = geo[:, ys, xs].astype(np.float64)
+            if not (np.isfinite(g).all() and (g[2:4] > 0).all()):
+                raise ValueError("geo's offsets and axis are finite and its lengths and heights positive and finite")
             v = {"p": np.stack([xs, ys], -1).astype(np.float64), "o": (g[:2] / g[3]).T, "ll": np.log(g[2]),
                  "lh": np.log(g[3]), "th": np.deg2rad(g[4]),
                  "t": np.moveaxis(tag[:, ys, xs].astype(np.float64), 0, -1)}
             truth = _rect_params(rects[j - 1])
-            err[:2] += (v["o"] - (truth[:2] - v["p"]) / math.exp(truth[3])).sum(0)
-            err[2] += float((v["ll"] - truth[2]).sum())
-            err[3] += float((v["lh"] - truth[3]).sum())
-            err[4] += float(_half(v["th"] - truth[4]).sum())
-            n_word += len(ys)
             y0, x0 = ys.min(), xs.min()
             m = np.zeros((ys.max() - y0 + 1, xs.max() - x0 + 1))
             m[ys - y0, xs - x0] = 1
-            per_word.append((v, rects[j - 1], m, (ys - y0, xs - x0), np.rint(_corr(m, m))))
+            per_word.append((v, truth, m, (ys - y0, xs - x0), np.rint(_corr(m, m))))
+            # its core px for the edge: Terra's rectangle grown by its height, in the mask, in no other word
+            margin = math.exp(truth[3])
+            corners = _box(truth, margin + 0.5)
+            bx0, by0 = np.maximum(np.floor(corners.min(0)).astype(int), 0)
+            bx1, by1 = np.minimum(np.ceil(corners.max(0)).astype(int) + 1, [w_page, h_page])
+            yy, xx = np.mgrid[by0:by1, bx0:bx1]
+            near = on[by0:by1, bx0:bx1] & np.isin(word_id[by0:by1, bx0:bx1], (0, j))
+            yy, xx = yy[near], xx[near]
+            own = word_id[yy, xx] == j
+            x = np.asarray(core)[yy, xx].astype(np.float64) if core is not None else np.where(own, math.inf, -math.inf)
+            edge_items.append((np.stack([xx, yy], -1).astype(np.float64), x, own, truth, margin))
         by, bx = np.nonzero((word_id == 0) & on)
         for lo in range(0, len(by), CHUNK_PX):
             yy, xx = by[lo:lo + CHUNK_PX], bx[lo:lo + CHUNK_PX]
             g = geo[:4, yy, xx].astype(np.float64)
             tt = tag[:, yy, xx].astype(np.float64)
             o, ll, lh = g[:2] / g[3], np.log(g[2]), np.log(g[3])
-            acc["o"] += o.sum(1)
-            acc["o2"] += (o ** 2).sum(1)
+            acc["o2"] += float((o ** 2).sum())
             acc["n"] += len(yy)
             acc["ll"] += float(ll.sum())
             acc["ll2"] += float((ll ** 2).sum())
@@ -1441,78 +1887,66 @@ def measure_spreads(pages) -> Spreads:
             acc["t2"] = (tt ** 2).sum(1) if acc["t2"] is None else acc["t2"] + (tt ** 2).sum(1)
     n = acc["n"]
     if not per_word or not n:
-        raise ValueError("the pages hold no word px or no background px to measure")
-    bias = err / n_word
-    for v, *_ in per_word:                                  # the biases taken off, as core_words takes them off
-        v["o"] = v["o"] - bias[:2]
-        v["ll"], v["lh"], v["th"] = v["ll"] - bias[2], v["lh"] - bias[3], v["th"] - bias[4]
+        raise ValueError("the pages hold no whole word or no background px to measure")
 
-    def mean_sd(total, squares, shift):
+    def mean_sd(total, squares):
         mean = total / n
-        return (mean - shift, math.sqrt(max(squares / n - mean ** 2, 0.0)))
+        return (mean, math.sqrt(max(squares / n - mean ** 2, 0.0)))
 
-    o_mean = acc["o"] / n                                   # the background's offsets about 0, the bias taken off
-    o_sq = acc["o2"] / n - 2 * bias[:2] * o_mean + bias[:2] ** 2
     tmean = acc["t"] / n
-    fixed = {"core_share": n_in / n_all, "centre_bias": (float(bias[0]), float(bias[1])),
-             "length_bias": float(bias[2]), "height_bias": float(bias[3]), "angle_bias": math.degrees(bias[4]),
-             "background_centre": math.sqrt(float(o_sq.sum()) / 2),
-             "background_length": mean_sd(acc["ll"], acc["ll2"], bias[2]),
-             "background_height": mean_sd(acc["lh"], acc["lh2"], bias[3]),
-             "background_tag": math.sqrt(float((acc["t2"] / n - tmean ** 2).sum()) / channels),
-             "background_tag_mean": tuple(float(x) for x in tmean)}
-    spreads = got = None
-    fields = ("centre", "length", "height", "angle", "tag", "cell", "edge", "outlier")
-    for _ in range(SPREAD_ROUNDS):
-        got = _measure_round(per_word, channels, spreads, fixed)
-        if spreads is not None and all(abs(getattr(got, f) - getattr(spreads, f)) <= SPREAD_TOL * getattr(spreads, f)
-                                       for f in fields):
-            break
-        spreads = got
-    return got
+    background = {"background_centre": math.sqrt(acc["o2"] / (2 * n)),
+                  "background_length": mean_sd(acc["ll"], acc["ll2"]),
+                  "background_height": mean_sd(acc["lh"], acc["lh2"]),
+                  "background_tag": math.sqrt(float((acc["t2"] / n - tmean ** 2).sum()) / channels),
+                  "background_tag_mean": tuple(float(x) for x in tmean)}
+    core_share = n_in / n_all
 
+    # the calibration: every word px's prediction against its Terra word's true value
+    word = np.concatenate([np.full(len(v["ll"]), k) for k, (v, *_) in enumerate(per_word)])
+    nw = len(per_word)
+    cat = {key: np.concatenate([v[key] for v, *_ in per_word]) for key in ("p", "o", "ll", "lh", "th", "t")}
+    truths = np.array([t for _, t, *_ in per_word])
+    T = truths[word]
+    true = {"x": (T[:, 0] - cat["p"][:, 0]) * np.exp(-T[:, 3]), "y": (T[:, 1] - cat["p"][:, 1]) * np.exp(-T[:, 3]),
+            "ll": T[:, 2], "lh": T[:, 3]}
+    pred = {"x": cat["o"][:, 0], "y": cat["o"][:, 1], "ll": cat["ll"], "lh": cat["lh"]}
+    cal = {}
+    for key in ("x", "y", "ll", "lh"):
+        t, q = true[key], pred[key]
+        vt = float(np.mean((t - t.mean()) ** 2))
+        if not vt > 0:
+            raise ValueError(f"the words' true {key} do not vary: no calibration slope")
+        beta = float(np.mean((t - t.mean()) * (q - q.mean()))) / vt
+        cal[key] = (float(q.mean()) - beta * float(t.mean()), beta, (float(t.mean()), math.sqrt(vt)))
+    angle_bias = float(np.mean(_half(cat["th"] - T[:, 4])))
+    errs = {key: pred[key] - cal[key][0] - cal[key][1] * true[key] for key in cal}
+    errs["th"] = _half(cat["th"] - angle_bias - T[:, 4])
 
-def _measure_round(per_word, channels: int, spreads: Spreads | None, fixed: dict) -> Spreads:
-    """One round of `measure_spreads`: each word's own fit with `spreads` (None: the votes' means, the first round),
-    then every spread from the residuals."""
-    model = _Model(spreads, channels) if spreads is not None else None
+    # the variogram of the offset's deviations within words (each word's location cancels in its differences)
+    loc0 = {key: _locations(errs[key], np.ones(len(word)), word, nw) for key in ("x", "y")}
     lag_n, lag_d = {}, {}
-    fits, offsets = [], []             # (n, residual sums of squares: log length, log height, axis, tag; pairs)
-    strays = votes = 0.0
-    for v, rect, m, (ry, rx), _ in per_word:
-        prm, tag, r = _own_fit(v, rect, model)
-        strays += float((1 - r).sum())
-        votes += len(r)
-        res = v["o"] - (prm[:2] - v["p"]) * math.exp(-prm[3])
-        mw = np.zeros_like(m)                  # each px weighted by its chance of being the word's own vote
-        mw[ry, rx] = r
-        n_lag = _corr(mw, mw)
+    starts = np.r_[0, np.cumsum([len(v["ll"]) for v, *_ in per_word])]
+    for k, (v, _, m, (ry, rx), n_lag) in enumerate(per_word):
+        sl = slice(starts[k], starts[k + 1])
         d_lag = np.zeros_like(n_lag)
-        for c in range(2):
+        for key in ("x", "y"):
             f = np.zeros_like(m)
-            f[ry, rx] = res[:, c]
-            d_lag += _corr(mw, mw * f * f) + _corr(mw * f * f, mw) - 2 * _corr(mw * f, mw * f)
-        key = n_lag.shape
-        lag_n[key] = lag_n.get(key, 0) + n_lag
-        lag_d[key] = lag_d.get(key, 0) + d_lag
-        fits.append((float(r.sum()), float((r * (v["ll"] - prm[2]) ** 2).sum()),
-                     float((r * (v["lh"] - prm[3]) ** 2).sum()), float((r * _half(v["th"] - prm[4]) ** 2).sum()),
-                     float((r[:, None] * (v["t"] - tag) ** 2).sum()), n_lag))
-        along, up = _axes(prm[4])
-        a, b = (rect - prm[:2]) @ along, (rect - prm[:2]) @ up
-        half_l, half_h = math.exp(prm[2]) / 2, math.exp(prm[3]) / 2
-        offsets += [-half_l - a.min(), half_l - a.max(), -half_h - b.min(), half_h - b.max()]
-    # the variogram's lags, pooled over words of every shape on one canvas, lag (0, 0) at its centre
+            f[ry, rx] = errs[key][sl] - loc0[key][k]
+            d_lag += _corr(m, m * f * f) + _corr(m * f * f, m) - 2 * _corr(m * f, m * f)
+        lag_n[n_lag.shape] = lag_n.get(n_lag.shape, 0) + n_lag
+        lag_d[n_lag.shape] = lag_d.get(n_lag.shape, 0) + d_lag
     hh = max(key[0] for key in lag_n) // 2
     ww = max(key[1] for key in lag_n) // 2
     pairs = np.zeros((2 * hh + 1, 2 * ww + 1))
     sq = np.zeros_like(pairs)
     for (h, w), nn in lag_n.items():
-        sl = (slice(hh - h // 2, hh + h // 2 + 1), slice(ww - w // 2, ww + w // 2 + 1))
-        pairs[sl] += nn
-        sq[sl] += lag_d[(h, w)]
+        sl2 = (slice(hh - h // 2, hh + h // 2 + 1), slice(ww - w // 2, ww + w // 2 + 1))
+        pairs[sl2] += nn
+        sq[sl2] += lag_d[(h, w)]
     pairs[hh, ww] = 0                                    # lag 0: no difference
     dy, dx = np.nonzero(pairs > 0)
+    if not len(dy):
+        raise ValueError("the pages' words hold no pair of px: no variogram")
     weight = pairs[dy, dx]
     gamma = sq[dy, dx] / (2 * 2 * weight)
     dist2 = (dy - hh) ** 2.0 + (dx - ww) ** 2.0
@@ -1524,21 +1958,83 @@ def _measure_round(per_word, channels: int, spreads: Spreads | None, fixed: dict
 
     extent = math.log(max(math.sqrt(float(dist2.max())), 1.0))
     log_ell = minimize_scalar(lambda le: fitted(le)[1], bounds=(math.log(1e-2), extent), method="bounded").x
-    sill, _ = fitted(log_ell)
     ell = math.exp(log_ell)
     cell = float(_lattice(ell).sum() ** 2)
-    dof = 0.0
-    sums = np.zeros(4)
-    for n, sl, sh, sa, st, n_lag in fits:
+    # each word's correlated share: the sum of rho over its px pairs (its n_lag) / n
+    rho_sum = np.empty(nw)
+    for k, (_, _, _, _, n_lag) in enumerate(per_word):
         h, w = n_lag.shape
         yy, xx = np.mgrid[-(h // 2):h // 2 + 1, -(w // 2):w // 2 + 1]
-        if n > 0:
-            dof += n - float((n_lag * np.exp(-(yy ** 2 + xx ** 2) / (2 * ell ** 2))).sum()) / n
-        sums += (sl, sh, sa, st)
-    dof = max(dof, np.finfo(float).tiny)
-    outlier = strays / votes if model is not None else 0.5     # the first round reads no outliers: a start only
-    outlier = min(max(outlier, np.finfo(float).tiny), 1 - np.finfo(float).eps)   # numerical: a share in (0, 1)
-    return Spreads(outlier=outlier, centre=math.sqrt(sill), length=math.sqrt(sums[0] / dof),
-                   height=math.sqrt(sums[1] / dof),
-                   angle=math.degrees(math.sqrt(sums[2] / dof)), tag=math.sqrt(sums[3] / (channels * dof)), cell=cell,
-                   edge=math.sqrt(float(np.mean(np.square(offsets))) + 1 / 12), **fixed)
+        rho_sum[k] = float((n_lag * np.exp(-(yy ** 2 + xx ** 2) / (2 * ell ** 2))).sum())
+    n_w = np.bincount(word, minlength=nw).astype(np.float64)
+    dof_words = float(np.maximum(n_w - rho_sum / n_w, 0.0).sum())       # n less its correlated share, each word
+
+    # the t of each dimension's deviations about its words' locations, and the locations, to a fixed point
+    groups = {"centre": ("x", "y"), "length": ("ll",), "height": ("lh",), "angle": ("th",)}
+    tags = cat["t"]
+    fits = {}
+    for dim, keys in [*groups.items(), ("tag", None)]:
+        if dim == "tag":
+            es = [tags[:, c] for c in range(channels)]
+        else:
+            es = [errs[key] for key in keys]
+        count = dof_words * len(es)
+        scale = math.sqrt(float(np.mean(np.concatenate(es) ** 2))) or 1.0
+        dof, ws, ll = math.inf, [np.ones(len(word)) for _ in es], -math.inf
+        for _ in range(SPREAD_ROUNDS):
+            locs = [_locations(e, w, word, nw, axis=dim == "angle") for e, w in zip(es, ws)]
+            devs = [(_half(e - loc[word]) if dim == "angle" else e - loc[word]) for e, loc in zip(es, locs)]
+            dev = np.concatenate(devs)
+            scale, dof, w_all, new_ll = _t_fit(dev, count, scale, dof)
+            ws = np.split(w_all, len(es))
+            settled = abs(new_ll - ll) <= EM_TOL * len(dev)
+            ll = new_ll
+            if settled:
+                break
+        else:
+            raise RuntimeError(f"the {dim} spread did not settle in {SPREAD_ROUNDS} rounds (last {scale}, dof {dof})")
+        fits[dim] = (scale, dof, locs)
+    shared = {}
+    for dim in groups:
+        scale, dof, locs = fits[dim]
+        noise = scale ** 2 * (dof + 3) / (dof + 1) if math.isfinite(dof) else scale ** 2
+        var_loc = noise * rho_sum / n_w ** 2
+        mean_sq = float(np.mean(np.concatenate([loc ** 2 for loc in locs])))
+        shared[dim] = math.sqrt(max(mean_sq - float(np.mean(var_loc)), 0.0))
+    edge, edge_left_out = _measure_edge(edge_items, core_share)
+    MEASURED.update(words=len(per_word), edge_left_out=edge_left_out)
+    deg = math.degrees
+    return Spreads(centre=fits["centre"][0], length=fits["length"][0], height=fits["height"][0],
+                   angle=deg(fits["angle"][0]), tag=fits["tag"][0], cell=cell, edge=edge, core_share=core_share,
+                   centre_bias=(cal["x"][0], cal["y"][0]), length_bias=cal["ll"][0], height_bias=cal["lh"][0],
+                   angle_bias=deg(angle_bias), **background,
+                   centre_slope=(cal["x"][1], cal["y"][1]), length_slope=cal["ll"][1], height_slope=cal["lh"][1],
+                   centre_dof=fits["centre"][1], length_dof=fits["length"][1], height_dof=fits["height"][1],
+                   angle_dof=fits["angle"][1], tag_dof=fits["tag"][1],
+                   centre_word=shared["centre"], length_word=shared["length"], height_word=shared["height"],
+                   angle_word=deg(shared["angle"]),
+                   centre_truth=(cal["x"][2], cal["y"][2]), length_truth=cal["ll"][2], height_truth=cal["lh"][2])
+
+
+def calibration_report(spreads: Spreads) -> dict:
+    """Each calibrated dimension's forward fit (alpha, beta; s the t's scale, its dof, and the words' shared error's
+    sd), the inverse one from it and the true values' spread (a, b, sigma: the point placement, `_placement`), and the
+    information share of one vote, R^2 = beta^2 var(true) / (beta^2 var(true) + s^2 + shared^2) (the t's scale taken
+    as its sd; the inverse fit's b^2 var(pred) / (b^2 var(pred) + sigma^2) is the same number)."""
+    out = {}
+    for name, alpha, beta, s, dof, shared, truth in (
+            ("centre x", spreads.centre_bias[0], spreads.centre_slope[0], spreads.centre, spreads.centre_dof,
+             spreads.centre_word, spreads.centre_truth[0]),
+            ("centre y", spreads.centre_bias[1], spreads.centre_slope[1], spreads.centre, spreads.centre_dof,
+             spreads.centre_word, spreads.centre_truth[1]),
+            ("log length", spreads.length_bias, spreads.length_slope, spreads.length, spreads.length_dof,
+             spreads.length_word, spreads.length_truth),
+            ("log height", spreads.height_bias, spreads.height_slope, spreads.height, spreads.height_dof,
+             spreads.height_word, spreads.height_truth)):
+        a, b, sigma = _placement(alpha, beta, math.hypot(s, shared), truth)
+        vt = truth[1] ** 2
+        out[name] = {"alpha": alpha, "beta": beta, "s": s, "dof": dof, "shared": shared, "a": a, "b": b,
+                     "sigma": sigma,
+                     "r2": (beta * beta * vt / (beta * beta * vt + s * s + shared * shared) if math.isfinite(vt)
+                            else 1.0)}
+    return out
