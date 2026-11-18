@@ -52,7 +52,7 @@ describe("plan: vector and citywide files", () => {
     });
     const text = `${SHA}  ${lotsName}\n`;
     expect(r.uploads).toEqual([
-      { to: blobPath("1948", lotsName), local: "1948/1948-lots.gpkg.zip", root: "downloads", bytes: 10 },
+      { to: blobPath("1948", lotsName), local: "1948/1948-lots.gpkg.zip", root: "downloads", bytes: 10, sha256: SHA },
       { to: blobPath("1948", `${lotsName}.sha256`), text, bytes: Buffer.byteLength(text) },
     ]);
     expect(r.newVersions).toEqual([{ series: "1948", layer: "lots", fmt: "gpkg", name: lotsName, date: "2026-11-04", bytes: 10, sha256: SHA }]);
@@ -119,6 +119,15 @@ describe("plan: vector and citywide files", () => {
     expect(r.newVersions).toEqual([]);
   });
 
+  it("a kept entry missing from history is re-recorded (a lost history repairs itself); with history intact nothing is added", () => {
+    const first = run(idx({ "1948/lots.gpkg": lots() }, { "1948": [sheet()] }), empty, hist, {}, new Map([[DVC, 5]]));
+    const manifest = { files: first.files, sheets: first.sheets };
+    const again = (history: { versions: Version[] }) =>
+      run(idx({ "1948/lots.gpkg": lots() }, { "1948": [sheet()] }), manifest, history, first.numbers, new Map([[DVC, 5]]));
+    expect(again(hist).newVersions).toEqual(first.newVersions);
+    expect(again({ versions: first.newVersions }).newVersions).toEqual([]);
+  });
+
   it("an index entry without made throws, naming the key and the fix", () => {
     const { made: _m, ...bad } = lots();
     void _m;
@@ -145,7 +154,7 @@ describe("plan: sheets", () => {
     const r = run(idx({}, { "1948": [sheet()] }));
     const name = sheetName("2026-11-18");
     expect(r.copies).toEqual([]);
-    expect(r.uploads[0]).toEqual({ to: blobPath("1948", name), local: "1948/10/warped_paper.tif", root: "work", bytes: 5 });
+    expect(r.uploads[0]).toEqual({ to: blobPath("1948", name), local: "1948/10/warped_paper.tif", root: "work", bytes: 5, sha256: SHA2 });
     expect(r.uploads[1].to).toBe(blobPath("1948", `${name}.sha256`));
   });
 
@@ -223,5 +232,32 @@ describe("manifest unchanged", () => {
   it("sees a change in files or sheets", () => {
     expect(same(m, { ...m, files: { a: { name: "x2", bytes: 1, extra: { r: "y" } } } })).toBe(false);
     expect(same(m, { ...m, sheets: {} })).toBe(false);
+  });
+});
+
+describe("uploadMismatch", () => {
+  const um = script.uploadMismatch as (u: unknown, f: string, o: unknown) => Promise<string | null>;
+  const u = { local: "1948/x.zip", bytes: 10, sha256: SHA };
+  it("passes a file with the indexed size and hash, and checks nothing for a text body", async () => {
+    expect(await um(u, "/f", { size: () => 10, hash: async () => SHA })).toBeNull();
+    expect(await um({ text: "t", bytes: 1 }, "/f", { size: () => 99, hash: async () => "no" })).toBeNull();
+  });
+  it("stops on a changed size or hash, saying to rerun sfzmaps downloads", async () => {
+    expect(await um(u, "/f", { size: () => 11, hash: async () => SHA })).toMatch(/11 bytes.*uv run sfzmaps downloads/);
+    expect(await um(u, "/f", { size: () => 10, hash: async () => "d".repeat(64) })).toMatch(/sha256 d+.*uv run sfzmaps downloads/);
+  });
+});
+
+describe("sha256File and writeJsonAtomic", () => {
+  it("hashes a file by streaming, and leaves no .part file behind", async () => {
+    const { mkdtempSync, writeFileSync, existsSync, readFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { createHash } = await import("node:crypto");
+    const dir = mkdtempSync(`${tmpdir()}/pd-`);
+    writeFileSync(`${dir}/a`, "hello");
+    expect(await script.sha256File(`${dir}/a`)).toBe(createHash("sha256").update("hello").digest("hex"));
+    script.writeJsonAtomic(`${dir}/j.json`, { a: 1 });
+    expect(JSON.parse(readFileSync(`${dir}/j.json`, "utf8"))).toEqual({ a: 1 });
+    expect(existsSync(`${dir}/j.json.part`)).toBe(false);
   });
 });

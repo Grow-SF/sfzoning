@@ -28,7 +28,7 @@
 // a confirming listing shows every upload.
 
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { EXTS, assignSheetNumbers, blobPath, parseName, versionedName } from "../lib/downloadNames.mjs";
@@ -99,6 +99,8 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
     const old = manifest.files?.[key];
     if (isVersioned(e.series, old) && old.sha256 === e.sha256) {
       files[key] = old;
+      // A kept entry is recorded too (a no-op when history has it), so a lost history repairs itself.
+      version({ series: e.series, layer: e.layer, fmt: e.fmt, name: old.name, date: old.updated, bytes: old.bytes, sha256: old.sha256 });
       continue;
     }
     const name = versionedName({ series: e.series, layer: e.layer, date: e.made, sha256: e.sha256, ext: EXTS[e.fmt] });
@@ -109,7 +111,7 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
     const publish = (rel, n, bytes, sha) => {
       if (local) return;
       const to = blobPath(e.series, n);
-      if (!checkListed(to, bytes)) uploads.push({ to, local: rel, root: "downloads", bytes });
+      if (!checkListed(to, bytes)) uploads.push({ to, local: rel, root: "downloads", bytes, sha256: sha });
       checksum(e.series, n, sha);
     };
     publish(e.path, name, e.bytes, e.sha256);
@@ -142,7 +144,10 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
     if (entries.length || numbers[series]) nextNumbers[series] = nums;
     const items = entries.map((s) => {
       const old = before.get(s.sheet);
-      if (isVersioned(series, old) && old.md5 === s.md5) return old;
+      if (isVersioned(series, old) && old.md5 === s.md5) {
+        version({ series, layer: `sheet-${old.number}`, fmt: "cog", name: old.name, date: old.updated, bytes: old.bytes, sha256: old.sha256 });
+        return old;
+      }
       const updated = old && old.md5 === s.md5 ? old.updated : today;
       const layer = `sheet-${nums[s.sheet]}`;
       const name = versionedName({ series, layer, date: updated, sha256: s.sha256, ext: "tif" });
@@ -153,7 +158,7 @@ export function plan(index, manifest, history, numbers, listing, today, { local 
         if (!checkListed(to, s.bytes)) {
           const dvc = dvcPath(s.md5);
           if (listing.has(dvc)) copies.push({ from: dvc, to, bytes: s.bytes });
-          else uploads.push({ to, local: `${series}/${s.sheet}/warped_paper.tif`, root: "work", bytes: s.bytes });
+          else uploads.push({ to, local: `${series}/${s.sheet}/warped_paper.tif`, root: "work", bytes: s.bytes, sha256: s.sha256 });
         }
         checksum(series, name, s.sha256);
       }
@@ -197,6 +202,36 @@ async function listSizes(list, prefix, sizes, counter) {
 
 const localPath = (u) => path.join(u.root === "work" ? WORK : DOWNLOADS, u.local);
 const requestsFor = (bytes) => (bytes > MULTIPART_MIN ? 2 + Math.ceil(bytes / PART_BYTES) : 1);
+
+/** sha256 of a file, streamed (files run to ~130 MB). */
+export function sha256File(file) {
+  return new Promise((resolve, reject) => {
+    const h = createHash("sha256");
+    createReadStream(file).on("data", (c) => h.update(c)).on("error", reject).on("end", () => resolve(h.digest("hex")));
+  });
+}
+
+/**
+ * Whether a local file is still the one index.json described: size and sha256 must match what the
+ * plan used to name it. @returns {Promise<string | null>} a message, or null when it matches (or
+ * when the upload is a text body, which has nothing local to check). `size` and `hash` are injectable.
+ */
+export async function uploadMismatch(u, file, { size = (f) => statSync(f).size, hash = sha256File } = {}) {
+  if (u.local === undefined) return null;
+  const rerun = "rerun `uv run sfzmaps downloads` in pipeline/ and publish again";
+  const bytes = size(file);
+  if (bytes !== u.bytes) return `${file} is ${bytes} bytes but index.json says ${u.bytes}; it changed after the index was written; ${rerun}`;
+  const sha = await hash(file);
+  if (sha !== u.sha256) return `${file} has sha256 ${sha} but index.json says ${u.sha256}; it changed after the index was written; ${rerun}`;
+  return null;
+}
+
+/** Write via a .part file and a rename, so a crash never leaves half a file. */
+export function writeJsonAtomic(file, v) {
+  const part = `${file}.part`;
+  writeFileSync(part, JSON.stringify(v, null, 1) + "\n");
+  renameSync(part, file);
+}
 
 const readJson = (file, fallback) => (existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : fallback);
 const writeJson = (file, v) => writeFileSync(file, JSON.stringify(v, null, 1) + "\n");
@@ -256,7 +291,6 @@ async function main() {
 
   index.sidecars = hashSidecars(index);
   const p = plan(index, manifest, history, numbers, sizes, now);
-  for (const u of p.uploads) if (u.local) u.bytes = statSync(localPath(u)).size;
   const bytes = p.uploads.reduce((n, u) => n + u.bytes, 0);
   const requests = counter.n + p.uploads.reduce((n, u) => n + requestsFor(u.bytes), 0) + p.copies.length + 1;
 
@@ -271,6 +305,11 @@ async function main() {
   }
 
   for (const u of p.uploads) {
+    // The index is what named this file (and its hash); stop before it goes up under the wrong name.
+    if (u.local) {
+      const problem = await uploadMismatch(u, localPath(u));
+      if (problem) throw new Error(`stopping before uploading ${u.to}: ${problem}`);
+    }
     console.log(`upload ${u.to} (${u.bytes} bytes)`);
     await put(u.to, u.text ?? createReadStream(localPath(u)), {
       access: "public",
@@ -283,7 +322,9 @@ async function main() {
   }
   for (const c of p.copies) {
     console.log(`copy ${c.from} -> ${c.to}`);
-    await copy(c.from, c.to, { access: "public", addRandomSuffix: false, allowOverwrite: false, cacheControlMaxAge: ONE_YEAR });
+    await copy(c.from, c.to, {
+      access: "public", addRandomSuffix: false, allowOverwrite: false, cacheControlMaxAge: ONE_YEAR, contentType: "image/tiff",
+    });
   }
   if (p.uploads.length || p.copies.length) {
     // One listing confirms every name by size (names carry the hash, so size is what can differ).
@@ -295,9 +336,11 @@ async function main() {
   }
 
   const next = build(index, p.files, p.sheets, now, BASE);
-  if (!sameManifest(manifest, next)) writeJson(MANIFEST, next);
-  if (p.newVersions.length) writeJson(HISTORY, { versions: [...history.versions, ...p.newVersions] });
-  if (stable(numbers) !== stable(p.numbers)) writeJson(NUMBERS, p.numbers);
+  // Order matters: numbers, then history, then the manifest last. A crash leaves the manifest
+  // behind, so a rerun still sees work to do (and plan() re-records any version history lacks).
+  if (stable(numbers) !== stable(p.numbers)) writeJsonAtomic(NUMBERS, p.numbers);
+  if (p.newVersions.length) writeJsonAtomic(HISTORY, { versions: [...history.versions, ...p.newVersions] });
+  if (!sameManifest(manifest, next)) writeJsonAtomic(MANIFEST, next);
   console.log(`published ${p.newVersions.length} new version(s); commit lib/downloads.json, lib/download-versions.json and lib/sheet-numbers.json, then deploy.`);
 }
 
