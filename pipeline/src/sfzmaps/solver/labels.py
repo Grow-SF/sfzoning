@@ -10,7 +10,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-from sfzmaps.solver import runs
+from sfzmaps.solver import paths, runs
 from sfzmaps.solver.codes import canon, is_overlay
 from sfzmaps.solver.trust import load_prints
 
@@ -69,7 +69,11 @@ def readings(q: str, vocabulary=None, source: Source | None = None) -> Readings:
     label = np.r_[lab, lab[r]]
     far = np.r_[np.zeros(len(lab), bool), np.ones(len(r), bool)]
     keep = (lot >= 0) & ~np.array([is_overlay(n) for n in raw_names], bool)[code]
-    names = [canon(n) for n in raw_names]
+    if paths.is_2000():
+        names = [canon(n) for n in raw_names]
+    else:                                        # another era's spellings ('C 1' is C-1): `transfer.era_canon`
+        from sfzmaps.solver import transfer
+        names = [transfer.era_canon(n) for n in raw_names]
     first = {}
     for i, n in enumerate(names):
         first.setdefault(n, i)

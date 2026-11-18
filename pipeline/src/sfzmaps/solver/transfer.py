@@ -241,6 +241,17 @@ def build_text_chance(device: str | None = None) -> dict:
     return {"sheets": len(paths.SHEETS), "device": device, "seconds": round(time.perf_counter() - t0, 1)}
 
 
+def era_canon(code: str) -> str:
+    """A code in the one spelling of the series' era: the pipeline's era-aware spelling (`districts.rules.
+    normalise_code` in the series' year: 'C 1' and 'C1' are C-1) where it knows the code, else `codes.canon`."""
+    from sfzmaps.districts.rules import normalise_code
+    from sfzmaps.districts.series import SERIES
+    from sfzmaps.solver.codes import canon
+    if paths.SERIES.endswith("-height"):
+        return canon(code)
+    return normalise_code(code, SERIES[paths.SERIES].year) or canon(code)
+
+
 def series_vocabulary() -> set[str]:
     """The codes a series' labels may name (the solve drops readings of any other): the codes of its published map
     (the pipeline's reader, held to the era's legend and code list) with every code read on its prints that the era's
@@ -267,10 +278,10 @@ def series_vocabulary() -> set[str]:
     out = set()
     f = config.WORK_DIR / paths.SERIES / "districts_raw.parquet"
     if f.is_file():
-        out |= {canon(c) for c in pd.read_parquet(f, columns=["code"])["code"].dropna().astype(str) if c}
+        out |= {era_canon(c) for c in pd.read_parquet(f, columns=["code"])["code"].dropna().astype(str) if c}
     prints = load_prints()
     for col in READS:
         for c in set(prints[col].astype(str)) - {""}:
             if rule_for(c, year) is not None:
-                out.add(canon(c))
+                out.add(era_canon(c))
     return out
