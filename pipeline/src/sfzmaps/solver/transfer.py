@@ -15,6 +15,7 @@ table, so fitting on it would read the answers), so each of its fits takes the 2
 `build_models` (run on the 2000 map: `sfzmaps solver transfer-models`) writes them into paths.TRANSFER_DIR; the
 series' stages read them (`sfzmaps solver --series S labels`, `walls`, `solve`)."""
 import json
+import os
 import logging
 import shutil
 import time
@@ -193,6 +194,10 @@ def build_walls(workers: int = 2) -> dict:
     from sfzmaps.solver import runs, textgrid, walls
     t0 = time.perf_counter()
     inputs = walls.load_inputs([list(TRANSFER_WALLS)])
+    scale = width_scale(inputs.strokes)
+    if scale != 1.0:                                 # the drawing's pen widths on the 2000 drawing's scale
+        for k in ("w", "wmed", "wiqr"):
+            inputs.strokes[k] = (inputs.strokes[k].astype(np.float64) * scale).astype(inputs.strokes[k].dtype)
     X = walls.candidate_design(inputs, list(TRANSFER_WALLS), workers)
     W = _models("walls.npz")
     if tuple(W["candidates"].astype(str)) != TRANSFER_WALLS:
@@ -208,12 +213,30 @@ def build_walls(workers: int = 2) -> dict:
         quarters[q] = {"held_out_log_loss": round(walls.log_loss(lo[held], y[held]), 6) if held.any() else None,
                        "held_out_pairs": int(held.sum())}
     evaluation = {"pairs": len(y), "features": int(X.shape[1]), "quarters": quarters,
-                  "candidates": list(TRANSFER_WALLS), "weights": "2000 (transfer)"}
+                  "candidates": list(TRANSFER_WALLS), "weights": "2000 (transfer)", "width_scale": scale}
     folder = runs.fresh_folder(runs.WALLS_DIR)
     walls.write_walls(folder, odds, evaluation)
     textgrid.write_text_chance(folder, inputs.text)
     runs.replace_folder(folder, runs.WALLS_DIR)
     return {**evaluation, "seconds": round(time.perf_counter() - t0, 1)}
+
+
+WIDTH_SCALE_ENV = "SFZMAPS_WALL_WIDTH_SCALE"
+
+
+def width_scale(strokes) -> float:
+    """How much wider the 2000 drawing's pen is than the series' (WIDTH_SCALE_ENV: "auto" for the ratio of the two
+    pages' length-weighted mean stroke widths, measured on the ink alone; a number for that; unset or "1" for none).
+    The 2000 walls weigh stroke widths in feet, and the older drawings print every line thinner."""
+    v = os.environ.get(WIDTH_SCALE_ENV, "1")
+    if v != "auto":
+        return float(v)
+    ref = np.load(paths.solver_dir(paths.SERIES_2000) / "labels" / "strokes.npz")
+
+    def mean(s):
+        w, L = s["wmed"].astype(float), s["length"].astype(float)
+        return float((w * L).sum() / L.sum())
+    return round(mean(ref) / mean(strokes), 4)
 
 
 def build_text_chance(device: str | None = None) -> dict:
