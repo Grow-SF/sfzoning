@@ -1,12 +1,14 @@
-"""Task 13's scenes (item 8): build the scene bank of one fold (`wordread.scenes.SceneBank`, the quarter and the answered
-blocks held out), write what it measured, a contact sheet of scenes with their masks, and the words a crop holds, real
+"""Task 13's scenes (item 8): build the scene bank of one fold (`wordread.scenes.SceneBank`, the quarter and the
+answered blocks held out), write what it measured, a contact sheet of scenes with their masks, and the words a crop holds, real
 and scene; and the run step Task 8's runner calls when the kept detector exists.  Everything is written to
 data/solver/experiments/wordread/scenes/<quarter>/ (never committed).  CPU only; $0.
 
     uv run python scripts/wordread/run_scenes.py build --quarter ne [--seed 0] [--threads 2]
 
-The run step (`scene_run`): the kept word recipe with `scenes` at the measured share (`density.json`'s "share"), its
-scenes from this fold's bank, trained and measured as Task 8's arms are (`variant.run` through the bank it takes).
+The run step (`scene_run`): the kept word recipe with `scenes` at a given share of the crops (the owner rules the
+share when the scene run comes up; `density.json` records the words a crop holds, real and scene, per map, and the
+pasteable share of the words, as measurements only), its scenes from this fold's bank, trained and measured as Task
+8's arms are (`variant.run` through the bank it takes).
 
 The keep rule (Task 8's, written before the runs): scenes are kept if, on NE over seeds 0 and 1, end to end (the
 detector plus a reader retrained on its boxes with Task 4's kept options), the headline rises with the paired label
@@ -66,20 +68,15 @@ def scene_recipe(share: float, kept: train.Recipe | None = None) -> train.Recipe
     return dataclasses.replace(kept, scenes=float(share))
 
 
-def measured_share(quarter: str, root: Path | None = None) -> float:
-    """The scene share measured for the fold (`density.json`'s "share", written by `build`)."""
-    return float(json.loads(((root or ROOT) / quarter / "density.json").read_text())["share"])
-
-
-def scene_run(quarter: str, seed: int, share: float | None = None, kept: train.Recipe | None = None,
+def scene_run(quarter: str, seed: int, share: float, kept: train.Recipe | None = None,
               bank=None, name: str = "scenes", **kwargs) -> Path:
-    """Task 8's run step for scenes: the kept recipe with `share` (default the measured one) of its crops scenes,
+    """Task 8's run step for scenes: the kept recipe with `share` of its crops scenes (the owner's ruling),
     trained by `variant.run` with the fold's bank (built here, before the GPU's turn, when not given) and measured
     as Task 8's arms are; `kwargs` as `variant.run` takes them (device, sheets, areas, root, doubt, ...).  Needs
     `variant.run` to take a bank for a recipe with scenes (today it takes one only with composites)."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "textlines"))
     import variant
-    recipe = scene_recipe(measured_share(quarter) if share is None else share, kept)
+    recipe = scene_recipe(share, kept)
     if bank is None:
         bank = bank_for(quarter, seed, kwargs.get("sheets"), kwargs.get("areas"))
     return variant.run(name, recipe, quarter, seed, bank=bank, **kwargs)
@@ -94,28 +91,34 @@ def words_in(crop: dict) -> int:
 
 def density(bank: scenes.SceneBank, sheets: list, seed: int, n: int = DENSITY_CROPS, size: int = train.CROP) -> dict:
     """Words a crop holds, real (drawn as `train.draw` draws them, the bank's areas held out) and scene, at the same
-    scales and turns; and the pasteable share of the usable words.  The share of scene crops is the pasteable share
-    (see the report: the word density alone does not fix it when scenes centre as the real crops do)."""
+    scales and turns, over all and per map (a real crop's map is its sheet's, a scene's its frame's); and the
+    pasteable share of the usable words.  Measurements only: the share of scene crops is the owner's to rule."""
     held = shrink.prepare(data.hold_out(sheets, bank.sheets[0].held))
     pools = train.centre_pools(held)
     rng = np.random.default_rng([seed, 21])
-    real, scene = [], []
+    real, scene, by_map = [], [], {}
     for _ in range(n):
         pool = pools[0] if rng.random() < train.TEXT_SHARE else pools[1]
         i, y, x = pool[rng.integers(len(pool))]
         scale = float(np.exp(rng.uniform(np.log(train.SCALE[0]), np.log(train.SCALE[1]))))
         turns = int(rng.integers(4))
         real.append(words_in(data.crop_targets(held[i], y, x, size, scale, turns, words=True)))
+        by_map.setdefault(held[i].series, {"real": [], "scene": []})["real"].append(real[-1])
         scene.append(words_in(bank.crop(rng, size, scale, turns)))
+        by_map.setdefault(bank.last["series"], {"real": [], "scene": []})["scene"].append(scene[-1])
     usable = sum(m.summary["words"]["usable"] for m in bank.measured.values())
     pasteable = sum(m.summary["words"]["pasteable"] for m in bank.measured.values())
 
     def stat(v):
         v = np.asarray(v, float)
-        return {"mean": round(float(v.mean()), 4), "se": round(float(v.std(ddof=1) / math.sqrt(len(v))), 4),
-                "q50": float(np.median(v)), "q90": float(np.quantile(v, 0.9))}
+        if len(v) < 2:
+            return {"crops": len(v)}
+        return {"crops": len(v), "mean": round(float(v.mean()), 4),
+                "se": round(float(v.std(ddof=1) / math.sqrt(len(v))), 4), "q50": float(np.median(v)),
+                "q90": float(np.quantile(v, 0.9))}
     return {"crops": n, "size": size, "real_words_per_crop": stat(real), "scene_words_per_crop": stat(scene),
-            "usable_words": usable, "pasteable_words": pasteable, "share": round(pasteable / usable, 4)}
+            "by_map": {s: {k: stat(v) for k, v in d.items()} for s, d in by_map.items()},
+            "usable_words": usable, "pasteable_words": pasteable, "pasteable_share": round(pasteable / usable, 4)}
 
 
 # --- the contact sheet -----------------------------------------------------------------------------------------------
@@ -151,7 +154,8 @@ def _tile(t: dict, caption: str) -> np.ndarray:
 
 def contact_sheet(bank: scenes.SceneBank, seed: int, out: Path, n: int = SHEET_CROPS, size: int = train.CROP) -> dict:
     """`n` scenes drawn as the training draws them (scale and turns), each beside its masks (`_tile`), in rows of
-    COLUMNS: written to `out` (png).  Returns what each held."""
+    COLUMNS: written to `out` (png).  Returns what each held (a label's word marked * when it is a same-kind stand-in
+    for a string no pasteable word prints)."""
     rng = np.random.default_rng([seed, 13])
     tiles, held = [], []
     for k in range(n):
@@ -160,11 +164,12 @@ def contact_sheet(bank: scenes.SceneBank, seed: int, out: Path, n: int = SHEET_C
         t = bank.crop(rng, size, scale, turns)
         last = bank.last
         sd = bank.sheets[last["sheet"]]
-        labels = [f"{p['what']}:{bank.words[sd.series].text[p['word']]}" for p in last["labels"]]
+        labels = [f"{p['what']}:{bank.words[sd.series].text[p['word']]}{'*' if p['standin'] else ''}"
+                  for p in last["labels"]]
         held.append({"scene": k, "series": sd.series, "sheet": sd.sheet, "window": list(last["window"]),
                      "scale": round(scale, 3), "turns": turns, "words": words_in(t), "labels": labels,
-                     "segments": {n_: int((last["segments"]["kind"] == i).sum())
-                                  for i, n_ in enumerate(scenes.LINE_KINDS)}})
+                     "edges": {n_: int((last["segments"]["kind"] == i).sum())
+                               for i, n_ in enumerate(scenes.LINE_KINDS)}})
         tiles.append(_tile(t, f"{k}: {sd.series} {sd.sheet}  x{scale:.2f} turns {turns}  {words_in(t)} words"))
     rows = [np.concatenate(tiles[i:i + COLUMNS] + [np.full_like(tiles[0], 255)] * (COLUMNS - len(tiles[i:i + COLUMNS])),
                            1) for i in range(0, n, COLUMNS)]

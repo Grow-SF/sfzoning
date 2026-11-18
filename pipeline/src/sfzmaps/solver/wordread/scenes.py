@@ -5,11 +5,13 @@ offset, rate and choice of word is drawn from what the training quarters show (`
 
 The geometry (`Geometry`, EPSG:2227 ft): the Assessor's lots (`lots/table.parquet`: `block_num` and the outline only,
 never a code), the blocks (the union of each block's lots) and DataSF's street centrelines
-(`context.sf_streets`).  Three kinds of line (LINE_KINDS):
+(`context.sf_streets`).  Three kinds of line (LINE_KINDS), each kept by item:
   block    a block's outline: the street edges
-  lot      the lines between a block's lots (the lots' outlines less the block's)
+  lot      a block's lot lines (its lots' outlines less its own)
   street   a centreline (the maps draw few: district lines down a street)
-cut into straight segments, each kept with its block (block and lot lines) or its centreline.
+On a page they are cut into EDGES (`page_edges`): straight runs between the vertices the page can show (DataSF puts a
+vertex at every lot corner along a block's straight side, half of them within 0.003 ft of the line; a vertex within
+SIMPLIFY_PX of the line through its neighbours is dropped: the page's px grid, not a decision about the data).
 
 What is held out (`usable`): the areas (a quarter, the answered blocks) as shapes on the map; a block is usable when
 its outline (and so every lot in it) meets none, a centreline when it meets none.  An answered-blocks area
@@ -25,20 +27,22 @@ rectangle (page px).
 
 What is measured (by `SceneBank.build`, `measure_map`), per map, on each sheet's training px of its printed map
 only (its footprint, `load_footprint`, less the held-out areas):
-  lines    per kind, a mixture over the skeleton px of the sheet's line ink (its ink outside every Terra word's and
-           other pass's rectangle; the run rule's line px, `SheetData.line_bits`, miss a block's short edges): each
-           skeleton px goes to the kind whose projected line is nearest (`_project`, through the inverse placement;
-           the first of LINE_KINDS on a tie), and its distance d to it is either the kind's own ink (the printed line
-           about the projected one, a Gaussian of spread sigma: g(d) = exp(-d^2 / 2 sigma^2)) or anything else, each
-           weighed by n_b(d), the count of the page's training px at that distance (the geometry of the px around a
-           line): P(d | own) ~ n_b(d) g(d), P(d | other) ~ n_b(d); a share a per kind and ONE sigma for every kind
-           (the placement that moves the lines is one), by EM (`fit_near`).  (Tried first: an offset mu and a sigma
-           per kind.  The offset came out 0 for block and lot lines on every map; and a centreline's own spread,
-           fitted alone, covered the whole street on the 1980-2000 maps (sigma 17-21 px against 0.8-1.0 px for the
-           blocks and lots): the street's untranscribed text, not a line.  A line's spread is the placement's.)  The drawn share: the own px over the kind's projected length (both counted in
-           8-connected px); the thickness: the own px' thickness (2 x the distance to paper at the skeleton - 1),
-           explained as a mixture of the thicknesses `cv2.line` draws (`thickness_shares`; each thickness's profile
-           measured by drawing it at every angle)
+  lines    the edges of every kind on the page (through the inverse placement, `_ToPage`), drawn 1 px wide; each
+           training px's nearest edge and its distance d (`_sheet_lines`).  Over the skeleton px of the sheet's line
+           ink (its ink outside every Terra word's and other pass's rectangle; the run rule's line px,
+           `SheetData.line_bits`, miss a block's short edges), d is either the nearest edge's kind's own ink (the
+           printed line about the projected one, a Gaussian of spread sigma: g(d) = exp(-d^2 / 2 sigma^2)) or anything
+           else, each weighed by n_b(d), the count of the page's training px nearest that kind at that distance (the
+           geometry of the px around a line): P(d | own) ~ n_b(d) g(d), P(d | other) ~ n_b(d); a share a per kind
+           and ONE sigma for every kind (the placement that moves the lines is one), by EM (`fit_near`).  (Tried first:
+           an offset mu and a sigma per kind.  The offset came out 0 for block and lot lines on every map; and a
+           centreline's own spread, fitted alone, covered the whole street on the 1980-2000 maps (sigma 17-21 px
+           against 0.8-1.0 px for the blocks and lots): the street's untranscribed text, not a line.)  Each edge's own
+           px (the responsibilities of the skeleton px nearest it) out of its px: the share of a kind's EDGES that are
+           drawn, by a binomial mixture of drawn and not-drawn edges (`fit_edges`; the maps leave whole edges out,
+           they do not dash them); the length share is reported beside it.  The thickness: the own px' thickness (2
+           x the distance to paper at the skeleton - 1), explained as a mixture of the thicknesses `cv2.line` draws
+           (`thickness_shares`; each thickness's profile measured by drawing it at every angle)
   codes    each zoning-code word's centre less the centroid of the lot nearest it (ft); its rate per lot
   blocks   each block-number word that lies in the block its text names (`context.block_forms`): its centre less
            the block's centroid (ft); its rate per block
@@ -46,9 +50,9 @@ only (its footprint, `load_footprint`, less the held-out areas):
            (`context.street_forms`): its signed offset across the centreline (ft) and the angle between its axis
            and the centreline's (0-90 degrees).  The offsets are a mixture of the street's own (half-normal) and
            misreads naming a street elsewhere (exponential), by EM from every decile start, the likeliest kept
-           (`fit_far`); the near rate per ft of centreline is the near responsibilities over the length; the angle's
-           density a reflected Gaussian kernel density of the near words' angles, its bandwidth by leave-one-out
-           likelihood (`context.loo_bandwidth`)
+           (`fit_far`); the near rate per ft of named centreline is the near responsibilities over the length; the
+           angle's density a reflected Gaussian kernel density of the near words' angles, its bandwidth by
+           leave-one-out likelihood (`context.loo_bandwidth`)
 Every rate counts per sheet (a lot on two sheets counts twice, as its words can).  A word is measured when usable and
 its centre is on the printed map; a lot, block or centreline when usable and its centroid (a centreline's middle) is
 on the printed map at a training px.  The pasteable words are those whose centre is on the printed map (not the
@@ -59,16 +63,19 @@ A scene (`SceneBank.crop(rng, size, scale, turns)`), from the generator alone:
     the sheets with the areas held out, on the printed map), its window of size / scale page px (moved inside the
     page), and the sheet's placement over the window as one affine map (least squares on its samples there,
     `window_affine`)
-  - lines: each usable block outline and centreline reaching the window drawn whole, and each lot line segment by
-    itself (the maps draw district lines along some of a block's lot lines), with its kind's drawn share, at a
-    thickness drawn from its kind's thickness shares (the same share of the kind's length as the maps draw)
+  - lines: the edges of every usable item reaching the window (`page_edges`), each drawn whole or left out with its
+    kind's drawn share by edge, at a thickness drawn from its kind's thickness shares
   - labels: each usable block with the block rate (at its centroid plus a measured block offset), each lot of a
-    usable block with the code rate (at its centroid plus a measured code offset), and along each usable centreline
-    a Poisson count at the near street rate x its length (uniform along it, offset across it by a measured near
-    offset).  Each label is a pasteable word of its map: of the block's number; any code word; a word its street
-    prints, drawn by the angle density at its angle to the centreline.  No word of that string: skipped.  The labels
-    are placed in a random order, each at its point (its rectangle's centre moved by whole px, so its ink is the
-    page's, unresampled); one whose rectangle would meet a placed one is skipped (two words never share a core px)
+    usable block with the code rate (at its centroid plus a measured code offset), and along each usable named
+    centreline a Poisson count at the near street rate x its length (uniform along it, offset across it by a
+    measured near offset).  Each label is a pasteable word of its map: of the block's number; any code word; a word
+    its street prints, drawn by the angle density at its angle to the centreline.  With no word of that string, a
+    same-kind stand-in: a pasteable word of the label's kind (block number, street name), drawn alike (a street
+    name's by the same angle density), recorded as one (`standin`); the detector's targets never read a label's
+    string, only the reader does, and the reader doesn't train on scenes.  No word of the kind either: skipped.
+    The labels are placed in a random order, each at its point (its rectangle's centre moved by whole px, so its
+    ink is the page's, unresampled); one whose rectangle would meet a placed one is skipped (two words never share
+    a core px)
   - targets: `data.crop_targets(..., words=True)` of the scene as a sheet (its words the pasted rectangles, their
     cores the same: `shrink.prepare`'s rule), so scenes and real crops share every target builder; then made exact:
     text is the pasted words' own ink alone (`text` ⊆ ink), a line px inside a word's rectangle is known not-text,
@@ -89,7 +96,7 @@ from functools import cached_property, lru_cache
 import cv2
 import numpy as np
 import shapely
-from scipy import optimize
+from scipy import optimize, special
 from scipy.interpolate import LinearNDInterpolator
 from skimage.morphology import skeletonize
 
@@ -109,6 +116,8 @@ EM_MAX_ITER = 5000           # ... or after this many iterations (reported when 
 ANGLE_GRID = np.linspace(0.0, 90.0, 9001)   # the street angle density's table (0.01 degree; numerical)
 DECILES = np.arange(1, 10) / 10              # fit_far's starts
 BIG = 1e9                    # ft: a quarter's shape reaches this far past the split (beyond the city; numerical)
+SIMPLIFY_PX = 0.5            # px: a vertex this close to the straight line through its neighbours is one the page
+#                              can't show (its px grid); the drawing's own resolution, not a decision about the data
 
 
 def norm(text) -> str:
@@ -134,14 +143,12 @@ def _segments(geoms) -> tuple[np.ndarray, np.ndarray]:
 
 @dataclasses.dataclass
 class Geometry:
-    """DataSF's geometry as plain arrays (see the module)."""
-    seg: np.ndarray            # float64 (n, 2, 2): every straight segment of every kind
-    seg_kind: np.ndarray       # uint8 (n,): its LINE_KINDS index
-    seg_item: np.ndarray       # int64 (n,): its block (block and lot lines) or centreline (street)
+    """DataSF's geometry (see the module): the blocks and lots, each block's outline and lot lines, the centrelines."""
     block_poly: np.ndarray     # shapely (b,): each block's outline (the union of its lots)
     block_number: np.ndarray   # str (b,): the Assessor's number
     lot_poly: np.ndarray       # shapely (l,)
     lot_block: np.ndarray      # int64 (l,): each lot's block
+    lot_lines: np.ndarray      # shapely (b,): each block's lot lines (its lots' outlines less its own)
     lines: np.ndarray          # shapely LineStrings (c,): the centrelines
     line_forms: tuple          # (c,) tuples: the strings each centreline's street prints (`context.street_forms`)
 
@@ -157,15 +164,11 @@ class Geometry:
         blocks = np.array([shapely.union_all(poly[g]) for g in groups], object)
         inner = np.array([shapely.difference(shapely.union_all(shapely.boundary(poly[g])), shapely.boundary(b))
                           for g, b in zip(groups, blocks, strict=True)], object)
-        lines = np.asarray(streets.geometry.values, object)
         forms = tuple(tuple(context.street_forms(s, t)) for s, t in zip(streets["street"], streets["type"],
                                                                          strict=True))
-        parts = [(_segments(shapely.boundary(blocks)), 0), (_segments(inner), 1), (_segments(lines), 2)]
-        return cls(seg=np.concatenate([p[0][0] for p in parts]).reshape(-1, 2, 2),
-                   seg_kind=np.concatenate([np.full(len(p[0][0]), p[1], np.uint8) for p in parts]),
-                   seg_item=np.concatenate([p[0][1] for p in parts]).astype(np.int64),
-                   block_poly=blocks, block_number=numbers.astype(str), lot_poly=poly,
-                   lot_block=lot_block.astype(np.int64), lines=lines, line_forms=forms)
+        return cls(block_poly=blocks, block_number=numbers.astype(str), lot_poly=poly,
+                   lot_block=lot_block.astype(np.int64), lot_lines=inner,
+                   lines=np.asarray(streets.geometry.values, object), line_forms=forms)
 
     @classmethod
     def load(cls) -> "Geometry":
@@ -175,8 +178,25 @@ class Geometry:
         return cls.from_frames(lots.to_crs(context.CRS), context.sf_streets())
 
     @cached_property
-    def seg_tree(self) -> shapely.STRtree:
-        return shapely.STRtree(shapely.linestrings(self.seg))
+    def outlines(self) -> np.ndarray:
+        return shapely.boundary(self.block_poly)
+
+    def items(self, kind: int) -> np.ndarray:
+        """The geometries of a LINE_KINDS kind: each block's outline, each block's lot lines, each centreline."""
+        return (self.outlines, self.lot_lines, self.lines)[kind]
+
+    def item_tree(self, kind: int) -> shapely.STRtree:
+        """The tree of a kind's items: the blocks (outlines and lot lines are inside them) or the centrelines."""
+        return self.block_poly_tree if kind < 2 else self.line_tree
+
+    @cached_property
+    def block_poly_tree(self) -> shapely.STRtree:
+        return shapely.STRtree(self.block_poly)
+
+    @cached_property
+    def named(self) -> np.ndarray:
+        """Whether each centreline's street prints anything (`context.street_forms`)."""
+        return np.array([bool(f) for f in self.line_forms], bool)
 
     @cached_property
     def block_centre(self) -> np.ndarray:
@@ -293,13 +313,21 @@ def usable(geo: Geometry, areas) -> tuple[np.ndarray, np.ndarray]:
     return block_ok, line_ok
 
 
-def segment_ok(geo: Geometry, block_ok: np.ndarray, line_ok: np.ndarray) -> np.ndarray:
-    """Which segments are usable: their block's or centreline's."""
-    street = geo.seg_kind == LINE_KINDS.index("street")
-    out = np.empty(len(geo.seg), bool)
-    out[~street] = block_ok[geo.seg_item[~street]]
-    out[street] = line_ok[geo.seg_item[street]]
-    return out
+def item_ok(kind: int, block_ok: np.ndarray, line_ok: np.ndarray) -> np.ndarray:
+    """Which items of a kind are usable: their block's (outlines, lot lines) or the centreline's."""
+    return block_ok if kind < 2 else line_ok
+
+
+def page_edges(geoms, to_page) -> tuple[np.ndarray, np.ndarray]:
+    """Geometries' straight edges on a page (px): each mapped by `to_page` ((n, 2) map ft -> page px), its vertices
+    the page can't show dropped (`shapely.simplify` by SIMPLIFY_PX), and cut into edges between the vertices left;
+    float64 (n, 2, 2) and the index of the geometry each came from.  DataSF's outlines carry a vertex at every lot
+    corner along a straight side (half of them within 0.003 ft of the line): on the page they are one edge."""
+    geoms = np.asarray(geoms, object)
+    if not len(geoms):
+        return np.zeros((0, 2, 2)), np.zeros(0, np.int64)
+    page = shapely.transform(geoms, to_page)
+    return _segments(shapely.simplify(page, SIMPLIFY_PX, preserve_topology=False))
 
 
 # --- a sheet's placement -------------------------------------------------------------------------------------------
@@ -340,13 +368,29 @@ def _apply(m: np.ndarray, xy) -> np.ndarray:
     return xy @ m[:, :2].T + m[:, 2]
 
 
-def page_from_world(sd: data.SheetData) -> LinearNDInterpolator:
-    """The inverse of the sheet's placement: map (ft) -> page (x, y), piecewise linear over its samples (nan off
-    them)."""
-    rows, cols = sd.world.shape[:2]
-    gr, gc = np.mgrid[0:rows, 0:cols]
-    page = np.c_[gc.ravel(), gr.ravel()].astype(float) * data.PLACEMENT_STEP
-    return LinearNDInterpolator(sd.world.reshape(-1, 2), page)
+class _ToPage:
+    """The inverse of a sheet's placement: map (ft) -> page (x, y) px, piecewise linear over its samples and, past
+    them, the affine map fitted to them all (least squares)."""
+
+    def __init__(self, sd: data.SheetData):
+        rows, cols = sd.world.shape[:2]
+        gr, gc = np.mgrid[0:rows, 0:cols]
+        page = np.c_[gc.ravel(), gr.ravel()].astype(float) * data.PLACEMENT_STEP
+        world = sd.world.reshape(-1, 2)
+        self.linear = LinearNDInterpolator(world, page)
+        self.affine = np.linalg.lstsq(np.c_[world, np.ones(len(world))], page, rcond=None)[0].T
+
+    def __call__(self, xy) -> np.ndarray:
+        xy = np.asarray(xy, float).reshape(-1, 2)
+        out = self.linear(xy).reshape(-1, 2)
+        off = ~np.isfinite(out).all(1)
+        out[off] = _apply(self.affine, xy[off])
+        return out
+
+
+def page_from_world(sd: data.SheetData) -> _ToPage:
+    """The inverse of the sheet's placement (`_ToPage`)."""
+    return _ToPage(sd)
 
 
 def _footprint(sd: data.SheetData):
@@ -381,7 +425,7 @@ def load_footprint(sd: data.SheetData):
     return shapely.union_all([shape(x["geometry"]) for x in json.loads(f.read_text())["features"]])
 
 
-def content_mask(sd: data.SheetData, footprint, inv: LinearNDInterpolator) -> np.ndarray:
+def content_mask(sd: data.SheetData, footprint, inv: _ToPage) -> np.ndarray:
     """The page px of the sheet's printed map (bool (height, width)): its footprint (`load_footprint`) drawn on the
     page through the inverse placement; every px when there is none."""
     if footprint is None:
@@ -392,8 +436,7 @@ def content_mask(sd: data.SheetData, footprint, inv: LinearNDInterpolator) -> np
         if shapely.get_type_id(part) != 3:              # polygons only (an overlay's stray lines or points: no area)
             continue
         for value, rings in ((1, [part.exterior]), (0, list(part.interiors))):
-            pts = [inv(np.asarray(r.coords)) for r in rings]
-            pts = [np.rint(q[np.isfinite(q).all(1)] * 2 ** SHIFT).astype(np.int32).reshape(-1, 1, 2) for q in pts]
+            pts = [np.rint(inv(np.asarray(r.coords)) * 2 ** SHIFT).astype(np.int32).reshape(-1, 1, 2) for r in rings]
             pts = [q for q in pts if len(q) >= 3]
             if pts:
                 cv2.fillPoly(out, pts, value, cv2.LINE_8, SHIFT)
@@ -726,6 +769,54 @@ def fit_far(d: np.ndarray) -> dict:
     return best
 
 
+def fit_edges(own: np.ndarray, length: np.ndarray) -> dict:
+    """The share of a kind's edges that are drawn: each edge's own ink px (`own`, soft counts; at most its length,
+    a line covering no more than itself) out of its px (`length`) is binomial at p_on when it is drawn and at p_off
+    when not (the stray ink of other things), the drawn share pi by EM from every decile split of the edges'
+    coverage, the likeliest kept, with each edge's responsibility r.  The drawn component is the one of the larger
+    p.  With no ink on any edge the share is 0; with one component (pi at an end) the edges are alike and the share
+    is their mean coverage."""
+    n = np.asarray(length, float)
+    x = np.minimum(np.asarray(own, float), n)
+    if not len(n) or not x.sum():
+        return {"share": 0.0, "p_on": math.nan, "p_off": math.nan, "r": np.zeros(len(n)), "loglik": 0.0, "edges": 0}
+
+    def loglik(p):
+        return special.xlogy(x, p) + special.xlogy(n - x, 1 - p)
+
+    best = None
+    cover = x / n
+    for q in DECILES:
+        r = (cover >= np.quantile(cover, q)).astype(float)
+        last, ll, it, pi = -np.inf, -np.inf, 0, float(r.mean())
+        if not 0 < pi < 1:
+            continue
+        for it in range(1, EM_MAX_ITER + 1):
+            pi = float(r.mean())
+            if not 0 < pi < 1:
+                break
+            p1 = float((r * x).sum() / (r * n).sum())
+            p0 = float(((1 - r) * x).sum() / ((1 - r) * n).sum())
+            a, b = math.log(pi) + loglik(p1), math.log(1 - pi) + loglik(p0)
+            top = np.maximum(a, b)
+            tot = top + np.log(np.exp(a - top) + np.exp(b - top))
+            r, ll = np.exp(a - tot), float(tot.sum())
+            if ll - last <= EM_TOL * max(1.0, abs(ll)):
+                break
+            last = ll
+        if 0 < pi < 1 and math.isfinite(ll) and (best is None or ll > best["loglik"]):
+            if p1 < p0:
+                pi, p1, p0, r = 1 - pi, p0, p1, 1 - r
+            best = {"share": pi, "p_on": p1, "p_off": p0, "r": r, "loglik": ll, "iterations": it, "start": float(q)}
+    one = float(x.sum() / n.sum())
+    whole = float(loglik(one).sum())
+    if best is None or whole >= best["loglik"]:
+        best = {"share": one, "p_on": one, "p_off": one, "r": np.ones(len(n)), "loglik": whole, "iterations": 0,
+                "start": "one component"}
+    best["edges"] = int(len(n))
+    return best
+
+
 def _line_frame(lines, at) -> tuple[np.ndarray, np.ndarray]:
     """Each centreline's point and unit direction (its straight piece there) at distance `at` along it."""
     pts, dirs = np.zeros((len(lines), 2)), np.zeros((len(lines), 2))
@@ -758,55 +849,56 @@ def _counts(keys: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return np.unique(keys, return_counts=True)
 
 
-def _project(sd: data.SheetData, geo: Geometry, inv: LinearNDInterpolator) -> list[list[np.ndarray]]:
-    """Every segment on the sheet's placement, per kind: page polylines (n, 2) of the segments clipped to the
-    placement's samples."""
+def _sheet_edges(sd: data.SheetData, geo: Geometry, inv: _ToPage) -> tuple[np.ndarray, np.ndarray]:
+    """Every edge of every kind reaching the sheet's placement, on its page (`page_edges`): (n, 2, 2) px and each
+    edge's kind."""
     hull = _footprint(sd)
-    idx = np.sort(geo.seg_tree.query(hull, predicate="intersects"))
-    out = [[] for _ in LINE_KINDS]
-    if not len(idx):
-        return out
-    lines = shapely.intersection(shapely.linestrings(geo.seg[idx]), hull)
-    seg, owner = _segments(lines)
-    page = inv(seg.reshape(-1, 2)).reshape(-1, 2, 2)
-    ok = np.isfinite(page).all(axis=(1, 2))
-    for s, k in zip(page[ok], geo.seg_kind[idx][owner[ok]], strict=True):
-        out[int(k)].append(s)
-    return out
+    geoms, kinds = [], []
+    for k in range(len(LINE_KINDS)):
+        idx = np.sort(geo.item_tree(k).query(hull))
+        geoms.append(geo.items(k)[idx])
+        kinds.append(np.full(len(idx), k, np.uint8))
+    edges, owner = page_edges(np.concatenate(geoms), inv)
+    return edges, np.concatenate(kinds)[owner]
 
 
 def _sheet_lines(sd: data.SheetData, geo: Geometry, inv, train: np.ndarray) -> dict:
-    """One sheet's part of the line measures: per kind, the distinct squared distances (px) of its training px to
-    the nearest line, counted over the page (background) and over the line ink's skeleton (with each skeleton px's
-    thickness key), and the kind's projected length (px of its lines drawn 1 px wide)."""
+    """One sheet's part of the line measures: the edges (`_sheet_edges`) drawn 1 px wide, each px its edge's (a block
+    outline's over a lot line's over a centreline's where they meet); each training px's nearest edge and distance;
+    per kind, the distinct squared distances (px) of its training px (background) and, over the line ink's skeleton,
+    the counts per (edge, squared distance, thickness key); and each edge's kind and px on the training px."""
     boxes_ = np.concatenate([sd.words, sd.other]).reshape(-1, 4, 2)
     words = data._paint(boxes_, np.ones(len(boxes_), np.int32), 0, 0, sd.height, sd.width) > 0
     line = data.page_ink(sd) & ~words & train
     del words
     skel, tkey = _thickness_key(line)
     del line
-    polys = _project(sd, geo, inv)
-    dist = np.empty((len(LINE_KINDS), sd.height, sd.width), np.float32)
-    length = []
-    for k, segs in enumerate(polys):
-        drawn = np.zeros((sd.height, sd.width), np.uint8)
-        if segs:
-            cv2.polylines(drawn, [np.rint(s * 2 ** SHIFT).astype(np.int32).reshape(-1, 1, 2) for s in segs], False, 1,
-                          1, cv2.LINE_8, SHIFT)
-        length.append(int((drawn.view(bool) & train).sum()))
-        dist[k] = cv2.distanceTransform(1 - drawn, cv2.DIST_L2, cv2.DIST_MASK_PRECISE) if drawn.any() else np.inf
-    nearest = np.argmin(dist, axis=0).astype(np.uint8)
-    d2 = np.min(dist, axis=0)
+    edges, kind = _sheet_edges(sd, geo, inv)
+    drawn = np.zeros((sd.height, sd.width), np.int32)
+    for e in np.argsort(-kind.astype(np.int64), kind="stable"):        # centrelines, then lot lines, outlines last
+        p, q = np.rint(edges[e] * 2 ** SHIFT).astype(np.int64)
+        cv2.line(drawn, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), int(e) + 1, 1, cv2.LINE_8, SHIFT)
+    out = {"edge_kind": kind, "edge_len": np.bincount(drawn[train & (drawn > 0)] - 1, minlength=len(kind)),
+           "background": [], "skeleton": (np.zeros(0, np.int32), np.zeros(0, np.int32), np.zeros(0, np.int64),
+                                          np.zeros(0, np.int64))}
+    if not len(kind) or not (drawn > 0).any():
+        out["background"] = [(np.zeros(0, np.int64), np.zeros(0, np.int64)) for _ in LINE_KINDS]
+        return out
+    paper = (drawn == 0).view(np.uint8)
+    dist = cv2.distanceTransform(paper, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+    _, label = cv2.distanceTransformWithLabels(paper, cv2.DIST_L2, 5, labelType=cv2.DIST_LABEL_PIXEL)
+    flat = drawn.ravel()
+    nearest = (flat[np.flatnonzero(flat)] - 1)[label.ravel() - 1].reshape(drawn.shape)   # each px's nearest edge
+    del label, paper
+    d2 = np.rint(dist.astype(np.float64) ** 2).astype(np.int64)
     del dist
-    finite = np.isfinite(d2)
-    d2key = np.where(finite, np.rint(np.where(finite, d2, 0).astype(np.float64) ** 2), -1).astype(np.int64)
-    out = {"length": length, "background": [], "skeleton": []}
-    on_skel = skel & finite & train
+    near_kind = kind[nearest]
     for k in range(len(LINE_KINDS)):
-        mine = (nearest == k) & finite & train
-        out["background"].append(_counts(d2key[mine]))
-        at = on_skel & (nearest == k)
-        out["skeleton"].append(_counts(d2key[at] * (1 << 32) + tkey[at]))
+        out["background"].append(_counts(d2[train & (near_kind == k)]))
+    at = skel & train
+    u, n = np.unique(np.stack([nearest[at].astype(np.int64), d2[at], tkey[at]], 1), axis=0, return_counts=True)
+    u = u.reshape(-1, 3)
+    out["skeleton"] = (u[:, 0].astype(np.int32), u[:, 1], u[:, 2], n.astype(np.int64))
     return out
 
 
@@ -931,28 +1023,45 @@ def measure_map(lines: list[dict], labels: list[dict]) -> Measured:
     data_k = []
     for k in range(len(LINE_KINDS)):
         bkey, bn = _merge([p["background"][k] for p in lines])
-        skey, sn = _merge([p["skeleton"][k] for p in lines])
         n_s = np.zeros(len(bkey))
-        pos = np.searchsorted(bkey, skey >> 32)
-        np.add.at(n_s, pos, sn)
-        data_k.append((bkey, bn, skey, sn, n_s, pos))
-    fit = fit_near([(np.sqrt(b.astype(float)), n_s, bn) for b, bn, _, _, n_s, _ in data_k])
+        for p in lines:
+            e, d2, _, n = p["skeleton"]
+            mine = p["edge_kind"][e] == k
+            np.add.at(n_s, np.searchsorted(bkey, d2[mine]), n[mine])
+        data_k.append((bkey, bn, n_s))
+    fit = fit_near([(np.sqrt(b.astype(float)), n_s, bn) for b, bn, n_s in data_k])
+    own, length, ekind, tkeys, tweights = [], [], [], [], [[] for _ in LINE_KINDS]
+    for p in lines:
+        e, d2, tk, n = p["skeleton"]
+        kind = p["edge_kind"]
+        r = np.zeros(len(e))
+        for k in range(len(LINE_KINDS)):
+            mine = kind[e] == k
+            if mine.any():
+                r[mine] = fit["r"][k][np.searchsorted(data_k[k][0], d2[mine])]
+        own.append(np.bincount(e, weights=r * n, minlength=len(kind)))
+        length.append(p["edge_len"])
+        ekind.append(kind)
+        tkeys.append((tk, kind[e], r * n))
+    own, length, ekind = (np.concatenate(v) if v else np.zeros(0) for v in (own, length, ekind))
     for k, name in enumerate(LINE_KINDS):
-        _, _, skey, sn, _, pos = data_k[k]
-        tkey = skey & ((1 << 32) - 1)
-        r_px = fit["r"][k][pos] if len(pos) else np.zeros(0)
-        own = float((r_px * sn).sum())
-        length = float(sum(p["length"][k] for p in lines))
-        drawn[k] = own / length if length > 0 else 0.0
-        tk, tinv = np.unique(tkey, return_inverse=True)
-        tw = np.bincount(tinv, weights=r_px * sn, minlength=len(tk)) if len(tk) else np.zeros(0)
-        shares = thickness_shares(tk, tw)
+        on = (ekind == k) & (length > 0)
+        edges = fit_edges(own[on], length[on])
+        drawn[k] = edges["share"]
+        tk = np.concatenate([t[0][t[1] == k] for t in tkeys]) if tkeys else np.zeros(0, np.int64)
+        tw = np.concatenate([t[2][t[1] == k] for t in tkeys]) if tkeys else np.zeros(0)
+        keys, inv_ = np.unique(tk, return_inverse=True)
+        tw = np.bincount(inv_, weights=tw, minlength=len(keys)) if len(keys) else np.zeros(0)
+        shares = thickness_shares(keys, tw)
         thick.append((np.array(shares["thickness"], np.int64), np.array(shares["share"], float)))
         line_summary[name] = {
-            "skeleton_px": int(sn.sum()), "own_share_a": round(fit["a"][k], 4),
-            "sigma_px (every kind's)": _round(fit["sigma"]), "own_px": round(own, 1), "length_px": int(length),
-            "drawn_share": round(drawn[k], 4), "em_iterations": fit["iterations"],
-            "thickness_measured_px": _quantiles(2 * np.sqrt(tk) - 1, tw),
+            "skeleton_px": int(data_k[k][2].sum()), "own_share_a": round(fit["a"][k], 4),
+            "sigma_px (every kind's)": _round(fit["sigma"]), "own_px": round(float(own[ekind == k].sum()), 1),
+            "length_px": int(length[ekind == k].sum()),
+            "drawn_share_by_length": round(float(own[on].sum() / length[on].sum()) if on.any() else 0.0, 4),
+            "edges": edges["edges"], "drawn_share_by_edge": round(drawn[k], 4), "p_on": _round(edges["p_on"]),
+            "p_off": _round(edges["p_off"]), "edge_fit": edges.get("start"), "em_iterations": fit["iterations"],
+            "thickness_measured_px": _quantiles(2 * np.sqrt(keys) - 1, tw),
             "cv2_thickness_shares": {int(t): round(s, 4) for t, s in zip(*thick[-1], strict=True) if round(s, 4)},
             "thickness_unexplained": round(shares["unexplained"], 5)}
     code = np.concatenate([p["code"] for p in labels]).reshape(-1, 2)
@@ -1076,10 +1185,6 @@ class SceneBank:
         from sfzmaps.solver.textnet import train
         return train.Pool(self.centres[0]), train.Pool(self.centres[1])
 
-    @cached_property
-    def _seg_ok(self) -> np.ndarray:
-        return segment_ok(self.geometry, self.block_ok, self.line_ok)
-
     def sizes(self) -> dict:
         """Per map: the pasteable words per kind and the measures' summary."""
         names = tuple(data.KINDS)
@@ -1113,6 +1218,7 @@ class SceneBank:
         self.tally["scenes"] += 1
         for p in placed:
             self.tally[f"label:{p['what']}"] += 1
+            self.tally[f"label:{p['what']}:{'stand-in' if p['standin'] else 'its own string'}"] += 1
         self.last = {"sheet": j, "series": sd.series, "window": (y0, x0, src), "segments": segs, "labels": placed,
                      "proposed": len(props), "own": out.pop("_own")}
         return out
@@ -1120,35 +1226,38 @@ class SceneBank:
     # the parts of a scene
 
     def _draw_lines(self, rng, ink, corners, ft, back, x0, y0, m: Measured) -> dict:
+        """Every usable item reaching the window as edges on the page (`page_edges` through the window's affine map),
+        each edge drawn whole or left out with its kind's drawn share, at a thickness drawn from its kind's shares."""
         top = max((int(t.max()) for t, _ in m.thickness if len(t)), default=1)
         grow = (top / 2 + 2) * ft
         (lx, ly), (hx, hy) = corners.min(0) - grow, corners.max(0) + grow
-        idx = np.sort(self.geometry.seg_tree.query(shapely.box(lx, ly, hx, hy)))
-        idx = idx[self._seg_ok[idx]]
-        kind = self.geometry.seg_kind[idx]
-        # a block's outline and a centreline are drawn whole or not at all, at one thickness; a lot line segment by
-        # segment (the maps draw district lines along some of a block's lot lines)
-        lot = kind == LINE_KINDS.index("lot")
-        unit = np.where(lot, -1 - idx, self.geometry.seg_item[idx] * len(LINE_KINDS) + kind)
-        units, first, of = np.unique(unit, return_index=True, return_inverse=True)
-        on = (rng.random(len(units)) < m.drawn[kind[first]])[of]
-        u = rng.random(len(units))[of]
-        idx, kind, u = idx[on], kind[on], u[on]
-        thick = np.ones(len(idx), np.int64)
+        box = shapely.box(lx, ly, hx, hy)
+        geoms, kinds, items = [], [], []
+        for k in range(len(LINE_KINDS)):
+            idx = np.sort(self.geometry.item_tree(k).query(box))
+            idx = idx[item_ok(k, self.block_ok, self.line_ok)[idx]]
+            geoms.append(self.geometry.items(k)[idx])
+            kinds.append(np.full(len(idx), k, np.uint8))
+            items.append(idx)
+        edges, owner = page_edges(np.concatenate(geoms), lambda xy: _apply(back, xy) - [x0, y0])
+        kind, item = np.concatenate(kinds)[owner], np.concatenate(items)[owner]
+        on = rng.random(len(edges)) < m.drawn[kind]
+        u = rng.random(len(edges))
+        edges, kind, item, u = edges[on], kind[on], item[on], u[on]
+        thick = np.ones(len(edges), np.int64)
         for k in range(len(LINE_KINDS)):
             t, q = m.thickness[k]
             here = kind == k
             if here.any() and len(t):
                 thick[here] = t[np.minimum(np.searchsorted(np.cumsum(q) / q.sum(), u[here], side="right"),
                                            len(t) - 1)]
-        page = _apply(back, self.geometry.seg[idx].reshape(-1, 2)).reshape(-1, 2, 2) - [x0, y0]
         canvas = np.zeros(ink.shape, np.uint8)
-        for (p, q), t in zip(np.rint(page * 2 ** SHIFT).astype(np.int64), thick, strict=True):
+        for (p, q), t in zip(np.rint(edges * 2 ** SHIFT).astype(np.int64), thick, strict=True):
             cv2.line(canvas, (int(p[0]), int(p[1])), (int(q[0]), int(q[1])), 1, int(t), cv2.LINE_8, SHIFT)
         ink |= canvas > 0
         for k in kind:
-            self.tally[f"segments:{LINE_KINDS[int(k)]}"] += 1
-        return {"index": idx, "kind": kind, "thickness": thick}
+            self.tally[f"edges:{LINE_KINDS[int(k)]}"] += 1
+        return {"edges": edges, "kind": kind, "item": item, "thickness": thick}
 
     def _propose(self, rng, corners, ft, fwd, m: Measured, words: Words) -> list[dict]:
         """The labels the scene would print, before placing: (what, the map point, the word)."""
@@ -1161,10 +1270,11 @@ class SceneBank:
         b = np.sort(geo.block_tree.query(box))
         b = b[self.block_ok[b]]
         b = b[rng.random(len(b)) < m.block_rate]
+        blocks = words.of_kind.get(BLOCK_NUMBER, np.zeros(0, np.int64))
         for i in b:
             off = m.block_offsets[rng.integers(len(m.block_offsets))] if len(m.block_offsets) else np.zeros(2)
             cand = [w for f in context.block_forms(geo.block_number[i]) for w in words.by_text.get(f, ())]
-            self._choose(rng, out, "block", i, geo.block_centre[i] + off, np.array(cand, np.int64))
+            self._choose(rng, out, "block", i, geo.block_centre[i] + off, np.array(cand, np.int64), standin=blocks)
         # codes in lots
         lots = np.sort(geo.lot_centre_tree.query(box))
         lots = lots[self.block_ok[geo.lot_block[lots]]]
@@ -1175,7 +1285,8 @@ class SceneBank:
             self._choose(rng, out, "code", i, geo.lot_centre[i] + off, codes)
         # street names along centrelines
         c = np.sort(geo.line_tree.query(box))
-        c = c[self.line_ok[c]]
+        c = c[self.line_ok[c] & geo.named[c]]
+        streets = words.of_kind.get(STREET_NAME, np.zeros(0, np.int64))
         if len(m.street_offsets) and m.street_cum[-1] > 0:
             n = rng.poisson(m.street_rate * geo.line_length[c])
             for i, k in zip(c, n, strict=True):
@@ -1187,30 +1298,41 @@ class SceneBank:
                     foot, u = _line_frame(geo.lines[i:i + 1], [s])
                     at = foot[0] + d * np.array([-u[0, 1], u[0, 0]])
                     cand = np.array([w for f in forms for w in words.by_text.get(f, ())], np.int64)
-                    if len(cand):
-                        axes = words.axis[cand] @ fwd[:, :2].T       # each word's axis on the map, in this frame
-                        weight = np.interp(_axis_gap(axes, np.repeat(u, len(cand), 0)), ANGLE_GRID, m.angle_table)
-                    else:
-                        weight = np.zeros(0)
-                    self._choose(rng, out, "street", i, at, cand, weight)
+
+                    def angle_weight(c, u=u):
+                        axes = words.axis[c] @ fwd[:, :2].T           # each word's axis on the map, in this frame
+                        return np.interp(_axis_gap(axes, np.repeat(u, len(c), 0)), ANGLE_GRID, m.angle_table)
+                    self._choose(rng, out, "street", i, at, cand, angle_weight, standin=streets)
         return out
 
-    def _choose(self, rng, out: list, what: str, item: int, at, cand: np.ndarray,
-                weight: np.ndarray | None = None) -> None:
-        """A word for the label of `item` (a block, lot or centreline) from its candidates (alike, or by `weight`);
-        none: the label is skipped."""
-        if weight is not None and len(cand):
-            keep = weight > 0
-            cand, weight = cand[keep], weight[keep]
-        if not len(cand):
+    def _choose(self, rng, out: list, what: str, item: int, at, cand: np.ndarray, weigh=None,
+                standin: np.ndarray | None = None) -> None:
+        """A word for the label of `item` (a block, lot or centreline): one of its string (`cand`), drawn alike or by
+        `weigh(candidates)`; when none has weight, a same-kind stand-in (`standin`: the map's pasteable words of the
+        label's kind, by the same weights), recorded as such (the detector's targets never read a label's string);
+        none at all: the label is skipped."""
+        used = False
+        for pool, is_standin in ((cand, False), (standin, True)):
+            if pool is None or not len(pool):
+                continue
+            weight = None if weigh is None else weigh(pool)
+            if weight is not None:
+                keep = weight > 0
+                pool, weight = pool[keep], weight[keep]
+            if not len(pool):
+                continue
+            if weight is None:
+                w = int(pool[rng.integers(len(pool))])
+            else:
+                cum = np.cumsum(weight)
+                w = int(pool[min(int(np.searchsorted(cum, rng.random() * cum[-1], side="right")), len(pool) - 1)])
+            out.append({"what": what, "item": int(item), "at": np.asarray(at, float), "word": w,
+                        "standin": is_standin})
+            self.tally[f"proposed:{what}:{'stand-in' if is_standin else 'its own string'}"] += 1
+            used = True
+            break
+        if not used:
             self.tally[f"skipped:{what}:no word"] += 1
-            return
-        if weight is None:
-            w = int(cand[rng.integers(len(cand))])
-        else:
-            cum = np.cumsum(weight)
-            w = int(cand[min(int(np.searchsorted(cum, rng.random() * cum[-1], side="right")), len(cand) - 1)])
-        out.append({"what": what, "item": int(item), "at": np.asarray(at, float), "word": w})
 
     def _place(self, rng, ink, props, back, x0, y0, words: Words) -> list[dict]:
         """The proposals placed in a random order, each at its point unless its rectangle meets a placed one."""

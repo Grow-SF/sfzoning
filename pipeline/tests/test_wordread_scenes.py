@@ -124,7 +124,8 @@ SCENE_SHEET = "2000-digital-zoning-p01"
 
 def _world(xy) -> np.ndarray:
     xy = np.asarray(xy, float)
-    return np.stack([grid.QUARTER_SPLIT[0] + FT * (xy[..., 0] - CX), grid.QUARTER_SPLIT[1] - FT * (xy[..., 1] - CY)], -1)
+    sx, sy = grid.QUARTER_SPLIT
+    return np.stack([sx + FT * (xy[..., 0] - CX), sy - FT * (xy[..., 1] - CY)], -1)
 
 
 def _block_px(i, j) -> tuple[int, int, int, int]:
@@ -302,9 +303,28 @@ def test_street_offsets_separate_misreads_far_away():
     assert fit["r"][:800].mean() > 0.95 and fit["r"][800:].mean() < 0.1
 
 
+def test_drawn_edges_are_told_from_stray_ink_by_edge():
+    from sfzmaps.solver.wordread import scenes
+    rng = np.random.default_rng(3)
+    n = rng.integers(5, 200, 1000).astype(float)
+    drawn = rng.random(1000) < 0.7                              # 70% of the edges drawn, 90% of their px inked
+    own = np.where(drawn, rng.binomial(n.astype(int), 0.9), rng.binomial(n.astype(int), 0.03)).astype(float)
+    fit = scenes.fit_edges(own, n)
+    assert fit["share"] == pytest.approx(0.7, abs=0.03) and fit["p_on"] == pytest.approx(0.9, abs=0.01)
+    assert fit["r"][drawn].mean() > 0.97 and fit["r"][~drawn].mean() < 0.03
+    assert scenes.fit_edges(np.zeros(5), np.full(5, 10.0))["share"] == 0.0
+
+
+def test_a_straight_side_with_a_vertex_at_every_lot_is_one_edge_on_the_page():
+    from sfzmaps.solver.wordread import scenes
+    side = shapely.LineString([(0, 0), (25, 0.002), (50, -0.001), (75, 0.0), (100, 0.0), (100, 60)])
+    edges, owner = scenes.page_edges([side], lambda xy: xy / FT)
+    assert len(edges) == 2 and (owner == 0).all()
+
+
 def test_the_bank_measures_the_city_it_was_given(bank):
     m = bank.measured[SCENE_SERIES]
-    # the outlines are printed; no lot line or centreline is
+    # the outlines are printed, edge by edge; no lot line or centreline is
     assert m.drawn[0] > 0.9 and m.drawn[1] < 0.05 and m.drawn[2] < 0.05
     t, q = m.thickness[0]
     assert t[np.argmax(q)] in (2, 3)
@@ -389,18 +409,19 @@ def test_a_held_out_area_never_appears(city, bank, held_bank):
     # nor measured: the codes measured are those outside
     outside = [j for j in np.flatnonzero(sd.kinds == data.KINDS["zoning code"])
                if not data._touch_held(sd, np.array([j]))[0]]
-    assert len(held_bank.measured[SCENE_SERIES].code_offsets) == len(outside) < len(bank.measured[SCENE_SERIES].code_offsets)
-    # and no scene draws a held-out line or prints a held-out block's, lot's or street's label
-    seg = shapely.linestrings(geo.seg)
+    measured = len(held_bank.measured[SCENE_SERIES].code_offsets)
+    assert measured == len(outside) < len(bank.measured[SCENE_SERIES].code_offsets)
+    # and no scene draws an edge of a held-out item or prints a held-out block's, lot's or street's label
     seen_held = 0
     for name, b in (("held", held_bank), ("all", bank)):
         rng = np.random.default_rng(11)
         for _ in range(40):
             b.crop(rng, 128, float(rng.uniform(0.6, 1.6)), int(rng.integers(4)))
-            idx = b.last["segments"]["index"]
-            meets = np.zeros(len(idx), bool)
+            drawn = b.last["segments"]
+            items = np.array([geo.items(int(k))[i] for k, i in zip(drawn["kind"], drawn["item"])], object)
+            meets = np.zeros(len(items), bool)
             for s in shapes:
-                meets |= shapely.intersects(seg[idx], s)
+                meets |= shapely.intersects(items, s)
             if name == "held":
                 assert not meets.any()
                 for p in b.last["labels"]:
@@ -410,6 +431,34 @@ def test_a_held_out_area_never_appears(city, bank, held_bank):
             else:
                 seen_held += int(meets.sum())
     assert seen_held > 0          # the test can fail: without the areas, held-out lines are drawn
+
+
+def test_a_label_with_no_word_of_its_string_takes_a_word_of_its_kind(city):
+    from sfzmaps.solver.wordread import scenes
+    # Terra misread block 120's number and every ALPHA: no pasteable word prints "120" or "ALPHA" (nor its forms)
+    texts = {k: ["1Z0" if t == "120" else "ALFA" if t == "ALPHA" else t for t in v] for k, v in city["texts"].items()}
+    b = scenes.SceneBank.build([city["sheet"]], (), 0, geometry=city["geometry"], texts=texts, footprints={})
+    kind_of = {"block": data.KINDS["block number"], "street": data.KINDS["street name"],
+               "code": data.KINDS["zoning code"]}
+    geo, words = city["geometry"], b.words[SCENE_SERIES]
+    rng = np.random.default_rng(8)
+    seen = set()
+    for _ in range(150):
+        b.crop(rng, 160, 1.0, 0)
+        for p in b.last["labels"]:
+            w = p["word"]
+            assert words.kind[w] == kind_of[p["what"]]          # a stand-in never crosses kinds
+            if p["what"] == "block":
+                same = words.text[w] == geo.block_number[p["item"]].lstrip("0")
+            elif p["what"] == "street":
+                same = words.text[w] in geo.line_forms[p["item"]]
+            else:
+                continue
+            assert p["standin"] == (not same)                   # recorded, and only when no twin exists
+            if p["standin"]:
+                seen.add(geo.block_number[p["item"]] if p["what"] == "block" else geo.line_forms[p["item"]][0])
+    assert "0120" in seen and any(f.startswith("ALPHA") for f in seen)
+    assert b.tally["label:block:stand-in"] > 0 and b.tally["label:street:stand-in"] > 0
 
 
 def test_scenes_train_with_the_word_heads(bank):
@@ -425,6 +474,6 @@ def test_scenes_train_with_the_word_heads(bank):
 def test_sf_geometry_has_every_kind_of_line():
     from sfzmaps.solver.wordread import scenes
     geo = scenes.Geometry.load()
-    counts = np.bincount(geo.seg_kind, minlength=3)
-    assert (counts > 0).all() and len(geo.block_number) > 5000 and len(geo.lines) > 17000
+    assert all((~shapely.is_empty(geo.items(k))).sum() > 1000 for k in range(3))
+    assert len(geo.block_number) > 5000 and len(geo.lines) > 17000
     assert "MISSION" in geo.form_lines and len(geo.block_of_form) > 5000
