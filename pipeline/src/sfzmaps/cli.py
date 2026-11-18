@@ -6,17 +6,46 @@ import cv2
 import typer
 
 from sfzmaps import config, inputs
+from sfzmaps.build import WARP_WORKERS
 from sfzmaps.sources import drive
 
 app = typer.Typer(no_args_is_help=True, help="Georeference historic SF zoning maps.")
+solver_app = typer.Typer(no_args_is_help=True,
+                         help="The 2000 solver: make its inputs (each a `sfzmaps build` stage) and solve.")
+app.add_typer(solver_app, name="solver")
 # Exit status of a command stopped by llm.FATAL (quota, spend cap, missing key): `sfzmaps build`
 # reports it as "needs a paid read". Not 2, which click uses for usage errors.
 PAID_READ_EXIT = 75
+# `sfzmaps build --system-tools` sets this for its stages, so a stage's command (`sfzmaps warp`) accepts the same
+# tools. Same value as build.SYSTEM_TOOLS_ENV (a test keeps them equal).
+SYSTEM_TOOLS_ENV = "SFZMAPS_SYSTEM_TOOLS"
 
 
 @app.callback()
 def main() -> None:
     """Georeference historic SF zoning maps."""
+
+
+@solver_app.callback()
+def solver_main(series: str = typer.Option(None, "--series",
+                                           help="The series to solve (default the 2000 map, data/solver/); another "
+                                                "series' outputs go to data/solver/<series>/.")
+                ) -> None:
+    """The solver of one series: the 2000 map unless --series names another."""
+    import os
+    import sys
+
+    from sfzmaps.solver import paths, threads
+    threads.limit_pools()
+    if series is None or series == paths.SERIES:
+        return
+    if not (config.DATA_DIR / "warp" / series).is_dir():
+        raise typer.BadParameter(f"no warped sheets of {series} under {config.DATA_DIR / 'warp'}",
+                                 param_hint="--series")
+    # Every module reads the series once, as it loads (`paths.SERIES`): start the command again in a process whose
+    # environment names it, as do the processes it starts.
+    cmd = threads.sfzmaps_command() + sys.argv[1:]
+    os.execve(cmd[0], cmd, {**os.environ, paths.SERIES_ENV: series})
 
 
 @app.command()
@@ -57,11 +86,38 @@ def refdata(
     if force or not (config.REF_DIR / "parcels.parquet").exists() \
             or not (config.REF_DIR / "streets.parquet").exists():
         datasf.fetch_reference(config.REF_DIR)
+    # the park outlines behind inputs/parks.csv (`sfzmaps parks`)
+    if force or not (config.REF_DIR / "rec_park_properties.parquet").exists():
+        datasf.fetch_rec_park_properties(config.REF_DIR)
+    if force or not (config.REF_DIR / "nps_tracts.parquet").exists():
+        datasf.fetch_nps_tracts(config.REF_DIR)
     ref = datasf.load_reference()
     typer.echo(f"blocks: {len(ref.blocks)}")
     typer.echo(f"corners: {len(ref.corners)}")
     typer.echo(f"intersections: {len(ref.intersections)}")
     typer.echo(f"bounds: {list(ref.blocks.total_bounds)}")
+
+
+@app.command()
+def parks(
+    out: Path = typer.Option(None, "--out", help="Write the CSV here instead of stdout."),
+    maps: bool = typer.Option(False, "--maps", help="Write inputs/park_maps.csv instead: the first "
+                              "published map showing each park lot as public."),
+) -> None:
+    """Park lots the reference data shows (Rec and Park properties, NPS tracts): the candidates
+    for inputs/parks.csv, with the NPS conveyance year where there is one. Reads data/ref only.
+    --maps: the first map showing each as public (inputs/park_maps.csv), from the published maps."""
+    from sfzmaps import parks as park_lots
+
+    if maps:
+        path = park_lots.write_first_maps()
+        typer.echo(f"{path}")
+        return
+    text = park_lots.candidates().to_csv(index=False)
+    if out:
+        out.write_text(text)
+    else:
+        typer.echo(text, nl=False)
 
 
 def _page_png(page) -> Path:
@@ -288,8 +344,22 @@ def districts(
     shared_archive: bool = typer.Option(False, "--shared", help="Merge every published series into "
                                                                 "out/shared/ for the explorer (no "
                                                                 "vision calls). Rerun after publishing."),
+    force: bool = typer.Option(False, "--force", help="Read and publish even when the outputs are "
+                                                     "current (their inputs haven't changed)."),
+    check: bool = typer.Option(False, "--check", help="Print the $0 accuracy check of the saved "
+                                                     "reads: review cases, answer keys, same-base and "
+                                                     "adjacent-era agreement."),
+    against: list[str] = typer.Option(None, "--against", help="With --check or --map: also these "
+                                                             "dirs of <series>_raw.parquet (a "
+                                                             "--snapshot or an experiment)."),
+    snapshot: Path = typer.Option(None, "--snapshot", help="Copy every series' current raw reads "
+                                                          "to this dir (the 'before' of a change)."),
+    map_series: str = typer.Option(None, "--map", help="Draw this series' city map, one panel per "
+                                                       "--against dir and one for the current "
+                                                       "reads, to data/check/<series>.png."),
 ) -> None:
-    """Read zoning districts per parcel, join the rules, publish out/<series>/districts/."""
+    """Read zoning districts per parcel, join the rules, publish out/<series>/districts/. A series
+    whose read and outputs are current (nothing they're made from changed) is skipped."""
     import json
     import logging
 
@@ -299,8 +369,24 @@ def districts(
     from sfzmaps.districts import assemble, shared
     from sfzmaps.districts.series import SERIES
 
+    if check or snapshot or map_series:
+        if series or all_ or validate or status or republish or cache_only or sheet or force \
+                or shared_archive:
+            raise typer.BadParameter("--check, --snapshot and --map run alone")
+        from sfzmaps.districts import check as chk
+
+        if snapshot:
+            typer.echo(f"{len(chk.snapshot(snapshot))} series copied to {snapshot}")
+        panels = {Path(a).name: a for a in against or []}
+        if map_series:
+            out = chk.city_map(map_series, {**panels, "now": chk.WORK},
+                               config.DATA_DIR / "check" / f"{map_series}.png")
+            typer.echo(str(out))
+        if check:
+            typer.echo(chk.report({"now": chk.WORK, **panels}))
+        return
     if shared_archive:
-        if series or all_ or validate or status or republish or cache_only or sheet:
+        if series or all_ or validate or status or republish or cache_only or sheet or force:
             raise typer.BadParameter("--shared runs alone")
         logging.basicConfig(level=logging.INFO, format="%(message)s")
         names = [s for s, i in SERIES.items() if i.role == "use"] + ["today"]
@@ -333,9 +419,9 @@ def districts(
     for k, s in enumerate(todo):
         try:
             if republish:
-                d = assemble.republish(s)
+                d = assemble.republish(s, force=force)
             else:
-                d = assemble.run_series(s, sheets=sheet or None, cache_only=cache_only)
+                d = assemble.run_series(s, sheets=sheet or None, cache_only=cache_only, force=force)
             st = d / "stats.json"
             if st.exists():
                 j = json.loads(st.read_text())
@@ -533,6 +619,44 @@ def push() -> None:
     typer.echo("pushed")
 
 
+@app.command("corrections")
+def corrections_cmd(
+    issue: int = typer.Argument(..., help="The GitHub issue number the site's corrections tray opened."),
+    apply: bool = typer.Option(False, "--apply", help="Write the corrections into inputs/ (overrides "
+                               "and review cases). Without it, only check them and write scan crops."),
+    file: Path = typer.Option(None, "--file", help="Read the corrections from this file (the tray's "
+                              "download, or text pasted into the issue as an attachment) instead of the issue body."),
+) -> None:
+    """Import readers' corrections from a GitHub issue (districts/corrections.py). First run
+    without --apply: check the crops in data/check/corrections/<issue>/ against the proposed codes;
+    then --apply, build, and commit inputs/."""
+    from sfzmaps.districts import check as chk
+    from sfzmaps.districts import corrections as corr
+    from sfzmaps.districts.read import load_parcels
+
+    meta = ({"url": f"issue #{issue}", "body": file.read_text()} if file is not None else corr.fetch(issue))
+    rows = corr.parse(meta["body"])
+    if not rows:
+        raise typer.BadParameter(f"issue #{issue} has no ```{corr.FENCE} block")
+    parcels = load_parcels(every=True)    # a lot on an old map may since have been retired
+    got = corr.check(rows, parcels)
+    for p in got.problems:
+        typer.echo(f"skipped: {p}", err=True)
+    rows = corr.with_twins(got.ok)
+    for r in rows:
+        typer.echo(f"{r['series']:22} {r['blklot']:10} {r['shown'] or 'none':>8} -> {r['proposed']:8} {r['note']}")
+    dest = config.DATA_DIR / "check" / "corrections" / str(issue)
+    shots = corr.crops(rows, dest, parcels)
+    typer.echo(f"{len(rows)} corrections from {meta['url']}; {len(shots)} scan crops in {dest}")
+    if not apply:
+        typer.echo("check the crops, then run again with --apply")
+        return
+    done = corr.write_overrides(rows, issue)
+    n_cases = corr.write_cases(rows, issue, chk.centroids())
+    typer.echo(f"overrides: {', '.join(f'{s} {n}' for s, n in done.items())}; review cases added: {n_cases}. "
+               "Now build and commit inputs/.")
+
+
 @app.command("answers")
 def answers_cmd(
     check: bool = typer.Option(False, "--check", help="List live artifacts whose answers aren't "
@@ -609,6 +733,24 @@ def ship(
 
 
 @app.command()
+def release(
+    dry_run: bool = typer.Option(False, "--dry-run", "-n", help="Check and plan; publish, commit and push nothing."),
+    no_pr: bool = typer.Option(False, "--no-pr", help="Commit the manifests on a release branch; don't push or open a PR."),
+) -> None:
+    """After a merge: check, export the GIS downloads, publish tiles and downloads to the Blob
+    store, and open a PR with the updated manifests (merging it deploys). Needs site/.env.local
+    (BLOB_READ_WRITE_TOKEN), or SFZMAPS_ENV_FILE, and `gh`. Never calls the vision API."""
+    from sfzmaps import release as release_mod
+    from sfzmaps import ship as ship_mod
+
+    try:
+        release_mod.release(dry_run=dry_run, no_pr=no_pr, d=release_mod.Deps(echo=typer.echo))
+    except (release_mod.ReleaseError, ship_mod.ShipError) as e:
+        typer.echo(f"release: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
 def edit(
     year: str = typer.Option(None, "--year", help="Only this series in the review queue."),
     sheet: str = typer.Option(None, "--sheet", help="Only this sheet id."),
@@ -645,8 +787,10 @@ def review(
     import webbrowser
 
     from sfzmaps import reviewpage
+    from sfzmaps.districts import assemble
 
     try:
+        assemble.review_tiles(year)     # the districts layer: made here, on demand, not by builds
         if reviewpage.is_stale(year):
             typer.echo(f"wrote {reviewpage.write(year)}")
     except RuntimeError as e:
@@ -664,8 +808,45 @@ def review(
 
 
 @app.command()
+def warp(
+    series: list[str] = typer.Argument(None, help="Only these series (default: every series with placed sheets)."),
+    jobs: int = typer.Option(WARP_WORKERS, "--jobs", "-j", help="Sheets fitted at once."),
+    force: bool = typer.Option(False, "--force", help="Correct sheets again even when their inputs are unchanged."),
+    system_tools: bool = typer.Option(False, "--system-tools", envvar=SYSTEM_TOOLS_ENV,
+                                      help="Warp with tools that aren't from the pixi environment (not recommended)."),
+) -> None:
+    """Correct every placed sheet's placement and warp it, into data/warp/<series>/<sheet>/ (skips a sheet whose
+    inputs haven't changed). Run inside `pixi shell` so gdalwarp is the pinned one. On the Mac's GPU the fits take a
+    shared turn (`sfzmaps.gpu`): they wait while a text detector has the GPU."""
+    import logging
+
+    from sfzmaps import build as build_mod
+    from sfzmaps import gpu
+    from sfzmaps.districts.series import SERIES
+    from sfzmaps.sheetwarp import run as sheetwarp
+    from sfzmaps.sheetwarp.device import fit_device
+    from sfzmaps.sheetwarp.sheet import placed_sheets
+
+    unknown = [s for s in series or [] if s not in SERIES]
+    if unknown:
+        raise typer.BadParameter(f"unknown series {', '.join(unknown)}; known: {', '.join(SERIES)}")
+    build_mod.require_toolchain(system_tools)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    failed = []
+    with gpu.gpu_turn(False, fit_device()):
+        for s in series or [s for s in SERIES if placed_sheets(s)]:
+            try:
+                sheetwarp.correct_series(s, jobs, force)
+            except RuntimeError as e:
+                typer.echo(f"error: {e}", err=True)
+                failed.append(s)
+    if failed:
+        raise typer.Exit(1)
+
+
+@app.command()
 def stage(name: str = typer.Argument(..., help="A build stage, e.g. edition-1948, period-1980-1990, "
-                                               "today, shared (see `sfzmaps build --list`).")) -> None:
+                                               "today, shared, warp-1948 (see `sfzmaps build --list`).")) -> None:
     """Run one build stage's commands, at $0 (what `sfzmaps build` and `dvc repro` run)."""
     from sfzmaps import build as build_mod
 
@@ -709,6 +890,27 @@ def build(
 
 
 @app.command()
+def downloads(
+    series: list[str] = typer.Option(None, "--series", "-s", help="Only this series (repeatable)."),
+    system_tools: bool = typer.Option(False, "--system-tools", help="Use GDAL from outside the pixi "
+                                                                    "environment (not recommended)."),
+) -> None:
+    """Write the GIS downloads (lot and district zips, citywide COG, sheet list) into
+    data/downloads/ and its index.json; what is unchanged is left alone. $0, no API calls."""
+    from sfzmaps import build as build_mod
+    from sfzmaps import downloads as dl
+
+    build_mod.require_toolchain(system_tools)
+    try:
+        index = dl.run(series or None, log=typer.echo)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--series")
+    files = index["files"]
+    typer.echo(f"{len(files)} files, {sum(f['bytes'] for f in files.values()):,} bytes; "
+               f"{sum(len(v) for v in index['sheets'].values())} sheets listed; index {dl.DOWNLOADS_DIR / 'index.json'}")
+
+
+@app.command()
 def doctor(
     renders: int = typer.Option(0, "--renders", help="Also re-render this many PDF pages per series "
                                                      "(into a temp folder) and compare them with "
@@ -739,3 +941,553 @@ def doctor(
             raise typer.Exit(1)
     if bad:
         raise typer.Exit(1)
+
+
+@solver_app.command("fetch-table")
+def solver_fetch_table() -> None:
+    """Download the April 2000 zoning table from DataSF into inputs/zoning-2000/, with its PROVENANCE.md."""
+    from sfzmaps.solver import table
+    info = table.fetch_table()
+    typer.echo(f"{info['rows']} rows, sha256 {info['sha256']}")
+
+
+@solver_app.command("page")
+def solver_page() -> None:
+    """Merge the warped 2000 sheets into one page on the solver's grid: data/solver/page/ink.png, sheets.png and
+    frames.json."""
+    import logging
+
+    from sfzmaps.solver import page
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = page.build_page()
+    typer.echo(f"{s['sheets']} sheets laid: {s['ink_px']:,} ink px, {s['covered_px']:,} px covered, {s['seconds']} s")
+
+
+@solver_app.command("lots")
+def solver_lots() -> None:
+    """Paint the April 2000 lots on the solver's grid: data/solver/lots/lots.npz and table.parquet."""
+    from sfzmaps.solver import lots
+    s = lots.build_lots()
+    typer.echo(f"{s['lots']:,} lots, {s['scored']:,} scored, {s['pairs']:,} neighbour pairs, median centroid of the "
+               f"scored lots ({s['median_x']:.3f}, {s['median_y']:.3f}), {s['seconds']} s")
+
+
+@solver_app.command("prints")
+def solver_prints() -> None:
+    """Find every printed zoning code on the 2000 sheets with its saved reads (no model is asked):
+    data/solver/prints/prints.parquet, terra_boxes.json and summary.json."""
+    from sfzmaps.solver import prints
+    s = prints.build_prints()
+    kinds = s["by_kind"]
+    typer.echo(f"{s['prints']:,} prints: Terra and Sol {kinds['0']}, Terra only {kinds['1']}, Sol only {kinds['2']}, "
+               f"turned pass only {kinds['3']}; {s['seconds']} s")
+    for read, c in s["saved_answers"].items():
+        typer.echo(f"  {read}: {c['found']:,} of {c['asked']:,} keys found ({c['missing']:,} missing); "
+                   f"{c['unused']:,} of {c['saved']:,} saved answers asked by no print")
+
+
+@solver_app.command("labels")
+def solver_labels() -> None:
+    """Fit what the solver knows about the printed labels (no model is asked): data/solver/labels/readings_<q>.npz,
+    trust.json, streetside_<q>.npz, lotsize.npz and strokes.npz.  On a series other than 2000, from the 2000 map's
+    models (`transfer`)."""
+    from sfzmaps.solver import labels_stage, paths
+    if not paths.is_2000():
+        from sfzmaps.solver import transfer
+        typer.echo(json.dumps(transfer.build_labels(), indent=1))
+        return
+    s = labels_stage.build_labels()
+    t, side, size, ink = s["trust"], s["streetside"], s["lotsize"], s["strokes"]
+    typer.echo(f"trust: {t['readings']:,} readings of {t['prints']:,} prints, {t['names']} names; held-out log loss "
+               + ", ".join(f"{q} {v['held_out_log_loss']:.4f}" for q, v in t["quarters"].items()))
+    typer.echo(f"street sides: {side['on_street']:,} prints on street ground ({side['by_freeway']} by a freeway), "
+               f"{side['with_side_b']:,} with a lot across; side A / B right on ordinary streets: "
+               + ", ".join(f"{q} {r['rA_st']:.3f} / {r['rB_st']:.3f}" for q, r in side["rates"].items()))
+    typer.echo(f"lot size: {size['codes']} codes; codes with no training lots: "
+               + ", ".join(f"{q} {n}" for q, n in size["codes_without_lots"].items()))
+    typer.echo(f"strokes: {ink['strokes']:,} ({ink['spurs']:,} spurs), {ink['nodes']:,} nodes, {ink['miles']:,} miles")
+    typer.echo("seconds: " + ", ".join(f"{k} {v}" for k, v in s["seconds"].items()))
+
+
+_DEVICE_OPTION = typer.Option(None, "--device", help="cpu or mps (default: mps where available, else cpu).")
+
+
+def _check_device(device: str | None) -> None:
+    if device not in (None, "cpu", "mps"):
+        raise typer.BadParameter("cpu or mps", param_hint="--device")
+
+
+@solver_app.command("text")
+def solver_text(device: str = _DEVICE_OPTION) -> None:
+    """Train the text detector on every sheet Terra read of the training maps (the validation area included) and
+    score every 2000 sheet's page with it: data/solver/text/model.pt and chance/<sheet>.png."""
+    import logging
+
+    from sfzmaps.solver.textnet import stage
+    _check_device(device)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = stage.build_text(device=device)
+    typer.echo(f"{s['iterations']:,} steps on {s['device']} over {s['trained_on']} sheets; {s['scored']} 2000 sheets "
+               "scored")
+    typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in s["seconds"].items()))
+
+
+def _scores_line(s: dict) -> str:
+    """One line of a detector's scores (`scores.score_sheets`' "all", or one map's)."""
+    def pc(v, digits=1):
+        return "-" if v is None else f"{v:.{digits}%}"
+
+    words = "; ".join(f"{k} {v['found']:,}/{v['of']:,}" for k, v in s["words"].items())
+    auc = "-" if s["auc"] is None else f"{s['auc']:.4f}"
+    return (f"AUC {auc}, words found {pc(s['words_found'])} ({words}), text ink found {pc(s['text_ink_found'])}, "
+            f"ink outside boxes called text {pc(s['ink_outside_boxes_called_text'], 2)}, long-line ink called text "
+            f"{pc(s['long_lines']['called_text'], 2)} (of {s['long_lines']['ink_px']:,} px)")
+
+
+@solver_app.command("text-scores")
+def solver_text_scores(device: str = _DEVICE_OPTION) -> None:
+    """Score the text detector (data/solver/text/model.pt) on the test drawings, every px of every sheet Terra read
+    of them: data/solver/text-scores/scores.json."""
+    import logging
+
+    from sfzmaps.solver.textnet import score_stage
+    _check_device(device)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = score_stage.build_scores(device)
+    for name, v in [*s["scores"]["series"].items(), ("all", s["scores"]["all"])]:
+        typer.echo(f"{name}: {_scores_line(v)}")
+    typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in s["seconds"].items()))
+
+
+@solver_app.command("text-reader")
+def solver_text_reader(device: str = _DEVICE_OPTION) -> None:
+    """Train the code reader's four text detectors, each with a quarter of the city and the answered blocks held out
+    on every training map, and give every 2000 sheet's px the chance of text, the kind and the reading direction of
+    the detector that never saw its quarter: data/solver/text-reader/."""
+    import logging
+
+    from sfzmaps.solver.textnet import reader_stage
+    _check_device(device)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = reader_stage.build_reader_text(device=device)
+    r = s["radius"]
+    typer.echo(f"4 x {s['iterations']:,} steps on {s['device']} over {s['trained_on']} sheets; {s['scored']} 2000 "
+               f"sheets scored; {s['blocks']} answered blocks held out")
+    typer.echo(f"unknown radius {r['px']} px: {r['longest']['text']} ({r['longest']['series']} "
+               f"{r['longest']['sheet']}, {r['longest']['length_px']} px), of {r['words']:,} code words "
+               f"({r['left_out']:,} in answered blocks left out)")
+    for name, v in s["scores"]["quarters"].items():
+        words = "; ".join(f"{k} {w['found']:,}/{w['of']:,}" for k, w in v["words"].items())
+        found = "-" if v["words_found"] is None else f"{v['words_found']:.1%}"
+        typer.echo(f"{name} on its own quarter: words found {found} ({words})")
+    typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in s["seconds"].items()))
+
+
+@solver_app.command("text-trial")
+def solver_text_trial(
+    settings: list[str] = typer.Option(None, "--set", help="One setting of a recipe, name=value (repeatable): "
+                                                          "together, one recipe over the old recipe (the quarter "
+                                                          "models')."),
+    recipes: list[str] = typer.Option(None, "--recipe",
+                                      help="A whole recipe, its settings apart by spaces (\"half_size=True "
+                                           "ink_only=ink\"; \"default\" for the old "
+                                           "recipe, \"stage\" first to start from the stage's: \"stage "
+                                           "iterations=2000\"); repeat for several, tried in turn on sheets "
+                                           "read once."),
+    seed: int = typer.Option(0, "--seed", min=0, help="The seed (its folder gets -seed=N when not 0)."),
+    reuse: bool = typer.Option(False, "--reuse", help="Score the model already in each recipe's folder; train "
+                                                      "nothing."),
+    train_series: str = typer.Option(None, "--train-series",
+                                     help="Train on these training maps only (comma-separated; default all six); "
+                                          "the folder gets -train=<maps>."),
+    test_series: str = typer.Option(None, "--test-series",
+                                    help="Also score every px of these test drawings (comma-separated): "
+                                         "test_scores.json."),
+    device: str = _DEVICE_OPTION,
+) -> None:
+    """Try recipes for the text detector: each trained with the validation area held out on every training map and
+    scored there, into data/solver/experiments/text-<recipe>/ (model.pt, recipe.json, scores.json, minutes.json).
+    With neither --set nor --recipe, the old recipe (the quarter models'; `stage` as a --recipe's first word starts from
+    the stage's)."""
+    import logging
+
+    from sfzmaps.solver.textnet import trial
+    _check_device(device)
+
+    def names(text: str | None) -> list[str] | None:
+        return None if text is None else [s.strip() for s in text.split(",") if s.strip()]
+
+    try:
+        maps = trial.training_maps(names(train_series))
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--train-series")
+    try:
+        tests = trial.test_maps(names(test_series))
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--test-series")
+    try:
+        asked = ([trial.parse_recipe(settings)] if settings else []) + [trial.parse_recipe(r) for r in recipes or []]
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--set / --recipe")
+    asked = asked or [trial.parse_recipe([])]
+    folders = [trial.folder(r, seed, maps) for r in asked]
+    twice = sorted({f.name for f in folders if folders.count(f) > 1})
+    if twice:
+        raise typer.BadParameter(f"two of the recipes are one ({', '.join(twice)}; prefetch aside): they would write "
+                                 "one folder", param_hint="--set / --recipe")
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    for r in trial.run_trials(asked, device, seed, reuse, maps, tests):
+        typer.echo(f"{r['name']}: {_scores_line(r['scores']['all'])}")
+        for name, v in (r["test_scores"] or {"series": {}})["series"].items():
+            typer.echo(f"  test {name}: {_scores_line(v)}")
+        typer.echo("  minutes: " + ", ".join(f"{k} {v:.1f}" for k, v in r["minutes"].items())
+                   + f"; written to {r['folder']}")
+
+
+def _in_one_thread(argv: list[str]) -> None:
+    """Unless this process is pinned to one thread for the maths libraries (`sfzmaps.solver.threads`), run
+    `sfzmaps <argv>` again in a process that is, and exit with its status: the libraries read their thread count
+    only as they load, and the walls', the placement's and the report's numbers must not depend on how many cores
+    the machine has."""
+    from sfzmaps.solver import threads
+    if not threads.pinned():
+        raise typer.Exit(threads.run_pinned(argv))
+
+
+@solver_app.command("boxes")
+def solver_boxes(workers: int = typer.Option(4, "--workers", help="Sheets grouped at once, one thread each.")) -> None:
+    """Word boxes on every 2000 sheet, grouped from the held-out detectors' chance (no outside input): each quarter's
+    level chosen on the other three, boxes with their trimmed extent, kind probabilities and map place:
+    data/solver/boxes/."""
+    import logging
+
+    from sfzmaps.solver import wordboxes
+    _in_one_thread(["solver", "boxes", "--workers", str(workers)])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = wordboxes.build_boxes(workers=workers)
+    typer.echo(f"{s['boxes']:,} boxes kept; seconds {s['seconds']}")
+    for q, v in s["quarters"].items():
+        typer.echo(f"{q}: level {v['level']}, {v['words']:,} code words, found {v['recall']:.1%}, "
+                   f"axis within 10 degrees {v['axis_within_10']:.1%}")
+    typer.echo(f"answered labels: {s['answered']}")
+
+
+@solver_app.command("text-crops")
+def solver_text_crops(workers: int = typer.Option(4, "--workers", help="Sheets cropped at once, one thread each.")
+                      ) -> None:
+    """The text reader's inputs: crops at Terra's words and non-text windows on the 2000 drawing's three scans, each
+    with the quarters and answered blocks it touches; the answered labels' crops; the template reader's font and
+    prior; each quarter's synthetic code crops: data/solver/text-crops/."""
+    import logging
+
+    from sfzmaps.solver.textread import inputs
+    _in_one_thread(["solver", "text-crops", "--workers", str(workers)])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = inputs.build_inputs(workers=workers)
+    typer.echo(f"{s['crops']['crops']:,} crops ({s['crops']['by_kind']}); {s['crops']['answered']} answered labels, "
+               f"{s['crops']['answered_with_terra_box']} with Terra's box")
+    typer.echo(f"template reader: {s['template']['training_labels']} training labels, {s['template']['forms']} forms "
+               f"over {s['template']['codes']} codes; training crops per quarter {s['training_crops']}")
+    typer.echo("seconds: " + ", ".join(f"{k} {v:.0f}" for k, v in s["seconds"].items()))
+
+
+@solver_app.command("text-train")
+def solver_text_train(device: str = _DEVICE_OPTION) -> None:
+    """Train the text reader: for each quarter a CTC reader and a 0/180 classifier that never saw that quarter or an
+    answered block (each in its own GPU turn): data/solver/text-train/."""
+    import logging
+
+    from sfzmaps.solver.textread import train
+    _check_device(device)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = train.build_train(device=device)
+    for name, h in s["held"].items():
+        typer.echo(f"{name}: {h['real_crops']:,} real + {h['synthetic_crops']:,} synthetic crops; monitor CER "
+                   f"{h['monitor_cer_last']}")
+    typer.echo(f"on {s['device']} in {s['seconds']:.0f} s")
+
+
+@solver_app.command("text-read")
+def solver_text_read(workers: int = typer.Option(4, "--workers", help="Processes reading, one thread each.")) -> None:
+    """Read every word box (solver-boxes) with the text reader of its quarter, both ways along its axis, and measure
+    on the owner's answers at Terra's boxes and at ours: data/solver/text-read/."""
+    import logging
+
+    from sfzmaps.solver.textread import read
+    _in_one_thread(["solver", "text-read", "--workers", str(workers)])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    s = read.build_read(workers=workers)
+    t, o = s["terra_boxes"]["all"], s["our_boxes"]["all"]
+    typer.echo(f"Terra's boxes, closed top-1: Terra's direction {t['terra_direction'].get('closed_top1')}, axis only "
+               f"{t['axis_only'].get('closed_top1')} (n {t['axis_only']['n']})")
+    typer.echo(f"our boxes: {o['box_found']} found, {o['box_missed']} missed; closed top-1 on found "
+               f"{o['found'].get('closed_top1')}, every label {o['every_label_closed_top1']}")
+    typer.echo(f"seconds {s['seconds']}")
+
+
+@solver_app.command("walls")
+def solver_walls(
+    workers: int = typer.Option(None, "--workers", help="Processes for the closing paths (default half the CPUs)."),
+    candidates: str = typer.Option(None, "--candidates",
+                                   help="Fit with these candidate features (comma-separated, walls.CANDIDATES; 'none' "
+                                        "for none) as an experiment, into data/solver/experiments/walls-<names>/ "
+                                        "(for `solve RUN --walls`), never over the stage's walls."),
+    evaluate: list[str] = typer.Option(None, "--evaluate",
+                                       help="Only score a configuration (comma-separated candidates; 'none' for the "
+                                            "default set) and print its held-out log loss; repeat for several, all "
+                                            "fitted on inputs read once. Writes nothing."),
+    chance: str = typer.Option(None, "--chance",
+                               help="The text chance the candidates read: 'all-sheets' (the default, the stage's: "
+                                    "solver-text's detector) or 'held-out' (solver-text-reader's four held-out "
+                                    "detectors). A fit on 'held-out' is an experiment, into "
+                                    "data/solver/experiments/walls-<names>-held-out/."),
+) -> None:
+    """Fit the wall odds, held out by quarter, from the raw page's strokes: the stage's walls, with
+    walls.DEFAULT_CANDIDATES (data/solver/walls/walls_<q>.npz and evaluation.json), or with --candidates or
+    --chance held-out an experiment's."""
+    import logging
+
+    from sfzmaps.solver import textgrid, walls
+    textgrid.check_source(chance)
+    _in_one_thread(["solver", "walls", *(["--workers", str(workers)] if workers is not None else []),
+                    *(["--candidates", candidates] if candidates is not None else []),
+                    *[a for c in evaluate or [] for a in ("--evaluate", c)],
+                    *(["--chance", chance] if chance is not None else [])])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    def names(text: str) -> list[str]:
+        return [c.strip() for c in text.split(",") if c.strip() and c.strip() != "none"]
+
+    from sfzmaps.solver import paths
+    if not paths.is_2000():                     # another series: the 2000 map's weights on its own features
+        from sfzmaps.solver import transfer
+        typer.echo(json.dumps(transfer.build_walls(workers or 2), indent=1))
+        return
+    if evaluate:
+        results = walls.evaluate_candidates([names(c) for c in evaluate], workers, chance)
+    else:
+        results = [walls.build_walls(workers, None if candidates is None else names(candidates), chance)]
+    for s in results:
+        typer.echo(f"{', '.join(s['candidates']) or 'no candidates'}: {s['pairs']:,} pairs, {s['features']} "
+                   "features; held-out log loss "
+                   + ", ".join(f"{q} {v['held_out_log_loss']:.4f} ({v['held_out_pairs']:,} pairs)"
+                               for q, v in s["quarters"].items())
+                   + (f"; {s['seconds']} s" if "seconds" in s else "")
+                   + (f"; written to {s['folder']}" if "folder" in s else ""))
+
+
+_WALLS_OPTION = typer.Option(None, "--walls", help="The folder of walls_<q>.npz (default data/solver/walls).")
+_COMPOUND_FUSION_OPTION = typer.Option(
+    True, "--compound-fusion/--no-compound-fusion",
+    help="The compound fusion move in the search (search.compound_fusion_moves; on by default; 'final' needs it on).")
+
+
+def _not_the_stage_run(run: str) -> None:
+    from sfzmaps.solver import runs
+    if run == runs.FINAL_RUN:
+        raise typer.BadParameter(f"{runs.FINAL_RUN!r} is the solver-solve stage's run, made only by "
+                                 f"`sfzmaps solver solve {runs.FINAL_RUN}`", param_hint="RUN")
+
+
+@solver_app.command("placement")
+def solver_placement(
+    run: str = typer.Argument(..., help="The experiment's name (data/solver/experiments/RUN/); not 'final'."),
+    walls: Path = _WALLS_OPTION,
+) -> None:
+    """Fit where each printed label belongs, held out by quarter (learning from the hand leader moves of
+    inputs/hand-labels-2000/label_fixes.csv and the table): data/solver/experiments/RUN/placement.npz."""
+    from sfzmaps.solver import placement, runs
+    _not_the_stage_run(run)
+    try:
+        folder = runs.solve_dir(run)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="RUN")
+    _in_one_thread(["solver", "placement", run, *(["--walls", str(walls)] if walls else [])])
+    placement.fit(folder, walls)
+
+
+@solver_app.command("solve")
+def solver_solve(
+    run: str = typer.Argument(..., help="A name for the run: 'final' is the solver-solve stage's (data/solver/solve/), "
+                                        "any other an experiment (data/solver/experiments/RUN/)."),
+    walls: Path = _WALLS_OPTION,
+    true_borders: bool = typer.Option(False, "--true-borders",
+                                      help="The ceiling check: the table's own borders as walls (not for 'final')."),
+    compound_fusion: bool = _COMPOUND_FUSION_OPTION,
+) -> None:
+    """Fit the placement, solve the four held-out quarters side by side and join them, list the data errors among
+    the run's holes, and score it against J7, into the run's folder made afresh: placement.npz, runs/RUN*.npz (with
+    each solve's costs), data_errors.npz, data-errors-2000-digital.csv, report.json and report.md."""
+    from sfzmaps.solver import report, runs, solve
+    try:
+        solve.check_run(run, walls, true_borders, compound_fusion)
+        runs.solve_dir(run)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="RUN")
+    _in_one_thread(["solver", "solve", run, *(["--walls", str(walls)] if walls else []),
+                    *(["--true-borders"] if true_borders else []),
+                    "--compound-fusion" if compound_fusion else "--no-compound-fusion"])
+    try:
+        found = solve.solve_and_report(run, walls, true_borders, compound_fusion=compound_fusion)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="RUN")
+    except RuntimeError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    from sfzmaps.solver import paths
+    typer.echo(report.markdown(found) if paths.is_2000() else json.dumps(found, indent=1))
+
+
+@solver_app.command("text-chance")
+def solver_text_chance(device: str = _DEVICE_OPTION) -> None:
+    """Score every sheet of the series with the one text detector (the 2000 map's solver-text model), in one
+    exclusive GPU turn: <series' solver folder>/text/chance/<sheet>.png."""
+    import logging
+
+    from sfzmaps.solver import transfer
+    _check_device(device)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    typer.echo(json.dumps(transfer.build_text_chance(device)))
+
+
+@solver_app.command("transfer-models")
+def solver_transfer_models(
+        workers: int = typer.Option(2, "--workers", help="Processes for the walls' closing paths.")) -> None:
+    """Fit, on the 2000 map, the models every other series is solved with (walls, trust, street sides, lot sizes,
+    placement): data/solver/models-2000/."""
+    import logging
+
+    from sfzmaps.solver import transfer
+    _in_one_thread(["solver", "transfer-models", "--workers", str(workers)])
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    typer.echo(json.dumps(transfer.build_models(workers), indent=1))
+
+
+@solver_app.command("solve-quarter")
+def solver_solve_quarter(
+    run: str = typer.Argument(..., help="The run's name."),
+    quarter: str = typer.Argument(..., help="The quarter held out: nw, ne, sw or se."),
+    walls: Path = _WALLS_OPTION,
+    true_borders: bool = typer.Option(False, "--true-borders"),
+    keep_costs: bool = typer.Option(False, "--keep-costs"),
+    folder: Path = typer.Option(None, "--folder", help="Where the run is being built (default the run's folder)."),
+    compound_fusion: bool = _COMPOUND_FUSION_OPTION,
+) -> None:
+    """Solve the whole city with one quarter's held-out inputs, with the placement in the run's folder:
+    runs/RUN-QUARTER.npz there (no join)."""
+    from sfzmaps.solver import paths, solve
+    if quarter not in paths.QUARTERS:
+        raise typer.BadParameter(f"one of {', '.join(paths.QUARTERS)}", param_hint="QUARTER")
+    solve.solve_quarter(run, quarter, walls, true_borders, keep_costs, folder, compound_fusion=compound_fusion)
+
+
+@solver_app.command("score")
+def solver_score(
+    runs: list[str] = typer.Argument(..., help="Runs to score."),
+    with_data_errors: bool = typer.Option(False, "--with-data-errors", help="Count the data-error parcels too."),
+) -> None:
+    """Score runs against the April 2000 table (with its by-eye corrections), each leaving out its own data-error
+    list (none for a run without one)."""
+    _solver_score(runs, not with_data_errors)
+
+
+def _solver_score(runs: list[str], exclude_data_errors: bool) -> None:
+    from sfzmaps.solver.city import load_run
+    from sfzmaps.solver.measures import report
+    for r in runs:
+        report(r, load_run(r), exclude_data_errors)
+
+
+@solver_app.command("holes")
+def solver_holes(
+    run: str = typer.Argument(..., help="A run solved with --keep-costs."),
+    picture: Path = typer.Option(None, "--picture", help="Write a picture of every hole, by cause."),
+    save_data_errors: bool = typer.Option(False, "--save-data-errors",
+                                          help="Write the data-error list into the run's folder (data_errors.npz and "
+                                               "data-errors-2000-digital.csv); not for 'final', whose solve writes "
+                                               "its own."),
+) -> None:
+    """Why each hole in a run's district lines is there, and the data errors among them."""
+    from sfzmaps.solver.holes import report_causes
+    if save_data_errors:
+        _not_the_stage_run(run)
+    report_causes(run, picture, save_data_errors)
+
+
+@solver_app.command("published")
+def solver_published(
+    districts: Path = typer.Option(None, "--districts",
+                                   help="districts_raw.parquet (default data/work/2000-digital-zoning/)."),
+) -> None:
+    """The published 2000 map as the run 'published', scored the same way."""
+    from sfzmaps.solver.published import save_published
+    _solver_score([save_published(districts)], True)
+
+
+@solver_app.command("publish")
+def solver_publish(
+    series: str = typer.Option("2000-digital-zoning", "--series",
+                               help="The zoning series to publish from its solve (1921 ... 2000-digital-zoning)."),
+    root: Path = typer.Option(None, "--root", help="The series' solver outputs, in 2000's layout (solve/runs/final.npz, "
+                              "solve/report.json, lots/table.parquet, lots/lots.npz); default data/solver for 2000, "
+                              "data/solver/<series> for another."),
+    page: Path = typer.Option(None, "--page", help="Then write the page of differences against the site's map into "
+                              "this folder (index.html, crops/)."),
+    published: str = typer.Option("shared", "--published", help="With --page: the map to compare against: 'shared' "
+                                  "(the site's archive, data/out/shared) or a parcels.fgb."),
+    force: bool = typer.Option(False, "--force", help="Publish even when the outputs are current."),
+) -> None:
+    """Publish a zoning map from its series' solve (the solver-publish stages): out/<series>/districts/, each lot of
+    the read with the solve's code (districts/solved.py), then unzoned blocks, overrides, heights and parks as for
+    every series.  Fails if a lot of the read outside the unzoned blocks has no code, or (2000 only) a code has no
+    category; another series lists such codes in unknown_codes.json, as the old reader's publish does.
+    With --page, then the page of the areas where it differs from the site's map (solver/differences.py)."""
+    import logging
+
+    import pandas as pd
+    import pyogrio
+
+    from sfzmaps import llm
+    from sfzmaps.districts import assemble, solved
+    from sfzmaps.districts.series import SERIES
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    llm.CACHE_ONLY = True                 # nothing here may reach the network
+    if SERIES.get(series) is None or SERIES[series].role != "use":
+        typer.echo(f"{series} is not a zoning series: {', '.join(s for s, i in SERIES.items() if i.role == 'use')}",
+                   err=True)
+        raise typer.Exit(2)
+    if series not in solved.SOLVED:
+        typer.echo(f"note: {series} is not in districts.solved.SOLVED, so its edition or period stage still owns "
+                   f"data/out/{series}: add it there and `sfzmaps build --write-dvc-yaml` for a build to record this "
+                   "publish", err=True)
+    try:
+        d = solved.publish(series, force=force, root=root)
+        with solved.rooted(series, root):
+            source = solved.confidence_source(series)
+    except (ValueError, FileNotFoundError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    unknown = json.loads((d / "unknown_codes.json").read_text())
+    g = pyogrio.read_dataframe(d / "parcels.fgb", columns=["blklot", "code"], read_geometry=False)
+    read = pd.read_parquet(assemble._raw_path(series), columns=["blklot"])["blklot"].astype(str)
+    year = SERIES[series].year
+    unzoned = assemble.blocks_of(read).map(lambda b: year < assemble.UNZONED_UNTIL.get(b, 0)).to_numpy(bool)
+    blank = read[read.isin(set(g.loc[g["code"].isna() | (g["code"] == ""), "blklot"].astype(str))) & ~unzoned]
+    typer.echo(f"{series}: {d}; {g['code'].notna().sum():,} of {len(g):,} lots coded; the read's lots "
+               f"{len(read):,}, {len(blank):,} of them with no code; codes with no category {len(unknown)}; "
+               f"confidence from the solve's {source}")
+    if unknown:
+        typer.echo(f"no category: {unknown}", err=True)
+    # 2000 must publish every code with a category; another series keeps a code its era's research table can't
+    # place, with category unknown and listed in unknown_codes.json, as the old reader's publish does
+    if (unknown and series == solved.SERIES) or len(blank):
+        typer.echo(f"no code: {list(blank[:10])}", err=True)
+        raise typer.Exit(1)
+    if page is not None:
+        from sfzmaps.solver import differences
+        out = differences.make(series, root=root, published=published, page_dir=page, new_dir=d)
+        typer.echo(f"the page of differences: {out}")
+
+
+if __name__ == "__main__":
+    app()

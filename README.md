@@ -22,17 +22,26 @@ The system tools (GDAL, poppler, uv, git, Node) are pinned in `pixi.toml` and lo
 `pixi.lock`. Install [pixi](https://pixi.sh) (`brew install pixi` on macOS), then run
 `pixi install` and `pixi shell` here. `CONTRIBUTING.md` has the rest of the setup for each part.
 
+## About the scans
+
+The historic San Francisco zoning maps were scanned by me, Steven Bacio, in 
+early 2018. Thanks to the assistance of Michael Webster at the San Francisco
+Planning Department, I spent a day in the SF Planning archives scanning their
+paper maps on a large-format scanner and I then uploaded them to [Google Drive](https://drive.google.com/drive/u/0/folders/10p74RwqmzeQFBrBqjxXdmEOUREx0BLgO).
+I, of course, cannot claim copyright on these maps but if you use them I would
+appreciate an acknowledgement of the archival work I undertook. 
+
 ## License
 
-The project is licensed in two parts. See `NOTICE` for exactly what each part
-covers; the license texts govern.
+The project is licensed in two parts. See `LICENSING.md` for exactly what each
+part covers; the license texts govern.
 
 - **Code** (`pipeline/`, `site/` except the story text): open source under the
-  [GNU AGPL v3.0](LICENSE). You can use and adapt it for your own city. If you
-  distribute it, or run a modified version as a public website, you must
-  publish your source code under the same license and keep the credit
-  "Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)"
-  visible in your site's credits (an additional term under AGPL section 7).
+  [Apache License 2.0](LICENSE). You can use, adapt and sell it, including
+  inside closed-source products. If you share copies, keep `LICENSE` and
+  `NOTICE` with them; `NOTICE` carries the credit "Based on sfzoning.com by
+  Steven Bacio for GrowSF (https://growsf.org)". We ask that sites built on
+  the code show that credit.
 - **Content and data** (story text, research, map tiles, district data):
   [CC BY-NC-SA 4.0](LICENSE-content). You can remix it for non-commercial
   purposes, sharing your version under the same license and crediting it as:
@@ -41,15 +50,15 @@ covers; the license texts govern.
   > licensed CC BY-NC-SA 4.0.
 
 The content's non-commercial terms aren't an open source license, and the
-content isn't covered by the AGPL even though the site bundles it. Using the
-code commercially means replacing that content.
+content isn't covered by the Apache license even though the site bundles it.
+Using the code commercially means replacing that content.
 
 Some material isn't ours to license. The historic zoning maps are official
 San Francisco maps from the Planning Department's archives; to the best of our
 knowledge they're in the public domain, and we claim no rights in them or in
 the scans. The 1948 atlas imagery (David Rumsey Map Collection,
 CC BY-NC-SA 3.0) and the DataSF datasets (PDDL) keep their own terms. See
-`NOTICE`.
+`LICENSING.md`.
 
 ## Trademark
 

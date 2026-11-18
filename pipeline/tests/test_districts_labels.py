@@ -65,14 +65,29 @@ def test_regions_closed():
 
 
 def test_regions_bridge_gap_in_heavy_line():
-    """A heavy line that stops short (a drafting gap, or a stretch drawn over a thin block
-    outline) still separates the districts."""
+    """A heavy line that stops short where it runs along a thin block outline still separates
+    the districts: the outline under the gap carries the bridge."""
     lm = sl.build(codes=CODES)
     lm.img[200:260, 404:418] = 255          # 60 px gap in the x = 410 line ...
-    lm.img[200:260, 400:402] = 0            # ... where only the thin block outline remains
+    lm.img[200:260, 409:413] = 0            # ... where only a block outline (under it) remains
     regs = labels.regions(lm.img, lm.exclude)
     assert len(regs) == 5
     assert _region_at(regs, 100, 100) is not _region_at(regs, 600, 120)
+
+
+def test_no_bridge_across_blank_paper():
+    """A gap over blank paper is not bridged: on two scans of one drawing such bridges cut the
+    districts in different places (#34); the split around the gap decides instead."""
+    lm = sl.build(codes=CODES)
+    lm.img[200:260, 404:418] = 255          # the same gap, nothing printed in it
+    regs = labels.regions(lm.img, lm.exclude)
+    assert _region_at(regs, 100, 100) is _region_at(regs, 600, 120)
+    off = labels.INK_SHARE
+    try:
+        labels.INK_SHARE = None             # without the ink test the line is bridged
+        assert len(labels.regions(lm.img, lm.exclude)) == 5
+    finally:
+        labels.INK_SHARE = off
 
 
 def test_filled_box_is_a_region():
@@ -114,6 +129,56 @@ def test_conflicting_labels_split():
     assert len(one) == 1 and one[0][1] == "R-1"
 
 
+def test_a_lone_label_in_a_region_of_another_code_keeps_only_its_surroundings():
+    """Mt Vernon 1960: one R-3 printed beside a small box in an unclosed region full of R-1."""
+    region = box(0, 0, 2000, 400)
+    r1 = [lab("R-1", x, 200) for x in (100, 900, 1700)]
+    out = labels.assign_regions([region], r1 + [lab("R-3", 1300, 200)])
+    by = {c: p for p, c, _ in out}
+    assert by["R-3"].area == pytest.approx(np.pi * labels.SPLIT_MINOR_RADIUS_PX ** 2, rel=0.02)
+    assert by["R-1"].contains(Point(1150, 50))          # beyond the disk: the main code
+    # printed twice it is a district of its own (Forest Hill 1980), even if outnumbered
+    many = [lab("R-1", x, 200) for x in (100, 300, 500, 700, 900)]
+    two = {c: p for p, c, _ in labels.assign_regions(
+        [region], many + [lab("R-3", 1500, 100), lab("R-3", 1700, 300)])}
+    assert two["R-3"].contains(Point(1900, 50))
+    # two codes printed alike: neither dominates, an even split
+    even = {c: p for p, c, _ in labels.assign_regions(
+        [region], [lab("R-1", 500, 200), lab("R-3", 1500, 200)])}
+    assert even["R-3"].area == pytest.approx(even["R-1"].area)
+
+
+def test_a_park_keeps_its_outline_closed_by_every_bridge():
+    """McLaren Park 1980: its outline's gaps cross streets, so the ink-checked regions merge it
+    with the homes around it; the fully bridged outline, holding only P, stays P."""
+    merged = [(box(0, 0, 1000, 400), "RH-1", 0.8)]
+    closed = [box(0, 0, 300, 400), box(300, 0, 1000, 400)]
+    labs = [lab("P", 100, 200), lab("RH-1", 600, 200)]
+    out = {c: p for p, c, _ in labels.closed_parks(merged, closed, labs)}
+    assert out["P"].area == pytest.approx(300 * 400)
+    assert out["RH-1"].area == pytest.approx(700 * 400)
+    # a closed region that also prints another code is not a park outline
+    shared = labels.closed_parks(merged, closed, labs + [lab("RH-1", 200, 200)])
+    assert [c for _, c, _ in shared] == ["RH-1"]
+
+
+def test_a_split_measures_distance_around_district_lines_not_across_them(monkeypatch):
+    """A district line that stops short of closing (a gap at its foot) still keeps each side
+    with the label printed on it; a straight-line split hands the far side of the line to the
+    label just across it (Forest Hill 1980, Mt Vernon 1964)."""
+    monkeypatch.setattr(labels, "GEO_SPLIT", True)
+    region = box(0, 0, 1000, 400)
+    wall = np.zeros((400, 1000), bool)
+    wall[0:300, 495:505] = True                         # the line, open at the bottom
+    labs = [lab("R-1", 450, 50), lab("R-2", 900, 350)]
+    straight = {c: p for p, c, _ in labels.assign_regions([region], labs)}
+    around = {c: p for p, c, _ in labels.assign_regions([region], labs, wall=wall)}
+    assert straight["R-1"].contains(Point(600, 50))     # nearer in a straight line ...
+    assert around["R-2"].contains(Point(600, 50))       # ... but the line is in the way
+    assert around["R-1"].contains(Point(100, 350)) and around["R-2"].contains(Point(950, 50))
+    assert around["R-1"].area + around["R-2"].area == pytest.approx(region.area, rel=0.01)
+
+
 def test_label_on_heavy_ink_snaps_to_nearest_region():
     a, b = box(0, 0, 100, 100), box(110, 0, 210, 100)
     out = labels.assign_regions([a, b], [lab("R-1", 103, 50), lab("R-2", 160, 50)])
@@ -153,6 +218,97 @@ def test_parcel_majority_region(tmp_path):
     assert out.loc[f"{5 * 20 + 6:04d}002", "code"] == "C-2"    # block (5, 5): MID
     assert out.index.name == "blklot" and set(out.columns) >= {"code", "height_code", "confidence"}
     assert out["height_code"].isna().all()
+
+
+def test_a_parcel_knows_how_far_its_printed_label_is(tmp_path):
+    """use_label_ft: distance from a parcel to the label its code comes from; inf when its
+    region inherited the code (no label printed in it)."""
+    lm = sl.build(codes=CODES)
+    d = sl.write_sheet("1960", "s1", lm)
+    labs = [l for l in _label_list() if l.code != "R-2"] + [lab("R1", *sl.CENTRES["BL"])]
+    labels.save_labels(d / "district_labels.json", labs, page_sha256=labels.page_sha(d))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
+    out = labels.assign_parcels(lm.parcels, d, lm.transform).set_index("blklot")
+    tl = lm.transform.to_world(np.array([sl.CENTRES["TL"]]))[0]
+    near, far = out.loc["0001001"], out.loc[f"{9 * 20 + 1:04d}001"]
+    c = lm.parcels.set_index("blklot").geometry["0001001"].centroid
+    assert near["use_label_ft"] == pytest.approx(np.hypot(c.x - tl[0], c.y - tl[1]))
+    assert far["code"] == "R-1"                  # printed "R1": one district, one code
+    assert near["use_label_ft"] < 1e9 and np.isinf(out["height_label_ft"]).all()
+
+
+def test_a_far_label_in_an_open_region_leaves_the_lot_unread(tmp_path, monkeypatch):
+    """#38: a lot coded only from a piece that reaches the page edge, from a label farther than
+    OPEN_REACH_FT, gets no code from this sheet; enclosed districts keep theirs."""
+    lm = sl.build(codes=CODES)
+    d = sl.write_sheet("1960", "s1", lm)
+    labels.save_labels(d / "district_labels.json", _label_list(), page_sha256=labels.page_sha(d))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
+    island = f"{sl.ISLAND_BLOCK[1] * 20 + sl.ISLAND_BLOCK[0] + 1:04d}001"
+    monkeypatch.setattr(labels, "OPEN_REACH_FT", None)
+    every = labels.assign_parcels(lm.parcels, d, lm.transform).set_index("blklot")
+    monkeypatch.setattr(labels, "OPEN_REACH_FT", 1.0)
+    near = labels.assign_parcels(lm.parcels, d, lm.transform).set_index("blklot")
+    assert every["code"].notna().all()
+    assert near.loc[island, "code"] == "P"                      # enclosed: kept
+    assert near.loc["0001001", "code"] is None                  # TL reaches the page edge
+    assert near["code"].isna().sum() < len(near)
+
+
+def test_label_fixes_recode_move_drop_and_add_read_labels():
+    """inputs/<series>/label_fixes.csv: a person's corrections, matched to the nearest read label
+    of the code within FIX_PX; the cached read itself is left alone."""
+    labs = [lab("M-1", 100, 100), lab("R-3", 500, 500), lab("C-2", 900, 900), lab("M-1", 300, 300)]
+    fixes = [{"x": "110", "y": "95", "code": "M-1", "fix_code": "RH-1"},           # misread
+             {"x": "505", "y": "500", "code": "R-3", "fix_code": "", "fix_x": "520", "fix_y": "560"},
+             {"x": "900", "y": "900", "code": "C-2", "fix_code": "-"},             # not a code
+             {"x": "50", "y": "60", "code": "", "fix_code": "C-2"},                 # missed
+             {"x": "700", "y": "700", "code": "R-1", "fix_code": "R-2"}]            # no match
+    out = {(l.code, l.x, l.y) for l in labels.apply_label_fixes(labs, fixes)}
+    assert out == {("RH-1", 100, 100), ("R-3", 520, 560), ("M-1", 300, 300), ("C-2", 50, 60)}
+
+
+def test_read_district_labels_applies_the_series_label_fixes(tmp_path, monkeypatch):
+    from sfzmaps import inputs
+
+    lm = sl.build(codes=CODES)
+    d = sl.write_sheet("1960", "s1", lm)
+    labels.save_labels(d / "district_labels.json", _label_list(), page_sha256=labels.page_sha(d),
+                       key=labels.read_key("1960"))
+    answers.write(d / "district_labels.json", [])   # made from no answers (fixture)
+    fixes = tmp_path / "label_fixes.csv"
+    x, y = sl.CENTRES["MID"]
+    fixes.write_text(f"sheet,x,y,code,fix_code,fix_x,fix_y,note\ns1,{x},{y},C-2,C-3,,,\ns2,{x},{y},C-2,-,,,\n")
+    monkeypatch.setattr(inputs, "label_fixes_path", lambda s: fixes)
+    codes = {l.code for l in labels.read_district_labels("1960", "s1", client=Fake(lambda *a: 1 / 0))}
+    assert "C-3" in codes and "C-2" not in codes
+    assert {l.code for l in labels.load_labels(d / "district_labels.json")} >= {"C-2"}   # cache as read
+
+
+def test_twin_sheets_pair_the_two_scans_of_one_drawing():
+    assert labels.twin_of("1996-2000-zoning", "1996-2000-zoning-p35") == ("2000-digital-zoning", "2000-digital-zoning-p11")
+    assert labels.twin_of("2000-digital-zoning", "2000-digital-zoning-p01") == ("1996-2000-zoning", "1996-2000-zoning-p25")
+    assert labels.twin_of("1996-2000-zoning", "1996-2000-zoning-p20") is None   # not a zoning sheet's twin
+    assert labels.twin_of("1980", "20180102115319417-p04") is None
+
+
+def test_register_finds_the_twin_scans_shift_and_scale_from_shared_labels():
+    lm = sl.build(codes=CODES)
+    m_true = np.float32([[1.005, 0.0, -30.0], [0.0, 1.005, 45.0]])          # other -> img
+    inv = cv2.invertAffineTransform(m_true)
+    other = cv2.warpAffine(lm.img, inv, (lm.img.shape[1], lm.img.shape[0]), borderValue=255)
+    pts = [(x, y) for x in range(150, 1100, 190) for y in range(150, 1100, 210)]
+    labs = [lab("R-1", x, y) for x, y in pts]
+    other_labs = [lab("R-1", *(inv @ np.array([x, y, 1.0]))) for x, y in pts]
+    m = labels.register(lm.img, other, labs, other_labs)
+    assert m is not None and np.allclose(m, m_true, atol=0.5)
+    assert labels.register(lm.img, other, labs[:3], other_labs[:3]) is None     # too few to fit
+
+
+def test_hyphenate():
+    assert [labels.hyphenate(c) for c in ("R1", "R4", "R1D", "RH1(D)", "R-1", "P", "NC-2", None)] == \
+        ["R-1", "R-4", "R-1-D", "RH-1(D)", "R-1", "P", "NC-2", None]
+    assert labels.hyphenate("UPPER MARKET NCD") == "UPPER MARKET NCD"
 
 
 def test_height_labels_fill_height_code():
@@ -389,3 +545,39 @@ def test_an_old_artifact_is_replayed_from_the_cache_and_kept_byte_for_byte(tmp_p
     assert fake.calls == calls                                           # replayed from the cache
     assert answers.read(art) == recorded and outer == set(recorded)      # and consumed
     assert (art.read_bytes(), art.stat().st_mtime_ns) == before
+
+
+def test_the_old_reader_never_sees_the_solvers_hand_labels(monkeypatch):
+    """The owner's hand labels for the 2000 map (329 rows, 101 leader moves) are the solver's: its placement learns
+    from them (runs.LABEL_FIXES).  The old reader applies inputs/<series>/label_fixes.csv, and through the twin fuse the
+    1996-2000 scan reads the 2000 sheets' fixes too; applied there the hand labels made the 1996-2000 map worse
+    (2026-11-18).  So their file is in no series' inputs folder, no series' label_fixes.csv holds any of them, and
+    what the twin fuse reads for each 2000 sheet (labels.label_fixes) holds none."""
+    import csv
+
+    from sfzmaps import inputs
+    from sfzmaps.districts.series import SERIES
+    from sfzmaps.solver import runs
+    # the committed inputs themselves, read only (conftest points every test at an empty folder)
+    monkeypatch.setattr(config, "INPUTS_DIR", config.PIPELINE_DIR / "inputs")
+    assert runs.LABEL_FIXES.is_relative_to(config.INPUTS_DIR)
+
+    def rows(path):
+        with open(path, newline="") as f:
+            return [tuple(r.values()) for r in csv.DictReader(f)]
+
+    hand = set(rows(runs.LABEL_FIXES))
+    with open(runs.LABEL_FIXES, newline="") as f:
+        moves = [r for r in csv.DictReader(f) if (r["fix_x"] or "").strip()]
+    assert len(hand) == 329 and len(moves) == 101
+    for s in SERIES:
+        assert runs.LABEL_FIXES.parent != inputs.series_dir(s)
+        if inputs.label_fixes_path(s).exists():
+            assert not set(rows(inputs.label_fixes_path(s))) & hand, s
+    twin = labels.TWIN_SERIES[1]
+    seen = 0
+    for n in range(1, 13):
+        got = {tuple(r.values()) for r in labels.label_fixes(twin, f"{twin}-p{n:02d}")}
+        assert not got & hand
+        seen += len(got)
+    assert seen == 19          # the 2000 sheets' own fixes of 2026-11-04 are still read

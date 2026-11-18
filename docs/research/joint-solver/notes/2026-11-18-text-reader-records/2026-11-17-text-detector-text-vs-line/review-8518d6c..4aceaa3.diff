@@ -1,0 +1,800 @@
+# Review package: 8518d6c..4aceaa3
+
+## Commits
+4aceaa3 textnet composites fix 1: kind weights, ink-only crossing, new-lesson tally
+
+## Files changed
+ pipeline/scripts/textlines/composites.py         |  96 ++++++++++--
+ pipeline/src/sfzmaps/solver/textnet/composite.py | 188 ++++++++++++++++-------
+ pipeline/tests/test_textnet_composite.py         |  85 +++++++++-
+ 3 files changed, 304 insertions(+), 65 deletions(-)
+
+## Diff
+diff --git a/pipeline/scripts/textlines/composites.py b/pipeline/scripts/textlines/composites.py
+index 9e87450..9289dcf 100644
+--- a/pipeline/scripts/textlines/composites.py
++++ b/pipeline/scripts/textlines/composites.py
+@@ -1,53 +1,61 @@
+ """The composites' measures and checks on the training maps (`textnet.composite`), made before a composites run, on the
+ CPU, sheets 4 at a time, one thread each:
+ 
+     uv run python scripts/textlines/composites.py
+ 
+ Writes to `data/solver/experiments/textlines/`:
+   distributions.json  `composite.measure` of the 2000 sheets with each quarter and the owner's answered blocks held out
+                       (`by_held_quarter`); at the top NE's, the quarter the composites run first (`cross_by_kind`,
+-                      `cross_by_kind_ink`, `clean_words`, `clean_word_texture`, `line_texture`); `p` per quarter, the
+-                      word-weighted share of words crossed over all kinds (the composites' share, `--composites`);
+-                      `banks` per quarter, each map's bank (`Bank.sizes`: clean words, pieces, words crossed by kind)
++                      `cross_by_kind_line_px`, `clean_words`, `clean_word_texture`, `line_texture`); `p` per quarter,
++                      the word-weighted share of words crossed over all kinds (the composites' share, `--composites`);
++                      `banks` per quarter, each map's bank (`Bank.sizes`: clean words, pieces, words crossed by kind,
++                      kind weights)
+   composites.json     100 batches of `train.draw` (stage.DEFAULT_RECIPE with the label rule lines-unknown, seed 0)
+                       timed at composites p and at 0, alone and with `batch_tensors` (the prefetch thread's work); what
+-                      the composites were (`Bank.tally`); the texture check: `texture_stats` of the text ink of
+-                      composites and of the real crops at the same centres (page scale, not turned), and of clean words
++                      the composites were (`Bank.tally`); `sample`: SAMPLE composites drawn as `train.draw` draws them,
++                      the clean words drawn by kind weight ("weighted", as the training does) and alike ("alike", as
++                      before the weights), each with the composites' kind mix, the draws per clean word (`repeats`)
++                      and the new lessons (`Bank.tally`'s, per composite: text px on line px, line ink in the word's
++                      box taught not text); the texture check: `texture_stats` of the text ink of composites and of
++                      the real crops at the same centres (page scale, not turned), and of clean words
+   composites.png      24 composites as the training sees them (12 word onto lines, 12 line onto a word): text red, other
+                       ink grey, px with no lesson (unknown) tinted blue, the pasted word's frame or the clean word's box
+-                      green
++                      green; each caption ends with the composite's new lessons ("new" px, page scale)
+ """
+ import os
+ 
+ for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS",
+            "OPENCV_FOR_THREADS_NUM"):
+     os.environ.setdefault(_k, "1")
++import collections  # noqa: E402
+ import dataclasses  # noqa: E402
+ import logging  # noqa: E402
+ import time  # noqa: E402
+ 
+ import cv2  # noqa: E402
+ import numpy as np  # noqa: E402
+ 
+ cv2.setNumThreads(1)
+ 
+ from sfzmaps.solver import paths  # noqa: E402
+ from sfzmaps.solver.textnet import composite, data, reader_stage, stage, train, zones  # noqa: E402
+ 
+ OUT = zones.TEXTLINES_DIR
+ THREADS = 4
+ FIRST = "ne"              # the quarter the composites run first: its numbers are the file's top level
+ BATCHES = 100             # batches timed
+ SEED = 0
+ PICTURES = 12             # composites of each kind in the picture
+ CHECKS = 150              # composites of each kind (and real crops) in the texture check
++SAMPLE = 2000             # composites in the sample of kinds, repeats and new lessons
++KIND_NAMES = composite.KIND_NAMES
+ log = logging.getLogger("composites")
+ 
+ 
+ def _p(m: dict) -> float:
+     return m["cross_by_kind"]["all"]["share"]
+ 
+ 
+ def _centre(pools, rng):
+     """A crop's centre, scale and turns as `train.draw` draws them."""
+     pool = pools[0] if rng.random() < train.TEXT_SHARE else pools[1]
+@@ -103,49 +111,109 @@ def _tile(c: dict, info: dict, bank, size: int, turns: int, caption: str) -> np.
+         cv2.polylines(img, [pts.reshape(-1, 1, 2)], True, (0, 150, 0), 1)
+     band = np.full((22, ink.shape[1], 3), 255, np.uint8)
+     cv2.putText(band, caption, (4, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 0, 0), 1, cv2.LINE_AA)
+     return np.vstack([img, band])
+ 
+ 
+ def picture(sheets, pools, bank, recipe, out) -> list[dict]:
+     """PICTURES composites of each kind (`picture`'s rng seeded 5), drawn as `train.draw` would, to `out`."""
+     rng = np.random.default_rng(5)
+     tiles, made = [], []
+-    kinds = {v: k for k, v in data.KINDS.items()}
++    short = {"zoning code": "code", "block number": "block", "street name": "street", "other": "other"}
+     for mode, share in (("a", 1.0), ("b", 0.0)):
+         forced = dataclasses.replace(bank, a_share=share)
+         n = 0
+         while n < PICTURES:
+             i, y, x, scale, turns = _centre(pools, rng)
+             c = forced.crop(rng, sheets[i], y, x, recipe.crop, scale, turns)
+             info = forced.last
+             if info["mode"] != mode:
+                 continue
+-            words = forced.words[sheets[i].series]
+-            kind = kinds[int(words.kind[info["word"]])]
++            kind = KIND_NAMES[info["kind"]]
+             where = ("on line" if info["on_line"] else "off line") if mode == "a" else "line across"
+-            caption = f"({mode}) {where}, {kind}, {sheets[i].series[:9]}, x{scale:.2f}, {turns} turn"
++            caption = (f"({mode}) {where}, {short[kind]}, {sheets[i].series[:9]}, x{scale:.2f}, {turns} turn, "
++                       f"new {info['new_lesson_px']}")
+             tiles.append(_tile(c, info, forced, recipe.crop, turns, caption))
+             made.append({"mode": mode, "series": sheets[i].series, "kind": kind, "scale": round(scale, 3),
+-                         "turns": turns, **{k: v for k, v in info.items() if k in ("on_line", "window")}})
++                         "turns": turns, **{k: v for k, v in info.items()
++                                            if k in ("on_line", "window", "word", "word_px", "new_lesson_px",
++                                                     "box_line_not_text_px")}})
+             n += 1
+     gap = 6
+     rows = []
+     for r in range(0, len(tiles), 6):
+         row = tiles[r:r + 6]
+         rows.append(np.hstack([np.pad(t, ((0, gap), (0, gap), (0, 0)), constant_values=255) for t in row]))
+     sheet = np.vstack(rows)
+     if not cv2.imwrite(str(out), sheet):
+         raise OSError(f"can't write {out}")
+     return made
+ 
+ 
++def _mix(rows, key=lambda r: True) -> dict:
++    """The share of each kind among the composites of `rows` for which `key` holds (None without any)."""
++    kinds = [r["kind"] for r in rows if key(r)]
++    return {n: round(kinds.count(k) / len(kinds), 4) if kinds else None for k, n in enumerate(KIND_NAMES)}
++
++
++def _lessons(rows) -> dict:
++    """The new lessons of composites (`Bank._lessons`): how many have any, and the px per composite and per px of the
++    composited word's ink."""
++    new = np.array([r["new_lesson_px"] for r in rows], float)
++    word = np.array([r["word_px"] for r in rows], float)
++    under = np.array([r["box_line_not_text_px"] for r in rows], float)
++    return {"composites": len(rows), "with_any": round(float((new > 0).mean()), 4) if len(rows) else None,
++            "new_lesson_px": int(new.sum()), "mean_px": round(float(new.mean()), 1) if len(rows) else None,
++            "share_of_word_ink": round(float(new.sum() / word.sum()), 4) if word.sum() else None,
++            "box_line_not_text_px": int(under.sum())}
++
++
++def sample(sheets, pools, bank, recipe, weighted: bool) -> dict:
++    """SAMPLE composites drawn as `train.draw` draws them (centre, scale, turns, then `Bank.crop`; rng seeded 21), the
++    clean words drawn by kind weight or alike: the kind mix (by kind of composite, in all, and per map), the draws per
++    clean word per map and kind (`repeats`: the bank's words, the draws, the words drawn, the mean draws per word of
++    the bank and the most draws of one word), and the new lessons (in all, per kind of composite, per map and kind)."""
++    bank = dataclasses.replace(bank, weighted=weighted, tally=collections.Counter())
++    rng = np.random.default_rng(21)
++    rows, left = [], 0
++    while len(rows) < SAMPLE:
++        i, y, x, scale, turns = _centre(pools, rng)
++        bank.crop(rng, sheets[i], y, x, recipe.crop, scale, turns)
++        info = bank.last
++        if info["mode"] == "none":
++            left += 1
++            continue
++        rows.append({k: info[k] for k in ("mode", "series", "word", "kind", "word_px", "new_lesson_px",
++                                          "box_line_not_text_px")})
++    series = list(dict.fromkeys(r["series"] for r in rows))
++    repeats = {}
++    for s in series:
++        repeats[s] = {}
++        for k, name in enumerate(KIND_NAMES):
++            mine = [r["word"] for r in rows if r["series"] == s and r["kind"] == k]
++            n_words = int((bank.words[s].kind == k).sum())
++            counts = np.bincount(mine) if mine else np.zeros(0, int)
++            repeats[s][name] = {"bank_words": n_words, "draws": len(mine), "words_drawn": int((counts > 0).sum()),
++                                "mean_per_word": round(len(mine) / n_words, 2) if n_words else None,
++                                "max_per_word": int(counts.max()) if len(counts) else 0}
++    return {
++        "weighted": weighted, "composites": len(rows), "left_as_is": left,
++        "kind_mix": {"all": _mix(rows), **{m: _mix(rows, lambda r, m=m: r["mode"] == m) for m in ("a", "b")}},
++        "kind_mix_by_series": {s: _mix(rows, lambda r, s=s: r["series"] == s) for s in series},
++        "repeats": repeats,
++        "new_lessons": {"all": _lessons(rows), **{m: _lessons([r for r in rows if r["mode"] == m]) for m in "ab"},
++                        "by_series_and_kind": {s: {name: _lessons([r for r in rows if r["series"] == s
++                                                                   and r["kind"] == k])
++                                                   for k, name in enumerate(KIND_NAMES)} for s in series}},
++    }
++
++
+ def texture_check(sheets, pools, bank) -> dict:
+     """`texture_stats` of the text ink of CHECKS composites of each kind and of the real crops (lines-unknown, text
+     ink with a lesson) at the same centres, at page scale and not turned (320 px)."""
+     out = {}
+     for mode, share in (("a", 1.0), ("b", 0.0)):
+         forced = dataclasses.replace(bank, a_share=share)
+         rng = np.random.default_rng(11)
+         comp, real = [], []
+         while len(comp) < CHECKS:
+             i, y, x, _, _ = _centre(pools, rng)
+@@ -184,37 +252,41 @@ def main() -> None:
+                  time.perf_counter() - t0)
+         if name == FIRST:
+             keep = (prepared, areas, bank)
+         del prepared, bank
+     first = by_quarter[FIRST]
+     p = {name: _p(m) for name, m in by_quarter.items()}
+     zones._write_json(OUT / "distributions.json", {
+         "held_out": f"the quarter {FIRST} and the answered blocks (reader_stage.held_blocks); by_held_quarter for each",
+         "rules": {"cross_px": composite.CROSS_PX, "clean_px": composite.CLEAN_PX, "piece_px": composite.PIECE_PX,
+                   "tile": composite.TILE, "line_px": "SheetData.line_bits (linerules.line_px grown by 1 px)"},
+-        **{k: first[k] for k in ("cross_by_kind", "cross_by_kind_ink", "clean_words", "clean_word_texture",
++        **{k: first[k] for k in ("cross_by_kind", "cross_by_kind_line_px", "clean_words", "clean_word_texture",
+                                  "line_texture", "sheets")},
+         "p": p, "by_held_quarter": by_quarter, "banks": banks, "seconds": seconds})
+     log.info("wrote %s: p %s", OUT / "distributions.json", p)
+ 
+     prepared, areas, bank = keep
+     held = data.hold_out(prepared, areas)
+     t0 = time.perf_counter()
+     pools = train.centre_pools(held)
+     pooled = time.perf_counter() - t0
+     base = dataclasses.replace(stage.DEFAULT_RECIPE, labels="lines-unknown")
+     with_p = dataclasses.replace(base, composites=round(p[FIRST], 4))
+     timing = [time_draw(held, pools, with_p, bank), time_draw(held, pools, base, None)]
+     made = dict(sorted(bank.tally.items()))
+     log.info("draw: %s", timing)
+     bank.tally.clear()
+     shown = picture(held, pools, bank, with_p, OUT / "composites.png")
++    sampled = {"weighted": sample(held, pools, bank, with_p, True), "alike": sample(held, pools, bank, with_p, False)}
++    log.info("sample: kind mix weighted %s, alike %s", sampled["weighted"]["kind_mix"]["all"],
++             sampled["alike"]["kind_mix"]["all"])
+     check = texture_check(held, pools, bank)
+     zones._write_json(OUT / "composites.json", {
+         "recipe": dataclasses.asdict(with_p), "timing": timing, "gpu_step_ms": 95,
+         "composites_made_in_timing": made, "pools_seconds": round(pooled, 1), "picture": shown,
++        "picture_new_lessons": _lessons(shown), "sample": sampled,
+         "texture_check": check, "clean_word_texture": first["clean_word_texture"]})
+     log.info("wrote %s and %s", OUT / "composites.json", OUT / "composites.png")
+ 
+ 
+ if __name__ == "__main__":
+     main()
+diff --git a/pipeline/src/sfzmaps/solver/textnet/composite.py b/pipeline/src/sfzmaps/solver/textnet/composite.py
+index aabdcbd..9430dc2 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/composite.py
++++ b/pipeline/src/sfzmaps/solver/textnet/composite.py
+@@ -1,53 +1,68 @@
+ """Composites inside real crops, for the text detector's training (`train.Recipe.composites`): real clean words ORed
+-onto real line work and real line pieces ORed across clean words, with exact masks, so the detector learns letters
+-(whole, their long strokes too) apart from the line ink through and beside them.
++onto real line work and real line pieces ORed across clean words, with exact masks, so the detector learns that letter
++px touching or under line ink are text and the line ink through and beside letters is not: lessons the label rule
++"lines-unknown" never gives (it leaves every line px inside a word unknown).
+ 
+   clean word   a Terra word whose ink pieces all lie inside its box, with no line px (`data.SheetData.line_bits`, the
+                run rule's px grown by 1 px) within CLEAN_PX px outside it (`linegate.clean_word_mask`, the gate's
+-               m2_clean_words): its ink is an exact mask of text, with the scan's own texture
++               m2_clean_words): its ink is an exact mask of text, with the scan's own texture.  On the real maps a
++               clean word holds (nearly) no run-rule px inside its box either (NE held out: no code or block number
++               does), so the composites do not teach the long strokes the label rule leaves unknown; they teach letter
++               px touching or under line ink
+   line piece   a connected piece of line ink (the line px that are ink) more than CLEAN_PX px from every Terra word,
+                other pass's box, unmatched zone and held-out px (`free_line_ink`), cut by a grid of TILE px tiles,
+                whose bounding diagonal is at least PIECE_PX px (`line_pieces`)
+-  crossed      a word with at least CROSS_PX line px inside its box (`crossings`)
++  crossed      a word with at least CROSS_PX px of line ink (line px that are ink) inside its box (`crossings`)
+ 
+ The bank (`Bank.build`) holds references only: each clean word as (sheet, rectangle, kind, angle), each line piece as
+ (sheet, box, a seed px of it), per map, none from an area held out (a held-out quarter, the answered blocks), and per
+-map and kind the share of words crossed (`cross_by_kind`), measured on its own sheets, the words whose centre is in an
+-area held out left out.  Its own generator (`default_rng([seed, 1])`) draws only where each sheet's tile grid starts.
++map and kind the words in a training area (their centre not held out), those crossed and the clean words it holds.
++From them, per map: the share of words crossed by kind (`cross`), and the weight each kind's clean words are drawn by
++(`kind_weights`), so the kinds come in the map's own mix: for (a) a kind's share of the map's words over its share of
++the clean words; for (b), which always crosses, its share of the crossed words over its share of the clean words (the
++words' mix where no word is crossed).  A kind with no clean word can't be drawn: the others share its weight.  Its own
++generator (`default_rng([seed, 1])`) draws only where each sheet's tile grid starts.
+ 
+ A composite (`Bank.crop`, drawn from the batch thread's generator alone) starts from the real crop the batch drew, as
+ `data.crop_targets(..., labels="lines-unknown")` makes it, and changes it at page scale, before the resize and the
+ turns, one of two ways (A_SHARE of them the first):
+ 
+-  (a) word onto lines   a clean word of the crop's map is ORed in, as it is printed (its own size and angle).  With
+-                        its kind's crossing share it goes on the crop's line ink (a px of its rectangle on a line ink
+-                        px, and CROSS_PX line px or more inside its rectangle), else off it (no line px within
+-                        CLEAN_PX px of its rectangle); and only where its rectangle and CLEAN_PX px around it hold no
+-                        Terra word, no other pass's box, no unmatched zone and no held-out px, inside the crop.  TRIES
+-                        places are tried, then the next clean word is drawn; after WORDS words the crop is left as it
+-                        is.  Its ink is text, known, with its kind and angle (where it overlaps line ink too); the line
+-                        ink under its rectangle off its letters stays as the crop had it: not text, known.
+-  (b) line onto a word  the crop is moved to centre on a clean word of the crop's map (on its own sheet), whose ink is
+-                        all text and known (its long strokes too, which the label rule leaves unknown), and a line
+-                        piece of that map, turned a random number of quarter turns, is ORed across it (a px of the
+-                        piece on a px of the word's rectangle).  The piece's px that were paper become ink, not text,
+-                        known as the px was (never where it was held out or unknown); those on the word's ink stay
+-                        text (the overlap: text, with weight 1, there being no measured weight); those on other ink
+-                        keep their targets.
++  (a) word onto lines   a clean word of the crop's map (drawn by its kind's weight) is ORed in, as it is printed (its
++                        own size and angle).  With its kind's crossing share it goes on the crop's line ink (a px of
++                        its rectangle on a line ink px, and CROSS_PX px of line ink or more inside its rectangle), else
++                        off it (no line px within CLEAN_PX px of its rectangle); and only where its rectangle and
++                        CLEAN_PX px around it hold no Terra word, no other pass's box, no unmatched zone and no
++                        held-out px, inside the crop.  TRIES places are tried, then the next clean word is drawn; after
++                        WORDS words the crop is left as it is.  Its ink is text, known, with its kind and angle (where
++                        it overlaps line ink too); the line ink under its rectangle off its letters stays as the crop
++                        had it: not text, known.
++  (b) line onto a word  the crop is moved to centre on a clean word of the crop's map (drawn by its kind's weight, on
++                        its own sheet), whose ink is all text and known, and a line piece of that map, turned a random
++                        number of quarter turns, is ORed across it (a px of the piece on a px of the word's
++                        rectangle).  The piece's px that were paper become ink, not text, known as the px was (never
++                        where it was held out or unknown); those on the word's ink stay text (the overlap: text, with
++                        weight 1, there being no measured weight); those on other ink keep their targets.  The piece's
++                        px, grown by 1 px as the line px are, join the crop's line px.
+ 
+ A composite's masks are exact, so its text is only ever ink: the paper inside a word box there (the pasted word's
+ rectangle's too) is unknown, a lesson neither of text nor of not-text (in the real crops it is text, by the box rule).
+ 
++`Bank.tally` counts what the composites were and, per kind of composite, the new lessons: `new_lesson_px` the px
++taught as text that are line px (text, known and a line px: a letter px on or next to line ink, which the label rule
++leaves unknown inside a word) and `box_line_not_text_px` the line ink inside the composited word's box taught as not
++text, at page scale; `last` holds the same for the last composite.
++
+ `measure` gives what the bank's rules rest on: on sheets with areas left out, the share of words crossed by kind
+-(`cross_by_kind`), the clean words, their texture (`texture_stats`) and the texture of straight line pieces
+-(`line_texture`), which drawn lines would have to match (none is drawn: real line pieces only).
++(`cross_by_kind`; `cross_by_kind_line_px` counting every line px, ink or not), the clean words, their texture
++(`texture_stats`) and the texture of straight line pieces (`line_texture`), which drawn lines would have to match
++(none is drawn: real line pieces only).
+ 
+ No stage imports this module (`train` takes the bank as any object with `.crop`), so no stage's import closure
+ changes with it.
+ """
+ import collections
+ import dataclasses
+ import logging
+ from concurrent.futures import ThreadPoolExecutor
+ 
+ import cv2
+@@ -63,20 +78,21 @@ PIECE_PX = 100                  # a line piece's least bounding diagonal, px
+ TILE = 256                      # px: line pieces are cut by a grid of tiles this size
+ TRIES = 20                      # places tried for one clean word
+ WORDS = 8                       # clean words tried before a crop is left as it is
+ A_SHARE = 0.5                   # the share of composites that are (a) word onto lines; the rest (b)
+ GAP_PX = 1.5                    # line_texture: px between two px across a piece that make them two strokes
+ WIDTH_TOP = 6                   # line_texture's width classes: 1 .. WIDTH_TOP - 1 px, and WIDTH_TOP px or more
+ LAGS = (1, 2, 4)                # line_texture's autocorrelation lags, px along the piece
+ DISTRIBUTIONS = zones.TEXTLINES_DIR / "distributions.json"
+ KIND_NAMES = tuple(data.KINDS)                    # by kind index
+ _REACH = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * CLEAN_PX + 1, 2 * CLEAN_PX + 1))
++_GROW = np.ones((2 * zones.GROW_PX + 1, 2 * zones.GROW_PX + 1), np.uint8)    # line px grow as `zones.find_lines`'s
+ 
+ 
+ # --- what the bank holds ---------------------------------------------------------------------------------------------
+ 
+ @dataclasses.dataclass(frozen=True)
+ class Words:
+     """Clean words by reference: the sheet's index in the bank, the rectangle's corners (page px, as
+     `SheetData.words`), the kind and the reading angle."""
+     sheet: np.ndarray       # int32 (n,)
+     rect: np.ndarray        # int32 (n, 4, 2)
+@@ -337,60 +353,61 @@ def _word_ink(sd: data.SheetData, rect: np.ndarray) -> np.ndarray | None:
+     box = _clipped_box(sd, rect)
+     return None if box is None else data._ink_window(sd, *box) & _rect_in(rect, *box)
+ 
+ 
+ def _share(words: int, crossed: int) -> dict:
+     return {"words": int(words), "crossed": int(crossed), "share": crossed / words if words else None}
+ 
+ 
+ def _sheet_counts(sd: data.SheetData, line: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+     """Per word of a sheet whose `held` are the areas left out: in a training area (its centre px not held out),
+-    crossed (by line px, and by line ink), and clean (`linegate.clean_word_mask` with the line px)."""
++    crossed (CROSS_PX px of line ink inside its box), crossed counting every line px (ink or not), and clean
++    (`linegate.clean_word_mask` with the line px)."""
+     train = np.array([not _held_at(sd, *_centre(sd, r)) for r in sd.words], bool).reshape(-1)
+     cross = crossings(sd) >= CROSS_PX
+-    return train, cross[:, 0], cross[:, 1], linegate.clean_word_mask(sd, line)
++    return train, cross[:, 1], cross[:, 0], linegate.clean_word_mask(sd, line)
+ 
+ 
+ def _sheet_measure(sd: data.SheetData) -> tuple:
+     """One sheet's part of `measure` (its held areas the areas left out)."""
+     line = _line_page(sd)
+-    train, cross, cross_ink, clean = _sheet_counts(sd, line)
++    train, cross, cross_line_px, clean = _sheet_counts(sd, line)
+     del line
+     kinds = sd.kinds.astype(np.int64)
+     k = len(KIND_NAMES)
+-    counts = [np.bincount(kinds[train & m], minlength=k) for m in (train, cross, cross_ink, clean)]
++    counts = [np.bincount(kinds[train & m], minlength=k) for m in (train, cross, cross_line_px, clean)]
+     clean_ink = [m for m in (_word_ink(sd, r) for r in sd.words[train & clean]) if m is not None]
+     pieces = [mask for tile in _tiles(sd) for _, _, mask in _tile_pieces(sd, *tile)]
+     return counts, clean_ink, pieces
+ 
+ 
+ def measure(sheets: list[data.SheetData], areas=(), threads: int = 1) -> dict:
+     """What the composites rest on, on `sheets` (with their line px) with `areas` left out (the words whose centre is
+     in one, the line ink in or within CLEAN_PX px of one): `cross_by_kind` per kind and over all ("all", word-weighted)
+-    the words, those crossed (CROSS_PX line px or more inside the box) and their share (None without words);
+-    `cross_by_kind_ink` the same counting only line px that are ink; `clean_words` per kind; `clean_word_texture`
+-    (`texture_stats` of the clean words' ink); `line_texture` of the line pieces (`line_texture`, tile grid at the
+-    page's corner).  `threads` sheets at a time."""
++    the words, those crossed (CROSS_PX px of line ink or more inside the box) and their share (None without words);
++    `cross_by_kind_line_px` the same counting every line px (ink or not); `clean_words` per kind;
++    `clean_word_texture` (`texture_stats` of the clean words' ink); `line_texture` of the line pieces (`line_texture`,
++    tile grid at the page's corner).  `threads` sheets at a time."""
+     sheets = data.hold_out(sheets, areas) if tuple(areas) else sheets
+     if threads > 1:
+         with ThreadPoolExecutor(threads) as ex:
+             parts = list(ex.map(_sheet_measure, sheets))
+     else:
+         parts = [_sheet_measure(sd) for sd in sheets]
+-    words, crossed, crossed_ink, clean_n = (sum(p[0][i] for p in parts) for i in range(4)) if parts else \
++    words, crossed, crossed_line_px, clean_n = (sum(p[0][i] for p in parts) for i in range(4)) if parts else \
+         (np.zeros(len(KIND_NAMES), np.int64) for _ in range(4))
+     clean_ink = [m for p in parts for m in p[1]]
+     return {
+         "cross_by_kind": {**{n: _share(words[i], crossed[i]) for i, n in enumerate(KIND_NAMES)},
+                           "all": _share(words.sum(), crossed.sum())},
+-        "cross_by_kind_ink": {**{n: _share(words[i], crossed_ink[i]) for i, n in enumerate(KIND_NAMES)},
+-                              "all": _share(words.sum(), crossed_ink.sum())},
++        "cross_by_kind_line_px": {**{n: _share(words[i], crossed_line_px[i]) for i, n in enumerate(KIND_NAMES)},
++                                  "all": _share(words.sum(), crossed_line_px.sum())},
+         "clean_words": {n: int(clean_n[i]) for i, n in enumerate(KIND_NAMES)},
+         "clean_word_texture": texture_stats(clean_ink),
+         "line_texture": line_texture(m for p in parts for m in p[2]),
+         "sheets": len(sheets),
+     }
+ 
+ 
+ # --- the bank and its composites -------------------------------------------------------------------------------------
+ 
+ def _sheet_bank(sd: data.SheetData, j: int, phase) -> tuple[Words, Pieces, np.ndarray, np.ndarray]:
+@@ -475,63 +492,120 @@ def _normal(angle: int) -> int:
+ class _Sprite:
+     """A clean word ready to paste: its frame (its rectangle's bounding box and CLEAN_PX px around it), the rectangle
+     and the px within CLEAN_PX px of it in that frame, its ink there, its kind and angle."""
+     rect: np.ndarray
+     grown: np.ndarray
+     ink: np.ndarray
+     kind: int
+     angle: int
+ 
+ 
++def _mix_weights(mix: np.ndarray, clean: np.ndarray) -> np.ndarray | None:
++    """Per kind, the weight that makes clean words drawn by it come in the kinds' mix `mix` (counts per kind): the
++    kind's share of `mix` over its share of the clean words (`clean`, counts per kind); 0 for a kind with no clean
++    word.  None when no kind with clean words has any of `mix`."""
++    out = np.zeros(len(KIND_NAMES))
++    have = clean > 0
++    if not have.any() or mix[have].sum() == 0:
++        return None
++    out[have] = (mix[have] / mix.sum()) / (clean[have] / clean.sum())
++    return out
++
++
++def _kind_weights(words: np.ndarray, crossed: np.ndarray, clean: np.ndarray) -> dict[str, np.ndarray]:
++    """A map's kind weights (see the module) from its words in a training area, those crossed and its clean words,
++    each counted per kind: "a" in the words' mix, "b" in the crossed words' mix (the words' where none is crossed)."""
++    a = _mix_weights(words, clean)
++    a = np.zeros(len(KIND_NAMES)) if a is None else a
++    b = _mix_weights(crossed, clean)
++    return {"a": a, "b": a if b is None else b}
++
++
+ @dataclasses.dataclass
+ class Bank:
+     """Clean words and line pieces by reference, per map (series), with the sheets they are on (holding the bank's
+-    areas out) and per map and kind the share of words crossed; `crop` makes a composite (see the module).  `tally`
+-    counts what the composites were; `last` says what the last one was made of (for pictures and tests)."""
++    areas out) and per map and kind the share of words crossed and the weights clean words are drawn by; `crop` makes
++    a composite (see the module).  With `weighted` False the clean words are drawn alike (for comparison).  `tally`
++    counts what the composites were and their new lessons; `last` says what the last one was made of (for pictures,
++    measures and tests)."""
+     sheets: list
+     words: dict
+     pieces: dict
+     cross: dict
+     crossing: dict
++    kind_weights: dict
+     a_share: float = A_SHARE
++    weighted: bool = True
+     tally: collections.Counter = dataclasses.field(default_factory=collections.Counter, compare=False)
+     last: dict = dataclasses.field(default_factory=dict, compare=False)
+ 
+     @classmethod
+     def build(cls, sheets: list[data.SheetData], areas, seed: int, threads: int = 1) -> "Bank":
+         """The bank of `sheets` (with their line px, `zones.prepare`) with `areas` held out (see the module); its own
+         generator `default_rng([seed, 1])` draws each sheet's tile grid's start; `threads` sheets at a time.
+         ValueError for a sheet without its line px."""
+         held = data.hold_out(sheets, tuple(areas))
+         rng = np.random.default_rng([seed, 1])
+         phases = rng.integers(0, TILE, (len(held), 2))
+         jobs = range(len(held))
+         if threads > 1:
+             with ThreadPoolExecutor(threads) as ex:
+                 parts = list(ex.map(lambda j: _sheet_bank(held[j], j, phases[j]), jobs))
+         else:
+             parts = [_sheet_bank(held[j], j, phases[j]) for j in jobs]
+-        words, pieces, cross, crossing = {}, {}, {}, {}
++        words, pieces, cross, crossing, weights = {}, {}, {}, {}, {}
+         for series in dict.fromkeys(sd.series for sd in held):
+             mine = [p for p, sd in zip(parts, held, strict=True) if sd.series == series]
+             words[series] = Words.join([p[0] for p in mine])
+             pieces[series] = Pieces.join([p[1] for p in mine])
+             n = sum(p[2] for p in mine)
+             c = sum(p[3] for p in mine)
+             crossing[series] = {KIND_NAMES[k]: _share(n[k], c[k]) for k in range(len(KIND_NAMES))}
+             cross[series] = {k: float(c[k] / n[k]) if n[k] else 0.0 for k in range(len(KIND_NAMES))}
+-        return cls(sheets=held, words=words, pieces=pieces, cross=cross, crossing=crossing)
++            weights[series] = _kind_weights(n, c, np.bincount(words[series].kind, minlength=len(KIND_NAMES)))
++        return cls(sheets=held, words=words, pieces=pieces, cross=cross, crossing=crossing, kind_weights=weights)
+ 
+     def sizes(self) -> dict:
+-        """Per map: the clean words per kind, the line pieces, and the crossing counts and shares by kind."""
++        """Per map: the clean words per kind, the line pieces, the crossing counts and shares by kind, and the kind
++        weights of (a) and (b)."""
+         return {s: {"clean_words": {n: int((w.kind == k).sum()) for k, n in enumerate(KIND_NAMES)},
+-                    "pieces": len(self.pieces[s]), "crossing": self.crossing[s]} for s, w in self.words.items()}
++                    "pieces": len(self.pieces[s]), "crossing": self.crossing[s],
++                    "kind_weights": {m: {n: round(float(v[k]), 4) for k, n in enumerate(KIND_NAMES)}
++                                     for m, v in self.kind_weights[s].items()}}
++                for s, w in self.words.items()}
++
++    def word_chances(self, series: str, mode: str, words: Words | None = None) -> np.ndarray:
++        """The chance each clean word of a map (`words`, default the bank's) is drawn for a composite of kind `mode`
++        ("a" or "b"): its kind's weight over the sum of all the words' (alike with `weighted` False); zeros when no
++        word has weight."""
++        words = self.words[series] if words is None else words
++        w = self.kind_weights[series][mode][words.kind] if self.weighted else np.ones(len(words))
++        return w / w.sum() if w.sum() > 0 else np.zeros(len(words))
++
++    def _pick(self, rng: np.random.Generator, series: str, words: Words, mode: str) -> int:
++        """A clean word's index for a composite of kind `mode`, by `word_chances` (one draw of `rng`; with `weighted`
++        False, `rng.integers`); -1 when no word has weight."""
++        if not self.weighted:
++            return int(rng.integers(len(words)))
++        cum = np.cumsum(self.kind_weights[series][mode][words.kind])
++        if not len(cum) or cum[-1] <= 0:
++            return -1
++        return int(np.searchsorted(cum, rng.random() * cum[-1], side="right"))
++
++    def _lessons(self, page: _Page, mode: str, kind: int, word_px: int, box_line_not_text: int) -> dict:
++        """Count a finished composite: its kind of composite and word, and its new lessons (see the module)."""
++        new = int(((page.text > 0) & page.known & page.line).sum())
++        self.tally[mode] += 1
++        self.tally[f"{mode}:{KIND_NAMES[kind]}"] += 1
++        self.tally[f"new_lesson_px:{mode}"] += new
++        self.tally[f"box_line_not_text_px:{mode}"] += box_line_not_text
++        return {"kind": kind, "word_px": word_px, "new_lesson_px": new, "box_line_not_text_px": box_line_not_text}
+ 
+     def _sprite(self, words: Words, j: int) -> _Sprite:
+         sd, rect = self.sheets[int(words.sheet[j])], words.rect[j]
+         lo = rect.min(axis=0) - CLEAN_PX
+         h, w = (int(v) for v in (rect.max(axis=0) + 1 + CLEAN_PX - lo)[::-1])
+         inside = _rect_in(rect, int(lo[1]), int(lo[0]), h, w)
+         return _Sprite(rect=inside, grown=cv2.dilate(inside.view(np.uint8), _REACH) > 0,
+                        ink=data._ink_window(sd, int(lo[1]), int(lo[0]), h, w) & inside, kind=int(words.kind[j]),
+                        angle=_normal(words.angle[j]))
+ 
+@@ -549,95 +623,105 @@ class Bank:
+         self.tally[f"left_as_is:{why}"] += 1
+         self.last = {"mode": "none", "why": why, "window": (page.y0, page.x0, page.src)}
+         return _finish(page, size, turns)
+ 
+     def _word_onto_lines(self, rng, sd, y, x, size, scale, turns, words) -> dict[str, np.ndarray]:
+         page = _page_parts(sd, y, x, size, scale)
+         if words is None or not len(words):
+             return self._as_it_is(page, size, turns, "no clean words")
+         src = page.src
+         forbidden = (page.text > 0) | ~page.known
+-        targets = np.flatnonzero(page.line & page.ink & ~forbidden)
++        line_ink = page.line & page.ink
++        targets = np.flatnonzero(line_ink & ~forbidden)
+         cross = self.cross[sd.series]
+         for _ in range(WORDS):
+-            j = int(rng.integers(len(words)))
++            j = self._pick(rng, sd.series, words, "a")
++            if j < 0:
++                return self._as_it_is(page, size, turns, "no clean word with weight")
+             sprite = self._sprite(words, j)
+             on = bool(rng.random() < cross.get(sprite.kind, 0.0))
+             fh, fw = sprite.rect.shape
+             placed = None
+             if fh <= src and fw <= src and (len(targets) or not on):
+                 rect_px = np.flatnonzero(sprite.rect)
+                 for _ in range(TRIES):
+                     if on:
+                         ty, tx = divmod(int(targets[rng.integers(len(targets))]), src)
+                         ry, rx = divmod(int(rect_px[rng.integers(len(rect_px))]), fw)
+                         oy, ox = ty - ry, tx - rx
+                         if not (0 <= oy <= src - fh and 0 <= ox <= src - fw):
+                             continue
+                     else:
+                         oy, ox = int(rng.integers(src - fh + 1)), int(rng.integers(src - fw + 1))
+                     win = (slice(oy, oy + fh), slice(ox, ox + fw))
+                     if (forbidden[win] & sprite.grown).any():
+                         continue
+-                    if on and (page.line[win] & sprite.rect).sum() < CROSS_PX:
++                    if on and (line_ink[win] & sprite.rect).sum() < CROSS_PX:
+                         continue
+                     if not on and (page.line[win] & sprite.grown).any():
+                         continue
+                     placed = (oy, ox)
+                     break
+             if placed is None:
+                 self.tally["words_failed"] += 1
+                 continue
+             oy, ox = placed
+             win = (slice(oy, oy + fh), slice(ox, ox + fw))
+             ink = sprite.ink
+             page.ink[win] |= ink
+             page.text[win][ink] = 1
+             page.kind[win][ink] = sprite.kind
+             page.angle[win][ink] = sprite.angle
+             page.known[win][ink] = True
+             page.has_angle[win][ink] = True
+             page.known[win][sprite.rect & ~page.ink[win]] = False     # the pasted box's paper: unknown
+             _exact(page)
+-            self.tally["a"] += 1
++            under = int((line_ink[win] & sprite.rect & ~(page.text[win] > 0) & page.known[win]).sum())
+             self.tally["a_on" if on else "a_off"] += 1
+-            self.last = {"mode": "a", "word": j, "on_line": on, "placed": (oy, ox, fh, fw),
+-                         "window": (page.y0, page.x0, src)}
++            self.last = {"mode": "a", "series": sd.series, "word": j, "on_line": on, "placed": (oy, ox, fh, fw),
++                         "window": (page.y0, page.x0, src),
++                         **self._lessons(page, "a", sprite.kind, int(ink.sum()), under)}
+             return _finish(page, size, turns)
+         return self._as_it_is(page, size, turns, "no place")
+ 
+     def _line_onto_word(self, rng, sd, y, x, size, scale, turns, words) -> dict[str, np.ndarray]:
+         pieces = self.pieces.get(sd.series)
+         if words is None or not len(words) or pieces is None or not len(pieces):
+             return self._as_it_is(_page_parts(sd, y, x, size, scale), size, turns, "no clean words or pieces")
+-        j = int(rng.integers(len(words)))
++        j = self._pick(rng, sd.series, words, "b")
++        if j < 0:
++            return self._as_it_is(_page_parts(sd, y, x, size, scale), size, turns, "no clean word with weight")
+         wsd, rect = self.sheets[int(words.sheet[j])], words.rect[j]
+         cx, cy = _centre(wsd, rect)
+         page = _page_parts(wsd, cy, cx, size, scale)
+         src = page.src
+         in_rect = _rect_in(rect, page.y0, page.x0, src, src)
+         word = in_rect & page.ink
+         page.text[word] = 1
+         page.known[word] = True
+         page.kind[word] = int(words.kind[j])
+         page.angle[word] = _normal(words.angle[j])
+         page.has_angle[word] = True
+         k = int(rng.integers(len(pieces)))
+-        piece = np.rot90(piece_mask(self.sheets[int(pieces.sheet[k])], pieces.box[k], pieces.seed[k]),
+-                         int(rng.integers(4)))
++        turned = int(rng.integers(4))
++        piece = np.rot90(piece_mask(self.sheets[int(pieces.sheet[k])], pieces.box[k], pieces.seed[k]), turned)
+         ph, pw = piece.shape
+         on_piece = np.flatnonzero(piece)
+         ay, ax = divmod(int(on_piece[rng.integers(len(on_piece))]), pw)
+         rect_px = np.flatnonzero(in_rect)
+         by, bx = divmod(int(rect_px[rng.integers(len(rect_px))]), src)
+         oy, ox = by - ay, bx - ax
+         y0, y1, x0, x1 = max(oy, 0), min(oy + ph, src), max(ox, 0), min(ox + pw, src)
+         line = piece[y0 - oy:y1 - oy, x0 - ox:x1 - ox]
+         win = (slice(y0, y1), slice(x0, x1))
+         paper = line & ~page.ink[win]
+         page.ink[win] |= line
+         page.text[win][paper] = 0
+         _exact(page)
+-        self.tally["b"] += 1
+-        self.last = {"mode": "b", "word": j, "sheet": int(words.sheet[j]), "centre": (cy, cx), "piece": k,
+-                     "placed": (oy, ox, ph, pw), "window": (page.y0, page.x0, src)}
++        placed = np.zeros((src, src), bool)
++        placed[win] = line
++        page.line[cv2.dilate(placed.view(np.uint8), _GROW) > 0] = True      # the piece's line px, as line_bits grow
++        across = int((placed & in_rect & ~(page.text > 0) & page.known).sum())
++        self.last = {"mode": "b", "series": sd.series, "word": j, "sheet": int(words.sheet[j]), "centre": (cy, cx),
++                     "piece": k, "piece_turns": turned, "placed": (oy, ox, ph, pw), "window": (page.y0, page.x0, src),
++                     **self._lessons(page, "b", int(words.kind[j]), int(word.sum()), across)}
+         return _finish(page, size, turns)
+diff --git a/pipeline/tests/test_textnet_composite.py b/pipeline/tests/test_textnet_composite.py
+index 99f7eb5..79b7b8a 100644
+--- a/pipeline/tests/test_textnet_composite.py
++++ b/pipeline/tests/test_textnet_composite.py
+@@ -315,33 +315,116 @@ def test_a_line_across_a_word_is_ink_not_text_and_the_word_stays_text(bank_fx):
+         in_rect = data._paint(rect[None], np.ones(1, np.int32), y0, x0, src, src) > 0
+         word_ink = base["ink"] & in_rect
+         new_ink = c["ink"] & ~base["ink"]
+         assert new_ink.any()                                   # the piece, ORed in
+         assert not c["text"][new_ink].any() and c["known"][new_ink].all()
+         assert c["text"][word_ink].all() and c["known"][word_ink].all()
+         assert (c["text"].astype(bool) <= c["ink"]).all()
+         assert (new_ink & in_rect).any()                       # across the word's box
+ 
+ 
+-def test_a_line_onto_a_word_teaches_its_long_strokes_as_text(bank_with_one_huge_word):
++def test_a_line_onto_a_word_teaches_all_its_ink_even_px_the_label_rule_leaves_unknown(bank_with_one_huge_word):
++    # a drawn word whose strokes the run rule calls line: the mechanism only (on the real maps no clean code holds a
++    # run-rule px in its box; the new lessons there are letter px touching or under line ink, below)
+     fx = bank_with_one_huge_word
+     words = fx.bank.words[SERIES]
+     huge = np.flatnonzero(words.kind == data.KINDS["zoning code"])
+     bank = dataclasses.replace(fx.bank, a_share=0.0, words={SERIES: words.take(huge)})
+     c = bank.crop(np.random.default_rng(1), fx.sd, 32, 32, 320, 1.0, 0)
+     y0, x0, src = bank.last["window"]
+     base = data.crop_targets(fx.sd, *bank.last["centre"], 320, 1.0, 0, labels="lines-unknown")
+     glyph = _glyphs("RM-2", (200, 420), scale=3.0, thick=6)[y0:y0 + src, x0:x0 + src]
+     assert (~base["known"] & glyph).sum() > 100             # the label rule leaves its long strokes unknown
+     assert c["text"][glyph].all() and c["known"][glyph].all()
+ 
+ 
++# --- the kinds clean words are drawn in --------------------------------------------------------------------------
++
++def test_kind_weights_draw_clean_words_in_the_words_mix_and_the_crossed_words_mix():
++    words = np.array([10, 60, 30, 0])
++    crossed = np.array([6, 12, 18, 0])
++    clean = np.array([5, 90, 1, 4])
++    w = composite._kind_weights(words, crossed, clean)
++    # the clean words drawn by these weights come in the words' mix, for (a), and the crossed words' mix, for (b)
++    assert np.allclose(clean * w["a"] / (clean * w["a"]).sum(), words / words.sum())
++    assert np.allclose(clean * w["b"] / (clean * w["b"]).sum(), crossed / crossed.sum())
++    assert w["a"][3] == 0 and w["b"][3] == 0               # "other": clean words, but no word of it to stand for
++    # a kind crossed but with no clean word can't be drawn: the others keep their mix among themselves
++    w = composite._kind_weights(words, np.array([6, 12, 18, 9]), np.array([5, 90, 1, 0]))
++    drawn = np.array([5, 90, 1, 0]) * w["b"]
++    assert w["b"][3] == 0 and np.allclose(drawn / drawn.sum(), [6 / 36, 12 / 36, 18 / 36, 0])
++    # no crossed word of a kind with clean words: (b) takes the words' mix
++    w = composite._kind_weights(words, np.array([0, 0, 0, 7]), np.array([5, 90, 1, 0]))
++    assert np.array_equal(w["b"], w["a"]) and w["a"][0] > 0
++
++
++def test_the_bank_draws_its_clean_words_by_kind_weight(bank_fx):
++    bank = bank_fx.bank
++    kind = bank.words[SERIES].kind
++    code, block, street = (data.KINDS[k] for k in ("zoning code", "block number", "street name"))
++    # its words: three codes (one crossed), a block number, a street name; clean: two codes, the block number, the
++    # street name.  (a): the words' mix (codes 3/5); (b): the crossed words' mix (codes alone)
++    a = bank.word_chances(SERIES, "a")
++    assert a[kind == code].sum() == pytest.approx(0.6) and a[kind == block].sum() == pytest.approx(0.2)
++    assert a[kind == street].sum() == pytest.approx(0.2)
++    b = bank.word_chances(SERIES, "b")
++    assert b[kind == code].sum() == pytest.approx(1.0)
++    rng = np.random.default_rng(0)
++    for mode, chances in (("a", a), ("b", b)):
++        picks = np.bincount([bank._pick(rng, SERIES, bank.words[SERIES], mode) for _ in range(4000)],
++                            minlength=len(kind))
++        assert np.abs(picks / 4000 - chances).max() < 0.03
++    alike = dataclasses.replace(bank, weighted=False)
++    assert np.allclose(alike.word_chances(SERIES, "b"), 0.25)
++    assert bank.sizes()[SERIES]["kind_weights"]["b"]["zoning code"] == pytest.approx(2.0)
++
++
++# --- the new lessons -------------------------------------------------------------------------------------------------
++
++def test_new_lessons_are_text_px_on_line_px_which_the_label_rule_never_teaches(bank_fx):
++    y0, x0 = CENTRE[0] - 64, CENTRE[1] - 64
++    line = data.line_window(bank_fx.sd, y0, x0, 128, 128)
++    base = data.crop_targets(bank_fx.sd, *CENTRE, 128, 1.0, 0, labels="lines-unknown")
++    assert not (base["text"].astype(bool) & base["known"] & line).any()     # the control: none
++    on = _forced(bank_fx.bank, a_share=1.0, cross=1.0)
++    seen = 0
++    for seed in range(10):
++        c = on.crop(np.random.default_rng(seed), bank_fx.sd, *CENTRE, 128, 1.0, 0)
++        new = int((c["text"].astype(bool) & c["known"] & line).sum())
++        assert on.last["new_lesson_px"] == new and new <= on.last["word_px"]
++        assert on.last["box_line_not_text_px"] > 0                # the line under the word, off its letters
++        seen += new
++    assert seen and on.tally["new_lesson_px:a"] >= seen
++    across = _forced(bank_fx.bank, a_share=0.0)
++    lessons = 0
++    for seed in range(10):
++        c = across.crop(np.random.default_rng(seed), bank_fx.sd, *CENTRE, 128, 1.0, 0)
++        info = across.last
++        wy0, wx0, src = info["window"]
++        base = data.crop_targets(across.sheets[info["sheet"]], *info["centre"], 128, 1.0, 0, labels="lines-unknown")
++        pieces = across.pieces[SERIES]
++        k = info["piece"]
++        piece = np.rot90(composite.piece_mask(across.sheets[pieces.sheet[k]], pieces.box[k], pieces.seed[k]),
++                         info["piece_turns"])
++        oy, ox, ph, pw = info["placed"]
++        canvas = np.zeros((src + 2 * ph, src + 2 * pw), bool)    # the piece where it was placed, cut to the window
++        canvas[oy + ph:oy + 2 * ph, ox + pw:ox + 2 * pw] = piece
++        placed = canvas[ph:ph + src, pw:pw + src]
++        assert (placed <= c["ink"]).all() and not (placed & ~base["ink"] & c["text"].astype(bool)).any()
++        # the piece's px, grown by 1 px as line px are, join the crop's line px
++        grown = cv2.dilate(placed.view(np.uint8), np.ones((3, 3), np.uint8)) > 0
++        lines = data.line_window(across.sheets[info["sheet"]], wy0, wx0, src, src) | grown
++        assert info["new_lesson_px"] == int((c["text"].astype(bool) & c["known"] & lines).sum())
++        lessons += info["new_lesson_px"]
++    assert lessons
++
++
+ # --- the page-scale path ---------------------------------------------------------------------------------------------
+ 
+ def test_the_page_scale_path_is_crop_targets(bank_fx):
+     for size, scale, turns in ((128, 1.0, 0), (128, 0.6, 1), (96, 1.6, 2), (101, 1.3, 3)):
+         parts = composite._page_parts(bank_fx.sd, *CENTRE, size, scale)
+         got = composite._finish(parts, size, turns)
+         want = data.crop_targets(bank_fx.sd, *CENTRE, size, scale, turns, labels="lines-unknown")
+         assert sorted(got) == sorted(want)
+         assert all(got[k].dtype == want[k].dtype and np.array_equal(got[k], want[k]) for k in want)
+ 

@@ -84,16 +84,28 @@ export function lotCategory(shared: SharedDistricts, eraIndex: number, lot: numb
   return n === NO_VALUE || n === undefined ? null : (shared.categories[n] ?? null);
 }
 
-type EraCards = { code: (number | null)[]; height: (number | null)[]; confidence: (number | null)[] };
+type EraCards = {
+  code: (number | null)[];
+  height: (number | null)[];
+  confidence: (number | null)[];
+  /** Why a lot shows other than its code, by lot number (parks shown as public). */
+  notes?: Record<string, number>;
+};
 export type LotCards = { blklot: string[]; strings: string[]; eras: Record<string, EraCards> };
 
-export type LotCard = { blklot: string; code?: string; height_code?: string; confidence?: number };
+export type LotCard = { blklot: string; code?: string; height_code?: string; confidence?: number; note?: string };
 
 /** What a lot's card shows for one series. */
 export function lotCard(cards: LotCards, series: string, lot: number): LotCard {
   const era = cards.eras[series];
   const text = (n: number | null | undefined) => (n == null ? undefined : cards.strings[n]);
-  return { blklot: cards.blklot[lot], code: text(era?.code[lot]), height_code: text(era?.height[lot]), confidence: era?.confidence[lot] ?? undefined };
+  return {
+    blklot: cards.blklot[lot],
+    code: text(era?.code[lot]),
+    height_code: text(era?.height[lot]),
+    confidence: era?.confidence[lot] ?? undefined,
+    note: text(era?.notes?.[lot]),
+  };
 }
 
 const cardsCache = new Map<string, Promise<LotCards>>();

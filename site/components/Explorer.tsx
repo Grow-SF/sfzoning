@@ -4,15 +4,18 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import StoryMap, { type ParcelHit, type StoryMapHandle } from "./StoryMap";
 import ParcelPopup from "./ParcelPopup";
 import StatsChart from "./StatsChart";
+import CorrectionsTray from "./CorrectionsTray";
 import { ERAS } from "@/lib/eras";
 import { loadRules, type Rule } from "@/lib/rules";
+import { loadStats } from "@/lib/districts";
+import { parksLine } from "@/lib/stats";
 import type { View } from "@/content/schema";
 import styles from "./explorer.module.css";
 
 const VIEW_LABELS: Record<View, string> = { scan: "Original map", allowed: "What it allowed", both: "Both" };
 const START = { center: [-122.443, 37.765] as [number, number], zoom: 12.4 };
 
-export default function Explorer() {
+export default function Explorer({ eager = false }: { eager?: boolean }) {
   const mapRef = useRef<StoryMapHandle>(null);
   const [index, setIndex] = useState(() => ERAS.findIndex((e) => e.id === "1960"));
   const [view, setView] = useState<View>("both");
@@ -27,7 +30,7 @@ export default function Explorer() {
   // Mount the explorer's map only as the reader nears it: a second WebGL map loading tiles
   // under the story would compete with the story map for the GPU and the network.
   const frameRef = useRef<HTMLDivElement>(null);
-  const [near, setNear] = useState(false);
+  const [near, setNear] = useState(eager);
   useEffect(() => {
     const el = frameRef.current;
     if (!el || near) return;
@@ -41,6 +44,19 @@ export default function Explorer() {
   useEffect(() => {
     loadRules().then(setRules);
   }, []);
+
+  // The parks that existed in the era's year (the pipeline's park tally), under the map.
+  const [parks, setParks] = useState<{ era: string; line: string | null } | null>(null);
+  useEffect(() => {
+    let live = true;
+    const series = era.districtSeries;
+    if (!series) return;
+    loadStats(series).then((s) => live && setParks({ era: era.id, line: parksLine(s) }));
+    return () => {
+      live = false;
+    };
+  }, [era.id, era.districtSeries]);
+  const parksNow = parks && parks.era === era.id ? parks.line : null;
 
   useEffect(() => {
     mapRef.current?.apply({ era: era.id, view: effectiveView });
@@ -137,6 +153,14 @@ export default function Explorer() {
           <p className={styles.frameNote}>There is no scanned map for today, only the current zoning.</p>
         )}
       </div>
+
+      {parksNow && (
+        <p className={styles.parksNote} data-testid="explorer-parks">
+          In {era.label}: {parksNow}.
+        </p>
+      )}
+
+      <CorrectionsTray />
 
       <StatsChart />
     </section>

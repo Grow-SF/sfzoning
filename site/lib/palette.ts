@@ -1,6 +1,8 @@
+import { MAP_COLORS } from "./theme";
+
 // "What it allowed" palette. One palette for every era, so change between eras pops.
 //
-// Homes allowed per lot read as one scale of seven steps: orange-red (one home), amber, pale
+// Homes allowed per lot read as one scale of seven steps: dusty rose (one home), amber, pale
 // yellow, then four greens that get steadily deeper as homes rise (pale, light, mid, then the
 // richest green at about 20 homes or no limit). Every green is plainly green, with no teal: the
 // owner read a teal 12-homes step as almost blue and darker than the steps either side of it.
@@ -23,7 +25,11 @@
 // (deutan). homes_top and commercial_dense stay at least 21 apart. The scale's adjacent steps
 // are 9.8 to 20.7 apart (mean 13.9, none more than 49% off it): tightest between the top two
 // greens, widest from amber to yellow.
-// RH-1's orange-red, the amber, both commercial blues, the brown and the purple are unchanged
+// One home is a dusty rose (#E07A80), the owner's choice over the earlier orange-reds (#FE4400,
+// then #FF5A28), which read too intense. A light red can't stay apart from the mid greens for
+// red-green colour-blind readers (it matches homes_high under deuteranopia), so this palette no
+// longer tries to serve them: ACCESSIBLE_COLORS below does, behind a switch in the key. The
+// margins quoted above predate the rose and hold for normal vision only. The amber, both commercial blues, the brown and the purple are unchanged
 // from the colours the owner approved. The yellow softened from #FFFF6C so it doesn't read as
 // neon; the grey took a slight cool cast (#939AA1 to #97A1B1) to stand off the mid green.
 // ALLOWED_FILL_OPACITY stays 0.85: 0.7 there would match the look exactly but lower every
@@ -49,7 +55,7 @@ export const CATEGORIES = [
 export type Category = (typeof CATEGORIES)[number];
 
 export const CATEGORY_COLORS: Record<Category, string> = {
-  single_family: "#FE4400",
+  single_family: "#E07A80",
   two_unit: "#F89600",
   three_unit: "#FFEE66",
   homes_low: "#A0F5BE",
@@ -62,6 +68,39 @@ export const CATEGORY_COLORS: Record<Category, string> = {
   public: "#97A1B1",
   unrestricted: "#8562AF",
   unknown: "#FFFFFF",
+};
+
+/**
+ * Colour-blind palette, behind "Colour-blind friendly" in the key. The homes scale is viridis
+ * (matplotlib's perceptually uniform map, built to read under every common colour-vision
+ * deficiency), reversed so darker means more homes, sampled 0 to 0.8 so the lightest step stands
+ * off the cream blocks. The other uses come from published colour-blind-safe sets: Paul Tol's
+ * light cyan and grey, olive from his muted set, vermilion from his vibrant set, and black
+ * (Okabe-Ito). Picked by scoring every pair, and every step against the blocks, under normal
+ * vision and simulated protanopia, deuteranopia and tritanopia (Machado 2009) at both fill
+ * strengths (0.85 and 0.7): weakest pair 5.4 (OKLab ΔE ×100) in every case. Under the same test
+ * the standard palette falls to about 2 for deuteranopia.
+ */
+export const ACCESSIBLE_COLORS: Record<Category, string> = {
+  single_family: "#7AD151",
+  two_unit: "#35B779",
+  three_unit: "#1F988B",
+  homes_low: "#2A788E",
+  homes_mid: "#39568C",
+  homes_high: "#472F7D",
+  homes_top: "#440154",
+  commercial_light: "#99DDFF",
+  commercial_dense: "#000000",
+  industrial: "#999933",
+  public: "#BBBBBB",
+  unrestricted: "#CC3311",
+  unknown: "#FFFFFF",
+};
+
+export type PaletteName = "standard" | "accessible";
+export const PALETTES: Record<PaletteName, Record<Category, string>> = {
+  standard: CATEGORY_COLORS,
+  accessible: ACCESSIBLE_COLORS,
 };
 
 export const CATEGORY_LABELS: Record<Category, string> = {
@@ -104,6 +143,17 @@ export function isCategory(v: unknown): v is Category {
 }
 
 export const ALLOWED_FILL_OPACITY = 0.85;
+
+/**
+ * A category's colour as the map shows it: drawn at `opacity` over the basemap's blocks. The key
+ * uses this so its swatches match the lots rather than the full-strength colour.
+ */
+export function shownColor(c: Category, opacity: number, colors: Record<Category, string> = CATEGORY_COLORS): string {
+  const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const top = rgb(colors[c]);
+  const ground = rgb(MAP_COLORS.block);
+  return `#${top.map((v, i) => Math.round(v * opacity + ground[i] * (1 - opacity)).toString(16).padStart(2, "0")).join("")}`;
+}
 export const BOTH_FILL_OPACITY = 0.7;
 /**
  * Scan ink weight under the colours in "both". Half-strength ink keeps the scan's labels and

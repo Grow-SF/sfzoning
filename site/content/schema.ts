@@ -8,7 +8,14 @@ export type Camera = { center: [number, number]; zoom: number; bearing?: number 
 
 export type GeoJSON = Feature<Geometry> | FeatureCollection<Geometry>;
 
-export type Block = { kind: "p" | "quote" | "stat"; text: string; href?: string };
+/**
+ * `cvd`: the same paragraph for the colour-blind palette. Every paragraph that names a map colour
+ * has one, naming that palette's colours instead (the story test checks this).
+ */
+export type Block = { kind: "p" | "quote" | "stat"; text: string; cvd?: string; href?: string };
+
+/** Colour words of the standard palette; a paragraph using one needs a `cvd` version. */
+export const STANDARD_COLOUR_WORDS = /\b(rose|amber|yellow|greens?|blue|brown|grey)\b/i;
 
 export type Step = {
   id: string;
@@ -40,6 +47,10 @@ export function validateStory(steps: Step[], eras: Pick<Era, "id">[]): string[] 
     if (!s.title?.trim()) errors.push(`${at}: empty title`);
     if (!s.body?.length) errors.push(`${at}: empty body`);
     if (!s.sources?.length) errors.push(`${at}: no sources`);
+    s.body?.forEach((b, j) => {
+      const word = s.view !== "scan" && !b.cvd && b.text.match(STANDARD_COLOUR_WORDS)?.[0];
+      if (word) errors.push(`${at}: paragraph ${j} names "${word}" but has no colour-blind (cvd) version`);
+    });
     const [lon, lat] = s.camera?.center ?? [NaN, NaN];
     const z = s.camera?.zoom;
     if (!(lon >= BOUNDS.minLon && lon <= BOUNDS.maxLon && lat >= BOUNDS.minLat && lat <= BOUNDS.maxLat))

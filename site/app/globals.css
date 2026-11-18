@@ -11,6 +11,7 @@
   --ink-dim: #67635a;     /* receded text (inactive story cards); still >= 4.5:1 on --paper */
   --rule: #c9c2b4;        /* hairlines */
   --accent: #2337c6;      /* ultramarine, the one strong colour */
+  --menu-h: 2.75rem;      /* sticky top menu; the story map and steps start below it */
 
   --font-body: var(--font-serif), Georgia, "Times New Roman", serif;
   --font-ui: var(--font-sans), "Helvetica Neue", Arial, sans-serif;

@@ -1,0 +1,1129 @@
+commit 38b5e4f90b175bd0ee57756ed0206eaa13ad7a59
+Author: Steven Bacio <steven.buss@gmail.com>
+Date:   Tue Nov 17 11:09:47 2026 -0800
+
+    wordread readercrops: a line draw is drawn again until kept (no LINE_TRIES cap; Lines must keep some cover always); a word with no ink in its rectangle has no letters to cross and gets no line; a neighbour pose whose grid holds no ink is not stored (tested)
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01UjTgrnx2j4PhzZErrad25Q
+
+ pipeline/src/sfzmaps/solver/textnet/data.py   |  53 +++-
+ pipeline/src/sfzmaps/solver/textnet/train.py  |  76 +++--
+ pipeline/src/sfzmaps/solver/wordread/doubt.py | 413 ++++++++++++++++++++++++++
+ pipeline/tests/test_wordread_doubt.py         | 407 +++++++++++++++++++++++++
+ 4 files changed, 914 insertions(+), 35 deletions(-)
+commit 38b5e4f90b175bd0ee57756ed0206eaa13ad7a59
+Author: Steven Bacio <steven.buss@gmail.com>
+Date:   Tue Nov 17 11:09:47 2026 -0800
+
+    wordread readercrops: a line draw is drawn again until kept (no LINE_TRIES cap; Lines must keep some cover always); a word with no ink in its rectangle has no letters to cross and gets no line; a neighbour pose whose grid holds no ink is not stored (tested)
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01UjTgrnx2j4PhzZErrad25Q
+
+diff --git a/pipeline/src/sfzmaps/solver/textnet/data.py b/pipeline/src/sfzmaps/solver/textnet/data.py
+index b99bddd..90309be 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/data.py
++++ b/pipeline/src/sfzmaps/solver/textnet/data.py
+@@ -19,7 +19,8 @@ the lines through it too; "lines-unknown" leaves the line px inside a word unkno
+ the sheet's line px, which `textnet.zones.prepare` fills before training, with the zones it keeps around Sol's points.
+ 
+ The word targets (`crop_targets(..., words=True)`, for the word heads `train.Recipe.heads="words"`), drawn from each
+-word's core (`SheetData.cores`, its rectangle shrunk, which `wordread.shrink.prepare` fills before training):
++word's core (`SheetData.cores`: the word's own labelled rectangle, no shrink, which `wordread.shrink.prepare` fills
++before training):
+   core       1 on the px of a word's core (filled as the words are, later over earlier), 0 elsewhere
+   tag_id     1 + the index of the word whose core holds the px (int32), 0 elsewhere
+   geo        float32 (5, h, w), at core px only (0 elsewhere): the distances in crop px from the px to its word's top,
+@@ -27,7 +28,12 @@ word's core (`SheetData.cores`, its rectangle shrunk, which `wordread.shrink.pre
+              those of the word's whole rectangle (`SheetData.words`), taken by its reading angle (`SheetData.angles`):
+              start and end along the reading direction, top and bottom across it (the top on the letters' upper side);
+              each is the furthest of the rectangle's corners that way.  Distances are measured at page px and scaled
+-             by the crop's scale; the quarter turns leave them as they are.
++             by the crop's scale; the quarter turns leave them as they are.  A word whose rectangle holds a held-out
++             px has no geometry: its four distances are 0 at its core px (no box; the loss reads the geometry only
++             where the distances make one), as they would tell how far it reaches into the held-out area.
++  weight     float32, only when the sheet holds word weights (`SheetData.weights`, Terra's doubt, which
++             `wordread.doubt.prepare` fills before training): at a core px its word's weight, 1 elsewhere.  With none,
++             every word weighs 1 and the key is absent (the targets are those without weights, byte for byte).
+ 
+ An area answers for map points whether each is in it (`contains`) and, from the placement's samples around a page
+ window, whether all of the window's px are in it or none is, when that follows from the samples alone (`decided`): a
+@@ -81,7 +87,7 @@ AREA_MARGIN = 1.0                 # ft: far more than a rounding of a px's weigh
+ # Park: 99.7% inside every training map's sheets, with 10-13% of each training map's box area (7-16% of each kind it
+ # prints).  `pipeline/scripts/choose_text_validation_area.py` re-derives the candidates and this choice from the data.
+ VALIDATION_AREA = (6000442.0, 2091727.0, 6008805.0, 2108453.0)
+-BOX_FIELDS = ("words", "kinds", "angles", "other", "points", "cores")    # SheetData's arrays of boxes and points
++BOX_FIELDS = ("words", "kinds", "angles", "other", "points", "cores", "weights")  # SheetData's arrays of boxes, points
+ LOAD_THREADS = 8                  # sheets read at once
+ BAND = 512                        # page rows drawn at a time when finding where crops may centre
+ LABEL_RULES = ("boxes", "lines-unknown")   # what a word box teaches (`crop_targets`; see the module)
+@@ -200,8 +206,11 @@ class SheetData:
+                              # uint8, packed as `ink_bits`: the line px (`linerules.line_px` grown by 1 px, the 8
+                              # around each), for the label rule "lines-unknown"; (0, 0) until `zones.prepare` fills it
+     cores: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros((0, 4, 2), np.int32))
+-                             # int32 (n, 4, 2): each word's core (its rectangle shrunk, corners rounded to px, in the
+-                             # order of `words`), for the word targets; none until `wordread.shrink.prepare` fills it
++                             # int32 (n, 4, 2): each word's core (its own labelled rectangle, no shrink, in the order
++                             # of `words`), for the word targets; none until `wordread.shrink.prepare` fills it
++    weights: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(0, np.float32))
++                             # float32 (n,): each word's weight in the word heads' loss (Terra's doubt, in the order of
++                             # `words`); none (the default) is every word weighing 1; `wordread.doubt.prepare` fills it
+ 
+ 
+ def reading_angle(rect: np.ndarray) -> int:
+@@ -495,9 +504,27 @@ def _cores(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+     return _paint(sd.cores, np.arange(1, len(sd.cores) + 1), y0, x0, h, w).astype(np.int32)
+ 
+ 
++def _touch_held(sd: SheetData, words: np.ndarray) -> np.ndarray:
++    """Which of the sheet's `words` (indices) have a px of their rectangle (as `_paint` fills it) in an area the sheet
++    holds out, bool; none when it holds none."""
++    out = np.zeros(len(words), bool)
++    if not sd.held:
++        return out
++    for n, j in enumerate(words):
++        (wx0, wy0), (wx1, wy1) = np.maximum(sd.words[j].min(0), 0), np.minimum(sd.words[j].max(0) + 1,
++                                                                                [sd.width, sd.height])
++        if wx1 <= wx0 or wy1 <= wy0:
++            continue
++        h, w = int(wy1 - wy0), int(wx1 - wx0)
++        rect = _paint(sd.words[j:j + 1], np.ones(1, np.int32), int(wy0), int(wx0), h, w) > 0
++        out[n] = bool((_held(sd, int(wy0), int(wx0), h, w) & rect).any())
++    return out
++
++
+ def _geometry(sd: SheetData, tag: np.ndarray, y0: int, x0: int) -> np.ndarray:
+     """At each core px of a page window (`_cores`), the distances in page px to its word's top, bottom, start and end
+-    edges, and its reading angle (see the module): float32 (h, w, 5), 0 off the cores."""
++    edges, and its reading angle (see the module): float32 (h, w, 5), 0 off the cores.  A word whose rectangle holds
++    a held-out px has its distances 0 (no box), its angle kept."""
+     out = np.zeros((*tag.shape, 5), np.float32)
+     rows, cols = np.nonzero(tag)
+     if not len(rows):
+@@ -512,6 +539,11 @@ def _geometry(sd: SheetData, tag: np.ndarray, y0: int, x0: int) -> np.ndarray:
+     pa, pb = (p * along).sum(-1), (p * up).sum(-1)
+     out[rows, cols, :4] = np.maximum(np.stack([b.max(-1) - pb, pb - b.min(-1), pa - a.min(-1), a.max(-1) - pa], -1), 0)
+     out[rows, cols, 4] = sd.angles[j]
++    if sd.held:
++        present = np.unique(j)
++        unseen = present[_touch_held(sd, present)]
++        if len(unseen):
++            out[rows[np.isin(j, unseen)], cols[np.isin(j, unseen)], :4] = 0
+     return out
+ 
+ 
+@@ -523,9 +555,14 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns:
+     (bool); drawn from the sheet's boxes for this crop alone, by the label rule `labels` (LABEL_RULES, see the
+     module): under "lines-unknown" a px inside a word that is a line px is not known (ValueError when the sheet holds
+     no line px).  With `words`, also the word targets core (uint8), tag_id (int32) and geo (float32 (5, size, size)),
+-    from the sheet's cores (see the module; ValueError when it holds none for its words)."""
++    from the sheet's cores (see the module; ValueError when it holds none for its words), and, when the sheet holds
++    word weights, weight (float32; ValueError unless one weight per word, each a number at least 0)."""
+     if labels not in LABEL_RULES:
+         raise ValueError(f"labels is one of {', '.join(LABEL_RULES)}, not {labels!r}")
++    if words and len(sd.weights) and (sd.weights.shape != (len(sd.words),) or not np.isfinite(sd.weights).all()
++                                      or (sd.weights < 0).any()):
++        raise ValueError(f"{sd.series} {sd.sheet}: SheetData.weights {sd.weights.shape} must be one number at least 0 "
++                         f"per word ({len(sd.words)}; wordread.doubt.prepare)")
+     src = int(round(size / scale))
+     y0 = int(np.clip(y - src // 2, 0, sd.height - src))
+     x0 = int(np.clip(x - src // 2, 0, sd.width - src))
+@@ -553,6 +590,8 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns:
+     geo[..., 4] = np.where(on, (geo[..., 4].astype(np.int32) + 90 * turns + 180) % 360 - 180, 0)
+     out["core"] = on.view(np.uint8)
+     out["geo"] = np.moveaxis(geo, -1, 0)
++    if len(sd.weights):
++        out["weight"] = np.concatenate([[1], sd.weights]).astype(np.float32)[out["tag_id"]]
+     return {k: np.rot90(v, turns, axes=(1, 2) if k == "geo" else (0, 1)) for k, v in out.items()}
+ 
+ 
+diff --git a/pipeline/src/sfzmaps/solver/textnet/train.py b/pipeline/src/sfzmaps/solver/textnet/train.py
+index 5da019a..590cfb7 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/train.py
++++ b/pipeline/src/sfzmaps/solver/textnet/train.py
+@@ -32,7 +32,11 @@ words=True)`), and the loss adds, to the per-ink head's (channels 0-6, the same
+   push       PAN's discrimination, x TAG_WEIGHT: two words' mean tags in one crop pushed PUSH apart or more
+              (log(1 + max(0, PUSH - |mean - mean'|)^2), over the crop's pairs)
+ each part averaged over the crops that have it (pull, push) or the batch (the rest).  Every term is dense (masked sums
+-and products, no indexing in the backward), so it runs on the Mac's GPU in deterministic mode.
++and products, no indexing in the backward), so it runs on the Mac's GPU in deterministic mode.  With word weights
++(`data.SheetData.weights`, Terra's doubt from `wordread.doubt.prepare`; none by default), each word's px count by its
++weight in all six (`word_tensors`): weighted sums and means, the hard negatives' number set by the positives' weight,
++a word of weight 0 adding nothing.  The geometry (iou, direction) is read only where the target's distances make a box:
++a word reaching into a held-out area has none (`data.crop_targets`).
+ 
+ The parts of the loss stay on the device, summed; every LOG_EVERY steps (and at the last) their mean over those steps
+ is read, logged and checked, so the device is waited on only then.  A mean that is not finite stops the training.
+@@ -90,6 +94,7 @@ PULL = 0.5             # PAN: a core px's tag is pulled to within this of its wo
+ PUSH = 3.0             # PAN: two words' mean tags are pushed at least this far apart
+ DICE_EPS = 1e-6
+ NORM_EPS = 1e-12       # under the square root of a tag distance (its gradient stays finite at 0)
++MASS_EPS = 1e-12       # the least a weighted sum divides by: no weight gives 0 / it = 0 (numerical; decides nothing)
+ PARTS = ("text", "kind", "angle")
+ WORD_PARTS = ("core", "dice", "iou", "direction", "pull", "push")
+ CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words"), "decoder": ("full", "light"),
+@@ -306,26 +311,33 @@ def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor
+ 
+ def word_tensors(crops: list[dict[str, np.ndarray]]) -> tuple[torch.Tensor, ...]:
+     """A batch's word targets on the CPU (`data.crop_targets(..., words=True)`): core (n, h, w) float, geo (n, 5, h,
+-    w) float, tag (n, h, w) int64, known (n, h, w) float, and groups.  A crop's tags are its known core px's words
+-    numbered 1, 2, ... in the order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so
+-    the loss knows their number without reading the device."""
++    w) float, tag (n, h, w) int64, known (n, h, w) float, and groups.  known is each px's weight in the word terms: 0
++    where the px is not known, else 1, or, for a crop with word weights (`weight`, from `SheetData.weights`), its
++    word's weight at a core px.  A crop's tags are its core px of weight above 0, their words numbered 1, 2, ... in the
++    order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so the loss knows their number
++    without reading the device."""
+     def stack(key, dtype):
+         return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype))
+-    tags = []
++    tags, weights = [], []
+     for c in crops:
+-        ids = np.where(c["known"], c["tag_id"], 0)
++        w = c["known"].astype(np.float32)
++        if "weight" in c:
++            w = w * c["weight"]
++        ids = np.where(w > 0, c["tag_id"], 0)
+         words = np.unique(ids[ids > 0])
+         tags.append(np.where(ids > 0, np.searchsorted(words, ids) + 1, 0))
++        weights.append(w)
+     most = max((int(t.max()) for t in tags), default=0)
+     return (stack("core", np.float32), stack("geo", np.float32), torch.from_numpy(np.stack(tags).astype(np.int64)),
+-            stack("known", np.float32), torch.arange(1, most + 1, dtype=torch.int64))
++            torch.from_numpy(np.stack(weights)), torch.arange(1, most + 1, dtype=torch.int64))
+ 
+ 
+ def _ohem_bce(logit: torch.Tensor, target: torch.Tensor, known: torch.Tensor) -> torch.Tensor:
+-    """Binary cross-entropy over the known px: every positive, and the k = min(negatives, OHEM_RATIO x positives)
+-    negatives of the highest loss; the negatives tied with the k-th share its remaining places equally (so the loss is
+-    the top k's whichever of them a sort would put first).  Divided by positives + k; 0 with no positive.  The k-th
+-    loss is found by a sort without reading the device."""
++    """Binary cross-entropy over the known px (`known` each px's weight): every positive by its weight, and the k =
++    min(negatives, OHEM_RATIO x the positives' weight) negatives of the highest loss; the negatives tied with the
++    ceil(k)-th share its remaining places equally (so the loss is the top k's whichever of them a sort would put
++    first; a fractional k gives the last place its fraction).  Divided by the positives' weight + k; 0 with no
++    positive.  The k-th loss is found by a sort without reading the device."""
+     bce = F.binary_cross_entropy_with_logits(logit, target, reduction="none")
+     pos = target * known
+     neg = (1 - target) * known
+@@ -333,17 +345,21 @@ def _ohem_bce(logit: torch.Tensor, target: torch.Tensor, known: torch.Tensor) ->
+     k = torch.minimum(neg.sum(), OHEM_RATIO * n_pos)
+     with torch.no_grad():
+         ranked = torch.sort(torch.where(neg > 0, bce, -torch.ones_like(bce)).flatten(), descending=True).values
+-        last = ranked.index_select(0, (k.long() - 1).clamp(min=0).reshape(1))
++        last = ranked.index_select(0, (torch.ceil(k).long() - 1).clamp(min=0).reshape(1))
+         above = ((neg > 0) & (bce > last)).float()
+         tied = ((neg > 0) & (bce == last)).float()
+         share = (k - above.sum()) / tied.sum().clamp(min=1)
+         hard = (above + tied * share) * (k > 0).float()
+-    return (bce * (pos + hard)).sum() / (n_pos + k).clamp(min=1)
++    return (bce * (pos + hard)).sum() / (n_pos + k).clamp(min=MASS_EPS)
+ 
+ 
+-def _tag_parts(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
++def _tag_parts(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor,
++               weight: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+     """PAN's aggregation and discrimination (see the module) of the tag outputs (n, c, h, w) by the crops' word tags
+-    (`word_tensors`), each crop's words found by a one-hot over `groups` (matrix products, no indexing)."""
++    (`word_tensors`), each crop's words found by a one-hot over `groups` (matrix products, no indexing).  With
++    `weight` (n, h, w; `word_tensors`' known), each word weighs its px's mean weight: a crop's pull is its words'
++    pulls weighed by their weights, a pair's push by the product of the two, and each crop counts by its words' (or
++    pairs') mean weight; with weights of 1 these are the plain means."""
+     n, c, h, w = tag_out.shape
+     zero = tag_out.sum() * 0
+     if groups.numel() == 0:
+@@ -351,36 +367,40 @@ def _tag_parts(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor) -
+     hot = (tag[:, None] == groups[None, :, None, None]).to(tag_out.dtype).reshape(n, len(groups), h * w)
+     count = hot.sum(-1)                                                     # (n, K) px of each word
+     present = (count > 0).to(tag_out.dtype)
++    held = present if weight is None else torch.bmm(hot, weight.reshape(n, h * w, 1).to(tag_out.dtype))[..., 0] \
++        / count.clamp(min=1)                                                # (n, K) each word's weight
+     vec = tag_out.reshape(n, c, h * w).transpose(1, 2)                      # (n, P, c)
+     mean = torch.bmm(hot, vec) / count.clamp(min=1)[..., None]              # (n, K, c)
+     own = torch.bmm(hot.transpose(1, 2), mean)                              # (n, P, c): its word's mean, 0 off cores
+     far = ((vec - own) ** 2).sum(-1).add(NORM_EPS).sqrt()
+     pulled = torch.log1p(F.relu(far - PULL) ** 2)                           # (n, P)
+     per_word = torch.bmm(hot, pulled[..., None])[..., 0] / count.clamp(min=1)
+-    words = present.sum(-1)
+-    crops = (words > 0).to(tag_out.dtype)
+-    pull = ((per_word * present).sum(-1) / words.clamp(min=1) * crops).sum() / crops.sum().clamp(min=1)
++    words = present.sum(-1).clamp(min=1)
++    pull = ((per_word * held).sum(-1) / words).sum() / (held.sum(-1) / words).sum().clamp(min=MASS_EPS)
+     apart = ((mean[:, :, None] - mean[:, None]) ** 2).sum(-1).add(NORM_EPS).sqrt()      # (n, K, K)
+-    pair = present[:, :, None] * present[:, None, :] * (1 - torch.eye(len(groups), dtype=tag_out.dtype,
+-                                                                      device=tag_out.device))
++    other = 1 - torch.eye(len(groups), dtype=tag_out.dtype, device=tag_out.device)
++    pairs = (present[:, :, None] * present[:, None, :] * other).sum((1, 2)).clamp(min=1)
++    pair = held[:, :, None] * held[:, None, :] * other
+     pushed = torch.log1p(F.relu(PUSH - apart) ** 2) * pair
+-    pairs = pair.sum((1, 2))
+-    two = (pairs > 0).to(tag_out.dtype)
+-    push = (pushed.sum((1, 2)) / pairs.clamp(min=1) * two).sum() / two.sum().clamp(min=1)
++    push = (pushed.sum((1, 2)) / pairs).sum() / (pair.sum((1, 2)) / pairs).sum().clamp(min=MASS_EPS)
+     return pull, push
+ 
+ 
+ def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: torch.Tensor, known: torch.Tensor,
+               groups: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+     """The word heads' loss of a batch (see the module) and its parts (WORD_PARTS, unweighted) as one tensor on the
+-    batch's device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`."""
++    batch's device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`.  Each px counts by its weight
++    (`known`): the core's cross-entropy and Dice, the geometry's and the tags' means are weighted.  The geometry
++    (iou, direction) is read only at core px whose distances make a box (`geo` has none for a word reaching into a
++    held-out area, `data.crop_targets`)."""
+     logit = out[:, model.CORE]
+     lc = _ohem_bce(logit, core, known)
+     p = torch.sigmoid(logit)
+     ld = 1 - 2 * (p * core * known).sum() / ((p * known).sum() + (core * known).sum() + DICE_EPS)
+-    m = core * known
+-    n = m.sum().clamp(min=1)
+-    d, g = model.distances(out[:, model.GEO]), geo[:, :4]
++    g = geo[:, :4]
++    m = core * known * ((g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) > 0).to(core.dtype)
++    n = m.sum().clamp(min=MASS_EPS)
++    d = model.distances(out[:, model.GEO])
+     inter = ((torch.minimum(d[:, 0], g[:, 0]) + torch.minimum(d[:, 1], g[:, 1]))
+              * (torch.minimum(d[:, 2], g[:, 2]) + torch.minimum(d[:, 3], g[:, 3])))
+     union = (d[:, 0] + d[:, 1]) * (d[:, 2] + d[:, 3]) + (g[:, 0] + g[:, 1]) * (g[:, 2] + g[:, 3]) - inter
+@@ -389,7 +409,7 @@ def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: tor
+     rad = torch.deg2rad(geo[:, 4])
+     cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
+     la = ((1 - cosine) * m).sum() / n
+-    pull, push = _tag_parts(out[:, model.TAG], tag, groups)
++    pull, push = _tag_parts(out[:, model.TAG], tag, groups, known)
+     total = lc + ld + li + GEO_ANGLE_WEIGHT * la + TAG_WEIGHT * (pull + push)
+     return total, torch.stack([lc, ld, li, la, pull, push])
+ 
+diff --git a/pipeline/src/sfzmaps/solver/wordread/doubt.py b/pipeline/src/sfzmaps/solver/wordread/doubt.py
+new file mode 100644
+index 0000000..ed846cd
+--- /dev/null
++++ b/pipeline/src/sfzmaps/solver/wordread/doubt.py
+@@ -0,0 +1,413 @@
++"""Doubt weights for Terra's words: each word's probability of being right, so a wrong label counts less in training.
++
++Some of Terra's word boxes are wrong: a word cut at a tile's edge and read again whole from the next tile, a box grown
++over the next word, a near-45-degree word whose height `boxes.word_rect` had to force.  No word is cut or flagged
++here: each gets two weights, fitted on the words Terra read twice.
++
++Terra was shown each sheet in overlapping tiles (`boxes.terra_boxes`; 768 px tiles about 583 px apart), so a word in
++the overlap of two tiles was shown twice, and each tile's answer read it on its own.  `terra_boxes` keeps one read
++(the one farthest from its tile's edge) and drops a second whose box overlaps it by IoU > `boxes.SAME_TEXT_IOU`; the
++second reads it drops are the ones used here, every tile's read (`tile_reads`) as Terra gave it.
++
++The features of a Terra word (`doubt_features`, one row per word of a sheet, in the order of `SheetData.words`):
++  ink_outside    the share of the px of its ink pieces (the 8-connected components of the page's ink that meet its
++                 rectangle, `SheetData.words` as `data._paint` fills it) that lie outside its rectangle; a rectangle
++                 holding no ink has all of its ink outside: 1
++  forced_height  its height was forced by `boxes.word_rect`'s near-45-degree case (TYPICAL_HEIGHT)
++  kind           Terra's kind
++  read_twice     another tile's window holds its whole box: Terra was shown it twice
++  other_*        for a word read twice, the other read: of the other tiles' reads (every one, before the drop), the
++                 one whose rectangle overlaps the word's with the highest IoU (argmax; no IoU cut), its text, the
++                 pair's IoU (`rect_iou` of the two reads' `word_rect`s, each at its own angle) and whether the two
++                 strings agree once folded (upper case, zero-width spaces dropped, single spaces: `crops.norm_text`'s
++                 folding); `paired` when such a read exists (a word shown twice may have been read once)
++  touch_<name>   with `areas`, whether its rectangle holds a px of each area (the held-out quarters and the answered
++                 blocks, as the reader's crops record them)
++
++The fit (`fit_doubt`, on the training quarters' paired words outside the answered blocks; the rows say so in
++`held_out` and `answered`, and a true one is refused), from x = (one intercept per kind, ink_outside, forced_height):
++  agree   a logistic model of P(the two strings agree | x)
++  IoU     a one-inflated beta regression of the pair's IoU (Ospina and Ferrari's inflated beta regression): P(IoU = 1 |
++          x), two reads of one rectangle, by a logistic (`one`), and otherwise IoU ~ Beta(mu phi, (1 - mu) phi) with
++          logit mu = x . `mean` and log phi = x . `precision` (the variable-dispersion beta regression).  The plain
++          beta regression has no room for the point mass at 1 (two identical reads: 5% of the pairs); one precision
++          for every word fitted the IoU of every held-out quarter worse (by 0.14-0.20 nats a pair) and put its mean
++          0.03 below the observed.
++Each by maximum likelihood (L-BFGS), with RIDGE on every coefficient only to keep a separable fit finite.
++
++The weights (`doubt_weights`), per word, with no cut and no flag:
++  box     the expected IoU of its box, P(IoU = 1 | x) + (1 - P(IoU = 1 | x)) mu(x): the word's weight in the
++          detector's word terms (`data.SheetData.weights`, `prepare`)
++  string  P(string right), taken as the fitted P(the two reads agree | x): for the reader's targets
++Both are predictions from the word's features alone (its own pair, when it has one, is one of the fit's rows).
++
++`write_doubt` measures the training maps' words (`paths.TEXT_TRAIN_SERIES`), fits once per fold of the reader's split
++(`paths.QUARTERS`: the words touching the fold's quarter or an answered block left out of its fit) and writes the
++features (FEATURES_FILE) and, per fold, the fitted parameters, every word's weights and the counts (DOUBT_FILE).
++
++Neither `textnet.data` nor `textnet.train` imports this module: the weights reach the detector in
++`data.SheetData.weights`, filled by `prepare` before the training.  Nothing here asks a model.
++"""
++import dataclasses
++import json
++import logging
++from collections.abc import Mapping
++
++import cv2
++import numpy as np
++import pandas as pd
++import shapely
++from scipy.optimize import minimize
++from scipy.special import digamma, expit, gammaln, log_expit
++
++from sfzmaps.solver import paths
++from sfzmaps.solver.textnet import boxes, data
++
++log = logging.getLogger(__name__)
++
++DOUBT_FILE = paths.SOLVER_DIR / "experiments" / "wordread" / "detector" / "doubt.json"
++FEATURES_FILE = DOUBT_FILE.with_name("doubt_features.parquet")
++KIND_NAMES = tuple(data.KINDS)                 # Terra's kinds, in the order of their KINDS index
++FEATURES = (*(f"kind={k}" for k in KIND_NAMES), "ink_outside", "forced_height")
++NEAR_DIAGONAL = 0.25    # `boxes.word_rect`'s: |cos^2 - sin^2| of the angle at or below it forces the height (its code,
++                        # not a choice here; copied, as boxes.py is in the prints stage's closure; a test pins it)
++RIDGE = 1e-6            # numerical: keeps a separable fit finite; decides nothing
++QUANTILES = (0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99)    # reported only
++
++
++# --- Terra's reads ---------------------------------------------------------------------------------------------------
++
++def _sheet_records(series: str, sheet: str, records: list[dict] | None) -> list[dict]:
++    return [r for r in (boxes.terra_records() if records is None else records)
++            if r.get("series") == series and r.get("sheet") == sheet]
++
++
++def tile_reads(series: str, sheet: str, records: list[dict] | None = None) -> list[dict]:
++    """Every piece of text Terra read on a sheet, every tile's, before `boxes.terra_boxes` drops repeats: Terra's
++    fields, `box` (page px), `tile` (its tile's top-left corner) and `page_box` (its tile, page px), decoded as
++    `terra_boxes` decodes them.  `records`: the lines of TERRA_READ (read from disk when None)."""
++    out = []
++    for r in _sheet_records(series, sheet, records):
++        tx, ty = r["page_box"][:2]
++        for it in boxes.TextItems.model_validate(r["answer"]).items:
++            out.append({**it.model_dump(), "box": [it.x0 + tx, it.y0 + ty, it.x1 + tx, it.y1 + ty],
++                        "tile": [tx, ty], "page_box": list(r["page_box"])})
++    return out
++
++
++def forced_height(angle_deg) -> np.ndarray:
++    """Whether `boxes.word_rect` forces a word's height at reading angle `angle_deg` (degrees; any shape): its
++    near-45-degree case, where the box can't give the height."""
++    a = np.deg2rad(np.asarray(angle_deg, float))
++    c, s = np.abs(np.cos(a)), np.abs(np.sin(a))
++    return ~(np.abs(c * c - s * s) > NEAR_DIAGONAL)
++
++
++def _norm(text) -> str:
++    """A string folded for comparison: upper case, zero-width spaces dropped, single spaces (`crops.norm_text`'s
++    folding, without its vocabulary)."""
++    return " ".join(str(text).replace("​", "").upper().split())
++
++
++def rect_iou(a: np.ndarray, b: np.ndarray) -> float:
++    """The IoU of two word rectangles (4 corners each): 1 exactly when they are the same rectangle."""
++    a, b = np.asarray(a, float), np.asarray(b, float)
++    if np.array_equal(a, b):
++        return 1.0
++    pa, pb = shapely.Polygon(a), shapely.Polygon(b)
++    inter = pa.intersection(pb).area
++    union = pa.area + pb.area - inter
++    return float(inter / union) if union > 0 else 0.0
++
++
++def _rect(item: dict) -> np.ndarray:
++    return boxes.word_rect(item["box"], float(item.get("angle_deg") or 0.0))
++
++
++def _other_reads(kept: list[dict], reads: list[dict]) -> list[dict]:
++    """For each kept word: the number of other tiles whose window holds its whole box and, among those tiles' reads,
++    the one whose rectangle overlaps its own with the highest IoU (None when none overlaps)."""
++    tiles = {tuple(r["tile"]): r["page_box"] for r in reads}
++    rects = [_rect(r) for r in reads]
++    lo = np.array([r.min(0) for r in rects]).reshape(-1, 2)
++    hi = np.array([r.max(0) for r in rects]).reshape(-1, 2)
++    tile_of = [tuple(r["tile"]) for r in reads]
++    out = []
++    for k in kept:
++        x0, y0, x1, y1 = k["box"]
++        own = tuple(k["tile"])
++        others = {t for t, (tx0, ty0, tx1, ty1) in tiles.items()
++                  if t != own and tx0 <= x0 and ty0 <= y0 and x1 <= tx1 and y1 <= ty1}
++        best, best_iou = None, 0.0
++        if others:
++            rect = _rect(k)
++            klo, khi = rect.min(0), rect.max(0)
++            near = np.flatnonzero((lo[:, 0] < khi[0]) & (hi[:, 0] > klo[0]) & (lo[:, 1] < khi[1]) & (hi[:, 1] > klo[1]))
++            for j in near:
++                if tile_of[j] not in others:
++                    continue
++                v = rect_iou(rect, rects[j])
++                if v > best_iou:
++                    best, best_iou = reads[j], v
++        out.append({"other_tiles": len(others), "other": best, "iou": best_iou})
++    return out
++
++
++# --- the features ----------------------------------------------------------------------------------------------------
++
++def _window(rect: np.ndarray, sd: data.SheetData) -> tuple[int, int, int, int] | None:
++    """The page window (x0, y0, w, h) holding a rectangle's px (its corners' bounding box), cut to the page."""
++    x0, y0 = np.maximum(rect.min(0), 0)
++    x1, y1 = np.minimum(rect.max(0) + 1, [sd.width, sd.height])
++    if x1 <= x0 or y1 <= y0:
++        return None
++    return int(x0), int(y0), int(x1 - x0), int(y1 - y0)
++
++
++def doubt_features(sd: data.SheetData, records: list[dict] | None = None, areas: Mapping | None = None
++                   ) -> pd.DataFrame:
++    """One row per Terra word of the sheet, in the order of `sd.words` (see the module): series, sheet, word (its
++    index), text, kind, edge (Terra's distance from its tile's edge, reported only), ink_outside, ink_px (its ink px
++    inside), forced_height, read_twice, other_tiles, paired, other_text, other_iou, agree (1.0 / 0.0; NaN unpaired),
++    and a bool column per entry of `areas` ({column name: data.MapRect / Quarter / GridArea}; needs the sheet's
++    placement).  `records`: the lines of TERRA_READ (read from disk when None).  ValueError when the sheet's words
++    are not Terra's words of the sheet (`boxes.terra_boxes`, as `data.sheet_data` reads them)."""
++    recs = _sheet_records(sd.series, sd.sheet, records)
++    kept = boxes.terra_boxes(sd.series, sd.sheet, recs)
++    rects = np.round(np.array([_rect(k) for k in kept], float).reshape(-1, 4, 2)).astype(np.int32)
++    if rects.shape != sd.words.shape or not np.array_equal(rects, sd.words):
++        raise ValueError(f"{sd.series} {sd.sheet}: the sheet's {len(sd.words)} words are not Terra's words of the "
++                         f"sheet ({len(kept)}, boxes.terra_boxes)")
++    areas = dict(areas or {})
++    _, labels, stats, _ = cv2.connectedComponentsWithStats(data.page_ink(sd).view(np.uint8), connectivity=8,
++                                                               ltype=cv2.CV_32S)
++    size = stats[:, cv2.CC_STAT_AREA].astype(np.int64)
++    rows = []
++    for j, (k, other) in enumerate(zip(kept, _other_reads(kept, tile_reads(sd.series, sd.sheet, recs)))):
++        win = _window(sd.words[j], sd)
++        inside = total = 0
++        touch = dict.fromkeys(areas, False)
++        if win is not None:
++            x0, y0, w, h = win
++            mask = data._paint(sd.words[j:j + 1], np.ones(1, np.int32), y0, x0, h, w) > 0
++            lab = labels[y0:y0 + h, x0:x0 + w][mask]
++            ids, counts = np.unique(lab[lab > 0], return_counts=True)
++            inside, total = int(counts.sum()), int(size[ids].sum())
++            touch = {name: bool(data.in_area(sd, area, y0, x0, h, w)[mask].any()) for name, area in areas.items()}
++        o = other["other"]
++        rows.append({"series": sd.series, "sheet": sd.sheet, "word": j, "text": k["text"], "kind": k["kind"],
++                     "edge": float(k["edge"]), "ink_outside": 1.0 - inside / total if total else 1.0,
++                     "ink_px": inside, "forced_height": bool(forced_height(float(k.get("angle_deg") or 0.0))),
++                     "read_twice": other["other_tiles"] > 0, "other_tiles": other["other_tiles"],
++                     "paired": o is not None, "other_text": None if o is None else o["text"],
++                     "other_iou": np.nan if o is None else other["iou"],
++                     "agree": np.nan if o is None else float(_norm(o["text"]) == _norm(k["text"])), **touch})
++    cols = ["series", "sheet", "word", "text", "kind", "edge", "ink_outside", "ink_px", "forced_height", "read_twice",
++            "other_tiles", "paired", "other_text", "other_iou", "agree", *areas]
++    return pd.DataFrame(rows, columns=cols)
++
++
++def design(features: pd.DataFrame) -> np.ndarray:
++    """The fit's x per row (FEATURES): one intercept per Terra kind, ink_outside and forced_height.  ValueError for an
++    unknown kind or a feature that is not a number."""
++    kind = features["kind"].to_numpy()
++    unknown = sorted(set(kind) - set(KIND_NAMES))
++    if unknown:
++        raise ValueError(f"doubt: kinds {unknown} are not Terra's ({', '.join(KIND_NAMES)})")
++    x = np.column_stack([*(kind == k for k in KIND_NAMES), features["ink_outside"].to_numpy(float),
++                         features["forced_height"].to_numpy(bool)]).astype(float)
++    if not np.isfinite(x).all():
++        raise ValueError("doubt: ink_outside must be a number for every word")
++    return x
++
++
++# --- the fit ---------------------------------------------------------------------------------------------------------
++
++def _logistic(x: np.ndarray, y: np.ndarray, ridge: float) -> tuple[np.ndarray, float]:
++    """Maximum-likelihood logistic coefficients of y (0/1) on x, RIDGE on each."""
++    def nll(b):
++        z = x @ b
++        p = expit(z)
++        f = -(y * log_expit(z) + (1 - y) * log_expit(-z)).sum() + ridge * b @ b
++        return f, x.T @ (p - y) + 2 * ridge * b
++
++    res = minimize(nll, np.zeros(x.shape[1]), jac=True, method="L-BFGS-B")
++    return res.x, float(res.fun)
++
++
++def _beta(x: np.ndarray, y: np.ndarray, ridge: float) -> tuple[np.ndarray, np.ndarray, float]:
++    """Maximum-likelihood beta regression of y in (0, 1) on x, its mean and its precision each modelled (logit mu =
++    x . g, log phi = x . d: the variable-dispersion beta regression), RIDGE on each: g, d and the negative
++    log-likelihood."""
++    ly, l1y = np.log(y), np.log1p(-y)
++    k = x.shape[1]
++
++    def nll(th):
++        g, d = th[:k], th[k:]
++        mu = expit(x @ g)
++        phi = np.exp(x @ d)
++        a, b = mu * phi, (1 - mu) * phi
++        f = -(gammaln(phi) - gammaln(a) - gammaln(b) + (a - 1) * ly + (b - 1) * l1y).sum() + ridge * th @ th
++        da, db = digamma(a), digamma(b)
++        # the log-likelihood's derivatives by mu and phi, through a = mu phi and b = (1 - mu) phi
++        dl_dmu = phi * (-da + db + ly - l1y)
++        dl_dphi = digamma(phi) - mu * da - (1 - mu) * db + mu * ly + (1 - mu) * l1y
++        grad = np.concatenate([-(x.T @ (dl_dmu * mu * (1 - mu))), -(x.T @ (dl_dphi * phi))])
++        return f, grad + 2 * ridge * th
++
++    res = minimize(nll, np.zeros(2 * k), jac=True, method="L-BFGS-B")
++    return res.x[:k], res.x[k:], float(res.fun)
++
++
++def fit_doubt(features: pd.DataFrame, ridge: float = RIDGE) -> dict:
++    """The doubt model (see the module) fitted on the paired rows of `features` (`doubt_features`' columns kind,
++    ink_outside, forced_height, paired, agree, other_iou).  Rows may come only from the training quarters' words
++    outside the answered blocks: the columns `held_out` and `answered` are REQUIRED (ValueError when missing) and a
++    true one is refused.  Returns {"features", "agree", "one", "mean", "precision" (each {feature: coefficient}),
++    "rows", "agree_share", "one_share", "nll": {"agree", "one", "mean"}}."""
++    for flag in ("held_out", "answered"):
++        if flag not in features:
++            raise ValueError(f"fit_doubt: rows need a `{flag}` column (False for a row that may be used)")
++        if features[flag].astype(bool).any():
++            raise ValueError(f"fit_doubt: rows flagged {flag} may not be used to fit")
++    rows = features[features["paired"].astype(bool)]
++    if not len(rows):
++        raise ValueError("fit_doubt: no word read twice with a pair to fit on")
++    x = design(rows)
++    agree = rows["agree"].to_numpy(float)
++    iou = rows["other_iou"].to_numpy(float)
++    if not ((agree == 0) | (agree == 1)).all() or not ((iou > 0) & (iou <= 1)).all():
++        raise ValueError("fit_doubt: a paired row needs agree 0 or 1 and an IoU in (0, 1]")
++    b_agree, nll_agree = _logistic(x, agree, ridge)
++    one = (iou == 1).astype(float)
++    b_one, nll_one = _logistic(x, one, ridge)
++    part = iou < 1
++    g, d, nll_mean = _beta(x[part], iou[part], ridge)
++    names = list(FEATURES)
++    return {"features": names, "agree": dict(zip(names, map(float, b_agree))),
++            "one": dict(zip(names, map(float, b_one))), "mean": dict(zip(names, map(float, g))),
++            "precision": dict(zip(names, map(float, d))), "rows": int(len(rows)), "agree_share": float(agree.mean()),
++            "one_share": float(one.mean()), "nll": {"agree": nll_agree, "one": nll_one, "mean": nll_mean}}
++
++
++# --- the weights -----------------------------------------------------------------------------------------------------
++
++def _coef(params: dict, part: str) -> np.ndarray:
++    if list(params["features"]) != list(FEATURES):
++        raise ValueError(f"doubt: the parameters are for {params['features']}, not {list(FEATURES)}")
++    return np.array([params[part][k] for k in FEATURES], float)
++
++
++def weights_of(features: pd.DataFrame, params: dict) -> tuple[np.ndarray, np.ndarray]:
++    """(box, string) weights of each row of `features` by the fitted `params` (see the module), float64."""
++    x = design(features)
++    p_one = expit(x @ _coef(params, "one"))
++    box = p_one + (1 - p_one) * expit(x @ _coef(params, "mean"))
++    return box, expit(x @ _coef(params, "agree"))
++
++
++def doubt_weights(sd: data.SheetData | None, params: dict, features: pd.DataFrame | None = None,
++                  records: list[dict] | None = None) -> tuple[np.ndarray, np.ndarray]:
++    """Each Terra word's (box_weight, string_weight) on a sheet (see the module): its expected box IoU and P(string
++    right), from its features (`features`, or `doubt_features(sd, records)` when None).  No cut, no flag."""
++    if features is None:
++        features = doubt_features(sd, records)
++    return weights_of(features, params)
++
++
++def prepare(sheets: list[data.SheetData], weights: Mapping) -> list[data.SheetData]:
++    """The sheets with each word's box weight in `SheetData.weights` (float32, in the order of its words), everything
++    else shared (`dataclasses.replace`).  `weights`: {"<series>/<sheet>": the sheet's box weights}.  ValueError for a
++    sheet with no weights or with another number of them than words."""
++    out = []
++    for sd in sheets:
++        key = f"{sd.series}/{sd.sheet}"
++        if key not in weights:
++            raise ValueError(f"doubt: no weights for {key}")
++        w = np.asarray(weights[key], np.float32)
++        if w.shape != (len(sd.words),):
++            raise ValueError(f"doubt: {key} has {len(sd.words)} words but {w.size} weights")
++        out.append(dataclasses.replace(sd, weights=w))
++    return out
++
++
++def load_weights(fold: str, path=DOUBT_FILE, which: str = "box") -> dict[str, np.ndarray]:
++    """The fold's weights of every training sheet from DOUBT_FILE ({"<series>/<sheet>": float32}), the box weights
++    (for `prepare`) or the string weights (`which` "string")."""
++    got = json.loads(path.read_text())["folds"][fold]["weights"]
++    return {k: np.asarray(v[which], np.float32) for k, v in got.items()}
++
++
++# --- measured on the training maps -----------------------------------------------------------------------------------
++
++def _quantiles(v: np.ndarray) -> dict:
++    return {str(q): round(float(np.quantile(v, q)), 4) for q in QUANTILES} if len(v) else {}
++
++
++def counts(features: pd.DataFrame) -> dict:
++    """The double reads among `features`' words: words, read twice, paired, shown twice but read once, the paired
++    words' agreement and IoU (quantiles; the share at 1), and the same per series and per kind."""
++    def one(f):
++        p = f[f["paired"]]
++        return {"words": int(len(f)), "read_twice": int(f["read_twice"].sum()), "paired": int(len(p)),
++                "read_once_of_twice": int((f["read_twice"] & ~f["paired"]).sum()),
++                "agree_share": round(float(p["agree"].mean()), 4) if len(p) else None,
++                "iou_one_share": round(float((p["other_iou"] == 1).mean()), 4) if len(p) else None,
++                "iou": _quantiles(p["other_iou"].to_numpy(float)),
++                "forced_height": int(f["forced_height"].sum()), "no_ink": int((f["ink_px"] == 0).sum()),
++                "ink_outside": _quantiles(f["ink_outside"].to_numpy(float))}
++    return {"all": one(features), "series": {s: one(g) for s, g in features.groupby("series", sort=False)},
++            "kind": {k: one(g) for k, g in features.groupby("kind", sort=False)}}
++
++
++def write_doubt(out=DOUBT_FILE, features_out=FEATURES_FILE) -> dict:
++    """Measure the training maps' words, fit each fold, and write the features to `features_out` and the folds'
++    parameters, weights and counts to `out` (folders made; see the module)."""
++    from sfzmaps.solver.textnet import reader_stage    # torch and the lots: only for this measurement
++
++    blocks = reader_stage.held_blocks()
++    areas = {**{f"touch_{q}": data.Quarter(i) for i, q in enumerate(paths.QUARTERS)},
++             "touch_blocks": reader_stage.load_block_area(blocks)}
++    records = boxes.terra_records()
++    frames = []
++    for s in paths.TEXT_TRAIN_SERIES:
++        for sd in data.load_sheets([s], hold_out_validation=False):
++            frames.append(doubt_features(sd, records, areas))
++            log.info("%s %s: %d words, %d read twice", sd.series, sd.sheet, len(frames[-1]),
++                     int(frames[-1]["read_twice"].sum()))
++    feats = pd.concat(frames, ignore_index=True)
++    features_out.parent.mkdir(parents=True, exist_ok=True)
++    feats.to_parquet(features_out)
++    folds = {}
++    for q in paths.QUARTERS:
++        free = ~feats[f"touch_{q}"] & ~feats["touch_blocks"]
++        rows = feats[free].assign(held_out=False, answered=False)
++        params = fit_doubt(rows)
++        box, string = weights_of(feats, params)
++        weights = {f"{s}/{sh}": {"box": [round(float(v), 6) for v in box[i]],
++                                 "string": [round(float(v), 6) for v in string[i]]}
++                   for (s, sh), i in feats.groupby(["series", "sheet"], sort=False).indices.items()}
++        dist: dict = {}
++        for (s, k), i in feats.groupby(["series", "kind"], sort=False).indices.items():
++            dist.setdefault(s, {})[k] = {"box": _quantiles(box[i]), "string": _quantiles(string[i]),
++                                         "words": int(len(i))}
++        folds[q] = {"params": params, "fit_counts": counts(feats[free]), "weights_by_series_kind": dist,
++                    "left_out": "words whose rectangle touches the fold's quarter or an answered block",
++                    "weights": weights}
++        log.info("fold %s: %d paired rows; agree %s; one %s; mean %s; precision %s", q, params["rows"],
++                 params["agree"], params["one"], params["mean"], params["precision"])
++    got = {"series": list(paths.TEXT_TRAIN_SERIES), "words": int(len(feats)), "blocks_held": len(blocks),
++           "counts": counts(feats), "folds": folds}
++    out.parent.mkdir(parents=True, exist_ok=True)
++    out.write_text(json.dumps(got) + "\n")
++    return got
++
++
++if __name__ == "__main__":
++    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
++    cv2.setNumThreads(1)
++    data.LOAD_THREADS = 1          # one page decoded at a time: the machine is shared
++    result = write_doubt()
++    print(json.dumps(result["counts"]["all"], indent=1))
++    for q, f in result["folds"].items():
++        print(q, json.dumps({k: v for k, v in f["params"].items()}, indent=None))
+diff --git a/pipeline/tests/test_wordread_doubt.py b/pipeline/tests/test_wordread_doubt.py
+new file mode 100644
+index 0000000..a134673
+--- /dev/null
++++ b/pipeline/tests/test_wordread_doubt.py
+@@ -0,0 +1,407 @@
++"""Doubt weights for Terra's words (`wordread.doubt`): the features of each word (its ink outside its box, the forced
++height of a near-45-degree word, its kind, and the other tile's read of a word Terra was shown twice), the fit of
++P(the two reads' strings agree) and of the pair's box IoU on those double reads, the weights (expected IoU, P(string
++right)) with no cut, and the word heads' loss weighing each word's px by its weight (`data.crop_targets`,
++`train.word_tensors`, `train.word_loss`)."""
++import contextlib
++import dataclasses
++
++import cv2
++import numpy as np
++import pandas as pd
++import pytest
++import torch
++
++from sfzmaps.solver import grid, paths
++from sfzmaps.solver.textnet import boxes, data, model, train
++from sfzmaps.solver.wordread import doubt
++
++ORIGIN = (6000000.0, 2110000.0)       # the map point of page px (0, 0)
++FT = 2.0                              # ft per page px
++
++
++@contextlib.contextmanager
++def _torch_kept():
++    threads = torch.get_num_threads()
++    deterministic = torch.are_deterministic_algorithms_enabled()
++    warn_only = torch.is_deterministic_algorithms_warn_only_enabled()
++    rng = torch.get_rng_state()
++    try:
++        yield
++    finally:
++        torch.set_num_threads(threads)
++        torch.use_deterministic_algorithms(deterministic, warn_only=warn_only)
++        torch.set_rng_state(rng)
++
++
++@pytest.fixture(autouse=True)
++def _torch_as_it_was():
++    with _torch_kept():
++        yield
++
++
++def _world(h, w) -> np.ndarray:
++    """Placement samples of a page placed north up at FT ft per px, page px (0, 0) at ORIGIN."""
++    step = data.PLACEMENT_STEP
++    gx, gy = np.meshgrid(np.arange(0, w - 1 + step, step, dtype=float), np.arange(0, h - 1 + step, step, dtype=float))
++    return np.stack([ORIGIN[0] + FT * gx, ORIGIN[1] - FT * gy], -1)
++
++
++def _map_rect(x0, y0, x1, y1) -> data.MapRect:
++    """The map rectangle holding page px x0..x1 - 1, y0..y1 - 1 (by their map points)."""
++    return data.MapRect(ORIGIN[0] + FT * x0 - FT / 2, ORIGIN[1] - FT * y1 + FT / 2,
++                        ORIGIN[0] + FT * x1 - FT / 2, ORIGIN[1] - FT * y0 + FT / 2)
++
++
++def _sheet(words, gray=None, size=(240, 320), held=(), kinds=None, sheet="s") -> data.SheetData:
++    """An in-memory sheet placed north up: Terra's `words` (axis box, reading angle), ink `gray` (default: a stroke
++    along each word's middle), the areas `held` held out, every word's core its own rectangle."""
++    h, w = size
++    if gray is None:
++        gray = np.full((h, w), 255, np.uint8)
++        for box, angle in words:
++            r = data.word_rect(box, angle)
++            a, b = (r[0] + r[3]) / 2, (r[1] + r[2]) / 2
++            cv2.line(gray, tuple(int(v) for v in np.round(a)), tuple(int(v) for v in np.round(b)), 0, 3)
++    rects = np.round(np.array([data.word_rect(b, a) for b, a in words], float).reshape(-1, 4, 2)).astype(np.int32)
++    return data.SheetData(
++        series=paths.SERIES, sheet=sheet, height=h, width=w, ink_bits=np.packbits(gray < grid.INK_BELOW, axis=1),
++        words=rects, kinds=np.zeros(len(words), np.uint8) if kinds is None else np.array(kinds, np.uint8),
++        angles=np.array([data.reading_angle(r) for r in rects], np.int16), other=np.zeros((0, 4, 2), np.int32),
++        points=np.zeros((0, 2), np.int32), world=_world(h, w), ft_per_px=FT, held=tuple(held), cores=rects.copy())
++
++
++def _item(text, box, kind="zoning code", angle=0, tile=(0, 0)):
++    x0, y0, x1, y1 = box
++    return {"text": text, "kind": kind, "x0": x0 - tile[0], "y0": y0 - tile[1], "x1": x1 - tile[0],
++            "y1": y1 - tile[1], "direction": "left-to-right", "angle_deg": angle}
++
++
++def _records(tiles, sheet="s", window="0,0,500,300"):
++    """Terra's saved answers for a sheet: `tiles` [(page_box, [(text, page box, kind, angle), ...]), ...]."""
++    return [{"series": paths.SERIES, "sheet": sheet, "page_box": list(pb),
++             "script": {"args": ["terra", paths.SERIES, sheet, window, "out"]},
++             "answer": {"items": [_item(t, b, k, a, tile=pb[:2]) for t, b, k, a in items]}} for pb, items in tiles]
++
++
++def _sheet_of(records, gray, sheet="s", held=()) -> data.SheetData:
++    found = boxes.terra_boxes(paths.SERIES, sheet, records)
++    return _sheet([(f["box"], float(f["angle_deg"])) for f in found], gray=gray, size=gray.shape, held=held,
++                  kinds=[data.KINDS[f["kind"]] for f in found], sheet=sheet)
++
++
++# --- the features ----------------------------------------------------------------------------------------------------
++
++def test_forced_height_is_word_rects_near_diagonal_case():
++    # word_rect forces the height (TYPICAL_HEIGHT) whatever the box: two different boxes give it exactly
++    for angle in range(-180, 181):
++        heights = [float(np.linalg.norm(r[3] - r[0])) for r in (boxes.word_rect((0, 0, 200, 150), angle),
++                                                                  boxes.word_rect((0, 0, 170, 190), angle))]
++        assert bool(doubt.forced_height(angle)) == all(abs(h - boxes.TYPICAL_HEIGHT) < 1e-9 for h in heights), angle
++    assert doubt.forced_height(45) and not doubt.forced_height(0) and not doubt.forced_height(90)
++
++
++def test_ink_outside_is_the_share_of_the_words_ink_pieces_px_outside_its_box():
++    gray = np.full((200, 300), 255, np.uint8)
++    gray[60:63, 100:140] = 0                    # a bar of 120 px, half under word 0's box (columns 100-119)
++    gray[100:110, 30:34] = 0                    # word 1's letter, wholly inside its box
++    gray[100:110, 40:44] = 0
++    gray[150:153, 200:260] = 0                  # word 2's letters...
++    gray[140:180, 230:232] = 0                  # ... joined to a line of which 80 of 200 px fall outside its box
++    words = {"HALF": (100, 55, 119, 70), "WHOLE": (25, 95, 50, 115), "LINED": (195, 145, 265, 159),
++             "EMPTY": (10, 10, 40, 30)}
++    recs = _records([((0, 0, 300, 200), [(t, b, "zoning code", 0) for t, b in words.items()])], window="0,0,300,200")
++    sd = _sheet_of(recs, gray)
++    f = doubt.doubt_features(sd, recs)
++    assert list(f["word"]) == [0, 1, 2, 3]                     # one row per word of the sheet, in its order
++    f = f.set_index("text")
++    assert f.loc["HALF", "ink_outside"] == pytest.approx(0.5) and f.loc["HALF", "ink_px"] == 60
++    assert f.loc["WHOLE", "ink_outside"] == 0
++    piece = 180 + 80 - 6                                  # the letters' bar and the line (6 px shared): one piece
++    outside = 2 * ((145 - 140) + (180 - 160))             # the line's rows above and below the box (rows 145-159)
++    assert f.loc["LINED", "ink_outside"] == pytest.approx(outside / piece)
++    assert f.loc["EMPTY", "ink_px"] == 0 and f.loc["EMPTY", "ink_outside"] == 1     # no ink: all its ink is outside
++    assert not f["forced_height"].any() and set(f["kind"]) == {"zoning code"}
++
++
++def test_a_word_shown_in_two_tiles_takes_the_other_tiles_best_overlapping_read():
++    gray = np.full((300, 500), 255, np.uint8)
++    a, b = (0, 0, 300, 300), (200, 0, 500, 300)           # two tiles overlapping in columns 200-299
++    tiles = [(a, [("RH-2", (250, 100, 290, 120), "zoning code", 0),            # in both tiles, 10 px from a's edge
++                  ("RH", (249, 101, 271, 119), "zoning code", 0),              # a worse read of it in tile a
++                  ("P", (50, 50, 70, 70), "zoning code", 0),                   # tile a's alone
++                  ("OF THE CIT", (210, 200, 296, 215), "other", 0)]),          # cut at tile a's edge
++             (b, [("rh-2 ", (250, 100, 291, 121), "zoning code", 0),           # tile b's read of it, 50 px in: kept
++                  ("CITY AND", (280, 200, 380, 215), "other", 0),              # read whole in tile b only
++                  ("RM-1", (330, 150, 360, 165), "zoning code", 0)])]          # tile b's alone
++    recs = _records(tiles)
++    sd = _sheet_of(recs, gray)
++    f = doubt.doubt_features(sd, recs).set_index("text")
++    assert sorted(f.index) == ["CITY AND", "OF THE CIT", "P", "RM-1", "rh-2 "]
++    # the read farthest from its tile's edge is kept (tile b's); its other read is tile a's best overlapping one,
++    # chosen by IoU with no cut, its strings agreeing once folded
++    rh = f.loc["rh-2 "]
++    want = doubt.rect_iou(boxes.word_rect((250, 100, 291, 121), 0), boxes.word_rect((250, 100, 290, 120), 0))
++    assert rh["read_twice"] and rh["paired"] and rh["other_text"] == "RH-2" and rh["other_tiles"] == 1
++    assert rh["other_iou"] == pytest.approx(want) and 0.9 < want < 1 and rh["agree"] == 1
++    # a word in one tile only was read once
++    for t in ("P", "RM-1", "CITY AND"):
++        assert not f.loc[t, "read_twice"] and not f.loc[t, "paired"] and np.isnan(f.loc[t, "other_iou"])
++    # the read cut at tile a's edge lies whole in tile b too: its other read is tile b's whole one, overlapping it
++    # little (no IoU cut), the strings differing
++    cit = f.loc["OF THE CIT"]
++    assert cit["read_twice"] and cit["other_text"] == "CITY AND" and cit["agree"] == 0 and 0 < cit["other_iou"] < 0.3
++    # identical reads are the same rectangle: IoU exactly 1
++    r = boxes.word_rect((230, 100, 271, 121), 30)
++    assert doubt.rect_iou(r, r.copy()) == 1.0
++
++
++def test_a_word_shown_twice_but_read_once_has_no_pair():
++    gray = np.full((300, 500), 255, np.uint8)
++    tiles = [((0, 0, 300, 300), [("NC-1", (230, 100, 270, 120), "zoning code", 0)]),
++             ((200, 0, 500, 300), [("RM-2", (400, 100, 430, 120), "zoning code", 0)])]
++    recs = _records(tiles)
++    f = doubt.doubt_features(_sheet_of(recs, gray), recs).set_index("text")
++    assert f.loc["NC-1", "read_twice"] and not f.loc["NC-1", "paired"] and np.isnan(f.loc["NC-1", "agree"])
++
++
++def test_features_name_the_held_out_areas_each_word_touches_and_must_be_the_sheets_words():
++    gray = np.full((300, 500), 255, np.uint8)
++    recs = _records([((0, 0, 500, 300), [("R-4", (100, 100, 140, 120), "zoning code", 0),
++                                          ("ANZA ST", (300, 100, 380, 120), "street name", 0)])])
++    sd = _sheet_of(recs, gray)
++    areas = {"touch_x": _map_rect(139, 0, 200, 300), "touch_y": _map_rect(0, 0, 50, 50)}
++    f = doubt.doubt_features(sd, recs, areas)
++    assert list(f["touch_x"]) == [True, False] and list(f["touch_y"]) == [False, False]
++    assert list(f["kind"]) == ["zoning code", "street name"]
++    with pytest.raises(ValueError, match="Terra's words"):
++        doubt.doubt_features(dataclasses.replace(sd, words=sd.words[:1]), recs)
++
++
++# --- the fit ---------------------------------------------------------------------------------------------------------
++
++TRUE = {"agree": [2.5, 2.0, 1.5, 1.0, -3.0, -1.0], "one": [-2.0, -2.5, -3.0, -2.0, -2.0, -0.5],
++        "mean": [2.0, 1.8, 1.5, 1.2, -1.5, -0.8], "precision": [3.0, 3.4, 2.4, 2.0, -1.0, -0.4]}
++
++
++def _double_reads(n, seed=0) -> pd.DataFrame:
++    """Synthetic double reads drawn from the TRUE model: agreement by the logistic, the IoU 1 by the logistic `one`
++    and otherwise from Beta(mu phi, (1 - mu) phi) with logit mu by `mean` and log phi by `precision`."""
++    rng = np.random.default_rng([seed, 7])
++    kinds = np.array(list(data.KINDS))[rng.integers(4, size=n)]
++    f = pd.DataFrame({"kind": kinds, "ink_outside": rng.uniform(0, 1, n), "forced_height": rng.random(n) < 0.2})
++    x = doubt.design(f)
++    sig = lambda z: 1 / (1 + np.exp(-z))                                     # noqa: E731
++    phi = np.exp(x @ TRUE["precision"])
++    mu = sig(x @ TRUE["mean"])
++    iou = np.where(rng.random(n) < sig(x @ TRUE["one"]), 1.0, rng.beta(mu * phi, (1 - mu) * phi))
++    return f.assign(read_twice=True, paired=True, agree=(rng.random(n) < sig(x @ TRUE["agree"])).astype(float),
++                    other_iou=iou, held_out=False, answered=False)
++
++
++def test_the_fit_recovers_known_coefficients_on_synthetic_double_reads():
++    f = _double_reads(40000)
++    # a word read once, or shown twice and read once, says nothing about agreement: left out
++    extra = f.iloc[:500].assign(paired=False, agree=np.nan, other_iou=np.nan)
++    p = doubt.fit_doubt(pd.concat([f, extra], ignore_index=True))
++    assert p["rows"] == 40000 and p["features"] == list(doubt.FEATURES)
++    for part, tol in (("agree", 0.15), ("one", 0.3), ("mean", 0.06), ("precision", 0.15)):   # about 4 standard errors
++        got = np.array([p[part][k] for k in doubt.FEATURES])
++        assert np.abs(got - TRUE[part]).max() < tol, (part, got)
++
++
++def test_fit_doubt_refuses_answered_block_or_held_quarter_words():
++    f = _double_reads(200)
++    for flag in ("held_out", "answered"):
++        with pytest.raises(ValueError, match=flag):
++            doubt.fit_doubt(f.drop(columns=flag))
++        bad = f.copy()
++        bad.loc[3, flag] = True
++        with pytest.raises(ValueError, match=flag):
++            doubt.fit_doubt(bad)
++
++
++# --- the weights -----------------------------------------------------------------------------------------------------
++
++def _params():
++    return {"features": list(doubt.FEATURES),
++            **{part: dict(zip(doubt.FEATURES, map(float, TRUE[part]))) for part in TRUE}}
++
++
++def test_more_ink_outside_gives_a_lower_weight_smoothly():
++    grid_ = np.linspace(0, 1, 1001)
++    params = _params()
++    for kind in data.KINDS:
++        for forced in (False, True):
++            f = pd.DataFrame({"kind": kind, "ink_outside": grid_, "forced_height": forced})
++            box, string = doubt.doubt_weights(None, params, features=f)
++            for w, part in ((box, "mean"), (string, "agree")):
++                assert ((w > 0) & (w < 1)).all()
++                step = np.diff(w)
++                assert (step < 0).all()                                 # lower with every bit more ink outside
++                # no step: never steeper than the logistics' steepest slope allows (|b| / 4 per unit, each part)
++                bound = sum(abs(params[p]["ink_outside"]) for p in ("one", "mean")) / 4 if part == "mean" \
++                    else abs(params["agree"]["ink_outside"]) / 4
++                assert np.abs(step).max() <= bound * (grid_[1] - grid_[0]) + 1e-12
++    # on a page: the box drawn shorter over the same bar of ink, its weights fall with it
++    gray = np.full((100, 200), 255, np.uint8)
++    gray[40:43, 50:150] = 0
++    got = []
++    for x1 in (149, 139, 129, 119, 109):
++        recs = _records([((0, 0, 200, 100), [("RH-1", (50, 35, x1, 48), "zoning code", 0)])], window="0,0,200,100")
++        sd = _sheet_of(recs, gray)
++        got.append(doubt.doubt_weights(sd, params, records=recs))
++    box = np.array([g[0][0] for g in got])
++    string = np.array([g[1][0] for g in got])
++    assert (np.diff(box) < 0).all() and (np.diff(string) < 0).all()
++
++
++def test_prepare_gives_each_sheet_its_words_box_weights():
++    sd = _sheet([((40, 60, 100, 80), 0), ((120, 60, 160, 80), 0)])
++    other = _sheet([((40, 60, 100, 80), 0)], sheet="t")
++    got = doubt.prepare([sd, other], {f"{sd.series}/s": [0.25, 0.5], f"{sd.series}/t": [0.75]})
++    assert got[0].weights.dtype == np.float32 and list(got[0].weights) == [0.25, 0.5] and list(got[1].weights) == [0.75]
++    assert got[0].ink_bits is sd.ink_bits and sd.weights.shape == (0,)
++    with pytest.raises(ValueError, match="2 words"):
++        doubt.prepare([sd], {f"{sd.series}/s": [0.25]})
++    with pytest.raises(ValueError, match="no weights"):
++        doubt.prepare([sd], {})
++
++
++# --- the word targets and losses -------------------------------------------------------------------------------------
++
++def test_each_core_px_carries_its_words_weight_and_without_words_nothing_changes():
++    sd = _sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0), ((160, 40, 180, 160), 90)])
++    weighted = dataclasses.replace(sd, weights=np.array([0.25, 0.5, 0.75], np.float32))
++    for y, x, size, scale, turns in ((90, 110, 64, 0.5, 0), (100, 150, 64, 1.3, 1), (70, 120, 48, 1.0, 3)):
++        plain = data.crop_targets(sd, y, x, size, scale, turns)
++        # the targets without the word heads are the same with weights or without, byte for byte
++        got = data.crop_targets(weighted, y, x, size, scale, turns)
++        assert sorted(got) == sorted(plain)
++        for k in plain:
++            assert got[k].dtype == plain[k].dtype and np.array_equal(got[k], plain[k])
++        # with them: no weight key without weights; with weights, each core px its word's weight, 1 elsewhere
++        bare = data.crop_targets(sd, y, x, size, scale, turns, words=True)
++        heavy = data.crop_targets(weighted, y, x, size, scale, turns, words=True)
++        assert "weight" not in bare and sorted(heavy) == sorted([*bare, "weight"])
++        for k in bare:
++            assert np.array_equal(heavy[k], bare[k])
++        want = np.array([1, 0.25, 0.5, 0.75], np.float32)[heavy["tag_id"]]
++        assert heavy["weight"].dtype == np.float32 and np.array_equal(heavy["weight"], want)
++    with pytest.raises(ValueError, match="weights"):
++        data.crop_targets(dataclasses.replace(sd, weights=np.ones(2, np.float32)), 90, 110, 64, 1.0, 0, words=True)
++    with pytest.raises(ValueError, match="weights"):
++        data.crop_targets(dataclasses.replace(sd, weights=np.array([1, -1, 1], np.float32)), 90, 110, 64, 1.0, 0,
++                          words=True)
++
++
++def test_a_word_reaching_into_a_held_out_area_has_no_geometry():
++    words = [((40, 60, 120, 80), 0), ((40, 100, 120, 120), 0)]
++    free = _sheet(words)
++    held = _sheet(words, held=(_map_rect(110, 0, 320, 70),))     # holds the end of word 0's top rows only
++    a = data.crop_targets(free, 90, 70, 64, 1.0, 0, words=True)  # page columns 38-101, rows 58-121: no held px
++    b = data.crop_targets(held, 90, 70, 64, 1.0, 0, words=True)
++    assert b["known"].all() and np.array_equal(a["core"], b["core"]) and np.array_equal(a["tag_id"], b["tag_id"])
++    zero = b["tag_id"] == 1
++    assert zero.any() and (a["geo"][0] + a["geo"][1])[zero].min() > 0       # without the hold-out: a box at each px
++    assert not b["geo"][:4][:, zero].any()                       # word 0: no distances, the angle kept
++    assert np.array_equal(b["geo"][4], a["geo"][4])
++    two = b["tag_id"] == 2
++    assert np.array_equal(b["geo"][:, two], a["geo"][:, two])    # word 1 touches nothing held
++
++
++def _batch(weights=None, turns=(0, 1)):
++    sd = _sheet([((40, 60, 100, 80), 0), ((100, 60, 160, 80), 0), ((160, 40, 180, 160), 90)])
++    if weights is not None:
++        sd = dataclasses.replace(sd, weights=np.array(weights, np.float32))
++    return [data.crop_targets(sd, 90, 110, 64, 0.5, turns[0], words=True),
++            data.crop_targets(sd, 100, 150, 64, 1.3, turns[1], words=True)]
++
++
++def test_word_tensors_weigh_each_words_px_and_leave_a_weightless_word_untagged():
++    plain = train.word_tensors(_batch())
++    ones = train.word_tensors(_batch([1, 1, 1]))
++    for p, o in zip(plain, ones):
++        assert p.dtype == o.dtype and torch.equal(p, o)
++    core, geo, tag, known, groups = train.word_tensors(_batch([0.5, 0, 1]))
++    crops = _batch([0.5, 0, 1])
++    ids = torch.from_numpy(np.stack([c["tag_id"] for c in crops]).astype(np.int64))
++    assert torch.equal(known, torch.tensor([1.0, 0.5, 0.0, 1.0])[ids] * plain[3])
++    assert not tag[ids == 2].any() and (tag[ids == 1] > 0).all() and torch.equal(groups, torch.arange(1, 3))
++
++
++def _out(seed=1):
++    return torch.randn(2, 16, 64, 64, generator=torch.Generator().manual_seed(seed))
++
++
++def test_word_losses_scale_with_the_weights_and_a_weightless_word_gives_no_gradient():
++    crops = _batch()
++    ids = torch.from_numpy(np.stack([c["tag_id"] for c in crops]).astype(np.int64))
++    # weight 0: nothing of the word's px reaches the loss; the others' do
++    out = _out().requires_grad_()
++    loss, _ = train.word_loss(out, *train.word_tensors(_batch([0, 1, 1])))
++    loss.backward()
++    g = out.grad.abs().sum(1)
++    assert not g[ids == 1].any() and (g[ids == 2] > 0).all()
++    # all ones: the loss without weights, bit for bit
++    same = train.word_loss(_out(), *train.word_tensors(_batch([1, 1, 1])))
++    plain = train.word_loss(_out(), *train.word_tensors(crops))
++    assert torch.equal(same[0], plain[0]) and torch.equal(same[1], plain[1])
++    # the geometry and pull are weighted means over the words: the parts with weights (a, b, c) are the single
++    # words' parts weighed by their weight and px (geometry) or by their weight (pull, one crop each word)
++
++    def parts(w):
++        return dict(zip(train.WORD_PARTS, train.word_loss(_out(), *train.word_tensors(_batch(w)))[1].tolist()))
++
++    def px(w):
++        return float(train.word_tensors(_batch(w))[3].mul(torch.from_numpy(
++            np.stack([c["core"] for c in _batch(w)]).astype(np.float32))).sum())
++
++    single = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
++    weights = [0.2, 0.5, 0.9]
++    mass = [px(s) for s in single]
++    for part in ("iou", "direction"):
++        want = sum(w * m * parts(s)[part] for w, m, s in zip(weights, mass, single)) / sum(
++            w * m for w, m in zip(weights, mass))
++        assert parts(weights)[part] == pytest.approx(want, rel=1e-5)
++
++
++def test_pull_is_each_crops_weighted_mean_of_its_words():
++    # one crop holding two words: its pull is their pulls weighed by their weights
++    sd = _sheet([((40, 60, 100, 80), 0), ((110, 60, 170, 80), 0)])
++    out = torch.randn(1, 16, 96, 96, generator=torch.Generator().manual_seed(3))
++
++    def pull(w):
++        crop = data.crop_targets(dataclasses.replace(sd, weights=np.array(w, np.float32)), 70, 105, 96, 1.0, 0,
++                                 words=True)
++        return dict(zip(train.WORD_PARTS, train.word_loss(out, *train.word_tensors([crop]))[1].tolist()))
++
++    a, b = pull([1, 0])["pull"], pull([0, 1])["pull"]
++    assert pull([0.3, 0.6])["pull"] == pytest.approx((0.3 * a + 0.6 * b) / 0.9, rel=1e-5)
++    assert pull([0.3, 0.6])["push"] == pytest.approx(pull([1, 1])["push"], rel=1e-6)
++    assert pull([0, 1])["push"] == 0
++
++
++def test_a_word_with_no_geometry_teaches_its_core_but_not_its_box():
++    crops = _batch()
++    core, geo, tag, known, groups = train.word_tensors(crops)
++    ids = torch.from_numpy(np.stack([c["tag_id"] for c in crops]).astype(np.int64))
++    geo = geo.clone()
++    geo[:, :4] = torch.where((ids == 1)[:, None], torch.zeros_like(geo[:, :4]), geo[:, :4])   # word 0: no distances
++    out = _out().requires_grad_()
++    loss, _ = train.word_loss(out, core, geo, tag, known, groups)
++    loss.backward()
++    on = ids == 1
++    assert not out.grad[:, model.GEO].abs().sum(1)[on].any() and not out.grad[:, 5:7].abs().sum(1)[on].any()
++    assert (out.grad[:, model.CORE][on] != 0).any() and (out.grad[:, model.GEO].abs().sum(1)[ids == 2] > 0).all()
++
++
++def test_hard_negatives_count_a_weighted_positive_by_its_weight():
++    target = torch.zeros(1, 2, 4)
++    target[0, 0, 0] = 1
++    known = torch.ones(1, 2, 4)
++    known[0, 0, 0] = 0.5                                  # one positive of weight 0.5: k = 1.5 negatives
++    logit = torch.tensor([[[0.0, 3.0, 2.0, 1.0], [-1.0, -2.0, -3.0, -4.0]]])
++    bce = torch.nn.functional.binary_cross_entropy_with_logits(logit, target, reduction="none")
++    want = (0.5 * bce[0, 0, 0] + bce[0, 0, 1] + 0.5 * bce[0, 0, 2]) / 2.0
++    assert torch.allclose(train._ohem_bce(logit, target, known), want)

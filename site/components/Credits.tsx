@@ -1,13 +1,14 @@
+import { RUMSEY_CREDIT } from "@/lib/credits";
 import styles from "./endmatter.module.css";
 
-export const RUMSEY_CREDIT = "David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries";
+export { RUMSEY_CREDIT };
 /**
  * Who made this site, shown in the credits. If you run a modified version, replace it with the
- * attribution NOTICE section 1 requires of works based on this code:
+ * credit from NOTICE, which we ask you to show:
  * "Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)."
  */
 export const ATTRIBUTION = "sfzoning.com by Steven Bacio for GrowSF (https://growsf.org).";
-/** Where users of this site can get its source code (AGPL section 13). */
+/** Where the site's source code is published. */
 export const SOURCE_URL = "https://github.com/Grow-SF/sfzoning";
 
 export default function Credits() {
@@ -39,7 +40,7 @@ export default function Credits() {
         </li>
         <li>
           <strong>About and license:</strong> {ATTRIBUTION} © 2026 GrowSF. Code:{" "}
-          <a href="https://www.gnu.org/licenses/agpl-3.0.html">AGPL-3.0</a>, with the{" "}
+          <a href="https://www.apache.org/licenses/LICENSE-2.0">Apache-2.0</a>, with the{" "}
           <a href={SOURCE_URL}>source on GitHub</a>. Content and data:{" "}
           <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/">CC BY-NC-SA 4.0</a>. Provided as is,
           without warranty, and not an official zoning record. GrowSF™ is a trademark of GrowSF.

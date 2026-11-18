@@ -44,15 +44,24 @@ far below 0.5 px in a few steps and is exactly consistent with to_world. Points 
 residual stays above 0.1 px afterwards get damped Newton steps (numerical Jacobian); any
 still unconverged are returned as NaN with one warnings.warn naming the count (never
 raises, never returns a wrong value).
+
+grid_to_pixel: to_pixel for large batches (the sheet warp's hundreds of thousands of points). to_world is
+sampled every `step` px over the page and GRID_MARGIN_STEPS steps beyond it, once per page shape and step, and read
+between the samples as its affine part plus a cubic spline of the rest; to_pixel's own iteration inverts that from
+to_pixel's own start, and one fixed-point step on to_world itself finishes. With 32 px steps, within 7e-5 px of
+to_pixel on the two sheets measured (1948 sheet 11, 1964 p17: 1.5 and 1.8 million points); the exact step is most of
+its time.
 """
 from __future__ import annotations
 
 import warnings
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
 from scipy.interpolate import RBFInterpolator
+from scipy.ndimage import map_coordinates, spline_filter
 
 MIN_GCPS = 3
 TPS_MIN_GCPS = 10
@@ -60,6 +69,8 @@ _INV_ITERS = 25
 _INV_TOL_PX = 1e-6
 _CONVERGED_PX = 0.1
 _MIN_COND = 1e-6
+GRID_MARGIN_STEPS = 16   # grid_to_pixel samples this many steps beyond the page each way, and reads the spline up
+                         # to half as far: near the samples' edge it bends away (its ends are mirrored)
 
 
 # SheetTransform.check_warpable: any real scan's ft/px lies well inside this range.
@@ -76,15 +87,80 @@ class GCP:
     enabled: bool = True
 
 
+@dataclass(eq=False)
+class Correction:
+    """A small displacement field laid over a placement: page px -> extra page px, bilinear between
+    grid nodes and 0 outside the grid. grid[0] is the x displacement and grid[1] the y displacement
+    at each node (row = y, column = x); node (0, 0) sits at page px `origin`, nodes `spacing` px apart."""
+    grid: np.ndarray
+    spacing: float
+    origin: np.ndarray
+    file: str | None = None
+
+    def u(self, p: np.ndarray) -> np.ndarray:
+        """Displacement (n, 2) at page px (n, 2)."""
+        rows = (p[:, 1] - self.origin[1]) / self.spacing
+        cols = (p[:, 0] - self.origin[0]) / self.spacing
+        return np.stack([map_coordinates(self.grid[k], [rows, cols], order=1, mode="constant", cval=0.0)
+                         for k in (0, 1)], -1)
+
+    def save(self, path: Path, **extra) -> None:
+        np.savez(path, Gc=self.grid, spacing=self.spacing, origin=self.origin, **extra)
+
+    @classmethod
+    def load(cls, path: Path) -> "Correction":
+        path = Path(path)
+        with np.load(path) as z:
+            return cls(grid=z["Gc"], spacing=float(z["spacing"]),
+                       origin=np.asarray(z["origin"], float), file=path.name)
+
+
+class _SampledPlacement:
+    """A placement's to_world on a page of `page_shape` (h, w) and up to GRID_MARGIN_STEPS / 2 steps beyond it (where
+    it `covers`), read from samples every `step` px over the page and GRID_MARGIN_STEPS steps beyond it: its affine
+    part exactly, the rest (the smooth TPS part) by a cubic spline through the samples."""
+
+    def __init__(self, transform: "SheetTransform", page_shape: tuple[int, int], step: int):
+        h, w = page_shape
+        self.transform = transform
+        self.step, self.margin = float(step), float(GRID_MARGIN_STEPS * step)
+        xs = np.arange(-self.margin, w + self.margin + step, step)
+        ys = np.arange(-self.margin, h + self.margin + step, step)
+        self.low, self.high = -0.5 * self.margin, np.array([w, h]) + 0.5 * self.margin
+        gx, gy = np.meshgrid(xs, ys)
+        samples = np.c_[gx.ravel(), gy.ravel()]
+        rest = transform.to_world(samples) - transform._affine_to_world(samples)
+        self.coefficients = [spline_filter(rest[:, k].reshape(gx.shape), order=3, mode="mirror") for k in (0, 1)]
+
+    def covers(self, p: np.ndarray) -> np.ndarray:
+        return ((p >= self.low) & (p <= self.high)).all(axis=1)
+
+    def to_world(self, p: np.ndarray) -> np.ndarray:
+        rows_cols = [(p[:, 1] + self.margin) / self.step, (p[:, 0] + self.margin) / self.step]
+        rest = np.stack([map_coordinates(c, rows_cols, order=3, mode="mirror", prefilter=False)
+                         for c in self.coefficients], -1)
+        return self.transform._affine_to_world(p) + rest
+
+
 @dataclass
 class SheetTransform:
     gcps: list[GCP]
     smoothing: float  # TPS ridge in ft^2 (see module docstring); 0 is forbidden
+    correction: Correction | None = None  # laid over the fitted placement; nothing is re-fitted
 
     def __post_init__(self):
         self._fitted = False
         self._rbf = None
         self._sig = None
+        self._uncorrected = None
+        self._sampled = {}           # grid_to_pixel's samples of to_world, per (page shape, step); dropped by fit()
+
+    def uncorrected(self) -> "SheetTransform":
+        """The same placement without the correction (kept while the GCPs and smoothing are unchanged)."""
+        base = self._uncorrected
+        if base is None or base.gcps is not self.gcps or base.smoothing != self.smoothing:
+            base = self._uncorrected = SheetTransform(self.gcps, self.smoothing)
+        return base
 
     def _signature(self):
         return (tuple((g.px, g.py, g.wx, g.wy) for g in self._enabled()), self.smoothing)
@@ -124,12 +200,15 @@ class SheetTransform:
         # d(world)/d(px) of the affine part, for inversion
         self._lin = coef[:2].T / self._ps
         self._lin_inv = np.linalg.inv(self._lin)
+        self._sampled = {}
         self._sig = self._signature()
         self._fitted = True
         return self
 
     # -- evaluation --------------------------------------------------------
     def to_world(self, px: np.ndarray) -> np.ndarray:
+        if self.correction is not None:
+            return self._corrected_to_world(px)
         self._ensure_fit()
         p = np.atleast_2d(np.asarray(px, float))
         pn = (p - self._pm) / self._ps
@@ -138,7 +217,38 @@ class SheetTransform:
             out = out + self._rbf(pn)
         return out + self._wm
 
+    def _affine_to_world(self, px: np.ndarray) -> np.ndarray:
+        """to_world's affine part alone (no correction)"""
+        self._ensure_fit()
+        pn = (np.atleast_2d(np.asarray(px, float)) - self._pm) / self._ps
+        return np.c_[pn, np.ones(len(pn))] @ self._coef + self._wm
+
+    def _corrected_to_world(self, px: np.ndarray) -> np.ndarray:
+        """Uncorrected to_world(p), p solving p + u(p) = q: damped fixed-point steps that keep the best p
+        found (where the correction changes sharply between nodes this is the closest it gets)."""
+        u = self.correction.u
+        q = np.atleast_2d(np.asarray(px, float))
+        if not len(q):
+            return self.uncorrected().to_world(q)
+        p = q - u(q)
+        best, err = p.copy(), np.linalg.norm(p + u(p) - q, axis=1)
+        for _ in range(60):
+            p = p + 0.5 * (q - u(p) - p)
+            e = np.linalg.norm(p + u(p) - q, axis=1)
+            better = e < err
+            best[better], err[better] = p[better], e[better]
+            if err.max() < 1e-4:
+                break
+        return self.uncorrected().to_world(best)
+
     def to_pixel(self, w: np.ndarray) -> np.ndarray:
+        if self.correction is not None:
+            # the correction's own direction: the uncorrected pixel plus u there, no inverting
+            p = self.uncorrected().to_pixel(w)
+            ok = np.isfinite(p).all(axis=1)
+            out = p.copy()
+            out[ok] = p[ok] + self.correction.u(p[ok])
+            return out
         self._ensure_fit()
         w = np.atleast_2d(np.asarray(w, float))
         p = self._pm + (w - self.to_world(self._pm[None])) @ self._lin_inv.T
@@ -162,6 +272,44 @@ class SheetTransform:
                 p[bad] = np.nan
                 warnings.warn(f"to_pixel: {int(bad.sum())} point(s) did not converge; "
                               "returned NaN", RuntimeWarning, stacklevel=2)
+        return p
+
+    def grid_to_pixel(self, w: np.ndarray, page_shape: tuple[int, int], step: int = 32) -> np.ndarray:
+        """to_pixel(w) for a large batch on a page of `page_shape` (h, w), through to_world sampled every `step` px
+        (see the module docstring).  A point the spline's iteration leaves off the samples, or whose exact step is
+        more than 0.1 px (more than to_pixel allows a point it calls converged), or that isn't finite, is placed by
+        to_pixel itself: the result is non-finite exactly where to_pixel's is."""
+        if self.correction is not None:
+            # the correction's own direction, as to_pixel: the uncorrected pixel plus u there
+            p = self.uncorrected().grid_to_pixel(w, page_shape, step)
+            ok = np.isfinite(p).all(axis=1)
+            out = p.copy()
+            out[ok] = p[ok] + self.correction.u(p[ok])
+            return out
+        self._ensure_fit()
+        w = np.atleast_2d(np.asarray(w, float))
+        key = (tuple(int(n) for n in page_shape), int(step))
+        if key not in self._sampled:
+            self._sampled[key] = _SampledPlacement(self, page_shape, step)
+        sampled = self._sampled[key]
+        p = np.full(w.shape, np.nan)
+        placed = np.isfinite(w).all(axis=1)
+        wf = w[placed]
+        q = self._pm + (wf - self.to_world(self._pm[None])) @ self._lin_inv.T
+        for _ in range(_INV_ITERS if len(q) else 0):
+            st = (wf - sampled.to_world(q)) @ self._lin_inv.T
+            q = q + st
+            if np.abs(st).max() < _INV_TOL_PX:
+                break
+        on = sampled.covers(q)
+        exact_step = (wf[on] - self.to_world(q[on])) @ self._lin_inv.T
+        q[on] = q[on] + exact_step
+        converged = np.zeros(len(q), bool)
+        converged[on] = np.linalg.norm(exact_step, axis=1) <= _CONVERGED_PX
+        placed[placed] = converged
+        p[placed] = q[converged]
+        if not placed.all():
+            p[~placed] = self.to_pixel(w[~placed])
         return p
 
     def _newton(self, p, w, iters=60):
@@ -236,8 +384,22 @@ class SheetTransform:
 
     # -- serialization -----------------------------------------------------
     def to_json(self) -> dict:
-        return {"smoothing": self.smoothing, "gcps": [asdict(g) for g in self.gcps]}
+        """The placement as transform.json holds it; a correction is named by its file (beside transform.json), so a
+        correction that has no file yet can't be written."""
+        d = {"smoothing": self.smoothing, "gcps": [asdict(g) for g in self.gcps]}
+        if self.correction is not None:
+            if self.correction.file is None:
+                raise ValueError("this placement's correction has no file to name in transform.json (only a "
+                                 "correction loaded from its file has one)")
+            d["correction"] = {"file": self.correction.file}
+        return d
 
     @classmethod
-    def from_json(cls, d: dict) -> "SheetTransform":
-        return cls([GCP(**g) for g in d["gcps"]], float(d["smoothing"]))
+    def from_json(cls, d: dict, folder: Path | None = None) -> "SheetTransform":
+        """`folder` is where a correction file named in `d` lives (beside the placement's transform.json)."""
+        correction = None
+        if d.get("correction"):
+            if folder is None:
+                raise ValueError("this placement carries a correction file; pass the folder it is in")
+            correction = Correction.load(Path(folder) / d["correction"]["file"])
+        return cls([GCP(**g) for g in d["gcps"]], float(d["smoothing"]), correction)

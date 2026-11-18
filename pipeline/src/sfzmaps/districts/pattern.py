@@ -619,12 +619,11 @@ def read_sheet(series: str, sheet_id: str, parcels, *, swatches: dict | None = N
 
 
 def read_series(series: str, *, sheets: list[str] | None = None, client=None) -> pd.DataFrame:
-    """Read every (or the listed) sheet of a pattern series over the active modern parcels,
-    each parcel on its highest-priority covering sheet (sampling.assign_sheets)."""
-    import geopandas as gpd
+    """Read every (or the listed) sheet of a pattern series over the lots of its year
+    (read.load_parcels), each parcel on its highest-priority covering sheet (sampling.assign_sheets)."""
+    from sfzmaps.districts.read import load_parcels, series_year
 
-    parcels = gpd.read_parquet(config.REF_DIR / "parcels.parquet")
-    parcels = parcels[parcels["active"]].reset_index(drop=True)
+    parcels = load_parcels(series_year(series))
     assigned = sampling.assign_sheets(parcels, series)
     parcels["sheet"] = assigned.to_numpy()
     swatches = legend_swatches(series, client=client)

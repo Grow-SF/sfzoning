@@ -1,0 +1,281 @@
+# Review package: 318ad8b..102f422
+
+## Commits
+102f422 linegate: m2_clean_words (all ink in clean Terra words, no line rule inside) and clean_word_mask, with tests
+
+## Files changed
+ pipeline/src/sfzmaps/solver/textnet/linegate.py | 47 ++++++++++++++++++++++-
+ pipeline/tests/test_textnet_linegate.py         | 51 +++++++++++++++++++++++++
+ 2 files changed, 96 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/pipeline/src/sfzmaps/solver/textnet/linegate.py b/pipeline/src/sfzmaps/solver/textnet/linegate.py
+index 05ef996..906064f 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/linegate.py
++++ b/pipeline/src/sfzmaps/solver/textnet/linegate.py
+@@ -13,20 +13,23 @@ by the px's map point) is one of those asked for:
+   m1a_context   a diagnostic, in no verdict: the same weight beyond the cut (the profile's tail: ink near district
+                 borders that is not the line's own), m1a_context and m1a_in_box_context (`Geo.context_weight`; None for
+                 a geo without it)
+   m1b_*         straight-line ink called text: the run rule's px (`linerules.line_px` at the sheet's scale), split by
+                 box (in_box, near, far) and by the distance to the nearest of Sol's label points (m1b_by_point:
+                 0-30, 30-100, 100+ px)
+   m1c           all ink outside every Terra word box called text, nothing excluded
+   m2            text found: ink inside a Terra word box that is not a run-rule px and not within 1 px of one (its 8
+                 neighbours); m2_by_kind by the kind of the word drawn last on the px (as the detector learns it), and
+                 m2_answered on the owner's answered labels' words (`Geo.answered`; None for a geo without it)
++  m2_clean_words  text found on clean words: ALL ink inside the box of a clean word (`clean_word_mask`), with no line
++                rule applied inside the word, so long letter strokes (big P and M stems, bold letters joined to a
++                hyphen) count; m2_clean_words_by_kind by the kind of the word drawn last on the px
+   overlap_band  ink inside a word box that is a run-rule px or within 1 px of one: reported on its own, never in m2
+ 
+ "In box": inside a Terra word's rectangle (`data.SheetData.words`, filled as `data._paint` fills them); "near": in
+ none, within NEAR_PX px of one (px centres, Euclidean); "far": farther.  Line ink by the run rule is the rule's, so
+ `rules` gives the rule's accuracy on exact-truth cases (`linerules.rule_accuracy`) beside every number, and the M1a
+ weight's table goes with M1a (`m1a_weight`).
+ 
+ Each measure: `px` (for M1a the sum of w), `called_05` and `called_09` (the share of px whose chance is at least 0.5
+ or 0.9: CALLED_05 and CALLED_09 of 255), `mean` (the mean chance), `log_loss` (against the measure's TARGET: not text
+ for M1, text for M2 and the overlap band, which mixes line and glyph ink; the chance clipped to 1e-4 .. 1 - 1e-4) and
+@@ -69,32 +72,34 @@ from sfzmaps.solver import borders, grid, page, paths
+ from sfzmaps.solver.city import city
+ from sfzmaps.solver.textnet import data, linerules
+ 
+ ChanceSource = Callable[[str], np.ndarray]
+ 
+ CALLED_05 = 128           # a chance of at least 0.5 (127.5 of 255): `scores.CALLED`
+ CALLED_09 = 230           # a chance of at least 0.9 (229.5 of 255)
+ NEAR_PX = 30              # page px from a word box that are "near" it
+ POINT_BINS = (("0-30", 30.0), ("30-100", 100.0), ("100+", np.inf))   # px to the nearest Sol point, upper ends kept
+ KINDS = tuple(data.KINDS)                                              # m2_by_kind, in data.KINDS' order
++CLEAN_PX = 3              # a clean word has no run-rule ink within this many px outside its box
+ CLIP = 1e-4               # the chance is clipped to CLIP .. 1 - CLIP in the log loss
+ BOOT_CHUNK = 100          # bootstrap draws made at a time
+ FIELDS = ("px", "called_05", "called_09", "chance", "log_loss")       # the sums per block (float64)
+ STATS = {"called_05": "called_05", "called_09": "called_09", "mean": "chance", "log_loss": "log_loss"}
+ SCORES_FILE, MARKDOWN_FILE, BLOCKS_FILE = "scores.json", "scores.md", "blocks.npz"
+ LEARNED_RULES = paths.SOLVER_DIR / "experiments" / "textlines" / "rules.json"   # `scripts/textlines/rules.py`
+ 
+ M1A = ("m1a", "m1a_in_box", "m1a_near", "m1a_far")
+ CONTEXT = ("m1a_context", "m1a_in_box_context")          # the weight beyond the cut: a diagnostic, in no verdict
+ WEIGHTED = (*M1A, *CONTEXT)                               # px are the sum of a weight
+ M1B = ("m1b_in_box", "m1b_near", "m1b_far", *(f"m1b_by_point:{b}" for b, _ in POINT_BINS))
+-M2 = ("m2", *(f"m2_by_kind:{k}" for k in KINDS), "m2_answered")
++M2 = ("m2", *(f"m2_by_kind:{k}" for k in KINDS), "m2_answered",
++      "m2_clean_words", *(f"m2_clean_words_by_kind:{k}" for k in KINDS))
+ MEASURES = (*M1A, *CONTEXT, *M1B, "m1c", *M2, "overlap_band")
+ TARGET = {m: ("text" if m.startswith("m2") or m == "overlap_band" else "not text") for m in MEASURES}
+ WHAT = {
+     "m1a": "ink, weighted by w(d) to the nearest district crack",
+     "m1a_in_box": "the same, inside a Terra word box",
+     "m1a_near": "the same, within 30 px of a box",
+     "m1a_far": "the same, farther",
+     "m1a_context": "diagnostic: ink weighted by w(d) beyond the cut",
+     "m1a_in_box_context": "diagnostic: the same, inside a box",
+     "m1b_in_box": "run-rule line ink inside a box",
+@@ -103,36 +108,40 @@ WHAT = {
+     "m1b_by_point:0-30": "run-rule line ink within 30 px of a Sol point",
+     "m1b_by_point:30-100": "run-rule line ink 30-100 px from a Sol point",
+     "m1b_by_point:100+": "run-rule line ink over 100 px from a Sol point",
+     "m1c": "all ink outside every box",
+     "m2": "in-box ink, not run-rule ink or within 1 px of it",
+     "m2_by_kind:zoning code": "the same, in a zoning code's box",
+     "m2_by_kind:block number": "the same, in a block number's box",
+     "m2_by_kind:street name": "the same, in a street name's box",
+     "m2_by_kind:other": "the same, in another word's box",
+     "m2_answered": "the same, in an owner-answered label's box",
++    "m2_clean_words": "all ink in the box of a clean word (no run rule applied inside it)",
++    **{f"m2_clean_words_by_kind:{k}": f"the same, in a clean {k}'s box" for k in KINDS},
+     "overlap_band": "in-box ink that is run-rule ink or within 1 px of it",
+ }
+ # What each measure would miss (the spec: a gate states what it would miss), one line per family, in scores.md.
+ MISSES = {
+     "m1a, m1a_in_box, m1a_near, m1a_far": "weight 0 on the margins, the cut boxes and other series' sheets (not on "
+     "the merged page) and beyond each class's cut; ink within the cut is weighted by the city's average, so label ink "
+     "touching a district border carries some weight too",
+     "m1a_context, m1a_in_box_context": "a diagnostic only: mostly ink near district borders that is not the line's own "
+     "(labels, block outlines); in no verdict",
+     "m1b_*": "lines the run rule misses (stair-step district lines: recall 0.08; dashed: 0.02); a few glyph px it calls "
+     "line (the table below)",
+     "m1c": "counts as not-text the ink in the other passes' boxes (`sd.other`, unknown in training), text Terra missed "
+     "(near Sol's points, unknown in training too) and the margins' text",
+     "m2, m2_by_kind, m2_answered": "counts as text the lines the run rule misses inside boxes (stair-step and dashed "
+     "lines); leaves out glyph ink within 1 px of a run-rule line (in the overlap band); m2_answered only the answered "
+     "labels with a Terra box",
++    "m2_clean_words, m2_clean_words_by_kind": "words touching or crossed by lines are left out; it measures letters, "
++    "including long strokes, on clean words only",
+     "overlap_band": "mixes line and glyph ink, so neither target is right; its log loss is against text",
+ }
+ _PROB = np.clip(np.arange(256) / 255.0, CLIP, 1 - CLIP)
+ _LOSS = {"text": -np.log(_PROB), "not text": -np.log1p(-_PROB)}       # by chance x 255
+ 
+ 
+ # --- where the chance comes from -------------------------------------------------------------------------------------
+ 
+ def folder_source(folder: Path, layout: str) -> ChanceSource:
+     """A source reading each sheet's chance from `folder`: `<sheet>.png` ("flat", as `paths.TEXT_CHANCE_DIR`) or
+@@ -434,20 +443,50 @@ class _Sums:
+         return {"quarter": (units >> 32).astype(np.int8), "block": ((units & 0xFFFFFFFF) - 1).astype(np.int32), **s}
+ 
+ 
+ def _page_raster(a, sd: data.SheetData, what: str, dtype) -> np.ndarray:
+     a = np.asarray(a)
+     if a.shape != (sd.height, sd.width):
+         raise ValueError(f"the geo's {what} of {sd.sheet} is {a.shape}, not its page's shape {(sd.height, sd.width)}")
+     return a.astype(dtype, copy=False)
+ 
+ 
++def clean_word_mask(sd: data.SheetData, line: np.ndarray) -> np.ndarray:
++    """Which of the sheet's Terra words are clean, bool (len(sd.words),): every 8-connected piece of ink that touches
++    the word's box lies wholly inside it, and no run-rule px (`line`, `linerules.line_px`) is within CLEAN_PX px outside
++    the box (a line's px inside the box are in a crossing piece, caught by the first test; a long letter stroke inside
++    the box is no reason to leave the word out).  Task 6's composites use the same words."""
++    out = np.zeros(len(sd.words), bool)
++    if not len(sd.words):
++        return out
++    ink = data.page_ink(sd)
++    n, label = cv2.connectedComponents(ink.view(np.uint8), connectivity=8)
++    size = np.bincount(label.ravel(), minlength=n)
++    reach = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * CLEAN_PX + 1, 2 * CLEAN_PX + 1))
++    for j, rect in enumerate(sd.words):
++        lo = np.maximum(rect.min(axis=0) - CLEAN_PX, 0)
++        hi = np.minimum(rect.max(axis=0) + CLEAN_PX + 1, [sd.width, sd.height])
++        if (hi <= lo).any():
++            continue
++        shape = (hi[1] - lo[1], hi[0] - lo[0])
++        box = np.zeros(shape, np.uint8)
++        cv2.fillPoly(box, [(rect - lo).reshape(-1, 1, 2)], 1)
++        window = (slice(lo[1], hi[1]), slice(lo[0], hi[0]))
++        ring = (cv2.dilate(box, reach) > 0) & (box == 0)
++        if line[window][ring].any():
++            continue
++        inside = label[window][(box > 0) & ink[window]]
++        pieces, got = np.unique(inside, return_counts=True)
++        out[j] = bool((size[pieces] == got).all())
++    return out
++
++
+ def _add_sheet(sums: dict[str, _Sums], sd: data.SheetData, chance: np.ndarray, quarter_ix: np.ndarray, geo) -> None:
+     """Add one sheet's px to every measure's sums (see the module)."""
+     if not np.isfinite(sd.ft_per_px):
+         raise ValueError(f"{sd.series} {sd.sheet} has no scale (read it with its placement): the run rule needs it")
+     h, w = sd.height, sd.width
+     ink = data.page_ink(sd)
+     quarter = _page_raster(geo.quarter(sd), sd, "quarter", np.uint8)
+     scope = ink & np.isin(quarter, quarter_ix)
+     if not scope.any():
+         return
+@@ -493,20 +532,24 @@ def _add_sheet(sums: dict[str, _Sums], sd: data.SheetData, chance: np.ndarray, q
+         sums[f"m1b_by_point:{name}"].add(q[j], blk[j], c[j])
+         lower = upper
+     add("m1c", scope & ~in_box)
+     base = scope & in_box & ~by_line
+     add("m2", base)
+     kind = np.concatenate([[data.NO_KIND], sd.kinds]).astype(np.uint8)[word]
+     for name in KINDS:
+         add(f"m2_by_kind:{name}", base & (kind == data.KINDS[name]))
+     if "m2_answered" in sums:
+         add("m2_answered", base & _page_raster(geo.answered(sd), sd, "answered words", bool))
++    clean = np.concatenate([[False], clean_word_mask(sd, line)])[word]
++    add("m2_clean_words", scope & clean)
++    for name in KINDS:
++        add(f"m2_clean_words_by_kind:{name}", scope & clean & (kind == data.KINDS[name]))
+     add("overlap_band", scope & in_box & by_line)
+ 
+ 
+ def _draws(n: int, boot: int, seed: int):
+     """The bootstrap's draws of `n` units with replacement, BOOT_CHUNK draws (rows) at a time, from one generator."""
+     rng = np.random.default_rng(seed)
+     for i in range(0, boot, BOOT_CHUNK):
+         yield rng.integers(0, n, (min(BOOT_CHUNK, boot - i), n))
+ 
+ 
+@@ -575,21 +618,21 @@ def gate_sheets(sheets: list[data.SheetData], source: ChanceSource, quarters: tu
+         "targets": {m: TARGET[m] for m in MEASURES}, "misses": MISSES,
+     }
+     for m in MEASURES:
+         if ":" in m:
+             group, part = m.split(":")
+             result.setdefault(group, {})[part] = summary[m]
+         else:
+             result[m] = summary.get(m)
+     result["m1a_weight"] = getattr(geo, "weight_table", None)
+     result["block_key"] = getattr(geo, "block_key", None)
+-    result["rules"] = {"rule": "the run rule (linerules.line_px): defines m1b, m2's base and the overlap band",
++    result["rules"] = {"rule": "the run rule (linerules.line_px): defines m1b, m2's base, the overlap band and which words are clean",
+                        "putText": rule_table()}
+     return result, tallies
+ 
+ 
+ def gate(source: ChanceSource, quarters: tuple[str, ...], geo: Geo | None = None, boot: int = 1000,
+          seed: int = 0) -> tuple[dict, dict]:
+     """`gate_sheets` on the 2000 sheets (`paths.SHEETS`, with their placements, Terra's words and Sol's points;
+     `data.load_sheets`), by `CityGeo` unless `geo` is given; with the run rule's accuracy on the learned font beside
+     cv2.putText's when `scripts/textlines/rules.py` has written it (LEARNED_RULES).  Returns (result, tallies)."""
+     paths.check_sheets()
+diff --git a/pipeline/tests/test_textnet_linegate.py b/pipeline/tests/test_textnet_linegate.py
+index 9b5ea67..57c769b 100644
+--- a/pipeline/tests/test_textnet_linegate.py
++++ b/pipeline/tests/test_textnet_linegate.py
+@@ -261,10 +261,61 @@ def test_page_to_grid_round_trip_within_one_px():
+     back_y, back_x = np.zeros(len(ys), np.int64), np.zeros(len(ys), np.int64)
+     seen = np.zeros(len(ys), bool)
+     box = (int(rows.min()), int(rows.max()) + 1, int(cols.min()), int(cols.max()) + 1)
+     for rs, cs, _, yi, xi in page.sheet_px(transform, np.ones(gray.shape, bool), (grid.HEIGHT, grid.WIDTH), box):
+         mine = (rows >= rs.start) & (rows < rs.stop)
+         r, c = rows[mine] - rs.start, cols[mine] - cs.start
+         back_y[mine], back_x[mine] = yi[r, c], xi[r, c]
+         seen |= mine
+     assert seen.all()
+     assert np.abs(back_y - ys).max() <= 1 and np.abs(back_x - xs).max() <= 1
++
++
++def _page_with_words(strokes, boxes, kinds):
++    """A page of drawn ink (rectangles filled (x0, y0, x1, y1) in `strokes`) and Terra words at `boxes`."""
++    ink = np.zeros((H, W), bool)
++    for x0, y0, x1, y1 in strokes:
++        ink[y0:y1 + 1, x0:x1 + 1] = True
++    words = np.array([[[x0, y0], [x1, y0], [x1, y1], [x0, y1]] for x0, y0, x1, y1 in boxes], np.int32)
++    sd = data.SheetData(series=paths.SERIES, sheet="2000-digital-zoning-p99", height=H, width=W,
++                        ink_bits=np.packbits(ink, axis=1), words=words, kinds=np.array(kinds, np.uint8),
++                        angles=np.zeros(len(boxes), np.int16), other=np.zeros((0, 4, 2), np.int32),
++                        points=np.zeros((0, 2), np.int32), world=np.zeros((0, 0, 2)), ft_per_px=FT_PER_PX)
++    geo = FakeGeo(np.full((H, W), NE, np.uint8), np.zeros((H, W), np.int32), np.zeros((H, W), np.float32),
++                  np.zeros((H, W), bool), np.zeros((H, W), np.float32))
++    return sd, geo, ink
++
++
++def test_a_clean_words_long_stroke_the_run_rule_calls_line_still_counts_in_m2_clean_words():
++    # a big stem (4 px x 100 rows: 400 ft long, a run-rule line) and a short letter, both inside one box with 4 px to
++    # spare: the word is clean, so its stem counts; m2 leaves the stem out as line ink
++    stem, letter = (30, 30, 33, 129), (40, 100, 47, 107)
++    sd, geo, ink = _page_with_words([stem, letter], [(26, 26, 51, 133)], [data.KINDS["zoning code"]])
++    line = linerules.line_px(ink, FT_PER_PX)
++    assert line[30:130, 30:34].all(), "the run rule no longer calls this stem line"
++    assert linegate.clean_word_mask(sd, line).tolist() == [True]
++    r, _ = linegate.gate_sheets([sd], lambda s: np.full((H, W), 255, np.uint8), ("ne",), geo, boot=10)
++    assert r["m2_clean_words"]["px"] == int(ink.sum())
++    assert r["m2_clean_words"]["called_05"] == 1.0
++    assert r["m2_clean_words_by_kind"]["zoning code"]["px"] == int(ink.sum())
++    assert r["m2_clean_words_by_kind"]["street name"]["px"] == 0
++    assert r["m2"]["px"] < r["m2_clean_words"]["px"]
++
++
++def test_a_word_touched_by_a_line_is_left_out_of_m2_clean_words(crossed_word):
++    sd = crossed_word.sd
++    line = linerules.line_px(crossed_word.ink, FT_PER_PX)
++    assert linegate.clean_word_mask(sd, line).tolist() == [False]
++    r, _ = linegate.gate_sheets([sd], crossed_word.all_box_text, ("ne",), crossed_word.geo, boot=10)
++    assert r["m2_clean_words"]["px"] == 0
++
++
++def test_a_word_whose_ink_runs_out_of_its_box_is_not_clean_and_a_word_a_line_nears_is_not_either():
++    # word 0: a piece reaching past the box; word 1: whole inside, a line (50+ px run) 2 px from its box; word 2: clean
++    pieces = [(10, 20, 30, 24), (30, 20, 70, 24),                  # word 0's piece runs from x 10 to 70, box ends at 40
++              (100, 20, 106, 26), (90, 50, 200, 53),               # word 1: letter; line below at 24 px... see box
++              (220, 20, 226, 26)]
++    boxes = [(8, 18, 40, 28), (96, 16, 112, 48), (216, 16, 232, 30)]
++    sd, geo, ink = _page_with_words(pieces, boxes, [0, 0, 0])
++    line = linerules.line_px(ink, FT_PER_PX)
++    assert line[50:54, 90:201].any()
++    assert linegate.clean_word_mask(sd, line).tolist() == [False, False, True]

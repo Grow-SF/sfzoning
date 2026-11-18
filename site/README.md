@@ -70,6 +70,10 @@ Live at https://www.sfzoning.com (Vercel project `growsf/sfzoning`, root directo
 environment. To deploy from a checkout: `vercel deploy --prod` from the repository root
 (`.vercelignore` keeps `pipeline/` data out of the upload).
 
+The usual way is `uv run sfzmaps release` in `pipeline/` (checks, then both publish scripts, then a
+PR with the updated manifests; see the pipeline README, "Releasing"). The scripts stay runnable
+alone (`scripts/publish-tiles.mjs`, `scripts/publish-downloads.mjs`, each with `--dry-run`).
+
 To publish changed tiles, with `BLOB_READ_WRITE_TOKEN` from `vercel env pull`:
 
 ```sh

@@ -1,0 +1,2509 @@
+commit 600d723ab0a43642ccb9adec2d35549a5d0abc9b
+Author: Steven Bacio <steven.buss@gmail.com>
+Date:   Tue Nov 17 11:43:26 2026 -0800
+
+    wordread boxmodel, fix round 1: joined examples are the merges our boxes really make
+    
+    A logistic P(our boxes merge a pair | geometry) is fitted to soft labels (the chance one training box holds both
+    words, from the ink shares) over every pair of training words on a sheet, with no distance cut. The geometry is in
+    the first word's frame: the gap along and across, the overlap as a share of the shorter extent and in heights, the
+    angle and the height ratio. Joined examples are real pairs drawn in proportion to the fitted chance, cut as the
+    union box our grouping would make at their real place on the page, with exact targets: count 2 or more, and
+    boundary columns where the extents separate (none for a stack). A pair is drawn again when its box would touch a
+    held area or a held word. Same-line gaps are kept only as the gaps.json record. The count-0 note covers Terra's
+    misses.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01UjTgrnx2j4PhzZErrad25Q
+---
+ pipeline/scripts/wordread/run_boxmodel.py        |  24 +-
+ pipeline/src/sfzmaps/solver/wordread/boxmodel.py | 471 ++++++++++++++---------
+ pipeline/tests/test_wordread_boxmodel.py         | 219 ++++++-----
+ 3 files changed, 429 insertions(+), 285 deletions(-)
+
+diff --git a/pipeline/scripts/wordread/run_boxmodel.py b/pipeline/scripts/wordread/run_boxmodel.py
+index 12ab614..4615280 100644
+--- a/pipeline/scripts/wordread/run_boxmodel.py
++++ b/pipeline/scripts/wordread/run_boxmodel.py
+@@ -1,15 +1,15 @@
+ """Measure the learned box model's targets on today's boxes, and build or fit its examples
+ (`sfzmaps.solver.wordread.boxmodel`), writing data/solver/experiments/wordread/boxmodel/:
+ 
+-  gaps.json            per held-out quarter, the real same-line gaps of its training words (`boxmodel.same_line_gaps`:
+-                       to the next word on each word's line of text, weighted by the chance it is that): the
+-                       distribution the joined neighbours' gaps are drawn from
++  gaps.json            per held-out quarter, the same-line gaps of its training words (`boxmodel.same_line_gaps`: to
++                       the next word on each word's line of text, weighted by the chance it is that); a record only,
++                       the joined neighbours don't use them
+   counts.json          today's boxes (data/solver/boxes) against every Terra word: the expected number of boxes holding
+                        0, 1, 2 and 3+ words (the sums of their Poisson-binomial count distributions; also the counts by
+                        each box's likeliest count, for display), overall, by quarter and on the Mission Street sheet;
+                        per held-out quarter what its model trains on (boxes, joined neighbours, K), the quantiles of its
+-                       same-line gaps, and for comparison those of the gaps between words its boxes hold together
+-                       (`boxmodel.held_pair_gaps`; reported only)
++                       same-line gaps, and with `--examples` its merge model (`boxmodel.fit_merge`'s coefficients, its
++                       chance's tail mass by separation) and the geometry of today's merges against the joined pairs'
+   examples_<q>.npz     (`--examples`) the examples of the model holding q out, and their .parquet
+   <q>_seed<s>.pt       (`fit`; Task 8's arm (c)) a fitted box model, and its log <q>_seed<s>.json
+ 
+@@ -87,7 +87,7 @@ def measure(args) -> None:
+     terra = load_words()
+     boxes = wordboxes.load_boxes().reset_index(drop=True)
+     sheets = Sheets()
+-    shapes, dists, pairs = {}, [None] * len(boxes), [None] * len(boxes)
++    shapes, dists = {}, [None] * len(boxes)
+     turned_s = turned_n = 0.0
+     for sheet in sorted(set(boxes["sheet"])):
+         inputs = sheets[sheet]
+@@ -96,7 +96,6 @@ def measure(args) -> None:
+         got = B.box_targets(mine, terra[terra["sheet"] == sheet], inputs.ink)
+         for label, t in zip(mine.index, got):
+             dists[label] = t["count"]
+-            pairs[label] = [(g, w) for _, _, g, w in B.pair_gaps(t)]
+             turned_s += float((t["shares"] * t["turned"]).sum())
+             turned_n += float(t["shares"].sum())
+     mission = review.mission_sheet()
+@@ -117,15 +116,11 @@ def measure(args) -> None:
+         keep = B.training_boxes(boxes, terra, quarter=q, touch=touch, shapes=shapes)
+         d = [dists[i] for i in keep.index]
+         gaps[qn] = B.gap_distribution(B.same_line_gaps(words))
+-        held = B.gap_distribution(pd.DataFrame([gw for i in keep.index for gw in pairs[i]],
+-                                               columns=["gap", "weight"]))
+         out["folds"][qn] = {"training_words": int(len(words)), "boxes": int(len(keep)), **binned(d),
+                             "joined": int(round(sum(float(x[2:].sum()) for x in d))),
+                             "K": int(max([len(x) - 1 for x in d] + [2])),
+                             "same_line_gaps": {"pairs": gaps[qn]["n"], "weight_sum": round(gaps[qn]["weight_sum"], 2),
+-                                               "quantiles": gaps[qn]["quantiles"]},
+-                            "held_pair_gaps": {"pairs": held["n"], "weight_sum": round(held["weight_sum"], 2),
+-                                               "quantiles": held["quantiles"]}}
++                                               "quantiles": gaps[qn]["quantiles"]}}
+         print(qn, json.dumps(out["folds"][qn]))
+     B.OUT_DIR.mkdir(parents=True, exist_ok=True)
+     if args.quarters:
+@@ -138,7 +133,8 @@ def measure(args) -> None:
+             t1 = time.perf_counter()
+             words = B.training_words(terra, q)
+             keep = B.training_boxes(boxes, terra, quarter=q, touch=touch, shapes=shapes)
+-            ex = B.box_examples(keep, words, sheets, q, touch=touch, gaps=gaps[qn])
++            held = terra[~terra.index.isin(words.index)]
++            ex = B.box_examples(keep, words, sheets, q, touch=touch, held_words=held)
+             ex.save(B.OUT_DIR / f"examples_{qn}")
+             src = ex.meta["source"].value_counts().to_dict()
+             out["folds"][qn]["examples"] = {"n": len(ex), "boxes": int(src.get("box", 0)),
+@@ -146,7 +142,9 @@ def measure(args) -> None:
+                                             "channels": list(ex.channels), "columns": int(ex.flat.shape[2]),
+                                             "weight_sum": float(ex.weight.sum()),
+                                             "seconds": round(time.perf_counter() - t1, 1)}
++            out["folds"][qn]["merge"] = ex.info
+             print(qn, "examples", json.dumps(out["folds"][qn]["examples"]))
++            print(qn, "merge", json.dumps(ex.info))
+     out["seconds"] = round(time.perf_counter() - t0, 1)
+     (B.OUT_DIR / "counts.json").write_text(json.dumps(out, indent=1) + "\n")
+     print(json.dumps(out["today"], indent=1))
+diff --git a/pipeline/src/sfzmaps/solver/wordread/boxmodel.py b/pipeline/src/sfzmaps/solver/wordread/boxmodel.py
+index b54fe92..622f2e7 100644
+--- a/pipeline/src/sfzmaps/solver/wordread/boxmodel.py
++++ b/pipeline/src/sfzmaps/solver/wordread/boxmodel.py
+@@ -14,7 +14,10 @@ The examples (`box_examples`), for the model that holds one quarter of the city
+   the count     each Terra word's share of its ink inside the box's trimmed rectangle (its ink: the ink px whose
+                 centre is inside its rectangle, `textnet.boxes.word_rect`; a word with no ink px: the share of its
+                 rectangle's area), each word held or not independently with that chance, so the count is the
+-                Poisson-binomial of the shares (`poisson_binomial`): exact, no "mostly inside" cut
++                Poisson-binomial of the shares (`poisson_binomial`): exact, no "mostly inside" cut.  Count 0 holds
++                junk, a word's fragment (a letter of a letter-spaced street name holds a small share of its word), and
++                text Terra missed: its misses are count-0 label noise, which Task 7's weights (on Terra's words) can't
++                reach
+   the boundary  per crop column, the chance that the column lies between two consecutive held words: at a point x
+                 along the box's axis, P(some held word ends at or before x) x P(some held word starts at or after x) x
+                 P(no held word covers x), each word's span its rectangle's extent along the axis; integrated exactly
+@@ -23,27 +26,30 @@ The examples (`box_examples`), for the model that holds one quarter of the city
+   the weight    with Task 7's per-word weights w (the chance Terra's box is right; None: 1), an example counts
+                 prod_i (1 - s_i (1 - w_i)) over the words it may hold (s_i its share): a word charges its doubt by the
+                 chance the box holds it
+-  joined        two real Terra word crops (the reader's own crops of the words, `crops.cut` at the words' geometry),
+-  neighbours    drawn at random from the training words, laid on one line at a gap drawn from the measured
+-                distribution of real same-line gaps (`draw_gaps`), in word heights: the first word's crop up to its
+-                end, paper across the gap, the second word's crop from its start (each word's outer margin real; a
+-                negative gap overlaps them, each px from the crop with more ink there).  Count 2 and the gap's columns,
+-                known by construction; turned a half turn with the measured share of real boxes' words that read
+-                against the box's axis (`turned`), so the joined crops read both ways as the real boxes do.  How many
+-                (`joined`): by default the expected number of real boxes holding two words or more (the sum of their
+-                P(count >= 2)): measured, and an argument Task 8 may screen
+-  the gaps      (`same_line_gaps`) the real same-line gaps, on the training words: from each word's end to the start
+-                of the next word on its line of text, along its reading direction (as the joined crops lay them), over
+-                their mean height.  No line rule and no distance cut: a word ahead shares the line with the chance
+-                `line_share` (the overlap of their letters' bands over the smaller, times |cos| of the angle between
+-                their readings: stacked words, a code over its block number, and words read across it count nothing),
+-                and it is the next word with that chance times the chance that no word ahead nearer shares the line.
+-                On a map the next word on a line is mostly another label far along the street (measured 11-17: median
+-                8-10 word heights, 95th percentile 75-85; a joined crop that long is squeezed to `crops.MAX_WIDTH` as a
+-                long box is); no mixture fitted to these gaps separates the words of one phrase from them.  For
+-                comparison (`held_pair_gaps`, reported by the run script, not drawn from): the same gaps between words
+-                that one of our boxes holds together are mostly negative, since a merged box is mostly a 2-D cluster (a
+-                code with its block number tucked beside or below it), not words side by side on a line
++  the merges    the merges our boxes really make, which are mostly 2-D clusters (a code with its block number tucked
++                beside or below it), not words side by side on a line.  Every pair of training words on one sheet
++                (`pair_geometry`) has its geometry in the frame of the first word's reading direction (MERGE_FEATURES):
++                the space between their rectangles along and across it where they are apart (in their mean height),
++                where their extents overlap the overlap as a share of the shorter extent and in their mean height, the
++                angle between their readings, and |log| of their heights' ratio (so the chance falls with the space
++                either way, and the fit decides how overlap counts).  Each pair's label is the chance that one of the
++                boxes holds both (`merge_labels`: 1 - prod (1 - s_a s_b) over the boxes, the shares above).  A
++                logistic P(merge | geometry) is fitted to those soft labels (`fit_merge`).  Every pair is a candidate:
++                no distance cut, the fit decides how fast the chance falls (its tail mass beyond 1, 2, 5 and 10 heights
++                is reported; measured 11-17, 0.9-2.3% of it lies beyond 5 heights and 0.02-0.1% beyond 10)
++  joined        real pairs drawn with chance proportional to their fitted P(merge), at their real place on the page
++  neighbours    (the empirical joint of their placement): the box our grouping would make of the two merged
++                (`union_box`: `wordboxes.group`'s chance-weighted major axis and trimmed rectangle over their ink) cut
++                as a box, with its exact targets (both words' shares are 1, so the count is 2, or more where another
++                word's ink is inside; the boundary columns where the two words' extents along the axis separate, none
++                for a vertical stack).  A pair whose box would touch the held quarter or an answered block, or meet a
++                held word (`held_words`), or a word with no ink, is drawn again.  How many (`joined`): by default the
++                expected number of real boxes holding two words or more (the sum of their P(count >= 2)): measured,
++                and an argument Task 8 may screen
++  the gaps      (`same_line_gaps`, `gaps.json`; a record, not used for the joins) the space from each word to the next
++                on its line of text, the next word soft (`_shared`'s chance of sharing the line, times the chance no
++                word nearer does).  On a map that is mostly another label far along the street (measured 11-17: median
++                8-10 word heights)
+   held out     only training-quarter words outside the answered blocks: `box_examples` raises on a word whose crop
+                 touches the held quarter or an answered block (`crops.TOUCH`, as `solver-text-crops` records them), on
+                 a box in the held quarter and on a box whose crop touches either (`touch`).  `training_boxes` and
+@@ -65,7 +71,7 @@ import contextlib
+ import json
+ import math
+ import time
+-from dataclasses import dataclass
++from dataclasses import dataclass, field
+ from pathlib import Path
+ 
+ import cv2
+@@ -73,6 +79,8 @@ import numpy as np
+ import pandas as pd
+ import torch
+ import torch.nn.functional as F
++from scipy.optimize import minimize
++from scipy.special import expit
+ from torch import nn
+ 
+ from sfzmaps import gpu
+@@ -92,6 +100,11 @@ SEED = 20261117
+ OUT_DIR = runs.EXPERIMENTS_DIR / "wordread" / "boxmodel"
+ GAPS_FILE = OUT_DIR / "gaps.json"
+ QUANTILES = (0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99)      # reported only
++MERGE_FEATURES = ("along_gap", "across_gap", "along_overlap", "across_overlap", "along_overlap_h", "across_overlap_h",
++                  "angle", "height")      # a pair's geometry (`pair_geometry`)
++MERGE_RIDGE = 1e-6               # numerical: keeps the merge model's fit finite; decides nothing
++JOIN_TRIES = 100                 # pairs drawn per wanted joined example before giving up (a guard: the held areas
++#   leave too little to draw from)
+ # MobileNetV3 blocks (`textread.model.InvertedResidual`): input channels, kernel, expanded, output, squeeze-excite,
+ # hard swish, stride.  With the stem's (2, 1) a HEIGHT-px crop comes out one row tall and a quarter as wide.
+ STEM = 16
+@@ -364,7 +377,7 @@ def training_boxes(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: int, to
+     return boxes[keep]
+ 
+ 
+-# --- the gaps between words on one line -------------------------------------------------------------------------------
++# --- the gaps between words on one line (a record: gaps.json; the joined neighbours don't use them) ----------------
+ 
+ def _in_frame(rects: np.ndarray, angles: np.ndarray, angle: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+     """Words (rectangles (m, 4, 2), reading angles (m,)) in the frame of a line read at `angle`: their extents along
+@@ -378,60 +391,18 @@ def _in_frame(rects: np.ndarray, angles: np.ndarray, angle: float) -> tuple[np.n
+ 
+ 
+ def _shared(across: np.ndarray, turn: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
+-    """How much words a and b (index arrays, broadcast) share one line of text (see `line_share`)."""
++    """How much words a and b (index arrays, broadcast) share one line of text: the overlap of their extents across it
++    over the smaller extent, times the smaller |cos| of a word's angle to the line's (1: one word's letters wholly
++    within the other's band, read the same way; 0: stacked words, or a word read across the line)."""
+     over = np.minimum(across[a, 1], across[b, 1]) - np.maximum(across[a, 0], across[b, 0])
+     size = np.minimum(across[a, 1] - across[a, 0], across[b, 1] - across[b, 0])
+     return np.clip(over / np.maximum(size, 1e-12), 0.0, 1.0) * np.minimum(turn[a], turn[b])
+ 
+ 
+-def line_share(rects: np.ndarray, angles: np.ndarray, angle: float) -> tuple[np.ndarray, np.ndarray]:
+-    """Words (rectangles (m, 4, 2), reading angles (m,)) in the frame of a line read at `angle`: their extents along
+-    it (m, 2), and how much each two share one line of text (m, m) in [0, 1]: the overlap of their extents across it
+-    over the smaller extent, times the smaller |cos| of a word's angle to the line's (1: one word's letters wholly
+-    within the other's band, read the same way; 0: stacked words, or a word read across the line)."""
+-    span, across, turn = _in_frame(rects, angles, angle)
+-    m = np.arange(len(span))
+-    return span, _shared(across, turn, m[:, None], m[None, :])
+-
+-
+-def pair_gaps(t: dict) -> list[tuple[int, int, float, float]]:
+-    """The consecutive pairs on one line of text among the words one box holds (`box_targets`; see the module):
+-    (word, next word (positions of `terra`, in reading order), gap, weight).  Each two words are taken in the frame of
+-    the first's reading direction (`line_share`): the gap from the earlier one's end to the later one's start along
+-    it, over their mean height; the weight the chance that both are held, that they share a line (as a chance) and
+-    that no word between them along it is held on that line: s_i s_j l_ij prod_k (1 - s_k min(l_ik, l_kj))."""
+-    s, h, rects, angles = t["shares"], t["heights"], t["rects"], t["angles"]
+-    out = []
+-    for i in range(len(s)):
+-        span, line = line_share(rects, angles, float(angles[i]))
+-        c = span.mean(1)
+-        for j in range(i + 1, len(s)):
+-            a, b = (i, j) if c[i] <= c[j] else (j, i)
+-            between = np.flatnonzero((c > c[a]) & (c < c[b]))
+-            between = between[(between != i) & (between != j)]
+-            weight = s[i] * s[j] * line[i, j] * np.prod(1.0 - s[between] * np.minimum(line[i, between],
+-                                                                                        line[between, j]))
+-            if weight > 0:
+-                gap = (span[b, 0] - span[a, 1]) / ((h[i] + h[j]) / 2)
+-                out.append((int(t["words"][a]), int(t["words"][b]), float(gap), float(weight)))
+-    return out
+-
+-
+-def held_pair_gaps(boxes: pd.DataFrame, terra: pd.DataFrame, ink: np.ndarray, targets: list | None = None
+-                   ) -> pd.DataFrame:
+-    """The real same-line gaps of one sheet's boxes (see the module): one row per consecutive held pair of every box
+-    (`pair_gaps`): sheet, box (its index label), word and next (positions in `terra`), gap, weight.  `targets`: the
+-    boxes' `box_targets` against `terra` (computed when None)."""
+-    targets = box_targets(boxes, terra, ink) if targets is None else targets
+-    rows = [{"sheet": str(b["sheet"]), "box": label, "word": a, "next": c, "gap": g, "weight": w}
+-            for (label, b), t in zip(boxes.iterrows(), targets) for a, c, g, w in pair_gaps(t)]
+-    return pd.DataFrame(rows, columns=["sheet", "box", "word", "next", "gap", "weight"])
+-
+-
+ def same_line_gaps(terra: pd.DataFrame) -> pd.DataFrame:
+-    """The real same-line gaps (see the module): for each Terra word, every other word of its sheet whose centre lies
+-    ahead along its reading direction and that shares its line of text (`line_share`), with the chance that it is the
+-    word's next word on that line: that it shares the line and that no word ahead nearer (by centre) does,
++    """The same-line gaps (see the module; kept as a record): for each Terra word, every other word of its sheet whose
++    centre lies ahead along its reading direction and that shares its line of text (`_shared`), with the chance that it
++    is the word's next word on that line: that it shares the line and that no word ahead nearer (by centre) does,
+     l_ab prod_k (1 - l_ak).  `gap`: from the word's end to the other's start along its reading direction, over their
+     mean height (negative when their rectangles overlap).  Columns: sheet, word, next (Terra's word numbers), pos,
+     next_pos (positions in `terra`), gap, weight."""
+@@ -468,8 +439,8 @@ def _weighted_quantiles(x: np.ndarray, w: np.ndarray, qs) -> list[float]:
+ 
+ 
+ def gap_distribution(gaps: pd.DataFrame) -> dict:
+-    """Measured gaps (`same_line_gaps`, or `held_pair_gaps`) as a distribution to draw from: every `gap` with its
+-    `weight`, `n`, the weights' sum and the weighted QUANTILES (reported only)."""
++    """Measured gaps (`same_line_gaps`) as a distribution: every `gap` with its `weight`, `n`, the weights' sum and the
++    weighted QUANTILES (reported only)."""
+     x, w = gaps["gap"].to_numpy(float), gaps["weight"].to_numpy(float)
+     out = {"gap": x.tolist(), "weight": w.tolist(), "n": int(len(x)), "weight_sum": float(w.sum())}
+     out["quantiles"] = (dict(zip(map(str, QUANTILES), _weighted_quantiles(x, w, QUANTILES)))
+@@ -477,13 +448,141 @@ def gap_distribution(gaps: pd.DataFrame) -> dict:
+     return out
+ 
+ 
+-def draw_gaps(dist: dict, n: int, rng) -> np.ndarray:
+-    """`n` gaps drawn from a measured distribution (`gap_distribution`: each measured gap with the chance of its
+-    weight)."""
+-    x, w = np.asarray(dist["gap"], float), np.asarray(dist["weight"], float)
+-    if not len(x) or w.sum() <= 0:
+-        raise ValueError("no measured gap to draw from")
+-    return x[rng.choice(len(x), size=n, p=w / w.sum())]
++# --- the merges our boxes make ----------------------------------------------------------------------------------------
++
++PAIR_COLUMNS = ("along", "across", *MERGE_FEATURES)
++
++
++def pair_geometry(terra: pd.DataFrame) -> pd.DataFrame:
++    """Every pair of Terra words on one sheet (`a` < `b`, positions in `terra`) and their relative geometry in the
++    frame of a's reading direction: `along` and `across`, the space between their rectangles along and across it over
++    their mean height, negative by how much their extents overlap (the offsets reported); and the merge model's
++    features (MERGE_FEATURES): `along_gap` and `across_gap`, those spaces where positive (0 where the extents overlap),
++    `along_overlap` and `across_overlap`, the overlap of their extents over the shorter extent (in [0, 1]; 0 where they
++    are apart), `along_overlap_h` and `across_overlap_h`, the overlap in their mean height, `angle`, the angle between
++    their reading axes, in [0, 90] degrees, over 90, and `height`, |log| of the ratio of their heights.  So the chance
++    falls with the space between two words either way, and the fit decides how an overlap counts, by its share of the
++    shorter word and by its length."""
++    rects_all = terra[C_COLS].to_numpy(float).reshape(-1, 4, 2)
++    angle_all = terra["angle"].to_numpy(float)
++    sheets = terra["sheet"].astype(str).to_numpy()
++    first, second, feats = [], [], []
++    for sheet in sorted(set(sheets)):
++        idx = np.flatnonzero(sheets == sheet)
++        r, ang = rects_all[idx], angle_all[idx]
++        h = np.hypot(*(r[:, 3] - r[:, 0]).T)
++        for a in range(len(idx) - 1):
++            span, across, _ = _in_frame(r, ang, float(ang[a]))
++            b = np.arange(a + 1, len(idx))
++            mean_h = (h[a] + h[b]) / 2
++            cols = []
++            for e in (span, across):
++                sep = np.maximum(e[b, 0], e[a, 0]) - np.minimum(e[b, 1], e[a, 1])     # minus the overlap, nested too
++                shorter = np.maximum(np.minimum(e[b, 1] - e[b, 0], e[a, 1] - e[a, 0]), 1e-12)
++                cols.append((sep / mean_h, np.maximum(sep, 0.0) / mean_h, np.clip(-sep / shorter, 0.0, 1.0),
++                             np.maximum(-sep, 0.0) / mean_h))
++            (along, along_gap, along_over, along_len), (acr, across_gap, across_over, across_len) = cols
++            d = (ang[b] - ang[a]) % 180.0
++            first.append(np.full(len(b), idx[a]))
++            second.append(idx[b])
++            feats.append(np.stack([along, acr, along_gap, across_gap, along_over, across_over, along_len, across_len,
++                                   np.minimum(d, 180.0 - d) / 90.0, np.abs(np.log(h[b] / h[a]))], 1))
++    f = np.concatenate(feats) if feats else np.zeros((0, len(PAIR_COLUMNS)))
++    return pd.DataFrame({"a": np.concatenate(first) if first else np.zeros(0, int),
++                         "b": np.concatenate(second) if second else np.zeros(0, int),
++                         **{k: f[:, i] for i, k in enumerate(PAIR_COLUMNS)}})
++
++
++def merge_labels(pairs: pd.DataFrame, held: list, n_words: int) -> np.ndarray:
++    """Each pair's chance that one of the boxes holds both its words: 1 - prod over the boxes of (1 - s_a s_b), from
++    `held`, each box's words (positions in `terra`, of `n_words`) and their shares (`box_targets`)."""
++    keys, logs = [], []
++    for words, s in held:
++        for i in range(len(words)):
++            for j in range(i + 1, len(words)):
++                a, b = sorted((int(words[i]), int(words[j])))
++                keys.append(a * n_words + b)
++                logs.append(math.log1p(-s[i] * s[j]) if s[i] * s[j] < 1 else -np.inf)
++    out = np.zeros(len(pairs))
++    if not keys:
++        return out
++    uk, inv = np.unique(np.array(keys, np.int64), return_inverse=True)
++    none = np.zeros(len(uk))
++    np.add.at(none, inv, np.array(logs))
++    pk = pairs["a"].to_numpy(np.int64) * n_words + pairs["b"].to_numpy(np.int64)
++    order = np.argsort(pk, kind="stable")
++    pos = np.minimum(np.searchsorted(pk[order], uk), max(len(pk) - 1, 0))
++    found = (pk[order][pos] == uk) if len(pk) else np.zeros(len(uk), bool)
++    out[order[pos[found]]] = 1.0 - np.exp(none[found])
++    return out
++
++
++def fit_merge(pairs: pd.DataFrame, label, weight=None, ridge: float = MERGE_RIDGE) -> dict:
++    """The logistic model of P(our boxes merge a pair | its geometry) (MERGE_FEATURES, `pair_geometry`), fitted by
++    maximum likelihood to the soft labels (`merge_labels`; each pair weighted by `weight`, 1 when None) on standardised
++    features (`ridge` numerical only): {"features", "intercept", "coef" (per unit of each feature), "pairs", "merged"
++    (the labels' weighted sum), "nll", "converged"}."""
++    X = pairs[list(MERGE_FEATURES)].to_numpy(float)
++    y = np.asarray(label, float)
++    w = np.ones(len(y)) if weight is None else np.asarray(weight, float)
++    if not len(y) or (w * y).sum() <= 0:
++        raise ValueError("no pair our boxes merge: the merge model has nothing to fit")
++    mu, sd = X.mean(0), X.std(0)
++    sd = np.where(sd > 0, sd, 1.0)
++    Z = (X - mu) / sd
++
++    def nll(th):
++        z = th[0] + Z @ th[1:]
++        loss = (w * (y * np.logaddexp(0.0, -z) + (1.0 - y) * np.logaddexp(0.0, z))).sum() + ridge * (th[1:] ** 2).sum()
++        g = w * (expit(z) - y)
++        return loss, np.r_[g.sum(), Z.T @ g + 2.0 * ridge * th[1:]]
++
++    start = np.zeros(1 + Z.shape[1])
++    m = (w * y).sum() / w.sum()
++    start[0] = math.log(m / (1.0 - m)) if 0 < m < 1 else 0.0
++    res = minimize(nll, start, jac=True, method="L-BFGS-B")
++    coef = res.x[1:] / sd
++    return {"features": list(MERGE_FEATURES), "intercept": float(res.x[0] - (res.x[1:] * mu / sd).sum()),
++            "coef": dict(zip(MERGE_FEATURES, coef.tolist())), "pairs": int(len(y)), "merged": float((w * y).sum()),
++            "nll": float(res.fun), "converged": bool(res.success)}
++
++
++def merge_chance(merge: dict, pairs: pd.DataFrame) -> np.ndarray:
++    """The fitted P(our boxes merge each pair) (`fit_merge`)."""
++    X = pairs[list(merge["features"])].to_numpy(float)
++    return expit(merge["intercept"] + X @ np.array([merge["coef"][k] for k in merge["features"]], float))
++
++
++def union_box(ink: np.ndarray, chance: np.ndarray, rect_a: np.ndarray, rect_b: np.ndarray) -> dict | None:
++    """The box our grouping would make of two words merged, as `wordboxes.group` makes a box of a component, from the
++    two words' ink px (each word's: its ink px whose centre is inside its rectangle): the chance-weighted major axis
++    (`axis`), and the trimmed rectangle of the ink along and across it (t corners, `t_length`, `t_height`; the g
++    corners alike).  None when either word has no ink."""
++    xa, ya = _ink_of(np.asarray(rect_a, float), ink)
++    xb, yb = _ink_of(np.asarray(rect_b, float), ink)
++    if not len(xa) or not len(xb):
++        return None
++    pts = np.unique(np.stack([np.r_[xa, xb], np.r_[ya, yb]], 1), axis=0)
++    x, y = pts[:, 0], pts[:, 1]
++    w = chance[(y - 0.5).astype(int), (x - 0.5).astype(int)].astype(float) / 255.0
++    if w.sum() <= 0:
++        w = np.ones(len(x))
++    m = w.sum()
++    cx, cy = (w * x).sum() / m, (w * y).sum() / m
++    rx, ry = x - cx, y - cy
++    sxx, syy, sxy = (w * rx * rx).sum() / m, (w * ry * ry).sum() / m, (w * rx * ry).sum() / m
++    th = 0.5 * math.atan2(2 * sxy, sxx - syy)
++    vx, vy = math.cos(th), math.sin(th)
++    p, q = rx * vx + ry * vy, -rx * vy + ry * vx
++    p0, p1, q0, q1 = p.min() - 0.5, p.max() + 0.5, q.min() - 0.5, q.max() + 0.5
++    c, v, n = np.array([cx, cy]), np.array([vx, vy]), np.array([-vy, vx])
++    row = {"axis": float(np.rad2deg(math.atan2(-vy, vx)) % 180.0), "length": float(p1 - p0),
++           "height": float(q1 - q0), "t_length": float(p1 - p0), "t_height": float(q1 - q0)}
++    for i, (a, b) in enumerate(((p0, q0), (p1, q0), (p1, q1), (p0, q1))):
++        corner = c + v * a + n * b
++        for k in "gt":
++            row[f"{k}{i}x"], row[f"{k}{i}y"] = float(corner[0]), float(corner[1])
++    return row
+ 
+ 
+ # --- the examples -----------------------------------------------------------------------------------------------------
+@@ -492,7 +591,7 @@ def draw_gaps(dist: dict, n: int, rng) -> np.ndarray:
+ class Examples:
+     """The box model's examples: crop i is `flat[:, :, offsets[i]:offsets[i + 1]]` (float32, (C, HEIGHT, W)) with
+     channels `channels`; its count distribution `count[i]` (over 0..K), its boundary target per column
+-    `boundary[offsets[i]:offsets[i + 1]]`, its `weight`; `meta` one row each."""
++    `boundary[offsets[i]:offsets[i + 1]]`, its `weight`; `meta` one row each; `info` what made them (JSON-able)."""
+     channels: tuple[str, ...]
+     flat: np.ndarray
+     offsets: np.ndarray
+@@ -500,9 +599,11 @@ class Examples:
+     boundary: np.ndarray
+     weight: np.ndarray
+     meta: pd.DataFrame
++    info: dict = field(default_factory=dict)
+ 
+     @classmethod
+-    def of(cls, crops, counts, boundaries, weights, meta: pd.DataFrame, channels) -> "Examples":
++    def of(cls, crops, counts, boundaries, weights, meta: pd.DataFrame, channels, info: dict | None = None
++           ) -> "Examples":
+         """From lists: crops (C, HEIGHT, W_i), count distributions (any length; padded to K + 1, K the largest count
+         with any chance among them), boundary targets (W_i,), weights."""
+         crops = [np.asarray(c, np.float32) for c in crops]
+@@ -518,7 +619,7 @@ class Examples:
+         flat = (np.concatenate(crops, axis=2) if crops else np.zeros((len(channels), HEIGHT, 0), np.float32))
+         return cls(tuple(channels), np.ascontiguousarray(flat), np.concatenate([[0], np.cumsum(widths)]).astype(
+             np.int64), count, np.concatenate([np.asarray(b, np.float32) for b in boundaries]) if len(boundaries)
+-            else np.zeros(0, np.float32), np.asarray(weights, float), meta.reset_index(drop=True))
++            else np.zeros(0, np.float32), np.asarray(weights, float), meta.reset_index(drop=True), dict(info or {}))
+ 
+     def __len__(self) -> int:
+         return len(self.offsets) - 1
+@@ -538,75 +639,47 @@ class Examples:
+         return self.count[i], self.boundary[self.offsets[i]:self.offsets[i + 1]]
+ 
+     def save(self, path: Path) -> None:
+-        """`<path>.npz` (fixed dates, `store.save_npz`) and `<path>.parquet` (the meta)."""
++        """`<path>.npz` (fixed dates, `store.save_npz`; `info` as JSON) and `<path>.parquet` (the meta)."""
+         path = Path(path)
+         store.save_npz(path.with_suffix(".npz"), channels=np.array(self.channels), flat=self.flat,
+-                       offsets=self.offsets, count=self.count, boundary=self.boundary, weight=self.weight)
++                       offsets=self.offsets, count=self.count, boundary=self.boundary, weight=self.weight,
++                       info=np.array(json.dumps(self.info)))
+         self.meta.to_parquet(path.with_suffix(".parquet"), index=False)
+ 
+     @classmethod
+     def load(cls, path: Path) -> "Examples":
+         path = Path(path)
+         with np.load(path.with_suffix(".npz")) as z:
++            info = json.loads(str(z["info"])) if "info" in z.files else {}
+             return cls(tuple(str(c) for c in z["channels"]), z["flat"], z["offsets"], z["count"], z["boundary"],
+-                       z["weight"], pd.read_parquet(path.with_suffix(".parquet")))
+-
+-
+-def _word_crop(inputs: SheetInputs, t) -> tuple[np.ndarray, tuple[float, float], float]:
+-    """A Terra word's crop as the reader cuts it (`crops.rectify`'s centre, the row's length and floored height):
+-    every layer, its span along the line in crop columns, and its height in crop columns."""
+-    length, height = float(t["length"]), float(t["height"])
+-    centre = ((t["box_x0"] + t["box_x1"] - 1) / 2, (t["box_y0"] + t["box_y1"] - 1) / 2)
+-    crop = _cut(inputs, centre, length, height, float(t["angle"]))
+-    w, out_w = layout(length, height)
+-    if crop.shape[2] != out_w:
+-        raise AssertionError(f"crops.cut made a crop {crop.shape[2]} wide, its layout {out_w}")
+-    s = out_w / w
+-    return crop, ((w / 2 - length / 2) * s, (w / 2 + length / 2) * s), height * s
+-
+-
+-def join(a: tuple, b: tuple, gap: float, turned: bool = False) -> tuple[np.ndarray, np.ndarray, dict]:
+-    """Two word crops (`_word_crop`'s three) on one line, `gap` word heights (their mean) from the first's end to the
+-    second's start, B placed at the nearest whole crop column: the first word's crop up to its end, paper across the
+-    gap, the second's from its start; where they overlap (a negative gap), each px from the crop with more ink there.
+-    Squeezed to `crops.MAX_WIDTH` as `crops.cut` squeezes, and turned a half turn with `turned`.  The crop, its
+-    boundary target (the gap's columns) and the gap realised (`gap_px`, `unit_px`: crop columns before any squeeze)."""
+-    (ca, (a0, a1), ua), (cb, (b0, b1), ub) = a, b
+-    unit = (ua + ub) / 2
+-    o = int(round(a1 + gap * unit - b0))          # B's crop's first column, from A's
+-    oa = max(0, -o)
+-    ob = oa + o
+-    sa0, sa1, sb0, sb1 = oa + a0, oa + a1, ob + b0, ob + b1
+-    width = max(oa + ca.shape[2], ob + cb.shape[2])
+-    out = np.zeros((ca.shape[0], HEIGHT, width), np.float32)
+-    end_a = min(oa + ca.shape[2], math.ceil(sa1))            # A's crop up to its word's end
+-    if end_a > oa:
+-        out[:, :, oa:end_a] = ca[:, :, :end_a - oa]
+-    start_b = max(ob, math.floor(sb0))                      # B's from its word's start
+-    if start_b < ob + cb.shape[2]:
+-        part, here = cb[:, :, start_b - ob:], out[:, :, start_b:ob + cb.shape[2]]
+-        out[:, :, start_b:ob + cb.shape[2]] = np.where(part[:1] > here[:1], part, here)
+-    spans = np.array([[sa0, sa1], [sb0, sb1]])
+-    out_w = min(width, K.MAX_WIDTH)
+-    target = boundary_target(spans, np.ones(2), width, out_w)
+-    if out_w < width:
+-        out = np.stack([cv2.resize(c, (out_w, HEIGHT), interpolation=cv2.INTER_AREA) for c in out])
+-    if turned:
+-        out, target = np.ascontiguousarray(out[:, ::-1, ::-1]), target[::-1].copy()
+-    return out, target, {"gap_px": float(sb0 - sa1), "unit_px": float(unit), "width": int(width)}
++                       z["weight"], pd.read_parquet(path.with_suffix(".parquet")), info)
++
++
++def _check_channels(channels, inputs: SheetInputs, sheet: str):
++    if channels is not None and inputs.channels != channels:
++        raise ValueError(f"{sheet}: channels {inputs.channels}, the others' {channels}")
++    return inputs.channels
++
++
++def _geometry_quantiles(pairs: pd.DataFrame, weight: np.ndarray) -> dict | None:
++    """Weighted QUANTILES of each of MERGE_FEATURES (reported only)."""
++    if not len(pairs) or weight.sum() <= 0:
++        return None
++    return {k: dict(zip(map(str, QUANTILES), _weighted_quantiles(pairs[k].to_numpy(float), weight, QUANTILES)))
++            for k in ("along", "across", "angle", "height")}
+ 
+ 
+ def box_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets, quarter: int, weights=None, *, touch=None,
+-                 joined: int | None = None, gaps: dict | None = None, turned: float | None = None,
++                 joined: int | None = None, merge: dict | None = None, held_words: pd.DataFrame | None = None,
+                  seed: int = SEED) -> Examples:
+     """The examples for the box model holding `quarter` out (see the module).  `boxes`: rows of boxes.parquet (any
+-    run's, Task 9's candidates alike); `terra`: Terra's words (`terra_frame`: C_COLS, angle, the axis box, the crop's
+-    length and height, TOUCH), every word that meets a box among them; `sheets`: sheet -> `SheetInputs` (a mapping or a
+-    function); `weights`: per word of `terra` (Task 7's; None: 1); `touch` (`training_boxes`; `readercrops.HeldAreas`
+-    when None); `joined`: how many joined neighbours (None: the expected number of real boxes holding two words or
+-    more); `gaps`: the gap distribution (`gap_distribution`; None: measured from `terra`, `same_line_gaps`);
+-    `turned`: the share of joined crops turned a half turn (None: measured from these boxes).  ValueError on a held
+-    word or box (see the module)."""
++    run's, Task 9's candidates alike); `terra`: Terra's words (`terra_frame`: C_COLS, angle, the axis box, TOUCH),
++    every word that meets a box among them; `sheets`: sheet -> `SheetInputs` (a mapping or a function); `weights`: per
++    word of `terra` (Task 7's; None: 1); `touch` (`training_boxes`; `readercrops.HeldAreas` when None); `joined`: how
++    many joined neighbours (None: the expected number of real boxes holding two words or more); `merge`: the merge
++    model (`fit_merge`; None: fitted here on these boxes and words); `held_words`: the held-out words (C_COLS, sheet),
++    whose rectangles a joined box may not meet.  `info`: the merge model, the pairs' and the joined boxes' geometry.
++    ValueError on a held word or box (see the module)."""
+     q = _need_quarter(quarter, "box_examples")
+     held = _held_words(terra, q)
+     if held.any():
+@@ -622,17 +695,14 @@ def box_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets, quarter: int,
+         from sfzmaps.solver.wordread import readercrops
+         touch = readercrops.HeldAreas()
+     get = _getter(sheets)
+-    crops, counts, bounds, wts, meta = [], [], [], [], []
++    crops, counts, bounds, wts, meta, holds = [], [], [], [], [], []
+     channels = None
+-    turn_s = turn_n = 0.0
+     sheet_of = boxes["sheet"].astype(str).to_numpy()
+     tsheet = terra["sheet"].astype(str).to_numpy()
++    blank = {"word_a": -1, "word_b": -1, "p_merge": np.nan, **{k: np.nan for k in PAIR_COLUMNS}}
+     for sheet in sorted(set(sheet_of)):
+         inputs = get(sheet)
+-        if channels is None:
+-            channels = inputs.channels
+-        elif inputs.channels != channels:
+-            raise ValueError(f"{sheet}: channels {inputs.channels}, the others' {channels}")
++        channels = _check_channels(channels, inputs, sheet)
+         mine = boxes[sheet_of == sheet]
+         twords = np.flatnonzero(tsheet == sheet)
+         got = box_targets(mine, terra.iloc[twords], inputs.ink)
+@@ -650,47 +720,92 @@ def box_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets, quarter: int,
+             counts.append(t["count"])
+             bounds.append(boundary_target(t["spans"], s, t["w"], t["out_w"]))
+             wts.append(float(np.prod(1.0 - s * (1.0 - wt[pos]))))
+-            turn_s += float((s * t["turned"]).sum())
+-            turn_n += float(s.sum())
++            holds.append((pos, s))
+             meta.append({"source": "box", "sheet": sheet, "box": int(label) if np.issubdtype(type(label), np.integer)
+-                         else -1, "quarter": int(b["quarter"]), "sheet_b": "", "word_a": -1, "word_b": -1,
+-                         "gap": np.nan, "gap_px": np.nan, "unit_px": np.nan, "turned": False,
+-                         "support": int(len(s)), "expected": float(s.sum())})
++                         else -1, "quarter": int(b["quarter"]), **blank, "support": int(len(s)),
++                         "expected": float(s.sum())})
+     n_join = (int(round(sum(float(c[2:].sum()) for c in counts))) if joined is None else int(joined))
++    info: dict = {}
+     if n_join > 0:
+-        if len(terra) < 2:
+-            raise ValueError("joined neighbours need two training words or more")
+-        dist = gap_distribution(same_line_gaps(terra)) if gaps is None else gaps
+-        share = (turn_s / turn_n if turn_n > 0 else 0.0) if turned is None else float(turned)
++        pairs = pair_geometry(terra)
++        if not len(pairs):
++            raise ValueError("joined neighbours need two training words on one sheet or more")
++        label = merge_labels(pairs, holds, len(terra))
++        pa, pb = pairs["a"].to_numpy(), pairs["b"].to_numpy()
++        if merge is None:
++            merge = fit_merge(pairs, label, wt[pa] * wt[pb])
++        p = merge_chance(merge, pairs)
++        sep = np.maximum(pairs["along"].to_numpy(), pairs["across"].to_numpy())
++        info = {"merge": merge, "pairs": int(len(pairs)), "merged_pairs": float(label.sum()),
++                "chance_sum": float(p.sum()),
++                "chance_beyond": {str(d): float(p[sep > d].sum() / p.sum()) for d in (1, 2, 5, 10)},
++                "today": _geometry_quantiles(pairs, label)}
+         rng = np.random.default_rng([seed, 1])
+-        first = rng.integers(0, len(terra), n_join)
+-        second = rng.integers(0, len(terra) - 1, n_join)
+-        second = second + (second >= first)
+-        gap = draw_gaps(dist, n_join, np.random.default_rng([seed, 2]))
+-        turn = np.random.default_rng([seed, 3]).random(n_join) < share
+-        need = np.unique(np.r_[first, second])
+-        word_crops = {}
+-        for sheet in sorted(set(tsheet[need])):
+-            inputs = get(sheet)
+-            if channels is None:
+-                channels = inputs.channels
+-            elif inputs.channels != channels:
+-                raise ValueError(f"{sheet}: channels {inputs.channels}, the others' {channels}")
+-            for p in need[tsheet[need] == sheet]:
+-                word_crops[int(p)] = _word_crop(inputs, terra.iloc[int(p)])
+-        for a, b, g, tn in zip(first, second, gap, turn):
+-            crop, target, got = join(word_crops[int(a)], word_crops[int(b)], float(g), bool(tn))
++        prob = p / p.sum()
++        held_rects = {}
++        if held_words is not None and len(held_words):
++            hs = held_words["sheet"].astype(str).to_numpy()
++            held_rects = {s: held_words[C_COLS].to_numpy(float)[hs == s].reshape(-1, 4, 2) for s in set(hs)}
++        made: dict = {}
++        drawn: list = []
++        tried = 0
++        while len(drawn) < n_join:
++            if tried >= JOIN_TRIES * n_join:
++                raise ValueError(f"{tried} pairs drawn, {len(drawn)} of them could join: the held areas take the rest")
++            chunk = rng.choice(len(pairs), size=n_join - len(drawn), p=prob)
++            new = np.unique([k for k in chunk if int(k) not in made]).astype(int)
++            for sheet in sorted(set(tsheet[pa[new]])):
++                inputs = get(sheet)
++                channels = _check_channels(channels, inputs, sheet)
++                twords = np.flatnonzero(tsheet == sheet)
++                for k in new[tsheet[pa[new]] == sheet]:
++                    made[int(k)] = _joined(inputs, sheet, terra, twords, int(pa[k]), int(pb[k]), wt, touch, q,
++                                           held_rects.get(sheet))
++            for k in chunk:
++                tried += 1
++                if made[int(k)] is not None and len(drawn) < n_join:
++                    drawn.append(int(k))
++        for k in drawn:
++            crop, count, target, weight, extra = made[k]
+             crops.append(crop)
+-            counts.append(np.array([0.0, 0.0, 1.0]))
++            counts.append(count)
+             bounds.append(target)
+-            wts.append(float(wt[a] * wt[b]))
+-            meta.append({"source": "joined", "sheet": tsheet[a], "box": -1, "quarter": int(terra["quarter"].iat[a]),
+-                         "sheet_b": tsheet[b], "word_a": int(a), "word_b": int(b), "gap": float(g),
+-                         "gap_px": got["gap_px"], "unit_px": got["unit_px"], "turned": bool(tn), "support": 2,
+-                         "expected": 2.0})
++            wts.append(weight)
++            meta.append({"source": "joined", "sheet": tsheet[pa[k]], "box": -1,
++                         "quarter": int(terra["quarter"].iat[int(pa[k])]), "word_a": int(pa[k]), "word_b": int(pb[k]),
++                         "p_merge": float(p[k]), **{f: float(pairs[f].iat[k]) for f in PAIR_COLUMNS}, **extra})
++        info.update(drawn=len(drawn), tried=tried, realised=_geometry_quantiles(pairs.iloc[drawn],
++                                                                               np.ones(len(drawn))),
++                    more_than_two=float(sum(made[k][1][3:].sum() for k in drawn)))
+     if channels is None:
+         raise ValueError("no box and no joined neighbour: nothing to learn from")
+-    return Examples.of(crops, counts, bounds, wts, pd.DataFrame(meta), channels)
++    return Examples.of(crops, counts, bounds, wts, pd.DataFrame(meta), channels, info)
++
++
++def _joined(inputs: SheetInputs, sheet: str, terra: pd.DataFrame, twords: np.ndarray, a: int, b: int, wt, touch,
++            q: int, held_rects):
++    """The joined example of words a and b (positions in `terra`) on their sheet: the union box our grouping would
++    make of them (`union_box`) cut as a box, its exact targets against the sheet's words `twords` (`box_targets`: both
++    words' shares are 1, so the count is 2 or more), and its weight; None when it can't be made (a word with no ink)
++    or may not be (its crop touches the held quarter or an answered block, or it meets a held word)."""
++    rects = terra[C_COLS].to_numpy(float).reshape(-1, 4, 2)
++    row = union_box(inputs.ink, inputs.chance, rects[a], rects[b])
++    if row is None:
++        return None
++    corners, length, height, axis = _box_geometry(row)
++    flags = touch(sheet, _footprint(corners, length, height, axis, inputs.shape), inputs.shape)
++    if flags[f"touch_{paths.QUARTERS[q]}"] or flags["touch_blocks"]:
++        return None
++    if held_rects is not None and len(held_rects) and len(wordboxes.pairs(corners[None], held_rects)[0]):
++        return None
++    t = box_targets(pd.DataFrame([row]), terra.iloc[twords], inputs.ink)[0]
++    crop = box_crop(inputs, corners, length, height, axis)
++    if crop.shape[2] != t["out_w"]:
++        raise AssertionError(f"crops.box_cut made a crop {crop.shape[2]} wide, its layout {t['out_w']}")
++    s = t["shares"]
++    pos = twords[t["words"]]
++    return (crop, t["count"], boundary_target(t["spans"], s, t["w"], t["out_w"]),
++            float(np.prod(1.0 - s * (1.0 - wt[pos]))), {"support": int(len(s)), "expected": float(s.sum())})
+ 
+ 
+ def terra_frame(rows: pd.DataFrame) -> pd.DataFrame:
+diff --git a/pipeline/tests/test_wordread_boxmodel.py b/pipeline/tests/test_wordread_boxmodel.py
+index 37900c0..af27833 100644
+--- a/pipeline/tests/test_wordread_boxmodel.py
++++ b/pipeline/tests/test_wordread_boxmodel.py
+@@ -1,13 +1,13 @@
+ """The learned box model (`wordread.boxmodel`): its targets, its held-out rule, its joined neighbours and a short CPU
+ fit, on synthetic pages."""
+ import itertools
++from collections import Counter
+ 
+ import numpy as np
+ import pandas as pd
+ import pytest
+ import torch
+ 
+-from sfzmaps.solver.codereader import labels as L
+ from sfzmaps.solver.textnet import boxes as textboxes
+ from sfzmaps.solver.textread import crops as K
+ from sfzmaps.solver.wordread import boxmodel as B
+@@ -109,7 +109,7 @@ def test_boundary_columns_are_exactly_the_gap_between_two_held_words():
+     boxes = pd.DataFrame([box(50, 100, 170, 130)])
+     ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
+     crop, (count, gap) = ex.crop(0), ex.target(0)
+-    assert np.allclose(count, [0, 0, 1])
++    assert np.allclose(count, np.eye(len(count))[2])
+     row = crop[0, K.HEIGHT // 2]
+     inside = _between(row)
+     assert inside.any() and (gap[inside] > 0.99).sum() >= 1
+@@ -203,15 +203,7 @@ def test_training_boxes_leave_out_boxes_meeting_a_held_word_or_touching_a_held_a
+     assert list(words["word"]) == [0, 2]
+ 
+ 
+-# --- joined neighbours ------------------------------------------------------------------------------------------------
+-
+-def test_draws_follow_the_measured_gap_distribution():
+-    dist = {"gap": [-0.1, 0.3, 0.8], "weight": [1.0, 2.0, 1.0]}
+-    got = B.draw_gaps(dist, 8000, np.random.default_rng([0, 1]))
+-    assert set(np.unique(got)) <= {-0.1, 0.3, 0.8}
+-    share = np.array([(got == g).mean() for g in dist["gap"]])
+-    assert np.allclose(share, [0.25, 0.5, 0.25], atol=0.02)
+-
++# --- the gaps record --------------------------------------------------------------------------------------------------
+ 
+ def test_same_line_gaps_measure_the_space_to_the_next_word_on_the_line():
+     # three words on one line (gaps 10 and 25 px, heights 20) and one word read across the line, ahead of the last
+@@ -233,94 +225,133 @@ def test_same_line_gaps_measure_the_space_to_the_next_word_on_the_line():
+     assert sorted(dist["gap"]) == sorted(got["gap"].tolist()) and dist["n"] == len(got)
+ 
+ 
+-def test_the_gaps_are_between_consecutive_words_on_one_line_of_a_box():
+-    # a box (rows 95..125, its centre line at 110) over three words along its axis (gaps 10 and 15 px; heights 20,
+-    # 40, 30), word 1 sticking out of it across the line so that the box holds 25 of its 40 rows of ink.  Across the
+-    # line the words span [-10, 10], [-30, 10] and [-15, 15]: lines shared 1 (0, 1), 25/30 (1, 2), 1 (0, 2)
+-    ink = page((10, 100, 60, 120), (70, 80, 110, 120), (125, 95, 175, 125))
+-    terra = pd.DataFrame([word(0, 10, 100, 60, 120), word(1, 70, 80, 110, 120), word(2, 125, 95, 175, 125)])
+-    got = B.held_pair_gaps(pd.DataFrame([box(10, 95, 175, 125)]), terra, ink)
+-    s1, l12 = (120 - 95) / 40, 25 / 30
+-    by = {(r.word, r.next): r for r in got.itertuples()}
+-    assert set(by) == {(0, 1), (1, 2), (0, 2)}
+-    assert by[(0, 1)].gap == pytest.approx(10 / 30) and by[(0, 1)].weight == pytest.approx(s1)
+-    assert by[(1, 2)].gap == pytest.approx(15 / 35) and by[(1, 2)].weight == pytest.approx(s1 * l12)
+-    # 0 and 2 are consecutive on their line unless word 1 is held and on it
+-    assert by[(0, 2)].gap == pytest.approx(65 / 25) and by[(0, 2)].weight == pytest.approx(1 - s1 * min(1.0, l12))
+-    dist = B.gap_distribution(got)
+-    assert sorted(dist["gap"]) == sorted(got["gap"].tolist()) and dist["n"] == 3
+-    # two words stacked in one box (a code over its block number) are not on one line: no gap
+-    ink2 = page((10, 60, 70, 80), (20, 90, 50, 105))
+-    terra2 = pd.DataFrame([word(0, 10, 60, 70, 80), word(1, 20, 90, 50, 105)])
+-    assert B.held_pair_gaps(pd.DataFrame([box(10, 60, 70, 105)]), terra2, ink2).empty
+-
+-
+-def test_the_gap_is_along_the_words_reading_direction_whatever_the_boxs_axis():
+-    # two level words side by side (a gap of 10 px, heights 20) in a box grouped at 30 degrees that holds them both
+-    ink = page((100, 100, 150, 120), (160, 100, 190, 120))
+-    terra = pd.DataFrame([word(0, 100, 100, 150, 120), word(1, 160, 100, 190, 120)])
+-    (ux, uy), (vx, vy) = L._axes(30.0)
+-    u, v = np.array([ux, uy]) * 60, np.array([vx, vy]) * 45
+-    c = np.array([145.0, 110.0])
+-    tilted = box(0, 0, 1, 1)
+-    for i, corner in enumerate([c - u - v, c + u - v, c + u + v, c - u + v]):
+-        tilted[f"t{i}x"], tilted[f"t{i}y"] = corner
+-    tilted.update(axis=30.0, t_length=120.0, t_height=90.0)
+-    got = B.held_pair_gaps(pd.DataFrame([tilted]), terra, ink)
+-    assert len(got) == 1
+-    assert got["gap"].iloc[0] == pytest.approx(10 / 20) and got["weight"].iloc[0] == pytest.approx(1.0)
+-    # a word read across the line shares no line of text with it
+-    terra["angle"] = [0.0, 90.0]
+-    assert B.held_pair_gaps(pd.DataFrame([tilted]), terra, ink).empty
+-
+-
+-def test_overlapping_joined_words_keep_both_words_ink():
+-    a = np.zeros((2, K.HEIGHT, 40), np.float32)
+-    a[:, 10:22, 6:34] = 1.0                       # the word spans columns 6..34
+-    b = np.zeros((2, K.HEIGHT, 30), np.float32)
+-    b[:, 12:20, 6:24] = 0.5
+-    crop, target, got = B.join((a, (6.0, 34.0), 20.0), (b, (6.0, 24.0), 20.0), gap=-0.2)
+-    assert got["gap_px"] == pytest.approx(-4.0)
+-    assert np.allclose(target, 0.0)              # no column between them
+-    assert crop.shape[2] == 6 + 28 - 4 + 18 + 6
+-    # A's ink is all there, and B's wherever A has none
+-    assert np.allclose(crop[:, 10:22, 6:34], 1.0)
+-    assert np.allclose(crop[:, 12:20, 34:48], 0.5)
+-    spaced, target, got = B.join((a, (6.0, 34.0), 20.0), (b, (6.0, 24.0), 20.0), gap=0.5)
+-    assert got["gap_px"] == pytest.approx(10.0) and target.sum() == pytest.approx(10.0)
+-    assert np.allclose(spaced[:, :, 34:44], 0.0)  # paper across the gap
+-
+-
+-def test_joined_neighbours_take_their_gaps_from_the_distribution_and_know_their_targets():
+-    ink = page((20, 40, 80, 60), (120, 40, 150, 60), (20, 120, 60, 140), (200, 120, 260, 140), shape=(200, 300))
+-    terra = pd.DataFrame([word(0, 20, 40, 80, 60), word(1, 120, 40, 150, 60), word(2, 20, 120, 60, 140),
+-                          word(3, 200, 120, 260, 140)])
+-    boxes = pd.DataFrame([box(20, 40, 80, 60)])
+-    gaps = {"gap": [0.5, 1.5], "weight": [1.0, 1.0]}
+-    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=40, gaps=gaps,
+-                        turned=0.0, seed=3)
++# --- the merges our boxes make ----------------------------------------------------------------------------------------
++
++def test_pair_geometry_is_the_space_between_two_words_in_the_first_ones_frame():
++    terra = pd.DataFrame([word(0, 10, 100, 60, 120), word(1, 70, 100, 100, 120),       # side by side, 10 px apart
++                          word(2, 10, 140, 70, 160), word(3, 20, 170, 50, 185),        # stacked, 10 px apart
++                          word(4, 200, 60, 220, 160, angle=90.0)])                     # read across
++    g = B.pair_geometry(terra)
++    assert len(g) == 10 and (g["a"] < g["b"]).all()
++    by = {(r.a, r.b): r for r in g.itertuples()}
++    side = by[(0, 1)]
++    assert side.along == pytest.approx(10 / 20) and side.across == pytest.approx(-20 / 20)
++    assert side.along_gap == pytest.approx(10 / 20) and side.across_gap == 0.0
++    assert side.along_overlap == 0.0 and side.across_overlap == pytest.approx(1.0)
++    assert side.along_overlap_h == 0.0 and side.across_overlap_h == pytest.approx(1.0)
++    assert side.angle == 0.0 and side.height == pytest.approx(0.0)
++    stack = by[(2, 3)]                 # along the line word 3 (30 px) lies wholly within word 2's extent (60 px)
++    assert stack.along == pytest.approx(-30 / 17.5) and stack.across == pytest.approx(10 / 17.5)
++    assert stack.along_overlap == pytest.approx(1.0) and stack.along_overlap_h == pytest.approx(30 / 17.5)
++    assert stack.across_gap == pytest.approx(10 / 17.5) and stack.across_overlap == 0.0
++    assert stack.height == pytest.approx(abs(np.log(15 / 20)))
++    assert by[(0, 4)].angle == 1.0
++
++
++def test_merge_labels_are_the_chance_one_box_holds_both():
++    pairs = pd.DataFrame({"a": [0, 0, 1, 0], "b": [1, 2, 2, 3]})
++    held = [(np.array([0, 1]), np.array([1.0, 0.5])), (np.array([2, 0, 1]), np.array([1.0, 0.25, 0.4]))]
++    got = B.merge_labels(pairs, held, 4)
++    assert got == pytest.approx([1 - (1 - 0.5) * (1 - 0.25 * 0.4), 0.25, 0.4, 0.0])
++    assert B.merge_labels(pairs, [(np.array([1, 0]), np.array([1.0, 1.0]))], 4)[0] == 1.0
++
++
++def test_fit_merge_recovers_a_known_logistic():
++    rng = np.random.default_rng([0, 5])
++    n = 4000
++    pairs = pd.DataFrame({"a": np.arange(n), "b": np.arange(n) + n,
++                          **{k: rng.uniform(0, 3, n) for k in B.MERGE_FEATURES}})
++    true = dict(zip(B.MERGE_FEATURES, (-1.5, -2.0, 1.0, 0.5, -0.3, -0.2, -0.5, 0.4)))
++    z = 1.0 + sum(c * pairs[k].to_numpy() for k, c in true.items())
++    label = 1 / (1 + np.exp(-z))                 # the exact chances: the likelihood is greatest at the truth
++    got = B.fit_merge(pairs, label)
++    assert got["converged"] and got["intercept"] == pytest.approx(1.0, abs=1e-2)
++    for k, c in true.items():
++        assert got["coef"][k] == pytest.approx(c, abs=1e-2)
++    assert B.merge_chance(got, pairs) == pytest.approx(label, abs=1e-3)
++
++
++def test_union_box_is_the_box_grouping_makes_of_two_merged_words():
++    ink = page((50, 100, 110, 120), (120, 100, 150, 120))
++    r0, r1 = (textboxes.word_rect(b, 0.0) for b in ((50, 100, 110, 120), (120, 100, 150, 120)))
++    row = B.union_box(ink, (ink * 200).astype(np.uint8), r0, r1)
++    assert row["axis"] % 180 == pytest.approx(0.0, abs=1e-9)
++    assert row["t_length"] == pytest.approx(100.0) and row["t_height"] == pytest.approx(20.0)
++    xs, ys = [row[f"t{i}x"] for i in range(4)], [row[f"t{i}y"] for i in range(4)]
++    assert min(xs) == pytest.approx(50) and max(xs) == pytest.approx(150)
++    assert min(ys) == pytest.approx(100) and max(ys) == pytest.approx(120)
++    assert B.union_box(ink, ink.astype(np.uint8), r0, textboxes.word_rect((300, 10, 340, 30), 0.0)) is None
++
++
++def _merge_page():
++    """Words side by side (0, 1; 15 px apart), a code over its block number (2, 3), and a word far away (4)."""
++    ink = page((20, 40, 80, 70), (95, 40, 125, 70), (20, 150, 120, 170), (40, 175, 90, 190), (300, 150, 360, 180),
++               shape=(300, 400))
++    terra = pd.DataFrame([word(0, 20, 40, 80, 70), word(1, 95, 40, 125, 70), word(2, 20, 150, 120, 170),
++                          word(3, 40, 175, 90, 190), word(4, 300, 150, 360, 180)])
++    return ink, terra
++
++
++MERGE = {"features": list(B.MERGE_FEATURES), "intercept": 0.0,
++         "coef": {k: -1.0 if k in ("along_gap", "across_gap") else 0.0 for k in B.MERGE_FEATURES}}
++
++
++def test_joined_pairs_are_drawn_by_their_merge_chance_at_their_real_place():
++    ink, terra = _merge_page()
++    boxes = pd.DataFrame([box(20, 40, 80, 70)])
++    sheets = {SHEET: inputs(ink)}
++    ex = B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=2000, merge=MERGE, seed=3)
+     j = np.flatnonzero(ex.meta["source"].to_numpy() == "joined")
+-    assert len(j) == 40
+-    drawn = ex.meta["gap"].to_numpy()[j]
+-    assert set(np.unique(drawn)) <= {0.5, 1.5} and len(np.unique(drawn)) == 2
++    assert len(j) == 2000 and ex.info["drawn"] == 2000 and ex.info["merge"] == MERGE
++    pairs = B.pair_geometry(terra)
++    want = B.merge_chance(MERGE, pairs)
++    want = want / want.sum()
++    drawn = Counter(zip(ex.meta["word_a"].to_numpy()[j], ex.meta["word_b"].to_numpy()[j]))
++    for a, b, w in zip(pairs["a"], pairs["b"], want):
++        assert drawn.get((a, b), 0) / len(j) == pytest.approx(w, abs=0.04)
+     for i in j:
+-        count, gap = ex.target(i)
+-        assert np.allclose(count, [0, 0, 1])
+-        m = ex.meta.iloc[i]
+-        # the boundary columns are the realised gap, in crop px; it is the drawn gap to the rounding of a px
+-        assert gap.sum() == pytest.approx(m["gap_px"], abs=1e-4)      # float32 targets
+-        assert m["gap_px"] / m["unit_px"] == pytest.approx(m["gap"], abs=0.5 / m["unit_px"] + 1e-9)
+-        # the gap is paper: the ink in a boundary column is the part of it outside the gap
+-        row = ex.crop(i)[0, K.HEIGHT // 2]
+-        assert np.allclose(row[gap >= 1.0], 0.0)
+-    # the joined words are training words, two different ones
+-    assert (ex.meta["word_a"].to_numpy()[j] != ex.meta["word_b"].to_numpy()[j]).all()
+-    # the same seed, the same examples
+-    again = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=40, gaps=gaps,
+-                           turned=0.0, seed=3)
++        assert ex.count[i][2:].sum() == pytest.approx(1.0)      # both words are wholly in their box
++    first = lambda a, b: j[(ex.meta["word_a"].to_numpy()[j] == a) & (ex.meta["word_b"].to_numpy()[j] == b)][0]  # noqa
++    # side by side: count 2, the boundary between them where it is not ink (as for a real box)
++    i = first(0, 1)
++    count, gap = ex.target(i)
++    assert np.allclose(count, np.eye(len(count))[2])
++    row = ex.crop(i)[0, K.HEIGHT // 2]
++    inside = _between(row)
++    assert (gap[inside] > 0.99).any() and np.allclose(gap[inside], 1.0 - row[inside], atol=1e-5)
++    assert np.allclose(gap[~inside], 0.0)
++    # a code over its block number: their extents along the box's axis overlap, so no boundary, and still two words
++    count, gap = ex.target(first(2, 3))
++    assert np.allclose(count, np.eye(len(count))[2]) and np.allclose(gap, 0.0)
++    again = B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=2000, merge=MERGE, seed=3)
+     assert np.array_equal(again.flat, ex.flat) and again.meta.equals(ex.meta)
+ 
+ 
++def test_a_joined_box_never_touches_a_held_area_or_word():
++    ink, terra = _merge_page()
++    boxes = pd.DataFrame([box(20, 40, 80, 70)])
++
++    def touch(sheet, window, shape):              # the far word's place is held
++        return {**NO_TOUCH, "touch_blocks": window[2] > 250}
++    held = pd.DataFrame([word(9, 100, 160, 110, 165)])           # a held word inside the code's box
++    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=touch, joined=300, merge=MERGE,
++                        held_words=held, seed=4)
++    j = np.flatnonzero(ex.meta["source"].to_numpy() == "joined")
++    words = set(ex.meta["word_a"].to_numpy()[j]) | set(ex.meta["word_b"].to_numpy()[j])
++    assert len(j) == 300 and 4 not in words and 2 not in words
++    assert ex.info["tried"] > 300
++
++
++def test_box_examples_fits_the_merge_model_on_its_own_boxes():
++    ink, terra = _merge_page()
++    boxes = pd.DataFrame([box(20, 40, 125, 70)])                # one box holding words 0 and 1
++    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, seed=5)
++    assert ex.info["merged_pairs"] == pytest.approx(1.0) and ex.info["merge"]["merged"] == pytest.approx(1.0)
++    assert ex.info["pairs"] == 10
++    # by default as many joined examples as the real boxes are expected to hold two words or more: one
++    assert (ex.meta["source"] == "joined").sum() == 1
++
++
+ # --- the network ------------------------------------------------------------------------------------------------------
+ 
+ def _bars(rng, words: int, width: int) -> tuple[np.ndarray, np.ndarray]:
+
+commit 7d2f553fa03a2a0ede0a99b79664537f0b7f502b
+Author: Steven Bacio <steven.buss@gmail.com>
+Date:   Tue Nov 17 11:18:46 2026 -0800
+
+    wordread boxmodel (Task 15): the learned box model of how many words a box holds and where they divide
+    
+    Examples (box_examples): each box cut by crops.box_cut (the reader crops' own margin) in ink, text chance and,
+    when given, the word heads' core and tags; the count target the exact Poisson-binomial of each Terra word's
+    share of its ink in the box; the boundary target per column the exact chance of lying between two consecutive
+    held words; doubt weights optional (None: 1); joined neighbours from two real word crops at gaps drawn from the
+    measured same-line gaps (soft next word on a line of text, no distance cut); raises on held-quarter or
+    answered-block words and boxes. K measured. BoxNet: smaller MobileNetV3 blocks plus masked dilated 1-D context;
+    fit_boxmodel in a GPU turn, seeded; box_logp for Task 9 (per crop, batch-independent). run_boxmodel.py measures
+    counts.json and gaps.json and builds examples_<q>; its fit is Task 8's. No training run.
+    
+    Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+    Claude-Session: https://claude.ai/code/session_01UjTgrnx2j4PhzZErrad25Q
+---
+ pipeline/scripts/wordread/run_boxmodel.py        | 186 +++++
+ pipeline/src/sfzmaps/solver/wordread/boxmodel.py | 890 +++++++++++++++++++++++
+ pipeline/tests/test_wordread_boxmodel.py         | 412 +++++++++++
+ 3 files changed, 1488 insertions(+)
+
+diff --git a/pipeline/scripts/wordread/run_boxmodel.py b/pipeline/scripts/wordread/run_boxmodel.py
+new file mode 100644
+index 0000000..12ab614
+--- /dev/null
++++ b/pipeline/scripts/wordread/run_boxmodel.py
+@@ -0,0 +1,186 @@
++"""Measure the learned box model's targets on today's boxes, and build or fit its examples
++(`sfzmaps.solver.wordread.boxmodel`), writing data/solver/experiments/wordread/boxmodel/:
++
++  gaps.json            per held-out quarter, the real same-line gaps of its training words (`boxmodel.same_line_gaps`:
++                       to the next word on each word's line of text, weighted by the chance it is that): the
++                       distribution the joined neighbours' gaps are drawn from
++  counts.json          today's boxes (data/solver/boxes) against every Terra word: the expected number of boxes holding
++                       0, 1, 2 and 3+ words (the sums of their Poisson-binomial count distributions; also the counts by
++                       each box's likeliest count, for display), overall, by quarter and on the Mission Street sheet;
++                       per held-out quarter what its model trains on (boxes, joined neighbours, K), the quantiles of its
++                       same-line gaps, and for comparison those of the gaps between words its boxes hold together
++                       (`boxmodel.held_pair_gaps`; reported only)
++  examples_<q>.npz     (`--examples`) the examples of the model holding q out, and their .parquet
++  <q>_seed<s>.pt       (`fit`; Task 8's arm (c)) a fitted box model, and its log <q>_seed<s>.json
++
++    uv run python scripts/wordread/run_boxmodel.py measure [--examples] [--quarters ne ...]
++    uv run python scripts/wordread/run_boxmodel.py fit --quarter ne --seed 0 [--device mps] [--steps N]
++
++`measure` is CPU only, one thread, $0, and trains nothing.  The words are `solver-text-crops`' rows (every Terra word
++of the 2000 sheets, with the held-out areas its crop touches); the chance of text is the fold detectors'
++(`text-reader/<sheet>/chance.png`); without the word heads' predictions (Task 8) the crops have two channels.
++"""
++import os
++
++for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS",
++           "OPENCV_FOR_THREADS_NUM"):
++    os.environ.setdefault(_k, "1")
++import argparse  # noqa: E402
++import json  # noqa: E402
++import time  # noqa: E402
++
++import cv2  # noqa: E402
++import numpy as np  # noqa: E402
++import pandas as pd  # noqa: E402
++import torch  # noqa: E402
++
++from sfzmaps.solver import paths, wordboxes  # noqa: E402
++from sfzmaps.solver.textnet import boxes as textboxes  # noqa: E402
++from sfzmaps.solver.textread import store  # noqa: E402
++from sfzmaps.solver.wordread import boxmodel as B  # noqa: E402
++
++BINS = ("0", "1", "2", "3+")
++
++
++class Sheets:
++    """sheet -> `boxmodel.SheetInputs`, read when asked, the last one kept."""
++
++    def __init__(self):
++        self.last: dict = {}
++
++    def __getitem__(self, sheet: str) -> B.SheetInputs:
++        if sheet not in self.last:
++            self.last.clear()
++            self.last[sheet] = B.load_sheet(sheet)
++        return self.last[sheet]
++
++
++def binned(dists: list[np.ndarray]) -> dict:
++    """The expected number of boxes holding 0, 1, 2 and 3+ words (sums of their count distributions), and the number
++    by each box's likeliest count (display only)."""
++    expected = np.zeros(4)
++    likeliest = np.zeros(4, int)
++    for d in dists:
++        expected += [d[0], d[1:2].sum(), d[2:3].sum(), d[3:].sum()]
++        likeliest[min(int(np.argmax(d)), 3)] += 1
++    return {"boxes": len(dists), "expected": dict(zip(BINS, np.round(expected, 2).tolist())),
++            "likeliest": dict(zip(BINS, likeliest.tolist()))}
++
++
++def load_words() -> pd.DataFrame:
++    rows = pd.read_parquet(store.CROPS_DIR / "crops.parquet")
++    terra = B.terra_frame(rows)
++    recs = textboxes.terra_records()
++    for sheet in paths.SHEETS:
++        have = int((terra["sheet"] == sheet).sum())
++        want = len(textboxes.terra_boxes(paths.SERIES, sheet, recs))
++        if have != want:
++            raise SystemExit(f"{sheet}: {have} words in solver-text-crops, Terra has {want}: rebuild text-crops")
++    return terra
++
++
++def measure(args) -> None:
++    from sfzmaps.solver.wordread import readercrops, review
++    torch.set_num_threads(1)
++    cv2.setNumThreads(1)
++    t0 = time.perf_counter()
++    terra = load_words()
++    boxes = wordboxes.load_boxes().reset_index(drop=True)
++    sheets = Sheets()
++    shapes, dists, pairs = {}, [None] * len(boxes), [None] * len(boxes)
++    turned_s = turned_n = 0.0
++    for sheet in sorted(set(boxes["sheet"])):
++        inputs = sheets[sheet]
++        shapes[sheet] = inputs.shape
++        mine = boxes[boxes["sheet"] == sheet]
++        got = B.box_targets(mine, terra[terra["sheet"] == sheet], inputs.ink)
++        for label, t in zip(mine.index, got):
++            dists[label] = t["count"]
++            pairs[label] = [(g, w) for _, _, g, w in B.pair_gaps(t)]
++            turned_s += float((t["shares"] * t["turned"]).sum())
++            turned_n += float(t["shares"].sum())
++    mission = review.mission_sheet()
++    quarter = boxes["quarter"].to_numpy()
++    out = {"today": {"all": binned(dists),
++                     "by_quarter": {qn: binned([dists[i] for i in np.flatnonzero(quarter == q)])
++                                    for q, qn in enumerate(paths.QUARTERS)},
++                     "mission_sheet": {"sheet": mission,
++                                       **binned([dists[i] for i in np.flatnonzero(boxes["sheet"] == mission)])},
++                     "largest_count_with_any_chance": int(max(len(d) - 1 for d in dists)),
++                     "turned_share": turned_s / turned_n if turned_n else None},
++           "words": int(len(terra)), "boxes": int(len(boxes)), "folds": {}}
++    touch = readercrops.HeldAreas()
++    gaps = {}
++    for qn in args.quarters:
++        q = paths.QUARTERS.index(qn)
++        words = B.training_words(terra, q)
++        keep = B.training_boxes(boxes, terra, quarter=q, touch=touch, shapes=shapes)
++        d = [dists[i] for i in keep.index]
++        gaps[qn] = B.gap_distribution(B.same_line_gaps(words))
++        held = B.gap_distribution(pd.DataFrame([gw for i in keep.index for gw in pairs[i]],
++                                               columns=["gap", "weight"]))
++        out["folds"][qn] = {"training_words": int(len(words)), "boxes": int(len(keep)), **binned(d),
++                            "joined": int(round(sum(float(x[2:].sum()) for x in d))),
++                            "K": int(max([len(x) - 1 for x in d] + [2])),
++                            "same_line_gaps": {"pairs": gaps[qn]["n"], "weight_sum": round(gaps[qn]["weight_sum"], 2),
++                                               "quantiles": gaps[qn]["quantiles"]},
++                            "held_pair_gaps": {"pairs": held["n"], "weight_sum": round(held["weight_sum"], 2),
++                                               "quantiles": held["quantiles"]}}
++        print(qn, json.dumps(out["folds"][qn]))
++    B.OUT_DIR.mkdir(parents=True, exist_ok=True)
++    if args.quarters:
++        B.GAPS_FILE.write_text(json.dumps({"definition": " ".join(B.same_line_gaps.__doc__.split()),
++                                           "words": "solver-text-crops' Terra words of the 2000 sheets, each "
++                                                    "quarter's training words", "quarters": gaps}) + "\n")
++    if args.examples:
++        for qn in args.quarters:
++            q = paths.QUARTERS.index(qn)
++            t1 = time.perf_counter()
++            words = B.training_words(terra, q)
++            keep = B.training_boxes(boxes, terra, quarter=q, touch=touch, shapes=shapes)
++            ex = B.box_examples(keep, words, sheets, q, touch=touch, gaps=gaps[qn])
++            ex.save(B.OUT_DIR / f"examples_{qn}")
++            src = ex.meta["source"].value_counts().to_dict()
++            out["folds"][qn]["examples"] = {"n": len(ex), "boxes": int(src.get("box", 0)),
++                                            "joined": int(src.get("joined", 0)), "K": ex.K,
++                                            "channels": list(ex.channels), "columns": int(ex.flat.shape[2]),
++                                            "weight_sum": float(ex.weight.sum()),
++                                            "seconds": round(time.perf_counter() - t1, 1)}
++            print(qn, "examples", json.dumps(out["folds"][qn]["examples"]))
++    out["seconds"] = round(time.perf_counter() - t0, 1)
++    (B.OUT_DIR / "counts.json").write_text(json.dumps(out, indent=1) + "\n")
++    print(json.dumps(out["today"], indent=1))
++
++
++def fit(args) -> None:
++    """Task 8's arm (c): fit the box model holding `--quarter` out on its saved examples."""
++    torch.set_num_threads(1)
++    cv2.setNumThreads(1)
++    ex = B.Examples.load(B.OUT_DIR / f"examples_{args.quarter}")
++    recipe = {**B.RECIPE, "seed": args.seed, "device": args.device}
++    if args.steps:
++        recipe["steps"] = args.steps
++    net = B.fit_boxmodel(ex, recipe)
++    name = f"{args.quarter}_seed{args.seed}"
++    B.save_boxnet(B.OUT_DIR / f"{name}.pt", net, quarter=args.quarter, recipe=recipe, examples=len(ex))
++    (B.OUT_DIR / f"{name}.json").write_text(json.dumps(net.fit_log, indent=1) + "\n")
++    print(json.dumps(net.fit_log["steps"][-1]))
++
++
++def main() -> None:
++    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
++    sub = ap.add_subparsers(dest="cmd", required=True)
++    m = sub.add_parser("measure")
++    m.add_argument("--quarters", nargs="*", default=list(paths.QUARTERS), choices=paths.QUARTERS)
++    m.add_argument("--examples", action="store_true")
++    f = sub.add_parser("fit")
++    f.add_argument("--quarter", required=True, choices=paths.QUARTERS)
++    f.add_argument("--seed", type=int, default=0)
++    f.add_argument("--device", default="cpu")
++    f.add_argument("--steps", type=int, default=None)
++    args = ap.parse_args()
++    measure(args) if args.cmd == "measure" else fit(args)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/pipeline/src/sfzmaps/solver/wordread/boxmodel.py b/pipeline/src/sfzmaps/solver/wordread/boxmodel.py
+new file mode 100644
+index 0000000..b54fe92
+--- /dev/null
++++ b/pipeline/src/sfzmaps/solver/wordread/boxmodel.py
+@@ -0,0 +1,890 @@
++"""The learned box model: a small network that reads one of our word boxes' own px and gives the number of words it
++holds (a distribution over 0..K) and, per crop column, the chance that the column lies between two of its words.  The
++owner: "there are things you can learn about boxes and how many words they hold ... Don't just hardcode these ...
++There is a hidden function that you should be able to learn automatically."  So no hand features (ink density, the ink
++centroid against the box centre, gaps): the network learns what matters from the px.  Its log-probabilities feed Task
++9's box choice (`box_logp`); Task 8's arm (c) trains it (`fit_boxmodel`).  No stage imports this module.
++
++The examples (`box_examples`), for the model that holds one quarter of the city out:
++  the crop      each box cut as the reader cuts it (`textread.crops.box_cut`: its trimmed rectangle along its axis, the
++                reader crops' own margin PAD_X / PAD_Y, HEIGHT px tall), one channel per layer of the sheet
++                (`SheetInputs`): the ink (the page darker than `grid.INK_BELOW`, 0 or 1, area-averaged by the resize),
++                the detector's per-ink text chance (`text-reader/<sheet>/chance.png`, 0..1), and when given the
++                detector's word-head outputs: the core chance (0..1) and the k tag channels (as they come)
++  the count     each Terra word's share of its ink inside the box's trimmed rectangle (its ink: the ink px whose
++                centre is inside its rectangle, `textnet.boxes.word_rect`; a word with no ink px: the share of its
++                rectangle's area), each word held or not independently with that chance, so the count is the
++                Poisson-binomial of the shares (`poisson_binomial`): exact, no "mostly inside" cut
++  the boundary  per crop column, the chance that the column lies between two consecutive held words: at a point x
++                along the box's axis, P(some held word ends at or before x) x P(some held word starts at or after x) x
++                P(no held word covers x), each word's span its rectangle's extent along the axis; integrated exactly
++                over the column's span (`boundary_target`).  With every share 1 these are exactly the columns between
++                consecutive words' ends, a column half in a gap counting a half
++  the weight    with Task 7's per-word weights w (the chance Terra's box is right; None: 1), an example counts
++                prod_i (1 - s_i (1 - w_i)) over the words it may hold (s_i its share): a word charges its doubt by the
++                chance the box holds it
++  joined        two real Terra word crops (the reader's own crops of the words, `crops.cut` at the words' geometry),
++  neighbours    drawn at random from the training words, laid on one line at a gap drawn from the measured
++                distribution of real same-line gaps (`draw_gaps`), in word heights: the first word's crop up to its
++                end, paper across the gap, the second word's crop from its start (each word's outer margin real; a
++                negative gap overlaps them, each px from the crop with more ink there).  Count 2 and the gap's columns,
++                known by construction; turned a half turn with the measured share of real boxes' words that read
++                against the box's axis (`turned`), so the joined crops read both ways as the real boxes do.  How many
++                (`joined`): by default the expected number of real boxes holding two words or more (the sum of their
++                P(count >= 2)): measured, and an argument Task 8 may screen
++  the gaps      (`same_line_gaps`) the real same-line gaps, on the training words: from each word's end to the start
++                of the next word on its line of text, along its reading direction (as the joined crops lay them), over
++                their mean height.  No line rule and no distance cut: a word ahead shares the line with the chance
++                `line_share` (the overlap of their letters' bands over the smaller, times |cos| of the angle between
++                their readings: stacked words, a code over its block number, and words read across it count nothing),
++                and it is the next word with that chance times the chance that no word ahead nearer shares the line.
++                On a map the next word on a line is mostly another label far along the street (measured 11-17: median
++                8-10 word heights, 95th percentile 75-85; a joined crop that long is squeezed to `crops.MAX_WIDTH` as a
++                long box is); no mixture fitted to these gaps separates the words of one phrase from them.  For
++                comparison (`held_pair_gaps`, reported by the run script, not drawn from): the same gaps between words
++                that one of our boxes holds together are mostly negative, since a merged box is mostly a 2-D cluster (a
++                code with its block number tucked beside or below it), not words side by side on a line
++  held out     only training-quarter words outside the answered blocks: `box_examples` raises on a word whose crop
++                touches the held quarter or an answered block (`crops.TOUCH`, as `solver-text-crops` records them), on
++                a box in the held quarter and on a box whose crop touches either (`touch`).  `training_boxes` and
++                `training_words` give what may go in (a box meeting a held word's rectangle is left out: its count
++                would miss that word)
++
++K, the largest count of the network's output, is measured: the largest count with any chance in the training
++examples (`Examples.K`).
++
++The network (`BoxNet`), in the style of the reader's backbone (`textread.model`, MobileNetV3 blocks): a smaller
++MobileNetV3 stack whose strides take a HEIGHT-px crop to one row and its width to a quarter (STRIDE px a frame), then
++dilated 1-D convolutions over the frames (each frame sees its neighbours), masked to the crop's own frames so a crop's
++output never depends on the padding of its batch beyond the 2-D stack; a boundary logit per frame (each of its STRIDE
++columns), and count logits over 0..K from the frames' masked mean, max and sum.  `fit_boxmodel` trains it by the
++recipe (`RECIPE`; Task 8 screens it), in an exclusive GPU turn, seeded.  `box_logp` reads crops one padded width at a
++time, so a crop's output is its own.
++"""
++import contextlib
++import json
++import math
++import time
++from dataclasses import dataclass
++from pathlib import Path
++
++import cv2
++import numpy as np
++import pandas as pd
++import torch
++import torch.nn.functional as F
++from torch import nn
++
++from sfzmaps import gpu
++from sfzmaps.solver import grid, paths, runs, wordboxes
++from sfzmaps.solver.codereader import labels as L
++from sfzmaps.solver.textnet import boxes as textboxes
++from sfzmaps.solver.textnet import data
++from sfzmaps.solver.textread import crops as K
++from sfzmaps.solver.textread import model, store
++
++HEIGHT = K.HEIGHT
++STRIDE = model.STRIDE            # crop px per frame
++TOUCH = store.TOUCH
++C_COLS = [f"c{i}{a}" for i in range(4) for a in "xy"]     # a Terra word's rectangle (`measures.C_COLS`)
++T_COLS = [f"t{i}{a}" for i in range(4) for a in "xy"]     # a box's trimmed rectangle
++SEED = 20261117
++OUT_DIR = runs.EXPERIMENTS_DIR / "wordread" / "boxmodel"
++GAPS_FILE = OUT_DIR / "gaps.json"
++QUANTILES = (0.01, 0.05, 0.25, 0.5, 0.75, 0.95, 0.99)      # reported only
++# MobileNetV3 blocks (`textread.model.InvertedResidual`): input channels, kernel, expanded, output, squeeze-excite,
++# hard swish, stride.  With the stem's (2, 1) a HEIGHT-px crop comes out one row tall and a quarter as wide.
++STEM = 16
++LAYERS = ((16, 3, 16, 16, True, False, (2, 1)), (16, 3, 64, 24, False, False, (2, 1)),
++          (24, 3, 72, 24, False, False, 1), (24, 5, 96, 40, True, True, (2, 2)),
++          (40, 5, 120, 40, True, True, 1), (40, 5, 144, 48, True, True, (2, 2)))
++LAST = 96                        # the frames' channels
++DILATIONS = (1, 2, 4, 8)         # the context convolutions over the frames
++SUM_SCALE = 16.0                 # numerical: the frames' summed features are divided by this (decides nothing)
++BN_MOMENTUM = 0.1                # torch's default: the reader's 0.01 (docTR's) leaves a short fit's running statistics
++#   far from its batches', and the network reads crops by them
++# The training recipe's defaults (Task 8 screens them on the held-out outcome); `boundary_weight` weighs the boundary
++# loss against the count's.
++RECIPE = {"steps": 6000, "batch": 32, "max_lr": 2e-3, "pct_start": 0.15, "weight_decay": 1e-4, "clip": 5.0,
++          "boundary_weight": 1.0, "seed": 0, "device": "cpu", "log_every": 250}
++
++
++def _need_quarter(quarter, what: str) -> int:
++    if quarter is None:
++        raise ValueError(f"{what} needs the held-out quarter: with none it would use that quarter's words")
++    return int(quarter)
++
++
++# --- a sheet's layers -------------------------------------------------------------------------------------------------
++
++@dataclass(frozen=True)
++class SheetInputs:
++    """One sheet's px the box model reads: `ink` bool (h, w); `chance` uint8 (h, w), the detector's per-ink text
++    chance x 255; optional word heads: `core` float (h, w) in [0, 1] and `tag` float (k, h, w)."""
++    ink: np.ndarray
++    chance: np.ndarray
++    core: np.ndarray | None = None
++    tag: np.ndarray | None = None
++
++    def __post_init__(self):
++        shape = np.shape(self.ink)
++        if np.shape(self.chance) != shape or (self.core is not None and np.shape(self.core) != shape) or (
++                self.tag is not None and np.shape(self.tag)[1:] != shape):
++            raise ValueError("every layer of a sheet must be the page's shape")
++
++    @property
++    def shape(self) -> tuple[int, int]:
++        return tuple(np.shape(self.ink))
++
++    @property
++    def channels(self) -> tuple[str, ...]:
++        out = ["ink", "chance"]
++        if self.core is not None:
++            out.append("core")
++        if self.tag is not None:
++            out += [f"tag{k}" for k in range(len(self.tag))]
++        return tuple(out)
++
++    def layers(self) -> list[tuple[np.ndarray, float]]:
++        """Each channel's page array and the factor its px are multiplied by (float32 crops)."""
++        out = [(self.ink, 1.0), (self.chance, 1.0 / 255.0)]
++        if self.core is not None:
++            out.append((self.core, 1.0))
++        if self.tag is not None:
++            out += [(t, 1.0) for t in self.tag]
++        return out
++
++
++def load_sheet(sheet: str, chance_dir: Path | None = None, heads=None) -> SheetInputs:
++    """A 2000 sheet's `SheetInputs`: its ink, the fold detectors' chance (`<chance_dir>/<sheet>/chance.png`,
++    `paths.READER_TEXT_DIR` when None), and `heads(sheet) -> (core, tag)` when given."""
++    ink = data.load_page(sheet) < grid.INK_BELOW
++    f = (chance_dir or paths.READER_TEXT_DIR) / sheet / "chance.png"
++    chance = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
++    if chance is None or chance.shape != ink.shape:
++        raise FileNotFoundError(f"no chance of text the page's size at {f}")
++    core, tag = heads(sheet) if heads is not None else (None, None)
++    return SheetInputs(ink=ink, chance=chance, core=core, tag=tag)
++
++
++def _getter(sheets):
++    return sheets.__getitem__ if hasattr(sheets, "__getitem__") else sheets
++
++
++def _cut(inputs: SheetInputs, centre, length: float, height: float, angle: float) -> np.ndarray:
++    """Every layer of the crop `crops.cut` makes of the rectangle (centre a page px index), float32 (C, HEIGHT, W):
++    each layer's window under the crop made float first, so the resize averages px exactly."""
++    a, shape = K.frame_of(centre, length, height, angle)
++    x0, y0, x1, y1 = L._footprint(a, shape, 2, inputs.shape)
++    out = []
++    for arr, scale in inputs.layers():
++        win = np.asarray(arr)[y0:y1, x0:x1].astype(np.float32) * np.float32(scale)
++        out.append(K.cut(win, centre, length, height, angle, 0, origin=(x0, y0))[0].astype(np.float32))
++    return np.stack(out)
++
++
++def layout(length: float, height: float) -> tuple[int, int]:
++    """`crops.cut`'s page-px width w of the crop of a `length` x `height` rectangle, and its crop's width.  A point
++    p page px along the axis from the rectangle's centre is at w / 2 + p in the page-px crop, and crop column c holds
++    [c, c + 1] x w / width of that."""
++    w = max(4, round(length + 2 * K.PAD_X * height))
++    h = max(4, round(height * (1 + 2 * K.PAD_Y)))
++    return w, min(K.MAX_WIDTH, max(4, round(w * HEIGHT / h)))
++
++
++def _box_geometry(b) -> tuple[np.ndarray, float, float, float]:
++    """A box's trimmed corners (4, 2), its sides as `crops.box_cut` takes them, and its axis."""
++    corners = np.array([[b[f"t{i}x"], b[f"t{i}y"]] for i in range(4)], float)
++    return corners, max(float(b["t_length"]), 1.0), max(float(b["t_height"]), 1.0), float(b["axis"])
++
++
++def box_crop(inputs: SheetInputs, corners, length: float, height: float, axis: float) -> np.ndarray:
++    """A rectangle's crop as the box model reads it (`crops.box_crop`'s cut of every layer): `corners` (4, 2) page px
++    edge coordinates, `length` and `height` its sides along and across `axis` (degrees).  Task 9's candidates are cut
++    by it."""
++    centre = np.asarray(corners, float).reshape(4, 2).mean(0) - 0.5
++    return _cut(inputs, (float(centre[0]), float(centre[1])), max(float(length), 1.0), max(float(height), 1.0),
++                float(axis))
++
++
++def _footprint(corners, length: float, height: float, axis: float, shape) -> tuple[int, int, int, int]:
++    centre = np.asarray(corners, float).reshape(4, 2).mean(0) - 0.5
++    a, crop_shape = K.frame_of((float(centre[0]), float(centre[1])), length, height, axis)
++    return K._footprint(a, crop_shape, shape)
++
++
++# --- the targets ------------------------------------------------------------------------------------------------------
++
++def poisson_binomial(p) -> np.ndarray:
++    """The distribution of the number of successes of independent trials with chances `p`: (len(p) + 1,)."""
++    out = np.ones(1)
++    for s in np.asarray(p, float).ravel():
++        out = np.concatenate([out * (1.0 - s), [0.0]]) + np.concatenate([[0.0], out * s])
++    return out
++
++
++def _inside(quad: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
++    """Which points are inside a convex quadrilateral (4, 2) (its edges included)."""
++    c = np.asarray(quad, float).reshape(4, 2)
++    cross = np.stack([(c[(k + 1) % 4, 0] - c[k, 0]) * (y - c[k, 1]) - (c[(k + 1) % 4, 1] - c[k, 1]) * (x - c[k, 0])
++                      for k in range(4)])
++    return (cross >= 0).all(0) | (cross <= 0).all(0)
++
++
++def _ink_of(rect: np.ndarray, ink: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
++    """The centres (edge coordinates) of the ink px whose centre is inside a rectangle (4, 2)."""
++    h, w = ink.shape
++    x0, y0 = np.floor(rect.min(0)).astype(int)
++    x1, y1 = np.ceil(rect.max(0)).astype(int)
++    x0, y0, x1, y1 = max(x0, 0), max(y0, 0), min(x1, w), min(y1, h)
++    if x1 <= x0 or y1 <= y0:
++        return np.zeros(0), np.zeros(0)
++    ys, xs = np.nonzero(ink[y0:y1, x0:x1])
++    x, y = xs + x0 + 0.5, ys + y0 + 0.5
++    keep = _inside(rect, x, y)
++    return x[keep], y[keep]
++
++
++def ink_shares(rects: np.ndarray, words: np.ndarray, ink: np.ndarray):
++    """For every rectangle of `rects` (n, 4, 2) and Terra word rectangle of `words` (m, 4, 2) (page px edge
++    coordinates): each word's share of its ink inside the rectangle (see the module), for the pairs with a share above
++    0: (rectangle positions, word positions, shares)."""
++    ri, wj, inter = wordboxes.pairs(np.asarray(rects, float).reshape(-1, 4, 2),
++                                    np.asarray(words, float).reshape(-1, 4, 2))
++    share = np.zeros(len(ri))
++    area = wordboxes.poly_area(np.asarray(words, float).reshape(-1, 4, 2))
++    for j in np.unique(wj):
++        sel = np.flatnonzero(wj == j)
++        x, y = _ink_of(words[j], ink)
++        if not len(x):
++            share[sel] = np.minimum(inter[sel] / max(area[j], 1e-12), 1.0)
++            continue
++        for k in sel:
++            share[k] = _inside(rects[ri[k]], x, y).sum() / len(x)
++    keep = share > 0
++    return ri[keep], wj[keep], share[keep]
++
++
++def boundary_target(spans: np.ndarray, held, w: float, out_w: int) -> np.ndarray:
++    """The boundary target of each of `out_w` crop columns (see the module): `spans` (m, 2) the words' extents along
++    the axis in page-px crop coordinates (0..w), `held` (m,) the chance each is held.  Column c holds [c, c + 1] x w /
++    out_w; its target is the mean over it of P(x lies between two consecutive held words)."""
++    spans = np.asarray(spans, float).reshape(-1, 2)
++    p = np.asarray(held, float).ravel()
++    out = np.zeros(out_w)
++    if len(spans) < 2 or out_w <= 0:
++        return out
++    lo, hi = spans.min(1), spans.max(1)
++    cuts = np.unique(np.concatenate([np.arange(out_w + 1) * (w / out_w), np.clip(np.r_[lo, hi], 0.0, w)]))
++    mid, length = (cuts[:-1] + cuts[1:]) / 2, np.diff(cuts)
++    keep = length > 0
++    mid, length = mid[keep], length[keep]
++    q = 1.0 - p[None, :]
++    before = 1.0 - np.where(hi[None, :] <= mid[:, None], q, 1.0).prod(1)
++    after = 1.0 - np.where(lo[None, :] >= mid[:, None], q, 1.0).prod(1)
++    across = np.where((lo[None, :] < mid[:, None]) & (hi[None, :] > mid[:, None]), q, 1.0).prod(1)
++    col = np.clip(np.floor(mid * out_w / w).astype(int), 0, out_w - 1)
++    out = np.bincount(col, weights=before * after * across * length, minlength=out_w) / (w / out_w)
++    return np.clip(out, 0.0, 1.0)
++
++
++def _spans(rects: np.ndarray, corners: np.ndarray, axis: float, w: float) -> np.ndarray:
++    """The extents along `axis` of word rectangles (m, 4, 2) in the page-px crop coordinates of the box `corners`."""
++    (ux, uy), _ = L._axes(axis)
++    p = (np.asarray(rects, float).reshape(-1, 4, 2) - np.asarray(corners, float).mean(0)) @ np.array([ux, uy])
++    return np.stack([p.min(1), p.max(1)], 1) + w / 2
++
++
++def _turned(terra_angle, axis) -> np.ndarray:
++    """Whether a word reads the other way along the axis (more than a quarter turn from it)."""
++    return np.cos(np.radians(np.asarray(terra_angle, float) - np.asarray(axis, float))) < 0
++
++
++def box_targets(boxes: pd.DataFrame, terra: pd.DataFrame, ink: np.ndarray) -> list[dict]:
++    """The targets of each of one sheet's boxes (rows of boxes.parquet) against one sheet's Terra words (C_COLS, and
++    `angle`): per box `words` (positions in `terra` with a share above 0), `shares`, `count` (`poisson_binomial`),
++    `turned` (whether each word reads against the box's axis), `spans` (the words' extents along the axis in the box
++    crop's page-px coordinates), and the words' `rects`, reading `angles` and `heights` (page px), and the crop's `w`
++    and `out_w` (`layout`)."""
++    rects = boxes[T_COLS].to_numpy(float).reshape(-1, 4, 2)
++    words = terra[C_COLS].to_numpy(float).reshape(-1, 4, 2)
++    word_h = np.hypot(*(words[:, 3] - words[:, 0]).T) if len(words) else np.zeros(0)
++    bi, wj, s = ink_shares(rects, words, ink)
++    angle = terra["angle"].to_numpy(float) if "angle" in terra else np.zeros(len(terra))
++    out = []
++    for k, (_, b) in enumerate(boxes.iterrows()):
++        corners, length, height, axis = _box_geometry(b)
++        sel = np.flatnonzero(bi == k)
++        sel = sel[np.argsort(wj[sel], kind="stable")]
++        w, out_w = layout(length, height)
++        out.append({"words": wj[sel], "shares": s[sel], "count": poisson_binomial(s[sel]),
++                    "turned": _turned(angle[wj[sel]], axis), "spans": _spans(words[wj[sel]], corners, axis, w),
++                    "rects": words[wj[sel]], "angles": angle[wj[sel]], "heights": word_h[wj[sel]], "w": w,
++                    "out_w": out_w})
++    return out
++
++
++# --- what may go in ---------------------------------------------------------------------------------------------------
++
++def _held_words(terra: pd.DataFrame, quarter: int) -> np.ndarray:
++    missing = [c for c in (f"touch_{paths.QUARTERS[quarter]}", "touch_blocks") if c not in terra]
++    if missing:
++        raise ValueError(f"Terra's words lack {missing}: which are held out can't be checked")
++    return terra[f"touch_{paths.QUARTERS[quarter]}"].to_numpy(bool) | terra["touch_blocks"].to_numpy(bool)
++
++
++def training_words(terra: pd.DataFrame, quarter: int) -> pd.DataFrame:
++    """Terra's words whose crop touches neither `quarter` nor an answered block."""
++    q = _need_quarter(quarter, "training_words")
++    return terra[~_held_words(terra, q)]
++
++
++def training_boxes(boxes: pd.DataFrame, terra: pd.DataFrame, *, quarter: int, touch, shapes: dict) -> pd.DataFrame:
++    """The boxes the model holding `quarter` out may train on: outside the quarter, their crop touching neither it nor
++    an answered block (`touch(sheet, (x0, y0, x1, y1), shape) -> {TOUCH name: bool}`, `readercrops.HeldAreas`;
++    `shapes` sheet -> page shape), and meeting no held word's rectangle (`terra`: every Terra word, with TOUCH)."""
++    q = _need_quarter(quarter, "training_boxes")
++    held = _held_words(terra, q)
++    keep = (boxes["quarter"].to_numpy() != q)
++    sheet_of = boxes["sheet"].astype(str).to_numpy()
++    tsheet = terra["sheet"].astype(str).to_numpy()
++    for sheet in sorted(set(sheet_of[keep])):
++        mine = np.flatnonzero((sheet_of == sheet) & keep)
++        theirs = np.flatnonzero((tsheet == sheet) & held)
++        rects = boxes.iloc[mine][T_COLS].to_numpy(float).reshape(-1, 4, 2)
++        if len(theirs):
++            bi, _, _ = wordboxes.pairs(rects, terra.iloc[theirs][C_COLS].to_numpy(float).reshape(-1, 4, 2))
++            keep[mine[np.unique(bi)]] = False
++        for k in mine:
++            if not keep[k]:
++                continue
++            corners, length, height, axis = _box_geometry(boxes.iloc[k])
++            flags = touch(sheet, _footprint(corners, length, height, axis, shapes[sheet]), shapes[sheet])
++            keep[k] = not (flags[f"touch_{paths.QUARTERS[q]}"] or flags["touch_blocks"])
++    return boxes[keep]
++
++
++# --- the gaps between words on one line -------------------------------------------------------------------------------
++
++def _in_frame(rects: np.ndarray, angles: np.ndarray, angle: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
++    """Words (rectangles (m, 4, 2), reading angles (m,)) in the frame of a line read at `angle`: their extents along
++    it and across it (m, 2) each, and |cos| of each word's angle to the line's (a quarter turn exactly 0)."""
++    (ux, uy), (vx, vy) = L._axes(angle)
++    rel = np.asarray(rects, float).reshape(-1, 4, 2)
++    p, q = rel @ np.array([ux, uy]), rel @ np.array([vx, vy])
++    d = (np.asarray(angles, float) - angle) % 180.0
++    turn = np.where(d == 90.0, 0.0, np.abs(np.cos(np.radians(d))))
++    return np.stack([p.min(1), p.max(1)], 1), np.stack([q.min(1), q.max(1)], 1), turn
++
++
++def _shared(across: np.ndarray, turn: np.ndarray, a: np.ndarray, b: np.ndarray) -> np.ndarray:
++    """How much words a and b (index arrays, broadcast) share one line of text (see `line_share`)."""
++    over = np.minimum(across[a, 1], across[b, 1]) - np.maximum(across[a, 0], across[b, 0])
++    size = np.minimum(across[a, 1] - across[a, 0], across[b, 1] - across[b, 0])
++    return np.clip(over / np.maximum(size, 1e-12), 0.0, 1.0) * np.minimum(turn[a], turn[b])
++
++
++def line_share(rects: np.ndarray, angles: np.ndarray, angle: float) -> tuple[np.ndarray, np.ndarray]:
++    """Words (rectangles (m, 4, 2), reading angles (m,)) in the frame of a line read at `angle`: their extents along
++    it (m, 2), and how much each two share one line of text (m, m) in [0, 1]: the overlap of their extents across it
++    over the smaller extent, times the smaller |cos| of a word's angle to the line's (1: one word's letters wholly
++    within the other's band, read the same way; 0: stacked words, or a word read across the line)."""
++    span, across, turn = _in_frame(rects, angles, angle)
++    m = np.arange(len(span))
++    return span, _shared(across, turn, m[:, None], m[None, :])
++
++
++def pair_gaps(t: dict) -> list[tuple[int, int, float, float]]:
++    """The consecutive pairs on one line of text among the words one box holds (`box_targets`; see the module):
++    (word, next word (positions of `terra`, in reading order), gap, weight).  Each two words are taken in the frame of
++    the first's reading direction (`line_share`): the gap from the earlier one's end to the later one's start along
++    it, over their mean height; the weight the chance that both are held, that they share a line (as a chance) and
++    that no word between them along it is held on that line: s_i s_j l_ij prod_k (1 - s_k min(l_ik, l_kj))."""
++    s, h, rects, angles = t["shares"], t["heights"], t["rects"], t["angles"]
++    out = []
++    for i in range(len(s)):
++        span, line = line_share(rects, angles, float(angles[i]))
++        c = span.mean(1)
++        for j in range(i + 1, len(s)):
++            a, b = (i, j) if c[i] <= c[j] else (j, i)
++            between = np.flatnonzero((c > c[a]) & (c < c[b]))
++            between = between[(between != i) & (between != j)]
++            weight = s[i] * s[j] * line[i, j] * np.prod(1.0 - s[between] * np.minimum(line[i, between],
++                                                                                        line[between, j]))
++            if weight > 0:
++                gap = (span[b, 0] - span[a, 1]) / ((h[i] + h[j]) / 2)
++                out.append((int(t["words"][a]), int(t["words"][b]), float(gap), float(weight)))
++    return out
++
++
++def held_pair_gaps(boxes: pd.DataFrame, terra: pd.DataFrame, ink: np.ndarray, targets: list | None = None
++                   ) -> pd.DataFrame:
++    """The real same-line gaps of one sheet's boxes (see the module): one row per consecutive held pair of every box
++    (`pair_gaps`): sheet, box (its index label), word and next (positions in `terra`), gap, weight.  `targets`: the
++    boxes' `box_targets` against `terra` (computed when None)."""
++    targets = box_targets(boxes, terra, ink) if targets is None else targets
++    rows = [{"sheet": str(b["sheet"]), "box": label, "word": a, "next": c, "gap": g, "weight": w}
++            for (label, b), t in zip(boxes.iterrows(), targets) for a, c, g, w in pair_gaps(t)]
++    return pd.DataFrame(rows, columns=["sheet", "box", "word", "next", "gap", "weight"])
++
++
++def same_line_gaps(terra: pd.DataFrame) -> pd.DataFrame:
++    """The real same-line gaps (see the module): for each Terra word, every other word of its sheet whose centre lies
++    ahead along its reading direction and that shares its line of text (`line_share`), with the chance that it is the
++    word's next word on that line: that it shares the line and that no word ahead nearer (by centre) does,
++    l_ab prod_k (1 - l_ak).  `gap`: from the word's end to the other's start along its reading direction, over their
++    mean height (negative when their rectangles overlap).  Columns: sheet, word, next (Terra's word numbers), pos,
++    next_pos (positions in `terra`), gap, weight."""
++    rects_all = terra[C_COLS].to_numpy(float).reshape(-1, 4, 2)
++    angle_all = terra["angle"].to_numpy(float)
++    number = terra["word"].to_numpy() if "word" in terra else np.arange(len(terra))
++    sheets = terra["sheet"].astype(str).to_numpy()
++    rows = []
++    for sheet in sorted(set(sheets)):
++        idx = np.flatnonzero(sheets == sheet)
++        r, ang = rects_all[idx], angle_all[idx]
++        h = np.hypot(*(r[:, 3] - r[:, 0]).T)
++        for a in range(len(idx)):
++            span, across, turn = _in_frame(r, ang, float(ang[a]))
++            c = span.mean(1)
++            ahead = np.flatnonzero(c > c[a])
++            line = _shared(across, turn, np.full(len(ahead), a), ahead)
++            ahead, line = ahead[line > 0], line[line > 0]
++            order = np.argsort(c[ahead], kind="stable")
++            ahead, line = ahead[order], line[order]
++            weight = line * np.concatenate([[1.0], np.cumprod(1.0 - line)[:-1]])
++            for b, w in zip(ahead[weight > 0], weight[weight > 0]):
++                rows.append({"sheet": sheet, "word": int(number[idx[a]]), "next": int(number[idx[b]]),
++                             "pos": int(idx[a]), "next_pos": int(idx[b]),
++                             "gap": float((span[b, 0] - span[a, 1]) / ((h[a] + h[b]) / 2)), "weight": float(w)})
++    return pd.DataFrame(rows, columns=["sheet", "word", "next", "pos", "next_pos", "gap", "weight"])
++
++
++def _weighted_quantiles(x: np.ndarray, w: np.ndarray, qs) -> list[float]:
++    order = np.argsort(x, kind="stable")
++    x, w = x[order], w[order]
++    c = np.cumsum(w)
++    return [float(x[min(np.searchsorted(c, q * c[-1]), len(x) - 1)]) for q in qs]
++
++
++def gap_distribution(gaps: pd.DataFrame) -> dict:
++    """Measured gaps (`same_line_gaps`, or `held_pair_gaps`) as a distribution to draw from: every `gap` with its
++    `weight`, `n`, the weights' sum and the weighted QUANTILES (reported only)."""
++    x, w = gaps["gap"].to_numpy(float), gaps["weight"].to_numpy(float)
++    out = {"gap": x.tolist(), "weight": w.tolist(), "n": int(len(x)), "weight_sum": float(w.sum())}
++    out["quantiles"] = (dict(zip(map(str, QUANTILES), _weighted_quantiles(x, w, QUANTILES)))
++                        if len(x) and w.sum() > 0 else None)
++    return out
++
++
++def draw_gaps(dist: dict, n: int, rng) -> np.ndarray:
++    """`n` gaps drawn from a measured distribution (`gap_distribution`: each measured gap with the chance of its
++    weight)."""
++    x, w = np.asarray(dist["gap"], float), np.asarray(dist["weight"], float)
++    if not len(x) or w.sum() <= 0:
++        raise ValueError("no measured gap to draw from")
++    return x[rng.choice(len(x), size=n, p=w / w.sum())]
++
++
++# --- the examples -----------------------------------------------------------------------------------------------------
++
++@dataclass
++class Examples:
++    """The box model's examples: crop i is `flat[:, :, offsets[i]:offsets[i + 1]]` (float32, (C, HEIGHT, W)) with
++    channels `channels`; its count distribution `count[i]` (over 0..K), its boundary target per column
++    `boundary[offsets[i]:offsets[i + 1]]`, its `weight`; `meta` one row each."""
++    channels: tuple[str, ...]
++    flat: np.ndarray
++    offsets: np.ndarray
++    count: np.ndarray
++    boundary: np.ndarray
++    weight: np.ndarray
++    meta: pd.DataFrame
++
++    @classmethod
++    def of(cls, crops, counts, boundaries, weights, meta: pd.DataFrame, channels) -> "Examples":
++        """From lists: crops (C, HEIGHT, W_i), count distributions (any length; padded to K + 1, K the largest count
++        with any chance among them), boundary targets (W_i,), weights."""
++        crops = [np.asarray(c, np.float32) for c in crops]
++        widths = np.array([c.shape[2] for c in crops], np.int64)
++        if any(np.shape(b) != (wd,) for b, wd in zip(boundaries, widths)):
++            raise ValueError("a boundary target per crop column")
++        top = max([int(np.flatnonzero(np.asarray(c) > 0).max()) for c in counts if np.any(np.asarray(c) > 0)],
++                  default=0)
++        count = np.zeros((len(counts), top + 1))
++        for i, c in enumerate(counts):
++            c = np.asarray(c, float)[:top + 1]
++            count[i, :len(c)] = c
++        flat = (np.concatenate(crops, axis=2) if crops else np.zeros((len(channels), HEIGHT, 0), np.float32))
++        return cls(tuple(channels), np.ascontiguousarray(flat), np.concatenate([[0], np.cumsum(widths)]).astype(
++            np.int64), count, np.concatenate([np.asarray(b, np.float32) for b in boundaries]) if len(boundaries)
++            else np.zeros(0, np.float32), np.asarray(weights, float), meta.reset_index(drop=True))
++
++    def __len__(self) -> int:
++        return len(self.offsets) - 1
++
++    @property
++    def K(self) -> int:
++        return self.count.shape[1] - 1
++
++    @property
++    def widths(self) -> np.ndarray:
++        return np.diff(self.offsets)
++
++    def crop(self, i: int) -> np.ndarray:
++        return self.flat[:, :, self.offsets[i]:self.offsets[i + 1]]
++
++    def target(self, i: int) -> tuple[np.ndarray, np.ndarray]:
++        return self.count[i], self.boundary[self.offsets[i]:self.offsets[i + 1]]
++
++    def save(self, path: Path) -> None:
++        """`<path>.npz` (fixed dates, `store.save_npz`) and `<path>.parquet` (the meta)."""
++        path = Path(path)
++        store.save_npz(path.with_suffix(".npz"), channels=np.array(self.channels), flat=self.flat,
++                       offsets=self.offsets, count=self.count, boundary=self.boundary, weight=self.weight)
++        self.meta.to_parquet(path.with_suffix(".parquet"), index=False)
++
++    @classmethod
++    def load(cls, path: Path) -> "Examples":
++        path = Path(path)
++        with np.load(path.with_suffix(".npz")) as z:
++            return cls(tuple(str(c) for c in z["channels"]), z["flat"], z["offsets"], z["count"], z["boundary"],
++                       z["weight"], pd.read_parquet(path.with_suffix(".parquet")))
++
++
++def _word_crop(inputs: SheetInputs, t) -> tuple[np.ndarray, tuple[float, float], float]:
++    """A Terra word's crop as the reader cuts it (`crops.rectify`'s centre, the row's length and floored height):
++    every layer, its span along the line in crop columns, and its height in crop columns."""
++    length, height = float(t["length"]), float(t["height"])
++    centre = ((t["box_x0"] + t["box_x1"] - 1) / 2, (t["box_y0"] + t["box_y1"] - 1) / 2)
++    crop = _cut(inputs, centre, length, height, float(t["angle"]))
++    w, out_w = layout(length, height)
++    if crop.shape[2] != out_w:
++        raise AssertionError(f"crops.cut made a crop {crop.shape[2]} wide, its layout {out_w}")
++    s = out_w / w
++    return crop, ((w / 2 - length / 2) * s, (w / 2 + length / 2) * s), height * s
++
++
++def join(a: tuple, b: tuple, gap: float, turned: bool = False) -> tuple[np.ndarray, np.ndarray, dict]:
++    """Two word crops (`_word_crop`'s three) on one line, `gap` word heights (their mean) from the first's end to the
++    second's start, B placed at the nearest whole crop column: the first word's crop up to its end, paper across the
++    gap, the second's from its start; where they overlap (a negative gap), each px from the crop with more ink there.
++    Squeezed to `crops.MAX_WIDTH` as `crops.cut` squeezes, and turned a half turn with `turned`.  The crop, its
++    boundary target (the gap's columns) and the gap realised (`gap_px`, `unit_px`: crop columns before any squeeze)."""
++    (ca, (a0, a1), ua), (cb, (b0, b1), ub) = a, b
++    unit = (ua + ub) / 2
++    o = int(round(a1 + gap * unit - b0))          # B's crop's first column, from A's
++    oa = max(0, -o)
++    ob = oa + o
++    sa0, sa1, sb0, sb1 = oa + a0, oa + a1, ob + b0, ob + b1
++    width = max(oa + ca.shape[2], ob + cb.shape[2])
++    out = np.zeros((ca.shape[0], HEIGHT, width), np.float32)
++    end_a = min(oa + ca.shape[2], math.ceil(sa1))            # A's crop up to its word's end
++    if end_a > oa:
++        out[:, :, oa:end_a] = ca[:, :, :end_a - oa]
++    start_b = max(ob, math.floor(sb0))                      # B's from its word's start
++    if start_b < ob + cb.shape[2]:
++        part, here = cb[:, :, start_b - ob:], out[:, :, start_b:ob + cb.shape[2]]
++        out[:, :, start_b:ob + cb.shape[2]] = np.where(part[:1] > here[:1], part, here)
++    spans = np.array([[sa0, sa1], [sb0, sb1]])
++    out_w = min(width, K.MAX_WIDTH)
++    target = boundary_target(spans, np.ones(2), width, out_w)
++    if out_w < width:
++        out = np.stack([cv2.resize(c, (out_w, HEIGHT), interpolation=cv2.INTER_AREA) for c in out])
++    if turned:
++        out, target = np.ascontiguousarray(out[:, ::-1, ::-1]), target[::-1].copy()
++    return out, target, {"gap_px": float(sb0 - sa1), "unit_px": float(unit), "width": int(width)}
++
++
++def box_examples(boxes: pd.DataFrame, terra: pd.DataFrame, sheets, quarter: int, weights=None, *, touch=None,
++                 joined: int | None = None, gaps: dict | None = None, turned: float | None = None,
++                 seed: int = SEED) -> Examples:
++    """The examples for the box model holding `quarter` out (see the module).  `boxes`: rows of boxes.parquet (any
++    run's, Task 9's candidates alike); `terra`: Terra's words (`terra_frame`: C_COLS, angle, the axis box, the crop's
++    length and height, TOUCH), every word that meets a box among them; `sheets`: sheet -> `SheetInputs` (a mapping or a
++    function); `weights`: per word of `terra` (Task 7's; None: 1); `touch` (`training_boxes`; `readercrops.HeldAreas`
++    when None); `joined`: how many joined neighbours (None: the expected number of real boxes holding two words or
++    more); `gaps`: the gap distribution (`gap_distribution`; None: measured from `terra`, `same_line_gaps`);
++    `turned`: the share of joined crops turned a half turn (None: measured from these boxes).  ValueError on a held
++    word or box (see the module)."""
++    q = _need_quarter(quarter, "box_examples")
++    held = _held_words(terra, q)
++    if held.any():
++        raise ValueError(f"{int(held.sum())} of Terra's words touch the held quarter {paths.QUARTERS[q]} or an "
++                         "answered block: pass training_words(...)")
++    if (boxes["quarter"].to_numpy() == q).any():
++        raise ValueError(f"boxes in the held quarter {paths.QUARTERS[q]}: pass training_boxes(...)")
++    terra = terra.reset_index(drop=True)
++    wt = np.ones(len(terra)) if weights is None else np.asarray(weights, float).ravel()
++    if len(wt) != len(terra) or (wt < 0).any() or (wt > 1).any():
++        raise ValueError(f"weights: {len(wt)} in [0, 1] for {len(terra)} words")
++    if touch is None:
++        from sfzmaps.solver.wordread import readercrops
++        touch = readercrops.HeldAreas()
++    get = _getter(sheets)
++    crops, counts, bounds, wts, meta = [], [], [], [], []
++    channels = None
++    turn_s = turn_n = 0.0
++    sheet_of = boxes["sheet"].astype(str).to_numpy()
++    tsheet = terra["sheet"].astype(str).to_numpy()
++    for sheet in sorted(set(sheet_of)):
++        inputs = get(sheet)
++        if channels is None:
++            channels = inputs.channels
++        elif inputs.channels != channels:
++            raise ValueError(f"{sheet}: channels {inputs.channels}, the others' {channels}")
++        mine = boxes[sheet_of == sheet]
++        twords = np.flatnonzero(tsheet == sheet)
++        got = box_targets(mine, terra.iloc[twords], inputs.ink)
++        for (label, b), t in zip(mine.iterrows(), got):
++            corners, length, height, axis = _box_geometry(b)
++            flags = touch(sheet, _footprint(corners, length, height, axis, inputs.shape), inputs.shape)
++            if flags[f"touch_{paths.QUARTERS[q]}"] or flags["touch_blocks"]:
++                raise ValueError(f"{sheet} box {label}: its crop touches the held quarter or an answered block")
++            crop = box_crop(inputs, corners, length, height, axis)
++            if crop.shape[2] != t["out_w"]:
++                raise AssertionError(f"crops.box_cut made a crop {crop.shape[2]} wide, its layout {t['out_w']}")
++            pos = twords[t["words"]]
++            s = t["shares"]
++            crops.append(crop)
++            counts.append(t["count"])
++            bounds.append(boundary_target(t["spans"], s, t["w"], t["out_w"]))
++            wts.append(float(np.prod(1.0 - s * (1.0 - wt[pos]))))
++            turn_s += float((s * t["turned"]).sum())
++            turn_n += float(s.sum())
++            meta.append({"source": "box", "sheet": sheet, "box": int(label) if np.issubdtype(type(label), np.integer)
++                         else -1, "quarter": int(b["quarter"]), "sheet_b": "", "word_a": -1, "word_b": -1,
++                         "gap": np.nan, "gap_px": np.nan, "unit_px": np.nan, "turned": False,
++                         "support": int(len(s)), "expected": float(s.sum())})
++    n_join = (int(round(sum(float(c[2:].sum()) for c in counts))) if joined is None else int(joined))
++    if n_join > 0:
++        if len(terra) < 2:
++            raise ValueError("joined neighbours need two training words or more")
++        dist = gap_distribution(same_line_gaps(terra)) if gaps is None else gaps
++        share = (turn_s / turn_n if turn_n > 0 else 0.0) if turned is None else float(turned)
++        rng = np.random.default_rng([seed, 1])
++        first = rng.integers(0, len(terra), n_join)
++        second = rng.integers(0, len(terra) - 1, n_join)
++        second = second + (second >= first)
++        gap = draw_gaps(dist, n_join, np.random.default_rng([seed, 2]))
++        turn = np.random.default_rng([seed, 3]).random(n_join) < share
++        need = np.unique(np.r_[first, second])
++        word_crops = {}
++        for sheet in sorted(set(tsheet[need])):
++            inputs = get(sheet)
++            if channels is None:
++                channels = inputs.channels
++            elif inputs.channels != channels:
++                raise ValueError(f"{sheet}: channels {inputs.channels}, the others' {channels}")
++            for p in need[tsheet[need] == sheet]:
++                word_crops[int(p)] = _word_crop(inputs, terra.iloc[int(p)])
++        for a, b, g, tn in zip(first, second, gap, turn):
++            crop, target, got = join(word_crops[int(a)], word_crops[int(b)], float(g), bool(tn))
++            crops.append(crop)
++            counts.append(np.array([0.0, 0.0, 1.0]))
++            bounds.append(target)
++            wts.append(float(wt[a] * wt[b]))
++            meta.append({"source": "joined", "sheet": tsheet[a], "box": -1, "quarter": int(terra["quarter"].iat[a]),
++                         "sheet_b": tsheet[b], "word_a": int(a), "word_b": int(b), "gap": float(g),
++                         "gap_px": got["gap_px"], "unit_px": got["unit_px"], "turned": bool(tn), "support": 2,
++                         "expected": 2.0})
++    if channels is None:
++        raise ValueError("no box and no joined neighbour: nothing to learn from")
++    return Examples.of(crops, counts, bounds, wts, pd.DataFrame(meta), channels)
++
++
++def terra_frame(rows: pd.DataFrame) -> pd.DataFrame:
++    """Every Terra word of the 2000 sheets (any kind and string) from rows of `solver-text-crops`' crops.parquet, as
++    `box_examples` takes them: sheet, word (its number on the sheet), kind, text (Terra's), quarter, angle, the axis
++    box, the crop's length and height (a slanted word's height floored, as the reader's crops), TOUCH, and C_COLS
++    (`textnet.boxes.word_rect`)."""
++    w = rows[(rows["series"] == paths.SERIES) & (rows["word"] >= 0)].reset_index(drop=True)
++    box = w[["box_x0", "box_y0", "box_x1", "box_y1"]].to_numpy(float)
++    angle = w["angle"].to_numpy(float)
++    rects = np.array([textboxes.word_rect(b, a) for b, a in zip(box, angle)], float).reshape(-1, 4, 2)
++    return pd.DataFrame({"sheet": w["sheet"].astype(str).to_numpy(), "word": w["word"].astype(int).to_numpy(),
++                         "kind": w["kind"].to_numpy(), "text": w["terra"].astype(str).to_numpy(),
++                         "quarter": w["quarter"].astype(int).to_numpy(), "angle": angle,
++                         **{c: box[:, k] for k, c in enumerate(("box_x0", "box_y0", "box_x1", "box_y1"))},
++                         "length": w["length"].to_numpy(float), "height": w["height"].to_numpy(float),
++                         **{t: w[t].astype(bool).to_numpy() for t in TOUCH},
++                         **dict(zip(C_COLS, rects.reshape(-1, 8).T))})
++
++
++# --- the network ------------------------------------------------------------------------------------------------------
++
++class BoxNet(nn.Module):
++    """The box model (see the module): `forward(x, frames)` with x (n, channels, HEIGHT, W), W a multiple of STRIDE,
++    and each crop's own frames; gives the count logits (n, k + 1) and a boundary logit per frame (n, W / STRIDE)."""
++
++    def __init__(self, channels: int, k: int):
++        super().__init__()
++        self.channels, self.k = int(channels), int(k)
++        layers = [model.ConvNormAct(self.channels, STEM, 3, (2, 1))]
++        for cin, kernel, exp, cout, se, hard, stride in LAYERS:
++            layers.append(model.InvertedResidual(cin, kernel, exp, cout, se, hard, stride))
++        layers.append(model.ConvNormAct(LAYERS[-1][3], LAST, 1))
++        self.features = nn.Sequential(*layers)
++        for m in self.features.modules():
++            if isinstance(m, nn.Conv2d):
++                nn.init.kaiming_normal_(m.weight, mode="fan_out")
++                if m.bias is not None:
++                    nn.init.zeros_(m.bias)
++            elif isinstance(m, nn.BatchNorm2d):
++                nn.init.ones_(m.weight)
++                nn.init.zeros_(m.bias)
++                m.momentum = BN_MOMENTUM
++        self.context = nn.ModuleList([nn.Conv1d(LAST, LAST, 3, padding=d, dilation=d) for d in DILATIONS])
++        self.boundary = nn.Conv1d(LAST, 1, 1)
++        self.count = nn.Sequential(nn.Linear(3 * LAST, LAST), nn.ReLU(inplace=True), nn.Linear(LAST, self.k + 1))
++
++    def forward(self, x: torch.Tensor, frames: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
++        f = self.features(x)
++        if f.shape[2] != 1:
++            raise ValueError(f"crops {x.shape[2]} px tall; the box model reads {HEIGHT}")
++        f = f[:, :, 0]
++        t = f.shape[2]
++        mask = (torch.arange(t, device=f.device)[None, :] < frames[:, None]).to(f.dtype)[:, None]
++        f = f * mask
++        for conv in self.context:
++            f = (f + F.relu(conv(f))) * mask
++        boundary = self.boundary(f)[:, 0]
++        n = frames.to(f.dtype)[:, None]
++        mean = f.sum(2) / n
++        top = f.masked_fill(mask == 0, float("-inf")).amax(2)
++        total = f.sum(2) / SUM_SCALE
++        return self.count(torch.cat([mean, top, total], 1)), boundary
++
++
++def _cpu_convs(device: str):
++    """On the CPU, NNPACK off while the body runs: it convolves a depthwise layer one group at a time (3x slower here);
++    elsewhere nothing."""
++    return torch.backends.nnpack.flags(enabled=False) if str(device) == "cpu" else contextlib.nullcontext()
++
++
++def _batch(crops: list[np.ndarray], width: int | None = None) -> tuple[torch.Tensor, torch.Tensor]:
++    """Crops (C, HEIGHT, W_i) padded with paper (0) on the right to whole frames (at least two; to `width` when
++    given) as the network's input, and each crop's own frames."""
++    frames = [max(2, math.ceil(c.shape[2] / STRIDE)) for c in crops]
++    w = max(width or 0, STRIDE * max(frames))
++    x = np.zeros((len(crops), crops[0].shape[0], HEIGHT, w), np.float32)
++    for i, c in enumerate(crops):
++        x[i, :, :, :c.shape[2]] = c
++    return torch.from_numpy(x), torch.tensor(frames, dtype=torch.long)
++
++
++def _frame_targets(boundary: np.ndarray, frames: int) -> tuple[np.ndarray, np.ndarray]:
++    """A crop's column targets as its frames' (the mean over each frame's own columns) and each frame's own columns."""
++    w = len(boundary)
++    cols = np.clip(w - STRIDE * np.arange(frames), 0, STRIDE).astype(float)
++    sums = np.bincount(np.arange(w) // STRIDE, weights=boundary, minlength=frames)[:frames]
++    return np.where(cols > 0, sums / np.maximum(cols, 1), 0.0), cols
++
++
++def fit_boxmodel(examples: Examples, recipe: dict | None = None) -> BoxNet:
++    """A `BoxNet` trained on `examples` by `recipe` (RECIPE's keys; see the module), in an exclusive GPU turn on mps,
++    seeded (torch and numpy, `recipe["seed"]`).  Each step draws `batch` examples (`np.random.default_rng([seed, 0])`),
++    pads them to the widest, and minimises the weighted mean over them of the count's cross-entropy against its target
++    distribution plus `boundary_weight` x the mean binary cross-entropy of its columns.  AdamW on a one-cycle
++    schedule, gradients clipped; a fixed number of steps.  The network comes back on the CPU in eval mode, its log as
++    `fit_log`."""
++    rc = {**RECIPE, **(recipe or {})}
++    if not len(examples):
++        raise ValueError("no examples")
++    seed, device = int(rc["seed"]), str(rc["device"])
++    torch.manual_seed(seed)
++    rng = np.random.default_rng([seed, 0])
++    net = BoxNet(len(examples.channels), examples.K)
++    widths = examples.widths
++    log = {"recipe": rc, "examples": len(examples), "k": examples.K, "channels": list(examples.channels),
++           "torch": torch.__version__, "steps": []}
++    with gpu.gpu_turn(True, device), _cpu_convs(device):
++        t0 = time.perf_counter()
++        net = net.to(device)
++        net.train()
++        opt = torch.optim.AdamW(net.parameters(), lr=rc["max_lr"], weight_decay=rc["weight_decay"])
++        sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=rc["max_lr"], total_steps=int(rc["steps"]),
++                                                    pct_start=rc["pct_start"])
++        run, runs_n = 0.0, 0
++        for step in range(1, int(rc["steps"]) + 1):
++            idx = rng.integers(0, len(examples), int(rc["batch"]))
++            idx = idx[np.argsort(widths[idx], kind="stable")]
++            x, frames = _batch([examples.crop(int(i)) for i in idx])
++            t = x.shape[3] // STRIDE
++            tf, cf = np.zeros((len(idx), t), np.float32), np.zeros((len(idx), t), np.float32)
++            for k, i in enumerate(idx):
++                a, c = _frame_targets(examples.target(int(i))[1], int(frames[k]))
++                tf[k, :len(a)], cf[k, :len(c)] = a, c
++            count_t = torch.from_numpy(examples.count[idx].astype(np.float32)).to(device)
++            w = torch.from_numpy(examples.weight[idx].astype(np.float32)).to(device)
++            logits, blog = net(x.to(device), frames.to(device))
++            ce = -(count_t * F.log_softmax(logits, 1)).sum(1)
++            bce = F.binary_cross_entropy_with_logits(blog, torch.from_numpy(tf).to(device), reduction="none")
++            cf_t = torch.from_numpy(cf).to(device)
++            per = ce + rc["boundary_weight"] * (bce * cf_t).sum(1) / cf_t.sum(1)
++            loss = (per * w).sum() / w.sum().clamp(min=1e-12)
++            opt.zero_grad(set_to_none=True)
++            loss.backward()
++            torch.nn.utils.clip_grad_norm_(net.parameters(), rc["clip"])
++            opt.step()
++            sched.step()
++            run += float(loss.detach().cpu())
++            runs_n += 1
++            if step % int(rc["log_every"]) == 0 or step == int(rc["steps"]):
++                mean = run / runs_n
++                if not math.isfinite(mean):
++                    raise FloatingPointError(f"box model: loss {mean} at step {step}")
++                log["steps"].append({"step": step, "loss": round(mean, 5), "lr": sched.get_last_lr()[0],
++                                     "seconds": round(time.perf_counter() - t0, 1)})
++                run, runs_n = 0.0, 0
++        if gpu.on_gpu(device):
++            torch.mps.synchronize()
++        log["train_seconds"] = round(time.perf_counter() - t0, 1)
++        net = net.cpu()
++        if gpu.on_gpu(device):
++            torch.mps.empty_cache()
++    net.eval()
++    net.fit_log = log
++    return net
++
++
++def box_logp(net: BoxNet, crops: list[np.ndarray], device: str = "cpu", batch: int = 64
++             ) -> tuple[np.ndarray, list[np.ndarray]]:
++    """The box model's log-probabilities of crops (C, HEIGHT, W_i) (`box_crop`): the count's (n, K + 1), and per crop
++    its columns' (W_i, 2): log P(no boundary), log P(boundary).  Crops are read in batches of one padded width, so a
++    crop's numbers are its own.  On mps, inside an exclusive GPU turn (don't call it inside another turn)."""
++    if not len(crops):
++        return np.zeros((0, net.k + 1)), []
++    frames = np.array([max(2, math.ceil(c.shape[2] / STRIDE)) for c in crops])
++    count = np.zeros((len(crops), net.k + 1))
++    bounds: list = [None] * len(crops)
++    net = net.eval()
++    with gpu.gpu_turn(True, device), _cpu_convs(device), torch.no_grad():
++        net = net.to(device)
++        for f in np.unique(frames):
++            idx = np.flatnonzero(frames == f)
++            for s in range(0, len(idx), batch):
++                part = idx[s:s + batch]
++                x, fr = _batch([np.asarray(crops[i], np.float32) for i in part], int(f) * STRIDE)
++                logits, blog = net(x.to(device), fr.to(device))
++                count[part] = F.log_softmax(logits.double(), 1).cpu().numpy()
++                b = blog.double().cpu()
++                lp = torch.stack([F.logsigmoid(-b), F.logsigmoid(b)], 2).numpy()
++                for k, i in enumerate(part):
++                    bounds[i] = np.repeat(lp[k], STRIDE, axis=0)[:crops[i].shape[2]]
++        net.cpu()
++    return count, bounds
++
++
++def save_boxnet(path: Path, net: BoxNet, **about) -> None:
++    """The weights (on the CPU), the channels and K, and `about` (JSON-able), in one torch file."""
++    torch.save({"state_dict": {k: v.detach().cpu() for k, v in net.state_dict().items()},
++                "channels": net.channels, "k": net.k, "about": json.loads(json.dumps(about, default=str))}, path)
++
++
++def load_boxnet(path: Path) -> BoxNet:
++    """A network written by `save_boxnet`, in eval mode on the CPU."""
++    got = torch.load(path, map_location="cpu", weights_only=True)
++    net = BoxNet(got["channels"], got["k"])
++    net.load_state_dict(got["state_dict"], strict=True)
++    return net.eval()
+diff --git a/pipeline/tests/test_wordread_boxmodel.py b/pipeline/tests/test_wordread_boxmodel.py
+new file mode 100644
+index 0000000..37900c0
+--- /dev/null
++++ b/pipeline/tests/test_wordread_boxmodel.py
+@@ -0,0 +1,412 @@
++"""The learned box model (`wordread.boxmodel`): its targets, its held-out rule, its joined neighbours and a short CPU
++fit, on synthetic pages."""
++import itertools
++
++import numpy as np
++import pandas as pd
++import pytest
++import torch
++
++from sfzmaps.solver.codereader import labels as L
++from sfzmaps.solver.textnet import boxes as textboxes
++from sfzmaps.solver.textread import crops as K
++from sfzmaps.solver.wordread import boxmodel as B
++
++SHEET = "s1"
++NO_TOUCH = {t: False for t in B.TOUCH}
++
++
++def never_held(sheet, window, shape):
++    return dict(NO_TOUCH)
++
++
++def word(k, x0, y0, x1, y1, angle=0.0, quarter=0, sheet=SHEET, **touch):
++    """A Terra word as `terra_frame` gives it: its axis box, rectangle (c corners), crop geometry and held flags."""
++    rect = textboxes.word_rect((x0, y0, x1, y1), angle)
++    row = {"sheet": sheet, "word": k, "kind": "zoning code", "text": f"W{k}", "quarter": quarter, "angle": angle,
++           "box_x0": x0, "box_y0": y0, "box_x1": x1, "box_y1": y1, "length": float(x1 - x0),
++           "height": float(y1 - y0), **NO_TOUCH, **touch}
++    row.update(dict(zip(B.C_COLS, rect.reshape(8).tolist())))
++    return row
++
++
++def box(x0, y0, x1, y1, quarter=0, sheet=SHEET):
++    """One of our boxes at axis 0 (boxes.parquet's columns that matter): trimmed and grouped corners alike."""
++    row = {"sheet": sheet, "i": 0, "quarter": quarter, "axis": 0.0, "length": x1 - x0, "height": y1 - y0,
++           "t_length": x1 - x0, "t_height": y1 - y0, "page_x": (x0 + x1) / 2, "page_y": (y0 + y1) / 2}
++    for i, (x, y) in enumerate([(x0, y0), (x1, y0), (x1, y1), (x0, y1)]):
++        for k in "gt":
++            row[f"{k}{i}x"], row[f"{k}{i}y"] = float(x), float(y)
++    return row
++
++
++def page(*rects, shape=(200, 400)):
++    ink = np.zeros(shape, bool)
++    for x0, y0, x1, y1 in rects:
++        ink[y0:y1, x0:x1] = True
++    return ink
++
++
++def inputs(ink, **heads):
++    return B.SheetInputs(ink=ink, chance=(ink * 200).astype(np.uint8), **heads)
++
++
++# --- the count target -------------------------------------------------------------------------------------------------
++
++def test_poisson_binomial_is_exact():
++    assert np.allclose(B.poisson_binomial([0.2, 0.7]), [0.8 * 0.3, 0.2 * 0.3 + 0.8 * 0.7, 0.2 * 0.7])
++    p = np.array([0.1, 0.55, 0.9, 0.3])
++    brute = np.zeros(5)
++    for held in itertools.product([0, 1], repeat=4):
++        brute[sum(held)] += np.prod(np.where(held, p, 1 - p))
++    assert np.allclose(B.poisson_binomial(p), brute)
++    assert np.allclose(B.poisson_binomial([]), [1.0])
++
++
++def test_the_count_is_the_poisson_binomial_of_each_words_share_of_ink_in_the_box():
++    # three words of solid ink; the box holds all of word 0, half of word 1's ink, none of word 2
++    ink = page((20, 40, 60, 60), (70, 40, 110, 60), (150, 40, 190, 60))
++    terra = pd.DataFrame([word(0, 20, 40, 60, 60), word(1, 70, 40, 110, 60), word(2, 150, 40, 190, 60)])
++    boxes = pd.DataFrame([box(20, 40, 90, 60)])
++    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
++    assert len(ex) == 1
++    assert ex.K == 2
++    assert np.allclose(ex.count[0], [0.0, 0.5, 0.5])
++    # a word's share counts its ink, not its rectangle: word 1 with ink in its left half only is wholly inside
++    ink2 = page((20, 40, 60, 60), (70, 40, 90, 60))
++    ex2 = B.box_examples(boxes, terra, {SHEET: inputs(ink2)}, quarter=1, touch=never_held, joined=0)
++    assert np.allclose(ex2.count[0], [0.0, 0.0, 1.0])
++
++
++def test_doubt_weights_scale_an_example_by_the_words_it_may_hold():
++    ink = page((20, 40, 60, 60), (70, 40, 110, 60))
++    terra = pd.DataFrame([word(0, 20, 40, 60, 60), word(1, 70, 40, 110, 60)])
++    boxes = pd.DataFrame([box(20, 40, 90, 60)])
++    sheets = {SHEET: inputs(ink)}
++    plain = B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=0)
++    assert np.allclose(plain.weight, 1.0)
++    got = B.box_examples(boxes, terra, sheets, quarter=1, weights=[0.8, 0.4], touch=never_held, joined=0)
++    # word 0 held for sure (share 1), word 1 with chance 0.5: (1 - 1 x 0.2) (1 - 0.5 x 0.6)
++    assert got.weight[0] == pytest.approx(0.8 * 0.7)
++
++
++# --- the boundary target ----------------------------------------------------------------------------------------------
++
++def _between(ink_row):
++    """The columns from the first column wholly of ink to the last (the words' outer columns, partly paper, are not
++    between them)."""
++    full = np.flatnonzero(ink_row > 1 - 1e-6)
++    out = np.zeros(len(ink_row), bool)
++    out[full[0]:full[-1] + 1] = True
++    return out
++
++
++def test_boundary_columns_are_exactly_the_gap_between_two_held_words():
++    # two words of solid ink and a box over both: in the crop (shrunk with INTER_AREA, so a column's ink is its exact
++    # share of ink) every column between them is gap where it is not ink, and no column outside them is
++    ink = page((50, 100, 110, 130), (130, 100, 170, 130))
++    terra = pd.DataFrame([word(0, 50, 100, 110, 130), word(1, 130, 100, 170, 130)])
++    boxes = pd.DataFrame([box(50, 100, 170, 130)])
++    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
++    crop, (count, gap) = ex.crop(0), ex.target(0)
++    assert np.allclose(count, [0, 0, 1])
++    row = crop[0, K.HEIGHT // 2]
++    inside = _between(row)
++    assert inside.any() and (gap[inside] > 0.99).sum() >= 1
++    assert np.allclose(gap[inside], 1.0 - row[inside], atol=1e-5)
++    assert np.allclose(gap[~inside], 0.0)
++
++
++def test_a_boundary_counts_only_as_much_as_the_words_on_both_sides_are_held():
++    # word 1 half inside the box: the gap is a boundary with chance 0.5
++    ink = page((50, 100, 110, 130), (130, 100, 170, 130))
++    terra = pd.DataFrame([word(0, 50, 100, 110, 130), word(1, 130, 100, 170, 130)])
++    boxes = pd.DataFrame([box(50, 100, 150, 130)])
++    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
++    crop, (count, gap) = ex.crop(0), ex.target(0)
++    assert np.allclose(count, [0, 0.5, 0.5])
++    row = crop[0, K.HEIGHT // 2]
++    inside = _between(row)
++    assert np.allclose(gap[inside], 0.5 * (1.0 - row[inside]), atol=1e-5)
++    assert np.allclose(gap[~inside], 0.0)
++
++
++def test_boundary_target_integrates_the_held_chances_exactly():
++    # three words along one line in raw px, the middle one held with chance 0.5: between 0 and 1 the gap needs 1 held
++    # (0.5); between 1 and 2 it is a gap when 1 is held (0.5) and also when it is not (0 and 2 are both held): 1
++    spans = np.array([[0.0, 10.0], [20.0, 30.0], [40.0, 50.0]])
++    got = B.boundary_target(spans, np.array([1.0, 0.5, 1.0]), w=50, out_w=50)
++    want = np.zeros(50)
++    want[10:20] = 1.0                       # a gap from 0 to 2 whether or not 1 is held
++    want[20:30] = 0.5                       # inside word 1: a gap only when it is not held
++    want[30:40] = 1.0
++    assert np.allclose(got, want)
++    # a column half in a gap is half a boundary
++    half = B.boundary_target(np.array([[0.0, 10.5], [20.0, 30.0]]), np.ones(2), w=30, out_w=30)
++    assert half[10] == pytest.approx(0.5) and half[11] == 1.0
++
++
++# --- the channels -----------------------------------------------------------------------------------------------------
++
++def test_crops_carry_ink_chance_and_the_word_heads_when_present():
++    ink = page((50, 100, 110, 130))
++    terra = pd.DataFrame([word(0, 50, 100, 110, 130)])
++    boxes = pd.DataFrame([box(50, 100, 110, 130)])
++    core = np.zeros(ink.shape, np.float32)
++    core[100:130, 50:110] = 0.75
++    tag = np.stack([np.full(ink.shape, 2.0, np.float32), np.full(ink.shape, -1.0, np.float32)])
++    plain = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=0)
++    assert plain.channels == ("ink", "chance")
++    heads = B.box_examples(boxes, terra, {SHEET: inputs(ink, core=core, tag=tag)}, quarter=1, touch=never_held,
++                           joined=0)
++    assert heads.channels == ("ink", "chance", "core", "tag0", "tag1")
++    c = heads.crop(0)
++    mid = c[:, K.HEIGHT // 2, c.shape[2] // 2]
++    assert mid[0] == pytest.approx(1.0) and mid[1] == pytest.approx(200 / 255) and mid[2] == pytest.approx(0.75)
++    assert mid[3] == pytest.approx(2.0) and mid[4] == pytest.approx(-1.0)
++
++
++# --- held out ---------------------------------------------------------------------------------------------------------
++
++def test_box_examples_raises_on_held_quarter_or_answered_block_words_and_boxes():
++    ink = page((50, 100, 110, 130))
++    boxes = pd.DataFrame([box(50, 100, 110, 130)])
++    sheets = {SHEET: inputs(ink)}
++    for flags in ({"touch_ne": True}, {"touch_blocks": True}):
++        terra = pd.DataFrame([word(0, 50, 100, 110, 130, **flags)])
++        with pytest.raises(ValueError):
++            B.box_examples(boxes, terra, sheets, quarter=1, touch=never_held, joined=0)
++    terra = pd.DataFrame([word(0, 50, 100, 110, 130)])
++    with pytest.raises(ValueError):          # a box in the held quarter
++        B.box_examples(pd.DataFrame([box(50, 100, 110, 130, quarter=1)]), terra, sheets, quarter=1,
++                       touch=never_held, joined=0)
++    with pytest.raises(ValueError):          # a box whose crop touches an answered block
++        B.box_examples(boxes, terra, sheets, quarter=1, joined=0,
++                       touch=lambda s, w, sh: {**NO_TOUCH, "touch_blocks": True})
++    with pytest.raises(ValueError):          # no quarter: it would train on every quarter's words
++        B.box_examples(boxes, terra, sheets, quarter=None, touch=never_held, joined=0)
++    with pytest.raises(ValueError):          # words without their held flags can't be checked
++        B.box_examples(boxes, terra.drop(columns=["touch_blocks"]), sheets, quarter=1, touch=never_held, joined=0)
++
++
++def test_training_boxes_leave_out_boxes_meeting_a_held_word_or_touching_a_held_area():
++    terra = pd.DataFrame([word(0, 50, 100, 110, 130), word(1, 200, 100, 260, 130, touch_ne=True),
++                          word(2, 300, 100, 340, 130)])
++    boxes = pd.DataFrame([box(50, 100, 110, 130), box(240, 100, 280, 130), box(300, 100, 340, 130),
++                          box(10, 10, 40, 30, quarter=1)])
++
++    def touch(sheet, window, shape):          # the crop of the box at x 300.. touches an answered block
++        return {**NO_TOUCH, "touch_blocks": window[0] > 280}
++    keep = B.training_boxes(boxes, terra, quarter=1, touch=touch, shapes={SHEET: (200, 400)})
++    assert list(keep.index) == [0]
++    words = B.training_words(terra, quarter=1)
++    assert list(words["word"]) == [0, 2]
++
++
++# --- joined neighbours ------------------------------------------------------------------------------------------------
++
++def test_draws_follow_the_measured_gap_distribution():
++    dist = {"gap": [-0.1, 0.3, 0.8], "weight": [1.0, 2.0, 1.0]}
++    got = B.draw_gaps(dist, 8000, np.random.default_rng([0, 1]))
++    assert set(np.unique(got)) <= {-0.1, 0.3, 0.8}
++    share = np.array([(got == g).mean() for g in dist["gap"]])
++    assert np.allclose(share, [0.25, 0.5, 0.25], atol=0.02)
++
++
++def test_same_line_gaps_measure_the_space_to_the_next_word_on_the_line():
++    # three words on one line (gaps 10 and 25 px, heights 20) and one word read across the line, ahead of the last
++    terra = pd.DataFrame([word(0, 10, 100, 60, 120), word(1, 70, 100, 100, 120), word(2, 125, 100, 175, 120),
++                          word(3, 200, 60, 220, 160, angle=90.0)])
++    got = B.same_line_gaps(terra)
++    by = {(r.word, r.next): r for r in got.itertuples()}
++    assert set(by) == {(0, 1), (1, 2)}               # word 2 is never next to 0: word 1 is surely between
++    assert by[(0, 1)].gap == pytest.approx(10 / 20) and by[(0, 1)].weight == pytest.approx(1.0)
++    assert by[(1, 2)].gap == pytest.approx(25 / 20) and by[(1, 2)].weight == pytest.approx(1.0)
++    # a small word partly on word 0's line (8 of its 12 px), between it and word 1: next with chance 2/3, else word 1
++    terra = pd.concat([terra, pd.DataFrame([word(4, 62, 112, 68, 124)])], ignore_index=True)
++    got = B.same_line_gaps(terra)
++    by = {(r.word, r.next): r for r in got.itertuples()}
++    assert by[(0, 4)].weight == pytest.approx(8 / 12) and by[(0, 4)].gap == pytest.approx(2 / 16)
++    assert by[(0, 1)].weight == pytest.approx(1 - 8 / 12)
++    assert (0, 2) not in by
++    dist = B.gap_distribution(got)
++    assert sorted(dist["gap"]) == sorted(got["gap"].tolist()) and dist["n"] == len(got)
++
++
++def test_the_gaps_are_between_consecutive_words_on_one_line_of_a_box():
++    # a box (rows 95..125, its centre line at 110) over three words along its axis (gaps 10 and 15 px; heights 20,
++    # 40, 30), word 1 sticking out of it across the line so that the box holds 25 of its 40 rows of ink.  Across the
++    # line the words span [-10, 10], [-30, 10] and [-15, 15]: lines shared 1 (0, 1), 25/30 (1, 2), 1 (0, 2)
++    ink = page((10, 100, 60, 120), (70, 80, 110, 120), (125, 95, 175, 125))
++    terra = pd.DataFrame([word(0, 10, 100, 60, 120), word(1, 70, 80, 110, 120), word(2, 125, 95, 175, 125)])
++    got = B.held_pair_gaps(pd.DataFrame([box(10, 95, 175, 125)]), terra, ink)
++    s1, l12 = (120 - 95) / 40, 25 / 30
++    by = {(r.word, r.next): r for r in got.itertuples()}
++    assert set(by) == {(0, 1), (1, 2), (0, 2)}
++    assert by[(0, 1)].gap == pytest.approx(10 / 30) and by[(0, 1)].weight == pytest.approx(s1)
++    assert by[(1, 2)].gap == pytest.approx(15 / 35) and by[(1, 2)].weight == pytest.approx(s1 * l12)
++    # 0 and 2 are consecutive on their line unless word 1 is held and on it
++    assert by[(0, 2)].gap == pytest.approx(65 / 25) and by[(0, 2)].weight == pytest.approx(1 - s1 * min(1.0, l12))
++    dist = B.gap_distribution(got)
++    assert sorted(dist["gap"]) == sorted(got["gap"].tolist()) and dist["n"] == 3
++    # two words stacked in one box (a code over its block number) are not on one line: no gap
++    ink2 = page((10, 60, 70, 80), (20, 90, 50, 105))
++    terra2 = pd.DataFrame([word(0, 10, 60, 70, 80), word(1, 20, 90, 50, 105)])
++    assert B.held_pair_gaps(pd.DataFrame([box(10, 60, 70, 105)]), terra2, ink2).empty
++
++
++def test_the_gap_is_along_the_words_reading_direction_whatever_the_boxs_axis():
++    # two level words side by side (a gap of 10 px, heights 20) in a box grouped at 30 degrees that holds them both
++    ink = page((100, 100, 150, 120), (160, 100, 190, 120))
++    terra = pd.DataFrame([word(0, 100, 100, 150, 120), word(1, 160, 100, 190, 120)])
++    (ux, uy), (vx, vy) = L._axes(30.0)
++    u, v = np.array([ux, uy]) * 60, np.array([vx, vy]) * 45
++    c = np.array([145.0, 110.0])
++    tilted = box(0, 0, 1, 1)
++    for i, corner in enumerate([c - u - v, c + u - v, c + u + v, c - u + v]):
++        tilted[f"t{i}x"], tilted[f"t{i}y"] = corner
++    tilted.update(axis=30.0, t_length=120.0, t_height=90.0)
++    got = B.held_pair_gaps(pd.DataFrame([tilted]), terra, ink)
++    assert len(got) == 1
++    assert got["gap"].iloc[0] == pytest.approx(10 / 20) and got["weight"].iloc[0] == pytest.approx(1.0)
++    # a word read across the line shares no line of text with it
++    terra["angle"] = [0.0, 90.0]
++    assert B.held_pair_gaps(pd.DataFrame([tilted]), terra, ink).empty
++
++
++def test_overlapping_joined_words_keep_both_words_ink():
++    a = np.zeros((2, K.HEIGHT, 40), np.float32)
++    a[:, 10:22, 6:34] = 1.0                       # the word spans columns 6..34
++    b = np.zeros((2, K.HEIGHT, 30), np.float32)
++    b[:, 12:20, 6:24] = 0.5
++    crop, target, got = B.join((a, (6.0, 34.0), 20.0), (b, (6.0, 24.0), 20.0), gap=-0.2)
++    assert got["gap_px"] == pytest.approx(-4.0)
++    assert np.allclose(target, 0.0)              # no column between them
++    assert crop.shape[2] == 6 + 28 - 4 + 18 + 6
++    # A's ink is all there, and B's wherever A has none
++    assert np.allclose(crop[:, 10:22, 6:34], 1.0)
++    assert np.allclose(crop[:, 12:20, 34:48], 0.5)
++    spaced, target, got = B.join((a, (6.0, 34.0), 20.0), (b, (6.0, 24.0), 20.0), gap=0.5)
++    assert got["gap_px"] == pytest.approx(10.0) and target.sum() == pytest.approx(10.0)
++    assert np.allclose(spaced[:, :, 34:44], 0.0)  # paper across the gap
++
++
++def test_joined_neighbours_take_their_gaps_from_the_distribution_and_know_their_targets():
++    ink = page((20, 40, 80, 60), (120, 40, 150, 60), (20, 120, 60, 140), (200, 120, 260, 140), shape=(200, 300))
++    terra = pd.DataFrame([word(0, 20, 40, 80, 60), word(1, 120, 40, 150, 60), word(2, 20, 120, 60, 140),
++                          word(3, 200, 120, 260, 140)])
++    boxes = pd.DataFrame([box(20, 40, 80, 60)])
++    gaps = {"gap": [0.5, 1.5], "weight": [1.0, 1.0]}
++    ex = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=40, gaps=gaps,
++                        turned=0.0, seed=3)
++    j = np.flatnonzero(ex.meta["source"].to_numpy() == "joined")
++    assert len(j) == 40
++    drawn = ex.meta["gap"].to_numpy()[j]
++    assert set(np.unique(drawn)) <= {0.5, 1.5} and len(np.unique(drawn)) == 2
++    for i in j:
++        count, gap = ex.target(i)
++        assert np.allclose(count, [0, 0, 1])
++        m = ex.meta.iloc[i]
++        # the boundary columns are the realised gap, in crop px; it is the drawn gap to the rounding of a px
++        assert gap.sum() == pytest.approx(m["gap_px"], abs=1e-4)      # float32 targets
++        assert m["gap_px"] / m["unit_px"] == pytest.approx(m["gap"], abs=0.5 / m["unit_px"] + 1e-9)
++        # the gap is paper: the ink in a boundary column is the part of it outside the gap
++        row = ex.crop(i)[0, K.HEIGHT // 2]
++        assert np.allclose(row[gap >= 1.0], 0.0)
++    # the joined words are training words, two different ones
++    assert (ex.meta["word_a"].to_numpy()[j] != ex.meta["word_b"].to_numpy()[j]).all()
++    # the same seed, the same examples
++    again = B.box_examples(boxes, terra, {SHEET: inputs(ink)}, quarter=1, touch=never_held, joined=40, gaps=gaps,
++                           turned=0.0, seed=3)
++    assert np.array_equal(again.flat, ex.flat) and again.meta.equals(ex.meta)
++
++
++# --- the network ------------------------------------------------------------------------------------------------------
++
++def _bars(rng, words: int, width: int) -> tuple[np.ndarray, np.ndarray]:
++    """A synthetic (2, HEIGHT, width) crop of `words` bars of ink across the middle rows, and its gap columns."""
++    crop = np.zeros((2, K.HEIGHT, width), np.float32)
++    gap = np.zeros(width, np.float32)
++    lo, hi = 8, width - 8
++    if words == 1:
++        crop[:, 8:24, lo:hi] = 1.0
++    else:
++        g0 = int(rng.integers(lo + 10, hi - 18))
++        g1 = g0 + int(rng.integers(5, 9))
++        crop[:, 8:24, lo:g0] = 1.0
++        crop[:, 8:24, g1:hi] = 1.0
++        gap[g0:g1] = 1.0
++    # broken strokes inside each word: the letters' own gaps, narrower than a word gap
++    for x in rng.integers(lo, hi, 6):
++        if gap[x] == 0:
++            crop[:, 8:24, x] = 0.0
++    return crop, gap
++
++
++def _synthetic(n: int, seed: int) -> B.Examples:
++    rng = np.random.default_rng([seed, 9])
++    crops, counts, gaps = [], [], []
++    for k in range(n):
++        words = 1 + k % 2
++        c, g = _bars(rng, words, int(rng.integers(56, 96)))
++        crops.append(c)
++        gaps.append(g)
++        counts.append(np.eye(3)[words])
++    meta = pd.DataFrame({"source": "synthetic", "words": [1 + k % 2 for k in range(n)]})
++    return B.Examples.of(crops, counts, gaps, np.ones(n), meta, ("ink", "chance"))
++
++
++@pytest.fixture
++def one_thread():
++    before = torch.get_num_threads()
++    torch.set_num_threads(1)
++    yield
++    torch.set_num_threads(before)
++
++
++def test_a_short_cpu_fit_tells_one_word_from_two(one_thread):
++    train, test = _synthetic(96, 0), _synthetic(64, 1)
++    recipe = {**B.RECIPE, "steps": 100, "batch": 8, "max_lr": 3e-3, "seed": 0, "device": "cpu"}
++    net = B.fit_boxmodel(train, recipe)
++    assert net.k == 2 and net.channels == 2
++    count_lp, gap_lp = B.box_logp(net, [test.crop(i) for i in range(len(test))])
++    assert count_lp.shape == (len(test), 3)
++    assert np.allclose(np.exp(count_lp).sum(1), 1.0, atol=1e-5)
++    words = test.meta["words"].to_numpy()
++    right = (count_lp.argmax(1) == words).mean()
++    assert right >= 0.9                      # chance is 0.5
++    # the boundary is likelier in the gap than in the words
++    two = np.flatnonzero(words == 2)
++    in_gap = np.mean([np.exp(gap_lp[i][test.target(i)[1] > 0.5, 1]).mean() for i in two])
++    off_gap = np.mean([np.exp(gap_lp[i][test.target(i)[1] == 0, 1]).mean() for i in two])
++    assert in_gap > off_gap + 0.2
++
++
++def test_box_logp_reads_each_crop_alone(one_thread):
++    ex = _synthetic(6, 2)
++    net = B.BoxNet(2, 2).eval()
++    alone = B.box_logp(net, [ex.crop(0)])
++    batch = B.box_logp(net, [ex.crop(i) for i in range(len(ex))])
++    assert np.allclose(alone[0][0], batch[0][0], atol=1e-6)
++    assert np.allclose(alone[1][0], batch[1][0], atol=1e-6)
++    assert batch[1][0].shape == (ex.crop(0).shape[2], 2)
++    assert np.allclose(np.exp(batch[1][0]).sum(1), 1.0, atol=1e-6)
++
++
++def test_a_saved_network_reads_as_before(tmp_path, one_thread):
++    ex = _synthetic(4, 5)
++    net = B.BoxNet(2, 3).eval()
++    B.save_boxnet(tmp_path / "net.pt", net, quarter="ne")
++    got = B.load_boxnet(tmp_path / "net.pt")
++    assert got.k == 3 and got.channels == 2
++    crops = [ex.crop(i) for i in range(len(ex))]
++    assert np.allclose(B.box_logp(net, crops)[0], B.box_logp(got, crops)[0])
++
++
++def test_examples_save_and_load(tmp_path):
++    ex = _synthetic(5, 4)
++    ex.save(tmp_path / "ex")
++    got = B.Examples.load(tmp_path / "ex")
++    assert got.channels == ex.channels and np.array_equal(got.flat, ex.flat)
++    assert np.array_equal(got.count, ex.count) and np.array_equal(got.boundary, ex.boundary)
++    assert got.meta.equals(ex.meta)

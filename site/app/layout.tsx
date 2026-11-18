@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Libre_Franklin, Newsreader } from "next/font/google";
 import "./globals.css";
+import SiteMenu from "@/components/SiteMenu";
+import downloads from "@/lib/downloads.json";
 
 // next/font self-hosts both families at build time; no runtime font CDN.
 const serif = Newsreader({
@@ -32,7 +34,10 @@ export const viewport: Viewport = { themeColor: "#efebe2" };
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en" className={`${serif.variable} ${sans.variable}`}>
-      <body>{children}</body>
+      <body>
+        <SiteMenu hasDownloads={Object.keys(downloads.files).length > 0} />
+        {children}
+      </body>
     </html>
   );
 }

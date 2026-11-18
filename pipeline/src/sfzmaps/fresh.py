@@ -2,7 +2,8 @@
 
 A step's output is current when it exists and its fingerprint sidecar,
 `<output>.inputs.json`, equals the fingerprint of its inputs now: the sha256 of each input
-file's bytes plus VERSION. Modification times are never trusted: a `git switch` or a DVC
+file's bytes plus VERSION (and, for a step that passes them, the versions of the libraries and
+tools that compute it). Modification times are never trusted: a `git switch` or a DVC
 checkout rewrites files with new mtimes but the same bytes, and must not rerun anything.
 
 Hashes are memoized per process, keyed by (device, inode, size, mtime), so a big raster read by
@@ -55,11 +56,16 @@ def sidecar(out: Path) -> Path:
     return out.with_name(out.name + ".inputs.json")
 
 
-def fingerprint(inputs: list[Path]) -> dict:
-    return {"version": VERSION, "inputs": [[p.name, sha256(p)] for p in inputs]}
+def fingerprint(inputs: list[Path], versions: dict[str, str] | None = None) -> dict:
+    """The input files' hashes; with `versions`, also the versions of the libraries and tools that compute the
+    output (what changes its numbers without changing any input file)."""
+    d = {"version": VERSION, "inputs": [[p.name, sha256(p)] for p in inputs]}
+    if versions is not None:
+        d["versions"] = versions
+    return d
 
 
-def is_fresh(out: Path, inputs: list[Path], force: bool = False) -> bool:
+def is_fresh(out: Path, inputs: list[Path], force: bool = False, versions: dict[str, str] | None = None) -> bool:
     if force or not out.exists() or not inputs or not all(i.exists() for i in inputs):
         return False
     try:
@@ -67,20 +73,20 @@ def is_fresh(out: Path, inputs: list[Path], force: bool = False) -> bool:
     except (OSError, ValueError):
         have = None
     if have is not None:
-        return have == fingerprint(inputs)
+        return have == fingerprint(inputs, versions)
     if _adoptable(out, inputs):
-        record(out, inputs)
+        record(out, inputs, versions)
         log.debug("%s: adopted (matches dvc.lock)", out)
         return True
     return False
 
 
-def record(out: Path, inputs: list[Path]) -> None:
-    """Write out's sidecar from its inputs as they are now (unchanged content is not rewritten)."""
+def record(out: Path, inputs: list[Path], versions: dict[str, str] | None = None) -> None:
+    """Write out's sidecar from its inputs (and `versions`) as they are now (unchanged content is not rewritten)."""
     if not out.exists():
         return
     p = sidecar(out)
-    text = json.dumps(fingerprint(inputs), indent=1)
+    text = json.dumps(fingerprint(inputs, versions), indent=1)
     try:
         if p.read_text() == text:
             return
@@ -89,6 +95,58 @@ def record(out: Path, inputs: list[Path]) -> None:
     tmp = p.with_name(p.name + ".tmp")
     tmp.write_text(text)
     tmp.replace(p)
+
+
+# -- code as an input -------------------------------------------------------------------------
+
+_PKG_DIR = Path(__file__).resolve().parent
+
+
+def module_file(module: str) -> Path | None:
+    """The source file of an sfzmaps module (None for anything else)."""
+    parts = module.split(".")
+    if parts[0] != "sfzmaps":
+        return None
+    p = _PKG_DIR.joinpath(*parts[1:])
+    if (p / "__init__.py").is_file():
+        return p / "__init__.py"
+    return p.with_suffix(".py") if p.with_suffix(".py").is_file() else None
+
+
+def _imports(module: str, path: Path) -> set[str]:
+    """sfzmaps modules a module imports anywhere in its source (function-level imports too)."""
+    import ast
+
+    pkg = module if path.name == "__init__.py" else module.rpartition(".")[0]
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.Import):
+            found.update(a.name for a in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = node.module or ""
+            if node.level:
+                up = pkg.split(".")[: len(pkg.split(".")) - node.level + 1]
+                base = ".".join(up + ([node.module] if node.module else []))
+            found.add(base)
+            found.update(f"{base}.{a.name}" for a in node.names)
+    return {m for m in found if module_file(m) is not None}
+
+
+def code_files(modules: list[str], *, cut: frozenset[str] = frozenset()) -> list[Path]:
+    """The source files of these sfzmaps modules and of every sfzmaps module they import,
+    transitively, as a step's code inputs. Modules in `cut` (and what only they import) are left
+    out: name there the modules whose effect reaches the step only through files it already
+    fingerprints by content (a warp's code, when the step hashes the warped raster)."""
+    seen: dict[str, Path] = {}
+    todo = list(modules)
+    while todo:
+        m = todo.pop()
+        path = module_file(m)
+        if m in seen or m in cut or path is None:
+            continue
+        seen[m] = path
+        todo.extend(_imports(m, path))
+    return sorted(set(seen.values()))
 
 
 # -- adoption from dvc.lock -------------------------------------------------------------------

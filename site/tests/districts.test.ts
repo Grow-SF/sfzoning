@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { gunzipped, lotCard, lotCategory, NO_VALUE, parseManifest, type SharedDistricts } from "@/lib/shared";
 import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
-import { isPartialMap, threePlusShare, type DistrictStats } from "@/lib/stats";
+import { isPartialMap, parksLine, threePlusShare, type DistrictStats } from "@/lib/stats";
 import { publishedPath } from "@/lib/tiles";
 import { dvcProblem, hashedName, plan, uploadedBytesMatch } from "../scripts/publish-tiles.mjs";
 import { buildRules } from "../scripts/build-rules.mjs";
@@ -168,6 +168,20 @@ describe("isPartialMap", () => {
   });
   it("makes no claim without the count", () => {
     expect(isPartialMap(stats(100))).toBe(false);
+  });
+});
+
+describe("parksLine", () => {
+  it("states the year's parks and their acres", () => {
+    expect(parksLine({ parks: { count: 132, acres: 3614.4 } } as unknown as DistrictStats)).toBe(
+      "132 parks covering 3,614 acres",
+    );
+    expect(parksLine({ parks: { count: 1, acres: 0.6 } } as unknown as DistrictStats)).toBe("1 park covering 1 acre");
+  });
+  it("says nothing when the stats carry no tally", () => {
+    expect(parksLine({} as DistrictStats)).toBeNull();
+    expect(parksLine(null)).toBeNull();
+    expect(parksLine({ parks: { count: 0, acres: 0 } } as unknown as DistrictStats)).toBeNull();
   });
 });
 

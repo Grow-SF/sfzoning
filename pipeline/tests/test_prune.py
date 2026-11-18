@@ -25,3 +25,14 @@ def test_plan_keeps_what_main_and_open_prs_use_and_deletes_the_rest():
     assert prune.by_kind(gone)["dvc single objects"] == (1, 10)
     del held[ship.object_name(big)]
     assert prune.plan(held, used).missing == [ship.object_name(big)]
+
+
+def test_site_download_links_count_as_used():
+    md5 = "f0c6c91856d71bea9aea2a9c9720c39e"
+    text = ('{"base": "https://x.public.blob.vercel-storage.com", "sheets": {"1921": {"items": [{"url": '
+            f'"https://x.public.blob.vercel-storage.com/dvc/files/md5/{md5[:2]}/{md5[2:]}", "md5": "{md5}"}}, '
+            '{"url": "https://x.public.blob.vercel-storage.com/downloads/sheets/ab/1921-sheet.tif"}]}}}')
+    used = prune.linked_names(text)
+    assert used == {ship.object_name(md5)}
+    held = {ship.object_name(md5): 10, ship.object_name("d" * 32): 5}
+    assert prune.plan(held, used).delete == {ship.object_name("d" * 32): 5}

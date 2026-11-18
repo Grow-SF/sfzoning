@@ -1,0 +1,72 @@
+"""Citywide image (a Cloud Optimized GeoTIFF) and the per-sheet download entries.
+
+The image is the same paper stitch the site shows (`stitch.build_vrt(paper=True)`) copied into a
+COG: the warped sheets (warp.py) at the finest sheet's resolution, nothing vectorized or drawn.
+"""
+from __future__ import annotations
+
+import hashlib
+import re
+from pathlib import Path
+
+from sfzmaps import config, stitch
+from sfzmaps.downloads import Item, run_tool
+from sfzmaps.downloads.readme import LICENSE_TEXT, readme
+
+ATTRIBUTION = "Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)"
+
+
+def _copyright(series: str) -> str:
+    text = f"{ATTRIBUTION}. Licensed CC BY-NC-SA 4.0 (https://creativecommons.org/licenses/by-nc-sa/4.0/)."
+    if series == "1948":
+        text += f" Imagery: {config.RUMSEY_CREDIT}."
+    return text
+
+
+def export_citywide(item: Item, out: Path, updated: str, commit: str) -> None:
+    """Write the citywide COG at `out` plus `<stem>.README.txt` and `<stem>.LICENSE.txt`."""
+    vrt = stitch.build_vrt(item.series, paper=True)
+    part = out.with_name(out.name + ".part")
+    try:
+        run_tool("gdal_translate", "-q", "-of", "COG", "-co", "COMPRESS=DEFLATE",
+                 "-co", "BIGTIFF=IF_SAFER", "-co", "OVERVIEWS=AUTO", "-co", "OVERVIEW_RESAMPLING=AVERAGE",
+                 "-mo", f"TIFFTAG_COPYRIGHT={_copyright(item.series)}",
+                 "-mo", f"TIFFTAG_IMAGEDESCRIPTION={item.series} edition, last updated {updated}",
+                 str(vrt), str(part))
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    part.replace(out)
+    stem = out.name.removesuffix(out.suffix)
+    out.with_name(f"{stem}.README.txt").write_text(readme(item.series, "citywide", updated, commit))
+    out.with_name(f"{stem}.LICENSE.txt").write_text(LICENSE_TEXT)
+
+
+def sheet_entries(series: str, known: list[dict] | None = None) -> list[dict]:
+    """One entry per placed sheet (every dir with warped_paper.tif), in natural order of sheet id."""
+    entries = []
+    old = {e["sheet"]: e for e in known or []}
+    for tif in (config.WORK_DIR / series).glob("*/warped_paper.tif"):
+        st = tif.stat()
+        sheet = tif.parent.name
+        k = old.get(sheet)
+        if k and k.get("bytes") == st.st_size and k.get("mtime_ns") == st.st_mtime_ns:
+            md5, sha = k["md5"], k["sha256"]  # unchanged since the last index: don't read GBs again
+        else:
+            md5, sha = _md5(tif), stitch._sha256(tif)
+        entries.append({"sheet": sheet, "name": f"{series}-sheet-{sheet}.tif", "md5": md5,
+                        "bytes": st.st_size, "sha256": sha, "mtime_ns": st.st_mtime_ns})
+    return sorted(entries, key=lambda e: _natural(e["sheet"]))
+
+
+def _natural(name: str) -> list:
+    """"2" before "10", "5a" after "5"; digit runs compare as numbers (parts alternate str, int)."""
+    return [int(p) if p.isdigit() else p for p in re.split(r"(\d+)", name)]
+
+
+def _md5(p: Path) -> str:
+    h = hashlib.md5()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()

@@ -1,0 +1,251 @@
+{
+ "run": "final",
+ "measures": {
+  "data_errors_left_out": {
+   "lines_drawn": 0.965257,
+   "lines_drawn_by_length": 0.926958,
+   "drawn_are_table_lines": 0.967792,
+   "drawn_are_table_lines_by_length": 0.936839,
+   "labels_right": 0.948432,
+   "zoning_labels": 1881,
+   "all_labels_right": 0.943915,
+   "all_labels": 1890,
+   "holes": 11,
+   "hole_ft": 592.0,
+   "missed_runs_over_100_ft": 480,
+   "missed_run_miles": 45.82197,
+   "incidents": 862,
+   "wrong_lots": 4543,
+   "incidents_of_100_lots": 5,
+   "lots_in_them": 1298
+  },
+  "every_lot": {
+   "lines_drawn": 0.964269,
+   "lines_drawn_by_length": 0.926286,
+   "drawn_are_table_lines": 0.966475,
+   "drawn_are_table_lines_by_length": 0.935728,
+   "labels_right": 0.9479,
+   "zoning_labels": 1881,
+   "all_labels_right": 0.943386,
+   "all_labels": 1890,
+   "holes": 48,
+   "hole_ft": 2984.0,
+   "missed_runs_over_100_ft": 481,
+   "missed_run_miles": 45.847727,
+   "incidents": 862,
+   "wrong_lots": 4543,
+   "incidents_of_100_lots": 5,
+   "lots_in_them": 1298
+  }
+ },
+ "j7": {
+  "lines_drawn": 0.963,
+  "drawn_are_table_lines": 0.969,
+  "labels_right": 0.95,
+  "holes": 15,
+  "incidents": 824,
+  "wrong_lots": 8625
+ },
+ "data_errors": {
+  "parcels": 40,
+  "j7_parcels": 33
+ },
+ "wrong_lots_by_quarter": {
+  "nw": 764,
+  "ne": 2272,
+  "sw": 730,
+  "se": 777
+ },
+ "largest_incidents": [
+  {
+   "lots": 451,
+   "table": "RH-1(D)",
+   "solved": "RH-1",
+   "blocks": [
+    "7240",
+    "7239",
+    "7241"
+   ]
+  },
+  {
+   "lots": 276,
+   "table": "RC-4",
+   "solved": "RM-1",
+   "blocks": [
+    "0280",
+    "0300",
+    "0281"
+   ]
+  },
+  {
+   "lots": 267,
+   "table": "RM-1",
+   "solved": "NC-1",
+   "blocks": [
+    "1386",
+    "1409",
+    "1408"
+   ]
+  },
+  {
+   "lots": 181,
+   "table": "RC-4",
+   "solved": "RH-2",
+   "blocks": [
+    "0694",
+    "0670",
+    "0718"
+   ]
+  },
+  {
+   "lots": 123,
+   "table": "RH-2",
+   "solved": "P",
+   "blocks": [
+    "6726",
+    "6741",
+    "6740"
+   ]
+  },
+  {
+   "lots": 97,
+   "table": "RM-4",
+   "solved": "C-2",
+   "blocks": [
+    "0674",
+    "0688",
+    "0744"
+   ]
+  }
+ ],
+ "holes_by_cause": {
+  "BIG AREA": 1,
+  "CHEAPER STEP": 3,
+  "LABEL PULL": 1,
+  "NOT PRINTED (offset)": 3,
+  "ON THE LINE, READ AS NO WALL": 18,
+  "PRINTED ONE LOT OVER": 6,
+  "SLIVER UNDER THE BAND": 16
+ },
+ "walls": {
+  "held_out_log_loss": {
+   "nw": 0.048357,
+   "ne": 0.0797,
+   "sw": 0.036273,
+   "se": 0.051159
+  },
+  "j7_held_out_log_loss": {
+   "nw": 0.0422,
+   "ne": 0.0676,
+   "sw": 0.0313,
+   "se": 0.0412
+  },
+  "candidates": [
+   "street_crossing",
+   "context"
+  ],
+  "features": 463,
+  "held_out_log_loss_table_as_downloaded": {
+   "nw": 0.097788,
+   "ne": 0.10265,
+   "sw": 0.045153,
+   "se": 0.061059
+  }
+ },
+ "placement": {
+  "labels": 1904,
+  "with_answer": 1723,
+  "hand_moves": 80,
+  "median_options": 4,
+  "held_out": {
+   "labels with an answer": {
+    "n": 1723,
+    "right": 0.920488,
+    "always_stay": 0.890888
+   },
+   "answer = move": {
+    "n": 188,
+    "right": 0.393617,
+    "always_stay": 0.0
+   },
+   "answer = stay": {
+    "n": 1535,
+    "right": 0.985016,
+    "always_stay": 1.0
+   },
+   "hand moves": {
+    "n": 80,
+    "right": 0.4875,
+    "always_stay": 0.175
+   }
+  },
+  "options": 32640
+ },
+ "top_reading_calibration": {
+  "used": [
+   0.128,
+   1.085
+  ],
+  "labels": 1824,
+  "right": 1528,
+  "log_loss_used": 0.344138,
+  "refit": [
+   0.180932,
+   0.901383
+  ],
+  "log_loss_refit": 0.339816,
+  "bins": [
+   {
+    "from": 0.0,
+    "to": 0.5,
+    "labels": 183,
+    "stated": 0.339646,
+    "right": 0.387978
+   },
+   {
+    "from": 0.5,
+    "to": 0.7,
+    "labels": 126,
+    "stated": 0.642149,
+    "right": 0.579365
+   },
+   {
+    "from": 0.7,
+    "to": 0.9,
+    "labels": 506,
+    "stated": 0.865562,
+    "right": 0.814229
+   },
+   {
+    "from": 0.9,
+    "to": 0.97,
+    "labels": 744,
+    "stated": 0.959529,
+    "right": 0.96371
+   },
+   {
+    "from": 0.97,
+    "to": 0.99,
+    "labels": 254,
+    "stated": 0.985253,
+    "right": 0.964567
+   },
+   {
+    "from": 0.99,
+    "to": 1.0,
+    "labels": 11,
+    "stated": 0.995898,
+    "right": 0.909091
+   }
+  ]
+ },
+ "definition_changes": [
+  "The new warp: every sheet is placed by its corrected placement from the sheet warp (data/warp/2000-digital-zoning), so the merged page, the prints and the hand leader moves sit where it puts them.",
+  "Scored lots without the old run: a lot is scored when the table gives it one district and more than half of it is on the mapped area; J7 also required it to lie inside a closed area of an older run.",
+  "Fits on the uncorrected table: the trust, the street sides, the lot sizes, the walls and the placement learn from the table as downloaded; J7 used the by-eye corrections in three fits. The scores still count against the corrected table.",
+  "The always-zero trust features dropped: the trust is one logistic regression on 23 features; J7's had six more (the place answers), all zero.",
+  "Strokes from the raw page: the strokes the placement reads for leader lines are the merged page's ink thinned, text and lines alike; J7's came from a cleaned page with the letters erased.",
+  "The walls' feature set: the walls read the raw page's strokes (`wallevidence`), with the candidate features their evaluation.json names, in one ridge logistic regression per quarter; J7's walls came from its cleaned page and its chain of graph steps.",
+  "Unchanged, and named here: the placement's training answers from the table (stay when the lot under the text has the label's code, else the nearest walled area whose lots mostly have it) count an area's lots across the quarter split, as J7's did, so a label near the split can learn from table codes of the quarter its model is scored on."
+ ]
+}

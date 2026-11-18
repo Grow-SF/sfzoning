@@ -5,6 +5,8 @@ import { ByteCache, cachedSource, type Pm } from "@/lib/archiveCache";
 import { BASEMAP, scanSource, tileUrl } from "@/lib/tiles";
 import { COLOURS, HOLD_LIMIT_MS, heldScans, nextHeld } from "@/lib/scanHold";
 import { INK_CITY, inkByZoom, scanInkWeight } from "@/lib/theme";
+import { ACCESSIBLE_COLORS, shownColor } from "@/lib/palette";
+import { getPaletteName, resetPaletteChoice, setPaletteName, subscribePalette } from "@/lib/paletteChoice";
 
 const orig = process.env.NEXT_PUBLIC_TILES_BASE_URL;
 afterEach(() => {
@@ -271,5 +273,54 @@ describe("nextHeld", () => {
   });
   it("releases held colours on a step that draws colours of its own", () => {
     expect(nextHeld([COLOURS], ["1960"], ["1972"], false, true)).toEqual(["1960"]);
+  });
+});
+
+describe("shownColor", () => {
+  it("matches the lots: the colour at the map's fill strength over the blocks", () => {
+    // #E07A80 at 0.85 over block #dfd9cd, as the map composites it.
+    expect(shownColor("single_family", 0.85)).toBe("#e0888c");
+    expect(shownColor("single_family", 1)).toBe("#e07a80");
+  });
+
+  it("uses the palette it's given", () => {
+    expect(shownColor("single_family", 1, ACCESSIBLE_COLORS)).toBe("#7ad151");
+  });
+});
+
+describe("palette choice", () => {
+  afterEach(() => {
+    resetPaletteChoice();
+    vi.unstubAllGlobals();
+  });
+
+  function stubStorage(initial: Record<string, string> = {}) {
+    const store = { ...initial };
+    vi.stubGlobal("window", {
+      localStorage: { getItem: (k: string) => store[k] ?? null, setItem: (k: string, v: string) => (store[k] = v) },
+    });
+    return store;
+  }
+
+  it("remembers the colour-blind palette between visits and tells every map", () => {
+    const store = stubStorage();
+    expect(getPaletteName()).toBe("standard");
+    const heard = vi.fn();
+    const stop = subscribePalette(heard);
+    setPaletteName("accessible");
+    stop();
+    expect(heard).toHaveBeenCalledOnce();
+    resetPaletteChoice();
+    expect(store["sfz-palette"]).toBe("accessible");
+    expect(getPaletteName()).toBe("accessible");
+  });
+
+  it("falls back to standard when storage is blocked", () => {
+    vi.stubGlobal("window", {
+      localStorage: { getItem: () => { throw new Error("blocked"); }, setItem: () => { throw new Error("blocked"); } },
+    });
+    expect(getPaletteName()).toBe("standard");
+    setPaletteName("accessible");
+    expect(getPaletteName()).toBe("accessible");
   });
 });

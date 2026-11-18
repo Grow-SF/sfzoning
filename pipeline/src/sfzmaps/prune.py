@@ -8,8 +8,10 @@ means re-recording dvc.lock and shipping again.)
 
 *Used* is everything named by `main`'s shipped manifest, and by that of every open pull request
 whose branch has a pipeline/cache-needed.json: the manifest itself, the needed-answers list, every
-answer pack (zip and index), every data pack and every object stored alone. Everything else under
-`dvc/` and `cache/` is unused. Tiles and stats under other prefixes are never listed or touched.
+answer pack (zip and index), every data pack and every object stored alone, plus every `dvc/` or
+`cache/` name the site links to from main's or an open pull request's site/lib/downloads.json (GIS
+sheet downloads link straight to shipped DVC objects, superseded ones included while they're kept).
+Everything else under `dvc/` and `cache/` is unused. Tiles and stats under other prefixes are never listed or touched.
 
 It refuses when main's manifest isn't version 2 (a v1 manifest stores every object alone, and
 pruning would delete objects older commits still pull), when an open pull request's branch can't
@@ -74,6 +76,18 @@ def used_names(needed: dict, manifest: dict, records=()) -> set[str]:
         out.add(ship.datapack_name(sha))
     out |= {ship.object_name(m) for m in manifest.get("objects") or {} if m not in where}
     return out
+
+
+# Store names the site links to (site/lib/downloads.json): a download is a plain link to the object.
+SITE_LINKS = ("site/lib/downloads.json",)
+LINKED = re.compile(r"dvc/files/md5/[0-9a-f]{2}/[0-9a-f]{30}(?:\.dir)?(?![0-9a-f])"
+                    r"|cache/(?:datapacks|packs|needed|shipped)/[0-9a-f]{64}(?:\.zip|\.keys\.gz|\.json)")
+
+
+def linked_names(text: str) -> set[str]:
+    """Every content-addressed `dvc/` or `cache/` store name a site manifest links to (prune only
+    deletes those layouts, so nothing else needs keeping)."""
+    return set(LINKED.findall(text))
 
 
 @dataclass
@@ -144,6 +158,8 @@ def gather_used(client=None) -> tuple[set[str], list[str], int]:
             ship._git("rev-parse", "--verify", "-q", ref)
         except subprocess.CalledProcessError:
             raise PruneError(f"{ref} isn't on origin; can't tell what it uses") from None
+        for path in SITE_LINKS:
+            used |= linked_names(_show(ref, path) or "")
         text = _show(ref, "pipeline/cache-needed.json")
         if text is None:
             if i == 0:

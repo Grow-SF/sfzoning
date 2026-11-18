@@ -1,0 +1,238 @@
+# Review package: 5209120..a201d3d
+
+## Commits
+a201d3d text detector tests: the default recipe's settings include its precision (float32)
+1bcd48d text detector: a float16 option for the recipe (autocast forward, float32 loss, gradient scaler)
+
+## Files changed
+ pipeline/src/sfzmaps/solver/textnet/predict.py  |  1 +
+ pipeline/src/sfzmaps/solver/textnet/train.py    | 23 ++++++++++++---
+ pipeline/tests/test_solver_textnet.py           |  3 +-
+ pipeline/tests/test_solver_textnet_precision.py | 37 +++++++++++++++++++++++++
+ 4 files changed, 59 insertions(+), 5 deletions(-)
+
+## Diff
+diff --git a/pipeline/src/sfzmaps/solver/textnet/predict.py b/pipeline/src/sfzmaps/solver/textnet/predict.py
+index e5db70a..acbeb51 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/predict.py
++++ b/pipeline/src/sfzmaps/solver/textnet/predict.py
+@@ -19,20 +19,21 @@ PAD = 64        # px of page around each tile that the model sees too (even)
+ 
+ 
+ def load_model(f: Path, device: str) -> model.TextNet:
+     """A trained detector (the file `train.save_model` wrote) on `device`, for scoring: the network its recipe names,
+     with its weights.  A file without a recipe is refused (ValueError), not guessed."""
+     if not f.is_file():
+         raise FileNotFoundError(f"can't read {f}: train the detector first")
+     saved = torch.load(f, map_location="cpu")
+     if "recipe" not in saved:
+         raise ValueError(f"{f} holds no recipe (it was saved before recipes): train the detector again")
++    # Float32 whatever the recipe's precision: training in half precision keeps the weights in float32.
+     net = train.build_net(train.Recipe(**saved["recipe"]))
+     net.load_state_dict(saved["state_dict"])
+     return net.to(device).eval()
+ 
+ 
+ @torch.no_grad()
+ def chance(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndarray | None = None) -> np.ndarray:
+     """The chance of text at every px of a page's ink (bool), as uint8 0..255.  `only` (bool, the page's shape): the
+     px wanted; a tile with none of them is not scored (left 0), and the px wanted get the chance a whole page's
+     scoring gives them."""
+diff --git a/pipeline/src/sfzmaps/solver/textnet/train.py b/pipeline/src/sfzmaps/solver/textnet/train.py
+index 4b1c7c0..3ff83c9 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/train.py
++++ b/pipeline/src/sfzmaps/solver/textnet/train.py
+@@ -17,20 +17,23 @@ is only ever read at ink), or the known ink and the px next to it, the 8 around
+ The parts of the loss stay on the device, summed; every LOG_EVERY steps (and at the last) their mean over those steps
+ is read, logged and checked, so the device is waited on only then.  A mean that is not finite stops the training.
+ Each batch goes to the device without waiting for it either (`Copies`): a waiting copy to the Mac's GPU first waits
+ for all the work queued before it, so every step would wait for the last.
+ 
+ Every draw comes from one numpy generator and the weights from torch's, both seeded; torch runs deterministic
+ algorithms on THREADS threads.  With `prefetch` a background thread draws the batches ahead, from that one generator
+ and in the same order, so the weights are the same bit for bit.  On the Mac's GPU the training runs in the GPU's
+ exclusive turn (`sfzmaps.gpu`), which the caller takes (`stage.build_text`, `trial.run_trials`).
+ 
++With `precision="float16"` the forward runs under autocast in half precision (measured 22% faster per step on the M1
++Max), with the loss in float32 and a gradient scaler; the weights stay float32, and prediction stays float32.
++
+ `save_model` writes the weights with the recipe they came from; `predict.load_model` builds the network that recipe
+ names.
+ """
+ import collections
+ import contextlib
+ import dataclasses
+ import logging
+ import queue
+ import threading
+ import time
+@@ -53,54 +56,61 @@ PCT_START = 0.3         # the share of the steps the learning rate rises over
+ TEXT_SHARE = 0.5        # the share of crops centred on text (the others on any ink)
+ SCALE = (0.6, 1.6)      # the range of the factor each crop is scaled by
+ CENTRE_STRIDE = 4       # crops centre on every this-many-th px each way
+ WEIGHT_DECAY = 1e-4
+ KIND_WEIGHT = 0.5
+ ANGLE_WEIGHT = 0.5
+ THREADS = 4
+ LOG_EVERY = 250         # iterations between progress lines (and reads of the loss from the device)
+ PREFETCH = 2            # batches drawn ahead with `prefetch`
+ HELD = 2                # steps a batch is held after its copy to the GPU was queued (`Copies`)
+-CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text"), "decoder": ("full", "light")}
++CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text"), "decoder": ("full", "light"),
++           "precision": ("float32", "float16")}
+ NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
+ 
+ 
+ @dataclasses.dataclass(frozen=True)
+ class Recipe:
+     """How the detector is trained.  The defaults are today's recipe (see the module).
+ 
+       iterations      steps
+       max_lr          the one-cycle schedule's peak learning rate
+       pct_start       the share of the steps the learning rate rises over
+       batch, crop     crops per step, and their side in px
+       width           the network's channels at full resolution (`model.TextNet`)
+       ink_only        the px the loss reads: "off" every known px, "ink" the known ink, "ink+1px" the known ink and
+                       the px next to it
+       half_size       the network runs at half the px each way, on the ink folded 2 x 2 into channels (`model.fold`);
+                       crops must be even
+       heads           "all" outputs (text, kind, reading direction) or "text" alone
+       weight_average  the decay of the moving average of the weights kept as the model (`WeightAverage`); 0 is off
+       prefetch        the next batches drawn in a background thread (the same batches)
+       decoder         "full" two convolutions per block up, or "light" one
++      precision       "float32", or "float16": the forward under `torch.autocast` in half precision, the output cast to
++                      float32 before the loss, and the loss scaled by a `torch.amp.GradScaler` against underflow of
++                      the half-precision gradients (torch 2.15 supports it on cpu and mps).  The weights, the
++                      optimiser and the saved model stay float32.  The scaler's step reads its overflow check
++                      back from the device each step (`.item()`), which waits for the GPU.
+     """
+     iterations: int = ITERATIONS
+     max_lr: float = LEARNING_RATE
+     pct_start: float = PCT_START
+     batch: int = BATCH
+     crop: int = CROP
+     width: int = model.WIDTH
+     ink_only: str = "off"
+     half_size: bool = False
+     heads: str = "all"
+     weight_average: float = 0.0
+     prefetch: bool = False
+     decoder: str = "full"
++    precision: str = "float32"
+ 
+     def __post_init__(self):
+         for f in dataclasses.fields(self):
+             v = getattr(self, f.name)
+             if f.type is bool and not isinstance(v, bool):
+                 raise ValueError(f"recipe: {f.name} is True or False, not {v!r}")
+             if f.type is int and (isinstance(v, bool) or not isinstance(v, (int, np.integer))):
+                 raise ValueError(f"recipe: {f.name} is a whole number, not {v!r}")
+             if f.type is float and (isinstance(v, bool) or not isinstance(v, (int, float, np.integer, np.floating))):
+                 raise ValueError(f"recipe: {f.name} is a number, not {v!r}")
+@@ -357,27 +367,32 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
+     torch.manual_seed(seed)
+     rng = np.random.default_rng(seed)
+     pools = centre_pools(sheets)
+     net = build_net(recipe).to(device)
+     opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=WEIGHT_DECAY)
+     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.iterations,
+                                                 pct_start=recipe.pct_start)
+     average = WeightAverage(net, recipe.weight_average) if recipe.weight_average else None
+     sums, first, t0 = torch.zeros(3, device=device), 1, time.perf_counter()
+     copies = Copies(device)
++    half = recipe.precision == "float16"
++    scaler = torch.amp.GradScaler(torch.device(device).type, enabled=half)
+     with _batches(sheets, pools, recipe, rng) as batches, contextlib.closing(copies):
+         for it, batch in enumerate(batches, 1):
+             x, t, k, a, w = copies(batch)
+-            loss, parts = loss_fn(net(x), t, k, a, w)
++            with torch.autocast(torch.device(device).type, dtype=torch.float16, enabled=half):
++                out = net(x)
++            loss, parts = loss_fn(out.float(), t, k, a, w)      # the loss in float32, outside the autocast
+             opt.zero_grad()
+-            loss.backward()
+-            opt.step()
++            scaler.scale(loss).backward()
++            scaler.step(opt)
++            scaler.update()
+             sched.step()
+             if average is not None:
+                 average.update(net)
+             sums += parts.detach()
+             if it % LOG_EVERY == 0 or it == recipe.iterations:
+                 mean = (sums / (it - first + 1)).cpu().numpy()
+                 if not np.isfinite(mean).all():
+                     raise FloatingPointError(f"iterations {first}-{it}: the loss is not finite (mean text {mean[0]}, "
+                                              f"kind {mean[1]}, angle {mean[2]})")
+                 log.info("iterations %d-%d: text %.4f, kind %.4f, angle %.4f (%.1f s)", first, it, *mean,
+diff --git a/pipeline/tests/test_solver_textnet.py b/pipeline/tests/test_solver_textnet.py
+index e6b6f07..fad36eb 100644
+--- a/pipeline/tests/test_solver_textnet.py
++++ b/pipeline/tests/test_solver_textnet.py
+@@ -485,21 +485,22 @@ def _flip(crops, where) -> list[dict[str, np.ndarray]]:
+     return [{**c, "text": np.where(m, 1 - c["text"], c["text"]).astype(np.uint8),
+              "kind": np.where(m, 2, c["kind"]).astype(np.uint8),
+              "angle": np.where(m, 45, c["angle"]).astype(np.int16)} for c, m in zip(crops, where)]
+ 
+ 
+ def test_default_recipe_trains_as_today(maps):
+     # today's settings: 8,000 steps of 12 crops of 320 px, a one-cycle peak of 2e-3 reached 30% in, width 24, the
+     # loss on every known px, the network at full size with all seven outputs, no average, no prefetch
+     assert dataclasses.asdict(train.Recipe()) == {
+         "iterations": 8000, "max_lr": 2e-3, "pct_start": 0.3, "batch": 12, "crop": 320, "width": 24, "ink_only": "off",
+-        "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full"}
++        "half_size": False, "heads": "all", "weight_average": 0.0, "prefetch": False, "decoder": "full",
++        "precision": "float32"}
+     torch.manual_seed(0)
+     net = train.build_net(train.Recipe())
+     assert sum(p.numel() for p in net.parameters()) == TODAYS_PARAMETERS
+     # on a fixed batch, the loss is today's: the weight is the known px, and the loss of the outputs is the same
+     crops = _fixed_batch(data.load_sheets([paths.SERIES, OLD], hold_out_validation=True))
+     x, t, k, a, w = train.to_tensors(crops, "cpu", train.Recipe().ink_only)
+     known = torch.from_numpy(np.stack([c["known"] for c in crops]).astype(np.float32))
+     assert torch.equal(w, known) and (t * w).sum() > 0 and (w == 0).any()
+     out = net(x)
+     assert out.shape == (4, 7, 64, 64)
+diff --git a/pipeline/tests/test_solver_textnet_precision.py b/pipeline/tests/test_solver_textnet_precision.py
+new file mode 100644
+index 0000000..bd2b5a6
+--- /dev/null
++++ b/pipeline/tests/test_solver_textnet_precision.py
+@@ -0,0 +1,37 @@
++import dataclasses
++
++import pytest
++import torch
++
++from sfzmaps.solver import paths
++from sfzmaps.solver.textnet import data, predict, train
++from test_solver_textnet import OLD, SMALL, maps  # noqa: F401  (the fixture)
++
++
++def test_precision_is_a_recipe_choice():
++    assert "precision=float16" in train.Recipe(precision="float16").name()
++    assert "precision" not in train.Recipe().name()
++    with pytest.raises(ValueError):
++        train.Recipe(precision="half")
++
++
++def _fit(maps, seed=0):
++    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=True)
++    recipe = dataclasses.replace(SMALL, iterations=3, precision="float16")
++    return recipe, train.fit(sheets, recipe, device="cpu", seed=seed)
++
++
++def test_float16_fit_is_repeatable(maps):
++    _, a = _fit(maps)
++    _, b = _fit(maps)
++    sa, sb = a.state_dict(), b.state_dict()
++    assert all(torch.equal(sa[k], sb[k]) for k in sa)
++    assert all(v.dtype == torch.float32 for v in sa.values() if v.is_floating_point())
++
++
++def test_saved_float16_model_loads(maps, tmp_path):
++    recipe, net = _fit(maps)
++    f = train.save_model(tmp_path / "m.pt", net, recipe, "cpu")
++    loaded = predict.load_model(f, "cpu")
++    for k, v in net.state_dict().items():
++        assert torch.equal(v, loaded.state_dict()[k])

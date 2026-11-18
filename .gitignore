@@ -30,7 +30,8 @@ dist-ssr
 pipeline/data/
 pipeline/.venv/
 pipeline/.env
-.claude/
+.claude/*
+!.claude/skills/
 .vercel
 
 # Python bytecode

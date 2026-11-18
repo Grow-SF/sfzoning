@@ -2,9 +2,11 @@
 
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { Era } from "@/lib/eras";
-import { CATEGORY_COLORS, CATEGORY_LABELS, isCategory } from "@/lib/palette";
+import { CATEGORY_LABELS, isCategory } from "@/lib/palette";
+import { usePalette } from "@/lib/paletteChoice";
 import { confidenceLabel, lookupRule, type Rule } from "@/lib/rules";
 import type { ParcelHit } from "./StoryMap";
+import CorrectionForm from "./CorrectionForm";
 import styles from "./explorer.module.css";
 
 type Props = { hit: ParcelHit; era: Era; rules: Rule[]; onClose: () => void };
@@ -15,6 +17,7 @@ function formatBlklot(b?: string) {
 }
 
 export default function ParcelPopup({ hit, era, rules, onClose }: Props) {
+  const { colors } = usePalette();
   const closeRef = useRef<HTMLButtonElement>(null);
   const rule = lookupRule(rules, era.year, hit.code);
   const cat = isCategory(hit.category) ? hit.category : "unknown";
@@ -62,9 +65,10 @@ export default function ParcelPopup({ hit, era, rules, onClose }: Props) {
         </h3>
         {rule?.name && <p className={styles.popupName}>{rule.name}</p>}
         <p className={styles.popupCat}>
-          <span className={styles.popupSwatch} style={{ background: CATEGORY_COLORS[cat] }} aria-hidden />
+          <span className={styles.popupSwatch} style={{ background: colors[cat] }} aria-hidden />
           {CATEGORY_LABELS[cat]}
         </p>
+        {hit.note && <p className={styles.popupName}>{hit.note}</p>}
 
         {rule ? (
           <dl className={styles.facts}>
@@ -90,6 +94,7 @@ export default function ParcelPopup({ hit, era, rules, onClose }: Props) {
           <span>Map reading: {confidenceLabel(hit.confidence)}</span>
           {rule && <span>Rule summary: {rule.confidence[0].toUpperCase() + rule.confidence.slice(1)}</span>}
         </p>
+        <CorrectionForm key={`${era.id}-${hit.blklot}`} hit={hit} era={era} rules={rules} />
       </div>
     </aside>
   );

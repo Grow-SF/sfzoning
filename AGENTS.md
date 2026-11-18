@@ -49,7 +49,8 @@ or Blob token.
   to force a re-read; change the prompt or context instead.
 - Keep DVC's cache type `reflink,copy`; `hardlink`/`symlink` corrupt the cache because the
   pipeline rewrites files in place. Never run a bare `dvc gc`.
-
+- The warp's corrected sheets live in `pipeline/data/warp/`, made by `uv run sfzmaps warp` (the `warp-<series>`
+  build stages); see "The sheet warp" in `pipeline/README.md`.
 - Never commit `pipeline/data/`. It's gigabytes, and it's shared through the
   processed bundle instead.
 - Published tiles are served from Vercel Blob. Don't overwrite a published
@@ -57,6 +58,12 @@ or Blob token.
   a changed archive under a new path, or accept that open tabs need a reload.
 - A production build of the site must never point at local tiles
   (`scripts/check-tiles-env.mjs` enforces this; don't bypass it).
+
+## Readers' corrections
+
+Issues labelled `correction` come from the site's corrections tray. Process them with the
+`processing-map-corrections` skill (`.claude/skills/processing-map-corrections/SKILL.md`):
+check every scan crop before applying anything.
 
 ## Faithfulness to the historic maps
 
@@ -73,8 +80,10 @@ or Blob token.
 
 Keep the attribution "Based on sfzoning.com by Steven Bacio for GrowSF
 (https://growsf.org)", the David Rumsey credit wherever 1948 imagery shows,
-and the license notices. See `NOTICE`. Don't add dependencies under licenses
-incompatible with AGPL-3.0.
+and the license notices. See `NOTICE` and `LICENSING.md`. Shipped code
+(`pipeline/`, `site/`) must not combine GPL-family (copyleft) dependencies that
+would put the code under their terms; MIT, BSD, ISC and Apache-2.0 are fine,
+and LGPL only as a separate library.
 
 ## Checking your work
 

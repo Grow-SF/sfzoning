@@ -120,3 +120,14 @@
   font-size: 0.875rem;
   font-weight: 600;
 }
+
+/* "Explore every map" link closing the story. */
+.more {
+  position: relative;
+  z-index: 1;
+  background: var(--paper);
+  border-top: 1px solid var(--ink);
+  padding: 2rem 1rem;
+  text-align: center;
+  font-family: var(--font-ui);
+}

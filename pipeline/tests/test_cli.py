@@ -118,7 +118,7 @@ def test_cli_republish_and_cache_only_never_reach_network(monkeypatch, tmp_path)
     from sfzmaps.districts import assemble
 
     seen = []
-    monkeypatch.setattr(assemble, "republish", lambda s: seen.append(("re", s, llm.CACHE_ONLY)) or tmp_path)
+    monkeypatch.setattr(assemble, "republish", lambda s, **k: seen.append(("re", s, llm.CACHE_ONLY)) or tmp_path)
     monkeypatch.setattr(assemble, "run_series",
                         lambda s, **k: seen.append(("run", s, k.get("cache_only"))) or tmp_path)
     monkeypatch.setattr(reviewpage, "write", lambda s: tmp_path / "review.html")
@@ -146,3 +146,26 @@ def test_cli_districts_status(monkeypatch):
     res = CliRunner().invoke(cli.app, ["districts", "--status"])
     assert res.exit_code == 0, res.output
     assert "1960" in res.output and "region-read abc1234" in res.output and "no" in res.output
+
+
+def test_cli_downloads_rejects_unknown_series(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import build, cli, downloads
+
+    monkeypatch.setattr(build, "require_toolchain", lambda s: None)
+    monkeypatch.setattr(downloads, "catalog", lambda: [])
+    res = CliRunner().invoke(cli.app, ["downloads", "--series", "nope"])
+    assert res.exit_code != 0 and "nope" in res.output
+
+
+def test_cli_downloads_listed(monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    res = CliRunner().invoke(cli.app, ["--help"])
+    assert "downloads" in res.output
+    res = CliRunner().invoke(cli.app, ["downloads", "--help"], env={"NO_COLOR": "1", "TERM": "dumb"})
+    import re
+    assert res.exit_code == 0 and "--series" in re.sub(r"\x1b\[[0-9;]*m", "", res.output)
