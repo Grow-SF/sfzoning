@@ -18,7 +18,8 @@ A network whose recipe has `input="grey"` (`train.build_net` sets `net.input`) i
 in the `ink` argument of `chance`, `outputs` and `word_outputs`: over 255 as training gives them, a tile's padding white
 paper, and no tile skipped for having no ink (a grey page has none to look for).
 
-`word_outputs` is for a network with the word heads (`train.Recipe(heads="words")`, `model.WORD_OUTPUTS` channels):
+`word_outputs` is for a network with the word heads (`train.Recipe(heads="words")`, `model.WORD_OUTPUTS` channels, or
+"words_aff", `model.WORD_AFF_OUTPUTS`, whose same-word affinity is `WordOutputs.aff`):
 the arrays `wordread.words.core_words` takes (`WordOutputs`), the page's tiles stitched into one page.  Each tile is
 seen with `context` px of page around it, the network's whole reach (its receptive field), not PAD: so every px kept
 gets the numbers one pass over the whole page would give it (the tile's own edges and the paper it is padded with
@@ -162,6 +163,11 @@ class WordOutputs(NamedTuple):
     #                          centre (x right, y down), the word's length and height in px, and its axis in degrees in
     #                          [0, 180) (no reading sign: 0/180 is the reader's)
     tag: np.ndarray          # float32 (k, h, w): the word tag (`model.TAG`)
+    aff: np.ndarray | None = None
+    #                          float32 (2, h, w), a "words_aff" network's alone (None for "words"): the same-word
+    #                          affinity logits (`model.AFF`), [0] of the px and the px to its right, [1] of the px and
+    #                          the px below; NOT_SCORED where the px is not scored, and on the page's last column ([0])
+    #                          and last row ([1]), whose pair has no second px
 
 
 def context(net: model.TextNet) -> int:
@@ -186,7 +192,8 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
     """A word-heads network's outputs (`WordOutputs`) at every px of a page's ink (bool), `tile` x `tile` px at a time
     (a multiple of the network's `multiple`), each tile seen with `context(net)` px of page around it and the tiles
     stitched (see the module).  `only` (bool, the page's shape): the px wanted; a tile with none of them is not scored.
-    A network without the word heads is refused (ValueError)."""
+    A network without the word heads is refused (ValueError).  A "words_aff" network's affinity is stitched as the
+    rest (`WordOutputs.aff`; None for a "words" network)."""
     h, w = ink.shape
     if only is not None and only.shape != ink.shape:
         raise ValueError(f"the px wanted are {only.shape}, the page {ink.shape}")
@@ -194,9 +201,11 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
         raise ValueError(f"a tile is a multiple of the network's {net.multiple} px, not {tile}")
     pad = context(net)
     k = model.TAG.stop - model.TAG.start
+    channels = net.head.out_channels // (model.FOLD ** 2 if net.half_size else 1)
     out = WordOutputs(np.zeros((h, w), np.uint8), np.zeros((4, h, w), np.float16),
                       np.full((h, w), NOT_SCORED, np.float32), np.zeros((5, h, w), np.float32),
-                      np.zeros((k, h, w), np.float32))
+                      np.zeros((k, h, w), np.float32),
+                      np.full((2, h, w), NOT_SCORED, np.float32) if channels == model.WORD_AFF_OUTPUTS else None)
     for y in range(0, h, tile):
         for x in range(0, w, tile):
             if only is not None and not only[y:y + tile, x:x + tile].any():
@@ -206,9 +215,9 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
             win = ink[y0:y1, x0:x1]
             xin = _tile_input(net, win, device)
             o = net(xin)[0]
-            if o.shape[0] != model.WORD_OUTPUTS:
-                raise ValueError(f"the network has {o.shape[0]} outputs, not {model.WORD_OUTPUTS}: it has no word "
-                                 "heads")
+            if o.shape[0] not in (model.WORD_OUTPUTS, model.WORD_AFF_OUTPUTS):
+                raise ValueError(f"the network has {o.shape[0]} outputs, not {model.WORD_OUTPUTS} or "
+                                 f"{model.WORD_AFF_OUTPUTS}: it has no word heads")
             cy, cx = y - y0, x - x0
             th, tw = min(tile, h - y), min(tile, w - x)
             o = o[:, cy:cy + th, cx:cx + tw].float()
@@ -218,4 +227,9 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
             out.core[win_out] = o[model.CORE].cpu().numpy()
             out.geo[(slice(None), *win_out)] = model.word_geometry(o).cpu().numpy()
             out.tag[(slice(None), *win_out)] = o[model.TAG].cpu().numpy()
+            if out.aff is not None:
+                out.aff[(slice(None), *win_out)] = o[model.AFF].cpu().numpy()
+    if out.aff is not None:
+        out.aff[0, :, -1] = NOT_SCORED         # no px to the right of the last column, none below the last row
+        out.aff[1, -1, :] = NOT_SCORED
     return out

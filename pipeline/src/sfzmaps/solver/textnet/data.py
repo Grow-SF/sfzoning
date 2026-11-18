@@ -47,6 +47,20 @@ before training):
              `wordread.doubt.prepare` fills before training): at a core px its word's weight, 1 elsewhere.  With none,
              every word weighs 1 and the key is absent (the targets are those without weights, byte for byte).
 
+The same-word affinity targets (`crop_targets(..., words=True, affinity=True)`, for `train.Recipe.heads="words_aff"`;
+`affinity_targets`), one per pair of neighbouring px of the crop as the network sees it (after the scale and the turns),
+from tag_id and known:
+  aff_right  uint8 (size, size): at px (r, c), 1 when it and px (r, c + 1) carry the same word id (above 0), else 0
+  aff_down   uint8 (size, size): the same of px (r, c) and px (r + 1, c)
+  aff_known  uint8 (2, size, size), [0] the right pairs', [1] the down pairs': 1 where the pair is taught, both px known
+             and at least one in a word (a word's px beside another word's or the background's is 0, beside its own
+             word's 1); 0 where either px is not known, where both are background (no word to tell apart), and on the
+             last column (right) and last row (down), whose pair has no second px in the crop
+They are drawn from the crop's final tag_id and known, after the turn: a turn moves which px is to the right of which,
+and the pairs are read off the turned map itself, so they are exact under every turn.  Where word rectangles overlap,
+tag_id holds the later word (painted later over earlier, as ever), so the pairs follow it: the earlier word ends where
+the later one's rectangle starts.
+
 An area answers for map points whether each is in it (`contains`) and, from the placement's samples around a page
 window, whether all of the window's px are in it or none is, when that follows from the samples alone (`decided`): a
 px's map point is a weighted mean of four samples, so it lies in their bounding box.  Only where it doesn't follow is
@@ -583,8 +597,25 @@ def _turn_offsets(dx: np.ndarray, dy: np.ndarray, turns: int) -> tuple[np.ndarra
     return dx, dy
 
 
+def affinity_targets(tag_id: np.ndarray, known: np.ndarray) -> dict[str, np.ndarray]:
+    """The same-word affinity targets of a crop (see the module) from its word ids (`tag_id`, 0 off the words) and its
+    known px (bool), both (h, w) as the network sees them: aff_right, aff_down (uint8 (h, w)) and aff_known (uint8
+    (2, h, w), the right pairs' then the down pairs')."""
+    h, w = tag_id.shape
+    known = np.asarray(known, bool)
+    right, down = np.zeros((h, w), np.uint8), np.zeros((h, w), np.uint8)
+    taught = np.zeros((2, h, w), np.uint8)
+    for k, (target, a, b, ka, kb, at) in enumerate((
+            (right, tag_id[:, :-1], tag_id[:, 1:], known[:, :-1], known[:, 1:], (slice(None), slice(0, w - 1))),
+            (down, tag_id[:-1], tag_id[1:], known[:-1], known[1:], (slice(0, h - 1), slice(None))))):
+        target[at] = (a == b) & (a > 0)
+        taught[(k, *at)] = ka & kb & ((a > 0) | (b > 0))
+    return {"aff_right": right, "aff_down": down, "aff_known": taught}
+
+
 def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int,
-                 labels: str = "boxes", words: bool = False, grey: bool = False) -> dict[str, np.ndarray]:
+                 labels: str = "boxes", words: bool = False, grey: bool = False,
+                 affinity: bool = False) -> dict[str, np.ndarray]:
     """The training crop centred on page px (row y, col x), moved inside the page: size / `scale` px of page resized
     to `size` x `size` (nearest px) and turned `turns` quarter turns counter-clockwise, the reading angle with it (in
     [-180, 180) degrees on text, 0 elsewhere).  Keys: ink (bool), text (uint8), kind (uint8), angle (int16), known
@@ -595,9 +626,13 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     the sheet holds word weights, weight (float32; ValueError unless one weight per word, each a number at least 0).
     With `grey`, also grey (float32 (size, size)): the same window of the page's grey levels (`SheetData.grey_bits`)
     over 255, resized bilinearly (`cv2.INTER_LINEAR`, as the ink is by nearest px) and turned with the rest;
-    ValueError when the sheet holds none.  The other keys are the same with or without it."""
+    ValueError when the sheet holds none.  With `affinity` (and `words`: ValueError without), also the same-word
+    affinity targets aff_right, aff_down and aff_known (`affinity_targets` of the turned tag_id and known; see the
+    module).  The other keys are the same with or without either."""
     if labels not in LABEL_RULES:
         raise ValueError(f"labels is one of {', '.join(LABEL_RULES)}, not {labels!r}")
+    if affinity and not words:
+        raise ValueError("the affinity targets are drawn from the word targets' tag_id: ask for words too")
     if words and len(sd.weights) and (sd.weights.shape != (len(sd.words),) or not np.isfinite(sd.weights).all()
                                       or (sd.weights < 0).any()):
         raise ValueError(f"{sd.series} {sd.sheet}: SheetData.weights {sd.weights.shape} must be one number at least 0 "
@@ -643,7 +678,10 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     out["geo_known"] = np.concatenate([[0], unheld & inside]).astype(np.uint8)[out["tag_id"]]
     if len(sd.weights):
         out["weight"] = np.concatenate([[1], sd.weights]).astype(np.float32)[out["tag_id"]]
-    return {k: np.rot90(v, turns, axes=(1, 2) if k == "geo" else (0, 1)) for k, v in out.items()}
+    out = {k: np.rot90(v, turns, axes=(1, 2) if k == "geo" else (0, 1)) for k, v in out.items()}
+    if affinity:
+        out.update(affinity_targets(out["tag_id"], out["known"]))
+    return out
 
 
 def centres(sd: SheetData, stride: int) -> tuple[np.ndarray, np.ndarray]:

@@ -12,6 +12,10 @@ quarter turns), so its channels are (`data.crop_targets(..., words=True)`):
   GEO  8-11  8, 9: dx, dy, the offset from the px to its word's centre in image px (x right, y down) over the word's
              height; 10, 11: the log of the word's length and of its height in px (along its axis and across it)
   TAG  12-15 the px's word tag, a vector classified to its own word's mean tag among its crop's words' (`train`)
+A network with the word heads and the same-word affinity (`train.Recipe.heads="words_aff"`, WORD_AFF_OUTPUTS channels;
+CRAFT's and instance segmentation's affinity) has those 16, the same layout, and
+  AFF  16-17 16: the logit of the px and the px to its RIGHT being in one word; 17: of the px and the px BELOW it
+             (`data.affinity_targets`)
 `word_geometry` decodes AXIS and GEO into px and degrees.  The number of channels of each recipe's heads:
 HEAD_OUTPUTS.
 
@@ -31,7 +35,10 @@ CORE = 7
 GEO = slice(8, 12)
 TAG = slice(12, 16)
 WORD_OUTPUTS = 16
-HEAD_OUTPUTS = {"all": OUTPUTS, "text": 1, "words": WORD_OUTPUTS}    # channels, by `train.Recipe.heads`
+AFF = slice(16, 18)            # the same-word affinity to the right and below (heads "words_aff"; see the module)
+WORD_AFF_OUTPUTS = 18
+HEAD_OUTPUTS = {"all": OUTPUTS, "text": 1, "words": WORD_OUTPUTS,
+                "words_aff": WORD_AFF_OUTPUTS}                       # channels, by `train.Recipe.heads`
 GEO_LIMIT = 20.0               # a numerical guard, not a decision: the log sizes are read within +-this when decoded,
                                # so a size stays finite in float32 (e^20 px is far beyond any page)
 FOLD = 2          # px each way folded into channels at half size
@@ -39,8 +46,8 @@ MULTIPLE = 2 ** (LEVELS - 1)   # a page side the levels halve evenly is a multip
 
 
 def word_geometry(out: torch.Tensor) -> torch.Tensor:
-    """The word heads' geometry decoded from a word network's outputs (`out` (..., WORD_OUTPUTS, h, w), the channels
-    third from last): (..., 5, h, w) of each px's word centre offset from the px in px (x right, y down: dx and dy
+    """The word heads' geometry decoded from a word network's outputs (`out` (..., WORD_OUTPUTS or WORD_AFF_OUTPUTS, h,
+    w), the channels third from last): (..., 5, h, w) of each px's word centre offset from the px in px (x right, y down: dx and dy
     times the height), the word's length and height in px, and its axis in degrees in [0, 180) (half the angle of
     AXIS's (cos 2t, sin 2t))."""
     g = out[..., GEO, :, :]

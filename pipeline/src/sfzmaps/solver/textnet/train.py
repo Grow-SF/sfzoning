@@ -48,6 +48,14 @@ weight at a core px; a word of weight 0 adds nothing.
              by its mean tag over its core px, and the background, by the mean tag over the crop's known px off the
              cores.  A softmax of -|tag - mean|^2 / T over the classes the crop has, T a learned temperature
              (exp of `WordLoss.log_temp`), and the cross-entropy to the px's own word: no margins
+With `heads` "words_aff" (`model.WORD_AFF_OUTPUTS` channels: the same 16 and the same-word affinity, `model.AFF`), the
+crops also have the affinity targets (`data.crop_targets(..., affinity=True)`, `data.affinity_targets`), and one more
+term, AFF_PARTS' last:
+  affinity   binary cross-entropy of each px pair's same-word logit (channel 16 the pair with the px to the right, 17
+             with the px below) over the taught pairs (`aff_known`), each class weighed by the inverse of its weight in
+             the batch (`_balanced_bce`, as the core's; both directions pooled).  With word weights a pair weighs the
+             chance its target is right: its word's weight when both px are of one word or one is background (weight
+             1), the product of the two words' weights when they are two words (each right or wrong on its own)
 The terms are added by learned weights (homoscedastic uncertainty: Kendall, Gal & Cipolla, CVPR 2018), one learned
 log-variance s_i a term (`WordLoss.log_var`):
     L_words = sum_i ( exp(-s_i) L_i + s_i / 2 )
@@ -112,7 +120,10 @@ DICE_EPS = 1e-6        # added to Dice's denominator: no px gives 0 / it (numeri
 MASS_EPS = 1e-12       # the least a weighted sum divides by: no weight gives 0 / it = 0 (numerical; decides nothing)
 PARTS = ("text", "kind", "angle")
 WORD_PARTS = ("core", "dice", "centre", "size", "axis", "tag")
-CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words"), "decoder": ("full", "light"),
+AFF_PARTS = WORD_PARTS + ("affinity",)    # the word terms of heads "words_aff"
+WORD_HEADS = ("words", "words_aff")       # the heads with the word heads (and their targets, cores and loss)
+CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words", "words_aff"),
+           "decoder": ("full", "light"),
            "precision": ("float32", "float16"), "labels": data.LABEL_RULES, "input": ("ink", "grey")}
 NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
 
@@ -133,7 +144,8 @@ class Recipe:
       heads           "all" outputs (text, kind, reading direction), "text" alone, or "words": all with the word heads
                       (axis, core, centre and size, tag; see the module), their sheets' cores filled by
                       `wordread.shrink.prepare`
-                      and the word terms added by learned weights (`WordLoss`)
+                      and the word terms added by learned weights (`WordLoss`); or "words_aff": "words" and the
+                      same-word affinity to the right and below (`model.AFF`), its term among the learned ones
       weight_average  the decay of the moving average of the weights kept as the model (`WeightAverage`); 0 is off
       prefetch        the next batches drawn in a background thread (the same batches)
       decoder         "full" two convolutions per block up, or "light" one
@@ -205,9 +217,9 @@ class Recipe:
         if self.input == "grey" and self.scenes > 0:
             raise ValueError(f"recipe: scenes are drawn as ink, with no grey levels: scenes must be 0 with input grey, "
                              f"not {self.scenes}")
-        if self.heads == "words" and self.composites > 0:
+        if self.heads in WORD_HEADS and self.composites > 0:
             raise ValueError(f"recipe: the word heads learn from data.crop_targets' word targets, which composites "
-                             f"don't make: composites must be 0 with heads words, not {self.composites}")
+                             f"don't make: composites must be 0 with heads {self.heads}, not {self.composites}")
 
     def name(self) -> str:
         """A short id of the weights the recipe trains, the same every run (for folder names): each setting that
@@ -284,7 +296,9 @@ def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe,
     or else, with chance `recipe.scenes` (drawn only when it is above 0), a scene of `bank` (`bank.scene`) at the same
     scale and turns (ValueError without a bank)."""
     _need_bank(recipe, bank)
-    extra = {"words": True} if recipe.heads == "words" else {}
+    extra = {"words": True} if recipe.heads in WORD_HEADS else {}
+    if recipe.heads == "words_aff":
+        extra["affinity"] = True
     if recipe.input == "grey":
         extra["grey"] = True
     out = []
@@ -362,13 +376,31 @@ def loss_fn(out: torch.Tensor, t: torch.Tensor, k: torch.Tensor, a: torch.Tensor
 
 # --- the word heads --------------------------------------------------------------------------------------------------
 
-def word_tensors(crops: list[dict[str, np.ndarray]]) -> tuple[torch.Tensor, ...]:
+def _pair_weights(c: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """A crop's same-word affinity targets (n = 2: right, down) and each pair's weight, float32 (2, h, w) each: its own
+    keys (`data.crop_targets(..., affinity=True)`) or, for a crop without them (a scene, whose known its bank changes
+    after `crop_targets`), `data.affinity_targets` of its tag_id and known.  A taught pair weighs 1, or with word
+    weights the chance its target is right (the module): its word's weight, or both words' product."""
+    aff = c if "aff_right" in c else data.affinity_targets(c["tag_id"], c["known"])
+    target = np.stack([aff["aff_right"], aff["aff_down"]]).astype(np.float32)
+    weight = aff["aff_known"].astype(np.float32)
+    if "weight" in c:
+        ids, w = c["tag_id"], c["weight"].astype(np.float32)
+        h, wd = ids.shape
+        for k, (a, b) in enumerate((((slice(None), slice(0, wd - 1)), (slice(None), slice(1, wd))),
+                                    ((slice(0, h - 1), slice(None)), (slice(1, h), slice(None))))):
+            weight[(k, *a)] *= np.where(ids[a] == ids[b], w[a], w[a] * w[b])
+    return target, weight
+
+
+def word_tensors(crops: list[dict[str, np.ndarray]], affinity: bool = False) -> tuple[torch.Tensor, ...]:
     """A batch's word targets on the CPU (`data.crop_targets(..., words=True)`): core (n, h, w) float, geo (n, 5, h,
     w) float, tag (n, h, w) int64, known (n, h, w) float, geo_known (n, h, w) float, and groups.  known is each px's
     weight in the word terms: 0 where the px is not known, else 1, or, for a crop with word weights (`weight`, from
     `SheetData.weights`), its word's weight at a core px.  A crop's tags are its core px of weight above 0, their words
     numbered 1, 2, ... in the order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so the
-    loss knows their number without reading the device."""
+    loss knows their number without reading the device.  With `affinity` (heads "words_aff"), also the same-word
+    affinity targets and their pairs' weights, float (n, 2, h, w) each (`_pair_weights`)."""
     def stack(key, dtype):
         return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype))
     tags, weights = [], []
@@ -381,9 +413,13 @@ def word_tensors(crops: list[dict[str, np.ndarray]]) -> tuple[torch.Tensor, ...]
         tags.append(np.where(ids > 0, np.searchsorted(words, ids) + 1, 0))
         weights.append(w)
     most = max((int(t.max()) for t in tags), default=0)
-    return (stack("core", np.float32), stack("geo", np.float32), torch.from_numpy(np.stack(tags).astype(np.int64)),
-            torch.from_numpy(np.stack(weights)), stack("geo_known", np.float32),
-            torch.arange(1, most + 1, dtype=torch.int64))
+    out = (stack("core", np.float32), stack("geo", np.float32), torch.from_numpy(np.stack(tags).astype(np.int64)),
+           torch.from_numpy(np.stack(weights)), stack("geo_known", np.float32),
+           torch.arange(1, most + 1, dtype=torch.int64))
+    if not affinity:
+        return out
+    pairs = [_pair_weights(c) for c in crops]
+    return out + (torch.from_numpy(np.stack([p[0] for p in pairs])), torch.from_numpy(np.stack([p[1] for p in pairs])))
 
 
 def _balanced_bce(logit: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
@@ -426,16 +462,25 @@ def _tag_ce(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor, weig
 
 
 def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: torch.Tensor, known: torch.Tensor,
-              geo_known: torch.Tensor, groups: torch.Tensor, log_var: torch.Tensor | None = None,
+              geo_known: torch.Tensor, groups: torch.Tensor, aff: torch.Tensor | None = None,
+              aff_weight: torch.Tensor | None = None, log_var: torch.Tensor | None = None,
               log_temp: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """The word heads' loss of a batch (see the module): sum_i exp(-s_i) L_i + s_i / 2 over the WORD_PARTS L_i, by
     the log-variances `log_var` (s, one a part) and the tag's log-temperature `log_temp` (both 0, their start, when
     not given: `WordLoss` holds the learned ones), and the parts themselves (unweighted) as one tensor on the batch's
     device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`.  Each px counts by its weight
     (`known`).  The centre and size are read only at core px whose geometry is known (`geo_known`), the axis at every
-    known core px."""
+    known core px.  With the affinity targets `aff` and their pairs' weights `aff_weight` (`word_tensors(...,
+    affinity=True)`; `out` then has WORD_AFF_OUTPUTS channels), the parts are AFF_PARTS: the affinity term last."""
+    affinity = aff is not None
+    if affinity and (aff_weight is None or out.shape[1] != model.WORD_AFF_OUTPUTS):
+        raise ValueError(f"the affinity term needs its pairs' weights and a network of {model.WORD_AFF_OUTPUTS} "
+                         f"outputs (heads words_aff), not {out.shape[1]}")
+    names = AFF_PARTS if affinity else WORD_PARTS
     if log_var is None:
-        log_var = out.new_zeros(len(WORD_PARTS))
+        log_var = out.new_zeros(len(names))
+    if log_var.shape != (len(names),):
+        raise ValueError(f"one log-variance a part ({', '.join(names)}), not {tuple(log_var.shape)}")
     if log_temp is None:
         log_temp = out.new_zeros(())
     logit = out[:, model.CORE]
@@ -453,18 +498,22 @@ def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: tor
     cosine = (cs[:, 0] * torch.cos(rad) + cs[:, 1] * torch.sin(rad)) / cs.norm(dim=1).clamp(min=1e-6)
     la = ((1 - cosine) * on).sum() / on.sum().clamp(min=MASS_EPS)
     lt = _tag_ce(out[:, model.TAG], tag, groups, known, core, log_temp)
-    parts = torch.stack([lc, ld, lcentre, lsize, la, lt])
+    terms = [lc, ld, lcentre, lsize, la, lt]
+    if affinity:
+        terms.append(_balanced_bce(out[:, model.AFF], aff, aff_weight))
+    parts = torch.stack(terms)
     return (torch.exp(-log_var) * parts + log_var / 2).sum(), parts
 
 
 class WordLoss(torch.nn.Module):
     """The word terms' learned settings (see the module), trained with the network: `log_var` (one log-variance s_i
-    a part of WORD_PARTS, its weight exp(-s_i)) and `log_temp` (the tag's log-temperature), all starting at 0.
-    Calling it gives `word_loss` by them."""
+    a part of WORD_PARTS, or of AFF_PARTS with `affinity`, its weight exp(-s_i)) and `log_temp` (the tag's
+    log-temperature), all starting at 0.  Calling it gives `word_loss` by them."""
 
-    def __init__(self):
+    def __init__(self, affinity: bool = False):
         super().__init__()
-        self.log_var = torch.nn.Parameter(torch.zeros(len(WORD_PARTS)))
+        self.parts = AFF_PARTS if affinity else WORD_PARTS
+        self.log_var = torch.nn.Parameter(torch.zeros(len(self.parts)))
         self.log_temp = torch.nn.Parameter(torch.zeros(()))
 
     def forward(self, out: torch.Tensor, *targets: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -475,7 +524,7 @@ class WordLoss(torch.nn.Module):
         """The settings as plain numbers (reading them waits for the device): each part's log-variance and weight
         exp(-s), and the tag's temperature."""
         s = self.log_var.detach().cpu().double().tolist()
-        return {"log_var": dict(zip(WORD_PARTS, s)), "weight": {k: float(np.exp(-v)) for k, v in zip(WORD_PARTS, s)},
+        return {"log_var": dict(zip(self.parts, s)), "weight": {k: float(np.exp(-v)) for k, v in zip(self.parts, s)},
                 "temperature": float(np.exp(float(self.log_temp.detach().cpu())))}
 
 
@@ -548,8 +597,9 @@ def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Rec
     def make():
         crops = draw(sheets, pools, recipe, rng, bank)
         grey = {"input": "grey"} if recipe.input == "grey" else {}     # the ink recipe's call is today's
-        if recipe.heads == "words":
-            return batch_tensors(crops, recipe.ink_only, **grey) + word_tensors(crops)
+        if recipe.heads in WORD_HEADS:
+            aff = {"affinity": True} if recipe.heads == "words_aff" else {}    # the words recipe's call is today's
+            return batch_tensors(crops, recipe.ink_only, **grey) + word_tensors(crops, **aff)
         return batch_tensors(crops, recipe.ink_only, **grey)
 
     if not recipe.prefetch:
@@ -603,14 +653,14 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
     rng = np.random.default_rng(seed)
     pools = centre_pools(sheets)
     net = build_net(recipe).to(device)
-    crit = WordLoss().to(device) if recipe.heads == "words" else None
+    crit = WordLoss(affinity=recipe.heads == "words_aff").to(device) if recipe.heads in WORD_HEADS else None
     trained = net.parameters() if crit is None else [{"params": net.parameters()},
                                                       {"params": crit.parameters(), "weight_decay": 0.0}]
     opt = torch.optim.AdamW(trained, lr=recipe.max_lr, weight_decay=WEIGHT_DECAY)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.iterations,
                                                 pct_start=recipe.pct_start)
     average = WeightAverage(net, recipe.weight_average) if recipe.weight_average else None
-    names = PARTS + (WORD_PARTS if recipe.heads == "words" else ())
+    names = PARTS + (crit.parts if crit is not None else ())
     sums, first, t0 = torch.zeros(len(names), device=device), 1, time.perf_counter()
     copies = Copies(device)
     half = recipe.precision == "float16"
