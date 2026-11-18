@@ -104,7 +104,7 @@ function attachment(name: string): string {
  * the download failed instead of saving a short file.
  */
 export function sheetsZipResponse(src: SheetSource, series: string, fetchFn: FetchFn = fetch, signal?: AbortSignal): Response {
-  if (!src.sheets[series] || !src.license) return missing();
+  if (!Object.hasOwn(src.sheets, series) || !src.license) return missing();
   return new Response(makeZip(zipEntries(src, series, fetchFn, { signal })), {
     headers: {
       "content-type": "application/zip",

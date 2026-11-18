@@ -127,7 +127,7 @@ export const sheetLatestName = (series: string, i: ManifestSheet): string =>
 /** The per-sheet index of a series as CSV. A single sheet carries no README, so each row names its license and credit. */
 export function sheetsCsv(m: Manifest, series: string): string {
   const header = "sheet,number,name,url,latest_url,bytes,md5,sha256,updated,license,credit";
-  const lines = (m.sheets[series]?.items ?? []).map((i) =>
+  const lines = (Object.hasOwn(m.sheets, series) ? m.sheets[series].items : []).map((i) =>
     [
       i.sheet, i.number, i.name, abs(series, i.name), abs(series, sheetLatestName(series, i)),
       i.bytes, i.md5, i.sha256, i.updated, sheetLicense(series), sheetCredit(series),

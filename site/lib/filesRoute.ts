@@ -23,7 +23,7 @@ function currents(m: Manifest, series: string): Current[] {
       out.push({ layer: f.layer, ext: kind, name, local: rel && `downloads/${rel}` });
     }
   }
-  for (const i of m.sheets[series]?.items ?? []) out.push({ layer: `sheet-${i.number}`, ext: "tif", name: i.name, local: i.local });
+  for (const i of (Object.hasOwn(m.sheets, series) ? m.sheets[series].items : [])) out.push({ layer: `sheet-${i.number}`, ext: "tif", name: i.name, local: i.local });
   return out;
 }
 
@@ -38,7 +38,7 @@ export async function filesResponse(
   fetchFn: FetchFn = fetch,
   signal?: AbortSignal,
 ): Promise<Response> {
-  const known = manifest.sheets[series] !== undefined || Object.values(manifest.files).some((f) => f.series === series);
+  const known = Object.hasOwn(manifest.sheets, series) || Object.values(manifest.files).some((f) => f.series === series);
   if (!known) return notFound();
   const p = parseName(series, name) as { layer: string; ext: string; latest: boolean } | null;
   if (!p) return notFound();

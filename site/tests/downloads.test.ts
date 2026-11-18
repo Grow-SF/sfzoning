@@ -153,6 +153,14 @@ describe("filesResponse", () => {
     await missing("..", LOTS);
     await missing("1948/../1921", LOTS);
   });
+  it("404s inherited object keys as a series, without fetching", async () => {
+    const src = { ...manifest, license: "L" };
+    for (const s of ["constructor", "__proto__", "toString"]) {
+      await missing(s, `sfzoning-${s}-lots-2026-11-01-3f9a2c1b.gpkg.zip`);
+      await missing(s, `sfzoning-${s}-sheets-latest.zip`);
+      expect(sheetsZipResponse(src, s, never).status).toBe(404);
+    }
+  });
   it("404s the latest name of a sheet no longer in the manifest, and a sheets zip for a series without sheets", async () => {
     const noSheets: Manifest = { ...manifest, sheets: {} };
     await missing("1948", "sfzoning-1948-sheet-01-latest.tif", noSheets);
