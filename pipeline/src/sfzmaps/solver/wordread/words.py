@@ -16,11 +16,13 @@ A vote has no reading sign: which way a word reads is the reader's (its two read
 
 The model (one likelihood for every decision).  Every px casts a vote: the centre p + H (dx, dy) it points to (H its
 height), its log length, log height and axis, and its tag.
-  - A word is a centre c, a log length, a log height, an axis theta (modulo 180 degrees) and a mean tag.  Where its
-    px lie: in its box, each edge uncertain by `spreads.edge` px (measured), so a px at p is in word k's box with
-    chance q_k(p): its box grown by a px's half width (a px is a unit square at its numbers, so one centred on the
-    box's edge is in it), convolved with that Gaussian (1 inside, a half on that edge, falling outside), the Gaussian
-    taken to EDGE_SDS spreads (where it is below double precision of its peak) and 0 beyond: the word's support.
+  - A word is a centre c, a log length and a log height (a box at least a px each way: a smaller one would be a
+    single px's own square, which a dead word in a fit shrinks towards forever), an axis theta (modulo 180 degrees)
+    and a mean tag.  Where its px lie: in its box, each edge uncertain by `spreads.edge` px (measured), so a px at p
+    is in word k's box with chance q_k(p): its box grown by a px's half width (a px is a unit square at its numbers,
+    so one centred on the box's edge is in it), convolved with that Gaussian (1 inside, a half on that edge, falling
+    outside), the Gaussian taken to EDGE_SDS spreads (where it is below double precision of its peak) and 0 beyond:
+    the word's support.
   - The core head's output is evidence of where boxes are: w = sigmoid(core_logit) is its chance that the px is in
     a word's box, at a base rate of `spreads.core_share` (measured), so the px's output is w / core_share as likely
     in a box as on average, and (1 - w) / (1 - core_share) out of every box.  A px is in some word's box with chance
@@ -65,17 +67,18 @@ The fit (tractable; every decision by the score):
      raises it, so the search ends.
   3. Every connected set of words whose supports overlap (sets that do not overlap do not interact: the likelihood
      factorises over them) is refitted jointly.
-  Each fit step: the words' weights take a Newton step on the likelihood (exact gradient and Hessian); an E-step
-  gives each word's votes' own update (the axis by the votes' mean error, the log length by their mean, the centre
-  and log height alternately, the tag by its mean); then each word in turn takes a Newton step on the likelihood in
-  its parameters (gradient and Hessian by finite differences, the Hessian's eigenvalues taken as their size and no
-  less than the votes' curvature, within a trust region: this sees the spatial terms the votes' update does not,
-  such as the core px ending where the word does against long length votes) and then moves towards its votes' own
-  update.  Each move goes to the first point of its line, its end, half way, a quarter, ..., that raises the log
-  likelihood of the whole model (every other word held, the spatial terms included), none if none does; so no step
-  lowers the likelihood itself (the expected complete log likelihood is no guide to the boxes: a vote at a
-  support's edge, given a tiny chance of being the word's, makes it -inf as soon as the box turns off it), and a
-  fall beyond float noise (LL_NOISE) raises, as a bug.
+  Each fit step: an E-step gives each word's votes' own update (the axis by the votes' mean error, the log length by
+  their mean, the centre and log height alternately, the tag by its mean); each tag goes to its update at once (its
+  exact CM step); the words' weights take a Newton step on the likelihood (exact gradient and Hessian); then each
+  word in turn takes a Newton step on the likelihood in its box's parameters (gradient and Hessian by finite
+  differences, the Hessian's eigenvalues taken as their size and no less than the votes' curvature, within a trust
+  region: this sees the spatial terms the votes' update does not, such as the core px ending where the word does
+  against long length votes) and then moves its box towards its votes' own update.  Each move goes to the first
+  point of its line, its end, half way, a quarter, ..., that raises the log likelihood of the whole model (every
+  other word held, the spatial terms included), none if none does; so no step lowers the likelihood itself (the
+  expected complete log likelihood is no guide to the boxes: a vote at a support's edge, given a tiny chance of
+  being the word's, makes it -inf as soon as the box turns off it), and a fall beyond float noise (LL_NOISE) raises,
+  as a bug.
 
 The table (`wordboxes.COLUMNS`, the same meaning, so the reader reads these boxes unchanged; then EXTRA_COLUMNS):
   g corners       the word's box, its first edge along its axis taken in (-90, 90] degrees (the reader reads it both
@@ -553,8 +556,8 @@ def _reach_of(V: _Votes, prm: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 
 def _fit(V: _Votes, start: list[dict], held: list[dict], trace: list | None = None) -> list[dict]:
     """Words `start` fitted (see the module) with the words `held` held.  `trace` collects each step's log likelihood
-    before and after its weight and line steps, on the step's region.  RuntimeError when a step lowers it beyond
-    float noise (a bug)."""
+    before and after its moves (tags, weights and boxes), on the step's region.  RuntimeError when a step lowers it
+    beyond float noise (a bug)."""
     words = [{"prm": np.array(w["prm"], np.float64), "tag": np.array(w["tag"], np.float64),
               "a": float(w.get("a", 0.0))} for w in start]
     n = len(words)
@@ -566,6 +569,13 @@ def _fit(V: _Votes, start: list[dict], held: list[dict], trace: list | None = No
         la = _weights(every)
         _, resp = _mixture(v, lq, lf, V, la)
         targets = [V.own_update(v, resp[:, j], w["prm"]) for j, w in enumerate(words)]
+        # the tags' exact CM step from this E-step (each its votes' mean: it raises the expected complete log
+        # likelihood, so the likelihood), before any other move; the box's moves then hold it
+        old = [w["tag"] for w in words]
+        for w, target in zip(words, targets):
+            if target is not None:
+                w["tag"] = target[1]
+        lf[:, :n] = _terms(V, v, words)[1]
         steps = [_newton(V, v, lq, lf, la, j, w, resp[:, j]) for j, w in enumerate(words)]
         # the step's region: every point of every word's lines (its Newton step's and to its votes' update)
         ends = ([w["prm"] for w in words] + [t[0] for t in targets if t is not None]
@@ -575,8 +585,8 @@ def _fit(V: _Votes, start: list[dict], held: list[dict], trace: list | None = No
         every = words + _near(V, held, *_span(V, region))
         lq, lf = _terms(V, v, every)
         la = _weights(every)
-        term, resp = _mixture(v, lq, lf, V, la)
-        before = float(term.sum())
+        before = float(_mixture(v, lq, np.hstack([_terms(V, v, [{**w, "tag": t} for w, t in zip(words, old)])[1],
+                                                  lf[:, n:]]), V, la)[0].sum())
         la[:n] = _weight_step(v, lq, lf, la, n, V)
         for j, w in enumerate(words):
             w["a"] = float(la[j])
@@ -584,7 +594,7 @@ def _fit(V: _Votes, start: list[dict], held: list[dict], trace: list | None = No
             if d is not None:                                    # its Newton step
                 _climb(V, v, lq, lf, la, j, w, w["prm"] + d, w["tag"])
             if target is not None:                               # then to the votes' own update
-                _climb(V, v, lq, lf, la, j, w, *target)
+                _climb(V, v, lq, lf, la, j, w, target[0], w["tag"])
         after = float(_mixture(v, lq, lf, V, la)[0].sum())
         if trace is not None:
             trace.append((before, after))
@@ -662,7 +672,7 @@ def _newton(V: _Votes, v: dict, lq, lf, la, j: int, w: dict, r: np.ndarray):
 def _climb(V: _Votes, v: dict, lq, lf, la, j: int, w: dict, prm_to: np.ndarray, tag_to: np.ndarray) -> None:
     """Word j (`w`, changed in place, with its columns of lq and lf) moved to the first point of the line to (prm_to,
     tag_to), its end, half way, a quarter, ... (to LINE_TOL), that raises the log likelihood; not moved if none
-    does."""
+    does.  Each point's box at least a px long and high (log sizes >= 0)."""
     prm, tag = w["prm"], w["tag"]
     near = _near_line(V, v, prm, prm_to)
     value = _move(V, v, lq, lf, la, j, near)
@@ -670,6 +680,7 @@ def _climb(V: _Votes, v: dict, lq, lf, la, j: int, w: dict, prm_to: np.ndarray, 
     share = 1.0
     while share >= LINE_TOL:
         at = _between(prm, prm_to, share), tag + share * (tag_to - tag)
+        at[0][2:4] = np.maximum(at[0][2:4], 0.0)          # a box is at least a px long and high
         got = value(*at)
         if got[0] > f0:
             w["prm"], w["tag"] = at
