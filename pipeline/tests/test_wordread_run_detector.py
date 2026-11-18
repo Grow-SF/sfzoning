@@ -183,8 +183,13 @@ def _perfect(sd):
 
 
 # test values of the measured spreads, for the fields `words.Spreads` has (`edge`: where a word's px end about its box)
-_SPREAD_VALUES = {"distance": 0.5, "angle": 1.0, "tag": 0.3, "reversed": 0.01, "cell": 1.0, "edge": 0.5,
-                  "background_distance": 8.0, "background_tag": 1.0, "background_tag_mean": (0.0, 0.0, 0.0, 0.0)}
+_SPREAD_VALUES = {"centre": 0.05, "length": 0.05, "height": 0.05, "angle": 1.0, "tag": 0.3, "cell": 1.0, "edge": 0.5,
+                  "core_share": 0.1, "outlier": 0.01, "centre_bias": (0.0, 0.0), "length_bias": 0.0,
+                  "height_bias": 0.0, "angle_bias": 0.0, "background_centre": 2.0,
+                  "background_length": (2.0794, 1.0), "background_height": (2.0794, 1.0), "background_tag": 1.0,
+                  "background_tag_mean": (0.0, 0.0, 0.0, 0.0)}
+
+
 def _spreads() -> "words.Spreads":
     """The test spreads, built when a test asks (the fields are words.Spreads' own).  Until `core_words` reads the
     sign-free votes (Task 6's round on Task 5's 512a1dc layout) its spreads name other fields, and the tests that form
