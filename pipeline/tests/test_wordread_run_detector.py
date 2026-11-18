@@ -470,13 +470,12 @@ def test_crude_aff_joins_core_px_only_where_the_affinity_calls_one_word():
 
 
 def test_crude_aff_splits_touching_words_the_affinity_parts(halves):
-    import types
     rects = [_box(190, 90, 215, 130), _box(215, 90, 235, 130)]       # two touching words
     sd = _sheet(rects, [0, 0])
     o = _perfect(sd)
     same = np.full((2, SIDE, SIDE), 3.0, np.float32)
     same[0, :, 214] = -3.0                             # the last px of the first word and the first of the second
-    oa = types.SimpleNamespace(**o._asdict(), **{RD.AFF_FIELD: same})
+    oa = o._replace(**{RD.AFF_FIELD: same})
     t, counts = RD.crude_map_words("run", "s", 1, lambda n: sd, lambda r, n: oa, _placer(), aff=True)
     assert counts["kept"] == 2
     t = t.sort_values("page_x").reset_index(drop=True)
