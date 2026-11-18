@@ -10,8 +10,10 @@ A pack (`Pack`, one parquet file per map, under PACKS_DIR) holds, in map coordin
   spreads  what is measured per fold (`Spreads`): "all" (every quarter) and, per quarter name, with that quarter left
            out: where printed words sit relative to what they name, the share of each kind's words off the pack's
            list (its escape), and each code's printed forms' shares P(form | code)
+  fits     per quarter name, what was fitted with that quarter left out (`ReadFit`: mode, tau, w, temperature)
 It never holds a code at a lot: on the 2000 map that is the answer key.  `build_sf_pack` refuses to add one, and a
-pack's frames take no column but their own.
+pack's frames take no column but their own.  The file carries its layout (LAYOUT); `Pack.load` refuses another
+(`PackLayoutError`).
 
 The prior (`prior`, a `Prior`): for each kind (KIND_ORDER, the detector's `textnet.data.KINDS` order), its items, each
 with its odds against the kind's escape ("a string the pack doesn't list here") and its printed forms' shares, and the
@@ -50,7 +52,8 @@ What is measured (`measure_spreads`, on pairs of OUR boxes and Terra's words, wh
 weighted by the chance the box holds the word, with no IoU or other cut; the codes on Terra's code words), by weighted
 EM, every word refused that is in or touching an answered block or the held-out quarter:
   - street-name words: whether each names the street it sits by (near: weighted kernel densities f(d) g(t), each
-    reflected at its ends, the bandwidth by leave-one-out likelihood) or not (far: the distance to the street its text
+    reflected at its ends, the bandwidth by leave-one-out likelihood, leaving out every pair of the word's box, which
+    sit at its one place) or not (far: the distance to the street its text
     names exponential, the angle uniform: misreads and renamed streets point miles away).  m = 1 - the near share, the
     words whose text no street prints counted far.
   - EM starts from every (weighted) decile split of the distances and the likeliest fixed point is kept.
@@ -62,14 +65,32 @@ EM, every word refused that is in or touching an answered block or the held-out 
   - codes: e_code the share of code words whose text no code prints; P(form | code) the forms' shares of each code's
     words (flat for a code not seen).
 
-The fit (`fit_prior`): by maximum likelihood of Terra's string on the pairs of the other three quarters, each pair's
-target the part of the string inside its box (`char_shares`, `substring_targets`: the expectation over the contiguous
-runs of characters inside), its log-likelihood weighted by the chance its box holds its word (never the owner's
-answers: a word in or touching an
-answered block, or touching the held-out quarter, is refused), the ink calibrated apart from the context: tau on the
-ink alone, then w per kind on top; unbounded searches (log tau, log w), a fit running away reported.  `joint` fits them
-together too; the two are compared by held-out NLL.  `fit_temperature`: one temperature on the combined log posterior,
-fitted on held-out predictions (`tempered` applies it).
+What a box holds (`box_targets`), the fit's target: the text of the Terra words the box overlaps, as an expectation.
+The box is read as one line: the line's place across the box is drawn from the box's ink inside the words, and holds
+the words whose own ink spans that place, less any two at one place along it (no one line holds both).  Each word is
+held by its share across the reading (`across_share`: its ink between the box's two long sides), each of its
+characters by its share along the reading (`char_shares`: its ink between the box's two ends, the characters spread
+evenly along the word); the line's words are read in order, a space between two; the box holds a contiguous run of that
+text.  So a box over "MISSION" and "ST." is asked for "MISSION ST.", a box over half of MISSION for its half, a box
+over a block number with a code printed under it for one or the other, and a word of the next line that grazes the box
+only by its share.  A run no read can be (too long for the box's CTC frames) has no chance from the ink at all: it is
+counted (`dropped`), not listed.
+
+The fit (`fit_prior`): by maximum likelihood of each box's target on the boxes of the other three quarters (log sum_t
+P(t) post(t)), each box's log-likelihood weighted by the chance it holds any of its words' text times its ink's share
+inside their rectangles (never the owner's answers: a box with a word in or touching an answered block, or touching the
+held-out quarter, is refused), the ink calibrated apart from the context: tau on the ink alone, then w per kind on top;
+unbounded searches (log tau, log w), a fit running away reported.  `joint` fits them together too.
+
+The read-time temperature (`fit_temperature`, `tempered`): the posterior a box is read with names the strings its
+prior lists, the reader's best path and OTHER, and a temperature T on that very vector is fitted by maximum likelihood
+of each target's slot there (`slot_targets`: its own when named, else OTHER's).  T is cross-fitted: quarter q's T is
+fitted on the other three quarters' held-out vectors (each made by the fold that left that quarter out, so q's targets
+never enter T's likelihood, though they did help fit those folds' tau and w); per mode, and q keeps the mode whose NLL
+there is lower after its own T.  The highest-posterior box among several compares these calibrated probabilities.
+
+The read recipe (`read_posterior`): with the box's own quarter's `ReadFit` and spreads, prior -> ink at tau ->
+posterior at w -> tempered at T.
 """
 import math
 import re
@@ -91,6 +112,8 @@ KIND_ORDER = ("zoning code", "block number", "street name", "other")   # kind_p'
 CODE, BLOCK, STREET, OTHER_KIND = KIND_ORDER
 OTHER = "other"            # the posterior's key for every string not named in `ink_logp` (never a reader's string)
 FOLDS = ("all", *paths.QUARTERS)   # a pack's spreads: every quarter, then each quarter left out
+MODES = ("sequential", "joint")    # how a fold's tau and w were fitted (`fit_prior`)
+LAYOUT = 2                 # the pack file's layout: 2 adds each fold's `ReadFit`; a file of another is refused
 STREET_COLS = ("name", "street", "type", "active")
 BLOCK_COLS = ("number",)
 SPREAD_ARRAYS = ("street_ft", "street_deg", "street_r", "block_ft", "block_r")
@@ -172,30 +195,42 @@ def _kernels(at: np.ndarray, x: np.ndarray, h: float, lo, hi) -> np.ndarray:
     return out
 
 
-def loo_density(x: np.ndarray, w: np.ndarray, h: float, lo=None, hi=None) -> np.ndarray:
-    """The weighted kernel density at each x_i from every other point (leave-one-out)."""
-    k = _kernels(x, x, h, lo, hi) * w[None, :]
-    np.fill_diagonal(k, 0.0)
-    rest = w.sum() - w
+def _same_group(groups, n: int) -> np.ndarray:
+    """(n, n): whether rows i and j are of one group (one of our boxes); each row its own when `groups` is None."""
+    if groups is None:
+        return np.eye(n, dtype=bool)
+    g = pd.factorize(pd.Series(list(groups)))[0]
+    return g[:, None] == g[None, :]
+
+
+def loo_density(x: np.ndarray, w: np.ndarray, h: float, lo=None, hi=None, groups=None) -> np.ndarray:
+    """The weighted kernel density at each x_i from every point of another group (leave-one-group-out): `groups`
+    (one label a row; each row its own when None) are our boxes, so a box's other rows, at its own place, never
+    vouch for it."""
+    x, w = np.asarray(x, float), np.asarray(w, float)
+    same = _same_group(groups, len(x))
+    k = np.where(same, 0.0, _kernels(x, x, h, lo, hi) * w[None, :])
+    rest = w.sum() - (same * w[None, :]).sum(1)
     with np.errstate(invalid="ignore", divide="ignore"):
         return np.where(rest > 0, k.sum(1) / np.where(rest > 0, rest, 1.0), 0.0)
 
 
-def loo_bandwidth(x: np.ndarray, w: np.ndarray, lo=None, hi=None, start: float | None = None) -> float:
-    """The bandwidth that maximises the weighted leave-one-out log-likelihood, sum_i w_i log f_-i(x_i), searched
-    without bounds in log h (Brent, from `start` or the weighted spread); nan when fewer than two points carry weight
-    or they don't spread."""
+def loo_bandwidth(x: np.ndarray, w: np.ndarray, lo=None, hi=None, start: float | None = None, groups=None) -> float:
+    """The bandwidth that maximises the weighted leave-one-group-out log-likelihood, sum_i w_i log f_-g(i)(x_i)
+    (`loo_density`; `groups` our boxes), searched without bounds in log h (Brent, from `start` or the weighted
+    spread); nan when fewer than two points carry weight or they don't spread."""
     x, w = np.asarray(x, float), np.asarray(w, float)
     on = w > 0
     if on.sum() < 2:
         return math.nan
     x, w = x[on], w[on]
+    groups = None if groups is None else np.asarray(list(groups), object)[on]
     sd = math.sqrt(float(np.average((x - np.average(x, weights=w)) ** 2, weights=w)))
     if not sd > 0:
         return math.nan
 
     def nll(u):
-        f = loo_density(x, w, math.exp(u), lo, hi)
+        f = loo_density(x, w, math.exp(u), lo, hi, groups)
         with np.errstate(divide="ignore"):
             v = -float((w * np.log(f)).sum())
         return v if math.isfinite(v) else 1e100      # a bandwidth leaving a point at density 0: worse than any other
@@ -307,6 +342,28 @@ class Spreads:
                 "code_away": round(self.code_away, 4), "forms_weighted": len(self.form_weights), "em": self.em}
 
 
+@dataclass(frozen=True)
+class ReadFit:
+    """A fold's fitted read (see the module): the mode it was fitted in ("sequential" or "joint"), the ink's
+    temperature tau, each listing kind's weight w, and the temperature on the read-time posterior."""
+    mode: str
+    tau: float
+    w: dict[str, float]
+    temperature: float
+
+    def __post_init__(self):
+        if self.mode not in MODES:
+            raise ValueError(f"a fit's mode is one of {MODES}, not {self.mode!r}")
+        if not (self.tau > 0 and self.temperature > 0) or any(not v >= 0 for v in self.w.values()):
+            raise ValueError(f"tau and the temperature must be > 0 and every w >= 0: {self}")
+        if set(self.w) - {CODE, BLOCK, STREET}:
+            raise ValueError(f"weights only for the listing kinds ({CODE}, {BLOCK}, {STREET}): {sorted(self.w)}")
+
+
+class PackLayoutError(ValueError):
+    """A pack file of another layout (`LAYOUT`) than this code reads: rebuild it (`build_pack.py build`, `fit`)."""
+
+
 # --- the pack ---------------------------------------------------------------------------------------------------------
 
 def _frame(gdf: gpd.GeoDataFrame, allowed: tuple[str, ...], what: str) -> gpd.GeoDataFrame:
@@ -322,14 +379,19 @@ def _frame(gdf: gpd.GeoDataFrame, allowed: tuple[str, ...], what: str) -> gpd.Ge
 
 @dataclass(eq=False)
 class Pack:
-    """One map's context pack (see the module).  Never a code at a lot."""
+    """One map's context pack (see the module).  Never a code at a lot.  `fits`: each quarter's `ReadFit` (fitted
+    with that quarter left out, like its spreads; `read_posterior` reads a box with its own quarter's)."""
     year: int
     streets: gpd.GeoDataFrame
     blocks: gpd.GeoDataFrame
     codes: dict[str, str]
     spreads: dict[str, Spreads] = field(default_factory=dict)
+    fits: dict[str, ReadFit] = field(default_factory=dict)
 
     def __post_init__(self):
+        bad = sorted(set(self.fits) - set(paths.QUARTERS))
+        if bad:
+            raise ValueError(f"a fit is a quarter's (fitted with it left out), not {bad}")
         self.streets = _frame(self.streets, STREET_COLS, "streets").reset_index(drop=True)
         self.blocks = _frame(self.blocks, BLOCK_COLS, "blocks").reset_index(drop=True)
         if "active" not in self.streets:
@@ -440,9 +502,10 @@ class Pack:
                 "spreads": {k: {**s.summary(), "reach_ft": dict(zip(("street", "block"), self.reach(s)))}
                             for k, s in self.spreads.items()}}
 
-    # the file: one parquet, a row per street centreline, block, code form and measured value
+    # the file: one parquet, a row per street centreline, block, code form, measured value and fitted value
     def save(self, f: Path) -> None:
-        rows = [{"layer": "meta", "name": "year", "value": float(self.year)}]
+        rows = [{"layer": "meta", "name": "year", "value": float(self.year)},
+                {"layer": "meta", "name": "layout", "value": float(LAYOUT)}]
         rows += [{"layer": "street", "name": r.name, "street": r.street, "type": r.type, "active": bool(r.active),
                   "geometry": r.geometry} for r in self.streets.itertuples(index=False)]
         rows += [{"layer": "block", "name": r.number, "geometry": r.geometry}
@@ -454,6 +517,12 @@ class Pack:
             rows += [{"layer": "spread", "name": k, "fold": fold, "value": getattr(s, k)} for k in SPREAD_SCALARS]
             rows += [{"layer": "form_weight", "fold": fold, "form": f, "value": float(v)}
                      for f, v in sorted(s.form_weights.items())]
+        for fold, fit in self.fits.items():
+            rows += [{"layer": "fit", "fold": fold, "name": "mode", "form": fit.mode},
+                     {"layer": "fit", "fold": fold, "name": "tau", "value": float(fit.tau)},
+                     {"layer": "fit", "fold": fold, "name": "temperature", "value": float(fit.temperature)}]
+            rows += [{"layer": "fit", "fold": fold, "name": "w", "form": k, "value": float(v)}
+                     for k, v in sorted(fit.w.items())]
         cols = ["layer", "name", "street", "type", "active", "form", "fold", "value", "geometry"]
         df = pd.DataFrame(rows, columns=cols)
         df["geometry"] = [g if isinstance(g, shapely.Geometry) else None for g in df["geometry"]]
@@ -466,8 +535,13 @@ class Pack:
 
     @classmethod
     def load(cls, f: Path) -> "Pack":
+        """A pack file (`save`); PackLayoutError when it is of another layout than LAYOUT."""
         df = gpd.read_parquet(f)
-        year = int(df.loc[(df["layer"] == "meta") & (df["name"] == "year"), "value"].iloc[0])
+        meta = df[df["layer"] == "meta"].set_index("name")["value"] if "layer" in df else pd.Series(dtype=float)
+        layout = int(meta["layout"]) if "layout" in meta else 1           # layout 1 had no version row
+        if layout != LAYOUT:
+            raise PackLayoutError(f"{f} is a pack of layout {layout}; this code reads layout {LAYOUT}")
+        year = int(meta["year"])
         st = df[df["layer"] == "street"]
         streets = gpd.GeoDataFrame({"name": st["name"].to_numpy(object), "street": st["street"].to_numpy(object),
                                     "type": st["type"].fillna("").to_numpy(object),
@@ -486,7 +560,18 @@ class Pack:
                 **{k: mine.loc[mine["name"] == k, "value"].to_numpy(float) for k in SPREAD_ARRAYS},
                 **{k: float(mine.loc[mine["name"] == k, "value"].iloc[0]) for k in SPREAD_SCALARS},
                 form_weights=dict(zip(w["form"], w["value"].astype(float))))
-        return cls(year=year, streets=streets, blocks=blocks, codes=codes, spreads=spreads)
+        ft = df[df["layer"] == "fit"]
+        fits = {}
+        for fold in [q for q in paths.QUARTERS if q in set(ft["fold"])]:
+            mine = ft[ft["fold"] == fold]
+
+            def one(name, col="value"):
+                return mine.loc[mine["name"] == name, col].iloc[0]
+            w = mine[mine["name"] == "w"]
+            fits[fold] = ReadFit(mode=str(one("mode", "form")), tau=float(one("tau")),
+                                 w=dict(zip(w["form"].astype(str), w["value"].astype(float))),
+                                 temperature=float(one("temperature")))
+        return cls(year=year, streets=streets, blocks=blocks, codes=codes, spreads=spreads, fits=fits)
 
 
 # --- building San Francisco's pack ------------------------------------------------------------------------------------
@@ -801,8 +886,9 @@ def posterior(ink_logp: dict[str, float], prior: Prior | None, w: dict[str, floa
 
 def refuse_answered(words: pd.DataFrame, held_blocks=None, quarter: int | None = None) -> None:
     """ValueError when any word is in or touches an answered block (`block` in `held_blocks`, default
-    `textnet.reader_stage.held_blocks()`; or `touch_blocks`), or lies in or touches the held-out `quarter` (`quarter`,
-    `touch_<q>`): nothing is fitted on the owner's answers, nor on the quarter it is scored on."""
+    `textnet.reader_stage.held_blocks()`; or, for a row of several words, any of its `blocks`; or `touch_blocks`), or
+    lies in or touches the held-out `quarter` (`quarter`, `touch_<q>`): nothing is fitted on the owner's answers, nor
+    on the quarter it is scored on."""
     if "block" not in words:
         raise ValueError("each word needs its block (`block`) so that answered blocks can be refused")
     if held_blocks is None:
@@ -810,6 +896,8 @@ def refuse_answered(words: pd.DataFrame, held_blocks=None, quarter: int | None =
         held_blocks = reader_stage.held_blocks()
     held = {str(b) for b in held_blocks}
     bad = words["block"].astype(str).isin(held)
+    if "blocks" in words:
+        bad |= np.array([any(str(b) in held for b in bs) for bs in words["blocks"]], bool)
     if bad.any():
         raise ValueError(f"{int(bad.sum())} words lie in an answered block (e.g. {words.loc[bad, 'block'].iloc[0]}): "
                          "a prior is never fitted on the owner's answers")
@@ -864,10 +952,11 @@ def word_offsets(pack: Pack, words: pd.DataFrame) -> pd.DataFrame:
 
 
 def _em(features: list[tuple[np.ndarray, float | None, float | None]], d: np.ndarray, far_angle: bool,
-        r0: np.ndarray, v: np.ndarray | None = None) -> dict:
+        r0: np.ndarray, v: np.ndarray | None = None, groups=None) -> dict:
     """One EM run from responsibilities r0, each point counting with weight `v` (the chance its box holds its word;
     1 when None): near = the product of weighted kernel densities over `features` (each (values, lo, hi), weights
-    r v, leave-one-out, bandwidth by leave-one-out likelihood), far = exponential in `d` (x uniform on [0, 90] when
+    r v, leaving out every row of the point's own box (`groups`; `loo_density`), bandwidth by that leave-one-box-out
+    likelihood), far = exponential in `d` (x uniform on [0, 90] when
     `far_angle`).  Each iteration's bandwidth search starts from the last one.  It stops when the log-likelihood stops
     rising (by more than EM_TOL relative: numerical convergence) or no responsibility moves by more than EM_TOL; the
     likeliest state seen is returned (the bandwidths are re-chosen each step, so the log-likelihood need not rise
@@ -880,10 +969,10 @@ def _em(features: list[tuple[np.ndarray, float | None, float | None]], d: np.nda
     it, converged = 0, False
     for it in range(1, EM_MAX_ITER + 1):
         pi = float((v * r).sum() / v.sum())
-        hs = [loo_bandwidth(x, r * v, lo, hi, start=h) for (x, lo, hi), h in zip(features, hs)]
+        hs = [loo_bandwidth(x, r * v, lo, hi, start=h, groups=groups) for (x, lo, hi), h in zip(features, hs)]
         near = np.ones(len(d))
         for (x, lo, hi), h in zip(features, hs):
-            near = near * (loo_density(x, r * v, h, lo, hi) if math.isfinite(h) else np.zeros(len(d)))
+            near = near * (loo_density(x, r * v, h, lo, hi, groups) if math.isfinite(h) else np.zeros(len(d)))
         far_w = (1.0 - r) * v
         lam = float((far_w * d).sum() / far_w.sum()) if far_w.sum() > 0 else math.nan
         far = (np.exp(-d / lam) / lam if math.isfinite(lam) and lam > 0 else np.zeros(len(d))) / \
@@ -903,9 +992,9 @@ def _em(features: list[tuple[np.ndarray, float | None, float | None]], d: np.nda
     return {**best, "iterations": it, "converged": converged}
 
 
-def em_split(features, d: np.ndarray, far_angle: bool, v: np.ndarray | None = None) -> dict:
-    """`_em` (weights `v`) from every decile split of `d` (near below it) and from an even start; the likeliest fixed
-    point."""
+def em_split(features, d: np.ndarray, far_angle: bool, v: np.ndarray | None = None, groups=None) -> dict:
+    """`_em` (weights `v`, boxes `groups`) from every decile split of `d` (near below it) and from an even start;
+    the likeliest fixed point."""
     d = np.asarray(d, float)
     if not len(d):
         return {"r": np.zeros(0), "h": [math.nan] * len(features), "lam": math.nan, "ll": 0.0, "iterations": 0,
@@ -925,7 +1014,7 @@ def em_split(features, d: np.ndarray, far_angle: bool, v: np.ndarray | None = No
             starts.append((name, r0))
     best = None
     for name, r0 in starts:
-        got = _em(features, d, far_angle, r0, v)
+        got = _em(features, d, far_angle, r0, v, groups)
         if best is None or got["ll"] > best["ll"]:
             best = {**got, "start": name}
     return best
@@ -935,9 +1024,10 @@ def measure_spreads(pack: Pack, words: pd.DataFrame, code_words: pd.DataFrame | 
                     quarter: int | None = None) -> tuple[Spreads, pd.DataFrame]:
     """The fold's `Spreads` (see the module), measured on `words` (our boxes paired with Terra's words: text, kind,
     x, y, axis, block, quarter, touches, and optionally `weight`, the chance the box holds the word: every share and
-    density is weighted by it) and, for the codes, on `code_words` (Terra's code words: text, block, quarter, touches;
-    `words`' code words when None), both refused answered blocks and the held-out quarter (`refuse_answered`); and the
-    words' offsets with their responsibilities (`r`)."""
+    density is weighted by it; and `box`: the leave-one-out bandwidths leave out every row of a word's box) and, for
+    the codes, on `code_words` (Terra's code words: text, block, quarter, touches; `words`' code words when None),
+    both refused answered blocks and the held-out quarter (`refuse_answered`); and the words' offsets with their
+    responsibilities (`r`)."""
     code_words = words[words["kind"] == CODE] if code_words is None else code_words
     refuse_answered(words, held_blocks, quarter)
     refuse_answered(code_words, held_blocks, quarter)
@@ -948,8 +1038,9 @@ def measure_spreads(pack: Pack, words: pd.DataFrame, code_words: pd.DataFrame | 
     bl = (words["kind"] == BLOCK).to_numpy()
     s = off[st & found]
     vs = v_all[st & found]
+    groups = words.loc[s.index, "box"].to_numpy() if "box" in words else None     # a box's rows: one group
     em_s = em_split([(s["d_ft"].to_numpy(), 0.0, None), (s["d_deg"].to_numpy(), 0.0, 90.0)], s["d_ft"].to_numpy(),
-                    True, vs)
+                    True, vs, groups)
     off.loc[s.index, "r"] = em_s["r"]
     b = off[bl & found]
     bd = b["d_ft"].to_numpy()
@@ -1132,27 +1223,71 @@ def readable(words: pd.DataFrame) -> np.ndarray:
                      for tg, r in zip(targets, words["reads"])], bool)
 
 
+ALONG = (1, 3)         # a quadrilateral's two ends (corner 1 to 2, corner 3 to 0): between them is "along the reading"
+ACROSS = (0, 2)        # its two long sides (corner 0 to 1, corner 2 to 3): between them is "in its line"
+
+
+def _inner_sides(quad, edges, x, y) -> np.ndarray:
+    """Which points lie on the inner side of every one of a convex quadrilateral's `edges` (k: the edge from corner k
+    to corner k + 1; edges included): all four, inside it; ALONG, between its two ends; ACROSS, between its two long
+    sides."""
+    c = np.asarray(quad, float).reshape(4, 2)
+    x, y = np.asarray(x, float), np.asarray(y, float)
+    twice_area = sum(c[k, 0] * c[(k + 1) % 4, 1] - c[(k + 1) % 4, 0] * c[k, 1] for k in range(4))
+    sign = 1.0 if twice_area >= 0 else -1.0
+    ok = np.ones(np.shape(x), bool)
+    for k in edges:
+        a, b = c[k], c[(k + 1) % 4]
+        ok &= sign * ((b[0] - a[0]) * (y - a[1]) - (b[1] - a[1]) * (x - a[0])) >= 0
+    return ok
+
+
 def _in_quad(quad, x, y) -> np.ndarray:
     """Which points lie inside a convex quadrilateral (4, 2) (its edges included)."""
+    return _inner_sides(quad, (0, 1, 2, 3), x, y)
+
+
+def _between(quad, edges, reach: float) -> shapely.Polygon:
+    """The region between a quadrilateral's two opposite `edges` (ALONG or ACROSS), as a polygon running `reach` past
+    the quadrilateral each way (so far that whatever it is cut with lies within it)."""
     c = np.asarray(quad, float).reshape(4, 2)
-    cross = np.stack([(c[(k + 1) % 4, 0] - c[k, 0]) * (np.asarray(y) - c[k, 1])
-                      - (c[(k + 1) % 4, 1] - c[k, 1]) * (np.asarray(x) - c[k, 0]) for k in range(4)])
-    return (cross >= 0).all(0) | (cross <= 0).all(0)
+    (a0, a1), (b0, b1) = [(c[k], c[(k + 1) % 4]) for k in edges]
+    u = (a1 - a0) / max(float(np.hypot(*(a1 - a0))), np.finfo(float).tiny)
+    v = (b1 - b0) / max(float(np.hypot(*(b1 - b0))), np.finfo(float).tiny)
+    return shapely.Polygon([a0 - u * reach, a1 + u * reach, b0 - v * reach, b1 + v * reach])
+
+
+def _reach(*quads) -> float:
+    """A reach (`_between`) past every point of `quads`."""
+    pts = np.concatenate([np.asarray(q, float).reshape(-1, 2) for q in quads])
+    return 2.0 * float(np.ptp(pts, axis=0).max()) + 1.0
+
+
+def _area_share(shape: shapely.Geometry, region: shapely.Geometry) -> float:
+    """The share of a shape's area inside a region; of its length when it has no area (a gap of no width); whether it
+    lies inside when it is a point."""
+    if shape.area > 0:
+        return float(shape.intersection(region).area / shape.area)
+    if shape.length > 0:
+        return float(shape.intersection(region).length / shape.length)
+    return float(region.covers(shape))
 
 
 def char_shares(text: str, word_rect, box_rect, ink_x, ink_y) -> np.ndarray:
     """Each character of a word's `text`, its extent the word's rectangle (4, 2; the first edge along the reading)
     divided evenly along the reading (no per-character widths are measured): the share of its ink px (the word's ink
-    px centres `ink_x`, `ink_y`, each a character's by where it projects on the reading) inside our box's rectangle,
-    or, for a character with no ink px (a space), the share of its extent's area inside it."""
+    px centres `ink_x`, `ink_y`, each a character's by where it projects on the reading) between our box's two ends,
+    or, for a character with no ink px (a space), the share of its extent's area between them.  Along the reading
+    only: how much of the word's line the box covers across the reading is the word's own (`across_share`, and the
+    pair's weight)."""
     n = len(text)
     c = np.asarray(word_rect, float).reshape(4, 2)
     a = c[1] - c[0]
     x, y = np.asarray(ink_x, float), np.asarray(ink_y, float)
     u = ((x - c[0, 0]) * a[0] + (y - c[0, 1]) * a[1]) / max(float(a @ a), 1e-12)
     idx = np.clip(np.floor(u * n).astype(int), 0, n - 1) if n else np.zeros(0, int)
-    inside = _in_quad(box_rect, x, y) if len(x) else np.zeros(0, bool)
-    box = shapely.Polygon(np.asarray(box_rect, float).reshape(4, 2))
+    inside = _inner_sides(box_rect, ALONG, x, y) if len(x) else np.zeros(0, bool)
+    strip = _between(box_rect, ALONG, _reach(word_rect, box_rect))
     out = np.zeros(n)
     for i in range(n):
         mine = idx == i
@@ -1160,7 +1295,206 @@ def char_shares(text: str, word_rect, box_rect, ink_x, ink_y) -> np.ndarray:
             out[i] = float(inside[mine].mean())
         else:
             ch = shapely.Polygon([c[0] + a * i / n, c[0] + a * (i + 1) / n, c[3] + a * (i + 1) / n, c[3] + a * i / n])
-            out[i] = float(ch.intersection(box).area / ch.area) if ch.area > 0 else 0.0
+            out[i] = _area_share(ch, strip)
+    return out
+
+
+def across_share(word_rect, box_rect, ink_x, ink_y) -> float:
+    """The chance a word lies in our box's line: the share of its ink px (`ink_x`, `ink_y`) between the box's two long
+    sides (across the reading only), or, for a word with no ink px, of its rectangle's area."""
+    x, y = np.asarray(ink_x, float), np.asarray(ink_y, float)
+    if len(x):
+        return float(_inner_sides(box_rect, ACROSS, x, y).mean())
+    band = _between(box_rect, ACROSS, _reach(word_rect, box_rect))
+    return _area_share(shapely.Polygon(np.asarray(word_rect, float).reshape(4, 2)), band)
+
+
+def _log(p: float) -> float:
+    return math.log(p) if p > 0 else -math.inf
+
+
+def _add(d: dict, key, lp: float) -> None:
+    if lp > -math.inf:
+        d[key] = float(np.logaddexp(d[key], lp)) if key in d else lp
+
+
+def _runs(chars, fits) -> tuple[dict, list, list]:
+    """The contiguous runs of a character sequence [(char, share)], each character inside independently by its share:
+    the log mass of each non-empty string (spaces at a run's ends print nothing), the log masses of the empty runs,
+    and those of the runs no read can be (`fits` false: a run only grows, so it is followed whole, unlisted).  Runs
+    that are not contiguous carry no mass."""
+    sb = 0.0                                         # nothing inside yet
+    si: dict = {}                                    # the run so far -> log mass, still open
+    sa: dict = {}                                    # the run -> log mass, closed: every later character outside
+    di = da = -math.inf                              # runs no read can be, open and closed
+    for ch, p in chars:
+        lin, lout = _log(p), _log(1.0 - p)
+        tb, ti, ta = sb + lout, {}, {}
+        _add(ti, "" if ch == " " else ch, sb + lin)
+        for s, v in si.items():
+            _add(ti, s + ch if s or ch != " " else "", v + lin)
+            _add(ta, s, v + lout)
+        for s, v in sa.items():
+            _add(ta, s, v + lout)
+        di, da = di + lin, float(np.logaddexp(da + lout, di + lout))
+        for s in [s for s in ti if not fits(s)]:
+            di = float(np.logaddexp(di, ti.pop(s)))
+        sb, si, sa = tb, ti, ta
+    got: dict = {}
+    empty = [sb]
+    for s, v in [*si.items(), *sa.items()]:
+        s = s.rstrip()
+        if s:
+            _add(got, s, v)
+        else:
+            empty.append(v)
+    return got, empty, [float(np.logaddexp(di, da))]
+
+
+def _apart(line, alongs) -> list[tuple]:
+    """The largest sets of a line's words no two of which overlap along the box (`alongs`: each word's [start, end]):
+    the maximal cliques of "apart" (Bron-Kerbosch with a pivot); the line itself when none overlap."""
+    line = list(line)
+    apart = {i: {k for k in line if k != i and min(alongs[i][1], alongs[k][1]) - max(alongs[i][0], alongs[k][0]) <= 0}
+             for i in line}
+    out: list[tuple] = []
+
+    def grow(r: set, p: set, x: set) -> None:
+        if not p and not x:
+            out.append(tuple(sorted(r)))
+            return
+        pivot = max(p | x, key=lambda v: (len(p & apart[v]), -v))
+        for v in sorted(p - apart[pivot]):
+            grow(r | {v}, p & apart[v], x & apart[v])
+            p = p - {v}
+            x = x | {v}
+
+    grow(set(), set(line), set())
+    return sorted(out)
+
+
+def box_targets(words, box_rect, frames: int | None = None, box_ink=None) -> dict:
+    """What our box holds of the Terra words it overlaps, as the expectation over the text it may hold (see the
+    module).  `words`: each (text, rectangle (4, 2; the first edge along its reading), its ink px centres x, y);
+    `box_ink`: the box's own ink px centres (x, y).
+      - the box is read as one line: where it lies across the box is drawn from the box's ink px inside the words'
+        rectangles that some word's span holds (from the box's width across, where they span it, without ink), and
+        the line holds every word whose span across the box holds that place: words of one line together, words
+        stacked one over another (which no one line can hold at the same place) apart.  A word's span across is its
+        own ink's (its ink px in no other word's rectangle: Terra's rectangles are loose and overlap), its
+        rectangle's when it has none;
+      - nor can one line hold two words at one place along it (a small label printed inside a big one): the line
+        reads each largest set of its words that lie apart along the box (`_apart`), by their own ink in the box;
+      - each word of the line is held by its `across_share`; a word not held empties the box's text (the box holds
+        none of its line's text);
+      - each character lies inside along the reading by its `char_shares`, independently;
+      - the line's words are read in reading order (their centres along the box's axis, the axis turned to Terra's
+        reading direction), a space between two (its share that of the gap between the one's end and the next one's
+        start: `_area_share` of their hull between the box's ends);
+      - the box holds one contiguous run of that text (spaces at its ends print nothing): every chance is conditioned
+        on the run being contiguous.
+    Returns `targets`, [(string, P(string | a non-empty run))] for the strings CTC can emit in `frames` frames
+    (`ctc_fits`; all when None), likeliest first; `dropped`, the chance of a run it can't emit (no read is it);
+    `p_nonempty`, the chance the run is not empty; `order`, the words' positions in reading order; `across`; `lines`,
+    each line's words (positions in reading order) and chance."""
+    b = np.asarray(box_rect, float).reshape(4, 2)
+    rects = [np.asarray(w[1], float).reshape(4, 2) for w in words]
+    across = [across_share(r, b, w[2], w[3]) for w, r in zip(words, rects)]
+    shares = [char_shares(w[0], r, b, w[2], w[3]) for w, r in zip(words, rects)]
+    axis = b[1] - b[0]
+    terra = sum((a * (r[1] - r[0]) / max(float(np.hypot(*(r[1] - r[0]))), np.finfo(float).tiny)
+                 for a, r in zip(across, rects)), np.zeros(2))
+    if float(terra @ axis) < 0:
+        axis = -axis
+    order = sorted(range(len(words)), key=lambda j: (float(rects[j].mean(0) @ axis), j))
+    rank = {j: k for k, j in enumerate(order)}
+    out = {"targets": [], "dropped": 0.0, "p_nonempty": 0.0, "order": order, "across": across, "lines": []}
+    if not words:
+        return out
+    unit = axis / max(float(np.hypot(*axis)), np.finfo(float).tiny)
+    normal = np.array([-unit[1], unit[0]])
+    spans, alongs, mass = [], [], []                 # each word's own ink (in no other's rectangle): its spans across
+    for j, (w, r) in enumerate(zip(words, rects)):   # and along the box, and its px inside the box
+        x, y = np.asarray(w[2], float), np.asarray(w[3], float)
+        own = np.ones(len(x), bool)
+        for k, other in enumerate(rects):
+            if k != j and len(x):
+                own &= ~_in_quad(other, x, y)
+        pts = np.c_[x[own], y[own]] if own.any() else (np.c_[x, y] if len(x) else r)
+        spans.append([float((pts @ normal).min()), float((pts @ normal).max())])
+        alongs.append([float((pts @ unit).min()), float((pts @ unit).max())])
+        mass.append(float(_in_quad(b, pts[:, 0], pts[:, 1]).sum()) if pts is not r else 0.0)
+    spans = np.array(spans)
+    lines: dict[tuple, float] = {}
+    bx, by = (np.zeros(0), np.zeros(0)) if box_ink is None else (np.asarray(box_ink[0], float),
+                                                                    np.asarray(box_ink[1], float))
+    inside = np.zeros(len(bx), bool)
+    for r in rects:
+        inside |= _in_quad(r, bx, by) if len(bx) else np.zeros(0, bool)
+    if inside.any():                                 # the line's place: one of the box's ink px in the words
+        t = np.c_[bx[inside], by[inside]] @ normal
+        member = (spans[:, :1] <= t[None, :]) & (t[None, :] <= spans[:, 1:])
+        keys, counts = np.unique(member.T, axis=0, return_counts=True)
+        for key, c in zip(keys, counts):
+            if key.any():                            # ink between the words' own spans holds no line
+                lines[tuple(sorted(np.flatnonzero(key).tolist(), key=rank.get))] = float(c)
+    else:                                            # no ink: where the words span the box's width across
+        lo, hi = float((b @ normal).min()), float((b @ normal).max())
+        cuts = np.unique(np.clip(np.r_[spans.ravel(), lo, hi], lo, hi))
+        for u0, u1 in zip(cuts[:-1], cuts[1:]):
+            mid = (u0 + u1) / 2
+            key = tuple(sorted(np.flatnonzero((spans[:, 0] <= mid) & (mid <= spans[:, 1])).tolist(), key=rank.get))
+            if key and u1 > u0:
+                lines[key] = lines.get(key, 0.0) + float(u1 - u0)
+    lines = {k: v / sum(lines.values()) for k, v in lines.items()} if lines else {}
+    reads: dict[tuple, float] = {}                   # one line can't hold two words at one place along it: the
+    for line, p_line in lines.items():               # line reads each largest set of its words apart along the
+        sets = _apart(line, alongs)                  # box, by their own ink in the box
+        w = np.array([sum(mass[j] for j in s) for s in sets], float)
+        w = w / w.sum() if w.sum() > 0 else np.full(len(sets), 1.0 / len(sets))
+        for s, ws in zip(sets, w):
+            key = tuple(sorted(s, key=rank.get))
+            reads[key] = reads.get(key, 0.0) + p_line * float(ws)
+    lines = reads
+    out["lines"] = [([rank[j] for j in k], p) for k, p in sorted(lines.items(), key=lambda kv: -kv[1])]
+    strip = _between(b, ALONG, _reach(b, *rects))
+
+    def ends(j):                                     # (start, end) edges along the axis
+        r = rects[j]
+        return ((r[0], r[3]), (r[1], r[2])) if float((r[1] - r[0]) @ axis) >= 0 else ((r[1], r[2]), (r[0], r[3]))
+
+    def gap(i, k) -> float:
+        hull = shapely.convex_hull(shapely.multipoints(np.array([*ends(i)[1], *ends(k)[0]])))
+        return _area_share(hull, strip)
+
+    def fits(s: str) -> bool:
+        return frames is None or ctc_fits(s.rstrip(), frames)
+
+    got: dict = {}
+    empty: list[float] = []
+    dropped: list[float] = []
+    for line, p_line in lines.items():
+        held = p_line * float(np.prod([across[j] for j in line]))
+        if p_line > held:
+            empty.append(math.log(p_line - held))    # a word of the line not held: the box holds none of its text
+        if not held > 0:
+            continue
+        chars = []
+        for k, j in enumerate(line):
+            chars += ([(" ", gap(line[k - 1], j))] if k else []) + list(zip(words[j][0], shares[j]))
+        g, e, dr = _runs(chars, fits)
+        for s, v in g.items():
+            _add(got, s, v + math.log(held))
+        empty += [v + math.log(held) for v in e]
+        dropped += [v + math.log(held) for v in dr if v > -math.inf]
+    ne = list(got.values()) + dropped
+    if not ne:
+        return out
+    z_ne = float(np.logaddexp.reduce(ne))
+    z_all = float(np.logaddexp.reduce(ne + empty))
+    out["targets"] = sorted(((s, math.exp(v - z_ne)) for s, v in got.items()), key=lambda kv: (-kv[1], kv[0]))
+    out["dropped"] = math.exp(float(np.logaddexp.reduce(dropped)) - z_ne) if dropped else 0.0
+    out["p_nonempty"] = math.exp(z_ne - z_all)
     return out
 
 
@@ -1212,10 +1546,52 @@ def tempered(logpost: np.ndarray, temperature: float) -> np.ndarray:
     return v - (float(np.logaddexp.reduce(v[fin])) if fin.any() else 0.0)
 
 
-def fit_temperature(rows: list[tuple[np.ndarray, object]], weights=None) -> dict:
-    """One temperature on the combined log posterior, by maximum likelihood of each row's target (`rows` as
-    `truth_rows` gives them, or (log posterior, place); `weights` per row, 1 when None): unbounded search in log T
-    (Brent from 1)."""
+def slot_targets(labels, targets, dropped: float = 0.0) -> list[tuple[int, float]]:
+    """A row's targets on the hypotheses named at read time (`labels`: the named strings then OTHER, as `posterior`
+    returns them): each target string at its own slot when named, else at OTHER's, and so is the chance `dropped` of a
+    string no read can be; as (slot, log P) (`target_logp`)."""
+    at = {s: i for i, s in enumerate(labels)}
+    other = at[OTHER]
+    out = [(at.get(s, other), math.log(p)) for s, p in targets if p > 0]
+    return out + ([(other, math.log(dropped))] if dropped > 0 else [])
+
+
+def read_posterior(pack: Pack | None, fold: str, ink_logp_fn, box: dict, strings=()) -> dict[str, float]:
+    """The read recipe (Task 11 reads every box with it): a box's calibrated log posterior over the strings its prior
+    lists, the `strings` named besides (the reader's best path: then OTHER is not one lump), and OTHER (every string
+    not named):
+      1. `prior` at the box's place, with its fold's spreads (`pack.spreads[fold]`);
+      2. the ink at the fold's tau: `ink_logp_fn(names, tau)` -> {name: log p(name | ink)} for every name (e.g.
+         `lambda names, tau: ink_logp(reads, q, names, tau)`);
+      3. `posterior` at the fold's w;
+      4. `tempered` at the fold's temperature (fitted on this very vector: see the module).
+    `fold`: the box's own quarter (paths.QUARTERS), whose fit and spreads left it out; never "all", which saw every
+    quarter.  `box`: its centre `x`, `y` and `axis` on the map (`box_on_map`) and its `kind_p` (KIND_ORDER).  No pack
+    (None): the ink alone as read (tau 1, no temperature: nothing is fitted)."""
+    if fold not in paths.QUARTERS:
+        raise ValueError(f"a box is read with its own quarter's fit ({paths.QUARTERS}), not {fold!r}: the fit of "
+                         "'all' saw every quarter")
+    if pack is None:
+        return posterior(dict(ink_logp_fn(sorted(set(strings)), 1.0)), None, {})
+    if fold not in pack.fits or fold not in pack.spreads:
+        raise ValueError(f"the pack has no fit or spreads for {fold} (`scripts/wordread/build_pack.py fit`)")
+    fit = pack.fits[fold]
+    pr = prior(pack, box, box["kind_p"], pack.spreads[fold])
+    names = sorted(set(pr.strings) | set(strings))
+    post = posterior(dict(ink_logp_fn(names, fit.tau)), pr, fit.w)
+    return dict(zip(post, tempered(np.array(list(post.values())), fit.temperature).tolist()))
+
+
+def fit_temperature(rows: list[tuple[np.ndarray, object]], words: pd.DataFrame, weights=None, held_blocks=None,
+                    quarter: int | None = None) -> dict:
+    """One temperature on the read-time log posterior, by maximum likelihood of each row's target slot (`rows`: (the
+    log posterior over the hypotheses named at read time then OTHER, its targets as (slot, log P) or a slot:
+    `slot_targets`); `weights` per row, 1 when None): unbounded search in log T (Brent from 1).  `words`: each row's
+    block, quarter and touches, refused like `fit_prior`'s (`refuse_answered`): never the owner's answers, nor the
+    held-out `quarter`."""
+    if len(words) != len(rows):
+        raise ValueError(f"{len(rows)} rows but {len(words)} rows of words to check them against")
+    refuse_answered(words, held_blocks, quarter)
     v = np.ones(len(rows)) if weights is None else np.asarray(weights, float)
 
     def nll(u):

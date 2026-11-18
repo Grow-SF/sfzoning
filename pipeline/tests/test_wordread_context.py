@@ -277,6 +277,18 @@ def test_a_kernel_density_is_exactly_zero_past_its_top_and_its_bandwidth_is_the_
     assert ll[1] >= ll[0] and ll[1] >= ll[2]
 
 
+def test_leave_one_out_leaves_out_every_row_of_the_same_box():
+    x = np.array([1.0, 2.0, 2.5, 4.0, 7.0])
+    dup, groups = np.r_[x, 1.0], ["a", "b", "c", "d", "e", "a"]      # a second row of box a, at its place
+    alone = C.loo_density(x, np.ones(5), 1.0, 0.0, None)
+    both = C.loo_density(dup, np.ones(6), 1.0, 0.0, None, groups)
+    assert both[[0, 5]] == pytest.approx([alone[0]] * 2)              # its twin never vouches for it
+    assert C.loo_density(dup, np.ones(6), 1.0, 0.0, None)[0] > alone[0]   # as it would one row at a time
+    h_grouped = C.loo_bandwidth(dup, np.ones(6), 0.0, None, groups=groups)
+    h_rows = C.loo_bandwidth(dup, np.ones(6), 0.0, None)
+    assert h_grouped > h_rows                                         # the twin pulled the bandwidth to itself
+
+
 # --- fitting ----------------------------------------------------------------------------------------------------------
 
 def _fit_words(n=24, seed=4):
@@ -331,6 +343,108 @@ def test_a_box_holding_part_of_a_word_is_asked_only_for_the_part_inside_it():
     xs = np.r_[np.linspace(1, 9, 9), np.linspace(21, 29, 9)]
     got = C.char_shares("A B", word, box, xs, np.ones(len(xs)))
     assert got == pytest.approx([1.0, 0.2, 0.0])
+    # along the reading only: a box over the lower half of the line holds the same characters; the rest is across
+    low = np.array([[-1, 1], [12, 1], [12, 3], [-1, 3]], float)
+    ys = np.repeat([0.5, 1.5], 9)
+    xs2 = np.tile(np.linspace(1, 9, 9), 2)
+    assert C.char_shares("A", np.array([[0, 0], [10, 0], [10, 2], [0, 2]], float), low, xs2, ys) == pytest.approx([1.0])
+    assert C.across_share(word, low, xs2, ys) == pytest.approx(0.5)
+
+
+def _rect(x0, y0, x1, y1):
+    """A word or box rectangle reading left to right (page px, y down: the first edge along the top)."""
+    return np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]], float)
+
+
+def _inked(text, rect):
+    """(text, rect, ink x, ink y): ink px centres filling the rectangle."""
+    r = np.asarray(rect, float)
+    xs, ys = np.meshgrid(np.arange(r[:, 0].min() + 0.5, r[:, 0].max()), np.arange(r[:, 1].min() + 0.5, r[:, 1].max()))
+    return (text, r, xs.ravel(), ys.ravel())
+
+
+def test_a_box_over_two_words_is_asked_for_both_in_reading_order():
+    mission, st = _inked("MISSION", _rect(0, 0, 70, 10)), _inked("ST.", _rect(80, 0, 110, 10))
+    box = _rect(-2, -2, 112, 12)
+    got = C.box_targets([mission, st], box)
+    assert got["targets"] == [("MISSION ST.", pytest.approx(1.0))] and got["p_nonempty"] == pytest.approx(1.0)
+    assert C.box_targets([st, mission], box)["targets"][0][0] == "MISSION ST."        # any order given
+    turned = box[[2, 3, 0, 1]]                       # our box's axis the other way: Terra's reading still decides
+    assert C.box_targets([mission, st], turned)["targets"][0][0] == "MISSION ST."
+    # a box over MISSION alone, ending in the gap: the gap's space prints nothing, ST. is outside
+    assert C.box_targets([mission, st], _rect(-2, -2, 72, 12))["targets"] == [("MISSION", pytest.approx(1.0))]
+    # one word: the same expectation as `substring_targets` of its shares along the reading
+    one = C.box_targets([mission], _rect(-2, -2, 35, 12))
+    shares = C.char_shares("MISSION", mission[1], _rect(-2, -2, 35, 12), mission[2], mission[3])
+    assert dict(one["targets"]) == pytest.approx(dict(C.substring_targets("MISSION", shares)))
+
+
+def test_a_word_barely_in_the_boxs_line_is_held_by_its_share_across():
+    mission = _inked("MISSION", _rect(0, 0, 70, 10))
+    above = _inked("767", _rect(20, -12, 50, -2))   # the line above, its lowest px row inside the box's band
+    box = _rect(-2, -2.5, 72, 12)
+    a = C.across_share(above[1], box, above[2], above[3])
+    assert a == pytest.approx(0.1)
+    # the read line's place is drawn from the box's ink: MISSION's 700 px, 767's lowest row of 30
+    ink = [np.r_[mission[k], above[k][above[3] >= -2.5]] for k in (2, 3)]
+    got = C.box_targets([mission, above], box, box_ink=ink)
+    p_above, p_mission = 30 / 730, 700 / 730
+    assert dict(got["targets"]) == pytest.approx({"MISSION": p_mission / (p_mission + a * p_above),
+                                                  "767": a * p_above / (p_mission + a * p_above)})
+    assert got["p_nonempty"] == pytest.approx(p_mission + a * p_above)        # one line never holds both
+    # a single word partly in the line: the target is the word, the chance it is held at all is its share across
+    alone = C.box_targets([above], box, box_ink=[above[k][above[3] >= -2.5] for k in (2, 3)])
+    assert alone["targets"] == [("767", pytest.approx(1.0))] and alone["p_nonempty"] == pytest.approx(a)
+    # without the box's ink, the line's place is drawn over the box's width across, where the words span it
+    assert C.box_targets([mission], box)["targets"] == [("MISSION", pytest.approx(1.0))]
+
+
+def test_loose_rectangles_of_stacked_labels_do_not_join_their_lines():
+    code, block = _inked("P", _rect(10, 0, 20, 10)), _inked("625", _rect(0, 12, 30, 22))
+    loose = (code[0], _rect(8, -2, 22, 16), code[2], code[3])     # Terra's rectangle reaching into the next line
+    box = _rect(-2, -1, 32, 23)
+    ink = (np.r_[code[2], block[2]], np.r_[code[3], block[3]])
+    got = dict(C.box_targets([loose, block], box, box_ink=ink)["targets"])
+    assert set(got) == {"P", "625"}
+
+
+def test_a_small_label_printed_inside_a_big_one_is_read_apart_from_it():
+    big, small = _inked("RH-3", _rect(0, 0, 80, 20)), _inked("1265", _rect(50, 4, 70, 12))
+    big = (big[0], big[1], *[v[~C._in_quad(small[1], big[2], big[3])] for v in big[2:]])   # its ink around the small
+    box = _rect(-2, -2, 82, 22)
+    ink = (np.r_[big[2], small[2]], np.r_[big[3], small[3]])
+    got = C.box_targets([big, small], box, box_ink=ink)
+    n_big, n_small = len(big[2]), len(small[2])                       # 1440 and 160 px
+    both = (8 * 80) / (n_big + n_small)            # the line's place within the small one's 8 rows: both there
+    assert dict(got["targets"]) == pytest.approx({"RH-3": 1 - both + both * n_big / (n_big + n_small),
+                                                  "1265": both * n_small / (n_big + n_small)})
+    assert "RH-3 1265" not in dict(got["targets"])
+    assert C._apart((0, 1, 2), [[0, 10], [5, 15], [12, 20]]) == [(0, 2), (1,)]
+
+
+def test_labels_stacked_in_one_box_are_read_one_line_at_a_time():
+    code, block = _inked("RH-3", _rect(0, 0, 40, 10)), _inked("1265", _rect(0, 12, 60, 22))
+    box = _rect(-2, -1, 62, 23)                      # a box over both lines
+    ink = (np.r_[code[2], block[2]], np.r_[code[3], block[3]])
+    got = C.box_targets([code, block], box, box_ink=ink)
+    share = len(code[2]) / (len(code[2]) + len(block[2]))     # the line's place drawn from the box's ink
+    assert dict(got["targets"]) == pytest.approx({"RH-3": share, "1265": 1 - share})
+    assert got["p_nonempty"] == pytest.approx(1.0)
+    # a word beside the code on its line joins it, in reading order
+    beside = _inked("P", _rect(48, 0, 56, 10))
+    two = C.box_targets([beside, code, block], box, box_ink=(np.r_[ink[0], beside[2]], np.r_[ink[1], beside[3]]))
+    assert {s for s, _ in two["targets"]} == {"RH-3 P", "1265"}
+
+
+def test_a_part_no_read_can_be_is_dropped_and_counted():
+    mission, st = _inked("MISSION", _rect(0, 0, 70, 10)), _inked("ST.", _rect(80, 0, 110, 10))
+    box = _rect(-2, -2, 112, 12)
+    assert C.box_targets([mission, st], box, frames=8)["targets"] == []          # "MISSION ST." needs 11 frames
+    got = C.box_targets([mission, st], box, frames=8)
+    assert got["dropped"] == pytest.approx(1.0) and got["p_nonempty"] == pytest.approx(1.0)
+    half = C.box_targets([mission], _rect(30, -2, 72, 12), frames=3)              # "ION" or "SION" (doubled S)
+    assert all(C.ctc_fits(s, 3) for s, _ in half["targets"])
+    assert sum(p for _, p in half["targets"]) + half["dropped"] == pytest.approx(1.0)
 
 
 def test_the_fit_scores_a_fragment_by_its_expected_part():
@@ -391,11 +505,69 @@ def test_a_temperature_on_the_combined_posterior_undoes_overconfidence():
         right = rng.random() < 0.7               # the top hypothesis is right 70% of the time, posterior says 99%
         lp = np.log(np.array([0.99, 0.005, 0.005]))
         rows.append((lp, 0 if right else int(rng.integers(1, 3))))
-    got = C.fit_temperature(rows)
+    got = C.fit_temperature(rows, pd.DataFrame([_word(block=f"b{i}") for i in range(len(rows))]), held_blocks=set())
     assert got["temperature"] > 1.5 and got["nll"] < got["nll_at_1"]
     p_top = math.exp(C.tempered(rows[0][0], got["temperature"])[0])
     assert p_top == pytest.approx(0.7, abs=0.05)
     assert C.tempered(rows[0][0], 1.0) == pytest.approx(rows[0][0])
+
+
+def test_the_temperature_never_sees_an_answered_or_held_out_row():
+    rows = [(np.log(np.array([0.9, 0.1])), 0)] * 2
+    with pytest.raises(ValueError, match="answered block"):
+        C.fit_temperature(rows, pd.DataFrame([_word(block="0767"), _word()]), held_blocks={"0767"})
+    with pytest.raises(ValueError, match="answered block"):
+        C.fit_temperature(rows, pd.DataFrame([_word(), _word()]).assign(blocks=[["1000"], ["1000", "0767"]]),
+                          held_blocks={"0767"})
+    with pytest.raises(ValueError, match="held-out quarter"):
+        C.fit_temperature(rows, pd.DataFrame([_word(quarter=2), _word(quarter=0, sw=True)]), held_blocks=set(),
+                          quarter=2)
+    with pytest.raises(ValueError, match="rows"):
+        C.fit_temperature(rows, pd.DataFrame([_word()]), held_blocks=set())
+
+
+def test_a_target_off_the_read_time_hypotheses_is_scored_at_other():
+    labels = ["RH-1", "RH-2", C.OTHER]
+    slots = C.slot_targets(labels, [("RH-2", 0.5), ("RH-3", 0.3)], dropped=0.2)
+    assert slots == [(1, pytest.approx(math.log(0.5))), (2, pytest.approx(math.log(0.3))),
+                     (2, pytest.approx(math.log(0.2)))]
+    post = np.log(np.array([0.1, 0.6, 0.3]))
+    assert C.target_logp(post, slots) == pytest.approx(math.log(0.5 * 0.6 + 0.5 * 0.3))
+
+
+def _fitted_pack():
+    pack = _pack()
+    for q in ("nw", "ne", "sw", "se"):
+        pack.spreads[q] = _spreads(code_away=0.05 + 0.01 * len(pack.spreads))
+    pack.fits = {"ne": C.ReadFit(mode="joint", tau=0.7, w={C.CODE: 3.0, C.BLOCK: 2.0, C.STREET: 1.5},
+                                 temperature=2.5)}
+    return pack
+
+
+def test_the_read_recipe_applies_its_own_quarters_tau_w_and_temperature():
+    from sfzmaps.solver.textread import ctc
+    rng = np.random.default_rng([0, 8])
+    reads = [ctc.log_softmax(rng.standard_normal((12, 47))) for _ in range(2)]
+    pack = _fitted_pack()
+    box = {"x": 500.0, "y": 10.0, "axis": 0.0, "kind_p": np.array([0.3, 0.1, 0.5, 0.1])}
+
+    def ink(names, tau):
+        return C.ink_logp(reads, 0.2, names, tau)
+
+    got = C.read_posterior(pack, "ne", ink, box, ["XYZ"])
+    pr = C.prior(pack, box, box["kind_p"], pack.spreads["ne"])
+    names = sorted(set(pr.strings) | {"XYZ"})
+    post = C.posterior(C.ink_logp(reads, 0.2, names, 0.7), pr, pack.fits["ne"].w)
+    want = C.tempered(np.array(list(post.values())), 2.5)
+    assert list(got) == list(post) and "XYZ" in got and C.OTHER in got
+    assert list(got.values()) == pytest.approx(want.tolist())
+    assert math.exp(float(np.logaddexp.reduce(list(got.values())))) == pytest.approx(1.0)
+    with pytest.raises(ValueError, match="own quarter"):
+        C.read_posterior(pack, "all", ink, box)
+    with pytest.raises(ValueError, match="no fit"):
+        C.read_posterior(pack, "nw", ink, box)
+    alone = C.read_posterior(None, "nw", ink, box, ["XYZ", "RH-1"])
+    assert alone == pytest.approx(C.posterior(C.ink_logp(reads, 0.2, ["RH-1", "XYZ"]), None, {}))
 
 
 # --- the pack file ----------------------------------------------------------------------------------------------------
@@ -417,6 +589,24 @@ def test_a_pack_round_trips_through_its_file(tmp_path):
     box = {"x": 500.0, "y": 10.0, "axis": 0.0}
     a, b = C.prior(back, box, STREET_ONLY, back.spreads["all"]), C.prior(pack, box, STREET_ONLY, pack.spreads["all"])
     assert a.strings == b.strings and a.escape.tolist() == pytest.approx(b.escape.tolist())
+
+
+def test_a_packs_fits_round_trip_and_another_layout_is_refused(tmp_path):
+    pack = _fitted_pack()
+    f = tmp_path / "pack.parquet"
+    pack.save(f)
+    back = C.Pack.load(f)
+    assert back.fits == pack.fits and set(back.spreads) == set(pack.spreads)
+    old = gpd.read_parquet(f)
+    old = old[~((old["layer"] == "meta") & (old["name"] == "layout"))]
+    old.to_parquet(tmp_path / "old.parquet", index=False)
+    with pytest.raises(C.PackLayoutError, match="layout 1"):
+        C.Pack.load(tmp_path / "old.parquet")
+    with pytest.raises(ValueError, match="quarter"):
+        C.Pack(year=2000, streets=pack.streets, blocks=pack.blocks, codes=dict(CODES),
+               fits={"all": pack.fits["ne"]})
+    with pytest.raises(ValueError, match="mode"):
+        C.ReadFit(mode="both", tau=1.0, w={}, temperature=1.0)
 
 
 def test_box_on_map_turns_page_corners_into_a_map_centre_and_axis():
@@ -445,8 +635,10 @@ def test_the_built_sf_2000_pack_holds_no_lot_codes():
         pytest.skip("no built pack (pipeline/data)")
     try:
         pack = C.Pack.load(f)
-    except (KeyError, IndexError, TypeError) as err:
-        pytest.skip(f"the built pack is of an older layout: {err}")
+    except C.PackLayoutError as err:          # only another layout skips; any other loader error fails
+        pytest.skip(str(err))
     assert pack.year == 2000
     assert set(pack.blocks.columns) == {"number", "geometry"}
     assert len(pack.streets) > 10000 and len(pack.blocks) > 3000 and len(set(pack.codes.values())) > 30
+    for fold, fit in pack.fits.items():       # a quarter's fit comes with the spreads it was fitted with
+        assert fold in pack.spreads and set(fit.w) == {C.CODE, C.BLOCK, C.STREET}
