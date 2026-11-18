@@ -173,6 +173,8 @@ def changed_sets(fin_codes, new_codes, top=5):
     blk = C.lots["blklot"].astype(str).str[:4].values
     out = []
     for c in np.argsort(-sizes)[:top]:
+        if not sizes[c]:            # fewer than `top` changed sets (none when the run is final's answer)
+            break
         ix = np.flatnonzero(m & (comp == c))
         xy = C.centroid[ix]
         out.append({"lots": int(len(ix)),
