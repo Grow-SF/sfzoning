@@ -5,6 +5,21 @@ import { EXTS, latestName } from "./downloadNames.mjs";
 /** The site path of a published file; the files route redirects it to Blob. The one definition of that path. */
 export const fileUrl = (series: string, name: string): string => `/data/files/${series}/${name}`;
 
+/** The versions page of one layer (the sheet zip and the CSV have none). */
+export const versionsUrl = (series: string, layer: string): string => `/data/versions/${series}/${layer}`;
+
+/** The three links a file shows: the latest one (for downloads), its dated name, and its versions page. */
+export type FileLinks = { latestUrl: string; versionedUrl: string; versionsUrl: string };
+
+/** The links of a current file: `name` is its versioned name, `layer` and `fmt` decide its latest name. */
+function fileLinks(series: string, layer: string, fmt: string, name: string): FileLinks {
+  return {
+    latestUrl: fileUrl(series, latestName({ series, layer, ext: EXTS[fmt as keyof typeof EXTS] })),
+    versionedUrl: fileUrl(series, name),
+    versionsUrl: versionsUrl(series, layer),
+  };
+}
+
 
 export type ManifestFile = {
   series: string; layer: string; fmt: string; name: string; bytes: number; sha256: string;
@@ -25,7 +40,7 @@ export type Manifest = {
 };
 export type Version = { series: string; layer: string; fmt: string; name: string; date: string; bytes: number; sha256: string };
 
-export type Cell = { fmt: string; label: "GeoJSON" | "GeoPackage" | "Shapefile"; url: string; bytes: number; updated: string };
+export type Cell = FileLinks & { fmt: string; label: "GeoJSON" | "GeoPackage" | "Shapefile"; bytes: number; updated: string };
 export type ScanCell = {
   series: string;
   label: "Zoning" | "Height" | "Special use" | "";
@@ -44,7 +59,7 @@ function vectorCells(m: Manifest, series: string, layer: string): Cell[] {
   const cells: Cell[] = [];
   for (const [fmt, label] of VECTOR_FORMATS) {
     const f = m.files[`${series}/${layer}.${fmt}`];
-    if (f) cells.push({ fmt, label, url: fileUrl(series, f.name), bytes: f.bytes, updated: f.updated });
+    if (f) cells.push({ fmt, label, ...fileLinks(series, layer, fmt, f.name), bytes: f.bytes, updated: f.updated });
   }
   return cells;
 }
@@ -64,7 +79,7 @@ function scanSeries(era: Era): { series: string; label: ScanCell["label"] }[] {
 function scanCell(m: Manifest, series: string, label: ScanCell["label"]): ScanCell {
   const cell: ScanCell = { series, label };
   const c = m.files[`${series}/citywide.cog`];
-  if (c) cell.citywide = { fmt: "cog", url: fileUrl(series, c.name), bytes: c.bytes, updated: c.updated };
+  if (c) cell.citywide = { fmt: "cog", ...fileLinks(series, "citywide", "cog", c.name), bytes: c.bytes, updated: c.updated };
   const s = m.sheets[series];
   if (s && s.items.length) {
     cell.sheets = {

@@ -6,6 +6,7 @@ import DownloadTable from "@/components/DownloadTable";
 import SiteFooter from "@/components/SiteFooter";
 import { lastUpdated, type Manifest } from "@/lib/downloadRows";
 import manifestJson from "@/lib/downloads.json";
+import { VERSIONS_NOTE } from "@/lib/versions";
 import styles from "@/components/endmatter.module.css";
 import tableStyles from "@/components/downloads.module.css";
 
@@ -43,6 +44,7 @@ export default function DataPage() {
             and the individual sheets. Black-and-white scans are tinted to the paper colour, and printed border rules
             and binding shadows are erased; nothing is traced or drawn on them.
           </p>
+          <p>{VERSIONS_NOTE}</p>
           <p>
             Lots and districts come as GeoJSON, GeoPackage and Shapefile, in WGS84 (EPSG:4326). The GeoPackage also
             carries a copy in California State Plane (zone III, feet). Each download includes a README and the license.

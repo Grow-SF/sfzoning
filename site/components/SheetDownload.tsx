@@ -44,10 +44,11 @@ export default function SheetDownload({ series, sheets, license }: Props) {
         <ul className={styles.sheetList}>
           {sheets.items.map((i) => (
             <li key={i.sheet}>
-              <a href={fileUrl(series, sheetLatestName(series, i))}>
-                {i.name}
-              </a>{" "}
+              <a href={fileUrl(series, sheetLatestName(series, i))}>{sheetLatestName(series, i)}</a>{" "}
               <span className={styles.size}>{formatBytes(i.bytes)}</span>
+              <span className={styles.meta}>
+                dated: <a href={fileUrl(series, i.name)}>{i.name}</a>
+              </span>
             </li>
           ))}
         </ul>

@@ -46,6 +46,24 @@ describe("rows", () => {
     expect(y.scans[0].citywide?.bytes).toBe(891_233_486);
     expect(y.scans[0].sheets).toEqual({ series: "1948", count: 1, bytes: 100, updated: "2026-11-04" });
     expect(r[0].lots).toEqual([]);
+  });
+  it("links each cell to its latest, dated and versions URLs", () => {
+    const y = r[3];
+    expect(y.lots[0]).toMatchObject({
+      latestUrl: "/data/files/1948/sfzoning-1948-lots-latest.geojson.zip",
+      versionedUrl: `/data/files/1948/${LOTS}`,
+      versionsUrl: "/data/versions/1948/lots",
+    });
+    expect(y.lots[1].latestUrl).toBe("/data/files/1948/sfzoning-1948-lots-latest.gpkg.zip");
+    expect(y.districts[0]).toMatchObject({
+      latestUrl: "/data/files/1948/sfzoning-1948-districts-latest.shp.zip",
+      versionsUrl: "/data/versions/1948/districts",
+    });
+    expect(y.scans[0].citywide).toMatchObject({
+      latestUrl: "/data/files/1948/sfzoning-1948-citywide-latest.tif",
+      versionedUrl: `/data/files/1948/${V("1948", "citywide", "tif")}`,
+      versionsUrl: "/data/versions/1948/citywide",
+    });
     expect(r[0].scans[0].citywide).toBeUndefined();
   });
   it("gives 1980-90 zoning, height and special-use scans, and today none", () => {
@@ -53,7 +71,9 @@ describe("rows", () => {
     expect(e.scans.map((s) => [s.series, s.label])).toEqual([
       ["1980-1990-zoning", "Zoning"], ["1980-1990-height", "Height"], ["1980-1990-su", "Special use"],
     ]);
-    expect(e.scans[1].citywide?.url).toContain("height-citywide");
+    expect(e.scans[1].citywide?.versionedUrl).toContain("height-citywide");
+    expect(e.scans[1].citywide?.latestUrl).toBe("/data/files/1980-1990-height/sfzoning-1980-1990-height-citywide-latest.tif");
+    expect(e.scans[1].citywide?.versionsUrl).toBe("/data/versions/1980-1990-height/citywide");
     expect(r.at(-1)!.scans).toEqual([]);
   });
 });
