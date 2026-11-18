@@ -294,8 +294,8 @@ def _sheet(tmp_path, name, col0, row0, page_image, chance):
     last = SHEET_PX - 1
     frames[name] = [[0, 0], [last, 0], [last, last], [0, last]]
     (tmp_path / "page" / "frames.json").write_text(json.dumps(frames))
-    (paths.READER_TEXT_DIR / name).mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(paths.READER_TEXT_DIR / name / "chance.png"), np.ascontiguousarray(chance))
+    paths.TEXT_CHANCE_DIR.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(paths.TEXT_CHANCE_DIR / f"{name}.png"), np.ascontiguousarray(chance))
 
 
 def test_text_chance_takes_the_largest_chance_of_the_sheets_that_inked_each_px(tmp_path, monkeypatch):
@@ -340,33 +340,43 @@ def test_text_chance_takes_the_largest_chance_of_the_sheets_that_inked_each_px(t
     assert not runs.WALLS_DIR.exists()                     # computed, not written
     # a sheet the detector did not score is an error naming its stage; so is a sheet the warp placed but the
     # detector's list does not name
-    (paths.READER_TEXT_DIR / b / "chance.png").unlink()
-    with pytest.raises(FileNotFoundError, match="solver-text-reader"):
+    (paths.TEXT_CHANCE_DIR / f"{b}.png").unlink()
+    with pytest.raises(FileNotFoundError, match=r"stage solver-text\)"):
         textgrid.text_chance()
     monkeypatch.setattr(paths, "SHEETS", (a,))
     with pytest.raises(ValueError, match="placed but not listed: " + b):
         textgrid.text_chance()
 
 
-def test_each_px_takes_its_chance_from_the_held_out_detectors_not_the_one_trained_on_every_px(tmp_path, monkeypatch):
-    """The chance a grid px takes is the reader stage's per-sheet chance (each page px from the detector that never saw
-    its quarter), not `solver-text`'s, which trained on these sheets: with both on disk, only the reader's reaches the
-    grid."""
+def test_the_chance_is_solver_texts_by_default_and_the_held_out_detectors_on_request(tmp_path, monkeypatch):
+    """With both on disk, the default chance a grid px takes is `solver-text`'s (the one detector, the stage's walls'),
+    and `text_chance("held-out")` takes the reader stage's per-sheet chance (each page px from the detector that never
+    saw its quarter) and nothing of the other; an unknown source is an error, and a missing held-out file names its
+    stage."""
     _text_folders(tmp_path, monkeypatch)
     a = f"{paths.SERIES}-p01"
     monkeypatch.setattr(paths, "SHEETS", (a,))
     col, row = SPLIT_COL - 100, SPLIT_ROW - 100
     page_a = np.zeros((SHEET_PX, SHEET_PX), np.uint8)
+    _sheet(tmp_path, a, col, row, page_a, np.full((SHEET_PX, SHEET_PX), 250, np.uint8))     # solver-text's chance
     held_out = np.full((SHEET_PX, SHEET_PX), 90, np.uint8)
     held_out[:, 100:] = 30                                  # another detector's px: the east half
-    _sheet(tmp_path, a, col, row, page_a, held_out)
-    paths.TEXT_CHANCE_DIR.mkdir(parents=True)
-    cv2.imwrite(str(paths.TEXT_CHANCE_DIR / f"{a}.png"), np.full((SHEET_PX, SHEET_PX), 250, np.uint8))
-    got = textgrid.text_chance()[row:row + SHEET_PX, col:col + SHEET_PX]
+    (paths.READER_TEXT_DIR / a).mkdir(parents=True)
+    cv2.imwrite(str(paths.READER_TEXT_DIR / a / textgrid.CHANCE_FILE), held_out)
+    window = np.s_[row + 10:row + 190, col + 10:col + 190]
+    assert textgrid.DEFAULT_SOURCE == textgrid.ALL_SHEETS
+    for source in (None, "all-sheets"):
+        assert (textgrid.text_chance(source)[window] == 250).all()
+    got = textgrid.text_chance("held-out")[row:row + SHEET_PX, col:col + SHEET_PX]
     assert (got[10:190, 10:90] == 90).all() and (got[10:190, 110:190] == 30).all()
     assert got.max() == 90                                  # nothing of the 250 of solver-text's chance
     from sfzmaps.solver.textnet import reader_stage
     assert textgrid.CHANCE_FILE == reader_stage.CHANCE_FILE   # the file the reader stage writes in each sheet's folder
+    with pytest.raises(ValueError, match="unknown text chance"):
+        textgrid.text_chance("per-quarter")
+    (paths.READER_TEXT_DIR / a / textgrid.CHANCE_FILE).unlink()
+    with pytest.raises(FileNotFoundError, match="solver-text-reader"):
+        textgrid.text_chance("held-out")
 
 
 def test_text_chance_is_written_whole(tmp_path):
@@ -699,10 +709,10 @@ def test_evaluate_candidates_scores_each_configuration_from_inputs_read_once(tmp
     """Several configurations in one call: the inputs are read once, each configuration gets the held-out log loss
     of each quarter's fit and its own features, in the order given, and nothing is written."""
     inputs, reads = _city_inputs(), []
-    monkeypatch.setattr(walls, "load_inputs", lambda configs: reads.append(configs) or inputs)
+    monkeypatch.setattr(walls, "load_inputs", lambda configs, chance=None: reads.append((configs, chance)) or inputs)
     monkeypatch.setattr(runs, "WALLS_DIR", tmp_path / "walls")
     base, crossing = walls.evaluate_candidates([[], ["street_crossing"]])
-    assert len(reads) == 1 and [list(c) for c in reads[0]] == [[], ["street_crossing"]]
+    assert len(reads) == 1 and [list(c) for c in reads[0][0]] == [[], ["street_crossing"]] and reads[0][1] is None
     for result in (base, crossing):
         assert set(result["quarters"]) == set(paths.QUARTERS)
         for q in paths.QUARTERS:
@@ -721,17 +731,17 @@ def test_a_candidates_fit_is_an_experiment_beside_the_stages_walls(tmp_path, mon
     evaluation.json and, when a candidate reads it, the text chance it fitted with go to its own folder
     (experiments/walls-<the names sorted>), which a solve reads with --walls; the stage's walls are left as they were.
     The stage's fit (no candidates named) uses DEFAULT_CANDIDATES; with none it reads no text chance and writes none (the test sets none)."""
-    assert walls.check_candidates(walls.DEFAULT_CANDIDATES) == ("text_weighted", "street_crossing", "context")
+    assert walls.check_candidates(walls.DEFAULT_CANDIDATES) == ("street_crossing", "context")
     monkeypatch.setattr(runs, "WALLS_DIR", tmp_path / "walls")
     monkeypatch.setattr(runs, "EXPERIMENTS_DIR", tmp_path / "experiments")
     monkeypatch.setattr(walls, "DEFAULT_CANDIDATES", ())
-    monkeypatch.setattr(walls, "load_inputs", lambda configs: _city_inputs(text=False))
+    monkeypatch.setattr(walls, "load_inputs", lambda configs, chance=None: _city_inputs(text=False))
     walls.build_walls(1)
     stage = {p.name: p.read_bytes() for p in (tmp_path / "walls").iterdir()}
     assert sorted(stage) == ["evaluation.json"] + [f"walls_{q}.npz" for q in sorted(paths.QUARTERS)]
-    inputs = _city_inputs()
+    inputs, chances = _city_inputs(), []
     inputs.text[inputs.ink] = 7
-    monkeypatch.setattr(walls, "load_inputs", lambda configs: inputs)
+    monkeypatch.setattr(walls, "load_inputs", lambda configs, chance=None: chances.append(chance) or inputs)
     got = walls.build_walls(1, ["street_crossing", "no_city_limit"])
     folder = tmp_path / "experiments" / "walls-no_city_limit+street_crossing"
     assert got["folder"] == str(folder)
@@ -739,11 +749,27 @@ def test_a_candidates_fit_is_an_experiment_beside_the_stages_walls(tmp_path, mon
     np.testing.assert_array_equal(cv2.imread(str(folder / "text_chance.png"), cv2.IMREAD_GRAYSCALE), inputs.text)
     assert {p.name: p.read_bytes() for p in (tmp_path / "walls").iterdir()} == stage
     assert city.wall_odds("nw", folder).shape == inputs.lots.a.shape
-    # the stage's fit takes its candidates from the code, and writes only the stage's folder
+    # the stage's fit takes its candidates from the code, and writes only the stage's folder, on the default chance
+    # (named or not)
     monkeypatch.setattr(walls, "DEFAULT_CANDIDATES", ("street_crossing",))
     walls.build_walls(1)
+    walls.build_walls(1, None, "all-sheets")
     assert json.loads((tmp_path / "walls" / "evaluation.json").read_text())["candidates"] == ["street_crossing"]
     assert [p.name for p in (tmp_path / "experiments").iterdir()] == [folder.name]
+    assert chances == ["all-sheets"] * 3
+    # a fit on the held-out detectors' chance is an experiment too, its folder named for the chance: the stage's
+    # candidates when none are named (T1's walls were text_weighted with the stage's two; context needs lot outlines,
+    # which this city leaves out)
+    stage = {p.name: p.read_bytes() for p in (tmp_path / "walls").iterdir()}
+    for named, name in ((None, "walls-street_crossing-held-out"),
+                        (["text_weighted", "street_crossing"], "walls-street_crossing+text_weighted-held-out")):
+        got = walls.build_walls(1, named, "held-out")
+        assert got["folder"] == str(tmp_path / "experiments" / name) and chances[-1] == "held-out"
+        assert json.loads((tmp_path / "experiments" / name / "evaluation.json").read_text())["candidates"] == (
+            named or ["street_crossing"])
+    assert {p.name: p.read_bytes() for p in (tmp_path / "walls").iterdir()} == stage
+    with pytest.raises(ValueError, match="unknown text chance"):
+        walls.build_walls(1, None, "per-quarter")
 
 
 def _pinned(monkeypatch, pinned: bool) -> None:
@@ -764,9 +790,10 @@ def test_the_walls_command_fits_in_a_process_pinned_to_one_thread(monkeypatch):
     from sfzmaps.solver import threads
     fits, evaluations, reruns = [], [], []
     done = {"pairs": 1, "features": 1, "quarters": {}, "candidates": [], "folder": "F", "seconds": 0.0}
-    monkeypatch.setattr(walls, "build_walls", lambda workers=None, candidates=None: fits.append((workers, candidates))
-                        or done)
-    monkeypatch.setattr(walls, "evaluate_candidates", lambda configs, workers=None: evaluations.append(configs) or [])
+    monkeypatch.setattr(walls, "build_walls", lambda workers=None, candidates=None, chance=None:
+                        fits.append((workers, candidates, chance)) or done)
+    monkeypatch.setattr(walls, "evaluate_candidates", lambda configs, workers=None, chance=None:
+                        evaluations.append((configs, chance)) or [])
     monkeypatch.setattr(threads, "run_pinned", lambda argv: reruns.append(argv) or 0)
     runner = CliRunner()
     _pinned(monkeypatch, True)
@@ -774,20 +801,29 @@ def test_the_walls_command_fits_in_a_process_pinned_to_one_thread(monkeypatch):
     assert runner.invoke(cli.app, ["solver", "walls", "--candidates", "context,street_crossing"]).exit_code == 0
     assert runner.invoke(cli.app, ["solver", "walls", "--candidates", "none"]).exit_code == 0
     assert runner.invoke(cli.app, ["solver", "walls", "--evaluate", "none", "--evaluate", "context"]).exit_code == 0
-    assert fits == [(None, None), (None, ["context", "street_crossing"]), (None, [])]
-    assert evaluations == [[[], ["context"]]] and reruns == []
+    assert runner.invoke(cli.app, ["solver", "walls", "--candidates", "text_weighted,street_crossing,context",
+                                   "--chance", "held-out"]).exit_code == 0
+    assert runner.invoke(cli.app, ["solver", "walls", "--evaluate", "text_weighted", "--chance",
+                                   "held-out"]).exit_code == 0
+    assert fits == [(None, None, None), (None, ["context", "street_crossing"], None), (None, [], None),
+                    (None, ["text_weighted", "street_crossing", "context"], "held-out")]
+    assert evaluations == [([[], ["context"]], None), ([["text_weighted"]], "held-out")] and reruns == []
+    assert runner.invoke(cli.app, ["solver", "walls", "--chance", "per-quarter"]).exit_code != 0     # unknown
+    assert len(fits) == 4
     _pinned(monkeypatch, False)
-    for args in (["--workers", "3"], ["--candidates", "context"], ["--evaluate", "none", "--evaluate", "context"]):
+    for args in (["--workers", "3"], ["--candidates", "context"], ["--evaluate", "none", "--evaluate", "context"],
+                 ["--chance", "held-out"]):
         assert runner.invoke(cli.app, ["solver", "walls", *args]).exit_code == 0
     assert reruns == [["solver", "walls", "--workers", "3"], ["solver", "walls", "--candidates", "context"],
-                      ["solver", "walls", "--evaluate", "none", "--evaluate", "context"]]
-    assert len(fits) == 3 and len(evaluations) == 1
+                      ["solver", "walls", "--evaluate", "none", "--evaluate", "context"],
+                      ["solver", "walls", "--chance", "held-out"]]
+    assert len(fits) == 4 and len(evaluations) == 2
 
 
-def test_the_stages_walls_read_no_terra_boxes(tmp_path, monkeypatch):
-    """The stage's candidates include text_weighted, so `load_inputs` never builds Terra's letter share (it would read
-    prints/terra_boxes.json); the text chance it reads instead is the held-out detectors' (`textgrid.text_chance`).  An
-    experiment that leaves text_weighted out still reads Terra's boxes."""
+def test_the_stages_walls_read_terra_boxes_and_t1s_walls_none(tmp_path, monkeypatch):
+    """The stage's candidates leave text_weighted out, so `load_inputs` builds Terra's letter share (from
+    prints/terra_boxes.json), and street_crossing reads the default text chance (`solver-text`'s).  T1's walls
+    (text_weighted with the stage's two, on the held-out detectors' chance) read no Terra boxes, and that chance."""
     import geopandas as gpd
     from shapely.geometry import box
     L, ink, _, _ = _district_city()
@@ -799,13 +835,13 @@ def test_the_stages_walls_read_no_terra_boxes(tmp_path, monkeypatch):
     np.savez(tmp_path / "labels" / "strokes.npz", **s)
     gpd.GeoDataFrame(geometry=[box(0, 0, 40, 40)] * L.n).to_parquet(tmp_path / "lots" / "table.parquet")
     chance = np.full(ink.shape, 9, np.uint8)
-    reads = []
+    reads, sources = [], []
     monkeypatch.setattr(walls.lots, "load_lots", lambda: L)
     monkeypatch.setattr(walls.page, "load_sheets", lambda: np.ones(ink.shape, np.uint8))
     monkeypatch.setattr(walls.page, "load_ink", lambda: ink)
-    monkeypatch.setattr(textgrid, "text_chance", lambda: chance)
+    monkeypatch.setattr(textgrid, "text_chance", lambda source=None: sources.append(source) or chance)
     monkeypatch.setattr(walls, "terra_text", lambda shape: reads.append(shape) or np.zeros(shape, bool))
     got = walls.load_inputs([list(walls.DEFAULT_CANDIDATES)])
-    assert reads == [] and got.letter is None and got.text is chance
-    walls.load_inputs([["street_crossing"]])               # an experiment without text_weighted
-    assert len(reads) == 1
+    assert len(reads) == 1 and got.letter is not None and got.text is chance and sources == [None]
+    got = walls.load_inputs([["text_weighted", "street_crossing", "context"]], "held-out")
+    assert len(reads) == 1 and got.letter is None and got.text is chance and sources == [None, "held-out"]

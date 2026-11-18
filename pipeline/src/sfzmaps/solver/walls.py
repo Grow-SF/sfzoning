@@ -3,12 +3,11 @@ that a printed district line runs between them, fitted held out by quarter.
 
 The features (`design`): the border evidence of `wallevidence` (F), F again times "the pair faces across a street"
 (no touching px), and the lots' character: hats of the difference of their log areas (AREA_DIFFERENCE_KNOTS), the
-same times across a street, and hats of the smaller log area (SMALLER_AREA_KNOTS; areas in square feet).  Where a
-stroke is text the stage reads the detector's chance of text (`text_weighted`: the held-out detectors of stage
-`solver-text-reader`, `textgrid`), never Terra's boxes.  Only an experiment that leaves `text_weighted` out still
-reads them: Terra's letter share of each stroke (`terra_text`, from `prints/terra_boxes.json`, every kind, each drawn
-as its word's rectangle on the sheet's page, kept when its centre is inside the sheet's crop (`page/frames.json`) and
-in no cut box, and put on the grid through the sheet's corrected placement).
+same times across a street, and hats of the smaller log area (SMALLER_AREA_KNOTS; areas in square feet).  The
+letter share of each stroke comes from Terra's text boxes (`prints/terra_boxes.json`, every kind), each drawn as its
+word's rectangle on the sheet's page, kept when its centre is inside the sheet's crop (`page/frames.json`) and in no
+cut box, and put on the grid through the sheet's corrected placement (`terra_text`); a fit with `text_weighted` reads
+the detector's chance there instead, and reads no Terra boxes.
 
 One ridge logistic regression per quarter q (`fit_quarter`: Newton's method from zero, RIDGE on every weight, at
 most MAX_STEPS steps, stopping when no weight moves TOLERANCE).  Its target is that the two lots' codes in the
@@ -18,16 +17,19 @@ is left to the solve's energy.
 
 Candidate features (CANDIDATES, in the order they are tried): the five of `wallevidence.OPTIONS` (text_weighted,
 text_weighted_beside_letters, street_crossing, no_city_limit, text_discounted_enclosure), read through the detector's
-text chance on the grid (`textgrid.text_chance`, from the held-out detectors' chance on each sheet's page) and the
-merged page's ink, and
+text chance on the grid (`textgrid.text_chance`: by default the one detector's chance on each sheet's page, stage
+`solver-text`; with `chance="held-out"` the four held-out detectors', stage `solver-text-reader`) and the merged
+page's ink, and
   context           (`context`, after the lots' character) touching pairs: hats over KIND_KNOTS of how the line
                     between the lots' centroids runs along their long axes (the mean |cos| with each lot's minimum
                     rotated rectangle's long side: 0 side by side, 0.5 between, 1 back to back); pairs across a
                     street: hats over STREET_WIDTH_KNOTS of the street's width (the distance between the two lots)
-The stage fits with DEFAULT_CANDIDATES (street_crossing, context and text_weighted): the first two chosen by held-out
-log loss, the third because it ties it without Terra's boxes.  A fit with other
-candidates (`build_walls(candidates=...)`, `sfzmaps solver walls --candidates`) is an experiment, written to its own
-folder (`runs.walls_experiment_dir`) for a solve to read with `--walls`, never over the stage's.
+The stage fits with DEFAULT_CANDIDATES (street_crossing and context), chosen by held-out log loss, on the default
+text chance.  A fit with other candidates (`build_walls(candidates=...)`, `sfzmaps solver walls --candidates`) or on
+the held-out detectors' chance (`build_walls(chance="held-out")`, `--chance held-out`; with `--candidates
+text_weighted,street_crossing,context` it is 2026-11-16's T1: no Terra boxes, and no chance from a detector that saw
+the quarter) is an experiment, written to its own folder (`runs.walls_experiment_dir`) for a solve to read with
+`--walls`, never over the stage's.
 `evaluate_candidates` scores several configurations from inputs read once, and writes nothing.
 
 Writes, under data/solver/walls/ (the stage's) or the experiment's folder:
@@ -71,10 +73,11 @@ CANDIDATES = (wallevidence.TEXT_WEIGHTED, wallevidence.TEXT_WEIGHTED_BESIDE_LETT
 # The candidate features the stage fits with (`build_walls()`): each kept only if it lowers the held-out log loss in
 # at least three quarters.  Street crossing and context, the set with the lowest held-out log loss (nw/ne/sw/se
 # .0978/.1027/.0452/.0611 against .0978/.1049/.0486/.0635 with none: better in three quarters, level in nw); either
-# alone, or with a text weighting added, improves fewer quarters.  `text_weighted` is added so that the walls read no
-# output of Terra (an LLM): with it the held-out log loss ties (README), and the text chance it reads is the held-out
-# detectors' (`textgrid`).
-DEFAULT_CANDIDATES: tuple[str, ...] = (wallevidence.TEXT_WEIGHTED, wallevidence.STREET_CROSSING, CONTEXT)
+# alone, or with a text weighting added, improves fewer quarters.  (From 2026-11-16 to 11-18 the stage also fitted
+# `text_weighted` on the held-out detectors' chance, so as to read no Terra boxes: 7,001 wrong lots against 4,543.
+# Shipping on the saved reads, the walls went back to these two; that fit is now the experiment `--candidates
+# text_weighted,street_crossing,context --chance held-out`.)
+DEFAULT_CANDIDATES: tuple[str, ...] = (wallevidence.STREET_CROSSING, CONTEXT)
 
 
 def check_candidates(names) -> tuple[str, ...]:
@@ -244,10 +247,10 @@ class Inputs:
     ink: np.ndarray | None
 
 
-def load_inputs(configs) -> Inputs:
+def load_inputs(configs, chance: str | None = None) -> Inputs:
     """Read, once, what the walls need to fit every configuration of `configs` (each a list of candidate names; see
-    `Inputs`).  The text chance is computed from the detector's chance on each sheet's page
-    (`textgrid.text_chance`)."""
+    `Inputs`).  The text chance is computed from the detector's chance on each sheet's page (`textgrid.text_chance`
+    from `chance`, one of `textgrid.SOURCES`; None for the default, the one detector of `solver-text`)."""
     import geopandas as gpd
     import shapely
 
@@ -268,7 +271,7 @@ def load_inputs(configs) -> Inputs:
         del boxes
         log.info("letter share: %d of %d strokes touch text (%.0f s)", (letter > 0).sum(), len(letter),
                  time.perf_counter() - t0)
-    text = textgrid.text_chance() if used & set(wallevidence.READS_TEXT) else None
+    text = textgrid.text_chance(chance) if used & set(wallevidence.READS_TEXT) else None
     ink = page.load_ink() if wallevidence.STREET_CROSSING in used else None
     geometries = gpd.read_parquet(paths.LOTS_DIR / "table.parquet").geometry.values
     log_area = np.log(np.maximum(shapely.area(geometries), 1.0))
@@ -285,17 +288,18 @@ def candidate_design(inputs: Inputs, candidates=(), workers: int = 1) -> np.ndar
     return design(F, inputs.lots, inputs.log_area, extra)
 
 
-def evaluate_candidates(configs, workers: int | None = None) -> list[dict]:
+def evaluate_candidates(configs, workers: int | None = None, chance: str | None = None) -> list[dict]:
     """Fit the walls under each configuration of `configs` (each a list of candidate names; [] is the default set)
-    per held-out quarter, as `build_walls` fits them (the table as downloaded), from inputs read once.  Returns one
-    evaluation per configuration, in order (per quarter the held-out log loss and pairs, the training log loss and
-    pairs; the pairs, features and candidates).  Writes nothing."""
+    per held-out quarter, as `build_walls` fits them (the table as downloaded), from inputs read once, the text chance
+    from `chance` (`textgrid.SOURCES`; None for the default).  Returns one evaluation per configuration, in order (per
+    quarter the held-out log loss and pairs, the training log loss and pairs; the pairs, features and candidates).
+    Writes nothing."""
     configs = [check_candidates(c) for c in configs]
     if not configs:
         raise ValueError("no configuration to evaluate")
     threads.warn_unless_pinned(log, "the walls' evaluation")
     workers = workers or max(1, (os.cpu_count() or 2) // 2)
-    inputs = load_inputs(configs)
+    inputs = load_inputs(configs, chance)
     out = []
     for candidates in configs:
         _, evaluation = fit_walls(candidate_design(inputs, candidates, workers), inputs.lots)
@@ -303,24 +307,26 @@ def evaluate_candidates(configs, workers: int | None = None) -> list[dict]:
     return out
 
 
-def build_walls(workers: int | None = None, candidates=None) -> dict:
+def build_walls(workers: int | None = None, candidates=None, chance: str | None = None) -> dict:
     """Fit the wall odds and write walls_{q}.npz and evaluation.json, and text_chance.png
-    (`textgrid.write_text_chance`) when a candidate reads it: with `candidates` None, the stage's walls, with
-    DEFAULT_CANDIDATES, into WALLS_DIR; with candidates named (a list, maybe empty), an experiment, into its own folder
-    (`runs.walls_experiment_dir`), leaving the stage's alone.  They are written into a fresh folder that then takes
-    the target's place (`runs.fresh_folder`, `runs.replace_folder`), so nothing of an earlier fit is left.
-    `workers`: processes for the closing paths (default half the CPUs).  Returns the evaluation, the folder and the
-    seconds taken (the last two not written)."""
+    (`textgrid.write_text_chance`) when a candidate reads it: with `candidates` and `chance` None, the stage's walls,
+    with DEFAULT_CANDIDATES on the default text chance, into WALLS_DIR; with candidates named (a list, maybe empty) or
+    another text chance (`textgrid.SOURCES`: "held-out"), an experiment, into its own folder
+    (`runs.walls_experiment_dir`; DEFAULT_CANDIDATES when none are named), leaving the stage's alone.  They are written
+    into a fresh folder that then takes the target's place (`runs.fresh_folder`, `runs.replace_folder`), so nothing of
+    an earlier fit is left.  `workers`: processes for the closing paths (default half the CPUs).  Returns the
+    evaluation, the folder and the seconds taken (the last two not written)."""
     from sfzmaps.solver import textgrid
     t0 = time.perf_counter()
-    if candidates is None:
+    chance = textgrid.check_source(chance)
+    if candidates is None and chance == textgrid.DEFAULT_SOURCE:
         candidates, target = check_candidates(DEFAULT_CANDIDATES), runs.WALLS_DIR
     else:
-        candidates = check_candidates(candidates)
-        target = runs.walls_experiment_dir(candidates)
+        candidates = check_candidates(DEFAULT_CANDIDATES if candidates is None else candidates)
+        target = runs.walls_experiment_dir(candidates, None if chance == textgrid.DEFAULT_SOURCE else chance)
     threads.warn_unless_pinned(log, "the walls")
     workers = workers or max(1, (os.cpu_count() or 2) // 2)
-    inputs = load_inputs([candidates])
+    inputs = load_inputs([candidates], chance)
     X = candidate_design(inputs, candidates, workers)
     odds, evaluation = fit_walls(X, inputs.lots)
     evaluation["candidates"] = list(candidates)

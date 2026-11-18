@@ -3157,19 +3157,8 @@ stages:
       - inputs/merged-page/2000-digital-zoning.json
       - data/solver/lots
       - data/solver/labels/strokes.npz
-      - data/solver/text-reader/2000-digital-zoning-p01/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p02/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p03/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p04/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p05/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p06/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p07/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p08/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p09/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p10/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p11/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p12/chance.png
-      - data/solver/text-reader/2000-digital-zoning-p13/chance.png
+      - data/solver/prints/terra_boxes.json
+      - data/solver/text/chance
       - data/work/2000-digital-zoning
       - data/warp/2000-digital-zoning
     outs:

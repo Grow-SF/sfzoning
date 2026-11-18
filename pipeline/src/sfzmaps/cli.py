@@ -1209,25 +1209,32 @@ def solver_walls(
                                        help="Only score a configuration (comma-separated candidates; 'none' for the "
                                             "default set) and print its held-out log loss; repeat for several, all "
                                             "fitted on inputs read once. Writes nothing."),
+    chance: str = typer.Option(None, "--chance",
+                               help="The text chance the candidates read: 'all-sheets' (the default, the stage's: "
+                                    "solver-text's detector) or 'held-out' (solver-text-reader's four held-out "
+                                    "detectors). A fit on 'held-out' is an experiment, into "
+                                    "data/solver/experiments/walls-<names>-held-out/."),
 ) -> None:
     """Fit the wall odds, held out by quarter, from the raw page's strokes: the stage's walls, with
-    walls.DEFAULT_CANDIDATES (data/solver/walls/walls_<q>.npz and evaluation.json), or with --candidates an
-    experiment's."""
+    walls.DEFAULT_CANDIDATES (data/solver/walls/walls_<q>.npz and evaluation.json), or with --candidates or
+    --chance held-out an experiment's."""
     import logging
 
-    from sfzmaps.solver import walls
+    from sfzmaps.solver import textgrid, walls
+    textgrid.check_source(chance)
     _in_one_thread(["solver", "walls", *(["--workers", str(workers)] if workers is not None else []),
                     *(["--candidates", candidates] if candidates is not None else []),
-                    *[a for c in evaluate or [] for a in ("--evaluate", c)]])
+                    *[a for c in evaluate or [] for a in ("--evaluate", c)],
+                    *(["--chance", chance] if chance is not None else [])])
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     def names(text: str) -> list[str]:
         return [c.strip() for c in text.split(",") if c.strip() and c.strip() != "none"]
 
     if evaluate:
-        results = walls.evaluate_candidates([names(c) for c in evaluate], workers)
+        results = walls.evaluate_candidates([names(c) for c in evaluate], workers, chance)
     else:
-        results = [walls.build_walls(workers, None if candidates is None else names(candidates))]
+        results = [walls.build_walls(workers, None if candidates is None else names(candidates), chance)]
     for s in results:
         typer.echo(f"{', '.join(s['candidates']) or 'no candidates'}: {s['pairs']:,} pairs, {s['features']} "
                    "features; held-out log loss "

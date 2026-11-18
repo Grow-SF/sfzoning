@@ -48,12 +48,13 @@ def solve_dir(run: str) -> Path:
     return SOLVE_DIR if run == FINAL_RUN else EXPERIMENTS_DIR / run
 
 
-def walls_experiment_dir(candidates) -> Path:
+def walls_experiment_dir(candidates, chance: str | None = None) -> Path:
     """The folder of walls fitted with the candidate features `candidates` as an experiment (`sfzmaps solver walls
-    --candidates`): EXPERIMENTS_DIR/walls-<the names sorted, joined by "+"; "none" for none>.  A solve reads them
-    with `--walls`."""
+    --candidates`): EXPERIMENTS_DIR/walls-<the names sorted, joined by "+"; "none" for none>, then "-<chance>" when
+    fitted on a text chance other than the default (`--chance`, `textgrid.SOURCES`).  A solve reads them with
+    `--walls`."""
     names = sorted(candidates)
-    return EXPERIMENTS_DIR / f"{WALLS_PREFIX}{'+'.join(names) or 'none'}"
+    return EXPERIMENTS_DIR / f"{WALLS_PREFIX}{'+'.join(names) or 'none'}{f'-{chance}' if chance else ''}"
 
 
 def check_final(run: str, walls_dir=None, true_borders: bool = False) -> None:

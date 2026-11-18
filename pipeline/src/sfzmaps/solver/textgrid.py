@@ -1,6 +1,11 @@
-"""The text detector's chance of text on the solver's grid, from the four held-out detectors (stage
-`solver-text-reader`) and their chance on each 2000 sheet's page (`paths.READER_TEXT_DIR/<sheet>/chance.png`, uint8
-chance x 255 in its page px, each px from the detector that never saw its quarter of the city or the answered blocks).
+"""The text detector's chance of text on the solver's grid, from one of two sources (`SOURCES`), each a chance on every
+2000 sheet's page (uint8, chance x 255 in its page px):
+
+  all-sheets  (ALL_SHEETS, the default, what the stage's walls read) the one detector of stage `solver-text`, trained on
+              every px of every map Terra read, these sheets too: `paths.TEXT_CHANCE_DIR/<sheet>.png`
+  held-out    (HELD_OUT, an experiment's) the four held-out detectors of stage `solver-text-reader`, each page px from
+              the detector that never saw its quarter of the city or the answered blocks:
+              `paths.READER_TEXT_DIR/<sheet>/chance.png`
 
 Each sheet's chance is read through the sheet's corrected placement exactly as the merged page reads its ink
 (`page.sheet_px`: the same crop, the frame of `page/frames.json` minus the cut boxes, and the same page px for every
@@ -28,15 +33,32 @@ log = logging.getLogger(__name__)
 
 TEXT_CHANCE_FILE = "text_chance.png"
 CHANCE_FILE = "chance.png"        # a sheet's chance in the reader stage's folder (`textnet.reader_stage.CHANCE_FILE`)
+ALL_SHEETS = "all-sheets"         # the one detector of `solver-text`, trained on every px (the stage's walls read it)
+HELD_OUT = "held-out"             # the four held-out detectors of `solver-text-reader` (2026-11-16's T1; an option)
+SOURCES = (ALL_SHEETS, HELD_OUT)
+DEFAULT_SOURCE = ALL_SHEETS
 
 
-def _chance_files(names) -> dict[str, Path]:
-    """The held-out detectors' chance file of each sheet; a missing one is an error naming its stage."""
-    files = {name: paths.READER_TEXT_DIR / name / CHANCE_FILE for name in names}
+def check_source(source: str | None) -> str:
+    """The chance's source: `source`, or DEFAULT_SOURCE for None; an unknown name is an error."""
+    source = DEFAULT_SOURCE if source is None else source
+    if source not in SOURCES:
+        raise ValueError(f"unknown text chance {source!r}: one of {', '.join(SOURCES)}")
+    return source
+
+
+def _chance_files(names, source: str = DEFAULT_SOURCE) -> dict[str, Path]:
+    """The chance file of each sheet from `source` (`SOURCES`); a missing one is an error naming its stage."""
+    if check_source(source) == ALL_SHEETS:
+        files = {name: paths.TEXT_CHANCE_DIR / f"{name}.png" for name in names}
+        stage = "the detector first (`sfzmaps solver text`, stage solver-text)"
+    else:
+        files = {name: paths.READER_TEXT_DIR / name / CHANCE_FILE for name in names}
+        stage = "the detectors first (`sfzmaps solver text-reader`, stage solver-text-reader)"
     missing = [str(f) for f in files.values() if not f.is_file()]
     if missing:
-        raise FileNotFoundError(f"can't read {missing[0]} ({len(missing)} of {len(names)} sheets missing): train the "
-                                "detectors first (`sfzmaps solver text-reader`, stage solver-text-reader)")
+        raise FileNotFoundError(f"can't read {missing[0]} ({len(missing)} of {len(names)} sheets missing): train "
+                                + stage)
     return files
 
 
@@ -49,12 +71,12 @@ def _read(path, shape) -> np.ndarray:
     return a
 
 
-def text_chance() -> np.ndarray:
-    """The chance of text at every grid px (uint8, chance x 255, HEIGHT x WIDTH; see the module).  A missing chance
-    file is an error.  Nothing is written."""
+def text_chance(source: str | None = None) -> np.ndarray:
+    """The chance of text at every grid px (uint8, chance x 255, HEIGHT x WIDTH; see the module), from `source`
+    (`SOURCES`; None for DEFAULT_SOURCE).  A missing chance file is an error.  Nothing is written."""
     t0 = time.perf_counter()
     names = paths.check_sheets()
-    files = _chance_files(names)
+    files = _chance_files(names, check_source(source))
     frames = json.loads((paths.PAGE_DIR / "frames.json").read_text())
     cuts = page.load_cuts()
     out = np.zeros((grid.HEIGHT, grid.WIDTH), np.uint8)

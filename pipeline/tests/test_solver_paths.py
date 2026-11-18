@@ -70,9 +70,12 @@ def test_a_solve_never_takes_the_folder_of_walls_fitted_as_an_experiment():
     assert walls == runs.EXPERIMENTS_DIR / "walls-context+street_crossing"           # named by the sorted list
     assert runs.walls_experiment_dir(["context", "street_crossing"]) == walls
     assert runs.walls_experiment_dir([]) == runs.EXPERIMENTS_DIR / "walls-none"
+    held_out = runs.walls_experiment_dir(["street_crossing", "context"], "held-out")     # another text chance
+    assert held_out == runs.EXPERIMENTS_DIR / "walls-context+street_crossing-held-out"
     # a solve built afresh in that folder would delete the walls it reads
-    with pytest.raises(ValueError, match="walls"):
-        runs.solve_dir(walls.name)
+    for folder in (walls, held_out):
+        with pytest.raises(ValueError, match="walls"):
+            runs.solve_dir(folder.name)
 
 
 def test_a_solve_never_takes_the_folder_of_a_text_detector_trial():
@@ -116,7 +119,7 @@ def test_a_default_wall_fit_leaves_no_text_chance_of_an_earlier_candidates_fit(t
     # the fit itself stubbed: no text read (inputs.text None), one pair
     inputs = walls.Inputs(lots=None, mapped=None, strokes={}, log_area=None, geometries=None, letter=None, text=None,
                           ink=None)
-    monkeypatch.setattr(walls, "load_inputs", lambda configs: inputs)
+    monkeypatch.setattr(walls, "load_inputs", lambda configs, chance=None: inputs)
     monkeypatch.setattr(walls, "candidate_design", lambda inputs, candidates, workers: np.zeros((1, 1)))
     monkeypatch.setattr(walls, "fit_walls", lambda X, lots_: ({q: np.zeros(1) for q in paths.QUARTERS},
                                                              {"pairs": 1, "features": 1, "quarters": {}}))

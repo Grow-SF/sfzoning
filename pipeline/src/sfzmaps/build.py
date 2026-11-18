@@ -227,14 +227,14 @@ def stages() -> dict[str, Stage]:
                                         "data/ref"),
                                  writes=("data/solver/labels",), code=("sfzmaps.solver.labels_stage",))
     # the walls read what `walls.build_walls` reads: the merged page (and its frames), the cut boxes, the lots, the
-    # strokes, the warp's placements, and for the text discount the held-out detectors' chance (each sheet's
-    # chance.png, not their weights or other outputs) and the sheets' pages it is read on.  Not the Terra boxes: the
-    # walls read no LLM output.
-    out["solver-walls"] = Stage("solver-walls", (), (), ("solver-labels", "solver-text-reader"),
+    # strokes, the Terra boxes, the warp's placements, and for the text discount the detector's chance (stage
+    # solver-text's, the default `textgrid` source) and the sheets' pages it is read on.  (The held-out detectors'
+    # chance is an experiment's, `walls --chance held-out`, never the stage's.)
+    out["solver-walls"] = Stage("solver-walls", (), (), ("solver-labels", "solver-text"),
                                 command=("solver", "walls"),
                                 reads=("data/solver/page", "inputs/merged-page/2000-digital-zoning.json",
                                        "data/solver/lots", "data/solver/labels/strokes.npz",
-                                       *(f"data/solver/text-reader/{s}/chance.png" for s in paths.SHEETS),
+                                       "data/solver/prints/terra_boxes.json", "data/solver/text/chance",
                                        "data/work/2000-digital-zoning", "data/warp/2000-digital-zoning"),
                                 writes=("data/solver/walls",), code=("sfzmaps.solver.walls",))
     # the solve: the placement, the four held-out solves, the join, the data errors and the report.  Of the inputs
