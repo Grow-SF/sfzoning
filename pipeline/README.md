@@ -1048,6 +1048,20 @@ The commands, run from `pipeline/`:
   not for `final`, whose solve writes its own).
 - `sfzmaps solver published [--districts PATH]` scores the pipeline's published 2000 map
   (`data/work/2000-digital-zoning/districts_raw.parquet`) the same way, as the run `published`.
+- `sfzmaps solver publish [--force]` (stage `solver-publish`, after `solver-solve` and `period-2000-digital`)
+  publishes the 2000 map's zoning from the solve (`districts/solved.py`) into `data/out/2000-digital-zoning/districts/`.
+  Each lot of the read (`districts_raw.parquet`, DataSF's lots of 2000) takes the code of the table lots covering most
+  of its area, their overlaps summed per code; the table's rows are never looked up by blklot, so the 45 rows that
+  share a blklot with another row keep their own codes, and a lot no table lot overlaps takes the nearest one's. Codes
+  are in the one spelling (`solver/codes.canon`) with " NCD" put back on the 16 named districts, so every code has a
+  category (`unknown_codes.json` stays empty; a code with none stops the publish). Then unzoned blocks, overrides,
+  heights and parks apply as for every series. A lot's confidence is the solve's share of scored lots right (every
+  lot). The period's stage still reads the zoning and the heights but no longer publishes them: it makes the sheets
+  the solver reads, so taking the solve itself would be a cycle, and DVC lets no two stages write one folder, so its
+  outputs in `data/out/2000-digital-zoning/` are listed file by file (`build._period_out_files`) and the published
+  files of `districts/` (`solved.PUBLISHED`) are this stage's. `districts --republish --series 2000-digital-zoning`
+  publishes from the solve too. `scripts/incidents/ship_differences.py` scores the new map against the published one
+  and writes the page of the areas where they differ.
 
 Dependency notes: the max-flow cuts use OR-Tools' `SimpleMaxFlow` (Apache-2.0) through `solver/mincut.py`, which scales
 the capacities to whole numbers and reports the bound on the rounding's effect on a cut's cost.

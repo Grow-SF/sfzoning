@@ -1366,5 +1366,36 @@ def solver_published(
     _solver_score([save_published(districts)], True)
 
 
+@solver_app.command("publish")
+def solver_publish(force: bool = typer.Option(False, "--force", help="Publish even when the outputs are current.")
+                   ) -> None:
+    """Publish the 2000 map's zoning from the solve (the solver-publish stage): out/2000-digital-zoning/districts/,
+    each lot of the read with the solve's code (districts/solved.py), then unzoned blocks, overrides, heights and
+    parks as for every series.  Fails if a lot of the read has no code or a code has no category."""
+    import logging
+
+    import pandas as pd
+    import pyogrio
+
+    from sfzmaps import llm
+    from sfzmaps.districts import assemble, solved
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    llm.CACHE_ONLY = True                 # nothing here may reach the network
+    try:
+        d = solved.publish(force=force)
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    unknown = json.loads((d / "unknown_codes.json").read_text())
+    g = pyogrio.read_dataframe(d / "parcels.fgb", columns=["blklot", "code"], read_geometry=False)
+    read = pd.read_parquet(assemble._raw_path(solved.SERIES), columns=["blklot"])["blklot"].astype(str)
+    blank = read[read.isin(set(g.loc[g["code"].isna() | (g["code"] == ""), "blklot"].astype(str)))]
+    typer.echo(f"{solved.SERIES}: {d}; {g['code'].notna().sum():,} of {len(g):,} lots coded; the read's lots "
+               f"{len(read):,}, {len(blank):,} of them with no code; codes with no category {len(unknown)}")
+    if unknown or len(blank):
+        typer.echo(f"no category: {unknown}; no code: {list(blank[:10])}", err=True)
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()

@@ -26,6 +26,9 @@ read_inputs() (the series' sheet files, its hand-made inputs, the parcels and th
 runs), and publishing is skipped when the outputs' fingerprint still matches publish_inputs()
 (the read, heights, overrides, rules and the code that joins them). So a build with nothing
 changed for a series rewrites nothing, and an overrides edit republishes without reading again.
+
+The 2000 map (districts.solved.SOLVED) is published from the 2000 solver's solve, not its read (`published_read`), by
+its own stage after the solve (`sfzmaps solver publish`): reading it leaves its published files alone.
 """
 from __future__ import annotations
 
@@ -47,6 +50,7 @@ from sfzmaps.districts.categories import CATEGORIES, category_for
 from sfzmaps.districts.read import (COLUMNS, MEDIUM, cap_confidence, load_parcels,  # noqa: F401
                                     merge_use_height, read_raw, sheet_statuses)
 from sfzmaps.districts.series import SERIES
+from sfzmaps.districts import solved
 
 log = logging.getLogger(__name__)
 
@@ -157,6 +161,9 @@ PUBLISH_MODULES = ("sfzmaps.districts.assemble", "sfzmaps.districts.categories",
                    "sfzmaps.districts.rules", "sfzmaps.districts.series", "sfzmaps.inputs",
                    "sfzmaps.config", "sfzmaps.fresh", "sfzmaps.parks")
 PUBLISHED = ("parcels.fgb", "districts.fgb", "stats.json", "unknown_codes.json")
+# What else publishing a series of solved.SOLVED runs: its codes come from the 2000 solver's solve.
+SOLVED_MODULES = ("sfzmaps.districts.solved", "sfzmaps.districts.read", "sfzmaps.solver.codes",
+                  "sfzmaps.solver.paths", "sfzmaps.solver.runs")
 
 
 def _rules_csv() -> Path:
@@ -216,6 +223,8 @@ def publish_inputs(series: str) -> list[Path]:
         hs = height_series_of(series)
         if hs:
             files.append(inputs.overrides_path(hs))
+        if series in solved.SOLVED:      # its codes: the solve's, and the code that maps and spells them
+            files += [*solved.inputs(), *(fresh.module_file(m) for m in SOLVED_MODULES)]
     files += [config.REF_DIR / "parcels.parquet", _rules_csv(),
               inputs.parks_path(), inputs.park_maps_path(),     # apply_parks, park_tally
               *(fresh.module_file(m) for m in PUBLISH_MODULES)]
@@ -605,6 +614,8 @@ def publish(series: str, df: pd.DataFrame, year: int, *, partial: bool = False) 
     st["unmapped_parcels"] = int((~geo["blklot"].isin(set(g["blklot"]))).sum())
     st["parks"] = park_tally(year, geo)
     st["provenance"] = read_provenance(series, partial=partial)
+    if series in solved.SOLVED and not partial:
+        st["provenance"]["codes"] = solved.provenance()
     if partial:
         st["partial"] = True
     if series == "today":
@@ -652,9 +663,20 @@ def _publish_full(series: str, *, force: bool = False, today_provenance: bool = 
             _write_json(_prov_path("today"), provenance("today"))
         publish("today", read_today(), date.today().year)
     else:
-        publish(series, pd.read_parquet(_raw_path(series)), SERIES[series].year)
+        publish(series, published_read(series), SERIES[series].year)
     fresh.record(d / "stats.json", publish_inputs(series))
     return d
+
+
+def published_read(series: str) -> pd.DataFrame:
+    """What a series is published from: its saved read; for a series of solved.SOLVED, the read's lots with the 2000
+    solver's codes (solved.solved_read)."""
+    from sfzmaps.districts.read import series_year
+
+    raw = pd.read_parquet(_raw_path(series))
+    if series not in solved.SOLVED:
+        return raw
+    return solved.solved_read(raw, load_parcels(series_year(series)), SERIES[series].year)
 
 
 def run_series(series: str, *, sheets: list[str] | None = None, client=None,
@@ -688,11 +710,16 @@ def run_series(series: str, *, sheets: list[str] | None = None, client=None,
     if info.role == "height":
         if partial:
             return out.parent
-        if _raw_path(zs).exists():
+        if _raw_path(zs).exists() and zs not in solved.SOLVED:
             _publish_full(zs, force=force)
         return out.parent
     if partial:
         return publish(series, pd.read_parquet(out), info.year, partial=True)
+    if series in solved.SOLVED:
+        # published from the 2000 solver's solve by its own stage, after the solve (`sfzmaps solver publish`, or
+        # `districts --republish`): the read's stage makes the sheets the solve reads
+        log.info("%s: read; published from the solve by `sfzmaps solver publish`", series)
+        return out_dir(series)
     return _publish_full(series, force=force)
 
 

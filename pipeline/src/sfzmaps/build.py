@@ -17,6 +17,8 @@ into one tracked folder, and a height series' districts write into its zoning se
   shared        the merged archive the site reads (districts --shared)
   warp-<S>      the sheet warp of one series (sfzmaps warp S), after the stage above that places it
   solver-<part> one of the 2000 solver's inputs (sfzmaps solver <part>), after the 2000 warp
+  solver-publish  the 2000 map's zoning from the solve (sfzmaps solver publish): the published files of
+                out/2000-digital-zoning/districts/, which its period's stage leaves to it
 
 The old pipeline's stages (edition-*, period-*, today, shared) are frozen: the sheet warp replaces
 them, so a build runs only the warp-* stages (`build --force NAME` still runs an old one).
@@ -246,8 +248,33 @@ def stages() -> dict[str, Stage]:
                                        "data/warp/2000-digital-zoning", "inputs/2000-digital-zoning/label_fixes.csv",
                                        "inputs/zoning-2000/table-corrections.csv"),
                                 writes=("data/solver/solve",), code=("sfzmaps.solver.solve",))
-    out["shared"] = Stage("shared", (), (), old, frozen=True)
+    # The 2000 map's zoning published from the solve (`districts/solved.py`): the read's lots with the solve's codes,
+    # then unzoned blocks, overrides, heights and parks as for every series.  Not in the period's stage, which makes
+    # the sheets the solver reads (a cycle): that stage reads the zoning and the heights, and this one writes the
+    # published files of its districts folder (`solved.PUBLISHED`, `_period_out_files`).
+    from sfzmaps.districts import solved
+    s = solved.SERIES
+    height = next(h for h in out[owner[s]].series if SERIES[h].role == "height")
+    out["solver-publish"] = Stage(
+        "solver-publish", (), (), ("refdata", owner[s], "solver-lots", "solver-solve"), command=("solver", "publish"),
+        reads=(f"data/work/{s}/districts_raw.parquet", f"data/work/{s}/districts_raw.json",
+               f"data/out/{s}/districts/height.parquet", f"data/out/{s}/districts/height.json",
+               f"inputs/{s}/overrides.csv", f"inputs/{height}", "inputs/parks.csv", "inputs/park_maps.csv",
+               "data/ref/parcels.parquet", "../docs/research/zoning-districts.csv",
+               "data/solver/solve/runs/final.npz", "data/solver/solve/report.json",
+               "data/solver/lots/table.parquet", "data/solver/lots/lots.npz"),
+        writes=tuple(f"data/out/{s}/districts/{n}" for n in solved.PUBLISHED), code=("sfzmaps.districts.solved",))
+    out["shared"] = Stage("shared", (), (), (*old, "solver-publish"), frozen=True)
     return out
+
+
+def _period_out_files(series: str) -> tuple[str, ...]:
+    """What a period's stage writes in out/<series> of a series published from the solve (districts.solved.SOLVED):
+    its tiles, manifest and review page, and the read of its heights in districts/; the rest of districts/ is
+    solver-publish's (DVC lets no two stages write one folder)."""
+    return (f"{series}.pmtiles", f"{series}.inputs.json", f"{series}-paper.pmtiles", f"{series}-paper.inputs.json",
+            "changes.wgs84.geojson", "manifest.json", "review.html", "districts/height.json",
+            "districts/height.parquet", "districts/height.parquet.answers", "districts/height.parquet.inputs.json")
 
 
 def _text_sheet_files(root: str, series_list, names: tuple[str, ...]) -> tuple[str, ...]:
@@ -350,8 +377,11 @@ def stage_outs(st: Stage) -> list[str]:
         return ["data/saved-reads/images"]
     if st.warp:
         return [f"data/warp/{st.warp}"]
+    from sfzmaps.districts import solved
     names = st.series or st.districts
-    return [f"data/{kind}/{s}" for s in names for kind in ("work", "out")]
+    return [o for s in names for o in (
+        [f"data/work/{s}", *(f"data/out/{s}/{f}" for f in _period_out_files(s))] if s in solved.SOLVED
+        else [f"data/work/{s}", f"data/out/{s}"])]
 
 
 def dvc_yaml() -> str:

@@ -13,10 +13,11 @@ def test_every_series_is_in_exactly_one_stage():
     owned = [s for st in table.values() for s in st.series]
     assert sorted(owned) == sorted(SERIES) and len(owned) == len(set(owned))
     # shared comes last and needs the old stages only: not the saved reads' images (no output is made
-    # from them), not the warp stages (the old pipeline's merge doesn't read them) and not the solver's
+    # from them), not the warp stages (the old pipeline's merge doesn't read them) and not the solver's,
+    # but the 2000 map it publishes
     assert list(table)[-1] == "shared" and set(table["shared"].upstream) == {
         n for n in table if n not in ("shared", "saved-reads") and not n.startswith("warp-")
-        and not table[n].command}
+        and not table[n].command} | {"solver-publish"}
 
 
 def test_a_period_reads_heights_before_zoning_and_never_special_use():
@@ -563,6 +564,54 @@ def test_the_solve_reads_what_the_solve_and_its_report_read():
     assert not any(d.endswith(("solver/walls.py", "solver/wallevidence.py", "solver/textgrid.py"))
                    or "/textnet/" in d or d.startswith(("data/solver/text-", "data/work/")) for d in deps)
     assert build.stage_outs(st) == ["data/solver/solve"]
+
+
+def test_the_2000_map_is_published_after_the_solve_by_its_own_stage():
+    from sfzmaps.districts import solved
+    t = build.stages()
+    st = t["solver-publish"]
+    assert build.stage_commands("solver-publish") == [["solver", "publish"]]
+    assert {"solver-solve", "period-2000-digital"} <= set(st.upstream)
+    deps = build.stage_deps(st)
+    # the solver's files a publish reads, as the stage names them
+    assert [p.relative_to(config.PIPELINE_DIR).as_posix() for p in solved.inputs()] == [
+        d for d in deps if d.startswith("data/solver/")]
+    for d in ("data/work/2000-digital-zoning/districts_raw.parquet",
+              "data/out/2000-digital-zoning/districts/height.parquet", "inputs/2000-digital-zoning/overrides.csv",
+              "src/sfzmaps/districts/solved.py", "src/sfzmaps/districts/assemble.py", "src/sfzmaps/solver/codes.py"):
+        assert d in deps, d
+    assert build.stage_outs(st) == [f"data/out/2000-digital-zoning/districts/{n}" for n in solved.PUBLISHED]
+    # the period's stage keeps its sheets, tiles and heights, and leaves the published files to it
+    period = build.stage_outs(t["period-2000-digital"])
+    assert "data/work/2000-digital-zoning" in period and "data/out/2000-digital-zoning" not in period
+    assert "data/out/2000-digital-zoning/districts/height.parquet" in period
+    assert "data/out/2000-digital-height" in period
+    assert "data/out/2000-digital-zoning/districts" in build.stage_deps(t["shared"])
+
+
+def _overlaps(a: str, b: str) -> bool:
+    return a == b or a.startswith(b + "/") or b.startswith(a + "/")
+
+
+def test_no_two_stages_write_one_path_and_no_stage_reads_its_own_downstream():
+    # what DVC refuses: one path written by two stages, and a cycle (a stage reading what its own outputs feed)
+    t = build.stages()
+    outs = {n: build.stage_outs(st) for n, st in t.items()}
+    names = list(t)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            assert not any(_overlaps(x, y) for x in outs[a] for y in outs[b]), (a, b)
+    reads = {n: [d for d in build.stage_deps(st) if d.startswith("data/")] for n, st in t.items()}
+    after = {n: {m for m in names if m != n and any(_overlaps(d, o) for d in reads[m] for o in outs[n])}
+             for n in names}
+    for n in names:                                       # nothing downstream of a stage feeds it
+        seen, todo = set(), list(after[n])
+        while todo:
+            m = todo.pop()
+            if m not in seen:
+                seen.add(m)
+                todo.extend(after[m])
+        assert n not in seen, n
 
 
 def test_needs_prepare_is_false_for_command_stages():

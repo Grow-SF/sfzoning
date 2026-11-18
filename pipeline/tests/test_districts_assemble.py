@@ -87,7 +87,7 @@ def test_public_land_is_public_before_it_is_counted_as_a_park(data, monkeypatch)
     inputs.parks_path().write_text("name,blklot,since,source,public_since\nPresidio,1000001,1994,,1776\n")
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: _raw(["R-1", "R-1"]))
     for series, count, note in (("1960", 0, "Public land; this map zones it R-1"),
-                                ("2000-digital-zoning", 1, "Park since 1994; this map zones it R-1")):
+                                ("1996-2000-zoning", 1, "Park since 1994; this map zones it R-1")):
         d = assemble.run_series(series)
         g = gpd.read_file(d / "parcels.fgb").set_index("blklot")
         assert g.loc["1000001", "category"] == "public" and g.loc["1000001", "note"] == note
@@ -135,22 +135,22 @@ def test_no_overrides_is_identity(data):
 
 
 def test_height_join_by_blklot(data, monkeypatch):
-    raws = {"2000-digital-zoning": _raw(["RH-1", "RH-2", "RM-1", "NC-1", "M-1"]),
-            "2000-digital-height": _raw([None, None, None], height=["40-X", "40-X", "65-A"], conf=0.7)}
+    raws = {"1996-2000-zoning": _raw(["RH-1", "RH-2", "RM-1", "NC-1", "M-1"]),
+            "1996-2000-height": _raw([None, None, None], height=["40-X", "40-X", "65-A"], conf=0.7)}
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: raws[s].copy())
-    hz = assemble.run_series("2000-digital-height")
-    assert hz == config.OUT_DIR / "2000-digital-zoning" / "districts"
+    hz = assemble.run_series("1996-2000-height")
+    assert hz == config.OUT_DIR / "1996-2000-zoning" / "districts"
     assert (hz / "height.parquet").exists()
-    assert not (config.OUT_DIR / "2000-digital-height").exists()
-    out = assemble.run_series("2000-digital-zoning")
+    assert not (config.OUT_DIR / "1996-2000-height").exists()
+    out = assemble.run_series("1996-2000-zoning")
     g = gpd.read_file(out / "parcels.fgb").set_index("blklot")
     assert g.loc["1000001", "height_code"] == "40-X" and g.loc["1001001", "height_code"] == "65-A"
     assert pd.isna(g.loc["1001002", "height_code"])
     assert g.loc["1000001", "code"] == "RH-1" and g.loc["1000001", "confidence"] == 0.9
     # a height rerun after the zoning run republishes the zoning output (forced: the stub's
     # new answer comes from no input the fingerprint sees)
-    raws["2000-digital-height"] = _raw([None], height=["80-B"])
-    assemble.run_series("2000-digital-height", force=True)
+    raws["1996-2000-height"] = _raw([None], height=["80-B"])
+    assemble.run_series("1996-2000-height", force=True)
     g = gpd.read_file(out / "parcels.fgb").set_index("blklot")
     assert g.loc["1000001", "height_code"] == "80-B"
 
@@ -281,21 +281,21 @@ def test_provenance_written_and_copied_into_stats(data, monkeypatch):
 
     monkeypatch.setattr(regionread, "ENABLED", True)
     monkeypatch.setattr(assemble, "git_rev", lambda: "abc1234-dirty")
-    raws = {"2000-digital-zoning": _raw(["RH-1", "RH-2", "RM-1", "NC-1", "M-1"]),
-            "2000-digital-height": _raw([None, None], height=["40-X", "65-A"])}
+    raws = {"1996-2000-zoning": _raw(["RH-1", "RH-2", "RM-1", "NC-1", "M-1"]),
+            "1996-2000-height": _raw([None, None], height=["40-X", "65-A"])}
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: raws[s].copy())
-    assemble.run_series("2000-digital-height")
-    hp = json.loads((config.OUT_DIR / "2000-digital-zoning" / "districts" / "height.json").read_text())
+    assemble.run_series("1996-2000-height")
+    hp = json.loads((config.OUT_DIR / "1996-2000-zoning" / "districts" / "height.json").read_text())
     assert hp["reader"] == "B" and hp["region_read"] is True and hp["git"] == "abc1234-dirty"
-    out = assemble.run_series("2000-digital-zoning")
-    up = json.loads((config.WORK_DIR / "2000-digital-zoning" / "districts_raw.json").read_text())
+    out = assemble.run_series("1996-2000-zoning")
+    up = json.loads((config.WORK_DIR / "1996-2000-zoning" / "districts_raw.json").read_text())
     assert set(up) >= {"reader", "region_read", "git", "read_at"}
     st = json.loads((out / "stats.json").read_text())
     assert st["provenance"] == {"use": up, "height": hp}
     rows = {r["series"]: r for r in assemble.status_rows()}
-    assert rows["2000-digital-zoning"]["needs_rerun"] is False
+    assert rows["1996-2000-zoning"]["needs_rerun"] is False
     assert rows["1960"]["needs_rerun"] is True and rows["1960"]["use"] is None
-    assert "2000-digital-zoning" in assemble.format_status(list(rows.values()))
+    assert "1996-2000-zoning" in assemble.format_status(list(rows.values()))
 
 
 def test_needs_rerun_rules():
@@ -474,12 +474,12 @@ def test_blocks_of_and_unzoned_by_block_num(suffixed, monkeypatch):
 
 
 def test_height_series_overrides_set_height_code(data, monkeypatch):
-    _overrides("blklot,block,height_code\n1000001,,105-E\n,1001,OS\n", "2000-digital-height")
-    raws = {"2000-digital-zoning": _raw(["RH-1", "RH-2", "RM-1", "NC-1", "M-1"]),
-            "2000-digital-height": _raw([None, None], height=["40-X", "40-X"])}
+    _overrides("blklot,block,height_code\n1000001,,105-E\n,1001,OS\n", "1996-2000-height")
+    raws = {"1996-2000-zoning": _raw(["RH-1", "RH-2", "RM-1", "NC-1", "M-1"]),
+            "1996-2000-height": _raw([None, None], height=["40-X", "40-X"])}
     monkeypatch.setattr(assemble, "read_raw", lambda s, **k: raws[s].copy())
-    assemble.run_series("2000-digital-height")
-    g = gpd.read_file(assemble.run_series("2000-digital-zoning") / "parcels.fgb").set_index("blklot")
+    assemble.run_series("1996-2000-height")
+    g = gpd.read_file(assemble.run_series("1996-2000-zoning") / "parcels.fgb").set_index("blklot")
     assert g.loc["1000001", "height_code"] == "105-E" and g.loc["1000002", "height_code"] == "40-X"
     assert (g.loc[["1001001", "1001002"], "height_code"] == "OS").all()
     assert g.loc["1000001", "code"] == "RH-1" and g.loc["1000001", "confidence"] == 0.9

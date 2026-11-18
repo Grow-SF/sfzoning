@@ -717,7 +717,27 @@ stages:
     outs:
       - data/work/2000-digital-zoning:
           persist: true
-      - data/out/2000-digital-zoning:
+      - data/out/2000-digital-zoning/2000-digital-zoning.pmtiles:
+          persist: true
+      - data/out/2000-digital-zoning/2000-digital-zoning.inputs.json:
+          persist: true
+      - data/out/2000-digital-zoning/2000-digital-zoning-paper.pmtiles:
+          persist: true
+      - data/out/2000-digital-zoning/2000-digital-zoning-paper.inputs.json:
+          persist: true
+      - data/out/2000-digital-zoning/changes.wgs84.geojson:
+          persist: true
+      - data/out/2000-digital-zoning/manifest.json:
+          persist: true
+      - data/out/2000-digital-zoning/review.html:
+          persist: true
+      - data/out/2000-digital-zoning/districts/height.json:
+          persist: true
+      - data/out/2000-digital-zoning/districts/height.parquet:
+          persist: true
+      - data/out/2000-digital-zoning/districts/height.parquet.answers:
+          persist: true
+      - data/out/2000-digital-zoning/districts/height.parquet.inputs.json:
           persist: true
       - data/work/2000-digital-height:
           persist: true
@@ -3205,6 +3225,76 @@ stages:
       - inputs/zoning-2000/table-corrections.csv
     outs:
       - data/solver/solve:
+          persist: true
+  solver-publish:
+    cmd: uv run --frozen sfzmaps stage solver-publish
+    deps:
+      - src/sfzmaps/__init__.py
+      - src/sfzmaps/anchors.py
+      - src/sfzmaps/answers.py
+      - src/sfzmaps/config.py
+      - src/sfzmaps/districts/__init__.py
+      - src/sfzmaps/districts/assemble.py
+      - src/sfzmaps/districts/categories.py
+      - src/sfzmaps/districts/labels.py
+      - src/sfzmaps/districts/lots.py
+      - src/sfzmaps/districts/pattern.py
+      - src/sfzmaps/districts/read.py
+      - src/sfzmaps/districts/regionread.py
+      - src/sfzmaps/districts/rules.py
+      - src/sfzmaps/districts/sampling.py
+      - src/sfzmaps/districts/series.py
+      - src/sfzmaps/districts/solved.py
+      - src/sfzmaps/districts/today.py
+      - src/sfzmaps/fresh.py
+      - src/sfzmaps/inputs.py
+      - src/sfzmaps/linework.py
+      - src/sfzmaps/llm.py
+      - src/sfzmaps/manifest.py
+      - src/sfzmaps/pages.py
+      - src/sfzmaps/parks.py
+      - src/sfzmaps/placement.py
+      - src/sfzmaps/pointsfile.py
+      - src/sfzmaps/reading.py
+      - src/sfzmaps/refine.py
+      - src/sfzmaps/runner.py
+      - src/sfzmaps/score.py
+      - src/sfzmaps/solver/__init__.py
+      - src/sfzmaps/solver/codes.py
+      - src/sfzmaps/solver/paths.py
+      - src/sfzmaps/solver/runs.py
+      - src/sfzmaps/sources/__init__.py
+      - src/sfzmaps/sources/datasf.py
+      - src/sfzmaps/stitch.py
+      - src/sfzmaps/tiles.py
+      - src/sfzmaps/transform.py
+      - src/sfzmaps/warp.py
+      - pyproject.toml
+      - uv.lock
+      - data/work/2000-digital-zoning/districts_raw.parquet
+      - data/work/2000-digital-zoning/districts_raw.json
+      - data/out/2000-digital-zoning/districts/height.parquet
+      - data/out/2000-digital-zoning/districts/height.json
+      - inputs/2000-digital-zoning/overrides.csv
+      - inputs/2000-digital-height
+      - inputs/parks.csv
+      - inputs/park_maps.csv
+      - data/ref/parcels.parquet
+      - ../docs/research/zoning-districts.csv
+      - data/solver/solve/runs/final.npz
+      - data/solver/solve/report.json
+      - data/solver/lots/table.parquet
+      - data/solver/lots/lots.npz
+    outs:
+      - data/out/2000-digital-zoning/districts/parcels.fgb:
+          persist: true
+      - data/out/2000-digital-zoning/districts/districts.fgb:
+          persist: true
+      - data/out/2000-digital-zoning/districts/stats.json:
+          persist: true
+      - data/out/2000-digital-zoning/districts/stats.json.inputs.json:
+          persist: true
+      - data/out/2000-digital-zoning/districts/unknown_codes.json:
           persist: true
   shared:
     cmd: uv run --frozen sfzmaps stage shared
