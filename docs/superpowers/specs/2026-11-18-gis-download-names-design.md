@@ -133,8 +133,18 @@ through the redirect). Each file also shows its versioned link for citing. A sho
 `latest` links to always get the newest data; a dated link always returns exactly that version."
 
 **READMEs** (pipeline `downloads/readme.py`, outside the build's code deps so `dvc.lock` doesn't
-change): a line giving the file's `latest` link and saying a dated link never changes. The README
-can't name its own hash.
+change). The owner approved this section, after LAST UPDATED:
+
+```
+GETTING THE NEWEST VERSION
+For the newest version of this file, use:
+  https://sfzoning.com/data/files/1948/sfzoning-1948-lots-latest.gpkg.zip
+```
+
+The README can't name its own hash, so it gives only the `latest` link. Changing the README template
+changes the downloads fingerprint (`EXPORTER_CODE`), so the next `sfzmaps downloads` re-exports
+every vector and citywide file once ($0); published versions are never rewritten. The sheet zip's
+README gets the same section with the zip's `latest` link.
 
 **Publishing.** `site/scripts/publish-downloads.mjs` computes names, uploads (or copies) what the
 store's listing lacks, updates the current manifest and `sheet-numbers.json`. Still one
