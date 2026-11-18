@@ -1,5 +1,7 @@
-"""Maps published from their series' solve (districts/solved.py, the solver-publish stages), 2000's first."""
+"""Maps published from their series' solve (districts/solved.py, the solver-publish stages), 2000's first, and the page
+of differences against the site's map (solver/differences.py)."""
 import json
+import shutil
 
 import geopandas as gpd
 import numpy as np
@@ -302,3 +304,113 @@ def test_the_publish_command_takes_any_zoning_series(era):
     assert "the read's lots 6, 0 of them with no code; codes with no category 0; confidence from the solve's " \
            "posterior" in res.output
     assert CliRunner().invoke(cli.app, ["solver", "publish", "--series", "1960-height"]).exit_code == 2
+
+
+# --- the page of differences against the site's map -----------------------------------------
+
+def _page_data(index):
+    html = index.read_text()
+    def grab(name):
+        return json.loads(html.split(f"const {name} = ", 1)[1].split(";\n", 1)[0])
+    return html, grab("SUMMARY"), grab("ROWS")
+
+
+def test_the_site_map_is_read_from_its_archive_and_a_stacked_lot_takes_its_footprints_code(tmp_path, monkeypatch):
+    import gzip
+
+    from sfzmaps.solver import differences
+
+    monkeypatch.setattr(config, "OUT_DIR", tmp_path / "out")
+    (config.OUT_DIR / "shared").mkdir(parents=True)
+    (config.OUT_DIR / "shared" / "districts.json").write_text(json.dumps(
+        {"archive": "shared/districts-x.pmtiles", "cards": "shared/districts-x.cards.json.gz"}))
+    # the archive keeps one of two condo lots on one footprint (1000003 is left out), and 1960 doesn't zone 1000002
+    cards = {"blklot": ["1000001", "1000002", "1000004"], "strings": ["R-2", "C-2"],
+             "eras": {E: {"code": [0, None, 1]}, "1948": {"code": [1, 1, 1]}}}
+    (config.OUT_DIR / "shared" / "districts-x.cards.json.gz").write_bytes(gzip.compress(json.dumps(cards).encode()))
+    geoms = [box(0, 0, 10, 10), box(20, 0, 30, 10), box(40, 0, 50, 10), box(40, 0, 50, 10), box(60, 0, 70, 10)]
+    code, where = differences.site_codes(E, ["1000001", "1000002", "1000003", "1000004", "1000005"], geoms)
+    assert code.tolist() == ["R-2", "", "C-2", "C-2", ""] and "districts-x" in where
+    with pytest.raises(ValueError, match="has no 1990-1996-zoning"):
+        differences.site_codes("1990-1996-zoning", ["1000001"], geoms[:1])
+
+
+@pytest.fixture
+def page(era, tmp_path, monkeypatch):
+    """1960 as the site shows it (the old reader's map, with a reader's correction of 1000001 to R-1) kept aside, and
+    the experiments' folder in the test's own data."""
+    from sfzmaps.solver import differences
+
+    monkeypatch.setattr(runs, "EXPERIMENTS_DIR", tmp_path / "solver" / "experiments")
+    inputs.overrides_path(E).parent.mkdir(parents=True, exist_ok=True)
+    inputs.overrides_path(E).write_text("blklot,block,code\n1000001,,R-1\n")
+    inputs.label_fixes_path(E).write_text("sheet,x,y,code,fix_code,fix_x,fix_y,note\n9,10,10,R-2,R-1,,,a sheet with "
+                                          "no warp\n9,10,10,R-2,-,,,not a label\n")
+    site = tmp_path / "site-1960.fgb"
+    shutil.copy(assemble.run_series(E, force=True) / "parcels.fgb", site)
+    return differences, site
+
+
+def test_the_page_lists_the_areas_where_the_new_map_differs_largest_first(page, tmp_path):
+    differences, site = page
+    before = (assemble.out_dir(E) / "parcels.fgb").read_bytes()
+    index = differences.make(E, published=site, page_dir=tmp_path / "page", log=lambda *a: None)
+    assert (assemble.out_dir(E) / "parcels.fgb").read_bytes() == before        # data/out is never written
+    html, S, rows = _page_data(index)
+    assert "<title>1960 Map Differences</title>" in html and S["label"] == "1960" and not S["table"]
+    # the site: R-1 on 1000001 (corrected), R-2 elsewhere; the new map: R-1, C-2, M-1, R-1-D, C-2, the Port unzoned.
+    # 1000002 and 1002001 both become C-2 over solve lot b: one area of two lots, first; then one lot each
+    assert [(r["p"], r["w"], r["n"]) for r in rows] == [("R-2", "C-2", 2), ("R-2", "M-1", 1), ("R-2", "R-1-D", 1)]
+    assert [r["r"] for r in rows] == [1, 2, 3] and {r["v"] for r in rows} == {"none"}    # no correction on them
+    assert S["areas"] == 3 and S["lots"] == 4 and S["confidence"] == {"from": "posterior", "value": 0.68}
+    # the correction scores the reads before it: the solve's R-1 is right, the old reader's R-2 isn't; the label
+    # fix that gives a code falls on no warped sheet
+    F = S["fixes"]
+    assert (F["override_lots"], F["override_solve_right"], F["override_read_right"]) == (1, 1, 0)
+    assert (F["label_fixes"], F["label_fixes_placed"]) == (1, 0)
+    assert not S["scan"] and not (tmp_path / "page" / "crops").exists()        # no merged page beside this solve
+    saved = json.loads((differences.ship_dir(E) / "compare.json").read_text())
+    assert saved["differing_lots"] == 4 and saved["areas"] == 3
+
+
+def test_a_corrected_lot_on_a_differing_area_backs_one_map(page, tmp_path):
+    differences, site = page
+    inputs.overrides_path(E).write_text("blklot,block,code\n1000001,,R-1\n,1001,M-1\n")   # since the site's map
+    index = differences.make(E, published=site, page_dir=tmp_path / "page", log=lambda *a: None)
+    rows = _page_data(index)[2]
+    r = next(r for r in rows if r["w"] == "M-1")
+    # block 1001 is M-1 on the new map (corrected after the site's map was made): the corrections back it
+    assert (r["p"], r["n"], r["v"], r["k"], r["bn"]) == ("R-2", 2, "new", 2, 2) and r["fx"] == [["override M-1", 2]]
+
+
+def test_publish_with_a_page_writes_the_map_and_its_page_in_one_command(page, tmp_path):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    _, site = page
+    res = CliRunner().invoke(cli.app, ["solver", "publish", "--series", E, "--page", str(tmp_path / "p"),
+                                       "--published", str(site)])
+    assert res.exit_code == 0, res.output
+    assert gpd.read_file(assemble.out_dir(E) / "parcels.fgb").set_index("blklot").loc["1001001", "code"] == "M-1"
+    _, S, rows = _page_data(tmp_path / "p" / "index.html")
+    assert S["areas"] == len(rows) == 3
+
+
+def test_a_crop_shows_the_scan_with_the_areas_lots_tinted_and_a_scale_bar_below():
+    import io
+
+    from PIL import Image
+
+    from sfzmaps.solver import differences, grid
+
+    ink = np.zeros((400, 400), bool)
+    ink[100, :] = True                                     # a printed line across the page, grid row 100
+    lot = _box(grid.X0 + 200 * 4, grid.Y1 - 120 * 4, grid.X0 + 240 * 4, grid.Y1 - 80 * 4)   # cols 200-240, rows 80-120
+    png, bar_ft, (w, h) = differences.crop(ink, [lot])
+    im = np.asarray(Image.open(io.BytesIO(png)))
+    assert (w, h) == im.shape[::-1] == (40 + 2 * differences.MARGIN, 40 + 2 * differences.MARGIN + differences.STRIP)
+    m = differences.MARGIN
+    # the line (crop row m + 20) is tinted ink inside the lot and plain ink outside it; the lot's paper is tinted
+    assert (im[m + 20, m + 20], im[m + 20, 5], im[m + 10, m + 20], im[5, 5]) == (3, 1, 2, 0)
+    assert (im[:-differences.STRIP] != 6).all() and (im[-differences.STRIP:] == 5).any() and bar_ft == 100
