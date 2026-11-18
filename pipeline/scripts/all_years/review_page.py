@@ -73,7 +73,7 @@ def series_data(s, C, n_areas, px, to_ll, reference=None):
     pub = sc.published_codes(s, blk, (reference or {}).get("use"))
     both = (solve != "") & (pub != "")
     out = {"series": s, "state": "PUBLISHED-FROM-SOLVE" if s in solved.SOLVED else "NEEDS-OWNER-LOOK",
-           "role": INFO[s].role, "lots_compared": int(both.sum()),
+           "role": INFO[s].role, "pattern": s in paths.PATTERN_SERIES, "lots_compared": int(both.sum()),
            "agree_lots": round(float((solve[both] == pub[both]).mean()), 4),
            "agree_area": round(float(area[both & (solve == pub)].sum() / area[both].sum()), 4),
            "own_labels": sc.own_labels(folder, pub, {"solve": solve, "published": pub}),
@@ -104,10 +104,13 @@ def series_data(s, C, n_areas, px, to_ll, reference=None):
         cx, cy = C.centroid[lots_].mean(0)
         lon, lat = to_ll(cx, cy)
         jpg = crop(ink, lot, lots_, differ, area_box(C, lots_, ink.shape), px)
+        p = post[lots_]
         it = {"rank": k, "lots": len(lots_), "acres": round(ar / 43560, 2),
               "old": [[c, int(n)] for c, n in zip(*np.unique(pub[lots_], return_counts=True))],
               "new": [[c, int(n)] for c, n in zip(*np.unique(solve[lots_], return_counts=True))],
-              "posterior": round(float(np.nanmean(post[lots_])), 3), "lat": round(lat, 5), "lon": round(lon, 5),
+              # the 2000 solve keeps no posterior (it is scored on the table): JSON has no NaN
+              "posterior": round(float(np.nanmean(p)), 3) if np.isfinite(p).any() else None,
+              "lat": round(lat, 5), "lon": round(lon, 5),
               "blocks": sorted({b[:4] for b in blk[lots_]})[:6],
               "img": "data:image/jpeg;base64," + base64.b64encode(jpg).decode()}
         if table is not None:
