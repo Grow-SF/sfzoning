@@ -1061,8 +1061,40 @@ The commands, run from `pipeline/`:
   the solver reads, so taking the solve itself would be a cycle, and DVC lets no two stages write one folder, so its
   outputs in `data/out/2000-digital-zoning/` are listed file by file (`build._period_out_files`) and the published
   files of `districts/` (`solved.PUBLISHED`) are this stage's. `districts --republish --series 2000-digital-zoning`
-  publishes from the solve too. `scripts/incidents/ship_differences.py` scores the new map against the published one
-  and writes the page of the areas where they differ.
+  publishes from the solve too.
+- `sfzmaps solver publish --series S [--root DIR] [--page DIR [--published shared|PARCELS.fgb]] [--force]` does the
+  same for any zoning series S from its solve under DIR, in 2000's layout (`solve/runs/final.npz`, `solve/report.json`,
+  `lots/table.parquet`, `lots/lots.npz`; default `data/solver/<S>`, `solved.default_root`). Codes are spelled and
+  categorised in the series' era (`categories.category_for` at its year, as the old reader's codes are; a code written
+  with " NCD" keeps it), so `unknown_codes.json` stays empty or the publish stops. A lot's confidence
+  (`solved.confidence_source`): the solve's measured share right where its report scores it (every-lot wrong lots over
+  `lots.npz` scored lots); otherwise the solve's own posterior, `posterior` in `final.npz` (one per solve lot, in
+  [0, 1]), each lot taking the overlap-weighted mean of the solve lots giving its code; with neither the publish
+  stops. `stats.json`'s `provenance.codes` says which (`confidence`, or `confidence_from: posterior` and its mean).
+  The check that every lot has a code leaves out the blocks unzoned in that year (the Port before 1969). With
+  `--page`, it then writes the page of differences (below) from the map it just published. By hand, for a series not
+  yet in `solved.SOLVED`, it writes `data/out/<S>/districts/` that its edition's stage still owns; a build records it
+  only once the series is wired:
+- Wiring a series' publish into the build: add it to `districts.solved.SOLVED` once its solver's stages write its
+  root, then `sfzmaps build --write-dvc-yaml`. `build.publish_stage` makes `solver-publish-<S>` (`sfzmaps solver
+  publish --series S`): it reads the series' read (and in a period its heights), its inputs folder (its overrides),
+  the parks, the parcels, the research table and the solve's four files, and comes after refdata, its edition or
+  period and every stage writing those files (`build.stages` stops if none does). Its edition's or period's stage then
+  hands over as 2000's did: it still reads the zoning (and the heights) but lists its outputs in `data/out/<S>/` file by
+  file (`build._period_out_files`), leaving the published files of `districts/` to `solver-publish-<S>`; that stage's
+  lock entry changes, so run it once with `sfzmaps build --force <edition-or-period>` ($0, every read from the cache).
+  `shared` comes after every publish stage.
+- The page of differences (`solver/differences.py`; `scripts/incidents/ship_differences.py --series S [--root DIR]
+  [--published ...] [--page-dir DIR]` publishes the new map the stage's way into
+  `data/solver/experiments/ship[-<S>]/new-map/`, never `data/out`): the new map against the site's (by default the
+  series' era in the site's archive, `data/out/shared/districts.json`'s lot cards; or a `parcels.fgb`), every area of
+  differing lots largest first (lots with the same pair of codes over the same or neighbouring solve lots), each with
+  the scan around it from `<root>/page/ink.png` at 4 ft per pixel, both codes, the ground truth and the lots. The
+  ground truth is the April 2000 table for 2000 and 1996-2000 (with the six measures of both maps and of the solve on
+  the table's lots and a paired block bootstrap), and for every series the site's corrections: `overrides.csv` (both
+  maps take them, so the reads are scored before them, the solve's against the old reader's) and the label fixes that
+  give a code (placed through each sheet's warp). Writes `compare.json`, `areas.csv`, `areas.json` and `lots.parquet`
+  beside the new map, and the page (`index.html`, `crops/`) into the page folder.
 
 Dependency notes: the max-flow cuts use OR-Tools' `SimpleMaxFlow` (Apache-2.0) through `solver/mincut.py`, which scales
 the capacities to whole numbers and reports the bound on the rounding's effect on a cut's cost.
