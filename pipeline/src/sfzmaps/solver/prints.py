@@ -337,9 +337,53 @@ def _frame(rows: list[dict]) -> pd.DataFrame:
     return df.astype({"kind": "int8", "lab_lot": "int32"})
 
 
+# The pattern maps: their districts are fill patterns keyed to a legend, with no printed codes for Terra or Sol to read.
+PATTERN_SERIES = ("1921", "1929", "1935", "1948")
+PATTERN_SKIP = ("off_sheet", "no_tile")       # pattern reads with no tile of the lot behind them
+
+
+def build_pattern_prints() -> dict:
+    """The prints of a pattern map (PATTERN_SERIES): the pipeline's pattern reader's code for each lot it read
+    (data/work/<series>/<sheet>/district_pattern.json, reader A), one print per read, at a point inside its lot (the
+    table's lot of the same ID), read as Sol's with the reader's confidence.  Writes prints.parquet and summary.json."""
+    import geopandas as gpd
+    t0 = time.perf_counter()
+    table = gpd.read_parquet(paths.LOTS_DIR / "table.parquet")
+    index = {}
+    for i, b in enumerate(table["blklot"].astype(str).values):
+        index.setdefault(b, i)
+    at = shapely.get_coordinates(shapely.point_on_surface(table.geometry.values))
+    rows, missing = [], 0
+    for name in paths.sheet_names():
+        f = config.WORK_DIR / paths.SERIES / name / "district_pattern.json"
+        if not f.is_file():
+            continue
+        for p in json.loads(f.read_text())["parcels"]:
+            code = p.get("code")
+            if not isinstance(code, str) or not code.strip() or p.get("via") in PATTERN_SKIP:
+                continue
+            i = index.get(str(p["blklot"]))
+            if i is None:
+                missing += 1
+                continue
+            rows.append({**_row(math.nan, math.nan, 2, sol_code=_code(code), sol_confidence=float(p["confidence"])),
+                         "sheet": name, "x": float(at[i, 0]), "y": float(at[i, 1]), "lab_lot": int(i),
+                         "street": False})
+    df = _frame(rows)
+    summary = {"prints": len(df), "by_kind": {str(k): int((df["kind"] == k).sum()) for k in range(4)},
+               "saved_answers": {}, "pattern_reads_on_no_table_lot": missing}
+    paths.PRINTS_DIR.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(paths.PRINTS_DIR / "prints.parquet", index=False)
+    (paths.PRINTS_DIR / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
+    return {**summary, "seconds": round(time.perf_counter() - t0, 1)}
+
+
 def build_prints() -> dict:
     """Find every print of the 2000 sheets with its reads and write prints.parquet, terra_boxes.json and
-    summary.json into PRINTS_DIR.  Returns the summary and the seconds taken."""
+    summary.json into PRINTS_DIR.  Returns the summary and the seconds taken.  A pattern map's prints are its
+    pattern reads (`build_pattern_prints`)."""
+    if paths.SERIES in PATTERN_SERIES:
+        return build_pattern_prints()
     t0 = time.perf_counter()
     names = paths.sheet_names()
     if not names:

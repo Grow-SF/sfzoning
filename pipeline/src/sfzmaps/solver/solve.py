@@ -221,8 +221,16 @@ def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool
         # comparison with J7 are the 2000 table's); it is scored by `scripts/all_years/score_series.py`.
         import json
 
-        from sfzmaps.solver import transfer
-        summary = placement.fit(folder, walls_dir, models=transfer.placement_models())
+        from sfzmaps.solver import prints, transfer
+        if paths.SERIES in prints.PATTERN_SERIES:
+            # A pattern map's prints are its reader's reads of each lot: each stands for its own lot (no leaders).
+            from sfzmaps.solver.city import walls_digest
+            e = np.zeros(0)
+            np.savez_compressed(placement.placement_file(folder), label=e.astype(int), lot=e.astype(int), chance=e,
+                                stay=e.astype(bool), holdout=e.astype(int), walls=walls_digest(walls_dir))
+            summary = {"labels": 0, "note": "pattern map: every read stands for its own lot"}
+        else:
+            summary = placement.fit(folder, walls_dir, models=transfer.placement_models())
         solve_all(run, walls_dir, true_borders, keep_costs=False, folder=folder, compound_fusion=compound_fusion)
         found = {"run": run, "series": paths.SERIES, "placement": summary,
                  "codes": dict(Counter(load_run(run, folder).tolist()).most_common())}
