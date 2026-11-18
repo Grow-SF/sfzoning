@@ -217,6 +217,8 @@ def main():
     out["differing_areas"] = len(areas)
     crops = folder / "crops"
     crops.mkdir(parents=True, exist_ok=True)
+    for old in crops.glob("[0-9][0-9]_*.png"):         # the last scoring's pictures
+        old.unlink()
     with open(folder / "differences.csv", "w", newline="") as fh:
         w = csv.writer(fh)
         w.writerow(["rank", "lots", "area_sqft", "published", "solve", "x", "y", "blklots"])
