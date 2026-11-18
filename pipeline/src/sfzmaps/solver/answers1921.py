@@ -31,6 +31,7 @@ import pandas as pd
 import shapely
 
 from sfzmaps import config
+from sfzmaps.solver.codes import canon
 
 SERIES = "1921"
 SOLVER_1921 = config.DATA_DIR / "solver" / SERIES       # this series' folders, whatever series the solver is set to
@@ -56,28 +57,37 @@ def owner_answers(answer_dirs: list[Path], case_files: list[Path]) -> pd.DataFra
     """One row per kept answer: blklot, block, truth, page, case (and `blklots`, every lot of the case's footprint).
     A page's answers dir pairs with the case files of the same page (`answers-1921-likely` with `1921-likely.json`);
     case ids repeat across pages.  Case files of one page are read in the order given and the first holding an id
-    wins (a later file can hold the cases the page retired).  A missing or empty answers dir gives no rows.
-    `attrs["dropped"]` counts the canttell / unsure answers left out."""
+    wins (a later file can hold the cases the page retired).  A missing or empty answers dir gives no rows (the
+    `answers-1921` collection has none yet) but is recorded; an answer whose page has no case file raises.
+    Truth is in the one spelling (`canon`).  `attrs["dropped"]` counts the canttell / unsure answers left out and
+    `attrs["pages"]` has, per page, whether its answers dir exists and the answers read, kept and dropped."""
     cases: dict[str, dict[str, dict]] = {}
     for cf in case_files:
         page = cases.setdefault(_page_of(Path(cf)), {})
         for c in json.loads(Path(cf).read_text())["cases"]:
             page.setdefault(c["id"], c)
-    rows, dropped = [], 0
+    rows, dropped, pages = [], 0, {}
     for ad in answer_dirs:
         ad = Path(ad)
         page = _page_of(ad)
+        info = pages[page] = {"dir_exists": ad.is_dir(), "read": 0, "kept": 0, "dropped": 0,
+                              "case_file": page in cases}
         if not ad.is_dir():
             continue
         for f in sorted(ad.glob("*.json")):
             a = json.loads(f.read_text())
             a = a.get("data", a)
+            info["read"] += 1
             if a["answer"] in DROPPED:
                 dropped += 1
+                info["dropped"] += 1
                 continue
-            case = cases.get(page, {}).get(a["case"])
+            if page not in cases:
+                raise FileNotFoundError(f"{ad} has answers but there is no case file for page {page}")
+            case = cases[page].get(a["case"])
             if case is None:
                 raise KeyError(f"answer {f} is for case {a['case']}, which no case file of page {page} holds")
+            info["kept"] += 1
             if a["answer"] == "ok":
                 truth = case["code"]
             elif a["answer"] == "fix":
@@ -87,10 +97,11 @@ def owner_answers(answer_dirs: list[Path], case_files: list[Path]) -> pd.DataFra
             else:
                 raise ValueError(f"{f}: unknown answer {a['answer']!r}")
             lots = [str(b) for b in case.get("blklots") or [case["blklot"]]]
-            rows.append({"blklot": str(case["blklot"]), "block": str(case["block"]), "truth": truth, "page": page,
+            rows.append({"blklot": str(case["blklot"]), "block": str(case["block"]), "truth": canon(truth), "page": page,
                          "case": a["case"], "blklots": tuple(lots)})
     out = pd.DataFrame(rows, columns=["blklot", "block", "truth", "page", "case", "blklots"])
     out.attrs["dropped"] = dropped
+    out.attrs["pages"] = pages
     return out
 
 
@@ -107,7 +118,6 @@ def default_answers() -> pd.DataFrame:
 def predictions_from_run(run_npz: Path, lots_table: Path | None = None) -> pd.Series:
     """A solver run's code per blklot: the run's `names[pred]` in the one spelling, each lot index named by the row of
     `data/solver/1921/lots/table.parquet` (the 1921 solver's, not the 2000 map's; the first row of a blklot that repeats)."""
-    from sfzmaps.solver.codes import canon
     R = np.load(run_npz, allow_pickle=True)
     codes = np.array([canon(x) for x in np.asarray(R["names"]).astype(str)])[R["pred"]]
     blklot = pd.read_parquet(lots_table or SOLVER_1921 / "lots" / "table.parquet", columns=["blklot"])["blklot"].astype(str)
@@ -143,7 +153,7 @@ def _lookup(pred: pd.Series, answers: pd.DataFrame) -> pd.Series:
     out = []
     for r in answers.itertuples():
         lots = [r.blklot] + [b for b in (getattr(r, "blklots", None) or ()) if b != r.blklot]
-        out.append(next((pred[b] for b in lots if b in pred.index), np.nan))
+        out.append(next((canon(pred[b]) for b in lots if b in pred.index and isinstance(pred[b], str)), np.nan))
     return pd.Series(out, index=answers.index, dtype=object)
 
 
@@ -167,21 +177,31 @@ def _boot(v: np.ndarray, c: np.ndarray) -> list[float]:
     return [float(lo), float(hi)]
 
 
+def _tally(got: pd.Series, truth: np.ndarray, blocks: np.ndarray) -> dict:
+    ok = got.notna().to_numpy()
+    hit = (got.to_numpy() == truth) & ok
+    v, c = _blocks(hit[ok].astype(float), np.ones(ok.sum()), blocks[ok])
+    n, right = int(ok.sum()), int(hit.sum())
+    return {"n": n, "right": right, "share": right / n if n else float("nan"), "ci95": _boot(v, c),
+            "unmatched": int((~ok).sum())}
+
+
 def score(pred: pd.Series, answers: pd.DataFrame, split_lots: list[str] | None = None) -> dict:
     """n (answers the method has a code for), right, share, ci95 (block bootstrap), unmatched (answers it has none
-    for, not in n), dropped (canttell / unsure answers left out before this) and split_lots: the answers' lots in the
-    PR #56 split list `split_lots` (sorted; [] where no list is given: PR #56 is not on main), which are scored
-    like any other."""
+    for, not in n), dropped (canttell / unsure answers left out before this), split_lots: the answers' lots in the
+    PR #56 split list `split_lots` (sorted; [] where no list is given: PR #56 is not on main), and `split`: the same
+    tally (n, right, share, ci95, unmatched) over only the answers with a lot in that list, a row of its own (they
+    are also in the totals)."""
     got = _lookup(pred, answers)
-    ok = got.notna().to_numpy()
-    hit = (got.to_numpy() == answers["truth"].to_numpy()) & ok
-    v, c = _blocks(hit[ok].astype(float), np.ones(ok.sum()), answers["block"].to_numpy()[ok])
-    n, right = int(ok.sum()), int(hit.sum())
+    truth, blocks = answers["truth"].to_numpy(), answers["block"].to_numpy()
+    out = _tally(got, truth, blocks)
     split = set(map(str, split_lots or ()))
-    listed = sorted({b for r in answers.itertuples() for b in [r.blklot, *(getattr(r, "blklots", None) or ())]
-                     if b in split})
-    return {"n": n, "right": right, "share": right / n if n else float("nan"), "ci95": _boot(v, c),
-            "unmatched": int((~ok).sum()), "dropped": int(answers.attrs.get("dropped", 0)), "split_lots": listed}
+    lots = [[r.blklot, *(getattr(r, "blklots", None) or ())] for r in answers.itertuples()]
+    is_split = np.array([any(b in split for b in l) for l in lots], dtype=bool)
+    out["dropped"] = int(answers.attrs.get("dropped", 0))
+    out["split_lots"] = sorted({b for l in lots for b in l if b in split})
+    out["split"] = _tally(got[is_split], truth[is_split], blocks[is_split])
+    return out
 
 
 def compare(preds: dict[str, pd.Series], answers: pd.DataFrame, split_lots: list[str] | None = None) -> dict:
@@ -231,6 +251,7 @@ def spike(column: str) -> pd.Series:
     """A hatching-spike round's per-answer call (`round1`, or `cv_model` for round 2: cross-validated, each answer
     predicted by a model that did not see it) next to its answers."""
     d = pd.read_csv(SPIKE_CSV, dtype=str)
+    d = d[~d["blklot"].duplicated()]
     return d.set_index("blklot")[column]
 
 
@@ -271,18 +292,24 @@ def main(argv: list[str] | None = None) -> None:
         ap.error("give --run NAME or --baselines")
     splits = a.split_list.read_text().split() if a.split_list else []
     answers = default_answers()
+    for page, i in answers.attrs["pages"].items():
+        print(f"  {page}: " + (f"{i['read']} answers read, {i['kept']} kept, {i['dropped']} dropped"
+                              if i["dir_exists"] else "0 answers (directory missing)"))
     print(f"{len(answers)} owner answers kept, {answers.attrs['dropped']} canttell/unsure dropped, "
           f"{answers['block'].nunique()} blocks; " + ("" if splits else "PR #56 not on main: no split list"))
     preds = {n: method(n) for n in names}
     res = compare(preds, answers, splits)
     for n in names:
         print(_line(n, res[n]))
+        if splits:
+            print(_line(n + " (split)", res[n]["split"]))
     for n in ([] if a.baselines else names):
         write_json(EXPERIMENT / f"score_{n}.json", {n: res[n]})
     if a.baselines:
         write_json(EXPERIMENT / "score_baselines.json",
                    {"answers": {"kept": len(answers), "dropped": answers.attrs["dropped"],
-                                "blocks": int(answers["block"].nunique()),
+                                "blocks": int(answers["block"].nunique()), "by_page": answers.attrs["pages"],
+                                "split_list": len(splits),
                                 "pages": answers["page"].value_counts().sort_index().to_dict()},
                     "methods": res})
 
