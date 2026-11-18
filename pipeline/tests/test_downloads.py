@@ -125,8 +125,9 @@ def test_data_fingerprint_covers_only_the_data_code_and_fingerprint_adds_the_tex
 
 def test_exporter_code_is_the_real_exporter_files():
     assert {k: [p.name for p in v] for k, v in downloads.DATA_CODE.items()} == {
-        "citywide": ["rasters.py"], "lots": ["vectors.py"], "districts": ["vectors.py"]}
-    assert [p.name for p in downloads.TEXT_CODE] == ["readme.py", "readme-template.txt", "package.py"]
+        "citywide": ["rasters.py"], "lots": ["vectors.py", "fields.py"],
+        "districts": ["vectors.py", "fields.py"]}
+    assert [p.name for p in downloads.TEXT_CODE] == ["readme.py", "readme-template.txt", "package.py", "fields.py"]
     assert all(p.exists() for v in downloads.DATA_CODE.values() for p in v)
     assert all(p.exists() for p in downloads.TEXT_CODE)
 
@@ -675,6 +676,23 @@ def test_vector_code_change_does_not_touch_images(fake_exports, tmp_data, monkey
     downloads.run()
     fake_exports.clear()
     _touch(code / "vectors.py", b"v2")
+    downloads.run()
+    keys = sorted(k for k, _ in fake_exports)
+    assert keys == sorted(f"1948/{l}.{f}" for l in ("lots", "districts") for f in ("geojson", "gpkg", "shp"))
+
+
+def test_fields_change_reruns_vector_data_but_not_images(fake_exports, tmp_data, monkeypatch):
+    code = tmp_data / "code"
+    _touch(code / "vectors.py", b"v1")
+    _touch(code / "fields.py", b"v1")
+    _touch(code / "rasters.py", b"v1")
+    monkeypatch.setattr(downloads, "DATA_CODE", {"citywide": [code / "rasters.py"],
+                        "lots": [code / "vectors.py", code / "fields.py"],
+                        "districts": [code / "vectors.py", code / "fields.py"]})
+    monkeypatch.setattr(downloads, "TEXT_CODE", [code / "fields.py"])
+    downloads.run()
+    fake_exports.clear()
+    _touch(code / "fields.py", b"v2")
     downloads.run()
     keys = sorted(k for k, _ in fake_exports)
     assert keys == sorted(f"1948/{l}.{f}" for l in ("lots", "districts") for f in ("geojson", "gpkg", "shp"))

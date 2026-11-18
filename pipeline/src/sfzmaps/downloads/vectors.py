@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from sfzmaps.downloads import Item, run_tool
-from sfzmaps.downloads.readme import DISTRICT_FIELDS, LOT_FIELDS
+from sfzmaps.downloads.fields import DISTRICT_FIELDS, LOT_FIELDS
 
 _FIELDS = {"lots": LOT_FIELDS, "districts": DISTRICT_FIELDS}
 

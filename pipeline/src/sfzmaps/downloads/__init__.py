@@ -26,10 +26,11 @@ _HERE = Path(__file__).parent
 # only to the README/LICENSE/packaging code rewrites the text files and leaves the data alone.
 DATA_CODE: dict[str, list[Path]] = {
     "citywide": [_HERE / "rasters.py"],
-    "lots": [_HERE / "vectors.py"],
-    "districts": [_HERE / "vectors.py"],
+    "lots": [_HERE / "vectors.py", _HERE / "fields.py"],
+    "districts": [_HERE / "vectors.py", _HERE / "fields.py"],
 }
-TEXT_CODE = [_HERE / "readme.py", _HERE / "readme-template.txt", _HERE / "package.py"]
+# fields.py is in both: it shapes the data files and the README's field table shows it.
+TEXT_CODE = [_HERE / "readme.py", _HERE / "readme-template.txt", _HERE / "package.py", _HERE / "fields.py"]
 
 VECTOR_FORMATS = ("geojson", "gpkg", "shp")
 _EXT = {"geojson": "geojson.zip", "gpkg": "gpkg.zip", "shp": "shp.zip", "cog": "tif"}
