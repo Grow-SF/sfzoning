@@ -1,0 +1,122 @@
+# Review package: 2ad9644..5b0b9d6
+
+## Commits
+5b0b9d6 wordread: matched_to_missed is the plain ratio matched / missed; the near-miss count is ours_near_missed; paired_labels checks blocks and its sign is tested
+
+## Files changed
+ pipeline/src/sfzmaps/solver/wordread/measures.py | 11 +++++++----
+ pipeline/tests/test_wordread_measures.py         | 21 +++++++++++++++++++++
+ 2 files changed, 28 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/pipeline/src/sfzmaps/solver/wordread/measures.py b/pipeline/src/sfzmaps/solver/wordread/measures.py
+index 2638062..e1c5fff 100644
+--- a/pipeline/src/sfzmaps/solver/wordread/measures.py
++++ b/pipeline/src/sfzmaps/solver/wordread/measures.py
+@@ -200,21 +200,22 @@ def geometric_reason(t: int, ti, bj, iou, best_word) -> str:
+         return "merged"
+     return "other"
+ 
+ 
+ def box_numbers(boxes: pd.DataFrame, terra: pd.DataFrame, reads: dict, iou=(0.5, 0.3), reason_fn=None,
+                 quarters: tuple[str, ...] = paths.QUARTERS) -> dict:
+     """How our boxes meet Terra's words, at each IoU of `iou` (the result's keys): `terra` words, `ours` boxes,
+     `matched` (a box is matched to its best word only, and only when it meets it at the IoU: a merged box matches one
+     word; a Terra word is matched when some box is), `missed` (the rest, each counted once) with `missed_reasons` (a
+     Counter), `ours_unmatched_text` and `ours_unmatched_none` (boxes matched to no word, read as text or as no text),
+-    `matched_to_missed` (of those, the boxes that meet a missed word at IoU >= SPLIT_PART), and `by_quarter` (the same
++    `ours_near_missed` (of those, the boxes that meet a missed word at IoU >= SPLIT_PART), `matched_to_missed` (the
++    plain ratio matched / missed; None when none is missed), and `by_quarter` (the same
+     by quarter name, from the `quarter` columns of both).
+ 
+     The reasons are "split", "merged", "none" and "other" (`geometric_reason`); with `reason_fn(t, ti, bj, iou,
+     best_word) -> str` (t: the word's row; ti, bj, iou: every overlapping pair; best_word: each box's best word) its
+     codes are counted instead."""
+     boxes = boxes.copy()
+     terra = terra.copy()
+     ti, bj, v = _overlaps(boxes, terra)
+     nb = len(boxes)
+     word, best = _best_word(ti, bj, v, nb)
+@@ -231,21 +232,23 @@ def box_numbers(boxes: pd.DataFrame, terra: pd.DataFrame, reads: dict, iou=(0.5,
+         near_missed = np.zeros(nb, bool)
+         sel = ~matched[ti] & (v >= SPLIT_PART)
+         near_missed[bj[sel]] = True
+ 
+         def count(wsel, bsel):
+             return {"terra": int(wsel.sum()), "ours": int(bsel.sum()), "matched": int((matched & wsel).sum()),
+                     "missed": int((~matched & wsel).sum()),
+                     "missed_reasons": Counter(r for t, r in reasons.items() if wsel[t]),
+                     "ours_unmatched_text": int((~won & bsel & is_text).sum()),
+                     "ours_unmatched_none": int((~won & bsel & ~is_text).sum()),
+-                    "matched_to_missed": int((~won & bsel & near_missed).sum())}
++                    "ours_near_missed": int((~won & bsel & near_missed).sum()),
++                    "matched_to_missed": (round(float((matched & wsel).sum()) / float((~matched & wsel).sum()), 4)
++                                          if (~matched & wsel).any() else None)}
+ 
+         res = count(np.ones(len(terra), bool), np.ones(nb, bool))
+         if tq is not None and bq is not None:
+             res["by_quarter"] = {name: count(tq == q, bq == q) for q, name in enumerate(quarters)}
+         out[level] = res
+     return out
+ 
+ 
+ def _code_of(text, forms: dict | None):
+     """The code a Terra string is a printed form of (`forms`: form -> code; None: the string itself), or None."""
+@@ -304,19 +307,19 @@ def compare(now: dict, before: dict) -> dict:
+             if d:
+                 out[k] = d
+         elif isinstance(v, (int, float)) and isinstance(w, (int, float)) and not isinstance(v, bool):
+             out[k] = v - w
+     return out
+ 
+ 
+ def paired_labels(a: pd.DataFrame, b: pd.DataFrame, boot: int = BOOT, seed: int = 0) -> dict:
+     """Two arms' right-or-wrong per answered label (columns `right` and `block`; the same labels in the same order) as
+     a difference of shares (a minus b) with its 95% interval, resampling whole blocks: `diff`, `lo`, `hi`."""
+-    if len(a) != len(b):
+-        raise ValueError("the two arms must score the same labels")
++    if len(a) != len(b) or (a["block"].to_numpy(str) != b["block"].to_numpy(str)).any():
++        raise ValueError("the two arms must score the same labels, in the same blocks")
+     ra, rb = a["right"].to_numpy(float), b["right"].to_numpy(float)
+     names, inv = np.unique(a["block"].to_numpy(str), return_inverse=True)
+     gain = np.bincount(inv, weights=ra - rb, minlength=len(names))
+     cnt = np.bincount(inv, minlength=len(names)).astype(float)
+     idx = np.random.default_rng([seed, 2]).integers(0, len(names), (boot, len(names)))
+     s = gain[idx].sum(1) / cnt[idx].sum(1)
+     return {"diff": float((ra - rb).mean()), "lo": float(np.quantile(s, 0.025)), "hi": float(np.quantile(s, 0.975))}
+diff --git a/pipeline/tests/test_wordread_measures.py b/pipeline/tests/test_wordread_measures.py
+index 11318ad..cf1c05f 100644
+--- a/pipeline/tests/test_wordread_measures.py
++++ b/pipeline/tests/test_wordread_measures.py
+@@ -94,10 +94,31 @@ def test_read_numbers_count_same_and_different_codes_on_matched_boxes():
+     terra = _terra((0, 0, 100, 10), (200, 0, 300, 10))
+     terra.loc[1, "text"] = "B"
+     boxes = _boxes((0, 0, 100, 10), (200, 0, 300, 10))
+     r = measures.read_numbers(boxes, terra, {0: _read("R-1"), 1: _read("A")})
+     assert r["same_as_terra"] == 1 and r["differs"] == 1
+ 
+ 
+ def test_compare_is_now_minus_before():
+     d = measures.compare({"a": {"n": 5, "x": "s"}, "b": 1.5}, {"a": {"n": 3}, "b": 1.0, "c": 9})
+     assert d == {"a": {"n": 2}, "b": 0.5}
++
++
++def test_matched_to_missed_is_the_plain_ratio():
++    b = measures.box_numbers(BOXES_MERGED, TERRA_TWO, READS_MERGED)
++    assert b[0.5]["matched_to_missed"] == 1.0
++    three = _terra((0, 0, 100, 10), (500, 0, 600, 10), (700, 0, 800, 10))
++    b = measures.box_numbers(_boxes((0, 0, 100, 10)), three, READS_ONE)
++    assert b[0.5]["matched_to_missed"] == 0.5 and b[0.5]["ours_near_missed"] == 0
++    assert measures.box_numbers(BOXES_ONE, TERRA_ONE, READS_ONE)[0.5]["matched_to_missed"] is None
++
++
++def test_paired_labels_diff_is_a_minus_b():
++    worse = ARM.assign(right=0.0)
++    assert measures.paired_labels(ARM, worse, boot=50)["diff"] == 0.5
++    assert measures.paired_labels(worse, ARM, boot=50)["diff"] == -0.5
++
++
++def test_paired_labels_refuses_arms_with_different_blocks():
++    import pytest
++    with pytest.raises(ValueError):
++        measures.paired_labels(ARM, ARM.assign(block=["x"] * 6), boot=50)

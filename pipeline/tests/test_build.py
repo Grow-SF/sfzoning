@@ -12,8 +12,13 @@ def test_every_series_is_in_exactly_one_stage():
     table = build.stages()
     owned = [s for st in table.values() for s in st.series]
     assert sorted(owned) == sorted(SERIES) and len(owned) == len(set(owned))
-    # shared comes last and needs every stage but the saved reads' images, which no output is made from
-    assert list(table)[-1] == "shared" and set(table["shared"].upstream) == set(table) - {"shared", "saved-reads"}
+    # shared comes last and needs the old stages only: not the saved reads' images (no output is made
+    # from them), not the warp stages (the old pipeline's merge doesn't read them) and not the solver's,
+    # but the maps it publishes from their solves
+    from sfzmaps.districts import solved
+    assert list(table)[-1] == "shared" and set(table["shared"].upstream) == {
+        n for n in table if n not in ("shared", "saved-reads") and not n.startswith("warp-")
+        and not table[n].command} | {solved.stage_name(s) for s in solved.SOLVED}
 
 
 def test_a_period_reads_heights_before_zoning_and_never_special_use():
@@ -29,6 +34,14 @@ def test_a_period_reads_heights_before_zoning_and_never_special_use():
 def test_committed_dvc_yaml_is_the_generated_one():
     assert build.dvc_yaml_path().read_text() == build.dvc_yaml(), \
         "run `uv run sfzmaps build --write-dvc-yaml`"
+
+
+def test_dvc_yaml_is_the_same_with_no_data(tmp_path, monkeypatch):
+    # a fresh clone writes (and checks) dvc.yaml before anything is pulled
+    from sfzmaps import config
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(config, "WORK_DIR", tmp_path / "data" / "work")
+    assert build.dvc_yaml() == build.dvc_yaml_path().read_text()
 
 
 def test_stage_deps_are_per_series_and_skip_the_editor():
@@ -49,11 +62,17 @@ def test_status_keys_with_or_without_a_path_prefix():
 
 def test_plan_adds_downstream_and_limits_to_targets():
     t = build.stages()
-    assert build.plan_run({"edition-1948"}, None, t) == ["edition-1948", "shared"]
-    assert build.plan_run({"edition-1948", "today"}, ["edition-1948"], t) == ["edition-1948"]
-    assert build.plan_run(set(), ["today"], t) == []
-    assert build.plan_run(set(), ["today"], t, force=True) == ["today"]
-    assert build.plan_run({"today"}, ["shared"], t) == ["today", "shared"]
+    # an SU map's warp: no solver reads it (every other warp has its series' solver stages downstream)
+    su, su2 = "warp-1980-1990-su", "warp-1990-1996-su"
+    assert build.plan_run({su}, None, t) == [su]
+    assert build.plan_run({"edition-1948"}, None, t) == []        # the old stages are frozen
+    assert build.plan_run({su, su2}, [su], t) == [su]
+    assert build.plan_run(set(), [su], t) == []
+    assert build.plan_run(set(), [su], t, force=True) == [su]
+    # a series' warp reruns its solver
+    assert build.plan_run({"warp-1948"}, None, t) == ["warp-1948", *(f"solver-{p}-1948" for p in
+                                                                    ("page", "lots", "prints", "labels", "walls",
+                                                                     "solve"))]
     with pytest.raises(ValueError):
         build.plan_run(set(), ["edition-1999"], t)
 
@@ -103,6 +122,102 @@ def test_inputs_changing_mid_build_stop_recording():
     res = build.run_build(["a", "b", "z"], _table(), 1, run_stage=lambda n: None,
                           commit=commits.append, guard=lambda: next(calls, "changed"))
     assert commits == ["a"] and "b" in res.failed and res.skipped == ["z"]
+
+
+def _chain():
+    """a -> b -> c, and d beside them"""
+    S = build.Stage
+    return {"a": S("a", (), ()), "b": S("b", (), (), ("a",)), "c": S("c", (), (), ("b",)), "d": S("d", (), ())}
+
+
+def test_a_stage_planned_only_for_its_upstream_is_checked_again_once_that_is_recorded():
+    events = []
+    still_stale = {"b": False, "c": True}         # a ran and changed nothing b reads; c changed on its own
+
+    def recheck(n):
+        events.append(("recheck", n))
+        return still_stale[n]
+
+    res = build.run_build(["a", "b", "c"], _chain(), 1, run_stage=lambda n: events.append(("run", n)),
+                          commit=lambda n: events.append(("commit", n)), recheck=recheck, must_run={"a"})
+    # b is asked again only after a is recorded; up to date, it doesn't run, and c (its downstream) is asked in turn
+    assert events == [("run", "a"), ("commit", "a"), ("recheck", "b"), ("recheck", "c"), ("run", "c"),
+                      ("commit", "c")]
+    assert res.ok and res.ran == ["a", "c"] and res.fresh == ["b"] and not res.skipped
+
+
+def test_stale_stages_always_run_and_a_clean_upstream_frees_its_downstream():
+    asked = []
+    res = build.run_build(["a", "b", "c", "d"], _chain(), 2, run_stage=lambda n: None, commit=lambda n: None,
+                          recheck=lambda n: asked.append(n) or False, must_run={"a", "c", "d"})
+    assert asked == ["b"] and sorted(res.ran) == ["a", "c", "d"] and res.fresh == ["b"] and res.ok
+    # without must_run (and without recheck) every planned stage runs, as before
+    res = build.run_build(["a", "b", "c"], _chain(), 1, run_stage=lambda n: None, commit=lambda n: None)
+    assert res.ran == ["a", "b", "c"] and res.fresh == []
+
+
+def test_a_stage_whose_upstream_failed_is_skipped_not_checked_again():
+    def run(n):
+        if n == "a":
+            raise build.StageFailed("boom")
+
+    res = build.run_build(["a", "b", "c"], _chain(), 1, run_stage=run, commit=lambda n: None,
+                          recheck=lambda n: pytest.fail("not asked"), must_run={"a"})
+    assert set(res.failed) == {"a"} and res.skipped == ["b", "c"] and res.fresh == []
+
+
+class _Done:
+    def __init__(self, returncode, stdout):
+        self.returncode, self.stdout, self.stderr = returncode, stdout, ""
+
+
+def test_the_second_status_asks_dvc_about_that_stage_alone():
+    calls = []
+
+    def dvc(*args, check=True):
+        calls.append(args)
+        return {"solver-lots": _Done(0, "{}"),
+                "solver-prints": _Done(0, json.dumps({"dvc.yaml:solver-prints": [
+                    {"changed deps": {"data/solver/lots": "modified"}}]})),
+                "solver-labels": _Done(1, "")}[args[-1]]
+
+    assert build.still_stale("solver-lots", dvc) == (False, [])
+    assert build.still_stale("solver-prints", dvc) == (True, ["data/solver/lots"])
+    assert build.still_stale("solver-labels", dvc) == (True, [])       # a status that fails: run it
+    assert calls == [("status", "--json", n) for n in ("solver-lots", "solver-prints", "solver-labels")]
+
+
+def test_a_build_asks_dvc_again_about_the_stages_after_a_stale_one(monkeypatch, tmp_path, capsys):
+    import types
+    table = _chain()
+    yaml = tmp_path / "dvc.yaml"
+    yaml.write_text("stages\n")
+    for name, value in (("stages", lambda: table), ("dvc_yaml", lambda: "stages\n"), ("dvc_yaml_path", lambda: yaml),
+                        ("require_toolchain", lambda system_tools: None), ("git_dirty", lambda *a: []),
+                        ("git_head", lambda: "head"), ("prepare", lambda: None)):
+        monkeypatch.setattr(build, name, value)
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    asked, ran = [], []
+
+    def dvc(*args, check=True):
+        asked.append(args)
+        if args == ("status", "--json"):                       # at the start: only a is stale
+            return _Done(0, json.dumps({"dvc.yaml:a": [{"changed deps": {"inputs/a": "modified"}}]}))
+        if args[:2] == ("status", "--json"):                   # asked again: b unchanged, c changed on its own
+            return _Done(0, json.dumps({"c": [{"changed deps": {"inputs/c": "modified"}}]} if args[2] == "c" else {}))
+        return _Done(0, "")                                    # dvc commit
+
+    monkeypatch.setattr(build, "dvc", dvc)
+    monkeypatch.setattr(build, "subprocess", types.SimpleNamespace(
+        STDOUT=-2, run=lambda argv, **kw: ran.append((argv[-1], kw["env"]["SFZMAPS_DVC_CHANGED_DEPS"])) or _Done(0, "")))
+    assert build.build(None, 1, dry_run=False, force=False) == 0
+    # b is asked again once a is recorded, and not run; c is asked once b counts as done, and runs with its own
+    # changed deps from the second status
+    assert asked == [("status", "--json"), ("commit", "--force", "a"), ("status", "--json", "b"),
+                     ("status", "--json", "c"), ("commit", "--force", "c")]
+    assert ran == [("a", '["inputs/a"]'), ("c", '["inputs/c"]')]
+    out = capsys.readouterr().out
+    assert "b, c only if still stale" in out and "up to date after its upstreams: b" in out
 
 
 def _stage_env(tmp_path, monkeypatch):
@@ -234,3 +349,344 @@ def test_saved_reads_stage_fails_unless_the_images_match(tmp_path, monkeypatch):
         build.run_stage("saved-reads", run=lambda argv, env: pytest.fail("runs no sfzmaps command"))
     (d / "a/1.png").write_bytes(b"uno")
     build.run_stage("saved-reads", run=lambda argv, env: pytest.fail("runs no sfzmaps command"))
+
+
+def test_every_series_has_one_warp_stage_after_the_stage_that_places_it():
+    table = build.stages()
+    names = list(table)
+    warps = {n: st for n, st in table.items() if st.warp}
+    assert sorted(st.warp for st in warps.values()) == sorted(SERIES)
+    for n, st in warps.items():
+        assert n == f"warp-{st.warp}" and not st.series and not st.districts and not st.frozen
+        owner = [o for o, ost in table.items() if st.warp in ost.series]
+        assert len(owner) == 1 and st.upstream == (owner[0], "refdata")
+        assert names.index(n) > names.index(owner[0]) and names.index(n) < names.index("shared")
+
+
+def test_a_warp_stage_reads_its_series_work_and_writes_data_warp():
+    st = build.stages()["warp-1948"]
+    assert build.stage_commands("warp-1948") == [["warp", "1948"]]
+    assert build.stage_deps(st) == build._code_deps() + [
+        "pyproject.toml", "uv.lock", "../pixi.toml", "../pixi.lock", "data/ref", "data/work/1948"]
+    assert build.stage_outs(st) == ["data/warp/1948"]
+
+
+def test_the_old_pipeline_stages_are_frozen():
+    table = build.stages()
+    old = [n for n in table if n.startswith(("edition-", "period-")) or n in ("today", "shared")]
+    assert old and all(table[n].frozen for n in old)
+    assert not any(st.frozen for n, st in table.items() if n.startswith("warp-"))
+
+
+def test_a_build_prepares_only_for_the_old_stages():
+    t = build.stages()
+    assert build.needs_prepare(["warp-1948"], t) is False
+    assert build.needs_prepare(["warp-1948", "today"], t) is True
+
+
+def _command_stage():
+    return build.Stage("x", (), (), command=("solver", "page"), reads=("data/warp/2000-digital-zoning",),
+                       writes=("data/solver/page",), code=("sfzmaps.solver.paths",))
+
+
+def test_a_command_stage_depends_on_its_import_closure_and_reads(monkeypatch):
+    st = _command_stage()
+    deps = build.stage_deps(st)
+    for d in ("src/sfzmaps/solver/paths.py", "src/sfzmaps/config.py", "pyproject.toml", "uv.lock",
+              "data/warp/2000-digital-zoning"):
+        assert d in deps
+    assert not any(d.startswith("src/sfzmaps/districts") or d.endswith("sheetwarp/probabilistic.py")
+                   for d in deps)
+    assert not any(d.endswith("build.py") for d in deps)
+    assert build.stage_outs(st) == ["data/solver/page"]
+    monkeypatch.setattr(build, "stages", lambda: {"x": st})
+    assert build.stage_commands("x") == [["solver", "page"]]
+
+
+def test_the_gpus_turns_are_in_no_command_stages_code_deps():
+    from sfzmaps import fresh
+    # the detector's stage imports sfzmaps.gpu (its training takes a turn on the GPU) ...
+    assert any(p.name == "gpu.py" for p in fresh.code_files(["sfzmaps.solver.textnet.stage"]))
+    # ... but the turns decide when it computes, never what: an edit to gpu.py reruns no stage
+    for name, st in build.stages().items():
+        if st.command:
+            assert "sfzmaps.gpu" in st.cut and "src/sfzmaps/gpu.py" not in build.stage_deps(st), name
+    # a stage that cuts nothing has it
+    st = build.Stage("x", (), (), command=("solver", "text"), code=("sfzmaps.solver.textnet.stage",), cut=())
+    assert "src/sfzmaps/gpu.py" in build.stage_deps(st)
+
+
+def test_the_solver_packages_hold_no_module_list():
+    # every solver stage imports both packages: an edit to their docstrings would rerun all of them (the detector's
+    # training too), so they are one line each and the module list is in the README
+    from sfzmaps import config
+    for init in ("solver/__init__.py", "solver/textnet/__init__.py"):
+        text = (config.PIPELINE_DIR / "src" / "sfzmaps" / init).read_text()
+        assert len(text.splitlines()) == 1 and text.startswith('"""'), init
+
+
+def test_the_page_and_the_lots_read_only_the_inputs_file_they_use():
+    from sfzmaps.solver import paths, table
+    t = build.stages()
+    for name, used in (("solver-page", f"{paths.CUTS_FILE.parent.name}/{paths.CUTS_FILE.name}"),
+                       ("solver-lots", f"{paths.TABLE_DIR.name}/{table.TABLE_FILE}")):
+        inputs = [d for d in build.stage_deps(t[name]) if d.startswith("inputs/")]
+        # a README, PROVENANCE.md or the table's by-eye corrections (read only in scoring) rerun nothing
+        assert inputs == [f"inputs/{used}"], name
+
+
+def test_the_walls_read_what_build_walls_reads_and_follow_the_one_detector():
+    t = build.stages()
+    st = t["solver-walls"]
+    assert build.stage_commands("solver-walls") == [["solver", "walls"]]
+    assert set(st.upstream) == {"solver-labels", "solver-text"}
+    deps = build.stage_deps(st)
+    for d in ("data/solver/page", "data/solver/lots", "data/solver/labels/strokes.npz",
+              "data/solver/prints/terra_boxes.json", "data/solver/text/chance",
+              "data/work/2000-digital-zoning",                  # the sheets' pages, where the text chance is read
+              "data/warp/2000-digital-zoning", "src/sfzmaps/solver/walls.py", "src/sfzmaps/solver/wallevidence.py",
+              "src/sfzmaps/solver/textgrid.py"):
+        assert d in deps, d
+    assert [d for d in deps if d.startswith("inputs/")] == ["inputs/merged-page/2000-digital-zoning.json"]
+    # the held-out detectors' chance is an experiment's (`walls --chance held-out`), never the stage's
+    assert "solver-text-reader" not in st.upstream and not any("text-reader" in d for d in deps)
+    # not the prints' table, the detector's weights or scores, the rest of the labels, or the solve's code; of the
+    # detector's code only what reads its chance (no training, no scoring)
+    assert [d for d in deps if d.startswith("data/solver/text")] == ["data/solver/text/chance"]
+    assert not any(d.endswith(("textnet/stage.py", "textnet/train.py", "textnet/predict.py", "textnet/model.py",
+                               "textnet/scores.py", "textnet/score_stage.py", "textnet/trial.py",
+                               "textnet/data.py", "textnet/model.py")) for d in deps)
+    assert [d for d in deps if "/textnet/" in d] == ["src/sfzmaps/solver/textnet/boxes.py"]
+    assert not any(d in ("data/solver/prints", "data/solver/prints/prints.parquet", "data/solver/labels")
+                   or d.endswith(("solver/solve.py", "solver/placement.py", "solver/search.py")) for d in deps)
+    assert build.stage_outs(st) == ["data/solver/walls"]
+
+
+def test_reader_stage_deps():
+    from sfzmaps import fresh
+    from sfzmaps.solver import paths
+    from sfzmaps.solver.codereader import labels
+    t = build.stages()
+    st = t["solver-text-reader"]
+    assert build.stage_commands("solver-text-reader") == [["solver", "text-reader"]]
+    assert build.stage_outs(st) == ["data/solver/text-reader"]
+    # after the lots, the prints and the training maps' warps
+    assert set(st.upstream) == {"solver-lots", "solver-prints", *(f"warp-{s}" for s in paths.TEXT_TRAIN_SERIES)}
+    names = list(t)
+    assert all(names.index(u) < names.index("solver-text-reader") for u in st.upstream)
+    deps = build.stage_deps(st)
+    # its code deps are its import closure, without the GPU's turns and the folder swap
+    code = [d for d in deps if d.startswith("src/")]
+    closure = fresh.code_files(["sfzmaps.solver.textnet.reader_stage"], cut=frozenset(st.cut))
+    assert code == sorted(p.relative_to(config.PIPELINE_DIR).as_posix() for p in closure)
+    for f in ("textnet/reader_stage.py", "textnet/data.py", "textnet/train.py", "textnet/predict.py",
+              "textnet/model.py", "textnet/stage.py", "codereader/labels.py", "grid.py", "paths.py"):
+        assert f"src/sfzmaps/solver/{f}" in code, f
+    assert "src/sfzmaps/transform.py" in code                   # it reads the placements
+    assert not any(d.endswith(("/gpu.py", "solver/runs.py", "textnet/trial.py", "textnet/score_stage.py"))
+                   for d in code)
+    # of each training sheet its page, Sol's points and its placement (the warp); Terra's boxes and the other passes;
+    # the prints, the lots and the owner's answers, for the answered blocks
+    rest = [d for d in deps if not d.startswith("src/")]
+    for s in paths.TEXT_TRAIN_SERIES:
+        for sheet in paths.TEXT_SHEETS[s]:
+            for f in (f"data/work/{s}/{sheet}/page.png", f"data/work/{s}/{sheet}/district_labels.json",
+                      f"data/warp/{s}/{sheet}/transform.json", f"data/warp/{s}/{sheet}/correction.npz"):
+                assert f in rest, f
+    for f in ("saved-reads/answers/text-on-every-sheet.jsonl.gz", "saved-reads/answers/experiments-2000/text-positions",
+              "data/solver/prints/prints.parquet", "data/solver/prints/terra_boxes.json", "data/solver/lots/lots.npz",
+              "data/solver/lots/table.parquet", f"inputs/{labels.CODE_CHECK}/{labels.CASES_FILE}",
+              f"inputs/{labels.CODE_CHECK}/{labels.ANSWERS_FILE}", "pyproject.toml", "uv.lock"):
+        assert f in rest, f
+    assert len(rest) == 2 + 4 * sum(len(paths.TEXT_SHEETS[s]) for s in paths.TEXT_TRAIN_SERIES) + 8
+    # nothing of the walls' detector: the reader's detectors are their own
+    assert not any(d.startswith("data/solver/text/") or d == "data/solver/text" for d in rest)
+
+
+def test_text_reader_stages_deps():
+    from sfzmaps import fresh
+    from sfzmaps.solver import paths
+    t = build.stages()
+    names = list(t)
+    maps = ("2000-digital-zoning", "1980-1990-zoning", "1990-1996-zoning")
+    crops, train, read = t["solver-text-crops"], t["solver-text-train"], t["solver-text-read"]
+    assert build.stage_commands("solver-text-crops") == [["solver", "text-crops"]]
+    assert build.stage_commands("solver-text-train") == [["solver", "text-train"]]
+    assert build.stage_commands("solver-text-read") == [["solver", "text-read"]]
+    assert set(crops.upstream) == {"solver-lots", "solver-prints", "solver-text-reader", *(f"warp-{s}" for s in maps)}
+    assert train.upstream == ("solver-text-crops",)
+    assert set(read.upstream) == {"solver-text-crops", "solver-text-train", "solver-boxes"}
+    for st in (crops, train, read):
+        assert all(names.index(u) < names.index(st.name) for u in st.upstream)
+        code = [d for d in build.stage_deps(st) if d.startswith("src/")]
+        closure = fresh.code_files(list(st.code), cut=frozenset(st.cut))
+        assert code == sorted(p.relative_to(config.PIPELINE_DIR).as_posix() for p in closure)
+        assert not any(d.endswith(("/gpu.py", "solver/runs.py")) for d in code)
+    # the training reads its crops alone, and only the text reader's training code can retrain it (GPU hours): not
+    # the reading maths (ctc.py), which the reading stage alone imports
+    assert [d for d in build.stage_deps(train) if not d.startswith("src/")] == ["pyproject.toml", "uv.lock",
+                                                                                "data/solver/text-crops"]
+    assert [d for d in build.stage_deps(train) if d.startswith("src/sfzmaps/solver/")] == [
+        "src/sfzmaps/solver/__init__.py", "src/sfzmaps/solver/paths.py", "src/sfzmaps/solver/textread/__init__.py",
+        "src/sfzmaps/solver/textread/model.py", "src/sfzmaps/solver/textread/store.py",
+        "src/sfzmaps/solver/textread/train.py"]
+    assert "src/sfzmaps/solver/textread/ctc.py" in build.stage_deps(read)
+    # the inputs: each scan's pages, Sol's points and placements, Terra's boxes and the other passes, the prints, the
+    # lots, the owner's answers and the code reader's detectors' held-out blocks and radius
+    rest = [d for d in build.stage_deps(crops) if not d.startswith("src/")]
+    for s in maps:
+        for sheet in paths.TEXT_SHEETS[s]:
+            for f in (f"data/work/{s}/{sheet}/page.png", f"data/work/{s}/{sheet}/district_labels.json",
+                      f"data/warp/{s}/{sheet}/transform.json", f"data/warp/{s}/{sheet}/correction.npz"):
+                assert f in rest, f
+    for f in ("data/solver/text-reader/held.json", "data/solver/prints/prints.parquet", "data/solver/lots/lots.npz"):
+        assert f in rest, f
+    assert not any(d.startswith("data/solver/text/") for d in rest)
+    # the reading: the crops' scoring files, the networks, the boxes and the 2000 pages
+    rest = [d for d in build.stage_deps(read) if not d.startswith("src/")]
+    assert "data/solver/text-train" in rest and "data/solver/boxes/boxes.parquet" in rest
+    assert all(f"data/work/{paths.SERIES}/{sheet}/page.png" in rest for sheet in paths.SHEETS)
+    assert not any(d.startswith("data/solver/text-crops/synth") for d in rest)
+    assert [build.stage_outs(st) for st in (crops, train, read)] == [["data/solver/text-crops"],
+                                                                     ["data/solver/text-train"],
+                                                                     ["data/solver/text-read"]]
+
+
+def test_the_solve_reads_what_the_solve_and_its_report_read():
+    t = build.stages()
+    st = t["solver-solve"]
+    assert build.stage_commands("solver-solve") == [["solver", "solve", "final"]]
+    assert "solver-walls" in st.upstream
+    deps = build.stage_deps(st)
+    for d in ("data/solver/lots", "data/solver/page/ink.png", "data/solver/prints/prints.parquet",
+              "data/solver/labels", "data/solver/walls", "data/warp/2000-digital-zoning",
+              "src/sfzmaps/solver/solve.py", "src/sfzmaps/solver/placement.py", "src/sfzmaps/solver/holes.py",
+              "src/sfzmaps/solver/measures.py", "src/sfzmaps/solver/report.py"):
+        assert d in deps, d
+    # the hand leader moves and the by-eye corrections the score counts against; not the table file (the lots'
+    # table.parquet carries it) or a README
+    assert [d for d in deps if d.startswith("inputs/")] == ["inputs/hand-labels-2000/label_fixes.csv",
+                                                            "inputs/zoning-2000/table-corrections.csv"]
+    # the walls' and the detector's code reach the solve only through the walls they wrote
+    assert not any(d.endswith(("solver/walls.py", "solver/wallevidence.py", "solver/textgrid.py"))
+                   or "/textnet/" in d or d.startswith(("data/solver/text-", "data/work/")) for d in deps)
+    assert build.stage_outs(st) == ["data/solver/solve"]
+
+
+def test_the_2000_map_is_published_after_the_solve_by_its_own_stage():
+    from sfzmaps.districts import solved
+    t = build.stages()
+    st = t["solver-publish"]
+    assert build.stage_commands("solver-publish") == [["solver", "publish"]]
+    assert {"solver-solve", "period-2000-digital"} <= set(st.upstream)
+    deps = build.stage_deps(st)
+    # the solver's files a publish reads, as the stage names them
+    assert [p.relative_to(config.PIPELINE_DIR).as_posix() for p in solved.inputs()] == [
+        d for d in deps if d.startswith("data/solver/")]
+    for d in ("data/work/2000-digital-zoning/districts_raw.parquet",
+              "data/out/2000-digital-zoning/districts/height.parquet", "inputs/2000-digital-zoning/overrides.csv",
+              "src/sfzmaps/districts/solved.py", "src/sfzmaps/districts/assemble.py", "src/sfzmaps/solver/codes.py"):
+        assert d in deps, d
+    assert build.stage_outs(st) == [f"data/out/2000-digital-zoning/districts/{n}" for n in solved.PUBLISHED]
+    # the period's stage keeps its sheets, tiles and heights, and leaves the published files to it
+    period = build.stage_outs(t["period-2000-digital"])
+    assert "data/work/2000-digital-zoning" in period and "data/out/2000-digital-zoning" not in period
+    assert "data/out/2000-digital-zoning/districts/height.parquet" in period
+    assert "data/out/2000-digital-height" in period
+    assert "data/out/2000-digital-zoning/districts" in build.stage_deps(t["shared"])
+
+
+def _overlaps(a: str, b: str) -> bool:
+    return a == b or a.startswith(b + "/") or b.startswith(a + "/")
+
+
+def test_no_two_stages_write_one_path_and_no_stage_reads_its_own_downstream():
+    _assert_dvc_accepts(build.stages())
+
+
+def _assert_dvc_accepts(t):
+    """What DVC refuses: one path written by two stages, and a cycle (a stage reading what its own outputs feed)."""
+    outs = {n: build.stage_outs(st) for n, st in t.items()}
+    names = list(t)
+    for i, a in enumerate(names):
+        for b in names[i + 1:]:
+            assert not any(_overlaps(x, y) for x in outs[a] for y in outs[b]), (a, b)
+    reads = {n: [d for d in build.stage_deps(st) if d.startswith("data/")] for n, st in t.items()}
+    after = {n: {m for m in names if m != n and any(_overlaps(d, o) for d in reads[m] for o in outs[n])}
+             for n in names}
+    for n in names:                                       # nothing downstream of a stage feeds it
+        seen, todo = set(), list(after[n])
+        while todo:
+            m = todo.pop()
+            if m not in seen:
+                seen.add(m)
+                todo.extend(after[m])
+        assert n not in seen, n
+
+
+def _with_a_solve(series, monkeypatch):
+    """The stage table once `series` is in districts.solved.SOLVED, with a stand-in for its solver's stages (writing
+    its root's lots and solve after its warp), as stages() makes it."""
+    from sfzmaps.districts import solved
+    t = build.stages()
+    owner = {s: n for n, st in t.items() for s in st.series}
+    monkeypatch.setattr(solved, "SOLVED", solved.SOLVED | {series})
+    st = build.publish_stage(series, t, owner)
+    shared = t.pop("shared")
+    t[st.name] = st
+    t["shared"] = build.Stage("shared", (), (), (*shared.upstream, st.name), frozen=True)
+    return t
+
+
+@pytest.mark.parametrize("series, owner, height", [("1960", "edition-1960", None),
+                                                   ("1990-1996-zoning", "period-1990-1996", "1990-1996-height")])
+def test_a_series_published_from_its_solve_gets_its_own_stage_and_its_edition_hands_over(series, owner, height,
+                                                                                         monkeypatch):
+    t = _with_a_solve(series, monkeypatch)
+    st = t[f"solver-publish-{series}"]
+    assert st.command == ("solver", "publish", "--series", series)
+    assert st.upstream == ("refdata", owner, f"solver-lots-{series}", f"solver-solve-{series}")
+    deps = build.stage_deps(st)
+    root = f"data/solver/{series}"
+    assert [d for d in deps if d.startswith("data/solver/")] == [
+        f"{root}/solve/runs/final.npz", f"{root}/solve/report.json", f"{root}/lots/table.parquet",
+        f"{root}/lots/lots.npz"]
+    for d in (f"data/work/{series}/districts_raw.parquet", f"inputs/{series}", "inputs/parks.csv",
+              "data/ref/parcels.parquet", "../docs/research/zoning-districts.csv", "src/sfzmaps/districts/solved.py"):
+        assert d in deps, d
+    assert (f"data/out/{series}/districts/height.parquet" in deps) == bool(height)
+    assert (f"inputs/{height}" in deps) if height else not any(d.endswith("-height") for d in deps)
+    assert build.stage_outs(st) == [f"data/out/{series}/districts/{n}" for n in
+                                    ("parcels.fgb", "districts.fgb", "stats.json", "stats.json.inputs.json",
+                                     "unknown_codes.json")]
+    # its edition or period keeps its sheets, tiles and heights, and hands it the published files
+    outs = build.stage_outs(t[owner])
+    assert f"data/work/{series}" in outs and f"data/out/{series}" not in outs
+    assert f"data/out/{series}/{series}.pmtiles" in outs and f"data/out/{series}/review.html" in outs
+    assert (f"data/out/{series}/districts/height.parquet" in outs) == bool(height)
+    assert not any(o.startswith(f"data/out/{series}/districts/") and "height" not in o for o in outs)
+    assert st.name in t["shared"].upstream
+    _assert_dvc_accepts(t)
+
+
+def test_a_series_in_solved_before_its_solver_has_stages_stops_the_stage_table(monkeypatch):
+    from sfzmaps.districts import solved
+    from sfzmaps.solver import paths
+    monkeypatch.setattr(solved, "SOLVED", solved.SOLVED | {"1948"})
+    monkeypatch.setattr(paths, "ALL_YEARS", tuple(s for s in paths.ALL_YEARS if s != "1948"))
+    with pytest.raises(ValueError, match="1948 is in districts.solved.SOLVED but no stage writes data/solver/1948/"):
+        build.stages()
+
+
+def test_needs_prepare_is_false_for_command_stages():
+    st = _command_stage()
+    assert build.needs_prepare(["x"], {"x": st}) is False
+
+
+@pytest.mark.parametrize("build_jobs, workers", [(1, 6), (2, 3), (4, 1), (8, 1)])
+def test_the_warp_stages_a_build_runs_at_once_share_one_budget_of_workers(monkeypatch, build_jobs, workers):
+    monkeypatch.setenv(build.BUILD_JOBS_ENV, str(build_jobs))
+    monkeypatch.setattr(build, "WARP_WORKERS", 6)
+    got = []
+    build.run_stage("warp-1948", run=lambda argv, env: got.append(argv) or (0, ""))
+    assert got == [["warp", "1948", "--jobs", str(workers)]]

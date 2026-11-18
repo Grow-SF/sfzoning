@@ -1,0 +1,772 @@
+# Review package: cb12116..e7550a4
+
+## Commits
+e7550a4 text detector scores: long lines up to 48 ft wide, found once per sheet in a process
+9960f19 spec: the long-line stand-in keeps lines up to 48 ft wide (district lines are 24-32 ft)
+6f6f4be text detector: scores on the validation area and the test drawings (one measure, long lines in each sheet's feet)
+
+## Files changed
+ .../2026-11-15-text-detector-training-design.md    |   4 +-
+ pipeline/README.md                                 |   3 +-
+ pipeline/src/sfzmaps/solver/strokes.py             |  12 +-
+ pipeline/src/sfzmaps/solver/textnet/data.py        |  17 +-
+ pipeline/src/sfzmaps/solver/textnet/scores.py      | 265 ++++++++++++++++++++
+ pipeline/tests/test_solver_textnet.py              | 275 ++++++++++++++++++++-
+ 6 files changed, 566 insertions(+), 10 deletions(-)
+
+## Diff
+diff --git a/docs/superpowers/specs/2026-11-15-text-detector-training-design.md b/docs/superpowers/specs/2026-11-15-text-detector-training-design.md
+index ce81271..e2030c0 100644
+--- a/docs/superpowers/specs/2026-11-15-text-detector-training-design.md
++++ b/docs/superpowers/specs/2026-11-15-text-detector-training-design.md
+@@ -80,22 +80,24 @@ trained on.
+   9 B/px would be 13 GB). Draw them per crop from the boxes, or keep them compact. **(my call: the builder picks)**
+ 
+ ## Scores (the same measure for every comparison)
+ 
+ On a sheet's ink pixels:
+ 
+ - AUC and log-loss of text vs not;
+ - text ink found;
+ - words found, by kind;
+ - ink outside every box called text;
+-- **long straight lines called text:** ink on strokes at least 200 ft long and at most 12 ft wide, named constants.
++- **long straight lines called text:** ink on strokes at least 200 ft long and at most 48 ft wide, named constants.
+   This stands in for "district-line ink called text", which needs the zoning table. **(my call)**
++  - Letters fall out by length.
++  - The width limit only excludes solid fills; the 2000 map's district lines are 24–32 ft wide.
+ 
+ Reported per test drawing and for the validation area.
+ 
+ - **Today's 2000-only quarter models are reported for context, not used as a gate** (nw: 96.6% of words found;
+   0.16% of district-line ink called text). Their measure differs, and the walls read only the 2000 sheets.
+   **(my call)**
+ - **One check on mixing styles.** Once the recipe is fast, the same recipe is also trained on the modern-lettering
+   maps only, and the two are compared on the 1980 test drawing.
+   - If the both-styles detector is worse there beyond the tolerance, it goes to the owner before anything ships.
+   - Otherwise the both-styles detector ships. **(my call)**
+diff --git a/pipeline/README.md b/pipeline/README.md
+index 5405443..c6a74a7 100644
+--- a/pipeline/README.md
++++ b/pipeline/README.md
+@@ -462,21 +462,22 @@ reruns neither the detector nor the stages before it.
+ The modules (`src/sfzmaps/solver/`):
+ 
+ - `paths`, `runs`: the locations above; `threads`: one thread for the maths libraries where the walls, the
+   placement, the report and the solve compute;
+ - `grid`: the raster over the city that the page, the lots and the walls share; `codes`: zoning codes in one spelling;
+ - `frame`, `page`: a scanned 2000 page's printed frame, measured, and the merged page (`sfzmaps solver page`);
+ - `table`, `lots`: the April 2000 table and its lots on the grid (`sfzmaps solver lots`);
+ - `saved`, `prints`: the saved vision answers, read by file, sheet or cache key (nothing asks a model), and every
+   printed zoning code with its saved reads (`sfzmaps solver prints`);
+ - `textnet/`: the text detector (`data`, `model`, `train`, `predict`, `stage`: `sfzmaps solver text Q`) and its
+-  scores (`evaluate`: `sfzmaps solver text-scores`);
++  scores (`evaluate`: `sfzmaps solver text-scores`; `scores`: the one measure on the validation area and the test
++  drawings, which replaces it);
+ - `labels_stage` with `trust`, `streetside`, `lotsize`, `strokes`: what the solver knows about the labels and the ink
+   (`sfzmaps solver labels`);
+ - `textgrid`, `wallevidence`, `walls`: the detectors' chance of text on the grid, out of fold, and the wall odds
+   between neighbouring lots (`sfzmaps solver walls`);
+ - `city`, `labels`, `placement`, `energy`, `search`, `solve`: the city as the solve reads it, each quarter's readings
+   of the labels, where each label belongs (`sfzmaps solver placement`), the energy over every lot's code, its
+   search, and the four held-out solves (`sfzmaps solver solve`);
+ - `borders`, `measures`, `holes`, `published`, `report`: scoring a run against the table (`sfzmaps solver score`,
+   `holes`, `published`) and the solve's report against J7's.
+ 
+diff --git a/pipeline/src/sfzmaps/solver/strokes.py b/pipeline/src/sfzmaps/solver/strokes.py
+index 838f539..291fb6d 100644
+--- a/pipeline/src/sfzmaps/solver/strokes.py
++++ b/pipeline/src/sfzmaps/solver/strokes.py
+@@ -24,22 +24,24 @@ Writes, under data/solver/labels/:
+ import cv2
+ import numpy as np
+ from skimage.morphology import skeletonize
+ 
+ from sfzmaps.solver import grid, page, paths
+ 
+ # a centre-line px's eight neighbours (row, column steps), in the order a stroke is followed
+ NEIGHBOURS = ((-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1))
+ 
+ 
+-def strokes(ink: np.ndarray) -> dict[str, np.ndarray]:
+-    """The strokes of `ink` (bool, True = ink, on the grid from its top-left corner): strokes.npz's arrays."""
++def strokes(ink: np.ndarray, ft_per_px: float = grid.FT_PER_PX, to_map=grid.to_map) -> dict[str, np.ndarray]:
++    """The strokes of `ink` (bool, True = ink, on the grid from its top-left corner): strokes.npz's arrays.  Ink of
++    another scale (a sheet's page) gives its own `ft_per_px` (for the widths and lengths) and `to_map` ((col, row)
++    -> the points' xy)."""
+     ink = np.asarray(ink, bool)
+     height, width = ink.shape
+     half = cv2.distanceTransform(ink.astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+     line = skeletonize(ink)
+     ring = np.ones((3, 3), np.float32)
+     ring[1, 1] = 0
+     degree_px = cv2.filter2D(line.view(np.uint8), -1, ring, borderType=cv2.BORDER_CONSTANT)
+     is_node = line & (degree_px != 2)
+     del degree_px
+     n_labels, label = cv2.connectedComponents(is_node.view(np.uint8), connectivity=8)
+@@ -105,36 +107,36 @@ def strokes(ink: np.ndarray) -> dict[str, np.ndarray]:
+ 
+     degree = np.zeros(len(node_xy), np.int64)
+     for a, b, _ in found:
+         degree[a] += 1
+         degree[b] += 1
+     points, widths, off = [], [], [0]
+     out = {key: [] for key in ("a", "b", "length", "wmed", "wiqr", "spur", "dega", "degb")}
+     for a, b, path in found:
+         p = np.vstack([node_xy[a], np.array([(x, y) for y, x in path], float), node_xy[b]])
+         w = 2 * half[np.clip(p[:, 1].astype(int), 0, height - 1), np.clip(p[:, 0].astype(int), 0, width - 1)] \
+-            * grid.FT_PER_PX
+-        length = float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) * grid.FT_PER_PX
++            * ft_per_px
++        length = float(np.linalg.norm(np.diff(p, axis=0), axis=1).sum()) * ft_per_px
+         median = np.median(w)
+         q1, q3 = np.percentile(w, [25, 75])
+         points.append(p)
+         widths.append(w)
+         off.append(off[-1] + len(p))
+         out["a"].append(a)
+         out["b"].append(b)
+         out["length"].append(length)
+         out["wmed"].append(float(median))
+         out["wiqr"].append(float(q3 - q1))
+         out["spur"].append(a != b and (degree[a] == 1 or degree[b] == 1) and length < median)
+         out["dega"].append(degree[a])
+         out["degb"].append(degree[b])
+-    xy = grid.to_map(np.vstack(points) + 0.5) if points else np.zeros((0, 2))
++    xy = to_map(np.vstack(points) + 0.5) if points else np.zeros((0, 2))
+     return {"xy": xy.astype(np.float32),
+             "w": (np.concatenate(widths) if widths else np.zeros(0)).astype(np.float32),
+             "off": np.array(off, np.int64),
+             "a": np.array(out["a"], np.int64), "b": np.array(out["b"], np.int64),
+             "length": np.array(out["length"], np.float32), "wmed": np.array(out["wmed"], np.float32),
+             "wiqr": np.array(out["wiqr"], np.float32), "spur": np.array(out["spur"], bool),
+             "dega": np.array(out["dega"], np.int64), "degb": np.array(out["degb"], np.int64)}
+ 
+ 
+ def build_strokes() -> dict:
+diff --git a/pipeline/src/sfzmaps/solver/textnet/data.py b/pipeline/src/sfzmaps/solver/textnet/data.py
+index 4e9b966..1cbdfff 100644
+--- a/pipeline/src/sfzmaps/solver/textnet/data.py
++++ b/pipeline/src/sfzmaps/solver/textnet/data.py
+@@ -371,24 +371,37 @@ def in_validation(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray
+ def _held(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+     """The held-out px of a page window: those in VALIDATION_AREA when the sheet holds it out, else none."""
+     return in_validation(sd, y0, x0, h, w) if sd.hold_out else np.zeros((h, w), bool)
+ 
+ 
+ def _words(sd: SheetData, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+     """The page window's words: 1 + the index of the last word drawn on each px (0 on none)."""
+     return _paint(sd.words, np.arange(1, len(sd.words) + 1), y0, x0, h, w)
+ 
+ 
++def _unknown(sd: SheetData, word: np.ndarray, y0: int, x0: int, h: int, w: int) -> np.ndarray:
++    """The unknown px of a page window, given its words (`_words`): within READ_POINT_RADIUS of one of Sol's points
++    or in another pass's box, but in no word."""
++    other = _paint(sd.other, np.ones(len(sd.other), np.int32), y0, x0, h, w, sd.points, READ_POINT_RADIUS)
++    return (other > 0) & (word == 0)
++
++
+ def _known(sd: SheetData, word: np.ndarray, y0: int, x0: int, h: int, w: int) -> np.ndarray:
+     """The px of a page window the loss reads, given its words (`_words`): not unknown, not held out."""
+-    other = _paint(sd.other, np.ones(len(sd.other), np.int32), y0, x0, h, w, sd.points, READ_POINT_RADIUS)
+-    return ~((other > 0) & (word == 0)) & ~_held(sd, y0, x0, h, w)
++    return ~_unknown(sd, word, y0, x0, h, w) & ~_held(sd, y0, x0, h, w)
++
++
++def page_text(sd: SheetData) -> tuple[np.ndarray, np.ndarray]:
++    """A sheet's whole page of text px (in one of Terra's words) and of unknown px, bool each, as the detector learns
++    them (`crop_targets`), whether or not the sheet holds the area out: for its scores."""
++    word = _words(sd, 0, 0, sd.height, sd.width)
++    return word > 0, _unknown(sd, word, 0, 0, sd.height, sd.width)
+ 
+ 
+ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int) -> dict[str, np.ndarray]:
+     """The training crop centred on page px (row y, col x), moved inside the page: size / `scale` px of page resized
+     to `size` x `size` (nearest px) and turned `turns` quarter turns counter-clockwise, the reading angle with it (in
+     [-180, 180) degrees on text, 0 elsewhere).  Keys: ink (bool), text (uint8), kind (uint8), angle (int16), known
+     (bool); drawn from the sheet's boxes for this crop alone."""
+     src = int(round(size / scale))
+     y0 = int(np.clip(y - src // 2, 0, sd.height - src))
+     x0 = int(np.clip(x - src // 2, 0, sd.width - src))
+diff --git a/pipeline/src/sfzmaps/solver/textnet/scores.py b/pipeline/src/sfzmaps/solver/textnet/scores.py
+new file mode 100644
+index 0000000..36427ed
+--- /dev/null
++++ b/pipeline/src/sfzmaps/solver/textnet/scores.py
+@@ -0,0 +1,265 @@
++"""The text detector's scores, the same measure for every comparison (`score_sheets`): from its chance of text on each
++sheet's page (as `predict.chance` gives it: uint8, the chance x 255; a float chance from 0 to 1 is rounded to that),
++on the sheets' compact data (`data.SheetData`).
++
++Where:
++  validation  the px whose map point is in VALIDATION_AREA (`data.in_validation`): on the training maps, trained with
++              the area held out, exactly the px that carried no loss.  A sheet with none is left out
++  whole       every px of every sheet (the test drawings, never trained on)
++
++What is scored there, on the ink px (text: the px of Terra's words, as the detector learns them, `data.page_text`; the
++unknown px, near Sol's points and in the other passes' boxes, left out).  A chance of 0.5 or more (CALLED of 255) is
++"called text".
++
++  ink px      text against not-text: the AUC and the log loss (from histograms of the 256 chances); text ink found
++              (the share of the text ink called text); ink outside every box called text (the share of the ink in no
++              word); and the share of the ink called text that is in a word
++  words       Terra's words found, by kind: a word is found when the mean chance over its ink is CALLED or more (on
++              average half its ink called text).  That is the found-word rule of the quarter models' scores
++              (`evaluate.py`), kept; not "at least half its px called", which differs where the chance is neither 0
++              nor 1.  Each word is its own rectangle, as drawn for training, and its ink the ink px inside it: where
++              two overlap, that ink is each one's.  (The quarter models' scores counted connected regions of box px
++              as words, so their 96.6% of words found is not comparable.)  A word with no ink is not counted.  In
++              validation a word is counted when its centre px (its rectangle's corners' mean, rounded) is in the
++              area, and is judged on its ink in the area alone, so no px the detector trained on counts; a word whose
++              centre is outside is not counted, though its ink inside still counts as text ink
++  long lines  ink on long strokes no wider than a heavy line (`line_ink`): the share called text and the mean chance;
++              the share of it in a word (which a detector calling exactly the words would call), and the share of the
++              rest called text.  It stands in for district-line ink called text, which needs the zoning table
++
++Summed over the sheets of each map (series), and over all of them.  The counts are whole numbers, divided only at the
++end, so the scores don't depend on the order of the sheets; a share of nothing is None; nothing in them is a time or a
++path, so the same chances give the same bytes.
++"""
++import dataclasses
++import hashlib
++from collections.abc import Mapping
++
++import cv2
++import numpy as np
++
++from sfzmaps.solver import paths, strokes
++from sfzmaps.solver.textnet import data
++
++CALLED = 128              # a chance of at least this (of 255) is "called text": a chance of 0.5 or more
++# A long line: a stroke at least LONG_LINE_FT long and at most THIN_LINE_FT wide (its median width), both in the
++# sheet's own feet (`ft_per_px`).  The measure is to catch district lines called text: the 2000 map's are heavy, 24 to
++# 32 ft wide, and its ordinary lines about 16 ft.  Letters already fall out by length, so the width limit only keeps
++# out solid fills.
++LONG_LINE_FT = 200.0
++THIN_LINE_FT = 48.0
++WHERE = ("validation", "whole")
++_LINE_INK: dict[tuple, np.ndarray] = {}     # `line_ink`'s answers in this process, packed bits, by sheet
++
++
++def auc(pos: np.ndarray, neg: np.ndarray) -> float | None:
++    """From histograms of scores 0..255 of positives and negatives: the chance a random positive scores above a random
++    negative (ties count half).  None without both."""
++    if not pos.sum() or not neg.sum():
++        return None
++    pos, neg = pos.astype(float), neg.astype(float)
++    below = np.cumsum(neg) - neg
++    return float((pos * (below + 0.5 * neg)).sum() / (pos.sum() * neg.sum()))
++
++
++def log_loss(pos: np.ndarray, neg: np.ndarray) -> float | None:
++    """From the same histograms: the mean log loss of chance score / 255 (clipped to 1e-4 .. 1 - 1e-4).  None
++    without any."""
++    n = pos.sum() + neg.sum()
++    if not n:
++        return None
++    p = np.clip(np.arange(len(pos)) / 255.0, 1e-4, 1 - 1e-4)
++    return float(-(pos * np.log(p) + neg * np.log(1 - p)).sum() / n)
++
++
++def as_chance(chance) -> np.ndarray:
++    """A chance of text as `predict.chance` gives it: uint8, the chance x 255.  A float chance (0 to 1) is rounded to
++    that, as `predict.chance` rounds."""
++    chance = np.asarray(chance)
++    if chance.dtype == np.uint8:
++        return chance
++    if np.issubdtype(chance.dtype, np.floating):
++        return np.rint(np.clip(chance, 0.0, 1.0) * 255).astype(np.uint8)
++    raise TypeError(f"a chance is uint8 (x 255) or float (0 to 1), not {chance.dtype}")
++
++
++def _page_px(colrow: np.ndarray) -> np.ndarray:
++    """Stroke points kept as page coordinates (`strokes.strokes` gives each px's centre, (col + 0.5, row + 0.5))."""
++    return np.asarray(colrow, float)
++
++
++def long_lines(ink: np.ndarray, ft_per_px: float) -> np.ndarray:
++    """The ink px (bool) on long lines: of the strokes of the ink (`strokes.strokes`: its centre lines, split at their
++    ends and junctions), those at least LONG_LINE_FT long and at most THIN_LINE_FT wide (median), measured at
++    `ft_per_px` ft per px.  Each ink px is its nearest centre-line px's, in its own piece of ink (a speck whose centre
++    line is no stroke is no line's); a centre-line px where strokes meet is on a long line when one of them is."""
++    ink = np.asarray(ink, bool)
++    s = strokes.strokes(ink, ft_per_px, _page_px)
++    off = s["off"]
++    out = np.zeros(ink.shape, bool)
++    if len(off) < 2:
++        return out
++    stroke = np.repeat(np.arange(len(off) - 1), np.diff(off))
++    on_path = np.ones(len(stroke), bool)
++    on_path[off[:-1]] = on_path[off[1:] - 1] = False          # the first and last points are its end nodes' centres
++    col = np.floor(s["xy"][on_path, 0]).astype(np.intp)
++    row = np.floor(s["xy"][on_path, 1]).astype(np.intp)
++    long = ((s["length"] >= LONG_LINE_FT) & (s["wmed"] <= THIN_LINE_FT))[stroke[on_path]]
++    centre = np.zeros(ink.shape, bool)
++    centre[row, col] = True
++    on_long = np.zeros(ink.shape, bool)
++    on_long[row[long], col[long]] = True
++    _, nearest = cv2.distanceTransformWithLabels((~centre).view(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_5,
++                                                 labelType=cv2.DIST_LABEL_PIXEL)
++    _, piece = cv2.connectedComponents(ink.view(np.uint8), connectivity=8)
++    is_long = np.zeros(int(nearest.max()) + 1, bool)
++    is_long[nearest[centre]] = on_long[centre]
++    piece_of = np.zeros(len(is_long), np.int32)
++    piece_of[nearest[centre]] = piece[centre]
++    return ink & is_long[nearest] & (piece_of[nearest] == piece)
++
++
++def line_ink(sd: data.SheetData) -> np.ndarray:
++    """A sheet's whole page of long-line ink (bool, `long_lines` of its ink at its scale), found once per process: the
++    answer is kept (as packed bits) under the sheet's name and shape, its scale, a digest of its ink and the two
++    constants, so scoring several detectors' chances in one process finds the lines once, and another page under the
++    same name is never given this one's."""
++    digest = hashlib.blake2b(sd.ink_bits.tobytes(), digest_size=16).hexdigest()
++    key = (sd.series, sd.sheet, sd.height, sd.width, sd.ft_per_px, digest, LONG_LINE_FT, THIN_LINE_FT)
++    if key not in _LINE_INK:
++        _LINE_INK[key] = np.packbits(long_lines(data.page_ink(sd), sd.ft_per_px), axis=1)
++    return np.unpackbits(_LINE_INK[key], axis=1, count=sd.width).view(bool)
++
++
++@dataclasses.dataclass
++class _Tally:
++    """The counts the scores are made of, added up sheet by sheet."""
++    sheets: int = 0
++    pos: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(256, np.int64))   # text ink, by chance
++    neg: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(256, np.int64))   # other ink, by chance
++    words: dict = dataclasses.field(default_factory=lambda: {k: [0, 0] for k in data.KINDS})   # found, of
++    line_px: int = 0
++    line_called: int = 0
++    line_chance: int = 0      # the sum of the chances (x 255)
++    line_in_word: int = 0
++    line_rest_called: int = 0
++
++    def add(self, other: "_Tally") -> None:
++        self.sheets += other.sheets
++        self.pos += other.pos
++        self.neg += other.neg
++        for k, (f, n) in other.words.items():
++            self.words[k][0] += f
++            self.words[k][1] += n
++        for f in ("line_px", "line_called", "line_chance", "line_in_word", "line_rest_called"):
++            setattr(self, f, getattr(self, f) + getattr(other, f))
++
++    def scores(self) -> dict:
++        def share(a, b):
++            return a / b if b else None
++
++        text, other = int(self.pos.sum()), int(self.neg.sum())
++        text_called, other_called = int(self.pos[CALLED:].sum()), int(self.neg[CALLED:].sum())
++        words = {k: {"found": f, "of": n} for k, (f, n) in self.words.items()}
++        found, of = sum(f for f, _ in self.words.values()), sum(n for _, n in self.words.values())
++        words["all"] = {"found": found, "of": of}
++        return {
++            "sheets": self.sheets, "ink_px": text + other, "text_ink_px": text,
++            "auc": auc(self.pos, self.neg), "log_loss": log_loss(self.pos, self.neg),
++            "text_ink_found": share(text_called, text),
++            "ink_outside_boxes_called_text": share(other_called, other),
++            "called_text_in_a_box": share(text_called, text_called + other_called),
++            "words": words, "words_found": share(found, of),
++            "long_lines": {"ink_px": self.line_px, "called_text": share(self.line_called, self.line_px),
++                           "mean_chance": share(self.line_chance, 255 * self.line_px),
++                           "in_a_box": share(self.line_in_word, self.line_px),
++                           "rest_called_text": share(self.line_rest_called, self.line_px - self.line_in_word)},
++        }
++
++
++def scored_px(sd: data.SheetData, where: str) -> np.ndarray:
++    """The px of a sheet's page that are scored `where` (bool): every px, or those in VALIDATION_AREA (found
++    data.BAND rows at a time: a whole page's map points would be 16 bytes a px)."""
++    if where == "whole":
++        return np.ones((sd.height, sd.width), bool)
++    return np.concatenate([data.in_validation(sd, y0, 0, min(data.BAND, sd.height - y0), sd.width)
++                           for y0 in range(0, sd.height, data.BAND)])
++
++
++def _add_words(t: _Tally, sd: data.SheetData, chance: np.ndarray, ink: np.ndarray, scope: np.ndarray) -> None:
++    """Count the words whose centre px is in `scope`, each found or not on its ink in `ink` (see the module)."""
++    h, w = ink.shape
++    kind_name = {k: name for name, k in data.KINDS.items()}
++    centre = np.rint(sd.words.mean(axis=1)).astype(np.intp)
++    counted = scope[np.clip(centre[:, 1], 0, h - 1), np.clip(centre[:, 0], 0, w - 1)]
++    lo, hi = sd.words.min(axis=1), sd.words.max(axis=1) + 1
++    for j in np.flatnonzero(counted):
++        (x0, y0), (x1, y1) = lo[j], hi[j]
++        rect = np.zeros((y1 - y0, x1 - x0), np.uint8)       # filled whole, as on a page large enough (`data._paint`)
++        cv2.fillPoly(rect, [(sd.words[j] - lo[j]).reshape(-1, 1, 2)], 1)
++        cy0, cx0, cy1, cx1 = max(y0, 0), max(x0, 0), min(y1, h), min(x1, w)
++        if cy0 >= cy1 or cx0 >= cx1:
++            continue
++        mine = rect[cy0 - y0:cy1 - y0, cx0 - x0:cx1 - x0].view(bool) & ink[cy0:cy1, cx0:cx1]
++        n = int(mine.sum())
++        if n:
++            tally = t.words[kind_name[int(sd.kinds[j])]]
++            tally[0] += int(chance[cy0:cy1, cx0:cx1][mine].sum(dtype=np.int64)) >= CALLED * n
++            tally[1] += 1
++
++
++def score_sheet(sd: data.SheetData, chance: np.ndarray, scope: np.ndarray) -> _Tally:
++    """One sheet's counts: its chance (uint8, the page's shape) on the px of `scope` (`scored_px`)."""
++    ink = data.page_ink(sd)
++    text, unknown = data.page_text(sd)
++    scored = ink & ~unknown & scope
++    t = _Tally(sheets=1)
++    t.pos += np.bincount(chance[scored & text], minlength=256)
++    t.neg += np.bincount(chance[scored & ~text], minlength=256)
++    _add_words(t, sd, chance, ink & scope, scope)
++    line = line_ink(sd) & scored
++    t.line_px = int(line.sum())
++    t.line_called = int((chance[line] >= CALLED).sum())
++    t.line_chance = int(chance[line].sum(dtype=np.int64))
++    t.line_in_word = int((line & text).sum())
++    t.line_rest_called = int((chance[line & ~text] >= CALLED).sum())
++    return t
++
++
++def score_sheets(chances: Mapping[tuple[str, str], np.ndarray], where: str,
++                 sheets: list[data.SheetData] | None = None) -> dict:
++    """The scores (see the module) of the chances of text `chances` ((series, sheet) -> its page's chance) `where`
++    ("validation" or "whole") on `sheets` (by default every sheet Terra read of the maps in `chances`,
++    `data.load_sheets`): per map, in the sheets' order, and over all; JSON-able.  Every sheet with px to score must
++    have its chance, of its page's shape, and every chance its sheet (ValueError)."""
++    if where not in WHERE:
++        raise ValueError(f"where is one of {', '.join(WHERE)}, not {where!r}")
++    if sheets is None:
++        present = {s for s, _ in chances}
++        series = [s for s in paths.TEXT_SHEETS if s in present] + sorted(present - set(paths.TEXT_SHEETS))
++        sheets = data.load_sheets(series, hold_out_validation=False)
++    keys = [(sd.series, sd.sheet) for sd in sheets]
++    extra = [k for k in chances if k not in set(keys)]
++    if extra:
++        raise ValueError(f"chances of sheets not among those scored: {', '.join(f'{s} {n}' for s, n in extra)}")
++    if where == "whole":
++        missing = [k for k in keys if k not in chances]
++        if missing:
++            raise ValueError(f"no chance for {', '.join(f'{s} {n}' for s, n in missing)}: whole sheets are scored")
++    tallies: dict[str, _Tally] = {}
++    for sd, key in zip(sheets, keys):
++        scope = scored_px(sd, where)
++        if not scope.any():
++            continue
++        if key not in chances:
++            raise ValueError(f"no chance for {key[0]} {key[1]}, which has px in the validation area")
++        chance = as_chance(chances[key])
++        if chance.shape != (sd.height, sd.width):
++            raise ValueError(f"the chance of {key[0]} {key[1]} is {chance.shape}, not its page's shape "
++                             f"{(sd.height, sd.width)}")
++        tallies.setdefault(sd.series, _Tally()).add(score_sheet(sd, chance, scope))
++    total = _Tally()
++    for t in tallies.values():
++        total.add(t)
++    return {"where": where, "called": CALLED, "long_line_ft": LONG_LINE_FT, "thin_line_ft": THIN_LINE_FT,
++            "series": {s: t.scores() for s, t in tallies.items()}, "all": total.scores()}
+diff --git a/pipeline/tests/test_solver_textnet.py b/pipeline/tests/test_solver_textnet.py
+index e6d440c..584276c 100644
+--- a/pipeline/tests/test_solver_textnet.py
++++ b/pipeline/tests/test_solver_textnet.py
+@@ -5,21 +5,21 @@ import json
+ import threading
+ 
+ import cv2
+ import numpy as np
+ import pytest
+ import torch
+ import torch.nn.functional as F
+ 
+ from sfzmaps import config
+ from sfzmaps.solver import grid, paths
+-from sfzmaps.solver.textnet import boxes, data, evaluate, model, predict, stage, train
++from sfzmaps.solver.textnet import boxes, data, evaluate, model, predict, scores, stage, train
+ from sfzmaps.transform import SheetTransform
+ 
+ SHEET = "2000-digital-zoning-p01"
+ SIZE = 640
+ SPLIT_PX = 319.5          # the quarter split, page px both ways: px 0-319 west / north, 320 on east / south
+ WORD_A = [100, 100, 180, 130]     # a zoning code read left to right, in nw
+ WORD_B = [450, 80, 470, 200]      # a street name read bottom to top, in ne
+ OTHER_NEAR_A = [160, 110, 230, 125]   # another pass's box, half on word A
+ OTHER_ALONE = [100, 400, 160, 430]    # another pass's box on no Terra box, in sw
+ SOL_IN_A = (175, 115)             # a Sol label point inside word A's box
+@@ -876,10 +876,283 @@ def test_recipe_round_trips_through_the_saved_model(maps, tmp_path):
+     assert train.Recipe(**saved["recipe"]) == recipe
+     assert (saved["iterations"], saved["device"], saved["seed"]) == (2, "cpu", 0)
+     # prediction builds the network the recipe names, and scores as the trained one does
+     loaded = predict.load_model(f, "cpu")
+     ink = data.page_ink(sheets[1])
+     assert np.array_equal(predict.chance(loaded, ink, "cpu"), predict.chance(net, ink, "cpu"))
+     # a model saved without its recipe is refused, not guessed
+     torch.save({k: v for k, v in saved.items() if k != "recipe"}, tmp_path / "old.pt")
+     with pytest.raises(ValueError, match="recipe"):
+         predict.load_model(tmp_path / "old.pt", "cpu")
++
++
++# --- the scores ------------------------------------------------------------------------------------------------------
++
++AREA_CORNER = (319.5, 319.5)      # page px of VALIDATION_AREA's north-west corner: rows and columns 320 on are in it
++EDGE_WORDS = [([300, 400, 380, 430], "zoning code", 0),    # P: across the area's west edge, its centre (340, 415) in it
++              ([400, 290, 460, 340], "street name", 0),    # Q: across its north edge, its centre (430, 315) outside
++              ([500, 500, 560, 530], "block number", 0),   # R: inside
++              ([50, 50, 120, 80], "other", 0)]             # S: outside
++EDGE_POINT = (600, 450)           # one of Sol's points, in the area
++
++
++def _in_memory_sheet(gray, ft_per_px=4.0, corner=AREA_CORNER, words=(), points=(), sheet=SHEET) -> data.SheetData:
++    """A 2000 SheetData made in memory: the page `gray`, placed north up at `ft_per_px` ft per page px with
++    VALIDATION_AREA's north-west corner at page px `corner` (col, row), so the px east of and below it are in the
++    area; Terra's `words` (axis box, kind, reading angle) and Sol's `points` (x, y)."""
++    h, w = gray.shape
++    ax0, _, _, ay1 = data.VALIDATION_AREA
++    step = data.PLACEMENT_STEP
++    gx, gy = np.meshgrid(np.arange(0, w - 1 + step, step, dtype=float), np.arange(0, h - 1 + step, step, dtype=float))
++    world = np.stack([ax0 + ft_per_px * (gx - corner[0]), ay1 - ft_per_px * (gy - corner[1])], -1)
++    rects = [data.word_rect(box, angle) for box, _, angle in words]
++    return data.SheetData(
++        series=paths.SERIES, sheet=sheet, height=h, width=w, ink_bits=np.packbits(gray < grid.INK_BELOW, axis=1),
++        words=np.round(np.array(rects, float).reshape(-1, 4, 2)).astype(np.int32),
++        kinds=np.array([data.KINDS[k] for _, k, _ in words], np.uint8),
++        angles=np.array([data.reading_angle(r) for r in rects], np.int16), other=np.zeros((0, 4, 2), np.int32),
++        points=np.array(points, np.int32).reshape(-1, 2), world=world, ft_per_px=float(ft_per_px), hold_out=False)
++
++
++def _box_mask(shape, box) -> np.ndarray:
++    """The page px (bool) of an axis box (x0, y0, x1, y1), its edges included: the px a word read left to right
++    fills."""
++    x0, y0, x1, y1 = box
++    m = np.zeros(shape, bool)
++    m[y0:y1 + 1, x0:x1 + 1] = True
++    return m
++
++
++def _u8(a) -> np.ndarray:
++    return np.asarray(a).astype(np.uint8)
++
++
++def _score(sd, chance, where) -> dict:
++    return scores.score_sheets({(sd.series, sd.sheet): chance}, where, [sd])
++
++
++def _drawing(ft_per_px: float) -> tuple[np.ndarray, dict[str, np.ndarray]]:
++    """One drawing in feet (1,600 ft square) at `ft_per_px` ft per page px: four straight bars apart (from x0 to x1,
++    centred on y, of a width; ft): a long thin line, a short thin one, a long heavy one (a district line's 40 ft) and
++    a long solid fill (64 ft); and a speck 8 ft below the long thin line (a bar 4 ft long).  Returns the page and the
++    px of each."""
++    lines = {"long thin": (100, 420, 200, 8), "short thin": (100, 260, 500, 8), "long heavy": (100, 420, 800, 40),
++             "solid": (100, 420, 1200, 64), "speck": (300, 304, 214, 4)}
++    n = int(round(1600 / ft_per_px))
++    gray = np.full((n, n), 255, np.uint8)
++    px = {}
++    for name, (x0, x1, y, width) in lines.items():
++        m = np.zeros((n, n), bool)
++        r0 = int(round((y - width / 2) / ft_per_px))
++        m[r0:r0 + int(round(width / ft_per_px)), int(round(x0 / ft_per_px)):int(round(x1 / ft_per_px))] = True
++        gray[m] = 0
++        px[name] = m
++    return gray, px
++
++
++def test_long_line_measure_uses_feet_per_sheet():
++    # the same drawing at 2 and at 4 ft per page px: the same lines are long lines (at least LONG_LINE_FT long, at most
++    # THIN_LINE_FT wide, each in the sheet's own feet), the thin and the heavy one, nearly all of their ink; the short
++    # line and the solid fill are not
++    for ft in (2.0, 4.0):
++        gray, lines = _drawing(ft)
++        found = scores.long_lines(gray < grid.INK_BELOW, ft)
++        assert found[lines["long thin"]].mean() >= 0.9 and found[lines["long heavy"]].mean() >= 0.8, ft
++        assert not found[lines["short thin"]].any() and not found[lines["solid"]].any(), ft
++        # a speck beside the line, whose centre line is no stroke, is not the line's
++        assert lines["speck"].any() and not found[lines["speck"]].any(), ft
++        assert not (found & (gray >= grid.INK_BELOW)).any()
++    # read at the grid's 4 ft per px instead, the 2 ft drawing's short line would be 320 ft long and its heavy line
++    # 80 ft wide: the sheet's scale decides both
++    gray, lines = _drawing(2.0)
++    wrong = scores.long_lines(gray < grid.INK_BELOW, grid.FT_PER_PX)
++    assert wrong[lines["short thin"]].mean() >= 0.9 and not wrong[lines["long heavy"]].any()
++    # the scores read each sheet's own scale: the same long-line ink, in square feet, at both
++    area_ft2 = []
++    for ft in (2.0, 4.0):
++        gray, _ = _drawing(ft)
++        sd = _in_memory_sheet(gray, ft_per_px=ft)
++        long_ink = _score(sd, np.zeros(gray.shape, np.uint8), "whole")["all"]["long_lines"]["ink_px"]
++        area_ft2.append(long_ink * ft * ft)
++    assert area_ft2[0] > 0 and area_ft2[0] == pytest.approx(area_ft2[1], rel=0.1)
++
++
++def _edge_page() -> np.ndarray:
++    """The page of EDGE_WORDS: each word's ink a block inside its box; a thin line 1,040 ft long whose last 160 ft
++    are in the area; ink at Sol's point."""
++    gray = np.full((SIZE, SIZE), 255, np.uint8)
++    for (x0, y0, x1, y1), _, _ in EDGE_WORDS:
++        gray[y0 + 3:y1 - 2, x0 + 2:x1 - 1] = 0
++    gray[598:600, 100:360] = 0
++    gray[440:460, 590:610] = 0
++    return gray
++
++
++def _edge_masks(gray) -> dict[str, np.ndarray]:
++    """The edge page's px, drawn independently: ink, the area (rows and columns 320 on), text (the words' boxes),
++    unknown (within READ_POINT_RADIUS of Sol's point, in no box)."""
++    ink = gray < grid.INK_BELOW
++    area = np.zeros(gray.shape, bool)
++    area[320:, 320:] = True
++    text = np.zeros(gray.shape, bool)
++    for box, _, _ in EDGE_WORDS:
++        text |= _box_mask(gray.shape, box)
++    disc = np.zeros(gray.shape, np.uint8)
++    cv2.circle(disc, EDGE_POINT, data.READ_POINT_RADIUS, 1, -1)
++    return {"ink": ink, "area": area, "text": text, "unknown": (disc > 0) & ~text}
++
++
++def test_validation_scores_use_only_validation_pixels():
++    gray = _edge_page()
++    sd = _in_memory_sheet(gray, words=EDGE_WORDS, points=[EDGE_POINT])
++    m = _edge_masks(gray)
++    rng = np.random.default_rng(0)
++    chance = rng.integers(0, 256, gray.shape, dtype=np.uint8)
++    v = _score(sd, chance, "validation")
++    # the ink px scored are the known ink px in the area, and no others
++    scored = m["ink"] & m["area"] & ~m["unknown"]
++    assert m["unknown"].any() and (m["ink"] & m["unknown"]).any()
++    assert v["all"]["ink_px"] == scored.sum() and v["all"]["text_ink_px"] == (scored & m["text"]).sum()
++    assert v["series"][paths.SERIES]["sheets"] == 1 and v["where"] == "validation"
++    # a chance changed anywhere outside the area changes nothing; changed on the ink inside, the scores change
++    assert _score(sd, np.where(m["area"], chance, rng.integers(0, 256, gray.shape, dtype=np.uint8)),
++                  "validation") == v
++    assert _score(sd, _u8(np.where(scored, 255 - chance, chance)), "validation") != v
++    # the long line is long by its whole length (its 160 ft in the area alone would be short): its ink in the area
++    # is the long-line ink
++    line = np.zeros(gray.shape, bool)
++    line[598:600, 320:360] = True
++    assert 0.9 * line.sum() <= v["all"]["long_lines"]["ink_px"] <= line.sum()
++    assert not scores.long_lines(m["ink"] & m["area"], sd.ft_per_px)[line].any()
++    # on the whole sheet every known ink px counts, outside the area too
++    w = _score(sd, chance, "whole")
++    assert w["all"]["ink_px"] == (m["ink"] & ~m["unknown"]).sum() and w["where"] == "whole"
++    assert w["all"]["long_lines"]["ink_px"] > v["all"]["long_lines"]["ink_px"]
++    assert _score(sd, _u8(np.where(m["area"], chance, 0)), "whole") != w
++    # validation needs a chance for every sheet with px in the area, and only those; whole needs every sheet's
++    away = _in_memory_sheet(gray, corner=(5000.0, 5000.0), sheet="2000-digital-zoning-p02")
++    both = [sd, away]
++    key = (sd.series, sd.sheet)
++    assert scores.score_sheets({key: chance}, "validation", both) == v
++    with pytest.raises(ValueError, match="2000-digital-zoning-p02"):
++        scores.score_sheets({key: chance}, "whole", both)
++    with pytest.raises(ValueError, match=SHEET):
++        scores.score_sheets({(away.series, away.sheet): chance}, "validation", both)
++    with pytest.raises(ValueError, match="elsewhere"):
++        scores.score_sheets({key: chance, (paths.SERIES, "elsewhere"): chance}, "validation", both)
++    with pytest.raises(ValueError, match="shape"):
++        _score(sd, chance[:-1], "validation")
++    with pytest.raises(ValueError, match="where"):
++        _score(sd, chance, "train")
++
++
++def test_a_word_across_the_validation_edge_counts_by_its_centre_and_only_its_ink_inside():
++    # in validation a word is counted when its centre px is in the area, and judged on its ink in the area alone (no
++    # px the detector trained on counts); a word whose centre is outside is not counted, though its ink inside counts
++    # as text ink. On the whole sheet every word counts, judged on all its ink
++    gray = _edge_page()
++    sd = _in_memory_sheet(gray, words=EDGE_WORDS, points=[EDGE_POINT])
++    m = _edge_masks(gray)
++    p_ink, q_ink, r_ink = (_box_mask(gray.shape, box) & m["ink"] for box, _, _ in EDGE_WORDS[:3])
++    assert (p_ink & ~m["area"]).any() and (q_ink & m["area"]).any() and (q_ink & ~m["area"]).any()
++    # P's ink outside the area called text, its ink inside not quite: not found in validation, found on the whole
++    # sheet (its mean chance there (255 x 18 + 100 x 59) / 77 = 136)
++    chance = _u8(np.where(p_ink & ~m["area"], 255, np.where(p_ink, 100, 0)))
++    v = _score(sd, chance, "validation")["all"]
++    assert {k: (x["found"], x["of"]) for k, x in v["words"].items()} == {
++        "zoning code": (0, 1), "block number": (0, 1), "street name": (0, 0), "other": (0, 0), "all": (0, 2)}
++    assert v["text_ink_px"] == ((p_ink | q_ink | r_ink) & m["area"]).sum()
++    w = _score(sd, chance, "whole")["all"]["words"]
++    assert {k: (x["found"], x["of"]) for k, x in w.items()} == {
++        "zoning code": (1, 1), "block number": (0, 1), "street name": (0, 1), "other": (0, 1), "all": (1, 4)}
++    # the other way round, P is found in validation: its ink inside called, its ink outside not
++    chance = _u8(np.where(p_ink & m["area"], 255, 0))
++    assert _score(sd, chance, "validation")["all"]["words"]["zoning code"] == {"found": 1, "of": 1}
++
++
++def test_words_found_counts_a_box_with_half_its_ink_called_text():
++    # a word is found when on average half its ink is called text: the mean chance over its ink (the ink px in its
++    # rectangle) is CALLED (0.5) or more, the rule of the quarter models' scores
++    a_box, b_box, c_box, d_box = [20, 20, 120, 60], [200, 20, 300, 60], [260, 20, 360, 60], [20, 100, 120, 140]
++    gray = np.full((200, 400), 255, np.uint8)
++    gray[30:50, 30:110] = 0        # A's ink: 80 columns
++    gray[30:50, 210:250] = 0       # B's ink outside C
++    gray[30:50, 265:295] = 0       # ink where B and C overlap
++    gray[30:50, 310:320] = 0       # C's ink outside B
++    gray[150:152, :] = 0           # a line in no box
++    words = [(a_box, "zoning code", 0), (b_box, "street name", 0), (c_box, "other", 0), (d_box, "block number", 0)]
++    sd = _in_memory_sheet(gray, words=words)
++    ink = gray < grid.INK_BELOW
++    a = _box_mask(gray.shape, a_box) & ink
++    cols = np.arange(400)[None, :]
++
++    def found(chance) -> dict[str, int]:
++        return {k: x["found"] for k, x in _score(sd, chance, "whole")["all"]["words"].items()}
++
++    def a_found(chance) -> bool:
++        return found(chance)["zoning code"] == 1
++
++    assert a_found(_u8(np.where(a, scores.CALLED, 0))) and not a_found(_u8(np.where(a, scores.CALLED - 1, 0)))
++    # a float chance is read as the detector writes it (x 255, rounded): 0.5 is called text, 0.498 is not
++    assert a_found(np.where(a, 0.5, 0.0)) and not a_found(np.where(a, 0.498, 0.0))
++    # the mean, however the chance is spread: half at 255 and half at 1 is 128; 60% of the ink at 255 found, 40% not;
++    # but 40% at 255 and the rest at 100 is found (a mean of 162), though most of its px are not called
++    assert a_found(_u8(np.where(a & (cols % 2 == 0), 255, np.where(a, 1, 0))))
++    assert a_found(_u8(np.where(a & (cols < 78), 255, 0))) and not a_found(_u8(np.where(a & (cols < 62), 255, 0)))
++    assert a_found(_u8(np.where(a & (cols < 62), 255, np.where(a, 100, 0))))
++    # paper in its box and ink in no box count for nothing
++    rows = np.arange(200)[:, None]
++    assert not a_found(_u8(np.where((_box_mask(gray.shape, a_box) & ~ink) | (ink & (rows >= 150)), 255, 0)))
++    # overlapping words are each judged on their own ink, the ink where they overlap each one's: called there, C is
++    # found (600 of its 800 ink px) and B not (600 of 1,400)
++    overlap = _box_mask(gray.shape, b_box) & _box_mask(gray.shape, c_box) & ink
++    f = found(_u8(np.where(overlap, 255, 0)))
++    assert f["other"] == 1 and f["street name"] == 0 and f["zoning code"] == 0
++    # a word with no ink (D) is not counted
++    w = _score(sd, np.zeros(gray.shape, np.uint8), "whole")["all"]
++    assert {k: x["of"] for k, x in w["words"].items()} == {
++        "zoning code": 1, "block number": 0, "street name": 1, "other": 1, "all": 3}
++    assert w["words_found"] == 0.0
++
++
++def test_a_sheets_long_lines_are_found_once_per_process(monkeypatch):
++    monkeypatch.setattr(scores, "_LINE_INK", {})
++    calls = []
++    real = scores.long_lines
++    monkeypatch.setattr(scores, "long_lines", lambda ink, ft: calls.append(ft) or real(ink, ft))
++    gray = _edge_page()
++    sd = _in_memory_sheet(gray, words=EDGE_WORDS, points=[EDGE_POINT])
++    rng = np.random.default_rng(2)
++    chances = [rng.integers(0, 256, gray.shape, dtype=np.uint8) for _ in range(2)]
++    first = [_score(sd, c, where) for c in chances for where in scores.WHERE]
++    # two detectors' chances, on validation and on the whole sheet, and an equal copy of the sheet: the lines once
++    assert _score(dataclasses.replace(sd, ink_bits=sd.ink_bits.copy()), chances[0], "validation") == first[0]
++    assert len(calls) == 1
++    assert np.array_equal(scores.line_ink(sd), real(data.page_ink(sd), sd.ft_per_px)) and len(calls) == 1
++    # the same as found afresh
++    monkeypatch.setattr(scores, "_LINE_INK", {})
++    assert [_score(sd, c, where) for c in chances for where in scores.WHERE] == first and len(calls) == 2
++    # another page under the same name, or the same page at another scale, is not given the kept answer
++    other = gray.copy()
++    other[100:102, 50:600] = 0
++    scores.line_ink(_in_memory_sheet(other, words=EDGE_WORDS, points=[EDGE_POINT]))
++    scores.line_ink(_in_memory_sheet(gray, ft_per_px=2.0, words=EDGE_WORDS, points=[EDGE_POINT]))
++    assert calls == [4.0, 4.0, 4.0, 2.0]
++
++
++def test_scores_read_the_sheets_of_the_maps_scored_and_add_them_up(maps):
++    sheets = data.load_sheets([paths.SERIES, OLD], hold_out_validation=False)
++    rng = np.random.default_rng(1)
++    chances = {(sd.series, sd.sheet): rng.integers(0, 256, (sd.height, sd.width), dtype=np.uint8) for sd in sheets}
++    # by default every sheet Terra read of the maps named, in the maps' order whatever the chances' order
++    got = scores.score_sheets(dict(reversed(chances.items())), "whole")
++    assert got == scores.score_sheets(chances, "whole", sheets) and list(got["series"]) == [paths.SERIES, OLD]
++    # over all, the maps' counts added up
++    per_map = list(got["series"].values())
++    for k in ("sheets", "ink_px", "text_ink_px"):
++        assert got["all"][k] == sum(s[k] for s in per_map) > 0
++    assert got["all"]["words"]["all"]["of"] == sum(s["words"]["all"]["of"] for s in per_map) > 0
++    assert got["all"]["long_lines"]["ink_px"] == sum(s["long_lines"]["ink_px"] for s in per_map) > 0
++    # JSON as it is, and the same bytes from the same chances
++    assert json.dumps(got) == json.dumps(scores.score_sheets(chances, "whole"))
++    with pytest.raises(ValueError, match="1975"):
++        scores.score_sheets({("1975", "1"): chances[sheets[0].series, sheets[0].sheet]}, "whole")

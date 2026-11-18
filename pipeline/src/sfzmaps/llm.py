@@ -245,9 +245,12 @@ def _model_parts() -> tuple[list[str], list[str]]:
     return [VISION_PROVIDER, VISION_MODEL], trailing
 
 
-def _key(png: bytes, prompt: str, schema: type[BaseModel]) -> str:
+def _key(png: bytes, prompt: str, schema: type[BaseModel],
+         model_parts: tuple[list[str], list[str]] | None = None) -> str:
+    """The cache key of a question.  `model_parts`: the (leading, trailing) parts naming the model, for an answer
+    asked of another model than today's (`_model_parts()` when None)."""
     h = hashlib.sha256()
-    lead, trail = _model_parts()
+    lead, trail = model_parts if model_parts is not None else _model_parts()
     parts = [*lead, prompt, json.dumps(schema.model_json_schema(), sort_keys=True), *trail]
     for part in parts:
         h.update(part.encode())
@@ -256,10 +259,12 @@ def _key(png: bytes, prompt: str, schema: type[BaseModel]) -> str:
     return h.hexdigest()
 
 
-def _encode(image: np.ndarray) -> bytes:
+def _encode(image: np.ndarray, max_edge: int | None = None) -> bytes:
+    """The image as PNG bytes; its long edge may be at most `max_edge` (MAX_EDGE when None)."""
+    max_edge = MAX_EDGE if max_edge is None else max_edge
     h, w = image.shape[:2]
-    if max(h, w) > MAX_EDGE:
-        raise ValueError(f"image {w}x{h} exceeds {MAX_EDGE}px long edge")
+    if max(h, w) > max_edge:
+        raise ValueError(f"image {w}x{h} exceeds {max_edge}px long edge")
     ok, buf = cv2.imencode(".png", image)
     if not ok:
         raise ValueError("PNG encoding failed")

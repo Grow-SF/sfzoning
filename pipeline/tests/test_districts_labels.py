@@ -545,3 +545,39 @@ def test_an_old_artifact_is_replayed_from_the_cache_and_kept_byte_for_byte(tmp_p
     assert fake.calls == calls                                           # replayed from the cache
     assert answers.read(art) == recorded and outer == set(recorded)      # and consumed
     assert (art.read_bytes(), art.stat().st_mtime_ns) == before
+
+
+def test_the_old_reader_never_sees_the_solvers_hand_labels(monkeypatch):
+    """The owner's hand labels for the 2000 map (329 rows, 101 leader moves) are the solver's: its placement learns
+    from them (runs.LABEL_FIXES).  The old reader applies inputs/<series>/label_fixes.csv, and through the twin fuse the
+    1996-2000 scan reads the 2000 sheets' fixes too; applied there the hand labels made the 1996-2000 map worse
+    (2026-11-18).  So their file is in no series' inputs folder, no series' label_fixes.csv holds any of them, and
+    what the twin fuse reads for each 2000 sheet (labels.label_fixes) holds none."""
+    import csv
+
+    from sfzmaps import inputs
+    from sfzmaps.districts.series import SERIES
+    from sfzmaps.solver import runs
+    # the committed inputs themselves, read only (conftest points every test at an empty folder)
+    monkeypatch.setattr(config, "INPUTS_DIR", config.PIPELINE_DIR / "inputs")
+    assert runs.LABEL_FIXES.is_relative_to(config.INPUTS_DIR)
+
+    def rows(path):
+        with open(path, newline="") as f:
+            return [tuple(r.values()) for r in csv.DictReader(f)]
+
+    hand = set(rows(runs.LABEL_FIXES))
+    with open(runs.LABEL_FIXES, newline="") as f:
+        moves = [r for r in csv.DictReader(f) if (r["fix_x"] or "").strip()]
+    assert len(hand) == 329 and len(moves) == 101
+    for s in SERIES:
+        assert runs.LABEL_FIXES.parent != inputs.series_dir(s)
+        if inputs.label_fixes_path(s).exists():
+            assert not set(rows(inputs.label_fixes_path(s))) & hand, s
+    twin = labels.TWIN_SERIES[1]
+    seen = 0
+    for n in range(1, 13):
+        got = {tuple(r.values()) for r in labels.label_fixes(twin, f"{twin}-p{n:02d}")}
+        assert not got & hand
+        seen += len(got)
+    assert seen == 19          # the 2000 sheets' own fixes of 2026-11-04 are still read

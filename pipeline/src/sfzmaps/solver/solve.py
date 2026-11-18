@@ -1,0 +1,281 @@
+"""Solving the city: one energy over every lot's code (energy.py), searched as in search.py.
+
+Held out by quarter: the city is solved four times, each time with wall odds and a placement model fitted without one
+quarter, and every lot takes its answer from the solve that did not see its quarter.  The four solves run side by side,
+each in its own process (`sfzmaps solver solve-quarter`), with one thread each for the linear algebra (`threads`).
+
+Writes, under runs/ in the run's folder (`runs.solve_dir`: data/solver/solve for the stage's run `final`,
+data/solver/experiments/<run> for any other):
+  {run}-{q}.npz        the solve that held out quarter q: `names` and `pred` (city.save_run)
+  {run}-{q}.log        its log: what its process prints, with no times (the same inputs give the same bytes); its
+                       stderr goes to the console
+  {run}-{q}-costs.npz  with keep_costs: its label costs, odds, codes and readings (for holes.py)
+  {run}.npz            the join: every lot from its own quarter's solve
+
+`solve_and_report` is the `solver-solve` stage (`sfzmaps solver solve final`, a process pinned to one thread like
+the quarters'): the placement, the four solves, the join, the data errors among the run's holes and the report, built
+in a fresh folder that then takes the run folder's place."""
+import subprocess
+import time
+from collections import Counter
+from pathlib import Path
+
+import numpy as np
+
+from sfzmaps.solver import energy as E
+from sfzmaps.solver import paths, runs, search, threads
+from sfzmaps.solver.city import city, load_run, run_file, save_run, wall_odds
+from sfzmaps.solver.codes import canon, table_vocabulary
+from sfzmaps.solver.labels import readings
+from sfzmaps.solver.placement import load_options
+
+TRUE_BORDER_ODDS = 6.0      # the ceiling check: the table's own borders as near-certain walls (+) or none (-)
+ROUNDS = 4                  # the search's loop of region, compound and expansion moves: rounds at most
+COMPOUND_FUSION_ROUNDS = 8  #   and with the compound fusion move in it (solve_joint's compound_fusion)
+
+
+def check_run(run: str, walls_dir: Path | None = None, true_borders: bool = False,
+              compound_fusion: bool = True) -> None:
+    """runs.check_final, and the stage's run (FINAL_RUN) keeps the stage's search: refuse it without the compound
+    fusion move (solve_joint's compound_fusion, on in the stage since the owner's ruling of 11-16; an experiment can
+    turn it off to compare)."""
+    runs.check_final(run, walls_dir, true_borders)
+    if run == runs.FINAL_RUN and not compound_fusion:
+        raise ValueError(f"the run {runs.FINAL_RUN!r} is the solver-solve stage's: solve it with the compound fusion "
+                         "move (the default; not --no-compound-fusion), or give the experiment another name")
+
+
+def costs(n_lots, a, b, odds, rd, options=None, label_weight=1.0, tie_break=1e-4):
+    """(U, labels, label terms): U[lot, code], the label costs (energy.label_costs) plus tie_break x each code's
+    cheapest-path cost (energy.path_costs), less each lot's row minimum: the costs solve_joint minimises"""
+    K = len(rd.names)
+    U, n_labels, n_terms = E.label_costs(n_lots, K, rd, options, label_weight)
+    U = U + tie_break * E.path_costs(n_lots, K, a, b, odds, rd)
+    U -= U.min(1, keepdims=True)
+    return U, n_labels, n_terms
+
+
+def polish(U, a, b, odds, same, p, compound_fusion=False, steps=None):
+    """solve_joint's loop from the answer p: region, compound (with compound_fusion, then compound fusion) and
+    expansion moves, round after round until the energy stops falling, at most ROUNDS rounds
+    (COMPOUND_FUSION_ROUNDS with compound_fusion).  steps: the moves' log, appended to."""
+    for _ in range(COMPOUND_FUSION_ROUNDS if compound_fusion else ROUNDS):
+        e0 = E.energy(U, a, b, odds, p, same)
+        p = search.region_moves(U, a, b, odds, same, p, log=steps)
+        p = search.compound_moves(U, a, b, odds, same, p, log=steps)
+        if compound_fusion:
+            p = search.compound_fusion_moves(U, a, b, odds, same, p, log=steps)
+        p = search.expansion_moves(U, a, b, odds, same, p, log=steps)
+        if E.energy(U, a, b, odds, p, same) >= e0 - 1e-6:
+            break
+    return p
+
+
+def solve_joint(n_lots, a, b, odds, rd, options=None, label_weight=1.0, wall_weight=1.0, same_weight=1.0,
+                tie_break=1e-4, table_codes=None, log=print, compound_fusion=True):
+    """the lowest-energy code per lot (an index into rd.names).
+    tie_break x each code's cheapest-path cost only breaks ties in areas no label stands for; it must stay tiny, as
+    it is charged per lot.  table_codes (index per lot, -1 unknown): also report the energy of the table's answer
+    (lots the table leaves blank take the solve's codes).  A diagnostic: misread walls and misread or misplaced labels
+    charge the table's answer, so it can cost more than the solve's even when the solve is mostly right.
+    compound_fusion: the search's loop also runs search.compound_fusion_moves after the compound moves, for up to
+    COMPOUND_FUSION_ROUNDS rounds instead of ROUNDS (on by default, and in the stage's run; False for a comparison)."""
+    U, n_labels, n_terms = costs(n_lots, a, b, odds, rd, options, label_weight, tie_break)
+    odds = wall_weight * odds
+    same = same_weight / wall_weight
+    steps = []
+    p = U.argmin(1)
+    e_start = E.energy(U, a, b, odds, p, same)
+    if same > 0:                                         # first without the same-code-across-a-line cost (an easy cut)
+        p = search.expansion_moves(U, a, b, odds, 0.0, p, log=steps)
+    p = search.expansion_moves(U, a, b, odds, same, p, log=steps)
+    p = polish(U, a, b, odds, same, p, compound_fusion, steps)
+    e_solve = E.energy(U, a, b, odds, p, same)
+    log(f"labels {n_labels:,}, label terms on {n_terms:,} lots; energy at the start {e_start:,.1f}, "
+        f"solved {e_solve:,.1f}")
+    log("search steps (kind, round, moved, energy): " + ", ".join(f"{s[0]} {s[1]} {s[2]} {s[3]:,.1f}" for s in steps))
+    if table_codes is not None:
+        t = np.where(table_codes >= 0, table_codes, p)
+        e_table = E.energy(U, a, b, odds, t, same)
+        log(f"energy of the table's answer {e_table:,.1f} "
+            f"({'lower' if e_table < e_solve else 'higher'} than the solve's)")
+    return p, U
+
+
+def solve_quarter(run: str, q: str, walls_dir: Path | None = None, true_borders: bool = False,
+                  keep_costs: bool = False, folder: Path | None = None, compound_fusion: bool = True) -> None:
+    """Solve the whole city with holdout q's inputs (the walls of `walls_dir`, default WALLS_DIR, and the placement
+    in the run's folder) and write runs/{run}-{q}.npz into `folder` (default the run's own,
+    `runs.solve_dir`).  The scoring table (with the by-eye corrections) gives the true borders of the ceiling check
+    and the table's answer the log prices.  compound_fusion: solve_joint's.  What it prints is the quarter's log: no
+    times."""
+    check_run(run, walls_dir, true_borders, compound_fusion)
+    folder = Path(folder or runs.solve_dir(run))
+
+    def log(s):
+        print(f"{q}: {s}", flush=True)
+
+    C = city()
+    odds = wall_odds(q, walls_dir)
+    if len(odds) != len(C.a):
+        raise ValueError(f"walls_{q}.npz has {len(odds):,} odds for {len(C.a):,} neighbour pairs: rerun "
+                         "`sfzmaps solver walls` after `sfzmaps solver lots`")
+    if true_borders:
+        both = C.known[C.a] & C.known[C.b]
+        odds = np.where(both, np.where(C.table[C.a] != C.table[C.b], TRUE_BORDER_ODDS, -TRUE_BORDER_ODDS), odds)
+    if paths.is_2000():
+        rd = readings(q, table_vocabulary(C.lots))
+    else:                                                # the era's codes (`transfer.series_vocabulary`)
+        from sfzmaps.solver import transfer
+        rd = readings(q, transfer.series_vocabulary())
+    index = {}
+    for i, n in enumerate(rd.names):
+        index.setdefault(n, i)
+    table_codes = (np.array([index.get(canon(c), -1) if k else -1 for c, k in zip(C.table, C.known)])
+                   if paths.is_2000() else None)          # only the 2000 map's log prices the table's answer
+    log(f"readings {len(rd.lot):,} on {len(np.unique(rd.lot)):,} lots")
+    options = load_options(q, folder, walls_dir)
+    p, U = solve_joint(C.n, C.a, C.b, odds, rd, options, table_codes=table_codes, log=log,
+                       compound_fusion=compound_fusion)
+    names = rd.names + [""]
+    save_run(run_file(run, f"-{q}", folder), np.array(names)[p])
+    if keep_costs:                                       # for hole causes
+        np.savez_compressed(run_file(run, f"-{q}-costs", folder), U=U.astype(np.float32),
+                            odds=odds.astype(np.float32), codes=p, names=np.array(rd.names), table_codes=table_codes,
+                            lot=rd.lot, code=rd.code, trust=rd.trust)
+    log("done")
+
+
+def join(run: str, folder: Path | None = None) -> None:
+    """Every lot takes the answer of the solve that held out its quarter; writes runs/{run}.npz into `folder`
+    (default the run's own)."""
+    C = city()
+    out = np.full(C.n, "", dtype=object)
+    for k, q in enumerate(paths.QUARTERS):
+        R = np.load(run_file(run, f"-{q}", folder), allow_pickle=True)
+        m = C.quarter == k
+        out[m] = R["names"].astype(str)[R["pred"]][m]
+    save_run(run_file(run, folder=folder), out)
+
+
+def solve_all(run: str, walls_dir: Path | None = None, true_borders: bool = False, keep_costs: bool = False,
+              folder: Path | None = None, compound_fusion: bool = True) -> None:
+    """The four holdouts side by side (one `sfzmaps solver solve-quarter` process each, pinned to one thread
+    (`threads`), writing into `folder`, default the run's own), then the join.  A quarter's log (runs/RUN-Q.log) is
+    what its process prints; what it writes to stderr (a library's warning, a traceback) goes to the console, never
+    into the run's folder.  It prints each quarter's log and how long each took (the times only here, never in the
+    run's folder).  compound_fusion: solve_joint's, in every quarter."""
+    check_run(run, walls_dir, true_borders, compound_fusion)
+    folder = Path(folder or runs.solve_dir(run))
+    logs = run_file(run, folder=folder).parent
+    logs.mkdir(parents=True, exist_ok=True)
+    env = threads.environment()
+    flags = (["--true-borders"] * true_borders + ["--keep-costs"] * keep_costs
+             + ["--compound-fusion" if compound_fusion else "--no-compound-fusion"]
+             + (["--walls", str(walls_dir)] if walls_dir else []) + ["--folder", str(folder)])
+    t0 = time.perf_counter()
+    procs = []
+    for q in paths.QUARTERS:
+        logf = open(logs / f"{run}-{q}.log", "w")
+        cmd = threads.sfzmaps_command() + ["solver", "solve-quarter", run, q] + flags
+        procs.append((q, logf, subprocess.Popen(cmd, stdout=logf, env=env)))
+    seconds = {}
+    while len(seconds) < len(procs):                     # each solve's time, as it ends
+        for q, _, p in procs:
+            if q not in seconds and p.poll() is not None:
+                seconds[q] = time.perf_counter() - t0
+        time.sleep(0.5)
+    failed = []
+    for q, logf, p in procs:
+        if p.returncode != 0:
+            failed.append(q)
+        logf.close()
+        print((logs / f"{run}-{q}.log").read_text().rstrip())
+    print("solved in " + ", ".join(f"{q} {seconds[q]:.0f} s" for q in paths.QUARTERS), flush=True)
+    if failed:
+        raise RuntimeError(f"solve failed for {', '.join(failed)}; see {logs}/{run}-<quarter>.log and the errors "
+                           "above")
+    join(run, folder)
+    print(f"joined: {run_file(run, folder=folder)}")
+
+
+def posterior(run: str, folder: Path) -> np.ndarray:
+    """Each lot's chance of its solved code under the energy, its neighbours' codes held at the solve's (the Gibbs
+    conditional): softmax over codes c of -(U[lot, c] + the wall costs c would pay against each neighbour's solved
+    code), from the solve that held the lot's quarter out (runs/RUN-Q-costs.npz)."""
+    C = city()
+    out = np.zeros(C.n)
+    for k, q in enumerate(paths.QUARTERS):
+        R = np.load(run_file(run, f"-{q}-costs", folder))
+        U, odds, x = R["U"].astype(np.float64), R["odds"].astype(np.float64), R["codes"].astype(np.int64)
+        K = U.shape[1]
+        cost = U.copy()
+        differ = np.maximum(-odds, 0)                # paid when the codes differ (odds < 0)
+        same = np.maximum(odds, 0)                   # paid when they are the same (odds > 0)
+        # a lot pays a border's `differ` for every code but its neighbour's, which pays `same` instead: the sum of
+        # `differ` is the same for every code, so only the difference at the neighbour's code changes the chance
+        for i, j in ((C.a, C.b), (C.b, C.a)):
+            np.add.at(cost, (i, np.minimum(x[j], K - 1)), np.where(x[j] < K, same - differ, 0.0))
+        cost -= cost.min(1, keepdims=True)
+        p = np.exp(-cost)
+        p /= p.sum(1, keepdims=True)
+        m = C.quarter == k
+        xi = np.minimum(x, K - 1)
+        out[m] = np.where(x[m] < K, p[np.flatnonzero(m), xi[m]], 0.0)
+    return out
+
+
+def solve_and_report(run: str, walls_dir: Path | None = None, true_borders: bool = False,
+                     compound_fusion: bool = True) -> dict:
+    """Everything a solve needs and makes, from the walls of `walls_dir` (default WALLS_DIR), built in a fresh
+    folder beside the run's (`runs.fresh_folder`) that then takes its place (`runs.replace_folder`), so nothing of
+    an earlier solve is left: fit the placement (placement.npz), solve the four held-out quarters with their costs
+    and join them (`solve_all`), list the data errors among the run's holes (`holes.write_data_errors`:
+    data_errors.npz and data-errors-2000-digital.csv), and write the report (`report.write_report`: report.json and
+    report.md), which scores the run with those parcels left out and with every lot.  compound_fusion: solve_joint's.
+    The stage's run (`final`) is refused with other walls, the true borders or without the compound fusion
+    (`check_run`).  The placement and the report are computed in
+    this process: `sfzmaps solver solve` runs it pinned to one thread (`threads`).  Returns the report."""
+    import logging
+
+    from sfzmaps.solver import holes, placement, report
+    check_run(run, walls_dir, true_borders, compound_fusion)
+    target = runs.solve_dir(run)
+    threads.warn_unless_pinned(logging.getLogger(__name__), "the placement and the report")
+    folder = runs.fresh_folder(target)
+    if not paths.is_2000():
+        # Another series: the 2000 map's placement models, the solve, and no report (its holes, data errors and the
+        # comparison with J7 are the 2000 table's); it is scored by `scripts/all_years/score_series.py`.
+        import json
+
+        from sfzmaps.solver import transfer
+        if paths.SERIES in paths.PATTERN_SERIES:
+            # A pattern map's prints are its reader's reads of each lot: each stands for its own lot (no leaders).
+            from sfzmaps.solver.city import walls_digest
+            e = np.zeros(0)
+            np.savez_compressed(placement.placement_file(folder), label=e.astype(int), lot=e.astype(int), chance=e,
+                                stay=e.astype(bool), holdout=e.astype(int), walls=walls_digest(walls_dir))
+            summary = {"labels": 0, "note": "pattern map: every read stands for its own lot"}
+        else:
+            summary = placement.fit(folder, walls_dir, models=transfer.placement_models())
+        solve_all(run, walls_dir, true_borders, keep_costs=True, folder=folder, compound_fusion=compound_fusion)
+        codes = load_run(run, folder)
+        chance = posterior(run, folder)
+        names, pred = np.unique(codes.astype(str), return_inverse=True)
+        np.savez_compressed(run_file(run, folder=folder), pred=pred, names=names, posterior=chance)
+        for q in paths.QUARTERS:                     # the costs are big and only make the posterior
+            run_file(run, f"-{q}-costs", folder).unlink(missing_ok=True)
+        found = {"run": run, "series": paths.SERIES, "placement": summary,
+                 "posterior_mean": round(float(chance.mean()), 4),
+                 "codes": dict(Counter(codes.tolist()).most_common())}
+        (folder / "report.json").write_text(json.dumps(found, indent=1) + "\n")
+        runs.replace_folder(folder, target)
+        return found
+    summary = placement.fit(folder, walls_dir)
+    solve_all(run, walls_dir, true_borders, keep_costs=True, folder=folder, compound_fusion=compound_fusion)
+    rows = holes.causes(run, folder)
+    holes.write_data_errors(holes.data_errors(rows), load_run(run, folder), folder)
+    found = report.build_report(run, summary, dict(Counter(r["cause"] for r in rows)), walls_dir, folder)
+    report.write_report(found, folder)
+    runs.replace_folder(folder, target)
+    return found

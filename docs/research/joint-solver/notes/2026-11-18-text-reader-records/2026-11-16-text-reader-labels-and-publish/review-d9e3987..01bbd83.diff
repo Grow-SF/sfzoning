@@ -1,0 +1,1071 @@
+# Review package: d9e3987..01bbd83
+
+## Commits
+01bbd83 T0: dvc.lock after rebuilding solver-labels, solver-walls and solver-solve on the new code
+a19ca2d T0: pin the score's label set apart from the labels the solve reads
+
+## Files changed
+ pipeline/dvc.lock                               | 36 ++++++++-------
+ pipeline/dvc.yaml                               |  1 +
+ pipeline/scripts/incidents/criteria_check.py    | 45 ++++++++++---------
+ pipeline/scripts/incidents/published_compare.py |  5 +--
+ pipeline/scripts/spikes/reader_spike.py         |  8 ++--
+ pipeline/src/sfzmaps/solver/labels.py           | 47 +++++++++++++------
+ pipeline/src/sfzmaps/solver/measures.py         | 33 ++++++++++++--
+ pipeline/src/sfzmaps/solver/placement.py        |  2 +-
+ pipeline/src/sfzmaps/solver/report.py           |  4 +-
+ pipeline/src/sfzmaps/solver/runs.py             | 13 +++++-
+ pipeline/src/sfzmaps/solver/trust.py            |  8 ++--
+ pipeline/tests/test_solver_solve.py             | 60 ++++++++++++++++++++++---
+ pipeline/tests/test_solver_trust.py             |  3 +-
+ 13 files changed, 192 insertions(+), 73 deletions(-)
+
+## Diff
+diff --git a/pipeline/dvc.lock b/pipeline/dvc.lock
+index 18f2fee..0a13ace 100644
+--- a/pipeline/dvc.lock
++++ b/pipeline/dvc.lock
+@@ -6551,36 +6551,40 @@ stages:
+       md5: 6a457e7f8fc2080c166184eeb0c56a78
+       size: 4329
+     - path: src/sfzmaps/solver/page.py
+       hash: md5
+       md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+       size: 8912
+     - path: src/sfzmaps/solver/paths.py
+       hash: md5
+       md5: aedf730eb73fad4377ecd8ee72bca25b
+       size: 4386
++    - path: src/sfzmaps/solver/runs.py
++      hash: md5
++      md5: a42cb40b049e482ea1ffbae6f9437189
++      size: 4792
+     - path: src/sfzmaps/solver/streetside.py
+       hash: md5
+       md5: cec5a6c564a7c7098ba1d859094a2acd
+       size: 9557
+     - path: src/sfzmaps/solver/strokes.py
+       hash: md5
+       md5: 0e71e98705b64da5b00c87d661f0684b
+       size: 7649
+     - path: src/sfzmaps/solver/table.py
+       hash: md5
+       md5: 93f7aa72e78e358ed74f663a47b4d7e6
+       size: 4053
+     - path: src/sfzmaps/solver/trust.py
+       hash: md5
+-      md5: 67c3b206db20e574117b97587df356a8
+-      size: 14559
++      md5: 8bfbb4f9ec4b0d3f7574d0b22bfd1866
++      size: 14632
+     - path: src/sfzmaps/transform.py
+       hash: md5
+       md5: c83192f3d3941fae99387dafd628e159
+       size: 19908
+     - path: uv.lock
+       hash: md5
+       md5: b038b7f427cf66546c731cc1433bb62d
+       size: 338100
+     outs:
+     - path: data/solver/labels
+@@ -7450,22 +7454,22 @@ stages:
+     - path: src/sfzmaps/solver/page.py
+       hash: md5
+       md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+       size: 8912
+     - path: src/sfzmaps/solver/paths.py
+       hash: md5
+       md5: aedf730eb73fad4377ecd8ee72bca25b
+       size: 4386
+     - path: src/sfzmaps/solver/runs.py
+       hash: md5
+-      md5: 6182a5bd007fc0bc6e7f9576bae355c5
+-      size: 3940
++      md5: a42cb40b049e482ea1ffbae6f9437189
++      size: 4792
+     - path: src/sfzmaps/solver/saved.py
+       hash: md5
+       md5: 5428b2e93ac078c2186cedf7b3aaaf8a
+       size: 2203
+     - path: src/sfzmaps/solver/table.py
+       hash: md5
+       md5: 93f7aa72e78e358ed74f663a47b4d7e6
+       size: 4053
+     - path: src/sfzmaps/solver/textgrid.py
+       hash: md5
+@@ -9148,78 +9152,78 @@ stages:
+     - path: src/sfzmaps/solver/grid.py
+       hash: md5
+       md5: 4ca66adc6cb23b3833854e6358dde8be
+       size: 1934
+     - path: src/sfzmaps/solver/holes.py
+       hash: md5
+       md5: c585564f67ddb183541046d05d3f6997
+       size: 12893
+     - path: src/sfzmaps/solver/labels.py
+       hash: md5
+-      md5: 8dc704244c9e8b5396ed0fa6e8d5d291
+-      size: 3501
++      md5: cb2bd4266c3bc63e390679c6c55b10a3
++      size: 4370
+     - path: src/sfzmaps/solver/lots.py
+       hash: md5
+       md5: 7399c576690409a389991a1a56e0e826
+       size: 6551
+     - path: src/sfzmaps/solver/measures.py
+       hash: md5
+-      md5: 7f318f8254b26b72c0061a8ece68947e
+-      size: 8238
++      md5: 861bc824d5631a3f0dcdd9558e726965
++      size: 10265
+     - path: src/sfzmaps/solver/mincut.py
+       hash: md5
+       md5: 75298f2138afd9c5db4a3b723ba502e8
+       size: 3296
+     - path: src/sfzmaps/solver/page.py
+       hash: md5
+       md5: c99d5fb7acb4b1346fd7b5e07b4dc5a0
+       size: 8912
+     - path: src/sfzmaps/solver/paths.py
+       hash: md5
+       md5: aedf730eb73fad4377ecd8ee72bca25b
+       size: 4386
+     - path: src/sfzmaps/solver/placement.py
+       hash: md5
+-      md5: 7959160c42e5e9094777e1bc23756aaf
+-      size: 14294
++      md5: fb022d8220dcf7d9b1a1ba42ce4fe2ae
++      size: 14299
+     - path: src/sfzmaps/solver/qpbo.py
+       hash: md5
+       md5: 7959060a86147d729af6ce6ab5144d91
+       size: 4547
+     - path: src/sfzmaps/solver/report.py
+       hash: md5
+-      md5: 2fe2dbc6fdfc47a1a506d0efcdcd4fcd
+-      size: 16672
++      md5: 18eeb1e702a1e875862ce345d51cf580
++      size: 16706
+     - path: src/sfzmaps/solver/runs.py
+       hash: md5
+-      md5: 6182a5bd007fc0bc6e7f9576bae355c5
+-      size: 3940
++      md5: a42cb40b049e482ea1ffbae6f9437189
++      size: 4792
+     - path: src/sfzmaps/solver/search.py
+       hash: md5
+       md5: b46af2b70d4d5ca411858391af8a1bc8
+       size: 13819
+     - path: src/sfzmaps/solver/solve.py
+       hash: md5
+       md5: e9f26851a382884ce7533160fc9e7b0e
+       size: 13251
+     - path: src/sfzmaps/solver/table.py
+       hash: md5
+       md5: 93f7aa72e78e358ed74f663a47b4d7e6
+       size: 4053
+     - path: src/sfzmaps/solver/threads.py
+       hash: md5
+       md5: 70b7f2940d5bc2961507198af1a58ee1
+       size: 2124
+     - path: src/sfzmaps/solver/trust.py
+       hash: md5
+-      md5: 67c3b206db20e574117b97587df356a8
+-      size: 14559
++      md5: 8bfbb4f9ec4b0d3f7574d0b22bfd1866
++      size: 14632
+     - path: src/sfzmaps/transform.py
+       hash: md5
+       md5: c83192f3d3941fae99387dafd628e159
+       size: 19908
+     - path: uv.lock
+       hash: md5
+       md5: b038b7f427cf66546c731cc1433bb62d
+       size: 338100
+     outs:
+     - path: data/solver/solve
+diff --git a/pipeline/dvc.yaml b/pipeline/dvc.yaml
+index b586a26..9c9c7a2 100644
+--- a/pipeline/dvc.yaml
++++ b/pipeline/dvc.yaml
+@@ -2711,20 +2711,21 @@ stages:
+       - src/sfzmaps/config.py
+       - src/sfzmaps/solver/__init__.py
+       - src/sfzmaps/solver/codes.py
+       - src/sfzmaps/solver/frame.py
+       - src/sfzmaps/solver/grid.py
+       - src/sfzmaps/solver/labels_stage.py
+       - src/sfzmaps/solver/lots.py
+       - src/sfzmaps/solver/lotsize.py
+       - src/sfzmaps/solver/page.py
+       - src/sfzmaps/solver/paths.py
++      - src/sfzmaps/solver/runs.py
+       - src/sfzmaps/solver/streetside.py
+       - src/sfzmaps/solver/strokes.py
+       - src/sfzmaps/solver/table.py
+       - src/sfzmaps/solver/trust.py
+       - src/sfzmaps/transform.py
+       - pyproject.toml
+       - uv.lock
+       - data/solver/prints/prints.parquet
+       - data/solver/lots
+       - data/solver/page
+diff --git a/pipeline/scripts/incidents/criteria_check.py b/pipeline/scripts/incidents/criteria_check.py
+index 2a274f4..7dfcc40 100644
+--- a/pipeline/scripts/incidents/criteria_check.py
++++ b/pipeline/scripts/incidents/criteria_check.py
+@@ -1,48 +1,55 @@
+ """The compound fusion move's acceptance criteria, fixed with the owner before it was measured (2026-11-16), checked
+ on an experiment run made with it (`sfzmaps solver solve RUN --compound-fusion`) against the stage's run `final`:
+ 
+-  1. the solver's energy goes down in every quarter (each quarter log's "solved" energy against final's);
++  1. the solver's energy goes down in every quarter (each quarter log's "solved" energy against final's).  This one
++     compares the energy of two runs of the SAME labels and walls: once the labels or the walls differ (another label
++     source, another walls fit) the energies are of different functions and the comparison means nothing.  Pass
++     --across-label-sources for such a comparison: criterion 1 is then reported as "not comparable", left out of the
++     verdict, and only criterion 2 gates;
+   2. wrong-lot incidents and labels right are not worse beyond the measured noise: a paired bootstrap over blocks
+      (blocks drawn with replacement, the same draw for both runs, 1,000 draws, seed 0) gives a 95% interval on
+      (run - final), with report.six_measures' definitions on every lot; beside it the scoring table's known error
+      (its by-eye corrections, the corrected table against the raw one).  "Worse beyond noise": the whole interval
+      on the worse side AND the difference larger than the table's known error;
+   3. the same on the 1996-2000-zoning scan: not measurable (Ruling R7: the solver exists only for
+      2000-digital-zoning).
+ 
+ Reported, not gated: the six measures; the lots right in final and wrong in the run ("broken"), by patch, with the
+ energy of both answers in their quarter; the five largest changed sets with pictures (render_incident.py); the
+ census's search incidents, the share of each right; each quarter's time (given with --times, as the solve prints
+ it: the run's folder holds no times).
+ 
+     uv run python scripts/incidents/criteria_check.py RUN [--times nw=305,ne=327,sw=329,se=407] [--times-note TEXT]
+-                                                          [--no-pictures]
++                                                          [--no-pictures] [--across-label-sources]
++
++The labels right and the per-block split count the one fixed scoring set of labels (`measures.scoring_labels`: the
++saved-reads chain's 1,881), whatever label source the run solved with.
+ 
+ Writes data/solver/experiments/RUN/criteria.json and criteria.md (and pictures/ there).  Reads only otherwise."""
+ import argparse
+ import json
+ import re
+ import subprocess
+ import sys
+ from collections import Counter
+ from pathlib import Path
+ 
+ import numpy as np
+ from scipy.sparse import coo_matrix
+ from scipy.sparse.csgraph import connected_components
+ 
+ from common import CENSUS_DIR
+ from sfzmaps.solver import energy as E
+ from sfzmaps.solver import paths, runs
+ from sfzmaps.solver.city import city, load_run, run_file
+-from sfzmaps.solver.measures import Table
++from sfzmaps.solver.measures import Table, check_block_split
+ from sfzmaps.solver.report import six_measures
+ 
+ DRAWS, SEED = 1000, 0
+ SEARCH_INCIDENTS = (1, 7, 34, 4, 23, 9, 44, 18, 14, 21, 12, 13, 15, 42, 22)   # the search report's table
+ 
+ 
+ def solved_energy(run, q):
+     log = (run_file(run, f"-{q}", runs.solve_dir(run)).with_suffix(".log")).read_text()
+     return float(re.search(r"solved ([\d,\.]+)", log).group(1).replace(",", ""))
+ 
+@@ -60,32 +67,25 @@ def per_block(codes, blocks, nb):
+     size = np.bincount(comp[wrong], minlength=comp.max() + 1)
+     inc = np.bincount(blocks[wrong], 1.0 / size[comp[wrong]], minlength=nb)
+     T = Table(np.zeros(C.n, bool))                       # measures.score's labels, label by label
+     nd = T.district.max() + 1
+     lots_in = np.bincount(T.district[C.scored], minlength=nd)
+     right_in = np.bincount(T.district[(codes == C.table) & C.scored], minlength=nd)
+     d = np.maximum(T.label_district, 0)
+     counted = (T.label_district < 0) | (lots_in[d] > 0)
+     right = (T.label_district >= 0) & (lots_in[d] > 0) & (right_in[d] > lots_in[d] / 2)
+     zoning = counted & T.label_in_vocab
+-    label_block = blocks[label_lots()]
++    label_block = blocks[T.label_lot]                    # the labels are Table's: one fixed scoring set, one source
+     return {"incidents": inc, "zoning": np.bincount(label_block[zoning], minlength=nb).astype(float),
+             "right": np.bincount(label_block[zoning & right], minlength=nb).astype(float),
+-            "wrong_lots": np.bincount(blocks[wrong], minlength=nb).astype(float)}
+-
+-
+-def label_lots():
+-    """the lot of each label measures.Table counts, in its order"""
+-    from sfzmaps.solver.labels import top_readings
+-    C = city()
+-    return np.array([lot for k, q in enumerate(paths.QUARTERS) for _, lot, _ in top_readings(q)
+-                     if C.quarter[lot] == k], int)
++            "wrong_lots": np.bincount(blocks[wrong], minlength=nb).astype(float),
++            "label_lot": T.label_lot, "label_zoning": zoning, "label_right": right}
+ 
+ 
+ def bootstrap(fin, new, nb):
+     rng = np.random.default_rng(SEED)
+     out = {"incidents": [], "labels_right": [], "wrong_lots": []}
+     for _ in range(DRAWS):
+         w = np.bincount(rng.integers(0, nb, nb), minlength=nb).astype(float)
+         out["incidents"].append(w @ new["incidents"] - w @ fin["incidents"])
+         out["labels_right"].append(w @ new["right"] / (w @ new["zoning"]) - w @ fin["right"] / (w @ fin["zoning"]))
+         out["wrong_lots"].append(w @ new["wrong_lots"] - w @ fin["wrong_lots"])
+@@ -203,51 +203,53 @@ def search_incidents(new_codes, fin_codes):
+     rows = []
+     for i in SEARCH_INCIDENTS:
+         rec = next(t for t in doc["list"] if t["id"] == i)
+         lots = np.array(rec["lots"], int)
+         rows.append({"id": i, "lots": int(len(lots)), "table": rec["table"], "final_code": rec["solved"],
+                      "quarter": rec["quarter"], "final": float(np.mean(fin_codes[lots] == C.table[lots])),
+                      "run": float(np.mean(new_codes[lots] == C.table[lots]))})
+     return rows
+ 
+ 
+-def main(run, times, times_note, pictures):
++def main(run, times, times_note, pictures, across_label_sources=False):
+     folder = runs.solve_dir(run)
+     C = city()
+     fin_codes, new_codes = load_run("final"), load_run(run, folder)
+     blocks_name = C.lots["blklot"].astype(str).str[:4].values
+     _, blocks = np.unique(blocks_name, return_inverse=True)
+     nb = blocks.max() + 1
+     # 1: the energy per quarter
+     energy = {q: {"final": solved_energy("final", q), "run": solved_energy(run, q)} for q in paths.QUARTERS}
+     for v in energy.values():
+         v["change"] = round(v["run"] - v["final"], 1)
+-    c1 = all(v["run"] < v["final"] for v in energy.values())
++    # across label sources (or walls) the two energies are of different functions: not comparable, not gated
++    c1 = None if across_label_sources else all(v["run"] < v["final"] for v in energy.values())
+     # 2: the paired block bootstrap, with the table's known error
+     m_fin, m_new = six_measures(fin_codes, np.zeros(C.n, bool)), six_measures(new_codes, np.zeros(C.n, bool))
+     fin, new = per_block(fin_codes, blocks, nb), per_block(new_codes, blocks, nb)
+     for name, pb, m in (("final", fin, m_fin), (run, new, m_new)):     # the split per block adds up to the measures
+-        assert round(pb["incidents"].sum()) == m["incidents"], name
+-        assert abs(pb["right"].sum() / pb["zoning"].sum() - m["labels_right"]) < 1e-5, name
+-        assert pb["wrong_lots"].sum() == m["wrong_lots"], name
++        check_block_split(pb, blocks, pb["label_lot"], pb["label_zoning"], pb["label_right"], m, name)
+     ci = bootstrap(fin, new, nb)
+     err = known_error(fin_codes)
+     diff = {"incidents": m_new["incidents"] - m_fin["incidents"],
+             "labels_right": m_new["labels_right"] - m_fin["labels_right"],
+             "wrong_lots": m_new["wrong_lots"] - m_fin["wrong_lots"]}
+     worse = {"incidents": ci["incidents"][0] > 0 and diff["incidents"] > err["incidents"],
+              "labels_right": ci["labels_right"][1] < 0 and -diff["labels_right"] > err["labels_right"]}
+     c2 = not any(worse.values())
+     out = {"run": run, "compared_with": "final",
+            "measure": "report.six_measures on every lot (no data errors left out)",
+            "criteria": {
+-               "1_energy_lower_every_quarter": {"verdict": "pass" if c1 else "fail", "energy": energy},
++               "1_energy_lower_every_quarter": {
++                   "verdict": "not comparable" if c1 is None else "pass" if c1 else "fail", "energy": energy,
++                   **({"why": "run and final differ in labels or walls: their energies are of different functions"}
++                      if c1 is None else {})},
+                "2_not_worse_beyond_noise": {
+                    "verdict": "pass" if c2 else "fail", "difference_run_minus_final": diff,
+                    "bootstrap_95": ci, "draws": DRAWS, "seed": SEED, "blocks": int(nb),
+                    "table_known_error": err, "worse_beyond_noise": worse},
+                "3_same_on_1996_2000_scan": {
+                    "verdict": "not measurable",
+                    "why": "Ruling R7: the solver exists only for 2000-digital-zoning (paths.SERIES); measuring it on "
+                           "1996-2000-zoning needs the whole solver generalised to a second series"}},
+            "measures_every_lot": {"final": m_fin, run: m_new},
+            "broken": broken(run, fin_codes, new_codes),
+@@ -338,13 +340,16 @@ def markdown(o):
+               + ", ".join(f"{q} {s}" for q, s in o["times_s"].items()) + ".", "", o["times_note"] or ""]
+     return "\n".join(L) + "\n"
+ 
+ 
+ if __name__ == "__main__":
+     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+     ap.add_argument("run")
+     ap.add_argument("--times", default="", help="each quarter's solve time in seconds, e.g. nw=305,ne=327")
+     ap.add_argument("--times-note", default="")
+     ap.add_argument("--no-pictures", action="store_true")
++    ap.add_argument("--across-label-sources", action="store_true",
++                    help="the run solved with other labels (or walls) than final: leave out criterion 1 (energy "
++                         "lower in every quarter), which compares the energies of two different functions")
+     args = ap.parse_args()
+     t = dict(kv.split("=") for kv in args.times.split(",") if kv)
+-    main(args.run, {k: float(v) for k, v in t.items()}, args.times_note, not args.no_pictures)
++    main(args.run, {k: float(v) for k, v in t.items()}, args.times_note, not args.no_pictures, args.across_label_sources)
+diff --git a/pipeline/scripts/incidents/published_compare.py b/pipeline/scripts/incidents/published_compare.py
+index ebac7d1..bd6ec53 100644
+--- a/pipeline/scripts/incidents/published_compare.py
++++ b/pipeline/scripts/incidents/published_compare.py
+@@ -18,20 +18,21 @@ import csv
+ import json
+ import textwrap
+ 
+ import numpy as np
+ import pandas as pd
+ 
+ import criteria_check as cc
+ from sfzmaps import config
+ from sfzmaps.solver import paths, runs
+ from sfzmaps.solver.city import city, load_run
++from sfzmaps.solver.measures import check_block_split
+ from sfzmaps.solver.published import save_published
+ from sfzmaps.solver.report import six_measures
+ 
+ OLD_FINAL = runs.EXPERIMENTS_DIR / "mincut-swap" / "before" / "report.json"
+ SEARCH_COMPOUND = runs.EXPERIMENTS_DIR / "search-compound" / "report.json"
+ OUT = runs.EXPERIMENTS_DIR / "published-compare"
+ KEYS = (("lines_drawn", "Table district lines the map draws", "{:.2%}"),
+         ("drawn_are_table_lines", "Lines the map draws that are table lines", "{:.2%}"),
+         ("labels_right", "Zoning labels whose district comes out right", "{:.2%}"),
+         ("holes", "Holes", "{:,}"), ("incidents", "Wrong-lot incidents", "{:,}"),
+@@ -49,23 +50,21 @@ def main():
+     save_published()
+     pub, fin = load_run("published"), load_run("final")
+     nothing = np.zeros(C.n, bool)
+     m_pub, m_fin = six_measures(pub, nothing), six_measures(fin, nothing)
+     m_old = json.loads(OLD_FINAL.read_text())["measures"]["every_lot"]
+     m_sc = json.loads(SEARCH_COMPOUND.read_text())["measures"]["every_lot"]
+     _, blocks = np.unique(C.lots["blklot"].astype(str).str[:4].values, return_inverse=True)
+     nb = int(blocks.max()) + 1
+     p_pub, p_fin = cc.per_block(pub, blocks, nb), cc.per_block(fin, blocks, nb)
+     for name, pb, m in (("published", p_pub, m_pub), ("final", p_fin, m_fin)):   # the split adds up to the measures
+-        assert round(pb["incidents"].sum()) == m["incidents"], name
+-        assert abs(pb["right"].sum() / pb["zoning"].sum() - m["labels_right"]) < 1e-5, name
+-        assert pb["wrong_lots"].sum() == m["wrong_lots"], name
++        check_block_split(pb, blocks, pb["label_lot"], pb["label_zoning"], pb["label_right"], m, name)
+     ci = cc.bootstrap(p_fin, p_pub, nb)                  # published - final
+     err = cc.known_error(fin)
+     diff = {"incidents": m_pub["incidents"] - m_fin["incidents"],
+             "labels_right": m_pub["labels_right"] - m_fin["labels_right"],
+             "wrong_lots": m_pub["wrong_lots"] - m_fin["wrong_lots"]}
+     # the lots where published != final, by what the table says (the scored lots; the rest the table does not score)
+     # a published blank is one of two things: the lot is in districts_raw with no code (a blank in the read), or
+     # today's lot is not in districts_raw at all (save_published gives it "")
+     raw = pd.read_parquet(config.WORK_DIR / paths.SERIES / "districts_raw.parquet", columns=["blklot", "code"])
+     ids = pd.Series(C.lots["blklot"].astype(str).values)
+diff --git a/pipeline/scripts/spikes/reader_spike.py b/pipeline/scripts/spikes/reader_spike.py
+index 7ca7c00..2cb43c9 100644
+--- a/pipeline/scripts/spikes/reader_spike.py
++++ b/pipeline/scripts/spikes/reader_spike.py
+@@ -50,21 +50,21 @@ from pathlib import Path  # noqa: E402
+ 
+ import numpy as np  # noqa: E402
+ from scipy.sparse import coo_matrix  # noqa: E402
+ from scipy.sparse.csgraph import connected_components  # noqa: E402
+ 
+ from sfzmaps.solver import energy as E  # noqa: E402
+ from sfzmaps.solver import labels as labels_mod  # noqa: E402
+ from sfzmaps.solver import paths, report, runs, solve, threads  # noqa: E402
+ from sfzmaps.solver.city import city, load_run, run_file, save_run, wall_odds  # noqa: E402
+ from sfzmaps.solver.codes import canon, is_overlay, table_vocabulary  # noqa: E402
+-from sfzmaps.solver.labels import Readings, top_readings  # noqa: E402
++from sfzmaps.solver.labels import Readings, scoring_source, top_readings  # noqa: E402
+ from sfzmaps.solver.measures import Table, data_error_lots  # noqa: E402
+ from sfzmaps.solver.placement import load_options  # noqa: E402
+ from sfzmaps.solver.trust import READS, load_prints  # noqa: E402
+ 
+ QUARTERS = paths.QUARTERS
+ S0_DIR = runs.EXPERIMENTS_DIR / "spike-s0"
+ S1_DIR = runs.EXPERIMENTS_DIR / "spike-s1"
+ INPUTS = S0_DIR / "inputs"          # the code reader's records, copied from the scratchpad (df61853's reader)
+ RECORDS = ("full_fix1held.records", "full_fix1rest.records")
+ PRIOR = "prior3.json"               # the prior the records were scored with (full_fix1.sh)
+@@ -371,21 +371,22 @@ def confusion() -> dict:
+     return {a: (sorted(d), np.array([d[k] for k in sorted(d)], float) / sum(d.values())) for a, d in model.items()}
+ 
+ 
+ def quarter_codes() -> dict:
+     """The fallback: per quarter k, the codes printed there (each charged label's top reading in the readings of
+     the fit that held its lot's quarter out, counted once per label) and their shares."""
+     C = city()
+     voc = vocabulary()
+     out = {}
+     for k, q in enumerate(QUARTERS):
+-        n = Counter(code for _, lot, code in top_readings(q) if C.quarter[lot] == k and code in voc)
++        n = Counter(code for _, lot, code in top_readings(q, scoring_source())
++                if C.quarter[lot] == k and code in voc)
+         out[k] = (sorted(n), np.array([n[c] for c in sorted(n)], float))
+     return out
+ 
+ 
+ def replacement(code: str, u: float, quarter: int, model: dict, fallback: dict) -> tuple[str, bool]:
+     """The code a misread of `code` reads, by the inverse of the model's chances at u (the fallback's, without
+     `code`, when the model has none for it); and whether the fallback gave it."""
+     if code in model:
+         names, p = model[code]
+         fell = False
+@@ -752,21 +753,22 @@ class Blocks:
+     block, wrong lots, incidents (each incident split over its lots, 1/size each, so they sum to the count) and the
+     zoning labels counted and right (a label in the block of its lot), as `measures.score` and `incidents` count
+     them."""
+ 
+     def __init__(self):
+         C = self.C = city()
+         blk = C.lots["blklot"].astype(str).str[:4].values
+         self.ids, self.of_lot = np.unique(blk, return_inverse=True)
+         self.nb = len(self.ids)
+         self.T = Table(np.zeros(C.n, bool))
+-        labels = [lot for k, q in enumerate(QUARTERS) for _, lot, _ in top_readings(q) if C.quarter[lot] == k]
++        labels = [lot for k, q in enumerate(QUARTERS) for _, lot, _ in top_readings(q, scoring_source())
++                  if C.quarter[lot] == k]
+         if len(labels) != len(self.T.label_code):
+             raise ValueError("labels differ from measures.Table's")
+         self.label_block = self.of_lot[np.array(labels, int)]
+         self.outside_1 = ~final_largest_incident()
+ 
+     def stats(self, codes: np.ndarray) -> dict:
+         C, T = self.C, self.T
+         a, b = C.a, C.b
+         wrong = C.scored & (codes != C.table)
+         key = np.char.add(np.char.add(C.table, "|"), codes)
+diff --git a/pipeline/src/sfzmaps/solver/labels.py b/pipeline/src/sfzmaps/solver/labels.py
+index 8038f1a..411f062 100644
+--- a/pipeline/src/sfzmaps/solver/labels.py
++++ b/pipeline/src/sfzmaps/solver/labels.py
+@@ -1,72 +1,93 @@
+ """The printed labels and their readings, as one held-out quarter's fits see them.
+ 
+ A label is a print (a row of prints.parquet).  It can have several readings (code, trust): readings_{q}.npz, from
+ the trust fit that held quarter q out.  A reading speaks for the lot under the label's text (prints.parquet
+ `lab_lot`).  A label printed on an ordinary street also speaks for the lot across the street (streetside_{q}.npz
+ `lotB`), at its trust x min(rB_st / rA_st, 1): a far-side copy."""
+ from dataclasses import dataclass
++from pathlib import Path
++from typing import NamedTuple
+ 
+ import numpy as np
+ 
+-from sfzmaps.solver import paths
++from sfzmaps.solver import runs
+ from sfzmaps.solver.codes import canon, is_overlay
+ from sfzmaps.solver.trust import load_prints
+ 
+ 
++class Source(NamedTuple):
++    """Where one set of labels is read from: the prints table and the folder of readings_{q}.npz / streetside_{q}.npz."""
++    prints_file: Path
++    labels_dir: Path
++
++
++def solve_source() -> Source:
++    """The labels the solve reads (`runs.SOLVE_*`)."""
++    return Source(runs.SOLVE_PRINTS_FILE, runs.SOLVE_LABELS_DIR)
++
++
++def scoring_source() -> Source:
++    """The labels the score counts (`runs.SCORING_*`): fixed whatever the solve reads."""
++    return Source(runs.SCORING_PRINTS_FILE, runs.SCORING_LABELS_DIR)
++
++
+ @dataclass
+ class Readings:
+     lot: np.ndarray        # the lot a reading speaks for
+     code: np.ndarray       # index into names
+     trust: np.ndarray      # the reader's trust in this reading, 0..1
+     label: np.ndarray      # which printed label it comes from (a prints.parquet row)
+     far: np.ndarray        # True for a street label's far-side copy
+     names: list            # code names in the one spelling; a reading's code is the first name with its spelling
+ 
+ 
+-def _load(q: str):
++def _load(q: str, source: Source):
+     """readings_{q}.npz's names, print, code and trust per reading, and the lot under each print's text."""
+-    f = paths.LABELS_DIR / f"readings_{q}.npz"
++    f = source.labels_dir / f"readings_{q}.npz"
+     if not f.is_file():
+         raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver labels`")
+     R = np.load(f)
+-    under = load_prints()["lab_lot"].to_numpy(np.int64)
++    under = load_prints(source.prints_file)["lab_lot"].to_numpy(np.int64)
+     return (list(R["names"].astype(str)), R["print_index"].astype(np.int64), R["code_index"].astype(np.int64),
+             R["trust"].astype(float), under)
+ 
+ 
+-def readings(q: str, vocabulary=None) -> Readings:
+-    """Every reading of holdout q, with the far-side copies.  Overlay (SUD) names are dropped; so are readings naming
+-    no code in vocabulary (when given: overlay text such as 'NORTH OF', 'RES.' is not a zoning code)."""
+-    raw_names, lab, code, trust, under = _load(q)
+-    S = np.load(paths.LABELS_DIR / f"streetside_{q}.npz")
++def readings(q: str, vocabulary=None, source: Source | None = None) -> Readings:
++    """Every reading of holdout q, with the far-side copies, from `source` (default: the solve's labels).  Overlay
++    (SUD) names are dropped; so are readings naming no code in vocabulary (when given: overlay text such as
++    'NORTH OF', 'RES.' is not a zoning code)."""
++    source = source or solve_source()
++    raw_names, lab, code, trust, under = _load(q, source)
++    S = np.load(source.labels_dir / f"streetside_{q}.npz")
+     rA, rB = float(S["rA_st"]), float(S["rB_st"])
+     ratio = min(rB / rA, 1.0) if rA > 0 else 0.0
+     across = S["onst"] & ~S["isfw"] & (S["lotB"] >= 0)
+     r = np.flatnonzero(across[lab])
+     lot = np.r_[under[lab], S["lotB"][lab[r]]]
+     code = np.r_[code, code[r]]
+     trust = np.r_[trust, trust[r] * ratio]
+     label = np.r_[lab, lab[r]]
+     far = np.r_[np.zeros(len(lab), bool), np.ones(len(r), bool)]
+     keep = (lot >= 0) & ~np.array([is_overlay(n) for n in raw_names], bool)[code]
+     names = [canon(n) for n in raw_names]
+     first = {}
+     for i, n in enumerate(names):
+         first.setdefault(n, i)
+     code = np.array([first[names[k]] for k in code], int)
+     if vocabulary is not None:
+         keep &= np.array([names[k] in vocabulary for k in code], bool)
+     return Readings(lot[keep], code[keep], trust[keep], label[keep], far[keep], names)
+ 
+ 
+-def top_readings(q: str) -> list[tuple[int, int, str]]:
+-    """(label, lot under its text, top reading's code) for every label of holdout q whose top reading (its most
+-    trusted; the first in row order on a tie) is not an overlay name."""
+-    raw_names, lab, code, trust, under = _load(q)
++def top_readings(q: str, source: Source) -> list[tuple[int, int, str]]:
++    """(label, lot under its text, top reading's code) for every label of holdout q in `source` whose top reading (its
++    most trusted; the first in row order on a tie) is not an overlay name.  `source` is required: a score takes
++    `scoring_source()`, never the solve's."""
++    raw_names, lab, code, trust, under = _load(q, source)
+     o = np.lexsort((-trust, lab))
+     first = np.r_[True, lab[o][1:] != lab[o][:-1]]
+     out = []
+     for j, k in zip(lab[o][first], code[o][first]):
+         if j < len(under) and under[j] >= 0 and not is_overlay(raw_names[k]):
+             out.append((int(j), int(under[j]), canon(raw_names[k])))
+     return out
+diff --git a/pipeline/src/sfzmaps/solver/measures.py b/pipeline/src/sfzmaps/solver/measures.py
+index 20a0451..b3991da 100644
+--- a/pipeline/src/sfzmaps/solver/measures.py
++++ b/pipeline/src/sfzmaps/solver/measures.py
+@@ -18,26 +18,53 @@ from collections import Counter
+ from pathlib import Path
+ 
+ import numpy as np
+ from scipy.sparse import coo_matrix
+ from scipy.sparse.csgraph import connected_components
+ from scipy.spatial import cKDTree
+ 
+ from sfzmaps.solver import paths, runs
+ from sfzmaps.solver.borders import junction_neighbours
+ from sfzmaps.solver.city import city
+-from sfzmaps.solver.labels import top_readings
++from sfzmaps.solver.labels import scoring_source, top_readings
+ 
+ QUARTERS = paths.QUARTERS
+ HOLE_FT = 100.0
+ 
+ 
++def scoring_labels() -> list[tuple[int, str]]:
++    """(lot under the text, top reading's code) of each label the score counts, in order: the labels of the fixed
++    scoring set (`labels.scoring_source`: today's saved-reads chain), by the quarter of the lot under them, whichever
++    labels the solve itself reads.  The one place the score's labels are chosen: `Table`, the per-block split of
++    scripts/incidents/criteria_check.py and the calibration all take them from here."""
++    C = city()
++    source = scoring_source()
++    return [(lot, code) for k, q in enumerate(QUARTERS) for _, lot, code in top_readings(q, source)
++            if C.quarter[lot] == k]
++
++
++def check_block_split(split, blocks, label_lot, zoning, right, measured, name="run"):
++    """Check a per-block split of the labels (`split["zoning"]`, `split["right"]`: counts per block) and of the wrong
++    lots against the measures it must add up to, and the labels' split against the labels themselves: each block's
++    count is recounted label by label (the block of the lot under it), so labels regrouped between blocks with the
++    same totals are caught, not only a wrong total.  `zoning`, `right`: per label, as `score` counts them;
++    `measured`: report.six_measures' dict.  AssertionError on a difference."""
++    assert round(split["incidents"].sum()) == measured["incidents"], f"{name}: incidents per block do not add up"
++    assert abs(split["right"].sum() / split["zoning"].sum() - measured["labels_right"]) < 1e-5, \
++        f"{name}: labels right per block do not add up"
++    assert split["wrong_lots"].sum() == measured["wrong_lots"], f"{name}: wrong lots per block do not add up"
++    for key, flag in (("zoning", zoning), ("right", right)):
++        again = Counter(int(blocks[lot]) for lot, f in zip(label_lot, flag) if f)
++        got = {int(b): int(split[key][b]) for b in np.flatnonzero(split[key])}
++        assert got == dict(again), f"{name}: the {key} labels are grouped into blocks differently from the labels'"
++
++
+ def data_errors_file(folder):
+     """a run's data-error list, in its folder (`runs.solve_dir`)"""
+     return Path(folder) / "data_errors.npz"
+ 
+ 
+ def data_error_lots(folder):
+     """the data-error parcels of the run whose folder is `folder` (bool per lot), none when it wrote no list"""
+     C = city()
+     m = np.zeros(C.n, bool)
+     if data_errors_file(folder).exists():
+@@ -59,22 +86,22 @@ class Table:
+         trees = {}
+ 
+         def nearest_district(code, xy):
+             if code not in trees:
+                 ix = np.flatnonzero(C.table == code)
+                 trees[code] = (cKDTree(C.centroid[ix]), ix) if len(ix) else None
+             if trees[code] is None:
+                 return -1
+             return self.district[trees[code][1][trees[code][0].query(xy)[1]]]
+ 
+-        labels = [(lot, code) for k, q in enumerate(QUARTERS) for _, lot, code in top_readings(q)
+-                  if C.quarter[lot] == k]
++        labels = scoring_labels()
++        self.label_lot = np.array([lot for lot, _ in labels], int)      # the lot under each label's text, in order
+         vocab = set(C.table[C.known].tolist()) - {""}
+         self.label_code = np.array([c for _, c in labels])
+         self.label_in_vocab = np.array([c in vocab for c in self.label_code])
+         self.label_district = np.array([self.district[lot] if C.table[lot] == c
+                                         else nearest_district(c, C.centroid[lot]) for lot, c in labels])
+         self.I, self.J = junction_neighbours()
+ 
+ 
+ def holes(T, drawn):
+     """(holes: list of border-index arrays, missed runs over HOLE_FT: count and ft)"""
+diff --git a/pipeline/src/sfzmaps/solver/placement.py b/pipeline/src/sfzmaps/solver/placement.py
+index cf94dd8..89e2df9 100644
+--- a/pipeline/src/sfzmaps/solver/placement.py
++++ b/pipeline/src/sfzmaps/solver/placement.py
+@@ -96,21 +96,21 @@ def _options(walls_dir=None):
+     end1, end2 = xy[off[:-1]], xy[off[1:] - 1]
+     end_tree = cKDTree(np.r_[end1, end2])
+     n_strokes = len(width)
+     LZ = np.load(paths.LABELS_DIR / "lotsize.npz")
+     lz_code = {c: i for i, c in enumerate(LZ["codes"].astype(str))}
+     size_bin = np.clip(np.digitize(np.log(np.maximum(shapely.area(C.lots.geometry.values), 1.0)), LZ["edges"]) - 1, 0,
+                        LZ["PMI"].shape[2] - 1)
+     moves = leader_moves()
+     rows = []
+     for qi, q in enumerate(paths.QUARTERS):
+-        R = np.load(paths.LABELS_DIR / f"readings_{q}.npz")
++        R = np.load(runs.SOLVE_LABELS_DIR / f"readings_{q}.npz")
+         names = [canon(n) for n in R["names"].astype(str)]
+         top, top_trust = {}, {}
+         for j, k, t in zip(R["print_index"], R["code_index"], R["trust"]):
+             if j < n_labels and t > top_trust.get(j, -1):
+                 top[j], top_trust[j] = names[k], float(t)
+         open_ = wall_odds(q, walls_dir) <= 0
+         _, area = connected_components(coo_matrix((np.ones(int(open_.sum())), (a[open_], b[open_])), shape=(N, N)),
+                                        directed=False)
+         area_size = np.bincount(area)
+         labels_in = {}
+diff --git a/pipeline/src/sfzmaps/solver/report.py b/pipeline/src/sfzmaps/solver/report.py
+index 1a46195..2d5e1c7 100644
+--- a/pipeline/src/sfzmaps/solver/report.py
++++ b/pipeline/src/sfzmaps/solver/report.py
+@@ -16,21 +16,21 @@ Writes report.json and report.md into the run's folder (`runs.solve_dir`).  Noth
+ run gives the same bytes."""
+ import json
+ from pathlib import Path
+ 
+ import numpy as np
+ from scipy.special import expit
+ 
+ from sfzmaps.solver import energy, paths, runs
+ from sfzmaps.solver.city import city, load_run, wall_odds
+ from sfzmaps.solver.codes import table_vocabulary
+-from sfzmaps.solver.labels import readings
++from sfzmaps.solver.labels import readings, scoring_source
+ from sfzmaps.solver.measures import Table, data_error_lots, incidents, score
+ 
+ J7 = {"lines_drawn": 0.963, "drawn_are_table_lines": 0.969, "labels_right": 0.950, "holes": 15, "incidents": 824,
+       "wrong_lots": 8625}
+ J7_DATA_ERRORS = 33         # parcels J7 left out
+ # J7's walls' held-out log loss against the scoring table, on J7's own pairs (both lots known and in the quarter)
+ J7_WALLS_LOG_LOSS = {"nw": 0.0422, "ne": 0.0676, "sw": 0.0313, "se": 0.0412}
+ PROBABILITY_FLOOR = 1e-6    # the walls' log loss counts a probability below this as this (as the walls' own does)
+ MEASURES = {"lines_drawn": "Table district lines the map draws",
+             "drawn_are_table_lines": "Lines the map draws that are table lines",
+@@ -96,21 +96,21 @@ def top_reading_calibration() -> dict:
+     """How well `energy.TOP_READING_FIT` (logit(chance the top reading is right) = a + b logit(trust)) fits this
+     build's trust.  Per label as the energy charges it (a print's own readings, not a far-side copy, of the codes
+     the table uses) whose lot under the text has a known code: its top reading's trust from the fit that held that
+     lot's quarter out, and whether the code is the table's as downloaded there (what the trust learns).  Gives the
+     log loss of the energy's (a, b) and of (a, b) fitted afresh by logistic regression, and per trust bin the
+     chance the energy states against how often the top reading is right."""
+     C = city()
+     vocabulary = table_vocabulary(C.lots)
+     trust, right = [], []
+     for k, q in enumerate(paths.QUARTERS):
+-        rd = readings(q, vocabulary)
++        rd = readings(q, vocabulary, scoring_source())
+         best, lot_of = {}, {}
+         for r in np.flatnonzero(~rd.far):
+             label = int(rd.label[r])
+             T = best.setdefault(label, np.zeros(len(rd.names)))
+             T[rd.code[r]] = max(T[rd.code[r]], rd.trust[r])
+             lot_of[label] = int(rd.lot[r])
+         for label in sorted(best):
+             lot = lot_of[label]
+             if C.quarter[lot] != k or not C.known[lot]:
+                 continue
+diff --git a/pipeline/src/sfzmaps/solver/runs.py b/pipeline/src/sfzmaps/solver/runs.py
+index 1d7a097..2f9a6dd 100644
+--- a/pipeline/src/sfzmaps/solver/runs.py
++++ b/pipeline/src/sfzmaps/solver/runs.py
+@@ -1,30 +1,41 @@
+ """Where the walls and the solve read and write: the stages' folders, the experiments' (each in its own folder, never
+-a stage's output), the hand leader moves the placement learns from, and building a folder afresh.  Kept apart from
++a stage's output), where the solve and the score read their printed labels, the hand leader moves the placement learns from, and building a folder afresh.  Kept apart from
+ `paths` (what the earlier stages and the text detector read) so that a change here reruns only the walls and the
+ solve."""
+ import os
+ import shutil
+ from pathlib import Path
+ 
+ from sfzmaps import config
+ from sfzmaps.solver import paths
+ 
+ WALLS_DIR = paths.SOLVER_DIR / "walls"
+ SOLVE_DIR = paths.SOLVER_DIR / "solve"     # the stage's run: placement.npz, runs/, the data-error list, the report
+ EXPERIMENTS_DIR = paths.SOLVER_DIR / "experiments"     # every other run and fit, one folder each (never shipped)
+ FINAL_RUN = "final"                        # the `solver-solve` stage's run
+ WALLS_PREFIX = "walls-"                    # an experiment folder of walls (`walls_experiment_dir`), never a solve's
+ TEXT_PREFIX = "text-"                      # an experiment folder of the text detector's trials (`textnet.trial`)
+ 
+ LINE_MASKS = "line-masks"                  # the text detector's trials' cache of long-line ink (`textnet.trial`)
+ 
++# Where the printed labels come from.  Two uses, kept apart so that the labels the solve reads can change without
++# changing what "labels right" means.
++#   The SOLVE's labels: the prints table (one row per label: its point, `lab_lot`, `street`) and the folder of the
++#   readings and street sides (readings_{q}.npz, streetside_{q}.npz).  A change of label source is these two lines.
++SOLVE_PRINTS_FILE = paths.PRINTS_DIR / "prints.parquet"
++SOLVE_LABELS_DIR = paths.LABELS_DIR
++#   The SCORING labels: the 1,881 labels of the saved-reads chain (`solver-prints`, `solver-labels`), the same
++#   whatever the solve reads, so that every run is scored on one set.  Not changed by a change of label source.
++SCORING_PRINTS_FILE = paths.PRINTS_DIR / "prints.parquet"
++SCORING_LABELS_DIR = paths.LABELS_DIR
++
+ LABEL_FIXES = config.INPUTS_DIR / "2000-digital-zoning" / "label_fixes.csv"
+ 
+ 
+ def solve_dir(run: str) -> Path:
+     """The folder of a solve's run: SOLVE_DIR for the stage's run (FINAL_RUN), EXPERIMENTS_DIR/<run> for any
+     other.  A name starting with WALLS_PREFIX or TEXT_PREFIX is refused: those folders hold walls fitted as
+     experiments or the text detector's trials (and their LINE_MASKS cache), which a solve built afresh in their place would
+     delete."""
+     if not run or "/" in run or run.startswith("."):
+         raise ValueError(f"{run!r} is not a run name")
+diff --git a/pipeline/src/sfzmaps/solver/trust.py b/pipeline/src/sfzmaps/solver/trust.py
+index ae31e59..9acbd23 100644
+--- a/pipeline/src/sfzmaps/solver/trust.py
++++ b/pipeline/src/sfzmaps/solver/trust.py
+@@ -35,21 +35,21 @@ Writes, under data/solver/labels/:
+   trust.json        per quarter: the weights by feature, the readings trained on and held out, and the held-out
+                     log loss (against the table's codes)
+ """
+ import json
+ import time
+ from dataclasses import dataclass
+ 
+ import numpy as np
+ import pandas as pd
+ 
+-from sfzmaps.solver import paths
++from sfzmaps.solver import paths, runs
+ from sfzmaps.solver.lots import Lots, load_lots
+ 
+ READS = ("sol_code", "terra_code", "third_code", "recheck_code", "turned_code")   # a print's reads, in this order
+ 
+ CONFIDENCE_CAP = 1e-3     # a reader's confidence c enters as -log(max(1 - c, CONFIDENCE_CAP))
+ DISTANCE_FLOOR_FT = 1.0   # a turned-pass-only print's distance d to the nearest other print enters as
+ DISTANCE_SCALE_FT = 100.0  # log(max(d, DISTANCE_FLOOR_FT)) - log(DISTANCE_SCALE_FT)
+ NEWTON_ITERATIONS = 200
+ NEWTON_TOLERANCE = 1e-8   # the fit stops when no weight moves more than this in a step
+ LOGIT_CLIP = 40.0         # the log odds are clipped to +-this before the logistic function
+@@ -242,23 +242,23 @@ def trust(table: FeatureTable, weights: np.ndarray) -> np.ndarray:
+     """Each reading's trust under `weights`: the logistic of its features, at least TRUST_FLOOR."""
+     return _logistic(table.values @ weights).clip(TRUST_FLOOR, 1)
+ 
+ 
+ def log_loss(chance: np.ndarray, target: np.ndarray) -> float:
+     """The mean log loss of chances (clipped to [TRUST_FLOOR, 1 - TRUST_FLOOR]) against 0/1 targets."""
+     p = np.clip(chance, TRUST_FLOOR, 1 - TRUST_FLOOR)
+     return float(-np.mean(np.where(target, np.log(p), np.log(1 - p)))) if len(p) else float("nan")
+ 
+ 
+-def load_prints() -> pd.DataFrame:
+-    """Read prints.parquet (made by `sfzmaps solver prints`)."""
+-    f = paths.PRINTS_DIR / "prints.parquet"
++def load_prints(f=None) -> pd.DataFrame:
++    """Read the prints the solve uses (`runs.SOLVE_PRINTS_FILE`, made by `sfzmaps solver prints`), or the file `f`."""
++    f = runs.SOLVE_PRINTS_FILE if f is None else f
+     if not f.is_file():
+         raise FileNotFoundError(f"can't read {f}: run `sfzmaps solver prints`")
+     return pd.read_parquet(f)
+ 
+ 
+ def build_readings() -> dict:
+     """Fit the trust once per held-out quarter and write readings_{q}.npz and trust.json into LABELS_DIR.  Returns
+     trust.json's summary and the seconds taken."""
+     t0 = time.perf_counter()
+     found = load_prints()
+diff --git a/pipeline/tests/test_solver_solve.py b/pipeline/tests/test_solver_solve.py
+index 09880b6..9aa4e14 100644
+--- a/pipeline/tests/test_solver_solve.py
++++ b/pipeline/tests/test_solver_solve.py
+@@ -20,36 +20,36 @@ NAMES = np.array(["NC-1", "RH-1", "RH-2"])
+ 
+ def _lot(column: int, row: int) -> int:
+     return row * COLUMNS + column
+ 
+ 
+ def _quarter(column: int, row: int) -> int:
+     """nw 0, ne 1, sw 2, se 3: the left four columns are west, the top two rows north."""
+     return (row >= 2) * 2 + (column >= 4)
+ 
+ 
+-def _write_readings(q: str, names, print_index, code_index, trust) -> None:
+-    np.savez(paths.LABELS_DIR / f"readings_{q}.npz", names=np.asarray(names), print_index=np.asarray(print_index),
++def _write_readings(q: str, names, print_index, code_index, trust, folder=None) -> None:
++    np.savez((folder or paths.LABELS_DIR) / f"readings_{q}.npz", names=np.asarray(names), print_index=np.asarray(print_index),
+              code_index=np.asarray(code_index), trust=np.asarray(trust, float))
+ 
+ 
+-def _write_streetside(q: str, lot_b, on_street, freeway, r_a: float, r_b: float) -> None:
+-    np.savez(paths.LABELS_DIR / f"streetside_{q}.npz", lotB=np.asarray(lot_b, np.int64),
++def _write_streetside(q: str, lot_b, on_street, freeway, r_a: float, r_b: float, folder=None) -> None:
++    np.savez((folder or paths.LABELS_DIR) / f"streetside_{q}.npz", lotB=np.asarray(lot_b, np.int64),
+              onst=np.asarray(on_street, bool), isfw=np.asarray(freeway, bool), rA_st=r_a, rB_st=r_b, rA_fw=0.5,
+              rB_fw=0.5)
+ 
+ 
+-def _write_prints(lab_lot, street) -> None:
++def _write_prints(lab_lot, street, file=None) -> None:
+     n = len(lab_lot)
+     pd.DataFrame({"sheet": ["p01"] * n, "x": np.zeros(n), "y": np.zeros(n),
+                   "lab_lot": np.asarray(lab_lot, np.int32), "street": np.asarray(street, bool)}).to_parquet(
+-        paths.PRINTS_DIR / "prints.parquet")
++        file or paths.PRINTS_DIR / "prints.parquet")
+ 
+ 
+ UNDER = [_lot(c, 2) for c in LABELLED]     # the lot under each print's text
+ 
+ 
+ def _solved(run: str, q: str) -> np.ndarray:
+     """The codes of the run's solve that held out quarter q."""
+     R = np.load(city.run_file(run, f"-{q}"), allow_pickle=True)
+     return R["names"].astype(str)[R["pred"]]
+ 
+@@ -73,20 +73,23 @@ def _write_placement(lot_under, walls_dir=None, run=runs.FINAL_RUN) -> None:
+ 
+ @pytest.fixture
+ def synthetic_city(tmp_path, monkeypatch):
+     """A city of 40 lots (8 columns x 5 rows) in three districts by column, one print in each district read right
+     with trust 0.95, every label staying on its own lot, and walls the reader never saw (NaN: a line everywhere).
+     Returns the City."""
+     for module, name in ((paths, "PAGE_DIR"), (paths, "LOTS_DIR"), (paths, "PRINTS_DIR"), (paths, "LABELS_DIR"),
+                          (runs, "WALLS_DIR"), (runs, "SOLVE_DIR"), (runs, "EXPERIMENTS_DIR"), (paths, "TABLE_DIR")):
+         monkeypatch.setattr(module, name, tmp_path / name.lower())
+         (tmp_path / name.lower()).mkdir()
++    for name in ("SOLVE", "SCORING"):                  # both label sources are the chain's, as in the repository
++        monkeypatch.setattr(runs, f"{name}_PRINTS_FILE", paths.PRINTS_DIR / "prints.parquet")
++        monkeypatch.setattr(runs, f"{name}_LABELS_DIR", paths.LABELS_DIR)
+     monkeypatch.setattr(grid, "HEIGHT", SHAPE[0])
+     monkeypatch.setattr(grid, "WIDTH", SHAPE[1])
+     cells = [(c, r) for r in range(ROWS) for c in range(COLUMNS)]
+     boxes = [shapely.box(grid.X0 + 40 + c * SIDE, grid.Y1 - 40 - (r + 1) * SIDE,
+                          grid.X0 + 40 + (c + 1) * SIDE, grid.Y1 - 40 - r * SIDE) for c, r in cells]
+     t = gpd.GeoDataFrame({"blklot": [f"{r:02d}{c:02d}" for c, r in cells], "zoning": [DISTRICT[c] for c, _ in cells]},
+                          geometry=boxes, crs="EPSG:2227")
+     known, codes = table.known_and_codes(t)
+     lot, grown = lots.lot_rasters(t, SHAPE)
+     pairs = lots.neighbour_pairs(lot, grown)
+@@ -276,20 +279,65 @@ def test_a_report_written_again_at_another_time_is_the_same_bytes(synthetic_city
+     report.write_report(report.build_report("r", placement_summary={"labels": 3}, hole_causes={}))
+     before = {f: (runs.solve_dir("r") / f).read_bytes() for f in ("report.json", "report.md")}
+     monkeypatch.setattr(time, "time", lambda: 4e9)
+     monkeypatch.setattr(time, "perf_counter", lambda: 4e9)
+     city.city.cache_clear()
+     report.write_report(report.build_report("r", placement_summary={"labels": 3}, hole_causes={}))
+     assert {f: (runs.solve_dir("r") / f).read_bytes() for f in before} == before
+     assert json.loads(before["report.json"])["run"] == "r"
+ 
+ 
++def _other_solve_labels(tmp_path, monkeypatch):
++    """The solve reads other labels than the chain's: two prints (lots 8 and 20) read as RH-2 and NC-1."""
++    folder = tmp_path / "other-labels"
++    folder.mkdir()
++    monkeypatch.setattr(runs, "SOLVE_LABELS_DIR", folder)
++    monkeypatch.setattr(runs, "SOLVE_PRINTS_FILE", folder / "prints.parquet")
++    _write_prints([8, 20], [False, False], folder / "prints.parquet")
++    for q in paths.QUARTERS:
++        _write_readings(q, NAMES, [0, 1], [2, 0], [0.9, 0.9], folder)
++        _write_streetside(q, [-1, -1], [False, False], [False, False], 0.8, 0.8, folder)
++
++
++def test_the_score_keeps_its_labels_when_the_solve_reads_other_ones(synthetic_city, tmp_path, monkeypatch):
++    before = measures.scoring_labels()
++    calibration = report.top_reading_calibration()
++    assert [lot for lot, _ in before] == UNDER and [code for _, code in before] == ["RH-1", "RH-2", "NC-1"]
++    _other_solve_labels(tmp_path, monkeypatch)
++    # the solve's labels moved ...
++    assert sorted(labels.readings("nw").lot.tolist()) == [8, 20]
++    assert labels.solve_source().labels_dir != labels.scoring_source().labels_dir
++    # ... the score's did not: the same labels, in the same table, whichever labels the solve reads
++    assert measures.scoring_labels() == before
++    assert report.top_reading_calibration() == calibration
++    T = measures.Table(np.zeros(synthetic_city.n, bool))
++    assert T.label_lot.tolist() == UNDER and T.label_code.tolist() == ["RH-1", "RH-2", "NC-1"]
++
++
++def test_the_block_split_is_refused_when_labels_are_regrouped_between_blocks_with_the_same_totals():
++    blocks = np.array([0, 0, 1, 1, 2, 2])
++    label_lot = np.array([0, 2, 4])                  # one label in each of blocks 0, 1 and 2
++    flag = np.ones(3, bool)
++    measured = {"incidents": 0, "labels_right": 1.0, "wrong_lots": 0}
++    split = {"incidents": np.zeros(3), "wrong_lots": np.zeros(3), "zoning": np.array([1.0, 1.0, 1.0]),
++             "right": np.array([1.0, 1.0, 1.0])}
++    measures.check_block_split(split, blocks, label_lot, flag, flag, measured)
++    # block 0's label counted in block 1, and block 1's in block 0: every total still adds up
++    swapped = dict(split, zoning=np.array([0.0, 2.0, 1.0]), right=np.array([2.0, 0.0, 1.0]))
++    with pytest.raises(AssertionError, match="grouped into blocks differently"):
++        measures.check_block_split(swapped, blocks, label_lot, flag, flag, measured)
++    # and a total that no longer adds up is still refused
++    with pytest.raises(AssertionError, match="labels right per block"):
++        measures.check_block_split(dict(split, right=np.array([1.0, 0.0, 0.0])), blocks, label_lot, flag, flag,
++                                   measured)
++
++
+ def test_the_trust_check_reads_each_label_by_the_fit_that_held_its_lot_out(synthetic_city):
+     # the labels' lots are in sw (print 0) and se (prints 1, 2); the other fits say print 0 is NC-1 at 0.99
+     for q in ("nw", "ne", "se"):
+         _write_readings(q, NAMES, [0, 1, 2], [0, 2, 0], [0.99, 0.95, 0.95])
+     _write_readings("sw", NAMES, [0, 1, 2], [1, 2, 0], [0.6, 0.95, 0.95])
+     got = report.top_reading_calibration()
+     assert got["labels"] == 3 and got["right"] == 3
+     bins = {(b["from"], b["to"]): b for b in got["bins"]}
+     assert bins[(0.5, 0.7)]["labels"] == 1 and bins[(0.5, 0.7)]["right"] == 1.0
+     assert bins[(0.9, 0.97)]["labels"] == 2
+diff --git a/pipeline/tests/test_solver_trust.py b/pipeline/tests/test_solver_trust.py
+index a4af5e4..b093a8e 100644
+--- a/pipeline/tests/test_solver_trust.py
++++ b/pipeline/tests/test_solver_trust.py
+@@ -1,18 +1,18 @@
+ import dataclasses
+ import math
+ 
+ import numpy as np
+ import pandas as pd
+ from scipy.optimize import minimize
+ 
+-from sfzmaps.solver import lots, paths, prints, trust
++from sfzmaps.solver import lots, paths, prints, runs, trust
+ 
+ NW, NE, SW, SE = range(4)
+ 
+ 
+ def _print(kind=0, sol="", sol_confidence=math.nan, terra="", height=None, third=None, third_confidence=math.nan,
+            leader=False, recheck=None, turned="", lot=0, street=False, x=0.0, y=0.0):
+     """One prints.parquet row: `third` / `recheck` None for no saved answer found, "" for an answer naming no code."""
+     box = (0.0, 0.0, 40.0, height) if height is not None else (math.nan,) * 4
+     row = {c: None for c in prints.COLUMNS}
+     row.update(sheet="2000-digital-zoning-p01", page_x=0.0, page_y=0.0, x=float(x), y=float(y), kind=kind,
+@@ -154,20 +154,21 @@ def test_fit_ignores_rows_in_its_own_quarter():
+     recoded = dataclasses.replace(city, codes=np.where(city.quarter == NW, "RM-2", city.codes))
+     np.testing.assert_array_equal(trust.fit(trust.features(found, recoded), "nw"), trust.fit(table, "nw"))
+     assert not np.array_equal(trust.fit(trust.features(found, recoded), "ne"), trust.fit(table, "ne"))
+ 
+ 
+ def test_build_readings_writes_every_quarter(tmp_path, monkeypatch):
+     found, city = _synthetic()
+     found = _prints([found.iloc[i].to_dict() for i in [0, 1, 2, 3, 4] * 6])
+     for name in ("PRINTS_DIR", "LOTS_DIR", "LABELS_DIR"):
+         monkeypatch.setattr(paths, name, tmp_path / name)
++    monkeypatch.setattr(runs, "SOLVE_PRINTS_FILE", paths.PRINTS_DIR / "prints.parquet")
+     paths.PRINTS_DIR.mkdir()
+     paths.LOTS_DIR.mkdir()
+     found.to_parquet(paths.PRINTS_DIR / "prints.parquet", index=False)
+     np.savez_compressed(paths.LOTS_DIR / "lots.npz", lot=city.lot, grown=city.grown, pairs=np.zeros((0, 4), np.int64),
+                         scored=city.scored, known=city.known, quarter=city.quarter, table=city.codes)
+     trust.build_readings()
+     first = {q: dict(np.load(paths.LABELS_DIR / f"readings_{q}.npz")) for q in paths.QUARTERS}
+     trust.build_readings()
+     for q in paths.QUARTERS:
+         out = first[q]

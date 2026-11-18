@@ -1,0 +1,505 @@
+# Review package: 7fc310d..837c994
+
+## Commits
+837c994 textlines: baselines of today's detectors on the gate, the picture panel, the missed-text audit
+
+## Files changed
+ pipeline/scripts/textlines/audit.py     | 128 +++++++++++++++++++++++++
+ pipeline/scripts/textlines/baselines.py | 165 ++++++++++++++++++++++++++++++++
+ pipeline/scripts/textlines/panel.py     | 102 ++++++++++++++++++++
+ pipeline/tests/test_textlines_panel.py  |  73 ++++++++++++++
+ 4 files changed, 468 insertions(+)
+
+## Diff
+diff --git a/pipeline/scripts/textlines/audit.py b/pipeline/scripts/textlines/audit.py
+new file mode 100644
+index 0000000..a83591d
+--- /dev/null
++++ b/pipeline/scripts/textlines/audit.py
+@@ -0,0 +1,128 @@
++"""The missed-text audit: letter-sized ink pieces a detector gives a chance of text below 0.5, outside every word box,
++drawn at random on a contact sheet to be judged by eye.  What it is for: counting how much of the text a detector
++misses that the Terra boxes do not cover.  A piece that is plainly a letter or digit is text the detector missed;
++a piece that is a stub of line or a smudge is not.
++
++"Letter-sized" is `scripts/spikes/redteam_text_vs_line/redteam_missed.py`'s: after taking out the run rule's line ink
++(`linerules.line_px`, and the 3 x 3 px around it), an 8-connected piece of ink with height 8 to 40 px, width 3 to 40
++px, 15 or more px and at most 70% of its bounding box, whose centre is more than 10 px from every Terra word box and
++every other pass's box.  "Missed": the piece's mean chance is below 0.5 (a chance of 128 or more of 255 is called).
++"""
++import os
++
++for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "OPENCV_FOR_THREADS_NUM"):
++    os.environ.setdefault(_k, "1")
++from collections.abc import Callable
++from pathlib import Path
++
++import cv2
++import numpy as np
++
++cv2.setNumThreads(1)
++
++CALLED = 128                       # chance >= 0.5 of 255
++FAR = 10                           # px from every box
++HEIGHT, WIDTH, MIN_AREA, FILL = (8, 40), (3, 40), 15, 0.7
++R = 40                             # a tile shows 2 R px square of the page, at 2 x
++
++
++def pieces(ink: np.ndarray, boxes: np.ndarray, run_line: np.ndarray) -> list[dict]:
++    """The letter-sized pieces of `ink` (see the module) outside `boxes` (bool, the union of every word box) and
++    `run_line` (bool, the run rule's px): dicts sheet-less, with the centre (x, y) and the bounding box (x0, y0, w, h)."""
++    rest = ink & ~(cv2.dilate(run_line.view(np.uint8), np.ones((3, 3), np.uint8)) > 0)
++    far = (cv2.distanceTransform((~boxes).view(np.uint8), cv2.DIST_L2, 3) if boxes.any()
++           else np.full(ink.shape, np.inf, np.float32))
++    n, lab, st, cen = cv2.connectedComponentsWithStats(rest.view(np.uint8), connectivity=8)
++    h, w, a = st[:, cv2.CC_STAT_HEIGHT], st[:, cv2.CC_STAT_WIDTH], st[:, cv2.CC_STAT_AREA]
++    ok = (h >= HEIGHT[0]) & (h <= HEIGHT[1]) & (w >= WIDTH[0]) & (w <= WIDTH[1]) & (a >= MIN_AREA) & (a <= FILL * h * w)
++    ok[0] = False
++    cx = np.clip(cen[:, 0].round().astype(int), 0, ink.shape[1] - 1)
++    cy = np.clip(cen[:, 1].round().astype(int), 0, ink.shape[0] - 1)
++    ok &= far[cy, cx] > FAR
++    out = []
++    for j in np.flatnonzero(ok):
++        x0, y0 = int(st[j, 0]), int(st[j, 1])
++        out.append({"x": int(cx[j]), "y": int(cy[j]), "x0": x0, "y0": y0, "w": int(w[j]), "h": int(h[j]),
++                    "mask": lab[y0:y0 + h[j], x0:x0 + w[j]] == j})
++    return out
++
++
++def missed(found: list[dict], chance: np.ndarray) -> list[dict]:
++    """The pieces whose mean chance over their own px is below 0.5, each with `chance` (the mean, of 255)."""
++    out = []
++    for p in found:
++        c = float(chance[p["y0"]:p["y0"] + p["h"], p["x0"]:p["x0"] + p["w"]][p["mask"]].mean())
++        if c < CALLED:
++            out.append({k: v for k, v in p.items() if k != "mask"} | {"chance": c})
++    return out
++
++
++def candidates(sheets: list, source: Callable[[str], np.ndarray], quarters: tuple[str, ...], geo) -> tuple[list, int]:
++    """Every missed piece (`missed`) of `sheets` (`data.SheetData`) whose centre lies in one of `quarters`, with a
++    `sheet` key, and the count of all letter-sized pieces there (missed or not).  `geo.quarter(sd)` gives the quarters."""
++    from sfzmaps.solver import paths
++    from sfzmaps.solver.textnet import data, linerules
++    ix = np.array([paths.QUARTERS.index(q) for q in quarters], np.uint8)
++    out, total = [], 0
++    for sd in sheets:
++        ink = data.page_ink(sd)
++        chance = np.asarray(source(sd.sheet))
++        if chance.shape != ink.shape:
++            raise ValueError(f"the chance of {sd.sheet} is {chance.shape}, not its page's shape {ink.shape}")
++        boxes = (data._words(sd, 0, 0, sd.height, sd.width) > 0) | (
++            data._paint(sd.other, np.ones(len(sd.other), np.int32), 0, 0, sd.height, sd.width) > 0)
++        found = pieces(ink, boxes, linerules.line_px(ink, sd.ft_per_px))
++        quarter = geo.quarter(sd)
++        found = [p for p in found if np.isin(quarter[p["y"], p["x"]], ix)]
++        total += len(found)
++        out += [p | {"sheet": sd.sheet} for p in missed(found, chance)]
++    return out, total
++
++
++def draw(cands: list[dict], n: int = 64, seed: int = 0) -> list[dict]:
++    """`n` of `cands` at random, without replacement (all of them when fewer), by a generator seeded with `seed`."""
++    rng = np.random.default_rng(seed)
++    pick = rng.choice(len(cands), min(n, len(cands)), replace=False)
++    return [cands[i] for i in sorted(pick)]
++
++
++def sample(source: Callable[[str], np.ndarray], quarters: tuple[str, ...], n: int = 64, seed: int = 0,
++           geo=None, sheets: list | None = None) -> list[dict]:
++    """`n` of the missed letter-sized pieces of the 2000 sheets (in `quarters`) at random: each a dict with sheet,
++    centre x, y, box x0, y0, w, h and chance.  `geo` (default `CityGeo`) and `sheets` (default every 2000 sheet) can be
++    given to share them between calls."""
++    from sfzmaps.solver import paths
++    from sfzmaps.solver.textnet import data, linegate
++    if sheets is None:
++        paths.check_sheets()
++        sheets = data.load_sheets([paths.SERIES], hold_out_validation=False)
++    cands, _ = candidates(sheets, source, quarters, geo or linegate.CityGeo())
++    return draw(cands, n, seed)
++
++
++def sheet(items: list[dict], out: Path, ink_of: Callable[[str], np.ndarray], columns: int = 8) -> Path:
++    """The contact sheet of `items` (each drawn on a 2 R px window of its page, at 2 x, the piece boxed in red and
++    numbered), `columns` to a row, written to `out`.  `ink_of(sheet)` gives a sheet's page of ink."""
++    cache: dict[str, np.ndarray] = {}
++    tiles = []
++    for i, it in enumerate(items):
++        if it["sheet"] not in cache:
++            cache[it["sheet"]] = ink_of(it["sheet"])
++        ink = cache[it["sheet"]]
++        y0, x0 = max(it["y"] - R, 0), max(it["x"] - R, 0)
++        win = np.zeros((2 * R, 2 * R), bool)
++        sub = ink[y0:it["y"] + R, x0:it["x"] + R]
++        win[:sub.shape[0], :sub.shape[1]] = sub
++        t = np.full((2 * R, 2 * R, 3), 255, np.uint8)
++        t[win] = (150, 150, 150)
++        bx, by = it["x0"] - x0, it["y0"] - y0
++        cv2.rectangle(t, (bx - 1, by - 1), (bx + it["w"], by + it["h"]), (0, 0, 230), 1)
++        t = cv2.resize(t, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST)
++        cv2.putText(t, str(i), (2, 12), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 0, 0), 1)
++        tiles.append(np.pad(t, ((2, 2), (2, 2), (0, 0)), constant_values=0))
++    blank = np.zeros_like(tiles[0])
++    rows = [np.hstack((tiles[r:r + columns] + [blank] * columns)[:columns]) for r in range(0, len(tiles), columns)]
++    out = Path(out)
++    out.parent.mkdir(parents=True, exist_ok=True)
++    cv2.imwrite(str(out), np.vstack(rows))
++    return out
+diff --git a/pipeline/scripts/textlines/baselines.py b/pipeline/scripts/textlines/baselines.py
+new file mode 100644
+index 0000000..e9794b6
+--- /dev/null
++++ b/pipeline/scripts/textlines/baselines.py
+@@ -0,0 +1,165 @@
++"""Score today's text detectors on the text-vs-line gate (`sfzmaps.solver.textnet.linegate`): the baselines every later
++training run is compared against.  CPU, one thread, $0.  One process, one `CityGeo` (about 7 GB at the peak): never run
++two at once.
++
++    OMP_NUM_THREADS=1 uv run python scripts/textlines/baselines.py
++
++Sources (all four quarters unless said):
++  r328         the held-out detectors, nested `data/solver/text-reader/<sheet>/chance.png` (copied with held.json)
++  all-sheets   the all-sheets detector, flat `data/solver/text/chance/` (trained on every sheet: in-sample, a reference)
++  trial        the detector-overcall recipe trial, flat `data/solver/experiments/detector-overcall/chance/trial/`
++  old-<q>      the old r30 quarter models, flat `data/solver/text-<q>/chance/`, each scored on its OWN quarter only
++
++Writes under `data/solver/experiments/textlines/baselines/`: `<source>/{scores.json, scores.md, blocks.npz}` (a source
++already written is skipped: remove its folder to redo it), `summary.md`, `panel.png` and `audit/`.
++"""
++import os
++
++for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "MKL_NUM_THREADS",
++           "OPENCV_FOR_THREADS_NUM"):
++    os.environ[_k] = "1"
++import json  # noqa: E402
++import shutil  # noqa: E402
++import sys  # noqa: E402
++from pathlib import Path  # noqa: E402
++
++import cv2  # noqa: E402
++import numpy as np  # noqa: E402
++
++cv2.setNumThreads(1)
++sys.path.insert(0, str(Path(__file__).resolve().parent))
++import audit  # noqa: E402
++import panel  # noqa: E402
++
++from sfzmaps.solver import paths, runs  # noqa: E402
++from sfzmaps.solver.textnet import data, linegate  # noqa: E402
++
++OUT = runs.EXPERIMENTS_DIR / "textlines" / "baselines"
++TRIAL = runs.EXPERIMENTS_DIR / "detector-overcall" / "chance" / "trial"
++QUARTERS = tuple(paths.QUARTERS)
++SUMMARY_MEASURES = ("m1a_in_box", "m1a", "m1b_in_box", "m1c", "m2", "overlap_band")
++TITLE = "text detectors on the 2000 sheets: red = ink called text (chance >= 0.5), grey = other ink"
++
++
++def copy_today() -> None:
++    """Copy the held-out detectors' chance (nested) and held.json to r328/, and the all-sheets chance to all-sheets/."""
++    r328, every = OUT / "r328", OUT / "all-sheets"
++    for sheet in paths.SHEETS:
++        src, dst = paths.READER_TEXT_DIR / sheet / "chance.png", r328 / sheet / "chance.png"
++        dst.parent.mkdir(parents=True, exist_ok=True)
++        if not dst.exists():
++            shutil.copy2(src, dst)
++        src, dst = paths.TEXT_CHANCE_DIR / f"{sheet}.png", every / f"{sheet}.png"
++        dst.parent.mkdir(parents=True, exist_ok=True)
++        if not dst.exists():
++            shutil.copy2(src, dst)
++    shutil.copy2(paths.READER_TEXT_DIR / "held.json", r328 / "held.json")
++
++
++def sources() -> dict[str, tuple[linegate.ChanceSource, tuple[str, ...]]]:
++    """Each baseline's chance source and the quarters it is scored on."""
++    out = {"r328": (linegate.folder_source(OUT / "r328", "nested"), QUARTERS),
++           "all-sheets": (linegate.folder_source(OUT / "all-sheets", "flat"), QUARTERS),
++           "trial": (linegate.folder_source(TRIAL, "flat"), QUARTERS)}
++    for q in QUARTERS:
++        out[f"old-{q}"] = (linegate.folder_source(paths.SOLVER_DIR / f"text-{q}" / "chance", "flat"), (q,))
++    return out
++
++
++def score(name: str, source, quarters, sheets, geo) -> dict:
++    """The gate on `sheets` for one source, written to OUT/<name>; its scores.json when it exists already."""
++    folder = OUT / name
++    if (folder / linegate.BLOCKS_FILE).is_file() and (folder / linegate.SCORES_FILE).is_file():
++        print(name, "already scored", flush=True)
++        return json.loads((folder / linegate.SCORES_FILE).read_text())
++    result, tallies = linegate.gate_sheets(sheets, source, quarters, geo)
++    if linegate.LEARNED_RULES.is_file():
++        found = json.loads(linegate.LEARNED_RULES.read_text()).get("run / font.npz")
++        if found:
++            result["rules"]["font.npz"] = linegate.summarise_rules(found)
++    linegate.write(result, tallies, folder)
++    print(name, "scored", flush=True)
++    return result
++
++
++def summary(results: dict[str, dict]) -> str:
++    """summary.md: for each source the headline measures, called >= 0.5 with the 95% interval."""
++    lines = ["# Baselines on the text-vs-line gate", "",
++             ("Each cell: the share of the measure's ink called text (chance >= 0.5), with the 95% bootstrap interval over "
++              "blocks. Lower is better for m1a_in_box (district-border ink in a word box), m1a (all district-border ink), "
++              "m1b_in_box (run-rule line ink in a word box) and m1c (ink outside every box); higher is better for m2 "
++              "(glyph ink in a word box, off the line rule). overlap_band is reported on its own. all-sheets is in-sample "
++              "(trained on every sheet): a reference only. old-q rows are scored on their own quarter only."), "",
++             "| source | " + " | ".join(SUMMARY_MEASURES) + " |", "|---|" + "---|" * len(SUMMARY_MEASURES)]
++    for name, r in results.items():
++        cells = []
++        for m in SUMMARY_MEASURES:
++            v = r[m]
++            cells.append("-" if v is None else f"{v['called_05']:.3f} [{v['ci_05'][0]:.3f}, {v['ci_05'][1]:.3f}]")
++        lines.append(f"| {name} | " + " | ".join(cells) + " |")
++    lines += ["", "Ink px (m1a in weight) behind each cell:", "", "| source | " + " | ".join(SUMMARY_MEASURES) + " |",
++              "|---|" + "---|" * len(SUMMARY_MEASURES)]
++    for name, r in results.items():
++        lines.append(f"| {name} | " + " | ".join(linegate._px(r[m]["px"]) for m in SUMMARY_MEASURES) + " |")
++    return "\n".join(lines) + "\n"
++
++
++def old_quarters_source(sheets: list, geo) -> linegate.ChanceSource:
++    """The four old quarter models as one chance: each px from the model of its own quarter."""
++    by_sheet = {sd.sheet: sd for sd in sheets}
++    each = {q: linegate.folder_source(paths.SOLVER_DIR / f"text-{q}" / "chance", "flat") for q in QUARTERS}
++    cache: dict[str, np.ndarray] = {}
++
++    def source(sheet: str) -> np.ndarray:
++        if sheet not in cache:
++            quarter = geo.quarter(by_sheet[sheet])
++            out = np.zeros(quarter.shape, np.uint8)
++            for i, q in enumerate(QUARTERS):
++                m = quarter == i
++                if m.any():
++                    out[m] = each[q](sheet)[m]
++            cache[sheet] = out
++        return cache[sheet]
++    return source
++
++
++def main() -> None:
++    OUT.mkdir(parents=True, exist_ok=True)
++    copy_today()
++    paths.check_sheets()
++    sheets = data.load_sheets([paths.SERIES], hold_out_validation=False)
++    geo = linegate.CityGeo()
++    srcs = sources()
++    results = {name: score(name, s, q, sheets, geo) for name, (s, q) in srcs.items()}
++    (OUT / "summary.md").write_text(summary(results))
++    print("summary written", flush=True)
++
++    ink = {sd.sheet: data.page_ink(sd) for sd in sheets if sd.sheet in {w[0] for w in panel.WINDOWS.values()}}
++    panel_sources = {"r328": srcs["r328"][0], "all-sheets": srcs["all-sheets"][0], "trial": srcs["trial"][0],
++                     "old quarters": old_quarters_source(sheets, geo)}
++    panel.page_ink = lambda sheet: ink[sheet]
++    panel.render(panel_sources, OUT / "panel.png", TITLE)
++    print("panel written", flush=True)
++
++    ink_of = lambda sheet: data.page_ink(next(sd for sd in sheets if sd.sheet == sheet))  # noqa: E731
++    (OUT / "audit").mkdir(exist_ok=True)
++    audits = {}
++    src, quarters = srcs["r328"]
++    cands, total = audit.candidates(sheets, src, quarters, geo)
++    audits["r328"] = (cands, total)
++    cands, total = [], 0
++    for q in QUARTERS:
++        c, t = audit.candidates(sheets, srcs[f"old-{q}"][0], (q,), geo)
++        cands += c
++        total += t
++    audits["old-quarters"] = (cands, total)
++    for name, (cands, total) in audits.items():
++        items = audit.draw(cands, 64, 0)
++        audit.sheet(items, OUT / "audit" / f"{name}.png", ink_of)
++        (OUT / "audit" / f"{name}.json").write_text(json.dumps(
++            {"letter_sized_pieces": total, "missed_below_0.5": len(cands), "items": items}, indent=1) + "\n")
++        print(name, "audit: letter-sized", total, "missed", len(cands), flush=True)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/pipeline/scripts/textlines/panel.py b/pipeline/scripts/textlines/panel.py
+new file mode 100644
+index 0000000..02d324d
+--- /dev/null
++++ b/pipeline/scripts/textlines/panel.py
+@@ -0,0 +1,102 @@
++"""The picture panel: fixed windows of the 2000 sheets, a row per window and a column per detector.  Ink the detector
++calls text (chance >= 0.5) is red, other ink grey.  What it is for: seeing at a glance whether a detector colours line
++ink (block, street and district lines, dashes, hatching) red, and whether the letters stay red.  The same windows
++every time, so two detectors' panels can be set side by side.
++
++Windows are (sheet, row, col, size): the page's row and column of the window's CENTRE and its side, in page px.  The
++three rm2 windows are the red team's RM-2 zooms; the rest were chosen once by looking at the scans:
++  downtown     p01, C-3-S / M-1 / SLI labels over a diagonal street grid
++  residential  p02, RH-2 and UNION NCD, thick district outlines through small blocks
++  dashed       p02, the dashed pier-head line across the water
++  hatched      p01, lots filled with hatching and small lettering
++  sw_dense     p12, curving hill streets with RH-1(D) lettering
++  sw_street    p12, a regular block grid with a thick district line and lot numbers
++"""
++import os
++
++for _k in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
++    os.environ.setdefault(_k, "1")
++from collections.abc import Callable
++from pathlib import Path
++
++import cv2
++import numpy as np
++
++cv2.setNumThreads(1)
++
++P = "2000-digital-zoning-p"
++WINDOWS: dict[str, tuple[str, int, int, int]] = {
++    "rm2a": (f"{P}02", 1850, 2505, 240),
++    "rm2b": (f"{P}02", 1745, 2175, 240),
++    "rm2c": (f"{P}02", 1868, 2218, 240),
++    "downtown": (f"{P}01", 3330, 1730, 240),
++    "residential": (f"{P}02", 1750, 1680, 240),
++    "dashed": (f"{P}02", 890, 2050, 240),
++    "hatched": (f"{P}01", 3430, 1690, 240),
++    "sw_dense": (f"{P}12", 1500, 1470, 240),
++    "sw_street": (f"{P}12", 2770, 1170, 240),
++}
++CALLED = 128                      # chance >= 0.5 of 255
++RED, GREY, PAPER, OUTSIDE = (0, 0, 255), (150, 150, 150), (255, 255, 255), (225, 225, 225)
++ZOOM = 2                          # each window px is drawn ZOOM x ZOOM px
++HEAD = 22                         # px of column heading
++SIDE = 96                         # px of row names
++
++
++def page_ink(sheet: str) -> np.ndarray:
++    """A sheet's whole page of ink, bool."""
++    from sfzmaps.solver import paths
++    from sfzmaps.solver.textnet import data
++    return data.page_ink(data.sheet_data(paths.SERIES, sheet, hold_out_validation=False, placement=False))
++
++
++def _window(a: np.ndarray, row: int, col: int, size: int, fill) -> np.ndarray:
++    """`a`'s `size` x `size` window centred on (row, col), `fill` outside the page."""
++    h = size // 2
++    out = np.full((size, size), fill, a.dtype)
++    y0, x0 = max(row - h, 0), max(col - h, 0)
++    sub = a[y0:row + h, x0:col + h]
++    oy, ox = y0 - (row - h), x0 - (col - h)
++    out[oy:oy + sub.shape[0], ox:ox + sub.shape[1]] = sub
++    return out
++
++
++def _tile(ink: np.ndarray, chance: np.ndarray, row: int, col: int, size: int) -> np.ndarray:
++    i = _window(ink, row, col, size, False)
++    c = _window(chance, row, col, size, 0)
++    inside = _window(np.ones(ink.shape, bool), row, col, size, False)
++    t = np.empty((size, size, 3), np.uint8)
++    t[:] = OUTSIDE
++    t[inside] = PAPER
++    t[i] = GREY
++    t[i & (c >= CALLED)] = RED
++    return cv2.resize(t, None, fx=ZOOM, fy=ZOOM, interpolation=cv2.INTER_NEAREST)
++
++
++def render(sources: dict[str, Callable[[str], np.ndarray]], out: Path, title: str) -> Path:
++    """Write the panel to `out`: a row per window of WINDOWS, a column per source (its name above), `title` on top.
++    Red: ink with a chance of text >= 0.5; grey: other ink."""
++    out = Path(out)
++    ink_cache: dict[str, np.ndarray] = {}
++    rows = []
++    cell = 0
++    for name, (sheet, row, col, size) in WINDOWS.items():
++        if sheet not in ink_cache:
++            ink_cache[sheet] = page_ink(sheet)
++        tiles = [np.pad(_tile(ink_cache[sheet], np.asarray(src(sheet)), row, col, size),
++                        ((2, 2), (2, 2), (0, 0)), constant_values=60) for src in sources.values()]
++        cell = tiles[0].shape[1]
++        label = np.full((tiles[0].shape[0], SIDE, 3), 255, np.uint8)
++        for k, (text, shade) in enumerate([(name, 0), (sheet[-3:], 90), (f"{row},{col}", 90), (f"{size}px", 90)]):
++            cv2.putText(label, text, (4, 18 + 17 * k), cv2.FONT_HERSHEY_SIMPLEX, 0.45 if k == 0 else 0.4,
++                        (shade,) * 3, 1)
++        rows.append(np.hstack([label, *tiles]))
++    width = rows[0].shape[1]
++    head = np.full((HEAD, width, 3), 255, np.uint8)
++    for k, n in enumerate(sources):
++        cv2.putText(head, n, (SIDE + k * cell + 4, 15), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
++    top = np.full((26, width, 3), 255, np.uint8)
++    cv2.putText(top, title, (4, 18), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
++    out.parent.mkdir(parents=True, exist_ok=True)
++    cv2.imwrite(str(out), np.vstack([top, head, *rows]))
++    return out
+diff --git a/pipeline/tests/test_textlines_panel.py b/pipeline/tests/test_textlines_panel.py
+new file mode 100644
+index 0000000..d2448a8
+--- /dev/null
++++ b/pipeline/tests/test_textlines_panel.py
+@@ -0,0 +1,73 @@
++"""The picture panel and the missed-text audit (scripts/textlines): synthetic pages, no pipeline data."""
++import sys
++from pathlib import Path
++
++import cv2
++import numpy as np
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "textlines"))
++import audit  # noqa: E402
++import panel  # noqa: E402
++
++
++def _red(img):
++    return (img[..., 2] > 200) & (img[..., 1] < 80) & (img[..., 0] < 80)
++
++
++def test_a_source_of_zeros_draws_no_red(tmp_path, monkeypatch):
++    monkeypatch.setattr(panel, "WINDOWS", {"w": ("s", 0, 0, 64)})
++    monkeypatch.setattr(panel, "page_ink", lambda sheet: np.ones((64, 64), bool))
++    out = panel.render({"zeros": lambda s: np.zeros((64, 64), np.uint8)}, tmp_path / "p.png", "t")
++    img = cv2.imread(str(out))
++    assert not _red(img).any()
++
++
++def test_red_is_ink_called_text_and_only_ink(tmp_path, monkeypatch):
++    ink = np.zeros((64, 64), bool)
++    ink[10:20, 10:20] = True
++    monkeypatch.setattr(panel, "WINDOWS", {"w": ("s", 32, 32, 64)})
++    monkeypatch.setattr(panel, "page_ink", lambda sheet: ink)
++    full = {"all": lambda s: np.full((64, 64), 255, np.uint8)}
++    assert _red(cv2.imread(str(panel.render(full, tmp_path / "p.png", "t")))).any()
++    monkeypatch.setattr(panel, "page_ink", lambda sheet: np.zeros((64, 64), bool))
++    assert not _red(cv2.imread(str(panel.render(full, tmp_path / "r.png", "t")))).any()
++
++
++def test_a_window_past_the_page_edge_is_padded(tmp_path, monkeypatch):
++    monkeypatch.setattr(panel, "WINDOWS", {"w": ("s", 60, 60, 64)})
++    monkeypatch.setattr(panel, "page_ink", lambda sheet: np.ones((64, 64), bool))
++    out = panel.render({"a": lambda s: np.zeros((64, 64), np.uint8)}, tmp_path / "p.png", "t")
++    assert cv2.imread(str(out)) is not None
++
++
++def _page():
++    ink = np.zeros((200, 200), np.uint8)
++    for y, x, ch in [(20, 20, "A"), (20, 100, "K"), (100, 20, "E")]:
++        cv2.putText(ink, ch, (x, y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1, 2)
++    return ink.view(bool)
++
++
++def test_audit_picks_only_letter_sized_pieces_the_detector_misses():
++    ink = _page()
++    none = np.zeros((200, 200), bool)
++    pieces = audit.pieces(ink, none, none)
++    assert len(pieces) == 3
++    assert len(audit.missed(pieces, np.zeros((200, 200), np.uint8))) == 3
++    assert len(audit.missed(pieces, np.full((200, 200), 255, np.uint8))) == 0
++
++
++def test_audit_skips_pieces_near_a_box_or_a_run_line():
++    ink = _page()
++    none = np.zeros((200, 200), bool)
++    box = np.zeros((200, 200), bool)
++    box[10:40, 10:60] = True
++    assert len(audit.pieces(ink, box, none)) == 2
++    line = np.zeros((200, 200), bool)
++    line[:, 98:120] = True
++    assert len(audit.pieces(ink, none, line)) == 2
++
++
++def test_audit_sheet_writes_a_picture(tmp_path):
++    items = [{"sheet": "s", "x": 30, "y": 30, "x0": 20, "y0": 20, "w": 10, "h": 12, "chance": 10}] * 3
++    out = audit.sheet(items, tmp_path / "a.png", ink_of=lambda s: _page())
++    assert cv2.imread(str(out)) is not None

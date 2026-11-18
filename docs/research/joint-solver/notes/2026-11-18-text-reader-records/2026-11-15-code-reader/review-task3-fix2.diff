@@ -1,0 +1,378 @@
+c626e46 code reader posterior, fix round 2: with Terra's word the best "other" string's path is chosen without its end weight again (chosen with it, "other" spelled fillers into codes printed wider spaced than the font's advances: "M-.2" for a wide M-2); the measured end-break term is off (END_BREAKS: on the training point labels it lowered the likelihood, mean -log p 2.55 against 2.26); evidence leaves the GPU turn to its caller (turns don't nest) and says settle_torch is process-wide; tests: a crisp code on clean paper reads that code, not "other" (M-2 among them); the off-centre point test with the end term on, -0.75 and -1.0 strict xfail with the measured reason; a widely spaced code strict xfail (the open letter-spacing gap)
+ .../src/sfzmaps/solver/codereader/posterior.py     | 59 ++++++++++----------
+ pipeline/tests/test_codereader.py                  | 64 ++++++++++++++++++----
+ 2 files changed, 84 insertions(+), 39 deletions(-)
+diff --git a/pipeline/src/sfzmaps/solver/codereader/posterior.py b/pipeline/src/sfzmaps/solver/codereader/posterior.py
+index e9a2546..6998efb 100644
+--- a/pipeline/src/sfzmaps/solver/codereader/posterior.py
++++ b/pipeline/src/sfzmaps/solver/codereader/posterior.py
+@@ -13,21 +13,22 @@ across the reading direction, px from the print's point) and the pen of its firs
+     px); px within 2 px of two characters' strokes count for both (on the training fits the characters' sums match
+     the whole string's ratio to 0.3%).
+   - Each character a little off its pen along the line (`_jitter`): the gaps between printed letters spread about
+     the font's advances (`Font.spacing_sd`, measured in Task 2), so each character's shift is Gaussian with that
+     spread / sqrt 2 and is summed over.  Without it a rigid layout misses the print's spacing and the open-vocabulary
+     pass wins by spelling dots and spaces into the gaps.
+   - Codes: each printed form of a code (`Prior.forms`), its characters laid out by the font's advances.
+   - "other": an open-vocabulary pass over the font's characters (a space between words), the string's probability
+     by a character bigram over the previous character's kind (`char_bigram`).  The best string from each cell (it
+     ends where its bigram ends it) is found by a max-product pass along the line (`_viterbi`) and stands for the sum
+-    over strings there; its placement weight is judged at the end it carries.
++    over strings there; its placement weight is judged at the end it carries, not used to choose it (chosen with it,
++    "other" spelled fillers into a code printed wider spaced than the font's advances, a freedom codes lack).
+   - Tempered: the px aren't independent (a stroke's edge is one event, not a run of independent px), so every ratio
+     is divided by the temperature before anything is summed (a composite likelihood's magnitude adjustment; Ocular
+     needed the same).  The pose prior carries a default; Task 4 fits it with the two masses.
+ 
+ The placement prior (`PosePrior`, measured on the training labels by `measure_pose_prior`).  Where the text is,
+ given the print:
+   - With Terra's box (the crop reads along Terra's angle; `code_rect` is the word): the ink's left and right ends at
+     the word's ends and the line's middle at the word's middle, each a Gaussian in word heights.  The two ends are two
+     observations of where the text is: their product is a Gaussian on the text's centre times a likelihood of its
+     length (scaled to 1 at the word's own length), so a code too long or too short for Terra's word pays for it.  The
+@@ -58,70 +59,73 @@ with L the tempered ratio, G(x) the ink in x weighted by each character's typica
+ (`PosePrior.char_gain`, measured on the training fits) and q the label's print quality (pass 1: the best code's
+ ratio over its G at the core placement).  Covering more ink of the label's quality then gains nothing; a code that
+ stops short of its word, or shrinks inside it, pays for the leftover as one more word; on paper and lines G is 0 and
+ E_h is L, which strokes on paper make tiny: "none".  The best "other" string carries its own G through the Viterbi
+ pass.  `PosePrior.foreign = 0` turns this off (the bare background alone).  Without a box there is no word: the term
+ is 1 / (1 + rho F(h)), and where the word ends comes from the ink along the line:
+ 
+ Where a word ends, without a box.  A reading that stops short of its word (RH-1 of RH-1(D), P on the R of RM-2)
+ leaves the rest of the word beside its end, on its line.  Past each end of a hypothesis's ink, a window of the
+ lettering band (`PosePrior.end_break["window"]`: a skip and a width, cap heights; leaned like the glyphs) holds some
+-density of observed ink; P(a word ends | that density) is measured on the training labels' fits (their strings' own ends against the
+-boundaries between their characters; isotonic, non-increasing in the density, a sample at the base rate added to
+-each step; the window kept by two-fold log loss: `end_breaks`).  Each end multiplies E_h by P(end | density) / P(end); the best "other" string
+-takes its last end's factor inside the Viterbi pass.  With a box Terra's word does this job.
++density of observed ink; P(a word ends | that density) is measured on the training labels' fits (their strings'
++own ends against the boundaries between their characters; isotonic, non-increasing in the density, a sample at the
++base rate added to each step; the window kept by two-fold log loss: `end_breaks`).  Each end multiplies E_h by
++P(end | density) / P(end); the best "other" string takes its last end's factor inside the Viterbi pass.  With a box
++Terra's word does this job.  The term is measured but off (END_BREAKS): it reads synthetic off-centre points right,
++but on the training point labels it lowered the likelihood (mean -log p(code) 2.55 against 2.26 without; see the
++task report).
+ 
+ The prior over hypotheses: p(code) = (1 - none - other) x `code_prior`, a code's printed forms weighted by
+ `form_prior` (how often the training strings print each), p(none), p(other): `Constants`, Task 4's to fit (two-fold
+ on the owner's answers).
+ 
+ Two passes (`evidence`): a coarse one (every other scale, each base angle's likeliest residual) finds the label's
+ print quality q (a statistic of the label, used as defined, at each temperature); the full pass scores every scale,
+ angle and cell within the placement prior's reach.  (Skipping scales and angles whose coarse score was far below the
+ label's best was tried and dropped: no cheap bound covers every hypothesis at every temperature, and it moved
+ posteriors.)
+ 
+-Deterministic: no randomness; torch's deterministic algorithms on THREADS threads (`settle_torch`, set by
+-`evidence`); on the CPU, or the GPU in one exclusive turn (`sfzmaps.gpu.gpu_turn`, taken by `evidence`; on the 2000
+-labels `mps` was far slower than the CPU).
++Deterministic: no randomness; torch's deterministic algorithms on THREADS threads (`settle_torch`, process-wide,
++set by every `evidence` call); on the CPU, or the GPU in one exclusive turn that the caller takes around its whole
++run (`sfzmaps.gpu.gpu_turn`; turns don't nest; on the 2000 labels `mps` was far slower than the CPU).
+ """
+ import json
+ import logging
+ import math
+ import re
+ import time
+ from dataclasses import asdict, dataclass, field
+ 
+ import cv2
+ import numpy as np
+ import torch
+ 
+-from sfzmaps import gpu
+ from sfzmaps.solver import codes
+ from sfzmaps.solver.codereader import glyphs
+ from sfzmaps.solver.codereader import labels as labels_mod
+ 
+ log = logging.getLogger(__name__)
+ 
+ RULES = "run"              # the line rule whose px are unobserved (`labels.line_mask`), chosen on the training labels
+ RESIDUALS = glyphs.RESIDUALS
+ SPACE, START, END = " ", "^", "$"
+ BIGRAM_ADD = 0.5           # the bigram's counts are smoothed by this many in every allowed cell
+ CODE_ADD = 0.5             # the code prior's counts are smoothed by this many per code
+ FORM_ADD = 0.5             # p(form | code)'s counts are smoothed by this many per form
+ NONE_MASS = 0.02           # p(none) and p(other) until Task 4 fits them
+ OTHER_MASS = 0.03
+ REACH_LOG = 12.0           # cells whose placement prior is below e^-REACH_LOG of the tail's peak are not scored
+ # windows past a word's end tried (skip, width; cap heights): `end_breaks` keeps one by two-fold log loss
+ END_WINDOWS = tuple((a, b) for a in (0.0, 0.1, 0.2) for b in (0.4, 0.6, 0.9, 1.3))
+ SOURCES = ("sol", "turned")
+ THREADS = 1                # torch's threads while scoring (labels go in parallel processes): the same sums anywhere
++END_BREAKS = False         # use the measured end-break term without a box: off, it lowered the training likelihood
+ 
+ 
+ # --- constants and priors --------------------------------------------------------------------------------------------
+ 
+ @dataclass(frozen=True)
+ class Constants:
+     """The three calibration constants: the temperature dividing every px log-likelihood ratio (None: the pose prior's
+     measured one), and the prior masses of "none" and "other"."""
+     temperature: float | None = None
+     none_mass: float = NONE_MASS
+@@ -143,21 +147,21 @@ class PosePrior:
+     along: dict = field(default_factory=lambda: {s: (0.0, 0.15, 0.6) for s in SOURCES})    # point's centre
+     across: dict = field(default_factory=lambda: {s: (0.0, 0.1, 0.4) for s in SOURCES})
+     point_tail: dict = field(default_factory=lambda: {s: 0.2 for s in SOURCES})
+     point_turns: dict = field(default_factory=lambda: {s: [0.7, 0.1, 0.1, 0.1] for s in SOURCES})
+     residuals: list = field(default_factory=lambda: [0.1, 0.2, 0.4, 0.2, 0.1])          # p over RESIDUALS
+     cap: tuple = (math.log(27.0), 0.3)   # log cap height (px) over the map's labels: mean, sd
+     height: float = 27.0                 # the training words' median height, px
+     point_heights: tuple = ()            # the training words' heights (px) the point labels' scales span
+     foreign: float = 5e-5                # other text per px^2 of crop (Terra's boxes of every kind)
+     char_gain: dict = field(default_factory=dict)    # each character's mean ratio per ink px of its cell
+-    end_break: dict = field(default_factory=dict)    # P(a word ends | ink density past it), without a box (`end_breaks`)
++    end_break: dict = field(default_factory=dict)    # P(a word ends | ink density past it), no box (`end_breaks`)
+     temperature: float = 30.0            # Constants' default: the design effect within one character
+     ratios: tuple = tuple(glyphs.RATIOS)             # the scale grid's cap/word ratios with a box
+     point_quantiles: tuple = glyphs.POINT_QUANTILES  # without one: cap heights over these quantiles of the heights
+     measured: dict = field(default_factory=dict)     # how it was measured
+ 
+     def to_dict(self) -> dict:
+         return json.loads(json.dumps(asdict(self), default=float))
+ 
+     @classmethod
+     def from_dict(cls, d: dict) -> "PosePrior":
+@@ -868,103 +872,100 @@ def end_factor(end_break: dict, density) -> np.ndarray:
+     """log P(a word ends | the ink density past the end) / P(a word ends) (`end_breaks`); 0 when not measured."""
+     density = np.asarray(density, float)
+     if not end_break:
+         return np.zeros(density.shape)
+     edges = np.asarray(end_break["edges"], float)
+     i = np.clip(np.searchsorted(edges, density, side="left"), 0, len(edges) - 1)
+     return np.asarray(end_break["log_factor"], float)[i]
+ 
+ 
+ def settle_torch() -> None:
+-    """torch's deterministic algorithms (it raises on an op that has none) on THREADS threads."""
++    """torch's deterministic algorithms (it raises on an op that has none) on THREADS threads: process-wide settings,
++    set again by every `evidence` call."""
+     torch.set_num_threads(THREADS)
+     torch.use_deterministic_algorithms(True)
+ 
+ 
+ def evidence(label: labels_mod.Label, font: glyphs.Font, noise: glyphs.NoiseModel, prior: Prior,
+              temperatures=(None,), *, observed: np.ndarray | None = None, rules=RULES, device="cpu") -> Evidence:
+     """log E_h of every printed form of `prior` and of "other" (see the module), at each temperature (None: the pose
+-    prior's measured one).  `observed`: the crop's observed px (not on a line by `rules` when None).  torch runs
+-    deterministic on THREADS threads (`settle_torch`); on the GPU (`device` "mps") in one exclusive turn."""
++    prior's measured one).  `observed`: the crop's observed px (not on a line by `rules` when None).  Calls
++    `settle_torch`, which is process-wide (torch's thread count and deterministic mode for the whole process).  On
++    the GPU (`device` "mps") the caller takes one exclusive turn around its whole run (`sfzmaps.gpu.gpu_turn(True,
++    device)`): turns don't nest, so this does not take one per label."""
+     settle_torch()
+-    with gpu.gpu_turn(True, device):
+-        return _evidence(label, font, noise, prior, temperatures, observed, rules, device)
++    return _evidence(label, font, noise, prior, temperatures, observed, rules, device)
+ 
+ 
+ def _evidence(label, font, noise, prior: Prior, temperatures, observed, rules, device) -> Evidence:
+     t_start = time.perf_counter()
+     pose = prior.pose
+     temps = tuple(float(pose.temperature if t is None else t) for t in temperatures)
+     if observed is None:
+         observed = ~labels_mod.line_mask(label, rules=rules)
+     sc = _Scorer(label, font, noise, prior, observed, device)
+     shift_sd = font.spacing_sd / math.sqrt(2)          # a pen's own shift: a gap is the difference of two
+     # pass 1: the label's print quality, the best code's ratio per ink px in its footprint at the core placement
+     # (every other scale, each base angle's likeliest residual)
+     best = [(-math.inf, 0.0) for _ in temps]
+     for si, s, angs, axes, ks, ts, starts, adv, lo, hi, layouts, longest, EI in sc.chunks(coarse=True):
+         rows, firsts, lasts, alongs, tx0, _ = sc.placement(si, angs, axes, ks, ts, adv, lo, hi, longest)
+         for ti, temp in enumerate(temps):
+-            names, tot, first, last = sc.codes_at(_jitter(EI, shift_sd * s, temp), ts, starts, layouts, lo, hi,
+-                                                  longest)
++            EJ = _jitter(EI, shift_sd * s, temp)
++            names, tot, first, last = sc.codes_at(EJ, ts, starts, layouts, lo, hi, longest)
+             score = tot[:, 0] / temp + _place_weights(rows[0], firsts[0], lasts[0], alongs[0], tx0, ts, first, last)
+             i = int(torch.argmax(score))
+             if float(score.reshape(-1)[i]) > best[ti][0]:
+                 ink = float(tot[:, 1].reshape(-1)[i])
+                 best[ti] = (float(score.reshape(-1)[i]), float(tot[:, 0].reshape(-1)[i]) / ink if ink > 0 else 0.0)
+     gains = np.array([max(0.0, g) for _, g in best])
+     # pass 2: every hypothesis at every scale, angle and cell
+     acc_forms = [[] for _ in temps]
+     acc_other = [[] for _ in temps]
+     names = list(sc.forms)
+-    breaks = sc.lab.box is None and bool(pose.end_break)
++    breaks = END_BREAKS and sc.lab.box is None and bool(pose.end_break)
+     for si, s, angs, axes, ks, ts, starts, adv, lo, hi, layouts, longest, EI in sc.chunks():
+         rows, firsts, lasts, alongs, tx0, log_rho = sc.placement(si, angs, axes, ks, ts, adv, lo, hi, longest)
+         n_t, n_r = EI.shape[2], EI.shape[3]
+         n_x = len(firsts[0])                                    # the placement's px along each line
+         r_idx = torch.arange(n_r, device=device)[None, :, None]
+         # each character's first and last ink px with its pen at t, as the placement's px: [t, c]
+         at_lo = torch.from_numpy(np.arange(n_t)[:, None] + tx0 + np.array(lo)[None, :]).to(device).clamp(0, n_x - 1)
+         at_hi = torch.from_numpy(np.arange(n_t)[:, None] + tx0 + np.array(hi)[None, :]).to(device).clamp(0, n_x - 1)
+         start_w = [f[at_lo] for f in firsts]                    # each first character's start weight: [t, c, r]
+-        end_w = choose = left_w = right_w = None
++        end_w = left_w = right_w = None
+         if breaks:                                              # where a word ends, from the ink along the line
+             left_w, right_w = sc.end_factors(s, axes, ks, int(ts[0]) - tx0, n_x)          # [tx, r] each
+             end_w = right_w[at_hi].permute(0, 2, 1)                                      # [t, r, c]
+-        elif lasts[0] is not None:
+-            # Terra's word: the weight that chooses where the best "other" string ends (the two components mixed by
+-            # their rows' weights); its exact weights are applied at the end it carries, below
+-            rw = torch.stack(rows)
+-            choose = torch.logsumexp(torch.stack(lasts) + rw[:, None, :], dim=0) - torch.logsumexp(rw, dim=0)
+-            end_w = choose[at_hi].permute(0, 2, 1)
+         for ti, temp in enumerate(temps):
+             g = gains[ti] / temp
+             EJ = _jitter(EI, shift_sd * s, temp)
+             _, tot, first, last = sc.codes_at(EJ, ts, starts, layouts, lo, hi, longest)
+             val = tot[:, 0] / temp - _log_other_text(log_rho, g, tot[:, 1], tot[:, 2], sc.mean_gain, sc.lab.word_ink)
+             if breaks:
+                 fi = torch.from_numpy((first - ts[0] + tx0).astype(np.int64)).to(device).clamp(0, n_x - 1)
+                 li = torch.from_numpy((last - ts[0] + tx0).astype(np.int64)).to(device).clamp(0, n_x - 1)
+                 val = val + left_w[fi] + right_w[li]                                     # [form, start, r]
+             parts = torch.stack([torch.logsumexp(
+                 (val + _place_weights(rows[c], firsts[c], lasts[c], alongs[c], tx0, ts, first, last))
+                 .reshape(len(names), -1), dim=1) for c in range(2)])
+             acc_forms[ti].append(torch.logsumexp(parts, dim=0).cpu().numpy())
+-            # other: the best string from each start (where its bigram, and its end's weight, end it), its own ink
+-            # and its last ink px carried along; the placement's weights judged at that end
++            # other: the best string from each start (where its bigram ends it; without a box and with END_BREAKS,
++            # its end's factor too), its own ink and its last ink px carried along; the placement's weights judged at
++            # that end.  With Terra's word the end weight does not choose the path: chosen with it, "other" spelled
++            # fillers into a code's print wider spaced than the font's advances ("M-.2" for a wide M-2), a freedom a
++            # code's fixed layout lacks (see the task report)
+             em = (EJ[0] - gains[ti] * EJ[1]) / temp
+             V, inks, Zv = _viterbi(em, EJ[1:], adv, hi, sc.kind, sc.logq, end_w)
+             V, Gv, Wv, Zv = V[starts], inks[0][starts], inks[1][starts], Zv[starts]          # [start, r, c]
+             explained = g * Gv - _log_other_text(log_rho[None, :, None], g, Gv, Wv, sc.mean_gain, sc.lab.word_ink)
+             at_end = (Zv.long() + tx0).clamp(0, n_x - 1)
+-            if choose is not None:
+-                V = V - choose[at_end, r_idx]                   # the choosing weight off: the exact ones below
+             if breaks:
+                 V = V + left_w[at_lo[starts]].permute(0, 2, 1)  # the start's factor (the end's is in V)
+             parts = []
+             for c in range(2):
+                 val_o = V + sc.start_q + start_w[c][starts].permute(0, 2, 1) + explained
+                 if lasts[c] is not None:                      # Terra's word: the string's last ink px at its end
+                     val_o = val_o + lasts[c][at_end, r_idx]
+                 if alongs[c] is not None:                     # point labels: the string's centre about the point
+                     first_t = torch.from_numpy(ts[starts].astype(np.float32)).to(device)[:, None, None] + \
+                         torch.tensor(lo, dtype=torch.float32, device=device)
+diff --git a/pipeline/tests/test_codereader.py b/pipeline/tests/test_codereader.py
+index 0b6fac6..f71b30f 100644
+--- a/pipeline/tests/test_codereader.py
++++ b/pipeline/tests/test_codereader.py
+@@ -1,10 +1,11 @@
++import dataclasses
+ import math
+ 
+ import cv2
+ import numpy as np
+ import pandas as pd
+ import pytest
+ 
+ from sfzmaps.solver.codereader import glyphs, labels, posterior
+ 
+ SHEET = "2000-digital-zoning-p01"
+@@ -582,51 +583,94 @@ def test_code_is_not_chosen_for_covering_more_ink(reader):
+ 
+ 
+ def test_text_that_is_no_code_reads_other(reader):
+     font, prior = reader
+     ink, box = _draw(font, [("SUD", glyphs.Pose(100, 55, 0.75, 0.0))], (110, 200), seed=8)
+     post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, posterior.Constants(),
+                                  observed=np.ones(ink.shape, bool))
+     assert _top(post) == "other" and post["other"] > 0.9
+ 
+ 
++@pytest.mark.parametrize("code", [*READ_CODES, "M-2"])
++def test_crisp_code_on_clean_paper_reads_that_code_not_other(reader, code):
++    """A printed code alone on paper, at Terra's word: the code, not "other" spelling it (or it with a filler)."""
++    font, prior = reader
++    prior = dataclasses.replace(prior, forms={**prior.forms, "M-2": "M-2"},
++                                codes={c: 1 / (len(READ_CODES) + 1) for c in [*READ_CODES, "M-2"]})
++    ink, box = _draw(font, [(code, glyphs.Pose(110, 55, 0.75, 0.0))], (110, 230), seed=11)
++    post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, observed=np.ones(ink.shape, bool))
++    assert post[code] > 0.9, (code, post)
++
++
+ def test_temperature_grid_gives_each_temperature_as_alone(reader):
+     """Evidence at a grid of temperatures is each temperature's alone (nothing pruned by one temperature's scores
+     or shared between them): on a box label and on a point label whose text sits off its point (the placement's tail)."""
+     font, prior = reader
+     ink, box = _draw(font, [("RM-2", glyphs.Pose(100, 55, 0.75, 0.0))], (110, 200), seed=2)
+     off, _ = _draw(font, [("RM-2", glyphs.Pose(150, 112, 0.75, 0.0))], (220, 260), seed=4)
+     point = labels.Label(index=0, sheet=SHEET, kind=2, point=(0.0, 0.0), crop=np.where(off, 0, 255).astype(np.uint8),
+                          centre=(126.5, 113.0))
+     for lab in (_box_label(ink, box), point):
+         obs = np.ones(lab.crop.shape, bool)
+         grid = posterior.evidence(lab, font, TRUE_NOISE, prior, (5.0, 30.0), observed=obs)
+         for i, temp in enumerate((5.0, 30.0)):
+             alone = posterior.evidence(lab, font, TRUE_NOISE, prior, (temp,), observed=obs)
+             assert abs(alone.other[0] - grid.other[i]) < 1e-9
+             assert max(abs(alone.forms[f][0] - grid.forms[f][i]) for f in grid.forms) < 1e-9
+ 
+ 
+-def test_off_centre_point_reads_the_full_code(reader):
+-    """Without a box, the print's point off the middle of its text: a reading that stops short of the ink (RH-1 of
+-    RH-1(D), or "other" spelling the part nearest the point) pays for the ink left beside its end (`end_breaks`,
+-    measured on the synthetic training labels).  The full code reads with the point a quarter or half a word height
+-    either side of the middle, and up to a word height past it toward "(D)" (no code there is nearer the point)."""
++@pytest.mark.parametrize("off", [
++    -0.5, -0.25, 0.25, 0.5, 0.75, 1.0,
++    pytest.param(-0.75, marks=pytest.mark.xfail(strict=True, reason=(
++        "measured: 'other' 0.666 (RH-1(D) 0.267): a string over the part nearest the point pays one end's factor, "
++        "less than the full code's placement tail costs"))),
++    pytest.param(-1.0, marks=pytest.mark.xfail(strict=True, reason=(
++        "measured: RH-1 0.901: the prefix centred near the point pays one end (~3 nats on the map's table), the full "
++        "code's centre is 2.5 tail spreads off")))])
++def test_off_centre_point_reads_the_full_code_with_the_end_term(reader, monkeypatch, off):
++    """Without a box, the print's point off the middle of its text (word heights along the line; negative: toward
++    "RH"): with the end-break term on (`END_BREAKS`; measured here on the synthetic training labels), a reading that
++    stops short of the ink pays for the ink left beside its end.  The term is off in the reader: on the map's
++    training point labels it lowered the likelihood (see the module)."""
++    monkeypatch.setattr(posterior, "END_BREAKS", True)
+     font, prior = reader
+     shape = (220, 260)
+     ink, box = _draw(font, [("RH-1(D)", glyphs.Pose(130, 112, 0.75, 0.0))], shape, seed=4)
+     mid = ((box[0] + box[2]) / 2, (box[1] + box[3]) / 2)
+-    for off in (-0.5, -0.25, 0.25, 0.5, 0.75, 1.0):                  # word heights along the line
+-        lab = labels.Label(index=0, sheet=SHEET, kind=2, point=(0.0, 0.0), crop=np.where(ink, 0, 255).astype(np.uint8),
+-                           centre=(mid[0] + off * prior.pose.height, mid[1]))
+-        post = posterior.score_label(lab, font, TRUE_NOISE, prior, observed=np.ones(shape, bool))
+-        assert _top(post) == "RH-1(D)", (off, post)
++    lab = labels.Label(index=0, sheet=SHEET, kind=2, point=(0.0, 0.0), crop=np.where(ink, 0, 255).astype(np.uint8),
++                       centre=(mid[0] + off * prior.pose.height, mid[1]))
++    post = posterior.score_label(lab, font, TRUE_NOISE, prior, observed=np.ones(shape, bool))
++    assert _top(post) == "RH-1(D)", (off, post)
++
++
++@pytest.mark.xfail(strict=True, reason=(
++    "measured: a code printed wider spaced than the font's advances reads 'other' (M-2 with its letters 0.3 cap "
++    "heights further apart: other 0.989), which spells fillers into the gaps; codes have no letter-spacing freedom"))
++def test_widely_spaced_code_reads_that_code(reader):
++    font, prior = reader
++    prior = dataclasses.replace(prior, forms={**prior.forms, "M-2": "M-2"},
++                                codes={c: 1 / (len(READ_CODES) + 1) for c in [*READ_CODES, "M-2"]})
++    s, extra = 0.75, 0.3 * glyphs.SIZE * 0.75
++    chars, xs = font.layout("M-2")
++    rng = np.random.default_rng(3)
++    ink = np.zeros((110, 260), bool)
++    boxes = []
++    for i, (c, x) in enumerate(zip(chars, xs)):
++        d = glyphs.render(font, c, glyphs.Pose(120 + (x + font.advance[c] / 2) * s + (i - 1) * extra, 55, s, 0.0),
++                          ink.shape)
++        ink |= rng.random(ink.shape) < TRUE_NOISE.p_ink(d)
++        ys, xx = np.nonzero(d > 0)
++        boxes.append((xx.min(), ys.min(), xx.max() + 1, ys.max() + 1))
++    b = np.array(boxes, float)
++    box = (b[:, 0].min(), b[:, 1].min(), b[:, 2].max(), b[:, 3].max())
++    post = posterior.score_label(_box_label(ink, box), font, TRUE_NOISE, prior, observed=np.ones(ink.shape, bool))
++    assert post["M-2"] > 0.9, post
+ 
+ 
+ def test_end_breaks_measure_where_words_end():
+     """`end_breaks` on synthetic training labels: past a string's own ends the window holds paper or a word a gap
+     away, past a boundary inside it the next letter; P(end) falls as the ink past it grows, and a window is chosen
+     by the other half's log loss."""
+     font = _reader_font("".join(sorted(set("".join(READ_CODES)) | set("SUD"))))
+     _, ends = _measured(font)
+     assert tuple(ends["window"]) in posterior.END_WINDOWS and len(ends["log_loss"]) == len(posterior.END_WINDOWS)
+     p = np.array(ends["p_end"])
