@@ -7351,24 +7351,24 @@ stages:
       size: 8542
     - path: src/sfzmaps/solver/textnet/data.py
       hash: md5
-      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
-      size: 28436
+      md5: ef8cb74f8990b42e5e9b61241ab9c7b3
+      size: 46900
     - path: src/sfzmaps/solver/textnet/model.py
       hash: md5
-      md5: 838bfdbb95644c10cf39d2513c815fc7
-      size: 3851
+      md5: f924f11c0f15a421e485a204b2ce4c79
+      size: 7492
     - path: src/sfzmaps/solver/textnet/predict.py
       hash: md5
-      md5: 6d54442b40dc6b9022c806eb44c338b4
-      size: 6860
+      md5: 4cdc30b45e70bec2357b4ed21e37d7b3
+      size: 16351
     - path: src/sfzmaps/solver/textnet/stage.py
       hash: md5
       md5: da952d71e74f6aaf8708ad102f00bc06
       size: 4088
     - path: src/sfzmaps/solver/textnet/train.py
       hash: md5
-      md5: 0c1b4bda2838082ba33a747a5ee4e3c3
-      size: 21777
+      md5: c844b2d1b600bf7de432b5f7fc217304
+      size: 48580
     - path: uv.lock
       hash: md5
       md5: b038b7f427cf66546c731cc1433bb62d
@@ -10793,16 +10793,16 @@ stages:
       size: 8542
     - path: src/sfzmaps/solver/textnet/data.py
       hash: md5
-      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
-      size: 28436
+      md5: ef8cb74f8990b42e5e9b61241ab9c7b3
+      size: 46900
     - path: src/sfzmaps/solver/textnet/model.py
       hash: md5
-      md5: 838bfdbb95644c10cf39d2513c815fc7
-      size: 3851
+      md5: f924f11c0f15a421e485a204b2ce4c79
+      size: 7492
     - path: src/sfzmaps/solver/textnet/predict.py
       hash: md5
-      md5: 6d54442b40dc6b9022c806eb44c338b4
-      size: 6860
+      md5: 4cdc30b45e70bec2357b4ed21e37d7b3
+      size: 16351
     - path: src/sfzmaps/solver/textnet/reader_stage.py
       hash: md5
       md5: e4d2bb8a2cbd158aa3e8ef1af4ac8106
@@ -10817,8 +10817,8 @@ stages:
       size: 4088
     - path: src/sfzmaps/solver/textnet/train.py
       hash: md5
-      md5: 0c1b4bda2838082ba33a747a5ee4e3c3
-      size: 21777
+      md5: c844b2d1b600bf7de432b5f7fc217304
+      size: 48580
     - path: src/sfzmaps/transform.py
       hash: md5
       md5: c83192f3d3941fae99387dafd628e159
@@ -12042,16 +12042,16 @@ stages:
       size: 8542
     - path: src/sfzmaps/solver/textnet/data.py
       hash: md5
-      md5: 5ffd2cd4fcfb2d9196e330d7c1acd413
-      size: 28436
+      md5: ef8cb74f8990b42e5e9b61241ab9c7b3
+      size: 46900
     - path: src/sfzmaps/solver/textnet/model.py
       hash: md5
-      md5: 838bfdbb95644c10cf39d2513c815fc7
-      size: 3851
+      md5: f924f11c0f15a421e485a204b2ce4c79
+      size: 7492
     - path: src/sfzmaps/solver/textnet/predict.py
       hash: md5
-      md5: 6d54442b40dc6b9022c806eb44c338b4
-      size: 6860
+      md5: 4cdc30b45e70bec2357b4ed21e37d7b3
+      size: 16351
     - path: src/sfzmaps/solver/textnet/reader_stage.py
       hash: md5
       md5: e4d2bb8a2cbd158aa3e8ef1af4ac8106
@@ -12066,16 +12066,16 @@ stages:
       size: 4088
     - path: src/sfzmaps/solver/textnet/train.py
       hash: md5
-      md5: 0c1b4bda2838082ba33a747a5ee4e3c3
-      size: 21777
+      md5: c844b2d1b600bf7de432b5f7fc217304
+      size: 48580
     - path: src/sfzmaps/solver/textread/__init__.py
       hash: md5
       md5: 1b8a10d530f0402ac643e573d2e31499
       size: 1133
     - path: src/sfzmaps/solver/textread/crops.py
       hash: md5
-      md5: fec945b94d94588c427969968ce5e959
-      size: 17847
+      md5: 57ab96359f22aa1ec28cbc514ff394c7
+      size: 20039
     - path: src/sfzmaps/solver/textread/inputs.py
       hash: md5
       md5: c9aaa7e79c15fc6314e7ec7a9f509741
@@ -12148,8 +12148,8 @@ stages:
       size: 3843
     - path: src/sfzmaps/solver/textread/train.py
       hash: md5
-      md5: 72da1873662aec4ceebdc5704aa2a380
-      size: 14442
+      md5: 86b1bd530a33173c27810e6521edf92a
+      size: 19245
     - path: uv.lock
       hash: md5
       md5: b038b7f427cf66546c731cc1433bb62d
