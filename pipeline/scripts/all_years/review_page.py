@@ -125,10 +125,12 @@ def main():
     ap.add_argument("--areas", type=int, default=150)
     ap.add_argument("--px", type=int, default=320)
     ap.add_argument("--series", nargs="*")
-    ap.add_argument("--solve-root", type=Path, help="the folder holding each series' solver folder (default data/solver; the build's, read only)")
+    ap.add_argument("--solve-root", type=Path,
+                    help="the folder holding each series' solver folder (default data/solver; the build's, read only)")
     ap.add_argument("--out", type=Path, default=OUT, help="where the page goes")
     ap.add_argument("--old-maps", type=Path, default=OUT.parent / "old-maps.json",
                     help="verify_old.py's check that each published map is the one main's dvc.lock records")
+    ap.add_argument("--index-only", action="store_true", help="only remake the index and the page from the data files")
     a = ap.parse_args()
     if a.solve_root:
         paths.SOLVER_ROOT = a.solve_root.resolve()
@@ -139,8 +141,7 @@ def main():
     C = city()
     (out_dir / "data").mkdir(parents=True, exist_ok=True)
     index_file = out_dir / "series.json"
-    index = json.loads(index_file.read_text()) if index_file.is_file() else {}
-    for s in a.series or (paths.SERIES_2000, *paths.ALL_YEARS):
+    for s in [] if a.index_only else a.series or (paths.SERIES_2000, *paths.ALL_YEARS):
         d = series_data(s, C, a.areas, a.px, tr.transform, old.get(s))
         if d is not None:
             d["reference"] = {k: v for k, v in (old.get(s) or {}).items() if k != "use"} or None   # no local paths
@@ -149,9 +150,12 @@ def main():
             continue
         f = out_dir / "data" / f"{s}.json"
         f.write_text(json.dumps(d, separators=(",", ":")))
-        index[s] = {k: v for k, v in d.items() if k != "areas"}
         print(s, d["state"], f"agree {d['agree_lots']:.1%}", f"own labels {d['own_labels']}",
               f"{f.stat().st_size / 1e6:.1f} MB")
+    # the index from every series' data file as it is now (several runs may have written them)
+    index = {}
+    for f in sorted((out_dir / "data").glob("*.json")):
+        index[f.stem] = {k: v for k, v in json.loads(f.read_text()).items() if k != "areas"}
     index_file.write_text(json.dumps(index, indent=1) + "\n")
     order = [s for s in (paths.SERIES_2000, *paths.ALL_YEARS) if s in index]
     html = (Path(__file__).parent / "review_template.html").read_text()
