@@ -163,3 +163,19 @@ def test_a_solve_of_other_lots_than_the_tables_stops_the_publish(city):
     np.savez_compressed(solved.run_file(), names=np.array(["RH-1"]), pred=np.array([0, 0]))
     with pytest.raises(ValueError, match="sfzmaps solver lots"):
         solved.publish(force=True)
+
+
+def test_the_stage_command_publishes_and_fails_on_a_code_with_no_category(city):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    assemble.run_series(S)
+    res = CliRunner().invoke(cli.app, ["solver", "publish"])
+    assert res.exit_code == 0, res.output
+    assert "the read's lots 5, 0 of them with no code; codes with no category 0" in res.output
+    _solve(["RH-1", "M-2 (MB)"], [0, 1, 1, 1, 1], [("1000001", (0, 0, 140, 100)), ("1000002", (140, 0, 400, 100)),
+                                                 ("1001001", (0, 200, 50, 300)), ("1001001", (50, 200, 100, 300)),
+                                                 ("9999001", (1000, 1000, 1100, 1100))])
+    res = CliRunner().invoke(cli.app, ["solver", "publish"])
+    assert res.exit_code == 1 and "M-2 (MB)" in res.output
