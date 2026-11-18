@@ -127,9 +127,11 @@ def build_models(workers: int = 2) -> dict:
         W.append(w)
     np.savez_compressed(out / "walls.npz", weights=np.array(W), candidates=np.array(TRANSFER_WALLS))
     summary["walls"] = {"candidates": list(TRANSFER_WALLS), "features": int(X.shape[1]), "quarters": quarters}
-    summary["seconds"] = round(time.perf_counter() - t0, 1)
+    # No run time in the file: a stage's output must be the same every run, or every series downstream goes stale
     (out / "models.json").write_text(json.dumps(summary, indent=1) + "\n")
-    return summary
+    seconds = round(time.perf_counter() - t0, 1)
+    log.info("transfer models written (%.0f s)", seconds)
+    return {**summary, "seconds": seconds}
 
 
 def _models(name: str):
