@@ -20,19 +20,23 @@ Every number is measured on the scans, derived from such a measure, or is a binn
             would (exponential power: ln of the number of bins searched), and when its lines lie nearer 1R's own
             angle (the orientation of the legend's 1R swatch, turned to the sheet: `paper_turn`) than the
             perpendicular (a cross-hatch: LI, HI or U).  A sheet whose 1R lots show no such wave takes the median of
-            the other sheets' periods.
+            the other sheets' periods carried to its scan resolution (by ft per px); the legend's sheet takes its own
+            1R swatch (`fallback_period`).
   patches   squares of side 2 x period (two periods: the least that shows a period) at a stride of one period
             (`patch_grid`), so every px away from the page's edge lies in four.
-  stroke    the printed block outline's width (`stroke_width`, on the outlines the line work traced: blocks_px.geojson):
-            the in-block mask is eroded by it (the outline's ink stays out of the measure; replaces the spike's
-            ERODE_PX), and it is the width of the taper at a region's edge (TAPER_PX), so the cut edge adds no lines.
+  stroke    the printed block outline's width (`stroke_width`, on the outlines the line work traced: blocks_px.geojson).
+            The in-block mask (`inblock_mask`) leaves out those traced outlines widened by it on each side, which
+            keeps the outline's ink out of the measure however far the solver's lots sit from the print (the lots'
+            own mask, which is also eroded by it, does not: they sit up to tens of px off it).  It is also the width
+            of the taper at a region's edge (the spike's TAPER_PX), so the cut edge adds no lines.
   band      the hatch band runs from the legend's finest period / 2 (`legend_scale`: the finest hatch the map uses,
             measured on the hatched swatches of the legend, `LEGENDS_FILE`, on sheet 20180102094142210; in px of
             that sheet, the same on every sheet) to 2 x period.
-  sectors   the periodicity is read at the lags the patch's own spectrum can't tell from its peak: the peak's
-            frequency +- 1 / (2 x side), and its angle within atan(that / frequency).  It is normalised by the whole
-            window's overlap with itself (the spike: the region's, read only where it was over a quarter), so a
-            region narrower than a period across the lines shows little periodicity instead of a noisy ratio.
+  sectors   the periodicity is read at the strongest period the patch can show (at most half its side: two periods
+            across), at the lags its own spectrum can't tell from that peak: the peak's frequency +- 1 / (2 x side),
+            and its angle within atan(that / frequency).  It is normalised by the whole window's overlap with itself
+            (the spike: the region's, read only where it was over a quarter), so a region narrower than a period
+            across the lines shows little periodicity instead of a noisy ratio; it is not clipped (`periodicity`).
   BANDS, N_ORI, WHITE_R, BLACK_R   the spike's binning of the spectrum (period bands, 15 degree orientations) and the
             scales of the morphology: features, not cutoffs.
 
@@ -93,6 +97,11 @@ N_ORI = 12                                # orientation bins of 15 degrees
 WHITE_R = (1, 2, 3, 5)                    # the morphology's scales (disk radii, px)
 BLACK_R = (1, 2, 3)
 LATTICE = page.STEP                       # page px between the points where a placement is evaluated
+# A patch's spectrum is padded to 4 x its side: 2 x so its autocorrelation does not wrap round, and 2 x again so its
+# frequency step is half the window's own resolution (1 / (2 side)), so whether its strongest period is at most half
+# the side (`spectrum`) is decided by the ink, not by where the bins fall: at 2 x, a 1R hatch a little finer than the
+# limit often landed on the bin beyond it and its periodicity was read at a harmonic.
+PAD = 4
 INK_BELOW = grid.INK_BELOW
 
 
@@ -192,27 +201,32 @@ def _sector(n: int, shape, period: float, wave: float, side: float) -> np.ndarra
 def periodicity(acf: np.ndarray, wsq: np.ndarray, n: int, shape, period: float, wave_angle: float) -> float:
     """How periodic the region's ink is: its autocorrelation one period across the lines of a wave (normalised by its
     value at lag 0 and by the whole window's overlap with itself at that lag), the best over the lags the window's
-    spectrum can't tell from that period and direction (`_sector`); clipped to [0, 1].  About 1 for a hatch filling
-    the window, about 0 for blank paper, a single line, text or solid ink; a region narrower than a period across the
-    lines can't show one (its overlap there is empty), so it scores low."""
+    spectrum can't tell from that period and direction (`_sector`).  About 1 for a hatch filling the window, about 0
+    for blank paper, a single line, text or solid ink; a region narrower than a period across the lines can't show
+    one (its overlap there is empty), so it scores low.  Not clipped: acf[lag] / acf[0] lies in [-1, 1]
+    (Cauchy-Schwarz), so the value lies within +-1 / (the window's overlap fraction at that lag); it passes 1 only
+    when the ink correlates more strongly inside the overlap than a stationary pattern would.  0 with no ink or no
+    lag to read."""
     if acf[0, 0] <= 1e-12 or not np.isfinite(period):
         return 0.0
     sector = _sector(n, shape, period, wave_angle, max(shape))
     if not sector.any():
         return 0.0
     ratio = (acf[sector] / acf[0, 0]) / (wsq[sector] / wsq[0, 0])
-    return float(np.clip(ratio.max(), 0, 1))
+    return float(ratio.max())
 
 
 def spectrum(ink: np.ndarray, mask: np.ndarray, frame: Frame) -> dict | None:
     """The region's ink minus its mean, tapered `frame.taper` px inside the region (so its edge adds no lines),
-    padded to twice the window (so the autocorrelation does not wrap around) and FFT'd: the power binned by BANDS and
+    padded to PAD times the window and FFT'd: the power (as a share of the region's weighted variance, so it doesn't
+    depend on the padding) binned by BANDS and
     the orientation of the LINES (N_ORI bins, page px: x right, y down, angle atan2(dy, dx)).  Over the hatch band
     (`frame.band`) the complex moments m2 = sum P e^{2 i beta} / sum P (one family of lines: its strength and
-    orientation) and m4 = sum P e^{4 i beta} / sum P (a cross-hatch at right angles), the power-weighted log period,
-    the strongest period and the periodicity there; 1R's own hatch, sought at the sheet's 1R period and direction
-    (`dir1r_acf`, the periodicity there, and `dir1r_share`, the band's power within what the window can't tell from
-    it).  None when the region has no weight."""
+    orientation) and m4 = sum P e^{4 i beta} / sum P (a cross-hatch at right angles), and the power-weighted log
+    period; the strongest period the window can show (at most half its side: two periods across, so two block
+    outlines further apart than that are no period) and the periodicity there; 1R's own hatch, sought at the sheet's
+    1R period and direction (`dir1r_acf`, the periodicity there, and `dir1r_share`, the band's power within what the
+    window can't tell from it).  None when the region has no weight."""
     if not mask.any():
         return None
     w = taper_weights(mask, frame.taper)
@@ -221,12 +235,12 @@ def spectrum(ink: np.ndarray, mask: np.ndarray, frame: Frame) -> dict | None:
         return None
     x = (ink - (ink * w).sum() / sw) * w
     side = max(ink.shape)
-    n = 1 << int(np.ceil(np.log2(2 * side)))
+    n = 1 << int(np.ceil(np.log2(PAD * side)))
     P = np.abs(np.fft.rfft2(x, s=(n, n))) ** 2
     acf = np.fft.irfft2(P, s=(n, n))
     wsq = _square_acf(ink.shape, n, frame.taper)
     band, ori, e2, e4, period, wt, freq, wave, ok, cell = bins(n)
-    p = P / (w ** 2).sum() * wt
+    p = P / (w ** 2).sum() * wt / (n * n / 2)          # Parseval: sums to the weighted variance, whatever the padding
     out = {"grid": np.bincount(cell, p.ravel()[ok], minlength=(len(BANDS) - 1) * N_ORI).reshape(-1, N_ORI),
            "periodicity": 0.0}
     lo, hi = frame.band
@@ -234,17 +248,20 @@ def spectrum(ink: np.ndarray, mask: np.ndarray, frame: Frame) -> dict | None:
     ph = p[hb]
     tot = ph.sum()
     out["hatch_power"] = float(tot)
-    out["var"] = float(p.sum() / max(n * n / 2, 1))
+    out["var"] = float(p.sum())
     if tot > 0:
         out["m2"] = complex((ph * e2[hb]).sum() / tot)
         out["m4"] = complex((ph * e4[hb]).sum() / tot)
         out["logperiod"] = float((ph * np.log(period[hb])).sum() / tot)
-        k = np.argmax(ph)
-        out["peak_period"] = float(period[hb][k])
-        out["periodicity"] = periodicity(acf, wsq, n, ink.shape, out["peak_period"], float(wave[hb][k]))
     else:
         out["m2"] = out["m4"] = 0j
-        out["logperiod"] = out["peak_period"] = np.nan
+        out["logperiod"] = np.nan
+    shows = hb & (period <= side / 2)
+    out["peak_period"] = np.nan
+    if (p[shows] > 0).any():
+        k = np.argmax(p[shows])
+        out["peak_period"] = float(period[shows][k])
+        out["periodicity"] = periodicity(acf, wsq, n, ink.shape, out["peak_period"], float(wave[shows][k]))
     if np.isfinite(frame.wave_1r):
         out["dir1r_acf"] = periodicity(acf, wsq, n, ink.shape, frame.period, frame.wave_1r)
         d = 0.5 / side
@@ -265,7 +282,7 @@ def spec_feats(sp: dict | None, frame: Frame) -> dict:
               "m2": complex(np.nan, np.nan), "m4": complex(np.nan, np.nan), "logperiod": np.nan,
               "peak_period": np.nan, "periodicity": np.nan, "dir1r_acf": np.nan, "dir1r_share": np.nan}
     turn = int(frame.turn) % 4
-    g = np.roll(sp["grid"], turn * N_ORI // 4, axis=1)      # a quarter turn moves a line 90 degrees: N_ORI / 2 bins
+    g = np.roll(sp["grid"], turn * N_ORI // 2, axis=1)      # a quarter turn moves a line 90 degrees: N_ORI / 2 bins
     m2_page, m4 = sp["m2"], sp["m4"]
     m2 = m2_page * (-1) ** turn
     out = {"periodicity": sp["periodicity"], "dir1r_acf": sp["dir1r_acf"], "dir1r_share": sp["dir1r_share"]}
@@ -352,8 +369,8 @@ def _pow2(v: int) -> int:
 
 
 def hatch_peak(ink: np.ndarray, mask: np.ndarray, low: float = 2.0, taper: float = 1.0) -> dict | None:
-    """The strongest wave of the region's ink (minus its mean, tapered `taper` px, padded to twice the region as
-    `spectrum` pads, so the peak is located between the region's own frequency steps), at periods of `low` px or
+    """The strongest wave of the region's ink (minus its mean, tapered `taper` px, padded to a square twice the
+    region's longer side, so the peak is located between the region's own frequency steps), at periods of `low` px or
     more: its period (px), its lines' angle (degrees, page px, (-90, 90]), its strength (its power over the
     background of its frequency ring: the ring's median power / ln 2, the mean of exponential noise with that
     median) and the number of frequency bins searched.  None for an empty region.  Single precision: a whole
@@ -369,7 +386,7 @@ def hatch_peak(ink: np.ndarray, mask: np.ndarray, low: float = 2.0, taper: float
     if sw <= 0:
         return None
     x = ((ic - (ic * w).sum() / sw) * w).astype(np.float32)
-    n0, n1 = _pow2(2 * x.shape[0]), _pow2(2 * x.shape[1])
+    n0 = n1 = _pow2(2 * max(x.shape))       # square: the same frequency step every way, as `spectrum`
     X = sfft.rfft2(x, s=(n0, n1), workers=1)
     del x
     P = (X.real ** 2 + X.imag ** 2).astype(np.float32)
@@ -403,6 +420,18 @@ def accept_period(peak: dict | None, line_angle: float | None = None) -> float:
     if line_angle is not None and np.isfinite(line_angle) and _angle_apart(peak["line_angle"], line_angle) >= 45:
         return np.nan
     return peak["period"]
+
+
+def fallback_period(sheet: str, ft_per_px: float, measured: dict[str, tuple[float, float]], legend_sheet: str,
+                    legend_1r: float) -> tuple[float, str]:
+    """The period of a sheet whose 1R lots show no 1R hatch, and where it came from.  The legend's sheet takes its own
+    measured 1R swatch.  Any other takes the median of the measured sheets' periods (`measured`: sheet -> (period px,
+    ft per px)), each carried to this sheet's scan resolution (period x its ft per px / this sheet's), so scans at
+    another resolution count at this one's."""
+    if sheet == legend_sheet:
+        return float(legend_1r), "legend 1R swatch"
+    vals = [t * f / ft_per_px for s, (t, f) in sorted(measured.items()) if s != sheet]
+    return float(np.median(vals)), "median"
 
 
 def sheet_period(ink: np.ndarray, mask_1r: np.ndarray, low: float = 2.0, line_angle: float | None = None,
@@ -775,16 +804,36 @@ def legend_scale(src: Sources, frames: dict) -> dict:
             "boxes": leg["swatches"]}
 
 
+def outline_mask(shape: tuple[int, int], rings: list[np.ndarray], stroke: int) -> np.ndarray:
+    """The printed block outlines' ink: the traced outlines (`rings`, page px) drawn one px wide and widened by the
+    measured stroke on each side, so the whole stroke is inside wherever along it the tracing ran."""
+    m = np.zeros(shape, np.uint8)
+    pts = [np.round(np.asarray(r, float)[:, :2] * 16).astype(np.int32) for r in rings
+           if len(r) >= 2 and np.isfinite(np.asarray(r, float)[:, :2]).all()]
+    if pts:
+        cv2.polylines(m, pts, True, 1, 1, lineType=cv2.LINE_8, shift=4)
+    return cv2.dilate(m, disk(int(stroke))).astype(bool)
+
+
+def inblock_mask(in_blocks: np.ndarray, rings: list[np.ndarray], stroke: int, crop: np.ndarray) -> np.ndarray:
+    """The page px a patch measures: in a block by the solver's lots (`in_blocks`, eroded by the stroke), inside the
+    neatline (`crop`) and off the printed outlines the line work traced on the scan (`outline_mask`).  The outlines
+    are measured on the scan itself, so they stay out however far the lots sit from the print."""
+    eroded = cv2.erode(np.asarray(in_blocks, np.uint8), disk(int(stroke))).astype(bool)
+    return eroded & np.asarray(crop, bool) & ~outline_mask(np.asarray(crop).shape, rings, stroke)
+
+
 def _setup(src: Sources, sheet: str, quad, lots: np.ndarray, blocks: np.ndarray, offset) -> dict:
-    """A sheet's page, placement, neatline, lot of every px, outline stroke and in-block mask: the page px whose grid px
-    is in a block (`blocks`: the lots with their enclosed holes), eroded by the stroke, inside the neatline."""
+    """A sheet's page, placement, neatline, lot of every px, outline stroke and in-block mask (`inblock_mask`: the page
+    px whose grid px is in a block, `blocks` being the lots with their enclosed holes)."""
     ink = load_page(src, sheet)
     tr = load_transform(src, sheet)
     crop = load_crop(src, sheet, ink.shape, quad)
     pw = PageWorld(tr, ink.shape)
     lot_px, in_blocks = page_values(pw, ink.shape, [(lots, -1), (blocks.astype(np.uint8), 0)], offset)
-    stroke = stroke_width(ink, printed_rings(src, sheet))
-    inblock = cv2.erode(in_blocks, disk(stroke)).astype(bool) & crop
+    rings = printed_rings(src, sheet)
+    stroke = stroke_width(ink, rings)
+    inblock = inblock_mask(in_blocks, rings, stroke, crop)
     return {"ink": ink, "tr": tr, "crop": crop, "pw": pw, "lot_px": lot_px, "stroke": stroke, "inblock": inblock,
             "turn": paper_turn(quad)}
 
@@ -934,11 +983,17 @@ def run(out: Path, workers: int, only: list[str] | None = None) -> dict:
         jobs.append((s, src, frames[s], lot_s, blk_s, off, np.isin(blklots, list(reads_1r(src, s))), legend["low"],
                      legend["line_angle_1r"]))
     scales = {r["sheet"]: r for r in _map(scale_job, jobs, workers)}
-    measured = sorted(v["period_measured"] for v in scales.values() if np.isfinite(v["period_measured"]))
+    measured = {s: (v["period_measured"], v["ft_per_px"]) for s, v in scales.items()
+                if np.isfinite(v["period_measured"])}
     if not measured:
         raise ValueError("no 1921 sheet's 1R lots show a 1R hatch: no period to measure the patches by")
-    fallback = float(np.median(measured))
-    periods = {s: (v["period_measured"] if np.isfinite(v["period_measured"]) else fallback) for s, v in scales.items()}
+    periods, sources_ = {}, {}
+    for s, v in scales.items():
+        if s in measured:
+            periods[s], sources_[s] = measured[s][0], "measured"
+        else:
+            periods[s], sources_[s] = fallback_period(s, v["ft_per_px"], measured, legend["sheet"],
+                                                      legend["swatches"]["1R"]["period"])
     todo = [s for s in names if not only or s in only]
     jobs = []
     for s in todo:
@@ -955,12 +1010,11 @@ def run(out: Path, workers: int, only: list[str] | None = None) -> dict:
     out.mkdir(parents=True, exist_ok=True)
     counts = {r["sheet"]: r for r in _map(patch_job, jobs, workers)}
     measure_swatches(src, legend, periods[legend["sheet"]]).to_parquet(out / "swatches.parquet", index=False)
-    summary = {"legend": {k: v for k, v in legend.items() if k != "boxes"}, "fallback_period": fallback,
-               "draw_order": order, "sheets": {}}
+    summary = {"legend": {k: v for k, v in legend.items() if k != "boxes"}, "draw_order": order, "sheets": {}}
     for s in names:
         v = scales[s]
         summary["sheets"][s] = {
-            "period": periods[s], "period_measured": bool(np.isfinite(v["period_measured"])),
+            "period": periods[s], "period_measured": s in measured, "period_source": sources_[s],
             "peak": v["peak"], "expected_line_angle_1r": v["expected_line_angle_1r"], "px_1r": v["px_1r"],
             "stroke": v["stroke"], "turn": v["turn"], "ft_per_px": v["ft_per_px"],
             "side": 2 * max(1, round(periods[s])),
@@ -1014,7 +1068,7 @@ def look(out: Path, sheets: list[str], dest: Path) -> Path:
             d = np.array([np.cos(a), np.sin(a)]) * s * 0.45
             cv2.line(img, (int(cx - d[0]), int(cy - d[1])), (int(cx + d[0]), int(cy + d[1])), (0, 0, 0), 1, cv2.LINE_AA)
         cv2.putText(img, f"{sheet}  period {meta[sheet]['period']:.2f} px  "
-                         f"({'measured' if meta[sheet]['period_measured'] else 'median of the others'})  "
+                         f"({meta[sheet]['period_source']})  "
                          f"patch {2 * s} px  stroke {meta[sheet]['stroke']} px", (20, 50),
                     cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 200), 3, cv2.LINE_AA)
         panels.append(img)
@@ -1040,7 +1094,7 @@ def main(argv: list[str] | None = None) -> None:
         os.environ.setdefault(v, "1")                 # the workers start with one maths thread each
     summary = run(a.out, a.workers, a.sheets)
     for s, v in summary["sheets"].items():
-        print(f"{s}: period {v['period']:.2f} px ({'measured' if v['period_measured'] else 'median'}), stroke "
+        print(f"{s}: period {v['period']:.2f} px ({v['period_source']}), stroke "
               f"{v['stroke']}, turn {v['turn']}, {v.get('patches', 0)} patches", flush=True)
 
 

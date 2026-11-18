@@ -98,6 +98,63 @@ def test_seam_once():
     assert len(keys) == len(wa) + len(wb)
 
 
+def test_lots_off_the_print_keep_the_outline_out():
+    # a blank block: its printed outline 3 px wide around page px 40-119, traced along its middle; the lots that mark
+    # the block sit k px off the print, so they reach over the outline on two sides
+    shape = (170, 170)
+    ink = np.zeros(shape, np.uint8)
+    ink[39:121, 39:121] = 1
+    ink[42:118, 42:118] = 0
+    ring = np.array([[40, 40], [119, 40], [119, 119], [40, 119], [40, 40]], float)
+    stroke = hatching.stroke_width(ink, [ring])
+    assert stroke == 3
+    for k in (4, 8, 16):
+        in_blocks = np.zeros(shape, np.uint8)
+        in_blocks[40 + k:120 + k, 40 + k:120 + k] = 1
+        inblock = hatching.inblock_mask(in_blocks, [ring], stroke, np.ones(shape, bool))
+        seen = 0
+        for box in hatching.patch_grid(shape, 12.0):
+            f = hatching.measure_patch(ink, inblock, box, hatching.Frame(period=12.0, taper=stroke))
+            if f["area"]:
+                seen += 1
+                assert f["periodicity"] < 0.1, (k, box)
+                assert np.hypot(f["m2_re"], f["m2_im"]) < 0.2, (k, box)
+        assert seen
+
+
+def test_turned_sheet_same_grid():
+    # one family of lines at -30 degrees; the same patch scanned a quarter turn round reads the same in the page
+    # frame (the sheet upright)
+    ink = hatch((48, 48), 12, angle_deg=-30.0)
+    on = np.ones(ink.shape, bool)
+    up = hatching.measure_patch(ink, on, (0, 0, 48, 48), hatching.Frame(period=12.0))
+    turned = hatching.measure_patch(np.ascontiguousarray(np.rot90(ink)), on, (0, 0, 48, 48),
+                                    hatching.Frame(period=12.0, turn=1))
+    keys = [k for k in up if k.startswith("g") or k in ("m2_re", "m2_im", "m4_re", "m4_im", "line_angle")]
+    a, b = np.array([up[k] for k in keys]), np.array([turned[k] for k in keys])
+    assert np.allclose(a, b, rtol=1e-6, atol=1e-9 * np.abs(a).max())
+
+
+def test_two_outlines_not_periodic():
+    # two block outlines 17 px apart in a patch of side 24 (period 12, taper one 3 px stroke) are not a hatch; lines
+    # 12 px apart are
+    frame = hatching.Frame(period=12.0, taper=3.0)
+    on = np.ones((24, 24), bool)
+    two = np.zeros((24, 24), np.uint8)
+    two[:, 4:7] = two[:, 21:24] = 1
+    hatched = hatch((24, 24), 12, angle_deg=90.0)
+    assert hatching.measure_patch(hatched, on, (0, 0, 24, 24), frame)["periodicity"] > 0.75
+    assert hatching.measure_patch(two, on, (0, 0, 24, 24), frame)["periodicity"] < 0.25
+
+
+def test_fallback_period():
+    # periods measured on other sheets, carried to this sheet's resolution; the legend's sheet takes its 1R swatch
+    measured = {"a": (10.0, 5.0), "b": (20.0, 2.5), "c": (12.0, 5.0), "d": (30.0, 2.5)}      # (period px, ft per px)
+    assert hatching.fallback_period("x", 5.0, measured, "leg", 13.0) == (11.0, "median")
+    assert hatching.fallback_period("y", 2.5, measured, "leg", 13.0) == (22.0, "median")
+    assert hatching.fallback_period("leg", 5.0, measured, "leg", 13.0) == (13.0, "legend 1R swatch")
+
+
 # --- a two-sheet run of the command -------------------------------------------------------------------------------
 
 SHEETS = ("sheetA", "sheetB")
