@@ -97,11 +97,20 @@ export function naturalCompare(a, b) {
 export function assignSheetNumbers(ids, known) {
   const out = { ...known };
   const fresh = [];
+  // pNN numbers already in use, by id: known entries (even ones no longer present) keep theirs.
+  const taken = new Map();
+  for (const [id, v] of Object.entries(known)) if (/^p\d+$/.test(v)) taken.set(v, id);
   for (const id of ids) {
     if (Object.hasOwn(known, id)) continue;
     const p = /-p(\d{2})$/.exec(id);
-    if (p) out[id] = `p${p[1]}`;
-    else fresh.push(id);
+    if (!p) {
+      fresh.push(id);
+      continue;
+    }
+    const n = `p${p[1]}`;
+    if (taken.has(n)) throw new Error(`sheets ${taken.get(n)} and ${id} both get ${n}`);
+    taken.set(n, id);
+    out[id] = n;
   }
   let next = 0;
   for (const v of Object.values(known)) if (/^\d+$/.test(v)) next = Math.max(next, Number(v));

@@ -58,6 +58,14 @@ describe("assignSheetNumbers", () => {
     expect(assignSheetNumbers(["x-p05", "x-p22"], {})).toEqual({ "x-p05": "p05", "x-p22": "p22" });
   });
 
+  it("throws when two new ids take the same pNN", () => {
+    expect(() => assignSheetNumbers(["a-p05", "b-p05"], {})).toThrow(/a-p05.*b-p05.*p05/);
+  });
+
+  it("throws when a new id takes a pNN a known entry already has", () => {
+    expect(() => assignSheetNumbers(["b-p05"], { "a-p05": "p05" })).toThrow(/a-p05.*b-p05.*p05/);
+  });
+
   it("keeps known numbers and never reuses a removed one", () => {
     expect(assignSheetNumbers(["1", "5a", "10", "11"], { "1": "01", "2": "02", "5a": "03", "10": "04" }))
       .toEqual({ "1": "01", "2": "02", "5a": "03", "10": "04", "11": "05" });
