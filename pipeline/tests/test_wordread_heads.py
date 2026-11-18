@@ -283,7 +283,8 @@ def test_a_word_the_crop_cuts_has_no_geometry_to_read_but_keeps_its_axis(turns):
 # --- the network and its loss ----------------------------------------------------------------------------------------
 
 def test_the_word_heads_are_a_recipe_choice_off_by_default():
-    assert train.Recipe().heads == "all" and train.CHOICES["heads"] == ("all", "text", "words", "words_aff")
+    assert train.Recipe().heads == "all" and train.CHOICES["heads"] == ("all", "text", "words", "words_aff",
+                                                                       "words_code")
     recipe = train.Recipe(heads="words", width=4, crop=32)
     assert recipe.name() == "crop=32-heads=words-width=4"
     out = train.build_net(recipe)(torch.zeros(2, 1, 32, 32))

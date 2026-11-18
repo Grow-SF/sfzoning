@@ -506,3 +506,22 @@ def test_the_affinity_prior_counts_the_training_quarters_taught_pairs_outside_th
     seam = int(((wid[:, :-1] == 1) & (wid[:, 1:] == 2)).sum())
     assert (n["same_core"], n["apart_core"]) == (same, seam)
     assert np.isclose(n["log_odds"], np.log(same / apart)) and np.isclose(n["log_odds_core"], np.log(same / seam))
+
+
+def test_code_spotting_reads_the_class_under_a_labels_point_and_its_component():
+    code = np.zeros((40, 60), np.uint8)
+    code[5:15, 5:25] = 7                    # one code region
+    code[5:15, 25:45] = 7                   # touching it: one component, two of Terra's words
+    code[25:35, 5:25] = 9                   # another code
+    code[15, 45] = 7                        # diagonal to the second region's corner: 8 px around joins it
+    code[30:32, 40:50] = 1                  # another text
+    assert RD.code_at(code, 10.9, 7.2) == 7 and RD.code_at(code, 41.5, 30.0) == 1 and RD.code_at(code, 0, 0) == 0
+    assert RD.code_at(code, 60.0, 5.0) == predict.NO_CODE and RD.code_at(code, -0.5, 5.0) == predict.NO_CODE
+    cache = {}
+    comp = RD.code_component(code, 10.5, 10.5, cache)
+    assert comp.sum() == 401 and comp[15, 45] and not comp[30, 10]
+    assert RD.code_component(code, 41.5, 30.5, cache) is None and RD.code_component(code, 1.0, 1.0, cache) is None
+    words = np.array([_box(5, 5, 24, 14), _box(25, 5, 44, 14), _box(5, 25, 24, 34), _box(20, 10, 60, 39)], np.int32)
+    assert RD.words_in(comp, words) == [0, 1]
+    assert RD.words_in(RD.code_component(code, 10.5, 30.5, cache), words) == [2]
+    assert RD.words_in(None, words) == []

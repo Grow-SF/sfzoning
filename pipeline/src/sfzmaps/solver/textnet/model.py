@@ -16,6 +16,10 @@ A network with the word heads and the same-word affinity (`train.Recipe.heads="w
 CRAFT's and instance segmentation's affinity) has those 16, the same layout, and
   AFF  16-17 16: the logit of the px and the px to its RIGHT being in one word; 17: of the px and the px BELOW it
              (`data.affinity_targets`)
+A network with the word heads and the px's code (`train.Recipe.heads="words_code"`, WORD_CODE_OUTPUTS channels; code
+spotting) has those 16, the same layout, and
+  CODE 16-   CODE_CLASSES logits of the px's class: 0 the background, 1 another text, 2 on the 2000 map's codes in the
+             order of `wordread.codes.classes` (`data.crop_targets(..., code=True)`)
 `word_geometry` decodes AXIS and GEO into px and degrees.  The number of channels of each recipe's heads:
 HEAD_OUTPUTS.
 
@@ -37,8 +41,12 @@ TAG = slice(12, 16)
 WORD_OUTPUTS = 16
 AFF = slice(16, 18)            # the same-word affinity to the right and below (heads "words_aff"; see the module)
 WORD_AFF_OUTPUTS = 18
-HEAD_OUTPUTS = {"all": OUTPUTS, "text": 1, "words": WORD_OUTPUTS,
-                "words_aff": WORD_AFF_OUTPUTS}                       # channels, by `train.Recipe.heads`
+CODE_CLASSES = 59              # the background, another text and the 2000 map's 57 codes (`wordread.codes.classes`,
+#                                which checks its list against this number)
+CODE = slice(WORD_OUTPUTS, WORD_OUTPUTS + CODE_CLASSES)    # the px's code logits (heads "words_code"; see the module)
+WORD_CODE_OUTPUTS = WORD_OUTPUTS + CODE_CLASSES
+HEAD_OUTPUTS = {"all": OUTPUTS, "text": 1, "words": WORD_OUTPUTS, "words_aff": WORD_AFF_OUTPUTS,
+                "words_code": WORD_CODE_OUTPUTS}                     # channels, by `train.Recipe.heads`
 GEO_LIMIT = 20.0               # a numerical guard, not a decision: the log sizes are read within +-this when decoded,
                                # so a size stays finite in float32 (e^20 px is far beyond any page)
 FOLD = 2          # px each way folded into channels at half size
@@ -46,8 +54,8 @@ MULTIPLE = 2 ** (LEVELS - 1)   # a page side the levels halve evenly is a multip
 
 
 def word_geometry(out: torch.Tensor) -> torch.Tensor:
-    """The word heads' geometry decoded from a word network's outputs (`out` (..., WORD_OUTPUTS or WORD_AFF_OUTPUTS, h,
-    w), the channels third from last): (..., 5, h, w) of each px's word centre offset from the px in px (x right, y down: dx and dy
+    """The word heads' geometry decoded from a word network's outputs (`out` (..., WORD_OUTPUTS, WORD_AFF_OUTPUTS or
+    WORD_CODE_OUTPUTS, h, w), the channels third from last): (..., 5, h, w) of each px's word centre offset from the px in px (x right, y down: dx and dy
     times the height), the word's length and height in px, and its axis in degrees in [0, 180) (half the angle of
     AXIS's (cos 2t, sin 2t))."""
     g = out[..., GEO, :, :]

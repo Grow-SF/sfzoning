@@ -78,7 +78,7 @@ def run_dir(name: str, quarter: str, seed: int, root: Path | None = None) -> Pat
     return (root or RUNS) / run_name(name, quarter, seed)
 
 
-WORD_HEADS = ("words", "words_aff")      # train.Recipe.heads with the word heads (words_aff: + the affinity)
+WORD_HEADS = ("words", "words_aff", "words_code")    # train.Recipe.heads with the word heads (+ affinity, + code)
 
 
 def word_recipe(**changes) -> train.Recipe:
@@ -1106,6 +1106,152 @@ def crude(name: str = "a", quarter: str = "ne", seed: int = 0, workers: int = WO
     return got
 
 
+# --- code spotting: the code head's classes read straight off the px ------------------------------------------------
+
+SPOT_NOTE = ("code spotting: each px's likeliest class of the code head (heads words_code); a label's code is the "
+             "class of the px its point lies on (the px whose square holds it) when that class is a code; no code "
+             "there (the background or another text) counts wrong; no boxes, no word formation, no reader")
+
+
+def code_at(code: np.ndarray, x: float, y: float) -> int:
+    """The class of the px whose square holds the page point (x, y) (px (r, c) spans c..c+1, r..r+1); NO_CODE off the
+    page."""
+    from sfzmaps.solver.textnet import predict
+    r, c = int(np.floor(y)), int(np.floor(x))
+    if not (0 <= r < code.shape[0] and 0 <= c < code.shape[1]):
+        return predict.NO_CODE
+    return int(code[r, c])
+
+
+def code_component(code: np.ndarray, x: float, y: float, cache: dict) -> np.ndarray | None:
+    """The 8-connected component of the px sharing the class at the page point (x, y) that holds it, bool (the page's
+    shape), or None when the class there is no code (`codes.FIRST_CODE` on)."""
+    import cv2
+    from sfzmaps.solver.wordread import codes
+    c = code_at(code, x, y)
+    if c < codes.FIRST_CODE or c >= model_classes():
+        return None
+    if c not in cache:
+        cache[c] = cv2.connectedComponents((code == c).astype(np.uint8), connectivity=8)[1]
+    lab = cache[c]
+    return lab == lab[int(np.floor(y)), int(np.floor(x))]
+
+
+def model_classes() -> int:
+    from sfzmaps.solver.textnet import model
+    return model.CODE_CLASSES
+
+
+def words_in(component: np.ndarray, words: np.ndarray) -> list[int]:
+    """The indices of the page rectangles `words` ((n, 4, 2) px corners, as `data._paint` fills them) more than half of
+    whose px lie in the component (the even-odds call)."""
+    if component is None:
+        return []
+    ys, xs = np.nonzero(component)
+    y0, y1, x0, x1 = ys.min(), ys.max() + 1, xs.min(), xs.max() + 1
+    lo, hi = words.min(1), words.max(1)
+    near = np.flatnonzero((hi[:, 0] >= x0) & (lo[:, 0] < x1) & (hi[:, 1] >= y0) & (lo[:, 1] < y1))
+    out = []
+    for k in near:
+        (wx0, wy0), (wx1, wy1) = lo[k], hi[k] + 1
+        rect = data._paint(words[k:k + 1], np.ones(1, np.int32), int(wy0), int(wx0), int(wy1 - wy0),
+                           int(wx1 - wx0)) > 0
+        sub = np.zeros_like(rect)
+        ya, yb, xa, xb = max(wy0, 0), min(wy1, component.shape[0]), max(wx0, 0), min(wx1, component.shape[1])
+        sub[ya - wy0:yb - wy0, xa - wx0:xb - wx0] = component[ya:yb, xa:xb]
+        if rect.any() and (rect & sub).sum() * 2 > rect.sum():
+            out.append(int(k))
+    return out
+
+
+def spot(run: Path, quarter: str, against: tuple = ()) -> dict:
+    """Code spotting (SPOT_NOTE) on the quarter's answered code labels from the run's word outputs: the headline, the
+    paired difference against today's boxes and reads and against each of `against` (run folders' names, their boxes
+    and reads), the wrong labels by cause (no code at the point; a wrong code in a component holding at most one of
+    Terra's words; a wrong code in a component holding two or more, merged) and the right ones in merged components.
+    Writes `run`/spot.json and spot_labels.parquet."""
+    import pandas as pd
+    from sfzmaps.solver import wordboxes
+    from sfzmaps.solver.textread import store
+    from sfzmaps.solver.wordread import codes, measures
+    q = paths.QUARTERS.index(quarter)
+    names = codes.classes()
+    answers = measures.answers_from_store(store.READ_DIR)
+    answers = answers[answers["quarter"] == q].reset_index(drop=True)
+    rows = []
+    for sheet, a in answers.groupby("sheet", sort=True):
+        o = outputs(run, sheet)
+        if o.code is None:
+            raise ValueError(f"{Path(run).name}: its word outputs hold no code (heads words_code)")
+        sd = load_sheet(sheet)
+        cache: dict = {}
+        for k, lab in a.iterrows():
+            c = code_at(o.code, lab["point_x"], lab["point_y"])
+            comp = code_component(o.code, lab["point_x"], lab["point_y"], cache)
+            inside = words_in(comp, sd.words)
+            got = names[c] if codes.FIRST_CODE <= c < len(names) else None
+            rows.append({"label": int(k), "sheet": sheet, "point_x": lab["point_x"], "point_y": lab["point_y"],
+                         "truth": lab["truth"], "terra": lab["terra"], "block": lab["block"], "quarter": q,
+                         "class": c, "code": got, "p": float(o.code_p[int(np.floor(lab["point_y"])),
+                                                                     int(np.floor(lab["point_x"]))]),
+                         "component_px": int(comp.sum()) if comp is not None else 0,
+                         "component_words": len(inside), "right": float(got == lab["truth"])})
+    t = pd.DataFrame(rows).sort_values("label").reset_index(drop=True)
+    t["cause"] = np.where(t["right"] > 0, np.where(t["component_words"] >= 2, "right, merged component", "right"),
+                          np.where(t["code"].isna(), "no code at the point",
+                                   np.where(t["component_words"] >= 2, "wrong code, merged component",
+                                            "wrong code, own component")))
+    mine = pd.DataFrame({"label": t["label"], "row": -1, "right": t["right"],
+                         "block": [b if isinstance(b, str) and b else f"label{k}" for k, b in zip(t["label"],
+                                                                                                   t["block"])],
+                         "quarter": q})
+    today = wordboxes.load_boxes().reset_index(drop=True)
+    today["row"] = np.arange(len(today))
+    today = today.set_index("row", drop=False)
+    sides = {"today": measures.label_right(today, measures.reads_from_store(store.READ_DIR), answers)}
+    for other in against:
+        r = RUNS / other
+        theirs = measures.answers_from_store(r / "read")
+        theirs = theirs[theirs["quarter"] == q].reset_index(drop=True)
+        cols = ["sheet", "point_x", "point_y", "truth"]
+        if not theirs[cols].equals(answers[cols]):
+            raise ValueError(f"{other}: not the same answered labels in the same order")
+        sides[other] = measures.label_right(run_boxes(r), measures.reads_from_store(r / "read"), answers)
+    out = {"note": SPOT_NOTE, "run": Path(run).name, "quarter": quarter, "labels": len(t),
+           "right": int(t["right"].sum()), "share": round(float(t["right"].mean()), 4),
+           "ci": measures.cluster_interval(mine["right"].to_numpy(float), mine["block"].to_numpy(str)),
+           "causes": {k: int(v) for k, v in t["cause"].value_counts().items()},
+           "others": {k: {"right": int(d["right"].sum()), "share": round(float(d["right"].mean()), 4)}
+                      for k, d in sides.items()},
+           "paired_minus": {k: measures.paired_labels(mine, d) for k, d in sides.items()}}
+    t.to_parquet(Path(run) / "spot_labels.parquet", index=False)
+    (Path(run) / "spot.json").write_text(json.dumps(out, indent=1, default=float) + "\n")
+    return out
+
+
+def code_counts(quarter: str) -> dict:
+    """Each class's Terra words on the 2000 sheets' training px of the fold holding `quarter` out: the other quarters
+    outside the answered blocks (`fit_area`), a word counted by the px at its rectangle's centre."""
+    from sfzmaps.solver.textnet import boxes
+    from sfzmaps.solver.wordread import codes
+    q = paths.QUARTERS.index(quarter)
+    keep = tuple(k for k in range(len(paths.QUARTERS)) if k != q)
+    blocks = reader_stage.load_block_area(reader_stage.held_blocks())
+    records = boxes.terra_records()
+    sheets = codes.prepare([load_sheet(s) for s in paths.SHEETS], records=records)
+
+    def area(sd):
+        a = fit_area(sd, keep, blocks)
+        c = np.round(sd.words.mean(1)).astype(int)
+        c[:, 0], c[:, 1] = np.clip(c[:, 0], 0, sd.width - 1), np.clip(c[:, 1], 0, sd.height - 1)
+        return a[c[:, 1], c[:, 0]]
+    n = codes.counts(sheets, area)
+    allw = codes.counts(sheets)
+    names = codes.classes()
+    return {"training_words": {names[k]: int(n[k]) for k in range(len(names))},
+            "all_words": {names[k]: int(allw[k]) for k in range(len(names))}}
+
+
 # --- the command line ------------------------------------------------------------------------------------------------
 
 def main() -> None:
@@ -1117,6 +1263,13 @@ def main() -> None:
     c.add_argument("--steps", type=int, default=CHECK_STEPS)
     c.add_argument("--then-train", default=None, help="train this arm's run after the check (same sheets)")
     c.add_argument("--seed", type=int, default=0)
+    sp = sub.add_parser("spot")
+    sp.add_argument("--name", default="code")
+    sp.add_argument("--quarter", default="ne", choices=paths.QUARTERS)
+    sp.add_argument("--seed", type=int, default=0)
+    sp.add_argument("--against", nargs="*", default=[])
+    cc = sub.add_parser("code-counts")
+    cc.add_argument("--quarter", default="ne", choices=paths.QUARTERS)
     cr = sub.add_parser("crude")
     cr.add_argument("--quarter", default="ne", choices=(*paths.QUARTERS, "all"))
     cr.add_argument("--seed", type=int, default=0)
@@ -1166,6 +1319,15 @@ def main() -> None:
                          indent=1))
         if a.then_train:
             print(train_run(a.then_train, a.quarter, a.seed, sheets=sheets))
+        return
+    if a.cmd == "spot":
+        print(json.dumps(spot(run_dir(a.name, a.quarter, a.seed), a.quarter, tuple(a.against)), indent=1,
+                         default=float))
+        return
+    if a.cmd == "code-counts":
+        got = code_counts(a.quarter)
+        (RUNS / f"code-counts-{a.quarter}.json").write_text(json.dumps(got, indent=1) + "\n")
+        print(json.dumps(got, indent=1))
         return
     if a.cmd == "crude":
         got = crude(a.name, a.quarter, a.seed, a.workers, a.tags, a.aff, a.against, a.prior, a.read_max)

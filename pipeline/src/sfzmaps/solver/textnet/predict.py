@@ -19,7 +19,8 @@ in the `ink` argument of `chance`, `outputs` and `word_outputs`: over 255 as tra
 paper, and no tile skipped for having no ink (a grey page has none to look for).
 
 `word_outputs` is for a network with the word heads (`train.Recipe(heads="words")`, `model.WORD_OUTPUTS` channels, or
-"words_aff", `model.WORD_AFF_OUTPUTS`, whose same-word affinity is `WordOutputs.aff`):
+"words_aff", `model.WORD_AFF_OUTPUTS`, whose same-word affinity is `WordOutputs.aff`, or "words_code",
+`model.WORD_CODE_OUTPUTS`, whose px's likeliest code class is `WordOutputs.code` and its chance `WordOutputs.code_p`):
 the arrays `wordread.words.core_words` takes (`WordOutputs`), the page's tiles stitched into one page.  Each tile is
 seen with `context` px of page around it, the network's whole reach (its receptive field), not PAD: so every px kept
 gets the numbers one pass over the whole page would give it (the tile's own edges and the paper it is padded with
@@ -151,6 +152,7 @@ def outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndarray |
 
 NOT_SCORED = -1e4    # the core logit of a px not scored: sigmoid(-1e4) is 0 in double precision (no word's), finite
 #                      so a log of it stays a number; float16 holds it exactly
+NO_CODE = 255        # the code class of a px not scored (no class: the classes are 0 .. model.CODE_CLASSES - 1)
 
 
 class WordOutputs(NamedTuple):
@@ -168,6 +170,13 @@ class WordOutputs(NamedTuple):
     #                          affinity logits (`model.AFF`), [0] of the px and the px to its right, [1] of the px and
     #                          the px below; NOT_SCORED where the px is not scored, and on the page's last column ([0])
     #                          and last row ([1]), whose pair has no second px
+    code: np.ndarray | None = None
+    #                          uint8 (h, w), a "words_code" network's alone (None otherwise): the px's likeliest class
+    #                          of the code head (`model.CODE`, the argmax of its logits: 0 the background, 1 another
+    #                          text, 2 on a code, `wordread.codes.classes`); NO_CODE where the px is not scored
+    code_p: np.ndarray | None = None
+    #                          float16 (h, w), with `code`: that class's chance (the softmax over the classes); 0 where
+    #                          not scored
 
 
 def context(net: model.TextNet) -> int:
@@ -193,7 +202,9 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
     (a multiple of the network's `multiple`), each tile seen with `context(net)` px of page around it and the tiles
     stitched (see the module).  `only` (bool, the page's shape): the px wanted; a tile with none of them is not scored.
     A network without the word heads is refused (ValueError).  A "words_aff" network's affinity is stitched as the
-    rest (`WordOutputs.aff`; None for a "words" network)."""
+    rest (`WordOutputs.aff`; None for a "words" network), and a "words_code" network's likeliest code class and its
+    chance (`WordOutputs.code`, `code_p`; None for the others: the class's logits are not kept, a page's would be
+    CODE_CLASSES floats a px)."""
     h, w = ink.shape
     if only is not None and only.shape != ink.shape:
         raise ValueError(f"the px wanted are {only.shape}, the page {ink.shape}")
@@ -202,10 +213,13 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
     pad = context(net)
     k = model.TAG.stop - model.TAG.start
     channels = net.head.out_channels // (model.FOLD ** 2 if net.half_size else 1)
+    coded = channels == model.WORD_CODE_OUTPUTS
     out = WordOutputs(np.zeros((h, w), np.uint8), np.zeros((4, h, w), np.float16),
                       np.full((h, w), NOT_SCORED, np.float32), np.zeros((5, h, w), np.float32),
                       np.zeros((k, h, w), np.float32),
-                      np.full((2, h, w), NOT_SCORED, np.float32) if channels == model.WORD_AFF_OUTPUTS else None)
+                      np.full((2, h, w), NOT_SCORED, np.float32) if channels == model.WORD_AFF_OUTPUTS else None,
+                      np.full((h, w), NO_CODE, np.uint8) if coded else None,
+                      np.zeros((h, w), np.float16) if coded else None)
     for y in range(0, h, tile):
         for x in range(0, w, tile):
             if only is not None and not only[y:y + tile, x:x + tile].any():
@@ -215,9 +229,9 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
             win = ink[y0:y1, x0:x1]
             xin = _tile_input(net, win, device)
             o = net(xin)[0]
-            if o.shape[0] not in (model.WORD_OUTPUTS, model.WORD_AFF_OUTPUTS):
-                raise ValueError(f"the network has {o.shape[0]} outputs, not {model.WORD_OUTPUTS} or "
-                                 f"{model.WORD_AFF_OUTPUTS}: it has no word heads")
+            if o.shape[0] not in (model.WORD_OUTPUTS, model.WORD_AFF_OUTPUTS, model.WORD_CODE_OUTPUTS):
+                raise ValueError(f"the network has {o.shape[0]} outputs, not {model.WORD_OUTPUTS}, "
+                                 f"{model.WORD_AFF_OUTPUTS} or {model.WORD_CODE_OUTPUTS}: it has no word heads")
             cy, cx = y - y0, x - x0
             th, tw = min(tile, h - y), min(tile, w - x)
             o = o[:, cy:cy + th, cx:cx + tw].float()
@@ -229,6 +243,10 @@ def word_outputs(net: model.TextNet, ink: np.ndarray, device: str, only: np.ndar
             out.tag[(slice(None), *win_out)] = o[model.TAG].cpu().numpy()
             if out.aff is not None:
                 out.aff[(slice(None), *win_out)] = o[model.AFF].cpu().numpy()
+            if coded:
+                p, c = torch.softmax(o[model.CODE], 0).max(0)
+                out.code[win_out] = c.cpu().numpy().astype(np.uint8)
+                out.code_p[win_out] = p.cpu().numpy().astype(np.float16)
     if out.aff is not None:
         out.aff[0, :, -1] = NOT_SCORED         # no px to the right of the last column, none below the last row
         out.aff[1, -1, :] = NOT_SCORED

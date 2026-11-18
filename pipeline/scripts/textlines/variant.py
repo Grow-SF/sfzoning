@@ -122,18 +122,19 @@ class Peak:
 
 
 def save_word_outputs(f: Path, out) -> None:
-    """A page's word outputs (`predict.WordOutputs`) as one .npz: chance (uint8), geo in float32 (a distance may run
-    past float16's range), every other field the outputs hold (not None) in float16."""
+    """A page's word outputs (`predict.WordOutputs`) as one .npz: the whole-number fields (chance, code) as they are,
+    geo in float32 (a distance may run past float16's range), every other field the outputs hold (not None) in
+    float16."""
     f.parent.mkdir(parents=True, exist_ok=True)
     arrays = {k: v for k, v in out._asdict().items() if v is not None}
-    np.savez_compressed(f, **{k: v if k == "chance" else v.astype(np.float32 if k == "geo" else np.float16)
-                              for k, v in arrays.items()})
+    np.savez_compressed(f, **{k: v if np.issubdtype(v.dtype, np.integer)
+                              else v.astype(np.float32 if k == "geo" else np.float16) for k, v in arrays.items()})
 
 
 def load_word_outputs(f: Path) -> predict.WordOutputs:
-    """`save_word_outputs`' file back, the floats as float32."""
+    """`save_word_outputs`' file back, the floats as float32, the whole numbers as saved."""
     with np.load(f) as z:
-        return predict.WordOutputs(**{k: z[k] if k == "chance" else z[k].astype(np.float32)
+        return predict.WordOutputs(**{k: z[k] if np.issubdtype(z[k].dtype, np.integer) else z[k].astype(np.float32)
                                       for k in predict.WordOutputs._fields if k in z.files})
 
 
@@ -194,7 +195,7 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
         raise ValueError("a bank is for a recipe with composites: this one has none")
     if quarter not in paths.QUARTERS:
         raise ValueError(f"quarters are {paths.QUARTERS}, not {quarter!r}")
-    words = recipe.heads in ("words", "words_aff")
+    words = recipe.heads in train.WORD_HEADS
     if doubt and not words:
         raise ValueError("doubt weighs the words in the word heads' loss: give a recipe with heads words")
     score = globals()["score"] if score is None else score
@@ -218,6 +219,9 @@ def run(name: str, recipe: train.Recipe, quarter: str, seed: int, device: str | 
         from sfzmaps.solver.wordread import doubt as doubt_mod
         from sfzmaps.solver.wordread import shrink
         prepared = shrink.prepare(prepared)
+        if recipe.heads == "words_code":
+            from sfzmaps.solver.wordread import codes
+            prepared = codes.prepare(prepared)
         if doubt:
             weights = doubt_mod.load_weights(quarter) if doubt_weights is None else doubt_weights
             prepared = doubt_mod.prepare(prepared, weights, "box")

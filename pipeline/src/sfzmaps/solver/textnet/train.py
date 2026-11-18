@@ -56,6 +56,14 @@ term, AFF_PARTS' last:
              the batch (`_balanced_bce`, as the core's; both directions pooled).  With word weights a pair weighs the
              chance its target is right: its word's weight when both px are of one word or one is background (weight
              1), the product of the two words' weights when they are two words (each right or wrong on its own)
+With `heads` "words_code" (`model.WORD_CODE_OUTPUTS` channels: the same 16 and the px's code, `model.CODE`; code
+spotting), the crops also have the code targets (`data.crop_targets(..., code=True)`), and one more term, CODE_PARTS'
+last:
+  code       cross-entropy of each px's class (`model.CODE_CLASSES`: the background, another text, each code) over the
+             px whose code is known (`code_known`), each class weighed by the inverse of its weight in the batch: the
+             mean over each class's px, summed over the classes the batch holds and divided by their number
+             (`_class_weights`, the many-class form of `_balanced_bce`).  A crop with no code targets (a scene, or a
+             sheet with no classes) teaches none
 The terms are added by learned weights (homoscedastic uncertainty: Kendall, Gal & Cipolla, CVPR 2018), one learned
 log-variance s_i a term (`WordLoss.log_var`):
     L_words = sum_i ( exp(-s_i) L_i + s_i / 2 )
@@ -121,8 +129,9 @@ MASS_EPS = 1e-12       # the least a weighted sum divides by: no weight gives 0 
 PARTS = ("text", "kind", "angle")
 WORD_PARTS = ("core", "dice", "centre", "size", "axis", "tag")
 AFF_PARTS = WORD_PARTS + ("affinity",)    # the word terms of heads "words_aff"
-WORD_HEADS = ("words", "words_aff")       # the heads with the word heads (and their targets, cores and loss)
-CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words", "words_aff"),
+CODE_PARTS = WORD_PARTS + ("code",)       # the word terms of heads "words_code"
+WORD_HEADS = ("words", "words_aff", "words_code")   # the heads with the word heads (and their targets, cores, loss)
+CHOICES = {"ink_only": ("off", "ink", "ink+1px"), "heads": ("all", "text", "words", "words_aff", "words_code"),
            "decoder": ("full", "light"),
            "precision": ("float32", "float16"), "labels": data.LABEL_RULES, "input": ("ink", "grey")}
 NOT_IN_NAME = ("prefetch",)    # recipe settings that never change the weights (the same batches, drawn sooner)
@@ -145,7 +154,9 @@ class Recipe:
                       (axis, core, centre and size, tag; see the module), their sheets' cores filled by
                       `wordread.shrink.prepare`
                       and the word terms added by learned weights (`WordLoss`); or "words_aff": "words" and the
-                      same-word affinity to the right and below (`model.AFF`), its term among the learned ones
+                      same-word affinity to the right and below (`model.AFF`), its term among the learned ones; or
+                      "words_code": "words" and each px's code (`model.CODE`), the sheets' word classes filled by
+                      `wordread.codes.prepare`
       weight_average  the decay of the moving average of the weights kept as the model (`WeightAverage`); 0 is off
       prefetch        the next batches drawn in a background thread (the same batches)
       decoder         "full" two convolutions per block up, or "light" one
@@ -299,6 +310,8 @@ def draw(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Recipe,
     extra = {"words": True} if recipe.heads in WORD_HEADS else {}
     if recipe.heads == "words_aff":
         extra["affinity"] = True
+    if recipe.heads == "words_code":
+        extra["code"] = True
     if recipe.input == "grey":
         extra["grey"] = True
     out = []
@@ -393,14 +406,27 @@ def _pair_weights(c: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
     return target, weight
 
 
-def word_tensors(crops: list[dict[str, np.ndarray]], affinity: bool = False) -> tuple[torch.Tensor, ...]:
+def _class_weights(code: np.ndarray, known: np.ndarray, classes: int) -> np.ndarray:
+    """Each px's weight in the code term (see the module), float32 like `code`: at a px whose code is known, 1 over its
+    class's number of known px in the batch and over the number of classes the batch holds; 0 elsewhere.  So the term,
+    the weighted sum of the px's cross-entropies, is the mean over each class's px averaged over the classes."""
+    mass = np.bincount(code[known].ravel(), minlength=classes).astype(np.float64)
+    held = int((mass > 0).sum())
+    per = np.where(mass > 0, 1 / np.maximum(mass, 1) / max(held, 1), 0.0)
+    return np.where(known, per[code], 0.0).astype(np.float32)
+
+
+def word_tensors(crops: list[dict[str, np.ndarray]], affinity: bool = False,
+                 code: bool = False) -> tuple[torch.Tensor, ...]:
     """A batch's word targets on the CPU (`data.crop_targets(..., words=True)`): core (n, h, w) float, geo (n, 5, h,
     w) float, tag (n, h, w) int64, known (n, h, w) float, geo_known (n, h, w) float, and groups.  known is each px's
     weight in the word terms: 0 where the px is not known, else 1, or, for a crop with word weights (`weight`, from
     `SheetData.weights`), its word's weight at a core px.  A crop's tags are its core px of weight above 0, their words
     numbered 1, 2, ... in the order of their ids (0 elsewhere); groups is 1 .. the most words of a crop (int64), so the
     loss knows their number without reading the device.  With `affinity` (heads "words_aff"), also the same-word
-    affinity targets and their pairs' weights, float (n, 2, h, w) each (`_pair_weights`)."""
+    affinity targets and their pairs' weights, float (n, 2, h, w) each (`_pair_weights`).  With `code` (heads
+    "words_code"), also each px's class, int64 (n, h, w), and its weight in the code term, float (n, h, w)
+    (`_class_weights` over the batch; a crop without code targets has none known)."""
     def stack(key, dtype):
         return torch.from_numpy(np.stack([c[key] for c in crops]).astype(dtype))
     tags, weights = [], []
@@ -416,10 +442,19 @@ def word_tensors(crops: list[dict[str, np.ndarray]], affinity: bool = False) -> 
     out = (stack("core", np.float32), stack("geo", np.float32), torch.from_numpy(np.stack(tags).astype(np.int64)),
            torch.from_numpy(np.stack(weights)), stack("geo_known", np.float32),
            torch.arange(1, most + 1, dtype=torch.int64))
-    if not affinity:
-        return out
-    pairs = [_pair_weights(c) for c in crops]
-    return out + (torch.from_numpy(np.stack([p[0] for p in pairs])), torch.from_numpy(np.stack([p[1] for p in pairs])))
+    if affinity:
+        pairs = [_pair_weights(c) for c in crops]
+        out = out + (torch.from_numpy(np.stack([p[0] for p in pairs])),
+                     torch.from_numpy(np.stack([p[1] for p in pairs])))
+    if code:
+        classes = np.stack([c["code"] if "code" in c else np.zeros(c["core"].shape, np.uint8) for c in crops])
+        known = np.stack([c["code_known"] if "code" in c else np.zeros(c["core"].shape, bool)
+                          for c in crops]).astype(bool)
+        if classes.max(initial=0) >= model.CODE_CLASSES:
+            raise ValueError(f"a code target of class {int(classes.max())}: the code head has {model.CODE_CLASSES}")
+        out = out + (torch.from_numpy(classes.astype(np.int64)),
+                     torch.from_numpy(_class_weights(classes, known, model.CODE_CLASSES)))
+    return out
 
 
 def _balanced_bce(logit: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
@@ -464,19 +499,25 @@ def _tag_ce(tag_out: torch.Tensor, tag: torch.Tensor, groups: torch.Tensor, weig
 def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: torch.Tensor, known: torch.Tensor,
               geo_known: torch.Tensor, groups: torch.Tensor, aff: torch.Tensor | None = None,
               aff_weight: torch.Tensor | None = None, log_var: torch.Tensor | None = None,
-              log_temp: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
+              log_temp: torch.Tensor | None = None, code: torch.Tensor | None = None,
+              code_weight: torch.Tensor | None = None) -> tuple[torch.Tensor, torch.Tensor]:
     """The word heads' loss of a batch (see the module): sum_i exp(-s_i) L_i + s_i / 2 over the WORD_PARTS L_i, by
     the log-variances `log_var` (s, one a part) and the tag's log-temperature `log_temp` (both 0, their start, when
     not given: `WordLoss` holds the learned ones), and the parts themselves (unweighted) as one tensor on the batch's
     device; `out` the network's WORD_OUTPUTS channels, the rest `word_tensors`.  Each px counts by its weight
     (`known`).  The centre and size are read only at core px whose geometry is known (`geo_known`), the axis at every
     known core px.  With the affinity targets `aff` and their pairs' weights `aff_weight` (`word_tensors(...,
-    affinity=True)`; `out` then has WORD_AFF_OUTPUTS channels), the parts are AFF_PARTS: the affinity term last."""
-    affinity = aff is not None
+    affinity=True)`; `out` then has WORD_AFF_OUTPUTS channels), the parts are AFF_PARTS: the affinity term last.
+    With the code targets `code` and their px's weights `code_weight` (`word_tensors(..., code=True)`; `out` then has
+    WORD_CODE_OUTPUTS channels), the parts are CODE_PARTS: the code term last."""
+    affinity, coded = aff is not None, code is not None
     if affinity and (aff_weight is None or out.shape[1] != model.WORD_AFF_OUTPUTS):
         raise ValueError(f"the affinity term needs its pairs' weights and a network of {model.WORD_AFF_OUTPUTS} "
                          f"outputs (heads words_aff), not {out.shape[1]}")
-    names = AFF_PARTS if affinity else WORD_PARTS
+    if coded and (affinity or code_weight is None or out.shape[1] != model.WORD_CODE_OUTPUTS):
+        raise ValueError(f"the code term needs its px's weights, no affinity, and a network of "
+                         f"{model.WORD_CODE_OUTPUTS} outputs (heads words_code), not {out.shape[1]}")
+    names = AFF_PARTS if affinity else CODE_PARTS if coded else WORD_PARTS
     if log_var is None:
         log_var = out.new_zeros(len(names))
     if log_var.shape != (len(names),):
@@ -501,22 +542,31 @@ def word_loss(out: torch.Tensor, core: torch.Tensor, geo: torch.Tensor, tag: tor
     terms = [lc, ld, lcentre, lsize, la, lt]
     if affinity:
         terms.append(_balanced_bce(out[:, model.AFF], aff, aff_weight))
+    if coded:
+        terms.append((F.cross_entropy(out[:, model.CODE], code, reduction="none") * code_weight).sum())
     parts = torch.stack(terms)
     return (torch.exp(-log_var) * parts + log_var / 2).sum(), parts
 
 
 class WordLoss(torch.nn.Module):
     """The word terms' learned settings (see the module), trained with the network: `log_var` (one log-variance s_i
-    a part of WORD_PARTS, or of AFF_PARTS with `affinity`, its weight exp(-s_i)) and `log_temp` (the tag's
-    log-temperature), all starting at 0.  Calling it gives `word_loss` by them."""
+    a part of WORD_PARTS, of AFF_PARTS with `affinity` or of CODE_PARTS with `code`, its weight exp(-s_i)) and
+    `log_temp` (the tag's log-temperature), all starting at 0.  Calling it gives `word_loss` by them (with `code`, the
+    targets' last two are the code targets and their weights, `word_tensors(..., code=True)`)."""
 
-    def __init__(self, affinity: bool = False):
+    def __init__(self, affinity: bool = False, code: bool = False):
         super().__init__()
-        self.parts = AFF_PARTS if affinity else WORD_PARTS
+        if affinity and code:
+            raise ValueError("the word terms take the affinity or the code, not both")
+        self.code = code
+        self.parts = AFF_PARTS if affinity else CODE_PARTS if code else WORD_PARTS
         self.log_var = torch.nn.Parameter(torch.zeros(len(self.parts)))
         self.log_temp = torch.nn.Parameter(torch.zeros(()))
 
     def forward(self, out: torch.Tensor, *targets: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.code:
+            return word_loss(out, *targets[:-2], code=targets[-2], code_weight=targets[-1], log_var=self.log_var,
+                             log_temp=self.log_temp)
         return word_loss(out, *targets, log_var=self.log_var, log_temp=self.log_temp)
 
     @torch.no_grad()
@@ -599,6 +649,8 @@ def _batches(sheets: list[data.SheetData], pools: tuple[Pool, Pool], recipe: Rec
         grey = {"input": "grey"} if recipe.input == "grey" else {}     # the ink recipe's call is today's
         if recipe.heads in WORD_HEADS:
             aff = {"affinity": True} if recipe.heads == "words_aff" else {}    # the words recipe's call is today's
+            if recipe.heads == "words_code":
+                aff = {"code": True}
             return batch_tensors(crops, recipe.ink_only, **grey) + word_tensors(crops, **aff)
         return batch_tensors(crops, recipe.ink_only, **grey)
 
@@ -653,7 +705,8 @@ def fit(sheets: list[data.SheetData], recipe: Recipe, device: str | None = None,
     rng = np.random.default_rng(seed)
     pools = centre_pools(sheets)
     net = build_net(recipe).to(device)
-    crit = WordLoss(affinity=recipe.heads == "words_aff").to(device) if recipe.heads in WORD_HEADS else None
+    crit = (WordLoss(affinity=recipe.heads == "words_aff", code=recipe.heads == "words_code").to(device)
+            if recipe.heads in WORD_HEADS else None)
     trained = net.parameters() if crit is None else [{"params": net.parameters()},
                                                       {"params": crit.parameters(), "weight_decay": 0.0}]
     opt = torch.optim.AdamW(trained, lr=recipe.max_lr, weight_decay=WEIGHT_DECAY)

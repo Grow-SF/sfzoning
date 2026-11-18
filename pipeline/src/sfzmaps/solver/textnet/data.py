@@ -61,6 +61,15 @@ and the pairs are read off the turned map itself, so they are exact under every 
 tag_id holds the later word (painted later over earlier, as ever), so the pairs follow it: the earlier word ends where
 the later one's rectangle starts.
 
+The code targets (`crop_targets(..., code=True)`, for `train.Recipe.heads="words_code"`: code spotting), from each
+word's class (`SheetData.codes`, which `wordread.codes.prepare` fills on the 2000 sheets):
+  code       uint8 (size, size): the class of the word whose rectangle holds the px (painted later over earlier, as
+             `text`, `kind` and `tag_id` are), 0 (the background) off the words: 1 another text, 2 on a code
+  code_known bool (size, size): the px the code term reads: not unknown and not held out (as `known`, but the line px
+             inside a word are taught as the word's class under either label rule: the class belongs to the word's
+             whole rectangle); none on a sheet with no classes (another map's: what its words would be on the 2000 map
+             is not known)
+
 An area answers for map points whether each is in it (`contains`) and, from the placement's samples around a page
 window, whether all of the window's px are in it or none is, when that follows from the samples alone (`decided`): a
 px's map point is a weighted mean of four samples, so it lies in their bounding box.  Only where it doesn't follow is
@@ -113,7 +122,8 @@ AREA_MARGIN = 1.0                 # ft: far more than a rounding of a px's weigh
 # Park: 99.7% inside every training map's sheets, with 10-13% of each training map's box area (7-16% of each kind it
 # prints).  `pipeline/scripts/choose_text_validation_area.py` re-derives the candidates and this choice from the data.
 VALIDATION_AREA = (6000442.0, 2091727.0, 6008805.0, 2108453.0)
-BOX_FIELDS = ("words", "kinds", "angles", "other", "points", "cores", "weights")  # SheetData's arrays of boxes, points
+BOX_FIELDS = ("words", "kinds", "angles", "other", "points", "cores", "weights",
+              "codes")                                   # SheetData's arrays of boxes, points
 LOAD_THREADS = 8                  # sheets read at once
 BAND = 512                        # page rows drawn at a time when finding where crops may centre
 LABEL_RULES = ("boxes", "lines-unknown")   # what a word box teaches (`crop_targets`; see the module)
@@ -241,6 +251,10 @@ class SheetData:
                              # uint8 (height, width): the scan's own grey levels (`load_page`), for a detector that
                              # reads them (`train.Recipe.input="grey"`); (0, 0), the default, until
                              # `sheet_data(grey=True)`.  Not bits (the plan's name): a byte a px, 8 x `ink_bits`
+    codes: np.ndarray = dataclasses.field(default_factory=lambda: np.zeros(0, np.uint8))
+                             # uint8 (n,): each word's code class (1 another text, 2 on a code of the 2000 map, in the
+                             # order of `words`), for the code targets; none (the default, and on another map's sheets)
+                             # until `wordread.codes.prepare` fills it
 
 
 def reading_angle(rect: np.ndarray) -> int:
@@ -615,7 +629,7 @@ def affinity_targets(tag_id: np.ndarray, known: np.ndarray) -> dict[str, np.ndar
 
 def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: int,
                  labels: str = "boxes", words: bool = False, grey: bool = False,
-                 affinity: bool = False) -> dict[str, np.ndarray]:
+                 affinity: bool = False, code: bool = False) -> dict[str, np.ndarray]:
     """The training crop centred on page px (row y, col x), moved inside the page: size / `scale` px of page resized
     to `size` x `size` (nearest px) and turned `turns` quarter turns counter-clockwise, the reading angle with it (in
     [-180, 180) degrees on text, 0 elsewhere).  Keys: ink (bool), text (uint8), kind (uint8), angle (int16), known
@@ -628,11 +642,16 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     over 255, resized bilinearly (`cv2.INTER_LINEAR`, as the ink is by nearest px) and turned with the rest;
     ValueError when the sheet holds none.  With `affinity` (and `words`: ValueError without), also the same-word
     affinity targets aff_right, aff_down and aff_known (`affinity_targets` of the turned tag_id and known; see the
-    module).  The other keys are the same with or without either."""
+    module).  With `code`, also the code targets code (uint8) and code_known (bool) from the sheet's word classes
+    (`SheetData.codes`; none known on a sheet with none; ValueError unless one class per word).  The other keys are
+    the same with or without any of them."""
     if labels not in LABEL_RULES:
         raise ValueError(f"labels is one of {', '.join(LABEL_RULES)}, not {labels!r}")
     if affinity and not words:
         raise ValueError("the affinity targets are drawn from the word targets' tag_id: ask for words too")
+    if code and len(sd.codes) and sd.codes.shape != (len(sd.words),):
+        raise ValueError(f"{sd.series} {sd.sheet}: SheetData.codes {sd.codes.shape} must be one class per word "
+                         f"({len(sd.words)}; wordread.codes.prepare)")
     if words and len(sd.weights) and (sd.weights.shape != (len(sd.words),) or not np.isfinite(sd.weights).all()
                                       or (sd.weights < 0).any()):
         raise ValueError(f"{sd.series} {sd.sheet}: SheetData.weights {sd.weights.shape} must be one number at least 0 "
@@ -645,9 +664,12 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     x0 = int(np.clip(x - src // 2, 0, sd.width - src))
     word = _words(sd, y0, x0, src, src)
     known = _known(sd, word, y0, x0, src, src)
+    code_known = (known.copy() if len(sd.codes) else np.zeros_like(known)) if code else None
     if labels == "lines-unknown":
         known &= ~((word > 0) & line_window(sd, y0, x0, src, src))
     parts = {"ink": _ink_window(sd, y0, x0, src, src), "word": word, "known": known}
+    if code:
+        parts["code_known"] = code_known
     if words:
         parts["tag_id"] = _cores(sd, y0, x0, src, src)
         parts["geo"] = _geometry(sd, parts["tag_id"], y0, x0)
@@ -662,6 +684,9 @@ def crop_targets(sd: SheetData, y: int, x: int, size: int, scale: float, turns: 
     kind = np.concatenate([[NO_KIND], sd.kinds]).astype(np.uint8)
     angle = np.concatenate([[0], (sd.angles.astype(np.int32) + 90 * turns + 180) % 360 - 180]).astype(np.int16)
     out = {**parts, "text": (word > 0).view(np.uint8), "kind": kind[word], "angle": angle[word]}
+    if code:
+        classes = sd.codes if len(sd.codes) else np.zeros(len(sd.words), np.uint8)
+        out["code"] = np.concatenate([[0], classes]).astype(np.uint8)[word]
     if not words:
         return {k: np.rot90(v, turns) for k, v in out.items()}
     geo = out.pop("geo")
