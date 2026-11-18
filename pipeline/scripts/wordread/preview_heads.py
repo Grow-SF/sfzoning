@@ -354,7 +354,7 @@ def render(sheet, rgb, ticks, rects, today_polys, words, top, notes, runs) -> st
                          separators=(",", ":")).replace("</", "<\\/")
     return (
         '<title>Word Heads Preview</title>\n<meta name="claude:viewport-fit-sides" content="cover">\n'
-        f"<style>{review.STYLE}{EXTRA_STYLE}</style>\n"
+        f"<style>{BASE_STYLE}{EXTRA_STYLE}</style>\n"
         '<div class="wrap"><h1>The Mission Street sheet: what the word heads see</h1>'
         f'<p class="sub">Sheet <b>{_e(sheet)}</b> · {w:,} × {h:,} px at full resolution · a preview before word '
         'formation, readings and the review page\'s numbers.</p>'
@@ -375,6 +375,61 @@ def render(sheet, rgb, ticks, rects, today_polys, words, top, notes, runs) -> st
         '<div id="info"></div></div></div></div>\n'
         f'<script type="application/json" id="data">{data_js}</script>\n<script>{PREVIEW_SCRIPT}</script>\n')
 
+
+# the page's base style (the review page's before it was redrawn, 2026-11-17)
+BASE_STYLE = """
+:root { --bg: #f4f5f2; --paper: #ffffff; --ink: #1d2320; --muted: #5b655f; --rule: #d7dbd4; --text: #d22222;
+  --match: #1a8a3a; --diff: #7b3fbf; --view: #e7e9e4;
+  --font: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; --mono: ui-monospace, Menlo, monospace; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #141816; --paper: #1b201d;
+  --ink: #e5eae6; --muted: #a0aaa4; --rule: #2e3531; --text: #ff6b6b; --match: #4cc274; --diff: #b48cf0;
+  --view: #0d100f; color-scheme: dark } }
+:root[data-theme="dark"] { --bg: #141816; --paper: #1b201d; --ink: #e5eae6; --muted: #a0aaa4; --rule: #2e3531;
+  --text: #ff6b6b; --match: #4cc274; --diff: #b48cf0; --view: #0d100f; color-scheme: dark }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font); margin: 0; }
+.wrap { max-width: 1280px; margin: 0 auto; padding-block: 20px 40px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1 { font-size: 22px; margin: 0 0 4px; text-wrap: balance; }
+.sub { color: var(--muted); margin: 0 0 14px; overflow-wrap: anywhere; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; }
+.box { background: var(--paper); border: 1px solid var(--rule); padding: 12px 14px; min-width: 0;
+  overflow-wrap: anywhere; }
+.box h2 { font: 600 12px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  margin: 0 0 8px; }
+.chip { display: inline-block; padding: 0 6px; }
+.sw { display: inline-block; width: 12px; height: 12px; vertical-align: -1px; }
+table.rs { border-collapse: collapse; width: 100%; font-size: 14px; }
+table.rs td { border-top: 1px solid var(--rule); padding: 4px 6px 4px 0; vertical-align: top;
+  overflow-wrap: normal; }
+table.rs td:first-child, td.num { white-space: nowrap; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 10px; }
+.viewer { margin-top: 12px; border: 1px solid var(--rule); background: var(--paper); }
+.bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px;
+  border-bottom: 1px solid var(--rule); }
+.bar button { font: 600 14px var(--font); min-width: 40px; min-height: 36px; padding: 0 10px; border-radius: 6px;
+  border: 1px solid var(--rule); background: var(--bg); color: var(--ink); cursor: pointer; }
+.bar .hint { color: var(--muted); font-size: 13px; }
+#vp { position: relative; height: min(78vh, 900px); overflow: hidden; touch-action: none; background: var(--view);
+  cursor: grab; user-select: none; -webkit-user-select: none; }
+#vp.drag { cursor: grabbing; }
+#stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; background: #fff; }
+#stage img { position: absolute; image-rendering: pixelated; pointer-events: none; -webkit-user-drag: none; }
+#ov, .ovl { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
+#ov .ln, .ovl .ln { vector-effect: non-scaling-stroke; }
+#stage.far .lbl, #stage.mid .tag { display: none; }
+#info { position: absolute; left: 8px; right: 8px; bottom: 8px; max-height: 46%; overflow: auto; display: none;
+  background: var(--paper); color: var(--ink); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px;
+  font-size: 13px; box-shadow: 0 4px 18px rgba(0,0,0,.25); cursor: auto; }
+#info.on { display: block; }
+#info h3 { font-size: 14px; margin: 6px 0 4px; }
+#info table { border-collapse: collapse; width: 100%; }
+#info td { padding: 2px 6px 2px 0; vertical-align: top; border-top: 1px solid var(--rule); }
+#info td:first-child { color: var(--muted); white-space: nowrap; }
+#info .x { float: right; border: 0; background: none; color: var(--ink); font-size: 20px; cursor: pointer;
+  min-width: 36px; min-height: 32px; }
+@media (min-width: 900px) { #info { left: auto; width: 380px; top: 8px; max-height: none; } }
+.models { color: var(--muted); font-size: 13px; margin-top: 12px; overflow-wrap: anywhere; }
+"""
 
 EXTRA_STYLE = """
 #stage img.tile { display: none; image-rendering: auto; }

@@ -780,10 +780,7 @@ def build_draft_page(folder: Path, sheet: str, runs_: dict, page_name: str = "dr
                          run="DRAFT boxes from the word heads (not final; before: today)", comps=comps,
                          reason_text=WORD_REASONS)
     out = root / page_name
-    page_path = review.render(d, out / "review.html")
-    text = page_path.read_text(encoding="utf-8")
-    banner = ('<p class="sub" style="color:var(--text);font-weight:600">' + review._e(note) + ".</p>")
-    page_path.write_text(text.replace("<div class=\"wrap\">", "<div class=\"wrap\">" + banner, 1), encoding="utf-8")
+    page_path = review.render(d, out / "review.html", about=f"<h3>Draft</h3><p><b>{review._e(note)}.</b></p>")
     (out / "numbers.json").write_text(json.dumps(d["numbers"], indent=1) + "\n")
     (out / "missed.json").write_text(json.dumps(d["missed"], indent=1, ensure_ascii=False) + "\n")
     b = d["numbers"]["boxes"]["0.5"]
@@ -1348,8 +1345,9 @@ def code_counts(quarter: str) -> dict:
 
 # --- the crude-kind review page: three box sets at one zoom -----------------------------------------------------------
 
-KIND_STROKE = {"zoning code": "#0b62d6", "block number": "#e07b00", "street name": "#008b8b", "other": "#8c564b"}
 SETS = (("kind", "crude-kind"), ("map", "crude-map"), ("today", "today"))
+PAGE_TITLE = "Mission New Boxes"
+CAUSES = ROOT.parent / "causes"          # label_causes.py's labels-<run>.parquet: each wrong label's cause
 
 
 def split_kinds(run, sheet: str, q: int, mode: str = "map") -> list[str]:
@@ -1366,12 +1364,23 @@ def split_kinds(run, sheet: str, q: int, mode: str = "map") -> list[str]:
     return [names[int(k)] for k in kinds.ravel()[sel][first]]
 
 
+def label_causes_of(name: str, sheet: str):
+    """label_causes.py's wrong labels of a run (`name`; "today" for today's boxes) on `sheet`, or None."""
+    import pandas as pd
+    f = CAUSES / f"labels-{name}.parquet"
+    if not f.is_file():
+        return None
+    c = pd.read_parquet(f)
+    return c[c["sheet"] == sheet].reset_index(drop=True)
+
+
 def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "crude-kind-map-all-s0",
                     map_run: str = "crude-map-all-s0", page_name: str = "crude-kind") -> Path:
     """The review page of crude-kind's boxes on `sheet` (every quarter from its own a-*-s0 detector and fold reader),
-    the outlines coloured by the kind the split gave each word, the boxes read as no text faint; buttons flip the
-    overlay (and what a tap tells) to crude-map's boxes or today's at the same zoom.  One image under all three (the
-    ink, red where the word-core chance is 0.5 or more); the panels are crude-kind's against today's."""
+    the outlines coloured by the kind the split gave each word; a segmented control flips the boxes (and what a tap
+    tells, and the wrong labels with their causes) to crude-map's or today's at the same zoom.  One image under all
+    three (the ink; the text ink layer red where the word-core chance is 0.5 or more); the folded panels are
+    crude-kind's against today's."""
     import html as H
     from sfzmaps.solver import grid, wordboxes
     from sfzmaps.solver.textread import store
@@ -1403,12 +1412,15 @@ def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "cru
     answers = answers[answers["sheet"] == sheet].reset_index(drop=True)
     before = json.loads((root / "baseline" / "numbers.json").read_text())
     forms = review.load_forms()
+    causes = {"kind": label_causes_of(kind_run, sheet), "map": label_causes_of(map_run, sheet),
+              "today": label_causes_of("today", sheet)}
     lines = [KIND_NOTE + ".",
-             "Red ink: the word-core chance 0.5 or more, each quarter from its own held-out detector (arm a, seed 0: "
+             "Text ink: the word-core chance 0.5 or more, each quarter from its own held-out detector (arm a, seed 0: "
              + ", ".join(f"{paths.QUARTERS[k].upper()} {r.name}" for k, r in runs_.items()) + ").",
              "Readings: the current fold readers (data/solver/text-train) and their 0/180 classifiers; the missed "
              "words read at Terra's box by the same readers.  Today's boxes: data/solver/boxes, read as the store "
              "holds them.",
+             "Wrong labels' causes: label_causes.py (experiments/wordread/causes/labels-<run>.parquet).",
              "The panels: crude-kind against today's boxes on this sheet (review/baseline)."]
     ds = {}
     for key, title in SETS:
@@ -1417,8 +1429,8 @@ def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "cru
                                    levels={qn: review.TEXT_CHANCE for qn in paths.QUARTERS}, on_map=on_map,
                                    terra_reads=terra_reads, answers=answers, forms=forms, models=lines,
                                    run=f"{title} (each quarter from its own held-out detector)",
-                                   comps=review.box_components(b, core, ink), reason_text=WORD_REASONS)
-        ds[key]["faint_none"] = True
+                                   comps=review.box_components(b, core, ink), reason_text=WORD_REASONS,
+                                   causes=causes[key])
     # crude-kind's outlines by the kind its split gave each word
     kb = sets["kind"][0]
     given = {}
@@ -1431,23 +1443,7 @@ def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "cru
         if rec["split_kind"]:
             rec["kind"] = {"zoning code": "zoning", "block number": "block", "street name": "street",
                            "other": "other"}[rec["split_kind"]]
-    ds["kind"]["stroke_by_kind"] = KIND_STROKE
-    plain = review.palette_image(ink, review.text_ink_of(ink, core), [], [])
-    ds["kind"]["pixels"] = plain
-    out = root / page_name
-    page = review.render(ds["kind"], out / "review.html")
-    text = page.read_text(encoding="utf-8")
-    # the other two overlays, hidden, and their boxes for the taps
-    extra = "".join(review._overlay(ds[k], f"ov-{k}").replace(f'<svg id="ov-{k}"', f'<svg id="ov-{k}" '
-                                                              'style="display:none"', 1) for k in ("map", "today"))
-    anchor = '</svg></div><div id="info"></div>'
-    assert text.count(anchor) == 1
-    text = text.replace(anchor, "</svg>" + extra + '</div><div id="info"></div>', 1)
-    hook = "const D = JSON.parse(document.getElementById('data').textContent);"
-    assert text.count(hook) == 1
-    text = text.replace(hook, hook + " window.__reviewD = D;", 1)
-    sets_json = json.dumps({k: {"boxes": ds[k]["boxes"], "missed": ds[k]["missed"]} for k, _ in SETS},
-                           ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
+    ds["kind"]["pixels"] = review.palette_image(ink, review.text_ink_of(ink, core), [], [])
     full = {"kind": json.loads((kind_dir / "vs_today.json").read_text()),
             "map": json.loads((map_dir / "vs_today.json").read_text())}
     vs_map = json.loads((kind_dir / f"vs_{map_run}.json").read_text())
@@ -1462,39 +1458,19 @@ def build_kind_page(sheet: str = "2000-digital-zoning-p07", kind_run: str = "cru
                     f"<td>{bx['missed']:,}</td><td>{bx['missed_reasons'].get('merged_with_word', 0):,}</td>"
                     f"<td>{bx['ours_unmatched_none']:,}</td></tr>")
     pk, pm = full["kind"]["paired_run_minus_today"], vs_map["paired_run_minus_other"]
-    legend = "".join(f'<span style="display:inline-block;margin-right:12px"><i style="display:inline-block;'
-                     f'width:18px;height:3px;background:{c};vertical-align:middle;margin-right:4px"></i>{H.escape(k)}'
-                     f"</span>" for k, c in KIND_STROKE.items())
-    banner = (
-        '<p class="sub" style="color:var(--text);font-weight:600">' + H.escape(KIND_NOTE) + ".</p>"
-        '<p class="sub"><b>Box outlines (crude-kind):</b> coloured by the kind the split gave each word: ' + legend
-        + " Solid: matched to a Terra word; dashed: read as text, no Terra word; faint grey: fragments the reader "
-        "calls no text.  The buttons above the map flip the boxes (and what a tap tells) to crude-map's or today's at "
-        "the same zoom; the image under them is one (red: ink whose word-core chance is 0.5 or more).</p>"
-        '<table class="sub" style="border-collapse:collapse;margin:6px 0"><tr><th></th><th>labels right, this '
-        "sheet</th><th>labels right, all 699</th><th>boxes</th><th>matched (IoU 0.5)</th><th>missed</th>"
-        "<th>merged with a word</th><th>read as no text</th></tr>" + "".join(rows) + "</table>"
-        f'<p class="sub">All 699 labels, paired by whole blocks: crude-kind minus today {pk["diff"]:+.3f} '
-        f'[{pk["lo"]:+.3f}, {pk["hi"]:+.3f}]; minus crude-map {pm["diff"]:+.3f} '
-        f'[{pm["lo"]:+.3f}, {pm["hi"]:+.3f}].</p>')
-    text = text.replace('<div class="wrap">', '<div class="wrap">' + banner, 1)
-    buttons = ('<span class="hint" style="margin-left:8px">Boxes:</span>'
-               + "".join(f'<button class="setb" data-set="{k}" aria-pressed="{str(k == "kind").lower()}"'
-                         f'{" style=" + chr(34) + "font-weight:700" + chr(34) if k == "kind" else ""}>{t}</button>'
-                         for k, t in SETS))
-    bar = '<button id="zfit">Fit</button>'
-    assert text.count(bar) == 1
-    text = text.replace(bar, bar + buttons, 1)
-    toggle = ("<script>(function(){const S=JSON.parse(document.getElementById('sets').textContent);"
-              "const ids={kind:'ov',map:'ov-map',today:'ov-today'};"
-              "document.querySelectorAll('.setb').forEach(b=>b.onclick=()=>{const k=b.dataset.set;"
-              "Object.entries(ids).forEach(([n,i])=>{document.getElementById(i).style.display=n===k?'':'none';});"
-              "window.__reviewD.boxes=S[k].boxes;window.__reviewD.missed=S[k].missed;"
-              "document.getElementById('info').classList.remove('on');"
-              "document.querySelectorAll('.setb').forEach(x=>{const on=x===b;x.setAttribute('aria-pressed',on);"
-              "x.style.fontWeight=on?'700':'';});});})();</script>\n")
-    text = text.rstrip("\n") + "\n" + f'<script type="application/json" id="sets">{sets_json}</script>\n' + toggle
-    page.write_text(text, encoding="utf-8")
+    about = (
+        f"<h3>The versions</h3><p>{H.escape(KIND_NOTE)}.</p>"
+        "<p>crude-kind's outlines take the kind its split gave each word; crude-map's and today's the box's likeliest "
+        "kind.  The image under all three is one.</p>"
+        '<div class="tblwrap"><table class="cmp"><tr><th></th><th>labels right, this sheet</th><th>labels right, '
+        "all 699</th><th>boxes</th><th>matched (IoU 0.5)</th><th>missed</th><th>merged with a word</th>"
+        "<th>read as no text</th></tr>" + "".join(rows) + "</table></div>"
+        f'<p>All 699 labels, paired by whole blocks: crude-kind minus today {pk["diff"]:+.3f} '
+        f'[{pk["lo"]:+.3f}, {pk["hi"]:+.3f}]; minus crude-map {pm["diff"]:+.3f} [{pm["lo"]:+.3f}, {pm["hi"]:+.3f}].</p>'
+        "<h3>crude-kind against today's boxes</h3>")
+    out = root / page_name
+    page = review.render(ds["kind"], out / "review.html", sets=[(k, t, ds[k]) for k, t in SETS], title=PAGE_TITLE,
+                         about=about)
     (out / "numbers.json").write_text(json.dumps({k: ds[k]["numbers"] for k, _ in SETS}, indent=1) + "\n")
     return page
 

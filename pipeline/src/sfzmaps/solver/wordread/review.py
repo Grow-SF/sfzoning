@@ -4,20 +4,30 @@ self-contained HTML page.  The owner judges every step of the plan 2026-11-17-ma
 The sheet (`mission_sheet`): the 2000 sheet whose footprint (the warp's `warped.footprint.geojson`, map ft) holds the
 longest length of DataSF's MISSION ST centreline (`streetside.load_streets`, the solver's centreline loader).
 
-What the page shows (`page_data`, then `render`):
-  the image     the page at full resolution as palette PNG tiles: white paper, grey ink, and red the ink the detector
-                calls text (chance >= TEXT_CHANCE; each px from the fold detector that held out its quarter).  The paper
-                inside a green or a yellow box is tinted, never the ink, so the shading sits under the red.
-  our boxes     (SVG) every box: its grouped rectangle, an arrow along its reading direction (its axis, turned a half
-                turn when the reader's 0/180 classifier says so) and a tag (kind, mean chance, reading angle).
-                  matched  its best Terra word meets it at IoU >= the page's level (`measures`' rule): its reading in
-                           green when it is Terra's, purple when it isn't, with Terra's string after it in red
-                  text     it matches no word and is read as text: shaded green (text Terra missed)
-                  none     it matches no word and is read as no text: a thin grey outline (junk)
-  missed words  Terra's words that no box matches: shaded yellow, dashed, with `miss_reason`'s code and details
-  panels        the top-line numbers of the boxes (`measures.box_numbers`) and of the readings, with the change
-                since the run before
-  tapping       a box or a missed word shows everything known about it
+What the page shows (`page_data`, then `render`), one job per layer, the calm view first:
+  the image     the page at full resolution as palette PNG tiles: paper and the ink in one neutral grey (inverted
+                with the theme).  Its own layer of tiles, off at first, draws red the ink the detector calls text
+                (chance >= TEXT_CHANCE; each px from the fold detector that held out its quarter); nothing is drawn
+                filled over the ink.
+  our boxes     (SVG, thin strokes of a constant screen width) every box read as text, its outline in the colour of
+                its kind (code, block number, street name, other; a colour-blind-safe set for both themes).  The
+                boxes read as no text ("fragments") are a layer of their own, off at first.
+  readings      (a screen layer drawn by the page's script) one small upright pill per box, at a constant screen size,
+                just outside the box: green when our reading is Terra's string, purple "ours ≠ Terra's" when it
+                isn't, neutral for text Terra lacks.  Drawn greedily (codes, then wrong readings, then the rest), a
+                pill that would overlap one already drawn is left out; more appear as the owner zooms in.  On by
+                itself from READINGS_FROM x, or when the owner turns it on.
+  layers        chips turn on Terra's words, the words Terra saw that no box matches ("missed", `miss_reason`), the
+                text ink, the fragments, and the details (kind, chance, angle); a filter keeps only the boxes whose
+                reading differs from Terra's.  The chips' state is kept in the viewer's browser.
+  versions      `render(..., sets=)`: several box sets over one image (e.g. crude-kind, crude-map, today) behind a
+                segmented control that keeps the view.
+  wrong labels  the owner's answered labels the version reads wrong (`answered_labels`), each with its cause when
+                given (label_causes.py), stepped through with prev/next: each centres the map on its box.
+  tapping       a box or a missed word opens everything known about it (a bottom sheet on a phone, a side panel on a
+                wide screen)
+  about         the top-line numbers of the boxes (`measures.box_numbers`) and of the readings, with the change since
+                the run before, the reasons' table and what drew the page, folded away
 
 The reading shown for a box: when the reader's likeliest hypothesis is a code, its likeliest code given a code; for
 other text, the reader's open best path in the direction the classifier chose (`textread.model.best_path`, by the
@@ -89,21 +99,22 @@ REASON_TEXT = {
     "wrong_size": "one component holds it, alone and not a line, but its box doesn't fit the word",
 }
 KIND_SHORT = {"zoning": "code", "block": "block", "street": "street", "other": "other"}
+KIND_CLASSES = ("code", "block", "street", "other")     # the outlines' colours (CSS classes k-<kind>)
+SPLIT_KIND = {"zoning code": "code", "block number": "block", "street name": "street", "other": "other"}
+CAUSE_NAMES = {"merged": "merged", "partial": "partial", "clean": "misread", "no_box": "no box", "other": "other"}
 TILE = 2048                # px: the image is cut into tiles at most this big each way
-LABELS_FROM = 0.8          # the overlay's readings and arrows are drawn from this zoom (screen px per page px) up,
-TAGS_FROM = 2.0            # its tags and the missed words' details from this
+READINGS_FROM = 2.0        # the readings come on by themselves from this zoom (screen px per page px) up
 MAX_SCALE = 24.0
+BAND = 400                 # px: the wrong labels are listed in bands this tall down the page, left to right in each
 
-# the image's palette (RGB), by index
+# the image's palette (RGB), by index: `page_data`'s pixels.  The page draws the paper's tints as paper and the text
+# ink as the other ink in its base tiles, and the text ink red in a layer of its own (`render`)
 COLOURS = {"paper": (255, 255, 255), "green_paper": (201, 234, 211), "yellow_paper": (250, 236, 166),
-           "both_paper": (198, 220, 145), "other_ink": (154, 154, 154), "text_ink": (221, 34, 34)}
+           "both_paper": (198, 220, 145), "other_ink": (140, 140, 140), "text_ink": (221, 34, 34)}
 INDEX = {name: k for k, name in enumerate(COLOURS)}
 FADED = {"faded_paper": (238, 238, 234), "faded_ink": (206, 206, 202)}     # `page_data(..., visible=)`: the rest
 FADED_INDEX = {name: len(COLOURS) + k for k, name in enumerate(FADED)}
 NOTE = "#8a8a84"           # the overlay's notes (`page_data(..., notes=)`)
-# the overlay's colours (on the white map, in both themes)
-MATCH, DIFF, TERRA_RED, BOX, FOUND, JUNK, MISSED, MISSED_TEXT = (
-    "#1a8a3a", "#7b3fbf", "#d22222", "#333333", "#2a8a4a", "#9a9a9a", "#b08a00", "#5a4600")
 
 
 # --- the sheet ------------------------------------------------------------------------------------------------------
@@ -521,12 +532,50 @@ def missed_words(boxes: pd.DataFrame, terra: pd.DataFrame, iou: float = MATCH_IO
     return np.flatnonzero(~matched_at(word, best, len(terra), iou)[1])
 
 
+def _cause_note(c: dict) -> str:
+    """A wrong label's cause in a few words (label_causes.py's row): the detail, where the other word lies, and it."""
+    bits = [str(c.get("detail") or "")]
+    if c.get("placement") and isinstance(c["placement"], str):
+        bits.append(c["placement"])
+    if c.get("other_text") and isinstance(c["other_text"], str):
+        bits.append(f'with “{c["other_text"]}”')
+    return ", ".join(b for b in bits if b)
+
+
+def answered_labels(boxes: pd.DataFrame, reads: dict, answers: pd.DataFrame, causes: pd.DataFrame | None = None,
+                    band: int = BAND) -> list[dict]:
+    """The owner's answered labels of one sheet (`answers`), each with the box its point goes to and whether our
+    likeliest code there is the answer (`measures.label_right`, the headline's rule: no box is wrong), our code, and,
+    when `causes` (label_causes.py's rows: point_x, point_y, truth, cause, detail, placement, other_text) holds the
+    label's point and answer, its cause.  In bands `band` px tall down the page, left to right in each."""
+    right = measures.label_right(boxes, reads, answers).set_index("label")
+    named = {}
+    if causes is not None and len(causes):
+        for c in causes.to_dict("records"):
+            named[(round(float(c["point_x"]), 1), round(float(c["point_y"]), 1), str(c["truth"]))] = c
+    out = []
+    for k, a in enumerate(answers.to_dict("records")):
+        if k not in right.index:
+            continue
+        row = right.loc[k, "row"]
+        has = not (isinstance(row, (int, np.integer)) and int(row) == -1)
+        c = named.get((round(float(a["point_x"]), 1), round(float(a["point_y"]), 1), str(a["truth"])))
+        out.append({"k": k, "x": _r(a["point_x"], 1), "y": _r(a["point_y"], 1), "truth": str(a["truth"]),
+                    "terra": None if a.get("terra") is None else str(a["terra"]),
+                    "box": f"b{row}" if has else None,
+                    "read": measures._closed_best(reads.get(row)) if has else None,
+                    "right": bool(right.loc[k, "right"]),
+                    "cause": c["cause"] if c else None, "note": _cause_note(c) if c else ""})
+    out.sort(key=lambda r: (int(r["y"] // band), r["x"], r["k"]))
+    return out
+
+
 def page_data(sheet: str, boxes: pd.DataFrame, reads: dict, terra: pd.DataFrame, chance: np.ndarray,
               before: dict | None = None, *, ink: np.ndarray | None = None, levels: dict | None = None,
               on_map: np.ndarray | None = None, terra_reads: dict | None = None, answers: pd.DataFrame | None = None,
               forms: dict | None = None, models=(), run: str = "", iou: float = MATCH_IOU,
               comps: Components | None = None, visible: np.ndarray | None = None, reason_text: dict | None = None,
-              notes=()) -> dict:
+              notes=(), causes: pd.DataFrame | None = None) -> dict:
     """Everything the page draws for `sheet`: `boxes` our boxes (wordboxes' columns; the index is the row `reads` is
     keyed by), `reads` their readings (`reads_for_page`), `terra` Terra's words (`measures.terra_words`' columns),
     `chance` the sheet's chance of text (uint8, chance x 255), `before` the numbers of the run before (None: none).
@@ -534,10 +583,12 @@ def page_data(sheet: str, boxes: pd.DataFrame, reads: dict, terra: pd.DataFrame,
     (each Terra word's centre placed where boxes are kept), `forms` (printed form -> code).  `terra_reads`: Terra word
     position -> the reading at Terra's box; `answers`: the owner's answered labels on the sheet
     (`measures.answers_from_store`' columns); `models`: lines naming the models that drew it.  `comps`, `visible`,
-    `reason_text` and `notes`: see the module (None, None, None and none: the page as before).
+    `reason_text` and `notes`: see the module (None, None, None and none: the page as before).  `causes`: the wrong
+    labels' causes (`answered_labels`).
 
-    Returns {"sheet", "run", "shape", "pixels" (`palette_image`), "text_ink_px", "boxes", "missed", "numbers",
-    "delta" (`measures.compare` with `before`, or None), "models", "iou", "levels"}."""
+    Returns {"sheet", "run", "shape", "pixels" (`palette_image`), "text_ink_px", "boxes", "missed", "terra_words"
+    (every Terra word's outline), "labels" (`answered_labels`; none without answers), "numbers", "delta"
+    (`measures.compare` with `before`, or None), "models", "iou", "levels"}."""
     boxes = boxes[boxes["sheet"] == sheet] if "sheet" in boxes.columns else boxes
     terra = terra[terra["sheet"] == sheet].reset_index(drop=True)
     if ink is None:
@@ -620,6 +671,16 @@ def page_data(sheet: str, boxes: pd.DataFrame, reads: dict, terra: pd.DataFrame,
     numbers = _jsonable(numbers)
     for lv in numbers["boxes"].values():
         lv.pop("by_quarter", None)
+    labels = answered_labels(boxes, reads, answers, causes) if answers is not None and len(answers) else []
+    at_box: dict[str, list] = {}
+    for lab in labels:
+        if lab["box"]:
+            at_box.setdefault(lab["box"], []).append({"truth": lab["truth"], "right": lab["right"]})
+    for rec in recs:
+        if rec["id"] in at_box:
+            rec["answers"] = at_box[rec["id"]]
+    terra_words = [{"id": f"w{t}", "poly": np.round(rects[t], 1).tolist(), "text": str(terra["text"].iloc[t]),
+                    "kind": terra["kind"].iloc[t]} for t in range(len(terra))]
     pixels = palette_image(ink, text_ink, green_polys, yellow_polys)
     extra = {}
     if visible is not None:
@@ -632,7 +693,7 @@ def page_data(sheet: str, boxes: pd.DataFrame, reads: dict, terra: pd.DataFrame,
         extra["notes"] = [[float(x), float(y), str(t)] for x, y, t in notes]
     return {**extra, "sheet": sheet, "run": run, "shape": list(ink.shape),
             "pixels": pixels, "text_ink_px": int(text_ink[visible].sum() if visible is not None else text_ink.sum()),
-            "boxes": recs, "missed": missed, "numbers": numbers,
+            "boxes": recs, "missed": missed, "terra_words": terra_words, "labels": labels, "numbers": numbers,
             "delta": measures.compare(numbers, before) if before else None, "models": list(models), "iou": iou,
             "levels": {k: float(v_) for k, v_ in levels.items()}}
 
@@ -644,11 +705,24 @@ def red_px_of(d: dict) -> int:
 
 # --- the page -----------------------------------------------------------------------------------------------------
 
-def _png_b64(idx: np.ndarray, faded: bool = False) -> str:
-    im = Image.fromarray(idx, "P")
-    im.putpalette([c for rgb in [*COLOURS.values(), *(FADED.values() if faded else ())] for c in rgb])
+def _tile_png(idx: np.ndarray, layer: str = "base", faded: bool = False) -> str | None:
+    """One tile of `page_data`'s pixels as a base64 palette PNG.  "base": the paper and every ink in one grey (the
+    paper's tints drawn as paper, the text ink as the other ink; the faded colours when `faded`).  "text": the text ink
+    red on a transparent ground, None when the tile holds none."""
     buf = io.BytesIO()
-    im.save(buf, "PNG", optimize=True)
+    if layer == "text":
+        on = idx == INDEX["text_ink"]
+        if not on.any():
+            return None
+        im = Image.fromarray(on.astype(np.uint8), "P")
+        im.putpalette([0, 0, 0, *COLOURS["text_ink"]])
+        im.save(buf, "PNG", optimize=True, transparency=0)
+    else:
+        base = {**COLOURS, "green_paper": COLOURS["paper"], "yellow_paper": COLOURS["paper"],
+                "both_paper": COLOURS["paper"], "text_ink": COLOURS["other_ink"]}
+        im = Image.fromarray(idx, "P")
+        im.putpalette([c for rgb in [*base.values(), *(FADED.values() if faded else ())] for c in rgb])
+        im.save(buf, "PNG", optimize=True)
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
@@ -665,115 +739,68 @@ def _path(polys) -> str:
                    for p in polys)
 
 
-def _frame(rec: dict):
-    """A box's or word's centre, reading direction v, its down-the-page normal n, length and height."""
-    p = np.asarray(rec["poly"], float)
-    a = np.deg2rad(rec["angle"])
-    v, n = np.array([np.cos(a), -np.sin(a)]), np.array([np.sin(a), np.cos(a)])
-    length = float(np.abs((p - p.mean(0)) @ v).max() * 2)
-    height = float(np.abs((p - p.mean(0)) @ n).max() * 2)
-    return p.mean(0), v, n, max(length, 4.0), max(height, 4.0)
+def _kind_class(rec: dict) -> str:
+    """A box's kind as the page colours it: one of KIND_CLASSES (a box of no kind is "other")."""
+    k = rec.get("kind")
+    k = KIND_SHORT.get(k, k)
+    return k if k in KIND_CLASSES else "other"
 
 
-def _text(xy, angle, size, fill, body, cls="") -> str:
-    x, y = xy
-    c = f' class="{cls}"' if cls else ""
-    return (f'<text{c} transform="translate({_f(x)} {_f(y)}) rotate({_f(-angle)})" font-size="{_f(size)}" '
-            f'fill="{fill}">{body}</text>')
+def _svg(w: int, h: int, body: str, attrs: str = "") -> str:
+    return (f'<svg class="ov"{attrs} xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
+            f'viewBox="0 0 {w} {h}">{body}</svg>')
 
 
-def _overlay(d: dict, svg_id: str = "ov") -> str:
-    """The SVG overlay (page px): outlines and arrows as a few paths, the words as text.  Options in `d` (absent: the
-    page as before): `stroke_by_kind` ({kind: colour}) draws each box read as text or matched in the colour of its
-    `split_kind` (matched solid, the others dashed); `faint_none` draws the boxes read as no text, and their tags,
-    faint.  `svg_id`: the element's id (one overlay of several)."""
+def _outlines(d: dict, key: str, hidden: bool = False) -> str:
+    """One version's outlines (SVG in page px; every stroke a constant screen width, unfilled, and no text): the
+    boxes read as text by kind, the same boxes again for the filter of the readings that differ from Terra's, the
+    fragments (read as no text), and Terra's words no box matches."""
     h, w = d["shape"]
-    by_kind, faint = d.get("stroke_by_kind"), bool(d.get("faint_none"))
-    cls = "" if svg_id == "ov" else ' class="ovl"'
-    out = [(f'<svg id="{svg_id}"{cls} xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
-            f'viewBox="0 0 {w} {h}" font-family="ui-monospace,Menlo,Consolas,monospace">')]
-    outlines = {"matched": [], "text": [], "none": []}
-    arrows = {"matched": [], "text": [], "none": []}
-    kind_lines: dict = {}
-    words, faint_words = [], []
+    kinds: dict = {k: [] for k in KIND_CLASSES}
+    differ: dict = {k: [] for k in KIND_CLASSES}
+    frags = []
     for b in d["boxes"]:
-        outlines[b["status"]].append(b["poly"])
-        if by_kind and b["status"] != "none":
-            kind_lines.setdefault((b["status"], b.get("split_kind")), []).append(b["poly"])
-        c, v, n, length, height = _frame(b)
-        base = c + n * (height / 2 + 1.5)
-        a0, a1 = base - v * length * 0.35, base + v * length * 0.35
-        hd = min(4.0, 0.25 * length)
-        h1, h2 = a1 - v * hd + n * hd * 0.6, a1 - v * hd - n * hd * 0.6
-        arrows[b["status"]].append(f"M{_f(a0[0])} {_f(a0[1])}L{_f(a1[0])} {_f(a1[1])}M{_f(h1[0])} {_f(h1[1])}"
-                                   f"L{_f(a1[0])} {_f(a1[1])}L{_f(h2[0])} {_f(h2[1])}")
-        fs = float(np.clip(0.6 * height, 6.0, 12.0))
-        ts = max(4.0, fs * 0.55)
-        kind = KIND_SHORT.get(b["kind"], b["kind"] or "?")
-        tag = f'{kind} · {b["chance"] or 0.0:.2f} · {round(b["angle"]) % 360}°'
-        tag_at = c - v * length / 2 + n * (height / 2 + 3.0 + ts)
-        tag_fill = {"matched": BOX, "text": FOUND, "none": JUNK}[b["status"]]
-        (faint_words if faint and b["status"] == "none" else words).append(
-            _text(tag_at, b["angle"], ts, tag_fill, _e(tag), "tag"))
         if b["status"] == "none":
+            frags.append(b["poly"])
             continue
-        top_at = c - v * length / 2 - n * (height / 2 + 2.0)
-        if b["status"] == "matched":
-            fill = MATCH if b["colour"] == "green" else DIFF
-            body = _e(b["shown"] or "∅")
-            if b["colour"] == "purple":
-                body += f' <tspan fill="{TERRA_RED}">(Terra: {_e(b["terra"])})</tspan>'
-        else:
-            fill, body = BOX, _e(b["shown"] or "?")
-        words.append(_text(top_at, b["angle"], fs, fill, body, "rd"))
-    for m in d["missed"]:
-        c, v, n, length, height = _frame(m)
-        fs = float(np.clip(0.6 * height, 6.0, 12.0))
-        ts = max(4.0, fs * 0.5)
-        det = m["details"]
-        words.append(_text(c - v * length / 2 - n * (height / 2 + 2.0), m["angle"], fs, TERRA_RED,
-                           f'Terra: {_e(m["text"])}', "rd"))
-        line1 = (f'{REASON_SHORT[m["reason"]]} · max {det["max_chance"] or 0.0:.2f} · '
-                 f'{round(100 * (det["share_above"] or 0.0))}% ≥ {det["level"]:g}')
-        bits = []
-        if m["reason"] == "merged_with_word":
-            bits.append(f'with {_e(", ".join(det.get("merged_with", [])[:2]))} ({round(det["component_px"])} px)')
-        elif m["reason"] == "merged_into_line":
-            bits.append(f'line {round(det["component_px"])} px')
-        elif m["reason"] == "split":
-            bits.append(f'{det["components"]} parts')
-        rd = det.get("reading")
-        if rd:
-            said = rd.get("text") or "∅"
-            bits.append(f"reader: {_e(said)} " + (f'{rd["p_top"]:.2f}' if rd["top"] == said
-                                                  else f'({_e(rd["top"])} {rd["p_top"]:.2f})'))
-        at = c - v * length / 2 + n * (height / 2 + 2.0 + ts)
-        words.append(_text(at, m["angle"], ts, MISSED_TEXT, _e(line1), "tag"))
-        if bits:
-            words.append(_text(at + n * ts * 1.25, m["angle"], ts, MISSED_TEXT, " · ".join(bits), "tag"))
-    out.append(f'<path class="ln" d="{_path([m["poly"] for m in d["missed"]])}" fill="none" stroke="{MISSED}" '
-               'stroke-width="1.5" stroke-dasharray="5 3"/>')
-    for status, stroke, width in (("none", JUNK, 0.8), ("text", FOUND, 1.4), ("matched", BOX, 1.4)):
-        more = ' stroke-opacity="0.3"' if faint and status == "none" else ""
-        if by_kind and status != "none":
-            for (st, kind), polys in sorted(kind_lines.items(), key=lambda kv: str(kv[0])):
-                if st == status:
-                    dash = "" if status == "matched" else ' stroke-dasharray="4 2"'
-                    out.append(f'<path class="ln" d="{_path(polys)}" fill="none" '
-                               f'stroke="{by_kind.get(kind, stroke)}" stroke-width="1.6"{dash}/>')
-        else:
-            out.append(f'<path class="ln" d="{_path(outlines[status])}" fill="none" stroke="{stroke}" '
-                       f'stroke-width="{width}"{more}/>')
-        out.append(f'<path class="ln lbl" d="{"".join(arrows[status])}" fill="none" stroke="{stroke}" '
-                   f'stroke-width="{width}"{more}/>')
-    out.append('<g class="lbl">' + "".join(words) + "</g>")
-    if faint_words:
-        out.append('<g class="lbl" opacity="0.3">' + "".join(faint_words) + "</g>")
-    for x, y, text in d.get("notes", ()):
-        out.append(f'<text x="{_f(x)}" y="{_f(y)}" font-size="72" fill="{NOTE}" text-anchor="middle" '
-                   f'font-family="-apple-system,Helvetica,Arial,sans-serif">{_e(text)}</text>')
-    out.append("</svg>")
+        kinds[_kind_class(b)].append(b["poly"])
+        if b["colour"] == "purple":
+            differ[_kind_class(b)].append(b["poly"])
+
+    def strokes(groups):
+        return "".join(f'<path class="ln k-{k}" fill="none" d="{_path(p)}"/>' for k, p in groups.items() if p)
+    miss = _path([m["poly"] for m in d["missed"]])
+    body = (f'<g class="L-frags"><path class="ln k-frag" fill="none" d="{_path(frags)}"/></g>'
+            f'<g class="L-boxes">{strokes(kinds)}</g><g class="L-diff">{strokes(differ)}</g>'
+            f'<g class="L-missed"><path class="ln halo" fill="none" d="{miss}"/>'
+            f'<path class="ln miss" fill="none" d="{miss}"/></g>')
+    return f'<div class="setov" data-set="{_e(key)}"{" hidden" if hidden else ""}>{_svg(w, h, body)}</div>'
+
+
+def _shared_overlays(d: dict) -> str:
+    """The overlays every version shares: Terra's words, the notes (upright, in page px) and the tapped box's
+    highlight."""
+    h, w = d["shape"]
+    terra = _path([t["poly"] for t in d.get("terra_words", [])])
+    out = [_svg(w, h, f'<path class="ln terra" fill="none" d="{terra}"/>', ' id="terra-ov"')]
+    notes = "".join(f'<text x="{_f(float(x))}" y="{_f(float(y))}" font-size="72" fill="{NOTE}" text-anchor="middle" '
+                    f'font-family="-apple-system,Helvetica,Arial,sans-serif">{_e(t)}</text>'
+                    for x, y, t in d.get("notes", ()))
+    if notes:
+        out.append(_svg(w, h, notes))
+    out.append(_svg(w, h, '<path id="hl-halo" class="ln hl-halo" fill="none" d=""/>'
+                          '<path id="hl-line" class="ln hl-line" fill="none" d=""/>', ' id="hl-ov"'))
     return "".join(out)
+
+
+def _set_numbers(d: dict) -> dict:
+    """The header's numbers for one version: the owner's labels read right on the sheet (of n), the Terra words
+    matched, the Terra words missed because merged with another word, and the matched boxes read unlike Terra."""
+    b = d["numbers"]["boxes"][f'{d["iou"]}']
+    hl = d["numbers"].get("headline") or {}
+    return {"right": hl.get("right"), "n": hl.get("n"), "matched": b["matched"],
+            "merged": (b.get("missed_reasons") or {}).get("merged_with_word", 0),
+            "differs": d["numbers"]["reads"]["all"]["differs"]}
 
 
 def _n(v) -> str:
@@ -805,7 +832,7 @@ def _get(dct, *keys):
 
 
 def _panels(d: dict) -> str:
-    """The two top-line panels, the legend and the reasons (HTML)."""
+    """The two top-line panels and the reasons (HTML, in the folded explanations)."""
     nb = d["numbers"]["boxes"]
     lv, other = f'{d["iou"]}', [k for k in nb if k != f'{d["iou"]}']
     b = nb[lv]
@@ -816,9 +843,9 @@ def _panels(d: dict) -> str:
     rows = [(f'Terra saw <b>{_n(b["terra"])}</b> words · we found <b>{_n(b["ours"])}</b> boxes '
              f'({_signed(b["ours"] - b["terra"])} against Terra)'),
             (f'Matched to a Terra word (IoU ≥ {lv}) <b>{_n(b["matched"])}</b> ({_pct(b["matched"], b["terra"])}) · '
-             f'missed <b>{_n(b["missed"])}</b> ({_pct(b["missed"], b["terra"])}, yellow)'),
-            (f'Ours, not in Terra: read as text <b>{_n(b["ours_unmatched_text"])}</b> (green) · read as none '
-             f'<b>{_n(b["ours_unmatched_none"])}</b> (grey outlines)'),
+             f'missed <b>{_n(b["missed"])}</b> ({_pct(b["missed"], b["terra"])}, the missed words)'),
+            (f'Ours, not in Terra: read as text <b>{_n(b["ours_unmatched_text"])}</b> · read as none '
+             f'<b>{_n(b["ours_unmatched_none"])}</b> (the fragments)'),
             f'Matched : missed = <b>{_n(b["matched_to_missed"])} : 1</b>{alt}']
     if delta:
         db = _get(delta, "boxes", lv) or {}
@@ -837,8 +864,8 @@ def _panels(d: dict) -> str:
     on_labels = (f' · on the owner\'s labels whose box is matched: ours {_n(cva["ours"])} / {_n(cva["n"])}, Terra\'s '
                  f'{_n(cva["terra"])} / {_n(cva["n"])}' if cva else "")
     trows = [(f'All matched boxes, any kind, string vs Terra\'s: <b>{_n(rd["matched"])}</b> boxes{shared} · same '
-              f'<b>{_n(rd["same"])}</b> ({_pct(rd["same"], rd["matched"])}, green) · different '
-              f'<b>{_n(rd["differs"])}</b> (purple)'),
+              f'<b>{_n(rd["same"])}</b> ({_pct(rd["same"], rd["matched"])}, green pills) · different '
+              f'<b>{_n(rd["differs"])}</b> (purple pills)'),
              (f'Zoning-code forms only (Terra\'s string a printed form of the code list, our likeliest code): same '
               f'<b>{_n(cf.get("same_as_terra"))}</b> · different <b>{_n(cf.get("differs"))}</b> · '
               f'{_n(cf.get("not_a_form"))} other matched boxes{on_labels}')]
@@ -860,92 +887,305 @@ def _panels(d: dict) -> str:
     reasons = b.get("missed_reasons") or {}
     rrows = "".join(f'<tr><td><b>{_e(r.replace("_", " "))}</b></td><td class="num">{_n(reasons.get(r, 0))}</td>'
                     f'<td>{_e(d.get("reason_text", REASON_TEXT)[r])}</td></tr>' for r in REASONS)
-    legend = (f'<span class="sw" style="background:rgb{COLOURS["text_ink"]}"></span> ink the detector calls text '
-              f'(chance ≥ {TEXT_CHANCE})<br>'
-              f'<span class="sw" style="background:rgb{COLOURS["other_ink"]}"></span> other ink<br>'
-              '<span class="chip" style="border:2px solid var(--ink)">box</span> our box; arrow = reading direction; '
-              'tag = kind · chance · angle<br>'
-              f'<b style="color:var(--match)">RH-2</b> our reading = Terra\'s<br>'
-              f'<b style="color:var(--diff)">NC-2</b> <span style="color:var(--text)">(Terra: NC-3)</span> our reading '
-              'differs<br>'
-              f'<span class="chip" style="background:rgb{COLOURS["green_paper"]};border:1.5px solid {FOUND};'
-              'color:#1d2320">green shade</span> we found text Terra missed (its reading in black)<br>'
-              f'<span class="chip" style="border:1px solid {JUNK};color:{JUNK}">grey</span> our box read as no text'
-              '<br>'
-              f'<span class="chip" style="background:rgb{COLOURS["yellow_paper"]};border:1.5px dashed {MISSED};'
-              'color:#1d2320">yellow shade</span> Terra saw a word we missed, with why')
     return (f'<div class="grid"><section class="box"><h2>Boxes (whole sheet)</h2>{boxes_html}</section>'
             f'<section class="box"><h2>Text read</h2>{"<br>".join(trows)}</section>'
-            f'<section class="box"><h2>Legend</h2>{legend}</section>'
             f'<section class="box"><h2>Why we missed Terra\'s words (IoU ≥ {lv})</h2>'
             f'<table class="rs">{rrows}</table></section></div>')
 
 
 STYLE = """
-:root { --bg: #f4f5f2; --paper: #ffffff; --ink: #1d2320; --muted: #5b655f; --rule: #d7dbd4; --text: #d22222;
-  --match: #1a8a3a; --diff: #7b3fbf; --view: #e7e9e4;
-  --font: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; --mono: ui-monospace, Menlo, monospace; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #141816; --paper: #1b201d;
-  --ink: #e5eae6; --muted: #a0aaa4; --rule: #2e3531; --text: #ff6b6b; --match: #4cc274; --diff: #b48cf0;
-  --view: #0d100f; color-scheme: dark } }
-:root[data-theme="dark"] { --bg: #141816; --paper: #1b201d; --ink: #e5eae6; --muted: #a0aaa4; --rule: #2e3531;
-  --text: #ff6b6b; --match: #4cc274; --diff: #b48cf0; --view: #0d100f; color-scheme: dark }
-body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font); margin: 0; }
-.wrap { max-width: 1280px; margin: 0 auto; padding-block: 20px 40px;
+:root {
+  /* Layout: one screen.  A compact header and toolbar, the scan filling the rest; what a tap opens slides up over
+     the map on a phone and sits in a side panel on a wide screen.  Box colours: Okabe-Ito, colour-blind safe. */
+  --bg: #f2f3f0; --surface: #ffffff; --fg: #1b1f1c; --muted: #59625c; --rule: #d6dad3; --view: #e3e6e0;
+  --map-paper: #ffffff; --map-filter: none;
+  --k-code: #0072b2; --k-block: #c98200; --k-street: #009e73; --k-other: #303030; --k-frag: #8c8c8c;
+  --terra: #3f3f3f; --miss: #c2338a; --halo: rgba(255, 255, 255, .85); --sel: #ffd500; --sel-line: #111111;
+  --ok-bg: #d6efdc; --ok-fg: #0b4f23; --bad-bg: #6a3cbf; --bad-fg: #ffffff; --ti: #dd2222;
+  --pill: rgba(255, 255, 255, .95); --pill-fg: #1b1f1c; --pill-edge: rgba(0, 0, 0, .24); --shadow: rgba(0, 0, 0, .16);
+  --on: #1b1f1c; --on-fg: #ffffff;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #101311; --surface: #1a1e1b; --fg: #e5eae6; --muted: #9aa49e; --rule: #2e3530; --view: #0b0d0c;
+  --map-paper: #1a1a1a; --map-filter: invert(.9);
+  --k-code: #56b4e9; --k-block: #f0b43c; --k-street: #3ccb9c; --k-other: #e8e8e8; --k-frag: #6e6e6e;
+  --terra: #d2d2d2; --miss: #f47cc6; --halo: rgba(0, 0, 0, .8); --sel: #ffd84d; --sel-line: #ffffff;
+  --ok-bg: #143a20; --ok-fg: #a6e9bb; --bad-bg: #8659e3; --bad-fg: #ffffff; --ti: #dd2222;
+  --pill: rgba(24, 28, 25, .95); --pill-fg: #e5eae6; --pill-edge: rgba(255, 255, 255, .26); --shadow: rgba(0, 0, 0, .5);
+  --on: #e5eae6; --on-fg: #101311; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #101311; --surface: #1a1e1b; --fg: #e5eae6; --muted: #9aa49e; --rule: #2e3530; --view: #0b0d0c;
+  --map-paper: #1a1a1a; --map-filter: invert(.9);
+  --k-code: #56b4e9; --k-block: #f0b43c; --k-street: #3ccb9c; --k-other: #e8e8e8; --k-frag: #6e6e6e;
+  --terra: #d2d2d2; --miss: #f47cc6; --halo: rgba(0, 0, 0, .8); --sel: #ffd84d; --sel-line: #ffffff;
+  --ok-bg: #143a20; --ok-fg: #a6e9bb; --bad-bg: #8659e3; --bad-fg: #ffffff; --ti: #dd2222;
+  --pill: rgba(24, 28, 25, .95); --pill-fg: #e5eae6; --pill-edge: rgba(255, 255, 255, .26); --shadow: rgba(0, 0, 0, .5);
+  --on: #e5eae6; --on-fg: #101311; color-scheme: dark }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.45 var(--font); }
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; }
+button:focus-visible, #vp:focus-visible { outline: 2px solid var(--k-code); outline-offset: 2px; }
+.app { box-sizing: border-box; height: 100%; display: flex; flex-direction: column; gap: 8px; padding-block: 8px 10px;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
-h1 { font-size: 22px; margin: 0 0 4px; text-wrap: balance; }
-.sub { color: var(--muted); margin: 0 0 14px; overflow-wrap: anywhere; }
-.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 12px; }
-.box { background: var(--paper); border: 1px solid var(--rule); padding: 12px 14px; min-width: 0;
-  overflow-wrap: anywhere; }
-.box h2 { font: 600 12px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
-  margin: 0 0 8px; }
-.chip { display: inline-block; padding: 0 6px; }
-.sw { display: inline-block; width: 12px; height: 12px; vertical-align: -1px; }
-table.rs { border-collapse: collapse; width: 100%; font-size: 14px; }
-table.rs td { border-top: 1px solid var(--rule); padding: 4px 6px 4px 0; vertical-align: top;
-  overflow-wrap: normal; }
+.top { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; }
+.top h1 { order: 0; flex: 1 1 auto; min-width: 0; margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.top h1 .sid { color: var(--muted); font-weight: 500; }
+#aboutb { order: 1; }
+.nums { order: 2; flex: 1 1 100%; display: flex; flex-wrap: wrap; gap: 0 14px; color: var(--muted); font-size: 13px;
+  font-variant-numeric: tabular-nums; }
+.nums b { color: var(--fg); font-size: 15px; font-weight: 650; }
+.legend { order: 3; flex: 1 1 100%; min-width: 0; display: flex; align-items: center; gap: 9px; overflow-x: auto;
+  white-space: nowrap; font-size: 12px; color: var(--muted); scrollbar-width: none; padding: 3px 2px; }
+.legend > span { display: inline-flex; align-items: center; gap: 4px; }
+.legend .sw { width: 12px; }
+.legend .lp { font-size: 11px; line-height: 14px; }
+@media (max-width: 479px) { .wd { display: none; } }
+.legend::-webkit-scrollbar, .chips::-webkit-scrollbar { display: none; }
+.sw { display: inline-block; width: 16px; height: 0; border-top: 2.5px solid var(--c); flex: none; }
+.s-code { --c: var(--k-code); } .s-block { --c: var(--k-block); } .s-street { --c: var(--k-street); }
+.s-other { --c: var(--k-other); } .s-frag { --c: var(--k-frag); border-top-width: 1.5px; } .s-miss { --c: var(--miss); }
+.s-terra { --c: var(--terra); border-top-style: dashed; border-top-width: 1.5px; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; background: var(--ti); flex: none; }
+.lp, .pl { font: 600 12px/16px var(--font); padding: 1px 5px; border-radius: 5px; white-space: nowrap;
+  background: var(--pill); color: var(--pill-fg); box-shadow: 0 0 0 1px var(--pill-edge), 0 1px 3px var(--shadow); }
+.lp.ok, .pl.ok { background: var(--ok-bg); color: var(--ok-fg); }
+.lp.bad, .pl.bad { background: var(--bad-bg); color: var(--bad-fg); }
+.pl .ne { opacity: .8; font-weight: 500; }
+.pl { position: absolute; left: 0; top: 0; }
+.pl.miss { color: var(--miss); box-shadow: 0 0 0 1.5px var(--miss), 0 1px 3px var(--shadow); }
+.pl.tag { font: 500 11px/14px var(--mono); color: var(--muted); }
+.pl.kc-code { --kc: var(--k-code); } .pl.kc-block { --kc: var(--k-block); } .pl.kc-street { --kc: var(--k-street); }
+.pl.kc-other { --kc: var(--k-other); }
+.pl[class*="kc-"] { border-left: 3px solid var(--kc); border-radius: 3px 5px 5px 3px; }
+.pl.sel { box-shadow: 0 0 0 2.5px var(--sel), 0 1px 4px var(--shadow); }
+.bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.seg { flex: 1 1 100%; display: flex; gap: 2px; padding: 2px; background: var(--view); border: 1px solid var(--rule);
+  border-radius: 12px; }
+.seg button { flex: 1 1 0; min-height: 40px; border: 0; border-radius: 10px; background: none; color: var(--muted);
+  font-weight: 600; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--fg); box-shadow: 0 1px 3px var(--shadow); }
+.chips { flex: 1 1 100%; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; }
+.chip { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 13px;
+  border-radius: 20px; border: 1px solid var(--rule); background: var(--surface); font-size: 13px; font-weight: 550;
+  cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--on); color: var(--on-fg); border-color: var(--on); }
+.chip .auto, .chip .cnt { font-weight: 400; opacity: .7; font-variant-numeric: tabular-nums; }
+.tb, .ib { min-width: 40px; min-height: 40px; border-radius: 10px; border: 1px solid var(--rule);
+  background: var(--surface); cursor: pointer; }
+.tb { padding: 0 12px; font-size: 13px; font-weight: 600; }
+.ib { font-size: 20px; line-height: 1; padding: 0; }
+.work { position: relative; flex: 1 1 auto; min-height: 260px; display: flex; gap: 12px; }
+#vp { position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden; touch-action: none; background: var(--view);
+  border: 1px solid var(--rule); border-radius: 12px; cursor: grab; user-select: none; -webkit-user-select: none; }
+#vp.drag { cursor: grabbing; }
+#stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; background: var(--map-paper); }
+#stage img { position: absolute; image-rendering: pixelated; pointer-events: none; -webkit-user-drag: none;
+  max-width: none; }
+#stage img.base { filter: var(--map-filter); }
+#stage img.ti { display: none; }
+#vp.on-ti #stage img.ti { display: block; }
+.setov { position: absolute; left: 0; top: 0; }
+.ov { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+.ln { vector-effect: non-scaling-stroke; fill: none; stroke-linejoin: round; stroke-width: 1.5px; }
+.k-code { stroke: var(--k-code); } .k-block { stroke: var(--k-block); } .k-street { stroke: var(--k-street); }
+.k-other { stroke: var(--k-other); } .k-frag { stroke: var(--k-frag); stroke-width: 1px; }
+.terra { stroke: var(--terra); stroke-width: 1px; stroke-dasharray: 3 3; }
+.halo { stroke: var(--halo); stroke-width: 5px; } .miss { stroke: var(--miss); stroke-width: 2.5px; }
+.hl-halo { stroke: var(--sel); stroke-width: 8px; } .hl-line { stroke: var(--sel-line); stroke-width: 2px; }
+.L-frags, .L-diff, .L-missed, #terra-ov { display: none; }
+#vp.on-frags .L-frags, #vp.on-missed .L-missed, #vp.f-diff .L-diff { display: inline; }
+#vp.on-terra #terra-ov { display: block; }
+#vp.f-diff .L-boxes { display: none; }
+#lab { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.xm { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+.xm::before, .xm::after { content: ""; position: absolute; background: var(--sel-line);
+  box-shadow: 0 0 0 1.5px var(--sel); }
+.xm::before { left: -9px; top: -1px; width: 18px; height: 2px; }
+.xm::after { left: -1px; top: -9px; width: 2px; height: 18px; }
+.zl { position: absolute; left: 8px; top: 8px; font: 600 12px/1 var(--mono); padding: 6px 7px; border-radius: 8px;
+  background: var(--pill); color: var(--muted); box-shadow: 0 0 0 1px var(--pill-edge); pointer-events: none; }
+.ctl { position: absolute; right: 8px; top: 8px; display: flex; flex-direction: column; gap: 6px; }
+.ctl button { width: 40px; height: 40px; border-radius: 10px; border: 1px solid var(--rule); background: var(--surface);
+  font-size: 20px; line-height: 1; cursor: pointer; box-shadow: 0 1px 3px var(--shadow); padding: 0; }
+.ctl #zfit { font-size: 12px; font-weight: 650; }
+@media (pointer: coarse) { .ctl #zin, .ctl #zout { display: none; } }
+.nav { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); display: flex;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 12px; box-shadow: 0 2px 10px var(--shadow);
+  overflow: hidden; max-width: calc(100% - 20px); }
+.nav button { min-width: 46px; min-height: 42px; border: 0; background: none; font-size: 22px; line-height: 1;
+  cursor: pointer; padding: 0; }
+.nav .navc { font-size: 13px; padding: 0 12px; white-space: nowrap; border-left: 1px solid var(--rule);
+  border-right: 1px solid var(--rule); }
+#panel { position: absolute; left: 0; right: 0; bottom: 0; max-height: 52%; overflow: auto;
+  overscroll-behavior: contain;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: 14px 14px 12px 12px;
+  box-shadow: 0 -6px 24px var(--shadow); display: none; z-index: 5; }
+#panel.open { display: block; }
+.work.open .nav { display: none; }
+.ph { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 6px; padding: 8px 8px 8px 12px;
+  background: var(--surface); border-bottom: 1px solid var(--rule); }
+.ph h2 { flex: 1 1 auto; min-width: 0; margin: 0; font-size: 14px; font-weight: 650; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.ph .pos { font: 600 13px var(--mono); color: var(--muted); }
+.muted, .sub { color: var(--muted); font-weight: 400; }
+.pb { padding: 10px 12px 14px; }
+.vs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; margin: 0 0 10px; }
+.vs .lp { font-size: 14px; line-height: 20px; padding: 2px 8px; }
+.vs .k { color: var(--muted); font-size: 12px; }
+.why { margin: 0 0 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
+.why .k { color: var(--muted); font-size: 12px; }
+.kv { width: 100%; border-collapse: collapse; font-size: 13px; }
+.kv th { text-align: left; font-weight: 500; color: var(--muted); padding: 6px 10px 6px 0; vertical-align: top;
+  white-space: nowrap; border-top: 1px solid var(--rule); }
+.kv td { padding: 6px 0; border-top: 1px solid var(--rule); overflow-wrap: anywhere; }
+.kv .tb { margin-top: 4px; }
+.cause { display: inline-block; flex: none; font: 600 11px/1 var(--font); padding: 4px 8px; border-radius: 999px;
+  background: var(--view); border: 1px solid var(--rule); white-space: nowrap; }
+.cf { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 6px; }
+.cf button { min-height: 40px; padding: 0 12px; border-radius: 20px; border: 1px solid var(--rule);
+  background: var(--surface); font-size: 13px; cursor: pointer; }
+.cf button[aria-pressed="true"] { background: var(--on); color: var(--on-fg); border-color: var(--on); }
+.ml { list-style: none; margin: 0; padding: 0 0 6px; }
+.ml button { width: 100%; min-height: 44px; display: flex; align-items: center; gap: 10px; padding: 6px 12px;
+  border: 0; border-top: 1px solid var(--rule); background: none; text-align: left; cursor: pointer; font-size: 14px; }
+.ml button[aria-current="true"] { background: var(--view); }
+.ml .mi { flex: 1 1 auto; min-width: 0; }
+.ml .mi b { font-weight: 650; }
+.empty { margin: 0; padding: 12px; color: var(--muted); }
+#about { flex: none; max-height: 50%; overflow: auto; background: var(--surface); border: 1px solid var(--rule);
+  border-radius: 12px; padding: 12px 14px; font-size: 13.5px; }
+#about h2 { font-size: 15px; margin: 0 0 6px; }
+#about h3 { font: 600 12px/1.2 var(--font); letter-spacing: .06em; text-transform: uppercase; color: var(--muted);
+  margin: 14px 0 6px; }
+#about p, #about li { max-width: 78ch; overflow-wrap: anywhere; }
+#about ul { padding-left: 18px; margin: 0; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr)); gap: 10px;
+  margin-top: 12px; }
+.box { border: 1px solid var(--rule); padding: 10px 12px; min-width: 0; overflow-wrap: anywhere; border-radius: 8px; }
+.box h2 { font: 600 12px/1.2 var(--mono) !important; letter-spacing: .06em; text-transform: uppercase;
+  color: var(--muted); margin: 0 0 8px !important; }
+.tblwrap { overflow-x: auto; }
+table.rs, table.cmp { border-collapse: collapse; width: 100%; font-size: 13px; }
+table.rs td, table.cmp td, table.cmp th { border-top: 1px solid var(--rule); padding: 4px 8px 4px 0;
+  vertical-align: top;
+  text-align: left; }
+table.cmp th { font-weight: 600; white-space: nowrap; } table.cmp td { font-variant-numeric: tabular-nums; }
 table.rs td:first-child, td.num { white-space: nowrap; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; padding-right: 10px; }
-.viewer { margin-top: 12px; border: 1px solid var(--rule); background: var(--paper); }
-.bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px;
-  border-bottom: 1px solid var(--rule); }
-.bar button { font: 600 14px var(--font); min-width: 40px; min-height: 36px; padding: 0 10px; border-radius: 6px;
-  border: 1px solid var(--rule); background: var(--bg); color: var(--ink); cursor: pointer; }
-.bar .hint { color: var(--muted); font-size: 13px; }
-#vp { position: relative; height: min(78vh, 900px); overflow: hidden; touch-action: none; background: var(--view);
-  cursor: grab; user-select: none; -webkit-user-select: none; }
-#vp.drag { cursor: grabbing; }
-#stage { position: absolute; left: 0; top: 0; transform-origin: 0 0; background: #fff; }
-#stage img { position: absolute; image-rendering: pixelated; pointer-events: none; -webkit-user-drag: none; }
-#ov, .ovl { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
-#ov .ln, .ovl .ln { vector-effect: non-scaling-stroke; }
-#stage.far .lbl, #stage.mid .tag { display: none; }
-#info { position: absolute; left: 8px; right: 8px; bottom: 8px; max-height: 46%; overflow: auto; display: none;
-  background: var(--paper); color: var(--ink); border: 1px solid var(--rule); border-radius: 8px; padding: 10px 12px;
-  font-size: 13px; box-shadow: 0 4px 18px rgba(0,0,0,.25); cursor: auto; }
-#info.on { display: block; }
-#info h3 { font-size: 14px; margin: 6px 0 4px; }
-#info table { border-collapse: collapse; width: 100%; }
-#info td { padding: 2px 6px 2px 0; vertical-align: top; border-top: 1px solid var(--rule); }
-#info td:first-child { color: var(--muted); white-space: nowrap; }
-#info .x { float: right; border: 0; background: none; color: var(--ink); font-size: 20px; cursor: pointer;
-  min-width: 36px; min-height: 32px; }
-@media (min-width: 900px) { #info { left: auto; width: 380px; top: 8px; max-height: none; } }
-.models { color: var(--muted); font-size: 13px; margin-top: 12px; overflow-wrap: anywhere; }
+.models { color: var(--muted); font-size: 12.5px; margin-top: 12px; overflow-wrap: anywhere; }
+@media (min-width: 960px) {
+  .top { flex-wrap: nowrap; } .top h1 { flex: none; }
+  .nums { order: 1; flex: 0 1 auto; } .legend { order: 2; flex: 0 1 auto; } #aboutb { order: 3; margin-left: auto; }
+  .seg { flex: none; width: 340px; } .chips { flex: 1 1 0; }
+  #panel { position: static; display: block; width: 360px; flex: none; max-height: none; box-shadow: none;
+    border-radius: 12px; }
+  .work.open .nav { display: flex; }
+  .xp { display: none; }
+}
 """
 
-SCRIPT = """
+SCRIPT = r"""
 (function () {
+  'use strict';
   const D = JSON.parse(document.getElementById('data').textContent);
-  const W = D.shape[1], H = D.shape[0], LBL = %(labels)s, TAGS = %(tags)s, MAXS = %(maxs)s;
-  const vp = document.getElementById('vp'), st = document.getElementById('stage');
-  const info = document.getElementById('info'), zl = document.getElementById('zl');
-  let s = 1, tx = 0, ty = 0, minS = 0.05;
+  const W = D.shape[1], H = D.shape[0], MAXS = D.max_scale, READ_FROM = D.readings_from;
+  const $ = id => document.getElementById(id);
+  const vp = $('vp'), st = $('stage'), lab = $('lab'), panel = $('panel'), work = $('work'), zl = $('zl');
+  const hlHalo = $('hl-halo'), hlLine = $('hl-line'), nav = $('nav'), navc = $('navc'), xm = $('xm');
+  const KIND = { zoning: 'code', code: 'code', block: 'block', street: 'street', other: 'other' };
+  const KIND_NAME = { code: 'Zoning code', block: 'Block number', street: 'Street name', other: 'Other text' };
+  const kindOf = r => KIND[r.kind] || 'other';
+  const ENT = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
+  const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ENT[c]);
+  const f2 = v => v == null ? '–' : (+v).toFixed(2);
+  const pc = v => v == null ? '–' : Math.round(100 * v) + '%';
+  const wide = () => window.matchMedia('(min-width: 960px)').matches;
+
+  // each outline's bounding box, area and length, once
+  function prep(r, t) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, a = 0;
+    const p = r.poly;
+    for (let i = 0; i < p.length; i++) {
+      const x = p[i][0], y = p[i][1], q = p[(i + 1) % p.length];
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      a += x * q[1] - q[0] * y;
+    }
+    r._t = t; r._bb = [x0, y0, x1, y1]; r._area = Math.abs(a) / 2; r._len = Math.max(x1 - x0, y1 - y0);
+  }
+  const ids = {};
+  for (const k of D.order) {
+    const S = D.sets[k], m = ids[k] = new Map();
+    S.boxes.forEach(b => { prep(b, 'box'); m.set(b.id, b); });
+    S.missed.forEach(t => { prep(t, 'miss'); m.set(t.id, t); });
+    S.missed.forEach(t => { const b = t.best_box && m.get(t.best_box); if (b) (b._missed = b._missed || []).push(t); });
+    S.wrong = (S.labels || []).filter(l => !l.right);
+  }
+  D.terra.forEach(w => prep(w, 'terra'));
+
+  // the layers, remembered in this browser only
+  const KEY = 'sfzoning-wordread-review-layers';
+  const L = { readings: null, missed: false, terra: false, textink: false, frags: false, details: false, diff: false };
+  try {
+    const v = JSON.parse(localStorage.getItem(KEY) || 'null');
+    if (v && typeof v === 'object') for (const k in L) if (k in v) L[k] = v[k];
+  } catch (e) { /* no storage: the defaults */ }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(L)); } catch (e) { /* no storage */ } }
+  let key = D.order[0], s = 1, tx = 0, ty = 0, minS = 0.05;
+  let sel = null, navI = -1, causeF = null, mode = 'list';
+  const S = () => D.sets[key];
+  const readingsOn = () => L.readings == null ? s >= READ_FROM : !!L.readings;
+  const list = () => causeF ? S().wrong.filter(l => l.cause === causeF) : S().wrong;
+
+  const chips = Array.from(document.querySelectorAll('.chip[data-layer]'));
+  function syncChips() {
+    chips.forEach(c => {
+      const k = c.dataset.layer, on = k === 'readings' ? readingsOn() : !!L[k];
+      c.setAttribute('aria-pressed', String(on));
+      const a = c.querySelector('.auto');
+      if (a) a.hidden = L.readings != null;
+    });
+    vp.classList.toggle('on-missed', !!L.missed); vp.classList.toggle('on-terra', !!L.terra);
+    vp.classList.toggle('on-ti', !!L.textink); vp.classList.toggle('on-frags', !!L.frags);
+    vp.classList.toggle('f-diff', !!L.diff);
+  }
+  chips.forEach(c => c.addEventListener('click', () => {
+    const k = c.dataset.layer;
+    if (k === 'readings') L.readings = !readingsOn(); else L[k] = !L[k];
+    save(); syncChips(); schedule();
+  }));
+
+  function syncSet() {
+    const n = S().nums;
+    $('n-right').textContent = n.right == null ? '–' : n.right + '/' + n.n;
+    $('n-match').textContent = n.matched.toLocaleString('en-US');
+    $('n-merged').textContent = n.merged.toLocaleString('en-US');
+    const nd = $('n-diff');
+    if (nd) nd.textContent = n.differs.toLocaleString('en-US');
+    document.querySelectorAll('.setov').forEach(e => { e.hidden = e.dataset.set !== key; });
+    document.querySelectorAll('.seg button')
+      .forEach(b => b.setAttribute('aria-pressed', String(b.dataset.set === key)));
+  }
+  document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+    if (b.dataset.set === key) return;
+    const keep = sel && sel.label ? sel.label.k : null;
+    key = b.dataset.set; syncSet();
+    if (causeF && !list().length) causeF = null;
+    sel = null; navI = -1; drawHL();
+    const i = keep == null ? -1 : list().findIndex(l => l.k === keep);
+    if (i >= 0) openMistake(i, false);
+    else if (mode === 'detail') close();
+    else { renderPanel(); renderNav(); schedule(); }
+  }));
+
+  // pan and zoom (the view stays when the version changes)
   function apply() {
     st.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + s + ')';
-    st.classList.toggle('far', s < LBL); st.classList.toggle('mid', s < TAGS);
     zl.textContent = (s >= 1 ? s.toFixed(1) : s.toFixed(2)) + 'x';
+    syncChips(); schedule();
   }
   function fit() {
     const r = vp.getBoundingClientRect();
@@ -957,9 +1197,9 @@ SCRIPT = """
     tx = px - (px - tx) * ns / s; ty = py - (py - ty) * ns / s; s = ns; apply();
   }
   function centre(f) { const r = vp.getBoundingClientRect(); zoomAt(r.width / 2, r.height / 2, f); }
-  document.getElementById('zin').onclick = () => centre(2);
-  document.getElementById('zout').onclick = () => centre(0.5);
-  document.getElementById('zfit').onclick = fit;
+  $('zin').onclick = () => centre(2);
+  $('zout').onclick = () => centre(0.5);
+  $('zfit').onclick = fit;
   vp.addEventListener('wheel', e => {
     e.preventDefault();
     const r = vp.getBoundingClientRect();
@@ -967,7 +1207,7 @@ SCRIPT = """
   }, { passive: false });
   const pts = new Map(); let moved = 0, startT = 0, pinch = null;
   vp.addEventListener('pointerdown', e => {
-    if (info.contains(e.target)) return;
+    if (e.target.closest('button')) return;
     vp.setPointerCapture(e.pointerId);
     pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
     if (pts.size === 1) { moved = 0; startT = Date.now(); vp.classList.add('drag'); }
@@ -998,130 +1238,486 @@ SCRIPT = """
   }
   vp.addEventListener('pointerup', up); vp.addEventListener('pointercancel', up);
   vp.addEventListener('dblclick', e => {
+    if (e.target.closest('button')) return;
     const r = vp.getBoundingClientRect(); zoomAt(e.clientX - r.left, e.clientY - r.top, 2);
   });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && sel) close(); });
+
+  // a tap: the smallest outline under it, else the nearest within 12 screen px
   function inside(poly, x, y) {
     let c = false;
     for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
-      const [xi, yi] = poly[i], [xj, yj] = poly[j];
+      const xi = poly[i][0], yi = poly[i][1], xj = poly[j][0], yj = poly[j][1];
       if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
     }
     return c;
   }
-  function near(poly, x, y, tol) {
-    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-    for (const [px, py] of poly) {
-      x0 = Math.min(x0, px); y0 = Math.min(y0, py); x1 = Math.max(x1, px); y1 = Math.max(y1, py);
+  function shownBox(b) { return b.status === 'none' ? !!L.frags : !(L.diff && b.colour !== 'purple'); }
+  function hit(x, y) {
+    const tol = 12 / s, A = S(), cands = [];
+    A.boxes.forEach(b => { if (shownBox(b)) cands.push([b, b.status === 'none' ? 1 : 0]); });
+    if (L.missed) A.missed.forEach(m => cands.push([m, 0]));
+    if (L.terra) D.terra.forEach(w => cands.push([w, 2]));
+    let best = null, bk = null;
+    for (const [r, rank] of cands) {
+      const bb = r._bb;
+      if (x < bb[0] - tol || x > bb[2] + tol || y < bb[1] - tol || y > bb[3] + tol) continue;
+      const inn = inside(r.poly, x, y);
+      const dist = inn ? 0 : Math.hypot(Math.max(bb[0] - x, 0, x - bb[2]), Math.max(bb[1] - y, 0, y - bb[3]));
+      const k = inn ? [0, rank, r._area] : [1, dist, rank];
+      if (!bk || k[0] < bk[0] || (k[0] === bk[0] && (k[1] < bk[1] || (k[1] === bk[1] && k[2] < bk[2])))) {
+        best = r; bk = k;
+      }
     }
-    if (x < x0 - tol || x > x1 + tol || y < y0 - tol || y > y1 + tol) return false;
-    return inside(poly, x, y) || tol > 0;
+    return best;
   }
-  const ENT = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' };
-  const esc = t => String(t == null ? '' : t).replace(/[&<>"]/g, c => ENT[c]);
-  const f2 = v => v == null ? '–' : (+v).toFixed(2);
-  const pc = v => v == null ? '–' : Math.round(100 * v) + '%%';
-  const row = (k, v) => '<tr><td>' + k + '</td><td>' + v + '</td></tr>';
+  function tap(x, y) {
+    const r = hit(x, y);
+    if (!r) { if (sel || (!wide() && panel.classList.contains('open'))) close(); return; }
+    const i = r._t === 'box' ? list().findIndex(l => l.box === r.id) : -1;
+    if (i >= 0) openMistake(i, false); else { navI = -1; select(r, null); }
+  }
+
+  // the highlight, the panel and the wrong labels
+  const pathOf = p => 'M' + p.map(q => q[0] + ' ' + q[1]).join('L') + 'Z';
+  function drawHL() {
+    const d = sel && sel.rec ? pathOf(sel.rec.poly) : '';
+    hlHalo.setAttribute('d', d); hlLine.setAttribute('d', d);
+  }
+  function openPanel() { panel.classList.add('open'); work.classList.add('open'); panel.scrollTop = 0; }
+  function select(rec, label) {
+    sel = { rec: rec, label: label }; mode = 'detail';
+    drawHL(); renderPanel(); openPanel(); renderNav(); schedule();
+  }
+  function close() {
+    sel = null; mode = 'list'; drawHL();
+    if (wide()) renderPanel(); else { panel.classList.remove('open'); work.classList.remove('open'); }
+    renderNav(); schedule();
+  }
+  function showList() { sel = null; mode = 'list'; drawHL(); renderPanel(); openPanel(); renderNav(); schedule(); }
+  function openMistake(i, move) {
+    const items = list();
+    if (!items.length) return;
+    navI = ((i % items.length) + items.length) % items.length;
+    const l = items[navI], b = l.box ? ids[key].get(l.box) : null;
+    if (move !== false) focusOn(b ? b._bb : [l.x - 30, l.y - 15, l.x + 30, l.y + 15]);
+    select(b, l);
+  }
+  function focusOn(bb) {
+    const r = vp.getBoundingClientRect(), avail = wide() ? r.height : r.height * 0.46;
+    const bw = Math.max(bb[2] - bb[0], 24), bh = Math.max(bb[3] - bb[1], 12);
+    s = Math.min(MAXS, Math.max(READ_FROM, Math.min(4, 0.6 * r.width / bw, 0.6 * avail / bh)));
+    tx = r.width / 2 - (bb[0] + bb[2]) / 2 * s; ty = avail / 2 - (bb[1] + bb[3]) / 2 * s; apply();
+  }
+  function renderNav() {
+    const all = S().wrong, items = list();
+    nav.hidden = !all.length;
+    navc.innerHTML = navI >= 0 ? '<b>' + (navI + 1) + '</b> / ' + items.length + ' wrong'
+      : '<b>' + items.length + '</b> wrong label' + (items.length === 1 ? '' : 's');
+  }
+  nav.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const a = b.dataset.act;
+    if (a === 'prev') openMistake(navI < 0 ? -1 : navI - 1);
+    else if (a === 'next') openMistake(navI + 1);
+    else showList();
+  });
+  panel.addEventListener('click', e => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    const act = b.dataset.act;
+    if (act === 'close') close();
+    else if (act === 'prev') openMistake(navI - 1);
+    else if (act === 'next') openMistake(navI + 1);
+    else if (act === 'list') showList();
+    else if (act === 'item') openMistake(+b.dataset.i);
+    else if (act === 'cause') { causeF = b.dataset.c || null; navI = -1; renderPanel(); renderNav(); }
+    else if (act === 'open') {
+      const r = ids[key].get(b.dataset.id);
+      if (r) { navI = -1; focusOn(r._bb); select(r, null); }
+    }
+  });
+  const causeChip = l => l.cause ? '<span class="cause">' + esc(D.causes[l.cause] || l.cause) + '</span>' : '';
+  const row = (k, v) => '<tr><th>' + k + '</th><td>' + v + '</td></tr>';
+  function renderPanel() { panel.innerHTML = mode === 'detail' && sel ? detailHtml() : listHtml(); }
+  function listHtml() {
+    const A = S(), all = A.wrong, items = list();
+    let h = '<div class="ph"><h2>Labels read wrong <span class="muted">' + all.length +
+      (A.nums.n != null ? ' of ' + A.nums.n : '') + '</span></h2>' +
+      '<button class="ib xp" data-act="close" aria-label="Close">×</button></div>';
+    if (!(A.labels || []).length) return h + '<p class="empty">No answered labels on this sheet.</p>';
+    if (!all.length) return h + '<p class="empty">This version reads every answered label right.</p>';
+    const counts = {};
+    all.forEach(l => { if (l.cause) counts[l.cause] = (counts[l.cause] || 0) + 1; });
+    const order = Object.keys(D.causes).filter(c => counts[c]);
+    if (order.length) {
+      h += '<div class="cf" role="group" aria-label="Cause"><button data-act="cause" data-c="" aria-pressed="' +
+        String(!causeF) + '">All ' + all.length + '</button>' + order.map(c => '<button data-act="cause" data-c="' + c +
+        '" aria-pressed="' + String(causeF === c) + '">' + esc(D.causes[c]) + ' ' + counts[c] + '</button>').join('') +
+        '</div>';
+    }
+    return h + '<ol class="ml">' + items.map((l, i) => '<li><button data-act="item" data-i="' + i + '"' +
+      (i === navI ? ' aria-current="true"' : '') + '>' + causeChip(l) + '<span class="mi"><b>' + esc(l.truth) +
+      '</b> <span class="sub">read</span> ' +
+      (l.read ? '<b>' + esc(l.read) + '</b>' : '<span class="sub">no box</span>') +
+      '</span></button></li>').join('') + '</ol>';
+  }
+  function detailHtml() {
+    const r = sel.rec, l = sel.label, items = list();
+    const title = l ? 'Your label' : !r ? '' : r._t === 'box' ? KIND_NAME[kindOf(r)] + ' box' :
+      r._t === 'miss' ? 'Missed word' : 'Terra’s word';
+    let h = '<div class="ph">';
+    if (l && navI >= 0) h += '<button class="ib" data-act="prev" aria-label="Previous wrong label">‹</button>' +
+      '<span class="pos">' + (navI + 1) + '/' + items.length + '</span>' +
+      '<button class="ib" data-act="next" aria-label="Next wrong label">›</button>';
+    h += '<h2>' + esc(title) + '</h2>';
+    if (l) h += '<button class="tb" data-act="list">List</button>';
+    h += '<button class="ib" data-act="close" aria-label="Close">×</button></div><div class="pb">';
+    if (l) h += labelHtml(l);
+    if (r && r._t === 'box') h += boxHtml(r);
+    else if (r && r._t === 'miss') h += missHtml(r);
+    else if (r && r._t === 'terra') h += terraHtml(r);
+    return h + '</div>';
+  }
+  function labelHtml(l) {
+    return '<div class="vs"><span class="k">your answer</span><span class="lp">' + esc(l.truth) + '</span>' +
+      '<span class="k">our code</span>' + (l.read ? '<span class="lp ' + (l.right ? 'ok' : 'bad') + '">' +
+      esc(l.read) + '</span>' : '<span class="lp">no box</span>') +
+      (l.terra != null ? '<span class="k">Terra</span><span class="lp">' + esc(l.terra) + '</span>' : '') + '</div>' +
+      (l.cause ? '<p class="why"><span class="k">why</span> ' + causeChip(l) + (l.note ? ' <span class="sub">' +
+        esc(l.note) + '</span>' : '') + '</p>' : '');
+  }
+  function readingPills(b) {
+    const o = b.shown || '∅';
+    const note = t => ' <span class="sub">' + t + '</span>';
+    const pill = (cls, t) => '<span class="lp' + cls + '">' + esc(t) + '</span>';
+    if (b.status === 'matched' && b.colour === 'green') return pill(' ok', o) + note('= Terra');
+    if (b.status === 'matched') return pill(' bad', o + ' ≠ ' + b.terra) + note('ours ≠ Terra’s');
+    if (b.status === 'text') return pill('', b.shown || '?') + note('Terra has no word here');
+    return '<span class="sub">no text: a fragment</span>';
+  }
   function boxHtml(b) {
     const kinds = Object.entries(b.p_kind || {}).sort((a, c) => c[1] - a[1])
       .map(([k, p]) => k + ' ' + f2(p)).join(' · ');
     const top3 = (b.top3 || []).map(([h, p]) => esc(h) + ' ' + f2(p)).join(' · ');
-    const what = { matched: 'matched to a Terra word', text: 'not in Terra, read as text (green)',
-                   none: 'not in Terra, read as no text (grey)' }[b.status];
-    const col = b.colour === 'green' ? 'var(--match)' : b.colour === 'purple' ? 'var(--diff)' : 'var(--ink)';
-    return '<h3>Our box ' + esc(b.id) + ': ' + what + '</h3><table>' +
-      row('reading', '<b style="color:' + col + '">' + (esc(b.shown) || '∅ (no text)') + '</b>' +
-          (b.colour === 'purple' ? ' <span style="color:var(--text)">(Terra: ' + esc(b.terra) + ')</span>' : '')) +
-      row('top three', top3 || '–') +
-      row('best paths', '0°: “' + esc(b.best_0) + '” · 180°: “' + esc(b.best_180) + '” · p(180°) ' +
-          f2(b.p_180)) +
-      row('reading direction', b.angle + '° (axis ' + b.axis + '°)') +
-      row('kind', kinds || '–') +
-      row('chance', 'mean ' + f2(b.chance) + ' on its ' + b.ink_px + ' ink px · grouped at ' + b.level) +
-      row('size', b.length + ' × ' + b.height + ' px') +
-      row('Terra', b.terra == null ? 'no word overlaps' :
-          '“' + esc(b.terra) + '” (' + esc(b.terra_kind) + ') · IoU ' + f2(b.iou)) +
-      row('quarter', b.quarter + ' (read by its fold reader)') + '</table>';
+    const ans = (b.answers || [])
+      .map(a => '<b>' + esc(a.truth) + '</b> ' + (a.right ? 'read right' : 'read wrong')).join('<br>');
+    const missed = (b._missed || [])
+      .map(m => '“' + esc(m.text) + '”: ' + esc(D.reason_short[m.reason] || m.reason)).join('<br>');
+    return '<table class="kv">' +
+      row('Reading', readingPills(b)) +
+      (ans ? row('Your answer', ans) : '') +
+      row('Kind', esc(KIND_NAME[kindOf(b)].toLowerCase()) +
+          (b.split_kind ? ' <span class="sub">(the split’s)</span>' : '') +
+          (kinds ? '<br><span class="sub">' + kinds + '</span>' : '')) +
+      row('Chance', 'mean ' + f2(b.chance) + ' on ' + esc(b.ink_px) + ' ink px') +
+      row('Angle', esc(b.angle) + '° reading direction <span class="sub">· axis ' + esc(b.axis) + '° · p(180°) ' +
+          f2(b.p_180) + '</span>') +
+      row('Reader', (top3 || '–') + '<br><span class="sub">0°: “' + esc(b.best_0) + '” · 180°: “' + esc(b.best_180) +
+          '”</span>') +
+      row('Terra', b.terra == null ? 'no Terra word overlaps' : '“' + esc(b.terra) + '” <span class="sub">' +
+          esc(b.terra_kind) + ' · IoU ' + f2(b.iou) + (b.status === 'matched' ? '' : ', no match') + '</span>') +
+      (missed ? row('Missed here', missed) : '') +
+      row('Box', esc(b.id) + ' <span class="sub">· ' + esc(String(b.quarter || '').toUpperCase()) + ' · ' +
+          esc(b.length) +
+          ' × ' + esc(b.height) + ' px · grouped at ' + esc(b.level) + '</span>') + '</table>';
   }
   function missHtml(m) {
     const d = m.details || {}, r = d.reading;
-    return '<h3>Terra word we missed: “' + esc(m.text) + '” (' + esc(m.kind) + ')</h3><table>' +
-      row('why', '<b>' + esc(m.reason.replace(/_/g, ' ')) + '</b>: ' + esc(D.reasons[m.reason])) +
-      row('how close', 'highest chance on its ink ' + pc(d.max_chance) + ' · mean ' + pc(d.mean_chance) + ' · ' +
-          pc(d.share_above) + ' of its ' + d.ink_px + ' ink px at or above ' + d.level) +
-      row('components', d.components + ' hold its ink at the level' + (d.component ? '; the main one ' +
+    return '<div class="vs"><span class="lp" style="box-shadow:0 0 0 1.5px var(--miss)">' + esc(m.text) + '</span>' +
+      '<span class="k">' + esc(m.kind) + ', no box matches it</span></div><table class="kv">' +
+      row('Why', '<b>' + esc(D.reason_short[m.reason] || m.reason) + '</b>: ' + esc(D.reasons[m.reason])) +
+      row('How close', 'highest chance on its ink ' + pc(d.max_chance) + ' · mean ' + pc(d.mean_chance) + ' · ' +
+          pc(d.share_above) + ' of its ' + esc(d.ink_px) + ' ink px at or above ' + esc(d.level)) +
+      row('Components', esc(d.components) + ' hold its ink' + (d.component ? '; the main one ' +
           Math.round(d.component_px) + ' px long (the word ' + Math.round(d.word_length_px) + ' × ' +
-          Math.round(d.word_height_px) + ' px), ' + d.component_ink_px + ' ink px, ' + pc(d.component_share) +
-          ' of its ink' : '')) +
-      row('that component also holds', (d.merged_with || []).length ?
-          (d.merged_with || []).map(t => '“' + esc(t) + '”').join(', ') : 'no other Terra word') +
-      row('our best box', m.best_box ? esc(m.best_box) + ' · IoU ' + f2(m.best_iou) : 'none overlaps') +
-      row('reader at Terra\\'s box', r ? '“' + esc(r.text) + '” · ' + esc(r.top) + ' ' + f2(r.p_top) +
-          ' · code ' + esc(r.code) + ' ' + f2(r.p_code) + ' · p(180°) ' + f2(r.p_180) : '–') +
-      row('quarter', m.quarter) + '</table>';
+          Math.round(d.word_height_px) + ' px)' : '')) +
+      row('Also holds', (d.merged_with || []).length ? d.merged_with.map(t => '“' + esc(t) + '”').join(', ') :
+          'no other Terra word') +
+      row('Our best box', m.best_box ? esc(m.best_box) + ' <span class="sub">· IoU ' + f2(m.best_iou) + '</span><br>' +
+          '<button class="tb" data-act="open" data-id="' + esc(m.best_box) + '">Open that box</button>' :
+          'none overlaps') +
+      row('Reader at Terra’s box', r ? '“' + esc(r.text) + '” · ' + esc(r.top) + ' ' + f2(r.p_top) +
+          (r.code ? ' · code ' + esc(r.code) + ' ' + f2(r.p_code) : '') : '–') +
+      row('Quarter', esc(String(m.quarter || '').toUpperCase())) + '</table>';
   }
-  function tap(x, y) {
-    const tol = 4 / s;
-    let hits = D.missed.filter(m => near(m.poly, x, y, 0)).map(missHtml)
-      .concat(D.boxes.filter(b => near(b.poly, x, y, 0)).map(boxHtml));
-    if (!hits.length) hits = D.missed.filter(m => near(m.poly, x, y, tol)).map(missHtml)
-      .concat(D.boxes.filter(b => near(b.poly, x, y, tol)).map(boxHtml));
-    if (!hits.length) { info.classList.remove('on'); return; }
-    info.innerHTML = '<button class="x" aria-label="Close">×</button><div class="pt">page px ' + Math.round(x) + ', ' +
-      Math.round(y) + '</div>' + hits.join('');
-    info.querySelector('.x').onclick = () => info.classList.remove('on');
-    info.classList.add('on');
+  function terraHtml(w) {
+    const m = ids[key].get('t' + w.id.slice(1));
+    return '<div class="vs"><span class="lp">' + esc(w.text) + '</span><span class="k">' + esc(w.kind) +
+      '</span></div>' +
+      '<table class="kv">' + row('This version', m ? 'misses it: ' + esc(D.reason_short[m.reason] || m.reason) +
+      '<br><button class="tb" data-act="open" data-id="' + esc(m.id) + '">Why</button>' : 'a box matches it') +
+      '</table>';
   }
-  function fromHash() {
-    const m = /view=([\\d.]+),([\\d.]+),([\\d.]+)/.exec(location.hash);
-    if (!m) return false;
+
+  // the screen layer: upright pills of one size, greedily placed, none overlapping
+  const cv = document.createElement('canvas').getContext('2d');
+  const FAMILY = getComputedStyle(document.body).fontFamily;
+  const MONO = getComputedStyle(document.documentElement).getPropertyValue('--mono').trim() || 'monospace';
+  const FONT = '600 12px ' + FAMILY, TFONT = '500 11px ' + MONO;
+  const widths = new Map();
+  function textW(t, font) {
+    const k = font + '|' + t;
+    let w = widths.get(k);
+    if (w == null) { cv.font = font; w = cv.measureText(t).width; widths.set(k, w); }
+    return w;
+  }
+  const pool = [];
+  let queued = false;
+  function schedule() { if (!queued) { queued = true; requestAnimationFrame(layout); } }
+  const CELL = 64, GAP = 3, MAXL = 400;
+  function Grid() {
+    const m = new Map(), key = (gx, gy) => (gy + 4) * 4096 + gx + 4;
+    function each(x, y, w, h, f) {
+      for (let gy = Math.floor(y / CELL); gy <= Math.floor((y + h) / CELL); gy++)
+        for (let gx = Math.floor(x / CELL); gx <= Math.floor((x + w) / CELL); gx++) if (f(key(gx, gy))) return true;
+      return false;
+    }
+    return {
+      add(x, y, w, h, ref) {
+        const q = [x, y, w, h, ref];
+        each(x, y, w, h, k => { let c = m.get(k); if (!c) m.set(k, c = []); c.push(q); });
+      },
+      hits(x, y, w, h, pad, skip) {
+        return each(x, y, w, h, k => (m.get(k) || []).some(q => q[4] !== skip && x < q[0] + q[2] + pad &&
+          q[0] < x + w + pad && y < q[1] + q[3] + pad && q[1] < y + h + pad));
+      }
+    };
+  }
+  function layout() {
+    queued = false;
+    const vw = vp.clientWidth, vh = vp.clientHeight, A = S();
+    const R = readingsOn() || !!L.diff, T = !!L.details, M = !!L.missed && R;
+    const pills = Grid(), boxes = Grid(), vr = vp.getBoundingClientRect();
+    const block = el => {
+      const b = el.getBoundingClientRect();
+      pills.add(b.left - vr.left, b.top - vr.top, b.width, b.height, null);
+    };
+    vp.querySelectorAll('.ctl, .nav, .zl').forEach(el => { if (el.offsetParent !== null) block(el); });
+    if (!wide() && panel.classList.contains('open')) block(panel);
+    const x0 = -tx / s, y0 = -ty / s, x1 = (vw - tx) / s, y1 = (vh - ty) / s;
+    const seen = bb => bb[2] >= x0 && bb[0] <= x1 && bb[3] >= y0 && bb[1] <= y1;
+    const scr = bb => [bb[0] * s + tx, bb[1] * s + ty, bb[2] * s + tx, bb[3] * s + ty];
+    const me = sel && sel.rec;
+    if (me && seen(me._bb)) { const q = scr(me._bb); pills.add(q[0], q[1], q[2] - q[0], q[3] - q[1], me); }
+    const cands = [];
+    const fence = r => {          // a box a pill had better not cover (not one filling a quarter of the view)
+      const q = scr(r._bb);
+      if ((q[2] - q[0]) * (q[3] - q[1]) < 0.25 * vw * vh) boxes.add(q[0], q[1], q[2] - q[0], q[3] - q[1], r);
+    };
+    for (const b of A.boxes) {
+      if (!shownBox(b) || !seen(b._bb)) continue;
+      if (b.status !== 'none') fence(b);
+      if (!R && !T) continue;
+      const mine = b === me;
+      // a box Terra lacks with no reading has nothing to say: its outline alone shows it
+      const says = b.status === 'matched' || !!b.shown || mine;
+      if (R && b.status !== 'none' && says) cands.push({ r: b, t: 'read', p: mine ? -2 : kindOf(b) === 'code' ?
+        (b.colour === 'purple' ? 0 : 0.5) : (b.colour === 'purple' ? 1 : 2) });
+      if (T) cands.push({ r: b, t: 'tag', p: mine ? -1 : 3 });
+    }
+    if (L.missed) for (const m of A.missed) {
+      if (!seen(m._bb)) continue;
+      fence(m);
+      if (M) cands.push({ r: m, t: 'miss', p: m === me ? -2 : 1.5 });
+    }
+    cands.sort((a, b) => a.p - b.p || b.r._len - a.r._len);
+    let n = 0;
+    for (const c of cands) {
+      if (n >= MAXL) break;
+      const r = c.r;
+      let text, cls, font = FONT, h = 18, inner = null, stripe = 0;
+      if (c.t === 'tag') {
+        text = kindOf(r) + ' · ' + f2(r.chance) + ' · ' + (Math.round(r.angle) % 360) + '°';
+        cls = 'pl tag'; font = TFONT; h = 16;
+      } else if (c.t === 'miss') { text = r.text; cls = 'pl miss'; }
+      else {
+        stripe = 3;
+        if (r.status === 'matched' && r.colour === 'purple') {
+          const o = r.shown || '∅';
+          text = o + ' ≠ ' + r.terra; inner = esc(o) + '<span class="ne"> ≠ </span>' + esc(r.terra); cls = 'pl bad';
+        } else if (r.status === 'matched') { text = r.shown || '∅'; cls = 'pl ok'; }
+        else { text = r.shown || '?'; cls = 'pl'; }
+        cls += ' kc-' + kindOf(r);
+      }
+      if (r === me) cls += ' sel';
+      const w = Math.ceil(textW(text, font)) + 12 + stripe;
+      const q = scr(r._bb), cx = (q[0] + q[2]) / 2, cy = (q[1] + q[3]) / 2;
+      const above = [cx - w / 2, q[1] - GAP - h], below = [cx - w / 2, q[3] + GAP];
+      const right = [q[2] + GAP + 1, cy - h / 2], left = [q[0] - GAP - 1 - w, cy - h / 2];
+      const spots = c.t === 'tag' ? [below, above, right, left] : [above, below, right, left];
+      const fits = (x, y) => x >= 2 && y >= 2 && x + w <= vw - 2 && y + h <= vh - 2 &&
+        !pills.hits(x, y, w, h, 2);
+      // first a spot clear of every other box, else any spot clear of the pills already drawn
+      const at = spots.find(([x, y]) => fits(x, y) && !boxes.hits(x, y, w, h, 0, r)) ||
+        spots.find(([x, y]) => fits(x, y));
+      if (!at) continue;
+      pills.add(at[0], at[1], w, h, null);
+      const e = pool[n] || (pool[n] = lab.appendChild(document.createElement('div')));
+      e.className = cls; e.hidden = false;
+      if (inner) e.innerHTML = inner; else e.textContent = text;
+      e.style.transform = 'translate(' + Math.round(at[0]) + 'px,' + Math.round(at[1]) + 'px)';
+      n++;
+    }
+    for (let i = n; i < pool.length; i++) pool[i].hidden = true;
+    if (sel && sel.label) {
+      xm.hidden = false;
+      xm.style.transform = 'translate(' + Math.round(sel.label.x * s + tx) + 'px,' +
+        Math.round(sel.label.y * s + ty) + 'px)';
+    } else xm.hidden = true;
+  }
+
+  const ab = $('aboutb'), about = $('about');
+  ab.addEventListener('click', () => {
+    about.hidden = !about.hidden; ab.setAttribute('aria-expanded', String(!about.hidden)); schedule();
+  });
+
+  // start: the whole sheet in view (a link's #view=x,y,zoom, #set=, #layers=, #nav=, #tap=x,y and #theme= are
+  // for checking the page by eye from a script)
+  const hash = location.hash;
+  const th = /theme=(light|dark)/.exec(hash);
+  if (th) document.documentElement.setAttribute('data-theme', th[1]);
+  const sk = /set=([\w-]+)/.exec(hash);
+  if (sk && D.sets[sk[1]]) key = sk[1];
+  const ly = /layers=([\w,]*)/.exec(hash);
+  if (ly) {
+    for (const k in L) L[k] = k === 'readings' ? null : false;
+    ly[1].split(',').forEach(k => { if (k in L) L[k] = true; });
+  }
+  syncSet(); syncChips(); renderPanel(); renderNav();
+  const v = /view=([\d.]+),([\d.]+),([\d.]+)/.exec(hash);
+  if (v) {
     const r = vp.getBoundingClientRect();
-    s = +m[3]; tx = r.width / 2 - +m[1] * s; ty = r.height / 2 - +m[2] * s; apply();
-    const t = /tap=([\\d.]+),([\\d.]+)/.exec(location.hash);
-    if (t) tap(+t[1], +t[2]);
-    return true;
-  }
-  if (!fromHash()) fit();
-  window.addEventListener('resize', () => { if (s <= minS * 2.01) fit(); });
+    s = +v[3]; tx = r.width / 2 - +v[1] * s; ty = r.height / 2 - +v[2] * s; apply();
+  } else fit();
+  const nv = /nav=(\d+)/.exec(hash);
+  if (nv) openMistake(+nv[1], !v);
+  const tp = /tap=([\d.]+),([\d.]+)/.exec(hash);
+  if (tp) tap(+tp[1], +tp[2]);
+  let lastW = vp.clientWidth;
+  window.addEventListener('resize', () => {
+    if (s <= minS * 2.01 || Math.abs(vp.clientWidth - lastW) > 200) fit(); else schedule();
+    lastW = vp.clientWidth;
+    if (wide() && mode === 'list') renderPanel();
+  });
 })();
 """
 
 
-def render(d: dict, out: Path) -> Path:
-    """Write the page of `page_data`'s `d` to `out` (one self-contained HTML file, the content of a page without
-    `<html>`, `<head>` or `<body>`: an Artifact's page)."""
+def _header(d: dict, sets) -> str:
+    """The compact header: the sheet, the selected version's three numbers, the legend in one line."""
+    m = re.search(r"-p(\d+)$", str(d["sheet"]))
+    short = f"p{m.group(1)}" if m else str(d["sheet"])
+    n = _set_numbers(sets[0][2])
+    right = f'{n["right"]}/{n["n"]}' if n["right"] is not None else "–"
+    swatches = "".join(f'<span><i class="sw s-{k}"></i>{k}</span>' for k in KIND_CLASSES)
+    return ('<header class="top">'
+            f'<h1 title="{_e(d["sheet"])}">Mission St <span class="sid">· {_e(short)}</span></h1>'
+            '<button class="tb" id="aboutb" aria-expanded="false" aria-controls="about">About</button>'
+            f'<div class="nums"><span><b id="n-right">{right}</b> labels right</span>'
+            f'<span><b id="n-match">{n["matched"]:,}</b> matched<span class="wd"> words</span></span>'
+            f'<span><b id="n-merged">{n["merged"]:,}</b> merged<span class="wd"> words</span></span></div>'
+            f'<div class="legend" aria-label="Legend">{swatches}<span class="lp ok">= Terra</span>'
+            '<span class="lp bad" title="our reading differs from Terra\'s">≠ Terra</span></div></header>')
+
+
+def _toolbar(sets) -> str:
+    """The version control (when there are several) and the layers' chips."""
+    seg = ""
+    if len(sets) > 1:
+        seg = ('<div class="seg" role="group" aria-label="Boxes from">'
+               + "".join(f'<button data-set="{_e(k)}" aria-pressed="{str(i == 0).lower()}">{_e(name)}</button>'
+                         for i, (k, name, _) in enumerate(sets)) + "</div>")
+    n = _set_numbers(sets[0][2])
+    chips = [("readings", f'Readings<span class="auto"> · from {READINGS_FROM:g}x</span>'),
+             ("missed", '<i class="sw s-miss"></i>Missed words'),
+             ("terra", '<i class="sw s-terra"></i>Terra\'s words'),
+             ("textink", '<i class="dot"></i>Text ink'),
+             ("frags", '<i class="sw s-frag"></i>Fragments'),
+             ("details", "Details"),
+             ("diff", f'≠ Terra only <span class="cnt" id="n-diff">{n["differs"]:,}</span>')]
+    return (f'<div class="bar">{seg}<div class="chips" role="group" aria-label="Layers">'
+            + "".join(f'<button class="chip" data-layer="{k}" aria-pressed="false">{t}</button>' for k, t in chips)
+            + "</div></div>")
+
+
+def _about(d: dict, about: str) -> str:
+    """The folded explanations: what each layer draws, the build's own note, the panels and what drew the page."""
     h, w = d["shape"]
+    run = f' · run <b>{_e(d["run"])}</b>' if d.get("run") else ""
+    models = "".join(f"<div>{_e(m)}</div>" for m in d["models"])
+    layers = (
+        '<ul><li><b>The scan</b>: the page\'s ink binarised (px darker than '
+        f'{grid.INK_BELOW}, the detector\'s own input), all in one grey; not the scan\'s grey levels.</li>'
+        '<li><b>Box outlines</b>: our boxes read as text, coloured by kind (code, block number, street name, other): '
+        'crude-kind\'s by the kind its split gave the word, the others\' by the box\'s likeliest kind.</li>'
+        '<li><b>Readings</b>: one upright pill per box, beside it: green when our reading is Terra\'s string (a '
+        'trailing "." and doubled spaces folded; a printed form counts as its code), purple "ours ≠ Terra\'s" when '
+        f'it is not, white for text Terra has no word for.  On by themselves from {READINGS_FROM:g}x.  Codes are '
+        'drawn first, then the readings that differ, then the rest; a pill that would overlap another waits until '
+        'you zoom in.</li>'
+        f'<li><b>Missed words</b>: Terra\'s words no box matches at IoU ≥ {d["iou"]}, thick pink outlines; tap one '
+        'for why.</li><li><b>Terra\'s words</b>: every word Terra saw, thin dashed outlines.</li>'
+        f'<li><b>Text ink</b>: red, the ink the detector calls text (chance ≥ {TEXT_CHANCE}).</li>'
+        '<li><b>Fragments</b>: our boxes the reader calls no text, thin grey.</li>'
+        '<li><b>Details</b>: each box\'s kind, mean chance and reading angle.</li>'
+        '<li><b>≠ Terra only</b>: keeps the boxes whose reading differs from Terra\'s.</li>'
+        '<li><b>Wrong labels</b> (‹ › at the foot of the map): your answered labels this version reads wrong at its '
+        'own boxes (a label with no box counts wrong), with why when known: merged (the box holds another Terra '
+        'word too), partial (it holds half or less of the code word), misread (a clean box read wrong), no box, '
+        'other.</li></ul>')
+    return (f'<section id="about" hidden aria-label="About this page"><h2>About this page</h2>'
+            f'<p>Sheet <b>{_e(d["sheet"])}</b>{run} · {w:,} × {h:,} px at full resolution · boxes matched to Terra\'s '
+            f'words at IoU ≥ {d["iou"]}.  Drag or pinch to move and zoom; tap a box for everything about it.</p>'
+            f'<h3>What is drawn</h3>{layers}{about}{_panels(d)}'
+            f'<div class="models"><b>Drawn by</b>{models}</div></section>')
+
+
+def render(d: dict, out: Path, *, sets=None, title: str = "Mission Sheet Review", about: str = "") -> Path:
+    """Write the page of `page_data`'s `d` to `out` (one self-contained HTML file, the content of a page without
+    `<html>`, `<head>` or `<body>`: an Artifact's page).  `sets`: the versions the page flips between, (key, name,
+    `page_data` of that version) in order, the first shown first (None: `d` alone); every version is drawn over
+    `d`'s image.  `about`: HTML added to the folded explanations."""
+    sets = list(sets) if sets else [("run", d.get("run") or "this run", d)]
+    h, w = d["shape"]
+    faded = bool(d.get("faded"))
     tiles = []
     for y0 in range(0, h, TILE):
         for x0 in range(0, w, TILE):
             part = d["pixels"][y0:y0 + TILE, x0:x0 + TILE]
-            tiles.append(f'<img class="tile" alt="" data-x="{x0}" data-y="{y0}" width="{part.shape[1]}" '
-                         f'height="{part.shape[0]}" style="left:{x0}px;top:{y0}px" '
-                         f'src="data:image/png;base64,{_png_b64(part, bool(d.get("faded")))}">')
-    js_data = {"shape": d["shape"], "boxes": d["boxes"], "missed": d["missed"],
-               "reasons": d.get("reason_text", REASON_TEXT)}
+            for layer, cls in (("base", "base"), ("text", "ti")):
+                png = _tile_png(part, layer, faded)
+                if png is not None:
+                    tiles.append(f'<img class="tile {cls}" alt="" data-x="{x0}" data-y="{y0}" '
+                                 f'width="{part.shape[1]}" height="{part.shape[0]}" style="left:{x0}px;top:{y0}px" '
+                                 f'src="data:image/png;base64,{png}">')
+    js_data = {"shape": d["shape"], "order": [k for k, _, _ in sets], "readings_from": READINGS_FROM,
+               "max_scale": MAX_SCALE, "reasons": d.get("reason_text", REASON_TEXT), "reason_short": REASON_SHORT,
+               "causes": CAUSE_NAMES, "terra": d.get("terra_words", []),
+               "sets": {k: {"name": name, "boxes": dk["boxes"], "missed": dk["missed"], "labels": dk.get("labels", []),
+                            "nums": _set_numbers(dk)} for k, name, dk in sets}}
     payload = json.dumps(js_data, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    models = "".join(f"<div>{_e(m)}</div>" for m in d["models"])
-    run = f' · run <b>{_e(d["run"])}</b>' if d.get("run") else ""
+    overlays = "".join(_outlines(dk, k, i > 0) for i, (k, _, dk) in enumerate(sets))
     page_html = (
-        '<title>Mission Sheet Review</title>\n<meta name="claude:viewport-fit-sides" content="cover">\n'
+        f'<title>{_e(title)}</title>\n'
+        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'
+        '<meta name="claude:viewport-fit-sides" content="cover">\n'
         f"<style>{STYLE}</style>\n"
-        '<div class="wrap">'
-        f'<h1>The Mission Street sheet: our text reader against Terra</h1>'
-        f'<p class="sub">Sheet <b>{_e(d["sheet"])}</b>{run} · {w:,} × {h:,} px at full resolution · '
-        f'boxes matched to Terra\'s words at IoU ≥ {d["iou"]} · {len(d["boxes"]):,} boxes, '
-        f'{len(d["missed"]):,} missed words drawn. The image is the page\'s ink binarised (px darker than '
-        f'{grid.INK_BELOW}, the detector\'s own input) and drawn grey or red, not the scan\'s grey levels.</p>'
-        f"{_panels(d)}"
-        '<div class="viewer"><div class="bar"><button id="zin" aria-label="Zoom in">+</button>'
-        '<button id="zout" aria-label="Zoom out">−</button><button id="zfit">Fit</button><span id="zl" '
-        'class="hint"></span><span class="hint">Drag or pinch to move and zoom; the readings appear from '
-        f'{LABELS_FROM:g}x, the tags and the reasons from {TAGS_FROM:g}x. Tap a box for everything about it.</span>'
+        f'<div class="app">{_header(d, sets)}{_about(d, about)}{_toolbar(sets)}'
+        '<div class="work" id="work"><div id="vp" aria-label="The sheet: drag or pinch to move and zoom, tap a box">'
+        f'<div id="stage" style="width:{w}px;height:{h}px">{"".join(tiles)}{overlays}{_shared_overlays(d)}</div>'
+        '<div id="lab" aria-hidden="true"><div class="xm" id="xm" hidden></div></div>'
+        '<div class="zl" id="zl"></div>'
+        '<div class="ctl"><button id="zin" aria-label="Zoom in">+</button>'
+        '<button id="zout" aria-label="Zoom out">−</button><button id="zfit" aria-label="Fit the sheet">Fit</button>'
         '</div>'
-        f'<div id="vp"><div id="stage" style="width:{w}px;height:{h}px">{"".join(tiles)}{_overlay(d)}</div>'
-        '<div id="info"></div></div></div>'
-        f'<div class="models"><b>Drawn by</b>{models}</div></div>\n'
+        '<div class="nav" id="nav"><button data-act="prev" aria-label="Previous wrong label">‹</button>'
+        '<button data-act="list" class="navc" id="navc">wrong labels</button>'
+        '<button data-act="next" aria-label="Next wrong label">›</button></div>'
+        '</div><aside id="panel" aria-label="Details"></aside></div></div>\n'
         f'<script type="application/json" id="data">{payload}</script>\n'
-        f"<script>{SCRIPT % {'labels': LABELS_FROM, 'tags': TAGS_FROM, 'maxs': MAX_SCALE}}</script>\n")
+        f"<script>{SCRIPT}</script>\n")
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page_html, encoding="utf-8")
@@ -1130,7 +1726,8 @@ def render(d: dict, out: Path) -> Path:
 
 # --- reading the page back (the tests' check that no shading covers the red) -----------------------------------------
 
-_TILE_RE = re.compile(r'<img class="tile"[^>]*data-x="(\d+)" data-y="(\d+)"[^>]*src="data:image/png;base64,([^"]+)"')
+_TILE_RE = re.compile(r'<img class="tile (\w+)"[^>]*data-x="(\d+)" data-y="(\d+)"[^>]*'
+                      r'src="data:image/png;base64,([^"]+)"')
 _SHAPE_RE = re.compile(r"<(polygon|rect|path)\b([^>]*)>")
 _ATTR_RE = re.compile(r'([\w:-]+)="([^"]*)"')
 
@@ -1152,17 +1749,22 @@ def _rgb(fill: str):
     return 0, 0, 0, 1.0          # a named colour: not red
 
 
-def page_image(path: Path) -> np.ndarray:
-    """The page's image as drawn (uint8 (h, w, 3) RGB): its tiles, and over them every filled polygon, rect or path of
-    the overlay (`fill` not none), at its fill and opacity."""
+def page_image(path: Path, layers=("base", "ti")) -> np.ndarray:
+    """The page's image as drawn in the light theme (uint8 (h, w, 3) RGB): its tiles of `layers` in order ("base" the
+    paper and grey ink, "ti" the text ink layer, transparent off the red), and over them every filled polygon, rect or
+    path of the overlay (`fill` not none), at its fill and opacity."""
     text = Path(path).read_text(encoding="utf-8")
-    tiles = [(int(x), int(y), np.asarray(Image.open(io.BytesIO(base64.b64decode(b))).convert("RGB")))
-             for x, y, b in _TILE_RE.findall(text)]
-    h = max(y + t.shape[0] for _, y, t in tiles)
-    w = max(x + t.shape[1] for x, _, t in tiles)
+    tiles = [(layer, int(x), int(y), np.asarray(Image.open(io.BytesIO(base64.b64decode(b))).convert("RGBA")))
+             for layer, x, y, b in _TILE_RE.findall(text)]
+    h = max(y + t.shape[0] for _, _, y, t in tiles)
+    w = max(x + t.shape[1] for _, x, _, t in tiles)
     img = np.zeros((h, w, 3), np.uint8)
-    for x, y, t in tiles:
-        img[y:y + t.shape[0], x:x + t.shape[1]] = t
+    for want in layers:
+        for layer, x, y, t in tiles:
+            if layer == want:
+                win = img[y:y + t.shape[0], x:x + t.shape[1]]
+                a = t[..., 3:] / 255.0
+                win[:] = np.round(win * (1 - a) + t[..., :3] * a).astype(np.uint8)
     for tag, attrs in _SHAPE_RE.findall(text):
         a = dict(_ATTR_RE.findall(attrs))
         fill = _rgb(a.get("fill", "#000"))          # SVG fills a shape black by default

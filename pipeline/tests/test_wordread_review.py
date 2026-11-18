@@ -1,5 +1,6 @@
 """The Mission Street review page (`wordread.review`) on small synthetic pages, boxes, reads and Terra words."""
 import json
+import re
 
 import geopandas as gpd
 import numpy as np
@@ -159,7 +160,7 @@ def _poly(x0, y0, x1, y1):
     return [x0, y0, x1, y0, x1, y1, x0, y1]
 
 
-def _tiny():
+def _tiny(**more):
     ink = _bars([12, 20, 28], 12, 20) | _bars([72, 80, 88], 12, 20) | _bars([132, 140, 148], 12, 20) \
         | _bars([192, 200, 208], 12, 20)
     ink[90, :] = True                                          # a line, not text
@@ -179,7 +180,7 @@ def _tiny():
                                           ("RC-3", "zoning code", (188, 8, 214, 24)))])
     return review.page_data("s", boxes, reads, terra, chance, None, ink=ink,
                             levels={q: 0.99 for q in ("nw", "ne", "sw", "se")}, on_map=np.ones(len(terra), bool),
-                            terra_reads={1: {"top": "RC-3", "p_top": 0.94}}, forms={}, models=["synthetic"])
+                            terra_reads={1: {"top": "RC-3", "p_top": 0.94}}, forms={}, models=["synthetic"], **more)
 
 
 PAGE_DATA_TINY = _tiny()
@@ -204,13 +205,51 @@ def test_shading_never_covers_red_ink(tmp_path):
     assert review.red_px_after_overlay(out) == review.red_px_of(PAGE_DATA_TINY)
 
 
-def test_shading_tints_the_paper_in_green_and_yellow_boxes_and_keeps_the_ink(tmp_path):
-    img = review.page_image(review.render(PAGE_DATA_TINY, tmp_path / "p.html"))
-    assert tuple(img[10, 70]) == review.COLOURS["green_paper"]          # paper inside the green box (ours, B)
-    assert tuple(img[10, 190]) == review.COLOURS["yellow_paper"]        # paper inside Terra's missed word
-    assert tuple(img[15, 73]) == review.COLOURS["text_ink"]             # text ink inside the green box
-    assert tuple(img[90, 120]) == review.COLOURS["other_ink"]           # the line
-    assert tuple(img[60, 120]) == review.COLOURS["paper"]
+def test_the_base_image_is_paper_and_one_grey_ink_and_the_text_ink_is_a_red_layer_of_its_own(tmp_path):
+    out = review.render(PAGE_DATA_TINY, tmp_path / "p.html")
+    base, both = review.page_image(out, layers=("base",)), review.page_image(out)
+    assert tuple(base[10, 70]) == review.COLOURS["paper"]               # no shading in our box Terra lacks (B)
+    assert tuple(base[10, 190]) == review.COLOURS["paper"]              # nor in Terra's missed word
+    assert tuple(base[15, 73]) == review.COLOURS["other_ink"]           # the calm view: every ink one grey
+    assert tuple(both[15, 73]) == review.COLOURS["text_ink"]            # the text ink layer draws it red
+    assert tuple(both[90, 120]) == review.COLOURS["other_ink"]          # the line is not text
+    assert tuple(both[60, 120]) == review.COLOURS["paper"]
+
+
+def test_readings_are_never_rotated_or_mirrored(tmp_path):
+    """The overlay holds outlines only; the readings are upright pills the page's script places beside the boxes."""
+    html = review.render(PAGE_DATA_TINY, tmp_path / "p.html").read_text()
+    svg = "".join(re.findall(r"<svg.*?</svg>", html, re.S))
+    assert "<text" not in svg and "<tspan" not in svg
+    assert not re.search(r"rotate|matrix\(|skew|scale[XY]?\(\s*-|writing-mode", html)
+
+
+def test_the_outlines_put_each_box_in_its_layer(tmp_path):
+    html = review.render(PAGE_DATA_TINY, tmp_path / "p.html").read_text()
+    layer = {g: re.search(rf'<g class="{g}">(.*?)</g>', html).group(1) for g in ("L-boxes", "L-frags", "L-missed")}
+    assert layer["L-boxes"].count("M") == 2 and 'class="ln k-code"' in layer["L-boxes"]   # A and B, read as text
+    assert "M128 8" in layer["L-frags"]                                                    # C, read as no text
+    assert "M188 8" in layer["L-missed"]                                                   # RC-3, no box matches it
+
+
+def test_the_wrong_labels_are_the_headlines_misses_with_their_causes():
+    points = ((250.0, "RM-2", "c"), (21.0, "RH-2", "a"), (81.0, "RM-1", "b"))     # no box, A (right), B (wrong)
+    answers = pd.DataFrame([{"sheet": "s", "point_x": x, "point_y": 16.0, "truth": t, "quarter": 0, "block": b,
+                             "terra": t} for x, t, b in points])
+    causes = pd.DataFrame([{"point_x": 81.0, "point_y": 16.0, "truth": "RM-1", "cause": "merged",
+                            "detail": "code+block number", "placement": "along", "other_text": "3751"},
+                           {"point_x": 250.0, "point_y": 16.0, "truth": "RM-2", "cause": "no_box", "detail": "",
+                            "placement": None, "other_text": None}])
+    d = _tiny(answers=answers, causes=causes)
+    labels = d["labels"]
+    assert [lab["truth"] for lab in labels] == ["RH-2", "RM-1", "RM-2"]                  # left to right
+    assert [(lab["box"], lab["read"], lab["right"]) for lab in labels] == [
+        ("b0", "RH-2", True), ("b1", "RH-2", False), (None, None, False)]
+    assert [lab["cause"] for lab in labels] == [None, "merged", "no_box"]
+    assert labels[1]["note"] == "code+block number, along, with “3751”"
+    hl = d["numbers"]["headline"]
+    assert sum(not lab["right"] for lab in labels) == hl["n"] - hl["right"]
+    assert {b["id"]: b.get("answers") for b in d["boxes"]}["b1"] == [{"truth": "RM-1", "right": False}]
 
 
 def test_the_change_since_the_run_before_is_shown(tmp_path):
