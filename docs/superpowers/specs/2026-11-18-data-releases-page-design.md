@@ -126,8 +126,8 @@ sheet row's "sheet list" points to that release's `urls.txt?layer=sheets&edition
 
 ## The page
 
-Built as in the agreed mockup (`.superpowers/brainstorm/…/releases-v6.html`, generator kept in the
-session scratchpad), in the site's own fonts (Newsreader, Libre Franklin), paper colours and the
+Built as in the mockup the owner approved during design (a local HTML file, not kept in the
+repository), in the site's own fonts (Newsreader, Libre Franklin), paper colours and the
 ultramarine accent.
 
 - **Header.** Kicker "Open data", title "Download the data", a one-paragraph lede (what the data is,
