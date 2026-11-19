@@ -596,13 +596,16 @@ export function releaseZips(release, history, { locals, base, listing, license, 
   const info = (name) => {
     const at = locals[name];
     const file = at ? localPath({ root: at.root, local: at.rel }) : undefined;
-    const local = file !== undefined && exists(file);
     const v = byName.get(name);
     const e = extras.get(name);
     if (!v && !e) throw new Error(`release ${release.id}: no size or sha256 for ${name}`);
     const series = v ? v.series : e.series;
     const where = blobPath(series, name);
-    const bytes = v ? v.bytes : local ? size(file) : listing.get(where);
+    const shipped = v ? v.bytes : listing.get(where);
+    // A local copy of another size (e.g. a sheet rebuilt since it was published) is not the shipped
+    // file: read the published copy instead of failing late, mid-zip, on its hash.
+    const local = file !== undefined && exists(file) && (shipped === undefined || size(file) === shipped);
+    const bytes = shipped ?? (local ? size(file) : undefined);
     if (bytes === undefined) throw new Error(`release ${release.id}: ${name} is neither on disk nor listed on the store`);
     const sha256 = v ? v.sha256 : e.sha256;
     return local ? { file, bytes, sha256 } : { url: `${base}/${where}`, bytes, sha256 };
@@ -664,6 +667,7 @@ async function main() {
   const releaseOnly = process.argv.includes("--release-only");
   const local = argValue("--local")?.replace(/\/+$/, "");
   const now = today();
+  if (local && releaseOnly) throw new Error("--local and --release-only don't go together");
 
   if (local) {
     const index = JSON.parse(readFileSync(path.join(DOWNLOADS, "index.json"), "utf8"));

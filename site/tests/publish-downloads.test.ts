@@ -604,10 +604,26 @@ describe("release zips from the published copies", () => {
     const { name } = await setup();
     const release = { id: "2026-11-18", date: "2026-11-18", names: [name], extras: [] };
     const history = { versions: [{ series: "1948", layer: "lots", fmt: "gpkg", name, date: "2026-11-18", bytes: 12, sha256: SHA }] };
-    const opts = { locals: { [name]: { root: "work", rel: "1948/x" } }, base: BASE, listing: new Map(), license: "L", exists: () => true };
+    const opts = {
+      locals: { [name]: { root: "work", rel: "1948/x" } }, base: BASE, listing: new Map(), license: "L",
+      exists: () => true, size: () => 12,
+    };
     const gpkg = (script.releaseZips as (r: unknown, h: unknown, o: unknown) => Record<string, Zip>)(release, history, opts).gpkg;
     expect(gpkg.fromLocal).toBe(1);
     expect(gpkg.entries.find((e) => e.name === name)).toMatchObject({ file: expect.stringMatching(/1948\/x$/), url: undefined });
+  });
+
+  it("a local copy of another size than the shipped one (a sheet rebuilt since) reads the published copy instead", async () => {
+    const { name, url } = await setup();
+    const release = { id: "2026-11-18", date: "2026-11-18", names: [name], extras: [] };
+    const history = { versions: [{ series: "1948", layer: "lots", fmt: "gpkg", name, date: "2026-11-18", bytes: 12, sha256: SHA }] };
+    const opts = {
+      locals: { [name]: { root: "work", rel: "1948/x" } }, base: BASE, listing: new Map(), license: "L",
+      exists: () => true, size: () => 99,
+    };
+    const gpkg = (script.releaseZips as (r: unknown, h: unknown, o: unknown) => Record<string, Zip>)(release, history, opts).gpkg;
+    expect(gpkg.fromLocal).toBe(0);
+    expect(gpkg.entries.find((e) => e.name === name)).toMatchObject({ url, bytes: 12, file: undefined });
   });
 
   it("a body from the store with the wrong hash, or a non-200, stops naming the member and leaves no zip", async () => {
