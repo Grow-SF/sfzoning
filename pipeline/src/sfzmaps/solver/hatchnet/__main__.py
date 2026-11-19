@@ -17,6 +17,9 @@ def main(argv: list[str] | None = None) -> None:
     d.add_argument("--out", type=Path, help="default: data/solver/experiments/hatch-cnn/data/<series>")
     d.add_argument("--look", nargs="+", metavar="SHEET",
                    help="draw the street-target pictures of these written sheets (hatch-cnn/look) and stop")
+    d.add_argument("--look-labels", action="store_true",
+                   help="draw the street-label pictures (data.LABEL_WHOLE, data.LABEL_ZOOMS) into "
+                        "hatch-cnn/streets-v2/look and stop")
     st = sub.add_parser("streets", help="train the street output; every sheet's streets and blocks (hatchnet.train)")
     st.add_argument("--series", required=True)
     st.add_argument("--device", help="default: mps where available, else cpu")
@@ -32,6 +35,10 @@ def main(argv: list[str] | None = None) -> None:
         from sfzmaps.solver.hatchnet import data
         if a.look:
             for f in data.look_targets(a.series, a.look, a.out):
+                print(f)
+            return
+        if a.look_labels:
+            for f in data.look_labels(a.series, data=a.out):
                 print(f)
             return
         s = data.run(a.series, a.out, a.workers, only=a.sheets)

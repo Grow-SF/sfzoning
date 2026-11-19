@@ -1,6 +1,7 @@
 """The learned reader's training data (`sfzmaps.solver.hatchnet.data`): the scan as printed (a sheet scanned on its side
 turned back exactly), today's blocks placed on it and labelled once where scans overlap, nothing erased from the ink,
 and the lot table's one read per lot and the owner's answers."""
+import dataclasses
 import hashlib
 import json
 
@@ -106,11 +107,25 @@ def write_today(root):
     pd.DataFrame({"blklot": list(TODAY) + ["0009003"], "geometry": wkb}).to_parquet(root / "parcels.parquet")
 
 
+STREETS = [                # today's centre lines: world (x, y) ft from (X0, Y1), x east and y south
+    ((78.0, 30.0), (78.0, 190.0)),          # north-south down grid column 19, on sheet A only
+    ((10.0, 162.0), (190.0, 162.0)),        # east-west along grid row 40, across both sheets
+]
+
+
+def write_streets(root):
+    """Today's street centre lines (WKB LineStrings in EPSG:2227 ft, as data/ref/streets.parquet), one not active."""
+    lines = [shapely.LineString([(grid.X0 + x, grid.Y1 - y) for x, y in pts]) for pts in STREETS]
+    pd.DataFrame({"cnn": np.arange(len(lines)), "active": [True, False],
+                  "geometry": list(shapely.to_wkb(np.array(lines)))}).to_parquet(root / "streets.parquet")
+
+
 def sources(root, order=None) -> data.Sources:
-    parcels = root / "parcels.parquet"
+    parcels, streets = root / "parcels.parquet", root / "streets.parquet"
     return data.Sources(series=SERIES, work=root / "work" / SERIES, solver=root / "solver" / SERIES,
                         legends=root / "legends.json", answers=root / "answers", cases=root / "cases",
-                        parcels=parcels if parcels.is_file() else None, order=tuple(order) if order else None)
+                        parcels=parcels if parcels.is_file() else None, order=tuple(order) if order else None,
+                        streets=streets if streets.is_file() else None)
 
 
 def upright_quad(shape=PAGE):
@@ -141,6 +156,7 @@ def test_turned_sheet_matches_upright(tmp_path):
     up, side = tmp_path / "up", tmp_path / "side"
     for root in (up, side):
         write_lots(root)
+        write_streets(root)
     write_sheet(up, "sheet", page, placement(PAGE, 20.37), upright_quad(), upright_crop())
     h, w = PAGE
     turned_quad = [(h - 1 - y, x) for x, y in upright_quad()]          # upright px (x, y) -> turned (h-1-y, x)
@@ -153,9 +169,10 @@ def test_turned_sheet_matches_upright(tmp_path):
     assert np.array_equal(a, b)
     ra, rb = data.sheet_rasters(SERIES, "sheet", sources(up)), data.sheet_rasters(SERIES, "sheet", sources(side))
     assert (ra.turn, rb.turn) == (0, 1)
-    for k in ("ink", "block", "lot", "crop"):
+    for k in ("ink", "block", "lot", "crop", "street", "centre"):
         assert np.array_equal(getattr(ra, k), getattr(rb, k)), k
     assert (ra.block == 1).sum() > 0 and (ra.block == 0).sum() > 0 and (ra.lot >= 0).sum() > 0
+    assert (ra.street == 1).sum() > 0 and ra.centre.sum() > 0
     assert np.isclose(ra.ft_per_px, rb.ft_per_px) and np.isclose(ra.ft_per_px, FT_PER_PX)
     # a box on the scanned page lands on the same px of the turned-back page
     assert data.turn_box((10, 20, 30, 50), (w, h), 1) == (20, h - 30, 50, h - 10)
@@ -268,7 +285,110 @@ def test_full_tone_luminance(tmp_path):
     assert np.allclose(lum, expect, atol=1e-6) and lum[0, 0] == 1.0 and lum[0, 1] == 0.0
 
 
+def gap_blocks(width: int, *spans) -> np.ndarray:
+    """A grid (20 rows) whose blocks are the column spans given (ends exclusive), every row: a 1-D map."""
+    block = np.zeros((20, width), bool)
+    for c0, c1 in spans:
+        block[:, c0:c1] = True
+    return block
+
+
+def centre_cols(shape, *cols) -> np.ndarray:
+    centre = np.zeros(shape, bool)
+    for c in cols:
+        centre[:, c] = True
+    return centre
+
+
+def test_corridor_between_two_blocks():
+    # blocks at columns 0-9 and 20-29, a 10 px street between them, its centre line at column 14 (5 px from the west
+    # block, 6 from the east): every px between the blocks is street, the blocks are not street
+    block = gap_blocks(40, (0, 10), (20, 30))
+    centre = centre_cols(block.shape, 14)
+    street, c = data.street_labels(block, centre)
+    assert street.dtype == np.uint8 and c.dtype == np.uint8
+    assert (street[:, 10:20] == 1).all()
+    assert (street[block] == 0).all()
+    assert np.array_equal(c == 1, centre)
+    assert set(np.unique(street)) <= {0, 1, data.UNKNOWN}
+
+
+def test_shoreline_stops_at_half_width():
+    # a block (columns 0-9), a centre line 5 px from it (column 14), then open water: the corridor reaches the line's
+    # own distance to the block on both sides, 5 px past the line on the open side (columns 15-19), and no further
+    block = gap_blocks(60, (0, 10))
+    street, _ = data.street_labels(block, centre_cols(block.shape, 14))
+    assert (street[:, :10] == 0).all()
+    assert (street[:, 10:20] == 1).all()
+    assert (street[:, 20:] == data.UNKNOWN).all()
+
+
+def test_no_centre_line_is_ignored():
+    # a street between two blocks with no centre line today (columns 30-39) is ignored, not labelled not-street; the
+    # one with a centre line (columns 10-19) is street.  With no centre line at all, every px off the blocks is ignored
+    block = gap_blocks(60, (0, 10), (20, 30), (40, 50))
+    street, _ = data.street_labels(block, centre_cols(block.shape, 14))
+    assert (street[:, 10:20] == 1).all()
+    assert (street[:, 30:40] == data.UNKNOWN).all()
+    assert (street[block] == 0).all()
+    street, c = data.street_labels(block, np.zeros_like(block))
+    assert (street[block] == 0).all() and (street[~block] == data.UNKNOWN).all() and not c.any()
+
+
+def test_centre_on_a_block_is_not_street():
+    # a centre line crossing today's block (a park road, a street built over): the block stays not-street, the line is
+    # no centre there, and its corridor is the line itself, so it labels nothing off the block
+    block = gap_blocks(40, (0, 20))
+    centre = centre_cols(block.shape, 10)
+    street, c = data.street_labels(block, centre)
+    assert (street[block] == 0).all() and (street[~block] == data.UNKNOWN).all()
+    assert not c.any()
+
+
+def test_centre_lines_rasterised_on_the_grid():
+    # today's centre lines (EPSG:2227 ft) on the solver's 4 ft grid, 8-connected, one px wide, wherever they run;
+    # a line off the grid is left out
+    lines = [shapely.LineString([(grid.X0 + 2, grid.Y1 - 42), (grid.X0 + 158, grid.Y1 - 42)]),       # row 10
+             shapely.LineString([(grid.X0 + 30, grid.Y1 - 2), (grid.X0 + 70, grid.Y1 - 158)]),        # diagonal
+             shapely.LineString([(grid.X0 - 500, grid.Y1 + 500), (grid.X0 - 100, grid.Y1 + 100)])]    # off the grid
+    c = data.centre_raster(np.array(lines, dtype=object), (40, 40))
+    assert c.dtype == bool
+    assert c[10].all()
+    n, _ = cv2.connectedComponents(c.astype(np.uint8), connectivity=8)
+    assert n == 2                                                  # one piece (and the background)
+    assert c[39, 17]                                               # the diagonal reaches the bottom row at x 70 ft
+
+
+def test_street_and_centre_carried_like_block(tmp_path):
+    # the labels go to each page through the same placement and ownership as `block`: not-street exactly where block is
+    # 1, ignored wherever block is unknown; the centre lines are drawn on the page through the placement, connected,
+    # on street px only, and only on the sheet that owns them
+    write_streets(tmp_path)
+    src = two_sheets(tmp_path)
+    for name, x_ft in (("sheetA", 20.37), ("sheetC", 80.37)):
+        r = data.sheet_rasters(SERIES, name, src)
+        assert r.street.dtype == np.uint8 and r.centre.dtype == np.uint8
+        assert np.array_equal(r.street == 0, r.block == 1), name
+        assert (r.street[r.block == data.UNKNOWN] == data.UNKNOWN).all(), name
+        assert (r.street == 1).any() and (r.street[r.block == 0] == data.UNKNOWN).any(), name
+        assert r.centre.any() and (r.street[r.centre == 1] == 1).all(), name
+        assert (r.centre[r.block == data.UNKNOWN] == 0).all(), name
+        # the drawn centre px lie on the lines (STREETS), within a page px; the north-south line is A's alone
+        ys, xs = np.nonzero(r.centre)
+        world = placement(PAGE, x_ft).to_world(np.c_[xs, ys].astype(float))
+        on_ew = np.abs(world[:, 1] - (grid.Y1 - 162.0)) <= FT_PER_PX
+        on_ns = np.abs(world[:, 0] - (grid.X0 + 78.0)) <= FT_PER_PX
+        assert (on_ew | on_ns).all() and on_ew.any(), name
+        assert on_ns.any() == (name == "sheetA"), name
+        assert cv2.connectedComponents(r.centre, connectivity=8)[0] == 2, name
+    # with no centre lines every px off today's blocks is ignored
+    bare = data.sheet_rasters(SERIES, "sheetA", dataclasses.replace(src, streets=None))
+    assert not (bare.street == 1).any() and not bare.centre.any()
+    assert np.array_equal(bare.street == 0, bare.block == 1)
+
+
 def test_run_writes_same_bytes(tmp_path):
+    write_streets(tmp_path)
     src = two_sheets(tmp_path, reads_a=[("0001001", "1R", 0.8, "parcel")])
     (tmp_path / "legends.json").write_text(json.dumps({SERIES: {"sheet": "sheetA", "swatches": {
         "1R": [10, 20, 30, 40]}}}))
@@ -281,5 +401,10 @@ def test_run_writes_same_bytes(tmp_path):
     assert digest(tmp_path / "one") == digest(tmp_path / "two")
     assert one["sheets_used"] == ["sheetA", "sheetC"]
     r = data.read_rasters(tmp_path / "one" / "sheetA.npz")
-    assert np.array_equal(r.block, data.sheet_rasters(SERIES, "sheetA", src).block)
+    direct = data.sheet_rasters(SERIES, "sheetA", src)
+    for k in ("block", "street", "centre"):
+        assert np.array_equal(getattr(r, k), getattr(direct, k)), k
+    assert (r.street == 1).any() and r.centre.any()
+    lab = one["street_labels"]
+    assert lab["lines"] == len(STREETS) and lab["centre_grid_px"] > 0
     assert data.swatches(SERIES, src) == [("sheetA", "1R", (10, 20, 30, 40))]

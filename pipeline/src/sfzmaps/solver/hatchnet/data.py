@@ -9,6 +9,13 @@ Per sheet (`sheet_rasters`), in the scan's own px, turned upright:
              their enclosed holes filled: `binary_fill_holes(lot >= 0)` on the whole grid), 0 where it doesn't (a
              street, or no lot), 255 (unknown) outside the sheet's neatline and on the area a sheet drawn above it
              owns, so each place is labelled once
+  street     the street labels (`street_labels`, on the solver's grid, carried to the page as `block` is): 1 street,
+             where the px is off today's blocks and inside its nearest centre line's corridor; 0 not street, on today's
+             blocks (exactly where `block` is 1); 255 ignored, everything else (the Bay, the ocean, land in no parcel,
+             1921 streets with no centre line today; a lake inside a parcel, as Lake Merced, is a block), and wherever
+             `block` is 255
+  centre     1 on a centre line: today's centre lines (`src.streets`, data/ref/streets.parquet, every row) drawn on the
+             page through the placement (`page_centres`), kept on street px of this sheet's own area
   lot        the solver lot index of the px (`lots.npz` `lot`, 4 ft grid px), -1 where none and wherever `block` is
              255 (each lot's px are pooled on one sheet only)
   crop       the neatline interior less the notes, as the merged page crops it (`hatching.load_crop`)
@@ -48,10 +55,11 @@ The lot table (`lot_table`), one row per solver lot:
             page's answer; two answers that disagree stop the run.
 
 Writes, under data/solver/experiments/hatch-cnn/data/<series>/ (`run`):
-  <sheet>.npz     ink, block, lot, crop, ft_per_px, turn (np.rot90 k), scanned_shape, sheet, series
+  <sheet>.npz     ink, block, street, centre, lot, crop, ft_per_px, turn (np.rot90 k), scanned_shape, sheet, series
   lots.parquet    the lot table, with px: the lot's owned page px over every sheet
   summary.json    the sheets used and not, the draw order, per-sheet and per-quarter counts, reads per code, the
-                  lots read on several sheets, answers per page and stratum, the legend swatches
+                  lots read on several sheets, answers per page and stratum, the legend swatches, the street labels'
+                  counts on the grid (`street_labels`)
 
 $0: no API calls.  Deterministic: the same inputs give the same bytes (the npz members are dated, as `textread.store`).
 """
@@ -70,7 +78,7 @@ from PIL import Image
 from scipy import ndimage
 
 from sfzmaps import config
-from sfzmaps.solver import answers1921, hatching, paths
+from sfzmaps.solver import answers1921, grid, hatching, paths
 from sfzmaps.solver.codes import canon
 from sfzmaps.solver.textread.store import save_npz
 from sfzmaps.transform import SheetTransform
@@ -89,7 +97,8 @@ ANSWER_PAGES = {"1921": answers1921.PAGES}     # the owner's answer pages per se
 class Sources:
     """Where a series is read: the pages, placements and reads (work), the neatlines and the solver's lots (solver),
     the legend's swatch boxes, the owner's answers and their case files, today's parcels (None: reads of parcels the
-    solver's table lacks are not placed); `order`: the draw order, bottom first (None: the published map's)."""
+    solver's table lacks are not placed); `order`: the draw order, bottom first (None: the published map's); today's
+    street centre lines (None: none, so every px off today's blocks is ignored)."""
     series: str
     work: Path
     solver: Path
@@ -98,11 +107,13 @@ class Sources:
     cases: Path
     parcels: Path | None = None
     order: tuple[str, ...] | None = None
+    streets: Path | None = None
 
 
 def sources(series: str) -> Sources:
     return Sources(series, config.WORK_DIR / series, config.DATA_DIR / "solver" / series, hatching.LEGENDS_FILE,
-                   answers1921.ANSWERS_DIR, answers1921.EXPERIMENT / "cases", config.REF_DIR / "parcels.parquet")
+                   answers1921.ANSWERS_DIR, answers1921.EXPERIMENT / "cases", config.REF_DIR / "parcels.parquet",
+                   streets=config.REF_DIR / "streets.parquet")
 
 
 def data_dir(series: str) -> Path:
@@ -254,6 +265,145 @@ def drawn_above(name: str, order: list[str], sheets: dict[str, Sheet]) -> list[S
     return [sheets[a] for a in order[order.index(name) + 1:] if overlaps(me, sheets[a])]
 
 
+# --- the street labels ----------------------------------------------------------------------------------------------
+
+STREET, NOT_STREET = 1, 0               # `street`'s labels; UNKNOWN (255) is ignored
+SUBPIXEL_BITS = 4                       # line points go to cv2 to 1/16 px (as `lots.lot_rasters` fills the lots)
+
+
+def centre_lines(src: Sources) -> np.ndarray:
+    """Today's street centre lines (`src.streets`: DataSF's, data/ref/streets.parquet, EPSG:2227 ft as the solver's
+    grid), every row: the ones no longer active too, since 1921's streets are older than today's list.  None when
+    `src.streets` is None."""
+    if src.streets is None:
+        return np.empty(0, dtype=object)
+    g = pd.read_parquet(src.streets, columns=["geometry"])["geometry"].to_numpy()
+    geoms = np.array([shapely.from_wkb(v) if isinstance(v, (bytes, bytearray)) else v for v in g], dtype=object)
+    keep = ~(shapely.is_missing(geoms) | shapely.is_empty(geoms)) if len(geoms) else np.zeros(0, bool)
+    return geoms[keep]
+
+
+def _paths(lines) -> list[np.ndarray]:
+    """The vertices (n, 2) of each line part (points and other parts left out)."""
+    parts = shapely.get_parts(np.asarray(lines, dtype=object))
+    parts = parts[shapely.get_type_id(parts) == 1]                     # LineString
+    if not len(parts):
+        return []
+    xy, idx = shapely.get_coordinates(parts, return_index=True)
+    return np.split(xy, np.flatnonzero(np.diff(idx)) + 1)
+
+
+def _draw_paths(shape: tuple[int, int], paths: list[np.ndarray]) -> np.ndarray:
+    """Paths (each (n, 2) x, y in px, px centres at integers) as 8-connected 1 px lines (cv2, to 1/16 px), bool."""
+    out = np.zeros(shape, np.uint8)
+    scale = 1 << SUBPIXEL_BITS
+    pts = [np.rint(p * scale).astype(np.int32).reshape(-1, 1, 2) for p in paths if len(p)]
+    if pts:
+        cv2.polylines(out, pts, False, 1, 1, cv2.LINE_8, shift=SUBPIXEL_BITS)
+    return out.astype(bool)
+
+
+def centre_raster(lines, shape: tuple[int, int]) -> np.ndarray:
+    """The centre lines on the solver's grid from its corner (`shape` rows x cols), bool: each line through its
+    vertices, 8-connected and 1 px wide.  Grid px (c, r) covers [c, c+1) x [r, r+1) and cv2 takes integer coordinates
+    as px centres, so the vertices go in at `to_grid - 0.5`.  A line off the grid draws nothing."""
+    return _draw_paths(shape, [grid.to_grid(p) - 0.5 for p in _paths(lines)])
+
+
+def _corridors(block_world: np.ndarray, centre_world: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """`street_labels`, and each centre px's squared corridor half-width (w(c)^2, in grid px^2, in `np.nonzero` order
+    of the returned centre)."""
+    block = np.asarray(block_world, bool)
+    centre = np.asarray(centre_world, bool) & ~block
+    street = np.where(block, NOT_STREET, UNKNOWN).astype(np.uint8)
+    cr, cc = np.nonzero(centre)
+    if not len(cr):
+        return street, centre.astype(np.uint8), np.zeros(0, np.int64)
+    if block.any():
+        ib = ndimage.distance_transform_edt(~block, return_distances=False, return_indices=True)
+        w2 = (cr - ib[0][cr, cc]).astype(np.int64) ** 2 + (cc - ib[1][cr, cc]).astype(np.int64) ** 2
+        del ib
+    else:                                                    # no block anywhere: no edge to any corridor
+        w2 = np.full(len(cr), np.iinfo(np.int64).max)
+    half = np.zeros(block.shape, np.int64)                   # w(c)^2 at each centre px
+    half[cr, cc] = w2
+    ic = ndimage.distance_transform_edt(~centre, return_distances=False, return_indices=True)
+    cols = np.arange(block.shape[1], dtype=np.int64)
+    for y0 in range(0, block.shape[0], ROWS):
+        rows = slice(y0, min(block.shape[0], y0 + ROWS))
+        ri, ci = ic[0][rows], ic[1][rows]
+        d2 = (np.arange(rows.start, rows.stop, dtype=np.int64)[:, None] - ri) ** 2 + (cols - ci) ** 2
+        inside = (d2 <= half[ri, ci]) & ~block[rows]
+        street[rows][inside] = STREET
+    return street, centre.astype(np.uint8), w2
+
+
+def street_labels(block_world: np.ndarray, centre_world: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """The street labels on the solver's 4 ft grid (uint8): with c(x) the centre-line px nearest px x, d_c(x) the
+    distance to it and w(c) the distance from c to its nearest block px (`distance_transform_edt` feature transforms,
+    compared as exact integer squares), street (1) = off the blocks and d_c(x) <= w(c(x)); not street (0) = the blocks;
+    ignored (255) = everything else.  A corridor's half-width is its own centre line's distance to today's nearest
+    block: no width is picked.  Also the centre lines used (uint8, 1): those off the blocks.  A centre px on a block
+    (a park road, a street since built over) has w = 0, so its corridor holds no px off the blocks; it is no centre,
+    so it doesn't take px from the corridor of the next centre line along."""
+    street, centre, _ = _corridors(block_world, centre_world)
+    return street, centre
+
+
+def street_grid(lines, blocks: np.ndarray) -> tuple[np.ndarray, dict]:
+    """The street labels on the whole solver grid (`street_labels` of today's blocks and `centre_raster` of `lines`)
+    and their counts: lines, centre px (and those on blocks, dropped), px per label, and the corridors' half-widths
+    (ft, over the centre px: quantiles and the largest)."""
+    centre = centre_raster(lines, blocks.shape)
+    street, kept, w2 = _corridors(blocks, centre)
+    w_ft = np.sqrt(w2.astype(float)) * grid.FT_PER_PX if blocks.any() else np.zeros(0)
+    q = (0.5, 0.9, 0.99, 0.999)
+    stats = {"lines": int(len(lines)), "centre_grid_px": int(np.count_nonzero(kept)),
+             "centre_on_blocks_px": int(np.count_nonzero(centre & blocks)),
+             "street_grid_px": int(np.count_nonzero(street == STREET)),
+             "not_street_grid_px": int(np.count_nonzero(street == NOT_STREET)),
+             "ignored_grid_px": int(np.count_nonzero(street == UNKNOWN)),
+             "half_width_ft": {**{f"q{v:g}": float(np.quantile(w_ft, v)) for v in q},
+                               "max": float(w_ft.max())} if len(w_ft) else {}}
+    return street, stats
+
+
+def page_centres(lines, sh: "Sheet") -> np.ndarray:
+    """The centre lines on the sheet's page as scanned (bool), drawn there rather than read off the grid: a page px is
+    about 5 ft on most 1921 sheets, wider than the grid's 4 ft line, so reading the grid's lines at page px centres (as
+    `block` is read) breaks them (20180102094149543, 5.2 ft/px: 16,847 pieces read, 6 drawn; 99.4% of the drawn px
+    within 1 px of a read one).  Each line near the sheet (its neatline's world bounds and two page px beyond,
+    as `centre_owner` reaches) is split every page px (`median_scale_ft_per_px`), carried through the placement's
+    inverse (`grid_to_pixel`, as `owned_px` carries px to a sheet above), and drawn 8-connected, 1 px wide; a point
+    the inverse can't place breaks its line there."""
+    h, w = sh.shape
+    lines = np.asarray(lines, dtype=object)
+    if not len(lines):
+        return np.zeros((h, w), bool)
+    step = float(sh.transform.median_scale_ft_per_px(sh.shape))
+    reach = 2.0 * step
+    x0, y0, x1, y1 = sh.bbox
+    b = shapely.bounds(lines)
+    near = (b[:, 0] <= x1 + reach) & (b[:, 2] >= x0 - reach) & (b[:, 1] <= y1 + reach) & (b[:, 3] >= y0 - reach)
+    if not near.any():
+        return np.zeros((h, w), bool)
+    cut = shapely.segmentize(shapely.clip_by_rect(lines[near], x0 - reach, y0 - reach, x1 + reach, y1 + reach), step)
+    paths = _paths(cut)
+    if not paths:
+        return np.zeros((h, w), bool)
+    n = np.array([len(p) for p in paths])
+    px = sh.transform.grid_to_pixel(np.concatenate(paths), sh.shape)
+    runs = []
+    for p in np.split(px, np.cumsum(n)[:-1]):
+        ok = np.isfinite(p).all(axis=1)
+        if ok.all():
+            runs.append(p)
+            continue
+        edges = np.flatnonzero(np.diff(np.r_[0, ok.astype(np.int8), 0]))
+        runs += [p[a:b] for a, b in zip(edges[::2], edges[1::2])]
+    return _draw_paths((h, w), runs)
+
+
 # --- the rasters ----------------------------------------------------------------------------------------------------
 
 @dataclass
@@ -267,6 +417,8 @@ class SheetRasters:
     ft_per_px: float
     turn: int = 0
     scanned_shape: tuple[int, int] = (0, 0)
+    street: np.ndarray | None = None
+    centre: np.ndarray | None = None
 
 
 def solver_grid(src: Sources) -> tuple[np.ndarray, np.ndarray]:
@@ -321,16 +473,20 @@ def owned_px(pw: hatching.PageWorld, shape: tuple[int, int], crop: np.ndarray, a
     return ok, failed
 
 
-def _rasters(src: Sources, sh: Sheet, lot_cut: np.ndarray, block_cut: np.ndarray, offset, above: list[Sheet]):
-    """A sheet's rasters (`SheetRasters`) and counts, from its cut of the solver's grid (`lot_cut`, `block_cut` from
-    grid row and column `offset`)."""
+def _rasters(src: Sources, sh: Sheet, lot_cut: np.ndarray, block_cut: np.ndarray, street_cut: np.ndarray, offset,
+             above: list[Sheet], lines):
+    """A sheet's rasters (`SheetRasters`) and counts, from its cut of the solver's grid (`lot_cut`, `block_cut`,
+    `street_cut` from grid row and column `offset`) and today's centre lines (`lines`)."""
     lum = load_luminance(src.work / sh.name / "page.png")
     if lum.shape != tuple(sh.shape):
         raise ValueError(f"{sh.name}: page {lum.shape}, header {sh.shape}")
     pw = hatching.PageWorld(sh.transform, sh.shape)
-    lot_px, blk_px = hatching.page_values(pw, sh.shape, [(lot_cut, -1), (block_cut.astype(np.uint8), 0)], offset)
+    lot_px, blk_px, st_px = hatching.page_values(
+        pw, sh.shape, [(lot_cut, -1), (block_cut.astype(np.uint8), 0), (street_cut, UNKNOWN)], offset)
     mine, failed = owned_px(pw, sh.shape, sh.crop, above)
     block = np.where(mine, blk_px, UNKNOWN).astype(np.uint8)
+    street = np.where(mine, st_px, UNKNOWN).astype(np.uint8)
+    centre = (page_centres(lines, sh) & (street == STREET)).astype(np.uint8)
     lot = np.where(mine, lot_px, -1).astype(np.int32)
     k = turn_of(sh.quad, sh.transform, sh.shape)
 
@@ -338,13 +494,19 @@ def _rasters(src: Sources, sh: Sheet, lot_cut: np.ndarray, block_cut: np.ndarray
         return np.ascontiguousarray(np.rot90(a, k))
 
     r = SheetRasters(sh.name, up(lum), up(block), up(lot), up(np.asarray(sh.crop, bool)),
-                     float(sh.transform.median_scale_ft_per_px(sh.shape)), int(k), tuple(int(v) for v in sh.shape))
+                     float(sh.transform.median_scale_ft_per_px(sh.shape)), int(k), tuple(int(v) for v in sh.shape),
+                     up(street), up(centre))
     stats = {"sheet": sh.name, "scanned_shape": list(r.scanned_shape), "shape": list(r.ink.shape), "turn": r.turn,
              "ft_per_px": r.ft_per_px, "above": [a.name for a in above], "px": int(lum.size),
              "crop_px": int(np.count_nonzero(sh.crop)), "owned_px": int(np.count_nonzero(mine)),
              "block_px": int(np.count_nonzero(block == 1)), "street_px": int(np.count_nonzero(block == 0)),
              "unknown_px": int(np.count_nonzero(block == UNKNOWN)), "lot_px": int(np.count_nonzero(lot >= 0)),
-             "lots": int(len(np.unique(lot[lot >= 0]))), "unplaced_nodes": failed}
+             "lots": int(len(np.unique(lot[lot >= 0]))), "unplaced_nodes": failed,
+             "labels": {"street_px": int(np.count_nonzero(street == STREET)),
+                        "not_street_px": int(np.count_nonzero(street == NOT_STREET)),
+                        "ignored_owned_px": int(np.count_nonzero(mine & (street == UNKNOWN))),
+                        "not_block_ignored_px": int(np.count_nonzero((block == 0) & (street == UNKNOWN))),
+                        "centre_px": int(np.count_nonzero(centre))}}
     return r, stats
 
 
@@ -358,22 +520,26 @@ def sheet_rasters(series: str, sheet: str, src: Sources | None = None) -> SheetR
     fr = frames(src)
     sheets = {s: load_sheet(src, s, fr[s]) for s in order[order.index(sheet):]}
     lot, blocks = solver_grid(src)
+    lines = centre_lines(src)
+    street, _ = street_grid(lines, blocks)
     me = sheets[sheet]
     r0, r1, c0, c1 = hatching._slice(me.transform, me.quad, lot.shape)
-    return _rasters(src, me, lot[r0:r1, c0:c1], blocks[r0:r1, c0:c1], (r0, c0), drawn_above(sheet, order, sheets))[0]
+    return _rasters(src, me, lot[r0:r1, c0:c1], blocks[r0:r1, c0:c1], street[r0:r1, c0:c1], (r0, c0),
+                    drawn_above(sheet, order, sheets), lines)[0]
 
 
 def write_rasters(f: Path, r: SheetRasters, series: str) -> None:
     f.parent.mkdir(parents=True, exist_ok=True)
-    save_npz(f, ink=r.ink, block=r.block, lot=r.lot, crop=r.crop, ft_per_px=np.float64(r.ft_per_px),
-             turn=np.int64(r.turn), scanned_shape=np.array(r.scanned_shape, np.int64), sheet=np.array(r.sheet),
-             series=np.array(series))
+    save_npz(f, ink=r.ink, block=r.block, street=r.street, centre=r.centre, lot=r.lot, crop=r.crop,
+             ft_per_px=np.float64(r.ft_per_px), turn=np.int64(r.turn),
+             scanned_shape=np.array(r.scanned_shape, np.int64), sheet=np.array(r.sheet), series=np.array(series))
 
 
 def read_rasters(f: Path) -> SheetRasters:
     with np.load(f) as z:
+        labels = [z[k] if k in z.files else None for k in ("street", "centre")]
         return SheetRasters(str(z["sheet"]), z["ink"], z["block"], z["lot"], z["crop"], float(z["ft_per_px"]),
-                            int(z["turn"]), tuple(int(v) for v in z["scanned_shape"]))
+                            int(z["turn"]), tuple(int(v) for v in z["scanned_shape"]), *labels)
 
 
 # --- the legend -----------------------------------------------------------------------------------------------------
@@ -653,10 +819,11 @@ def _init_worker():
 
 def _job(job) -> dict:
     """One sheet: its rasters written to `out`/<sheet>.npz; returns its counts and its lots' px."""
-    src, name, order, lot_cut, block_cut, offset, out, n_lots = job
+    src, name, order, lot_cut, block_cut, street_cut, offset, out, n_lots, lines = job
     fr = frames(src)
     sheets = {s: load_sheet(src, s, fr[s]) for s in order[order.index(name):]}
-    r, stats = _rasters(src, sheets[name], lot_cut, block_cut, offset, drawn_above(name, order, sheets))
+    r, stats = _rasters(src, sheets[name], lot_cut, block_cut, street_cut, offset, drawn_above(name, order, sheets),
+                        lines)
     write_rasters(out / f"{name}.npz", r, src.series)
     stats["lot_px_per_lot"] = np.bincount(r.lot[r.lot >= 0], minlength=n_lots).astype(np.int64)
     return stats
@@ -681,6 +848,8 @@ def run(series: str, out: Path | None = None, workers: int = 4, src: Sources | N
     order = draw_order(src, names)
     fr = frames(src)
     lot, blocks = solver_grid(src)
+    lines = centre_lines(src)
+    street, labels = street_grid(lines, blocks)
     table = lot_table(series, src, lot)
     n_lots = len(table)
     jobs = []
@@ -689,7 +858,8 @@ def run(series: str, out: Path | None = None, workers: int = 4, src: Sources | N
             continue
         tr = load_transform(src, s)
         r0, r1, c0, c1 = hatching._slice(tr, fr[s], lot.shape)
-        jobs.append((src, s, order, lot[r0:r1, c0:c1], blocks[r0:r1, c0:c1], (r0, c0), out, n_lots))
+        jobs.append((src, s, order, lot[r0:r1, c0:c1], blocks[r0:r1, c0:c1], street[r0:r1, c0:c1], (r0, c0), out,
+                     n_lots, lines))
     jobs.sort(key=lambda j: -int(np.prod(page_shape(src, j[1]))))          # the largest first: the pool ends sooner
     out.mkdir(parents=True, exist_ok=True)
     done = sorted(_map(_job, jobs, workers), key=lambda d: d["sheet"])
@@ -703,7 +873,8 @@ def run(series: str, out: Path | None = None, workers: int = 4, src: Sources | N
                "sheets": {d["sheet"]: {k: v for k, v in d.items() if k != "sheet"} for d in done},
                "quarters": quarter_counts(table), "reads_per_code": reads_per_code(table),
                "answers_per_page_stratum": answers_per_page(table),
-               "lot_table": attrs, "swatches": [[s, c, list(b)] for s, c, b in swatches(series, src)]}
+               "lot_table": attrs, "swatches": [[s, c, list(b)] for s, c, b in swatches(series, src)],
+               "street_labels": labels}
     (out / "summary.json").write_text(json.dumps(summary, indent=1, sort_keys=True) + "\n")
     return summary
 
@@ -810,4 +981,59 @@ def look_targets(series: str, sheets: list[str], data: Path | None = None, dest:
         f = dest / f"targets_{sheet}_zoom.png"
         cv2.imwrite(str(f), zoom)
         written.append(f)
+    return written
+
+
+LABELS_LOOK = EXPERIMENT / "streets-v2" / "look"
+LABEL_TINT = {STREET: ((0, 140, 255), 0.45), NOT_STREET: ((255, 110, 0), 0.40),      # BGR, alpha: street orange,
+              UNKNOWN: ((150, 150, 150), 0.55)}                                       # not street blue, ignored grey
+OTHER_AREA = ((60, 60, 60), 0.70)       # dark grey: not this sheet's to label (outside its neatline or drawn above)
+CENTRE_BGR = (0, 0, 200)                # dark red: today's centre lines
+LABEL_WHOLE = ("20180102094149543", "20180102094355582")            # the plan's whole sheets (Lake Merced second)
+LABEL_ZOOMS = {"20180102100525362": (2015, 1495, 520)}              # x0, y0, side (upright px): Task 2's south zoom
+
+
+def _label_tinted(r: SheetRasters) -> np.ndarray:
+    grey = np.round(r.ink * 255).astype(np.uint8)
+    img = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR).astype(np.float32)
+    other = r.block == UNKNOWN
+    for m, (bgr, a) in [(r.street == v, LABEL_TINT[v]) for v in (STREET, NOT_STREET)] + [
+            ((r.street == UNKNOWN) & ~other, LABEL_TINT[UNKNOWN]), (other, OTHER_AREA)]:
+        img[m] = img[m] * (1 - a) + np.array(bgr, np.float32) * a
+    img = np.round(img).astype(np.uint8)
+    img[r.centre == 1] = CENTRE_BGR
+    return img
+
+
+def look_labels(series: str, whole=LABEL_WHOLE, zooms=LABEL_ZOOMS, data: Path | None = None,
+                dest: Path = LABELS_LOOK) -> list[Path]:
+    """For the owner: the street labels tinted over the scan (street orange, not street blue, ignored grey, not this
+    sheet's area dark grey, today's centre lines dark red), each `whole` sheet at the scan's own px and each of `zooms`
+    ((x0, y0, side) upright px) at ZOOM x, nearest."""
+    data = Path(data or data_dir(series))
+    dest.mkdir(parents=True, exist_ok=True)
+    legend = ["orange: street (1): off today's blocks, in its centre line's corridor",
+              "blue: not street (0): today's blocks     grey: ignored (255)",
+              "dark grey: not this sheet's area (255)     dark red: today's centre lines"]
+    written = []
+    for sheet in list(whole) + list(zooms):
+        r = read_rasters(data / f"{sheet}.npz")
+        img = _label_tinted(r)
+        n = np.count_nonzero(r.block != UNKNOWN)
+        share = {v: np.count_nonzero((r.street == v) & (r.block != UNKNOWN)) / max(n, 1)
+                 for v in (STREET, NOT_STREET, UNKNOWN)}
+        head = [f"{series} {sheet}  {r.ft_per_px:.2f} ft/px  street labels v2 (centre-line corridors)",
+                f"of this sheet's area: street {share[STREET]:.1%}, not street {share[NOT_STREET]:.1%}, "
+                f"ignored {share[UNKNOWN]:.1%}"]
+        if sheet in whole:
+            f = dest / f"labels_{sheet}_whole.png"
+            cv2.imwrite(str(f), _banner(img, head + legend, 1.6))
+            written.append(f)
+        if sheet in zooms:
+            x0, y0, s = zooms[sheet]
+            crop = np.repeat(np.repeat(img[y0:y0 + s, x0:x0 + s], ZOOM, 0), ZOOM, 1)
+            f = dest / f"labels_{sheet}_zoom.png"
+            zoom_line = f"zoom x{ZOOM}: scan px x {x0}-{x0 + s}, y {y0}-{y0 + s} (upright)"
+            cv2.imwrite(str(f), _banner(crop, head + [zoom_line] + legend, 1.0))
+            written.append(f)
     return written
