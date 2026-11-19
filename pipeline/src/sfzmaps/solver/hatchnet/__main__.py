@@ -48,6 +48,16 @@ def main(argv: list[str] | None = None) -> None:
     ds.add_argument("--runs", nargs="+", metavar="NAME",
                     help="only these runs (answers_<q>, reads_<q>, answers_all; default: all nine, train.RUNS)")
     ds.add_argument("--look-only", action="store_true", help="only draw the pictures of the written all-quarters model")
+    pr = sub.add_parser("predict", help="each lot's district by the fold that withheld its quarter, and the "
+                                        "all-quarters model's; their pictures (hatchnet.predict)")
+    pr.add_argument("--series", required=True)
+    pr.add_argument("--device", help="default: mps where available, else cpu")
+    pr.add_argument("--root", type=Path, help="default: data/solver/experiments/hatch-cnn/predict")
+    pr.add_argument("--models", type=Path, help="default: data/solver/experiments/hatch-cnn/districts/models")
+    pr.add_argument("--no-look", action="store_true", help="write the predictions only, no pictures")
+    pr.add_argument("--look-only", action="store_true", help="only draw the pictures, from the written predictions")
+    pr.add_argument("--which", choices=("with_answers", "reads_only"), default="with_answers",
+                    help="--look-only: the fold predictions the sheets are drawn from (default with_answers)")
     a = ap.parse_args(argv)
     for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
         os.environ.setdefault(v, "1")                 # the workers start with one maths thread each
@@ -118,6 +128,29 @@ def main(argv: list[str] | None = None) -> None:
             print(f"{name}: kept step {v['best_step']} of {recipe.steps}, held-out loss {k['val_loss']:.4f} (reads "
                   f"{k['val_read_loss']:.4f}, read agreement {k['val_read_agree']:.4f}); {v['seconds']:.0f} s; "
                   f"lot units per quarter {v['units_per_quarter']}")
+        for f in s.get("pictures", []):
+            print(f)
+    elif a.command == "predict":
+        import logging
+
+        from sfzmaps.solver.hatchnet import predict
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+        if a.look_only:
+            for f in predict.look_sheets(a.series, a.root, which=a.which):
+                print(f)
+            if a.which == "with_answers":
+                for f in predict.look_random(a.series, a.root):
+                    print(f)
+            return
+        s = predict.run(a.series, a.root, a.models, a.device, look=not a.no_look)
+        for name, v in s["runs"].items():
+            print(f"{name}: step {v['step']}, {v['rows']} lots from {len(v['sheets'])} sheets, {v['seconds']:.0f} s")
+        for name, v in s["outputs"].items():
+            print(f"{name}: {v['rows']} rows ({v['file']}); by model {v['rows_per_model']}; lots by sheets "
+                  f"{v['lots_by_sheets']}")
+        w = s["lots"]["without_a_row"]
+        print(f"lots: {s['lots']['total']}, {s['lots']['with_a_row']} with a row; {w['count']} without (no px on any "
+              f"sheet: {w['no_px_on_any_sheet']}; no centre sheet: {w['no_centre_sheet']})")
         for f in s.get("pictures", []):
             print(f)
 

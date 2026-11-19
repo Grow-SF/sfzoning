@@ -23,4 +23,12 @@ a pooling weight, trained through per-lot pooled losses (spec: docs/superpowers/
 
     OMP_NUM_THREADS=1 SFZMAPS_MAX_USD=0 uv run python -m sfzmaps.solver.hatchnet districts --series 1921
 
+  predict  each lot's district (`predict`, ruling R8): the model's own pooled lot probability over all the lot's px on
+           every sheet, pooled once; each quarter's lots by the fold that withheld it (with_answers.parquet from
+           answers_<q>, reads_only.parquet from reads_<q>), and the all-quarters model's (all.parquet, pictures only),
+           into hatch-cnn/predict; then the pictures: four sheets' lots in their predicted districts, and the contact
+           sheet of the owner's random lots (look/).  No score against the answers
+
+    OMP_NUM_THREADS=1 SFZMAPS_MAX_USD=0 uv run python -m sfzmaps.solver.hatchnet predict --series 1921
+
 $0: no API calls."""

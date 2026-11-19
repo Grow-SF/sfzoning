@@ -13,6 +13,10 @@
             tint's strength the px's learned pooling weight (`weight_strength`: strong where the px counts most in its
             lot, pale where it is discounted, so its argmax hardly counts); the banner gives the lots' weight-mass
             shares; whole, and a zoom
+  quarter_seams  where the lots' quarters meet on a sheet (each side predicted by another fold's model), drawn over
+            `district_lots` for the fold predictions (`predict.look_sheets`)
+  contact   a contact sheet of single lots (`lot_crop`, `contact_tile`, `contact_pages`): each tile the scan round one
+            lot with the lot outlined, over lines of text, framed red or grey (`predict.look_random`)
 
 Nothing here is used by the reading: the pictures only show it.
 """
@@ -345,12 +349,121 @@ LOTS_LEGEND = ["each lot: its pooled district (its px on this sheet, the learned
 
 
 def district_lots(sheet: data.SheetRasters, code: np.ndarray, prob: np.ndarray, out: Path, at=None,
-                  note: str = "", shares=None, lots: int = 0) -> list[Path]:
-    """Every lot in its pooled district (`district_lots_tint`), into the folder `out`: districts_<sheet>_lots_whole.png
-    and, with `at`, districts_<sheet>_lots_zoom.png.  `shares`: the share of the sheet's `lots` pooled to each district,
-    for the banner.  Returns the paths."""
+                  note: str = "", shares=None, lots: int = 0, legend=LOTS_LEGEND, name: str = "lots",
+                  seams: np.ndarray | None = None) -> list[Path]:
+    """Every lot in its pooled district (`district_lots_tint`), into the folder `out`:
+    districts_<sheet>_<name>_whole.png and, with `at`, districts_<sheet>_<name>_zoom.png.  `shares`: the share of the
+    sheet's `lots` pooled to each district, for the banner; `legend`: the banner's key; `seams` (h, w) bool: px drawn
+    SEAM_BGR on top.  Returns the paths."""
     base = np.round(district_lots_tint(sheet, code, prob)).astype(np.uint8)
+    if seams is not None:
+        base[seams] = SEAM_BGR
     head = [f"{sheet.sheet}  {sheet.ft_per_px:.2f} ft/px  pooled lot districts  {note}"]
     if shares is not None:
         head.append(f"the sheet's {lots} lots pooled to: {_shares(shares)}")
-    return _write(base, sheet, Path(out), "lots", at, head, LOTS_LEGEND)
+    return _write(base, sheet, Path(out), name, at, head, list(legend))
+
+
+SEAM_BGR = (255, 255, 0)           # cyan: no district's colour
+SEAM_WIDTH = 3                     # px (scan px)
+SEAM_REACH = 60                    # px: a seam is drawn only this near a lot (not across open water or blank tracts)
+
+
+def quarter_seams(sheet: data.SheetRasters, quarter: np.ndarray) -> np.ndarray:
+    """(h, w) bool: where the lots' quarters meet on the sheet, SEAM_WIDTH px wide: every px takes the quarter of its
+    nearest lot px (`quarter` (h, w): each lot px's quarter index, -1 off the lots) and the seam is where that changes,
+    inside the neatline, on the sheet's own area and within SEAM_REACH px of a lot."""
+    on = quarter >= 0
+    if not on.any():
+        return np.zeros(quarter.shape, bool)
+    dist, (iy, ix) = ndimage.distance_transform_edt(~on, return_indices=True)
+    q = quarter[iy, ix]
+    edge = np.zeros(q.shape, bool)
+    edge[:, 1:] |= q[:, 1:] != q[:, :-1]
+    edge[1:] |= q[1:] != q[:-1]
+    edge &= np.asarray(sheet.crop, bool) & (sheet.block != data.UNKNOWN) & (dist <= SEAM_REACH)
+    return ndimage.binary_dilation(edge, iterations=SEAM_WIDTH // 2) if SEAM_WIDTH > 1 else edge
+
+
+# --- the contact sheet of single lots -------------------------------------------------------------------------------
+
+CONTACT_SIDE = 300                 # px, a tile's crop (square)
+CONTACT_MARGIN = 24                # scan px of print kept round the lot's box at least
+CONTACT_TEXT = 0.45                # the tile's text scale (cv2.FONT_HERSHEY_SIMPLEX)
+CONTACT_LINE = 19                  # px per text line
+CONTACT_FRAME = 5                  # px, the frame round each tile
+OUTLINE_BGR = (230, 0, 230)        # magenta: the lot's outline (no district's colour)
+DIFFERS_BGR = (0, 0, 220)          # red frame: the prediction differs from the owner's answer
+SAME_BGR = (200, 200, 200)         # grey frame: the same
+CONTACT_COLUMNS, CONTACT_ROWS = 8, 6
+
+
+def lot_crop(sheet: data.SheetRasters, lot: int, box: tuple[slice, slice]) -> tuple[np.ndarray, str]:
+    """The scan round the lot (uint8 BGR, CONTACT_SIDE square), the lot's px on this sheet outlined outside their edge
+    in OUTLINE_BGR (so every px of the lot stays as scanned), and the scale: "x2" (a CONTACT_SIDE / 2 square of scan
+    px, each drawn 2 x 2), "x1" (a CONTACT_SIDE square, each px as scanned), or "1/k" (a lot too big for that: the
+    square that holds it, shrunk by k, area-averaged).  `box`: the lot's bounding box on the sheet (rows, columns).
+    The page's paper continues past its edge."""
+    ys, xs = box
+    ext = max(ys.stop - ys.start, xs.stop - xs.start) + 2 * CONTACT_MARGIN
+    side = CONTACT_SIDE // 2 if ext <= CONTACT_SIDE // 2 else max(ext, CONTACT_SIDE)
+    y0, x0 = (ys.start + ys.stop - side) // 2, (xs.start + xs.stop - side) // 2
+    h, w = sheet.ink.shape
+    ink = np.ones((side, side), np.float32)
+    mask = np.zeros((side, side), bool)
+    a0, a1, b0, b1 = max(y0, 0), min(y0 + side, h), max(x0, 0), min(x0 + side, w)
+    ink[a0 - y0:a1 - y0, b0 - x0:b1 - x0] = sheet.ink[a0:a1, b0:b1]
+    mask[a0 - y0:a1 - y0, b0 - x0:b1 - x0] = sheet.lot[a0:a1, b0:b1] == lot
+    img = np.round(_grey(ink)).astype(np.uint8)
+    if side * 2 == CONTACT_SIDE:
+        img, mask, scale = np.repeat(np.repeat(img, 2, 0), 2, 1), np.repeat(np.repeat(mask, 2, 0), 2, 1), "x2"
+    elif side == CONTACT_SIDE:
+        scale = "x1"
+    else:
+        img = cv2.resize(img, (CONTACT_SIDE, CONTACT_SIDE), interpolation=cv2.INTER_AREA)
+        mask = cv2.resize(mask.astype(np.float32), (CONTACT_SIDE, CONTACT_SIDE), interpolation=cv2.INTER_AREA) >= 0.5
+        scale = f"1/{side / CONTACT_SIDE:.1f}"
+    ring = ndimage.binary_dilation(mask, iterations=2) & ~mask
+    img[ring] = OUTLINE_BGR
+    return img, scale
+
+
+def contact_tile(crop: np.ndarray, lines: list[str], differs: bool) -> np.ndarray:
+    """A tile: the crop over its lines of text, framed red (`differs`) or grey."""
+    th = CONTACT_LINE * len(lines) + 8
+    text = np.full((th, crop.shape[1], 3), 255, np.uint8)
+    for k, line in enumerate(lines):
+        cv2.putText(text, line, (4, CONTACT_LINE * (k + 1)), cv2.FONT_HERSHEY_SIMPLEX, CONTACT_TEXT, (0, 0, 0), 1,
+                    cv2.LINE_AA)
+    tile = np.vstack([crop, text])
+    f = CONTACT_FRAME
+    return cv2.copyMakeBorder(tile, f, f, f, f, cv2.BORDER_CONSTANT, value=DIFFERS_BGR if differs else SAME_BGR)
+
+
+def contact_pages(tiles: list[np.ndarray], out: Path, name: str, head: list[str], columns: int = CONTACT_COLUMNS,
+                  rows: int = CONTACT_ROWS) -> list[Path]:
+    """Write the tiles, in order, `columns` x `rows` to a page, into the folder `out`: <name>_<k>.png, each under the
+    banner `head` and which tiles it holds.  Returns the paths."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    if not tiles:
+        return []
+    th, tw = tiles[0].shape[:2]
+    gap = 8
+    per = columns * rows
+    pages = (len(tiles) + per - 1) // per
+    got = []
+    for p in range(pages):
+        page = np.full((rows * (th + gap) + gap, columns * (tw + gap) + gap, 3), 255, np.uint8)
+        chunk = tiles[p * per:(p + 1) * per]
+        for k, t in enumerate(chunk):
+            y, x = gap + (k // columns) * (th + gap), gap + (k % columns) * (tw + gap)
+            page[y:y + t.shape[0], x:x + t.shape[1]] = t
+        used = (len(chunk) + columns - 1) // columns
+        page = page[:used * (th + gap) + gap]
+        lines = head + [f"page {p + 1} of {pages}: tiles {p * per + 1}-{p * per + len(chunk)} of {len(tiles)}, "
+                        "left to right, top to bottom"]
+        f = out / f"{name}_{p + 1}.png"
+        cv2.imwrite(str(f), _banner(page, lines, 1.0))
+        got.append(f)
+    return got
