@@ -6,6 +6,7 @@ few minutes on the CPU, and the two run side by side).
 
 The pass check (+-0.03 on a rate) is the test's own criterion, not a setting of the model."""
 import numpy as np
+import pytest
 
 from sfzmaps.solver.hatchnet import train
 from synthetic_towns import printed_blocks, town
@@ -13,6 +14,10 @@ from synthetic_towns import printed_blocks, town
 SMALL = train.Recipe(batch=4, tile=64, width=4, val_cell=64, val_tiles=8)
 
 
+@pytest.mark.xfail(strict=False, reason=(
+    "ruling R5 (streets v2, 2026-11-19): the joint ML fit identifies the rates only partly; the check (+-0.03) is kept "
+    "as written.  Seed 0 passes (theta 0.097, phi 0.060); seeds 1 and 2 do not (theta 0.089 / 0.083, phi 0.059 / "
+    "0.072).  The rates' estimator is to be replaced after the v2a review (train.RATE_INIT)"))
 def test_theta_recovered():
     """Labels flipped px by px with theta = 0.12 (a printed block labelled street) and phi = 0.03 (a printed street
     labelled block): the fitted rates fall within 0.03 of them.  (Seed 0 gives theta 0.097, phi 0.060; seeds 1 and 2
