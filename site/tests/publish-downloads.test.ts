@@ -11,8 +11,9 @@ type Result = {
   newVersions: Version[];
   uploads: Upload[];
   copies: { from: string; to: string }[];
+  locals: Record<string, { root: string; rel: string }>;
 };
-const plan = script.plan as (...a: unknown[]) => Result;
+const plan = script.plan as unknown as (...a: unknown[]) => Result;
 
 const BASE = "https://b.example";
 const SHA = "3f9a2c1b" + "0".repeat(56);
@@ -373,5 +374,122 @@ describe("multipart parts", () => {
       "part 1 10", "part 2 10", "part 3 5",
       'complete [{"etag":"e1","partNumber":1},{"etag":"e2","partNumber":2},{"etag":"e3","partNumber":3}]',
     ]);
+  });
+});
+
+describe("plan: locals", () => {
+  const withLocals = (r: Result) => r.locals;
+
+  it("maps every current file, sidecar and sheet, new or kept, to where it is on disk", () => {
+    const i = idx({ "1948/lots.gpkg": lots(), "1921/citywide.cog": city }, { "1948": [sheet()] });
+    const first = run(i, empty, hist, {}, new Map([[DVC, 5]]));
+    const locals = withLocals(first);
+    expect(locals[lotsName]).toEqual({ root: "downloads", rel: "1948/1948-lots.gpkg.zip" });
+    const cityEntry = first.files["1921/citywide.cog"];
+    expect(locals[cityEntry.name]).toEqual({ root: "downloads", rel: "1921/1921-citywide.tif" });
+    expect(locals[cityEntry.extra!["README.txt"]]).toEqual({ root: "downloads", rel: "1921/1921-citywide.README.txt" });
+    expect(locals[cityEntry.extra!["LICENSE.txt"]]).toEqual({ root: "downloads", rel: "1921/1921-citywide.LICENSE.txt" });
+    expect(locals[first.sheets["1948"].items[0].name]).toEqual({ root: "work", rel: "1948/10/warped_paper.tif" });
+
+    const kept = run(i, { files: first.files, sheets: first.sheets }, { versions: first.newVersions }, first.numbers, new Map([[DVC, 5]]));
+    expect(kept.newVersions).toEqual([]);
+    expect(withLocals(kept)).toEqual(locals);
+  });
+});
+
+describe("releaseStep", () => {
+  type Step = { id: string; date: string; names: string[]; extras: { series: string; name: string; sha256: string }[] } | null;
+  const step = script.releaseStep as (record: unknown, manifest: unknown, newVersions: number, today: string, prev: string) => Step;
+  const m = run(idx({ "1948/lots.gpkg": lots(), "1921/citywide.cog": city }));
+  const manifest = { files: m.files, sheets: m.sheets };
+  const none = { releases: [] };
+
+  it("backfills: an empty record and no new versions is dated the day the set was published", () => {
+    expect(step(none, manifest, 0, "2026-11-20", "2026-11-18")).toMatchObject({ id: "2026-11-18", date: "2026-11-18" });
+  });
+  it("an empty record with new versions is dated today, and holds every current name and sidecar", () => {
+    const r = step(none, manifest, 3, "2026-11-20", "2026-11-18")!;
+    expect(r).toMatchObject({ id: "2026-11-20", date: "2026-11-20" });
+    expect(r.names).toEqual([m.files["1921/citywide.cog"].name, lotsName].sort());
+    expect(r.extras.map((e) => e.name).sort()).toEqual(Object.values(m.files["1921/citywide.cog"].extra!).sort());
+  });
+  it("an unchanged set makes no release", () => {
+    const r = step(none, manifest, 0, "2026-11-20", "2026-11-18")!;
+    expect(step({ releases: [r] }, manifest, 0, "2026-11-21", "2026-11-20")).toBeNull();
+  });
+  it("a changed set on a day that already has a release gets -2", () => {
+    const r = step(none, manifest, 0, "2026-11-18", "2026-11-18")!;
+    const changed = run(idx({ "1948/lots.gpkg": lots(SHA2, "2026-11-18") }));
+    const next = step({ releases: [r] }, { files: changed.files, sheets: {} }, 1, "2026-11-18", "2026-11-18")!;
+    expect(next).toMatchObject({ id: "2026-11-18-2", date: "2026-11-18" });
+  });
+});
+
+describe("writeZip", () => {
+  type Entry = { name: string; file?: string; text?: string; sha256?: string; lastModified: Date };
+  const writeZip = script.writeZip as (out: string, entries: Entry[]) => Promise<{ bytes: number; sha256: string }>;
+  const setup = async () => {
+    const { mkdtempSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { createHash } = await import("node:crypto");
+    const dir = mkdtempSync(`${tmpdir()}/pdz-`);
+    writeFileSync(`${dir}/a.bin`, "alpha");
+    writeFileSync(`${dir}/b.bin`, "bravo bravo");
+    const sha = (s: string | Buffer) => createHash("sha256").update(s).digest("hex");
+    const when = new Date("2026-11-18T12:00:00Z");
+    return { dir, sha, when };
+  };
+  /** File names in the order their local headers appear (signature PK\x03\x04, name length at 26, name at 30). */
+  const localNames = (buf: Buffer) => {
+    const out: string[] = [];
+    for (let i = buf.indexOf("PK\x03\x04"); i >= 0; i = buf.indexOf("PK\x03\x04", i + 4)) {
+      const n = buf.readUInt16LE(i + 26);
+      out.push(buf.subarray(i + 30, i + 30 + n).toString("utf8"));
+    }
+    return out;
+  };
+
+  it("writes README.txt first, then the files stored as they are, and returns the zip's size and sha256", async () => {
+    const { readFileSync, statSync } = await import("node:fs");
+    const { dir, sha, when } = await setup();
+    const out = `${dir}/out/x.zip`;
+    const r = await writeZip(out, [
+      { name: "README.txt", text: "read me", lastModified: when },
+      { name: "a.bin", file: `${dir}/a.bin`, sha256: sha("alpha"), lastModified: when },
+      { name: "b.bin", file: `${dir}/b.bin`, sha256: sha("bravo bravo"), lastModified: when },
+    ]);
+    const buf = readFileSync(out);
+    expect(r).toEqual({ bytes: statSync(out).size, sha256: sha(buf) });
+    expect(localNames(buf)).toEqual(["README.txt", "a.bin", "b.bin"]);
+    expect(buf.includes("bravo bravo")).toBe(true); // stored, not compressed
+  });
+
+  it("rejects, naming the member, when a file's sha256 is not the expected one, and leaves no zip", async () => {
+    const { existsSync } = await import("node:fs");
+    const { dir, sha, when } = await setup();
+    const out = `${dir}/bad.zip`;
+    await expect(
+      writeZip(out, [
+        { name: "README.txt", text: "read me", lastModified: when },
+        { name: "a.bin", file: `${dir}/a.bin`, sha256: sha("alpha"), lastModified: when },
+        { name: "b.bin", file: `${dir}/b.bin`, sha256: "0".repeat(64), lastModified: when },
+      ]),
+    ).rejects.toThrow(/b\.bin/);
+    expect(existsSync(out)).toBe(false);
+  });
+});
+
+describe("zipReadme", () => {
+  const readme = script.zipReadme as (release: unknown, kind: string, count: number, bytes: number) => string;
+  const rel = { id: "2026-11-18-2", date: "2026-11-18" };
+  it("names the release, how to verify, the credit and the release page; only the whole-release zip carries the Rumsey credit", () => {
+    const all = readme(rel, "all", 400, 6_600_000_000);
+    expect(all).toContain("2026-11-18-2");
+    expect(all).toContain("sha256sum -c SHA256SUMS");
+    expect(all).toContain("Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)");
+    expect(all).toContain("David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries");
+    expect(all).toContain("CC BY-NC-SA 3.0");
+    expect(all).toContain("https://sfzoning.com/data/releases/2026-11-18-2");
+    expect(readme(rel, "gpkg", 20, 744_000_000)).not.toContain("David Rumsey");
   });
 });

@@ -74,6 +74,12 @@ The usual way is `uv run sfzmaps release` in `pipeline/` (checks, then both publ
 PR with the updated manifests; see the pipeline README, "Releasing"). The scripts stay runnable
 alone (`scripts/publish-tiles.mjs`, `scripts/publish-downloads.mjs`, each with `--dry-run`).
 
+`publish-downloads.mjs` writes `lib/downloads.json`, `lib/download-versions.json`,
+`lib/download-releases.json` and `lib/sheet-numbers.json`; commit all four. When the set of
+current files changed, it also makes a release: four stored zips (the whole release, and GeoJSON,
+GeoPackage and Shapefile) uploaded to `downloads/releases/<id>/` on the store. They are built
+first under `pipeline/data/downloads/releases/`, which needs about 8 GB of free disk today.
+
 To publish changed tiles, with `BLOB_READ_WRITE_TOKEN` from `vercel env pull`:
 
 ```sh
