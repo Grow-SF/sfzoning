@@ -95,7 +95,30 @@ blocks rule, `look.streets` and the CLI stay.
   20180102094355582 (whole). Write `streets-v2/look/labels_*.png`.
 - [ ] **Step 6:** Commit `hatchnet: street labels from centre-line corridors; everything else ignored`.
 
-### Task B: Soft-clDice, checkpoint selection, retrain and compare
+### Task B: Soft-clDice with a missing-street noise model, checkpoint selection, retrain and compare
+
+**Added on 11-18 (owner: "yep", "test it first").** Today's streets that weren't printed in 1921 (Sunset Blvd,
+I-280, cuts through cemeteries) are labelled street. The clDice recall would push the network to draw them. So the
+street loss gets a label-noise model in the manner of Mnih & Hinton (ICML 2012):
+- **Two learned rates:**
+  - θ = P(map says street | the print shows block): today's street not printed;
+  - φ = P(map says block | the print shows street): a 1921 street under today's block.
+- **The likelihood** of a label m given the network's p:
+  - for m = 1: p(1−φ) + (1−p)θ;
+  - for m = 0: pφ + (1−p)(1−θ).
+- **How the rates are fitted:** jointly, by maximum likelihood, as two sigmoid-parameterised scalars. The
+  initialisation is stated. There are no picked values.
+- **The clDice recall** weights each centre-line px by the posterior that it is truly a street, given p (detached):
+  p(1−φ) / (p(1−φ) + (1−p)θ).
+- **The soft-label weights** (`street_w`) still multiply the BCE terms.
+
+**Test first** (synthetic cases, before any real run; each tests one cause alone):
+- `test_unprinted_street_not_forced`: a centre line across solid hatched block ink with no corridor. Once θ is fitted
+  on a synthetic set where 12% of labelled street is unprinted, the loss gradient pushing street there is much
+  smaller than on a printed corridor (assert a ratio < 1/4, stated as the test's check, not a model setting).
+- `test_printed_narrow_street_still_enforced`: a 5-px printed corridor under a centre line. Recall still rises when a
+  gap in the predicted street is closed.
+- `test_theta_recovered`: on a synthetic set with known θ = 0.12 and φ = 0.03, the fitted rates fall within ±0.03.
 
 **Files:**
 - Create: `pipeline/src/sfzmaps/solver/hatchnet/topo.py`: `soft_skeleton(p: Tensor, iters: int) -> Tensor` and
