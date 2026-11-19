@@ -6,8 +6,8 @@ scanned; 1 the sheet's measured scale, ft/px over FT_SCALE, the same at every px
 in so one network reads sheets scanned at 2.72 and at 4.6-5.4 ft/px without rescaling the scan.
 
 Outputs per px (OUTPUTS channels):
-  STREET     0     the logit of the px being a street (not in a printed block); trained on today's blocks placed on
-                   the scan (`train.fit_streets`)
+  STREET     0     the logit of the px being a street (not in a printed block); trained on the street labels from
+                   today's centre lines and blocks placed on the scan (`train.fit_streets`)
   DISTRICTS  1-6   the six districts' logits, in NAMES order (trained later, through pooled lot losses)
   WEIGHT     7     the logit of how much the px counts when its lot's district evidence is pooled (trained later)
 

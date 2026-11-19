@@ -8,8 +8,10 @@ a pooling weight, trained through per-lot pooled losses (spec: docs/superpowers/
 
     OMP_NUM_THREADS=1 SFZMAPS_MAX_USD=0 uv run python -m sfzmaps.solver.hatchnet data --series 1921
 
-  streets  the network (`model`) and its street output trained on today's blocks placed on the scans; every sheet's
-           street probability and blocks, the connected areas it calls not street (`train`); their pictures (`look`)
+  streets  the network (`model`) and its street output, trained (`train`) on the street labels with a label-noise
+           model and the clDice terms (`topo`; `--street-loss v2`, the default, into hatch-cnn/streets-v2), or on
+           today's blocks placed on the scans (`--street-loss v1`, into hatch-cnn); every sheet's street probability
+           and blocks, the connected areas it calls not street; their pictures (`look`)
 
     OMP_NUM_THREADS=1 SFZMAPS_MAX_USD=0 uv run python -m sfzmaps.solver.hatchnet streets --series 1921
 

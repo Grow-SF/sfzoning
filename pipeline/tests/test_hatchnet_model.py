@@ -1,34 +1,14 @@
 """The learned reader's network and its learned streets (`sfzmaps.solver.hatchnet.model`, `.train`): the network's
 shape, CPU training that gives the same bits twice, a street output that learns more than the share of street px
-from a synthetic page, and blocks as the connected areas the street output calls "not street"."""
+from a synthetic page (`synthetic_towns`), and blocks as the connected areas the street output calls "not street"."""
 import numpy as np
 import torch
 
-from sfzmaps.solver.hatchnet import data, model, train
+from sfzmaps.solver.hatchnet import model, train
+from synthetic_towns import town
 
 # A small recipe for the CPU: a narrow network on small tiles, few steps (the real settings are train.Recipe()'s).
 SMALL = train.Recipe(steps=5, batch=4, tile=64, width=4, val_every=50, val_tiles=4, val_cell=64)
-
-
-def town(seed: int, shape=(192, 192), block=40, street=8, period=6, ft_per_px=5.0) -> data.SheetRasters:
-    """A synthetic sheet: a grid of `block`-px blocks between white `street`-px streets, the grid shifted by a random
-    phase; each block has a black outline and a diagonal hatch every `period` px (one family, at one angle, as 1R).
-    The target is today's blocks exactly (block 1 inside a block, 0 on a street), every px known; the neatline is the
-    whole page."""
-    rng = np.random.default_rng(seed)
-    h, w = shape
-    step = block + street
-    oy, ox = (int(v) for v in rng.integers(0, step, 2))
-    yy, xx = np.mgrid[0:h, 0:w]
-    in_y, in_x = (yy - oy) % step < block, (xx - ox) % step < block
-    inside = in_y & in_x
-    edge_y = ((yy - oy) % step == 0) | ((yy - oy) % step == block - 1)
-    edge_x = ((xx - ox) % step == 0) | ((xx - ox) % step == block - 1)
-    outline = inside & (edge_y | edge_x)
-    hatch = inside & ((yy + xx) % period == 0)
-    ink = np.where(outline | hatch, 0.0, 1.0).astype(np.float32)
-    return data.SheetRasters(f"town{seed}", ink, inside.astype(np.uint8), np.full(shape, -1, np.int32),
-                             np.ones(shape, bool), ft_per_px)
 
 
 def test_shapes():

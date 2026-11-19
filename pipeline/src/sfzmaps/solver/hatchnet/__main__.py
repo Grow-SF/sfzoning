@@ -25,7 +25,11 @@ def main(argv: list[str] | None = None) -> None:
     st.add_argument("--device", help="default: mps where available, else cpu")
     st.add_argument("--seed", type=int, default=0)
     st.add_argument("--steps", type=int, help="default: train.STEPS")
-    st.add_argument("--root", type=Path, help="default: data/solver/experiments/hatch-cnn (models/, streets/, look/)")
+    st.add_argument("--street-loss", choices=("v1", "v2"), default="v2",
+                    help="v1: Task 2's cross-entropy on today's blocks; v2: the street labels with the noise model and "
+                         "clDice (default)")
+    st.add_argument("--root", type=Path, help="default: data/solver/experiments/hatch-cnn for v1, its streets-v2/ for "
+                                              "v2 (models/, streets/, look/)")
     st.add_argument("--look", nargs="*", metavar="SHEET", help="the sheets to draw (default: train.LOOK_SHEETS)")
     st.add_argument("--redraw", action="store_true", help="only draw the pictures again, from the written streets")
     a = ap.parse_args(argv)
@@ -51,19 +55,22 @@ def main(argv: list[str] | None = None) -> None:
     elif a.command == "streets":
         import logging
 
-        from sfzmaps.solver.hatchnet import data, train
+        from sfzmaps.solver.hatchnet import train
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-        root = a.root or data.EXPERIMENT
+        root = a.root or train.default_root(a.street_loss)
         sheets = tuple(a.look) if a.look is not None else train.LOOK_SHEETS
         if a.redraw:
             for f in train.redraw(a.series, root, sheets):
                 print(f)
             return
-        recipe = train.Recipe(**({"steps": a.steps} if a.steps else {}))
+        recipe = train.Recipe(street_loss=a.street_loss, **({"steps": a.steps} if a.steps else {}))
         s = train.run(a.series, root, a.device, a.seed, recipe, sheets)
         h = s["held_out"]
-        print(f"device {s['device']}, {s['weights']} weights, kept step {s['best_step']} of {recipe.steps}; "
-              f"{s['seconds']['train']:.0f} s training, {s['seconds']['predict']:.0f} s predicting")
+        print(f"device {s['device']}, {s['weights']} weights, {recipe.street_loss} loss, kept step {s['best_step']} "
+              f"of {recipe.steps}; {s['seconds']['train']:.0f} s training, {s['seconds']['predict']:.0f} s predicting")
+        if s["rates"]:
+            print(f"noise rates kept: theta {s['rates']['theta']:.4f}, phi {s['rates']['phi']:.4f} (last step: "
+                  f"theta {s['last_rates']['theta']:.4f}, phi {s['last_rates']['phi']:.4f})")
         print(f"held out: {h['px']} px, agreement {h['agree']:.4f} (all one class: {h['majority_agree']:.4f}), "
               f"BCE {h['bce']:.4f} (constant prior {h['constant_prior_bce']:.4f})")
         z, t = s["last_step"]["held_out"], s["last_step"]["trained"]
