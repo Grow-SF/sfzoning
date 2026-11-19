@@ -136,6 +136,44 @@ def test_lots_off_the_print_keep_the_outline_out():
         assert seen
 
 
+def gapped_grid(gap: int):
+    """A 4 x 4 grid of blank blocks (3 px outlines, 12 px streets, lots on the print), each outline with one gap of
+    `gap` px in its top edge; and the rings the line work traces, closing the gaps."""
+    b, s, w, n = 60, 12, 3, 4
+    size = n * (b + s) + s
+    ink = np.zeros((size, size), np.uint8)
+    lots = np.zeros_like(ink)
+    rings = []
+    for i in range(n):
+        for j in range(n):
+            y0, x0 = s + i * (b + s), s + j * (b + s)
+            ink[y0:y0 + b, x0:x0 + b] = 1
+            ink[y0 + w:y0 + b - w, x0 + w:x0 + b - w] = 0
+            ink[y0:y0 + w, x0 + b // 2 - gap // 2:x0 + b // 2 - gap // 2 + gap] = 0
+            lots[y0 + 1:y0 + b - 1, x0 + 1:x0 + b - 1] = 1
+            rings.append(np.array([[x0 + 1, y0 + 1], [x0 + b - 2, y0 + 1], [x0 + b - 2, y0 + b - 2],
+                                   [x0 + 1, y0 + b - 2], [x0 + 1, y0 + 1]], float))
+    return ink, lots, rings, w
+
+
+def test_gapped_outlines_stay_blocks():
+    # with the paper split only by its connections, a gap in each outline makes every block one region with the
+    # streets, which lies mostly on the blocks: owned, holes filled, no outline found.  A gap of one stroke holds no
+    # core, so the paper splits there anyway; a gap of three strokes takes the line work's ring (it closes the gap)
+    for gap, rings_needed in ((3, False), (9, True)):
+        ink, lots, rings, w = gapped_grid(gap)
+        outline = ink > 0
+        streets = (ink == 0) & (lots == 0)
+        for given in ([], rings):
+            band = hatching.outline_mask(ink, given, w, lots)
+            paper = hatching.block_paper(ink, given, lots, w)
+            if given or not rings_needed:
+                assert (band & outline).sum() / outline.sum() > 0.95, (gap, len(given))
+                assert (paper & streets).sum() <= 0.02 * streets.sum(), (gap, len(given))   # the gap's own px
+            else:
+                assert (band & outline).sum() / outline.sum() < 0.05                         # it leaks
+
+
 @pytest.mark.parametrize("traced", ["every strip", "every other strip"])
 def test_hatched_block_keeps_its_hatch(traced):
     # a 1R block: outline 3 px wide around page px 39-160, -45 degree hatch 12 px apart inside; the line work traces

@@ -25,10 +25,11 @@ Every number is measured on the scans, derived from such a measure, or is a binn
   patches   squares of side 2 x period (two periods: the least that shows a period) at a stride of one period
             (`patch_grid`), so every px away from the page's edge lies in four.
   stroke    the printed line's width (`stroke_width`, across the edges of the white regions the line work traced:
-            blocks_px.geojson).  The in-block mask (`inblock_mask`) leaves out the band within one stroke of the
-            printed block outlines, found on the scan (`outline_mask`: the outer edge of the blocks' paper, the
-            regions of paper lying mostly on the solver's blocks, joined across one stroke; the lines inside a block,
-            its hatch, stay), so the outline's ink stays out of the measure however far the solver's lots sit from the
+            blocks_px.geojson).  The in-block mask (`inblock_mask`) leaves out the band one stroke wide outside the
+            blocks' paper, the printed block outlines found on the scan (`outline_mask`; `block_paper`: the regions of
+            paper lying mostly on the solver's blocks, split at gaps narrower than two strokes and walled by the line
+            work's traced edges, joined across one stroke; the lines inside a block, its hatch, stay), so the
+            outline's ink stays out of the measure however far the solver's lots sit from the
             print (the lots' own mask, which is also eroded by it, does not: they sit up to tens of px off it).  It is
             also the width of the taper at a region's edge (the spike's TAPER_PX), so the cut edge adds no lines.
   band      the hatch band runs from the legend's finest period / 2 (`legend_scale`: the finest hatch the map uses,
@@ -814,49 +815,75 @@ def _ring_points(r) -> np.ndarray | None:
     return np.round(r * 16).astype(np.int32)
 
 
-def block_paper(ink: np.ndarray, rings: list[np.ndarray], in_blocks: np.ndarray) -> np.ndarray:
-    """The paper inside the printed blocks: each connected region of paper on the scan (4-neighbours: a blank block,
-    one strip between two hatch lines, one cell of a cross-hatch, a street) that lies mostly on the solver's blocks
-    (`in_blocks`), and each white region the line work traced (`rings`, page px) that does.  The traced regions mend
-    blocks whose paper runs into the street through a gap in their outline (the line work closes such gaps); the scan's
-    own regions hold the strips it left untraced.  A street lies mostly off the blocks, however far the lots sit from
-    the print, unless they cover more than half of it."""
-    on = np.asarray(in_blocks, bool)
-    n, lab = cv2.connectedComponents((ink == 0).astype(np.uint8), connectivity=4)
-    total = np.bincount(lab.ravel(), minlength=n)
-    inside = np.bincount(lab[on], minlength=n)
+def _paper(ink: np.ndarray, rings: list[np.ndarray]) -> np.ndarray:
+    """The scan's paper with the edges of the white regions the line work traced (`rings`, page px) drawn in as ink:
+    the line work closes the gaps in a block's outline.  8-connected edges, which 4-connected paper can't cross."""
+    barrier = (np.asarray(ink) > 0).astype(np.uint8)
+    pts = [p for p in (_ring_points(r) for r in rings) if p is not None]
+    if pts:
+        cv2.polylines(barrier, pts, True, 1, 1, lineType=cv2.LINE_8, shift=4)
+    return barrier == 0
+
+
+def paper_regions(paper: np.ndarray, stroke: int) -> np.ndarray:
+    """Paper split at its necks (int32 labels, 0 off the paper).  The cores are the paper more than one stroke from
+    any ink; a core's region is the paper within one stroke of it (the morphological opening: what a disk of one
+    stroke's radius sweeps from the core, which can't pass a neck narrower than two strokes nor cross a line), so a
+    block and the street a gap in its outline opens onto are two regions.  The paper no core reaches (a strip or a
+    cell thinner than two strokes, the gap itself, a tight corner) makes regions of its own, by its connections."""
+    dist = cv2.distanceTransform(paper.astype(np.uint8), cv2.DIST_L2, 5)
+    core = dist > stroke
+    regions = np.zeros(paper.shape, np.int32)
+    if core.any():
+        near, lab = cv2.distanceTransformWithLabels((~core).astype(np.uint8), cv2.DIST_L2, 5,
+                                                    labelType=cv2.DIST_LABEL_CCOMP)
+        swept = paper & (near <= stroke)
+        regions[swept] = lab[swept]
+    rest = paper & (regions == 0)
+    _, other = cv2.connectedComponents(rest.astype(np.uint8), connectivity=4)
+    regions[rest] = other[rest] + int(regions.max())
+    return regions
+
+
+def _mostly_on(labels: np.ndarray, on: np.ndarray) -> np.ndarray:
+    """For each label, whether most of its px lie on `on` (label 0 never)."""
+    n = int(labels.max()) + 1
+    total = np.bincount(labels.ravel(), minlength=n)
+    inside = np.bincount(labels[on], minlength=n)
     owned = inside > total - inside
-    owned[0] = False                                         # label 0 is the ink
-    out = owned[lab]
-    h, w = ink.shape
-    for r in rings:
-        pts = _ring_points(r)
-        if pts is None:
-            continue
-        x0, y0 = np.maximum(pts.min(0) // 16 - 1, 0)
-        x1, y1 = np.minimum(pts.max(0) // 16 + 2, [w, h])
-        if x1 <= x0 or y1 <= y0:
-            continue
-        m = np.zeros((y1 - y0, x1 - x0), np.uint8)
-        cv2.fillPoly(m, [pts - np.array([x0, y0]) * 16], 1, lineType=cv2.LINE_8, shift=4)
-        m = m > 0
-        k = int(on[y0:y1, x0:x1][m].sum())
-        if k > int(m.sum()) - k:
-            out[y0:y1, x0:x1] |= m
-    return out
+    owned[0] = False
+    return owned
+
+
+def block_paper(ink: np.ndarray, rings: list[np.ndarray], in_blocks: np.ndarray, stroke: int) -> np.ndarray:
+    """The paper inside the printed blocks: each connected region of paper (4-neighbours, `_paper`: a blank block,
+    one strip between two hatch lines, one cell of a cross-hatch, a street) lying mostly on the solver's blocks
+    (`in_blocks`), less the parts of it, split at its necks (`paper_regions`), that lie mostly off them.  A gap in an
+    outline the line work didn't close joins a block to the street; where that makes one region lying mostly on the
+    blocks, the split hands the street back.  A street network, lying mostly off the blocks, stays one region and
+    unowned whatever parts of it today's lots cover (splitting it too would own every stretch of a 1921 street the
+    lots now overlay).  The scan's own regions hold the strips the line work left untraced."""
+    paper = _paper(ink, rings)
+    on = np.asarray(in_blocks, bool)
+    _, comps = cv2.connectedComponents(paper.astype(np.uint8), connectivity=4)
+    regions = paper_regions(paper, stroke)
+    return _mostly_on(comps, on)[comps] & _mostly_on(regions, on)[regions]
 
 
 def outline_mask(ink: np.ndarray, rings: list[np.ndarray], stroke: int, in_blocks: np.ndarray) -> np.ndarray:
-    """The printed block outlines' ink, and only that: the band within one stroke of the outer edge of the blocks'
-    paper (`block_paper`) joined across one line of ink (closed by one stroke, so the strips on either side of a
-    hatch line, or the cells of a cross-hatch, make one block) with its holes filled.  The lines inside a block stay.
-    Two blocks don't join across a street: it is at least two outlines and some paper wide, more than one closing
-    bridges."""
+    """The printed block outlines' ink, and only that: the band one stroke wide outside the edge of the blocks' paper
+    (`block_paper`) joined across one line of ink (closed by one stroke, so the strips on either side of a hatch
+    line, or the cells of a cross-hatch, make one block) with its holes filled.  The lines inside a block stay.  Two
+    blocks don't join across a street: it is at least two outlines and some paper wide, more than one closing
+    bridges.  Only outside: the paper's edge is the scan's own, so the outline starts there; a band one stroke inside
+    too took the hatch lines' ends, and scored lower on every one of the five 1R-against-2R AUCs over all sheets."""
     s = int(stroke)
-    paper = block_paper(ink, rings, in_blocks).astype(np.uint8)
+    paper = block_paper(ink, rings, in_blocks, s).astype(np.uint8)
     joined = cv2.morphologyEx(paper, cv2.MORPH_CLOSE, disk(s))
     filled = ndimage.binary_fill_holes(joined > 0).astype(np.uint8)
-    return (cv2.dilate(filled, disk(s)) > 0) & ~(cv2.erode(filled, disk(s)) > 0)
+    # one stroke out in every direction (a square: a pen-drawn outline's outer corner lies up to s * sqrt 2 from the
+    # paper's corner; on a diagonal outline the square reaches about a px past it, onto the street's paper)
+    return (cv2.dilate(filled, np.ones((2 * s + 1, 2 * s + 1), np.uint8)) > 0) & ~(filled > 0)
 
 
 def inblock_mask(in_blocks: np.ndarray, ink: np.ndarray, rings: list[np.ndarray], stroke: int,
