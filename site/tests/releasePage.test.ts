@@ -3,7 +3,6 @@ import history from "../lib/download-versions.json";
 import manifest from "../lib/downloads.json";
 import { allReleases } from "../lib/releaseData";
 import { changesView, releaseView, type ReleaseView, type Row } from "../lib/releaseView";
-import { releaseChanges } from "../lib/releaseFiles";
 import type { Manifest, Version } from "../lib/downloadRows";
 import type { ReleaseRecord } from "../lib/releases.mjs";
 import { chipFilter, filterQuery, formatZip } from "../lib/releaseFilter";
@@ -87,8 +86,19 @@ describe("changesView", () => {
     expect(c.removed).toEqual([]);
     expect(changesView("nope", H)).toBeUndefined();
   });
-  it("releaseChanges(null, files) is all added", () => {
-    const c = changesView(current.id, H)!;
-    expect(releaseChanges(null, c.added).added).toHaveLength(c.added.length);
+  it("across two releases: a re-issued file is changed, a dropped one removed, the rest untouched", () => {
+    const [kept, renamed, dropped] = current.names.map((n) => H.versions.find((v) => v.name === n)!);
+    const oldName = renamed.name.replace(/-[0-9a-f]{8}\./, "-00000000.");
+    const hist = { versions: [...H.versions, { ...renamed, name: oldName, date: "2026-11-04" }] };
+    const older = { ...current, id: "2026-11-04", date: "2026-11-04", names: [kept.name, oldName, dropped.name] };
+    const newer = { ...current, names: [kept.name, renamed.name] };
+    const c = changesView(newer.id, hist, { releases: [older, newer] })!;
+    expect(c.first).toBe(false);
+    expect(c.previousId).toBe("2026-11-04");
+    expect(c.added).toEqual([]);
+    expect(c.changed).toHaveLength(1);
+    expect(c.changed[0].from.name).toBe(oldName);
+    expect(c.changed[0].to.name).toBe(renamed.name);
+    expect(c.removed.map((f) => f.name)).toEqual([dropped.name]);
   });
 });
