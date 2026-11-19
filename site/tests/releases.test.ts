@@ -39,11 +39,19 @@ describe("currentNames", () => {
   });
 });
 
+describe("currentNames refusals", () => {
+  it("throws, naming the file and sidecar, when a sidecar has no hash", () => {
+    const bad = structuredClone(manifest) as any;
+    delete bad.files["1948/citywide.tif"].extraSha256["LICENSE.txt"];
+    expect(() => currentNames(bad)).toThrow(/1948\/citywide\.tif.*LICENSE\.txt/);
+  });
+});
+
 describe("releaseChanged", () => {
   it("is true with no releases", () => expect(releaseChanged({ releases: [] }, names, extras)).toBe(true));
   it("is false for the same names and extras", () => expect(releaseChanged({ releases: [release()] }, names, extras)).toBe(false));
   it("is true when one extra hash differs", () => {
-    const changed = extras.map((e: { sha256: string }, i: number) => (i === 0 ? { ...e, sha256: "x".repeat(64) } : e));
+    const changed = extras.map((e, i) => (i === 0 ? { ...e, sha256: "x".repeat(64) } : e));
     expect(releaseChanged({ releases: [release()] }, names, changed)).toBe(true);
   });
   it("is true when a name differs", () => {
@@ -78,6 +86,12 @@ describe("zips", () => {
     expect(m.all).toHaveLength(5);
     expect(m.gpkg).toEqual([LOTS.name]);
     expect(m.shp).toEqual([]);
+  });
+});
+
+describe("zipMembers refusals", () => {
+  it("throws, naming the file, when a release name has no history entry", () => {
+    expect(() => zipMembers(release(), { versions: [LOTS, CITY] })).toThrow(SHEET.name);
   });
 });
 
