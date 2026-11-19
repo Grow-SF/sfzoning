@@ -11,17 +11,20 @@ import pytest
 from sfzmaps.solver.hatchnet import train
 from synthetic_towns import printed_blocks, town
 
-SMALL = train.Recipe(batch=4, tile=64, width=4, val_cell=64, val_tiles=8)
+# Width 8 (the real network's is 16): with the scan as its only input (model.INPUTS), a width-4 network stays
+# unsure on hatched blocks (p about 0.1) and takes the noise in, which tests the stand-in, not the noise model.
+SMALL = train.Recipe(batch=4, tile=64, width=8, val_cell=64, val_tiles=8)
 
 
 @pytest.mark.xfail(strict=False, reason=(
     "ruling R5 (streets v2, 2026-11-19): the joint ML fit identifies the rates only partly; the check (+-0.03) is kept "
-    "as written.  Seed 0 passes (theta 0.097, phi 0.060); seeds 1 and 2 do not (theta 0.089 / 0.083, phi 0.059 / "
-    "0.072).  The rates' estimator is to be replaced after the v2a review (train.RATE_INIT)"))
+    "as written.  With this stand-in (width 8, the scan only) seeds 0 / 1 / 2 pass (theta 0.114 / 0.112 / 0.098, phi "
+    "0.042 / 0.053 / 0.049); with the earlier one (width 4, scan and ft/px) seeds 1 and 2 did not (theta 0.089 / 0.083, "
+    "phi 0.059 / 0.072).  The rates' estimator is to be replaced after the v2a review (train.RATE_INIT)"))
 def test_theta_recovered():
     """Labels flipped px by px with theta = 0.12 (a printed block labelled street) and phi = 0.03 (a printed street
-    labelled block): the fitted rates fall within 0.03 of them.  (Seed 0 gives theta 0.097, phi 0.060; seeds 1 and 2
-    give theta 0.089 / 0.083 and phi 0.059 / 0.072, outside the check: see train.RATE_INIT.)"""
+    labelled block): the fitted rates fall within 0.03 of them (how firmly depends on the stand-in: see the mark and
+    train.RATE_INIT)."""
     towns = [town(s, theta=0.12, phi=0.03) for s in range(1, 9)]
     printed = np.concatenate([~printed_blocks(s).ravel() for s in range(1, 9)])          # printed street
     street = np.concatenate([t.street.ravel() == 1 for t in towns])

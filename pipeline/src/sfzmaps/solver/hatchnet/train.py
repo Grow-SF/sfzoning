@@ -8,7 +8,8 @@ the placement is off by a few ft.  The owner's rule the network has to find in t
 inside blocks and never crosses streets.  So it is trained to learn how a street LOOKS, not where today's streets are:
 
   - a small network (`model.WIDTH`: about 1.2 M weights against 72 M labelled px) that sees only the scan as printed
-    and its scale, never a px's position; the noise isn't in the print, so it can only be fitted by memorising;
+    (`Recipe.inputs`: by default not even its scale, which can name a sheet; see `model`), never a px's position; the
+    noise isn't in the print, so it can only be fitted by memorising;
   - held-out areas (`held_out`): one VAL_CELL square in HELD_OUT on every sheet is never trained on.  Its labels are
     the held-out loss, measured every VAL_EVERY steps on fixed held-out tiles; the weights kept are those of the step
     with the least held-out loss (early stopping: past the point where fitting the training labels stops carrying
@@ -110,10 +111,11 @@ STREET_LOSSES = ("v1", "v2")
 # the network's own learning rate, as the network grows sure (started below, the network takes the noise in instead).
 # 1/4 is the middle of the rates a minority of wrong labels can have (0 to 1/2): above any such noise, while the labels
 # keep 1 - theta - phi = 1/2 of their pull at the start (at theta + phi = 1 a label says nothing).  This identifies the
-# rates only partly (synthetic towns, test_hatchnet_noise*): today's streets across hatched blocks give theta to within
-# 0.005, but with labels flipped px by px (theta 0.12, phi 0.03) the network still takes in 19-31% of theta (0.083-0.097
-# over three seeds), and phi ends at 0.057-0.072: under the one-cycle schedule a rate's logit moves at most about the
-# sum of the learning rates (about 3), so a rate far below 1/4 is not reached.
+# rates only as well as the network grows sure (synthetic towns, test_hatchnet_noise*): with labels flipped px by px
+# (theta 0.12, phi 0.03), a width-8 network on the scan alone gives theta 0.098-0.114 and phi 0.042-0.053 over three
+# seeds, but a width-4 one, less sure on hatched blocks, took in 19-31% of theta (0.083-0.097, with the scale plane) or
+# over half (0.049-0.056, the scan alone); and under the one-cycle schedule a rate's logit moves at most about the sum
+# of the learning rates (about 3), so a rate far below 1/4 is not reached (phi ends at 0.04-0.07 whatever its truth).
 RATE_INIT = 0.25
 # The clDice skeleton depth (Recipe.iters): the widest street's half-width in px.  The widest learned half-width
 # (data.summary.json street_labels.half_widths: 1,117 ft) is 207-411 px on the 1921 sheets (5.4-2.72 ft/px), more
@@ -125,7 +127,8 @@ RATE_INIT = 0.25
 @dataclasses.dataclass(frozen=True)
 class Recipe:
     """How the street output is trained (the defaults are the settings above).  `street_loss` "v1" or "v2" (see the
-    module); `skeleton_iters` None means TILE / 2 (`iters`)."""
+    module); `skeleton_iters` None means TILE / 2 (`iters`); `inputs` the network's input channels (`model.INPUTS`, the
+    scan only, or `model.SCALE_INPUTS`, with its ft/px: Task 2's and v2a's)."""
     steps: int = STEPS
     batch: int = BATCH
     tile: int = TILE
@@ -140,6 +143,7 @@ class Recipe:
     street_loss: str = "v2"
     rate_init: float = RATE_INIT
     skeleton_iters: int | None = None
+    inputs: int = model.INPUTS
 
     @property
     def iters(self) -> int:
@@ -274,7 +278,7 @@ def _measure(net: model.HatchNet, held, device: str, batch: int) -> tuple[float,
     for a in range(0, len(x), batch):
         xs = torch.from_numpy(x[a:a + batch]).to(device)
         ts, ks = torch.from_numpy(t[a:a + batch]).to(device), torch.from_numpy(k[a:a + batch]).to(device)
-        out = net(model.inputs(xs, torch.from_numpy(ft[a:a + batch]).to(device)))
+        out = net(model.inputs(xs, torch.from_numpy(ft[a:a + batch]).to(device), net.inputs))
         s, c = _loss(out, ts, ks)
         hit = ((out[:, model.STREET] > 0).float() == ts).float()
         loss, agree, n = loss + float(s), agree + float((hit * ks).sum()), n + float(c)
@@ -432,7 +436,7 @@ def _measure_v2(net: model.HatchNet, rates: NoiseRates, held, device: str, recip
     agree = torch.zeros(2, device=device)
     for a in range(0, len(ft), recipe.batch):
         x, m, w, c, v, g = (torch.from_numpy(p[a:a + recipe.batch]).to(device) for p in planes)
-        z = net(model.inputs(x, torch.from_numpy(ft[a:a + recipe.batch]).to(device)))[:, model.STREET]
+        z = net(model.inputs(x, torch.from_numpy(ft[a:a + recipe.batch]).to(device), net.inputs))[:, model.STREET]
         sums += street_terms(z, m, w, c, v, g, theta, phi, recipe.iters)
         agree += torch.stack([(((z > 0).float() == m).float() * w).sum(), w.sum()])
     net.train()
@@ -455,7 +459,7 @@ def _fit_v2(rasters: list[data.SheetRasters], seed: int, device: str, recipe: Re
     pool = _Pool([_centres(r, recipe.val_cell, held=False) for r in rasters])
     if not len(pool):
         raise ValueError("nothing to train on: no labelled px outside the held-out areas")
-    net = model.HatchNet(recipe.width).to(device)
+    net = model.HatchNet(recipe.width, recipe.inputs).to(device)
     net.train()
     rates = NoiseRates(recipe.rate_init).to(device)
     opt = torch.optim.AdamW([{"params": list(net.parameters())},
@@ -467,7 +471,7 @@ def _fit_v2(rasters: list[data.SheetRasters], seed: int, device: str, recipe: Re
     sums, first, t0 = torch.zeros(len(TERMS), device=device), 1, time.perf_counter()
     for step in range(1, recipe.steps + 1):
         x, m, w, c, v, g, ft = (torch.from_numpy(a).to(device) for a in _batch_v2(rasters, pool, rng, recipe))
-        z = net(model.inputs(x, ft))[:, model.STREET]
+        z = net(model.inputs(x, ft, net.inputs))[:, model.STREET]
         theta, phi = rates()
         terms = street_terms(z, m, w, c, v, g, theta, phi, recipe.iters)
         loss = street_total(terms)
@@ -523,7 +527,7 @@ def _fit_v1(rasters: list[data.SheetRasters], seed: int, device: str, recipe: Re
     pool = _Pool([_centres(r, recipe.val_cell, held=False) for r in rasters])
     if not len(pool):
         raise ValueError("nothing to train on: no labelled px outside the held-out areas")
-    net = model.HatchNet(recipe.width).to(device)
+    net = model.HatchNet(recipe.width, recipe.inputs).to(device)
     net.train()
     opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=recipe.weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.steps,
@@ -532,7 +536,7 @@ def _fit_v1(rasters: list[data.SheetRasters], seed: int, device: str, recipe: Re
     sums, first, t0 = torch.zeros(2, device=device), 1, time.perf_counter()
     for step in range(1, recipe.steps + 1):
         x, t, k, ft = (torch.from_numpy(a).to(device) for a in _batch(rasters, pool, rng, recipe))
-        out = net(model.inputs(x, ft))
+        out = net(model.inputs(x, ft, net.inputs))
         s, c = _loss(out, t, k)
         loss = s / c.clamp_min(1.0)
         opt.zero_grad()
@@ -587,7 +591,7 @@ def predict_streets(net: model.HatchNet, sheet: data.SheetRasters, tile: int = P
             win = sheet.ink[y0:y1, x0:x1]
             win = np.pad(win, ((0, (-win.shape[0]) % model.MULTIPLE), (0, (-win.shape[1]) % model.MULTIPLE)),
                          constant_values=1.0)                  # paper
-            xin = model.inputs(torch.from_numpy(np.ascontiguousarray(win, np.float32))[None].to(dev), ft)
+            xin = model.inputs(torch.from_numpy(np.ascontiguousarray(win, np.float32))[None].to(dev), ft, net.inputs)
             p = torch.sigmoid(net(xin)[0, model.STREET]).cpu().numpy()
             th, tw = min(tile, h - y), min(tile, w - x)
             out[y:y + th, x:x + tw] = p[y - y0:y - y0 + th, x - x0:x - x0 + tw]
@@ -630,9 +634,10 @@ def save_checkpoints(d: Path, fitted: Fitted, recipe: Recipe, seed: int) -> list
 
 
 def load_model(f: Path, device: str) -> tuple[model.HatchNet, dict]:
-    """A saved street network on `device` in eval mode, and what was saved with it."""
+    """A saved street network on `device` in eval mode, and what was saved with it (a model saved before the input
+    became an option has the scale plane: `model.SCALE_INPUTS`)."""
     saved = torch.load(f, map_location="cpu")
-    net = model.HatchNet(saved["recipe"]["width"])
+    net = model.HatchNet(saved["recipe"]["width"], saved["recipe"].get("inputs", model.SCALE_INPUTS))
     net.load_state_dict(saved["state_dict"])
     return net.to(device).eval(), saved
 
@@ -748,7 +753,7 @@ def run(series: str, root: Path | None = None, device: str | None = None, seed: 
         save_model(root / "models" / "streets.pt", fitted, recipe, seed)
         save_model(root / "models" / "streets_last.pt", fitted, recipe, seed, last=True)
         save_checkpoints(root / "models" / "checkpoints", fitted, recipe, seed)
-        net, net_last = model.HatchNet(recipe.width), model.HatchNet(recipe.width)
+        net, net_last = model.HatchNet(recipe.width, recipe.inputs), model.HatchNet(recipe.width, recipe.inputs)
         net.load_state_dict(fitted.state_dict)
         net_last.load_state_dict(fitted.last_state_dict)
         net, net_last = net.to(device).eval(), net_last.to(device).eval()

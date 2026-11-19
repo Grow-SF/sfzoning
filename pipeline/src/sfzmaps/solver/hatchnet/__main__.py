@@ -28,6 +28,9 @@ def main(argv: list[str] | None = None) -> None:
     st.add_argument("--street-loss", choices=("v1", "v2"), default="v2",
                     help="v1: Task 2's cross-entropy on today's blocks; v2: the street labels with the noise model and "
                          "clDice (default)")
+    st.add_argument("--inputs", type=int, choices=(1, 2), default=1,
+                    help="the network's input channels: 1 the scan only (default), 2 the scan and its ft/px (Task 2's "
+                         "and streets v2a's)")
     st.add_argument("--root", type=Path, help="default: data/solver/experiments/hatch-cnn for v1, its streets-v2/ for "
                                               "v2 (models/, streets/, look/)")
     st.add_argument("--look", nargs="*", metavar="SHEET", help="the sheets to draw (default: train.LOOK_SHEETS)")
@@ -63,7 +66,7 @@ def main(argv: list[str] | None = None) -> None:
             for f in train.redraw(a.series, root, sheets):
                 print(f)
             return
-        recipe = train.Recipe(street_loss=a.street_loss, **({"steps": a.steps} if a.steps else {}))
+        recipe = train.Recipe(street_loss=a.street_loss, inputs=a.inputs, **({"steps": a.steps} if a.steps else {}))
         s = train.run(a.series, root, a.device, a.seed, recipe, sheets)
         h = s["held_out"]
         print(f"device {s['device']}, {s['weights']} weights, {recipe.street_loss} loss, kept step {s['best_step']} "

@@ -1,6 +1,8 @@
 """The learned reader's network and its learned streets (`sfzmaps.solver.hatchnet.model`, `.train`): the network's
 shape, CPU training that gives the same bits twice, a street output that learns more than the share of street px
 from a synthetic page (`synthetic_towns`), and blocks as the connected areas the street output calls "not street"."""
+import dataclasses
+
 import numpy as np
 import torch
 
@@ -13,21 +15,42 @@ SMALL = train.Recipe(steps=5, batch=4, tile=64, width=4, val_every=50, val_tiles
 
 def test_shapes():
     net = model.HatchNet(width=4)
-    out = net(torch.zeros(2, 2, 256, 256))
+    assert net.inputs == model.INPUTS == 1                       # the scan only, by default
+    x = model.inputs(torch.zeros(2, 256, 256), torch.tensor([5.0, 2.72]), net.inputs)
+    assert x.shape == (2, 1, 256, 256)
+    out = net(x)
     assert out.shape == (2, 8, 256, 256)
     assert model.OUTPUTS == 1 + len(model.NAMES) + 1 and model.NAMES == ["1R", "2R", "C", "HI", "LI", "U"]
+    # the scale plane is still reachable (Task 2's and streets v2a's form)
+    two = model.HatchNet(width=4, inputs=model.SCALE_INPUTS)
+    x2 = model.inputs(torch.zeros(2, 256, 256), torch.tensor([5.0, 2.72]), model.SCALE_INPUTS)
+    assert x2.shape == (2, 2, 256, 256) and abs(float(x2[1, 1, 0, 0]) - 2.72 / model.FT_SCALE) < 1e-6
+    assert two(x2).shape == (2, 8, 256, 256)
+
+
+def test_scan_only_input_ignores_scale():
+    """With the scan only, two sheets of different ft/px but the same scan get the same street probability."""
+    torch.manual_seed(0)
+    net = model.HatchNet(width=4).eval()
+    a, b = town(6, shape=(128, 128)), town(6, shape=(128, 128), ft_per_px=2.72)
+    np.testing.assert_array_equal(train.predict_streets(net, a), train.predict_streets(net, b))
+    torch.manual_seed(0)
+    two = model.HatchNet(width=4, inputs=model.SCALE_INPUTS).eval()
+    assert not np.array_equal(train.predict_streets(two, a), train.predict_streets(two, b))
 
 
 def test_deterministic_cpu():
     sheets = [town(1), town(2, ft_per_px=2.72)]
-    a = train.train_streets(sheets, seed=0, device="cpu", recipe=SMALL)
-    b = train.train_streets(sheets, seed=0, device="cpu", recipe=SMALL)
-    assert a.keys() == b.keys()
-    for k in a:
-        assert torch.equal(a[k], b[k]), k
-    torch.manual_seed(0)
-    init = model.HatchNet(SMALL.width).state_dict()
-    assert any(not torch.equal(a[k], init[k]) for k in init if init[k].is_floating_point())     # it trained
+    for recipe in (SMALL, dataclasses.replace(SMALL, inputs=model.SCALE_INPUTS)):        # the scan only; with ft/px
+        a = train.train_streets(sheets, seed=0, device="cpu", recipe=recipe)
+        b = train.train_streets(sheets, seed=0, device="cpu", recipe=recipe)
+        assert a.keys() == b.keys()
+        for k in a:
+            assert torch.equal(a[k], b[k]), k
+        torch.manual_seed(0)
+        init = model.HatchNet(recipe.width, recipe.inputs).state_dict()
+        assert any(not torch.equal(a[k], init[k]) for k in init if init[k].is_floating_point())     # it trained
+        assert a["down.0.0.weight"].shape[1] == recipe.inputs
 
 
 def test_saved_model_loads(tmp_path):
@@ -35,8 +58,17 @@ def test_saved_model_loads(tmp_path):
     f = train.save_model(tmp_path / "streets.pt", fitted, SMALL, seed=0)
     net, saved = train.load_model(f, "cpu")               # torch.load's default, weights only: plain values
     assert saved["device"] == "cpu" and saved["step"] == fitted.best_step and saved["seed"] == 0
+    assert net.inputs == model.INPUTS
     for k, v in net.state_dict().items():
         assert torch.equal(v, fitted.state_dict[k]), k
+    # a model saved before the input was an option (no "inputs" in its recipe) has the scale plane
+    two = dataclasses.replace(SMALL, inputs=model.SCALE_INPUTS)
+    fitted = train.fit_streets([town(1), town(2)], seed=0, device="cpu", recipe=two)
+    saved = torch.load(train.save_model(tmp_path / "old.pt", fitted, two, seed=0))
+    del saved["recipe"]["inputs"]
+    torch.save(saved, tmp_path / "old.pt")
+    net, _ = train.load_model(tmp_path / "old.pt", "cpu")
+    assert net.inputs == model.SCALE_INPUTS
 
 
 def test_streets_learnable():

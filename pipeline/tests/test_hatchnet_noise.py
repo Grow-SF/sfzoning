@@ -10,7 +10,9 @@ import torch
 from sfzmaps.solver.hatchnet import model, train
 from synthetic_towns import printed_blocks, town
 
-SMALL = train.Recipe(batch=4, tile=64, width=4, val_cell=64, val_tiles=8)
+# Width 8 (the real network's is 16): with the scan as its only input (model.INPUTS), a width-4 network stays
+# unsure on hatched blocks (p about 0.1) and takes the noise in, which tests the stand-in, not the noise model.
+SMALL = train.Recipe(batch=4, tile=64, width=8, val_cell=64, val_tiles=8)
 
 
 def test_unprinted_street_not_forced():
@@ -34,10 +36,11 @@ def test_unprinted_street_not_forced():
     unprinted_line = (fresh.centre == 1) & printed_blocks(99)
     printed_line = (fresh.centre == 1) & ~printed_blocks(99)
     assert unprinted_line.sum() > 50 and printed_line.sum() > 50
-    net = model.HatchNet(SMALL.width)
+    net = model.HatchNet(SMALL.width, SMALL.inputs)
     net.load_state_dict(fitted.state_dict)
     with torch.no_grad():
-        z0 = net.eval()(model.inputs(torch.from_numpy(fresh.ink)[None], torch.tensor([fresh.ft_per_px])))[:, 0]
+        z0 = net.eval()(model.inputs(torch.from_numpy(fresh.ink)[None], torch.tensor([fresh.ft_per_px]),
+                                      net.inputs))[:, 0]
     labels = [torch.from_numpy(a)[None].float() for a in
               (fresh.street == 1, fresh.street_w.astype(np.float32), fresh.centre == 1, fresh.street == 1,
                np.ones(fresh.ink.shape, bool))]

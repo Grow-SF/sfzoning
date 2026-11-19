@@ -1,9 +1,14 @@
 """The learned reader's network: a small U-Net over a sheet's scan as printed, every px scored at the scan's own
 resolution.
 
-Input per px (INPUTS channels): 0 the scan's luminance (`data.SheetRasters.ink`, 0 = ink, 1 = paper), every px as
-scanned; 1 the sheet's measured scale, ft/px over FT_SCALE, the same at every px of a sheet (`inputs`).  The scale goes
-in so one network reads sheets scanned at 2.72 and at 4.6-5.4 ft/px without rescaling the scan.
+Input per px (`inputs`), a stated option (`HatchNet(inputs=...)`):
+  INPUTS = 1        the scan's luminance only (`data.SheetRasters.ink`, 0 = ink, 1 = paper), every px as scanned: the
+                    default.  The network reads every sheet the same way: nothing in its input names the sheet
+  SCALE_INPUTS = 2  also the sheet's measured scale, ft/px over FT_SCALE, the same at every px of a sheet (Task 2's and
+                    the streets v2a run's form, kept for comparison).  Meant to let one network read sheets scanned at
+                    2.72 and at 4.6-5.4 ft/px without rescaling; but a scale only one sheet has names that sheet, and
+                    the network used it to treat each sheet differently (streets v2a: the Bay sheet, 5.39 ft/px, came
+                    out 7 blocks at its own scale and 326 at 4.72 ft/px, the scan unchanged; ruling R6)
 
 Outputs per px (OUTPUTS channels):
   STREET     0     the logit of the px being a street (not in a printed block); trained on the street labels from
@@ -24,7 +29,8 @@ STREET = 0
 DISTRICTS = slice(1, 1 + len(NAMES))
 WEIGHT = 1 + len(NAMES)
 OUTPUTS = 2 + len(NAMES)
-INPUTS = 2
+INPUTS = 1                         # the scan only (see the module)
+SCALE_INPUTS = 2                   # the scan and its ft/px
 # Channels at full resolution.  Small on purpose: about 1.2 M weights against the 1921 sheets' 72 M labelled px, so
 # the network has room to learn how a street looks (a white channel between parallel block outlines, never crossed by
 # a pattern) and the six patterns, and little room to memorise where today's labels disagree with the 1921 print.
@@ -50,8 +56,13 @@ def reach(levels: int = LEVELS) -> int:
 REACH = reach()
 
 
-def inputs(ink: torch.Tensor, ft_per_px: torch.Tensor) -> torch.Tensor:
-    """The network's input (n, INPUTS, h, w) from the scans' luminance (n, h, w) and each scan's ft/px (n,)."""
+def inputs(ink: torch.Tensor, ft_per_px: torch.Tensor, channels: int = INPUTS) -> torch.Tensor:
+    """The network's input (n, channels, h, w) from the scans' luminance (n, h, w) and each scan's ft/px (n,): the
+    luminance alone (INPUTS), or with the scale plane (SCALE_INPUTS)."""
+    if channels == INPUTS:
+        return ink[:, None]
+    if channels != SCALE_INPUTS:
+        raise ValueError(f"the input has {INPUTS} or {SCALE_INPUTS} channels, not {channels}")
     plane = (ft_per_px.to(ink.dtype) / FT_SCALE)[:, None, None].expand_as(ink)
     return torch.stack([ink, plane], 1)
 
@@ -65,13 +76,17 @@ def _block(i: int, o: int) -> nn.Sequential:
 
 
 class HatchNet(nn.Module):
-    """The U-Net (see the module).  Input (n, INPUTS, h, w) (`inputs`); output (n, OUTPUTS, h, w)."""
+    """The U-Net (see the module).  Input (n, inputs, h, w) (`inputs(ink, ft_per_px, net.inputs)`); output
+    (n, OUTPUTS, h, w)."""
 
-    def __init__(self, width: int = WIDTH):
+    def __init__(self, width: int = WIDTH, inputs: int = INPUTS):
         super().__init__()
+        if inputs not in (INPUTS, SCALE_INPUTS):
+            raise ValueError(f"the input has {INPUTS} or {SCALE_INPUTS} channels, not {inputs}")
         self.width = width
+        self.inputs = inputs
         ch = [width * min(2 ** i, 8) for i in range(LEVELS)]
-        self.down = nn.ModuleList([_block(INPUTS, ch[0])] + [_block(ch[i], ch[i + 1]) for i in range(LEVELS - 1)])
+        self.down = nn.ModuleList([_block(inputs, ch[0])] + [_block(ch[i], ch[i + 1]) for i in range(LEVELS - 1)])
         self.up = nn.ModuleList([_block(ch[i + 1] + ch[i], ch[i]) for i in reversed(range(LEVELS - 1))])
         self.head = nn.Conv2d(ch[0], OUTPUTS, 1)
 
