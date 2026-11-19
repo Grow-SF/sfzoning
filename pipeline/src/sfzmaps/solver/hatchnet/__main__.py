@@ -35,6 +35,19 @@ def main(argv: list[str] | None = None) -> None:
                                               "v2 (models/, streets/, look/)")
     st.add_argument("--look", nargs="*", metavar="SHEET", help="the sheets to draw (default: train.LOOK_SHEETS)")
     st.add_argument("--redraw", action="store_true", help="only draw the pictures again, from the written streets")
+    ds = sub.add_parser("districts", help="train the district and weight outputs through pooled lot losses: four folds "
+                                          "with answers, four reads-only, all quarters (hatchnet.train)")
+    ds.add_argument("--series", required=True)
+    ds.add_argument("--device", help="default: mps where available, else cpu")
+    ds.add_argument("--seed", type=int, default=0)
+    ds.add_argument("--steps", type=int, help="default: train.STEPS")
+    ds.add_argument("--init", type=Path, help="the street model to start from (default: train.STREETS_INIT, streets "
+                                              "v2c)")
+    ds.add_argument("--root", type=Path, help="default: data/solver/experiments/hatch-cnn/districts (models/, look/, "
+                                              "summary.json)")
+    ds.add_argument("--runs", nargs="+", metavar="NAME",
+                    help="only these runs (answers_<q>, reads_<q>, answers_all; default: all nine, train.RUNS)")
+    ds.add_argument("--look-only", action="store_true", help="only draw the pictures of the written all-quarters model")
     a = ap.parse_args(argv)
     for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
         os.environ.setdefault(v, "1")                 # the workers start with one maths thread each
@@ -83,6 +96,29 @@ def main(argv: list[str] | None = None) -> None:
             print(f"  {sheet}: {v['blocks']['count']} blocks (target {v['blocks']['target_blocks']}), held-out "
                   f"agreement {v['held_out']['agree']}")
         for f in s["pictures"]:
+            print(f)
+    elif a.command == "districts":
+        import logging
+
+        from sfzmaps.solver.hatchnet import train
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+        if a.look_only:
+            for f in train.look_districts(a.series, a.root, device=a.device):
+                print(f)
+            return
+        names = {train.run_name(q, w): (q, w) for q, w in train.RUNS}
+        unknown = sorted(set(a.runs or ()) - set(names))
+        if unknown:
+            ap.error(f"unknown runs {unknown}: one of {sorted(names)}")
+        runs = tuple(names[n] for n in a.runs) if a.runs else train.RUNS
+        recipe = train.DistrictRecipe(**({"steps": a.steps} if a.steps else {}))
+        s = train.run_districts(a.series, a.root, a.init or train.STREETS_INIT, a.device, a.seed, recipe, runs)
+        for name, v in s["runs"].items():
+            k = v["kept"]
+            print(f"{name}: kept step {v['best_step']} of {recipe.steps}, held-out loss {k['val_loss']:.4f} (reads "
+                  f"{k['val_read_loss']:.4f}, read agreement {k['val_read_agree']:.4f}); {v['seconds']:.0f} s; "
+                  f"lot units per quarter {v['units_per_quarter']}")
+        for f in s.get("pictures", []):
             print(f)
 
 

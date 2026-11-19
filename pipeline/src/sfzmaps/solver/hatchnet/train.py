@@ -46,8 +46,34 @@ Blocks (`blocks`): the connected areas (4-connected: px that share a side) where
 (the two-class argmax: a block px is one the network calls more likely block than street), inside the neatline.  No
 size, shape or other rule: every such area is a block.
 
+The districts (`fit_fold`, `train_fold`, `run_districts`; ruling R5): the six district logits and the weight logit,
+trained through pooled lot losses only (no street loss: the street output is not used), every weight of the network
+fine-tuned from the streets v2c model (STREETS_INIT, the scan as its only input):
+
+  - each lot's prediction (`lot_logprob`) is its px's district probabilities pooled with the learned weights, softmaxed
+    over the lot: p(j) = sum_px softmax_lot(weight)_px softmax(districts_px)(j), over the lot's px in the tile;
+  - its loss (`lot_loss`): an owner answer j (with answers) -log p(j), exact whatever its page; else the reader's read
+    k, -log sum_j p(j) T[j, k], through the read-noise matrix T[j, k] = P(read k | true j) (`read_noise`: the training
+    quarters' random-page answers against their reads, plus one per cell; the identity for a reads-only run); a
+    legend swatch box: its px's mean cross-entropy against its district;
+  - each lot counts once (`assemble`, `batch_loss`): a batch's loss is sum_u s_u loss_u / sum_u s_u over its labelled
+    units (lots and swatch boxes), s_u the unit's px in the tile over its px on every sheet: a lot wholly in a tile
+    counts 1, and over any partition of the pages into tiles every lot's shares sum to 1.  Tiles centre uniformly on
+    the training units' px (every CENTRE_STRIDE-th px each way), so every px is covered about equally often and every
+    lot has the same expected weight, whatever its size;
+  - folds by quarter (`fold_labels`): fold q gives quarter q's lots no label, read or answer; T is counted from the
+    other quarters only; tile centres and held-out tiles come from labelled lots of the other quarters only; and every
+    batch is checked as it is made (`assemble` raises when a lot of quarter q carries a label);
+  - the checkpoint kept: a lot is held out when most of its px (over every sheet) lie in the held-out cells
+    (`held_out`, VAL_CELL); a held-out lot's label is never trained on.  Every VAL_EVERY steps the same loss is
+    measured on VAL_TILES fixed tiles centred on the held-out lots of the training quarters (only those lots count:
+    never quarter q's), and the step with the least is kept (`select_checkpoint`).  The swatches are always trained
+    on (six boxes, no area);
+  - the schedule, tile, batch, jitter and network are the street training's engineering settings (`DistrictRecipe`).
+    The loss after the network runs on the CPU, where its sums (`index_add`) are deterministic.
+
 Deterministic: one numpy generator and torch's, both seeded; torch runs deterministic algorithms on THREADS threads.
-On the Mac's GPU the caller holds the GPU's exclusive turn (`sfzmaps.gpu`); `run` does.
+On the Mac's GPU the caller holds the GPU's exclusive turn (`sfzmaps.gpu`); `run` and `run_districts` do.
 
 $0: no API calls.
 """
@@ -58,16 +84,19 @@ import hashlib
 import json
 import logging
 import math
+import os
 import time
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from scipy import ndimage
 
 from sfzmaps import gpu
+from sfzmaps.solver import paths
 from sfzmaps.solver.hatchnet import data, model, topo
 from sfzmaps.solver.textread.store import save_npz
 
@@ -571,8 +600,9 @@ def train_streets(rasters: list[data.SheetRasters], seed: int = 0, device: str |
 
 
 @torch.no_grad()
-def predict_streets(net: model.HatchNet, sheet: data.SheetRasters, tile: int = PRED_TILE) -> np.ndarray:
-    """The street probability (float32) at every px of a sheet's page, on the network's device, in eval mode as given.
+def _predict(net: model.HatchNet, sheet: data.SheetRasters, tile: int, take, planes: int) -> np.ndarray:
+    """`planes` float32 planes at every px of a sheet's page, `take(out)` of the network's output (1, OUTPUTS, h, w)
+    over each window, (planes, h, w); on the network's device, in eval mode as given.
 
     The page is predicted `tile` px square at a time, each seen with CONTEXT px of page around it (the network's whole
     reach, model.REACH, rounded up to model.MULTIPLE) and its end padded with paper to model.MULTIPLE, as one pass
@@ -583,7 +613,7 @@ def predict_streets(net: model.HatchNet, sheet: data.SheetRasters, tile: int = P
     dev = next(net.parameters()).device
     h, w = sheet.ink.shape
     ft = torch.tensor([sheet.ft_per_px], dtype=torch.float32, device=dev)
-    out = np.empty((h, w), np.float32)
+    out = np.empty((planes, h, w), np.float32)
     for y in range(0, h, tile):
         for x in range(0, w, tile):
             y0, x0 = max(y - CONTEXT, 0), max(x - CONTEXT, 0)
@@ -592,10 +622,26 @@ def predict_streets(net: model.HatchNet, sheet: data.SheetRasters, tile: int = P
             win = np.pad(win, ((0, (-win.shape[0]) % model.MULTIPLE), (0, (-win.shape[1]) % model.MULTIPLE)),
                          constant_values=1.0)                  # paper
             xin = model.inputs(torch.from_numpy(np.ascontiguousarray(win, np.float32))[None].to(dev), ft, net.inputs)
-            p = torch.sigmoid(net(xin)[0, model.STREET]).cpu().numpy()
+            p = take(net(xin)).cpu().numpy()
             th, tw = min(tile, h - y), min(tile, w - x)
-            out[y:y + th, x:x + tw] = p[y - y0:y - y0 + th, x - x0:x - x0 + tw]
+            out[:, y:y + th, x:x + tw] = p[:, y - y0:y - y0 + th, x - x0:x - x0 + tw]
     return out
+
+
+def predict_streets(net: model.HatchNet, sheet: data.SheetRasters, tile: int = PRED_TILE) -> np.ndarray:
+    """The street probability (float32) at every px of a sheet's page, on the network's device, in eval mode as given
+    (one pass over the whole page, `_predict`)."""
+    return _predict(net, sheet, tile, lambda o: torch.sigmoid(o[0, model.STREET:model.STREET + 1]), 1)[0]
+
+
+def predict_districts(net: model.HatchNet, sheet: data.SheetRasters,
+                      tile: int = PRED_TILE) -> tuple[np.ndarray, np.ndarray]:
+    """Every px's district argmax (uint8, model.NAMES order) and weight logit (float32) on a sheet's page, as
+    `predict_streets` predicts (one pass over the whole page)."""
+    def take(o):
+        return torch.cat([o[0, model.DISTRICTS].argmax(0, keepdim=True).float(), o[0, model.WEIGHT:model.WEIGHT + 1]])
+    a = _predict(net, sheet, tile, take, 2)
+    return a[0].astype(np.uint8), a[1]
 
 
 def blocks(street_prob: np.ndarray, crop: np.ndarray) -> np.ndarray:
@@ -811,4 +857,558 @@ def redraw(series: str, root: Path = data.EXPERIMENT, look_sheets=LOOK_SHEETS, c
         if r.sheet in look_sheets:
             out += look.all_pictures(r, p, b, root / "look", WINDOWS.get(r.sheet), cell)
         out.append(look.overview(r, p, b, root / "look", _note(sheets[r.sheet]) if r.sheet in sheets else ""))
+    return out
+
+
+# --- the districts --------------------------------------------------------------------------------------------------
+
+DISTRICTS_ROOT = data.EXPERIMENT / "districts"
+STREETS_INIT = data.EXPERIMENT / "streets-v2c" / "models" / "streets.pt"     # ruling R5: the trunk starts here
+NONE, READ, ANSWER, SWATCH = 0, 1, 2, 3          # a unit's label: none, the reader's read, the owner's answer, a swatch
+CODE = {c: i for i, c in enumerate(model.NAMES)}
+# The runs (`run_districts`): the four folds with answers, the same four reads-only, and the all-quarters model (the
+# deliverable; trained with answers).
+RUNS = tuple((q, True) for q in paths.QUARTERS) + tuple((q, False) for q in paths.QUARTERS) + ((None, True),)
+DELIVERABLE = "answers_all"
+# The pictures of the all-quarters model: sheet -> the zoom's top-left (y, x), upright scan px, or None (whole only).
+DISTRICT_LOOK = {"20180102094149543": WINDOWS["20180102094149543"],     # dense
+                 "20180102100525362": WINDOWS["20180102100525362"],     # south: x 2015-2535, y 1495-2015
+                 "20180102094317284": None}                             # Islais / Bayview: the checkerboard U blocks
+
+
+@dataclasses.dataclass(frozen=True)
+class DistrictRecipe:
+    """How the districts are trained: the street training's engineering settings (see the module); `inputs` must be
+    the starting model's."""
+    steps: int = STEPS
+    batch: int = BATCH
+    tile: int = TILE
+    width: int = model.WIDTH
+    max_lr: float = MAX_LR
+    pct_start: float = PCT_START
+    weight_decay: float = WEIGHT_DECAY
+    jitter: float = JITTER
+    val_cell: int = VAL_CELL
+    val_every: int = VAL_EVERY
+    val_tiles: int = VAL_TILES
+    inputs: int = model.INPUTS
+
+
+def run_name(q: str | None, with_answers: bool) -> str:
+    """answers_<q> / reads_<q> for the fold that withholds quarter q; <q> is "all" for the all-quarters model."""
+    return f"{'answers' if with_answers else 'reads'}_{q or 'all'}"
+
+
+def _codes(s: pd.Series, what: str) -> np.ndarray:
+    """Each code's index in model.NAMES, -1 for "" (none); a code not in the legend stops the run."""
+    v = s.fillna("").astype(str).to_numpy()
+    bad = sorted(set(v.tolist()) - set(model.NAMES) - {""})
+    if bad:
+        raise ValueError(f"{what}: codes not in the legend {model.NAMES}: {bad}")
+    out = np.full(len(v), -1, np.int64)
+    for c, i in CODE.items():
+        out[v == c] = i
+    return out
+
+
+def read_noise(lots: pd.DataFrame, train_quarters) -> np.ndarray:
+    """The read-noise matrix (6 x 6, model.NAMES order): T[j, k] = P(read k | true j), counted from the owner's
+    random-page answers (`stratum` random) of lots in `train_quarters` that the reader read, against their reads, plus
+    one per cell (a uniform prior), each row over its sum.  The likely-wrong and least-sure pages were chosen where the
+    reader was probably wrong, so they would overstate its errors: they are not counted.  No such answer: the identity
+    (the reads taken as they are)."""
+    m = ((lots["stratum"] == "random") & lots["quarter"].isin(list(train_quarters))).to_numpy()
+    j, k = _codes(lots["answer"], "answers")[m], _codes(lots["read_code"], "reads")[m]
+    ok = (j >= 0) & (k >= 0)
+    n = len(model.NAMES)
+    if not ok.any():
+        return np.eye(n)
+    t = np.ones((n, n))
+    np.add.at(t, (j[ok], k[ok]), 1.0)
+    return t / t.sum(1, keepdims=True)
+
+
+def _segment_lse(v: torch.Tensor, idx: torch.Tensor, n: int) -> torch.Tensor:
+    """log sum exp of the rows of `v` (P, ...) in each of `n` segments (`idx` (P,), int64): (n, ...); -inf for an
+    empty segment.  Each segment's max is taken out first (held fixed: it cancels)."""
+    shape = (n,) + tuple(v.shape[1:])
+    with torch.no_grad():
+        ix = idx.view(-1, *([1] * (v.dim() - 1))).expand_as(v)
+        m = torch.full(shape, -math.inf, dtype=v.dtype, device=v.device).scatter_reduce(0, ix, v, "amax")
+        m = torch.where(torch.isfinite(m), m, torch.zeros_like(m))
+    s = torch.zeros(shape, dtype=v.dtype, device=v.device).index_add(0, idx, torch.exp(v - m[idx]))
+    return torch.log(s) + m
+
+
+def lot_logprob(district_logits: torch.Tensor, weight_logits: torch.Tensor, lot_px: torch.Tensor,
+                n: int | None = None) -> torch.Tensor:
+    """Each lot's log district probabilities (n x 6): log sum_px softmax(weight)_px softmax(districts_px), the weights'
+    softmax over the lot's own px.  district_logits (P, 6), weight_logits (P,), lot_px (P,) each px's lot 0..n-1, or
+    -1 for none (not pooled); n: the lots (default: the largest lot + 1)."""
+    keep = lot_px >= 0
+    idx = lot_px[keep].long()
+    if n is None:
+        n = int(idx.max()) + 1 if len(idx) else 0
+    d, a = district_logits[keep], weight_logits[keep]
+    lw = a - _segment_lse(a, idx, n)[idx]                          # log softmax of the weights within each lot
+    return _segment_lse(lw[:, None] + F.log_softmax(d, -1), idx, n)
+
+
+def lot_loss(lp: torch.Tensor, kind: torch.Tensor, code: torch.Tensor, log_t: torch.Tensor) -> torch.Tensor:
+    """Each lot's loss from its log district probabilities `lp` (n x 6): an ANSWER j, -log p(j); a READ k,
+    -log sum_j p(j) T[j, k] (`log_t` = log T)."""
+    code = code.long()
+    read = -torch.logsumexp(lp + log_t[:, code].T, 1)
+    answer = -lp.gather(1, code[:, None])[:, 0]
+    return torch.where(kind == ANSWER, answer, read)
+
+
+@dataclasses.dataclass
+class DistrictData:
+    """What every fold trains from: the rasters, the lot table (row i is lot i), the legend's swatches (sheet, code,
+    (x0, y0, x1, y1) upright px, ends exclusive), each lot's px over every sheet, and whether each lot is held out
+    (most of its px in held-out cells, `district_data`)."""
+    rasters: list[data.SheetRasters]
+    lots: pd.DataFrame
+    swatches: list[tuple[str, str, tuple[int, int, int, int]]]
+    px: np.ndarray
+    held: np.ndarray
+
+
+def district_data(rasters: list[data.SheetRasters], lots: pd.DataFrame, swatches,
+                  cell: int = VAL_CELL) -> DistrictData:
+    """`DistrictData`: each lot's px counted on every sheet, and held out when more than half of them lie in the
+    held-out cells of side `cell` (`held_out`, on each sheet's own page)."""
+    n = len(lots)
+    if not np.array_equal(lots["lot"].to_numpy(), np.arange(n)):
+        raise ValueError("the lot table's rows must be lots 0..n-1 in order")
+    px, hpx = np.zeros(n, np.int64), np.zeros(n, np.int64)
+    for r in rasters:
+        m = r.lot >= 0
+        if not m.any():
+            continue
+        if int(r.lot.max()) >= n:
+            raise ValueError(f"{r.sheet}: lot {int(r.lot.max())} is not in the table of {n}")
+        h, w = r.lot.shape
+        px += np.bincount(r.lot[m], minlength=n)
+        hpx += np.bincount(r.lot[m & held_out(np.arange(h), np.arange(w), cell)], minlength=n)
+    pages = {r.sheet: r.ink.shape for r in rasters}
+    sw = []
+    for s, c, box in swatches:
+        x0, y0, x1, y1 = (int(v) for v in box)
+        if s not in pages or c not in CODE or not (0 <= x0 < x1 <= pages[s][1] and 0 <= y0 < y1 <= pages[s][0]):
+            raise ValueError(f"the swatch {c} {box} is not on a page of {s}")
+        sw.append((s, c, (x0, y0, x1, y1)))
+    return DistrictData(list(rasters), lots, sw, px, 2 * hpx > px)
+
+
+@dataclasses.dataclass
+class Labels:
+    """A fold's label per unit: the lots 0..n-1, then the swatches n.. (`fold_labels`)."""
+    kind: np.ndarray            # NONE, READ, ANSWER or SWATCH
+    code: np.ndarray            # the label's district (model.NAMES index)
+    px: np.ndarray              # the unit's px over every sheet
+    quarter: np.ndarray         # the lot's quarter, from the lot table ("" a swatch)
+    q: str | None               # the quarter withheld
+    t: np.ndarray               # the read-noise matrix
+
+    @property
+    def log_t(self) -> torch.Tensor:
+        with np.errstate(divide="ignore"):
+            return torch.from_numpy(np.log(self.t)).float()
+
+
+def fold_labels(d: DistrictData, q: str | None, with_answers: bool) -> Labels:
+    """The labels of the fold withholding quarter `q` (None: none): every lot of the other quarters with an owner
+    answer (`with_answers`) is an ANSWER, else with a read a READ; quarter q's lots have none; the swatches are
+    SWATCH.  T: `read_noise` of the other quarters with answers, else the identity."""
+    if q is not None and q not in paths.QUARTERS:
+        raise ValueError(f"a fold withholds one of {paths.QUARTERS} or none, not {q!r}")
+    train_q = [x for x in paths.QUARTERS if x != q]
+    n, s = len(d.lots), len(d.swatches)
+    quarter = d.lots["quarter"].fillna("").astype(str).to_numpy().astype(object)
+    mine = np.isin(quarter, train_q)
+    read, ans = _codes(d.lots["read_code"], "reads"), _codes(d.lots["answer"], "answers")
+    kind, code = np.zeros(n + s, np.int8), np.zeros(n + s, np.int64)
+    r = mine & (read >= 0)
+    kind[:n][r], code[:n][r] = READ, read[r]
+    if with_answers:
+        a = mine & (ans >= 0)
+        kind[:n][a], code[:n][a] = ANSWER, ans[a]
+    for i, (_, c, _) in enumerate(d.swatches):
+        kind[n + i], code[n + i] = SWATCH, CODE[c]
+    box_px = [(x1 - x0) * (y1 - y0) for _, _, (x0, y0, x1, y1) in d.swatches]
+    t = read_noise(d.lots, train_q) if with_answers else np.eye(len(model.NAMES))
+    return Labels(kind, code, np.r_[d.px, np.asarray(box_px, np.int64)].astype(np.int64),
+                  np.r_[quarter, np.array([""] * s, object)].astype(object), q, t)
+
+
+def _unit_map(d: DistrictData, labels: Labels, held: bool) -> np.ndarray:
+    """(n,) int64: each lot's unit (its own index) where it has a label and is held out or not as `held`, else -1."""
+    n = len(d.lots)
+    return np.where((labels.kind[:n] != NONE) & (d.held == held), np.arange(n), -1)
+
+
+def _unit_tile(d: DistrictData, i: int, y0: int, x0: int, side: int, umap: np.ndarray, swatches: bool) -> np.ndarray:
+    """(side, side) int32: each px's unit in a tile of sheet `i` (`umap` of its lot; with `swatches` the swatch
+    boxes, units n..), -1 for none."""
+    r = d.rasters[i]
+    lot = r.lot[y0:y0 + side, x0:x0 + side]
+    u = np.where(lot >= 0, umap[np.maximum(lot, 0)], -1).astype(np.int32)
+    if swatches:
+        n = len(d.lots)
+        for k, (s, _, (bx0, by0, bx1, by1)) in enumerate(d.swatches):
+            ya, yb, xa, xb = max(by0, y0), min(by1, y0 + side), max(bx0, x0), min(bx1, x0 + side)
+            if s == r.sheet and ya < yb and xa < xb:
+                u[ya - y0:yb - y0, xa - x0:xb - x0] = n + k
+    return u
+
+
+def _unit_centres(d: DistrictData, umap: np.ndarray, swatches: bool) -> list[np.ndarray]:
+    """Per sheet, (m, 2) int32 (row, col): every CENTRE_STRIDE-th px each way of a unit of `umap` (with `swatches`,
+    also of a swatch box)."""
+    out = []
+    for r in d.rasters:
+        h, w = r.lot.shape
+        rows, cols = np.arange(0, h, CENTRE_STRIDE), np.arange(0, w, CENTRE_STRIDE)
+        sub = r.lot[::CENTRE_STRIDE, ::CENTRE_STRIDE]
+        ok = (sub >= 0) & (umap[np.maximum(sub, 0)] >= 0)
+        if swatches:
+            for s, _, (x0, y0, x1, y1) in d.swatches:
+                if s == r.sheet:
+                    ok |= ((rows >= y0) & (rows < y1))[:, None] & ((cols >= x0) & (cols < x1))[None, :]
+        i, j = np.nonzero(ok)
+        out.append(np.stack([rows[i], cols[j]], 1).astype(np.int32))
+    return out
+
+
+def _district_batch(d: DistrictData, pool: _Pool, rng: np.random.Generator, recipe: DistrictRecipe,
+                    umap: np.ndarray):
+    """One step's tiles, drawn from `rng` as `_batch` draws them: ink (jittered), units (`_unit_tile`, with the
+    swatches), ft/px."""
+    b, s = recipe.batch, recipe.tile
+    x, u, ft = np.empty((b, s, s), np.float32), np.empty((b, s, s), np.int32), np.empty(b, np.float32)
+    for n in range(b):
+        i, c = pool[int(rng.integers(len(pool)))]
+        r = d.rasters[i]
+        y0, x0 = _tile(r, c, s)
+        lo, hi = rng.uniform(0.0, recipe.jitter), rng.uniform(1.0 - recipe.jitter, 1.0)
+        x[n] = lo + (hi - lo) * r.ink[y0:y0 + s, x0:x0 + s]
+        u[n] = _unit_tile(d, i, y0, x0, s, umap, swatches=True)
+        ft[n] = r.ft_per_px
+    return x, u, ft
+
+
+def _held_district_tiles(d: DistrictData, umap: np.ndarray, recipe: DistrictRecipe, rng: np.random.Generator):
+    """The fixed held-out tiles (no jitter), centred on the held-out lots' px (`umap`): ink, units (no swatches),
+    ft/px; None when there is no held-out lot."""
+    pool = _Pool(_unit_centres(d, umap, swatches=False))
+    if not len(pool):
+        return None
+    n, s = recipe.val_tiles, recipe.tile
+    x, u, ft = np.empty((n, s, s), np.float32), np.empty((n, s, s), np.int32), np.empty(n, np.float32)
+    for m, j in enumerate(rng.choice(len(pool), size=n, replace=len(pool) < n)):
+        i, c = pool[int(j)]
+        r = d.rasters[i]
+        y0, x0 = _tile(r, c, s)
+        x[m], u[m] = r.ink[y0:y0 + s, x0:x0 + s], _unit_tile(d, i, y0, x0, s, umap, swatches=False)
+        ft[m] = r.ft_per_px
+    return x, u, ft
+
+
+@dataclasses.dataclass
+class Units:
+    """A batch's labelled units (`assemble`): the lots' px (flat batch px: tile, row, col) and each px's lot unit; per
+    lot unit its lot, label kind, district and share (its px in the tile over its px on every sheet); the same for the
+    swatch boxes, with each box's px in the tile."""
+    lot_px: np.ndarray
+    lot_of: np.ndarray
+    lot: np.ndarray
+    kind: np.ndarray
+    code: np.ndarray
+    share: np.ndarray
+    sw_px: np.ndarray
+    sw_of: np.ndarray
+    sw_code: np.ndarray
+    sw_share: np.ndarray
+    sw_count: np.ndarray
+
+
+def assemble(tiles: np.ndarray, labels: Labels) -> Units:
+    """The labelled units of a batch's unit tiles (b, h, w) (each px's unit, -1 none): a lot or swatch in two tiles is
+    two units, each pooled over its own tile.  Raises RuntimeError when a lot of the withheld quarter carries a label
+    (the fold's leak check, on every batch), ValueError on a unit with no label."""
+    b, h, w = tiles.shape
+    flat = tiles.reshape(-1)
+    px = np.flatnonzero(flat >= 0)
+    m = len(labels.kind)
+    key = (px // (h * w)) * m + flat[px].astype(np.int64)
+    count = np.bincount(key, minlength=b * m)
+    uniq = np.flatnonzero(count)
+    local = np.zeros(b * m, np.int64)
+    local[uniq] = np.arange(len(uniq))
+    inv = local[key]
+    uid = uniq % m
+    kind = labels.kind[uid]
+    if (kind == NONE).any():
+        raise ValueError(f"units with no label in the batch: {uid[kind == NONE][:5].tolist()}")
+    lots = kind != SWATCH
+    if labels.q is not None:
+        bad = lots & (labels.quarter[uid] == labels.q)
+        if bad.any():
+            raise RuntimeError(f"leak: {int(bad.sum())} lots of the withheld quarter {labels.q} carry a label into its "
+                               f"fold (lots {uid[bad][:5].tolist()})")
+    share = count[uniq] / labels.px[uid]
+    li, si = np.flatnonzero(lots), np.flatnonzero(~lots)
+    lmap, smap = np.full(len(uniq), -1, np.int64), np.full(len(uniq), -1, np.int64)
+    lmap[li], smap[si] = np.arange(len(li)), np.arange(len(si))
+    on_lot = lots[inv]
+    return Units(px[on_lot], lmap[inv[on_lot]], uid[li], kind[li], labels.code[uid[li]], share[li],
+                 px[~on_lot], smap[inv[~on_lot]], labels.code[uid[si]], share[si], count[uniq][si])
+
+
+def batch_loss(out: torch.Tensor, units: Units, labels: Labels):
+    """The batch's loss sums from the network's output (b, OUTPUTS, h, w), on the CPU: (sum over its units of
+    share x loss, the sum of the shares, each lot unit's log-probabilities without gradient).  A lot's loss is
+    `lot_loss` of its pooled prediction (`lot_logprob`); a swatch box's, its px's mean cross-entropy."""
+    k = len(model.NAMES)
+    dl = out[:, model.DISTRICTS].permute(0, 2, 3, 1).reshape(-1, k).cpu()
+    wl = out[:, model.WEIGHT].reshape(-1).cpu()
+    total = torch.zeros((), dtype=dl.dtype)
+    lp = torch.empty((0, k))
+    if len(units.kind):
+        px = torch.from_numpy(units.lot_px)
+        lp = lot_logprob(dl[px], wl[px], torch.from_numpy(units.lot_of), len(units.kind))
+        loss = lot_loss(lp, torch.from_numpy(units.kind), torch.from_numpy(units.code), labels.log_t)
+        total = total + (torch.from_numpy(units.share).to(dl.dtype) * loss).sum()
+    if len(units.sw_code):
+        of = torch.from_numpy(units.sw_of)
+        code = torch.from_numpy(units.sw_code)[of]
+        ce = -F.log_softmax(dl[torch.from_numpy(units.sw_px)], -1).gather(1, code[:, None])[:, 0]
+        mean = torch.zeros(len(units.sw_code), dtype=dl.dtype).index_add(0, of, ce) / \
+            torch.from_numpy(units.sw_count).to(dl.dtype)
+        total = total + (torch.from_numpy(units.sw_share).to(dl.dtype) * mean).sum()
+    weight = torch.tensor(float(units.share.sum() + units.sw_share.sum()), dtype=dl.dtype)
+    return total, weight, lp.detach()
+
+
+@torch.no_grad()
+def _measure_districts(net: model.HatchNet, held, labels: Labels, device: str, recipe: DistrictRecipe) -> dict:
+    """On the fixed held-out tiles, in eval mode: the loss (sum share x loss / sum share over the held-out lots), and
+    over the held-out lots labelled by a read: their loss and the share-weighted agreement of the pooled argmax with
+    the read (the old reader's, not the owner's)."""
+    x, u, ft = held
+    net.eval()
+    total = weight = rl = rw = hit = 0.0
+    n_units = 0
+    log_t = labels.log_t
+    for a in range(0, len(x), recipe.batch):
+        units = assemble(u[a:a + recipe.batch], labels)
+        out = net(model.inputs(torch.from_numpy(x[a:a + recipe.batch]).to(device),
+                               torch.from_numpy(ft[a:a + recipe.batch]).to(device), net.inputs))
+        t, w, lp = batch_loss(out, units, labels)
+        total, weight, n_units = total + float(t), weight + float(w), n_units + len(units.kind)
+        read = units.kind == READ
+        if read.any():
+            sel = torch.from_numpy(np.flatnonzero(read))
+            loss = lot_loss(lp[sel], torch.from_numpy(units.kind[read]), torch.from_numpy(units.code[read]), log_t)
+            sh = units.share[read]
+            rl += float((torch.from_numpy(sh).float() * loss).sum())
+            rw += float(sh.sum())
+            hit += float((sh * (lp[sel].argmax(1).numpy() == units.code[read])).sum())
+    net.train()
+    return {"loss": total / weight if weight else math.nan, "read_loss": rl / rw if rw else math.nan,
+            "read_agree": hit / rw if rw else math.nan, "units": n_units}
+
+
+@dataclasses.dataclass
+class FittedFold:
+    """A trained fold: the weights kept (CPU) and their step, the curve (one row per held-out measurement), the device,
+    the seconds, the read-noise matrix used, the labelled lot units trained on per quarter and the swatch units (the
+    leak record), and the last step's weights."""
+    q: str | None
+    with_answers: bool
+    state_dict: dict
+    best_step: int
+    curve: list[dict]
+    device: str
+    seconds: float
+    t: np.ndarray
+    units_per_quarter: dict
+    swatch_units: int
+    last_state_dict: dict | None = None
+
+
+def fit_fold(d: DistrictData, q: str | None, with_answers: bool, seed: int = 0, device: str | None = None,
+             recipe: DistrictRecipe = DistrictRecipe(), init: dict | None = None) -> FittedFold:
+    """Train the district and weight outputs of the fold withholding quarter `q` (None: all quarters), with or without
+    the owner's answers, from the weights `init` (None: a new network from `seed`); see the module.  On `mps` the
+    caller holds the GPU's exclusive turn."""
+    device = device or default_device()
+    labels = fold_labels(d, q, with_answers)
+    settle_torch()
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+    train_map, val_map = _unit_map(d, labels, held=False), _unit_map(d, labels, held=True)
+    held = _held_district_tiles(d, val_map, recipe, np.random.default_rng([seed, 1]))
+    pool = _Pool(_unit_centres(d, train_map, swatches=True))
+    if not len(pool):
+        raise ValueError("nothing to train on: no labelled lot outside the held-out cells, and no swatch")
+    net = model.HatchNet(recipe.width, recipe.inputs)
+    if init is not None:
+        net.load_state_dict(init)
+    net = net.to(device)
+    net.train()
+    opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=recipe.weight_decay)
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.steps,
+                                                pct_start=recipe.pct_start)
+    curve, checkpoints, per_quarter, swatch_units = [], [], {}, 0
+    s_sum = w_sum = 0.0
+    first, t0 = 1, time.perf_counter()
+    for step in range(1, recipe.steps + 1):
+        x, u, ft = _district_batch(d, pool, rng, recipe, train_map)
+        units = assemble(u, labels)
+        out = net(model.inputs(torch.from_numpy(x).to(device), torch.from_numpy(ft).to(device), net.inputs))
+        total, weight, _ = batch_loss(out, units, labels)
+        if not float(weight) > 0:
+            raise RuntimeError(f"step {step}: a batch with no labelled unit")
+        loss = total / weight
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        sched.step()
+        s_sum, w_sum = s_sum + float(total.detach()), w_sum + float(weight)
+        for qq, c in zip(*np.unique(labels.quarter[units.lot].astype(str), return_counts=True)):
+            per_quarter[str(qq)] = per_quarter.get(str(qq), 0) + int(c)
+        swatch_units += len(units.sw_code)
+        if step % recipe.val_every == 0 or step == recipe.steps:
+            train_loss = s_sum / w_sum
+            if not math.isfinite(train_loss):
+                raise FloatingPointError(f"steps {first}-{step}: the training loss is not finite ({train_loss})")
+            val = _measure_districts(net, held, labels, device, recipe) if held else \
+                {"loss": math.nan, "read_loss": math.nan, "read_agree": math.nan, "units": 0}
+            row = {"step": step, "lr": float(sched.get_last_lr()[0]), "train_loss": train_loss,
+                   **{f"val_{k}": v for k, v in val.items()}, "seconds": time.perf_counter() - t0,
+                   "load1": os.getloadavg()[0]}
+            curve.append(row)
+            checkpoints.append({"step": step, "val_loss": val["loss"],
+                                "state_dict": {n: a.detach().cpu().clone() for n, a in net.state_dict().items()}})
+            log.info("%s steps %d-%d: train loss %.4f; held-out loss %.4f (reads %.4f, read agreement %.4f, %d lot "
+                     "units) (%.0f s, load %.1f)", run_name(q, with_answers), first, step, train_loss, val["loss"],
+                     val["read_loss"], val["read_agree"], val["units"], row["seconds"], row["load1"])
+            s_sum = w_sum = 0.0
+            first = step + 1
+    if q is not None and per_quarter.get(q, 0):
+        raise RuntimeError(f"leak: {per_quarter[q]} lot units of the withheld quarter {q} were trained on")
+    k = select_checkpoint([c["val_loss"] for c in checkpoints])
+    return FittedFold(q, with_answers, checkpoints[k]["state_dict"], checkpoints[k]["step"], curve, str(device),
+                      time.perf_counter() - t0, labels.t, per_quarter, swatch_units, checkpoints[-1]["state_dict"])
+
+
+def train_fold(q: str | None, with_answers: bool, seed: int = 0, data: DistrictData | None = None,
+               device: str | None = None, recipe: DistrictRecipe = DistrictRecipe(), init: dict | None = None,
+               series: str = "1921") -> dict:
+    """The weights (`fit_fold`, the step kept, on the CPU) of the fold withholding quarter `q` (None: all quarters),
+    from `data` (default: `load_district_data(series)`), started from `init` (None: a new network)."""
+    data = data if data is not None else load_district_data(series, recipe.val_cell)
+    return fit_fold(data, q, with_answers, seed, device, recipe, init).state_dict
+
+
+def load_district_data(series: str, cell: int = VAL_CELL) -> DistrictData:
+    """The written rasters and lot table of `series` (`data.data_dir`) and the legend's swatches (`data.swatches`)."""
+    folder = data.data_dir(series)
+    files = sorted(folder.glob("*.npz"))
+    if not files:
+        raise FileNotFoundError(f"no rasters under {folder}: run `hatchnet data --series {series}`")
+    rasters = [dataclasses.replace(data.read_rasters(f), street=None, centre=None, street_w=None) for f in files]
+    return district_data(rasters, pd.read_parquet(folder / "lots.parquet"), data.swatches(series), cell)
+
+
+def save_district_model(f: Path, fitted: FittedFold, recipe: DistrictRecipe, seed: int, init: dict | None) -> Path:
+    """Write a fold's network as `save_model` writes the streets' (plain values: torch.load's weights-only default reads
+    it; `load_model` loads it): the weights kept, their step, the curve, the recipe, the seed, the device, the fold,
+    the read-noise matrix, the units per quarter and what it started from."""
+    f = Path(f)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    torch.save({"state_dict": fitted.state_dict, "step": fitted.best_step, "best_step": fitted.best_step,
+                "curve": fitted.curve, "recipe": dataclasses.asdict(recipe), "seed": seed, "device": fitted.device,
+                "fold": fitted.q, "with_answers": fitted.with_answers, "read_noise": fitted.t.tolist(),
+                "units_per_quarter": fitted.units_per_quarter, "swatch_units": fitted.swatch_units, "init": init,
+                "torch": str(torch.__version__)}, f)
+    return f
+
+
+def _load_init(f: Path, recipe: DistrictRecipe) -> tuple[dict, dict]:
+    """The starting weights (a saved street model) and a note of them (path, step, digest); its width and inputs must
+    be the recipe's."""
+    saved = torch.load(f, map_location="cpu")
+    width, inputs = saved["recipe"]["width"], saved["recipe"].get("inputs", model.SCALE_INPUTS)
+    if (width, inputs) != (recipe.width, recipe.inputs):
+        raise ValueError(f"{f}: width {width} and {inputs} input channels, the recipe {recipe.width} and "
+                         f"{recipe.inputs}")
+    return saved["state_dict"], {"path": str(f), "step": saved.get("step"), "sha256": state_digest(saved["state_dict"])}
+
+
+def run_districts(series: str, root: Path | None = None, init: Path = STREETS_INIT, device: str | None = None,
+                  seed: int = 0, recipe: DistrictRecipe = DistrictRecipe(), runs=RUNS,
+                  look_sheets=DISTRICT_LOOK) -> dict:
+    """Train `runs` ((q, with_answers), `RUNS`) one at a time, each on the GPU's exclusive turn, from the model `init`,
+    and write under `root` (default DISTRICTS_ROOT): models/<run_name>.pt and summary.json (updated after each run).
+    Then, when the all-quarters model is written, its pictures (`look_districts`)."""
+    root = Path(root) if root is not None else DISTRICTS_ROOT
+    device = device or default_device()
+    state, init_note = _load_init(init, recipe)
+    d = load_district_data(series, recipe.val_cell)
+    n = len(d.lots)
+    sf = root / "summary.json"
+    summary = json.loads(sf.read_text()) if sf.is_file() else {}
+    summary.update({"series": series, "seed": seed, "recipe": dataclasses.asdict(recipe), "init": init_note,
+                    "torch": torch.__version__, "names": model.NAMES,
+                    "lots": {"total": n, "with_px": int((d.px > 0).sum()), "held_out": int(d.held.sum()),
+                             "held_out_per_quarter": {q: int((d.held & (d.lots["quarter"] == q).to_numpy()).sum())
+                                                      for q in paths.QUARTERS}},
+                    "swatches": [[s, c, list(b)] for s, c, b in d.swatches]})
+    summary.setdefault("runs", {})
+    root.mkdir(parents=True, exist_ok=True)
+    for q, with_answers in runs:
+        name = run_name(q, with_answers)
+        kind = fold_labels(d, q, with_answers).kind[:n]
+        trained, held = (kind != NONE) & ~d.held & (d.px > 0), (kind != NONE) & d.held & (d.px > 0)
+        with gpu.gpu_turn(True, device):
+            fitted = fit_fold(d, q, with_answers, seed, device, recipe, state)
+        f = save_district_model(root / "models" / f"{name}.pt", fitted, recipe, seed, init_note)
+        kept = next(r for r in fitted.curve if r["step"] == fitted.best_step)
+        summary["runs"][name] = {
+            "fold": q, "with_answers": with_answers, "model": str(f), "device": fitted.device,
+            "best_step": fitted.best_step, "kept": kept, "curve": fitted.curve, "seconds": fitted.seconds,
+            "read_noise": fitted.t.tolist(), "units_per_quarter": fitted.units_per_quarter,
+            "swatch_units": fitted.swatch_units, "state_sha256": state_digest(fitted.state_dict),
+            "lots_trained": int(trained.sum()), "answers_trained": int((trained & (kind == ANSWER)).sum()),
+            "lots_held_out": int(held.sum()), "answers_held_out": int((held & (kind == ANSWER)).sum()),
+            "peak_load1": max(r["load1"] for r in fitted.curve)}
+        sf.write_text(json.dumps(summary, indent=1, sort_keys=True) + "\n")
+        log.info("%s: kept step %d, held-out loss %.4f; %.0f s", name, fitted.best_step, kept["val_loss"],
+                 fitted.seconds)
+    if (root / "models" / f"{DELIVERABLE}.pt").is_file() and look_sheets:
+        summary["pictures"] = [str(p) for p in look_districts(series, root, look_sheets, device=device)]
+        sf.write_text(json.dumps(summary, indent=1, sort_keys=True) + "\n")
+    return summary
+
+
+def look_districts(series: str, root: Path | None = None, sheets=DISTRICT_LOOK, name: str = DELIVERABLE,
+                   device: str | None = None) -> list[Path]:
+    """The pictures of the model `name` (`look.districts`): each sheet's per-px district argmax over the scan, the
+    learned weight as the tint's strength, whole and (where `sheets` gives a top-left) zoomed, into root/look."""
+    from sfzmaps.solver.hatchnet import look
+    root = Path(root) if root is not None else DISTRICTS_ROOT
+    device = device or default_device()
+    folder = data.data_dir(series)
+    out = []
+    with gpu.gpu_turn(True, device):
+        net, saved = load_model(root / "models" / f"{name}.pt", device)
+        for sheet, at in sheets.items():
+            r = data.read_rasters(folder / f"{sheet}.npz")
+            arg, wgt = predict_districts(net, r)
+            note = f"model {name}: kept step {saved['step']} of {saved['recipe']['steps']}"
+            out += look.districts(r, arg, wgt, root / "look", at, note)
     return out

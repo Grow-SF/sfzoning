@@ -7,6 +7,9 @@
             px a square)
   compare   the zoom side by side: the target (today's blocks placed on the scan, as `data.look_targets` draws it)
             and what was learned
+  districts the learned district evidence: every px inside the neatline tinted in its district argmax's colour
+            (DISTRICT_BGR), the tint's strength the px's learned pooling weight (`weight_strength`: strong where the
+            px counts most in its lot, pale where it counts little); whole, and a zoom
 
 Nothing here is used by the reading: the pictures only show it.
 """
@@ -18,7 +21,7 @@ import cv2
 import numpy as np
 from scipy import ndimage
 
-from sfzmaps.solver.hatchnet import data
+from sfzmaps.solver.hatchnet import data, model
 
 STREET_BGR = data.TINT[0]          # orange: the target pictures' not-a-block
 STREET_ALPHA = 0.6                 # the street tint's opacity at probability 1 (it scales with the probability)
@@ -217,4 +220,88 @@ def all_pictures(sheet: data.SheetRasters, street_prob: np.ndarray, blocks: np.n
            compare(sheet, street_prob, blocks, out, at, cell)]
     if cell is not None:
         got.append(compare(sheet, street_prob, blocks, out, held_window(sheet, cell), cell, "compare_heldout"))
+    return got
+
+
+# --- the districts --------------------------------------------------------------------------------------------------
+
+# Each district's colour (BGR), model.NAMES order: the published map's colours (sfzmaps.districts.assemble.COLORS by
+# 1921 category), with LI yellow where the published map gives LI and HI one industrial brown.
+DISTRICT_BGR = {"1R": (0, 68, 254), "2R": (0, 150, 0), "C": (175, 73, 17), "HI": (11, 66, 133), "LI": (0, 190, 230),
+                "U": (175, 98, 133)}
+DISTRICT_WORD = {"1R": "orange-red", "2R": "green", "C": "blue", "HI": "brown", "LI": "yellow", "U": "purple"}
+TINT_LOW, TINT_HIGH = 0.12, 0.62   # the district tint's opacity at the least and most weight
+INK_GREY = 0.3                     # ink drawn this grey (paper white) under the district tint, so its colour shows on
+                                   # solid ink (C) and hatch lines too (a display choice: the network read the scan)
+
+
+def weight_strength(sheet: data.SheetRasters, weight: np.ndarray) -> np.ndarray:
+    """Each px's weight shown as a strength in (0, 1): sigmoid(weight - the median weight of the sheet's lot px in the
+    neatline).  A lot pools its px in proportion to exp(weight), so a px 3 above the median counts 20 times a median
+    px (strength 0.95) and one 3 below a twentieth (0.05)."""
+    ref = np.asarray(sheet.crop, bool) & (sheet.lot >= 0)
+    if not ref.any():
+        ref = np.asarray(sheet.crop, bool)
+    med = float(np.median(weight[ref])) if ref.any() else 0.0
+    return (1.0 / (1.0 + np.exp(-(weight.astype(np.float64) - med)))).astype(np.float32)
+
+
+def district_tint(sheet: data.SheetRasters, argmax: np.ndarray, weight: np.ndarray) -> np.ndarray:
+    """The scan (ink drawn INK_GREY) with every px inside the neatline tinted in its district's colour, the tint's
+    opacity from TINT_LOW (least weight) to TINT_HIGH (most), and grey outside the neatline (float32 BGR)."""
+    img = _grey(INK_GREY + (1.0 - INK_GREY) * sheet.ink)
+    crop = np.asarray(sheet.crop, bool)
+    colours = np.array([DISTRICT_BGR[n] for n in model.NAMES], np.float32)
+    a = (TINT_LOW + (TINT_HIGH - TINT_LOW) * weight_strength(sheet, weight))[..., None]
+    img = np.where(crop[..., None], img * (1 - a) + colours[argmax] * a, img)
+    ga = data.ALPHA[data.UNKNOWN]
+    img[~crop] = img[~crop] * (1 - ga) + np.array(data.TINT[data.UNKNOWN], np.float32) * ga
+    return img
+
+
+def _key(width: int, scale: float) -> np.ndarray:
+    """A banner row naming each district beside a swatch of its colour."""
+    h = int(round(40 * scale))
+    row = np.full((h, width, 3), 255, np.uint8)
+    x, side = int(12 * scale), int(round(26 * scale))
+    for n in model.NAMES:
+        cv2.rectangle(row, (x, (h - side) // 2), (x + side, (h + side) // 2), DISTRICT_BGR[n], -1)
+        x += side + int(8 * scale)
+        label = f"{n} {DISTRICT_WORD[n]}"
+        cv2.putText(row, label, (x, h // 2 + int(10 * scale)), cv2.FONT_HERSHEY_SIMPLEX, 0.8 * scale, (0, 0, 0),
+                    max(1, int(round(2 * scale))), cv2.LINE_AA)
+        x += int(cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.8 * scale, max(1, int(round(2 * scale))))[0][0]
+                 + 28 * scale)
+    return row
+
+
+DISTRICT_LEGEND = ["colour: each px's district argmax; strength: its learned pooling weight",
+                   "strong = counts most in its lot, pale = counts little, middle = median lot px",
+                   "street px are in no lot (colour never trained); grey: outside the neatline"]
+
+
+def districts(sheet: data.SheetRasters, argmax: np.ndarray, weight: np.ndarray, out: Path, at=None,
+              note: str = "") -> list[Path]:
+    """Write the per-px district evidence over the scan into the folder `out`: districts_<sheet>_whole.png (the scan's
+    own px) and, with `at` = (y0, x0), districts_<sheet>_zoom.png (data.ZOOM_SIDE px from there, at data.ZOOM x).
+    Returns the paths."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
+    base = np.round(district_tint(sheet, argmax, weight)).astype(np.uint8)
+    crop = np.asarray(sheet.crop, bool)
+    share = np.bincount(argmax[crop].ravel(), minlength=len(model.NAMES)) / max(int(crop.sum()), 1)
+    shares = ", ".join(f"{n} {100 * s:.0f}%" for n, s in zip(model.NAMES, share))
+    head = f"{sheet.sheet}  {sheet.ft_per_px:.2f} ft/px  per-px district evidence  {note}"
+    whole = _banner(base, [head, f"argmax share of the neatline's px: {shares}"] + DISTRICT_LEGEND, 1.6)
+    f = out / f"districts_{sheet.sheet}_whole.png"
+    cv2.imwrite(str(f), np.vstack([_key(whole.shape[1], 1.6), whole]))
+    got = [f]
+    if at is not None:
+        w = _window(sheet, at)
+        zoom = _zoom(base, w)
+        where = f"zoom x{data.ZOOM}: scan px x {w[1]}-{w[1] + w[2]}, y {w[0]}-{w[0] + w[2]} (upright)"
+        zoom = _banner(zoom, [f"{sheet.sheet}  {note}", where] + DISTRICT_LEGEND, 1.0)
+        g = out / f"districts_{sheet.sheet}_zoom.png"
+        cv2.imwrite(str(g), np.vstack([_key(zoom.shape[1], 1.0), zoom]))
+        got.append(g)
     return got

@@ -15,4 +15,12 @@ a pooling weight, trained through per-lot pooled losses (spec: docs/superpowers/
 
     OMP_NUM_THREADS=1 SFZMAPS_MAX_USD=0 uv run python -m sfzmaps.solver.hatchnet streets --series 1921
 
+  districts  the six district outputs and the pooling weight, trained through pooled lot losses (the reader's reads
+             through a read-noise matrix, the owner's answers, the legend swatches; each lot once), from the streets
+             v2c model and with no street loss (ruling R5): the four folds by quarter with answers, the same four
+             reads-only and the all-quarters model, one GPU turn at a time, into hatch-cnn/districts (models/,
+             summary.json); then the all-quarters model's per-px pictures (look/)
+
+    OMP_NUM_THREADS=1 SFZMAPS_MAX_USD=0 uv run python -m sfzmaps.solver.hatchnet districts --series 1921
+
 $0: no API calls."""
