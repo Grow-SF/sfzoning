@@ -169,7 +169,7 @@ def test_turned_sheet_matches_upright(tmp_path):
     assert np.array_equal(a, b)
     ra, rb = data.sheet_rasters(SERIES, "sheet", sources(up)), data.sheet_rasters(SERIES, "sheet", sources(side))
     assert (ra.turn, rb.turn) == (0, 1)
-    for k in ("ink", "block", "lot", "crop", "street", "centre"):
+    for k in ("ink", "block", "lot", "crop", "street", "street_w", "centre"):
         assert np.array_equal(getattr(ra, k), getattr(rb, k)), k
     assert (ra.block == 1).sum() > 0 and (ra.block == 0).sum() > 0 and (ra.lot >= 0).sum() > 0
     assert (ra.street == 1).sum() > 0 and ra.centre.sum() > 0
@@ -293,56 +293,117 @@ def gap_blocks(width: int, *spans) -> np.ndarray:
     return block
 
 
-def centre_cols(shape, *cols) -> np.ndarray:
-    centre = np.zeros(shape, bool)
-    for c in cols:
-        centre[:, c] = True
-    return centre
+def wline(*rc) -> shapely.LineString:
+    """A centre line (EPSG:2227 ft) through the centres of grid px (row, col)."""
+    return shapely.LineString([(grid.X0 + 4 * (c + 0.5), grid.Y1 - 4 * (r + 0.5)) for r, c in rc])
+
+
+def centres_of(shape, *lines) -> "data.Centres":
+    return data.centre_segments(np.array(lines, dtype=object), shape)
 
 
 def test_corridor_between_two_blocks():
     # blocks at columns 0-9 and 20-29, a 10 px street between them, its centre line at column 14 (5 px from the west
-    # block, 6 from the east): every px between the blocks is street, the blocks are not street
+    # block, 6 from the east): both sides are bounded, so every px between the blocks is street with weight 1 (the
+    # exact corridor), the blocks are not street, and the px past the east block are ignored
     block = gap_blocks(40, (0, 10), (20, 30))
-    centre = centre_cols(block.shape, 14)
-    street, c = data.street_labels(block, centre)
-    assert street.dtype == np.uint8 and c.dtype == np.uint8
-    assert (street[:, 10:20] == 1).all()
-    assert (street[block] == 0).all()
-    assert np.array_equal(c == 1, centre)
-    assert set(np.unique(street)) <= {0, 1, data.UNKNOWN}
+    lab = data.street_labels(block, centres_of(block.shape, wline((0, 14), (19, 14))))
+    assert lab.street.dtype == np.uint8 and lab.weight.dtype == np.float16 and lab.centre.dtype == np.uint8
+    assert (lab.street[:, 10:20] == 1).all() and (lab.weight[:, 10:20] == 1).all()
+    assert (lab.street[block] == 0).all() and (lab.weight[block] == 1).all()
+    assert (lab.street[:, 30:] == data.UNKNOWN).all() and (lab.weight[:, 30:] == 0).all()
+    assert lab.centre[:, 14].all() and lab.centre.sum() == 20
+    assert set(np.unique(lab.street)) <= {0, 1, data.UNKNOWN}
 
 
-def test_shoreline_stops_at_half_width():
-    # a block (columns 0-9), a centre line 5 px from it (column 14), then open water: the corridor reaches the line's
-    # own distance to the block on both sides, 5 px past the line on the open side (columns 15-19), and no further
-    block = gap_blocks(60, (0, 10))
-    street, _ = data.street_labels(block, centre_cols(block.shape, 14))
-    assert (street[:, :10] == 0).all()
-    assert (street[:, 10:20] == 1).all()
-    assert (street[:, 20:] == data.UNKNOWN).all()
+def shore_grid():
+    """Rows 0-9 and 20-39 are blocks.  A street between them (centre row 14: 5 px to the block above, 6 below), and a
+    shoreline street (centre row 42: 3 px below the block) with open water below it to the grid's edge."""
+    block = np.zeros((60, 80), bool)
+    block[0:10] = True
+    block[20:40] = True
+    return block, centres_of(block.shape, wline((14, 0), (14, 79)), wline((42, 0), (42, 79)))
+
+
+def test_shoreline_open_side_is_soft():
+    # the shoreline's block side keeps its exact corridor (rows 40-41); its open side is street with the learned
+    # survival weight S(d) = P(half-width >= d): the half-widths learned are the two-sided street's 5 and 6 (80 px
+    # each), so S is 1 up to 5 px, 1/2 at 6 px and 0 beyond, where the water is ignored
+    block, centres = shore_grid()
+    lab = data.street_labels(block, centres)
+    assert (lab.street[40:42] == 1).all() and (lab.weight[40:42] == 1).all()
+    assert (lab.street[10:20] == 1).all() and (lab.weight[10:20] == 1).all()
+    assert (lab.street[43:49] == 1).all()
+    for row in range(43, 60):
+        d = row - 42
+        assert np.allclose(lab.weight[row].astype(float), data.survival(lab.learned.pooled, np.full(80, d))), row
+    assert (lab.weight[43:48] == 1).all() and (lab.weight[48] == 0.5).all()
+    assert (lab.street[49:] == data.UNKNOWN).all() and (lab.weight[49:] == 0).all()
+
+
+def test_bridge_gets_only_soft_weights():
+    # a centre line with no block on either side: only the learned survival weights, out to the largest learned
+    # half-width, then ignored; nothing is not-street
+    learned = data.street_labels(*shore_grid()).learned
+    block = np.zeros((40, 40), bool)
+    lab = data.street_labels(block, centres_of(block.shape, wline((0, 20), (39, 20))), learned=learned)
+    d = np.abs(np.arange(40) - 20)
+    for col in range(40):
+        assert np.allclose(lab.weight[:, col].astype(float), data.survival(learned.pooled, np.full(40, d[col]))), col
+    assert (lab.street[:, d <= 6] == 1).all() and (lab.street[:, d > 6] == data.UNKNOWN).all()
+    assert not (lab.street == 0).any() and (lab.weight[:, d == 6] == 0.5).all()
+
+
+def test_half_widths_learned_from_two_sided_px():
+    # the distribution comes only from px bounded on both sides: not the shoreline's one side (3), and not a side whose
+    # ray runs into a cross street's area before it meets a block (here up a cross street that ends 12 px away at a
+    # block band), which measures the cross street's length, not this street's width
+    block, centres = shore_grid()
+    lab = data.street_labels(block, centres)
+    assert np.array_equal(np.sort(lab.learned.pooled), np.r_[np.full(80, 5.0), np.full(80, 6.0)])
+    block = np.zeros((30, 40), bool)
+    block[0:3] = True                                         # a block band across the top
+    for r0, r1 in ((3, 10), (20, 30)):
+        block[r0:r1, 0:10] = True
+        block[r0:r1, 20:40] = True
+    lab = data.street_labels(block, centres_of(block.shape, wline((14, 0), (14, 39)), wline((3, 14), (29, 14))))
+    assert lab.learned.pooled.size and set(np.unique(lab.learned.pooled)) <= {5.0, 6.0}
+    i = int(np.flatnonzero((lab.sides.rows == 14) & (lab.sides.cols == 12))[0])
+    assert np.isinf(lab.sides.width[i]).any()                 # its up side runs along the cross street
 
 
 def test_no_centre_line_is_ignored():
     # a street between two blocks with no centre line today (columns 30-39) is ignored, not labelled not-street; the
     # one with a centre line (columns 10-19) is street.  With no centre line at all, every px off the blocks is ignored
     block = gap_blocks(60, (0, 10), (20, 30), (40, 50))
-    street, _ = data.street_labels(block, centre_cols(block.shape, 14))
-    assert (street[:, 10:20] == 1).all()
-    assert (street[:, 30:40] == data.UNKNOWN).all()
-    assert (street[block] == 0).all()
-    street, c = data.street_labels(block, np.zeros_like(block))
-    assert (street[block] == 0).all() and (street[~block] == data.UNKNOWN).all() and not c.any()
+    lab = data.street_labels(block, centres_of(block.shape, wline((0, 14), (19, 14))))
+    assert (lab.street[:, 10:20] == 1).all()
+    assert (lab.street[:, 30:40] == data.UNKNOWN).all() and (lab.weight[:, 30:40] == 0).all()
+    assert (lab.street[block] == 0).all()
+    lab = data.street_labels(block, centres_of(block.shape))
+    assert (lab.street[block] == 0).all() and (lab.street[~block] == data.UNKNOWN).all() and not lab.centre.any()
+    assert (lab.weight[~block] == 0).all()
 
 
 def test_centre_on_a_block_is_not_street():
-    # a centre line crossing today's block (a park road, a street built over): the block stays not-street, the line is
-    # no centre there, and its corridor is the line itself, so it labels nothing off the block
+    # a centre line crossing today's block (a park road, a street built over): the block stays not-street and the line
+    # is no centre there, so it labels nothing off the block
     block = gap_blocks(40, (0, 20))
-    centre = centre_cols(block.shape, 10)
-    street, c = data.street_labels(block, centre)
-    assert (street[block] == 0).all() and (street[~block] == data.UNKNOWN).all()
-    assert not c.any()
+    lab = data.street_labels(block, centres_of(block.shape, wline((0, 10), (19, 10))))
+    assert (lab.street[block] == 0).all() and (lab.street[~block] == data.UNKNOWN).all()
+    assert not lab.centre.any()
+
+
+def test_kind_pooled_unless_its_widths_differ():
+    # each street type gets its own learned half-widths only when they differ from all types' by more than the DKW 95%
+    # band for its number of lines; a type seen on one line is pooled
+    block, _ = shore_grid()
+    lines = np.array([wline((14, 0), (14, 79)), wline((42, 0), (42, 79))], dtype=object)
+    centres = data.centre_segments(lines, block.shape, kinds=np.array(["AVE", "ST"]))
+    lab = data.street_labels(block, centres)
+    rep = lab.learned.report
+    assert rep["AVE"]["own"] is False and rep["AVE"]["lines"] == 1 and rep["AVE"]["px"] == 80
+    assert rep["ST"]["own"] is False and rep["ST"]["px"] == 0 and not lab.learned.own
 
 
 def test_centre_lines_rasterised_on_the_grid():
@@ -367,10 +428,14 @@ def test_street_and_centre_carried_like_block(tmp_path):
     src = two_sheets(tmp_path)
     for name, x_ft in (("sheetA", 20.37), ("sheetC", 80.37)):
         r = data.sheet_rasters(SERIES, name, src)
-        assert r.street.dtype == np.uint8 and r.centre.dtype == np.uint8
+        assert r.street.dtype == np.uint8 and r.centre.dtype == np.uint8 and r.street_w.dtype == np.float16
         assert np.array_equal(r.street == 0, r.block == 1), name
         assert (r.street[r.block == data.UNKNOWN] == data.UNKNOWN).all(), name
         assert (r.street == 1).any() and (r.street[r.block == 0] == data.UNKNOWN).any(), name
+        # the weight: 1 on not-street, 0 where ignored, in (0, 1] on street, soft somewhere off the lots
+        w = r.street_w.astype(float)
+        assert (w[r.street == 0] == 1).all() and (w[r.street == data.UNKNOWN] == 0).all(), name
+        assert ((w[r.street == 1] > 0) & (w[r.street == 1] <= 1)).all() and (w[r.street == 1] < 1).any(), name
         assert r.centre.any() and (r.street[r.centre == 1] == 1).all(), name
         assert (r.centre[r.block == data.UNKNOWN] == 0).all(), name
         # the drawn centre px lie on the lines (STREETS), within a page px; the north-south line is A's alone
@@ -385,6 +450,7 @@ def test_street_and_centre_carried_like_block(tmp_path):
     bare = data.sheet_rasters(SERIES, "sheetA", dataclasses.replace(src, streets=None))
     assert not (bare.street == 1).any() and not bare.centre.any()
     assert np.array_equal(bare.street == 0, bare.block == 1)
+    assert np.array_equal(bare.street_w == 1, bare.block == 1)
 
 
 def test_run_writes_same_bytes(tmp_path):
@@ -402,9 +468,9 @@ def test_run_writes_same_bytes(tmp_path):
     assert one["sheets_used"] == ["sheetA", "sheetC"]
     r = data.read_rasters(tmp_path / "one" / "sheetA.npz")
     direct = data.sheet_rasters(SERIES, "sheetA", src)
-    for k in ("block", "street", "centre"):
+    for k in ("block", "street", "street_w", "centre"):
         assert np.array_equal(getattr(r, k), getattr(direct, k)), k
     assert (r.street == 1).any() and r.centre.any()
     lab = one["street_labels"]
-    assert lab["lines"] == len(STREETS) and lab["centre_grid_px"] > 0
+    assert lab["lines"] == len(STREETS) and lab["centre_grid_px"] > 0 and "(none)" in lab["half_widths"]
     assert data.swatches(SERIES, src) == [("sheetA", "1R", (10, 20, 30, 40))]
