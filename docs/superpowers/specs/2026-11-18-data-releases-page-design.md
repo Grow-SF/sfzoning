@@ -145,10 +145,10 @@ ultramarine accent.
 - **Filter and download panel** (sticky at the top while scrolling the table). Left: pill toggles
   for Format, Layer, Edition (with "all" / "none" for editions), all on by default. Right: the live
   count (`30 files · 316.8 MB`, "Everything in this release" or "Your selection"), a primary
-  zip button when the selection is everything ("Download the whole release as zip, 6.6 GB") or
-  exactly one whole vector format ("Download all Shapefiles as zip", with its size); otherwise no
-  button and a line saying zips exist for the whole release and each vector format and the rest is
-  fetched with the command below, `urls.txt` and `SHA256SUMS` links, and a
+  "Download the whole release as zip (6.6 GB)" button, always shown whatever the filter (owner's
+  call); when the selection is exactly one whole vector format, a second button for that zip
+  ("Download all Shapefiles as zip", with its size); any other selection is fetched with the
+  command below, `urls.txt` and `SHA256SUMS` links, and a
   one-line `curl -s '<urls.txt?…>' | wget -nc -i -` command with a copy button. Only narrowed
   groups go in the query string. The filter state is mirrored in the page URL
   (`/data?format=shp`) so a filtered view can be shared; the page reads it on load.
