@@ -268,3 +268,14 @@ pre.ref { font: 12px/1.45 var(--mono); white-space: pre; overflow-x: auto; }
   .table .hash, .table .date { display: none; }
   .table col.cd, .table col.ch { width: 0; }
 }
+
+/* Releases index and changes pages. */
+.page .back { font-size: 13.5px; margin: 0 0 1rem; }
+.idx { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+.idx th { text-align: left; font-size: 12px; font-weight: 500; color: var(--ink-dim); padding: 0.4rem 0.6rem; border-bottom: 1px solid var(--ink-2); }
+.idx td { padding: 0.5rem 0.6rem; border-bottom: 1px solid var(--faint); }
+.idx th.num, .idx td.num { text-align: right; }
+.idx td.rid { font: 500 14px var(--mono); }
+.table tr.was td { color: var(--ink-dim); border-bottom-style: dashed; }
+.table tr.was td.file a { color: var(--ink-dim); }
+.nothing { color: var(--ink-dim); font-size: 14px; padding: 0.6rem; }

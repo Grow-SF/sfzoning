@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import history from "../lib/download-versions.json";
 import manifest from "../lib/downloads.json";
 import { allReleases } from "../lib/releaseData";
-import { releaseView, type ReleaseView, type Row } from "../lib/releaseView";
+import { changesView, releaseView, type ReleaseView, type Row } from "../lib/releaseView";
+import { releaseChanges } from "../lib/releaseFiles";
 import type { Manifest, Version } from "../lib/downloadRows";
 import type { ReleaseRecord } from "../lib/releases.mjs";
 import { chipFilter, filterQuery, formatZip } from "../lib/releaseFilter";
@@ -73,5 +74,21 @@ describe("chipFilter", () => {
     expect(f.edition.has("today")).toBe(true);
     expect(filterQuery(f)).toContain("edition=");
     expect(filterQuery(f)).not.toContain("1948");
+  });
+});
+
+describe("changesView", () => {
+  it("the first release has no predecessor and adds every file", () => {
+    const first = allReleases()[0];
+    const c = changesView(first.id, H)!;
+    expect(c.first).toBe(true);
+    expect(c.added).toHaveLength(releaseView(first, H, M).totals.files);
+    expect(c.changed).toEqual([]);
+    expect(c.removed).toEqual([]);
+    expect(changesView("nope", H)).toBeUndefined();
+  });
+  it("releaseChanges(null, files) is all added", () => {
+    const c = changesView(current.id, H)!;
+    expect(releaseChanges(null, c.added).added).toHaveLength(c.added.length);
   });
 });

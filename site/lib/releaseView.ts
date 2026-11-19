@@ -3,8 +3,8 @@ import { citations, type Citations } from "./citation.mjs";
 import { ERAS } from "./eras";
 import { fileUrl, scanSeries, versionsUrl, type Manifest, type Version } from "./downloadRows";
 import { EXTS, latestName } from "./downloadNames.mjs";
-import { isLatest, previousRelease } from "./releaseData";
-import { releaseFiles, type ReleaseFile } from "./releaseFiles";
+import { findRelease, isLatest, previousRelease } from "./releaseData";
+import { releaseChanges, releaseFiles, type ReleaseFile } from "./releaseFiles";
 import type { Release, ReleaseRecord } from "./releases.mjs";
 
 export type FileRow = { type: "file"; file: ReleaseFile; label: string; latestUrl: string; historyUrl: string };
@@ -33,7 +33,7 @@ function scanLabel(series: string): string {
   return "Scan";
 }
 
-function fileLabel(f: ReleaseFile): string {
+export function fileLabel(f: ReleaseFile): string {
   if (f.kind === "lots") return "Lots";
   if (f.kind === "districts") return "Districts";
   if (f.kind === "scans") return `${scanLabel(f.series)}, citywide`;
@@ -92,4 +92,22 @@ export function releaseView(
     citations: citations(release),
     editions,
   };
+}
+
+export type ChangesView = {
+  id: string; date: string; first: boolean; previousId?: string;
+  added: ReleaseFile[]; changed: { from: ReleaseFile; to: ReleaseFile }[]; removed: ReleaseFile[];
+};
+
+/** What one release added, changed and removed since the one before it; for the first, everything is added. */
+export function changesView(
+  id: string,
+  history: { versions: Version[] },
+  record?: ReleaseRecord,
+): ChangesView | undefined {
+  const release = findRelease(id, record);
+  if (!release) return undefined;
+  const prev = previousRelease(release.id, record);
+  const { added, changed, removed } = releaseChanges(prev ? releaseFiles(prev, history) : null, releaseFiles(release, history));
+  return { id: release.id, date: release.date, first: !prev, previousId: prev?.id, added, changed, removed };
 }
