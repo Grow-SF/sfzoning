@@ -24,7 +24,14 @@ LOTS = [                   # (rows, cols) of the solver grid (4 ft px), blklot, 
     ((15, 25), (38, 42), "0003001", 2),     # on C only
     ((28, 36), (14, 18), "0004001", 3),     # on A only
     ((28, 36), (43, 46), "0005001", 1),     # on C only
+    ((28, 36), (24, 28), "0006001", 3),     # in the overlap of A and C: C owns its centre
 ]
+TODAY = {                  # today's parcels (DataSF) that the solver's April 2000 table lacks: world box (ft from X0, Y1)
+    "0003001B": (154.0, 62.0, 166.0, 98.0),     # inside lot 2
+    "0003001C": (156.0, 64.0, 164.0, 96.0),     # inside lot 2
+    "0004001Z": (58.0, 116.0, 70.0, 140.0),     # inside lot 3
+    "0009001": (73.0, 62.0, 79.0, 98.0),        # on a street (no solver lot)
+}
 
 
 def placement(shape, x_ft: float, y_ft: float = Y_FT, ft_per_px: float = FT_PER_PX) -> SheetTransform:
@@ -92,10 +99,18 @@ def write_lots(root):
     return lot
 
 
+def write_today(root):
+    """Today's parcels (blklot, WKB geometry in EPSG:2227 ft), one with no geometry."""
+    geoms = [shapely.box(grid.X0 + x0, grid.Y1 - y1, grid.X0 + x1, grid.Y1 - y0) for x0, y0, x1, y1 in TODAY.values()]
+    wkb = list(shapely.to_wkb(np.array(geoms))) + [None]
+    pd.DataFrame({"blklot": list(TODAY) + ["0009003"], "geometry": wkb}).to_parquet(root / "parcels.parquet")
+
+
 def sources(root, order=None) -> data.Sources:
+    parcels = root / "parcels.parquet"
     return data.Sources(series=SERIES, work=root / "work" / SERIES, solver=root / "solver" / SERIES,
                         legends=root / "legends.json", answers=root / "answers", cases=root / "cases",
-                        order=tuple(order) if order else None)
+                        parcels=parcels if parcels.is_file() else None, order=tuple(order) if order else None)
 
 
 def upright_quad(shape=PAGE):
@@ -176,11 +191,16 @@ def test_overlap_owned_once(tmp_path):
 
 
 def test_lot_table_answers_and_reads(tmp_path):
+    write_today(tmp_path)
     src = two_sheets(tmp_path,
                      reads_a=[("0001001", "1R", 0.8, "parcel"), ("0002001", "2R", 0.6, "parcel"),
-                              ("0004001", "", 0.5, "parcel"), ("0003001", "HI", 0.9, "off_sheet")],
+                              ("0004001", "", 0.5, "parcel"), ("0003001", "HI", 0.9, "off_sheet"),
+                              ("0006001", "HI", 0.7, "parcel"), ("0004001Z", "1R", 0.6, "parcel"),
+                              ("0009001", "C", 0.9, "parcel"), ("0009002", "C", 0.9, "parcel"),
+                              ("0009003", "C", 0.9, "parcel")],
                      reads_c=[("0002001", "C", 0.7, "parcel"), ("0003001", "LI", 0.9, "block"),
-                              ("0005001", "U", 0.5, "parcel")])
+                              ("0005001", "U", 0.5, "parcel"), ("0003001B", "2R", 0.95, "parcel"),
+                              ("0003001C", "1R", 0.5, "parcel")])
     cases = tmp_path / "cases"
     cases.mkdir()
     (cases / "1921.json").write_text(json.dumps({"cases": [
@@ -199,20 +219,30 @@ def test_lot_table_answers_and_reads(tmp_path):
         for case, ans, code in rows:
             (d / f"{case}.json").write_text(json.dumps({"case": case, "answer": ans, "code": code}))
     t = data.lot_table(SERIES, src)
-    assert list(t["lot"]) == [0, 1, 2, 3, 4]
+    assert list(t["lot"]) == [0, 1, 2, 3, 4, 5]
     assert list(t["blklot"]) == [b for *_, b, _ in LOTS]
-    assert list(t["quarter"]) == ["nw", "ne", "sw", "se", "ne"]
-    # one read per lot: the read of the sheet that owns the lot's centre (C over A in the overlap); empty codes
-    # and the reader's off-sheet marks are no reads
-    assert list(t["read_code"]) == ["1R", "C", "LI", "", "U"]
-    assert np.allclose(t["read_conf"].to_numpy(), [0.8, 0.7, 0.9, np.nan, 0.5], equal_nan=True)
-    assert list(t["read_sheet"]) == ["sheetA", "sheetC", "sheetC", "", "sheetC"]
-    assert list(t["n_reads"]) == [1, 2, 1, 0, 1]
+    assert list(t["quarter"]) == ["nw", "ne", "sw", "se", "ne", "se"]
+    # one read per lot (R3'): a lot read on one sheet keeps it whichever sheet that is (lot 5: A read it, C owns its
+    # centre); read on two, the draw order picks (lot 1: C, drawn above A, owns its centre).  Empty codes and the
+    # reader's off-sheet marks are no reads.  R4: a read of today's parcel the solver's table lacks lands on the
+    # solver lot under the parcel's representative point (lots 2 and 3); several on one lot from one sheet keep the
+    # most confident (lot 2: 0.95 over its own 0.9 and 0.5); one on no solver lot, not in today's parcels or with no
+    # geometry stays unattached
+    assert list(t["read_code"]) == ["1R", "C", "2R", "1R", "U", "HI"]
+    assert np.allclose(t["read_conf"].to_numpy(), [0.8, 0.7, 0.95, 0.6, 0.5, 0.7])
+    assert list(t["read_sheet"]) == ["sheetA", "sheetC", "sheetC", "sheetA", "sheetC", "sheetA"]
+    assert list(t["read_blklot"]) == ["0001001", "0002001", "0003001B", "0004001Z", "0005001", "0006001"]
+    assert list(t["read_recovered"]) == [False, False, True, True, False, False]
+    assert list(t["n_reads"]) == [1, 2, 1, 1, 1, 1]
+    r = t.attrs["reads"]
+    assert (r["direct"], r["recovered"]) == (6, 3)
+    assert r["unattached"] == {"no_geometry": 1, "no_solver_lot": 1, "not_in_parcels": 1}
+    assert (r["lots_several_reads_one_sheet"], r["lots_read_on_several_sheets"]) == (1, 1)
     # the owner's answers: ok -> the code shown, fix -> the fix, unzoned -> 2R, canttell dropped; a case whose own
     # blklot is not a solver lot lands on the lot of its footprint
-    assert list(t["answer"]) == ["1R", "LI", "2R", "", "HI"]
-    assert list(t["answer_page"]) == ["1921", "1921", "1921-likely", "", "1921-likely"]
-    assert list(t["stratum"]) == ["random", "disagree", "likely", "", "likely"]
+    assert list(t["answer"]) == ["1R", "LI", "2R", "", "HI", ""]
+    assert list(t["answer_page"]) == ["1921", "1921", "1921-likely", "", "1921-likely", ""]
+    assert list(t["stratum"]) == ["random", "disagree", "likely", "", "likely", ""]
 
 
 def test_no_rule_masks(tmp_path):

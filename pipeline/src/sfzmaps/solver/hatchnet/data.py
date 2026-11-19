@@ -27,8 +27,19 @@ The lot table (`lot_table`), one row per solver lot:
 
   lot, blklot, block, quarter (nw / ne / sw / se, `paths.QUARTERS`), centre_sheet (the sheet that owns the lot's
   centre: its representative point, `shapely.point_on_surface`, by `hatching.owned`; "" none)
-  read_code, read_conf, read_via, read_sheet   the pattern reader's read (`district_pattern.json`; its off-sheet and
-            no-tile marks and empty codes are no reads), one per lot: the read of `centre_sheet`, the others dropped
+  read_code, read_conf, read_via, read_sheet, read_blklot, read_recovered   the pattern reader's read
+            (`district_pattern.json`; its off-sheet and no-tile marks and empty codes are no reads), one per lot
+            (`attach_reads`, `one_read_per_lot`):
+              - a read whose blklot is a solver lot is that lot's (every row of the blklot);
+              - R4: a read of a parcel the solver's April 2000 table lacks (today's blklots: condo and subdivision ids)
+                lands on the solver lot under its parcel's representative point (`shapely.point_on_surface` of its
+                polygon in data/ref/parcels.parquet, DataSF's parcels; `hatching.grid_values` on `lots.npz` `lot`), no
+                distance allowed; a read whose parcel has no polygon there or whose point is on no solver lot stays
+                unattached, and is counted (`recover_lots`);
+              - several reads of a lot from one sheet: the most confident (ties: a read of its own blklot first);
+              - R3': a lot read on one sheet keeps that read, whichever sheet it is; read on several, the draw order
+                picks: the read of `centre_sheet` when it read the lot, else that of the sheet drawn highest.
+            read_blklot is the read's own blklot (today's, for a recovered read)
   n_reads   how many sheets read the lot (before keeping one)
   answer, answer_page, answer_case, stratum, n_answers   the owner's answer (truth by `answers1921.owner_answers`:
             ok the code shown, fix the fix, unzoned 2R, canttell / unsure dropped) on the lot of its blklot, else of the
@@ -77,20 +88,21 @@ ANSWER_PAGES = {"1921": answers1921.PAGES}     # the owner's answer pages per se
 @dataclass(frozen=True)
 class Sources:
     """Where a series is read: the pages, placements and reads (work), the neatlines and the solver's lots (solver),
-    the legend's swatch boxes, the owner's answers and their case files; `order`: the draw order, bottom first (None:
-    the published map's)."""
+    the legend's swatch boxes, the owner's answers and their case files, today's parcels (None: reads of parcels the
+    solver's table lacks are not placed); `order`: the draw order, bottom first (None: the published map's)."""
     series: str
     work: Path
     solver: Path
     legends: Path
     answers: Path
     cases: Path
+    parcels: Path | None = None
     order: tuple[str, ...] | None = None
 
 
 def sources(series: str) -> Sources:
     return Sources(series, config.WORK_DIR / series, config.DATA_DIR / "solver" / series, hatching.LEGENDS_FILE,
-                   answers1921.ANSWERS_DIR, answers1921.EXPERIMENT / "cases")
+                   answers1921.ANSWERS_DIR, answers1921.EXPERIMENT / "cases", config.REF_DIR / "parcels.parquet")
 
 
 def data_dir(series: str) -> Path:
@@ -446,8 +458,95 @@ def answers(src: Sources) -> pd.DataFrame:
     return a
 
 
-def lot_table(series: str, src: Sources | None = None) -> pd.DataFrame:
-    """One row per solver lot (see the module); `attrs` holds the counts of how the reads and answers were kept."""
+UNATTACHED = ("no_geometry", "no_solver_lot", "not_in_parcels")
+
+
+def recover_lots(src: Sources, blklots, lot: np.ndarray) -> tuple[dict[str, int], dict[str, str]]:
+    """R4: for parcels the solver's table lacks, the solver lot under each one's representative point
+    (`shapely.point_on_surface` of its polygon in `src.parcels`, EPSG:2227 ft like the solver's grid; `lot`: the
+    solver's lot raster from the grid's corner, read by `hatching.grid_values`), with no distance allowed; and why
+    each of the others has none (`UNATTACHED`; with no parcels file, not_in_parcels)."""
+    want = sorted(set(map(str, blklots)))
+    why = {b: "not_in_parcels" for b in want}
+    if not want or src.parcels is None:
+        return {}, why
+    p = pd.read_parquet(src.parcels, columns=["blklot", "geometry"])
+    p = p[p["blklot"].astype(str).isin(want)].drop_duplicates("blklot")
+    names = p["blklot"].astype(str).to_numpy()
+    geoms = np.array([shapely.from_wkb(g) if isinstance(g, (bytes, bytearray)) else None
+                      for g in p["geometry"].to_numpy()], dtype=object)
+    has = ~(shapely.is_missing(geoms) | shapely.is_empty(geoms)) if len(geoms) else np.zeros(0, bool)
+    pts = shapely.point_on_surface(geoms[has])
+    under = hatching.grid_values(shapely.get_x(pts), shapely.get_y(pts), lot, fill=-1)
+    found = {}
+    for b in names[~has]:
+        why[b] = "no_geometry"
+    for b, i in zip(names[has], under):
+        if i >= 0:
+            found[str(b)] = int(i)
+            del why[b]
+        else:
+            why[b] = "no_solver_lot"
+    return found, why
+
+
+def attach_reads(rd: pd.DataFrame, lots_of: dict[str, list[int]], src: Sources, lot: np.ndarray):
+    """The reads with the solver lot each is about, one row per read and lot (`recovered`: placed through today's
+    parcel, `recover_lots`); and the counts: direct (reads of a solver lot's own blklot), recovered, and the
+    unattached by why."""
+    direct = rd["blklot"].isin(list(lots_of)).to_numpy()
+    d = rd[direct].assign(lot=rd.loc[direct, "blklot"].map(lots_of), recovered=False).explode("lot")
+    u = rd[~direct]
+    found, why = recover_lots(src, u["blklot"].unique(), lot)
+    on = u["blklot"].isin(list(found)).to_numpy()
+    r = u[on].assign(lot=u.loc[on, "blklot"].map(found), recovered=True)
+    att = pd.concat([d, r], ignore_index=True)
+    att["lot"] = att["lot"].astype(np.int64)
+    att["recovered"] = att["recovered"].astype(bool)
+    lost = u.loc[~on, "blklot"].map(why).value_counts()
+    counts = {"direct": int(direct.sum()), "recovered": int(on.sum()),
+              "unattached": {k: int(lost.get(k, 0)) for k in UNATTACHED}}
+    return att, counts
+
+
+READ_COLUMNS = ["lot", "sheet", "blklot", "code", "confidence", "via", "recovered", "n_sheets"]
+
+
+def one_read_per_lot(att: pd.DataFrame, owner: np.ndarray, order: list[str]):
+    """One read per lot from `attach_reads`' rows: per sheet the most confident (ties: a read of the lot's own blklot
+    first, then by blklot); across sheets (R3') the read of the sheet owning the lot's centre (`owner`, per lot) when
+    it read the lot, else that of the sheet drawn highest (`order`, bottom first).  Returns `READ_COLUMNS` per read
+    lot (n_sheets: how many sheets read it) and the counts."""
+    counts = {"lots_read": 0, "lots_several_reads_one_sheet": 0, "lots_several_reads_one_sheet_recovered": 0,
+              "lots_read_on_several_sheets": 0, "lots_several_sheets_by_centre_sheet": 0}
+    if not len(att):
+        return pd.DataFrame(columns=READ_COLUMNS), counts
+    a = att.assign(_conf=-att["confidence"], _rec=att["recovered"].astype(int)).sort_values(
+        ["lot", "sheet", "_conf", "_rec", "blklot"], kind="stable")
+    g = a.groupby(["lot", "sheet"], sort=False)
+    size = g["blklot"].transform("size").to_numpy()
+    any_rec = g["_rec"].transform("max").to_numpy()
+    first = ~a.duplicated(["lot", "sheet"]).to_numpy()
+    several = first & (size > 1)
+    per_sheet = a[first].copy()
+    rank = {s: k for k, s in enumerate(order)}
+    per_sheet["_own"] = (per_sheet["sheet"].to_numpy() == owner[per_sheet["lot"].to_numpy()]).astype(int)
+    per_sheet["_rank"] = per_sheet["sheet"].map(rank).fillna(-1)
+    per_sheet["n_sheets"] = per_sheet.groupby("lot")["sheet"].transform("size")
+    best = per_sheet.sort_values(["lot", "_own", "_rank"], ascending=[True, False, False], kind="stable")
+    best = best[~best.duplicated("lot").to_numpy()]
+    multi = best[best["n_sheets"] > 1]
+    counts.update({"lots_read": int(len(best)),
+                   "lots_several_reads_one_sheet": int(a.loc[several, "lot"].nunique()),
+                   "lots_several_reads_one_sheet_recovered": int(a.loc[several & (any_rec > 0), "lot"].nunique()),
+                   "lots_read_on_several_sheets": int(len(multi)),
+                   "lots_several_sheets_by_centre_sheet": int(multi["_own"].sum())})
+    return best[READ_COLUMNS].reset_index(drop=True), counts
+
+
+def lot_table(series: str, src: Sources | None = None, lot: np.ndarray | None = None) -> pd.DataFrame:
+    """One row per solver lot (see the module); `attrs` holds the counts of how the reads and answers were kept.
+    `lot`: the solver's lot raster, when it is already loaded."""
     src = src or sources(series)
     table = pd.read_parquet(src.solver / "lots" / "table.parquet", columns=["blklot", "block_num", "geometry"])
     with np.load(src.solver / "lots" / "lots.npz") as z:
@@ -476,30 +575,28 @@ def lot_table(series: str, src: Sources | None = None) -> pd.DataFrame:
     owner, twice = centre_owner(centres, sheets)
     out["centre_sheet"] = owner.astype(str)
 
-    # one read per lot: the centre's sheet's
+    # one read per lot (R4, then R3')
     rd = reads(src, used)
+    if lot is None:
+        with np.load(src.solver / "lots" / "lots.npz") as z:
+            lot = z["lot"]
+    att, read_counts = attach_reads(rd, lots_of, src, lot)
+    kept, keep_counts = one_read_per_lot(att, owner, order)
     code = np.full(n, "", dtype=object)
     conf = np.full(n, np.nan)
     via = np.full(n, "", dtype=object)
     rsheet = np.full(n, "", dtype=object)
-    sheets_read: list[set] = [set() for _ in range(n)]
-    unmatched = 0
-    repeated = 0
-    for r in rd.itertuples(index=False):
-        lots = lots_of.get(r.blklot)
-        if not lots:
-            unmatched += 1
-            continue
-        for i in lots:
-            if r.sheet in sheets_read[i]:
-                repeated += 1                         # the same sheet reading a lot twice: its first read stands
-                continue
-            sheets_read[i].add(r.sheet)
-            if r.sheet == owner[i]:
-                code[i], conf[i], via[i], rsheet[i] = r.code, r.confidence, r.via, r.sheet
-    n_reads = np.array([len(s) for s in sheets_read], np.int64)
+    rblklot = np.full(n, "", dtype=object)
+    recovered = np.zeros(n, bool)
+    n_reads = np.zeros(n, np.int64)
+    k = kept["lot"].to_numpy(np.int64)
+    code[k], conf[k], via[k] = kept["code"].to_numpy(), kept["confidence"].to_numpy(float), kept["via"].to_numpy()
+    rsheet[k], rblklot[k] = kept["sheet"].to_numpy(), kept["blklot"].to_numpy()
+    recovered[k] = kept["recovered"].to_numpy(bool)
+    n_reads[k] = kept["n_sheets"].to_numpy(np.int64)
     out["read_code"], out["read_conf"], out["read_via"], out["read_sheet"] = (
         code.astype(str), conf, via.astype(str), rsheet.astype(str))
+    out["read_blklot"], out["read_recovered"] = rblklot.astype(str), recovered
     out["n_reads"] = n_reads
 
     # the owner's answers
@@ -531,10 +628,10 @@ def lot_table(series: str, src: Sources | None = None) -> pd.DataFrame:
     out.attrs = {
         "sheets": used, "draw_order": order, "centres_claimed_twice": twice,
         "lots_without_centre_sheet": int((owner == "").sum()),
-        "reads": {"kept": int((out["read_code"] != "").sum()), "total": int(len(rd)), "unmatched_blklot": unmatched,
-                  "repeated_on_one_sheet": repeated, "lots_read": int((n_reads > 0).sum()),
-                  "lots_read_on_several_sheets": int((n_reads > 1).sum()),
-                  "lots_read_but_not_by_centre_sheet": int(((n_reads > 0) & (out["read_code"] == "")).sum()),
+        "reads": {"kept": int((out["read_code"] != "").sum()), "total": int(len(rd)), **read_counts, **keep_counts,
+                  "kept_recovered": int(recovered.sum()),
+                  "kept_not_from_centre_sheet": int(((out["read_code"] != "") &
+                                                     (out["read_sheet"] != out["centre_sheet"])).sum()),
                   "by_sheet": {s: int(v) for s, v in rd["sheet"].value_counts().sort_index().items()}},
         "answers": {"kept": int(len(ans)), "dropped": int(ans.attrs.get("dropped", 0)),
                     "unattached": unattached, "lots_answered_twice": int((n_ans > 1).sum()),
@@ -584,7 +681,7 @@ def run(series: str, out: Path | None = None, workers: int = 4, src: Sources | N
     order = draw_order(src, names)
     fr = frames(src)
     lot, blocks = solver_grid(src)
-    table = lot_table(series, src)
+    table = lot_table(series, src, lot)
     n_lots = len(table)
     jobs = []
     for s in order:
