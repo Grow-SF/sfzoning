@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as script from "../scripts/publish-downloads.mjs";
+import { DATA_CREDIT, RUMSEY_CREDIT, RUMSEY_LICENSE } from "../lib/credits";
 import { blobPath, versionedName } from "../lib/downloadNames.mjs";
 
 type Upload = { to: string; local?: string; root?: string; text?: string; bytes: number };
@@ -488,7 +489,9 @@ describe("zipReadme", () => {
     expect(all).toContain("sha256sum -c SHA256SUMS");
     expect(all).toContain("Based on sfzoning.com by Steven Bacio for GrowSF (https://growsf.org)");
     expect(all).toContain("David Rumsey Map Collection, David Rumsey Map Center, Stanford Libraries");
-    expect(all).toContain("CC BY-NC-SA 3.0");
+    expect(all).toContain(DATA_CREDIT);
+    expect(all).toContain(RUMSEY_CREDIT);
+    expect(all).toContain(RUMSEY_LICENSE);
     expect(all).toContain("https://sfzoning.com/data/releases/2026-11-18-2");
     expect(readme(rel, "gpkg", 20, 744_000_000)).not.toContain("David Rumsey");
   });

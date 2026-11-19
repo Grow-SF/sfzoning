@@ -67,3 +67,8 @@ export function chipFilter(checked: { format: string[]; layer: string[]; edition
     edition: new Set([...checked.edition, ...EDITIONS.filter((e) => !present.includes(e))]),
   };
 }
+
+/** The shell command that fetches a urls.txt list. -L because sfzoning.com answers with a 308 to www. */
+export function downloadCommand(urls: string): string {
+  return `curl -sL '${urls}' | wget -nc -i -`;
+}

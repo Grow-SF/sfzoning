@@ -5,7 +5,7 @@ import { allReleases } from "../lib/releaseData";
 import { changesView, releaseView, type ReleaseView, type Row } from "../lib/releaseView";
 import type { Manifest, Version } from "../lib/downloadRows";
 import type { ReleaseRecord } from "../lib/releases.mjs";
-import { chipFilter, filterQuery, formatZip } from "../lib/releaseFilter";
+import { chipFilter, downloadCommand, filterQuery, formatZip } from "../lib/releaseFilter";
 import { ERAS } from "../lib/eras";
 
 const H = history as unknown as { versions: Version[] };
@@ -100,5 +100,13 @@ describe("changesView", () => {
     expect(c.changed[0].from.name).toBe(oldName);
     expect(c.changed[0].to.name).toBe(renamed.name);
     expect(c.removed.map((f) => f.name)).toEqual([dropped.name]);
+  });
+});
+
+describe("downloadCommand", () => {
+  it("follows redirects so the apex 308 to www still works", () => {
+    const c = downloadCommand("https://sfzoning.com/data/releases/x/urls.txt");
+    expect(c).toContain("curl -sL '");
+    expect(c).toBe("curl -sL 'https://sfzoning.com/data/releases/x/urls.txt' | wget -nc -i -");
   });
 });

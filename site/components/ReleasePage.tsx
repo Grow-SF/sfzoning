@@ -308,8 +308,9 @@ export default function ReleasePage({ release }: { release: Release }) {
             <h3>Links</h3>
             <p>
               A file name is its dated link and always returns exactly that file. <b>Latest</b> always returns the
-              newest version; <b>history</b> lists every version. Single sheets carry no README; the sheet list gives
-              each one’s license and credit.
+              newest version; <b>history</b> lists every version. {view.latest
+                ? "Single sheets carry no README; the sheet list gives each one’s license and credit."
+                : "Single sheets carry no README; they are licensed as stated in the License and credit note on this page."}
             </p>
           </div>
           <div>

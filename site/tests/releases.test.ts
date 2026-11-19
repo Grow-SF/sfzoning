@@ -151,7 +151,7 @@ describe("committed releases", () => {
   it("has all four zips with name, bytes and sha256", () => {
     for (const r of rs) {
       for (const k of ["all", "geojson", "gpkg", "shp"] as const) {
-        expect(r.zips[k].name).toBeTruthy();
+        expect(r.zips[k].name).toBe(zipNames(r.id)[k]);
         expect(r.zips[k].bytes).toBeGreaterThan(0);
         expect(r.zips[k].sha256).toMatch(/^[0-9a-f]{64}$/);
       }

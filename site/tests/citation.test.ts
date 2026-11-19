@@ -20,7 +20,7 @@ describe("citations", () => {
   it("builds the BibTeX entry exactly", () => {
     expect(citations(REL).bibtex).toBe(
       [
-        "@misc{bacio_sfzoning_2026,",
+        "@misc{bacio_sfzoning_2026_11_18,",
         "  author    = {Bacio, Steven},",
         "  title     = {A History of San Francisco’s Zoning},",
         "  year      = {2026},",

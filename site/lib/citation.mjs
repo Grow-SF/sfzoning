@@ -29,7 +29,7 @@ export function citations({ id, date }) {
   const apa = `${AUTHOR_FAMILY}, ${AUTHOR_GIVEN[0]}. (${year}). ${TITLE} (Version ${id}) [Data set]. ${PUBLISHER}. ${url}`;
   const chicago = `${AUTHOR_FAMILY}, ${AUTHOR_GIVEN}. ${year}. ${TITLE}. Data release ${id}. ${PUBLISHER}. ${url}.`;
   const bibtex = [
-    `@misc{bacio_sfzoning_${year},`,
+    `@misc{bacio_sfzoning_${id.replace(/-/g, "_")},`,
     `  author    = {${AUTHOR_FAMILY}, ${AUTHOR_GIVEN}},`,
     `  title     = {${TITLE}},`,
     `  year      = {${year}},`,

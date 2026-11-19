@@ -8,7 +8,7 @@
 import { useEffect, useRef } from "react";
 import { formatBytes } from "@/lib/downloadRows";
 import type { Fmt, Kind } from "@/lib/releaseFiles";
-import { chipFilter, filterQuery, formatZip, matches, parseFilter, type Filter } from "@/lib/releaseFilter";
+import { chipFilter, downloadCommand, filterQuery, formatZip, matches, parseFilter, type Filter } from "@/lib/releaseFilter";
 import styles from "./releases.module.css";
 
 type Zip = { href: string; bytes: number };
@@ -26,7 +26,7 @@ const ZIP_NAME = { geojson: "GeoJSON files", gpkg: "GeoPackages", shp: "Shapefil
 const SITE = "https://sfzoning.com";
 
 const fileCount = (n: number) => `${n} file${n === 1 ? "" : "s"}`;
-const command = (urls: string) => `curl -s '${urls}' | wget -nc -i -`;
+const command = downloadCommand;
 
 function Chips({ name, options }: { name: string; options: [string, string][] }) {
   return options.map(([v, label]) => (
