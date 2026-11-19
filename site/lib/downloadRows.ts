@@ -66,7 +66,7 @@ function vectorCells(m: Manifest, series: string, layer: string): Cell[] {
   return cells;
 }
 
-function scanSeries(era: Era): { series: string; label: ScanCell["label"] }[] {
+export function scanSeries(era: Era): { series: string; label: ScanCell["label"] }[] {
   return era.scanSeries.flatMap<{ series: string; label: ScanCell["label"] }>((s) =>
     s.endsWith("-zoning")
       ? [
