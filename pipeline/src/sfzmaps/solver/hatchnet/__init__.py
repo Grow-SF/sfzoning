@@ -7,4 +7,9 @@ a pooling weight, trained through per-lot pooled losses (spec: docs/superpowers/
 
     OMP_NUM_THREADS=1 SFZMAPS_MAX_USD=0 uv run python -m sfzmaps.solver.hatchnet data --series 1921
 
+  streets  the network (`model`) and its street output trained on today's blocks placed on the scans; every sheet's
+           street probability and blocks, the connected areas it calls not street (`train`); their pictures (`look`)
+
+    OMP_NUM_THREADS=1 SFZMAPS_MAX_USD=0 uv run python -m sfzmaps.solver.hatchnet streets --series 1921
+
 $0: no API calls."""

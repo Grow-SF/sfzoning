@@ -17,6 +17,14 @@ def main(argv: list[str] | None = None) -> None:
     d.add_argument("--out", type=Path, help="default: data/solver/experiments/hatch-cnn/data/<series>")
     d.add_argument("--look", nargs="+", metavar="SHEET",
                    help="draw the street-target pictures of these written sheets (hatch-cnn/look) and stop")
+    st = sub.add_parser("streets", help="train the street output; every sheet's streets and blocks (hatchnet.train)")
+    st.add_argument("--series", required=True)
+    st.add_argument("--device", help="default: mps where available, else cpu")
+    st.add_argument("--seed", type=int, default=0)
+    st.add_argument("--steps", type=int, help="default: train.STEPS")
+    st.add_argument("--root", type=Path, help="default: data/solver/experiments/hatch-cnn (models/, streets/, look/)")
+    st.add_argument("--look", nargs="*", metavar="SHEET", help="the sheets to draw (default: train.LOOK_SHEETS)")
+    st.add_argument("--redraw", action="store_true", help="only draw the pictures again, from the written streets")
     a = ap.parse_args(argv)
     for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
         os.environ.setdefault(v, "1")                 # the workers start with one maths thread each
@@ -33,6 +41,32 @@ def main(argv: list[str] | None = None) -> None:
                   f"{v['lots_answered']} answered ({v['lots_answered_random']} random)")
         print(f"  reads per code: {s['reads_per_code']}")
         print(f"  answers per page and stratum: {s['answers_per_page_stratum']}")
+    elif a.command == "streets":
+        import logging
+
+        from sfzmaps.solver.hatchnet import data, train
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+        root = a.root or data.EXPERIMENT
+        sheets = tuple(a.look) if a.look is not None else train.LOOK_SHEETS
+        if a.redraw:
+            for f in train.redraw(a.series, root, sheets):
+                print(f)
+            return
+        recipe = train.Recipe(**({"steps": a.steps} if a.steps else {}))
+        s = train.run(a.series, root, a.device, a.seed, recipe, sheets)
+        h = s["held_out"]
+        print(f"device {s['device']}, {s['weights']} weights, kept step {s['best_step']} of {recipe.steps}; "
+              f"{s['seconds']['train']:.0f} s training, {s['seconds']['predict']:.0f} s predicting")
+        print(f"held out: {h['px']} px, agreement {h['agree']:.4f} (all one class: {h['majority_agree']:.4f}), "
+              f"BCE {h['bce']:.4f} (constant prior {h['constant_prior_bce']:.4f})")
+        z, t = s["last_step"]["held_out"], s["last_step"]["trained"]
+        print(f"the last step's weights: held-out agreement {z['agree']:.4f}, BCE {z['bce']:.4f}; trained areas "
+              f"{t['agree']:.4f}, BCE {t['bce']:.4f} (kept: {s['trained']['agree']:.4f}, {s['trained']['bce']:.4f})")
+        for sheet, v in s["sheets"].items():
+            print(f"  {sheet}: {v['blocks']['count']} blocks (target {v['blocks']['target_blocks']}), held-out "
+                  f"agreement {v['held_out']['agree']}")
+        for f in s["pictures"]:
+            print(f)
 
 
 if __name__ == "__main__":
