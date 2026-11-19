@@ -304,12 +304,14 @@ def centres_of(shape, *lines) -> "data.Centres":
 
 def test_corridor_between_two_blocks():
     # blocks at columns 0-9 and 20-29, a 10 px street between them, its centre line at column 14 (5 px from the west
-    # block, 6 from the east): both sides are bounded, so every px between the blocks is street with weight 1 (the
-    # exact corridor), the blocks are not street, and the px past the east block are ignored
+    # block, 6 from the east): every px between the blocks is street, weighted by the learned S(d) = P(half-width > d)
+    # and cut at each side's block; the half-widths learned are 5 and 6 (20 px each), so S is 1 below 5 px and 1/2 at
+    # 5 px (column 19, beside the east block).  The blocks are not street; the px past the east block are ignored
     block = gap_blocks(40, (0, 10), (20, 30))
     lab = data.street_labels(block, centres_of(block.shape, wline((0, 14), (19, 14))))
     assert lab.street.dtype == np.uint8 and lab.weight.dtype == np.float16 and lab.centre.dtype == np.uint8
-    assert (lab.street[:, 10:20] == 1).all() and (lab.weight[:, 10:20] == 1).all()
+    assert (lab.street[:, 10:20] == 1).all()
+    assert (lab.weight[:, 10:19] == 1).all() and (lab.weight[:, 19] == 0.5).all()
     assert (lab.street[block] == 0).all() and (lab.weight[block] == 1).all()
     assert (lab.street[:, 30:] == data.UNKNOWN).all() and (lab.weight[:, 30:] == 0).all()
     assert lab.centre[:, 14].all() and lab.centre.sum() == 20
@@ -326,19 +328,20 @@ def shore_grid():
 
 
 def test_shoreline_open_side_is_soft():
-    # the shoreline's block side keeps its exact corridor (rows 40-41); its open side is street with the learned
-    # survival weight S(d) = P(half-width >= d): the half-widths learned are the two-sided street's 5 and 6 (80 px
-    # each), so S is 1 up to 5 px, 1/2 at 6 px and 0 beyond, where the water is ignored
+    # every side is weighted by the learned survival S(d) = P(half-width > d): the half-widths learned are the
+    # two-sided street's 5 and 6 (80 px each), so S is 1 below 5 px, 1/2 at 5 px and 0 from 6 px.  The shoreline's
+    # block side is cut at its block (rows 40-41, S = 1 there); its open side follows S out to where it reaches 0, and
+    # the water beyond is ignored.  An open side labels what a bounded side would
     block, centres = shore_grid()
     lab = data.street_labels(block, centres)
     assert (lab.street[40:42] == 1).all() and (lab.weight[40:42] == 1).all()
-    assert (lab.street[10:20] == 1).all() and (lab.weight[10:20] == 1).all()
-    assert (lab.street[43:49] == 1).all()
+    assert (lab.street[10:20] == 1).all()
+    assert (lab.weight[10:19] == 1).all() and (lab.weight[19] == 0.5).all()        # row 19: 5 px above the block
     for row in range(43, 60):
         d = row - 42
         assert np.allclose(lab.weight[row].astype(float), data.survival(lab.learned.pooled, np.full(80, d))), row
-    assert (lab.weight[43:48] == 1).all() and (lab.weight[48] == 0.5).all()
-    assert (lab.street[49:] == data.UNKNOWN).all() and (lab.weight[49:] == 0).all()
+    assert (lab.street[43:48] == 1).all() and (lab.weight[43:47] == 1).all() and (lab.weight[47] == 0.5).all()
+    assert (lab.street[48:] == data.UNKNOWN).all() and (lab.weight[48:] == 0).all()
 
 
 def test_bridge_gets_only_soft_weights():
@@ -350,8 +353,21 @@ def test_bridge_gets_only_soft_weights():
     d = np.abs(np.arange(40) - 20)
     for col in range(40):
         assert np.allclose(lab.weight[:, col].astype(float), data.survival(learned.pooled, np.full(40, d[col]))), col
-    assert (lab.street[:, d <= 6] == 1).all() and (lab.street[:, d > 6] == data.UNKNOWN).all()
-    assert not (lab.street == 0).any() and (lab.weight[:, d == 6] == 0.5).all()
+    assert (lab.street[:, d <= 5] == 1).all() and (lab.street[:, d > 5] == data.UNKNOWN).all()
+    assert not (lab.street == 0).any() and (lab.weight[:, d == 5] == 0.5).all()
+
+
+def test_far_shore_parcel_does_not_make_full_corridor():
+    # a centre line, open water, and a parcel 400 ft (100 px) away: the side is bounded, but its weights are still the
+    # learned S(d), not 1; at 200 ft (50 px) about S(50 px), and they stop at the parcel
+    learned = data.HalfWidths(pooled=np.arange(1.0, 121.0), own={}, report={})      # half-widths 1-120 px
+    block = gap_blocks(130, (110, 130))
+    lab = data.street_labels(block, centres_of(block.shape, wline((0, 10), (19, 10))), learned=learned)
+    w = lab.weight.astype(float)
+    assert np.allclose(w[:, 60], data.survival(learned.pooled, 50.0), atol=1e-3)
+    assert np.allclose(data.survival(learned.pooled, 50.0), 70 / 120) and (w[:, 60] < 1).all()
+    assert np.allclose(w[:, 109], data.survival(learned.pooled, 99.0), atol=1e-3)
+    assert (lab.street[:, 11:110] == 1).all() and (lab.street[:, 110:] == 0).all()
 
 
 def test_half_widths_learned_from_two_sided_px():
@@ -407,17 +423,30 @@ def test_kind_pooled_unless_its_widths_differ():
 
 
 def test_centre_lines_rasterised_on_the_grid():
-    # today's centre lines (EPSG:2227 ft) on the solver's 4 ft grid, 8-connected, one px wide, wherever they run;
-    # a line off the grid is left out
+    # today's centre lines (EPSG:2227 ft) on the solver's 4 ft grid, segment by segment, 8-connected, one px wide,
+    # wherever they run, each px knowing its segment's direction; a line off the grid is left out
     lines = [shapely.LineString([(grid.X0 + 2, grid.Y1 - 42), (grid.X0 + 158, grid.Y1 - 42)]),       # row 10
              shapely.LineString([(grid.X0 + 30, grid.Y1 - 2), (grid.X0 + 70, grid.Y1 - 158)]),        # diagonal
              shapely.LineString([(grid.X0 - 500, grid.Y1 + 500), (grid.X0 - 100, grid.Y1 + 100)])]    # off the grid
-    c = data.centre_raster(np.array(lines, dtype=object), (40, 40))
-    assert c.dtype == bool
+    centres = data.centre_segments(np.array(lines, dtype=object), (40, 40))
+    c = centres.seg >= 0
     assert c[10].all()
+    assert np.allclose(centres.direction[centres.seg[10, 0]], [1.0, 0.0])
+    assert np.allclose(centres.direction[centres.seg[39, 17]], np.array([40.0, 156.0]) / np.hypot(40, 156))
     n, _ = cv2.connectedComponents(c.astype(np.uint8), connectivity=8)
     assert n == 2                                                  # one piece (and the background)
     assert c[39, 17]                                               # the diagonal reaches the bottom row at x 70 ft
+
+
+def test_street_type_from_name(tmp_path):
+    # a line with no st_type takes its name's last word when that is a type other lines have (OCTAVIA ST -> ST); the
+    # rest (freeways, THE EMBARCADERO) stay untyped
+    f = tmp_path / "streets.parquet"
+    line = shapely.to_wkb(shapely.LineString([(grid.X0, grid.Y1), (grid.X0 + 40, grid.Y1)]))
+    pd.DataFrame({"st_type": ["ST", None, None, None], "geometry": [line] * 4,
+                  "streetname": ["A ST", "OCTAVIA ST", "HWY 101 SOUTHBOUND", "THE EMBARCADERO"]}).to_parquet(f)
+    lines = data.centre_lines(dataclasses.replace(sources(tmp_path), streets=f))
+    assert list(lines.kinds) == ["ST", "ST", data.KIND_NONE, data.KIND_NONE]
 
 
 def test_street_and_centre_carried_like_block(tmp_path):

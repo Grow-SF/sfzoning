@@ -10,12 +10,12 @@ Per sheet (`sheet_rasters`), in the scan's own px, turned upright:
              street, or no lot), 255 (unknown) outside the sheet's neatline and on the area a sheet drawn above it
              owns, so each place is labelled once
   street     the street labels (`street_labels`, on the solver's grid, carried to the page as `block` is): 1 street,
-             where the px is off today's blocks and inside its nearest centre line's corridor (exact on a side a block
-             bounds, soft on a side with none); 0 not street, on today's blocks (exactly where `block` is 1); 255
-             ignored, everything else (the Bay and ocean past the learned half-widths, land in no parcel, 1921 streets
-             with no centre line today; a lake inside a parcel, as Lake Merced, is a block), and wherever `block` is 255
-  street_w   float16, each label's weight in the street loss: 1 on not street and on street a block bounds, S(d) =
-             P(half-width >= d) of the learned half-widths on a side with no block, 0 where ignored
+             where the px is off today's blocks, within the learned half-widths of its nearest centre line and short of
+             that side's block; 0 not street, on today's blocks (exactly where `block` is 1); 255 ignored, everything
+             else (the Bay and ocean past the learned half-widths, land in no parcel, 1921 streets with no centre line
+             today; a lake inside a parcel, as Lake Merced, is a block), and wherever `block` is 255
+  street_w   float16, each label's weight in the street loss: 1 on not street; on street S(d) = P(half-width > d) of
+             the street type's learned half-widths at the px's distance d from its centre line; 0 where ignored
   centre     1 on a centre line: today's centre lines (`src.streets`, data/ref/streets.parquet, every row) drawn on the
              page through the placement (`page_centres`), kept on street px of this sheet's own area
   lot        the solver lot index of the px (`lots.npz` `lot`, 4 ft grid px), -1 where none and wherever `block` is
@@ -287,11 +287,18 @@ class Lines:
     streets: np.ndarray
 
 
+def _type_from_name(name, known: set[str]) -> str:
+    """A line with no `st_type`: its name's last word when that is a type other lines have (OCTAVIA ST -> ST), else
+    KIND_NONE (freeways, THE EMBARCADERO, BROADWAY)."""
+    last = name.split()[-1] if isinstance(name, str) and name.split() else ""
+    return last if last in known else KIND_NONE
+
+
 def centre_lines(src: Sources) -> Lines:
     """Today's street centre lines (`src.streets`: DataSF's, data/ref/streets.parquet, EPSG:2227 ft as the solver's
     grid), every row: the ones no longer active too, since 1921's streets are older than today's list.  Each one's
-    street type (`st_type`, KIND_NONE where missing) and street (`streetname`; a line with none is its own street).
-    None when `src.streets` is None."""
+    street type (`st_type`; where missing, `_type_from_name`) and street (`streetname`; a line with none is its own
+    street).  None when `src.streets` is None."""
     if src.streets is None:
         empty = np.empty(0, dtype=object)
         return Lines(empty, empty, empty)
@@ -301,7 +308,9 @@ def centre_lines(src: Sources) -> Lines:
     n = len(df)
     kinds = df["st_type"].astype(object).to_numpy() if "st_type" in df else np.full(n, None, dtype=object)
     names = df["streetname"].astype(object).to_numpy() if "streetname" in df else np.full(n, None, dtype=object)
-    kinds = np.array([k if isinstance(k, str) and k else KIND_NONE for k in kinds], dtype=object)
+    known = {k for k in kinds if isinstance(k, str) and k}
+    kinds = np.array([k if isinstance(k, str) and k else _type_from_name(nm, known) for k, nm in zip(kinds, names)],
+                     dtype=object)
     streets = np.array([s if isinstance(s, str) and s else f"#{i}" for i, s in enumerate(names)], dtype=object)
     keep = ~(shapely.is_missing(geoms) | shapely.is_empty(geoms)) if n else np.zeros(0, bool)
     return Lines(geoms[keep], kinds[keep], streets[keep])
@@ -327,17 +336,12 @@ def _draw_paths(shape: tuple[int, int], paths: list[np.ndarray]) -> np.ndarray:
     return out.astype(bool)
 
 
-def centre_raster(lines, shape: tuple[int, int]) -> np.ndarray:
-    """The centre lines on the solver's grid from its corner (`shape` rows x cols), bool: each line through its
-    vertices, 8-connected and 1 px wide.  Grid px (c, r) covers [c, c+1) x [r, r+1) and cv2 takes integer coordinates
-    as px centres, so the vertices go in at `to_grid - 0.5`.  A line off the grid draws nothing."""
-    return _draw_paths(shape, [grid.to_grid(p) - 0.5 for p in _paths(lines)])
-
-
 @dataclass(frozen=True)
 class Centres:
-    """Today's centre lines on the solver's grid, segment by segment (two consecutive vertices of a line), drawn as
-    `centre_raster` draws them (the same px), a later segment over an earlier one."""
+    """Today's centre lines on the solver's grid, segment by segment (two consecutive vertices of a line), each
+    8-connected and 1 px wide (cv2, to 1/16 px), a later segment over an earlier one.  Grid px (c, r) covers [c, c+1)
+    x [r, r+1) and cv2 takes integer coordinates as px centres, so the vertices go in at `to_grid - 0.5`.  A line off
+    the grid draws nothing."""
     seg: np.ndarray            # int32 grid: the segment of each centre px, -1 none
     direction: np.ndarray      # (n, 2): each segment's unit direction on the grid (col, row)
     line: np.ndarray           # (n,): its line (index into the lines given)
@@ -459,11 +463,12 @@ class HalfWidths:
 
 
 def survival(samples: np.ndarray, d) -> np.ndarray:
-    """S(d) = P(half-width >= d): the share of `samples` (sorted) at least d; 0 with no samples."""
+    """S(d) = P(half-width > d): the share of `samples` (sorted) beyond d; 0 with no samples.  Strictly beyond, so a
+    px at d is street as often as a street's block lies past it: a side whose block is at w labels px below w."""
     d = np.asarray(d, float)
     if not len(samples):
         return np.zeros(d.shape)
-    return (len(samples) - np.searchsorted(samples, d, side="left")) / len(samples)
+    return (len(samples) - np.searchsorted(samples, d, side="right")) / len(samples)
 
 
 def _ecdf_gap(a: np.ndarray, b: np.ndarray) -> float:
@@ -514,14 +519,13 @@ def street_labels(block_world: np.ndarray, centres: Centres, area: np.ndarray | 
                   learned: HalfWidths | None = None) -> StreetLabels:
     """The street labels on the solver's 4 ft grid.  Each px x off today's blocks belongs to its nearest centre px c
     (`distance_transform_edt` indices), at distance d, on the side of c's segment that x lies on, with that side's
-    half-width w (`side_widths`):
-      - a side bounded by a block: street, weight 1, where d <= w (the exact corridor); ignored beyond;
-      - an unbounded side: street with weight S(d) = P(half-width >= d) (`survival`) of c's street type's learned
-        half-widths (`learn_half_widths`, from this grid's two-sided px unless `learned` is given), a weight and never
-        a 1/2 target; ignored where S(d) is 0, beyond the largest half-width learned.
-    Today's blocks are not street (weight 1).  A centre px on a block (a park road, a street since built over) is no
-    centre: it would label nothing off the block.  No width is picked: bounded corridors are measured, the rest
-    learned."""
+    block distance w (`side_widths`; inf with no block).  On every side x is street with weight S(d) = P(half-width >
+    d) (`survival`) of c's street type's learned half-widths (`learn_half_widths`, from this grid's two-sided px unless
+    `learned` is given) while d < w: the side's own block cuts it, and a far block (across water or open land) never
+    makes full-weight street, since S is ~0 there.  Ignored where S(d) is 0 (beyond the largest half-width learned)
+    and past the side's block.  A weight, never a 1/2 target.  Today's blocks are not street (weight 1).  A centre px
+    on a block (a park road, a street since built over) is no centre: it would label nothing off the block.  No width
+    is picked: block distances are measured, the weights learned."""
     block = np.asarray(block_world, bool)
     h, w = block.shape
     kept = (centres.seg >= 0) & ~block
@@ -552,10 +556,10 @@ def street_labels(block_world: np.ndarray, centres: Centres, area: np.ndarray | 
         side = ((vx * normal[i, 0] + vy * normal[i, 1]) < 0).astype(np.int64)
         half = width[i, side]
         d = np.sqrt(vx * vx + vy * vy)
-        bounded = np.isfinite(half)
-        wt = np.where(bounded & (d <= half), 1.0, 0.0)
-        kk = np.where(bounded, -1, kind[i])
-        for k in np.unique(kk[~bounded]):
+        inside = d < half
+        wt = np.zeros(d.shape)
+        kk = np.where(inside, kind[i], -1)
+        for k in np.unique(kk[inside]):
             m = kk == k
             wt[m] = survival(samples[k], d[m])
         off = ~block[band]
@@ -1215,7 +1219,8 @@ OTHER_AREA = ((60, 60, 60), 0.70)       # dark grey: not this sheet's to label (
 CENTRE_BGR = (0, 0, 200)                # dark red: today's centre lines
 LABEL_WHOLE = ("20180102094149543", "20180102094355582",            # the plan's whole sheets (Lake Merced second),
                "20180102094212101", "20180102094308402")            # Ocean Beach and the Bay Bridge
-LABEL_ZOOMS = {"20180102100525362": (2015, 1495, 520)}              # x0, y0, side (upright px): Task 2's south zoom
+LABEL_ZOOMS = {"20180102100525362": (2015, 1495, 520, 520),         # x0, y0, width, height (upright px): Task 2's
+               "20180102094325427": (1176, 880, 604, 420)}          # south zoom; the review's Islais Creek crop
 
 
 def _label_tinted(r: SheetRasters) -> np.ndarray:
@@ -1237,11 +1242,11 @@ def look_labels(series: str, whole=LABEL_WHOLE, zooms=LABEL_ZOOMS, data: Path | 
                 dest: Path = LABELS_LOOK) -> list[Path]:
     """For the owner: the street labels tinted over the scan (street orange, its opacity its weight; not street blue,
     ignored grey, not this sheet's area dark grey, today's centre lines dark red), each `whole` sheet at the scan's own
-    px and each of `zooms` ((x0, y0, side) upright px) at ZOOM x, nearest."""
+    px and each of `zooms` ((x0, y0, width, height) upright px) at ZOOM x, nearest."""
     data = Path(data or data_dir(series))
     dest.mkdir(parents=True, exist_ok=True)
     legend = ["orange: street (1): off today's blocks, in its centre line's corridor;",
-              "  opacity = weight: full where a block bounds it, fading with the learned widths where none (white: ~0)",
+              "  opacity = weight = P(learned half-width > distance), cut at the side's block (white: ~0)",
               "blue: not street (0): today's blocks     grey: ignored (255)",
               "dark grey: not this sheet's area (255)     dark red: today's centre lines"]
     written = []
@@ -1253,7 +1258,8 @@ def look_labels(series: str, whole=LABEL_WHOLE, zooms=LABEL_ZOOMS, data: Path | 
                  for v in (STREET, NOT_STREET, UNKNOWN)}
         on = r.street == STREET
         soft = np.count_nonzero(on & (r.street_w < 1)) / max(np.count_nonzero(on), 1)
-        head = [f"{series} {sheet}  {r.ft_per_px:.2f} ft/px  street labels v2 (two-sided corridors, learned widths)",
+        head = [f"{series} {sheet}  {r.ft_per_px:.2f} ft/px  street labels v2 "
+                "(learned widths, cut at each side's block)",
                 f"of this sheet's area: street {share[STREET]:.1%} ({soft:.1%} of it soft), not street "
                 f"{share[NOT_STREET]:.1%}, ignored {share[UNKNOWN]:.1%}"]
         if sheet in whole:
@@ -1261,10 +1267,10 @@ def look_labels(series: str, whole=LABEL_WHOLE, zooms=LABEL_ZOOMS, data: Path | 
             cv2.imwrite(str(f), _banner(img, head + legend, 1.6))
             written.append(f)
         if sheet in zooms:
-            x0, y0, s = zooms[sheet]
-            crop = np.repeat(np.repeat(img[y0:y0 + s, x0:x0 + s], ZOOM, 0), ZOOM, 1)
+            x0, y0, zw, zh = zooms[sheet]
+            crop = np.repeat(np.repeat(img[y0:y0 + zh, x0:x0 + zw], ZOOM, 0), ZOOM, 1)
             f = dest / f"labels_{sheet}_zoom.png"
-            zoom_line = f"zoom x{ZOOM}: scan px x {x0}-{x0 + s}, y {y0}-{y0 + s} (upright)"
+            zoom_line = f"zoom x{ZOOM}: scan px x {x0}-{x0 + zw}, y {y0}-{y0 + zh} (upright)"
             cv2.imwrite(str(f), _banner(crop, head + [zoom_line] + legend, 1.0))
             written.append(f)
     return written
