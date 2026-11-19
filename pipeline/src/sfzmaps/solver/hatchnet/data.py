@@ -7,8 +7,8 @@ Per sheet (`sheet_rasters`), in the scan's own px, turned upright:
              scan's Rec. 601 luma), every px exactly as scanned: nothing erased, cleaned, masked or thresholded
   block      the target of the learned street output: 1 where the px lies in today's blocks (the solver's lots with
              their enclosed holes filled: `binary_fill_holes(lot >= 0)` on the whole grid), 0 where it doesn't (a
-             street, or no lot), 255 (unknown) outside the sheet's neatline and on the area a sheet drawn above it
-             owns, so each place is labelled once
+             street, or no lot), 255 (unknown) outside the sheet's neatline and on the area another sheet owns (R9,
+             below), so each place is labelled once
   street     the street labels (`street_labels`, on the solver's grid, carried to the page as `block` is): 1 street,
              where the px is off today's blocks, within the learned half-widths of its nearest centre line and short of
              that side's block; 0 not street, on today's blocks (exactly where `block` is 1); 255 ignored, everything
@@ -26,16 +26,22 @@ Per sheet (`sheet_rasters`), in the scan's own px, turned upright:
 
 The placement is `data/work/<series>/<sheet>/transform.json` (the one the reads were made through; the warp's correction
 in data/warp bends straight print), read as the merged page reads a sheet: `hatching.PageWorld` (the placement every
-LATTICE px, bilinear between) and `hatching.page_values`.  Which sheet owns a px: the one whose neatline holds it and
-that no neatline of a sheet drawn above it (the published draw order, `stitch.draw_order`) holds, as `hatching.owned`
-says for points; a px is carried to an above sheet's page by that sheet's inverse placement at the lattice nodes,
-bilinear between (the same lattice).  A sheet scanned on its side (`hatching.paper_turn`) is turned back by its quarter
-turn, which is lossless (`turn_of`); every raster is computed in the scan's own px and turned with it.
+LATTICE px, bilinear between) and `hatching.page_values`.  Which sheet owns a px (ruling R9, `owned_px`): a place inside
+several sheets' neatlines belongs to the sheet that prints it.  On one of today's blocks (`block_ids`: each connected
+piece of the filled lots), each sheet whose neatline holds some of the block is measured by its mean ink over the
+block's px on its page inside its neatline (`BlockInk`: 1 - luminance), and every px of the block goes to the sheet
+with the most ink that holds it (argmax, no threshold; a tie to the sheet drawn higher); a block on one sheet keeps
+it.  A px on no block (streets, water) keeps the draw-order rule: the sheet drawn highest (the published draw order,
+`stitch.draw_order`) whose neatline holds it, as `hatching.owned` says for points.  A px is carried to another sheet's
+page by that sheet's inverse placement at the lattice nodes, bilinear between (the same lattice).  A sheet scanned on
+its side (`hatching.paper_turn`) is turned back by its quarter turn, which is lossless (`turn_of`); every raster is
+computed in the scan's own px and turned with it.
 
 The lot table (`lot_table`), one row per solver lot:
 
   lot, blklot, block, quarter (nw / ne / sw / se, `paths.QUARTERS`), centre_sheet (the sheet that owns the lot's
-  centre: its representative point, `shapely.point_on_surface`, by `hatching.owned`; "" none)
+  centre: its representative point, `shapely.point_on_surface`, by the rule the px follow (R9, `centre_owner`); ""
+  none)
   read_code, read_conf, read_via, read_sheet, read_blklot, read_recovered   the pattern reader's read
             (`district_pattern.json`; its off-sheet and no-tile marks and empty codes are no reads), one per lot
             (`attach_reads`, `one_read_per_lot`):
@@ -62,7 +68,8 @@ Writes, under data/solver/experiments/hatch-cnn/data/<series>/ (`run`):
   lots.parquet    the lot table, with px: the lot's owned page px over every sheet
   summary.json    the sheets used and not, the draw order, per-sheet and per-quarter counts, reads per code, the
                   lots read on several sheets, answers per page and stratum, the legend swatches, the street labels'
-                  counts on the grid and the learned half-widths per street type (`street_grid`)
+                  counts on the grid and the learned half-widths per street type (`street_grid`), and the blocks R9
+                  gives to a sheet other than the one drawn highest (`ownership_counts`)
 
 $0: no API calls.  Deterministic: the same inputs give the same bytes (the npz members are dated, as `textread.store`).
 """
@@ -262,10 +269,117 @@ def overlaps(a: Sheet, b: Sheet) -> bool:
     return a.bbox[0] <= b.bbox[2] and a.bbox[2] >= b.bbox[0] and a.bbox[1] <= b.bbox[3] and a.bbox[3] >= b.bbox[1]
 
 
-def drawn_above(name: str, order: list[str], sheets: dict[str, Sheet]) -> list[Sheet]:
-    """The sheets drawn above `name` whose neatlines' bounds meet its own."""
+def overlapping(name: str, order: list[str], sheets: dict[str, Sheet]) -> list[Sheet]:
+    """The other sheets, drawn below or above `name`, whose neatlines' bounds meet its own (bottom first)."""
     me = sheets[name]
-    return [sheets[a] for a in order[order.index(name) + 1:] if overlaps(me, sheets[a])]
+    return [sheets[s] for s in order if s != name and s in sheets and overlaps(me, sheets[s])]
+
+
+# --- which sheet owns a place (ruling R9) ---------------------------------------------------------------------------
+
+def block_ids(blocks: np.ndarray) -> tuple[np.ndarray, int]:
+    """Today's blocks numbered (int32): each connected piece of `blocks` (4-connected, `ndimage.label`) 1..n, 0 off
+    them; and n."""
+    bid, n = ndimage.label(np.asarray(blocks, bool))
+    return bid.astype(np.int32, copy=False), int(n)
+
+
+@dataclass(frozen=True)
+class BlockInk:
+    """R9's measure: each sheet's ink over each of today's blocks, from the block's px on its page inside its neatline
+    (`crop`): their count and the sum of their ink, 1 - luminance (paper 0, solid ink 1; every 1921 scan's paper reads
+    1.0).  Rows: the sheets in `order` (the draw order, bottom first), a sheet not measured all 0; columns: block ids
+    (`block_ids`), 0 off the blocks."""
+    order: tuple[str, ...]
+    px: np.ndarray                 # (sheets, blocks + 1) int64
+    ink: np.ndarray                # (sheets, blocks + 1) float64
+
+    def level(self, sheet: str) -> int:
+        """The sheet's place in the draw order (higher: drawn above)."""
+        return self.order.index(sheet)
+
+    def key(self, sheet: str) -> np.ndarray:
+        """Per block id: the sheet's mean ink over the block's px; -inf where it has none of them, and off the blocks
+        (0), where only the draw order decides."""
+        i = self.level(sheet)
+        out = np.full(self.px.shape[1], -np.inf)
+        has = self.px[i] > 0
+        has[0] = False
+        out[has] = self.ink[i][has] / self.px[i][has]
+        return out
+
+    def owners(self) -> np.ndarray:
+        """Per block id, the level of the sheet it goes to among those with px of it (`key`'s argmax, ties to the one
+        drawn highest); -1 where no sheet has any."""
+        keys = np.stack([self.key(s) for s in self.order]) if self.order else np.zeros((0, self.px.shape[1]))
+        out = np.full(self.px.shape[1], -1, np.int64)
+        best = np.full(self.px.shape[1], -np.inf)
+        for i in range(len(self.order)):                    # bottom first: a tie goes to the sheet drawn above
+            take = (self.px[i] > 0) & (keys[i] >= best)
+            out[take], best[take] = i, keys[i][take]
+        return out
+
+
+def beats(ink: BlockInk, other: str, me: str, bid: np.ndarray) -> np.ndarray:
+    """Where `other` takes a place both sheets' neatlines hold from `me` (R9), at block ids `bid`: on a block, the
+    sheet with more ink over it (`BlockInk.key`); equal, and off the blocks, the one drawn higher."""
+    ko, km = ink.key(other)[bid], ink.key(me)[bid]
+    return (ko > km) | ((ko == km) & (ink.level(other) > ink.level(me)))
+
+
+def sheet_block_ink(src: Sources, sh: Sheet, bid_cut: np.ndarray, offset, n_blocks: int) -> tuple[np.ndarray,
+                                                                                                    np.ndarray]:
+    """One sheet's row of `BlockInk`: per block id, its px on the page inside the neatline (the block ids read at
+    every page px through the placement, as `block` is) and their summed ink (1 - luminance, float64)."""
+    lum = load_luminance(src.work / sh.name / "page.png")
+    if lum.shape != tuple(sh.shape):
+        raise ValueError(f"{sh.name}: page {lum.shape}, header {sh.shape}")
+    (b,) = hatching.page_values(hatching.PageWorld(sh.transform, sh.shape), sh.shape, [(bid_cut, 0)], offset)
+    m = np.asarray(sh.crop, bool) & (b > 0)
+    v = b[m]
+    return (np.bincount(v, minlength=n_blocks + 1).astype(np.int64),
+            np.bincount(v, weights=1.0 - lum[m].astype(np.float64), minlength=n_blocks + 1))
+
+
+def _ink_job(job):
+    src, name, quad, bid_cut, offset, n_blocks = job
+    return (name, *sheet_block_ink(src, load_sheet(src, name, quad), bid_cut, offset, n_blocks))
+
+
+def block_ink(src: Sources, order: list[str], bid: np.ndarray, n_blocks: int, workers: int = 1,
+              names: list[str] | None = None) -> BlockInk:
+    """`BlockInk` of the sheets in `order` (or only `names` of them; the rest stay unmeasured), `bid` the block ids
+    on the whole grid."""
+    fr = frames(src)
+    want = list(order) if names is None else [s for s in order if s in set(names)]
+    jobs = []
+    for s in want:
+        r0, r1, c0, c1 = hatching._slice(load_transform(src, s), fr[s], bid.shape)
+        jobs.append((src, s, fr[s], bid[r0:r1, c0:c1], (r0, c0), n_blocks))
+    px = np.zeros((len(order), n_blocks + 1), np.int64)
+    ink = np.zeros((len(order), n_blocks + 1), np.float64)
+    for name, p, k in _map(_ink_job, jobs, workers):
+        i = list(order).index(name)
+        px[i], ink[i] = p, k
+    return BlockInk(tuple(order), px, ink)
+
+
+def ownership_counts(ink: BlockInk) -> dict:
+    """For the summary: today's blocks, those with px on several sheets, and those R9 gives to a sheet other than the
+    highest-drawn of them (per pair: the sheet it goes to < the one the draw order gave it)."""
+    has = ink.px[:, 1:] > 0
+    several = has.sum(axis=0) > 1
+    top = np.where(has.any(axis=0), len(ink.order) - 1 - np.argmax(has[::-1], axis=0), -1)
+    win = ink.owners()[1:]
+    moved = several & (win != top)
+    pairs: dict[str, int] = {}
+    for w, t in zip(win[moved], top[moved]):
+        k = f"{ink.order[w]} < {ink.order[t]}"
+        pairs[k] = pairs.get(k, 0) + 1
+    return {"rule": "R9: a block's px go to the sheet with the most ink over it; px in no block by the draw order",
+            "blocks": int(ink.px.shape[1] - 1), "blocks_on_any_sheet": int(has.any(axis=0).sum()),
+            "blocks_on_several_sheets": int(several.sum()), "blocks_not_to_the_top_sheet": int(moved.sum()),
+            "blocks_not_to_the_top_sheet_by_pair": dict(sorted(pairs.items()))}
 
 
 # --- the street labels ----------------------------------------------------------------------------------------------
@@ -597,7 +711,7 @@ def page_centres(lines, sh: "Sheet") -> np.ndarray:
     `block` is read) breaks them (20180102094149543, 5.2 ft/px: 16,847 pieces read, 6 drawn; 99.4% of the drawn px
     within 1 px of a read one).  Each line near the sheet (its neatline's world bounds and two page px beyond,
     as `centre_owner` reaches) is split every page px (`median_scale_ft_per_px`), carried through the placement's
-    inverse (`grid_to_pixel`, as `owned_px` carries px to a sheet above), and drawn 8-connected, 1 px wide; a point
+    inverse (`grid_to_pixel`, as `owned_px` carries px to another sheet), and drawn 8-connected, 1 px wide; a point
     the inverse can't place breaks its line there."""
     h, w = sh.shape
     lines = np.asarray(lines, dtype=object)
@@ -664,14 +778,20 @@ def _bilinear(nodes: np.ndarray, pw: hatching.PageWorld, rows: slice, w: int) ->
             + (nodes[i + 1, j] * (1 - ax) + nodes[i + 1, j + 1] * ax) * ay)
 
 
-def owned_px(pw: hatching.PageWorld, shape: tuple[int, int], crop: np.ndarray, above: list[Sheet]) -> tuple[np.ndarray, int]:
-    """The page px a sheet labels: inside its neatline (`crop`) and inside no neatline of a sheet drawn above it
-    (`hatching.owned`'s rule, every px): each px is carried to an above sheet's page by that sheet's inverse placement
-    (`grid_to_pixel`) at this page's lattice nodes, bilinear between.  Nodes beyond reach of an above sheet's neatline
-    bounds (twice the lattice's longest cell diagonal) aren't carried: no px of a cell they bound can lie in it.  Also
-    returns the nodes the inverse placement could not place (their cells stay this sheet's)."""
+def owned_px(pw: hatching.PageWorld, shape: tuple[int, int], crop: np.ndarray, me: str, others: list[Sheet],
+             ink: BlockInk, bid: np.ndarray) -> tuple[np.ndarray, int, dict]:
+    """The page px a sheet labels (R9): inside its neatline (`crop`), and taken by no other sheet whose neatline also
+    holds the px (`others`, drawn below or above).  On one of today's blocks (`bid`: the block id at every page px,
+    0 off them) the sheet with more ink over the block takes it (`beats`); off the blocks, and on a tie, the sheet
+    drawn higher (the draw-order rule, `hatching.owned`'s).  Each px is carried to another sheet's page by that
+    sheet's inverse placement (`grid_to_pixel`) at this page's lattice nodes, bilinear between.  Nodes beyond reach of
+    the other sheet's neatline bounds (twice the lattice's longest cell diagonal) aren't carried: no px of a cell they
+    bound can lie in it.  Also returns the nodes the inverse placement could not place (their cells stay this
+    sheet's) and the block px R9 decides against the draw order: kept from a sheet drawn above, or yielded to one
+    drawn below."""
     h, w = shape
     ok = np.asarray(crop, bool).copy()
+    by_order = ok.copy()                     # the draw order alone, for the counts
     nodes = pw.nodes
     if nodes.shape[0] < 2 or nodes.shape[1] < 2:
         raise ValueError(f"a page of {shape} px has too few lattice nodes")
@@ -680,7 +800,7 @@ def owned_px(pw: hatching.PageWorld, shape: tuple[int, int], crop: np.ndarray, a
     reach = 2.0 * diag
     flat = nodes.reshape(-1, 2)
     failed = 0
-    for t in above:
+    for t in others:
         x0, y0, x1, y1 = t.bbox
         cand = ((flat[:, 0] >= x0 - reach) & (flat[:, 0] <= x1 + reach) &
                 (flat[:, 1] >= y0 - reach) & (flat[:, 1] <= y1 + reach))
@@ -690,25 +810,34 @@ def owned_px(pw: hatching.PageWorld, shape: tuple[int, int], crop: np.ndarray, a
         P[cand] = t.transform.grid_to_pixel(flat[cand], t.shape)
         failed += int((cand & ~np.isfinite(P).all(axis=1)).sum())
         P = P.reshape(nodes.shape)
+        above = ink.level(t.name) > ink.level(me)
         for y0b in range(0, h, ROWS):
             rows = slice(y0b, min(h, y0b + ROWS))
             xy = _bilinear(P, pw, rows, w).reshape(-1, 2)
-            ok[rows] &= ~hatching._in_crop(t.crop, xy).reshape(rows.stop - rows.start, w)
-    return ok, failed
+            held = hatching._in_crop(t.crop, xy).reshape(rows.stop - rows.start, w)
+            ok[rows] &= ~(held & beats(ink, t.name, me, bid[rows]))
+            if above:
+                by_order[rows] &= ~held
+    on = bid > 0
+    moved = {"block_px_kept_from_above": int(np.count_nonzero(ok & ~by_order & on)),
+             "block_px_yielded_to_below": int(np.count_nonzero(~ok & by_order & on))}
+    return ok, failed, moved
 
 
 def _rasters(src: Sources, sh: Sheet, lot_cut: np.ndarray, block_cut: np.ndarray, street_cut: np.ndarray,
-             weight_cut: np.ndarray, offset, above: list[Sheet], lines):
+             weight_cut: np.ndarray, bid_cut: np.ndarray, offset, others: list[Sheet], ink: BlockInk, lines):
     """A sheet's rasters (`SheetRasters`) and counts, from its cut of the solver's grid (`lot_cut`, `block_cut`,
-    `street_cut`, `weight_cut` from grid row and column `offset`) and today's centre lines (`lines`, geometries)."""
+    `street_cut`, `weight_cut`, `bid_cut` (`block_ids`) from grid row and column `offset`), the sheets overlapping it
+    and the blocks' ink (`owned_px`), and today's centre lines (`lines`, geometries)."""
     lum = load_luminance(src.work / sh.name / "page.png")
     if lum.shape != tuple(sh.shape):
         raise ValueError(f"{sh.name}: page {lum.shape}, header {sh.shape}")
     pw = hatching.PageWorld(sh.transform, sh.shape)
-    lot_px, blk_px, st_px, w_px = hatching.page_values(
+    lot_px, blk_px, st_px, w_px, bid_px = hatching.page_values(
         pw, sh.shape, [(lot_cut, -1), (block_cut.astype(np.uint8), 0), (street_cut, UNKNOWN),
-                       (weight_cut.astype(np.float16), np.float16(0))], offset)
-    mine, failed = owned_px(pw, sh.shape, sh.crop, above)
+                       (weight_cut.astype(np.float16), np.float16(0)), (bid_cut, 0)], offset)
+    mine, failed, moved = owned_px(pw, sh.shape, sh.crop, sh.name, others, ink, bid_px)
+    del bid_px
     block = np.where(mine, blk_px, UNKNOWN).astype(np.uint8)
     street = np.where(mine, st_px, UNKNOWN).astype(np.uint8)
     street_w = np.where(mine, w_px, 0).astype(np.float16)
@@ -723,8 +852,10 @@ def _rasters(src: Sources, sh: Sheet, lot_cut: np.ndarray, block_cut: np.ndarray
                      float(sh.transform.median_scale_ft_per_px(sh.shape)), int(k), tuple(int(v) for v in sh.shape),
                      up(street), up(centre), up(street_w))
     stats = {"sheet": sh.name, "scanned_shape": list(r.scanned_shape), "shape": list(r.ink.shape), "turn": r.turn,
-             "ft_per_px": r.ft_per_px, "above": [a.name for a in above], "px": int(lum.size),
-             "crop_px": int(np.count_nonzero(sh.crop)), "owned_px": int(np.count_nonzero(mine)),
+             "ft_per_px": r.ft_per_px,
+             "above": [a.name for a in others if ink.level(a.name) > ink.level(sh.name)],
+             "below": [a.name for a in others if ink.level(a.name) < ink.level(sh.name)], "px": int(lum.size),
+             "crop_px": int(np.count_nonzero(sh.crop)), "owned_px": int(np.count_nonzero(mine)), **moved,
              "block_px": int(np.count_nonzero(block == 1)), "street_px": int(np.count_nonzero(block == 0)),
              "unknown_px": int(np.count_nonzero(block == UNKNOWN)), "lot_px": int(np.count_nonzero(lot >= 0)),
              "lots": int(len(np.unique(lot[lot >= 0]))), "unplaced_nodes": failed,
@@ -746,14 +877,17 @@ def sheet_rasters(series: str, sheet: str, src: Sources | None = None) -> SheetR
         raise KeyError(f"{sheet} is not a {series} map sheet (a page, a data/work placement and a frame)")
     order = draw_order(src, names)
     fr = frames(src)
-    sheets = {s: load_sheet(src, s, fr[s]) for s in order[order.index(sheet):]}
+    sheets = {s: load_sheet(src, s, fr[s]) for s in order}
     lot, blocks = solver_grid(src)
+    bid, n_blocks = block_ids(blocks)
     lines = centre_lines(src)
     street, weight, _ = street_grid(lines, blocks, data_area(src, names, lot.shape))
     me = sheets[sheet]
+    others = overlapping(sheet, order, sheets)
+    ink = block_ink(src, order, bid, n_blocks, names=[sheet] + [o.name for o in others])
     r0, r1, c0, c1 = hatching._slice(me.transform, me.quad, lot.shape)
     return _rasters(src, me, lot[r0:r1, c0:c1], blocks[r0:r1, c0:c1], street[r0:r1, c0:c1], weight[r0:r1, c0:c1],
-                    (r0, c0), drawn_above(sheet, order, sheets), lines.geoms)[0]
+                    bid[r0:r1, c0:c1], (r0, c0), others, ink, lines.geoms)[0]
 
 
 def write_rasters(f: Path, r: SheetRasters, series: str) -> None:
@@ -788,27 +922,31 @@ def swatches(series: str, src: Sources | None = None) -> list[tuple[str, str, tu
 
 # --- the lot table --------------------------------------------------------------------------------------------------
 
-def centre_owner(points: np.ndarray, sheets: list[Sheet]) -> tuple[np.ndarray, int]:
-    """The sheet that owns each map point (n, 2), `sheets` bottom first: the one whose neatline holds it and no
-    neatline of a sheet drawn above it does (`hatching.owned`); "" none.  Also the points two sheets both claimed (at a
-    neatline's edge `owned` reads only within the bounds of a sheet above; the upper one keeps them)."""
+def centre_owner(points: np.ndarray, sheets: list[Sheet], blocks_at: np.ndarray | None = None,
+                 ink: BlockInk | None = None) -> tuple[np.ndarray, int]:
+    """The sheet that owns each map point (n, 2), `sheets` bottom first, by `owned_px`'s rule (R9): of the sheets whose
+    neatline holds it (its nearest px in the crop, as `hatching.owned` reads one), the one with the most ink over the
+    point's block (`blocks_at`: the block id under each point, 0 none; `ink`); off the blocks, on a tie, or with no
+    `ink`, the one drawn highest; "" none.  Also how many points several sheets held."""
     pts = np.asarray(points, float)
     owner = np.full(len(pts), "", dtype=object)
+    best = np.full(len(pts), -np.inf)
+    held_by = np.zeros(len(pts), np.int64)
+    block = np.zeros(len(pts), np.int64) if blocks_at is None else np.asarray(blocks_at, np.int64)
     finite = np.isfinite(pts).all(axis=1)
-    twice = 0
-    for i, sh in enumerate(sheets):
+    for sh in sheets:
         x0, y0, x1, y1 = sh.bbox
         margin = 2.0 * sh.transform.median_scale_ft_per_px(sh.shape)       # the crop's nearest px reaches 1/2 px out
         cand = np.flatnonzero(finite & (pts[:, 0] >= x0 - margin) & (pts[:, 0] <= x1 + margin)
                               & (pts[:, 1] >= y0 - margin) & (pts[:, 1] <= y1 + margin))
         if not len(cand):
             continue
-        px = sh.transform.grid_to_pixel(pts[cand], sh.shape)
-        above = [s.above() for s in sheets[i + 1:] if overlaps(sh, s)]
-        mine = cand[hatching.owned(px, pts[cand], sh.crop, above)]
-        twice += int((owner[mine] != "").sum())
-        owner[mine] = sh.name
-    return owner, twice
+        held = cand[hatching._in_crop(sh.crop, np.asarray(sh.transform.grid_to_pixel(pts[cand], sh.shape), float))]
+        key = ink.key(sh.name)[block[held]] if ink is not None else np.full(len(held), -np.inf)
+        take = key >= best[held]                            # bottom first: a tie goes to the sheet drawn above
+        owner[held[take]], best[held[take]] = sh.name, key[take]
+        held_by[held] += 1
+    return owner, int((held_by > 1).sum())
 
 
 def reads(src: Sources, sheets: list[str]) -> pd.DataFrame:
@@ -938,9 +1076,11 @@ def one_read_per_lot(att: pd.DataFrame, owner: np.ndarray, order: list[str]):
     return best[READ_COLUMNS].reset_index(drop=True), counts
 
 
-def lot_table(series: str, src: Sources | None = None, lot: np.ndarray | None = None) -> pd.DataFrame:
+def lot_table(series: str, src: Sources | None = None, lot: np.ndarray | None = None, ink: BlockInk | None = None,
+              bid: np.ndarray | None = None) -> pd.DataFrame:
     """One row per solver lot (see the module); `attrs` holds the counts of how the reads and answers were kept.
-    `lot`: the solver's lot raster, when it is already loaded."""
+    `lot`: the solver's lot raster, `bid` its blocks' ids (`block_ids`) and `ink` every sheet's `BlockInk`, when they
+    are already at hand."""
     src = src or sources(series)
     table = pd.read_parquet(src.solver / "lots" / "table.parquet", columns=["blklot", "block_num", "geometry"])
     with np.load(src.solver / "lots" / "lots.npz") as z:
@@ -957,23 +1097,28 @@ def lot_table(series: str, src: Sources | None = None, lot: np.ndarray | None = 
     for i, b in enumerate(blklot):
         lots_of.setdefault(b, []).append(i)
 
-    # the sheet owning each lot's centre
+    # the sheet owning each lot's centre (R9)
     used = sheet_names(src)
     order = draw_order(src, used)
     fr = frames(src)
     sheets = [load_sheet(src, s, fr[s]) for s in order]
+    if lot is None:
+        with np.load(src.solver / "lots" / "lots.npz") as z:
+            lot = z["lot"]
+    if bid is None:
+        bid = block_ids(ndimage.binary_fill_holes(lot >= 0))[0]
+    if ink is None:
+        ink = block_ink(src, order, bid, int(bid.max()))
     geoms = shapely.from_wkb(table["geometry"].to_numpy()) if n and isinstance(
         table["geometry"].iloc[0], (bytes, bytearray)) else np.asarray(table["geometry"].to_numpy())
     pts = shapely.point_on_surface(geoms)
     centres = np.c_[shapely.get_x(pts), shapely.get_y(pts)]
-    owner, twice = centre_owner(centres, sheets)
+    owner, several = centre_owner(centres, sheets, hatching.grid_values(centres[:, 0], centres[:, 1], bid, fill=0),
+                                  ink)
     out["centre_sheet"] = owner.astype(str)
 
     # one read per lot (R4, then R3')
     rd = reads(src, used)
-    if lot is None:
-        with np.load(src.solver / "lots" / "lots.npz") as z:
-            lot = z["lot"]
     att, read_counts = attach_reads(rd, lots_of, src, lot)
     kept, keep_counts = one_read_per_lot(att, owner, order)
     code = np.full(n, "", dtype=object)
@@ -1020,7 +1165,7 @@ def lot_table(series: str, src: Sources | None = None, lot: np.ndarray | None = 
         a_code.astype(str), a_page.astype(str), a_case.astype(str), a_strat.astype(str))
     out["n_answers"] = n_ans
     out.attrs = {
-        "sheets": used, "draw_order": order, "centres_claimed_twice": twice,
+        "sheets": used, "draw_order": order, "centres_on_several_sheets": several,
         "lots_without_centre_sheet": int((owner == "").sum()),
         "reads": {"kept": int((out["read_code"] != "").sum()), "total": int(len(rd)), **read_counts, **keep_counts,
                   "kept_recovered": int(recovered.sum()),
@@ -1047,11 +1192,11 @@ def _init_worker():
 
 def _job(job) -> dict:
     """One sheet: its rasters written to `out`/<sheet>.npz; returns its counts and its lots' px."""
-    src, name, order, lot_cut, block_cut, street_cut, weight_cut, offset, out, n_lots, lines = job
+    src, name, order, lot_cut, block_cut, street_cut, weight_cut, bid_cut, offset, out, n_lots, lines, ink = job
     fr = frames(src)
-    sheets = {s: load_sheet(src, s, fr[s]) for s in order[order.index(name):]}
-    r, stats = _rasters(src, sheets[name], lot_cut, block_cut, street_cut, weight_cut, offset,
-                        drawn_above(name, order, sheets), lines)
+    sheets = {s: load_sheet(src, s, fr[s]) for s in order}
+    r, stats = _rasters(src, sheets[name], lot_cut, block_cut, street_cut, weight_cut, bid_cut, offset,
+                        overlapping(name, order, sheets), ink, lines)
     write_rasters(out / f"{name}.npz", r, src.series)
     stats["lot_px_per_lot"] = np.bincount(r.lot[r.lot >= 0], minlength=n_lots).astype(np.int64)
     return stats
@@ -1076,9 +1221,11 @@ def run(series: str, out: Path | None = None, workers: int = 4, src: Sources | N
     order = draw_order(src, names)
     fr = frames(src)
     lot, blocks = solver_grid(src)
+    bid, n_blocks = block_ids(blocks)
+    ink = block_ink(src, order, bid, n_blocks, workers)                    # every sheet: the lot table needs them all
     lines = centre_lines(src)
     street, weight, labels = street_grid(lines, blocks, data_area(src, names, lot.shape))
-    table = lot_table(series, src, lot)
+    table = lot_table(series, src, lot, ink, bid)
     n_lots = len(table)
     jobs = []
     for s in order:
@@ -1087,7 +1234,7 @@ def run(series: str, out: Path | None = None, workers: int = 4, src: Sources | N
         tr = load_transform(src, s)
         r0, r1, c0, c1 = hatching._slice(tr, fr[s], lot.shape)
         jobs.append((src, s, order, lot[r0:r1, c0:c1], blocks[r0:r1, c0:c1], street[r0:r1, c0:c1],
-                     weight[r0:r1, c0:c1], (r0, c0), out, n_lots, lines.geoms))
+                     weight[r0:r1, c0:c1], bid[r0:r1, c0:c1], (r0, c0), out, n_lots, lines.geoms, ink))
     jobs.sort(key=lambda j: -int(np.prod(page_shape(src, j[1]))))          # the largest first: the pool ends sooner
     out.mkdir(parents=True, exist_ok=True)
     done = sorted(_map(_job, jobs, workers), key=lambda d: d["sheet"])
@@ -1102,7 +1249,7 @@ def run(series: str, out: Path | None = None, workers: int = 4, src: Sources | N
                "quarters": quarter_counts(table), "reads_per_code": reads_per_code(table),
                "answers_per_page_stratum": answers_per_page(table),
                "lot_table": attrs, "swatches": [[s, c, list(b)] for s, c, b in swatches(series, src)],
-               "street_labels": labels}
+               "street_labels": labels, "ownership": ownership_counts(ink)}
     (out / "summary.json").write_text(json.dumps(summary, indent=1, sort_keys=True) + "\n")
     return summary
 

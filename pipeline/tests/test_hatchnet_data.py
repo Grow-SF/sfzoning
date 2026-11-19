@@ -9,8 +9,9 @@ import cv2
 import numpy as np
 import pandas as pd
 import shapely
+from scipy import ndimage
 
-from sfzmaps.solver import grid
+from sfzmaps.solver import grid, hatching
 from sfzmaps.solver.hatchnet import data
 from sfzmaps.transform import GCP, SheetTransform
 
@@ -139,12 +140,51 @@ def upright_crop(shape=PAGE):
     return c
 
 
-def two_sheets(root, reads_a=(), reads_c=()):
-    """Sheets A (world x 20-130 ft) and C (80-190 ft) side by side, overlapping 50 ft; C is drawn above A."""
+A_FT, C_FT = 20.37, 80.37  # the two sheets' west edges, ft east of the grid's corner
+
+
+def two_sheets(root, reads_a=(), reads_c=(), page_a=None, page_c=None):
+    """Sheets A (world x 20-130 ft) and C (80-190 ft) side by side, overlapping 50 ft; C is drawn above A.  Their
+    pages are `scan(0)` and `scan(1)` unless given."""
     write_lots(root)
-    write_sheet(root, "sheetA", scan(0), placement(PAGE, 20.37), upright_quad(), upright_crop(), reads_a)
-    write_sheet(root, "sheetC", scan(1), placement(PAGE, 80.37), upright_quad(), upright_crop(), reads_c)
+    write_sheet(root, "sheetA", scan(0) if page_a is None else page_a, placement(PAGE, A_FT), upright_quad(),
+                upright_crop(), reads_a)
+    write_sheet(root, "sheetC", scan(1) if page_c is None else page_c, placement(PAGE, C_FT), upright_quad(),
+                upright_crop(), reads_c)
     return sources(root, order=("sheetA", "sheetC"))
+
+
+def lot_box(i: int, x_ft: float, pad: int = 3) -> tuple[slice, slice]:
+    """The page px (rows, cols) over lot i on the sheet whose west edge is `x_ft`, `pad` px beyond it each way."""
+    (r0, r1), (c0, c1), *_ = LOTS[i]
+    rows = slice(int(np.floor((4 * r0 - Y_FT) / FT_PER_PX)) - pad, int(np.ceil((4 * r1 - Y_FT) / FT_PER_PX)) + pad)
+    cols = slice(int(np.floor((4 * c0 - x_ft) / FT_PER_PX)) - pad, int(np.ceil((4 * c1 - x_ft) / FT_PER_PX)) + pad)
+    return rows, cols
+
+
+def lot_px_on(src, sheet: str, i: int) -> np.ndarray:
+    """Where lot i lies on the sheet's page inside its neatline (the solver's lot raster read at every page px through
+    the placement): its px, whichever sheet owns them."""
+    sh = data.load_sheet(src, sheet, data.frames(src)[sheet])
+    lot, _ = data.solver_grid(src)
+    (v,) = hatching.page_values(hatching.PageWorld(sh.transform, sh.shape), sh.shape, [(lot, -1)])
+    return (v == i) & sh.crop
+
+
+def printed(page: np.ndarray, rows: slice, cols: slice, solid: bool = False) -> np.ndarray:
+    """The page with the box printed over: solid ink, or hatch inside an outline."""
+    pg = page.copy()
+    y, x = np.mgrid[rows, cols]
+    pg[rows, cols] = 0 if solid else np.where(np.mod(x + y, 9) < 2, 0, 255)
+    if not solid:
+        cv2.rectangle(pg, (cols.start, rows.start), (cols.stop - 1, rows.stop - 1), 0, 1)
+    return pg
+
+
+def blank(page: np.ndarray, rows: slice, cols: slice) -> np.ndarray:
+    pg = page.copy()
+    pg[rows, cols] = 255
+    return pg
 
 
 # --- the tests ------------------------------------------------------------------------------------------------------
@@ -183,28 +223,117 @@ def test_turned_sheet_matches_upright(tmp_path):
 
 
 def test_overlap_owned_once(tmp_path):
-    src = two_sheets(tmp_path)
+    # C is drawn above A, and prints the overlap's two blocks (lots 1 and 5) solid, so it owns them by its ink (R9) as
+    # well as the streets between them by the draw order
+    src = two_sheets(tmp_path, page_c=printed(printed(scan(1), *lot_box(1, C_FT), solid=True), *lot_box(5, C_FT),
+                                              solid=True))
     ra = data.sheet_rasters(SERIES, "sheetA", src)
     rc = data.sheet_rasters(SERIES, "sheetC", src)
-    ta, tc = placement(PAGE, 20.37), placement(PAGE, 80.37)
+    ta, tc = placement(PAGE, A_FT), placement(PAGE, C_FT)
 
     def at(r, tr, world):
         x, y = np.round(tr.to_pixel(np.array([world]))[0]).astype(int)
         return int(r.block[y, x]), int(r.lot[y, x])
 
-    overlap = (grid.X0 + 105.3, grid.Y1 - 80.3)                  # inside both neatlines: C is drawn above A
+    overlap = (grid.X0 + 105.3, grid.Y1 - 80.3)                  # inside both neatlines, on lot 1: C's
     assert at(ra, ta, overlap)[0] == 255 and at(ra, ta, overlap)[1] == -1
     assert at(rc, tc, overlap)[0] != 255 and at(rc, tc, overlap)[1] == 1
     only_a = (grid.X0 + 40.3, grid.Y1 - 80.3)
     assert at(ra, ta, only_a)[0] != 255 and at(ra, ta, only_a)[1] == 0
     # outside the neatline: unknown; inside it on no other sheet: labelled
     assert (ra.block[~ra.crop] == 255).all() and (ra.lot[~ra.crop] == -1).all()
-    assert (rc.block[rc.crop] != 255).all()                      # C is on top: it keeps its whole neatline
+    assert (rc.block[rc.crop] != 255).all()                      # C keeps its whole neatline
     # each place is labelled on one sheet: A's labelled px reach no further east than C's neatline begins
     ys, xs = np.nonzero(ra.block != 255)
     east = ta.to_world(np.c_[xs, ys].astype(float))[:, 0].max()
     c_west = tc.to_world(np.array([[INSET, 50.0]]))[0, 0]
     assert east < c_west and east > c_west - 2 * FT_PER_PX
+
+
+def at_world(r, x_ft: float, world) -> tuple[int, int]:
+    """(block, lot) of the sheet's rasters at a world point (ft from X0, Y1)."""
+    x, y = np.round(placement(PAGE, x_ft).to_pixel(np.array([[grid.X0 + world[0], grid.Y1 - world[1]]]))[0])
+    return int(r.block[int(y), int(x)]), int(r.lot[int(y), int(x)])
+
+
+def test_blank_corner_yields_to_printing_sheet(tmp_path):
+    # R9: C is drawn above A, but its page is blank paper over lot 1's block (a join corner the other sheet prints),
+    # which A prints with outline and hatch: every px of the block on A is A's and none on C is C's.  The street beside
+    # it, in no block, keeps the draw order (C's).  The lot table's centre sheet follows the same rule
+    src = two_sheets(tmp_path, page_a=printed(scan(0), *lot_box(1, A_FT)), page_c=blank(scan(1), *lot_box(1, C_FT)))
+    ra, rc = data.sheet_rasters(SERIES, "sheetA", src), data.sheet_rasters(SERIES, "sheetC", src)
+    on_a, on_c = lot_px_on(src, "sheetA", 1), lot_px_on(src, "sheetC", 1)
+    assert on_a.sum() > 400 and on_c.sum() > 400
+    assert np.array_equal(ra.lot == 1, on_a) and (ra.block[on_a] == 1).all()
+    assert not (rc.lot == 1).any() and (rc.block[on_c] == data.UNKNOWN).all()
+    street = (105.3, 106.3)                                      # between lots 1 and 5: in no block
+    assert at_world(ra, A_FT, street)[0] == data.UNKNOWN and at_world(rc, C_FT, street) == (0, -1)
+    assert data.lot_table(SERIES, src).loc[1, "centre_sheet"] == "sheetA"
+
+
+def test_both_printed_goes_to_more_ink(tmp_path):
+    # both sheets print lots 1's and 5's blocks.  Lot 1's: A (drawn below) solid, C hatched: A has more ink, so the
+    # block is A's.  Lot 5's: C solid, A hatched: C's
+    src = two_sheets(tmp_path,
+                     page_a=printed(printed(scan(0), *lot_box(1, A_FT), solid=True), *lot_box(5, A_FT)),
+                     page_c=printed(printed(scan(1), *lot_box(1, C_FT)), *lot_box(5, C_FT), solid=True))
+    ra, rc = data.sheet_rasters(SERIES, "sheetA", src), data.sheet_rasters(SERIES, "sheetC", src)
+    for i, (win, lose) in ((1, ((ra, "sheetA"), (rc, "sheetC"))), (5, ((rc, "sheetC"), (ra, "sheetA")))):
+        on_w, on_l = lot_px_on(src, win[1], i), lot_px_on(src, lose[1], i)
+        assert on_w.sum() > 300 and on_l.sum() > 300, i
+        assert np.array_equal(win[0].lot == i, on_w) and (win[0].block[on_w] == 1).all(), i
+        assert not (lose[0].lot == i).any() and (lose[0].block[on_l] == data.UNKNOWN).all(), i
+    t = data.lot_table(SERIES, src)
+    assert (t.loc[1, "centre_sheet"], t.loc[5, "centre_sheet"]) == ("sheetA", "sheetC")
+
+
+def test_single_candidate_unchanged(tmp_path):
+    # a block inside one sheet's neatline only stays that sheet's, blank there or printed: lot 0 (on A only) blank on
+    # A, lot 2 (on C only) blank on C, lots 3 (A) and 4 (C) printed
+    src = two_sheets(tmp_path, page_a=blank(scan(0), *lot_box(0, A_FT)), page_c=blank(scan(1), *lot_box(2, C_FT)))
+    ra, rc = data.sheet_rasters(SERIES, "sheetA", src), data.sheet_rasters(SERIES, "sheetC", src)
+    for r, sheet, i in ((ra, "sheetA", 0), (rc, "sheetC", 2), (ra, "sheetA", 3), (rc, "sheetC", 4)):
+        on = lot_px_on(src, sheet, i)
+        other = lot_px_on(src, "sheetC" if sheet == "sheetA" else "sheetA", i)
+        assert on.sum() > 100 and not other.any(), i
+        assert np.array_equal(r.lot == i, on) and (r.block[on] == 1).all(), i
+    t = data.lot_table(SERIES, src)
+    assert list(t.loc[[0, 2, 3, 4], "centre_sheet"]) == ["sheetA", "sheetC", "sheetA", "sheetC"]
+
+
+def test_every_px_owned_once(tmp_path):
+    # blocks given against the draw order (lot 1's, blank on C) and with it (lot 5's, solid on C), streets by the draw
+    # order: a place inside both neatlines is labelled on exactly one sheet, and a place inside one neatline on that
+    # one.  Each sheet's px is carried to the other page through the placements; left out are px at a neatline's edge
+    # and those whose nearest px on the other page reads another block (the two px are < 1 px apart)
+    src = two_sheets(tmp_path, page_c=printed(blank(scan(1), *lot_box(1, C_FT)), *lot_box(5, C_FT), solid=True))
+    r = {"sheetA": data.sheet_rasters(SERIES, "sheetA", src), "sheetC": data.sheet_rasters(SERIES, "sheetC", src)}
+    tr = {"sheetA": placement(PAGE, A_FT), "sheetC": placement(PAGE, C_FT)}
+    _, blocks = data.solver_grid(src)
+    bid = ndimage.label(blocks)[0]
+    h, w = PAGE
+    inner = {k: cv2.erode(v.crop.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool) for k, v in r.items()}
+    checked = {}
+    for me, other in (("sheetA", "sheetC"), ("sheetC", "sheetA")):
+        ys, xs = np.nonzero(r[me].crop)
+        world = tr[me].to_world(np.c_[xs, ys].astype(float))
+        p = np.round(tr[other].to_pixel(world)).astype(int)
+        on = (p[:, 0] >= 0) & (p[:, 0] < w) & (p[:, 1] >= 0) & (p[:, 1] < h)
+        held, deep = np.zeros(len(xs), bool), np.zeros(len(xs), bool)
+        held[on] = r[other].crop[p[on, 1], p[on, 0]]
+        deep[on] = inner[other][p[on, 1], p[on, 0]] & inner[me][ys[on], xs[on]]
+        mine = r[me].block[ys, xs] != data.UNKNOWN
+        assert mine[~held].all(), me                                 # inside this neatline only: this sheet's
+        back = tr[other].to_world(p.astype(float))
+        same = (hatching.grid_values(world[:, 0], world[:, 1], bid, fill=0) ==
+                hatching.grid_values(back[:, 0], back[:, 1], bid, fill=0))
+        both = deep & same
+        theirs = r[other].block[p[both, 1], p[both, 0]] != data.UNKNOWN
+        assert (mine[both] ^ theirs).all(), me                       # inside both: exactly one sheet's
+        checked[me] = (int(both.sum()), int((mine[both] & (r[me].lot[ys[both], xs[both]] >= 0)).sum()))
+    assert all(n > 2000 and lots > 300 for n, lots in checked.values()), checked
+    assert not (r["sheetC"].lot == 1).any() and (r["sheetA"].lot == 1).any()
+    assert not (r["sheetA"].lot == 5).any() and (r["sheetC"].lot == 5).any()
 
 
 def test_lot_table_answers_and_reads(tmp_path):
@@ -217,7 +346,8 @@ def test_lot_table_answers_and_reads(tmp_path):
                               ("0009003", "C", 0.9, "parcel")],
                      reads_c=[("0002001", "C", 0.7, "parcel"), ("0003001", "LI", 0.9, "block"),
                               ("0005001", "U", 0.5, "parcel"), ("0003001B", "2R", 0.95, "parcel"),
-                              ("0003001C", "1R", 0.5, "parcel")])
+                              ("0003001C", "1R", 0.5, "parcel")],
+                     page_c=printed(printed(scan(1), *lot_box(1, C_FT), solid=True), *lot_box(5, C_FT), solid=True))
     cases = tmp_path / "cases"
     cases.mkdir()
     (cases / "1921.json").write_text(json.dumps({"cases": [
@@ -240,8 +370,8 @@ def test_lot_table_answers_and_reads(tmp_path):
     assert list(t["blklot"]) == [b for *_, b, _ in LOTS]
     assert list(t["quarter"]) == ["nw", "ne", "sw", "se", "ne", "se"]
     # one read per lot (R3'): a lot read on one sheet keeps it whichever sheet that is (lot 5: A read it, C owns its
-    # centre); read on two, the draw order picks (lot 1: C, drawn above A, owns its centre).  Empty codes and the
-    # reader's off-sheet marks are no reads.  R4: a read of today's parcel the solver's table lacks lands on the
+    # centre); read on two, the centre's sheet picks (lot 1: C, which prints it solid, owns its centre).  Empty codes
+    # and the reader's off-sheet marks are no reads.  R4: a read of today's parcel the solver's table lacks lands on the
     # solver lot under the parcel's representative point (lots 2 and 3); several on one lot from one sheet keep the
     # most confident (lot 2: 0.95 over its own 0.9 and 0.5); one on no solver lot, not in today's parcels or with no
     # geometry stays unattached
