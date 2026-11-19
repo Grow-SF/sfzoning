@@ -567,3 +567,72 @@ describe("prepareReleaseZip", () => {
     );
   });
 });
+
+describe("release zips from the published copies", () => {
+  type Entry = { name: string; file?: string; url?: string; text?: string; sha256?: string; bytes?: number; lastModified: Date };
+  type Zip = { name: string; memberCount: number; fromLocal: number; bytes: number; entries: Entry[] };
+  type Opts = { locals: Record<string, { root: string; rel: string }>; base: string; listing: Map<string, number>; license: string };
+  const zips = script.releaseZips as (release: unknown, history: unknown, o: Opts) => Record<string, Zip>;
+  const writeZip = script.writeZip as (out: string, e: Entry[], o: { fetch: (u: string) => Promise<Response> }) => Promise<{ bytes: number }>;
+
+  const setup = async () => {
+    const fs = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { createHash } = await import("node:crypto");
+    const dir = fs.mkdtempSync(`${tmpdir()}/pds-`);
+    const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+    const body = "a geopackage";
+    const name = versionedName({ series: "1948", layer: "lots", date: "2026-11-18", sha256: sha(body), ext: "gpkg.zip" });
+    const history = { versions: [{ series: "1948", layer: "lots", fmt: "gpkg", name, date: "2026-11-18", bytes: body.length, sha256: sha(body) }] };
+    const release = { id: "2026-11-18", date: "2026-11-18", names: [name], extras: [] };
+    const url = `${BASE}/${blobPath("1948", name)}`;
+    const gpkg = zips(release, history, { locals: {}, base: BASE, listing: new Map(), license: "L" }).gpkg;
+    return { fs, dir, body, name, url, gpkg };
+  };
+
+  it("a member with no local file is fetched from its published copy, one request, and lands in the zip", async () => {
+    const { fs, dir, body, name, url, gpkg } = await setup();
+    expect(gpkg).toMatchObject({ memberCount: 1, fromLocal: 0, bytes: body.length });
+    expect(gpkg.entries.find((e) => e.name === name)).toMatchObject({ url, bytes: body.length });
+    const asked: string[] = [];
+    await writeZip(`${dir}/z.zip`, gpkg.entries, { fetch: async (u) => (asked.push(u), new Response(body)) });
+    expect(asked).toEqual([url]);
+    expect(fs.readFileSync(`${dir}/z.zip`).includes(body)).toBe(true);
+  });
+
+  it("a member whose local file exists is read from disk instead", async () => {
+    const { name } = await setup();
+    const release = { id: "2026-11-18", date: "2026-11-18", names: [name], extras: [] };
+    const history = { versions: [{ series: "1948", layer: "lots", fmt: "gpkg", name, date: "2026-11-18", bytes: 12, sha256: SHA }] };
+    const opts = { locals: { [name]: { root: "work", rel: "1948/x" } }, base: BASE, listing: new Map(), license: "L", exists: () => true };
+    const gpkg = (script.releaseZips as (r: unknown, h: unknown, o: unknown) => Record<string, Zip>)(release, history, opts).gpkg;
+    expect(gpkg.fromLocal).toBe(1);
+    expect(gpkg.entries.find((e) => e.name === name)).toMatchObject({ file: expect.stringMatching(/1948\/x$/), url: undefined });
+  });
+
+  it("a body from the store with the wrong hash, or a non-200, stops naming the member and leaves no zip", async () => {
+    const { fs, dir, name, gpkg } = await setup();
+    await expect(writeZip(`${dir}/z.zip`, gpkg.entries, { fetch: async () => new Response("a geopackagE") })).rejects.toThrow(new RegExp(name));
+    await expect(writeZip(`${dir}/z.zip`, gpkg.entries, { fetch: async () => new Response("gone", { status: 404 }) })).rejects.toThrow(
+      new RegExp(`${name}: HTTP 404`),
+    );
+    expect(fs.existsSync(`${dir}/z.zip`)).toBe(false);
+  });
+});
+
+describe("--release-only planning", () => {
+  type Step = { id: string; date: string } | null;
+  const step = script.releaseOnlyStep as (record: unknown, manifest: unknown, today: string) => Step;
+  const locals = script.releaseOnlyLocals as (manifest: unknown) => Record<string, { root: string; rel: string }>;
+  const m = run(idx({ "1948/lots.gpkg": lots() }, { "1948": [sheet()] }));
+  const manifest = { generated: "2026-11-18", files: m.files, sheets: m.sheets };
+
+  it("on an empty record the release is the manifest's own date; with this set already recorded there is none", () => {
+    const r = step({ releases: [] }, manifest, "2026-11-25");
+    expect(r).toMatchObject({ id: "2026-11-18", date: "2026-11-18" });
+    expect(step({ releases: [r] }, manifest, "2026-11-25")).toBeNull();
+  });
+  it("reads each sheet from its warped_paper.tif under work/", () => {
+    expect(locals(manifest)).toEqual({ [m.sheets["1948"].items[0].name]: { root: "work", rel: "1948/10/warped_paper.tif" } });
+  });
+});

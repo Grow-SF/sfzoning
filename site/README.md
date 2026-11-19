@@ -78,7 +78,15 @@ alone (`scripts/publish-tiles.mjs`, `scripts/publish-downloads.mjs`, each with `
 `lib/download-releases.json` and `lib/sheet-numbers.json`; commit all four. When the set of
 current files changed, it also makes a release: four stored zips (the whole release, and GeoJSON,
 GeoPackage and Shapefile) uploaded to `downloads/releases/<id>/` on the store. They are built
-first under `pipeline/data/downloads/releases/`, which needs about 8 GB of free disk today.
+first under `pipeline/data/downloads/releases/`, which needs about 8 GB of free disk today. Each
+member is read from its local file when there is one, else streamed from its published copy on
+the store, and checked against its recorded sha256 either way.
+
+`--release-only` makes a release of what is already published, from the committed
+`lib/downloads.json` alone: no `index.json`, no data uploads. Sheets are read from
+`pipeline/data/work/` (DVC) when present, everything else from the store. It writes only
+`lib/download-releases.json`. Try it with `--dry-run` first: that prints the release and its zips
+and uploads nothing.
 
 To publish changed tiles, with `BLOB_READ_WRITE_TOKEN` from `vercel env pull`:
 

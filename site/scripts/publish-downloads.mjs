@@ -13,12 +13,20 @@
 // against its sha256 as it is zipped. The zips are written to pipeline/data/downloads/releases/<id>/
 // (about 8 GB free disk needed today) and uploaded, multipart with one part at a time, to
 // downloads/releases/<id>/<zip name> with a <zip name>.sha256 beside each. A rerun reuses a local zip
-// only when its <zip>.plan matches, and stops if a zip already on the store has another sha256. --dry-run prints the release and its zips; --local makes none.
+// only when its <zip>.plan matches, and stops if a zip already on the store has another sha256.
+// A member is read from its local file when there is one, else streamed from its published copy
+// (one request at a time), and checked against its recorded sha256 and size either way.
+//
+// --release-only makes a release from the committed manifest alone, with no index.json and no data
+// uploads: names from lib/downloads.json, dated like the backfill (the manifest's own date on an
+// empty record). Sheets are read from work/<series>/<sheet>/warped_paper.tif when present (DVC),
+// everything else from the store. With --dry-run it prints the release and uploads/fetches nothing. --dry-run prints the release and its zips; --local makes none.
 //
 //   node --env-file=.env.local scripts/publish-downloads.mjs                # needs BLOB_READ_WRITE_TOKEN
 //   ... scripts/publish-downloads.mjs --dry-run                             # lists, prints the plan, uploads nothing
 //   ... scripts/publish-downloads.mjs --local http://127.0.0.1:8787        # manifest for local checking; no token, no requests
 //   ... scripts/publish-downloads.mjs --skip-dvc-check                      # emergencies only
+//   ... scripts/publish-downloads.mjs --release-only [--dry-run]           # a release of what is already published
 //
 // Checking the /data page locally: serve pipeline/data from the tile server, then write a local manifest:
 //
@@ -398,33 +406,52 @@ export function zipReadme(release, kind, memberCount, bytes) {
 
 /**
  * Write a stored (uncompressed, ZIP64-capable) zip of `entries` to `outFile`, in their order,
- * via a .part file. Each file member is hashed as it streams and must match its `sha256`, or the
- * write rejects naming the member and leaves no zip behind.
+ * via a .part file. A member is read from a local `file` or, failing that, fetched from its `url`
+ * (one request at a time: the zip asks for the next member only once the last is written). Each
+ * member is hashed as it streams and must match its `sha256` (and `bytes`, when given), or the
+ * write rejects naming the member and leaves no zip behind; so do a failed fetch and a non-200.
  * @param {string} outFile
- * @param {{ name: string; file?: string; text?: string; sha256?: string; lastModified: Date }[]} entries
+ * @param {{ name: string; file?: string; url?: string; text?: string; sha256?: string; bytes?: number; lastModified: Date }[]} entries
+ * @param {{ fetch?: (url: string) => Promise<Response> }} [options]
  * @returns {Promise<{ bytes: number; sha256: string }>}
  */
-export async function writeZip(outFile, entries) {
+export async function writeZip(outFile, entries, { fetch: fetchFn = fetch } = {}) {
   async function* inputs() {
     for (const e of entries) {
-      if (e.file === undefined) {
+      if (e.file === undefined && e.url === undefined) {
         yield { name: e.name, input: e.text ?? "", lastModified: e.lastModified };
         continue;
       }
       if (!e.sha256) throw new Error(`${e.name}: no sha256 to check it against`);
+      const from = e.file ?? e.url;
       const h = createHash("sha256");
+      let n = 0;
       const checked = new TransformStream({
         transform(chunk, c) {
           h.update(chunk);
+          n += chunk.length;
           c.enqueue(chunk);
         },
         flush() {
           const got = h.digest("hex");
-          if (got !== e.sha256) throw new Error(`${e.name} (${e.file}) has sha256 ${got}, expected ${e.sha256}`);
+          if (got !== e.sha256) throw new Error(`${e.name} (${from}) has sha256 ${got}, expected ${e.sha256}`);
+          if (e.bytes !== undefined && n !== e.bytes) throw new Error(`${e.name} (${from}) is ${n} bytes, expected ${e.bytes}`);
         },
       });
-      const body = Readable.toWeb(createReadStream(e.file, { highWaterMark: 1024 * 1024 })).pipeThrough(checked);
-      yield { name: e.name, input: body, lastModified: e.lastModified };
+      let body;
+      if (e.file !== undefined) {
+        body = Readable.toWeb(createReadStream(e.file, { highWaterMark: 1024 * 1024 }));
+      } else {
+        let res;
+        try {
+          res = await fetchFn(e.url);
+        } catch (err) {
+          throw new Error(`${e.name}: could not fetch ${e.url}: ${err?.message ?? err}`);
+        }
+        if (!res.ok || !res.body) throw new Error(`${e.name}: HTTP ${res.status} from ${e.url}`);
+        body = res.body;
+      }
+      yield { name: e.name, input: body.pipeThrough(checked), lastModified: e.lastModified };
     }
   }
   mkdirSync(path.dirname(outFile), { recursive: true });
@@ -452,7 +479,7 @@ const noon = (date) => new Date(`${date}T12:00:00Z`);
 
 /**
  * One zip's entries: README.txt, LICENSE.txt, CITATION.cff and SHA256SUMS, then the files flat
- * under their versioned names. `info(name)` gives a member's { file, bytes, sha256 }.
+ * under their versioned names. `info(name)` gives a member's { file or url, bytes, sha256 }.
  */
 function releaseZipEntries(release, kind, names, info, license) {
   const lastModified = noon(release.date);
@@ -465,15 +492,19 @@ function releaseZipEntries(release, kind, names, info, license) {
       { name: "LICENSE.txt", text: license, lastModified },
       { name: "CITATION.cff", text: citations(release).cff, lastModified },
       { name: "SHA256SUMS", text: sha256Sums(files), lastModified },
-      ...files.map(({ name, file, sha256 }) => ({ name, file, sha256, lastModified })),
+      ...files.map(({ name, file, url, bytes: b, sha256 }) => ({ name, file, url, bytes: b, sha256, lastModified })),
     ],
   };
 }
 
-/** A hash of a zip's planned entries (names, member sha256s, text bodies, dates): equal plans make equal zips. */
+/**
+ * A hash of a zip's planned entries (names, member sha256s, text bodies, dates): equal plans make
+ * equal zips, whether a member is read locally or from the store.
+ */
 export function zipFingerprint(entries) {
   const sha = (t) => createHash("sha256").update(t).digest("hex");
-  const rows = entries.map((e) => [e.name, e.file === undefined ? `text:${sha(e.text ?? "")}` : `file:${e.sha256}`, e.lastModified.toISOString()]);
+  const isMember = (e) => e.file !== undefined || e.url !== undefined;
+  const rows = entries.map((e) => [e.name, isMember(e) ? `member:${e.sha256}` : `text:${sha(e.text ?? "")}`, e.lastModified.toISOString()]);
   return sha(JSON.stringify(rows));
 }
 
@@ -538,13 +569,104 @@ function argValue(flag) {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
+/** The release a --release-only run makes from the committed manifest: dated as the backfill would be. */
+export function releaseOnlyStep(record, manifest, today) {
+  return releaseStep(record, manifest, 0, today, manifest.generated);
+}
+
+/** Local copies a --release-only run can use: each sheet's warped_paper.tif under work/ (from DVC). */
+export function releaseOnlyLocals(manifest) {
+  const locals = {};
+  for (const [series, s] of Object.entries(manifest.sheets ?? {})) {
+    for (const i of s.items ?? []) locals[i.name] = { root: "work", rel: `${series}/${i.sheet}/warped_paper.tif` };
+  }
+  return locals;
+}
+
+/**
+ * Each zip of a release: its name, member count (and how many are local), member bytes and entries
+ * (see releaseZipEntries). A member is read from its local file when `locals` names one that exists,
+ * else from its published copy at `<base>/<blob path>`. Bytes and sha256 come from the version
+ * history, or for a sidecar from the release's extras and its local size or listed size.
+ */
+export function releaseZips(release, history, { locals, base, listing, license, exists = existsSync, size = (f) => statSync(f).size }) {
+  if (!license) throw new Error("no license text; the release zips need it");
+  const byName = new Map(history.versions.map((v) => [v.name, v]));
+  const extras = new Map(release.extras.map((e) => [e.name, e]));
+  const info = (name) => {
+    const at = locals[name];
+    const file = at ? localPath({ root: at.root, local: at.rel }) : undefined;
+    const local = file !== undefined && exists(file);
+    const v = byName.get(name);
+    const e = extras.get(name);
+    if (!v && !e) throw new Error(`release ${release.id}: no size or sha256 for ${name}`);
+    const series = v ? v.series : e.series;
+    const where = blobPath(series, name);
+    const bytes = v ? v.bytes : local ? size(file) : listing.get(where);
+    if (bytes === undefined) throw new Error(`release ${release.id}: ${name} is neither on disk nor listed on the store`);
+    const sha256 = v ? v.sha256 : e.sha256;
+    return local ? { file, bytes, sha256 } : { url: `${base}/${where}`, bytes, sha256 };
+  };
+  const members = zipMembers(release, history);
+  const names = zipNames(release.id);
+  return Object.fromEntries(ZIP_KINDS.map((kind) => {
+    const { bytes, entries } = releaseZipEntries(release, kind, members[kind], info, license);
+    const fromLocal = entries.filter((x) => x.file !== undefined).length;
+    return [kind, { name: names[kind], memberCount: members[kind].length, fromLocal, bytes, entries }];
+  }));
+}
+
+function printRelease(release, zipPlan) {
+  if (!release) {
+    console.log("release: none (the current set is the last release's)");
+    return;
+  }
+  console.log(`release ${release.id} (${release.date}): ${release.names.length} file(s) and ${release.extras.length} sidecar(s)`);
+  for (const kind of ZIP_KINDS) {
+    const z = zipPlan[kind];
+    console.log(`  ${z.name}: ${z.memberCount} member(s) (${z.fromLocal} from local files, ${z.memberCount - z.fromLocal} from the store), ` +
+      `${z.bytes} bytes of files -> ${releaseZipPath(release.id, z.name)}`);
+  }
+}
+
+/**
+ * Write each zip (or reuse it when its .plan shows the same entries), check it against any copy
+ * the store already has, upload what is missing, confirm by one listing. Returns the record entry.
+ */
+async function publishReleaseZips(release, zipPlan, sizes, { list, send }) {
+  const zips = {};
+  const zipUploads = [];
+  const fetchSum = async (p) => {
+    const res = await fetch(`${BASE}/${p}`, { cache: "no-store" });
+    if (!res.ok) throw new Error(`${p}: HTTP ${res.status}`);
+    return res.text();
+  };
+  for (const kind of ZIP_KINDS) {
+    const z = zipPlan[kind];
+    const out = path.join(DOWNLOADS, "releases", release.id, z.name);
+    const step = await prepareReleaseZip(z, out, releaseZipPath(release.id, z.name), sizes, { fetchSum });
+    zips[kind] = step.zip;
+    zipUploads.push(...step.uploads);
+  }
+  for (const u of zipUploads) await send(u);
+  if (zipUploads.length) {
+    const after = new Map();
+    await listSizes(list, `downloads/releases/${release.id}/`, after, { n: 0 });
+    for (const u of zipUploads) {
+      if (after.get(u.to) !== u.bytes) throw new Error(`${u.to}: listed ${after.get(u.to)} bytes, expected ${u.bytes}`);
+    }
+  }
+  return { ...release, zips };
+}
+
 async function main() {
   const dryRun = process.argv.includes("--dry-run");
+  const releaseOnly = process.argv.includes("--release-only");
   const local = argValue("--local")?.replace(/\/+$/, "");
   const now = today();
-  const index = JSON.parse(readFileSync(path.join(DOWNLOADS, "index.json"), "utf8"));
 
   if (local) {
+    const index = JSON.parse(readFileSync(path.join(DOWNLOADS, "index.json"), "utf8"));
     const p = plan(index, { files: {}, sheets: {} }, { versions: [] }, {}, new Map(), now, { local: true });
     writeJson(MANIFEST, build(index, p.files, p.sheets, now, local, true));
     console.log(`wrote ${MANIFEST} for ${local} (${Object.keys(p.files).length} files); nothing uploaded. Don't commit it.`);
@@ -563,11 +685,30 @@ async function main() {
   const bad = manifestProblem(manifest);
   if (bad) throw new Error(`refusing to publish: ${bad}`);
   const history = readJson(HISTORY, { versions: [] });
-  const numbers = readJson(NUMBERS, {});
+  const record = readJson(RELEASES, { releases: [] });
   const { list, put, copy, createMultipartUploader } = await import("@vercel/blob");
+  const send = (u) => upload({ put, createMultipartUploader }, u);
   const sizes = new Map();
   const counter = { n: 0 };
   await listSizes(list, "downloads/", sizes, counter);
+
+  if (releaseOnly) {
+    // A release of what is already published: members come from the store (or a local copy).
+    console.log(`listing: ${sizes.size} names under downloads/ in ${counter.n} request(s)`);
+    const release = releaseOnlyStep(record, manifest, now);
+    const zipPlan = release
+      ? releaseZips(release, history, { locals: releaseOnlyLocals(manifest), base: manifest.base ?? BASE, listing: sizes, license: manifest.license })
+      : null;
+    printRelease(release, zipPlan);
+    if (!release || dryRun) return;
+    const entry = await publishReleaseZips(release, zipPlan, sizes, { list, send });
+    writeJsonAtomic(RELEASES, { releases: [...record.releases, entry] });
+    console.log(`published release ${entry.id}; commit lib/download-releases.json, then deploy.`);
+    return;
+  }
+
+  const index = JSON.parse(readFileSync(path.join(DOWNLOADS, "index.json"), "utf8"));
+  const numbers = readJson(NUMBERS, {});
   await listSizes(list, "dvc/files/md5/", sizes, counter);
 
   index.sidecars = hashSidecars(index);
@@ -577,30 +718,22 @@ async function main() {
   const next = build(index, p.files, p.sheets, now, BASE);
 
   // The release this run makes (null when the current set is the last release's), and its zips.
-  const record = readJson(RELEASES, { releases: [] });
   const release = releaseStep(record, next, p.newVersions.length, now, manifest.generated);
-  const zipPlan = release ? releaseZips(release, { versions: [...history.versions, ...p.newVersions] }, p.locals, index) : null;
+  const zipPlan = release
+    ? releaseZips(release, { versions: [...history.versions, ...p.newVersions] }, { locals: p.locals, base: BASE, listing: sizes, license: index.license })
+    : null;
 
   console.log(`listing: ${sizes.size} names under downloads/ (releases included) and dvc/files/md5/ in ${counter.n} request(s)`);
   console.log(`files: ${Object.keys(p.files).length}, sheets: ${Object.values(p.sheets).reduce((n, x) => n + x.items.length, 0)}, new versions: ${p.newVersions.length}`);
   console.log(`to upload: ${p.uploads.length} file(s), ${bytes} bytes; to copy on the store: ${p.copies.length}`);
   console.log(`requests: ${requests} (listing, uploads, copies and one confirming listing)`);
-  if (release) {
-    console.log(`release ${release.id} (${release.date}): ${release.names.length} file(s) and ${release.extras.length} sidecar(s)`);
-    for (const kind of ZIP_KINDS) {
-      const z = zipPlan[kind];
-      console.log(`  ${z.name}: ${z.memberCount} member(s), ${z.bytes} bytes of files -> ${releaseZipPath(release.id, z.name)}`);
-    }
-  } else {
-    console.log("release: none (the current set is the last release's)");
-  }
+  printRelease(release, zipPlan);
   if (dryRun) {
     for (const u of p.uploads) console.log(`would upload ${u.local ?? "(checksum text)"} -> ${u.to}`);
     for (const c of p.copies) console.log(`would copy ${c.from} -> ${c.to}`);
     return;
   }
 
-  const send = (u) => upload({ put, createMultipartUploader }, u);
   for (const u of p.uploads) {
     // The index is what named this file (and its hash); stop before it goes up under the wrong name.
     if (u.local) {
@@ -624,34 +757,7 @@ async function main() {
     }
   }
 
-  let releaseEntry = null;
-  if (release) {
-    // Each zip is written to disk (or reused when its .plan shows the same entries), checked
-    // against any copy the store already has, then uploaded with its .sha256 where missing.
-    const zips = {};
-    const zipUploads = [];
-    const fetchSum = async (p) => {
-      const res = await fetch(`${BASE}/${p}`, { cache: "no-store" });
-      if (!res.ok) throw new Error(`${p}: HTTP ${res.status}`);
-      return res.text();
-    };
-    for (const kind of ZIP_KINDS) {
-      const z = zipPlan[kind];
-      const out = path.join(DOWNLOADS, "releases", release.id, z.name);
-      const step = await prepareReleaseZip(z, out, releaseZipPath(release.id, z.name), sizes, { fetchSum });
-      zips[kind] = step.zip;
-      zipUploads.push(...step.uploads);
-    }
-    for (const u of zipUploads) await send(u);
-    if (zipUploads.length) {
-      const after = new Map();
-      await listSizes(list, `downloads/releases/${release.id}/`, after, { n: 0 });
-      for (const u of zipUploads) {
-        if (after.get(u.to) !== u.bytes) throw new Error(`${u.to}: listed ${after.get(u.to)} bytes, expected ${u.bytes}`);
-      }
-    }
-    releaseEntry = { ...release, zips };
-  }
+  const releaseEntry = release ? await publishReleaseZips(release, zipPlan, sizes, { list, send }) : null;
 
   // Order matters: numbers, then history, then releases, then the manifest last. A crash leaves the
   // manifest behind, so a rerun still sees work to do (and plan() re-records any version history lacks).
@@ -661,33 +767,6 @@ async function main() {
   if (!sameManifest(manifest, next)) writeJsonAtomic(MANIFEST, next);
   console.log(`published ${p.newVersions.length} new version(s)${releaseEntry ? ` and release ${releaseEntry.id}` : ""}; ` +
     "commit lib/downloads.json, lib/download-versions.json, lib/download-releases.json and lib/sheet-numbers.json, then deploy.");
-}
-
-/**
- * Each zip of a release: its name, member count, member bytes and entries (see releaseZipEntries).
- * Members are read from the local outputs (`locals`); bytes and sha256 come from the version history,
- * or for a sidecar from the release's extras and the index's sidecar sizes.
- */
-function releaseZips(release, history, locals, index) {
-  if (!index.license) throw new Error("index.json has no license text; the release zips need it");
-  const byName = new Map(history.versions.map((v) => [v.name, v]));
-  const extras = new Map(release.extras.map((e) => [e.name, e]));
-  const info = (name) => {
-    const at = locals[name];
-    if (!at) throw new Error(`release ${release.id}: ${name} has no local file`);
-    const file = localPath({ root: at.root, local: at.rel });
-    const v = byName.get(name);
-    if (v) return { file, bytes: v.bytes, sha256: v.sha256 };
-    const side = index.sidecars?.[at.rel];
-    if (!extras.has(name) || !side) throw new Error(`release ${release.id}: no size or sha256 for ${name}`);
-    return { file, bytes: side.bytes, sha256: extras.get(name).sha256 };
-  };
-  const members = zipMembers(release, history);
-  const names = zipNames(release.id);
-  return Object.fromEntries(ZIP_KINDS.map((kind) => {
-    const { bytes, entries } = releaseZipEntries(release, kind, members[kind], info, index.license);
-    return [kind, { name: names[kind], memberCount: members[kind].length, bytes, entries }];
-  }));
 }
 
 /** One upload: a text body, a small file in one request, or a large one in parts sent one at a time. */
