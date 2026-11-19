@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { versionedName } from "../lib/downloadNames.mjs";
 import type { Manifest, Version } from "../lib/downloadRows";
-import { RELEASE_ID, currentNames, nextReleaseId, releaseChanged, sha256Sums, zipMembers, zipNames } from "../lib/releases.mjs";
+import downloads from "../lib/downloads.json";
+import versionHistory from "../lib/download-versions.json";
+import { allReleases, findRelease, isLatest, previousRelease } from "../lib/releaseData";
+import { RELEASE_ID,currentNames, nextReleaseId, releaseChanged, sha256Sums, zipMembers, zipNames } from "../lib/releases.mjs";
 
 const DATE = "2026-11-18";
 const ver = (series: string, layer: string, fmt: string, hash8: string): Version => {
@@ -98,5 +101,60 @@ describe("zipMembers refusals", () => {
 describe("sha256Sums", () => {
   it("writes one sha256sum line per entry", () => {
     expect(sha256Sums([{ name: "a.tif", sha256: "ab" }])).toBe("ab  a.tif\n");
+  });
+});
+
+describe("release data loader", () => {
+  const z = { name: "z", bytes: 1, sha256: "x" };
+  const rel = (id: string) => ({ id, date: id.slice(0, 10), names: [], extras: [], zips: { all: z, geojson: z, gpkg: z, shp: z } });
+  const rec = { releases: [rel("2026-11-18"), rel("2026-11-18-2"), rel("2026-12-01")] };
+
+  it("finds releases by id, with latest as the newest", () => {
+    expect(findRelease("2026-11-18-2", rec)?.id).toBe("2026-11-18-2");
+    expect(findRelease("latest", rec)?.id).toBe("2026-12-01");
+    expect(findRelease("2026-01-01", rec)).toBeUndefined();
+  });
+
+  it("gives the release before, none for the first", () => {
+    expect(previousRelease("2026-12-01", rec)?.id).toBe("2026-11-18-2");
+    expect(previousRelease("latest", rec)?.id).toBe("2026-11-18-2");
+    expect(previousRelease("2026-11-18", rec)).toBeUndefined();
+    expect(previousRelease("nope", rec)).toBeUndefined();
+  });
+
+  it("knows the newest", () => {
+    expect(isLatest("2026-12-01", rec)).toBe(true);
+    expect(isLatest("2026-11-18", rec)).toBe(false);
+  });
+});
+
+describe("committed releases", () => {
+  const rs = allReleases();
+
+  it("ends with the current names and sidecars", () => {
+    const { names, extras } = currentNames(downloads);
+    expect(rs.at(-1)!.names).toEqual(names);
+    expect(rs.at(-1)!.extras).toEqual(extras);
+  });
+
+  it("has unique valid ids and dates that do not go backwards", () => {
+    expect(new Set(rs.map((r) => r.id)).size).toBe(rs.length);
+    for (const r of rs) expect(r.id).toMatch(RELEASE_ID);
+    expect(rs.map((r) => r.date)).toEqual([...rs.map((r) => r.date)].sort());
+  });
+
+  it("names only files in the version history", () => {
+    const known = new Set(versionHistory.versions.map((v) => v.name));
+    for (const r of rs) for (const n of r.names) expect(known.has(n), n).toBe(true);
+  });
+
+  it("has all four zips with name, bytes and sha256", () => {
+    for (const r of rs) {
+      for (const k of ["all", "geojson", "gpkg", "shp"] as const) {
+        expect(r.zips[k].name).toBeTruthy();
+        expect(r.zips[k].bytes).toBeGreaterThan(0);
+        expect(r.zips[k].sha256).toMatch(/^[0-9a-f]{64}$/);
+      }
+    }
   });
 });
