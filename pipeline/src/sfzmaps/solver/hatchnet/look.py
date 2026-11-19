@@ -7,9 +7,12 @@
             px a square)
   compare   the zoom side by side: the target (today's blocks placed on the scan, as `data.look_targets` draws it)
             and what was learned
-  districts the learned district evidence: every px inside the neatline tinted in its district argmax's colour
-            (DISTRICT_BGR), the tint's strength the px's learned pooling weight (`weight_strength`: strong where the
-            px counts most in its lot, pale where it counts little); whole, and a zoom
+  district_lots  the learned districts by lot: every lot in its pooled district's colour (DISTRICT_BGR), at opacity =
+            its pooled probability, multiplied into the scan so the print stays readable; whole, and a zoom
+  districts the learned per-px evidence: every px inside the neatline tinted in its own district argmax's colour, the
+            tint's strength the px's learned pooling weight (`weight_strength`: strong where the px counts most in its
+            lot, pale where it is discounted, so its argmax hardly counts); the banner gives the lots' weight-mass
+            shares; whole, and a zoom
 
 Nothing here is used by the reading: the pictures only show it.
 """
@@ -275,33 +278,79 @@ def _key(width: int, scale: float) -> np.ndarray:
     return row
 
 
-DISTRICT_LEGEND = ["colour: each px's district argmax; strength: its learned pooling weight",
-                   "strong = counts most in its lot, pale = counts little, middle = median lot px",
-                   "street px are in no lot (colour never trained); grey: outside the neatline"]
+def _shares(shares) -> str:
+    return ", ".join(f"{n} {100 * float(v):.1f}%" for n, v in zip(model.NAMES, shares))
 
 
-def districts(sheet: data.SheetRasters, argmax: np.ndarray, weight: np.ndarray, out: Path, at=None,
-              note: str = "") -> list[Path]:
-    """Write the per-px district evidence over the scan into the folder `out`: districts_<sheet>_whole.png (the scan's
-    own px) and, with `at` = (y0, x0), districts_<sheet>_zoom.png (data.ZOOM_SIDE px from there, at data.ZOOM x).
-    Returns the paths."""
-    out = Path(out)
+def _write(base: np.ndarray, sheet: data.SheetRasters, out: Path, name: str, at, head: list[str],
+           legend: list[str]) -> list[Path]:
+    """Write districts_<sheet>_<name>_whole.png (the scan's own px) and, with `at` = (y0, x0), ..._zoom.png
+    (data.ZOOM_SIDE px from there, at data.ZOOM x), each under the colour key and a banner."""
     out.mkdir(parents=True, exist_ok=True)
-    base = np.round(district_tint(sheet, argmax, weight)).astype(np.uint8)
-    crop = np.asarray(sheet.crop, bool)
-    share = np.bincount(argmax[crop].ravel(), minlength=len(model.NAMES)) / max(int(crop.sum()), 1)
-    shares = ", ".join(f"{n} {100 * s:.0f}%" for n, s in zip(model.NAMES, share))
-    head = f"{sheet.sheet}  {sheet.ft_per_px:.2f} ft/px  per-px district evidence  {note}"
-    whole = _banner(base, [head, f"argmax share of the neatline's px: {shares}"] + DISTRICT_LEGEND, 1.6)
-    f = out / f"districts_{sheet.sheet}_whole.png"
+    whole = _banner(base, head + legend, 1.6)
+    f = out / f"districts_{sheet.sheet}_{name}_whole.png"
     cv2.imwrite(str(f), np.vstack([_key(whole.shape[1], 1.6), whole]))
     got = [f]
     if at is not None:
         w = _window(sheet, at)
-        zoom = _zoom(base, w)
         where = f"zoom x{data.ZOOM}: scan px x {w[1]}-{w[1] + w[2]}, y {w[0]}-{w[0] + w[2]} (upright)"
-        zoom = _banner(zoom, [f"{sheet.sheet}  {note}", where] + DISTRICT_LEGEND, 1.0)
-        g = out / f"districts_{sheet.sheet}_zoom.png"
+        zoom = _banner(_zoom(base, w), head + [where] + legend, 1.0)
+        g = out / f"districts_{sheet.sheet}_{name}_zoom.png"
         cv2.imwrite(str(g), np.vstack([_key(zoom.shape[1], 1.0), zoom]))
         got.append(g)
     return got
+
+
+DISTRICT_LEGEND = ["colour: each px's own district argmax; strength: its learned pooling weight",
+                   "strong = counts most in its lot; pale = discounted: its colour hardly counts",
+                   "px in no lot (streets; areas another sheet labels): never trained; grey: off the neatline"]
+
+
+def districts(sheet: data.SheetRasters, argmax: np.ndarray, weight: np.ndarray, out: Path, at=None,
+              note: str = "", mass=None) -> list[Path]:
+    """The per-px district evidence over the scan (`district_tint`), into the folder `out`:
+    districts_<sheet>_px_whole.png and, with `at`, districts_<sheet>_px_zoom.png.  `mass`: the weight-mass shares of the
+    sheet's lots (sum over lots of sum_px softmax_lot(weight)_px p_px, over the lots), for the banner.  Returns the
+    paths."""
+    base = np.round(district_tint(sheet, argmax, weight)).astype(np.uint8)
+    head = [f"{sheet.sheet}  {sheet.ft_per_px:.2f} ft/px  per-px district evidence  {note}"]
+    if mass is not None:
+        head.append(f"weight-mass shares of the sheet's lots: {_shares(mass)}")
+    return _write(base, sheet, Path(out), "px", at, head, DISTRICT_LEGEND)
+
+
+LOT_INK = 0.45                     # ink drawn this grey under the lots' multiply blend, so solid C ink shows its colour
+                                   # (dark) and hatch lines stay readable (a display choice)
+
+
+def district_lots_tint(sheet: data.SheetRasters, code: np.ndarray, prob: np.ndarray) -> np.ndarray:
+    """The scan (ink drawn LOT_INK grey) with every lot px in its lot's pooled district colour at opacity = the lot's
+    pooled probability, in a multiply blend (colour x scan, so ink stays darker than paper and the print readable); px
+    of no lot as scanned; grey outside the neatline (float32 BGR).  `code` (h, w): the lot's district index, -1 none;
+    `prob` (h, w)."""
+    img = _grey(LOT_INK + (1.0 - LOT_INK) * sheet.ink)
+    colours = np.array([DISTRICT_BGR[n] for n in model.NAMES], np.float32)
+    on = code >= 0
+    a = prob[on].astype(np.float32)[:, None]
+    img[on] = img[on] * (1 - a) + (colours[code[on]] * img[on] / 255.0) * a
+    crop = np.asarray(sheet.crop, bool)
+    ga = data.ALPHA[data.UNKNOWN]
+    img[~crop] = img[~crop] * (1 - ga) + np.array(data.TINT[data.UNKNOWN], np.float32) * ga
+    return img
+
+
+LOTS_LEGEND = ["each lot: its pooled district (its px on this sheet, the learned weights softmaxed over the lot)",
+               "opacity = the pooled probability (multiply blend over the scan: ink stays darker)",
+               "px in no lot (streets; areas another sheet labels): as scanned; grey: off the neatline"]
+
+
+def district_lots(sheet: data.SheetRasters, code: np.ndarray, prob: np.ndarray, out: Path, at=None,
+                  note: str = "", shares=None, lots: int = 0) -> list[Path]:
+    """Every lot in its pooled district (`district_lots_tint`), into the folder `out`: districts_<sheet>_lots_whole.png
+    and, with `at`, districts_<sheet>_lots_zoom.png.  `shares`: the share of the sheet's `lots` pooled to each district,
+    for the banner.  Returns the paths."""
+    base = np.round(district_lots_tint(sheet, code, prob)).astype(np.uint8)
+    head = [f"{sheet.sheet}  {sheet.ft_per_px:.2f} ft/px  pooled lot districts  {note}"]
+    if shares is not None:
+        head.append(f"the sheet's {lots} lots pooled to: {_shares(shares)}")
+    return _write(base, sheet, Path(out), "lots", at, head, LOTS_LEGEND)

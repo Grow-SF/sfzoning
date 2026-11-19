@@ -634,16 +634,6 @@ def predict_streets(net: model.HatchNet, sheet: data.SheetRasters, tile: int = P
     return _predict(net, sheet, tile, lambda o: torch.sigmoid(o[0, model.STREET:model.STREET + 1]), 1)[0]
 
 
-def predict_districts(net: model.HatchNet, sheet: data.SheetRasters,
-                      tile: int = PRED_TILE) -> tuple[np.ndarray, np.ndarray]:
-    """Every px's district argmax (uint8, model.NAMES order) and weight logit (float32) on a sheet's page, as
-    `predict_streets` predicts (one pass over the whole page)."""
-    def take(o):
-        return torch.cat([o[0, model.DISTRICTS].argmax(0, keepdim=True).float(), o[0, model.WEIGHT:model.WEIGHT + 1]])
-    a = _predict(net, sheet, tile, take, 2)
-    return a[0].astype(np.uint8), a[1]
-
-
 def blocks(street_prob: np.ndarray, crop: np.ndarray) -> np.ndarray:
     """The printed blocks (int32: 0 none, 1.. each block): the 4-connected areas where `street_prob` is at most 1/2,
     inside the neatline `crop`."""
@@ -911,21 +901,78 @@ def _codes(s: pd.Series, what: str) -> np.ndarray:
     return out
 
 
-def read_noise(lots: pd.DataFrame, train_quarters) -> np.ndarray:
-    """The read-noise matrix (6 x 6, model.NAMES order): T[j, k] = P(read k | true j), counted from the owner's
-    random-page answers (`stratum` random) of lots in `train_quarters` that the reader read, against their reads, plus
-    one per cell (a uniform prior), each row over its sum.  The likely-wrong and least-sure pages were chosen where the
-    reader was probably wrong, so they would overstate its errors: they are not counted.  No such answer: the identity
-    (the reads taken as they are)."""
+def read_counts(lots: pd.DataFrame, train_quarters) -> np.ndarray:
+    """(6, 6) int64: n[j, k], the owner's random-page answers (`stratum` random) j of lots in `train_quarters` that the
+    reader read k.  The likely-wrong and least-sure pages were chosen where the reader was probably wrong, so they would
+    overstate its errors: they are not counted."""
     m = ((lots["stratum"] == "random") & lots["quarter"].isin(list(train_quarters))).to_numpy()
     j, k = _codes(lots["answer"], "answers")[m], _codes(lots["read_code"], "reads")[m]
     ok = (j >= 0) & (k >= 0)
-    n = len(model.NAMES)
-    if not ok.any():
-        return np.eye(n)
-    t = np.ones((n, n))
-    np.add.at(t, (j[ok], k[ok]), 1.0)
-    return t / t.sum(1, keepdims=True)
+    n = np.zeros((len(model.NAMES), len(model.NAMES)), np.int64)
+    np.add.at(n, (j[ok], k[ok]), 1)
+    return n
+
+
+def _prior_mean(a: float, k: int) -> np.ndarray:
+    """(k, k): row j's prior mean, a on the diagonal and (1 - a) / (k - 1) off it."""
+    m = np.full((k, k), (1.0 - a) / (k - 1))
+    np.fill_diagonal(m, a)
+    return m
+
+
+def _prior_nll(x: np.ndarray, counts: np.ndarray) -> tuple[float, np.ndarray]:
+    """The negative pooled Dirichlet-multinomial log marginal likelihood of the rows of `counts` (..., k, k) (row j's
+    true district is j) and its gradient, at x = (logit a, log alpha): per row, log G(alpha) - log G(N + alpha) +
+    sum_k [log G(n_k + alpha m_k) - log G(alpha m_k)] (the multinomial coefficients are constants, left out)."""
+    from scipy.special import digamma, gammaln
+    k = counts.shape[-1]
+    a, alpha = 1.0 / (1.0 + math.exp(-x[0])), math.exp(x[1])
+    n = counts.reshape(-1, k, k).astype(np.float64)
+    rows = n.sum(-1)                                                      # (r, k) answers per row
+    m = _prior_mean(a, k)[None]
+    beta = alpha * m
+    ll = (gammaln(alpha) - gammaln(rows + alpha)).sum() + (gammaln(n + beta) - gammaln(beta)).sum()
+    dpsi = digamma(n + beta) - digamma(beta)                              # d/d(beta) of each cell's term
+    d_alpha = (digamma(alpha) - digamma(rows + alpha)).sum() + (dpsi * m).sum()
+    diag = np.eye(k, dtype=bool)[None]
+    d_a = alpha * (dpsi * diag).sum() - alpha / (k - 1) * (dpsi * ~diag).sum()
+    grad = np.array([d_a * a * (1.0 - a), d_alpha * alpha])               # through the transform
+    return -float(ll), -grad
+
+
+def fit_read_prior(counts: np.ndarray, start=(0.0, 0.0)) -> tuple[float, float]:
+    """(a, alpha): the Dirichlet prior of every row of T (`posterior_t`), row j's mean a on the diagonal and
+    (1 - a) / (K - 1) off it, its strength alpha, fitted by maximising the pooled Dirichlet-multinomial marginal
+    likelihood of the answer rows `counts` (..., K, K) (each K x K block's row j is answers of true district j; a row
+    with no answer adds nothing).  Optimiser: L-BFGS-B (scipy) with the analytic gradient on the unbounded transform
+    (logit a, log alpha), so a stays in (0, 1) and alpha in (0, inf), from `start` (the transform's origin: a = 1/2,
+    alpha = 1; the optimum doesn't depend on it, test_prior_recovered).  Raises ValueError with no answers or when the
+    optimiser does not converge."""
+    from scipy.optimize import minimize
+    counts = np.asarray(counts)
+    if counts.sum() <= 0:
+        raise ValueError("no answers to fit the read prior on")
+    res = minimize(_prior_nll, np.asarray(start, np.float64), args=(counts,), jac=True, method="L-BFGS-B")
+    if not res.success or not np.all(np.isfinite(res.x)):
+        raise ValueError(f"the read prior's fit did not converge: {res.message}")
+    return 1.0 / (1.0 + math.exp(-res.x[0])), math.exp(res.x[1])
+
+
+def posterior_t(counts: np.ndarray, a: float, alpha: float) -> np.ndarray:
+    """T's posterior mean under the prior: T[j, k] = (n_jk + alpha m_jk) / (n_j + alpha)."""
+    k = counts.shape[-1]
+    return (counts + alpha * _prior_mean(a, k)) / (counts.sum(1, keepdims=True) + alpha)
+
+
+def read_noise(lots: pd.DataFrame, train_quarters) -> np.ndarray:
+    """The read-noise matrix (6 x 6, model.NAMES order): T[j, k] = P(read k | true j), the posterior mean
+    (`posterior_t`) of the training quarters' random-page answers against their reads (`read_counts`) under the
+    Dirichlet prior fitted to them (`fit_read_prior`; ruling R6).  A district with no answers takes the prior's mean
+    (a on the diagonal); one with many, its own rates.  No answers at all: the identity (the reads as they are)."""
+    n = read_counts(lots, train_quarters)
+    if not n.sum():
+        return np.eye(len(model.NAMES))
+    return posterior_t(n, *fit_read_prior(n))
 
 
 def _segment_lse(v: torch.Tensor, idx: torch.Tensor, n: int) -> torch.Tensor:
@@ -1011,6 +1058,7 @@ class Labels:
     quarter: np.ndarray         # the lot's quarter, from the lot table ("" a swatch)
     q: str | None               # the quarter withheld
     t: np.ndarray               # the read-noise matrix
+    prior: tuple[float, float] | None = None    # T's fitted prior (a, alpha) (`fit_read_prior`); None: T the identity
 
     @property
     def log_t(self) -> torch.Tensor:
@@ -1021,7 +1069,8 @@ class Labels:
 def fold_labels(d: DistrictData, q: str | None, with_answers: bool) -> Labels:
     """The labels of the fold withholding quarter `q` (None: none): every lot of the other quarters with an owner
     answer (`with_answers`) is an ANSWER, else with a read a READ; quarter q's lots have none; the swatches are
-    SWATCH.  T: `read_noise` of the other quarters with answers, else the identity."""
+    SWATCH.  T: with answers, the posterior mean of the other quarters' random-page answers under the prior fitted to
+    them (`read_noise`); else the identity."""
     if q is not None and q not in paths.QUARTERS:
         raise ValueError(f"a fold withholds one of {paths.QUARTERS} or none, not {q!r}")
     train_q = [x for x in paths.QUARTERS if x != q]
@@ -1038,9 +1087,11 @@ def fold_labels(d: DistrictData, q: str | None, with_answers: bool) -> Labels:
     for i, (_, c, _) in enumerate(d.swatches):
         kind[n + i], code[n + i] = SWATCH, CODE[c]
     box_px = [(x1 - x0) * (y1 - y0) for _, _, (x0, y0, x1, y1) in d.swatches]
-    t = read_noise(d.lots, train_q) if with_answers else np.eye(len(model.NAMES))
+    counts = read_counts(d.lots, train_q)
+    prior = fit_read_prior(counts) if with_answers and counts.sum() else None
+    t = posterior_t(counts, *prior) if prior else np.eye(len(model.NAMES))       # = read_noise(d.lots, train_q)
     return Labels(kind, code, np.r_[d.px, np.asarray(box_px, np.int64)].astype(np.int64),
-                  np.r_[quarter, np.array([""] * s, object)].astype(object), q, t)
+                  np.r_[quarter, np.array([""] * s, object)].astype(object), q, t, prior)
 
 
 def _unit_map(d: DistrictData, labels: Labels, held: bool) -> np.ndarray:
@@ -1225,7 +1276,7 @@ def _measure_districts(net: model.HatchNet, held, labels: Labels, device: str, r
 class FittedFold:
     """A trained fold: the weights kept (CPU) and their step, the curve (one row per held-out measurement), the device,
     the seconds, the read-noise matrix used, the labelled lot units trained on per quarter and the swatch units (the
-    leak record), and the last step's weights."""
+    leak record), the last step's weights, and T's fitted prior (a, alpha) (None: T the identity)."""
     q: str | None
     with_answers: bool
     state_dict: dict
@@ -1237,6 +1288,10 @@ class FittedFold:
     units_per_quarter: dict
     swatch_units: int
     last_state_dict: dict | None = None
+    prior: tuple[float, float] | None = None
+
+    def prior_dict(self) -> dict | None:
+        return {"a": self.prior[0], "alpha": self.prior[1]} if self.prior else None
 
 
 def fit_fold(d: DistrictData, q: str | None, with_answers: bool, seed: int = 0, device: str | None = None,
@@ -1302,16 +1357,17 @@ def fit_fold(d: DistrictData, q: str | None, with_answers: bool, seed: int = 0, 
         raise RuntimeError(f"leak: {per_quarter[q]} lot units of the withheld quarter {q} were trained on")
     k = select_checkpoint([c["val_loss"] for c in checkpoints])
     return FittedFold(q, with_answers, checkpoints[k]["state_dict"], checkpoints[k]["step"], curve, str(device),
-                      time.perf_counter() - t0, labels.t, per_quarter, swatch_units, checkpoints[-1]["state_dict"])
+                      time.perf_counter() - t0, labels.t, per_quarter, swatch_units, checkpoints[-1]["state_dict"],
+                      labels.prior)
 
 
-def train_fold(q: str | None, with_answers: bool, seed: int = 0, data: DistrictData | None = None,
+def train_fold(q: str | None, with_answers: bool, seed: int = 0, d: DistrictData | None = None,
                device: str | None = None, recipe: DistrictRecipe = DistrictRecipe(), init: dict | None = None,
                series: str = "1921") -> dict:
     """The weights (`fit_fold`, the step kept, on the CPU) of the fold withholding quarter `q` (None: all quarters),
-    from `data` (default: `load_district_data(series)`), started from `init` (None: a new network)."""
-    data = data if data is not None else load_district_data(series, recipe.val_cell)
-    return fit_fold(data, q, with_answers, seed, device, recipe, init).state_dict
+    from `d` (default: `load_district_data(series)`), started from `init` (None: a new network)."""
+    d = d if d is not None else load_district_data(series, recipe.val_cell)
+    return fit_fold(d, q, with_answers, seed, device, recipe, init).state_dict
 
 
 def load_district_data(series: str, cell: int = VAL_CELL) -> DistrictData:
@@ -1334,6 +1390,7 @@ def save_district_model(f: Path, fitted: FittedFold, recipe: DistrictRecipe, see
                 "curve": fitted.curve, "recipe": dataclasses.asdict(recipe), "seed": seed, "device": fitted.device,
                 "fold": fitted.q, "with_answers": fitted.with_answers, "read_noise": fitted.t.tolist(),
                 "units_per_quarter": fitted.units_per_quarter, "swatch_units": fitted.swatch_units, "init": init,
+                "read_prior": fitted.prior_dict(),
                 "torch": str(torch.__version__)}, f)
     return f
 
@@ -1381,7 +1438,8 @@ def run_districts(series: str, root: Path | None = None, init: Path = STREETS_IN
         summary["runs"][name] = {
             "fold": q, "with_answers": with_answers, "model": str(f), "device": fitted.device,
             "best_step": fitted.best_step, "kept": kept, "curve": fitted.curve, "seconds": fitted.seconds,
-            "read_noise": fitted.t.tolist(), "units_per_quarter": fitted.units_per_quarter,
+            "read_noise": fitted.t.tolist(), "read_prior": fitted.prior_dict(),
+            "units_per_quarter": fitted.units_per_quarter,
             "swatch_units": fitted.swatch_units, "state_sha256": state_digest(fitted.state_dict),
             "lots_trained": int(trained.sum()), "answers_trained": int((trained & (kind == ANSWER)).sum()),
             "lots_held_out": int(held.sum()), "answers_held_out": int((held & (kind == ANSWER)).sum()),
@@ -1395,10 +1453,25 @@ def run_districts(series: str, root: Path | None = None, init: Path = STREETS_IN
     return summary
 
 
+def pool_sheet(net: model.HatchNet, sheet: data.SheetRasters, tile: int = PRED_TILE):
+    """Every px's district argmax (uint8) and weight logit (float32) on a sheet's page (one pass, `_predict`), and each
+    lot's pooled log-probabilities over its px on this sheet (`lot_logprob`; (lots, 6), -inf rows for lots with no px
+    here)."""
+    k = len(model.NAMES)
+    o = _predict(net, sheet, tile, lambda t: t[0, model.DISTRICTS.start:], k + 1)
+    m = sheet.lot >= 0
+    n = int(sheet.lot.max()) + 1 if m.any() else 0
+    lp = lot_logprob(torch.from_numpy(np.ascontiguousarray(o[:k][:, m].T)), torch.from_numpy(o[k][m]),
+                     torch.from_numpy(sheet.lot[m].astype(np.int64)), n)
+    return o[:k].argmax(0).astype(np.uint8), o[k], lp.numpy()
+
+
 def look_districts(series: str, root: Path | None = None, sheets=DISTRICT_LOOK, name: str = DELIVERABLE,
                    device: str | None = None) -> list[Path]:
-    """The pictures of the model `name` (`look.districts`): each sheet's per-px district argmax over the scan, the
-    learned weight as the tint's strength, whole and (where `sheets` gives a top-left) zoomed, into root/look."""
+    """The pictures of the model `name`, into root/look, whole and (where `sheets` gives a top-left) zoomed: every lot
+    in its pooled district at opacity = its pooled probability (`look.district_lots`), and the per-px evidence with the
+    weight as the tint's strength and the lots' weight-mass shares (`look.districts`).  Lots are pooled over their px on
+    the sheet drawn."""
     from sfzmaps.solver.hatchnet import look
     root = Path(root) if root is not None else DISTRICTS_ROOT
     device = device or default_device()
@@ -1408,7 +1481,16 @@ def look_districts(series: str, root: Path | None = None, sheets=DISTRICT_LOOK, 
         net, saved = load_model(root / "models" / f"{name}.pt", device)
         for sheet, at in sheets.items():
             r = data.read_rasters(folder / f"{sheet}.npz")
-            arg, wgt = predict_districts(net, r)
+            arg, wgt, lp = pool_sheet(net, r)
+            here = np.isfinite(lp[:, 0])
+            p = np.exp(lp[here].astype(np.float64))
+            code, prob = np.full(len(lp), -1, np.int64), np.zeros(len(lp), np.float32)
+            code[here], prob[here] = p.argmax(1), p.max(1)
+            lot = np.maximum(r.lot, 0)
+            on = r.lot >= 0
             note = f"model {name}: kept step {saved['step']} of {saved['recipe']['steps']}"
-            out += look.districts(r, arg, wgt, root / "look", at, note)
+            shares = np.bincount(p.argmax(1), minlength=len(model.NAMES)) / max(len(p), 1)
+            out += look.district_lots(r, np.where(on, code[lot], -1), np.where(on, prob[lot], 0.0), root / "look", at,
+                                      note, shares, len(p))
+            out += look.districts(r, arg, wgt, root / "look", at, note, p.mean(0) if len(p) else None)
     return out

@@ -113,7 +113,7 @@ def perturb(lots: pd.DataFrame, which: np.ndarray, seed: int, reads: bool = True
 
 def fit(lots, q, with_answers, rasters, boxes):
     d = train.district_data(rasters, lots, boxes, TINY.val_cell)
-    return train.train_fold(q, with_answers, seed=0, data=d, device="cpu", recipe=TINY)
+    return train.train_fold(q, with_answers, seed=0, d=d, device="cpu", recipe=TINY)
 
 
 def same(a: dict, b: dict) -> bool:
@@ -122,27 +122,68 @@ def same(a: dict, b: dict) -> bool:
 
 # --- the read-noise matrix ------------------------------------------------------------------------------------------
 
-def test_read_noise_counts():
-    """Random-page answers 1R read as 1R three times and as 2R once: T's 1R row is those counts plus one per cell.
-    Answers on other pages, of other quarters, or of lots with no read don't count; the other rows, with no answers,
-    are the uniform prior."""
+def test_read_counts_random_training_quarters_only():
+    """T is counted from random-page answers of lots in the training quarters that have a read: answers on other pages,
+    of other quarters, or of lots with no read don't count.  No answers to count: T is the identity."""
     rows = [("nw", "random", "1R", "1R")] * 3 + [("ne", "random", "1R", "2R")]
     rows += [("nw", "likely", "1R", "C"), ("nw", "lowconf", "C", "2R"), ("se", "random", "1R", "C"),
              ("nw", "random", "1R", ""), ("nw", "", "", "2R")]
     lots = pd.DataFrame(rows, columns=["quarter", "stratum", "answer", "read_code"])
-    t = train.read_noise(lots, ["nw", "ne", "sw"])
-    assert t.shape == (6, 6)
-    one = NAMES.index("1R")
-    want = np.ones(6)
-    want[NAMES.index("1R")] += 3
-    want[NAMES.index("2R")] += 1
-    np.testing.assert_allclose(t[one], want / want.sum())
-    for j in range(6):
-        if j != one:
-            np.testing.assert_allclose(t[j], np.full(6, 1 / 6))
-    np.testing.assert_allclose(t.sum(1), 1.0)
-    # no answers to count: the identity (the reads taken as they are)
+    n = train.read_counts(lots, ["nw", "ne", "sw"])
+    want = np.zeros((6, 6), np.int64)
+    want[NAMES.index("1R"), NAMES.index("1R")] = 3
+    want[NAMES.index("1R"), NAMES.index("2R")] = 1
+    np.testing.assert_array_equal(n, want)
     np.testing.assert_array_equal(train.read_noise(lots, ["sw"]), np.eye(6))
+
+
+def dirichlet_rows(seed: int, a: float, alpha: float, matrices: int, sizes=(5, 40)) -> np.ndarray:
+    """(matrices, 6, 6) counts: row j of each matrix drawn as theta ~ Dirichlet(alpha m_j), m_j = a on the diagonal
+    and (1 - a) / 5 off it, then its count ~ U(sizes) answers ~ Multinomial(theta)."""
+    rng = np.random.default_rng(seed)
+    k = len(NAMES)
+    out = np.zeros((matrices, k, k), np.int64)
+    for i in range(matrices):
+        for j in range(k):
+            m = np.full(k, (1 - a) / (k - 1))
+            m[j] = a
+            out[i, j] = rng.multinomial(int(rng.integers(*sizes)), rng.dirichlet(alpha * m))
+    return out
+
+
+def test_prior_recovered():
+    """(a, alpha) of rows drawn from a known Dirichlet are recovered by the marginal likelihood, from any start.
+    (+-0.02 on a and +-20% on alpha are this test's own criteria.)"""
+    counts = dirichlet_rows(0, 0.8, 6.0, 300)
+    a, alpha = train.fit_read_prior(counts)
+    assert abs(a - 0.8) < 0.02 and abs(alpha / 6.0 - 1) < 0.2, (a, alpha)
+    for start in ((2.0, -1.0), (-1.0, 3.0)):
+        b, beta = train.fit_read_prior(counts, start=start)
+        assert abs(b - a) < 1e-4 and abs(beta / alpha - 1) < 1e-3, (start, b, beta, a, alpha)
+
+
+def test_unanswered_row_takes_the_prior():
+    """A district with no random answer gets the prior's mean: T[j, j] = the fitted a (not 1/6), its other cells
+    (1 - a) / 5."""
+    counts = dirichlet_rows(1, 0.8, 6.0, 1, sizes=(20, 60))[0]
+    counts[NAMES.index("U")] = 0
+    a, alpha = train.fit_read_prior(counts)
+    t = train.posterior_t(counts, a, alpha)
+    u = NAMES.index("U")
+    assert abs(t[u, u] - a) < 1e-12 and a > 0.5
+    np.testing.assert_allclose(np.delete(t[u], u), (1 - a) / 5)
+    np.testing.assert_allclose(t.sum(1), 1.0)
+
+
+def test_well_answered_row_takes_its_own_rates():
+    """A district with many random answers gets its own read rates, whatever the prior."""
+    counts = dirichlet_rows(2, 0.8, 6.0, 1)[0]
+    rates = np.array([0.55, 0.40, 0.05, 0.0, 0.0, 0.0])
+    counts[0] = np.round(rates * 200_000).astype(np.int64)
+    a, alpha = train.fit_read_prior(counts)
+    t = train.posterior_t(counts, a, alpha)
+    np.testing.assert_allclose(t[0], rates, atol=1e-3)
+    assert abs(t[0, 0] - a) > 0.1                               # not the prior's mean
 
 
 # --- pooling and the loss -------------------------------------------------------------------------------------------
