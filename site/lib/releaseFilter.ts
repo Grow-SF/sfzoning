@@ -55,3 +55,15 @@ export function formatZip(f: Filter): "geojson" | "gpkg" | "shp" | null {
   const [fmt] = [...f.format];
   return fmt === "cog" ? null : fmt;
 }
+
+/**
+ * The filter a page's chips select. A release shows chips only for its own editions; the editions
+ * it lacks count as selected, so "every chip on" is the full filter whatever ERAS holds.
+ */
+export function chipFilter(checked: { format: string[]; layer: string[]; edition: string[] }, present: string[]): Filter {
+  return {
+    format: new Set(checked.format as Fmt[]),
+    layer: new Set(checked.layer as Kind[]),
+    edition: new Set([...checked.edition, ...EDITIONS.filter((e) => !present.includes(e))]),
+  };
+}

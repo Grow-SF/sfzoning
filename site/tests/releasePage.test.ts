@@ -5,6 +5,8 @@ import { allReleases } from "../lib/releaseData";
 import { releaseView, type ReleaseView, type Row } from "../lib/releaseView";
 import type { Manifest, Version } from "../lib/downloadRows";
 import type { ReleaseRecord } from "../lib/releases.mjs";
+import { chipFilter, filterQuery, formatZip } from "../lib/releaseFilter";
+import { ERAS } from "../lib/eras";
 
 const H = history as unknown as { versions: Version[] };
 const M = manifest as unknown as Manifest;
@@ -52,5 +54,24 @@ describe("releaseView", () => {
     expect(g.zipUrl).toBeUndefined();
     expect(g.listUrl).toBe("/data/releases/2026-11-04/urls.txt?layer=sheets&edition=1921");
     expect(releaseView(current, H, M, record).previousId).toBe("2026-11-04");
+  });
+});
+
+describe("chipFilter", () => {
+  const eras = ERAS.map((e) => e.id);
+  const present = eras.filter((e) => e !== "today");
+  const on = { format: ["shp"], layer: ["lots", "districts", "scans", "sheets"], edition: present };
+
+  it("a release without an edition still reads as every edition when all its chips are on", () => {
+    const f = chipFilter(on, present);
+    expect(formatZip(f)).toBe("shp");
+    expect(filterQuery(f)).toBe("?format=shp");
+  });
+  it("turning a present edition off narrows; the absent one stays out of the query", () => {
+    const f = chipFilter({ ...on, edition: present.filter((e) => e !== "1948") }, present);
+    expect(formatZip(f)).toBeNull();
+    expect(f.edition.has("today")).toBe(true);
+    expect(filterQuery(f)).toContain("edition=");
+    expect(filterQuery(f)).not.toContain("1948");
   });
 });

@@ -2,13 +2,13 @@
 // DRAFT COPY — NOT REVIEWED BY THE OWNER. Panel labels and the zip note are first drafts.
 //
 // The filter and download panel, and the page's small behaviours (citation switch, sheet
-// expanders, copy buttons, release picker). It renders only the panel; the server-rendered
+// expanders, copy buttons). It renders only the panel; the server-rendered
 // table is changed in place through its data- attributes, so React never re-renders the rows.
 // No download is built here: links are plain hrefs to server routes.
 import { useEffect, useRef } from "react";
 import { formatBytes } from "@/lib/downloadRows";
 import type { Fmt, Kind } from "@/lib/releaseFiles";
-import { filterQuery, formatZip, matches, parseFilter, type Filter } from "@/lib/releaseFilter";
+import { chipFilter, filterQuery, formatZip, matches, parseFilter, type Filter } from "@/lib/releaseFilter";
 import styles from "./releases.module.css";
 
 type Zip = { href: string; bytes: number };
@@ -48,13 +48,11 @@ export default function ReleaseFilter({ id, files, bytes, editions, zips }: Prop
     const rows = [...document.querySelectorAll<HTMLTableRowElement>("tr[data-row]")];
     const bodies = [...document.querySelectorAll<HTMLTableSectionElement>("tbody[data-edition]")];
 
+    const present = editions.map((e) => e.era);
     const read = (): Filter => {
       const fd = new FormData(el);
-      return {
-        format: new Set(fd.getAll("format") as Fmt[]),
-        layer: new Set(fd.getAll("layer") as Kind[]),
-        edition: new Set(fd.getAll("edition") as string[]),
-      };
+      const all = (k: string) => fd.getAll(k) as string[];
+      return chipFilter({ format: all("format"), layer: all("layer"), edition: all("edition") }, present);
     };
 
     const update = () => {
@@ -161,7 +159,7 @@ export default function ReleaseFilter({ id, files, bytes, editions, zips }: Prop
       const seg = t.closest<HTMLButtonElement>("[data-seg] button");
       if (seg) {
         const style = seg.dataset.style;
-        document.querySelectorAll("[data-seg] button").forEach((x) => x.setAttribute("aria-selected", String(x === seg)));
+        document.querySelectorAll("[data-seg] button").forEach((x) => x.setAttribute("aria-pressed", String(x === seg)));
         let text = "";
         document.querySelectorAll<HTMLElement>("[data-ref]").forEach((r) => {
           r.hidden = r.dataset.ref !== style;
@@ -171,23 +169,15 @@ export default function ReleaseFilter({ id, files, bytes, editions, zips }: Prop
       }
     };
 
-    const picker = document.querySelector<HTMLSelectElement>("select[data-release]");
-    const onPick = () => {
-      const href = picker?.selectedOptions[0]?.dataset.href;
-      if (href) location.href = href;
-    };
-
     el.addEventListener("change", update);
     el.addEventListener("click", onSet);
     document.addEventListener("click", onClick);
-    picker?.addEventListener("change", onPick);
     return () => {
       el.removeEventListener("change", update);
       el.removeEventListener("click", onSet);
       document.removeEventListener("click", onClick);
-      picker?.removeEventListener("change", onPick);
     };
-  }, [base, zips]);
+  }, [base, zips, editions]);
 
   const allCmd = command(SITE + base + "urls.txt");
   return (

@@ -59,17 +59,32 @@
 
 .relcard { background: var(--paper-hi); border: 1px solid var(--rule); border-radius: 6px; padding: 1rem 1.1rem; }
 .reldate { display: flex; align-items: baseline; gap: 0.6rem; margin: 0.15rem 0 0.35rem; }
-.reldate select {
+.picker { position: relative; }
+.picker summary {
   font: 500 26px var(--font-body);
-  background: transparent;
-  border: 0;
   color: var(--ink);
-  padding: 0;
   cursor: pointer;
-  -webkit-appearance: none;
-  appearance: none;
+  list-style: none;
 }
-.caretd { font-size: 12px; color: var(--ink-dim); margin-left: -0.4rem; }
+.picker summary::-webkit-details-marker { display: none; }
+.picker ul {
+  position: absolute;
+  z-index: 10;
+  top: 100%;
+  left: 0;
+  margin: 0.25rem 0 0;
+  padding: 0.3rem 0;
+  list-style: none;
+  min-width: 12rem;
+  background: var(--paper-hi);
+  border: 1px solid var(--rule);
+  border-radius: 5px;
+  box-shadow: 0 6px 18px -10px rgba(0, 0, 0, 0.35);
+}
+.page .picker a { display: block; padding: 0.2rem 0.75rem; font-size: 14px; color: var(--ink); }
+.page .picker a[aria-current="page"] { font-weight: 600; }
+.page .picker a:hover { background: var(--row-hover); text-decoration: none; }
+.caretd { font-size: 12px; color: var(--ink-dim); margin-left: 0.3rem; vertical-align: middle; }
 .tag {
   font-size: 10.5px;
   font-weight: 700;
@@ -90,7 +105,7 @@
 .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; }
 .seg button { font: 600 11.5px var(--font-ui); background: transparent; color: var(--ink-dim); border: 0; padding: 3px 10px; cursor: pointer; }
 .seg button + button { border-left: 1px solid var(--rule); }
-.seg button[aria-selected="true"] { background: var(--ink); color: var(--paper-hi); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper-hi); }
 .citebox { position: relative; background: var(--paper-hi); border: 1px solid var(--rule); border-radius: 5px; padding: 0.55rem 4rem 0.55rem 0.75rem; }
 .ref { margin: 0; font: 14px/1.45 var(--font-body); color: var(--ink); overflow-wrap: anywhere; }
 pre.ref { font: 12px/1.45 var(--mono); white-space: pre; overflow-x: auto; }

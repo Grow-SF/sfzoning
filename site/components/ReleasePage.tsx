@@ -101,9 +101,9 @@ export default function ReleasePage({ release }: { release: Release }) {
             <div className={styles.cite}>
               <div className={styles.citebar}>
                 <span className={styles.lbl}>Cite this release</span>
-                <div className={styles.seg} role="tablist" data-seg>
+                <div className={styles.seg} role="group" aria-label="Citation style" data-seg>
                   {(["apa", "chicago", "bibtex"] as const).map((s) => (
-                    <button key={s} type="button" role="tab" data-style={s} aria-selected={s === "chicago"}>
+                    <button key={s} type="button" data-style={s} aria-pressed={s === "chicago"}>
                       {s === "apa" ? "APA" : s === "chicago" ? "Chicago" : "BibTeX"}
                     </button>
                   ))}
@@ -129,16 +129,25 @@ export default function ReleasePage({ release }: { release: Release }) {
           <aside className={styles.relcard}>
             <div className={styles.lbl}>Release</div>
             <div className={styles.reldate}>
-              <select aria-label="Release" defaultValue={view.id} data-release>
-                {ids.map((id) => (
-                  <option key={id} value={id} data-href={id === newest ? "/data" : `/data/releases/${id}`}>
-                    {id}
-                  </option>
-                ))}
-              </select>
-              <span className={styles.caretd} aria-hidden>
-                ▾
-              </span>
+              {/* Plain links, so picking a release never navigates by surprise and works without JavaScript. */}
+              <details className={styles.picker}>
+                <summary aria-label={`Release ${view.id}; choose another release`}>
+                  {view.id}
+                  <span className={styles.caretd} aria-hidden>
+                    ▾
+                  </span>
+                </summary>
+                <ul>
+                  {ids.map((id) => (
+                    <li key={id}>
+                      <a href={id === newest ? "/data" : `/data/releases/${id}`} aria-current={id === view.id ? "page" : undefined}>
+                        {id}
+                        {id === newest && " (latest)"}
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </details>
               {view.latest && <span className={styles.tag}>Latest</span>}
             </div>
             <div className={styles.relstats}>
