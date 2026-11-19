@@ -1,0 +1,10 @@
+"""A learned reader for the hatched zoning maps (1921, 1929, 1935, 1948): a small fully convolutional network on the scans
+as printed, with a learned street output (today's blocks placed on the scan are its target), six district outputs and
+a pooling weight, trained through per-lot pooled losses (spec: docs/superpowers/specs/
+2026-11-18-hatched-maps-learned-reader-design.md).
+
+  data   the training rasters (the scan, today's blocks, the solver lot of every px) and the lot table (`data`)
+
+    OMP_NUM_THREADS=1 SFZMAPS_MAX_USD=0 uv run python -m sfzmaps.solver.hatchnet data --series 1921
+
+$0: no API calls."""
