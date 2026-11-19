@@ -22,8 +22,8 @@ The look was agreed on a mockup (see "Look").
   link.
 - Each release is a **dated snapshot of the whole dataset** with its own page, citable by URL.
 - Bulk downloads for a release: `urls.txt` (for `wget -i`), `SHA256SUMS` (for `sha256sum -c`),
-  `manifest.json`, `CITATION.cff`, and ready-made zips of each vector format. The scans and the
-  whole release are fetched with `curl`/`wget` from `urls.txt` (no zip; owner's call on cost).
+  `manifest.json`, `CITATION.cff`, and ready-made zips: the whole release (one download to cite and
+  keep) and each vector format. GeoTIFFs alone are fetched with `curl`/`wget` from `urls.txt`.
 - A **filter** (format, layer, edition) that narrows the table and every bulk download, e.g. "only
   Shapefiles".
 - **Cite this release** with an APA / Chicago / BibTeX switch and a copy button.
@@ -103,7 +103,7 @@ All new pages are static, generated at deploy from the committed JSON, like the 
 | `/data/releases/<id>/SHA256SUMS` | `<sha256>  <name>` per line, for `sha256sum -c` in the download folder (see below). |
 | `/data/releases/<id>/manifest.json` | The release as JSON: id, date, license, credit, and each file with series, layer, format, name, bytes, sha256, url, latest. |
 | `/data/releases/<id>/CITATION.cff` | Citation File Format 1.2.0 for the release. |
-| `/data/releases/<id>/sfzoning-<id>-<format>.zip` | 308 redirect to the ready-made zip on Blob (format: `geojson`, `gpkg`, `shp`; see Zip); 404 for any other name. |
+| `/data/releases/<id>/sfzoning-<id>[-<format>].zip` | 308 redirect to the ready-made zip on Blob (the whole release, or format `geojson`, `gpkg`, `shp`; see Zip); 404 for any other name. |
 | `/data/releases/latest/…` | Each bulk file above under `latest` resolves to the newest release (307, not cached past a deploy), so scripts can always ask for the newest. |
 
 **Filtering.** The bulk routes take `format`, `layer` and `edition`, each a comma-separated list;
@@ -145,9 +145,10 @@ ultramarine accent.
 - **Filter and download panel** (sticky at the top while scrolling the table). Left: pill toggles
   for Format, Layer, Edition (with "all" / "none" for editions), all on by default. Right: the live
   count (`30 files · 316.8 MB`, "Everything in this release" or "Your selection"), a primary
-  zip button when the selection is exactly one whole vector format ("Download all Shapefiles as
-  zip", with its size); otherwise no button and a line saying zips exist for each vector format and
-  the rest is fetched with the command below, `urls.txt` and `SHA256SUMS` links, and a
+  zip button when the selection is everything ("Download the whole release as zip, 6.6 GB") or
+  exactly one whole vector format ("Download all Shapefiles as zip", with its size); otherwise no
+  button and a line saying zips exist for the whole release and each vector format and the rest is
+  fetched with the command below, `urls.txt` and `SHA256SUMS` links, and a
   one-line `curl -s '<urls.txt?…>' | wget -nc -i -` command with a copy button. Only narrowed
   groups go in the query string. The filter state is mirrored in the page URL
   (`/data?format=shp`) so a filtered view can be shared; the page reads it on load.
@@ -169,16 +170,15 @@ The table, header and notes are server-rendered; the filter, citation switch, sh
 copy buttons are one small client component working on `data-` attributes, so the 469 rows are not
 re-rendered by React on each toggle.
 
-## Zip (owner picked A, vector formats only)
+## Zip (owner picked A: whole release and vector formats)
 
 Ready-made zips, built by the publish script and stored on Blob, so downloads come straight from
 storage, resume, and never pass through a function.
 
-- Per release, one zip per vector format, lots and districts of every edition:
-  `sfzoning-<id>-geojson.zip` (135 MB today), `-gpkg.zip` (744 MB), `-shp.zip` (317 MB). No zip of
-  the whole release or of the GeoTIFFs: the owner dropped them on storage cost (they would add
-  about 12 GB per release, kept forever); people fetch those with `curl`/`wget` from `urls.txt`.
-  Each holds `README.txt` (the release, what is inside, how to
+- Per release: the whole release, `sfzoning-<id>.zip` (6.6 GB today), so an academic can download
+  and cite one file; and one zip per vector format, lots and districts of every edition:
+  `sfzoning-<id>-geojson.zip` (135 MB today), `-gpkg.zip` (744 MB), `-shp.zip` (317 MB). No
+  GeoTIFF-only zip (owner's call on storage cost); those are fetched from `urls.txt`. Each holds `README.txt` (the release, what is inside, how to
   verify), `LICENSE.txt`, `CITATION.cff`, `SHA256SUMS` for its own contents, and the files flat under
   their versioned names (names are unique, so the zip's `SHA256SUMS` works from its top level).
   Stored (no compression: the members are already zips and TIFFs).
@@ -188,7 +188,8 @@ storage, resume, and never pass through a function.
   script already has; a member whose bytes do not match its recorded sha256 stops the publish.
   Upload uses Blob multipart, one upload per zip (no bursts of requests).
 - The page's zip button links the route, which 308-redirects to the Blob copy with `?download=1`.
-- About 1.2 GB of extra storage per release today (about $0.03 a month), kept forever.
+- About 7.8 GB of extra storage per release today (about $0.18 a month at Blob's $0.023/GB-month),
+  kept forever. Storage can move later without breaking links: only `base` changes.
 
 Rejected: a zip built while it downloads (B), because its run time depends on the reader's
 connection (at 800 s a 20 Mbit/s reader is cut off near 2 GB) and every click would push the bytes
