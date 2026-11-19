@@ -13,7 +13,7 @@
 // against its sha256 as it is zipped. The zips are written to pipeline/data/downloads/releases/<id>/
 // (about 8 GB free disk needed today) and uploaded, multipart with one part at a time, to
 // downloads/releases/<id>/<zip name> with a <zip name>.sha256 beside each. A rerun reuses a local zip
-// the store already lists at that size. --dry-run prints the release and its zips; --local makes none.
+// only when its <zip>.plan matches, and stops if a zip already on the store has another sha256. --dry-run prints the release and its zips; --local makes none.
 //
 //   node --env-file=.env.local scripts/publish-downloads.mjs                # needs BLOB_READ_WRITE_TOKEN
 //   ... scripts/publish-downloads.mjs --dry-run                             # lists, prints the plan, uploads nothing
@@ -470,6 +470,50 @@ function releaseZipEntries(release, kind, names, info, license) {
   };
 }
 
+/** A hash of a zip's planned entries (names, member sha256s, text bodies, dates): equal plans make equal zips. */
+export function zipFingerprint(entries) {
+  const sha = (t) => createHash("sha256").update(t).digest("hex");
+  const rows = entries.map((e) => [e.name, e.file === undefined ? `text:${sha(e.text ?? "")}` : `file:${e.sha256}`, e.lastModified.toISOString()]);
+  return sha(JSON.stringify(rows));
+}
+
+/**
+ * One release zip: write it to `out` (reusing the local file only when `<out>.plan` holds this
+ * plan's fingerprint), then compare it with what the store has. Zip names carry only the release id,
+ * so a name on the store proves nothing about its contents: when the store lists the zip or its
+ * .sha256, the stored .sha256 is fetched (one small GET) and must equal this zip's hash, else the
+ * run stops. Returns the zip's record entry and the uploads still needed.
+ * `listing`: blob path -> size. `fetchSum(path)`: the text of a stored .sha256.
+ */
+export async function prepareReleaseZip(z, out, to, listing, { fetchSum, write = writeZip, hashFile = sha256File }) {
+  const planFile = `${out}.plan`;
+  const fp = zipFingerprint(z.entries);
+  let made;
+  if (existsSync(out) && existsSync(planFile) && readFileSync(planFile, "utf8").trim() === fp) {
+    console.log(`reuse ${out} (same entries as planned)`);
+    made = { bytes: statSync(out).size, sha256: await hashFile(out) };
+  } else {
+    console.log(`write ${out}`);
+    rmSync(planFile, { force: true }); // a crash mid-write must not leave an old plan beside a new zip
+    made = await write(out, z.entries);
+    writeFileSync(planFile, `${fp}\n`);
+  }
+  const sumTo = `${to}.sha256`;
+  const text = `${made.sha256}  ${z.name}\n`;
+  if (listing.has(to) || listing.has(sumTo)) {
+    const stop = (why) => new Error(`${to} is on the store already but ${why}; the store never overwrites or deletes, ` +
+      "so this needs a look by hand (publish on a later day for a new release id)");
+    if (!listing.has(sumTo)) throw stop("its .sha256 is not, so its contents cannot be checked");
+    const stored = (await fetchSum(sumTo)).trim().split(/\s+/)[0];
+    if (stored !== made.sha256) throw stop(`holds sha256 ${stored}, not this release's ${made.sha256}`);
+    if (listing.has(to) && listing.get(to) !== made.bytes) throw stop(`is listed at ${listing.get(to)} bytes, not ${made.bytes}`);
+  }
+  const uploads = [];
+  if (!listing.has(to)) uploads.push({ to, file: out, bytes: made.bytes });
+  if (!listing.has(sumTo)) uploads.push({ to: sumTo, text, bytes: Buffer.byteLength(text) });
+  return { zip: { name: z.name, bytes: made.bytes, sha256: made.sha256 }, uploads };
+}
+
 const readJson = (file, fallback) => (existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : fallback);
 const writeJson = (file, v) => writeFileSync(file, JSON.stringify(v, null, 1) + "\n");
 
@@ -582,35 +626,21 @@ async function main() {
 
   let releaseEntry = null;
   if (release) {
-    // Each zip is written to disk (or, after a crash, reused when the store already has it at that
-    // size), then uploaded with its .sha256 unless the first listing showed them already.
+    // Each zip is written to disk (or reused when its .plan shows the same entries), checked
+    // against any copy the store already has, then uploaded with its .sha256 where missing.
     const zips = {};
     const zipUploads = [];
-    const listedAs = (to, n) => {
-      if (!sizes.has(to)) return false;
-      if (sizes.get(to) !== n) {
-        throw new Error(`${to} is on the store already but listed at ${sizes.get(to)} bytes, not ${n}; ` +
-          "the store never overwrites or deletes, so this needs a look by hand");
-      }
-      return true;
+    const fetchSum = async (p) => {
+      const res = await fetch(`${BASE}/${p}`, { cache: "no-store" });
+      if (!res.ok) throw new Error(`${p}: HTTP ${res.status}`);
+      return res.text();
     };
     for (const kind of ZIP_KINDS) {
       const z = zipPlan[kind];
       const out = path.join(DOWNLOADS, "releases", release.id, z.name);
-      const to = releaseZipPath(release.id, z.name);
-      let made;
-      if (existsSync(out) && sizes.has(to) && sizes.get(to) === statSync(out).size) {
-        console.log(`reuse ${out} (on the store at that size already)`);
-        made = { bytes: statSync(out).size, sha256: await sha256File(out) };
-      } else {
-        console.log(`write ${out}`);
-        made = await writeZip(out, z.entries);
-      }
-      zips[kind] = { name: z.name, bytes: made.bytes, sha256: made.sha256 };
-      if (!listedAs(to, made.bytes)) zipUploads.push({ to, file: out, bytes: made.bytes });
-      const text = `${made.sha256}  ${z.name}\n`;
-      const sumTo = `${to}.sha256`;
-      if (!listedAs(sumTo, Buffer.byteLength(text))) zipUploads.push({ to: sumTo, text, bytes: Buffer.byteLength(text) });
+      const step = await prepareReleaseZip(z, out, releaseZipPath(release.id, z.name), sizes, { fetchSum });
+      zips[kind] = step.zip;
+      zipUploads.push(...step.uploads);
     }
     for (const u of zipUploads) await send(u);
     if (zipUploads.length) {

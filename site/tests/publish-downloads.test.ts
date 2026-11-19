@@ -493,3 +493,77 @@ describe("zipReadme", () => {
     expect(readme(rel, "gpkg", 20, 744_000_000)).not.toContain("David Rumsey");
   });
 });
+
+describe("prepareReleaseZip", () => {
+  type Entry = { name: string; file?: string; text?: string; sha256?: string; lastModified: Date };
+  type Up = { to: string; file?: string; text?: string; bytes: number };
+  type Step = { zip: { name: string; bytes: number; sha256: string }; uploads: Up[] };
+  type Opts = { fetchSum: (p: string) => Promise<string>; write?: (out: string, e: Entry[]) => Promise<{ bytes: number; sha256: string }> };
+  const prepare = script.prepareReleaseZip as (z: unknown, out: string, to: string, listing: Map<string, number>, o: Opts) => Promise<Step>;
+  const TO = "downloads/releases/2026-11-18/sfzoning-2026-11-18-gpkg.zip";
+  const SUM = `${TO}.sha256`;
+
+  const setup = async () => {
+    const fs = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { createHash } = await import("node:crypto");
+    const dir = fs.mkdtempSync(`${tmpdir()}/pdr-`);
+    const sha = (s: string) => createHash("sha256").update(s).digest("hex");
+    const when = new Date("2026-11-18T12:00:00Z");
+    // the same member name and length, different bytes: the zip comes out the same size
+    const zipOf = (body: string) => {
+      fs.writeFileSync(`${dir}/m.gpkg.zip`, body);
+      const entries: Entry[] = [
+        { name: "README.txt", text: "read me", lastModified: when },
+        { name: "m.gpkg.zip", file: `${dir}/m.gpkg.zip`, sha256: sha(body), lastModified: when },
+      ];
+      return { name: "sfzoning-2026-11-18-gpkg.zip", entries };
+    };
+    const writes: string[] = [];
+    const write = async (out: string, e: Entry[]) => {
+      writes.push(out);
+      return script.writeZip(out, e) as Promise<{ bytes: number; sha256: string }>;
+    };
+    return { fs, dir, out: `${dir}/rel/sfzoning-2026-11-18-gpkg.zip`, zipOf, writes, write };
+  };
+  /** The store after a first run uploaded `step`'s zip and .sha256. */
+  const storeAfter = (step: Step) => {
+    const listing = new Map(step.uploads.map((u) => [u.to, u.bytes]));
+    const text = step.uploads.find((u) => u.to === SUM)!.text!;
+    return { listing, fetchSum: async (p: string) => (p === SUM ? text : Promise.reject(new Error(p))) };
+  };
+
+  it("first run writes the zip and asks for it and its .sha256 to go up; a rerun with the same plan reuses both", async () => {
+    const { out, zipOf, writes, write } = await setup();
+    const first = await prepare(zipOf("alpha"), out, TO, new Map(), { fetchSum: async () => "", write });
+    expect(first.uploads.map((u) => u.to)).toEqual([TO, SUM]);
+    expect(first.uploads[1].text).toBe(`${first.zip.sha256}  sfzoning-2026-11-18-gpkg.zip\n`);
+    const store = storeAfter(first);
+    const again = await prepare(zipOf("alpha"), out, TO, store.listing, { fetchSum: store.fetchSum, write });
+    expect(again).toEqual({ zip: first.zip, uploads: [] });
+    expect(writes).toHaveLength(1);
+  });
+
+  it("listed at the same size but the planned entries changed: rebuilds instead of reusing, and stops on the stored hash", async () => {
+    const { fs, out, zipOf, writes, write } = await setup();
+    const first = await prepare(zipOf("alpha"), out, TO, new Map(), { fetchSum: async () => "", write });
+    const store = storeAfter(first);
+    // (a) the old local zip is still there
+    await expect(prepare(zipOf("alphb"), out, TO, store.listing, { fetchSum: store.fetchSum, write })).rejects.toThrow(
+      /sfzoning-2026-11-18-gpkg\.zip is on the store already but holds sha256/,
+    );
+    expect(writes).toHaveLength(2);
+    expect(fs.statSync(out).size).toBe(first.zip.bytes); // same size, other contents
+    // (b) the local zip is gone
+    fs.rmSync(out);
+    await expect(prepare(zipOf("alphb"), out, TO, store.listing, { fetchSum: store.fetchSum, write })).rejects.toThrow(/holds sha256/);
+  });
+
+  it("a zip on the store without its .sha256 stops, since its contents can't be checked", async () => {
+    const { out, zipOf, write } = await setup();
+    const first = await prepare(zipOf("alpha"), out, TO, new Map(), { fetchSum: async () => "", write });
+    await expect(prepare(zipOf("alpha"), out, TO, new Map([[TO, first.zip.bytes]]), { fetchSum: async () => "", write })).rejects.toThrow(
+      /\.sha256 is not/,
+    );
+  });
+});
