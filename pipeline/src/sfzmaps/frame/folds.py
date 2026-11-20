@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from sfzmaps.frame.data import SheetId
 
 OUTER_K = 4
-INNER_K = 3
 
 
 @dataclass(frozen=True)

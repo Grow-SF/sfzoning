@@ -19,12 +19,12 @@ def _tiny_nets(monkeypatch, tile=64, side=96):
 
 
 def test_real_sizes():
-    """The real constants: folds of 4, the page pass sees the whole page, the tile margin is 256 (232 rounded up to
-    the pooling grid of 32) and every size sits on its net's grid."""
+    """The real constants: folds of 4, the page pass sees the whole 512 px square (its reach is 1000), the tile margin
+    is 256 (232 rounded up to the pooling grid of 32) and every size sits on its net's grid."""
     p = predict
-    assert (p.COARSE_FOLD, p.COARSE_LEVELS, p.COARSE_WIDTH, p.COARSE_SIDE) == (4, 7, 16, 1024)
+    assert (p.COARSE_FOLD, p.COARSE_LEVELS, p.COARSE_WIDTH, p.COARSE_SIDE) == (4, 6, 16, 512)
     assert (p.FINE_FOLD, p.FINE_LEVELS, p.FINE_WIDTH, p.TILE) == (4, 4, 32, 256)
-    assert folded_reach(p.COARSE_FOLD, p.COARSE_LEVELS) >= p.COARSE_SIDE
+    assert folded_reach(p.COARSE_FOLD, p.COARSE_LEVELS) == 1000 >= p.COARSE_SIDE
     assert p.COARSE_SIDE % folded_multiple(p.COARSE_FOLD, p.COARSE_LEVELS) == 0
     assert folded_reach(p.FINE_FOLD, p.FINE_LEVELS) == 232 and p._margin() == 256
     assert p.TILE % folded_multiple(p.FINE_FOLD, p.FINE_LEVELS) == 0
@@ -100,12 +100,34 @@ def test_tiling_has_no_seams(monkeypatch):
     np.testing.assert_allclose(got, want, atol=1e-5)
 
 
+def test_near_computes_only_the_tiles_it_touches(monkeypatch):
+    """With `near`, a tile whose core holds a near px is the full prediction's, bit for bit; every other px is the
+    prior's (as float32); no near px at all is the prior throughout."""
+    _, fine = _tiny_nets(monkeypatch)
+    _wake_head(fine)
+    rng = np.random.default_rng(5)
+    lum = rng.random((150, 230)).astype(np.float32)
+    prior = rng.random((150, 230)).astype(np.float16)
+    near = np.zeros(lum.shape, bool)
+    near[70, 140] = True                                   # in the tile at rows 64..127, columns 128..191
+    full = predict.predict_tiles(fine, lum, prior, "cpu")
+    got = predict.predict_tiles(fine, lum, prior, "cpu", near=near)
+    assert got.dtype == np.float32 and got.shape == lum.shape
+    done = np.zeros(lum.shape, bool)
+    done[64:128, 128:192] = True
+    np.testing.assert_array_equal(got[done], full[done])
+    np.testing.assert_array_equal(got[~done], prior[~done].astype(np.float32))
+    assert not np.array_equal(got, full)
+    none = predict.predict_tiles(fine, lum, prior, "cpu", near=np.zeros(lum.shape, bool))
+    np.testing.assert_array_equal(none, prior.astype(np.float32))
+
+
 def test_coarse_input_pads_to_a_square():
     lum = np.zeros((3300, 5100), np.float32)
     for page in (lum, lum.T):
         arr, scale = predict.coarse_input(page)
         assert arr.shape == (predict.COARSE_SIDE, predict.COARSE_SIDE)
-        assert scale == pytest.approx(1024 / 5100, rel=1e-3)
+        assert scale == pytest.approx(predict.COARSE_SIDE / 5100, rel=1e-3)
         nh, nw = round(page.shape[0] * scale), round(page.shape[1] * scale)
         assert (arr[:nh, :nw] == 0).all() and (arr[nh:] == 1).all() and (arr[:, nw:] == 1).all()
 

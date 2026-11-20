@@ -1,5 +1,6 @@
 import itertools
 import logging
+import math
 import threading
 
 import numpy as np
@@ -8,12 +9,12 @@ import torch
 from scipy import ndimage
 
 from sfzmaps.frame import predict, scores, train
-from sfzmaps.frame.predict import predict_coarse, predict_tiles
+from sfzmaps.frame.predict import Corrected, page_prior, predict_coarse, predict_tiles
 from sfzmaps.frame.scores import UNSURE_PX
 from sfzmaps.frame.train import (BLUR_SHARE, BLUR_SIGMA, BRIGHTNESS, CONTRAST, GAMMA, OUTLINE_REACH, SCALE_JITTER,
                                  Page, Recipe, _batches, _coarse_arrays, _coarse_draw, _coarse_make, _fine_aux,
-                                 _fine_draw, _fine_make, _near_outline, _val_loss, apply_aug, choose_steps, draw_aug,
-                                 train_coarse, train_fine)
+                                 _fine_draw, _fine_make, _near_mask, _near_outline, _page_priors, _prior_window,
+                                 _val_loss, apply_aug, draw_aug, train_joint)
 from sfzmaps.nets.unet import Folded
 
 RULE_AT, RULE_PX = 10, 3
@@ -34,7 +35,7 @@ def tiny(monkeypatch):
 
 def toy_page(seed, h=96, w=128):
     """Paper with a 3-px frame rule 10 px in from each edge, plus random 'streets' inside; the mask is the inside of
-    the rule.  The prior is the mask blurred, a stand-in for the page pass's answer."""
+    the rule."""
     rng = np.random.default_rng(seed)
     lum = np.ones((h, w), np.float32)
     a, b = RULE_AT, RULE_AT + RULE_PX
@@ -48,8 +49,7 @@ def toy_page(seed, h=96, w=128):
         lum[r:r + 2, lo_c:hi_c] = 0.0
         c = int(rng.integers(lo_c, hi_c - 2))
         lum[lo_r:hi_r, c:c + 2] = 0.0
-    prior = ndimage.gaussian_filter(mask.astype(np.float32), 4.0)
-    return Page(id=("toy", str(seed)), lum=lum, mask=mask, prior=prior)
+    return Page(id=("toy", str(seed)), lum=lum, mask=mask)
 
 
 def _rule_px(pg):
@@ -139,56 +139,169 @@ def test_blur_is_measured_in_page_px():
     assert blurred_any
 
 
-def test_fine_pass_learns_the_toy_frame():
-    """The realistic case: the toy's rule lies 1-3 px outside the label's outline, on the certain (frame) side, and the
-    prior (the mask blurred) calls it about 1/3 map; the pixel pass learns the rule as frame."""
-    pages = [toy_page(s) for s in range(4)]
-    # 600 steps: the folded net's 32-px core is 1.6% of its 256-px crop (the margin is the folded reach)
-    net, _ = train_fine(pages, Recipe(steps=600, batch=2, check_every=200), "cpu")
-    assert isinstance(net, Folded)
+def test_joint_training_learns_the_toy_frame():
+    """The realistic case: the toy's rule lies 1-3 px outside the label's outline, on the certain (frame) side.  Both
+    passes trained together, read as the run reads them (the page pass's float16 prior, then the pixel pass): the rule
+    is frame, the ink inside is map."""
+    pages = [toy_page(s, h=128, w=96) if s % 2 else toy_page(s) for s in range(4)]   # mixed shapes in a batch
+    (coarse, fine), info = train_joint(pages, Recipe(steps=600, batch=2, check_every=200), "cpu")
+    assert isinstance(coarse, Folded) and isinstance(fine, Corrected)
+    assert not coarse.training and not fine.training
+    assert next(coarse.parameters()).device.type == next(fine.parameters()).device.type == "cpu"
+    assert [s for s, _, _ in info["train_curve"]] == [200, 400, 600] and info["val_curve"] == []
     pg = toy_page(9)
     rule = _rule_px(pg)
     assert not (rule & scores.unsure(pg.mask)).any()
-    assert pg.prior[rule].mean() > 0.25                 # the prior alone does not call the rule frame
-    p = predict_tiles(net, pg.lum, pg.prior)
+    p = predict_tiles(fine, pg.lum, page_prior(coarse, pg.lum))
     assert p[rule].mean() < 0.2 and p[_inside_ink_px(pg)].mean() > 0.8
-
-
-def test_coarse_pass_learns_the_toy_frame():
-    pages = [toy_page(s, h=128, w=96) if s % 2 else toy_page(s) for s in range(4)]   # mixed shapes in a batch
-    net, _ = train_coarse(pages, Recipe(steps=600, batch=2, check_every=200), "cpu")
-    assert isinstance(net, Folded)
-    pg = toy_page(9)
-    p = predict_coarse(net, pg.lum)
-    h, w = p.shape
-    inside = np.zeros(p.shape, bool)
-    inside[30:h - 30, 30:w - 30] = True
-    outside = np.zeros(p.shape, bool)
-    outside[:, :4] = outside[:, -4:] = outside[:4] = outside[-4:] = True
-    assert p[inside].mean() > 0.8 and p[outside].mean() < 0.2
 
 
 def _same(a, b):
     return all(torch.equal(x, y) for x, y in zip(a.state_dict().values(), b.state_dict().values()))
 
 
-def test_training_is_deterministic():
-    a, _ = train_coarse([toy_page(0)], Recipe(steps=5, batch=1), "cpu")
-    b, _ = train_coarse([toy_page(0)], Recipe(steps=5, batch=1), "cpu")
-    assert _same(a, b)
-    c, _ = train_fine([toy_page(0)], Recipe(steps=5, batch=2), "cpu")
-    d, _ = train_fine([toy_page(0)], Recipe(steps=5, batch=2), "cpu")
-    assert _same(c, d)
+def _same_nets(a, b):
+    return _same(a[0], b[0]) and _same(a[1], b[1])
 
 
-def test_prefetch_same_weights():
+def test_joint_training_is_deterministic_with_or_without_prefetch():
     pages = [toy_page(0), toy_page(1, h=60, w=50)]
-    for trainer in (train_coarse, train_fine):
-        a, _ = trainer(pages, Recipe(steps=6, batch=2, prefetch=True), "cpu")
-        b, _ = trainer(pages, Recipe(steps=6, batch=2, prefetch=False), "cpu")
-        assert _same(a, b)
-        c, _ = trainer(pages, Recipe(steps=6, batch=2, prefetch=True, seed=1), "cpu")
-        assert not _same(a, c)
+    a, _ = train_joint(pages, Recipe(steps=6, batch=2, prefetch=True), "cpu")
+    b, _ = train_joint(pages, Recipe(steps=6, batch=2, prefetch=True), "cpu")
+    c, _ = train_joint(pages, Recipe(steps=6, batch=2, prefetch=False), "cpu")
+    assert _same_nets(a, b) and _same_nets(a, c)
+    d, _ = train_joint(pages, Recipe(steps=6, batch=2, seed=1), "cpu")
+    assert not _same(a[0], d[0]) and not _same(a[1], d[1])
+
+
+def test_validation_is_logged_and_changes_nothing(caplog):
+    """The validation curve is a log: the same weights with and without it."""
+    pages, val = [toy_page(0)], [toy_page(7)]
+    recipe = Recipe(steps=4, batch=2, check_every=2)
+    plain, info = train_joint(pages, recipe, "cpu")
+    assert info["val_curve"] == []
+    with caplog.at_level(logging.INFO, logger="sfzmaps.frame.train"):
+        nets, info = train_joint(pages, recipe, "cpu", val=val, label="fold 0")
+    assert _same_nets(plain, nets)
+    assert [s for s, _ in info["val_curve"]] == [2, 4]
+    assert all(np.isfinite(v) and v > 0 for _, v in info["val_curve"])
+    assert [s for s, _, _ in info["train_curve"]] == [2, 4]
+    assert all(np.isfinite(v) and v > 0 for _, a, b in info["train_curve"] for v in (a, b))
+    lines = [r.getMessage() for r in caplog.records if r.name == "sfzmaps.frame.train"]
+    assert [m.split(":")[0] for m in lines] == ["fold 0 step 2/4", "fold 0 step 4/4"]
+    assert [float(m.split(" val ")[1]) for m in lines] == pytest.approx([v for _, v in info["val_curve"]], abs=1e-4)
+
+
+def test_recipe():
+    assert (Recipe().steps, Recipe().check_every) == (2000, 250)
+
+
+def test_cosine_schedule(monkeypatch):
+    """The learning rate is `recipe.lr` at step 1, falls along a half cosine, and is exactly 0 after the last step
+    (the last step itself still moves the weights)."""
+    used, opts = [], []
+
+    class Spy(torch.optim.Adam):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            opts.append(self)
+
+        def step(self, *args, **kwargs):
+            used.append(self.param_groups[0]["lr"])
+            return super().step(*args, **kwargs)
+
+    monkeypatch.setattr(torch.optim, "Adam", Spy)
+    recipe = Recipe(steps=8, batch=1, check_every=4, lr=1e-3)
+    train_joint([toy_page(0)], recipe, "cpu")
+    assert len(opts) == 1 and len(used) == 8
+    assert used[0] == recipe.lr
+    assert used == pytest.approx([recipe.lr * 0.5 * (1 + math.cos(math.pi * s / 8)) for s in range(8)], abs=1e-12)
+    assert used[-1] > 0 and opts[0].param_groups[0]["lr"] == 0.0
+
+
+def test_pixel_loss_is_on_the_prior_logit_plus_the_correction(monkeypatch):
+    """The pixel pass's training loss reads the summed logit: at the first step (head still zero) it is the prior's
+    logit, clipped, exactly as prediction reads it."""
+    seen, logits = {}, []
+    real_make, real_loss = train._fine_make, train._loss
+
+    def make(*args):
+        out = real_make(*args)
+        seen.setdefault("x", out[0].clone())
+        return out
+
+    def loss(lg, target, weight):
+        logits.append(lg.detach().clone())
+        return real_loss(lg, target, weight)
+
+    monkeypatch.setattr(train, "_fine_make", make)
+    monkeypatch.setattr(train, "_loss", loss)
+    train_joint([toy_page(0)], Recipe(steps=1, batch=2, prefetch=False), "cpu")
+    assert len(logits) == 2                                 # the page pass's, then the pixel pass's
+    p = seen["x"][:, 1:2].clamp(1e-4, 1 - 1e-4)
+    assert (seen["x"][:, 1:2] == 0).any()                  # off the page the prior is 0, and its logit finite
+    assert torch.isfinite(logits[1]).all()
+    torch.testing.assert_close(logits[1], torch.log(p) - torch.log1p(-p))
+
+
+def test_each_pass_is_trained_by_its_own_loss(monkeypatch):
+    """The prior enters the pixel pass with no gradient: the pixel loss reaches none of the page pass's weights."""
+    nets, losses = [], []
+    real_new, real_loss = predict.new_coarse_net, train._loss
+
+    def new():
+        nets.append(real_new())
+        return nets[-1]
+
+    def loss(lg, target, weight):
+        out = real_loss(lg, target, weight)
+        losses.append(out)
+        if len(losses) == 2:
+            grads = torch.autograd.grad(out, list(nets[0].parameters()), allow_unused=True, retain_graph=True)
+            assert out.requires_grad and all(g is None for g in grads)
+        return out
+
+    monkeypatch.setattr(predict, "new_coarse_net", new)
+    monkeypatch.setattr(train, "_loss", loss)
+    train_joint([toy_page(0)], Recipe(steps=1, batch=2, prefetch=False), "cpu")
+    assert len(losses) == 2 and len(nets) == 1
+
+
+def _wake(net):
+    """Random running statistics, so the eval-mode net differs from the train-mode one."""
+    for m in net.modules():
+        if isinstance(m, torch.nn.BatchNorm2d):
+            m.running_mean.uniform_(-0.5, 0.5)
+            m.running_var.uniform_(0.5, 2.0)
+
+
+def test_the_prior_is_the_page_pass_now_on_the_plain_page():
+    """A crop's prior is the page pass's eval-mode probability for the unaugmented page, as `predict_coarse` gives it
+    (to float rounding; then float16, as the run saves and reads it), cut to the crop's window, 0 off the page; the
+    page pass is left in training mode."""
+    torch.manual_seed(0)
+    net = predict.new_coarse_net()
+    _wake(net)
+    pages = [toy_page(0), toy_page(1, h=60, w=50)]          # the page grid smaller, then larger, than the page
+    coarse = [_coarse_arrays(pg, 0.1)[0] for pg in pages]
+    on_device = [tuple(torch.from_numpy(np.ascontiguousarray(a)) for a in arrays) for arrays in coarse]
+    net.train()
+    priors = _page_priors(net, on_device, {0, 1}, "cpu")
+    assert net.training and set(priors) == {0, 1}
+    for k, pg in enumerate(pages):
+        full = predict_coarse(net, pg.lum)
+        h, w = pg.lum.shape
+        assert tuple(priors[k].shape) == coarse[k][0].shape
+        for top, left, side in ((0, 0, h), (-7, 5, 40), (h - 20, w - 30, 45), (3, -9, 70)):
+            got = _prior_window(priors[k], (h, w), top, left, side).numpy()
+            assert got.dtype == np.float32 and got.shape == (side, side)
+            want = np.zeros((side, side), np.float32)
+            r0, c0 = max(top, 0), max(left, 0)
+            r1, c1 = min(top + side, h), min(left + side, w)
+            want[r0 - top:r1 - top, c0 - left:c1 - left] = full[r0:r1, c0:c1]
+            np.testing.assert_allclose(got, want, rtol=2e-3, atol=1e-6)
+            assert np.array_equal(got, got.astype(np.float16).astype(np.float32))
+            assert (got[want == 0] == 0).all() and (got[want > 0] > 0).all()
 
 
 def _prefetchers():
@@ -217,52 +330,6 @@ def test_prefetch_stops_cleanly():
     assert not _prefetchers()
 
 
-def test_validation_curve_and_returned_net(caplog):
-    val = [toy_page(7)]
-    with caplog.at_level(logging.INFO, logger="sfzmaps.frame.train"):
-        net, info = train_coarse([toy_page(0)], Recipe(steps=4, batch=1, check_every=2), "cpu", val=val,
-                                 label="fold 0 page inner 1")
-    assert [s for s, _ in info["val_curve"]] == [2, 4]
-    assert all(np.isfinite(v) and v > 0 for _, v in info["val_curve"])
-    lines = [r.getMessage() for r in caplog.records if r.name == "sfzmaps.frame.train"]
-    assert [m.split(": val ")[0] for m in lines] == ["fold 0 page inner 1 step 2/4", "fold 0 page inner 1 step 4/4"]
-    assert [float(m.split(": val ")[1]) for m in lines] == pytest.approx([v for _, v in info["val_curve"]], abs=1e-4)
-    assert not net.training and next(net.parameters()).device.type == "cpu"
-    net, info = train_fine([toy_page(0)], Recipe(steps=4, batch=2, check_every=2), "cpu", val=val)
-    assert [s for s, _ in info["val_curve"]] == [2, 4]
-    assert not net.training and next(net.parameters()).device.type == "cpu"
-    _, info = train_fine([toy_page(0)], Recipe(steps=2, batch=1), "cpu")
-    assert info == {"val_curve": []}
-
-
-def test_recipe_caps_at_4000_steps():
-    assert Recipe().steps == 4000
-
-
-def test_fine_loss_is_on_the_prior_logit_plus_the_correction(monkeypatch):
-    """The pixel pass's training loss reads the summed logit: at the first step (head still zero) it is the prior's
-    logit, clipped, exactly as prediction reads it."""
-    seen = {}
-    real_make, real_loss = train._fine_make, train._loss
-
-    def make(*args):
-        out = real_make(*args)
-        seen.setdefault("x", out[0].clone())
-        return out
-
-    def loss(logits, target, weight):
-        seen.setdefault("logits", logits.detach().clone())
-        return real_loss(logits, target, weight)
-
-    monkeypatch.setattr(train, "_fine_make", make)
-    monkeypatch.setattr(train, "_loss", loss)
-    train_fine([toy_page(0)], Recipe(steps=1, batch=2, prefetch=False), "cpu")
-    p = seen["x"][:, 1:2].clamp(1e-4, 1 - 1e-4)
-    assert (seen["x"][:, 1:2] == 0).any()                  # off the page the prior is 0, and its logit finite
-    assert torch.isfinite(seen["logits"]).all()
-    torch.testing.assert_close(seen["logits"], torch.log(p) - torch.log1p(-p))
-
-
 def test_fine_weight_is_zero_in_the_uncertain_strip():
     """No px within UNSURE_PX of the label's outline (as scaled with the crop) carries weight; px beyond it do."""
     pages = [toy_page(0), toy_page(1)]
@@ -285,7 +352,7 @@ def test_coarse_weight_is_zero_in_the_strip_of_at_least_one_coarse_px():
     assert (weight[strip] == 0).all() and (weight[~strip] > 0).all()
     mask = np.zeros((96, 1024), np.uint8)                 # 1/16: 8 px would be half a coarse px; it is 1
     mask[20:76, 100:900] = 1
-    wide = Page(id=("toy", "wide"), lum=np.ones(mask.shape, np.float32), mask=mask, prior=None)
+    wide = Page(id=("toy", "wide"), lum=np.ones(mask.shape, np.float32), mask=mask)
     (_, target, weight), scale = _coarse_arrays(wide, 0.1)
     strip = scores.unsure(target >= 0.5, 1.0)
     assert scale == pytest.approx(1 / 16) and strip.any()
@@ -298,8 +365,7 @@ def _holed_page():
     mask = np.zeros((64, 64), np.uint8)
     mask[10:54, 10:54] = 1
     mask[25:39, 25:39] = 0
-    return Page(id=("toy", "holed"), lum=np.zeros(mask.shape, np.float32), mask=mask,
-                prior=np.full(mask.shape, 0.5, np.float32))
+    return Page(id=("toy", "holed"), lum=np.zeros(mask.shape, np.float32), mask=mask)
 
 
 # (row, col) of: 3 px outside the outline (a rule's place), 3 px inside it, the block side of the hole's outline and
@@ -329,32 +395,15 @@ def test_validation_loss_ignores_the_strip():
     bad = good.copy()
     bad[strip] = 1.0 - bad[strip]
     loss = _val_loss([pg])
-    assert loss(lambda p: bad) == pytest.approx(loss(lambda p: good), abs=1e-12)
+    assert loss(lambda i: bad) == pytest.approx(loss(lambda i: good), abs=1e-12)
     bad[48, 64] = 0.01
-    assert loss(lambda p: bad) > loss(lambda p: good)
-
-
-def test_snapshot_at_a_step_is_a_run_of_that_many_steps():
-    """A snapshot taken at step s while training (and validating) for longer is, bit for bit, the net a run of s steps
-    returns: the chosen step's net costs no extra training."""
-    val = [toy_page(7)]
-    for trainer, batch in ((train_coarse, 1), (train_fine, 2)):
-        long, info = trainer([toy_page(0)], Recipe(steps=4, batch=batch, check_every=2), "cpu", val=val,
-                             snapshots=True)
-        assert sorted(info["snapshots"]) == [2, 4]
-        short, _ = trainer([toy_page(0)], Recipe(steps=2, batch=batch, check_every=2), "cpu")
-        for want, net_step in ((short.state_dict(), 2), (long.state_dict(), 4)):
-            snap = info["snapshots"][net_step]
-            assert list(snap) == list(want)
-            assert all(torch.equal(snap[k], want[k]) for k in want)
-        assert any(not torch.equal(info["snapshots"][2][k], info["snapshots"][4][k]) for k in want)
-    _, info = train_coarse([toy_page(0)], Recipe(steps=2, batch=1, check_every=1), "cpu")
-    assert "snapshots" not in info
+    assert loss(lambda i: bad) > loss(lambda i: good)
 
 
 def test_outline_band():
     pg = toy_page(0)
     assert _near_outline(np.ones_like(pg.mask)).size == 0 and _near_outline(np.zeros_like(pg.mask)).size == 0
+    assert not _near_mask(np.ones_like(pg.mask)).any()
     big = np.zeros((700, 700), np.uint8)
     big[300:400, 300:400] = 1
     near = np.zeros(big.size, bool)
@@ -363,19 +412,23 @@ def test_outline_band():
     edge = big.astype(bool) & ~ndimage.binary_erosion(big.astype(bool), border_value=1)
     d = ndimage.distance_transform_edt(~edge)
     assert np.array_equal(near, d <= OUTLINE_REACH) and not near.all()
+    assert np.array_equal(_near_mask(big), near)
 
 
 def _fine_batch(rng, pages, batch, paper_weight=0.1):
+    """A pixel-pass batch whose priors are 1/2 on every page's coarse grid."""
     spec = _fine_draw(rng, pages, [_fine_aux(p) for p in pages], batch)
-    return tuple(a.numpy() for a in _fine_make(spec, paper_weight, "cpu"))
+    priors = {k: torch.full(_coarse_arrays(pg, paper_weight)[0][0].shape, 0.5) for k, pg in enumerate(pages)}
+    return tuple(a.numpy() for a in _fine_make(spec, priors, paper_weight, "cpu"))
 
 
 def test_fine_pass_takes_pages_with_no_outline():
     pg = toy_page(0)
-    full = Page(id=("toy", "full"), lum=pg.lum, mask=np.ones_like(pg.mask), prior=np.ones_like(pg.prior))
-    small = Page(id=("toy", "small"), lum=pg.lum[:20, :24], mask=pg.mask[:20, :24], prior=pg.prior[:20, :24])
-    net, _ = train_fine([full, small], Recipe(steps=3, batch=2), "cpu")
-    assert all(torch.isfinite(v).all() for v in net.state_dict().values() if v.is_floating_point())
+    full = Page(id=("toy", "full"), lum=pg.lum, mask=np.ones_like(pg.mask))
+    small = Page(id=("toy", "small"), lum=pg.lum[:20, :24], mask=pg.mask[:20, :24])
+    nets, _ = train_joint([full, small], Recipe(steps=3, batch=2), "cpu")
+    for net in nets:
+        assert all(torch.isfinite(v).all() for v in net.state_dict().values() if v.is_floating_point())
     # an outline crop of a page with no outline falls back to a uniform one: a whole-map crop, learned as map
     _, t, w = _fine_batch(np.random.default_rng(0), [full], 4)
     assert w.sum() > 0 and (t * w).sum() / w.sum() > 0.95
@@ -397,8 +450,7 @@ def test_fine_crops_have_an_unweighted_margin():
 def test_fine_weight_is_exactly_zero_off_the_page():
     """Scaling a crop must not smear the page's weight onto the paper around it: on an all-ink page every px weighs
     paper_weight + 1 or more, so no weight lies strictly between 0 and paper_weight."""
-    ink = Page(id=("toy", "ink"), lum=np.zeros((40, 30), np.float32), mask=np.ones((40, 30), np.uint8),
-               prior=np.ones((40, 30), np.float32))
+    ink = Page(id=("toy", "ink"), lum=np.zeros((40, 30), np.float32), mask=np.ones((40, 30), np.uint8))
     rng = np.random.default_rng(5)
     for _ in range(5):
         _, _, w = _fine_batch(rng, [ink], 4, paper_weight=0.1)
@@ -426,14 +478,9 @@ def test_coarse_batches_are_the_prediction_square():
     assert arrays[0].shape == (48, 64) and scale == pytest.approx(0.5)
 
 
-def test_fine_pass_needs_a_prior():
+def test_training_needs_labels():
     pg = toy_page(0)
     with pytest.raises(ValueError):
-        train_fine([Page(id=pg.id, lum=pg.lum, mask=pg.mask, prior=None)], Recipe(steps=1, batch=1), "cpu")
-
-
-def test_choose_steps():
-    assert choose_steps([[(250, 0.5), (500, 0.3), (750, 0.4)], [(250, 0.6), (500, 0.2), (750, 0.2)]]) == 500
-    assert choose_steps([[(250, 0.3), (500, 0.3)]]) == 250
+        train_joint([Page(id=pg.id, lum=pg.lum, mask=None)], Recipe(steps=1, batch=1), "cpu")
     with pytest.raises(ValueError):
-        choose_steps([[(250, 0.3), (500, float("nan"))], [(250, 0.4), (500, 0.1)]])
+        train_joint([pg], Recipe(steps=1, batch=1), "cpu", val=[Page(id=("toy", "v"), lum=pg.lum, mask=None)])

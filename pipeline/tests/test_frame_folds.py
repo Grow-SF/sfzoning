@@ -1,4 +1,4 @@
-"""Outer and inner folds by sheet: a stratified round-robin."""
+"""Folds by sheet: a stratified round-robin."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import random
 import pytest
 
 from sfzmaps.frame.data import SheetId
-from sfzmaps.frame.folds import INNER_K, OUTER_K, split
+from sfzmaps.frame.folds import OUTER_K, split
 
 SERIES = ("1921", "1960", "2000-digital-zoning")
 
@@ -19,7 +19,7 @@ def _uneven() -> list[SheetId]:
 
 
 def test_constants():
-    assert (OUTER_K, INNER_K) == (4, 3)
+    assert OUTER_K == 4
 
 
 def test_round_robin_in_series_then_sheet_order():

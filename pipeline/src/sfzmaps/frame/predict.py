@@ -3,9 +3,12 @@ px sees the whole page), then a pixel pass at full resolution over tiles, fed `[
 pass's probability that a px is map.
 
 Both passes are folded U-Nets (`nets.unet.Folded`): 4 x 4 px folded into channels, one output per px still (issue
-#71's speed amendment).  The page pass sees the whole COARSE_SIDE square (`folded_reach` >= COARSE_SIDE); the pixel
-pass sees `folded_reach(FINE_FOLD, FINE_LEVELS)` = 232 px each way, so each tile is read with a margin of that,
-rounded up to the folded pooling grid (256).
+#71's speed amendment).  The page pass sees the whole COARSE_SIDE square (`folded_reach` = 1000 >= COARSE_SIDE =
+512); the pixel pass sees `folded_reach(FINE_FOLD, FINE_LEVELS)` = 232 px each way, so each tile is read with a margin
+of that, rounded up to the folded pooling grid (256).
+
+The page pass's prior is float16 wherever it is kept or read (`page_prior`): saved, read by the pixel pass in
+prediction, and in training (`train._prior_window`), so the pixel pass always reads the same precision.
 
 The pixel pass is a correction of the page pass (`Corrected`): its logit is the prior's logit,
 `logit(clip(prior, PRIOR_CLIP, 1 - PRIOR_CLIP))`, plus the net's output, and its head convolution starts at zero, so
@@ -22,9 +25,9 @@ from PIL import Image
 
 from sfzmaps.nets.unet import Folded, folded_multiple, folded_reach
 
-COARSE_SIDE = 1024
+COARSE_SIDE = 512
 COARSE_FOLD = 4
-COARSE_LEVELS = 7
+COARSE_LEVELS = 6
 COARSE_WIDTH = 16
 FINE_FOLD = 4
 FINE_LEVELS = 4
@@ -110,6 +113,11 @@ def predict_coarse(net: nn.Module, lum: np.ndarray, device: str = "cpu") -> np.n
     return F.interpolate(t, size=(h, w), mode="bilinear", align_corners=False)[0, 0].numpy().astype(np.float32)
 
 
+def page_prior(net: nn.Module, lum: np.ndarray, device: str = "cpu") -> np.ndarray:
+    """The page pass's map probability as it is saved and as the pixel pass reads it: `predict_coarse`, float16."""
+    return predict_coarse(net, lum, device).astype(np.float16)
+
+
 def _margin() -> int:
     """The pixel pass's reach (`folded_reach`) rounded up to its grid (`folded_multiple`), so every tile and the
     whole-page run fold and pool on the same grid."""
@@ -138,9 +146,12 @@ def _predict_padded_whole(net: nn.Module, lum: np.ndarray, prior: np.ndarray, de
     return out[mg:mg + h, mg:mg + w]
 
 
-def predict_tiles(net: nn.Module, lum: np.ndarray, prior: np.ndarray, device: str = "cpu") -> np.ndarray:
+def predict_tiles(net: nn.Module, lum: np.ndarray, prior: np.ndarray, device: str = "cpu",
+                  near: np.ndarray | None = None) -> np.ndarray:
     """The pixel pass's probability at full resolution.  TILE x TILE cores, each read with a margin of reach px of
-    page or paper around it; only the core is kept."""
+    page or paper around it; only the core is kept.  With `near` (bool, the page's shape), only the tiles whose core
+    holds a True px are read; every other px is the prior's (the validation curve's shortcut: the border is where
+    the pixel pass works)."""
     if TILE % _fine_multiple():
         raise ValueError(f"TILE {TILE} is not a multiple of {_fine_multiple()}")
     h, w = lum.shape
@@ -148,9 +159,13 @@ def predict_tiles(net: nn.Module, lum: np.ndarray, prior: np.ndarray, device: st
     th, tw = -(-h // TILE) * TILE, -(-w // TILE) * TILE
     x = _padded(lum, prior, mg, th + 2 * mg, tw + 2 * mg)
     out = np.zeros((th, tw), np.float32)
+    if near is not None:
+        out[:h, :w] = prior
     with _eval_on(net, device):
         for y in range(0, th, TILE):
             for xx in range(0, tw, TILE):
+                if near is not None and not near[y:y + TILE, xx:xx + TILE].any():
+                    continue
                 p = _run(net, x[:, y:y + TILE + 2 * mg, xx:xx + TILE + 2 * mg], device)
                 out[y:y + TILE, xx:xx + TILE] = p[mg:mg + TILE, mg:mg + TILE]
     return out[:h, :w]

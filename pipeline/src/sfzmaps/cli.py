@@ -848,7 +848,7 @@ def warp(
 def frame(
     device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where available, else cpu)."),
     seed: int = typer.Option(0, "--seed", help="Seed of every trainer's draws."),
-    steps: int = typer.Option(None, "--steps", help="The most steps any trainer may take (default: the recipe's)."),
+    steps: int = typer.Option(None, "--steps", help="The steps each training takes (default: the recipe's)."),
     only_folds: bool = typer.Option(False, "--only-folds", help="Only the held-out folds and their scores."),
     skip_folds: bool = typer.Option(False, "--skip-folds",
                                     help="Reuse data/frame/folds.json: train the final model, predict, draw."),
@@ -899,7 +899,7 @@ def frame(
         else:
             result = frame_run.run_folds(labelled, recipe, device, out=out, only=fold)
         if not (only_folds or fold is not None):
-            frame_run.train_final(labelled, recipe, device, result["steps"], out=out)
+            frame_run.train_final(labelled, recipe, device, out=out)
             frame_run.predict_all(device, out=out)
             look.series_mosaics(out)
             look.odd_cases(out)

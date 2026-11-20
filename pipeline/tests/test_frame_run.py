@@ -1,8 +1,7 @@
-import collections
 import csv
 import json
-import logging
 import math
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -45,7 +44,8 @@ def _toy_lum(seed: int) -> np.ndarray:
 @pytest.fixture
 def toy(tmp_path, monkeypatch):
     """Three toy series of four labelled map pages each, plus one unlabelled map page and one cover per series, under
-    tmp_path (the data paths point there).  Returns (labelled sheets, out dir)."""
+    tmp_path (the data paths point there).  Each sheet's label is a rectangle of its own, so a mask names its sheet.
+    Returns (labelled sheets, out dir)."""
     work, labels, kinds = tmp_path / "work", tmp_path / "labels", tmp_path / "page_kinds.csv"
     monkeypatch.setattr(data, "WORK", work)
     monkeypatch.setattr(data, "LABELS", labels)
@@ -57,14 +57,14 @@ def toy(tmp_path, monkeypatch):
             p = data.page_path(s, sheet, work)
             p.parent.mkdir(parents=True)
             Image.fromarray(np.round(_toy_lum(seed) * 255).astype(np.uint8)).save(p)
-            seed += 1
-            rows.append({"series": s, "sheet": sheet, "kind": kind, "checked": "test"})
             if sheet.startswith("s"):
-                b = RULE + 2
+                b, r = RULE + 2, W - RULE - 2 - len(labelled)
                 (labels / s).mkdir(parents=True, exist_ok=True)
                 (labels / s / f"{sheet}.json").write_text(json.dumps(
-                    {"polygons": [[[b, b], [W - b, b], [W - b, H - b], [b, H - b]]]}))
+                    {"polygons": [[[b, b], [r, b], [r, H - b], [b, H - b]]]}))
                 labelled.append((s, sheet))
+            seed += 1
+            rows.append({"series": s, "sheet": sheet, "kind": kind, "checked": "test"})
     with open(kinds, "w", newline="") as f:
         wr = csv.DictWriter(f, fieldnames=["series", "sheet", "kind", "checked"])
         wr.writeheader()
@@ -90,106 +90,74 @@ def _sig(v: float) -> float:
 
 
 class Recorder:
-    """Fake trainers: each call records the sheets it trained on ("trained"), every sheet it was given, training and
-    validation ("seen"), and, for the pixel pass, each page's prior.  The net's state after each step (one check per
-    step) is a Const whose probability names (call, step); the call returns the last one and, when asked, the
-    snapshots of every step, as `train._fit` does.  Both curves bottom at step 1, short of the recipe's 2 steps, so a
-    net at the chosen step differs from the net a call returns."""
+    """A fake `train.train_joint`: each call records its label and every page it was given, training and validation
+    (each page's id, luminance and mask), and returns a page pass and a pixel pass that are Consts whose
+    probabilities name the call."""
 
-    CURVES = {"coarse": [(1, 0.4), (2, 0.5)], "fine": [(1, 0.3), (2, 0.6)]}
+    CURVE = [(1, 0.5, 0.4), (2, 0.3, 0.2)]
 
     def __init__(self):
-        self.coarse, self.fine = [], []   # per call: {"trained", "seen", "steps"[, "priors"]}
-        self.tags = {"coarse": [], "fine": []}   # per kind: [(call, step)], a tag's index fixes its logit
-        self.labels = []                         # every call's label, in call order
+        self.calls = []          # per call: {"label", "trained", "seen", "pages"}
 
     @staticmethod
-    def _logit(kind: str, t: int) -> float:
-        return (-2.0 if kind == "coarse" else 0.1) + 0.06 * t
+    def _logit(kind: str, call: int) -> float:
+        return (-2.0 if kind == "coarse" else 0.1) + 0.3 * call
 
-    def which(self, kind: str, p: np.ndarray) -> tuple[int, int]:
-        """(call, step) of the net state that gave the constant probability p."""
+    def which(self, kind: str, p: np.ndarray) -> int:
+        """The call whose `kind` net gave the constant probability p."""
         p = np.asarray(p, np.float64)
         assert float(p.max() - p.min()) < 1e-3, "a toy net's output is constant"
-        dist = [abs(_sig(self._logit(kind, t)) - float(p.mean())) for t in range(len(self.tags[kind]))]
-        t = int(np.argmin(dist))
-        assert dist[t] < 2e-3
-        return self.tags[kind][t]
+        dist = [abs(_sig(self._logit(kind, c)) - float(p.mean())) for c in range(len(self.calls))]
+        c = int(np.argmin(dist))
+        assert dist[c] < 2e-3
+        return c
 
-    def _train(self, kind, in_ch, pages, recipe, val, snapshots, label, record):
-        self.labels.append(label)
-        k = len(getattr(self, kind))
-        getattr(self, kind).append({"trained": {pg.id for pg in pages}, "seen": {pg.id for pg in pages + (val or [])},
-                                    "steps": recipe.steps, **record})
-        snaps = {}
-        for step in range(1, recipe.steps + 1):
-            self.tags[kind].append((k, step))
-            snaps[step] = Const(in_ch, self._logit(kind, len(self.tags[kind]) - 1)).state_dict()
-        net = Const(in_ch, 0.0)
-        net.load_state_dict(snaps[recipe.steps])
-        info = {"val_curve": self.CURVES[kind] if val else []}
-        if snapshots:
-            info["snapshots"] = snaps
-        return net, info
-
-    def train_coarse(self, pages, recipe, device, val=None, snapshots=False, label="page pass"):
-        return self._train("coarse", 1, pages, recipe, val, snapshots, label, {})
-
-    def train_fine(self, pages, recipe, device, val=None, snapshots=False, label="pixel pass"):
-        priors = {pg.id: np.asarray(pg.prior, np.float32) for pg in pages + (val or [])}
-        return self._train("fine", 2, pages, recipe, val, snapshots, label, {"priors": priors})
+    def train_joint(self, pages, recipe, device, val=None, label=""):
+        given = pages + (val or [])
+        self.calls.append({"label": label, "trained": {pg.id for pg in pages}, "seen": {pg.id for pg in given},
+                           "pages": [(pg.id, pg.lum, pg.mask) for pg in given]})
+        c = len(self.calls) - 1
+        return (Const(1, self._logit("coarse", c)), Const(2, self._logit("fine", c))), \
+            {"train_curve": self.CURVE, "val_curve": []}
 
 
 @pytest.fixture
 def recorder(monkeypatch):
     rec = Recorder()
-    monkeypatch.setattr(train, "train_coarse", rec.train_coarse)
-    monkeypatch.setattr(train, "train_fine", rec.train_fine)
+    monkeypatch.setattr(train, "train_joint", rec.train_joint)
     return rec
+
+
+def _check_no_leak(recorder, labelled, outer):
+    """Each outer fold's one training sees exactly its training sheets: their own pages and labels, never a
+    held-out sheet's (by id, and by the page and mask given)."""
+    truth = {sid: run._labelled_page(sid) for sid in labelled}
+    assert [c["label"] for c in recorder.calls] == [f"fold {k}" for k in range(len(outer))]
+    for k, (call, fold) in enumerate(zip(recorder.calls, outer)):
+        assert call["seen"] == call["trained"] == set(fold.train)
+        assert not call["seen"] & set(fold.held)
+        for sid, lum, mask in call["pages"]:
+            assert np.array_equal(lum, truth[sid].lum) and np.array_equal(mask, truth[sid].mask)
+            for held in fold.held:
+                assert not np.array_equal(mask, truth[held].mask)
+                assert not np.array_equal(lum, truth[held].lum)
 
 
 def test_run_folds_never_scores_a_trained_sheet(toy, recorder):
     labelled, out = toy
     result = run.run_folds(labelled, RECIPE, "cpu", out=out)
     outer = folds.split(labelled, folds.OUTER_K)
+    _check_no_leak(recorder, labelled, outer)
 
-    # every trainer call (outer or inner) sees exactly one fold's training sheets, never its held-out ones
-    per_fold, home = collections.Counter(), {}
-    for kind, calls in (("coarse", recorder.coarse), ("fine", recorder.fine)):
-        for i, call in enumerate(calls):
-            homes = [k for k, f in enumerate(outer) if call["seen"] == set(f.train)]
-            assert len(homes) == 1, call["seen"]
-            assert not call["seen"] & set(outer[homes[0]].held)
-            per_fold[(homes[0], kind)] += 1
-            home[(kind, i)] = homes[0]
-    assert per_fold == {(k, kind): 4 for k in range(folds.OUTER_K) for kind in ("coarse", "fine")}
-    chosen = {f["fold"]: f for f in result["folds"]}
-
-    # every pixel-pass page's prior came from an inner page pass that never trained on that page (it validates on the
-    # sheets it then predicts: validation only records its curve), taken at the step the fold chose, not the last
-    for i, call in enumerate(recorder.fine):
-        for sid, prior in call["priors"].items():
-            c, step = recorder.which("coarse", prior)
-            assert sid not in recorder.coarse[c]["trained"]
-            assert recorder.coarse[c]["trained"] != recorder.coarse[c]["seen"]      # an inner page pass
-            assert step == chosen[home[("fine", i)]]["coarse_steps"] < RECIPE.steps
-
-    # each held-out sheet is predicted by nets that saw nothing of its fold's held-out sheets, nor did the page
-    # passes that made the pixel pass's priors; the page pass that made its prior ran the chosen steps
+    # each held-out sheet is predicted by its own fold's two nets, the pixel pass reading the page pass's prior
     for k, f in enumerate(outer):
         for sid in f.held:
             with np.load(out / sid[0] / sid[1] / "map_prob.npz") as z:
                 assert z["coarse"].dtype == np.float16 and z["map"].dtype == np.float16
                 assert z["coarse"].shape == z["map"].shape == (H, W)
-                (c, c_step), (m, m_step) = recorder.which("coarse", z["coarse"]), recorder.which("fine", z["map"])
-            assert c_step == recorder.coarse[c]["steps"] == chosen[k]["coarse_steps"]
-            assert m_step == recorder.fine[m]["steps"] == chosen[k]["fine_steps"]
-            assert not recorder.coarse[c]["seen"] & set(f.held)
-            assert not recorder.fine[m]["seen"] & set(f.held)
-            for prior in recorder.fine[m]["priors"].values():
-                assert not recorder.coarse[recorder.which("coarse", prior)[0]]["seen"] & set(f.held)
+                assert recorder.which("coarse", z["coarse"]) == k and recorder.which("fine", z["map"]) == k
 
-    # every sheet has its scores; folds.json has them with the fold, the means and the chosen steps
+    # every sheet has its scores; folds.json has them with the fold, the means and the fold's logged curves
     written = json.loads((out / "folds.json").read_text())
     assert written == json.loads(json.dumps(result))
     by_sheet = {(s["series"], s["sheet"]): s for s in written["sheets"]}
@@ -200,20 +168,11 @@ def test_run_folds_never_scores_a_trained_sheet(toy, recorder):
             assert by_sheet[sid]["fold"] == k
     assert set(written["series"]) == set(SERIES)
     assert written["overall"]["log_loss_all_ink"]["sheets"] == len(labelled)
-    assert written["steps"] == {"coarse": [1] * folds.OUTER_K, "fine": [1] * folds.OUTER_K}
-    # every validation curve is in folds.json
-    for f in written["folds"]:
-        assert f["coarse_curves"] == [[list(p) for p in Recorder.CURVES["coarse"]]] * folds.INNER_K
-        assert f["fine_curves"] == [[list(p) for p in Recorder.CURVES["fine"]]] * folds.INNER_K
-    # each training is labelled by its fold, pass and inner fold
-    want = []
-    for k in range(folds.OUTER_K):
-        want += [f"fold {k} page inner {i}" for i in range(folds.INNER_K)] + [f"fold {k} page all"]
-        want += [f"fold {k} pixel inner {i}" for i in range(folds.INNER_K)] + [f"fold {k} pixel all"]
-    assert recorder.labels == want
-    # the outer nets train for the chosen steps; the inner ones for the recipe's
-    assert collections.Counter(c["steps"] for c in recorder.coarse) == {2: 12, 1: 4}
-    assert collections.Counter(c["steps"] for c in recorder.fine) == {2: 12, 1: 4}
+    assert [f["fold"] for f in written["folds"]] == list(range(folds.OUTER_K))
+    for f, fold in zip(written["folds"], outer):
+        assert f["held"] == [list(s) for s in fold.held]
+        assert f["train_curve"] == [list(p) for p in Recorder.CURVE] and f["val_curve"] == []
+    assert "steps" not in written
 
 
 def test_uneven_series_each_counted(toy, recorder):
@@ -224,9 +183,7 @@ def test_uneven_series_each_counted(toy, recorder):
     result = run.run_folds(labelled, RECIPE, "cpu", out=out)
     outer = folds.split(labelled, folds.OUTER_K)
     assert [len(f.held) for f in outer] == [3, 2, 2, 2]                       # 9 dealt into 4
-    for call in recorder.coarse + recorder.fine:
-        homes = [k for k, f in enumerate(outer) if call["seen"] == set(f.train)]
-        assert len(homes) == 1 and not call["seen"] & set(outer[homes[0]].held)
+    _check_no_leak(recorder, labelled, outer)
     assert {(s["series"], s["sheet"]) for s in result["sheets"]} == set(labelled)
     counts = {name: m["log_loss_all_ink"]["sheets"] for name, m in result["series"].items()}
     assert counts == {"a": 4, "b": 4, "c": 1}
@@ -248,15 +205,6 @@ def test_labelled_page_cuts_holes_and_ink_skips_the_strip(toy):
     assert ink["all"] < float(data.ink_weight(pg.lum).sum(dtype=np.float64))
 
 
-def test_a_curve_best_at_the_cap_is_logged(toy, recorder, monkeypatch, caplog):
-    labelled, out = toy
-    monkeypatch.setattr(Recorder, "CURVES", {"coarse": [(1, 0.4), (2, 0.5)], "fine": [(1, 0.6), (2, 0.3)]})
-    with caplog.at_level(logging.INFO, logger="sfzmaps.frame.run"):
-        run.run_folds(labelled, RECIPE, "cpu", out=out, only=1)
-    capped = [r.getMessage() for r in caplog.records if "best at the cap" in r.getMessage()]
-    assert capped == [f"fold 1 pixel inner {i}: best at the cap; more steps may help" for i in range(folds.INNER_K)]
-
-
 def _files(root):
     return {p.relative_to(root): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
 
@@ -270,7 +218,6 @@ def test_one_fold_run_leaves_the_main_tree_alone(toy, recorder):
     assert {p: after[p] for p in before} == before
     new = sorted(p for p in after if p not in before)
     held = folds.split(labelled, folds.OUTER_K)[0].held
-    from pathlib import Path
     want = [Path("fold-0") / "folds.json"] + [Path("fold-0", s, h, name) for s, h in held
                                               for name in ("map_prob.npz", "scores.json")]
     assert new == sorted(want)
@@ -286,32 +233,25 @@ def test_a_full_run_drops_the_old_summary_first(toy, recorder, monkeypatch):
 
     def boom(*args, **kwargs):
         raise RuntimeError("crash mid-run")
-    monkeypatch.setattr(train, "train_coarse", boom)
+    monkeypatch.setattr(train, "train_joint", boom)
     with pytest.raises(RuntimeError):
         run.run_folds(labelled, RECIPE, "cpu", out=out)
     assert not (out / "folds.json").exists()
 
 
-def test_final_priors_are_held_out_predictions(toy, recorder):
+def test_final_model_trains_on_every_labelled_sheet(toy, recorder):
     labelled, out = toy
-    for i, sid in enumerate(labelled):
-        d = out / sid[0] / sid[1]
-        d.mkdir(parents=True)
-        np.savez_compressed(d / "map_prob.npz", coarse=np.full((H, W), 0.05 + 0.07 * i, np.float16),
-                            map=np.zeros((H, W), np.float16))
-    run.train_final(labelled, RECIPE, "cpu", {"coarse": [1, 2, 4, 5], "fine": [2, 2, 4, 6]}, out=out)
-
-    assert [c["seen"] for c in recorder.coarse] == [set(labelled)]
-    assert [c["seen"] for c in recorder.fine] == [set(labelled)]
-    assert recorder.labels == ["final page", "final pixel"]
-    assert recorder.coarse[0]["steps"] == 3 and recorder.fine[0]["steps"] == 3
-    for i, sid in enumerate(labelled):
-        np.testing.assert_array_equal(recorder.fine[0]["priors"][sid],
-                                      np.full((H, W), np.float16(0.05 + 0.07 * i), np.float32))
-    assert (out / "model" / "coarse.pt").exists() and (out / "model" / "fine.pt").exists()
+    run.train_final(labelled, RECIPE, "cpu", out=out)
+    assert [c["label"] for c in recorder.calls] == ["final"]
+    assert recorder.calls[0]["seen"] == recorder.calls[0]["trained"] == set(labelled)
+    for name, kind in (("coarse.pt", "coarse"), ("fine.pt", "fine")):
+        state = torch.load(out / "model" / name, weights_only=True)
+        assert float(state["b"]) == pytest.approx(Recorder._logit(kind, 0))
     recipe = json.loads((out / "model" / "recipe.json").read_text())
-    assert recipe["coarse_steps"] == 3 and recipe["fine_steps"] == 3
     assert recipe["recipe"]["seed"] == RECIPE.seed and recipe["recipe"]["lr"] == RECIPE.lr
+    assert recipe["recipe"]["steps"] == RECIPE.steps
+    assert recipe["sheets"] == [list(s) for s in labelled]
+    assert recipe["train_curve"] == [list(p) for p in Recorder.CURVE]
 
 
 def test_predict_all_keeps_held_out_and_draws_every_page(toy, monkeypatch):

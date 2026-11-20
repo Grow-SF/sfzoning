@@ -1,19 +1,22 @@
-"""Issue #71 speed check: where does a training step's time go?
+"""Issue #71 speed check: where does a joint training step's time go?
 
-Times, on real labelled pages, for the page pass and the pixel pass as `sfzmaps.frame.train` trains them (folded
-U-Nets, batches built on the device, prefetch):
+Times, on real labelled pages, for one step of `sfzmaps.frame.train.train_joint` (both passes together: the page
+pass's priors, the two batches, forward, backward, Adam):
 
-- draw: the cpu's part of a batch (`_coarse_draw` / `_fine_draw`: the random values and the crops), alone;
-- make: the device's part (`_coarse_make` / `_fine_make`: scaling, turns, flips, photometric changes, blur), synced;
-- device step: make, forward, backward and Adam, synced;
-- loop: the training loop as `_fit` runs it, prefetch on (the draw in a background thread), per step, synced at the
-  end only;
-- one validation check on 3 pages.
+- draw: the cpu's part of a step (`_coarse_draw` and `_fine_draw`: the random values and the crops), alone;
+- priors: the page pass in eval mode on the drawn pages (`_page_priors`), synced;
+- make: the device's part of both batches (`_coarse_make`, `_fine_make`: the prior windows, scaling, turns, flips,
+  photometric changes, blur), synced;
+- device step: priors, make, both forwards, backward and Adam, synced;
+- loop: the training loop as `train_joint` runs it, prefetch on (the draw in a background thread), per step, synced
+  at the end only;
+- one validation check on 3 pages (the pixel pass only near the outline).
 
     uv run python scripts/spikes/issue71_speed.py [--device mps] [--steps 20]
 """
 
 import argparse
+import math
 import time
 
 import torch
@@ -30,52 +33,10 @@ def sync(device):
         torch.mps.synchronize()
 
 
-def time_pass(name, net, draw, make, device, steps, recipe):
-    net.to(device).train()
-    opt = torch.optim.Adam(net.parameters(), lr=recipe.lr)
-
-    def step(spec):
-        with torch.no_grad():
-            x, t, w = make(spec)
-        loss = train._loss(net(x), t, w)
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
-
-    t_draw = t_make = t_step = 0.0
-    for i in range(steps + WARM):
-        t0 = time.perf_counter()
-        spec = draw()
-        t1 = time.perf_counter()
-        make(spec)
-        sync(device)
-        t2 = time.perf_counter()
-        step(spec)
-        sync(device)
-        t3 = time.perf_counter()
-        if i >= WARM:
-            t_draw += t1 - t0
-            t_make += t2 - t1
-            t_step += t3 - t2
-    sync(device)
-    t0 = time.perf_counter()
-    with train._batches(draw, steps, True) as batches:
-        for spec in batches:
-            step(spec)
-    sync(device)
-    t_loop = time.perf_counter() - t0
-    print(f"{name} per step: draw {t_draw / steps * 1000:.0f} ms (cpu), make {t_make / steps * 1000:.0f} ms, "
-          f"device step {t_step / steps * 1000:.0f} ms (make + fwd + bwd + Adam); "
-          f"loop with prefetch {t_loop / steps * 1000:.0f} ms -> {recipe.steps} steps "
-          f"{t_loop / steps * recipe.steps / 60:.1f} min")
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", default="mps")
     ap.add_argument("--steps", type=int, default=20)
-    ap.add_argument("--nondet", action="store_true", help="deterministic algorithms off (speed comparison only)")
-    ap.add_argument("--only-coarse", action="store_true")
     a = ap.parse_args()
     recipe = train.Recipe()
     sheets = data.labelled_sheets()[:6]
@@ -83,32 +44,70 @@ def main():
     pages = [frun._labelled_page(s) for s in sheets]
     print(f"load {len(pages)} pages: {time.perf_counter() - t0:.1f} s")
     with gpu.gpu_turn(True, a.device):
+        dev = a.device
         rng = train._settle(0)
-        if a.nondet:
-            torch.use_deterministic_algorithms(False)
         t0 = time.perf_counter()
-        coarse = [train._coarse_arrays(pg, recipe.paper_weight) for pg in pages]
-        scales = [s for _, s in coarse]
-        on_device = [tuple(torch.from_numpy(arr.copy()).to(a.device) for arr in arrays) for arrays, _ in coarse]
-        print(f"coarse arrays: {time.perf_counter() - t0:.1f} s")
-        net = predict.new_coarse_net()
-        time_pass("PAGE PASS", net, lambda: train._coarse_draw(rng, scales, recipe.batch),
-                  lambda spec: train._coarse_make(spec, on_device, a.device), a.device, a.steps, recipe)
-        val_loss = train._val_loss(pages[:3])
-        t0 = time.perf_counter()
-        val_loss(lambda pg: predict.predict_coarse(net, pg.lum, a.device))
-        print(f"page-pass validation check (3 pages): {time.perf_counter() - t0:.1f} s")
-        if a.only_coarse:
-            return
-        for pg in pages:
-            pg.prior = predict.predict_coarse(net, pg.lum, a.device).astype("float16")
+        found = [train._coarse_arrays(pg, recipe.paper_weight) for pg in pages]
+        scales = [s for _, s in found]
+        arrays = [tuple(torch.from_numpy(x.copy()).to(dev) for x in arr) for arr, _ in found]
         aux = [train._fine_aux(pg) for pg in pages]
-        fnet = predict.new_fine_net()
-        time_pass("PIXEL PASS", fnet, lambda: train._fine_draw(rng, pages, aux, recipe.batch),
-                  lambda spec: train._fine_make(spec, recipe.paper_weight, a.device), a.device, a.steps, recipe)
+        print(f"page arrays and crop aids: {time.perf_counter() - t0:.1f} s")
+        coarse, fine = predict.new_coarse_net().to(dev).train(), predict.new_fine_net().to(dev).train()
+        opt = torch.optim.Adam([*coarse.parameters(), *fine.parameters()], lr=recipe.lr)
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 0.5 * (1 + math.cos(math.pi * s / recipe.steps)))
+
+        def draw():
+            return train._coarse_draw(rng, scales, recipe.batch), train._fine_draw(rng, pages, aux, recipe.batch)
+
+        def step(spec):
+            cspec, fspec = spec
+            with torch.no_grad():
+                priors = train._page_priors(coarse, arrays, (c.page for c in fspec), dev)
+                xc, tc, wc = train._coarse_make(cspec, arrays, dev)
+                xf, tf, wf = train._fine_make(fspec, priors, recipe.paper_weight, dev)
+            losses = torch.stack([train._loss(coarse(xc), tc, wc), train._loss(fine(xf), tf, wf)])
+            opt.zero_grad(set_to_none=True)
+            losses.sum().backward()
+            opt.step()
+            sched.step()
+
+        t_draw = t_prior = t_make = t_step = 0.0
+        for i in range(a.steps + WARM):
+            t0 = time.perf_counter()
+            spec = draw()
+            t1 = time.perf_counter()
+            with torch.no_grad():
+                priors = train._page_priors(coarse, arrays, (c.page for c in spec[1]), dev)
+                sync(dev)
+                t2 = time.perf_counter()
+                train._coarse_make(spec[0], arrays, dev)
+                train._fine_make(spec[1], priors, recipe.paper_weight, dev)
+                sync(dev)
+            t3 = time.perf_counter()
+            step(spec)
+            sync(dev)
+            t4 = time.perf_counter()
+            if i >= WARM:
+                t_draw += t1 - t0
+                t_prior += t2 - t1
+                t_make += t3 - t2
+                t_step += t4 - t3
+        n = a.steps
+        sync(dev)
         t0 = time.perf_counter()
-        val_loss(lambda pg: predict.predict_tiles(fnet, pg.lum, pg.prior, a.device))
-        print(f"pixel-pass validation check (3 pages): {time.perf_counter() - t0:.1f} s")
+        with train._batches(draw, n, True) as batches:
+            for spec in batches:
+                step(spec)
+        sync(dev)
+        t_loop = time.perf_counter() - t0
+        print(f"JOINT per step: draw {t_draw / n * 1000:.0f} ms (cpu), priors {t_prior / n * 1000:.0f} ms, "
+              f"make {t_make / n * 1000:.0f} ms, device step {t_step / n * 1000:.0f} ms (priors + make + fwd + bwd + "
+              f"Adam); loop with prefetch {t_loop / n * 1000:.0f} ms -> {recipe.steps} steps "
+              f"{t_loop / n * recipe.steps / 60:.1f} min")
+        check = train._validation(pages[:3], dev)
+        t0 = time.perf_counter()
+        check(coarse, fine)
+        print(f"validation check (3 pages, pixel pass near the outline only): {time.perf_counter() - t0:.1f} s")
 
 
 if __name__ == "__main__":
