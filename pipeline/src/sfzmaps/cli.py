@@ -845,6 +845,61 @@ def warp(
 
 
 @app.command()
+def frame(
+    device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where available, else cpu)."),
+    seed: int = typer.Option(0, "--seed", help="Seed of every trainer's draws."),
+    steps: int = typer.Option(None, "--steps", help="The most steps any trainer may take (default: the recipe's)."),
+    only_folds: bool = typer.Option(False, "--only-folds", help="Only the held-out folds and their scores."),
+    skip_folds: bool = typer.Option(False, "--skip-folds",
+                                    help="Reuse data/frame/folds.json: train the final model, predict, draw."),
+    fold: int = typer.Option(None, "--fold", hidden=True,
+                             help="Run outer fold K alone (the determinism check); writes fold-K.json."),
+) -> None:
+    """The learned frame finder (issue #71), $0: score every labelled sheet held out, train the final model on all
+    of them, predict every map page and draw the pictures, into data/frame/. On the Mac's GPU it takes one exclusive
+    turn (`sfzmaps.gpu`) for the whole run."""
+    import dataclasses
+    import json
+    import logging
+
+    from sfzmaps import gpu
+    from sfzmaps.frame import data as frame_data
+    from sfzmaps.frame import look
+    from sfzmaps.frame import run as frame_run
+    from sfzmaps.frame.train import Recipe
+    from sfzmaps.solver.textnet.train import default_device
+
+    device = device or default_device()
+    if device not in ("cpu", "mps"):
+        raise typer.BadParameter(f"--device must be cpu or mps, not {device!r}")
+    if only_folds and skip_folds:
+        raise typer.BadParameter("--only-folds and --skip-folds exclude each other")
+    if fold is not None and skip_folds:
+        raise typer.BadParameter("--fold runs one fold; it can't skip the folds")
+    recipe = Recipe(seed=seed)
+    if steps is not None:
+        recipe = dataclasses.replace(recipe, steps=steps)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    out = frame_data.OUT
+    labelled = frame_data.labelled_sheets()
+    with gpu.gpu_turn(True, device):
+        if skip_folds:
+            result = json.loads((out / frame_run.FOLDS_FILE).read_text())
+            ran = Recipe(**result["recipe"])
+            if ran != recipe:
+                typer.echo(f"the folds ran with {ran}; the final model trains with it too", err=True)
+            recipe = ran
+        else:
+            result = frame_run.run_folds(labelled, recipe, device, out=out, only=fold)
+        if not (only_folds or fold is not None):
+            frame_run.train_final(labelled, recipe, device, result["steps"], out=out)
+            frame_run.predict_all(device, out=out)
+            look.series_mosaics(out)
+            look.odd_cases(out)
+    typer.echo(frame_run.format_scores(result))
+
+
+@app.command()
 def stage(name: str = typer.Argument(..., help="A build stage, e.g. edition-1948, period-1980-1990, "
                                                "today, shared, warp-1948 (see `sfzmaps build --list`).")) -> None:
     """Run one build stage's commands, at $0 (what `sfzmaps build` and `dvc repro` run)."""

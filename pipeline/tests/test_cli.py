@@ -159,6 +159,22 @@ def test_cli_downloads_rejects_unknown_series(monkeypatch):
     assert res.exit_code != 0 and "nope" in res.output
 
 
+def test_cli_frame_listed():
+    import re
+
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    res = CliRunner().invoke(cli.app, ["--help"])
+    assert "frame" in res.output
+    res = CliRunner().invoke(cli.app, ["frame", "--help"], env={"NO_COLOR": "1", "TERM": "dumb"})
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", res.output)
+    assert res.exit_code == 0
+    assert all(opt in plain for opt in ("--device", "--seed", "--steps", "--only-folds", "--skip-folds"))
+    assert "--fold " not in plain     # hidden: the determinism check's one-fold run
+
+
 def test_cli_downloads_listed(monkeypatch):
     from typer.testing import CliRunner
 
