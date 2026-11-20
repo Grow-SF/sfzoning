@@ -100,6 +100,18 @@ out. The owner sees the redrawn 1921 labels before anything trains on them.
    5 levels, about 120 px reach, batch norm, nearest upsampling). It outputs the map-area logit per pixel. This places
    the edge between the thin rule and the map's first line, which the coarse pass cannot resolve.
 
+**Speed (owner, 2026-11-19, after the first real run took 25 min per training).** On the Mac's GPU a convolution's
+backward is 12–35× its forward on layers with few channels and millions of pixels, which is exactly a U-Net's
+full-resolution top level; building batches on the CPU added 35–83 ms per step in series. So:
+
+- **Both passes fold 4×4 pixels into channels** (`pixel_unshuffle`) before their U-Net and unfold the output
+  (`pixel_shuffle`): one output per pixel still, nothing discarded, about 8× faster per step (measured: page pass
+  353 → 42 ms, pixel pass 344 → 43 ms). The page pass still sees the whole page; the pixel pass sees about 230 px each
+  way.
+- **Augmentation runs on the GPU,** with the next batch's crops prepared while the GPU works.
+- **Training is capped at 2,000 steps, and every validation curve is logged,** so a curve whose best point sits at the
+  cap shows the cap was too short.
+
 Both passes are trained on the same masks. The page pass trains first. The pixel pass then trains on top of the page
 pass's held-out output for each training sheet (see Folds), so it never learns to trust an over-confident in-sample
 coarse prediction.

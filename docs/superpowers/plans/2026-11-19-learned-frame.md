@@ -476,7 +476,73 @@ the mask blurred (a stand-in for the page pass's answer).
 
 ---
 
-### Task 8: The real run, and showing the owner
+### Task 9: Fast networks and GPU augmentation (amendment, owner 2026-11-19)
+
+The first real run took 25 min per 4,000-step training. Measured cause: on mps a convolution's backward is 12–35× its
+forward on few-channel megapixel layers (the U-Net's top level), and batches are built on the CPU in series (35–83 ms).
+Spike scripts with the measurements: `pipeline/scripts/spikes/issue71_speed*.py`. Spec: the "Speed" paragraph in the
+design's "The network: two scales". Controller rulings R1–R7 in the ledger still hold.
+
+**Files:**
+- Modify: `pipeline/src/sfzmaps/nets/unet.py`, `pipeline/src/sfzmaps/frame/predict.py`, `pipeline/src/sfzmaps/frame/train.py`,
+  `pipeline/src/sfzmaps/frame/run.py`
+- Test: `pipeline/tests/test_nets_unet.py`, `test_frame_predict.py`, `test_frame_train.py`, `test_frame_run.py`
+
+**Interfaces:**
+- Produces in `nets/unet.py`: `Folded(in_ch: int, out_ch: int, fold: int, width: int, levels: int)`, an `nn.Module`
+  computing `pixel_shuffle(UNet(in_ch*fold², out_ch*fold², width, levels)(pixel_unshuffle(x, fold)), fold)`; input
+  sides must be multiples of `fold * multiple(levels)`. `folded_reach(fold, levels) -> int = fold * reach(levels)`;
+  `folded_multiple(fold, levels) -> int = fold * multiple(levels)`.
+- Changes in `predict.py`:
+  - **The page pass:** `COARSE_FOLD = 4`, `COARSE_LEVELS = 7`, `COARSE_WIDTH = 16`, and
+    `new_coarse_net() = Folded(1, 1, COARSE_FOLD, COARSE_WIDTH, COARSE_LEVELS)`.
+    - Keep `COARSE_SIDE = 1024`, and the square padding of ruling R6.
+    - Two asserts:
+      - `folded_reach(COARSE_FOLD, COARSE_LEVELS) >= COARSE_SIDE`, so every output still sees the whole page;
+      - `COARSE_SIDE % folded_multiple(...) == 0`.
+  - **The pixel pass:** `FINE_FOLD = 4`, `FINE_LEVELS = 4`, `FINE_WIDTH = 32`, `TILE = 256`, and
+    `new_fine_net() = Folded(2, 1, FINE_FOLD, FINE_WIDTH, FINE_LEVELS)`.
+    - The tile margin becomes `folded_reach(FINE_FOLD, FINE_LEVELS)` (232), rounded up to a multiple of
+      `folded_multiple(FINE_FOLD, FINE_LEVELS)` (32), which gives 256.
+    - The seamless-tiling equality test must still pass.
+- Changes in `train.py`:
+  - **Batches.** The CPU draws only crops and pages. The quarter turns, flips, photometric changes, Gaussian blur
+    (sigma in page px, ruling R6) and scale jitter run on the device, in torch, on the batch.
+  - **Randomness.** Every random value is still drawn from the one numpy generator, in a fixed order, and only applied
+    on the device. Determinism is unchanged.
+  - **Prefetch.** A background thread draws the next batch while the GPU steps, as in
+    `solver/textnet/train.py`'s `prefetch`. It uses the same generator in the same order, so the weights are the same
+    bit for bit with or without it. Test this.
+  - **Recipe.** `Recipe.steps` defaults to 2000. Every validation check logs one line: `"<label> step <s>/<n>: val
+    <loss>"`, which needs a `label` argument from the caller.
+- Changes in `run.py`:
+  - pass a label to each training: `"fold 0 page inner 1"` and the like;
+  - write every validation curve into `folds.json`;
+  - after a fold, log one line for each curve whose best step is the last step: `"<label>: best at the cap; more steps may help"`.
+
+- [ ] **Step 1: Write the failing tests.**
+  - `test_folded_shapes_and_reach`: `Folded(2, 1, 4, 8, 3)` on (2, 2, 64, 96) returns (2, 1, 64, 96);
+    `folded_reach(4, 4) == 4 * reach(4)`.
+  - `test_folded_is_one_output_per_pixel`: a `Folded` net whose inner U-Net is replaced by the identity on channels
+    returns its input exactly. This checks the unshuffle/shuffle order.
+  - The existing predict tests, updated to the new constants. The tiling equality test runs with `Folded` nets.
+  - `test_device_augment_matches_geometry`: the same draws applied on cpu by the new device augmentation give the
+    same turn and flip for every array as the old numpy version. Use `device="cpu"` in the test.
+  - `test_prefetch_same_weights`: two tiny trainings, one with prefetch and one without, give equal weights.
+  - The toy learning tests (thin rule next to a block line) still pass with the folded nets.
+- [ ] **Step 2: Run, and expect failures.** `uv run pytest tests/test_nets_unet.py tests/test_frame_predict.py tests/test_frame_train.py -v` → FAIL.
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run, and expect a pass.** Run the four test files above → pass. Then run the full suite once.
+- [ ] **Step 5: Measure on real pages.** `uv run python scripts/spikes/issue71_speed.py --steps 20`, after updating the
+  script to the new nets and the device augmentation.
+  - Report the per-step draw time and device step time for each pass.
+  - Target: about 50 ms per step or less for each pass, the draw hidden behind the GPU.
+  - Report the numbers whether or not they meet the target.
+- [ ] **Step 6: Commit.** `git commit -m "frame: folded U-Nets, augmentation on the device, prefetch, 2000-step cap with logged curves"`
+
+---
+
+### Task 10: The real run, and showing the owner (was Task 8)
 
 No new code, unless the run exposes a bug. A fix for that bug follows Tasks 1–7's test-first steps.
 
