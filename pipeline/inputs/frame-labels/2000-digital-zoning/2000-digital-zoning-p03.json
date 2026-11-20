@@ -1,0 +1,5 @@
+{
+ "polygons": [[[89, 495], [3174, 478], [3193, 3986], [104, 4010]]],
+ "notes": "Just inside the single heavy frame rule on left, top and right; the bottom edge sits just above the legend strip's top rule (README rule 3: ruled-off legend and title boxes are outside). The page is turned slightly (left rule drifts ~15 px right top to bottom).",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19"
+}

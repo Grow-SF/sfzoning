@@ -1,0 +1,5 @@
+{
+ "polygons": [[[287, 161], [5068, 115], [5124, 5452], [351, 5496]]],
+ "notes": "Single thick frame rule on all sides; the outline sits just inside it. The bottom side is the top edge of the thick bar that rules off the legend/title strip (rule 3), so the strip is outside. The page is turned about 0.6 degrees; corners placed where they are (rule 7), sides checked straight at their midpoints.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19"
+}

@@ -1,0 +1,5 @@
+{
+ "polygons": [[[92, 504], [3178, 483], [3205, 3993], [116, 4020]]],
+ "notes": "Just inside the single heavy frame rule on left, top and right; the bottom edge sits just above the legend strip's top rule (README rule 3: ruled-off legend and title boxes are outside). The pier-head-line note in the bottom-right corner just above the legend strip has no rule of its own separating it from the map, so it is floating text and stays inside (rule 4). The page is turned slightly (left and right rules drift ~25 px right top to bottom).",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19"
+}
