@@ -46,6 +46,31 @@ def test_coarse_input_pads_to_multiple():
     arr, scale = predict.coarse_input(lum)
     m = multiple(predict.COARSE_LEVELS)
     assert max(arr.shape) % m == 0 and min(arr.shape) % m == 0
-    assert min(arr.shape) >= 1024 or arr.shape[0] >= 1024 or arr.shape[1] >= 1024
     assert arr.shape[1] >= 1024
     assert scale == pytest.approx(1024 / 5100, rel=1e-3)
+
+
+def test_predict_restores_training_mode(monkeypatch):
+    coarse, fine = _tiny_nets(monkeypatch)
+    lum = np.random.default_rng(2).random((100, 130)).astype(np.float32)
+    coarse.train()
+    fine.train()
+    predict.predict_coarse(coarse, lum, "cpu")
+    predict.predict_tiles(fine, lum, lum, "cpu")
+    assert coarse.training and fine.training
+
+
+def test_predict_keeps_pixels_aligned(monkeypatch):
+    _tiny_nets(monkeypatch)
+    monkeypatch.setattr(predict, "_run", lambda net, x, device: x[0].copy())
+    lum = np.ones((517, 1283), np.float32)
+    lum[100:200, 900:1100] = 0.0
+    net = UNet(2, 1, 4, predict.FINE_LEVELS)
+    tiled = predict.predict_tiles(net, lum, lum, "cpu")
+    np.testing.assert_array_equal(tiled, lum)
+    coarse = predict.predict_coarse(UNet(1, 1, 4, 3), lum, "cpu")
+    assert coarse.shape == lum.shape
+    dark = coarse < 0.5
+    rows, cols = np.where(dark)
+    assert abs(rows.min() - 100) <= 2 and abs(rows.max() - 199) <= 2
+    assert abs(cols.min() - 900) <= 3 and abs(cols.max() - 1099) <= 3

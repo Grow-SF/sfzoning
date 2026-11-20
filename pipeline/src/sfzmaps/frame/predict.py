@@ -1,6 +1,8 @@
 """Whole-page prediction for the learned frame finder: a page pass on the whole page at low resolution (every output
 px sees the whole page), then a pixel pass at full resolution over tiles, fed `[lum, prior]` where `prior` is the page
 pass's probability that a px is map."""
+from contextlib import contextmanager
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -38,9 +40,21 @@ def coarse_input(lum: np.ndarray) -> tuple[np.ndarray, float]:
     return out, scale
 
 
+@contextmanager
+def _eval_on(net: UNet, device: str):
+    """The net in eval mode on `device`, put back as the caller had it (train/eval mode and device) afterwards."""
+    was = net.training
+    home = next(net.parameters()).device
+    net.to(device).eval()
+    try:
+        yield net
+    finally:
+        net.train(was)
+        net.to(home)
+
+
 def _run(net: UNet, x: np.ndarray, device: str) -> np.ndarray:
-    """Sigmoid probability of a (c, h, w) array, in eval mode, float32."""
-    net.eval()
+    """Sigmoid probability of a (c, h, w) array, float32.  The net must be in eval mode (see `_eval_on`)."""
     with torch.no_grad():
         t = torch.from_numpy(np.ascontiguousarray(x, np.float32))[None].to(device)
         return torch.sigmoid(net(t))[0, 0].float().cpu().numpy()
@@ -50,7 +64,8 @@ def predict_coarse(net: UNet, lum: np.ndarray, device: str = "cpu") -> np.ndarra
     """The page pass's probability, cropped of padding and resized (bilinear) to the page's shape."""
     h, w = lum.shape
     arr, scale = coarse_input(lum)
-    prob = _run(net.to(device), arr[None], device)
+    with _eval_on(net, device):
+        prob = _run(net, arr[None], device)
     nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
     prob = prob[:nh, :nw]
     t = torch.from_numpy(np.ascontiguousarray(prob))[None, None]
@@ -79,7 +94,8 @@ def _predict_padded_whole(net: UNet, lum: np.ndarray, prior: np.ndarray, device:
     h, w = lum.shape
     m, mg = multiple(FINE_LEVELS), _margin()
     ph, pw = -(-(h + 2 * mg) // m) * m, -(-(w + 2 * mg) // m) * m
-    out = _run(net.to(device), _padded(lum, prior, mg, ph, pw), device)
+    with _eval_on(net, device):
+        out = _run(net, _padded(lum, prior, mg, ph, pw), device)
     return out[mg:mg + h, mg:mg + w]
 
 
@@ -90,12 +106,12 @@ def predict_tiles(net: UNet, lum: np.ndarray, prior: np.ndarray, device: str = "
     mg = _margin()
     th, tw = -(-h // TILE) * TILE, -(-w // TILE) * TILE
     x = _padded(lum, prior, mg, th + 2 * mg, tw + 2 * mg)
-    net = net.to(device)
     out = np.zeros((th, tw), np.float32)
-    for y in range(0, th, TILE):
-        for xx in range(0, tw, TILE):
-            p = _run(net, x[:, y:y + TILE + 2 * mg, xx:xx + TILE + 2 * mg], device)
-            out[y:y + TILE, xx:xx + TILE] = p[mg:mg + TILE, mg:mg + TILE]
+    with _eval_on(net, device):
+        for y in range(0, th, TILE):
+            for xx in range(0, tw, TILE):
+                p = _run(net, x[:, y:y + TILE + 2 * mg, xx:xx + TILE + 2 * mg], device)
+                out[y:y + TILE, xx:xx + TILE] = p[mg:mg + TILE, mg:mg + TILE]
     return out[:h, :w]
 
 
