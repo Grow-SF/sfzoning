@@ -62,7 +62,7 @@ EDGE_MAX = 0.5      # the most `position_planes`' edge plane says (half the shor
 # The position planes both passes read beside the page, in this order (Task 15): "valid" (the scan mask) alone.
 # ("valid", "edge") is Task 14's: the edge distance taught the nets "near the edge = frame" (a district bar along
 # 1929 p09's Ocean Beach called frame).  Every input, padding and net reads the planes from here.
-POSITION_CHANNELS: tuple[str, ...] = ("valid",)
+POSITION_CHANNELS: tuple[str, ...] = ()  # held-out 2026-11-20: none 0.038 vs valid 0.047 log-loss over all ink
 
 
 def position_planes(shape: tuple[int, int],

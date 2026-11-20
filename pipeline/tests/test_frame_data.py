@@ -18,10 +18,11 @@ from sfzmaps.frame.data import (
 )
 
 
-def test_position_channels_default_to_the_scan_mask_alone():
+def test_position_channels_default_to_none():
     """Task 15: the edge distance taught the nets 'near the edge = frame' (a district bar along 1929 p09's Ocean
-    Beach); the default is the scan mask alone."""
-    assert POSITION_CHANNELS == ("valid",)
+    Beach); held out on all 18 labelled sheets, no position inputs beat the scan mask alone (log-loss over all ink
+    0.038 vs 0.047), so the default is none."""
+    assert POSITION_CHANNELS == ()
 
 
 def test_position_planes_values(position_channels):
