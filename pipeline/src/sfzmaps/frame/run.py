@@ -25,8 +25,9 @@ Outputs, all under `out` (default `data/frame`):
 - `<series>/<sheet>/map_prob.npz`: `coarse` (page pass) and `map` (pixel pass), float16 map probabilities;
 - `<series>/<sheet>/scores.json`: a labelled sheet's held-out `sheet_scores`;
 - `folds.json`: per sheet its scores, fold and ink; per series and overall the ink-weighted means of each score (NaN
-  scores skipped, with the count of sheets that contributed); each fold's curves and chosen step counts.  NaN and
-  Infinity are written as Python's json writes them;
+  scores skipped, with the count of sheets that contributed); each fold's chosen step counts and every validation
+  curve (`coarse_curves`, `fine_curves`: one per inner fold, [step, loss] at each check).  NaN and Infinity are
+  written as Python's json writes them;
 - `model/coarse.pt`, `model/fine.pt` (state dicts) and `model/recipe.json`.
 """
 from __future__ import annotations
@@ -141,16 +142,24 @@ def _held_once(inner: list[folds.Fold], train_ids: tuple[SheetId, ...]) -> None:
                          "out-of-fold prior")
 
 
-def _fold(fold: folds.Fold, pages: dict[SheetId, Page], recipe: Recipe, device: str):
-    """Steps 1-4 of the module for one outer fold: ({curves and chosen steps}, (page-pass net, pixel-pass net)).
-    Nothing here sees `fold.held`."""
+def _best_at_the_cap(label: str, curve: list) -> None:
+    """Log a curve whose lowest loss is at its last step (ties go to the earlier step, as in `choose_steps`): the
+    step cap may have stopped it short."""
+    if curve and min(range(len(curve)), key=lambda i: (curve[i][1], i)) == len(curve) - 1:
+        log.warning("%s: best at the cap; more steps may help", label)
+
+
+def _fold(k: int, fold: folds.Fold, pages: dict[SheetId, Page], recipe: Recipe, device: str):
+    """Steps 1-4 of the module for outer fold `k`: ({curves and chosen steps}, (page-pass net, pixel-pass net)).
+    Nothing here sees `fold.held`.  Each training is labelled "fold <k> <page|pixel> <inner i|all>" in the log; after
+    the fold, each validation curve whose best step is its last is logged (`_best_at_the_cap`)."""
     inner = folds.split(list(fold.train), folds.INNER_K)
     _held_once(inner, fold.train)
     inner_nets, coarse_curves = [], []
     for i, f in enumerate(inner):
         log.info("  page pass, inner fold %d: train %d, validate %d", i, len(f.train), len(f.held))
         net, rec = train.train_coarse([pages[s] for s in f.train], recipe, device, val=[pages[s] for s in f.held],
-                                      snapshots=True)
+                                      snapshots=True, label=f"fold {k} page inner {i}")
         coarse_curves.append(rec["val_curve"])
         inner_nets.append((net, rec["snapshots"]))
     coarse_steps = train.choose_steps(coarse_curves)
@@ -164,7 +173,8 @@ def _fold(fold: folds.Fold, pages: dict[SheetId, Page], recipe: Recipe, device: 
     del inner_nets
     log.info("  page pass on all %d for %d steps", len(fold.train), coarse_steps)
     coarse_net, _ = train.train_coarse([pages[s] for s in fold.train],
-                                       dataclasses.replace(recipe, steps=coarse_steps), device)
+                                       dataclasses.replace(recipe, steps=coarse_steps), device,
+                                       label=f"fold {k} page all")
 
     def with_prior(sids):
         return [dataclasses.replace(pages[s], prior=priors[s]) for s in sids]
@@ -172,11 +182,16 @@ def _fold(fold: folds.Fold, pages: dict[SheetId, Page], recipe: Recipe, device: 
     fine_curves = []
     for i, f in enumerate(inner):
         log.info("  pixel pass, inner fold %d: train %d, validate %d", i, len(f.train), len(f.held))
-        _, rec = train.train_fine(with_prior(f.train), recipe, device, val=with_prior(f.held))
+        _, rec = train.train_fine(with_prior(f.train), recipe, device, val=with_prior(f.held),
+                                  label=f"fold {k} pixel inner {i}")
         fine_curves.append(rec["val_curve"])
     fine_steps = train.choose_steps(fine_curves)
     log.info("  pixel pass on all %d for %d steps", len(fold.train), fine_steps)
-    fine_net, _ = train.train_fine(with_prior(fold.train), dataclasses.replace(recipe, steps=fine_steps), device)
+    fine_net, _ = train.train_fine(with_prior(fold.train), dataclasses.replace(recipe, steps=fine_steps), device,
+                                   label=f"fold {k} pixel all")
+    for kind, curves in (("page", coarse_curves), ("pixel", fine_curves)):
+        for i, curve in enumerate(curves):
+            _best_at_the_cap(f"fold {k} {kind} inner {i}", curve)
     info = {"coarse_steps": coarse_steps, "fine_steps": fine_steps,
             "coarse_curves": coarse_curves, "fine_curves": fine_curves}
     return info, (coarse_net, fine_net)
@@ -203,7 +218,7 @@ def run_folds(labelled: list[SheetId], recipe: Recipe, device: str, out: Path = 
         if only is not None and k != only:
             continue
         log.info("outer fold %d: hold out %s", k, ", ".join(f"{s}/{h}" for s, h in fold.held))
-        info, (coarse_net, fine_net) = _fold(fold, pages, recipe, device)
+        info, (coarse_net, fine_net) = _fold(k, fold, pages, recipe, device)
         for sid in fold.held:
             pg = pages[sid]
             coarse, prob = _predict(coarse_net, fine_net, pg.lum, device)
@@ -246,10 +261,11 @@ def train_final(labelled: list[SheetId], recipe: Recipe, device: str, steps: dic
             raise ValueError(f"{pg.id}: held-out prior {prior.shape} is not the page's shape {pg.lum.shape}")
         priors[pg.id] = prior
     log.info("final page pass on all %d for %d steps", len(pages), coarse_steps)
-    coarse_net, _ = train.train_coarse(pages, dataclasses.replace(recipe, steps=coarse_steps), device)
+    coarse_net, _ = train.train_coarse(pages, dataclasses.replace(recipe, steps=coarse_steps), device,
+                                       label="final page")
     log.info("final pixel pass on all %d for %d steps", len(pages), fine_steps)
     fine_net, _ = train.train_fine([dataclasses.replace(pg, prior=priors[pg.id]) for pg in pages],
-                                   dataclasses.replace(recipe, steps=fine_steps), device)
+                                   dataclasses.replace(recipe, steps=fine_steps), device, label="final pixel")
     model = out / MODEL_DIR
     model.mkdir(parents=True, exist_ok=True)
     for name, net in (("coarse.pt", coarse_net), ("fine.pt", fine_net)):

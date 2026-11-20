@@ -1,37 +1,53 @@
 """Whole-page prediction for the learned frame finder: a page pass on the whole page at low resolution (every output
 px sees the whole page), then a pixel pass at full resolution over tiles, fed `[lum, prior]` where `prior` is the page
-pass's probability that a px is map."""
+pass's probability that a px is map.
+
+Both passes are folded U-Nets (`nets.unet.Folded`): 4 x 4 px folded into channels, one output per px still (issue
+#71's speed amendment).  The page pass sees the whole COARSE_SIDE square (`folded_reach` >= COARSE_SIDE); the pixel
+pass sees `folded_reach(FINE_FOLD, FINE_LEVELS)` = 232 px each way, so each tile is read with a margin of that,
+rounded up to the folded pooling grid (256)."""
 from contextlib import contextmanager
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 
-from sfzmaps.nets.unet import UNet, multiple, reach
+from sfzmaps.nets.unet import Folded, folded_multiple, folded_reach
 
 COARSE_SIDE = 1024
-COARSE_LEVELS = 9
-COARSE_WIDTH = 8
-FINE_LEVELS = 5
-FINE_WIDTH = 16
-TILE = 512
+COARSE_FOLD = 4
+COARSE_LEVELS = 7
+COARSE_WIDTH = 16
+FINE_FOLD = 4
+FINE_LEVELS = 4
+FINE_WIDTH = 32
+TILE = 256
+
+assert folded_reach(COARSE_FOLD, COARSE_LEVELS) >= COARSE_SIDE, "every page-pass output must see the whole page"
+assert COARSE_SIDE % folded_multiple(COARSE_FOLD, COARSE_LEVELS) == 0, "COARSE_SIDE must sit on the page pass's grid"
 
 
-def new_coarse_net() -> UNet:
-    return UNet(1, 1, COARSE_WIDTH, COARSE_LEVELS)
+def new_coarse_net() -> Folded:
+    return Folded(1, 1, COARSE_FOLD, COARSE_WIDTH, COARSE_LEVELS)
 
 
-def new_fine_net() -> UNet:
-    return UNet(2, 1, FINE_WIDTH, FINE_LEVELS)
+def new_fine_net() -> Folded:
+    return Folded(2, 1, FINE_FOLD, FINE_WIDTH, FINE_LEVELS)
+
+
+def _fine_multiple() -> int:
+    return folded_multiple(FINE_FOLD, FINE_LEVELS)
 
 
 def coarse_input(lum: np.ndarray) -> tuple[np.ndarray, float]:
     """The page resized (Pillow BOX) so its long side is COARSE_SIDE, padded with paper (1.0) at the right and bottom
     to a COARSE_SIDE x COARSE_SIDE square: every page, either way up, is read with the same frame of padding, in
     training and in prediction alike.  Returns the array and the scale factor."""
-    if COARSE_SIDE % multiple(COARSE_LEVELS):
-        raise ValueError(f"COARSE_SIDE {COARSE_SIDE} is not a multiple of {multiple(COARSE_LEVELS)}")
+    m = folded_multiple(COARSE_FOLD, COARSE_LEVELS)
+    if COARSE_SIDE % m:
+        raise ValueError(f"COARSE_SIDE {COARSE_SIDE} is not a multiple of {m}")
     h, w = lum.shape
     scale = COARSE_SIDE / max(h, w)
     nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
@@ -42,7 +58,7 @@ def coarse_input(lum: np.ndarray) -> tuple[np.ndarray, float]:
 
 
 @contextmanager
-def _eval_on(net: UNet, device: str):
+def _eval_on(net: nn.Module, device: str):
     """The net in eval mode on `device`, put back as the caller had it (train/eval mode and device) afterwards."""
     was = net.training
     home = next(net.parameters()).device
@@ -54,14 +70,14 @@ def _eval_on(net: UNet, device: str):
         net.to(home)
 
 
-def _run(net: UNet, x: np.ndarray, device: str) -> np.ndarray:
+def _run(net: nn.Module, x: np.ndarray, device: str) -> np.ndarray:
     """Sigmoid probability of a (c, h, w) array, float32.  The net must be in eval mode (see `_eval_on`)."""
     with torch.no_grad():
         t = torch.from_numpy(np.ascontiguousarray(x, np.float32))[None].to(device)
         return torch.sigmoid(net(t))[0, 0].float().cpu().numpy()
 
 
-def predict_coarse(net: UNet, lum: np.ndarray, device: str = "cpu") -> np.ndarray:
+def predict_coarse(net: nn.Module, lum: np.ndarray, device: str = "cpu") -> np.ndarray:
     """The page pass's probability, cropped of padding and resized (bilinear) to the page's shape."""
     h, w = lum.shape
     arr, scale = coarse_input(lum)
@@ -74,9 +90,10 @@ def predict_coarse(net: UNet, lum: np.ndarray, device: str = "cpu") -> np.ndarra
 
 
 def _margin() -> int:
-    """reach(FINE_LEVELS) rounded up to the pooling grid, so every tile and the whole-page run pool on the same grid."""
-    m = multiple(FINE_LEVELS)
-    return -(-reach(FINE_LEVELS) // m) * m
+    """The pixel pass's reach (`folded_reach`) rounded up to its grid (`folded_multiple`), so every tile and the
+    whole-page run fold and pool on the same grid."""
+    m = _fine_multiple()
+    return -(-folded_reach(FINE_FOLD, FINE_LEVELS) // m) * m
 
 
 def _padded(lum: np.ndarray, prior: np.ndarray, margin: int, ph: int, pw: int) -> np.ndarray:
@@ -89,20 +106,22 @@ def _padded(lum: np.ndarray, prior: np.ndarray, margin: int, ph: int, pw: int) -
     return x
 
 
-def _predict_padded_whole(net: UNet, lum: np.ndarray, prior: np.ndarray, device: str = "cpu") -> np.ndarray:
+def _predict_padded_whole(net: nn.Module, lum: np.ndarray, prior: np.ndarray, device: str = "cpu") -> np.ndarray:
     """The reference tiling must equal: one run on the page paper-padded by the margin on every side, then at right and
-    bottom to a multiple of multiple(FINE_LEVELS), cropped back to the page."""
+    bottom to a multiple of the pixel pass's grid (`folded_multiple`), cropped back to the page."""
     h, w = lum.shape
-    m, mg = multiple(FINE_LEVELS), _margin()
+    m, mg = _fine_multiple(), _margin()
     ph, pw = -(-(h + 2 * mg) // m) * m, -(-(w + 2 * mg) // m) * m
     with _eval_on(net, device):
         out = _run(net, _padded(lum, prior, mg, ph, pw), device)
     return out[mg:mg + h, mg:mg + w]
 
 
-def predict_tiles(net: UNet, lum: np.ndarray, prior: np.ndarray, device: str = "cpu") -> np.ndarray:
+def predict_tiles(net: nn.Module, lum: np.ndarray, prior: np.ndarray, device: str = "cpu") -> np.ndarray:
     """The pixel pass's probability at full resolution.  TILE x TILE cores, each read with a margin of reach px of
     page or paper around it; only the core is kept."""
+    if TILE % _fine_multiple():
+        raise ValueError(f"TILE {TILE} is not a multiple of {_fine_multiple()}")
     h, w = lum.shape
     mg = _margin()
     th, tw = -(-h // TILE) * TILE, -(-w // TILE) * TILE
@@ -116,7 +135,7 @@ def predict_tiles(net: UNet, lum: np.ndarray, prior: np.ndarray, device: str = "
     return out[:h, :w]
 
 
-def predict_page(coarse_net: UNet, fine_net: UNet, lum: np.ndarray, device: str = "cpu") -> tuple[np.ndarray, np.ndarray]:
+def predict_page(coarse_net: nn.Module, fine_net: nn.Module, lum: np.ndarray, device: str = "cpu") -> tuple[np.ndarray, np.ndarray]:
     """(coarse_prob, map_prob), both float32 of the page's shape."""
     coarse = predict_coarse(coarse_net, lum, device)
     return coarse, predict_tiles(fine_net, lum, coarse, device)

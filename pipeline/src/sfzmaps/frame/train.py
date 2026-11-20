@@ -12,32 +12,44 @@ Training reads a page exactly as prediction does, so batch norm and the borders 
 
 Both losses are binary cross-entropy on logits, each px weighted by `paper_weight + ink_weight(lum)` (the ink counts,
 as in the scores, and paper a little so the net still says something there).  Px outside the page (padding) and the
-pixel pass's margins weigh 0.  Every sample is augmented (`augment`): quarter turns and mirror flips of every array
+pixel pass's margins weigh exactly 0.  Every sample is augmented: quarter turns and mirror flips of every array
 alike, and brightness, contrast, gamma and blur changes of the luminance alone, the blur measured in page px on either
 grid; the pixel pass's crops are also scaled by up to `SCALE_JITTER` either way.  The page pass needs no scale change:
 every page is resized to `predict.COARSE_SIDE` before it is read.
 
+Where the work runs (issue #71's speed amendment): the cpu draws every random value and cuts the crops (`_coarse_draw`,
+`_fine_draw`); the device builds the batch from them (`_coarse_make`, `_fine_make`): the crops' scaling, the turns
+and flips, the photometric changes and the blur, in torch (`apply_aug`).  With `Recipe.prefetch` a background thread
+draws the next batches while the device steps (`_batches`).
+
 The learning rate is constant (Adam), so a net trained for n steps is the net a longer run had at step n: the step
-count chosen from the validation curves (`choose_steps`) is the one the final model trains for.
+count chosen from the validation curves (`choose_steps`) is the one the final model trains for.  Every validation
+check logs one line, "<label> step <s>/<n>: val <loss>".
 
 Deterministic: each trainer seeds torch and one numpy generator with `recipe.seed`, makes torch use deterministic
-algorithms and pins its cpu threads to `THREADS`; every random draw comes from that generator.  On mps the caller
-holds the GPU's exclusive turn (`sfzmaps.gpu.gpu_turn`) for the whole run.
+algorithms and pins its cpu threads to `THREADS`; every random value comes from that generator, drawn in a fixed order
+by one thread (the prefetching one, or the training's own), so the weights are the same with or without prefetch.  On
+mps the caller holds the GPU's exclusive turn (`sfzmaps.gpu.gpu_turn`) for the whole run.
 """
 from __future__ import annotations
 
+import contextlib
 import dataclasses
-from collections.abc import Callable
+import logging
+import queue
+import threading
+from collections.abc import Callable, Iterator
 
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
-from PIL import Image
 from scipy import ndimage
 
 from sfzmaps.frame import predict, scores
 from sfzmaps.frame.data import SheetId, ink_weight
-from sfzmaps.nets.unet import UNet
+
+log = logging.getLogger(__name__)
 
 THREADS = 4
 SCALE_JITTER = 0.1      # the pixel pass's crops are scaled by a factor in 1 +- this
@@ -46,18 +58,23 @@ BLUR_SHARE = 0.5        # the share of samples blurred
 BRIGHTNESS = 0.1        # the luminance is shifted by up to this either way
 CONTRAST = 0.2          # ... stretched about 0.5 by a factor in 1 +- this
 GAMMA = 1.5             # ... and raised to a power between 1 / this and this
+BLUR_TRUNCATE = 4.0     # the blur's kernel reaches this many sigmas each way (scipy's gaussian_filter default)
 OUTLINE_REACH = scores.BAND_PX * 4   # px: the outline crops centre within this of the label's outline
 WEIGHT_EPS = 1e-12      # the least the loss divides by, so a batch of no weight gives 0 (numerical; decides nothing)
+PREFETCH = 2            # batches drawn ahead with `Recipe.prefetch`
 
 
 @dataclasses.dataclass(frozen=True)
 class Recipe:
-    steps: int = 4000
+    """`prefetch` draws the next batches in a background thread: the same batches, so it never changes the
+    weights."""
+    steps: int = 2000
     check_every: int = 250
     lr: float = 1e-3
     batch: int = 4
     paper_weight: float = 0.1
     seed: int = 0
+    prefetch: bool = True
 
 
 @dataclasses.dataclass
@@ -70,29 +87,74 @@ class Page:
     prior: np.ndarray | None
 
 
-def augment(rng: np.random.Generator, *arrays, scale: float = 1.0) -> tuple:
-    """The same random quarter turn and mirror flip of every array, then brightness, contrast and gamma changes and,
-    for `BLUR_SHARE` of the draws, a Gaussian blur (sigma up to `BLUR_SIGMA` page px) of the first array (the
-    luminance) alone, kept within [0, 1].  `scale` is the arrays' px per page px (the page pass's coarse grid is
-    smaller than the page), so the blur is the same on the page whatever grid it is applied on.  The first comes
-    back float32; the others keep their dtype."""
+# --- augmentation: drawn on the cpu, applied on the device -----------------------------------------------------------
+
+@dataclasses.dataclass(frozen=True)
+class Aug:
+    """One sample's augmentation (`draw_aug`): `turns` quarter turns after a mirror `flip`, the luminance raised to
+    `gamma`, stretched by `contrast` about 0.5, shifted by `brightness`, and blurred by `sigma` px of the arrays it
+    is applied to (0: not blurred)."""
+    turns: int
+    flip: bool
+    gamma: float
+    contrast: float
+    brightness: float
+    sigma: float
+
+
+def draw_aug(rng: np.random.Generator, scale: float = 1.0) -> Aug:
+    """One sample's augmentation drawn from `rng`, always the same seven draws in the same order.  `scale` is the
+    arrays' px per page px (the page pass's coarse grid is smaller than the page), so the blur is the same on the page
+    whatever grid it is applied on; `BLUR_SHARE` of the draws are blurred."""
     turns, flip = int(rng.integers(4)), bool(rng.integers(2))
     gamma = float(np.exp(rng.uniform(-np.log(GAMMA), np.log(GAMMA))))
     contrast = 1.0 + float(rng.uniform(-CONTRAST, CONTRAST))
     brightness = float(rng.uniform(-BRIGHTNESS, BRIGHTNESS))
     blurred, sigma = rng.random() < BLUR_SHARE, float(rng.uniform(0.0, BLUR_SIGMA)) * scale
-    out = []
-    for i, a in enumerate(arrays):
-        a = np.rot90(np.flip(a, 1) if flip else a, turns)
-        if i == 0:
-            a = np.clip(a.astype(np.float32), 0.0, 1.0) ** gamma
-            a = np.clip((a - 0.5) * contrast + 0.5 + brightness, 0.0, 1.0)
-            if blurred and sigma > 0:
-                a = ndimage.gaussian_filter(a, sigma, mode="nearest")
-            a = a.astype(np.float32)
-        out.append(np.ascontiguousarray(a))
-    return tuple(out)
+    return Aug(turns, flip, gamma, contrast, brightness, sigma if blurred else 0.0)
 
+
+def _blur(a: torch.Tensor, sigma: float) -> torch.Tensor:
+    """A Gaussian blur of a (h, w) tensor, as `scipy.ndimage.gaussian_filter(a, sigma, mode="nearest")`: a separable
+    kernel `BLUR_TRUNCATE` sigmas each way, the edge px repeated beyond the edge."""
+    radius = int(BLUR_TRUNCATE * sigma + 0.5)
+    if radius == 0:
+        return a
+    x = torch.arange(-radius, radius + 1, dtype=torch.float64)
+    k = torch.exp(-0.5 * (x / sigma) ** 2)
+    k = (k / k.sum()).to(device=a.device, dtype=a.dtype)
+    t = a[None, None]
+    t = F.conv2d(F.pad(t, (radius, radius, 0, 0), mode="replicate"), k.view(1, 1, 1, -1))
+    t = F.conv2d(F.pad(t, (0, 0, radius, radius), mode="replicate"), k.view(1, 1, -1, 1))
+    return t[0, 0]
+
+
+def apply_aug(aug: Aug, lum: torch.Tensor, *others: torch.Tensor) -> tuple[torch.Tensor, ...]:
+    """`aug` applied to tensors on any device, the luminance (h, w) and the others (..., h, w) (stacked planes move
+    together): the same flip and turns of every plane (exact: a permutation of the px, so a weight of 0 stays 0),
+    then the gamma, contrast and brightness changes and the blur of the luminance alone, kept within [0, 1].  The
+    luminance comes back float32; the others keep their dtype."""
+    def move(a: torch.Tensor) -> torch.Tensor:
+        return torch.rot90(torch.flip(a, (-1,)) if aug.flip else a, aug.turns, (-2, -1))
+
+    lum = move(lum).float().clamp(0.0, 1.0) ** aug.gamma
+    lum = ((lum - 0.5) * aug.contrast + 0.5 + aug.brightness).clamp(0.0, 1.0)
+    if aug.sigma > 0:
+        lum = _blur(lum, aug.sigma)
+    return (lum.contiguous(), *(move(a).contiguous() for a in others))
+
+
+def _resize(a: torch.Tensor, side: int, mode: str) -> torch.Tensor:
+    """A (..., h, w) tensor resized to (..., side, side), every (h, w) plane alike, in one call: "bilinear"
+    (half-px centres) or "nearest-exact" (the same centres)."""
+    if tuple(a.shape[-2:]) == (side, side):
+        return a
+    extra = {"align_corners": False} if mode == "bilinear" else {}
+    out = F.interpolate(a.reshape(-1, 1, *a.shape[-2:]), size=(side, side), mode=mode, **extra)
+    return out.reshape(*a.shape[:-2], side, side)
+
+
+# --- training loop ---------------------------------------------------------------------------------------------------
 
 def _settle(seed: int) -> np.random.Generator:
     """Seed torch, make it deterministic and pin its threads; the one numpy generator every draw comes from."""
@@ -122,29 +184,78 @@ def _val_loss(val: list[Page], prob: Callable[[Page], np.ndarray]) -> float:
     return num / den if den else float("nan")
 
 
-def _fit(net: UNet, draw: Callable[[], tuple[np.ndarray, ...]], recipe: Recipe, device: str,
-         val_loss: Callable[[UNet], float] | None, snapshots: bool = False) -> tuple[UNet, dict]:
-    """`recipe.steps` Adam steps on batches from `draw` ((x, target, weight) float32 arrays), the validation loss
-    every `check_every` steps; the net back in eval mode on cpu.  With `snapshots`, the info also holds
-    {"snapshots": {step: state_dict on cpu}} at every check: the draws do not depend on `recipe.steps` and the
-    validation changes nothing, so the snapshot at step s is the net a run of s steps returns.  FloatingPointError on
-    a non-finite loss (read only at the checks, so the device is not waited on every step)."""
+@contextlib.contextmanager
+def _batches(draw: Callable[[], object], n: int, prefetch: bool) -> Iterator[Iterator[object]]:
+    """An iterator over `n` results of `draw()`, in order.  With `prefetch`, a background thread calls `draw` up to
+    `PREFETCH` ahead (and alone calls it meanwhile, so the same draws come in the same order).  An error in that
+    thread is raised where the draw is asked for; leaving the block, by an error or not, stops and joins it."""
+    if not prefetch:
+        yield (draw() for _ in range(n))
+        return
+    ready, stop = queue.Queue(PREFETCH), threading.Event()
+
+    def put(item) -> bool:
+        while not stop.is_set():
+            try:
+                ready.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                pass
+        return False
+
+    def produce():
+        try:
+            for _ in range(n):
+                if not put(draw()):
+                    return
+        except BaseException as e:      # noqa: BLE001 - handed to the training's thread, raised there
+            put(e)
+
+    def consume():
+        for _ in range(n):
+            item = ready.get()
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+    worker = threading.Thread(target=produce, name="frame-prefetch", daemon=True)
+    worker.start()
+    try:
+        yield consume()
+    finally:
+        stop.set()
+        worker.join()
+
+
+def _fit(net: nn.Module, draw: Callable[[], object], make: Callable[[object], tuple[torch.Tensor, ...]],
+         recipe: Recipe, device: str, val_loss: Callable[[nn.Module], float] | None, snapshots: bool = False,
+         label: str = "training") -> tuple[nn.Module, dict]:
+    """`recipe.steps` Adam steps, each on the batch `make` builds on the device ((x, target, weight) float32 tensors)
+    from what `draw` drew on the cpu; the validation loss every `check_every` steps, logged as "<label> step <s>/<n>:
+    val <loss>"; the net back in eval mode on cpu.  With `snapshots`, the info also holds {"snapshots": {step:
+    state_dict on cpu}} at every check: the draws do not depend on `recipe.steps` and the validation changes nothing,
+    so the snapshot at step s is the net a run of s steps returns.  FloatingPointError on a non-finite loss (read only
+    at the checks, so the device is not waited on every step)."""
     net.to(device).train()
     opt = torch.optim.Adam(net.parameters(), lr=recipe.lr)
     curve, snaps = [], {}
-    for step in range(1, recipe.steps + 1):
-        x, t, w = (torch.from_numpy(a).to(device) for a in draw())
-        loss = _loss(net(x), t, w)
-        opt.zero_grad(set_to_none=True)
-        loss.backward()
-        opt.step()
-        if step % recipe.check_every == 0:
-            if not torch.isfinite(loss).item():
-                raise FloatingPointError(f"training loss is {loss.item()} at step {step}")
-            if val_loss is not None:
-                curve.append((step, float(val_loss(net))))
-            if snapshots:
-                snaps[step] = {k: v.detach().to("cpu", copy=True) for k, v in net.state_dict().items()}
+    with _batches(draw, recipe.steps, recipe.prefetch) as batches:
+        for step, spec in enumerate(batches, 1):
+            with torch.no_grad():
+                x, t, w = make(spec)
+            loss = _loss(net(x), t, w)
+            opt.zero_grad(set_to_none=True)
+            loss.backward()
+            opt.step()
+            if step % recipe.check_every == 0:
+                if not torch.isfinite(loss).item():
+                    raise FloatingPointError(f"training loss is {loss.item()} at step {step}")
+                if val_loss is not None:
+                    checked = float(val_loss(net))
+                    curve.append((step, checked))
+                    log.info("%s step %d/%d: val %.4f", label, step, recipe.steps, checked)
+                if snapshots:
+                    snaps[step] = {k: v.detach().to("cpu", copy=True) for k, v in net.state_dict().items()}
     info = {"val_curve": curve}
     if snapshots:
         info["snapshots"] = snaps
@@ -171,35 +282,48 @@ def _coarse_arrays(pg: Page, paper_weight: float) -> tuple[tuple[np.ndarray, np.
     return (lum, target, (paper_weight + ink_weight(lum)).astype(np.float32)), scale
 
 
-def _coarse_batch(rng: np.random.Generator, coarse: list[tuple[tuple[np.ndarray, ...], float]], batch: int):
-    """`batch` whole pages, drawn with replacement and augmented, each padded at right and bottom to the
-    COARSE_SIDE x COARSE_SIDE square `predict.coarse_input` reads on: paper in the input, weight 0."""
-    samples = []
+def _coarse_draw(rng: np.random.Generator, scales: list[float], batch: int) -> list[tuple[int, Aug]]:
+    """`batch` pages (indices, drawn with replacement), each with its augmentation (the blur in page px: `scales`
+    are the pages' coarse px per page px)."""
+    out = []
     for _ in range(batch):
-        arrays, scale = coarse[int(rng.integers(len(coarse)))]
-        samples.append(augment(rng, *arrays, scale=scale))
-    side = predict.COARSE_SIDE
-    x = np.ones((batch, 1, side, side), np.float32)
-    t = np.zeros((batch, 1, side, side), np.float32)
-    w = np.zeros((batch, 1, side, side), np.float32)
-    for i, (lum, target, weight) in enumerate(samples):
+        k = int(rng.integers(len(scales)))
+        out.append((k, draw_aug(rng, scales[k])))
+    return out
+
+
+def _coarse_make(spec: list[tuple[int, Aug]], arrays: list[tuple[torch.Tensor, ...]], device: str):
+    """The page-pass batch on the device: each drawn page's (lum, target, weight) (`arrays`, on the device already),
+    augmented, and padded at right and bottom to the COARSE_SIDE x COARSE_SIDE square `predict.coarse_input` reads on:
+    paper in the input, target and weight 0."""
+    side, n = predict.COARSE_SIDE, len(spec)
+    x = torch.ones((n, 1, side, side), dtype=torch.float32, device=device)
+    t = torch.zeros((n, 1, side, side), dtype=torch.float32, device=device)
+    w = torch.zeros((n, 1, side, side), dtype=torch.float32, device=device)
+    for i, (k, aug) in enumerate(spec):
+        lum, target, weight = apply_aug(aug, *arrays[k])
         h, wd = lum.shape
         x[i, 0, :h, :wd], t[i, 0, :h, :wd], w[i, 0, :h, :wd] = lum, target, weight
     return x, t, w
 
 
-def train_coarse(pages: list[Page], recipe: Recipe, device: str,
-                 val: list[Page] | None = None, snapshots: bool = False) -> tuple[UNet, dict]:
+def train_coarse(pages: list[Page], recipe: Recipe, device: str, val: list[Page] | None = None,
+                 snapshots: bool = False, label: str = "page pass") -> tuple[nn.Module, dict]:
     """The page pass trained on `pages` (see the module); returns (net in eval mode on cpu, {"val_curve": [(step,
-    loss), ...]}), the curve empty without `val`; with `snapshots`, also the net's state at every check (`_fit`)."""
+    loss), ...]}), the curve empty without `val`; with `snapshots`, also the net's state at every check (`_fit`).
+    `label` names the training in the validation lines logged."""
     _need(pages + (val or []), "page-pass", ("mask",))
     rng = _settle(recipe.seed)
     net = predict.new_coarse_net()
     coarse = [_coarse_arrays(pg, recipe.paper_weight) for pg in pages]
+    scales = [scale for _, scale in coarse]
+    on_device = [tuple(torch.from_numpy(np.ascontiguousarray(a, np.float32)).to(device) for a in arrays)
+                 for arrays, _ in coarse]
     val_loss = None
     if val:
         val_loss = lambda n: _val_loss(val, lambda pg: predict.predict_coarse(n, pg.lum, device))  # noqa: E731
-    return _fit(net, lambda: _coarse_batch(rng, coarse, recipe.batch), recipe, device, val_loss, snapshots)
+    return _fit(net, lambda: _coarse_draw(rng, scales, recipe.batch),
+                lambda spec: _coarse_make(spec, on_device, device), recipe, device, val_loss, snapshots, label)
 
 
 # --- the pixel pass --------------------------------------------------------------------------------------------------
@@ -224,20 +348,21 @@ def _window(a: np.ndarray, top: int, left: int, side: int, fill: float) -> np.nd
     return out
 
 
-def _resized(a: np.ndarray, side: int) -> np.ndarray:
-    if a.shape == (side, side):
-        return a
-    return np.asarray(Image.fromarray(a).resize((side, side), Image.BILINEAR), np.float32)
+@dataclasses.dataclass(frozen=True)
+class _Crop:
+    """A pixel-pass crop as the cpu cuts it: `arrays`, (3, side, side) float32 windows of the luminance (paper off
+    the page), the prior and the mask (0 off the page), stacked so the device moves them in one go; the page's rows
+    [r0, r1) and columns [c0, c1) within the window; and the augmentation."""
+    arrays: np.ndarray
+    inside: tuple[int, int, int, int]
+    aug: Aug
 
 
-def _fine_crop(rng: np.random.Generator, pg: Page, near: np.ndarray, outline: bool, paper_weight: float):
-    """One augmented crop (lum, prior, mask, weight) read as `predict.predict_tiles` reads a tile: a TILE x TILE core
-    with `predict._margin()` px of context around it, the margin weighing 0 so only the core is learned.  The window
-    is (TILE + 2 margin) / s px (s within 1 +- SCALE_JITTER), centred on a px near the outline (`outline` and the page
-    has one) or anywhere on the page, resized to TILE + 2 margin.  Outside the page: paper, prior 0, mask 0, weight
-    0."""
-    tile, margin = predict.TILE, predict._margin()
-    full = tile + 2 * margin
+def _fine_crop(rng: np.random.Generator, pg: Page, near: np.ndarray, outline: bool) -> _Crop:
+    """One crop, to be read as `predict.predict_tiles` reads a tile once `_fine_make` scales it: a window of
+    (TILE + 2 margin) / s px (s within 1 +- SCALE_JITTER), centred on a px near the outline (`outline` and the page
+    has one) or anywhere on the page."""
+    full = predict.TILE + 2 * predict._margin()
     side = max(1, round(full / (1.0 + float(rng.uniform(-SCALE_JITTER, SCALE_JITTER)))))
     h, w = pg.lum.shape
     if outline and near.size:
@@ -245,36 +370,50 @@ def _fine_crop(rng: np.random.Generator, pg: Page, near: np.ndarray, outline: bo
     else:
         cy, cx = int(rng.integers(h)), int(rng.integers(w))
     top, left = cy - side // 2, cx - side // 2
-    lum = _window(pg.lum, top, left, side, 1.0)
-    inside = np.zeros((side, side), np.float32)
-    inside[max(-top, 0):min(h - top, side), max(-left, 0):min(w - left, side)] = 1.0
-    arrays = [_resized(a, full) for a in (lum, _window(pg.prior, top, left, side, 0.0),
-                                          _window(pg.mask.astype(np.float32), top, left, side, 0.0),
-                                          inside * (paper_weight + ink_weight(lum)))]
-    core = np.zeros((full, full), np.float32)
-    core[margin:margin + tile, margin:margin + tile] = 1.0
-    arrays[3] = arrays[3] * core
-    return augment(rng, *arrays)
+    inside = (max(-top, 0), min(h - top, side), max(-left, 0), min(w - left, side))
+    arrays = np.stack([_window(pg.lum, top, left, side, 1.0), _window(pg.prior, top, left, side, 0.0),
+                       _window(pg.mask, top, left, side, 0.0)])
+    return _Crop(arrays=arrays, inside=inside, aug=draw_aug(rng))
 
 
-def _fine_batch(rng: np.random.Generator, pages: list[Page], near: list[np.ndarray], batch: int,
-                paper_weight: float):
+def _fine_draw(rng: np.random.Generator, pages: list[Page], near: list[np.ndarray], batch: int) -> list[_Crop]:
     """`batch` crops, every other one (from the first) an outline crop; pages drawn with replacement."""
     crops = []
     for i in range(batch):
         k = int(rng.integers(len(pages)))
-        crops.append(_fine_crop(rng, pages[k], near[k], i % 2 == 0, paper_weight))
-    x = np.stack([np.stack([c[0], c[1]]) for c in crops])
-    t = np.stack([c[2] for c in crops])[:, None]
-    w = np.stack([c[3] for c in crops])[:, None]
-    return x, t, w
+        crops.append(_fine_crop(rng, pages[k], near[k], i % 2 == 0))
+    return crops
 
 
-def train_fine(pages: list[Page], recipe: Recipe, device: str,
-               val: list[Page] | None = None, snapshots: bool = False) -> tuple[UNet, dict]:
+def _fine_make(spec: list[_Crop], paper_weight: float, device: str):
+    """The pixel-pass batch on the device: each crop scaled to TILE + 2 margin (luminance, prior and mask bilinear),
+    weighted `paper_weight + ink_weight(lum)` on the core and on the page only (the page's extent scaled nearest, so
+    the weight off the page and on the margins is exactly 0), then augmented."""
+    tile, margin = predict.TILE, predict._margin()
+    full = tile + 2 * margin
+    core = torch.zeros((full, full), dtype=torch.float32, device=device)
+    core[margin:margin + tile, margin:margin + tile] = 1.0
+    xs, ts, ws = [], [], []
+    for c in spec:
+        side = c.arrays.shape[-1]
+        lum, prior, mask = _resize(torch.from_numpy(c.arrays).to(device), full, "bilinear")
+        r0, r1, c0, c1 = c.inside
+        inside = torch.zeros((side, side), dtype=torch.float32, device=device)
+        inside[r0:r1, c0:c1] = 1.0
+        inside = _resize(inside, full, "nearest-exact")
+        weight = inside * core * (paper_weight + ink_weight(lum))
+        lum, (prior, mask, weight) = apply_aug(c.aug, lum, torch.stack([prior, mask, weight]))
+        xs.append(torch.stack([lum, prior]))
+        ts.append(mask)
+        ws.append(weight)
+    return torch.stack(xs), torch.stack(ts)[:, None], torch.stack(ws)[:, None]
+
+
+def train_fine(pages: list[Page], recipe: Recipe, device: str, val: list[Page] | None = None,
+               snapshots: bool = False, label: str = "pixel pass") -> tuple[nn.Module, dict]:
     """The pixel pass trained on `pages` (each with its page-pass `prior`; see the module); returns (net in eval mode
     on cpu, {"val_curve": [(step, loss), ...]}), the curve empty without `val`; with `snapshots`, also the net's
-    state at every check (`_fit`)."""
+    state at every check (`_fit`).  `label` names the training in the validation lines logged."""
     _need(pages + (val or []), "pixel-pass", ("mask", "prior"))
     rng = _settle(recipe.seed)
     net = predict.new_fine_net()
@@ -282,8 +421,9 @@ def train_fine(pages: list[Page], recipe: Recipe, device: str,
     val_loss = None
     if val:
         val_loss = lambda n: _val_loss(val, lambda pg: predict.predict_tiles(n, pg.lum, pg.prior, device))  # noqa: E731
-    return _fit(net, lambda: _fine_batch(rng, pages, near, recipe.batch, recipe.paper_weight), recipe, device,
-                val_loss, snapshots)
+    return _fit(net, lambda: _fine_draw(rng, pages, near, recipe.batch),
+                lambda spec: _fine_make(spec, recipe.paper_weight, device), recipe, device, val_loss, snapshots,
+                label)
 
 
 # --- step choice -----------------------------------------------------------------------------------------------------

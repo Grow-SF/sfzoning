@@ -1,4 +1,6 @@
 import itertools
+import logging
+import threading
 
 import numpy as np
 import pytest
@@ -7,19 +9,23 @@ from scipy import ndimage
 
 from sfzmaps.frame import predict
 from sfzmaps.frame.predict import predict_coarse, predict_tiles
-from sfzmaps.frame.train import (OUTLINE_REACH, Page, Recipe, _coarse_arrays, _coarse_batch, _fine_batch,
-                                 _near_outline, augment, choose_steps, train_coarse, train_fine)
+from sfzmaps.frame.train import (BLUR_SHARE, BLUR_SIGMA, BRIGHTNESS, CONTRAST, GAMMA, OUTLINE_REACH, Page, Recipe,
+                                 _batches, _coarse_arrays, _coarse_draw, _coarse_make, _fine_draw, _fine_make,
+                                 _near_outline, apply_aug, choose_steps, draw_aug, train_coarse, train_fine)
+from sfzmaps.nets.unet import Folded
 
 RULE_AT, RULE_PX = 10, 3
 
 
 @pytest.fixture(autouse=True)
 def tiny(monkeypatch):
-    """Toy-sized nets: the real sizes would take minutes on cpu."""
+    """Toy-sized folded nets: the real sizes would take minutes on cpu."""
     monkeypatch.setattr(predict, "TILE", 32)
     monkeypatch.setattr(predict, "COARSE_SIDE", 64)
+    monkeypatch.setattr(predict, "COARSE_FOLD", 4)
     monkeypatch.setattr(predict, "COARSE_LEVELS", 3)
-    monkeypatch.setattr(predict, "COARSE_WIDTH", 4)
+    monkeypatch.setattr(predict, "COARSE_WIDTH", 8)
+    monkeypatch.setattr(predict, "FINE_FOLD", 4)
     monkeypatch.setattr(predict, "FINE_LEVELS", 3)
     monkeypatch.setattr(predict, "FINE_WIDTH", 8)
 
@@ -62,34 +68,80 @@ def _transforms():
     return [lambda x, k=k, f=f: np.rot90(np.flip(x, 1) if f else x, k) for k, f in itertools.product(range(4), (0, 1))]
 
 
-def test_augment_keeps_arrays_aligned():
-    lum = np.random.default_rng(1).random((6, 8)).astype(np.float32)
-    mask = (lum > 0.5).astype(np.float32)
-    seen = set()
+def _numpy_augment(rng, *arrays, scale=1.0):
+    """The numpy augmentation the device one replaced (Task 6), kept here as the reference."""
+    turns, flip = int(rng.integers(4)), bool(rng.integers(2))
+    gamma = float(np.exp(rng.uniform(-np.log(GAMMA), np.log(GAMMA))))
+    contrast = 1.0 + float(rng.uniform(-CONTRAST, CONTRAST))
+    brightness = float(rng.uniform(-BRIGHTNESS, BRIGHTNESS))
+    blurred, sigma = rng.random() < BLUR_SHARE, float(rng.uniform(0.0, BLUR_SIGMA)) * scale
+    out = []
+    for i, a in enumerate(arrays):
+        a = np.rot90(np.flip(a, 1) if flip else a, turns)
+        if i == 0:
+            a = np.clip(a.astype(np.float32), 0.0, 1.0) ** gamma
+            a = np.clip((a - 0.5) * contrast + 0.5 + brightness, 0.0, 1.0)
+            if blurred and sigma > 0:
+                a = ndimage.gaussian_filter(a, sigma, mode="nearest")
+            a = a.astype(np.float32)
+        out.append(np.ascontiguousarray(a))
+    return tuple(out)
+
+
+def _apply(aug, *arrays):
+    return tuple(t.numpy() for t in apply_aug(aug, *(torch.from_numpy(a) for a in arrays)))
+
+
+def test_device_augment_matches_geometry():
+    """The same draws, applied in torch (here on cpu), turn and flip every array as the numpy version did, and change
+    the luminance's levels as it did; the generator ends in the same state."""
+    rng0 = np.random.default_rng(1)
+    lum = rng0.random((12, 20)).astype(np.float32)
+    prior, target, weight = (rng0.random((12, 20)).astype(np.float32) for _ in range(3))
+    seen, blurred = set(), 0
     for seed in range(40):
-        l2, m2, plain = augment(np.random.default_rng(seed), lum, mask, lum.copy())
-        assert l2.shape == m2.shape == plain.shape
-        # only the first array gets the brightness / contrast / gamma / blur changes; the others are moved only
-        hits = [i for i, t in enumerate(_transforms()) if np.array_equal(t(lum), plain)]
+        old_rng, new_rng = np.random.default_rng(seed), np.random.default_rng(seed)
+        want = _numpy_augment(old_rng, lum, prior, target, weight)
+        aug = draw_aug(new_rng)
+        got = _apply(aug, lum, prior, target, weight)
+        for g, w in zip(got[1:], want[1:]):
+            assert np.array_equal(g, w)
+        np.testing.assert_allclose(got[0], want[0], atol=1e-5)
+        assert old_rng.random() == new_rng.random()
+        hits = [i for i, t in enumerate(_transforms()) if np.array_equal(t(prior), got[1])]
         assert len(hits) == 1
-        assert np.array_equal(_transforms()[hits[0]](mask), m2)
         seen.add(hits[0])
-    assert len(seen) == 8
+        blurred += aug.sigma > 0
+    assert len(seen) == 8 and 0 < blurred < 40
 
 
 def test_augment_changes_only_the_first_arrays_levels():
     lum = np.random.default_rng(2).random((16, 16)).astype(np.float32)
     changed = 0
     for seed in range(10):
-        l2, plain = augment(np.random.default_rng(seed), lum, lum.copy())
+        l2, plain = _apply(draw_aug(np.random.default_rng(seed)), lum, lum.copy())
         assert l2.dtype == np.float32 and l2.min() >= 0.0 and l2.max() <= 1.0
         changed += not np.allclose(l2, plain)
     assert changed == 10
 
 
+def test_blur_is_measured_in_page_px():
+    two_levels = np.zeros((32, 32), np.float32)
+    two_levels[:, 16:] = 1.0
+    blurred_any = False
+    for seed in range(20):
+        fine = _apply(draw_aug(np.random.default_rng(seed), scale=1.0), two_levels)[0]
+        coarse = _apply(draw_aug(np.random.default_rng(seed), scale=1e-3), two_levels)[0]
+        assert len(np.unique(coarse)) <= 2           # a blur of under 0.002 px leaves two levels
+        blurred_any |= len(np.unique(fine)) > 2
+    assert blurred_any
+
+
 def test_fine_pass_learns_the_toy_frame():
     pages = [toy_page(s) for s in range(4)]
-    net, _ = train_fine(pages, Recipe(steps=300, batch=2, check_every=100), "cpu")
+    # 600 steps: the folded net's 32-px core is 1.6% of its 256-px crop (the margin is the folded reach)
+    net, _ = train_fine(pages, Recipe(steps=600, batch=2, check_every=200), "cpu")
+    assert isinstance(net, Folded)
     pg = toy_page(9)
     p = predict_tiles(net, pg.lum, pg.prior)
     assert p[_rule_px(pg)].mean() < 0.2 and p[_inside_ink_px(pg)].mean() > 0.8
@@ -98,6 +150,7 @@ def test_fine_pass_learns_the_toy_frame():
 def test_coarse_pass_learns_the_toy_frame():
     pages = [toy_page(s, h=128, w=96) if s % 2 else toy_page(s) for s in range(4)]   # mixed shapes in a batch
     net, _ = train_coarse(pages, Recipe(steps=600, batch=2, check_every=200), "cpu")
+    assert isinstance(net, Folded)
     pg = toy_page(9)
     p = predict_coarse(net, pg.lum)
     h, w = p.shape
@@ -108,13 +161,75 @@ def test_coarse_pass_learns_the_toy_frame():
     assert p[inside].mean() > 0.8 and p[outside].mean() < 0.2
 
 
+def _same(a, b):
+    return all(torch.equal(x, y) for x, y in zip(a.state_dict().values(), b.state_dict().values()))
+
+
 def test_training_is_deterministic():
     a, _ = train_coarse([toy_page(0)], Recipe(steps=5, batch=1), "cpu")
     b, _ = train_coarse([toy_page(0)], Recipe(steps=5, batch=1), "cpu")
-    assert all(torch.equal(x, y) for x, y in zip(a.state_dict().values(), b.state_dict().values()))
+    assert _same(a, b)
     c, _ = train_fine([toy_page(0)], Recipe(steps=5, batch=2), "cpu")
     d, _ = train_fine([toy_page(0)], Recipe(steps=5, batch=2), "cpu")
-    assert all(torch.equal(x, y) for x, y in zip(c.state_dict().values(), d.state_dict().values()))
+    assert _same(c, d)
+
+
+def test_prefetch_same_weights():
+    pages = [toy_page(0), toy_page(1, h=60, w=50)]
+    for trainer in (train_coarse, train_fine):
+        a, _ = trainer(pages, Recipe(steps=6, batch=2, prefetch=True), "cpu")
+        b, _ = trainer(pages, Recipe(steps=6, batch=2, prefetch=False), "cpu")
+        assert _same(a, b)
+        c, _ = trainer(pages, Recipe(steps=6, batch=2, prefetch=True, seed=1), "cpu")
+        assert not _same(a, c)
+
+
+def _prefetchers():
+    return [t for t in threading.enumerate() if t.name == "frame-prefetch"]
+
+
+def test_prefetch_stops_cleanly():
+    """The draws come in order; an error in the drawing thread is raised in the training's; an error in the
+    training stops the drawing thread."""
+    counter = iter(range(100))
+    with _batches(lambda: next(counter), 10, True) as batches:
+        assert list(batches) == list(range(10))
+    assert not _prefetchers()
+
+    def bad():
+        raise ValueError("bad page")
+    with pytest.raises(ValueError, match="bad page"):
+        with _batches(bad, 10, True) as batches:
+            list(batches)
+    assert not _prefetchers()
+
+    with pytest.raises(RuntimeError):
+        with _batches(lambda: np.zeros(3), 1000, True) as batches:
+            next(batches)
+            raise RuntimeError("the step failed")
+    assert not _prefetchers()
+
+
+def test_validation_curve_and_returned_net(caplog):
+    val = [toy_page(7)]
+    with caplog.at_level(logging.INFO, logger="sfzmaps.frame.train"):
+        net, info = train_coarse([toy_page(0)], Recipe(steps=4, batch=1, check_every=2), "cpu", val=val,
+                                 label="fold 0 page inner 1")
+    assert [s for s, _ in info["val_curve"]] == [2, 4]
+    assert all(np.isfinite(v) and v > 0 for _, v in info["val_curve"])
+    lines = [r.getMessage() for r in caplog.records if r.name == "sfzmaps.frame.train"]
+    assert [m.split(": val ")[0] for m in lines] == ["fold 0 page inner 1 step 2/4", "fold 0 page inner 1 step 4/4"]
+    assert [float(m.split(": val ")[1]) for m in lines] == pytest.approx([v for _, v in info["val_curve"]], abs=1e-4)
+    assert not net.training and next(net.parameters()).device.type == "cpu"
+    net, info = train_fine([toy_page(0)], Recipe(steps=4, batch=2, check_every=2), "cpu", val=val)
+    assert [s for s, _ in info["val_curve"]] == [2, 4]
+    assert not net.training and next(net.parameters()).device.type == "cpu"
+    _, info = train_fine([toy_page(0)], Recipe(steps=2, batch=1), "cpu")
+    assert info == {"val_curve": []}
+
+
+def test_recipe_caps_at_2000_steps():
+    assert Recipe().steps == 2000
 
 
 def test_snapshot_at_a_step_is_a_run_of_that_many_steps():
@@ -135,19 +250,6 @@ def test_snapshot_at_a_step_is_a_run_of_that_many_steps():
     assert "snapshots" not in info
 
 
-def test_validation_curve_and_returned_net():
-    val = [toy_page(7)]
-    net, info = train_coarse([toy_page(0)], Recipe(steps=4, batch=1, check_every=2), "cpu", val=val)
-    assert [s for s, _ in info["val_curve"]] == [2, 4]
-    assert all(np.isfinite(v) and v > 0 for _, v in info["val_curve"])
-    assert not net.training and next(net.parameters()).device.type == "cpu"
-    net, info = train_fine([toy_page(0)], Recipe(steps=4, batch=2, check_every=2), "cpu", val=val)
-    assert [s for s, _ in info["val_curve"]] == [2, 4]
-    assert not net.training and next(net.parameters()).device.type == "cpu"
-    _, info = train_fine([toy_page(0)], Recipe(steps=2, batch=1), "cpu")
-    assert info == {"val_curve": []}
-
-
 def test_outline_band():
     pg = toy_page(0)
     assert _near_outline(np.ones_like(pg.mask)).size == 0 and _near_outline(np.zeros_like(pg.mask)).size == 0
@@ -161,6 +263,11 @@ def test_outline_band():
     assert np.array_equal(near, d <= OUTLINE_REACH) and not near.all()
 
 
+def _fine_batch(rng, pages, batch, paper_weight=0.1):
+    spec = _fine_draw(rng, pages, [_near_outline(p.mask) for p in pages], batch)
+    return tuple(a.numpy() for a in _fine_make(spec, paper_weight, "cpu"))
+
+
 def test_fine_pass_takes_pages_with_no_outline():
     pg = toy_page(0)
     full = Page(id=("toy", "full"), lum=pg.lum, mask=np.ones_like(pg.mask), prior=np.ones_like(pg.prior))
@@ -168,43 +275,46 @@ def test_fine_pass_takes_pages_with_no_outline():
     net, _ = train_fine([full, small], Recipe(steps=3, batch=2), "cpu")
     assert all(torch.isfinite(v).all() for v in net.state_dict().values() if v.is_floating_point())
     # an outline crop of a page with no outline falls back to a uniform one: a whole-map crop, learned as map
-    _, t, w = _fine_batch(np.random.default_rng(0), [full], [_near_outline(full.mask)], 4, 0.1)
+    _, t, w = _fine_batch(np.random.default_rng(0), [full], 4)
     assert w.sum() > 0 and (t * w).sum() / w.sum() > 0.95
 
 
 def test_fine_crops_have_an_unweighted_margin():
     tile, margin = predict.TILE, predict._margin()
     pages = [toy_page(0), toy_page(1, h=60, w=50)]
-    x, t, w = _fine_batch(np.random.default_rng(3), pages, [_near_outline(p.mask) for p in pages], 6, 0.1)
+    x, t, w = _fine_batch(np.random.default_rng(3), pages, 6)
     full = tile + 2 * margin
     assert x.shape == (6, 2, full, full) and t.shape == w.shape == (6, 1, full, full)
+    assert x.dtype == t.dtype == w.dtype == np.float32
     core = np.zeros((full, full), bool)
     core[margin:margin + tile, margin:margin + tile] = True
     assert (w[:, :, ~core] == 0).all()
     assert (w[:, :, core].reshape(6, -1).sum(1) > 0).all()
 
 
+def test_fine_weight_is_exactly_zero_off_the_page():
+    """Scaling a crop must not smear the page's weight onto the paper around it: on an all-ink page every px weighs
+    paper_weight + 1 or more, so no weight lies strictly between 0 and paper_weight."""
+    ink = Page(id=("toy", "ink"), lum=np.zeros((40, 30), np.float32), mask=np.ones((40, 30), np.uint8),
+               prior=np.ones((40, 30), np.float32))
+    rng = np.random.default_rng(5)
+    for _ in range(5):
+        _, _, w = _fine_batch(rng, [ink], 4, paper_weight=0.1)
+        assert not ((w > 0) & (w < 0.1)).any()
+        assert (w == 0).any() and (w > 0).any()
+
+
 def test_coarse_batches_are_the_prediction_square():
     pages = [toy_page(0), toy_page(1, h=128, w=60)]
     coarse = [_coarse_arrays(pg, 0.1) for pg in pages]
-    x, t, w = _coarse_batch(np.random.default_rng(0), coarse, 4)
+    on_device = [tuple(torch.from_numpy(np.ascontiguousarray(a)) for a in arrays) for arrays, _ in coarse]
+    spec = _coarse_draw(np.random.default_rng(0), [s for _, s in coarse], 4)
+    x, t, w = (a.numpy() for a in _coarse_make(spec, on_device, "cpu"))
     side = predict.COARSE_SIDE
     assert x.shape == t.shape == w.shape == (4, 1, side, side)
     assert (x[w == 0] == 1.0).all() and (t[w == 0] == 0).all()
     arrays, scale = coarse[0]
     assert arrays[0].shape == (48, 64) and scale == pytest.approx(0.5)
-
-
-def test_blur_is_measured_in_page_px():
-    two_levels = np.zeros((32, 32), np.float32)
-    two_levels[:, 16:] = 1.0
-    blurred_any = False
-    for seed in range(20):
-        fine = augment(np.random.default_rng(seed), two_levels, scale=1.0)[0]
-        coarse = augment(np.random.default_rng(seed), two_levels, scale=1e-3)[0]
-        assert len(np.unique(coarse)) <= 2           # a blur of under 0.002 px leaves two levels
-        blurred_any |= len(np.unique(fine)) > 2
-    assert blurred_any
 
 
 def test_fine_pass_needs_a_prior():

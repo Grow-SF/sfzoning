@@ -6,6 +6,13 @@ The network (`UNet`): `levels` blocks down (channels `width` x 1, 2, 4, 8, 8, ..
 blocks up (nearest upsampling, each joined to the block down at its resolution), two 3 x 3 convolutions with batch norm
 and ReLU per block, and a 1 x 1 head.  A px's outputs depend on the input within `reach(levels)` px of it each way.
 The height and width must be multiples of `multiple(levels)`, so the halvings come out even.
+
+The folded network (`Folded`): the input's `fold` x `fold` px blocks folded into channels (`pixel_unshuffle`), a U-Net
+at 1/fold the size each way, and its outputs unfolded back (`pixel_shuffle`): one output per input px still, nothing
+discarded.  On the Mac's GPU a convolution's backward costs 12-35 times its forward on layers with few channels and
+millions of px (a U-Net's full-resolution top level); folded, no layer is both, and a training step is about 8 times
+faster (issue #71, `scripts/spikes/issue71_speed4.py`).  Its reach is `folded_reach` page px; its sides must be
+multiples of `folded_multiple`.
 """
 import torch
 import torch.nn as nn
@@ -58,3 +65,29 @@ class UNet(nn.Module):
             s = skips.pop()
             x = u(torch.cat([F.interpolate(x, size=s.shape[-2:], mode="nearest"), s], 1))
         return self.head(x)
+
+
+def folded_multiple(fold: int, levels: int) -> int:
+    """A `Folded` net's sides must be multiples of this: the fold, then the inner U-Net's halvings."""
+    return fold * multiple(levels)
+
+
+def folded_reach(fold: int, levels: int) -> int:
+    """How far (input px, each way) a `Folded` net's outputs see: the inner U-Net's reach in folded px, each `fold`
+    input px.  Measured from a px's fold block, so a px sees up to `fold - 1` px more on one side; a tile margin
+    rounded up to `folded_multiple` covers that (the tiling test checks it)."""
+    return fold * reach(levels)
+
+
+class Folded(nn.Module):
+    """`pixel_shuffle(UNet(in_ch * fold², out_ch * fold², width, levels)(pixel_unshuffle(x, fold)), fold)` (see the
+    module).  Input (n, in_ch, h, w), h and w multiples of `folded_multiple(fold, levels)`; output (n, out_ch, h, w)
+    logits."""
+
+    def __init__(self, in_ch: int, out_ch: int, fold: int, width: int, levels: int):
+        super().__init__()
+        self.fold = fold
+        self.net = UNet(in_ch * fold * fold, out_ch * fold * fold, width, levels)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.pixel_shuffle(self.net(F.pixel_unshuffle(x, self.fold)), self.fold)

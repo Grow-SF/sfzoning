@@ -1,6 +1,7 @@
 import collections
 import csv
 import json
+import logging
 import math
 
 import numpy as np
@@ -22,8 +23,10 @@ def tiny(monkeypatch):
     """Toy-sized nets: the real sizes would take minutes on cpu."""
     monkeypatch.setattr(predict, "TILE", 32)
     monkeypatch.setattr(predict, "COARSE_SIDE", 64)
+    monkeypatch.setattr(predict, "COARSE_FOLD", 4)
     monkeypatch.setattr(predict, "COARSE_LEVELS", 3)
     monkeypatch.setattr(predict, "COARSE_WIDTH", 4)
+    monkeypatch.setattr(predict, "FINE_FOLD", 4)
     monkeypatch.setattr(predict, "FINE_LEVELS", 3)
     monkeypatch.setattr(predict, "FINE_WIDTH", 8)
 
@@ -98,6 +101,7 @@ class Recorder:
     def __init__(self):
         self.coarse, self.fine = [], []   # per call: {"trained", "seen", "steps"[, "priors"]}
         self.tags = {"coarse": [], "fine": []}   # per kind: [(call, step)], a tag's index fixes its logit
+        self.labels = []                         # every call's label, in call order
 
     @staticmethod
     def _logit(kind: str, t: int) -> float:
@@ -112,7 +116,8 @@ class Recorder:
         assert dist[t] < 2e-3
         return self.tags[kind][t]
 
-    def _train(self, kind, in_ch, pages, recipe, val, snapshots, record):
+    def _train(self, kind, in_ch, pages, recipe, val, snapshots, label, record):
+        self.labels.append(label)
         k = len(getattr(self, kind))
         getattr(self, kind).append({"trained": {pg.id for pg in pages}, "seen": {pg.id for pg in pages + (val or [])},
                                     "steps": recipe.steps, **record})
@@ -127,12 +132,12 @@ class Recorder:
             info["snapshots"] = snaps
         return net, info
 
-    def train_coarse(self, pages, recipe, device, val=None, snapshots=False):
-        return self._train("coarse", 1, pages, recipe, val, snapshots, {})
+    def train_coarse(self, pages, recipe, device, val=None, snapshots=False, label="page pass"):
+        return self._train("coarse", 1, pages, recipe, val, snapshots, label, {})
 
-    def train_fine(self, pages, recipe, device, val=None, snapshots=False):
+    def train_fine(self, pages, recipe, device, val=None, snapshots=False, label="pixel pass"):
         priors = {pg.id: np.asarray(pg.prior, np.float32) for pg in pages + (val or [])}
-        return self._train("fine", 2, pages, recipe, val, snapshots, {"priors": priors})
+        return self._train("fine", 2, pages, recipe, val, snapshots, label, {"priors": priors})
 
 
 @pytest.fixture
@@ -196,9 +201,28 @@ def test_run_folds_never_scores_a_trained_sheet(toy, recorder):
     assert set(written["series"]) == set(SERIES)
     assert written["overall"]["log_loss_all_ink"]["sheets"] == len(labelled)
     assert written["steps"] == {"coarse": [1] * folds.OUTER_K, "fine": [1] * folds.OUTER_K}
+    # every validation curve is in folds.json
+    for f in written["folds"]:
+        assert f["coarse_curves"] == [[list(p) for p in Recorder.CURVES["coarse"]]] * folds.INNER_K
+        assert f["fine_curves"] == [[list(p) for p in Recorder.CURVES["fine"]]] * folds.INNER_K
+    # each training is labelled by its fold, pass and inner fold
+    want = []
+    for k in range(folds.OUTER_K):
+        want += [f"fold {k} page inner {i}" for i in range(folds.INNER_K)] + [f"fold {k} page all"]
+        want += [f"fold {k} pixel inner {i}" for i in range(folds.INNER_K)] + [f"fold {k} pixel all"]
+    assert recorder.labels == want
     # the outer nets train for the chosen steps; the inner ones for the recipe's
     assert collections.Counter(c["steps"] for c in recorder.coarse) == {2: 12, 1: 4}
     assert collections.Counter(c["steps"] for c in recorder.fine) == {2: 12, 1: 4}
+
+
+def test_a_curve_best_at_the_cap_is_logged(toy, recorder, monkeypatch, caplog):
+    labelled, out = toy
+    monkeypatch.setattr(Recorder, "CURVES", {"coarse": [(1, 0.4), (2, 0.5)], "fine": [(1, 0.6), (2, 0.3)]})
+    with caplog.at_level(logging.INFO, logger="sfzmaps.frame.run"):
+        run.run_folds(labelled, RECIPE, "cpu", out=out, only=1)
+    capped = [r.getMessage() for r in caplog.records if "best at the cap" in r.getMessage()]
+    assert capped == [f"fold 1 pixel inner {i}: best at the cap; more steps may help" for i in range(folds.INNER_K)]
 
 
 def _files(root):
@@ -247,6 +271,7 @@ def test_final_priors_are_held_out_predictions(toy, recorder):
 
     assert [c["seen"] for c in recorder.coarse] == [set(labelled)]
     assert [c["seen"] for c in recorder.fine] == [set(labelled)]
+    assert recorder.labels == ["final page", "final pixel"]
     assert recorder.coarse[0]["steps"] == 3 and recorder.fine[0]["steps"] == 3
     for i, sid in enumerate(labelled):
         np.testing.assert_array_equal(recorder.fine[0]["priors"][sid],

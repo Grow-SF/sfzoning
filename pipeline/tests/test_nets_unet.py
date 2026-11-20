@@ -1,6 +1,7 @@
 import torch
+import torch.nn as nn
 
-from sfzmaps.nets.unet import UNet, multiple, reach
+from sfzmaps.nets.unet import Folded, UNet, folded_multiple, folded_reach, multiple, reach
 
 
 def test_shapes():
@@ -21,3 +22,18 @@ def test_same_input_same_output():
     b = UNet(1, 1, width=4, levels=3).eval()
     x = torch.rand(1, 1, 16, 16, generator=torch.Generator().manual_seed(1))
     assert torch.equal(a(x), b(x))
+
+
+def test_folded_shapes_and_reach():
+    net = Folded(2, 1, 4, 8, 3)
+    assert net(torch.zeros(2, 2, 64, 96)).shape == (2, 1, 64, 96)
+    assert folded_reach(4, 4) == 4 * reach(4)
+    assert folded_multiple(4, 3) == 4 * multiple(3)
+
+
+def test_folded_is_one_output_per_pixel():
+    """With the inner U-Net the identity on channels, unshuffle then shuffle must give each px back where it was."""
+    net = Folded(2, 2, 4, 4, 2)
+    net.net = nn.Identity()
+    x = torch.rand(3, 2, 16, 24, generator=torch.Generator().manual_seed(0))
+    assert torch.equal(net(x), x)
