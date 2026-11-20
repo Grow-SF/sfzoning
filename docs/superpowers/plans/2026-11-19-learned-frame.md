@@ -568,3 +568,70 @@ No new code, unless the run exposes a bug. A fix for that bug follows Tasks 1–
   - List what you saw wrong.
   - The owner decides the next step: more labels, approach B, or wiring in.
 - [ ] **Step 7: Commit any fixes.** Commit no data.
+
+
+---
+
+### Task 11: The fixes from the first held-out run (amendment, owner 2026-11-20: "you can do all fixes")
+
+The first full held-out run (12 sheets) found:
+- the pixel pass lowers the map probability inside the map: grey patches, and 2–3× the page pass's whole-page
+  log-loss;
+- the frame rule's grey fringe sits inside the label outlines, which are drawn 2–6 px inside the rule;
+- the pixel pass's curves are still falling at the 2,000-step cap.
+
+The owner also ruled that floating blocks (notes, titles, legends, scale bars, north arrows, sheet cross-references)
+are frame. The labels get `holes` for them; see `pipeline/inputs/frame-labels/README.md` rule 4. Six more labelled
+sheets come in a parallel labelling task, and some series will have one labelled sheet.
+
+**Files:**
+- Modify: `pipeline/src/sfzmaps/frame/data.py`, `folds.py`, `scores.py`, `train.py`, `predict.py`, `run.py`
+- Test: the matching `pipeline/tests/test_frame_*.py`
+
+**Interfaces and changes:**
+- **`data.py`:**
+  - `load_label` returns `(polygons, holes)`: `holes` is a list of polygons, empty when the file has none.
+  - `map_mask(polygons, shape, scale=1.0, holes=())` fills the polygons, then clears the holes.
+  - Update every caller.
+- **`folds.py`:** `split(sheets, k)` becomes a stratified round-robin.
+  - Sort by (series, sheet), then deal the sheets into k folds in that order, counting across series. Fold i holds
+    out sheets i, i+k, i+2k and so on, and trains on the rest.
+  - A series of any size is allowed.
+  - Raise `ValueError` only when k is less than 2 or greater than the number of sheets.
+  - The tests:
+    - every sheet is held out exactly once;
+    - no fold trains on a sheet it holds out;
+    - a series with fewer sheets than k is spread across folds;
+    - the result is deterministic.
+- **The uncertain strip:** `UNSURE_PX = 8`. That is the measured label precision: outlines sit a median of 4–6 px
+  inside the rule, never more than about 8 px (from the label QA script). Pixels within `UNSURE_PX` of a label
+  outline, on either side and including hole outlines, get weight 0:
+  - in both passes' training losses (on the coarse grid at `UNSURE_PX * scale`, at least 1 coarse pixel);
+  - in every score: log-losses, mean probabilities, and the bands, which now start beyond `UNSURE_PX`.
+
+  The edge distance is unchanged (it measures outlines). One helper, `scores.unsure(mask) -> bool array`, does it
+  with a distance transform from both sides of the mask's boundary.
+- **The pixel pass is a correction:**
+  - its output logit = `logit(clip(prior, 1e-4, 1 − 1e-4))` + the net's output;
+  - the net's last (head) convolution starts at zero weights and bias, so an untrained pixel pass returns the page
+    pass's answer exactly;
+  - the same in training (the loss is on the summed logit) and in `predict_tiles`;
+  - the seam test still passes;
+  - a new test: with the head zeroed, `predict_tiles` returns the prior (within float32 rounding of
+    sigmoid(logit(p))).
+- **`Recipe.steps` defaults to 4000.**
+- **`run.py`:** every per-series aggregate counts its sheets, as now.
+
+- [ ] **Step 1: Write the failing tests** (above, plus updates to the existing ones).
+- [ ] **Step 2: Run, and expect failures.**
+- [ ] **Step 3: Implement.**
+- [ ] **Step 4: Run the frame tests, then the full suite once, and expect a pass.**
+- [ ] **Step 5: Commit.** `git commit -m "frame: pixel pass as a correction, uncertain label strip, label holes, round-robin folds, 4000 steps"`
+
+### Task 12: Re-run on the 18 labels, and show the owner
+
+As in Task 10, after Task 11 and the labelling (12 redrawn with holes, plus 6 new sheets) are both done:
+1. run the folds;
+2. compare the page pass alone with both passes (`scripts/spikes/issue71_compare_passes.py`);
+3. train the final model, predict every page, and draw the mosaics;
+4. report to the owner against the first run's numbers.

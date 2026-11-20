@@ -43,18 +43,20 @@ def row(series: str, sheet: str, lab: dict) -> Image.Image:
     md = ImageDraw.Draw(mask)
     for poly in lab["polygons"]:
         md.polygon([(x * f, y * f) for x, y in poly], fill=255)
+    for poly in lab.get("holes", []):
+        md.polygon([(x * f, y * f) for x, y in poly], fill=0)
     tint = Image.new("RGB", sm.size, (255, 120, 120))
     outside = Image.blend(sm, tint, 0.45)
     sm = Image.composite(sm, outside, mask)
     d = ImageDraw.Draw(sm)
-    for poly in lab["polygons"]:
+    for poly in lab["polygons"] + lab.get("holes", []):
         pts = [(x * f, y * f) for x, y in poly]
         d.line(pts + [pts[0]], fill=(200, 0, 160), width=2)
     zooms = []
     for x, y in sample_points(lab["polygons"], W, H):
         c = im.crop((x - HALF, y - HALF, x + HALF, y + HALF)).resize((4 * HALF, 4 * HALF), Image.NEAREST)
         zd = ImageDraw.Draw(c)
-        for poly in lab["polygons"]:
+        for poly in lab["polygons"] + lab.get("holes", []):
             pts = [(2 * HALF + 2 * (px - x), 2 * HALF + 2 * (py - y)) for px, py in poly]
             zd.line(pts + [pts[0]], fill=(230, 0, 160), width=2)
         ImageDraw.Draw(c).rectangle([0, 0, c.width - 1, c.height - 1], outline=(120, 120, 120))

@@ -117,7 +117,7 @@ def zoom_img(im, X, Y, half, polys):
 def zoom(series, sheet, pts, half=120):
     lab = label(series, sheet)
     im = page(series, sheet)
-    tiles = [zoom_img(im, X, Y, half, lab["polygons"] if lab else None) for X, Y in pts]
+    tiles = [zoom_img(im, X, Y, half, (lab["polygons"] + lab.get("holes", [])) if lab else None) for X, Y in pts]
     out = outdir(series, sheet) / ("zoom_" + "_".join(f"{x}-{y}" for x, y in pts)[:120] + ".png")
     grid(tiles, 2).save(out)
     print(out)
@@ -137,9 +137,10 @@ def check(series, sheet):
     lab = label(series, sheet)
     if not lab:
         sys.exit(f"no label for {series}/{sheet}")
-    overview(series, sheet, lab["polygons"], "check_overview.png")
+    overview(series, sheet, lab["polygons"] + lab.get("holes", []), "check_overview.png")
     im = page(series, sheet)
-    tiles = [zoom_img(im, round(x), round(y), 80, lab["polygons"]) for poly in lab["polygons"] for x, y in poly]
+    allp = lab["polygons"] + lab.get("holes", [])
+    tiles = [zoom_img(im, round(x), round(y), 80, allp) for poly in allp for x, y in poly]
     S = grid(tiles, 4)
     out = outdir(series, sheet) / "check_vertices.png"
     S.save(out)

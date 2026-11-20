@@ -2,17 +2,20 @@
 
 Hand-drawn outlines of the printed map area on a few sheets of every edition. They train and score the learned
 frame output (issue #71): inside the outline is the printed city; everything outside it (frame bars and rules, legend,
-title and note boxes ruled off from the map, margins, scan background) is not.
+title and note boxes, notes printed over the map, margins, scan background) is not.
 
 One file per sheet: `<series>/<sheet>.json`, the sheet named as in `data/work/<series>/<sheet>/page.png`.
 
 ```json
 {
  "polygons": [[[x, y], ...]],
+ "holes": [[[x, y], ...]],
  "notes": "what was ambiguous and how it was decided",
  "drawn_by": "who, how, date"
 }
 ```
+
+`holes` (optional) are cut out of the polygons: blocks printed over the map area that are not the city (rule 4).
 
 Coordinates are `page.png` pixels at full resolution, as stored (x right, y down, the page as scanned, not turned).
 
@@ -28,8 +31,14 @@ Coordinates are `page.png` pixels at full resolution, as stored (x right, y down
 3. **Ruled-off boxes are outside.** A legend, title, sheet-number or notes box that is separated from the map by a
    printed rule (the 2000-style legend strip along the bottom, the 1964–1975 title strip down one side) is excluded:
    the outline runs just inside that box's rule on the map side, with a notch if the box occupies only part of a side.
-4. **Floating text stays inside.** A title block, legend or note printed over the map area with no rule separating it
-   (e.g. 1921's "ZONE MAP" block in a corner of the map) stays inside.
+4. **Floating blocks are frame (owner, 2026-11-20: "call floating notes frame, not map").** A block printed over the
+   map area that is not the city, with or without a rule around it, is cut out as a hole: notes (2000's pier-head and
+   code notes), title and legend blocks (1921's "ZONE MAP" block), scale bars, north arrows and compass roses, and
+   cross-references to other sheets ("SEE SHEET 6", "Join Sec. 3" when inside the frame). Draw each hole a few px
+   outside the block's ink (hole edge on paper, never through the block's ink), a simple outline (4–8 points) around
+   the whole block. **Text that labels the city stays map:** street names, district codes, block and lot numbers,
+   place names ("PRESIDIO", "PACIFIC OCEAN", "GOLDEN GATE PARK"). Where a block overlaps map ink, the hole still
+   takes the whole block; say so in the notes.
 5. **No frame on a side.** Where a side has no frame rule (the scan cut through the map, or the sheet prints none), the
    outline runs along the edge of the page (or of the paper, if the scan shows background beyond the paper).
 6. **Several framed maps on one page:** one polygon each.
