@@ -1,0 +1,9 @@
+{
+ "polygons": [[[0, 0], [4710, 0], [4710, 6042], [0, 6042]]],
+ "holes": [
+  [[113, 115], [820, 115], [820, 440], [855, 440], [855, 632], [53, 632], [53, 440], [113, 440]],
+  [[4580, 75], [4656, 75], [4700, 118], [4700, 182], [4692, 215], [4660, 250], [4575, 250], [4555, 232], [4540, 210], [4534, 183], [4528, 160], [4531, 135], [4550, 105]]
+ ],
+ "notes": "Colour photograph cropped through the map: no frame rule anywhere, and the paper (with map ink) runs to all four page edges with no background visible (checked at every corner and mid-side), so the polygon is the whole page (README rule 5). Floating blocks are cut out as holes (rule 4): (1) the title and legend block 'CITY & COUNTY OF SAN FRANCISCO / USE OF PROPERTY / ZONE MAP / LEGEND' with its six swatches in the top-left corner (ink x 68-840, y 130-617), stepped at y 440 because the swatch column starts left of the title and runs right of it; it sits on plain paper, the nearest map ink (hatched blocks) starts at x ~1040; (2) the 'SECTION 12' circle (ink x ~4537-4695, y ~83-243). The circle is printed in a tight gap between map ink: a diagonal street line up-left (10-25 px away), the apex of a street triangle down-left (only ~12 px from the circle at y ~185), a street line at x ~4702 to the right from y ~195, and block numbers 5646 / 5647 just below. All of that stays map, so the hole is a 13-point outline run through the paper gap, about halfway between the circle and the street ink (5-8 px from each where tightest). No compass rose, scale bar or cross-reference note on this sheet. Place names (BALBOA PARK, AMAZON RESERVOIR SITE, CITY PROPERTY, HOLLY PARK, ST MARY'S PLAYGROUND), the hospital cross symbol and street names stay map.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-20"
+}

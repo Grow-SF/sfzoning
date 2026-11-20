@@ -1,0 +1,11 @@
+{
+ "polygons": [[[0, 0], [4653, 0], [4653, 6193], [0, 6193]]],
+ "holes": [
+  [[3770, 295], [4410, 295], [4410, 640], [4470, 640], [4470, 815], [3720, 815], [3720, 640], [3770, 640]],
+  [[4437, 100], [4527, 100], [4572, 145], [4572, 235], [4527, 280], [4437, 280], [4392, 235], [4392, 145]],
+  [[4340, 865], [4490, 865], [4490, 1090], [4550, 1090], [4550, 1375], [4390, 1375], [4357, 1680], [4358, 1772], [4288, 1772], [4292, 1680], [4330, 1375], [4195, 1375], [4195, 1090], [4340, 1090]],
+  [[1205, 5445], [1600, 5445], [1600, 5590], [1142, 5590], [1142, 5515]]
+ ],
+ "notes": "Colour photograph cropped through the map: no frame rule anywhere, and the paper runs to all four page edges with no background visible (checked at every corner and mid-side; the left and top margins and the right side beside the bay are plain paper, but there is no rule), so the polygon is the whole page (README rule 5). The Dogpatch blocks (4304-4318, Ohio / Oklahoma / New York streets, x ~4150-4650, y ~2700-3300) run to the right page edge and stay map. Floating blocks are cut out as holes (rule 4): (1) the title and legend block 'CITY & COUNTY OF SAN FRANCISCO / USE OF PROPERTY / ZONE MAP / LEGEND' with its six swatches (ink x 3735-4460, y 310-805), stepped at y 640 because the swatch column starts left of the title and runs right of it; the Central Basin slips and pier rule just left of it (x <= 3700) stay map; (2) the 'SECTION 9' circle (ink x 4407-4557, y 115-265), an octagon; (3) the compass rose with its true-north and magnetic needles (needle tips y ~880, rose x 4213-4535, y 1100-1365) and the needle tail with its arrow down to y ~1760; all on plain paper beside the piers, no map ink inside, 14 points for the tail; (4) the hand-lettered cross-reference 'For streets ect. See Section 11' (ink x 1155-1585, y 5455-5578), rule 4 'cross-references to other sheets'; the street lines just left of it (x ~1070) stay map. Place names (FRANKLIN SQUARE, JACKSON PARK, McKINLEY SQUARE, SAN FRANCISCO HOSPITAL, POTRERO PLAYGROUND, CENTRAL BASIN, ISLAIS CREEK CHANNEL) and street names stay map; the small blue pen mark near (2600,4700) is on the map and stays map.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-20"
+}
