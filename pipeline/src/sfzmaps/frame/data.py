@@ -29,21 +29,32 @@ def ink_weight(lum: np.ndarray) -> np.ndarray:
     return 1.0 - lum
 
 
-def load_label(series: str, sheet: str, root: Path = LABELS) -> list[list[tuple[float, float]]]:
+Polygon = list[tuple[float, float]]
+
+
+def load_label(series: str, sheet: str, root: Path = LABELS) -> tuple[list[Polygon], list[Polygon]]:
+    """(polygons, holes) of a sheet's label, in page px; `holes` (blocks printed over the map that are not the city,
+    see `inputs/frame-labels/README.md` rule 4) is empty when the file has none."""
     data = json.loads((root / series / f"{sheet}.json").read_text())
-    return [[(float(x), float(y)) for x, y in poly] for poly in data["polygons"]]
+
+    def polys(key: str) -> list[Polygon]:
+        return [[(float(x), float(y)) for x, y in poly] for poly in data.get(key, [])]
+    return polys("polygons"), polys("holes")
 
 
 def labelled_sheets(root: Path = LABELS) -> list[SheetId]:
     return sorted((p.parent.name, p.stem) for p in root.glob("*/*.json"))
 
 
-def map_mask(polygons, shape: tuple[int, int], scale: float = 1.0) -> np.ndarray:
-    """Uint8 mask, 1 inside any polygon. Polygons are in page px, drawn times `scale`."""
+def map_mask(polygons, shape: tuple[int, int], scale: float = 1.0, holes=()) -> np.ndarray:
+    """Uint8 mask, 1 inside any polygon, then 0 inside any hole (outlines included both times).  Polygons and holes
+    are in page px, drawn times `scale`."""
     img = Image.new("L", (shape[1], shape[0]), 0)
     draw = ImageDraw.Draw(img)
     for poly in polygons:
         draw.polygon([(x * scale, y * scale) for x, y in poly], fill=1, outline=1)
+    for hole in holes:
+        draw.polygon([(x * scale, y * scale) for x, y in hole], fill=0, outline=0)
     return np.asarray(img, dtype=np.uint8)
 
 

@@ -1,3 +1,4 @@
+import dataclasses
 import itertools
 import logging
 import threading
@@ -7,11 +8,13 @@ import pytest
 import torch
 from scipy import ndimage
 
-from sfzmaps.frame import predict
+from sfzmaps.frame import predict, scores, train
 from sfzmaps.frame.predict import predict_coarse, predict_tiles
-from sfzmaps.frame.train import (BLUR_SHARE, BLUR_SIGMA, BRIGHTNESS, CONTRAST, GAMMA, OUTLINE_REACH, Page, Recipe,
-                                 _batches, _coarse_arrays, _coarse_draw, _coarse_make, _fine_draw, _fine_make,
-                                 _near_outline, apply_aug, choose_steps, draw_aug, train_coarse, train_fine)
+from sfzmaps.frame.scores import UNSURE_PX
+from sfzmaps.frame.train import (BLUR_SHARE, BLUR_SIGMA, BRIGHTNESS, CONTRAST, GAMMA, OUTLINE_REACH, SCALE_JITTER,
+                                 Page, Recipe, _batches, _coarse_arrays, _coarse_draw, _coarse_make, _fine_aux,
+                                 _fine_draw, _fine_make, _near_outline, _val_loss, apply_aug, choose_steps, draw_aug,
+                                 train_coarse, train_fine)
 from sfzmaps.nets.unet import Folded
 
 RULE_AT, RULE_PX = 10, 3
@@ -138,13 +141,26 @@ def test_blur_is_measured_in_page_px():
 
 
 def test_fine_pass_learns_the_toy_frame():
-    pages = [toy_page(s) for s in range(4)]
+    """With no help from its prior (1/2 all over the page), the pixel pass's correction learns the toy frame beyond
+    the label's uncertain strip.  The toy's rule, 1-3 px outside the outline, lies within the strip and weighs 0, so
+    each page gets an outer frame bar too (its 4 outermost px, 10-13 px outside the outline)."""
+    def flat(pg):
+        lum = pg.lum.copy()
+        bar = np.ones(lum.shape, bool)
+        bar[4:-4, 4:-4] = False
+        lum[bar] = 0.0
+        return dataclasses.replace(pg, lum=lum, prior=np.full(lum.shape, 0.5, np.float32))
+    pages = [flat(toy_page(s)) for s in range(4)]
     # 600 steps: the folded net's 32-px core is 1.6% of its 256-px crop (the margin is the folded reach)
     net, _ = train_fine(pages, Recipe(steps=600, batch=2, check_every=200), "cpu")
     assert isinstance(net, Folded)
-    pg = toy_page(9)
+    pg = flat(toy_page(9))
     p = predict_tiles(net, pg.lum, pg.prior)
-    assert p[_rule_px(pg)].mean() < 0.2 and p[_inside_ink_px(pg)].mean() > 0.8
+    sure = ~scores.unsure(pg.mask)
+    assert not (_rule_px(pg) & sure).any()
+    frame_ink = sure & ~pg.mask.astype(bool) & (pg.lum < 0.5)
+    assert frame_ink.sum() > 0
+    assert p[frame_ink].mean() < 0.2 and p[_inside_ink_px(pg) & sure].mean() > 0.8
 
 
 def test_coarse_pass_learns_the_toy_frame():
@@ -228,8 +244,73 @@ def test_validation_curve_and_returned_net(caplog):
     assert info == {"val_curve": []}
 
 
-def test_recipe_caps_at_2000_steps():
-    assert Recipe().steps == 2000
+def test_recipe_caps_at_4000_steps():
+    assert Recipe().steps == 4000
+
+
+def test_fine_loss_is_on_the_prior_logit_plus_the_correction(monkeypatch):
+    """The pixel pass's training loss reads the summed logit: at the first step (head still zero) it is the prior's
+    logit, clipped, exactly as prediction reads it."""
+    seen = {}
+    real_make, real_loss = train._fine_make, train._loss
+
+    def make(*args):
+        out = real_make(*args)
+        seen.setdefault("x", out[0].clone())
+        return out
+
+    def loss(logits, target, weight):
+        seen.setdefault("logits", logits.detach().clone())
+        return real_loss(logits, target, weight)
+
+    monkeypatch.setattr(train, "_fine_make", make)
+    monkeypatch.setattr(train, "_loss", loss)
+    train_fine([toy_page(0)], Recipe(steps=1, batch=2, prefetch=False), "cpu")
+    p = seen["x"][:, 1:2].clamp(1e-4, 1 - 1e-4)
+    assert (seen["x"][:, 1:2] == 0).any()                  # off the page the prior is 0, and its logit finite
+    assert torch.isfinite(seen["logits"]).all()
+    torch.testing.assert_close(seen["logits"], torch.log(p) - torch.log1p(-p))
+
+
+def test_fine_weight_is_zero_in_the_uncertain_strip():
+    """No px within UNSURE_PX of the label's outline (as scaled with the crop) carries weight; px beyond it do."""
+    pages = [toy_page(0), toy_page(1)]
+    _, t, w = _fine_batch(np.random.default_rng(7), pages, 16)
+    near = UNSURE_PX * (1 - SCALE_JITTER) - 1.5          # the strip once a crop is scaled, less resampling
+    far = UNSURE_PX * (1 + SCALE_JITTER) + 1.5
+    weighed_far = 0
+    for ti, wi in zip(t[:, 0], w[:, 0]):
+        m = ti >= 0.5
+        assert (wi[scores.unsure(m, near)] == 0).all()
+        weighed_far += int(((wi > 0) & ~scores.unsure(m, far)).sum())
+    assert weighed_far > 0
+
+
+def test_coarse_weight_is_zero_in_the_strip_of_at_least_one_coarse_px():
+    pg = toy_page(0)                                       # 96 x 128 on a 64 grid: 1/2, so the strip is 4 coarse px
+    (_, target, weight), scale = _coarse_arrays(pg, 0.1)
+    strip = scores.unsure(target >= 0.5, UNSURE_PX * scale)
+    assert scale == pytest.approx(0.5) and strip.any()
+    assert (weight[strip] == 0).all() and (weight[~strip] > 0).all()
+    mask = np.zeros((96, 1024), np.uint8)                 # 1/16: 8 px would be half a coarse px; it is 1
+    mask[20:76, 100:900] = 1
+    wide = Page(id=("toy", "wide"), lum=np.ones(mask.shape, np.float32), mask=mask, prior=None)
+    (_, target, weight), scale = _coarse_arrays(wide, 0.1)
+    strip = scores.unsure(target >= 0.5, 1.0)
+    assert scale == pytest.approx(1 / 16) and strip.any()
+    assert (weight[strip] == 0).all() and (weight[~strip] > 0).all()
+
+
+def test_validation_loss_ignores_the_strip():
+    pg = toy_page(0)
+    strip = scores.unsure(pg.mask)
+    good = np.where(pg.mask == 1, 0.99, 0.01).astype(np.float32)
+    bad = good.copy()
+    bad[strip] = 1.0 - bad[strip]
+    loss = _val_loss([pg])
+    assert loss(lambda p: bad) == pytest.approx(loss(lambda p: good), abs=1e-12)
+    bad[48, 64] = 0.01
+    assert loss(lambda p: bad) > loss(lambda p: good)
 
 
 def test_snapshot_at_a_step_is_a_run_of_that_many_steps():
@@ -264,7 +345,7 @@ def test_outline_band():
 
 
 def _fine_batch(rng, pages, batch, paper_weight=0.1):
-    spec = _fine_draw(rng, pages, [_near_outline(p.mask) for p in pages], batch)
+    spec = _fine_draw(rng, pages, [_fine_aux(p) for p in pages], batch)
     return tuple(a.numpy() for a in _fine_make(spec, paper_weight, "cpu"))
 
 
@@ -312,7 +393,14 @@ def test_coarse_batches_are_the_prediction_square():
     x, t, w = (a.numpy() for a in _coarse_make(spec, on_device, "cpu"))
     side = predict.COARSE_SIDE
     assert x.shape == t.shape == w.shape == (4, 1, side, side)
-    assert (x[w == 0] == 1.0).all() and (t[w == 0] == 0).all()
+    for i, (k, aug) in enumerate(spec):
+        h, wd = coarse[k][0][0].shape
+        if aug.turns % 2:
+            h, wd = wd, h
+        pad = np.ones((side, side), bool)
+        pad[:h, :wd] = False
+        assert (x[i, 0][pad] == 1.0).all() and (t[i, 0][pad] == 0).all() and (w[i, 0][pad] == 0).all()
+        assert (w[i, 0][~pad] > 0).any()
     arrays, scale = coarse[0]
     assert arrays[0].shape == (48, 64) and scale == pytest.approx(0.5)
 

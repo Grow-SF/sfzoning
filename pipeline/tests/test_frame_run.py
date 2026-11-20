@@ -216,6 +216,38 @@ def test_run_folds_never_scores_a_trained_sheet(toy, recorder):
     assert collections.Counter(c["steps"] for c in recorder.fine) == {2: 12, 1: 4}
 
 
+def test_uneven_series_each_counted(toy, recorder):
+    """A series with one labelled sheet runs with the rest; every per-series mean counts its own sheets; and the
+    leak checks hold with folds that hold out several sheets of one series."""
+    labelled, out = toy
+    labelled = [s for s in labelled if s[0] != "c" or s[1] == "s0"]          # c has one sheet: 9 in all
+    result = run.run_folds(labelled, RECIPE, "cpu", out=out)
+    outer = folds.split(labelled, folds.OUTER_K)
+    assert [len(f.held) for f in outer] == [3, 2, 2, 2]                       # 9 dealt into 4
+    for call in recorder.coarse + recorder.fine:
+        homes = [k for k, f in enumerate(outer) if call["seen"] == set(f.train)]
+        assert len(homes) == 1 and not call["seen"] & set(outer[homes[0]].held)
+    assert {(s["series"], s["sheet"]) for s in result["sheets"]} == set(labelled)
+    counts = {name: m["log_loss_all_ink"]["sheets"] for name, m in result["series"].items()}
+    assert counts == {"a": 4, "b": 4, "c": 1}
+
+
+def test_labelled_page_cuts_holes_and_ink_skips_the_strip(toy):
+    labelled, _ = toy
+    s, sheet = labelled[0]
+    b = RULE + 2
+    (data.LABELS / s / f"{sheet}.json").write_text(json.dumps(
+        {"polygons": [[[b, b], [W - b, b], [W - b, H - b], [b, H - b]]], "holes": [[[20, 20], [30, 20], [30, 30],
+                                                                                   [20, 30]]]}))
+    pg = run._labelled_page((s, sheet))
+    assert pg.mask[25, 25] == 0 and pg.mask[15, 40] == 1
+    from sfzmaps.frame import scores
+    keep = ~scores.unsure(pg.mask)
+    ink = run._ink(pg.mask, pg.lum)
+    assert ink["all"] == pytest.approx(float(data.ink_weight(pg.lum)[keep].sum(dtype=np.float64)))
+    assert ink["all"] < float(data.ink_weight(pg.lum).sum(dtype=np.float64))
+
+
 def test_a_curve_best_at_the_cap_is_logged(toy, recorder, monkeypatch, caplog):
     labelled, out = toy
     monkeypatch.setattr(Recorder, "CURVES", {"coarse": [(1, 0.4), (2, 0.5)], "fine": [(1, 0.6), (2, 0.3)]})

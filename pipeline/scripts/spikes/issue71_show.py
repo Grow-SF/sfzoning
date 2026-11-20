@@ -38,12 +38,12 @@ def row(sid):
     lum = data.load_luminance(data.page_path(*sid))
     pr = np.load(data.OUT / sid[0] / sid[1] / "map_prob.npz")["map"].astype(np.float32)
     sc = json.load(open(data.OUT / sid[0] / sid[1] / "scores.json"))
-    polys = data.load_label(*sid)
+    polys, holes = data.load_label(*sid)
     H, W = lum.shape
     whole = look.sheet_picture(lum, pr, side=700).convert("RGB")
     f = whole.width / W
     d = ImageDraw.Draw(whole)
-    for poly in polys:
+    for poly in polys + holes:
         q = [(x * f, y * f) for x, y in poly]
         d.line(q + [q[0]], fill=(0, 170, 0), width=1)
     zooms = []
@@ -52,7 +52,7 @@ def row(sid):
         c = colour(lum[y0:y + HALF, x0:x + HALF], pr[y0:y + HALF, x0:x + HALF]).resize(
             ((min(W, x + HALF) - x0) * 2, (min(H, y + HALF) - y0) * 2), Image.NEAREST)
         zd = ImageDraw.Draw(c)
-        for poly in polys:
+        for poly in polys + holes:
             q = [(2 * (px - x0), 2 * (py - y0)) for px, py in poly]
             zd.line(q + [q[0]], fill=(0, 170, 0), width=1)
         zooms.append(c)

@@ -33,7 +33,28 @@ def test_labelled_sheets_and_load_label(tmp_path):
     )
     (tmp_path / "README.md").write_text("not a label")
     assert labelled_sheets(tmp_path) == [("1921", "a")]
-    assert load_label("1921", "a", tmp_path) == [[(0, 0), (4, 0), (4, 4)]]
+    assert load_label("1921", "a", tmp_path) == ([[(0, 0), (4, 0), (4, 4)]], [])
+
+
+def test_load_label_reads_holes(tmp_path):
+    (tmp_path / "2000").mkdir()
+    (tmp_path / "2000" / "b.json").write_text(
+        '{"polygons": [[[0,0],[9,0],[9,9],[0,9]]], "holes": [[[2,2],[4,2],[4,4],[2,4]]], "notes": ""}'
+    )
+    polygons, holes = load_label("2000", "b", tmp_path)
+    assert polygons == [[(0, 0), (9, 0), (9, 9), (0, 9)]]
+    assert holes == [[(2, 2), (4, 2), (4, 4), (2, 4)]]
+
+
+def test_map_mask_clears_holes():
+    square = [(0, 0), (19, 0), (19, 19), (0, 19)]
+    hole = [(5, 5), (10, 5), (10, 10), (5, 10)]
+    m = map_mask([square], (20, 20), holes=[hole])
+    assert m[7, 7] == 0 and m[5, 5] == 0 and m[10, 10] == 0     # the hole, its outline included, is not map
+    assert m[2, 2] == 1 and m[15, 15] == 1 and m[7, 12] == 1
+    assert int(map_mask([square], (20, 20)).sum()) - int(m.sum()) == 36   # exactly the hole's 6 x 6 px are cleared
+    small = map_mask([square], (10, 10), scale=0.5, holes=[hole])        # holes scale with the polygons
+    assert small[3, 3] == 0 and small[1, 1] == 1 and small[7, 7] == 1
 
 
 def _pages(work, *sheets):

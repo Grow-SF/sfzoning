@@ -94,19 +94,20 @@ def main():
         net = predict.new_coarse_net()
         time_pass("PAGE PASS", net, lambda: train._coarse_draw(rng, scales, recipe.batch),
                   lambda spec: train._coarse_make(spec, on_device, a.device), a.device, a.steps, recipe)
+        val_loss = train._val_loss(pages[:3])
         t0 = time.perf_counter()
-        train._val_loss(pages[:3], lambda pg: predict.predict_coarse(net, pg.lum, a.device))
+        val_loss(lambda pg: predict.predict_coarse(net, pg.lum, a.device))
         print(f"page-pass validation check (3 pages): {time.perf_counter() - t0:.1f} s")
         if a.only_coarse:
             return
         for pg in pages:
             pg.prior = predict.predict_coarse(net, pg.lum, a.device).astype("float16")
-        near = [train._near_outline(pg.mask) for pg in pages]
+        aux = [train._fine_aux(pg) for pg in pages]
         fnet = predict.new_fine_net()
-        time_pass("PIXEL PASS", fnet, lambda: train._fine_draw(rng, pages, near, recipe.batch),
+        time_pass("PIXEL PASS", fnet, lambda: train._fine_draw(rng, pages, aux, recipe.batch),
                   lambda spec: train._fine_make(spec, recipe.paper_weight, a.device), a.device, a.steps, recipe)
         t0 = time.perf_counter()
-        train._val_loss(pages[:3], lambda pg: predict.predict_tiles(fnet, pg.lum, pg.prior, a.device))
+        val_loss(lambda pg: predict.predict_tiles(fnet, pg.lum, pg.prior, a.device))
         print(f"pixel-pass validation check (3 pages): {time.perf_counter() - t0:.1f} s")
 
 

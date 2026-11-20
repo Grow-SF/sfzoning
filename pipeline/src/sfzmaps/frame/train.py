@@ -11,10 +11,15 @@ Training reads a page exactly as prediction does, so batch norm and the borders 
   outline, where the hard part is; the other half anywhere on the page.
 
 Both losses are binary cross-entropy on logits, each px weighted by `paper_weight + ink_weight(lum)` (the ink counts,
-as in the scores, and paper a little so the net still says something there).  Px outside the page (padding) and the
-pixel pass's margins weigh exactly 0.  Every sample is augmented: quarter turns and mirror flips of every array
-alike, and brightness, contrast, gamma and blur changes of the luminance alone, the blur measured in page px on either
-grid; the pixel pass's crops are also scaled by up to `SCALE_JITTER` either way.  The page pass needs no scale change:
+as in the scores, and paper a little so the net still says something there).  Px outside the page (padding), the
+pixel pass's margins and the label's uncertain strip (`scores.unsure`: within `scores.UNSURE_PX` of an outline, holes'
+too; on the coarse grid `UNSURE_PX` times its scale, at least 1 coarse px) weigh exactly 0.  The pixel pass's logit
+is the prior's plus the net's correction (`predict.Corrected`), so its loss is on that sum, as prediction reads it.
+The validation loss, like the scores, leaves the strip out.
+
+Every sample is augmented: quarter turns and mirror flips of every array alike, and brightness, contrast, gamma and
+blur changes of the luminance alone, the blur measured in page px on either grid; the pixel pass's crops are also
+scaled by up to `SCALE_JITTER` either way.  The page pass needs no scale change:
 every page is resized to `predict.COARSE_SIDE` before it is read.
 
 Where the work runs (issue #71's speed amendment): the cpu draws every random value and cuts the crops (`_coarse_draw`,
@@ -68,7 +73,7 @@ PREFETCH = 2            # batches drawn ahead with `Recipe.prefetch`
 class Recipe:
     """`prefetch` draws the next batches in a background thread: the same batches, so it never changes the
     weights."""
-    steps: int = 2000
+    steps: int = 4000
     check_every: int = 250
     lr: float = 1e-3
     batch: int = 4
@@ -171,17 +176,23 @@ def _loss(logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> t
     return (bce * weight).sum() / weight.sum().clamp(min=WEIGHT_EPS)
 
 
-def _val_loss(val: list[Page], prob: Callable[[Page], np.ndarray]) -> float:
-    """The ink-weighted log-loss over all ink of every validation page, pooled (each page counts by its ink)."""
-    num = den = 0.0
-    for pg in val:
-        w = ink_weight(pg.lum)
-        total = float(w.sum(dtype=np.float64))
-        if total <= 0:
-            continue
-        num += scores.log_loss(prob(pg), pg.mask, w, np.ones(pg.lum.shape, bool)) * total
-        den += total
-    return num / den if den else float("nan")
+def _val_loss(val: list[Page]) -> Callable[[Callable[[Page], np.ndarray]], float]:
+    """A function of `prob` (a page's map probability): the ink-weighted log-loss over all ink of every validation
+    page beyond the label's uncertain strip (`scores.unsure`, found once here, not at every check), pooled (each page
+    counts by that ink)."""
+    sure = [~scores.unsure(pg.mask) for pg in val]
+
+    def loss(prob: Callable[[Page], np.ndarray]) -> float:
+        num = den = 0.0
+        for pg, where in zip(val, sure):
+            w = ink_weight(pg.lum)
+            total = float(w[where].sum(dtype=np.float64))
+            if total <= 0:
+                continue
+            num += scores.log_loss(prob(pg), pg.mask, w, where) * total
+            den += total
+        return num / den if den else float("nan")
+    return loss
 
 
 @contextlib.contextmanager
@@ -273,13 +284,16 @@ def _need(pages: list[Page], what: str, attrs: tuple[str, ...]) -> None:
 
 def _coarse_arrays(pg: Page, paper_weight: float) -> tuple[tuple[np.ndarray, np.ndarray, np.ndarray], float]:
     """((lum, target, weight), scale): the page on the coarse grid `predict.coarse_input` reads it on, without its
-    padding, and that grid's px per page px."""
+    padding, and that grid's px per page px.  The weight is 0 on the label's uncertain strip as that grid sees it:
+    `scores.unsure` of the target's map side (>= 1/2) at `UNSURE_PX * scale` coarse px, at least 1."""
     h, w = pg.lum.shape
     arr, scale = predict.coarse_input(pg.lum)
     nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
     lum = arr[:nh, :nw]
     target = predict.coarse_input(pg.mask.astype(np.float32))[0][:nh, :nw]
-    return (lum, target, (paper_weight + ink_weight(lum)).astype(np.float32)), scale
+    strip = scores.unsure(target >= 0.5, max(1.0, scores.UNSURE_PX * scale))
+    weight = np.where(strip, 0.0, paper_weight + ink_weight(lum)).astype(np.float32)
+    return (lum, target, weight), scale
 
 
 def _coarse_draw(rng: np.random.Generator, scales: list[float], batch: int) -> list[tuple[int, Aug]]:
@@ -321,7 +335,8 @@ def train_coarse(pages: list[Page], recipe: Recipe, device: str, val: list[Page]
                  for arrays, _ in coarse]
     val_loss = None
     if val:
-        val_loss = lambda n: _val_loss(val, lambda pg: predict.predict_coarse(n, pg.lum, device))  # noqa: E731
+        loss = _val_loss(val)
+        val_loss = lambda n: loss(lambda pg: predict.predict_coarse(n, pg.lum, device))  # noqa: E731
     return _fit(net, lambda: _coarse_draw(rng, scales, recipe.batch),
                 lambda spec: _coarse_make(spec, on_device, device), recipe, device, val_loss, snapshots, label)
 
@@ -348,20 +363,28 @@ def _window(a: np.ndarray, top: int, left: int, side: int, fill: float) -> np.nd
     return out
 
 
+def _fine_aux(pg: Page) -> tuple[np.ndarray, np.ndarray]:
+    """What the pixel pass's crops need of a page beside its arrays, found once per training: (the flat indices of
+    the px near the label's outline (`_near_outline`), the uncertain strip (`scores.unsure`))."""
+    return _near_outline(pg.mask), scores.unsure(pg.mask)
+
+
 @dataclasses.dataclass(frozen=True)
 class _Crop:
-    """A pixel-pass crop as the cpu cuts it: `arrays`, (3, side, side) float32 windows of the luminance (paper off
-    the page), the prior and the mask (0 off the page), stacked so the device moves them in one go; the page's rows
-    [r0, r1) and columns [c0, c1) within the window; and the augmentation."""
+    """A pixel-pass crop as the cpu cuts it: `arrays`, (4, side, side) float32 windows of the luminance (paper off
+    the page), the prior, the mask and the sure px (1 beyond the label's uncertain strip) (0 off the page), stacked
+    so the device moves them in one go; the page's rows [r0, r1) and columns [c0, c1) within the window; and the
+    augmentation."""
     arrays: np.ndarray
     inside: tuple[int, int, int, int]
     aug: Aug
 
 
-def _fine_crop(rng: np.random.Generator, pg: Page, near: np.ndarray, outline: bool) -> _Crop:
+def _fine_crop(rng: np.random.Generator, pg: Page, aux: tuple[np.ndarray, np.ndarray], outline: bool) -> _Crop:
     """One crop, to be read as `predict.predict_tiles` reads a tile once `_fine_make` scales it: a window of
     (TILE + 2 margin) / s px (s within 1 +- SCALE_JITTER), centred on a px near the outline (`outline` and the page
-    has one) or anywhere on the page."""
+    has one) or anywhere on the page.  `aux` is the page's `_fine_aux`."""
+    near, strip = aux
     full = predict.TILE + 2 * predict._margin()
     side = max(1, round(full / (1.0 + float(rng.uniform(-SCALE_JITTER, SCALE_JITTER)))))
     h, w = pg.lum.shape
@@ -372,23 +395,26 @@ def _fine_crop(rng: np.random.Generator, pg: Page, near: np.ndarray, outline: bo
     top, left = cy - side // 2, cx - side // 2
     inside = (max(-top, 0), min(h - top, side), max(-left, 0), min(w - left, side))
     arrays = np.stack([_window(pg.lum, top, left, side, 1.0), _window(pg.prior, top, left, side, 0.0),
-                       _window(pg.mask, top, left, side, 0.0)])
+                       _window(pg.mask, top, left, side, 0.0), _window(~strip, top, left, side, 0.0)])
     return _Crop(arrays=arrays, inside=inside, aug=draw_aug(rng))
 
 
-def _fine_draw(rng: np.random.Generator, pages: list[Page], near: list[np.ndarray], batch: int) -> list[_Crop]:
-    """`batch` crops, every other one (from the first) an outline crop; pages drawn with replacement."""
+def _fine_draw(rng: np.random.Generator, pages: list[Page], aux: list[tuple[np.ndarray, np.ndarray]],
+               batch: int) -> list[_Crop]:
+    """`batch` crops, every other one (from the first) an outline crop; pages drawn with replacement; `aux` holds
+    each page's `_fine_aux`."""
     crops = []
     for i in range(batch):
         k = int(rng.integers(len(pages)))
-        crops.append(_fine_crop(rng, pages[k], near[k], i % 2 == 0))
+        crops.append(_fine_crop(rng, pages[k], aux[k], i % 2 == 0))
     return crops
 
 
 def _fine_make(spec: list[_Crop], paper_weight: float, device: str):
     """The pixel-pass batch on the device: each crop scaled to TILE + 2 margin (luminance, prior and mask bilinear),
-    weighted `paper_weight + ink_weight(lum)` on the core and on the page only (the page's extent scaled nearest, so
-    the weight off the page and on the margins is exactly 0), then augmented."""
+    weighted `paper_weight + ink_weight(lum)` on the core, on the page and beyond the label's uncertain strip only
+    (the page's extent and the sure px scaled nearest, so the weight off the page, on the margins and on the strip
+    is exactly 0), then augmented."""
     tile, margin = predict.TILE, predict._margin()
     full = tile + 2 * margin
     core = torch.zeros((full, full), dtype=torch.float32, device=device)
@@ -396,12 +422,13 @@ def _fine_make(spec: list[_Crop], paper_weight: float, device: str):
     xs, ts, ws = [], [], []
     for c in spec:
         side = c.arrays.shape[-1]
-        lum, prior, mask = _resize(torch.from_numpy(c.arrays).to(device), full, "bilinear")
+        planes = torch.from_numpy(c.arrays).to(device)
+        lum, prior, mask = _resize(planes[:3], full, "bilinear")
         r0, r1, c0, c1 = c.inside
         inside = torch.zeros((side, side), dtype=torch.float32, device=device)
         inside[r0:r1, c0:c1] = 1.0
-        inside = _resize(inside, full, "nearest-exact")
-        weight = inside * core * (paper_weight + ink_weight(lum))
+        inside, sure = _resize(torch.stack([inside, planes[3]]), full, "nearest-exact")
+        weight = inside * sure * core * (paper_weight + ink_weight(lum))
         lum, (prior, mask, weight) = apply_aug(c.aug, lum, torch.stack([prior, mask, weight]))
         xs.append(torch.stack([lum, prior]))
         ts.append(mask)
@@ -417,11 +444,12 @@ def train_fine(pages: list[Page], recipe: Recipe, device: str, val: list[Page] |
     _need(pages + (val or []), "pixel-pass", ("mask", "prior"))
     rng = _settle(recipe.seed)
     net = predict.new_fine_net()
-    near = [_near_outline(pg.mask) for pg in pages]
+    aux = [_fine_aux(pg) for pg in pages]
     val_loss = None
     if val:
-        val_loss = lambda n: _val_loss(val, lambda pg: predict.predict_tiles(n, pg.lum, pg.prior, device))  # noqa: E731
-    return _fit(net, lambda: _fine_draw(rng, pages, near, recipe.batch),
+        loss = _val_loss(val)
+        val_loss = lambda n: loss(lambda pg: predict.predict_tiles(n, pg.lum, pg.prior, device))  # noqa: E731
+    return _fit(net, lambda: _fine_draw(rng, pages, aux, recipe.batch),
                 lambda spec: _fine_make(spec, recipe.paper_weight, device), recipe, device, val_loss, snapshots,
                 label)
 

@@ -17,16 +17,15 @@ class Fold:
 
 
 def split(sheets: list[SheetId], k: int) -> list[Fold]:
-    """Fold i holds out each series' i-th sheet (modulo the series size); the rest train."""
-    by_series: dict[str, list[SheetId]] = {}
-    for sheet in sorted(set(sheets)):
-        by_series.setdefault(sheet[0], []).append(sheet)
-    for series, members in by_series.items():
-        if len(members) < 2:
-            raise ValueError(f"series {series!r} has {len(members)} sheet(s); need at least 2")
+    """A stratified round-robin: the sheets sorted by (series, sheet) and dealt into `k` folds in that order, counting
+    across series, so fold i holds out sheets i, i + k, i + 2k, ... and trains on the rest.  Each sheet is held out
+    exactly once; a series of any size is allowed, and one with no more sheets than `k` has each held out by a
+    different fold.  ValueError unless 2 <= k <= the number of sheets."""
+    ordered = sorted(set(sheets))
+    if not 2 <= k <= len(ordered):
+        raise ValueError(f"{k} folds of {len(ordered)} sheet(s): need 2 <= k <= the number of sheets")
     folds = []
     for i in range(k):
-        held = {members[i % len(members)] for members in by_series.values()}
-        train = tuple(s for s in sorted(set(sheets)) if s not in held)
-        folds.append(Fold(train=train, held=tuple(sorted(held))))
+        held = ordered[i::k]
+        folds.append(Fold(train=tuple(s for s in ordered if s not in held), held=tuple(held)))
     return folds

@@ -18,7 +18,8 @@ for sid in data.labelled_sheets():
         continue
     z = np.load(f)
     lum = data.load_luminance(data.page_path(*sid))
-    mask = data.map_mask(data.load_label(*sid), lum.shape)
+    polygons, holes = data.load_label(*sid)
+    mask = data.map_mask(polygons, lum.shape, holes=holes)
     for name in ("coarse", "map"):
         s = scores.sheet_scores(z[name].astype(np.float32), mask, lum)
         print(f"{sid[0] + '/' + sid[1][-12:]:40s} {name:6s} " + " ".join(f"{s[k]:16.3f}" for k in KEYS))

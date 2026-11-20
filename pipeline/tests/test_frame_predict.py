@@ -41,9 +41,56 @@ def test_predict_shape_matches_page(monkeypatch):
         assert out.min() >= 0.0 and out.max() <= 1.0
 
 
+def _wake_head(net):
+    """A random head, so the pixel pass's correction is not zero and the tiling is really tested."""
+    torch.manual_seed(3)
+    torch.nn.init.normal_(net.net.head.weight, std=0.5)
+    torch.nn.init.normal_(net.net.head.bias, std=0.5)
+
+
+def test_fine_net_starts_as_the_page_pass():
+    """The pixel pass's head convolution starts at zero weights and bias (at the real sizes): an untrained net adds
+    nothing to the prior's logit."""
+    fine = predict.new_fine_net()
+    assert isinstance(fine, Folded)
+    head = fine.net.head
+    assert torch.count_nonzero(head.weight) == 0 and torch.count_nonzero(head.bias) == 0
+    assert any(torch.count_nonzero(p) for n, p in fine.named_parameters() if not n.startswith("net.head"))
+
+
+def test_zero_head_returns_the_prior(monkeypatch):
+    """Untrained, the pixel pass returns the page pass's answer: sigmoid(logit(clip(prior, 1e-4, 1 - 1e-4)))."""
+    _, fine = _tiny_nets(monkeypatch)
+    rng = np.random.default_rng(4)
+    lum = rng.random((150, 230)).astype(np.float32)
+    prior = rng.random((150, 230)).astype(np.float32)
+    prior[:10] = 0.0                                   # clipped: 0 and 1 stay finite
+    prior[-10:] = 1.0
+    got = predict.predict_tiles(fine, lum, prior, "cpu")
+    want = np.clip(prior, predict.PRIOR_CLIP, 1 - predict.PRIOR_CLIP)
+    assert predict.PRIOR_CLIP == 1e-4
+    assert np.isfinite(got).all()
+    np.testing.assert_allclose(got, want, rtol=1e-5, atol=1e-6)
+
+
+def test_output_is_prior_logit_plus_correction(monkeypatch):
+    _, fine = _tiny_nets(monkeypatch)
+    _wake_head(fine)
+    fine.eval()
+    m = folded_multiple(predict.FINE_FOLD, predict.FINE_LEVELS)
+    x = torch.rand((1, 2, 2 * m, 2 * m))
+    x[0, 1, :3] = 0.0
+    with torch.no_grad():
+        inner = torch.nn.functional.pixel_shuffle(
+            fine.net(torch.nn.functional.pixel_unshuffle(x, fine.fold)), fine.fold)
+        p = x[:, 1:2].clamp(1e-4, 1 - 1e-4)
+        torch.testing.assert_close(fine(x), torch.log(p) - torch.log1p(-p) + inner)
+
+
 def test_tiling_has_no_seams(monkeypatch):
     _, fine = _tiny_nets(monkeypatch)
     assert isinstance(fine, Folded)
+    _wake_head(fine)
     rng = np.random.default_rng(1)
     lum = rng.random((150, 230)).astype(np.float32)
     prior = rng.random((150, 230)).astype(np.float32)

@@ -1,21 +1,23 @@
 """The learned frame finder's run: held-out folds, the final model, every map page.
 
 `run_folds` scores every labelled sheet with networks that never saw it.  Each outer fold (`folds.split(labelled,
-OUTER_K)`) holds out one sheet per series and works on the other 9 alone:
+OUTER_K)`, a round-robin over the sheets in (series, sheet) order) holds out every OUTER_K-th sheet and works on the
+rest (its training sheets) alone:
 
-1. inner folds (`folds.split(train, INNER_K)`): the page pass trains on 6 and validates on 3; the page pass's step
-   count is chosen (`train.choose_steps`) over the 3 inner curves; each inner page pass's snapshot at that step
-   (bit for bit a run of that many steps, so no extra training) predicts its 3, their out-of-fold prior: every one
-   of the 9 gets a prior from a page pass that did not train on it, run for the steps the held-out sheets' is;
-2. the page pass trains on all 9 for that step count;
-3. the inner folds again: the pixel pass trains on 6 and validates on 3, each with its out-of-fold prior; the pixel
-   pass's step count is chosen the same way;
-4. the pixel pass trains on all 9, each with its out-of-fold prior, for that step count;
-5. the fold's 3 held-out sheets are predicted with the fold's two networks and scored (`scores.sheet_scores`).
+1. inner folds (`folds.split(train, INNER_K)`): the page pass trains on two thirds of the training sheets and
+   validates on the rest; the page pass's step count is chosen (`train.choose_steps`) over the 3 inner curves; each
+   inner page pass's snapshot at that step (bit for bit a run of that many steps, so no extra training) predicts
+   its validation sheets, their out-of-fold prior: every training sheet gets a prior from a page pass that did not
+   train on it, run for the steps the held-out sheets' is;
+2. the page pass trains on all the training sheets for that step count;
+3. the inner folds again: the pixel pass trains and validates the same way, each sheet with its out-of-fold prior;
+   the pixel pass's step count is chosen the same way;
+4. the pixel pass trains on all the training sheets, each with its out-of-fold prior, for that step count;
+5. the fold's held-out sheets are predicted with the fold's two networks and scored (`scores.sheet_scores`).
 
-`train_final` trains on all 12 for the median of the folds' chosen step counts; the pixel pass's priors are each
-sheet's held-out page-pass prediction, read back from its `map_prob.npz`.  `predict_all` writes every other map page's
-prediction with the final model; the labelled sheets keep their held-out ones.
+`train_final` trains on every labelled sheet for the median of the folds' chosen step counts; the pixel pass's priors
+are each sheet's held-out page-pass prediction, read back from its `map_prob.npz`.  `predict_all` writes every other
+map page's prediction with the final model; the labelled sheets keep their held-out ones.
 
 The page pass's prior is kept as float16, as it is saved: the pixel pass trains on, and predicts from, exactly the
 `coarse` array in `map_prob.npz` (so `map` can be remade from the file).  Scores are of the float32 `map`, before it
@@ -100,7 +102,8 @@ def _lum(sid: SheetId) -> np.ndarray:
 
 def _labelled_page(sid: SheetId) -> Page:
     lum = _lum(sid)
-    mask = data.map_mask(data.load_label(*sid, root=data.LABELS), lum.shape)
+    polygons, holes = data.load_label(*sid, root=data.LABELS)
+    mask = data.map_mask(polygons, lum.shape, holes=holes)
     return Page(id=sid, lum=lum, mask=mask, prior=None)
 
 
@@ -116,10 +119,13 @@ def _predict(coarse_net, fine_net, lum: np.ndarray, device: str) -> tuple[np.nda
 
 
 def _ink(mask: np.ndarray, lum: np.ndarray) -> dict[str, float]:
-    """The ink each score is a mean over (`REGION_OF`)."""
+    """The ink each score is a mean over (`REGION_OF`): "all" is every ink px beyond the label's uncertain strip
+    (`scores.unsure`), as `scores.sheet_scores` counts it."""
     w = data.ink_weight(lum).astype(np.float64)
     frame_band, map_band = scores.bands(mask)
-    return {"frame_band": float(w[frame_band].sum()), "map_band": float(w[map_band].sum()), "all": float(w.sum())}
+    sure = ~scores.unsure(mask)
+    return {"frame_band": float(w[frame_band].sum()), "map_band": float(w[map_band].sum()),
+            "all": float(w[sure].sum())}
 
 
 def means(sheets: list[dict]) -> dict[str, dict]:

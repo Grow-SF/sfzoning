@@ -5,7 +5,13 @@ pass's probability that a px is map.
 Both passes are folded U-Nets (`nets.unet.Folded`): 4 x 4 px folded into channels, one output per px still (issue
 #71's speed amendment).  The page pass sees the whole COARSE_SIDE square (`folded_reach` >= COARSE_SIDE); the pixel
 pass sees `folded_reach(FINE_FOLD, FINE_LEVELS)` = 232 px each way, so each tile is read with a margin of that,
-rounded up to the folded pooling grid (256)."""
+rounded up to the folded pooling grid (256).
+
+The pixel pass is a correction of the page pass (`Corrected`): its logit is the prior's logit,
+`logit(clip(prior, PRIOR_CLIP, 1 - PRIOR_CLIP))`, plus the net's output, and its head convolution starts at zero, so
+an untrained pixel pass returns the page pass's answer.  The sum is inside the module, so training (whose loss reads
+the summed logit), validation and prediction all use the one formula.  Off the page the prior is 0.0 (not map); the
+clip keeps its logit finite."""
 from contextlib import contextmanager
 
 import numpy as np
@@ -24,6 +30,7 @@ FINE_FOLD = 4
 FINE_LEVELS = 4
 FINE_WIDTH = 32
 TILE = 256
+PRIOR_CLIP = 1e-4       # the prior is clipped to [this, 1 - this] before its logit (finite: about +-9.2)
 
 assert folded_reach(COARSE_FOLD, COARSE_LEVELS) >= COARSE_SIDE, "every page-pass output must see the whole page"
 assert COARSE_SIDE % folded_multiple(COARSE_FOLD, COARSE_LEVELS) == 0, "COARSE_SIDE must sit on the page pass's grid"
@@ -33,8 +40,22 @@ def new_coarse_net() -> Folded:
     return Folded(1, 1, COARSE_FOLD, COARSE_WIDTH, COARSE_LEVELS)
 
 
-def new_fine_net() -> Folded:
-    return Folded(2, 1, FINE_FOLD, FINE_WIDTH, FINE_LEVELS)
+class Corrected(Folded):
+    """The pixel pass: a `Folded` net reading `[lum, prior]` whose output is added to the prior's logit (see the
+    module).  Its head convolution (the inner U-Net's last) starts at zero weights and bias."""
+
+    def __init__(self, fold: int, width: int, levels: int):
+        super().__init__(2, 1, fold, width, levels)
+        nn.init.zeros_(self.net.head.weight)
+        nn.init.zeros_(self.net.head.bias)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        p = x[:, 1:2].clamp(PRIOR_CLIP, 1.0 - PRIOR_CLIP)
+        return torch.log(p) - torch.log1p(-p) + super().forward(x)
+
+
+def new_fine_net() -> Corrected:
+    return Corrected(FINE_FOLD, FINE_WIDTH, FINE_LEVELS)
 
 
 def _fine_multiple() -> int:
