@@ -6,10 +6,11 @@ reported on the side only, for comparison with the ICDAR 2021 MapSeg
 competition, whose HD95 is the 95th percentile of the pooled two-way distances.
 
 The labels are only so precise: their outlines sit a median of 4-6 px inside the
-printed frame rule, never more than about 8 px (issue #71's label QA).  Px within
-`UNSURE_PX` of a label outline, on either side and around holes too (`unsure`),
-count in no score here and weigh 0 in both passes' training losses.  The edge
-distance still measures the outlines themselves.
+printed frame rule, never more than about 8 px (issue #71's label QA).  Map px
+within `UNSURE_PX` of a label outline, holes' too (`unsure`; the map side only:
+the frame side, where the rule is, is certain), count in no score here and weigh
+0 in both passes' training losses.  The edge distance still measures the
+outlines themselves.
 """
 
 from __future__ import annotations
@@ -34,25 +35,27 @@ def _sides(mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None
 
 
 def unsure(mask: np.ndarray, px: float = UNSURE_PX) -> np.ndarray:
-    """Bool, True on the px within `px` of the mask's outline on either side: an inside px whose nearest outside px
-    is at most `px` away, or an outside px whose nearest inside px is.  A hole's outline is part of the mask's, so it
-    gets the strip too; the page's edge is not an outline.  All False for a mask with no outline."""
+    """Bool, True on the map side of the mask's outline within `px` of it: an inside px whose nearest outside px is at
+    most `px` away.  One-sided (controller ruling R8): the labels are drawn inside the printed rule, and holes on paper
+    outside each block, so the frame side of every outline is certain (the rule lies there) and only the map side can
+    hold the rule's fringe.  A hole's outline is part of the mask's, so its map side gets the strip too; the page's
+    edge is not an outline.  All False for a mask with no outline."""
     sides = _sides(mask)
     if sides is None:
         return np.zeros(mask.shape, bool)
-    m, d_in, d_out = sides
-    return np.where(m, d_in <= px, d_out <= px)
+    m, d_in, _ = sides
+    return m & (d_in <= px)
 
 
 def bands(mask: np.ndarray, band_px: int = BAND_PX) -> tuple[np.ndarray, np.ndarray]:
-    """(frame_band, map_band): outside / inside the mask, beyond the uncertain strip (`unsure`) and within band_px of
-    its edge.  Both empty for a mask with no outline."""
+    """(frame_band, map_band): outside / inside the mask within band_px of its edge, the map band beyond the uncertain
+    strip (`unsure`, map side only), the frame band from the outline itself.  Both empty for a mask with no outline."""
     sides = _sides(mask)
     if sides is None:
         empty = np.zeros(mask.shape, bool)
         return empty, empty.copy()
     m, d_in, d_out = sides
-    return (~m) & (d_out > UNSURE_PX) & (d_out <= band_px), m & (d_in > UNSURE_PX) & (d_in <= band_px)
+    return (~m) & (d_out <= band_px), m & (d_in > UNSURE_PX) & (d_in <= band_px)
 
 
 def _wmean(values: np.ndarray, w: np.ndarray, where: np.ndarray) -> float:

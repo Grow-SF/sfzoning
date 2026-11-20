@@ -15,30 +15,32 @@ def test_unsure_px_is_the_label_precision():
     assert UNSURE_PX == 8
 
 
-def test_unsure_strip_is_within_unsure_px_on_both_sides():
-    """Inside, the outline px is 1 px from it and px 8 is the last in the strip; outside likewise."""
+def test_unsure_strip_is_the_map_side_within_unsure_px():
+    """Inside, the outline px is 1 px from it and px 8 is the last in the strip; the frame side (where the printed rule
+    lies: the labels are drawn inside it) is never in the strip (ruling R8)."""
     mask = _square()
     u = unsure(mask)
     assert u.dtype == bool and u.shape == mask.shape
     row = u[50]
     assert row[30:38].all() and not row[38]           # inside: columns 30..37 are 1..8 px from the outline
-    assert row[22:30].all() and not row[21]           # outside: columns 22..29 are 8..1 px from it
-    assert not u[50, 45:55].any() and not u[50, :15].any()
-    assert u.sum() == (56 * 56 - 24 * 24) - 4 * (8 * 8 - int((np.hypot(*np.mgrid[1:9, 1:9]) <= 8).sum()))
+    assert not row[:30].any()                         # outside: none, the px 3 px out (a rule's place) included
+    assert not u[50, 45:55].any()
+    assert not (u & (mask == 0)).any()
+    assert u.sum() == 40 * 40 - 24 * 24
 
 
 def test_unsure_px_scales():
     mask = _square()
-    assert unsure(mask, 1)[50, 29:31].all() and not unsure(mask, 1)[50, [28, 31]].any()
+    assert unsure(mask, 1)[50, 30] and not unsure(mask, 1)[50, [28, 29, 31]].any()
 
 
-def test_a_holes_outline_gets_the_strip():
+def test_a_holes_outline_gets_the_strip_on_its_map_side():
     square = [(10, 10), (89, 10), (89, 89), (10, 89)]
     hole = [(40, 40), (59, 40), (59, 59), (40, 59)]
     mask = map_mask([square], (100, 100), holes=[hole])
     u = unsure(mask)
     assert u[50, 39] and u[50, 32] and not u[50, 31]   # map side of the hole's outline
-    assert u[50, 40] and u[50, 47] and not u[50, 50]   # inside the hole
+    assert not u[40:60, 40:60].any()                   # the block side (the hole) is certain
 
 
 def test_no_outline_no_strip():
@@ -46,14 +48,15 @@ def test_no_outline_no_strip():
     assert not unsure(np.zeros((20, 30), np.uint8)).any()
 
 
-def test_bands_start_beyond_the_strip():
+def test_frame_band_starts_at_the_outline_map_band_beyond_the_strip():
     mask = _square(200, 70, 130)
     fb, mb = bands(mask)
     u = unsure(mask)
     assert not (fb & u).any() and not (mb & u).any()
-    assert fb[100, 70 - UNSURE_PX - 1] and not fb[100, 70 - UNSURE_PX]
+    assert fb[100, 69] and fb[100, 67]                 # 1 and 3 px outside (where a rule would be) count
     assert fb[100, 70 - BAND_PX] and not fb[100, 70 - BAND_PX - 1]
     assert mb[100, 70 + UNSURE_PX] and not mb[100, 70 + UNSURE_PX - 1]
+    assert not mb[100, 72]                             # 3 px inside: in the strip
 
 
 def test_scores_ignore_the_strip():
@@ -70,6 +73,10 @@ def test_scores_ignore_the_strip():
         assert a[k] == pytest.approx(b[k], abs=1e-12), k
     bad[50, 50] = 0.01                                  # outside the strip it counts
     assert sheet_scores(bad, mask, lum)["log_loss_all_ink"] > a["log_loss_all_ink"]
+    rule = good.copy()
+    rule[30:70, 27] = 0.99                              # a rule 3 px outside the outline called map: it counts
+    c = sheet_scores(rule, mask, lum)
+    assert c["frame_called_map"] > a["frame_called_map"] and c["log_loss_frame_band"] > a["log_loss_frame_band"]
 
 
 def test_perfect_prediction():

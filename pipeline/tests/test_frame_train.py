@@ -1,4 +1,3 @@
-import dataclasses
 import itertools
 import logging
 import threading
@@ -141,26 +140,18 @@ def test_blur_is_measured_in_page_px():
 
 
 def test_fine_pass_learns_the_toy_frame():
-    """With no help from its prior (1/2 all over the page), the pixel pass's correction learns the toy frame beyond
-    the label's uncertain strip.  The toy's rule, 1-3 px outside the outline, lies within the strip and weighs 0, so
-    each page gets an outer frame bar too (its 4 outermost px, 10-13 px outside the outline)."""
-    def flat(pg):
-        lum = pg.lum.copy()
-        bar = np.ones(lum.shape, bool)
-        bar[4:-4, 4:-4] = False
-        lum[bar] = 0.0
-        return dataclasses.replace(pg, lum=lum, prior=np.full(lum.shape, 0.5, np.float32))
-    pages = [flat(toy_page(s)) for s in range(4)]
+    """The realistic case: the toy's rule lies 1-3 px outside the label's outline, on the certain (frame) side, and the
+    prior (the mask blurred) calls it about 1/3 map; the pixel pass learns the rule as frame."""
+    pages = [toy_page(s) for s in range(4)]
     # 600 steps: the folded net's 32-px core is 1.6% of its 256-px crop (the margin is the folded reach)
     net, _ = train_fine(pages, Recipe(steps=600, batch=2, check_every=200), "cpu")
     assert isinstance(net, Folded)
-    pg = flat(toy_page(9))
+    pg = toy_page(9)
+    rule = _rule_px(pg)
+    assert not (rule & scores.unsure(pg.mask)).any()
+    assert pg.prior[rule].mean() > 0.25                 # the prior alone does not call the rule frame
     p = predict_tiles(net, pg.lum, pg.prior)
-    sure = ~scores.unsure(pg.mask)
-    assert not (_rule_px(pg) & sure).any()
-    frame_ink = sure & ~pg.mask.astype(bool) & (pg.lum < 0.5)
-    assert frame_ink.sum() > 0
-    assert p[frame_ink].mean() < 0.2 and p[_inside_ink_px(pg) & sure].mean() > 0.8
+    assert p[rule].mean() < 0.2 and p[_inside_ink_px(pg)].mean() > 0.8
 
 
 def test_coarse_pass_learns_the_toy_frame():
@@ -299,6 +290,36 @@ def test_coarse_weight_is_zero_in_the_strip_of_at_least_one_coarse_px():
     strip = scores.unsure(target >= 0.5, 1.0)
     assert scale == pytest.approx(1 / 16) and strip.any()
     assert (weight[strip] == 0).all() and (weight[~strip] > 0).all()
+
+
+def _holed_page():
+    """A 64 x 64 page (1 coarse px per page px on the test grid), all ink, map rows / columns 10..53 with a hole (a
+    floating block) at 25..38."""
+    mask = np.zeros((64, 64), np.uint8)
+    mask[10:54, 10:54] = 1
+    mask[25:39, 25:39] = 0
+    return Page(id=("toy", "holed"), lum=np.zeros(mask.shape, np.float32), mask=mask,
+                prior=np.full(mask.shape, 0.5, np.float32))
+
+
+# (row, col) of: 3 px outside the outline (a rule's place), 3 px inside it, the block side of the hole's outline and
+# 3 px from it, the map side of the hole's outline (1 px and 3 px)
+RULE_SIDE, MAP_SIDE = (30, 7), (30, 12)
+BLOCK_SIDE, MAP_BY_HOLE = [(30, 25), (30, 27)], [(30, 24), (30, 22)]
+
+
+def test_weights_follow_the_one_sided_strip():
+    """Ruling R8: the frame side of every outline is certain (the labels are drawn inside the rule, holes on paper
+    outside each block); only the map side is uncertain.  Both passes."""
+    pg = _holed_page()
+    (_, _, weight), scale = _coarse_arrays(pg, 0.1)
+    assert scale == pytest.approx(1.0)
+    _, strip = _fine_aux(pg)
+    sure = ~strip
+    for r, c in [RULE_SIDE] + BLOCK_SIDE:
+        assert weight[r, c] > 0 and sure[r, c], (r, c)
+    for r, c in [MAP_SIDE] + MAP_BY_HOLE:
+        assert weight[r, c] == 0 and not sure[r, c], (r, c)
 
 
 def test_validation_loss_ignores_the_strip():

@@ -12,8 +12,9 @@ Training reads a page exactly as prediction does, so batch norm and the borders 
 
 Both losses are binary cross-entropy on logits, each px weighted by `paper_weight + ink_weight(lum)` (the ink counts,
 as in the scores, and paper a little so the net still says something there).  Px outside the page (padding), the
-pixel pass's margins and the label's uncertain strip (`scores.unsure`: within `scores.UNSURE_PX` of an outline, holes'
-too; on the coarse grid `UNSURE_PX` times its scale, at least 1 coarse px) weigh exactly 0.  The pixel pass's logit
+pixel pass's margins and the label's uncertain strip (`scores.unsure`: map px within `scores.UNSURE_PX` of an
+outline, holes' too, the frame side being certain; on the coarse grid `UNSURE_PX` times its scale, at least 1 coarse
+px) weigh exactly 0.  The pixel pass's logit
 is the prior's plus the net's correction (`predict.Corrected`), so its loss is on that sum, as prediction reads it.
 The validation loss, like the scores, leaves the strip out.
 
