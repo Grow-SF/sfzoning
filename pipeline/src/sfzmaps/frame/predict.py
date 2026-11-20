@@ -1,11 +1,11 @@
 """Whole-page prediction for the learned frame finder: a page pass on the whole page at low resolution (every output
-px sees the whole page), fed `[lum, valid, edge]`, then a pixel pass at full resolution over tiles, fed `[lum, prior,
-valid, edge]` where `prior` is the page pass's probability that a px is map.
+px sees the whole page), fed `[lum, *planes]`, then a pixel pass at full resolution over tiles, fed `[lum, prior,
+*planes]` where `prior` is the page pass's probability that a px is map.
 
-`valid` and `edge` (`data.position_planes`, issue #71 Task 14) say where the scan is: 1 on the page, and each px's
-distance to the page's nearest edge as a fraction of its shorter side; both 0 off the page.  Each pass computes them
-from the page it reads (the page pass from the resized page), and pads them with 0 where it pads the luminance with
-paper (1.0) and the prior with 0.0.
+The position planes (`data.position_planes`, named in `data.POSITION_CHANNELS`; issue #71 Tasks 14-15) say where the
+scan is: `valid` is 1 on the page (the default reads it alone), `edge` each px's distance to the page's nearest edge
+as a fraction of its shorter side; both 0 off the page.  Each pass computes them from the page it reads (the page pass
+from the resized page), and pads them with 0 where it pads the luminance with paper (1.0) and the prior with 0.0.
 
 Both passes are folded U-Nets (`nets.unet.Folded`): 4 x 4 px folded into channels, one output per px still (issue
 #71's speed amendment).  The page pass sees the whole COARSE_SIDE square (`folded_reach` = 1000 >= COARSE_SIDE =
@@ -28,6 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 
+from sfzmaps.frame import data
 from sfzmaps.frame.data import position_planes
 from sfzmaps.nets.unet import Folded, folded_multiple, folded_reach
 
@@ -48,17 +49,22 @@ assert folded_reach(COARSE_FOLD, COARSE_LEVELS) >= COARSE_SIDE, "every page-pass
 assert COARSE_SIDE % folded_multiple(COARSE_FOLD, COARSE_LEVELS) == 0, "COARSE_SIDE must sit on the page pass's grid"
 
 
+def _planes() -> int:
+    """How many position planes the nets read (`data.POSITION_CHANNELS`, read when a net is made)."""
+    return len(data.POSITION_CHANNELS)
+
+
 def new_coarse_net() -> Folded:
-    """The page pass, reading `[lum, valid, edge]`."""
-    return Folded(3, 1, COARSE_FOLD, COARSE_WIDTH, COARSE_LEVELS)
+    """The page pass, reading `[lum, *planes]`."""
+    return Folded(1 + _planes(), 1, COARSE_FOLD, COARSE_WIDTH, COARSE_LEVELS)
 
 
 class Corrected(Folded):
-    """The pixel pass: a `Folded` net reading `[lum, prior, valid, edge]` whose output is added to the prior's logit
+    """The pixel pass: a `Folded` net reading `[lum, prior, *planes]` whose output is added to the prior's logit
     (see the module).  Its head convolution (the inner U-Net's last) starts at zero weights and bias."""
 
     def __init__(self, fold: int, width: int, levels: int):
-        super().__init__(4, 1, fold, width, levels)
+        super().__init__(2 + _planes(), 1, fold, width, levels)
         nn.init.zeros_(self.net.head.weight)
         nn.init.zeros_(self.net.head.bias)
 
@@ -90,15 +96,15 @@ def coarse_resize(img: Image.Image, box: tuple[int, int, int, int] | None = None
 
 
 def coarse_square(small: np.ndarray) -> np.ndarray:
-    """(3, COARSE_SIDE, COARSE_SIDE) float32: a page on the page pass's grid (`coarse_resize`) and its position planes
-    (`data.position_planes` of its shape) at top left, padded at the right and bottom with paper (1.0) in the
-    luminance and 0 in the planes: every page, either way up, is read with the same frame of padding, in training and
-    in prediction alike."""
+    """(1 + planes, COARSE_SIDE, COARSE_SIDE) float32: a page on the page pass's grid (`coarse_resize`) and its
+    position planes (`data.position_planes` of its shape) at top left, padded at the right and bottom with paper
+    (1.0) in the luminance and 0 in the planes: every page, either way up, is read with the same frame of padding, in
+    training and in prediction alike."""
     m = folded_multiple(COARSE_FOLD, COARSE_LEVELS)
     if COARSE_SIDE % m:
         raise ValueError(f"COARSE_SIDE {COARSE_SIDE} is not a multiple of {m}")
     nh, nw = small.shape
-    out = np.zeros((3, COARSE_SIDE, COARSE_SIDE), np.float32)
+    out = np.zeros((1 + _planes(), COARSE_SIDE, COARSE_SIDE), np.float32)
     out[0] = 1.0
     out[0, :nh, :nw] = small
     out[1:, :nh, :nw] = np.stack(position_planes((nh, nw)))
@@ -156,14 +162,14 @@ def _margin() -> int:
 
 
 def _padded(lum: np.ndarray, prior: np.ndarray, margin: int, ph: int, pw: int) -> np.ndarray:
-    """(4, ph, pw): [lum, prior, valid, edge] of the page at (margin, margin), paper (1.0) in lum and 0 in the prior
-    (not map) and the position planes (off the page) around it."""
+    """(2 + planes, ph, pw): [lum, prior, *planes] of the page at (margin, margin), paper (1.0) in lum and 0 in the
+    prior (not map) and the position planes (off the page) around it."""
     h, w = lum.shape
-    x = np.zeros((4, ph, pw), np.float32)
+    x = np.zeros((2 + _planes(), ph, pw), np.float32)
     x[0] = 1.0
     x[0, margin:margin + h, margin:margin + w] = lum
     x[1, margin:margin + h, margin:margin + w] = prior
-    x[2], x[3] = position_planes((h, w), (-margin, -margin, ph, pw))
+    x[2:] = np.stack(position_planes((h, w), (-margin, -margin, ph, pw)))
     return x
 
 

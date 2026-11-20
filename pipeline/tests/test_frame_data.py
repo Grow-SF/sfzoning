@@ -6,6 +6,7 @@ from PIL import Image
 
 from sfzmaps.frame.data import (
     EDGE_MAX,
+    POSITION_CHANNELS,
     labelled_sheets,
     load_label,
     load_luminance,
@@ -16,13 +17,25 @@ from sfzmaps.frame.data import (
 )
 
 
-def test_position_planes_values():
-    """`valid` is 1 on the page; `edge` is 0 on the page's edge px (the corners too), rises by 1 / (shorter side's
-    span) per px, and is 1/2 at the centre of the shorter side, which the clip to EDGE_MAX keeps."""
+def test_position_channels_default_to_the_scan_mask_alone():
+    """Task 15: the edge distance taught the nets 'near the edge = frame' (a district bar along 1929 p09's Ocean
+    Beach); the default is the scan mask alone."""
+    assert POSITION_CHANNELS == ("valid",)
+
+
+def test_position_planes_values(position_channels):
+    """The planes in POSITION_CHANNELS' order.  `valid` is 1 on the page; `edge` is 0 on the page's edge px (the
+    corners too), rises by 1 / (shorter side's span) per px, and is 1/2 at the centre of the shorter side, which the
+    clip to EDGE_MAX keeps."""
     h, w = 101, 151
-    valid, edge = position_planes((h, w))
-    assert valid.dtype == edge.dtype == np.float32 and valid.shape == edge.shape == (h, w)
-    assert (valid == 1).all() and EDGE_MAX == 0.5
+    got = position_planes((h, w))
+    assert isinstance(got, tuple) and len(got) == len(position_channels)
+    planes = dict(zip(position_channels, got))
+    assert all(p.dtype == np.float32 and p.shape == (h, w) for p in got)
+    assert (planes["valid"] == 1).all() and EDGE_MAX == 0.5
+    if "edge" not in planes:
+        return
+    edge = planes["edge"]
     for r, c in ((0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)):
         assert edge[r, c] == 0
     assert (edge[0] == 0).all() and (edge[:, -1] == 0).all()
@@ -31,7 +44,7 @@ def test_position_planes_values():
     assert edge.max() <= EDGE_MAX and edge.min() >= 0
 
 
-def test_position_planes_turn_and_flip_with_the_page():
+def test_position_planes_turn_and_flip_with_the_page(position_channels):
     """Each of the eight quarter-turn / mirror-flip maps of a page's planes is the planes of the moved page."""
     shape = (13, 22)
     planes = np.stack(position_planes(shape))
@@ -40,14 +53,14 @@ def test_position_planes_turn_and_flip_with_the_page():
         assert np.array_equal(moved, np.stack(position_planes(moved.shape[1:])))
 
 
-def test_position_planes_over_a_window():
+def test_position_planes_over_a_window(position_channels):
     """A window (top, left, height, width) of the page's frame, off the page included: the whole page's planes where
     it is on the page, 0 off it."""
     shape = (30, 40)
     whole = np.stack(position_planes(shape))
     for top, left, hh, ww in ((0, 0, 30, 40), (-5, 7, 20, 50), (25, -3, 12, 9), (40, 50, 5, 5)):
         got = np.stack(position_planes(shape, (top, left, hh, ww)))
-        want = np.zeros((2, hh, ww), np.float32)
+        want = np.zeros((len(position_channels), hh, ww), np.float32)
         r0, c0, r1, c1 = max(top, 0), max(left, 0), min(top + hh, 30), min(left + ww, 40)
         if r1 > r0 and c1 > c0:
             want[:, r0 - top:r1 - top, c0 - left:c1 - left] = whole[:, r0:r1, c0:c1]

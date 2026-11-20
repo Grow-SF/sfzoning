@@ -9,8 +9,9 @@
 
 Every drawn page (the page pass's, and the one each pixel-pass crop is cut from) is first cut by a random 0 ..
 `EDGE_CROP` of its size at each side, each side drawn on its own (`_draw_cut`, Task 14): the cut page is the page from
-then on, its label mask cut alike, and its uncertain strip, its position planes (`data.position_planes`: on the scan,
-and the distance to its nearest edge) and the pixel pass's prior are all of the cut page.  So the scan's edge falls in
+then on, its label mask cut alike, and its uncertain strip, its position planes (`data.position_planes`, those named
+in `data.POSITION_CHANNELS`: on the scan, and with Task 14's setting the distance to its nearest edge) and the pixel
+pass's prior are all of the cut page.  So the scan's edge falls in
 a different place each time, and the nets cannot learn where a sheet's map sits.
 
 Training reads a (cut) page exactly as prediction reads a page, so batch norm and the borders see the same thing in
@@ -19,7 +20,7 @@ both:
 - The page pass sees whole pages on the coarse grid with their position planes, padded to the COARSE_SIDE square as
   `predict.coarse_input` pads them (`predict.coarse_square`), and learns the label's mask resized to that grid with
   Pillow BOX: a soft target, each coarse px the fraction of its page px inside the map.
-- The pixel pass sees crops at full resolution, fed `[lum, prior, valid, edge]`, each a `predict.TILE` x
+- The pixel pass sees crops at full resolution, fed `[lum, prior, *planes]`, each a `predict.TILE` x
   `predict.TILE` core with `predict._margin()` px of context around it, as `predict.predict_tiles` reads a tile; it
   learns the mask on the core only.  Half the cores centre on a px of the cut page within `scores.BAND_PX * 4` of the
   label's outline, where the hard part is; the other half anywhere on the cut page.  A crop's prior is what
@@ -80,6 +81,7 @@ from PIL import Image
 from scipy import ndimage
 
 from sfzmaps.frame import predict, scores
+from sfzmaps.frame import data
 from sfzmaps.frame.data import SheetId, ink_weight, position_planes
 
 log = logging.getLogger(__name__)
@@ -301,7 +303,7 @@ def _whole(pg: Page) -> Box:
 
 def _coarse_arrays(src: _Source, paper_weight: float, box: Box | None = None) -> tuple[tuple[np.ndarray, ...], float]:
     """((lum, planes, target, weight), scale): the page cut to `box` (default: the whole page) on the coarse grid
-    `predict.coarse_input` reads that cut page on, without its padding; `planes` (2, h, w) its position planes
+    `predict.coarse_input` reads that cut page on, without its padding; `planes` (planes, h, w) its position planes
     (`data.position_planes` of the grid's shape); and that grid's px per page px.  The weight is 0 on the label's
     uncertain strip as that grid sees it: `scores.unsure` of the target's map side (>= 1/2) at `UNSURE_PX * scale`
     coarse px, at least 1."""
@@ -333,7 +335,8 @@ def _coarse_make(spec: list[tuple[tuple[np.ndarray, ...], Aug]], device: str):
     right and bottom to the COARSE_SIDE x COARSE_SIDE square `predict.coarse_square` reads on: paper in the luminance,
     0 in the position planes, target and weight."""
     side, n = predict.COARSE_SIDE, len(spec)
-    x = torch.zeros((n, 3, side, side), dtype=torch.float32, device=device)
+    k = len(data.POSITION_CHANNELS)
+    x = torch.zeros((n, 1 + k, side, side), dtype=torch.float32, device=device)
     x[:, 0] = 1.0
     t = torch.zeros((n, 1, side, side), dtype=torch.float32, device=device)
     w = torch.zeros((n, 1, side, side), dtype=torch.float32, device=device)
@@ -341,7 +344,7 @@ def _coarse_make(spec: list[tuple[tuple[np.ndarray, ...], Aug]], device: str):
         rest = np.concatenate([planes, target[None], weight[None]])
         lum, rest = apply_aug(aug, torch.from_numpy(lum).to(device), torch.from_numpy(rest).to(device))
         h, wd = lum.shape
-        x[i, 0, :h, :wd], x[i, 1:, :h, :wd], t[i, 0, :h, :wd], w[i, 0, :h, :wd] = lum, rest[:2], rest[2], rest[3]
+        x[i, 0, :h, :wd], x[i, 1:, :h, :wd], t[i, 0, :h, :wd], w[i, 0, :h, :wd] = lum, rest[:k], rest[k], rest[k + 1]
     return x, t, w
 
 
@@ -433,9 +436,10 @@ def _window_sure(mask: np.ndarray, top: int, left: int, side: int) -> np.ndarray
 
 @dataclasses.dataclass(frozen=True)
 class _Crop:
-    """A pixel-pass crop as the cpu cuts it from a cut page: `arrays`, (4, side, side) float32 windows of the
-    luminance (paper off the page), the mask, the sure px (1 beyond the label's uncertain strip) and the distance to
-    the cut page's edge (`data.position_planes`) (all 0 off the page), stacked so the device moves them in one go;
+    """A pixel-pass crop as the cpu cuts it from a cut page: `arrays`, (3 + fields, side, side) float32 windows of the
+    luminance (paper off the page), the mask, the sure px (1 beyond the label's uncertain strip) and the position
+    planes but `valid` (`_fields`; the crop's extent, `inside`, gives `valid`) (all 0 off the page), stacked so the
+    device moves them in one go;
     the page (`page`, its index, and `box`, the cut), the cut page's `shape` and the window's place on it (`top`,
     `left`); the cut page's rows [r0, r1) and columns [c0, c1) within the window (`inside`: the scan, `valid`); the
     cut page on the coarse grid (`small`, for its prior); and the augmentation.  The prior is added on the device
@@ -484,6 +488,12 @@ def _fine_plan(rng: np.random.Generator, src: _Source, outline: bool) -> tuple[B
     return box, side, cy - side // 2, cx - side // 2, draw_aug(rng)
 
 
+def _fields(planes: tuple[np.ndarray, ...]) -> list[np.ndarray]:
+    """The position planes (`data.position_planes`, in POSITION_CHANNELS' order) a pixel-pass crop carries: all but
+    `valid`, which `_fine_make` takes from the crop's extent (scaled nearest, as the weight is)."""
+    return [p for name, p in zip(data.POSITION_CHANNELS, planes) if name != "valid"]
+
+
 def _fine_crop(k: int, src: _Source, box: Box, side: int, top: int, left: int, aug: Aug) -> _Crop:
     """The crop of page `k` (`src`) that `_fine_plan` drew: its windows of the cut page and the cut page on the
     coarse grid (no random draws)."""
@@ -492,7 +502,7 @@ def _fine_crop(k: int, src: _Source, box: Box, side: int, top: int, left: int, a
     h, w = lum.shape
     inside = (max(-top, 0), min(h - top, side), max(-left, 0), min(w - left, side))
     arrays = np.stack([_window(lum, top, left, side, 1.0), _window(mask, top, left, side, 0.0),
-                       _window_sure(mask, top, left, side), position_planes((h, w), (top, left, side, side))[1]])
+                       _window_sure(mask, top, left, side), *_fields(position_planes((h, w), (top, left, side, side)))])
     return _Crop(arrays=arrays, page=k, box=box, shape=(h, w), top=top, left=left, inside=inside,
                  small=predict.coarse_resize(src.lum_img, box), aug=aug)
 
@@ -509,11 +519,11 @@ def _fine_draw(rng: np.random.Generator, sources: list[_Source], batch: int, bui
 
 
 def _fine_make(spec: list[_Crop], priors: dict[tuple[int, Box], torch.Tensor], paper_weight: float, device: str):
-    """The pixel-pass batch on the device, `[lum, prior, valid, edge]`: each crop's prior window (`_prior_window` of
-    its cut page's `priors` entry), then the crop scaled to TILE + 2 margin (luminance, prior, mask and edge distance
-    bilinear), weighted `paper_weight + ink_weight(lum)` on the core, on the page and beyond the label's uncertain
-    strip only (the page's extent, which is also the `valid` plane, and the sure px scaled nearest, so the weight off
-    the page, on the margins and on the strip is exactly 0), then augmented."""
+    """The pixel-pass batch on the device, `[lum, prior, *planes]`: each crop's prior window (`_prior_window` of its
+    cut page's `priors` entry), then the crop scaled to TILE + 2 margin (luminance, prior, mask and the planes but
+    `valid` bilinear), weighted `paper_weight + ink_weight(lum)` on the core, on the page and beyond the label's
+    uncertain strip only (the page's extent, which is also the `valid` plane, and the sure px scaled nearest, so the
+    weight off the page, on the margins and on the strip is exactly 0), then augmented."""
     tile, margin = predict.TILE, predict._margin()
     full = tile + 2 * margin
     core = torch.zeros((full, full), dtype=torch.float32, device=device)
@@ -523,15 +533,17 @@ def _fine_make(spec: list[_Crop], priors: dict[tuple[int, Box], torch.Tensor], p
         side = c.arrays.shape[-1]
         planes = torch.from_numpy(c.arrays).to(device)
         prior = _prior_window(priors[c.key], c.shape, c.top, c.left, side)
-        lum, prior, mask, edge = _resize(torch.stack([planes[0], prior, planes[1], planes[3]]), full, "bilinear")
+        lum, prior, mask, *fields = _resize(torch.stack([planes[0], prior, planes[1], *planes[3:]]), full, "bilinear")
         r0, r1, c0, c1 = c.inside
         inside = torch.zeros((side, side), dtype=torch.float32, device=device)
         inside[r0:r1, c0:c1] = 1.0
         inside, sure = _resize(torch.stack([inside, planes[2]]), full, "nearest-exact")
         weight = inside * sure * core * (paper_weight + ink_weight(lum))
-        moved = apply_aug(c.aug, lum, torch.stack([prior, inside, edge, mask, weight]))
-        lum, (prior, valid, edge, mask, weight) = moved
-        xs.append(torch.stack([lum, prior, valid, edge]))
+        lum, (prior, valid, mask, weight, *fields) = apply_aug(c.aug, lum, torch.stack([prior, inside, mask, weight,
+                                                                                         *fields]))
+        fields = iter(fields)
+        xs.append(torch.stack([lum, prior, *(valid if name == "valid" else next(fields)
+                                             for name in data.POSITION_CHANNELS)]))
         ts.append(mask)
         ws.append(weight)
     return torch.stack(xs), torch.stack(ts)[:, None], torch.stack(ws)[:, None]

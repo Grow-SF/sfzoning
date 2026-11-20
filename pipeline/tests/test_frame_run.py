@@ -117,7 +117,8 @@ class Recorder:
         self.calls.append({"label": label, "trained": {pg.id for pg in pages}, "seen": {pg.id for pg in given},
                            "pages": [(pg.id, pg.lum, pg.mask) for pg in given]})
         c = len(self.calls) - 1
-        return (Const(3, self._logit("coarse", c)), Const(4, self._logit("fine", c))), \
+        n = len(data.POSITION_CHANNELS)
+        return (Const(1 + n, self._logit("coarse", c)), Const(2 + n, self._logit("fine", c))), \
             {"train_curve": self.CURVE, "val_curve": []}
 
 

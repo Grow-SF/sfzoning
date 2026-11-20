@@ -59,16 +59,21 @@ def map_mask(polygons, shape: tuple[int, int], scale: float = 1.0, holes=()) -> 
 
 
 EDGE_MAX = 0.5      # the most `position_planes`' edge plane says (half the shorter side: the middle of a page)
+# The position planes both passes read beside the page, in this order (Task 15): "valid" (the scan mask) alone.
+# ("valid", "edge") is Task 14's: the edge distance taught the nets "near the edge = frame" (a district bar along
+# 1929 p09's Ocean Beach called frame).  Every input, padding and net reads the planes from here.
+POSITION_CHANNELS: tuple[str, ...] = ("valid",)
 
 
 def position_planes(shape: tuple[int, int],
-                    window: tuple[int, int, int, int] | None = None) -> tuple[np.ndarray, np.ndarray]:
-    """(valid, edge), float32: what the frame finder's nets read beside the page to know where the scan is (issue #71
-    Task 14; a net gets absolute position almost only from its zero padding, which the paper padding hides).  `valid`
-    is 1 on the page and 0 off it; `edge` is each page px's distance to the nearest edge of the page, 0 on the edge
-    px themselves (in px between px centres), as a fraction of the shorter side's span (`min(h, w) - 1` px, so the
-    middle of an odd shorter side is exactly 1/2), at most EDGE_MAX, and 0 off the page.  Both are scalar fields of
-    the page's own shape, so a quarter turn or mirror flip of the planes is the planes of the moved page.
+                    window: tuple[int, int, int, int] | None = None) -> tuple[np.ndarray, ...]:
+    """The planes named in POSITION_CHANNELS, in its order, float32: what the frame finder's nets read beside the
+    page to know where the scan is (issue #71 Task 14; a net gets absolute position almost only from its zero padding,
+    which the paper padding hides).  `valid` is 1 on the page and 0 off it; `edge` is each page px's distance to the
+    nearest edge of the page, 0 on the edge px themselves (in px between px centres), as a fraction of the shorter
+    side's span (`min(h, w) - 1` px, so the middle of an odd shorter side is exactly 1/2), at most EDGE_MAX, and 0 off
+    the page.  Both are scalar fields of the page's own shape, so a quarter turn or mirror flip of the planes is the
+    planes of the moved page.
 
     With `window` (top, left, height, width), the planes over that window of the page's frame (it may leave the page),
     without computing the whole page's."""
@@ -77,8 +82,10 @@ def position_planes(shape: tuple[int, int],
     rows, cols = np.arange(top, top + wh), np.arange(left, left + ww)
     dist = np.minimum(np.minimum(rows, h - 1 - rows)[:, None], np.minimum(cols, w - 1 - cols)[None])
     valid = dist >= 0
-    edge = np.where(valid, np.minimum(dist / max(min(h, w) - 1, 1), EDGE_MAX), 0.0)
-    return valid.astype(np.float32), edge.astype(np.float32)
+    planes = {"valid": lambda: valid.astype(np.float32),
+              "edge": lambda: np.where(valid, np.minimum(dist / max(min(h, w) - 1, 1), EDGE_MAX), 0.0
+                                       ).astype(np.float32)}
+    return tuple(planes[name]() for name in POSITION_CHANNELS)
 
 
 def page_path(series: str, sheet: str, work: Path = WORK) -> Path:

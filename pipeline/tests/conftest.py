@@ -87,3 +87,12 @@ def _no_vision_api(request, monkeypatch, tmp_path):
     regionread.Stats.reset()
     yield
     llm.reset_stop()
+
+
+@pytest.fixture(params=[("valid",), ("valid", "edge")], ids=["valid", "valid+edge"])
+def position_channels(request, monkeypatch):
+    """The frame finder's position channels (`frame.data.POSITION_CHANNELS`) set to each allowed setting in turn: the
+    default scan mask alone, and Task 14's scan mask and edge distance."""
+    from sfzmaps.frame import data
+    monkeypatch.setattr(data, "POSITION_CHANNELS", request.param)
+    return request.param

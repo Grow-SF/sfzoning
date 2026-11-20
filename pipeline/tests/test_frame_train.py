@@ -457,12 +457,12 @@ def test_fine_pass_takes_pages_with_no_outline():
     assert w.sum() > 0 and (t * w).sum() / w.sum() > 0.95
 
 
-def test_fine_crops_have_an_unweighted_margin():
+def test_fine_crops_have_an_unweighted_margin(position_channels):
     tile, margin = predict.TILE, predict._margin()
     pages = [toy_page(0), toy_page(1, h=60, w=50)]
     x, t, w = _fine_batch(np.random.default_rng(3), pages, 6)
     full = tile + 2 * margin
-    assert x.shape == (6, 4, full, full) and t.shape == w.shape == (6, 1, full, full)
+    assert x.shape == (6, 2 + len(position_channels), full, full) and t.shape == w.shape == (6, 1, full, full)
     assert x.dtype == t.dtype == w.dtype == np.float32
     core = np.zeros((full, full), bool)
     core[margin:margin + tile, margin:margin + tile] = True
@@ -481,14 +481,14 @@ def test_fine_weight_is_exactly_zero_off_the_page():
         assert (w == 0).any() and (w > 0).any()
 
 
-def test_coarse_batches_are_the_prediction_square():
-    """[lum, valid, edge] on the COARSE_SIDE square as `coarse_input` pads it: paper in lum, 0 in the planes, target
+def test_coarse_batches_are_the_prediction_square(position_channels):
+    """[lum, *planes] on the COARSE_SIDE square as `coarse_input` pads it: paper in lum, 0 in the planes, target
     and weight around the page; on the page the planes are the moved page's own (they turn and flip with it)."""
     pages = [toy_page(0), toy_page(1, h=128, w=60)]
     spec = _coarse_draw(np.random.default_rng(0), [_Source(pg) for pg in pages], 6, 0.1)
     x, t, w = (a.numpy() for a in _coarse_make(spec, "cpu"))
     side = predict.COARSE_SIDE
-    assert x.shape == (6, 3, side, side) and t.shape == w.shape == (6, 1, side, side)
+    assert x.shape == (6, 1 + len(position_channels), side, side) and t.shape == w.shape == (6, 1, side, side)
     turned = 0
     for i, (arrays, aug) in enumerate(spec):
         h, wd = arrays[0].shape
@@ -521,7 +521,7 @@ def test_edge_cut_is_up_to_a_tenth_per_side():
     assert _draw_cut(np.random.default_rng(1), (h, w)) == _draw_cut(np.random.default_rng(1), (h, w))
 
 
-def test_page_pass_reads_the_cut_page():
+def test_page_pass_reads_the_cut_page(position_channels):
     """A cut page's page-pass arrays are prediction's reading of that page alone (`coarse_input`): its luminance,
     its own position planes, its mask resized alike as the target, weight 0 on the target's strip."""
     pg = toy_page(0)
@@ -559,10 +559,11 @@ def _cut(pg, box):
     return pg.lum[top:bottom, left:right], pg.mask[top:bottom, left:right]
 
 
-def test_fine_crops_read_the_cut_page(monkeypatch):
-    """Every crop is cut from its own randomly cut page: its windows (luminance, mask, sure px, distance to the cut
-    page's edge) and its prior's page are of that page; the batch's input is [lum, prior, valid, edge], the planes
-    moved with the crop.  (Unscaled crops, so the windows can be compared exactly.)"""
+def test_fine_crops_read_the_cut_page(monkeypatch, position_channels):
+    """Every crop is cut from its own randomly cut page: its windows (luminance, mask, sure px, and the position
+    planes but `valid`, which the crop's extent gives) and its prior's page are of that page; the batch's input is
+    [lum, prior, *planes], the planes moved with the crop.  (Unscaled crops, so the windows can be compared
+    exactly.)"""
     monkeypatch.setattr(train, "SCALE_JITTER", 0.0)
     pages = [toy_page(0), toy_page(1, h=60, w=50)]
     sources = [_Source(pg) for pg in pages]
@@ -572,18 +573,19 @@ def test_fine_crops_read_the_cut_page(monkeypatch):
     assert len(boxes) == 8 and all(c.key == (c.page, c.box) for c in spec)
     for c in spec:
         lum, mask = _cut(pages[c.page], c.box)
-        assert c.shape == lum.shape and c.arrays.shape == (4, full, full)
+        assert c.shape == lum.shape and c.arrays.shape == (2 + len(position_channels), full, full)
         assert np.array_equal(c.arrays[0], _window(lum, c.top, c.left, full, 1.0))
         assert np.array_equal(c.arrays[1], _window(mask, c.top, c.left, full, 0.0))
         sure = _window((~scores.unsure(mask)).astype(np.float32), c.top, c.left, full, 0.0)
         assert np.array_equal(c.arrays[2], sure)
-        valid, edge = position_planes(lum.shape, (c.top, c.left, full, full))
-        assert np.array_equal(c.arrays[3], edge)
+        planes = position_planes(lum.shape, (c.top, c.left, full, full))
+        fields = [p for name, p in zip(position_channels, planes) if name != "valid"]
+        assert np.array_equal(c.arrays[3:], np.stack(fields) if fields else np.zeros((0, full, full)))
         assert np.array_equal(c.small, predict.coarse_input(np.ascontiguousarray(lum))[0][0][:c.small.shape[0],
                                                                                             :c.small.shape[1]])
     priors = {c.key: torch.full(c.small.shape, 0.5) for c in spec}
     x = _fine_make(spec, priors, 0.1, "cpu")[0].numpy()
-    assert x.shape == (8, 4, full, full)
+    assert x.shape == (8, 2 + len(position_channels), full, full)
     for i, c in enumerate(spec):
         lum, _ = _cut(pages[c.page], c.box)
         planes = np.stack(position_planes(lum.shape, (c.top, c.left, full, full)))
