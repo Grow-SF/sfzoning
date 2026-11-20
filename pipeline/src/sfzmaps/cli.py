@@ -853,7 +853,7 @@ def frame(
     skip_folds: bool = typer.Option(False, "--skip-folds",
                                     help="Reuse data/frame/folds.json: train the final model, predict, draw."),
     fold: int = typer.Option(None, "--fold", hidden=True,
-                             help="Run outer fold K alone (the determinism check); writes fold-K.json."),
+                             help="Run outer fold K alone (the determinism check), all of it under data/frame/fold-K/."),
 ) -> None:
     """The learned frame finder (issue #71), $0: score every labelled sheet held out, train the final model on all
     of them, predict every map page and draw the pictures, into data/frame/. On the Mac's GPU it takes one exclusive
@@ -879,8 +879,15 @@ def frame(
     recipe = Recipe(seed=seed)
     if steps is not None:
         recipe = dataclasses.replace(recipe, steps=steps)
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if recipe.steps < recipe.check_every:
+        raise typer.BadParameter(f"--steps {recipe.steps} is less than one validation check "
+                                 f"(every {recipe.check_every} steps)")
     out = frame_data.OUT
+    if skip_folds and not (out / frame_run.FOLDS_FILE).exists():
+        typer.echo(f"error: {out / frame_run.FOLDS_FILE} is missing: run the folds first (without --skip-folds)",
+                   err=True)
+        raise typer.Exit(1)
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     labelled = frame_data.labelled_sheets()
     with gpu.gpu_turn(True, device):
         if skip_folds:

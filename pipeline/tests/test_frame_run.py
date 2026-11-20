@@ -88,38 +88,51 @@ def _sig(v: float) -> float:
 
 class Recorder:
     """Fake trainers: each call records the sheets it trained on ("trained"), every sheet it was given, training and
-    validation ("seen"), and, for the pixel pass, each page's prior; it returns a Const net whose probability names
-    the call."""
+    validation ("seen"), and, for the pixel pass, each page's prior.  The net's state after each step (one check per
+    step) is a Const whose probability names (call, step); the call returns the last one and, when asked, the
+    snapshots of every step, as `train._fit` does.  Both curves bottom at step 1, short of the recipe's 2 steps, so a
+    net at the chosen step differs from the net a call returns."""
+
+    CURVES = {"coarse": [(1, 0.4), (2, 0.5)], "fine": [(1, 0.3), (2, 0.6)]}
 
     def __init__(self):
-        self.coarse, self.fine = [], []   # per call: {"trained": set, "seen": set, "steps": n[, "priors": {...}]}
+        self.coarse, self.fine = [], []   # per call: {"trained", "seen", "steps"[, "priors"]}
+        self.tags = {"coarse": [], "fine": []}   # per kind: [(call, step)], a tag's index fixes its logit
 
     @staticmethod
-    def _logit(kind: str, k: int) -> float:
-        return (-2.0 if kind == "coarse" else 0.1) + 0.12 * k
+    def _logit(kind: str, t: int) -> float:
+        return (-2.0 if kind == "coarse" else 0.1) + 0.06 * t
 
-    def which(self, kind: str, p: np.ndarray) -> int:
-        """The call whose net gave the constant probability p."""
+    def which(self, kind: str, p: np.ndarray) -> tuple[int, int]:
+        """(call, step) of the net state that gave the constant probability p."""
         p = np.asarray(p, np.float64)
         assert float(p.max() - p.min()) < 1e-3, "a toy net's output is constant"
-        calls = self.coarse if kind == "coarse" else self.fine
-        dist = [abs(_sig(self._logit(kind, k)) - float(p.mean())) for k in range(len(calls))]
-        k = int(np.argmin(dist))
-        assert dist[k] < 2e-3
-        return k
+        dist = [abs(_sig(self._logit(kind, t)) - float(p.mean())) for t in range(len(self.tags[kind]))]
+        t = int(np.argmin(dist))
+        assert dist[t] < 2e-3
+        return self.tags[kind][t]
 
-    def train_coarse(self, pages, recipe, device, val=None):
-        k = len(self.coarse)
-        self.coarse.append({"trained": {pg.id for pg in pages}, "seen": {pg.id for pg in pages + (val or [])},
-                            "steps": recipe.steps})
-        return Const(1, self._logit("coarse", k)), {"val_curve": [(1, 0.5), (2, 0.4)] if val else []}
+    def _train(self, kind, in_ch, pages, recipe, val, snapshots, record):
+        k = len(getattr(self, kind))
+        getattr(self, kind).append({"trained": {pg.id for pg in pages}, "seen": {pg.id for pg in pages + (val or [])},
+                                    "steps": recipe.steps, **record})
+        snaps = {}
+        for step in range(1, recipe.steps + 1):
+            self.tags[kind].append((k, step))
+            snaps[step] = Const(in_ch, self._logit(kind, len(self.tags[kind]) - 1)).state_dict()
+        net = Const(in_ch, 0.0)
+        net.load_state_dict(snaps[recipe.steps])
+        info = {"val_curve": self.CURVES[kind] if val else []}
+        if snapshots:
+            info["snapshots"] = snaps
+        return net, info
 
-    def train_fine(self, pages, recipe, device, val=None):
-        k = len(self.fine)
-        self.fine.append({"trained": {pg.id for pg in pages}, "seen": {pg.id for pg in pages + (val or [])},
-                          "steps": recipe.steps,
-                          "priors": {pg.id: np.asarray(pg.prior, np.float32) for pg in pages + (val or [])}})
-        return Const(2, self._logit("fine", k)), {"val_curve": [(1, 0.3), (2, 0.6)] if val else []}
+    def train_coarse(self, pages, recipe, device, val=None, snapshots=False):
+        return self._train("coarse", 1, pages, recipe, val, snapshots, {})
+
+    def train_fine(self, pages, recipe, device, val=None, snapshots=False):
+        priors = {pg.id: np.asarray(pg.prior, np.float32) for pg in pages + (val or [])}
+        return self._train("fine", 2, pages, recipe, val, snapshots, {"priors": priors})
 
 
 @pytest.fixture
@@ -136,33 +149,40 @@ def test_run_folds_never_scores_a_trained_sheet(toy, recorder):
     outer = folds.split(labelled, folds.OUTER_K)
 
     # every trainer call (outer or inner) sees exactly one fold's training sheets, never its held-out ones
-    per_fold = collections.Counter()
+    per_fold, home = collections.Counter(), {}
     for kind, calls in (("coarse", recorder.coarse), ("fine", recorder.fine)):
-        for call in calls:
+        for i, call in enumerate(calls):
             homes = [k for k, f in enumerate(outer) if call["seen"] == set(f.train)]
             assert len(homes) == 1, call["seen"]
             assert not call["seen"] & set(outer[homes[0]].held)
             per_fold[(homes[0], kind)] += 1
+            home[(kind, i)] = homes[0]
     assert per_fold == {(k, kind): 4 for k in range(folds.OUTER_K) for kind in ("coarse", "fine")}
+    chosen = {f["fold"]: f for f in result["folds"]}
 
-    # every pixel-pass page's prior came from a page pass that never trained on that page (an inner page pass
-    # validates on the sheets it then predicts: validation only records its curve)
-    for call in recorder.fine:
+    # every pixel-pass page's prior came from an inner page pass that never trained on that page (it validates on the
+    # sheets it then predicts: validation only records its curve), taken at the step the fold chose, not the last
+    for i, call in enumerate(recorder.fine):
         for sid, prior in call["priors"].items():
-            assert sid not in recorder.coarse[recorder.which("coarse", prior)]["trained"]
+            c, step = recorder.which("coarse", prior)
+            assert sid not in recorder.coarse[c]["trained"]
+            assert recorder.coarse[c]["trained"] != recorder.coarse[c]["seen"]      # an inner page pass
+            assert step == chosen[home[("fine", i)]]["coarse_steps"] < RECIPE.steps
 
     # each held-out sheet is predicted by nets that saw nothing of its fold's held-out sheets, nor did the page
-    # passes that made the pixel pass's priors
+    # passes that made the pixel pass's priors; the page pass that made its prior ran the chosen steps
     for k, f in enumerate(outer):
         for sid in f.held:
             with np.load(out / sid[0] / sid[1] / "map_prob.npz") as z:
                 assert z["coarse"].dtype == np.float16 and z["map"].dtype == np.float16
                 assert z["coarse"].shape == z["map"].shape == (H, W)
-                c, m = recorder.which("coarse", z["coarse"]), recorder.which("fine", z["map"])
+                (c, c_step), (m, m_step) = recorder.which("coarse", z["coarse"]), recorder.which("fine", z["map"])
+            assert c_step == recorder.coarse[c]["steps"] == chosen[k]["coarse_steps"]
+            assert m_step == recorder.fine[m]["steps"] == chosen[k]["fine_steps"]
             assert not recorder.coarse[c]["seen"] & set(f.held)
             assert not recorder.fine[m]["seen"] & set(f.held)
             for prior in recorder.fine[m]["priors"].values():
-                assert not recorder.coarse[recorder.which("coarse", prior)]["seen"] & set(f.held)
+                assert not recorder.coarse[recorder.which("coarse", prior)[0]]["seen"] & set(f.held)
 
     # every sheet has its scores; folds.json has them with the fold, the means and the chosen steps
     written = json.loads((out / "folds.json").read_text())
@@ -175,10 +195,45 @@ def test_run_folds_never_scores_a_trained_sheet(toy, recorder):
             assert by_sheet[sid]["fold"] == k
     assert set(written["series"]) == set(SERIES)
     assert written["overall"]["log_loss_all_ink"]["sheets"] == len(labelled)
-    assert written["steps"] == {"coarse": [2] * folds.OUTER_K, "fine": [1] * folds.OUTER_K}
+    assert written["steps"] == {"coarse": [1] * folds.OUTER_K, "fine": [1] * folds.OUTER_K}
     # the outer nets train for the chosen steps; the inner ones for the recipe's
-    assert collections.Counter(c["steps"] for c in recorder.coarse) == {2: 16}
+    assert collections.Counter(c["steps"] for c in recorder.coarse) == {2: 12, 1: 4}
     assert collections.Counter(c["steps"] for c in recorder.fine) == {2: 12, 1: 4}
+
+
+def _files(root):
+    return {p.relative_to(root): p.read_bytes() for p in sorted(root.rglob("*")) if p.is_file()}
+
+
+def test_one_fold_run_leaves_the_main_tree_alone(toy, recorder):
+    labelled, out = toy
+    run.run_folds(labelled, RECIPE, "cpu", out=out)
+    before = _files(out)
+    run.run_folds(labelled, RECIPE, "cpu", out=out, only=0)
+    after = _files(out)
+    assert {p: after[p] for p in before} == before
+    new = sorted(p for p in after if p not in before)
+    held = folds.split(labelled, folds.OUTER_K)[0].held
+    from pathlib import Path
+    want = [Path("fold-0") / "folds.json"] + [Path("fold-0", s, h, name) for s, h in held
+                                              for name in ("map_prob.npz", "scores.json")]
+    assert new == sorted(want)
+    summary = json.loads((out / "fold-0" / "folds.json").read_text())
+    assert [f["fold"] for f in summary["folds"]] == [0]
+    assert {(s["series"], s["sheet"]) for s in summary["sheets"]} == set(held)
+
+
+def test_a_full_run_drops_the_old_summary_first(toy, recorder, monkeypatch):
+    labelled, out = toy
+    out.mkdir()
+    (out / "folds.json").write_text("{}")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("crash mid-run")
+    monkeypatch.setattr(train, "train_coarse", boom)
+    with pytest.raises(RuntimeError):
+        run.run_folds(labelled, RECIPE, "cpu", out=out)
+    assert not (out / "folds.json").exists()
 
 
 def test_final_priors_are_held_out_predictions(toy, recorder):

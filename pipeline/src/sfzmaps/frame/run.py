@@ -3,9 +3,10 @@
 `run_folds` scores every labelled sheet with networks that never saw it.  Each outer fold (`folds.split(labelled,
 OUTER_K)`) holds out one sheet per series and works on the other 9 alone:
 
-1. inner folds (`folds.split(train, INNER_K)`): the page pass trains on 6 and validates on 3; its prediction of those
-   3 is their out-of-fold prior, so every one of the 9 gets a prior from a page pass that did not see it; the page
-   pass's step count is chosen (`train.choose_steps`) over the 3 inner curves;
+1. inner folds (`folds.split(train, INNER_K)`): the page pass trains on 6 and validates on 3; the page pass's step
+   count is chosen (`train.choose_steps`) over the 3 inner curves; each inner page pass's snapshot at that step
+   (bit for bit a run of that many steps, so no extra training) predicts its 3, their out-of-fold prior: every one
+   of the 9 gets a prior from a page pass that did not train on it, run for the steps the held-out sheets' is;
 2. the page pass trains on all 9 for that step count;
 3. the inner folds again: the pixel pass trains on 6 and validates on 3, each with its out-of-fold prior; the pixel
    pass's step count is chosen the same way;
@@ -145,15 +146,22 @@ def _fold(fold: folds.Fold, pages: dict[SheetId, Page], recipe: Recipe, device: 
     Nothing here sees `fold.held`."""
     inner = folds.split(list(fold.train), folds.INNER_K)
     _held_once(inner, fold.train)
-    priors, coarse_curves = {}, []
+    inner_nets, coarse_curves = [], []
     for i, f in enumerate(inner):
         log.info("  page pass, inner fold %d: train %d, validate %d", i, len(f.train), len(f.held))
-        net, rec = train.train_coarse([pages[s] for s in f.train], recipe, device, val=[pages[s] for s in f.held])
+        net, rec = train.train_coarse([pages[s] for s in f.train], recipe, device, val=[pages[s] for s in f.held],
+                                      snapshots=True)
         coarse_curves.append(rec["val_curve"])
+        inner_nets.append((net, rec["snapshots"]))
+    coarse_steps = train.choose_steps(coarse_curves)
+    # each prior comes from its inner page pass as it was at the chosen step (the snapshot is, bit for bit, a run of
+    # that many steps), as the held-out sheets' priors come from a page pass run for that many steps
+    priors = {}
+    for f, (net, snaps) in zip(inner, inner_nets):
+        net.load_state_dict(snaps[coarse_steps])
         for s in f.held:
             priors[s] = _prior(net, pages[s].lum, device)
-        del net
-    coarse_steps = train.choose_steps(coarse_curves)
+    del inner_nets
     log.info("  page pass on all %d for %d steps", len(fold.train), coarse_steps)
     coarse_net, _ = train.train_coarse([pages[s] for s in fold.train],
                                        dataclasses.replace(recipe, steps=coarse_steps), device)
@@ -176,13 +184,19 @@ def _fold(fold: folds.Fold, pages: dict[SheetId, Page], recipe: Recipe, device: 
 
 def run_folds(labelled: list[SheetId], recipe: Recipe, device: str, out: Path = OUT,
               only: int | None = None) -> dict:
-    """Score every labelled sheet held out (see the module); returns what it writes to `out/folds.json`.  `only` runs
-    outer fold `only` alone (the determinism check), writing `out/fold-<only>.json` instead."""
+    """Score every labelled sheet held out (see the module); returns what it writes to `out/folds.json`, which a full
+    run deletes first, so a run that stops part way leaves no summary for `--skip-folds` to trust.  `only` runs
+    outer fold `only` alone (the determinism check) and writes everything, its summary included, under
+    `out/fold-<only>/`, never touching the run's own files."""
     labelled = sorted(set(labelled))
     outer = folds.split(labelled, folds.OUTER_K)
     if only is not None and not 0 <= only < len(outer):
         raise ValueError(f"fold {only} is not one of 0..{len(outer) - 1}")
     _held_once(outer, tuple(labelled))
+    if only is None:
+        (out / FOLDS_FILE).unlink(missing_ok=True)
+    else:
+        out = out / f"fold-{only}"
     pages = {sid: _labelled_page(sid) for sid in labelled}
     sheets, fold_info = [], []
     for k, fold in enumerate(outer):
@@ -208,7 +222,7 @@ def run_folds(labelled: list[SheetId], recipe: Recipe, device: str, out: Path = 
         "folds": fold_info,
         "steps": {"coarse": [f["coarse_steps"] for f in fold_info], "fine": [f["fine_steps"] for f in fold_info]},
     }
-    _write_json(out / (FOLDS_FILE if only is None else f"fold-{only}.json"), result)
+    _write_json(out / FOLDS_FILE, result)
     return result
 
 

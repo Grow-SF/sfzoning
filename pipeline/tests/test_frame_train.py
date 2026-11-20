@@ -117,6 +117,24 @@ def test_training_is_deterministic():
     assert all(torch.equal(x, y) for x, y in zip(c.state_dict().values(), d.state_dict().values()))
 
 
+def test_snapshot_at_a_step_is_a_run_of_that_many_steps():
+    """A snapshot taken at step s while training (and validating) for longer is, bit for bit, the net a run of s steps
+    returns: the chosen step's net costs no extra training."""
+    val = [toy_page(7)]
+    for trainer, batch in ((train_coarse, 1), (train_fine, 2)):
+        long, info = trainer([toy_page(0)], Recipe(steps=4, batch=batch, check_every=2), "cpu", val=val,
+                             snapshots=True)
+        assert sorted(info["snapshots"]) == [2, 4]
+        short, _ = trainer([toy_page(0)], Recipe(steps=2, batch=batch, check_every=2), "cpu")
+        for want, net_step in ((short.state_dict(), 2), (long.state_dict(), 4)):
+            snap = info["snapshots"][net_step]
+            assert list(snap) == list(want)
+            assert all(torch.equal(snap[k], want[k]) for k in want)
+        assert any(not torch.equal(info["snapshots"][2][k], info["snapshots"][4][k]) for k in want)
+    _, info = train_coarse([toy_page(0)], Recipe(steps=2, batch=1, check_every=1), "cpu")
+    assert "snapshots" not in info
+
+
 def test_validation_curve_and_returned_net():
     val = [toy_page(7)]
     net, info = train_coarse([toy_page(0)], Recipe(steps=4, batch=1, check_every=2), "cpu", val=val)

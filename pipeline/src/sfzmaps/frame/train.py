@@ -123,13 +123,15 @@ def _val_loss(val: list[Page], prob: Callable[[Page], np.ndarray]) -> float:
 
 
 def _fit(net: UNet, draw: Callable[[], tuple[np.ndarray, ...]], recipe: Recipe, device: str,
-         val_loss: Callable[[UNet], float] | None) -> tuple[UNet, dict]:
+         val_loss: Callable[[UNet], float] | None, snapshots: bool = False) -> tuple[UNet, dict]:
     """`recipe.steps` Adam steps on batches from `draw` ((x, target, weight) float32 arrays), the validation loss
-    every `check_every` steps; the net back in eval mode on cpu.  FloatingPointError on a non-finite loss (read only
-    at the checks, so the device is not waited on every step)."""
+    every `check_every` steps; the net back in eval mode on cpu.  With `snapshots`, the info also holds
+    {"snapshots": {step: state_dict on cpu}} at every check: the draws do not depend on `recipe.steps` and the
+    validation changes nothing, so the snapshot at step s is the net a run of s steps returns.  FloatingPointError on
+    a non-finite loss (read only at the checks, so the device is not waited on every step)."""
     net.to(device).train()
     opt = torch.optim.Adam(net.parameters(), lr=recipe.lr)
-    curve = []
+    curve, snaps = [], {}
     for step in range(1, recipe.steps + 1):
         x, t, w = (torch.from_numpy(a).to(device) for a in draw())
         loss = _loss(net(x), t, w)
@@ -141,7 +143,12 @@ def _fit(net: UNet, draw: Callable[[], tuple[np.ndarray, ...]], recipe: Recipe, 
                 raise FloatingPointError(f"training loss is {loss.item()} at step {step}")
             if val_loss is not None:
                 curve.append((step, float(val_loss(net))))
-    return net.eval().cpu(), {"val_curve": curve}
+            if snapshots:
+                snaps[step] = {k: v.detach().to("cpu", copy=True) for k, v in net.state_dict().items()}
+    info = {"val_curve": curve}
+    if snapshots:
+        info["snapshots"] = snaps
+    return net.eval().cpu(), info
 
 
 def _need(pages: list[Page], what: str, attrs: tuple[str, ...]) -> None:
@@ -182,9 +189,9 @@ def _coarse_batch(rng: np.random.Generator, coarse: list[tuple[tuple[np.ndarray,
 
 
 def train_coarse(pages: list[Page], recipe: Recipe, device: str,
-                 val: list[Page] | None = None) -> tuple[UNet, dict]:
+                 val: list[Page] | None = None, snapshots: bool = False) -> tuple[UNet, dict]:
     """The page pass trained on `pages` (see the module); returns (net in eval mode on cpu, {"val_curve": [(step,
-    loss), ...]}), the curve empty without `val`."""
+    loss), ...]}), the curve empty without `val`; with `snapshots`, also the net's state at every check (`_fit`)."""
     _need(pages + (val or []), "page-pass", ("mask",))
     rng = _settle(recipe.seed)
     net = predict.new_coarse_net()
@@ -192,7 +199,7 @@ def train_coarse(pages: list[Page], recipe: Recipe, device: str,
     val_loss = None
     if val:
         val_loss = lambda n: _val_loss(val, lambda pg: predict.predict_coarse(n, pg.lum, device))  # noqa: E731
-    return _fit(net, lambda: _coarse_batch(rng, coarse, recipe.batch), recipe, device, val_loss)
+    return _fit(net, lambda: _coarse_batch(rng, coarse, recipe.batch), recipe, device, val_loss, snapshots)
 
 
 # --- the pixel pass --------------------------------------------------------------------------------------------------
@@ -264,9 +271,10 @@ def _fine_batch(rng: np.random.Generator, pages: list[Page], near: list[np.ndarr
 
 
 def train_fine(pages: list[Page], recipe: Recipe, device: str,
-               val: list[Page] | None = None) -> tuple[UNet, dict]:
+               val: list[Page] | None = None, snapshots: bool = False) -> tuple[UNet, dict]:
     """The pixel pass trained on `pages` (each with its page-pass `prior`; see the module); returns (net in eval mode
-    on cpu, {"val_curve": [(step, loss), ...]}), the curve empty without `val`."""
+    on cpu, {"val_curve": [(step, loss), ...]}), the curve empty without `val`; with `snapshots`, also the net's
+    state at every check (`_fit`)."""
     _need(pages + (val or []), "pixel-pass", ("mask", "prior"))
     rng = _settle(recipe.seed)
     net = predict.new_fine_net()
@@ -275,7 +283,7 @@ def train_fine(pages: list[Page], recipe: Recipe, device: str,
     if val:
         val_loss = lambda n: _val_loss(val, lambda pg: predict.predict_tiles(n, pg.lum, pg.prior, device))  # noqa: E731
     return _fit(net, lambda: _fine_batch(rng, pages, near, recipe.batch, recipe.paper_weight), recipe, device,
-                val_loss)
+                val_loss, snapshots)
 
 
 # --- step choice -----------------------------------------------------------------------------------------------------
