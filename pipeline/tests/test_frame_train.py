@@ -7,7 +7,8 @@ from scipy import ndimage
 
 from sfzmaps.frame import predict
 from sfzmaps.frame.predict import predict_coarse, predict_tiles
-from sfzmaps.frame.train import Page, Recipe, augment, choose_steps, train_coarse, train_fine
+from sfzmaps.frame.train import (OUTLINE_REACH, Page, Recipe, _coarse_arrays, _coarse_batch, _fine_batch,
+                                 _near_outline, augment, choose_steps, train_coarse, train_fine)
 
 RULE_AT, RULE_PX = 10, 3
 
@@ -129,12 +130,63 @@ def test_validation_curve_and_returned_net():
     assert info == {"val_curve": []}
 
 
+def test_outline_band():
+    pg = toy_page(0)
+    assert _near_outline(np.ones_like(pg.mask)).size == 0 and _near_outline(np.zeros_like(pg.mask)).size == 0
+    big = np.zeros((700, 700), np.uint8)
+    big[300:400, 300:400] = 1
+    near = np.zeros(big.size, bool)
+    near[_near_outline(big)] = True
+    near = near.reshape(big.shape)
+    edge = big.astype(bool) & ~ndimage.binary_erosion(big.astype(bool), border_value=1)
+    d = ndimage.distance_transform_edt(~edge)
+    assert np.array_equal(near, d <= OUTLINE_REACH) and not near.all()
+
+
 def test_fine_pass_takes_pages_with_no_outline():
     pg = toy_page(0)
     full = Page(id=("toy", "full"), lum=pg.lum, mask=np.ones_like(pg.mask), prior=np.ones_like(pg.prior))
     small = Page(id=("toy", "small"), lum=pg.lum[:20, :24], mask=pg.mask[:20, :24], prior=pg.prior[:20, :24])
     net, _ = train_fine([full, small], Recipe(steps=3, batch=2), "cpu")
-    assert net is not None
+    assert all(torch.isfinite(v).all() for v in net.state_dict().values() if v.is_floating_point())
+    # an outline crop of a page with no outline falls back to a uniform one: a whole-map crop, learned as map
+    _, t, w = _fine_batch(np.random.default_rng(0), [full], [_near_outline(full.mask)], 4, 0.1)
+    assert w.sum() > 0 and (t * w).sum() / w.sum() > 0.95
+
+
+def test_fine_crops_have_an_unweighted_margin():
+    tile, margin = predict.TILE, predict._margin()
+    pages = [toy_page(0), toy_page(1, h=60, w=50)]
+    x, t, w = _fine_batch(np.random.default_rng(3), pages, [_near_outline(p.mask) for p in pages], 6, 0.1)
+    full = tile + 2 * margin
+    assert x.shape == (6, 2, full, full) and t.shape == w.shape == (6, 1, full, full)
+    core = np.zeros((full, full), bool)
+    core[margin:margin + tile, margin:margin + tile] = True
+    assert (w[:, :, ~core] == 0).all()
+    assert (w[:, :, core].reshape(6, -1).sum(1) > 0).all()
+
+
+def test_coarse_batches_are_the_prediction_square():
+    pages = [toy_page(0), toy_page(1, h=128, w=60)]
+    coarse = [_coarse_arrays(pg, 0.1) for pg in pages]
+    x, t, w = _coarse_batch(np.random.default_rng(0), coarse, 4)
+    side = predict.COARSE_SIDE
+    assert x.shape == t.shape == w.shape == (4, 1, side, side)
+    assert (x[w == 0] == 1.0).all() and (t[w == 0] == 0).all()
+    arrays, scale = coarse[0]
+    assert arrays[0].shape == (48, 64) and scale == pytest.approx(0.5)
+
+
+def test_blur_is_measured_in_page_px():
+    two_levels = np.zeros((32, 32), np.float32)
+    two_levels[:, 16:] = 1.0
+    blurred_any = False
+    for seed in range(20):
+        fine = augment(np.random.default_rng(seed), two_levels, scale=1.0)[0]
+        coarse = augment(np.random.default_rng(seed), two_levels, scale=1e-3)[0]
+        assert len(np.unique(coarse)) <= 2           # a blur of under 0.002 px leaves two levels
+        blurred_any |= len(np.unique(fine)) > 2
+    assert blurred_any
 
 
 def test_fine_pass_needs_a_prior():
@@ -146,3 +198,5 @@ def test_fine_pass_needs_a_prior():
 def test_choose_steps():
     assert choose_steps([[(250, 0.5), (500, 0.3), (750, 0.4)], [(250, 0.6), (500, 0.2), (750, 0.2)]]) == 500
     assert choose_steps([[(250, 0.3), (500, 0.3)]]) == 250
+    with pytest.raises(ValueError):
+        choose_steps([[(250, 0.3), (500, float("nan"))], [(250, 0.4), (500, 0.1)]])

@@ -1,16 +1,21 @@
 """Training the learned frame finder's two passes (see `predict` for how they read a page).
 
-- The page pass (`train_coarse`) sees whole pages on the coarse grid (`predict.coarse_input`) and learns the label's
-  mask resized to that grid with Pillow BOX: a soft target, each coarse px the fraction of its page px inside the map.
-- The pixel pass (`train_fine`) sees `predict.TILE` x `predict.TILE` crops at full resolution, fed `[lum, prior]`,
-  and learns the mask itself.  Half the crops centre on a px within `scores.BAND_PX * 4` of the label's outline, where
-  the hard part is; the other half anywhere on the page.
+Training reads a page exactly as prediction does, so batch norm and the borders see the same thing in both:
+
+- The page pass (`train_coarse`) sees whole pages on the coarse grid, padded with paper to the COARSE_SIDE square
+  (`predict.coarse_input`), and learns the label's mask resized to that grid with Pillow BOX: a soft target, each
+  coarse px the fraction of its page px inside the map.
+- The pixel pass (`train_fine`) sees crops at full resolution, fed `[lum, prior]`, each a `predict.TILE` x
+  `predict.TILE` core with `predict._margin()` px of context around it, as `predict.predict_tiles` reads a tile; it
+  learns the mask on the core only.  Half the cores centre on a px within `scores.BAND_PX * 4` of the label's
+  outline, where the hard part is; the other half anywhere on the page.
 
 Both losses are binary cross-entropy on logits, each px weighted by `paper_weight + ink_weight(lum)` (the ink counts,
-as in the scores, and paper a little so the net still says something there).  Px outside the page (padding) weigh 0.
-Every sample is augmented (`augment`): quarter turns and mirror flips of every array alike, and brightness, contrast,
-gamma and blur changes of the luminance alone; the pixel pass's crops are also scaled by up to `SCALE_JITTER` either
-way.  The page pass needs no scale change: every page is resized to `predict.COARSE_SIDE` before it is read.
+as in the scores, and paper a little so the net still says something there).  Px outside the page (padding) and the
+pixel pass's margins weigh 0.  Every sample is augmented (`augment`): quarter turns and mirror flips of every array
+alike, and brightness, contrast, gamma and blur changes of the luminance alone, the blur measured in page px on either
+grid; the pixel pass's crops are also scaled by up to `SCALE_JITTER` either way.  The page pass needs no scale change:
+every page is resized to `predict.COARSE_SIDE` before it is read.
 
 The learning rate is constant (Adam), so a net trained for n steps is the net a longer run had at step n: the step
 count chosen from the validation curves (`choose_steps`) is the one the final model trains for.
@@ -32,7 +37,7 @@ from scipy import ndimage
 
 from sfzmaps.frame import predict, scores
 from sfzmaps.frame.data import SheetId, ink_weight
-from sfzmaps.nets.unet import UNet, multiple
+from sfzmaps.nets.unet import UNet
 
 THREADS = 4
 SCALE_JITTER = 0.1      # the pixel pass's crops are scaled by a factor in 1 +- this
@@ -65,15 +70,17 @@ class Page:
     prior: np.ndarray | None
 
 
-def augment(rng: np.random.Generator, *arrays) -> tuple:
+def augment(rng: np.random.Generator, *arrays, scale: float = 1.0) -> tuple:
     """The same random quarter turn and mirror flip of every array, then brightness, contrast and gamma changes and,
-    for `BLUR_SHARE` of the draws, a Gaussian blur (sigma up to `BLUR_SIGMA` px) of the first array (the luminance)
-    alone, kept within [0, 1].  The first comes back float32; the others keep their dtype."""
+    for `BLUR_SHARE` of the draws, a Gaussian blur (sigma up to `BLUR_SIGMA` page px) of the first array (the
+    luminance) alone, kept within [0, 1].  `scale` is the arrays' px per page px (the page pass's coarse grid is
+    smaller than the page), so the blur is the same on the page whatever grid it is applied on.  The first comes
+    back float32; the others keep their dtype."""
     turns, flip = int(rng.integers(4)), bool(rng.integers(2))
     gamma = float(np.exp(rng.uniform(-np.log(GAMMA), np.log(GAMMA))))
     contrast = 1.0 + float(rng.uniform(-CONTRAST, CONTRAST))
     brightness = float(rng.uniform(-BRIGHTNESS, BRIGHTNESS))
-    blurred, sigma = rng.random() < BLUR_SHARE, float(rng.uniform(0.0, BLUR_SIGMA))
+    blurred, sigma = rng.random() < BLUR_SHARE, float(rng.uniform(0.0, BLUR_SIGMA)) * scale
     out = []
     for i, a in enumerate(arrays):
         a = np.rot90(np.flip(a, 1) if flip else a, turns)
@@ -146,26 +153,28 @@ def _need(pages: list[Page], what: str, attrs: tuple[str, ...]) -> None:
 
 # --- the page pass ---------------------------------------------------------------------------------------------------
 
-def _coarse_arrays(pg: Page, paper_weight: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(lum, target, weight) on the coarse grid `predict.coarse_input` reads the page on, without its padding."""
+def _coarse_arrays(pg: Page, paper_weight: float) -> tuple[tuple[np.ndarray, np.ndarray, np.ndarray], float]:
+    """((lum, target, weight), scale): the page on the coarse grid `predict.coarse_input` reads it on, without its
+    padding, and that grid's px per page px."""
     h, w = pg.lum.shape
     arr, scale = predict.coarse_input(pg.lum)
     nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
     lum = arr[:nh, :nw]
     target = predict.coarse_input(pg.mask.astype(np.float32))[0][:nh, :nw]
-    return lum, target, (paper_weight + ink_weight(lum)).astype(np.float32)
+    return (lum, target, (paper_weight + ink_weight(lum)).astype(np.float32)), scale
 
 
-def _coarse_batch(rng: np.random.Generator, coarse: list[tuple[np.ndarray, ...]], batch: int):
-    """`batch` whole pages, drawn with replacement and augmented, padded at right and bottom to a common multiple of
-    `multiple(COARSE_LEVELS)`: paper in the input, weight 0."""
-    samples = [augment(rng, *coarse[int(rng.integers(len(coarse)))]) for _ in range(batch)]
-    m = multiple(predict.COARSE_LEVELS)
-    hh = -(-max(s[0].shape[0] for s in samples) // m) * m
-    ww = -(-max(s[0].shape[1] for s in samples) // m) * m
-    x = np.ones((batch, 1, hh, ww), np.float32)
-    t = np.zeros((batch, 1, hh, ww), np.float32)
-    w = np.zeros((batch, 1, hh, ww), np.float32)
+def _coarse_batch(rng: np.random.Generator, coarse: list[tuple[tuple[np.ndarray, ...], float]], batch: int):
+    """`batch` whole pages, drawn with replacement and augmented, each padded at right and bottom to the
+    COARSE_SIDE x COARSE_SIDE square `predict.coarse_input` reads on: paper in the input, weight 0."""
+    samples = []
+    for _ in range(batch):
+        arrays, scale = coarse[int(rng.integers(len(coarse)))]
+        samples.append(augment(rng, *arrays, scale=scale))
+    side = predict.COARSE_SIDE
+    x = np.ones((batch, 1, side, side), np.float32)
+    t = np.zeros((batch, 1, side, side), np.float32)
+    w = np.zeros((batch, 1, side, side), np.float32)
     for i, (lum, target, weight) in enumerate(samples):
         h, wd = lum.shape
         x[i, 0, :h, :wd], t[i, 0, :h, :wd], w[i, 0, :h, :wd] = lum, target, weight
@@ -215,11 +224,14 @@ def _resized(a: np.ndarray, side: int) -> np.ndarray:
 
 
 def _fine_crop(rng: np.random.Generator, pg: Page, near: np.ndarray, outline: bool, paper_weight: float):
-    """One augmented crop (lum, prior, mask, weight), TILE x TILE: a window of TILE / s px (s within 1 +-
-    SCALE_JITTER) centred on a px near the outline (`outline` and the page has one) or anywhere on the page, resized
-    to TILE.  Outside the page: paper, prior 0, mask 0, weight 0."""
-    tile = predict.TILE
-    side = max(1, round(tile / (1.0 + float(rng.uniform(-SCALE_JITTER, SCALE_JITTER)))))
+    """One augmented crop (lum, prior, mask, weight) read as `predict.predict_tiles` reads a tile: a TILE x TILE core
+    with `predict._margin()` px of context around it, the margin weighing 0 so only the core is learned.  The window
+    is (TILE + 2 margin) / s px (s within 1 +- SCALE_JITTER), centred on a px near the outline (`outline` and the page
+    has one) or anywhere on the page, resized to TILE + 2 margin.  Outside the page: paper, prior 0, mask 0, weight
+    0."""
+    tile, margin = predict.TILE, predict._margin()
+    full = tile + 2 * margin
+    side = max(1, round(full / (1.0 + float(rng.uniform(-SCALE_JITTER, SCALE_JITTER)))))
     h, w = pg.lum.shape
     if outline and near.size:
         cy, cx = divmod(int(near[int(rng.integers(near.size))]), w)
@@ -229,9 +241,13 @@ def _fine_crop(rng: np.random.Generator, pg: Page, near: np.ndarray, outline: bo
     lum = _window(pg.lum, top, left, side, 1.0)
     inside = np.zeros((side, side), np.float32)
     inside[max(-top, 0):min(h - top, side), max(-left, 0):min(w - left, side)] = 1.0
-    arrays = (lum, _window(pg.prior, top, left, side, 0.0), _window(pg.mask.astype(np.float32), top, left, side, 0.0),
-              inside * (paper_weight + ink_weight(lum)))
-    return augment(rng, *(_resized(a, tile) for a in arrays))
+    arrays = [_resized(a, full) for a in (lum, _window(pg.prior, top, left, side, 0.0),
+                                          _window(pg.mask.astype(np.float32), top, left, side, 0.0),
+                                          inside * (paper_weight + ink_weight(lum)))]
+    core = np.zeros((full, full), np.float32)
+    core[margin:margin + tile, margin:margin + tile] = 1.0
+    arrays[3] = arrays[3] * core
+    return augment(rng, *arrays)
 
 
 def _fine_batch(rng: np.random.Generator, pages: list[Page], near: list[np.ndarray], batch: int,
@@ -266,7 +282,10 @@ def train_fine(pages: list[Page], recipe: Recipe, device: str,
 
 def choose_steps(curves: list[list[tuple[int, float]]]) -> int:
     """The step with the lowest mean validation loss across the curves (the inner folds'), over the steps every
-    curve has; ties go to the earlier step."""
+    curve has; ties go to the earlier step.  ValueError if any loss is NaN (a validation set with no ink scores
+    NaN, and NaN never compares) or no step is on every curve."""
+    if any(np.isnan(v) for c in curves for _, v in c):
+        raise ValueError("a validation curve has a NaN loss (no ink in its validation pages?)")
     tables = [dict(c) for c in curves]
     common = sorted(set.intersection(*(set(t) for t in tables))) if tables else []
     if not common:

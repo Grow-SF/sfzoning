@@ -28,14 +28,15 @@ def new_fine_net() -> UNet:
 
 def coarse_input(lum: np.ndarray) -> tuple[np.ndarray, float]:
     """The page resized (Pillow BOX) so its long side is COARSE_SIDE, padded with paper (1.0) at the right and bottom
-    to a multiple of multiple(COARSE_LEVELS).  Returns the array and the scale factor."""
+    to a COARSE_SIDE x COARSE_SIDE square: every page, either way up, is read with the same frame of padding, in
+    training and in prediction alike.  Returns the array and the scale factor."""
+    if COARSE_SIDE % multiple(COARSE_LEVELS):
+        raise ValueError(f"COARSE_SIDE {COARSE_SIDE} is not a multiple of {multiple(COARSE_LEVELS)}")
     h, w = lum.shape
     scale = COARSE_SIDE / max(h, w)
     nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
     small = np.asarray(Image.fromarray(lum.astype(np.float32), mode="F").resize((nw, nh), Image.BOX), np.float32)
-    m = multiple(COARSE_LEVELS)
-    ph, pw = -(-nh // m) * m, -(-nw // m) * m
-    out = np.ones((ph, pw), np.float32)
+    out = np.ones((COARSE_SIDE, COARSE_SIDE), np.float32)
     out[:nh, :nw] = small
     return out, scale
 

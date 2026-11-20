@@ -41,13 +41,15 @@ def test_coarse_reach_covers_page():
     assert reach(predict.COARSE_LEVELS) >= predict.COARSE_SIDE
 
 
-def test_coarse_input_pads_to_multiple():
-    lum = np.ones((3300, 5100), np.float32)
-    arr, scale = predict.coarse_input(lum)
-    m = multiple(predict.COARSE_LEVELS)
-    assert max(arr.shape) % m == 0 and min(arr.shape) % m == 0
-    assert arr.shape[1] >= 1024
-    assert scale == pytest.approx(1024 / 5100, rel=1e-3)
+def test_coarse_input_pads_to_a_square():
+    lum = np.zeros((3300, 5100), np.float32)
+    for page in (lum, lum.T):
+        arr, scale = predict.coarse_input(page)
+        assert arr.shape == (predict.COARSE_SIDE, predict.COARSE_SIDE)
+        assert predict.COARSE_SIDE % multiple(predict.COARSE_LEVELS) == 0
+        assert scale == pytest.approx(1024 / 5100, rel=1e-3)
+        nh, nw = round(page.shape[0] * scale), round(page.shape[1] * scale)
+        assert (arr[:nh, :nw] == 0).all() and (arr[nh:] == 1).all() and (arr[:, nw:] == 1).all()
 
 
 def test_predict_restores_training_mode(monkeypatch):
