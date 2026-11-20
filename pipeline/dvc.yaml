@@ -31,7 +31,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -80,7 +79,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -129,7 +127,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -178,7 +175,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -227,7 +223,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -276,7 +271,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -325,7 +319,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -374,7 +367,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -423,7 +415,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -472,7 +463,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -521,7 +511,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -600,7 +589,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -679,7 +667,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -758,7 +745,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -837,7 +823,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -882,7 +867,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -923,7 +907,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -964,7 +947,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1005,7 +987,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1046,7 +1027,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1087,7 +1067,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1128,7 +1107,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1169,7 +1147,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1210,7 +1187,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1251,7 +1227,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1292,7 +1267,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1333,7 +1307,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1374,7 +1347,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1415,7 +1387,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1456,7 +1427,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1497,7 +1467,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1538,7 +1507,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1579,7 +1547,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1620,7 +1587,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1661,7 +1627,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1702,7 +1667,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -1743,7 +1707,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
@@ -8155,7 +8118,6 @@ stages:
       - src/sfzmaps/linework.py
       - src/sfzmaps/llm.py
       - src/sfzmaps/manifest.py
-      - src/sfzmaps/nets
       - src/sfzmaps/pages.py
       - src/sfzmaps/parks.py
       - src/sfzmaps/placement.py
