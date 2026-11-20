@@ -1,5 +1,6 @@
 {
  "polygons": [[[89, 495], [3174, 478], [3193, 3986], [104, 4010]]],
- "notes": "Just inside the single heavy frame rule on left, top and right; the bottom edge sits just above the legend strip's top rule (README rule 3: ruled-off legend and title boxes are outside). The page is turned slightly (left rule drifts ~15 px right top to bottom).",
- "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19"
+ "holes": [],
+ "notes": "Just inside the single heavy frame rule on left, top and right; the bottom edge sits just above the legend strip's top rule (README rule 3: ruled-off legend and title boxes are outside). The page is turned slightly (left rule drifts ~15 px right top to bottom). No holes (README rule 4): on this sheet the planning-code note, north arrow and scale bar are printed in the ruled-off legend strip, already outside, and the map area holds no notes, cross-references or other floating blocks. PACIFIC OCEAN, SAN FRANCISCO BAY, PRESIDIO and OUTER CLEMENT NCD label the city and stay map; the thin vertical line running from the bottom streets down to the legend rule near x 2120 is joined to the street ink and stays map.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19; holes added 2026-11-20 (floating blocks are frame; none on this sheet)"
 }

@@ -1,0 +1,10 @@
+{
+ "polygons": [[[0, 0], [4545, 0], [4545, 6089], [0, 6089]]],
+ "holes": [
+  [[3633, 176], [4314, 176], [4314, 505], [4388, 505], [4388, 712], [3575, 712], [3575, 505], [3633, 505]],
+  [[4370, 46], [4442, 46], [4492, 96], [4492, 166], [4442, 216], [4370, 216], [4320, 166], [4320, 96]],
+  [[4232, 888], [4398, 912], [4402, 1421], [4360, 1545], [4256, 1562], [4256, 1970], [4210, 1970], [4210, 1562], [4120, 1545], [4076, 1421], [4120, 1300]]
+ ],
+ "notes": "Colour photograph cropped through the map: no frame rule anywhere, and the paper (with map ink) runs to all four page edges with no background visible (checked at every corner and mid-side), so the polygon is the whole page (README rule 5). Floating blocks are cut out as holes (rule 4): (1) the title and legend block 'CITY & COUNTY OF SAN FRANCISCO / USE OF PROPERTY / ZONE MAP / LEGEND' with its six swatches (x 3585-4375, y 192-704), stepped at y 505 because the swatch column starts left of the title; (2) the 'SECTION 11' circle (centre ~4406,131, r ~78), an octagon; (3) the compass rose with its true-north and magnetic needles (needle tips y ~900-930, rose x 4089-4389, y 1294-1553) and the long needle tail down to y ~1962. The tail runs through map blocks and street lines at x ~4220-4250, y 1560-1960; the hole still takes the tail (rule 4: the hole takes the whole block), kept to a narrow 48 px strip so the blocks around it stay map; that tail needs 11 points rather than 4-8. Place names (BAY VIEW PARK, OLD LADIES HOME, RESERVOIR) and street names stay map.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-20"
+}

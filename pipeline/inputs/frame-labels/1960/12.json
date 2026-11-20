@@ -1,5 +1,6 @@
 {
  "polygons": [[[270, 153], [5049, 91], [5119, 5432], [352, 5488]]],
- "notes": "Single thick frame rule on all sides; the outline sits just inside it. The bottom side is the top edge of the thick bar that rules off the legend/title strip (rule 3), so the strip is outside. Page turned about 0.8 degrees; corners placed where they are (rule 7), sides checked straight at their midpoints.",
- "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19"
+ "holes": [[[2578, 272], [2952, 272], [2952, 330], [2578, 330]], [[704, 2648], [764, 2648], [764, 3025], [704, 3025]], [[4936, 2558], [4995, 2558], [4995, 2953], [4936, 2953]]],
+ "notes": "Single thick frame rule on all sides; the outline sits just inside it. The bottom side is the top edge of the thick bar that rules off the legend/title strip (rule 3), so the strip is outside. Page turned about 0.8 degrees; corners placed where they are (rule 7), sides checked straight at their midpoints. Holes (README rule 4, floating blocks are frame): the three cross-references 'SEE SHEET 6' (top), 'SEE SHEET 13' (left, vertical) and 'SEE SHEET 11' (right, vertical), each on blank paper just beyond the last streets; edges from the ink's bounding box. The north arrow and scale bar sit in the ruled-off legend strip, so already outside. 'COUNTY LINE' (bottom right) labels the county line on the map and stays map.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19; holes added 2026-11-20 (floating blocks are frame)"
 }

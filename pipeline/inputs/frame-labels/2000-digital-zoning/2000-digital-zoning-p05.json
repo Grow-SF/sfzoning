@@ -1,5 +1,6 @@
 {
  "polygons": [[[90, 508], [3174, 481], [3204, 3990], [117, 4021]]],
- "notes": "Just inside the single heavy frame rule on left, top and right; the bottom edge sits just above the legend strip's top rule (README rule 3: ruled-off legend and title boxes are outside). The page is turned slightly (left and right rules drift ~27 px right top to bottom).",
- "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19"
+ "holes": [],
+ "notes": "Just inside the single heavy frame rule on left, top and right; the bottom edge sits just above the legend strip's top rule (README rule 3: ruled-off legend and title boxes are outside). The page is turned slightly (left and right rules drift ~27 px right top to bottom). No holes (README rule 4): on this sheet the planning-code note, north arrow and scale bar are printed in the ruled-off legend strip, already outside, and the map area holds no notes, cross-references or other floating blocks (the blank paper above, right of and below the map was searched for ink). PACIFIC OCEAN and GOLDEN GATE PARK name places and stay map.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19; holes added 2026-11-20 (floating blocks are frame; none on this sheet)"
 }

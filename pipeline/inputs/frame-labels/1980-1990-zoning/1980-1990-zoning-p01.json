@@ -1,0 +1,6 @@
+{
+ "polygons": [[[0, 0], [3300, 0], [3300, 4404], [2800, 4408], [2400, 4412], [2000, 4415], [1600, 4420], [1200, 4428], [800, 4433], [400, 4438], [0, 4443]]],
+ "holes": [[[2068, 383], [3183, 398], [3171, 1382], [2058, 1364]]],
+ "notes": "No frame rule on the top, left or right: the scan shows blank paper out to the page edge there, so the outline follows the page edge (README rule 5). The bottom side sits ~4 px above the top edge of the thick bar that rules off the legend strip (rule 3); the bar runs x 33-3270, and the edge is carried on at the bar's height out to both page edges. The bar is not straight (top at y 4447 near x 40, 4424 at x 1600, 4408 at x 3260), so the bottom edge has a point every 400 px (rule 8). The ZONING MAP INDEX inset (ruled box, x 2066-3175, y 390-1373) floats inside the map area with blank paper above it (~390 px) and to its right (~125 px) and no frame to attach a notch to, so it is cut out as a hole a few px outside its box rule (rule 3: a hole if the box floats inside). No other floating blocks over the map; PIER HEAD LINE, SAN FRANCISCO BAY and district codes label the city and stay map.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-20"
+}

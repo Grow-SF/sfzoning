@@ -1,5 +1,6 @@
 {
  "polygons": [[[92, 504], [3178, 483], [3205, 3993], [116, 4020]]],
- "notes": "Just inside the single heavy frame rule on left, top and right; the bottom edge sits just above the legend strip's top rule (README rule 3: ruled-off legend and title boxes are outside). The pier-head-line note in the bottom-right corner just above the legend strip has no rule of its own separating it from the map, so it is floating text and stays inside (rule 4). The page is turned slightly (left and right rules drift ~25 px right top to bottom).",
- "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19"
+ "holes": [[[2287, 3874], [3177, 3874], [3177, 3989], [2287, 3992]]],
+ "notes": "Just inside the single heavy frame rule on left, top and right; the bottom edge sits just above the legend strip's top rule (README rule 3: ruled-off legend and title boxes are outside). The page is turned slightly (left and right rules drift ~25 px right top to bottom). Hole (README rule 4, floating blocks are frame): the pier-head note block in the bottom-right corner just above the legend strip ('ZONING DISTRICTS ALONG THE BAY EXTEND TO THE PIER HEAD LINE ... PLANNING CODE SECTION 105(e).'); it has no rule of its own, so it is a hole, not a notch; its bottom edge runs ~4 px above the outline's bottom edge (the note sits right on the legend rule), on blank paper. The planning-code note, north arrow and scale bar are in the ruled-off legend strip, already outside. 'J.E. CODY' (street label), the BULKHEAD LINE / PIERHEAD LINE lettering, INDIA BASIN, SOUTH BASIN and SAN FRANCISCO BAY label the map and stay map.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-19; holes added 2026-11-20 (floating blocks are frame)"
 }

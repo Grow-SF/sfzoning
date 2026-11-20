@@ -1,0 +1,10 @@
+{
+ "polygons": [[[1107, 357], [3200, 358], [3900, 356], [4600, 358], [5300, 360], [6000, 362], [6454, 363], [6455, 3150], [6452, 4550], [6451, 5105], [1094, 5108], [1103, 2450]]],
+ "holes": [
+  [[5221, 3738], [6322, 3740], [6321, 4954], [5221, 4952]],
+  [[3528, 712], [3912, 712], [3912, 782], [3528, 782]],
+  [[1133, 2376], [1187, 2376], [1187, 2737], [1133, 2737]]
+ ],
+ "notes": "Landscape template. The left side sits just right of the thick vertical bar that rules off the title strip (ZONING MAP OF THE CITY AND COUNTY OF SAN FRANCISCO, legend, sheet number), README rule 3; the bar's map-side edge drifts from x 1102 at the top to 1090 at the bottom, with a point at y 2450. Top, right and bottom sides sit ~4 px inside the single frame rule (rule 1); the top rule wobbles 352-358 so it has a point every ~700 px (rule 8). The ZONING MAP INDEX inset (ruled box x 5227-6316, y 3744-4948) floats inside the map area, ~140 px clear of the right rule and ~160 px clear of the bottom rule, with open bay between, so it is a hole a few px outside its box rule rather than a notch (rule 3: a hole if the box floats inside). The cross-references 'SEE SHEET 2' (top, above the piers) and 'SEE SHEET 8' (vertical, just right of the left bar) are holes (rule 4). PIER HEAD LINE, THE EMBARCADERO, SAN FRANCISCO BAY and district codes label the city and stay map.",
+ "drawn_by": "Claude, by eye on full-resolution crops, 2026-11-20"
+}
