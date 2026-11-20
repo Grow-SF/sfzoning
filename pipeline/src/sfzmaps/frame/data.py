@@ -88,6 +88,14 @@ def position_planes(shape: tuple[int, int],
     return tuple(planes[name]() for name in POSITION_CHANNELS)
 
 
+def stacked_planes(shape: tuple[int, int], window=None) -> np.ndarray:
+    """`position_planes` as one float32 array (planes, h, w); (0, h, w) when POSITION_CHANNELS is empty."""
+    planes = position_planes(shape) if window is None else position_planes(shape, window)
+    if not planes:
+        return np.zeros((0, *(shape if window is None else (window[2], window[3]))), np.float32)
+    return np.stack(planes)
+
+
 def page_path(series: str, sheet: str, work: Path = WORK) -> Path:
     return work / series / sheet / "page.png"
 

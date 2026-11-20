@@ -82,7 +82,7 @@ from scipy import ndimage
 
 from sfzmaps.frame import predict, scores
 from sfzmaps.frame import data
-from sfzmaps.frame.data import SheetId, ink_weight, position_planes
+from sfzmaps.frame.data import SheetId, ink_weight, position_planes, stacked_planes
 
 log = logging.getLogger(__name__)
 
@@ -313,7 +313,7 @@ def _coarse_arrays(src: _Source, paper_weight: float, box: Box | None = None) ->
     scale = predict.coarse_size(box[3] - box[1], box[2] - box[0])[2]
     strip = scores.unsure(target >= 0.5, max(1.0, scores.UNSURE_PX * scale))
     weight = np.where(strip, 0.0, paper_weight + ink_weight(lum)).astype(np.float32)
-    return (lum, np.stack(position_planes(lum.shape)), target, weight), scale
+    return (lum, stacked_planes(lum.shape), target, weight), scale
 
 
 def _coarse_draw(rng: np.random.Generator, sources: list[_Source], batch: int, paper_weight: float,

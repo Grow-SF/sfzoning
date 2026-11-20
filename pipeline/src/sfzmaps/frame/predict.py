@@ -29,7 +29,7 @@ import torch.nn.functional as F
 from PIL import Image
 
 from sfzmaps.frame import data
-from sfzmaps.frame.data import position_planes
+from sfzmaps.frame.data import position_planes, stacked_planes
 from sfzmaps.nets.unet import Folded, folded_multiple, folded_reach
 
 COARSE_SIDE = 512
@@ -107,7 +107,7 @@ def coarse_square(small: np.ndarray) -> np.ndarray:
     out = np.zeros((1 + _planes(), COARSE_SIDE, COARSE_SIDE), np.float32)
     out[0] = 1.0
     out[0, :nh, :nw] = small
-    out[1:, :nh, :nw] = np.stack(position_planes((nh, nw)))
+    out[1:, :nh, :nw] = stacked_planes((nh, nw))
     return out
 
 
@@ -169,7 +169,7 @@ def _padded(lum: np.ndarray, prior: np.ndarray, margin: int, ph: int, pw: int) -
     x[0] = 1.0
     x[0, margin:margin + h, margin:margin + w] = lum
     x[1, margin:margin + h, margin:margin + w] = prior
-    x[2:] = np.stack(position_planes((h, w), (-margin, -margin, ph, pw)))
+    x[2:] = stacked_planes((h, w), (-margin, -margin, ph, pw))
     return x
 
 

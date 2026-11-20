@@ -7,6 +7,7 @@ from PIL import Image
 from sfzmaps.frame.data import (
     EDGE_MAX,
     POSITION_CHANNELS,
+    stacked_planes,
     labelled_sheets,
     load_label,
     load_luminance,
@@ -32,7 +33,9 @@ def test_position_planes_values(position_channels):
     assert isinstance(got, tuple) and len(got) == len(position_channels)
     planes = dict(zip(position_channels, got))
     assert all(p.dtype == np.float32 and p.shape == (h, w) for p in got)
-    assert (planes["valid"] == 1).all() and EDGE_MAX == 0.5
+    assert EDGE_MAX == 0.5
+    if "valid" in planes:
+        assert (planes["valid"] == 1).all()
     if "edge" not in planes:
         return
     edge = planes["edge"]
@@ -47,19 +50,19 @@ def test_position_planes_values(position_channels):
 def test_position_planes_turn_and_flip_with_the_page(position_channels):
     """Each of the eight quarter-turn / mirror-flip maps of a page's planes is the planes of the moved page."""
     shape = (13, 22)
-    planes = np.stack(position_planes(shape))
+    planes = stacked_planes(shape)
     for k, f in itertools.product(range(4), (0, 1)):
         moved = np.rot90(np.flip(planes, 2) if f else planes, k, (1, 2))
-        assert np.array_equal(moved, np.stack(position_planes(moved.shape[1:])))
+        assert np.array_equal(moved, stacked_planes(moved.shape[1:]))
 
 
 def test_position_planes_over_a_window(position_channels):
     """A window (top, left, height, width) of the page's frame, off the page included: the whole page's planes where
     it is on the page, 0 off it."""
     shape = (30, 40)
-    whole = np.stack(position_planes(shape))
+    whole = stacked_planes(shape)
     for top, left, hh, ww in ((0, 0, 30, 40), (-5, 7, 20, 50), (25, -3, 12, 9), (40, 50, 5, 5)):
-        got = np.stack(position_planes(shape, (top, left, hh, ww)))
+        got = stacked_planes(shape, (top, left, hh, ww))
         want = np.zeros((len(position_channels), hh, ww), np.float32)
         r0, c0, r1, c1 = max(top, 0), max(left, 0), min(top + hh, 30), min(left + ww, 40)
         if r1 > r0 and c1 > c0:

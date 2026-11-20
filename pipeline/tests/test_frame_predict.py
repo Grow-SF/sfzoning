@@ -4,7 +4,7 @@ import torch
 
 from sfzmaps.frame import predict
 from sfzmaps.frame import data
-from sfzmaps.frame.data import POSITION_CHANNELS, position_planes
+from sfzmaps.frame.data import POSITION_CHANNELS, position_planes, stacked_planes
 from sfzmaps.nets.unet import Folded, folded_multiple, folded_reach
 
 
@@ -109,7 +109,7 @@ def _reference(net, lum, prior):
     x[0] = 1.0
     x[0, mg:mg + h, mg:mg + w] = lum
     x[1, mg:mg + h, mg:mg + w] = prior
-    x[2:, mg:mg + h, mg:mg + w] = np.stack(position_planes((h, w)))
+    x[2:, mg:mg + h, mg:mg + w] = stacked_planes((h, w))
     net.eval()
     with torch.no_grad():
         out = torch.sigmoid(net(torch.from_numpy(x)[None]))[0, 0].numpy()
@@ -166,7 +166,7 @@ def test_coarse_input_pads_to_a_square(position_channels):
         assert scale == pytest.approx(predict.COARSE_SIDE / 5100, rel=1e-3)
         nh, nw = round(page.shape[0] * scale), round(page.shape[1] * scale)
         assert (arr[0, :nh, :nw] == 0).all() and (arr[0, nh:] == 1).all() and (arr[0, :, nw:] == 1).all()
-        assert np.array_equal(arr[1:, :nh, :nw], np.stack(position_planes((nh, nw))))
+        assert np.array_equal(arr[1:, :nh, :nw], stacked_planes((nh, nw)))
         assert (arr[1:, nh:] == 0).all() and (arr[1:, :, nw:] == 0).all()
 
 

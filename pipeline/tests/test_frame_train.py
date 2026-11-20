@@ -10,7 +10,7 @@ import torch
 from scipy import ndimage
 
 from sfzmaps.frame import predict, scores, train
-from sfzmaps.frame.data import position_planes
+from sfzmaps.frame.data import position_planes, stacked_planes
 from sfzmaps.frame.predict import Corrected, page_prior, predict_coarse, predict_tiles
 from sfzmaps.frame.scores import UNSURE_PX
 from sfzmaps.frame.train import (BLUR_SHARE, BLUR_SIGMA, BRIGHTNESS, CONTRAST, EDGE_CROP, GAMMA, OUTLINE_REACH,
@@ -499,7 +499,7 @@ def test_coarse_batches_are_the_prediction_square(position_channels):
         pad[:h, :wd] = False
         assert (x[i, 0][pad] == 1.0).all() and (x[i, 1:][:, pad] == 0).all()
         assert (t[i, 0][pad] == 0).all() and (w[i, 0][pad] == 0).all()
-        assert np.array_equal(x[i, 1:, :h, :wd], np.stack(position_planes((h, wd))))
+        assert np.array_equal(x[i, 1:, :h, :wd], stacked_planes((h, wd)))
         assert (w[i, 0][~pad] > 0).any()
     assert turned
     arrays, scale = _coarse_arrays(_Source(pages[0]), 0.1)
@@ -573,7 +573,9 @@ def test_fine_crops_read_the_cut_page(monkeypatch, position_channels):
     assert len(boxes) == 8 and all(c.key == (c.page, c.box) for c in spec)
     for c in spec:
         lum, mask = _cut(pages[c.page], c.box)
-        assert c.shape == lum.shape and c.arrays.shape == (2 + len(position_channels), full, full)
+        # carried: lum, mask, the sure px and every position plane but `valid` (made from the crop's extent)
+        carried = 3 + len([n for n in position_channels if n != "valid"])
+        assert c.shape == lum.shape and c.arrays.shape == (carried, full, full)
         assert np.array_equal(c.arrays[0], _window(lum, c.top, c.left, full, 1.0))
         assert np.array_equal(c.arrays[1], _window(mask, c.top, c.left, full, 0.0))
         sure = _window((~scores.unsure(mask)).astype(np.float32), c.top, c.left, full, 0.0)
@@ -588,10 +590,14 @@ def test_fine_crops_read_the_cut_page(monkeypatch, position_channels):
     assert x.shape == (8, 2 + len(position_channels), full, full)
     for i, c in enumerate(spec):
         lum, _ = _cut(pages[c.page], c.box)
-        planes = np.stack(position_planes(lum.shape, (c.top, c.left, full, full)))
+        planes = stacked_planes(lum.shape, (c.top, c.left, full, full))
         moved = np.rot90(np.flip(planes, 2) if c.aug.flip else planes, c.aug.turns, (1, 2))
         assert np.array_equal(x[i, 2:], moved)
-        assert (x[i, 1][moved[0] == 0] == 0).all()                            # the prior: 0 off the page
+        h, w = lum.shape                                                      # the page's extent in the window
+        on = np.zeros((full, full), bool)
+        on[max(0, -c.top):max(0, min(full, h - c.top)), max(0, -c.left):max(0, min(full, w - c.left))] = True
+        on = np.rot90(np.flip(on, 1) if c.aug.flip else on, c.aug.turns)
+        assert (x[i, 1][~on] == 0).all()                                      # the prior: 0 off the page
 
 
 def test_outline_crops_centre_near_the_outline_on_the_cut_page():
