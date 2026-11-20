@@ -1,15 +1,57 @@
+import itertools
+
 import numpy as np
 import pytest
 from PIL import Image
 
 from sfzmaps.frame.data import (
+    EDGE_MAX,
     labelled_sheets,
     load_label,
     load_luminance,
     map_mask,
     map_pages,
     page_path,
+    position_planes,
 )
+
+
+def test_position_planes_values():
+    """`valid` is 1 on the page; `edge` is 0 on the page's edge px (the corners too), rises by 1 / (shorter side's
+    span) per px, and is 1/2 at the centre of the shorter side, which the clip to EDGE_MAX keeps."""
+    h, w = 101, 151
+    valid, edge = position_planes((h, w))
+    assert valid.dtype == edge.dtype == np.float32 and valid.shape == edge.shape == (h, w)
+    assert (valid == 1).all() and EDGE_MAX == 0.5
+    for r, c in ((0, 0), (0, w - 1), (h - 1, 0), (h - 1, w - 1)):
+        assert edge[r, c] == 0
+    assert (edge[0] == 0).all() and (edge[:, -1] == 0).all()
+    assert edge[h // 2, w // 2] == pytest.approx(min(min(h, w) / 2 / min(h, w), 0.5), abs=1e-7)
+    assert edge[10, 75] == pytest.approx(10 / 100) and edge[50, 3] == pytest.approx(3 / 100)
+    assert edge.max() <= EDGE_MAX and edge.min() >= 0
+
+
+def test_position_planes_turn_and_flip_with_the_page():
+    """Each of the eight quarter-turn / mirror-flip maps of a page's planes is the planes of the moved page."""
+    shape = (13, 22)
+    planes = np.stack(position_planes(shape))
+    for k, f in itertools.product(range(4), (0, 1)):
+        moved = np.rot90(np.flip(planes, 2) if f else planes, k, (1, 2))
+        assert np.array_equal(moved, np.stack(position_planes(moved.shape[1:])))
+
+
+def test_position_planes_over_a_window():
+    """A window (top, left, height, width) of the page's frame, off the page included: the whole page's planes where
+    it is on the page, 0 off it."""
+    shape = (30, 40)
+    whole = np.stack(position_planes(shape))
+    for top, left, hh, ww in ((0, 0, 30, 40), (-5, 7, 20, 50), (25, -3, 12, 9), (40, 50, 5, 5)):
+        got = np.stack(position_planes(shape, (top, left, hh, ww)))
+        want = np.zeros((2, hh, ww), np.float32)
+        r0, c0, r1, c1 = max(top, 0), max(left, 0), min(top + hh, 30), min(left + ww, 40)
+        if r1 > r0 and c1 > c0:
+            want[:, r0 - top:r1 - top, c0 - left:c1 - left] = whole[:, r0:r1, c0:c1]
+        assert got.dtype == np.float32 and np.array_equal(got, want)
 
 
 def test_load_luminance_rgb_and_grey(tmp_path):

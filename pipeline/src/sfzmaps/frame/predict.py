@@ -1,6 +1,11 @@
 """Whole-page prediction for the learned frame finder: a page pass on the whole page at low resolution (every output
-px sees the whole page), then a pixel pass at full resolution over tiles, fed `[lum, prior]` where `prior` is the page
-pass's probability that a px is map.
+px sees the whole page), fed `[lum, valid, edge]`, then a pixel pass at full resolution over tiles, fed `[lum, prior,
+valid, edge]` where `prior` is the page pass's probability that a px is map.
+
+`valid` and `edge` (`data.position_planes`, issue #71 Task 14) say where the scan is: 1 on the page, and each px's
+distance to the page's nearest edge as a fraction of its shorter side; both 0 off the page.  Each pass computes them
+from the page it reads (the page pass from the resized page), and pads them with 0 where it pads the luminance with
+paper (1.0) and the prior with 0.0.
 
 Both passes are folded U-Nets (`nets.unet.Folded`): 4 x 4 px folded into channels, one output per px still (issue
 #71's speed amendment).  The page pass sees the whole COARSE_SIDE square (`folded_reach` = 1000 >= COARSE_SIDE =
@@ -23,6 +28,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from PIL import Image
 
+from sfzmaps.frame.data import position_planes
 from sfzmaps.nets.unet import Folded, folded_multiple, folded_reach
 
 COARSE_SIDE = 512
@@ -43,15 +49,16 @@ assert COARSE_SIDE % folded_multiple(COARSE_FOLD, COARSE_LEVELS) == 0, "COARSE_S
 
 
 def new_coarse_net() -> Folded:
-    return Folded(1, 1, COARSE_FOLD, COARSE_WIDTH, COARSE_LEVELS)
+    """The page pass, reading `[lum, valid, edge]`."""
+    return Folded(3, 1, COARSE_FOLD, COARSE_WIDTH, COARSE_LEVELS)
 
 
 class Corrected(Folded):
-    """The pixel pass: a `Folded` net reading `[lum, prior]` whose output is added to the prior's logit (see the
-    module).  Its head convolution (the inner U-Net's last) starts at zero weights and bias."""
+    """The pixel pass: a `Folded` net reading `[lum, prior, valid, edge]` whose output is added to the prior's logit
+    (see the module).  Its head convolution (the inner U-Net's last) starts at zero weights and bias."""
 
     def __init__(self, fold: int, width: int, levels: int):
-        super().__init__(2, 1, fold, width, levels)
+        super().__init__(4, 1, fold, width, levels)
         nn.init.zeros_(self.net.head.weight)
         nn.init.zeros_(self.net.head.bias)
 
@@ -68,20 +75,40 @@ def _fine_multiple() -> int:
     return folded_multiple(FINE_FOLD, FINE_LEVELS)
 
 
-def coarse_input(lum: np.ndarray) -> tuple[np.ndarray, float]:
-    """The page resized (Pillow BOX) so its long side is COARSE_SIDE, padded with paper (1.0) at the right and bottom
-    to a COARSE_SIDE x COARSE_SIDE square: every page, either way up, is read with the same frame of padding, in
-    training and in prediction alike.  Returns the array and the scale factor."""
+def coarse_size(h: int, w: int) -> tuple[int, int, float]:
+    """(rows, columns, scale) of an h x w page on the page pass's grid: its long side COARSE_SIDE."""
+    scale = COARSE_SIDE / max(h, w)
+    return max(1, round(h * scale)), max(1, round(w * scale)), scale
+
+
+def coarse_resize(img: Image.Image, box: tuple[int, int, int, int] | None = None) -> np.ndarray:
+    """A mode "F" image, or its `box` (left, top, right, bottom: training's cut page, read without copying the
+    page), resized (Pillow BOX) so its long side is COARSE_SIDE; float32, unpadded."""
+    left, top, right, bottom = box if box is not None else (0, 0, *img.size)
+    nh, nw, _ = coarse_size(bottom - top, right - left)
+    return np.array(img.resize((nw, nh), Image.BOX, box=(left, top, right, bottom)), np.float32)   # writable
+
+
+def coarse_square(small: np.ndarray) -> np.ndarray:
+    """(3, COARSE_SIDE, COARSE_SIDE) float32: a page on the page pass's grid (`coarse_resize`) and its position planes
+    (`data.position_planes` of its shape) at top left, padded at the right and bottom with paper (1.0) in the
+    luminance and 0 in the planes: every page, either way up, is read with the same frame of padding, in training and
+    in prediction alike."""
     m = folded_multiple(COARSE_FOLD, COARSE_LEVELS)
     if COARSE_SIDE % m:
         raise ValueError(f"COARSE_SIDE {COARSE_SIDE} is not a multiple of {m}")
-    h, w = lum.shape
-    scale = COARSE_SIDE / max(h, w)
-    nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
-    small = np.asarray(Image.fromarray(lum.astype(np.float32), mode="F").resize((nw, nh), Image.BOX), np.float32)
-    out = np.ones((COARSE_SIDE, COARSE_SIDE), np.float32)
-    out[:nh, :nw] = small
-    return out, scale
+    nh, nw = small.shape
+    out = np.zeros((3, COARSE_SIDE, COARSE_SIDE), np.float32)
+    out[0] = 1.0
+    out[0, :nh, :nw] = small
+    out[1:, :nh, :nw] = np.stack(position_planes((nh, nw)))
+    return out
+
+
+def coarse_input(lum: np.ndarray) -> tuple[np.ndarray, float]:
+    """The page pass's input for a page (`coarse_square` of the resized page) and the scale factor."""
+    img = Image.fromarray(np.ascontiguousarray(lum, np.float32), mode="F")
+    return coarse_square(coarse_resize(img)), coarse_size(*lum.shape)[2]
 
 
 @contextmanager
@@ -107,10 +134,10 @@ def _run(net: nn.Module, x: np.ndarray, device: str) -> np.ndarray:
 def predict_coarse(net: nn.Module, lum: np.ndarray, device: str = "cpu") -> np.ndarray:
     """The page pass's probability, cropped of padding and resized (bilinear) to the page's shape."""
     h, w = lum.shape
-    arr, scale = coarse_input(lum)
+    arr, _ = coarse_input(lum)
     with _eval_on(net, device):
-        prob = _run(net, arr[None], device)
-    nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
+        prob = _run(net, arr, device)
+    nh, nw, _ = coarse_size(h, w)
     prob = prob[:nh, :nw]
     t = torch.from_numpy(np.ascontiguousarray(prob))[None, None]
     return F.interpolate(t, size=(h, w), mode="bilinear", align_corners=False)[0, 0].numpy().astype(np.float32)
@@ -129,12 +156,14 @@ def _margin() -> int:
 
 
 def _padded(lum: np.ndarray, prior: np.ndarray, margin: int, ph: int, pw: int) -> np.ndarray:
-    """(2, ph, pw): the page at (margin, margin), paper (1.0) in lum and not-map (0.0) in prior around it."""
+    """(4, ph, pw): [lum, prior, valid, edge] of the page at (margin, margin), paper (1.0) in lum and 0 in the prior
+    (not map) and the position planes (off the page) around it."""
     h, w = lum.shape
-    x = np.zeros((2, ph, pw), np.float32)
+    x = np.zeros((4, ph, pw), np.float32)
     x[0] = 1.0
     x[0, margin:margin + h, margin:margin + w] = lum
     x[1, margin:margin + h, margin:margin + w] = prior
+    x[2], x[3] = position_planes((h, w), (-margin, -margin, ph, pw))
     return x
 
 

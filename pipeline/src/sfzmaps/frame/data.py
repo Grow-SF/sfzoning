@@ -58,6 +58,29 @@ def map_mask(polygons, shape: tuple[int, int], scale: float = 1.0, holes=()) -> 
     return np.asarray(img, dtype=np.uint8)
 
 
+EDGE_MAX = 0.5      # the most `position_planes`' edge plane says (half the shorter side: the middle of a page)
+
+
+def position_planes(shape: tuple[int, int],
+                    window: tuple[int, int, int, int] | None = None) -> tuple[np.ndarray, np.ndarray]:
+    """(valid, edge), float32: what the frame finder's nets read beside the page to know where the scan is (issue #71
+    Task 14; a net gets absolute position almost only from its zero padding, which the paper padding hides).  `valid`
+    is 1 on the page and 0 off it; `edge` is each page px's distance to the nearest edge of the page, 0 on the edge
+    px themselves (in px between px centres), as a fraction of the shorter side's span (`min(h, w) - 1` px, so the
+    middle of an odd shorter side is exactly 1/2), at most EDGE_MAX, and 0 off the page.  Both are scalar fields of
+    the page's own shape, so a quarter turn or mirror flip of the planes is the planes of the moved page.
+
+    With `window` (top, left, height, width), the planes over that window of the page's frame (it may leave the page),
+    without computing the whole page's."""
+    h, w = shape
+    top, left, wh, ww = window if window is not None else (0, 0, h, w)
+    rows, cols = np.arange(top, top + wh), np.arange(left, left + ww)
+    dist = np.minimum(np.minimum(rows, h - 1 - rows)[:, None], np.minimum(cols, w - 1 - cols)[None])
+    valid = dist >= 0
+    edge = np.where(valid, np.minimum(dist / max(min(h, w) - 1, 1), EDGE_MAX), 0.0)
+    return valid.astype(np.float32), edge.astype(np.float32)
+
+
 def page_path(series: str, sheet: str, work: Path = WORK) -> Path:
     return work / series / sheet / "page.png"
 

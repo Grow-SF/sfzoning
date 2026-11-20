@@ -40,11 +40,10 @@ def unsure(mask: np.ndarray, px: float = UNSURE_PX) -> np.ndarray:
     outside each block, so the frame side of every outline is certain (the rule lies there) and only the map side can
     hold the rule's fringe.  A hole's outline is part of the mask's, so its map side gets the strip too; the page's
     edge is not an outline.  All False for a mask with no outline."""
-    sides = _sides(mask)
-    if sides is None:
+    m = mask.astype(bool)
+    if m.all() or not m.any():
         return np.zeros(mask.shape, bool)
-    m, d_in, _ = sides
-    return m & (d_in <= px)
+    return m & (ndimage.distance_transform_edt(m) <= px)      # `_sides`' d_in alone (training cuts many per step)
 
 
 def bands(mask: np.ndarray, band_px: int = BAND_PX) -> tuple[np.ndarray, np.ndarray]:

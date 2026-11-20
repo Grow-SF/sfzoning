@@ -3,6 +3,7 @@ import pytest
 import torch
 
 from sfzmaps.frame import predict
+from sfzmaps.frame.data import position_planes
 from sfzmaps.nets.unet import Folded, folded_multiple, folded_reach
 
 
@@ -29,6 +30,13 @@ def test_real_sizes():
     assert folded_reach(p.FINE_FOLD, p.FINE_LEVELS) == 232 and p._margin() == 256
     assert p.TILE % folded_multiple(p.FINE_FOLD, p.FINE_LEVELS) == 0
     assert isinstance(p.new_coarse_net(), Folded) and isinstance(p.new_fine_net(), Folded)
+
+
+def test_nets_read_the_position_planes():
+    """The page pass reads [lum, valid, edge], the pixel pass [lum, prior, valid, edge] (Task 14), one output each."""
+    for net, ch in ((predict.new_coarse_net(), 3), (predict.new_fine_net(), 4)):
+        first, head = net.net.down[0][0], net.net.head
+        assert first.in_channels == ch * net.fold ** 2 and head.out_channels == net.fold ** 2
 
 
 def test_predict_shape_matches_page(monkeypatch):
@@ -78,7 +86,7 @@ def test_output_is_prior_logit_plus_correction(monkeypatch):
     _wake_head(fine)
     fine.eval()
     m = folded_multiple(predict.FINE_FOLD, predict.FINE_LEVELS)
-    x = torch.rand((1, 2, 2 * m, 2 * m))
+    x = torch.rand((1, 4, 2 * m, 2 * m))
     x[0, 1, :3] = 0.0
     with torch.no_grad():
         inner = torch.nn.functional.pixel_shuffle(
@@ -87,17 +95,38 @@ def test_output_is_prior_logit_plus_correction(monkeypatch):
         torch.testing.assert_close(fine(x), torch.log(p) - torch.log1p(-p) + inner)
 
 
+def _reference(net, lum, prior):
+    """The run the tiling must equal (rulings R1/R5), built here from the definition: one run of the net on
+    [lum, prior, valid, edge] of the whole page, padded by the tile margin on every side and then at right and bottom
+    to the pixel pass's grid, with paper (1.0) in lum and 0 in the prior and both position planes; cropped back."""
+    h, w = lum.shape
+    m, mg = folded_multiple(predict.FINE_FOLD, predict.FINE_LEVELS), predict._margin()
+    ph, pw = -(-(h + 2 * mg) // m) * m, -(-(w + 2 * mg) // m) * m
+    x = np.zeros((4, ph, pw), np.float32)
+    x[0] = 1.0
+    x[0, mg:mg + h, mg:mg + w] = lum
+    x[1, mg:mg + h, mg:mg + w] = prior
+    x[2:, mg:mg + h, mg:mg + w] = np.stack(position_planes((h, w)))
+    net.eval()
+    with torch.no_grad():
+        out = torch.sigmoid(net(torch.from_numpy(x)[None]))[0, 0].numpy()
+    return out[mg:mg + h, mg:mg + w]
+
+
 def test_tiling_has_no_seams(monkeypatch):
+    """With four input channels: the tiles (training's size and prediction's) equal one run on the whole page."""
     _, fine = _tiny_nets(monkeypatch)
     assert isinstance(fine, Folded)
     _wake_head(fine)
     rng = np.random.default_rng(1)
     lum = rng.random((150, 230)).astype(np.float32)
     prior = rng.random((150, 230)).astype(np.float32)
-    got = predict.predict_tiles(fine, lum, prior, "cpu")
-    want = predict._predict_padded_whole(fine, lum, prior, "cpu")
-    assert got.shape == lum.shape
-    np.testing.assert_allclose(got, want, atol=1e-5)
+    want = _reference(fine, lum, prior)
+    for tile in (predict.TILE, 2 * predict.TILE):
+        got = predict.predict_tiles(fine, lum, prior, "cpu", tile=tile)
+        assert got.shape == lum.shape
+        np.testing.assert_allclose(got, want, atol=1e-5)
+    np.testing.assert_allclose(predict._predict_padded_whole(fine, lum, prior, "cpu"), want, atol=1e-5)
 
 
 def test_near_computes_only_the_tiles_it_touches(monkeypatch):
@@ -123,13 +152,17 @@ def test_near_computes_only_the_tiles_it_touches(monkeypatch):
 
 
 def test_coarse_input_pads_to_a_square():
+    """[lum, valid, edge] on the COARSE_SIDE square: the resized page at top left, paper (1.0) in lum and 0 in the
+    position planes around it; the planes are the resized page's own (`position_planes` of its shape)."""
     lum = np.zeros((3300, 5100), np.float32)
     for page in (lum, lum.T):
         arr, scale = predict.coarse_input(page)
-        assert arr.shape == (predict.COARSE_SIDE, predict.COARSE_SIDE)
+        assert arr.shape == (3, predict.COARSE_SIDE, predict.COARSE_SIDE) and arr.dtype == np.float32
         assert scale == pytest.approx(predict.COARSE_SIDE / 5100, rel=1e-3)
         nh, nw = round(page.shape[0] * scale), round(page.shape[1] * scale)
-        assert (arr[:nh, :nw] == 0).all() and (arr[nh:] == 1).all() and (arr[:, nw:] == 1).all()
+        assert (arr[0, :nh, :nw] == 0).all() and (arr[0, nh:] == 1).all() and (arr[0, :, nw:] == 1).all()
+        assert np.array_equal(arr[1:, :nh, :nw], np.stack(position_planes((nh, nw))))
+        assert (arr[1:, nh:] == 0).all() and (arr[1:, :, nw:] == 0).all()
 
 
 def test_predict_restores_training_mode(monkeypatch):
