@@ -635,3 +635,62 @@ As in Task 10, after Task 11 and the labelling (12 redrawn with holes, plus 6 ne
 2. compare the page pass alone with both passes (`scripts/spikes/issue71_compare_passes.py`);
 3. train the final model, predict every page, and draw the mosaics;
 4. report to the owner against the first run's numbers.
+
+
+### Task 13: Train both passes together (amendment, owner 2026-11-20: "Go")
+
+The nested design trained 34 models for one run: four outer folds each trained 3 inner page passes, 1 outer page
+pass, 3 inner pixel passes and 1 outer pixel pass, and the final model trained 2 more. The inner rounds existed only
+to give the pixel pass page-pass answers on unseen sheets, and to choose step counts. The owner called this "dumb"
+and approved the replacement below. Task 12's re-run was stopped. Rulings R1–R8 still hold, except where this task
+replaces the inner-fold design (Task 7's snapshots and step choice).
+
+**Files:**
+- Modify: `pipeline/src/sfzmaps/frame/train.py`, `predict.py`, `run.py`, `pipeline/src/sfzmaps/cli.py` (if needed)
+- Test: the matching `pipeline/tests/test_frame_*.py`
+
+**Changes:**
+- **`train.py`:** `train_joint(pages, recipe, device, val=None, label="") -> tuple[tuple[Folded, Corrected], dict]`.
+  It trains the page pass and the pixel pass in one loop, from one generator and one seed.
+  - **Each step:**
+    1. The page-pass loss on `batch` augmented whole pages, as `train_coarse` does now.
+    2. The pixel-pass loss on `batch` crops, as `train_fine` does now. Each crop's prior is the page pass's own current
+       probability for that page: run the page pass in eval mode with no gradient on the unaugmented page, upsample
+       to full resolution, then crop and augment exactly as today's stored priors are.
+    3. The sum of the two losses, one Adam step on both nets' parameters.
+  - **The prior enters the pixel pass with no gradient,** so each pass is trained only by its own loss.
+  - **The learning rate follows a cosine schedule** from `recipe.lr` down to 0 over `recipe.steps`. No checkpoint is
+    chosen: the last step is the model.
+  - **The validation curve is logged only,** every `check_every` steps, on `val`. It is ink-weighted log-loss, and it
+    uses `predict_tiles` only on tiles within `scores.BAND_PX * 4` of the label outline, taking the prior elsewhere
+    (add a `near: np.ndarray | None` argument to `predict_tiles`).
+  - **Removed:** `train_coarse`, `train_fine`, `choose_steps` and snapshots. Delete their tests too, or rewrite them
+    for `train_joint`.
+  - **Kept:** device augmentation, prefetch (now drawing both pages and crops), the one-sided strip, the zero head,
+    and determinism.
+- **`predict.py`:** `COARSE_SIDE = 512` and `COARSE_LEVELS = 6`.
+  - Keep `COARSE_FOLD = 4` and `COARSE_WIDTH = 16`.
+  - Assert that `folded_reach >= COARSE_SIDE`, which gives 1000 ≥ 512, and that `COARSE_SIDE % folded_multiple == 0`.
+- **`run.py`:** `run_folds`, for each outer fold:
+  1. `train_joint` on `fold.train`, with no inner folds; `val` is `None`.
+  2. Predict the held-out sheets and write their outputs and scores.
+
+  `train_final` runs `train_joint` on all labelled sheets. `folds.json` keeps the fold layout, the scores and the
+  logged curves. Remove the inner-fold, snapshot and step-choice code, and the "best at the cap" line.
+- **`Recipe`:** `steps = 2000`, `check_every = 250`.
+- **Tests:**
+  - **The leak test:** no outer fold's training or validation pages include its held-out sheets.
+  - **The joint toy test:** on the realistic toy page (a rule just outside the outline), the frame rule is called
+    frame (< 0.2) and the inside ink map (> 0.8).
+  - **The schedule:** the learning rate is `recipe.lr` at step 1 and 0 at the last step.
+  - **Determinism:** two runs give the same weights, with and without prefetch.
+  - **Fast validation:** `predict_tiles` with `near` equals the full prediction on the tiles it computes, and equals
+    the prior elsewhere.
+- **The speed measurement:** update `scripts/spikes/issue71_speed.py` and report the joint step time on real pages.
+
+- [ ] **Step 1:** write the failing tests.
+- [ ] **Step 2:** run them, and expect them to fail.
+- [ ] **Step 3:** implement.
+- [ ] **Step 4:** run the frame tests, then the full suite once.
+- [ ] **Step 5:** run the speed measurement.
+- [ ] **Step 6:** commit. `git commit -m "frame: train both passes together, cosine schedule, 512 px page pass, border-only validation"`
