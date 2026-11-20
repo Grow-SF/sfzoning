@@ -26,6 +26,7 @@ Outputs, all under `out` (default `data/frame`):
 """
 from __future__ import annotations
 
+import concurrent.futures
 import dataclasses
 import json
 import logging
@@ -43,6 +44,7 @@ from sfzmaps.frame.train import Page, Recipe
 log = logging.getLogger(__name__)
 
 PROB_FILE = "map_prob.npz"
+SAVE_THREADS = 4
 SCORES_FILE = "scores.json"
 FOLDS_FILE = "folds.json"
 MODEL_DIR = "model"
@@ -215,14 +217,22 @@ def predict_all(device: str, out: Path = OUT) -> None:
     coarse_net, fine_net = load_model(out)
     labelled = set(data.labelled_sheets(data.LABELS))
     pages = data.map_pages(data.PAGE_KINDS, data.WORK)
-    for i, sid in enumerate(pages, 1):
-        if sid in labelled:
-            if not (sheet_dir(out, sid) / PROB_FILE).exists():
-                log.warning("%s/%s is labelled but has no held-out prediction: run the folds", *sid)
-            continue
-        coarse, prob = _predict(coarse_net, fine_net, _lum(sid), device)
-        save_prob(out, sid, coarse, prob)
-        log.info("%d/%d %s/%s", i, len(pages), *sid)
+    # Compressing a page's maps takes longer than predicting it; zlib releases the GIL, so the saves run on a few
+    # threads while the device predicts the next page.  At most SAVE_THREADS pages wait in memory.
+    with concurrent.futures.ThreadPoolExecutor(SAVE_THREADS) as pool:
+        pending: list[concurrent.futures.Future] = []
+        for i, sid in enumerate(pages, 1):
+            if sid in labelled:
+                if not (sheet_dir(out, sid) / PROB_FILE).exists():
+                    log.warning("%s/%s is labelled but has no held-out prediction: run the folds", *sid)
+                continue
+            coarse, prob = _predict(coarse_net, fine_net, _lum(sid), device)
+            pending.append(pool.submit(save_prob, out, sid, coarse, prob))
+            while len(pending) >= SAVE_THREADS:
+                pending.pop(0).result()
+            log.info("%d/%d %s/%s", i, len(pages), *sid)
+        for f in pending:
+            f.result()
 
 
 def format_scores(result: dict) -> str:

@@ -33,6 +33,9 @@ FINE_FOLD = 4
 FINE_LEVELS = 4
 FINE_WIDTH = 32
 TILE = 256
+# Whole-page prediction reads bigger cores than training's crops: the margin is the same, so the result is the same
+# (seamless, R1/R5) but far fewer px are read twice.  A multiple of the fine net's stride.
+PREDICT_TILE = 1536
 PRIOR_CLIP = 1e-4       # the prior is clipped to [this, 1 - this] before its logit (finite: about +-9.2)
 
 assert folded_reach(COARSE_FOLD, COARSE_LEVELS) >= COARSE_SIDE, "every page-pass output must see the whole page"
@@ -147,27 +150,28 @@ def _predict_padded_whole(net: nn.Module, lum: np.ndarray, prior: np.ndarray, de
 
 
 def predict_tiles(net: nn.Module, lum: np.ndarray, prior: np.ndarray, device: str = "cpu",
-                  near: np.ndarray | None = None) -> np.ndarray:
+                  near: np.ndarray | None = None, tile: int | None = None) -> np.ndarray:
     """The pixel pass's probability at full resolution.  TILE x TILE cores, each read with a margin of reach px of
     page or paper around it; only the core is kept.  With `near` (bool, the page's shape), only the tiles whose core
     holds a True px are read; every other px is the prior's (the validation curve's shortcut: the border is where
     the pixel pass works)."""
-    if TILE % _fine_multiple():
-        raise ValueError(f"TILE {TILE} is not a multiple of {_fine_multiple()}")
+    TILE_ = tile or (TILE if near is not None else PREDICT_TILE)
+    if TILE_ % _fine_multiple():
+        raise ValueError(f"tile {TILE_} is not a multiple of {_fine_multiple()}")
     h, w = lum.shape
     mg = _margin()
-    th, tw = -(-h // TILE) * TILE, -(-w // TILE) * TILE
+    th, tw = -(-h // TILE_) * TILE_, -(-w // TILE_) * TILE_
     x = _padded(lum, prior, mg, th + 2 * mg, tw + 2 * mg)
     out = np.zeros((th, tw), np.float32)
     if near is not None:
         out[:h, :w] = prior
     with _eval_on(net, device):
-        for y in range(0, th, TILE):
-            for xx in range(0, tw, TILE):
-                if near is not None and not near[y:y + TILE, xx:xx + TILE].any():
+        for y in range(0, th, TILE_):
+            for xx in range(0, tw, TILE_):
+                if near is not None and not near[y:y + TILE_, xx:xx + TILE_].any():
                     continue
-                p = _run(net, x[:, y:y + TILE + 2 * mg, xx:xx + TILE + 2 * mg], device)
-                out[y:y + TILE, xx:xx + TILE] = p[mg:mg + TILE, mg:mg + TILE]
+                p = _run(net, x[:, y:y + TILE_ + 2 * mg, xx:xx + TILE_ + 2 * mg], device)
+                out[y:y + TILE_, xx:xx + TILE_] = p[mg:mg + TILE_, mg:mg + TILE_]
     return out[:h, :w]
 
 
