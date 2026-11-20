@@ -694,3 +694,45 @@ replaces the inner-fold design (Task 7's snapshots and step choice).
 - [ ] **Step 4:** run the frame tests, then the full suite once.
 - [ ] **Step 5:** run the speed measurement.
 - [ ] **Step 6:** commit. `git commit -m "frame: train both passes together, cosine schedule, 512 px page pass, border-only validation"`
+
+
+### Task 14: Position inputs (amendment, owner 2026-11-20: "ok")
+
+A CNN gets absolute position almost only from zero padding at the image's border (Islam et al., ICLR 2020; Kayhan &
+van Gemert 2020). Two things hide position here. Pages are padded with paper (1.0), so a blank margin and the area
+beyond the scan look the same. And the pixel pass reads crops and tiles cut at arbitrary places. The visible effect:
+blank paper between a 1980s legend strip and the scan's bottom edge is called map. Following CoordConv (Liu et al.,
+NeurIPS 2018), we feed what the network cannot compute itself, and nothing it can (ink density, lines and layout stay
+learned).
+
+**Changes:**
+- **Two more input channels in both passes:**
+  1. `valid`: 1 on the scan, 0 on padding and outside the page.
+  2. `edge`: each pixel's distance to the nearest scan edge, as a fraction of the page's shorter side. It is clipped to
+     at most 0.5, and is 0 outside the page.
+
+  Both turn and flip correctly with the page under augmentation, because they are scalar fields. In training, compute
+  them from the (possibly cropped) page before the geometric augmentation, and move them with the other arrays. In
+  prediction, compute them from the page. Put one helper, `data.position_planes(shape) -> (valid, edge)`, in `data.py`.
+- **The page pass:** input `[lum, valid, edge]`, `Folded(3, 1, ...)`. **The pixel pass:** input `[lum, prior, valid, edge]`.
+  - The prior stays the second channel, and the correction form and the zero head are kept.
+  - Padding values: lum 1.0, prior 0.0, valid 0, edge 0.
+- **Random edge cropping in training:** each drawn page is first cropped by a random 0–10% of its size on each side,
+  independently per side, from the one generator. Its label mask is cropped the same way, and its position planes
+  are computed from the cropped page. This varies where the scan's edge falls, so the network can't memorise
+  positions. Apply it to the page-pass pages and to the page each pixel-pass crop is drawn from. The pixel-pass prior
+  is the page pass's prediction on that same cropped page.
+- **Tests:**
+  - `position_planes` values: corners 0, the centre equal to `min(h, w)/2/min(h, w)` clipped to 0.5;
+  - the planes move correctly with every quarter turn and flip;
+  - the seam test with 4-channel input;
+  - the zero head still returns the prior;
+  - determinism;
+  - the joint toy test still passes.
+- **Deterministic and nothing per-series,** as before.
+
+- [ ] **Step 1:** write the failing tests.
+- [ ] **Step 2:** run them, and expect them to fail.
+- [ ] **Step 3:** implement.
+- [ ] **Step 4:** run the frame tests, then the full suite once.
+- [ ] **Step 5:** commit. `git commit -m "frame: position inputs (scan mask, distance to the scan edge) and random edge cropping"`
