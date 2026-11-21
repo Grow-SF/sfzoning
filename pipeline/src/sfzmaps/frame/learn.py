@@ -9,7 +9,9 @@ prediction does not.  The step:
    extreme the frame is gone and map ink runs to the page edge (a frameless side), the label cut alike;
 3. scales the cut page by a factor in 1 +- `SCALE_JITTER` (bilinear for the luminance, nearest for the label);
 4. turns and flips it, changes its brightness, contrast and gamma, and blurs it now and then (`apply_aug`);
-5. takes one Adam step on the weighted log-loss (`_loss`) of "outside the map" (the target is 1 - the label's inside).
+5. takes one Adam step on the weighted multiclass log-loss (`_loss`, cross-entropy) of the label's class per px: 0
+   map, 1 outside the frame, 2 removed block (`data.class_mask`, `model.CLASSES`).  Multiclass log-loss is a strictly
+   proper scoring rule, as the two-class one was, so the chances stay calibrated (spec amendment "removed blocks").
 
 The weight of a px is `paper_weight + (1 - lum)`, from the luminance after the scale and before the photometric
 changes, and 0 on the padding.  It never depends on the label: a weight that does moves the loss's minimiser away
@@ -70,7 +72,7 @@ BLUR_TRUNCATE = 4.0     # the blur's kernel reaches this many sigmas each way (s
 WEIGHT_EPS = 1e-12      # the least the loss divides by, so a batch of no weight gives 0 (numerical; decides nothing)
 PREFETCH = 2            # steps drawn ahead with `Recipe.prefetch`
 
-HELD_EPS = 1e-6         # the held-out chances are clipped to [this, 1 - this], as `scores.log_loss` clips (numerical)
+HELD_EPS = 1e-6         # the held-out chance of the labelled class is clipped to at least this (numerical)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -89,11 +91,11 @@ class Recipe:
 
 @dataclasses.dataclass
 class Page:
-    """A page to train on or hold out.  `lum` is the float32 luminance (1 = paper), `inside` the label's map area
-    (bool, True inside)."""
+    """A page to train on or hold out.  `lum` is the float32 luminance (1 = paper), `cls` the label's class per px
+    (uint8: 0 map, 1 outside the frame, 2 removed block; `data.class_mask`)."""
     id: SheetId
     lum: np.ndarray
-    inside: np.ndarray | None
+    cls: np.ndarray | None
 
 
 # --- augmentation: drawn on the cpu, applied on the device (from `frame/train.py` at e580a00, unchanged) -------------
@@ -171,10 +173,11 @@ def _settle(seed: int) -> np.random.Generator:
 
 
 def _loss(logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    """Weighted mean BCE.  A masked (weighted) sum, never boolean indexing: the backward of indexing has no
-    deterministic kernel on mps."""
-    bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
-    return (bce * weight).sum() / weight.sum().clamp(min=WEIGHT_EPS)
+    """Weighted mean cross-entropy of `logits` (n, CLASSES, H, W) against the class indices `target` (n, H, W), each
+    px weighted by `weight` (n, H, W).  A masked (weighted) sum, never boolean indexing: the backward of indexing has
+    no deterministic kernel on mps."""
+    ce = F.cross_entropy(logits, target, reduction="none")
+    return (ce * weight).sum() / weight.sum().clamp(min=WEIGHT_EPS)
 
 
 @contextlib.contextmanager
@@ -225,12 +228,12 @@ def _batches(draw: Callable[[], object], n: int, prefetch: bool) -> Iterator[Ite
 Cut = tuple[int, int, int, int]     # px taken off the (top, bottom, left, right) of a page
 
 
-def side_depths(inside: np.ndarray) -> Cut:
+def side_depths(cls: np.ndarray) -> Cut:
     """(top, bottom, left, right): for each side, the median over that side's lines (the columns for top and bottom,
-    the rows for left and right) of the distance in px from the page's edge to the line's first inside px.  Lines
-    with no inside px are left out; a side with none gives 0.  The lower median (one line's own depth), so an even
-    count of lines never gives a half px."""
-    m = np.asarray(inside, bool)
+    the rows for left and right) of the distance in px from the page's edge to the line's first px not outside the
+    frame (`cls != 1`: map or a removed block).  Lines with no such px are left out; a side with none gives 0.  The
+    lower median (one line's own depth), so an even count of lines never gives a half px."""
+    m = np.asarray(cls) != 1
 
     def depth(a: np.ndarray, axis: int) -> int:
         hit = a.any(axis=axis)
@@ -252,78 +255,79 @@ def draw_cut(rng: np.random.Generator, depths: Cut) -> Cut:
 @dataclasses.dataclass(frozen=True)
 class _Source:
     """A page as the cpu side reads it: its luminance as an 8-bit Pillow image (`lum`, mode L, 0 .. 255) and its
-    label's inside as one (`inside`, mode L, 0 or 1), made once per training."""
+    label's classes as one (`cls`, mode L, 0 .. 2), made once per training."""
     lum: Image.Image
-    inside: Image.Image
+    cls: Image.Image
 
     @classmethod
     def of(cls, pg: Page) -> _Source:
         lum = np.round(np.clip(pg.lum, 0.0, 1.0) * 255.0).astype(np.uint8)
-        return cls(Image.fromarray(lum), Image.fromarray(pg.inside.astype(np.uint8)))   # 2-D uint8: mode L
+        return cls(Image.fromarray(lum), Image.fromarray(np.asarray(pg.cls, np.uint8)))   # 2-D uint8: mode L
 
 
 def _cut_and_scale(src: _Source, cut: Cut, scale: float) -> tuple[np.ndarray, np.ndarray]:
-    """(lum, inside), uint8 arrays: the page cut by `cut`, then scaled by `scale` (Pillow BILINEAR for the luminance,
-    NEAREST for the inside: px centres, as torch's nearest-exact).  Cut first and then scaled, so no px beyond the cut
-    reaches the sample through the resampling filter; a scale of 1 resamples nothing."""
+    """(lum, cls), uint8 arrays: the page cut by `cut`, then scaled by `scale` (Pillow BILINEAR for the luminance,
+    NEAREST for the classes: px centres, as torch's nearest-exact).  Cut first and then scaled, so no px beyond the
+    cut reaches the sample through the resampling filter; a scale of 1 resamples nothing."""
     top, bottom, left, right = cut
     w, h = src.lum.size
     box = (left, top, w - right, h - bottom)
     if box[2] <= box[0] or box[3] <= box[1]:
         raise ValueError(f"cut {cut} leaves nothing of a {h} x {w} page")
-    lum, inside = src.lum.crop(box), src.inside.crop(box)
+    lum, cls = src.lum.crop(box), src.cls.crop(box)
     if scale != 1.0:
         size = (max(1, round(lum.width * scale)), max(1, round(lum.height * scale)))
         lum = lum.resize(size, Image.Resampling.BILINEAR)
-        inside = inside.resize(size, Image.Resampling.NEAREST)
-    return np.array(lum), np.array(inside)
+        cls = cls.resize(size, Image.Resampling.NEAREST)
+    return np.array(lum), np.array(cls)
 
 
 @torch.no_grad()
-def _on_device(lum: np.ndarray, inside: np.ndarray, aug: Aug, paper_weight: float,
+def _on_device(lum: np.ndarray, cls: np.ndarray, aug: Aug, paper_weight: float,
                device: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """(x, target, weight), each (1, 1, H, W) on `device`, from the cpu side's uint8 arrays: `apply_aug(aug, lum,
-    target, weight)` of the luminance, the target 1 - inside and the weight `paper_weight + (1 - lum)` (before the
-    photometric changes), then padded at the bottom and right to multiples of `model.multiple()`: paper in x, 1
-    (not map) in the target, 0 in the weight.
+    """(x, target, weight) on `device`, x (1, 1, H, W) and the target and the weight (1, H, W), from the cpu side's
+    uint8 arrays: `apply_aug(aug, lum, target, weight)` of the luminance, the target the classes as int64 indices and
+    the weight `paper_weight + (1 - lum)` (before the photometric changes), then padded at the bottom and right to
+    multiples of `model.multiple()`: paper in x, 1 (outside the frame) in the target, 0 in the weight.
 
     Computed in a cheaper order with the same values: the flip and turns move the two uint8 arrays (6 ms on the
     largest page, mps), and the target, the weight and the float luminance are made from the moved bytes, instead of
-    moving three float32 arrays (38 ms).  The target and the weight are functions of each px's own values and the
-    move only permutes px, so either order gives the same numbers."""
-    lum8, inside8 = (_move(aug, torch.from_numpy(a).to(device)).contiguous() for a in (lum, inside))
+    moving three larger arrays (38 ms for float32).  The target and the weight are functions of each px's own values
+    and the move only permutes px, so either order gives the same numbers."""
+    lum8, cls8 = (_move(aug, torch.from_numpy(a).to(device)).contiguous() for a in (lum, cls))
     lum_t = lum8.float() / 255.0
-    target = 1.0 - inside8.float()
     weight = paper_weight + (1.0 - lum_t)
     lum_t = _photometric(aug, lum_t)
     h, w = lum_t.shape
     m = model.multiple()
-    size = (1, 1, -(-h // m) * m, -(-w // m) * m)
-    x = torch.full(size, model.PAPER, dtype=torch.float32, device=device)
-    t = torch.ones(size, dtype=torch.float32, device=device)
+    size = (1, -(-h // m) * m, -(-w // m) * m)
+    x = torch.full((1, *size), model.PAPER, dtype=torch.float32, device=device)
+    t = torch.ones(size, dtype=torch.int64, device=device)
     wt = torch.zeros(size, dtype=torch.float32, device=device)
-    x[0, 0, :h, :w], t[0, 0, :h, :w], wt[0, 0, :h, :w] = lum_t, target, weight
+    x[0, 0, :h, :w], t[0, :h, :w], wt[0, :h, :w] = lum_t, cls8, weight
     return x, t, wt
 
 
 def make_sample(page: Page, cut: Cut, scale: float, aug: Aug, paper_weight: float,
                 device: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """(x, target, weight), each (1, 1, H, W): `page` cut by `cut`, scaled by `scale`, augmented by `aug` and padded,
-    as a training step reads it (see the module)."""
+    """(x, target, weight), x (1, 1, H, W), the target (int64 class indices) and the weight (1, H, W): `page` cut by
+    `cut`, scaled by `scale`, augmented by `aug` and padded, as a training step reads it (see the module)."""
     return _on_device(*_cut_and_scale(_Source.of(page), cut, scale), aug, paper_weight, device)
 
 
 # --- held-out loss ---------------------------------------------------------------------------------------------------
 
 def held_loss(net: nn.Module, held: Sequence[Page], device: str) -> tuple[float, float]:
-    """(loss, ink): the ink-weighted log-loss of `model.prob([net], ...)` (P(outside), clipped to `HELD_EPS`) against
-    the labels' outside, over every px of every held page, each px weighted by 1 - lum and the pages pooled; and the
-    total ink (the sum of the weights), so curves can be pooled across runs.  NaN loss with no ink."""
+    """(loss, ink): the ink-weighted multiclass log-loss of `model.prob([net], ...)` against the labels' classes (-log
+    of the chance given the labelled class, clipped to at least `HELD_EPS`), over every px of every held page, each px
+    weighted by 1 - lum and the pages pooled; and the total ink (the sum of the weights), so curves can be pooled
+    across runs.  NaN loss with no ink."""
     num = den = 0.0
     for pg in held:
-        p = np.clip(model.prob([net], pg.lum, device), HELD_EPS, 1.0 - HELD_EPS)
+        p = model.prob([net], pg.lum, device)
+        own = np.take_along_axis(p, np.asarray(pg.cls, np.intp)[None], axis=0)[0]
         w = 1.0 - pg.lum
-        loss = np.where(pg.inside, -np.log1p(-p), -np.log(p))
+        loss = -np.log(np.maximum(own, HELD_EPS))
         num += float((loss * w).sum(dtype=np.float64))
         den += float(w.sum(dtype=np.float64))
     return (num / den if den > 0 else float("nan")), den
@@ -345,13 +349,13 @@ def train(pages: Sequence[Page], recipe: Recipe, device: str, held: Sequence[Pag
     `snapshots / "step-<s:05d>.pt"` when `snapshots` is set.  FloatingPointError on a non-finite training loss (read
     at the checks only, so the device is not waited on every step)."""
     for pg in (*pages, *held):
-        if pg.inside is None:
+        if pg.cls is None:
             raise ValueError(f"page {pg.id} has no label")
     rng = _settle(recipe.seed)
     net = model.new_net().to(device).train()
     opt = torch.optim.Adam(net.parameters(), lr=recipe.lr)
     sources = [_Source.of(pg) for pg in pages]
-    depths = [side_depths(pg.inside) for pg in pages]
+    depths = [side_depths(pg.cls) for pg in pages]
     if snapshots is not None:
         snapshots.mkdir(parents=True, exist_ok=True)
 
@@ -367,8 +371,8 @@ def train(pages: Sequence[Page], recipe: Recipe, device: str, held: Sequence[Pag
     total, since = torch.zeros((), device=device), 0
     t0 = time.perf_counter()
     with _batches(draw, recipe.steps, recipe.prefetch) as batches:
-        for step, (lum, inside, aug) in enumerate(batches, 1):
-            x, t, w = _on_device(lum, inside, aug, recipe.paper_weight, device)
+        for step, (lum, cls, aug) in enumerate(batches, 1):
+            x, t, w = _on_device(lum, cls, aug, recipe.paper_weight, device)
             loss = _loss(net(x), t, w)
             opt.zero_grad(set_to_none=True)
             loss.backward()

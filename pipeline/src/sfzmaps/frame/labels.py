@@ -1,8 +1,10 @@
 """Check of the hand-drawn frame labels: rank the ink lying under each outline.
 
 A label outline must lie on paper, except where map ink truly touches the frame rule (design spec, measurement 2 and
-part 5).  Ink under an outline therefore marks a place to look at, and a person fixes the label there.  The outline is
-cut into stretches of `STRETCH_PX` px and listed by the ink under it, highest first; `qa_sheet` draws a crop per stretch.
+part 5); a removed block's outline is drawn a few px outside the block's ink, so it too lies on paper, and the
+`frame-labels` command checks the map polygons and the removed blocks alike.  Ink under an outline therefore marks a
+place to look at, and a person fixes the label there.  The outline is cut into stretches of `STRETCH_PX` px and
+listed by the ink under it, highest first; `qa_sheet` draws a crop per stretch.
 Nothing here decides anything: it only orders what a person looks at.
 """
 

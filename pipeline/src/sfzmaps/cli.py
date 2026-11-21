@@ -912,15 +912,16 @@ def downloads(
 
 @app.command("frame-labels")
 def frame_labels(top: int = typer.Option(30, "--top", help="Stretches per sheet in its crop picture.")) -> None:
-    """Rank the ink under every frame label's outline (no GPU).  Writes data/frame/labels-qa/<series>/<sheet>.png
-    from the top stretches and prints `series/sheet total-outline-ink top-stretch-ink`, highest first."""
+    """Rank the ink under every frame label's outline, the map polygons' and the removed blocks' (no GPU).  Writes
+    data/frame/labels-qa/<series>/<sheet>.png from the top stretches and prints `series/sheet total-outline-ink
+    top-stretch-ink`, highest first."""
     from sfzmaps.frame import data as fd
     from sfzmaps.frame import labels as fl
 
     rows = []
     for series, sheet in fd.labelled_sheets():
         lum = fd.load_luminance(fd.page_path(series, sheet))
-        polys = fd.load_label(series, sheet)
+        polys = fd.load_label(series, sheet) + fd.load_remove(series, sheet)
         st = fl.outline_stretches(lum, polys, series, sheet)
         if st:
             fl.qa_sheet(lum, polys, st[:top], fd.OUT / "labels-qa" / series / f"{sheet}.png")

@@ -1,4 +1,9 @@
-"""Pages, hand-drawn map-area labels and their masks."""
+"""Pages, hand-drawn map-area labels and their masks.
+
+A label file (`inputs/frame-labels/<series>/<sheet>.json`, see its README) has `polygons`, the map area, and may have
+`remove`, the printed blocks inside the frame that are deleted wherever they sit (legend and title blocks, compass
+roses, "SECTION N" badges).  `class_mask` turns both into the network's three answers per px: 0 map, 1 outside the
+frame, 2 removed block (`model.CLASSES`)."""
 
 from __future__ import annotations
 
@@ -45,6 +50,11 @@ def load_label(series: str, sheet: str, root: Path = LABELS) -> list[Polygon]:
     return _polys(_label_file(series, sheet, root), "polygons")
 
 
+def load_remove(series: str, sheet: str, root: Path = LABELS) -> list[Polygon]:
+    """A sheet's removed blocks (the file's `remove`), in page px (x, y); empty when it has none."""
+    return _polys(_label_file(series, sheet, root), "remove")
+
+
 def label_holes(series: str, sheet: str, root: Path = LABELS) -> list[Polygon]:
     """The file's `holes` (blocks printed over the map that are not the city, see `inputs/frame-labels/README.md`
     rule 4), empty when it has none.  Only for reviewing them; the label proper is `load_label`."""
@@ -64,6 +74,19 @@ def map_mask(polygons, shape: tuple[int, int], scale: float = 1.0, holes=()) -> 
         draw.polygon([(x * scale, y * scale) for x, y in poly], fill=1, outline=1)
     for hole in holes:
         draw.polygon([(x * scale, y * scale) for x, y in hole], fill=0, outline=0)
+    return np.asarray(img, dtype=np.uint8)
+
+
+def class_mask(polygons, remove, shape: tuple[int, int]) -> np.ndarray:
+    """Uint8 class per px: 1 (outside the frame) everywhere, then 0 (map) inside any of `polygons`, then 2 (removed
+    block) inside any of `remove`, outlines included each time; `remove` is drawn last, so it wins where they overlap.
+    A file's `holes` play no part."""
+    img = Image.new("L", (shape[1], shape[0]), 1)
+    draw = ImageDraw.Draw(img)
+    for poly in polygons:
+        draw.polygon(list(poly), fill=0, outline=0)
+    for block in remove:
+        draw.polygon(list(block), fill=2, outline=2)
     return np.asarray(img, dtype=np.uint8)
 
 

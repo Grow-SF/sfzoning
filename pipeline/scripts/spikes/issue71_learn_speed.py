@@ -27,7 +27,8 @@ def pages() -> list[learn.Page]:
     for series, sheet in data.labelled_sheets():
         try:
             lum = data.load_luminance(data.page_path(series, sheet))
-            out.append(learn.Page((series, sheet), lum, data.inside_mask(data.load_label(series, sheet), lum.shape)))
+            cls = data.class_mask(data.load_label(series, sheet), data.load_remove(series, sheet), lum.shape)
+            out.append(learn.Page((series, sheet), lum, cls))
         except Exception as e:  # noqa: BLE001 - a label mid-edit is skipped, the timing needs no particular page
             print(f"skipped {series}/{sheet}: {type(e).__name__}: {e}")
     return out

@@ -2,12 +2,14 @@ import numpy as np
 import pytest
 from PIL import Image
 
+from sfzmaps.frame import data
 from sfzmaps.frame.data import (
     inside_mask,
     label_holes,
     labelled_sheets,
     load_label,
     load_luminance,
+    load_remove,
     map_counts,
     map_mask,
     map_pages,
@@ -38,6 +40,16 @@ def test_labelled_sheets_and_load_label(tmp_path):
     assert labelled_sheets(tmp_path) == [("1921", "a")]
     assert load_label("1921", "a", tmp_path) == [[(0, 0), (4, 0), (4, 4)]]
     assert label_holes("1921", "a", tmp_path) == []
+    assert load_remove("1921", "a", tmp_path) == []
+
+
+def test_load_remove_reads_the_removed_blocks(tmp_path):
+    (tmp_path / "1948").mkdir()
+    (tmp_path / "1948" / "c.json").write_text(
+        '{"polygons": [[[0,0],[9,0],[9,9],[0,9]]], "remove": [[[2,2],[4,2],[4,4],[2,4]]], "notes": ""}'
+    )
+    assert load_label("1948", "c", tmp_path) == [[(0, 0), (9, 0), (9, 9), (0, 9)]]
+    assert load_remove("1948", "c", tmp_path) == [[(2, 2), (4, 2), (4, 4), (2, 4)]]
 
 
 def test_load_label_reads_holes(tmp_path):
@@ -94,3 +106,15 @@ def test_map_counts_blank_means_one(tmp_path):
 def test_inside_mask_is_map_mask_equal_one():
     m = inside_mask([[(2, 2), (8, 2), (8, 8), (2, 8)]], (12, 12))
     assert m.dtype == bool and m[5, 5] and m[2, 2] and not m[0, 0]
+
+
+def test_class_mask_remove_wins():
+    m = data.class_mask([[(0, 0), (9, 0), (9, 9), (0, 9)]], [[(3, 3), (6, 3), (6, 6), (3, 6)]], (20, 20))
+    assert m[1, 1] == 0 and m[4, 4] == 2 and m[15, 15] == 1
+
+
+def test_class_mask_includes_outlines_and_is_uint8():
+    m = data.class_mask([[(0, 0), (9, 0), (9, 9), (0, 9)]], [[(3, 3), (6, 3), (6, 6), (3, 6)]], (20, 20))
+    assert m.dtype == np.uint8 and m.shape == (20, 20)
+    assert m[9, 9] == 0 and m[10, 10] == 1 and m[3, 3] == 2 and m[6, 6] == 2 and m[7, 7] == 0
+    assert (m == 2).sum() == 16 and (m == 0).sum() == 100 - 16

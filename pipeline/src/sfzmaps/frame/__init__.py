@@ -1,9 +1,10 @@
 """Learned map-frame finder (issue #71).
 
-One full-resolution network looks at a whole scanned page and gives, per pixel, the chance it is outside the map
-area (the printed frame, notches and all); a later step cuts the page where that chance says.  This package holds
-the data layer (pages, hand-drawn labels, masks) and the network (`model`); training, the cut decision, scores and
-pictures are added on top of them.
+One full-resolution network looks at a whole scanned page and gives, per pixel, three chances: map, outside the
+frame (the printed frame, notches and all) and removed block (legend and title blocks, compass roses and "SECTION N"
+badges, deleted wherever they sit inside the frame).  The cut (`decide`) deletes what is outside the frame and the
+removed blocks, which are the only holes it leaves.  This package holds the data layer (pages, hand-drawn labels,
+masks), the network (`model`), training (`learn`) and the cut; scores and pictures are added on top of them.
 Design: docs/superpowers/specs/2026-11-20-frame-crop-design.md
 
 Constraints that hold everywhere in this package:
