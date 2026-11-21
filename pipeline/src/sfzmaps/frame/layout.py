@@ -11,10 +11,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
+import torch
 from PIL import Image
+from torch import nn
+from torch.nn import functional as F
 
 from sfzmaps.frame import data
 
@@ -29,6 +33,7 @@ LONG_PATCHES = 111   # 1,554 px on the long side
 LAYERS = 4
 COMPONENTS = 128
 HIDDEN = 768
+CLASSES = 3  # 0 map, 1 outside the frame, 2 removed block (spec amendment "removed blocks")
 MEAN = np.array([0.485, 0.456, 0.406], np.float32)
 STD = np.array([0.229, 0.224, 0.225], np.float32)
 
@@ -162,3 +167,107 @@ def extract_all(sids: list[data.SheetId], device: str, out: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         np.save(target, reducer.transform(raw_features(backbone, _lum(sid), device)))
     reducer.save(path)
+
+
+def combine(zs: Sequence[np.ndarray], temperature: float = 1.0) -> np.ndarray:
+    """Float32 `(CLASSES, h, w)`: the mean over `zs` (each `(CLASSES, h, w)` logits) of softmax(z / temperature) over
+    the classes (axis 0).  One temperature divides every class's logits (Guo et al. 2017's temperature scaling is
+    multiclass).  Each softmax subtracts its largest logit first, so no logit overflows; float32 and in place, so a
+    whole page needs two arrays of its three planes, whatever the number of nets."""
+    total = None
+    for z in zs:
+        e = np.asarray(z, np.float32) / np.float32(temperature)
+        e -= e.max(axis=0, keepdims=True)
+        np.exp(e, out=e)
+        e /= e.sum(axis=0, keepdims=True)
+        if total is None:
+            total = e
+        else:
+            total += e
+    total /= np.float32(len(zs))
+    return total
+
+
+# ---- the head: a small network on the reduced features, trained on the labelled pages ----
+
+HIDDEN_UNITS = 32            # channels of the 3x3 conv
+HEAD_SEEDS = (0, 1, 2)       # the spike's layout cost ranged 2.6k-17k across seeds, so each fit is repeated
+HEAD_LR = 1e-3
+HEAD_MAX_STEPS = 3000        # computational convergence settings: stop when the mean loss over the last 100 steps
+HEAD_FLAT = 0.002            # improved by less than this share on the 100 before, checked every 50 steps from 300
+HEAD_THREADS = 4
+WEIGHT_FLOOR = 0.1           # a patch's weight is this plus its mean ink: blank paper still counts, ink counts more
+
+
+def patch_targets(cls: np.ndarray, lum: np.ndarray, grid: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """`(shares (CLASSES, rows, cols) float32, weight (rows, cols) float32)` of a page on its patch grid: each patch's
+    area fraction of the three classes of `cls` (Pillow BOX resize of the one-hot planes) and its weight, 0.1 + the
+    patch's mean ink (1 - luminance)."""
+    rows, cols = grid
+    shares = np.stack([np.asarray(Image.fromarray((cls == k).astype(np.float32)).resize((cols, rows), Image.BOX))
+                       for k in range(CLASSES)])
+    ink = np.asarray(Image.fromarray(1.0 - lum.astype(np.float32)).resize((cols, rows), Image.BOX), np.float32)
+    return shares.astype(np.float32), (WEIGHT_FLOOR + ink).astype(np.float32)
+
+
+def new_head() -> nn.Module:
+    """3x3 conv (`COMPONENTS` -> `HIDDEN_UNITS`, padding 1), ReLU, 1x1 conv to `CLASSES` logits."""
+    return nn.Sequential(nn.Conv2d(COMPONENTS, HIDDEN_UNITS, 3, padding=1), nn.ReLU(),
+                         nn.Conv2d(HIDDEN_UNITS, CLASSES, 1))
+
+
+def train_head(feats: Sequence[np.ndarray], targets: Sequence[tuple], seed: int, device: str = "cpu") -> nn.Module:
+    """One head trained on `feats` (float16 `(COMPONENTS, rows, cols)` each) against `targets` (`patch_targets`
+    pairs): one page per Adam step, in a seeded order (a fresh permutation each pass), on the weighted soft-target
+    cross-entropy (each patch's loss times its weight, over the page's total weight).  Stops when the mean loss over
+    100 steps improves by less than `HEAD_FLAT` on the 100 before.  Deterministic for a seed on cpu."""
+    torch.set_num_threads(HEAD_THREADS)
+    torch.manual_seed(seed)
+    rng = np.random.default_rng(seed)
+    head = new_head().to(device)
+    xs = [torch.from_numpy(np.asarray(f, np.float32)).to(device) for f in feats]
+    ts = [(torch.from_numpy(s).to(device), torch.from_numpy(w).to(device)) for s, w in targets]
+    opt = torch.optim.Adam(head.parameters(), lr=HEAD_LR)
+    order: list[int] = []
+    hist: list[float] = []
+    for step in range(HEAD_MAX_STEPS):
+        if not order:
+            order = [int(i) for i in rng.permutation(len(xs))]
+        i = order.pop()
+        shares, w = ts[i]
+        opt.zero_grad()
+        z = head(xs[i][None])[0]
+        loss = (-(shares * F.log_softmax(z, 0)).sum(0) * w).sum() / w.sum()
+        loss.backward()
+        opt.step()
+        hist.append(float(loss.detach()))
+        if step >= 300 and step % 50 == 0:
+            a, b = np.mean(hist[-200:-100]), np.mean(hist[-100:])
+            if a - b < HEAD_FLAT * a:
+                break
+    return head.eval().to("cpu")
+
+
+@torch.no_grad()
+def head_logits(head: nn.Module, feat: np.ndarray) -> np.ndarray:
+    """Float32 `(CLASSES, rows, cols)` patch logits of `head` on one page's features."""
+    dev = next(head.parameters()).device
+    x = torch.from_numpy(np.asarray(feat, np.float32))[None].to(dev)
+    return head(x)[0].float().cpu().numpy().astype(np.float32)
+
+
+def page_logits(z: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """The patch logits `z` bilinearly upsampled (align_corners False) to the page: `(CLASSES, h, w)` float32."""
+    up = F.interpolate(torch.from_numpy(np.asarray(z, np.float32))[None], size=tuple(shape), mode="bilinear",
+                       align_corners=False)
+    return up[0].numpy().astype(np.float32)
+
+
+def leave_one_out(feats: dict, targets: dict, seeds: Sequence[int] = HEAD_SEEDS) -> dict:
+    """For each sheet, the patch logits of heads trained on every other sheet, one per seed."""
+    out = {}
+    for held in feats:
+        rest = [s for s in feats if s != held]
+        heads = [train_head([feats[s] for s in rest], [targets[s] for s in rest], seed) for seed in seeds]
+        out[held] = [head_logits(h, feats[held]) for h in heads]
+    return out

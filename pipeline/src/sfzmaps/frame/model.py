@@ -26,6 +26,7 @@ import numpy as np
 import torch
 from torch import nn
 
+from sfzmaps.frame.layout import CLASSES, combine  # noqa: F401  (moved; model.py goes in a later task)
 from sfzmaps.nets.unet import Folded, folded_multiple
 
 # "fold 16", chosen at the first look (issue #71 ledger R11: held-out loss tied the plan's net, 1.7x faster):
@@ -33,7 +34,6 @@ FOLD = 16    # pixels folded into channels
 WIDTH = 32   # channels of the first level
 LEVELS = 5   # U-Net levels: with FOLD 16 a reach of 1,952 px (spec part 3: about 2,000)
 PAPER = 1.0  # luminance of the padding: plain paper
-CLASSES = 3  # 0 map, 1 outside the frame, 2 removed block (spec amendment "removed blocks")
 BUCKET = 1024  # px: padded sides are multiples of this, so few shapes reach the GPU (computational; see the module)
 
 
@@ -72,25 +72,6 @@ def logits(net: nn.Module, lum: np.ndarray, device: str) -> np.ndarray:
         return z.float().cpu().numpy().astype(np.float32)
     finally:
         net.to(old).train(was_training)
-
-
-def combine(zs: Sequence[np.ndarray], temperature: float = 1.0) -> np.ndarray:
-    """Float32 `(CLASSES, h, w)`: the mean over `zs` (each `(CLASSES, h, w)` logits) of softmax(z / temperature) over
-    the classes (axis 0).  One temperature divides every class's logits (Guo et al. 2017's temperature scaling is
-    multiclass).  Each softmax subtracts its largest logit first, so no logit overflows; float32 and in place, so a
-    whole page needs two arrays of its three planes, whatever the number of nets."""
-    total = None
-    for z in zs:
-        e = np.asarray(z, np.float32) / np.float32(temperature)
-        e -= e.max(axis=0, keepdims=True)
-        np.exp(e, out=e)
-        e /= e.sum(axis=0, keepdims=True)
-        if total is None:
-            total = e
-        else:
-            total += e
-    total /= np.float32(len(zs))
-    return total
 
 
 def prob(nets: Sequence[nn.Module], lum: np.ndarray, device: str, temperature: float = 1.0) -> np.ndarray:

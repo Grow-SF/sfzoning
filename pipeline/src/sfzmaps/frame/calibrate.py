@@ -1,6 +1,6 @@
 """Temperature scaling and reliability for the frame finder's chances.
 
-The seeds' logits are averaged as chances (`model.combine`); a single temperature T divides every logit first.  T is
+The seeds' logits are averaged as chances (`combine`); a single temperature T divides every logit first.  T is
 the one number fitted to held-out labels, by minimising the multiclass log-loss, a proper scoring rule (Gneiting &
 Raftery 2007), as in temperature scaling (Guo et al. 2017).  The sheet is the unit of resampling for its interval
 (Efron & Tibshirani 1993).  Pixels are drawn in proportion to their ink, since ink amounts are what the scores count.
@@ -14,7 +14,7 @@ from typing import Sequence
 import numpy as np
 from scipy.optimize import minimize_scalar
 
-from sfzmaps.frame import model
+from sfzmaps.frame.layout import combine
 
 log = logging.getLogger(__name__)
 
@@ -36,7 +36,7 @@ def sample(zs: Sequence[np.ndarray], cls: np.ndarray, lum, rng, n: int = N_CAL) 
 def _loss(samples, temperature: float) -> float:
     total = count = 0
     for z, y in samples:
-        p = np.clip(model.combine(list(z), temperature).astype(np.float64), EPS, 1.0)
+        p = np.clip(combine(list(z), temperature).astype(np.float64), EPS, 1.0)
         total += float(-np.log(np.take_along_axis(p, y[None].astype(np.int64), axis=0)).sum())
         count += y.size
     return total / count
@@ -61,7 +61,7 @@ def temperature_interval(samples, n: int = CAL_BOOT, seed: int = 0) -> tuple[flo
 
 def reliability(samples, temperature: float, bins: int = 10) -> list[dict]:
     """One row per equal-width bin of the chance of deletion (outside + removed): lo, hi, mean_q, share_outside, n."""
-    q = np.concatenate([(lambda p: p[1] + p[2])(model.combine(list(z), temperature)) for z, _ in samples])
+    q = np.concatenate([(lambda p: p[1] + p[2])(combine(list(z), temperature)) for z, _ in samples])
     gone = np.concatenate([y != 0 for _, y in samples])
     edges = np.linspace(0.0, 1.0, bins + 1)
     which = np.clip(np.digitize(q, edges[1:-1]), 0, bins - 1)

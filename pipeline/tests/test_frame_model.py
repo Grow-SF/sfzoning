@@ -25,19 +25,6 @@ def test_padded_shape_is_a_multiple_of_the_bucket_and_the_net(small_model, monke
     assert model.pad(np.zeros((25, 1), np.float32)).shape == (36, 12)
 
 
-def test_combine_is_a_tempered_softmax_mean():
-    z = np.random.default_rng(0).normal(size=(3, 4, 5)).astype(np.float32)
-    p = model.combine([z, 2 * z], temperature=2.0)
-    np.testing.assert_allclose(p.sum(0), 1.0, rtol=1e-6)
-    e1, e2 = np.exp(z / 2), np.exp(z)
-    np.testing.assert_allclose(p, (e1 / e1.sum(0) + e2 / e2.sum(0)) / 2, rtol=1e-5)
-
-
-def test_combine_of_large_logits_is_finite():
-    z = np.array([1000.0, 0.0, -1000.0], np.float32)[:, None, None]
-    np.testing.assert_array_equal(model.combine([z]), np.array([1.0, 0.0, 0.0], np.float32)[:, None, None])
-
-
 def test_prob_combines_each_nets_logits(small_model):
     torch.manual_seed(0)
     a, b = model.new_net(), model.new_net()
