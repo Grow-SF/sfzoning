@@ -169,3 +169,66 @@ def test_cli_downloads_listed(monkeypatch):
     res = CliRunner().invoke(cli.app, ["downloads", "--help"], env={"NO_COLOR": "1", "TERM": "dumb"})
     import re
     assert res.exit_code == 0 and "--series" in re.sub(r"\x1b\[[0-9;]*m", "", res.output)
+
+
+def _frame_stubs(monkeypatch, tmp_path):
+    """Everything `frame` calls, recording its calls; the output folder is `tmp_path`."""
+    from sfzmaps import gpu
+    from sfzmaps.frame import data as fd
+    from sfzmaps.frame import look
+    from sfzmaps.frame import run as fr
+
+    calls = []
+    monkeypatch.setattr(fd, "OUT", tmp_path)
+    monkeypatch.setattr(fd, "labelled_sheets", lambda *a, **k: [("s", "1")])
+    monkeypatch.setattr(gpu, "gpu_turn", lambda *a, **k: __import__("contextlib").nullcontext())
+    for name in ("run_folds", "train_final", "predict_all", "predict_pages"):
+        monkeypatch.setattr(fr, name, lambda *a, _n=name, **k: calls.append(_n) or {})
+    monkeypatch.setattr(fr, "format_scores", lambda r: "scores")
+    monkeypatch.setattr(look, "series_mosaics", lambda out: calls.append("mosaics") or [])
+    monkeypatch.setattr(look, "closeups", lambda out: calls.append("closeups"))
+    return calls
+
+
+def test_cli_frame_needs_the_folds_first(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    calls = _frame_stubs(monkeypatch, tmp_path)
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu"])
+    assert res.exit_code == 1 and "folds" in res.output and calls == []
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--predict-only"])
+    assert res.exit_code == 1 and calls == []           # no model either
+
+
+def test_cli_frame_final_run_uses_the_folds_step_and_temperature(monkeypatch, tmp_path):
+    import json
+
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    from sfzmaps.frame import run as fr
+
+    calls = _frame_stubs(monkeypatch, tmp_path)
+    (tmp_path / fr.FOLDS_FILE).write_text(json.dumps({"step": 3000, "temperature": 1.5}))
+    got = {}
+    monkeypatch.setattr(fr, "train_final", lambda labelled, recipe, device, out, step, temperature:
+                        got.update(step=step, temperature=temperature))
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu"])
+    assert res.exit_code == 0, res.output
+    assert got == {"step": 3000, "temperature": 1.5}
+    assert calls == ["predict_all", "mosaics", "closeups"]
+
+
+def test_cli_frame_flags_exclude_each_other(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    calls = _frame_stubs(monkeypatch, tmp_path)
+    for flags in (["--folds", "--predict-only"], ["--folds", "--only-fold", "1"],
+                  ["--only-fold", "1", "--predict-only"]):
+        res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", *flags])
+        assert res.exit_code != 0, flags
+    assert calls == []
