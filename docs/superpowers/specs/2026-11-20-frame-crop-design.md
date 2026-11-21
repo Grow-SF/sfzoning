@@ -516,3 +516,91 @@ candidate line's cost a sum over the side's length.
 
 Same as the priors: the fold-0 model's held-out chances and pages, both decisions, the same costs, and the pictures of
 1948/8, 12, 14 and the close-ups. Then the plan gets a task for it.
+
+## Amendment 3: the combined design (owner, 2026-11-21: "Write the plan for the new combined design")
+
+The owner asked for an audit against the literature ("surprised that this isn't working ... single model, a mixture of
+experts, or what?"). Findings, each measured here or cited:
+
+- **The from-scratch region network gets the layout wrong, and more labels of the same kind don't fix it.** Trained on
+  all 21 labels, its wrong cuts move rather than vanish: 1948/14 loses the ocean instead of the lake, and 3, 5a and 6a
+  lose sparse areas. It decides "dense city = map, sparse = outside". "Inside the frame" is a non-local question
+  (Villalobos et al. 2021), and half of what drives the network's decision comes from within about 280 px.
+- **A frozen pretrained backbone with a small head gets the layout right** (DINOv2 ViT-B/14, Apache-2.0; Sterzinger
+  et al. 2025 for few-shot historical maps). On fold 0's held sheets:
+
+  | | pooled cost | layout cost (more than 100 px from the outline) |
+  |---|---:|---:|
+  | DINOv2 + small head | 205,036 | 6,578 |
+  | region network | 381,666 | 159,954 |
+
+  - It keeps oceans, lakes and bays, finds every legend, rose and badge on unseen 1948 pages, and cuts the title
+    strips on five unlabelled editions.
+  - Its edge wobbles by about a patch, and 82–97% of its cost is within 100 px of the outline.
+- **Line evidence** (a network trained on nearness to the outline) finds the right rule (median 3 px, 24/24 sides
+  framed-or-not), but its peak lands on the rule about half the time: cost 787k–2,039k against the region cut's
+  113k. Not used.
+- **The full-resolution region network is good at exactly the edge:** a steady 4 px inside the rule where a frame
+  line really is.
+- **The straight-line shape decision** (amendment 2) is exact given its chances; its remaining cost was the chances.
+
+### The design: each part does what it measured well at
+
+1. **Layout** (new): frozen DINOv2 ViT-B/14 with registers (`facebook/dinov2-with-registers-base`, pinned revision
+   and file hash).
+   - **Input:** the whole page, long side 111 patches (1,554 px), grey as 3 channels.
+   - **Features:** the last 4 layers' patch tokens (3,072 numbers per patch), standardised and reduced to 128
+     principal components. The components are fitted once on every map page's features. That uses no labels, so the
+     348 unlabelled pages contribute.
+   - **Head:** 3×3 conv (32) → ReLU → 1×1 conv → three classes (map / outside / removed block), trained on each
+     patch's class shares with the usual input-only weights (0.1 + mean ink). It trains in seconds.
+   - **Seeds:** three heads from different seeds are averaged (measured spread across seeds: 2.6k–17k layout cost).
+   - **Held out by leaving one sheet out** (21 × 3 heads, seconds each): every labelled sheet gets layout chances from
+     heads that never saw it. This replaces the 4 folds for the layout.
+2. **Edge** (already built): the full-resolution network (`frame/model.py`, `learn.py`), unchanged.
+   - It is used **only within a band of each fitted line**. Its layout mistakes far from any line are never read.
+   - The band's half-width W is the layout's largest held-out side-position error, widened by half (the same pattern
+     as the other bounds).
+   - Held-out edge chances come from the 4 folds, one seed (about 9 minutes each).
+3. **Decision** (amendment 2's shape, ported from the spike): one rotated-rectangle frame, per-side tilt and bow,
+   corner fillets, ruled rectangular notches, and removed blocks as rotated rectangles or ellipses.
+   - **Coarse stages** (frame search, notch and block candidates) minimise the expected ink cost under the layout
+     chances.
+   - **Refinements** (side offsets, tilt, bow, fillet radii, notch sides) use the edge chances inside the band and the
+     layout chances outside it.
+   - **Block shapes are bounded by the labelled blocks' sizes, widened by half.** The spike's ellipses ballooned over
+     blank water because paper is free.
+   - **λ_notch, β and λ_block are fitted on the 21 held-out sheets** by realised cost.
+   - Amendment 2's ranking of pages by confident frame ink left along the sides, and its multi-map rule, stand.
+4. **Calibration, scores, outputs and pictures:** as built. There is one temperature per model, each fitted on its own
+   held-out chances. Scores add the split of cost into layout (more than 100 px from the label's outline) and edge;
+   that is a reporting split, not a decision.
+
+### Why sound
+
+- This is the competition winner's recipe (coarse layout from a network, then the border re-adjusted on the ink at
+  full resolution; Chazalon et al. 2021). A pretrained backbone supplies the coarse part, since 21 labels can't teach
+  layout from scratch, and the owner's straight-line shape supplies the re-adjustment in place of tuned morphology.
+- Each stage's fitted numbers are fitted on chances from sheets its model did not train on.
+- It is one process for every edition, not a mixture of experts: per-edition experts would have 1–5 labels each.
+
+### Red team, and the edits it made
+
+- **The pretrained result rests on 6 sheets, and mostly on one** (1948/12). The paired interval just includes zero.
+  → The first task is a combined test on the same pages before anything is ported, and leave-one-out over all 21
+  follows in the run.
+- **The layout still cuts wide blank strips just inside a frame** (1948/2, 9, 5a's Pacific strip). → The frame is
+  fitted as a rectangle to the whole page's cost, so a strip the head wrongly calls "outside" only moves a side if it
+  outweighs the rule's own evidence. The combined test looks at exactly those pages. If it persists, the fix is labels
+  for that case, chosen by the seeds' disagreement.
+- **A new dependency and a downloaded model** (`transformers`, Apache-2.0; weights Apache-2.0). → The revision is
+  pinned and the weights' hash checked before use. Licence notices are added. Tests never download (a tiny stand-in
+  backbone). The first real run needs the network once.
+- **Features differ slightly between devices** (to within 0.03 between cpu and mps). → One device for every page
+  (mps under the GPU turn). Results are deterministic on one machine, and the doc says they are not bit-equal across
+  machines.
+- **Disk:** raw features are about 58 MB per page. → Only the 128-component features are stored (about 2.4 MB per
+  page, under 1 GB for all pages), and per-page outputs follow the disk rule (one run's maps at a time).
+- **The edge network still trains for about 9 minutes per fold.** → One seed. It is only read inside the band, where
+  the decision is a few px either way. If the two models disagree on framed-or-not anywhere, the layout wins by
+  construction.
