@@ -1,3 +1,4 @@
+import contextlib
 import csv
 import dataclasses
 import hashlib
@@ -122,14 +123,21 @@ def _files(root):
 def test_layout_chances_are_held_out(fake_world, pixel_shape, monkeypatch):
     """Orchestration test (the shape decision is stubbed with the per-pixel cut)."""
     labelled, out = fake_world
-    calls, real = [], layout.train_head
+    calls, real, inside = [], layout.train_head, []
 
     def spy(feats, targets, seed, device="cpu"):
         head = real(feats, targets, seed, device)
-        calls.append({"feats": [np.asarray(f) for f in feats], "seed": seed, "head": head})
+        calls.append({"feats": [np.asarray(f) for f in feats], "seed": seed, "head": head, "turn": bool(inside)})
         return head
     monkeypatch.setattr(layout, "train_head", spy)
-    result = run.held_out(labelled, "cpu", out)
+
+    @contextlib.contextmanager
+    def turn():
+        inside.append(1)
+        yield
+        inside.pop()
+    result = run.held_out(labelled, "cpu", out, turn=turn)
+    assert all(c["turn"] for c in calls)                      # every head inside the GPU turn
 
     feats = {sid: _feat(out, sid) for sid in labelled}
 
@@ -158,6 +166,8 @@ def test_layout_chances_are_held_out(fake_world, pixel_shape, monkeypatch):
                                              nan_ok=True)
         assert set(row["side_ink_left"]) == {"top", "bottom", "left", "right"}
     assert set(written) >= {"params", "temperature", "sheets", "pooled", "baseline", "search"}
+    assert written["reducer"] == {"file": "reducer.npz", "pages": [f"{s}/{h}" for s, h in run.feature_pages(labelled)],
+                                  "sha256": hashlib.sha256((out / "reducer.npz").read_bytes()).hexdigest()}
     assert set(written["pooled"]) == {"shape", "pixel"}
 
 
@@ -316,12 +326,14 @@ def test_write_outputs_keeps_colour(tmp_path, monkeypatch, mode):
 def test_train_final_then_predict_every_other_page(fake_world):
     """The real shape decision on the toy pages; the labelled sheets keep their held-out outputs."""
     labelled, out = fake_world
-    held = {"params": dataclasses.asdict(shape.Params(1e4, 3, 1e3)), "temperature": 1.25}
+    held = {"params": dataclasses.asdict(shape.Params(1e4, 3, 1e3)), "temperature": 1.25,
+            "reducer": run.extract_features(labelled, "cpu", out)}
     run.train_final(labelled, "cpu", out, held)
     meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
     assert meta["params"] == held["params"] and meta["temperature"] == 1.25
     assert meta["head_seeds"] == list(layout.HEAD_SEEDS) and meta["sheets"] == [list(s) for s in labelled]
     assert set(meta["bounds"]) == {"rect_max", "ellipse_max"} and meta["bounds"]["rect_max"][0] > 0
+    assert meta["reducer"] == held["reducer"]
     assert meta["reducer"]["sha256"] == hashlib.sha256((out / "reducer.npz").read_bytes()).hexdigest()
     heads, got = run.load_model(out)
     assert len(heads) == len(layout.HEAD_SEEDS) and got["temperature"] == 1.25
@@ -363,12 +375,31 @@ def test_predict_refuses_a_full_disk(monkeypatch, fake_world):
 def test_predict_refuses_a_changed_reducer(fake_world):
     labelled, out = fake_world
     run.train_final(labelled, "cpu", out, {"params": dataclasses.asdict(shape.Params(1e4, 3, 1e3)),
-                                           "temperature": 1.0})
+                                           "temperature": 1.0, "reducer": run.extract_features(labelled, "cpu", out)})
     meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
     meta["reducer"]["sha256"] = "0" * 64
     (out / run.MODEL_DIR / "model.json").write_text(json.dumps(meta))
-    with pytest.raises(RuntimeError, match="reducer"):
+    with pytest.raises(run.StaleFeatures, match="reducer"):
         run.predict_all("cpu", out)
+
+
+def test_a_new_page_after_the_held_out_run_is_refused_not_refitted(fake_world, tiny_backbone):
+    labelled, out = fake_world
+    record = run.extract_features(labelled, "cpu", out)
+    held = {"params": dataclasses.asdict(shape.Params(1e4, 3, 1e3)), "temperature": 1.0, "reducer": record}
+    run.train_final(labelled, "cpu", out, held)
+    stamp = (out / "reducer.npz").stat().st_mtime_ns
+    _save(_unlabelled_lum(9), data.page_path("b", "u9", data.WORK))       # a page added since
+    with open(data.PAGE_KINDS, "a", newline="") as f:
+        f.write("b,u9,map,test,\n")
+    with pytest.raises(run.StaleFeatures, match="--held-out"):
+        run.train_final(labelled, "cpu", out, held)
+    with pytest.raises(run.StaleFeatures, match="--held-out"):
+        run.predict_all("cpu", out)
+    with pytest.raises(run.StaleFeatures, match="--held-out"):
+        run.train_final(labelled, "cpu", out, {k: v for k, v in held.items() if k != "reducer"})   # an older run
+    assert (out / "reducer.npz").stat().st_mtime_ns == stamp                 # never refitted
+    assert not (layout.features_dir(out) / "b" / "u9.npy").exists()
 
 
 def test_an_old_model_is_refused(tmp_path):
@@ -386,20 +417,3 @@ def test_pages_rank_by_side_ink_then_dropped():
     assert [r["sheet"] for r in got] == ["1", "2", "0", "3"]
     assert {r["sheet"]: r["dropped_rank"] for r in got} == {"2": 1, "3": 2, "0": 3, "1": 4}
     assert [r["side_rank"] for r in got] == [1, 2, 3, 4]
-
-
-def test_head_pool_matches_one_process(monkeypatch):
-    """Heads trained in spawned workers equal heads trained here (the workers read the module's real settings, so
-    this test uses them too)."""
-    monkeypatch.setattr(layout, "COMPONENTS", 128)
-    monkeypatch.setattr(layout, "HEAD_MAX_STEPS", 3000)
-    rng = np.random.default_rng(0)
-    feats = {("s", str(i)): rng.normal(size=(128, 4, 5)).astype(np.float16) for i in range(3)}
-    targets = {sid: (rng.dirichlet((1, 1, 1), (4, 5)).transpose(2, 0, 1).astype(np.float32),
-                     np.ones((4, 5), np.float32)) for sid in feats}
-    serial, _ = run.leave_one_out(feats, targets, (0,))
-    monkeypatch.setattr(run, "PROCESSES", 2)
-    pooled, seconds = run.leave_one_out(feats, targets, (0,))
-    assert sorted(pooled) == sorted(feats) and len(seconds) == 3
-    for sid in feats:
-        np.testing.assert_array_equal(pooled[sid][0], serial[sid][0])

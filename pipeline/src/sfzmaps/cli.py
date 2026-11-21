@@ -940,8 +940,9 @@ def frame(
                                                                     "heads, then the pictures."),
 ) -> None:
     """The frame finder (issue #71), $0.  No flag: train the final heads with the numbers and temperature of the last
-    `--held-out` run, decide every map page, draw the pictures.  The layout features are extracted on the device in
-    one exclusive GPU turn (`sfzmaps.gpu`); the rest runs on cpu worker processes, after the turn."""
+    `--held-out` run, decide every map page, draw the pictures.  The layout features and heads run on the device in
+    an exclusive GPU turn (`sfzmaps.gpu`); the shape decisions run on cpu worker processes, after it.  Only
+    `--held-out` may fit the features' reducer; the other modes refuse features that changed since."""
     import logging
 
     from sfzmaps import gpu
@@ -967,19 +968,24 @@ def frame(
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     labelled = fd.labelled_sheets()
     shown = None
+
+    def turn():
+        return gpu.gpu_turn(True, device)
+
     try:
         if not held_out:
+            # before any GPU work: the disk, and the features the held-out run (or the model) was fitted on
+            fitted = json.loads((summary if plain else out / fr.MODEL_DIR / "model.json").read_text())
             fr.check_disk(out)
-        with gpu.gpu_turn(True, device):
-            fr.extract_features(labelled, device, out)
+            fr.check_features(labelled, fitted.get("reducer"))
         if held_out:
-            shown = fr.format_scores(fr.held_out(labelled, device, out))
+            shown = fr.format_scores(fr.held_out(labelled, device, out, turn=turn))
         elif plain:
-            fr.train_final(labelled, device, out, json.loads(summary.read_text()))
-            fr.predict_all(device, out)
+            fr.train_final(labelled, device, out, fitted, turn=turn)
+            fr.predict_all(device, out, turn=turn)
         else:
-            fr.predict_all(device, out)
-    except fr.DiskFull as e:
+            fr.predict_all(device, out, turn=turn)
+    except (fr.DiskFull, fr.StaleFeatures) as e:
         typer.echo(f"error: {e}", err=True)
         raise typer.Exit(1)
     if shown is not None:

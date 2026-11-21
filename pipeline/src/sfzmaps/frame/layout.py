@@ -216,31 +216,58 @@ def new_head() -> nn.Module:
                          nn.Conv2d(HIDDEN_UNITS, CLASSES, 1))
 
 
+def batch(feats: Sequence[np.ndarray], targets: Sequence[tuple], device: str = "cpu"):
+    """The pages as one padded batch on `device`: features `(N, COMPONENTS, Hmax, Wmax)` float32, shares
+    `(N, CLASSES, Hmax, Wmax)` and weights `(N, Hmax, Wmax)`, each page at the top left with zeros beyond it, and the
+    sum of every page's weights.  Exact for the head (one 3x3 conv with padding 1, then 1x1 convs): the zeros beyond
+    a page's right and bottom edges are the zeros its own padding gave there, and the padded positions weigh 0."""
+    hmax = max(np.shape(f)[1] for f in feats)
+    wmax = max(np.shape(f)[2] for f in feats)
+    n = len(feats)
+    x = np.zeros((n, np.shape(feats[0])[0], hmax, wmax), np.float32)
+    sh = np.zeros((n, CLASSES, hmax, wmax), np.float32)
+    wt = np.zeros((n, hmax, wmax), np.float32)
+    for i, (f, (s, w)) in enumerate(zip(feats, targets)):
+        r, c = np.shape(f)[1:]
+        x[i, :, :r, :c] = f
+        sh[i, :, :r, :c] = s
+        wt[i, :r, :c] = w
+    wsum = float(sum(float(np.asarray(w, np.float32).sum(dtype=np.float32)) for _, w in targets))
+    return (torch.from_numpy(x).to(device), torch.from_numpy(sh).to(device), torch.from_numpy(wt).to(device),
+            wsum)
+
+
+def batch_loss(head: nn.Module, x: torch.Tensor, shares: torch.Tensor, weight: torch.Tensor,
+               wsum: float) -> torch.Tensor:
+    """The sum over every page and patch of the soft-target cross-entropy times the patch's weight, over `wsum`: one
+    forward over the padded batch (`batch`)."""
+    return (-(shares * F.log_softmax(head(x), 1)).sum(1) * weight).sum() / wsum
+
+
 def train_head(feats: Sequence[np.ndarray], targets: Sequence[tuple], seed: int, device: str = "cpu") -> nn.Module:
     """One head trained on `feats` (float16 `(COMPONENTS, rows, cols)` each) against `targets` (`patch_targets`
-    pairs), full batch as the spike measured: every step uses all the pages, and the loss is the sum over every page
-    of each patch's soft-target cross-entropy times its weight, over the sum of all the weights.  The seed sets the
-    head's initial weights.  Adam; stops when the mean loss over 100 steps improves by less than `HEAD_FLAT` on the
-    100 before.  Deterministic for a seed on cpu."""
-    torch.set_num_threads(HEAD_THREADS)
+    pairs), full batch as the spike measured: every step uses all the pages at once (`batch`, one forward), and the
+    loss is `batch_loss`.  The seed sets the head's initial weights (made on cpu, so they are the same on every
+    device).  Adam; stops when the mean loss over 100 steps improves by less than `HEAD_FLAT` on the 100 before.
+    Deterministic for a seed on one device; returned on cpu."""
+    if device == "cpu":
+        torch.set_num_threads(HEAD_THREADS)
     torch.manual_seed(seed)
     head = new_head().to(device)
-    xs = [torch.from_numpy(np.asarray(f, np.float32)).to(device) for f in feats]
-    ts = [(torch.from_numpy(s).to(device), torch.from_numpy(w).to(device)) for s, w in targets]
-    wsum = sum(float(w.sum()) for _, w in ts)
+    x, shares, weight, wsum = batch(feats, targets, device)
     opt = torch.optim.Adam(head.parameters(), lr=HEAD_LR)
-    hist: list[float] = []
+    # the losses stay on the device and are read only at a check: reading each step waits for the device every
+    # step (on mps 25 ms a step against 11); the check sees the same float64 values either way
+    hist: list[torch.Tensor] = []
     for step in range(HEAD_MAX_STEPS):
         opt.zero_grad()
-        loss = 0.0
-        for x, (shares, w) in zip(xs, ts):
-            z = head(x[None])[0]
-            loss = loss + (-(shares * F.log_softmax(z, 0)).sum(0) * w).sum() / wsum
+        loss = batch_loss(head, x, shares, weight, wsum)
         loss.backward()
         opt.step()
-        hist.append(float(loss.detach()))
+        hist.append(loss.detach())
         if step >= 300 and step % 50 == 0:
-            a, b = np.mean(hist[-200:-100]), np.mean(hist[-100:])
+            last = torch.stack(hist[-200:]).cpu().numpy().astype(np.float64)
+            a, b = np.mean(last[:100]), np.mean(last[100:])
             if a - b < HEAD_FLAT * a:
                 break
     return head.eval().to("cpu")
@@ -259,13 +286,3 @@ def page_logits(z: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     up = F.interpolate(torch.from_numpy(np.asarray(z, np.float32))[None], size=tuple(shape), mode="bilinear",
                        align_corners=False)
     return up[0].numpy().astype(np.float32)
-
-
-def leave_one_out(feats: dict, targets: dict, seeds: Sequence[int] = HEAD_SEEDS) -> dict:
-    """For each sheet, the patch logits of heads trained on every other sheet, one per seed."""
-    out = {}
-    for held in feats:
-        rest = [s for s in feats if s != held]
-        heads = [train_head([feats[s] for s in rest], [targets[s] for s in rest], seed) for seed in seeds]
-        out[held] = [head_logits(h, feats[held]) for h in heads]
-    return out

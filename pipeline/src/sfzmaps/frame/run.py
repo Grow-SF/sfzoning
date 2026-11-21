@@ -5,9 +5,12 @@ temperature `calibrate`.
 
 `held_out` scores every labelled sheet with layout heads that never saw it:
 1. `layout.extract_all` over every map page (and the labelled sheets): the frozen backbone's reduced features, on the
-   caller's device (`extract_features`: the CLI runs it first, alone in the GPU's turn, so here it finds them);
+   run's device.  Only the held-out run may fit a reducer: its record (`reducer`: sha256 and page list) goes to
+   `folds.json` and `model.json`, and the final training and the prediction refuse (`StaleFeatures`) features that
+   are not that record's, before extracting anything;
 2. leave one sheet out: for each labelled sheet and each of `layout.HEAD_SEEDS`, a head trained on every other sheet
-   (`leave_one_out`; cpu, on the process pool), giving the sheet's patch logits per seed.  Each is upsampled to the
+   (`leave_one_out`; one padded batch on the run's device, one head after another), giving the sheet's patch logits
+   per seed.  Steps 1 and 2 run inside the caller's `turn` (the CLI's GPU turn).  Each is upsampled to the
    page (`layout.page_logits`) and the seeds' tempered softmaxes are averaged (`layout.combine`).  One temperature is
    fitted on ink-weighted samples of every sheet's upsampled logits (`calibrate`);
 3. the shape decision's numbers (`shape.Params`) are chosen by the lowest pooled realised cost (summed over the held
@@ -22,13 +25,14 @@ temperature `calibrate`.
    against `BASELINE` where its files exist;
 5. everything goes to `folds.json`.
 
-The page work runs on `PROCESSES` spawned worker processes, each pinned to one maths thread (heads: torch takes
-`layout.HEAD_THREADS`).  A job carries everything it needs (the page's path, its patch logits, the temperature,
+The page work (the shape decisions) runs on `PROCESSES` spawned worker processes, each pinned to one maths
+thread.  A job carries everything it needs (the page's path, its patch logits, the temperature,
 the label folder), and its worker loads the page, makes the chances and lets them go when the job ends: so one
 page's chances and shape cache (`shape.decide`'s `cache`) live in one worker at a time, and a search job runs every
 parameter point it needs on that one cache.  `PROCESSES = 1` runs everything in this process.
 
-`train_final` trains `layout.HEAD_SEEDS` heads on every labelled sheet; `predict_all` decides every other map page
+`train_final` trains `layout.HEAD_SEEDS` heads on every labelled sheet (refusing features that are not the held-out
+run's); `predict_all` decides every other map page
 with them at the held-out run's temperature and numbers; the labelled sheets keep their held-out outputs.
 
 Outputs, all under `out` (default `data/frame`):
@@ -44,7 +48,7 @@ Outputs, all under `out` (default `data/frame`):
 - `folds.json` (`FOLDS_FILE`): the held-out run, deleted when a run starts, so a run that stops part way leaves no
   summary for the final training to trust;
 - `model/head-<seed>.pt` and `model/model.json` (`MODEL_DIR`): the final heads, the numbers, the temperature, the
-  block bounds and the reducer they were trained on (its sha256);
+  block bounds and the reducer record they were trained on (sha256 and page list);
 - `pages.json` (`PAGES_FILE`): every map page's side ink left and dropped ink, with both ranks, the pages to look at.
 """
 from __future__ import annotations
@@ -100,6 +104,10 @@ class DiskFull(RuntimeError):
     """Less than `MIN_FREE_GB` free where the outputs go."""
 
 
+class StaleFeatures(RuntimeError):
+    """The layout's features (their reducer) are not the ones the held-out run or the model was fitted on."""
+
+
 def sheet_dir(out: Path, sid: SheetId) -> Path:
     return out / sid[0] / sid[1]
 
@@ -136,19 +144,14 @@ def _cls(sid: SheetId, shape_: tuple[int, int], root: Path | None = None) -> np.
 # The process pool
 # ---------------------------------------------------------------------------------------------------------------
 
-_STATE: dict = {}   # a worker's shared inputs, set once per worker (`pool_map`'s `state`)
-
-
-def _init_worker(state: dict) -> None:
-    """A spawned worker: one thread for OpenCV and torch (BLAS is pinned by the environment it started with), its
-    warnings shown, and the shared inputs."""
+def _init_worker() -> None:
+    """A spawned worker: one thread for OpenCV and torch (BLAS is pinned by the environment it started with), and
+    its warnings shown."""
     import cv2
 
     cv2.setNumThreads(1)
     torch.set_num_threads(1)
     logging.basicConfig(level=logging.WARNING, format="%(message)s")
-    _STATE.clear()
-    _STATE.update(state)
 
 
 @contextlib.contextmanager
@@ -172,12 +175,11 @@ def _apply(fn: Callable, args: tuple, item):
     return fn(item, *args)
 
 
-def pool_map(fn: Callable, items: Sequence, *args, state: dict | None = None, label: str = "") -> list:
+def pool_map(fn: Callable, items: Sequence, *args, label: str = "") -> list:
     """`[fn(item, *args) for item in items]`, in order, on up to `PROCESSES` spawned workers (here when
-    `PROCESSES` <= 1 or there is one item).  `fn` must be a module-level function; `state` is given to every worker
-    once (`_STATE`).  With a `label`, each result is logged as it arrives."""
+    `PROCESSES` <= 1 or there is one item).  `fn` must be a module-level function.  With a `label`, each result is
+    logged as it arrives."""
     items = list(items)
-    state = state or {}
     n = len(items)
     t0 = time.perf_counter()
 
@@ -186,19 +188,13 @@ def pool_map(fn: Callable, items: Sequence, *args, state: dict | None = None, la
             log.info("%s %d/%d (%.0f s)", label, i, n, time.perf_counter() - t0)
 
     if PROCESSES <= 1 or n <= 1:
-        _STATE.clear()
-        _STATE.update(state)
-        try:
-            out = []
-            for i, item in enumerate(items, 1):
-                out.append(fn(item, *args))
-                note(i)
-            return out
-        finally:
-            _STATE.clear()
+        out = []
+        for i, item in enumerate(items, 1):
+            out.append(fn(item, *args))
+            note(i)
+        return out
     with _pinned_environment(), concurrent.futures.ProcessPoolExecutor(
-            min(PROCESSES, n), mp_context=multiprocessing.get_context("spawn"), initializer=_init_worker,
-            initargs=(state,)) as ex:
+            min(PROCESSES, n), mp_context=multiprocessing.get_context("spawn"), initializer=_init_worker) as ex:
         out = []
         for i, r in enumerate(ex.map(partial(_apply, fn, args), items), 1):
             out.append(r)
@@ -217,10 +213,39 @@ def feature_pages(labelled: Sequence[SheetId]) -> list[SheetId]:
     return sorted(set(data.map_pages(data.PAGE_KINDS, data.WORK)) | set(labelled))
 
 
-def extract_features(labelled: Sequence[SheetId], device: str, out: Path = OUT) -> None:
-    """`layout.extract_all` over `feature_pages(labelled)` on `device` (a no-op when they are all there): the only
-    GPU work of the run, so the caller can hold the GPU's turn for this alone."""
-    layout.extract_all(feature_pages(labelled), device, out)
+def _names(pages: Sequence[SheetId]) -> list[str]:
+    return [f"{s}/{h}" for s, h in pages]
+
+
+def check_features(labelled: Sequence[SheetId], record: dict | None) -> None:
+    """Raise `StaleFeatures` unless `record` (a held-out run's or a model's `reducer`) was made over the pages
+    `feature_pages(labelled)` lists now: the heads, temperature and shape numbers belong to that reducer's feature
+    space, and extracting over another page list would fit another reducer."""
+    if record is None or "pages" not in record:
+        raise StaleFeatures("the held-out run has no record of the features it was fitted on (an older run): rerun "
+                            "`sfzmaps frame --held-out`")
+    now = _names(feature_pages(labelled))
+    if now != record["pages"]:
+        added, gone = sorted(set(now) - set(record["pages"])), sorted(set(record["pages"]) - set(now))
+        raise StaleFeatures(f"the pages changed since the held-out run ({len(added)} added, e.g. {added[:3]}; "
+                            f"{len(gone)} gone, e.g. {gone[:3]}): the layout's features would be refitted; rerun "
+                            "`sfzmaps frame --held-out`")
+
+
+def extract_features(labelled: Sequence[SheetId], device: str, out: Path = OUT, record: dict | None = None) -> dict:
+    """`layout.extract_all` over `feature_pages(labelled)` on `device` (a no-op when they are all there); returns the
+    reducer's record (`file`, `sha256`, `pages`).  With a `record` (from `folds.json` or `model.json`), it refuses
+    (`StaleFeatures`) before extracting when the page list differs (`check_features`), and after when the reducer is
+    not that record's: only the held-out run fits a reducer."""
+    if record is not None:
+        check_features(labelled, record)
+    pages = feature_pages(labelled)
+    layout.extract_all(pages, device, out)
+    now = {"file": REDUCER_FILE, "sha256": _sha256(out / REDUCER_FILE), "pages": _names(pages)}
+    if record is not None and now["sha256"] != record["sha256"]:
+        raise StaleFeatures(f"{out / REDUCER_FILE} is not the reducer the held-out run used: rerun "
+                            "`sfzmaps frame --held-out`")
+    return now
 
 
 def load_features(out: Path, sid: SheetId) -> np.ndarray:
@@ -241,32 +266,30 @@ def _features_and_targets(labelled: Sequence[SheetId], out: Path) -> tuple[dict,
     return feats, targets
 
 
-def _head_job(job: tuple[SheetId | None, int]) -> tuple:
-    """One head of `layout.train_head` on every sheet in the worker's `feats` but `held` (all of them when `held` is
-    None): (held, seed, the held sheet's patch logits or, for None, the head's weights as arrays, seconds)."""
-    held, seed = job
-    feats, targets = _STATE["feats"], _STATE["targets"]
-    rest = [s for s in feats if s != held]
+def _train(feats: dict, targets: dict, rest: Sequence[SheetId], seed: int, device: str) -> tuple:
     t0 = time.perf_counter()
-    head = layout.train_head([feats[s] for s in rest], [targets[s] for s in rest], seed)
-    seconds = time.perf_counter() - t0
-    if held is None:
-        return None, seed, {k: v.detach().cpu().numpy().copy() for k, v in head.state_dict().items()}, seconds
-    return held, seed, layout.head_logits(head, feats[held]), seconds
+    head = layout.train_head([feats[s] for s in rest], [targets[s] for s in rest], seed, _head_device(device))
+    return head, time.perf_counter() - t0
 
 
-def leave_one_out(feats: dict, targets: dict, seeds: Sequence[int]) -> tuple[dict, list[dict]]:
-    """`layout.leave_one_out` on the process pool: for each sheet, the patch logits of heads trained on every other
-    sheet, one per seed (in `seeds` order); and each head's training time."""
+def _head_device(device: str) -> str:
+    """Heads train on the run's device: mps where it is the device, else cpu."""
+    return "mps" if device == "mps" else "cpu"
+
+
+def leave_one_out(feats: dict, targets: dict, seeds: Sequence[int], device: str = "cpu") -> tuple[dict, list[dict]]:
+    """For each sheet, the patch logits of heads trained on every other sheet (`layout.train_head`, one padded batch
+    on `device`), one per seed in `seeds` order, one head after another; and each head's training seconds."""
     seeds = list(seeds)
-    jobs = [(sid, s) for sid in feats for s in seeds]
-    done = pool_map(_head_job, jobs, state={"feats": feats, "targets": targets}, label="held-out head")
-    logits = {sid: [None] * len(seeds) for sid in feats}
+    logits = {sid: [] for sid in feats}
     seconds = []
-    for held, seed, z, sec in done:
-        logits[held][seeds.index(seed)] = z
-        seconds.append({"series": held[0], "sheet": held[1], "seed": seed, "seconds": sec})
-        log.info("head without %s/%s, seed %d: %.1f s", *held, seed, sec)
+    for held in feats:
+        rest = [s for s in feats if s != held]
+        for seed in seeds:
+            head, sec = _train(feats, targets, rest, seed, device)
+            logits[held].append(layout.head_logits(head, feats[held]))
+            seconds.append({"series": held[0], "sheet": held[1], "seed": seed, "seconds": sec})
+            log.info("head without %s/%s, seed %d: %.1f s on %s", *held, seed, sec, _head_device(device))
     return logits, seconds
 
 
@@ -476,20 +499,22 @@ def _paired(a: dict[SheetId, dict], b: dict[SheetId, dict], keys: Sequence[str])
                                                   scores.BOOT_N)) for k in keys}
 
 
-def held_out(labelled: Sequence[SheetId], device: str, out: Path = OUT) -> dict:
-    """Score every labelled sheet held out (see the module); returns what it writes to `out/folds.json`.  Missing
-    features are extracted on `device` (the CLI does that first, in the GPU's turn); the rest runs on cpu."""
+def held_out(labelled: Sequence[SheetId], device: str, out: Path = OUT,
+             turn: Callable[[], contextlib.AbstractContextManager] = contextlib.nullcontext) -> dict:
+    """Score every labelled sheet held out (see the module); returns what it writes to `out/folds.json`.  The
+    features (extracted, or refitted when the page list changed: the only place that may) and the heads run on
+    `device` inside `turn()` (the CLI's GPU turn); the rest runs on cpu after it."""
     labelled = sorted(set(labelled))
     if len(labelled) < 2:
         raise ValueError(f"{len(labelled)} labelled sheet(s): leaving one out needs at least 2")
     (out / FOLDS_FILE).unlink(missing_ok=True)
     torch.set_num_threads(THREADS)
     counts = data.map_counts(data.PAGE_KINDS)
-    extract_features(labelled, device, out)
-    feats, targets = _features_and_targets(labelled, out)
-
     seeds = list(layout.HEAD_SEEDS)
-    loo, head_seconds = leave_one_out(feats, targets, seeds)
+    with turn():
+        reducer = extract_features(labelled, device, out)
+        feats, targets = _features_and_targets(labelled, out)
+        loo, head_seconds = leave_one_out(feats, targets, seeds, device)
 
     rng = np.random.default_rng(0)            # one generator for the run, sheets in sorted order
     samples = []
@@ -527,6 +552,7 @@ def held_out(labelled: Sequence[SheetId], device: str, out: Path = OUT) -> dict:
     pixel = {(r["series"], r["sheet"]): r["pixel"] for r in sheets}
     result = {
         "params": dataclasses.asdict(params),
+        "reducer": reducer,
         "grid": {k: list(v) for k, v in GRID.items()},
         "start": dataclasses.asdict(START),
         "search": search,
@@ -554,34 +580,36 @@ def held_out(labelled: Sequence[SheetId], device: str, out: Path = OUT) -> dict:
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def train_final(labelled: Sequence[SheetId], device: str, out: Path, held: dict) -> None:
-    """`layout.HEAD_SEEDS` heads trained on every labelled sheet, saved to `out/model/` with the held-out run's
-    numbers and temperature (`held`, its `folds.json`), the block bounds of every label and the reducer's sha256;
-    `model.json` is deleted first and written last, so a run that stops part way leaves no model to load.  The
-    features are extracted first if they are missing (on `device`; the CLI extracts them first, in the GPU's turn)."""
+def train_final(labelled: Sequence[SheetId], device: str, out: Path, held: dict,
+                turn: Callable[[], contextlib.AbstractContextManager] = contextlib.nullcontext) -> None:
+    """`layout.HEAD_SEEDS` heads trained on every labelled sheet (on `device`, inside `turn()`), saved to
+    `out/model/` with the held-out run's numbers, temperature and reducer record (`held`, its `folds.json`) and the
+    block bounds of every label; `model.json` is deleted first and written last, so a run that stops part way leaves
+    no model to load.  Refuses (`StaleFeatures`, before any extraction) when the features are not the held-out
+    run's."""
     labelled = sorted(set(labelled))
+    check_features(labelled, held.get("reducer"))
     d = out / MODEL_DIR
     d.mkdir(parents=True, exist_ok=True)
     (d / "model.json").unlink(missing_ok=True)
     torch.set_num_threads(THREADS)
-    extract_features(labelled, device, out)
-    feats, targets = _features_and_targets(labelled, out)
     seeds = list(layout.HEAD_SEEDS)
-    done = pool_map(_head_job, [(None, s) for s in seeds], state={"feats": feats, "targets": targets},
-                    label="final head")
     seconds = []
-    for _, seed, weights, sec in done:
-        log.info("final head, seed %d: %.1f s", seed, sec)
-        seconds.append({"seed": seed, "seconds": sec})
-        tmp = d / f"head-{seed}.pt.tmp"
-        torch.save({k: torch.from_numpy(v) for k, v in weights.items()}, tmp)
-        os.replace(tmp, d / f"head-{seed}.pt")
+    with turn():
+        reducer = extract_features(labelled, device, out, held["reducer"])
+        feats, targets = _features_and_targets(labelled, out)
+        for seed in seeds:
+            head, sec = _train(feats, targets, labelled, seed, device)
+            log.info("final head, seed %d: %.1f s on %s", seed, sec, _head_device(device))
+            seconds.append({"seed": seed, "seconds": sec})
+            tmp = d / f"head-{seed}.pt.tmp"
+            torch.save(head.state_dict(), tmp)
+            os.replace(tmp, d / f"head-{seed}.pt")
     bounds = blk.block_bounds(labelled, root=data.LABELS)
     _write_json(d / "model.json", {
         "head_seeds": seeds, "head_seconds": seconds, "components": layout.COMPONENTS,
         "params": {k: held["params"][k] for k in ("lam_notch", "beta", "lam_block")},
-        "temperature": float(held["temperature"]), "bounds": dataclasses.asdict(bounds),
-        "reducer": {"file": REDUCER_FILE, "sha256": _sha256(out / REDUCER_FILE)},
+        "temperature": float(held["temperature"]), "bounds": dataclasses.asdict(bounds), "reducer": reducer,
         "sheets": [list(s) for s in labelled], "level": decide.cut_level()})
 
 
@@ -624,20 +652,20 @@ def rank_pages(rows: list[dict]) -> list[dict]:
     return rows
 
 
-def predict_all(device: str, out: Path = OUT) -> None:
+def predict_all(device: str, out: Path = OUT,
+                turn: Callable[[], contextlib.AbstractContextManager] = contextlib.nullcontext) -> None:
     """Every map page that is not labelled, decided with the final heads at the held-out numbers; the labelled sheets
     keep their held-out outputs.  Then `PAGES_FILE` (`rank_pages`; the labelled sheets' rows from `folds.json`,
-    marked `held_out`).  Refuses (`DiskFull`) with less than `MIN_FREE_GB` free, and (RuntimeError) when the reducer
-    is not the one the heads were trained on.  Missing features are extracted on `device` (the CLI does that first,
-    in the GPU's turn)."""
+    marked `held_out`).  Refuses (`DiskFull`) with less than `MIN_FREE_GB` free, and (`StaleFeatures`, before any
+    extraction) when the features are not the ones the heads were trained on.  Missing feature files are extracted on
+    `device` inside `turn()`."""
     check_disk(out)
     heads, meta = load_model(out)
     torch.set_num_threads(THREADS)
     labelled = sorted(set(data.labelled_sheets(data.LABELS)))
-    extract_features(labelled, device, out)
-    if _sha256(out / REDUCER_FILE) != meta["reducer"]["sha256"]:
-        raise RuntimeError(f"{out / REDUCER_FILE} is not the reducer the heads were trained on (the page list "
-                           "changed?): run the held-out run and the final training again")
+    check_features(labelled, meta.get("reducer"))
+    with turn():
+        extract_features(labelled, device, out, meta["reducer"])
     params = shape.Params(**meta["params"])
     bounds = blk.BlockBounds(tuple(meta["bounds"]["rect_max"]), tuple(meta["bounds"]["ellipse_max"]))
     counts = data.map_counts(data.PAGE_KINDS)

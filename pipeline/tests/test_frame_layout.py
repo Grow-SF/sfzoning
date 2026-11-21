@@ -175,27 +175,6 @@ def test_same_seed_same_head(monkeypatch):
     assert not np.array_equal(a, c)
 
 
-def test_leave_one_out_never_trains_on_the_held_sheet(monkeypatch):
-    monkeypatch.setattr(layout, "COMPONENTS", 6)
-    feats, tg = _toy_pages(3, 2)
-    sids = [("s", "a"), ("s", "b"), ("s", "c")]
-    seen = []
-    real = layout.train_head
-
-    def spy(fs, ts, seed, device="cpu"):
-        seen.append(([id(f) for f in fs], seed))
-        return real(fs, ts, seed, device)
-
-    monkeypatch.setattr(layout, "train_head", spy)
-    out = layout.leave_one_out(dict(zip(sids, feats)), dict(zip(sids, tg)), seeds=(0, 1))
-    assert set(out) == set(sids) and all(len(v) == 2 and v[0].shape == (3, 8, 10) for v in out.values())
-    assert len(seen) == 6
-    held = {sid: id(f) for sid, f in zip(sids, feats)}
-    for k, sid in enumerate(sids):
-        for ids, _ in seen[2 * k: 2 * k + 2]:
-            assert held[sid] not in ids and len(ids) == 2
-
-
 def test_page_logits_shape_and_orientation():
     z = np.zeros((3, 4, 5), np.float32)
     z[0, :, :2] = 5
@@ -224,3 +203,57 @@ def test_pages_count_by_their_patch_weights(monkeypatch):
     heavy, light = np.full((4, 4), 1.0, np.float32), np.full((4, 4), 0.1, np.float32)
     z = layout.head_logits(layout.train_head([f, f], [(s0, heavy), (s1, light)], seed=0), f)
     assert z[0].mean() > z[1].mean()
+
+
+def _per_page_loss(head, feats, tg):
+    """The loss page by page, as the spike wrote it: each page alone through the head."""
+    wsum = sum(float(w.sum()) for _, w in tg)
+    loss = 0.0
+    for f, (sh, w) in zip(feats, tg):
+        z = head(torch.from_numpy(np.asarray(f, np.float32))[None])[0]
+        loss = loss + (-(torch.from_numpy(sh) * torch.nn.functional.log_softmax(z, 0)).sum(0)
+                       * torch.from_numpy(w)).sum() / wsum
+    return loss
+
+
+def _ragged_pages():
+    """Three pages of different shapes (landscape, portrait, small), random features, targets and weights."""
+    rng = np.random.default_rng(7)
+    feats, tg = [], []
+    for rows, cols in ((8, 10), (11, 6), (4, 5)):
+        feats.append(rng.normal(size=(6, rows, cols)).astype(np.float16))
+        tg.append((rng.dirichlet((1, 1, 1), (rows, cols)).transpose(2, 0, 1).astype(np.float32),
+                   (0.1 + rng.random((rows, cols))).astype(np.float32)))
+    return feats, tg
+
+
+def test_the_padded_batch_gives_the_per_page_loss_and_gradients(monkeypatch):
+    monkeypatch.setattr(layout, "COMPONENTS", 6)
+    feats, tg = _ragged_pages()
+    torch.manual_seed(0)
+    head = layout.new_head()
+    want = _per_page_loss(head, feats, tg)
+    want.backward()
+    g_want = [p.grad.clone() for p in head.parameters()]
+    head.zero_grad()
+    got = layout.batch_loss(head, *layout.batch(feats, tg))
+    got.backward()
+    assert float(got.detach()) == pytest.approx(float(want.detach()), rel=1e-6)
+    for a, b in zip(head.parameters(), g_want):
+        torch.testing.assert_close(a.grad, b, rtol=1e-5, atol=1e-7)
+
+
+def test_batched_training_is_the_per_page_training(monkeypatch):
+    monkeypatch.setattr(layout, "COMPONENTS", 6)
+    monkeypatch.setattr(layout, "HEAD_MAX_STEPS", 60)
+    feats, tg = _ragged_pages()
+    got = layout.train_head(feats, tg, seed=2)
+    torch.manual_seed(2)                         # the former per-page loop, same seed, same steps
+    head = layout.new_head()
+    opt = torch.optim.Adam(head.parameters(), lr=layout.HEAD_LR)
+    for _ in range(60):
+        opt.zero_grad()
+        _per_page_loss(head, feats, tg).backward()
+        opt.step()
+    for a, b in zip(got.parameters(), head.parameters()):
+        torch.testing.assert_close(a, b, rtol=1e-4, atol=1e-5)
