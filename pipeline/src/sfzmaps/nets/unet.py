@@ -4,7 +4,9 @@ reader can use it.
 
 The network (`UNet`): `levels` blocks down (channels `width` x 1, 2, 4, 8, 8, ..., max-pooled between), `levels - 1`
 blocks up (nearest upsampling, each joined to the block down at its resolution), two 3 x 3 convolutions with batch norm
-and ReLU per block, and a 1 x 1 head.  A px's outputs depend on the input within `reach(levels)` px of it each way.
+and ReLU per block, and a 1 x 1 head.  `norm="group"` swaps batch norm for group norm, whose statistics come from
+each image alone (so one image per step trains the same as a batch; issue #71); the default stays batch norm, so PR
+#70's checkpoints still load.  A px's outputs depend on the input within `reach(levels)` px of it each way.
 The height and width must be multiples of `multiple(levels)`, so the halvings come out even.
 
 The folded network (`Folded`): the input's `fold` x `fold` px blocks folded into channels (`pixel_unshuffle`), a U-Net
@@ -35,24 +37,33 @@ def reach(levels: int) -> int:
     return down + up + shifts
 
 
-def _conv(i: int, o: int) -> list[nn.Module]:
-    return [nn.Conv2d(i, o, 3, padding=1), nn.BatchNorm2d(o), nn.ReLU(inplace=True)]
+GROUPS = 32          # Wu & He 2018's default; a layer with fewer channels uses one group per channel
 
 
-def _block(i: int, o: int) -> nn.Sequential:
-    return nn.Sequential(*_conv(i, o), *_conv(o, o))
+def _conv(i: int, o: int, norm: str) -> list[nn.Module]:
+    if norm == "batch":
+        n = nn.BatchNorm2d(o)
+    elif norm == "group":
+        n = nn.GroupNorm(min(GROUPS, o), o)
+    else:
+        raise ValueError(f"norm must be 'batch' or 'group', not {norm!r}")
+    return [nn.Conv2d(i, o, 3, padding=1), n, nn.ReLU(inplace=True)]
+
+
+def _block(i: int, o: int, norm: str) -> nn.Sequential:
+    return nn.Sequential(*_conv(i, o, norm), *_conv(o, o, norm))
 
 
 class UNet(nn.Module):
     """The U-Net (see the module).  Input (n, in_ch, h, w); output (n, out_ch, h, w) logits."""
 
-    def __init__(self, in_ch: int, out_ch: int, width: int = 16, levels: int = 5):
+    def __init__(self, in_ch: int, out_ch: int, width: int = 16, levels: int = 5, norm: str = "batch"):
         super().__init__()
         self.width = width
         self.levels = levels
         ch = [width * min(2 ** i, 8) for i in range(levels)]
-        self.down = nn.ModuleList([_block(in_ch, ch[0])] + [_block(ch[i], ch[i + 1]) for i in range(levels - 1)])
-        self.up = nn.ModuleList([_block(ch[i + 1] + ch[i], ch[i]) for i in reversed(range(levels - 1))])
+        self.down = nn.ModuleList([_block(in_ch, ch[0], norm)] + [_block(ch[i], ch[i + 1], norm) for i in range(levels - 1)])
+        self.up = nn.ModuleList([_block(ch[i + 1] + ch[i], ch[i], norm) for i in reversed(range(levels - 1))])
         self.head = nn.Conv2d(ch[0], out_ch, 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -84,10 +95,10 @@ class Folded(nn.Module):
     module).  Input (n, in_ch, h, w), h and w multiples of `folded_multiple(fold, levels)`; output (n, out_ch, h, w)
     logits."""
 
-    def __init__(self, in_ch: int, out_ch: int, fold: int, width: int, levels: int):
+    def __init__(self, in_ch: int, out_ch: int, fold: int, width: int, levels: int, norm: str = "batch"):
         super().__init__()
         self.fold = fold
-        self.net = UNet(in_ch * fold * fold, out_ch * fold * fold, width, levels)
+        self.net = UNet(in_ch * fold * fold, out_ch * fold * fold, width, levels, norm)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return F.pixel_shuffle(self.net(F.pixel_unshuffle(x, self.fold)), self.fold)
