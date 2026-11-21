@@ -28,6 +28,7 @@ dependencies = [
     "mapbox-vector-tile>=2.2.0",
     "pyyaml>=6",
     "torch==2.15.0",
+    "transformers>=5.24.0",
     "ortools==9.15.6755",
 ]
 

@@ -98,3 +98,36 @@ def small_model(monkeypatch):
     monkeypatch.setattr(model, "LEVELS", 2)
     monkeypatch.setattr(model, "WIDTH", 4)
     monkeypatch.setattr(model, "BUCKET", 8)
+
+
+@pytest.fixture
+def tiny_backbone():
+    """A stand-in for the frozen DINOv2 backbone with the output structure `frame.layout` relies on: called with
+    `pixel_values` and `output_hidden_states=True`, it returns `.hidden_states` (the embeddings, then one entry per
+    layer: 4 layers, 8 dims, patch 14), each (1, 1 + registers + patches, 8): a class token, 4 register tokens, the
+    patch tokens.  It has `.layernorm` and `.config.num_register_tokens`.  No weights are downloaded."""
+    import types
+
+    import torch
+
+    class Tiny(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            torch.manual_seed(0)
+            self.config = types.SimpleNamespace(num_register_tokens=4, patch_size=14, hidden_size=8)
+            self.proj = torch.nn.Conv2d(3, 8, 14, stride=14)
+            self.layers = torch.nn.ModuleList([torch.nn.Linear(8, 8) for _ in range(4)])
+            self.cls = torch.nn.Parameter(torch.randn(1, 1, 8))
+            self.reg = torch.nn.Parameter(torch.randn(1, 4, 8))
+            self.layernorm = torch.nn.LayerNorm(8)
+
+        def forward(self, pixel_values, output_hidden_states=False):
+            p = self.proj(pixel_values).flatten(2).transpose(1, 2)
+            h = torch.cat([self.cls.expand(len(p), -1, -1), self.reg.expand(len(p), -1, -1), p], 1)
+            states = [h]
+            for lin in self.layers:
+                h = torch.tanh(lin(h))
+                states.append(h)
+            return types.SimpleNamespace(hidden_states=tuple(states), last_hidden_state=self.layernorm(h))
+
+    return Tiny().eval()

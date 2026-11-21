@@ -88,6 +88,10 @@ Not covered by the licenses above; its own terms apply.
 - **Fonts:** Newsreader and Libre Franklin, SIL Open Font License 1.1,
   self-hosted via next/font.
 
+- **Layout model:** the frame finder reads each page's layout with the DINOv2 ViT-B/14 with registers weights
+  (`facebook/dinov2-with-registers-base`, revision `a1d738ccfa7ae170945f210395d99dde8adb1805`; Meta, Apache-2.0), run
+  through Hugging Face `transformers` (Apache-2.0).
+
 - **Software dependencies** (npm and Python packages) are used under their
   own licenses, all compatible with Apache-2.0: mostly MIT, Apache-2.0, BSD
   and ISC, plus libvips (LGPL-3.0, via sharp) used as a separate, dynamically
