@@ -4,17 +4,18 @@
 > superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** For every map page, delete the printed frame line, everything outside it, and the legend / compass-rose /
-SECTION blocks. Layout comes from a frozen pretrained model, the shape is straight lines, and the exact edge comes
-from the ink at full resolution.
+SECTION blocks. Layout comes from a frozen pretrained model and the shape is straight lines.
 
 **Architecture:**
 - A frozen DINOv2 backbone plus a small trained head gives each page's layout at coarse scale: map, outside the frame,
   or removed block.
 - The straight-line shape decision fits one rotated-rectangle frame with fillets, ruled notches and block shapes to
   that layout.
-- Within a band of each fitted line, the existing full-resolution network places the cut on the ink.
-- Held-out chances come from leaving one sheet out for the layout and from 4 folds for the edge. The decision's three
-  numbers and each model's temperature are fitted on those.
+- Held-out chances come from leaving one sheet out. The decision's three numbers and the temperature are fitted on
+  those.
+- **After Task 1 (owner, 2026-11-21: "Sgtm"):** the full-resolution network is dropped from the design. In the
+  combined test it raised frame ink left in from 1.0% to 3.9%. `frame/model.py` and `frame/learn.py` are deleted in
+  Task 6. The exact edge is the subject of Task 1b (the cut lies on paper).
 
 **Tech Stack:** Python 3, PyTorch (mps/cpu), `transformers` (new, Apache-2.0) for DINOv2 ViT-B/14 with registers,
 numpy, scipy, opencv, rasterio, shapely, Pillow, typer, pytest.
@@ -36,8 +37,8 @@ blocks", "Amendment 2" (the shape, with its red-team edits) and "Amendment 3" (t
   with a comment saying which.
 - Costs: frame or removed-block ink left in is 3× map ink cut (`decide.COST_FRAME = 3.0`, `COST_MAP = 1.0`). Blank
   paper costs nothing.
-- Every fitted number (temperatures, λ_notch, β, λ_block, the band's half-width) is fitted on chances from sheets its
-  model did not train on.
+- Every fitted number (the temperature, λ_notch, β, λ_block) is fitted on chances from sheets the heads did not train
+  on.
 - Deterministic on one machine: seeded, features extracted on one device for every page. Not bit-equal across
   machines; the code says so.
 - One GPU job at a time (`sfzmaps.gpu.gpu_turn(True, "mps")`, one turn per process). At most 4 threads per job.
@@ -92,6 +93,27 @@ are in fold 0's training set, so their pictures are in-sample and are labelled s
 - [ ] **Step 4: Show the owner** the picture and the table (SendUserFile with a purpose caption). **Wait for the
   owner** before Task 2. If (c) doesn't beat (b) at the edge, say so: the edge model's place in the design is then
   the owner's call.
+
+---
+
+### Task 1b: The cut lies on paper (spike; runs beside Tasks 2-5)
+
+**Files:**
+- Create: `pipeline/scripts/spikes/issue71_on_paper.py` (throwaway; builds on `issue71_combined.py`)
+
+After Task 1, 90% of the remaining cost is at the edge: the layout sees 50-px patches, so a fitted side can sit a few
+px off the rule. Label rule 1 says the outline lies on paper between the innermost rule and the first map ink.
+
+- [ ] **Step 1:** Start from Task 1's best decision (layout + shape + bounded blocks, "W = 0"). For each fitted frame
+  side, notch side and block outline, slide it along its normal within one patch width of where the layout put it
+  (page px per patch = the page's long side / 111). Choose the position that minimises the layout's expected ink
+  cost plus the ink lying under the line itself. Report exactly how the two terms are combined and why; no
+  hand-tuned weight (if one is unavoidable, fit it on the held sheets by realised cost and say so).
+- [ ] **Step 2:** The same six held sheets and eight 1948 pages. Report frame/legend ink left in and map ink cut, as
+  shares of each class's ink, before and after; full-resolution close-ups of the 1921 thin rule, a 1960 rule and
+  a 1948 legend's edge, before | after.
+- [ ] **Step 3:** Show the owner. If it helps, it becomes a refinement stage in Task 5 (a plan edit, then built with
+  tests).
 
 ---
 
@@ -161,8 +183,10 @@ def test_extract_all_is_resumable(tiny_backbone, tmp_path): ...  # second call e
 - Test: `pipeline/tests/test_frame_layout.py`
 
 **Interfaces:**
-- Consumes: Task 2's features; `data.class_mask`; `model.CLASSES` (3: map, outside, removed).
+- Consumes: Task 2's features; `data.class_mask`.
 - Produces:
+  - `CLASSES = 3` (0 map, 1 outside the frame, 2 removed block) and `combine(zs, temperature=1.0)`, both moved here
+    from `frame/model.py` unchanged (with their tests); `calibrate.py` imports `combine` from here.
   - `HIDDEN = 32`; `HEAD_SEEDS = (0, 1, 2)` (spike: layout cost 2.6k–17k across seeds).
   - `HEAD_LR = 1e-3`, `HEAD_MAX_STEPS = 3000`, `HEAD_FLAT = 0.002`: stop when the mean loss over 100 steps improves
     by less than this share. These are computational convergence settings.
@@ -234,6 +258,9 @@ lists ten findings; each is a requirement here.
   - `fit_arcs(frame, D) -> Frame`: tangent fillets. One histogram per corner gives every radius: a px at inward
     distances (a, b) is cut iff a + b + √(2ab) < r.
   - **Ties** go to zero tilt, zero bow, the angle nearest 0 and the outermost offset (finding 5).
+  - **A side with no frame is the page's own edge** (label rule 5): a side whose best offset is 0 is not rotated by
+    φ, tilted or bowed. φ is shared by the framed sides only, and with no framed side φ = 0. (Task 1: with rotated
+    page-edge sides, 1948/8 and 1948/9 came out at +2.56° and −2.10° and lost their corners.)
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -250,6 +277,10 @@ def test_blank_strip_called_outside_does_not_move_the_side():
     # stays at the rule (paper costs nothing; the rule's ink decides)
     ...
 def test_all_ink_page_does_not_crash(): ...
+def test_partly_framed_page_keeps_its_corners():
+    # a rule along the top and left only, tilted 1°: top and left follow it; right and bottom are the page edge
+    # exactly (no px cut along them, corners kept); phi within 0.1° of 1°
+    ...
 ```
 
 - [ ] **Step 2: Run; expect** `ModuleNotFoundError`.
@@ -261,7 +292,7 @@ def test_all_ink_page_does_not_crash(): ...
 
 ---
 
-### Task 5: The shape decision, notches, blocks and the band (`frame/shape.py`, part 2)
+### Task 5: The shape decision, notches and blocks (`frame/shape.py`, part 2)
 
 **Files:**
 - Modify: `pipeline/src/sfzmaps/frame/shape.py`
@@ -274,8 +305,7 @@ def test_all_ink_page_does_not_crash(): ...
     at least `2 * STRIP + 1` px wide.
   - `NOTCH_CAP = 6` notches per page (computational; the labels have at most 3).
   - `NOTCH_ANGLE = 2.46` degrees: a notch's angle around φ (the labels' 1.64° × 1.5).
-  - `@dataclass class Params: lam_notch: float; beta: float; lam_block: float; band: float`: the three fitted numbers
-    and the band's half-width in px.
+  - `@dataclass class Params: lam_notch: float; beta: float; lam_block: float`: the three fitted numbers.
   - `@dataclass class BlockBounds: rect_max: tuple[float, float]; ellipse_max: tuple[float, float]`: the labelled
     blocks' largest sides and axes × 1.5. `block_bounds(labelled) -> BlockBounds` measures them from the labels'
     `remove` polygons: a polygon counts as an ellipse when an ellipse fits it better than a rectangle, by area
@@ -287,15 +317,12 @@ def test_all_ink_page_does_not_crash(): ...
     - candidates are the 8-connected pieces of `p[2] > cut_level()` inside the frame;
     - each gets the better of a rotated rectangle and an ellipse within `bounds`;
     - a block is kept if its gain exceeds λ_block.
-  - `band_mask(frame, notches, shape, half_width) -> bool`: px within `half_width` of any frame side, fillet or notch
-    side.
-  - `decide(p_layout, p_edge, lum, params, bounds, maps=1) -> tuple[decide.Decision, Frame, list, list]`, in the
-    spike's measured order (finding 2):
-    1. `frame_search` from both starts (plain and notch-aware) on the layout's cost field; the lower joint objective
-       wins;
-    2. blocks, then notches, on the layout's cost field;
-    3. if `p_edge` is not None: `p = where(band_mask, p_edge, p_layout)`. On the cost field of `p`, re-fit the
-       rectangle within ±0.5° and ± the band, then sides, tilt, bow, fillets and notch sides;
+  - `decide(p, lum, params, bounds, maps=1) -> tuple[decide.Decision, Frame, list, list]`, in the spike's measured
+    order (finding 2), all on the layout's cost field:
+    1. `frame_search` from both starts (plain and notch-aware); the lower joint objective wins;
+    2. blocks, then notches;
+    3. the rectangle re-fitted within ±0.5° and ±32 px, then sides, tilt, bow and fillets, with notch and block px
+       zeroed;
     4. blocks re-scored in the final kept region;
     5. `Decision(outside, removed, filled_ink=0.0, dropped_ink, removed_ink)`.
 
@@ -315,10 +342,6 @@ def test_blocks_are_bounded_by_the_labels():
     # a p2 blob on blank paper 5x the largest labelled block: the fitted ellipse is no larger than bounds.ellipse_max
     ...
 def test_map_shaped_false_block_is_refused(): ...         # an L-shaped p2 patch over map ink: no shape gains
-def test_band_uses_the_edge_chances_only_near_lines():
-    # p_edge says "delete" for a big block of map ink far from any line: not deleted; p_edge moves a side 5 px
-    # inward within the band: moved
-    ...
 def test_decision_is_one_region_with_only_block_holes(): ...
 def test_frameless_page_only_loses_its_blocks(): ...
 def test_side_ink_left_ranks_a_missed_rule(): ...
@@ -328,7 +351,7 @@ def test_side_ink_left_ranks_a_missed_rule(): ...
 - [ ] **Step 3: Implement** by porting `kadane`, `best_notch`, `greedy_notches`, `_rect_on`, `_ellipse_on`,
   `block_shapes`, `accept_blocks` and `pipeline`.
 - [ ] **Step 4: Run the full suite.** Expected: PASS.
-- [ ] **Step 5: Commit** `frame: ruled notches, bounded block shapes, edge chances within a band of the fitted lines`.
+- [ ] **Step 5: Commit** `frame: ruled notches, bounded block shapes, the full shape decision`.
 
 ---
 
@@ -339,45 +362,38 @@ def test_side_ink_left_ranks_a_missed_rule(): ...
 - Test: `pipeline/tests/test_frame_run.py`, `test_frame_scores.py`, `test_cli.py`
 
 **Interfaces:**
-- Consumes: Tasks 2–5; the existing `learn.train`, `model.prob`, `calibrate.*`, `decide.outline`, `write_outputs`.
+- Consumes: Tasks 2–5; the existing `calibrate.*`, `decide.outline`, `write_outputs`.
+- Deletes: `frame/model.py`, `frame/learn.py`, `frame/folds.py`, their tests, the `small_model` fixture, and the old
+  fold logic in `run.py` (the full-resolution network is out of the design). `nets/unet.py` stays (PR #70 uses it).
 - Produces, in `scores.py`: `SPLIT_PX = 100` (a reporting split only). `sheet_scores` gains `cost_layout` and
   `cost_edge`: the cost on ink further than / within `SPLIT_PX` of any class change in the label.
 - Produces, in `run.py` (replacing the fold logic where it differs):
-  - `EDGE_SEEDS = (0,)` (amendment 3: the edge net is read only inside the band).
   - `GRID = {"lam_notch": (0, 1e3, 1e4, 1e5), "beta": (0, 1, 3, 10), "lam_block": (0, 1e3, 1e4)}`: the search grid
     from the spike (computational).
-  - `held_out(labelled, recipe, device, out) -> dict`:
+  - `held_out(labelled, device, out) -> dict`:
     1. `layout.extract_all` over every map page;
-    2. `layout.leave_one_out`, giving each sheet's layout logits per seed. One temperature T_layout is fitted on
-       samples of them (ink-weighted, as `calibrate.sample`);
-    3. the 4 folds of the edge network (`learn.train`, seed 0, the recipe's steps, snapshots as before), giving
-       held-out edge logits and T_edge;
-    4. `band` = the largest side-position error of the layout-only decision against the labels over the 21 sheets ×
-       1.5, at the grid's median parameters. Recorded;
-    5. `Params` are chosen by minimum pooled realised cost over `GRID` on the 21 held-out sheets (the chances are
+    2. `layout.leave_one_out`, giving each sheet's patch logits per seed. Upsample each with `layout.page_logits`,
+       then `layout.combine`. One temperature is fitted on ink-weighted samples of them (`calibrate.sample`);
+    3. `Params` are chosen by minimum pooled realised cost over `GRID` on the 21 held-out sheets (the chances are
        cached in memory per sheet);
-    6. per sheet, the scores of three decisions: the per-pixel cut on the layout chances, the shape on layout only,
-       and the combined shape; plus pooled means with sheet-bootstrap intervals, paired differences against
-       `BASELINE`, and `side_ink_left`;
-    7. everything goes to `folds.json` (`params`, `band`, `temperature_layout`, `temperature_edge`, `sheets`,
-       `pooled`, `baseline`).
-  - `train_final(labelled, recipe, device, out, held: dict) -> None`: `HEAD_SEEDS` heads on all labelled sheets, and
-    the edge net on all labelled sheets (seed 0). Writes `model/` (heads, edge net, `reducer.npz` reference,
-    `model.json` with params, band, temperatures and the block bounds).
-  - `predict_all(device, out) -> None`: for every unlabelled map page, the layout chances, the edge chances, the
-    decision and `write_outputs`. Writes `pages.json`, ranked by `side_ink_left` (highest first) and by dropped ink.
+    4. per sheet, the scores of two decisions: the per-pixel cut on the layout chances (`decide.decide`) and the
+       shape decision; plus the share of each class's ink left in or cut, pooled means with sheet-bootstrap
+       intervals, paired differences against `BASELINE`, and `side_ink_left`;
+    5. everything goes to `folds.json` (`params`, `temperature`, `sheets`, `pooled`, `baseline`).
+  - `train_final(labelled, device, out, held: dict) -> None`: `HEAD_SEEDS` heads on all labelled sheets. Writes
+    `model/` (heads, `reducer.npz` reference, `model.json` with params, temperature and the block bounds).
+  - `predict_all(device, out) -> None`: for every unlabelled map page, the layout chances, the decision and
+    `write_outputs`. Writes `pages.json`, ranked by `side_ink_left` (highest first) and by dropped ink.
     It checks the free disk first, and refuses below 20 GB with a clear message (a safety margin, computational).
 - `cli.py`: `sfzmaps frame [--held-out | --predict-only]` with the same guards as now.
 - `look.py`: the fitted frame, notches and blocks are drawn as straight outlines from `outline.json`. The close-ups
   list adds 1948/2 and 1948/9's blank strips.
 
-- [ ] **Step 1: Write the failing tests** (synthetic pages; stub `learn.train` and `layout.load_backbone` as the
-  current run tests do):
+- [ ] **Step 1: Write the failing tests** (synthetic pages; stub `layout.load_backbone` with the tiny stand-in):
 
 ```python
 def test_layout_chances_are_held_out(fake_world): ...          # each sheet's head never trained on it
 def test_params_minimise_the_pooled_cost(fake_world): ...       # a rigged grid point wins
-def test_band_is_recorded_and_used(fake_world): ...
 def test_scores_split_layout_and_edge(): ...                    # ink 150 px from the outline -> layout; 20 px -> edge
 def test_predict_refuses_a_full_disk(monkeypatch, fake_world): ...
 def test_cli_frame_needs_the_held_out_run_first(...): ...
@@ -386,18 +402,18 @@ def test_cli_frame_needs_the_held_out_run_first(...): ...
 - [ ] **Step 2: Run; expect failures.**
 - [ ] **Step 3: Implement.** Delete the code and tests of the old per-pixel fold path that nothing uses any more.
 - [ ] **Step 4: Run the full suite.** Expected: PASS.
-- [ ] **Step 5: Commit** `frame: combined run (leave-one-out layout, edge folds, fitted shape numbers, every page)`.
+- [ ] **Step 5: Commit** `frame: the run on the pretrained layout (leave-one-out, fitted shape numbers, every page)`.
 
 ---
 
 ### Task 7: Held-out run (controller)
 
-- [ ] **Step 1:** `uv run sfzmaps frame --held-out` on mps. Log the time of each stage (features, heads, edge folds,
-  grid).
+- [ ] **Step 1:** `uv run sfzmaps frame --held-out` on mps. Log the time of each stage (features, heads, grid).
 - [ ] **Step 2:** Report to the owner, numbers with their 90% sheet-bootstrap intervals:
-  - pooled cost and its layout/edge split for the three decisions and the old region baseline;
-  - the fitted params and band;
-  - both temperatures and their reliability near ¼;
+  - the share of frame/legend ink left in and of map ink cut, and the cost with its layout/edge split, for both
+    decisions and the old region baseline;
+  - the fitted params;
+  - the temperature and its reliability near ¼;
   - the five worst sheets with pictures;
   - the top of the side-ink ranking.
 

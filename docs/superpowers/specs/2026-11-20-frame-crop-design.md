@@ -604,3 +604,25 @@ experts, or what?"). Findings, each measured here or cited:
 - **The edge network still trains for about 9 minutes per fold.** → One seed. It is only read inside the band, where
   the decision is a few px either way. If the two models disagree on framed-or-not anywhere, the layout wins by
   construction.
+
+### Amendment 3, after the combined test (owner, 2026-11-21: "Sgtm")
+
+On fold 0's six held-out sheets, as shares of each class's ink:
+
+| decision | frame / legend ink left in | map ink cut |
+|---|---:|---:|
+| from-scratch region network, per-pixel cut | 3.8% | 1.00% |
+| pretrained layout, per-pixel cut | 2.0% | 0.12% |
+| pretrained layout + straight-line shape | 1.1% | 0.14% |
+| … + the full-resolution network within a band of the lines | 3.9% | 0.07% |
+| pretrained layout + shape + block shapes bounded by the labels | **1.0%** | **0.14%** |
+
+- **The full-resolution network is dropped** (part 2 of the design above). It calls the 1921 Lake Merced sheet's top
+  frame bar "map", and inside the band its call overrules the correct layout: that sheet alone goes from 38k to 202k
+  cost. It helps by a few hundred ink on clean modern rules. `frame/model.py` and `frame/learn.py` go; no long GPU
+  training remains.
+- **A side with no frame is the page's own edge**, not a rotated line. The fitted frame's angle is shared by framed
+  sides only. On partly framed pages the rotated page-edge sides clipped corners (1948/8 +2.56°, 1948/9 −2.10°).
+- **The remaining cost is about 90% at the edge:** the layout sees 50-px patches. Next test: slide each fitted line,
+  within one patch, to where it lies on paper (label rule 1), with no second network.
+- **Open from the test:** the bottom row of blocks cut on 1948/4, and a notch across the map on 1948/3.
