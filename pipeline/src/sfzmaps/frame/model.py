@@ -5,11 +5,20 @@ deleted wherever it sits).  `combine` turns logits into the three chances, a sof
 
 One network, one pass, no coarse page pass and no tiles' seams: its reach (about 2,000 px each way) is the context
 a pixel needs.  GroupNorm, not batch norm, so the output does not depend on what else is in the batch (one page per
-step).  FOLD, WIDTH, LEVELS and CLASSES are read when called, never bound at import, so tests can shrink the net.
+step).  FOLD, WIDTH, LEVELS, CLASSES and BUCKET are read when called, never bound at import, so tests can shrink the
+net.
+
+A page is read padded with paper at the bottom and right up to `padded_shape`: sides that are multiples of `BUCKET` px
+(and of `multiple()`, the net's own), the same in training and prediction.  The bucket is computational: the Mac's
+GPU builds its kernels for each new input shape, and every training sample had a new one (a random cut and scale).
+Measured on the 21 labelled pages, "fold 16" net (issue #71, `scripts/spikes/issue71_shape_cost.py`): a step was
+132 ms on 40 new shapes and 89 ms when the same shapes came again; padded up to multiples of 1,024 px the 40 samples
+had 14 shapes and 15.6% more px, and a step was 96 ms once the shapes had been seen.
 """
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 
 import numpy as np
@@ -18,11 +27,13 @@ from torch import nn
 
 from sfzmaps.nets.unet import Folded, folded_multiple
 
-FOLD = 8     # pixels folded into channels (the spike's network)
-WIDTH = 32   # channels of the first level (the spike's network)
-LEVELS = 6   # U-Net levels: with FOLD 8 a reach of 2,000 px (spec part 3)
+# "fold 16", chosen at the first look (issue #71 ledger R11: held-out loss tied the plan's net, 1.7x faster):
+FOLD = 16    # pixels folded into channels
+WIDTH = 32   # channels of the first level
+LEVELS = 5   # U-Net levels: with FOLD 16 a reach of 1,952 px (spec part 3: about 2,000)
 PAPER = 1.0  # luminance of the padding: plain paper
 CLASSES = 3  # 0 map, 1 outside the frame, 2 removed block (spec amendment "removed blocks")
+BUCKET = 1024  # px: padded sides are multiples of this, so few shapes reach the GPU (computational; see the module)
 
 
 def new_net() -> Folded:
@@ -34,11 +45,16 @@ def multiple() -> int:
     return folded_multiple(FOLD, LEVELS)
 
 
+def padded_shape(h: int, w: int) -> tuple[int, int]:
+    """(H, W) a page of h x w px is read at: each side up to a multiple of both `BUCKET` and `multiple()`."""
+    m = math.lcm(multiple(), BUCKET)
+    return -(-h // m) * m, -(-w // m) * m
+
+
 def pad(lum: np.ndarray) -> np.ndarray:
-    """`lum` with paper added at the bottom and right up to multiples of `multiple()`."""
-    m = multiple()
+    """`lum` with paper added at the bottom and right up to `padded_shape`."""
     h, w = lum.shape
-    out = np.full((-(-h // m) * m, -(-w // m) * m), PAPER, np.float32)
+    out = np.full(padded_shape(h, w), PAPER, np.float32)
     out[:h, :w] = lum
     return out
 

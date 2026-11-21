@@ -10,10 +10,19 @@ def test_logits_have_a_plane_per_class_and_the_page_shape(small_model):      # 3
     assert z.shape == (model.CLASSES, 300, 457) == (3, 300, 457) and z.dtype == np.float32
 
 
-def test_pad_is_paper_and_a_multiple(small_model):
+def test_pad_is_paper_up_to_the_padded_shape(small_model):
     p = model.pad(np.zeros((5, 9), np.float32))
-    assert p.shape[0] % model.multiple() == 0 and p.shape[1] % model.multiple() == 0
+    assert p.shape == model.padded_shape(5, 9)
     assert (p[:5, :9] == 0).all() and (p[5:, :] == model.PAPER).all() and (p[:, 9:] == model.PAPER).all()
+
+
+def test_padded_shape_is_a_multiple_of_the_bucket_and_the_net(small_model, monkeypatch):
+    """Sides go up to multiples of both the shape bucket and the net's multiple (here 6 and 4: 12)."""
+    monkeypatch.setattr(model, "BUCKET", 6)
+    assert model.multiple() == 4
+    assert model.padded_shape(5, 13) == (12, 24)
+    assert model.padded_shape(12, 24) == (12, 24)
+    assert model.pad(np.zeros((25, 1), np.float32)).shape == (36, 12)
 
 
 def test_combine_is_a_tempered_softmax_mean():
@@ -46,4 +55,6 @@ def test_logits_restore_train_mode(small_model):
 
 
 def test_full_size_constants():
-    assert model.multiple() == 256
+    """The real net's sides are multiples of 256, which divides the bucket: pages are padded to multiples of 1,024."""
+    assert model.multiple() == 256 and model.BUCKET % model.multiple() == 0
+    assert model.padded_shape(1, 1025) == (1024, 2048)

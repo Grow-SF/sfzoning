@@ -1,4 +1,10 @@
+import dataclasses
+import threading
+import time
+
 import numpy as np
+import pytest
+import scipy.ndimage as ndi
 import torch
 
 from sfzmaps.frame import learn, model
@@ -36,18 +42,60 @@ def test_target_is_the_class_mask_turned_with_the_page():
     np.testing.assert_array_equal(t[0].numpy()[:70, :60], np.rot90(cls[:, ::-1], 1))
 
 
-def test_sample_is_apply_aug_of_lum_target_and_weight():
-    """make_sample moves the bytes before making the floats; the values are those of the plain order: `apply_aug` of
-    the luminance, the target and the weight, then the padding."""
+def test_sample_is_the_cpu_sides_bytes_moved():
+    """x is the photometric changes and the blur of the 8-bit luminance (made on the cpu), the weight comes from the
+    luminance before them, the target is the classes; all three turned and flipped alike, then padded."""
     rng = np.random.default_rng(3)
-    lum = rng.integers(0, 256, (37, 53)).astype(np.float32) / np.float32(255)
+    lum8 = rng.integers(0, 256, (37, 53)).astype(np.uint8)
     cls = rng.integers(0, 3, (37, 53)).astype(np.uint8)
     aug = learn.Aug(3, True, 1.3, 0.9, 0.05, 1.2)
+    lum = lum8.astype(np.float32) / np.float32(255)
     x, t, w = learn.make_sample(learn.Page(("s", "r"), lum, cls), (0, 0, 0, 0), 1.0, aug, 0.1, "cpu")
-    lum_t = torch.from_numpy(lum)
-    want = learn.apply_aug(aug, lum_t, torch.from_numpy(cls).long(), 0.1 + (1.0 - lum_t))
+    changed = torch.from_numpy(learn._photometric(aug, lum8)).float() / 255.0
+    assert not torch.equal(changed, torch.from_numpy(lum))
+    want = (changed, torch.from_numpy(cls).long(), 0.1 + (1.0 - torch.from_numpy(lum8).float() / 255.0))
     for got, expect in zip((x[0], t, w), want):
-        assert torch.equal(got[0, :53, :37], expect)
+        assert torch.equal(got[0, :53, :37], learn._move(aug, expect))
+
+
+def _float_tone(aug: learn.Aug, v: np.ndarray) -> np.ndarray:
+    """The photometric changes as the device made them before Task 5c: float32 gamma, contrast about 0.5, brightness,
+    kept within [0, 1]."""
+    v = np.clip(v.astype(np.float32), 0.0, 1.0) ** np.float32(aug.gamma)
+    return np.clip((v - 0.5) * np.float32(aug.contrast) + 0.5 + np.float32(aug.brightness), 0.0, 1.0)
+
+
+def test_photometric_table_is_the_float_formula_rounded_to_a_level():
+    rng = np.random.default_rng(0)
+    augs = [learn.Aug(0, False, 1.5, 1.2, 0.1, 0.0), learn.Aug(0, False, 1 / 1.5, 0.8, -0.1, 0.0),
+            *(dataclasses.replace(learn.draw_aug(rng), sigma=0.0) for _ in range(4))]
+    levels = np.arange(256, dtype=np.uint8)[None]
+    for aug in augs:
+        got = learn._photometric(aug, levels)
+        assert got.dtype == np.uint8 and got.shape == levels.shape
+        assert np.abs(got / 255.0 - _float_tone(aug, levels / 255.0)).max() <= 0.5 / 255 + 1e-6
+    assert np.array_equal(learn._photometric(learn.Aug(0, False, 1.0, 1.0, 0.0, 0.0), levels), levels)
+
+
+@pytest.mark.parametrize("kind", ["uniform", "binary"])
+def test_blur_is_scipys_gaussian_rounded_to_a_level(kind):
+    """The blur of the 8-bit luminance is scipy's `gaussian_filter` (edge px repeated, `BLUR_TRUNCATE` sigmas each
+    way) rounded to the nearest level, on noise and on a 1-bit page alike; sigma 0 is no blur."""
+    rng = np.random.default_rng(1)
+    img = (rng.integers(0, 256, (41, 67)) if kind == "uniform" else rng.integers(0, 2, (41, 67)) * 255).astype(np.uint8)
+    for sigma in (0.1, 0.3, 0.7, 1.13, 1.5):
+        got = learn._photometric(learn.Aug(0, False, 1.0, 1.0, 0.0, sigma), img)
+        want = ndi.gaussian_filter(img / 255.0, sigma, mode="nearest", truncate=learn.BLUR_TRUNCATE)
+        assert got.dtype == np.uint8 and np.abs(got / 255.0 - want).max() <= 0.5 / 255 + 1e-6, sigma
+    assert np.array_equal(learn._photometric(learn.Aug(0, False, 1.0, 1.0, 0.0, 0.0), img), img)
+
+
+def test_sample_is_padded_to_the_padded_shape(small_model, monkeypatch):
+    """Training pads as prediction does (`model.padded_shape`): a bucket of 6 and the small net's 4 give 12s."""
+    monkeypatch.setattr(model, "BUCKET", 6)
+    pg = learn.Page(("s", "h"), np.full((60, 70), 0.5, np.float32), np.zeros((60, 70), np.uint8))
+    x, t, w = learn.make_sample(pg, (3, 0, 2, 5), 1.0, learn.Aug(1, False, 1, 1, 0, 0), 0.1, "cpu")
+    assert x.shape[2:] == model.padded_shape(63, 57) == (72, 60) == t.shape[1:] == w.shape[1:]
 
 
 def test_cut_and_scale_shape_the_sample():
@@ -107,10 +155,42 @@ def _framed_pages(n: int, seed: int) -> list:
 
 def test_same_seed_same_weights_with_or_without_prefetch(small_model):
     pages = _framed_pages(3, 0)
-    a, _ = learn.train(pages, learn.Recipe(steps=3, check_every=3, prefetch=True), "cpu")
-    b, _ = learn.train(pages, learn.Recipe(steps=3, check_every=3, prefetch=False), "cpu")
+    a, _ = learn.train(pages, learn.Recipe(steps=6, check_every=6, prefetch=True), "cpu")
+    b, _ = learn.train(pages, learn.Recipe(steps=6, check_every=6, prefetch=False), "cpu")
     sa, sb = a.state_dict(), b.state_dict()
     assert sa.keys() == sb.keys() and all(torch.equal(sa[k], sb[k]) for k in sa)
+
+
+@pytest.mark.parametrize("prefetch", [True, False])
+def test_batches_come_back_in_draw_order(prefetch):
+    """One thread calls `draw` in order; its jobs may finish out of order on the drawing threads, the results come
+    back in the order drawn."""
+    drawn, threads = [], set()
+
+    def work(i: int) -> int:
+        time.sleep(0.02 if i % 3 == 0 else 0.0)        # every third job is the slowest
+        return i
+
+    def draw():
+        threads.add(threading.get_ident())
+        drawn.append(len(drawn))
+        return work, (drawn[-1],)
+
+    with learn._batches(draw, 10, prefetch) as batches:
+        assert list(batches) == list(range(10))
+    assert drawn == list(range(10)) and len(threads) == 1
+
+
+def test_batches_raise_a_jobs_error():
+    def work(i: int) -> int:
+        if i == 2:
+            raise ValueError("job 2")
+        return i
+
+    count = iter(range(10))
+    with pytest.raises(ValueError, match="job 2"), learn._batches(lambda: (work, (next(count),)), 10, True) as batches:
+        assert [next(batches), next(batches)] == [0, 1]
+        next(batches)
 
 
 def test_snapshots_and_curves(small_model, tmp_path):

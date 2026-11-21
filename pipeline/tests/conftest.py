@@ -91,8 +91,10 @@ def _no_vision_api(request, monkeypatch, tmp_path):
 
 @pytest.fixture
 def small_model(monkeypatch):
-    """The frame finder's network shrunk (`frame.model` FOLD, LEVELS, WIDTH) so tests run on cpu in seconds."""
+    """The frame finder's network shrunk (`frame.model` FOLD, LEVELS, WIDTH) so tests run on cpu in seconds, and its
+    shape buckets (`model.BUCKET`) with it, so small pages are not padded to 1,024 px."""
     from sfzmaps.frame import model
     monkeypatch.setattr(model, "FOLD", 2)
     monkeypatch.setattr(model, "LEVELS", 2)
     monkeypatch.setattr(model, "WIDTH", 4)
+    monkeypatch.setattr(model, "BUCKET", 8)

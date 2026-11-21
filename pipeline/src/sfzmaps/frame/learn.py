@@ -1,14 +1,15 @@
 """Training the frame finder's one network on whole pages (issue #71, spec parts 3-6).
 
 Each step is one whole page at full resolution, read exactly as prediction reads a page (`model.pad`: paper at the
-bottom and right up to multiples of `model.multiple()`), so there is no window edge that training sees and
-prediction does not.  The step:
+bottom and right up to `model.padded_shape`, multiples of `model.BUCKET` px), so there is no window edge that training
+sees and prediction does not.  The step:
 
 1. draws a labelled page uniformly, then its cut, its scale and its augmentation, in that order, from one generator;
 2. cuts the page: each side by a random 0 .. that side's labelled frame depth (`side_depths`, `draw_cut`), so at the
    extreme the frame is gone and map ink runs to the page edge (a frameless side), the label cut alike;
 3. scales the cut page by a factor in 1 +- `SCALE_JITTER` (bilinear for the luminance, nearest for the label);
-4. turns and flips it, changes its brightness, contrast and gamma, and blurs it now and then (`apply_aug`);
+4. changes its brightness, contrast and gamma and blurs it now and then (`_photometric`), then turns and flips it,
+   the label alike (`_move`; the blur is the same each way, so it commutes with the turns and flips);
 5. takes one Adam step on the weighted multiclass log-loss (`_loss`, cross-entropy) of the label's class per px: 0
    map, 1 outside the frame, 2 removed block (`data.class_mask`, `model.CLASSES`).  Multiclass log-loss is a strictly
    proper scoring rule, as the two-class one was, so the chances stay calibrated (spec amendment "removed blocks").
@@ -24,21 +25,27 @@ run of s steps, so the held-out loss at a check is the score of "train s steps",
 held-out loss (`held_loss`) when held pages are given, and saves a snapshot when asked.  The held-out loss is a log
 and a curve only: it changes no weight.
 
-Where the work runs (issue #71's speed measurement: a device-side bilinear rescale of a whole page is 63 ms of a
-213 ms step): the cpu draws every random value, cuts the page and scales it, from the page's luminance and label kept
-as 8-bit Pillow images (`_Source`; the pages are 8-bit scans, so the luminance loses nothing) and handed over as
-uint8 arrays (`_cut_and_scale`); the device does the turns and flips (of those bytes, a sixth of the time of
-moving float32 arrays), the photometric changes, the blur and the padding (`_on_device`).  With `Recipe.prefetch` a
-background thread (`_batches`) does the cpu side up to `PREFETCH` steps ahead while the device steps.
+Where the work runs (issue #71's speed measurements, "fold 16" net on mps: a device-side bilinear rescale of a whole
+page was 63 ms of a 213 ms step; later the device side was 49 ms of every step, in series with the net, and the cpu
+side 75 ms on one thread): the cpu does everything but the net's own step, from the page's luminance and label kept
+as 8-bit Pillow images (`_Source`; the pages are 8-bit scans, so the luminance loses nothing).  It cuts the page and
+scales it (`_cut_and_scale`), then changes the 8-bit luminance's brightness, contrast and gamma by a 256-entry lookup
+table and blurs it (`_photometric`, `_cpu_side`), each result rounded to the nearest of the 256 levels.  It hands the
+device three uint8 planes: the changed luminance, the luminance before the changes (for the weight) and the classes.
+The device turns and flips those bytes, makes the floats, the target and the weight and pads them (`_on_device`).
+With `Recipe.prefetch` a background thread (`_batches`) draws up to `PREFETCH` steps ahead and hands each step's cpu
+work to `DRAW_THREADS` threads while the device steps.
 
 Deterministic: the trainer seeds torch and one numpy generator with `recipe.seed`, makes torch use deterministic
-algorithms and pins its cpu threads to `THREADS` (`_settle`); every random value comes from that generator, drawn in
-a fixed order by one thread (the prefetching one, or the training's own), so the weights are the same with or
-without prefetch, and with or without held pages.  On mps the caller holds the GPU's exclusive turn
-(`sfzmaps.gpu.gpu_turn`) for the whole run.
+algorithms and pins its cpu threads to `THREADS` and OpenCV's to one per drawing thread (`_settle`); every random
+value comes from that generator, drawn in a fixed order by one thread (the prefetching one, or the training's own)
+before the work, which draws nothing, is handed out, and the results come back in the order drawn.  So the weights
+are the same with or without prefetch, and with or without held pages.  On mps the caller holds the GPU's exclusive
+turn (`sfzmaps.gpu.gpu_turn`) for the whole run.
 """
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import dataclasses
 import logging
@@ -49,6 +56,7 @@ import time
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path
 
+import cv2
 import numpy as np
 import torch
 import torch.nn as nn
@@ -70,7 +78,8 @@ CONTRAST = 0.2          # ... stretched about 0.5 by a factor in 1 +- this
 GAMMA = 1.5             # ... and raised to a power between 1 / this and this
 BLUR_TRUNCATE = 4.0     # the blur's kernel reaches this many sigmas each way (scipy's gaussian_filter default)
 WEIGHT_EPS = 1e-12      # the least the loss divides by, so a batch of no weight gives 0 (numerical; decides nothing)
-PREFETCH = 2            # steps drawn ahead with `Recipe.prefetch`
+PREFETCH = 4            # steps drawn ahead with `Recipe.prefetch` (computational)
+DRAW_THREADS = 3        # threads that do the drawn steps' cpu work (computational: Pillow and OpenCV let go of the GIL)
 
 HELD_EPS = 1e-6         # the held-out chance of the labelled class is clipped to at least this (numerical)
 
@@ -79,8 +88,8 @@ HELD_EPS = 1e-6         # the held-out chance of the labelled class is clipped t
 class Recipe:
     """`steps` Adam steps at the constant rate `lr`, checked every `check_every` (1,000 gives the spec's four
     candidate step counts, 1,000 to 4,000); `paper_weight` the weight of a px of plain paper (ink adds 1 - lum);
-    `prefetch` does the next steps' cpu side in a background thread: the same draws, so it never changes the
-    weights."""
+    `prefetch` draws the next steps in a background thread and does their cpu side on `DRAW_THREADS` threads: the
+    same draws, so it never changes the weights."""
     steps: int = 4000
     check_every: int = 1000
     lr: float = 1e-3
@@ -98,7 +107,7 @@ class Page:
     cls: np.ndarray | None
 
 
-# --- augmentation: drawn on the cpu, applied on the device (from `frame/train.py` at e580a00, unchanged) -------------
+# --- augmentation: drawn and mostly applied on the cpu, the turns and flips on the device ---------------------------
 
 @dataclasses.dataclass(frozen=True)
 class Aug:
@@ -125,50 +134,50 @@ def draw_aug(rng: np.random.Generator, scale: float = 1.0) -> Aug:
     return Aug(turns, flip, gamma, contrast, brightness, sigma if blurred else 0.0)
 
 
-def _blur(a: torch.Tensor, sigma: float) -> torch.Tensor:
-    """A Gaussian blur of a (h, w) tensor, as `scipy.ndimage.gaussian_filter(a, sigma, mode="nearest")`: a separable
-    kernel `BLUR_TRUNCATE` sigmas each way, the edge px repeated beyond the edge."""
-    radius = int(BLUR_TRUNCATE * sigma + 0.5)
-    if radius == 0:
-        return a
-    x = torch.arange(-radius, radius + 1, dtype=torch.float64)
-    k = torch.exp(-0.5 * (x / sigma) ** 2)
-    k = (k / k.sum()).to(device=a.device, dtype=a.dtype)
-    t = a[None, None]
-    t = F.conv2d(F.pad(t, (radius, radius, 0, 0), mode="replicate"), k.view(1, 1, 1, -1))
-    t = F.conv2d(F.pad(t, (0, 0, radius, radius), mode="replicate"), k.view(1, 1, -1, 1))
-    return t[0, 0]
-
-
-def apply_aug(aug: Aug, lum: torch.Tensor, *others: torch.Tensor) -> tuple[torch.Tensor, ...]:
-    """`aug` applied to tensors on any device, the luminance (h, w) and the others (..., h, w) (stacked planes move
-    together): the same flip and turns of every plane (exact: a permutation of the px, so a weight of 0 stays 0),
-    then the gamma, contrast and brightness changes and the blur of the luminance alone, kept within [0, 1].  The
-    luminance comes back float32; the others keep their dtype."""
-    return (_photometric(aug, _move(aug, lum)).contiguous(), *(_move(aug, a).contiguous() for a in others))
-
-
 def _move(aug: Aug, a: torch.Tensor) -> torch.Tensor:
     """`aug`'s flip, then its quarter turns, of a (..., h, w) tensor (a view where torch can)."""
     return torch.rot90(torch.flip(a, (-1,)) if aug.flip else a, aug.turns, (-2, -1))
 
 
-def _photometric(aug: Aug, lum: torch.Tensor) -> torch.Tensor:
-    """`aug`'s gamma, contrast and brightness changes and its blur, of a (h, w) luminance, float32 within [0, 1]."""
-    lum = lum.float().clamp(0.0, 1.0) ** aug.gamma
-    lum = ((lum - 0.5) * aug.contrast + 0.5 + aug.brightness).clamp(0.0, 1.0)
-    if aug.sigma > 0:
-        lum = _blur(lum, aug.sigma)
-    return lum
+def _table(aug: Aug) -> np.ndarray:
+    """`aug`'s gamma, contrast and brightness changes as a 256-entry uint8 lookup table: level k is k / 255 raised to
+    the gamma, stretched by the contrast about 0.5, shifted by the brightness, kept within [0, 1] and rounded to the
+    nearest level."""
+    v = (np.arange(256, dtype=np.float64) / 255.0) ** aug.gamma
+    v = np.clip((v - 0.5) * aug.contrast + 0.5 + aug.brightness, 0.0, 1.0)
+    return np.round(v * 255.0).astype(np.uint8)
 
 
-# --- shared pieces (from `frame/train.py` at e580a00, unchanged) -----------------------------------------------------
+def _blur(lum: np.ndarray, sigma: float) -> np.ndarray:
+    """A Gaussian blur of a (h, w) uint8 array, as `scipy.ndimage.gaussian_filter(lum, sigma, mode="nearest")` rounded
+    to the nearest level: a separable kernel `BLUR_TRUNCATE` sigmas each way, the edge px repeated beyond the edge.
+    OpenCV's `sepFilter2D` with scipy's kernel, not its `GaussianBlur`, whose 8-bit path rounds the kernel to fixed
+    point (measured up to 2.9 levels off scipy on 1-bit noise; this is within half a level, at the same speed)."""
+    radius = int(BLUR_TRUNCATE * sigma + 0.5)
+    if radius == 0:
+        return lum
+    x = np.arange(-radius, radius + 1, dtype=np.float64)
+    k = np.exp(-0.5 * (x / sigma) ** 2)
+    k /= k.sum()
+    return cv2.sepFilter2D(lum, -1, k, k, borderType=cv2.BORDER_REPLICATE)
+
+
+def _photometric(aug: Aug, lum: np.ndarray) -> np.ndarray:
+    """`aug`'s gamma, contrast and brightness changes (`_table`), then its blur (`_blur`; sigma 0: none), of a (h, w)
+    uint8 luminance; uint8."""
+    out = cv2.LUT(lum, _table(aug))
+    return _blur(out, aug.sigma) if aug.sigma > 0 else out
+
+
+# --- shared pieces (from `frame/train.py` at e580a00; `_batches` now hands its jobs to `DRAW_THREADS` threads) -------
 
 def _settle(seed: int) -> np.random.Generator:
-    """Seed torch, make it deterministic and pin its threads; the one numpy generator every draw comes from."""
+    """Seed torch, make it deterministic and pin its threads, and OpenCV's to one (each drawing thread is one); the one
+    numpy generator every draw comes from."""
     torch.manual_seed(seed)
     torch.use_deterministic_algorithms(True)
     torch.set_num_threads(THREADS)
+    cv2.setNumThreads(1)
     return np.random.default_rng(seed)
 
 
@@ -180,15 +189,22 @@ def _loss(logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> t
     return (ce * weight).sum() / weight.sum().clamp(min=WEIGHT_EPS)
 
 
+Job = tuple[Callable[..., object], tuple]     # (work, args): work that draws nothing, and what it is called with
+
+
 @contextlib.contextmanager
-def _batches(draw: Callable[[], object], n: int, prefetch: bool) -> Iterator[Iterator[object]]:
-    """An iterator over `n` results of `draw()`, in order.  With `prefetch`, a background thread calls `draw` up to
-    `PREFETCH` ahead (and alone calls it meanwhile, so the same draws come in the same order).  An error in that
-    thread is raised where the draw is asked for; leaving the block, by an error or not, stops and joins it."""
+def _batches(draw: Callable[[], Job], n: int, prefetch: bool) -> Iterator[Iterator[object]]:
+    """An iterator over `n` results, in order: each `draw()` gives a job `(work, args)`, its result `work(*args)`.
+    One thread calls `draw`, in order: the training's own without `prefetch`, which then does each job as it asks for
+    it; with `prefetch` a background thread, up to `PREFETCH` ahead, which hands the jobs to `DRAW_THREADS` threads
+    whose results come back in the order drawn.  So the same draws come in the same order either way.  An error in
+    `draw` or a job is raised where its result is asked for; leaving the block, by an error or not, stops and joins the
+    threads (jobs not yet started are dropped)."""
     if not prefetch:
-        yield (draw() for _ in range(n))
+        yield (work(*args) for work, args in (draw() for _ in range(n)))
         return
     ready, stop = queue.Queue(PREFETCH), threading.Event()
+    pool = concurrent.futures.ThreadPoolExecutor(DRAW_THREADS, thread_name_prefix="frame-cut")
 
     def put(item) -> bool:
         while not stop.is_set():
@@ -202,7 +218,8 @@ def _batches(draw: Callable[[], object], n: int, prefetch: bool) -> Iterator[Ite
     def produce():
         try:
             for _ in range(n):
-                if not put(draw()):
+                work, args = draw()
+                if not put(pool.submit(work, *args)):
                     return
         except BaseException as e:      # noqa: BLE001 - handed to the training's thread, raised there
             put(e)
@@ -212,7 +229,7 @@ def _batches(draw: Callable[[], object], n: int, prefetch: bool) -> Iterator[Ite
             item = ready.get()
             if isinstance(item, BaseException):
                 raise item
-            yield item
+            yield item.result()
 
     worker = threading.Thread(target=produce, name="frame-prefetch", daemon=True)
     worker.start()
@@ -221,6 +238,7 @@ def _batches(draw: Callable[[], object], n: int, prefetch: bool) -> Iterator[Ite
     finally:
         stop.set()
         worker.join()
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 # --- the cut: how deep each side's frame is --------------------------------------------------------------------------
@@ -282,29 +300,31 @@ def _cut_and_scale(src: _Source, cut: Cut, scale: float) -> tuple[np.ndarray, np
     return np.array(lum), np.array(cls)
 
 
+def _cpu_side(src: _Source, cut: Cut, scale: float, aug: Aug) -> tuple[np.ndarray, Aug]:
+    """(planes, aug): `src` cut by `cut` and scaled by `scale` (`_cut_and_scale`), as (3, h, w) uint8 planes: the
+    luminance after `aug`'s photometric changes and blur (`_photometric`), the luminance before them (the weight's)
+    and the classes.  Draws nothing; `aug` comes back with the planes for the device's turns and flips."""
+    lum, cls = _cut_and_scale(src, cut, scale)
+    return np.stack((_photometric(aug, lum), lum, cls)), aug
+
+
 @torch.no_grad()
-def _on_device(lum: np.ndarray, cls: np.ndarray, aug: Aug, paper_weight: float,
+def _on_device(planes: np.ndarray, aug: Aug, paper_weight: float,
                device: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """(x, target, weight) on `device`, x (1, 1, H, W) and the target and the weight (1, H, W), from the cpu side's
-    uint8 arrays: `apply_aug(aug, lum, target, weight)` of the luminance, the target the classes as int64 indices and
-    the weight `paper_weight + (1 - lum)` (before the photometric changes), then padded at the bottom and right to
-    multiples of `model.multiple()`: paper in x, 1 (outside the frame) in the target, 0 in the weight.
-
-    Computed in a cheaper order with the same values: the flip and turns move the two uint8 arrays (6 ms on the
-    largest page, mps), and the target, the weight and the float luminance are made from the moved bytes, instead of
-    moving three larger arrays (38 ms for float32).  The target and the weight are functions of each px's own values
-    and the move only permutes px, so either order gives the same numbers."""
-    lum8, cls8 = (_move(aug, torch.from_numpy(a).to(device)).contiguous() for a in (lum, cls))
-    lum_t = lum8.float() / 255.0
-    weight = paper_weight + (1.0 - lum_t)
-    lum_t = _photometric(aug, lum_t)
-    h, w = lum_t.shape
-    m = model.multiple()
-    size = (1, -(-h // m) * m, -(-w // m) * m)
+    (3, h, w) uint8 planes (`_cpu_side`): moved together by `aug`'s flip and turns (`_move`, of the bytes: a sixth of
+    the time of moving float32 arrays), then x the changed luminance / 255, the target the classes as int64 indices
+    and the weight `paper_weight + (1 - lum)` of the luminance before the changes, padded at the bottom and right to
+    `model.padded_shape`: paper in x, 1 (outside the frame) in the target, 0 in the weight."""
+    moved = _move(aug, torch.from_numpy(planes).to(device)).contiguous()
+    _, h, w = moved.shape
+    size = (1, *model.padded_shape(h, w))
     x = torch.full((1, *size), model.PAPER, dtype=torch.float32, device=device)
     t = torch.ones(size, dtype=torch.int64, device=device)
     wt = torch.zeros(size, dtype=torch.float32, device=device)
-    x[0, 0, :h, :w], t[0, :h, :w], wt[0, :h, :w] = lum_t, cls8, weight
+    x[0, 0, :h, :w] = moved[0].float() / 255.0
+    wt[0, :h, :w] = paper_weight + (1.0 - moved[1].float() / 255.0)
+    t[0, :h, :w] = moved[2]
     return x, t, wt
 
 
@@ -312,7 +332,7 @@ def make_sample(page: Page, cut: Cut, scale: float, aug: Aug, paper_weight: floa
                 device: str) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """(x, target, weight), x (1, 1, H, W), the target (int64 class indices) and the weight (1, H, W): `page` cut by
     `cut`, scaled by `scale`, augmented by `aug` and padded, as a training step reads it (see the module)."""
-    return _on_device(*_cut_and_scale(_Source.of(page), cut, scale), aug, paper_weight, device)
+    return _on_device(*_cpu_side(_Source.of(page), cut, scale, aug), paper_weight, device)
 
 
 # --- held-out loss ---------------------------------------------------------------------------------------------------
@@ -359,20 +379,20 @@ def train(pages: Sequence[Page], recipe: Recipe, device: str, held: Sequence[Pag
     if snapshots is not None:
         snapshots.mkdir(parents=True, exist_ok=True)
 
-    def draw() -> tuple[np.ndarray, np.ndarray, Aug]:
+    def draw() -> Job:
         k = int(rng.integers(len(sources)))
         cut = draw_cut(rng, depths[k])
         scale = 1.0 + float(rng.uniform(-SCALE_JITTER, SCALE_JITTER))
         aug = draw_aug(rng)
-        return (*_cut_and_scale(sources[k], cut, scale), aug)
+        return _cpu_side, (sources[k], cut, scale, aug)
 
     prefix = f"{label} " if label else ""
     train_curve, held_curve = [], []
     total, since = torch.zeros((), device=device), 0
     t0 = time.perf_counter()
     with _batches(draw, recipe.steps, recipe.prefetch) as batches:
-        for step, (lum, cls, aug) in enumerate(batches, 1):
-            x, t, w = _on_device(lum, cls, aug, recipe.paper_weight, device)
+        for step, (planes, aug) in enumerate(batches, 1):
+            x, t, w = _on_device(planes, aug, recipe.paper_weight, device)
             loss = _loss(net(x), t, w)
             opt.zero_grad(set_to_none=True)
             loss.backward()
