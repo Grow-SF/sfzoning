@@ -1,131 +1,68 @@
 import numpy as np
 import pytest
 
-from sfzmaps.frame.data import map_mask
-from sfzmaps.frame.scores import BAND_PX, UNSURE_PX, bands, edge_distance, log_loss, sheet_scores, unsure
+from sfzmaps.frame import scores
 
 
-def _square(n=100, lo=30, hi=70):
-    mask = np.zeros((n, n), np.uint8)
-    mask[lo:hi, lo:hi] = 1
-    return mask
+def test_sheet_scores_counts_kept_and_cut_ink():
+    inside = np.zeros((10, 10), bool); inside[2:8, 2:8] = True
+    outside = ~inside; outside[2, 2:8] = True; outside[0, 0] = False      # cut a map row; keep one frame px
+    lum = np.zeros((10, 10), np.float32)
+    cls = np.where(inside, 0, 1).astype(np.uint8)
+    p = np.stack([1 - outside, outside, 0 * outside]).astype(float)
+    s = scores.sheet_scores(p, outside, cls, lum)
+    assert s["map_cut"] == 6 and s["frame_kept"] == 1 and s["cost"] == 3 * 1 + 6
 
 
-def test_unsure_px_is_the_label_precision():
-    assert UNSURE_PX == 8
+def test_removed_block_left_in_counts_as_frame_kept():
+    cls = np.zeros((4, 4), np.uint8); cls[0] = 2
+    p = np.stack([np.ones((4, 4)), 0 * np.ones((4, 4)), 0 * np.ones((4, 4))])
+    s = scores.sheet_scores(p, np.zeros((4, 4), bool), cls, np.zeros((4, 4)))
+    assert s["frame_kept"] == 4 and s["frame_kept_share"] == 1.0 and s["map_cut"] == 0
 
 
-def test_unsure_strip_is_the_map_side_within_unsure_px():
-    """Inside, the outline px is 1 px from it and px 8 is the last in the strip; the frame side (where the printed rule
-    lies: the labels are drawn inside it) is never in the strip (ruling R8)."""
-    mask = _square()
-    u = unsure(mask)
-    assert u.dtype == bool and u.shape == mask.shape
-    row = u[50]
-    assert row[30:38].all() and not row[38]           # inside: columns 30..37 are 1..8 px from the outline
-    assert not row[:30].any()                         # outside: none, the px 3 px out (a rule's place) included
-    assert not u[50, 45:55].any()
-    assert not (u & (mask == 0)).any()
-    assert u.sum() == 40 * 40 - 24 * 24
+def test_shares_are_nan_for_a_class_with_no_ink():
+    cls = np.zeros((4, 4), np.uint8)
+    p = np.stack([np.ones((4, 4)), np.zeros((4, 4)), np.zeros((4, 4))])
+    s = scores.sheet_scores(p, np.zeros((4, 4), bool), cls, np.zeros((4, 4)))
+    assert np.isnan(s["frame_kept_share"]) and s["map_cut_share"] == 0.0
 
 
-def test_unsure_px_scales():
-    mask = _square()
-    assert unsure(mask, 1)[50, 30] and not unsure(mask, 1)[50, [28, 29, 31]].any()
+def test_log_loss_of_a_constant_quarter():
+    cls = np.ones((4, 4), np.uint8); cls[:2] = 0
+    q = np.full((4, 4), 0.25)
+    p = np.stack([1 - q, q, 0 * q])
+    s = scores.sheet_scores(p, np.zeros((4, 4), bool), cls, np.zeros((4, 4)))
+    assert s["log_loss"] == pytest.approx(-(np.log(0.75) + np.log(0.25)) / 2)
 
 
-def test_a_holes_outline_gets_the_strip_on_its_map_side():
-    square = [(10, 10), (89, 10), (89, 89), (10, 89)]
-    hole = [(40, 40), (59, 40), (59, 59), (40, 59)]
-    mask = map_mask([square], (100, 100), holes=[hole])
-    u = unsure(mask)
-    assert u[50, 39] and u[50, 32] and not u[50, 31]   # map side of the hole's outline
-    assert not u[40:60, 40:60].any()                   # the block side (the hole) is certain
+def test_log_loss_weighs_by_ink():
+    cls = np.zeros((2, 2), np.uint8); cls[1] = 1
+    p = np.stack([np.full((2, 2), 0.5), np.full((2, 2), 0.5), np.zeros((2, 2))])
+    lum = np.array([[1.0, 1.0], [0.0, 0.0]])             # only the class-1 row has ink
+    assert scores.sheet_scores(p, np.zeros((2, 2), bool), cls, lum)["log_loss"] == pytest.approx(np.log(2))
 
 
-def test_no_outline_no_strip():
-    assert not unsure(np.ones((20, 30), np.uint8)).any()
-    assert not unsure(np.zeros((20, 30), np.uint8)).any()
+def test_hd95_of_a_shifted_square():
+    inside = np.zeros((60, 60), bool); inside[10:50, 10:50] = True
+    outside = np.ones((60, 60), bool); outside[13:53, 10:50] = False
+    cls = np.where(inside, 0, 1).astype(np.uint8)
+    p = np.zeros((3, 60, 60))
+    assert scores.sheet_scores(p, outside, cls, np.zeros((60, 60)))["hd95_px"] == pytest.approx(3, abs=0.5)
 
 
-def test_frame_band_starts_at_the_outline_map_band_beyond_the_strip():
-    mask = _square(200, 70, 130)
-    fb, mb = bands(mask)
-    u = unsure(mask)
-    assert not (fb & u).any() and not (mb & u).any()
-    assert fb[100, 69] and fb[100, 67]                 # 1 and 3 px outside (where a rule would be) count
-    assert fb[100, 70 - BAND_PX] and not fb[100, 70 - BAND_PX - 1]
-    assert mb[100, 70 + UNSURE_PX] and not mb[100, 70 + UNSURE_PX - 1]
-    assert not mb[100, 72]                             # 3 px inside: in the strip
+def test_hd95_is_nan_without_a_boundary():
+    cls = np.zeros((8, 8), np.uint8)
+    s = scores.sheet_scores(np.zeros((3, 8, 8)), np.ones((8, 8), bool), cls, np.zeros((8, 8)))
+    assert np.isnan(s["hd95_px"])
 
 
-def test_scores_ignore_the_strip():
-    """A confident mistake inside the strip changes no score but the edge distance."""
-    mask = _square()
-    lum = np.zeros(mask.shape, np.float32)
-    good = np.where(mask == 1, 0.99, 0.01).astype(np.float32)
-    bad = good.copy()
-    u = unsure(mask)
-    bad[u] = 1.0 - bad[u]
-    a, b = sheet_scores(good, mask, lum), sheet_scores(bad, mask, lum)
-    for k in ("log_loss_frame_band", "log_loss_map_band", "log_loss_all_ink", "frame_called_map",
-              "map_called_frame"):
-        assert a[k] == pytest.approx(b[k], abs=1e-12), k
-    bad[50, 50] = 0.01                                  # outside the strip it counts
-    assert sheet_scores(bad, mask, lum)["log_loss_all_ink"] > a["log_loss_all_ink"]
-    rule = good.copy()
-    rule[30:70, 27] = 0.99                              # a rule 3 px outside the outline called map: it counts
-    c = sheet_scores(rule, mask, lum)
-    assert c["frame_called_map"] > a["frame_called_map"] and c["log_loss_frame_band"] > a["log_loss_frame_band"]
+def test_bootstrap_mean_drops_nans():
+    m, lo, hi = scores.bootstrap_mean([1.0, np.nan, 1.0, 1.0])
+    assert (m, lo, hi) == (1.0, 1.0, 1.0)
 
 
-def test_perfect_prediction():
-    mask = np.zeros((100, 100), np.uint8)
-    mask[20:80, 20:80] = 1
-    lum = np.full(mask.shape, 0.0, np.float32)
-    s = sheet_scores(mask.astype(np.float32), mask, lum)
-    assert s["log_loss_all_ink"] < 1e-5 and s["frame_called_map"] < 1e-5 and s["edge_hd95_px"] == 0
-
-
-def test_confident_mistake_costs_more_than_unsure():
-    mask = np.zeros((50, 50), np.uint8)
-    mask[20:40, 20:40] = 1          # row 5 is 15 px from the outline: in the frame band, beyond the uncertain strip
-    lum = np.zeros(mask.shape, np.float32)
-    wrong, unsure = mask.astype(np.float32), mask.astype(np.float32)
-    wrong[5, 5:45] = 0.99
-    unsure[5, 5:45] = 0.5
-    fb, _ = bands(mask)
-    w = 1 - lum
-    assert (
-        log_loss(wrong, mask, w, fb)
-        > log_loss(unsure, mask, w, fb)
-        > log_loss(mask.astype(np.float32), mask, w, fb)
-    )
-
-
-def test_edge_distance_of_a_shift():
-    mask = np.zeros((100, 100), np.uint8)
-    mask[20:80, 20:80] = 1
-    p = np.zeros((100, 100), np.float32)
-    p[23:83, 23:83] = 1  # a diagonal shift: no edge stays put, so the median is unambiguous
-    assert edge_distance(p, mask)["median"] == pytest.approx(3, abs=1)
-
-
-def test_edge_distance_empty_boundary_is_inf():
-    mask = np.zeros((40, 40), np.uint8)
-    mask[10:30, 10:30] = 1
-    d = edge_distance(np.full(mask.shape, 0.2, np.float32), mask)
-    assert d["median"] == float("inf") and d["hd95"] == float("inf")
-
-
-def test_paper_does_not_count():
-    mask = np.zeros((100, 100), np.uint8)
-    mask[20:80, 20:80] = 1
-    p = mask.astype(np.float32)
-    p[5:10, :] = 1.0  # wrong: a strip of frame called map
-    lum = np.zeros(mask.shape, np.float32)
-    lum[5:10, :] = 1.0  # but it is paper
-    s = sheet_scores(p, mask, lum)
-    assert s["frame_called_map"] == 0
-    lum[5:10, :] = 0.0
-    assert sheet_scores(p, mask, lum)["frame_called_map"] > 0
+def test_paired_difference_sign_and_interval():
+    a = {("s", str(i)): 1.0 + 0.1 * i for i in range(20)}; b = {k: v - 0.5 for k, v in a.items()}
+    m, lo, hi = scores.paired_difference(a, b)
+    assert m == pytest.approx(0.5) and lo == pytest.approx(0.5) and hi == pytest.approx(0.5)
