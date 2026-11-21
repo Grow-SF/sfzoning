@@ -19,7 +19,11 @@ turned page-edge sides, 1948/8 and 1948/9 came out at +2.56 and -2.10 degrees an
 **Ties** go to the simplest shape: zero tilt, zero bow, the angle nearest 0 and the outermost offset (on 1-bit pages
 blank paper has D = 0 exactly, so a side over a paper gap ties over every tilt and bow).
 
-The search, in order (each exact given what it holds fixed):
+The search, in order.  Each stage is exact, ties included, over its own candidates: an angle grid and offsets within
+a window of the stage before (the windows and grids below are computational settings, not fitted).  Optimality
+therefore holds per stage within those windows, not for the whole shape class.  Two steps depart from the plain sum
+on purpose: `_settle_outward`, and the `END_MARGIN` row left out at a side's ends, which is the offset grid's own
+resolution (a line sits on whole canvas rows while a rule's edge is sub-pixel).
 1. `frame_search`: every angle within +-ANGLE_MAX and all four offsets on a GRID-px grid.  For fixed (top, bottom) the
    best (left, right) separates exactly, since every left candidate lies left of every right one.  Each side's
    candidates are the page edge (offset 0) and turned lines whose middle lies inside the page (from GRID px in on
@@ -32,236 +36,60 @@ The search, in order (each exact given what it holds fixed):
 `fit_sides_arcs` runs 2 and 3 as coordinate descent: fillets, sides, fillets, and while any fillet is cut, sides and
 fillets once more.  The full-resolution steps bin every page pixel into the canvas cell its centre falls in (exact,
 and the same centre rule as `Frame.mask`); the coarse steps warp pooled sums bilinearly.
+
+`decide` is the whole decision: the frame from two starts, the removed blocks (`blocks`), the notches (`notches`), the
+frame again given them, the on-paper slide (`paper`) and the blocks re-scored.  Geometry shared by those parts lives
+in `geometry` and is re-exported here.
 """
 
 from __future__ import annotations
 
+import logging
 import math
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass
 
-import cv2
 import numpy as np
+from scipy import ndimage as ndi
 from scipy.ndimage import minimum_filter1d
 
-from sfzmaps.frame.decide import COST_FRAME, COST_MAP
+from sfzmaps.frame import blocks as blk
+from sfzmaps.frame import decide as pixel
+from sfzmaps.frame import notches as nt
+from sfzmaps.frame import paper
+from sfzmaps.frame.geometry import (  # noqa: F401  (re-exported)
+    ARC_MARGIN,
+    CORNERS,
+    END_CORNERS,
+    SIDES,
+    Canvas,
+    Frame,
+    Lines,
+    box,
+    cost_field,
+    e_along,
+    half,
+    pool,
+    side_view,
+    uv_of,
+)
+from sfzmaps.frame.notches import NOTCH_REACH
+
+log = logging.getLogger(__name__)
 
 ANGLE_MAX = 2.5  # degrees: the labels' 95% frame tilt 1.56, widened by half and rounded
 TILT_MAX = 0.45  # degrees: per-side deviation (labels' 80% parallelism 0.28 x 1.5)
 BOW_MAX = 22  # px: per-side bow at the middle (labels' 95% bow 15 x 1.5)
 ARC_MAX = 332  # px: the largest fillet radius (the largest labelled, 221 px, x 1.5)
-NOTCH_SPAN_MAX = 0.5  # a credited notch covers at most this share of its side (labelled notches: 23-29%)
-NOTCH_REACH = 0.5  # a credited notch reaches at most this share of the page inward
+NOTCH_SPAN_MAX = 0.5  # a credited notch covers at most this share of its side (labelled notches: 23-29%, x 1.5 rounded)
+# Computational settings (search grids and windows, not fitted and not from the labels):
 ANGLE_STEP = 0.1  # degrees, the plain search's angle grid
 NOTCH_ANGLE_STEP = 0.2  # degrees, the notch-aware search's angle grid
 GRID = 16  # px, the offsets' grid
-REACH = 0.4  # a side's offset runs up to this share of the page inward
+REACH = 0.4  # a side's offset runs up to this share of the page inward (the labels' frames reach far less)
 END_MARGIN = 1  # px: a side is scored without its neighbours' first kept row (a sliver of their rule can sit there)
-ARC_MARGIN = 8  # px: and without the columns this far beyond a fitted fillet's radius
-
-SIDES = ("top", "bottom", "left", "right")
-CORNERS = (("top", "left"), ("top", "right"), ("bottom", "left"), ("bottom", "right"))
-_END_CORNERS = {
-    "top": (("top", "left"), ("top", "right")),
-    "bottom": (("bottom", "left"), ("bottom", "right")),
-    "left": (("top", "left"), ("bottom", "left")),
-    "right": (("top", "right"), ("bottom", "right")),
-}
-
-
-def cost_field(p: np.ndarray, lum: np.ndarray) -> np.ndarray:
-    """D = ink x (COST_MAP p0 - COST_FRAME (p1 + p2)), float32, ink = 1 - lum.  D > 0: cheaper kept."""
-    p = np.asarray(p, np.float32)
-    ink = 1.0 - np.asarray(lum, np.float32)
-    return (ink * (np.float32(COST_MAP) * p[0] - np.float32(COST_FRAME) * (p[1] + p[2]))).astype(np.float32)
-
-
-def pool(a: np.ndarray, s: int) -> np.ndarray:
-    """Sums over s x s cells (the page padded with zeros to a multiple of s)."""
-    if s == 1:
-        return np.ascontiguousarray(a, np.float32)
-    h, w = a.shape
-    H, W = -(-h // s) * s, -(-w // s) * s
-    b = np.zeros((H, W), np.float32)
-    b[:h, :w] = a
-    return b.reshape(H // s, s, W // s, s).sum((1, 3), dtype=np.float32)
-
-
-def _half(side: str, h: int, w: int) -> float:
-    return h / 2.0 if side in ("top", "bottom") else w / 2.0
-
-
-def e_along(side, u, v):
-    """(e, along) of frame coordinates (u, v) seen from `side`."""
-    return {"top": (v, u), "bottom": (-v, u), "left": (u, v), "right": (-u, v)}[side]
-
-
-def side_view(A: np.ndarray, side: str) -> np.ndarray:
-    """A whole canvas array seen from `side`: rows inward from that edge, columns along it."""
-    return {"top": A, "bottom": A[::-1], "left": A.T, "right": A[:, ::-1].T}[side]
-
-
-class Canvas:
-    """Page coordinates -> the frame turned by `phi` degrees about (cx, cy): u = c dx + s dy, v = -s dx + c dy, with
-    (dx, dy) from (cx, cy) to a pixel's centre.  Canvas pixel (j, i) covers u in [i - U, i - U + 1) and v in
-    [j - V, j - V + 1); U and V are multiples of 8 and exceed the turned page's half extents, so cells of s | 8 line up
-    and the canvas edge lies outside the page."""
-
-    def __init__(self, phi: float, cx: float, cy: float, hu: float, hv: float):
-        self.phi, self.cx, self.cy = float(phi), float(cx), float(cy)
-        t = math.radians(phi)
-        self.c, self.sn = math.cos(t), math.sin(t)
-        self.U = int(math.ceil((hu + 2) / 8.0) * 8)
-        self.V = int(math.ceil((hv + 2) / 8.0) * 8)
-
-    @classmethod
-    def page(cls, phi: float, h: int, w: int) -> Canvas:
-        t = math.radians(phi)
-        c, s = abs(math.cos(t)), abs(math.sin(t))
-        return cls(phi, w / 2.0, h / 2.0, c * w / 2 + s * h / 2, s * w / 2 + c * h / 2)
-
-    def uv(self, x, y):
-        """(u, v) of the centres of page pixels (x, y)."""
-        dx = np.asarray(x, np.float64) + 0.5 - self.cx
-        dy = np.asarray(y, np.float64) + 0.5 - self.cy
-        return self.c * dx + self.sn * dy, -self.sn * dx + self.c * dy
-
-    def xy(self, u, v):
-        """Page coordinates (continuous) of (u, v)."""
-        return self.cx + self.c * u - self.sn * v, self.cy + self.sn * u + self.c * v
-
-    def cells(self, s: int) -> tuple[int, int]:
-        return 2 * self.V // s, 2 * self.U // s
-
-    def EA(self, side: str) -> tuple[int, int]:
-        """(E, A): seen from `side`, row k covers e in [k - E, k - E + 1), column a covers along in [a - A, ...)."""
-        return (self.V, self.U) if side in ("top", "bottom") else (self.U, self.V)
-
-    def warp(self, src: np.ndarray, s_src: int, s: int) -> np.ndarray:
-        """`src` (page pixels pooled by s_src) drawn on the whole canvas at cells of s px, bilinear."""
-        nj, ni = self.cells(s)
-        c, sn = self.c, self.sn
-        ox, oy = s_src / 2.0 - self.cx, s_src / 2.0 - self.cy
-        M = np.array(
-            [
-                [c * s_src / s, sn * s_src / s, (c * ox + sn * oy + self.U - s / 2.0) / s],
-                [-sn * s_src / s, c * s_src / s, (-sn * ox + c * oy + self.V - s / 2.0) / s],
-            ]
-        )
-        return cv2.warpAffine(
-            np.ascontiguousarray(src, np.float32),
-            M,
-            (ni, nj),
-            flags=cv2.INTER_LINEAR,
-            borderMode=cv2.BORDER_CONSTANT,
-            borderValue=0.0,
-        )
-
-    def bin(self, src: np.ndarray, window=None) -> np.ndarray:
-        """Forward binning at full resolution: every page pixel of `src` added to the canvas pixel its centre falls
-        in, over window (j0, j1, i0, i1) (default the whole canvas).  Exact sums, and the same centre rule as the
-        masks (bilinear warping blurs rule ink into the first map row, which the 3:1 cost then cuts)."""
-        h, w = src.shape
-        nj, ni = self.cells(1)
-        j0, j1, i0, i1 = window or (0, nj, 0, ni)
-        out = np.zeros((j1 - j0, i1 - i0), np.float64)
-        us = np.array([i0, i1]) - self.U
-        vs = np.array([j0, j1]) - self.V
-        xs, ys = zip(*[self.xy(u, v) for u in us for v in vs])
-        x0, x1 = max(0, int(math.floor(min(xs))) - 2), min(w, int(math.ceil(max(xs))) + 2)
-        y0, y1 = max(0, int(math.floor(min(ys))) - 2), min(h, int(math.ceil(max(ys))) + 2)
-        if x1 <= x0 or y1 <= y0:
-            return out.astype(np.float32)
-        step = max(1, 4_000_000 // (x1 - x0))
-        xx = (np.arange(x0, x1) + 0.5 - self.cx)[None, :]
-        for ya in range(y0, y1, step):
-            yb = min(y1, ya + step)
-            yy = (np.arange(ya, yb) + 0.5 - self.cy)[:, None]
-            i = np.floor(self.c * xx + self.sn * yy + self.U).astype(np.int64) - i0
-            j = np.floor(-self.sn * xx + self.c * yy + self.V).astype(np.int64) - j0
-            ok = (i >= 0) & (i < i1 - i0) & (j >= 0) & (j < j1 - j0)
-            out += np.bincount(
-                j[ok] * (i1 - i0) + i[ok], weights=src[ya:yb, x0:x1][ok].astype(np.float64), minlength=out.size
-            ).reshape(out.shape)
-        return out.astype(np.float32)
-
-
-@dataclass
-class Frame:
-    """The frame: turned by `phi` degrees; per side the offset (px inward of the page edge's midpoint; 0 = the page's
-    own edge), a tilt deviation (degrees) and a bow (px at the middle, + = inward); per corner a fillet radius (px)."""
-
-    phi: float = 0.0
-    offset: dict = field(default_factory=lambda: dict.fromkeys(SIDES, 0.0))
-    tilt: dict = field(default_factory=lambda: dict.fromkeys(SIDES, 0.0))
-    bow: dict = field(default_factory=lambda: dict.fromkeys(SIDES, 0.0))
-    arc: dict = field(default_factory=lambda: dict.fromkeys(CORNERS, 0.0))
-
-    def framed(self, side: str) -> bool:
-        return self.offset[side] > 0
-
-    def copy(self) -> Frame:
-        return Frame(self.phi, dict(self.offset), dict(self.tilt), dict(self.bow), dict(self.arc))
-
-    def mask(self, shape: tuple[int, int], chunk: int = 1024) -> np.ndarray:
-        """Bool, True = kept by the frame (before notches and blocks), by the pixel-centre rule."""
-        h, w = shape
-        g = _Lines(self, h, w)
-        K = np.zeros((h, w), bool)
-        for y0 in range(0, h, chunk):
-            y1 = min(h, y0 + chunk)
-            y, x = np.mgrid[y0:y1, 0:w]
-            K[y0:y1] = g.kept(*g.cv.uv(x, y))
-        return K
-
-
-class _Lines:
-    """A frame's lines on a page of h x w: the canvas, each side's beta (page-edge sides: the canvas edge, which cuts
-    nothing), the tilts as slopes, and the bound of each side along it."""
-
-    def __init__(self, fr: Frame, h: int, w: int):
-        self.fr, self.h, self.w = fr, h, w
-        self.cv = Canvas.page(fr.phi, h, w)
-        c = math.cos(math.radians(fr.phi))
-        self.beta = {
-            s: fr.offset[s] - c * _half(s, h, w) if fr.framed(s) else -float(self.cv.EA(s)[0]) for s in SIDES
-        }
-        self.slope = {s: math.tan(math.radians(fr.tilt[s])) if fr.framed(s) else 0.0 for s in SIDES}
-        self.bow = {s: fr.bow[s] if fr.framed(s) else 0.0 for s in SIDES}
-
-    def offset_of(self, side: str, beta: float) -> float:
-        return beta + math.cos(math.radians(self.fr.phi)) * _half(side, self.h, self.w)
-
-    def ends(self, side: str) -> tuple[float, float]:
-        b = self.beta
-        return (b["left"], -b["right"]) if side in ("top", "bottom") else (b["top"], -b["bottom"])
-
-    def bound(self, side: str, along):
-        lo, hi = self.ends(side)
-        m, hw = (lo + hi) / 2.0, max((hi - lo) / 2.0, 1.0)
-        t = (along - m) / hw
-        return self.beta[side] + self.slope[side] * (along - m) + self.bow[side] * (1.0 - t * t)
-
-    def kept(self, u, v) -> np.ndarray:
-        keep = np.ones(np.shape(u), bool)
-        dist = {}
-        for side in SIDES:
-            if not self.fr.framed(side):
-                continue
-            e, al = e_along(side, u, v)
-            dist[side] = e - self.bound(side, al)
-            keep &= dist[side] >= 0
-        for c in CORNERS:
-            r = self.fr.arc[c]
-            if r <= 0 or c[0] not in dist or c[1] not in dist:
-                continue
-            a, b = dist[c[0]], dist[c[1]]
-            near = keep & (a < r) & (b < r)
-            if near.any():
-                an, bn = a[near], b[near]
-                idx = np.flatnonzero(near.ravel())[an + bn + np.sqrt(2.0 * an * bn) < r]
-                keep.ravel()[idx] = False
-        return keep
-
+REFIT_ANGLE = 0.5  # degrees: the rectangle re-fitted given the notches and blocks, this far either side
+REFIT_PX = 32  # px: ... with each offset this far either side
 
 # ---------------------------------------------------------------------------------------------------------------
 # 1. The rectangle
@@ -306,7 +134,7 @@ def _candidates(cv: Canvas, side: str, s: int, h: int, w: int, phi: float, d_lo:
     from the page edge's midpoint lies in [max(1, d_lo), d_hi], every `step` cells (outermost first)."""
     E = cv.EA(side)[0]
     n = cv.cells(s)[0 if side in ("top", "bottom") else 1]
-    base = E - math.cos(math.radians(phi)) * _half(side, h, w)
+    base = E - math.cos(math.radians(phi)) * half(side, h, w)
     k0 = math.ceil((base + max(1.0, d_lo)) / s - 1e-9)
     k1 = min(math.floor((base + d_hi) / s + 1e-9), n // 2 - 1)
     return np.concatenate([[0], np.arange(max(1, k0), k1 + 1, step)]).astype(np.int64)
@@ -315,7 +143,7 @@ def _candidates(cv: Canvas, side: str, s: int, h: int, w: int, phi: float, d_lo:
 def _offsets(cv: Canvas, s: int, h: int, w: int, phi: float, ks: dict) -> dict:
     """Side -> offset from the page edge's midpoint of cell offsets `ks` (0: the page edge, offset 0)."""
     c = math.cos(math.radians(phi))
-    return {sd: 0.0 if ks[sd] == 0 else float(s * ks[sd] - cv.EA(sd)[0] + c * _half(sd, h, w)) for sd in SIDES}
+    return {sd: 0.0 if ks[sd] == 0 else float(s * ks[sd] - cv.EA(sd)[0] + c * half(sd, h, w)) for sd in SIDES}
 
 
 def _nearest_zero_first(phis) -> np.ndarray:
@@ -334,7 +162,7 @@ def _plain_search(D4: np.ndarray, h: int, w: int, T: float):
     for phi in _nearest_zero_first(np.arange(-ANGLE_MAX, ANGLE_MAX + 1e-9, ANGLE_STEP)):
         cv = Canvas.page(phi, h, w)
         A = cv.warp(D4, 4, 4)
-        K = {sd: _candidates(cv, sd, 4, h, w, phi, GRID, REACH * 2 * _half(sd, h, w), GRID // 4) for sd in SIDES}
+        K = {sd: _candidates(cv, sd, 4, h, w, phi, GRID, REACH * 2 * half(sd, h, w), GRID // 4) for sd in SIDES}
         _, kt, kb, kl, kr = _rect_best(A, K["top"], K["bottom"], K["left"], K["right"])
         # every 4 px within a grid step of it: the grid's phase alone would otherwise pick the angle (a side 8 px off
         # its rule costs as much as a wrong angle on a small page)
@@ -394,7 +222,7 @@ def _notch_aware_search(D16: np.ndarray, h: int, w: int, T: float, lam: float):
         def cred(side, lo, hi):
             if (side, lo, hi) not in cache:
                 K = KT if side in ("top", "bottom") else KL
-                reach = int(NOTCH_REACH * 2 * _half(side, h, w) / s) + 1
+                reach = int(NOTCH_REACH * 2 * half(side, h, w) / s) + 1
                 g = _notch_credit(side_view(A, side), K, 2, reach, lo, hi)
                 cache[(side, lo, hi)] = np.maximum(0.0, g - lam - 1e-6)
             return cache[(side, lo, hi)]
@@ -454,14 +282,15 @@ def _settle_outward(fr: Frame, A1: np.ndarray, h: int, w: int, rounds: int = 4) 
     included) whose cut is no worse than its own, scored on its own span: END_MARGIN px from either end are left out,
     where the neighbouring lines' sub-pixel slivers live.  Over blank paper (D = 0) every position ties, and the side
     goes back to the rule that bounds the paper; without this, each grid's rounding (a sliver of a neighbour's rule
-    left in its first kept row) pays a side to cut ever deeper into a free strip.  Only outward: an inward move beyond the refinement's
-    window is what the notch-aware start guards against."""
+    left in its first kept row) pays a side to cut ever deeper into a free strip.  Only outward: an inward move beyond
+    the refinement's window is what the notch-aware start guards against.  A deliberate departure from the plain
+    maximum of the sum (see the module)."""
     for _ in range(rounds):
         moved = False
         for side in SIDES:
             if not fr.framed(side):
                 continue
-            g = _Lines(fr, h, w)
+            g = Lines(fr, h, w)
             E, Aoff = g.cv.EA(side)
             lo, hi = g.ends(side)
             view = side_view(A1, side)
@@ -483,8 +312,8 @@ def _settle_outward(fr: Frame, A1: np.ndarray, h: int, w: int, rounds: int = 4) 
     return fr
 
 
-def _angles(centre: float, half: float, step: float) -> np.ndarray:
-    phis = centre + np.arange(-half, half + 1e-9, step)
+def _angles(centre: float, width: float, step: float) -> np.ndarray:
+    phis = centre + np.arange(-width, width + 1e-9, step)
     return phis[np.abs(phis) <= ANGLE_MAX + 1e-9]
 
 
@@ -494,8 +323,10 @@ def frame_search(D: np.ndarray, notch_aware: bool = False, lam_notch: float = 0.
     1. Every angle within +-ANGLE_MAX (every ANGLE_STEP) and all four offsets on a GRID-px grid, cells of 4 px: exact
        per angle.  `notch_aware`: every NOTCH_ANGLE_STEP at cells of 16 px, each rectangle scored with its best
        single notch per side (span at most NOTCH_SPAN_MAX of the side, credited above `lam_notch`).
-    2. Refined: angle +-0.1 degrees every 0.02 with offsets +-24 px at 2 px, then +-0.02 every 0.01 with offsets
-       +-4 px at 1 px (forward binning).
+    2. Refined: over the coarse angle's uncertainty (`_angle_window`) every 0.05 degrees with offsets +-24 px at
+       2 px, then +-0.04 every 0.02 with +-8 px at 2 px, then +-0.02 every 0.01 with offsets +-4 px at 1 px (forward
+       binning).  These windows and grids are computational settings.
+    3. `_settle_outward`.
     A side whose best offset is 0 is the page's own edge; with no framed side, phi = 0."""
     D = np.ascontiguousarray(D, np.float32)
     h, w = D.shape
@@ -525,18 +356,21 @@ def _refine_sides(fr: Frame, A1: np.ndarray, h: int, w: int, rounds: int = 2) ->
     """In place on `fr`: each framed side's tilt (+-TILT_MAX), bow (+-BOW_MAX) and offset (+-24 px, staying > 0)
     minimising the sum of D it cuts, from running sums along its normal on the full-resolution canvas A1 at the
     frame's angle.  The neighbours' first kept row (END_MARGIN), or a fitted fillet's radius plus ARC_MARGIN, at
-    either end is left out: the neighbour and the fillet decide there.  Ties: zero tilt, zero bow, the outermost offset."""
+    either end is left out: the neighbour and the fillet decide there.  Ties: zero tilt, zero bow, the outermost offset.
+    The +-24 px window and the tilt, bow and offset grids are computational settings.  A canvas cell counts as cut by
+    its centre, which lies within 0.5 px of the page pixels binned into it (`Frame.mask` judges each page pixel by its
+    own centre)."""
     tmax = math.tan(math.radians(TILT_MAX))
     for _ in range(rounds):
         for side in SIDES:
             if not fr.framed(side):
                 continue
-            g = _Lines(fr, h, w)
+            g = Lines(fr, h, w)
             E, Aoff = g.cv.EA(side)
             lo, hi = g.ends(side)
             m, hw = (lo + hi) / 2.0, max((hi - lo) / 2.0, 1.0)
             view = side_view(A1, side)
-            c_lo, c_hi = _END_CORNERS[side]
+            c_lo, c_hi = END_CORNERS[side]
             f_lo = lo + (fr.arc[c_lo] + ARC_MARGIN if fr.arc[c_lo] > 0 else END_MARGIN)
             f_hi = hi - (fr.arc[c_hi] + ARC_MARGIN if fr.arc[c_hi] > 0 else END_MARGIN)
             a0 = max(0, int(math.ceil(f_lo + Aoff - 0.5)))
@@ -593,8 +427,10 @@ def _fit_arcs(fr: Frame, A1: np.ndarray, h: int, w: int) -> Frame:
     cuts.  The fillet is a circle of radius r tangent to both sides; a pixel at inward distances (a, b) from them is
     cut iff a + b + sqrt(2ab) < r, so the cuts nest and one histogram gives every r.  The sides' first kept rows
     (END_MARGIN) are left out of the score, as in `_settle_outward`: otherwise a fillet over blank paper grows to cut
-    a neighbour's sliver (seen: 289 px over a blank strip).  Ties: the smaller radius."""
-    g = _Lines(fr, h, w)
+    a neighbour's sliver (seen: 289 px over a blank strip).  Ties: the smaller radius.  Cells are judged by their
+    centre, within 0.5 px of the page pixels binned into them (`Frame.mask` judges each page pixel by its own centre);
+    the 48-px margin of the window is a computational setting."""
+    g = Lines(fr, h, w)
     cv = g.cv
     nj, ni = A1.shape
     for c in CORNERS:
@@ -663,3 +499,224 @@ def fit_sides_arcs(frame: Frame, D: np.ndarray) -> Frame:
         _refine_sides(fr, A1, h, w, rounds=1)
         _fit_arcs(fr, A1, h, w)
     return fr
+
+
+def _fit_sides_arcs_on(fr: Frame, A1: np.ndarray, h: int, w: int) -> Frame:
+    """`fit_sides_arcs` in place, on a canvas A1 already binned at fr.phi."""
+    _fit_arcs(fr, A1, h, w)
+    _refine_sides(fr, A1, h, w)
+    _fit_arcs(fr, A1, h, w)
+    if any(r > 0 for r in fr.arc.values()):
+        _refine_sides(fr, A1, h, w, rounds=1)
+        _fit_arcs(fr, A1, h, w)
+    return fr
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The whole decision
+# ---------------------------------------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Params:
+    """The shape decision's three fitted numbers (fitted on held-out chances by realised cost)."""
+
+    lam_notch: float  # the cost of a notch
+    beta: float  # the weight of the ink along a notch's inner sides
+    lam_block: float  # the cost of a removed block
+
+
+def _refit(rect: Frame, Dz: np.ndarray) -> Frame:
+    """The rectangle, then the sides and fillets, fitted again given the notches and blocks (their px zeroed in Dz:
+    they are deleted whatever the sides do).  The angle within +-REFIT_ANGLE every 0.05 and the offsets +-REFIT_PX
+    at cells of 2 (the spike's `rect_given`), then `frame_search`'s last two stages (+-0.04 every 0.02 and +-8 px at
+    cells of 2, +-0.02 every 0.01 and +-4 px at 1 px); the angle stays within +-ANGLE_MAX.  Each side settled outward,
+    then `fit_sides_arcs`.  Without the re-fit a notch turned off the frame
+    pulls the angle and every side's tilt makes up for it (the spike: 0.28 degrees off)."""
+    Dz = np.ascontiguousarray(Dz, np.float32)
+    h, w = Dz.shape
+    T = float(Dz.sum(dtype=np.float64))
+    start = rect.offset
+    D2 = pool(Dz, 2)
+    _, phi, off, _ = _refine_rect(Dz, D2, _angles(rect.phi, REFIT_ANGLE, 0.05), 2, REFIT_PX, start, T)
+    _, phi, off, _ = _refine_rect(Dz, D2, _angles(phi, 0.04, 0.02), 2, 8, off, T)
+    _, phi, off, A1 = _refine_rect(Dz, None, _angles(phi, 0.02, 0.01), 1, 4, off, T)
+    fr = _settle_outward(Frame(phi=float(phi), offset=off), A1, h, w)
+    if not any(fr.framed(s) for s in SIDES):
+        fr.phi = 0.0
+        A1 = Canvas.page(0.0, h, w).bin(Dz)
+    return _fit_sides_arcs_on(fr, A1, h, w)
+
+
+def _shape_mask(fr: Frame, ns, shape) -> np.ndarray:
+    return fr.mask(shape) & ~nt.notches_mask(ns, shape)
+
+
+def _objective(D, K, removed, ns, bs, params: Params) -> float:
+    """The joint objective the shape minimises: the expected cost of what it keeps, -sum of D over the kept px less
+    the removed blocks, + lambda_notch per notch + lambda_block per block - beta x the notches' side ink."""
+    return (
+        -float(D[K & ~removed].sum(dtype=np.float64))
+        + params.lam_notch * len(ns)
+        + params.lam_block * len(bs)
+        - params.beta * sum(n.ink for n in ns)
+    )
+
+
+def _from_start(rect: Frame, p, D, ink, params: Params, bounds: blk.BlockBounds, timing: dict, tag: str, cache):
+    """Steps 2-3 and the blocks re-scored, from one start (the spike's `pipeline`): (frame, notches, block
+    candidates, kept region, removed, kept blocks, objective)."""
+    shape = D.shape
+    t0 = time.perf_counter()
+    key = ("start", rect.phi, tuple(sorted(rect.offset.items())), bounds)
+    if key not in cache:
+        K0 = rect.mask(shape)
+        cache[key] = (K0, blk.candidates(p, D, K0, rect, bounds))
+    K0, cands = cache[key]
+    B0, _ = blk.accept(cands, D, K0, params.lam_block)
+    t1 = time.perf_counter()
+    Dz = np.where(B0, np.float32(0), D)
+    inkz = np.where(B0, np.float32(0), ink)
+    ns = nt.greedy_notches(Dz, inkz, rect, params, kept=K0)
+    t2 = time.perf_counter()
+    Nm = nt.notches_mask(ns, shape)
+    fr = _refit(rect, np.where(Nm, np.float32(0), Dz))
+    K = fr.mask(shape) & ~Nm
+    removed, bs = blk.accept(cands, D, K, params.lam_block)
+    t3 = time.perf_counter()
+    for k, v in (("blocks", t1 - t0), ("notches", t2 - t1), ("refit", t3 - t2)):
+        timing[f"{tag} {k}"] = v
+    return fr, ns, cands, K, removed, bs, _objective(D, K, removed, ns, bs, params)
+
+
+def _one_region(K: np.ndarray, removed: np.ndarray) -> np.ndarray:
+    """The largest 8-connected piece of the kept region less the removed blocks (a notch or a block can cut a piece
+    off; the map is one region, by definition)."""
+    inside = K & ~removed
+    comp, m = ndi.label(inside, structure=ndi.generate_binary_structure(2, 2))
+    if m <= 1:
+        return inside
+    sizes = np.bincount(comp.ravel(), minlength=m + 1)
+    sizes[0] = 0
+    return comp == int(np.argmax(sizes))
+
+
+def decide(
+    p: np.ndarray,
+    lum: np.ndarray,
+    params: Params,
+    bounds: blk.BlockBounds,
+    maps: int = 1,
+    timing: dict | None = None,
+    cache: dict | None = None,
+) -> tuple[pixel.Decision, Frame, list, list]:
+    """The shape decision for chances p ((3, h, w): map, outside, removed block) on a page of luminance `lum`:
+    (Decision, the frame, its notches, the removed blocks).  In the spike's measured order (finding 2), all on one
+    cost field:
+    1. `frame_search` from two starts, plain and notch-aware;
+    2. per start, the blocks (`blocks.block_shapes`), then the notches with the blocks' px zeroed
+       (`notches.greedy_notches`);
+    3. the rectangle, sides, tilts, bows and fillets fitted again with the notches' and blocks' px zeroed (`_refit`),
+       and the blocks re-scored in that kept region; the start with the lower joint objective (`_objective`) wins
+       (ties: the plain one).  The notch-aware start can come out degrees off on a page without notches; the
+       objective rejects it there;
+    4. `paper.on_paper` on the winner;
+    5. the blocks re-scored in the final kept region;
+    6. the kept region is one piece (the largest; any other is outside, its ink `dropped_ink`), and removed blocks
+       are its only holes.
+    A page listed with several `maps` keeps the per-pixel decision (`decide.decide`) until such a page is checked.
+    `timing`, if given, gets the seconds of each stage.  `cache`, if given, holds the work that does not depend on
+    `params` (the cost field, the plain start, the notch-aware start per lambda_notch, each start's block candidates)
+    for the next call on the same page with other numbers: one dict per page (p and lum), never shared between
+    pages."""
+    timing = {} if timing is None else timing
+    cache = {} if cache is None else cache
+    if maps > 1:
+        log.info("%d maps on the page: the per-pixel decision (the shape fits one map)", maps)
+        return pixel.decide(p, lum, maps), Frame(), [], []
+    t = time.perf_counter()
+    lum = np.asarray(lum, np.float32)
+    shape = lum.shape
+    if "D" not in cache:
+        cache["D"] = cost_field(p, lum)
+    D = cache["D"]
+    ink = 1.0 - lum
+    timing["cost field"] = time.perf_counter() - t
+
+    t = time.perf_counter()
+    if "plain" not in cache:
+        cache["plain"] = frame_search(D, False)
+    starts = {"plain": cache["plain"]}
+    timing["frame plain"] = time.perf_counter() - t
+    t = time.perf_counter()
+    if ("notch-aware", params.lam_notch) not in cache:
+        cache[("notch-aware", params.lam_notch)] = frame_search(D, True, params.lam_notch)
+    aware = cache[("notch-aware", params.lam_notch)]
+    timing["frame notch-aware"] = time.perf_counter() - t
+    if aware != starts["plain"]:
+        starts["notch-aware"] = aware
+    best = None
+    for name, rect in starts.items():
+        r = _from_start(rect.copy(), p, D, ink, params, bounds, timing, name, cache)
+        log.debug("start %s: objective %.1f", name, r[-1])
+        if best is None or r[-1] < best[1][-1]:
+            best = (name, r)
+    name, (fr, ns, cands, K, removed, bs, J) = best
+    log.info("shape: the %s start (objective %.1f), %d notches, %d blocks", name, J, len(ns), len(bs))
+    timing["start"] = name
+
+    t = time.perf_counter()
+    fr, ns, slid = paper.on_paper(fr, ns, bs, p, lum, D=D)
+    timing["on paper"] = time.perf_counter() - t
+
+    t = time.perf_counter()
+    swap = {id(b): s for b, s in zip(bs, slid)}
+    cands = [swap.get(id(b), b) for b in cands]
+    K = _shape_mask(fr, ns, shape)
+    removed, bs = blk.accept(cands, D, K, params.lam_block)
+    removed &= K
+    kept = _one_region(K, removed)
+    outside = ~kept & ~removed
+    dropped = K & ~removed & ~kept
+    timing["final"] = time.perf_counter() - t
+    dec = pixel.Decision(
+        outside,
+        removed,
+        0.0,
+        float(ink[dropped].sum(dtype=np.float64)),
+        float(ink[removed].sum(dtype=np.float64)),
+    )
+    return dec, fr, ns, bs
+
+
+def side_ink_left(p: np.ndarray, lum: np.ndarray, frame: Frame, strip: int = nt.STRIP) -> dict[str, float]:
+    """Per side, the ink the chances call frame or block (p1 + p2 > `decide.cut_level()`) in the `strip` px just
+    inside the fitted side (on its own span, kept by the frame): amendment 2's ranking of pages for the owner's eye
+    (a side that bows more than any label leaves confident frame ink there).  A page-edge side's strip is the page's
+    own first `strip` rows or columns."""
+    lum = np.asarray(lum, np.float32)
+    h, w = lum.shape
+    g = Lines(frame, h, w)
+    out = {}
+    for side in SIDES:
+        lo, hi = g.ends(side)
+        if frame.framed(side):
+            al = np.linspace(lo, hi, 64)
+            pts = [g.cv.xy(*uv_of(side, g.bound(side, al) + de, al)) for de in (-2.0, strip + 2.0)]
+            y0, y1, x0, x1 = box(np.concatenate([q[0] for q in pts]), np.concatenate([q[1] for q in pts]), h, w)
+        else:
+            y0, y1, x0, x1 = {"top": (0, strip, 0, w), "bottom": (h - strip, h, 0, w),
+                              "left": (0, h, 0, strip), "right": (0, h, w - strip, w)}[side]
+        if y1 <= y0 or x1 <= x0:
+            out[side] = 0.0
+            continue
+        y, x = np.mgrid[y0:y1, x0:x1]
+        u, v = g.cv.uv(x, y)
+        sel = g.kept(u, v)
+        if frame.framed(side):
+            e, a = e_along(side, u, v)
+            d = e - g.bound(side, a)
+            sel &= (d < strip) & (a >= lo) & (a < hi)
+        conf = np.asarray(p[1][y0:y1, x0:x1] + p[2][y0:y1, x0:x1]) > pixel.cut_level()
+        out[side] = float((1.0 - lum[y0:y1, x0:x1])[sel & conf].sum(dtype=np.float64))
+    return out

@@ -35,7 +35,8 @@ def make_page(h=900, w=1200, phi=1.2, offset=None, bow_top=0.0, arc=0.0, notch=N
     bow_top: the top side's inward bow at its middle (a parabola, zero where it meets the left and right sides).
     arc: the fillet radius at every corner between two framed sides (tangent to both).
     notch: dict(side="bottom", psi, a0, a1, d): a ruled box cut from the kept region at angle psi, along in [a0, a1)
-        and inward distance e < d in the psi-turned frame (the spike's form).
+        and inward distance e < d in the psi-turned frame (the spike's form); `ruled=False` leaves out the rule
+        along its three inner sides.
     blocks: a ruled legend (rectangle) and a badge (circle) inside, called "removed block".
     blank_strip: a strip this wide just inside the left side with no ink, which the chances call "outside".
     gap: blank paper this wide (called map) just inside every framed side, between the rule and the map's ink.
@@ -95,6 +96,8 @@ def make_page(h=900, w=1200, phi=1.2, offset=None, bow_top=0.0, arc=0.0, notch=N
         e, al = {"top": (vn, un), "bottom": (-vn, un), "left": (un, vn), "right": (-un, vn)}[notch["side"]]
         N = (al >= notch["a0"]) & (al < notch["a1"]) & (e < notch["d"]) & K
         strip = N & ((e >= notch["d"] - 4) | (al < notch["a0"] + 4) | (al >= notch["a1"] - 4))
+        if not notch.get("ruled", True):  # no rule: the strip gets the box's own 15% ink
+            strip = np.zeros((h, w), bool)
         ink[strip] = 1
         ink[N & ~strip & (rng.random((h, w)) < 0.15)] = 1
         K &= ~N

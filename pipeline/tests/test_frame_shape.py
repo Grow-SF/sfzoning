@@ -1,8 +1,13 @@
+import logging
+
 import numpy as np
 import pytest
+from scipy import ndimage as ndi
 from synthetic_frame import make_page
 
+from sfzmaps.frame import decide as pixel
 from sfzmaps.frame import shape
+from sfzmaps.frame.blocks import BlockBounds
 
 SIDES = ("top", "bottom", "left", "right")
 
@@ -125,3 +130,106 @@ def test_partly_framed_page_keeps_its_corners():
     m = fr.mask((h, w))
     assert m[-1, w // 4:].all() and m[h // 4:, -1].all()  # nothing cut along the page-edge sides, corner kept
     assert (m ^ tr["K"]).mean() < 0.002
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The whole decision
+# ---------------------------------------------------------------------------------------------------------------
+
+# make_page's legend is 150 x 110 px and its badge 60 across: the labels' largest, widened by half
+BOUNDS = BlockBounds(rect_max=(225.0, 165.0), ellipse_max=(90.0, 90.0))
+FITTED = shape.Params(lam_notch=1e4, beta=3.0, lam_block=1e3)  # the spike's fitted numbers
+
+
+def _notch_page():
+    c = np.cos(np.radians(1.2))
+    notch = dict(side="bottom", psi=2.2, a0=112.0, a1=375.0, d=70 - c * 450 + 250)
+    return make_page(phi=1.2, blocks=True, notch=notch)
+
+
+def test_notchless_page_takes_the_plain_start():
+    # without a notch the notch-aware start comes out degrees off (its credited notches take back the rule wedges a
+    # wrong angle leaves in); the joint objective must reject it
+    lum, p, tr = make_page(phi=0.7, bow_top=10.0, arc=120.0, blocks=True, **BIG)
+    params = shape.Params(lam_notch=3e3, beta=3.0, lam_block=1e3)
+    aware = shape.frame_search(shape.cost_field(p, lum), True, params.lam_notch)
+    assert abs(aware.phi - 0.7) > 1.0  # the trap is there
+    timing = {}
+    dec, fr, ns, bs = shape.decide(p, lum, params, BOUNDS, timing=timing)
+    assert timing["start"] == "plain"
+    assert abs(fr.phi - 0.7) <= 0.1
+    assert ns == []
+    assert ((~dec.deleted) ^ (tr["cls"] == 0)).mean() < 0.002
+
+
+def test_decision_is_one_region_with_only_block_holes():
+    lum, p, tr = _notch_page()
+    dec, fr, ns, bs = shape.decide(p, lum, FITTED, BOUNDS)
+    assert len(ns) == 1 and ns[0].side == "bottom"
+    assert sorted(b.kind for b in bs) == ["ellipse", "rect"]
+    kept = ~dec.deleted
+    assert not (dec.outside & dec.removed).any()
+    _, n = ndi.label(kept, structure=np.ones((3, 3)))
+    assert n == 1
+
+    def border_pieces(m):  # 4-connected pieces of m: (labels, count, the labels touching the page's border)
+        lab, n = ndi.label(m)
+        return lab, n, set(np.unique(np.r_[lab[0], lab[-1], lab[:, 0], lab[:, -1]])) - {0}
+
+    lab, n, border = border_pieces(dec.outside)
+    assert border == set(range(1, n + 1))  # outside reaches the page's border
+    lab, n, border = border_pieces(dec.deleted)
+    holes = np.isin(lab, [k for k in range(1, n + 1) if k not in border])
+    assert holes.any() and (holes <= dec.removed).all()  # the kept region's only holes are removed blocks
+    assert (kept ^ (tr["cls"] == 0)).mean() < 0.005
+    assert dec.filled_ink == 0.0 and dec.dropped_ink == 0.0
+    assert dec.removed_ink == pytest.approx(float((1 - lum)[dec.removed].sum()), rel=1e-6)
+
+
+def test_frameless_page_only_loses_its_blocks():
+    lum, p, tr = make_page(offset=dict.fromkeys(SIDES), blocks=True)
+    dec, fr, ns, bs = shape.decide(p, lum, FITTED, BOUNDS)
+    assert all(fr.offset[s] == 0.0 for s in SIDES) and ns == []
+    assert not dec.outside.any()
+    truth = tr["cls"] == 2
+    assert (dec.removed & truth).sum() == truth.sum()
+    assert (dec.removed & ~truth).sum() <= 0.05 * truth.sum()
+
+
+def test_multi_map_page_keeps_the_per_pixel_decision(caplog):
+    lum, p, tr = make_page(blocks=True)
+    with caplog.at_level(logging.INFO, logger="sfzmaps.frame.shape"):
+        dec, fr, ns, bs = shape.decide(p, lum, FITTED, BOUNDS, maps=2)
+    want = pixel.decide(p, lum, 2)
+    assert (dec.outside == want.outside).all() and (dec.removed == want.removed).all()
+    assert "per-pixel" in caplog.text
+
+
+def test_side_ink_left_ranks_a_missed_rule():
+    # the fitted left side sits 5 px outside the truth, on the 5-px rule the chances call frame
+    lum, p, tr = make_page(phi=0.6, seed=2)
+    fr = shape.Frame(phi=0.6, offset=dict(tr["offset"]))
+    assert all(v == 0.0 for v in shape.side_ink_left(p, lum, fr).values())
+    fr.offset["left"] -= 5
+    left = shape.side_ink_left(p, lum, fr)
+    assert max(left, key=left.get) == "left"
+    assert left["left"] > 0.9 * 4 * 700  # the 4-px strip along the side's ~740 px
+    assert left["top"] <= 4 * 5 and left["bottom"] <= 4 * 5  # the corners where they meet the missed rule
+    assert left["right"] == 0.0
+
+
+def test_cache_reuses_the_work_that_does_not_depend_on_the_numbers(monkeypatch):
+    lum, p, tr = _notch_page()
+    other = shape.Params(lam_notch=1e4, beta=0.0, lam_block=1e4)
+    fresh = shape.decide(p, lum, other, BOUNDS)
+    cache = {}
+    shape.decide(p, lum, FITTED, BOUNDS, cache=cache)
+    calls = []
+    real = shape.frame_search
+    monkeypatch.setattr(shape, "frame_search", lambda *a, **k: calls.append(a[1:]) or real(*a, **k))
+    again = shape.decide(p, lum, other, BOUNDS, cache=cache)
+    assert calls == []  # both starts came from the cache (same lambda_notch)
+    assert (again[0].outside == fresh[0].outside).all() and (again[0].removed == fresh[0].removed).all()
+    assert again[1] == fresh[1] and again[2] == fresh[2]
+    shape.decide(p, lum, shape.Params(lam_notch=2e4, beta=3.0, lam_block=1e3), BOUNDS, cache=cache)
+    assert calls == [(True, 2e4)]  # a new lambda_notch: only the notch-aware start again
