@@ -32,14 +32,23 @@ def ink_weight(lum: np.ndarray) -> np.ndarray:
 Polygon = list[tuple[float, float]]
 
 
-def load_label(series: str, sheet: str, root: Path = LABELS) -> tuple[list[Polygon], list[Polygon]]:
-    """(polygons, holes) of a sheet's label, in page px; `holes` (blocks printed over the map that are not the city,
-    see `inputs/frame-labels/README.md` rule 4) is empty when the file has none."""
-    data = json.loads((root / series / f"{sheet}.json").read_text())
+def _label_file(series: str, sheet: str, root: Path) -> dict:
+    return json.loads((root / series / f"{sheet}.json").read_text())
 
-    def polys(key: str) -> list[Polygon]:
-        return [[(float(x), float(y)) for x, y in poly] for poly in data.get(key, [])]
-    return polys("polygons"), polys("holes")
+
+def _polys(data: dict, key: str) -> list[Polygon]:
+    return [[(float(x), float(y)) for x, y in poly] for poly in data.get(key, [])]
+
+
+def load_label(series: str, sheet: str, root: Path = LABELS) -> list[Polygon]:
+    """A sheet's label polygons, in page px (x, y)."""
+    return _polys(_label_file(series, sheet, root), "polygons")
+
+
+def label_holes(series: str, sheet: str, root: Path = LABELS) -> list[Polygon]:
+    """The file's `holes` (blocks printed over the map that are not the city, see `inputs/frame-labels/README.md`
+    rule 4), empty when it has none.  Only for reviewing them; the label proper is `load_label`."""
+    return _polys(_label_file(series, sheet, root), "holes")
 
 
 def labelled_sheets(root: Path = LABELS) -> list[SheetId]:
@@ -56,6 +65,17 @@ def map_mask(polygons, shape: tuple[int, int], scale: float = 1.0, holes=()) -> 
     for hole in holes:
         draw.polygon([(x * scale, y * scale) for x, y in hole], fill=0, outline=0)
     return np.asarray(img, dtype=np.uint8)
+
+
+def inside_mask(polygons, shape: tuple[int, int]) -> np.ndarray:
+    """Bool, True inside any polygon, outlines included: `map_mask(polygons, shape) == 1`."""
+    return map_mask(polygons, shape) == 1
+
+
+def map_counts(kinds_csv: Path = PAGE_KINDS) -> dict[SheetId, int]:
+    """How many maps each page holds, from the column `maps` of the page-kinds file; blank means 1."""
+    with open(kinds_csv, newline="") as f:
+        return {(r["series"], r["sheet"]): int(r["maps"] or 1) for r in csv.DictReader(f)}
 
 
 def page_path(series: str, sheet: str, work: Path = WORK) -> Path:

@@ -18,7 +18,7 @@ for sid in data.labelled_sheets():
         continue
     z = np.load(f)
     lum = data.load_luminance(data.page_path(*sid))
-    polygons, holes = data.load_label(*sid)
+    polygons, holes = data.load_label(*sid), data.label_holes(*sid)
     mask = data.map_mask(polygons, lum.shape, holes=holes)
     for name in ("coarse", "map"):
         s = scores.sheet_scores(z[name].astype(np.float32), mask, lum)

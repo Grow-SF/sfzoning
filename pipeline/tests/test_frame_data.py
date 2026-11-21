@@ -3,9 +3,12 @@ import pytest
 from PIL import Image
 
 from sfzmaps.frame.data import (
+    inside_mask,
+    label_holes,
     labelled_sheets,
     load_label,
     load_luminance,
+    map_counts,
     map_mask,
     map_pages,
     page_path,
@@ -33,7 +36,8 @@ def test_labelled_sheets_and_load_label(tmp_path):
     )
     (tmp_path / "README.md").write_text("not a label")
     assert labelled_sheets(tmp_path) == [("1921", "a")]
-    assert load_label("1921", "a", tmp_path) == ([[(0, 0), (4, 0), (4, 4)]], [])
+    assert load_label("1921", "a", tmp_path) == [[(0, 0), (4, 0), (4, 4)]]
+    assert label_holes("1921", "a", tmp_path) == []
 
 
 def test_load_label_reads_holes(tmp_path):
@@ -41,7 +45,7 @@ def test_load_label_reads_holes(tmp_path):
     (tmp_path / "2000" / "b.json").write_text(
         '{"polygons": [[[0,0],[9,0],[9,9],[0,9]]], "holes": [[[2,2],[4,2],[4,4],[2,4]]], "notes": ""}'
     )
-    polygons, holes = load_label("2000", "b", tmp_path)
+    polygons, holes = load_label("2000", "b", tmp_path), label_holes("2000", "b", tmp_path)
     assert polygons == [[(0, 0), (9, 0), (9, 9), (0, 9)]]
     assert holes == [[(2, 2), (4, 2), (4, 4), (2, 4)]]
 
@@ -79,3 +83,14 @@ def test_map_pages_keeps_only_maps(tmp_path):
     csv_path.write_text('series,sheet,kind,checked\n1921,a,map,"x, y"\n1921,b,text,o\n')
     assert map_pages(csv_path, work) == [("1921", "a")]
     assert page_path("1921", "a", work) == work / "1921" / "a" / "page.png"
+
+
+def test_map_counts_blank_means_one(tmp_path):
+    p = tmp_path / "k.csv"
+    p.write_text("series,sheet,kind,checked,maps\nA,1,map,x,\nA,2,map,x,2\nA,3,text,x,\n")
+    assert map_counts(p) == {("A", "1"): 1, ("A", "2"): 2, ("A", "3"): 1}
+
+
+def test_inside_mask_is_map_mask_equal_one():
+    m = inside_mask([[(2, 2), (8, 2), (8, 8), (2, 8)]], (12, 12))
+    assert m.dtype == bool and m[5, 5] and m[2, 2] and not m[0, 0]

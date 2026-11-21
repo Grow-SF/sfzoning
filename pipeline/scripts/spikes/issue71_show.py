@@ -38,7 +38,7 @@ def row(sid):
     lum = data.load_luminance(data.page_path(*sid))
     pr = np.load(data.OUT / sid[0] / sid[1] / "map_prob.npz")["map"].astype(np.float32)
     sc = json.load(open(data.OUT / sid[0] / sid[1] / "scores.json"))
-    polys, holes = data.load_label(*sid)
+    polys, holes = data.load_label(*sid), data.label_holes(*sid)
     H, W = lum.shape
     whole = look.sheet_picture(lum, pr, side=700).convert("RGB")
     f = whole.width / W

@@ -910,6 +910,25 @@ def downloads(
                f"{sum(len(v) for v in index['sheets'].values())} sheets listed; index {dl.DOWNLOADS_DIR / 'index.json'}")
 
 
+@app.command("frame-labels")
+def frame_labels(top: int = typer.Option(30, "--top", help="Stretches per sheet in its crop picture.")) -> None:
+    """Rank the ink under every frame label's outline (no GPU).  Writes data/frame/labels-qa/<series>/<sheet>.png
+    from the top stretches and prints `series/sheet total-outline-ink top-stretch-ink`, highest first."""
+    from sfzmaps.frame import data as fd
+    from sfzmaps.frame import labels as fl
+
+    rows = []
+    for series, sheet in fd.labelled_sheets():
+        lum = fd.load_luminance(fd.page_path(series, sheet))
+        polys = fd.load_label(series, sheet)
+        st = fl.outline_stretches(lum, polys, series, sheet)
+        if st:
+            fl.qa_sheet(lum, polys, st[:top], fd.OUT / "labels-qa" / series / f"{sheet}.png")
+        rows.append((sum(s.ink for s in st), st[0].ink if st else 0.0, series, sheet))
+    for total, best, series, sheet in sorted(rows, reverse=True):
+        typer.echo(f"{series}/{sheet} {total:.1f} {best:.1f}")
+
+
 @app.command()
 def doctor(
     renders: int = typer.Option(0, "--renders", help="Also re-render this many PDF pages per series "
