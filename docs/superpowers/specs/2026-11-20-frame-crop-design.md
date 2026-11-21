@@ -404,62 +404,103 @@ arced corners"), which part 2's per-pixel cut lost.
 
   The only exceptions are sides with notches, and the notches are rectangles.
 
-### The shape (replaces part 2's per-pixel cut and component rules)
+### The shape (replaces part 2's per-pixel cut and component rules; edited after the red team, see below)
 
 The kept region K is one shape:
 
-- **Four sides, each a straight line** with its own tilt, plus at most a gentle bow. Bounds: the labels' measured
-  ranges, widened by half. A side with no frame is the page edge.
-- **Corner arcs:** each corner may be cut by a circular arc tangent to its two sides, radius 0 (a sharp corner) up to
-  the labels' largest arc radius, widened by half.
-- **Notches: rectangles cut from K, each touching a side,** any length along the side and any depth. A notch may be
-  rotated: its sides parallel and perpendicular to its own angle θ, not necessarily the frame's. The range of θ comes
-  from the labels' notches; the owner says rotations happen.
-- **Removed blocks:** unchanged (amendment 1): removed = inside K and p₂ > `level`. They are the only holes.
+- **The frame: one rotated rectangle.**
+  - One rotation angle φ for the whole frame and four offsets, plus small per-side deviations. Measured on the
+    labels: opposite sides are parallel to within 0.13° (median; 80% within 0.28°), and a frame's sides share one
+    rotation to within 0.1°.
+  - Per side: a tilt deviation bounded by those spreads widened by half, and a gentle bow bounded by the labels' 95%
+    bow (15 px) widened by half.
+  - A side with no frame is the page edge.
+- **Corner arcs:** each corner may be cut by a circular arc, radius 0 (sharp) up to the labels' largest arc radius
+  widened by half. The arc's form (tangent to both sides, as the 1921 corners look) is checked against the labelled
+  corners in the spike before it's fixed.
+- **Notches: rotated rectangles cut from K, each touching a side, at any length and depth.**
+  - A notch's angle is searched around the frame's φ, over the range of the labels' notch angles widened by half (the
+    owner: "they can be rotated").
+  - **A notch must be a ruled box:** its inner sides follow printed ink. Every labelled notch is one (rule 3, and the
+    owner's "every ruled-off box at the margin"). So a candidate notch scores the ink lying along its inner sides,
+    with weight β (fitted). A cut that follows nothing printed, such as Lake Merced's region, gets no such support.
+- **Removed blocks: shapes too.** Each is a rotated rectangle (legend and title blocks) or an ellipse (SECTION badges,
+  compass roses), placed by the same expected cost, with a per-block cost λ_block (fitted). The candidates come from
+  the pieces where p₂ > `level`. A map patch the network wrongly calls "removed" has an irregular, map-shaped
+  outline: no rectangle or ellipse fits it without taking map ink, so it stays.
+- **Removed blocks are the only holes.**
 - **Pages listed with several maps:** one shape per map. Until such a page is found and checked, those pages keep the
   per-pixel decision, and the run lists them.
 
 **The cost:** the same expected ink cost as part 1. It's a sum over pixels of c_f (p₁ + p₂) ink for each pixel kept,
 and c_m p₀ ink for each pixel deleted. **Paper costs nothing:** the shape, not the paper's chances, decides where an
-edge crosses blank paper, which is why it can be straight. A notch also pays a cost λ_notch, so noise can't be carved
-into many tiny notches. λ_notch is one number, fitted on held-out sheets by the same realised cost, as the priors were.
+edge crosses blank paper, which is why it can be straight. Three numbers are fitted, all where scoring happens (on
+held-out chances, by the same realised cost, as the temperature and the priors were):
+- λ_notch, the cost of a notch, so noise isn't carved into many small notches;
+- β, the weight of the ink along a notch's inner sides;
+- λ_block, the cost of a removed block.
+
+They are fitted on the full run's 21 held-out sheets. The fold-0 spike fits them on its 6 held-out sheets, which is
+rough, and says so.
 
 **Why sound:**
 - This is the Bayes decision restricted to the shape class: of all the shapes the owner and the labels say a frame
   can have, choose the one with the least expected cost given the network's chances. The class carries knowledge the
-  per-pixel network can't express: sides are straight across the whole page, and notches are rectangles.
-- The only fitted number, λ_notch, is fitted where scoring happens (held-out chances), like the temperature.
+  per-pixel network can't express: sides are straight across the whole page, the frame is one rectangle, and notches
+  are ruled rectangles.
+- The few fitted numbers are fitted on held-out chances, never on the network's own training pages.
 
 ### The search: each piece exact given the others; coordinate descent overall
 
-The cost is a sum over pixels, so a running-sum table of the cost difference along the side's normal makes any
+The cost is a sum over pixels, so a running-sum table of the cost difference along each side's normal makes any
 candidate line's cost a sum over the side's length.
 
-1. **Start:** each side's line fitted to the per-pixel cut's edge points nearest that page edge, with a robust
-   (Huber) fit.
-2. **Sides:** for each side in turn, holding the others fixed, search every offset and a fine grid of tilt and bow
-   within the bounds around the start, scoring each candidate from the running sums. Repeat over the four sides until
-   none moves. The cost can only fall, so this ends.
+1. **Start:** a rotated rectangle fitted jointly to all four sides with a robust (Huber) fit. The points come from
+   each row or column's outermost kept pixel of the per-pixel cut. Robust, because a wrong inward cut, like Lake
+   Merced's, only affects a minority of a side's columns.
+2. **Frame:**
+   - the shared angle φ by a 1-D search around the start;
+   - for each side in turn, holding the others fixed, every offset and a fine grid of tilt deviation and bow within
+     the bounds, each scored from the running sums;
+   - repeat until none moves. The cost can only fall, so this ends.
 3. **Corners:** for each corner, the arc radius by a 1-D search.
 4. **Notches**, greedily, one at a time while one gains more than λ_notch:
-   - for each side and each θ in the measured range, work in that rotated frame: u along the side, v inward;
-   - for every depth h, the best span [u₀, u₁] comes from a maximum-subarray (Kadane) pass over the column sums
-     to depth h;
+   - for each side and each angle in the range, work in that rotated frame: u along the side, v inward;
+   - the column sums to each depth h include −β × the ink along the rectangle's inner sides;
+   - for every depth, the best span [u₀, u₁] comes from a maximum-subarray (Kadane) pass;
    - this is exact for a single rectangle anchored at the side.
-5. **Removed blocks** inside K, as in amendment 1.
+5. **Removed blocks:**
+   - for each piece where p₂ > `level` inside K, the best rotated rectangle and the best ellipse over its
+     orientation, centre and size, each by a local search from the piece's own moments;
+   - each kept if it gains more than λ_block.
 
-### Red team
+### Red team, and the edits it made
 
-- **Strong, confident errors touching the frame can still become a rectangular notch.** An example is Lake Merced's
-  region where it meets the bottom frame, if a rectangle through it pays. λ_notch and the evidence decide. What the
-  shape removes is the coastline-shaped cut and wandering over blank paper. Errors of meaning stay a labelling problem.
-- **Coordinate descent finds a local optimum.** The start, a robust fit to the per-pixel cut's edge, is usually near
-  the answer; the held-out scores show whether it isn't.
-- **A notch is one rectangle.** An L-shaped notch takes two, and the greedy search allows that.
-- **Bows beyond the bound** (an extreme 1921 sheet) would leave a sliver of rule inside. The bound comes from the
-  labels with margin, and the close-ups check the thin rule.
-- **Speed:** this replaces a per-pixel threshold. The line search is a few hundred candidates × the side length, from
-  running sums, and the notch search is one pass per depth × θ. Measured in the spike; the target is seconds per page.
+- **Edit 1: the frame is one rotated rectangle,** not four free lines. Measured: opposite sides parallel within 0.13°,
+  one rotation per frame within 0.1°. Fewer free numbers per page, so a wrong patch of chances can't tilt one side on
+  its own.
+- **Edit 2: a notch must be a ruled box.** Without this, a confident error touching the frame, such as Lake Merced
+  meeting the bottom frame, could still become a rectangular notch if its chances paid for it. Every labelled notch
+  is a ruled box, so its inner sides lying on printed ink is real evidence. β weighs it, fitted.
+- **Edit 3: removed blocks are shapes too.** About 70% of the fold-0 held-out error was the removed-block class,
+  mostly map patches called "removed" (1948/12) and legends not removed (1921 Lake Merced). The straight-line frame
+  alone leaves that untouched. Legends are rectangles; badges and compass roses fit an ellipse; a map-shaped false
+  patch fits neither.
+- **Edit 4: the fitted numbers are fitted on all 21 held-out sheets.** Fold 0's 6 hold only one or two notches,
+  far too few to fit λ_notch; the spike says its fit is rough.
+- **Edit 5: corner arcs are checked against the labels before the form is fixed.** The 1921 arcs look tangent to both
+  sides, but a wrong form would leave arc ink inside every corner.
+- **Edit 6: the start is a robust, joint rectangle fit,** so a wrong inward cut can't drag a side.
+- **Still true:**
+  - coordinate descent finds a local optimum, and the held-out scores show it if the start misleads it;
+  - a bow beyond the bound leaves a sliver of rule inside, and the close-ups check the thin rule;
+  - errors of meaning on sheets unlike any label still need labels.
+- **Speed:**
+  - the line search is a few hundred candidates × the side length, from running sums;
+  - the notch search is one pass per depth × angle;
+  - the block search is local per candidate.
+
+  Measured in the spike; the target is seconds per page.
 - **What doesn't change:** the network, the training, the labels, the calibration and the scores. Only the decision
   changes, so it's compared with the per-pixel cut on the same held-out chances.
 
