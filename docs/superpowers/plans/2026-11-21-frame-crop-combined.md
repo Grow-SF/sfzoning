@@ -323,10 +323,22 @@ def test_partly_framed_page_keeps_its_corners():
     2. blocks, then notches;
     3. the rectangle re-fitted within ±0.5° and ±32 px, then sides, tilt, bow and fillets, with notch and block px
        zeroed;
-    4. blocks re-scored in the final kept region;
-    5. `Decision(outside, removed, filled_ink=0.0, dropped_ink, removed_ink)`.
+    4. `on_paper` (below);
+    5. blocks re-scored in the final kept region;
+    6. `Decision(outside, removed, filled_ink=0.0, dropped_ink, removed_ink)`.
 
     With `maps > 1`, fall back to `decide.decide(p, lum, maps)` and say so in the log.
+  - `on_paper(frame, notches, blocks, p, lum) -> tuple[Frame, list, list]`: the cut lies on paper (label rule 1;
+    Task 1b: frame/legend ink left in 1.19% → 0.81%, map cut 0.136% → 0.139%). Port from
+    `scripts/spikes/issue71_on_paper.py`; its report is `.superpowers/sdd/2026-11-21-frame-crop-combined/on-paper-report.md`.
+    - Each line slides along its normal within one patch width (`max(page sides) / layout.LONG_PATCHES` px) of where
+      the fit put it.
+    - It takes the position minimising E(t) + `COST_FRAME` × (the ink in the first kept row), where E(t) is the
+      expected ink cost of the rows the line keeps. Ink under the line is charged at the frame-left-in price; no
+      number is fitted.
+    - A frame side's two ends move independently (a shift plus a tilt). Fillets, notch sides and block sides only
+      shift.
+    - Ties stay where the fit put the line. A side at the page edge doesn't move.
   - `side_ink_left(p, lum, frame, strip=STRIP) -> dict[str, float]`: per side, the ink with `p[1] + p[2] >
     cut_level()` in the strip just inside the fitted side (amendment 2's ranking).
 
@@ -342,6 +354,15 @@ def test_blocks_are_bounded_by_the_labels():
     # a p2 blob on blank paper 5x the largest labelled block: the fitted ellipse is no larger than bounds.ellipse_max
     ...
 def test_map_shaped_false_block_is_refused(): ...         # an L-shaped p2 patch over map ink: no shape gains
+def test_on_paper_moves_a_side_off_a_thin_rule():
+    # a 3-px rule; the fitted side sits on it (2 px in); chances call the rule frame: the side moves to the paper row
+    # just inside the rule; map ink 6 px further in is not cut
+    ...
+def test_on_paper_picks_the_inner_gap_not_the_margin():
+    # bar, gap, thin rule, gap, map; the fit starts between the rules: it ends inside the thin rule, not outside the bar
+    ...
+def test_on_paper_leaves_ties_and_page_edges_alone(): ...   # blank band: no move; a frameless side: no move
+def test_on_paper_stays_within_one_patch(): ...
 def test_decision_is_one_region_with_only_block_holes(): ...
 def test_frameless_page_only_loses_its_blocks(): ...
 def test_side_ink_left_ranks_a_missed_rule(): ...

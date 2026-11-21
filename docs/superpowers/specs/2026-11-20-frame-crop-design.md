@@ -626,3 +626,32 @@ On fold 0's six held-out sheets, as shares of each class's ink:
 - **The remaining cost is about 90% at the edge:** the layout sees 50-px patches. Next test: slide each fitted line,
   within one patch, to where it lies on paper (label rule 1), with no second network.
 - **Open from the test:** the bottom row of blocks cut on 1948/4, and a notch across the map on 1948/3.
+
+### Amendment 3: the cut lies on paper (owner, 2026-11-21: "Make a plan and do it")
+
+Task 1b's test, on the six held-out sheets with the full-resolution network truly absent:
+
+| | frame / legend ink left in | map ink cut |
+|---|---:|---:|
+| layout + straight lines (the true start; the 1.0% above still read the full-resolution network on boundary px) | 1.19% | 0.136% |
+| … + each line slid onto paper | 0.81% | 0.139% |
+
+**The step:**
+- Each fitted line slides along its normal within one patch width.
+- It takes the position minimising the layout's expected ink cost of what it keeps, plus the ink under the line itself
+  charged at the frame-left-in price (label rule 1: the outline lies on paper). No number is fitted.
+- A frame side's two ends move independently. Ties stay put, and page-edge sides don't move.
+
+**What was tried and lost:**
+- **Lightest row first:** 4× worse, because it lands on the blank margin outside the bar.
+- **The layout's cost alone:** no change.
+- **Ink charged at the map price:** 87k against 71k.
+- **A likelihood measured from the labels:** worse, because the labelled lines sit on the rule's ragged fringe.
+
+**Known regression:** where map hatching touches the rule (1921/142210), the line moves 1–3 px into the rule's fringe.
+
+**Out of its reach (layout misses of more than a patch), to be examined when the shape code is ported:**
+- 1948/12's badge not found and its legend fitted 5° off;
+- 1921/355582's bottom side 400 px high;
+- 1948/4's bottom row of blocks clipped;
+- 1948/14's thick bars called map.
