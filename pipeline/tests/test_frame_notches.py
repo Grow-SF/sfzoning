@@ -97,3 +97,22 @@ def test_kadane_matches_brute_force(seed):
         Iv[d - kc:d, a0:a1].sum() + Iv[:d, a0:min(a0 + kc, n_a)].sum() + Iv[:d, max(a1 - kc, 0):a1].sum()
     ) / norm
     assert check == pytest.approx(v)
+
+
+@pytest.mark.parametrize("beta", [0.0, 1.0, 3.0, 10.0])
+def test_side_ink_alone_buys_no_notch(beta):
+    # a pair of 3-px lines 3 px apart running 500 px in from the bottom side, inside the map, called map: a 9-px
+    # notch between them has every strip on ink, but deleting it only costs map ink
+    lum, p, tr = make_page(phi=0.0, seed=4)
+    h, w = lum.shape
+    y1 = h - 70  # the bottom side's line
+    lum[y1 - 500 : y1, 600:603] = 0.0
+    lum[y1 - 500 : y1, 606:609] = 0.0
+    fr = _true_frame(tr)
+    D = cost_field(p, lum)
+    sliver = notches.Notch("bottom", 0.0, 600 - w / 2, 609 - w / 2, 500 - h / 2 + 70)
+    m = notches.notch_mask(sliver, D.shape) & fr.mask(D.shape)
+    area = -D[m].sum()
+    assert area < 0 < area + 10.0 * notches.side_ink(sliver, (1 - lum) * fr.mask(D.shape))  # the trap is there
+    got = notches.greedy_notches(D, 1 - lum, fr, Params(0.0, beta, 0.0))
+    assert got == []

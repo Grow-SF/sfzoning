@@ -117,3 +117,20 @@ def test_on_paper_never_turns_a_notch_inside_out():
     n = Notch("top", 0.0, 300 - W / 2, 309 - W / 2, 200 - H / 2)
     fr, ns, _ = paper.on_paper(Frame(), [n], [], p, lum)
     assert ns[0].a1 - ns[0].a0 >= NOTCH_MIN_PX
+
+
+def test_on_paper_tilt_stays_within_the_bound():
+    # a 3-px rule slanting 6 px over the page's 600 rows (0.57 degrees), a 2-px paper gap, then the map; the
+    # fitted left side keeps from column 101 (on the rule).  Following the rule (within a patch) would tilt it 0.57
+    # degrees; it may tilt only up to TILT_MAX towards it.
+    from sfzmaps.frame.geometry import TILT_MAX
+
+    lum, p = _page([(0, 100, "paper")], called_out_to=0)
+    for y in range(H):
+        x = 100 + int(6 * y / H)
+        lum[y, x : x + 3] = 0.0
+        lum[y, x + 3 : x + 5] = 1.0
+        p[:, y, : x + 3] = OUT_P[:, None]
+    fr, _, _ = paper.on_paper(_left_framed(101), [], [], p, lum)
+    assert fr.tilt["left"] > 0.0
+    assert abs(fr.tilt["left"]) <= TILT_MAX + 1e-9

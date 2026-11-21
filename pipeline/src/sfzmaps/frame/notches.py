@@ -8,7 +8,11 @@ pixels with "along" in [a0, a1) and inward distance e < d (`geometry.e_along`), 
 **A notch must be a ruled box** (label rule 3): its gain is the sum of -D (`geometry.cost_field`'s D > 0 means
 "cheaper kept") over what it deletes of the kept region, plus beta x the ink in the STRIP px just inside its three
 inner sides, per px of side (spike finding 7).  A cut that follows nothing printed gets no such support.  Notches are
-added greedily while the best one's gain exceeds lambda_notch.  beta above COST_MAP can be gamed (the spike: 1-3 px
+added greedily while the best one's gain exceeds lambda_notch, and **only if its area term alone (the sum of -D) is
+positive** (controller ruling C5): side ink is evidence that a box is ruled; it can't stand in for the region being
+outside (on 1948/14, beta = 3 paid for 9-px slivers up to 2,800 px deep along pairs of lines, their sums of -D -2,146,
+-1,894 and +78).  The
+search stages propose only such notches too.  beta above COST_MAP can be gamed (the spike: 1-3 px
 slivers along street lines, paid for by beta x a line's ink counted on both sides), so a notch is at least
 2 x STRIP + 1 px wide.
 """
@@ -38,6 +42,7 @@ STAGES = (2, 1)  # px: the cells of the refining stages after it (1: full resolu
 FINE_ANGLE = 0.25  # degrees: a refining stage's angle window, at least, either side of the angle before ...
 FINE_ANGLE_STEP = 0.05  # degrees: ... and its step
 FINE_CELLS = 2  # a refining stage searches the ends and the depth this many of the previous stage's cells either side
+AREA_TOP = 64  # the best (depth, end) pairs a stage checks for a positive area term (computational)
 
 
 @dataclass
@@ -92,12 +97,25 @@ def notches_mask(ns, shape: tuple[int, int]) -> np.ndarray:
     return out
 
 
-def _kadane(Dv, Iv, bw: float, s: int, kc: int, d_lo: int = 1, d_hi: int | None = None):
+def _value(Dv, Iv, bw: float, s: int, kc: int, a0: int, a1: int, d: int) -> tuple[float, float]:
+    """(value, area term) of the notch rows [0, d) x columns [a0, a1) of a side view, as `_kadane` scores it."""
+    n_a = Dv.shape[1]
+    area = float(Dv[:d, a0:a1].sum(dtype=np.float64))
+    ink = (Iv[d - kc : d, a0:a1].sum() + Iv[:d, a0 : min(a0 + kc, n_a)].sum() + Iv[:d, max(a1 - kc, 0) : a1].sum())
+    return area + bw * float(ink) / (kc * s), area
+
+
+def _kadane(Dv, Iv, bw: float, s: int, kc: int, d_lo: int = 1, d_hi: int | None = None,
+            area_positive: bool = False):
     """The best notch on a side view (rows from the canvas edge inward, columns along the side, cells of s px): rows
     [0, d) x columns [a0, a1), at least NOTCH_MIN_PX wide.  Its value: the sum of the gain Dv over it + bw x the ink
     along its three inner sides, each the ink in the strip of kc cells just inside it per px of side.  For every depth
     d the best span is a maximum-sum subarray with end terms (Kadane, with a running maximum of the start term).
-    Returns (value, a0, a1, d); value -inf when there is none."""
+    Returns (value, a0, a1, d); value -inf when there is none.
+
+    `area_positive`: only notches whose area term (the sum of Dv over them, without the side ink) is positive, so
+    side ink alone can't pay for a notch (controller ruling C5).  Not exact: the best of the AREA_TOP best
+    (depth, end) pairs whose best start has a positive area term, and the best notch by area alone."""
     n_e, n_a = Dv.shape
     d_hi = n_e if d_hi is None else min(d_hi, n_e)
     d_lo = max(d_lo, kc)
@@ -129,11 +147,37 @@ def _kadane(Dv, Iv, bw: float, s: int, kc: int, d_lo: int = 1, d_hi: int | None 
     if wmin <= n_a:
         Mx[:, wmin - 1 :] = np.maximum.accumulate(M, 1)[:, : n_a - wmin + 1]
     val = P + end + Mx
+    if area_positive:
+        return _area_positive(Dv, Iv, bw, s, kc, d_lo, d_hi, val, M, G, ds, wmin)
     di, a1 = np.unravel_index(int(np.argmax(val)), val.shape)
     if not np.isfinite(val[di, a1]):
         return -np.inf, 0, 0, 0
     a0 = int(np.argmax(M[di, : a1 - wmin + 2]))
     return float(val[di, a1]), a0, int(a1) + 1, int(ds[di])
+
+
+def _area_positive(Dv, Iv, bw, s, kc, d_lo, d_hi, val, M, G, ds, wmin):
+    """`_kadane`'s `area_positive` choice (see there)."""
+    best = (-np.inf, 0, 0, 0)
+    if bw:
+        PA = np.cumsum(G[ds], 1)  # the area term's running sums along the side, per depth
+        flat = val.ravel()
+        k = min(AREA_TOP, int(np.isfinite(flat).sum()))
+        if k > 0:
+            top = np.argpartition(-flat, k - 1)[:k]
+            for i in top[np.argsort(-flat[top], kind="stable")]:
+                di, a1 = np.unravel_index(int(i), val.shape)
+                a0 = int(np.argmax(M[di, : a1 - wmin + 2]))
+                area = PA[di, a1] - (PA[di, a0 - 1] if a0 > 0 else 0.0)
+                if area > 0:
+                    best = (float(flat[i]), a0, int(a1) + 1, int(ds[di]))
+                    break
+    plain = _kadane(Dv, Iv, 0.0, s, kc, d_lo, d_hi)  # the best by area alone
+    if np.isfinite(plain[0]) and plain[0] > 0:
+        v, _ = _value(Dv, Iv, bw, s, kc, plain[1], plain[2], plain[3])
+        if v > best[0]:
+            best = (v, plain[1], plain[2], plain[3])
+    return best
 
 
 class _Gains:
@@ -177,7 +221,7 @@ def _best_notch(g: _Gains, phi: float, bw: float) -> Notch | None:
             E, A = cv.EA(side)
             hp = half(side, h, w)
             ne = int((E - hp + NOTCH_REACH * 2 * hp) // s)
-            r = _kadane(side_view(Gw, side)[:ne], side_view(Iw, side)[:ne], bw, s, 1)
+            r = _kadane(side_view(Gw, side)[:ne], side_view(Iw, side)[:ne], bw, s, 1, area_positive=True)
             if r[0] > best[0]:
                 best = (r[0], Notch(side, psi, float(r[1] * s - A), float(r[2] * s - A), float(r[3] * s - E), r[0]))
     if not np.isfinite(best[0]):
@@ -220,7 +264,7 @@ def _refine_notch(n: Notch, G, I, phi, bw, s, prev, h, w) -> Notch | None:
         Gv = cv.side_window(n.side, G, 0, e1, a0, a1, s)
         Iv = cv.side_window(n.side, I, 0, e1, a0, a1, s)
         d_lo = max(1, int(math.floor((n.d + E - pad) / s)))
-        r = _kadane(Gv, Iv, bw, s, max(1, STRIP // s), d_lo=d_lo, d_hi=e1)
+        r = _kadane(Gv, Iv, bw, s, max(1, STRIP // s), d_lo=d_lo, d_hi=e1, area_positive=True)
         if r[0] > best[0]:
             best = (r[0], Notch(n.side, float(psi), float((r[1] + a0) * s - A), float((r[2] + a0) * s - A),
                                    float(r[3] * s - E), r[0]))
@@ -262,8 +306,9 @@ def greedy_notches(D: np.ndarray, ink: np.ndarray, frame: Frame, params: Params,
         if not m.any():
             break
         n.ink = side_ink(n, g.IK)
-        n.gain = float(g.GK[y0:y1, x0:x1][m].sum(dtype=np.float64)) + params.beta * n.ink
-        if n.gain <= params.lam_notch:
+        area = float(g.GK[y0:y1, x0:x1][m].sum(dtype=np.float64))
+        n.gain = area + params.beta * n.ink
+        if area <= 0 or n.gain <= params.lam_notch:  # side ink supports a box; it can't make a region outside
             break
         out.append(n)
         K[y0:y1, x0:x1] &= ~m

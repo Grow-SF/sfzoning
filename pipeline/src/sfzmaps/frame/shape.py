@@ -62,6 +62,7 @@ from sfzmaps.frame.geometry import (  # noqa: F401  (re-exported)
     CORNERS,
     END_CORNERS,
     SIDES,
+    TILT_MAX,
     Canvas,
     Frame,
     Lines,
@@ -78,7 +79,6 @@ from sfzmaps.frame.notches import NOTCH_REACH
 log = logging.getLogger(__name__)
 
 ANGLE_MAX = 2.5  # degrees: the labels' 95% frame tilt 1.56, widened by half and rounded
-TILT_MAX = 0.45  # degrees: per-side deviation (labels' 80% parallelism 0.28 x 1.5)
 BOW_MAX = 22  # px: per-side bow at the middle (labels' 95% bow 15 x 1.5)
 ARC_MAX = 332  # px: the largest fillet radius (the largest labelled, 221 px, x 1.5)
 NOTCH_SPAN_MAX = 0.5  # a credited notch covers at most this share of its side (labelled notches: 23-29%, x 1.5 rounded)

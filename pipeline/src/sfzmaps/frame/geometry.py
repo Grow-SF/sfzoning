@@ -21,6 +21,7 @@ END_CORNERS = {
     "left": (("top", "left"), ("bottom", "left")),
     "right": (("top", "right"), ("bottom", "right")),
 }
+TILT_MAX = 0.45  # degrees: a side's tilt deviation from phi (labels' 80% parallelism 0.28 x 1.5)
 ARC_MARGIN = 8  # px: a side is fitted without the columns this far beyond a fitted fillet's radius (computational)
 
 

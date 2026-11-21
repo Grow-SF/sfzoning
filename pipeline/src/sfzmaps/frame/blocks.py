@@ -118,7 +118,11 @@ def label_kind(poly) -> tuple[str, float, float]:
 
 def block_bounds(labelled: Iterable[data.SheetId], root: Path = data.LABELS) -> BlockBounds:
     """The labelled blocks' (every `remove` polygon of the `labelled` sheets) largest rectangle sides and ellipse
-    axes, each class by `label_kind`, widened by WIDEN.  A class with no labelled block gets (0, 0): no such shape."""
+    axes, widened by WIDEN.  Each polygon is assigned to the family whose shape fits it better (`label_kind`: the
+    larger intersection over union), and bounds that family only; the labels are the authority (controller ruling
+    C7: a compass rose with its long needle is legitimately a long thin ellipse; on the 21 labels this gives
+    rectangles <= 1212 x 994 px and ellipses <= 1419 x 484).  A family with no labelled block gets (0, 0): no such
+    shape."""
     rect, ell = [0.0, 0.0], [0.0, 0.0]
     for sid in labelled:
         for poly in data.load_remove(*sid, root=root):

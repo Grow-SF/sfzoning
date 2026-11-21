@@ -17,8 +17,8 @@ fitted.  (Measured on fold 0's six held sheets: frame/legend ink left in 1.19% -
 0.139%.  The layout's cost alone moved almost nothing; the lightest row first lands on the blank margin outside a
 frame bar; ink at the map price did less.)
 
-- A frame side's two ends move independently within +-R (a shift plus a tilt), its cost summed over ALONG_BINS bins
-  along it; fillet radii, notch sides and block sides only shift.
+- A frame side's two ends move independently within +-R (a shift plus a tilt, the side's tilt deviation staying
+  within +-TILT_MAX, controller ruling C6), its cost summed over ALONG_BINS bins along it; fillet radii, notch sides and block sides only shift.
 - Ties stay where the fit put the line (paper rows of a 1-bit scan tie exactly).  A side at the page edge doesn't
   move.  A notch's or a block's side never slides past the opposite one: a notch stays at least NOTCH_MIN_PX wide and
   a rectangle 1 px (in the spike a side's window ran past the opposite side, and on 1948/14 a notch came out
@@ -39,6 +39,7 @@ from sfzmaps.frame.geometry import (
     CORNERS,
     END_CORNERS,
     SIDES,
+    TILT_MAX,
     Canvas,
     Frame,
     Lines,
@@ -111,9 +112,10 @@ def _choose(ik, dd, R, lo: float = -np.inf) -> int:
     return int(ts[np.lexsort((np.abs(ts), np.round(J, 6)))[0]])
 
 
-def _choose_ends(x, s, zone, ink_c, D_c, R) -> tuple[int, int]:
+def _choose_ends(x, s, zone, ink_c, D_c, R, dmin=-np.inf, dmax=np.inf) -> tuple[int, int]:
     """A frame side's two ends each moved within [-R, R) (x: the px's place along the side, 0 at one end and 1 at
-    the other), minimising J summed over ALONG_BINS bins along it; ties: the least total move."""
+    the other), the far end's move less the near end's within [dmin, dmax], minimising J summed over ALONG_BINS bins
+    along it; ties: the least total move."""
     r = np.floor(s).astype(np.int64)
     sel = zone & (r >= -R) & (r < R)
     nb, n = ALONG_BINS, 2 * R
@@ -128,7 +130,7 @@ def _choose_ends(x, s, zone, ink_c, D_c, R) -> tuple[int, int]:
     best = None
     for tl in ts:
         k = np.clip(np.round(tl + (ts[:, None] - tl) * xc[None, :]).astype(np.int64) + R, 0, n - 1)  # (th, bin)
-        J = J1[cols, k].sum(1)
+        J = np.where((ts - tl >= dmin) & (ts - tl <= dmax), J1[cols, k].sum(1), np.inf)
         for th, j in zip(ts, J):
             cand = (round(float(j), 6), abs(int(tl)) + abs(int(th)), int(tl), int(th))
             if best is None or cand < best:
@@ -159,7 +161,10 @@ def _slide_side(st: _State, side: str, R: int, ink, D) -> None:
     e, a = e_along(side, *g.cv.uv(x, y))
     s = e - g.bound(side, a)
     zone = (a >= f_lo) & (a < f_hi) & st.kept(y0, y1, x0, x1, skip_side=side)
-    t_lo, t_hi = _choose_ends((a - f_lo) / (f_hi - f_lo), s, zone, ink[y0:y1, x0:x1], D[y0:y1, x0:x1], R)
+    # the added tilt keeps the side's tilt deviation within +-TILT_MAX (controller ruling C6)
+    t0, tmax = math.tan(math.radians(fr.tilt[side])), math.tan(math.radians(TILT_MAX))
+    dmin, dmax = (-tmax - t0) * (f_hi - f_lo), (tmax - t0) * (f_hi - f_lo)
+    t_lo, t_hi = _choose_ends((a - f_lo) / (f_hi - f_lo), s, zone, ink[y0:y1, x0:x1], D[y0:y1, x0:x1], R, dmin, dmax)
     if t_lo == 0 and t_hi == 0:
         return
     m = (lo + hi) / 2.0
