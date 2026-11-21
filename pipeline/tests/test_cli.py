@@ -159,37 +159,6 @@ def test_cli_downloads_rejects_unknown_series(monkeypatch):
     assert res.exit_code != 0 and "nope" in res.output
 
 
-def test_cli_frame_listed():
-    import re
-
-    from typer.testing import CliRunner
-
-    from sfzmaps import cli
-
-    res = CliRunner().invoke(cli.app, ["--help"])
-    assert "frame" in res.output
-    res = CliRunner().invoke(cli.app, ["frame", "--help"], env={"NO_COLOR": "1", "TERM": "dumb"})
-    plain = re.sub(r"\x1b\[[0-9;]*m", "", res.output)
-    assert res.exit_code == 0
-    assert all(opt in plain for opt in ("--device", "--seed", "--steps", "--only-folds", "--skip-folds"))
-    assert "--fold " not in plain     # hidden: the determinism check's one-fold run
-
-
-def test_cli_frame_refuses_bad_starts(monkeypatch, tmp_path):
-    """Too few steps for one validation check, or --skip-folds with no folds.json: a short error, no traceback."""
-    from typer.testing import CliRunner
-
-    from sfzmaps import cli
-    from sfzmaps.frame import data as frame_data
-
-    monkeypatch.setattr(frame_data, "OUT", tmp_path)
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--steps", "10"])
-    assert res.exit_code != 0 and isinstance(res.exception, SystemExit) and "check" in res.output
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--skip-folds"])
-    assert res.exit_code == 1 and isinstance(res.exception, SystemExit) and "folds.json" in res.output
-    assert list(tmp_path.iterdir()) == []
-
-
 def test_cli_downloads_listed(monkeypatch):
     from typer.testing import CliRunner
 

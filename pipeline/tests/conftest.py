@@ -89,10 +89,10 @@ def _no_vision_api(request, monkeypatch, tmp_path):
     llm.reset_stop()
 
 
-@pytest.fixture(params=[(), ("valid",), ("valid", "edge")], ids=["none", "valid", "valid+edge"])
-def position_channels(request, monkeypatch):
-    """The frame finder's position channels (`frame.data.POSITION_CHANNELS`) set to each allowed setting in turn: the
-    position inputs off, the default scan mask alone, and Task 14's scan mask and edge distance."""
-    from sfzmaps.frame import data
-    monkeypatch.setattr(data, "POSITION_CHANNELS", request.param)
-    return request.param
+@pytest.fixture
+def small_model(monkeypatch):
+    """The frame finder's network shrunk (`frame.model` FOLD, LEVELS, WIDTH) so tests run on cpu in seconds."""
+    from sfzmaps.frame import model
+    monkeypatch.setattr(model, "FOLD", 2)
+    monkeypatch.setattr(model, "LEVELS", 2)
+    monkeypatch.setattr(model, "WIDTH", 4)

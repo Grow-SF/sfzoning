@@ -1,10 +1,10 @@
 """Learned map-frame finder (issue #71).
 
-A U-Net looks at one scanned page and predicts which pixels belong to the map
-area (inside the printed frame, notches and all), replacing the hand-built
-frame crops. This package holds the data layer (pages, hand-drawn labels,
-masks), and later the training, prediction and evaluation code.
-Design: docs/superpowers/specs/2026-11-19-learned-frame-design.md
+One full-resolution network looks at a whole scanned page and gives, per pixel, the chance it is outside the map
+area (the printed frame, notches and all); a later step cuts the page where that chance says.  This package holds
+the data layer (pages, hand-drawn labels, masks) and the network (`model`); training, the cut decision, scores and
+pictures are added on top of them.
+Design: docs/superpowers/specs/2026-11-20-frame-crop-design.md
 
 Constraints that hold everywhere in this package:
 - $0: no paid reads, no LLM output as input.
