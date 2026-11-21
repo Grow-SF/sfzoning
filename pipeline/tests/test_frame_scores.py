@@ -66,3 +66,34 @@ def test_paired_difference_sign_and_interval():
     a = {("s", str(i)): 1.0 + 0.1 * i for i in range(20)}; b = {k: v - 0.5 for k, v in a.items()}
     m, lo, hi = scores.paired_difference(a, b)
     assert m == pytest.approx(0.5) and lo == pytest.approx(0.5) and hi == pytest.approx(0.5)
+
+
+def test_scores_split_layout_and_edge():
+    cls = np.ones((300, 400), np.uint8)
+    cls[:, 200:] = 0                                      # the outline: a class change at x = 199 | 200
+    lum = np.ones((300, 400), np.float32)
+    lum[100:110, 350] = 0.0                               # map ink 150 px from the outline, cut
+    lum[100:105, 180] = 0.5                               # frame ink 20 px from the outline, left in
+    deleted = np.zeros((300, 400), bool)
+    deleted[:, :150] = True
+    deleted[:, 300:] = True
+    s = scores.sheet_scores(np.zeros((3, 300, 400)), deleted, cls, lum)
+    assert scores.SPLIT_PX == 100
+    assert s["map_cut"] == 10 and s["frame_kept"] == 2.5
+    assert s["cost_layout"] == pytest.approx(10.0)        # COST_MAP x 10
+    assert s["cost_edge"] == pytest.approx(7.5)           # COST_FRAME x 2.5
+    assert s["cost_layout"] + s["cost_edge"] == pytest.approx(s["cost"])
+
+
+def test_scores_split_with_one_class_is_all_layout():
+    cls = np.zeros((20, 20), np.uint8)
+    lum = np.zeros((20, 20), np.float32)
+    s = scores.sheet_scores(np.zeros((3, 20, 20)), np.ones((20, 20), bool), cls, lum)
+    assert s["cost_edge"] == 0.0 and s["cost_layout"] == s["cost"] == 400.0
+
+
+def test_scores_count_each_class_ink():
+    cls = np.zeros((4, 4), np.uint8); cls[0] = 1; cls[1] = 2
+    s = scores.sheet_scores(np.zeros((3, 4, 4)), np.zeros((4, 4), bool), cls, np.zeros((4, 4)))
+    assert (s["outside_kept"], s["block_kept"], s["frame_ink"], s["map_ink"]) == (4, 4, 8, 8)
+    assert s["outside_kept_share"] == 1.0 and s["block_kept_share"] == 1.0

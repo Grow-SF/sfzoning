@@ -233,3 +233,16 @@ def test_cache_reuses_the_work_that_does_not_depend_on_the_numbers(monkeypatch):
     assert again[1] == fresh[1] and again[2] == fresh[2]
     shape.decide(p, lum, shape.Params(lam_notch=2e4, beta=3.0, lam_block=1e3), BOUNDS, cache=cache)
     assert calls == [(True, 2e4)]  # a new lambda_notch: only the notch-aware start again
+
+
+def test_cache_refuses_another_page():
+    lum, p, _ = make_page(h=300, w=400, offset={"top": 30.0, "bottom": 30.0, "left": 30.0, "right": 30.0})
+    cache = {}
+    shape.decide(p, lum, FITTED, BOUNDS, cache=cache)
+    shape.decide(p, lum, FITTED, BOUNDS, cache=cache)            # the same page again: fine
+    other = p.copy()
+    other[:, 150:160, 200:210] = other[:, 150:160, 200:210][::-1]
+    with pytest.raises(ValueError, match="another page"):
+        shape.decide(other, lum, FITTED, BOUNDS, cache=cache)
+    with pytest.raises(ValueError, match="another page"):
+        shape.decide(p[:, :200], lum[:200], FITTED, BOUNDS, cache=cache)

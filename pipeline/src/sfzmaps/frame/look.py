@@ -1,12 +1,14 @@
 """Pictures of the frame finder's outputs, for the owner's eye.
 
 A sheet picture is the scan with its paper white and each ink px coloured by q, the chance it is deleted, from blue
-(kept) to red (deleted), as strongly as the px is inked; the boundary of the kept region (removed blocks' too) is drawn
-on top in magenta.  Pages are shrunk (Pillow BOX) before they are coloured and never enlarged.
+(kept) to red (deleted), as strongly as the px is inked; the outline of the kept region (the fitted frame, its notches
+and the removed blocks' holes) is drawn on top in magenta, as straight lines: the polygons of `outline.json`
+simplified within `OUTLINE_TOLERANCE` px (a px staircase along a straight fitted line becomes that line).  Pages are
+shrunk (Pillow BOX) before they are coloured and never enlarged.
 
 Under `out/look/`: one picture per map page at `LONG_SIDE` (`<series>/<sheet>.png`), one mosaic per series
-(`<series>.png`; a labelled sheet's caption shows its held-out `frame_kept` and `map_cut`) and `closeups.png`, crops of
-`CLOSEUPS` at full scan resolution (never shrunk).
+(`<series>.png`; a labelled sheet's caption shows its held-out shares of frame ink left in and map ink cut) and
+`closeups.png`, crops of `CLOSEUPS` at full scan resolution (never shrunk).
 """
 from __future__ import annotations
 
@@ -18,8 +20,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 from scipy import ndimage
+from shapely.geometry import LineString
 
-from sfzmaps.frame import data, run
+from sfzmaps.frame import data, run, scores
 from sfzmaps.frame.data import OUT, SheetId
 
 log = logging.getLogger(__name__)
@@ -35,6 +38,7 @@ DELETED_RGB = (255, 0, 0)
 CONTOUR_RGB = (255, 0, 255)
 PAPER_RGB = (255, 255, 255)
 BACKGROUND_RGB = (200, 200, 200)   # around the tiles, so a page's white paper shows where it ends
+OUTLINE_TOLERANCE = 1.0   # px: a straight line's px staircase lies within this of it (for drawing only)
 
 # (series, sheet, (x0, y0, x1, y1) in page px, caption): places that have gone wrong before.
 CLOSEUPS: list[tuple[str, str, tuple[int, int, int, int], str]] = [
@@ -45,6 +49,8 @@ CLOSEUPS: list[tuple[str, str, tuple[int, int, int, int], str]] = [
     ("1948", "4", (680, 5000, 1160, 5800), "1948/4 Great Highway"),
     ("1948", "4", (4334, 5905, 4834, 6305), "1948/4 blocks 1724-1726 and frame bar"),
     ("1948", "8", (0, 1500, 600, 4500), "1948/8 left edge"),
+    ("1948", "2", (4300, 5300, 5050, 6450), "1948/2 blank strip between the map and the right frame"),
+    ("1948", "9", (3900, 3300, 4653, 4300), "1948/9 blank strip at the right edge"),
 ]
 
 
@@ -56,9 +62,22 @@ def _shrink(a: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     return np.asarray(Image.fromarray(a).resize(size, Image.BOX), np.float32)
 
 
-def sheet_picture(lum: np.ndarray, q: np.ndarray, deleted: np.ndarray, side: int = LONG_SIDE) -> Image.Image:
+def rings(polygons: list[dict], tolerance: float = OUTLINE_TOLERANCE) -> list[list[tuple[float, float]]]:
+    """Every ring (exteriors and holes) of `outline.json`'s polygons, simplified within `tolerance` px for drawing."""
+    out = []
+    for poly in polygons:
+        for ring in [poly["exterior"], *poly["holes"]]:
+            if len(ring) < 2:
+                continue
+            out.append([(float(x), float(y)) for x, y in LineString(ring).simplify(tolerance).coords])
+    return out
+
+
+def sheet_picture(lum: np.ndarray, q: np.ndarray, deleted: np.ndarray, side: int = LONG_SIDE,
+                  polygons: list[dict] | None = None) -> Image.Image:
     """The page coloured by `q` (see the module), its longest side `side` px (a smaller page keeps its own size:
-    scans are never enlarged); `deleted` is the cut's mask, whose complement's boundary is drawn."""
+    scans are never enlarged); `deleted` is the cut's mask.  With `polygons` (`outline.json`'s), their simplified
+    rings are drawn; without, the boundary of the shrunk mask's complement."""
     if q.shape != lum.shape or deleted.shape != lum.shape:
         raise ValueError(f"q {q.shape} and deleted {deleted.shape} are not the page's shape {lum.shape}")
     h, w = lum.shape
@@ -68,18 +87,25 @@ def sheet_picture(lum: np.ndarray, q: np.ndarray, deleted: np.ndarray, side: int
     ink = np.clip(data.ink_weight(_shrink(lum, size)), 0.0, 1.0)[..., None]
     colour = qs * np.array(DELETED_RGB, np.float32) + (1.0 - qs) * np.array(KEPT_RGB, np.float32)
     rgb = (1.0 - ink) * np.array(PAPER_RGB, np.float32) + ink * colour
-    kept = _shrink(deleted.astype(np.float32), size) < 0.5
-    edge = ndimage.binary_dilation(kept & ~ndimage.binary_erosion(kept, border_value=1))
-    rgb[edge] = CONTOUR_RGB
-    return Image.fromarray(np.round(rgb).astype(np.uint8), "RGB")
+    if polygons is None:
+        kept = _shrink(deleted.astype(np.float32), size) < 0.5
+        edge = ndimage.binary_dilation(kept & ~ndimage.binary_erosion(kept, border_value=1))
+        rgb[edge] = CONTOUR_RGB
+    img = Image.fromarray(np.round(rgb).astype(np.uint8), "RGB")
+    if polygons is not None:
+        sx, sy = size[0] / w, size[1] / h
+        draw = ImageDraw.Draw(img)
+        for ring in rings(polygons):
+            draw.line([(x * sx, y * sy) for x, y in ring], fill=CONTOUR_RGB, width=1)
+    return img
 
 
 def _font() -> ImageFont.ImageFont:
     return ImageFont.load_default(size=FONT_PX)
 
 
-def _load_outputs(out: Path, sid: SheetId) -> tuple[np.ndarray, np.ndarray] | None:
-    """(q in [0, 1], deleted) of a page, or None (logged) when it has no outputs."""
+def _load_outputs(out: Path, sid: SheetId) -> tuple[np.ndarray, np.ndarray, list[dict] | None] | None:
+    """(q in [0, 1], deleted, the outline's polygons or None) of a page, or None (logged) when it has no outputs."""
     d = run.sheet_dir(out, sid)
     if not (d / run.PROB_FILE).exists() or not (d / run.OUTSIDE_PNG).exists():
         log.info("no outputs for %s/%s; left out of the pictures", *sid)
@@ -88,7 +114,9 @@ def _load_outputs(out: Path, sid: SheetId) -> tuple[np.ndarray, np.ndarray] | No
         q = z["q"].astype(np.float32) / 255.0
     with Image.open(d / run.OUTSIDE_PNG) as im:
         deleted = np.asarray(im.convert("L")) > 0
-    return q, deleted
+    f = d / run.OUTLINE_FILE
+    polygons = json.loads(f.read_text())["polygons"] if f.exists() else None
+    return q, deleted, polygons
 
 
 def _held_out(out: Path) -> dict[SheetId, dict]:
@@ -135,10 +163,12 @@ def series_mosaics(out: Path = OUT) -> list[Path]:
             lum = data.load_luminance(data.page_path(*sid, work=data.WORK))
             full = out / "look" / series / f"{sid[1]}.png"
             full.parent.mkdir(parents=True, exist_ok=True)
-            sheet_picture(lum, *loaded, LONG_SIDE).save(full)
+            q, deleted, polygons = loaded
+            sheet_picture(lum, q, deleted, LONG_SIDE, polygons).save(full)
             sc = held.get(sid)
-            line2 = "" if sc is None else f"held-out kept {sc['frame_kept']:.1f} cut {sc['map_cut']:.2f}"
-            tiles.append((sheet_picture(lum, *loaded, MOSAIC_SIDE), (sid[1], line2)))
+            line2 = ("" if sc is None else f"held-out left in {scores.percent(sc['frame_kept_share'])} "
+                     f"cut {scores.percent(sc['map_cut_share'])}")
+            tiles.append((sheet_picture(lum, q, deleted, MOSAIC_SIDE, polygons), (sid[1], line2)))
         if not tiles:
             log.info("series %s has no outputs; no mosaic", series)
             continue
@@ -169,10 +199,8 @@ def closeups(out: Path = OUT, items=CLOSEUPS) -> Path:
                         np.zeros(3, np.float32))
         img = Image.fromarray(np.round((1.0 - ink) * 255.0 + ink * tint).astype(np.uint8), "RGB")
         draw = ImageDraw.Draw(img)
-        outline = json.loads((run.sheet_dir(out, sid) / run.OUTLINE_FILE).read_text())["polygons"]
-        for poly in outline:
-            for ring in [poly["exterior"], *poly["holes"]]:
-                draw.line([(x - x0, y - y0) for x, y in ring], fill=CONTOUR_RGB, width=1)
+        for ring in rings(loaded[2] or []):
+            draw.line([(x - x0, y - y0) for x, y in ring], fill=CONTOUR_RGB, width=1)
         panels.append((img, f"{caption} ({series}/{sheet} x {x0}-{x1}, y {y0}-{y1})"))
     width = max([img.width for img, _ in panels], default=GAP_PX + 200)
     height = sum(img.height + CAPTION_PX + GAP_PX for img, _ in panels) + GAP_PX

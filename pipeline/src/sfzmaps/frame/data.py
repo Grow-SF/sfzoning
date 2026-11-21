@@ -2,8 +2,8 @@
 
 A label file (`inputs/frame-labels/<series>/<sheet>.json`, see its README) has `polygons`, the map area, and may have
 `remove`, the printed blocks inside the frame that are deleted wherever they sit (legend and title blocks, compass
-roses, "SECTION N" badges).  `class_mask` turns both into the network's three answers per px: 0 map, 1 outside the
-frame, 2 removed block (`model.CLASSES`)."""
+roses, "SECTION N" badges).  `class_mask` turns both into the layout's three answers per px: 0 map, 1 outside the
+frame, 2 removed block (`layout.CLASSES`)."""
 
 from __future__ import annotations
 

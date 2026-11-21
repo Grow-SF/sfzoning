@@ -68,7 +68,7 @@ def test_wrong_weights_hash_is_refused(monkeypatch, tmp_path):
 
 def _pages(tmp_path, monkeypatch, n=2):
     sids = [("s", f"p{i}") for i in range(n)]
-    monkeypatch.setattr(layout.data, "page_path", lambda s, h: tmp_path / "work" / s / h / "page.png")
+    monkeypatch.setattr(layout.data, "page_path", lambda s, h, work=None: tmp_path / "work" / s / h / "page.png")
     for i, sid in enumerate(sids):
         path = layout.data.page_path(*sid)
         path.parent.mkdir(parents=True)

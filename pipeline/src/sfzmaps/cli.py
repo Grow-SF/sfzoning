@@ -933,67 +933,59 @@ def frame_labels(top: int = typer.Option(30, "--top", help="Stretches per sheet 
 @app.command("frame")
 def frame(
     device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where available)."),
-    folds: bool = typer.Option(False, "--folds", help="Only the held-out run over every labelled sheet; "
-                                                      "prints its scores."),
-    only_fold: int = typer.Option(None, "--only-fold", help="Only fold K (seed 0, last step), then predict the "
-                                                            "close-up pages and every 1948 page with it into "
-                                                            "data/frame/fold-K/, with pictures."),
-    predict_only: bool = typer.Option(False, "--predict-only", help="Predict every page with the saved final "
-                                                                    "model, then the pictures."),
+    held_out: bool = typer.Option(False, "--held-out", help="Only the held-out run over every labelled sheet (leave "
+                                                            "one sheet out, the shape numbers, the scores); prints "
+                                                            "its scores and draws the pictures."),
+    predict_only: bool = typer.Option(False, "--predict-only", help="Decide every page with the saved final "
+                                                                    "heads, then the pictures."),
 ) -> None:
-    """The learned frame finder (issue #71), $0.  No flag: train the final model with the step and temperature of
-    the last `--folds` run, predict every map page, draw the pictures.  One exclusive GPU turn (`sfzmaps.gpu`)."""
+    """The frame finder (issue #71), $0.  No flag: train the final heads with the numbers and temperature of the last
+    `--held-out` run, decide every map page, draw the pictures.  The layout features are extracted on the device in
+    one exclusive GPU turn (`sfzmaps.gpu`); the rest runs on cpu worker processes, after the turn."""
     import logging
-
-    import torch
 
     from sfzmaps import gpu
     from sfzmaps.frame import data as fd
-    from sfzmaps.frame import learn, look
+    from sfzmaps.frame import look
     from sfzmaps.frame import run as fr
     from sfzmaps.solver.textnet.train import default_device
 
-    if sum([folds, only_fold is not None, predict_only]) > 1:
-        raise typer.BadParameter("--folds, --only-fold and --predict-only exclude each other")
+    if held_out and predict_only:
+        raise typer.BadParameter("--held-out and --predict-only exclude each other")
     device = device or default_device()
     if device not in ("cpu", "mps"):
         raise typer.BadParameter(f"--device must be cpu or mps, not {device!r}")
-    out, recipe = fd.OUT, learn.Recipe()
+    out = fd.OUT
     summary = out / fr.FOLDS_FILE
-    plain = not (folds or only_fold is not None or predict_only)
+    plain = not (held_out or predict_only)
     if plain and not summary.exists():
-        typer.echo(f"error: {summary} is missing: run `sfzmaps frame --folds` first", err=True)
+        typer.echo(f"error: {summary} is missing: run `sfzmaps frame --held-out` first", err=True)
         raise typer.Exit(1)
     if predict_only and not (out / fr.MODEL_DIR / "model.json").exists():
         typer.echo(f"error: {out / fr.MODEL_DIR} has no model: run `sfzmaps frame` first", err=True)
         raise typer.Exit(1)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     labelled = fd.labelled_sheets()
-    shown, look_out = None, out
-    with gpu.gpu_turn(True, device):
-        if folds:
-            shown = fr.format_scores(fr.run_folds(labelled, recipe, device, out=out))
-        elif only_fold is not None:
-            look_out = out / f"fold-{only_fold}"
-            fr.run_folds(labelled, recipe, device, out=out, only=only_fold)
-            torch.set_num_threads(learn.THREADS)
-            torch.use_deterministic_algorithms(True)
-            net = fr.load_snapshot(fr.snapshot_path(look_out, only_fold, 0, recipe.steps))
-            sids = sorted({sid for sid in fd.map_pages(fd.PAGE_KINDS, fd.WORK) if sid[0] == "1948"}
-                          | {(s, h) for s, h, _, _ in look.CLOSEUPS})
-            fr.predict_pages([net], 1.0, sids, device, look_out)
+    shown = None
+    try:
+        if not held_out:
+            fr.check_disk(out)
+        with gpu.gpu_turn(True, device):
+            fr.extract_features(labelled, device, out)
+        if held_out:
+            shown = fr.format_scores(fr.held_out(labelled, device, out))
         elif plain:
-            result = json.loads(summary.read_text())
-            fr.train_final(labelled, recipe, device, out=out, step=result["step"],
-                           temperature=result["temperature"])
-            fr.predict_all(device, out=out)
+            fr.train_final(labelled, device, out, json.loads(summary.read_text()))
+            fr.predict_all(device, out)
         else:
-            fr.predict_all(device, out=out)
+            fr.predict_all(device, out)
+    except fr.DiskFull as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1)
     if shown is not None:
         typer.echo(shown)
-    else:
-        look.series_mosaics(look_out)
-        look.closeups(look_out)
+    look.series_mosaics(out)
+    look.closeups(out)
 
 
 @app.command()

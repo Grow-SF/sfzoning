@@ -44,6 +44,7 @@ in `geometry` and is re-exported here.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import math
 import time
@@ -601,6 +602,20 @@ def _one_region(K: np.ndarray, removed: np.ndarray) -> np.ndarray:
     return comp == int(np.argmax(sizes))
 
 
+FINGERPRINT_SAMPLES = 64  # computational: a page's fingerprint hashes about this many rows and columns of p and lum
+
+
+def fingerprint(p: np.ndarray, lum: np.ndarray) -> tuple:
+    """A cheap identity of a page's chances and luminance: their shapes and a hash of an evenly spaced subsample
+    (about FINGERPRINT_SAMPLES rows and columns), for `decide`'s guard against a cache reused on another page."""
+    h, w = np.shape(lum)
+    sy, sx = max(1, h // FINGERPRINT_SAMPLES), max(1, w // FINGERPRINT_SAMPLES)
+    d = hashlib.blake2b(digest_size=16)
+    d.update(np.ascontiguousarray(np.asarray(p, np.float32)[:, ::sy, ::sx]).tobytes())
+    d.update(np.ascontiguousarray(np.asarray(lum, np.float32)[::sy, ::sx]).tobytes())
+    return tuple(np.shape(p)), tuple(np.shape(lum)), d.hexdigest()
+
+
 def decide(
     p: np.ndarray,
     lum: np.ndarray,
@@ -628,9 +643,14 @@ def decide(
     `timing`, if given, gets the seconds of each stage.  `cache`, if given, holds the work that does not depend on
     `params` (the cost field, the plain start, the notch-aware start per lambda_notch, each start's block candidates)
     for the next call on the same page with other numbers: one dict per page (p and lum), never shared between
-    pages."""
+    pages.  The first call stores the page's `fingerprint` in it; a later call with another page raises ValueError."""
     timing = {} if timing is None else timing
-    cache = {} if cache is None else cache
+    if cache is None:
+        cache = {}
+    else:
+        fp = fingerprint(p, lum)
+        if cache.setdefault("page", fp) != fp:
+            raise ValueError("this cache holds another page's work: one cache per page")
     if maps > 1:
         log.info("%d maps on the page: the per-pixel decision (the shape fits one map)", maps)
         return pixel.decide(p, lum, maps), Frame(), [], []

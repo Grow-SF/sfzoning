@@ -24,11 +24,17 @@ LOG_T_BOUNDS = (-3.0, 3.0)  # numerical search bounds on log T
 EPS = 1e-6         # numerical clip for log-loss
 
 
-def sample(zs: Sequence[np.ndarray], cls: np.ndarray, lum, rng, n: int = N_CAL) -> tuple[np.ndarray, np.ndarray]:
-    """(z (seeds, 3, n) float32, y (n,) uint8): n px drawn with replacement, probability proportional to 1 - lum."""
+def draw(lum, rng, n: int = N_CAL) -> np.ndarray:
+    """The flat indices of n px drawn with replacement, probability proportional to 1 - lum (uniform on a page with
+    no ink)."""
     w = (1.0 - np.asarray(lum, np.float64)).ravel()
     total = w.sum()
-    idx = rng.choice(w.size, size=n, replace=True, p=w / total if total > 0 else None)
+    return rng.choice(w.size, size=n, replace=True, p=w / total if total > 0 else None)
+
+
+def sample(zs: Sequence[np.ndarray], cls: np.ndarray, lum, rng, n: int = N_CAL) -> tuple[np.ndarray, np.ndarray]:
+    """(z (seeds, 3, n) float32, y (n,) uint8): the px of `draw`, each seed's logits there and the class."""
+    idx = draw(lum, rng, n)
     z = np.stack([np.asarray(a).reshape(a.shape[0], -1)[:, idx] for a in zs]).astype(np.float32)
     return z, np.asarray(cls).ravel()[idx].astype(np.uint8)
 

@@ -141,7 +141,7 @@ def features_dir(out: Path) -> Path:
 
 
 def _lum(sid: data.SheetId) -> np.ndarray:
-    return data.load_luminance(data.page_path(*sid))
+    return data.load_luminance(data.page_path(*sid, work=data.WORK))
 
 
 def extract_all(sids: list[data.SheetId], device: str, out: Path) -> None:

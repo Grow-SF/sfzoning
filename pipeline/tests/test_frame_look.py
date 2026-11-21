@@ -69,11 +69,36 @@ def test_series_mosaic_caption_has_held_out_scores(tmp_path, monkeypatch):
         _page(work, sid, 60, 80)
     _outputs(out, ("s", "p"), 60, 80)
     (out / "folds.json").write_text(json.dumps({"sheets": [
-        {"series": "s", "sheet": "p", "scores": {"frame_kept": 12.5, "map_cut": 3.25}}]}))
+        {"series": "s", "sheet": "p", "scores": {"frame_kept_share": 0.0125, "map_cut_share": 0.00325}}]}))
     seen = []
     monkeypatch.setattr(look, "_mosaic", lambda tiles, side, cols, path: seen.append((tiles, path)) or path)
     paths = look.series_mosaics(out)
     assert paths == [out / "look" / "s.png"]
     (tiles, _), = seen
-    assert len(tiles) == 1 and "12.5" in tiles[0][1][1] and "3.25" in tiles[0][1][1]
+    assert len(tiles) == 1 and "1.25%" in tiles[0][1][1] and "0.325%" in tiles[0][1][1]
     assert (out / "look" / "s" / "p.png").exists()
+
+
+def test_sheet_picture_draws_the_outline_straight():
+    lum = np.zeros((200, 300), np.float32)
+    q = np.zeros((200, 300), np.float32)
+    deleted = np.ones((200, 300), bool)
+    # a kept region with a tilted left side: a staircase in px, one straight segment once drawn
+    rows = np.arange(200)
+    for r in rows:
+        deleted[r, 50 + r // 10:250] = False
+    polygons = run_outline(deleted)
+    a = np.asarray(look.sheet_picture(lum, q, deleted, side=300, polygons=polygons))
+    drawn = (a == look.CONTOUR_RGB).all(axis=2)
+    for r in (20, 100, 180):                    # the drawn left side runs along the tilted edge, one px wide
+        xs = np.flatnonzero(drawn[r, :150])
+        assert len(xs) >= 1 and abs(xs.mean() - (50 + r / 10)) <= 1.5
+
+
+def run_outline(deleted):
+    from sfzmaps.frame import decide
+    return decide.outline(deleted)
+
+
+def test_closeups_list_the_blank_strips():
+    assert {(s, h) for s, h, _, _ in look.CLOSEUPS} >= {("1948", "2"), ("1948", "9")}

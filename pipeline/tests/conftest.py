@@ -90,17 +90,6 @@ def _no_vision_api(request, monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def small_model(monkeypatch):
-    """The frame finder's network shrunk (`frame.model` FOLD, LEVELS, WIDTH) so tests run on cpu in seconds, and its
-    shape buckets (`model.BUCKET`) with it, so small pages are not padded to 1,024 px."""
-    from sfzmaps.frame import model
-    monkeypatch.setattr(model, "FOLD", 2)
-    monkeypatch.setattr(model, "LEVELS", 2)
-    monkeypatch.setattr(model, "WIDTH", 4)
-    monkeypatch.setattr(model, "BUCKET", 8)
-
-
-@pytest.fixture
 def tiny_backbone():
     """A stand-in for the frozen DINOv2 backbone with the output structure `frame.layout` relies on: called with
     `pixel_values` and `output_hidden_states=True`, it returns `.hidden_states` (the embeddings, then one entry per

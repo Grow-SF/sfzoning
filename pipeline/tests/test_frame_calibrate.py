@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from sfzmaps.frame import calibrate, model
+from sfzmaps.frame import calibrate, layout
 
 
 def _softmax(z):
@@ -36,7 +36,7 @@ def test_reliability_of_calibrated_chances():
     rng = np.random.default_rng(1)
     n = 100_000
     z = rng.normal(0, 2, (1, 3, n)).astype(np.float32)
-    p = model.combine(list(z), 1.0)
+    p = layout.combine(list(z), 1.0)
     u = rng.random(n)
     y = (u > p[0]).astype(np.uint8) + (u > p[0] + p[1]).astype(np.uint8)
     rows = calibrate.reliability([(z, y)], 1.0)
