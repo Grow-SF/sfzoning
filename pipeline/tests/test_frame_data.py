@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 from PIL import Image
@@ -5,7 +8,6 @@ from PIL import Image
 from sfzmaps.frame import data
 from sfzmaps.frame.data import (
     inside_mask,
-    label_holes,
     labelled_sheets,
     load_label,
     load_luminance,
@@ -39,7 +41,6 @@ def test_labelled_sheets_and_load_label(tmp_path):
     (tmp_path / "README.md").write_text("not a label")
     assert labelled_sheets(tmp_path) == [("1921", "a")]
     assert load_label("1921", "a", tmp_path) == [[(0, 0), (4, 0), (4, 4)]]
-    assert label_holes("1921", "a", tmp_path) == []
     assert load_remove("1921", "a", tmp_path) == []
 
 
@@ -52,14 +53,26 @@ def test_load_remove_reads_the_removed_blocks(tmp_path):
     assert load_remove("1948", "c", tmp_path) == [[(2, 2), (4, 2), (4, 4), (2, 4)]]
 
 
-def test_load_label_reads_holes(tmp_path):
+def test_load_label_refuses_holes(tmp_path):
     (tmp_path / "2000").mkdir()
     (tmp_path / "2000" / "b.json").write_text(
         '{"polygons": [[[0,0],[9,0],[9,9],[0,9]]], "holes": [[[2,2],[4,2],[4,4],[2,4]]], "notes": ""}'
     )
-    polygons, holes = load_label("2000", "b", tmp_path), label_holes("2000", "b", tmp_path)
-    assert polygons == [[(0, 0), (9, 0), (9, 9), (0, 9)]]
-    assert holes == [[(2, 2), (4, 2), (4, 4), (2, 4)]]
+    with pytest.raises(ValueError, match="b.json"):
+        load_label("2000", "b", tmp_path)
+
+
+REPO_LABELS = Path(__file__).parents[1] / "inputs" / "frame-labels"
+
+
+def test_no_label_has_holes():
+    sheets = data.labelled_sheets(REPO_LABELS)
+    assert sheets
+    for series, sheet in sheets:
+        label = json.loads((REPO_LABELS / series / f"{sheet}.json").read_text())
+        assert "holes" not in label, (series, sheet)
+        for block in label.get("remove", []):
+            assert len(block) >= 3, (series, sheet)
 
 
 def test_map_mask_clears_holes():
