@@ -11,9 +11,10 @@ net.
 A page is read padded with paper at the bottom and right up to `padded_shape`: sides that are multiples of `BUCKET` px
 (and of `multiple()`, the net's own), the same in training and prediction.  The bucket is computational: the Mac's
 GPU builds its kernels for each new input shape, and every training sample had a new one (a random cut and scale).
-Measured on the 21 labelled pages, "fold 16" net (issue #71, `scripts/spikes/issue71_shape_cost.py`): a step was
-132 ms on 40 new shapes and 89 ms when the same shapes came again; padded up to multiples of 1,024 px the 40 samples
-had 14 shapes and 15.6% more px, and a step was 96 ms once the shapes had been seen.
+Measured on the 21 labelled pages, "fold 16" net, mps (issue #71): a new shape every step cost about 40 ms of a 132 ms
+net step (89 ms when the same shapes came again); padded up to multiples of 1,024 px, 40 draws had 14 shapes and 15.6%
+more px, and the net step went from 132 to 96 ms once the shapes had been seen.  The whole training loop before and
+after: `scripts/spikes/issue71_train_speed.py`.
 """
 
 from __future__ import annotations
