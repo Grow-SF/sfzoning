@@ -455,14 +455,18 @@ rough, and says so.
 The cost is a sum over pixels, so a running-sum table of the cost difference along each side's normal makes any
 candidate line's cost a sum over the side's length.
 
-1. **Start:** a rotated rectangle fitted jointly to all four sides with a robust (Huber) fit. The points come from
+1. **Start (for the per-side refinements; the frame itself is searched globally in step 2):** a rotated rectangle fitted jointly to all four sides with a robust (Huber) fit. The points come from
    each row or column's outermost kept pixel of the per-pixel cut. Robust, because a wrong inward cut, like Lake
    Merced's, only affects a minority of a side's columns.
-2. **Frame:**
-   - the shared angle φ by a 1-D search around the start;
-   - for each side in turn, holding the others fixed, every offset and a fine grid of tilt deviation and bow within
-     the bounds, each scored from the running sums;
-   - repeat until none moves. The cost can only fall, so this ends.
+2. **Frame, searched globally:**
+   - Every rotation angle in the measured range, and all four offsets, on a coarse grid. A summed-area table of the
+     cost difference in the rotated frame makes each candidate rectangle's cost one lookup (four corners), so the full
+     grid is cheap.
+   - Then a 1-px refinement around the best: the angle and each offset in turn, until none moves.
+   - Then, per side, the small tilt deviation and bow within their bounds, from the running sums along that side.
+
+   The frame is the best rectangle on the whole page to within the grid, not a local optimum near the start. Only the
+   small per-side adjustments are local.
 3. **Corners:** for each corner, the arc radius by a 1-D search.
 4. **Notches**, greedily, one at a time while one gains more than λ_notch:
    - for each side and each angle in the range, work in that rotated frame: u along the side, v inward;
@@ -491,10 +495,14 @@ candidate line's cost a sum over the side's length.
 - **Edit 5: corner arcs are checked against the labels before the form is fixed.** The 1921 arcs look tangent to both
   sides, but a wrong form would leave arc ink inside every corner.
 - **Edit 6: the start is a robust, joint rectangle fit,** so a wrong inward cut can't drag a side.
-- **Still true:**
-  - coordinate descent finds a local optimum, and the held-out scores show it if the start misleads it;
-  - a bow beyond the bound leaves a sliver of rule inside, and the close-ups check the thin rule;
-  - errors of meaning on sheets unlike any label still need labels.
+- **Edit 7 (owner: "not sure about your three still open"): no local optimum for the frame.** It is searched over
+  the whole angle × four-offset grid (one lookup per candidate), then refined.
+- **Edit 8: a bow beyond the bound is measured, not hoped away.** After the fit, every page is ranked by the
+  confident frame ink (chance above `level`) left inside along each side. A page that bows more than any label sits
+  at the top of that ranking for the owner's eye: label it, or widen the bound. It's a ranking, not a threshold.
+- **Not a design gap:** errors of meaning, such as a sheet where the network takes a lake for margin, can't be fixed
+  by any decision. The shape limits their damage (straight lines, ruled notches, shaped blocks); the fix is labels,
+  chosen where the two seeds disagree, by the labelling loop already in the plan.
 - **Speed:**
   - the line search is a few hundred candidates × the side length, from running sums;
   - the notch search is one pass per depth × angle;
