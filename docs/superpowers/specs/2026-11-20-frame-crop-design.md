@@ -344,3 +344,41 @@ temperature are refitted once for the batch, not after each label.
    q > c_m / (c_f + c_m) = ¼. It's applied only at decision time, so changing it later needs no retraining; the
    held-out run can show the frame-kept / map-cut trade-off at a few ratios for the owner to look at.
 3. **1948 framed sheet:** "whichever" → 1948/2.
+
+## Amendment: removed blocks (owner, 2026-11-20, later)
+
+The owner circled the "City & County of San Francisco / Zone Map / Legend" block on the 1948 sheets ("I think the
+legends should be cut out"), then: "Compass roses should go too. Section labels." So three kinds of printed block
+**inside** the frame are deleted, wherever they sit:
+- legend and title blocks;
+- compass roses and north arrows;
+- "SECTION N" sheet-number badges.
+
+Everything else that floats inside the frame stays: notes, scale bars, cross-references, place names. Ruled boxes at
+the margin stay notches (rule 3).
+
+**Three answers per pixel.** The network gives a softmax over three classes:
+- 0, map;
+- 1, outside the frame;
+- 2, removed block.
+
+Labels gain a `remove` list of polygons, one per block, drawn a few px outside the block's ink. Training uses
+multiclass log-loss with the same input-only weights. Multiclass log-loss is still a strictly proper scoring rule, so
+the chances stay calibrated; one temperature divides the logits before the softmax (Guo et al. 2017 is multiclass).
+
+**The decision** (part 1 and part 2 amended). With p₀, p₁, p₂ the three chances and `level` = c_m / (c_f + c_m) = ¼
+(removed-block ink left in costs the same as frame ink left in):
+1. Cut where p₁ + p₂ > `level`. Outside is the 4-connected components of that cut that touch the page border, as
+   before.
+2. Every other pixel can't be outside the frame, by definition. It is removed iff p₂ > `level`, which is the same
+   cost rule with the impossible outside-frame mass returned to map. Map is where the no-holes step would put it.
+
+   Why not condition, p₂ / (p₀ + p₂)? Where the network is confidently but wrongly calling map "frame", both p₀ and p₂
+   are tiny and that ratio is noise. Returning the mass to map keeps the earlier behaviour there: a commercial band
+   called frame mid-map is kept.
+3. The inside region (neither outside nor removed) keeps its `maps` largest 8-connected components; the rest is
+   outside.
+
+Removed blocks are therefore the only holes, and only where the network says "removed block", not merely "not map".
+
+**Scores:** frame ink kept counts every pixel labelled outside or removed that the decision keeps.

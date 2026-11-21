@@ -439,6 +439,92 @@ def test_outline_reproduces_the_region():
 
 ---
 
+### Task 6b: Three answers per pixel: map, outside the frame, removed block
+
+Spec: the "Amendment: removed blocks" section at the end of the design. The owner's decision: legend/title blocks,
+compass roses and SECTION badges are deleted wherever they sit.
+
+**Files:**
+- Modify: `pipeline/src/sfzmaps/frame/model.py`, `frame/data.py`, `frame/labels.py`, `frame/learn.py`,
+  `frame/decide.py`, and the `frame-labels` command in `cli.py`.
+- Test: `tests/test_frame_model.py`, `tests/test_frame_data.py`, `tests/test_frame_labels.py`,
+  `tests/test_frame_learn.py`, `tests/test_frame_decide.py`.
+
+**Interfaces** (these replace the earlier ones of the same names):
+- `model.CLASSES = 3`, with 0 = map, 1 = outside the frame, 2 = removed block.
+  - `new_net()` has `CLASSES` outputs.
+  - `logits(...)` returns float32 `(3, h, w)`.
+  - `combine(zs, temperature=1.0)` returns float32 `(3, h, w)`: the mean over `zs` of `softmax(z / temperature)` over
+    axis 0.
+  - `prob(...)` returns `(3, h, w)`.
+- `data.load_remove(series, sheet, root=LABELS) -> list[Polygon]`: the file's `remove` list, `[]` when absent.
+- `data.class_mask(polygons, remove, shape) -> np.ndarray`: uint8. It is 1 everywhere, then 0 inside `polygons`
+  (`map_mask`), then 2 inside `remove` (drawn last, so it wins).
+- `labels.outline_stretches(lum, polygons, series, sheet)`: unchanged. The `frame-labels` command passes
+  `polygons + remove`, so removed blocks' outlines are checked too.
+- `learn.Page(id, lum, cls)`: `cls` is the uint8 class mask, replacing `inside`.
+  - `side_depths(cls)` measures to the first px with `cls != 1`.
+  - `make_sample` returns `(x, target, weight)` with `target` int64 class indices `(1, H, W)`: padding target 1,
+    weight 0. The mask is resized NEAREST, as before.
+  - The loss is `F.cross_entropy(logits, target, reduction="none")`, weighted as before; the weight still never
+    depends on the label.
+  - `held_loss` is the multiclass log-loss of `model.prob([net], ...)` against `cls`, weighted by `1 - lum`.
+- `decide.decide(p, lum, maps=1, level=None) -> Decision`, where `p` is `(3, h, w)` and
+  `Decision(outside, removed, filled_ink, dropped_ink, removed_ink)` has a property `deleted = outside | removed`:
+  1. `cut = p[1] + p[2] > level`. `outside` is the 4-connected components of `cut` touching the border.
+     `filled_ink` = Σ(1 − lum) over `cut & ~outside` px that end up neither removed nor outside.
+  2. `removed = ~outside & (p[2] > level)`; `removed_ink` = its Σ(1 − lum).
+  3. The inside px (`~outside & ~removed`) keep their `maps` largest 8-connected components; the rest join
+     `outside`, and their ink is `dropped_ink`.
+- `decide.outline(deleted) -> list[dict]`: one dict per kept-region polygon, `{"exterior": [(x, y), ...],
+  "holes": [[(x, y), ...], ...]}`, using px-corner coordinates and `simplify(0)` as before.
+
+- [ ] **Step 1: Write the failing tests.** Adapt the existing tests to three classes: build `p` from a two-class `q`
+  as `np.stack([1 - q, q, 0 * q])`, and the class mask as `np.where(inside, 0, 1)`. Add:
+
+```python
+def test_combine_is_a_tempered_softmax_mean():
+    z = np.random.default_rng(0).normal(size=(3, 4, 5)).astype(np.float32)
+    p = model.combine([z, 2 * z], temperature=2.0)
+    np.testing.assert_allclose(p.sum(0), 1.0, rtol=1e-6)
+    e1, e2 = np.exp(z / 2), np.exp(z)
+    np.testing.assert_allclose(p, (e1 / e1.sum(0) + e2 / e2.sum(0)) / 2, rtol=1e-5)
+
+def test_class_mask_remove_wins():
+    m = data.class_mask([[(0, 0), (9, 0), (9, 9), (0, 9)]], [[(3, 3), (6, 3), (6, 6), (3, 6)]], (20, 20))
+    assert m[1, 1] == 0 and m[4, 4] == 2 and m[15, 15] == 1
+
+def test_removed_block_mid_map_is_a_hole():
+    p = np.zeros((3, 50, 50)); p[0] = 1; p[:, :3] = [[1e-3], [1 - 2e-3], [1e-3]]     # frame along the top
+    p[:, 20:26, 20:26] = np.array([0.1, 0.1, 0.8])[:, None, None]                    # a compass rose mid-map
+    d = decide.decide(p, np.zeros((50, 50)))
+    assert d.removed[22, 22] and not d.outside[22, 22] and d.deleted[22, 22] and d.removed_ink == 36
+
+def test_map_called_frame_mid_map_is_kept():                                          # the 1948 commercial band
+    p = np.zeros((3, 50, 50)); p[0] = 1; p[:, :3] = [[1e-3], [1 - 2e-3], [1e-3]]
+    p[:, 20:26, 20:26] = np.array([0.05, 0.9, 0.05])[:, None, None]
+    d = decide.decide(p, np.zeros((50, 50)))
+    assert not d.deleted[22, 22] and d.filled_ink == 36
+
+def test_outline_has_the_removed_hole():
+    deleted = np.ones((40, 40), bool); deleted[5:35, 5:35] = False; deleted[15:20, 15:20] = True
+    polys = decide.outline(deleted)
+    raster = rasterio.features.rasterize(
+        [(Polygon(q["exterior"], q["holes"]), 1) for q in polys], out_shape=deleted.shape)
+    np.testing.assert_array_equal(raster.astype(bool), ~deleted)
+
+def test_weight_ignores_the_label():                                                 # learn, adapted: cls differs
+    ...
+```
+
+- [ ] **Step 2: Run them.** Expect failures.
+- [ ] **Step 3: Implement.** Keep every other behaviour of these modules as it is, including the R5 cpu/device split
+  in `learn`.
+- [ ] **Step 4: Run the full suite.** Expected: PASS.
+- [ ] **Step 5: Commit** `frame: three answers per pixel (map / outside / removed block); removed blocks are the only holes`.
+
+---
+
 ### Task 7: Scores and calibration
 
 **Files:**
@@ -449,18 +535,20 @@ def test_outline_reproduces_the_region():
   - `pipeline/tests/test_frame_calibrate.py`
 
 **Interfaces:**
-- Consumes: `decide.COST_FRAME`, `decide.COST_MAP` (Task 6); `model.combine` (Task 2).
+- Consumes: `decide.COST_FRAME`, `decide.COST_MAP`, `Decision.deleted` (Tasks 6 and 6b); `model.combine` (three
+  classes, Task 6b).
 - Produces, in `frame/scores.py`:
   - `EPS = 1e-6`: numerical clip for log-loss.
   - `BOOT_N = 10_000`: Monte Carlo resamples; computational.
-  - `sheet_scores(q, outside, inside, lum, cost_frame=COST_FRAME, cost_map=COST_MAP) -> dict`, with keys:
-    - `frame_kept`: Σ(1 − lum) over `~inside & ~outside` (ink px);
-    - `map_cut`: Σ(1 − lum) over `inside & outside`;
+  - `sheet_scores(p, deleted, cls, lum, cost_frame=COST_FRAME, cost_map=COST_MAP) -> dict`, where `p` is the
+    `(3, h, w)` chances, `deleted` is `Decision.deleted` and `cls` is the label's class mask; with keys:
+    - `frame_kept`: Σ(1 − lum) over `(cls != 0) & ~deleted` (ink px: frame and removed blocks left in);
+    - `map_cut`: Σ(1 − lum) over `(cls == 0) & deleted`;
     - `cost`: `cost_frame * frame_kept + cost_map * map_cut`;
     - `frame_kept_share`, `map_cut_share`: each over all of its class's ink, NaN when the class has none;
-    - `log_loss`: of `q` against `~inside`, weighted by `1 - lum`, over all px;
+    - `log_loss`: the multiclass log-loss of `p` against `cls`, weighted by `1 - lum`, over all px;
     - `hd95_px`: MapSeg's HD95, the 95th percentile of the pooled two-way distances between the boundaries of
-      `~outside` and `inside`, using the old `edge_distance` method. NaN when either has no boundary.
+      `~deleted` and `cls == 0`, using the old `edge_distance` method. NaN when either has no boundary.
   - `bootstrap_mean(values, n=BOOT_N, seed=0) -> tuple[float, float, float]`: mean and 5th/95th percentiles of the
     means of sheets resampled with replacement. NaNs are dropped first.
   - `paired_difference(a: dict[SheetId, float], b: dict[SheetId, float], n=BOOT_N, seed=0) -> tuple[float, float, float]`:
@@ -469,17 +557,20 @@ def test_outline_reproduces_the_region():
   - `N_CAL = 200_000`: px per sheet. A computational setting: its sampling error is far below the spread between
     sheets.
   - `CAL_BOOT = 200`: computational.
-  - `sample(zs: Sequence[np.ndarray], outside_label: np.ndarray, lum, rng, n=N_CAL) -> tuple[np.ndarray, np.ndarray]`:
-    `(z (seeds, n) float32, y (n,) bool)`, px drawn with replacement with probability proportional to `1 - lum`.
-  - `fit_temperature(samples: list[tuple[np.ndarray, np.ndarray]]) -> float`: minimises the pooled mean log-loss of
-    `model.combine(z, T)` against `y`, via `scipy.optimize.minimize_scalar(method="bounded")` on log T in [−3, 3].
+  - `sample(zs: Sequence[np.ndarray], cls: np.ndarray, lum, rng, n=N_CAL) -> tuple[np.ndarray, np.ndarray]`:
+    `(z (seeds, 3, n) float32, y (n,) uint8 classes)`, px drawn with replacement with probability proportional to
+    `1 - lum`.
+  - `fit_temperature(samples: list[tuple[np.ndarray, np.ndarray]]) -> float`: minimises the pooled mean multiclass
+    log-loss of `model.combine(list(z), T)` against `y`, via `scipy.optimize.minimize_scalar(method="bounded")` on log T in [−3, 3].
     The search bounds are numerical; hitting one is logged as a warning.
   - `temperature_interval(samples, n=CAL_BOOT, seed=0) -> tuple[float, float]`: 5th/95th percentiles of refits on
     sheets resampled with replacement.
-  - `reliability(samples, temperature, bins=10) -> list[dict]`: one row per equal-width bin of `combine(z, T)`, with
-    `lo`, `hi`, `mean_q`, `share_outside`, `n`. A reporting format only.
+  - `reliability(samples, temperature, bins=10) -> list[dict]`: one row per equal-width bin of the chance of
+    deletion, `combine(list(z), T)[1] + [2]`, against `y != 0`, with `lo`, `hi`, `mean_q`, `share_outside`, `n`. A reporting format only.
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **Step 1: Write the failing tests** (three classes: build `p` as `np.stack([1 - q, q, 0 * q])` and the class mask as
+  `np.where(inside, 0, 1)` where the tests below use `q` and `inside`; the temperature test draws three-class logits
+  `z` of shape `(2, 3, n)` and `y` from `softmax(z[0] / 2)`; the reliability test is three-class too)
 
 ```python
 def test_sheet_scores_counts_kept_and_cut_ink():
@@ -538,24 +629,26 @@ def test_reliability_of_calibrated_chances():
   - `RATIOS_SHOWN = (2.0, 3.0, 10.0)`: the cost ratios reported to the owner; the decision itself uses
     `decide.COST_FRAME`;
   - `BASELINE = DATA_DIR / "frame-cmp-none"`: the two-pass model's held-out `map_prob.npz` (key `map` = P(inside));
-  - file names: `FOLDS_FILE = "folds.json"`, `MODEL_DIR = "model"`, `HELD_FILE = "held_logits.npz"` (keys
-    `z0`, `z1`, float16), `OUTSIDE_PNG = "outside.png"` (mode `"1"`), `PROB_FILE = "outside_prob.npz"` (key `q`,
-    float16), `ERASED_PNG = "erased.png"`, `OUTLINE_FILE = "outline.json"` (`{"polygons": [...], "maps": n}`),
+  - file names: `FOLDS_FILE = "folds.json"`, `MODEL_DIR = "model"`, `OUTSIDE_PNG = "outside.png"` (mode `"1"`,
+    `Decision.deleted`), `PROB_FILE = "outside_prob.npz"` (key `q`, the chance of deletion `p[1] + p[2]` as uint8
+    levels `round(255 q)`, decided before rounding, ruling R6), `ERASED_PNG = "erased.png"`, `OUTLINE_FILE = "outline.json"` (`{"polygons": [...], "maps": n}`),
     `PAGES_FILE = "pages.json"`.
   - `sheet_dir(out, sid) -> Path`: `out / series / sheet`.
-  - `labelled_pages(labelled) -> dict[SheetId, learn.Page]`.
+  - `labelled_pages(labelled) -> dict[SheetId, learn.Page]`: `cls = data.class_mask(load_label, load_remove, shape)`.
   - `choose_step(curves: Sequence[Sequence[tuple[int, float, float]]]) -> int`: argmin over check steps of the
     ink-pooled held log-loss across all curves. Ties go to the earlier step.
   - `run_folds(labelled, recipe, device, out=OUT, only: int | None = None) -> dict`:
     - For each fold k and seed s, it trains on the fold's sheets with `held` = its held sheets and
       `snapshots = out/"folds"/f"fold-{k}"/f"seed-{s}"`.
-    - It then sets `step = choose_step(...)` and saves `HELD_FILE` from each seed's snapshot at `step`. It fits T
-      (with its interval and the reliability table) on all held sheets, and per held sheet runs `decide` (with
+    - It then sets `step = choose_step(...)`. Pass 1: per held sheet, logits from each seed's snapshot at `step`
+      (a forward pass is about 50 ms, so nothing is stored), calibration samples drawn. It fits T (with its interval
+      and the reliability table) on all held sheets. Pass 2: per held sheet, the logits again, then and per held sheet runs `decide` (with
       `map_counts`), `write_outputs` and `sheet_scores`, at the 3:1 cut and at each of `RATIOS_SHOWN`.
     - It also computes per-sheet seed disagreement: the ink-weighted share of px where seed 0 alone and seed 1 alone
       decide differently at T.
-    - Baseline: q = 1 − `map` for the labelled sheets found under `BASELINE`, scored the same way with no
-      temperature, giving paired differences (new − old).
+    - Baseline: `p = [map, 1 − map, 0]` for the labelled sheets found under `BASELINE`, decided and scored the same
+      way with no temperature, giving paired differences (new − old) in `frame_kept`, `map_cut` and `cost` only:
+      the old model has no removed-block class, so its log-loss is not comparable.
     - Everything goes to `folds.json`: `recipe`, `step`, `curves`, `temperature`, `temperature_interval`,
       `reliability`, `sheets`, `pooled`, `ratios`, `seed_disagreement`, `baseline`.
     - With `only=k`: fold k and seed 0 only, everything under `out/f"fold-{k}"`, the step being the recipe's last.
@@ -564,8 +657,9 @@ def test_reliability_of_calibrated_chances():
     `seeds`, `sheets`, `level`).
   - `load_model(out) -> tuple[list[nn.Module], float]`.
   - `load_snapshot(path) -> nn.Module`.
-  - `write_outputs(out, sid, q, decision, maps) -> None`: the four files. `erased.png` is `page.png` in its own mode
-    (`"1"` is converted to `"L"`), with outside px set to the per-channel median of the inside px.
+  - `write_outputs(out, sid, p, decision, maps) -> None`: the four files. `erased.png` is `page.png` in its own mode
+    (`"1"` is converted to `"L"`), with deleted px set to the per-channel median of the kept px; `outline.json` is
+    `{"polygons": decide.outline(decision.deleted), "maps": n}`.
   - `predict_pages(nets, temperature, sids, device, out) -> None`: saves on `SAVE_THREADS = 4` threads, as the old
     `predict_all` did.
   - `predict_all(device, out) -> None`: every unlabelled map page; labelled sheets keep their held-out outputs. Then
@@ -581,7 +675,7 @@ def test_choose_step_pools_ink_and_breaks_ties_early():
     assert run.choose_step([a, b]) == 500          # pooled: 0.15 vs 0.20
     assert run.choose_step([[(500, 0.2, 1.0), (1000, 0.2, 1.0)]]) == 500
 
-def test_every_labelled_sheet_held_out_once(fake_world): ...   # folds.json sheets == labelled; each has HELD_FILE
+def test_every_labelled_sheet_held_out_once(fake_world): ...   # folds.json sheets == labelled; each has its outputs
 def test_write_outputs_keeps_colour(tmp_path): ...             # RGB page: erased.png RGB, outside px = inside median,
                                                                # outside.png mode "1" equals decision.outside
 def test_predict_all_skips_labelled_and_ranks_dropped(fake_world): ...
@@ -608,8 +702,9 @@ def test_baseline_only_on_shared_sheets(fake_world): ...       # BASELINE holds 
 - Consumes: `run` file names and `sheet_dir` (Task 8).
 - Produces, in `frame/look.py`:
   - `LONG_SIDE`, `MOSAIC_SIDE`, `MOSAIC_COLUMNS` and the colours, as in the deleted `look.py`.
-  - `sheet_picture(lum, q, outside, side=LONG_SIDE) -> Image`: ink coloured by q (blue for inside, red for outside),
-    the inside region's boundary in magenta. Pages are never enlarged.
+  - `sheet_picture(lum, q, deleted, side=LONG_SIDE) -> Image`: ink coloured by q, the chance of deletion (blue for
+    kept, red for deleted), the kept region's boundary (removed blocks' too) in magenta. `q` and `deleted` are read
+    from `PROB_FILE` and `OUTSIDE_PNG`. Pages are never enlarged.
   - `series_mosaics(out) -> list[Path]`: one per series. A labelled sheet's caption shows its held-out `frame_kept`
     and `map_cut`.
   - `CLOSEUPS`: a list of (series, sheet, (x0, y0, x1, y1) page px, caption):
