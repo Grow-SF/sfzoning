@@ -382,3 +382,88 @@ the chances stay calibrated; one temperature divides the logits before the softm
 Removed blocks are therefore the only holes, and only where the network says "removed block", not merely "not map".
 
 **Scores:** frame ink kept counts every pixel labelled outside or removed that the decision keeps.
+
+## Amendment 2: the cut traces straight lines (owner, 2026-11-20, later)
+
+Owner, looking at the first look's curvy cut edges: "why are your edges so curved? that doesn't happen", then "you've
+removed too many useful constraints. we're by-and-large tracing straight lines", and on notches: "Rectangles, but they
+can be rotated." This restores the owner's first description ("The lines should be mostly straight except for the
+arced corners"), which part 2's per-pixel cut lost.
+
+### Why the per-pixel cut curves (measured, fold-0 model, 1948/8, 12, 14)
+
+- **The edge wanders where nothing pins it.** 76–79% of the kept region's edge runs over blank paper, where it sits
+  wherever the network's chance happens to cross ¼ (median chance along those edges 0.23–0.27): a soft contour, not
+  a printed line.
+- **The big curvy cuts are blank water mistaken for margin.** Deleted areas more than 300 px in from the page edge are
+  76–89% blank paper (bays, Lake Merced), outlined along the coastline.
+- **The labels are straight.** Fitting a line to each labelled side over its middle 70%:
+  - median 0.3–2 px off it, and 95% of each side within about 10 px (1921 bows reach about 18 px);
+  - tilt: median 0.5°, 95% within 1.6°;
+  - bow (quadratic sag over the side): median 0.8 px, 95% within 15 px.
+
+  The only exceptions are sides with notches, and the notches are rectangles.
+
+### The shape (replaces part 2's per-pixel cut and component rules)
+
+The kept region K is one shape:
+
+- **Four sides, each a straight line** with its own tilt, plus at most a gentle bow. Bounds: the labels' measured
+  ranges, widened by half. A side with no frame is the page edge.
+- **Corner arcs:** each corner may be cut by a circular arc tangent to its two sides, radius 0 (a sharp corner) up to
+  the labels' largest arc radius, widened by half.
+- **Notches: rectangles cut from K, each touching a side,** any length along the side and any depth. A notch may be
+  rotated: its sides parallel and perpendicular to its own angle θ, not necessarily the frame's. The range of θ comes
+  from the labels' notches; the owner says rotations happen.
+- **Removed blocks:** unchanged (amendment 1): removed = inside K and p₂ > `level`. They are the only holes.
+- **Pages listed with several maps:** one shape per map. Until such a page is found and checked, those pages keep the
+  per-pixel decision, and the run lists them.
+
+**The cost:** the same expected ink cost as part 1. It's a sum over pixels of c_f (p₁ + p₂) ink for each pixel kept,
+and c_m p₀ ink for each pixel deleted. **Paper costs nothing:** the shape, not the paper's chances, decides where an
+edge crosses blank paper, which is why it can be straight. A notch also pays a cost λ_notch, so noise can't be carved
+into many tiny notches. λ_notch is one number, fitted on held-out sheets by the same realised cost, as the priors were.
+
+**Why sound:**
+- This is the Bayes decision restricted to the shape class: of all the shapes the owner and the labels say a frame
+  can have, choose the one with the least expected cost given the network's chances. The class carries knowledge the
+  per-pixel network can't express: sides are straight across the whole page, and notches are rectangles.
+- The only fitted number, λ_notch, is fitted where scoring happens (held-out chances), like the temperature.
+
+### The search: each piece exact given the others; coordinate descent overall
+
+The cost is a sum over pixels, so a running-sum table of the cost difference along the side's normal makes any
+candidate line's cost a sum over the side's length.
+
+1. **Start:** each side's line fitted to the per-pixel cut's edge points nearest that page edge, with a robust
+   (Huber) fit.
+2. **Sides:** for each side in turn, holding the others fixed, search every offset and a fine grid of tilt and bow
+   within the bounds around the start, scoring each candidate from the running sums. Repeat over the four sides until
+   none moves. The cost can only fall, so this ends.
+3. **Corners:** for each corner, the arc radius by a 1-D search.
+4. **Notches**, greedily, one at a time while one gains more than λ_notch:
+   - for each side and each θ in the measured range, work in that rotated frame: u along the side, v inward;
+   - for every depth h, the best span [u₀, u₁] comes from a maximum-subarray (Kadane) pass over the column sums
+     to depth h;
+   - this is exact for a single rectangle anchored at the side.
+5. **Removed blocks** inside K, as in amendment 1.
+
+### Red team
+
+- **Strong, confident errors touching the frame can still become a rectangular notch.** An example is Lake Merced's
+  region where it meets the bottom frame, if a rectangle through it pays. λ_notch and the evidence decide. What the
+  shape removes is the coastline-shaped cut and wandering over blank paper. Errors of meaning stay a labelling problem.
+- **Coordinate descent finds a local optimum.** The start, a robust fit to the per-pixel cut's edge, is usually near
+  the answer; the held-out scores show whether it isn't.
+- **A notch is one rectangle.** An L-shaped notch takes two, and the greedy search allows that.
+- **Bows beyond the bound** (an extreme 1921 sheet) would leave a sliver of rule inside. The bound comes from the
+  labels with margin, and the close-ups check the thin rule.
+- **Speed:** this replaces a per-pixel threshold. The line search is a few hundred candidates × the side length, from
+  running sums, and the notch search is one pass per depth × θ. Measured in the spike; the target is seconds per page.
+- **What doesn't change:** the network, the training, the labels, the calibration and the scores. Only the decision
+  changes, so it's compared with the per-pixel cut on the same held-out chances.
+
+### Test before adopting
+
+Same as the priors: the fold-0 model's held-out chances and pages, both decisions, the same costs, and the pictures of
+1948/8, 12, 14 and the close-ups. Then the plan gets a task for it.
