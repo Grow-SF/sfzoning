@@ -203,3 +203,24 @@ def test_page_logits_shape_and_orientation():
     up = layout.page_logits(z, (40, 100))
     assert up.shape == (3, 40, 100) and up.dtype == np.float32
     assert up[0, 20, 5] > up[1, 20, 5] and up[1, 20, 95] > up[0, 20, 95]
+
+
+def test_a_page_of_zero_weight_does_not_change_the_head(monkeypatch):
+    monkeypatch.setattr(layout, "COMPONENTS", 6)
+    feats, tg = _toy_pages(3, 5)
+    junk, jt = _toy_pages(1, 6)
+    jt = [(1 - s, np.zeros_like(w)) for s, w in jt]   # wrong labels, but no weight
+    a = layout.head_logits(layout.train_head(feats, tg, seed=0), feats[0])
+    b = layout.head_logits(layout.train_head(feats + junk, tg + jt, seed=0), feats[0])
+    np.testing.assert_array_equal(a, b)
+
+
+def test_pages_count_by_their_patch_weights(monkeypatch):
+    """Two pages that disagree: the head follows the one whose patches weigh more."""
+    monkeypatch.setattr(layout, "COMPONENTS", 6)
+    f = np.zeros((6, 4, 4), np.float16)
+    s0 = np.zeros((3, 4, 4), np.float32); s0[0] = 1
+    s1 = np.zeros((3, 4, 4), np.float32); s1[1] = 1
+    heavy, light = np.full((4, 4), 1.0, np.float32), np.full((4, 4), 0.1, np.float32)
+    z = layout.head_logits(layout.train_head([f, f], [(s0, heavy), (s1, light)], seed=0), f)
+    assert z[0].mean() > z[1].mean()

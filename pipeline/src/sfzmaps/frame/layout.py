@@ -218,26 +218,24 @@ def new_head() -> nn.Module:
 
 def train_head(feats: Sequence[np.ndarray], targets: Sequence[tuple], seed: int, device: str = "cpu") -> nn.Module:
     """One head trained on `feats` (float16 `(COMPONENTS, rows, cols)` each) against `targets` (`patch_targets`
-    pairs): one page per Adam step, in a seeded order (a fresh permutation each pass), on the weighted soft-target
-    cross-entropy (each patch's loss times its weight, over the page's total weight).  Stops when the mean loss over
-    100 steps improves by less than `HEAD_FLAT` on the 100 before.  Deterministic for a seed on cpu."""
+    pairs), full batch as the spike measured: every step uses all the pages, and the loss is the sum over every page
+    of each patch's soft-target cross-entropy times its weight, over the sum of all the weights.  The seed sets the
+    head's initial weights.  Adam; stops when the mean loss over 100 steps improves by less than `HEAD_FLAT` on the
+    100 before.  Deterministic for a seed on cpu."""
     torch.set_num_threads(HEAD_THREADS)
     torch.manual_seed(seed)
-    rng = np.random.default_rng(seed)
     head = new_head().to(device)
     xs = [torch.from_numpy(np.asarray(f, np.float32)).to(device) for f in feats]
     ts = [(torch.from_numpy(s).to(device), torch.from_numpy(w).to(device)) for s, w in targets]
+    wsum = sum(float(w.sum()) for _, w in ts)
     opt = torch.optim.Adam(head.parameters(), lr=HEAD_LR)
-    order: list[int] = []
     hist: list[float] = []
     for step in range(HEAD_MAX_STEPS):
-        if not order:
-            order = [int(i) for i in rng.permutation(len(xs))]
-        i = order.pop()
-        shares, w = ts[i]
         opt.zero_grad()
-        z = head(xs[i][None])[0]
-        loss = (-(shares * F.log_softmax(z, 0)).sum(0) * w).sum() / w.sum()
+        loss = 0.0
+        for x, (shares, w) in zip(xs, ts):
+            z = head(x[None])[0]
+            loss = loss + (-(shares * F.log_softmax(z, 0)).sum(0) * w).sum() / wsum
         loss.backward()
         opt.step()
         hist.append(float(loss.detach()))
