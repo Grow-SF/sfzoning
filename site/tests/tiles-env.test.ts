@@ -40,8 +40,9 @@ describe("check-tiles-env script", () => {
     return p;
   };
   // The store base is the tiles URL the build is given.
-  const good = fixture("good.json", { files: { k: { url: "https://tiles.example.com/downloads/a/x.zip", extra: {} } }, sheets: {} });
-  const local = fixture("local.json", { local: true, files: { k: { url: "http://127.0.0.1:8787/x", extra: {} } }, sheets: {} });
+  const N = "sfzoning-1948-lots-2026-11-01-3f9a2c1b.gpkg.zip";
+  const good = fixture("good.json", { base: "https://tiles.example.com", files: { k: { series: "1948", name: N, extra: {} } }, sheets: {} });
+  const local = fixture("local.json", { local: true, base: "http://127.0.0.1:8787", files: { k: { series: "1948", name: N, extra: {} } }, sheets: {} });
   const run = (env: Record<string, string>, manifest = good) => {
     const childEnv: Record<string, string> = { PATH: process.env.PATH ?? "", DOWNLOADS_MANIFEST: manifest, ...env };
     return spawnSync(process.execPath, [SCRIPT], { cwd, env: childEnv as unknown as NodeJS.ProcessEnv, encoding: "utf8" });
@@ -65,17 +66,26 @@ describe("check-tiles-env script", () => {
 describe("checkDownloadsManifest", () => {
   const prod = { VERCEL: "1" };
   const base = "https://blob.example";
-  const good = { files: { k: { url: `${base}/a.zip`, extra: { r: `${base}/r.txt` } } }, sheets: { s: { items: [{ url: `${base}/dvc/x` }] } } };
-  it("accepts a manifest under the Blob base, and anything outside production", () => {
+  const N = "sfzoning-1948-lots-2026-11-01-3f9a2c1b.gpkg.zip";
+  const R = "sfzoning-1948-lots-2026-11-01-3f9a2c1b.README.txt";
+  const S = "sfzoning-1948-sheet-01-2026-11-04-ce47cd18.tif";
+  const good = { base, files: { k: { series: "1948", name: N, extra: { "README.txt": R } } }, sheets: { "1948": { items: [{ name: S }] } } };
+  const restore = /git checkout site\/lib\/downloads\.json/;
+  it("accepts a manifest for the Blob base, and anything outside production", () => {
     expect(checkDownloadsManifest(prod, good, base)).toBeNull();
-    expect(checkDownloadsManifest(prod, { files: {}, sheets: {} }, base)).toBeNull();
+    expect(checkDownloadsManifest(prod, { base, files: {}, sheets: {} }, base)).toBeNull();
     expect(checkDownloadsManifest({}, { local: true, files: {} }, base)).toBeNull();
   });
-  it("fails a production build on a local manifest or a foreign url, telling how to restore it", () => {
-    expect(checkDownloadsManifest(prod, { local: true, files: {} }, base)).toMatch(/git checkout site\/lib\/downloads\.json/);
-    const foreign = { ...good, sheets: { s: { items: [{ url: "http://127.0.0.1:8787/x" }] } } };
-    expect(checkDownloadsManifest(prod, foreign, base)).toMatch(/outside https:\/\/blob\.example/);
-    const extra = { files: { k: { url: `${base}/a`, extra: { r: "http://127.0.0.1/r" } } }, sheets: {} };
-    expect(checkDownloadsManifest(prod, extra, base)).not.toBeNull();
+  it("fails a production build on a local manifest or another store, telling how to restore it", () => {
+    expect(checkDownloadsManifest(prod, { ...good, local: true }, base)).toMatch(restore);
+    expect(checkDownloadsManifest(prod, { ...good, base: "http://127.0.0.1:8787" }, base)).toMatch(/not https:\/\/blob\.example/);
+    expect(checkDownloadsManifest(prod, { files: good.files, sheets: {} }, base)).toMatch(restore); // no base
+  });
+  it("fails on a file, sidecar or sheet name that is not a download name for its series", () => {
+    const bad = (m: object) => expect(checkDownloadsManifest(prod, { ...good, ...m }, base)).toMatch(/not a download name/);
+    bad({ files: { k: { series: "1948", name: "x.zip", extra: {} } } });
+    bad({ files: { k: { series: "1921", name: N, extra: {} } } });
+    bad({ files: { k: { series: "1948", name: N, extra: { "README.txt": "http://127.0.0.1/r" } } } });
+    bad({ sheets: { "1948": { items: [{ name: "1948-p01.tif" }] } } });
   });
 });

@@ -1,0 +1,64 @@
+{
+ "polygons": [
+  [
+   [
+    0,
+    0
+   ],
+   [
+    3300,
+    0
+   ],
+   [
+    3300,
+    3675.9
+   ],
+   [
+    2984,
+    3680.2
+   ],
+   [
+    2658,
+    3684.6
+   ],
+   [
+    2332,
+    3690.0
+   ],
+   [
+    2005,
+    3695.2
+   ],
+   [
+    1679,
+    3699.6
+   ],
+   [
+    1352,
+    3703.2
+   ],
+   [
+    1024,
+    3706.5
+   ],
+   [
+    697,
+    3709.5
+   ],
+   [
+    369,
+    3712.5
+   ],
+   [
+    42,
+    3715.3
+   ],
+   [
+    0,
+    3715.7
+   ]
+  ]
+ ],
+ "notes": "Portrait sheet (SPECIAL USE DISTRICTS, SHEET 1SUb, 1978). No frame rule on the top, left or right: the map runs out to blank paper or to the page edge there (the shoreline reaches x ~4 at the left), so the outline follows the page edge on those three sides (README rule 5). Bottom: just above the top edge of the thick bar (~26 px, x ~36-2991) that rules off the legend/title strip (SPECIAL USE DISTRICTS, district key 1-3, code note, north arrow and scale, SHEET 1SUb), rule 3; the bar's edge was measured column by column (y ~3717 at the left, ~3682 at the right; the page is turned slightly) and the outline set ~1.5 px above it, carried on along its slope to both page edges. No remove polygons: the north arrow and scale are in the legend strip. The circled district numbers 1-3 on the map, SAN FRANCISCO BAY and street names are map. No ink under the outline.",
+ "drawn_by": "Claude (R2 training labels), rule inner edges measured column by column on page.png, median+mean smoothed, checked by eye on full-resolution crops, 2026-11-21"
+}

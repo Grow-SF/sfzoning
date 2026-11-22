@@ -18,6 +18,8 @@ relying on it for any legal purpose.
 LAST UPDATED
 {{UPDATED}} (build {{COMMIT}})
 
+{{NEWEST}}
+
 LICENSE
 {{LICENSE}}
 

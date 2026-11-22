@@ -34,7 +34,7 @@ class Fake:
 
     def node(self, script, args):
         self.node_calls.append((script, list(args)))
-        out = ("to upload now: 2 file(s), 300 bytes; superseded: 1; expired to delete: 1\n"
+        out = ("to upload: 2 file(s), 300 bytes; to copy on the store: 1\n"
                if "downloads" in script else "upload tiles/a.pmtiles -> x.pmtiles (700 bytes)\n")
         return subprocess.CompletedProcess([], 0, out, "")
 
@@ -120,7 +120,7 @@ def test_release_commits_branch_pushes_and_opens_pr():
     assert gh[gh.index("--base") + 1] == "main"
     assert gh[gh.index("--title") + 1] == "Release 2026-11-04"
     assert gh[gh.index("--body") + 1].endswith("🤖 Generated with [Claude Code](https://claude.com/claude-code)")
-    assert (s.files, s.bytes, s.superseded, s.deleted) == (3, 1000, 1, 1)
+    assert (s.files, s.bytes) == (3, 1000)
     assert s.pr_url == "https://github.com/x/y/pull/9"
 
 
@@ -191,13 +191,13 @@ def test_tally_reads_the_scripts_real_output_lines():
              "upload b.pmtiles -> b-1234abcd.pmtiles (700 bytes)\n"
              "would upload c.pmtiles -> c-9999.pmtiles (50 bytes)\n")
     dl = ("listing: 10 names under downloads/ and dvc/files/md5/ in 1 request(s)\n"
-          "files: 4 (2 new uploads planned), sheets: 9 (3 to upload as packed)\n"
-          "to upload now: 5 file(s), 12345 bytes; superseded: 2; expired to delete: 1\n"
-          "requests: 7 listing and upload, 1 delete\n")
+          "files: 4, sheets: 9, new versions: 3\n"
+          "to upload: 5 file(s), 12345 bytes; to copy on the store: 2\n"
+          "requests: 7 (listing, uploads, copies and one confirming listing)\n")
     s = release.Summary()
     release._tally("publish-tiles.mjs", tiles, s)
     release._tally("publish-downloads.mjs", dl, s)
-    assert (s.files, s.bytes, s.superseded, s.deleted) == (7, 13095, 2, 1)
+    assert (s.files, s.bytes) == (7, 13095)
 
 
 def test_tools_outside_pixi_stop_the_release_before_the_export():
@@ -218,3 +218,10 @@ def test_export_progress_is_printed():
     f = Fake()
     release.release(dry_run=True, d=f.deps())
     assert "wrote  1948/lots.geojson  (10 bytes)" in f.out
+
+
+def test_every_file_the_publish_writes_is_committed_and_restored():
+    assert {"site/lib/download-versions.json", "site/lib/sheet-numbers.json"} <= set(release.MANIFESTS)
+    f = Fake()
+    release.release(d=f.deps())
+    assert ("add", "--", *release.MANIFESTS) in f.git_calls
