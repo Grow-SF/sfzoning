@@ -4,12 +4,17 @@ ellipses (design spec, amendment 2, edit 3, and amendment 3; ported from the mea
 spike-shape-report.md and .superpowers/sdd/2026-11-21-frame-crop-combined/combined-test-report.md).
 
 The candidates are the 8-connected pieces of p2 > `decide.cut_level()` inside the kept region.  Each gets the better
-of the best rotated rectangle and the best ellipse, both by local search from the piece's own moments, scored by the
-gain of deleting it: the sum of -D (`geometry.cost_field`'s D > 0 means "cheaper kept") over the shape within the kept
+of the best rectangle and the best ellipse, both by local search, scored by the gain of deleting it: the sum of -D (`geometry.cost_field`'s D > 0 means "cheaper kept") over the shape within the kept
 region.  **Shapes are bounded by the labelled blocks' sizes, widened by half** (`BlockBounds`): paper is free, so
 unbounded ellipses ballooned over blank water in the spike.  A block is kept while its gain, re-scored within the
 kept region less the blocks already kept, exceeds lambda_block.  A map patch wrongly called "removed" has a
 map-shaped outline, so no rectangle or ellipse takes it without the map around it.
+
+**A rectangle is square to the frame** (design spec amendment 4, the note "after the straight-line test"; owner
+2026-11-21): it tries only angles within FRAME_ANGLES of the frame's (the page's own when no side is framed).  The
+printed title and legend boxes are ruled square to the map's frame; around the piece's own moment angle they scored
+within about 1% of the frame's on real boxes, so the piece's coarse shape tilted them by up to 22 degrees.  An
+ellipse still starts from the piece's own moments: a compass needle points where it points.
 """
 
 from __future__ import annotations
@@ -36,8 +41,7 @@ if TYPE_CHECKING:
 WIDEN = 1.5  # the labels' largest block, widened by half (the design's pattern for every bound)
 BLOCK_MIN_PX = 50  # px: smaller pieces of p2 > level are not candidates (noise specks; computational)
 # Computational settings of the local searches (not fitted):
-MOMENT_ANGLES = (-3, -2, -1, -0.5, 0, 0.5, 1, 2, 3)  # degrees around a piece's moment angle, for rectangles
-FRAME_ANGLES = (-0.5, -0.25, 0, 0.25, 0.5)  # ... and around the frame's angle
+FRAME_ANGLES = (-0.5, -0.25, 0, 0.25, 0.5)  # degrees around the frame's angle, for rectangles
 CROP_MARGIN = (24, 0.3)  # px and share: the search crop around a piece, at least 24 px or 30% of its larger side
 ELLIPSE_CELLS = 300  # the ellipse's coarse pass works on cells making the crop at most this many across
 _EIGHT = ndi.generate_binary_structure(2, 2)
@@ -289,13 +293,11 @@ def _ellipse_on(Gc, x0, y0, cx, cy, a, b, th, amax, bmax):
     return g, Block("ellipse", float(p[0]), float(p[1]), float(p[4]), (float(p[2]), float(p[3])), g)
 
 
-def _wrap90(deg: float) -> float:
-    return (deg + 45.0) % 90.0 - 45.0
-
-
 def candidates(p: np.ndarray, D: np.ndarray, kept: np.ndarray, frame: Frame, bounds: BlockBounds) -> list[Block]:
     """Per 8-connected piece of p2 > `cut_level()` inside `kept` (at least BLOCK_MIN_PX px): the better of the best
-    rectangle and the best ellipse within `bounds`, by gain within `kept`; highest gain first."""
+    rectangle and the best ellipse within `bounds`, by gain within `kept`; highest gain first.  The rectangle is square
+    to the frame (`frame.phi` + FRAME_ANGLES; with no framed side phi is 0, square to the page); the ellipse starts
+    from the piece's own moments."""
     D = np.asarray(D, np.float32)
     h, w = D.shape
     L, S = bounds.rect_max
@@ -322,8 +324,7 @@ def candidates(p: np.ndarray, D: np.ndarray, kept: np.ndarray, frame: Frame, bou
         thm = math.degrees(math.atan2(evec[1, 1], evec[0, 1]))
         best = None
         if L > 0 and S > 0:
-            angles = sorted({round(_wrap90(thm) + d, 3) for d in MOMENT_ANGLES}
-                            | {round(frame.phi + d, 3) for d in FRAME_ANGLES})
+            angles = sorted({round(frame.phi + d, 3) for d in FRAME_ANGLES})
             for th in angles:
                 t = math.radians(th)
                 c, s = math.cos(t), math.sin(t)

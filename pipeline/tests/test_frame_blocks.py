@@ -125,3 +125,72 @@ def test_blocks_are_rescored_inside_the_kept_region():
     assert acc == [] and not removed.any()
     removed, acc = blocks.accept(cands, D, kept, 0.4 * full)
     assert len(acc) == 1 and not (removed & ~kept).any()
+
+
+def _turned(X, Y, cx, cy, deg):
+    """(u, v) of px centres about (cx, cy), turned by `deg` degrees."""
+    t = math.radians(deg)
+    dx, dy = X + 0.5 - cx, Y + 0.5 - cy
+    return math.cos(t) * dx + math.sin(t) * dy, -math.sin(t) * dx + math.cos(t) * dy
+
+
+def _ruled_box_page(phi, seed=0):
+    """A 1000 x 1000 page of blank paper (called map) with a ruled 600 x 400 box of 20% ink turned by `phi` about
+    (500, 500); the chances call the box "removed" over a band along its diagonal covering three quarters of it (the
+    corners off the band, 300 x 200 triangles, are called map).  (lum, p, box mask)."""
+    h = w = 1000
+    rng = np.random.default_rng(seed)
+    lum, p = _blank_page(h, w)
+    Y, X = np.mgrid[0:h, 0:w]
+    u, v = _turned(X, Y, 500, 500, phi)
+    box = (np.abs(u) < 300) & (np.abs(v) < 200)
+    rule = box & ((np.abs(u) >= 295) | (np.abs(v) >= 195))
+    lum[box] = 1.0 - (rng.random(int(box.sum())) < 0.2)
+    lum[rule] = 0.0
+    a, b = (u + 300) / 600, (v + 200) / 400  # 0..1 across the box, left to right and top to bottom
+    band = box & (np.abs(a - b) < 0.5)  # leaves out the top-right and bottom-left corners, each 1/8 of the box
+    p[:, band] = BLOCK_P[:, None]
+    p[:, box & ~band] = MAP_P[:, None]
+    return lum, p, box
+
+
+def _the_block(p, lum, frame, bounds):
+    h, w = lum.shape
+    cands = blocks.candidates(p, cost_field(p, lum), np.ones((h, w), bool), frame, bounds)
+    assert cands
+    return cands[0]
+
+
+def _angle_off(theta, phi):
+    """The angle between a rectangle turned by theta and one turned by phi (a rectangle repeats every 90 degrees)."""
+    return abs((theta - phi + 45.0) % 90.0 - 45.0)
+
+
+def test_a_box_is_square_to_the_frame_when_the_blob_is_diagonal():
+    # the frame is turned 0.5 degrees and so is the box; the blob called "removed" runs along the box's diagonal, so
+    # its own moment angle is far from the frame's: the rectangle still takes the frame's angle
+    lum, p, _ = _ruled_box_page(0.5)
+    b = _the_block(p, lum, Frame(phi=0.5), blocks.BlockBounds((900.0, 600.0), (0.0, 0.0)))
+    assert b.kind == "rect"
+    assert _angle_off(b.theta, 0.5) <= 0.5
+
+
+def test_a_box_on_a_page_with_no_framed_side_is_square_to_the_page():
+    lum, p, _ = _ruled_box_page(0.0, seed=1)
+    b = _the_block(p, lum, Frame(), blocks.BlockBounds((900.0, 600.0), (0.0, 0.0)))
+    assert b.kind == "rect"
+    assert _angle_off(b.theta, 0.0) <= 0.5
+
+
+def test_an_ellipse_still_takes_its_own_angle():
+    # a thin ellipse of ink turned 30 degrees, called "removed": found as an ellipse near 30 degrees
+    h = w = 600
+    rng = np.random.default_rng(2)
+    lum, p = _blank_page(h, w)
+    Y, X = np.mgrid[0:h, 0:w]
+    u, v = _turned(X, Y, 300, 300, 30.0)
+    m = (u / 200) ** 2 + (v / 40) ** 2 <= 1.0
+    _patch(lum, p, m, rng)
+    b = _the_block(p, lum, Frame(), blocks.BlockBounds((600.0, 120.0), (600.0, 120.0)))
+    assert b.kind == "ellipse"
+    assert abs((b.theta - 30.0 + 90.0) % 180.0 - 90.0) <= 3.0
