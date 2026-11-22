@@ -208,6 +208,7 @@ def _frame_stubs(monkeypatch, tmp_path, stale=None, test_sheets=(("s", "2"),)):
     monkeypatch.setattr(fr, "format_split", lambda r: "split table")
     monkeypatch.setattr(look, "series_mosaics", lambda out: calls.append(("mosaics", out)) or [])
     monkeypatch.setattr(look, "closeups", lambda out: calls.append("closeups"))
+    monkeypatch.setattr(look, "set_mosaic", lambda out, name: calls.append(("set mosaic", name)) or out / name)
     return calls
 
 
@@ -234,11 +235,12 @@ def test_cli_frame_dev_and_test_fit_first_when_the_model_is_stale(monkeypatch, t
         res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", flag])
         assert res.exit_code == 0, res.output
         assert "split table" in res.output and "model.json is missing" in res.output
-        assert calls == ["model_stale", "turn", "fit", step, ("mosaics", tmp_path / where)]
+        assert calls == ["model_stale", "turn", "fit", step, ("mosaics", tmp_path / where), ("set mosaic", where)]
         calls = _frame_stubs(monkeypatch, tmp_path, stale=None)
         res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", flag])
         assert res.exit_code == 0, res.output
-        assert calls == ["model_stale", step, ("mosaics", tmp_path / where)]          # current: no fit, no GPU
+        assert calls == ["model_stale", step, ("mosaics", tmp_path / where),
+                         ("set mosaic", where)]                                        # current: no fit, no GPU
 
 
 def test_cli_frame_plain_fits_when_stale_then_predicts(monkeypatch, tmp_path):
@@ -283,7 +285,8 @@ def test_cli_frame_full_disk_is_an_error(monkeypatch, tmp_path):
         res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", *flags])
         assert res.exit_code == 1 and "20 GB" in res.output and calls == []
     res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--test"])   # no prediction: no check
-    assert res.exit_code == 0 and calls == ["model_stale", "score_test", ("mosaics", tmp_path / fr.TEST_DIR)]
+    assert res.exit_code == 0 and calls == ["model_stale", "score_test", ("mosaics", tmp_path / fr.TEST_DIR),
+                                            ("set mosaic", fr.TEST_DIR)]
 
 
 def test_cli_frame_flags_exclude_each_other(monkeypatch, tmp_path):

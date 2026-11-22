@@ -647,7 +647,8 @@ def _split_line(name: str, shares: dict, boxes: list[dict]) -> str:
             f"{pct(shares['map_cut_frame_share'])}, by boxes {pct(shares['map_cut_boxes_share'])}")
 
 
-def _sheet_line(row: dict) -> str:
+def sheet_line(row: dict) -> str:
+    """A scored sheet's line of `format_split`."""
     return _split_line(f"{row['series']}/{row['sheet']}", scores.pooled_split([row["split"]]), row["split"]["boxes"])
 
 
@@ -657,7 +658,7 @@ def format_split(result: dict) -> str:
     rows = result["sheets"]
     lo, hi = result["temperature_interval"]
     lines = [f"{result['set']}: {len(rows)} sheets, temperature {result['temperature']:.3f} ({lo:.3f}-{hi:.3f})"]
-    lines += [_sheet_line(r) for r in rows]
+    lines += [sheet_line(r) for r in rows]
     lines.append(_split_line(f"pooled ({len(rows)} sheets)", result["pooled"],
                              [b for r in rows for b in r["split"]["boxes"]]))
     return "\n".join(lines)
@@ -668,7 +669,7 @@ def _score_set(name: str, jobs: list[PageJob], where: Path, meta: dict) -> dict:
     `FITS_FILE` under `where`; returns what `SCORES_FILE` holds."""
     for f in (SCORES_FILE, FITS_FILE):
         (where / f).unlink(missing_ok=True)
-    rows = pool_map(score_page, jobs, PARAMS, where, label=f"{name} sheet", describe=_sheet_line)
+    rows = pool_map(score_page, jobs, PARAMS, where, label=f"{name} sheet", describe=sheet_line)
     fits = {f"{r['series']}/{r['sheet']}": r.pop("fit") for r in rows}
     _write_json(where / FITS_FILE, fits)
     _write_json(where / SCORES_FILE, {

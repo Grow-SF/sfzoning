@@ -1,21 +1,23 @@
 """Pictures of the frame finder's outputs, for the owner's eye.
 
-A sheet picture is the scan with its paper white and each ink px coloured by q, the chance it is deleted, from blue
-(kept) to red (deleted), as strongly as the px is inked; the outline of the kept region (the fitted frame, its notches
-and the removed blocks' holes) is drawn on top in magenta, as straight lines: the polygons of `outline.json`
-simplified within `OUTLINE_TOLERANCE` px (a px staircase along a straight fitted line becomes that line).  Pages are
-shrunk (Pillow BOX) before they are coloured and never enlarged.
+A sheet picture is the scan with its paper white and its ink in two plain colours: ink the cut keeps in `KEPT_RGB`,
+ink it deletes in `DELETED_RGB`, each shaded by the ink's darkness only, nothing in between (a shrunk px takes the
+colour of most of its ink).  The outline of the kept region (the fitted frame, its notches and the removed blocks'
+holes) is drawn on top in magenta, as straight lines: the polygons of `outline.json` simplified within
+`OUTLINE_TOLERANCE` px (a px staircase along a straight fitted line becomes that line).  Where a label is given, its
+frame and boxes are drawn in green, wider, beneath the outline.  Pages are shrunk (Pillow BOX) and never enlarged.
 
 Under `out/look/`: one picture per map page at `LONG_SIDE` (`<series>/<sheet>.png`), one mosaic per series
 (`<series>.png`; a scored sheet's caption shows its shares of frame ink and label-box ink left in and of map ink
-cut, from the `scores.json` of the folder drawn) and
-`closeups.png`, crops of `CLOSEUPS` at full scan resolution (never shrunk).
+cut, from the `scores.json` of the folder drawn) and `closeups.png`, crops of `CLOSEUPS` at full scan resolution
+(never shrunk).  `set_mosaic` draws every sheet of the dev or test set with its label, under `out/<set>/look/`.
 """
 from __future__ import annotations
 
 import json
 import logging
 import math
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -34,9 +36,12 @@ MOSAIC_COLUMNS = 8
 CAPTION_PX = 40           # px under each tile for its two caption lines
 GAP_PX = 6
 FONT_PX = 14
-KEPT_RGB = (0, 0, 255)
-DELETED_RGB = (255, 0, 0)
+SET_SIDE = 480            # px, a set mosaic tile's longest side
+KEPT_RGB = (30, 60, 220)
+DELETED_RGB = (225, 30, 30)
 CONTOUR_RGB = (255, 0, 255)
+LABEL_RGB = (0, 170, 0)
+LABEL_WIDTH = 3           # px: the label's lines, under the 1-px outline so both show where they meet
 PAPER_RGB = (255, 255, 255)
 BACKGROUND_RGB = (200, 200, 200)   # around the tiles, so a page's white paper shows where it ends
 OUTLINE_TOLERANCE = 1.0   # px: a straight line's px staircase lies within this of it (for drawing only)
@@ -74,28 +79,35 @@ def rings(polygons: list[dict], tolerance: float = OUTLINE_TOLERANCE) -> list[li
     return out
 
 
-def sheet_picture(lum: np.ndarray, q: np.ndarray, deleted: np.ndarray, side: int = LONG_SIDE,
-                  polygons: list[dict] | None = None) -> Image.Image:
-    """The page coloured by `q` (see the module), its longest side `side` px (a smaller page keeps its own size:
-    scans are never enlarged); `deleted` is the cut's mask.  With `polygons` (`outline.json`'s), their simplified
-    rings are drawn; without, the boundary of the shrunk mask's complement."""
-    if q.shape != lum.shape or deleted.shape != lum.shape:
-        raise ValueError(f"q {q.shape} and deleted {deleted.shape} are not the page's shape {lum.shape}")
+def sheet_picture(lum: np.ndarray, deleted: np.ndarray, side: int = LONG_SIDE, polygons: list[dict] | None = None,
+                  label: list | None = None) -> Image.Image:
+    """The page in two colours (see the module), its longest side `side` px (a smaller page keeps its own size: scans
+    are never enlarged); `deleted` is the cut's mask.  With `polygons` (`outline.json`'s), their simplified rings are
+    drawn; without, the boundary of the shrunk mask's complement.  With `label` (polygons, each a list of (x, y) page
+    px: the label's frame and boxes), it is drawn in green."""
+    if deleted.shape != lum.shape:
+        raise ValueError(f"deleted {deleted.shape} is not the page's shape {lum.shape}")
     h, w = lum.shape
     s = min(1.0, side / max(h, w))
     size = (max(1, round(w * s)), max(1, round(h * s)))
-    qs = np.clip(_shrink(q, size), 0.0, 1.0)[..., None]
-    ink = np.clip(data.ink_weight(_shrink(lum, size)), 0.0, 1.0)[..., None]
-    colour = qs * np.array(DELETED_RGB, np.float32) + (1.0 - qs) * np.array(KEPT_RGB, np.float32)
+    ink_full = np.clip(data.ink_weight(np.asarray(lum, np.float32)), 0.0, 1.0)
+    ink = _shrink(ink_full, size)
+    gone = _shrink(ink_full * deleted, size) > 0.5 * ink          # most of the px's ink is deleted
+    colour = np.where(gone[..., None], np.array(DELETED_RGB, np.float32), np.array(KEPT_RGB, np.float32))
+    ink = np.clip(ink, 0.0, 1.0)[..., None]
     rgb = (1.0 - ink) * np.array(PAPER_RGB, np.float32) + ink * colour
     if polygons is None:
         kept = _shrink(deleted.astype(np.float32), size) < 0.5
         edge = ndimage.binary_dilation(kept & ~ndimage.binary_erosion(kept, border_value=1))
         rgb[edge] = CONTOUR_RGB
     img = Image.fromarray(np.round(rgb).astype(np.uint8), "RGB")
+    sx, sy = size[0] / w, size[1] / h
+    draw = ImageDraw.Draw(img)
+    for poly in label or []:
+        pts = [(float(x) * sx, float(y) * sy) for x, y in poly]
+        if len(pts) >= 2:
+            draw.line(pts + pts[:1], fill=LABEL_RGB, width=LABEL_WIDTH, joint="curve")
     if polygons is not None:
-        sx, sy = size[0] / w, size[1] / h
-        draw = ImageDraw.Draw(img)
         for ring in rings(polygons):
             draw.line([(x * sx, y * sy) for x, y in ring], fill=CONTOUR_RGB, width=1)
     return img
@@ -105,19 +117,17 @@ def _font() -> ImageFont.ImageFont:
     return ImageFont.load_default(size=FONT_PX)
 
 
-def _load_outputs(out: Path, sid: SheetId) -> tuple[np.ndarray, np.ndarray, list[dict] | None] | None:
-    """(q in [0, 1], deleted, the outline's polygons or None) of a page, or None (logged) when it has no outputs."""
+def _load_outputs(out: Path, sid: SheetId) -> tuple[np.ndarray, list[dict] | None] | None:
+    """(deleted, the outline's polygons or None) of a page, or None (logged) when it has no outputs."""
     d = run.sheet_dir(out, sid)
-    if not (d / run.PROB_FILE).exists() or not (d / run.OUTSIDE_PNG).exists():
+    if not (d / run.OUTSIDE_PNG).exists():
         log.info("no outputs for %s/%s; left out of the pictures", *sid)
         return None
-    with np.load(d / run.PROB_FILE) as z:
-        q = z["q"].astype(np.float32) / 255.0
     with Image.open(d / run.OUTSIDE_PNG) as im:
         deleted = np.asarray(im.convert("L")) > 0
     f = d / run.OUTLINE_FILE
     polygons = json.loads(f.read_text())["polygons"] if f.exists() else None
-    return q, deleted, polygons
+    return deleted, polygons
 
 
 def _scored(out: Path) -> dict[SheetId, dict]:
@@ -128,19 +138,30 @@ def _scored(out: Path) -> dict[SheetId, dict]:
     return {(r["series"], r["sheet"]): scores.pooled_split([r["split"]]) for r in json.loads(path.read_text())["sheets"]}
 
 
-def _mosaic(tiles: list[tuple[Image.Image, tuple[str, str]]], side: int, columns: int, path: Path) -> Path:
-    """The tiles on a grid of `columns`, each cell side x side plus its caption."""
+def _lines_px(n: int) -> int:
+    """The height of `n` caption lines (two: `CAPTION_PX`)."""
+    return n * (FONT_PX + 4) + 4
+
+
+def _mosaic(tiles: list[tuple[Image.Image, Sequence[str]]], side: int, columns: int, path: Path,
+            title: Sequence[str] = ()) -> Path:
+    """The tiles on a grid of `columns`, each cell side x side plus its caption lines (at least two lines' room),
+    under the `title` lines."""
     font = _font()
     cols = max(1, min(columns, len(tiles)))
     rows = max(1, math.ceil(len(tiles) / cols))
-    cell_w, cell_h = side + GAP_PX, side + CAPTION_PX + GAP_PX
-    canvas = Image.new("RGB", (cols * cell_w + GAP_PX, rows * cell_h + GAP_PX), BACKGROUND_RGB)
+    caption = _lines_px(max([2, *(len(c) for _, c in tiles)]))
+    top = _lines_px(len(title)) if title else 0
+    cell_w, cell_h = side + GAP_PX, side + caption + GAP_PX
+    canvas = Image.new("RGB", (cols * cell_w + GAP_PX, top + rows * cell_h + GAP_PX), BACKGROUND_RGB)
     draw = ImageDraw.Draw(canvas)
-    for i, (img, (line1, line2)) in enumerate(tiles):
-        x, y = GAP_PX + (i % cols) * cell_w, GAP_PX + (i // cols) * cell_h
+    for k, line in enumerate(title):
+        draw.text((GAP_PX, 2 + k * (FONT_PX + 4)), line, fill=(0, 0, 0), font=font)
+    for i, (img, lines) in enumerate(tiles):
+        x, y = GAP_PX + (i % cols) * cell_w, top + GAP_PX + (i // cols) * cell_h
         canvas.paste(img, (x, y))
-        draw.text((x, y + side + 2), line1, fill=(0, 0, 0), font=font)
-        draw.text((x, y + side + 2 + FONT_PX + 4), line2, fill=(0, 0, 0), font=font)
+        for k, line in enumerate(lines):
+            draw.text((x, y + side + 2 + k * (FONT_PX + 4)), line, fill=(0, 0, 0), font=font)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.stem + ".tmp.png")
     canvas.save(tmp)
@@ -165,13 +186,13 @@ def series_mosaics(out: Path = OUT) -> list[Path]:
             lum = data.load_luminance(data.page_path(*sid, work=data.WORK))
             full = out / "look" / series / f"{sid[1]}.png"
             full.parent.mkdir(parents=True, exist_ok=True)
-            q, deleted, polygons = loaded
-            sheet_picture(lum, q, deleted, LONG_SIDE, polygons).save(full)
+            deleted, polygons = loaded
+            sheet_picture(lum, deleted, LONG_SIDE, polygons).save(full)
             sc = scored.get(sid)
             line2 = ("" if sc is None else f"frame {scores.percent(sc['frame_left_share'])} boxes "
                      f"{scores.percent(sc['box_left_share'])} cut "
                      f"{scores.percent(sc['map_cut_frame_share'] + sc['map_cut_boxes_share'])}")
-            tiles.append((sheet_picture(lum, q, deleted, MOSAIC_SIDE, polygons), (sid[1], line2)))
+            tiles.append((sheet_picture(lum, deleted, MOSAIC_SIDE, polygons), (sid[1], line2)))
         if not tiles:
             log.info("series %s has no outputs; no mosaic", series)
             continue
@@ -180,9 +201,46 @@ def series_mosaics(out: Path = OUT) -> list[Path]:
     return paths
 
 
+def _caption(line: str) -> list[str]:
+    """A `run.sheet_line` broken at its separators: the sheet, then each of its shares."""
+    name, rest = line.split(": ", 1)
+    return [name, *rest.split(" | ")]
+
+
+def set_mosaic(out: Path, name: str) -> Path:
+    """`out/<name>/look/<name>-set.png`: every sheet of the dev or test set (`name` is `run.DEV_DIR` or
+    `run.TEST_DIR`, the sheets of its `scores.json`, the cuts of its outputs) at `SET_SIDE`, each with its training
+    or test label in green and captioned with its `run.format_split` line; the set's header and pooled lines on top.
+    A sheet with no outputs is skipped (logged)."""
+    where = out / name
+    result = json.loads((where / run.SCORES_FILE).read_text())
+    root = data.LABELS if name == run.DEV_DIR else data.TEST_LABELS
+    tiles = []
+    for row in result["sheets"]:
+        sid = (row["series"], row["sheet"])
+        loaded = _load_outputs(where, sid)
+        if loaded is None:
+            continue
+        deleted, polygons = loaded
+        lum = data.load_luminance(data.page_path(*sid, work=data.WORK))
+        label = data.load_label(*sid, root=root) + data.load_remove(*sid, root=root)
+        tiles.append((sheet_picture(lum, deleted, SET_SIDE, polygons, label), _caption(run.sheet_line(row))))
+    lines = run.format_split(result).splitlines()
+    path = _mosaic(tiles, SET_SIDE, MOSAIC_COLUMNS, where / "look" / f"{name}-set.png",
+                   title=(lines[0], lines[-1]))
+    log.info("set mosaic %s: %d sheets", path, len(tiles))
+    return path
+
+
+def _shifted(polygons: list[dict], dx: float, dy: float) -> list[dict]:
+    return [{"exterior": [(x - dx, y - dy) for x, y in p["exterior"]],
+             "holes": [[(x - dx, y - dy) for x, y in r] for r in p["holes"]]} for p in polygons]
+
+
 def closeups(out: Path = OUT, items=CLOSEUPS) -> Path:
-    """`out/look/closeups.png`: each crop of `items` at the scan's own resolution, outside ink tinted red, the kept
-    region's outline drawn, captioned, stacked.  A page with no outputs is skipped (logged)."""
+    """`out/look/closeups.png`: each crop of `items` at the scan's own resolution (`sheet_picture`: kept and deleted
+    ink in their two colours, the kept region's outline drawn), captioned, stacked.  A page with no outputs is
+    skipped (logged)."""
     font = _font()
     panels = []
     for series, sheet, (x0, y0, x1, y1), caption in items:
@@ -190,20 +248,15 @@ def closeups(out: Path = OUT, items=CLOSEUPS) -> Path:
         loaded = _load_outputs(out, sid)
         if loaded is None:
             continue
-        deleted = loaded[1]
+        deleted, polygons = loaded
         lum = data.load_luminance(data.page_path(*sid, work=data.WORK))
         h, w = lum.shape
         x0, y0, x1, y1 = max(0, x0), max(0, y0), min(w, x1), min(h, y1)
         if x1 <= x0 or y1 <= y0:
             log.info("%s lies outside %s/%s; skipped", caption, *sid)
             continue
-        ink = np.clip(data.ink_weight(lum[y0:y1, x0:x1]), 0.0, 1.0)[..., None]
-        tint = np.where(deleted[y0:y1, x0:x1, None], np.array(DELETED_RGB, np.float32),
-                        np.zeros(3, np.float32))
-        img = Image.fromarray(np.round((1.0 - ink) * 255.0 + ink * tint).astype(np.uint8), "RGB")
-        draw = ImageDraw.Draw(img)
-        for ring in rings(loaded[2] or []):
-            draw.line([(x - x0, y - y0) for x, y in ring], fill=CONTOUR_RGB, width=1)
+        img = sheet_picture(lum[y0:y1, x0:x1], deleted[y0:y1, x0:x1], max(x1 - x0, y1 - y0),
+                            _shifted(polygons or [], x0, y0))
         panels.append((img, f"{caption} ({series}/{sheet} x {x0}-{x1}, y {y0}-{y1})"))
     width = max([img.width for img, _ in panels], default=GAP_PX + 200)
     height = sum(img.height + CAPTION_PX + GAP_PX for img, _ in panels) + GAP_PX

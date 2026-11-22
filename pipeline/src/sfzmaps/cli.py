@@ -991,7 +991,9 @@ def frame(
     if shown is not None:
         typer.echo(shown)
     look.series_mosaics(where)
-    if not (dev or test):
+    if dev or test:
+        typer.echo(f"set mosaic: {look.set_mosaic(out, fr.DEV_DIR if dev else fr.TEST_DIR)}")
+    else:
         look.closeups(out)
 
 
