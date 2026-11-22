@@ -336,33 +336,29 @@ def test_write_outputs_keeps_colour(tmp_path, monkeypatch, mode):
     assert outline["shape"] is None
 
 
-def test_predict_every_other_page_with_the_fitted_model(fake_world):
-    """The real shape decision on the toy pages; the training sheets take their dev outputs."""
+def test_predict_cuts_every_page_with_the_fitted_model(fake_world):
+    """Every map page, the training sheets too, is decided by the final heads; nothing is taken from a dev run."""
     labelled, out = fake_world
     run.fit("cpu", out)
 
-    for i, sid in enumerate(labelled):                          # the outputs a dev run left
+    for sid in labelled:                                        # the outputs a dev run left: never used
         d = run.sheet_dir(out / run.DEV_DIR, sid)
         d.mkdir(parents=True)
-        for name in (run.OUTSIDE_PNG, run.PROB_FILE, run.ERASED_PNG, run.OUTLINE_FILE):
+        for name in run.PAGE_FILES:
             (d / name).write_bytes(b"dev")
-    (out / run.DEV_DIR / run.SCORES_FILE).write_text(json.dumps({"sheets": [
-        {"series": s, "sheet": h, "filled_ink": 0.0, "dropped_ink": 2.5, "removed_ink": 0.0, "side_ink_left": {},
-         "side_ink_left_total": float(i)} for i, (s, h) in enumerate(labelled)]}))
     run.predict_all("cpu", out)
 
-    for sid in labelled:
+    every = set(UNLABELLED) | set(labelled)
+    for sid in every:
         d = run.sheet_dir(out, sid)
-        assert all((d / n).read_bytes() == b"dev"
-                   for n in (run.OUTSIDE_PNG, run.PROB_FILE, run.ERASED_PNG, run.OUTLINE_FILE))
+        assert {f.name for f in d.iterdir()} == set(run.PAGE_FILES)
+        with Image.open(d / run.OUTSIDE_PNG) as im:
+            assert im.mode == "1"
+        assert "shape" in json.loads((d / run.OUTLINE_FILE).read_text())
     assert not run.sheet_dir(out, ("a", "c0")).exists()
-    for sid in UNLABELLED:
-        d = run.sheet_dir(out, sid)
-        assert {f.name for f in d.iterdir()} == {run.OUTSIDE_PNG, run.PROB_FILE, run.ERASED_PNG, run.OUTLINE_FILE}
-        assert json.loads((d / run.OUTLINE_FILE).read_text())["shape"] is not None
     pages = json.loads((out / run.PAGES_FILE).read_text())
-    assert {(p["series"], p["sheet"]) for p in pages} == set(UNLABELLED) | set(labelled)
-    assert all(p["held_out"] == ((p["series"], p["sheet"]) in labelled) for p in pages)
+    assert {(p["series"], p["sheet"]) for p in pages} == every
+    assert not any("held_out" in p for p in pages)
 
 
 def test_predict_refuses_a_full_disk(monkeypatch, fake_world):
@@ -461,4 +457,4 @@ def test_dev_and_test_pages_use_the_learned_chances(fake_world, spy_apply, monke
     run.score_test(out)
     check(out / run.TEST_DIR, TEST, final)
     run.predict_all("cpu", out)
-    check(out, sorted(set(UNLABELLED)), final)
+    check(out, sorted(set(UNLABELLED) | set(labelled)), final)          # every map page, the training sheets too
