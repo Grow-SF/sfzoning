@@ -18,7 +18,7 @@ def _page() -> np.ndarray:
 
 
 def _outside() -> np.ndarray:
-    return ~data.inside_mask(MAP, (N, N))
+    return data.map_mask(MAP, (N, N)) == 0
 
 
 def test_split_scores_separates_frame_from_boxes():

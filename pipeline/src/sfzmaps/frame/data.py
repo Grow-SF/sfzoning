@@ -82,15 +82,12 @@ def check_split(train, test) -> None:
                          f"{names}; a test sheet is never trained on: remove one of the two labels")
 
 
-def map_mask(polygons, shape: tuple[int, int], scale: float = 1.0, holes=()) -> np.ndarray:
-    """Uint8 mask, 1 inside any polygon, then 0 inside any hole (outlines included both times).  Polygons and holes
-    are in page px, drawn times `scale`."""
+def map_mask(polygons, shape: tuple[int, int]) -> np.ndarray:
+    """Uint8 mask, 1 inside any polygon (outlines included), in page px."""
     img = Image.new("L", (shape[1], shape[0]), 0)
     draw = ImageDraw.Draw(img)
     for poly in polygons:
-        draw.polygon([(x * scale, y * scale) for x, y in poly], fill=1, outline=1)
-    for hole in holes:
-        draw.polygon([(x * scale, y * scale) for x, y in hole], fill=0, outline=0)
+        draw.polygon([(x, y) for x, y in poly], fill=1, outline=1)
     return np.asarray(img, dtype=np.uint8)
 
 
@@ -104,11 +101,6 @@ def class_mask(polygons, remove, shape: tuple[int, int]) -> np.ndarray:
     for block in remove:
         draw.polygon(list(block), fill=2, outline=2)
     return np.asarray(img, dtype=np.uint8)
-
-
-def inside_mask(polygons, shape: tuple[int, int]) -> np.ndarray:
-    """Bool, True inside any polygon, outlines included: `map_mask(polygons, shape) == 1`."""
-    return map_mask(polygons, shape) == 1
 
 
 def map_counts(kinds_csv: Path = PAGE_KINDS) -> dict[SheetId, int]:

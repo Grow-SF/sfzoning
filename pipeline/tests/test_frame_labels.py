@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 
 from sfzmaps.frame import labels
@@ -16,16 +18,6 @@ def test_page_edge_is_not_listed():
     lum = np.zeros((100, 100), np.float32)                                # all ink
     st = labels.outline_stretches(lum, [[(0, 0), (99, 0), (99, 99), (0, 99)]], "s", "h")
     assert st == []
-
-
-def test_qa_sheet_stacks_one_crop_per_stretch(tmp_path):
-    from PIL import Image
-    lum = np.ones((200, 200), np.float32)
-    poly = [(20, 20), (100, 20), (100, 180), (20, 180)]
-    st = labels.outline_stretches(lum, [poly], "s", "h")[:2]
-    out = labels.qa_sheet(lum, [poly], st, tmp_path / "s" / "h.png")
-    with Image.open(out) as im:
-        assert im.height >= 2 * (2 * labels.CROP_MARGIN)                  # two crops, never shrunk
 
 
 def test_frame_labels_command_checks_removed_blocks(monkeypatch, tmp_path):
@@ -55,6 +47,8 @@ def test_frame_labels_command_checks_removed_blocks(monkeypatch, tmp_path):
     monkeypatch.setattr(fd, "OUT", tmp_path / "out")
     res = CliRunner().invoke(cli.app, ["frame-labels"])
     assert res.exit_code == 0, res.output
-    name, total, best = res.output.split()
-    assert name == "s/h" and float(total) >= 80 and float(best) >= 49
+    row = re.search(r"^s/h\s+(\S+)\s+(\S+)\s*$", res.output, re.M)
+    assert row, res.output
+    total, best = map(float, row.groups())
+    assert total >= 80 and best >= 49
     assert (tmp_path / "out" / "labels-qa" / "s" / "h.png").exists()

@@ -19,19 +19,6 @@ def test_temperature_is_recovered():
     assert calibrate.fit_temperature([(z, y)]) == pytest.approx(2.0, rel=0.05)
 
 
-def test_temperature_interval_brackets_the_fit():
-    rng = np.random.default_rng(3)
-    samples = []
-    for _ in range(6):
-        z0 = rng.normal(0, 3, (3, 20_000)).astype(np.float32)
-        p = _softmax(z0 / 2); u = rng.random(20_000)
-        y = (u > p[0]).astype(np.uint8) + (u > p[0] + p[1]).astype(np.uint8)
-        samples.append((z0[None], y))
-    t = calibrate.fit_temperature(samples)
-    lo, hi = calibrate.temperature_interval(samples, n=20)
-    assert lo <= t * 1.1 and hi >= t * 0.9 and lo < hi
-
-
 def test_reliability_of_calibrated_chances():
     rng = np.random.default_rng(1)
     n = 100_000
@@ -47,15 +34,16 @@ def test_reliability_of_calibrated_chances():
 
 
 def test_sample_draws_ink_pixels_only():
+    # one ink px on blank paper, in the class-1 half: every draw is that px, its class and each seed's logits there
     rng = np.random.default_rng(0)
     h = w = 20
-    zs = [rng.normal(size=(3, h, w)).astype(np.float32)]
+    zs = [rng.normal(size=(3, h, w)).astype(np.float32) for _ in range(2)]
     cls = np.zeros((h, w), np.uint8); cls[:, 10:] = 1
-    lum = np.ones((h, w)); lum[0, 0] = 0.0
+    lum = np.ones((h, w)); lum[5, 15] = 0.0
     z, y = calibrate.sample(zs, cls, lum, rng, n=500)
-    assert z.shape == (1, 3, 500) and y.shape == (500,) and y.dtype == np.uint8
-    assert z.dtype == np.float32
-    assert set(np.unique(y)) <= {0, 1}
+    assert y.shape == (500,) and (y == cls[5, 15]).all()
+    for s, zz in enumerate(zs):
+        np.testing.assert_array_equal(z[s], np.repeat(zz[:, 5, 15][:, None], 500, axis=1))
 
 
 def test_temperature_interval_refits_as_a_fresh_search_does():

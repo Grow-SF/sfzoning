@@ -19,10 +19,6 @@ def _framed() -> np.ndarray:
     return p
 
 
-def test_cut_level_is_even_odds():
-    assert decide.cut_level() == 0.5
-
-
 def test_level_itself_is_not_cut():
     q = np.full((5, 5), 0.5)
     assert not decide.decide(_p(q), np.zeros((5, 5))).deleted.any()
@@ -98,12 +94,9 @@ def test_removed_block_on_the_frame_is_outside():
     assert d.outside[3:9, 20:26].all() and not d.removed.any() and d.removed_ink == 0
 
 
-def test_outline_has_the_removed_hole():
-    deleted = np.ones((40, 40), bool); deleted[5:35, 5:35] = False; deleted[15:20, 15:20] = True
-    polys = decide.outline(deleted)
-    raster = rasterio.features.rasterize(
-        [(Polygon(q["exterior"], q["holes"]), 1) for q in polys], out_shape=deleted.shape)
-    np.testing.assert_array_equal(raster.astype(bool), ~deleted)
+def _rasterised(polys, shape):
+    return rasterio.features.rasterize(
+        [(Polygon(q["exterior"], q["holes"]), 1) for q in polys], out_shape=shape).astype(bool)
 
 
 def test_outline_reproduces_the_region():
@@ -111,9 +104,11 @@ def test_outline_reproduces_the_region():
     outside[5:35, 5:45] = False
     outside[5:15, 30:45] = True  # L-shape
     polys = decide.outline(outside)
-    raster = rasterio.features.rasterize(
-        [(Polygon(q["exterior"], q["holes"]), 1) for q in polys], out_shape=outside.shape)
-    np.testing.assert_array_equal(raster.astype(bool), ~outside)
+    np.testing.assert_array_equal(_rasterised(polys, outside.shape), ~outside)
     assert len(polys[0]["exterior"]) <= 7 and polys[0]["holes"] == []
+    deleted = np.ones((40, 40), bool); deleted[5:35, 5:35] = False; deleted[15:20, 15:20] = True   # a removed block
+    polys = decide.outline(deleted)
+    np.testing.assert_array_equal(_rasterised(polys, deleted.shape), ~deleted)
+    assert len(polys) == 1 and len(polys[0]["holes"]) == 1
     assert decide.outline(np.ones((8, 8), bool)) == []
     assert len(decide.outline(np.zeros((8, 8), bool))[0]["exterior"]) <= 5

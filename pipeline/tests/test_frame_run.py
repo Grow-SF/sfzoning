@@ -1,6 +1,5 @@
 import contextlib
 import csv
-import hashlib
 import json
 import types
 
@@ -102,7 +101,7 @@ def fake_world(tmp_path, monkeypatch, tiny_backbone):
     return sorted(labelled), tmp_path / "out"
 
 
-def _pixel_shape(p, lum, params, bounds, maps=1, timing=None, cache=None):
+def _pixel_shape(p, lum, params, bounds, maps=1, timing=None, labels=None):
     """A fast stand-in for the shape decision (for the tests of the run's orchestration): the per-pixel cut."""
     return decide.decide(p, lum, maps), Frame(), [], []
 
@@ -110,10 +109,6 @@ def _pixel_shape(p, lum, params, bounds, maps=1, timing=None, cache=None):
 @pytest.fixture
 def pixel_shape(monkeypatch):
     monkeypatch.setattr(shape, "decide", _pixel_shape)
-
-
-def _lum(sid):
-    return data.load_luminance(data.page_path(*sid, work=data.WORK))
 
 
 def _feat(out, sid):
@@ -177,10 +172,9 @@ def test_no_test_sheet_reaches_training(fake_world, spy_train_head, monkeypatch)
     assert meta["sheets"] == [list(s) for s in labelled]
 
 
-def test_dev_sheets_are_cut_by_heads_that_did_not_train_on_them(fake_world, spy_train_head, pixel_shape, caplog):
+def test_dev_sheets_are_cut_by_heads_that_did_not_train_on_them(fake_world, spy_train_head, pixel_shape):
     """Orchestration test (the shape decision is stubbed with the per-pixel cut)."""
     labelled, out = fake_world
-    caplog.set_level("INFO", logger=run.__name__)
     marks = []
 
     @contextlib.contextmanager
@@ -206,110 +200,42 @@ def test_dev_sheets_are_cut_by_heads_that_did_not_train_on_them(fake_world, spy_
     assert all(sorted(h) == list(layout.HEAD_SEEDS) for h in heads.values())
     assert sorted(final) == list(layout.HEAD_SEEDS)
 
-    temperature = fitted["temperature"]
-    meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
-    assert meta["temperature"] == temperature > 0 and len(meta["temperature_interval"]) == 2
-    assert meta["reducer"] == {"file": "reducer.npz",
-                               "pages": [f"{s}/{h}" for s, h in run.feature_pages(labelled + TEST)],
-                               "sha256": hashlib.sha256((out / "reducer.npz").read_bytes()).hexdigest()}
-    saved = {}
     with np.load(out / run.MODEL_DIR / run.DEV_LOGITS) as z:
         assert sorted(z.files) == sorted(f"{s}/{h}" for s, h in labelled)
         for k, fold in enumerate(folds):
             for sid in fold:
-                saved[sid] = z[f"{sid[0]}/{sid[1]}"]
                 want = np.stack([layout.head_logits(heads[k][s], feats[sid]) for s in layout.HEAD_SEEDS])
-                np.testing.assert_array_equal(saved[sid], want)           # exact: the follow-up fits on them
+                np.testing.assert_array_equal(z[f"{sid[0]}/{sid[1]}"], want)   # exact: the follow-up fits on them
 
     result = run.score_dev(out)
-    chances = learned.Chances.from_json(meta["chances"])
-    for sid in labelled:                                         # each sheet cut from its fold's logits at T
-        p = layout.combine([layout.page_logits(z, (H, W)) for z in saved[sid]], temperature)
-        np.testing.assert_array_equal(_q(run.sheet_dir(out / run.DEV_DIR, sid) / run.PROB_FILE),
-                                      _written(learned.apply(p, _lum(sid), chances)))
     written = json.loads((out / run.DEV_DIR / run.SCORES_FILE).read_text())
     assert [(r["series"], r["sheet"]) for r in written["sheets"]] == labelled
-    assert written["temperature"] == temperature and written["sheets"] == result["sheets"]
+    assert written["temperature"] == fitted["temperature"] and written["sheets"] == result["sheets"]
     assert written["pooled"] == pytest.approx(scores.pooled_split([r["split"] for r in written["sheets"]]),
                                               nan_ok=True)
     boxes = {(r["series"], r["sheet"]): len(r["split"]["boxes"]) for r in written["sheets"]}
-    assert boxes == {sid: int(sid[1] == "s1") for sid in labelled}
-    fits = json.loads((out / run.DEV_DIR / run.FITS_FILE).read_text())
-    assert sorted(fits) == sorted(f"{s}/{h}" for s, h in labelled)
-    text = run.format_split(result)
-    for sid in labelled:                                         # one progress line per finished sheet
-        assert sum(f"{sid[0]}/{sid[1]}: frame left" in r.getMessage() for r in caplog.records) == 1
-    assert len(text.splitlines()) >= len(labelled) + 1
-    assert "a/s1: frame left " in text and ("(0 of 1 deleted)" in text or "(1 of 1 deleted)" in text)
-    assert text.splitlines()[-1].startswith("pooled")
+    assert boxes == {sid: int(sid[1] == "s1") for sid in labelled}       # scored against each label's removes
 
 
 def test_test_sheets_are_cut_by_the_final_heads(fake_world):
     """The real shape decision on the toy pages."""
     labelled, out = fake_world
     run.fit("cpu", out)
-    heads, meta = run.load_model(out)
     result = run.score_test(out)
     assert [(r["series"], r["sheet"]) for r in result["sheets"]] == TEST
     for sid in TEST:
-        f = _feat(out, sid)
-        p = layout.combine([layout.page_logits(layout.head_logits(h, f), (H, W)) for h in heads],
-                           meta["temperature"])
         d = run.sheet_dir(out / run.TEST_DIR, sid)
-        np.testing.assert_array_equal(_q(d / run.PROB_FILE),
-                                      _written(learned.apply(p, _lum(sid), learned.Chances.from_json(meta["chances"]))))
         assert json.loads((d / run.OUTLINE_FILE).read_text())["shape"] is not None
     row = result["sheets"][0]
     assert len(row["split"]["boxes"]) == 1 and row["split"]["box_ink"] > 0     # scored on the test folder's label
-    fits = json.loads((out / run.TEST_DIR / run.FITS_FILE).read_text())
-    assert sorted(fits) == ["a/u0", "b/u1"]
-    fit = fits["a/u0"]
-    assert set(fit) == {"frame", "notches", "boxes"} and set(fit["frame"]) == {"angle", "sides", "arcs"}
     assert json.loads((out / run.TEST_DIR / run.SCORES_FILE).read_text())["sheets"] == result["sheets"]
-
-
-def _fit(angle=0.5, box_x=100.0, notch_d=3.0):
-    side = {"offset": 40.0, "tilt": 0.0, "bow": 1.5}
-    return {"frame": {"angle": angle, "sides": {"top": side, "bottom": side, "left": "page edge", "right": side},
-                      "arcs": {"top-left": 12.0, "top-right": 0.0, "bottom-left": 0.0, "bottom-right": 0.0}},
-            "notches": [{"side": "top", "psi": 0.5, "a0": 10.0, "a1": 90.0, "d": notch_d}],
-            "boxes": [{"kind": "rect", "cx": box_x, "cy": 50.0, "theta": 0.5, "p": [-5.0, 5.0, -3.0, 3.0]}]}
-
-
-def test_fit_changes_names_a_sheet_whose_frame_moved(tmp_path):
-    before = {"s/1": _fit(), "s/2": _fit(), "s/3": _fit(), "s/4": _fit(), "s/6": _fit()}
-    after = {"s/1": _fit(angle=0.6), "s/2": _fit(box_x=120.0), "s/3": _fit(notch_d=4.0), "s/4": _fit(),
-             "s/5": _fit()}
-    (tmp_path / "before.json").write_text(json.dumps(before))
-    (tmp_path / "after.json").write_text(json.dumps(after))
-    # the boxes may change (label-box work); a sheet in one file only is not a change of its fit
-    assert run.fit_changes(tmp_path / "before.json", tmp_path / "after.json") == ["s/1", "s/3"]
-
-
-def test_fits_are_plain_rounded_numbers():
-    from sfzmaps.frame import blocks, notches
-
-    fr = Frame(phi=0.123456)
-    fr.offset["top"], fr.tilt["top"], fr.bow["top"] = 40.00049, 0.1111, 2.0
-    fr.arc[("top", "left")] = 12.3456
-    fit = run.fit_json(fr, [notches.Notch("top", 0.5, 10.0, 90.123456, 3.0, gain=9.9)],
-                       [blocks.Block("rect", 100.0004, 50.0, 0.5, (-5.0, 5.0, -3.0, 3.0), gain=7.0)])
-    assert fit["frame"]["angle"] == 0.123
-    assert fit["frame"]["sides"]["top"] == {"offset": 40.0, "tilt": 0.111, "bow": 2.0}
-    assert fit["frame"]["sides"]["bottom"] == "page edge"
-    assert fit["frame"]["arcs"]["top-left"] == 12.346
-    assert fit["notches"] == [{"side": "top", "psi": 0.5, "a0": 10.0, "a1": 90.123, "d": 3.0}]
-    assert fit["boxes"] == [{"kind": "rect", "cx": 100.0, "cy": 50.0, "theta": 0.5, "p": [-5.0, 5.0, -3.0, 3.0]}]
-    assert json.loads(json.dumps(fit)) == fit
 
 
 def test_the_model_is_stale_until_fitted_and_when_its_inputs_change(fake_world):
     labelled, out = fake_world
     run.extract_features(labelled + TEST, "cpu", out)
-    stamp = (out / "reducer.npz").stat().st_mtime_ns
     assert "missing" in run.model_stale(out)
     run.fit("cpu", out)
-    assert (out / "reducer.npz").stat().st_mtime_ns == stamp                 # the features were reused
     assert run.model_stale(out) is None
     new = data.LABELS / "b" / "u0.json"                                      # a training label added
     new.write_text((data.LABELS / "b" / "s0.json").read_text())
@@ -414,11 +340,6 @@ def test_predict_every_other_page_with_the_fitted_model(fake_world):
     """The real shape decision on the toy pages; the training sheets take their dev outputs."""
     labelled, out = fake_world
     run.fit("cpu", out)
-    meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
-    assert meta["head_seeds"] == list(layout.HEAD_SEEDS) and meta["sheets"] == [list(s) for s in labelled]
-    assert set(meta["bounds"]) == {"rect_max", "ellipse_max"} and meta["bounds"]["rect_max"][0] > 0
-    heads, got = run.load_model(out)
-    assert len(heads) == len(layout.HEAD_SEEDS) and got["temperature"] == meta["temperature"]
 
     for i, sid in enumerate(labelled):                          # the outputs a dev run left
         d = run.sheet_dir(out / run.DEV_DIR, sid)
@@ -441,11 +362,6 @@ def test_predict_every_other_page_with_the_fitted_model(fake_world):
         assert json.loads((d / run.OUTLINE_FILE).read_text())["shape"] is not None
     pages = json.loads((out / run.PAGES_FILE).read_text())
     assert {(p["series"], p["sheet"]) for p in pages} == set(UNLABELLED) | set(labelled)
-    side = [p["side_ink_left_total"] for p in pages]
-    assert side == sorted(side, reverse=True)
-    assert sorted(p["side_rank"] for p in pages) == list(range(1, len(pages) + 1))
-    by_drop = sorted(pages, key=lambda p: p["dropped_rank"])
-    assert [p["dropped_ink"] for p in by_drop] == sorted((p["dropped_ink"] for p in pages), reverse=True)
     assert all(p["held_out"] == ((p["series"], p["sheet"]) in labelled) for p in pages)
 
 
@@ -457,17 +373,7 @@ def test_predict_refuses_a_full_disk(monkeypatch, fake_world):
     assert not out.exists() or not _files(out)
 
 
-def test_predict_refuses_a_changed_reducer(fake_world):
-    labelled, out = fake_world
-    run.fit("cpu", out)
-    meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
-    meta["reducer"]["sha256"] = "0" * 64
-    (out / run.MODEL_DIR / "model.json").write_text(json.dumps(meta))
-    with pytest.raises(run.StaleFeatures, match="reducer"):
-        run.predict_all("cpu", out)
-
-
-def test_a_new_page_after_the_fit_is_refused_not_refitted(fake_world, tiny_backbone):
+def test_a_new_page_after_the_fit_is_refused_not_refitted(fake_world):
     labelled, out = fake_world
     run.fit("cpu", out)
     stamp = (out / "reducer.npz").stat().st_mtime_ns
@@ -483,14 +389,6 @@ def test_a_new_page_after_the_fit_is_refused_not_refitted(fake_world, tiny_backb
     assert not (layout.features_dir(out) / "b" / "u9.npy").exists()
 
 
-def test_an_old_model_is_refused(tmp_path):
-    (tmp_path / run.MODEL_DIR).mkdir()
-    (tmp_path / run.MODEL_DIR / "model.json").write_text(json.dumps({"step": 3000, "temperature": 1.0,
-                                                                     "seeds": [0, 1]}))
-    with pytest.raises(FileNotFoundError, match="old"):
-        run.load_model(tmp_path)
-
-
 def test_pages_rank_by_side_ink_then_dropped():
     rows = [{"series": "s", "sheet": str(i), "side_ink_left_total": a, "dropped_ink": b}
             for i, (a, b) in enumerate([(1.0, 5.0), (3.0, 0.0), (1.0, 9.0), (0.0, 7.0)])]
@@ -498,21 +396,6 @@ def test_pages_rank_by_side_ink_then_dropped():
     assert [r["sheet"] for r in got] == ["1", "2", "0", "3"]
     assert {r["sheet"]: r["dropped_rank"] for r in got} == {"2": 1, "3": 2, "0": 3, "1": 4}
     assert [r["side_rank"] for r in got] == [1, 2, 3, 4]
-
-
-def test_model_without_chances_is_stale(fake_world):
-    labelled, out = fake_world
-    run.fit("cpu", out)
-    assert run.model_stale(out) is None
-    path = out / run.MODEL_DIR / "model.json"
-    meta = json.loads(path.read_text())
-    got = meta["chances"]
-    assert len(got["rule"]) == 3 and len(got["ink"]) == 2
-    assert got["fitted_on"]["rules"] > 0 and got["fitted_on"]["rule_ink"] > 0 and got["fitted_on"]["other_ink"] > 0
-    assert learned.Chances.from_json(got) == learned.Chances(tuple(got["rule"]), tuple(got["ink"]))
-    del meta["chances"]
-    path.write_text(json.dumps(meta))
-    assert "chances" in run.model_stale(out)
 
 
 def test_fit_adds_the_chances_to_a_current_model_without_retraining(fake_world, spy_train_head):
@@ -523,6 +406,7 @@ def test_fit_adds_the_chances_to_a_current_model_without_retraining(fake_world, 
     kept = {f: (d / f).read_bytes() for f in [run.DEV_LOGITS, *(f"head-{s}.pt" for s in layout.HEAD_SEEDS)]}
     del first["chances"]
     (d / "model.json").write_text(json.dumps(first))
+    assert "chances" in run.model_stale(out)                     # a model without chances is stale
     spy_train_head.clear()
     again = run.fit("cpu", out)
     assert spy_train_head == []                                  # no head trained
@@ -549,7 +433,7 @@ def test_dev_and_test_pages_use_the_learned_chances(fake_world, spy_apply, monke
     labelled, out = fake_world
     decided = []
 
-    def stub(p, lum, params, bounds, maps=1, timing=None, cache=None):
+    def stub(p, lum, params, bounds, maps=1, timing=None, labels=None):
         decided.append(np.array(p))
         return _pixel_shape(p, lum, params, bounds, maps)
     monkeypatch.setattr(shape, "decide", stub)

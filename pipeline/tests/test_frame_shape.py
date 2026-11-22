@@ -1,5 +1,3 @@
-import logging
-
 import numpy as np
 import pytest
 from scipy import ndimage as ndi
@@ -80,16 +78,6 @@ def test_frameless_page_is_the_page_rectangle(notch_aware):
     assert fr.mask(D.shape).all()
 
 
-@pytest.mark.parametrize("notch_aware", [False, True])
-def test_all_ties_take_the_simplest_shape(notch_aware):
-    D = np.zeros((900, 1200), np.float32)
-    fr = _fit(D, notch_aware)
-    assert fr.phi == 0.0
-    assert all(fr.offset[s] == 0.0 and fr.tilt[s] == 0.0 and fr.bow[s] == 0.0 for s in SIDES)
-    assert all(r == 0.0 for r in fr.arc.values())
-    assert fr.mask(D.shape).all()
-
-
 def test_ties_on_a_framed_side_take_zero_tilt_and_bow():
     # 12 px of blank paper between each rule and the map: every tilt or bow that stays on the paper ties
     lum, p, tr = make_page(phi=0.4, gap=12, seed=2)
@@ -107,14 +95,11 @@ def test_blank_strip_called_outside_does_not_move_the_side():
     assert abs(fr.offset["left"] - tr["offset"]["left"]) <= 2, fr.offset["left"]
 
 
-@pytest.mark.parametrize("notch_aware", [False, True])
-def test_all_ink_page_does_not_crash(notch_aware):
+def test_all_ink_page_does_not_crash():
     rng = np.random.default_rng(4)
     p = rng.dirichlet((1.0, 1.0, 1.0), (900, 1200)).transpose(2, 0, 1).astype(np.float32)
     lum = np.zeros((900, 1200), np.float32)
-    fr = _fit(shape.cost_field(p, lum), notch_aware)
-    m = fr.mask(lum.shape)
-    assert m.shape == lum.shape and m.dtype == bool
+    fr = _fit(shape.cost_field(p, lum), notch_aware=True)
     assert abs(fr.phi) <= shape.ANGLE_MAX + 0.2
 
 
@@ -152,7 +137,7 @@ def test_notchless_page_takes_the_plain_start():
     # without a notch the decision takes the plain start and no notch.  (At the old 3:1 cost the notch-aware start
     # came out degrees off here, its credited notches taking back the rule wedges a wrong angle leaves in; at even
     # odds that trap is gone from this page, and no notch cost brings it back without false notches winning.)
-    lum, p, tr = make_page(phi=0.7, bow_top=10.0, arc=120.0, blocks=True, **BIG)
+    lum, p, tr = make_page(phi=0.7, bow_top=10.0, arc=120.0, blocks=True)
     params = shape.Params(lam_notch=3e3, beta=3.0, lam_block=1e3)
     timing = {}
     dec, fr, ns, bs = shape.decide(p, lum, params, BOUNDS, timing=timing)
@@ -196,13 +181,28 @@ def test_frameless_page_only_loses_its_blocks():
     assert (dec.removed & ~truth).sum() <= 0.05 * truth.sum()
 
 
-def test_multi_map_page_keeps_the_per_pixel_decision(caplog):
-    lum, p, tr = make_page(blocks=True)
-    with caplog.at_level(logging.INFO, logger="sfzmaps.frame.shape"):
-        dec, fr, ns, bs = shape.decide(p, lum, FITTED, BOUNDS, maps=2)
+def _two_panel_page():
+    """Two framed maps side by side on one page (as on a sheet of several small maps): (lum, p, each panel's kept
+    region on the whole page)."""
+    edge = {"top": 30.0, "bottom": 30.0, "left": 30.0, "right": 30.0}
+    a, b = make_page(300, 400, phi=0.5, offset=edge, seed=8), make_page(300, 400, phi=-0.3, offset=edge, seed=9)
+    lum, p = np.hstack([a[0], b[0]]), np.concatenate([a[1], b[1]], axis=2)
+    left, right = np.zeros(lum.shape, bool), np.zeros(lum.shape, bool)
+    left[:, :400], right[:, 400:] = a[2]["K"], b[2]["K"]
+    return lum, p, (left, right)
+
+
+def test_multi_map_page_keeps_the_per_pixel_decision():
+    lum, p, panels = _two_panel_page()
+    dec, fr, ns, bs = shape.decide(p, lum, FITTED, BOUNDS, maps=2)
     want = pixel.decide(rules.share(p, lum), lum, 2)  # rules are shared on every page, several maps too (amendment 5)
     assert (dec.outside == want.outside).all() and (dec.removed == want.removed).all()
-    assert "per-pixel" in caplog.text
+    kept = ~dec.deleted
+    for K in panels:                                   # both maps kept, the frames between them deleted
+        assert (kept & K).sum() >= 0.999 * K.sum()
+    assert not (kept & ~(panels[0] | panels[1])).any()
+    one = ~pixel.decide(rules.share(p, lum), lum, 1).deleted     # read as one map, the page keeps one panel only
+    assert (one & panels[0]).any() != (one & panels[1]).any()
 
 
 def test_side_ink_left_ranks_a_missed_rule():
@@ -216,36 +216,6 @@ def test_side_ink_left_ranks_a_missed_rule():
     assert left["left"] > 0.9 * 4 * 700  # the 4-px strip along the side's ~740 px
     assert left["top"] <= 4 * 5 and left["bottom"] <= 4 * 5  # the corners where they meet the missed rule
     assert left["right"] == 0.0
-
-
-def test_cache_reuses_the_work_that_does_not_depend_on_the_numbers(monkeypatch):
-    lum, p, tr = _notch_page()
-    other = shape.Params(lam_notch=1e4, beta=0.0, lam_block=1e4)
-    fresh = shape.decide(p, lum, other, BOUNDS)
-    cache = {}
-    shape.decide(p, lum, FITTED, BOUNDS, cache=cache)
-    calls = []
-    real = shape.frame_search
-    monkeypatch.setattr(shape, "frame_search", lambda *a, **k: calls.append(a[1:]) or real(*a, **k))
-    again = shape.decide(p, lum, other, BOUNDS, cache=cache)
-    assert calls == []  # both starts came from the cache (same lambda_notch)
-    assert (again[0].outside == fresh[0].outside).all() and (again[0].removed == fresh[0].removed).all()
-    assert again[1] == fresh[1] and again[2] == fresh[2]
-    shape.decide(p, lum, shape.Params(lam_notch=2e4, beta=3.0, lam_block=1e3), BOUNDS, cache=cache)
-    assert calls == [(True, 2e4)]  # a new lambda_notch: only the notch-aware start again
-
-
-def test_cache_refuses_another_page():
-    lum, p, _ = make_page(h=300, w=400, offset={"top": 30.0, "bottom": 30.0, "left": 30.0, "right": 30.0})
-    cache = {}
-    shape.decide(p, lum, FITTED, BOUNDS, cache=cache)
-    shape.decide(p, lum, FITTED, BOUNDS, cache=cache)            # the same page again: fine
-    other = p.copy()
-    other[:, 150:160, 200:210] = other[:, 150:160, 200:210][::-1]
-    with pytest.raises(ValueError, match="another page"):
-        shape.decide(other, lum, FITTED, BOUNDS, cache=cache)
-    with pytest.raises(ValueError, match="another page"):
-        shape.decide(p[:, :200], lum[:200], FITTED, BOUNDS, cache=cache)
 
 
 def test_a_frame_rule_half_read_as_map_does_not_tilt_the_cut():

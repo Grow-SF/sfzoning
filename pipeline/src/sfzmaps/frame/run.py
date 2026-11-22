@@ -32,8 +32,7 @@ training sheet from its dev logits (block bounds from its fold's other sheets, a
 test sheet with the final heads.  Both score the cuts against the labels apart by what is
 deleted (`scores.split_scores`: frame ink, label-box ink, map ink cut by the frame and by boxes), and write under
 `out/dev/` or `out/test/` the sheets' outputs, `scores.json` (per sheet and pooled) and `fits.json` (each sheet's
-fitted frame, notches and boxes, `fit_json`; compared between runs by `fit_changes`).  `format_split` is the table for
-the owner.
+fitted frame, notches and boxes, `fit_json`).  `format_split` is the table for the owner.
 
 `predict_all` decides every map page that is not a training sheet with the final heads; the training sheets take
 their dev outputs.
@@ -320,13 +319,13 @@ class PageJob:
     labels: Path | None = None
 
 
-def _load(job: PageJob) -> tuple[np.ndarray, np.ndarray, dict]:
-    """The page's luminance, its learned chances (`learned.apply` on the model's) and a `shape.decide` cache holding
-    its rule labels, found once for both."""
+def _load(job: PageJob) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The page's luminance, its learned chances (`learned.apply` on the model's) and its rule labels
+    (`rules.rule_labels`), found once for both `learned.apply` and `shape.decide`."""
     lum = data.load_luminance(job.page)
     labels = rules.rule_labels(lum)
     p = learned.apply(chances(job.zs, lum.shape, job.temperature), lum, job.chances, labels)
-    return lum, p, {"rules": labels}
+    return lum, p, labels
 
 
 def _r(x) -> float:
@@ -358,9 +357,9 @@ def _shape_json(fr, ns, bs) -> dict:
 def score_page(job: PageJob, params: shape.Params, out: Path) -> dict:
     """A labelled page (its label under `job.labels`): the shape decision at `params`, its outputs written under
     `out`, scored against the label (`scores.split_scores`); its fit (`fit_json`), ink figures and side ink left."""
-    lum, p, cache = _load(job)
-    dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps, cache=cache)
-    del cache
+    lum, p, labels = _load(job)
+    dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps, labels=labels)
+    del labels
     fitted = (fr, ns, bs) if job.maps == 1 else None
     write_outputs(out, job.sid, p, dec, job.maps, page=job.page, fitted=fitted)
     side = shape.side_ink_left(p, lum, fr)
@@ -374,9 +373,9 @@ def score_page(job: PageJob, params: shape.Params, out: Path) -> dict:
 
 def predict_page(job: PageJob, params: shape.Params, out: Path) -> dict:
     """An unlabelled page: the shape decision, its outputs written; its ink figures and the side ink left."""
-    lum, p, cache = _load(job)
-    dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps, cache=cache)
-    del cache
+    lum, p, labels = _load(job)
+    dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps, labels=labels)
+    del labels
     write_outputs(out, job.sid, p, dec, job.maps, page=job.page, fitted=(fr, ns, bs) if job.maps == 1 else None)
     side = shape.side_ink_left(p, lum, fr)
     return {"filled_ink": dec.filled_ink, "dropped_ink": dec.dropped_ink, "removed_ink": dec.removed_ink,
@@ -719,14 +718,6 @@ def score_test(out: Path = OUT) -> dict:
                             maps=counts[sid], bounds=bounds, chances=learned.Chances.from_json(meta["chances"]),
                             labels=data.TEST_LABELS))
     return _score_set("test", jobs, out / TEST_DIR, meta)
-
-
-def fit_changes(before: Path, after: Path) -> list[str]:
-    """The sheets, in both `fits.json` files, whose frame (angle, sides, arcs) or notches differ between them; the
-    boxes are not compared."""
-    a, b = json.loads(Path(before).read_text()), json.loads(Path(after).read_text())
-    return sorted(k for k in a.keys() & b.keys()
-                  if a[k]["frame"] != b[k]["frame"] or a[k]["notches"] != b[k]["notches"])
 
 
 # ---------------------------------------------------------------------------------------------------------------

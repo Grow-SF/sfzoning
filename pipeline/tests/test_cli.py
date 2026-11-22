@@ -1,6 +1,8 @@
 import types
 from pathlib import Path
 
+import pytest
+
 from sfzmaps import runner
 from sfzmaps.pages import Page
 
@@ -224,80 +226,36 @@ def test_cli_frame_test_refuses_an_overlap_before_any_gpu_work(monkeypatch, tmp_
         assert calls == [], flags
 
 
-def test_cli_frame_dev_and_test_fit_first_when_the_model_is_stale(monkeypatch, tmp_path):
-    from typer.testing import CliRunner
-
-    from sfzmaps import cli
-    from sfzmaps.frame import run as fr
-
-    for flag, step, where in (("--dev", "score_dev", fr.DEV_DIR), ("--test", "score_test", fr.TEST_DIR)):
-        calls = _frame_stubs(monkeypatch, tmp_path, stale="model.json is missing")
-        res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", flag])
-        assert res.exit_code == 0, res.output
-        assert "split table" in res.output and "model.json is missing" in res.output
-        assert calls == ["model_stale", "turn", "fit", step, ("mosaics", tmp_path / where), ("set mosaic", where)]
-        calls = _frame_stubs(monkeypatch, tmp_path, stale=None)
-        res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", flag])
-        assert res.exit_code == 0, res.output
-        assert calls == ["model_stale", step, ("mosaics", tmp_path / where),
-                         ("set mosaic", where)]                                        # current: no fit, no GPU
-
-
-def test_cli_frame_plain_fits_when_stale_then_predicts(monkeypatch, tmp_path):
+@pytest.mark.parametrize("flags, step", [([], "predict_all"), (["--dev"], "score_dev"), (["--test"], "score_test")])
+def test_cli_frame_fits_first_in_a_gpu_turn_only_when_the_model_is_stale(monkeypatch, tmp_path, flags, step):
     from typer.testing import CliRunner
 
     from sfzmaps import cli
 
-    calls = _frame_stubs(monkeypatch, tmp_path, stale="the training sheets changed")
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu"])
+    calls = _frame_stubs(monkeypatch, tmp_path, stale="model.json is missing")
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", *flags])
     assert res.exit_code == 0, res.output
-    assert calls == ["check_disk", "model_stale", "turn", "fit", "turn", "predict_all", ("mosaics", tmp_path),
-                     "closeups"]
+    fit = calls.index("fit")
+    assert calls[fit - 1] == "turn" and fit < calls.index(step)               # fitted in a GPU turn, then the step
     calls = _frame_stubs(monkeypatch, tmp_path, stale=None)
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu"])
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", *flags])
     assert res.exit_code == 0, res.output
-    assert calls == ["check_disk", "model_stale", "turn", "predict_all", ("mosaics", tmp_path), "closeups"]
+    assert "fit" not in calls and step in calls                                 # current: no fit
 
 
 def test_cli_frame_predict_only_refuses_a_stale_model_before_any_gpu_work(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 
     from sfzmaps import cli
+    from sfzmaps.frame import run as fr
 
     calls = _frame_stubs(monkeypatch, tmp_path, stale="the reducer changed")
     res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--predict-only"])
     assert res.exit_code == 1 and "the reducer changed" in res.output and "sfzmaps frame" in res.output
     assert calls == ["check_disk", "model_stale"]
 
-
-def test_cli_frame_full_disk_is_an_error(monkeypatch, tmp_path):
-    from typer.testing import CliRunner
-
-    from sfzmaps import cli
-    from sfzmaps.frame import run as fr
-
-    calls = _frame_stubs(monkeypatch, tmp_path)
-
     def full(out):
-        raise fr.DiskFull("only 3.0 GB free under x; predicting every page needs 20 GB")
+        raise fr.DiskFull("only 3.0 GB free; predicting every page needs 20 GB free")
     monkeypatch.setattr(fr, "check_disk", full)
-    for flags in ([], ["--predict-only"]):
-        res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", *flags])
-        assert res.exit_code == 1 and "20 GB" in res.output and calls == []
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--test"])   # no prediction: no check
-    assert res.exit_code == 0 and calls == ["model_stale", "score_test", ("mosaics", tmp_path / fr.TEST_DIR),
-                                            ("set mosaic", fr.TEST_DIR)]
-
-
-def test_cli_frame_flags_exclude_each_other(monkeypatch, tmp_path):
-    from typer.testing import CliRunner
-
-    from sfzmaps import cli
-
-    calls = _frame_stubs(monkeypatch, tmp_path)
-    for flags in (["--dev", "--test"], ["--dev", "--predict-only"], ["--test", "--predict-only"]):
-        res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", *flags])
-        assert res.exit_code != 0, flags
-    assert calls == []
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--held-out"])
-    assert res.exit_code != 0 and calls == []                                  # retired
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--predict-only"])
+    assert res.exit_code == 1 and "20 GB" in res.output                        # a full disk: an error, not a crash

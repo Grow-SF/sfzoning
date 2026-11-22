@@ -72,7 +72,7 @@ def test_rows_of_a_page():
     assert r[0] == pytest.approx((2400.0, 0.2, 0.75, 800.0), rel=1e-5)
     b = learned.ink_rows(p, lum, cls)
     assert b.shape == (learned.INK_BINS, 3)
-    assert b[62] == pytest.approx((8.0, 8.0 * 0.625, 8.0), rel=1e-5)
+    assert b[int(0.625 * learned.INK_BINS)] == pytest.approx((8.0, 8.0 * 0.625, 8.0), rel=1e-5)
     assert b[0] == pytest.approx((4.0, 4.0 * 0.004, 0.0), rel=1e-4)
     assert b[:, 0].sum() == pytest.approx(12.0)                               # the rule's ink is in no bin
 
@@ -129,11 +129,13 @@ def test_apply_does_not_modify_its_input():
 
 
 def test_apply_takes_the_rule_labels_given():
-    from sfzmaps.frame import rules
-
+    # the caller's labels name no rule: the printed rule's ink then follows the ink curve, not the rule curve
     lum, p = _ruled_page()
-    labels = rules.rule_labels(lum)
-    np.testing.assert_array_equal(learned.apply(p, lum, MEASURED, labels), learned.apply(p, lum, MEASURED))
+    none = (np.zeros(lum.shape, np.int32), 0)
+    q = learned.apply(p, lum, MEASURED, none)
+    on = lum < 0.5
+    want = _sig(0.16 + 1.0 * _logit(0.02))
+    assert q[1][on] + q[2][on] == pytest.approx(np.full(int(on.sum()), want), abs=1e-6)
 
 
 def test_chances_round_trip_through_json():

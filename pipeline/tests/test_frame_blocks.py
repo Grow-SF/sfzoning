@@ -4,7 +4,7 @@ import math
 import numpy as np
 import pytest
 
-from sfzmaps.frame import blocks
+from sfzmaps.frame import blocks, shape
 from sfzmaps.frame.geometry import Frame, cost_field
 from sfzmaps.frame.shape import Params
 
@@ -166,20 +166,32 @@ def _angle_off(theta, phi):
     return abs((theta - phi + 45.0) % 90.0 - 45.0)
 
 
-def test_a_box_is_square_to_the_frame_when_the_blob_is_diagonal():
-    # the frame is turned 0.5 degrees and so is the box; the blob called "removed" runs along the box's diagonal, so
-    # its own moment angle is far from the frame's: the rectangle still takes the frame's angle
-    lum, p, _ = _ruled_box_page(0.5)
-    b = _the_block(p, lum, Frame(phi=0.5), blocks.BlockBounds((900.0, 600.0), (0.0, 0.0)))
+@pytest.mark.parametrize("phi", [0.0, 0.5])
+def test_a_box_is_square_to_the_frame_when_the_blob_is_diagonal(phi):
+    # the frame is turned phi degrees and so is the box (phi 0: a page with no framed side, square to the page); the
+    # blob called "removed" runs along the box's diagonal, so its own moment angle is far from the frame's: the
+    # rectangle still takes the frame's angle
+    lum, p, _ = _ruled_box_page(phi)
+    b = _the_block(p, lum, Frame(phi=phi), blocks.BlockBounds((900.0, 600.0), (0.0, 0.0)))
     assert b.kind == "rect"
-    assert _angle_off(b.theta, 0.5) <= 0.5
+    assert _angle_off(b.theta, phi) <= 0.5
 
 
-def test_a_box_on_a_page_with_no_framed_side_is_square_to_the_page():
-    lum, p, _ = _ruled_box_page(0.0, seed=1)
-    b = _the_block(p, lum, Frame(), blocks.BlockBounds((900.0, 600.0), (0.0, 0.0)))
-    assert b.kind == "rect"
-    assert _angle_off(b.theta, 0.0) <= 0.5
+def test_ink_read_mostly_map_is_not_a_box():
+    # a legend-sized blob of ink the chances read as 34% label box and 62% map: at even odds it is map, so the box
+    # step finds no block there and the whole decision keeps its ink
+    h, w = 400, 400
+    rng = np.random.default_rng(3)
+    lum, p = _blank_page(h, w)
+    m = np.zeros((h, w), bool)
+    m[150:250, 120:280] = True
+    _patch(lum, p, m, rng)
+    p[:, m] = np.array([0.62, 0.04, 0.34], np.float32)[:, None]
+    bounds = blocks.BlockBounds((400.0, 400.0), (400.0, 400.0))
+    assert blocks.candidates(p, cost_field(p, lum), np.ones((h, w), bool), Frame(), bounds) == []
+    dec, fr, ns, bs = shape.decide(p, lum, Params(lam_notch=1e4, beta=3.0, lam_block=1e3), bounds)
+    assert bs == [] and not dec.removed.any()
+    assert not (dec.deleted & m).any()
 
 
 def test_an_ellipse_still_takes_its_own_angle():

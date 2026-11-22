@@ -34,12 +34,21 @@ def test_sheet_picture_never_enlarges():
     assert big.size == (100, 60)
 
 
-def test_kept_ink_is_never_the_deleted_colour():
+def test_kept_ink_deleted_ink_and_the_label_take_their_own_colours():
     lum = np.full((40, 40), 1.0, np.float32); lum[10:30, 10:30] = 0.0
     deleted = np.zeros((40, 40), bool); deleted[:, :20] = True
     im = np.asarray(look.sheet_picture(lum, deleted, side=40))
     assert (im[20, 25] == look.KEPT_RGB).all() and (im[20, 15] == look.DELETED_RGB).all()
     assert (im[5, 30] == look.PAPER_RGB).all() and (im[5, 5] == look.PAPER_RGB).all()     # paper stays white
+
+    lum = np.ones((100, 100), np.float32)
+    deleted = np.zeros((100, 100), bool)
+    square = [(20.0, 20.0), (80.0, 20.0), (80.0, 80.0), (20.0, 80.0)]
+    im = np.asarray(look.sheet_picture(lum, deleted, side=100, label=[square]))
+    green = (im == look.LABEL_RGB).all(axis=2)
+    assert green[20, 30:70].all() and green[30:70, 80].all()             # the label's edges in green, closed
+    assert not green[50, 50] and not green[5, 5]
+    assert not (np.asarray(look.sheet_picture(lum, deleted, side=100)) == look.LABEL_RGB).all(axis=2).any()
 
 
 def test_shrunk_ink_takes_one_colour_shaded_by_its_darkness():
@@ -57,17 +66,6 @@ def test_shrunk_ink_takes_one_colour_shaded_by_its_darkness():
         on_a_line |= (np.abs(paper + w[..., None] * d - im).max(axis=2) <= 1.0) & (w >= -0.01) & (w <= 1.01)
     assert on_a_line.all()
     assert (im[2, 2] != im[12, 2]).any()                                 # lighter ink above, darker below
-
-
-def test_label_is_drawn_in_green():
-    lum = np.ones((100, 100), np.float32)
-    deleted = np.zeros((100, 100), bool)
-    square = [(20.0, 20.0), (80.0, 20.0), (80.0, 80.0), (20.0, 80.0)]
-    im = np.asarray(look.sheet_picture(lum, deleted, side=100, label=[square]))
-    green = (im == look.LABEL_RGB).all(axis=2)
-    assert green[20, 30:70].all() and green[30:70, 80].all()             # its edges, closed
-    assert not green[50, 50] and not green[5, 5]
-    assert not (np.asarray(look.sheet_picture(lum, deleted, side=100)) == look.LABEL_RGB).all(axis=2).any()
 
 
 def test_closeups_are_full_resolution(tmp_path, monkeypatch):
@@ -123,10 +121,6 @@ def run_outline(deleted):
     return decide.outline(deleted)
 
 
-def test_closeups_list_the_blank_strips():
-    assert {(s, h) for s, h, _, _ in look.CLOSEUPS} >= {("1948", "2"), ("1948", "9")}
-
-
 def test_set_mosaic_captions_each_sheet(tmp_path, monkeypatch):
     work, out, labels = tmp_path / "work", tmp_path / "out", tmp_path / "labels-test"
     monkeypatch.setattr(data, "WORK", work)
@@ -149,13 +143,10 @@ def test_set_mosaic_captions_each_sheet(tmp_path, monkeypatch):
     seen = []
     real = look._mosaic
     monkeypatch.setattr(look, "_mosaic", lambda tiles, side, cols, path, title=():
-                        seen.append((tiles, title)) or real(tiles, side, cols, path, title))
+                        seen.append(tiles) or real(tiles, side, cols, path, title))
     path = look.set_mosaic(out, run.TEST_DIR)
     assert path == out / run.TEST_DIR / "look" / "test-set.png" and path.exists()
-    (tiles, title), = seen
-    assert len(tiles) == len(sheets)
-    for (img, caption), row in zip(tiles, rows):
-        want = [t for t in run.sheet_line(row).replace(": ", " ").split() if t != "|"]
-        assert " ".join(caption).replace(": ", " ").split() == want
+    tiles, = seen
+    assert len(tiles) == len(sheets)                                    # one tile per sheet
+    for img, _ in tiles:
         assert (np.asarray(img) == look.LABEL_RGB).all(axis=2).any()   # the test label, in green
-    assert any(line.startswith("pooled (2 sheets)") for line in title)

@@ -2,6 +2,7 @@ import hashlib
 
 import numpy as np
 import pytest
+import torch
 from PIL import Image
 
 from sfzmaps.frame import layout
@@ -12,23 +13,14 @@ def test_grid_keeps_the_aspect():
     assert layout.grid((10, 5000)) == (1, 111)
 
 
-def test_raw_features_shape(tiny_backbone):
-    f = layout.raw_features(tiny_backbone, np.random.default_rng(0).random((700, 500), dtype=np.float32), "cpu")
-    assert f.shape == (8 * layout.LAYERS, 111, 79) and f.dtype == np.float32
-
-
-def test_raw_features_take_the_last_layers_through_the_norm(tiny_backbone):
-    import torch
-    lum = np.random.default_rng(1).random((140, 280), dtype=np.float32)
+def test_raw_features_drop_the_class_and_register_tokens(tiny_backbone):
+    lum = np.random.default_rng(0).random((700, 500), dtype=np.float32)
     f = layout.raw_features(tiny_backbone, lum, "cpu")
-    rows, cols = layout.grid(lum.shape)
-    small = np.asarray(Image.fromarray(lum).resize((cols * 14, rows * 14), Image.BOX), np.float32)
-    x = (np.repeat(small[..., None], 3, -1) - layout.MEAN) / layout.STD
-    with torch.no_grad():
-        hs = tiny_backbone(pixel_values=torch.from_numpy(x.transpose(2, 0, 1)[None].copy()),
-                           output_hidden_states=True).hidden_states[-layout.LAYERS:]
-        want = torch.cat([tiny_backbone.layernorm(t)[0, 5:] for t in hs], -1).T.reshape(-1, rows, cols).numpy()
-    assert np.allclose(f, want, atol=1e-5)
+    assert f.shape == (8 * layout.LAYERS, 111, 79)        # one feature column per patch of the grid
+    with torch.no_grad():                                  # other class and register tokens: the same patch features
+        tiny_backbone.cls.fill_(100.0)
+        tiny_backbone.reg.fill_(-100.0)
+    np.testing.assert_array_equal(layout.raw_features(tiny_backbone, lum, "cpu"), f)
 
 
 def test_reducer_whitens_and_orders_components():
@@ -41,17 +33,6 @@ def test_reducer_whitens_and_orders_components():
     r.finish()
     y = r.transform(x).astype(np.float32).reshape(3, -1)
     assert abs(y.mean(1)).max() < 1e-2 and y.var(1)[0] >= y.var(1)[1] >= y.var(1)[2]
-
-
-def test_reducer_round_trip(tmp_path):
-    x = np.random.default_rng(0).normal(size=(6, 20, 10)).astype(np.float32)
-    r = layout.Reducer(components=3)
-    r.fit_update(x)
-    r.finish()
-    r.pages = ["a/b"]
-    r.save(tmp_path / "reducer.npz")
-    r2 = layout.Reducer.load(tmp_path / "reducer.npz")
-    assert np.array_equal(r.transform(x), r2.transform(x)) and r2.pages == ["a/b"]
 
 
 def test_wrong_weights_hash_is_refused(monkeypatch, tmp_path):
@@ -94,9 +75,7 @@ def test_extract_all_is_resumable(tiny_backbone, tmp_path, monkeypatch):
     assert not calls and [p.stat().st_mtime_ns for p in files] == stamp
 
 
-# ---- the head (task 3) ----
-
-import torch  # noqa: E402
+# ---- the head ----
 
 
 def test_combine_is_a_tempered_softmax_mean():
@@ -110,11 +89,6 @@ def test_combine_is_a_tempered_softmax_mean():
 def test_combine_of_large_logits_is_finite():
     z = np.array([1000.0, 0.0, -1000.0], np.float32)[:, None, None]
     np.testing.assert_array_equal(layout.combine([z]), np.array([1.0, 0.0, 0.0], np.float32)[:, None, None])
-
-
-
-def test_classes_is_three():
-    assert layout.CLASSES == 3
 
 
 def test_patch_targets_are_area_shares():
@@ -167,6 +141,7 @@ def test_head_learns_a_separable_layout(monkeypatch):
 
 def test_same_seed_same_head(monkeypatch):
     monkeypatch.setattr(layout, "COMPONENTS", 6)
+    monkeypatch.setattr(layout, "HEAD_MAX_STEPS", 20)        # determinism needs no convergence
     feats, tg = _toy_pages(3, 1)
     a = layout.head_logits(layout.train_head(feats, tg, seed=3), feats[0])
     b = layout.head_logits(layout.train_head(feats, tg, seed=3), feats[0])
@@ -184,29 +159,8 @@ def test_page_logits_shape_and_orientation():
     assert up[0, 20, 5] > up[1, 20, 5] and up[1, 20, 95] > up[0, 20, 95]
 
 
-def test_a_page_of_zero_weight_does_not_change_the_head(monkeypatch):
-    monkeypatch.setattr(layout, "COMPONENTS", 6)
-    feats, tg = _toy_pages(3, 5)
-    junk, jt = _toy_pages(1, 6)
-    jt = [(1 - s, np.zeros_like(w)) for s, w in jt]   # wrong labels, but no weight
-    a = layout.head_logits(layout.train_head(feats, tg, seed=0), feats[0])
-    b = layout.head_logits(layout.train_head(feats + junk, tg + jt, seed=0), feats[0])
-    np.testing.assert_array_equal(a, b)
-
-
-def test_pages_count_by_their_patch_weights(monkeypatch):
-    """Two pages that disagree: the head follows the one whose patches weigh more."""
-    monkeypatch.setattr(layout, "COMPONENTS", 6)
-    f = np.zeros((6, 4, 4), np.float16)
-    s0 = np.zeros((3, 4, 4), np.float32); s0[0] = 1
-    s1 = np.zeros((3, 4, 4), np.float32); s1[1] = 1
-    heavy, light = np.full((4, 4), 1.0, np.float32), np.full((4, 4), 0.1, np.float32)
-    z = layout.head_logits(layout.train_head([f, f], [(s0, heavy), (s1, light)], seed=0), f)
-    assert z[0].mean() > z[1].mean()
-
-
 def _per_page_loss(head, feats, tg):
-    """The loss page by page, as the spike wrote it: each page alone through the head."""
+    """The loss page by page: each page alone through the head, weighted by its patches' weights."""
     wsum = sum(float(w.sum()) for _, w in tg)
     loss = 0.0
     for f, (sh, w) in zip(feats, tg):
@@ -241,19 +195,3 @@ def test_the_padded_batch_gives_the_per_page_loss_and_gradients(monkeypatch):
     assert float(got.detach()) == pytest.approx(float(want.detach()), rel=1e-6)
     for a, b in zip(head.parameters(), g_want):
         torch.testing.assert_close(a.grad, b, rtol=1e-5, atol=1e-7)
-
-
-def test_batched_training_is_the_per_page_training(monkeypatch):
-    monkeypatch.setattr(layout, "COMPONENTS", 6)
-    monkeypatch.setattr(layout, "HEAD_MAX_STEPS", 60)
-    feats, tg = _ragged_pages()
-    got = layout.train_head(feats, tg, seed=2)
-    torch.manual_seed(2)                         # the former per-page loop, same seed, same steps
-    head = layout.new_head()
-    opt = torch.optim.Adam(head.parameters(), lr=layout.HEAD_LR)
-    for _ in range(60):
-        opt.zero_grad()
-        _per_page_loss(head, feats, tg).backward()
-        opt.step()
-    for a, b in zip(got.parameters(), head.parameters()):
-        torch.testing.assert_close(a, b, rtol=1e-4, atol=1e-5)

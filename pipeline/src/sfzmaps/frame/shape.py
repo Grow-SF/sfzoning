@@ -44,7 +44,6 @@ the chances along it (`rules`, amendment 5).
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import math
 import time
@@ -565,16 +564,13 @@ def _objective(D, K, removed, ns, bs, params: Params) -> float:
     )
 
 
-def _from_start(rect: Frame, p, D, ink, params: Params, bounds: blk.BlockBounds, timing: dict, tag: str, cache):
+def _from_start(rect: Frame, p, D, ink, params: Params, bounds: blk.BlockBounds, timing: dict, tag: str):
     """Steps 2-3 and the blocks re-scored, from one start (the spike's `pipeline`): (frame, notches, block
     candidates, kept region, removed, kept blocks, objective)."""
     shape = D.shape
     t0 = time.perf_counter()
-    key = ("start", rect.phi, tuple(sorted(rect.offset.items())), bounds)
-    if key not in cache:
-        K0 = rect.mask(shape)
-        cache[key] = (K0, blk.candidates(p, D, K0, rect, bounds))
-    K0, cands = cache[key]
+    K0 = rect.mask(shape)
+    cands = blk.candidates(p, D, K0, rect, bounds)
     B0, _ = blk.accept(cands, D, K0, params.lam_block)
     t1 = time.perf_counter()
     Dz = np.where(B0, np.float32(0), D)
@@ -603,20 +599,6 @@ def _one_region(K: np.ndarray, removed: np.ndarray) -> np.ndarray:
     return comp == int(np.argmax(sizes))
 
 
-FINGERPRINT_SAMPLES = 64  # computational: a page's fingerprint hashes about this many rows and columns of p and lum
-
-
-def fingerprint(p: np.ndarray, lum: np.ndarray) -> tuple:
-    """A cheap identity of a page's chances and luminance: their shapes and a hash of an evenly spaced subsample
-    (about FINGERPRINT_SAMPLES rows and columns), for `decide`'s guard against a cache reused on another page."""
-    h, w = np.shape(lum)
-    sy, sx = max(1, h // FINGERPRINT_SAMPLES), max(1, w // FINGERPRINT_SAMPLES)
-    d = hashlib.blake2b(digest_size=16)
-    d.update(np.ascontiguousarray(np.asarray(p, np.float32)[:, ::sy, ::sx]).tobytes())
-    d.update(np.ascontiguousarray(np.asarray(lum, np.float32)[::sy, ::sx]).tobytes())
-    return tuple(np.shape(p)), tuple(np.shape(lum)), d.hexdigest()
-
-
 def decide(
     p: np.ndarray,
     lum: np.ndarray,
@@ -624,7 +606,7 @@ def decide(
     bounds: blk.BlockBounds,
     maps: int = 1,
     timing: dict | None = None,
-    cache: dict | None = None,
+    labels: np.ndarray | None = None,
 ) -> tuple[pixel.Decision, Frame, list, list]:
     """The shape decision for chances p ((3, h, w): map, outside, removed block) on a page of luminance `lum`:
     (Decision, the frame, its notches, the removed blocks).  In the order the first trial measured as best, all on one
@@ -642,22 +624,13 @@ def decide(
     6. the kept region is one piece (the largest; any other is outside, its ink `dropped_ink`), and removed blocks
        are its only holes.
     A page listed with several `maps` keeps the per-pixel decision (`decide.decide`) until such a page is checked.
-    `timing`, if given, gets the seconds of each stage.  `cache`, if given, holds the work that does not depend on
-    `params` (the rule labels, the cost field, the plain start, the notch-aware start per lambda_notch, each start's
-    block candidates) for the next call on the same page with other numbers: one dict per page (p and lum), never
-    shared between pages.  The first call stores the page's `fingerprint` (of the caller's p and lum) in it; a later
-    call with another page raises ValueError."""
+    `timing`, if given, gets the seconds of each stage.  `labels`, if given, are the page's `rules.rule_labels(lum)`,
+    already found by the caller."""
     timing = {} if timing is None else timing
-    if cache is None:
-        cache = {}
-    else:
-        fp = fingerprint(p, lum)
-        if cache.setdefault("page", fp) != fp:
-            raise ValueError("this cache holds another page's work: one cache per page")
     t = time.perf_counter()
-    if "rules" not in cache:
-        cache["rules"] = rules.rule_labels(lum)
-    p = rules.share(p, lum, cache["rules"])
+    if labels is None:
+        labels = rules.rule_labels(lum)
+    p = rules.share(p, lum, labels)
     timing["rules"] = time.perf_counter() - t
     if maps > 1:
         log.info("%d maps on the page: the per-pixel decision (the shape fits one map)", maps)
@@ -665,27 +638,21 @@ def decide(
     t = time.perf_counter()
     lum = np.asarray(lum, np.float32)
     shape = lum.shape
-    if "D" not in cache:
-        cache["D"] = cost_field(p, lum)
-    D = cache["D"]
+    D = cost_field(p, lum)
     ink = 1.0 - lum
     timing["cost field"] = time.perf_counter() - t
 
     t = time.perf_counter()
-    if "plain" not in cache:
-        cache["plain"] = frame_search(D, False)
-    starts = {"plain": cache["plain"]}
+    starts = {"plain": frame_search(D, False)}
     timing["frame plain"] = time.perf_counter() - t
     t = time.perf_counter()
-    if ("notch-aware", params.lam_notch) not in cache:
-        cache[("notch-aware", params.lam_notch)] = frame_search(D, True, params.lam_notch)
-    aware = cache[("notch-aware", params.lam_notch)]
+    aware = frame_search(D, True, params.lam_notch)
     timing["frame notch-aware"] = time.perf_counter() - t
     if aware != starts["plain"]:
         starts["notch-aware"] = aware
     best = None
     for name, rect in starts.items():
-        r = _from_start(rect.copy(), p, D, ink, params, bounds, timing, name, cache)
+        r = _from_start(rect.copy(), p, D, ink, params, bounds, timing, name)
         log.debug("start %s: objective %.1f", name, r[-1])
         if best is None or r[-1] < best[1][-1]:
             best = (name, r)
