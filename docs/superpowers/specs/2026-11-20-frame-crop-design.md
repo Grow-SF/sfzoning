@@ -739,3 +739,48 @@ The one number that needs held-out chances, the temperature, comes from a 4-fold
   are re-cut with the current model before anything is concluded about them.
 
 Plan: `docs/superpowers/plans/2026-11-21-frame-crop-test-set.md`.
+
+## Amendment 5: a printed rule is one thing (owner, 2026-11-21)
+
+**The fault.** On 2000-digital-su p11 the cut came out tilted 1.66° against a level printed frame, with the right half
+of the top rule left in. The model's chance of deletion along that one rule, in six stretches from left to right, was
+0.97, 0.92, 0.72, 0.17, 0.25, 0.38. The cut judges ink px by px, so the cheapest rectangle kept the "map" half of the
+rule and tilted to do it. The level and the tilted rectangle scored within 0.07% of each other.
+
+**The owner's choice** among three options (more labels; treat a rule as one thing; only flag such pages): "2", then
+"Do 2". In my words, which the owner chose: treat a straight printed rule as one thing: if most of it is frame, all of
+it is.
+
+**The rule.**
+- A *rule* is a connected stroke of ink that runs straight for a long way along the page (within the frame search's
+  angle range) and is thin across. Frame rules and legend bars are rules. Hatching, lettering, corner arcs and solid
+  blocks are not.
+- Every px of a rule shares one set of chances: the ink-weighted mean of the model's chances along the rule.
+- The straight-line cut then runs unchanged on those chances.
+- A stroke the model reads the same way along its length is unchanged by this. Only strokes with a split reading
+  change, and they change as a whole.
+
+**Why the mean.** A rule is one printed object with one true class. The mean keeps each rule's expected ink in each
+class exactly as the model gave it, so the cost accounting of part 1 still holds, and the 3:1 cost then decides the
+whole rule at once. Two readings were tried on the same sheets: every rule takes its mean, or only rules whose mean
+chance of deletion is over one half. The first is used.
+
+**Measured (trial, heads on 39 labels, 22 test sheets, pooled):**
+
+| | frame ink left in | label-box ink left in | map ink cut |
+|---|---:|---:|---:|
+| before | 0.24% | 31.5% | 0.322% |
+| every rule takes its mean | 0.10% | 31.4% | 0.330% |
+| only rules over one half | 0.18% | 31.5% | 0.322% |
+
+- 2000-digital-su p11: angle −1.66° → −0.22°, no bow, the whole top rule deleted.
+- 1964 p14 (test): angle −1.31° → −0.14°, frame ink left in 0.68% → 0.00%.
+- 1980-1990-su p01: the top side's bow, which was at its limit, goes to 0.
+- The rise in map ink cut is one sheet, 1929 p14: its top rule goes whole, including stretches where the label counts
+  block ink merged into the rule as map. Its frame ink left in falls from 7.7% to 4.3%.
+- Not improved: where blank paper lies between a bar and the map, nothing printed pins the cut's angle
+  (1980-1990-height p10 moved from −0.21° to −1.01°, with no ink affected).
+
+**Settings.** How long a stroke must run to count (201 px) and how thin it must be (under 61 px) are trial settings,
+not fitted. Halving the length (101 px) gives the same pooled result (0.10% / 0.328%); doubling it (401 px) loses the
+1929 p14 gain (0.18% / 0.322%) and keeps the three fixes above.
