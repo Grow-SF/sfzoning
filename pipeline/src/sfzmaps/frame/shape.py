@@ -1,6 +1,5 @@
 """The cut traces straight lines: the frame of a page as one rotated rectangle with small per-side tilts and bows and
-filleted corners (design spec, amendment 2 and amendment 3; ported from the measured spike
-`scripts/spikes/issue71_shape.py`, whose report is .superpowers/sdd/2026-11-20-frame-crop/spike-shape-report.md).
+filleted corners (design spec, amendment 2 and amendment 3).
 
 **Sign.** `cost_field` gives, per pixel, D = ink x (COST_MAP p0 - COST_FRAME (p1 + p2)): the expected cost of deleting
 the pixel less the expected cost of keeping it.  So D > 0 means "cheaper kept" (map ink), D < 0 "cheaper deleted"
@@ -628,7 +627,7 @@ def decide(
     cache: dict | None = None,
 ) -> tuple[pixel.Decision, Frame, list, list]:
     """The shape decision for chances p ((3, h, w): map, outside, removed block) on a page of luminance `lum`:
-    (Decision, the frame, its notches, the removed blocks).  In the spike's measured order (finding 2), all on one
+    (Decision, the frame, its notches, the removed blocks).  In the order the first trial measured as best, all on one
     cost field:
     0. every printed rule's px share the rule's ink-weighted mean chances (`rules.share`), for every cut below;
     1. `frame_search` from two starts, plain and notch-aware;

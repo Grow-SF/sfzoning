@@ -1,5 +1,4 @@
-"""Notches: ruled boxes at the margin cut from the kept region (design spec, amendment 2; ported from the measured
-spike `scripts/spikes/issue71_shape.py`, report .superpowers/sdd/2026-11-20-frame-crop/spike-shape-report.md).
+"""Notches: ruled boxes at the margin cut from the kept region (design spec, amendment 2).
 
 A notch is a rectangle anchored at a side, turned by `psi` degrees (within NOTCH_ANGLE of the frame's angle; the
 owner: "Rectangles, but they can be rotated").  In the frame turned by psi about the page centre it deletes the
@@ -7,7 +6,7 @@ pixels with "along" in [a0, a1) and inward distance e < d (`geometry.e_along`), 
 
 **A notch must be a ruled box** (label rule 3): its gain is the sum of -D (`geometry.cost_field`'s D > 0 means
 "cheaper kept") over what it deletes of the kept region, plus beta x the ink in the STRIP px just inside its three
-inner sides, per px of side (spike finding 7).  A cut that follows nothing printed gets no such support.  Notches are
+inner sides, per px of side (measured in the first trial of the shape decision).  A cut that follows nothing printed gets no such support.  Notches are
 added greedily while the best one's gain exceeds lambda_notch, and **only if its area term alone (the sum of -D) is
 positive** (controller ruling C5): side ink is evidence that a box is ruled; it can't stand in for the region being
 outside (on 1948/14, beta = 3 paid for 9-px slivers up to 2,800 px deep along pairs of lines, their sums of -D -2,146,
@@ -30,8 +29,8 @@ from sfzmaps.frame.geometry import SIDES, Canvas, Frame, box, e_along, half, poo
 if TYPE_CHECKING:
     from sfzmaps.frame.shape import Params
 
-STRIP = 4  # px: the strip just inside a notch's inner sides whose ink supports it (spike finding 7)
-NOTCH_MIN_PX = 2 * STRIP + 1  # px: a notch is at least this wide (spike finding 6)
+STRIP = 4  # px: the strip just inside a notch's inner sides whose ink supports it (measured in the first trial of the shape decision)
+NOTCH_MIN_PX = 2 * STRIP + 1  # px: a notch is at least this wide (the same trial)
 NOTCH_CAP = 6  # notches per page (computational; the labels have at most 3)
 NOTCH_ANGLE = 2.46  # degrees: a notch's angle around phi (the labels' 1.64 x 1.5)
 NOTCH_REACH = 0.5  # a notch reaches at most this share of the page inward (computational: to the page's middle)

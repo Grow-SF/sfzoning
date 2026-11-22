@@ -3,6 +3,10 @@
 Supersedes the two-scale design in `2026-11-19-learned-frame-design.md` (page pass + pixel pass). Same issue, same labels
 (revised as below), simpler model.
 
+The trial scripts this document and the plans name (`pipeline/scripts/spikes/issue71_*.py`) were removed before the pull
+request; they are in the branch's history up to commit 3f69dc6. What they measured is reproduced by `sfzmaps frame
+--dev` and `--test`. The labelling helper among them is kept as `pipeline/scripts/frame_label_tool.py`.
+
 ## Intent
 
 Every scanned sheet prints a frame around its map: bars, thin rules, corner arcs, ruled-off legend and title strips,

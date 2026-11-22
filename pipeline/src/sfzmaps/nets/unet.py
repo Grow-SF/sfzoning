@@ -13,7 +13,7 @@ The folded network (`Folded`): the input's `fold` x `fold` px blocks folded into
 at 1/fold the size each way, and its outputs unfolded back (`pixel_shuffle`): one output per input px still, nothing
 discarded.  On the Mac's GPU a convolution's backward costs 12-35 times its forward on layers with few channels and
 millions of px (a U-Net's full-resolution top level); folded, no layer is both, and a training step is about 8 times
-faster (issue #71, `scripts/spikes/issue71_speed4.py`).  Its reach is `folded_reach` page px; its sides must be
+faster (measured for issue #71).  Its reach is `folded_reach` page px; its sides must be
 multiples of `folded_multiple`.
 """
 import torch

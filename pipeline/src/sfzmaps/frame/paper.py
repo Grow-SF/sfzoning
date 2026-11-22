@@ -1,6 +1,4 @@
-"""The cut lies on paper (label rule 1; design spec, amendment 3, "the cut lies on paper"; ported from the measured
-spike `scripts/spikes/issue71_on_paper.py`, its "sum + tilt" rule, report
-.superpowers/sdd/2026-11-21-frame-crop-combined/on-paper-report.md).
+"""The cut lies on paper (label rule 1; design spec, amendment 3, "the cut lies on paper": its "sum + tilt" rule).
 
 The layout sees patches of about 50 px, so a fitted line can sit a few px off the printed rule.  Each fitted line
 slides along its normal, within one patch width R = max(page sides) / `layout.LONG_PATCHES` of where the fit put it,

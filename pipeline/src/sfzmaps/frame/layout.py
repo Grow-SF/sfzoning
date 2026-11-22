@@ -25,7 +25,7 @@ from sfzmaps.frame import data
 log = logging.getLogger(__name__)
 
 MODEL_ID = "facebook/dinov2-with-registers-base"
-# The snapshot the spike (scripts/spikes/issue71_dino.py) measured with, and the sha256 of its model.safetensors.
+# The snapshot the design was measured with (spec, amendment 3), and the sha256 of its model.safetensors.
 REVISION = "a1d738ccfa7ae170945f210395d99dde8adb1805"
 WEIGHTS_SHA256 = "7a6f7b3b9fa4b8732e707476a03cd6cdce210048582f21aafb7991c17d98e362"
 PATCH = 14

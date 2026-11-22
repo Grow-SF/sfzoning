@@ -1,5 +1,4 @@
-"""The learned chances (design spec, amendment 6; ported from the trial scripts `scripts/spikes/issue71_dev.py` and
-`scripts/spikes/issue71_learned.py`, behaviour unchanged).
+"""The learned chances (design spec, amendment 6).
 
 The model under-reads whole printed rules (on training sheets read by heads that did not train on them, a rule read
 as 30% frame or box is frame or box almost nine times in ten) and reads other ink about right.  So the chance of

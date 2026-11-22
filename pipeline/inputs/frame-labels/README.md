@@ -50,6 +50,6 @@ Coordinates are `page.png` pixels at full resolution, as stored (x right, y down
 
 ## Tool
 
-`uv run python scripts/spikes/issue71_label_tool.py` (in `pipeline/`): `overview` (whole page with a coordinate grid),
+`uv run python scripts/frame_label_tool.py` (in `pipeline/`): `overview` (whole page with a coordinate grid),
 `zoom` (full-resolution close-ups of one or more points with pixel ticks), `check` (the outline drawn on the overview,
 and a close-up of every vertex). Pictures go to `data/research/issue71/labels/<series>/<sheet>/`.

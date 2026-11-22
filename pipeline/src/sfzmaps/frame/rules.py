@@ -1,5 +1,4 @@
-"""A printed rule is one thing (design spec, amendment 5; ported from the trial `scripts/spikes/issue71_rules.py`,
-mode "one").
+"""A printed rule is one thing (design spec, amendment 5: every rule takes its mean reading).
 
 A *rule* is a connected stroke of ink that runs straight for a long way along the page (within the frame search's
 angle range) and is thin across: frame rules and legend bars are rules; hatching, lettering, corner arcs and solid

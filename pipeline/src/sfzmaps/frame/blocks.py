@@ -1,7 +1,5 @@
 """Removed blocks as shapes: legend and title blocks as rotated rectangles, SECTION badges and compass roses as
-ellipses (design spec, amendment 2, edit 3, and amendment 3; ported from the measured spikes
-`scripts/spikes/issue71_shape.py` and `issue71_combined.py`, reports .superpowers/sdd/2026-11-20-frame-crop/
-spike-shape-report.md and .superpowers/sdd/2026-11-21-frame-crop-combined/combined-test-report.md).
+ellipses (design spec, amendment 2, edit 3, and amendment 3).
 
 The candidates are the 8-connected pieces of p2 > `decide.cut_level()` inside the kept region.  Each gets the better
 of the best rectangle and the best ellipse, both by local search, scored by the gain of deleting it: the sum of -D (`geometry.cost_field`'s D > 0 means "cheaper kept") over the shape within the kept

@@ -1,4 +1,4 @@
-"""Issue #71: helper for drawing map-area labels by eye.
+"""Helper for drawing the frame finder's map-area labels by eye (issue #71).
 
 Labels live in pipeline/inputs/frame-labels/<series>/<sheet>.json:
 
@@ -24,7 +24,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 Image.MAX_IMAGE_PIXELS = None
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 WORK = ROOT / "data" / "work"
 LABELS = ROOT / "inputs" / "frame-labels"
 OUT = ROOT / "data" / "research" / "issue71" / "labels"
