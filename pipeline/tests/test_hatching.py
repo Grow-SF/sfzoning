@@ -383,3 +383,13 @@ def test_run_writes_each_seam_patch_once(two_sheet_run):
     # the 1R side's period is measured from its 12 px hatch
     sheets = json.loads((out / "sheets.json").read_text())
     assert abs(sheets["sheets"][SHEETS[0]]["period"] - 12) <= 1
+
+
+def test_load_crop_refuses_missing_or_misshapen_cut(tmp_path):
+    with pytest.raises(FileNotFoundError, match="sfzmaps frame"):
+        hatching.load_crop(tmp_path, "s", (10, 10))
+    (tmp_path / "s").mkdir()
+    cv2.imwrite(str(tmp_path / "s" / hatching.FRAME_CUT), np.zeros((8, 8), np.uint8))
+    with pytest.raises(ValueError, match="its page"):
+        hatching.load_crop(tmp_path, "s", (10, 10))
+    assert hatching.load_crop(tmp_path, "s", (8, 8)).all()
