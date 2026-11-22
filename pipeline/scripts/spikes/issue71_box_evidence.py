@@ -27,6 +27,14 @@ OUT = data.DATA_DIR / "frame-box-evidence"
 TEST = data.LABELS.parent / "frame-labels-test"
 T = 1.540
 PARAMS = shape.Params(lam_notch=1e4, beta=3, lam_block=1e3)
+# The box step as it was when this evidence was gathered (before f2c9dd8 made rectangles square to the frame):
+MOMENT_ANGLES = (-3, -2, -1, -0.5, 0, 0.5, 1, 2, 3)
+
+
+def _wrap90(deg):
+    return (deg + 45.0) % 90.0 - 45.0
+
+
 PAGES = [("1921", "20180102094348509"), ("1929", "20180102100804566-p14"), ("1935", "20180102102853571-p12"),
          ("1948", "6a"), ("1980-1990-su", "1980-1990-su-p05"), ("1990-1996-zoning", "1990-1996-zoning-p30"),
          ("1948", "4")]
@@ -55,7 +63,7 @@ def pieces(p, D, kept, frame, bounds):
         ev, evec = np.linalg.eigh(cov)
         thm = math.degrees(math.atan2(evec[1, 1], evec[0, 1]))
         fam = {}
-        for name, angs in (("rect at the piece's angle", [blk._wrap90(thm) + d for d in blk.MOMENT_ANGLES]),
+        for name, angs in (("rect at the piece's angle", [_wrap90(thm) + d for d in MOMENT_ANGLES]),
                            ("rect at the frame's angle", [frame.phi + d for d in blk.FRAME_ANGLES])):
             best = None
             for th in angs:
