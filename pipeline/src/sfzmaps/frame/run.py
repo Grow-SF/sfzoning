@@ -34,8 +34,8 @@ deleted (`scores.split_scores`: frame ink, label-box ink, map ink cut by the fra
 `out/dev/` or `out/test/` the sheets' outputs, `scores.json` (per sheet and pooled) and `fits.json` (each sheet's
 fitted frame, notches and boxes, `fit_json`).  `format_split` is the table for the owner.
 
-`predict_all` decides every map page that is not a training sheet with the final heads; the training sheets take
-their dev outputs.
+`predict_all` decides every map page with the final heads, the training sheets too.  The dev and test outputs are for
+scoring only: nothing reads them to make a page's cut.
 
 The page work (the shape decisions) runs on `PROCESSES` spawned worker processes, each pinned to one maths thread.  A
 job carries everything it needs (the page's path, its patch logits, the temperature, the label folder), and its
@@ -747,23 +747,10 @@ def rank_pages(rows: list[dict]) -> list[dict]:
     return rows
 
 
-def _copy_dev_outputs(out: Path, sid: SheetId) -> bool:
-    """The training sheet's dev outputs copied to its place under `out`; False (nothing copied) when any is missing."""
-    src, dst = sheet_dir(out / DEV_DIR, sid), sheet_dir(out, sid)
-    if not all((src / n).exists() for n in PAGE_FILES):
-        return False
-    dst.mkdir(parents=True, exist_ok=True)
-    for n in PAGE_FILES:
-        shutil.copyfile(src / n, dst / (n + ".tmp"))
-        os.replace(dst / (n + ".tmp"), dst / n)
-    return True
-
-
 def predict_all(device: str, out: Path = OUT,
                 turn: Callable[[], contextlib.AbstractContextManager] = contextlib.nullcontext) -> None:
-    """Every map page that is not a training sheet, decided with the final heads at the model's temperature and
-    `PARAMS`; the training sheets take their dev outputs (`sfzmaps frame --dev`).  Then `PAGES_FILE` (`rank_pages`;
-    the training sheets' rows from `dev/scores.json`, marked `held_out`).  Refuses (`DiskFull`) with less than
+    """Every map page, the training sheets too, decided with the final heads at the model's temperature and
+    `PARAMS`.  Then `PAGES_FILE` (`rank_pages`).  Refuses (`DiskFull`) with less than
     `MIN_FREE_GB` free, and (`StaleFeatures`, before any extraction) a stale model.  Missing feature files are
     extracted on `device` inside `turn()`."""
     check_disk(out)
@@ -776,26 +763,12 @@ def predict_all(device: str, out: Path = OUT,
     bounds = _bounds(meta["bounds"])
     counts = data.map_counts(data.PAGE_KINDS)
     pages = data.map_pages(data.PAGE_KINDS, data.WORK)
-    for sid in pages:
-        if sid in set(train) and not _copy_dev_outputs(out, sid):
-            log.warning("%s/%s is a training sheet with no dev outputs: run `sfzmaps frame --dev`", *sid)
-    todo = [sid for sid in pages if sid not in set(train)]
     jobs = []
-    for sid in todo:
+    for sid in pages:
         f = load_features(out, sid)
         jobs.append(PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK),
                             zs=tuple(layout.head_logits(h, f) for h in heads), temperature=float(meta["temperature"]),
                             maps=counts[sid], bounds=bounds, chances=learned.Chances.from_json(meta["chances"])))
     stats = pool_map(predict_page, jobs, PARAMS, out, label="page")
-    rows = [{"series": s, "sheet": h, **v, "held_out": False} for (s, h), v in zip(todo, stats)]
-    summary = out / DEV_DIR / SCORES_FILE
-    if summary.exists():
-        on_page = set(pages)
-        rows += [{"series": r["series"], "sheet": r["sheet"], "filled_ink": r["filled_ink"],
-                  "dropped_ink": r["dropped_ink"], "removed_ink": r["removed_ink"],
-                  "side_ink_left": r.get("side_ink_left"), "side_ink_left_total": r["side_ink_left_total"],
-                  "held_out": True}
-                 for r in json.loads(summary.read_text())["sheets"] if (r["series"], r["sheet"]) in on_page]
-    else:
-        log.warning("%s is missing: the training sheets are left out of %s", summary, PAGES_FILE)
+    rows = [{"series": s, "sheet": h, **v} for (s, h), v in zip(pages, stats)]
     _write_json(out / PAGES_FILE, rank_pages(rows))
