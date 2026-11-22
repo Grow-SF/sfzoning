@@ -655,3 +655,64 @@ Task 1b's test, on the six held-out sheets with the full-resolution network trul
 - 1921/355582's bottom side 400 px high;
 - 1948/4's bottom row of blocks clipped;
 - 1948/14's thick bars called map.
+
+## Amendment 4: a test set, and what it showed (owner, 2026-11-21)
+
+The owner's directions, in order:
+- "if you can't score honestly, then add some damn labels. don't train on them";
+- "you're working in a little box ... trying to workaround obvious things that you should do";
+- on the cut: "you were following a frame edge and then decided to jump to the edge of the scan for no apparent
+  reason"; "such wobbly magenta";
+- on a sparse sheet: the model is "using white space as a signal on the outside of the frame rather than looking for
+  edge of file".
+
+### What exists now
+
+- **A test set of 22 sheets, one per series, never trained on:** `pipeline/inputs/frame-labels-test/`. Each was chosen
+  by a fixed rule before any prediction was looked at (the unlabelled page at index 3n/4 of its series) and drawn from
+  the scan only.
+- **39 training sheets** (`pipeline/inputs/frame-labels/`): the original 21, one for each of the 14 series that had
+  none, and a second for 1929, 1935, 1975 and 1980-1990-zoning.
+- **The measure is the test set.** Per sheet and pooled: the share of frame and legend ink left in, and the share of
+  map ink cut. Scoring is one decision per test sheet, taking minutes.
+- **The leave-one-out run is retired.** It took over an hour, and on single-label editions it measured "no label for
+  this edition", not the model that ships.
+
+### First test-set result (heads on the 39 labels; the simple cut)
+
+The simple cut: cut where deleting is the cheaper expected cost; outside is what connects to the edge of the file; one
+kept region.
+
+| | frame / legend ink left in | map ink cut |
+|---|---:|---:|
+| pooled, 22 sheets | 2.37% | 0.361% |
+| median sheet | 0.78% | 0.043% |
+
+- **1960 through 2000-digital (17 sheets):** at most 1.6% left in (one sheet 2.6%), at most 0.34% cut.
+- **1921, 1929, 1935:** 4.7–8.5% left in, 0.6–2.9% cut.
+- **1948/6a** (frameless photo): 51% left in. Its title block, compass rose and badge are all there is to delete.
+
+### What was learned about the two decisions
+
+- **The model sorts ink well and has no reliable opinion about blank paper.** With three heads it calls large blank
+  areas "outside" on sparse sheets (1975 p18 "4H", 1960/4, 1964 p10). The owner's white-space inference was right.
+- **The simple cut** trusts that opinion: its boundary wanders across blank paper.
+- **The straight-line shape decision** (amendment 2) was built to fix that, but on unseen pages it produced a frame
+  fitted inside the real one, rectangles cut from the map (1975 p18, at every setting tried), and a patch of margin
+  left in between two notches (2000-digital-su p11). Causes not yet found; tinted paper letting the model's
+  blank-paper opinion into the "paper costs nothing" cost is the first suspect.
+
+### The rule the cut must follow
+
+**A side of the cut is a straight line along the inner edge of the printed frame ink, or the edge of the file where
+there is no frame. Blank paper never moves a line.** The model says which ink is frame; the geometry comes from the
+ink and the file's edge.
+
+### How decisions are chosen from here
+
+Every candidate decision is scored on the 22 test sheets against the simple cut's numbers above, and shown on the same
+pages. The one with the better numbers and no embarrassing page ships. Labels are added where the test set and the
+owner's eye show a weakness; the test set itself is never trained on and never used to fit a number.
+
+The one number that needs held-out chances, the temperature, comes from a 4-fold split of the training sheets
+(12 small heads), not from the test set.
