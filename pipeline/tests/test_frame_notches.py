@@ -48,7 +48,7 @@ def test_ruled_notch_found_and_unruled_blob_is_not():
 def test_notch_may_be_rotated():
     psi = PHI + 1.5
     lum, p, tr = _page(psi)
-    got = notches.greedy_notches(cost_field(p, lum), 1 - lum, _true_frame(tr), Params(2e4, 3.0, 0.0))
+    got = notches.greedy_notches(cost_field(p, lum), 1 - lum, _true_frame(tr), Params(7e3, 3.0, 0.0))  # about half its gain
     assert len(got) == 1
     n = got[0]
     assert abs(n.psi - psi) <= 0.2, n.psi

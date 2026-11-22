@@ -132,7 +132,7 @@ class Canvas:
     def bin(self, src: np.ndarray, window=None) -> np.ndarray:
         """Forward binning at full resolution: every page pixel of `src` added to the canvas pixel its centre falls
         in, over window (j0, j1, i0, i1) (default the whole canvas).  Exact sums, and the same centre rule as the
-        masks (bilinear warping blurs rule ink into the first map row, which the 3:1 cost then cuts)."""
+        masks (bilinear warping blurs rule ink into the first map row, which the cut then takes)."""
         h, w = src.shape
         nj, ni = self.cells(1)
         j0, j1, i0, i1 = window or (0, nj, 0, ni)

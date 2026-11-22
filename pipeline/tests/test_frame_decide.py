@@ -19,13 +19,13 @@ def _framed() -> np.ndarray:
     return p
 
 
-def test_cut_level_is_the_cost_ratio():
-    assert decide.cut_level(3.0, 1.0) == 0.25
+def test_cut_level_is_even_odds():
+    assert decide.cut_level() == 0.5
 
 
 def test_level_itself_is_not_cut():
-    q = np.full((5, 5), 0.25)
-    assert not decide.decide(_p(q), np.zeros((5, 5)), level=0.25).deleted.any()
+    q = np.full((5, 5), 0.5)
+    assert not decide.decide(_p(q), np.zeros((5, 5))).deleted.any()
 
 
 def test_hole_inside_the_map_is_filled():

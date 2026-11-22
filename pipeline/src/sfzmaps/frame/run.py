@@ -15,15 +15,21 @@ on and never used to fit a number (`data.check_split` refuses a sheet in both, b
    turn);
 4. one temperature fitted on ink-weighted samples of the dev logits upsampled to each page (`calibrate`), with its
    sheet-bootstrap interval;
-5. `model/model.json`, written last: the temperature, the folds, the block bounds of every label, the reducer record
-   (sha256 and page list) and the training sheets.  A fit deletes it first, so one that stops part way leaves no
-   model.
+5. the learned chances (`learned`, amendment 6): each training sheet's dev chances and label give its rule and ink
+   rows (on the workers), and `learned.fit` on all of them the two curves;
+6. `model/model.json`, written last: the temperature, the learned chances (`"chances"`, with the rules and ink they
+   were fitted on), the folds, the block bounds of every label, the reducer record (sha256 and page list) and the
+   training sheets.  A fit deletes it first, so one that stops part way leaves no model.
+A model whose heads, dev logits, training sheets and reducer record are current but which has no learned chances (an
+older model's) gets steps 5 and 6 only: the heads, dev logits and temperature are kept.
 
-The model is stale (`model_stale`) when `model.json` is missing, or its training sheets or reducer record are not
-the current ones.  The shape decision's numbers are the constants `PARAMS`, not searched.
+The model is stale (`model_stale`) when `model.json` is missing or has no learned chances, or its training sheets or
+reducer record are not the current ones.  The shape decision's numbers are the constants `PARAMS`, not searched.
 
-`score_dev` cuts each training sheet from its dev logits (block bounds from its fold's other sheets, as its heads);
-`score_test` cuts each test sheet with the final heads.  Both score the cuts against the labels apart by what is
+Every page's chances are corrected by `learned.apply` before the decision (`shape.decide`, or the per-pixel one on a
+page of several maps), which cuts at even odds; the corrected chances are the ones written.  `score_dev` cuts each
+training sheet from its dev logits (block bounds from its fold's other sheets, as its heads); `score_test` cuts each
+test sheet with the final heads.  Both score the cuts against the labels apart by what is
 deleted (`scores.split_scores`: frame ink, label-box ink, map ink cut by the frame and by boxes), and write under
 `out/dev/` or `out/test/` the sheets' outputs, `scores.json` (per sheet and pooled) and `fits.json` (each sheet's
 fitted frame, notches and boxes, `fit_json`; compared between runs by `fit_changes`).  `format_split` is the table for
@@ -41,8 +47,8 @@ Outputs, all under `out` (default `data/frame`):
 - `reducer.npz` and `features/<series>/<sheet>.npy`: the layout's features (`layout.extract_all`);
 - `[dev/|test/]<series>/<sheet>/outside.png` (`OUTSIDE_PNG`): 1-bit, the deletion (`Decision.deleted`: outside the
   frame or a removed block);
-- `.../outside_prob.npz` (`PROB_FILE`): key `q`, the layout's chance of deletion p1 + p2 as uint8 levels round(255 q),
-  for reading and placement to weigh ink by;
+- `.../outside_prob.npz` (`PROB_FILE`): key `q`, the learned chance of deletion p1 + p2 as uint8 levels
+  round(255 q), for reading and placement to weigh ink by;
 - `.../erased.png` (`ERASED_PNG`): the scan in its own mode (1-bit as 8-bit grey) with the deleted px painted plain
   paper, the per-channel median of the kept px: for looking only;
 - `.../outline.json` (`OUTLINE_FILE`): {"polygons": the kept region (`decide.outline`), "maps": n, "shape": the
@@ -73,7 +79,7 @@ import torch
 from PIL import Image
 
 from sfzmaps.frame import blocks as blk
-from sfzmaps.frame import calibrate, data, decide, layout, scores, shape
+from sfzmaps.frame import calibrate, data, decide, layout, learned, rules, scores, shape
 from sfzmaps.frame.data import OUT, SheetId
 from sfzmaps.frame.geometry import CORNERS, SIDES
 from sfzmaps.solver import threads
@@ -302,7 +308,7 @@ def sample_patch_logits(zs: Sequence[np.ndarray], cls: np.ndarray, lum: np.ndarr
 @dataclasses.dataclass(frozen=True, eq=False)
 class PageJob:
     """What a worker needs for one page: its id and scan, each head's patch logits, the temperature, the number of
-    maps on it, the block bounds, and the label folder (labelled sheets: to score)."""
+    maps on it, the block bounds, the learned chances, and the label folder (labelled sheets: to score)."""
 
     sid: SheetId
     page: Path
@@ -310,12 +316,17 @@ class PageJob:
     temperature: float
     maps: int
     bounds: blk.BlockBounds
+    chances: learned.Chances
     labels: Path | None = None
 
 
-def _load(job: PageJob) -> tuple[np.ndarray, np.ndarray]:
+def _load(job: PageJob) -> tuple[np.ndarray, np.ndarray, dict]:
+    """The page's luminance, its learned chances (`learned.apply` on the model's) and a `shape.decide` cache holding
+    its rule labels, found once for both."""
     lum = data.load_luminance(job.page)
-    return lum, chances(job.zs, lum.shape, job.temperature)
+    labels = rules.rule_labels(lum)
+    p = learned.apply(chances(job.zs, lum.shape, job.temperature), lum, job.chances, labels)
+    return lum, p, {"rules": labels}
 
 
 def _r(x) -> float:
@@ -347,8 +358,9 @@ def _shape_json(fr, ns, bs) -> dict:
 def score_page(job: PageJob, params: shape.Params, out: Path) -> dict:
     """A labelled page (its label under `job.labels`): the shape decision at `params`, its outputs written under
     `out`, scored against the label (`scores.split_scores`); its fit (`fit_json`), ink figures and side ink left."""
-    lum, p = _load(job)
-    dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps)
+    lum, p, cache = _load(job)
+    dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps, cache=cache)
+    del cache
     fitted = (fr, ns, bs) if job.maps == 1 else None
     write_outputs(out, job.sid, p, dec, job.maps, page=job.page, fitted=fitted)
     side = shape.side_ink_left(p, lum, fr)
@@ -362,8 +374,9 @@ def score_page(job: PageJob, params: shape.Params, out: Path) -> dict:
 
 def predict_page(job: PageJob, params: shape.Params, out: Path) -> dict:
     """An unlabelled page: the shape decision, its outputs written; its ink figures and the side ink left."""
-    lum, p = _load(job)
-    dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps)
+    lum, p, cache = _load(job)
+    dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps, cache=cache)
+    del cache
     write_outputs(out, job.sid, p, dec, job.maps, page=job.page, fitted=(fr, ns, bs) if job.maps == 1 else None)
     side = shape.side_ink_left(p, lum, fr)
     return {"filled_ink": dec.filled_ink, "dropped_ink": dec.dropped_ink, "removed_ink": dec.removed_ink,
@@ -407,6 +420,53 @@ def write_outputs(out: Path, sid: SheetId, p: np.ndarray, decision: decide.Decis
     replace(OUTLINE_FILE, lambda f: f.write_text(json.dumps(outline, default=_json_default)))
 
 
+@dataclasses.dataclass(frozen=True, eq=False)
+class RowsJob:
+    """What a worker needs for one training sheet's learned-chance rows: its id, scan and label folder, its dev
+    logits (each seed's) and the temperature."""
+
+    sid: SheetId
+    page: Path
+    zs: tuple
+    temperature: float
+    labels: Path
+
+
+def chance_rows(job: RowsJob) -> dict:
+    """A training sheet's `learned.rule_rows` and `learned.ink_rows` on its dev chances and its label."""
+    lum = data.load_luminance(job.page)
+    p = chances(job.zs, lum.shape, job.temperature)
+    cls = _cls(job.sid, lum.shape, job.labels)
+    labels = rules.rule_labels(lum)
+    return {"series": job.sid[0], "sheet": job.sid[1], "rules": learned.rule_rows(p, lum, cls, labels),
+            "ink": learned.ink_rows(p, lum, cls, labels)}
+
+
+def _rows_line(r: dict) -> str:
+    return (f"{r['series']}/{r['sheet']}: {len(r['rules'])} rules (ink {r['rules'][:, 0].sum():.0f}), other ink "
+            f"{r['ink'][:, 0].sum():.0f}")
+
+
+def fit_chances(train: Sequence[SheetId], dev: dict, temperature: float) -> dict:
+    """The learned chances (`learned.fit`) from every training sheet's dev chances (`dev`: its dev logits) at
+    `temperature` and its label, the rows made on `PROCESSES` workers (one log line per sheet): the two curves and
+    what they were fitted on, as `model.json` keeps them."""
+    t0 = time.perf_counter()
+    jobs = [RowsJob(sid=sid, page=data.page_path(*sid, work=data.WORK), zs=tuple(dev[sid]),
+                    temperature=float(temperature), labels=data.LABELS) for sid in train]
+    rows = pool_map(chance_rows, jobs, label="chances sheet", describe=_rows_line)
+    rule = np.concatenate([r["rules"] for r in rows])
+    ink = np.sum([r["ink"] for r in rows], axis=0)
+    got = learned.fit(rule, ink)
+    a, b, g = got.rule
+    i0, i1 = got.ink
+    log.info("learned chances from %d sheets (%d rules) in %.0f s: rules sigmoid(%.3f + %.3f logit(reading) + %.3f "
+             "log(length px)); other ink sigmoid(%.3f + %.3f logit(reading)), even odds at a reading of %.3f",
+             len(rows), len(rule), time.perf_counter() - t0, a, b, g, i0, i1, 1.0 / (1.0 + np.exp(i0 / i1)))
+    return {**got.to_json(), "fitted_on": {"sheets": len(rows), "rules": int(len(rule)),
+                                           "rule_ink": float(rule[:, 0].sum()), "other_ink": float(ink[:, 0].sum())}}
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # The model
 # ---------------------------------------------------------------------------------------------------------------
@@ -420,17 +480,28 @@ def _save_head(head, path: Path) -> None:
 
 def fit(device: str, out: Path = OUT,
         turn: Callable[[], contextlib.AbstractContextManager] = contextlib.nullcontext) -> dict:
-    """Fit the model (see the module): the dev logits, the temperature and the final heads; returns what it writes
-    to `out/model/model.json`.  Refuses (ValueError) a sheet that is both a training and a test sheet, before
-    anything is read or written.  The features (extracted, or refitted when the page list changed: the only place
-    that may) and the heads run on `device` inside `turn()` (the CLI's GPU turn); the rest runs on cpu after it."""
+    """Fit the model (see the module): the dev logits, the temperature, the final heads and the learned chances;
+    returns what it writes to `out/model/model.json`.  Refuses (ValueError) a sheet that is both a training and a test
+    sheet, before anything is read or written.  The features (extracted, or refitted when the page list changed: the
+    only place that may) and the heads run on `device` inside `turn()` (the CLI's GPU turn); the rest runs on cpu
+    after it.  A model current but for its learned chances keeps its heads, dev logits and temperature and gets the
+    chances only (no turn taken)."""
     train, test = _sheet_lists()
     data.check_split(train, test)
     if len(train) < TEMPERATURE_FOLDS:
         raise ValueError(f"{len(train)} training sheet(s): {TEMPERATURE_FOLDS} folds need at least as many")
     d = out / MODEL_DIR
-    (d / "model.json").unlink(missing_ok=True)
     torch.set_num_threads(THREADS)
+    if _heads_stale(out) is None:
+        meta = json.loads((d / "model.json").read_text())
+        if "chances" not in meta:
+            log.info("the heads, dev logits and temperature (%.3f) are current: fitting the learned chances only",
+                     meta["temperature"])
+            meta["chances"] = fit_chances(train, load_dev_logits(out), float(meta["temperature"]))
+            meta["level"] = decide.cut_level()
+            _write_json(d / "model.json", meta)
+            return json.loads((d / "model.json").read_text())
+    (d / "model.json").unlink(missing_ok=True)
     seeds = list(layout.HEAD_SEEDS)
     folds = [train[k::TEMPERATURE_FOLDS] for k in range(TEMPERATURE_FOLDS)]
     dev: dict[SheetId, np.ndarray] = {}
@@ -472,10 +543,11 @@ def fit(device: str, out: Path = OUT,
     del samples
     log.info("temperature %.3f (%.3f-%.3f), from the dev logits of %d sheets in %.0f s", temperature, t_lo, t_hi,
              len(train), time.perf_counter() - t0)
+    fitted = fit_chances(train, dev, temperature)
 
     meta = {"head_seeds": seeds, "head_seconds": seconds, "components": layout.COMPONENTS,
             "temperature": temperature, "temperature_interval": [t_lo, t_hi], "reliability": reliability,
-            "folds": [[list(s) for s in f] for f in folds],
+            "chances": fitted, "folds": [[list(s) for s in f] for f in folds],
             "bounds": dataclasses.asdict(blk.block_bounds(train, root=data.LABELS)), "reducer": reducer,
             "sheets": [list(s) for s in train], "params": dataclasses.asdict(PARAMS), "level": decide.cut_level()}
     _write_json(d / "model.json", meta)
@@ -485,7 +557,17 @@ def fit(device: str, out: Path = OUT,
 def model_stale(out: Path = OUT) -> str | None:
     """Why the model under `out/model/` is stale, or None when it is current: `model.json` missing (or an older
     model's), its training sheets not the labels' now, its reducer record not the pages' now or not `reducer.npz`,
-    or a file it needs missing."""
+    a file it needs missing, or no learned chances (`fit` then fits only those)."""
+    reason = _heads_stale(out)
+    if reason is None and "chances" not in json.loads((out / MODEL_DIR / "model.json").read_text()):
+        return (f"{out / MODEL_DIR / 'model.json'} has no learned chances (amendment 6): they are fitted on its dev "
+                "logits, its heads kept")
+    return reason
+
+
+def _heads_stale(out: Path) -> str | None:
+    """`model_stale` but for the learned chances: why the heads, dev logits, temperature, training sheets or reducer
+    record under `out/model/` are not current, or None."""
     d = out / MODEL_DIR
     f = d / "model.json"
     if not f.exists():
@@ -597,8 +679,8 @@ def _score_set(name: str, jobs: list[PageJob], where: Path, meta: dict) -> dict:
 
 
 def score_dev(out: Path = OUT) -> dict:
-    """Each training sheet cut from its dev logits at the model's temperature, with block bounds from its fold's
-    other sheets (as its heads), and scored against its label; written under `out/dev/` (see the module).  Refuses
+    """Each training sheet cut from its dev logits at the model's temperature, corrected by the learned chances, with
+    block bounds from its fold's other sheets (as its heads), and scored against its label; written under `out/dev/` (see the module).  Refuses
     (`StaleFeatures`) a stale model."""
     _require_current(out)
     meta = json.loads((out / MODEL_DIR / "model.json").read_text())
@@ -611,14 +693,16 @@ def score_dev(out: Path = OUT) -> dict:
         held = [tuple(s) for s in fold]
         bounds = blk.block_bounds([s for s in train if s not in set(held)], root=data.LABELS)
         jobs += [PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK), zs=tuple(logits[sid]),
-                         temperature=float(meta["temperature"]), maps=counts[sid], bounds=bounds, labels=data.LABELS)
+                         temperature=float(meta["temperature"]), maps=counts[sid], bounds=bounds,
+                         chances=learned.Chances.from_json(meta["chances"]), labels=data.LABELS)
                  for sid in held]
     jobs.sort(key=lambda j: j.sid)
     return _score_set("dev", jobs, out / DEV_DIR, meta)
 
 
 def score_test(out: Path = OUT) -> dict:
-    """Each test sheet cut by the final heads at the model's temperature and scored against its label (under
+    """Each test sheet cut by the final heads at the model's temperature, corrected by the learned chances, and
+    scored against its label (under
     `data.TEST_LABELS`); written under `out/test/` (see the module).  Refuses (`StaleFeatures`) a stale model."""
     _require_current(out)
     heads, meta = load_model(out)
@@ -631,7 +715,8 @@ def score_test(out: Path = OUT) -> dict:
         f = load_features(out, sid)
         jobs.append(PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK),
                             zs=tuple(layout.head_logits(h, f) for h in heads), temperature=float(meta["temperature"]),
-                            maps=counts[sid], bounds=bounds, labels=data.TEST_LABELS))
+                            maps=counts[sid], bounds=bounds, chances=learned.Chances.from_json(meta["chances"]),
+                            labels=data.TEST_LABELS))
     return _score_set("test", jobs, out / TEST_DIR, meta)
 
 
@@ -708,7 +793,7 @@ def predict_all(device: str, out: Path = OUT,
         f = load_features(out, sid)
         jobs.append(PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK),
                             zs=tuple(layout.head_logits(h, f) for h in heads), temperature=float(meta["temperature"]),
-                            maps=counts[sid], bounds=bounds))
+                            maps=counts[sid], bounds=bounds, chances=learned.Chances.from_json(meta["chances"])))
     stats = pool_map(predict_page, jobs, PARAMS, out, label="page")
     rows = [{"series": s, "sheet": h, **v, "held_out": False} for (s, h), v in zip(todo, stats)]
     summary = out / DEV_DIR / SCORES_FILE

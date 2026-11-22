@@ -2,10 +2,11 @@
 "removed blocks").
 
 The chances are p = (p0, p1, p2): map, outside the frame, removed block (a legend or title block, a compass rose or a
-"SECTION N" badge printed inside the frame, deleted wherever it sits).  Deleting a pixel costs (1 - p1 - p2) *
-COST_MAP in expectation (map ink lost if it was really map); keeping it costs (p1 + p2) * COST_FRAME (frame or block
-ink left in: a removed block left in costs the same as frame left in).  By linearity of expectation the pixel-wise
-best choice is to delete where p1 + p2 > cost_map / (cost_frame + cost_map), the `level`.
+"SECTION N" badge printed inside the frame, deleted wherever it sits).  There is no cost ratio (amendment 6: the
+earlier 3:1, frame ink left in counted three times map ink cut, was a guess, not a decision): the more likely answer
+wins, so a pixel is deleted where p1 + p2 > p0, the `level` of one half, and the cost field is ink x (p0 - p1 - p2).
+The chances it is applied to are the learned ones (`learned.apply`: how often a whole printed rule, and other ink,
+really is frame or box given the model's reading, fitted on the training sheets).
 
 The pixel-wise answer can leave holes or stray islands, so the decision applies the definitions:
 1. Outside the frame means connected to the page edge.  Outside is the part of the cut (p1 + p2 > level) reachable
@@ -33,8 +34,8 @@ from affine import Affine
 from scipy import ndimage as ndi
 from shapely.geometry import shape
 
-# Owner 2026-11-20: frame ink left in is 3x worse than map ink cut.
-COST_FRAME = 3.0
+# Even odds (amendment 6).  Not knobs: the names stay so the cost field's modules need no change.
+COST_FRAME = 1.0
 COST_MAP = 1.0
 
 _FOUR = ndi.generate_binary_structure(2, 1)
@@ -42,7 +43,7 @@ _EIGHT = ndi.generate_binary_structure(2, 2)
 
 
 def cut_level(cost_frame: float = COST_FRAME, cost_map: float = COST_MAP) -> float:
-    """The chance of "not map" above which deleting is cheaper in expectation."""
+    """The chance of "not map" above which deleting is the more likely answer: one half."""
     return cost_map / (cost_frame + cost_map)
 
 

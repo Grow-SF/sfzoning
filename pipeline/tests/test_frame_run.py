@@ -8,10 +8,11 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from sfzmaps.frame import calibrate, data, decide, layout, run, scores, shape
+from sfzmaps.frame import calibrate, data, decide, layout, learned, rules, run, scores, shape
 from sfzmaps.frame.geometry import Frame
 
 H, W = 40, 48
+REAL_RUN = rules.RUN
 RULE = 4            # the toy frame rule's distance in from the page edge
 B = RULE + 2        # the label's edge: map is [B, W - B] x [B, H - B], outlines included
 
@@ -25,6 +26,7 @@ def quick(monkeypatch):
     monkeypatch.setattr(layout, "HEAD_MAX_STEPS", 5)
     monkeypatch.setattr(layout, "HEAD_SEEDS", (0, 1))
     monkeypatch.setattr(run, "PROCESSES", 1)
+    monkeypatch.setattr(rules, "RUN", 15)          # the toy pages' rules are 32-40 px long
 
 
 def _labelled_lum(seed: int) -> np.ndarray:
@@ -220,9 +222,11 @@ def test_dev_sheets_are_cut_by_heads_that_did_not_train_on_them(fake_world, spy_
                 np.testing.assert_array_equal(saved[sid], want)           # exact: the follow-up fits on them
 
     result = run.score_dev(out)
+    chances = learned.Chances.from_json(meta["chances"])
     for sid in labelled:                                         # each sheet cut from its fold's logits at T
         p = layout.combine([layout.page_logits(z, (H, W)) for z in saved[sid]], temperature)
-        np.testing.assert_array_equal(_q(run.sheet_dir(out / run.DEV_DIR, sid) / run.PROB_FILE), _written(p))
+        np.testing.assert_array_equal(_q(run.sheet_dir(out / run.DEV_DIR, sid) / run.PROB_FILE),
+                                      _written(learned.apply(p, _lum(sid), chances)))
     written = json.loads((out / run.DEV_DIR / run.SCORES_FILE).read_text())
     assert [(r["series"], r["sheet"]) for r in written["sheets"]] == labelled
     assert written["temperature"] == temperature and written["sheets"] == result["sheets"]
@@ -252,7 +256,8 @@ def test_test_sheets_are_cut_by_the_final_heads(fake_world):
         p = layout.combine([layout.page_logits(layout.head_logits(h, f), (H, W)) for h in heads],
                            meta["temperature"])
         d = run.sheet_dir(out / run.TEST_DIR, sid)
-        np.testing.assert_array_equal(_q(d / run.PROB_FILE), _written(p))
+        np.testing.assert_array_equal(_q(d / run.PROB_FILE),
+                                      _written(learned.apply(p, _lum(sid), learned.Chances.from_json(meta["chances"]))))
         assert json.loads((d / run.OUTLINE_FILE).read_text())["shape"] is not None
     row = result["sheets"][0]
     assert len(row["split"]["boxes"]) == 1 and row["split"]["box_ink"] > 0     # scored on the test folder's label
@@ -344,10 +349,12 @@ def test_a_fit_that_stops_part_way_leaves_no_model(fake_world, monkeypatch):
 def test_score_pool_matches_one_process(fake_world, tmp_path, monkeypatch):
     """The process pool (spawned workers, the real shape decision) gives what one process gives."""
     labelled, out = fake_world
+    monkeypatch.setattr(rules, "RUN", REAL_RUN)                  # what the spawned workers import
     rng = np.random.default_rng(0)
     jobs = [run.PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK), labels=data.LABELS,
                         zs=tuple(rng.normal(size=(3, 6, 7)).astype(np.float32) for _ in range(2)),
-                        temperature=1.0, maps=1, bounds=run.blk.BlockBounds((20.0, 10.0), (10.0, 8.0)))
+                        temperature=1.0, maps=1, bounds=run.blk.BlockBounds((20.0, 10.0), (10.0, 8.0)),
+                        chances=learned.Chances(rule=(-6.0, 2.0, 1.5), ink=(0.2, 1.0)))
             for sid in labelled[:3]]
     one = run.pool_map(run.score_page, jobs, run.PARAMS, tmp_path / "one")
     monkeypatch.setattr(run, "PROCESSES", 2)
@@ -491,3 +498,83 @@ def test_pages_rank_by_side_ink_then_dropped():
     assert [r["sheet"] for r in got] == ["1", "2", "0", "3"]
     assert {r["sheet"]: r["dropped_rank"] for r in got} == {"2": 1, "3": 2, "0": 3, "1": 4}
     assert [r["side_rank"] for r in got] == [1, 2, 3, 4]
+
+
+def test_model_without_chances_is_stale(fake_world):
+    labelled, out = fake_world
+    run.fit("cpu", out)
+    assert run.model_stale(out) is None
+    path = out / run.MODEL_DIR / "model.json"
+    meta = json.loads(path.read_text())
+    got = meta["chances"]
+    assert len(got["rule"]) == 3 and len(got["ink"]) == 2
+    assert got["fitted_on"]["rules"] > 0 and got["fitted_on"]["rule_ink"] > 0 and got["fitted_on"]["other_ink"] > 0
+    assert learned.Chances.from_json(got) == learned.Chances(tuple(got["rule"]), tuple(got["ink"]))
+    del meta["chances"]
+    path.write_text(json.dumps(meta))
+    assert "chances" in run.model_stale(out)
+
+
+def test_fit_adds_the_chances_to_a_current_model_without_retraining(fake_world, spy_train_head):
+    labelled, out = fake_world
+    run.fit("cpu", out)
+    d = out / run.MODEL_DIR
+    first = json.loads((d / "model.json").read_text())
+    kept = {f: (d / f).read_bytes() for f in [run.DEV_LOGITS, *(f"head-{s}.pt" for s in layout.HEAD_SEEDS)]}
+    del first["chances"]
+    (d / "model.json").write_text(json.dumps(first))
+    spy_train_head.clear()
+    again = run.fit("cpu", out)
+    assert spy_train_head == []                                  # no head trained
+    assert {f: (d / f).read_bytes() for f in kept} == kept      # heads and dev logits as they were
+    assert again["temperature"] == first["temperature"] and run.model_stale(out) is None
+    assert again["level"] == decide.cut_level() == 0.5
+
+
+@pytest.fixture
+def spy_apply(monkeypatch):
+    """Every `learned.apply` call: the chances it was given, the fit, and what it returned."""
+    calls, real = [], learned.apply
+
+    def spy(p, lum, chances, labels=None):
+        q = real(p, lum, chances, labels)
+        calls.append({"p": np.array(p), "chances": chances, "q": q})
+        return q
+    monkeypatch.setattr(learned, "apply", spy)
+    return calls
+
+
+def test_dev_and_test_pages_use_the_learned_chances(fake_world, spy_apply, monkeypatch):
+    """Orchestration test (the shape decision is stubbed with the per-pixel cut, and records its chances)."""
+    labelled, out = fake_world
+    decided = []
+
+    def stub(p, lum, params, bounds, maps=1, timing=None, cache=None):
+        decided.append(np.array(p))
+        return _pixel_shape(p, lum, params, bounds, maps)
+    monkeypatch.setattr(shape, "decide", stub)
+    run.fit("cpu", out)
+    meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
+    want = learned.Chances.from_json(meta["chances"])
+    logits = run.load_dev_logits(out)
+    heads, _ = run.load_model(out)
+
+    def check(where, pages, model_p):
+        assert len(spy_apply) == len(decided) == len(pages)
+        for call, p_decided, sid in zip(spy_apply, decided, pages):
+            assert call["chances"] == want
+            np.testing.assert_array_equal(call["p"], model_p(sid))          # the model's chances, corrected
+            np.testing.assert_array_equal(p_decided, call["q"])              # the corrected ones are decided
+            np.testing.assert_array_equal(_q(run.sheet_dir(where, sid) / run.PROB_FILE), _written(call["q"]))
+        spy_apply.clear()
+        decided.clear()
+
+    def final(sid):
+        return run.chances([layout.head_logits(h, _feat(out, sid)) for h in heads], (H, W), meta["temperature"])
+
+    run.score_dev(out)
+    check(out / run.DEV_DIR, labelled, lambda sid: run.chances(list(logits[sid]), (H, W), meta["temperature"]))
+    run.score_test(out)
+    check(out / run.TEST_DIR, TEST, final)
+    run.predict_all("cpu", out)
+    check(out, sorted(set(UNLABELLED)), final)

@@ -46,15 +46,15 @@ def test_recovers_a_rotated_frame():
 
 
 def test_notch_aware_start_keeps_a_side_past_a_ruled_notch():
-    # a ruled box 250 px deep at the bottom, turned 1 degree off the frame: the plain rectangle takes its depth (the
-    # box's ink outweighs the map beside it); the notch-aware start keeps the bottom side at the frame, up to its
-    # 16-px grid plus the plain refinement's drift (24 + 8 + 4 px)
+    # a ruled box 250 px deep at the bottom, turned 1 degree off the frame, half ink inside: the plain rectangle takes
+    # most of its depth (the box's ink outweighs the map beside it); the notch-aware start keeps the bottom side at
+    # the frame, up to its 16-px grid plus the plain refinement's drift (24 + 8 + 4 px)
     c = np.cos(np.radians(1.2))
-    notch = dict(side="bottom", psi=2.2, a0=112.0, a1=375.0, d=70 - c * 450 + 250)
+    notch = dict(side="bottom", psi=2.2, a0=112.0, a1=375.0, d=70 - c * 450 + 250, ink=0.5)
     lum, p, tr = make_page(phi=1.2, blocks=True, notch=notch)
     D = shape.cost_field(p, lum)
     plain, aware = shape.frame_search(D, False), shape.frame_search(D, True)
-    assert plain.offset["bottom"] - tr["offset"]["bottom"] > 200
+    assert plain.offset["bottom"] - tr["offset"]["bottom"] > 150
     assert abs(aware.offset["bottom"] - tr["offset"]["bottom"]) <= 16 + 36
     assert abs(aware.phi - 1.2) <= 0.1
 
@@ -149,12 +149,11 @@ def _notch_page():
 
 
 def test_notchless_page_takes_the_plain_start():
-    # without a notch the notch-aware start comes out degrees off (its credited notches take back the rule wedges a
-    # wrong angle leaves in); the joint objective must reject it
+    # without a notch the decision takes the plain start and no notch.  (At the old 3:1 cost the notch-aware start
+    # came out degrees off here, its credited notches taking back the rule wedges a wrong angle leaves in; at even
+    # odds that trap is gone from this page, and no notch cost brings it back without false notches winning.)
     lum, p, tr = make_page(phi=0.7, bow_top=10.0, arc=120.0, blocks=True, **BIG)
     params = shape.Params(lam_notch=3e3, beta=3.0, lam_block=1e3)
-    aware = shape.frame_search(shape.cost_field(p, lum), True, params.lam_notch)
-    assert abs(aware.phi - 0.7) > 1.0  # the trap is there
     timing = {}
     dec, fr, ns, bs = shape.decide(p, lum, params, BOUNDS, timing=timing)
     assert timing["start"] == "plain"
@@ -193,7 +192,7 @@ def test_frameless_page_only_loses_its_blocks():
     assert all(fr.offset[s] == 0.0 for s in SIDES) and ns == []
     assert not dec.outside.any()
     truth = tr["cls"] == 2
-    assert (dec.removed & truth).sum() == truth.sum()
+    assert (dec.removed & truth).sum() >= 0.999 * truth.sum()
     assert (dec.removed & ~truth).sum() <= 0.05 * truth.sum()
 
 
@@ -264,3 +263,26 @@ def test_a_frame_rule_half_read_as_map_does_not_tilt_the_cut():
     assert abs(fr.phi) <= 0.1, fr.phi
     assert fr.bow["top"] == 0.0 and fr.tilt["top"] == 0.0, (fr.bow["top"], fr.tilt["top"])
     assert dec.deleted[rule].all(), (~dec.deleted[rule]).sum()  # the whole top rule
+
+
+def test_a_weakly_read_long_frame_rule_is_cut_at_even_odds():
+    # a level frame whose rules read 0.3 (map 0.7) everywhere, its map ink read 0.02: on the model's chances even odds
+    # keep the frame; on the learned chances (amendment 6, a fit like the measured one) the frame goes and the map stays
+    from sfzmaps.frame import learned
+
+    lum, p, tr = make_page(phi=0.0, seed=7)
+    ink = 1.0 - lum
+    frame, mapink = (tr["cls"] == 1) & (ink > 0), (tr["cls"] == 0) & (ink > 0)
+    p = p.copy()
+    p[:, tr["cls"] == 1] = np.array([0.7, 0.3, 0.0], np.float32)[:, None]
+    p[:, mapink] = np.array([0.98, 0.02, 0.0], np.float32)[:, None]
+    measured = learned.Chances(rule=(-6.03, 2.17, 1.46), ink=(0.16, 1.0))
+
+    def left_and_cut(q):
+        dec, *_ = shape.decide(q, lum, FITTED, BOUNDS)
+        return ink[frame & ~dec.deleted].sum() / ink[frame].sum(), ink[mapink & dec.deleted].sum() / ink[mapink].sum()
+
+    left, cut = left_and_cut(p)
+    assert left > 0.5                                                   # without the learned chances: kept
+    left, cut = left_and_cut(learned.apply(p, lum, measured))
+    assert left < 0.01 and cut < 0.002

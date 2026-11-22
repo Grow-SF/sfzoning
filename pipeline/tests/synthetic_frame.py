@@ -36,7 +36,7 @@ def make_page(h=900, w=1200, phi=1.2, offset=None, bow_top=0.0, arc=0.0, notch=N
     arc: the fillet radius at every corner between two framed sides (tangent to both).
     notch: dict(side="bottom", psi, a0, a1, d): a ruled box cut from the kept region at angle psi, along in [a0, a1)
         and inward distance e < d in the psi-turned frame (the spike's form); `ruled=False` leaves out the rule
-        along its three inner sides.
+        along its three inner sides; `ink` is the share of the box's inside that is ink (default 0.15).
     blocks: a ruled legend (rectangle) and a badge (circle) inside, called "removed block".
     blank_strip: a strip this wide just inside the left side with no ink, which the chances call "outside".
     gap: blank paper this wide (called map) just inside every framed side, between the rule and the map's ink.
@@ -99,7 +99,7 @@ def make_page(h=900, w=1200, phi=1.2, offset=None, bow_top=0.0, arc=0.0, notch=N
         if not notch.get("ruled", True):  # no rule: the strip gets the box's own 15% ink
             strip = np.zeros((h, w), bool)
         ink[strip] = 1
-        ink[N & ~strip & (rng.random((h, w)) < 0.15)] = 1
+        ink[N & ~strip & (rng.random((h, w)) < notch.get("ink", 0.15))] = 1
         K &= ~N
     B = np.zeros((h, w), bool)
     if blocks:
