@@ -716,3 +716,26 @@ owner's eye show a weakness; the test set itself is never trained on and never u
 
 The one number that needs held-out chances, the temperature, comes from a 4-fold split of the training sheets
 (12 small heads), not from the test set.
+
+## Amendment 4, after the straight-line test (owner, 2026-11-21)
+
+- **The owner chose the cut:** "well those straight-line cuts are practically perfect". The straight-line cut ships.
+  The simple cut is no longer a candidate, and the "how decisions are chosen" paragraph above no longer applies to it.
+- **The owner's one complaint:** "the only issue I see is the map label box being a bit wrong".
+- **Measured on the same 22 test sheets, frame and label boxes apart** (pooled):
+  - frame ink left in: 0.24%;
+  - label-box ink left in: 31.5% (boxes are 3.3% of the ink to delete, so one pooled figure hid them);
+  - map ink cut: 0.32%.
+- **The frame fit is therefore kept as it is.** The remaining work is the label boxes, which have two causes:
+  - **the fit:** rectangles take their angle from the model's blob and come out turned by up to 22°, while every
+    labelled box is square to its sheet. Rule: a rectangular box takes the frame's angle; on a page with no framed
+    side, the page's axes;
+  - **the model:** compass roses drawn over the map (chance of deletion 0.00–0.02) and some small badges are not seen
+    at all. That needs training labels, not a different fit.
+- **The test set is a check, not a tuning set.** Fixes are iterated on a dev set: the training sheets, each cut by
+  heads that did not train on it.
+- **The earlier suspicion that paper tint moves the frame's sides is withdrawn:** it was never tested, and the frame
+  is right on the test sheets. The four pages the owner flagged earlier were seen with older heads and settings, and
+  are re-cut with the current model before anything is concluded about them.
+
+Plan: `docs/superpowers/plans/2026-11-21-frame-crop-test-set.md`.
