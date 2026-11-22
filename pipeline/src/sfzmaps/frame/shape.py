@@ -39,7 +39,8 @@ and the same centre rule as `Frame.mask`); the coarse steps warp pooled sums bil
 
 `decide` is the whole decision: the frame from two starts, the removed blocks (`blocks`), the notches (`notches`), the
 frame again given them, the on-paper slide (`paper`) and the blocks re-scored.  Geometry shared by those parts lives
-in `geometry` and is re-exported here.
+in `geometry` and is re-exported here.  Before all of it, every straight printed rule takes one reading, the mean of
+the chances along it (`rules`, amendment 5).
 """
 
 from __future__ import annotations
@@ -58,6 +59,7 @@ from sfzmaps.frame import blocks as blk
 from sfzmaps.frame import decide as pixel
 from sfzmaps.frame import notches as nt
 from sfzmaps.frame import paper
+from sfzmaps.frame import rules
 from sfzmaps.frame.geometry import (  # noqa: F401  (re-exported)
     ARC_MARGIN,
     CORNERS,
@@ -628,6 +630,7 @@ def decide(
     """The shape decision for chances p ((3, h, w): map, outside, removed block) on a page of luminance `lum`:
     (Decision, the frame, its notches, the removed blocks).  In the spike's measured order (finding 2), all on one
     cost field:
+    0. every printed rule's px share the rule's ink-weighted mean chances (`rules.share`), for every cut below;
     1. `frame_search` from two starts, plain and notch-aware;
     2. per start, the blocks (`blocks.block_shapes`), then the notches with the blocks' px zeroed
        (`notches.greedy_notches`);
@@ -641,9 +644,10 @@ def decide(
        are its only holes.
     A page listed with several `maps` keeps the per-pixel decision (`decide.decide`) until such a page is checked.
     `timing`, if given, gets the seconds of each stage.  `cache`, if given, holds the work that does not depend on
-    `params` (the cost field, the plain start, the notch-aware start per lambda_notch, each start's block candidates)
-    for the next call on the same page with other numbers: one dict per page (p and lum), never shared between
-    pages.  The first call stores the page's `fingerprint` in it; a later call with another page raises ValueError."""
+    `params` (the rule labels, the cost field, the plain start, the notch-aware start per lambda_notch, each start's
+    block candidates) for the next call on the same page with other numbers: one dict per page (p and lum), never
+    shared between pages.  The first call stores the page's `fingerprint` (of the caller's p and lum) in it; a later
+    call with another page raises ValueError."""
     timing = {} if timing is None else timing
     if cache is None:
         cache = {}
@@ -651,6 +655,11 @@ def decide(
         fp = fingerprint(p, lum)
         if cache.setdefault("page", fp) != fp:
             raise ValueError("this cache holds another page's work: one cache per page")
+    t = time.perf_counter()
+    if "rules" not in cache:
+        cache["rules"] = rules.rule_labels(lum)
+    p = rules.share(p, lum, cache["rules"])
+    timing["rules"] = time.perf_counter() - t
     if maps > 1:
         log.info("%d maps on the page: the per-pixel decision (the shape fits one map)", maps)
         return pixel.decide(p, lum, maps), Frame(), [], []

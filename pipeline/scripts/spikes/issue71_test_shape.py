@@ -2,6 +2,7 @@
 the 39 training labels (saved by issue71_look39.py), beside the simple cut's scores.  Throwaway; prints as it goes.
 """
 import json
+import os
 import sys
 
 import numpy as np
@@ -12,7 +13,7 @@ from sfzmaps.frame import data, layout, look, scores, shape
 from sfzmaps.frame import run as fr
 
 SRC = data.DATA_DIR / "frame-look39"
-OUT = data.DATA_DIR / "frame-test-shape"
+OUT = data.DATA_DIR / os.environ.get("FRAME_OUT", "frame-test-shape")     # FRAME_OUT: another folder, to keep a run's files
 FEATS = data.OUT
 T = 1.540
 TEST = data.LABELS.parent / "frame-labels-test"

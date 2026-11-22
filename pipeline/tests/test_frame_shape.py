@@ -6,6 +6,7 @@ from scipy import ndimage as ndi
 from synthetic_frame import make_page
 
 from sfzmaps.frame import decide as pixel
+from sfzmaps.frame import rules
 from sfzmaps.frame import shape
 from sfzmaps.frame.blocks import BlockBounds
 
@@ -200,7 +201,7 @@ def test_multi_map_page_keeps_the_per_pixel_decision(caplog):
     lum, p, tr = make_page(blocks=True)
     with caplog.at_level(logging.INFO, logger="sfzmaps.frame.shape"):
         dec, fr, ns, bs = shape.decide(p, lum, FITTED, BOUNDS, maps=2)
-    want = pixel.decide(p, lum, 2)
+    want = pixel.decide(rules.share(p, lum), lum, 2)  # rules are shared on every page, several maps too (amendment 5)
     assert (dec.outside == want.outside).all() and (dec.removed == want.removed).all()
     assert "per-pixel" in caplog.text
 
@@ -246,3 +247,20 @@ def test_cache_refuses_another_page():
         shape.decide(other, lum, FITTED, BOUNDS, cache=cache)
     with pytest.raises(ValueError, match="another page"):
         shape.decide(p[:, :200], lum[:200], FITTED, BOUNDS, cache=cache)
+
+
+def test_a_frame_rule_half_read_as_map_does_not_tilt_the_cut():
+    # a level frame; the chances call the right half of the top rule map (as on 2000-digital-su p11, where the model's
+    # chance of deletion along the top rule fell from 0.97 at its left to 0.17-0.38 at its right)
+    lum, p, tr = make_page(phi=0.0, seed=6)
+    top = int(tr["offset"]["top"])
+    rule = np.zeros(lum.shape, bool)
+    rule[top - 5:top] = lum[top - 5:top] < 0.5  # the 5-px rule just outside the kept region
+    right = rule.copy()
+    right[:, : lum.shape[1] // 2] = False
+    p = p.copy()
+    p[:, right] = np.array([0.8, 0.18, 0.02], np.float32)[:, None]
+    dec, fr, ns, bs = shape.decide(p, lum, FITTED, BOUNDS)
+    assert abs(fr.phi) <= 0.1, fr.phi
+    assert fr.bow["top"] == 0.0 and fr.tilt["top"] == 0.0, (fr.bow["top"], fr.tilt["top"])
+    assert dec.deleted[rule].all(), (~dec.deleted[rule]).sum()  # the whole top rule

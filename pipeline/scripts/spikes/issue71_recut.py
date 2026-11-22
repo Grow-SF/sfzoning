@@ -3,6 +3,7 @@ the 39 training labels, saved by issue71_look39.py) and the straight-line cut at
 these pages have no labels.  Throwaway; prints as it goes.
 """
 import json
+import os
 
 import numpy as np
 import torch
@@ -13,7 +14,7 @@ from sfzmaps.frame import data, layout, look, shape
 from sfzmaps.frame import run as fr
 
 SRC = data.DATA_DIR / "frame-look39"
-OUT = data.DATA_DIR / "frame-recut"
+OUT = data.DATA_DIR / os.environ.get("FRAME_OUT", "frame-recut")     # FRAME_OUT: another folder, to keep a run's files
 T = 1.540
 PARAMS = shape.Params(lam_notch=1e4, beta=3, lam_block=1e3)
 PAGES = [("1975", "20180102114142444-p18"), ("2000-digital-su", "2000-digital-su-p11"), ("1948", "4"),
