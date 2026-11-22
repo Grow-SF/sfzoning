@@ -784,3 +784,59 @@ chance of deletion is over one half. The first is used.
 **Settings.** How long a stroke must run to count (201 px) and how thin it must be (under 61 px) are trial settings,
 not fitted. Halving the length (101 px) gives the same pooled result (0.10% / 0.328%); doubling it (401 px) loses the
 1929 p14 gain (0.18% / 0.322%) and keeps the three fixes above.
+
+## Amendment 6: no cost ratio; the more likely answer wins on measured chances (owner, 2026-11-21)
+
+**The owner:** "The boxes should be aligned with the frame." "The 3x rule is not a rule. You asked me for a threshold
+and I guessed, but I still don't want thresholds." Then, to building a learned replacement: "Yes".
+
+**What goes.** The cost ratio of part 1 (`COST_FRAME = 3`, cut level ¼) has no standing: it was a guess I asked for.
+It is removed. Rectangular label boxes take the frame's angle (built: f2c9dd8).
+
+**What was tried first.** Even odds on the model's own chances (delete what is more likely frame or box than map):
+false label boxes went and map ink cut fell to a quarter, but whole frame rules were left in (frame ink left in 0.10%
+→ 1.13% on the test sheets).
+
+**The measurement that explains it** (48 training sheets, each read by heads that did not train on it;
+`scripts/spikes/issue71_dev.py`). How much of a rule's ink really is frame or box, by the model's mean reading along
+the rule:
+
+| reading | under 5% | 5–15% | 15–25% | 25–35% | 35–45% | 45% and up |
+|---|---:|---:|---:|---:|---:|---:|
+| really frame or box (share of ink) | 0% | 34% | 63% | 87% | 98% | 99–100% |
+
+- The model under-reads rules: a rule read as 30% frame is frame almost nine times in ten. Rules of 1000 px or more
+  read at 15–25% are frame 99.8% of the time.
+- Ink on no rule is read about right: a reading of 45–55% is frame or box 62% of the time.
+- A likely cause, not tested: the layout works in patches about 46 px across with soft targets, so a thin rule shares
+  its patch's reading with the map ink beside it.
+
+**The rule.**
+1. **Rules:** the chance that a whole rule is frame or box is learned from the training sheets, as a function of the
+   model's mean reading along the rule and the rule's length (a logistic fit, each rule weighted by its ink), on
+   chances from heads that did not train on the sheet. On a page, every px of a rule takes its rule's learned chance.
+2. **Other ink:** its chance is learned the same way from the same sheets (a logistic fit of the label on the model's
+   reading).
+3. **The decision:** everything is cut at even odds: ink is deleted where frame-or-box is the more likely answer.
+   There is no cost ratio and no cut level to set.
+4. The split between "outside" and "label box" within the chance of deletion stays as the model gave it.
+
+Nothing here is set by hand: the two fits come from the labels, and refit whenever the labels change.
+
+**Trial on the 22 test sheets** (heads on 48 labels; `scripts/spikes/issue71_learned.py`):
+
+| | frame ink left in | label-box ink left in | map ink cut |
+|---|---:|---:|---:|
+| the 3× guess | 0.14% | 23.2% | 0.277% |
+| learned, even odds | 0.14% | 27.7% | 0.136% |
+
+- No false label box on any test sheet or flagged page; 2000-digital-zoning p11's tilt (−1.58°, cutting 0.19% of its
+  map) is gone.
+- Fitted: chance = sigmoid(−6.03 + 2.17 logit(reading) + 1.46 log(length px)) for rules; for other ink, even odds at
+  a reading of 0.46.
+- Weaker: label boxes are deleted a little less fully (1948/6a's rose 18% → 0%, its title block 83% → 78%).
+
+**Still hand-set, to be dealt with next:** the minimum scores for a label box and for a notch and the weight of a
+notch's border ink (`Params`); how long and thin a rule is (`rules.RUN`, `ACROSS`); the "widened by half" on bounds
+taken from the labels. A blob-level learned chance for label boxes (58 blobs in the training sheets: above a 75% box
+reading 97–100% are real, below it mixed) is the obvious next use of the same idea.
