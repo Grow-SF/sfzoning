@@ -2,7 +2,7 @@
 blocks found as the connected areas it calls "not street".
 
 The target (`data.SheetRasters.block`): 1 where a px lies in today's blocks as placed on the scan, 0 where it doesn't,
-255 unknown (outside the neatline, or another sheet's area).  A px is a street when its block is 0.  These labels are
+255 unknown (outside the frame cut, or another sheet's area).  A px is a street when its block is 0.  These labels are
 noisy: today's alleys and lot gaps cross some printed 1921 blocks, today's blocks spill over some printed streets, and
 the placement is off by a few ft.  The owner's rule the network has to find in the print: the hatching always falls
 inside blocks and never crosses streets.  So it is trained to learn how a street LOOKS, not where today's streets are:
@@ -43,7 +43,7 @@ one-cycle schedule rising to MAX_LR over the first PCT_START of the steps.  Two 
       (`select_checkpoint`), its terms pooled over the fixed held-out tiles.
 
 Blocks (`blocks`): the connected areas (4-connected: px that share a side) where the street probability is at most 1/2
-(the two-class argmax: a block px is one the network calls more likely block than street), inside the neatline.  No
+(the two-class argmax: a block px is one the network calls more likely block than street), inside the frame cut.  No
 size, shape or other rule: every such area is a block.
 
 The districts (`fit_fold`, `train_fold`, `run_districts`; ruling R5): the six district logits and the weight logit,
@@ -636,7 +636,7 @@ def predict_streets(net: model.HatchNet, sheet: data.SheetRasters, tile: int = P
 
 def blocks(street_prob: np.ndarray, crop: np.ndarray) -> np.ndarray:
     """The printed blocks (int32: 0 none, 1.. each block): the 4-connected areas where `street_prob` is at most 1/2,
-    inside the neatline `crop`."""
+    inside the frame cut `crop`."""
     lab, _ = ndimage.label((street_prob <= 0.5) & np.asarray(crop, bool), structure=FOUR)
     return lab.astype(np.int32)
 

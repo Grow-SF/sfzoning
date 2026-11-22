@@ -48,8 +48,9 @@ right-angle cross: m2 = |m2| e^{2 i theta}): the page (turned upright where the 
 `paper_turn`) and the block's major axis (the minimum rotated rectangle of the block's lots in the solver's lot table,
 carried to page px through the placement at the patch's centre).
 
-A patch at a seam is measured once: on the sheet whose neatline (data/solver/1921/page/crops/<sheet>.png, the
-neatline interior less the notes, as the merged page crops it) holds its centre, and where several do, on the one the
+Each sheet is read only inside its frame cut (`sfzmaps frame`: data/frame/1921/<sheet>/outside.png, everything the
+frame finder keeps: the map inside the printed frame, less the legend and title blocks, compass roses and badges).  A
+patch at a seam is measured once: on the sheet whose frame cut holds its centre, and where several do, on the one the
 published map draws on top (`stitch.draw_order`).
 
 Writes, under data/solver/experiments/hatch-regions/:
@@ -79,6 +80,7 @@ import cv2
 import numpy as np
 import pandas as pd
 import shapely
+from PIL import Image
 from scipy import fft as sfft
 from scipy import ndimage
 from scipy.ndimage import map_coordinates
@@ -91,6 +93,8 @@ SERIES = "1921"
 WORK = config.WORK_DIR / SERIES
 WARP = config.DATA_DIR / "warp" / SERIES
 SOLVER_1921 = config.DATA_DIR / "solver" / SERIES     # this series' folders, whatever series the solver is set to
+FRAME = config.DATA_DIR / "frame" / SERIES             # the frame finder's cuts (`sfzmaps frame`)
+FRAME_CUT = "outside.png"                              # its deletion per page: nonzero where it deleted
 EXPERIMENT = config.DATA_DIR / "solver" / "experiments" / "hatch-regions"
 LEGENDS_FILE = config.PIPELINE_DIR / "src" / "sfzmaps" / "districts" / "legends.json"
 SKIP_VIA = ("off_sheet", "no_tile")      # reads of a lot not on the sheet (the reader's own marks)
@@ -491,15 +495,26 @@ def stroke_width(ink: np.ndarray, rings: list[np.ndarray]) -> int:
     return int(vals[np.argmax(counts)])
 
 
-def paper_turn(quad) -> int:
+def paper_turn(crop: np.ndarray) -> int:
     """Quarter turns from the page to the printed sheet upright: every 1921 section is drawn on a portrait sheet (15
-    of the 16 neatlines are taller than wide), so a neatline wider than tall was scanned on its side (20180102100525362,
-    whose 1R lines lie at +45 degrees on the page where the others' lie at -45).  Which way it turned doesn't matter
-    to a line's angle mod 180, nor to a cross's mod 90."""
-    q = np.asarray(quad, float)
-    width = np.hypot(*(q[1] - q[0])) + np.hypot(*(q[2] - q[3]))
-    height = np.hypot(*(q[3] - q[0])) + np.hypot(*(q[2] - q[1]))
-    return int(width > height)
+    of the 16 frame cuts are taller than wide), so a cut wider than tall was scanned on its side (20180102100525362,
+    whose 1R lines lie at +45 degrees on the page where the others' lie at -45).  The cut's width and height are its
+    minimum rotated rectangle's sides, the one nearer the page's x axis being the width.  Which way it turned doesn't
+    matter to a line's angle mod 180, nor to a cross's mod 90."""
+    pts = _crop_outline(crop)
+    if len(pts) < 3:
+        raise ValueError("an empty frame cut has no turn")
+    box = cv2.boxPoints(cv2.minAreaRect(pts.astype(np.float32)))
+    sides = [box[1] - box[0], box[2] - box[1]]
+    flat = max(sides, key=lambda v: abs(v[0]) - abs(v[1]))          # the side nearer the page's x axis
+    tall = sides[1] if flat is sides[0] else sides[0]
+    return int(np.hypot(*flat) > np.hypot(*tall))
+
+
+def _crop_outline(crop: np.ndarray) -> np.ndarray:
+    """Every boundary px (x, y) of a crop's outer outlines, page px."""
+    cs, _ = cv2.findContours(np.asarray(crop, np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    return np.concatenate([c.reshape(-1, 2) for c in cs]) if cs else np.zeros((0, 2), np.int32)
 
 
 # --- page px and the solver's grid ----------------------------------------------------------------------------------
@@ -593,7 +608,7 @@ def patch_grid(shape: tuple[int, int], period: float) -> list[tuple[int, int, in
 
 @dataclass
 class Above:
-    """A sheet drawn above another: its placement, its neatline crop and that crop's bounds in world ft."""
+    """A sheet drawn above another: its placement, its frame cut and that cut's bounds in world ft."""
     transform: object
     crop: np.ndarray
     bbox: tuple[float, float, float, float]
@@ -623,8 +638,8 @@ def _in_crop(crop: np.ndarray, xy: np.ndarray) -> np.ndarray:
 
 
 def owned(centres_px: np.ndarray, centres_world: np.ndarray, crop: np.ndarray, above: list[Above]) -> np.ndarray:
-    """Which patches a sheet writes: those whose centre lies inside its neatline (`crop`, at the centre's nearest px)
-    and inside no neatline of a sheet drawn above it (`above`), so each place is measured once."""
+    """Which patches a sheet writes: those whose centre lies inside its frame cut (`crop`, at the centre's nearest
+    px) and inside no frame cut of a sheet drawn above it (`above`), so each place is measured once."""
     ok = _in_crop(crop, np.asarray(centres_px, float))
     cw = np.asarray(centres_world, float)
     for t in above:
@@ -702,25 +717,25 @@ def page_axes(pw: PageWorld, centres_px: np.ndarray, axis_world: np.ndarray) -> 
 
 @dataclass(frozen=True)
 class Sources:
-    """Where the run reads: the pages, reads and printed blocks (work), the placements (warp), the solver's 1921 page
-    and lots (solver), and the legend's swatch boxes."""
+    """Where the run reads: the pages, reads and printed blocks (work), the placements (warp), the solver's 1921 lots
+    (solver), the legend's swatch boxes and the frame finder's cuts (frame)."""
     work: Path
     warp: Path
     solver: Path
     legends: Path
+    frame: Path
 
 
 def sources() -> Sources:
-    return Sources(Path(WORK), Path(WARP), Path(SOLVER_1921), Path(LEGENDS_FILE))
+    return Sources(Path(WORK), Path(WARP), Path(SOLVER_1921), Path(LEGENDS_FILE), Path(FRAME))
 
 
 def sheet_names(src: Sources) -> list[str]:
-    """The sheets with a page, the pattern reader's reads, printed blocks, a placement and a neatline crop."""
-    frames = json.loads((src.solver / "page" / "frames.json").read_text())
+    """The sheets with a page, the pattern reader's reads, printed blocks, a placement and a frame cut."""
     out = []
     for d in sorted(p for p in src.work.iterdir() if p.is_dir()):
         if all((d / f).is_file() for f in ("page.png", "district_pattern.json", "blocks_px.geojson")) and \
-                (src.warp / d.name / "transform.json").is_file() and d.name in frames:
+                (src.warp / d.name / "transform.json").is_file() and (src.frame / d.name / FRAME_CUT).is_file():
             out.append(d.name)
     return out
 
@@ -741,21 +756,28 @@ def load_page(src: Sources, sheet: str) -> np.ndarray:
     return (pg < INK_BELOW).astype(np.uint8)
 
 
+def page_shape(src: Sources, sheet: str) -> tuple[int, int]:
+    """(rows, cols) of the sheet's page.png as scanned, from its header."""
+    with Image.open(src.work / sheet / "page.png") as im:
+        w, h = im.size
+    return h, w
+
+
 def load_transform(src: Sources, sheet: str) -> SheetTransform:
     folder = src.warp / sheet
     return SheetTransform.from_json(json.loads((folder / "transform.json").read_text()), folder=folder)
 
 
-def load_crop(src: Sources, sheet: str, shape, quad) -> np.ndarray:
-    """The sheet's neatline interior less its notes, as the merged page crops it (page/crops/<sheet>.png); the quad of
-    frames.json when there is no crop file."""
-    f = src.solver / "page" / "crops" / f"{sheet}.png"
-    if f.is_file():
-        crop = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE) > 0
-        if crop.shape != tuple(shape):
-            raise ValueError(f"{f} is {crop.shape}, its page {tuple(shape)}")
-        return crop
-    return page.crop_mask(tuple(shape), np.asarray(quad, float), [])
+def load_crop(frame: Path, sheet: str, shape) -> np.ndarray:
+    """The page px the frame finder keeps on the sheet (`frame`/<sheet>/outside.png is zero there): the map inside
+    the printed frame, less the legend and title blocks, compass roses and badges it deleted."""
+    f = Path(frame) / sheet / FRAME_CUT
+    cut = cv2.imread(str(f), cv2.IMREAD_GRAYSCALE)
+    if cut is None:
+        raise FileNotFoundError(f"can't read {f}: run `sfzmaps frame`")
+    if cut.shape != tuple(shape):
+        raise ValueError(f"{f} is {cut.shape}, its page {tuple(shape)}")
+    return cut == 0
 
 
 def printed_rings(src: Sources, sheet: str) -> list[np.ndarray]:
@@ -780,7 +802,7 @@ def reads_1r(src: Sources, sheet: str) -> set[str]:
     return out
 
 
-def legend_scale(src: Sources, frames: dict) -> dict:
+def legend_scale(src: Sources) -> dict:
     """The legend's measures (`LEGENDS_FILE`'s swatch boxes on its sheet): its sheet's outline stroke, each hatched
     swatch's period and the angle of its strongest wave (`hatch_peak` from Nyquist, inside the box shrunk by the
     stroke), the finest of those periods and the hatch band's low end (half of it), and 1R's line angle on the sheet
@@ -799,7 +821,7 @@ def legend_scale(src: Sources, frames: dict) -> dict:
         regions[code] = ink[y0 + stroke:y1 - stroke, x0 + stroke:x1 - stroke].astype(np.float64)
         swatches[code] = hatch_peak(regions[code], np.ones(regions[code].shape, bool), taper=stroke)
     finest = min(v["period"] for v in swatches.values())
-    turn = paper_turn(frames[sheet])
+    turn = paper_turn(load_crop(src.frame, sheet, ink.shape))
     one = regions["1R"]
     sp = spectrum(one, np.ones(one.shape, bool), Frame(period=swatches["1R"]["period"], low=finest / 2, taper=stroke))
     angle = float(np.degrees(np.angle(sp["m2"]) / 2)) + 90.0 * turn
@@ -889,25 +911,25 @@ def outline_mask(ink: np.ndarray, rings: list[np.ndarray], stroke: int, in_block
 def inblock_mask(in_blocks: np.ndarray, ink: np.ndarray, rings: list[np.ndarray], stroke: int,
                  crop: np.ndarray) -> np.ndarray:
     """The page px a patch measures: in a block by the solver's lots (`in_blocks`, eroded by the stroke), inside the
-    neatline (`crop`) and off the printed block outlines found on the scan itself (`outline_mask`), so the outlines
+    frame cut (`crop`) and off the printed block outlines found on the scan itself (`outline_mask`), so the outlines
     stay out however far the lots sit from the print, and a block's hatch stays in."""
     eroded = cv2.erode(np.asarray(in_blocks, np.uint8), disk(int(stroke))).astype(bool)
     return eroded & np.asarray(crop, bool) & ~outline_mask(ink, rings, stroke, in_blocks)
 
 
-def _setup(src: Sources, sheet: str, quad, lots: np.ndarray, blocks: np.ndarray, offset) -> dict:
-    """A sheet's page, placement, neatline, lot of every px, outline stroke and in-block mask (`inblock_mask`: the page
+def _setup(src: Sources, sheet: str, lots: np.ndarray, blocks: np.ndarray, offset) -> dict:
+    """A sheet's page, placement, frame cut, lot of every px, outline stroke and in-block mask (`inblock_mask`: the page
     px whose grid px is in a block, `blocks` being the lots with their enclosed holes)."""
     ink = load_page(src, sheet)
     tr = load_transform(src, sheet)
-    crop = load_crop(src, sheet, ink.shape, quad)
+    crop = load_crop(src.frame, sheet, ink.shape)
     pw = PageWorld(tr, ink.shape)
     lot_px, in_blocks = page_values(pw, ink.shape, [(lots, -1), (blocks.astype(np.uint8), 0)], offset)
     rings = printed_rings(src, sheet)
     stroke = stroke_width(ink, rings)
     inblock = inblock_mask(in_blocks, ink, rings, stroke, crop)
     return {"ink": ink, "tr": tr, "crop": crop, "pw": pw, "lot_px": lot_px, "stroke": stroke, "inblock": inblock,
-            "turn": paper_turn(quad)}
+            "turn": paper_turn(crop)}
 
 
 def _init_worker():
@@ -916,9 +938,9 @@ def _init_worker():
 
 def scale_job(job) -> dict:
     """Pass 1, one sheet: its stroke, its 1R period (`sheet_period`), its turn, ft per px and the world bounds of its
-    neatline."""
-    sheet, src, quad, lots, blocks, offset, is1r, low, line_angle_1r = job
-    s = _setup(src, sheet, quad, lots, blocks, offset)
+    frame cut."""
+    sheet, src, lots, blocks, offset, is1r, low, line_angle_1r = job
+    s = _setup(src, sheet, lots, blocks, offset)
     lot_px = s["lot_px"]
     mask = s["inblock"] & (lot_px >= 0)
     mask[mask] = is1r[lot_px[mask]]
@@ -934,14 +956,14 @@ def scale_job(job) -> dict:
 def patch_job(job) -> dict:
     """Pass 2, one sheet: every patch it owns (`owned`), measured (`measure_patch`) with its lots' shares
     (`patch_lots`); writes patches/<sheet>.parquet and patch_lots/<sheet>.parquet."""
-    (sheet, src, quad, lots, blocks, offset, scale, period, low, line_angle_1r, pieces, piece_of, above,
+    (sheet, src, lots, blocks, offset, scale, period, low, line_angle_1r, pieces, piece_of, above,
      out) = job
-    s = _setup(src, sheet, quad, lots, blocks, offset)
+    s = _setup(src, sheet, lots, blocks, offset)
     ink, pw, lot_px, inblock, turn = s["ink"], s["pw"], s["lot_px"], s["inblock"], s["turn"]
     boxes = np.array(patch_grid(ink.shape, period), np.int64).reshape(-1, 4)
     centres = (boxes[:, :2] + boxes[:, 2:]) / 2.0 - 0.5          # px centres sit at integers
     world = pw.at(centres)
-    tops = [Above.of(load_transform(src, a), load_crop(src, a, shp, q)) for a, q, shp in above]
+    tops = [Above.of(load_transform(src, a), load_crop(src.frame, a, shp)) for a, shp in above]
     mine = owned(centres, world, s["crop"], tops)
     wave_1r = np.radians(line_angle_1r - 90.0 * turn) + np.pi / 2
     stack = morph_stack(ink)
@@ -1021,8 +1043,20 @@ def _map(fn, jobs, workers: int):
         return list(pool.imap_unordered(fn, jobs))
 
 
-def _slice(tr, quad, shape) -> tuple[int, int, int, int]:
-    return page.grid_box(tr, np.asarray(quad, float), shape)
+def _slice(tr, crop: np.ndarray, shape) -> tuple[int, int, int, int]:
+    """The grid rows and columns (r0, r1, c0, c1, ends exclusive) a sheet's frame cut can reach: every boundary px of
+    its outer outlines carried to the grid by its placement, `page.STEP` px wider each way, inside a grid of
+    `shape`."""
+    cr = grid.to_grid(tr.to_world(_crop_outline(crop).astype(float)))
+    cr = cr[np.isfinite(cr).all(axis=1)]
+    if not len(cr):
+        return 0, 0, 0, 0
+    rows, cols = shape
+    r0 = max(0, int(np.floor(cr[:, 1].min())) - page.STEP)
+    r1 = min(rows, int(np.ceil(cr[:, 1].max())) + page.STEP)
+    c0 = max(0, int(np.floor(cr[:, 0].min())) - page.STEP)
+    c1 = min(cols, int(np.ceil(cr[:, 0].max())) + page.STEP)
+    return r0, r1, c0, c1
 
 
 def run(out: Path, workers: int, only: list[str] | None = None) -> dict:
@@ -1032,18 +1066,18 @@ def run(out: Path, workers: int, only: list[str] | None = None) -> dict:
     names = sheet_names(src)
     if not names:
         raise FileNotFoundError(f"no 1921 sheets with pages, reads, printed blocks and placements under {src.work}")
-    frames = json.loads((src.solver / "page" / "frames.json").read_text())
     order = draw_order(names)
     with np.load(src.solver / "lots" / "lots.npz") as z:
         lots = z["lot"]
     table = pd.read_parquet(src.solver / "lots" / "table.parquet", columns=["blklot", "block_num", "geometry"])
     blocks = ndimage.binary_fill_holes(lots >= 0)
     pieces, piece_of = block_pieces(table)
-    legend = legend_scale(src, frames)
+    legend = legend_scale(src)
     blklots = table["blklot"].astype(str).to_numpy()
     boxes = {}
     for s in names:
-        boxes[s] = _slice(load_transform(src, s), frames[s], lots.shape)
+        tr = load_transform(src, s)
+        boxes[s] = _slice(tr, load_crop(src.frame, s, page_shape(src, s)), lots.shape)
 
     def cut(s):
         r0, r1, c0, c1 = boxes[s]
@@ -1052,7 +1086,7 @@ def run(out: Path, workers: int, only: list[str] | None = None) -> dict:
     jobs = []
     for s in names:
         lot_s, blk_s, off = cut(s)
-        jobs.append((s, src, frames[s], lot_s, blk_s, off, np.isin(blklots, list(reads_1r(src, s))), legend["low"],
+        jobs.append((s, src, lot_s, blk_s, off, np.isin(blklots, list(reads_1r(src, s))), legend["low"],
                      legend["line_angle_1r"]))
     scales = {r["sheet"]: r for r in _map(scale_job, jobs, workers)}
     measured = {s: (v["period_measured"], v["ft_per_px"]) for s, v in scales.items()
@@ -1075,8 +1109,8 @@ def run(out: Path, workers: int, only: list[str] | None = None) -> dict:
         for a in order[order.index(s) + 1:]:
             ab = scales[a]["bbox"]
             if ab[0] <= sb[2] and ab[2] >= sb[0] and ab[1] <= sb[3] and ab[3] >= sb[1]:
-                above.append((a, frames[a], tuple(scales[a]["shape"])))
-        jobs.append((s, src, frames[s], lot_s, blk_s, off, scales[s], periods[s], legend["low"],
+                above.append((a, tuple(scales[a]["shape"])))
+        jobs.append((s, src, lot_s, blk_s, off, scales[s], periods[s], legend["low"],
                      legend["line_angle_1r"], pieces, piece_of, above, out))
     jobs.sort(key=lambda j: -int(np.prod(scales[j[0]]["shape"])))
     out.mkdir(parents=True, exist_ok=True)

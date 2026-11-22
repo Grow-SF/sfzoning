@@ -70,20 +70,16 @@ def scan(seed: int = 0) -> np.ndarray:
     return pg
 
 
-def write_sheet(root, sheet: str, page: np.ndarray, tr: SheetTransform, quad, crop: np.ndarray, reads=()):
+def write_sheet(root, sheet: str, page: np.ndarray, tr: SheetTransform, crop: np.ndarray, reads=()):
     d = root / "work" / SERIES / sheet
     d.mkdir(parents=True)
     cv2.imwrite(str(d / "page.png"), page)
     (d / "transform.json").write_text(json.dumps(tr.to_json()))
     parcels = [{"blklot": b, "code": c, "confidence": p, "via": v} for b, c, p, v in reads]
     (d / "district_pattern.json").write_text(json.dumps({"series": SERIES, "sheet": sheet, "parcels": parcels}))
-    crops = root / "solver" / SERIES / "page" / "crops"
-    crops.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(crops / f"{sheet}.png"), crop.astype(np.uint8) * 255)
-    f = root / "solver" / SERIES / "page" / "frames.json"
-    frames = json.loads(f.read_text()) if f.is_file() else {}
-    frames[sheet] = [[float(a), float(b)] for a, b in quad]
-    f.write_text(json.dumps(frames))
+    cut = root / "frame" / SERIES / sheet                 # the frame finder's cut: nonzero where it deleted
+    cut.mkdir(parents=True)
+    cv2.imwrite(str(cut / hatching.FRAME_CUT), np.where(crop, 0, 255).astype(np.uint8))
 
 
 def write_lots(root):
@@ -126,12 +122,7 @@ def sources(root, order=None) -> data.Sources:
     return data.Sources(series=SERIES, work=root / "work" / SERIES, solver=root / "solver" / SERIES,
                         legends=root / "legends.json", answers=root / "answers", cases=root / "cases",
                         parcels=parcels if parcels.is_file() else None, order=tuple(order) if order else None,
-                        streets=streets if streets.is_file() else None)
-
-
-def upright_quad(shape=PAGE):
-    h, w = shape
-    return [(INSET, INSET), (w - 1 - INSET, INSET), (w - 1 - INSET, h - 1 - INSET), (INSET, h - 1 - INSET)]
+                        streets=streets if streets.is_file() else None, frame=root / "frame" / SERIES)
 
 
 def upright_crop(shape=PAGE):
@@ -147,9 +138,9 @@ def two_sheets(root, reads_a=(), reads_c=(), page_a=None, page_c=None):
     """Sheets A (world x 20-130 ft) and C (80-190 ft) side by side, overlapping 50 ft; C is drawn above A.  Their
     pages are `scan(0)` and `scan(1)` unless given."""
     write_lots(root)
-    write_sheet(root, "sheetA", scan(0) if page_a is None else page_a, placement(PAGE, A_FT), upright_quad(),
+    write_sheet(root, "sheetA", scan(0) if page_a is None else page_a, placement(PAGE, A_FT),
                 upright_crop(), reads_a)
-    write_sheet(root, "sheetC", scan(1) if page_c is None else page_c, placement(PAGE, C_FT), upright_quad(),
+    write_sheet(root, "sheetC", scan(1) if page_c is None else page_c, placement(PAGE, C_FT),
                 upright_crop(), reads_c)
     return sources(root, order=("sheetA", "sheetC"))
 
@@ -165,7 +156,7 @@ def lot_box(i: int, x_ft: float, pad: int = 3) -> tuple[slice, slice]:
 def lot_px_on(src, sheet: str, i: int) -> np.ndarray:
     """Where lot i lies on the sheet's page inside its neatline (the solver's lot raster read at every page px through
     the placement): its px, whichever sheet owns them."""
-    sh = data.load_sheet(src, sheet, data.frames(src)[sheet])
+    sh = data.load_sheet(src, sheet)
     lot, _ = data.solver_grid(src)
     (v,) = hatching.page_values(hatching.PageWorld(sh.transform, sh.shape), sh.shape, [(lot, -1)])
     return (v == i) & sh.crop
@@ -197,12 +188,10 @@ def test_turned_sheet_matches_upright(tmp_path):
     for root in (up, side):
         write_lots(root)
         write_streets(root)
-    write_sheet(up, "sheet", page, placement(PAGE, 20.37), upright_quad(), upright_crop())
+    write_sheet(up, "sheet", page, placement(PAGE, 20.37), upright_crop())
     h, w = PAGE
-    turned_quad = [(h - 1 - y, x) for x, y in upright_quad()]          # upright px (x, y) -> turned (h-1-y, x)
-    turned_quad = turned_quad[3:] + turned_quad[:3]                      # still top-left first
     write_sheet(side, "sheet", np.ascontiguousarray(np.rot90(page, -1)), placement_turned(PAGE, 20.37),
-                turned_quad, np.rot90(upright_crop(), -1))
+                np.rot90(upright_crop(), -1))
     a = data.load_scan(SERIES, "sheet", sources(up))
     b = data.load_scan(SERIES, "sheet", sources(side))
     assert a.dtype == np.float32 and a.shape == PAGE

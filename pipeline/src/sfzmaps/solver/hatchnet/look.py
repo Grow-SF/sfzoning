@@ -3,13 +3,13 @@
   streets   the learned streets and blocks: the scan in grey; each px tinted orange by its street probability (the
             target pictures' colour for not-a-block, so the two read alike); each block (`train.blocks`) filled faintly
             and outlined in its own colour, so two printed blocks that came out as one show one colour; outside the
-            neatline grey (no blocks there).  Whole, at the scan's own px, and a zoom (data.ZOOM x, nearest: each scan
+            frame cut grey (no blocks there).  Whole, at the scan's own px, and a zoom (data.ZOOM x, nearest: each scan
             px a square)
   compare   the zoom side by side: the target (today's blocks placed on the scan, as `data.look_targets` draws it)
             and what was learned
   district_lots  the learned districts by lot: every lot in its pooled district's colour (DISTRICT_BGR), at opacity =
             its pooled probability, multiplied into the scan so the print stays readable; whole, and a zoom
-  districts the learned per-px evidence: every px inside the neatline tinted in its own district argmax's colour, the
+  districts the learned per-px evidence: every px inside the frame cut tinted in its own district argmax's colour, the
             tint's strength the px's learned pooling weight (`weight_strength`: strong where the px counts most in its
             lot, pale where it is discounted, so its argmax hardly counts); the banner gives the lots' weight-mass
             shares; whole, and a zoom
@@ -116,14 +116,14 @@ def _held_share(window, cell: int | None) -> float | None:
 
 
 LEGEND = ["orange: learned street probability (stronger = surer)   each colour: one learned block, outlined",
-          "grey: outside the neatline (no blocks there)"]
+          "grey: outside the frame cut (no blocks there)"]
 
 
 def _head(sheet: data.SheetRasters, blocks: np.ndarray, short: bool = False) -> str:
     if short:
         return f"{sheet.sheet}  {sheet.ft_per_px:.2f} ft/px  learned streets and blocks ({int(blocks.max())} blocks)"
     return (f"{sheet.sheet}  {sheet.ft_per_px:.2f} ft/px  learned streets and blocks ({int(blocks.max())} blocks: "
-            f"street probability <= 1/2 inside the neatline, 4-connected)")
+            f"street probability <= 1/2 inside the frame cut, 4-connected)")
 
 
 def held_window(sheet: data.SheetRasters, cell: int) -> tuple[int, int]:
@@ -211,8 +211,8 @@ def overview(sheet: data.SheetRasters, street_prob: np.ndarray, blocks: np.ndarr
              for a in (target(sheet), learned(sheet, street_prob, blocks, palette(int(blocks.max()))))]
     gap = np.full((small[0].shape[0], 16, 3), 255, np.uint8)
     head = [f"{sheet.sheet}  {sheet.ft_per_px:.2f} ft/px  {int(blocks.max())} learned blocks  {note}",
-            "left TARGET: blue today's blocks, orange not a block, grey unknown (another sheet's or off the neatline)",
-            "right LEARNED: orange street probability, each colour one block, grey off the neatline"]
+            "left TARGET: blue today's blocks, orange not a block, grey unknown (another sheet's or off the frame cut)",
+            "right LEARNED: orange street probability, each colour one block, grey off the frame cut"]
     f = out / f"overview_{sheet.sheet}.png"
     cv2.imwrite(str(f), _banner(np.hstack([small[0], gap, small[1]]), head, 0.9))
     return f
@@ -244,7 +244,7 @@ INK_GREY = 0.3                     # ink drawn this grey (paper white) under the
 
 def weight_strength(sheet: data.SheetRasters, weight: np.ndarray) -> np.ndarray:
     """Each px's weight shown as a strength in (0, 1): sigmoid(weight - the median weight of the sheet's lot px in the
-    neatline).  A lot pools its px in proportion to exp(weight), so a px 3 above the median counts 20 times a median
+    frame cut).  A lot pools its px in proportion to exp(weight), so a px 3 above the median counts 20 times a median
     px (strength 0.95) and one 3 below a twentieth (0.05)."""
     ref = np.asarray(sheet.crop, bool) & (sheet.lot >= 0)
     if not ref.any():
@@ -254,8 +254,8 @@ def weight_strength(sheet: data.SheetRasters, weight: np.ndarray) -> np.ndarray:
 
 
 def district_tint(sheet: data.SheetRasters, argmax: np.ndarray, weight: np.ndarray) -> np.ndarray:
-    """The scan (ink drawn INK_GREY) with every px inside the neatline tinted in its district's colour, the tint's
-    opacity from TINT_LOW (least weight) to TINT_HIGH (most), and grey outside the neatline (float32 BGR)."""
+    """The scan (ink drawn INK_GREY) with every px inside the frame cut tinted in its district's colour, the tint's
+    opacity from TINT_LOW (least weight) to TINT_HIGH (most), and grey outside the frame cut (float32 BGR)."""
     img = _grey(INK_GREY + (1.0 - INK_GREY) * sheet.ink)
     crop = np.asarray(sheet.crop, bool)
     colours = np.array([DISTRICT_BGR[n] for n in model.NAMES], np.float32)
@@ -307,7 +307,7 @@ def _write(base: np.ndarray, sheet: data.SheetRasters, out: Path, name: str, at,
 
 DISTRICT_LEGEND = ["colour: each px's own district argmax; strength: its learned pooling weight",
                    "strong = counts most in its lot; pale = discounted: its colour hardly counts",
-                   "px in no lot (streets; areas another sheet labels): never trained; grey: off the neatline"]
+                   "px in no lot (streets; areas another sheet labels): never trained; grey: off the frame cut"]
 
 
 def districts(sheet: data.SheetRasters, argmax: np.ndarray, weight: np.ndarray, out: Path, at=None,
@@ -330,7 +330,7 @@ LOT_INK = 0.45                     # ink drawn this grey under the lots' multipl
 def district_lots_tint(sheet: data.SheetRasters, code: np.ndarray, prob: np.ndarray) -> np.ndarray:
     """The scan (ink drawn LOT_INK grey) with every lot px in its lot's pooled district colour at opacity = the lot's
     pooled probability, in a multiply blend (colour x scan, so ink stays darker than paper and the print readable); px
-    of no lot as scanned; grey outside the neatline (float32 BGR).  `code` (h, w): the lot's district index, -1 none;
+    of no lot as scanned; grey outside the frame cut (float32 BGR).  `code` (h, w): the lot's district index, -1 none;
     `prob` (h, w)."""
     img = _grey(LOT_INK + (1.0 - LOT_INK) * sheet.ink)
     colours = np.array([DISTRICT_BGR[n] for n in model.NAMES], np.float32)
@@ -345,7 +345,7 @@ def district_lots_tint(sheet: data.SheetRasters, code: np.ndarray, prob: np.ndar
 
 LOTS_LEGEND = ["each lot: its pooled district (its px on this sheet, the learned weights softmaxed over the lot)",
                "opacity = the pooled probability (multiply blend over the scan: ink stays darker)",
-               "px in no lot (streets; areas another sheet labels): as scanned; grey: off the neatline"]
+               "px in no lot (streets; areas another sheet labels): as scanned; grey: off the frame cut"]
 
 
 def district_lots(sheet: data.SheetRasters, code: np.ndarray, prob: np.ndarray, out: Path, at=None,
@@ -372,7 +372,7 @@ SEAM_REACH = 60                    # px: a seam is drawn only this near a lot (n
 def quarter_seams(sheet: data.SheetRasters, quarter: np.ndarray) -> np.ndarray:
     """(h, w) bool: where the lots' quarters meet on the sheet, SEAM_WIDTH px wide: every px takes the quarter of its
     nearest lot px (`quarter` (h, w): each lot px's quarter index, -1 off the lots) and the seam is where that changes,
-    inside the neatline, on the sheet's own area and within SEAM_REACH px of a lot."""
+    inside the frame cut, on the sheet's own area and within SEAM_REACH px of a lot."""
     on = quarter >= 0
     if not on.any():
         return np.zeros(quarter.shape, bool)

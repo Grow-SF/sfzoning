@@ -7,7 +7,7 @@ Per sheet (`sheet_rasters`), in the scan's own px, turned upright:
              scan's Rec. 601 luma), every px exactly as scanned: nothing erased, cleaned, masked or thresholded
   block      the target of the learned street output: 1 where the px lies in today's blocks (the solver's lots with
              their enclosed holes filled: `binary_fill_holes(lot >= 0)` on the whole grid), 0 where it doesn't (a
-             street, or no lot), 255 (unknown) outside the sheet's neatline and on the area another sheet owns (R9,
+             street, or no lot), 255 (unknown) outside the sheet's frame cut and on the area another sheet owns (R9,
              below), so each place is labelled once
   street     the street labels (`street_labels`, on the solver's grid, carried to the page as `block` is): 1 street,
              where the px is off today's blocks, within the learned half-widths of its nearest centre line and short of
@@ -20,19 +20,20 @@ Per sheet (`sheet_rasters`), in the scan's own px, turned upright:
              page through the placement (`page_centres`), kept on street px of this sheet's own area
   lot        the solver lot index of the px (`lots.npz` `lot`, 4 ft grid px), -1 where none and wherever `block` is
              255 (each lot's px are pooled on one sheet only)
-  crop       the neatline interior less the notes, as the merged page crops it (`hatching.load_crop`)
+  crop       the frame cut: the page px the frame finder keeps (`sfzmaps frame`, `hatching.load_crop`), the map
+             inside the printed frame less the legend and title blocks, compass roses and badges
   ft_per_px  the placement's median scale (`SheetTransform.median_scale_ft_per_px`): measured on the placement, never
              on the reads
 
 The placement is `data/work/<series>/<sheet>/transform.json` (the one the reads were made through; the warp's correction
 in data/warp bends straight print), read as the merged page reads a sheet: `hatching.PageWorld` (the placement every
 LATTICE px, bilinear between) and `hatching.page_values`.  Which sheet owns a px (ruling R9, `owned_px`): a place inside
-several sheets' neatlines belongs to the sheet that prints it.  On one of today's blocks (`block_ids`: each connected
-piece of the filled lots), each sheet whose neatline holds some of the block is measured by its mean ink over the
-block's px on its page inside its neatline (`BlockInk`: 1 - luminance), and every px of the block goes to the sheet
+several sheets' frame cuts belongs to the sheet that prints it.  On one of today's blocks (`block_ids`: each
+connected piece of the filled lots), each sheet whose frame cut holds some of the block is measured by its mean ink over
+the block's px on its page inside its frame cut (`BlockInk`: 1 - luminance), and every px of the block goes to the sheet
 with the most ink that holds it (argmax, no threshold; a tie to the sheet drawn higher); a block on one sheet keeps
 it.  A px on no block (streets, water) keeps the draw-order rule: the sheet drawn highest (the published draw order,
-`stitch.draw_order`) whose neatline holds it, as `hatching.owned` says for points.  A px is carried to another sheet's
+`stitch.draw_order`) whose frame cut holds it, as `hatching.owned` says for points.  A px is carried to another sheet's
 page by that sheet's inverse placement at the lattice nodes, bilinear between (the same lattice).  A sheet scanned on
 its side (`hatching.paper_turn`) is turned back by its quarter turn, which is lossless (`turn_of`); every raster is
 computed in the scan's own px and turned with it.
@@ -105,10 +106,11 @@ ANSWER_PAGES = {"1921": answers1921.PAGES}     # the owner's answer pages per se
 
 @dataclass(frozen=True)
 class Sources:
-    """Where a series is read: the pages, placements and reads (work), the neatlines and the solver's lots (solver),
-    the legend's swatch boxes, the owner's answers and their case files, today's parcels (None: reads of parcels the
-    solver's table lacks are not placed); `order`: the draw order, bottom first (None: the published map's); today's
-    street centre lines (None: none, so every px off today's blocks is ignored)."""
+    """Where a series is read: the pages, placements and reads (work), the solver's lots (solver), the legend's
+    swatch boxes, the owner's answers and their case files, today's parcels (None: reads of parcels the solver's table
+    lacks are not placed); `order`: the draw order, bottom first (None: the published map's); today's street centre
+    lines (None: none, so every px off today's blocks is ignored); the frame finder's cuts (`sfzmaps frame`; None:
+    data/frame/<series>)."""
     series: str
     work: Path
     solver: Path
@@ -118,6 +120,11 @@ class Sources:
     parcels: Path | None = None
     order: tuple[str, ...] | None = None
     streets: Path | None = None
+    frame: Path | None = None
+
+    @property
+    def frames(self) -> Path:
+        return self.frame if self.frame is not None else config.DATA_DIR / "frame" / self.series
 
 
 def sources(series: str) -> Sources:
@@ -159,10 +166,6 @@ def load_transform(src: Sources, sheet: str) -> SheetTransform:
     return SheetTransform.from_json(json.loads((folder / "transform.json").read_text()), folder=folder)
 
 
-def frames(src: Sources) -> dict:
-    return json.loads((src.solver / "page" / "frames.json").read_text())
-
-
 def page_shape(src: Sources, sheet: str) -> tuple[int, int]:
     """(rows, cols) of the sheet's page.png as scanned, from its header."""
     with Image.open(src.work / sheet / "page.png") as im:
@@ -170,12 +173,12 @@ def page_shape(src: Sources, sheet: str) -> tuple[int, int]:
     return h, w
 
 
-def turn_of(quad, transform, shape: tuple[int, int]) -> int:
+def turn_of(crop: np.ndarray, transform, shape: tuple[int, int]) -> int:
     """The `np.rot90` k that turns a scan upright: 0 for a sheet scanned upright; for one scanned on its side
-    (`hatching.paper_turn`: its neatline wider than tall), the quarter turn, anticlockwise (1: its right edge comes to
+    (`hatching.paper_turn`: its frame cut wider than tall), the quarter turn, anticlockwise (1: its right edge comes to
     the top) or clockwise (3: its left edge), that brings the sheet's north nearer the top, as on the upright sheets
     (from its placement at the page's centre)."""
-    if hatching.paper_turn(quad) == 0:
+    if hatching.paper_turn(crop) == 0:
         return 0
     h, w = shape
     c = np.array([[(w - 1) / 2.0, (h - 1) / 2.0]])
@@ -206,7 +209,7 @@ def load_scan(series: str, sheet: str, src: Sources | None = None) -> np.ndarray
     """The sheet's page as scanned (`load_luminance`), turned upright (`turn_of`)."""
     src = src or sources(series)
     lum = load_luminance(src.work / sheet / "page.png")
-    k = turn_of(frames(src)[sheet], load_transform(src, sheet), lum.shape)
+    k = turn_of(hatching.load_crop(src.frames, sheet, lum.shape), load_transform(src, sheet), lum.shape)
     return np.ascontiguousarray(np.rot90(lum, k))
 
 
@@ -214,10 +217,9 @@ def load_scan(series: str, sheet: str, src: Sources | None = None) -> np.ndarray
 
 @dataclass
 class Sheet:
-    """A sheet's geometry in its scanned px: the neatline quad, the page shape, the placement, the neatline crop and
-    the crop's world bounds (ft)."""
+    """A sheet's geometry in its scanned px: the page shape, the placement, the frame cut and the cut's world bounds
+    (ft)."""
     name: str
-    quad: list
     shape: tuple[int, int]
     transform: SheetTransform
     crop: np.ndarray
@@ -227,27 +229,29 @@ class Sheet:
         return hatching.Above(self.transform, self.crop, self.bbox)
 
 
-def load_sheet(src: Sources, name: str, quad) -> Sheet:
+def load_sheet(src: Sources, name: str) -> Sheet:
     shape = page_shape(src, name)
     tr = load_transform(src, name)
-    crop = hatching.load_crop(src, name, shape, quad)
-    return Sheet(name, quad, shape, tr, crop, hatching.crop_bbox(tr, crop))
+    crop = hatching.load_crop(src.frames, name, shape)
+    return Sheet(name, shape, tr, crop, hatching.crop_bbox(tr, crop))
 
 
 def sheet_names(src: Sources) -> list[str]:
-    """The map sheets: a page, a placement (data/work) and a neatline (frames.json)."""
-    fr = frames(src)
+    """The map sheets: a page, a placement (data/work) and a frame cut (`sfzmaps frame`)."""
     return [d.name for d in sorted(p for p in src.work.iterdir() if p.is_dir())
-            if (d / "page.png").is_file() and (d / "transform.json").is_file() and d.name in fr]
+            if (d / "page.png").is_file() and (d / "transform.json").is_file() and _has_cut(src, d.name)]
+
+
+def _has_cut(src: Sources, sheet: str) -> bool:
+    return (src.frames / sheet / hatching.FRAME_CUT).is_file()
 
 
 def not_used(src: Sources) -> dict[str, list[str]]:
     """The series' folders that are not map sheets, with what they lack."""
-    fr = frames(src)
     out = {}
     for d in sorted(p for p in src.work.iterdir() if p.is_dir()):
         miss = [f for f in ("page.png", "transform.json") if not (d / f).is_file()]
-        if d.name not in fr:
+        if not _has_cut(src, d.name):
             miss.append("frame")
         if miss:
             out[d.name] = miss
@@ -270,7 +274,7 @@ def overlaps(a: Sheet, b: Sheet) -> bool:
 
 
 def overlapping(name: str, order: list[str], sheets: dict[str, Sheet]) -> list[Sheet]:
-    """The other sheets, drawn below or above `name`, whose neatlines' bounds meet its own (bottom first)."""
+    """The other sheets, drawn below or above `name`, whose frame cuts' bounds meet its own (bottom first)."""
     me = sheets[name]
     return [sheets[s] for s in order if s != name and s in sheets and overlaps(me, sheets[s])]
 
@@ -286,7 +290,7 @@ def block_ids(blocks: np.ndarray) -> tuple[np.ndarray, int]:
 
 @dataclass(frozen=True)
 class BlockInk:
-    """R9's measure: each sheet's ink over each of today's blocks, from the block's px on its page inside its neatline
+    """R9's measure: each sheet's ink over each of today's blocks, from the block's px on its page inside its frame cut
     (`crop`): their count and the sum of their ink, 1 - luminance (paper 0, solid ink 1; every 1921 scan's paper reads
     1.0).  Rows: the sheets in `order` (the draw order, bottom first), a sheet not measured all 0; columns: block ids
     (`block_ids`), 0 off the blocks."""
@@ -321,7 +325,7 @@ class BlockInk:
 
 
 def beats(ink: BlockInk, other: str, me: str, bid: np.ndarray) -> np.ndarray:
-    """Where `other` takes a place both sheets' neatlines hold from `me` (R9), at block ids `bid`: on a block, the
+    """Where `other` takes a place both sheets' frame cuts hold from `me` (R9), at block ids `bid`: on a block, the
     sheet with more ink over it (`BlockInk.key`); equal, and off the blocks, the one drawn higher."""
     ko, km = ink.key(other)[bid], ink.key(me)[bid]
     return (ko > km) | ((ko == km) & (ink.level(other) > ink.level(me)))
@@ -329,7 +333,7 @@ def beats(ink: BlockInk, other: str, me: str, bid: np.ndarray) -> np.ndarray:
 
 def sheet_block_ink(src: Sources, sh: Sheet, bid_cut: np.ndarray, offset, n_blocks: int) -> tuple[np.ndarray,
                                                                                                     np.ndarray]:
-    """One sheet's row of `BlockInk`: per block id, its px on the page inside the neatline (the block ids read at
+    """One sheet's row of `BlockInk`: per block id, its px on the page inside the frame cut (the block ids read at
     every page px through the placement, as `block` is) and their summed ink (1 - luminance, float64)."""
     lum = load_luminance(src.work / sh.name / "page.png")
     if lum.shape != tuple(sh.shape):
@@ -342,20 +346,19 @@ def sheet_block_ink(src: Sources, sh: Sheet, bid_cut: np.ndarray, offset, n_bloc
 
 
 def _ink_job(job):
-    src, name, quad, bid_cut, offset, n_blocks = job
-    return (name, *sheet_block_ink(src, load_sheet(src, name, quad), bid_cut, offset, n_blocks))
+    src, name, bid_cut, offset, n_blocks = job
+    return (name, *sheet_block_ink(src, load_sheet(src, name), bid_cut, offset, n_blocks))
 
 
 def block_ink(src: Sources, order: list[str], bid: np.ndarray, n_blocks: int, workers: int = 1,
               names: list[str] | None = None) -> BlockInk:
     """`BlockInk` of the sheets in `order` (or only `names` of them; the rest stay unmeasured), `bid` the block ids
     on the whole grid."""
-    fr = frames(src)
     want = list(order) if names is None else [s for s in order if s in set(names)]
     jobs = []
     for s in want:
-        r0, r1, c0, c1 = hatching._slice(load_transform(src, s), fr[s], bid.shape)
-        jobs.append((src, s, fr[s], bid[r0:r1, c0:c1], (r0, c0), n_blocks))
+        r0, r1, c0, c1 = hatching._slice(load_transform(src, s), _cut(src, s), bid.shape)
+        jobs.append((src, s, bid[r0:r1, c0:c1], (r0, c0), n_blocks))
     px = np.zeros((len(order), n_blocks + 1), np.int64)
     ink = np.zeros((len(order), n_blocks + 1), np.float64)
     for name, p, k in _map(_ink_job, jobs, workers):
@@ -499,23 +502,30 @@ def centre_segments(lines, shape: tuple[int, int], kinds=None, streets=None) -> 
 
 
 def data_area(src: Sources, names: list[str], shape: tuple[int, int]) -> np.ndarray:
-    """Where the series' sheets hold data, on the grid: the union of their neatlines (frames.json quads), each quad's
-    edges carried through its sheet's placement every page px and filled (cv2, to 1/16 px)."""
-    fr = frames(src)
+    """Where the series' sheets hold data, on the grid: the union of their frame cuts, each cut's outlines (outer and
+    inner: a deleted block inside the frame is no data) carried through its sheet's placement at every boundary px and
+    filled (cv2, to 1/16 px)."""
     area = np.zeros(shape, np.uint8)
     scale = 1 << SUBPIXEL_BITS
     for s in names:
-        q = np.asarray(fr[s], float)
-        edge = []
-        for i in range(len(q)):
-            p0, p1 = q[i], q[(i + 1) % len(q)]
-            n = max(1, int(np.ceil(np.hypot(*(p1 - p0)))))
-            edge.append(p0 + (p1 - p0) * (np.arange(n) / n)[:, None])
-        w = grid.to_grid(load_transform(src, s).to_world(np.concatenate(edge))) - 0.5
-        w = w[np.isfinite(w).all(axis=1)]
-        if len(w) >= 3:
-            cv2.fillPoly(area, [np.rint(w * scale).astype(np.int32)], 1, cv2.LINE_8, SUBPIXEL_BITS)
+        cs, _ = cv2.findContours(_cut(src, s).astype(np.uint8), cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE)
+        tr = load_transform(src, s)
+        rings = []
+        for c in cs:
+            w = grid.to_grid(tr.to_world(c.reshape(-1, 2).astype(float))) - 0.5
+            w = w[np.isfinite(w).all(axis=1)]
+            if len(w) >= 3:
+                rings.append(np.rint(w * scale).astype(np.int32))
+        if rings:
+            one = np.zeros(shape, np.uint8)
+            cv2.fillPoly(one, rings, 1, cv2.LINE_8, SUBPIXEL_BITS)
+            area |= one
     return area.astype(bool)
+
+
+def _cut(src: Sources, sheet: str) -> np.ndarray:
+    """The sheet's frame cut (`hatching.load_crop`), at its page's shape."""
+    return hatching.load_crop(src.frames, sheet, page_shape(src, sheet))
 
 
 @dataclass(frozen=True)
@@ -709,7 +719,7 @@ def page_centres(lines, sh: "Sheet") -> np.ndarray:
     """The centre lines on the sheet's page as scanned (bool), drawn there rather than read off the grid: a page px is
     about 5 ft on most 1921 sheets, wider than the grid's 4 ft line, so reading the grid's lines at page px centres (as
     `block` is read) breaks them (20180102094149543, 5.2 ft/px: 16,847 pieces read, 6 drawn; 99.4% of the drawn px
-    within 1 px of a read one).  Each line near the sheet (its neatline's world bounds and two page px beyond,
+    within 1 px of a read one).  Each line near the sheet (its frame cut's world bounds and two page px beyond,
     as `centre_owner` reaches) is split every page px (`median_scale_ft_per_px`), carried through the placement's
     inverse (`grid_to_pixel`, as `owned_px` carries px to another sheet), and drawn 8-connected, 1 px wide; a point
     the inverse can't place breaks its line there."""
@@ -780,12 +790,12 @@ def _bilinear(nodes: np.ndarray, pw: hatching.PageWorld, rows: slice, w: int) ->
 
 def owned_px(pw: hatching.PageWorld, shape: tuple[int, int], crop: np.ndarray, me: str, others: list[Sheet],
              ink: BlockInk, bid: np.ndarray) -> tuple[np.ndarray, int, dict]:
-    """The page px a sheet labels (R9): inside its neatline (`crop`), and taken by no other sheet whose neatline also
+    """The page px a sheet labels (R9): inside its frame cut (`crop`), and taken by no other sheet whose frame cut also
     holds the px (`others`, drawn below or above).  On one of today's blocks (`bid`: the block id at every page px,
     0 off them) the sheet with more ink over the block takes it (`beats`); off the blocks, and on a tie, the sheet
     drawn higher (the draw-order rule, `hatching.owned`'s).  Each px is carried to another sheet's page by that
     sheet's inverse placement (`grid_to_pixel`) at this page's lattice nodes, bilinear between.  Nodes beyond reach of
-    the other sheet's neatline bounds (twice the lattice's longest cell diagonal) aren't carried: no px of a cell they
+    the other sheet's frame cut bounds (twice the lattice's longest cell diagonal) aren't carried: no px of a cell they
     bound can lie in it.  Also returns the nodes the inverse placement could not place (their cells stay this
     sheet's) and the block px R9 decides against the draw order: kept from a sheet drawn above, or yielded to one
     drawn below."""
@@ -843,7 +853,7 @@ def _rasters(src: Sources, sh: Sheet, lot_cut: np.ndarray, block_cut: np.ndarray
     street_w = np.where(mine, w_px, 0).astype(np.float16)
     centre = (page_centres(lines, sh) & (street == STREET)).astype(np.uint8)
     lot = np.where(mine, lot_px, -1).astype(np.int32)
-    k = turn_of(sh.quad, sh.transform, sh.shape)
+    k = turn_of(sh.crop, sh.transform, sh.shape)
 
     def up(a):
         return np.ascontiguousarray(np.rot90(a, k))
@@ -876,8 +886,7 @@ def sheet_rasters(series: str, sheet: str, src: Sources | None = None) -> SheetR
     if sheet not in names:
         raise KeyError(f"{sheet} is not a {series} map sheet (a page, a data/work placement and a frame)")
     order = draw_order(src, names)
-    fr = frames(src)
-    sheets = {s: load_sheet(src, s, fr[s]) for s in order}
+    sheets = {s: load_sheet(src, s) for s in order}
     lot, blocks = solver_grid(src)
     bid, n_blocks = block_ids(blocks)
     lines = centre_lines(src)
@@ -885,7 +894,7 @@ def sheet_rasters(series: str, sheet: str, src: Sources | None = None) -> SheetR
     me = sheets[sheet]
     others = overlapping(sheet, order, sheets)
     ink = block_ink(src, order, bid, n_blocks, names=[sheet] + [o.name for o in others])
-    r0, r1, c0, c1 = hatching._slice(me.transform, me.quad, lot.shape)
+    r0, r1, c0, c1 = hatching._slice(me.transform, me.crop, lot.shape)
     return _rasters(src, me, lot[r0:r1, c0:c1], blocks[r0:r1, c0:c1], street[r0:r1, c0:c1], weight[r0:r1, c0:c1],
                     bid[r0:r1, c0:c1], (r0, c0), others, ink, lines.geoms)[0]
 
@@ -915,8 +924,8 @@ def swatches(series: str, src: Sources | None = None) -> list[tuple[str, str, tu
         return []
     sheet = leg["sheet"]
     shape = page_shape(src, sheet)
-    fr = frames(src)
-    k = turn_of(fr[sheet], load_transform(src, sheet), shape) if sheet in fr else 0
+    k = turn_of(hatching.load_crop(src.frames, sheet, shape), load_transform(src, sheet), shape) \
+        if _has_cut(src, sheet) else 0
     return [(sheet, code, turn_box(box, shape, k)) for code, box in leg["swatches"].items()]
 
 
@@ -925,7 +934,7 @@ def swatches(series: str, src: Sources | None = None) -> list[tuple[str, str, tu
 def centre_owner(points: np.ndarray, sheets: list[Sheet], blocks_at: np.ndarray | None = None,
                  ink: BlockInk | None = None) -> tuple[np.ndarray, int]:
     """The sheet that owns each map point (n, 2), `sheets` bottom first, by `owned_px`'s rule (R9): of the sheets whose
-    neatline holds it (its nearest px in the crop, as `hatching.owned` reads one), the one with the most ink over the
+    frame cut holds it (its nearest px in the crop, as `hatching.owned` reads one), the one with the most ink over the
     point's block (`blocks_at`: the block id under each point, 0 none; `ink`); off the blocks, on a tie, or with no
     `ink`, the one drawn highest; "" none.  Also how many points several sheets held."""
     pts = np.asarray(points, float)
@@ -1100,8 +1109,7 @@ def lot_table(series: str, src: Sources | None = None, lot: np.ndarray | None = 
     # the sheet owning each lot's centre (R9)
     used = sheet_names(src)
     order = draw_order(src, used)
-    fr = frames(src)
-    sheets = [load_sheet(src, s, fr[s]) for s in order]
+    sheets = [load_sheet(src, s) for s in order]
     if lot is None:
         with np.load(src.solver / "lots" / "lots.npz") as z:
             lot = z["lot"]
@@ -1193,8 +1201,7 @@ def _init_worker():
 def _job(job) -> dict:
     """One sheet: its rasters written to `out`/<sheet>.npz; returns its counts and its lots' px."""
     src, name, order, lot_cut, block_cut, street_cut, weight_cut, bid_cut, offset, out, n_lots, lines, ink = job
-    fr = frames(src)
-    sheets = {s: load_sheet(src, s, fr[s]) for s in order}
+    sheets = {s: load_sheet(src, s) for s in order}
     r, stats = _rasters(src, sheets[name], lot_cut, block_cut, street_cut, weight_cut, bid_cut, offset,
                         overlapping(name, order, sheets), ink, lines)
     write_rasters(out / f"{name}.npz", r, src.series)
@@ -1219,7 +1226,6 @@ def run(series: str, out: Path | None = None, workers: int = 4, src: Sources | N
     if not names:
         raise FileNotFoundError(f"no {series} sheets with a page, a placement and a frame under {src.work}")
     order = draw_order(src, names)
-    fr = frames(src)
     lot, blocks = solver_grid(src)
     bid, n_blocks = block_ids(blocks)
     ink = block_ink(src, order, bid, n_blocks, workers)                    # every sheet: the lot table needs them all
@@ -1232,7 +1238,7 @@ def run(series: str, out: Path | None = None, workers: int = 4, src: Sources | N
         if only and s not in only:
             continue
         tr = load_transform(src, s)
-        r0, r1, c0, c1 = hatching._slice(tr, fr[s], lot.shape)
+        r0, r1, c0, c1 = hatching._slice(tr, _cut(src, s), lot.shape)
         jobs.append((src, s, order, lot[r0:r1, c0:c1], blocks[r0:r1, c0:c1], street[r0:r1, c0:c1],
                      weight[r0:r1, c0:c1], bid[r0:r1, c0:c1], (r0, c0), out, n_lots, lines.geoms, ink))
     jobs.sort(key=lambda j: -int(np.prod(page_shape(src, j[1]))))          # the largest first: the pool ends sooner
@@ -1336,7 +1342,7 @@ def look_targets(series: str, sheets: list[str], data: Path | None = None, dest:
     dest.mkdir(parents=True, exist_ok=True)
     written = []
     legend = ["blue: today's blocks placed on the scan (target 1)   orange: not a block / street (0)",
-              "grey: unknown (outside the neatline or another sheet's area)"]
+              "grey: unknown (outside the frame cut or another sheet's area)"]
     for sheet in sheets:
         r = read_rasters(data / f"{sheet}.npz")
         img = _tinted(r)
@@ -1362,7 +1368,7 @@ def look_targets(series: str, sheets: list[str], data: Path | None = None, dest:
 LABELS_LOOK = EXPERIMENT / "streets-v2" / "look"
 LABEL_TINT = {STREET: ((0, 140, 255), 0.45), NOT_STREET: ((255, 110, 0), 0.40),      # BGR, alpha: street orange,
               UNKNOWN: ((150, 150, 150), 0.55)}                                       # not street blue, ignored grey
-OTHER_AREA = ((60, 60, 60), 0.70)       # dark grey: not this sheet's to label (outside its neatline or drawn above)
+OTHER_AREA = ((60, 60, 60), 0.70)       # dark grey: not this sheet's to label (outside its frame cut or drawn above)
 CENTRE_BGR = (0, 0, 200)                # dark red: today's centre lines
 LABEL_WHOLE = ("20180102094149543", "20180102094355582",            # the plan's whole sheets (Lake Merced second),
                "20180102094212101", "20180102094308402")            # Ocean Beach and the Bay Bridge

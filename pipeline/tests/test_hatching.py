@@ -285,8 +285,7 @@ def _fixture(root):
     np.savez(solver / "lots" / "lots.npz", lot=lot)
     table.assign(geometry=shapely.to_wkb(np.array(lots))).drop(columns="code").to_parquet(
         solver / "lots" / "table.parquet")
-    (solver / "page" / "crops").mkdir(parents=True)
-    frames = {}
+    frame = root / "frame"
     for s, x_ft in zip(SHEETS, (0.0, SHIFT_FT)):
         tr = affine(PAGE, x_ft + 0.5, 0.5)          # page px centres mid grid px
         ink = np.zeros(PAGE, np.uint8)
@@ -325,14 +324,13 @@ def _fixture(root):
         (d / "blocks_px.geojson").write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
         (warp / s).mkdir(parents=True)
         (warp / s / "transform.json").write_text(json.dumps(tr.to_json()))
-        crop = np.zeros(PAGE, np.uint8)
-        crop[12:228, 12:228] = 255
-        cv2.imwrite(str(solver / "page" / "crops" / f"{s}.png"), crop)
-        frames[s] = [[12.0, 12.0], [227.0, 12.0], [227.0, 227.0], [12.0, 227.0]]
-    (solver / "page" / "frames.json").write_text(json.dumps(frames))
+        deleted = np.full(PAGE, 255, np.uint8)          # the frame finder's cut: nonzero where it deleted
+        deleted[12:228, 12:228] = 0
+        (frame / s).mkdir(parents=True)
+        cv2.imwrite(str(frame / s / hatching.FRAME_CUT), deleted)
     legends = root / "legends.json"
     legends.write_text(json.dumps({"1921": {"sheet": SHEETS[0], "swatches": LEGEND}}))
-    return work, warp, solver, legends
+    return work, warp, solver, legends, frame
 
 
 def _digest(folder) -> dict[str, str]:
@@ -343,12 +341,13 @@ def _digest(folder) -> dict[str, str]:
 @pytest.fixture(scope="module")
 def two_sheet_run(tmp_path_factory):
     root = tmp_path_factory.mktemp("hatch")
-    work, warp, solver, legends = _fixture(root)
+    work, warp, solver, legends, frame = _fixture(root)
     mp = pytest.MonkeyPatch()
     mp.setattr(hatching, "WORK", work)
     mp.setattr(hatching, "WARP", warp)
     mp.setattr(hatching, "SOLVER_1921", solver)
     mp.setattr(hatching, "LEGENDS_FILE", legends)
+    mp.setattr(hatching, "FRAME", frame)
     mp.setattr(hatching, "draw_order", lambda sheets: [SHEETS[1], SHEETS[0]])     # A on top
     outs = []
     try:

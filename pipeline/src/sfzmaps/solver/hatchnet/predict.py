@@ -277,7 +277,7 @@ def look_sheets(series: str, root: Path | None = None, frame: pd.DataFrame | Non
     legend = [f"each lot: its predicted district, by the fold that withheld its quarter, {kind}",
               "pooled over all its px on every sheet with the learned weights; opacity = its probability",
               "cyan: the seam between the lots' quarters (each side another fold's model)",
-              "px in no lot (streets; areas another sheet labels): as scanned; grey: off the neatline"]
+              "px in no lot (streets; areas another sheet labels): as scanned; grey: off the frame cut"]
     out = []
     for sheet, at in sheets.items():
         r = have.get(sheet) or data.read_rasters(data.data_dir(series) / f"{sheet}.npz")
