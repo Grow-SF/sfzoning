@@ -730,10 +730,25 @@ def sources() -> Sources:
     return Sources(Path(WORK), Path(WARP), Path(SOLVER_1921), Path(LEGENDS_FILE), Path(FRAME))
 
 
+def duplicate_scans(series: str) -> dict[str, str]:
+    """The series' scans that repeat a section another scan shows better, each with the scan kept in its place: the
+    owner's list, inputs/<series>/duplicate_scans.csv (sheet, kept, reason); none when there is no file.  A duplicate
+    is never read: one scan per section."""
+    f = config.INPUTS_DIR / series / "duplicate_scans.csv"
+    if not f.is_file():
+        return {}
+    rows = pd.read_csv(f, dtype=str)
+    return dict(zip(rows["sheet"], rows["kept"]))
+
+
 def sheet_names(src: Sources) -> list[str]:
-    """The sheets with a page, the pattern reader's reads, printed blocks, a placement and a frame cut."""
+    """The sheets with a page, the pattern reader's reads, printed blocks, a placement and a frame cut, less the
+    duplicate scans (`duplicate_scans`)."""
     out = []
+    skip = duplicate_scans(SERIES)
     for d in sorted(p for p in src.work.iterdir() if p.is_dir()):
+        if d.name in skip:
+            continue
         if all((d / f).is_file() for f in ("page.png", "district_pattern.json", "blocks_px.geojson")) and \
                 (src.warp / d.name / "transform.json").is_file() and (src.frame / d.name / FRAME_CUT).is_file():
             out.append(d.name)

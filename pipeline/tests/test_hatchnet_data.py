@@ -622,3 +622,17 @@ def test_run_writes_same_bytes(tmp_path):
     lab = one["street_labels"]
     assert lab["lines"] == len(STREETS) and lab["centre_grid_px"] > 0 and "(none)" in lab["half_widths"]
     assert data.swatches(SERIES, src) == [("sheetA", "1R", (10, 20, 30, 40))]
+
+
+def test_a_duplicate_scan_is_not_a_sheet(tmp_path, monkeypatch):
+    # the owner's list names sheetA a duplicate of sheetC: only sheetC is read, and sheetA is reported as not used
+    from sfzmaps import config
+    src = two_sheets(tmp_path)
+    assert data.sheet_names(src) == ["sheetA", "sheetC"]
+    inputs = tmp_path / "inputs"
+    (inputs / SERIES).mkdir(parents=True)
+    (inputs / SERIES / "duplicate_scans.csv").write_text('sheet,kept,reason\nsheetA,sheetC,"coarser"\n')
+    monkeypatch.setattr(config, "INPUTS_DIR", inputs)
+    assert hatching.duplicate_scans(SERIES) == {"sheetA": "sheetC"}
+    assert data.sheet_names(src) == ["sheetC"]
+    assert data.not_used(src) == {"sheetA": ["a duplicate scan"]}

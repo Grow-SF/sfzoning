@@ -237,9 +237,12 @@ def load_sheet(src: Sources, name: str) -> Sheet:
 
 
 def sheet_names(src: Sources) -> list[str]:
-    """The map sheets: a page, a placement (data/work) and a frame cut (`sfzmaps frame`)."""
+    """The map sheets: a page, a placement (data/work) and a frame cut (`sfzmaps frame`), less the duplicate scans
+    (`hatching.duplicate_scans`: one scan per section)."""
+    skip = hatching.duplicate_scans(src.series)
     return [d.name for d in sorted(p for p in src.work.iterdir() if p.is_dir())
-            if (d / "page.png").is_file() and (d / "transform.json").is_file() and _has_cut(src, d.name)]
+            if (d / "page.png").is_file() and (d / "transform.json").is_file() and _has_cut(src, d.name)
+            and d.name not in skip]
 
 
 def _has_cut(src: Sources, sheet: str) -> bool:
@@ -253,6 +256,8 @@ def not_used(src: Sources) -> dict[str, list[str]]:
         miss = [f for f in ("page.png", "transform.json") if not (d / f).is_file()]
         if not _has_cut(src, d.name):
             miss.append("frame")
+        if d.name in hatching.duplicate_scans(src.series):
+            miss.append("a duplicate scan")
         if miss:
             out[d.name] = miss
     return out
