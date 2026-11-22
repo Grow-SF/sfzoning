@@ -11,3 +11,7 @@ what each license covers.
 
 If you build a website or app on this code, please show the credit line above
 in its credits or footer.
+
+This product uses the DINOv2 with registers weights (facebook/dinov2-with-registers-base,
+revision a1d738ccfa7ae170945f210395d99dde8adb1805) by Meta Platforms, Inc., licensed under the Apache License,
+Version 2.0, and the Hugging Face `transformers` library, licensed under the Apache License, Version 2.0.

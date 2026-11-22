@@ -910,6 +910,93 @@ def downloads(
                f"{sum(len(v) for v in index['sheets'].values())} sheets listed; index {dl.DOWNLOADS_DIR / 'index.json'}")
 
 
+@app.command("frame-labels")
+def frame_labels(top: int = typer.Option(30, "--top", help="Stretches per sheet in its crop picture.")) -> None:
+    """Rank the ink under every frame label's outline, the map polygons' and the removed blocks' (no GPU).  Writes
+    data/frame/labels-qa/<series>/<sheet>.png from the top stretches and prints `series/sheet total-outline-ink
+    top-stretch-ink`, highest first."""
+    from sfzmaps.frame import data as fd
+    from sfzmaps.frame import labels as fl
+
+    rows = []
+    for series, sheet in fd.labelled_sheets():
+        lum = fd.load_luminance(fd.page_path(series, sheet))
+        polys = fd.load_label(series, sheet) + fd.load_remove(series, sheet)
+        st = fl.outline_stretches(lum, polys, series, sheet)
+        if st:
+            fl.qa_sheet(lum, polys, st[:top], fd.OUT / "labels-qa" / series / f"{sheet}.png")
+        rows.append((sum(s.ink for s in st), st[0].ink if st else 0.0, series, sheet))
+    for total, best, series, sheet in sorted(rows, reverse=True):
+        typer.echo(f"{series}/{sheet} {total:.1f} {best:.1f}")
+
+
+@app.command("frame")
+def frame(
+    device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where available)."),
+    dev: bool = typer.Option(False, "--dev", help="Score the training sheets, each cut by heads that did not train "
+                                                  "on it; prints the table and draws the pictures."),
+    test: bool = typer.Option(False, "--test", help="Score the test sheets (never trained on), cut by the final "
+                                                    "heads; prints the table and draws the pictures."),
+    predict_only: bool = typer.Option(False, "--predict-only", help="Decide every page with the saved model, then "
+                                                                    "the pictures."),
+) -> None:
+    """The frame finder (issue #71), $0.  Every mode fits the model first when it is stale (new labels, new pages),
+    except `--predict-only`, which refuses.  No flag: decide every map page with the model, draw the pictures.  The
+    layout features and heads run on the device in an exclusive GPU turn (`sfzmaps.gpu`); the shape decisions run on
+    cpu worker processes, after it.  A sheet labelled both for training and for testing is refused first."""
+    import logging
+
+    from sfzmaps import gpu
+    from sfzmaps.frame import data as fd
+    from sfzmaps.frame import look
+    from sfzmaps.frame import run as fr
+    from sfzmaps.solver.textnet.train import default_device
+
+    if dev + test + predict_only > 1:
+        raise typer.BadParameter("--dev, --test and --predict-only exclude each other")
+    device = device or default_device()
+    if device not in ("cpu", "mps"):
+        raise typer.BadParameter(f"--device must be cpu or mps, not {device!r}")
+    try:
+        fd.check_split(fd.labelled_sheets(fd.LABELS), fd.test_sheets(fd.TEST_LABELS))
+    except ValueError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1)
+    out = fd.OUT
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    shown, where = None, out
+
+    def turn():
+        return gpu.gpu_turn(True, device)
+
+    try:
+        if not (dev or test):
+            fr.check_disk(out)
+        stale = fr.model_stale(out)
+        if stale is not None and predict_only:
+            typer.echo(f"error: {stale}: fit the model first (`sfzmaps frame`)", err=True)
+            raise typer.Exit(1)
+        if stale is not None:
+            typer.echo(f"fitting the model first: {stale}")
+            fr.fit(device, out, turn=turn)
+        if dev:
+            shown, where = fr.format_split(fr.score_dev(out)), out / fr.DEV_DIR
+        elif test:
+            shown, where = fr.format_split(fr.score_test(out)), out / fr.TEST_DIR
+        else:
+            fr.predict_all(device, out, turn=turn)
+    except (fr.DiskFull, fr.StaleFeatures) as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1)
+    if shown is not None:
+        typer.echo(shown)
+    look.series_mosaics(where)
+    if dev or test:
+        typer.echo(f"set mosaic: {look.set_mosaic(out, fr.DEV_DIR if dev else fr.TEST_DIR)}")
+    else:
+        look.closeups(out)
+
+
 @app.command()
 def doctor(
     renders: int = typer.Option(0, "--renders", help="Also re-render this many PDF pages per series "
