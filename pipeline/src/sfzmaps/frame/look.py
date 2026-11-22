@@ -7,7 +7,8 @@ simplified within `OUTLINE_TOLERANCE` px (a px staircase along a straight fitted
 shrunk (Pillow BOX) before they are coloured and never enlarged.
 
 Under `out/look/`: one picture per map page at `LONG_SIDE` (`<series>/<sheet>.png`), one mosaic per series
-(`<series>.png`; a labelled sheet's caption shows its held-out shares of frame ink left in and map ink cut) and
+(`<series>.png`; a scored sheet's caption shows its shares of frame ink and label-box ink left in and of map ink
+cut, from the `scores.json` of the folder drawn) and
 `closeups.png`, crops of `CLOSEUPS` at full scan resolution (never shrunk).
 """
 from __future__ import annotations
@@ -119,11 +120,12 @@ def _load_outputs(out: Path, sid: SheetId) -> tuple[np.ndarray, np.ndarray, list
     return q, deleted, polygons
 
 
-def _held_out(out: Path) -> dict[SheetId, dict]:
-    path = out / run.FOLDS_FILE
+def _scored(out: Path) -> dict[SheetId, dict]:
+    """Each scored sheet's shares (`scores.pooled_split` of its split scores) from `out/scores.json`, if any."""
+    path = out / run.SCORES_FILE
     if not path.exists():
         return {}
-    return {(r["series"], r["sheet"]): r["scores"] for r in json.loads(path.read_text())["sheets"]}
+    return {(r["series"], r["sheet"]): scores.pooled_split([r["split"]]) for r in json.loads(path.read_text())["sheets"]}
 
 
 def _mosaic(tiles: list[tuple[Image.Image, tuple[str, str]]], side: int, columns: int, path: Path) -> Path:
@@ -149,7 +151,7 @@ def _mosaic(tiles: list[tuple[Image.Image, tuple[str, str]]], side: int, columns
 def series_mosaics(out: Path = OUT) -> list[Path]:
     """One mosaic per series under `out/look/` of every map page that has outputs (see the module); each page's own
     picture is saved beside it."""
-    held = _held_out(out)
+    scored = _scored(out)
     by_series: dict[str, list[SheetId]] = {}
     for sid in data.map_pages(data.PAGE_KINDS, data.WORK):
         by_series.setdefault(sid[0], []).append(sid)
@@ -165,9 +167,10 @@ def series_mosaics(out: Path = OUT) -> list[Path]:
             full.parent.mkdir(parents=True, exist_ok=True)
             q, deleted, polygons = loaded
             sheet_picture(lum, q, deleted, LONG_SIDE, polygons).save(full)
-            sc = held.get(sid)
-            line2 = ("" if sc is None else f"held-out left in {scores.percent(sc['frame_kept_share'])} "
-                     f"cut {scores.percent(sc['map_cut_share'])}")
+            sc = scored.get(sid)
+            line2 = ("" if sc is None else f"frame {scores.percent(sc['frame_left_share'])} boxes "
+                     f"{scores.percent(sc['box_left_share'])} cut "
+                     f"{scores.percent(sc['map_cut_frame_share'] + sc['map_cut_boxes_share'])}")
             tiles.append((sheet_picture(lum, q, deleted, MOSAIC_SIDE, polygons), (sid[1], line2)))
         if not tiles:
             log.info("series %s has no outputs; no mosaic", series)

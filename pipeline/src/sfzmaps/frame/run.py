@@ -1,54 +1,56 @@
-"""The frame finder's run (issue #71; design spec amendment 3, "the combined design"): the layout's held-out chances,
-the temperature, the shape decision's three numbers, the scores, the final heads and every map page's outputs.  It
-orchestrates only: the layout is `layout`, the decision `shape` (per-pixel: `decide`), the scores `scores` and the
-temperature `calibrate`.
+"""The frame finder's run (issue #71; design spec amendments 3 to 6): the model fit, the dev and test scores, and
+every map page's outputs.  It orchestrates only: the layout is `layout`, the decision `shape` (per-pixel: `decide`),
+the scores `scores` and the temperature `calibrate`.
 
-`held_out` scores every labelled sheet with layout heads that never saw it:
-1. `layout.extract_all` over every map page (and the labelled sheets): the frozen backbone's reduced features, on the
-   run's device.  Only the held-out run may fit a reducer: its record (`reducer`: sha256 and page list) goes to
-   `folds.json` and `model.json`, and the final training and the prediction refuse (`StaleFeatures`) features that
-   are not that record's, before extracting anything;
-2. leave one sheet out: for each labelled sheet and each of `layout.HEAD_SEEDS`, a head trained on every other sheet
-   (`leave_one_out`; one padded batch on the run's device, one head after another), giving the sheet's patch logits
-   per seed.  Steps 1 and 2 run inside the caller's `turn` (the CLI's GPU turn).  Each is upsampled to the
-   page (`layout.page_logits`) and the seeds' tempered softmaxes are averaged (`layout.combine`).  One temperature is
-   fitted on ink-weighted samples of every sheet's upsampled logits (`calibrate`);
-3. the shape decision's numbers (`shape.Params`) are chosen by the lowest pooled realised cost (summed over the held
-   sheets) in a coordinate-wise search over `GRID` from `START` (controller ruling C8; the full grid is 48 points
-   and hours): each number in turn takes each of its GRID values with the others fixed, the lowest pooled cost is
-   kept (ties keep the current value, then the earlier GRID value), and rounds repeat until one changes nothing, at
-   most `SEARCH_ROUNDS`.  Every visited point and its pooled cost go to the summary.  The block bounds a held sheet
-   is decided with are fitted on the other sheets' labels (`blocks.block_bounds`), as the heads are;
-4. per sheet, the scores of the per-pixel cut on the layout chances (`decide.decide`) and of the shape decision at
-   the chosen numbers (its outputs are written), the frame ink the chances still see along each fitted side
-   (`shape.side_ink_left`), pooled means with sheet-bootstrap intervals, pooled ink shares, and paired differences
-   against `BASELINE` where its files exist;
-5. everything goes to `folds.json`.
+The training sheets are the labels under `data.LABELS`; the test sheets, under `data.TEST_LABELS`, are never trained
+on and never used to fit a number (`data.check_split` refuses a sheet in both, before anything else runs).
 
-The page work (the shape decisions) runs on `PROCESSES` spawned worker processes, each pinned to one maths
-thread.  A job carries everything it needs (the page's path, its patch logits, the temperature,
-the label folder), and its worker loads the page, makes the chances and lets them go when the job ends: so one
-page's chances and shape cache (`shape.decide`'s `cache`) live in one worker at a time, and a search job runs every
-parameter point it needs on that one cache.  `PROCESSES = 1` runs everything in this process.
+`fit` makes the model:
+1. `layout.extract_all` over every map page and the training and test sheets: the frozen backbone's reduced
+   features, on the run's device.  Reused when the page list is the reducer's; only `fit` may fit a reducer;
+2. the training sheets dealt round-robin, in sorted order, into `TEMPERATURE_FOLDS` folds; per fold,
+   `layout.HEAD_SEEDS` heads trained on the other folds (one padded batch on the run's device, one head after
+   another), and the held sheets' patch logits per seed kept: the dev logits, `model/dev_logits.npz`;
+3. the final heads, one per seed, on every training sheet.  Steps 1 to 3 run inside the caller's `turn` (the CLI's GPU
+   turn);
+4. one temperature fitted on ink-weighted samples of the dev logits upsampled to each page (`calibrate`), with its
+   sheet-bootstrap interval;
+5. `model/model.json`, written last: the temperature, the folds, the block bounds of every label, the reducer record
+   (sha256 and page list) and the training sheets.  A fit deletes it first, so one that stops part way leaves no
+   model.
 
-`train_final` trains `layout.HEAD_SEEDS` heads on every labelled sheet (refusing features that are not the held-out
-run's); `predict_all` decides every other map page
-with them at the held-out run's temperature and numbers; the labelled sheets keep their held-out outputs.
+The model is stale (`model_stale`) when `model.json` is missing, or its training sheets or reducer record are not
+the current ones.  The shape decision's numbers are the constants `PARAMS`, not searched.
+
+`score_dev` cuts each training sheet from its dev logits (block bounds from its fold's other sheets, as its heads);
+`score_test` cuts each test sheet with the final heads.  Both score the cuts against the labels apart by what is
+deleted (`scores.split_scores`: frame ink, label-box ink, map ink cut by the frame and by boxes), and write under
+`out/dev/` or `out/test/` the sheets' outputs, `scores.json` (per sheet and pooled) and `fits.json` (each sheet's
+fitted frame, notches and boxes, `fit_json`; compared between runs by `fit_changes`).  `format_split` is the table for
+the owner.
+
+`predict_all` decides every map page that is not a training sheet with the final heads; the training sheets take
+their dev outputs.
+
+The page work (the shape decisions) runs on `PROCESSES` spawned worker processes, each pinned to one maths thread.  A
+job carries everything it needs (the page's path, its patch logits, the temperature, the label folder), and its
+worker loads the page, makes the chances and lets them go when the job ends.  `PROCESSES = 1` runs everything in this
+process.
 
 Outputs, all under `out` (default `data/frame`):
 - `reducer.npz` and `features/<series>/<sheet>.npy`: the layout's features (`layout.extract_all`);
-- `<series>/<sheet>/outside.png` (`OUTSIDE_PNG`): 1-bit, the deletion (`Decision.deleted`: outside the frame or a
-  removed block);
-- `<series>/<sheet>/outside_prob.npz` (`PROB_FILE`): key `q`, the layout's chance of deletion p1 + p2 as uint8
-  levels round(255 q), for reading and placement to weigh ink by;
-- `<series>/<sheet>/erased.png` (`ERASED_PNG`): the scan in its own mode (1-bit as 8-bit grey) with the deleted px
-  painted plain paper, the per-channel median of the kept px: for looking only;
-- `<series>/<sheet>/outline.json` (`OUTLINE_FILE`): {"polygons": the kept region (`decide.outline`), "maps": n,
-  "shape": the fitted frame, notches and blocks, or null where the per-pixel cut decided (a page of several maps)};
-- `folds.json` (`FOLDS_FILE`): the held-out run, deleted when a run starts, so a run that stops part way leaves no
-  summary for the final training to trust;
-- `model/head-<seed>.pt` and `model/model.json` (`MODEL_DIR`): the final heads, the numbers, the temperature, the
-  block bounds and the reducer record they were trained on (sha256 and page list);
+- `[dev/|test/]<series>/<sheet>/outside.png` (`OUTSIDE_PNG`): 1-bit, the deletion (`Decision.deleted`: outside the
+  frame or a removed block);
+- `.../outside_prob.npz` (`PROB_FILE`): key `q`, the layout's chance of deletion p1 + p2 as uint8 levels round(255 q),
+  for reading and placement to weigh ink by;
+- `.../erased.png` (`ERASED_PNG`): the scan in its own mode (1-bit as 8-bit grey) with the deleted px painted plain
+  paper, the per-channel median of the kept px: for looking only;
+- `.../outline.json` (`OUTLINE_FILE`): {"polygons": the kept region (`decide.outline`), "maps": n, "shape": the
+  fitted frame, notches and blocks, or null where the per-pixel cut decided (a page of several maps)};
+- `dev/` and `test/` (`DEV_DIR`, `TEST_DIR`): `scores.json` (`SCORES_FILE`) and `fits.json` (`FITS_FILE`), deleted
+  when a scoring run starts;
+- `model/head-<seed>.pt`, `model/dev_logits.npz` (`DEV_LOGITS`: per training sheet "series/sheet", float32
+  (seeds, classes, rows, cols)) and `model/model.json` (`MODEL_DIR`);
 - `pages.json` (`PAGES_FILE`): every map page's side ink left and dropped ink, with both ranks, the pages to look at.
 """
 from __future__ import annotations
@@ -64,7 +66,6 @@ import os
 import shutil
 import time
 from collections.abc import Callable, Sequence
-from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -73,31 +74,32 @@ from PIL import Image
 
 from sfzmaps.frame import blocks as blk
 from sfzmaps.frame import calibrate, data, decide, layout, scores, shape
-from sfzmaps.frame.data import DATA_DIR, OUT, SheetId
+from sfzmaps.frame.data import OUT, SheetId
+from sfzmaps.frame.geometry import CORNERS, SIDES
 from sfzmaps.solver import threads
 
 log = logging.getLogger(__name__)
 
-# the search grid from the spike (computational), and the coordinate search's start and round limit (ruling C8)
-GRID = {"lam_notch": (0, 1e3, 1e4, 1e5), "beta": (0, 1, 3, 10), "lam_block": (0, 1e3, 1e4)}
-START = shape.Params(lam_notch=1e4, beta=3, lam_block=1e3)
-SEARCH_ROUNDS = 3
-PROCESSES = 4           # computational: worker processes for the page decisions and the heads
+TEMPERATURE_FOLDS = 4   # computational: folds of the training sheets for the dev logits and the temperature
+# the shape decision's numbers behind the cuts the owner approved (spec amendment 4); constants, not searched
+PARAMS = shape.Params(lam_notch=1e4, beta=3, lam_block=1e3)
+PROCESSES = 4           # computational: worker processes for the page decisions
 THREADS = 4             # computational: torch threads in this process (upsampling, head logits)
 MIN_FREE_GB = 20        # computational safety margin: `predict_all` refuses with less free disk under `out`
-BASELINE = DATA_DIR / "frame-cmp-none"   # the old two-pass model's held-out outputs (spec part 7)
 
-FOLDS_FILE = "folds.json"
 MODEL_DIR = "model"
+DEV_LOGITS = "dev_logits.npz"
+DEV_DIR = "dev"
+TEST_DIR = "test"
+SCORES_FILE = "scores.json"
+FITS_FILE = "fits.json"
 REDUCER_FILE = "reducer.npz"          # `layout.extract_all`'s file
 OUTSIDE_PNG = "outside.png"
 PROB_FILE = "outside_prob.npz"
 ERASED_PNG = "erased.png"
 OUTLINE_FILE = "outline.json"
 PAGES_FILE = "pages.json"
-BASELINE_FILE = "map_prob.npz"      # the two-pass run's file name
-COMPARED = ("frame_kept", "map_cut", "cost")   # the scores compared with the baseline
-PAIRED = ("frame_kept", "map_cut", "cost", "cost_layout", "cost_edge")   # shape - per-pixel, paired
+PAGE_FILES = (OUTSIDE_PNG, PROB_FILE, ERASED_PNG, OUTLINE_FILE)
 
 
 class DiskFull(RuntimeError):
@@ -105,7 +107,7 @@ class DiskFull(RuntimeError):
 
 
 class StaleFeatures(RuntimeError):
-    """The layout's features (their reducer) are not the ones the held-out run or the model was fitted on."""
+    """The model is stale (`model_stale`): its features, reducer or training sheets are not the current ones."""
 
 
 def sheet_dir(out: Path, sid: SheetId) -> Path:
@@ -140,6 +142,19 @@ def _cls(sid: SheetId, shape_: tuple[int, int], root: Path | None = None) -> np.
     return data.class_mask(data.load_label(*sid, root=root), data.load_remove(*sid, root=root), shape_)
 
 
+def _name(sid: SheetId) -> str:
+    return f"{sid[0]}/{sid[1]}"
+
+
+def _names(pages: Sequence[SheetId]) -> list[str]:
+    return [_name(s) for s in pages]
+
+
+def _sheet_lists() -> tuple[list[SheetId], list[SheetId]]:
+    """(training sheets, test sheets), each sorted, from the label folders as they are now."""
+    return (sorted(set(data.labelled_sheets(data.LABELS))), sorted(set(data.test_sheets(data.TEST_LABELS))))
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # The process pool
 # ---------------------------------------------------------------------------------------------------------------
@@ -171,34 +186,33 @@ def _pinned_environment():
                 os.environ[k] = v
 
 
-def _apply(fn: Callable, args: tuple, item):
-    return fn(item, *args)
-
-
-def pool_map(fn: Callable, items: Sequence, *args, label: str = "") -> list:
+def pool_map(fn: Callable, items: Sequence, *args, label: str = "",
+             describe: Callable[[object], str] | None = None) -> list:
     """`[fn(item, *args) for item in items]`, in order, on up to `PROCESSES` spawned workers (here when
     `PROCESSES` <= 1 or there is one item).  `fn` must be a module-level function.  With a `label`, each result is
-    logged as it arrives."""
+    logged as it completes (one line, with `describe(result)` when given)."""
     items = list(items)
     n = len(items)
     t0 = time.perf_counter()
 
-    def note(i: int) -> None:
+    def note(i: int, r) -> None:
         if label:
-            log.info("%s %d/%d (%.0f s)", label, i, n, time.perf_counter() - t0)
+            log.info("%s %d/%d (%.0f s)%s", label, i, n, time.perf_counter() - t0,
+                     f": {describe(r)}" if describe is not None else "")
 
     if PROCESSES <= 1 or n <= 1:
         out = []
         for i, item in enumerate(items, 1):
             out.append(fn(item, *args))
-            note(i)
+            note(i, out[-1])
         return out
     with _pinned_environment(), concurrent.futures.ProcessPoolExecutor(
             min(PROCESSES, n), mp_context=multiprocessing.get_context("spawn"), initializer=_init_worker) as ex:
-        out = []
-        for i, r in enumerate(ex.map(partial(_apply, fn, args), items), 1):
-            out.append(r)
-            note(i)
+        futures = {ex.submit(fn, item, *args): k for k, item in enumerate(items)}
+        out = [None] * n
+        for i, f in enumerate(concurrent.futures.as_completed(futures), 1):
+            out[futures[f]] = f.result()
+            note(i, out[futures[f]])
         return out
 
 
@@ -207,44 +221,24 @@ def pool_map(fn: Callable, items: Sequence, *args, label: str = "") -> list:
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def feature_pages(labelled: Sequence[SheetId]) -> list[SheetId]:
-    """The pages the reducer is fitted over: every map page and the labelled sheets, sorted.  The held-out run, the
-    final training and the prediction use the same list, so the features are extracted once."""
-    return sorted(set(data.map_pages(data.PAGE_KINDS, data.WORK)) | set(labelled))
+def feature_pages(sheets: Sequence[SheetId]) -> list[SheetId]:
+    """The pages the reducer is fitted over: every map page and `sheets` (the training and test sheets), sorted.  The
+    fit, the scoring and the prediction use the same list, so the features are extracted once."""
+    return sorted(set(data.map_pages(data.PAGE_KINDS, data.WORK)) | set(sheets))
 
 
-def _names(pages: Sequence[SheetId]) -> list[str]:
-    return [f"{s}/{h}" for s, h in pages]
-
-
-def check_features(labelled: Sequence[SheetId], record: dict | None) -> None:
-    """Raise `StaleFeatures` unless `record` (a held-out run's or a model's `reducer`) was made over the pages
-    `feature_pages(labelled)` lists now: the heads, temperature and shape numbers belong to that reducer's feature
-    space, and extracting over another page list would fit another reducer."""
-    if record is None or "pages" not in record:
-        raise StaleFeatures("the held-out run has no record of the features it was fitted on (an older run): rerun "
-                            "`sfzmaps frame --held-out`")
-    now = _names(feature_pages(labelled))
-    if now != record["pages"]:
-        added, gone = sorted(set(now) - set(record["pages"])), sorted(set(record["pages"]) - set(now))
-        raise StaleFeatures(f"the pages changed since the held-out run ({len(added)} added, e.g. {added[:3]}; "
-                            f"{len(gone)} gone, e.g. {gone[:3]}): the layout's features would be refitted; rerun "
-                            "`sfzmaps frame --held-out`")
-
-
-def extract_features(labelled: Sequence[SheetId], device: str, out: Path = OUT, record: dict | None = None) -> dict:
-    """`layout.extract_all` over `feature_pages(labelled)` on `device` (a no-op when they are all there); returns the
-    reducer's record (`file`, `sha256`, `pages`).  With a `record` (from `folds.json` or `model.json`), it refuses
-    (`StaleFeatures`) before extracting when the page list differs (`check_features`), and after when the reducer is
-    not that record's: only the held-out run fits a reducer."""
-    if record is not None:
-        check_features(labelled, record)
-    pages = feature_pages(labelled)
+def extract_features(sheets: Sequence[SheetId], device: str, out: Path = OUT, record: dict | None = None) -> dict:
+    """`layout.extract_all` over `feature_pages(sheets)` on `device` (a no-op when they are all there); returns the
+    reducer's record (`file`, `sha256`, `pages`).  With a `record` (a model's), it refuses (`StaleFeatures`) before
+    extracting when the page list differs, and after when the reducer is not that record's: only `fit` fits a
+    reducer."""
+    pages = feature_pages(sheets)
+    if record is not None and record.get("pages") != _names(pages):
+        raise StaleFeatures("the pages changed since the model was fitted: refit it")
     layout.extract_all(pages, device, out)
     now = {"file": REDUCER_FILE, "sha256": _sha256(out / REDUCER_FILE), "pages": _names(pages)}
     if record is not None and now["sha256"] != record["sha256"]:
-        raise StaleFeatures(f"{out / REDUCER_FILE} is not the reducer the held-out run used: rerun "
-                            "`sfzmaps frame --held-out`")
+        raise StaleFeatures(f"{out / REDUCER_FILE} is not the reducer the model was fitted on: refit it")
     return now
 
 
@@ -275,22 +269,6 @@ def _train(feats: dict, targets: dict, rest: Sequence[SheetId], seed: int, devic
 def _head_device(device: str) -> str:
     """Heads train on the run's device: mps where it is the device, else cpu."""
     return "mps" if device == "mps" else "cpu"
-
-
-def leave_one_out(feats: dict, targets: dict, seeds: Sequence[int], device: str = "cpu") -> tuple[dict, list[dict]]:
-    """For each sheet, the patch logits of heads trained on every other sheet (`layout.train_head`, one padded batch
-    on `device`), one per seed in `seeds` order, one head after another; and each head's training seconds."""
-    seeds = list(seeds)
-    logits = {sid: [] for sid in feats}
-    seconds = []
-    for held in feats:
-        rest = [s for s in feats if s != held]
-        for seed in seeds:
-            head, sec = _train(feats, targets, rest, seed, device)
-            logits[held].append(layout.head_logits(head, feats[held]))
-            seconds.append({"series": held[0], "sheet": held[1], "seed": seed, "seconds": sec})
-            log.info("head without %s/%s, seed %d: %.1f s on %s", *held, seed, sec, _head_device(device))
-    return logits, seconds
 
 
 def chances(zs: Sequence[np.ndarray], shape_: tuple[int, int], temperature: float) -> np.ndarray:
@@ -335,22 +313,26 @@ class PageJob:
     labels: Path | None = None
 
 
-def _load(job: PageJob) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
+def _load(job: PageJob) -> tuple[np.ndarray, np.ndarray]:
     lum = data.load_luminance(job.page)
-    p = chances(job.zs, lum.shape, job.temperature)
-    cls = _cls(job.sid, lum.shape, job.labels) if job.labels is not None else None
-    return lum, p, cls
+    return lum, chances(job.zs, lum.shape, job.temperature)
 
 
-def search_page(job: PageJob, points: Sequence[shape.Params]) -> list[dict]:
-    """The shape decision's realised cost (`scores.realised`) on one labelled page at each of `points`, on one cache."""
-    lum, p, cls = _load(job)
-    cache: dict = {}
-    out = []
-    for pt in points:
-        dec, *_ = shape.decide(p, lum, pt, job.bounds, job.maps, cache=cache)
-        out.append(scores.realised(dec.deleted, cls, lum))
-    return out
+def _r(x) -> float:
+    return round(float(x), 3)
+
+
+def fit_json(fr, ns, bs) -> dict:
+    """A sheet's fit as plain JSON numbers rounded to 3 decimals: the frame's `angle` (degrees), per side its offset,
+    tilt and bow, or "page edge" where the side is unframed, and per corner its arc (`geometry.Frame`); the notches
+    and the boxes (`notches.Notch`, `blocks.Block`, without their gains)."""
+    sides = {s: {"offset": _r(fr.offset[s]), "tilt": _r(fr.tilt[s]), "bow": _r(fr.bow[s])} if fr.framed(s)
+             else "page edge" for s in SIDES}
+    return {"frame": {"angle": _r(fr.phi), "sides": sides, "arcs": {"-".join(c): _r(fr.arc[c]) for c in CORNERS}},
+            "notches": [{"side": n.side, "psi": _r(n.psi), "a0": _r(n.a0), "a1": _r(n.a1), "d": _r(n.d)}
+                        for n in ns],
+            "boxes": [{"kind": b.kind, "cx": _r(b.cx), "cy": _r(b.cy), "theta": _r(b.theta),
+                       "p": [_r(v) for v in b.p]} for b in bs]}
 
 
 def _shape_json(fr, ns, bs) -> dict:
@@ -362,45 +344,25 @@ def _shape_json(fr, ns, bs) -> dict:
             "blocks": [dataclasses.asdict(b) for b in bs]}
 
 
-def _baseline_scores(job: PageJob, lum: np.ndarray, cls: np.ndarray, baseline: Path | None) -> dict | None:
-    """The old two-pass model's chances for the page under `baseline` (key `map`, P(inside), read as (map, 1 - map,
-    0)), decided and scored as the new ones with no temperature: `COMPARED`; None where it has no file."""
-    if baseline is None:
-        return None
-    f = sheet_dir(baseline, job.sid) / BASELINE_FILE
-    if not f.exists():
-        return None
-    with np.load(f) as z:
-        inside = z["map"].astype(np.float32)
-    if inside.shape != lum.shape:
-        log.warning("%s/%s: baseline is %s, the page %s; left out", *job.sid, inside.shape, lum.shape)
-        return None
-    p = np.stack([inside, 1.0 - inside, np.zeros_like(inside)])
-    s = scores.sheet_scores(p, decide.decide(p, lum, job.maps).deleted, cls, lum)
-    return {k: s[k] for k in COMPARED}
-
-
-def final_page(job: PageJob, params: shape.Params, out: Path, baseline: Path | None) -> dict:
-    """A labelled page at the chosen numbers: the shape decision (its outputs written) and the per-pixel cut, both
-    scored, the side ink left, and the baseline's scores (or None)."""
-    lum, p, cls = _load(job)
-    pix = decide.decide(p, lum, job.maps)
+def score_page(job: PageJob, params: shape.Params, out: Path) -> dict:
+    """A labelled page (its label under `job.labels`): the shape decision at `params`, its outputs written under
+    `out`, scored against the label (`scores.split_scores`); its fit (`fit_json`), ink figures and side ink left."""
+    lum, p = _load(job)
     dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps)
-    write_outputs(out, job.sid, p, dec, job.maps, page=job.page, fitted=(fr, ns, bs) if job.maps == 1 else None)
+    fitted = (fr, ns, bs) if job.maps == 1 else None
+    write_outputs(out, job.sid, p, dec, job.maps, page=job.page, fitted=fitted)
     side = shape.side_ink_left(p, lum, fr)
-    return {"series": job.sid[0], "sheet": job.sid[1], "maps": job.maps,
-            "scores": scores.sheet_scores(p, dec.deleted, cls, lum),
-            "pixel": scores.sheet_scores(p, pix.deleted, cls, lum),
-            "side_ink_left": side, "side_ink_left_total": float(sum(side.values())),
+    split = scores.split_scores(dec.outside, dec.removed, data.load_label(*job.sid, root=job.labels),
+                                data.load_remove(*job.sid, root=job.labels), lum)
+    return {"series": job.sid[0], "sheet": job.sid[1], "maps": job.maps, "split": split,
             "filled_ink": dec.filled_ink, "dropped_ink": dec.dropped_ink, "removed_ink": dec.removed_ink,
-            "notches": len(ns), "blocks": len(bs), "phi": fr.phi,
-            "bounds": dataclasses.asdict(job.bounds),
-            "baseline": _baseline_scores(job, lum, cls, baseline)}
+            "side_ink_left": side, "side_ink_left_total": float(sum(side.values())),
+            "bounds": dataclasses.asdict(job.bounds), "fit": fit_json(fr, ns, bs)}
 
 
 def predict_page(job: PageJob, params: shape.Params, out: Path) -> dict:
     """An unlabelled page: the shape decision, its outputs written; its ink figures and the side ink left."""
-    lum, p, _ = _load(job)
+    lum, p = _load(job)
     dec, fr, ns, bs = shape.decide(p, lum, params, job.bounds, job.maps)
     write_outputs(out, job.sid, p, dec, job.maps, page=job.page, fitted=(fr, ns, bs) if job.maps == 1 else None)
     side = shape.side_ink_left(p, lum, fr)
@@ -446,188 +408,244 @@ def write_outputs(out: Path, sid: SheetId, p: np.ndarray, decision: decide.Decis
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# The held-out run
+# The model
 # ---------------------------------------------------------------------------------------------------------------
 
 
-def _interval(t: tuple[float, float, float]) -> dict:
-    return {"mean": t[0], "lo": t[1], "hi": t[2]}
+def _save_head(head, path: Path) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    torch.save(head.state_dict(), tmp)
+    os.replace(tmp, path)
 
 
-def search_params(jobs: Sequence[PageJob]) -> tuple[shape.Params, list[dict], int]:
-    """The coordinate search (see the module) on the held-out `jobs`: (the chosen numbers, every visited point with
-    its pooled `frame_kept`, `map_cut` and `cost` in visiting order, the rounds run)."""
-    visited: dict[shape.Params, dict] = {}
-
-    def evaluate(points: list[shape.Params]) -> None:
-        need = [pt for pt in dict.fromkeys(points) if pt not in visited]
-        if not need:
-            return
-        per_page = pool_map(search_page, jobs, tuple(need), label=f"search, {len(need)} points per page")
-        for i, pt in enumerate(need):
-            rows = [r[i] for r in per_page]
-            visited[pt] = {**dataclasses.asdict(pt), **{k: float(sum(r[k] for r in rows))
-                                                        for k in ("frame_kept", "map_cut", "cost")}}
-            log.info("lambda_notch %g, beta %g, lambda_block %g: pooled cost %.1f", pt.lam_notch, pt.beta,
-                     pt.lam_block, visited[pt]["cost"])
-
-    current, rounds = START, 0
-    for _ in range(SEARCH_ROUNDS):
-        rounds += 1
-        changed = False
-        for name, values in GRID.items():
-            points = [dataclasses.replace(current, **{name: v}) for v in values]
-            evaluate([current, *points])
-            best = current
-            for pt in points:
-                if visited[pt]["cost"] < visited[best]["cost"]:
-                    best = pt
-            if best != current:
-                current, changed = best, True
-        if not changed:
-            break
-    return current, list(visited.values()), rounds
-
-
-def _pooled(rows: list[dict]) -> dict:
-    return {"means": {k: _interval(scores.bootstrap_mean([r[k] for r in rows], scores.BOOT_N)) for k in rows[0]},
-            "shares": scores.pooled_shares(rows)}
-
-
-def _paired(a: dict[SheetId, dict], b: dict[SheetId, dict], keys: Sequence[str]) -> dict:
-    return {k: _interval(scores.paired_difference({s: v[k] for s, v in a.items()}, {s: v[k] for s, v in b.items()},
-                                                  scores.BOOT_N)) for k in keys}
-
-
-def held_out(labelled: Sequence[SheetId], device: str, out: Path = OUT,
-             turn: Callable[[], contextlib.AbstractContextManager] = contextlib.nullcontext) -> dict:
-    """Score every labelled sheet held out (see the module); returns what it writes to `out/folds.json`.  The
-    features (extracted, or refitted when the page list changed: the only place that may) and the heads run on
-    `device` inside `turn()` (the CLI's GPU turn); the rest runs on cpu after it."""
-    labelled = sorted(set(labelled))
-    if len(labelled) < 2:
-        raise ValueError(f"{len(labelled)} labelled sheet(s): leaving one out needs at least 2")
-    (out / FOLDS_FILE).unlink(missing_ok=True)
-    torch.set_num_threads(THREADS)
-    counts = data.map_counts(data.PAGE_KINDS)
-    seeds = list(layout.HEAD_SEEDS)
-    with turn():
-        reducer = extract_features(labelled, device, out)
-        feats, targets = _features_and_targets(labelled, out)
-        loo, head_seconds = leave_one_out(feats, targets, seeds, device)
-
-    rng = np.random.default_rng(0)            # one generator for the run, sheets in sorted order
-    samples = []
-    for sid in labelled:
-        lum = _lum(sid)
-        samples.append(sample_patch_logits(loo[sid], _cls(sid, lum.shape), lum, rng, calibrate.N_CAL))
-    temperature = calibrate.fit_temperature(samples)
-    t_lo, t_hi = calibrate.temperature_interval(samples, calibrate.CAL_BOOT)
-    reliability = calibrate.reliability(samples, temperature)
-    del samples
-    log.info("temperature %.3f (%.3f-%.3f)", temperature, t_lo, t_hi)
-
-    jobs = [PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK), zs=tuple(loo[sid]), temperature=temperature,
-                    maps=counts[sid], labels=data.LABELS,
-                    bounds=blk.block_bounds([s for s in labelled if s != sid], root=data.LABELS))
-            for sid in labelled]
-    params, search, rounds = search_params(jobs)
-    log.info("numbers: lambda_notch %g, beta %g, lambda_block %g (%d points, %d rounds)", params.lam_notch,
-             params.beta, params.lam_block, len(search), rounds)
-
-    rows = pool_map(final_page, jobs, params, out, BASELINE, label="held-out sheet")
-    old = {}
-    sheets = []
-    for r in rows:
-        sid = (r["series"], r["sheet"])
-        b = r.pop("baseline")
-        if b is not None:
-            old[sid] = b
-        sheets.append(r)
-        sc, px = r["scores"], r["pixel"]
-        log.info("%s/%s: shape left in %s, cut %s, cost %.1f; per-pixel left in %s, cut %s, cost %.1f", *sid,
-                 scores.percent(sc["frame_kept_share"]), scores.percent(sc["map_cut_share"]), sc["cost"],
-                 scores.percent(px["frame_kept_share"]), scores.percent(px["map_cut_share"]), px["cost"])
-    new = {(r["series"], r["sheet"]): r["scores"] for r in sheets}
-    pixel = {(r["series"], r["sheet"]): r["pixel"] for r in sheets}
-    result = {
-        "params": dataclasses.asdict(params),
-        "reducer": reducer,
-        "grid": {k: list(v) for k, v in GRID.items()},
-        "start": dataclasses.asdict(START),
-        "search": search,
-        "rounds": rounds,
-        "head_seeds": seeds,
-        "head_seconds": head_seconds,
-        "temperature": temperature,
-        "temperature_interval": [t_lo, t_hi],
-        "reliability": reliability,
-        "sheets": sheets,
-        "pooled": {"shape": _pooled(list(new.values())), "pixel": _pooled(list(pixel.values()))},
-        "shape_vs_pixel": _paired(new, pixel, PAIRED),
-        "side_ink_left": _interval(scores.bootstrap_mean([r["side_ink_left_total"] for r in sheets],
-                                                         scores.BOOT_N)),
-        "baseline": {"dir": str(BASELINE),
-                     "sheets": [{"series": s, "sheet": h, **v} for (s, h), v in sorted(old.items())],
-                     "paired": _paired({s: new[s] for s in old}, old, COMPARED) if old else {}},
-    }
-    _write_json(out / FOLDS_FILE, result)
-    return result
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# The final heads and every page
-# ---------------------------------------------------------------------------------------------------------------
-
-
-def train_final(labelled: Sequence[SheetId], device: str, out: Path, held: dict,
-                turn: Callable[[], contextlib.AbstractContextManager] = contextlib.nullcontext) -> None:
-    """`layout.HEAD_SEEDS` heads trained on every labelled sheet (on `device`, inside `turn()`), saved to
-    `out/model/` with the held-out run's numbers, temperature and reducer record (`held`, its `folds.json`) and the
-    block bounds of every label; `model.json` is deleted first and written last, so a run that stops part way leaves
-    no model to load.  Refuses (`StaleFeatures`, before any extraction) when the features are not the held-out
-    run's."""
-    labelled = sorted(set(labelled))
-    check_features(labelled, held.get("reducer"))
+def fit(device: str, out: Path = OUT,
+        turn: Callable[[], contextlib.AbstractContextManager] = contextlib.nullcontext) -> dict:
+    """Fit the model (see the module): the dev logits, the temperature and the final heads; returns what it writes
+    to `out/model/model.json`.  Refuses (ValueError) a sheet that is both a training and a test sheet, before
+    anything is read or written.  The features (extracted, or refitted when the page list changed: the only place
+    that may) and the heads run on `device` inside `turn()` (the CLI's GPU turn); the rest runs on cpu after it."""
+    train, test = _sheet_lists()
+    data.check_split(train, test)
+    if len(train) < TEMPERATURE_FOLDS:
+        raise ValueError(f"{len(train)} training sheet(s): {TEMPERATURE_FOLDS} folds need at least as many")
     d = out / MODEL_DIR
-    d.mkdir(parents=True, exist_ok=True)
     (d / "model.json").unlink(missing_ok=True)
     torch.set_num_threads(THREADS)
     seeds = list(layout.HEAD_SEEDS)
+    folds = [train[k::TEMPERATURE_FOLDS] for k in range(TEMPERATURE_FOLDS)]
+    dev: dict[SheetId, np.ndarray] = {}
     seconds = []
     with turn():
-        reducer = extract_features(labelled, device, out, held["reducer"])
-        feats, targets = _features_and_targets(labelled, out)
+        reducer = extract_features(train + test, device, out)
+        feats, targets = _features_and_targets(train, out)
+        for k, held in enumerate(folds):
+            rest = [s for s in train if s not in set(held)]
+            heads = []
+            for seed in seeds:
+                head, sec = _train(feats, targets, rest, seed, device)
+                heads.append(head)
+                seconds.append({"fold": k, "seed": seed, "seconds": sec})
+                log.info("fold %d/%d, seed %d: head on %d sheets, %.1f s on %s", k + 1, TEMPERATURE_FOLDS, seed,
+                         len(rest), sec, _head_device(device))
+            for sid in held:
+                dev[sid] = np.stack([layout.head_logits(h, feats[sid]) for h in heads]).astype(np.float32)
+        d.mkdir(parents=True, exist_ok=True)
         for seed in seeds:
-            head, sec = _train(feats, targets, labelled, seed, device)
-            log.info("final head, seed %d: %.1f s on %s", seed, sec, _head_device(device))
-            seconds.append({"seed": seed, "seconds": sec})
-            tmp = d / f"head-{seed}.pt.tmp"
-            torch.save(head.state_dict(), tmp)
-            os.replace(tmp, d / f"head-{seed}.pt")
-    bounds = blk.block_bounds(labelled, root=data.LABELS)
-    _write_json(d / "model.json", {
-        "head_seeds": seeds, "head_seconds": seconds, "components": layout.COMPONENTS,
-        "params": {k: held["params"][k] for k in ("lam_notch", "beta", "lam_block")},
-        "temperature": float(held["temperature"]), "bounds": dataclasses.asdict(bounds), "reducer": reducer,
-        "sheets": [list(s) for s in labelled], "level": decide.cut_level()})
+            head, sec = _train(feats, targets, train, seed, device)
+            seconds.append({"fold": None, "seed": seed, "seconds": sec})
+            log.info("final head, seed %d: on %d sheets, %.1f s on %s", seed, len(train), sec, _head_device(device))
+            _save_head(head, d / f"head-{seed}.pt")
+    tmp = d / (DEV_LOGITS + ".tmp")
+    with open(tmp, "wb") as fh:
+        np.savez_compressed(fh, **{_name(sid): z for sid, z in sorted(dev.items())})
+    os.replace(tmp, d / DEV_LOGITS)
+
+    t0 = time.perf_counter()
+    rng = np.random.default_rng(0)            # one generator for the run, sheets in sorted order
+    samples = []
+    for sid in train:
+        lum = _lum(sid)
+        samples.append(sample_patch_logits(list(dev[sid]), _cls(sid, lum.shape), lum, rng, calibrate.N_CAL))
+    temperature = calibrate.fit_temperature(samples)
+    t_lo, t_hi = calibrate.temperature_interval(samples, calibrate.CAL_BOOT, centre=temperature)
+    reliability = calibrate.reliability(samples, temperature)
+    del samples
+    log.info("temperature %.3f (%.3f-%.3f), from the dev logits of %d sheets in %.0f s", temperature, t_lo, t_hi,
+             len(train), time.perf_counter() - t0)
+
+    meta = {"head_seeds": seeds, "head_seconds": seconds, "components": layout.COMPONENTS,
+            "temperature": temperature, "temperature_interval": [t_lo, t_hi], "reliability": reliability,
+            "folds": [[list(s) for s in f] for f in folds],
+            "bounds": dataclasses.asdict(blk.block_bounds(train, root=data.LABELS)), "reducer": reducer,
+            "sheets": [list(s) for s in train], "params": dataclasses.asdict(PARAMS), "level": decide.cut_level()}
+    _write_json(d / "model.json", meta)
+    return json.loads((d / "model.json").read_text())
+
+
+def model_stale(out: Path = OUT) -> str | None:
+    """Why the model under `out/model/` is stale, or None when it is current: `model.json` missing (or an older
+    model's), its training sheets not the labels' now, its reducer record not the pages' now or not `reducer.npz`,
+    or a file it needs missing."""
+    d = out / MODEL_DIR
+    f = d / "model.json"
+    if not f.exists():
+        return f"{f} is missing"
+    meta = json.loads(f.read_text())
+    if not {"folds", "reducer", "head_seeds"} <= set(meta):
+        return f"{f} is an older model's (no folds or reducer record)"
+    train, test = _sheet_lists()
+    had = [tuple(s) for s in meta["sheets"]]
+    if had != train:
+        added, gone = _names(sorted(set(train) - set(had))), _names(sorted(set(had) - set(train)))
+        return (f"the training sheets changed since the fit ({len(added)} added, e.g. {added[:3]}; {len(gone)} gone, "
+                f"e.g. {gone[:3]})")
+    rec = meta["reducer"]
+    now = _names(feature_pages(train + test))
+    if rec.get("pages") != now:
+        added, gone = sorted(set(now) - set(rec.get("pages", []))), sorted(set(rec.get("pages", [])) - set(now))
+        return (f"the pages changed since the fit ({len(added)} added, e.g. {added[:3]}; {len(gone)} gone, e.g. "
+                f"{gone[:3]}): the reducer would be refitted")
+    r = out / REDUCER_FILE
+    if not r.exists() or _sha256(r) != rec.get("sha256"):
+        return f"{r} is not the reducer the model was fitted on"
+    for need in [d / DEV_LOGITS, *(d / f"head-{s}.pt" for s in meta["head_seeds"])]:
+        if not need.exists():
+            return f"{need} is missing"
+    return None
+
+
+def _require_current(out: Path) -> None:
+    reason = model_stale(out)
+    if reason is not None:
+        raise StaleFeatures(f"{reason}: refit the model first (`sfzmaps frame` fits it when it is stale)")
 
 
 def load_model(out: Path) -> tuple[list, dict]:
     """The final heads (eval, cpu) and `model.json`, from `out/model/`."""
     d = out / MODEL_DIR
     if not (d / "model.json").exists():
-        raise FileNotFoundError(f"{d / 'model.json'} is missing: train the final model first (`sfzmaps frame`)")
+        raise FileNotFoundError(f"{d / 'model.json'} is missing: fit the model first (`sfzmaps frame`)")
     meta = json.loads((d / "model.json").read_text())
     if "head_seeds" not in meta:
-        raise FileNotFoundError(f"{d / 'model.json'} is the old full-resolution model's: train the final heads "
-                                "first (`sfzmaps frame`)")
+        raise FileNotFoundError(f"{d / 'model.json'} is the old full-resolution model's: fit the model first "
+                                "(`sfzmaps frame`)")
     heads = []
     for s in meta["head_seeds"]:
         head = layout.new_head()
         head.load_state_dict(torch.load(d / f"head-{s}.pt", map_location="cpu", weights_only=True))
         heads.append(head.eval())
     return heads, meta
+
+
+def load_dev_logits(out: Path = OUT) -> dict[SheetId, np.ndarray]:
+    """Each training sheet's dev logits (`DEV_LOGITS`): float32 (seeds, classes, rows, cols), from the heads of the
+    fold that held it out."""
+    with np.load(out / MODEL_DIR / DEV_LOGITS) as z:
+        return {tuple(k.split("/", 1)): z[k] for k in z.files}
+
+
+def _bounds(meta_bounds: dict) -> blk.BlockBounds:
+    return blk.BlockBounds(tuple(meta_bounds["rect_max"]), tuple(meta_bounds["ellipse_max"]))
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# The dev and test scores
+# ---------------------------------------------------------------------------------------------------------------
+
+
+def _deleted_boxes(boxes: list[dict]) -> int:
+    """The labelled boxes most of whose ink is deleted (a reporting count; each box's share is in `scores.json`)."""
+    return sum(1 for b in boxes if b["deleted_share"] > 0.5)
+
+
+def _split_line(name: str, shares: dict, boxes: list[dict]) -> str:
+    pct = scores.percent
+    return (f"{name}: frame left {pct(shares['frame_left_share'])} | boxes left {pct(shares['box_left_share'])} "
+            f"({_deleted_boxes(boxes)} of {len(boxes)} deleted) | map cut by frame "
+            f"{pct(shares['map_cut_frame_share'])}, by boxes {pct(shares['map_cut_boxes_share'])}")
+
+
+def _sheet_line(row: dict) -> str:
+    return _split_line(f"{row['series']}/{row['sheet']}", scores.pooled_split([row["split"]]), row["split"]["boxes"])
+
+
+def format_split(result: dict) -> str:
+    """A `score_dev` or `score_test` result for the owner: one line per sheet, then the pooled line (summed ink over
+    summed ink)."""
+    rows = result["sheets"]
+    lo, hi = result["temperature_interval"]
+    lines = [f"{result['set']}: {len(rows)} sheets, temperature {result['temperature']:.3f} ({lo:.3f}-{hi:.3f})"]
+    lines += [_sheet_line(r) for r in rows]
+    lines.append(_split_line(f"pooled ({len(rows)} sheets)", result["pooled"],
+                             [b for r in rows for b in r["split"]["boxes"]]))
+    return "\n".join(lines)
+
+
+def _score_set(name: str, jobs: list[PageJob], where: Path, meta: dict) -> dict:
+    """`score_page` on every job (`PROCESSES` workers, one log line per finished sheet), then `SCORES_FILE` and
+    `FITS_FILE` under `where`; returns what `SCORES_FILE` holds."""
+    for f in (SCORES_FILE, FITS_FILE):
+        (where / f).unlink(missing_ok=True)
+    rows = pool_map(score_page, jobs, PARAMS, where, label=f"{name} sheet", describe=_sheet_line)
+    fits = {f"{r['series']}/{r['sheet']}": r.pop("fit") for r in rows}
+    _write_json(where / FITS_FILE, fits)
+    _write_json(where / SCORES_FILE, {
+        "set": name, "temperature": meta["temperature"], "temperature_interval": meta["temperature_interval"],
+        "params": dataclasses.asdict(PARAMS), "sheets": rows,
+        "pooled": scores.pooled_split([r["split"] for r in rows])})
+    return json.loads((where / SCORES_FILE).read_text())
+
+
+def score_dev(out: Path = OUT) -> dict:
+    """Each training sheet cut from its dev logits at the model's temperature, with block bounds from its fold's
+    other sheets (as its heads), and scored against its label; written under `out/dev/` (see the module).  Refuses
+    (`StaleFeatures`) a stale model."""
+    _require_current(out)
+    meta = json.loads((out / MODEL_DIR / "model.json").read_text())
+    torch.set_num_threads(THREADS)
+    train = [tuple(s) for s in meta["sheets"]]
+    logits = load_dev_logits(out)
+    counts = data.map_counts(data.PAGE_KINDS)
+    jobs = []
+    for fold in meta["folds"]:
+        held = [tuple(s) for s in fold]
+        bounds = blk.block_bounds([s for s in train if s not in set(held)], root=data.LABELS)
+        jobs += [PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK), zs=tuple(logits[sid]),
+                         temperature=float(meta["temperature"]), maps=counts[sid], bounds=bounds, labels=data.LABELS)
+                 for sid in held]
+    jobs.sort(key=lambda j: j.sid)
+    return _score_set("dev", jobs, out / DEV_DIR, meta)
+
+
+def score_test(out: Path = OUT) -> dict:
+    """Each test sheet cut by the final heads at the model's temperature and scored against its label (under
+    `data.TEST_LABELS`); written under `out/test/` (see the module).  Refuses (`StaleFeatures`) a stale model."""
+    _require_current(out)
+    heads, meta = load_model(out)
+    torch.set_num_threads(THREADS)
+    _, test = _sheet_lists()
+    counts = data.map_counts(data.PAGE_KINDS)
+    bounds = _bounds(meta["bounds"])
+    jobs = []
+    for sid in test:
+        f = load_features(out, sid)
+        jobs.append(PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK),
+                            zs=tuple(layout.head_logits(h, f) for h in heads), temperature=float(meta["temperature"]),
+                            maps=counts[sid], bounds=bounds, labels=data.TEST_LABELS))
+    return _score_set("test", jobs, out / TEST_DIR, meta)
+
+
+def fit_changes(before: Path, after: Path) -> list[str]:
+    """The sheets, in both `fits.json` files, whose frame (angle, sides, arcs) or notches differ between them; the
+    boxes are not compared."""
+    a, b = json.loads(Path(before).read_text()), json.loads(Path(after).read_text())
+    return sorted(k for k in a.keys() & b.keys()
+                  if a[k]["frame"] != b[k]["frame"] or a[k]["notches"] != b[k]["notches"])
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Every page
+# ---------------------------------------------------------------------------------------------------------------
 
 
 def check_disk(out: Path) -> None:
@@ -652,37 +670,48 @@ def rank_pages(rows: list[dict]) -> list[dict]:
     return rows
 
 
+def _copy_dev_outputs(out: Path, sid: SheetId) -> bool:
+    """The training sheet's dev outputs copied to its place under `out`; False (nothing copied) when any is missing."""
+    src, dst = sheet_dir(out / DEV_DIR, sid), sheet_dir(out, sid)
+    if not all((src / n).exists() for n in PAGE_FILES):
+        return False
+    dst.mkdir(parents=True, exist_ok=True)
+    for n in PAGE_FILES:
+        shutil.copyfile(src / n, dst / (n + ".tmp"))
+        os.replace(dst / (n + ".tmp"), dst / n)
+    return True
+
+
 def predict_all(device: str, out: Path = OUT,
                 turn: Callable[[], contextlib.AbstractContextManager] = contextlib.nullcontext) -> None:
-    """Every map page that is not labelled, decided with the final heads at the held-out numbers; the labelled sheets
-    keep their held-out outputs.  Then `PAGES_FILE` (`rank_pages`; the labelled sheets' rows from `folds.json`,
-    marked `held_out`).  Refuses (`DiskFull`) with less than `MIN_FREE_GB` free, and (`StaleFeatures`, before any
-    extraction) when the features are not the ones the heads were trained on.  Missing feature files are extracted on
-    `device` inside `turn()`."""
+    """Every map page that is not a training sheet, decided with the final heads at the model's temperature and
+    `PARAMS`; the training sheets take their dev outputs (`sfzmaps frame --dev`).  Then `PAGES_FILE` (`rank_pages`;
+    the training sheets' rows from `dev/scores.json`, marked `held_out`).  Refuses (`DiskFull`) with less than
+    `MIN_FREE_GB` free, and (`StaleFeatures`, before any extraction) a stale model.  Missing feature files are
+    extracted on `device` inside `turn()`."""
     check_disk(out)
+    _require_current(out)
     heads, meta = load_model(out)
     torch.set_num_threads(THREADS)
-    labelled = sorted(set(data.labelled_sheets(data.LABELS)))
-    check_features(labelled, meta.get("reducer"))
+    train, test = _sheet_lists()
     with turn():
-        extract_features(labelled, device, out, meta["reducer"])
-    params = shape.Params(**meta["params"])
-    bounds = blk.BlockBounds(tuple(meta["bounds"]["rect_max"]), tuple(meta["bounds"]["ellipse_max"]))
+        extract_features(train + test, device, out, meta["reducer"])
+    bounds = _bounds(meta["bounds"])
     counts = data.map_counts(data.PAGE_KINDS)
     pages = data.map_pages(data.PAGE_KINDS, data.WORK)
     for sid in pages:
-        if sid in labelled and not (sheet_dir(out, sid) / OUTSIDE_PNG).exists():
-            log.warning("%s/%s is labelled but has no held-out outputs: run `sfzmaps frame --held-out`", *sid)
-    todo = [sid for sid in pages if sid not in set(labelled)]
+        if sid in set(train) and not _copy_dev_outputs(out, sid):
+            log.warning("%s/%s is a training sheet with no dev outputs: run `sfzmaps frame --dev`", *sid)
+    todo = [sid for sid in pages if sid not in set(train)]
     jobs = []
     for sid in todo:
         f = load_features(out, sid)
         jobs.append(PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK),
                             zs=tuple(layout.head_logits(h, f) for h in heads), temperature=float(meta["temperature"]),
                             maps=counts[sid], bounds=bounds))
-    stats = pool_map(predict_page, jobs, params, out, label="page")
+    stats = pool_map(predict_page, jobs, PARAMS, out, label="page")
     rows = [{"series": s, "sheet": h, **v, "held_out": False} for (s, h), v in zip(todo, stats)]
-    summary = out / FOLDS_FILE
+    summary = out / DEV_DIR / SCORES_FILE
     if summary.exists():
         on_page = set(pages)
         rows += [{"series": r["series"], "sheet": r["sheet"], "filled_ink": r["filled_ink"],
@@ -691,67 +720,5 @@ def predict_all(device: str, out: Path = OUT,
                   "held_out": True}
                  for r in json.loads(summary.read_text())["sheets"] if (r["series"], r["sheet"]) in on_page]
     else:
-        log.warning("%s is missing: the labelled sheets are left out of %s", summary, PAGES_FILE)
+        log.warning("%s is missing: the training sheets are left out of %s", summary, PAGES_FILE)
     _write_json(out / PAGES_FILE, rank_pages(rows))
-
-
-# ---------------------------------------------------------------------------------------------------------------
-# The owner's summary
-# ---------------------------------------------------------------------------------------------------------------
-
-
-def _fmt(iv: dict, digits: int = 1) -> str:
-    return f"{iv['mean']:.{digits}f} [{iv['lo']:.{digits}f}, {iv['hi']:.{digits}f}]"
-
-
-def _shares_line(name: str, sh: dict) -> str:
-    pct = scores.percent
-    return (f"  {name}: frame/legend ink left in {pct(sh['frame_kept_share'])} (outside the frame "
-            f"{pct(sh['outside_kept_share'])}, removed blocks {pct(sh['block_kept_share'])}); "
-            f"map ink cut {pct(sh['map_cut_share'])}")
-
-
-def format_scores(result: dict) -> str:
-    """The held-out run for the owner: the ink shares first (pooled over every sheet's ink), then the numbers, the
-    costs with 90% sheet-bootstrap intervals, the comparisons and each sheet."""
-    pct = scores.percent
-    lo, hi = result["temperature_interval"]
-    p = result["params"]
-    shp, pix = result["pooled"]["shape"], result["pooled"]["pixel"]
-    lines = [
-        f"held-out: {len(result['sheets'])} sheets, each laid out by {len(result['head_seeds'])} heads trained "
-        f"without it",
-        "pooled over every sheet's ink:",
-        _shares_line("straight-line shape", shp["shares"]),
-        _shares_line("per-pixel cut      ", pix["shares"]),
-        f"shape numbers: lambda_notch {p['lam_notch']:g}, beta {p['beta']:g}, lambda_block {p['lam_block']:g} "
-        f"({len(result['search'])} points searched, {result['rounds']} rounds); temperature "
-        f"{result['temperature']:.3f} ({lo:.3f}-{hi:.3f})",
-        f"means over sheets [90% sheet-bootstrap interval], cost at frame:map {decide.COST_FRAME:g}:"
-        f"{decide.COST_MAP:g}:",
-    ]
-    for name, pooled in (("shape    ", shp), ("per-pixel", pix)):
-        m = pooled["means"]
-        lines.append(f"  {name}: cost {_fmt(m['cost'])} (layout {_fmt(m['cost_layout'])}, edge "
-                     f"{_fmt(m['cost_edge'])}); frame ink left {_fmt(m['frame_kept'])}, map ink cut "
-                     f"{_fmt(m['map_cut'])}")
-    lines.append("shape - per-pixel, paired: " + ", ".join(f"{k} {_fmt(v)}" for k, v in result["shape_vs_pixel"].items()))
-    lines.append(f"side ink left (confident frame ink along the fitted sides): {_fmt(result['side_ink_left'])}")
-    base = result["baseline"]
-    if base["sheets"]:
-        lines.append(f"baseline (two-pass, {len(base['sheets'])} sheets), shape - old: "
-                     + ", ".join(f"{k} {_fmt(v)}" for k, v in base["paired"].items()))
-    else:
-        lines.append("baseline: no shared sheets")
-    lines.append("per sheet (shape | per-pixel):")
-    for s in result["sheets"]:
-        sc, px = s["scores"], s["pixel"]
-        lines.append(f"  {s['series']}/{s['sheet']}: left in {pct(sc['frame_kept_share'])}, cut "
-                     f"{pct(sc['map_cut_share'])}, cost {sc['cost']:.0f} (layout {sc['cost_layout']:.0f}, edge "
-                     f"{sc['cost_edge']:.0f}), side ink left {s['side_ink_left_total']:.0f} | left in "
-                     f"{pct(px['frame_kept_share'])}, cut {pct(px['map_cut_share'])}, cost {px['cost']:.0f}")
-    lines.append("search (pooled cost):")
-    for r in result["search"]:
-        lines.append(f"  lambda_notch {r['lam_notch']:g}, beta {r['beta']:g}, lambda_block {r['lam_block']:g}: "
-                     f"{r['cost']:.0f}")
-    return "\n".join(lines)

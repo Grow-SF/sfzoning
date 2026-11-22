@@ -1,6 +1,5 @@
 import contextlib
 import csv
-import dataclasses
 import hashlib
 import json
 import types
@@ -22,7 +21,6 @@ def quick(monkeypatch):
     """Few resamples and head steps, two head seeds, no process pool: the real counts are for real pages."""
     monkeypatch.setattr(calibrate, "N_CAL", 2_000)
     monkeypatch.setattr(calibrate, "CAL_BOOT", 5)
-    monkeypatch.setattr(scores, "BOOT_N", 200)
     monkeypatch.setattr(layout, "COMPONENTS", 5)
     monkeypatch.setattr(layout, "HEAD_MAX_STEPS", 5)
     monkeypatch.setattr(layout, "HEAD_SEEDS", (0, 1))
@@ -54,19 +52,22 @@ def _save(lum: np.ndarray, path) -> None:
 
 
 UNLABELLED = [("a", "u0"), ("b", "u0"), ("b", "u1")]
+TEST = [("a", "u0"), ("b", "u1")]          # unlabelled for training; labelled in the test folder
+TEST_BOX = [[2, 4], [11, 4], [11, 10], [2, 10]]   # over a/u0's printed block
 
 
 @pytest.fixture
 def fake_world(tmp_path, monkeypatch, tiny_backbone):
     """Two series, each with three labelled map pages (s0..s2; each s1 has a removed block), unlabelled map pages
-    (a/u0, b/u0, b/u1) and a cover (c0), under tmp_path; the stand-in backbone; plenty of free disk.  The data paths
-    and BASELINE point there.  Returns (labelled sheets, out dir)."""
+    (a/u0, b/u0, b/u1; a/u0 and b/u1 are the test sheets, labelled in their own folder, a/u0 with a box) and a cover
+    (c0), under tmp_path; the stand-in backbone; plenty of free disk.  The data paths point there.  Returns (training
+    sheets, out dir)."""
     work, labels, kinds = tmp_path / "work", tmp_path / "labels", tmp_path / "page_kinds.csv"
     monkeypatch.setattr(data, "WORK", work)
     monkeypatch.setattr(data, "LABELS", labels)
+    monkeypatch.setattr(data, "TEST_LABELS", tmp_path / "labels-test")
     monkeypatch.setattr(data, "PAGE_KINDS", kinds)
     monkeypatch.setattr(data, "OUT", tmp_path / "out")
-    monkeypatch.setattr(run, "BASELINE", tmp_path / "baseline")
     monkeypatch.setattr(layout, "load_backbone", lambda device: tiny_backbone)
     monkeypatch.setattr(run.shutil, "disk_usage", lambda p: types.SimpleNamespace(total=1e12, used=0, free=1e12))
     rows, labelled = [], []
@@ -86,6 +87,12 @@ def fake_world(tmp_path, monkeypatch, tiny_backbone):
         else:
             _save(np.ones((H, W), np.float32), data.page_path(s, sheet, work))
         rows.append({"series": s, "sheet": sheet, "kind": kind, "checked": "test", "maps": ""})
+    for s, sheet in TEST:
+        label = {"polygons": [[[B, B], [W - B, B], [W - B, H - B], [B, H - B]]]}
+        if s == "a":
+            label["remove"] = [TEST_BOX]
+        (tmp_path / "labels-test" / s).mkdir(parents=True, exist_ok=True)
+        (tmp_path / "labels-test" / s / f"{sheet}.json").write_text(json.dumps(label))
     with open(kinds, "w", newline="") as f:
         wr = csv.DictWriter(f, fieldnames=["series", "sheet", "kind", "checked", "maps"])
         wr.writeheader()
@@ -107,11 +114,6 @@ def _lum(sid):
     return data.load_luminance(data.page_path(*sid, work=data.WORK))
 
 
-def _cls(sid):
-    return data.class_mask(data.load_label(*sid, root=data.LABELS), data.load_remove(*sid, root=data.LABELS),
-                           (H, W))
-
-
 def _feat(out, sid):
     return np.load(layout.features_dir(out) / sid[0] / f"{sid[1]}.npy")
 
@@ -120,109 +122,200 @@ def _files(root):
     return {p.relative_to(root) for p in root.rglob("*") if p.is_file()}
 
 
-def test_layout_chances_are_held_out(fake_world, pixel_shape, monkeypatch):
-    """Orchestration test (the shape decision is stubbed with the per-pixel cut)."""
-    labelled, out = fake_world
-    calls, real, inside = [], layout.train_head, []
+@pytest.fixture
+def spy_train_head(monkeypatch):
+    """Every head trained (the real training): the features of the pages it trained on, its seed and the head."""
+    calls, real = [], layout.train_head
 
     def spy(feats, targets, seed, device="cpu"):
         head = real(feats, targets, seed, device)
-        calls.append({"feats": [np.asarray(f) for f in feats], "seed": seed, "head": head, "turn": bool(inside)})
+        calls.append({"feats": [np.asarray(f) for f in feats], "seed": seed, "head": head})
         return head
     monkeypatch.setattr(layout, "train_head", spy)
+    return calls
+
+
+def _trained_on(call, feats):
+    return {sid for sid, f in feats.items() if any(np.array_equal(f, g) for g in call["feats"])}
+
+
+def _q(path):
+    with np.load(path) as z:
+        return z["q"]
+
+
+def _written(p):
+    return np.round(np.clip(p[1] + p[2], 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
+def test_fit_refuses_a_test_sheet_that_is_also_trained_on(fake_world):
+    labelled, out = fake_world
+    (data.TEST_LABELS / "a" / "s0.json").write_text((data.LABELS / "a" / "s0.json").read_text())
+    with pytest.raises(ValueError, match="a/s0"):
+        run.fit("cpu", out)
+    assert not out.exists()                                     # before any features or heads
+
+
+def test_no_test_sheet_reaches_training(fake_world, spy_train_head, monkeypatch):
+    labelled, out = fake_world
+    sampled, real_fit = [], calibrate.fit_temperature
+
+    def spy_fit(samples):
+        sampled.append(len(samples))
+        return real_fit(samples)
+    monkeypatch.setattr(calibrate, "fit_temperature", spy_fit)
+    run.fit("cpu", out)
+    feats = {sid: _feat(out, sid) for sid in labelled + TEST}
+    assert len(spy_train_head) == (run.TEMPERATURE_FOLDS + 1) * len(layout.HEAD_SEEDS)
+    for call in spy_train_head:
+        seen = _trained_on(call, feats)
+        assert not seen & set(TEST) and len(seen) == len(call["feats"])
+    assert sampled and all(n == len(labelled) for n in sampled)      # the temperature: the training sheets only
+    meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
+    assert meta["sheets"] == [list(s) for s in labelled]
+
+
+def test_dev_sheets_are_cut_by_heads_that_did_not_train_on_them(fake_world, spy_train_head, pixel_shape, caplog):
+    """Orchestration test (the shape decision is stubbed with the per-pixel cut)."""
+    labelled, out = fake_world
+    caplog.set_level("INFO", logger=run.__name__)
+    marks = []
 
     @contextlib.contextmanager
     def turn():
-        inside.append(1)
+        marks.append(len(spy_train_head))
         yield
-        inside.pop()
-    result = run.held_out(labelled, "cpu", out, turn=turn)
-    assert all(c["turn"] for c in calls)                      # every head inside the GPU turn
+        marks.append(len(spy_train_head))
+    fitted = run.fit("cpu", out, turn=turn)
+    total = (run.TEMPERATURE_FOLDS + 1) * len(layout.HEAD_SEEDS)
+    assert marks == [0, total]                                   # every head inside the one GPU turn
 
     feats = {sid: _feat(out, sid) for sid in labelled}
+    folds = [labelled[k::run.TEMPERATURE_FOLDS] for k in range(run.TEMPERATURE_FOLDS)]
+    heads, final = {}, []
+    for c in spy_train_head:
+        left_out = set(labelled) - _trained_on(c, feats)
+        if not left_out:
+            final.append(c["seed"])
+            continue
+        k = next(k for k, f in enumerate(folds) if set(f) == left_out)    # a fold, held out whole
+        heads.setdefault(k, {})[c["seed"]] = c["head"]
+    assert sorted(heads) == list(range(run.TEMPERATURE_FOLDS))
+    assert all(sorted(h) == list(layout.HEAD_SEEDS) for h in heads.values())
+    assert sorted(final) == list(layout.HEAD_SEEDS)
 
-    def trained_on(call):
-        return {sid for sid, f in feats.items() if any(np.array_equal(f, g) for g in call["feats"])}
-    assert len(calls) == len(labelled) * len(layout.HEAD_SEEDS)
-    heads = {}
-    for c in calls:
-        left_out = set(labelled) - trained_on(c)
-        assert len(left_out) == 1 and len(c["feats"]) == len(labelled) - 1   # every other sheet, never its own
-        heads.setdefault(left_out.pop(), {})[c["seed"]] = c["head"]
-    assert sorted(heads) == labelled and all(sorted(h) == list(layout.HEAD_SEEDS) for h in heads.values())
+    temperature = fitted["temperature"]
+    meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
+    assert meta["temperature"] == temperature > 0 and len(meta["temperature_interval"]) == 2
+    assert meta["reducer"] == {"file": "reducer.npz",
+                               "pages": [f"{s}/{h}" for s, h in run.feature_pages(labelled + TEST)],
+                               "sha256": hashlib.sha256((out / "reducer.npz").read_bytes()).hexdigest()}
+    saved = {}
+    with np.load(out / run.MODEL_DIR / run.DEV_LOGITS) as z:
+        assert sorted(z.files) == sorted(f"{s}/{h}" for s, h in labelled)
+        for k, fold in enumerate(folds):
+            for sid in fold:
+                saved[sid] = z[f"{sid[0]}/{sid[1]}"]
+                want = np.stack([layout.head_logits(heads[k][s], feats[sid]) for s in layout.HEAD_SEEDS])
+                np.testing.assert_array_equal(saved[sid], want)           # exact: the follow-up fits on them
 
-    written = json.loads((out / run.FOLDS_FILE).read_text())
-    temperature = written["temperature"]
-    assert temperature == result["temperature"] and temperature > 0
-    assert sorted((s["series"], s["sheet"]) for s in written["sheets"]) == labelled
-    for sid in labelled:                                       # each sheet's chances: its own held-out heads at T
-        zs = [layout.page_logits(layout.head_logits(heads[sid][s], feats[sid]), (H, W)) for s in layout.HEAD_SEEDS]
-        p = layout.combine(zs, temperature)
-        with np.load(run.sheet_dir(out, sid) / run.PROB_FILE) as z:
-            np.testing.assert_array_equal(z["q"], np.round(255 * (p[1] + p[2])).astype(np.uint8))
-        row = next(s for s in written["sheets"] if (s["series"], s["sheet"]) == sid)
-        want = decide.decide(p, _lum(sid), 1)
-        assert row["pixel"] == pytest.approx(scores.sheet_scores(p, want.deleted, _cls(sid), _lum(sid)),
-                                             nan_ok=True)
-        assert set(row["side_ink_left"]) == {"top", "bottom", "left", "right"}
-    assert set(written) >= {"params", "temperature", "sheets", "pooled", "baseline", "search"}
-    assert written["reducer"] == {"file": "reducer.npz", "pages": [f"{s}/{h}" for s, h in run.feature_pages(labelled)],
-                                  "sha256": hashlib.sha256((out / "reducer.npz").read_bytes()).hexdigest()}
-    assert set(written["pooled"]) == {"shape", "pixel"}
-
-
-RIGGED = shape.Params(lam_notch=0, beta=10, lam_block=1e4)
-
-
-def _rigged_decide(p, lum, params, bounds, maps=1, timing=None, cache=None):
-    """Deletes exactly what the label calls outside, except that each of the numbers off RIGGED leaves one side's
-    rule in: the pooled cost falls one coordinate at a time towards RIGGED."""
-    off = sum(getattr(params, k) != getattr(RIGGED, k) for k in ("lam_notch", "beta", "lam_block"))
-    deleted = np.ones(lum.shape, bool)
-    deleted[B:H - B + 1, B:W - B + 1] = False
-    for k, sl in enumerate([np.s_[RULE:B, :], np.s_[H - B:H - RULE, :], np.s_[:, RULE:B]][:off]):
-        deleted[sl] = False
-    _rigged_decide.calls.append((cache, hashlib.sha1(np.ascontiguousarray(p).tobytes()).hexdigest(), params))
-    return decide.Decision(deleted, np.zeros_like(deleted), 0.0, 0.0, 0.0), Frame(), [], []
+    result = run.score_dev(out)
+    for sid in labelled:                                         # each sheet cut from its fold's logits at T
+        p = layout.combine([layout.page_logits(z, (H, W)) for z in saved[sid]], temperature)
+        np.testing.assert_array_equal(_q(run.sheet_dir(out / run.DEV_DIR, sid) / run.PROB_FILE), _written(p))
+    written = json.loads((out / run.DEV_DIR / run.SCORES_FILE).read_text())
+    assert [(r["series"], r["sheet"]) for r in written["sheets"]] == labelled
+    assert written["temperature"] == temperature and written["sheets"] == result["sheets"]
+    assert written["pooled"] == pytest.approx(scores.pooled_split([r["split"] for r in written["sheets"]]),
+                                              nan_ok=True)
+    boxes = {(r["series"], r["sheet"]): len(r["split"]["boxes"]) for r in written["sheets"]}
+    assert boxes == {sid: int(sid[1] == "s1") for sid in labelled}
+    fits = json.loads((out / run.DEV_DIR / run.FITS_FILE).read_text())
+    assert sorted(fits) == sorted(f"{s}/{h}" for s, h in labelled)
+    text = run.format_split(result)
+    for sid in labelled:                                         # one progress line per finished sheet
+        assert sum(f"{sid[0]}/{sid[1]}: frame left" in r.getMessage() for r in caplog.records) == 1
+    assert len(text.splitlines()) >= len(labelled) + 1
+    assert "a/s1: frame left " in text and ("(0 of 1 deleted)" in text or "(1 of 1 deleted)" in text)
+    assert text.splitlines()[-1].startswith("pooled")
 
 
-def test_params_minimise_the_pooled_cost(fake_world, monkeypatch):
-    """Orchestration test (the shape decision is stubbed with `_rigged_decide`)."""
+def test_test_sheets_are_cut_by_the_final_heads(fake_world):
+    """The real shape decision on the toy pages."""
     labelled, out = fake_world
-    _rigged_decide.calls = []
-    monkeypatch.setattr(shape, "decide", _rigged_decide)
-    result = run.held_out(labelled, "cpu", out)
-    assert result["params"] == dataclasses.asdict(RIGGED)
-    search = result["search"]
-    points = [(r["lam_notch"], r["beta"], r["lam_block"]) for r in search]
-    assert len(points) == len(set(points)) == 15          # 4 + 3 + 2 new points in the first round, 3 + 3 + 0 in the second
-    assert result["rounds"] == 2                           # the second round changed nothing
-    assert points[0] == (1e4, 3, 1e3)                    # the start first
-    costs = {pt: r["cost"] for pt, r in zip(points, search)}
-    assert min(costs, key=costs.get) == (0, 10, 1e4)
-    assert costs[(0, 10, 1e4)] < sorted(costs.values())[1]
-    assert json.loads((out / run.FOLDS_FILE).read_text())["search"] == search
-    # every search cache saw a single page (the calls hold the caches, so no two share an id)
-    pages_of = {}
-    for cache, page, _ in _rigged_decide.calls:
-        if cache is not None:
-            pages_of.setdefault(id(cache), set()).add(page)
-    assert pages_of and all(len(v) == 1 for v in pages_of.values())
+    run.fit("cpu", out)
+    heads, meta = run.load_model(out)
+    result = run.score_test(out)
+    assert [(r["series"], r["sheet"]) for r in result["sheets"]] == TEST
+    for sid in TEST:
+        f = _feat(out, sid)
+        p = layout.combine([layout.page_logits(layout.head_logits(h, f), (H, W)) for h in heads],
+                           meta["temperature"])
+        d = run.sheet_dir(out / run.TEST_DIR, sid)
+        np.testing.assert_array_equal(_q(d / run.PROB_FILE), _written(p))
+        assert json.loads((d / run.OUTLINE_FILE).read_text())["shape"] is not None
+    row = result["sheets"][0]
+    assert len(row["split"]["boxes"]) == 1 and row["split"]["box_ink"] > 0     # scored on the test folder's label
+    fits = json.loads((out / run.TEST_DIR / run.FITS_FILE).read_text())
+    assert sorted(fits) == ["a/u0", "b/u1"]
+    fit = fits["a/u0"]
+    assert set(fit) == {"frame", "notches", "boxes"} and set(fit["frame"]) == {"angle", "sides", "arcs"}
+    assert json.loads((out / run.TEST_DIR / run.SCORES_FILE).read_text())["sheets"] == result["sheets"]
 
 
-def test_search_pool_matches_one_process(fake_world, monkeypatch):
-    """The process pool (spawned workers, the real shape decision) gives what one process gives."""
+def _fit(angle=0.5, box_x=100.0, notch_d=3.0):
+    side = {"offset": 40.0, "tilt": 0.0, "bow": 1.5}
+    return {"frame": {"angle": angle, "sides": {"top": side, "bottom": side, "left": "page edge", "right": side},
+                      "arcs": {"top-left": 12.0, "top-right": 0.0, "bottom-left": 0.0, "bottom-right": 0.0}},
+            "notches": [{"side": "top", "psi": 0.5, "a0": 10.0, "a1": 90.0, "d": notch_d}],
+            "boxes": [{"kind": "rect", "cx": box_x, "cy": 50.0, "theta": 0.5, "p": [-5.0, 5.0, -3.0, 3.0]}]}
+
+
+def test_fit_changes_names_a_sheet_whose_frame_moved(tmp_path):
+    before = {"s/1": _fit(), "s/2": _fit(), "s/3": _fit(), "s/4": _fit(), "s/6": _fit()}
+    after = {"s/1": _fit(angle=0.6), "s/2": _fit(box_x=120.0), "s/3": _fit(notch_d=4.0), "s/4": _fit(),
+             "s/5": _fit()}
+    (tmp_path / "before.json").write_text(json.dumps(before))
+    (tmp_path / "after.json").write_text(json.dumps(after))
+    # the boxes may change (label-box work); a sheet in one file only is not a change of its fit
+    assert run.fit_changes(tmp_path / "before.json", tmp_path / "after.json") == ["s/1", "s/3"]
+
+
+def test_fits_are_plain_rounded_numbers():
+    from sfzmaps.frame import blocks, notches
+
+    fr = Frame(phi=0.123456)
+    fr.offset["top"], fr.tilt["top"], fr.bow["top"] = 40.00049, 0.1111, 2.0
+    fr.arc[("top", "left")] = 12.3456
+    fit = run.fit_json(fr, [notches.Notch("top", 0.5, 10.0, 90.123456, 3.0, gain=9.9)],
+                       [blocks.Block("rect", 100.0004, 50.0, 0.5, (-5.0, 5.0, -3.0, 3.0), gain=7.0)])
+    assert fit["frame"]["angle"] == 0.123
+    assert fit["frame"]["sides"]["top"] == {"offset": 40.0, "tilt": 0.111, "bow": 2.0}
+    assert fit["frame"]["sides"]["bottom"] == "page edge"
+    assert fit["frame"]["arcs"]["top-left"] == 12.346
+    assert fit["notches"] == [{"side": "top", "psi": 0.5, "a0": 10.0, "a1": 90.123, "d": 3.0}]
+    assert fit["boxes"] == [{"kind": "rect", "cx": 100.0, "cy": 50.0, "theta": 0.5, "p": [-5.0, 5.0, -3.0, 3.0]}]
+    assert json.loads(json.dumps(fit)) == fit
+
+
+def test_the_model_is_stale_until_fitted_and_when_its_inputs_change(fake_world):
     labelled, out = fake_world
-    rng = np.random.default_rng(0)
-    jobs = [run.PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK), labels=data.LABELS,
-                        zs=tuple(rng.normal(size=(3, 6, 7)).astype(np.float32) for _ in range(2)),
-                        temperature=1.0, maps=1, bounds=run.blk.BlockBounds((20.0, 10.0), (10.0, 8.0)))
-            for sid in labelled[:3]]
-    points = (shape.Params(1e4, 3, 1e3), shape.Params(0, 0, 0))
-    one = run.pool_map(run.search_page, jobs, points)
-    monkeypatch.setattr(run, "PROCESSES", 2)
-    assert run.pool_map(run.search_page, jobs, points) == one
-    assert len(one) == 3 and all(len(r) == 2 and {"cost", "frame_kept", "map_cut"} <= set(r[0]) for r in one)
+    run.extract_features(labelled + TEST, "cpu", out)
+    stamp = (out / "reducer.npz").stat().st_mtime_ns
+    assert "missing" in run.model_stale(out)
+    run.fit("cpu", out)
+    assert (out / "reducer.npz").stat().st_mtime_ns == stamp                 # the features were reused
+    assert run.model_stale(out) is None
+    new = data.LABELS / "b" / "u0.json"                                      # a training label added
+    new.write_text((data.LABELS / "b" / "s0.json").read_text())
+    assert "training sheets" in run.model_stale(out)
+    new.unlink()
+    assert run.model_stale(out) is None
+    meta_path = out / run.MODEL_DIR / "model.json"
+    meta = json.loads(meta_path.read_text())
+    meta["reducer"]["sha256"] = "0" * 64
+    meta_path.write_text(json.dumps(meta))
+    assert "reducer" in run.model_stale(out)
 
 
 def test_sample_draws_the_same_px_as_calibrate():
@@ -236,43 +329,30 @@ def test_sample_draws_the_same_px_as_calibrate():
     np.testing.assert_array_equal(got[1], want[1])
 
 
-def test_a_held_out_run_drops_the_old_summary_first(fake_world, monkeypatch):
+def test_a_fit_that_stops_part_way_leaves_no_model(fake_world, monkeypatch):
     labelled, out = fake_world
-    out.mkdir()
-    (out / run.FOLDS_FILE).write_text("{}")
+    run.fit("cpu", out)
 
     def boom(*args, **kwargs):
         raise RuntimeError("crash mid-run")
     monkeypatch.setattr(layout, "train_head", boom)
     with pytest.raises(RuntimeError):
-        run.held_out(labelled, "cpu", out)
-    assert not (out / run.FOLDS_FILE).exists()
+        run.fit("cpu", out)
+    assert not (out / run.MODEL_DIR / "model.json").exists() and run.model_stale(out)
 
 
-def test_baseline_only_on_shared_sheets(fake_world, pixel_shape):
+def test_score_pool_matches_one_process(fake_world, tmp_path, monkeypatch):
+    """The process pool (spawned workers, the real shape decision) gives what one process gives."""
     labelled, out = fake_world
-    shared = ("a", "s1")
-    for sid in (shared, ("a", "u0")):                           # an unlabelled sheet's file is not compared
-        d = run.sheet_dir(run.BASELINE, sid)
-        d.mkdir(parents=True)
-        np.savez_compressed(d / "map_prob.npz", map=np.ones((H, W), np.float16))   # all map: nothing cut
-    result = run.held_out(labelled, "cpu", out)
-
-    base = result["baseline"]
-    assert [(s["series"], s["sheet"]) for s in base["sheets"]] == [shared]
-    lum, cls = _lum(shared), _cls(shared)
-    frame_ink = float((1.0 - lum.astype(np.float64))[cls != 0].sum())
-    old = base["sheets"][0]
-    assert old["frame_kept"] == pytest.approx(frame_ink) and old["map_cut"] == 0.0
-    assert old["cost"] == pytest.approx(decide.COST_FRAME * frame_ink)
-    new = next(s["scores"] for s in result["sheets"] if (s["series"], s["sheet"]) == shared)
-    assert set(base["paired"]) == {"frame_kept", "map_cut", "cost"}
-    for key in base["paired"]:
-        diff = new[key] - old[key]
-        assert base["paired"][key] == pytest.approx({"mean": diff, "lo": diff, "hi": diff})
-    text = run.format_scores(result)
-    first = next(line for line in text.splitlines() if "left in" in line)
-    assert "%" in first.split("left in")[1][:12]           # percentages first
+    rng = np.random.default_rng(0)
+    jobs = [run.PageJob(sid=sid, page=data.page_path(*sid, work=data.WORK), labels=data.LABELS,
+                        zs=tuple(rng.normal(size=(3, 6, 7)).astype(np.float32) for _ in range(2)),
+                        temperature=1.0, maps=1, bounds=run.blk.BlockBounds((20.0, 10.0), (10.0, 8.0)))
+            for sid in labelled[:3]]
+    one = run.pool_map(run.score_page, jobs, run.PARAMS, tmp_path / "one")
+    monkeypatch.setattr(run, "PROCESSES", 2)
+    assert run.pool_map(run.score_page, jobs, run.PARAMS, tmp_path / "two") == one
+    assert [(r["series"], r["sheet"]) for r in one] == labelled[:3]
 
 
 @pytest.mark.parametrize("mode", ["RGB", "1"])
@@ -323,32 +403,30 @@ def test_write_outputs_keeps_colour(tmp_path, monkeypatch, mode):
     assert outline["shape"] is None
 
 
-def test_train_final_then_predict_every_other_page(fake_world):
-    """The real shape decision on the toy pages; the labelled sheets keep their held-out outputs."""
+def test_predict_every_other_page_with_the_fitted_model(fake_world):
+    """The real shape decision on the toy pages; the training sheets take their dev outputs."""
     labelled, out = fake_world
-    held = {"params": dataclasses.asdict(shape.Params(1e4, 3, 1e3)), "temperature": 1.25,
-            "reducer": run.extract_features(labelled, "cpu", out)}
-    run.train_final(labelled, "cpu", out, held)
+    run.fit("cpu", out)
     meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
-    assert meta["params"] == held["params"] and meta["temperature"] == 1.25
     assert meta["head_seeds"] == list(layout.HEAD_SEEDS) and meta["sheets"] == [list(s) for s in labelled]
     assert set(meta["bounds"]) == {"rect_max", "ellipse_max"} and meta["bounds"]["rect_max"][0] > 0
-    assert meta["reducer"] == held["reducer"]
-    assert meta["reducer"]["sha256"] == hashlib.sha256((out / "reducer.npz").read_bytes()).hexdigest()
     heads, got = run.load_model(out)
-    assert len(heads) == len(layout.HEAD_SEEDS) and got["temperature"] == 1.25
+    assert len(heads) == len(layout.HEAD_SEEDS) and got["temperature"] == meta["temperature"]
 
-    for i, sid in enumerate(labelled):                          # held-out outputs a held-out run left
-        d = run.sheet_dir(out, sid)
+    for i, sid in enumerate(labelled):                          # the outputs a dev run left
+        d = run.sheet_dir(out / run.DEV_DIR, sid)
         d.mkdir(parents=True)
-        (d / run.OUTSIDE_PNG).write_bytes(b"held-out")
-    (out / run.FOLDS_FILE).write_text(json.dumps({"sheets": [
-        {"series": s, "sheet": h, "filled_ink": 0.0, "dropped_ink": 2.5, "removed_ink": 0.0,
+        for name in (run.OUTSIDE_PNG, run.PROB_FILE, run.ERASED_PNG, run.OUTLINE_FILE):
+            (d / name).write_bytes(b"dev")
+    (out / run.DEV_DIR / run.SCORES_FILE).write_text(json.dumps({"sheets": [
+        {"series": s, "sheet": h, "filled_ink": 0.0, "dropped_ink": 2.5, "removed_ink": 0.0, "side_ink_left": {},
          "side_ink_left_total": float(i)} for i, (s, h) in enumerate(labelled)]}))
     run.predict_all("cpu", out)
 
     for sid in labelled:
-        assert (run.sheet_dir(out, sid) / run.OUTSIDE_PNG).read_bytes() == b"held-out"
+        d = run.sheet_dir(out, sid)
+        assert all((d / n).read_bytes() == b"dev"
+                   for n in (run.OUTSIDE_PNG, run.PROB_FILE, run.ERASED_PNG, run.OUTLINE_FILE))
     assert not run.sheet_dir(out, ("a", "c0")).exists()
     for sid in UNLABELLED:
         d = run.sheet_dir(out, sid)
@@ -374,8 +452,7 @@ def test_predict_refuses_a_full_disk(monkeypatch, fake_world):
 
 def test_predict_refuses_a_changed_reducer(fake_world):
     labelled, out = fake_world
-    run.train_final(labelled, "cpu", out, {"params": dataclasses.asdict(shape.Params(1e4, 3, 1e3)),
-                                           "temperature": 1.0, "reducer": run.extract_features(labelled, "cpu", out)})
+    run.fit("cpu", out)
     meta = json.loads((out / run.MODEL_DIR / "model.json").read_text())
     meta["reducer"]["sha256"] = "0" * 64
     (out / run.MODEL_DIR / "model.json").write_text(json.dumps(meta))
@@ -383,21 +460,18 @@ def test_predict_refuses_a_changed_reducer(fake_world):
         run.predict_all("cpu", out)
 
 
-def test_a_new_page_after_the_held_out_run_is_refused_not_refitted(fake_world, tiny_backbone):
+def test_a_new_page_after_the_fit_is_refused_not_refitted(fake_world, tiny_backbone):
     labelled, out = fake_world
-    record = run.extract_features(labelled, "cpu", out)
-    held = {"params": dataclasses.asdict(shape.Params(1e4, 3, 1e3)), "temperature": 1.0, "reducer": record}
-    run.train_final(labelled, "cpu", out, held)
+    run.fit("cpu", out)
     stamp = (out / "reducer.npz").stat().st_mtime_ns
     _save(_unlabelled_lum(9), data.page_path("b", "u9", data.WORK))       # a page added since
     with open(data.PAGE_KINDS, "a", newline="") as f:
         f.write("b,u9,map,test,\n")
-    with pytest.raises(run.StaleFeatures, match="--held-out"):
-        run.train_final(labelled, "cpu", out, held)
-    with pytest.raises(run.StaleFeatures, match="--held-out"):
+    assert "reducer" in run.model_stale(out) or "pages" in run.model_stale(out)
+    with pytest.raises(run.StaleFeatures, match="refit"):
         run.predict_all("cpu", out)
-    with pytest.raises(run.StaleFeatures, match="--held-out"):
-        run.train_final(labelled, "cpu", out, {k: v for k, v in held.items() if k != "reducer"})   # an older run
+    with pytest.raises(run.StaleFeatures, match="refit"):
+        run.score_test(out)
     assert (out / "reducer.npz").stat().st_mtime_ns == stamp                 # never refitted
     assert not (layout.features_dir(out) / "b" / "u9.npy").exists()
 

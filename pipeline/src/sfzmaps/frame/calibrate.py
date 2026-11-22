@@ -22,6 +22,8 @@ N_CAL = 200_000    # computational: px per sheet; its sampling error is far belo
 CAL_BOOT = 200     # computational: sheet resamples for the temperature interval
 LOG_T_BOUNDS = (-3.0, 3.0)  # numerical search bounds on log T
 EPS = 1e-6         # numerical clip for log-loss
+CURVE_STEP = 0.02  # numerical: log T step of the per-sheet loss curves `temperature_interval` refits on
+CURVE_REACH = 0.6  # numerical: ... and their reach either side of the fit (a resample beyond it is searched afresh)
 
 
 def draw(lum, rng, n: int = N_CAL) -> np.ndarray:
@@ -57,10 +59,36 @@ def fit_temperature(samples: list[tuple[np.ndarray, np.ndarray]]) -> float:
     return float(np.exp(res.x))
 
 
-def temperature_interval(samples, n: int = CAL_BOOT, seed: int = 0) -> tuple[float, float]:
-    """5th/95th percentiles of the temperature refitted on sheets resampled with replacement."""
+def _sheet_loss(z: np.ndarray, y: np.ndarray, temperature: float) -> float:
+    p = np.clip(combine(list(z), temperature).astype(np.float64), EPS, 1.0)
+    return float(-np.log(np.take_along_axis(p, y[None].astype(np.int64), axis=0)).sum())
+
+
+def temperature_interval(samples, n: int = CAL_BOOT, seed: int = 0, centre: float | None = None) -> tuple[float, float]:
+    """5th/95th percentiles of the temperature refitted on sheets resampled with replacement.
+
+    Each sheet's summed log-loss is tabulated once on a grid of log T (`CURVE_STEP` apart, `CURVE_REACH` either side
+    of log `centre`, the fit on every sheet; fitted here when not given), and a resample's refit is the minimum of its
+    sheets' summed curves, refined by the parabola through the lowest grid point and its two neighbours.  That is the
+    same minimum as a fresh search to well within the grid step, at one search's cost instead of `n`.  A resample
+    whose minimum lies at the grid's end is refitted by `fit_temperature`."""
+    if centre is None:
+        centre = fit_temperature(samples)
+    grid = np.log(centre) + np.arange(-CURVE_REACH, CURVE_REACH + CURVE_STEP / 2, CURVE_STEP)
+    curves = np.array([[_sheet_loss(z, y, float(np.exp(t))) for t in grid] for z, y in samples])
+    counts = np.array([y.size for _, y in samples], np.float64)
     rng = np.random.default_rng(seed)
-    ts = [fit_temperature([samples[i] for i in rng.integers(0, len(samples), len(samples))]) for _ in range(n)]
+    ts = []
+    for _ in range(n):
+        pick = rng.integers(0, len(samples), len(samples))
+        c = curves[pick].sum(axis=0) / counts[pick].sum()
+        i = int(np.argmin(c))
+        if i == 0 or i == len(grid) - 1:
+            ts.append(fit_temperature([samples[k] for k in pick]))
+            continue
+        den = c[i - 1] - 2 * c[i] + c[i + 1]
+        shift = 0.5 * (c[i - 1] - c[i + 1]) / den if den > 0 else 0.0
+        ts.append(float(np.exp(grid[i] + shift * CURVE_STEP)))
     lo, hi = np.percentile(ts, (5, 95))
     return float(lo), float(hi)
 

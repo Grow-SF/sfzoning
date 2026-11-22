@@ -59,7 +59,7 @@ def test_closeups_are_full_resolution(tmp_path, monkeypatch):
         assert im.width >= 300 and im.height > 300      # 300 px crop, unshrunk, plus its caption
 
 
-def test_series_mosaic_caption_has_held_out_scores(tmp_path, monkeypatch):
+def test_series_mosaic_caption_has_the_split_scores(tmp_path, monkeypatch):
     work, out = tmp_path / "work", tmp_path / "out"
     monkeypatch.setattr(data, "WORK", work)
     kinds = tmp_path / "kinds.csv"
@@ -68,14 +68,15 @@ def test_series_mosaic_caption_has_held_out_scores(tmp_path, monkeypatch):
     for sid in (("s", "p"), ("s", "q")):
         _page(work, sid, 60, 80)
     _outputs(out, ("s", "p"), 60, 80)
-    (out / "folds.json").write_text(json.dumps({"sheets": [
-        {"series": "s", "sheet": "p", "scores": {"frame_kept_share": 0.0125, "map_cut_share": 0.00325}}]}))
+    split = {"frame_ink": 80.0, "frame_left": 1.0, "box_ink": 10.0, "box_left": 5.0, "boxes": [], "map_ink": 400.0,
+             "map_cut_frame": 1.0, "map_cut_boxes": 0.3}
+    (out / run.SCORES_FILE).write_text(json.dumps({"sheets": [{"series": "s", "sheet": "p", "split": split}]}))
     seen = []
     monkeypatch.setattr(look, "_mosaic", lambda tiles, side, cols, path: seen.append((tiles, path)) or path)
     paths = look.series_mosaics(out)
     assert paths == [out / "look" / "s.png"]
     (tiles, _), = seen
-    assert len(tiles) == 1 and "1.25%" in tiles[0][1][1] and "0.325%" in tiles[0][1][1]
+    assert len(tiles) == 1 and "1.25%" in tiles[0][1][1] and "50%" in tiles[0][1][1] and "0.325%" in tiles[0][1][1]
     assert (out / "look" / "s" / "p.png").exists()
 
 

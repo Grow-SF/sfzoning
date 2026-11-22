@@ -933,16 +933,17 @@ def frame_labels(top: int = typer.Option(30, "--top", help="Stretches per sheet 
 @app.command("frame")
 def frame(
     device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where available)."),
-    held_out: bool = typer.Option(False, "--held-out", help="Only the held-out run over every labelled sheet (leave "
-                                                            "one sheet out, the shape numbers, the scores); prints "
-                                                            "its scores and draws the pictures."),
-    predict_only: bool = typer.Option(False, "--predict-only", help="Decide every page with the saved final "
-                                                                    "heads, then the pictures."),
+    dev: bool = typer.Option(False, "--dev", help="Score the training sheets, each cut by heads that did not train "
+                                                  "on it; prints the table and draws the pictures."),
+    test: bool = typer.Option(False, "--test", help="Score the test sheets (never trained on), cut by the final "
+                                                    "heads; prints the table and draws the pictures."),
+    predict_only: bool = typer.Option(False, "--predict-only", help="Decide every page with the saved model, then "
+                                                                    "the pictures."),
 ) -> None:
-    """The frame finder (issue #71), $0.  No flag: train the final heads with the numbers and temperature of the last
-    `--held-out` run, decide every map page, draw the pictures.  The layout features and heads run on the device in
-    an exclusive GPU turn (`sfzmaps.gpu`); the shape decisions run on cpu worker processes, after it.  Only
-    `--held-out` may fit the features' reducer; the other modes refuse features that changed since."""
+    """The frame finder (issue #71), $0.  Every mode fits the model first when it is stale (new labels, new pages),
+    except `--predict-only`, which refuses.  No flag: decide every map page with the model, draw the pictures.  The
+    layout features and heads run on the device in an exclusive GPU turn (`sfzmaps.gpu`); the shape decisions run on
+    cpu worker processes, after it.  A sheet labelled both for training and for testing is refused first."""
     import logging
 
     from sfzmaps import gpu
@@ -951,38 +952,37 @@ def frame(
     from sfzmaps.frame import run as fr
     from sfzmaps.solver.textnet.train import default_device
 
-    if held_out and predict_only:
-        raise typer.BadParameter("--held-out and --predict-only exclude each other")
+    if dev + test + predict_only > 1:
+        raise typer.BadParameter("--dev, --test and --predict-only exclude each other")
     device = device or default_device()
     if device not in ("cpu", "mps"):
         raise typer.BadParameter(f"--device must be cpu or mps, not {device!r}")
+    try:
+        fd.check_split(fd.labelled_sheets(fd.LABELS), fd.test_sheets(fd.TEST_LABELS))
+    except ValueError as e:
+        typer.echo(f"error: {e}", err=True)
+        raise typer.Exit(1)
     out = fd.OUT
-    summary = out / fr.FOLDS_FILE
-    plain = not (held_out or predict_only)
-    if plain and not summary.exists():
-        typer.echo(f"error: {summary} is missing: run `sfzmaps frame --held-out` first", err=True)
-        raise typer.Exit(1)
-    if predict_only and not (out / fr.MODEL_DIR / "model.json").exists():
-        typer.echo(f"error: {out / fr.MODEL_DIR} has no model: run `sfzmaps frame` first", err=True)
-        raise typer.Exit(1)
     logging.basicConfig(level=logging.INFO, format="%(message)s")
-    labelled = fd.labelled_sheets()
-    shown = None
+    shown, where = None, out
 
     def turn():
         return gpu.gpu_turn(True, device)
 
     try:
-        if not held_out:
-            # before any GPU work: the disk, and the features the held-out run (or the model) was fitted on
-            fitted = json.loads((summary if plain else out / fr.MODEL_DIR / "model.json").read_text())
+        if not (dev or test):
             fr.check_disk(out)
-            fr.check_features(labelled, fitted.get("reducer"))
-        if held_out:
-            shown = fr.format_scores(fr.held_out(labelled, device, out, turn=turn))
-        elif plain:
-            fr.train_final(labelled, device, out, fitted, turn=turn)
-            fr.predict_all(device, out, turn=turn)
+        stale = fr.model_stale(out)
+        if stale is not None and predict_only:
+            typer.echo(f"error: {stale}: fit the model first (`sfzmaps frame`)", err=True)
+            raise typer.Exit(1)
+        if stale is not None:
+            typer.echo(f"fitting the model first: {stale}")
+            fr.fit(device, out, turn=turn)
+        if dev:
+            shown, where = fr.format_split(fr.score_dev(out)), out / fr.DEV_DIR
+        elif test:
+            shown, where = fr.format_split(fr.score_test(out)), out / fr.TEST_DIR
         else:
             fr.predict_all(device, out, turn=turn)
     except (fr.DiskFull, fr.StaleFeatures) as e:
@@ -990,8 +990,9 @@ def frame(
         raise typer.Exit(1)
     if shown is not None:
         typer.echo(shown)
-    look.series_mosaics(out)
-    look.closeups(out)
+    look.series_mosaics(where)
+    if not (dev or test):
+        look.closeups(out)
 
 
 @app.command()

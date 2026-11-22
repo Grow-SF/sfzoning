@@ -171,10 +171,10 @@ def test_cli_downloads_listed(monkeypatch):
     assert res.exit_code == 0 and "--series" in re.sub(r"\x1b\[[0-9;]*m", "", res.output)
 
 
-def _frame_stubs(monkeypatch, tmp_path, stale=False):
+def _frame_stubs(monkeypatch, tmp_path, stale=None, test_sheets=(("s", "2"),)):
     """Everything `frame` calls, recording its calls ("turn" when a GPU turn is entered; the run's steps enter the
-    turn they are given, as the real ones do around their GPU work); the output folder is `tmp_path`.  With `stale`,
-    the features check refuses."""
+    turn they are given, as the real ones do around their GPU work); the output folder is `tmp_path`.  `stale` is
+    what `model_stale` says (None: the model is current); `test_sheets` the test set (the training set is s/1)."""
     import contextlib
 
     from sfzmaps import gpu
@@ -185,6 +185,7 @@ def _frame_stubs(monkeypatch, tmp_path, stale=False):
     calls = []
     monkeypatch.setattr(fd, "OUT", tmp_path)
     monkeypatch.setattr(fd, "labelled_sheets", lambda *a, **k: [("s", "1")])
+    monkeypatch.setattr(fd, "test_sheets", lambda *a, **k: list(test_sheets))
 
     @contextlib.contextmanager
     def turn(*a, **k):
@@ -200,109 +201,89 @@ def _frame_stubs(monkeypatch, tmp_path, stale=False):
             calls.append(name)
             return {}
         return run_step
-    for name in ("held_out", "train_final", "predict_all"):
+    for name in ("fit", "score_dev", "score_test", "predict_all"):
         monkeypatch.setattr(fr, name, step(name))
-
-    def check_features(labelled, record):
-        calls.append("check_features")
-        if stale:
-            raise fr.StaleFeatures("the pages changed since the held-out run: rerun `sfzmaps frame --held-out`")
-    monkeypatch.setattr(fr, "check_features", check_features)
+    monkeypatch.setattr(fr, "model_stale", lambda out: calls.append("model_stale") or stale)
     monkeypatch.setattr(fr, "check_disk", lambda out: calls.append("check_disk"))
-    monkeypatch.setattr(fr, "format_scores", lambda r: "scores")
-    monkeypatch.setattr(look, "series_mosaics", lambda out: calls.append("mosaics") or [])
+    monkeypatch.setattr(fr, "format_split", lambda r: "split table")
+    monkeypatch.setattr(look, "series_mosaics", lambda out: calls.append(("mosaics", out)) or [])
     monkeypatch.setattr(look, "closeups", lambda out: calls.append("closeups"))
     return calls
 
 
-HELD = {"params": {"lam_notch": 1e4, "beta": 3.0, "lam_block": 1e3}, "temperature": 1.5,
-        "reducer": {"file": "reducer.npz", "sha256": "0" * 64, "pages": ["s/1"]}}
-
-
-def test_cli_frame_needs_the_held_out_run_first(monkeypatch, tmp_path):
+def test_cli_frame_test_refuses_an_overlap_before_any_gpu_work(monkeypatch, tmp_path):
     from typer.testing import CliRunner
 
     from sfzmaps import cli
 
-    calls = _frame_stubs(monkeypatch, tmp_path)
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu"])
-    assert res.exit_code == 1 and "--held-out" in res.output and calls == []
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--predict-only"])
-    assert res.exit_code == 1 and "has no model" in res.output and calls == []
-
-
-def test_cli_frame_held_out_prints_the_scores(monkeypatch, tmp_path):
-    from typer.testing import CliRunner
-
-    from sfzmaps import cli
-
-    calls = _frame_stubs(monkeypatch, tmp_path)
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--held-out"])
-    assert res.exit_code == 0, res.output
-    assert "scores" in res.output and calls == ["turn", "held_out", "mosaics", "closeups"]
-
-
-def test_cli_frame_final_run_uses_the_held_out_numbers(monkeypatch, tmp_path):
-    import json
-
-    from typer.testing import CliRunner
-
-    from sfzmaps import cli
-    from sfzmaps.frame import run as fr
-
-    calls = _frame_stubs(monkeypatch, tmp_path)
-    (tmp_path / fr.FOLDS_FILE).write_text(json.dumps(HELD))
-    got = {}
-
-    def train_final(labelled, device, out, held, turn=None):
-        with turn():
-            calls.append("train_final")
-        got.update(held)
-    monkeypatch.setattr(fr, "train_final", train_final)
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu"])
-    assert res.exit_code == 0, res.output
-    assert got == HELD
-    assert calls == ["check_disk", "check_features", "turn", "train_final", "turn", "predict_all", "mosaics",
-                     "closeups"]
-
-
-def test_cli_frame_refuses_changed_features_before_any_gpu_work(monkeypatch, tmp_path):
-    import json
-
-    from typer.testing import CliRunner
-
-    from sfzmaps import cli
-    from sfzmaps.frame import run as fr
-
-    (tmp_path / fr.FOLDS_FILE).write_text(json.dumps(HELD))
-    (tmp_path / fr.MODEL_DIR).mkdir()
-    (tmp_path / fr.MODEL_DIR / "model.json").write_text(json.dumps(HELD))
-    for flags in ([], ["--predict-only"]):
-        calls = _frame_stubs(monkeypatch, tmp_path, stale=True)
+    for flags in (["--test"], ["--dev"], [], ["--predict-only"]):
+        calls = _frame_stubs(monkeypatch, tmp_path, stale="model.json is missing", test_sheets=[("s", "1")])
         res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", *flags])
-        assert res.exit_code == 1 and "--held-out" in res.output, flags
-        assert calls == ["check_disk", "check_features"], flags
+        assert res.exit_code == 1 and "s/1" in res.output, flags
+        assert calls == [], flags
+
+
+def test_cli_frame_dev_and_test_fit_first_when_the_model_is_stale(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+    from sfzmaps.frame import run as fr
+
+    for flag, step, where in (("--dev", "score_dev", fr.DEV_DIR), ("--test", "score_test", fr.TEST_DIR)):
+        calls = _frame_stubs(monkeypatch, tmp_path, stale="model.json is missing")
+        res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", flag])
+        assert res.exit_code == 0, res.output
+        assert "split table" in res.output and "model.json is missing" in res.output
+        assert calls == ["model_stale", "turn", "fit", step, ("mosaics", tmp_path / where)]
+        calls = _frame_stubs(monkeypatch, tmp_path, stale=None)
+        res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", flag])
+        assert res.exit_code == 0, res.output
+        assert calls == ["model_stale", step, ("mosaics", tmp_path / where)]          # current: no fit, no GPU
+
+
+def test_cli_frame_plain_fits_when_stale_then_predicts(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    calls = _frame_stubs(monkeypatch, tmp_path, stale="the training sheets changed")
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu"])
+    assert res.exit_code == 0, res.output
+    assert calls == ["check_disk", "model_stale", "turn", "fit", "turn", "predict_all", ("mosaics", tmp_path),
+                     "closeups"]
+    calls = _frame_stubs(monkeypatch, tmp_path, stale=None)
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu"])
+    assert res.exit_code == 0, res.output
+    assert calls == ["check_disk", "model_stale", "turn", "predict_all", ("mosaics", tmp_path), "closeups"]
+
+
+def test_cli_frame_predict_only_refuses_a_stale_model_before_any_gpu_work(monkeypatch, tmp_path):
+    from typer.testing import CliRunner
+
+    from sfzmaps import cli
+
+    calls = _frame_stubs(monkeypatch, tmp_path, stale="the reducer changed")
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--predict-only"])
+    assert res.exit_code == 1 and "the reducer changed" in res.output and "sfzmaps frame" in res.output
+    assert calls == ["check_disk", "model_stale"]
 
 
 def test_cli_frame_full_disk_is_an_error(monkeypatch, tmp_path):
-    import json
-
     from typer.testing import CliRunner
 
     from sfzmaps import cli
     from sfzmaps.frame import run as fr
 
     calls = _frame_stubs(monkeypatch, tmp_path)
-    (tmp_path / fr.MODEL_DIR).mkdir()
-    (tmp_path / fr.MODEL_DIR / "model.json").write_text(json.dumps(HELD))
 
     def full(out):
         raise fr.DiskFull("only 3.0 GB free under x; predicting every page needs 20 GB")
     monkeypatch.setattr(fr, "check_disk", full)
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--predict-only"])
-    assert res.exit_code == 1 and "20 GB" in res.output and calls == []
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--held-out"])   # no prediction: no check
-    assert res.exit_code == 0 and calls == ["turn", "held_out", "mosaics", "closeups"]
+    for flags in ([], ["--predict-only"]):
+        res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", *flags])
+        assert res.exit_code == 1 and "20 GB" in res.output and calls == []
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--test"])   # no prediction: no check
+    assert res.exit_code == 0 and calls == ["model_stale", "score_test", ("mosaics", tmp_path / fr.TEST_DIR)]
 
 
 def test_cli_frame_flags_exclude_each_other(monkeypatch, tmp_path):
@@ -311,6 +292,9 @@ def test_cli_frame_flags_exclude_each_other(monkeypatch, tmp_path):
     from sfzmaps import cli
 
     calls = _frame_stubs(monkeypatch, tmp_path)
-    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--held-out", "--predict-only"])
-    assert res.exit_code != 0
+    for flags in (["--dev", "--test"], ["--dev", "--predict-only"], ["--test", "--predict-only"]):
+        res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", *flags])
+        assert res.exit_code != 0, flags
     assert calls == []
+    res = CliRunner().invoke(cli.app, ["frame", "--device", "cpu", "--held-out"])
+    assert res.exit_code != 0 and calls == []                                  # retired

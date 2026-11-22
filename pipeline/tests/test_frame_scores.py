@@ -1,99 +1,88 @@
+import math
+
 import numpy as np
 import pytest
 
-from sfzmaps.frame import scores
+from sfzmaps.frame import data, scores
+
+N = 40
+MAP = [[(5, 5), (34, 5), (34, 34), (5, 34)]]          # the map: px 5..34, outlines included
+BOX = [(20, 20), (29, 20), (29, 29), (20, 29)]        # a labelled box inside it: px 20..29
 
 
-def test_sheet_scores_counts_kept_and_cut_ink():
-    inside = np.zeros((10, 10), bool); inside[2:8, 2:8] = True
-    outside = ~inside; outside[2, 2:8] = True; outside[0, 0] = False      # cut a map row; keep one frame px
-    lum = np.zeros((10, 10), np.float32)
-    cls = np.where(inside, 0, 1).astype(np.uint8)
-    p = np.stack([1 - outside, outside, 0 * outside]).astype(float)
-    s = scores.sheet_scores(p, outside, cls, lum)
-    assert s["map_cut"] == 6 and s["frame_kept"] == 1 and s["cost"] == 3 * 1 + 6
+def _page() -> np.ndarray:
+    lum = np.ones((N, N), np.float32)
+    lum[2, :] = 0.0                                    # a frame rule: 40 px of class-1 ink
+    lum[22:28, 22:28] = 0.0                            # the box's ink: 36 px
+    return lum
 
 
-def test_removed_block_left_in_counts_as_frame_kept():
-    cls = np.zeros((4, 4), np.uint8); cls[0] = 2
-    p = np.stack([np.ones((4, 4)), 0 * np.ones((4, 4)), 0 * np.ones((4, 4))])
-    s = scores.sheet_scores(p, np.zeros((4, 4), bool), cls, np.zeros((4, 4)))
-    assert s["frame_kept"] == 4 and s["frame_kept_share"] == 1.0 and s["map_cut"] == 0
+def _outside() -> np.ndarray:
+    return ~data.inside_mask(MAP, (N, N))
 
 
-def test_shares_are_nan_for_a_class_with_no_ink():
-    cls = np.zeros((4, 4), np.uint8)
-    p = np.stack([np.ones((4, 4)), np.zeros((4, 4)), np.zeros((4, 4))])
-    s = scores.sheet_scores(p, np.zeros((4, 4), bool), cls, np.zeros((4, 4)))
-    assert np.isnan(s["frame_kept_share"]) and s["map_cut_share"] == 0.0
+def test_split_scores_separates_frame_from_boxes():
+    lum = _page()
+    removed = np.zeros((N, N), bool)
+    removed[20:30, 20:25] = True                       # half the box's ink columns (22..24 of 22..27)
+    s = scores.split_scores(_outside(), removed, MAP, [BOX], lum)
+    assert s["frame_ink"] == 40 and s["frame_left"] == 0
+    assert s["box_ink"] == 36 and s["box_left"] == 18
+    (box,) = s["boxes"]
+    assert box["deleted_share"] == 0.5 and box["kind"] == "rect"
+    assert box["size"] == pytest.approx([9, 9])
+    assert s["map_ink"] == 0 and s["map_cut_frame"] == 0 and s["map_cut_boxes"] == 0
 
 
-def test_log_loss_of_a_constant_quarter():
-    cls = np.ones((4, 4), np.uint8); cls[:2] = 0
-    q = np.full((4, 4), 0.25)
-    p = np.stack([1 - q, q, 0 * q])
-    s = scores.sheet_scores(p, np.zeros((4, 4), bool), cls, np.zeros((4, 4)))
-    assert s["log_loss"] == pytest.approx(-(np.log(0.75) + np.log(0.25)) / 2)
+def test_map_cut_is_split_by_what_cut_it():
+    lum = np.ones((N, N), np.float32)
+    lum[8, 10:20] = 0.0                                # 10 px of map ink
+    lum[15, 10:14] = 0.0                               # 4 more
+    outside = _outside()
+    outside[8, 10:15] = True                           # the frame cuts 5 of the first
+    removed = np.zeros((N, N), bool)
+    removed[15, 10:14] = True                          # a fitted box cuts the 4 ...
+    outside[15, 10:12] = True                          # ... 2 of them also outside: they count under boxes only
+    s = scores.split_scores(outside, removed, MAP, [], lum)
+    assert s["map_ink"] == 14 and s["map_cut_frame"] == 5 and s["map_cut_boxes"] == 4
+    shares = scores.pooled_split([s])
+    assert shares["map_cut_frame_share"] == pytest.approx(5 / 14) and shares["map_cut_boxes_share"] == pytest.approx(4 / 14)
 
 
-def test_log_loss_weighs_by_ink():
-    cls = np.zeros((2, 2), np.uint8); cls[1] = 1
-    p = np.stack([np.full((2, 2), 0.5), np.full((2, 2), 0.5), np.zeros((2, 2))])
-    lum = np.array([[1.0, 1.0], [0.0, 0.0]])             # only the class-1 row has ink
-    assert scores.sheet_scores(p, np.zeros((2, 2), bool), cls, lum)["log_loss"] == pytest.approx(np.log(2))
+def test_sheet_without_boxes_is_scored():
+    lum = _page()
+    lum[22:28, 22:28] = 1.0                            # no box ink either
+    lum[10, 10:20] = 0.0                               # some map ink, kept
+    plain = scores.split_scores(_outside(), np.zeros((N, N), bool), MAP, [], lum)
+    assert plain["box_ink"] == 0 and plain["box_left"] == 0 and plain["boxes"] == []
+    one = scores.pooled_split([plain])
+    assert one["frame_left_share"] == 0 and one["map_cut_frame_share"] == 0 and one["map_cut_boxes_share"] == 0
+    assert math.isnan(one["box_left_share"]) and scores.percent(one["box_left_share"]) == "n/a"
+    boxed = scores.split_scores(_outside(), np.zeros((N, N), bool), MAP, [BOX], _page())   # box all left in
+    pooled = scores.pooled_split([plain, boxed])
+    assert all(math.isfinite(v) for v in pooled.values())
+    assert pooled["box_left_share"] == 1.0
+    assert pooled["frame_left_share"] == 0.0           # summed ink over summed ink: 0 of 80
 
 
-def test_hd95_of_a_shifted_square():
-    inside = np.zeros((60, 60), bool); inside[10:50, 10:50] = True
-    outside = np.ones((60, 60), bool); outside[13:53, 10:50] = False
-    cls = np.where(inside, 0, 1).astype(np.uint8)
-    p = np.zeros((3, 60, 60))
-    assert scores.sheet_scores(p, outside, cls, np.zeros((60, 60)))["hd95_px"] == pytest.approx(3, abs=0.5)
+def test_pooled_split_sums_ink_not_shares():
+    small = {"frame_ink": 10.0, "frame_left": 10.0, "box_ink": 0.0, "box_left": 0.0, "map_ink": 100.0,
+             "map_cut_frame": 0.0, "map_cut_boxes": 0.0, "boxes": []}
+    big = {**small, "frame_ink": 990.0, "frame_left": 0.0, "map_ink": 900.0, "map_cut_frame": 10.0}
+    pooled = scores.pooled_split([small, big])
+    assert pooled["frame_left_share"] == pytest.approx(0.01)        # 10 of 1000, not the mean of 1 and 0
+    assert pooled["map_cut_frame_share"] == pytest.approx(0.01)
 
 
-def test_hd95_is_nan_without_a_boundary():
-    cls = np.zeros((8, 8), np.uint8)
-    s = scores.sheet_scores(np.zeros((3, 8, 8)), np.ones((8, 8), bool), cls, np.zeros((8, 8)))
-    assert np.isnan(s["hd95_px"])
-
-
-def test_bootstrap_mean_drops_nans():
-    m, lo, hi = scores.bootstrap_mean([1.0, np.nan, 1.0, 1.0])
-    assert (m, lo, hi) == (1.0, 1.0, 1.0)
-
-
-def test_paired_difference_sign_and_interval():
-    a = {("s", str(i)): 1.0 + 0.1 * i for i in range(20)}; b = {k: v - 0.5 for k, v in a.items()}
-    m, lo, hi = scores.paired_difference(a, b)
-    assert m == pytest.approx(0.5) and lo == pytest.approx(0.5) and hi == pytest.approx(0.5)
-
-
-def test_scores_split_layout_and_edge():
-    cls = np.ones((300, 400), np.uint8)
-    cls[:, 200:] = 0                                      # the outline: a class change at x = 199 | 200
-    lum = np.ones((300, 400), np.float32)
-    lum[100:110, 350] = 0.0                               # map ink 150 px from the outline, cut
-    lum[100:105, 180] = 0.5                               # frame ink 20 px from the outline, left in
-    deleted = np.zeros((300, 400), bool)
-    deleted[:, :150] = True
-    deleted[:, 300:] = True
-    s = scores.sheet_scores(np.zeros((3, 300, 400)), deleted, cls, lum)
-    assert scores.SPLIT_PX == 100
-    assert s["map_cut"] == 10 and s["frame_kept"] == 2.5
-    assert s["cost_layout"] == pytest.approx(10.0)        # COST_MAP x 10
-    assert s["cost_edge"] == pytest.approx(7.5)           # COST_FRAME x 2.5
-    assert s["cost_layout"] + s["cost_edge"] == pytest.approx(s["cost"])
-
-
-def test_scores_split_with_one_class_is_all_layout():
-    cls = np.zeros((20, 20), np.uint8)
-    lum = np.zeros((20, 20), np.float32)
-    s = scores.sheet_scores(np.zeros((3, 20, 20)), np.ones((20, 20), bool), cls, lum)
-    assert s["cost_edge"] == 0.0 and s["cost_layout"] == s["cost"] == 400.0
-
-
-def test_scores_count_each_class_ink():
-    cls = np.zeros((4, 4), np.uint8); cls[0] = 1; cls[1] = 2
-    s = scores.sheet_scores(np.zeros((3, 4, 4)), np.zeros((4, 4), bool), cls, np.zeros((4, 4)))
-    assert (s["outside_kept"], s["block_kept"], s["frame_ink"], s["map_ink"]) == (4, 4, 8, 8)
-    assert s["outside_kept_share"] == 1.0 and s["block_kept_share"] == 1.0
+def test_frameless_sheet_whose_only_deletions_are_boxes_is_scored():
+    lum = _page()
+    lum[2, :] = 1.0                                    # no frame rule: the map is the whole page
+    whole = [[(0, 0), (N - 1, 0), (N - 1, N - 1), (0, N - 1)]]
+    removed = np.zeros((N, N), bool)
+    removed[20:30, 20:30] = True                       # the box, all deleted
+    s = scores.split_scores(np.zeros((N, N), bool), removed, whole, [BOX], lum)
+    assert s["frame_ink"] == 0 and s["box_ink"] == 36 and s["box_left"] == 0 and s["boxes"][0]["deleted_share"] == 1
+    one = scores.pooled_split([s])
+    assert math.isnan(one["frame_left_share"]) and one["box_left_share"] == 0
+    assert scores.pooled_split([s, scores.split_scores(_outside(), np.zeros((N, N), bool), MAP, [], _page())])[
+        "frame_left_share"] == 0

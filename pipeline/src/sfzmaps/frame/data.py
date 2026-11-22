@@ -1,6 +1,7 @@
 """Pages, hand-drawn map-area labels and their masks.
 
-A label file (`inputs/frame-labels/<series>/<sheet>.json`, see its README) has `polygons`, the map area, and may have
+A label file (`inputs/frame-labels/<series>/<sheet>.json`, see its README; the test set's, never trained on, in
+`inputs/frame-labels-test/`, the same format) has `polygons`, the map area, and may have
 `remove`, the printed blocks inside the frame that are deleted wherever they sit (legend and title blocks, compass
 roses, "SECTION N" badges).  `class_mask` turns both into the layout's three answers per px: 0 map, 1 outside the
 frame, 2 removed block (`layout.CLASSES`)."""
@@ -19,6 +20,7 @@ from sfzmaps.config import DATA_DIR, INPUTS_DIR
 SheetId = tuple[str, str]  # (series, sheet)
 
 LABELS = INPUTS_DIR / "frame-labels"
+TEST_LABELS = INPUTS_DIR / "frame-labels-test"
 PAGE_KINDS = INPUTS_DIR / "page_kinds.csv"
 WORK = DATA_DIR / "work"
 OUT = DATA_DIR / "frame"
@@ -60,6 +62,24 @@ def load_remove(series: str, sheet: str, root: Path = LABELS) -> list[Polygon]:
 
 def labelled_sheets(root: Path = LABELS) -> list[SheetId]:
     return sorted((p.parent.name, p.stem) for p in root.glob("*/*.json"))
+
+
+def test_sheets(root: Path | None = None) -> list[SheetId]:
+    """The test set's sheets (`TEST_LABELS` by default): scored, never trained on."""
+    return labelled_sheets(TEST_LABELS if root is None else root)
+
+
+test_sheets.__test__ = False   # a data function, not a test
+
+
+def check_split(train, test) -> None:
+    """Raise ValueError naming every sheet that is both a training sheet (`LABELS`) and a test sheet (`TEST_LABELS`):
+    a test sheet must never be trained on."""
+    both = sorted(set(map(tuple, train)) & set(map(tuple, test)))
+    if both:
+        names = ", ".join(f"{s}/{h}" for s, h in both)
+        raise ValueError(f"{len(both)} sheet(s) labelled both for training ({LABELS}) and for testing ({TEST_LABELS}): "
+                         f"{names}; a test sheet is never trained on: remove one of the two labels")
 
 
 def map_mask(polygons, shape: tuple[int, int], scale: float = 1.0, holes=()) -> np.ndarray:

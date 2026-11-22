@@ -56,3 +56,20 @@ def test_sample_draws_ink_pixels_only():
     assert z.shape == (1, 3, 500) and y.shape == (500,) and y.dtype == np.uint8
     assert z.dtype == np.float32
     assert set(np.unique(y)) <= {0, 1}
+
+
+def test_temperature_interval_refits_as_a_fresh_search_does():
+    rng = np.random.default_rng(5)
+    samples = []
+    for k in range(8):
+        z0 = rng.normal(0, 3, (3, 5_000)).astype(np.float32)
+        p = _softmax(z0 / (1.2 + 0.2 * k)); u = rng.random(5_000)           # sheets that differ: a real spread
+        y = (u > p[0]).astype(np.uint8) + (u > p[0] + p[1]).astype(np.uint8)
+        samples.append((np.stack([z0, z0 + 0.1]), y))
+    n = 30
+    pick = np.random.default_rng(0)
+    fresh = [calibrate.fit_temperature([samples[i] for i in pick.integers(0, 8, 8)]) for _ in range(n)]
+    want = np.percentile(fresh, (5, 95))
+    got = calibrate.temperature_interval(samples, n=n)
+    assert got == pytest.approx(tuple(want), rel=2e-3)
+    assert want[1] / want[0] > 1.05                                         # the interval is not a point

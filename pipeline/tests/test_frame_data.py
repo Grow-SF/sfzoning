@@ -131,3 +131,17 @@ def test_class_mask_includes_outlines_and_is_uint8():
     assert m.dtype == np.uint8 and m.shape == (20, 20)
     assert m[9, 9] == 0 and m[10, 10] == 1 and m[3, 3] == 2 and m[6, 6] == 2 and m[7, 7] == 0
     assert (m == 2).sum() == 16 and (m == 0).sum() == 100 - 16
+
+
+def test_split_overlap_is_refused():
+    with pytest.raises(ValueError, match="1960/6"):
+        data.check_split([("1960", "6"), ("1960", "1")], [("1960", "6")])
+
+
+def test_split_overlap_names_every_shared_sheet_and_both_folders():
+    with pytest.raises(ValueError) as e:
+        data.check_split([("1960", "6"), ("1921", "a"), ("1935", "p1")], [("1921", "a"), ("1960", "6"), ("1935", "p2")])
+    msg = str(e.value)
+    assert "1921/a" in msg and "1960/6" in msg and "1935" not in msg
+    assert str(data.LABELS) in msg and str(data.TEST_LABELS) in msg
+    data.check_split([("1960", "6")], [("1960", "1")])                 # apart: no error
