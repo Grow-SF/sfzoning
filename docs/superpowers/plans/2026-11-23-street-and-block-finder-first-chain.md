@@ -29,7 +29,7 @@
 - Before every commit run `pgrep -f "sfzmaps build"`; commit only if nothing is found. Messages end with:
   `Co-Authored-By: Claude Fable 5.2 <noreply@anthropic.com>` and
   `Claude-Session: https://claude.ai/code/session_01UjTgrnFxxUqpDGdyiFtNFS`
-- Tests: `cd pipeline && OMP_NUM_THREADS=1 uv run pytest -q tests/test_find_*.py`; before a task's commit also the full `uv run pytest -q`.
+- Tests: `cd pipeline && OMP_NUM_THREADS=1 uv run pytest -q tests/test_find_*.py`, plus the test file of any existing module the task changed. Not the full suite per task (the owner, 2026-11-23); CI runs it on the pull request.
 
 ## Review Focus
 
@@ -108,7 +108,7 @@
   - in `test_hatchnet_data.py`, `test_pooled_half_widths_have_no_type_test`: with `per_type=False`, `learned.own == {}` and every type's samples are the pooled ones.
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run the tests (PASS) and the full suite.
+- [ ] **Step 4:** Run the tests (PASS).
 - [ ] **Step 5:** Add `sfzmaps find labels --series S [--sheet X ...] [--placement warp|work]` (it grows in Task 3; for now it builds `ground(S)` and prints the px per label). Run it for `2000-digital-zoning`. Expected: a `grid.npz` and three counts.
 - [ ] **Step 6:** Commit `find: street-or-not labels from a series' lots; pooled street half-widths`.
 
@@ -140,7 +140,7 @@
   - `test_doubling_the_cut_length_changes_nothing_that_matters`: the summed prior of a cut built with `R` and with `2 * R` differ by under 1e-3 of the sum.
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run the tests (PASS) and the full suite.
+- [ ] **Step 4:** Run the tests (PASS).
 - [ ] **Step 5: Build and draw the labels.** `sfzmaps find labels --series 2000-digital-zoning --sheet 2000-digital-zoning-p05 --sheet 2000-digital-zoning-p07 --placement warp --look`, the same with `--placement work`, and `--series 2000-digital-height --sheet 2000-digital-height-p07 --look`. Pictures go to `OUT / "look" / "labels" / <placement>/`, whole sheet and a 640 px close-up at 2x. Look at every picture: do the cyan ticks sit on the thin block lines, the red ones on the heavy lines, and does either placement put block-edge ticks on a zoning border?
 - [ ] **Step 6:** Commit `find: cut statements for block edges and zoning borders; label pictures`.
 - [ ] **Step 7: Owner gate.** Send the close-ups for both placements with a caption saying which placement sits better on the block lines and why. Wait for the go, and for which placement to use (the default stays `warp` unless the pictures say otherwise).
@@ -183,7 +183,7 @@
   - `test_reserved_ground_reaches_other_scans`: a `test` crop on sheet A covers ground that sheet B (a `Flat` placement shifted by 100 px) also shows; `reserved(B)` is True on exactly that box grown by `margin`, False elsewhere; a `train` crop reserves nothing.
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3:** Implement. Write `inputs/find-labels/README.md`: the file format, the seven rules, the three sets and what each is for, and the reading of the maps from the design (a line closing a street is a block edge; a road drawn as two lines is a street; open land is its own kind; railway lines, shorelines and contours are neither edge nor zoning border).
-- [ ] **Step 4:** Run the tests (PASS) and the full suite.
+- [ ] **Step 4:** Run the tests (PASS).
 - [ ] **Step 5:** Commit `find: hand crops (seeds and strokes), their labels and the reserved ground`.
 
 ### Task 5: Draw the first hand crops (labelling, no code)
@@ -228,7 +228,7 @@ Each crop is 1,024 x 1,024 px unless the sheet is smaller. To draw one: cut the 
   - `test_the_border_answer_learns_which_ink_is_the_border` (the design's made-up case; CPU, `FindNet(8)`, tile 64, batch 8, 400 steps, seed 0; trained on 16 towns with edge and border cuts only): on a fresh town, more than half of the "crosses" cuts have a px whose border chance is over one half, fewer than half of the "none" cuts do, and the mean border chance on `border_line` px is above the mean on `block_line` px that are not `border_line`.
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3:** Implement the model and losses; then `town.measure` and the command; run `sfzmaps find measure-town` and commit its file with the code; then `town.draw`.
-- [ ] **Step 4:** Run the tests (PASS; the last one within about a minute) and the full suite. **If the made-up case fails after two honest fixes, stop and report to the owner with pictures of what the border answer lights up** (the design's known weakness; do not patch a third time).
+- [ ] **Step 4:** Run the tests (PASS; the last one within about a minute). **If the made-up case fails after two honest fixes, stop and report to the owner with pictures of what the border answer lights up** (the design's known weakness; do not patch a third time).
 - [ ] **Step 5:** Commit `find: the network, the likelihoods, and the zoning-border label learned on made-up towns`.
 
 ### Task 7: `Labelled`, tiles and the trainer
@@ -257,7 +257,7 @@ Each crop is 1,024 x 1,024 px unless the sheet is smaller. To draw one: cut the 
   - `test_the_kept_step_is_the_best_by_the_callback`: a callback returning 0.2, 0.9, 0.9, 0.1 keeps the second checkpoint.
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run the tests (PASS) and the full suite.
+- [ ] **Step 4:** Run the tests (PASS).
 - [ ] **Step 5:** Commit `find: Labelled, tiles by era and quarter turn, the trainer`.
 
 ### Task 8: Reading a page, closed areas, the counts
@@ -290,7 +290,7 @@ Each crop is 1,024 x 1,024 px unless the sheet is smaller. To draw one: cut the 
   - `test_border_counts_are_per_cut`.
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3:** Implement.
-- [ ] **Step 4:** Run the tests (PASS) and the full suite.
+- [ ] **Step 4:** Run the tests (PASS).
 - [ ] **Step 5:** Commit `find: reading a page, closed areas by watershed, the block and zoning-border counts`.
 
 ### Task 9: The first whole chain (stage 3)
