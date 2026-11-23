@@ -416,14 +416,18 @@ def _type_from_name(name, known: set[str]) -> str:
 
 
 def centre_lines(src: Sources) -> Lines:
-    """Today's street centre lines (`src.streets`: DataSF's, data/ref/streets.parquet, EPSG:2227 ft as the solver's
-    grid), every row: the ones no longer active too, since 1921's streets are older than today's list.  Each one's
-    street type (`st_type`; where missing, `_type_from_name`) and street (`streetname`; a line with none is its own
-    street).  None when `src.streets` is None."""
+    """Today's street centre lines (`lines_from(src.streets)`); none when `src.streets` is None."""
     if src.streets is None:
         empty = np.empty(0, dtype=object)
         return Lines(empty, empty, empty)
-    df = pd.read_parquet(src.streets)
+    return lines_from(src.streets)
+
+
+def lines_from(path: Path) -> Lines:
+    """Today's street centre lines (DataSF's, data/ref/streets.parquet, EPSG:2227 ft as the solver's grid), every row:
+    the ones no longer active too, since 1921's streets are older than today's list.  Each one's street type
+    (`st_type`; where missing, `_type_from_name`) and street (`streetname`; a line with none is its own street)."""
+    df = pd.read_parquet(path)
     geoms = np.array([shapely.from_wkb(v) if isinstance(v, (bytes, bytearray)) else v for v in df["geometry"]],
                      dtype=object)
     n = len(df)
@@ -612,15 +616,18 @@ def _ft(s: np.ndarray) -> dict:
     return {"median_ft": float(np.quantile(f, 0.5)), "p90_ft": float(np.quantile(f, 0.9)), "max_ft": float(f[-1])}
 
 
-def learn_half_widths(width: np.ndarray, sid: np.ndarray, centres: Centres) -> HalfWidths:
+def learn_half_widths(width: np.ndarray, sid: np.ndarray, centres: Centres, per_type: bool = True) -> HalfWidths:
     """The half-widths of the centre px bounded on both sides, both sides' (the empirical distribution: nothing
     smoothed).  Per street type: its own when its two-sided px come from lines enough to tell it apart, i.e. its
     empirical CDF differs from every type's together by more than the DKW band sqrt(ln(2 / (1 - CONFIDENCE)) /
-    (2 n)), n its lines (the px of one line are not independent); else the pooled ones."""
+    (2 n)), n its lines (the px of one line are not independent); else the pooled ones.  `per_type` False: every type
+    the pooled ones, with no test."""
     both = np.isfinite(width).all(axis=1)
     kind, line = centres.kind[sid], centres.line[sid]
     pooled = np.sort(width[both].ravel())
     own, report = {}, {POOLED: {"px": int(both.sum()), "lines": int(len(np.unique(line[both]))), **_ft(pooled)}}
+    if not per_type:
+        return HalfWidths(pooled, own, report)
     for k, name in enumerate(centres.kinds):
         m = both & (kind == k)
         s = np.sort(width[m].ravel())
@@ -644,7 +651,7 @@ class StreetLabels:
 
 
 def street_labels(block_world: np.ndarray, centres: Centres, area: np.ndarray | None = None,
-                  learned: HalfWidths | None = None) -> StreetLabels:
+                  learned: HalfWidths | None = None, per_type: bool = True) -> StreetLabels:
     """The street labels on the solver's 4 ft grid.  Each px x off today's blocks belongs to its nearest centre px c
     (`distance_transform_edt` indices), at distance d, on the side of c's segment that x lies on, with that side's
     block distance w (`side_widths`; inf with no block).  On every side x is street with weight S(d) = P(half-width >
@@ -653,7 +660,7 @@ def street_labels(block_world: np.ndarray, centres: Centres, area: np.ndarray | 
     makes full-weight street, since S is ~0 there.  Ignored where S(d) is 0 (beyond the largest half-width learned)
     and past the side's block.  A weight, never a 1/2 target.  Today's blocks are not street (weight 1).  A centre px
     on a block (a park road, a street since built over) is no centre: it would label nothing off the block.  No width
-    is picked: block distances are measured, the weights learned."""
+    is picked: block distances are measured, the weights learned.  `per_type`: as `learn_half_widths`."""
     block = np.asarray(block_world, bool)
     h, w = block.shape
     kept = (centres.seg >= 0) & ~block
@@ -663,12 +670,12 @@ def street_labels(block_world: np.ndarray, centres: Centres, area: np.ndarray | 
     sid = centres.seg[rows, cols]
     if not len(rows):
         sides = Sides(rows, cols, sid, np.zeros((0, 2)))
-        learned = learned if learned is not None else learn_half_widths(sides.width, sid, centres)
+        learned = learned if learned is not None else learn_half_widths(sides.width, sid, centres, per_type)
         return StreetLabels(street, weight, kept.astype(np.uint8), sides, learned)
     near = ndimage.distance_transform_edt(~kept, return_distances=False, return_indices=True)
     width = side_widths(block, centres, area, near, rows, cols)
     sides = Sides(rows, cols, sid, width)
-    learned = learned if learned is not None else learn_half_widths(width, sid, centres)
+    learned = learned if learned is not None else learn_half_widths(width, sid, centres, per_type)
     index = np.full(block.shape, -1, np.int32)
     index[rows, cols] = np.arange(len(rows), dtype=np.int32)
     normal = _normals(centres.direction[sid])
@@ -696,14 +703,14 @@ def street_labels(block_world: np.ndarray, centres: Centres, area: np.ndarray | 
     return StreetLabels(street, weight, kept.astype(np.uint8), sides, learned)
 
 
-def street_grid(lines: Lines, blocks: np.ndarray, area: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray,
-                                                                                            dict]:
+def street_grid(lines: Lines, blocks: np.ndarray, area: np.ndarray | None = None,
+                per_type: bool = True) -> tuple[np.ndarray, np.ndarray, dict]:
     """The street labels and weights on the whole solver grid (`street_labels` of today's blocks and `lines`, rays
     kept to the data `area`) and their counts: lines, centre px (those on blocks dropped), the centre px bounded on
     both sides, one or none, px per label, the soft street px and the street weight's sum, and the learned
-    half-widths per street type."""
+    half-widths per street type (`per_type`: as `learn_half_widths`)."""
     centres = centre_segments(lines.geoms, blocks.shape, lines.kinds, lines.streets)
-    lab = street_labels(blocks, centres, area)
+    lab = street_labels(blocks, centres, area, per_type=per_type)
     fin = np.isfinite(lab.sides.width).sum(axis=1)
     on = lab.street == STREET
     stats = {"lines": int(len(lines.geoms)), "centre_grid_px": int(len(lab.sides.rows)),

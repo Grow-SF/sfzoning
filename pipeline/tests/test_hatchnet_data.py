@@ -541,6 +541,24 @@ def test_kind_pooled_unless_its_widths_differ():
     assert rep["ST"]["own"] is False and rep["ST"]["px"] == 0 and not lab.learned.own
 
 
+def test_pooled_half_widths_have_no_type_test():
+    # two street types of 20 lines each, AVE's half-widths all 2 px and ST's all 8: by type, each differs from the
+    # pooled ones by far more than the DKW band and keeps its own; pooled (per_type=False), neither does, and every
+    # type gets the pooled half-widths
+    n = 40
+    kind = (np.arange(n) >= n // 2).astype(np.int64)
+    centres = data.Centres(np.full((1, 1), -1, np.int32), np.tile([1.0, 0.0], (n, 1)), np.arange(n), np.arange(n),
+                           kind, ("AVE", "ST"))
+    width = np.where(kind == 0, 2.0, 8.0)[:, None].repeat(2, axis=1)
+    sid = np.arange(n)
+    assert set(data.learn_half_widths(width, sid, centres).own) == {"AVE", "ST"}
+    learned = data.learn_half_widths(width, sid, centres, per_type=False)
+    assert learned.own == {}
+    assert np.array_equal(learned.pooled, np.r_[np.full(n, 2.0), np.full(n, 8.0)])
+    for k in centres.kinds:
+        assert np.array_equal(learned.of(k), learned.pooled)
+
+
 def test_centre_lines_rasterised_on_the_grid():
     # today's centre lines (EPSG:2227 ft) on the solver's 4 ft grid, segment by segment, 8-connected, one px wide,
     # wherever they run, each px knowing its segment's direction; a line off the grid is left out

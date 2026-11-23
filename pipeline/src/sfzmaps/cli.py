@@ -1587,5 +1587,25 @@ def find_sheets(series: str = typer.Option(None, "--series", help="Only this ser
         typer.echo(f"{s}/{h}")
 
 
+@find_app.command("labels")
+def find_labels(series: str = typer.Option(..., "--series", help="A series whose lots label it (label_sources.csv)."),
+                sheet: list[str] = typer.Option(None, "--sheet", help="Only these sheets (repeatable)."),
+                placement: str = typer.Option("warp", "--placement",
+                                              help="The sheets' placement: warp (data/warp) or work (data/work).")
+                ) -> None:
+    """Make the series' street-or-not labels from its lots on the solver's grid (data/find/labels/<series>/grid.npz,
+    kept once made) and print the px per label."""
+    import numpy as np
+
+    from sfzmaps.find import lotlabels
+    from sfzmaps.solver.hatchnet.data import NOT_STREET, STREET, UNKNOWN
+    if placement not in lotlabels.PLACEMENTS:
+        raise typer.BadParameter(f"expected one of {', '.join(lotlabels.PLACEMENTS)}", param_hint="--placement")
+    g = lotlabels.ground(series)
+    for name, v in (("street", STREET), ("block (not street)", NOT_STREET), ("no label", UNKNOWN)):
+        typer.echo(f"{name}: {int(np.count_nonzero(g.street == v)):,} grid px")
+    typer.echo(f"the grid labels: {lotlabels.grid_path(series)}")
+
+
 if __name__ == "__main__":
     app()
