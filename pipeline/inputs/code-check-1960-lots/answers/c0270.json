@@ -1,0 +1,12 @@
+{
+  "answer": "pick",
+  "at": "2026-11-18T23:26:12.251Z",
+  "case": "c0270",
+  "code": "C-M",
+  "options": [
+    "M-1",
+    "C-M"
+  ],
+  "order": 270,
+  "stratum": "disagree"
+}

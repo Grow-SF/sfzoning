@@ -10,10 +10,10 @@ from sfzmaps.solver import answers1921 as a1921
 
 def _write(tmp_path, cases, answers, page="1921-likely"):
     """One page: its cases file and its answers directory (one json per answer, wrapped in `data` for one)."""
-    cf = tmp_path / f"{page}.json"
+    ad, _ = a1921.page_inputs(page, tmp_path)
+    ad.mkdir(parents=True)
+    cf = ad.parent / "cases.json"
     cf.write_text(json.dumps({"cases": cases}))
-    ad = tmp_path / f"answers-{page}"
-    ad.mkdir()
     for i, ans in enumerate(answers):
         body = {"case": ans["case"], "answer": ans["answer"], "code": ans.get("code", ""), "shown": ans["shown"]}
         (ad / f"{i}.json").write_text(json.dumps({"data": body} if i == 0 else body))
@@ -116,7 +116,7 @@ def test_split_lot_answers_have_their_own_row():
 def test_missing_answers_dir_is_recorded_not_fatal(tmp_path):
     cases = [{"id": "c0001", "blklot": "0001001", "block": "0001", "code": "1R"}]
     ad, cf = _write(tmp_path, cases, [{"case": "c0001", "answer": "ok", "shown": "1R"}])
-    gone = tmp_path / "answers-1921"
+    gone, _ = a1921.page_inputs("1921", tmp_path)
     df = a1921.owner_answers([ad, gone], [cf])
     pages = df.attrs["pages"]
     assert pages["1921-likely"] == {"dir_exists": True, "read": 1, "kept": 1, "dropped": 0, "case_file": True}

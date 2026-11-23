@@ -107,16 +107,15 @@ ANSWER_PAGES = {"1921": answers1921.PAGES}     # the owner's answer pages per se
 @dataclass(frozen=True)
 class Sources:
     """Where a series is read: the pages, placements and reads (work), the solver's lots (solver), the legend's
-    swatch boxes, the owner's answers and their case files, today's parcels (None: reads of parcels the solver's table
-    lacks are not placed); `order`: the draw order, bottom first (None: the published map's); today's street centre
-    lines (None: none, so every px off today's blocks is ignored); the frame finder's cuts (`sfzmaps frame`; None:
-    data/frame/<series>)."""
+    swatch boxes, the folder of the check pages' cases and the owner's answers (`answers1921.page_inputs`: inputs/),
+    today's parcels (None: reads of parcels the solver's table lacks are not placed); `order`: the draw order, bottom
+    first (None: the published map's); today's street centre lines (None: none, so every px off today's blocks is
+    ignored); the frame finder's cuts (`sfzmaps frame`; None: data/frame/<series>)."""
     series: str
     work: Path
     solver: Path
     legends: Path
-    answers: Path
-    cases: Path
+    checks: Path
     parcels: Path | None = None
     order: tuple[str, ...] | None = None
     streets: Path | None = None
@@ -129,7 +128,7 @@ class Sources:
 
 def sources(series: str) -> Sources:
     return Sources(series, config.WORK_DIR / series, config.DATA_DIR / "solver" / series, hatching.LEGENDS_FILE,
-                   answers1921.ANSWERS_DIR, answers1921.EXPERIMENT / "cases", config.REF_DIR / "parcels.parquet",
+                   config.INPUTS_DIR, config.REF_DIR / "parcels.parquet",
                    streets=config.REF_DIR / "streets.parquet")
 
 
@@ -992,9 +991,9 @@ def answers(src: Sources) -> pd.DataFrame:
     """The owner's answers kept (`answers1921.owner_answers`: blklot, block, truth, page, case, blklots) with each
     one's stratum; attrs as owner_answers'."""
     pages = ANSWER_PAGES.get(src.series, ())
-    dirs = [src.answers / f"answers-{p}" for p in pages]
-    files = [f for p in pages for f in (src.cases / f"{p}.json", src.cases / f"{p}-retired.json") if f.is_file()]
-    a = answers1921.owner_answers(dirs, files)
+    found = [answers1921.page_inputs(p, src.checks) for p in pages]
+    files = [f for _, fs in found for f in fs]
+    a = answers1921.owner_answers([d for d, _ in found], files)
     cases: dict[str, dict[str, dict]] = {}
     for f in files:
         page = cases.setdefault(answers1921._page_of(f), {})

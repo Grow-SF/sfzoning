@@ -1,0 +1,12 @@
+{
+  "answer": "pick",
+  "at": "2026-11-18T23:05:55.218Z",
+  "case": "c0031",
+  "code": "R-1",
+  "options": [
+    "R-1",
+    "R-2"
+  ],
+  "order": 31,
+  "stratum": "random"
+}

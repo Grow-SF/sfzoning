@@ -120,7 +120,7 @@ def write_streets(root):
 def sources(root, order=None) -> data.Sources:
     parcels, streets = root / "parcels.parquet", root / "streets.parquet"
     return data.Sources(series=SERIES, work=root / "work" / SERIES, solver=root / "solver" / SERIES,
-                        legends=root / "legends.json", answers=root / "answers", cases=root / "cases",
+                        legends=root / "legends.json", checks=root / "checks",
                         parcels=parcels if parcels.is_file() else None, order=tuple(order) if order else None,
                         streets=streets if streets.is_file() else None, frame=root / "frame" / SERIES)
 
@@ -337,21 +337,21 @@ def test_lot_table_answers_and_reads(tmp_path):
                               ("0005001", "U", 0.5, "parcel"), ("0003001B", "2R", 0.95, "parcel"),
                               ("0003001C", "1R", 0.5, "parcel")],
                      page_c=printed(printed(scan(1), *lot_box(1, C_FT), solid=True), *lot_box(5, C_FT), solid=True))
-    cases = tmp_path / "cases"
-    cases.mkdir()
-    (cases / "1921.json").write_text(json.dumps({"cases": [
+    checks = {p: tmp_path / "checks" / f"code-check-{p}" for p in ("1921", "1921-likely")}
+    for d in checks.values():
+        (d / "answers").mkdir(parents=True)
+    (checks["1921"] / "cases.json").write_text(json.dumps({"cases": [
         {"id": "c0001", "stratum": "random", "code": "1R", "blklot": "0001001", "block": "0001"},
         {"id": "c0002", "stratum": "disagree", "code": "2R", "blklot": "0002001", "block": "0002"},
         {"id": "c0003", "stratum": "random", "code": "2R", "blklot": "0004001", "block": "0004"}]}))
-    (cases / "1921-likely.json").write_text(json.dumps({"cases": [
+    (checks["1921-likely"] / "cases.json").write_text(json.dumps({"cases": [
         {"id": "c0001", "stratum": "all", "code": "LI", "blklot": "0003001", "blklots": ["0003001"], "block": "0003"},
         {"id": "c0002", "stratum": "all", "code": "1R", "blklot": "0009009", "blklots": ["0009009", "0005001"],
          "block": "0005"}]}))
-    answers = {"answers-1921": [("c0001", "ok", "1R"), ("c0002", "fix", "LI"), ("c0003", "canttell", "")],
-               "answers-1921-likely": [("c0001", "unzoned", ""), ("c0002", "fix", "HI")]}
+    answers = {"1921": [("c0001", "ok", "1R"), ("c0002", "fix", "LI"), ("c0003", "canttell", "")],
+               "1921-likely": [("c0001", "unzoned", ""), ("c0002", "fix", "HI")]}
     for page, rows in answers.items():
-        d = tmp_path / "answers" / page
-        d.mkdir(parents=True)
+        d = checks[page] / "answers"
         for case, ans, code in rows:
             (d / f"{case}.json").write_text(json.dumps({"case": case, "answer": ans, "code": code}))
     t = data.lot_table(SERIES, src)

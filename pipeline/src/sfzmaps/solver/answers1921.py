@@ -1,18 +1,21 @@
 """The 1921 measure: how many of the owner's hand answers a method gets right, with a block bootstrap interval.
 
-The owner answered 1921 lot reads on the code-check pages (`label-checks`: `1921-likely`, `1921-lowconf`, `1921`).  Each
-answer file holds the case id, the answer (ok, fix, canttell, unsure, unzoned), the fixed `code`, and the code the page
-showed.  Truth (the owner's rulings, 2026-11-18):
+The owner answered 1921 lot reads on the code-check pages (`label-checks`: `1921-likely`, `1921-lowconf`, `1921`).  A
+page's cases and answers are in git, inputs/code-check-<page>/ (`page_inputs`): cases.json, the cases it retired
+(cases-retired.json) and answers/, one file per answer as the page's store exports them.  Each answer file holds the
+case id, the answer (ok, fix, canttell, unsure, unzoned), the fixed `code`, and the code the page showed.  Truth (the
+owner's rulings, 2026-11-18):
 
   ok         the case's `code`, the code the page showed
   fix        the answer's `code`
   unzoned    2R (the ordinance: white is 2R)
   canttell, unsure   dropped, and counted (`answers.attrs["dropped"]`)
 
-The owner's answers are the score, never training data.  Counting: a method is right on an answer when its code for
-the answer's lot equals the truth; an answer none of whose lots (a stacked-condo footprint has several) the method
-has a code for is `unmatched`, and is not in `n`.  Intervals resample whole BLOCKS (the answers of one block share
-their errors), 2000 resamples, `numpy.random.default_rng(0)`: a fixed seed for byte-identical reports.
+The owner's answers are for both scoring and training, split by area (the owner, 2026-11-18).  Counting: a method is
+right on an answer when its code for the answer's lot equals the truth; an answer none of whose lots (a stacked-condo
+footprint has several) the method has a code for is `unmatched`, and is not in `n`.  Intervals resample whole BLOCKS
+(the answers of one block share their errors), 2000 resamples, `numpy.random.default_rng(0)`: a fixed seed for
+byte-identical reports.
 
     uv run python -m sfzmaps.solver.answers1921 --run published --run solve-final --run round2
     uv run python -m sfzmaps.solver.answers1921 --baselines
@@ -35,8 +38,8 @@ from sfzmaps.solver.codes import canon
 
 SERIES = "1921"
 SOLVER_1921 = config.DATA_DIR / "solver" / SERIES       # this series' folders, whatever series the solver is set to
-EXPERIMENT = config.DATA_DIR / "solver" / "experiments" / "hatch-regions"
-ANSWERS_DIR = config.DATA_DIR / "solver" / "experiments" / "label-checks" / "answers"
+EXPERIMENT = config.DATA_DIR / "solver" / "experiments" / "hatch-regions"       # where the scores are written
+CHECKS = "code-check-"                  # a check page's folder under inputs/: code-check-<page>
 SPIKE_CSV = config.DATA_DIR / "solver" / "experiments" / "hatch1921" / "owner_answers_cv_r2.csv"
 PAGES = ("1921-likely", "1921-lowconf", "1921")
 DROPPED = ("canttell", "unsure")
@@ -47,18 +50,24 @@ SEED = 0
 
 # --- the owner's answers -----------------------------------------------------------------------------------------
 
+def page_inputs(page: str, root: Path | None = None) -> tuple[Path, list[Path]]:
+    """A check page's inputs, `root`/code-check-<page>/ (root: inputs/): its answers folder, and its case files that
+    exist, the current cases first, then the cases the page retired (the owner answered some before)."""
+    d = Path(root if root is not None else config.INPUTS_DIR) / f"{CHECKS}{page}"
+    return d / "answers", [f for f in (d / "cases.json", d / "cases-retired.json") if f.is_file()]
+
+
 def _page_of(path: Path) -> str:
-    """`answers-1921-likely` (an answers folder) or `1921-likely.json` / `1921-lowconf-retired.json` (cases)."""
-    name = path.name.removesuffix(".json").removeprefix("answers-").removesuffix("-retired")
-    return name
+    """The page of an answers folder or a case file: the `<page>` of the code-check-<page> folder it is in."""
+    return Path(path).parent.name.removeprefix(CHECKS)
 
 
 def owner_answers(answer_dirs: list[Path], case_files: list[Path]) -> pd.DataFrame:
     """One row per kept answer: blklot, block, truth, page, case (and `blklots`, every lot of the case's footprint).
-    A page's answers dir pairs with the case files of the same page (`answers-1921-likely` with `1921-likely.json`);
-    case ids repeat across pages.  Case files of one page are read in the order given and the first holding an id
-    wins (a later file can hold the cases the page retired).  A missing or empty answers dir gives no rows (the
-    `answers-1921` collection has none yet) but is recorded; an answer whose page has no case file raises.
+    A page's answers dir pairs with the case files of the same page (those in its code-check-<page> folder:
+    `page_inputs`); case ids repeat across pages.  Case files of one page are read in the order given and the first
+    holding an id wins (a later file can hold the cases the page retired).  A missing or empty answers dir gives no
+    rows (a page not answered yet) but is recorded; an answer whose page has no case file raises.
     Truth is in the one spelling (`canon`).  `attrs["dropped"]` counts the canttell / unsure answers left out and
     `attrs["pages"]` has, per page, whether its answers dir exists and the answers read, kept and dropped."""
     cases: dict[str, dict[str, dict]] = {}
@@ -107,10 +116,8 @@ def owner_answers(answer_dirs: list[Path], case_files: list[Path]) -> pd.DataFra
 
 def default_answers() -> pd.DataFrame:
     """Every answer of the three 1921 pages, with the cases of the pages (and the retired ones the owner answered)."""
-    dirs = [ANSWERS_DIR / f"answers-{p}" for p in PAGES]
-    cases = EXPERIMENT / "cases"
-    files = [cases / f"{p}.json" for p in PAGES] + [cases / "1921-lowconf-retired.json"]
-    return owner_answers(dirs, [f for f in files if f.is_file()])
+    found = [page_inputs(p) for p in PAGES]
+    return owner_answers([d for d, _ in found], [f for _, files in found for f in files])
 
 
 # --- the predictions ---------------------------------------------------------------------------------------------

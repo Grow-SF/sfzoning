@@ -501,14 +501,14 @@ def score(folder: Path = EVIDENCE, dest: Path = EXPERIMENT / "score_patches.json
     preds = {"patches": evidence_predictions(folder), "published": A.published(), "solve-final": A.solve_run("final"),
              "round2": A.method("round2")}
     strata = {c["id"]: c.get("stratum", "") for c in
-              json.loads((A.EXPERIMENT / "cases" / "1921.json").read_text())["cases"]}
+              json.loads(A.page_inputs("1921")[1][0].read_text())["cases"]}
     answers["stratum"] = [strata.get(c, "") if p == "1921" else "" for c, p in zip(answers["case"], answers["page"])]
     pages = answers.attrs["pages"]
     subsets = {"all": (answers, answers.attrs["dropped"])}
     for p in A.PAGES:
         subsets[f"page {p}"] = (answers[answers["page"] == p], pages.get(p, {}).get("dropped", 0))
     by_stratum = {}                                  # the 1921 page's canttell / unsure answers, by stratum
-    for f in sorted((A.ANSWERS_DIR / "answers-1921").glob("*.json")):
+    for f in sorted(A.page_inputs("1921")[0].glob("*.json")):
         ans = json.loads(f.read_text())
         ans = ans.get("data", ans)
         if ans["answer"] in A.DROPPED:
