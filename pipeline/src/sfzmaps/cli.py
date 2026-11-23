@@ -13,6 +13,9 @@ app = typer.Typer(no_args_is_help=True, help="Georeference historic SF zoning ma
 solver_app = typer.Typer(no_args_is_help=True,
                          help="The 2000 solver: make its inputs (each a `sfzmaps build` stage) and solve.")
 app.add_typer(solver_app, name="solver")
+find_app = typer.Typer(no_args_is_help=True, help="The street-and-block finder: one model that finds streets, block "
+                                                  "edges and zoning borders on a scanned map.")
+app.add_typer(find_app, name="find")
 # Exit status of a command stopped by llm.FATAL (quota, spend cap, missing key): `sfzmaps build`
 # reports it as "needs a paid read". Not 2, which click uses for usage errors.
 PAID_READ_EXIT = 75
@@ -1574,6 +1577,14 @@ def solver_publish(
         from sfzmaps.solver import differences
         out = differences.make(series, root=root, published=published, page_dir=page, new_dir=d)
         typer.echo(f"the page of differences: {out}")
+
+
+@find_app.command("sheets")
+def find_sheets(series: str = typer.Option(None, "--series", help="Only this series (default: every series).")) -> None:
+    """Print the map pages the finder reads, one `series/sheet` a line (duplicate scans left out)."""
+    from sfzmaps.find import pages
+    for s, h in pages.sheets(series):
+        typer.echo(f"{s}/{h}")
 
 
 if __name__ == "__main__":
