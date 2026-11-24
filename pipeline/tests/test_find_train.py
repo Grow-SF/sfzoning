@@ -92,7 +92,8 @@ def _label_file(sid, shape, cuts: Cuts, before: bool):
     street[:, 400:420] = 1
     arrays = dict(street=street, weight=np.ones(shape, np.float32), cuts_px=cuts.px, cuts_cut=cuts.cut,
                   cuts_prior=cuts.prior, cuts_weight=cuts.weight, edge_none=np.ones(shape, bool),
-                  sigma=np.float64(2.0), placement=np.array("warp"))
+                  sigma=np.float64(2.0), placement=np.array("warp"),
+                  unlabelled_ids=np.array(lotlabels.listed_ids(), dtype=str))
     if before:
         n = len(cuts.weight)
         zb = 10 * shape[1] + np.arange(30, 40)                   # "a zoning border crosses", off the reserved ground
@@ -139,7 +140,8 @@ def _plain_label_file(sid, shape, cuts: Cuts, weight: float = 0.5):
     f.parent.mkdir(parents=True, exist_ok=True)
     np.savez(f, street=np.ones(shape, np.uint8), weight=np.full(shape, weight, np.float32), cuts_px=cuts.px,
              cuts_cut=cuts.cut, cuts_prior=cuts.prior, cuts_weight=cuts.weight, edge_none=np.ones(shape, bool),
-             sigma=np.float64(2.0), placement=np.array("warp"))
+             sigma=np.float64(2.0), placement=np.array("warp"),
+             unlabelled_ids=np.array(lotlabels.listed_ids(), dtype=str))
 
 
 def _row_cuts(w, runs) -> Cuts:

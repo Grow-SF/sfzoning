@@ -132,8 +132,10 @@ def test_a_sheets_labels_are_street_no_block_edge_and_block_edge_cuts(tmp_path, 
     with np.load(tmp_path / "find" / "labels" / "s" / "s-p01.npz") as z:
         assert set(z.files) == {"street", "weight", "cuts_px", "cuts_cut", "cuts_prior", "cuts_weight", "edge_none",
                                 "sigma", "placement", "count_edge_used", "count_edge_dropped",
-                                "count_labelled_px_before", "count_labelled_px_after", "count_unlabelled_lot_px"}
+                                "count_labelled_px_before", "count_labelled_px_after", "count_unlabelled_lot_px",
+                                "unlabelled_ids"}
         assert str(z["placement"]) == "warp" and float(z["sigma"]) == SIGMA
+        assert tuple(z["unlabelled_ids"]) == ground.unlabelled_ids          # the grid's list, recorded
 
 
 def test_spread_is_the_placement_miss_and_the_grid_in_page_px(tmp_path, monkeypatch):
@@ -162,6 +164,23 @@ def test_ground_is_made_only_by_the_labels_command(tmp_path, monkeypatch):
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
     with pytest.raises(FileNotFoundError, match="sfzmaps find labels --series 2000-digital-zoning"):
         lotlabels.ground("2000-digital-zoning")
+
+
+def test_a_missing_or_malformed_list_of_lots_carrying_no_label_is_named(tmp_path, monkeypatch):
+    src = tmp_path / "label_sources.csv"
+    src.write_text("series,era,lots\nt,lined-1bit,table\n")
+    monkeypatch.setattr(pages, "SOURCES", src)
+    monkeypatch.setattr(pages, "sheets", lambda series: [])
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    for text in (None, "id,name\n1700001,Golden Gate Park\n"):
+        f = tmp_path / "unlabelled_lots.csv"
+        if text is not None:
+            f.write_text(text)
+        monkeypatch.setattr(lotlabels, "UNLABELLED", f)
+        r = invoke(["find", "labels", "--series", "t"])
+        assert r.exit_code == 1 and "unlabelled_lots.csv" in r.output and "--series" not in r.output, r.output
+        assert len(r.output.strip().splitlines()) == 1, r.output
+    assert not (tmp_path / "find").exists()
 
 
 def test_a_series_without_lot_labels_is_a_usage_error(monkeypatch):

@@ -1618,6 +1618,11 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
     if unknown:
         raise typer.BadParameter(f"not a map page of {series} that is read: {', '.join(unknown)}", param_hint="--sheet")
     try:
+        lotlabels.unlabelled_lots()
+    except (FileNotFoundError, ValueError) as e:
+        typer.echo(f"the list of lots carrying no label ({lotlabels.UNLABELLED}) cannot be read: {e}", err=True)
+        raise typer.Exit(1) from None
+    try:
         g = lotlabels.make_ground(series)
     except ValueError as e:
         raise typer.BadParameter(str(e), param_hint="--series") from None

@@ -11,4 +11,6 @@ Hand-made inputs of `sfzmaps find`; a person decides every row. The hand crops a
   "no block edge" statement). The lot still bounds the streets beside it, and the block-edge cuts on its sides stay.
   Where the inside of such a lot should be taught, hand crops mark it (`../find-labels/`). The ids are the lots'
   `blklot`; `sfzmaps find labels` refuses a listed id that is not among a series' lots, naming the id and the series,
-  so nobody trains believing a lot is switched off when it is not.
+  so nobody trains believing a lot is switched off when it is not. Every grid and sheet label file records the
+  list it was made under; after a change to this file, the label files made before it are refused until
+  `sfzmaps find labels` makes them again.

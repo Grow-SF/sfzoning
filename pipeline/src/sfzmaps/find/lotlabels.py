@@ -63,12 +63,14 @@ def series_lots(series: str) -> gpd.GeoDataFrame:
 class Ground:
     """The street-or-not labels on the solver's grid: the lot index (-1 none), today's blocks, the street labels (1
     street, 0 not street, 255 no label) and their weights (1 not street, (0, 1] street, 0 no label); `unlabelled`: the
-    px of the listed lots (`unlabelled_lots`), which carry no label."""
+    px of the listed lots (`unlabelled_lots`), which carry no label, and their ids as listed when it was made (sorted).
+    """
     lot: np.ndarray            # int32
     block: np.ndarray          # bool
     street: np.ndarray         # uint8
     weight: np.ndarray         # float16
     unlabelled: np.ndarray     # bool
+    unlabelled_ids: tuple[str, ...] = ()
 
 
 def unlabelled_lots(path: Path | None = None) -> list[tuple[str, str, str]]:
@@ -85,24 +87,37 @@ def unlabelled_lots(path: Path | None = None) -> list[tuple[str, str, str]]:
     return [(r[0].strip(), r[1].strip(), r[2].strip()) for r in rows]
 
 
+def listed_ids(path: Path | None = None) -> tuple[str, ...]:
+    """The ids of the lots listed as carrying no label (`unlabelled_lots`), sorted: what a grid and a sheet's label
+    file record of the list they were made under."""
+    return tuple(sorted(r[0] for r in unlabelled_lots(path)))
+
+
+def _check_list(f: Path, z, again: str, error: type[Exception]) -> None:
+    """`error` naming the file `f` and the command `again` when its arrays `z` record no list of lots carrying no label
+    (`unlabelled_ids`), or another list than the one now (`listed_ids`)."""
+    if "unlabelled_ids" not in z:
+        raise error(f"{f}: records no list of lots carrying no label (made before {UNLABELLED.name}); {again}")
+    made, now = tuple(sorted(str(v) for v in z["unlabelled_ids"])), listed_ids()
+    if made != now:
+        raise error(f"{f}: made with the lots {', '.join(made) or 'none'} carrying no label; the list now holds "
+                    f"{', '.join(now) or 'none'} ({UNLABELLED}); {again}")
+
+
 def build_ground(lots: gpd.GeoDataFrame, lines: Lines, shape: tuple[int, int] | None = None,
-                 unlabelled: list[str] | tuple[str, ...] = (), series: str = "these lots") -> Ground:
+                 unlabelled: list[str] | tuple[str, ...] = ()) -> Ground:
     """`Ground` of `lots` (EPSG:2227 ft, with `blklot`) and today's centre `lines` on a grid of `shape` from the solver
     grid's corner (None: the whole grid).  Every px of a lot whose blklot is in `unlabelled` carries no label (255,
     weight 0); it stays a lot and a block for everything else, so the street labels beside it and the block-edge cuts
-    on its sides are as they would be.  ValueError naming the id and `series` for a listed blklot not among `lots`."""
+    on its sides are as they would be.  (`make_ground` refuses a listed id that is not among the lots.)"""
     ids = lots["blklot"].astype(str).to_numpy() if len(unlabelled) else np.zeros(0, str)
-    for bl in unlabelled:
-        if bl not in set(ids):
-            raise ValueError(f"lot {bl}, listed in {UNLABELLED} as carrying no label, is not among the lots of "
-                             f"{series}: the list would switch nothing off there")
     lot, _ = lot_rasters(lots, shape)
     block = ndimage.binary_fill_holes(lot >= 0)
     street, weight, _ = street_grid(lines, block, per_type=False)
     off = np.isin(lot, np.flatnonzero(np.isin(ids, list(unlabelled)))) if len(unlabelled) else np.zeros(lot.shape, bool)
     street[off] = UNKNOWN
     weight[off] = 0
-    return Ground(lot, block, street, weight, off)
+    return Ground(lot, block, street, weight, off, tuple(sorted(unlabelled)))
 
 
 def grid_path(series: str) -> Path:
@@ -121,18 +136,20 @@ def make_ground(series: str, shape: tuple[int, int] | None = None) -> Ground:
         if bl not in have:
             raise ValueError(f"{UNLABELLED}: lot {bl} ({name}) is not among the lots of series {series}, so it would "
                              f"not be switched off there; correct the list or the lots")
-    g = build_ground(lots, lines_from(config.REF_DIR / "streets.parquet"), shape, [r[0] for r in listed], series)
+    g = build_ground(lots, lines_from(config.REF_DIR / "streets.parquet"), shape, [r[0] for r in listed])
     f = grid_path(series)
     f.parent.mkdir(parents=True, exist_ok=True)
     part = f.with_name(f".{GRID}.part")
-    save_npz(part, lot=g.lot, block=g.block, street=g.street, weight=g.weight, unlabelled=g.unlabelled)
+    save_npz(part, lot=g.lot, block=g.block, street=g.street, weight=g.weight, unlabelled=g.unlabelled,
+             unlabelled_ids=np.array(g.unlabelled_ids, dtype=str))
     part.replace(f)
     return g
 
 
 def ground(series: str) -> Ground:
     """The series' `Ground` as `make_ground` last wrote it; FileNotFoundError naming the command that makes it, also for
-    a file made before listed lots carried no label (it has no `unlabelled`)."""
+    a file made before listed lots carried no label (it has no `unlabelled`) or under another list of them than the one
+    now (`_check_list`)."""
     f = grid_path(series)
     again = f"make them with `sfzmaps find labels --series {series}`"
     if not f.is_file():
@@ -140,7 +157,9 @@ def ground(series: str) -> Ground:
     with np.load(f) as z:
         if "unlabelled" not in z.files:
             raise FileNotFoundError(f"{f}: made before listed lots carried no label; {again}")
-        return Ground(z["lot"], z["block"], z["street"], z["weight"], z["unlabelled"])
+        _check_list(f, z, again, FileNotFoundError)
+        return Ground(z["lot"], z["block"], z["street"], z["weight"], z["unlabelled"],
+                      tuple(sorted(str(v) for v in z["unlabelled_ids"])))
 
 
 def placement(sid: SheetId, which: str = "warp") -> SheetTransform:
@@ -219,8 +238,9 @@ def sheet_path(sid: SheetId) -> Path:
 def load_sheet_labels(sid: SheetId, which: str = "warp", shape: tuple[int, int] | None = None) -> dict:
     """The arrays of the sheet's label file (data/find/labels/<series>/<sheet>.npz, as `sheet_labels` wrote it), every
     reader's way in.  FileNotFoundError naming the command that makes a missing file; ValueError naming the command
-    that makes it again when the file was made through another placement than `which`, or (`shape` given) does not
-    fit a page of that shape."""
+    that makes it again when the file was made through another placement than `which`, under another list of lots
+    carrying no label than the one now or before there was one (`_check_list`: a park would be trained on as it was
+    labelled then), or (`shape` given) does not fit a page of that shape."""
     f = sheet_path(sid)
     again = f"`sfzmaps find labels --series {sid[0]} --sheet {sid[1]} --placement {which}`"
     if not f.is_file():
@@ -229,6 +249,7 @@ def load_sheet_labels(sid: SheetId, which: str = "warp", shape: tuple[int, int] 
         lab = {k: z[k] for k in z.files}
     if str(lab["placement"]) != which:
         raise ValueError(f"{f}: made through the {lab['placement']} placement, not {which}; make it again with {again}")
+    _check_list(f, lab, f"make it again with {again}", ValueError)
     if shape is not None and lab["street"].shape != tuple(shape):
         raise ValueError(f"{f}: labels are {lab['street'].shape}, the page {tuple(shape)}; make them again with "
                          f"{again}")
@@ -254,7 +275,9 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     """A sheet's labels through its placement `which`, written to data/find/labels/<series>/<sheet>.npz and returned:
     `street` and `weight` (`page_ground`), `cuts` (`find.cuts.edge_cuts`; in the file as cuts_px, cuts_cut, cuts_prior
     and cuts_weight), `edge_none` (px with a street-or-not label on no block-edge cut), `sigma` (`cuts.spread_px`),
-    `placement` and `counts`.  ValueError for a series whose lots do not label it.
+    `placement` and `counts`; in the file also `unlabelled_ids`, the ids of the lots listed as carrying no label that
+    the grid was made under (`load_sheet_labels` refuses a file whose list is not the one now).  ValueError for a
+    series whose lots do not label it.
 
     Labels count only where the sheet draws ink (`find.drawn`): a cut not used has weight 0, and a px whose nearest
     block outline px is not inked has weight 0 and no `edge_none`.  A px on a cut the lots call for, kept or dropped at
@@ -291,6 +314,7 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     f.parent.mkdir(parents=True, exist_ok=True)
     part = f.with_name(f".{f.name}.part")
     save_npz(part, street=street, weight=weight, cuts_px=found.px, cuts_cut=found.cut, cuts_prior=found.prior,
+             unlabelled_ids=np.array(g.unlabelled_ids, dtype=str),
              cuts_weight=found.weight, edge_none=edge_none, sigma=np.float64(sigma), placement=np.array(which),
              **{f"count_{k}": np.int64(v) for k, v in counts.items()})
     part.replace(f)
