@@ -1,8 +1,8 @@
 {
  "box": [
-  3010,
+  3026,
   1270,
-  1024,
+  1008,
   1024
  ],
  "street": [
@@ -140,10 +140,6 @@
   ],
   [
    4018,
-   1950
-  ],
-  [
-   3015,
    1950
   ],
   [
@@ -347,16 +343,6 @@
   ],
   [
    [
-    3024,
-    1940
-   ],
-   [
-    3024,
-    1995
-   ]
-  ],
-  [
-   [
     3304,
     1875
    ],
@@ -387,6 +373,6 @@
   ]
  ],
  "limits": [],
- "notes": "Mission between Valencia (x 3128-3161) and Mission St (x 3424-3460) and east to past S. Van Ness, 14th-18th St; commercial (solid black), light industrial (cross-hatch) and second residential (white) blocks. Narrow alleys printed as two lines with paper between are marked as streets splitting the blocks: Julian Ave (x 3211-3214, y 1550-1790; its dead-end stub x 3218-3225, y 1405-1522), a short alley from Valencia to Julian (y 1672-1675, x 3161-3210), Wiese St (x 3331-3337, y 1590-1790), Minna (x 3538-3552, y 1287-1522), Natoma (x 3630-3643, y 1287-1522), Adair St (y 1711-1725, x 3601-3717), Hoff St (x 3306-3321, y 1826-2074), Rondel Pl dead end (x 3220-3230, y 1828-2021), Clarion Alley (y ~2150, x 3154-3416), Sycamore St (y 2205-2219, x 3154-3416). FOR THE OWNER TO RULE ON: (1) below Sycamore St, x 3154-3416, y 2219-2294 (crop edge) the print shows three separately outlined pieces with paper gaps at x 3229-3244 and x 3321-3338; marked as three blocks with streets between, but they may be one block drawn with district outlines. (2) Julian Ave is only 3-4 px wide; an ink blob crosses it at (3212, 1650-1668); a stroke there keeps the blocks either side apart. Strokes close gaps in printed outlines: x 3024 y 1940-1995 (west edge of the block at 3021-3123, y 1826-2074); x 3304 y 1875-2072 (east edge along Hoff St); x 3858 y 2195-2293 (dashed east edge of the block at 3746-3862, y 2105-2294); x 4007 y 1725-1792 (east edge of the 3552 block, hatch holes open to the street). The lot-width numerals '11' at the mouths of Minna and Natoma (y 1280-1290) touch both corners; strokes at x 3541 and x 3633 cut each from the west block, so each stays as a few px of the block east of it. Other street numerals touching one block corner ('60', '40', marks at about (3275,1283), (3765,1285), (3135,1680), (3720,1715), (3150,2155)) are labelled as part of that block; numerals touching no block are street.",
+ "notes": "Mission between Valencia (x 3128-3161) and Mission St (x 3424-3460) and east to past S. Van Ness, 14th-18th St; commercial (solid black), light industrial (cross-hatch) and second residential (white) blocks. Narrow alleys printed as two lines with paper between are marked as streets splitting the blocks: Julian Ave (x 3211-3214, y 1550-1790; its dead-end stub x 3218-3225, y 1405-1522), a short alley from Valencia to Julian (y 1672-1675, x 3161-3210), Wiese St (x 3331-3337, y 1590-1790), Minna (x 3538-3552, y 1287-1522), Natoma (x 3630-3643, y 1287-1522), Adair St (y 1711-1725, x 3601-3717), Hoff St (x 3306-3321, y 1826-2074), Rondel Pl dead end (x 3220-3230, y 1828-2021), Clarion Alley (y ~2150, x 3154-3416), Sycamore St (y 2205-2219, x 3154-3416). FOR THE OWNER TO RULE ON: (1) below Sycamore St, x 3154-3416, y 2219-2294 (crop edge) the print shows three separately outlined pieces with paper gaps at x 3229-3244 and x 3321-3338; marked as three blocks with streets between, but they may be one block drawn with district outlines. (2) Julian Ave is only 3-4 px wide; an ink blob crosses it at (3212, 1650-1668); a stroke there keeps the blocks either side apart. Strokes close gaps in printed outlines: x 3304 y 1875-2072 (east edge along Hoff St); x 3858 y 2195-2293 (dashed east edge of the block at 3746-3862, y 2105-2294); x 4007 y 1725-1792 (east edge of the 3552 block, hatch holes open to the street). The lot-width numerals '11' at the mouths of Minna and Natoma (y 1280-1290) touch both corners; strokes at x 3541 and x 3633 cut each from the west block, so each stays as a few px of the block east of it. Other street numerals touching one block corner ('60', '40', marks at about (3275,1283), (3765,1285), (3135,1680), (3720,1715), (3150,2155)) are labelled as part of that block; numerals touching no block are street. Box trimmed on its west side from x 3010 to x 3026 (2026-11-23) to keep clear of the ground of test crop 2000-digital-zoning-p07__1400_1900_640_640 (its east side falls at x 3016 on this sheet); the street seed at (3015,1950) and the stroke at x 3024 y 1940-1995 fell outside and were dropped.",
  "drawn_by": "Claude (AI), by eye from ruled close-ups, checked on the labels picture, 2026-11-23"
 }

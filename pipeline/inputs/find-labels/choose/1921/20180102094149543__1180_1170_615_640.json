@@ -2,7 +2,7 @@
  "box": [
   1180,
   1170,
-  640,
+  615,
   640
  ],
  "street": [
@@ -159,10 +159,6 @@
    1494
   ],
   [
-   1818,
-   1494
-  ],
-  [
    1268,
    1557
   ],
@@ -180,10 +176,6 @@
   ],
   [
    1728,
-   1557
-  ],
-  [
-   1818,
    1557
   ],
   [
@@ -211,10 +203,6 @@
    1618
   ],
   [
-   1817,
-   1618
-  ],
-  [
    1265,
    1747
   ],
@@ -239,10 +227,6 @@
    1747
   ],
   [
-   1815,
-   1747
-  ],
-  [
    1264,
    1798
   ],
@@ -264,10 +248,6 @@
   ],
   [
    1725,
-   1798
-  ],
-  [
-   1812,
    1798
   ],
   [
@@ -625,7 +605,7 @@
     1707
    ],
    [
-    1820,
+    1795,
     1707
    ]
   ],
@@ -711,6 +691,6 @@
   ]
  ],
  "limits": [],
- "notes": "Box chosen for a mix of first-residential hatched, second-residential empty and part-commercial (black) blocks; first tried x0=1320 but moved west to x0=1180 to leave out Lafayette Square (1825-1998, 1536-1647), whose outline also encloses blocks 616/625 east of it with no Gough St between: unclear, not drawn. HOW DRAWN: one seed per block, street seeds in every vertical street stretch. A long line runs along the south side of the row y about 1652-1703 (page y 1701 at x 1180 to 1710 at x 1820) closing every street end and joining the whole row: stroke traced along it 2-3 px toward the blocks, so its ink falls on the street side (left unseeded, so street). Gaps closed with short strokes on the printed line: left edge of block 636 (1459,1628-1637), left edge of 637 (1641,1677-1696) and its top (1661-1674,1658), left edge of block 589 (1645,1429-1440), left edge of 633 (1593,1743-1754). An ink blot in the street between rows at (1455-1472,1283-1301) touched both neighbouring blocks: strokes on each block's own side line (x 1452 and x 1466) leave it as street. FOR THE OWNER TO RULE ON: (1) Block at x 1366-1447, y 1653-1703 holds a dead-end road drawn as two lines (y 1677 and 1682) entering from its east side (open at x 1444-1447) and closed at the west edge: read as a street (an alley) inside one block; one seed. (2) x 1549-1629, y 1722-1776: two separate outlines 4 px apart (x 1587-1591), the gap open at the north and closed at the south by a small ink blob: read as two blocks with a narrow alley between; stroke (1589,1771-1783) cuts the blob. (3) Alta Plaza (1277-1448, 1467-1585) is one outlined park block; its paths are inside and need nothing; seeded as a block. (4) Small marks in the street touching a block outline (under 538 at about 1500,1262; above block at 1300,1398) stay with their block (a few px).",
+ "notes": "Box chosen for a mix of first-residential hatched, second-residential empty and part-commercial (black) blocks; first tried x0=1320 but moved west to x0=1180 to leave out Lafayette Square (1825-1998, 1536-1647), whose outline also encloses blocks 616/625 east of it with no Gough St between: unclear, not drawn. HOW DRAWN: one seed per block, street seeds in every vertical street stretch. A long line runs along the south side of the row y about 1652-1703 (page y 1701 at x 1180 to 1710 at x 1820) closing every street end and joining the whole row: stroke traced along it 2-3 px toward the blocks, so its ink falls on the street side (left unseeded, so street). Gaps closed with short strokes on the printed line: left edge of block 636 (1459,1628-1637), left edge of 637 (1641,1677-1696) and its top (1661-1674,1658), left edge of block 589 (1645,1429-1440), left edge of 633 (1593,1743-1754). An ink blot in the street between rows at (1455-1472,1283-1301) touched both neighbouring blocks: strokes on each block's own side line (x 1452 and x 1466) leave it as street. FOR THE OWNER TO RULE ON: (1) Block at x 1366-1447, y 1653-1703 holds a dead-end road drawn as two lines (y 1677 and 1682) entering from its east side (open at x 1444-1447) and closed at the west edge: read as a street (an alley) inside one block; one seed. (2) x 1549-1629, y 1722-1776: two separate outlines 4 px apart (x 1587-1591), the gap open at the north and closed at the south by a small ink blob: read as two blocks with a narrow alley between; stroke (1589,1771-1783) cuts the blob. (3) Alta Plaza (1277-1448, 1467-1585) is one outlined park block; its paths are inside and need nothing; seeded as a block. (4) Small marks in the street touching a block outline (under 538 at about 1500,1262; above block at 1300,1398) stay with their block (a few px). Trimmed 2026-11-23: right side moved from x 1820 to 1795 (box 640 to 615 wide) so the crop no longer lies on the ground of test crop test/1975/20180102114142444-p16__2760_3020_940_940.json; street seeds east of x 1795 dropped and the long stroke clipped at the new side.",
  "drawn_by": "Claude (AI), by eye from ruled close-ups, checked on the labels picture, 2026-11-23"
 }
