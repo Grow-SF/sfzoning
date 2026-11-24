@@ -48,8 +48,17 @@ def _log_statement_chance(logit_flat: torch.Tensor, cuts_px: torch.Tensor, cuts_
     first[1:] = cut[1:] != cut[:-1]
     start = torch.cummax(torch.where(first, torch.arange(len(cut), device=z.device), 0), 0).values
     before = ((upto - miss.double()) - (upto[start] - miss[start].double())).to(z.dtype)   # sum_{j<i} in its cut
-    crosses = _segment_logsumexp(torch.log(prior) + F.logsigmoid(z) + before, cut, n)
+    # a cut with no px of prior above 0 cannot cross: its terms are made finite before the logsumexp (so no NaN forms
+    # in backward) and its chance set to 0 after; a px of prior 0 in any other cut adds exp(-inf) = 0
+    possible = _possible(prior, cut, n)
+    terms = torch.where(possible[cut], torch.log(prior) + F.logsigmoid(z) + before, torch.zeros_like(z))
+    crosses = torch.where(possible, _segment_logsumexp(terms, cut, n), torch.full_like(log_off, float("-inf")))
     return torch.where(says.to(torch.bool), crosses, log_off)
+
+
+def _possible(prior: torch.Tensor, cuts_cut: torch.Tensor, n: int) -> torch.Tensor:
+    """Bool (n,): the cuts with a px of prior above 0."""
+    return torch.zeros(n, dtype=torch.long, device=prior.device).index_add(0, cuts_cut, (prior > 0).long()) > 0
 
 
 def statement_chance(logit_flat: torch.Tensor, cuts_px: torch.Tensor, cuts_cut: torch.Tensor, prior: torch.Tensor,
@@ -64,7 +73,12 @@ def cut_nll(logit_flat: torch.Tensor, cuts_px: torch.Tensor, cuts_cut: torch.Ten
             says: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     """The sum over cuts of weight * minus the log of the cut's statement chance (`statement_chance`).  `logit_flat`:
     the answer's logits, flat; `cuts_px` (m,): the index into it of each cut px; `cuts_cut` (m,): the cut each px is
-    in; `prior` (m,); `says` (n,) bool, True "a line crosses"; `weight` (n,)."""
+    in; `prior` (m,); `says` (n,) bool, True "a line crosses"; `weight` (n,).  ValueError for a "crosses" cut of
+    weight above 0 with no px of prior above 0 (a statement nothing could make true: a malformed label); one of
+    weight 0 adds nothing."""
+    bad = says.to(torch.bool) & (weight > 0) & ~_possible(prior, cuts_cut, len(says))
+    if bad.any():
+        raise ValueError(f"{int(bad.sum())} 'a line crosses' cut(s) of weight above 0 have no px of prior above 0")
     term = -_log_statement_chance(logit_flat, cuts_px, cuts_cut, prior, says)
     weight = weight.to(term.dtype)
     return torch.where(weight > 0, weight * term, torch.zeros_like(term)).sum()

@@ -94,3 +94,44 @@ def test_a_none_cut_read_as_surely_on_has_a_finite_gradient(dtype):
                               torch.ones(1, dtype=dtype))
         loss.backward()
         assert torch.isfinite(loss.detach()) and torch.isfinite(logit.grad).all() and (logit.grad != 0).all()
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_an_unused_crossing_cut_with_no_prior_adds_nothing(dtype):
+    """A "crosses" cut with no px of prior above 0 says something impossible: unused (weight 0) it adds exactly 0 to
+    the loss and to the gradient; its statement's chance is 0."""
+    px, cut, prior, says = torch.arange(3), torch.zeros(3, dtype=torch.long), torch.zeros(3, dtype=dtype), \
+        torch.tensor([True])
+    logit = torch.full((3,), -30.0, dtype=dtype, requires_grad=True)
+    loss = losses.cut_nll(logit, px, cut, prior, says, torch.zeros(1, dtype=dtype))
+    loss.backward()
+    assert float(loss.detach()) == 0 and (logit.grad == 0).all()
+    assert float(losses.statement_chance(logit.detach(), px, cut, prior, says)[0]) == 0
+
+
+def test_a_used_crossing_cut_with_no_prior_is_refused():
+    with pytest.raises(ValueError, match="1 "):
+        losses.cut_nll(torch.zeros(3), torch.arange(3), torch.zeros(3, dtype=torch.long), torch.zeros(3),
+                       torch.tensor([True]), torch.ones(1))
+
+
+def test_an_unused_impossible_cut_beside_others_changes_nothing():
+    """Ordinary cuts (a "crosses" cut with one px of prior 0, which cannot carry its statement, and a "none" cut) give
+    the same loss and gradients with an unused all-prior-0 "crosses" cut beside them as without it."""
+    g = torch.Generator().manual_seed(0)
+    base = torch.randn(9, generator=g, dtype=torch.float64) * 5
+    px, cut = torch.arange(6), torch.tensor([0, 0, 0, 1, 1, 1])
+    prior, says, weight = torch.tensor([0.0, 1.0, 0.5, 0.5, 1.0, 0.5], dtype=torch.float64), \
+        torch.tensor([True, False]), torch.ones(2, dtype=torch.float64)
+    alone = base.clone().requires_grad_(True)
+    loss_alone = losses.cut_nll(alone, px, cut, prior, says, weight)
+    loss_alone.backward()
+    beside = base.clone().requires_grad_(True)
+    loss_beside = losses.cut_nll(beside, torch.arange(9), torch.tensor([0, 0, 0, 1, 1, 1, 2, 2, 2]),
+                                 torch.cat([prior, torch.zeros(3, dtype=torch.float64)]),
+                                 torch.tensor([True, False, True]), torch.tensor([1.0, 1.0, 0.0], dtype=torch.float64))
+    loss_beside.backward()
+    assert torch.isfinite(loss_alone.detach()) and torch.isfinite(alone.grad).all()
+    assert alone.grad[0] == 0 and (alone.grad[1:6] != 0).all()
+    assert float(loss_beside.detach()) == float(loss_alone.detach())
+    assert torch.equal(beside.grad[:6], alone.grad[:6]) and (beside.grad[6:] == 0).all()
