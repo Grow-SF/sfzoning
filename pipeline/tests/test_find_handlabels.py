@@ -38,11 +38,12 @@ def _pg(points):
     return tuple((x + BOX[0], y + BOX[1]) for x, y in points)
 
 
-def _crop(street=(), blocks=(), open=(), strokes=(), limits=()):
+def _crop(street=(), blocks=(), open=(), strokes=(), limits=(), openings=()):
     """A crop at BOX, every mark given in crop px."""
+    extra = {"openings": tuple(_pg(s) for s in openings)} if openings else {}
     return handlabels.Crop("train", "s", "p", BOX, _pg(street), _pg(blocks), _pg(open),
                            tuple(_pg(s) for s in strokes), tuple(_pg(s) for s in limits),
-                           Path("train/s/p__100_200_60_40.json"))
+                           Path("train/s/p__100_200_60_40.json"), **extra)
 
 
 def _street_between_two_lines():
@@ -377,3 +378,44 @@ def test_a_ruled_tile_shows_its_part_of_the_box():
     assert (t[top + 20 * 4:top + 21 * 4, left + 30 * 4:left + 31 * 4] == 0).all()
     assert (t[top:, left:] == 0).all(axis=2).sum() == 16          # only that px is black
     assert all((tiles[k][top:, left:] > 0).all() for k in ((0, 0), (0, 1), (1, 0)))
+
+
+def _block_with_a_dead_end_road():
+    """A block (outer px x 10..50, y 5..35) holding a dead-end road up from its bottom side: side lines at x 26-27
+    and 34-35, its end at y 15-16, its paper x 28..33, y 17..33; the block's bottom line (y 34-35) runs across its
+    mouth."""
+    img = _page()
+    _rect(img, 10, 5, 50, 35)
+    _v(img, 26, 15, 36)
+    _v(img, 34, 15, 36)
+    _h(img, 15, 26, 36)
+    return img
+
+
+MOUTH = [(29, 35), (32, 35)]              # drawn 3 px wide: x 28..33, y 34..36, between the road's side lines
+
+
+def test_an_opening_lets_the_street_through_a_line():
+    img = _block_with_a_dead_end_road()
+    marks = dict(street=[(5, 38)], blocks=[(15, 20)])
+    shut = handlabels.make_labels(img, _crop(**marks))
+    assert (shut.street[17:34, 28:34] == 0).all() and (shut.area[17:34, 28:34] == 1).all()
+    lab = handlabels.make_labels(img, _crop(**marks, openings=[MOUTH]))
+    assert (lab.street[17:34, 28:34] == 1).all()                       # the road, joined to the street below
+    assert (lab.street[34:37, 28:34] == 1).all()                       # the opening itself
+    assert lab.kinds == {1: "block"} and lab.area[20, 15] == lab.area[20, 45] == 1
+    assert (lab.edge[18:33, 27] == 1).all() and (lab.edge[18:33, 34] == 1).all()     # the road's sides
+
+
+def test_a_stroke_over_an_opening_wins():
+    img = _block_with_a_dead_end_road()
+    lab = handlabels.make_labels(img, _crop(street=[(5, 38)], blocks=[(15, 20)], openings=[MOUTH], strokes=[MOUTH]))
+    assert (lab.street[17:34, 28:34] == 0).all()
+    assert (lab.street[34:37, 28:34] == 255).all()                     # the stroke
+
+
+def test_an_outline_crop_cannot_carry_openings(tmp_path):
+    _write(tmp_path, "test", "A", BOX, polygons=[[[105, 205], [120, 205], [120, 220]]],
+           openings=[[[110, 210], [115, 210]]])
+    with pytest.raises(ValueError, match=r"A__100_200_60_40\.json: marks of both kinds"):
+        handlabels.crops(root=tmp_path)

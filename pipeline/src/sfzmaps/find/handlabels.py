@@ -3,14 +3,15 @@ under the test and choosing crops.
 
 A crop file is inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json (the format and the reading of the
 maps: inputs/find-labels/README.md).  It is drawn one of two ways:
-- seeds and strokes (for maps whose streets are open paper): `make_labels` turns them into per-px labels by seven
-  rules: paper by Otsu's threshold, strokes and limits as barriers, street as the paper 4-connected to a street seed,
-  areas as the 8-connected islands holding a block or open seed;
+- seeds and strokes (for maps whose streets are open paper): `make_labels` turns them into per-px labels by eight
+  rules: paper by Otsu's threshold, openings as paper (where the map's owner has said a street runs through printed
+  ink), strokes and limits as barriers, street as the paper 4-connected to a street seed, areas as the 8-connected
+  islands holding a block or open seed;
 - outlines (for maps where heavy lines and letters join the blocks): each typed polygon is an area, the rest street.
   Outline crops are for scoring only (`choose` and `test`): a corner typed by eye is a px or two off the printed line.
-This is a drawing aid for hand labels only, checked by eye on its picture (`look.crop`): its 3 px barrier width, its
-4-connected street fill and 8-connected islands, and the 2 px an outline's corner may lie outside the box are parts of
-the tool, and nothing like it runs when a sheet is read.
+This is a drawing aid for hand labels only, checked by eye on its picture (`look.crop`): its 3 px barrier and opening
+width, its 4-connected street fill and 8-connected islands, and the 2 px an outline's corner may lie outside the box
+are parts of the tool, and nothing like it runs when a sheet is read.
 
 `reserved` is the ground under every `choose` and `test` crop, on any sheet's page, which training leaves out.
 
@@ -36,10 +37,10 @@ from sfzmaps.solver import hatching
 
 SETS = ("train", "choose", "test")
 HELD_OUT = ("choose", "test")       # the sets whose ground training leaves out
-SEED_MARKS = ("street", "blocks", "open", "strokes", "limits")
+SEED_MARKS = ("street", "blocks", "open", "strokes", "limits", "openings")
 OUTLINE_MARKS = ("polygons", "open_polygons")
 KEYS = {"box", "notes", "drawn_by", *SEED_MARKS, *OUTLINE_MARKS}
-BARRIER = 3                         # tool setting: a stroke's or limit's width, px
+BARRIER = 3                         # tool setting: a stroke's, limit's or opening's width, px
 OUTSIDE = 2                         # tool setting: how far an outline's corner may lie outside the box, px (a block
                                     # cut by the crop's side is typed with corners on or just past the box's edge)
 LARGEST = 5                         # tool setting: how many of the largest unseeded islands are always warned of
@@ -72,6 +73,7 @@ class Crop:
     path: Path
     polygons: tuple[tuple[Point, ...], ...] = ()
     open_polygons: tuple[tuple[Point, ...], ...] = ()
+    openings: tuple[tuple[Point, ...], ...] = ()
 
     @property
     def outlined(self) -> bool:
@@ -117,9 +119,10 @@ def read_crop(path: Path, set_: str) -> Crop:
     if box[2] <= 0 or box[3] <= 0:
         raise ValueError(f"{path}: the box's width and height must be positive")
     try:
-        lines = {k: tuple(_points(path, k, s) for s in d.get(k, [])) for k in ("strokes", "limits", *OUTLINE_MARKS)}
+        lines = {k: tuple(_points(path, k, s) for s in d.get(k, [])) for k in ("strokes", "limits", "openings",
+                                                                       *OUTLINE_MARKS)}
     except TypeError:
-        raise ValueError(f"{path}: strokes, limits and outlines must be lists of [x, y] lists") from None
+        raise ValueError(f"{path}: strokes, limits, openings and outlines must be lists of [x, y] lists") from None
     seeded, outlined = any(d.get(k) for k in SEED_MARKS), any(d.get(k) for k in OUTLINE_MARKS)
     if seeded == outlined:
         raise ValueError(f"{path}: {'marks of both kinds' if seeded else 'no marks'}; a crop is drawn either with "
@@ -136,7 +139,8 @@ def read_crop(path: Path, set_: str) -> Crop:
                          f"that scan")
     return Crop(set_, path.parent.name, sheet, box, _points(path, "street", d.get("street", [])),
                 _points(path, "blocks", d.get("blocks", [])), _points(path, "open", d.get("open", [])),
-                lines["strokes"], lines["limits"], path, lines["polygons"], lines["open_polygons"])
+                lines["strokes"], lines["limits"], path, lines["polygons"], lines["open_polygons"],
+                lines["openings"])
 
 
 def crop_files(sets=SETS, root: Path | None = None) -> list[tuple[Path, str]]:
@@ -255,7 +259,7 @@ def _deepest(islands: np.ndarray, i: int, depth: np.ndarray) -> tuple[int, int]:
 
 
 def seed_labels(lum: np.ndarray, crop: Crop) -> CropLabels:
-    """A seed crop's labels by the seven rules.  ValueError naming the file and the seed for a seed off the crop, on a
+    """A seed crop's labels by the eight rules.  ValueError naming the file and the seed for a seed off the crop, on a
     stroke or limit, a street seed not on paper, a block or open seed the street reaches, and two seeds in one
     island.  Warnings: each unseeded island larger than the smallest seeded one, then the LARGEST largest unseeded
     islands whatever was seeded (page px of a px well inside each)."""
@@ -263,7 +267,7 @@ def seed_labels(lum: np.ndarray, crop: Crop) -> CropLabels:
     stroke = _barrier(crop.strokes, x0, y0, lum.shape)
     limit = _barrier(crop.limits, x0, y0, lum.shape)
     barrier = stroke | limit
-    paper = (lum > threshold_otsu(lum)) & ~barrier
+    paper = ((lum > threshold_otsu(lum)) | _barrier(crop.openings, x0, y0, lum.shape)) & ~barrier
     seeds = [("street", p) for p in crop.street] + [("block", p) for p in crop.blocks] + \
             [("open", p) for p in crop.open]
     for kind, (x, y) in seeds:
