@@ -6,12 +6,12 @@ maps: inputs/find-labels/README.md).  It is drawn one of two ways:
 - seeds and strokes (for maps whose streets are open paper): `make_labels` turns them into per-px labels by nine
   rules: paper by Otsu's threshold, openings as paper (where the map's owner has said a street runs through printed
   ink), strokes and limits as barriers, street as the paper 4-connected to a street seed, areas as the 8-connected
-  islands holding a block or open seed, and bites (a hatching cell the street reached through a pin-hole in the
-  outline) filled back into their area (`fill_bites`);
+  islands holding a block or open seed, and pockets (street paper the street reaches only through a pin-hole, as a
+  hatching cell behind a hole in a thin outline) joined to the one area they touch (`find_pockets`);
 - outlines (for maps where heavy lines and letters join the blocks): each typed polygon is an area, the rest street.
   Outline crops are for scoring only (`choose` and `test`): a corner typed by eye is a px or two off the printed line.
 This is a drawing aid for hand labels only, checked by eye on its picture (`look.crop`): its 3 px barrier and opening
-width, its 4-connected street fill and 8-connected islands, BITE and SHALLOW, and the 2 px an outline's corner may lie
+width, its 4-connected street fill and 8-connected islands, PINHOLE, and the 2 px an outline's corner may lie
 outside the box are parts of the tool, and nothing like it runs when a sheet is read.
 
 `reserved` is the ground under every `choose` and `test` crop, on any sheet's page, which training leaves out.
@@ -30,7 +30,6 @@ import numpy as np
 from scipy import ndimage
 from skimage.draw import line as draw_line
 from skimage.filters import threshold_otsu
-from skimage.morphology import disk
 
 from sfzmaps import config
 from sfzmaps.find import lotlabels
@@ -46,10 +45,8 @@ BARRIER = 3                         # tool setting: a stroke's, limit's or openi
 OUTSIDE = 2                         # tool setting: how far an outline's corner may lie outside the box, px (a block
                                     # cut by the crop's side is typed with corners on or just past the box's edge)
 LARGEST = 5                         # tool setting: how many of the largest unseeded islands are always warned of
-BITE = 5                            # tool setting: the disk that closes an area's dents, radius px (a dent narrower
-                                    # than about 2 BITE is closed); drawn with px centres within BITE + 1/2, so a
-                                    # pin-hole up to 4 px wide closes right up to the surface
-SHALLOW = 10                        # tool setting: a closed dent no deeper than this, px, is a bite and joins the area
+PINHOLE = 3                         # tool setting: street paper reached only through a neck narrower than this, px,
+                                    # is a pocket
 RING_STEP = 8                       # engineering setting: px between the points of a crop's box sent to another page
 log = logging.getLogger(__name__)
 STREET, AREA, NONE = 1, 0, 255      # the street label; NONE also marks edge px with no label
@@ -220,7 +217,7 @@ def _no_edge_on_the_crop_side(edge: np.ndarray) -> None:
 
 def make_labels(lum_crop: np.ndarray, crop: Crop, smooth: bool = True) -> CropLabels:
     """The crop's labels from its marks (the module's rules, as inputs/find-labels/README.md states them): an outline
-    crop's by `outline_labels`, a seed crop's by `seed_labels` (`smooth`: with its bites filled).  ValueError naming the
+    crop's by `outline_labels`, a seed crop's by `seed_labels` (`smooth`: with its pockets joined).  ValueError naming the
     file if `lum_crop` is not the box's size."""
     lum = np.asarray(lum_crop, np.float32)
     w, h = crop.box[2:]
@@ -265,56 +262,64 @@ def _deepest(islands: np.ndarray, i: int, depth: np.ndarray) -> tuple[int, int]:
 
 
 @dataclass(frozen=True)
-class Dent:
-    """A piece of street that closing an area adds: its area, px count, depth (px to the closed shape's outside), the
-    crop px (x, y) of its deepest px, and whether it was filled (a bite) or left (an alley or dead end)."""
-    area: int
+class Pocket:
+    """Street paper the street reaches only through a neck narrower than PINHOLE: its number in `find_pockets`'s
+    labels, px count, the crop px (x, y) of a px well inside it, what it touches ("street seed", "one area", "no area"
+    or "two or more areas") and the area it joins (0: none)."""
+    number: int
     size: int
-    depth: float
     at: tuple[int, int]
-    filled: bool
+    case: str
+    joins: int
 
 
-def fill_bites(area: np.ndarray, barrier: np.ndarray) -> tuple[np.ndarray, list[Dent]]:
-    """`area` with its bites filled, and every dent found.  For each area in number order: its mask closed with a disk
-    of radius BITE; the px the closing adds that are no area's and no barrier's, in 8-connected pieces; a piece whose
-    deepest px lies no more than SHALLOW px from the closed shape's outside joins the area, a deeper one is left
-    whole."""
-    area = area.copy()
-    found: list[Dent] = []
-    pad = BITE + 1
-    h, w = area.shape
-    for k, sl in enumerate(ndimage.find_objects(area), start=1):
-        if sl is None:
-            continue
-        ys, xs = slice(max(0, sl[0].start - pad), min(h, sl[0].stop + pad)), \
-            slice(max(0, sl[1].start - pad), min(w, sl[1].stop + pad))
-        win = area[ys, xs]
-        mask = np.pad(win == k, pad)
-        closed = ndimage.binary_closing(mask, disk(BITE, strict_radius=False).astype(bool)) | mask
-        depth = ndimage.distance_transform_edt(closed)[pad:-pad, pad:-pad]
-        added = closed[pad:-pad, pad:-pad] & (win == 0) & ~barrier[ys, xs]
-        pieces, n = ndimage.label(added, EIGHT)
-        if not n:
-            continue
-        deepest = ndimage.maximum(depth, pieces, np.arange(1, n + 1))
-        where = ndimage.maximum_position(depth, pieces, np.arange(1, n + 1))
-        sizes = np.bincount(pieces.ravel(), minlength=n + 1)
-        for i in range(1, n + 1):
-            filled = bool(deepest[i - 1] <= SHALLOW)
-            if filled:
-                win[pieces == i] = k
-            y, x = where[i - 1]
-            found.append(Dent(k, int(sizes[i]), float(deepest[i - 1]), (int(x) + xs.start, int(y) + ys.start), filled))
-    return area, found
+def find_pockets(flooded: np.ndarray, area: np.ndarray,
+                 street_seeds: list[tuple[int, int]]) -> tuple[np.ndarray, list[Pocket]]:
+    """The pockets of the street's flooded paper `flooded` (int32 labels, 0 none, and one `Pocket` each).  The part the
+    street reaches through passages at least PINHOLE px wide: the px whose PINHOLE x PINHOLE neighbourhood is all
+    flooded (outside the crop counts as flooded: streets run off it), flooded 4-connected from those within one px of
+    a street seed (crop px (x, y)), grown by one PINHOLE x PINHOLE step inside `flooded`.  The rest, in 8-connected
+    pieces, are pockets.  A pocket joins the area it touches when it touches exactly one and holds no street seed."""
+    square = np.ones((PINHOLE, PINHOLE), bool)
+    h, w = flooded.shape
+    wide, _ = ndimage.label(ndimage.binary_erosion(flooded, square, border_value=1), FOUR)
+    near = {int(v) for x, y in street_seeds for v in wide[max(0, y - 1):y + 2, max(0, x - 1):x + 2].ravel() if v}
+    reached = ndimage.binary_dilation(np.isin(wide, sorted(near)), square) & flooded
+    pockets, n = ndimage.label(flooded & ~reached, EIGHT)
+    if not n:
+        return pockets, []
+    ys, xs = np.nonzero(pockets)
+    number = pockets[ys, xs]
+    padded = np.pad(area, 1)
+    pairs = [np.zeros((0, 2), np.int64)]
+    for dy in (-1, 0, 1):
+        for dx in (-1, 0, 1):
+            if dy or dx:
+                a = padded[ys + 1 + dy, xs + 1 + dx]
+                pairs.append(np.c_[number[a > 0], a[a > 0]])
+    pairs = np.unique(np.vstack(pairs).astype(np.int64), axis=0)
+    touching = np.bincount(pairs[:, 0], minlength=n + 1)
+    first = np.zeros(n + 1, np.int64)
+    first[pairs[::-1, 0]] = pairs[::-1, 1]
+    seeded = {int(pockets[y, x]) for x, y in street_seeds}
+    sizes = np.bincount(pockets.ravel(), minlength=n + 1)
+    depth = ndimage.distance_transform_edt(np.pad(pockets > 0, 1))[1:-1, 1:-1]
+    where = ndimage.maximum_position(depth, pockets, np.arange(1, n + 1))
+    out = []
+    for i in range(1, n + 1):
+        case = "street seed" if i in seeded else {0: "no area", 1: "one area"}.get(int(touching[i]),
+                                                                                  "two or more areas")
+        y, x = where[i - 1]
+        out.append(Pocket(i, int(sizes[i]), (int(x), int(y)), case, int(first[i]) if case == "one area" else 0))
+    return pockets, out
 
 
 def seed_labels(lum: np.ndarray, crop: Crop, smooth: bool = True) -> CropLabels:
-    """A seed crop's labels by the nine rules (`smooth` False: without rule 6, `fill_bites`).  ValueError naming the
+    """A seed crop's labels by the nine rules (`smooth` False: without rule 6, the pockets).  ValueError naming the
     file and the seed for a seed off the crop, on a stroke or limit, a street seed not on paper, a block or open seed
-    the street reaches, and two seeds in one island.  Warnings (the same either way): each unseeded island larger than
-    the smallest seeded one, then the LARGEST largest unseeded islands whatever was seeded (page px of a px well inside
-    each)."""
+    the street reaches, and two seeds in one island.  Warnings: each unseeded island larger than the smallest seeded
+    one, then the LARGEST largest unseeded islands whatever was seeded, then (`smooth`) the LARGEST largest pockets that
+    joined an area (page px of a px well inside each)."""
     x0, y0, w, h = crop.box
     stroke = _barrier(crop.strokes, x0, y0, lum.shape)
     limit = _barrier(crop.limits, x0, y0, lum.shape)
@@ -364,7 +369,15 @@ def seed_labels(lum: np.ndarray, crop: Crop, smooth: bool = True) -> CropLabels:
             warnings.append(f"unseeded island of {int(sizes[i])} px at {x + x0}, {y + y0}: a block left unseeded is "
                             f"labelled street")
     if smooth:
-        area, _ = fill_bites(area, barrier)
+        pockets, found = find_pockets(street, area, [(x - x0, y - y0) for x, y in crop.street])
+        joined = [p for p in found if p.joins]
+        if joined:
+            area = area.copy()
+            area[pockets > 0] = np.r_[0, [p.joins for p in found]][pockets[pockets > 0]]
+        for p in sorted(joined, key=lambda p: (-p.size, p.number))[:LARGEST]:
+            warnings.append(f"pocket of {p.size} px at {p.at[0] + x0}, {p.at[1] + y0} joined its block: the street "
+                            f"reaches it only through a gap under {PINHOLE} px; if it is a real dead end, give it a "
+                            f"street seed")
     label = np.where(barrier, NONE, np.where(area > 0, AREA, STREET)).astype(np.uint8)
     edge = _edges(area)
     edge[stroke] = 1
