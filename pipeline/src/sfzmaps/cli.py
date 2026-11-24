@@ -1717,9 +1717,10 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                                                                "(data/find/runs/<run>/noise-examples.png).")) -> None:
     """Train the finder on the named lot-labelled sheets (`sfzmaps find labels`) and every `train` hand crop, the
     ground under the choosing and test crops left out: data/find/runs/<run>/model.pt and log.json (the recipe, device,
-    commit, items, curve, and the print sizes measured and the factors drawn).  Each tile is shown at the print size of
-    a sheet the finder is used on, measured from every sheet of every series whose placement passes the warp's own
-    check (`find.data.print_sizes`; with --no-resize, at its item's own size).  The last step's weights are kept.  At
+    commit (null, with one line saying why, when git cannot tell), items, curve, and the print sizes measured and the
+    factors drawn).  Each tile is shown at the print size of a sheet the finder is used on, measured from every sheet
+    of every series whose placement passes the warp's own check (`find.data.print_sizes`; with --no-resize, at its
+    item's own size).  The last step's weights are kept.  At
     every checkpoint the `choose` crops are read and the share of their blocks found is logged in the curve as the
     run's held-out trace (`find.counts.trace_scorer`: the share of their blocks found and the panoptic quality of
     their areas, the connected pieces of ground the model calls not street, per checkpoint; it chooses nothing;
@@ -1729,13 +1730,11 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     import dataclasses
     import logging
     import math
-    import subprocess
     import time
 
     import torch
 
     from sfzmaps import gpu
-    from sfzmaps.build import git_head
     from sfzmaps.find import counts, data, handlabels, pages, train
     from sfzmaps.solver import hatching
     from sfzmaps.solver.hatchnet.train import THREADS, default_device
@@ -1814,8 +1813,7 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     out = pages.OUT / "runs" / run
     if look:
         typer.echo(str(train.write_noise_examples(items, recipe, out / "noise-examples.png", sizes=sizes)))
-    changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "src"],
-                             cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True).stdout.strip()
+    changed, why = _git("status", "--porcelain", "--untracked-files=no", "--", "src")
     t0 = time.perf_counter()
     try:
         with gpu.gpu_turn(True, device):
@@ -1823,12 +1821,31 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     except ValueError as e:
         typer.echo(f"nothing trained: {e}", err=True)
         raise typer.Exit(1) from None
-    fields = {"commit": git_head(), "uncommitted_changes_in_src": bool(changed), "torch": torch.__version__,
+    commit, why_head = _git("rev-parse", "HEAD")
+    why = why or why_head
+    if why:
+        typer.echo(f"the git state was not recorded (commit and uncommitted_changes_in_src are null): {why}")
+    fields = {"commit": commit, "uncommitted_changes_in_src": None if changed is None else bool(changed),
+              "torch": torch.__version__,
               "threads": THREADS, "items": listed, "choosing_crops": [data.crop_name(c) for c in choosing] or None,
               "train_crops_left_out_as_reserved": {it.name: it.left_out for it in items if it.hand}, **size_fields,
               "seconds": round(time.perf_counter() - t0, 1)}
     for f in train.save_run(out, fitted, recipe, fields):
         typer.echo(str(f))
+
+
+def _git(*args: str) -> tuple[str | None, str | None]:
+    """git's output (stripped) for `args`, run in the pipeline folder, and None; or None and why, in one line, when git
+    is not installed, fails or finds no repository there (a run goes on without the git state)."""
+    import subprocess
+    try:
+        done = subprocess.run(["git", *args], cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True)
+    except FileNotFoundError:
+        return None, "git is not installed"
+    except subprocess.CalledProcessError as e:
+        said = next((line for line in (e.stderr or "").splitlines() if line.strip()), "")
+        return None, f"`git {' '.join(args)}` exited {e.returncode}" + (f" ({said.strip()})" if said else "")
+    return done.stdout.strip(), None
 
 
 @find_app.command("count")

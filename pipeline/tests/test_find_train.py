@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 import torch
 
-from find_fixtures import Flat
+from find_fixtures import Flat, git_answers, invoke
 from sfzmaps import config
 from sfzmaps.find import data, handlabels, lotlabels, model, pages, train
 from sfzmaps.find.cuts import Cuts
@@ -247,9 +247,7 @@ def test_the_seed_moves_the_batches_and_the_start_and_only_the_seed():
 
 
 def test_train_passes_the_seed_and_keeps_the_default(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-
-    from sfzmaps.cli import app
+    git_answers(monkeypatch)
     _sources(tmp_path, monkeypatch)
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
     monkeypatch.setattr(pages, "load_scan", lambda sid: _two_line_page())
@@ -263,12 +261,12 @@ def test_train_passes_the_seed_and_keeps_the_default(tmp_path, monkeypatch):
         return train.Fitted({}, recipe.steps, [], "cpu")
     monkeypatch.setattr(train, "fit", fit)
     for args, run in ((["--seed", "3"], "a"), ([], "b")):
-        r = CliRunner().invoke(app, ["find", "train", "--run", run, "--device", "cpu", "--no-trace", *args])
+        r = invoke(["find", "train", "--run", run, "--device", "cpu", "--no-trace", *args])
         assert r.exit_code == 0, r.output
     assert seen[0].seed == 3 and json.loads((tmp_path / "find" / "runs" / "a" / "log.json").read_text())[
         "recipe"]["seed"] == 3
     assert seen[1] == train.Recipe()                             # no --seed: the recipe of before
-    r = CliRunner().invoke(app, ["find", "train", "--run", "c", "--device", "cpu"])     # no choosing crop, traced
+    r = invoke(["find", "train", "--run", "c", "--device", "cpu"])     # no choosing crop, traced
     assert r.exit_code == 1 and "no choose crop" in r.output and "--no-trace" in r.output, r.output
 
 
@@ -373,9 +371,6 @@ def test_a_used_cut_with_no_px_is_left_out_of_tiles():
 
 
 def test_train_refuses_before_training_when_a_crop_cannot_be_read(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-
-    from sfzmaps.cli import app
     _sources(tmp_path, monkeypatch)
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
     monkeypatch.setattr(pages, "load_scan", lambda sid: _two_line_page())
@@ -387,13 +382,13 @@ def test_train_refuses_before_training_when_a_crop_cannot_be_read(tmp_path, monk
     _crop_file("train", "s", "A", (100, 100, 60, 40), street=[[110, 120]], blocks=[[120, 104], [120, 135]])
     _crop_file("train", "s", "B", (100, 100, 60, 40), street=[[110, 110]])         # on the line's ink
     _crop_file("train", "s", "C", (480, 100, 60, 40), street=[[490, 120]])         # off the page
-    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu"])
+    r = invoke(["find", "train", "--run", "r", "--device", "cpu"])
     assert r.exit_code == 1, r.output
     assert "B__100_100_60_40.json" in r.output and "not on paper" in r.output
     assert "C__480_100_60_40.json" in r.output and "2 training crop(s) could not be read" in r.output
     assert not (tmp_path / "find" / "runs").exists()
     for bad in ("../r", "a/b", "..", "."):
-        r = CliRunner().invoke(app, ["find", "train", "--run", bad, "--device", "cpu"])
+        r = invoke(["find", "train", "--run", bad, "--device", "cpu"])
         assert r.exit_code == 2 and "--run" in r.output, (bad, r.output)
 
 
@@ -410,16 +405,14 @@ def test_a_block_edge_cut_moves_only_the_block_edge_answer():
 
 
 def test_train_reports_a_series_with_no_source_row_and_a_refused_fit_without_a_traceback(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-
-    from sfzmaps.cli import app
+    git_answers(monkeypatch)
     _sources(tmp_path, monkeypatch)
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
     monkeypatch.setattr(pages, "load_scan", lambda sid: _two_line_page())
     monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
     marks = dict(street=[[110, 120]], blocks=[[120, 104], [120, 135]])
     f = _crop_file("train", "u", "A", (100, 100, 60, 40), **marks)        # series u has no row
-    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
+    r = invoke(["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
     assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.output
     assert "series 'u' has no row in" in r.output and "1 training crop(s) could not be read" in r.output, r.output
     f.unlink()
@@ -429,7 +422,35 @@ def test_train_reports_a_series_with_no_source_row_and_a_refused_fit_without_a_t
     def refused(*a, **k):                   # as `train.fit` refuses, for example, an item smaller than a tile
         raise ValueError("s/A: 40 x 60 px is smaller than a 256 px tile")
     monkeypatch.setattr(train, "fit", refused)
-    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
+    r = invoke(["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
     assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.output
     assert "nothing trained: s/A: 40 x 60 px is smaller than a 256 px tile" in r.output, r.output
     assert not (tmp_path / "find" / "runs").exists()
+
+
+@pytest.mark.parametrize("fail", ["exit", "missing", None])
+def test_train_goes_on_without_the_git_state_when_git_cannot_tell(tmp_path, monkeypatch, fail):
+    """git exiting 128 (no repository) or not installed: the run is trained and saved all the same, the commit and
+    uncommitted_changes_in_src are null in log.json, and one line says why; with git working, the log is as before."""
+    git_answers(monkeypatch, head="abc123", status=" M src/x.py", fail=fail)
+    _sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    monkeypatch.setattr(pages, "load_scan", lambda sid: _two_line_page())
+    monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
+    monkeypatch.setattr(data, "print_sizes", lambda: ({"s": [4.0]}, [], {}))
+    monkeypatch.setattr(train, "fit", lambda items, recipe, device, on_checkpoint=None, sizes=None:
+                        train.Fitted({}, recipe.steps, [], "cpu"))
+    _crop_file("train", "s", "A", (100, 100, 60, 40), street=[[110, 120]], blocks=[[120, 104], [120, 135]])
+    r = invoke(["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
+    assert r.exit_code == 0, r.output
+    run = tmp_path / "find" / "runs" / "r"
+    log = json.loads((run / "log.json").read_text())
+    saved = torch.load(run / "model.pt")
+    assert saved["step"] == train.Recipe().steps and "commit" not in saved          # model.pt holds no git state
+    said = [line for line in r.output.splitlines() if "git state was not recorded" in line]
+    if fail is None:
+        assert (log["commit"], log["uncommitted_changes_in_src"]) == ("abc123", True) and not said
+    else:
+        assert log["commit"] is None and log["uncommitted_changes_in_src"] is None
+        why = "git is not installed" if fail == "missing" else "exited 128 (fatal: not a git repository"
+        assert len(said) == 1 and why in said[0], r.output

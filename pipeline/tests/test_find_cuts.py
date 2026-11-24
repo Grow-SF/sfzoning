@@ -8,9 +8,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PIL import Image
-from typer.testing import CliRunner
 
-from find_fixtures import (EAST, GRID_COLS, GRID_ROWS, ROWS, SHAPE, SPLIT, STREET, WEST, Flat, blocks_world,
+from find_fixtures import (EAST, GRID_COLS, GRID_ROWS, ROWS, SHAPE, SPLIT, STREET, WEST, Flat, blocks_world, invoke,
                            lines_world, lots_world)
 from sfzmaps.find import cuts, drawn, lotlabels, pages
 from sfzmaps.frame import data as fdata
@@ -166,10 +165,9 @@ def test_ground_is_made_only_by_the_labels_command(tmp_path, monkeypatch):
 
 
 def test_a_series_without_lot_labels_is_a_usage_error(monkeypatch):
-    from sfzmaps.cli import app
     monkeypatch.setattr(pages, "SOURCES", CHECKED_IN)
     for series in ("1921", "no-such-series"):
-        r = CliRunner().invoke(app, ["find", "labels", "--series", series])
+        r = invoke(["find", "labels", "--series", series])
         assert r.exit_code == 2 and "--series" in r.output, r.output
 
 

@@ -67,8 +67,9 @@ every 50 px, plus the whole box at 2x, under `data/find/look/ruled/<series>__<sh
 ## The three sets
 
 - **`test`**: drawn first; used for nothing but the pictures and counts shown to the owner.
-- **`choose`**: fit the one setting of the area step (its depth), give the training trace (scored at each checkpoint;
-  it chooses nothing, the trainer keeps its last step), and are where two recipes are compared.
+- **`choose`**: fit nothing; they give the training trace (scored at each checkpoint; it chooses nothing, the trainer
+  keeps its last step) and are where two recipes are compared (`sfzmaps find count` measures them as it does the test
+  crops).
 - **`train`**: the only hand labels the model learns from; added to wherever the pictures show misses.
 
 The ground under every `test` and `choose` crop is left out of all training, in every year's scan of that ground

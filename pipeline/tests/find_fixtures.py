@@ -4,7 +4,11 @@
 The grid is SHAPE (60 rows x 80 columns of 4 ft px from the grid's top-left corner, `grid.X0`, `grid.Y1`).  The west
 block is columns 20-35, the street columns 36-39 (16 ft), the east block columns 40-55; both blocks run rows 10-49,
 each cut into two lots at row 30.  The centre line runs down the middle of the street (x = 152 ft from X0), the
-grid's whole height."""
+grid's whole height.
+
+`invoke` runs an `sfzmaps` command as the finder's tests read it: plain text (typer's coloured error boxes off for the
+call, so no colour codes and no wrapping whatever the terminal or CI says).  `git_answers` makes the git a command asks
+answer as told: fixed text, failing, or missing."""
 from __future__ import annotations
 
 import geopandas as gpd
@@ -83,3 +87,35 @@ def blocks_world() -> tuple[gpd.GeoDataFrame, data.Lines]:
     n = len(found)
     return lots, data.Lines(np.array(found, dtype=object), np.array(["ST"] * n, dtype=object),
                             np.array([f"{i} ST" for i in range(n)], dtype=object))
+
+
+def invoke(args: list[str]):
+    """`sfzmaps <args>` through typer's test runner, its output plain: typer's rich error formatting off for the call
+    (click's own one-line errors instead), which on CI (GITHUB_ACTIONS) puts colour codes between the characters of an
+    option's name and wraps at 80 columns."""
+    from unittest import mock
+
+    import typer.core
+    from typer.testing import CliRunner
+
+    from sfzmaps.cli import app
+    with mock.patch.object(typer.core, "HAS_RICH", False):
+        return CliRunner().invoke(app, args)
+
+
+def git_answers(monkeypatch, head: str = "0" * 40, status: str = "", fail: str | None = None) -> None:
+    """Every `git` a command runs answers `head` to rev-parse and `status` to status; with `fail` "exit" each exits 128
+    (no repository), with "missing" git is not installed.  Other commands run as they are."""
+    import subprocess
+    real = subprocess.run
+
+    def run(argv, *a, **k):
+        if not argv or argv[0] != "git":
+            return real(argv, *a, **k)
+        if fail == "missing":
+            raise FileNotFoundError(2, "No such file or directory", "git")
+        if fail == "exit":
+            raise subprocess.CalledProcessError(128, argv, "", "fatal: not a git repository (or any of the parent "
+                                                              "directories): .git\n")
+        return subprocess.CompletedProcess(argv, 0, (head if "rev-parse" in argv else status) + "\n", "")
+    monkeypatch.setattr(subprocess, "run", run)

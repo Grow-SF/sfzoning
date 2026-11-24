@@ -12,7 +12,7 @@ import numpy as np
 import pytest
 from scipy import ndimage
 
-from find_fixtures import Flat
+from find_fixtures import Flat, git_answers, invoke
 from sfzmaps.find import cuts, data, lotlabels, pages, train
 from sfzmaps.find.cuts import Cuts
 
@@ -306,10 +306,8 @@ def test_a_sheet_whose_placement_fails_the_warps_check_gives_no_size(tmp_path, m
 
 
 def test_the_run_log_holds_the_sizes_and_the_factors(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-
     from sfzmaps import config
-    from sfzmaps.cli import app
+    git_answers(monkeypatch)
     f = tmp_path / "label_sources.csv"
     f.write_text("series,era,lots\ns,hatched-grey,\n")
     monkeypatch.setattr(pages, "SOURCES", f)
@@ -331,7 +329,7 @@ def test_the_run_log_holds_the_sizes_and_the_factors(tmp_path, monkeypatch):
         return train.Fitted({}, 1, [], "cpu", 0, {"count": 2, "least": 1.0, "median": 1.5, "most": 2.0,
                                                   "moved_to_fit": 0})
     monkeypatch.setattr(train, "fit", fit)
-    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
+    r = invoke(["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
     assert r.exit_code == 0, r.output
     log = json.loads((tmp_path / "find" / "runs" / "r" / "log.json").read_text())
     assert log["print_sizes"] == {"s": {"count": 2, "least": 2.0, "median": 2.5, "most": 3.0}}
@@ -339,7 +337,7 @@ def test_the_run_log_holds_the_sizes_and_the_factors(tmp_path, monkeypatch):
     assert log["print_sizes_sheets_left_out"] == {"count": 1, "sheets": {"s/A": "misplaced"}}
     assert log["training_items_on_sheets_left_out"] == ["train/s/A__100_100_60_40"]
     assert seen["recipe"].resize and seen["sizes"] == {"s": [2.0, 3.0]} and seen["ft"] == [pytest.approx(4.0)]
-    r = CliRunner().invoke(app, ["find", "train", "--run", "q", "--device", "cpu", "--no-trace", "--no-resize"])
+    r = invoke(["find", "train", "--run", "q", "--device", "cpu", "--no-trace", "--no-resize"])
     assert r.exit_code == 0, r.output
     assert not seen["recipe"].resize and seen["sizes"] is None
     log = json.loads((tmp_path / "find" / "runs" / "q" / "log.json").read_text())

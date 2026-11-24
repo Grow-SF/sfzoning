@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from find_fixtures import Flat
+from find_fixtures import Flat, invoke
 from sfzmaps.find import handlabels
 
 BOX = (100, 200, 60, 40)          # the crops' box on their page: x0, y0, w, h (page px)
@@ -208,22 +208,19 @@ def test_reserved_ground_needs_placed_sheets(tmp_path):
 
 
 def test_the_crops_command_reports_a_bad_crop_and_goes_on(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-
     from sfzmaps import config
-    from sfzmaps.cli import app
     from sfzmaps.find import pages
     root = tmp_path / "inputs" / "find-labels"
     monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
-    r = CliRunner().invoke(app, ["find", "crops"])
+    r = invoke(["find", "crops"])
     assert r.exit_code == 0 and "no crops" in r.output, r.output
     page = np.ones((300, 300), np.float32)
     page[110:112] = page[128:130] = 0     # a street between two lines, crop rows 10 and 28 of a crop at y0 = 100
     monkeypatch.setattr(pages, "load_scan", lambda sid: page)
     _write(root, "test", "A", (100, 100, 60, 40), street=[[110, 120]], blocks=[[120, 104], [120, 135]])
     _write(root, "train", "A", (100, 100, 60, 40), street=[[110, 110]])          # on the line's ink
-    r = CliRunner().invoke(app, ["find", "crops", "--look"])
+    r = invoke(["find", "crops", "--look"])
     assert r.exit_code == 1, r.output
     assert "test/s/A__100_100_60_40.json: block 2, open 0" in r.output
     assert "train/s/A__100_100_60_40.json: FAILED" in r.output and "not on paper" in r.output
@@ -303,10 +300,7 @@ def test_the_largest_unseeded_islands_are_always_listed():
 
 
 def test_bad_crop_files_are_named_and_the_command_goes_on(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-
     from sfzmaps import config
-    from sfzmaps.cli import app
     from sfzmaps.find import pages
     root = tmp_path / "inputs" / "find-labels"
     monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
@@ -321,7 +315,7 @@ def test_bad_crop_files_are_named_and_the_command_goes_on(tmp_path, monkeypatch)
     misnamed = misnamed.rename(misnamed.with_name("C__100_100_60_41.json"))
     with pytest.raises(ValueError, match=r"A__100_100_60_40\.json: not JSON"):
         handlabels.crops(root=root)
-    r = CliRunner().invoke(app, ["find", "crops", "--look"])
+    r = invoke(["find", "crops", "--look"])
     assert r.exit_code == 1, r.output
     assert f"{broken}: not JSON" in r.output and f"{misnamed}: its name says box" in r.output
     assert "test/s/B__100_100_60_40.json: block 0, open 0" in r.output
@@ -556,10 +550,7 @@ def test_the_trace_scorer_and_count_refuse_a_choosing_crop_on_test_ground(tmp_pa
 
 
 def test_the_crops_command_prints_a_choosing_crop_on_test_ground(tmp_path, monkeypatch):
-    from typer.testing import CliRunner
-
     from sfzmaps import config
-    from sfzmaps.cli import app
     from sfzmaps.find import lotlabels, pages
     root = tmp_path / "inputs" / "find-labels"
     monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
@@ -569,10 +560,10 @@ def test_the_crops_command_prints_a_choosing_crop_on_test_ground(tmp_path, monke
     monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
     _write(root, "test", "A", (100, 100, 40, 40), street=[[101, 105]])
     _write(root, "choose", "A", (200, 100, 40, 40), street=[[201, 105]])
-    r = CliRunner().invoke(app, ["find", "crops"])
+    r = invoke(["find", "crops"])
     assert r.exit_code == 0 and "overlap" not in r.output, r.output
     _write(root, "choose", "A", (130, 135, 40, 40), street=[[131, 145]])
-    r = CliRunner().invoke(app, ["find", "crops", "--set", "train"])
+    r = invoke(["find", "crops", "--set", "train"])
     assert r.exit_code == 1, r.output
     assert ("choose-against-test ground overlap: choose/s/A__130_135_40_40.json lies on the ground of the test crop "
             "test/s/A__100_100_40_40.json (0.031 of the choosing crop's area)") in r.output, r.output

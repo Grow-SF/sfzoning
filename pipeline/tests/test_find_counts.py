@@ -6,6 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
+from find_fixtures import invoke
 from sfzmaps.find import counts, handlabels
 from sfzmaps.find.handlabels import CropLabels
 
@@ -317,9 +318,6 @@ def test_a_read_picture_has_four_panels():
 
 def test_count_refuses_a_model_saved_with_three_answers_in_one_line(tmp_path, monkeypatch):
     import torch
-    from typer.testing import CliRunner
-
-    from sfzmaps.cli import app
     from sfzmaps.find import model, pages
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
     old = model.FindNet(4)
@@ -327,6 +325,6 @@ def test_count_refuses_a_model_saved_with_three_answers_in_one_line(tmp_path, mo
     (tmp_path / "find" / "runs" / "r").mkdir(parents=True)
     torch.save({"state_dict": old.state_dict(), "step": 1, "recipe": {"answers": ["street", "edge", "border"]},
                 "device": "cpu"}, tmp_path / "find" / "runs" / "r" / "model.pt")
-    r = CliRunner().invoke(app, ["find", "count", "--run", "r", "--device", "cpu"])
+    r = invoke(["find", "count", "--run", "r", "--device", "cpu"])
     assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.output
     assert len(r.output.strip().splitlines()) == 1 and "predates the two-answer finder" in r.output, r.output
