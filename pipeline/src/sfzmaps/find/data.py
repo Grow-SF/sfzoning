@@ -46,11 +46,12 @@ class Labelled:
     border: np.ndarray          # uint8: 1 a zoning border runs here, 0 none does, 255 no label
     cuts: Cuts | None           # the cut statements; None for a hand crop
     left_out: float = 0.0       # a training crop's share of px left without a label as reserved ground (0 otherwise)
+    set: str | None = None      # a hand crop's set (train, choose, test); None for a sheet
 
     @property
     def hand(self) -> bool:
         """True for a hand crop (or a tile of one)."""
-        return self.cuts is None
+        return self.set is not None
 
 
 def _no_cut_on(c: Cuts, ground: np.ndarray) -> Cuts:
@@ -124,7 +125,7 @@ def crop_labelled(crop: handlabels.Crop) -> Labelled:
                      left_out)
     street_w = (street != NONE).astype(np.float32)
     return Labelled(crop_name(crop), pages.source(crop.series).era, np.ascontiguousarray(page[gy0:gy1, gx0:gx1]),
-                    street, street_w, edge, border, None, left_out)
+                    street, street_w, edge, border, None, left_out, crop.set)
 
 
 def labelled(item: Labelled, answers=ANSWERS) -> np.ndarray:
@@ -145,6 +146,12 @@ def labelled(item: Labelled, answers=ANSWERS) -> np.ndarray:
     return out
 
 
+def cuts_without_px(c: Cuts) -> int:
+    """How many used cuts (weight above 0) have no px: a malformed statement, which `cut_boxes` (and so every tile)
+    leaves out."""
+    return int(((c.weight > 0) & (np.bincount(c.cut, minlength=len(c.answer)) == 0)).sum())
+
+
 @dataclass(frozen=True)
 class CutBoxes:
     """Each used cut's px run (`start`, `stop` into `order`, which lists the px of each cut together) and its box of
@@ -160,13 +167,14 @@ class CutBoxes:
 
 
 def cut_boxes(c: Cuts, width: int) -> CutBoxes:
-    """The `CutBoxes` of `c`'s used cuts (weight above 0) on an item `width` px wide."""
-    used = np.flatnonzero(c.weight > 0)
-    on = (c.weight > 0)[c.cut]
-    idx = np.flatnonzero(on)
+    """The `CutBoxes` of `c`'s used cuts (weight above 0) with a px (`cuts_without_px` counts those without) on an
+    item `width` px wide."""
+    size = np.bincount(c.cut, minlength=len(c.answer))
+    use = (c.weight > 0) & (size > 0)
+    used = np.flatnonzero(use)
+    idx = np.flatnonzero(use[c.cut])
     order = idx[np.argsort(c.cut[idx], kind="stable")]
-    cut = c.cut[order]
-    counts = np.bincount(cut, minlength=len(c.answer))[used]
+    counts = size[used]
     stop = np.cumsum(counts)
     start = stop - counts
     r, q = np.divmod(c.px[order], width)

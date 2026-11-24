@@ -23,7 +23,8 @@ Deterministic: torch's generator and two numpy generators (the tiles; the noise,
 one without draw the same tiles) are seeded from `Recipe.seed`, and torch runs deterministic algorithms
 (`hatchnet.train.settle_torch`).  On the Mac's GPU the caller holds the GPU's turn (`sfzmaps.gpu`).
 
-Reads nothing itself; `save_run` writes data/find/runs/<run>/model.pt and log.json, `write_noise_examples` a PNG."""
+Reads nothing itself; `save_run` writes data/find/runs/<run>/model.pt and log.json, `write_noise_examples`
+data/find/runs/<run>/noise-examples.png (the path its caller gives)."""
 from __future__ import annotations
 
 import dataclasses
@@ -38,7 +39,7 @@ import numpy as np
 import torch
 from scipy import ndimage
 
-from sfzmaps.find import cuts as cutlib, data, losses, model
+from sfzmaps.find import cuts as cutlib, data, handlabels, losses, model
 from sfzmaps.find.data import NONE, Labelled
 from sfzmaps.solver.hatchnet import topo
 from sfzmaps.solver.hatchnet import train as branch
@@ -95,20 +96,25 @@ class Fitted:
 
 # --- the noise --------------------------------------------------------------------------------------------------------
 
+def noise_amounts(rng: np.random.Generator, recipe: Recipe) -> tuple[float, float, float, float, float]:
+    """One tile's noise (`noised`): the blur's sigma, the level's shift, the gain, the share of specks and the
+    grain's standard deviation, each drawn uniformly between 0 (gain 1; shift its negative maximum) and its maximum
+    times `recipe.noise`."""
+    a = recipe.noise
+    return (rng.uniform(0, a * recipe.noise_blur), rng.uniform(-a * recipe.noise_shift, a * recipe.noise_shift),
+            1 + rng.uniform(0, a * (recipe.noise_gain - 1)), rng.uniform(0, a * recipe.noise_specks),
+            rng.uniform(0, a * recipe.noise_grain))
+
+
 def noised(lum: np.ndarray, rng: np.random.Generator, recipe: Recipe) -> np.ndarray:
     """`lum` (float32, 1 paper 0 ink) with print-and-scan noise, kept in [0, 1]; with `recipe.noise` 0, `lum` itself.
-    Each part's amount is drawn uniformly between 0 and its maximum times `recipe.noise`, in this order: a soft scan
+    Each part's amount is drawn per call, so per tile (`noise_amounts`), in this order: a soft scan
     (Gaussian blur); light or heavy printing (clip(0.5 + (lum - 0.5 - shift) gain): shift either way, gain from 1 up);
     specks of dust and broken ink (blobs of 1 or 2 x 2 px turned to the other end, 1 - lum); and grain (Gaussian
     grey noise)."""
     if recipe.noise == 0:
         return lum
-    a = recipe.noise
-    blur = rng.uniform(0, a * recipe.noise_blur)
-    shift = rng.uniform(-a * recipe.noise_shift, a * recipe.noise_shift)
-    gain = 1 + rng.uniform(0, a * (recipe.noise_gain - 1))
-    specks = rng.uniform(0, a * recipe.noise_specks)
-    grain = rng.uniform(0, a * recipe.noise_grain)
+    blur, shift, gain, specks, grain = noise_amounts(rng, recipe)
     x = ndimage.gaussian_filter(np.asarray(lum, np.float32), blur) if blur > 0 else np.asarray(lum, np.float32)
     x = np.clip(0.5 + (x - 0.5 - shift) * gain, 0, 1)
     seed = rng.random(x.shape) < specks / SPECK_AREA
@@ -149,8 +155,9 @@ class _Era:
 
 
 class Tiles:
-    """Training tiles drawn from `items` (see the module).  ValueError for an item smaller than the tile (naming it),
-    a tile side that is not a multiple of model.MULTIPLE, and an era with no labelled px."""
+    """Training tiles drawn from `items` (see the module).  ValueError for an item smaller than the tile or one of a
+    held-out set (`handlabels.HELD_OUT`: a choosing or test crop), naming it; a tile side that is not a multiple of
+    model.MULTIPLE; an era with no labelled px."""
 
     def __init__(self, items: list[Labelled], recipe: Recipe):
         side = recipe.tile
@@ -162,6 +169,8 @@ class Tiles:
             h, w = it.lum.shape
             if h < side or w < side:
                 raise ValueError(f"{it.name}: {h} x {w} px is smaller than a {side} px tile")
+            if it.set in handlabels.HELD_OUT:
+                raise ValueError(f"{it.name}: a {it.set} crop is never trained on")
         self.items, self.recipe = items, recipe
         self.eras = sorted({it.era for it in items})
         self.pools = {}
@@ -265,18 +274,31 @@ def statements(tiles: list[Labelled], recipe: Recipe) -> float:
     return losses.statements(*weights)
 
 
+def corridor(edge: np.ndarray) -> np.ndarray:
+    """float32: 1 on the band a hand block edge's printed line can fill, the edge label (1) drawn as wide as the hand
+    tool draws a line (`handlabels.BARRIER`, a square), 0 elsewhere.  The edge label is the outermost px of a block (or
+    a stroke's px), so the middle of the printed line, where a predicted line's skeleton runs, lies a px or so in."""
+    on = edge == 1
+    if not on.any():
+        return on.astype(np.float32)
+    return ndimage.binary_dilation(on, np.ones((handlabels.BARRIER, handlabels.BARRIER), bool)).astype(np.float32)
+
+
 def unbroken_loss(net_out: torch.Tensor, tiles: list[Labelled], recipe: Recipe) -> torch.Tensor:
-    """The branch's unbroken-line terms (`hatchnet.topo.cldice_sums`) on the hand-crop tiles, pooled: 1 - recall
-    (how much of the hand block-edge label the block-edge chance covers) + 1 - precision (how much of the chance's
-    soft skeleton, over the px with a block-edge label, lies on the hand label); the skeleton half a tile deep (the
-    branch's).  0 with no hand tile or with the block-edge answer left out."""
+    """The branch's unbroken-line terms (`hatchnet.topo.cldice_sums`) on the hand-crop tiles, pooled, as the branch
+    uses them (a thin line for the recall, a wider corridor for the precision): 1 - recall (how much of the hand
+    block-edge label, edge 1, the block-edge chance covers) + 1 - precision (how much of the chance's soft skeleton,
+    over the px with a block-edge label, lies in the edge's `corridor`); the skeleton half a tile deep (the branch's).
+    0 with no hand tile or with the block-edge answer left out."""
     hand = [i for i, t in enumerate(tiles) if t.hand]
     if not hand or "edge" not in recipe.answers:
         return net_out.new_zeros(())
     p = torch.sigmoid(net_out[torch.tensor(hand), model.EDGE])
-    edge = torch.from_numpy(np.stack([tiles[i].edge for i in hand])).to(p.device)
+    labels = np.stack([tiles[i].edge for i in hand])
+    edge = torch.from_numpy(labels).to(p.device)
     on, region = (edge == 1).to(p.dtype), (edge != NONE).to(p.dtype)
-    s = topo.cldice_sums(p, on, on, recipe.tile // 2, region)
+    band = torch.from_numpy(np.stack([corridor(e) for e in labels])).to(p.device, p.dtype)
+    s = topo.cldice_sums(p, on, band, recipe.tile // 2, region)
     return (1 - topo.ratio(s[0], s[1])) + (1 - topo.ratio(s[2], s[3]))
 
 
@@ -385,7 +407,7 @@ def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None) -> Fi
 
 def save_run(folder: Path, fitted: Fitted, recipe: Recipe, log_fields: dict) -> tuple[Path, Path]:
     """model.pt (the weights kept, their step, the recipe, the device: no clock time) and log.json (the recipe, the
-    device, the curve, the skipped batches and `log_fields`) in `folder`."""
+    device, the curve, the skipped batches and `log_fields`; a number that is not finite as null) in `folder`."""
     folder.mkdir(parents=True, exist_ok=True)
     recipe_d = dataclasses.asdict(recipe) | {"answers": list(recipe.answers)}
     pt, js = folder / "model.pt", folder / "log.json"
@@ -395,8 +417,19 @@ def save_run(folder: Path, fitted: Fitted, recipe: Recipe, log_fields: dict) -> 
     part.replace(pt)
     out = {"recipe": recipe_d, "device": fitted.device, "step_kept": fitted.step, **log_fields,
            "curve": fitted.curve, "skipped_batches": fitted.skipped}
-    js.write_text(json.dumps(out, indent=1) + "\n")
+    js.write_text(json.dumps(_finite(out), indent=1, allow_nan=False) + "\n")
     return pt, js
+
+
+def _finite(v):
+    """`v` with every float that is not finite (NaN, infinity) as None: JSON has no such numbers."""
+    if isinstance(v, dict):
+        return {k: _finite(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_finite(x) for x in v]
+    if isinstance(v, float) and not math.isfinite(v):
+        return None
+    return v
 
 
 ZOOM = 2                    # picture setting: the noise examples' enlargement (nearest neighbour)
@@ -405,7 +438,6 @@ ZOOM = 2                    # picture setting: the noise examples' enlargement (
 def write_noise_examples(items: list[Labelled], recipe: Recipe, path: Path, per_era: int = 2) -> Path:
     """`per_era` training tiles of every era, each as trained without noise (turned and jittered) beside the same with
     noise, in rows, to judge by eye whether the noise looks like these maps."""
-    from sfzmaps.find import look as pictures
     tiles = Tiles(items, recipe)
     rng, noise_rng = np.random.default_rng([recipe.seed, 2]), np.random.default_rng([recipe.seed, 3])
     rows, j = [], recipe.jitter
@@ -421,9 +453,10 @@ def write_noise_examples(items: list[Labelled], recipe: Recipe, path: Path, per_
             band = np.full((28, img.shape[1]), 255, np.uint8)
             cv2.putText(band, f"{era}: {t.name}", (6, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, 0, 1, cv2.LINE_AA)
             rows.append(np.vstack([band, img, np.full((10, img.shape[1]), 255, np.uint8)]))
-    img = cv2.cvtColor(np.vstack(rows), cv2.COLOR_GRAY2BGR)
-    img = pictures._keyed(img, "training tiles: left as trained without noise (turned, jittered), right with noise",
-                          ())
+    title = np.full((36, rows[0].shape[1]), 255, np.uint8)
+    cv2.putText(title, "training tiles: left as trained without noise (turned, jittered), right with noise", (6, 24),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, 0, 1, cv2.LINE_AA)
+    img = np.vstack([title, *rows])
     path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(path), img)
     return path

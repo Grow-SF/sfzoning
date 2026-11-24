@@ -1730,11 +1730,11 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                                                                       "instead of the recipe's (a short check)."),
                device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one)."),
                look: bool = typer.Option(False, "--look", help="Also draw training tiles without and with noise "
-                                                               "(data/find/look/train/noise-examples.png).")) -> None:
+                                                               "(data/find/runs/<run>/noise-examples.png).")) -> None:
     """Train the finder on the named lot-labelled sheets (`sfzmaps find labels`) and every `train` hand crop, the
     ground under the choosing and test crops left out: data/find/runs/<run>/model.pt (the last step's weights) and
-    log.json (the recipe, device, commit, items, curve).  A crop file that cannot be read is reported, recorded in
-    log.json and left out.  $0."""
+    log.json (the recipe, device, commit, items, curve).  Every training crop is read first; if any cannot be, each
+    is reported with its path and nothing is trained (exit status 1).  $0."""
     import dataclasses
     import logging
     import subprocess
@@ -1748,6 +1748,9 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     from sfzmaps.solver import hatching
     from sfzmaps.solver.hatchnet.train import THREADS, default_device
     logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
     recipe = train.Recipe()
     recipe = dataclasses.replace(recipe, steps=steps or recipe.steps, unbroken=unbroken,
                                  noise=0.0 if no_noise else recipe.noise,
@@ -1761,7 +1764,7 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
         if name in hatching.duplicate_scans(series):
             raise typer.BadParameter(f"{s} is a duplicate scan, which is never read", param_hint="--sheet")
         sids.append((series, name))
-    items, not_read = [], []
+    items, failed = [], 0
     try:
         for sid in sids:
             items.append(data.sheet_labelled(sid))
@@ -1772,19 +1775,23 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
         try:
             items.append(data.crop_labelled(handlabels.read_crop(path, s)))
         except (ValueError, FileNotFoundError) as e:
-            typer.echo(f"{path}: NOT READ: {e}", err=True)
-            not_read.append({"path": str(path.relative_to(config.INPUTS_DIR)), "error": str(e)})
+            failed += 1
+            msg = str(e)
+            typer.echo(f"FAILED: {msg if str(path) in msg else f'{path}: {msg}'}", err=True)
+    if failed:
+        typer.echo(f"{failed} training crop(s) could not be read; nothing trained", err=True)
+        raise typer.Exit(1)
     if not items:
         typer.echo("nothing to train on", err=True)
         raise typer.Exit(1)
-    listed = [{"name": it.name, "era": it.era, "labelled_px": int(data.labelled(it, recipe.answers).sum())}
-              for it in items]
+    listed = [{"name": it.name, "era": it.era, "labelled_px": int(data.labelled(it, recipe.answers).sum()),
+               "used_cuts_with_no_px": 0 if it.cuts is None else data.cuts_without_px(it.cuts)} for it in items]
     for era in sorted({it.era for it in items}):
         mine = [x for x in listed if x["era"] == era]
         typer.echo(f"{era}: {len(mine)} items, {sum(x['labelled_px'] for x in mine):,} labelled px")
     out = pages.OUT / "runs" / run
     if look:
-        typer.echo(str(train.write_noise_examples(items, recipe, pages.OUT / "look" / "train" / "noise-examples.png")))
+        typer.echo(str(train.write_noise_examples(items, recipe, out / "noise-examples.png")))
     changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "src"],
                              cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True).stdout.strip()
     t0 = time.perf_counter()
@@ -1793,7 +1800,7 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     fields = {"commit": git_head(), "uncommitted_changes_in_src": bool(changed), "torch": torch.__version__,
               "threads": THREADS, "items": listed,
               "train_crops_left_out_as_reserved": {it.name: it.left_out for it in items if it.hand},
-              "crops_not_read": not_read, "seconds": round(time.perf_counter() - t0, 1)}
+              "seconds": round(time.perf_counter() - t0, 1)}
     for f in train.save_run(out, fitted, recipe, fields):
         typer.echo(str(f))
 

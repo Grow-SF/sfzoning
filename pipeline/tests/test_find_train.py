@@ -3,6 +3,7 @@ reserved ground left unlabelled on sheets and training crops, tiles shared fairl
 the noise on the tiles, and the same bits from the same seed."""
 import json
 import logging
+import math
 from collections import Counter
 
 import numpy as np
@@ -55,14 +56,15 @@ def _cuts(shape, rng, n=8) -> Cuts:
                 np.full((n, 2), -1, np.int32), np.zeros(0, np.int64))
 
 
-def _item(shape, rng, era="lined-1bit", name="x", cuts=True) -> data.Labelled:
-    """An item with labels of every kind at random: about a third of each answer's px unlabelled."""
+def _item(shape, rng, era="lined-1bit", name="x", cuts=True, set_="train") -> data.Labelled:
+    """An item with labels of every kind at random: about a third of each answer's px unlabelled; with `cuts` a
+    sheet's (cut statements, no set), else a hand crop of `set_`."""
     def lab():
         return rng.choice(np.array([0, 1, 255], np.uint8), size=shape)
     street = lab()
     street_w = np.where(street == 255, 0, rng.uniform(0.2, 1.0, shape)).astype(np.float32)
     return data.Labelled(name, era, rng.uniform(0, 1, shape).astype(np.float32), street, street_w, lab(), lab(),
-                         _cuts(shape, rng) if cuts else None)
+                         _cuts(shape, rng) if cuts else None, set=None if cuts else set_)
 
 
 def test_a_quarter_turn_keeps_the_loss():
@@ -156,12 +158,12 @@ def test_a_training_crop_on_reserved_ground_loses_that_ground(tmp_path, monkeypa
     assert (got.border[inner][keep] == 0).all()                  # series s draws no zoning border
     assert (got.street_w[inner][keep] == (want.street[keep] != 255)).all()
     assert got.left_out == pytest.approx(32 / 60)
-    assert got.hand and got.name == "train/s/A__100_100_60_40" and got.era == "hatched-grey"
+    assert got.hand and got.set == "train" and got.name == "train/s/A__100_100_60_40" and got.era == "hatched-grey"
     [line] = [r.getMessage() for r in caplog.records if r.name == "sfzmaps.find.data"]
     assert "train/s/A__100_100_60_40" in line and "0.533" in line
     [test_crop] = handlabels.crops(("test",))
     held_out = data.crop_labelled(test_crop)                     # the reserved ground itself is never masked
-    assert held_out.left_out == 0
+    assert held_out.left_out == 0 and held_out.set == "test"
     assert np.array_equal(held_out.street[100:140, R:R + 10],
                           handlabels.make_labels(handlabels.crop_scan(page, test_crop), test_crop).street)
 
@@ -249,9 +251,105 @@ def test_noise_changes_the_picture_and_never_the_labels():
     assert off.dtype == lum.dtype and np.array_equal(off, lum)
 
 
-def test_noise_is_drawn_per_tile():
-    noisy, clean = _drawn(train.Recipe(noise=1.0, **SMALL)), _drawn(train.Recipe(noise=0.0, **SMALL))
-    d = [a.lum - b.lum for a, b in zip(noisy, clean)]
-    assert not np.array_equal(d[0], d[1])
-    again = _drawn(train.Recipe(noise=1.0, **SMALL))
-    assert all(np.array_equal(a.lum, b.lum) for a, b in zip(noisy, again))
+def test_noise_is_drawn_per_tile(monkeypatch):
+    rng = np.random.default_rng(0)
+    flat = _item((64, 64), rng, "lined-1bit", "flat", cuts=False)
+    flat.lum[:] = 0.5                                             # every tile the same picture
+    recipe = train.Recipe(jitter=0.0, **SMALL)                    # and no jitter: both tiles reach the noise equal
+    drawn = []
+    real = train.noise_amounts
+
+    def spy(rng, recipe):
+        drawn.append(real(rng, recipe))
+        return drawn[-1]
+    monkeypatch.setattr(train, "noise_amounts", spy)
+
+    def batch():
+        return train.Tiles([flat], recipe).draw(np.random.default_rng(7), np.random.default_rng([7, 1]))
+    first = batch()
+    assert len(drawn) == 2 and drawn[0] != drawn[1]               # each tile draws its own amounts
+    # their printing alone moves the two tiles' level apart, far past what grain and specks average to over a tile
+    level = [0.5 - a[1] * a[2] for a in drawn]
+    assert abs(first[0].lum.mean() - first[1].lum.mean()) == pytest.approx(abs(level[0] - level[1]), abs=0.02)
+    assert abs(level[0] - level[1]) > 0.05
+    again = batch()
+    assert all(np.array_equal(a.lum, b.lum) for a, b in zip(first, again))
+
+
+def test_a_held_out_crop_is_never_trained_on():
+    rng = np.random.default_rng(0)
+    for set_ in handlabels.HELD_OUT:
+        items = [_item((48, 48), rng, cuts=False, name="ok"), _item((48, 48), rng, cuts=False, name="held",
+                                                                     set_=set_)]
+        with pytest.raises(ValueError, match=f"held: a {set_} crop is never trained on"):
+            train.Tiles(items, train.Recipe(**SMALL))
+        with pytest.raises(ValueError, match="held"):
+            train.fit(items, train.Recipe(steps=1, **SMALL), "cpu")
+
+
+def test_the_unbroken_terms_reach_only_the_hand_tiles_block_edge():
+    rng = np.random.default_rng(3)
+    sheet = _item((32, 32), rng)
+    crop = _item((32, 32), rng, cuts=False)
+    crop.edge[:] = 0
+    crop.edge[10, 4:28] = 1                                       # a hand block edge across the crop
+    crop.edge[:, :2] = 255
+    z = torch.from_numpy(rng.normal(0, 1, (2, 3, 32, 32))).requires_grad_(True)
+    loss = train.unbroken_loss(z, [sheet, crop], train.Recipe(unbroken=True, tile=32))
+    assert torch.isfinite(loss) and float(loss.detach()) > 0
+    loss.backward()
+    g = z.grad
+    assert g[1, model.EDGE].abs().sum() > 0
+    assert (g[0] == 0).all() and (g[1, model.STREET] == 0).all() and (g[1, model.BORDER] == 0).all()
+    band = train.corridor(crop.edge)                              # the precision's target is wider than the line
+    assert band[9:12, 4:28].all() and band.sum() > (crop.edge == 1).sum()
+
+
+def test_log_json_holds_no_nan(tmp_path):
+    fitted = train.Fitted({"w": torch.zeros(1)}, 3, [{"step": 3, "loss_per_statement": math.nan,
+                                                     "chosen_by": math.inf}], "cpu")
+    _, js = train.save_run(tmp_path, fitted, train.Recipe(), {"x": [-math.inf, 1.5]})
+    text = js.read_text()
+    assert "NaN" not in text and "Infinity" not in text
+    d = json.loads(text)
+    assert d["curve"][0]["loss_per_statement"] is None and d["curve"][0]["chosen_by"] is None
+    assert d["x"] == [None, 1.5]
+
+
+def test_a_used_cut_with_no_px_is_left_out_of_tiles():
+    rng = np.random.default_rng(4)
+    t = _item((40, 40), rng)
+    c = t.cuts
+    n = len(c.answer)                                             # one more used cut, with no px
+    bare = Cuts(c.px, c.cut, c.prior, np.r_[c.answer, EDGE].astype(np.uint8), np.r_[c.says, True],
+                np.r_[c.weight, 1].astype(np.float32), np.r_[c.ends, [[-1, -1]]].astype(np.int32), c.dropped)
+    t2 = data.Labelled(t.name, t.era, t.lum, t.street, t.street_w, t.edge, t.border, bare)
+    assert data.cuts_without_px(bare) == 1
+    got, want = data.window(t2, 0, 0, 40), data.window(t, 0, 0, 40)
+    assert len(got.cuts.answer) == len(want.cuts.answer) == n - 1           # the unused cut and the bare one gone
+    assert np.array_equal(got.cuts.px, want.cuts.px)
+
+
+def test_train_refuses_before_training_when_a_crop_cannot_be_read(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps.cli import app
+    _sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    monkeypatch.setattr(pages, "load_scan", lambda sid: _two_line_page())
+    monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
+
+    def no_fit(*a, **k):
+        raise AssertionError("trained")
+    monkeypatch.setattr(train, "fit", no_fit)
+    _crop_file("train", "s", "A", (100, 100, 60, 40), street=[[110, 120]], blocks=[[120, 104], [120, 135]])
+    _crop_file("train", "s", "B", (100, 100, 60, 40), street=[[110, 110]])         # on the line's ink
+    _crop_file("train", "s", "C", (480, 100, 60, 40), street=[[490, 120]])         # off the page
+    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu"])
+    assert r.exit_code == 1, r.output
+    assert "B__100_100_60_40.json" in r.output and "not on paper" in r.output
+    assert "C__480_100_60_40.json" in r.output and "2 training crop(s) could not be read" in r.output
+    assert not (tmp_path / "find" / "runs").exists()
+    for bad in ("../r", "a/b", "..", "."):
+        r = CliRunner().invoke(app, ["find", "train", "--run", bad, "--device", "cpu"])
+        assert r.exit_code == 2 and "--run" in r.output, (bad, r.output)
