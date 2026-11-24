@@ -419,3 +419,126 @@ def test_an_outline_crop_cannot_carry_openings(tmp_path):
            openings=[[[110, 210], [115, 210]]])
     with pytest.raises(ValueError, match=r"A__100_200_60_40\.json: marks of both kinds"):
         handlabels.crops(root=tmp_path)
+
+
+def _at(box, street=(), blocks=(), strokes=()):
+    """A seed crop at `box`, its marks given in crop px."""
+    pg = lambda pts: tuple((x + box[0], y + box[1]) for x, y in pts)                 # noqa: E731
+    return handlabels.Crop("train", "s", "p", tuple(box), pg(street), pg(blocks), (), tuple(pg(s) for s in strokes),
+                           (), Path(f"train/s/p__{'_'.join(str(v) for v in box)}.json"))
+
+
+def _toothed(img, x0, y0, x1, y1, rng, keep=5):
+    """A solid black block x0..x1, y0..y1 (inclusive) whose sides carry 1 and 2 px teeth (ink out) and pits (paper
+    in), a single px wide, as many teeth as pits of each depth, none within `keep` px of a corner or beside another."""
+    img[y0:y1 + 1, x0:x1 + 1] = 0
+    for lo, hi, side in ((x0, x1, "top"), (x0, x1, "bottom"), (y0, y1, "left"), (y0, y1, "right")):
+        at = rng.permutation(np.arange(lo + keep, hi - keep + 1, 3))[:12]
+        for t, d in zip(at, (1, 1, 1, 2, 2, 2, -1, -1, -1, -2, -2, -2)):
+            t = int(t)
+            if side == "top":
+                img[y0 - d:y0, t] = 0 if d > 0 else 1
+                if d < 0:
+                    img[y0:y0 - d, t] = 1
+            elif side == "bottom":
+                if d > 0:
+                    img[y1 + 1:y1 + 1 + d, t] = 0
+                else:
+                    img[y1 + d + 1:y1 + 1, t] = 1
+            elif side == "left":
+                if d > 0:
+                    img[t, x0 - d:x0] = 0
+                else:
+                    img[t, x0:x0 - d] = 1
+            else:
+                if d > 0:
+                    img[t, x1 + 1:x1 + 1 + d] = 0
+                else:
+                    img[t, x1 + d + 1:x1 + 1] = 1
+
+
+def test_teeth_along_a_side_are_straightened():
+    img = np.ones((80, 100), np.float32)
+    _toothed(img, 15, 15, 84, 64, np.random.default_rng(3))
+    crop = _at((0, 0, 100, 80), street=[(2, 2)], blocks=[(50, 40)])
+    ragged = handlabels.make_labels(img, crop, straighten=False)
+    rect = np.zeros((80, 100), bool)
+    rect[15:65, 15:85] = True
+    assert ((ragged.area == 1) != rect).sum() > 50                    # the teeth are there
+    lab = handlabels.make_labels(img, crop)
+    assert ((lab.area == 1) == rect).all()                             # the rectangle, its sides where they are
+    for sl in (np.s_[:, 20:80], np.s_[20:60, :]):                       # each side's edge px on one row or column
+        ys, xs = np.nonzero(lab.edge[sl] == 1)
+        v = ys if sl[0] == slice(None) else xs
+        lo, hi = v[v < v.mean()], v[v >= v.mean()]
+        assert np.ptp(lo) == 0 and np.ptp(hi) == 0
+    gained = int(((ragged.area == 0) & (lab.area == 1)).sum())
+    lost = int(((ragged.area == 1) & (lab.area == 0)).sum())
+    assert abs(gained - lost) < (gained + lost) / 3                    # not sitting inside the ragged edge
+
+
+def test_a_clean_rectangle_and_an_l_are_unchanged():
+    img = np.ones((80, 100), np.float32)
+    img[10:40, 10:50] = 0                                              # a rectangle
+    img[10:70, 60:90] = 0
+    img[10:40, 75:90] = 1                                              # an L
+    crop = _at((0, 0, 100, 80), street=[(2, 2)], blocks=[(20, 20), (65, 60)])
+    a, b = handlabels.make_labels(img, crop, straighten=False), handlabels.make_labels(img, crop)
+    assert (a.area == b.area).all() and (a.edge == b.edge).all()
+
+
+def _block_with_alleys():
+    """A solid black block (x 10..89, y 10..69) with two dead ends up from its bottom side, 40 px deep: one 4 px wide
+    (x 30..33), one 3 px wide (x 60..62)."""
+    img = np.ones((80, 100), np.float32)
+    img[10:70, 10:90] = 0
+    img[30:70, 30:34] = 1
+    img[30:70, 60:63] = 1
+    return img
+
+
+def test_alleys_survive_straightening():
+    img = _block_with_alleys()
+    crop = _at((0, 0, 100, 80), street=[(2, 2)], blocks=[(15, 40)])
+    a, b = handlabels.make_labels(img, crop, straighten=False), handlabels.make_labels(img, crop)
+    assert (b.street[30:70, 30:34] == 1).all() and (b.street[30:70, 60:63] == 1).all()     # every alley px
+    assert (a.area == b.area).all()                                    # and the walls where they were, to the px
+
+
+def test_a_bite_is_not_filled():
+    img = np.ones((80, 100), np.float32)
+    img[10:70, 10:90] = 0
+    img[10:17, 40:48] = 1                 # a bite 8 px wide, 7 deep, in the top side: this is no bite filler
+    crop = _at((0, 0, 100, 80), street=[(2, 2)], blocks=[(50, 40)])
+    assert (handlabels.make_labels(img, crop).street[10:17, 40:48] == 1).all()
+
+
+def test_straightening_takes_nothing_from_another_area_or_a_barrier():
+    rng = np.random.default_rng(5)
+    img = np.ones((80, 100), np.float32)
+    img[10:70, 10:45] = 0
+    img[10:70, 49:90] = 0                 # two blocks 3 px apart (x 46..48), their facing sides ragged by 1 px
+    for y in range(15, 65):
+        if rng.random() < 0.4:
+            img[y, 45] = 0
+        if rng.random() < 0.4:
+            img[y, 48] = 0
+    stroke = [(30, 72), (60, 72)]
+    crop = _at((0, 0, 100, 80), street=[(2, 2)], blocks=[(20, 40), (70, 40)], strokes=[stroke])
+    a, b = handlabels.make_labels(img, crop, straighten=False), handlabels.make_labels(img, crop)
+    assert ((b.street[10:70, 45:49] == 1).sum(axis=1) >= 1).all()      # the street between keeps a px on every row
+    assert not ((a.area > 0) & (b.area > 0) & (a.area != b.area)).any()
+    assert (b.street[a.street == 255] == 255).all() and (a.street[b.street == 255] == 255).all()
+
+
+def test_a_curved_side_moves_no_further_than_the_setting():
+    img = np.ones((80, 80), np.float32)
+    yy, xx = np.mgrid[:80, :80]
+    img[(yy - 40) ** 2 + (xx - 40) ** 2 <= 25 ** 2] = 0
+    crop = _at((0, 0, 80, 80), street=[(2, 2)], blocks=[(40, 40)])
+    a, b = handlabels.make_labels(img, crop, straighten=False), handlabels.make_labels(img, crop)
+    changed = (a.area == 1) != (b.area == 1)
+    assert changed.any()
+    inside = a.area == 1
+    d = handlabels.ndimage.distance_transform_edt(~(inside ^ handlabels.ndimage.binary_erosion(inside)))
+    assert d[changed].max() <= handlabels.STRAIGHT + 1

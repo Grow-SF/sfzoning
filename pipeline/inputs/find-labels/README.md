@@ -100,16 +100,25 @@ In this order:
    **area**, numbered in the order its first seed appears in the file (`blocks`, then `open`), of the seed's kind
    (`block` or `open`). Two seeds in one island is an error: draw a stroke between them. A block or open seed the
    street reaches is an error: close the gap with a stroke. An island with no seed is street (lettering in the street).
-6. The **street** label: 1 street, 0 an area, 255 a barrier.
-7. The **edge** label: 1 on area px 8-adjacent to anything not the same area, and on stroke px; 255 (no label) on px
+6. **Sides are straightened.** The scan's ink edge is ragged: a block's side wobbles by a px or two, so the labels
+   have teeth and pits along every side. Each area in turn (in area-number order) has its outline replaced by the
+   fewest straight sides that stay within `STRAIGHT` (2 px) of it (`cv2.approxPolyDP`, on the outline traced on the
+   mask enlarged 4 times so that a straight side keeps its place to the px and a concave corner is not cut); its
+   holes are straightened the same way. The straightened shape takes only px that are street now (never another
+   area's, a stroke's or a limit's); px it leaves out become street. `STRAIGHT` is a tool setting, checked by eye on
+   the pictures. What it cannot do: lettering that touches a block still counts as the block; a dent or spur deeper
+   than 2 px stays, so the cell-sized bites on cross-hatched blocks (a cell the street reached through a hole in the
+   outline) stay street, and a curved side may be flattened by up to 2 px.
+7. The **street** label: 1 street, 0 an area, 255 a barrier.
+8. The **edge** label: 1 on area px 8-adjacent to anything not the same area, and on stroke px; 255 (no label) on px
    8-adjacent to a limit, on limit px, and on the crop's outermost rows and columns; 0 elsewhere.
-8. **Warnings** list each island with no seed that is larger than the smallest seeded one ("possible missed block at
+9. **Warnings** list each island with no seed that is larger than the smallest seeded one ("possible missed block at
    x, y", page px, a point well inside it), and then always the five largest islands with no seed, whatever was seeded
    ("unseeded island of N px at x, y: a block left unseeded is labelled street").
 
-The 3 px barriers and openings, the 4-connected street, the 8-connected islands and the 2 px an outline's corner may
-lie past the box belong to this drawing aid, which is checked by eye on its picture. Nothing like it runs when a sheet
-is read.
+The 3 px barriers and openings, the 4-connected street, the 8-connected islands, `STRAIGHT` and the 2 px an outline's
+corner may lie past the box belong to this drawing aid, which is checked by eye on its picture. Nothing like it runs
+when a sheet is read.
 
 ## Reading the maps
 

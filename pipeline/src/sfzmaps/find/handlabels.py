@@ -3,15 +3,16 @@ under the test and choosing crops.
 
 A crop file is inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json (the format and the reading of the
 maps: inputs/find-labels/README.md).  It is drawn one of two ways:
-- seeds and strokes (for maps whose streets are open paper): `make_labels` turns them into per-px labels by eight
+- seeds and strokes (for maps whose streets are open paper): `make_labels` turns them into per-px labels by nine
   rules: paper by Otsu's threshold, openings as paper (where the map's owner has said a street runs through printed
   ink), strokes and limits as barriers, street as the paper 4-connected to a street seed, areas as the 8-connected
-  islands holding a block or open seed;
+  islands holding a block or open seed, and each area's ragged sides straightened to within STRAIGHT px
+  (`straighten_areas`);
 - outlines (for maps where heavy lines and letters join the blocks): each typed polygon is an area, the rest street.
   Outline crops are for scoring only (`choose` and `test`): a corner typed by eye is a px or two off the printed line.
 This is a drawing aid for hand labels only, checked by eye on its picture (`look.crop`): its 3 px barrier and opening
-width, its 4-connected street fill and 8-connected islands, and the 2 px an outline's corner may lie outside the box
-are parts of the tool, and nothing like it runs when a sheet is read.
+width, its 4-connected street fill and 8-connected islands, STRAIGHT, and the 2 px an outline's corner may lie
+outside the box are parts of the tool, and nothing like it runs when a sheet is read.
 
 `reserved` is the ground under every `choose` and `test` crop, on any sheet's page, which training leaves out.
 
@@ -43,6 +44,10 @@ KEYS = {"box", "notes", "drawn_by", *SEED_MARKS, *OUTLINE_MARKS}
 BARRIER = 3                         # tool setting: a stroke's, limit's or opening's width, px
 OUTSIDE = 2                         # tool setting: how far an outline's corner may lie outside the box, px (a block
                                     # cut by the crop's side is typed with corners on or just past the box's edge)
+STRAIGHT = 2.0                      # tool setting: how far a straightened side may lie from the ragged edge it
+                                    # replaces, px
+TRACE = 4                           # engineering setting: an area's outline is traced on its mask enlarged this many
+                                    # times (nearest neighbour), so a concave corner is cut by at most 1/TRACE px
 LARGEST = 5                         # tool setting: how many of the largest unseeded islands are always warned of
 RING_STEP = 8                       # engineering setting: px between the points of a crop's box sent to another page
 log = logging.getLogger(__name__)
@@ -212,15 +217,15 @@ def _no_edge_on_the_crop_side(edge: np.ndarray) -> None:
     edge[:, [0, -1]] = NONE
 
 
-def make_labels(lum_crop: np.ndarray, crop: Crop) -> CropLabels:
+def make_labels(lum_crop: np.ndarray, crop: Crop, straighten: bool = True) -> CropLabels:
     """The crop's labels from its marks (the module's rules, as inputs/find-labels/README.md states them): an outline
-    crop's by `outline_labels`, a seed crop's by `seed_labels`.  ValueError naming the file if `lum_crop` is not the
-    box's size."""
+    crop's by `outline_labels`, a seed crop's by `seed_labels` (`straighten`: see there).  ValueError naming the file
+    if `lum_crop` is not the box's size."""
     lum = np.asarray(lum_crop, np.float32)
     w, h = crop.box[2:]
     if lum.shape != (h, w):
         raise ValueError(f"{crop.path}: the crop is {lum.shape}, its box {w} x {h}")
-    return outline_labels(crop) if crop.outlined else seed_labels(lum, crop)
+    return outline_labels(crop) if crop.outlined else seed_labels(lum, crop, straighten)
 
 
 def outline_labels(crop: Crop) -> CropLabels:
@@ -258,8 +263,52 @@ def _deepest(islands: np.ndarray, i: int, depth: np.ndarray) -> tuple[int, int]:
     return int(xx), int(yy)
 
 
-def seed_labels(lum: np.ndarray, crop: Crop) -> CropLabels:
-    """A seed crop's labels by the eight rules.  ValueError naming the file and the seed for a seed off the crop, on a
+def _polygon_mask(mask: np.ndarray, eps: float) -> np.ndarray:
+    """The outer contour of `mask` (one 8-connected piece) simplified with `cv2.approxPolyDP` to within `eps` px and
+    filled.  The outline is traced on the mask enlarged TRACE times (nearest neighbour) with `eps` scaled the same, and
+    the filled polygon brought back to whole px by taking each px more than half of whose enlarged px are filled: so
+    a straight side stays where it is to the px and a concave corner is not cut (tracing px centres cuts it
+    diagonally, which slants a narrow street's wall across it)."""
+    big = np.repeat(np.repeat(mask.astype(np.uint8), TRACE, axis=0), TRACE, axis=1)
+    contours, _ = cv2.findContours(big, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    filled = np.zeros(big.shape, np.uint8)
+    cv2.fillPoly(filled, [cv2.approxPolyDP(c, eps * TRACE, True) for c in contours], 1)
+    h, w = mask.shape
+    cover = filled.reshape(h, TRACE, w, TRACE).sum(axis=(1, 3))
+    return cover * 2 > TRACE * TRACE
+
+
+def straighten_areas(area: np.ndarray, free: np.ndarray, eps: float = STRAIGHT) -> np.ndarray:
+    """`area` with each area's sides straightened, in area-number order: its outline simplified to within `eps` px
+    (`_polygon_mask`), less each of its holes simplified the same way.  The straightened shape adds only `free` px
+    (street-labelled: flooded street or an unseeded island) not given to an earlier area; px it leaves out become
+    street."""
+    area = area.copy()
+    taken = np.zeros(area.shape, bool)
+    pad = int(np.ceil(eps)) + 2
+    h, w = area.shape
+    for k, sl in enumerate(ndimage.find_objects(area), start=1):
+        if sl is None:
+            continue
+        ys = slice(max(0, sl[0].start - pad), min(h, sl[0].stop + pad))
+        xs = slice(max(0, sl[1].start - pad), min(w, sl[1].stop + pad))
+        mask = np.pad(area[ys, xs] == k, pad)
+        shape = _polygon_mask(mask, eps)
+        holes, n = ndimage.label(ndimage.binary_fill_holes(mask) & ~mask, FOUR)
+        for i in range(1, n + 1):
+            shape &= ~_polygon_mask(holes == i, eps)
+        shape = shape[pad:-pad, pad:-pad]
+        mine = area[ys, xs] == k
+        area[ys, xs][mine & ~shape] = 0
+        add = shape & ~mine & free[ys, xs] & ~taken[ys, xs] & (area[ys, xs] == 0)
+        area[ys, xs][add] = k
+        taken[ys, xs] |= area[ys, xs] == k
+    return area
+
+
+def seed_labels(lum: np.ndarray, crop: Crop, straighten: bool = True) -> CropLabels:
+    """A seed crop's labels by the nine rules (`straighten` False: without rule 6, `straighten_areas`: the areas as
+    the fill made them).  ValueError naming the file and the seed for a seed off the crop, on a
     stroke or limit, a street seed not on paper, a block or open seed the street reaches, and two seeds in one
     island.  Warnings: each unseeded island larger than the smallest seeded one, then the LARGEST largest unseeded
     islands whatever was seeded (page px of a px well inside each)."""
@@ -311,6 +360,8 @@ def seed_labels(lum: np.ndarray, crop: Crop) -> CropLabels:
             x, y = _deepest(islands, i, depth)
             warnings.append(f"unseeded island of {int(sizes[i])} px at {x + x0}, {y + y0}: a block left unseeded is "
                             f"labelled street")
+    if straighten:
+        area = straighten_areas(area, (area == 0) & ~barrier)
     label = np.where(barrier, NONE, np.where(area > 0, AREA, STREET)).astype(np.uint8)
     edge = _edges(area)
     edge[stroke] = 1
