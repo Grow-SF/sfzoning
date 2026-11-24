@@ -12,13 +12,24 @@ Street only between blocks (`street_between`, on the grid, before anything is re
 its street label only where it lies between blocks: going straight away from its nearest block px, the ray reaches a
 block px before the grid ends.  Anywhere else it gets no label (255, weight 0), so it carries no "no block edge"
 statement either: nothing is known about what is printed there (the beach and the ocean beyond the last blocks, open
-land past a block's outer side).  No distance, width or size decides it.  "Reaches" is numerics only: the ray is
-sampled one grid step apart near blocks, and further apart only as far as the distance to the nearest block allows
-(no point between two samples can fall on a block px), and it reaches a block when a sample falls on a block px.
-What the rule cannot do, and does not guess at: a street with lots on one side only (a road along the shore) gets no
-label; a lot-free expanse enclosed by blocks on every side (a plaza, or a park that has no lot) is still called street;
-and at the closed end of a notch cut into a block, the px whose nearest block px is the end look out of the notch's
-mouth and get no label.  Where the label stays, it and its weight are exactly as before; block px and the block-edge
+land past a block's outer side).  No distance, width or size decides it.  "Reaches" is numerics only: the ray reaches
+a block when one of its samples falls on a block px.  Far from blocks the samples are the distance to the nearest
+block less root two apart, and then no point between two samples can fall on a block px; near a block they are held
+one grid step apart, and then a ray can graze a single corner px of a block between samples, or slip between two
+block px that touch only at a corner, without a sample falling on either.  That miss only ever takes a label away
+(measured against a dense reference on random grids: 36 of 59,694 px differed, all towards "no label").
+What the rule cannot do, and does not guess at:
+- a street with lots on one side only (a road along the shore) gets no label;
+- a lot-free expanse enclosed by blocks on every side (a plaza, or a park that has no lot) is still called street;
+- where a px's ray runs lengthwise down a street (the square of a T-junction under the stem's mouth, or a crossing
+  whose two halves are offset), the px is called street only if some block closes that street before the grid ends;
+  where the street runs off the edge of the lots with nothing beyond, that patch gets no label.  On the real sheets
+  this happens at the city's edge only: 2000 zoning sheet 7, height sheet 7 and 1980-1990 sheet 7 lost no street
+  label at all; the labels lost are at the ocean (zoning sheet 5) and the county line (zoning sheet 11);
+- the open inner corner of an L-shaped block gets no label (every ray from it runs alongside the other arm, out into
+  the open); a notch cut into a block is street between its sides, but at its closed end, where nothing lies beyond
+  the mouth, the px whose nearest block px is the end get no label.
+Where the label stays, it and its weight are exactly as before; block px and the block-edge
 cuts (`find.cuts`, from the blocks alone) are not touched: a block's side facing the ocean still has its cuts.
 
 A sheet's labels (`sheet_labels`): the street-or-not labels read onto its page, the px said to carry no block edge, and
@@ -87,9 +98,11 @@ def between_blocks(block: np.ndarray, which: np.ndarray | None = None) -> np.nda
     """Bool (h, w): the px of `which` (None: every px off `block`) that lie between blocks: going straight away from
     the px's nearest block px, the ray reaches a block px before the grid ends (see the module).  Each ray starts at its
     px and is sampled at distances t = 0, t1, ...; a sample at q looks at the px r nearest q (rounded) and its distance
-    D to the nearest block px, and the next sample is max(1, D - sqrt 2) further on: no point before it can round to a
-    block px, so no block is passed between samples (numerics, not a setting).  A block px a sample falls on is
-    reached; a sample off the grid ends the ray unreached.  With no block on the grid, no px lies between blocks."""
+    D to the nearest block px, and the next sample is max(1, D - sqrt 2) further on (numerics, not a setting).  While
+    the step is D - sqrt 2, no point before the next sample can round to a block px; where it is held at one grid step
+    (D under 1 + sqrt 2, near a block), the ray can graze a single corner px of a block between samples, or slip
+    between two block px touching only at a corner, and miss them (only ever taking a label away).  A block px a
+    sample falls on is reached; a sample off the grid ends the ray unreached.  With no block on the grid, no px lies between blocks."""
     block = np.asarray(block, bool)
     h, w = block.shape
     which = ~block if which is None else np.asarray(which, bool) & ~block
