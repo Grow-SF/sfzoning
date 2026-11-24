@@ -215,8 +215,8 @@ def test_same_seed_same_bits_cpu():
     assert a.curve == b.curve and a.step == 5
 
 
-def test_the_kept_step_is_the_best_by_the_callback():
-    values = iter([0.2, 0.9, 0.9, 0.1])
+def test_the_last_step_is_kept_whatever_the_choosing_score():
+    values = iter([0.9, 0.6, 0.3, 0.1])                          # the choosing score falls: step 1 scores highest
     seen = {}
 
     def score(step, state):
@@ -224,9 +224,10 @@ def test_the_kept_step_is_the_best_by_the_callback():
         return next(values)
     fitted = train.fit(_fit_items(), train.Recipe(steps=4, every=1, **SMALL), "cpu", on_checkpoint=score)
     assert sorted(seen) == [1, 2, 3, 4]
-    assert fitted.step == 2
-    assert all(torch.equal(fitted.state_dict[k], seen[2][k]) for k in seen[2])
-    assert not all(torch.equal(seen[2][k], seen[3][k]) for k in seen[2])
+    assert fitted.step == 4
+    assert all(torch.equal(fitted.state_dict[k], seen[4][k]) for k in seen[4])
+    assert not all(torch.equal(seen[1][k], seen[4][k]) for k in seen[1])
+    assert [r["chosen_by"] for r in fitted.curve] == [0.9, 0.6, 0.3, 0.1]       # every checkpoint's score, traced
 
 
 def _drawn(recipe, seed=7):

@@ -288,9 +288,9 @@ def test_a_sheet_whose_placement_fails_the_warps_check_gives_no_size(tmp_path, m
     f = tmp_path / "label_sources.csv"
     f.write_text("series,era,lots\na,hatched-grey,\nb,lined-grey,\nd,lined-grey,\n")
     monkeypatch.setattr(pages, "SOURCES", f)
-    found = {"a": ["a1"], "b": ["b1", "b2"], "d": ["d1"]}
+    found = {"a": ["a1", "a2"], "b": ["b1", "b2"], "d": ["d1"]}
     monkeypatch.setattr(pages, "sheets", lambda series=None: [(series, h) for h in found[series]])
-    scale = {("a", "a1"): 2.0, ("b", "b1"): 3.0, ("b", "b2"): 12.0, ("d", "d1"): 5.0}
+    scale = {("a", "a1"): 2.0, ("a", "a2"): math.nan, ("b", "b1"): 3.0, ("b", "b2"): 12.0, ("d", "d1"): 5.0}
     monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(scale[sid]))
     monkeypatch.setattr(lotlabels, "page_shape", lambda sid: (300, 200))
     verdict = {("b", "b2"): {"passed": False, "reason": "misplaced"},       # the warp's own check
@@ -298,7 +298,8 @@ def test_a_sheet_whose_placement_fails_the_warps_check_gives_no_size(tmp_path, m
     monkeypatch.setattr(lotlabels, "placement_check", lambda sid: verdict.get(sid, {"passed": True, "reason": None}))
     sizes, left_out, failed = data.print_sizes()
     assert sizes == {"a": [pytest.approx(2.0)], "b": [pytest.approx(3.0)]}
-    assert left_out == ["d"] and failed == {"b/b2": "misplaced", "d/d1": "too_few_matches"}
+    assert left_out == ["d"] and failed == {"a/a2": "measured size not finite (nan ft per px)", "b/b2": "misplaced",
+                                            "d/d1": "too_few_matches"}
     tiles = train.Tiles([_crop_item()], RECIPE, sizes)
     drawn = Counter(tiles.target() for _ in range(400))
     assert set(drawn) == {("a", 2.0), ("b", 3.0)}                         # b only at b1's size; d never

@@ -67,7 +67,8 @@ every 50 px, plus the whole box at 2x, under `data/find/look/ruled/<series>__<sh
 ## The three sets
 
 - **`test`**: drawn first; used for nothing but the pictures and counts shown to the owner.
-- **`choose`**: used only to choose the training step kept and the one setting of the area step.
+- **`choose`**: used only to fit the one setting of the area step (the trainer keeps its last step; it logs the
+  choosing crops' score at each checkpoint as a held-out trace, which chooses nothing).
 - **`train`**: the only hand labels the model learns from; added to wherever the pictures show misses.
 
 The ground under every `test` and `choose` crop is left out of all training, in every year's scan of that ground

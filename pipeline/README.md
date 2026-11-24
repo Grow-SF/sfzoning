@@ -1129,8 +1129,8 @@ reads it yet, and `sfzmaps build` doesn't run it. Everything is $0 (no API calls
 | `sfzmaps find labels --series S [--sheet H ...] [--placement warp\|work] [--look]` | makes a series' labels from its lots, and each sheet's street labels and block-edge cut statements through its placement |
 | `sfzmaps find crops [--set train\|choose\|test] [--look]` | labels every hand crop and prints its areas and warnings, then any choosing crop lying on a test crop's ground; exits 1 on a bad crop or an overlap |
 | `sfzmaps find ruled --sheet S/H --box x0,y0,w,h` | draws close-ups with page-pixel rulers, to mark a crop from |
-| `sfzmaps find train --run R --sheet S/H ... [--no-noise] [--unbroken]` | trains on the named lot-labelled sheets and every `train` crop; the step kept is the one whose closed areas find the most blocks on the `choose` crops |
-| `sfzmaps find count --run R` | reads every `test` crop with the run's kept model and counts blocks found, held whole, joined, cut up or lost, street and block ground, and block-boundary distances in feet, per crop, per era and pooled |
+| `sfzmaps find train --run R --sheet S/H ... [--no-noise] [--unbroken] [--no-resize]` | trains on the named lot-labelled sheets and every `train` crop, each tile shown at a print size measured from the sheets the finder is used on; keeps the last step (the `choose` crops' score at each checkpoint is logged as a held-out trace and chooses nothing) |
+| `sfzmaps find count --run R` | reads every `test` crop with the run's kept model and counts blocks found, held whole, joined, cut up or lost, street and block ground, and block-boundary distances in feet both ways (answer key to model edge, model edge to answer key), per crop, per era and pooled |
 
 Inputs, in git: `inputs/find/label_sources.csv` (each series' era and the lots that label it) and the hand crops,
 `inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json` (how to draw them: `inputs/find-labels/README.md`).

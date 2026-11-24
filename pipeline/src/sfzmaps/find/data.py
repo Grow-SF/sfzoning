@@ -126,7 +126,8 @@ def print_sizes(which: str = "warp") -> tuple[dict[str, list[float]], list[str],
     ft per px over the whole page (`lotlabels.page_ft_per_px`) of each of its sheets (`pages.sheets`: duplicate scans
     left out) that has a placement `which` on disk that the warp's own check passes (`lotlabels.placement_check`; a
     sheet the warp recorded no verdict for was not judged misplaced and is kept).  Also the series with no such
-    sheet, left out, and the sheets left out for failing the check ("series/sheet" -> the warp's reason)."""
+    sheet, left out, and the sheets left out ("series/sheet" -> why): for failing the check (the warp's reason), or
+    for a measured size that is not finite."""
     sizes, left_out, failed = {}, [], {}
     for series in pages.sources():
         found = []
@@ -139,7 +140,11 @@ def print_sizes(which: str = "warp") -> tuple[dict[str, list[float]], list[str],
             if check is not None and check.get("passed") is False:
                 failed[f"{sid[0]}/{sid[1]}"] = check.get("reason")
                 continue
-            found.append(lotlabels.page_ft_per_px(tr, lotlabels.page_shape(sid)))
+            v = lotlabels.page_ft_per_px(tr, lotlabels.page_shape(sid))
+            if not math.isfinite(v):
+                failed[f"{sid[0]}/{sid[1]}"] = f"measured size not finite ({v} ft per px)"
+                continue
+            found.append(v)
         if found:
             sizes[series] = found
         else:

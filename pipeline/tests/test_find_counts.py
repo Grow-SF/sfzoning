@@ -164,6 +164,49 @@ def test_boundary_feet_pool_every_px_of_an_era_together():
     assert got["median"] == pytest.approx(3.0) and got["p90"] == pytest.approx(4.0)       # the medians' mean: 1.75
 
 
+def test_model_edge_feet_is_the_other_half():
+    shape = (40, 20)
+    truth = _edge_truth(shape, (10,))                       # the answer key: one boundary along row 10
+    on = np.zeros(shape, np.float32)
+    on[10] = 0.9                                            # the model's edge exactly on it
+    got = counts.model_edge_feet(on, truth, 2.0)
+    assert (got["px"], got["median"], got["p90"], got["p99"]) == (20, 0.0, 0.0, 0.0)
+    assert counts.boundary_feet(on, truth, 2.0)["p99"] == 0.0
+    stray = on.copy()
+    stray[30] = 0.9                                         # plus a stray straight line 20 px (40 ft) away
+    got = counts.model_edge_feet(stray, truth, 2.0)
+    assert got["px"] == 40 and got["median"] == pytest.approx(20.0) and got["p90"] == pytest.approx(40.0)
+    assert got["p99"] == pytest.approx(40.0)
+    assert counts.boundary_feet(stray, truth, 2.0) == counts.boundary_feet(on, truth, 2.0)     # the first half is blind
+    band = np.zeros(shape, np.float32)
+    band[4:17] = 0.9                                        # a thick band called edge round the thin key line
+    first, other = counts.boundary_feet(band, truth, 2.0), counts.model_edge_feet(band, truth, 2.0)
+    assert first["p99"] == 0.0
+    assert other["median"] == pytest.approx(6.0) and other["p99"] == pytest.approx(12.0)
+    # the ground without a label is not counted: a model edge there is no claim about the answer key
+    unlabelled = _edge_truth(shape, (10,))
+    unlabelled.edge[25:] = handlabels.NONE
+    assert counts.model_edge_feet(stray, unlabelled, 2.0)["p99"] == 0.0
+
+
+def test_model_edge_feet_says_plainly_when_there_is_nothing_to_measure():
+    shape = (30, 10)
+    truth, empty = _edge_truth(shape, (5,)), _edge_truth(shape, ())
+    none_called = counts.model_edge_feet(np.full(shape, 0.4, np.float32), truth, 1.0)
+    assert none_called == {"px": 0, "no_model_edge": True, "no_answer_key_boundary": False, "median": None,
+                           "p90": None, "p99": None}
+    chance = np.zeros(shape, np.float32)
+    chance[7] = 0.9
+    no_key = counts.model_edge_feet(chance, empty, 1.0)
+    assert no_key == {"px": 10, "no_model_edge": False, "no_answer_key_boundary": True, "median": None, "p90": None,
+                      "p99": None}
+    ds = [counts.model_edge_distances(chance, truth, 1.0), counts.model_edge_distances(chance, empty, 1.0),
+          counts.model_edge_distances(np.zeros(shape, np.float32), truth, 1.0)]
+    assert ds[1] is None and ds[2] is None
+    got = counts.model_edge_feet_pooled(ds, [10, 10, 0])
+    assert (got["px"], got["px_measured"], got["crops_not_measured"], got["median"]) == (20, 10, 2, 2.0)
+
+
 def test_a_block_split_60_40_is_found_but_not_whole():
     shape = (20, 30)
     truth = _truth({1: (slice(5, 15), slice(5, 15)), 2: (slice(5, 15), slice(18, 28))}, shape)

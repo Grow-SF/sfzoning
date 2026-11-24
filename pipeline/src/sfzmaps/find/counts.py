@@ -16,12 +16,15 @@ loses, holds whole, and where it puts the street and the block boundary.
   street (its street chance over one half, the more likely answer).
 - `boundary_feet`: from each hand block-boundary px, the distance in feet to the nearest px the read calls a block
   edge (its block-edge chance over one half): the median, 90th and 99th percentile.
+- `model_edge_feet`: the other half: from each px the read calls a block edge on the crop's labelled ground, the
+  distance in feet to the nearest answer-key boundary px; the median, 90th and 99th percentile.
 - `edge_feet`: how far, in feet, the hand block-edge px of found blocks lie from the nearest side of a found area.
 
-`chooser` scores a checkpoint by the `choose` crops' `found_share` at their fitted depth (the trainer keeps the best);
-`count` reads every `test` crop with a run's kept model at the depth fitted on the `choose` crops.  Both refuse a
-choosing crop lying on a test crop's ground (`handlabels.refuse_choose_on_test`).  A crop is read with model.REACH px
-of scan round it where the page allows (`data.grown`) and scored on its own box only.
+`chooser` scores a checkpoint by the `choose` crops' `found_share` at their fitted depth, for the trainer's log (the
+held-out trace; the trainer keeps the last step whatever it scores); `count` reads every `test` crop with a run's
+kept model at the depth fitted on the `choose` crops (the choosing crops' one use in a count).  Both refuse a choosing
+crop lying on a test crop's ground (`handlabels.refuse_choose_on_test`).  A crop is read with model.REACH px of scan
+round it where the page allows (`data.grown`) and scored on its own box only.
 
 Reads the scans and frame cuts, the crop files, every held-out crop's sheet placement (for the choosing crops'
 ground), and for `count` each test crop's sheet placement (its ft per px, for scoring only).  `count` writes
@@ -148,7 +151,7 @@ def found_share(dicts_by_era: dict[str, list[dict]]) -> float:
     """The mean over eras of found / blocks (`era_shares`).  ValueError when no era has a block."""
     shares = era_shares(dicts_by_era)
     if not shares:
-        raise ValueError("no hand block in any crop: nothing to find")
+        raise ValueError("no answer-key block in any crop: nothing to find")
     return float(np.mean(list(shares.values())))
 
 
@@ -219,22 +222,60 @@ def _percentiles(d: np.ndarray) -> dict:
 
 
 def boundary_feet(edge_chance: np.ndarray, truth: CropLabels, ft_per_px: float) -> dict:
-    """The hand block-boundary px (edge 1: `px`) and the median, 90th and 99th percentile (`median`, `p90`, `p99`, ft)
-    of their `boundary_distances`.  When the read calls no px an edge, `no_model_edge` is True and the percentiles are
-    None (no distance to give); likewise None for a crop with no hand boundary px."""
+    """One half of the boundary measure, answer key to model: the answer key's block-boundary px (edge 1: `px`) and
+    the median, 90th and 99th percentile (`median`, `p90`, `p99`, ft) of their `boundary_distances`.  When the read
+    calls no px an edge, `no_model_edge` is True and the percentiles are None (no distance to give); likewise None for
+    a crop with no answer-key boundary px.  It does not see a block edge the model draws where the answer key has
+    none; the other half, `model_edge_feet`, does."""
     d = boundary_distances(edge_chance, truth, ft_per_px)
     px = int((np.asarray(truth.edge) == 1).sum())
     return {"px": px, "no_model_edge": d is None, **_percentiles(np.zeros(0) if d is None else d)}
 
 
-def boundary_feet_pooled(distances: list[np.ndarray | None], px: list[int]) -> dict:
-    """`boundary_feet` of several crops together (`distances` each crop's `boundary_distances`, `px` its hand boundary
-    px): `px` all of them, `px_measured` those on crops where the read calls an edge, `crops_with_no_model_edge`, and
-    the percentiles over every measured px together."""
+def _pooled(distances: list[np.ndarray | None], px: list[int]) -> dict:
+    """Several crops' distances together: `px` all their px, `px_measured` those of the crops that could be measured
+    (distances not None), and the percentiles over every measured px together."""
     got = [d for d in distances if d is not None]
     d = np.concatenate(got) if got else np.zeros(0)
-    return {"px": int(sum(px)), "px_measured": int(len(d)),
-            "crops_with_no_model_edge": sum(d_ is None for d_ in distances), **_percentiles(d)}
+    return {"px": int(sum(px)), "px_measured": int(len(d)), **_percentiles(d)}
+
+
+def boundary_feet_pooled(distances: list[np.ndarray | None], px: list[int]) -> dict:
+    """`boundary_feet` of several crops together (`distances` each crop's `boundary_distances`, `px` its answer-key
+    boundary px): `px` all of them, `px_measured` those on crops where the read calls an edge,
+    `crops_with_no_model_edge`, and the percentiles over every measured px together."""
+    return {**_pooled(distances, px), "crops_with_no_model_edge": sum(d is None for d in distances)}
+
+
+def model_edge_distances(edge_chance: np.ndarray, truth: CropLabels, ft_per_px: float) -> np.ndarray | None:
+    """Float64: from each px the read calls a block edge (its block-edge chance over one half, the more likely
+    answer) on the crop's labelled ground (edge not 255), in row order, the distance in feet to the nearest answer-key
+    boundary px (edge 1); None when the answer key has no boundary px or the read calls no such px an edge."""
+    edge = np.asarray(truth.edge)
+    key = edge == 1
+    called = (np.asarray(edge_chance) > 0.5) & (edge != handlabels.NONE)
+    if not key.any() or not called.any():
+        return None
+    return ndimage.distance_transform_edt(~key)[called] * float(ft_per_px)
+
+
+def model_edge_feet(edge_chance: np.ndarray, truth: CropLabels, ft_per_px: float) -> dict:
+    """The other half of the boundary measure (`boundary_feet` is the first), model to answer key: the px the read
+    calls a block edge on the crop's labelled ground (`px`) and the median, 90th and 99th percentile (ft) of their
+    `model_edge_distances`.  `no_model_edge`: the read calls no such px an edge; `no_answer_key_boundary`: the answer
+    key has no boundary px; either way the percentiles are None (no distance to give)."""
+    edge = np.asarray(truth.edge)
+    px = int(((np.asarray(edge_chance) > 0.5) & (edge != handlabels.NONE)).sum())
+    d = model_edge_distances(edge_chance, truth, ft_per_px)
+    return {"px": px, "no_model_edge": px == 0, "no_answer_key_boundary": not (edge == 1).any(),
+            **_percentiles(np.zeros(0) if d is None else d)}
+
+
+def model_edge_feet_pooled(distances: list[np.ndarray | None], px: list[int]) -> dict:
+    """`model_edge_feet` of several crops together (`distances` each crop's `model_edge_distances`, `px` its model
+    edge px), as `boundary_feet_pooled`: `crops_not_measured` counts the crops with no model edge px or no answer-key
+    boundary px."""
+    return {**_pooled(distances, px), "crops_not_measured": sum(d is None for d in distances)}
 
 
 # --- the block edges --------------------------------------------------------------------------------------------------
@@ -327,10 +368,10 @@ def _only(crops: list[handlabels.Crop], set_: str) -> None:
 
 def chooser(crops: list[handlabels.Crop], device, test: list[handlabels.Crop] | None = None,
             placements=None) -> Callable[[int, dict], float]:
-    """A checkpoint's score for the trainer (`train.fit`'s on_checkpoint): every crop read with the checkpoint's
-    weights, and `fit_depth`'s share.  The crops are read from disk once, here.  ValueError when there is no crop, one
-    is not in the `choose` set, or one lies on the ground of a `test` crop (`test`, None: every test crop;
-    `handlabels.refuse_choose_on_test` with `placements`)."""
+    """A checkpoint's score for the trainer's log (`train.fit`'s on_checkpoint; it chooses nothing): every crop read
+    with the checkpoint's weights, and `fit_depth`'s share.  The crops are read from disk once, here.  ValueError
+    when there is no crop, one is not in the `choose` set, or one lies on the ground of a `test` crop (`test`, None:
+    every test crop; `handlabels.refuse_choose_on_test` with `placements`)."""
     _only(crops, "choose")
     handlabels.refuse_choose_on_test(crops, handlabels.crops(("test",)) if test is None else test, placements)
     ready = prepare(crops)
@@ -374,7 +415,7 @@ def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabe
     out = {"depth": depth, "depth_level": round(depth * read.LEVELS),
            "choose": {"found_share": share, "era_shares": era_shares(_by_era(at_depth, [p.era for p in ready])),
                       "crops": [data.crop_name(p.crop) for p in ready]}}
-    rows, distances = [], []
+    rows, distances, model_distances = [], [], []
     for c in test:
         p = prepare([c])[0]
         sid = (c.series, c.sheet)
@@ -389,6 +430,8 @@ def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabe
         d = boundary_distances(chances[model.EDGE], p.truth, scale)
         distances.append(d)
         bf = boundary_feet(chances[model.EDGE], p.truth, scale)
+        model_distances.append(model_edge_distances(chances[model.EDGE], p.truth, scale))
+        mf = model_edge_feet(chances[model.EDGE], p.truth, scale)
         held = whole(found, p.truth)
         picture = Path("look") / "test" / f"{name}.png"
         (folder / picture).parent.mkdir(parents=True, exist_ok=True)
@@ -398,7 +441,7 @@ def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabe
                  f"joined {got['joined']}, cut up {got['cut_up']}, lost {got['lost']}; extra areas {got['extra']}")
         cv2.imwrite(str(folder / picture), look.read_picture(p.lum[p.inner], chances, found, p.truth, status, title))
         rows.append({"name": data.crop_name(c), "era": p.era, "counts": got, "whole": held,
-                     "ground": ground(chances[model.STREET], p.truth), "boundary_feet": bf,
+                     "ground": ground(chances[model.STREET], p.truth), "boundary_feet": bf, "model_edge_feet": mf,
                      "edge_feet": edge_feet(found, p.truth, scale), "ft_per_px": scale, "read": str(stored),
                      "picture": str(picture)})
         log.info("%s: %s", data.crop_name(c), got)
@@ -408,6 +451,9 @@ def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabe
     whole_by_era = _by_era([r["whole"] for r in rows], eras)
     feet_by_era = _by_era([(d, r["boundary_feet"]["px"]) for d, r in zip(distances, rows)], eras)
     feet = {e: boundary_feet_pooled([d for d, _ in v], [n for _, n in v]) for e, v in sorted(feet_by_era.items())}
+    model_by_era = _by_era([(d, r["model_edge_feet"]["px"]) for d, r in zip(model_distances, rows)], eras)
+    model_feet = {e: model_edge_feet_pooled([d for d, _ in v], [n for _, n in v])
+                  for e, v in sorted(model_by_era.items())}
     out["test"] = {"found_share": found_share(by_era), "era_shares": era_shares(by_era),
                    "eras": {e: _summed(d) for e, d in sorted(by_era.items())},
                    "pooled": _summed([r["counts"] for r in rows]),
@@ -418,5 +464,8 @@ def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabe
                    "boundary_feet": {"eras": feet,
                                      "pooled": boundary_feet_pooled(distances, [r["boundary_feet"]["px"]
                                                                                for r in rows])},
+                   "model_edge_feet": {"eras": model_feet,
+                                       "pooled": model_edge_feet_pooled(model_distances, [r["model_edge_feet"]["px"]
+                                                                                          for r in rows])},
                    "crops": rows}
     return out

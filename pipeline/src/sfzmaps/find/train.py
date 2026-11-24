@@ -20,8 +20,9 @@ add the branch's unbroken-line terms (`hatchnet.topo`, clDice: 1 - recall and 1 
 chance and the hand block-edge label.  The loss is taken on the CPU, where its sums (`index_add`) are deterministic
 (as the branch does).
 
-Every `Recipe.every` steps (and at the last) the weights are a checkpoint: `on_checkpoint(step, state_dict)` scores it
-and the highest is kept, the earliest of a tie; with no callback, the last.
+The weights kept are the last step's.  Every `Recipe.every` steps (and at the last) `on_checkpoint(step, state_dict)`
+scores the weights (the choosing crops' share of blocks found, `counts.chooser`); the score goes into the curve as the
+run's held-out trace and chooses nothing.
 
 Deterministic: torch's generator and three numpy generators (the tiles; the noise, apart so that a run with noise and
 one without draw the same tiles; the print sizes, apart so that a run without resizing draws the tiles of before) are
@@ -88,9 +89,9 @@ class Recipe:
 
 @dataclass
 class Fitted:
-    """The weights kept (on the CPU), the step they are from, the curve (a row at the first step, every `every` steps
-    and the last), the device, the count of batches skipped for holding no statement and the factors the tiles were
-    shown at (`Tiles.factor_summary`; None without resizing)."""
+    """The weights kept (on the CPU: the last step's), their step, the curve (a row at the first step, every `every`
+    steps and the last), the device, the count of batches skipped for holding no statement and the factors the tiles
+    were shown at (`Tiles.factor_summary`; None without resizing)."""
     state_dict: dict
     step: int
     curve: list[dict]
@@ -372,7 +373,7 @@ def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None,
     opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=recipe.weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.steps,
                                                 pct_start=recipe.pct_start)
-    curve, skipped, best, best_value, last_row = [], 0, None, None, 0
+    curve, skipped, last_row = [], 0, 0
     sums = _zero()
     for step in range(1, recipe.steps + 1):
         batch = tiles.draw(rng, noise_rng)
@@ -410,20 +411,14 @@ def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None,
                 row["unbroken"] = sums["unbroken"] / sums["steps"] if sums["steps"] else math.nan
             sums = _zero()
             last_row = step
-            if checkpoint:
-                state = _state(net)
-                value = on_checkpoint(step, state) if on_checkpoint is not None else None
+            if checkpoint and on_checkpoint is not None:         # the held-out trace: it chooses nothing
+                value = on_checkpoint(step, _state(net))
                 if value is not None:
                     row["chosen_by"] = float(value)
-                if on_checkpoint is None or (value is not None and math.isfinite(value)
-                                             and (best_value is None or value > best_value)):
-                    best, best_value = (step, state), value
             curve.append(row)
             log.info("steps %d-%d: loss per statement %.4f (%.0f statements), %d skipped", row["first_step"], step,
                      row["loss_per_statement"], row["statements"], row["skipped"])
-    if best is None:                                 # no checkpoint scored a finite value: the last
-        best = (recipe.steps, _state(net))
-    return Fitted(best[1], best[0], curve, str(device), skipped, tiles.factor_summary())
+    return Fitted(_state(net), recipe.steps, curve, str(device), skipped, tiles.factor_summary())
 
 
 # --- the run's files --------------------------------------------------------------------------------------------------
