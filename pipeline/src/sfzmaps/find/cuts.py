@@ -77,16 +77,17 @@ def reach_px(sigma: float) -> int:
 class _GridPage:
     """Page px (x, y) of solver grid points (col, row) in a window of the grid, as the placement's `to_pixel` puts
     them: its uncorrected placement's px plus its correction there.  The uncorrected placement is smooth and is read
-    at every LATTICE grid px, bilinear between (within 0.003 px of to_pixel on the 2000 sheets); the correction can
-    change sharply between those points (by up to 7 px) and is added at each point exactly."""
+    at every LATTICE grid px (`grid_to_pixel`, to_pixel for a large batch on a page of `shape`), bilinear between
+    (within 0.003 px of to_pixel on the 2000 sheets); the correction can change sharply between those points (by up
+    to 7 px) and is added at each point exactly."""
 
-    def __init__(self, tr, r0: int, r1: int, c0: int, c1: int):
+    def __init__(self, tr, shape: tuple[int, int], r0: int, r1: int, c0: int, c1: int):
         self.correction = tr.correction
         base = tr if tr.correction is None else tr.uncorrected()
         self.cols = np.arange(c0 - LATTICE, c1 + 2 * LATTICE, LATTICE, dtype=float)
         self.rows = np.arange(r0 - LATTICE, r1 + 2 * LATTICE, LATTICE, dtype=float)
         cc, rr = np.meshgrid(self.cols, self.rows)
-        p = np.asarray(base.to_pixel(grid.to_map(np.c_[cc.ravel(), rr.ravel()])), float)
+        p = np.asarray(base.grid_to_pixel(grid.to_map(np.c_[cc.ravel(), rr.ravel()]), shape), float)
         self.nodes = p.reshape(rr.shape + (2,))
 
     def at(self, colrow: np.ndarray) -> np.ndarray:
@@ -102,7 +103,7 @@ class _GridPage:
 def _window(tr, keep: np.ndarray, grid_shape) -> tuple[tuple[int, int, int, int], _GridPage]:
     """The part of the grid the sheet's kept px reach (`hatching._slice`), and its page px."""
     r0, r1, c0, c1 = hatching._slice(tr, keep, grid_shape)
-    return (r0, r1, c0, c1), _GridPage(tr, r0, r1, c0, c1)
+    return (r0, r1, c0, c1), _GridPage(tr, keep.shape, r0, r1, c0, c1)
 
 
 def _pairs(a: np.ndarray, b: np.ndarray | None = None, *, test) -> tuple[np.ndarray, np.ndarray]:

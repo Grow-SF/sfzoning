@@ -58,3 +58,7 @@ class Flat:
     def to_pixel(self, world) -> np.ndarray:
         w = np.asarray(world, float).reshape(-1, 2)
         return np.c_[(w[:, 0] - grid.X0) / self.ft_per_px, (grid.Y1 - w[:, 1]) / self.ft_per_px]
+
+    def grid_to_pixel(self, world, page_shape) -> np.ndarray:
+        """`to_pixel` for a large batch, as SheetTransform.grid_to_pixel."""
+        return self.to_pixel(world)
