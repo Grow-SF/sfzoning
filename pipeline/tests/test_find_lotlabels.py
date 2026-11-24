@@ -9,6 +9,8 @@ import pytest
 from find_fixtures import EAST, ROWS, SHAPE, STREET, WEST, Flat, lines_world, lots_world
 from sfzmaps.find import lotlabels, pages
 from sfzmaps.solver import grid
+from sfzmaps.solver.hatchnet.data import NOT_STREET, UNKNOWN
+from sfzmaps.solver.hatchnet.data import STREET as ST
 
 CHECKED_IN = Path(__file__).parents[1] / "inputs" / "find" / "label_sources.csv"
 FT_PER_PX = 2.0                                     # two page px to a grid px each way
@@ -118,3 +120,94 @@ def test_a_label_file_made_before_gives_its_block_edge_cuts_only(tmp_path, monke
     assert list(c.px) == [3, 4, 5, 63, 64, 65, 66] and list(c.cut) == [0, 0, 0, 1, 1, 1, 1]
     assert np.array_equal(c.prior, np.linspace(0.1, 1, 10).astype(np.float32)[[0, 1, 2, 5, 6, 7, 8]])
     assert list(c.weight) == [1, 0] and list(c.inside) == [-1, -1]
+
+
+# --- street only between blocks ---------------------------------------------------------------------------------------
+
+def _ruled(block: np.ndarray):
+    """The rule applied to labels calling every px off `block` street (as the lots' labels did by open ground before),
+    with weights that vary px to px: (street, weight) before, (street, weight) after, and the px that lost the label."""
+    street = np.where(block, NOT_STREET, ST).astype(np.uint8)
+    weight = np.where(block, 1, 0.25 + 0.25 * (np.arange(block.size).reshape(block.shape) % 4)).astype(np.float16)
+    s, w, lost = lotlabels.street_between(street, weight, block)
+    assert (s[block] == NOT_STREET).all() and (w[block] == 1).all()                 # block px are untouched
+    kept = s == ST
+    assert (w[kept] == weight[kept]).all()                                          # kept street: its weight as it was
+    assert np.array_equal(lost, (street == ST) & (s == UNKNOWN)) and (w[lost] == 0).all()
+    assert not ((s == UNKNOWN) & ~lost).any()
+    return s, lost
+
+
+def _blocks(shape, *boxes) -> np.ndarray:
+    block = np.zeros(shape, bool)
+    for r0, r1, c0, c1 in boxes:
+        block[r0:r1, c0:c1] = True
+    return block
+
+
+@pytest.mark.parametrize("gap", [3, 400])
+def test_the_gap_between_two_facing_blocks_is_street_whatever_its_width(gap):
+    west, east = (20, 40), (40 + gap, 60 + gap)                     # the blocks' columns, rows 20-59
+    shape = (80, east[1] + 20)
+    s, lost = _ruled(_blocks(shape, (20, 60, *west), (20, 60, *east)))
+    assert (s[20:60, west[1]:east[0]] == ST).all()              # the gap between the faces
+    for beyond in (s[20:60, :west[0]], s[20:60, east[1]:]):         # beyond the outer faces, open to the grid's edge
+        assert (beyond == UNKNOWN).all()
+    for mouth in (s[:20, west[1]:east[0]], s[60:, west[1]:east[0]]):  # the gap's mouths beyond the blocks' faces
+        assert (mouth == UNKNOWN).all()
+    assert lost.sum() == (s == UNKNOWN).sum()
+
+
+def test_the_square_where_two_streets_cross_between_four_blocks_is_street():
+    a, b = (10, 40), (48, 78)                                      # the blocks' rows and columns: 30 px, streets 8 px
+    s, _ = _ruled(_blocks((88, 88), (*a, *a), (*a, *b), (*b, *a), (*b, *b)))
+    assert (s[40:48, 40:48] == ST).all()                        # the crossing
+    assert (s[10:40, 40:48] == ST).all() and (s[48:78, 40:48] == ST).all()      # the streets between
+    assert (s[40:48, 10:40] == ST).all() and (s[40:48, 48:78] == ST).all()
+    assert (s[:10] == UNKNOWN).all() and (s[78:] == UNKNOWN).all()  # round the outside: open to the grid's edge
+    assert (s[:, :10] == UNKNOWN).all() and (s[:, 78:] == UNKNOWN).all()
+
+
+def test_a_notch_cut_into_a_block_is_street_between_its_sides():
+    # a block 40 x 40 with a notch 8 px wide cut 30 px deep into it from the north (its sides columns 36-43)
+    block = _blocks((60, 80), (10, 50, 20, 60))
+    block[10:40, 36:44] = False
+    s, _ = _ruled(block)
+    rows, cols = np.mgrid[10:40, 36:44]
+    by_side = np.minimum(cols - 35, 44 - cols) < 40 - rows          # nearer a side of the notch than its end
+    assert (s[10:40, 36:44][by_side] == ST).all()
+    # the rule as it is: px whose nearest block px is the notch's end look out of its mouth, and get no label
+    assert (s[39, 38:42] == UNKNOWN).all()
+
+
+def test_a_strip_beside_a_single_block_has_no_label():
+    s, lost = _ruled(_blocks((60, 60), (20, 40, 20, 40)))
+    assert not (s == ST).any() and lost.sum() == 60 * 60 - 20 * 20
+
+
+def test_a_lot_free_square_enclosed_by_blocks_is_still_street():
+    # four blocks round a square (rows and columns 20-39), streets leaving it at its corners: the limit the rule admits
+    s, _ = _ruled(_blocks((60, 60), (10, 20, 14, 46), (40, 50, 14, 46), (24, 36, 10, 20), (24, 36, 40, 50)))
+    assert (s[20:40, 20:40] == ST).all()
+
+
+def test_no_block_on_the_grid_labels_no_street():
+    s, lost = _ruled(np.zeros((30, 40), bool))
+    assert (s == UNKNOWN).all() and lost.all()
+
+
+def test_the_labels_picture_tints_only_px_whose_label_counts():
+    from sfzmaps.find import look
+    lum = np.full((10, 12), 0.5, np.float32)
+    street = np.full((10, 12), UNKNOWN, np.uint8)
+    street[:, :4], street[:, 4:8] = ST, NOT_STREET
+    weight = np.ones((10, 12), np.float32)
+    weight[0, :] = 0                                    # a label that does not count: untinted
+    weight[:, 8:] = 0
+    img = look.beside(lum, street, weight, (1, 0, 11, 10), "t")
+    h = 10
+    left, right = img[-h:, :10], img[-h:, 10 + look.GAP:]
+    assert img.shape[1] == 2 * 10 + look.GAP and (left == 128).all()
+    assert (right[0] == 128).all() and (right[:, 7:] == 128).all()          # no label, or one that does not count
+    assert (right[1:, :3, 2] > right[1:, :3, 0]).all()                      # street: orange (more red than blue)
+    assert (right[1:, 3:7, 0] > right[1:, 3:7, 2]).all()                    # block: blue

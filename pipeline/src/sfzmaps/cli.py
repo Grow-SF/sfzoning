@@ -1597,7 +1597,10 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
                 ) -> None:
     """Make the series' street-or-not labels from its lots on the solver's grid (data/find/labels/<series>/grid.npz,
     made again every run), then each sheet's labels through its placement: street or not, no block edge, and the cuts
-    saying where a block edge crosses (data/find/labels/<series>/<sheet>.npz).  $0."""
+    saying where a block edge crosses (data/find/labels/<series>/<sheet>.npz).  Ground with no lot is called street
+    only where it lies between blocks (`find.lotlabels.street_between`); elsewhere (the beach, the ocean, open land
+    past the last blocks) it gets no label, and each sheet reports how many of its px lost their street label so.
+    $0."""
     import time
 
     import numpy as np
@@ -1620,6 +1623,7 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
         raise typer.BadParameter(str(e), param_hint="--series") from None
     for name, v in (("street", STREET), ("block (not street)", NOT_STREET), ("no label", UNKNOWN)):
         typer.echo(f"{name}: {int(np.count_nonzero(g.street == v)):,} grid px")
+    typer.echo(f"street label taken away (not between blocks): {int(np.count_nonzero(g.lost)):,} grid px")
     typer.echo(f"the grid labels: {lotlabels.grid_path(series)}")
     for h in sheet or found:
         t = time.time()
@@ -1628,6 +1632,7 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
                    f"{time.time() - t:.1f} s; {lotlabels.sheet_path((series, h))}")
         n = lab["counts"]
         kept = n["labelled_px_after"] / max(1, n["labelled_px_before"])
+        typer.echo(f"  not between blocks: {n['street_label_lost']:,} px lost their street label")
         typer.echo(f"  where the sheet draws ink: block-edge cuts used {n['edge_used']:,}, dropped "
                    f"{n['edge_dropped']:,}; labelled px kept {kept:.3f}")
         if look:

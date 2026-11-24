@@ -8,6 +8,19 @@ today's blocks the lots with their enclosed holes filled, and the street labels 
 `hatchnet.data.street_grid` from the blocks and today's centre lines (data/ref/streets.parquet), every street type with
 the pooled half-widths: 1 street, 0 not street (a block), 255 no label.
 
+Street only between blocks (`street_between`, on the grid, before anything is read onto a page): a px with no lot keeps
+its street label only where it lies between blocks: going straight away from its nearest block px, the ray reaches a
+block px before the grid ends.  Anywhere else it gets no label (255, weight 0), so it carries no "no block edge"
+statement either: nothing is known about what is printed there (the beach and the ocean beyond the last blocks, open
+land past a block's outer side).  No distance, width or size decides it.  "Reaches" is numerics only: the ray is
+sampled one grid step apart near blocks, and further apart only as far as the distance to the nearest block allows
+(no point between two samples can fall on a block px), and it reaches a block when a sample falls on a block px.
+What the rule cannot do, and does not guess at: a street with lots on one side only (a road along the shore) gets no
+label; a lot-free expanse enclosed by blocks on every side (a plaza, or a park that has no lot) is still called street;
+and at the closed end of a notch cut into a block, the px whose nearest block px is the end look out of the notch's
+mouth and get no label.  Where the label stays, it and its weight are exactly as before; block px and the block-edge
+cuts (`find.cuts`, from the blocks alone) are not touched: a block's side facing the ocean still has its cuts.
+
 A sheet's labels (`sheet_labels`): the street-or-not labels read onto its page, the px said to carry no block edge, and
 the block-edge cut statements of `find.cuts`.  The finder makes no label about zoning borders.  `ft_per_px`: the scale
 of a box of a page through its placement (the trainer's items and print sizes, `find.data`; the test crops' feet,
@@ -15,8 +28,8 @@ of a box of a page through its placement (the trainer's items and print sizes, `
 
 Reads data/ref/parcels.parquet or the April 2000 table, data/ref/streets.parquet, a sheet's page, frame cut and
 placement (data/warp/<series>/<sheet>/transform.json with its correction, or data/work/<series>/<sheet>/transform.json)
-and data/warp/<series>/<sheet>/scores.json.  Writes data/find/labels/<series>/grid.npz (`make_ground`, made by
-`sfzmaps find labels`, read by everything else) and data/find/labels/<series>/<sheet>.npz (`sheet_labels`)."""
+and data/warp/<series>/<sheet>/scores.json.  Writes data/find/labels/<series>/grid.npz (`make_ground`, with `lost`,
+made by `sfzmaps find labels`, read by everything else) and data/find/labels/<series>/<sheet>.npz (`sheet_labels`)."""
 from __future__ import annotations
 
 import json
@@ -34,7 +47,7 @@ from sfzmaps.find import pages
 from sfzmaps.find.pages import SheetId
 from sfzmaps.solver import hatching
 from sfzmaps.frame import data as frame_data
-from sfzmaps.solver.hatchnet.data import UNKNOWN, Lines, lines_from, street_grid
+from sfzmaps.solver.hatchnet.data import STREET, UNKNOWN, Lines, lines_from, street_grid
 from sfzmaps.solver.lots import lot_rasters
 from sfzmaps.solver.table import load_table
 from sfzmaps.solver.textread.store import save_npz
@@ -58,20 +71,78 @@ def series_lots(series: str) -> gpd.GeoDataFrame:
 @dataclass(frozen=True)
 class Ground:
     """The street-or-not labels on the solver's grid: the lot index (-1 none), today's blocks, the street labels (1
-    street, 0 not street, 255 no label) and their weights (1 not street, (0, 1] street, 0 no label)."""
+    street, 0 not street, 255 no label) and their weights (1 not street, (0, 1] street, 0 no label), and the px whose
+    street label `street_between` took away (`lost`)."""
     lot: np.ndarray            # int32
     block: np.ndarray          # bool
     street: np.ndarray         # uint8
     weight: np.ndarray         # float16
+    lost: np.ndarray           # bool
+
+
+RAYS = 1 << 20              # engineering setting (memory only): the rays stepped together
+
+
+def between_blocks(block: np.ndarray, which: np.ndarray | None = None) -> np.ndarray:
+    """Bool (h, w): the px of `which` (None: every px off `block`) that lie between blocks: going straight away from
+    the px's nearest block px, the ray reaches a block px before the grid ends (see the module).  Each ray starts at its
+    px and is sampled at distances t = 0, t1, ...; a sample at q looks at the px r nearest q (rounded) and its distance
+    D to the nearest block px, and the next sample is max(1, D - sqrt 2) further on: no point before it can round to a
+    block px, so no block is passed between samples (numerics, not a setting).  A block px a sample falls on is
+    reached; a sample off the grid ends the ray unreached.  With no block on the grid, no px lies between blocks."""
+    block = np.asarray(block, bool)
+    h, w = block.shape
+    which = ~block if which is None else np.asarray(which, bool) & ~block
+    out = np.zeros(block.shape, bool)
+    if not block.any() or not which.any():
+        return out
+    dist, (ny, nx) = ndimage.distance_transform_edt(~block, return_indices=True)
+    ys, xs = np.nonzero(which)
+    hit = np.zeros(len(ys), bool)
+    for c0 in range(0, len(ys), RAYS):
+        y0, x0 = ys[c0:c0 + RAYS].astype(np.float64), xs[c0:c0 + RAYS].astype(np.float64)
+        uy, ux = y0 - ny[ys[c0:c0 + RAYS], xs[c0:c0 + RAYS]], x0 - nx[ys[c0:c0 + RAYS], xs[c0:c0 + RAYS]]
+        norm = np.hypot(uy, ux)
+        uy, ux = uy / norm, ux / norm
+        t = np.zeros(len(y0))
+        live = np.arange(len(y0))
+        reached = np.zeros(len(y0), bool)
+        while len(live):
+            ry = np.rint(y0[live] + t[live] * uy[live]).astype(np.int64)
+            rx = np.rint(x0[live] + t[live] * ux[live]).astype(np.int64)
+            on = (ry >= 0) & (ry < h) & (rx >= 0) & (rx < w)
+            live, ry, rx = live[on], ry[on], rx[on]
+            d = dist[ry, rx]
+            landed = d == 0
+            reached[live[landed]] = True
+            live, d = live[~landed], d[~landed]
+            t[live] += np.maximum(1.0, d - np.sqrt(2))
+        hit[c0:c0 + RAYS] = reached
+    out[ys, xs] = hit
+    return out
+
+
+def street_between(street: np.ndarray, weight: np.ndarray, block: np.ndarray
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """The street labels `street` and weights `weight` with the street label kept only between blocks
+    (`between_blocks`; see the module): (street, weight, lost), `lost` the px whose street label was taken away (now
+    255, weight 0).  Every other px is as it was."""
+    on = np.asarray(street) == STREET
+    lost = on & ~between_blocks(block, on)
+    street, weight = np.array(street, copy=True), np.array(weight, copy=True)
+    street[lost] = UNKNOWN
+    weight[lost] = 0
+    return street, weight, lost
 
 
 def build_ground(lots: gpd.GeoDataFrame, lines: Lines, shape: tuple[int, int] | None = None) -> Ground:
     """`Ground` of `lots` (EPSG:2227 ft) and today's centre `lines` on a grid of `shape` from the solver grid's corner
-    (None: the whole grid)."""
+    (None: the whole grid), the street label kept only between blocks (`street_between`)."""
     lot, _ = lot_rasters(lots, shape)
     block = ndimage.binary_fill_holes(lot >= 0)
     street, weight, _ = street_grid(lines, block, per_type=False)
-    return Ground(lot, block, street, weight)
+    street, weight, lost = street_between(street, weight, block)
+    return Ground(lot, block, street, weight, lost)
 
 
 def grid_path(series: str) -> Path:
@@ -85,18 +156,22 @@ def make_ground(series: str) -> Ground:
     f = grid_path(series)
     f.parent.mkdir(parents=True, exist_ok=True)
     part = f.with_name(f".{GRID}.part")
-    save_npz(part, lot=g.lot, block=g.block, street=g.street, weight=g.weight)
+    save_npz(part, lot=g.lot, block=g.block, street=g.street, weight=g.weight, lost=g.lost)
     part.replace(f)
     return g
 
 
 def ground(series: str) -> Ground:
-    """The series' `Ground` as `make_ground` last wrote it; FileNotFoundError naming the command that makes it."""
+    """The series' `Ground` as `make_ground` last wrote it; FileNotFoundError naming the command that makes it, also for
+    a file made before the street label was kept only between blocks (it has no `lost`)."""
     f = grid_path(series)
+    again = f"make them with `sfzmaps find labels --series {series}`"
     if not f.is_file():
-        raise FileNotFoundError(f"{f}: no grid labels; make them with `sfzmaps find labels --series {series}`")
+        raise FileNotFoundError(f"{f}: no grid labels; {again}")
     with np.load(f) as z:
-        return Ground(z["lot"], z["block"], z["street"], z["weight"])
+        if "lost" not in z.files:
+            raise FileNotFoundError(f"{f}: made before the street label was kept only between blocks; {again}")
+        return Ground(z["lot"], z["block"], z["street"], z["weight"], z["lost"])
 
 
 def placement(sid: SheetId, which: str = "warp") -> SheetTransform:
@@ -134,22 +209,26 @@ def page_ft_per_px(tr, shape: tuple[int, int]) -> float:
 
 @dataclass(frozen=True)
 class PageGround:
-    """The street-or-not labels at every page px: 1 street, 0 block, 255 no label; and their weights (0 no label)."""
+    """The street-or-not labels at every page px: 1 street, 0 block, 255 no label; their weights (0 no label); and the
+    px on the frame cut whose street label the grid's `street_between` took away (`Ground.lost`)."""
     street: np.ndarray         # uint8 (h, w)
     weight: np.ndarray         # float32 (h, w)
+    lost: np.ndarray           # bool (h, w)
 
 
 def page_ground(g: Ground, tr, shape: tuple[int, int], keep: np.ndarray) -> PageGround:
     """The grid's labels read at every px of a page of `shape` through its placement `tr` (`hatching.PageWorld`,
-    `hatching.page_values`); 255 with weight 0 off the grid and off `keep` (the frame cut's map area)."""
+    `hatching.page_values`); 255 with weight 0 off the grid and off `keep` (the frame cut's map area), and no px lost
+    there."""
     keep = np.asarray(keep, bool)
     if keep.shape != tuple(shape):
         raise ValueError(f"the frame cut is {keep.shape}, the page {tuple(shape)}")
-    street, weight = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(g.street, UNKNOWN), (g.weight, 0)])
+    street, weight, lost = hatching.page_values(hatching.PageWorld(tr, shape), shape,
+                                                [(g.street, UNKNOWN), (g.weight, 0), (g.lost, False)])
     weight = weight.astype(np.float32)
     street[~keep] = UNKNOWN
     weight[~keep] = 0
-    return PageGround(street, weight)
+    return PageGround(street, weight, lost & keep)
 
 
 def page_shape(sid: SheetId) -> tuple[int, int]:
@@ -205,7 +284,8 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     Labels count only where the sheet draws ink (`find.drawn`): a cut not used has weight 0, and a px whose nearest
     block outline px is not inked has weight 0 and no `edge_none`.  A px on a cut the lots call for, kept or dropped at
     the frame cut, is not in `edge_none`.  `counts` (in the file as count_<name>): the cuts used and dropped
-    (`drawn.use`), and the labelled px (weight > 0) before and after."""
+    (`drawn.use`), the labelled px (weight > 0) before and after, and `street_label_lost`: the px on the frame cut
+    whose street label `street_between` took away (not between blocks)."""
     from sfzmaps.find import cuts, drawn
 
     series, _ = sid
@@ -228,7 +308,8 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     before = int((weight > 0).sum())
     weight = (weight * near).astype(np.float32)
     edge_none &= near
-    counts.update(labelled_px_before=before, labelled_px_after=int((weight > 0).sum()))
+    counts.update(labelled_px_before=before, labelled_px_after=int((weight > 0).sum()),
+                  street_label_lost=int(pg.lost.sum()))
     out = {"street": street, "weight": weight, "cuts": found, "edge_none": edge_none, "sigma": float(sigma),
            "placement": which, "counts": counts}
     f = sheet_path(sid)
