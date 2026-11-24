@@ -133,6 +133,83 @@ def test_reserved_ground_has_no_label_and_only_block_edge_cuts_are_read(tmp_path
     assert got.ft_per_px == pytest.approx(4.0) and got.sigma == 2.0        # the page's scale; the label file's sigma
 
 
+def _plain_label_file(sid, shape, cuts: Cuts, weight: float = 0.5):
+    """A label file calling every px street at `weight`, every px "no block edge", with the cuts `cuts`."""
+    f = lotlabels.sheet_path(sid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(f, street=np.ones(shape, np.uint8), weight=np.full(shape, weight, np.float32), cuts_px=cuts.px,
+             cuts_cut=cuts.cut, cuts_prior=cuts.prior, cuts_weight=cuts.weight, edge_none=np.ones(shape, bool),
+             sigma=np.float64(2.0), placement=np.array("warp"))
+
+
+def _row_cuts(w, runs) -> Cuts:
+    """Block-edge cuts along row 10, one per run of columns."""
+    return Cuts(np.concatenate([10 * w + r for r in runs]).astype(np.int64),
+                np.repeat(np.arange(len(runs), dtype=np.int32), [len(r) for r in runs]),
+                np.ones(sum(len(r) for r in runs), np.float32), np.ones(len(runs), np.float32),
+                np.full(len(runs), -1, np.int32), np.zeros(0, np.int64))
+
+
+def test_hand_marked_ground_has_no_lot_label_on_its_sheet_and_on_another_sheet_of_the_same_ground(tmp_path,
+                                                                                                    monkeypatch):
+    _sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    shape = (400, 500)
+    monkeypatch.setattr(pages, "load_scan", lambda sid: np.ones(shape, np.float32))
+    flats = {("t", "A"): Flat(4.0), ("t", "B"): Flat(4.0, dx=100)}     # B shows A's px (x, y) at (x + 100, y)
+    monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": flats[sid])
+    w = shape[1]
+    # on A, three cuts along row 10: one with a single px on the crop's ground (column 200), one beside it, one far
+    _plain_label_file(("t", "A"), shape, _row_cuts(w, [np.arange(190, 201), np.arange(170, 180), np.arange(5, 15)]))
+    _plain_label_file(("t", "B"), shape, _row_cuts(w, [np.arange(5, 15)]))
+    _crop_file("train", "t", "A", (200, 5, 30, 20))
+    for sid, x0 in ((("t", "A"), 200), (("t", "B"), 300)):
+        got = data.sheet_labelled(sid)
+        ground = np.zeros(shape, bool)
+        ground[5:25, x0:x0 + 30] = True                              # exactly the crop's box: no margin
+        assert (got.street[ground] == 255).all() and (got.street_w[ground] == 0).all()
+        assert (got.edge[ground] == 255).all()
+        assert (got.street[~ground] == 1).all() and (got.street_w[~ground] == 0.5).all()
+        assert (got.edge[~ground] == 0).all()
+        assert (got.hand_px, got.hand_weight) == (600, pytest.approx(300.0)), sid
+    a = data.sheet_labelled(("t", "A"))
+    assert sorted(set(a.cuts.px // w)) == [10] and sorted(a.cuts.px % w) == [*range(5, 15), *range(170, 180)]
+    assert len(a.cuts.weight) == 2                                   # the cut with one px on the ground is dropped
+
+
+def test_a_training_crop_on_a_series_the_lots_do_not_label_blanks_nothing(tmp_path, monkeypatch):
+    _sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    shape = (400, 500)
+    monkeypatch.setattr(pages, "load_scan", lambda sid: np.ones(shape, np.float32))
+    monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
+    _plain_label_file(("t", "A"), shape, _row_cuts(shape[1], [np.arange(190, 201)]))
+    _crop_file("train", "s", "A", (200, 5, 30, 20))                  # the same ground, on a hatched series
+    got = data.sheet_labelled(("t", "A"))
+    assert (got.street == 1).all() and (got.street_w == 0.5).all() and (got.edge == 0).all()
+    assert len(got.cuts.weight) == 1 and (got.hand_px, got.hand_weight) == (0, 0.0)
+
+
+def test_find_train_records_per_sheet_the_px_left_to_the_hand_crops(tmp_path, monkeypatch):
+    git_answers(monkeypatch)
+    _sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    monkeypatch.setattr(pages, "load_scan", lambda sid: _two_line_page())
+    monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
+    monkeypatch.setattr(data, "print_sizes", lambda: ({"t": [4.0]}, [], {}))
+    monkeypatch.setattr(train, "fit", lambda items, recipe, device, on_checkpoint=None, sizes=None:
+                        train.Fitted({}, recipe.steps, [], "cpu"))
+    _plain_label_file(("t", "A"), (400, 500), _row_cuts(500, [np.arange(5, 15)]))
+    _crop_file("train", "t", "A", (100, 100, 60, 40), street=[[110, 120]], blocks=[[120, 104], [120, 135]])
+    r = invoke(["find", "train", "--run", "r", "--device", "cpu", "--no-trace", "--sheet", "t/A"])
+    assert r.exit_code == 0, r.output
+    assert "t/A: 2,400 px left without a lot label as hand-marked ground (street weight 1,200.0)" in r.output
+    items = json.loads((tmp_path / "find" / "runs" / "r" / "log.json").read_text())["items"]
+    sheet = next(i for i in items if i["name"] == "t/A")
+    assert (sheet["hand_marked_px"], sheet["hand_marked_street_weight"]) == (2400, 1200.0)
+    assert all("hand_marked_px" not in i for i in items if i["name"] != "t/A")
+
+
 def _two_line_page():
     page = np.ones((400, 500), np.float32)
     page[110:112] = page[128:130] = 0           # a street between two lines, rows 112-127

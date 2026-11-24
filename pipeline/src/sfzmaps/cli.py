@@ -1598,7 +1598,9 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
     """Make the series' street-or-not labels from its lots on the solver's grid (data/find/labels/<series>/grid.npz,
     made again every run), then each sheet's labels through its placement: street or not, no block edge, and the cuts
     saying where a block edge crosses (data/find/labels/<series>/<sheet>.npz).  Street labels are reported by their px
-    and the sum of their weights (most px of a street label far from its centre line weigh almost nothing).  $0."""
+    and the sum of their weights (most px of a street label far from its centre line weigh almost nothing).  The lots
+    listed in inputs/find/unlabelled_lots.csv (the two parks held as one lot) carry no label; a listed lot that is not
+    among the series' lots is refused.  $0."""
     import time
 
     import numpy as np
@@ -1623,6 +1625,8 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
         typer.echo(f"{name}: {int(np.count_nonzero(g.street == v)):,} grid px")
     px, weighs = lotlabels.street_totals(g.street, g.weight)
     typer.echo(f"street labels: {px:,} grid px with weight above 0, weighing {weighs:,.0f} in all")
+    typer.echo(f"listed lots carrying no label ({lotlabels.UNLABELLED.name}): {int(np.count_nonzero(g.unlabelled)):,} "
+               f"grid px")
     typer.echo(f"the grid labels: {lotlabels.grid_path(series)}")
     for h in sheet or found:
         t = time.time()
@@ -1632,7 +1636,8 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
         n = lab["counts"]
         kept = n["labelled_px_after"] / max(1, n["labelled_px_before"])
         px, weighs = lotlabels.street_totals(lab["street"], lab["weight"])
-        typer.echo(f"  street labels: {px:,} px with weight above 0, weighing {weighs:,.0f} in all")
+        typer.echo(f"  street labels: {px:,} px with weight above 0, weighing {weighs:,.0f} in all; listed lots "
+                   f"left without a label: {n['unlabelled_lot_px']:,} px")
         typer.echo(f"  where the sheet draws ink: block-edge cuts used {n['edge_used']:,}, dropped "
                    f"{n['edge_dropped']:,}; labelled px kept {kept:.3f}")
         if look:
@@ -1790,7 +1795,13 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
         typer.echo("nothing to train on", err=True)
         raise typer.Exit(1)
     listed = [{"name": it.name, "era": it.era, "ft_per_px": it.ft_per_px, "labelled_px": int(data.labelled(it).sum()),
-               "used_cuts_with_no_px": 0 if it.cuts is None else data.cuts_without_px(it.cuts)} for it in items]
+               "used_cuts_with_no_px": 0 if it.cuts is None else data.cuts_without_px(it.cuts),
+               **({} if it.hand else {"hand_marked_px": it.hand_px, "hand_marked_street_weight": it.hand_weight})}
+              for it in items]
+    for it in items:
+        if not it.hand and it.hand_px:
+            typer.echo(f"{it.name}: {it.hand_px:,} px left without a lot label as hand-marked ground (street weight "
+                       f"{it.hand_weight:,.1f})")
     for era in sorted({it.era for it in items}):
         mine = [x for x in listed if x["era"] == era]
         typer.echo(f"{era}: {len(mine)} items, {sum(x['labelled_px'] for x in mine):,} labelled px")

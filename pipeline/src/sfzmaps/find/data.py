@@ -10,7 +10,10 @@ for a hand crop):
   The item is the crop grown by `model.REACH` px on every side where the page allows: the scan is shown there, so the
   network sees the print round a crop's edge as it does when a page is read, but nothing is labelled there.
 The ground under the `choose` and `test` crops, grown by `model.REACH` (`handlabels.reserved`), has no label on any
-sheet or training crop, and a cut touching it is dropped from the item; the scan is still shown there.  When a tile is
+sheet or training crop, and a cut touching it is dropped from the item; the scan is still shown there.  The
+hand-marked ground, under every `train` crop drawn on a series the lots label (`handlabels.hand_marked`, no margin),
+has no lot label on any lot-labelled sheet, and a cut touching it is dropped: there the hand crop is the only label
+source, so the two never disagree; the hand crop's own labels are untouched.  When a tile is
 resized (`resized`), its labels there stay "no label", but a re-laid cut's px can fall up to the cut's reach inside
 that margin (its px are placed again at the new size), never on a held-out crop's own box.  The margin is
 `model.REACH` px of the item's own scan: a tile shrunk by a factor f lets a labelled px see `model.REACH / f` source
@@ -57,6 +60,8 @@ class Labelled:
     set: str | None = None      # a hand crop's set (train, choose, test); None for a sheet
     ft_per_px: float = math.nan  # the print's feet per px, through the sheet's placement (`lotlabels.ft_per_px`)
     sigma: float = math.nan     # the cuts' sigma, px (the label file's); NaN for a hand crop
+    hand_px: int = 0            # a sheet's px left without a lot label as hand-marked ground (and not reserved)
+    hand_weight: float = 0.0    # the street weight those px carried
 
     @property
     def hand(self) -> bool:
@@ -66,20 +71,31 @@ class Labelled:
 
 def sheet_labelled(sid: SheetId, which: str = "warp") -> Labelled:
     """The sheet's lot labels (data/find/labels/<series>/<sheet>.npz) as a `Labelled` (see the module), with the
-    reserved ground through placement `which` left unlabelled and every cut with a px on it dropped.
-    FileNotFoundError or ValueError naming the command that makes the label file (`lotlabels.load_sheet_labels`):
-    missing, made through another placement, or not fitting the scan."""
+    reserved ground and the hand-marked ground (`handlabels.hand_marked`) through placement `which` left unlabelled
+    and every cut with a px on either dropped; `hand_px` and `hand_weight` count the px that had a lot label (street
+    weight above 0, or "no block edge") on hand-marked ground off the reserved ground, and the street weight they
+    carried, and one line is logged when there are any.  FileNotFoundError or ValueError naming the command that makes
+    the label file (`lotlabels.load_sheet_labels`): missing, made through another placement, or not fitting the
+    scan."""
     lum = pages.load_scan(sid)
     lab = lotlabels.load_sheet_labels(sid, which, lum.shape)
     found = lotlabels.file_cuts(lab)
-    held = handlabels.reserved(sid, lum.shape, model.REACH, which=which)
+    reserved = handlabels.reserved(sid, lum.shape, model.REACH, which=which)
+    hand = handlabels.hand_marked(sid, lum.shape, which=which) & ~reserved
+    had = hand & (((lab["street"] != NONE) & (lab["weight"] > 0)) | lab["edge_none"])
+    hand_px = int(had.sum())
+    hand_weight = float(np.where(lab["street"] == 1, lab["weight"], 0)[had].astype(np.float64).sum())
+    if hand_px:
+        log.info("%s/%s: %d px left without a lot label as hand-marked ground (street weight %.1f)", sid[0], sid[1],
+                 hand_px, hand_weight)
+    held = reserved | hand
     street = np.where(held, NONE, lab["street"]).astype(np.uint8)
     street_w = np.where(held | (street == NONE), 0, lab["weight"]).astype(np.float32)
     edge = np.where(lab["edge_none"] & ~held, 0, NONE).astype(np.uint8)
     off_held = np.bincount(found.cut[held.ravel()[found.px]], minlength=len(found.weight)) == 0
     scale = lotlabels.page_ft_per_px(lotlabels.placement(sid, which), lum.shape)
     return Labelled(f"{sid[0]}/{sid[1]}", pages.source(sid[0]).era, lum, street, street_w, edge, found.only(off_held),
-                    ft_per_px=scale, sigma=float(lab["sigma"]))
+                    ft_per_px=scale, sigma=float(lab["sigma"]), hand_px=hand_px, hand_weight=hand_weight)
 
 
 def grown(box: tuple[int, int, int, int], shape: tuple[int, int]) -> tuple[tuple[slice, slice], tuple[slice, slice]]:

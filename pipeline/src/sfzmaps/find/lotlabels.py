@@ -44,6 +44,7 @@ from sfzmaps.solver.textread.store import save_npz
 from sfzmaps.transform import SheetTransform
 
 PLACEMENTS = {"warp": config.DATA_DIR / "warp", "work": config.WORK_DIR}
+UNLABELLED = config.INPUTS_DIR / "find" / "unlabelled_lots.csv"
 GRID = "grid.npz"
 
 
@@ -61,45 +62,85 @@ def series_lots(series: str) -> gpd.GeoDataFrame:
 @dataclass(frozen=True)
 class Ground:
     """The street-or-not labels on the solver's grid: the lot index (-1 none), today's blocks, the street labels (1
-    street, 0 not street, 255 no label) and their weights (1 not street, (0, 1] street, 0 no label)."""
+    street, 0 not street, 255 no label) and their weights (1 not street, (0, 1] street, 0 no label); `unlabelled`: the
+    px of the listed lots (`unlabelled_lots`), which carry no label."""
     lot: np.ndarray            # int32
     block: np.ndarray          # bool
     street: np.ndarray         # uint8
     weight: np.ndarray         # float16
+    unlabelled: np.ndarray     # bool
 
 
-def build_ground(lots: gpd.GeoDataFrame, lines: Lines, shape: tuple[int, int] | None = None) -> Ground:
-    """`Ground` of `lots` (EPSG:2227 ft) and today's centre `lines` on a grid of `shape` from the solver grid's corner
-    (None: the whole grid)."""
+def unlabelled_lots(path: Path | None = None) -> list[tuple[str, str, str]]:
+    """The lots listed as carrying no label (inputs/find/unlabelled_lots.csv, `UNLABELLED`): (blklot, name, why) in
+    file order.  ValueError for a file whose columns are not blklot, name, why."""
+    import csv
+    path = UNLABELLED if path is None else path
+    with open(path, newline="") as f:
+        reader = csv.reader(f)
+        cols = [c.strip() for c in next(reader, [])]
+        rows = [r for r in reader if any(c.strip() for c in r)]
+    if cols != ["blklot", "name", "why"] or any(len(r) != 3 for r in rows):
+        raise ValueError(f"{path}: columns must be blklot,name,why, three to a row; the header is {','.join(cols)}")
+    return [(r[0].strip(), r[1].strip(), r[2].strip()) for r in rows]
+
+
+def build_ground(lots: gpd.GeoDataFrame, lines: Lines, shape: tuple[int, int] | None = None,
+                 unlabelled: list[str] | tuple[str, ...] = (), series: str = "these lots") -> Ground:
+    """`Ground` of `lots` (EPSG:2227 ft, with `blklot`) and today's centre `lines` on a grid of `shape` from the solver
+    grid's corner (None: the whole grid).  Every px of a lot whose blklot is in `unlabelled` carries no label (255,
+    weight 0); it stays a lot and a block for everything else, so the street labels beside it and the block-edge cuts
+    on its sides are as they would be.  ValueError naming the id and `series` for a listed blklot not among `lots`."""
+    ids = lots["blklot"].astype(str).to_numpy() if len(unlabelled) else np.zeros(0, str)
+    for bl in unlabelled:
+        if bl not in set(ids):
+            raise ValueError(f"lot {bl}, listed in {UNLABELLED} as carrying no label, is not among the lots of "
+                             f"{series}: the list would switch nothing off there")
     lot, _ = lot_rasters(lots, shape)
     block = ndimage.binary_fill_holes(lot >= 0)
     street, weight, _ = street_grid(lines, block, per_type=False)
-    return Ground(lot, block, street, weight)
+    off = np.isin(lot, np.flatnonzero(np.isin(ids, list(unlabelled)))) if len(unlabelled) else np.zeros(lot.shape, bool)
+    street[off] = UNKNOWN
+    weight[off] = 0
+    return Ground(lot, block, street, weight, off)
 
 
 def grid_path(series: str) -> Path:
     return pages.OUT / "labels" / series / GRID
 
 
-def make_ground(series: str) -> Ground:
-    """The series' `Ground` on the whole grid, made from `series_lots` and today's centre lines and written to
-    data/find/labels/<series>/grid.npz (`sfzmaps find labels` makes it every time it runs)."""
-    g = build_ground(series_lots(series), lines_from(config.REF_DIR / "streets.parquet"))
+def make_ground(series: str, shape: tuple[int, int] | None = None) -> Ground:
+    """The series' `Ground` on the whole grid (or one of `shape` from its corner), made from `series_lots`, today's
+    centre lines and the listed lots (`unlabelled_lots`), and written to data/find/labels/<series>/grid.npz
+    (`sfzmaps find labels` makes it every time it runs).  ValueError naming the id and the series for a listed lot
+    not among the series' lots (nothing written)."""
+    listed = unlabelled_lots()
+    lots = series_lots(series)
+    have = set(lots["blklot"].astype(str))
+    for bl, name, _ in listed:
+        if bl not in have:
+            raise ValueError(f"{UNLABELLED}: lot {bl} ({name}) is not among the lots of series {series}, so it would "
+                             f"not be switched off there; correct the list or the lots")
+    g = build_ground(lots, lines_from(config.REF_DIR / "streets.parquet"), shape, [r[0] for r in listed], series)
     f = grid_path(series)
     f.parent.mkdir(parents=True, exist_ok=True)
     part = f.with_name(f".{GRID}.part")
-    save_npz(part, lot=g.lot, block=g.block, street=g.street, weight=g.weight)
+    save_npz(part, lot=g.lot, block=g.block, street=g.street, weight=g.weight, unlabelled=g.unlabelled)
     part.replace(f)
     return g
 
 
 def ground(series: str) -> Ground:
-    """The series' `Ground` as `make_ground` last wrote it; FileNotFoundError naming the command that makes it."""
+    """The series' `Ground` as `make_ground` last wrote it; FileNotFoundError naming the command that makes it, also for
+    a file made before listed lots carried no label (it has no `unlabelled`)."""
     f = grid_path(series)
+    again = f"make them with `sfzmaps find labels --series {series}`"
     if not f.is_file():
-        raise FileNotFoundError(f"{f}: no grid labels; make them with `sfzmaps find labels --series {series}`")
+        raise FileNotFoundError(f"{f}: no grid labels; {again}")
     with np.load(f) as z:
-        return Ground(z["lot"], z["block"], z["street"], z["weight"])
+        if "unlabelled" not in z.files:
+            raise FileNotFoundError(f"{f}: made before listed lots carried no label; {again}")
+        return Ground(z["lot"], z["block"], z["street"], z["weight"], z["unlabelled"])
 
 
 def placement(sid: SheetId, which: str = "warp") -> SheetTransform:
@@ -137,9 +178,11 @@ def page_ft_per_px(tr, shape: tuple[int, int]) -> float:
 
 @dataclass(frozen=True)
 class PageGround:
-    """The street-or-not labels at every page px: 1 street, 0 block, 255 no label; and their weights (0 no label)."""
+    """The street-or-not labels at every page px: 1 street, 0 block, 255 no label; their weights (0 no label); and the
+    px on the frame cut of the listed lots (`Ground.unlabelled`)."""
     street: np.ndarray         # uint8 (h, w)
     weight: np.ndarray         # float32 (h, w)
+    unlabelled: np.ndarray     # bool (h, w)
 
 
 def page_ground(g: Ground, tr, shape: tuple[int, int], keep: np.ndarray) -> PageGround:
@@ -148,11 +191,12 @@ def page_ground(g: Ground, tr, shape: tuple[int, int], keep: np.ndarray) -> Page
     keep = np.asarray(keep, bool)
     if keep.shape != tuple(shape):
         raise ValueError(f"the frame cut is {keep.shape}, the page {tuple(shape)}")
-    street, weight = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(g.street, UNKNOWN), (g.weight, 0)])
+    street, weight, off = hatching.page_values(hatching.PageWorld(tr, shape), shape,
+                                               [(g.street, UNKNOWN), (g.weight, 0), (g.unlabelled, False)])
     weight = weight.astype(np.float32)
     street[~keep] = UNKNOWN
     weight[~keep] = 0
-    return PageGround(street, weight)
+    return PageGround(street, weight, off & keep)
 
 
 def street_totals(street: np.ndarray, weight: np.ndarray) -> tuple[int, float]:
@@ -215,7 +259,8 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     Labels count only where the sheet draws ink (`find.drawn`): a cut not used has weight 0, and a px whose nearest
     block outline px is not inked has weight 0 and no `edge_none`.  A px on a cut the lots call for, kept or dropped at
     the frame cut, is not in `edge_none`.  `counts` (in the file as count_<name>): the cuts used and dropped
-    (`drawn.use`), and the labelled px (weight > 0) before and after."""
+    (`drawn.use`), the labelled px (weight > 0) before and after, and `unlabelled_lot_px`: the px on the frame cut of
+    the listed lots (`unlabelled_lots`), left without a label."""
     from sfzmaps.find import cuts, drawn
 
     series, _ = sid
@@ -238,7 +283,8 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     before = int((weight > 0).sum())
     weight = (weight * near).astype(np.float32)
     edge_none &= near
-    counts.update(labelled_px_before=before, labelled_px_after=int((weight > 0).sum()))
+    counts.update(labelled_px_before=before, labelled_px_after=int((weight > 0).sum()),
+                  unlabelled_lot_px=int(pg.unlabelled.sum()))
     out = {"street": street, "weight": weight, "cuts": found, "edge_none": edge_none, "sigma": float(sigma),
            "placement": which, "counts": counts}
     f = sheet_path(sid)

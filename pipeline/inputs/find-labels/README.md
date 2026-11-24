@@ -1,16 +1,19 @@
 # Hand crops for the street-and-block finder
 
-Hand-made labels on crops of the scans, the only teacher of the street-and-block finder (`sfzmaps.find`) for every
-map before the 1980s. A person marks a crop, one of two ways (below); `sfzmaps.find.handlabels` makes the per-pixel
-labels from the marks. Design: `docs/superpowers/specs/2026-11-23-street-and-block-finder-design.md`.
+Hand-made labels on crops of the scans for the street-and-block finder (`sfzmaps.find`). On every map before the 1980s
+they are its only teacher. On the maps the lots label (1980 on, the series with `lots` in
+`inputs/find/label_sources.csv`) they mark the places the lots cannot label: the inside of the Presidio and Golden
+Gate Park (each held as one lot with roads inside it), the city's edge (the beach beyond the Great Highway, the piers
+beyond the Embarcadero), and ground the city has no lot for. A person marks a crop, one of two ways (below);
+`sfzmaps.find.handlabels` makes the per-pixel labels from the marks. Design: `docs/superpowers/specs/2026-11-23-street-and-block-finder-design.md`.
 
 One file per crop: `<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json`, the sheet named as in
 `data/work/<series>/<sheet>/page.png`, the name's numbers the same as the file's `box`.
 
 ## Two ways to draw a crop
 
-- **Seeds and strokes**, for maps whose streets are open paper: the hatched maps of 1921-1948, where a thin outline
-  closes each block and the street between is white. A few seed points and strokes; the fill does the rest.
+- **Seeds and strokes**, for maps whose streets are open paper (the hatched maps of 1921-1948, and open ground such
+  as a park's drives on any map), where a thin outline closes each block and the street between is white. A few seed points and strokes; the fill does the rest.
 - **Outlines**, for maps where heavy lines and letters join the blocks: 1960 on, where zoning borders run down the
   streets and letters cross them, so the ink of every block is joined and no fill can tell the blocks apart. Every
   printed block in the box is typed as a polygon. Outline crops may be in any set (`train`, `choose` or `test`). A
@@ -75,6 +78,13 @@ every 50 px, plus the whole box at 2x, under `data/find/look/ruled/<series>__<sh
 The ground under every `test` and `choose` crop is left out of all training, in every year's scan of that ground
 (`handlabels.reserved`): 1921 and 1929 draw the same streets, so a training crop on one would give away a test crop on
 the other. A crop must lie on a sheet that has a placement, and never on a duplicate scan.
+
+On the maps the lots label, the lots' labels step aside wherever a person has marked the ground by hand, so the two
+never disagree: the ground under every `train` crop drawn on a series the lots label (`handlabels.hand_marked`) carries
+no lot label on any sheet the lots label, in every year's scan of that ground, and there the hand crop is the only
+label. Adding such a crop needs no `sfzmaps find labels` run: the lot labels step aside when training is made ready,
+and `sfzmaps find train` says per sheet how many pixels they left to the hand crops. The two parks also carry no lot
+label at all (`inputs/find/unlabelled_lots.csv`), whether or not a hand crop marks them.
 
 ## How the labels are made
 

@@ -150,3 +150,44 @@ def test_the_labels_picture_tints_street_as_strongly_as_the_label_weighs():
     out = big[-16:, 2 * (12 + look.GAP) + 20:]                              # page columns 10-11: off the frame cut
     assert big.shape[1] == 2 * (2 * 12 + look.GAP)
     assert (out[..., 0] == out[..., 1]).all() and (out[..., 1] == out[..., 2]).all() and (out != 128).all()
+
+
+# --- lots listed as carrying no label (inputs/find/unlabelled_lots.csv) ----------------------------------------------
+
+def test_a_listed_lot_has_no_label_and_its_neighbours_and_cuts_are_as_they_were():
+    from sfzmaps.find import cuts
+    plain = lotlabels.build_ground(lots_world(), lines_world(), SHAPE)
+    g = lotlabels.build_ground(lots_world(), lines_world(), SHAPE, unlabelled=["0002001"])
+    listed = plain.lot == 2                                          # 0002001: the east block's north lot
+    assert listed.any() and np.array_equal(g.unlabelled, listed)
+    assert (g.street[listed] == 255).all() and (g.weight[listed] == 0).all()
+    assert np.array_equal(g.street[~listed], plain.street[~listed])  # the street beside it, every other lot: as were
+    assert np.array_equal(g.weight[~listed], plain.weight[~listed])
+    assert (g.street[ROWS[0]:30, STREET[0]:STREET[1]] == 1).all()
+    assert np.array_equal(g.block, plain.block) and np.array_equal(g.lot, plain.lot)
+    a, b = (cuts.edge_cuts(x, Flat(2.0), (2 * SHAPE[0], 2 * SHAPE[1]), np.ones((2 * SHAPE[0], 2 * SHAPE[1]), bool),
+                           1.5) for x in (plain, g))
+    for k in ("px", "cut", "prior", "weight", "inside"):
+        assert np.array_equal(getattr(a, k), getattr(b, k)), k       # the listed lot's sides keep their cuts
+    pg = lotlabels.page_ground(g, Flat(2.0), (2 * SHAPE[0], 2 * SHAPE[1]), np.ones((2 * SHAPE[0], 2 * SHAPE[1]), bool))
+    assert pg.unlabelled.sum() == 4 * listed.sum() and (pg.street[pg.unlabelled] == 255).all()
+
+
+def test_a_listed_id_not_among_a_series_lots_is_refused(tmp_path, monkeypatch):
+    f = tmp_path / "unlabelled_lots.csv"
+    f.write_text("blklot,name,why\n0002001,a lot,test\n1700001,a park,test\n")
+    monkeypatch.setattr(lotlabels, "UNLABELLED", f)
+    monkeypatch.setattr(lotlabels, "series_lots", lambda series: lots_world())
+    monkeypatch.setattr(lotlabels, "lines_from", lambda path: lines_world())
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    with pytest.raises(ValueError, match=r"1700001 \(a park\).*not among the lots of series t"):
+        lotlabels.make_ground("t", SHAPE)
+    assert not (tmp_path / "find").exists()
+    f.write_text("blklot,name,why\n0002001,a lot,test\n")
+    g = lotlabels.make_ground("t", SHAPE)
+    assert g.unlabelled.sum() > 0 and lotlabels.ground("t").unlabelled.sum() == g.unlabelled.sum()
+
+
+def test_the_checked_in_list_holds_the_two_parks():
+    rows = lotlabels.unlabelled_lots(Path(__file__).parents[1] / "inputs" / "find" / "unlabelled_lots.csv")
+    assert [r[0] for r in rows] == ["1300001", "1700001"]

@@ -132,7 +132,7 @@ def test_a_sheets_labels_are_street_no_block_edge_and_block_edge_cuts(tmp_path, 
     with np.load(tmp_path / "find" / "labels" / "s" / "s-p01.npz") as z:
         assert set(z.files) == {"street", "weight", "cuts_px", "cuts_cut", "cuts_prior", "cuts_weight", "edge_none",
                                 "sigma", "placement", "count_edge_used", "count_edge_dropped",
-                                "count_labelled_px_before", "count_labelled_px_after"}
+                                "count_labelled_px_before", "count_labelled_px_after", "count_unlabelled_lot_px"}
         assert str(z["placement"]) == "warp" and float(z["sigma"]) == SIGMA
 
 

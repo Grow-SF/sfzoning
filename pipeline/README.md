@@ -1132,7 +1132,9 @@ reads it yet, and `sfzmaps build` doesn't run it. Everything is $0 (no API calls
 | `sfzmaps find train --run R --sheet S/H ... [--no-noise] [--unbroken] [--no-resize] [--seed N] [--no-trace]` | trains on the named lot-labelled sheets and every `train` crop, each tile shown at a print size measured from the sheets the finder is used on; keeps the last step (the `choose` crops' score at each checkpoint is logged as a held-out trace and chooses nothing) |
 | `sfzmaps find count --run R` | reads every `choose` and every `test` crop with the run's kept model and measures each set alike and on its own: the found areas are the connected pieces of ground the model calls not street; it counts their panoptic quality (how well they match the answer key's areas, counting stray areas and missed ones), blocks found, held whole, joined, cut up or lost, street and block ground, and block-boundary distances in feet both ways (answer key to model edge, model edge to answer key), per crop, per era and pooled |
 
-Inputs, in git: `inputs/find/label_sources.csv` (each series' era and the lots that label it) and the hand crops,
+Inputs, in git: `inputs/find/label_sources.csv` (each series' era and the lots that label it),
+`inputs/find/unlabelled_lots.csv` (lots that carry no lot label: the two parks held as one lot; see
+`inputs/find/README.md`) and the hand crops,
 `inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json` (how to draw them: `inputs/find-labels/README.md`).
 It also reads the scans, the frame cuts and the warp's placements under `data/`. Outputs, under `data/find/`:
 `labels/<series>/` (the label files), `look/` (pictures), and `runs/<run>/` (`model.pt`, `log.json`, `counts.json`,

@@ -14,6 +14,8 @@ This is a drawing aid for hand labels only, checked by eye on its picture (`look
 are parts of the tool, and nothing like it runs when a sheet is read.
 
 `reserved` is the ground under every `choose` and `test` crop, on any sheet's page, which training leaves out.
+`hand_marked` is the ground under every `train` crop drawn on a series the lots label, on any sheet's page, with no
+margin: there the lots' labels step aside for the hand crop's (`data.sheet_labelled`).
 `choose_on_test` finds a choosing crop lying on a test crop's ground (on any sheet), which `refuse_choose_on_test`
 refuses: the choosing crops are where two recipes are compared (the trainer keeps its last step and only logs their
 score), so they must not see the test ground.
@@ -395,11 +397,36 @@ def ring(box: tuple[int, int, int, int], step: int = RING_STEP) -> np.ndarray:
 def reserved(sid: SheetId, shape: tuple[int, int], margin: int, root: Path | None = None, which: str = "warp",
              placements: Callable[[SheetId], object] | None = None) -> np.ndarray:
     """Bool (h, w) of the page `sid`: True on the ground under any `choose` or `test` crop of any sheet, grown by
-    `margin` px (a square of side 2 margin + 1).  Points round each crop's box (`ring`) go to the ground through its
-    sheet's placement (`placements`, None: `lotlabels.placement` with `which`) and from the ground onto this page
-    through this sheet's; the polygon of the finite ones, in order, is filled.  When none is finite the crop's ground
-    is not on this page; when only some are, a warning is logged naming the crop, the sheet and the count.
-    FileNotFoundError naming a crop on a sheet with no placement."""
+    `margin` px (a square of side 2 margin + 1) (`ground_under`)."""
+    return ground_under(crops(HELD_OUT, root), sid, shape, margin, which, placements)
+
+
+def lots_label(series: str) -> bool:
+    """True for a series the lots label (a `lots` entry in the label sources); False for one with no row there."""
+    from sfzmaps.find import pages
+    try:
+        return bool(pages.source(series).lots)
+    except KeyError:
+        return False
+
+
+def hand_marked(sid: SheetId, shape: tuple[int, int], root: Path | None = None, which: str = "warp",
+                placements: Callable[[SheetId], object] | None = None) -> np.ndarray:
+    """Bool (h, w) of the page `sid`: True on the hand-marked ground, the ground under every `train` crop drawn on a
+    series the lots label (`lots_label`), on any sheet, with no margin (`ground_under`): there the hand crop is the
+    only label source, and a lot-labelled sheet carries no lot label."""
+    return ground_under([c for c in crops(("train",), root) if lots_label(c.series)], sid, shape, 0, which,
+                        placements)
+
+
+def ground_under(chosen: list[Crop], sid: SheetId, shape: tuple[int, int], margin: int, which: str = "warp",
+                 placements: Callable[[SheetId], object] | None = None) -> np.ndarray:
+    """Bool (h, w) of the page `sid`: True on the ground under the crops `chosen` (any sheet), grown by `margin` px (a
+    square of side 2 margin + 1).  Points round each crop's box (`ring`) go to the ground through its sheet's
+    placement (`placements`, None: `lotlabels.placement` with `which`) and from the ground onto this page through this
+    sheet's; the polygon of the finite ones, in order, is filled.  When none is finite the crop's ground is not on
+    this page; when only some are, a warning is logged naming the crop, the sheet and the count.  FileNotFoundError
+    naming a crop on a sheet with no placement."""
     get = (lambda s: lotlabels.placement(s, which)) if placements is None else placements
     h, w = shape
     out = np.zeros((h, w), np.uint8)
@@ -416,11 +443,10 @@ def reserved(sid: SheetId, shape: tuple[int, int], margin: int, root: Path | Non
                                         f"placed sheets") from None
         return found[s]
 
-    held = crops(HELD_OUT, root)
-    if not held:
+    if not chosen:
         return out.astype(bool)
     here = tr_of(sid, None)
-    for c in held:
+    for c in chosen:
         pts = ring(c.box)
         px = here.to_pixel(tr_of((c.series, c.sheet), c).to_world(pts))
         ok = np.isfinite(px).all(axis=1)
