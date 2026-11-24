@@ -526,3 +526,53 @@ def test_a_spur_thins_and_the_block_is_straightened():
     assert ((lab.area == 1) == rect)[~spur].all()                      # the block straightened, its teeth gone
     left = (lab.area == 1) & spur         # the spur, no wider than the tolerance, is thinned to a wedge (1 px at its
     assert left.any() and left.sum() < spur.sum() and left[8:12].sum(axis=1).max() == 1      # tip), not kept whole
+
+
+def test_a_choosing_crop_on_test_ground_is_found_on_another_sheet(tmp_path):
+    a, b = ("s", "A"), ("s", "B")
+    # B's page shows the same ground 100 px further east: A's px (x, y) is B's px (x + 100, y)
+    flats = {a: Flat(4.0), b: Flat(4.0, dx=100)}
+    _write(tmp_path, "test", "B", (300, 300, 50, 40))                  # A's ground x 200-249
+    on = handlabels.read_crop(_write(tmp_path, "choose", "A", (225, 310, 50, 20)), "choose")      # half on it
+    beside = handlabels.read_crop(_write(tmp_path, "choose", "A", (250, 300, 50, 40)), "choose")  # touching only
+    test = handlabels.crops(("test",), root=tmp_path)
+    got = handlabels.choose_on_test([on, beside], test, flats.__getitem__)
+    assert [(c.box, t.sheet) for c, t, _ in got] == [((225, 310, 50, 20), "B")]
+    assert got[0][2] == pytest.approx(0.5)
+    with pytest.raises(ValueError, match=r"A__225_310_50_20\.json.*B__300_300_50_40\.json \(0\.500 of"):
+        handlabels.refuse_choose_on_test([on, beside], test, flats.__getitem__)
+    handlabels.refuse_choose_on_test([beside], test, flats.__getitem__)          # nothing to refuse
+
+
+def test_the_chooser_and_count_refuse_a_choosing_crop_on_test_ground(tmp_path):
+    from sfzmaps.find import counts
+    flats = {("s", "A"): Flat(4.0)}
+    choose = [handlabels.read_crop(_write(tmp_path, "choose", "A", (100, 100, 20, 20)), "choose")]
+    test = [handlabels.read_crop(_write(tmp_path, "test", "A", (110, 100, 20, 20)), "test")]
+    with pytest.raises(ValueError, match=r"choose/s/A__100_100_20_20\.json.*test/s/A__110_100_20_20\.json"):
+        counts.chooser(choose, "cpu", test, flats.__getitem__)
+    with pytest.raises(ValueError, match=r"0\.500 of the choosing crop's area"):
+        counts.count({}, choose, test, "cpu", tmp_path / "run", placements=flats.__getitem__)
+
+
+def test_the_crops_command_prints_a_choosing_crop_on_test_ground(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import config
+    from sfzmaps.cli import app
+    from sfzmaps.find import lotlabels, pages
+    root = tmp_path / "inputs" / "find-labels"
+    monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
+    page = np.ones((300, 300), np.float32)
+    page[::10] = 0                        # lines every 10 rows: each crop has ink and paper
+    monkeypatch.setattr(pages, "load_scan", lambda sid: page)
+    monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
+    _write(root, "test", "A", (100, 100, 40, 40), street=[[101, 105]])
+    _write(root, "choose", "A", (200, 100, 40, 40), street=[[201, 105]])
+    r = CliRunner().invoke(app, ["find", "crops"])
+    assert r.exit_code == 0 and "overlap" not in r.output, r.output
+    _write(root, "choose", "A", (130, 135, 40, 40), street=[[131, 145]])
+    r = CliRunner().invoke(app, ["find", "crops", "--set", "train"])
+    assert r.exit_code == 1, r.output
+    assert ("choose-against-test ground overlap: choose/s/A__130_135_40_40.json lies on the ground of the test crop "
+            "test/s/A__100_100_40_40.json (0.031 of the choosing crop's area)") in r.output, r.output

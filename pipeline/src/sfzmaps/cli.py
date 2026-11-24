@@ -1683,14 +1683,15 @@ def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: trai
                                                                "(data/find/look/crops/<set>/).")) -> None:
     """Make the labels of every hand crop (inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json) and
     print each crop's areas by kind and its warnings.  A crop file that cannot be read or labelled is reported with its
-    path and the rest go on; the exit status is 1 if any failed.  $0."""
+    path and the rest go on.  Then every choosing crop lying on a test crop's ground, sent through the sheets'
+    placements, is printed with the share of its area that overlaps.  The exit status is 1 if any crop failed or any
+    such overlap was found.  $0."""
     from sfzmaps.find import handlabels, look as pictures, pages
     if set_ is not None and set_ not in handlabels.SETS:
         raise typer.BadParameter(f"expected one of {', '.join(handlabels.SETS)}", param_hint="--set")
     found = handlabels.crop_files(handlabels.SETS if set_ is None else (set_,))
     if not found:
         typer.echo("no crops")
-        return
     failed, scans = 0, {}
     for path, s in found:
         name = f"{s}/{path.parent.name}/{path.name}"
@@ -1712,8 +1713,21 @@ def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: trai
             typer.echo(f"  {w}")
         if look:
             typer.echo(f"  {pictures.write_crop(c, lum, lab)}")
+    overlaps = []
+    try:
+        overlaps = handlabels.choose_on_test(handlabels.crops(("choose",)), handlabels.crops(("test",)))
+    except (ValueError, FileNotFoundError) as e:
+        failed += 1
+        typer.echo(f"choosing crops against test crops: not checked: {e}")
+    for c, t, share in overlaps:
+        typer.echo(f"choose-against-test ground overlap: {c.set}/{c.series}/{c.path.name} lies on the ground of the "
+                   f"test crop {t.set}/{t.series}/{t.path.name} ({share:.3f} of the choosing crop's area)")
     if failed:
         typer.echo(f"{failed} of {len(found)} crops failed")
+    if overlaps:
+        typer.echo(f"{len(overlaps)} choose-against-test overlap(s): a choosing crop must lie away from every test "
+                   f"crop's ground")
+    if failed or overlaps:
         raise typer.Exit(1)
 
 
@@ -1832,10 +1846,13 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
                device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one).")
                ) -> None:
     """Count what the run's kept model finds on every `test` hand crop, at the watershed depth fitted on the `choose`
-    crops: how many printed blocks are found, joined, cut up or lost, the found block edges' distance from the hand
-    ones in feet, and on the April 2000 table's series how many zoning-border statements it agrees with; per era and
-    pooled.  Writes data/find/runs/<run>/counts.json, each test crop's read (reads/test/<crop>.npz) and picture
-    (look/test/<crop>.png).  Exit status 1 when there is no choosing or no test crop, or a crop cannot be read.  $0."""
+    crops: how many printed blocks are found, joined, cut up, lost or held whole, how much of the hand street and
+    block ground it calls so, how far the hand block boundary lies from its block edges in feet, and on the April
+    2000 table's series how many zoning-border statements it agrees with (null for a run that did not train that
+    answer) and how many of them its block-edge answer crosses; per crop, per era and pooled
+    (`find.counts`).  Writes data/find/runs/<run>/counts.json, each test crop's read
+    (reads/test/<series>__<crop>.npz) and picture (look/test/<series>__<crop>.png).  Exit status 1 when there is no
+    choosing or no test crop, a choosing crop lies on a test crop's ground, or a crop cannot be read.  $0."""
     import json
     import logging
 
@@ -1858,9 +1875,9 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
     try:
         choose, test = handlabels.crops(("choose",)), handlabels.crops(("test",))
         with gpu.gpu_turn(True, device):
-            out = counts.count(saved["state_dict"], choose, test, device, folder)
-    except (ValueError, FileNotFoundError) as e:
-        typer.echo(str(e), err=True)
+            out = counts.count(saved["state_dict"], choose, test, device, folder, saved["recipe"]["answers"])
+    except (ValueError, FileNotFoundError, KeyError) as e:
+        typer.echo(str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e), err=True)
         raise typer.Exit(1) from None
     out = {"run": run, "step": saved["step"], "device": str(device), **out}
     f = folder / "counts.json"
@@ -1869,7 +1886,12 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
     typer.echo(f"depth {out['depth_level']}/255 (choosing crops find {out['choose']['found_share']:.3f} of their "
                f"blocks, mean over eras); test crops find {t['found_share']:.3f}")
     for era, c in t["eras"].items():
-        typer.echo(f"  {era}: {c}")
+        g, b, h = t["ground"]["eras"][era], t["boundary_feet"]["eras"][era], t["whole"]["eras"][era]
+        feet = "no model edge" if b["median"] is None else (f"median {b['median']:.1f} ft, 90% {b['p90']:.1f} ft, "
+                                                            f"99% {b['p99']:.1f} ft")
+        typer.echo(f"  {era}: {c}; held whole {h['whole']} of {h['blocks']}; street px called street "
+                   f"{g['street_share']}, area px called not street {g['area_share']}; hand block boundary to the "
+                   f"nearest block edge: {feet}")
     typer.echo(str(f))
 
 

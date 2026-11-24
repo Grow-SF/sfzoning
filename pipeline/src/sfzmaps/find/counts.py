@@ -1,5 +1,6 @@
 """The counts a read of the finder is judged by, on the hand crops: how many printed blocks it finds, joins, cuts up or
-loses, and how many zoning-border statements of the April 2000 table it agrees with.
+loses, holds whole, where it puts the street and the block boundary, and how many zoning-border statements of the
+April 2000 table it agrees with.
 
 - `blocks`: every hand area of kind `block` is exactly one of, tested in this order: `lost` (more than half its px lie
   in no found area), `found` (one found area holds more than half its px, and more than half of that area's px are
@@ -10,18 +11,29 @@ loses, and how many zoning-border statements of the April 2000 table it agrees w
   weighs as much as one with many.
 - `fit_depth`: the watershed depth (`find.areas`) among i / 255, i = 1..254 (every level a stored read can tell
   apart) with the highest `found_share`, the smallest of a tie.
+- `whole`: per hand block, the share of it its biggest found area holds, and whether it is held whole (WHOLE, a
+  reporting level); a block split 60/40 is `found` but not whole.
+- `ground`: of the hand street px, how many the read calls street, and of the hand area px how many it calls not
+  street (its street chance over one half, the more likely answer).
+- `boundary_feet`: from each hand block-boundary px, the distance in feet to the nearest px the read calls a block
+  edge (its block-edge chance over one half): the median, 90th and 99th percentile.
 - `edge_feet`: how far, in feet, the hand block-edge px of found blocks lie from the nearest side of a found area.
 - `borders`: of the used zoning-border cuts (`find.cuts`), how many of those that say "a zoning border crosses" and of
   those that say "none does" the read agrees with: the chance it gives the cut's own statement
   (`losses.statement_chance`) over one half, the more likely answer.
+- `edge_on_zoning_border_cuts`: of the "a zoning border crosses" cuts, those inside a block (no street-labelled px on
+  the cut) and those across a street, how many the BLOCK-EDGE answer says an edge crosses.
 
 `chooser` scores a checkpoint by the `choose` crops' `found_share` at their fitted depth (the trainer keeps the best);
-`count` reads every `test` crop with a run's kept model at the depth fitted on the `choose` crops.  A crop is read with
-model.REACH px of scan round it where the page allows (`data.grown`) and scored on its own box only.
+`count` reads every `test` crop with a run's kept model at the depth fitted on the `choose` crops.  Both refuse a
+choosing crop lying on a test crop's ground (`handlabels.refuse_choose_on_test`).  A crop is read with model.REACH px
+of scan round it where the page allows (`data.grown`) and scored on its own box only.
 
-Reads the scans and frame cuts, the crop files, and for `count` each test crop's sheet placement (its ft per px, for
-scoring only) and its sheet's label file data/find/labels/<series>/<sheet>.npz (the zoning-border cuts lying wholly in
-the crop, for scoring only).  `count` writes data/find/runs/<run>/reads/test/<crop>.npz and look/test/<crop>.png."""
+Reads the scans and frame cuts, the crop files, every held-out crop's sheet placement (for the choosing crops'
+ground), and for `count` each test crop's sheet placement (its ft per px, for scoring only) and its sheet's label file
+data/find/labels/<series>/<sheet>.npz (the zoning-border cuts lying wholly in the crop and the lots' street labels,
+for scoring only).  `count` writes data/find/runs/<run>/reads/test/<series>__<crop>.npz and
+look/test/<series>__<crop>.png."""
 from __future__ import annotations
 
 import logging
@@ -38,12 +50,18 @@ from scipy import ndimage
 from sfzmaps.find import areas, cuts as cutlib, data, handlabels, look, losses, lotlabels, model, pages, read
 from sfzmaps.find.cuts import Cuts
 from sfzmaps.find.handlabels import CropLabels
+from sfzmaps.solver.hatchnet.data import STREET
 
 log = logging.getLogger(__name__)
 
 DEPTHS = tuple(i / read.LEVELS for i in range(1, read.LEVELS))
 OUTCOMES = ("found", "joined", "cut_up", "lost")
 TINY = 1e-12                # numerics only: a stored chance of 0 or 1 is read as this far inside (0, 1) for its logit
+WHOLE = 0.9                 # reporting level only, never used to choose anything: a hand block is held "whole" when
+                            # its biggest found area holds at least this share of it and it is at least this share of
+                            # that area
+PIECE = 0.1                 # reporting level only: a found area holding at least this share of a hand block is one of
+                            # the pieces it lies in
 
 
 # --- the blocks -------------------------------------------------------------------------------------------------------
@@ -94,6 +112,39 @@ def _summed(dicts: list[dict]) -> dict:
     return {k: int(sum(d[k] for d in dicts)) for k in ("blocks", *OUTCOMES, "extra")}
 
 
+def whole(found: np.ndarray, truth: CropLabels) -> dict:
+    """Per hand block (`per_block`, by area number): the share of it its biggest found area holds (`held`; 0 when no
+    found area touches it), whether it is held whole (that area holds at least WHOLE of it and it is at least WHOLE of
+    that area) and how many found areas hold PIECE or more of it (`pieces`); and the counts: `blocks`, `whole`, and
+    `in_two_or_more` (blocks with two or more such pieces)."""
+    joint, size = _table(found, truth)
+    per = []
+    for i, kind in sorted(truth.kinds.items()):
+        if kind != "block":
+            continue
+        row = joint[i]
+        n = int(row.sum())
+        held, is_whole, pieces = 0.0, False, 0
+        if n and row[1:].any():
+            a = int(np.argmax(row[1:])) + 1          # the biggest found area in it (the first of a tie)
+            held = int(row[a]) / n
+            is_whole = held >= WHOLE and int(row[a]) / int(size[a]) >= WHOLE
+            pieces = int((row[1:] >= PIECE * n).sum())
+        per.append({"block": int(i), "held": float(held), "whole": bool(is_whole), "pieces": pieces})
+    return {"blocks": len(per), "whole": sum(b["whole"] for b in per),
+            "in_two_or_more": sum(b["pieces"] >= 2 for b in per), "per_block": per}
+
+
+def whole_summed(dicts: list[dict]) -> dict:
+    """`whole` of several crops together: the counts summed, the share of blocks held whole (`whole_share`) and the
+    median of every block's `held` (`median_held`); None for a share or median of no block."""
+    per = [b for d in dicts for b in d["per_block"]]
+    out = {k: int(sum(d[k] for d in dicts)) for k in ("blocks", "whole", "in_two_or_more")}
+    out["whole_share"] = out["whole"] / out["blocks"] if out["blocks"] else None
+    out["median_held"] = float(np.median([b["held"] for b in per])) if per else None
+    return out
+
+
 def era_shares(dicts_by_era: dict[str, list[dict]]) -> dict[str, float]:
     """Each era's found / blocks, its crops summed; an era with no block is left out."""
     out = {}
@@ -140,6 +191,63 @@ def fit_depth(reads: list[tuple[np.ndarray, np.ndarray]], truths: list[CropLabel
     return DEPTHS[best], best_share
 
 
+# --- the street and the block boundary -------------------------------------------------------------------------------
+
+def ground(street_chance: np.ndarray, truth: CropLabels) -> dict:
+    """Of the hand street px (street 1: `street_px`), how many the read calls street (its street chance over one half,
+    the more likely answer: `street_called_street`); of the hand area px (street 0, block or open land: `area_px`), how
+    many it calls not street (`area_called_not_street`).  Counts; `ground_summed` makes the shares."""
+    called = np.asarray(street_chance) > 0.5
+    on_street, on_area = truth.street == handlabels.STREET, truth.street == handlabels.AREA
+    return {"street_px": int(on_street.sum()), "street_called_street": int(called[on_street].sum()),
+            "area_px": int(on_area.sum()), "area_called_not_street": int((~called[on_area]).sum())}
+
+
+def ground_summed(dicts: list[dict]) -> dict:
+    """`ground` of several crops summed, with the shares `street_share` (street_called_street / street_px) and
+    `area_share` (area_called_not_street / area_px); None for a share of no px."""
+    out = {k: int(sum(d[k] for d in dicts)) for k in ("street_px", "street_called_street", "area_px",
+                                                     "area_called_not_street")}
+    out["street_share"] = out["street_called_street"] / out["street_px"] if out["street_px"] else None
+    out["area_share"] = out["area_called_not_street"] / out["area_px"] if out["area_px"] else None
+    return out
+
+
+def boundary_distances(edge_chance: np.ndarray, truth: CropLabels, ft_per_px: float) -> np.ndarray | None:
+    """Float64: from each hand block-boundary px (edge 1), in row order, the distance in feet to the nearest px the
+    read calls a block edge (its block-edge chance over one half, the more likely answer); None when it calls no px of
+    the crop an edge."""
+    called = np.asarray(edge_chance) > 0.5
+    if not called.any():
+        return None
+    return ndimage.distance_transform_edt(~called)[np.asarray(truth.edge) == 1] * float(ft_per_px)
+
+
+def _percentiles(d: np.ndarray) -> dict:
+    if not len(d):
+        return {"median": None, "p90": None, "p99": None}
+    return {"median": float(np.median(d)), "p90": float(np.percentile(d, 90)), "p99": float(np.percentile(d, 99))}
+
+
+def boundary_feet(edge_chance: np.ndarray, truth: CropLabels, ft_per_px: float) -> dict:
+    """The hand block-boundary px (edge 1: `px`) and the median, 90th and 99th percentile (`median`, `p90`, `p99`, ft)
+    of their `boundary_distances`.  When the read calls no px an edge, `no_model_edge` is True and the percentiles are
+    None (no distance to give); likewise None for a crop with no hand boundary px."""
+    d = boundary_distances(edge_chance, truth, ft_per_px)
+    px = int((np.asarray(truth.edge) == 1).sum())
+    return {"px": px, "no_model_edge": d is None, **_percentiles(np.zeros(0) if d is None else d)}
+
+
+def boundary_feet_pooled(distances: list[np.ndarray | None], px: list[int]) -> dict:
+    """`boundary_feet` of several crops together (`distances` each crop's `boundary_distances`, `px` its hand boundary
+    px): `px` all of them, `px_measured` those on crops where the read calls an edge, `crops_with_no_model_edge`, and
+    the percentiles over every measured px together."""
+    got = [d for d in distances if d is not None]
+    d = np.concatenate(got) if got else np.zeros(0)
+    return {"px": int(sum(px)), "px_measured": int(len(d)),
+            "crops_with_no_model_edge": sum(d_ is None for d_ in distances), **_percentiles(d)}
+
+
 # --- the block edges --------------------------------------------------------------------------------------------------
 
 def _sides(found: np.ndarray) -> np.ndarray:
@@ -157,7 +265,8 @@ def _sides(found: np.ndarray) -> np.ndarray:
 def edge_feet(found: np.ndarray, truth: CropLabels, ft_per_px: float) -> dict:
     """Of the hand block-edge px (edge 1) of the blocks `block_status` calls found: how many (`px`), and the median
     and 90th percentile (`median`, `p90`, ft) of their distance to the nearest px on a side of a found area (None when
-    there is no such px or no side)."""
+    there is no such px or no side).  Unlike `boundary_feet`, which measures every hand boundary px against the px the
+    block-edge answer calls an edge, this measures the closed areas (`find.areas`) and only the blocks they find."""
     found = np.asarray(found)
     mine = [i for i, s in block_status(found, truth).items() if s == "found"]
     on = (np.asarray(truth.edge) == 1) & np.isin(truth.area, mine)
@@ -196,31 +305,56 @@ def cuts_in_box(c: Cuts, page_width: int, box: tuple[int, int, int, int]) -> Cut
                 c.weight[keep], c.ends[keep], np.zeros(0, np.int64))
 
 
+def _statement_chances(chance: np.ndarray, c: Cuts, says: np.ndarray) -> np.ndarray:
+    """(n,): the chance the read `chance` (h, w; `c.px` index it flat) gives each cut's statement `says` (True "a line
+    crosses"), `losses.statement_chance`."""
+    p = np.clip(np.asarray(chance, np.float64).ravel(), TINY, 1 - TINY)
+    logit = torch.from_numpy(np.log(p) - np.log1p(-p))
+    with torch.no_grad():
+        return losses.statement_chance(logit, torch.from_numpy(c.px.astype(np.int64)),
+                                       torch.from_numpy(c.cut.astype(np.int64)),
+                                       torch.from_numpy(c.prior.astype(np.float64)),
+                                       torch.from_numpy(np.asarray(says, bool))).numpy()
+
+
 def borders(border_chance: np.ndarray, c: Cuts) -> dict:
     """Of the used zoning-border cuts (answer BORDER, weight above 0) on the item whose zoning-border chances are
     `border_chance` (h, w; `c.px` index it flat): how many say "a zoning border crosses" (`crosses`) and how many of
     those the read agrees with (`crosses_agreed`), and the same for "none does" (`none`, `none_agreed`).  Agreeing:
     the chance the read gives the cut's own statement (`losses.statement_chance`) is over one half."""
     use = (c.answer == cutlib.BORDER) & (c.weight > 0)
-    p = np.clip(np.asarray(border_chance, np.float64).ravel(), TINY, 1 - TINY)
-    logit = torch.from_numpy(np.log(p) - np.log1p(-p))
-    with torch.no_grad():
-        chance = losses.statement_chance(logit, torch.from_numpy(c.px.astype(np.int64)),
-                                         torch.from_numpy(c.cut.astype(np.int64)),
-                                         torch.from_numpy(c.prior.astype(np.float64)),
-                                         torch.from_numpy(c.says.astype(bool))).numpy()
-    agreed = chance > 0.5
+    agreed = _statement_chances(border_chance, c, c.says) > 0.5
     return {"crosses": int((use & c.says).sum()), "crosses_agreed": int((use & c.says & agreed).sum()),
             "none": int((use & ~c.says).sum()), "none_agreed": int((use & ~c.says & agreed).sum())}
 
 
-def _sheet_border_cuts(sid: pages.SheetId, shape: tuple[int, int]) -> Cuts | None:
-    """The sheet's zoning-border cuts from its label file made through the warp's placement
-    (`lotlabels.load_sheet_labels`); None when it has no label file.  ValueError (naming the command that makes it
-    again) when the file was made through another placement or does not fit the page."""
+EDGE_ON_BORDER_KEYS = ("inside_a_block", "inside_a_block_edge_crosses", "across_a_street",
+                       "across_a_street_edge_crosses")
+
+
+def edge_on_zoning_border_cuts(edge_chance: np.ndarray, c: Cuts, street_labels: np.ndarray) -> dict:
+    """Of the used "a zoning border crosses" cuts (answer BORDER, weight above 0) on the item whose block-edge chances
+    are `edge_chance` (h, w; `c.px` index it flat): those with no px the lots label street (`street_labels` (h, w),
+    1 street: a zoning border between touching lots, where the print draws no block edge) as `inside_a_block`, the
+    rest as `across_a_street`, and of each how many the BLOCK-EDGE answer says an edge crosses (`..._edge_crosses`:
+    the chance it gives "a line crosses" on the cut, `losses.statement_chance`, over one half)."""
+    use = (c.answer == cutlib.BORDER) & c.says & (c.weight > 0)
+    n = len(c.answer)
+    on_street = np.bincount(c.cut, np.asarray(street_labels).ravel()[c.px] == STREET, minlength=n) > 0
+    crosses = _statement_chances(edge_chance, c, np.ones(n, bool)) > 0.5
+    inside, across = use & ~on_street, use & on_street
+    return dict(zip(EDGE_ON_BORDER_KEYS, (int(inside.sum()), int((inside & crosses).sum()), int(across.sum()),
+                                          int((across & crosses).sum()))))
+
+
+def _sheet_labels(sid: pages.SheetId, shape: tuple[int, int]) -> tuple[Cuts, np.ndarray] | None:
+    """The sheet's cut statements and the lots' street labels (h, w) from its label file made through the warp's
+    placement (`lotlabels.load_sheet_labels`); None when it has no label file.  ValueError (naming the command that
+    makes it again) when the file was made through another placement or does not fit the page."""
     if not lotlabels.sheet_path(sid).is_file():
         return None
-    return lotlabels.file_cuts(lotlabels.load_sheet_labels(sid, "warp", shape))
+    lab = lotlabels.load_sheet_labels(sid, "warp", shape)
+    return lotlabels.file_cuts(lab), lab["street"]
 
 
 # --- reading the crops ------------------------------------------------------------------------------------------------
@@ -277,11 +411,14 @@ def _only(crops: list[handlabels.Crop], set_: str) -> None:
         raise ValueError(f"only {set_} crops are read here, not {', '.join(bad)}")
 
 
-def chooser(crops: list[handlabels.Crop], device) -> Callable[[int, dict], float]:
+def chooser(crops: list[handlabels.Crop], device, test: list[handlabels.Crop] | None = None,
+            placements=None) -> Callable[[int, dict], float]:
     """A checkpoint's score for the trainer (`train.fit`'s on_checkpoint): every crop read with the checkpoint's
-    weights, and `fit_depth`'s share.  The crops are read from disk once, here.  ValueError when there is no crop or
-    one is not in the `choose` set."""
+    weights, and `fit_depth`'s share.  The crops are read from disk once, here.  ValueError when there is no crop, one
+    is not in the `choose` set, or one lies on the ground of a `test` crop (`test`, None: every test crop;
+    `handlabels.refuse_choose_on_test` with `placements`)."""
     _only(crops, "choose")
+    handlabels.refuse_choose_on_test(crops, handlabels.crops(("test",)) if test is None else test, placements)
     ready = prepare(crops)
 
     def score(step: int, state_dict: dict) -> float:
@@ -298,69 +435,121 @@ def chooser(crops: list[handlabels.Crop], device) -> Callable[[int, dict], float
 
 # --- a run's counts ---------------------------------------------------------------------------------------------------
 
-def count(state_dict: dict, choose: list[handlabels.Crop], test: list[handlabels.Crop], device,
-          folder: Path) -> dict:
+NEEDED = ("street", "edge")         # the answers the closed areas are made of: a run without them is not counted
+NOT_TRAINED = "not_trained"
+
+
+def crop_file_name(c: handlabels.Crop) -> str:
+    """<series>__<crop file stem>: a test crop's read and picture are named so (as `look.write_crop` names a crop)."""
+    return f"{c.series}__{c.path.stem}"
+
+
+def count(state_dict: dict, choose: list[handlabels.Crop], test: list[handlabels.Crop], device, folder: Path,
+          answers=model.ANSWERS, placements=None) -> dict:
     """The counts of a run's kept model (see the module): the depth fitted on the `choose` crops, then every `test`
-    crop read at it; each test crop's read saved to <folder>/reads/test/<crop file stem>.npz and its picture to
-    <folder>/look/test/<crop file stem>.png.  Returns what counts.json holds (no clock time, no absolute path).
-    ValueError when a set has no crop, holds a crop of another set, or two of its crops share a file stem."""
+    crop read at it; each test crop's read saved to <folder>/reads/test/<series>__<crop file stem>.npz and its picture
+    to <folder>/look/test/<series>__<crop file stem>.png.  `answers`: the answers the run trained; a measure of one it
+    did not train is null (the zoning-border agreement, `not_trained` saying so) and its panel is left out of the
+    pictures.  Returns what counts.json holds (no clock time, no absolute path), each measure per crop, per era and
+    pooled.  ValueError when a set has no crop or holds a crop of another set, a choosing crop lies on a test crop's
+    ground (`handlabels.refuse_choose_on_test`, with `placements`), or the run did not train the street or the
+    block-edge answer."""
     _only(choose, "choose")
     _only(test, "test")
-    for crops in (choose, test):
-        stems = [c.path.stem for c in crops]
-        twice = sorted({s for s in stems if stems.count(s) > 1})
-        if twice:
-            raise ValueError(f"crops sharing a file stem (their pictures would overwrite): {', '.join(twice)}")
+    answers = tuple(answers)
+    missing = [a for a in NEEDED if a not in answers]
+    if missing:
+        raise ValueError(f"the run did not train the {' and '.join(missing)} answer(s), which the closed areas are "
+                         f"made of: nothing to count")
+    handlabels.refuse_choose_on_test(choose, test, placements)
+    borders_trained = "border" in answers
     net = network(state_dict)
     ready = prepare(choose)
     reads = [read_one(net, p, device) for p in ready]
     depth, share = fit_depth(reads, [p.truth for p in ready], [p.era for p in ready])
     at_depth = [blocks(areas.areas(c[model.STREET], c[model.EDGE], k, depth), p.truth) for (c, k), p in
                 zip(reads, ready)]
-    out = {"depth": depth, "depth_level": round(depth * read.LEVELS),
+    out = {"depth": depth, "depth_level": round(depth * read.LEVELS), "answers_trained": list(answers),
+           NOT_TRAINED: {a: "the run did not train this answer: its measures are null" for a in model.ANSWERS
+                         if a not in answers},
            "choose": {"found_share": share, "era_shares": era_shares(_by_era(at_depth, [p.era for p in ready])),
                       "crops": [data.crop_name(p.crop) for p in ready]}}
-    rows, no_file = [], []
+    rows, distances, no_file = [], [], []
     for c in test:
         p = prepare([c])[0]
         sid = (c.series, c.sheet)
         chances, keep = read_one(net, p, device)
-        read.save(folder / "reads" / "test" / f"{c.path.stem}.npz", chances)
+        name = crop_file_name(c)
+        stored = Path("reads") / "test" / f"{name}.npz"
+        read.save(folder / stored, chances)
         found = areas.areas(chances[model.STREET], chances[model.EDGE], keep, depth)
         status = block_status(found, p.truth)
         got = blocks(found, p.truth)
         scale = ft_per_px(lotlabels.placement(sid), c.box)
-        zb = None
+        zb = edge_on_zb = None
         if pages.source(c.series).borders in lotlabels.TABLE_BORDERS:
-            sheet_cuts = _sheet_border_cuts(sid, p.page_shape)
-            if sheet_cuts is None:
+            sheet = _sheet_labels(sid, p.page_shape)
+            if sheet is None:
                 no_file.append(data.crop_name(c))
             else:
-                zb = borders(chances[model.BORDER], cuts_in_box(sheet_cuts, p.page_shape[1], c.box))
-        picture = Path("look") / "test" / f"{c.path.stem}.png"
+                sheet_cuts, street = sheet
+                in_box = cuts_in_box(sheet_cuts, p.page_shape[1], c.box)
+                x0, y0, w, h = c.box
+                edge_on_zb = edge_on_zoning_border_cuts(chances[model.EDGE], in_box, street[y0:y0 + h, x0:x0 + w])
+                if borders_trained:
+                    zb = borders(chances[model.BORDER], in_box)
+        d = boundary_distances(chances[model.EDGE], p.truth, scale)
+        distances.append(d)
+        bf = boundary_feet(chances[model.EDGE], p.truth, scale)
+        held = whole(found, p.truth)
+        picture = Path("look") / "test" / f"{name}.png"
         (folder / picture).parent.mkdir(parents=True, exist_ok=True)
         x0, y0, w, h = c.box
         title = (f"test / {c.series} / {c.sheet}  page x {x0}-{x0 + w}, y {y0}-{y0 + h}; {p.era}; depth "
-                 f"{out['depth_level']}/255; blocks {got['blocks']}: found {got['found']}, joined {got['joined']}, "
-                 f"cut up {got['cut_up']}, lost {got['lost']}; extra areas {got['extra']}")
-        cv2.imwrite(str(folder / picture), look.read_picture(p.lum[p.inner], chances, found, p.truth, status, title))
-        rows.append({"name": data.crop_name(c), "era": p.era, "counts": got,
+                 f"{out['depth_level']}/255; blocks {got['blocks']}: found {got['found']}, whole {held['whole']}, "
+                 f"joined {got['joined']}, cut up {got['cut_up']}, lost {got['lost']}; extra areas {got['extra']}")
+        cv2.imwrite(str(folder / picture), look.read_picture(p.lum[p.inner], chances, found, p.truth, status, title,
+                                                             answers))
+        rows.append({"name": data.crop_name(c), "era": p.era, "counts": got, "whole": held,
+                     "ground": ground(chances[model.STREET], p.truth), "boundary_feet": bf,
                      "edge_feet": edge_feet(found, p.truth, scale), "ft_per_px": scale, "zoning_borders": zb,
-                     "picture": str(picture)})
+                     "edge_on_zoning_border_cuts": edge_on_zb, "read": str(stored), "picture": str(picture)})
         log.info("%s: %s", data.crop_name(c), got)
-    by_era = _by_era([r["counts"] for r in rows], [r["era"] for r in rows])
-    zb_rows = [r for r in rows if r["zoning_borders"] is not None]
-    zb_by_era = _by_era([r["zoning_borders"] for r in zb_rows], [r["era"] for r in zb_rows])
+    eras = [r["era"] for r in rows]
+    by_era = _by_era([r["counts"] for r in rows], eras)
+    ground_by_era = _by_era([r["ground"] for r in rows], eras)
+    whole_by_era = _by_era([r["whole"] for r in rows], eras)
+    feet_by_era = _by_era([(d, r["boundary_feet"]["px"]) for d, r in zip(distances, rows)], eras)
+    feet = {e: boundary_feet_pooled([d for d, _ in v], [n for _, n in v]) for e, v in sorted(feet_by_era.items())}
+    on_zb = [r for r in rows if r["edge_on_zoning_border_cuts"] is not None]
+    on_zb_by_era = _by_era([r["edge_on_zoning_border_cuts"] for r in on_zb], [r["era"] for r in on_zb])
     out["test"] = {"found_share": found_share(by_era), "era_shares": era_shares(by_era),
                    "eras": {e: _summed(d) for e, d in sorted(by_era.items())},
                    "pooled": _summed([r["counts"] for r in rows]),
-                   "zoning_borders": {"eras": {e: _sum_keys(d) for e, d in sorted(zb_by_era.items())},
-                                      "pooled": _sum_keys([r["zoning_borders"] for r in zb_rows]),
-                                      "no_label_file": no_file},
+                   "whole": {"eras": {e: whole_summed(d) for e, d in sorted(whole_by_era.items())},
+                             "pooled": whole_summed([r["whole"] for r in rows])},
+                   "ground": {"eras": {e: ground_summed(d) for e, d in sorted(ground_by_era.items())},
+                              "pooled": ground_summed([r["ground"] for r in rows])},
+                   "boundary_feet": {"eras": feet,
+                                     "pooled": boundary_feet_pooled(distances, [r["boundary_feet"]["px"]
+                                                                               for r in rows])},
+                   "edge_on_zoning_border_cuts": {
+                       "eras": {e: _sum_keys(d, EDGE_ON_BORDER_KEYS) for e, d in sorted(on_zb_by_era.items())},
+                       "pooled": _sum_keys([r["edge_on_zoning_border_cuts"] for r in on_zb], EDGE_ON_BORDER_KEYS),
+                       "no_label_file": no_file},
+                   "zoning_borders": None,
                    "crops": rows}
+    if borders_trained:
+        zb_rows = [r for r in rows if r["zoning_borders"] is not None]
+        zb_by_era = _by_era([r["zoning_borders"] for r in zb_rows], [r["era"] for r in zb_rows])
+        out["test"]["zoning_borders"] = {"eras": {e: _sum_keys(d) for e, d in sorted(zb_by_era.items())},
+                                         "pooled": _sum_keys([r["zoning_borders"] for r in zb_rows]),
+                                         "no_label_file": no_file}
     return out
 
 
-def _sum_keys(dicts: list[dict]) -> dict:
-    keys = ("crosses", "crosses_agreed", "none", "none_agreed")
+BORDER_KEYS = ("crosses", "crosses_agreed", "none", "none_agreed")
+
+
+def _sum_keys(dicts: list[dict], keys=BORDER_KEYS) -> dict:
     return {k: int(sum(d[k] for d in dicts)) for k in keys}

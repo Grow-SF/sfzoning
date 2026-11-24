@@ -84,7 +84,7 @@ def test_every_reader_of_a_label_file_checks_its_placement(tmp_path, monkeypatch
         lotlabels.load_sheet_labels(("t", "A"))
     _label_file("work")
     for read in (lambda: lotlabels.load_sheet_labels(("t", "A")), lambda: data.sheet_labelled(("t", "A")),
-                 lambda: town.measure("t", ["A"]), lambda: counts._sheet_border_cuts(("t", "A"), (20, 30))):
+                 lambda: town.measure("t", ["A"]), lambda: counts._sheet_labels(("t", "A"), (20, 30))):
         with pytest.raises(ValueError, match=again):
             read()
     assert lotlabels.load_sheet_labels(("t", "A"), "work")["street"].shape == (20, 30)

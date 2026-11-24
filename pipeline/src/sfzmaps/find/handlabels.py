@@ -14,8 +14,11 @@ This is a drawing aid for hand labels only, checked by eye on its picture (`look
 are parts of the tool, and nothing like it runs when a sheet is read.
 
 `reserved` is the ground under every `choose` and `test` crop, on any sheet's page, which training leaves out.
+`choose_on_test` finds a choosing crop lying on a test crop's ground (on any sheet), which `refuse_choose_on_test`
+refuses: the trainer's kept step and the closed areas' depth are chosen on the choosing crops, so they must not see the
+test ground.
 
-Reads the crop files and (for `reserved`) the sheets' placements.  Writes nothing."""
+Reads the crop files and (for `reserved` and `choose_on_test`) the sheets' placements.  Writes nothing."""
 from __future__ import annotations
 
 import json
@@ -432,3 +435,69 @@ def reserved(sid: SheetId, shape: tuple[int, int], margin: int, root: Path | Non
     if margin > 0:
         out = cv2.dilate(out, np.ones((2 * margin + 1, 2 * margin + 1), np.uint8))
     return out.astype(bool)
+
+
+def _placer(placements: Callable[[SheetId], object] | None, which: str = "warp") -> Callable[[SheetId, Crop], object]:
+    """The placement of a crop's sheet, each read once (`placements`, None: `lotlabels.placement` with `which`);
+    FileNotFoundError naming the crop when its sheet has none."""
+    get = (lambda s: lotlabels.placement(s, which)) if placements is None else placements
+    found: dict[SheetId, object] = {}
+
+    def tr_of(c: Crop):
+        s = (c.series, c.sheet)
+        if s not in found:
+            try:
+                found[s] = get(s)
+            except FileNotFoundError:
+                raise FileNotFoundError(f"{c.path}: sheet {s[0]}/{s[1]} has no placement; crops must lie on placed "
+                                        f"sheets") from None
+        return found[s]
+    return tr_of
+
+
+def ground_share(a: Crop, b: Crop, tr_a, tr_b) -> float:
+    """The share of crop a's ground that lies on crop b's box: points round a's box (`ring`) sent to the ground through
+    its sheet's placement `tr_a` and onto b's page through `tr_b`, their polygon (the finite ones, in order) filled on
+    b's page px, and the share of its px inside b's box.  0 when no point can be placed."""
+    px = tr_b.to_pixel(tr_a.to_world(ring(a.box)))
+    px = px[np.isfinite(px).all(axis=1)]
+    if not len(px):
+        return 0.0
+    lo = np.floor(px.min(axis=0)).astype(int) - 1
+    hi = np.ceil(px.max(axis=0)).astype(int) + 2
+    canvas = np.zeros((hi[1] - lo[1], hi[0] - lo[0]), np.uint8)
+    cv2.fillPoly(canvas, [np.rint(px - lo).astype(np.int32)], 1)
+    total = int(canvas.sum())
+    x0, y0, w, h = b.box
+    cx0, cy0 = max(x0 - lo[0], 0), max(y0 - lo[1], 0)
+    cx1, cy1 = min(x0 + w - lo[0], canvas.shape[1]), min(y0 + h - lo[1], canvas.shape[0])
+    inside = int(canvas[cy0:cy1, cx0:cx1].sum()) if cx1 > cx0 and cy1 > cy0 else 0
+    return inside / total if total else 0.0
+
+
+def choose_on_test(choose: list[Crop], test: list[Crop], placements: Callable[[SheetId], object] | None = None,
+                   which: str = "warp") -> list[tuple[Crop, Crop, float]]:
+    """Every (choosing crop, test crop, share) where the choosing crop's box, sent through the placements to the test
+    crop's sheet, covers a px of the test crop's box (`ground_share` over 0: the share of the choosing crop's area that
+    overlaps), in the crops' order.  `placements` as `reserved`."""
+    if not choose or not test:
+        return []
+    tr_of = _placer(placements, which)
+    out = []
+    for c in choose:
+        for t in test:
+            share = ground_share(c, t, tr_of(c), tr_of(t))
+            if share > 0:
+                out.append((c, t, share))
+    return out
+
+
+def refuse_choose_on_test(choose: list[Crop], test: list[Crop], placements: Callable[[SheetId], object] | None = None,
+                          which: str = "warp") -> None:
+    """ValueError naming every choosing crop that lies on a test crop's ground (`choose_on_test`), the test crop and
+    the share of the choosing crop's area that overlaps; nothing when none does."""
+    found = choose_on_test(choose, test, placements, which)
+    if found:
+        lines = "; ".join(f"{c.path} lies on the ground of the test crop {t.path} ({share:.3f} of the choosing crop's "
+                          f"area)" for c, t, share in found)
+        raise ValueError(f"choosing crops on test ground, which the choosing must never see: {lines}")

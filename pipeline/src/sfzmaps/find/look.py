@@ -8,8 +8,8 @@ sheet's name at the top.  `busiest` finds the close-up: the window holding the m
 `crop`: a hand crop (`handlabels`) and its labels side by side, both enlarged ZOOM times, with page-px rulers to read
 coordinates off for the crop file.  `ruled`: a close-up of the scan with rulers and a grid, to draw crops from.
 
-`read_picture`: a crop as the finder read it (`find.counts`): the scan, the three chances and the closed areas, the
-hand blocks outlined by what became of them.
+`read_picture`: a crop as the finder read it (`find.counts`): the scan, the chances of the answers the run trained and
+the closed areas, the hand blocks outlined by what became of them.
 
 Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/, `write_crop` to
 data/find/look/crops/<set>/, `write_ruled` to data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
@@ -21,7 +21,7 @@ import cv2
 import numpy as np
 from scipy import ndimage
 
-from sfzmaps.find import cuts, handlabels, pages
+from sfzmaps.find import cuts, handlabels, model, pages
 from sfzmaps.find.pages import SheetId
 from sfzmaps.solver.hatchnet.data import NOT_STREET, STREET
 
@@ -308,6 +308,8 @@ FOUND_TINT = 0.35           # picture setting: how strongly a found area tints t
 SIDE = (120, 40, 0)         # picture setting: the found areas' sides, dark blue
 OUTLINE = 2                 # picture setting: a hand block's outline width, px
 LABEL = 30                  # picture setting: the height of the white strip naming a 1,000 px panel, px
+TOP = 1 / 255               # picture setting: the least largest value a zoning-border panel is scaled to (one stored
+                            # level), so a read of all 0 is drawn white
 
 
 def _grey(a: np.ndarray) -> np.ndarray:
@@ -330,8 +332,8 @@ def _key_tints(band, box):
         band[y0:y1, x0 + i * step:x0 + (i + 1) * step] = colour
 
 
-READ_KEY = (("panels: the scan; the chance of street, of a block edge and of a zoning border (black 1, white 0); the "
-             "found areas over the scan", WHITE),
+READ_KEY = (("panels: the scan; the chance of street and of a block edge (white 0, black 1), of a zoning border "
+             "(white 0, black its largest, named); the found areas over the scan", WHITE),
             ("found areas: each tinted its own colour, their sides dark blue", _key_tints),
             ("hand block outlines: green = found", OUTCOME_COLOUR["found"]),
             ("red = joined (the found area holding most of it lies mostly outside it)", OUTCOME_COLOUR["joined"]),
@@ -340,15 +342,23 @@ READ_KEY = (("panels: the scan; the chance of street, of a block edge and of a z
 
 
 def read_picture(lum: np.ndarray, chances: np.ndarray, found: np.ndarray, truth: handlabels.CropLabels,
-                 status: dict[int, str], title: str) -> np.ndarray:
+                 status: dict[int, str], title: str, answers=model.ANSWERS) -> np.ndarray:
     """The picture (BGR uint8) of a crop's read, side by side at the scan's own size: the scan `lum` (1 paper, 0 ink);
-    the chances (3, h, w) of street, block edge and zoning border as grey (black 1, white 0), each named; and the found
-    areas `found` tinted over the scan with their sides, each hand block outlined in its outcome's colour (`status`,
-    by hand area number: `OUTCOME_COLOUR`); a key and `title` above."""
+    the chances (3, h, w) of the answers trained (`answers`; one left out has no panel), each named: street and block
+    edge as grey from white 0 to black 1, the zoning border from white 0 to black at its own largest chance (a
+    zoning-border chance runs low, its labels being cut statements), the scale in its name; and the found areas
+    `found` tinted over the scan with their sides, each hand block outlined in its outcome's colour (`status`, by hand
+    area number: `OUTCOME_COLOUR`); a key and `title` above."""
     scan = _grey(lum)
     panels = [_named(scan, "the scan")]
-    for i, name in enumerate(("street", "block edge", "zoning border")):
-        panels.append(_named(_grey(1 - chances[i]), f"the chance of {name}"))
+    for i, (answer, name) in enumerate(zip(model.ANSWERS, ("street", "block edge", "zoning border"))):
+        if answer not in answers:
+            continue
+        top = 1.0
+        if i == model.BORDER:
+            top = max(float(chances[i].max()), TOP)
+            name = f"{name} (white 0 to black {top:.3f})"
+        panels.append(_named(_grey(1 - np.clip(chances[i] / top, 0, 1)), f"the chance of {name}"))
     over = scan.astype(np.float32)
     for k in range(1, int(found.max(initial=0)) + 1):
         _paint(over, found == k, FOUND_TINTS[(k - 1) % len(FOUND_TINTS)], FOUND_TINT)
