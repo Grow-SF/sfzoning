@@ -1,12 +1,13 @@
 """The finder's likelihoods: minus the log chance of each label under the network's answers, summed.
 
-- A dense label (street or not at a px, or "no block edge" / "no zoning border" at a px): Bernoulli, `dense_nll`.
+- A dense label (street or not at a px, or "no block edge" at a px): Bernoulli, `dense_nll`.
 - A cut statement (`find.cuts`): "a line crosses this cut" holds with chance 1 - prod_i (1 - prior_i p_i), the line
   being at px i with the network's chance p_i where the placement allows it (prior_i); "none does" with chance
-  prod_i (1 - p_i).  `statement_chance`, and `cut_nll` from it, computed in logs.
+  prod_i (1 - p_i).  `statement_chance`, and `cut_nll` from it, computed in logs.  The finder's cuts (block edges) all
+  say a line crosses.
 
 Every term is multiplied by its label's weight, and `statements` counts the labels (their weights summed); the
-trainer divides the summed loss by it.  The three answers add as one likelihood, with no weights between them.
+trainer divides the summed loss by it.  The two answers add as one likelihood, with no weights between them.
 Reads and writes nothing."""
 from __future__ import annotations
 

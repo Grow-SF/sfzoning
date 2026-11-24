@@ -1,17 +1,15 @@
 """Street-or-not labels from a series' lots: which ground is street and which is block, on the solver's 4 ft grid, and
 the same read onto a scan's page through its sheet's placement.
 
-Only a series whose `lots` flag is set in inputs/find/label_sources.csv is labelled from lots (`series_lots`): the three
-`2000-digital` series from the April 2000 table (`solver.table.load_table`), so the lot index lines up with the table's
-rows; every other such series from the lots of its year (`districts.read.load_parcels`).  On the grid (`Ground`): the
-lots painted (`solver.lots.lot_rasters`), today's blocks the lots with their enclosed holes filled, and the street
-labels and weights of `hatchnet.data.street_grid` from the blocks and today's centre lines (data/ref/streets.parquet),
-every street type with the pooled half-widths: 1 street, 0 not street (a block), 255 no label.
+Only a series whose `lots` is set in inputs/find/label_sources.csv is labelled from lots (`series_lots`): "table" from
+the lots of the April 2000 table (`solver.table.load_table`, the three `2000-digital` series), "year" from the lots of
+its year (`districts.read.load_parcels`).  On the grid (`Ground`): the lots painted (`solver.lots.lot_rasters`),
+today's blocks the lots with their enclosed holes filled, and the street labels and weights of `hatchnet.data.street_grid`
+from the blocks and today's centre lines (data/ref/streets.parquet), every street type with the pooled half-widths: 1
+street, 0 not street (a block), 255 no label.
 
-A sheet's labels (`sheet_labels`): the street-or-not labels read onto its page, and the cut statements of
-`find.cuts`: block edges for a series labelled from lots, and zoning borders where the series' zoning borders are a
-column of the April 2000 table (`series_codes`).  A series whose zoning borders are `none` (the hatched maps) has no
-zoning border anywhere on its map.
+A sheet's labels (`sheet_labels`): the street-or-not labels read onto its page, the px said to carry no block edge, and
+the block-edge cut statements of `find.cuts`.  The finder makes no label about zoning borders.
 
 Reads data/ref/parcels.parquet or the April 2000 table, data/ref/streets.parquet, a sheet's page, frame cut and
 placement (data/warp/<series>/<sheet>/transform.json with its correction, or data/work/<series>/<sheet>/transform.json)
@@ -40,22 +38,17 @@ from sfzmaps.solver.table import load_table
 from sfzmaps.solver.textread.store import save_npz
 from sfzmaps.transform import SheetTransform
 
-TABLE_BORDERS = ("zoning", "height_lim", "sud")     # the April 2000 table's columns a series' zoning borders can be
-# What a lot with no value in a table column is: unknown ("", no statement), except in `sud`, where the table leaves a
-# lot in no special-use district blank; that is known plain ground, and the special-use map draws a zoning border
-# between a district and it.
-MISSING_CODE = {"sud": "(none)"}
 PLACEMENTS = {"warp": config.DATA_DIR / "warp", "work": config.WORK_DIR}
 GRID = "grid.npz"
 
 
 def series_lots(series: str) -> gpd.GeoDataFrame:
-    """The lots that label a series: the April 2000 table when its zoning borders are one of the table's columns
-    (`TABLE_BORDERS`), else the lots of its year.  ValueError for a series whose `lots` flag is not set."""
+    """The lots that label a series: the April 2000 table's for `lots` "table", else the lots of its year.  ValueError
+    for a series whose `lots` is not set."""
     src = pages.source(series)
     if not src.lots:
         raise ValueError(f"series {series}: its lots do not label it (no `lots` in {pages.SOURCES})")
-    if src.borders in TABLE_BORDERS:
+    if src.lots == "table":
         return load_table()
     return load_parcels(series_year(series))
 
@@ -139,16 +132,6 @@ def page_shape(sid: SheetId) -> tuple[int, int]:
         return im.height, im.width
 
 
-def series_codes(series: str) -> np.ndarray | None:
-    """Each table lot's code in the table column the series' zoning borders are (`TABLE_BORDERS`), as downloaded and
-    stripped, in lot-index order; a missing value is `MISSING_CODE` for its column, else "" (unknown).  None for a
-    series whose zoning borders are not a table column."""
-    col = pages.source(series).borders
-    if col not in TABLE_BORDERS:
-        return None
-    return load_table()[col].fillna(MISSING_CODE.get(col, "")).astype(str).str.strip().to_numpy(dtype=str)
-
-
 def sheet_path(sid: SheetId) -> Path:
     return pages.OUT / "labels" / sid[0] / f"{sid[1]}.npz"
 
@@ -172,78 +155,61 @@ def load_sheet_labels(sid: SheetId, which: str = "warp", shape: tuple[int, int] 
     return lab
 
 
+OLD_EDGE = 0                # in a label file made before 2026-11-23, cuts_answer of a block-edge cut (1 was a
+                            # zoning-border cut, which the finder no longer reads)
+
+
 def file_cuts(lab: dict):
-    """The cut statements of a label file's arrays (`load_sheet_labels`) as `find.cuts.Cuts` (the file holds no
-    `ends`: -1)."""
+    """The block-edge cut statements of a label file's arrays (`load_sheet_labels`) as `find.cuts.Cuts` (the file
+    holds no `inside`: -1).  A file made before 2026-11-23 also holds zoning-border cuts (`cuts_answer`): only its
+    block-edge cuts are read."""
     from sfzmaps.find.cuts import Cuts
-    n = len(lab["cuts_answer"])
-    return Cuts(lab["cuts_px"].astype(np.int64), lab["cuts_cut"].astype(np.int32), lab["cuts_prior"].astype(np.float32),
-                lab["cuts_answer"].astype(np.uint8), lab["cuts_says"].astype(bool),
-                lab["cuts_weight"].astype(np.float32), np.full((n, 2), -1, np.int32), np.zeros(0, np.int64))
+    n = len(lab["cuts_weight"])
+    c = Cuts(lab["cuts_px"].astype(np.int64), lab["cuts_cut"].astype(np.int32), lab["cuts_prior"].astype(np.float32),
+             lab["cuts_weight"].astype(np.float32), np.full(n, -1, np.int32), np.zeros(0, np.int64))
+    return c.only(lab["cuts_answer"] == OLD_EDGE) if "cuts_answer" in lab else c
 
 
 def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     """A sheet's labels through its placement `which`, written to data/find/labels/<series>/<sheet>.npz and returned:
-    `street` and `weight` (`page_ground`; none for a series not labelled from lots), `cuts` (`find.cuts.Cuts`: edge
-    cuts for a series labelled from lots, then zoning-border cuts where its zoning borders are a table column; in the
-    file as cuts_px, cuts_cut, cuts_prior, cuts_answer, cuts_says, cuts_weight), `edge_none` (px with a street-or-not
-    label on no edge cut), `border_none` (px inside a lot with a known code on no zoning-border cut; for a series whose
-    zoning borders are `none`, every px of the frame cut), `sigma` (`cuts.spread_px`), `placement` and `counts`.
+    `street` and `weight` (`page_ground`), `cuts` (`find.cuts.edge_cuts`; in the file as cuts_px, cuts_cut, cuts_prior
+    and cuts_weight), `edge_none` (px with a street-or-not label on no block-edge cut), `sigma` (`cuts.spread_px`),
+    `placement` and `counts`.  ValueError for a series whose lots do not label it.
 
-    For a series labelled from lots, labels count only where the sheet draws ink (`find.drawn`): a cut not used has
-    weight 0, and a px whose nearest block outline px is not inked has weight 0 and no `edge_none` / `border_none`.
-    A px on a cut the lots call for, kept or dropped at the frame cut, is in neither `edge_none` nor `border_none`.
-    `counts` (in the file as count_<name>): the cuts used and dropped (`drawn.use`), and the labelled px (weight > 0)
-    before and after."""
+    Labels count only where the sheet draws ink (`find.drawn`): a cut not used has weight 0, and a px whose nearest
+    block outline px is not inked has weight 0 and no `edge_none`.  A px on a cut the lots call for, kept or dropped at
+    the frame cut, is not in `edge_none`.  `counts` (in the file as count_<name>): the cuts used and dropped
+    (`drawn.use`), and the labelled px (weight > 0) before and after."""
     from sfzmaps.find import cuts, drawn
 
     series, _ = sid
-    src = pages.source(series)
+    if not pages.source(series).lots:
+        raise ValueError(f"series {series}: its lots do not label it (no `lots` in {pages.SOURCES})")
     lum = pages.load_scan(sid)
     shape = lum.shape
     keep = pages.load_keep(sid, shape)
     tr = placement(sid, which)
     sigma = cuts.spread_px(sid, which)
-    found = cuts.Cuts.empty()
-    street, weight = np.full(shape, UNKNOWN, np.uint8), np.zeros(shape, np.float32)
-    g = ground(series) if src.lots else None
-    if g is not None:
-        pg = page_ground(g, tr, shape, keep)
-        street, weight = pg.street, pg.weight
-        found = cuts.edge_cuts(g, tr, shape, keep, sigma)
-    codes = series_codes(series)
-    border = cuts.Cuts.empty()
-    if codes is not None:
-        border = cuts.border_cuts(g.lot, codes, tr, shape, keep, sigma)
+    g = ground(series)
+    pg = page_ground(g, tr, shape, keep)
+    street, weight = pg.street, pg.weight
+    found = cuts.edge_cuts(g, tr, shape, keep, sigma)
     edge_none = (street != UNKNOWN) & ~found.on(shape, dropped=True)
-    if codes is not None:
-        r0, r1, c0, c1 = cuts.window(tr, keep, g.lot.shape)
-        [lot] = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(g.lot[r0:r1, c0:c1], -1)], (r0, c0))
-        known = np.r_[codes != "", False][lot]                  # lot -1 (none) reads the appended False
-        border_none = known & keep & ~border.on(shape, dropped=True)
-    else:
-        border_none = keep.copy() if src.borders == "none" else np.zeros(shape, bool)
-    found = cuts.Cuts.joined(found, border)
-    counts = {}
-    if g is not None:
-        r0, r1, c0, c1 = cuts.window(tr, keep, g.block.shape)
-        used_edge = (found.answer == cuts.EDGE) & drawn.inked(found, lum)
-        near_win = drawn.near_inked(g.block[r0:r1, c0:c1], found.ends[used_edge, 0])
-        [near] = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(near_win, False)], (r0, c0))
-        before = int((weight > 0).sum())
-        weight = (weight * near).astype(np.float32)
-        found, counts = drawn.use(found, lum, near_win, street, weight)
-        edge_none &= near
-        border_none &= near
-        counts.update(labelled_px_before=before, labelled_px_after=int((weight > 0).sum()))
-    out = {"street": street, "weight": weight, "cuts": found, "edge_none": edge_none, "border_none": border_none,
-           "sigma": float(sigma), "placement": which, "counts": counts}
+    found, counts = drawn.use(found, lum)
+    r0, r1, c0, c1 = cuts.window(tr, keep, g.block.shape)
+    near_win = drawn.near_inked(g.block[r0:r1, c0:c1], found.inside[found.weight > 0])
+    [near] = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(near_win, False)], (r0, c0))
+    before = int((weight > 0).sum())
+    weight = (weight * near).astype(np.float32)
+    edge_none &= near
+    counts.update(labelled_px_before=before, labelled_px_after=int((weight > 0).sum()))
+    out = {"street": street, "weight": weight, "cuts": found, "edge_none": edge_none, "sigma": float(sigma),
+           "placement": which, "counts": counts}
     f = sheet_path(sid)
     f.parent.mkdir(parents=True, exist_ok=True)
     part = f.with_name(f".{f.name}.part")
     save_npz(part, street=street, weight=weight, cuts_px=found.px, cuts_cut=found.cut, cuts_prior=found.prior,
-             cuts_answer=found.answer, cuts_says=found.says, cuts_weight=found.weight, edge_none=edge_none,
-             border_none=border_none, sigma=np.float64(sigma), placement=np.array(which),
+             cuts_weight=found.weight, edge_none=edge_none, sigma=np.float64(sigma), placement=np.array(which),
              **{f"count_{k}": np.int64(v) for k, v in counts.items()})
     part.replace(f)
     return out

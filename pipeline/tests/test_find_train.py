@@ -1,6 +1,7 @@
 """The finder's training items (`find.data`) and its trainer (`find.train`): labels that survive a quarter turn, the
-reserved ground left unlabelled on sheets and training crops, tiles shared fairly between eras, an answer left out,
-the noise on the tiles, and the same bits from the same seed."""
+reserved ground left unlabelled on sheets and training crops, a sheet's block-edge cuts the only cuts trained on,
+tiles shared fairly between eras, both answers trained, the noise on the tiles, and the same bits from the same
+seed."""
 import json
 import logging
 import math
@@ -13,15 +14,15 @@ import torch
 from find_fixtures import Flat
 from sfzmaps import config
 from sfzmaps.find import data, handlabels, lotlabels, model, pages, train
-from sfzmaps.find.cuts import BORDER, EDGE, Cuts
+from sfzmaps.find.cuts import Cuts
 
 R = model.REACH
 
 
 def _sources(tmp_path, monkeypatch):
-    """Series `s` (hatched, no zoning borders) and `t` (lined, zoning borders from the table)."""
+    """Series `s` (hatched, no lots) and `t` (lined, labelled from the April 2000 table's lots)."""
     f = tmp_path / "label_sources.csv"
-    f.write_text("series,era,lots,zoning_borders\ns,hatched-grey,,none\nt,lined-1bit,year,zoning\n")
+    f.write_text("series,era,lots\ns,hatched-grey,\nt,lined-1bit,table\n")
     monkeypatch.setattr(pages, "SOURCES", f)
 
 
@@ -35,8 +36,8 @@ def _crop_file(set_, series, sheet, box, **marks):
 
 
 def _cuts(shape, rng, n=8) -> Cuts:
-    """`n` short cuts at random on an item of `shape`, across or down, of both answers and both statements; every
-    "crosses" cut has a px of prior 1; the last cut is not used (weight 0)."""
+    """`n` short block-edge cuts at random on an item of `shape`, across or down, each with a px of prior 1; the last
+    cut is not used (weight 0)."""
     h, w = shape
     px, cut, prior = [], [], []
     for i in range(n):
@@ -51,75 +52,82 @@ def _cuts(shape, rng, n=8) -> Cuts:
         prior.append(p)
     weight = np.ones(n, np.float32)
     weight[-1] = 0
-    return Cuts(np.concatenate(px).astype(np.int64), np.concatenate(cut), np.concatenate(prior),
-                (np.arange(n) % 2).astype(np.uint8), (np.arange(n) // 2 % 2).astype(bool), weight,
-                np.full((n, 2), -1, np.int32), np.zeros(0, np.int64))
+    return Cuts(np.concatenate(px).astype(np.int64), np.concatenate(cut), np.concatenate(prior), weight,
+                np.full(n, -1, np.int32), np.zeros(0, np.int64))
 
 
 def _item(shape, rng, era="lined-1bit", name="x", cuts=True, set_="train") -> data.Labelled:
-    """An item with labels of every kind at random: about a third of each answer's px unlabelled; with `cuts` a
+    """An item with labels of both answers at random: about a third of each answer's px unlabelled; with `cuts` a
     sheet's (cut statements, no set), else a hand crop of `set_`."""
     def lab():
         return rng.choice(np.array([0, 1, 255], np.uint8), size=shape)
     street = lab()
     street_w = np.where(street == 255, 0, rng.uniform(0.2, 1.0, shape)).astype(np.float32)
-    return data.Labelled(name, era, rng.uniform(0, 1, shape).astype(np.float32), street, street_w, lab(), lab(),
+    return data.Labelled(name, era, rng.uniform(0, 1, shape).astype(np.float32), street, street_w, lab(),
                          _cuts(shape, rng) if cuts else None, set=None if cuts else set_)
 
 
 def test_a_quarter_turn_keeps_the_loss():
     rng = np.random.default_rng(0)
     t = _item((24, 40), rng)
-    z = torch.from_numpy(rng.normal(0, 2, (1, 3, 24, 40)))          # float64: the sums agree to rounding
-    recipe = train.Recipe()
-    want = float(train.batch_loss(z, [t], recipe))
+    z = torch.from_numpy(rng.normal(0, 2, (1, 2, 24, 40)))          # float64: the sums agree to rounding
+    want = float(train.batch_loss(z, [t]))
     assert want > 0
     for k in (1, 2, 3):
-        got = float(train.batch_loss(torch.rot90(z, k, (2, 3)), [data.turned(t, k)], recipe))
+        got = float(train.batch_loss(torch.rot90(z, k, (2, 3)), [data.turned(t, k)]))
         assert got == pytest.approx(want, abs=1e-5), k
     # the cuts count: the same turn with the cuts left where they were gives another loss
     moved = data.turned(t, 1)
-    stale = data.Labelled(moved.name, moved.era, moved.lum, moved.street, moved.street_w, moved.edge, moved.border,
-                          t.cuts)
-    assert float(train.batch_loss(torch.rot90(z, 1, (2, 3)), [stale], recipe)) != pytest.approx(want, abs=1e-3)
+    stale = data.Labelled(moved.name, moved.era, moved.lum, moved.street, moved.street_w, moved.edge, t.cuts)
+    assert float(train.batch_loss(torch.rot90(z, 1, (2, 3)), [stale])) != pytest.approx(want, abs=1e-3)
 
 
-def _label_file(sid, shape, cuts: Cuts):
+def _label_file(sid, shape, cuts: Cuts, before: bool):
+    """A label file of the block-edge cuts `cuts`; `before`: as made before the finder dropped the zoning border, with
+    a zoning-border cut among them (cuts_answer 1) and a `border_none` label, neither of which is read."""
     f = lotlabels.sheet_path(sid)
     f.parent.mkdir(parents=True, exist_ok=True)
     street = np.zeros(shape, np.uint8)
     street[:, 400:420] = 1
-    np.savez(f, street=street, weight=np.ones(shape, np.float32), cuts_px=cuts.px, cuts_cut=cuts.cut,
-             cuts_prior=cuts.prior, cuts_answer=cuts.answer, cuts_says=cuts.says, cuts_weight=cuts.weight,
-             edge_none=np.ones(shape, bool), border_none=np.ones(shape, bool), sigma=np.float64(2.0),
-             placement=np.array("warp"))
+    arrays = dict(street=street, weight=np.ones(shape, np.float32), cuts_px=cuts.px, cuts_cut=cuts.cut,
+                  cuts_prior=cuts.prior, cuts_weight=cuts.weight, edge_none=np.ones(shape, bool),
+                  sigma=np.float64(2.0), placement=np.array("warp"))
+    if before:
+        n = len(cuts.weight)
+        zb = 10 * shape[1] + np.arange(30, 40)                   # "a zoning border crosses", off the reserved ground
+        arrays.update(cuts_px=np.r_[cuts.px, zb], cuts_cut=np.r_[cuts.cut, np.full(len(zb), n)].astype(np.int32),
+                      cuts_prior=np.r_[cuts.prior, np.ones(len(zb), np.float32)],
+                      cuts_weight=np.r_[cuts.weight, 1].astype(np.float32),
+                      cuts_answer=np.r_[np.zeros(n), 1].astype(np.uint8), cuts_says=np.ones(n + 1, bool),
+                      border_none=np.ones(shape, bool))
+    np.savez(f, **arrays)
 
 
-def test_reserved_ground_has_no_label(tmp_path, monkeypatch):
+@pytest.mark.parametrize("before", [False, True])
+def test_reserved_ground_has_no_label_and_only_block_edge_cuts_are_read(tmp_path, monkeypatch, before):
     _sources(tmp_path, monkeypatch)
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
     shape = (400, 500)
     monkeypatch.setattr(pages, "load_scan", lambda sid: np.ones(shape, np.float32))
     monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
     w = shape[1]
-    # three cuts across row 10: wholly outside the reserved ground, half in it, wholly in it
+    # three block-edge cuts across row 10: wholly outside the reserved ground, half in it, wholly in it
     runs = [np.arange(5, 15), np.arange(70, 90), np.arange(150, 160)]
     c = Cuts(np.concatenate([10 * w + r for r in runs]).astype(np.int64),
              np.repeat(np.arange(3, dtype=np.int32), [len(r) for r in runs]),
-             np.ones(sum(len(r) for r in runs), np.float32), np.array([EDGE, BORDER, EDGE], np.uint8),
-             np.array([True, False, True]), np.ones(3, np.float32), np.full((3, 2), -1, np.int32),
+             np.ones(sum(len(r) for r in runs), np.float32), np.ones(3, np.float32), np.full(3, -1, np.int32),
              np.zeros(0, np.int64))
-    _label_file(("t", "A"), shape, c)
+    _label_file(("t", "A"), shape, c, before)
     _crop_file("choose", "t", "A", (200, 50, 20, 20))
     got = data.sheet_labelled(("t", "A"))
     held = np.zeros(shape, bool)
     held[0:70 + R, 200 - R:220 + R] = True                       # the crop's box grown by REACH, cut at the page
-    assert (got.street[held] == 255).all() and (got.street_w[held] == 0).all()
-    assert (got.edge[held] == 255).all() and (got.border[held] == 255).all()
-    assert (got.street_w[~held] == 1).all() and (got.edge[~held] == 0).all() and (got.border[~held] == 0).all()
+    assert (got.street[held] == 255).all() and (got.street_w[held] == 0).all() and (got.edge[held] == 255).all()
+    assert (got.street_w[~held] == 1).all() and (got.edge[~held] == 0).all()
     assert np.array_equal(got.street[~held], np.where(np.arange(w) // 20 == 20, 1, 0)[None].repeat(400, 0)[~held])
     assert not held.ravel()[got.cuts.px].any()
-    assert np.array_equal(got.cuts.px, 10 * w + runs[0]) and list(got.cuts.answer) == [EDGE]
+    assert np.array_equal(got.cuts.px, 10 * w + runs[0]) and list(got.cuts.cut) == [0] * 10
+    assert len(got.cuts.weight) == 1                             # the zoning-border cut of before is not read
     assert (got.era, got.name, got.hand) == ("lined-1bit", "t/A", False)
 
 
@@ -147,7 +155,7 @@ def test_a_training_crop_on_reserved_ground_loses_that_ground(tmp_path, monkeypa
     assert got.lum.shape == (140 + R, 160 + R) and np.array_equal(got.lum, page[:140 + R, :160 + R])
     inner = (slice(100, 140), slice(100, 160))
     keep, lost = (slice(None), slice(None, 28)), (slice(None), slice(28, None))   # crop columns 100-127, 128-159
-    for a in (got.street, got.edge, got.border):
+    for a in (got.street, got.edge):
         outside = np.ones(a.shape, bool)
         outside[inner] = False
         assert (a[outside] == 255).all()
@@ -155,7 +163,6 @@ def test_a_training_crop_on_reserved_ground_loses_that_ground(tmp_path, monkeypa
     assert (got.street_w[inner][lost] == 0).all()
     assert np.array_equal(got.street[inner][keep], want.street[keep])
     assert np.array_equal(got.edge[inner][keep], want.edge[keep])
-    assert (got.border[inner][keep] == 0).all()                  # series s draws no zoning border
     assert (got.street_w[inner][keep] == (want.street[keep] != 255)).all()
     assert got.left_out == pytest.approx(32 / 60)
     assert got.hand and got.set == "train" and got.name == "train/s/A__100_100_60_40" and got.era == "hatched-grey"
@@ -172,7 +179,7 @@ def test_each_era_gets_its_share_of_a_batch():
     rng = np.random.default_rng(1)
     items = [_item((64, 64), rng, era, era, cuts=False) for era in ("b", "a", "c", "b")]
     corner = items[1]                                             # era a: labelled only in a 4 x 4 corner patch
-    for arr in (corner.street, corner.edge, corner.border):
+    for arr in (corner.street, corner.edge):
         arr[:] = 255
     corner.street_w[:] = 0
     corner.street[:4, :4], corner.street_w[:4, :4] = 1, 1
@@ -198,14 +205,14 @@ def _fit_items():
 SMALL = dict(batch=2, tile=32, width=4)
 
 
-def test_an_answer_left_out_gets_no_gradient():
-    recipe = train.Recipe(steps=3, answers=("street", "edge"), **SMALL)
+def test_every_run_trains_both_answers():
+    recipe = train.Recipe(steps=3, **SMALL)
     torch.manual_seed(recipe.seed)                                # the network fit makes, before training
     before = model.FindNet(recipe.width).state_dict()
     after = train.fit(_fit_items(), recipe, "cpu").state_dict
     for k in ("head.weight", "head.bias"):
-        assert torch.equal(after[k][model.BORDER], before[k][model.BORDER]), k
-        assert not torch.equal(after[k][model.STREET], before[k][model.STREET]), k
+        for channel in (model.STREET, model.EDGE):
+            assert not torch.equal(after[k][channel], before[k][channel]), (k, channel)
 
 
 def test_same_seed_same_bits_cpu():
@@ -240,11 +247,11 @@ def test_noise_changes_the_picture_and_never_the_labels():
     for a, b in zip(noisy, clean):
         assert not np.array_equal(a.lum, b.lum)
         assert a.lum.dtype == np.float32 and a.lum.min() >= 0 and a.lum.max() <= 1
-        for k in ("street", "street_w", "edge", "border"):
+        for k in ("street", "street_w", "edge"):
             assert np.array_equal(getattr(a, k), getattr(b, k)), k
         assert (a.cuts is None) == (b.cuts is None)
         if a.cuts is not None:
-            for k in ("px", "cut", "prior", "answer", "says", "weight"):
+            for k in ("px", "cut", "prior", "weight"):
                 assert np.array_equal(getattr(a.cuts, k), getattr(b.cuts, k)), k
     lum = clean[0].lum
     off = train.noised(lum, np.random.default_rng(0), train.Recipe(noise=0.0))
@@ -294,13 +301,13 @@ def test_the_unbroken_terms_reach_only_the_hand_tiles_block_edge():
     crop.edge[:] = 0
     crop.edge[10, 4:28] = 1                                       # a hand block edge across the crop
     crop.edge[:, :2] = 255
-    z = torch.from_numpy(rng.normal(0, 1, (2, 3, 32, 32))).requires_grad_(True)
+    z = torch.from_numpy(rng.normal(0, 1, (2, 2, 32, 32))).requires_grad_(True)
     loss = train.unbroken_loss(z, [sheet, crop], train.Recipe(unbroken=True, tile=32))
     assert torch.isfinite(loss) and float(loss.detach()) > 0
     loss.backward()
     g = z.grad
     assert g[1, model.EDGE].abs().sum() > 0
-    assert (g[0] == 0).all() and (g[1, model.STREET] == 0).all() and (g[1, model.BORDER] == 0).all()
+    assert (g[0] == 0).all() and (g[1, model.STREET] == 0).all()
     band = train.corridor(crop.edge)                              # the precision's target is wider than the line
     assert band[9:12, 4:28].all() and band.sum() > (crop.edge == 1).sum()
 
@@ -320,13 +327,13 @@ def test_a_used_cut_with_no_px_is_left_out_of_tiles():
     rng = np.random.default_rng(4)
     t = _item((40, 40), rng)
     c = t.cuts
-    n = len(c.answer)                                             # one more used cut, with no px
-    bare = Cuts(c.px, c.cut, c.prior, np.r_[c.answer, EDGE].astype(np.uint8), np.r_[c.says, True],
-                np.r_[c.weight, 1].astype(np.float32), np.r_[c.ends, [[-1, -1]]].astype(np.int32), c.dropped)
-    t2 = data.Labelled(t.name, t.era, t.lum, t.street, t.street_w, t.edge, t.border, bare)
+    n = len(c.weight)                                             # one more used cut, with no px
+    bare = Cuts(c.px, c.cut, c.prior, np.r_[c.weight, 1].astype(np.float32), np.r_[c.inside, -1].astype(np.int32),
+                c.dropped)
+    t2 = data.Labelled(t.name, t.era, t.lum, t.street, t.street_w, t.edge, bare)
     assert data.cuts_without_px(bare) == 1
     got, want = data.window(t2, 0, 0, 40), data.window(t, 0, 0, 40)
-    assert len(got.cuts.answer) == len(want.cuts.answer) == n - 1           # the unused cut and the bare one gone
+    assert len(got.cuts.weight) == len(want.cuts.weight) == n - 1           # the unused cut and the bare one gone
     assert np.array_equal(got.cuts.px, want.cuts.px)
 
 
@@ -355,22 +362,16 @@ def test_train_refuses_before_training_when_a_crop_cannot_be_read(tmp_path, monk
         assert r.exit_code == 2 and "--run" in r.output, (bad, r.output)
 
 
-@pytest.mark.parametrize("answer, channel", [(BORDER, model.BORDER), (EDGE, model.EDGE)])
-def test_a_cut_moves_only_its_own_answer(answer, channel):
-    """A zoning-border cut's loss reaches only the zoning-border channel, a block-edge cut's only the block-edge
-    channel (cuts.BORDER and model.EDGE share a number: a slip between them would run silently)."""
+def test_a_block_edge_cut_moves_only_the_block_edge_answer():
     shape = (16, 16)
     none = np.full(shape, data.NONE, np.uint8)
-    for says in (True, False):
-        c = Cuts(np.arange(40, 46, dtype=np.int64), np.zeros(6, np.int32), np.ones(6, np.float32),
-                 np.array([answer], np.uint8), np.array([says]), np.ones(1, np.float32), np.full((1, 2), -1, np.int32),
-                 np.zeros(0, np.int64))
-        t = data.Labelled("x", "lined-1bit", np.ones(shape, np.float32), none, np.zeros(shape, np.float32), none,
-                          none, c)
-        z = torch.zeros((1, 3, *shape), dtype=torch.float64, requires_grad=True)
-        train.batch_loss(z, [t], train.Recipe()).backward()
-        moved = [bool(z.grad[0, k].abs().sum() > 0) for k in range(3)]
-        assert moved == [k == channel for k in range(3)], (says, moved)
+    c = Cuts(np.arange(40, 46, dtype=np.int64), np.zeros(6, np.int32), np.ones(6, np.float32), np.ones(1, np.float32),
+             np.full(1, -1, np.int32), np.zeros(0, np.int64))
+    t = data.Labelled("x", "lined-1bit", np.ones(shape, np.float32), none, np.zeros(shape, np.float32), none, c)
+    z = torch.zeros((1, 2, *shape), dtype=torch.float64, requires_grad=True)
+    train.batch_loss(z, [t]).backward()
+    assert z.grad[0, model.EDGE].abs().sum() > 0 and (z.grad[0, model.STREET] == 0).all()
+    assert train.statements([t]) == 1
 
 
 def test_train_reports_a_series_with_no_source_row_and_a_refused_fit_without_a_traceback(tmp_path, monkeypatch):

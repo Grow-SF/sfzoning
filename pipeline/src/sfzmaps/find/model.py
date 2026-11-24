@@ -1,11 +1,10 @@
-"""The finder's network: the branch's U-Net (`solver.hatchnet.model`) over a scan's luminance, three independent
+"""The finder's network: the branch's U-Net (`solver.hatchnet.model`) over a scan's luminance, two independent
 answers per px.
 
-Input (n, 1, h, w): the scan's luminance as stored (1 paper, 0 ink), nothing else.  Output (n, 3, h, w): the logit
+Input (n, 1, h, w): the scan's luminance as stored (1 paper, 0 ink), nothing else.  Output (n, 2, h, w): the logit
 of each answer at every px, in ANSWERS order:
   STREET  0  the px is street (not in a printed block)
   EDGE    1  a printed block edge runs here
-  BORDER  2  a printed zoning border runs here
 
 The blocks are hatchnet's (`_block`: two 3 x 3 convolutions with batch norm and ReLU), LEVELS of them down, LEVELS - 1
 up, a 1 x 1 head; a px's answers see the input within `REACH` px of it each way.  h and w must be multiples of
@@ -18,11 +17,11 @@ import torch.nn.functional as F
 
 from sfzmaps.solver.hatchnet.model import LEVELS, MULTIPLE, REACH, _block
 
-STREET, EDGE, BORDER = 0, 1, 2
-ANSWERS = ("street", "edge", "border")
+STREET, EDGE = 0, 1
+ANSWERS = ("street", "edge")
 WIDTH = 16          # engineering setting: channels at full resolution (hatchnet's)
 
-__all__ = ["ANSWERS", "BORDER", "EDGE", "FindNet", "LEVELS", "MULTIPLE", "REACH", "STREET", "WIDTH"]
+__all__ = ["ANSWERS", "EDGE", "FindNet", "LEVELS", "MULTIPLE", "REACH", "STREET", "WIDTH"]
 
 
 class FindNet(nn.Module):

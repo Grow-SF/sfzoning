@@ -1,13 +1,13 @@
 """What the finder trains on: a sheet's lot labels and a hand crop's labels as one kind of item (`Labelled`), cut into
 tiles and turned.
 
-A `Labelled` is a scan (or a part of one) with a label per px for each of the three answers, 1 yes / 0 no / 255 no
-label, a weight per px for the street answer, and the cut statements of `find.cuts` (None for a hand crop):
+A `Labelled` is a scan (or a part of one) with a label per px for each of the two answers (street, block edge), 1 yes
+/ 0 no / 255 no label, a weight per px for the street answer, and the block-edge cut statements of `find.cuts` (None
+for a hand crop):
 - a sheet labelled from lots (`sheet_labelled`): street and its weight from the label file; block edge 0 on its
-  `edge_none` px, zoning border 0 on its `border_none` px, 255 elsewhere (a line is said to be there only by a cut);
-- a hand crop (`crop_labelled`): street and block edge from `handlabels.make_labels`, street weight 1 where labelled;
-  zoning border 0 on the whole crop when the series draws none (`pages.Source.borders` "none"), else no label.  The
-  item is the crop grown by `model.REACH` px on every side where the page allows: the scan is shown there, so the
+  `edge_none` px, 255 elsewhere (an edge is said to be there only by a cut);
+- a hand crop (`crop_labelled`): street and block edge from `handlabels.make_labels`, street weight 1 where labelled.
+  The item is the crop grown by `model.REACH` px on every side where the page allows: the scan is shown there, so the
   network sees the print round a crop's edge as it does when a page is read, but nothing is labelled there.
 The ground under the `choose` and `test` crops, grown by `model.REACH` (`handlabels.reserved`), has no label on any
 sheet or training crop, and a cut touching it is dropped whole; the scan is still shown there.
@@ -25,12 +25,11 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from sfzmaps.find import cuts as cutlib, handlabels, lotlabels, model, pages
+from sfzmaps.find import handlabels, lotlabels, model, pages
 from sfzmaps.find.cuts import Cuts
 from sfzmaps.find.pages import SheetId
 
 NONE = 255                  # no label
-ANSWERS = model.ANSWERS
 log = logging.getLogger(__name__)
 
 
@@ -43,8 +42,7 @@ class Labelled:
     street: np.ndarray          # uint8: 1 street, 0 not, 255 no label
     street_w: np.ndarray        # float32: the street label's weight, 0 where there is none
     edge: np.ndarray            # uint8: 1 a block edge runs here, 0 none does, 255 no label
-    border: np.ndarray          # uint8: 1 a zoning border runs here, 0 none does, 255 no label
-    cuts: Cuts | None           # the cut statements; None for a hand crop
+    cuts: Cuts | None           # the block-edge cut statements; None for a hand crop
     left_out: float = 0.0       # a training crop's share of px left without a label as reserved ground (0 otherwise)
     set: str | None = None      # a hand crop's set (train, choose, test); None for a sheet
 
@@ -54,19 +52,9 @@ class Labelled:
         return self.set is not None
 
 
-def _no_cut_on(c: Cuts, ground: np.ndarray) -> Cuts:
-    """`c` less every cut with a px on `ground` (bool, flat page), the rest renumbered in order."""
-    n = len(c.answer)
-    keep = np.bincount(c.cut[ground[c.px]], minlength=n) == 0
-    on = keep[c.cut]
-    renumber = (np.cumsum(keep) - 1).astype(np.int32)
-    return Cuts(c.px[on], renumber[c.cut[on]], c.prior[on], c.answer[keep], c.says[keep], c.weight[keep],
-                c.ends[keep], c.dropped)
-
-
 def sheet_labelled(sid: SheetId, which: str = "warp") -> Labelled:
     """The sheet's lot labels (data/find/labels/<series>/<sheet>.npz) as a `Labelled` (see the module), with the
-    reserved ground through placement `which` left unlabelled.  FileNotFoundError or ValueError naming the command
+    reserved ground through placement `which` left unlabelled and every cut with a px on it dropped.  FileNotFoundError or ValueError naming the command
     that makes the label file (`lotlabels.load_sheet_labels`): missing, made through another placement, or not fitting
     the scan."""
     lum = pages.load_scan(sid)
@@ -76,9 +64,8 @@ def sheet_labelled(sid: SheetId, which: str = "warp") -> Labelled:
     street = np.where(held, NONE, lab["street"]).astype(np.uint8)
     street_w = np.where(held | (street == NONE), 0, lab["weight"]).astype(np.float32)
     edge = np.where(lab["edge_none"] & ~held, 0, NONE).astype(np.uint8)
-    border = np.where(lab["border_none"] & ~held, 0, NONE).astype(np.uint8)
-    return Labelled(f"{sid[0]}/{sid[1]}", pages.source(sid[0]).era, lum, street, street_w, edge, border,
-                    _no_cut_on(found, held.ravel()))
+    off_held = np.bincount(found.cut[held.ravel()[found.px]], minlength=len(found.weight)) == 0
+    return Labelled(f"{sid[0]}/{sid[1]}", pages.source(sid[0]).era, lum, street, street_w, edge, found.only(off_held))
 
 
 def grown(box: tuple[int, int, int, int], shape: tuple[int, int]) -> tuple[tuple[slice, slice], tuple[slice, slice]]:
@@ -106,47 +93,36 @@ def crop_labelled(crop: handlabels.Crop) -> Labelled:
     outer, inner = grown(crop.box, page.shape)
     gy0, gy1, gx0, gx1 = outer[0].start, outer[0].stop, outer[1].start, outer[1].stop
     shape = (gy1 - gy0, gx1 - gx0)
-    street, edge, border = (np.full(shape, NONE, np.uint8) for _ in range(3))
+    street, edge = (np.full(shape, NONE, np.uint8) for _ in range(2))
     street[inner] = lab.street
     edge[inner] = lab.edge
-    if pages.source(crop.series).borders == "none":
-        border[inner] = 0
     left_out = 0.0
     if crop.set not in handlabels.HELD_OUT:
         held = handlabels.reserved(sid, page.shape, model.REACH)[gy0:gy1, gx0:gx1]
         left_out = float(held[inner].mean())
-        for a in (street, edge, border):
+        for a in (street, edge):
             a[held] = NONE
         if left_out:
             log.info("%s: %.3f of its px lie on reserved ground and are left without a label", crop_name(crop),
                      left_out)
     street_w = (street != NONE).astype(np.float32)
     return Labelled(crop_name(crop), pages.source(crop.series).era, np.ascontiguousarray(page[gy0:gy1, gx0:gx1]),
-                    street, street_w, edge, border, None, left_out, crop.set)
+                    street, street_w, edge, None, left_out, crop.set)
 
 
-def labelled(item: Labelled, answers=ANSWERS) -> np.ndarray:
-    """Bool (h, w): the px that carry a label of one of `answers`: a street weight above 0, a block-edge or
-    zoning-border label, or a px of a used cut (weight above 0) of those answers."""
-    out = np.zeros(item.lum.shape, bool)
-    if "street" in answers:
-        out |= item.street_w > 0
-    if "edge" in answers:
-        out |= item.edge != NONE
-    if "border" in answers:
-        out |= item.border != NONE
-    if item.cuts is not None and len(item.cuts.answer):
-        c = item.cuts
-        mine = np.isin(c.answer, [a for a, name in ((cutlib.EDGE, "edge"), (cutlib.BORDER, "border"))
-                                  if name in answers])
-        out |= c.on(item.lum.shape, which=(c.weight > 0) & mine)
+def labelled(item: Labelled) -> np.ndarray:
+    """Bool (h, w): the px that carry a label: a street weight above 0, a block-edge label, or a px of a used cut
+    (weight above 0)."""
+    out = (item.street_w > 0) | (item.edge != NONE)
+    if item.cuts is not None and len(item.cuts.weight):
+        out |= item.cuts.on(item.lum.shape, which=item.cuts.weight > 0)
     return out
 
 
 def cuts_without_px(c: Cuts) -> int:
     """How many used cuts (weight above 0) have no px: a malformed statement, which `cut_boxes` (and so every tile)
     leaves out."""
-    return int(((c.weight > 0) & (np.bincount(c.cut, minlength=len(c.answer)) == 0)).sum())
+    return int(((c.weight > 0) & (np.bincount(c.cut, minlength=len(c.weight)) == 0)).sum())
 
 
 @dataclass(frozen=True)
@@ -166,7 +142,7 @@ class CutBoxes:
 def cut_boxes(c: Cuts, width: int) -> CutBoxes:
     """The `CutBoxes` of `c`'s used cuts (weight above 0) with a px (`cuts_without_px` counts those without) on an
     item `width` px wide."""
-    size = np.bincount(c.cut, minlength=len(c.answer))
+    size = np.bincount(c.cut, minlength=len(c.weight))
     use = (c.weight > 0) & (size > 0)
     used = np.flatnonzero(use)
     idx = np.flatnonzero(use[c.cut])
@@ -203,10 +179,9 @@ def window(item: Labelled, y0: int, x0: int, side: int, boxes: CutBoxes | None =
         r, q = np.divmod(c.px[take], w)
         which = b.used[inside]
         found = Cuts((r - y0) * side + (q - x0), np.repeat(np.arange(len(which), dtype=np.int32), length),
-                     c.prior[take], c.answer[which], c.says[which], c.weight[which], c.ends[which],
-                     np.zeros(0, np.int64))
+                     c.prior[take], c.weight[which], c.inside[which], np.zeros(0, np.int64))
     return dataclasses.replace(item, lum=item.lum[sl], street=item.street[sl], street_w=item.street_w[sl],
-                               edge=item.edge[sl], border=item.border[sl], cuts=found)
+                               edge=item.edge[sl], cuts=found)
 
 
 def turned(tile: Labelled, k: int) -> Labelled:
@@ -220,4 +195,4 @@ def turned(tile: Labelled, k: int) -> Labelled:
         where[rot(np.arange(h * w).reshape(h, w)).ravel()] = np.arange(h * w)      # old flat px -> new flat px
         found = dataclasses.replace(found, px=where[found.px])
     return dataclasses.replace(tile, lum=rot(tile.lum), street=rot(tile.street), street_w=rot(tile.street_w),
-                               edge=rot(tile.edge), border=rot(tile.border), cuts=found)
+                               edge=rot(tile.edge), cuts=found)

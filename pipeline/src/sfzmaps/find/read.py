@@ -1,4 +1,4 @@
-"""Reading a page with the finder: the network's three chances (street, block edge, zoning border) at every px.
+"""Reading a page with the finder: the network's two chances (street, block edge) at every px.
 
 `read_page` reads a page TILE px square at a time, each square seen with CONTEXT px of page round it (the network's
 whole reach, model.REACH, rounded up to model.MULTIPLE) and the page's end padded with paper to model.MULTIPLE, as one
@@ -8,7 +8,8 @@ poolings fall on the whole page's grid and every px gets the numbers one pass ov
 (`data.grown`; `find.counts`).
 
 A read is stored as uint8 levels round(255 p) (`save`, `load`; `stored` gives the same levels in memory), so every
-reading downstream (`find.areas`, `find.counts`) sees only the 256 levels a stored read can tell apart.
+reading downstream (`find.areas`, `find.counts`) sees only the 256 levels a stored read can tell apart.  A read stored
+before the finder dropped its zoning-border answer (2026-11-23) holds a third key, which `load` does not read.
 
 Reads nothing itself; `save` writes the path its caller gives (data/find/runs/<run>/reads/...)."""
 from __future__ import annotations
@@ -29,7 +30,7 @@ LEVELS = 255                # a stored chance is round(LEVELS p) / LEVELS
 
 @torch.no_grad()
 def read_page(net: model.FindNet, lum: np.ndarray, keep: np.ndarray, device, tile: int = TILE) -> np.ndarray:
-    """Float32 (3, h, w): the chance of each answer (model.ANSWERS order) at every px of the page `lum` (1 paper, 0 ink,
+    """Float32 (2, h, w): the chance of each answer (model.ANSWERS order) at every px of the page `lum` (1 paper, 0 ink,
     as stored), 0 off `keep` (the frame cut's map area; the scan is shown there all the same).  The network is moved
     to `device` and put in eval mode.  ValueError for a `tile` that is not a multiple of model.MULTIPLE."""
     if tile % model.MULTIPLE or tile <= 0:
@@ -67,8 +68,8 @@ def stored(chances: np.ndarray) -> np.ndarray:
 
 
 def save(path: Path, chances: np.ndarray) -> Path:
-    """The read (3, h, w) at `path` (a compressed .npz, its folders made), as `levels` under the keys street, edge and
-    border."""
+    """The read (2, h, w) at `path` (a compressed .npz, its folders made), as `levels` under the keys street and
+    edge."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lv = levels(chances)
@@ -77,6 +78,7 @@ def save(path: Path, chances: np.ndarray) -> Path:
 
 
 def load(path: Path) -> np.ndarray:
-    """Float32 (3, h, w): a read `save` stored, each level / 255."""
+    """Float32 (2, h, w): a read `save` stored, each level / 255 (the keys street and edge; any other key is not
+    read)."""
     with np.load(path) as z:
         return np.stack([z[name] for name in model.ANSWERS]).astype(np.float32) / LEVELS

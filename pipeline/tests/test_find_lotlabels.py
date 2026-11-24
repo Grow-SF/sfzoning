@@ -64,18 +64,27 @@ def test_a_series_without_lot_labels_is_refused(monkeypatch):
         lotlabels.series_lots("1921")
 
 
+def test_the_lots_come_from_the_table_or_the_series_year(tmp_path, monkeypatch):
+    src = tmp_path / "label_sources.csv"
+    src.write_text("series,era,lots\n2000-digital-zoning,lined-1bit,table\n1980-1990-zoning,lined-1bit,year\n")
+    monkeypatch.setattr(pages, "SOURCES", src)
+    monkeypatch.setattr(lotlabels, "load_table", lambda: "the table")
+    monkeypatch.setattr(lotlabels, "load_parcels", lambda year: f"the lots of {year:g}")
+    assert lotlabels.series_lots("2000-digital-zoning") == "the table"
+    assert lotlabels.series_lots("1980-1990-zoning") == "the lots of 1980"
+
+
 def _label_file(placement: str, shape=(20, 30)) -> None:
     f = lotlabels.sheet_path(("t", "A"))
     f.parent.mkdir(parents=True, exist_ok=True)
     e = np.zeros(0)
     np.savez(f, street=np.zeros(shape, np.uint8), weight=np.ones(shape, np.float32), cuts_px=e.astype(np.int64),
-             cuts_cut=e.astype(np.int32), cuts_prior=e.astype(np.float32), cuts_answer=e.astype(np.uint8),
-             cuts_says=e.astype(bool), cuts_weight=e.astype(np.float32), edge_none=np.ones(shape, bool),
-             border_none=np.ones(shape, bool), sigma=np.float64(2.0), placement=np.array(placement))
+             cuts_cut=e.astype(np.int32), cuts_prior=e.astype(np.float32), cuts_weight=e.astype(np.float32),
+             edge_none=np.ones(shape, bool), sigma=np.float64(2.0), placement=np.array(placement))
 
 
 def test_every_reader_of_a_label_file_checks_its_placement(tmp_path, monkeypatch):
-    from sfzmaps.find import counts, data, town
+    from sfzmaps.find import data
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
     monkeypatch.setattr(pages, "load_scan", lambda sid: np.ones((20, 30), np.float32))
     again = r"made through the work placement, not warp; make it again with `sfzmaps find labels --series t " \
@@ -83,10 +92,29 @@ def test_every_reader_of_a_label_file_checks_its_placement(tmp_path, monkeypatch
     with pytest.raises(FileNotFoundError, match=r"no labels; make them with `sfzmaps find labels --series t"):
         lotlabels.load_sheet_labels(("t", "A"))
     _label_file("work")
-    for read in (lambda: lotlabels.load_sheet_labels(("t", "A")), lambda: data.sheet_labelled(("t", "A")),
-                 lambda: town.measure("t", ["A"]), lambda: counts._sheet_labels(("t", "A"), (20, 30))):
+    for read in (lambda: lotlabels.load_sheet_labels(("t", "A")), lambda: data.sheet_labelled(("t", "A"))):
         with pytest.raises(ValueError, match=again):
             read()
     assert lotlabels.load_sheet_labels(("t", "A"), "work")["street"].shape == (20, 30)
     with pytest.raises(ValueError, match=r"labels are \(20, 30\), the page \(20, 31\)"):
         lotlabels.load_sheet_labels(("t", "A"), "work", (20, 31))
+
+
+def test_a_label_file_made_before_gives_its_block_edge_cuts_only(tmp_path, monkeypatch):
+    """A label file made before the finder dropped the zoning border holds zoning-border cuts among its block-edge
+    cuts (cuts_answer 1, "a zoning border crosses" or "none does") and a `border_none` label: they are not read."""
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    shape = (20, 30)
+    f = lotlabels.sheet_path(("t", "A"))
+    f.parent.mkdir(parents=True, exist_ok=True)
+    px = np.array([3, 4, 5, 33, 34, 63, 64, 65, 66, 93], np.int64)
+    np.savez(f, street=np.zeros(shape, np.uint8), weight=np.ones(shape, np.float32), cuts_px=px,
+             cuts_cut=np.array([0, 0, 0, 1, 1, 2, 2, 2, 2, 3], np.int32),
+             cuts_prior=np.linspace(0.1, 1, 10).astype(np.float32), cuts_answer=np.array([0, 1, 0, 1], np.uint8),
+             cuts_says=np.array([True, True, True, False]), cuts_weight=np.array([1, 1, 0, 1], np.float32),
+             edge_none=np.ones(shape, bool), border_none=np.ones(shape, bool), sigma=np.float64(2.0),
+             placement=np.array("warp"))
+    c = lotlabels.file_cuts(lotlabels.load_sheet_labels(("t", "A"), "warp", shape))
+    assert list(c.px) == [3, 4, 5, 63, 64, 65, 66] and list(c.cut) == [0, 0, 0, 1, 1, 1, 1]
+    assert np.array_equal(c.prior, np.linspace(0.1, 1, 10).astype(np.float32)[[0, 1, 2, 5, 6, 7, 8]])
+    assert list(c.weight) == [1, 0] and list(c.inside) == [-1, -1]

@@ -1,13 +1,12 @@
 """The counts a read is judged by (`find.counts`): each printed block found, joined, cut up or lost (exactly one of
 them), open land left out, the depth fitted on the choosing crops, how far found block edges lie from the hand ones,
-and the zoning-border statements agreed with, each read by its own statement's chance."""
+the street and block ground, whole blocks, and a run's counts with nothing about zoning borders."""
 from pathlib import Path
 
 import numpy as np
 import pytest
 
 from sfzmaps.find import counts, handlabels
-from sfzmaps.find.cuts import BORDER, EDGE, Cuts
 from sfzmaps.find.handlabels import CropLabels
 
 
@@ -80,8 +79,7 @@ def test_fit_depth_takes_the_smallest_best():
     edge = np.zeros((H, W))
     edge[2:-2, RIDGE] = 0.9
     edge[18:21, RIDGE] = 0.6
-    border = np.zeros((H, W))
-    read = (np.stack([street, edge, border]).astype(np.float32), np.ones((H, W), bool))
+    read = (np.stack([street, edge]).astype(np.float32), np.ones((H, W), bool))
     truth = _truth({1: (slice(2, H - 2), slice(2, RIDGE)), 2: (slice(2, H - 2), slice(RIDGE + 1, W - 2))}, (H, W))
     depth, share = counts.fit_depth([read], [truth], ["lined-grey"])
     assert depth == 13 / 255
@@ -106,44 +104,6 @@ def test_edge_feet_measure_found_blocks_only():
     assert got["px"] == int(edge[truth.area == 1].sum())
 
 
-def _cuts(lines, width) -> Cuts:
-    """Cuts along row 0 of an item `width` px wide: each (start column, px, answer, says, weight)."""
-    px, cut = [], []
-    for i, (c0, n, *_rest) in enumerate(lines):
-        px.append(np.arange(c0, c0 + n))
-        cut.append(np.full(n, i, np.int32))
-    m = len(lines)
-    return Cuts(np.concatenate(px).astype(np.int64), np.concatenate(cut), np.ones(sum(len(p) for p in px), np.float32),
-                np.array([a for *_x, a, _s, _w in lines], np.uint8), np.array([s for *_x, s, _w in lines], bool),
-                np.array([w for *_x, w in lines], np.float32), np.full((m, 2), -1, np.int32), np.zeros(0, np.int64))
-
-
-def test_border_counts_are_per_cut():
-    chance = np.zeros((1, 40), np.float32)
-    chance[0, 0:5] = 0.3            # "crosses": 1 - 0.7^5 = 0.83, agreed though no px is over one half
-    chance[0, 6:9] = 0.1            # "crosses": 1 - 0.9^3 = 0.27, not agreed
-    chance[0, 10:13] = 0.3          # "none": 0.7^3 = 0.34, not agreed though no px is over one half
-    chance[0, 14:16] = 0.1          # "none": 0.9^2 = 0.81, agreed
-    chance[0, 17:19] = (0.0, 1.0)   # "none" with a px at 1 as stored: not agreed (and no NaN)
-    chance[0, 20:23] = 0.9          # "crosses", but weight 0: not counted
-    chance[0, 24:27] = 0.9          # a block-edge cut: not counted
-    cuts = _cuts([(0, 5, BORDER, True, 1.0), (6, 3, BORDER, True, 1.0), (10, 3, BORDER, False, 1.0),
-                  (14, 2, BORDER, False, 1.0), (17, 2, BORDER, False, 1.0), (20, 3, BORDER, True, 0.0),
-                  (24, 3, EDGE, True, 1.0)], 40)
-    assert counts.borders(chance, cuts) == {"crosses": 2, "crosses_agreed": 1, "none": 3, "none_agreed": 1}
-
-
-def test_cuts_in_a_box_are_those_wholly_inside_it():
-    width = 20
-    # cut 0 inside the box (rows 2-5, columns 3-9), cut 1 half out of it, cut 2 a zoning-border cut unused
-    px = np.array([3 * width + 4, 3 * width + 5, 4 * width + 9, 4 * width + 10, 5 * width + 6], np.int64)
-    cuts = Cuts(px, np.array([0, 0, 1, 1, 2], np.int32), np.ones(5, np.float32), np.array([BORDER] * 3, np.uint8),
-                np.array([True, True, False]), np.array([1, 1, 0], np.float32), np.full((3, 2), -1, np.int32),
-                np.zeros(0, np.int64))
-    got = counts.cuts_in_box(cuts, width, (3, 2, 7, 4))
-    assert list(got.cut) == [0, 0] and list(got.px) == [1 * 7 + 1, 1 * 7 + 2] and len(got.answer) == 1
-
-
 def _crop(set_: str) -> handlabels.Crop:
     return handlabels.Crop(set_, "s", "p1", (0, 0, 10, 10), ((1, 1),), (), (), (), (), Path("s/p1__0_0_10_10.json"))
 
@@ -155,7 +115,7 @@ def test_the_chooser_takes_choosing_crops_only():
         counts.chooser([], "cpu")
 
 
-# --- the street and block boundary, whole blocks, the block edge on zoning-border cuts --------------------------------
+# --- the street and block boundary, whole blocks, a run's counts --------------------------------------------------
 
 def test_ground_counts_street_and_area_px():
     truth = _truth({1: (slice(0, 10), slice(0, 20))}, (10, 40))     # area on columns 0-19, street on 20-39
@@ -229,26 +189,7 @@ def test_everything_one_area_holds_no_block_whole():
     assert [b["held"] for b in lost["per_block"]] == [0.0, 0.0] and lost["whole"] == 0
 
 
-def test_the_block_edge_on_zoning_border_cuts_inside_a_block_and_across_a_street():
-    width = 40
-    street = np.zeros((1, width), np.uint8)
-    street[0, 10:14] = 1                    # the lots' street, columns 10-13
-    edge = np.zeros((1, width), np.float32)
-    edge[0, 2] = 0.9                        # an edge crosses cut 0 (inside a block)
-    edge[0, 11] = 0.9                       # and cut 2 (across the street)
-    cuts = _cuts([(0, 5, BORDER, True, 1.0),            # inside a block, edge crosses
-                  (5, 4, BORDER, True, 1.0),            # inside a block, no edge
-                  (9, 6, BORDER, True, 1.0),            # across the street, edge crosses
-                  (15, 5, BORDER, True, 0.0),           # not used
-                  (20, 5, BORDER, False, 1.0),          # "none crosses": not counted
-                  (25, 5, EDGE, True, 1.0)], width)     # a block-edge cut: not counted
-    edge[0, 16] = edge[0, 21] = edge[0, 26] = 0.9
-    assert counts.edge_on_zoning_border_cuts(edge, cuts, street) == {
-        "inside_a_block": 2, "inside_a_block_edge_crosses": 1, "across_a_street": 1,
-        "across_a_street_edge_crosses": 1}
-
-
-def test_count_names_files_by_series_and_leaves_an_answer_not_trained_null(tmp_path, monkeypatch):
+def test_count_names_files_by_series_and_holds_nothing_about_zoning_borders(tmp_path, monkeypatch):
     import json
 
     import cv2
@@ -258,7 +199,7 @@ def test_count_names_files_by_series_and_leaves_an_answer_not_trained_null(tmp_p
     from sfzmaps import config
     from sfzmaps.find import look, lotlabels, model, pages
     src = tmp_path / "label_sources.csv"
-    src.write_text("series,era,lots,zoning_borders\nt,lined-1bit,year,zoning\n")
+    src.write_text("series,era,lots\nt,lined-1bit,year\n")
     monkeypatch.setattr(pages, "SOURCES", src)
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
     page = np.ones((300, 400), np.float32)
@@ -275,45 +216,45 @@ def test_count_names_files_by_series_and_leaves_an_answer_not_trained_null(tmp_p
                                  "blocks": [[x0 + 20, 104], [x0 + 20, 135]]}))
         return handlabels.read_crop(f, set_)
     choose, test = crop("choose", 20), crop("test", 200)
-    street = np.zeros(page.shape, np.uint8)
-    street[112:128] = 1
-    rows = np.arange(105, 135)                   # one "a zoning border crosses" cut down column 230, across the street
-    f = lotlabels.sheet_path(("t", "A"))
-    f.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(f, street=street, weight=np.ones(page.shape, np.float32), cuts_px=(rows * 400 + 230).astype(np.int64),
-             cuts_cut=np.zeros(len(rows), np.int32), cuts_prior=np.ones(len(rows), np.float32),
-             cuts_answer=np.array([BORDER], np.uint8), cuts_says=np.array([True]),
-             cuts_weight=np.ones(1, np.float32), edge_none=np.ones(page.shape, bool),
-             border_none=np.ones(page.shape, bool), sigma=np.float64(2.0), placement=np.array("warp"))
     torch.manual_seed(0)
-    state = model.FindNet(4).state_dict()
-    full = counts.count(state, [choose], [test], "cpu", tmp_path / "a")
-    part = counts.count(state, [choose], [test], "cpu", tmp_path / "b", ("street", "edge"))
-    row, part_row = full["test"]["crops"][0], part["test"]["crops"][0]
+    out = counts.count(model.FindNet(4), [choose], [test], "cpu", tmp_path / "a")
+    row = out["test"]["crops"][0]
     assert row["read"] == "reads/test/t__A__200_100_60_40.npz" and (tmp_path / "a" / row["read"]).is_file()
     assert row["picture"] == "look/test/t__A__200_100_60_40.png"
-    assert full["not_trained"] == {} and row["zoning_borders"]["crosses"] == 1
-    assert full["test"]["zoning_borders"]["pooled"]["crosses"] == 1
-    assert part_row["zoning_borders"] is None and part["test"]["zoning_borders"] is None
-    assert list(part["not_trained"]) == ["border"]
-    assert part_row["edge_on_zoning_border_cuts"]["across_a_street"] == 1       # a block-edge measure: still counted
-    for k in ("ground", "boundary_feet", "whole", "edge_on_zoning_border_cuts"):
-        assert set(full["test"][k]) >= {"eras", "pooled"} and "lined-1bit" in full["test"][k]["eras"], k
-    with_border, without = (cv2.imread(str(tmp_path / r / row["picture"])) for r in ("a", "b"))
-    assert with_border.shape[1] - without.shape[1] == 60 + look.GAP          # the zoning-border panel left out
-    with pytest.raises(ValueError, match="block-edge|edge answer"):
-        counts.count(state, [choose], [test], "cpu", tmp_path / "c", ("street", "border"))
+    for k in ("ground", "boundary_feet", "whole"):
+        assert set(out["test"][k]) >= {"eras", "pooled"} and "lined-1bit" in out["test"][k]["eras"], k
+    text = json.dumps(out)
+    assert "border" not in text and "not_trained" not in text and "answers" not in text
+    picture = cv2.imread(str(tmp_path / "a" / row["picture"]))
+    assert picture.shape[1] == 4 * 60 + 3 * look.GAP                     # the scan, street, block edge, found areas
 
 
-def test_the_zoning_border_panel_is_scaled_to_its_own_largest_chance():
+def test_a_read_picture_has_four_panels():
     from sfzmaps.find import look
     h, w = 30, 40
-    chances = np.zeros((3, h, w), np.float32)
+    chances = np.zeros((2, h, w), np.float32)
     chances[0, 3, 4] = 0.2                      # street: grey on the 0 to 1 scale
-    chances[2, 5, 6], chances[2, 7, 8] = 0.2, 0.1   # zoning border: black at its largest, mid-grey at half of it
+    chances[1, 5, 6] = 1.0                      # block edge: black
     truth = _truth({}, (h, w))
     img = look.read_picture(np.ones((h, w), np.float32), chances, np.zeros((h, w), np.int32), truth, {}, "t")
-    panel = [img[-h:, k * (w + look.GAP):k * (w + look.GAP) + w, 0] for k in range(5)]
+    assert img.shape[1] == 4 * w + 3 * look.GAP
+    panel = [img[-h:, k * (w + look.GAP):k * (w + look.GAP) + w, 0] for k in range(4)]
     assert panel[1][3, 4] == 204 and panel[1].min() == 204
-    assert panel[3][5, 6] == 0 and panel[3][7, 8] == 128 and (np.delete(panel[3].ravel(), [5 * w + 6, 7 * w + 8])
-                                                              == 255).all()
+    assert panel[2][5, 6] == 0 and (np.delete(panel[2].ravel(), 5 * w + 6) == 255).all()
+
+
+def test_count_refuses_a_model_saved_with_three_answers_in_one_line(tmp_path, monkeypatch):
+    import torch
+    from typer.testing import CliRunner
+
+    from sfzmaps.cli import app
+    from sfzmaps.find import model, pages
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    old = model.FindNet(4)
+    old.head = torch.nn.Conv2d(4, 3, 1)                     # street, block edge and zoning border, as saved before
+    (tmp_path / "find" / "runs" / "r").mkdir(parents=True)
+    torch.save({"state_dict": old.state_dict(), "step": 1, "recipe": {"answers": ["street", "edge", "border"]},
+                "device": "cpu"}, tmp_path / "find" / "runs" / "r" / "model.pt")
+    r = CliRunner().invoke(app, ["find", "count", "--run", "r", "--device", "cpu"])
+    assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.output
+    assert len(r.output.strip().splitlines()) == 1 and "predates the two-answer finder" in r.output, r.output

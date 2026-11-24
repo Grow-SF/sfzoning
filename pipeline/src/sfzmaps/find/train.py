@@ -3,15 +3,15 @@
 
 Each step's batch takes equal numbers of tiles from every era present (the remainder to the eras first in sorted
 order), so an era with few labelled px weighs as much as one with many.  A tile's centre is drawn uniformly from its
-era's labelled px (`data.labelled`, of the answers trained), the tile shifted to lie inside its item, turned a random
+era's labelled px (`data.labelled`), the tile shifted to lie inside its item, turned a random
 number of quarter turns (the finder is not told which way is up), given the branch's intensity jitter
 (`hatchnet.train`: ink and paper levels each moved) and then print-and-scan noise (`noised`, the owner's ruling R29:
 these are old, poorly printed and poorly scanned maps).  The noise moves only the luminance, never a label.
 
-The loss (`batch_loss`): every label of the answers trained, summed as one likelihood (`find.losses`: the dense labels
-by `dense_nll`, the cut statements by `cut_nll`), divided by the batch's statements (`losses.statements`); a batch with
-no statement is skipped and counted.  An answer left out of `Recipe.answers` gets no loss, no gradient and no weight
-decay: its row of the network's head stays as it was made.  With `Recipe.unbroken`, the hand-crop tiles add the
+The loss (`batch_loss`): every label of both answers, summed as one likelihood (`find.losses`: the dense street and
+block-edge labels by `dense_nll`, the block-edge cut statements by `cut_nll`), divided by the batch's statements
+(`losses.statements`); a batch with no statement is skipped and counted.  With `Recipe.unbroken`, the hand-crop tiles
+add the
 branch's unbroken-line terms (`hatchnet.topo`, clDice: 1 - recall and 1 - precision) between the block-edge chance
 and the hand block-edge label.  The loss is taken on the CPU, where its sums (`index_add`) are deterministic (as the
 branch does).
@@ -39,16 +39,13 @@ import numpy as np
 import torch
 from scipy import ndimage
 
-from sfzmaps.find import cuts as cutlib, data, handlabels, losses, model
+from sfzmaps.find import data, handlabels, losses, model
 from sfzmaps.find.data import NONE, Labelled
 from sfzmaps.solver.hatchnet import topo
 from sfzmaps.solver.hatchnet import train as branch
 
 log = logging.getLogger(__name__)
 
-ANSWERS = model.ANSWERS
-CHANNEL = {"street": model.STREET, "edge": model.EDGE, "border": model.BORDER}
-CUT_ANSWER = {"edge": cutlib.EDGE, "border": cutlib.BORDER}
 SPECK_AREA = 2.5            # noise setting: a speck's mean px, half of them 1 px and half 2 x 2
 
 
@@ -56,8 +53,8 @@ SPECK_AREA = 2.5            # noise setting: a speck's mean px, half of them 1 p
 class Recipe:
     """How the finder is trained.  Engineering settings, the branch's (`hatchnet.train`): the steps, tiles per step,
     the tile's side (px, a multiple of model.MULTIPLE), the network's width, the one-cycle schedule (`max_lr`,
-    `pct_start`), AdamW's weight decay, the intensity jitter, and the steps between checkpoints (`every`).  `answers`:
-    the answers trained (one left out gets no loss); `unbroken`: add the unbroken-line terms (see the module); `seed`.
+    `pct_start`), AdamW's weight decay, the intensity jitter, and the steps between checkpoints (`every`).  `unbroken`:
+    add the unbroken-line terms (see the module); `seed`.
 
     The noise (`noised`): engineering settings too, augmentation strengths, not anything a reading uses.  `noise`
     scales every part (0: none at all); each part's maximum: `noise_blur` the blur's sigma (px), `noise_shift` the
@@ -72,7 +69,6 @@ class Recipe:
     weight_decay: float = 1e-4
     jitter: float = 0.25
     every: int = 250
-    answers: tuple[str, ...] = ANSWERS
     unbroken: bool = False
     seed: int = 0
     noise: float = 1.0
@@ -176,7 +172,7 @@ class Tiles:
         self.pools = {}
         for era in self.eras:
             mine = [i for i, it in enumerate(items) if it.era == era]
-            pool = _Era(mine, [data.labelled(items[i], recipe.answers) for i in mine])
+            pool = _Era(mine, [data.labelled(items[i]) for i in mine])
             if not pool.total:
                 raise ValueError(f"era {era}: no labelled px")
             self.pools[era] = pool
@@ -222,55 +218,51 @@ def _dense(tiles: list[Labelled], name: str) -> tuple[np.ndarray, np.ndarray]:
     return (lab == 1).astype(np.float32), weight
 
 
-def _cuts(tiles: list[Labelled], answer: int):
-    """The tiles' cuts of `answer`, one after the other: px into the batch's flat (n, h, w), cut, prior, says,
-    weight."""
-    px, cut, prior, says, weight = [], [], [], [], []
+def _cuts(tiles: list[Labelled]):
+    """The tiles' block-edge cuts, one after the other: px into the batch's flat (n, h, w), cut, prior, weight; None
+    when there is none."""
+    px, cut, prior, weight = [], [], [], []
     n = 0
     for b, t in enumerate(tiles):
         c = t.cuts
         if c is None:
             continue
-        sel = c.answer == answer
-        on = sel[c.cut]
-        renumber = np.cumsum(sel) - 1 + n
-        px.append(c.px[on] + b * t.lum.size)
-        cut.append(renumber[c.cut[on]])
-        prior.append(c.prior[on])
-        says.append(c.says[sel])
-        weight.append(c.weight[sel])
-        n += int(sel.sum())
+        px.append(c.px + b * t.lum.size)
+        cut.append(c.cut.astype(np.int64) + n)
+        prior.append(c.prior)
+        weight.append(c.weight)
+        n += len(c.weight)
     if not n:
         return None
-    return (np.concatenate(px).astype(np.int64), np.concatenate(cut).astype(np.int64),
-            np.concatenate(prior).astype(np.float32), np.concatenate(says), np.concatenate(weight).astype(np.float32))
+    return (np.concatenate(px).astype(np.int64), np.concatenate(cut), np.concatenate(prior).astype(np.float32),
+            np.concatenate(weight).astype(np.float32))
 
 
-def batch_loss(net_out: torch.Tensor, tiles: list[Labelled], recipe: Recipe) -> torch.Tensor:
-    """Minus the log likelihood of every label of the answers in `recipe.answers` on `tiles`, summed (the dense labels
-    by `losses.dense_nll`, each cut by `losses.cut_nll` with its weight), under the logits `net_out` (n, 3, h, w);
-    divided by nothing (`statements` counts them)."""
+def batch_loss(net_out: torch.Tensor, tiles: list[Labelled]) -> torch.Tensor:
+    """Minus the log likelihood of every label on `tiles`, summed (the dense street and block-edge labels by
+    `losses.dense_nll`, each block-edge cut by `losses.cut_nll` with its weight, saying an edge crosses), under the
+    logits `net_out` (n, 2, h, w); divided by nothing (`statements` counts them)."""
     total = net_out.new_zeros(())
-    for name in recipe.answers:
-        z = net_out[:, CHANNEL[name]]
+    for name, channel in (("street", model.STREET), ("edge", model.EDGE)):
+        z = net_out[:, channel]
         target, weight = _dense(tiles, name)
         total = total + losses.dense_nll(z, torch.from_numpy(target).to(z.device),
                                          torch.from_numpy(weight).to(z.device))
-        found = _cuts(tiles, CUT_ANSWER[name]) if name in CUT_ANSWER else None
-        if found is not None:
-            px, cut, prior, says, weight = (torch.from_numpy(a).to(z.device) for a in found)
-            total = total + losses.cut_nll(z.reshape(-1), px, cut, prior, says, weight)
+    found = _cuts(tiles)
+    if found is not None:
+        z = net_out[:, model.EDGE]
+        px, cut, prior, weight = (torch.from_numpy(a).to(z.device) for a in found)
+        says = torch.ones(len(weight), dtype=torch.bool, device=z.device)
+        total = total + losses.cut_nll(z.reshape(-1), px, cut, prior, says, weight)
     return total
 
 
-def statements(tiles: list[Labelled], recipe: Recipe) -> float:
+def statements(tiles: list[Labelled]) -> float:
     """The statements `batch_loss` sums for `tiles` (`losses.statements` of every weight it uses)."""
-    weights = []
-    for name in recipe.answers:
-        weights.append(_dense(tiles, name)[1])
-        found = _cuts(tiles, CUT_ANSWER[name]) if name in CUT_ANSWER else None
-        if found is not None:
-            weights.append(found[4])
+    weights = [_dense(tiles, name)[1] for name in ("street", "edge")]
+    found = _cuts(tiles)
+    if found is not None:
+        weights.append(found[3])
     return losses.statements(*weights)
 
 
@@ -289,9 +281,9 @@ def unbroken_loss(net_out: torch.Tensor, tiles: list[Labelled], recipe: Recipe) 
     uses them (a thin line for the recall, a wider corridor for the precision): 1 - recall (how much of the hand
     block-edge label, edge 1, the block-edge chance covers) + 1 - precision (how much of the chance's soft skeleton,
     over the px with a block-edge label, lies in the edge's `corridor`); the skeleton half a tile deep (the branch's).
-    0 with no hand tile or with the block-edge answer left out."""
+    0 with no hand tile."""
     hand = [i for i, t in enumerate(tiles) if t.hand]
-    if not hand or "edge" not in recipe.answers:
+    if not hand:
         return net_out.new_zeros(())
     p = torch.sigmoid(net_out[torch.tensor(hand), model.EDGE])
     labels = np.stack([tiles[i].edge for i in hand])
@@ -304,20 +296,6 @@ def unbroken_loss(net_out: torch.Tensor, tiles: list[Labelled], recipe: Recipe) 
 
 # --- the fit ----------------------------------------------------------------------------------------------------------
 
-def _decay_keep(net: model.FindNet, answers) -> list[tuple[torch.nn.Parameter, torch.Tensor | float]]:
-    """Each weight and how much of AdamW's decay it takes: 1, or for the head 0 on the rows of answers left out."""
-    left = [CHANNEL[a] for a in ANSWERS if a not in answers]
-    out = []
-    for name, p in net.named_parameters():
-        if name.startswith("head.") and left:
-            keep = torch.ones_like(p)
-            keep[left] = 0
-            out.append((p, keep))
-        else:
-            out.append((p, 1.0))
-    return out
-
-
 def _state(net: torch.nn.Module) -> dict:
     return {k: v.detach().cpu().clone() for k, v in net.state_dict().items()}
 
@@ -329,32 +307,26 @@ def _zero() -> dict:
 
 def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None) -> Fitted:
     """The network trained on `items` (see the module).  The network is made right after torch's generator is
-    seeded.  ValueError for an answer not in model.ANSWERS; FloatingPointError for a loss that is not finite."""
-    bad = sorted(set(recipe.answers) - set(ANSWERS))
-    if bad or not recipe.answers:
-        raise ValueError(f"answers must be some of {', '.join(ANSWERS)}; got {', '.join(recipe.answers) or 'none'}")
+    seeded.  FloatingPointError for a loss that is not finite."""
     branch.settle_torch()
     torch.manual_seed(recipe.seed)
     net = model.FindNet(recipe.width)
     tiles = Tiles(items, recipe)
     rng, noise_rng = np.random.default_rng(recipe.seed), np.random.default_rng([recipe.seed, 1])
     net.to(device).train()
-    # AdamW's decoupled weight decay (p <- p (1 - lr decay) before the Adam step, as torch's AdamW does), applied here
-    # so that an answer left out keeps its head row exactly as made
-    opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=0.0)
-    keep = _decay_keep(net, recipe.answers)
+    opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=recipe.weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.steps,
                                                 pct_start=recipe.pct_start)
     curve, skipped, best, best_value, last_row = [], 0, None, None, 0
     sums = _zero()
     for step in range(1, recipe.steps + 1):
         batch = tiles.draw(rng, noise_rng)
-        n = statements(batch, recipe)
+        n = statements(batch)
         row_step = None
         if n > 0:
             x = torch.from_numpy(np.stack([t.lum for t in batch]))[:, None].to(device)
             out = net(x).cpu()
-            nll = batch_loss(out, batch, recipe)
+            nll = batch_loss(out, batch)
             loss = nll / n
             extra = unbroken_loss(out, batch, recipe) if recipe.unbroken else None
             if extra is not None:
@@ -363,10 +335,6 @@ def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None) -> Fi
                 raise FloatingPointError(f"step {step}: the loss is not finite ({float(loss.detach())})")
             opt.zero_grad()
             loss.backward()
-            with torch.no_grad():
-                lr = opt.param_groups[0]["lr"]
-                for p, k in keep:
-                    p.mul_(1 - lr * recipe.weight_decay * k)
             opt.step()
             sched.step()
             row_step = float(nll.detach()) / n
@@ -409,7 +377,7 @@ def save_run(folder: Path, fitted: Fitted, recipe: Recipe, log_fields: dict) -> 
     """model.pt (the weights kept, their step, the recipe, the device: no clock time) and log.json (the recipe, the
     device, the curve, the skipped batches and `log_fields`; a number that is not finite as null) in `folder`."""
     folder.mkdir(parents=True, exist_ok=True)
-    recipe_d = dataclasses.asdict(recipe) | {"answers": list(recipe.answers)}
+    recipe_d = dataclasses.asdict(recipe)
     pt, js = folder / "model.pt", folder / "log.json"
     part = folder / ".model.pt.part"
     torch.save({"state_dict": fitted.state_dict, "step": fitted.step, "recipe": recipe_d, "device": fitted.device},

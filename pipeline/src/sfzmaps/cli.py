@@ -13,8 +13,8 @@ app = typer.Typer(no_args_is_help=True, help="Georeference historic SF zoning ma
 solver_app = typer.Typer(no_args_is_help=True,
                          help="The 2000 solver: make its inputs (each a `sfzmaps build` stage) and solve.")
 app.add_typer(solver_app, name="solver")
-find_app = typer.Typer(no_args_is_help=True, help="The street-and-block finder: one model that finds streets, block "
-                                                  "edges and zoning borders on a scanned map.")
+find_app = typer.Typer(no_args_is_help=True, help="The street-and-block finder: one model that finds streets and "
+                                                  "block edges on a scanned map.")
 app.add_typer(find_app, name="find")
 # Exit status of a command stopped by llm.FATAL (quota, spend cap, missing key): `sfzmaps build`
 # reports it as "needs a paid read". Not 2, which click uses for usage errors.
@@ -1596,13 +1596,13 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
                                                                 "(data/find/look/labels/<placement>/).")
                 ) -> None:
     """Make the series' street-or-not labels from its lots on the solver's grid (data/find/labels/<series>/grid.npz,
-    made again every run), then each sheet's labels through its placement: street or not, and the cuts saying where
-    a block edge and a zoning border cross (data/find/labels/<series>/<sheet>.npz).  $0."""
+    made again every run), then each sheet's labels through its placement: street or not, no block edge, and the cuts
+    saying where a block edge crosses (data/find/labels/<series>/<sheet>.npz).  $0."""
     import time
 
     import numpy as np
 
-    from sfzmaps.find import cuts, look as pictures, lotlabels, pages
+    from sfzmaps.find import look as pictures, lotlabels, pages
     from sfzmaps.solver.hatchnet.data import NOT_STREET, STREET, UNKNOWN
     if placement not in lotlabels.PLACEMENTS:
         raise typer.BadParameter(f"expected one of {', '.join(lotlabels.PLACEMENTS)}", param_hint="--placement")
@@ -1624,57 +1624,15 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
     for h in sheet or found:
         t = time.time()
         lab = lotlabels.sheet_labels((series, h), placement)
-        c = lab["cuts"]
-        counts = ", ".join(f"{name} {int(np.count_nonzero(which)):,}" for name, which in (
-            ("block edge", c.answer == cuts.EDGE),
-            ("a zoning border crosses", (c.answer == cuts.BORDER) & c.says),
-            ("no zoning border crosses", (c.answer == cuts.BORDER) & ~c.says)))
-        typer.echo(f"{h}: sigma {lab['sigma']:.3f} px; cuts: {counts}; {time.time() - t:.1f} s; "
-                   f"{lotlabels.sheet_path((series, h))}")
+        typer.echo(f"{h}: sigma {lab['sigma']:.3f} px; block-edge cuts {len(lab['cuts'].weight):,}; "
+                   f"{time.time() - t:.1f} s; {lotlabels.sheet_path((series, h))}")
         n = lab["counts"]
-        if n:
-            kept = n["labelled_px_after"] / max(1, n["labelled_px_before"])
-            typer.echo(f"  where the sheet draws ink: edge cuts used {n['edge_used']:,}, dropped "
-                       f"{n['edge_dropped']:,}; 'crosses' used {n['crosses_used']:,}, dropped for a bare block side "
-                       f"{n['crosses_dropped_bare_side']:,}, for no street between "
-                       f"{n['crosses_dropped_no_street_between']:,}, for no ink on the cut "
-                       f"{n['crosses_dropped_no_ink_on_cut']:,}; 'none' used {n['none_used']:,}, dropped for a bare "
-                       f"block side {n['none_dropped_bare_side']:,}, for no street between "
-                       f"{n['none_dropped_no_street_between']:,}; labelled px kept {kept:.3f}")
+        kept = n["labelled_px_after"] / max(1, n["labelled_px_before"])
+        typer.echo(f"  where the sheet draws ink: block-edge cuts used {n['edge_used']:,}, dropped "
+                   f"{n['edge_dropped']:,}; labelled px kept {kept:.3f}")
         if look:
             for f in pictures.write((series, h), pages.load_scan((series, h)), lab):
                 typer.echo(f"  {f}")
-
-
-@find_app.command("measure-town")
-def find_measure_town(series: str = typer.Option(..., "--series", help="The series whose built labels are measured."),
-                      sheet: list[str] = typer.Option(..., "--sheet", help="A sheet to measure (repeatable).")) -> None:
-    """Measure street widths, block sides, block-line and zoning-border widths and the placement spread on built
-    label files (`sfzmaps find labels`), for the made-up towns: inputs/find/town-measures.json, with this command,
-    the date and the git commit.  $0."""
-    import datetime
-    import subprocess
-
-    from sfzmaps.build import git_head
-    from sfzmaps.find import town
-    try:
-        found = town.measure(series, sheet)
-    except (FileNotFoundError, ValueError) as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(1) from None
-    changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "src"],
-                             cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True).stdout.strip()
-    command = " ".join(["sfzmaps find measure-town", f"--series {series}", *(f"--sheet {h}" for h in sheet)])
-    out = {"command": command, "date": datetime.date.today().isoformat(), "commit": git_head(),
-           "uncommitted_changes_in_src": bool(changed), **found}
-    f = town.measures_path()
-    f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(out, indent=1) + "\n")
-    for k in town.SIZES:
-        q = found[k]
-        typer.echo(f"{k}: median {q[50]:g} px (5% {q[5]:g}, 95% {q[95]:g}; {found['counts'][k]:,} values)")
-    typer.echo(f"spread_px: {found['spread_px']:.4f}")
-    typer.echo(str(f))
 
 
 @find_app.command("crops")
@@ -1735,8 +1693,6 @@ def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: trai
 def find_train(run: str = typer.Option(..., "--run", help="The run's name: its files go to data/find/runs/<run>/."),
                sheet: list[str] = typer.Option(None, "--sheet", help="A lot-labelled sheet to train on, as "
                                                                      "<series>/<sheet> (repeatable)."),
-               without_borders: bool = typer.Option(False, "--without-borders",
-                                                    help="Train no zoning-border answer (its labels give no loss)."),
                unbroken: bool = typer.Option(False, "--unbroken", help="Add the unbroken-line terms on the hand "
                                                                        "crops' block edges."),
                no_noise: bool = typer.Option(False, "--no-noise", help="No print-and-scan noise on the tiles."),
@@ -1774,8 +1730,7 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                                  param_hint="--run")
     recipe = train.Recipe()
     recipe = dataclasses.replace(recipe, steps=steps or recipe.steps, every=every or recipe.every, unbroken=unbroken,
-                                 noise=0.0 if no_noise else recipe.noise,
-                                 answers=tuple(a for a in recipe.answers if not (without_borders and a == "border")))
+                                 noise=0.0 if no_noise else recipe.noise)
     device = device or default_device()
     sids = []
     for s in sheet or []:
@@ -1816,7 +1771,7 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     if not items:
         typer.echo("nothing to train on", err=True)
         raise typer.Exit(1)
-    listed = [{"name": it.name, "era": it.era, "labelled_px": int(data.labelled(it, recipe.answers).sum()),
+    listed = [{"name": it.name, "era": it.era, "labelled_px": int(data.labelled(it).sum()),
                "used_cuts_with_no_px": 0 if it.cuts is None else data.cuts_without_px(it.cuts)} for it in items]
     for era in sorted({it.era for it in items}):
         mine = [x for x in listed if x["era"] == era]
@@ -1847,12 +1802,11 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
                ) -> None:
     """Count what the run's kept model finds on every `test` hand crop, at the watershed depth fitted on the `choose`
     crops: how many printed blocks are found, joined, cut up, lost or held whole, how much of the hand street and
-    block ground it calls so, how far the hand block boundary lies from its block edges in feet, and on the April
-    2000 table's series how many zoning-border statements it agrees with (null for a run that did not train that
-    answer) and how many of them its block-edge answer crosses; per crop, per era and pooled
-    (`find.counts`).  Writes data/find/runs/<run>/counts.json, each test crop's read
-    (reads/test/<series>__<crop>.npz) and picture (look/test/<series>__<crop>.png).  Exit status 1 when there is no
-    choosing or no test crop, a choosing crop lies on a test crop's ground, or a crop cannot be read.  $0."""
+    block ground it calls so, and how far the hand block boundary lies from its block edges in feet; per crop, per era
+    and pooled (`find.counts`).  Writes data/find/runs/<run>/counts.json, each test crop's read
+    (reads/test/<series>__<crop>.npz) and picture (look/test/<series>__<crop>.png).  Exit status 1 when the model
+    predates the two-answer finder, there is no choosing or no test crop, a choosing crop lies on a test crop's
+    ground, or a crop cannot be read.  $0."""
     import json
     import logging
 
@@ -1873,9 +1827,10 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
     saved = torch.load(folder / "model.pt", map_location="cpu")
     settle_torch()
     try:
+        net = counts.network(saved["state_dict"])
         choose, test = handlabels.crops(("choose",)), handlabels.crops(("test",))
         with gpu.gpu_turn(True, device):
-            out = counts.count(saved["state_dict"], choose, test, device, folder, saved["recipe"]["answers"])
+            out = counts.count(net, choose, test, device, folder)
     except (ValueError, FileNotFoundError, KeyError) as e:
         typer.echo(str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e), err=True)
         raise typer.Exit(1) from None

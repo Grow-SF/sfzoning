@@ -1,9 +1,8 @@
 """Street-and-block finder.
 
-One model looks at a scanned historic zoning map and says, per spot, three things: street or not, block edge or not,
-zoning border or not.  Its labels come only from what matches the print: modern lots for the series that mark them
-(`inputs/find/label_sources.csv`), the April 2000 table for the three `2000-digital` series' zoning borders, "no zoning
-border" everywhere on the hatched 1921-1948 maps, and hand crops for the rest.
+One model looks at a scanned historic zoning map and says, per spot, two things: street or not, block edge or not.  It
+does not look for zoning borders.  Its labels come only from what matches the print: modern lots for the series that
+mark them (`inputs/find/label_sources.csv`) and hand crops for the rest.
 Design: docs/superpowers/specs/2026-11-23-street-and-block-finder-design.md
 
 Constraints that hold everywhere in this package:

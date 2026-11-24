@@ -1,12 +1,12 @@
-"""Lines as statements about short cuts: the block edges and zoning borders the finder learns, from a series' lots.
+"""Block edges as statements about short cuts: where the lots say a block side is, the finder learns that a block edge
+crosses.
 
-A cut is a short run of page px across a place where the lots say a line should be: a block side, the line between two
-lots, or the ground between two lots facing each other across a street.  Its statement is "a line crosses this cut"
-(`says` True) or "none does" (False); which px of the cut the line is on, the model finds itself.  Each px carries a
-prior: where the placement puts the line, falling off as a Gaussian of the sheet's measured placement spread
-(`spread_px`), so a cut is as long as the placement is unsure.  A cut with any px off the page or off the frame cut is
-dropped whole.  Each cut names the grid px it speaks about (`Cuts.ends`), so that it can be kept only where the sheet
-draws them (`find.drawn`).
+A cut is a short run of page px across a block side the lots give; its statement is "a block edge crosses this cut",
+and which px of the cut the edge is on, the model finds itself.  Each px carries a prior: where the placement puts the
+side, falling off as a Gaussian of the sheet's measured placement spread (`spread_px`), so a cut is as long as the
+placement is unsure.  A cut with any px off the page or off the frame cut is dropped whole.  Each cut names the grid px
+of the block it is across the side of (`Cuts.inside`), so that it can be kept only where the sheet draws the block
+(`find.drawn`).
 
 Reads a sheet's placement and data/warp/<series>/<sheet>/scores.json (the placement's measured miss).  Writes nothing.
 """
@@ -17,14 +17,12 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
-from scipy import ndimage
 from scipy.ndimage import map_coordinates
 
 from sfzmaps.find import lotlabels
 from sfzmaps.find.pages import SheetId
 from sfzmaps.solver import grid, hatching
 
-EDGE, BORDER = 0, 1                 # Cuts.answer: a block edge, a zoning border
 REACH_SIGMAS = 4.0                  # a cut runs this many sigma past where the line can be: numerics only, the prior
                                     # there is 3e-4 of its peak
 MEDIAN_RADIUS = 1.1774              # the median distance from the centre of a 2-D normal, in sigma
@@ -36,32 +34,30 @@ MISS = {"warp": None, "work": "today"}   # whose control-point miss (scores.json
 
 @dataclass(frozen=True)
 class Cuts:
-    """Cuts on one page, px of every cut one after the other."""
+    """Block-edge cuts on one page, px of every cut one after the other; each says a block edge crosses it."""
     px: np.ndarray          # int64 (m,): flat page index (row * w + col) of each cut px
     cut: np.ndarray         # int32 (m,): the cut each px is in
     prior: np.ndarray       # float32 (m,): 1 where the line most likely is, falling off
-    answer: np.ndarray      # uint8 (n,): EDGE or BORDER
-    says: np.ndarray        # bool (n,): True "a line crosses this cut", False "none does"
     weight: np.ndarray      # float32 (n,): how much the cut counts (1 as made; `find.drawn` sets 0 for a cut not used)
-    ends: np.ndarray        # int32 (n, 2): the grid px it speaks about, as flat indexes of the sheet's grid window
-                            # (`window`): an edge cut its inside px and -1, a zoning-border cut a px of each of its lots
+    inside: np.ndarray      # int32 (n,): the block's grid px the cut is across the side of, as a flat index of the
+                            # sheet's grid window (`window`); -1 when not known (a cut read from a label file)
     dropped: np.ndarray     # int64: the page px (flat) of the cuts the lots call for that were dropped for leaving the
                             # page or the frame cut, those on the page
 
     @staticmethod
     def empty() -> Cuts:
-        return Cuts(np.zeros(0, np.int64), np.zeros(0, np.int32), np.zeros(0, np.float32), np.zeros(0, np.uint8),
-                    np.zeros(0, bool), np.zeros(0, np.float32), np.zeros((0, 2), np.int32), np.zeros(0, np.int64))
-
-    @staticmethod
-    def joined(a: Cuts, b: Cuts) -> Cuts:
-        """`a`'s cuts, then `b`'s."""
-        return Cuts(np.r_[a.px, b.px], np.r_[a.cut, b.cut + len(a.answer)].astype(np.int32), np.r_[a.prior, b.prior],
-                    np.r_[a.answer, b.answer], np.r_[a.says, b.says], np.r_[a.weight, b.weight],
-                    np.r_[a.ends, b.ends].astype(np.int32), np.r_[a.dropped, b.dropped])
+        return Cuts(np.zeros(0, np.int64), np.zeros(0, np.int32), np.zeros(0, np.float32), np.zeros(0, np.float32),
+                    np.zeros(0, np.int32), np.zeros(0, np.int64))
 
     def with_weight(self, weight: np.ndarray) -> Cuts:
-        return Cuts(self.px, self.cut, self.prior, self.answer, self.says, np.asarray(weight, np.float32), self.ends,
+        return Cuts(self.px, self.cut, self.prior, np.asarray(weight, np.float32), self.inside, self.dropped)
+
+    def only(self, keep: np.ndarray) -> Cuts:
+        """The cuts `keep` (bool (n,)) says to keep, renumbered in order; `dropped` as it is."""
+        keep = np.asarray(keep, bool)
+        on = keep[self.cut]
+        renumber = (np.cumsum(keep) - 1).astype(np.int32)
+        return Cuts(self.px[on], renumber[self.cut[on]], self.prior[on], self.weight[keep], self.inside[keep],
                     self.dropped)
 
     def on(self, shape: tuple[int, int], which: np.ndarray | None = None, dropped: bool = False) -> np.ndarray:
@@ -126,14 +122,13 @@ def _window(tr, keep: np.ndarray, grid_shape) -> tuple[tuple[int, int, int, int]
     return (r0, r1, c0, c1), _GridPage(tr, keep.shape, r0, r1, c0, c1)
 
 
-def _pairs(a: np.ndarray, b: np.ndarray | None = None, *, test) -> tuple[np.ndarray, np.ndarray]:
-    """Every 4-neighbour pair (p, q) of px of a window (flat indexes), across then down, for which `test(a[p], a[q])`
-    (or `test(a[p], a[q], b[p], b[q])`) holds."""
+def _pairs(a: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Every 4-neighbour pair (p, q) of px of a window (flat indexes) whose values in `a` differ, across then down."""
     idx = np.arange(a.size).reshape(a.shape)
     ps, qs = [], []
     for sp, sq in (((slice(None), slice(None, -1)), (slice(None), slice(1, None))),
                    ((slice(None, -1), slice(None)), (slice(1, None), slice(None)))):
-        ok = test(a[sp], a[sq]) if b is None else test(a[sp], a[sq], b[sp], b[sq])
+        ok = a[sp] != a[sq]
         ps.append(idx[sp][ok])
         qs.append(idx[sq][ok])
     return np.concatenate(ps), np.concatenate(qs)
@@ -145,49 +140,35 @@ def _centres(flat: np.ndarray, width: int, r0: int, c0: int) -> np.ndarray:
     return np.c_[c + c0 + 0.5, r + r0 + 0.5]
 
 
-def _lay(a: np.ndarray, b: np.ndarray, d: np.ndarray, answer: int, says: np.ndarray, ends: np.ndarray, sigma: float,
-         reach: int, shape: tuple[int, int], keep: np.ndarray) -> Cuts:
-    """Cuts from page points `a` to `b` (equal for a cut across one place) along unit directions `d`, `reach` steps
-    past both ends.  A step is one px along the direction's longer axis, so a cut's px are distinct and touching;
-    prior 1 from a to b and exp(-t^2 / 2 sigma^2) at distance t past them."""
-    n = len(a)
+def _lay(mid: np.ndarray, d: np.ndarray, inside: np.ndarray, sigma: float, reach: int, shape: tuple[int, int],
+         keep: np.ndarray) -> Cuts:
+    """Cuts across page points `mid` along unit directions `d`, `reach` steps each way.  A step is one px along the
+    direction's longer axis, so a cut's px are distinct and touching; prior exp(-t^2 / 2 sigma^2) at distance t from
+    `mid`."""
+    n = len(mid)
     if not n:
         return Cuts.empty()
     with np.errstate(invalid="ignore", divide="ignore"):
         m = np.abs(d).max(axis=1)
         step = d / m[:, None]
-        span = np.rint(np.linalg.norm(b - a, axis=1) * m)
-    good = np.isfinite(step).all(axis=1) & np.isfinite(a).all(axis=1) & np.isfinite(span)
-    span = np.where(good, span, 0).astype(np.int64)
-    length = span + 2 * reach + 1
-    cut = np.repeat(np.arange(n), length)
-    k = np.arange(len(cut)) - np.repeat(np.cumsum(length) - length, length) - reach
-    pos = a[cut] + k[:, None] * step[cut]
+    good = np.isfinite(step).all(axis=1) & np.isfinite(mid).all(axis=1)
+    cut = np.repeat(np.arange(n), 2 * reach + 1)
+    k = np.tile(np.arange(-reach, reach + 1), n)
+    pos = mid[cut] + k[:, None] * step[cut]
     with np.errstate(invalid="ignore"):
         col, row = np.rint(pos[:, 0]), np.rint(pos[:, 1])
-        inside = (col >= 0) & (col < shape[1]) & (row >= 0) & (row < shape[0])
-    col, row = np.where(inside, col, 0).astype(np.int64), np.where(inside, row, 0).astype(np.int64)
-    on_page = inside.copy()
-    inside &= keep[row, col]
-    good &= np.bincount(cut[~inside], minlength=n) == 0
+        inbounds = (col >= 0) & (col < shape[1]) & (row >= 0) & (row < shape[0])
+    col, row = np.where(inbounds, col, 0).astype(np.int64), np.where(inbounds, row, 0).astype(np.int64)
+    on_page = inbounds.copy()
+    inbounds &= keep[row, col]
+    good &= np.bincount(cut[~inbounds], minlength=n) == 0
     lost = on_page & ~good[cut]
-    t = (np.maximum(-k, 0) + np.maximum(k - span[cut], 0)) / m[cut]
+    t = np.abs(k) / m[cut]
     on = good[cut]
     renumber = np.cumsum(good) - 1
     return Cuts((row * shape[1] + col)[on], renumber[cut[on]].astype(np.int32),
-                np.exp(-t[on] ** 2 / (2 * sigma ** 2)).astype(np.float32), np.full(int(good.sum()), answer, np.uint8),
-                np.asarray(says, bool)[good], np.ones(int(good.sum()), np.float32),
-                np.asarray(ends, np.int32).reshape(-1, 2)[good], (row * shape[1] + col)[lost])
-
-
-def _across(p: np.ndarray, q: np.ndarray, width: int, r0: int, c0: int, gp: _GridPage, answer: int,
-            says: np.ndarray, ends: np.ndarray, sigma: float, reach: int, shape, keep) -> Cuts:
-    """A cut across the place between window px p and q, from p towards q: centred on their midpoint."""
-    cp, cq = _centres(p, width, r0, c0), _centres(q, width, r0, c0)
-    xy = gp.at(np.r_[(cp + cq) / 2, cp, cq])
-    mid, d = xy[:len(p)], xy[2 * len(p):] - xy[len(p):2 * len(p)]
-    d = d / np.linalg.norm(d, axis=1, keepdims=True)
-    return _lay(mid, mid, d, answer, says, ends, sigma, reach, shape, keep)
+                np.exp(-t[on] ** 2 / (2 * sigma ** 2)).astype(np.float32), np.ones(int(good.sum()), np.float32),
+                np.asarray(inside, np.int32)[good], (row * shape[1] + col)[lost])
 
 
 def edge_cuts(g: lotlabels.Ground, tr, shape: tuple[int, int], keep: np.ndarray, sigma: float,
@@ -198,49 +179,12 @@ def edge_cuts(g: lotlabels.Ground, tr, shape: tuple[int, int], keep: np.ndarray,
     reach = reach_px(sigma) if reach is None else reach
     (r0, r1, c0, c1), gp = _window(tr, keep, g.block.shape)
     block = g.block[r0:r1, c0:c1]
-    p, q = _pairs(block, test=lambda x, y: x != y)
+    p, q = _pairs(block)
     flip = ~block.ravel()[p]
     u, v = np.where(flip, q, p), np.where(flip, p, q)
-    ends = np.c_[u, np.full(len(u), -1)]
-    return _across(u, v, block.shape[1], r0, c0, gp, EDGE, np.ones(len(u), bool), ends, sigma, reach, shape, keep)
-
-
-def border_cuts(lot: np.ndarray, codes: np.ndarray, tr, shape: tuple[int, int], keep: np.ndarray, sigma: float,
-                reach: int | None = None) -> Cuts:
-    """Cuts saying whether a zoning border crosses, from the lots (`lot`, the grid's lot index, -1 none) and each
-    lot's code (`codes[i]`, "" unknown: no statement).  Two lots touching: a cut across every 4-neighbour pair of
-    their px, as `edge_cuts`.  Across a street: for every 4-neighbour pair of grid px off the lots whose nearest lots
-    differ, a cut on the straight line from one's nearest lot px to the other's, `reach` px past both (prior 1 between
-    the two lot px).  Each says a zoning border crosses when the two lots' codes differ."""
-    reach = reach_px(sigma) if reach is None else reach
-    (r0, r1, c0, c1), gp = _window(tr, keep, lot.shape)
-    win = lot[r0:r1, c0:c1]
-    names, ids = np.unique(np.asarray(codes, str), return_inverse=True)
-    ids = np.where(names[ids] == "", -1, ids).astype(np.int64)
-    code = np.where(win >= 0, ids[np.maximum(win, 0)], -1)                       # each px's code id, -1 none
-    width = win.shape[1]
-
-    p, q = _pairs(win, code, test=lambda a, b, ca, cb: (a >= 0) & (b >= 0) & (a != b) & (ca >= 0) & (cb >= 0))
-    cp, cq = code.ravel()[p], code.ravel()[q]
-    touching = _across(p, q, width, r0, c0, gp, BORDER, cp != cq, np.c_[p, q], sigma, reach, shape, keep)
-
-    if not (win >= 0).any():
-        return touching
-    near = ndimage.distance_transform_edt(win < 0, return_distances=False, return_indices=True).astype(np.int64)
-    near = (near[0] * width + near[1]).ravel()                                   # each px's nearest lot px
-    nlot = np.where(win.ravel() < 0, win.ravel()[near], -1).reshape(win.shape)   # off the lots: the nearest lot
-    p, q = _pairs(nlot, test=lambda a, b: (a >= 0) & (b >= 0) & (a != b))
-    a, b = near[p], near[q]
-    ca, cb = code.ravel()[a], code.ravel()[b]
-    known = (ca >= 0) & (cb >= 0)
-    a, b, ca, cb = a[known], b[known], ca[known], cb[known]
-    lo, hi = np.minimum(a, b), np.maximum(a, b)                                  # many pairs share two lot px
-    key = lo * win.size + hi                                                     # int64: a window holds ~10^7 px
-    assert key.dtype == np.int64
-    _, first = np.unique(key, return_index=True)
-    lo, hi, same = lo[first], hi[first], ca[first] == cb[first]
-    ends = gp.at(np.r_[_centres(lo, width, r0, c0), _centres(hi, width, r0, c0)])
-    pa, pb = ends[:len(lo)], ends[len(lo):]
-    d = (pb - pa) / np.linalg.norm(pb - pa, axis=1, keepdims=True)
-    street = _lay(pa, pb, d, BORDER, ~same, np.c_[lo, hi], sigma, reach, shape, keep)
-    return Cuts.joined(touching, street)
+    width = block.shape[1]
+    cu, cv = _centres(u, width, r0, c0), _centres(v, width, r0, c0)
+    xy = gp.at(np.r_[(cu + cv) / 2, cu, cv])
+    mid, d = xy[:len(u)], xy[2 * len(u):] - xy[len(u):2 * len(u)]
+    d = d / np.linalg.norm(d, axis=1, keepdims=True)
+    return _lay(mid, d, u, sigma, reach, shape, keep)

@@ -88,18 +88,18 @@ def test_colour_scan_is_luminance(world):
 def test_sources_rows_and_refusals(tmp_path):
     table = pages.sources(CHECKED_IN)
     assert len(table) == 22
-    assert table["2000-digital-height"].borders == "height_lim"
-    assert pages.sources(CHECKED_IN)["1921"] == pages.Source("1921", "hatched-grey", False, "none")
-    assert table["1990-1996-su"].lots is True and table["1960"].lots is False
+    assert pages.sources(CHECKED_IN)["1921"] == pages.Source("1921", "hatched-grey", "")
+    assert table["2000-digital-height"].lots == "table" and table["1990-1996-su"].lots == "year"
+    assert not table["1960"].lots
     bad = tmp_path / "bad.csv"
-    bad.write_text("series,era,lots,zoning_borders\nx,lined-grey,,wall\n")
-    with pytest.raises(ValueError):
+    bad.write_text("series,era,lots\nx,lined-grey,parcels\n")
+    with pytest.raises(ValueError, match="unknown lots 'parcels'"):
         pages.sources(bad)
     dup = tmp_path / "dup.csv"
-    dup.write_text("series,era,lots,zoning_borders\nx,lined-grey,,\nx,lined-grey,,\n")
+    dup.write_text("series,era,lots\nx,lined-grey,\nx,lined-grey,\n")
     with pytest.raises(ValueError):
         pages.sources(dup)
     empty = tmp_path / "e.csv"
-    empty.write_text("series,era,lots,zoning_borders\nx,lined-grey,,\n")
+    empty.write_text("series,era,lots\nx,lined-grey,\n")
     with pytest.raises(KeyError, match="e.csv"):
         pages.source("nope", empty)

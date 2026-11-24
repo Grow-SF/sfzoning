@@ -23,7 +23,7 @@ OUT = config.DATA_DIR / "find"
 SOURCES = config.INPUTS_DIR / "find" / "label_sources.csv"
 
 ERAS = ("hatched-grey", "hatched-colour", "lined-grey", "lined-1bit")
-BORDERS = ("zoning", "height_lim", "sud", "none", "")
+LOTS = ("year", "table", "")       # a series' lots: those of its year, the April 2000 table's, or none
 CUT = "outside.png"
 
 
@@ -63,15 +63,15 @@ def load_keep(sid: SheetId, shape: tuple[int, int]) -> np.ndarray:
 
 @dataclass(frozen=True)
 class Source:
-    """Where a series' labels come from: its era, whether lots label it, and what labels its zoning borders."""
+    """Where a series' labels come from: its era, and the lots that label it (`LOTS`: "year" the lots of its year,
+    "table" the April 2000 table's, "" none: hand crops only)."""
     series: str
     era: str
-    lots: bool
-    borders: str
+    lots: str
 
 
 def sources(path: Path | None = None) -> dict[str, Source]:
-    """The label sources by series.  ValueError for a repeated series, an unknown era or an unknown zoning_borders."""
+    """The label sources by series.  ValueError for a repeated series, an unknown era or unknown lots."""
     path = SOURCES if path is None else path
     table: dict[str, Source] = {}
     with open(path, newline="") as f:
@@ -81,11 +81,9 @@ def sources(path: Path | None = None) -> dict[str, Source]:
                 raise ValueError(f"{path}: series {s} appears twice")
             if r["era"] not in ERAS:
                 raise ValueError(f"{path}: series {s}: unknown era {r['era']!r}")
-            if r["zoning_borders"] not in BORDERS:
-                raise ValueError(f"{path}: series {s}: unknown zoning_borders {r['zoning_borders']!r}")
-            if r["lots"] not in ("year", ""):
+            if r["lots"] not in LOTS:
                 raise ValueError(f"{path}: series {s}: unknown lots {r['lots']!r}")
-            table[s] = Source(s, r["era"], r["lots"] == "year", r["zoning_borders"])
+            table[s] = Source(s, r["era"], r["lots"])
     return table
 
 
