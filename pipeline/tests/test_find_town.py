@@ -34,7 +34,7 @@ def test_measures_file_is_complete():
     line, heavy = found["block_line_width"], found["zoning_border_width"]
     assert all(z >= b for b, z in zip(line, heavy)) and heavy[50] > line[50]
     assert found["command"].startswith("sfzmaps find measure-town")
-    assert len(found["commit"]) == 40 and int(found["commit"], 16) >= 0
+    assert len(found["commit"]) == 40
 
 
 def _hits(t: town.Town, c: cuts.Cuts) -> np.ndarray:

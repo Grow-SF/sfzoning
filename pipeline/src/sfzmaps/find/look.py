@@ -1,7 +1,7 @@
 """Pictures of a sheet's labels (`lotlabels.sheet_labels`) on its scan, to check by eye that they sit on the print.
 
 The scan in grey with street tinted orange and block blue, as strongly as the label's weight; the cut statements drawn
-over it, each px as strong as its prior times its cut's weight (so labels of blocks the sheet does not draw fade out):
+over it, each px as strong as its prior, a cut not used (weight 0: a block the sheet does not draw) not at all:
 "no zoning border crosses" faint green, then "a zoning border crosses" red, then block-edge cuts cyan; a key and the
 sheet's name at the top.  `busiest` finds the close-up: the window holding the most cut px.
 

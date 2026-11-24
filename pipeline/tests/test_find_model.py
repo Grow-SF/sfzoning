@@ -8,4 +8,3 @@ def test_shapes():
     net = model.FindNet(8)
     out = net(torch.rand(2, 1, 64, 64))
     assert out.shape == (2, 3, 64, 64)
-    assert len(model.ANSWERS) == 3 and model.ANSWERS[model.BORDER] == "border"

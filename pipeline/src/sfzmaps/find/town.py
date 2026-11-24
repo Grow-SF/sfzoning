@@ -31,15 +31,13 @@ lies on the solver grid's top-left corner, one page px a grid px (`PLACEMENT`).
 
 The made-up case (`fit`, `chances`): the network learns from the towns' block-edge and zoning-border cuts alone.
 
-Reads built label files (data/find/labels/<series>/<sheet>.npz) and their scans; `look` writes a picture to
-data/find/look/town/."""
+Reads built label files (data/find/labels/<series>/<sheet>.npz) and their scans.  Writes nothing itself."""
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
-import cv2
 import numpy as np
 import torch
 
@@ -127,19 +125,17 @@ def sizes(z, lum: np.ndarray) -> dict[str, np.ndarray]:
             "zoning_border_width": width(border & says)}
 
 
-def measure(series: str, sheets: list[str]) -> dict:
-    """The measures (see the module) from the series' sheets' built label files: SIZES as QUANTILES px each,
+def measure(series: str, sheets: list[str], which: str = "warp") -> dict:
+    """The measures (see the module) from the series' sheets' built label files, made through placement `which`
+    (`lotlabels.load_sheet_labels`, whose errors name the command that makes a file): SIZES as QUANTILES px each,
     `spread_px`, and `counts` (how many values each list was made from)."""
     found = {k: [] for k in SIZES}
     sigma = []
     for h in sheets:
-        f = lotlabels.sheet_path((series, h))
-        if not f.is_file():
-            raise FileNotFoundError(f"{f}: no labels; make them with `sfzmaps find labels --series {series} "
-                                    f"--sheet {h}`")
-        with np.load(f) as z:
-            got = sizes(z, pages.load_scan((series, h)))
-            sigma.append(float(z["sigma"]))
+        lum = pages.load_scan((series, h))
+        z = lotlabels.load_sheet_labels((series, h), which, lum.shape)
+        got = sizes(z, lum)
+        sigma.append(float(z["sigma"]))
         for k in SIZES:
             found[k].append(got[k])
     out = {}
@@ -478,54 +474,3 @@ def chances(net: model.FindNet, lum: np.ndarray) -> np.ndarray:
     """float32 (3, h, w): each answer's chance at every px of a print (h, w multiples of model.MULTIPLE)."""
     net.eval()
     return torch.sigmoid(net(torch.from_numpy(np.asarray(lum, np.float32))[None, None]))[0].numpy()
-
-
-# --- the picture ------------------------------------------------------------------------------------------------------
-
-ZOOM = 3                    # picture setting: enlargement (nearest neighbour)
-
-
-def look(t: Town, chance: np.ndarray, sigma: float, path: Path) -> Path:
-    """A picture of a town, three panels: its print; the print with its zoning-border cuts tinted on the paper ("a
-    zoning border crosses" red, "none does" green, as strong as their prior); and the zoning-border chance the network
-    gives (black 0 to white at the picture's largest chance, named in the title), the printed zoning borders outlined
-    in red and the block lines in cyan.  The title gives the share of the town's "crosses" and "none" cuts the network
-    agrees with (gives its statement a chance over one half, `losses.statement_chance`)."""
-    from sfzmaps.find import look as pictures
-    c = border_cuts(t.lot, t.codes, sigma)
-    logit = torch.logit(torch.from_numpy(np.asarray(chance, np.float64).ravel()), eps=1e-12)
-    agreed = losses.statement_chance(logit, torch.from_numpy(c.px), torch.from_numpy(c.cut).long(),
-                                     torch.from_numpy(c.prior), torch.from_numpy(c.says)).numpy() > 0.5
-    share = [f"{agreed[w].mean():.2f} of {int(w.sum())}" if w.any() else "none drawn" for w in (c.says, ~c.says)]
-    grey = np.repeat((t.lum * 200 + 55).astype(np.uint8)[..., None], 3, axis=2)
-    tinted = grey.astype(float)
-    paper = t.lum.ravel()[c.px] > 0.5
-    for which, colour in ((~c.says, pictures.GREEN), (c.says, pictures.RED)):
-        sel = which[c.cut] & paper
-        r, q = np.divmod(c.px[sel], t.lum.shape[1])
-        a = 0.5 * c.prior[sel][:, None]
-        tinted[r, q] = tinted[r, q] * (1 - a) + np.array(colour) * a
-    top = max(float(chance.max()), 1e-6)
-    right = np.repeat((np.clip(chance / top, 0, 1) * 255).astype(np.uint8)[..., None], 3, axis=2)
-    for ink, colour in ((t.block_line & ~t.border_line, pictures.CYAN), (t.border_line, pictures.RED)):
-        edge = ink & ~cv2.erode(ink.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool)
-        right[edge] = colour
-    gap = np.full((t.lum.shape[0], 4, 3), 255, np.uint8)
-    img = np.hstack([grey, gap, tinted.astype(np.uint8), gap, right])
-    img = cv2.resize(img, None, fx=ZOOM, fy=ZOOM, interpolation=cv2.INTER_NEAREST)
-    img = pictures._keyed(img, f"made-up town, print offset {t.shift} px; agreed with: 'crosses' cuts {share[0]}, "
-                               f"'none' cuts {share[1]}",
-                          (("panels: the print | its zoning-border cuts | the zoning-border chance, black 0 to white "
-                            f"{top:.3f}", lambda band, box: None),
-                           ("red, middle = a zoning border crosses this cut", pictures.RED),
-                           ("green, middle = no zoning border crosses this cut", pictures.GREEN),
-                           ("red outline, right = printed zoning border", pictures.RED),
-                           ("cyan outline, right = printed block line", pictures.CYAN)))
-    path.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(path), img)
-    return path
-
-
-def look_path(name: str) -> Path:
-    return pages.OUT / "look" / "town" / f"{name}.png"
-

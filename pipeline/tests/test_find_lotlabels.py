@@ -62,3 +62,31 @@ def test_a_series_without_lot_labels_is_refused(monkeypatch):
     monkeypatch.setattr(pages, "SOURCES", CHECKED_IN)
     with pytest.raises(ValueError, match="1921"):
         lotlabels.series_lots("1921")
+
+
+def _label_file(placement: str, shape=(20, 30)) -> None:
+    f = lotlabels.sheet_path(("t", "A"))
+    f.parent.mkdir(parents=True, exist_ok=True)
+    e = np.zeros(0)
+    np.savez(f, street=np.zeros(shape, np.uint8), weight=np.ones(shape, np.float32), cuts_px=e.astype(np.int64),
+             cuts_cut=e.astype(np.int32), cuts_prior=e.astype(np.float32), cuts_answer=e.astype(np.uint8),
+             cuts_says=e.astype(bool), cuts_weight=e.astype(np.float32), edge_none=np.ones(shape, bool),
+             border_none=np.ones(shape, bool), sigma=np.float64(2.0), placement=np.array(placement))
+
+
+def test_every_reader_of_a_label_file_checks_its_placement(tmp_path, monkeypatch):
+    from sfzmaps.find import counts, data, town
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    monkeypatch.setattr(pages, "load_scan", lambda sid: np.ones((20, 30), np.float32))
+    again = r"made through the work placement, not warp; make it again with `sfzmaps find labels --series t " \
+            r"--sheet A --placement warp`"
+    with pytest.raises(FileNotFoundError, match=r"no labels; make them with `sfzmaps find labels --series t"):
+        lotlabels.load_sheet_labels(("t", "A"))
+    _label_file("work")
+    for read in (lambda: lotlabels.load_sheet_labels(("t", "A")), lambda: data.sheet_labelled(("t", "A")),
+                 lambda: town.measure("t", ["A"]), lambda: counts._sheet_border_cuts(("t", "A"), (20, 30))):
+        with pytest.raises(ValueError, match=again):
+            read()
+    assert lotlabels.load_sheet_labels(("t", "A"), "work")["street"].shape == (20, 30)
+    with pytest.raises(ValueError, match=r"labels are \(20, 30\), the page \(20, 31\)"):
+        lotlabels.load_sheet_labels(("t", "A"), "work", (20, 31))

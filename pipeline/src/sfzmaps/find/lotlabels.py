@@ -153,6 +153,35 @@ def sheet_path(sid: SheetId) -> Path:
     return pages.OUT / "labels" / sid[0] / f"{sid[1]}.npz"
 
 
+def load_sheet_labels(sid: SheetId, which: str = "warp", shape: tuple[int, int] | None = None) -> dict:
+    """The arrays of the sheet's label file (data/find/labels/<series>/<sheet>.npz, as `sheet_labels` wrote it), every
+    reader's way in.  FileNotFoundError naming the command that makes a missing file; ValueError naming the command
+    that makes it again when the file was made through another placement than `which`, or (`shape` given) does not
+    fit a page of that shape."""
+    f = sheet_path(sid)
+    again = f"`sfzmaps find labels --series {sid[0]} --sheet {sid[1]} --placement {which}`"
+    if not f.is_file():
+        raise FileNotFoundError(f"{f}: no labels; make them with {again}")
+    with np.load(f) as z:
+        lab = {k: z[k] for k in z.files}
+    if str(lab["placement"]) != which:
+        raise ValueError(f"{f}: made through the {lab['placement']} placement, not {which}; make it again with {again}")
+    if shape is not None and lab["street"].shape != tuple(shape):
+        raise ValueError(f"{f}: labels are {lab['street'].shape}, the page {tuple(shape)}; make them again with "
+                         f"{again}")
+    return lab
+
+
+def file_cuts(lab: dict):
+    """The cut statements of a label file's arrays (`load_sheet_labels`) as `find.cuts.Cuts` (the file holds no
+    `ends`: -1)."""
+    from sfzmaps.find.cuts import Cuts
+    n = len(lab["cuts_answer"])
+    return Cuts(lab["cuts_px"].astype(np.int64), lab["cuts_cut"].astype(np.int32), lab["cuts_prior"].astype(np.float32),
+                lab["cuts_answer"].astype(np.uint8), lab["cuts_says"].astype(bool),
+                lab["cuts_weight"].astype(np.float32), np.full((n, 2), -1, np.int32), np.zeros(0, np.int64))
+
+
 def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     """A sheet's labels through its placement `which`, written to data/find/labels/<series>/<sheet>.npz and returned:
     `street` and `weight` (`page_ground`; none for a series not labelled from lots), `cuts` (`find.cuts.Cuts`: edge

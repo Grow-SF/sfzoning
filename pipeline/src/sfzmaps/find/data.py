@@ -66,24 +66,12 @@ def _no_cut_on(c: Cuts, ground: np.ndarray) -> Cuts:
 
 def sheet_labelled(sid: SheetId, which: str = "warp") -> Labelled:
     """The sheet's lot labels (data/find/labels/<series>/<sheet>.npz) as a `Labelled` (see the module), with the
-    reserved ground through placement `which` left unlabelled.  FileNotFoundError naming the command that makes a
-    missing label file; ValueError when the file was made through another placement or does not fit the scan."""
-    f = lotlabels.sheet_path(sid)
-    if not f.is_file():
-        raise FileNotFoundError(f"{f}: no labels; make them with `sfzmaps find labels --series {sid[0]} "
-                                f"--sheet {sid[1]}`")
-    with np.load(f) as z:
-        lab = {k: z[k] for k in z.files}
-    if str(lab["placement"]) != which:
-        raise ValueError(f"{f}: made through the {lab['placement']} placement, not {which}")
+    reserved ground through placement `which` left unlabelled.  FileNotFoundError or ValueError naming the command
+    that makes the label file (`lotlabels.load_sheet_labels`): missing, made through another placement, or not fitting
+    the scan."""
     lum = pages.load_scan(sid)
-    if lab["street"].shape != lum.shape:
-        raise ValueError(f"{f}: labels are {lab['street'].shape}, the scan {lum.shape}")
-    n = len(lab["cuts_answer"])
-    found = Cuts(lab["cuts_px"].astype(np.int64), lab["cuts_cut"].astype(np.int32),
-                 lab["cuts_prior"].astype(np.float32), lab["cuts_answer"].astype(np.uint8),
-                 lab["cuts_says"].astype(bool), lab["cuts_weight"].astype(np.float32),
-                 np.full((n, 2), -1, np.int32), np.zeros(0, np.int64))          # the file holds no `ends`
+    lab = lotlabels.load_sheet_labels(sid, which, lum.shape)
+    found = lotlabels.file_cuts(lab)
     held = handlabels.reserved(sid, lum.shape, model.REACH, which=which)
     street = np.where(held, NONE, lab["street"]).astype(np.uint8)
     street_w = np.where(held | (street == NONE), 0, lab["weight"]).astype(np.float32)
@@ -93,21 +81,30 @@ def sheet_labelled(sid: SheetId, which: str = "warp") -> Labelled:
                     _no_cut_on(found, held.ravel()))
 
 
+def grown(box: tuple[int, int, int, int], shape: tuple[int, int]) -> tuple[tuple[slice, slice], tuple[slice, slice]]:
+    """The page slices of the box (x0, y0, w, h) grown by model.REACH px on every side where a page of `shape` allows,
+    and the box's own slices within that: a crop as the trainer shows it and as `find.counts` reads it."""
+    x0, y0, w, h = box
+    gx0, gy0 = max(0, x0 - model.REACH), max(0, y0 - model.REACH)
+    gx1, gy1 = min(shape[1], x0 + w + model.REACH), min(shape[0], y0 + h + model.REACH)
+    return ((slice(gy0, gy1), slice(gx0, gx1)),
+            (slice(y0 - gy0, y0 - gy0 + h), slice(x0 - gx0, x0 - gx0 + w)))
+
+
 def crop_name(crop: handlabels.Crop) -> str:
     return f"{crop.set}/{crop.series}/{crop.path.stem}"
 
 
 def crop_labelled(crop: handlabels.Crop) -> Labelled:
     """A hand crop's labels as a `Labelled` (see the module): the crop grown by `model.REACH` px where the page
-    allows.  For a `train` crop, the px on reserved ground are left without a label, and one line is logged naming
-    the crop and the share of its px left out; a `choose` or `test` crop is the reserved ground and is never masked."""
+    allows (`grown`).  For a `train` crop, the px on reserved ground are left without a label, and one line is logged
+    naming the crop and the share of its px left out; a `choose` or `test` crop is the reserved ground and is never
+    masked."""
     sid = (crop.series, crop.sheet)
     page = pages.load_scan(sid)
     lab = handlabels.make_labels(handlabels.crop_scan(page, crop), crop)
-    x0, y0, w, h = crop.box
-    gx0, gy0 = max(0, x0 - model.REACH), max(0, y0 - model.REACH)
-    gx1, gy1 = min(page.shape[1], x0 + w + model.REACH), min(page.shape[0], y0 + h + model.REACH)
-    inner = (slice(y0 - gy0, y0 - gy0 + h), slice(x0 - gx0, x0 - gx0 + w))
+    outer, inner = grown(crop.box, page.shape)
+    gy0, gy1, gx0, gx1 = outer[0].start, outer[0].stop, outer[1].start, outer[1].stop
     shape = (gy1 - gy0, gx1 - gx0)
     street, edge, border = (np.full(shape, NONE, np.uint8) for _ in range(3))
     street[inner] = lab.street

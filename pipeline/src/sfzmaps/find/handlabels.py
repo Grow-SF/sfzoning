@@ -313,10 +313,10 @@ def straighten_areas(area: np.ndarray, free: np.ndarray, seeds: dict[int, tuple[
 
 
 def seed_labels(lum: np.ndarray, crop: Crop, straighten: bool = True) -> CropLabels:
-    """A seed crop's labels by the nine rules (`straighten` False: without rule 6, `straighten_areas`: the areas as
-    the fill made them).  ValueError naming the file and the seed for a seed off the crop, on a
-    stroke or limit, a street seed not on paper, a block or open seed the street reaches, and two seeds in one
-    island.  Warnings: each unseeded island larger than the smallest seeded one, then the LARGEST largest unseeded
+    """A seed crop's labels by the eight steps of inputs/find-labels/README.md (`straighten` False: without step 5,
+    `straighten_areas`: the areas as the fill made them).  ValueError naming the file and the seed for a seed off the
+    crop, on a stroke or limit, a street seed not on paper, a block or open seed the street reaches, and two seeds in
+    one island.  Warnings: each unseeded island larger than the smallest seeded one, then the LARGEST largest unseeded
     islands whatever was seeded (page px of a px well inside each)."""
     x0, y0, w, h = crop.box
     stroke = _barrier(crop.strokes, x0, y0, lum.shape)

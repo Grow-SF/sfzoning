@@ -353,3 +353,46 @@ def test_train_refuses_before_training_when_a_crop_cannot_be_read(tmp_path, monk
     for bad in ("../r", "a/b", "..", "."):
         r = CliRunner().invoke(app, ["find", "train", "--run", bad, "--device", "cpu"])
         assert r.exit_code == 2 and "--run" in r.output, (bad, r.output)
+
+
+@pytest.mark.parametrize("answer, channel", [(BORDER, model.BORDER), (EDGE, model.EDGE)])
+def test_a_cut_moves_only_its_own_answer(answer, channel):
+    """A zoning-border cut's loss reaches only the zoning-border channel, a block-edge cut's only the block-edge
+    channel (cuts.BORDER and model.EDGE share a number: a slip between them would run silently)."""
+    shape = (16, 16)
+    none = np.full(shape, data.NONE, np.uint8)
+    for says in (True, False):
+        c = Cuts(np.arange(40, 46, dtype=np.int64), np.zeros(6, np.int32), np.ones(6, np.float32),
+                 np.array([answer], np.uint8), np.array([says]), np.ones(1, np.float32), np.full((1, 2), -1, np.int32),
+                 np.zeros(0, np.int64))
+        t = data.Labelled("x", "lined-1bit", np.ones(shape, np.float32), none, np.zeros(shape, np.float32), none,
+                          none, c)
+        z = torch.zeros((1, 3, *shape), dtype=torch.float64, requires_grad=True)
+        train.batch_loss(z, [t], train.Recipe()).backward()
+        moved = [bool(z.grad[0, k].abs().sum() > 0) for k in range(3)]
+        assert moved == [k == channel for k in range(3)], (says, moved)
+
+
+def test_train_reports_a_series_with_no_source_row_and_a_refused_fit_without_a_traceback(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps.cli import app
+    _sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    monkeypatch.setattr(pages, "load_scan", lambda sid: _two_line_page())
+    monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
+    marks = dict(street=[[110, 120]], blocks=[[120, 104], [120, 135]])
+    f = _crop_file("train", "u", "A", (100, 100, 60, 40), **marks)        # series u has no row
+    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-chooser"])
+    assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.output
+    assert "series 'u' has no row in" in r.output and "1 training crop(s) could not be read" in r.output, r.output
+    f.unlink()
+    _crop_file("train", "s", "A", (100, 100, 60, 40), **marks)
+
+    def refused(*a, **k):                   # as `train.fit` refuses, for example, an item smaller than a tile
+        raise ValueError("s/A: 40 x 60 px is smaller than a 256 px tile")
+    monkeypatch.setattr(train, "fit", refused)
+    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-chooser"])
+    assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.output
+    assert "nothing trained: s/A: 40 x 60 px is smaller than a 256 px tile" in r.output, r.output
+    assert not (tmp_path / "find" / "runs").exists()

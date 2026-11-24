@@ -17,7 +17,7 @@ loses, and how many zoning-border statements of the April 2000 table it agrees w
 
 `chooser` scores a checkpoint by the `choose` crops' `found_share` at their fitted depth (the trainer keeps the best);
 `count` reads every `test` crop with a run's kept model at the depth fitted on the `choose` crops.  A crop is read with
-model.REACH px of scan round it where the page allows and scored on its own box only.
+model.REACH px of scan round it where the page allows (`data.grown`) and scored on its own box only.
 
 Reads the scans and frame cuts, the crop files, and for `count` each test crop's sheet placement (its ft per px, for
 scoring only) and its sheet's label file data/find/labels/<series>/<sheet>.npz (the zoning-border cuts lying wholly in
@@ -215,25 +215,19 @@ def borders(border_chance: np.ndarray, c: Cuts) -> dict:
 
 
 def _sheet_border_cuts(sid: pages.SheetId, shape: tuple[int, int]) -> Cuts | None:
-    """The sheet's zoning-border cuts from its label file; None when it has no label file.  ValueError when the file
-    does not fit the page."""
-    f = lotlabels.sheet_path(sid)
-    if not f.is_file():
+    """The sheet's zoning-border cuts from its label file made through the warp's placement
+    (`lotlabels.load_sheet_labels`); None when it has no label file.  ValueError (naming the command that makes it
+    again) when the file was made through another placement or does not fit the page."""
+    if not lotlabels.sheet_path(sid).is_file():
         return None
-    with np.load(f) as z:
-        if z["street"].shape != tuple(shape):
-            raise ValueError(f"{f}: labels are {z['street'].shape}, the page {tuple(shape)}")
-        n = len(z["cuts_answer"])
-        return Cuts(z["cuts_px"].astype(np.int64), z["cuts_cut"].astype(np.int32), z["cuts_prior"].astype(np.float32),
-                    z["cuts_answer"].astype(np.uint8), z["cuts_says"].astype(bool),
-                    z["cuts_weight"].astype(np.float32), np.full((n, 2), -1, np.int32), np.zeros(0, np.int64))
+    return lotlabels.file_cuts(lotlabels.load_sheet_labels(sid, "warp", shape))
 
 
 # --- reading the crops ------------------------------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class CropRead:
-    """A hand crop ready to read: its scan and frame cut grown by model.REACH px where the page allows (`read.grown`),
+    """A hand crop ready to read: its scan and frame cut grown by model.REACH px where the page allows (`data.grown`),
     its box within them (`inner`), the page's shape, its era and its hand labels."""
     crop: handlabels.Crop
     era: str
@@ -255,7 +249,7 @@ def prepare(crops: list[handlabels.Crop]) -> list[CropRead]:
             page = (sid, lum, pages.load_keep(sid, lum.shape))
         _, lum, keep = page
         truth = handlabels.make_labels(handlabels.crop_scan(lum, c), c)
-        outer, inner = read.grown(c.box, lum.shape)
+        outer, inner = data.grown(c.box, lum.shape)
         out.append(CropRead(c, pages.source(c.series).era, np.ascontiguousarray(lum[outer]),
                             np.ascontiguousarray(keep[outer]), inner, lum.shape, truth))
     return out

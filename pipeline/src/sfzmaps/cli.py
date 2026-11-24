@@ -1659,7 +1659,7 @@ def find_measure_town(series: str = typer.Option(..., "--series", help="The seri
     from sfzmaps.find import town
     try:
         found = town.measure(series, sheet)
-    except FileNotFoundError as e:
+    except (FileNotFoundError, ValueError) as e:
         typer.echo(str(e), err=True)
         raise typer.Exit(1) from None
     changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "src"],
@@ -1771,19 +1771,22 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
         if name in hatching.duplicate_scans(series):
             raise typer.BadParameter(f"{s} is a duplicate scan, which is never read", param_hint="--sheet")
         sids.append((series, name))
+    def said(e: Exception) -> str:                     # a KeyError's message is its first argument (str() quotes it)
+        return str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
+
     items, failed = [], 0
     try:
         for sid in sids:
             items.append(data.sheet_labelled(sid))
-    except (FileNotFoundError, ValueError) as e:
-        typer.echo(str(e), err=True)
+    except (FileNotFoundError, ValueError, KeyError) as e:
+        typer.echo(said(e), err=True)
         raise typer.Exit(1) from None
     for path, s in handlabels.crop_files(("train",)):
         try:
             items.append(data.crop_labelled(handlabels.read_crop(path, s)))
-        except (ValueError, FileNotFoundError) as e:
+        except (ValueError, FileNotFoundError, KeyError) as e:
             failed += 1
-            msg = str(e)
+            msg = said(e)
             typer.echo(f"FAILED: {msg if str(path) in msg else f'{path}: {msg}'}", err=True)
     if failed:
         typer.echo(f"{failed} training crop(s) could not be read; nothing trained", err=True)
@@ -1793,8 +1796,8 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
         try:
             choosing = handlabels.crops(("choose",))
             on_checkpoint = counts.chooser(choosing, device)
-        except (ValueError, FileNotFoundError) as e:
-            typer.echo(f"the choosing crops: {e}; nothing trained", err=True)
+        except (ValueError, FileNotFoundError, KeyError) as e:
+            typer.echo(f"the choosing crops: {said(e)}; nothing trained", err=True)
             raise typer.Exit(1) from None
     if not items:
         typer.echo("nothing to train on", err=True)
@@ -1810,8 +1813,12 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "src"],
                              cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True).stdout.strip()
     t0 = time.perf_counter()
-    with gpu.gpu_turn(True, device):
-        fitted = train.fit(items, recipe, device, on_checkpoint)
+    try:
+        with gpu.gpu_turn(True, device):
+            fitted = train.fit(items, recipe, device, on_checkpoint)
+    except ValueError as e:
+        typer.echo(f"nothing trained: {e}", err=True)
+        raise typer.Exit(1) from None
     fields = {"commit": git_head(), "uncommitted_changes_in_src": bool(changed), "torch": torch.__version__,
               "threads": THREADS, "items": listed, "choosing_crops": [data.crop_name(c) for c in choosing] or None,
               "train_crops_left_out_as_reserved": {it.name: it.left_out for it in items if it.hand},

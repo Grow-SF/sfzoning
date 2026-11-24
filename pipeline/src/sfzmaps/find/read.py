@@ -4,8 +4,8 @@
 whole reach, model.REACH, rounded up to model.MULTIPLE) and the page's end padded with paper to model.MULTIPLE, as one
 pass over the whole page pads it: the squares' corners and the context are multiples of model.MULTIPLE, so the
 poolings fall on the whole page's grid and every px gets the numbers one pass over the whole page gives it (as
-`hatchnet.train` reads a sheet).  `read_crop` reads a hand crop as the trainer shows one (`data.crop_labelled`): the
-crop grown by model.REACH px of scan on every side where the page allows, the chances kept on its box.
+`hatchnet.train` reads a sheet).  A hand crop is read as `read_page` of the crop grown as the trainer shows it
+(`data.grown`; `find.counts`).
 
 A read is stored as uint8 levels round(255 p) (`save`, `load`; `stored` gives the same levels in memory), so every
 reading downstream (`find.areas`, `find.counts`) sees only the 256 levels a stored read can tell apart.
@@ -54,24 +54,6 @@ def read_page(net: model.FindNet, lum: np.ndarray, keep: np.ndarray, device, til
             out[:, y:y + th, x:x + tw] = p[:, y - y0:y - y0 + th, x - x0:x - x0 + tw]
     out[:, ~keep] = 0
     return out
-
-
-def grown(box: tuple[int, int, int, int], shape: tuple[int, int]) -> tuple[tuple[slice, slice], tuple[slice, slice]]:
-    """The page slices of the box (x0, y0, w, h) grown by model.REACH px on every side where a page of `shape` allows,
-    and the box's own slices within that."""
-    x0, y0, w, h = box
-    gx0, gy0 = max(0, x0 - model.REACH), max(0, y0 - model.REACH)
-    gx1, gy1 = min(shape[1], x0 + w + model.REACH), min(shape[0], y0 + h + model.REACH)
-    return ((slice(gy0, gy1), slice(gx0, gx1)),
-            (slice(y0 - gy0, y0 - gy0 + h), slice(x0 - gx0, x0 - gx0 + w)))
-
-
-def read_crop(net: model.FindNet, lum: np.ndarray, keep: np.ndarray, box: tuple[int, int, int, int],
-              device) -> np.ndarray:
-    """Float32 (3, h, w): the chances on the page box (x0, y0, w, h), read with model.REACH px of scan round it where
-    the page `lum` allows (`read_page` of that grown box, `keep` the page's frame cut)."""
-    outer, inner = grown(box, lum.shape)
-    return read_page(net, lum[outer], keep[outer], device)[(slice(None), *inner)]
 
 
 def levels(chances: np.ndarray) -> np.ndarray:
