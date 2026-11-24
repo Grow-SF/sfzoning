@@ -15,7 +15,7 @@ are parts of the tool, and nothing like it runs when a sheet is read.
 
 `reserved` is the ground under every `choose` and `test` crop, on any sheet's page, which training leaves out.
 `choose_on_test` finds a choosing crop lying on a test crop's ground (on any sheet), which `refuse_choose_on_test`
-refuses: the closed areas' depth is fitted on the choosing crops (the trainer keeps its last step and only logs their
+refuses: the choosing crops are where two recipes are compared (the trainer keeps its last step and only logs their
 score), so they must not see the test ground.
 
 Reads the crop files and (for `reserved` and `choose_on_test`) the sheets' placements.  Writes nothing."""

@@ -22,7 +22,7 @@ chance and the hand block-edge label.  The loss is taken on the CPU, where its s
 
 The weights kept are the last step's.  Every `Recipe.every` steps (and at the last) `on_checkpoint(step, state_dict)`
 scores the weights on the choosing crops (`counts.trace_scorer`: a dict such as `choose_found_share`,
-`choose_panoptic_quality`, `choose_depth`); it goes into the curve row as the run's held-out trace and chooses
+`choose_panoptic_quality`); it goes into the curve row as the run's held-out trace and chooses
 nothing.
 
 Deterministic: torch's generator and three numpy generators (the tiles; the noise, apart so that a run with noise and

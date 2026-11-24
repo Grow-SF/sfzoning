@@ -1716,9 +1716,9 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     a sheet the finder is used on, measured from every sheet of every series whose placement passes the warp's own
     check (`find.data.print_sizes`; with --no-resize, at its item's own size).  The last step's weights are kept.  At
     every checkpoint the `choose` crops are read and the share of their blocks found is logged in the curve as the
-    run's held-out trace (`find.counts.trace_scorer`: the share of their blocks found, their panoptic quality and the
-    depth fitted, per checkpoint; it chooses nothing; --no-trace skips it); the choosing crops fit only the depth of
-    the area step, in `find count`.  --seed sets the recipe's seed (0 by default).  Every training crop (and, unless
+    run's held-out trace (`find.counts.trace_scorer`: the share of their blocks found and the panoptic quality of
+    their areas, the connected pieces of ground the model calls not street, per checkpoint; it chooses nothing;
+    --no-trace skips it).  --seed sets the recipe's seed (0 by default).  Every training crop (and, unless
     --no-trace, every choosing crop) is read first; if any cannot be, each is reported with its path and nothing is
     trained (exit status 1), as when there is no choosing crop and --no-trace is not given.  $0."""
     import dataclasses
@@ -1830,14 +1830,15 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
 def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/runs/<run>/model.pt) to count."),
                device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one).")
                ) -> None:
-    """Count what the run's kept model finds on every `test` hand crop, at the watershed depth fitted on the `choose`
-    crops by panoptic quality (how well the found areas match the answer key's areas, counting stray areas and missed
-    ones): that quality; how many of the answer key's blocks are found, joined, cut up, lost or held whole, how much of
-    the answer key's street and block ground it calls so, how far the answer key's block boundary lies from the
-    nearest block edge the model drew and how far each block edge the model drew lies from the nearest answer-key
-    boundary, in feet; per crop, per era and pooled (`find.counts`).  The answer key: block outlines marked by hand on
-    the scan, never shown to the model.  Writes data/find/runs/<run>/counts.json, each test crop's read
-    (reads/test/<series>__<crop>.npz) and picture (look/test/<series>__<crop>.png).  Exit status 1 when the model
+    """Count what the run's kept model finds on every `choose` and every `test` hand crop, each set measured alike and
+    on its own.  The found areas are the connected pieces of ground the model calls not street.  The measures: the
+    panoptic quality (how well the found areas match the answer key's areas, counting stray areas and missed ones); how
+    many of the answer key's blocks are found, joined, cut up, lost or held whole, how much of the answer key's street
+    and block ground it calls so, how far the answer key's block boundary lies from the nearest block edge the model
+    drew and how far each block edge the model drew lies from the nearest answer-key boundary, in feet; per crop, per
+    era and pooled (`find.counts`).  The answer key: block outlines marked by hand on the scan, never shown to the
+    model.  Writes data/find/runs/<run>/counts.json, each crop's read (reads/<set>/<series>__<crop>.npz) and picture
+    (look/<set>/<series>__<crop>.png).  Exit status 1 when the model
     predates the two-answer finder, there is no choosing or no test crop, a choosing crop lies on a test crop's
     ground, or a crop cannot be read.  $0."""
     import json
@@ -1870,25 +1871,27 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
     out = {"run": run, "step": saved["step"], "device": str(device), **out}
     f = folder / "counts.json"
     f.write_text(json.dumps(out, indent=1, allow_nan=False) + "\n")
-    t = out["test"]
-    typer.echo(f"depth {out['depth_level']}/255 (choosing crops: panoptic quality "
-               f"{out['choose']['panoptic_quality']:.3f}; they find {out['choose']['found_share']:.3f} of their "
-               f"blocks); test crops: panoptic quality {t['panoptic']['mean_over_eras']:.3f}, find "
-               f"{t['found_share']:.3f} (means over eras)")
-    for era, c in t["eras"].items():
-        g, b, h = t["ground"]["eras"][era], t["boundary_feet"]["eras"][era], t["whole"]["eras"][era]
-        m = t["model_edge_feet"]["eras"][era]
-        back = ("not measured (no model edge px, or no answer-key boundary px)" if m["median"] is None else
-                f"median {m['median']:.1f} ft, 90% {m['p90']:.1f} ft, 99% {m['p99']:.1f} ft")
-        feet = "no model edge" if b["median"] is None else (f"median {b['median']:.1f} ft, 90% {b['p90']:.1f} ft, "
-                                                            f"99% {b['p99']:.1f} ft")
-        pq = t["panoptic"]["eras"][era]["quality"]
-        quality = "none" if pq is None else f"{pq:.3f}"
-        typer.echo(f"  {era}: {c}; panoptic quality {quality}; held whole"
-                   f" {h['whole']} of {h['blocks']}; street px called street "
-                   f"{g['street_share']}, area px called not street {g['area_share']}; answer key's block boundary "
-                   f"to the nearest block edge the model drew: {feet}; block edge the model drew to the nearest "
-                   f"answer-key boundary: {back}")
+    for set_, said in (("choose", "choosing crops"), ("test", "test crops")):
+        t = out[set_]
+        pooled_q = t["panoptic"]["pooled"]["quality"]
+        typer.echo(f"{said}: panoptic quality {t['panoptic']['mean_over_eras']:.3f}, find {t['found_share']:.3f} of "
+                   f"their blocks (means over eras); pooled: {t['pooled']}, panoptic quality "
+                   f"{'none' if pooled_q is None else f'{pooled_q:.3f}'}, held whole {t['whole']['pooled']['whole']} "
+                   f"of {t['whole']['pooled']['blocks']}")
+        for era, c in t["eras"].items():
+            g, b, h = t["ground"]["eras"][era], t["boundary_feet"]["eras"][era], t["whole"]["eras"][era]
+            m = t["model_edge_feet"]["eras"][era]
+            back = ("not measured (no model edge px, or no answer-key boundary px)" if m["median"] is None else
+                    f"median {m['median']:.1f} ft, 90% {m['p90']:.1f} ft, 99% {m['p99']:.1f} ft")
+            feet = "no model edge" if b["median"] is None else (f"median {b['median']:.1f} ft, 90% {b['p90']:.1f} ft, "
+                                                                f"99% {b['p99']:.1f} ft")
+            pq = t["panoptic"]["eras"][era]["quality"]
+            quality = "none" if pq is None else f"{pq:.3f}"
+            typer.echo(f"  {set_} {era}: {c}; panoptic quality {quality}; held whole"
+                       f" {h['whole']} of {h['blocks']}; street px called street "
+                       f"{g['street_share']}, area px called not street {g['area_share']}; answer key's block "
+                       f"boundary to the nearest block edge the model drew: {feet}; block edge the model drew to the "
+                       f"nearest answer-key boundary: {back}")
     typer.echo(str(f))
 
 

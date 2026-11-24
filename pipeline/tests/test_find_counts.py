@@ -1,12 +1,12 @@
 """The counts a read is judged by (`find.counts`): each printed block found, joined, cut up or lost (exactly one of
-them), open land left out, the depth fitted on the choosing crops, how far found block edges lie from the hand ones,
-the street and block ground, whole blocks, and a run's counts with nothing about zoning borders."""
+them), open land left out, how far found block edges lie from the hand ones, the street and block ground, whole
+blocks, and a run's counts, the choosing crops' measured as the test crops' are, with nothing about zoning borders."""
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from sfzmaps.find import areas, counts, handlabels
+from sfzmaps.find import counts, handlabels
 from sfzmaps.find.handlabels import CropLabels
 
 
@@ -63,31 +63,6 @@ def test_found_share_is_the_mean_over_eras():
     assert counts.era_shares(by_era) == {"a": 0.25, "b": 1.0}
 
 
-H, W, RIDGE = 40, 60, 30
-
-
-def test_fit_depth_takes_the_smallest_best():
-    # the faint-stretch case (a column of block edge at 0.9 dipping to 0.6 between two blocks), the left block made of
-    # three parts parted by two low bumps of street chance 25/255, floors 10/255, 12.5/255 and 12.5/255: below 12.5/255
-    # it is cut up; the right block's floor 50.5/255 keeps it apart up to 0.6 - 50.5/255 = 102.5/255
-    street = np.ones((H, W))
-    street[2:-2, 2:RIDGE] = 12.5 / 255
-    street[2:-2, 2:11] = 10 / 255
-    street[2:-2, [11, 20]] = 25 / 255
-    street[2:-2, RIDGE + 1:-2] = 50.5 / 255
-    street[2:-2, RIDGE] = 0.0
-    edge = np.zeros((H, W))
-    edge[2:-2, RIDGE] = 0.9
-    edge[18:21, RIDGE] = 0.6
-    read = (np.stack([street, edge]).astype(np.float32), np.ones((H, W), bool))
-    truth = _truth({1: (slice(2, H - 2), slice(2, RIDGE)), 2: (slice(2, H - 2), slice(RIDGE + 1, W - 2))}, (H, W))
-    depth, quality, share = counts.fit_depth([read], [truth], ["lined-grey"])
-    assert depth == 13 / 255
-    assert share == 1.0
-    found = areas.areas(street, edge, np.ones((H, W), bool), depth)        # the quality is that of the areas there
-    assert quality == counts.panoptic_summed([counts.panoptic_parts(found, truth)])["quality"]
-
-
 def _panoptic_truth(shape):
     """Two key blocks, rows 5-14 and 25-34 by columns 5-54 (500 px each); the rest street; the last 5 columns with no
     label."""
@@ -124,25 +99,6 @@ def test_panoptic_parts_on_known_answers():
     assert summed["quality"] == pytest.approx(2.0 / (2 + 2 / 2 + 2 / 2))
     assert counts.panoptic_summed([counts.panoptic_parts(np.zeros(shape, np.int32), _truth({}, shape))])[
         "quality"] is None
-
-
-def test_fit_depth_counts_stray_areas_the_share_of_blocks_found_cannot_see():
-    # two blocks (street chance 0) in street ground (0.6) with a small patch of 0.45 in the street between: a hollow
-    # 0.15 deep that is no street (under one half), so a shallow depth makes it a stray area; a deeper one does not
-    shape = (40, 60)
-    street = np.full(shape, 0.6)
-    street[4:16, 4:56] = street[24:36, 4:56] = 0.0
-    street[19:21, 28:30] = 0.45
-    read = (np.stack([street, np.zeros(shape)]).astype(np.float32), np.ones(shape, bool))
-    truth = _truth({1: (slice(4, 16), slice(4, 56)), 2: (slice(24, 36), slice(4, 56))}, shape)
-    depth, quality, share = counts.fit_depth([read], [truth], ["lined-grey"])
-    assert 0.15 < depth <= 0.6
-    shallow = areas.areas(street, np.zeros(shape), np.ones(shape, bool), 1 / 255)
-    deep = areas.areas(street, np.zeros(shape), np.ones(shape, bool), depth)
-    assert counts.blocks(shallow, truth)["extra"] == 1 and counts.blocks(deep, truth)["extra"] == 0
-    # the old score could not tell them apart: every block found at both
-    assert counts.blocks(shallow, truth)["found"] == counts.blocks(deep, truth)["found"] == 2 and share == 1.0
-    assert counts.panoptic_summed([counts.panoptic_parts(shallow, truth)])["quality"] < quality
 
 
 def test_edge_feet_measure_found_blocks_only():
@@ -319,16 +275,30 @@ def test_count_names_files_by_series_and_holds_nothing_about_zoning_borders(tmp_
         return handlabels.read_crop(f, set_)
     choose, test = crop("choose", 20), crop("test", 200)
     torch.manual_seed(0)
-    out = counts.count(model.FindNet(4), [choose], [test], "cpu", tmp_path / "a")
+    net = model.FindNet(4)
+    out = counts.count(net, [choose], [test], "cpu", tmp_path / "a")
     row = out["test"]["crops"][0]
     assert row["read"] == "reads/test/t__A__200_100_60_40.npz" and (tmp_path / "a" / row["read"]).is_file()
     assert row["picture"] == "look/test/t__A__200_100_60_40.png"
-    for k in ("ground", "boundary_feet", "whole"):
-        assert set(out["test"][k]) >= {"eras", "pooled"} and "lined-1bit" in out["test"][k]["eras"], k
+    # the choosing crops are measured exactly as the test crops are, under `choose`
+    assert set(out) == {"choose", "test"}
+    assert set(out["choose"]) == set(out["test"])
+    for k in ("ground", "boundary_feet", "model_edge_feet", "whole", "panoptic"):
+        for s in ("choose", "test"):
+            assert set(out[s][k]) >= {"eras", "pooled"} and "lined-1bit" in out[s][k]["eras"], (s, k)
+    mine = out["choose"]["crops"][0]
+    assert mine["name"] == "choose/t/A__20_100_60_40" and set(mine) == set(row)
+    assert mine["read"] == "reads/choose/t__A__20_100_60_40.npz" and (tmp_path / "a" / mine["picture"]).is_file()
+    assert out["choose"]["pooled"]["blocks"] == 2 and out["choose"]["ground"]["pooled"]["street_px"] > 0
     text = json.dumps(out)
-    assert "border" not in text and "not_trained" not in text and "answers" not in text
+    assert "border" not in text and "not_trained" not in text and "answers" not in text and "depth" not in text
     picture = cv2.imread(str(tmp_path / "a" / row["picture"]))
-    assert picture.shape[1] == 4 * 60 + 3 * look.GAP                     # the scan, street, block edge, found areas
+    assert picture.shape[1] == 4 * 60 + 3 * look.GAP                     # the scan, street, block edge, the areas
+    # the training trace scores the same plain pieces the count does
+    traced = counts.trace_scorer([choose], "cpu", test=[test])(1, net.state_dict())
+    assert set(traced) == {"choose_found_share", "choose_panoptic_quality"}
+    assert traced["choose_panoptic_quality"] == out["choose"]["panoptic"]["mean_over_eras"]
+    assert traced["choose_found_share"] == out["choose"]["found_share"]
 
 
 def test_a_read_picture_has_four_panels():

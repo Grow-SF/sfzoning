@@ -1130,13 +1130,14 @@ reads it yet, and `sfzmaps build` doesn't run it. Everything is $0 (no API calls
 | `sfzmaps find crops [--set train\|choose\|test] [--look]` | labels every hand crop and prints its areas and warnings, then any choosing crop lying on a test crop's ground; exits 1 on a bad crop or an overlap |
 | `sfzmaps find ruled --sheet S/H --box x0,y0,w,h` | draws close-ups with page-pixel rulers, to mark a crop from |
 | `sfzmaps find train --run R --sheet S/H ... [--no-noise] [--unbroken] [--no-resize] [--seed N] [--no-trace]` | trains on the named lot-labelled sheets and every `train` crop, each tile shown at a print size measured from the sheets the finder is used on; keeps the last step (the `choose` crops' score at each checkpoint is logged as a held-out trace and chooses nothing) |
-| `sfzmaps find count --run R` | reads every `test` crop with the run's kept model, at the area-step depth fitted on the `choose` crops by panoptic quality (how well the found areas match the answer key's areas, counting stray areas and missed ones), and counts that quality, blocks found, held whole, joined, cut up or lost, street and block ground, and block-boundary distances in feet both ways (answer key to model edge, model edge to answer key), per crop, per era and pooled |
+| `sfzmaps find count --run R` | reads every `choose` and every `test` crop with the run's kept model and measures each set alike and on its own: the found areas are the connected pieces of ground the model calls not street; it counts their panoptic quality (how well they match the answer key's areas, counting stray areas and missed ones), blocks found, held whole, joined, cut up or lost, street and block ground, and block-boundary distances in feet both ways (answer key to model edge, model edge to answer key), per crop, per era and pooled |
 
 Inputs, in git: `inputs/find/label_sources.csv` (each series' era and the lots that label it) and the hand crops,
 `inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json` (how to draw them: `inputs/find-labels/README.md`).
 It also reads the scans, the frame cuts and the warp's placements under `data/`. Outputs, under `data/find/`:
 `labels/<series>/` (the label files), `look/` (pictures), and `runs/<run>/` (`model.pt`, `log.json`, `counts.json`,
-and each test crop's read and picture as `reads/test/<series>__<crop>.npz` and `look/test/<series>__<crop>.png`).
+and each choosing and test crop's read and picture as `reads/<set>/<series>__<crop>.npz` and
+`look/<set>/<series>__<crop>.png`).
 
 The hand crops are training and scoring images, never results: nothing reads them as the map's answer. The ground
 under the `choose` and `test` crops is left out of all training, on every year's scan, and a choosing crop may not

@@ -222,14 +222,14 @@ def test_the_last_step_is_kept_whatever_the_choosing_score():
 
     def score(step, state):
         seen[step] = {k: v.clone() for k, v in state.items()}
-        return {"choose_found_share": next(values), "choose_panoptic_quality": 0.5, "choose_depth": 3 * step}
+        return {"choose_found_share": next(values), "choose_panoptic_quality": step / 10}
     fitted = train.fit(_fit_items(), train.Recipe(steps=4, every=1, **SMALL), "cpu", on_checkpoint=score)
     assert sorted(seen) == [1, 2, 3, 4]
     assert fitted.step == 4
     assert all(torch.equal(fitted.state_dict[k], seen[4][k]) for k in seen[4])
     assert not all(torch.equal(seen[1][k], seen[4][k]) for k in seen[1])
     assert [r["choose_found_share"] for r in fitted.curve] == [0.9, 0.6, 0.3, 0.1]   # every checkpoint's, traced
-    assert [r["choose_depth"] for r in fitted.curve] == [3, 6, 9, 12]
+    assert [r["choose_panoptic_quality"] for r in fitted.curve] == [0.1, 0.2, 0.3, 0.4]
     assert all("chosen_by" not in r for r in fitted.curve)
 
 

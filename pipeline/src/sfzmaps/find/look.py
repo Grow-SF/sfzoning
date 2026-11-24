@@ -8,8 +8,8 @@ key and the sheet's name at the top.  `busiest` finds the close-up: the window h
 coordinates off for the crop file.  `ruled`: a close-up of the scan with rulers and a grid, to draw crops from.
 
 `read_picture`: a crop as the finder read it (`find.counts`): the scan, the chances of street and of a block edge, and
-the closed areas, the answer key's blocks outlined by what became of them (the answer key: block outlines marked by
-hand on the scan, never shown to the model).
+the areas (`find.areas`: the connected pieces of ground the model calls not street), the answer key's blocks outlined
+by what became of them (the answer key: block outlines marked by hand on the scan, never shown to the model).
 
 Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/, `write_crop` to
 data/find/look/crops/<set>/, `write_ruled` to data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
@@ -326,7 +326,8 @@ def _key_tints(band, box):
 
 READ_KEY = (("panels: the scan; the chance of street and of a block edge (white 0, black 1); the found areas over "
              "the scan", WHITE),
-            ("found areas: each tinted its own colour, their sides dark blue", _key_tints),
+            ("found areas: the connected pieces of ground the model calls not street, each tinted its own colour, "
+             "their sides dark blue", _key_tints),
             ("answer key: block outlines marked by hand on the scan, never shown to the model", WHITE),
             ("the answer key's blocks outlined by outcome: green = found", OUTCOME_COLOUR["found"]),
             ("red = joined (the found area holding most of it lies mostly outside it)", OUTCOME_COLOUR["joined"]),
@@ -338,8 +339,9 @@ def read_picture(lum: np.ndarray, chances: np.ndarray, found: np.ndarray, truth:
                  status: dict[int, str], title: str) -> np.ndarray:
     """The picture (BGR uint8) of a crop's read, four panels side by side at the scan's own size: the scan `lum` (1
     paper, 0 ink); the chances (2, h, w) of street and of a block edge, each as grey from white 0 to black 1; and the
-    found areas `found` tinted over the scan with their sides, each hand block outlined in its outcome's colour
-    (`status`, by hand area number: `OUTCOME_COLOUR`); a key and `title` above."""
+    found areas `found` (`find.areas`: the connected pieces of ground the model calls not street) tinted over the scan
+    with their sides, each hand block outlined in its outcome's colour (`status`, by hand area number:
+    `OUTCOME_COLOUR`); a key and `title` above."""
     scan = _grey(lum)
     panels = [_named(scan, "the scan")]
     for i, name in ((model.STREET, "street"), (model.EDGE, "a block edge")):
@@ -358,7 +360,7 @@ def read_picture(lum: np.ndarray, chances: np.ndarray, found: np.ndarray, truth:
         block = truth.area == i
         inner = ndimage.binary_erosion(block, iterations=OUTLINE, border_value=1)
         over[block & ~inner] = OUTCOME_COLOUR[outcome]
-    panels.append(_named(over, "the found areas; the answer key's blocks outlined by outcome"))
+    panels.append(_named(over, "the pieces called not street; the answer key's blocks by outcome"))
     gap = np.full((panels[0].shape[0], GAP, 3), 255, np.uint8)
     row = [panels[0]]
     for p in panels[1:]:

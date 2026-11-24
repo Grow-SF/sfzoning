@@ -12,9 +12,7 @@ loses, holds whole, and where it puts the street and the block boundary.
   (blocks and open land), counting stray areas and missed ones: a found area and a key area match when their overlap
   (px in both over px in either) is over one half; quality = the matched overlaps summed / (matched + unmatched found
   areas / 2 + unmatched key areas / 2).
-- `fit_depth`: the watershed depth (`find.areas`) among i / 255, i = 1..254 (every level a stored read can tell
-  apart) with the highest panoptic quality (the mean over the map eras, each era's crops summed), the smallest of a
-  tie.  The share of blocks found does not see stray areas or cut-up blocks; panoptic quality does.
+  The share of blocks found does not see stray areas or cut-up blocks; panoptic quality does.
 - `whole`: per hand block, the share of it its biggest found area holds, and whether it is held whole (WHOLE, a
   reporting level); a block split 60/40 is `found` but not whole.
 - `ground`: of the hand street px, how many the read calls street, and of the hand area px how many it calls not
@@ -25,16 +23,17 @@ loses, holds whole, and where it puts the street and the block boundary.
   distance in feet to the nearest answer-key boundary px; the median, 90th and 99th percentile.
 - `edge_feet`: how far, in feet, the hand block-edge px of found blocks lie from the nearest side of a found area.
 
-`trace_scorer` scores a checkpoint on the `choose` crops (their fitted depth, panoptic quality and `found_share`
-there) for the trainer's log (the
-held-out trace; the trainer keeps the last step whatever it scores); `count` reads every `test` crop with a run's
-kept model at the depth fitted on the `choose` crops (the choosing crops' one use in a count).  Both refuse a choosing
-crop lying on a test crop's ground (`handlabels.refuse_choose_on_test`).  A crop is read with model.REACH px of scan
-round it where the page allows (`data.grown`) and scored on its own box only.
+The found areas are `find.areas`: the connected pieces of ground the model calls not street.  Nothing is fitted on any
+crop.  `trace_scorer` scores a checkpoint on the `choose` crops (the share of their blocks found and the panoptic
+quality of their areas) for the trainer's log (the held-out trace; the trainer keeps the last step whatever it scores);
+`count` reads every `choose` and every `test` crop with a run's kept model and measures both sets alike, each under its
+own name (the choosing crops are where two recipes are compared; the test crops are the final word).  Both refuse a
+choosing crop lying on a test crop's ground (`handlabels.refuse_choose_on_test`).  A crop is read with model.REACH px
+of scan round it where the page allows (`data.grown`) and scored on its own box only.
 
 Reads the scans and frame cuts, the crop files, every held-out crop's sheet placement (for the choosing crops'
-ground), and for `count` each test crop's sheet placement (its ft per px, for scoring only).  `count` writes
-data/find/runs/<run>/reads/test/<series>__<crop>.npz and look/test/<series>__<crop>.png."""
+ground), and for `count` each crop's sheet placement (its ft per px, for scoring only).  `count` writes
+data/find/runs/<run>/reads/<set>/<series>__<crop>.npz and look/<set>/<series>__<crop>.png, <set> choose or test."""
 from __future__ import annotations
 
 import logging
@@ -53,7 +52,6 @@ from sfzmaps.find.handlabels import CropLabels
 
 log = logging.getLogger(__name__)
 
-DEPTHS = tuple(i / read.LEVELS for i in range(1, read.LEVELS))
 OUTCOMES = ("found", "joined", "cut_up", "lost")
 WHOLE = 0.9                 # reporting level only, never used to choose anything: a hand block is held "whole" when
                             # its biggest found area holds at least this share of it and it is at least this share of
@@ -216,28 +214,6 @@ def panoptic_quality(dicts_by_era: dict[str, list[dict]]) -> float:
     return float(np.mean(list(q.values())))
 
 
-def fit_depth(reads: list[tuple[np.ndarray, np.ndarray]], truths: list[CropLabels],
-              eras: list[str]) -> tuple[float, float, float]:
-    """The depth among DEPTHS with the highest `panoptic_quality` over the crops (how well the found areas match the
-    answer key's areas, counting stray areas and missed ones), the smallest of a tie; that quality; and the
-    `found_share` at that depth.  `reads`: each crop's chances (2, h, w), as stored (`read.stored`), and its frame cut
-    `keep` (h, w), on its box; `truths` and `eras` the crops' answer keys and map eras, in the same order."""
-    if not (len(reads) == len(truths) == len(eras)) or not reads:
-        raise ValueError(f"{len(reads)} reads, {len(truths)} truths, {len(eras)} eras: expected the same, at least 1")
-    per_depth: list[list[tuple | None]] = [[None] * len(reads) for _ in DEPTHS]
-    for k, ((chances, keep), truth) in enumerate(zip(reads, truths)):
-        for which, found in areas.areas_by_depth(chances[model.STREET], chances[model.EDGE], keep, DEPTHS):
-            c = (blocks(found, truth), panoptic_parts(found, truth))
-            for i in which:
-                per_depth[i][k] = c
-    best, best_q = 0, -1.0
-    for i, dicts in enumerate(per_depth):
-        q = panoptic_quality(_by_era([p for _, p in dicts], eras))
-        if q > best_q:
-            best, best_q = i, q
-    return DEPTHS[best], best_q, found_share(_by_era([b for b, _ in per_depth[best]], eras))
-
-
 # --- the street and the block boundary -------------------------------------------------------------------------------
 
 def ground(street_chance: np.ndarray, truth: CropLabels) -> dict:
@@ -351,7 +327,7 @@ def edge_feet(found: np.ndarray, truth: CropLabels, ft_per_px: float) -> dict:
     """Of the hand block-edge px (edge 1) of the blocks `block_status` calls found: how many (`px`), and the median
     and 90th percentile (`median`, `p90`, ft) of their distance to the nearest px on a side of a found area (None when
     there is no such px or no side).  Unlike `boundary_feet`, which measures every hand boundary px against the px the
-    block-edge answer calls an edge, this measures the closed areas (`find.areas`) and only the blocks they find."""
+    block-edge answer calls an edge, this measures the found areas (`find.areas`) and only the blocks they find."""
     found = np.asarray(found)
     mine = [i for i, s in block_status(found, truth).items() if s == "found"]
     on = (np.asarray(truth.edge) == 1) & np.isin(truth.area, mine)
@@ -424,25 +400,26 @@ def _only(crops: list[handlabels.Crop], set_: str) -> None:
 def trace_scorer(crops: list[handlabels.Crop], device, test: list[handlabels.Crop] | None = None,
                  placements=None) -> Callable[[int, dict], dict]:
     """A checkpoint's scores on the choosing crops for the trainer's held-out trace (`train.fit`'s on_checkpoint; they
-    choose nothing): every crop read with the checkpoint's weights and `fit_depth` taken, as a curve row's
-    `choose_found_share`, `choose_panoptic_quality` and `choose_depth` (the fitted depth as n of n/255).  The crops
-    are read from disk once, here.  ValueError when there is no crop, one is not in the `choose` set, or one lies on
-    the ground of a `test` crop (`test`, None: every test crop; `handlabels.refuse_choose_on_test` with
+    choose nothing): every crop read with the checkpoint's weights, its areas taken (`find.areas`), as a curve row's
+    `choose_found_share` (`found_share`) and `choose_panoptic_quality` (`panoptic_quality`, the mean over eras).  The
+    crops are read from disk once, here.  ValueError when there is no crop, one is not in the `choose` set, or one
+    lies on the ground of a `test` crop (`test`, None: every test crop; `handlabels.refuse_choose_on_test` with
     `placements`)."""
     _only(crops, "choose")
     handlabels.refuse_choose_on_test(crops, handlabels.crops(("test",)) if test is None else test, placements)
     ready = prepare(crops)
+    eras = [p.era for p in ready]
 
     def score(step: int, state_dict: dict) -> dict:
         t0 = time.perf_counter()
         net = network(state_dict)
-        reads = [read_one(net, p, device) for p in ready]
-        depth, quality, share = fit_depth(reads, [p.truth for p in ready], [p.era for p in ready])
-        log.info("step %d: the choosing crops find %.3f of their blocks (mean over eras) at depth %d/255, panoptic "
-                 "quality %.3f; read and scored in %.1f s", step, share, round(depth * read.LEVELS), quality,
-                 time.perf_counter() - t0)
-        return {"choose_found_share": float(share), "choose_panoptic_quality": float(quality),
-                "choose_depth": round(depth * read.LEVELS)}
+        found = [areas.areas(chances[model.STREET], keep) for chances, keep in (read_one(net, p, device)
+                                                                                 for p in ready)]
+        share = found_share(_by_era([blocks(f, p.truth) for f, p in zip(found, ready)], eras))
+        quality = panoptic_quality(_by_era([panoptic_parts(f, p.truth) for f, p in zip(found, ready)], eras))
+        log.info("step %d: the choosing crops find %.3f of their blocks (mean over eras), panoptic quality %.3f; read "
+                 "and scored in %.1f s", step, share, quality, time.perf_counter() - t0)
+        return {"choose_found_share": float(share), "choose_panoptic_quality": float(quality)}
 
     return score
 
@@ -455,39 +432,19 @@ def crop_file_name(c: handlabels.Crop) -> str:
     return f"{c.series}__{c.path.stem}"
 
 
-def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabels.Crop], device, folder: Path,
-          placements=None) -> dict:
-    """The counts of a run's kept model `net` (see the module): the depth fitted on the `choose` crops, then every
-    `test` crop read at it; each test crop's read saved to <folder>/reads/test/<series>__<crop file stem>.npz and its
-    picture to <folder>/look/test/<series>__<crop file stem>.png.  Returns what counts.json holds (no clock time, no
-    absolute path), each measure per crop, per era and pooled.  ValueError when a set has no crop or holds a crop of
-    another set, or a choosing crop lies on a test crop's ground (`handlabels.refuse_choose_on_test`, with
-    `placements`)."""
-    _only(choose, "choose")
-    _only(test, "test")
-    handlabels.refuse_choose_on_test(choose, test, placements)
-    ready = prepare(choose)
-    reads = [read_one(net, p, device) for p in ready]
-    depth, quality, share = fit_depth(reads, [p.truth for p in ready], [p.era for p in ready])
-    at_depth = [areas.areas(c[model.STREET], c[model.EDGE], k, depth) for c, k in reads]
-    choose_eras = [p.era for p in ready]
-    out = {"depth": depth, "depth_level": round(depth * read.LEVELS),
-           "choose": {"panoptic_quality": quality,
-                      "era_panoptic": era_qualities(_by_era([panoptic_parts(f, p.truth) for f, p in
-                                                             zip(at_depth, ready)], choose_eras)),
-                      "found_share": share,
-                      "era_shares": era_shares(_by_era([blocks(f, p.truth) for f, p in zip(at_depth, ready)],
-                                                       choose_eras)),
-                      "crops": [data.crop_name(p.crop) for p in ready]}}
+def measured(net: model.FindNet, set_: str, crops: list[handlabels.Crop], device, folder: Path) -> dict:
+    """Every crop of `set_` read with `net` and measured (see the module): each crop's read saved to
+    <folder>/reads/<set_>/<series>__<crop file stem>.npz and its picture to <folder>/look/<set_>/...png.  Each measure
+    per crop (`crops`), per era and pooled; no clock time, no absolute path."""
     rows, distances, model_distances = [], [], []
-    for c in test:
+    for c in crops:
         p = prepare([c])[0]
         sid = (c.series, c.sheet)
         chances, keep = read_one(net, p, device)
         name = crop_file_name(c)
-        stored = Path("reads") / "test" / f"{name}.npz"
+        stored = Path("reads") / set_ / f"{name}.npz"
         read.save(folder / stored, chances)
-        found = areas.areas(chances[model.STREET], chances[model.EDGE], keep, depth)
+        found = areas.areas(chances[model.STREET], keep)
         status = block_status(found, p.truth)
         got = blocks(found, p.truth)
         scale = lotlabels.ft_per_px(lotlabels.placement(sid), c.box)
@@ -497,12 +454,12 @@ def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabe
         model_distances.append(model_edge_distances(chances[model.EDGE], p.truth, scale))
         mf = model_edge_feet(chances[model.EDGE], p.truth, scale)
         held = whole(found, p.truth)
-        picture = Path("look") / "test" / f"{name}.png"
+        picture = Path("look") / set_ / f"{name}.png"
         (folder / picture).parent.mkdir(parents=True, exist_ok=True)
         x0, y0, w, h = c.box
-        title = (f"test / {c.series} / {c.sheet}  page x {x0}-{x0 + w}, y {y0}-{y0 + h}; {p.era}; depth "
-                 f"{out['depth_level']}/255; blocks {got['blocks']}: found {got['found']}, whole {held['whole']}, "
-                 f"joined {got['joined']}, cut up {got['cut_up']}, lost {got['lost']}; extra areas {got['extra']}")
+        title = (f"{set_} / {c.series} / {c.sheet}  page x {x0}-{x0 + w}, y {y0}-{y0 + h}; {p.era}; blocks "
+                 f"{got['blocks']}: found {got['found']}, whole {held['whole']}, joined {got['joined']}, cut up "
+                 f"{got['cut_up']}, lost {got['lost']}; extra areas {got['extra']}")
         cv2.imwrite(str(folder / picture), look.read_picture(p.lum[p.inner], chances, found, p.truth, status, title))
         parts = panoptic_parts(found, p.truth)
         rows.append({"name": data.crop_name(c), "era": p.era, "counts": got, "whole": held,
@@ -521,21 +478,32 @@ def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabe
     model_feet = {e: model_edge_feet_pooled([d for d, _ in v], [n for _, n in v])
                   for e, v in sorted(model_by_era.items())}
     panoptic_by_era = _by_era([r["panoptic"] for r in rows], eras)
-    out["test"] = {"panoptic": {"mean_over_eras": panoptic_quality(panoptic_by_era),
-                                "eras": {e: panoptic_summed(d) for e, d in sorted(panoptic_by_era.items())},
-                                "pooled": panoptic_summed([r["panoptic"] for r in rows])},
-                   "found_share": found_share(by_era), "era_shares": era_shares(by_era),
-                   "eras": {e: _summed(d) for e, d in sorted(by_era.items())},
-                   "pooled": _summed([r["counts"] for r in rows]),
-                   "whole": {"eras": {e: whole_summed(d) for e, d in sorted(whole_by_era.items())},
-                             "pooled": whole_summed([r["whole"] for r in rows])},
-                   "ground": {"eras": {e: ground_summed(d) for e, d in sorted(ground_by_era.items())},
-                              "pooled": ground_summed([r["ground"] for r in rows])},
-                   "boundary_feet": {"eras": feet,
-                                     "pooled": boundary_feet_pooled(distances, [r["boundary_feet"]["px"]
-                                                                               for r in rows])},
-                   "model_edge_feet": {"eras": model_feet,
-                                       "pooled": model_edge_feet_pooled(model_distances, [r["model_edge_feet"]["px"]
-                                                                                          for r in rows])},
-                   "crops": rows}
-    return out
+    return {"panoptic": {"mean_over_eras": panoptic_quality(panoptic_by_era),
+                         "eras": {e: panoptic_summed(d) for e, d in sorted(panoptic_by_era.items())},
+                         "pooled": panoptic_summed([r["panoptic"] for r in rows])},
+            "found_share": found_share(by_era), "era_shares": era_shares(by_era),
+            "eras": {e: _summed(d) for e, d in sorted(by_era.items())},
+            "pooled": _summed([r["counts"] for r in rows]),
+            "whole": {"eras": {e: whole_summed(d) for e, d in sorted(whole_by_era.items())},
+                      "pooled": whole_summed([r["whole"] for r in rows])},
+            "ground": {"eras": {e: ground_summed(d) for e, d in sorted(ground_by_era.items())},
+                       "pooled": ground_summed([r["ground"] for r in rows])},
+            "boundary_feet": {"eras": feet,
+                              "pooled": boundary_feet_pooled(distances, [r["boundary_feet"]["px"] for r in rows])},
+            "model_edge_feet": {"eras": model_feet,
+                                "pooled": model_edge_feet_pooled(model_distances, [r["model_edge_feet"]["px"]
+                                                                                   for r in rows])},
+            "crops": rows}
+
+
+def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabels.Crop], device, folder: Path,
+          placements=None) -> dict:
+    """The counts of a run's kept model `net` (see the module): every `choose` and every `test` crop read and
+    measured alike (`measured`), as {"choose": ..., "test": ...}: what counts.json holds.  ValueError when a set has no
+    crop or holds a crop of another set, or a choosing crop lies on a test crop's ground
+    (`handlabels.refuse_choose_on_test`, with `placements`)."""
+    _only(choose, "choose")
+    _only(test, "test")
+    handlabels.refuse_choose_on_test(choose, test, placements)
+    return {"choose": measured(net, "choose", choose, device, folder),
+            "test": measured(net, "test", test, device, folder)}
