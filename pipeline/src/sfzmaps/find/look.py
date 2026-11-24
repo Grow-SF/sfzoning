@@ -6,10 +6,10 @@ over it, each px as strong as its prior times its cut's weight (so labels of blo
 sheet's name at the top.  `busiest` finds the close-up: the window holding the most cut px.
 
 `crop`: a hand crop (`handlabels`) and its labels side by side, both enlarged ZOOM times, with page-px rulers to read
-coordinates off for the crop file.
+coordinates off for the crop file.  `ruled`: a close-up of the scan with rulers and a grid, to draw crops from.
 
 Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/, `write_crop` to
-data/find/look/crops/<set>/."""
+data/find/look/crops/<set>/, `write_ruled` to data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -156,25 +156,25 @@ def _marks(img: np.ndarray, c: handlabels.Crop) -> None:
             _seed(img, at(*p), kind)
 
 
-def _ruled(panel: np.ndarray, x0: int, y0: int) -> np.ndarray:
-    """`panel` (enlarged ZOOM times, its corner page px (x0, y0)) with page-px rulers above and to its left: ticks
-    every 10 px, longer every 50, numbered every 100."""
+def _ruled(panel: np.ndarray, x0: int, y0: int, zoom: int = ZOOM, number: int = 100) -> np.ndarray:
+    """`panel` (enlarged `zoom` times, its corner page px (x0, y0)) with page-px rulers above and to its left: ticks
+    every 10 px, longer every 50, numbered every `number`."""
     top, left = RULER
     h, w = panel.shape[:2]
     out = np.full((h + top, w + left, 3), 255, np.uint8)
     out[top:, left:] = panel
     font = cv2.FONT_HERSHEY_SIMPLEX
-    for page0, n, along in ((x0, w // ZOOM, "x"), (y0, h // ZOOM, "y")):
+    for page0, n, along in ((x0, w // zoom, "x"), (y0, h // zoom, "y")):
         for v in range(-(-page0 // 10) * 10, page0 + n, 10):
-            p = (v - page0) * ZOOM + ZOOM // 2
+            p = (v - page0) * zoom + zoom // 2
             size = 10 if v % 50 == 0 else 5
             if along == "x":
                 cv2.line(out, (left + p, top - 1), (left + p, top - size), BLACK, 1)
-                if v % 100 == 0:
+                if v % number == 0:
                     cv2.putText(out, str(v), (left + p - 14, top - 13), font, 0.4, BLACK, 1, cv2.LINE_AA)
             else:
                 cv2.line(out, (left - 1, top + p), (left - size, top + p), BLACK, 1)
-                if v % 100 == 0:
+                if v % number == 0:
                     cv2.putText(out, str(v), (2, top + p + 4), font, 0.4, BLACK, 1, cv2.LINE_AA)
     return out
 
@@ -245,3 +245,52 @@ def write_crop(c: handlabels.Crop, lum_crop: np.ndarray, labels: handlabels.Crop
     f = folder / f"{c.series}__{c.path.stem}.png"
     cv2.imwrite(str(f), crop(lum_crop, labels, c))
     return f
+
+
+GRID = 50                   # picture setting: the close-up's grid and ruler numbers, every this many page px
+GRID_GREY = (205, 205, 205)
+
+
+def ruled(lum_crop: np.ndarray, box: tuple[int, int, int, int], zoom: int) -> np.ndarray:
+    """The scan `lum_crop` of the page box (x0, y0, w, h), enlarged `zoom` times (nearest neighbour), thin light-grey
+    lines every GRID page px over it, and page-px rulers along its top and left (a tick every 10 px, a number every
+    GRID)."""
+    x0, y0, w, h = box
+    if lum_crop.shape != (h, w):
+        raise ValueError(f"the crop is {lum_crop.shape}, its box {w} x {h}")
+    img = np.repeat((np.clip(np.asarray(lum_crop, np.float32), 0, 1) * 255).astype(np.uint8)[..., None], 3, axis=2)
+    img = np.ascontiguousarray(np.repeat(np.repeat(img, zoom, axis=0), zoom, axis=1))
+    half = zoom // 2
+    for v in range(-(-x0 // GRID) * GRID, x0 + w, GRID):
+        col = img[:, (v - x0) * zoom + half]
+        col[:] = np.minimum(col, GRID_GREY)
+    for v in range(-(-y0 // GRID) * GRID, y0 + h, GRID):
+        row = img[(v - y0) * zoom + half]
+        row[:] = np.minimum(row, GRID_GREY)
+    return _ruled(img, x0, y0, zoom, GRID)
+
+
+def ruled_tiles(lum_crop: np.ndarray, box: tuple[int, int, int, int], zoom: int,
+                tiles: int) -> dict[tuple[int, int], np.ndarray]:
+    """The box cut into `tiles` x `tiles` equal tiles, each as `ruled` draws it, by (row, column)."""
+    x0, y0, w, h = box
+    xs = [w * i // tiles for i in range(tiles + 1)]
+    ys = [h * i // tiles for i in range(tiles + 1)]
+    return {(r, c): ruled(lum_crop[ys[r]:ys[r + 1], xs[c]:xs[c + 1]],
+                          (x0 + xs[c], y0 + ys[r], xs[c + 1] - xs[c], ys[r + 1] - ys[r]), zoom)
+            for r in range(tiles) for c in range(tiles)}
+
+
+def write_ruled(sid: SheetId, lum_crop: np.ndarray, box: tuple[int, int, int, int], zoom: int,
+                tiles: int) -> list[Path]:
+    """`ruled_tiles` as r<row>_c<col>.png and the whole box at ZOOM as whole.png, in
+    data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
+    folder = pages.OUT / "look" / "ruled" / f"{sid[0]}__{sid[1]}__{'_'.join(str(v) for v in box)}"
+    folder.mkdir(parents=True, exist_ok=True)
+    out = []
+    for (r, c), img in ruled_tiles(lum_crop, box, zoom, tiles).items():
+        out.append(folder / f"r{r}_c{c}.png")
+        cv2.imwrite(str(out[-1]), img)
+    out.append(folder / "whole.png")
+    cv2.imwrite(str(out[-1]), ruled(lum_crop, box, ZOOM))
+    return out

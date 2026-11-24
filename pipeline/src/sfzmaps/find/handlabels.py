@@ -18,6 +18,7 @@ Reads the crop files and (for `reserved`) the sheets' placements.  Writes nothin
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,6 +43,8 @@ BARRIER = 3                         # tool setting: a stroke's or limit's width,
 OUTSIDE = 2                         # tool setting: how far an outline's corner may lie outside the box, px (a block
                                     # cut by the crop's side is typed with corners on or just past the box's edge)
 LARGEST = 5                         # tool setting: how many of the largest unseeded islands are always warned of
+RING_STEP = 8                       # engineering setting: px between the points of a crop's box sent to another page
+log = logging.getLogger(__name__)
 STREET, AREA, NONE = 1, 0, 255      # the street label; NONE also marks edge px with no label
 FOUR = ndimage.generate_binary_structure(2, 1)
 EIGHT = ndimage.generate_binary_structure(2, 2)
@@ -86,7 +89,8 @@ def _points(path: Path, key: str, value) -> tuple[Point, ...]:
 def read_crop(path: Path, set_: str) -> Crop:
     """The crop file at `path` (in `set_`).  ValueError for a name not `<sheet>__<x0>_<y0>_<w>_<h>.json`, a name and
     `box` that disagree, an unknown key, a mark that is not [x, y] points, a polygon of fewer than 3 corners, marks of
-    both kinds (seeds and strokes, outlines) or of neither, and an outline crop in the `train` set."""
+    both kinds (seeds and strokes, outlines) or of neither, an outline crop in the `train` set, a file that is not
+    JSON, and a crop on a duplicate scan (never read)."""
     path = Path(path)
     sheet, _, tail = path.stem.rpartition("__")
     try:
@@ -95,16 +99,27 @@ def read_crop(path: Path, set_: str) -> Crop:
         named = ()
     if not sheet or len(named) != 4:
         raise ValueError(f"{path}: expected a name <sheet>__<x0>_<y0>_<w>_<h>.json")
-    d = json.loads(path.read_text())
+    try:
+        d = json.loads(path.read_text())
+    except json.JSONDecodeError as e:
+        raise ValueError(f"{path}: not JSON: {e}") from None
+    if not isinstance(d, dict):
+        raise ValueError(f"{path}: expected a JSON object")
     unknown = sorted(set(d) - KEYS)
     if unknown:
         raise ValueError(f"{path}: unknown keys {', '.join(unknown)} (expected {', '.join(sorted(KEYS))})")
-    box = tuple(int(v) for v in d.get("box", ()))
+    try:
+        box = tuple(int(v) for v in d.get("box", ()))
+    except (TypeError, ValueError):
+        raise ValueError(f"{path}: `box` must be [x0, y0, w, h], whole numbers; it is {d.get('box')!r}") from None
     if box != named:
         raise ValueError(f"{path}: its name says box {list(named)}, the file {list(box)}")
     if box[2] <= 0 or box[3] <= 0:
         raise ValueError(f"{path}: the box's width and height must be positive")
-    lines = {k: tuple(_points(path, k, s) for s in d.get(k, [])) for k in ("strokes", "limits", *OUTLINE_MARKS)}
+    try:
+        lines = {k: tuple(_points(path, k, s) for s in d.get(k, [])) for k in ("strokes", "limits", *OUTLINE_MARKS)}
+    except TypeError:
+        raise ValueError(f"{path}: strokes, limits and outlines must be lists of [x, y] lists") from None
     seeded, outlined = any(d.get(k) for k in SEED_MARKS), any(d.get(k) for k in OUTLINE_MARKS)
     if seeded == outlined:
         raise ValueError(f"{path}: {'marks of both kinds' if seeded else 'no marks'}; a crop is drawn either with "
@@ -115,28 +130,29 @@ def read_crop(path: Path, set_: str) -> Crop:
         for i, poly in enumerate(lines[k]):
             if len(poly) < 3:
                 raise ValueError(f"{path}: {k}[{i}] has {len(poly)} corners; an outline needs at least 3")
+    dup = hatching.duplicate_scans(path.parent.name)
+    if sheet in dup:
+        raise ValueError(f"{path}: {sheet} is a duplicate scan of {dup[sheet]}, which is never read; draw the crop on "
+                         f"that scan")
     return Crop(set_, path.parent.name, sheet, box, _points(path, "street", d.get("street", [])),
                 _points(path, "blocks", d.get("blocks", [])), _points(path, "open", d.get("open", [])),
                 lines["strokes"], lines["limits"], path, lines["polygons"], lines["open_polygons"])
 
 
-def crops(sets=SETS, root: Path | None = None) -> list[Crop]:
-    """Every crop file of `sets` under `root` (None: inputs/find-labels), sorted by path.  ValueError for an unknown
-    set, a bad file (`read_crop`) or a crop on a duplicate scan (never read)."""
+def crop_files(sets=SETS, root: Path | None = None) -> list[tuple[Path, str]]:
+    """(path, set) of every crop file of `sets` under `root` (None: inputs/find-labels), sorted by path, unread.
+    ValueError for an unknown set."""
     root = root_dir() if root is None else Path(root)
     bad = sorted(set(sets) - set(SETS))
     if bad:
         raise ValueError(f"unknown crop sets {', '.join(bad)} (expected {', '.join(SETS)})")
-    found = sorted((f, s) for s in sets for f in (root / s).glob("*/*.json"))
-    out = [read_crop(f, s) for f, s in found]
-    skip: dict[str, dict] = {}
-    for c in out:
-        if c.series not in skip:
-            skip[c.series] = hatching.duplicate_scans(c.series)
-        if c.sheet in skip[c.series]:
-            raise ValueError(f"{c.path}: {c.sheet} is a duplicate scan of {skip[c.series][c.sheet]}, which is never "
-                             f"read; draw the crop on that scan")
-    return out
+    return sorted((f, s) for s in sets for f in (root / s).glob("*/*.json"))
+
+
+def crops(sets=SETS, root: Path | None = None) -> list[Crop]:
+    """Every crop of `sets` under `root` (None: inputs/find-labels), sorted by path.  ValueError (naming the file) for
+    the first bad file (`read_crop`)."""
+    return [read_crop(f, s) for f, s in crop_files(sets, root)]
 
 
 def crop_scan(lum: np.ndarray, crop: Crop) -> np.ndarray:
@@ -299,14 +315,27 @@ def seed_labels(lum: np.ndarray, crop: Crop) -> CropLabels:
     return CropLabels(label, area, kinds, edge, warnings)
 
 
+def ring(box: tuple[int, int, int, int], step: int = RING_STEP) -> np.ndarray:
+    """(n, 2) px centres round the box (x0, y0, w, h): each side, clockwise from the top-left corner, every `step` px
+    from its first corner (the next side starts at its last)."""
+    x0, y0, w, h = box
+    x1, y1 = x0 + w - 1, y0 + h - 1
+    out = []
+    for (xa, ya), (xb, yb) in (((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))):
+        n = max(abs(xb - xa), abs(yb - ya))
+        t = np.arange(0, max(n, 1), step, dtype=float)
+        out.append(np.c_[xa + np.sign(xb - xa) * t, ya + np.sign(yb - ya) * t])
+    return np.vstack(out)
+
+
 def reserved(sid: SheetId, shape: tuple[int, int], margin: int, root: Path | None = None, which: str = "warp",
              placements: Callable[[SheetId], object] | None = None) -> np.ndarray:
     """Bool (h, w) of the page `sid`: True on the ground under any `choose` or `test` crop of any sheet, grown by
-    `margin` px (a square of side 2 margin + 1).  Each crop's box corners and side midpoints go to the ground through
-    its sheet's placement (`placements`, None: `lotlabels.placement` with `which`) and from the ground onto this page
-    through this sheet's; the polygon they make is filled (points the placement cannot bring onto this page are left
-    out; with fewer than three left the crop's ground is not on it).  FileNotFoundError naming a crop on a sheet with
-    no placement."""
+    `margin` px (a square of side 2 margin + 1).  Points round each crop's box (`ring`) go to the ground through its
+    sheet's placement (`placements`, None: `lotlabels.placement` with `which`) and from the ground onto this page
+    through this sheet's; the polygon of the finite ones, in order, is filled.  When none is finite the crop's ground
+    is not on this page; when only some are, a warning is logged naming the crop, the sheet and the count.
+    FileNotFoundError naming a crop on a sheet with no placement."""
     get = (lambda s: lotlabels.placement(s, which)) if placements is None else placements
     h, w = shape
     out = np.zeros((h, w), np.uint8)
@@ -328,13 +357,15 @@ def reserved(sid: SheetId, shape: tuple[int, int], margin: int, root: Path | Non
         return out.astype(bool)
     here = tr_of(sid, None)
     for c in held:
-        x0, y0, cw, ch = c.box
-        x1, y1, xm, ym = x0 + cw - 1, y0 + ch - 1, x0 + (cw - 1) / 2, y0 + (ch - 1) / 2
-        ring = np.array([(x0, y0), (xm, y0), (x1, y0), (x1, ym), (x1, y1), (xm, y1), (x0, y1), (x0, ym)], float)
-        px = here.to_pixel(tr_of((c.series, c.sheet), c).to_world(ring))
-        px = px[np.isfinite(px).all(axis=1)]
-        if len(px) >= 3:
-            cv2.fillPoly(out, [np.rint(px).astype(np.int32)], 1)
+        pts = ring(c.box)
+        px = here.to_pixel(tr_of((c.series, c.sheet), c).to_world(pts))
+        ok = np.isfinite(px).all(axis=1)
+        if not ok.any():
+            continue
+        if not ok.all():
+            log.warning("%s: %d of %d points round its box could not be placed on %s/%s; reserved the polygon of the "
+                        "rest", c.path, int((~ok).sum()), len(ok), sid[0], sid[1])
+        cv2.fillPoly(out, [np.rint(px[ok]).astype(np.int32)], 1)
     if margin > 0:
         out = cv2.dilate(out, np.ones((2 * margin + 1, 2 * margin + 1), np.uint8))
     return out.astype(bool)

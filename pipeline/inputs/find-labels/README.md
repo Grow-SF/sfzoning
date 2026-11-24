@@ -60,6 +60,10 @@ Check every crop by eye: `uv run sfzmaps find crops --look` (in `pipeline/`) dra
 twice size, with page-pixel rulers to read coordinates off, under `data/find/look/crops/<set>/`, and prints each crop's
 warnings and its areas by kind.
 
+To read coordinates off before typing marks, `uv run sfzmaps find ruled --sheet <series>/<sheet> --box x0,y0,w,h
+[--zoom 4] [--tiles 2]` cuts the box into tiles, each enlarged (4x by default) with page-pixel rulers and a light grid
+every 50 px, plus the whole box at 2x, under `data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/`.
+
 ## The three sets
 
 - **`test`**: drawn first; used for nothing but the pictures and counts shown to the owner.

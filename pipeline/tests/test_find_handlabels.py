@@ -300,3 +300,80 @@ def test_the_largest_unseeded_islands_are_always_listed():
     xs = sorted(int(w.split(" at ")[1].split(",")[0]) - BOX[0] for w in found)
     assert 5 < xs[0] < 15 and 22 < xs[1] < 36 and 42 < xs[2] < 56
     assert all(w.endswith("a block left unseeded is labelled street") for w in found)
+
+
+def test_bad_crop_files_are_named_and_the_command_goes_on(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps import config
+    from sfzmaps.cli import app
+    from sfzmaps.find import pages
+    root = tmp_path / "inputs" / "find-labels"
+    monkeypatch.setattr(config, "INPUTS_DIR", tmp_path / "inputs")
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    page = np.ones((300, 300), np.float32)
+    page[110:112] = page[128:130] = 0     # a street between two lines
+    monkeypatch.setattr(pages, "load_scan", lambda sid: page)
+    _write(root, "test", "B", (100, 100, 60, 40), street=[[110, 120]])
+    broken = _write(root, "test", "A", (100, 100, 60, 40), street=[[110, 120]])
+    broken.write_text('{"box": [100, 100, 60, 40], "street": [[110, 120]')         # a JSON syntax error
+    misnamed = _write(root, "test", "C", (100, 100, 60, 40), street=[[110, 120]])
+    misnamed = misnamed.rename(misnamed.with_name("C__100_100_60_41.json"))
+    with pytest.raises(ValueError, match=r"A__100_100_60_40\.json: not JSON"):
+        handlabels.crops(root=root)
+    r = CliRunner().invoke(app, ["find", "crops", "--look"])
+    assert r.exit_code == 1, r.output
+    assert f"{broken}: not JSON" in r.output and f"{misnamed}: its name says box" in r.output
+    assert "test/s/B__100_100_60_40.json: block 0, open 0" in r.output
+    assert (tmp_path / "find" / "look" / "crops" / "test" / "s__B__100_100_60_40.png").is_file()
+
+
+class _Blind:
+    """A placement that cannot place ground east of x_ft (to_pixel gives NaN there)."""
+
+    def __init__(self, flat, x_ft):
+        self.flat, self.x_ft = flat, x_ft
+
+    def to_world(self, px):
+        return self.flat.to_world(px)
+
+    def to_pixel(self, world):
+        out = self.flat.to_pixel(world)
+        out[np.asarray(world, float).reshape(-1, 2)[:, 0] > self.x_ft] = np.nan
+        return out
+
+
+def test_reserved_ground_the_placement_cannot_place_in_part_is_warned(tmp_path, caplog):
+    import logging
+
+    from sfzmaps.solver import grid
+    _write(tmp_path, "test", "A", (200, 300, 80, 40))
+    a, b = Flat(4.0), Flat(4.0, dx=100)                # A's px (x, y) is B's (x + 100, y)
+    blind = _Blind(b, grid.X0 + 4.0 * 240)             # B cannot place A's px east of x = 240 (B's 340)
+    flats = {("s", "A"): a, ("s", "B"): blind}
+    with caplog.at_level(logging.WARNING, logger="sfzmaps.find.handlabels"):
+        got = handlabels.reserved(("s", "B"), (800, 900), 0, root=tmp_path, placements=flats.__getitem__)
+    assert got[305:335, 305:335].all()                 # the part B can place
+    assert not got[:, 350:].any() and not got[:, :300].any()
+    # 30 points round the 80 x 40 box every 8 px; those east of A's x = 240: 4 on the top, 5 on the east side, 5 on
+    # the bottom
+    assert len(caplog.records) == 1 and "14 of 30 points" in caplog.records[0].getMessage()
+    assert "A__200_300_80_40.json" in caplog.records[0].getMessage() and "s/B" in caplog.records[0].getMessage()
+    caplog.clear()
+    flats[("s", "B")] = _Blind(b, grid.X0)             # places none of it: the crop's ground is not on B
+    with caplog.at_level(logging.WARNING, logger="sfzmaps.find.handlabels"):
+        got = handlabels.reserved(("s", "B"), (800, 900), 3, root=tmp_path, placements=flats.__getitem__)
+    assert not got.any() and caplog.records == []
+
+
+def test_a_ruled_tile_shows_its_part_of_the_box():
+    from sfzmaps.find import look
+    lum = np.ones((100, 100), np.float32)
+    lum[70, 80] = 0                                     # page px (1080, 2070)
+    tiles = look.ruled_tiles(lum, (1000, 2000, 100, 100), 4, 2)
+    top, left = look.RULER
+    t = tiles[(1, 1)]                                   # page px 1050..1099, 2050..2099
+    assert t.shape == (top + 50 * 4, left + 50 * 4, 3)
+    assert (t[top + 20 * 4:top + 21 * 4, left + 30 * 4:left + 31 * 4] == 0).all()
+    assert (t[top:, left:] == 0).all(axis=2).sum() == 16          # only that px is black
+    assert all((tiles[k][top:, left:] > 0).all() for k in ((0, 0), (0, 1), (1, 0)))

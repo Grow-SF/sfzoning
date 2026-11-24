@@ -1651,23 +1651,20 @@ def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: trai
                look: bool = typer.Option(False, "--look", help="Draw each crop's scan and labels side by side "
                                                                "(data/find/look/crops/<set>/).")) -> None:
     """Make the labels of every hand crop (inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json) and
-    print each crop's areas by kind and its warnings.  A crop whose marks cannot be read is reported and the rest go
-    on; the exit status is 1 if any failed.  $0."""
+    print each crop's areas by kind and its warnings.  A crop file that cannot be read or labelled is reported with its
+    path and the rest go on; the exit status is 1 if any failed.  $0."""
     from sfzmaps.find import handlabels, look as pictures, pages
     if set_ is not None and set_ not in handlabels.SETS:
         raise typer.BadParameter(f"expected one of {', '.join(handlabels.SETS)}", param_hint="--set")
-    try:
-        found = handlabels.crops(handlabels.SETS if set_ is None else (set_,))
-    except ValueError as e:
-        typer.echo(str(e), err=True)
-        raise typer.Exit(1)
+    found = handlabels.crop_files(handlabels.SETS if set_ is None else (set_,))
     if not found:
         typer.echo("no crops")
         return
     failed, scans = 0, {}
-    for c in found:
-        name = f"{c.set}/{c.series}/{c.path.name}"
+    for path, s in found:
+        name = f"{s}/{path.parent.name}/{path.name}"
         try:
+            c = handlabels.read_crop(path, s)
             sid = (c.series, c.sheet)
             if sid not in scans:
                 scans = {sid: pages.load_scan(sid)}         # crops come sorted by sheet: keep one page in memory
@@ -1675,7 +1672,8 @@ def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: trai
             lab = handlabels.make_labels(lum, c)
         except (ValueError, FileNotFoundError) as e:
             failed += 1
-            typer.echo(f"{name}: FAILED: {e}")
+            msg = str(e)
+            typer.echo(f"{name}: FAILED: {msg if str(path) in msg else f'{path}: {msg}'}")
             continue
         kinds = list(lab.kinds.values())
         typer.echo(f"{name}: block {kinds.count('block')}, open {kinds.count('open')}")
@@ -1686,6 +1684,34 @@ def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: trai
     if failed:
         typer.echo(f"{failed} of {len(found)} crops failed")
         raise typer.Exit(1)
+
+
+@find_app.command("ruled")
+def find_ruled(sheet: str = typer.Option(..., "--sheet", help="The page, as <series>/<sheet>."),
+               box: str = typer.Option(..., "--box", help="The page px box x0,y0,w,h."),
+               zoom: int = typer.Option(4, "--zoom", help="The tiles' enlargement (nearest neighbour)."),
+               tiles: int = typer.Option(2, "--tiles", help="Cut the box into this many x this many tiles.")) -> None:
+    """Close-ups of a page box to draw a hand crop from: the scan cut into tiles, each enlarged, with page-px rulers
+    and a light grid every 50 px, and the whole box at 2x (data/find/look/ruled/<series>__<sheet>__<box>/).  $0."""
+    from sfzmaps.find import look as pictures, pages
+    from sfzmaps.solver import hatching
+    series, _, name = sheet.partition("/")
+    if not series or not name:
+        raise typer.BadParameter("expected <series>/<sheet>", param_hint="--sheet")
+    if name in hatching.duplicate_scans(series):
+        raise typer.BadParameter(f"{sheet} is a duplicate scan, which is never read", param_hint="--sheet")
+    try:
+        x0, y0, w, h = (int(v) for v in box.split(","))
+    except ValueError:
+        raise typer.BadParameter("expected x0,y0,w,h (whole numbers)", param_hint="--box") from None
+    if zoom < 1 or tiles < 1:
+        raise typer.BadParameter("--zoom and --tiles must be at least 1")
+    lum = pages.load_scan((series, name))
+    if w < tiles or h < tiles or x0 < 0 or y0 < 0 or x0 + w > lum.shape[1] or y0 + h > lum.shape[0]:
+        raise typer.BadParameter(f"must lie on the page ({lum.shape[1]} x {lum.shape[0]} px) and hold every tile",
+                                 param_hint="--box")
+    for f in pictures.write_ruled((series, name), lum[y0:y0 + h, x0:x0 + w], (x0, y0, w, h), zoom, tiles):
+        typer.echo(str(f))
 
 
 if __name__ == "__main__":
