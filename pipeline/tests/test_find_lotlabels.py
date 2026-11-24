@@ -1,6 +1,6 @@
 """The finder's street-or-not labels from a series' lots (`sfzmaps.find.lotlabels`): today's blocks are not street,
-the street between them is, and nothing else is labelled; read onto a page through its placement, and nothing off the
-frame cut."""
+ground with no lot within the reach of a street's centre line is, and nothing else is labelled; read onto a page
+through its placement, and nothing off the frame cut."""
 from pathlib import Path
 
 import numpy as np
@@ -122,78 +122,127 @@ def test_a_label_file_made_before_gives_its_block_edge_cuts_only(tmp_path, monke
     assert list(c.weight) == [1, 0] and list(c.inside) == [-1, -1]
 
 
-# --- street only between blocks ---------------------------------------------------------------------------------------
+# --- street where a centre line runs ----------------------------------------------------------------------------------
 
-def _ruled(block: np.ndarray):
-    """The rule applied to labels calling every px off `block` street (as the lots' labels did by open ground before),
-    with weights that vary px to px: (street, weight) before, (street, weight) after, and the px that lost the label."""
-    street = np.where(block, NOT_STREET, ST).astype(np.uint8)
-    weight = np.where(block, 1, 0.25 + 0.25 * (np.arange(block.size).reshape(block.shape) % 4)).astype(np.float16)
-    s, w, lost = lotlabels.street_between(street, weight, block)
-    assert (s[block] == NOT_STREET).all() and (w[block] == 1).all()                 # block px are untouched
-    kept = s == ST
-    assert (w[kept] == weight[kept]).all()                                          # kept street: its weight as it was
-    assert np.array_equal(lost, (street == ST) & (s == UNKNOWN)) and (w[lost] == 0).all()
-    assert not ((s == UNKNOWN) & ~lost).any()
-    return s, lost
-
-
-def _blocks(shape, *boxes) -> np.ndarray:
-    block = np.zeros(shape, bool)
+def _boxes(shape, *boxes) -> np.ndarray:
+    m = np.zeros(shape, bool)
     for r0, r1, c0, c1 in boxes:
-        block[r0:r1, c0:c1] = True
-    return block
+        m[r0:r1, c0:c1] = True
+    return m
 
 
-@pytest.mark.parametrize("gap", [3, 400])
-def test_the_gap_between_two_facing_blocks_is_street_whatever_its_width(gap):
-    west, east = (20, 40), (40 + gap, 60 + gap)                     # the blocks' columns, rows 20-59
-    shape = (80, east[1] + 20)
-    s, lost = _ruled(_blocks(shape, (20, 60, *west), (20, 60, *east)))
-    assert (s[20:60, west[1]:east[0]] == ST).all()              # the gap between the faces
-    for beyond in (s[20:60, :west[0]], s[20:60, east[1]:]):         # beyond the outer faces, open to the grid's edge
-        assert (beyond == UNKNOWN).all()
-    for mouth in (s[:20, west[1]:east[0]], s[60:, west[1]:east[0]]):  # the gap's mouths beyond the blocks' faces
-        assert (mouth == UNKNOWN).all()
-    assert lost.sum() == (s == UNKNOWN).sum()
+def _ruled(lot: np.ndarray, centre: np.ndarray, street: np.ndarray | None = None):
+    """The rule applied to labels that call every px with no lot street (`street` None) or to the labels `street`, with
+    weights that vary px to px; checks what holds whatever the case: block px and their weights untouched, a street
+    label that stays keeps its weight, a street label the rule adds weighs 1, every px with no lot the rule does not
+    call street has no label, and `off` is exactly those px.  The street labels after, and `off`."""
+    block = lot
+    if street is None:
+        street = np.where(block, NOT_STREET, ST).astype(np.uint8)
+    weight = np.where(block, 1, np.where(street == ST, 0.25 + 0.25 * (np.arange(lot.size).reshape(lot.shape) % 4),
+                                         0)).astype(np.float16)
+    s, w, off = lotlabels.centre_line_street(street, weight, block, lot, centre)
+    assert (s[block] == NOT_STREET).all() and (w[block] == 1).all()
+    stays, added = (s == ST) & (street == ST), (s == ST) & (street != ST)
+    assert (w[stays] == weight[stays]).all() and (w[added] == 1).all()
+    assert np.array_equal(off, ~block & (s != ST)) and (s[off] == UNKNOWN).all() and (w[off] == 0).all()
+    return s, off
 
 
-def test_the_square_where_two_streets_cross_between_four_blocks_is_street():
-    a, b = (10, 40), (48, 78)                                      # the blocks' rows and columns: 30 px, streets 8 px
-    s, _ = _ruled(_blocks((88, 88), (*a, *a), (*a, *b), (*b, *a), (*b, *b)))
-    assert (s[40:48, 40:48] == ST).all()                        # the crossing
-    assert (s[10:40, 40:48] == ST).all() and (s[48:78, 40:48] == ST).all()      # the streets between
-    assert (s[40:48, 10:40] == ST).all() and (s[40:48, 48:78] == ST).all()
-    assert (s[:10] == UNKNOWN).all() and (s[78:] == UNKNOWN).all()  # round the outside: open to the grid's edge
-    assert (s[:, :10] == UNKNOWN).all() and (s[:, 78:] == UNKNOWN).all()
+def _reach_by_every_point(centre: np.ndarray, lot: np.ndarray) -> np.ndarray:
+    """Every px tested against every centre-line point: within the point's distance to the nearest lot px."""
+    ly, lx = np.nonzero(lot)
+    out = np.zeros(lot.shape, bool)
+    yy, xx = np.mgrid[:lot.shape[0], :lot.shape[1]]
+    for y, x in zip(*np.nonzero(centre)):
+        r2 = ((ly - y) ** 2 + (lx - x) ** 2).min() if len(ly) else np.inf
+        out |= (yy - y) ** 2 + (xx - x) ** 2 <= r2
+    return out
 
 
-def test_a_notch_cut_into_a_block_is_street_between_its_sides():
-    # a block 40 x 40 with a notch 8 px wide cut 30 px deep into it from the north (its sides columns 36-43)
-    block = _blocks((60, 80), (10, 50, 20, 60))
-    block[10:40, 36:44] = False
-    s, _ = _ruled(block)
-    rows, cols = np.mgrid[10:40, 36:44]
-    by_side = np.minimum(cols - 35, 44 - cols) < 40 - rows          # nearer a side of the notch than its end
-    assert (s[10:40, 36:44][by_side] == ST).all()
-    # the rule as it is: px whose nearest block px is the notch's end look out of its mouth, and get no label
-    assert (s[39, 38:42] == UNKNOWN).all()
+def test_the_reach_is_what_testing_every_px_against_every_centre_line_point_gives():
+    rng = np.random.default_rng(5)
+    for trial in range(12):
+        shape = (int(rng.integers(8, 40)), int(rng.integers(8, 40)))
+        lot = rng.random(shape) < rng.uniform(0.02, 0.4)
+        centre = rng.random(shape) < rng.uniform(0.01, 0.1)
+        if trial == 0:
+            lot[:] = False                                  # no lot at all: no centre-line point reaches anywhere
+        np.testing.assert_array_equal(lotlabels.within_reach(centre, lot), _reach_by_every_point(centre, lot) &
+                                      (lot.any() | ~centre.any()), err_msg=f"trial {trial}")
 
 
-def test_a_strip_beside_a_single_block_has_no_label():
-    s, lost = _ruled(_blocks((60, 60), (20, 40, 20, 40)))
-    assert not (s == ST).any() and lost.sum() == 60 * 60 - 20 * 20
+@pytest.mark.parametrize("gap", [5, 401])
+def test_two_blocks_with_the_centre_line_midway_the_whole_gap_is_street_whatever_its_width(gap):
+    west, east = (20, 40), (40 + gap, 60 + gap)
+    shape = (100, east[1] + 20)
+    lot = _boxes(shape, (10, 90, *west), (10, 90, *east))
+    centre = _boxes(shape, (10, 90, 40 + gap // 2, 41 + gap // 2))
+    s, _ = _ruled(lot, centre)
+    assert (s[10:90, west[1]:east[0]] == ST).all()
 
 
-def test_a_lot_free_square_enclosed_by_blocks_is_still_street():
-    # four blocks round a square (rows and columns 20-39), streets leaving it at its corners: the limit the rule admits
-    s, _ = _ruled(_blocks((60, 60), (10, 20, 14, 46), (40, 50, 14, 46), (24, 36, 10, 20), (24, 36, 40, 50)))
-    assert (s[20:40, 20:40] == ST).all()
+@pytest.mark.parametrize("k", [1, 3])
+def test_a_centre_line_off_the_middle_leaves_a_sliver_along_the_far_face(k):
+    gap = 21                                                # columns 40-60; the lots' faces at columns 39 and 61
+    lot = _boxes((100, 100), (10, 90, 20, 40), (10, 90, 61, 81))
+    line = 50 - k                                           # the middle is column 50
+    s, off = _ruled(lot, _boxes((100, 100), (10, 90, line, line + 1)))
+    rows = slice(30, 70)                                    # away from the blocks' ends
+    reach = line - 39
+    assert (s[rows, 40:line + reach + 1] == ST).all()       # from the near face to as far beyond the line
+    assert off[rows, line + reach + 1:61].all()             # the sliver along the far face: no label
+    assert 61 - (line + reach + 1) == 2 * k - 1 and gap == 61 - 40
 
 
-def test_no_block_on_the_grid_labels_no_street():
-    s, lost = _ruled(np.zeros((30, 40), bool))
-    assert (s == UNKNOWN).all() and lost.all()
+def test_a_road_with_a_block_on_one_side_only_is_street_as_far_beyond_its_line_as_the_face_is_before_it():
+    lot = _boxes((60, 80), (10, 50, 40, 70))               # the block; open ground west of it to the grid's edge
+    s, off = _ruled(lot, _boxes((60, 80), (10, 50, 33, 34)))   # the road's centre line, 7 px from the face's lots
+    rows = slice(20, 40)
+    assert (s[rows, 26:40] == ST).all() and off[rows, :26].all()
+
+
+def test_two_streets_crossing_between_four_blocks_are_street_across_the_whole_square():
+    a, b = (10, 40), (49, 79)                              # blocks 30 px, streets 9 px (40-48)
+    lot = _boxes((89, 89), (*a, *a), (*a, *b), (*b, *a), (*b, *b))
+    centre = _boxes((89, 89), (0, 89, 44, 45)) | _boxes((89, 89), (44, 45, 0, 89))
+    s, _ = _ruled(lot, centre)
+    assert (s[40:49, 40:49] == ST).all() and (s[10:40, 40:49] == ST).all() and (s[40:49, 10:40] == ST).all()
+
+
+def test_ground_with_no_lot_and_no_centre_line_has_no_label():
+    lot = _boxes((40, 40), (5, 15, 5, 15))
+    s, off = _ruled(lot, np.zeros((40, 40), bool))
+    assert not (s == ST).any() and off.sum() == 40 * 40 - 100
+
+
+def test_a_centre_line_inside_a_lot_calls_nothing_street():
+    lot = _boxes((40, 60), (10, 30, 10, 50))
+    s, off = _ruled(lot, _boxes((40, 60), (20, 21, 15, 45)))   # a drive through a park that is a lot
+    assert not (s == ST).any() and off.sum() == 40 * 60 - 20 * 40
+
+
+def test_the_rule_adds_a_street_label_where_the_lots_labels_had_none():
+    lot = _boxes((40, 40), (0, 40, 0, 10), (0, 40, 21, 40))
+    centre = _boxes((40, 40), (0, 40, 15, 16))
+    s, _ = _ruled(lot, centre, street=np.where(lot, NOT_STREET, UNKNOWN).astype(np.uint8))
+    assert (s[:, 10:21] == ST).all()
+
+
+def test_the_centre_lines_order_changes_nothing():
+    import shapely
+
+    from sfzmaps.solver.hatchnet.data import Lines
+    base = lines_world()
+    across = shapely.LineString([(grid.X0, grid.Y1 - 4 * 30.5), (grid.X0 + 4 * SHAPE[1], grid.Y1 - 4 * 30.5)])
+    road = shapely.LineString([(grid.X0 + 66.0, grid.Y1), (grid.X0 + 66.0, grid.Y1 - 4 * SHAPE[0])])
+    geoms = [*base.geoms, across, road]
+    one = Lines(np.array(geoms, dtype=object), np.array(["ST"] * 3, dtype=object), np.array(["A", "B", "C"],
+                                                                                           dtype=object))
+    two = Lines(one.geoms[::-1].copy(), one.kinds[::-1].copy(), one.streets[::-1].copy())
+    g1, g2 = (lotlabels.build_ground(lots_world(), lines, SHAPE) for lines in (one, two))
+    assert np.array_equal(g1.street == ST, g2.street == ST) and np.array_equal(g1.off, g2.off)
+    assert (g1.street == ST).any() and g1.off.any()
 
 
 def test_the_labels_picture_tints_only_px_whose_label_counts():
@@ -211,3 +260,11 @@ def test_the_labels_picture_tints_only_px_whose_label_counts():
     assert (right[0] == 128).all() and (right[:, 7:] == 128).all()          # no label, or one that does not count
     assert (right[1:, :3, 2] > right[1:, :3, 0]).all()                      # street: orange (more red than blue)
     assert (right[1:, 3:7, 0] > right[1:, 3:7, 2]).all()                    # block: blue
+    keep = np.ones((10, 12), bool)
+    keep[:, 10:] = False
+    big = look.beside(lum, street, weight, (1, 0, 11, 10), "t", keep=keep, zoom=2)
+    right = big[-2 * h:, 2 * (10 + look.GAP):]
+    assert big.shape[1] == 2 * (2 * 10 + look.GAP) and (right[:, :18] == np.repeat(img[-h:, 10 + look.GAP:][:, :9],
+                                                                                   2, axis=0).repeat(2, axis=1)).all()
+    out = right[:, 18:]                                                     # page column 10: outside the frame cut
+    assert (out[..., 0] == out[..., 1]).all() and (out[..., 1] == out[..., 2]).all() and (out != 128).all()

@@ -132,7 +132,7 @@ def test_a_sheets_labels_are_street_no_block_edge_and_block_edge_cuts(tmp_path, 
     with np.load(tmp_path / "find" / "labels" / "s" / "s-p01.npz") as z:
         assert set(z.files) == {"street", "weight", "cuts_px", "cuts_cut", "cuts_prior", "cuts_weight", "edge_none",
                                 "sigma", "placement", "count_edge_used", "count_edge_dropped",
-                                "count_labelled_px_before", "count_labelled_px_after", "count_street_label_lost"}
+                                "count_labelled_px_before", "count_labelled_px_after", "count_street_left_off"}
         assert str(z["placement"]) == "warp" and float(z["sigma"]) == SIGMA
 
 
@@ -280,45 +280,54 @@ def test_px_on_a_cut_dropped_at_the_frame_cut_are_not_none(tmp_path, monkeypatch
     assert lab["edge_none"][mid, 2 * WEST[1] - 12]               # on no cut, by the inked east side
 
 
-def test_open_ground_past_the_blocks_loses_its_street_label_and_nothing_else_changes(tmp_path, monkeypatch):
-    """A road along the west block's open side (lots on one side only, like a road along the shore) was labelled street
-    by its centre line; past the blocks it is not between blocks, so it gets no label and no "no block edge"
-    statement.  The street between the blocks, its weights, the block px and every block-edge cut (the west block's
-    open side keeps its cuts) are as they were before the rule."""
-    import dataclasses
-
+def _lines(*extra):
+    """The fixture's centre line down the street and `extra` lines (each ((x0, y0), (x1, y1)) in ft from the grid's
+    top-left corner, y down), as `Lines`."""
     import shapely
 
-    from sfzmaps.solver.hatchnet.data import Lines, street_grid
+    from sfzmaps.solver.hatchnet.data import Lines
     base = lines_world()
-    road = shapely.LineString([(grid.X0 + 42.0, grid.Y1), (grid.X0 + 42.0, grid.Y1 - 4 * SHAPE[0])])   # column 10
-    lines = Lines(np.array([*base.geoms, road], dtype=object), np.array([*base.kinds, "ST"], dtype=object),
-                  np.array([*base.streets, "SHORE RD"], dtype=object))
+    more = [shapely.LineString([(grid.X0 + x0, grid.Y1 - y0), (grid.X0 + x1, grid.Y1 - y1)])
+            for (x0, y0), (x1, y1) in extra]
+    n = len(base.geoms) + len(more)
+    return Lines(np.array([*base.geoms, *more], dtype=object), np.array(["ST"] * n, dtype=object),
+                 np.array([f"S{i}" for i in range(n)], dtype=object))
+
+
+def test_a_road_along_one_block_is_street_out_to_its_reach_and_nothing_else_changes(tmp_path, monkeypatch):
+    """A road along the west block's open side (lots on one side only, like a road along the shore): street out to as
+    far beyond its centre line as the block's face is before it; past that no label and no "no block edge"
+    statement.  The street between the blocks, the weights of labels that stay, the block px and every block-edge cut
+    (the west block's open side keeps its cuts) are as they were before the rule."""
+    import dataclasses
+
+    from sfzmaps.solver.hatchnet.data import street_grid
+    lines = _lines(((66.0, 0.0), (66.0, 4.0 * SHAPE[0])))       # grid column 16; the west block's lots from column 20
     new = lotlabels.build_ground(lots_world(), lines, SHAPE)
     street, weight, _ = street_grid(lines, new.block, per_type=False)
-    old = dataclasses.replace(new, street=street, weight=weight, lost=np.zeros_like(new.lost))
+    old = dataclasses.replace(new, street=street, weight=weight, off=np.zeros_like(new.off))
     page = np.full(PAGE, 255, np.uint8)
     for cols in (WEST, EAST):
         ink_outline(page, cols, ROWS)
     before, _ = _labelled(tmp_path, monkeypatch, old, page)
     monkeypatch.setattr(lotlabels, "ground", lambda series: new)
     after = lotlabels.sheet_labels(("s", "s-p01"))
-    by_road = (slice(2 * ROWS[0], 2 * ROWS[1]), slice(2 * 10 - 2, 2 * 10 + 4))
-    assert (before["street"][by_road] == 1).all()                             # the road was labelled street
-    assert (after["street"][by_road] == 255).all() and (after["weight"][by_road] == 0).all()
-    assert not after["edge_none"][by_road].any()
-    lost = (before["street"] == 1) & (after["street"] == 255)
-    assert after["counts"]["street_label_lost"] == lost.sum() > 0
-    assert (after["street"] == 1).sum() + lost.sum() == (before["street"] == 1).sum()
-    kept = after["street"] == 1
-    assert (before["street"][kept] == 1).all() and np.array_equal(after["weight"][kept], before["weight"][kept])
+    rows = slice(2 * ROWS[0] + 4, 2 * ROWS[1] - 4)
+    road = (rows, slice(2 * 12, 2 * 20))                        # grid columns 12-19: the road out to its reach
+    beyond = (rows, slice(4, 2 * 12))                           # grid columns 2-11: past it (inside the frame cut)
+    assert (after["street"][road] == 1).all() and (after["weight"][road] > 0).all()
+    assert (after["street"][beyond] == 255).all() and (after["weight"][beyond] == 0).all()
+    assert not after["edge_none"][beyond].any()
+    kept = (after["street"] == 1) & (before["street"] == 1)
+    assert np.array_equal(after["weight"][kept], before["weight"][kept])
     gap = (slice(2 * ROWS[0], 2 * ROWS[1]), slice(2 * STREET[0], 2 * STREET[1]))
     assert (after["street"][gap] == 1).all()
     assert np.array_equal(after["street"] == 0, before["street"] == 0)
-    assert np.array_equal(after["edge_none"], before["edge_none"] & ~lost)
+    off = (after["street"] == 255) & (before["street"] != 255)
+    assert np.array_equal(after["edge_none"] & ~(before["street"] == 255), before["edge_none"] & ~off)
     for k in ("px", "cut", "prior", "weight"):
         assert np.array_equal(getattr(after["cuts"], k), getattr(before["cuts"], k)), k
-    west_side = np.bincount(after["cuts"].cut, after["cuts"].px % PAGE[1]) / np.bincount(after["cuts"].cut)
-    assert ((np.abs(west_side - 2 * WEST[0]) < 1) & (after["cuts"].weight == 1)).any()     # the open side's cuts
+    mean_x = np.bincount(after["cuts"].cut, after["cuts"].px % PAGE[1]) / np.bincount(after["cuts"].cut)
+    assert ((np.abs(mean_x - 2 * WEST[0]) < 1) & (after["cuts"].weight == 1)).any()      # the open side's cuts
     with np.load(tmp_path / "find" / "labels" / "s" / "s-p01.npz") as z:
-        assert int(z["count_street_label_lost"]) == lost.sum()
+        assert int(z["count_street_left_off"]) == after["counts"]["street_left_off"] > 0

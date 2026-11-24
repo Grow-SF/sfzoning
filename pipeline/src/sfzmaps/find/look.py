@@ -5,8 +5,8 @@ cyan over it, each px as strong as its prior, a cut not used (weight 0: a block 
 key and the sheet's name at the top.  `busiest` finds the close-up: the window holding the most cut px.
 
 `beside`: a window of a sheet's page, the scan on the left and on the right the scan with every label that counts
-(weight above 0) tinted at one strength, street orange and block blue, px with no label untinted: where the labels
-are, not how sure they are.
+(weight above 0) tinted at one strength, street orange and block blue, px with no label untinted, and (given the frame
+cut) px outside it grey: where the labels are, not how sure they are.
 
 `crop`: a hand crop (`handlabels`) and its labels side by side, both enlarged ZOOM times, with page-px rulers to read
 coordinates off for the crop file.  `ruled`: a close-up of the scan with rulers and a grid, to draw crops from.
@@ -31,6 +31,7 @@ from sfzmaps.solver.hatchnet.data import NOT_STREET, STREET
 
 # BGR
 ORANGE, BLUE, CYAN = (0, 140, 255), (255, 90, 0), (255, 255, 0)
+WHITE, BLACK, GREY = (255, 255, 255), (0, 0, 0), (160, 160, 160)
 TINT = 0.25                 # picture setting: how strongly street and block tint the scan
 STRENGTH = 0.85             # picture setting: a cut px's colour at prior 1
 CLOSE = 640                 # picture setting: the close-up's side, page px
@@ -113,29 +114,34 @@ def write(sid: SheetId, lum: np.ndarray, lab: dict) -> list[Path]:
 BESIDE_TINT = 0.45          # picture setting: how strongly `beside` tints a labelled px
 BESIDE_KEY = (("left: the scan; right: the labels over it", (255, 255, 255)), ("orange = street", ORANGE),
               ("blue = block", BLUE), ("untinted = no label", (255, 255, 255)))
+BESIDE_OUT_KEY = ("grey = outside the frame cut", GREY)
 
 
 def beside(lum: np.ndarray, street: np.ndarray, weight: np.ndarray, box: tuple[int, int, int, int],
-           title: str) -> np.ndarray:
-    """The picture (BGR uint8) of the page window `box` (x0, y0, x1, y1) at the scan's own size: the scan `lum` (1
-    paper, 0 ink) on the left; on the right the scan with the px whose label counts (`weight` above 0) tinted
-    BESIDE_TINT, street (`street` 1) orange and block (0) blue, every other px untinted; a key and `title` above."""
+           title: str, keep: np.ndarray | None = None, zoom: int = 1) -> np.ndarray:
+    """The picture (BGR uint8) of the page window `box` (x0, y0, x1, y1), enlarged `zoom` times (nearest neighbour):
+    the scan `lum` (1 paper, 0 ink) on the left; on the right the scan with the px whose label counts (`weight` above
+    0) tinted BESIDE_TINT, street (`street` 1) orange and block (0) blue, every other px untinted, and, given the frame
+    cut `keep`, the px outside it grey; a key and `title` above."""
     x0, y0, x1, y1 = box
     scan = np.repeat((lum[y0:y1, x0:x1] * 255)[..., None], 3, axis=2).astype(np.float32)
     over = scan.copy()
     s, w = street[y0:y1, x0:x1], weight[y0:y1, x0:x1] > 0
     for colour, where in ((ORANGE, w & (s == STREET)), (BLUE, w & (s == NOT_STREET))):
         _paint(over, where, colour, BESIDE_TINT)
+    if keep is not None:
+        _paint(over, ~np.asarray(keep, bool)[y0:y1, x0:x1], GREY, BESIDE_TINT)
     gap = np.full((y1 - y0, GAP, 3), 255, np.float32)
     row = np.clip(np.rint(np.hstack([scan, gap, over])), 0, 255).astype(np.uint8)
-    return _keyed(row, title, BESIDE_KEY)
+    if zoom > 1:
+        row = np.repeat(np.repeat(row, zoom, axis=0), zoom, axis=1)
+    return _keyed(row, title, BESIDE_KEY + ((BESIDE_OUT_KEY,) if keep is not None else ()))
 
 
 # The crop picture.  BGR; no area colour near the street's orange, the edges' black, the no-label grey or the
 # marks' magenta.
 AREAS = ((255, 90, 0), (60, 170, 60), (140, 200, 230), (230, 200, 60), (90, 60, 160), (40, 160, 160),
          (170, 120, 255), (120, 200, 120), (180, 140, 90), (60, 90, 230))
-WHITE, BLACK, GREY = (255, 255, 255), (0, 0, 0), (160, 160, 160)
 MAGENTA, YELLOW = (255, 0, 255), (0, 230, 255)
 STRIPE = 3                  # picture setting: open land's stripe width, crop px
 DOT = 4                     # picture setting: a seed's radius, picture px
