@@ -27,11 +27,9 @@ def _log1mexp(s: torch.Tensor) -> torch.Tensor:
     return torch.where(s < -0.6931471805599453, torch.log1p(-torch.exp(s)), torch.log(-torch.expm1(s)))
 
 
-def cut_nll(logit_flat: torch.Tensor, cuts_px: torch.Tensor, cuts_cut: torch.Tensor, prior: torch.Tensor,
-            says: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    """The sum over cuts of weight * minus the log chance of the cut's statement (see the module).  `logit_flat`: the
-    answer's logits, flat; `cuts_px` (m,): the index into it of each cut px; `cuts_cut` (m,): the cut each px is in;
-    `prior` (m,); `says` (n,) bool, True "a line crosses"; `weight` (n,)."""
+def _log_statement_chance(logit_flat: torch.Tensor, cuts_px: torch.Tensor, cuts_cut: torch.Tensor,
+                          prior: torch.Tensor, says: torch.Tensor) -> torch.Tensor:
+    """The log of each cut's statement chance (see `statement_chance`), computed in logs."""
     z = logit_flat[cuts_px]
     prior = prior.to(z.dtype)
     n = len(says)
@@ -39,9 +37,25 @@ def cut_nll(logit_flat: torch.Tensor, cuts_px: torch.Tensor, cuts_cut: torch.Ten
     miss = torch.logaddexp(torch.zeros_like(z), z + torch.log1p(-prior.clamp(max=1))) - F.softplus(z)
     log_none = torch.zeros(n, dtype=z.dtype, device=z.device).index_add(0, cuts_cut, miss)       # log prod(1 - prior p)
     log_off = torch.zeros(n, dtype=z.dtype, device=z.device).index_add(0, cuts_cut, -F.softplus(z))  # log prod(1 - p)
-    crosses = -_log1mexp(log_none.clamp(max=-TINY))                          # log(1 - TINY) = -TINY
-    term = torch.where(says.to(torch.bool), crosses, -log_off)
-    weight = weight.to(z.dtype)
+    crosses = _log1mexp(log_none.clamp(max=-TINY))                           # log(1 - TINY) = -TINY
+    return torch.where(says.to(torch.bool), crosses, log_off)
+
+
+def statement_chance(logit_flat: torch.Tensor, cuts_px: torch.Tensor, cuts_cut: torch.Tensor, prior: torch.Tensor,
+                     says: torch.Tensor) -> torch.Tensor:
+    """(n,): the chance the network gives each cut's own statement: 1 - prod_i (1 - prior_i p_i) for "a line
+    crosses", prod_i (1 - p_i) for "none does".  The network agrees with a cut when this is over one half (the more
+    likely answer).  Arguments as `cut_nll`."""
+    return torch.exp(_log_statement_chance(logit_flat, cuts_px, cuts_cut, prior, says))
+
+
+def cut_nll(logit_flat: torch.Tensor, cuts_px: torch.Tensor, cuts_cut: torch.Tensor, prior: torch.Tensor,
+            says: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    """The sum over cuts of weight * minus the log of the cut's statement chance (`statement_chance`).  `logit_flat`:
+    the answer's logits, flat; `cuts_px` (m,): the index into it of each cut px; `cuts_cut` (m,): the cut each px is
+    in; `prior` (m,); `says` (n,) bool, True "a line crosses"; `weight` (n,)."""
+    term = -_log_statement_chance(logit_flat, cuts_px, cuts_cut, prior, says)
+    weight = weight.to(term.dtype)
     return torch.where(weight > 0, weight * term, torch.zeros_like(term)).sum()
 
 

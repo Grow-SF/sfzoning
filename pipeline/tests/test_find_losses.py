@@ -41,6 +41,16 @@ def test_a_none_statement_needs_every_px_off():
     assert abs(nll([OFF, 0.0, OFF], prior, False) + math.log(0.5)) < 1e-6
 
 
+def test_statement_chance_is_the_chance_of_the_cuts_own_statement():
+    """The same three-px cut: one px surely on where the prior is one half gives "crosses" an even chance; one px at
+    an even chance gives "none" an even chance."""
+    px, cut, prior = torch.arange(3), torch.zeros(3, dtype=torch.long), torch.tensor([0.5, 1.0, 0.5])
+    crosses = losses.statement_chance(torch.tensor([ON, OFF, OFF]), px, cut, prior, torch.tensor([True]))
+    none = losses.statement_chance(torch.tensor([OFF, 0.0, OFF]), px, cut, prior, torch.tensor([False]))
+    assert crosses.shape == (1,) and abs(float(crosses[0]) - 0.5) < 1e-6
+    assert abs(float(none[0]) - 0.5) < 1e-6
+
+
 def test_a_cut_of_weight_zero_adds_nothing():
     """Two cuts, the second of weight 0: whatever its px say, the loss is the first cut's alone, and it counts as no
     statement."""

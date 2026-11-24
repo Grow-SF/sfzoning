@@ -2,7 +2,6 @@
 codes say, and the design's made-up case: from cut statements alone the network learns which ink is the zoning
 border, though block edges cross the same cuts whether the zoning changes or not."""
 import json
-import time
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +9,7 @@ import pytest
 import torch
 
 from find_fixtures import Flat
-from sfzmaps.find import cuts, model, town
+from sfzmaps.find import cuts, losses, model, town
 
 MEASURES = Path(__file__).parents[1] / "inputs" / "find" / "town-measures.json"
 # A grid px a page px, as the town is drawn.  Offset a quarter px so that no cut px falls on a half px, where rounding
@@ -30,6 +29,10 @@ def test_measures_file_is_complete():
         assert len(q) == 101 and all(isinstance(v, (int, float)) for v in q)
         assert all(a <= b for a, b in zip(q, q[1:]))
     assert isinstance(found["spread_px"], float) and found["spread_px"] > 0
+    # a town draws both widths at one quantile: nowhere is the zoning border lighter than the block line, and at the
+    # median it is heavier (the two lowest quantiles tie, as measured)
+    line, heavy = found["block_line_width"], found["zoning_border_width"]
+    assert all(z >= b for b, z in zip(line, heavy)) and heavy[50] > line[50]
     assert found["command"].startswith("sfzmaps find measure-town")
     assert len(found["commit"]) == 40 and int(found["commit"], 16) >= 0
 
@@ -69,36 +72,36 @@ def test_measuring_a_town_gives_back_its_sizes():
         assert np.median(found[k]) == v, k
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "the zoning-border answer lights the zoning-border ink and not the block lines (mean chance 0.137 against 0.009 on "
-    "the fresh town; no 'none' cut lit) but no px passes one half in 400 steps: a 'crosses' statement over a line "
-    "several px wide is met by several px of moderate chance (median brightest px of a 'crosses' cut 0.20, median "
-    "chance of its statement 0.79), and the chances rise slowly after (0.29 at 800 steps, 0.42 at 1600, when the "
-    "test's three checks hold); an owner decision (task-6 report)"))
 def test_the_border_answer_learns_which_ink_is_the_border(m):
-    """The design's made-up case.  Test settings: CPU, FindNet(8), tiles of 64 px, batches of 8, 400 steps, seed 0,
-    16 towns to learn from and a fresh one to read."""
+    """The design's made-up case.  Test settings: CPU, FindNet(8), tiles of 64 px, batches of 8, 400 steps, seed 0;
+    16 towns to learn from and 20 fresh ones to read, all drawn in turn from np.random.default_rng(0).  The network
+    agrees with a cut when it gives the cut's own statement a chance over one half; judged on the fresh towns' cuts
+    pooled."""
     torch.use_deterministic_algorithms(True)
     threads = torch.get_num_threads()
     torch.set_num_threads(1)
     try:
         rng = np.random.default_rng(0)
         towns = [town.draw(rng, m) for _ in range(16)]
-        fresh = town.draw(rng, m)
-        t0 = time.time()
+        fresh = [town.draw(rng, m) for _ in range(20)]
         net = town.fit(towns, m["spread_px"], width=8, tile=64, batch=8, steps=400, seed=0)
-        chance = town.chances(net, fresh.lum)[model.BORDER]
-        took = time.time() - t0
+        chance = [town.chances(net, t.lum)[model.BORDER] for t in fresh]
     finally:
         torch.use_deterministic_algorithms(False)
         torch.set_num_threads(threads)
-    c = cuts.border_cuts(fresh.lot, fresh.codes, FLAT, fresh.lum.shape, np.ones(fresh.lum.shape, bool),
-                         m["spread_px"])
-    lit = np.bincount(c.cut, chance.ravel()[c.px] > 0.5, minlength=len(c.answer)) > 0
-    on_border = chance[fresh.border_line].mean()
-    on_block_only = chance[fresh.block_line & ~fresh.border_line].mean()
-    print(f"\n'crosses' lit {lit[c.says].mean():.3f}, 'none' lit {lit[~c.says].mean():.3f}; zoning-border chance on "
-          f"zoning-border ink {on_border:.3f}, on block-line-only ink {on_block_only:.3f}; {took:.1f} s")
-    assert lit[c.says].mean() > 0.5
-    assert lit[~c.says].mean() < 0.5
-    assert on_border > on_block_only
+    agreed, says, on_border, on_block_only = [], [], [], []
+    for t, p in zip(fresh, chance):
+        c = cuts.border_cuts(t.lot, t.codes, FLAT, t.lum.shape, np.ones(t.lum.shape, bool), m["spread_px"])
+        logit = torch.logit(torch.from_numpy(p.ravel()).double(), eps=1e-12)
+        got = losses.statement_chance(logit, torch.from_numpy(c.px), torch.from_numpy(c.cut).long(),
+                                      torch.from_numpy(c.prior), torch.from_numpy(c.says))
+        agreed.append(got.numpy() > 0.5)
+        says.append(c.says)
+        on_border.append(p[t.border_line])
+        on_block_only.append(p[t.block_line & ~t.border_line])
+    agreed, says = np.concatenate(agreed), np.concatenate(says)
+    crosses, none = agreed[says].mean(), agreed[~says].mean()
+    border, block_only = np.concatenate(on_border).mean(), np.concatenate(on_block_only).mean()
+    found = (f"'crosses' cuts agreed with {crosses:.3f}, 'none' cuts {none:.3f}; mean zoning-border chance on "
+             f"zoning-border ink {border:.3f}, on block-line-only ink {block_only:.3f}")
+    assert crosses > 0.5 and none > 0.5 and border > block_only, found

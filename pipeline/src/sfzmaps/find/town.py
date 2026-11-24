@@ -21,7 +21,8 @@ cutting the rows into bands; more cross each band from edge to edge, along a lot
 deep (where it meets zoning borders at both ends).  Each is the kind placed least so far in the town among those with
 a free place, ties at random: equal shares as far as the blocks allow.  The districts (`codes`) are the parts the
 zoning borders cut the town into.  The print is offset from the lots by a placement error drawn from a normal of the
-measured spread, in whole px as a 1-bit scan prints.  A zoning border is printed only where its print touches no cut
+measured spread, in whole px as a 1-bit scan prints.  The block lines' and the zoning borders' widths are one draw:
+the same quantile of both lists.  A zoning border is printed only where its print touches no cut
 its lots say none crosses (the labels' rule: never a label that might not match the print; a zoning border down a
 narrow street can touch the lots beside it), and lots no printed zoning border divides are one district.  The town
 lies on the solver grid's top-left corner, one page px a grid px (`PLACEMENT`).
@@ -184,11 +185,17 @@ class Town:
     border_line: np.ndarray     # bool (h, w): where the zoning borders are printed
     shift: tuple[int, int]      # (dx, dy): the print's offset from the lots, px
     kinds: tuple[str, ...]      # each printed zoning border's kind (KINDS)
+    widths: tuple[int, int]     # the block lines' and the zoning borders' width, px
+
+
+def _at(q, u: float) -> int:
+    """The size at level u (0 to 1) of its quantiles (px, whole, at least 1)."""
+    return max(1, int(round(float(np.interp(u * (len(q) - 1), np.arange(len(q)), q)))))
 
 
 def _size(rng: np.random.Generator, q) -> int:
-    """A size drawn from its quantiles (px, whole, at least 1)."""
-    return max(1, int(round(float(np.interp(rng.random() * (len(q) - 1), np.arange(len(q)), q)))))
+    """A size drawn from its quantiles."""
+    return _at(q, rng.random())
 
 
 def _spans(rng: np.random.Generator, m: dict, n: int) -> list[tuple[int, int]]:
@@ -284,7 +291,8 @@ def draw(rng: np.random.Generator, m: dict, shape: tuple[int, int] = SHAPE) -> T
     across the blocks' width; the town is laid on its side in half the draws."""
     flip = bool(rng.random() < 0.5)
     h, w = (shape[1], shape[0]) if flip else shape
-    line, heavy = _size(rng, m["block_line_width"]), _size(rng, m["zoning_border_width"])
+    u = rng.random()                    # one draw for both widths: the zoning border is the heavier line, as measured
+    line, heavy = _at(m["block_line_width"], u), _at(m["zoning_border_width"], u)
     sigma = float(m["spread_px"])
     shift = (int(np.rint(rng.normal(0, sigma))), int(np.rint(rng.normal(0, sigma))))
     cols, rows = _spans(rng, m, w), _spans(rng, m, h)
@@ -402,7 +410,7 @@ def draw(rng: np.random.Generator, m: dict, shape: tuple[int, int] = SHAPE) -> T
     if flip:
         lum, lot, block_line, border_line = lum.T.copy(), lot.T.copy(), block_line.T.copy(), border_line.T.copy()
         shift = shift[::-1]
-    return Town(lum, lot, codes, block_line, border_line, shift, kinds)
+    return Town(lum, lot, codes, block_line, border_line, shift, kinds, (line, heavy))
 
 
 def labels(t: Town, sigma: float) -> dict:
@@ -478,9 +486,14 @@ def look(t: Town, chance: np.ndarray, sigma: float, path: Path) -> Path:
     """A picture of a town, three panels: its print; the print with its zoning-border cuts tinted on the paper ("a
     zoning border crosses" red, "none does" green, as strong as their prior); and the zoning-border chance the network
     gives (black 0 to white at the picture's largest chance, named in the title), the printed zoning borders outlined
-    in red and the block lines in cyan."""
+    in red and the block lines in cyan.  The title gives the share of the town's "crosses" and "none" cuts the network
+    agrees with (gives its statement a chance over one half, `losses.statement_chance`)."""
     from sfzmaps.find import look as pictures
     c = border_cuts(t.lot, t.codes, sigma)
+    logit = torch.logit(torch.from_numpy(np.asarray(chance, np.float64).ravel()), eps=1e-12)
+    agreed = losses.statement_chance(logit, torch.from_numpy(c.px), torch.from_numpy(c.cut).long(),
+                                     torch.from_numpy(c.prior), torch.from_numpy(c.says)).numpy() > 0.5
+    share = [f"{agreed[w].mean():.2f} of {int(w.sum())}" if w.any() else "none drawn" for w in (c.says, ~c.says)]
     grey = np.repeat((t.lum * 200 + 55).astype(np.uint8)[..., None], 3, axis=2)
     tinted = grey.astype(float)
     paper = t.lum.ravel()[c.px] > 0.5
@@ -497,9 +510,11 @@ def look(t: Town, chance: np.ndarray, sigma: float, path: Path) -> Path:
     gap = np.full((t.lum.shape[0], 4, 3), 255, np.uint8)
     img = np.hstack([grey, gap, tinted.astype(np.uint8), gap, right])
     img = cv2.resize(img, None, fx=ZOOM, fy=ZOOM, interpolation=cv2.INTER_NEAREST)
-    img = pictures._keyed(img, f"made-up town (print offset {t.shift} px from its lots): the print | its zoning-border "
-                               f"cuts | the zoning-border chance, white = {top:.3f}",
-                          (("red, middle = a zoning border crosses this cut", pictures.RED),
+    img = pictures._keyed(img, f"made-up town, print offset {t.shift} px; agreed with: 'crosses' cuts {share[0]}, "
+                               f"'none' cuts {share[1]}",
+                          (("panels: the print | its zoning-border cuts | the zoning-border chance, black 0 to white "
+                            f"{top:.3f}", lambda band, box: None),
+                           ("red, middle = a zoning border crosses this cut", pictures.RED),
                            ("green, middle = no zoning border crosses this cut", pictures.GREEN),
                            ("red outline, right = printed zoning border", pictures.RED),
                            ("cyan outline, right = printed block line", pictures.CYAN)))
