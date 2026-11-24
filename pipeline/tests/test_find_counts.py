@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from sfzmaps.find import counts, handlabels
+from sfzmaps.find import areas, counts, handlabels
 from sfzmaps.find.handlabels import CropLabels
 
 
@@ -81,9 +81,68 @@ def test_fit_depth_takes_the_smallest_best():
     edge[18:21, RIDGE] = 0.6
     read = (np.stack([street, edge]).astype(np.float32), np.ones((H, W), bool))
     truth = _truth({1: (slice(2, H - 2), slice(2, RIDGE)), 2: (slice(2, H - 2), slice(RIDGE + 1, W - 2))}, (H, W))
-    depth, share = counts.fit_depth([read], [truth], ["lined-grey"])
+    depth, quality, share = counts.fit_depth([read], [truth], ["lined-grey"])
     assert depth == 13 / 255
     assert share == 1.0
+    found = areas.areas(street, edge, np.ones((H, W), bool), depth)        # the quality is that of the areas there
+    assert quality == counts.panoptic_summed([counts.panoptic_parts(found, truth)])["quality"]
+
+
+def _panoptic_truth(shape):
+    """Two key blocks, rows 5-14 and 25-34 by columns 5-54 (500 px each); the rest street; the last 5 columns with no
+    label."""
+    t = _truth({1: (slice(5, 15), slice(5, 55)), 2: (slice(25, 35), slice(5, 55))}, shape)
+    t.street[:, 55:] = handlabels.NONE
+    return t
+
+
+def test_panoptic_parts_on_known_answers():
+    shape = (40, 60)
+    truth = _panoptic_truth(shape)
+    same = (truth.area == 1).astype(np.int32)
+    assert counts.panoptic_parts(same, truth) == {"matched": 1, "overlap_sum": 1.0, "found_unmatched": 0,
+                                                  "key_unmatched": 1}
+    split = np.zeros(shape, np.int32)
+    split[5:15, 5:35], split[5:15, 35:55] = 1, 2          # block 1 in a 60% piece and a 40% piece
+    split[25:35, 5:55] = 3
+    got = counts.panoptic_parts(split, truth)
+    assert got["matched"] == 2 and got["overlap_sum"] == pytest.approx(1.6)
+    assert (got["found_unmatched"], got["key_unmatched"]) == (1, 0)
+    joined = np.zeros(shape, np.int32)
+    joined[5:35, 5:55] = 1                                 # one found area over both blocks and the street between
+    assert counts.panoptic_parts(joined, truth) == {"matched": 0, "overlap_sum": 0.0, "found_unmatched": 1,
+                                                    "key_unmatched": 2}
+    stray = (truth.area > 0).astype(np.int32) * np.where(np.arange(40)[:, None] < 20, 1, 2)
+    stray[18:22, 10:20] = 3                                # a stray found area on street ground
+    stray[0:3, 56:60] = 4                                  # a found area on px with no label: counts for nothing
+    got = counts.panoptic_parts(stray, truth)
+    assert got == {"matched": 2, "overlap_sum": 2.0, "found_unmatched": 1, "key_unmatched": 0}
+    spill = (truth.area > 0).astype(np.int32) * np.where(np.arange(40)[:, None] < 20, 1, 2)
+    spill[5:15, 55:60] = 1                                 # block 1's found area runs on over unlabelled px
+    assert counts.panoptic_parts(spill, truth)["overlap_sum"] == 2.0
+    summed = counts.panoptic_summed([got, counts.panoptic_parts(joined, truth)])
+    assert summed["quality"] == pytest.approx(2.0 / (2 + 2 / 2 + 2 / 2))
+    assert counts.panoptic_summed([counts.panoptic_parts(np.zeros(shape, np.int32), _truth({}, shape))])[
+        "quality"] is None
+
+
+def test_fit_depth_counts_stray_areas_the_share_of_blocks_found_cannot_see():
+    # two blocks (street chance 0) in street ground (0.6) with a small patch of 0.45 in the street between: a hollow
+    # 0.15 deep that is no street (under one half), so a shallow depth makes it a stray area; a deeper one does not
+    shape = (40, 60)
+    street = np.full(shape, 0.6)
+    street[4:16, 4:56] = street[24:36, 4:56] = 0.0
+    street[19:21, 28:30] = 0.45
+    read = (np.stack([street, np.zeros(shape)]).astype(np.float32), np.ones(shape, bool))
+    truth = _truth({1: (slice(4, 16), slice(4, 56)), 2: (slice(24, 36), slice(4, 56))}, shape)
+    depth, quality, share = counts.fit_depth([read], [truth], ["lined-grey"])
+    assert 0.15 < depth <= 0.6
+    shallow = areas.areas(street, np.zeros(shape), np.ones(shape, bool), 1 / 255)
+    deep = areas.areas(street, np.zeros(shape), np.ones(shape, bool), depth)
+    assert counts.blocks(shallow, truth)["extra"] == 1 and counts.blocks(deep, truth)["extra"] == 0
+    # the old score could not tell them apart: every block found at both
+    assert counts.blocks(shallow, truth)["found"] == counts.blocks(deep, truth)["found"] == 2 and share == 1.0
+    assert counts.panoptic_summed([counts.panoptic_parts(shallow, truth)])["quality"] < quality
 
 
 def test_edge_feet_measure_found_blocks_only():

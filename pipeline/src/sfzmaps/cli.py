@@ -1790,19 +1790,19 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     sizes, size_fields = None, {}
     if recipe.resize:
         try:
-            sizes, left_out, failed_check = data.print_sizes()
+            sizes, left_out, sheets_left_out = data.print_sizes()
         except (FileNotFoundError, ValueError, KeyError) as e:
             typer.echo(f"the print sizes: {said(e)}; nothing trained", err=True)
             raise typer.Exit(1) from None
         size_fields = {"print_sizes": data.size_summary(sizes), "print_sizes_left_out": left_out,
-                       "print_sizes_failed_check": {"count": len(failed_check), "sheets": failed_check},
-                       "training_items_on_failed_placements": [it.name for it, sid in zip(items, on_sheet)
-                                                               if f"{sid[0]}/{sid[1]}" in failed_check]}
+                       "print_sizes_sheets_left_out": {"count": len(sheets_left_out), "sheets": sheets_left_out},
+                       "training_items_on_sheets_left_out": [it.name for it, sid in zip(items, on_sheet)
+                                                             if f"{sid[0]}/{sid[1]}" in sheets_left_out]}
         typer.echo(f"print sizes: {sum(len(v) for v in sizes.values())} placed sheets of {len(sizes)} series, "
                    f"{min((min(v) for v in sizes.values()), default=math.nan):.2f}-"
                    f"{max((max(v) for v in sizes.values()), default=math.nan):.2f} ft per px; left out (no placed "
-                   f"sheet): {', '.join(left_out) or 'none'}; {len(failed_check)} sheet(s) left out for failing the "
-                   f"warp's placement check")
+                   f"sheet): {', '.join(left_out) or 'none'}; {len(sheets_left_out)} sheet(s) left out: "
+                   f"{', '.join(f'{k} ({v})' for k, v in sheets_left_out.items()) or 'none'}")
     out = pages.OUT / "runs" / run
     if look:
         typer.echo(str(train.write_noise_examples(items, recipe, out / "noise-examples.png", sizes=sizes)))
@@ -1828,11 +1828,12 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
                device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one).")
                ) -> None:
     """Count what the run's kept model finds on every `test` hand crop, at the watershed depth fitted on the `choose`
-    crops: how many of the answer key's blocks are found, joined, cut up, lost or held whole, how much of the answer
-    key's street and block ground it calls so, how far the answer key's block boundary lies from the nearest block
-    edge the model drew and how far each block edge the model drew lies from the nearest answer-key boundary, in feet;
-    per crop, per era and pooled (`find.counts`).  The answer key: block outlines marked
-    by hand on the scan, never shown to the model.  Writes data/find/runs/<run>/counts.json, each test crop's read
+    crops by panoptic quality (how well the found areas match the answer key's areas, counting stray areas and missed
+    ones): that quality; how many of the answer key's blocks are found, joined, cut up, lost or held whole, how much of
+    the answer key's street and block ground it calls so, how far the answer key's block boundary lies from the
+    nearest block edge the model drew and how far each block edge the model drew lies from the nearest answer-key
+    boundary, in feet; per crop, per era and pooled (`find.counts`).  The answer key: block outlines marked by hand on
+    the scan, never shown to the model.  Writes data/find/runs/<run>/counts.json, each test crop's read
     (reads/test/<series>__<crop>.npz) and picture (look/test/<series>__<crop>.png).  Exit status 1 when the model
     predates the two-answer finder, there is no choosing or no test crop, a choosing crop lies on a test crop's
     ground, or a crop cannot be read.  $0."""
@@ -1867,8 +1868,10 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
     f = folder / "counts.json"
     f.write_text(json.dumps(out, indent=1, allow_nan=False) + "\n")
     t = out["test"]
-    typer.echo(f"depth {out['depth_level']}/255 (choosing crops find {out['choose']['found_share']:.3f} of their "
-               f"blocks, mean over eras); test crops find {t['found_share']:.3f}")
+    typer.echo(f"depth {out['depth_level']}/255 (choosing crops: panoptic quality "
+               f"{out['choose']['panoptic_quality']:.3f}; they find {out['choose']['found_share']:.3f} of their "
+               f"blocks); test crops: panoptic quality {t['panoptic']['mean_over_eras']:.3f}, find "
+               f"{t['found_share']:.3f} (means over eras)")
     for era, c in t["eras"].items():
         g, b, h = t["ground"]["eras"][era], t["boundary_feet"]["eras"][era], t["whole"]["eras"][era]
         m = t["model_edge_feet"]["eras"][era]
@@ -1876,7 +1879,10 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
                 f"median {m['median']:.1f} ft, 90% {m['p90']:.1f} ft, 99% {m['p99']:.1f} ft")
         feet = "no model edge" if b["median"] is None else (f"median {b['median']:.1f} ft, 90% {b['p90']:.1f} ft, "
                                                             f"99% {b['p99']:.1f} ft")
-        typer.echo(f"  {era}: {c}; held whole {h['whole']} of {h['blocks']}; street px called street "
+        pq = t["panoptic"]["eras"][era]["quality"]
+        quality = "none" if pq is None else f"{pq:.3f}"
+        typer.echo(f"  {era}: {c}; panoptic quality {quality}; held whole"
+                   f" {h['whole']} of {h['blocks']}; street px called street "
                    f"{g['street_share']}, area px called not street {g['area_share']}; answer key's block boundary "
                    f"to the nearest block edge the model drew: {feet}; block edge the model drew to the nearest "
                    f"answer-key boundary: {back}")

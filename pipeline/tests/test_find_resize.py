@@ -336,8 +336,8 @@ def test_the_run_log_holds_the_sizes_and_the_factors(tmp_path, monkeypatch):
     log = json.loads((tmp_path / "find" / "runs" / "r" / "log.json").read_text())
     assert log["print_sizes"] == {"s": {"count": 2, "least": 2.0, "median": 2.5, "most": 3.0}}
     assert log["print_sizes_left_out"] == ["t"] and log["factors"]["median"] == 1.5
-    assert log["print_sizes_failed_check"] == {"count": 1, "sheets": {"s/A": "misplaced"}}
-    assert log["training_items_on_failed_placements"] == ["train/s/A__100_100_60_40"]
+    assert log["print_sizes_sheets_left_out"] == {"count": 1, "sheets": {"s/A": "misplaced"}}
+    assert log["training_items_on_sheets_left_out"] == ["train/s/A__100_100_60_40"]
     assert seen["recipe"].resize and seen["sizes"] == {"s": [2.0, 3.0]} and seen["ft"] == [pytest.approx(4.0)]
     r = CliRunner().invoke(app, ["find", "train", "--run", "q", "--device", "cpu", "--no-chooser", "--no-resize"])
     assert r.exit_code == 0, r.output
