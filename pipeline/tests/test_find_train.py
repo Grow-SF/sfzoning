@@ -381,7 +381,7 @@ def test_train_reports_a_series_with_no_source_row_and_a_refused_fit_without_a_t
     assert "series 'u' has no row in" in r.output and "1 training crop(s) could not be read" in r.output, r.output
     f.unlink()
     _crop_file("train", "s", "A", (100, 100, 60, 40), **marks)
-    monkeypatch.setattr(data, "print_sizes", lambda: ({"s": [4.0]}, []))   # no real sheet measured
+    monkeypatch.setattr(data, "print_sizes", lambda: ({"s": [4.0]}, [], {}))   # no real sheet measured
 
     def refused(*a, **k):                   # as `train.fit` refuses, for example, an item smaller than a tile
         raise ValueError("s/A: 40 x 60 px is smaller than a 256 px tile")

@@ -1712,11 +1712,11 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     """Train the finder on the named lot-labelled sheets (`sfzmaps find labels`) and every `train` hand crop, the
     ground under the choosing and test crops left out: data/find/runs/<run>/model.pt and log.json (the recipe, device,
     commit, items, curve, and the print sizes measured and the factors drawn).  Each tile is shown at the print size of
-    a sheet the finder is used on, measured from every placed sheet of every series (`find.data.print_sizes`; with
-    --no-resize, at its item's own size).  At every checkpoint the `choose` crops are read and the weights kept are
-    those whose closed areas find the most printed blocks (`find.counts.chooser`; with --no-chooser, the last step's).
-    Every training and choosing crop is read first; if any cannot be, each is reported with its path and nothing is
-    trained (exit status 1), as when there is no choosing crop.  $0."""
+    a sheet the finder is used on, measured from every sheet of every series whose placement passes the warp's own
+    check (`find.data.print_sizes`; with --no-resize, at its item's own size).  At every checkpoint the `choose` crops
+    are read and the weights kept are those whose closed areas find the most printed blocks (`find.counts.chooser`;
+    with --no-chooser, the last step's).  Every training and choosing crop is read first; if any cannot be, each is
+    reported with its path and nothing is trained (exit status 1), as when there is no choosing crop.  $0."""
     import dataclasses
     import logging
     import math
@@ -1749,16 +1749,19 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     def said(e: Exception) -> str:                     # a KeyError's message is its first argument (str() quotes it)
         return str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
 
-    items, failed = [], 0
+    items, failed, on_sheet = [], 0, []                # on_sheet: each item's (series, sheet)
     try:
         for sid in sids:
             items.append(data.sheet_labelled(sid))
+            on_sheet.append(sid)
     except (FileNotFoundError, ValueError, KeyError) as e:
         typer.echo(said(e), err=True)
         raise typer.Exit(1) from None
     for path, s in handlabels.crop_files(("train",)):
         try:
-            items.append(data.crop_labelled(handlabels.read_crop(path, s)))
+            crop = handlabels.read_crop(path, s)
+            items.append(data.crop_labelled(crop))
+            on_sheet.append((crop.series, crop.sheet))
         except (ValueError, FileNotFoundError, KeyError) as e:
             failed += 1
             msg = said(e)
@@ -1785,15 +1788,19 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     sizes, size_fields = None, {}
     if recipe.resize:
         try:
-            sizes, left_out = data.print_sizes()
+            sizes, left_out, failed_check = data.print_sizes()
         except (FileNotFoundError, ValueError, KeyError) as e:
             typer.echo(f"the print sizes: {said(e)}; nothing trained", err=True)
             raise typer.Exit(1) from None
-        size_fields = {"print_sizes": data.size_summary(sizes), "print_sizes_left_out": left_out}
+        size_fields = {"print_sizes": data.size_summary(sizes), "print_sizes_left_out": left_out,
+                       "print_sizes_failed_check": {"count": len(failed_check), "sheets": failed_check},
+                       "training_items_on_failed_placements": [it.name for it, sid in zip(items, on_sheet)
+                                                               if f"{sid[0]}/{sid[1]}" in failed_check]}
         typer.echo(f"print sizes: {sum(len(v) for v in sizes.values())} placed sheets of {len(sizes)} series, "
                    f"{min((min(v) for v in sizes.values()), default=math.nan):.2f}-"
                    f"{max((max(v) for v in sizes.values()), default=math.nan):.2f} ft per px; left out (no placed "
-                   f"sheet): {', '.join(left_out) or 'none'}")
+                   f"sheet): {', '.join(left_out) or 'none'}; {len(failed_check)} sheet(s) left out for failing the "
+                   f"warp's placement check")
     out = pages.OUT / "runs" / run
     if look:
         typer.echo(str(train.write_noise_examples(items, recipe, out / "noise-examples.png", sizes=sizes)))

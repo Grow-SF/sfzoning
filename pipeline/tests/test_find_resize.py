@@ -274,12 +274,34 @@ def test_the_sizes_are_each_placed_sheets_and_a_series_with_none_is_named(tmp_pa
         return Flat(scale[sid])
     monkeypatch.setattr(lotlabels, "placement", placement)
     monkeypatch.setattr(lotlabels, "page_shape", lambda sid: (300, 200))
-    sizes, left_out = data.print_sizes()
+    monkeypatch.setattr(lotlabels, "placement_check", lambda sid: {"passed": True, "reason": None})
+    sizes, left_out, failed = data.print_sizes()
     assert sizes == {"a": [pytest.approx(2.0)], "b": [pytest.approx(3.0), pytest.approx(3.5)]} and left_out == ["c"]
+    assert failed == {}
     assert data.size_summary(sizes) == {"a": {"count": 1, "least": 2.0, "median": 2.0, "most": 2.0},
                                         "b": {"count": 2, "least": 3.0, "median": 3.25, "most": 3.5}}
     tiles = train.Tiles([_crop_item()], RECIPE, sizes)
     assert {tiles.target()[0] for _ in range(200)} == {"a", "b"}
+
+
+def test_a_sheet_whose_placement_fails_the_warps_check_gives_no_size(tmp_path, monkeypatch):
+    f = tmp_path / "label_sources.csv"
+    f.write_text("series,era,lots\na,hatched-grey,\nb,lined-grey,\nd,lined-grey,\n")
+    monkeypatch.setattr(pages, "SOURCES", f)
+    found = {"a": ["a1"], "b": ["b1", "b2"], "d": ["d1"]}
+    monkeypatch.setattr(pages, "sheets", lambda series=None: [(series, h) for h in found[series]])
+    scale = {("a", "a1"): 2.0, ("b", "b1"): 3.0, ("b", "b2"): 12.0, ("d", "d1"): 5.0}
+    monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(scale[sid]))
+    monkeypatch.setattr(lotlabels, "page_shape", lambda sid: (300, 200))
+    verdict = {("b", "b2"): {"passed": False, "reason": "misplaced"},       # the warp's own check
+               ("d", "d1"): {"passed": False, "reason": "too_few_matches"}}
+    monkeypatch.setattr(lotlabels, "placement_check", lambda sid: verdict.get(sid, {"passed": True, "reason": None}))
+    sizes, left_out, failed = data.print_sizes()
+    assert sizes == {"a": [pytest.approx(2.0)], "b": [pytest.approx(3.0)]}
+    assert left_out == ["d"] and failed == {"b/b2": "misplaced", "d/d1": "too_few_matches"}
+    tiles = train.Tiles([_crop_item()], RECIPE, sizes)
+    drawn = Counter(tiles.target() for _ in range(400))
+    assert set(drawn) == {("a", 2.0), ("b", 3.0)}                         # b only at b1's size; d never
 
 
 def test_the_run_log_holds_the_sizes_and_the_factors(tmp_path, monkeypatch):
@@ -300,7 +322,7 @@ def test_the_run_log_holds_the_sizes_and_the_factors(tmp_path, monkeypatch):
     d.mkdir(parents=True)
     (d / "A__100_100_60_40.json").write_text(json.dumps({"box": list(box), "notes": "", "drawn_by": "",
                                                         "street": [[110, 120]], "blocks": [[120, 104], [120, 135]]}))
-    monkeypatch.setattr(data, "print_sizes", lambda: ({"s": [2.0, 3.0]}, ["t"]))
+    monkeypatch.setattr(data, "print_sizes", lambda: ({"s": [2.0, 3.0]}, ["t"], {"s/A": "misplaced"}))
     seen = {}
 
     def fit(items, recipe, device, on_checkpoint=None, sizes=None):
@@ -313,6 +335,8 @@ def test_the_run_log_holds_the_sizes_and_the_factors(tmp_path, monkeypatch):
     log = json.loads((tmp_path / "find" / "runs" / "r" / "log.json").read_text())
     assert log["print_sizes"] == {"s": {"count": 2, "least": 2.0, "median": 2.5, "most": 3.0}}
     assert log["print_sizes_left_out"] == ["t"] and log["factors"]["median"] == 1.5
+    assert log["print_sizes_failed_check"] == {"count": 1, "sheets": {"s/A": "misplaced"}}
+    assert log["training_items_on_failed_placements"] == ["train/s/A__100_100_60_40"]
     assert seen["recipe"].resize and seen["sizes"] == {"s": [2.0, 3.0]} and seen["ft"] == [pytest.approx(4.0)]
     r = CliRunner().invoke(app, ["find", "train", "--run", "q", "--device", "cpu", "--no-chooser", "--no-resize"])
     assert r.exit_code == 0, r.output

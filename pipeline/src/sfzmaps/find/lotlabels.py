@@ -118,6 +118,15 @@ def ft_per_px(tr, box: tuple[int, int, int, int]) -> float:
     return float(np.mean(feet / np.array([w, h, w, h], float)))
 
 
+def placement_check(sid: SheetId) -> dict | None:
+    """The warp's own verdict on the sheet's placement, as it records it (`placement_check` in
+    data/warp/<series>/<sheet>/scores.json: `passed`, `reason`); None when it recorded none."""
+    f = PLACEMENTS["warp"] / sid[0] / sid[1] / "scores.json"
+    if not f.is_file():
+        return None
+    return json.loads(f.read_text()).get("placement_check")
+
+
 def page_ft_per_px(tr, shape: tuple[int, int]) -> float:
     """`ft_per_px` over the whole page of `shape` (its box, centred on the page's centre): a sheet's print size."""
     return ft_per_px(tr, (0, 0, shape[1], shape[0]))

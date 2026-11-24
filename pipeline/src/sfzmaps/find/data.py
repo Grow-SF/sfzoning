@@ -121,11 +121,13 @@ def crop_labelled(crop: handlabels.Crop) -> Labelled:
                     street, street_w, edge, None, left_out, crop.set, ft_per_px=scale)
 
 
-def print_sizes(which: str = "warp") -> tuple[dict[str, list[float]], list[str]]:
+def print_sizes(which: str = "warp") -> tuple[dict[str, list[float]], list[str], dict[str, str | None]]:
     """The print sizes the finder is used on: for every series of the label sources (`pages.sources`), in order, the
     ft per px over the whole page (`lotlabels.page_ft_per_px`) of each of its sheets (`pages.sheets`: duplicate scans
-    left out) that has a placement `which` on disk; and the series with no such sheet, left out."""
-    sizes, left_out = {}, []
+    left out) that has a placement `which` on disk that the warp's own check passes (`lotlabels.placement_check`; a
+    sheet the warp recorded no verdict for was not judged misplaced and is kept).  Also the series with no such
+    sheet, left out, and the sheets left out for failing the check ("series/sheet" -> the warp's reason)."""
+    sizes, left_out, failed = {}, [], {}
     for series in pages.sources():
         found = []
         for sid in pages.sheets(series):
@@ -133,12 +135,16 @@ def print_sizes(which: str = "warp") -> tuple[dict[str, list[float]], list[str]]
                 tr = lotlabels.placement(sid, which)
             except FileNotFoundError:
                 continue
+            check = lotlabels.placement_check(sid)
+            if check is not None and check.get("passed") is False:
+                failed[f"{sid[0]}/{sid[1]}"] = check.get("reason")
+                continue
             found.append(lotlabels.page_ft_per_px(tr, lotlabels.page_shape(sid)))
         if found:
             sizes[series] = found
         else:
             left_out.append(series)
-    return sizes, left_out
+    return sizes, left_out, failed
 
 
 def size_summary(sizes: dict[str, list[float]]) -> dict[str, dict]:
