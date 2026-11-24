@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 
 from find_fixtures import (EAST, GRID_COLS, GRID_ROWS, ROWS, SHAPE, SPLIT, STREET, WEST, Flat, blocks_world,
                            lines_world, lots_world)
-from sfzmaps.find import cuts, lotlabels, pages
+from sfzmaps.find import cuts, drawn, lotlabels, pages
 from sfzmaps.frame import data as fdata
 from sfzmaps.solver import grid
 
@@ -134,15 +134,29 @@ def test_doubling_the_cut_length_changes_nothing_that_matters(ground):
         assert (np.abs(s2 - s1) < 1e-3 * s1).all()
 
 
-def _sheet_world(tmp_path, monkeypatch, sources: str, page: np.ndarray | None = None):
-    """A one-sheet series `s` on disk: the page `page` (None: white) of PAGE, its frame cut keeping all but a 10 px
-    border, the label sources `sources`, a flat placement and a spread of SIGMA."""
+def ink_outline(page: np.ndarray, cols: tuple[int, int], rows: tuple[int, int], sides: str = "wnes") -> None:
+    """Draw a block's outline on `page` (grid columns and rows, ends exclusive, through `Flat(FT_PER_PX)`): a 1 px line
+    just outside each of its `sides` (w, n, e, s), where the block-edge cuts across that side cross."""
+    (c0, c1), (r0, r1) = cols, rows
+    if "w" in sides:
+        page[2 * r0 - 1:2 * r1 + 1, 2 * c0 - 1] = 0
+    if "e" in sides:
+        page[2 * r0 - 1:2 * r1 + 1, 2 * c1] = 0
+    if "n" in sides:
+        page[2 * r0 - 1, 2 * c0 - 1:2 * c1 + 1] = 0
+    if "s" in sides:
+        page[2 * r1, 2 * c0 - 1:2 * c1 + 1] = 0
+
+
+def _sheet_world(tmp_path, monkeypatch, sources: str, page: np.ndarray | None = None, margin: int = 10):
+    """A one-sheet series `s` on disk: the page `page` (None: white) of PAGE, its frame cut keeping all but a `margin`
+    px border, the label sources `sources`, a flat placement and a spread of SIGMA."""
     work, frame = tmp_path / "work", tmp_path / "frame"
     (work / "s" / "s-p01").mkdir(parents=True)
     page = np.full(PAGE, 255, np.uint8) if page is None else page
     Image.fromarray(page, "L").save(work / "s" / "s-p01" / "page.png")
     cut = np.full(PAGE, 255, np.uint8)
-    cut[10:-10, 10:-10] = 0
+    cut[margin:-margin, margin:-margin] = 0
     (frame / "s" / "s-p01").mkdir(parents=True)
     Image.fromarray(cut, "L").save(frame / "s" / "s-p01" / "outside.png")
     (tmp_path / "label_sources.csv").write_text("series,era,lots,zoning_borders\n" + sources)
@@ -166,7 +180,10 @@ def test_hatched_series_say_no_zoning_border_everywhere(tmp_path, monkeypatch):
 
 
 def test_table_series_label_edges_and_zoning_borders(tmp_path, monkeypatch, ground):
-    keep = _sheet_world(tmp_path, monkeypatch, "s,lined-1bit,year,zoning\n")
+    page = np.full(PAGE, 255, np.uint8)
+    for cols in (WEST, EAST):
+        ink_outline(page, cols, ROWS)
+    keep = _sheet_world(tmp_path, monkeypatch, "s,lined-1bit,year,zoning\n", page)
     monkeypatch.setattr(lotlabels, "ground", lambda series: ground)
     monkeypatch.setattr(lotlabels, "series_codes", lambda series: FIRST)
     lab = lotlabels.sheet_labels(("s", "s-p01"))
@@ -249,38 +266,108 @@ def test_the_close_up_is_the_window_with_the_most_cut_px():
     assert drawn.sum() == 4 * 30                                          # the 30 cut px in it, each 2 x 2
 
 
-def test_labels_fade_where_the_sheet_draws_nothing(tmp_path, monkeypatch):
+
+def test_an_edge_cut_without_ink_is_not_used(ground):
+    c = cuts.edge_cuts(ground, Flat(FT_PER_PX), PAGE, np.ones(PAGE, bool), SIGMA)
+    lum = np.ones(PAGE, np.float32)
+    lum[:, 2 * WEST[0] - 1] = 0                                   # only the west block's west side is drawn
+    used, counts = drawn.use(c, lum, np.ones(SHAPE, bool))
+    west_side = np.bincount(c.cut, c.px % PAGE[1] == 2 * WEST[0]) > 0
+    assert (used.weight[~west_side] == 0).all() and counts["edge_dropped"] == int((~west_side).sum())
+
+
+def test_an_edge_cut_with_ink_is_used(ground):
+    c = cuts.edge_cuts(ground, Flat(FT_PER_PX), PAGE, np.ones(PAGE, bool), SIGMA)
+    page = np.full(PAGE, 255, np.uint8)
+    for cols in (WEST, EAST):
+        ink_outline(page, cols, ROWS)
+    used, counts = drawn.use(c, page.astype(np.float32) / 255, np.ones(SHAPE, bool))
+    assert (used.weight == 1).all() and counts["edge_used"] == len(c.answer) and counts["edge_dropped"] == 0
+
+
+def _labelled(tmp_path, monkeypatch, ground, page, codes):
+    """`sheet_labels` of a zoning-table series with lots `ground`, page `page` and lot codes `codes`, the frame cut
+    leaving room for the block-edge cuts of `blocks_world`'s top row; and the street-or-not weights before the rule."""
+    keep = _sheet_world(tmp_path, monkeypatch, "s,lined-1bit,year,zoning\n", page, margin=2)
+    monkeypatch.setattr(lotlabels, "ground", lambda series: ground)
+    monkeypatch.setattr(lotlabels, "series_codes", lambda series: codes)
+    before = lotlabels.page_ground(ground, Flat(FT_PER_PX), PAGE, keep).weight
+    return lotlabels.sheet_labels(("s", "s-p01")), before
+
+
+def test_ground_by_a_bare_block_side_has_no_label(tmp_path, monkeypatch, ground):
+    page = np.full(PAGE, 255, np.uint8)
+    ink_outline(page, WEST, ROWS, "wn")                          # the west block: its west and north sides only
+    ink_outline(page, EAST, ROWS)
+    lab, before = _labelled(tmp_path, monkeypatch, ground, page, FIRST)
+    rows = slice(2 * ROWS[0] + 20, 2 * ROWS[1] - 20)             # well away from the north and south sides
+    by_ink = (rows, slice(2 * WEST[0] + 1, 2 * WEST[0] + 7))     # block px by the inked west side
+    by_bare = (rows, slice(2 * WEST[1] - 7, 2 * STREET[0] + 3))  # block and street px by the bare east side
+    by_east = (rows, slice(2 * STREET[1] - 3, 2 * STREET[1]))    # street px by the east block's inked west side
+    for box in (by_ink, by_east):
+        assert (before[box] > 0).all() and np.array_equal(lab["weight"][box], before[box])
+    assert (before[by_bare] > 0).all() and (lab["weight"][by_bare] == 0).all()
+    assert not lab["edge_none"][by_bare].any() and not lab["border_none"][by_bare].any()
+    inner = (slice(2 * ROWS[0] + 12, 2 * SPLIT - 12), slice(2 * WEST[0] + 6, 2 * WEST[0] + 14))
+    assert lab["border_none"][inner].all()                       # nearest the inked west side: still labelled
+    c = lab["cuts"]
+    mean_x = np.bincount(c.cut, c.px % PAGE[1]) / np.bincount(c.cut)
+    edge = c.answer == cuts.EDGE
+    east_side = edge & (np.abs(mean_x - 2 * WEST[1]) < 1)
+    assert east_side.any() and (c.weight[east_side] == 0).all()
+
+
+def test_a_crossing_cut_needs_ink_on_it(tmp_path, monkeypatch, ground):
+    page = np.full(PAGE, 255, np.uint8)
+    for cols in (WEST, EAST):
+        ink_outline(page, cols, ROWS)
+    weights = []
+    for line in (True, False):
+        p = page.copy()
+        if line:
+            p[2 * SPLIT, 2 * WEST[0]:2 * WEST[1]] = 0            # the lot line between the west block's two lots
+        lab, _ = _labelled(tmp_path / str(line), monkeypatch, ground, p, VARIANT)
+        c = lab["cuts"]
+        rows, cols = np.divmod(c.px, PAGE[1])
+        n = len(c.answer)
+        length = np.bincount(c.cut, minlength=n)
+        mid_y = np.bincount(c.cut, rows, minlength=n) / length
+        mid_x = np.bincount(c.cut, cols, minlength=n) / length
+        on_line = (c.answer == cuts.BORDER) & (length == 2 * R + 1) & (np.abs(mid_y - 2 * SPLIT) < 1)
+        west = on_line & (mid_x < 2 * WEST[1]) & c.says           # A beside B: a zoning border crosses
+        east = on_line & (mid_x > 2 * EAST[0]) & ~c.says          # B beside B: none does
+        assert west.sum() == WEST[1] - WEST[0] and east.sum() == EAST[1] - EAST[0]
+        weights.append((c.weight[west], c.weight[east]))
+    (west_line, east_line), (west_bare, east_bare) = weights
+    assert (west_line == 1).all() and (west_bare == 0).all()
+    assert (east_line == 1).all() and (east_bare == 1).all()
+
+
+def test_no_label_where_the_sheet_draws_nothing(tmp_path, monkeypatch):
     lots, lines = blocks_world()
     g = lotlabels.build_ground(lots, lines, SHAPE)
     drawn_cols = 3                                          # the sheet draws the blocks of columns 0-2, not 3-4
     page = np.full(PAGE, 255, np.uint8)
-    for c0, c1 in GRID_COLS[:drawn_cols]:
-        for r0, r1 in GRID_ROWS:                            # each outline 2 px wide, on the block's side
-            page[2 * r0 - 1:2 * r1 + 1, [2 * c0 - 1, 2 * c0, 2 * c1 - 1, 2 * c1]] = 0
-            page[[2 * r0 - 1, 2 * r0, 2 * r1 - 1, 2 * r1], 2 * c0 - 1:2 * c1 + 1] = 0
-    keep = _sheet_world(tmp_path, monkeypatch, "s,lined-1bit,year,zoning\n", page)
+    for cols in GRID_COLS[:drawn_cols]:
+        for rows in GRID_ROWS:
+            ink_outline(page, cols, rows)
     codes = np.array(["A"] * 4 * drawn_cols + ["B"] * 4 * (len(GRID_COLS) - drawn_cols))
-    monkeypatch.setattr(lotlabels, "ground", lambda series: g)
-    monkeypatch.setattr(lotlabels, "series_codes", lambda series: codes)
-    lab = lotlabels.sheet_labels(("s", "s-p01"))
-    before = lotlabels.page_ground(g, Flat(FT_PER_PX), PAGE, keep).weight
+    lab, before = _labelled(tmp_path, monkeypatch, g, page, codes)
 
     split = GRID_COLS[drawn_cols - 1][1] + GRID_COLS[drawn_cols][0]        # page x of the street's middle between
     x = np.arange(PAGE[1])[None, :].repeat(PAGE[0], 0)
     labelled = before > 0
-    undrawn, drawn_side = labelled & (x > split + 4), labelled & (x < split - 4)
-    assert undrawn.any() and drawn_side.any()
-    assert (lab["weight"][undrawn] < 0.01).all()           # the undrawn blocks and the streets beside them
-    assert (lab["weight"][drawn_side] > 0.99 * before[drawn_side]).all()
+    bare, inked = labelled & (x > split), labelled & (x < split)
+    assert bare.any() and inked.any()
+    assert (lab["weight"][bare] == 0).all() and np.array_equal(lab["weight"][inked], before[inked])
+    assert not lab["edge_none"][x > split].any() and not lab["border_none"][x > split].any()
+    assert lab["edge_none"][inked].any() and lab["border_none"][inked].any()
 
     c = lab["cuts"]
     mean_x = np.bincount(c.cut, c.px % PAGE[1]) / np.bincount(c.cut)
     edge, border = c.answer == cuts.EDGE, c.answer == cuts.BORDER
-    assert (edge & (mean_x > split)).any() and (c.weight[edge & (mean_x > split)] < 0.01).all()
-    assert (edge & (mean_x < split)).any() and (c.weight[edge & (mean_x < split)] > 0.99).all()
-    across = border & c.says                               # A beside B: a drawn block beside an undrawn one
-    assert across.any() and (c.weight[across] < 0.01).all()
-    both_drawn = border & ~c.says & (mean_x < split)
-    assert both_drawn.any() and (c.weight[both_drawn] > 0.99).all()
-    p = lab["drawn"]
-    assert len(p) == 20 and (np.sort(p)[:8] < 0.01).all() and (np.sort(p)[8:] > 0.99).all()
+    assert (edge & (mean_x > split)).any() and (c.weight[edge & (mean_x > split)] == 0).all()
+    assert (c.weight[edge & (mean_x < split)] == 1).all()
+    touching_bare = border & (c.says | (mean_x > split))   # A beside B, and B beside B: each touches a bare block
+    assert touching_bare.any() and (c.weight[touching_bare] == 0).all()
+    assert (c.weight[border & ~c.says & (mean_x < split)] == 1).all()

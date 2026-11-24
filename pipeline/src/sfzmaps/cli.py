@@ -1602,7 +1602,7 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
 
     import numpy as np
 
-    from sfzmaps.find import cuts, look as drawn, lotlabels, pages
+    from sfzmaps.find import cuts, look as pictures, lotlabels, pages
     from sfzmaps.solver.hatchnet.data import NOT_STREET, STREET, UNKNOWN
     if placement not in lotlabels.PLACEMENTS:
         raise typer.BadParameter(f"expected one of {', '.join(lotlabels.PLACEMENTS)}", param_hint="--placement")
@@ -1631,13 +1631,16 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
             ("no zoning border crosses", (c.answer == cuts.BORDER) & ~c.says)))
         typer.echo(f"{h}: sigma {lab['sigma']:.3f} px; cuts: {counts}; {time.time() - t:.1f} s; "
                    f"{lotlabels.sheet_path((series, h))}")
-        fit, p = lab["drawn_fit"], lab["drawn"]
-        typer.echo(f"  blocks drawn on the sheet: {fit['groups']} group(s), pi {fit['pi']:.4f}, q_drawn "
-                   f"{fit['q_drawn']:.4f}, q_blank {fit['q_blank']:.4f}; of {len(p):,} blocks, chance > 0.99: "
-                   f"{int((p > 0.99).sum()):,}, < 0.01: {int((p < 0.01).sum()):,}, between: "
-                   f"{int(((p >= 0.01) & (p <= 0.99)).sum()):,}")
+        n = lab["counts"]
+        if n:
+            kept = n["labelled_px_after"] / max(1, n["labelled_px_before"])
+            typer.echo(f"  where the sheet draws ink: edge cuts used {n['edge_used']:,}, dropped "
+                       f"{n['edge_dropped']:,}; 'crosses' used {n['crosses_used']:,}, dropped for no ink on the cut "
+                       f"{n['crosses_dropped_no_ink_on_cut']:,}, for a bare block side "
+                       f"{n['crosses_dropped_bare_side']:,}; 'none' used {n['none_used']:,}, dropped "
+                       f"{n['none_dropped']:,}; labelled px kept {kept:.3f}")
         if look:
-            for f in drawn.write((series, h), pages.load_scan((series, h)), lab):
+            for f in pictures.write((series, h), pages.load_scan((series, h)), lab):
                 typer.echo(f"  {f}")
 
 
