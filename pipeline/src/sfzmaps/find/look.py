@@ -8,6 +8,9 @@ sheet's name at the top.  `busiest` finds the close-up: the window holding the m
 `crop`: a hand crop (`handlabels`) and its labels side by side, both enlarged ZOOM times, with page-px rulers to read
 coordinates off for the crop file.  `ruled`: a close-up of the scan with rulers and a grid, to draw crops from.
 
+`read_picture`: a crop as the finder read it (`find.counts`): the scan, the three chances and the closed areas, the
+hand blocks outlined by what became of them.
+
 Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/, `write_crop` to
 data/find/look/crops/<set>/, `write_ruled` to data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
 from __future__ import annotations
@@ -16,6 +19,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+from scipy import ndimage
 
 from sfzmaps.find import cuts, handlabels, pages
 from sfzmaps.find.pages import SheetId
@@ -294,3 +298,74 @@ def write_ruled(sid: SheetId, lum_crop: np.ndarray, box: tuple[int, int, int, in
     out.append(folder / "whole.png")
     cv2.imwrite(str(out[-1]), ruled(lum_crop, box, ZOOM))
     return out
+
+
+# The picture of a read crop (`read_picture`).  BGR.  The found areas' tints hold no green, red, orange or purple,
+# the colours of the hand blocks' outcomes.
+OUTCOME_COLOUR = {"found": (0, 170, 0), "joined": (0, 0, 255), "cut_up": (0, 140, 255), "lost": (200, 0, 170)}
+FOUND_TINTS = ((255, 90, 0), (230, 200, 60), (40, 160, 160), (0, 220, 255), (160, 120, 40))
+FOUND_TINT = 0.35           # picture setting: how strongly a found area tints the scan
+SIDE = (120, 40, 0)         # picture setting: the found areas' sides, dark blue
+OUTLINE = 2                 # picture setting: a hand block's outline width, px
+LABEL = 30                  # picture setting: the height of the white strip naming a 1,000 px panel, px
+
+
+def _grey(a: np.ndarray) -> np.ndarray:
+    return np.repeat(np.clip(np.rint(np.asarray(a, np.float32) * 255), 0, 255).astype(np.uint8)[..., None], 3, axis=2)
+
+
+def _named(panel: np.ndarray, name: str) -> np.ndarray:
+    scale = max(0.5, panel.shape[1] / 1000)
+    line = int(round(LABEL * 1.6 * scale))
+    strip = np.full((line, panel.shape[1], 3), 255, np.uint8)
+    cv2.putText(strip, name, (6, line - int(round(10 * scale))), cv2.FONT_HERSHEY_SIMPLEX, 1.1 * scale, BLACK,
+                max(1, int(round(2 * scale))), cv2.LINE_AA)
+    return np.vstack([strip, panel])
+
+
+def _key_tints(band, box):
+    x0, y0, x1, y1 = box
+    step = max(1, (x1 - x0) // len(FOUND_TINTS))
+    for i, colour in enumerate(FOUND_TINTS):
+        band[y0:y1, x0 + i * step:x0 + (i + 1) * step] = colour
+
+
+READ_KEY = (("panels: the scan; the chance of street, of a block edge and of a zoning border (black 1, white 0); the "
+             "found areas over the scan", WHITE),
+            ("found areas: each tinted its own colour, their sides dark blue", _key_tints),
+            ("hand block outlines: green = found", OUTCOME_COLOUR["found"]),
+            ("red = joined (the found area holding most of it lies mostly outside it)", OUTCOME_COLOUR["joined"]),
+            ("orange = cut up among found areas", OUTCOME_COLOUR["cut_up"]),
+            ("purple = lost (most of it in no found area)", OUTCOME_COLOUR["lost"]))
+
+
+def read_picture(lum: np.ndarray, chances: np.ndarray, found: np.ndarray, truth: handlabels.CropLabels,
+                 status: dict[int, str], title: str) -> np.ndarray:
+    """The picture (BGR uint8) of a crop's read, side by side at the scan's own size: the scan `lum` (1 paper, 0 ink);
+    the chances (3, h, w) of street, block edge and zoning border as grey (black 1, white 0), each named; and the found
+    areas `found` tinted over the scan with their sides, each hand block outlined in its outcome's colour (`status`,
+    by hand area number: `OUTCOME_COLOUR`); a key and `title` above."""
+    scan = _grey(lum)
+    panels = [_named(scan, "the scan")]
+    for i, name in enumerate(("street", "block edge", "zoning border")):
+        panels.append(_named(_grey(1 - chances[i]), f"the chance of {name}"))
+    over = scan.astype(np.float32)
+    for k in range(1, int(found.max(initial=0)) + 1):
+        _paint(over, found == k, FOUND_TINTS[(k - 1) % len(FOUND_TINTS)], FOUND_TINT)
+    over = np.clip(np.rint(over), 0, 255).astype(np.uint8)
+    h, w = found.shape
+    padded = np.pad(found, 1, mode="edge")
+    other = np.zeros(found.shape, bool)
+    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        other |= padded[1 + dy:1 + dy + h, 1 + dx:1 + dx + w] != found
+    over[(found > 0) & other] = SIDE
+    for i, outcome in sorted(status.items()):
+        block = truth.area == i
+        inner = ndimage.binary_erosion(block, iterations=OUTLINE, border_value=1)
+        over[block & ~inner] = OUTCOME_COLOUR[outcome]
+    panels.append(_named(over, "the found areas; hand blocks outlined by outcome"))
+    gap = np.full((panels[0].shape[0], GAP, 3), 255, np.uint8)
+    row = [panels[0]]
+    for p in panels[1:]:
+        row += [gap, p]
+    return _keyed(np.hstack(row), title, READ_KEY)

@@ -1728,13 +1728,20 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                no_noise: bool = typer.Option(False, "--no-noise", help="No print-and-scan noise on the tiles."),
                steps: int = typer.Option(None, "--steps", min=1, help="Engineering setting: train this many steps "
                                                                       "instead of the recipe's (a short check)."),
+               every: int = typer.Option(None, "--every", min=1, help="Engineering setting: steps between "
+                                                                      "checkpoints instead of the recipe's."),
+               no_chooser: bool = typer.Option(False, "--no-chooser", help="Engineering switch: keep the last "
+                                                                           "step's weights, reading no choosing "
+                                                                           "crop (a short check)."),
                device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one)."),
                look: bool = typer.Option(False, "--look", help="Also draw training tiles without and with noise "
                                                                "(data/find/runs/<run>/noise-examples.png).")) -> None:
     """Train the finder on the named lot-labelled sheets (`sfzmaps find labels`) and every `train` hand crop, the
-    ground under the choosing and test crops left out: data/find/runs/<run>/model.pt (the last step's weights) and
-    log.json (the recipe, device, commit, items, curve).  Every training crop is read first; if any cannot be, each
-    is reported with its path and nothing is trained (exit status 1).  $0."""
+    ground under the choosing and test crops left out: data/find/runs/<run>/model.pt and log.json (the recipe, device,
+    commit, items, curve).  At every checkpoint the `choose` crops are read and the weights kept are those whose
+    closed areas find the most printed blocks (`find.counts.chooser`; with --no-chooser, the last step's).  Every
+    training and choosing crop is read first; if any cannot be, each is reported with its path and nothing is trained
+    (exit status 1), as when there is no choosing crop.  $0."""
     import dataclasses
     import logging
     import subprocess
@@ -1744,7 +1751,7 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
 
     from sfzmaps import gpu
     from sfzmaps.build import git_head
-    from sfzmaps.find import data, handlabels, pages, train
+    from sfzmaps.find import counts, data, handlabels, pages, train
     from sfzmaps.solver import hatching
     from sfzmaps.solver.hatchnet.train import THREADS, default_device
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -1752,7 +1759,7 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
         raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
                                  param_hint="--run")
     recipe = train.Recipe()
-    recipe = dataclasses.replace(recipe, steps=steps or recipe.steps, unbroken=unbroken,
+    recipe = dataclasses.replace(recipe, steps=steps or recipe.steps, every=every or recipe.every, unbroken=unbroken,
                                  noise=0.0 if no_noise else recipe.noise,
                                  answers=tuple(a for a in recipe.answers if not (without_borders and a == "border")))
     device = device or default_device()
@@ -1781,6 +1788,14 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     if failed:
         typer.echo(f"{failed} training crop(s) could not be read; nothing trained", err=True)
         raise typer.Exit(1)
+    choosing, on_checkpoint = [], None
+    if not no_chooser:
+        try:
+            choosing = handlabels.crops(("choose",))
+            on_checkpoint = counts.chooser(choosing, device)
+        except (ValueError, FileNotFoundError) as e:
+            typer.echo(f"the choosing crops: {e}; nothing trained", err=True)
+            raise typer.Exit(1) from None
     if not items:
         typer.echo("nothing to train on", err=True)
         raise typer.Exit(1)
@@ -1796,13 +1811,59 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                              cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True).stdout.strip()
     t0 = time.perf_counter()
     with gpu.gpu_turn(True, device):
-        fitted = train.fit(items, recipe, device)
+        fitted = train.fit(items, recipe, device, on_checkpoint)
     fields = {"commit": git_head(), "uncommitted_changes_in_src": bool(changed), "torch": torch.__version__,
-              "threads": THREADS, "items": listed,
+              "threads": THREADS, "items": listed, "choosing_crops": [data.crop_name(c) for c in choosing] or None,
               "train_crops_left_out_as_reserved": {it.name: it.left_out for it in items if it.hand},
               "seconds": round(time.perf_counter() - t0, 1)}
     for f in train.save_run(out, fitted, recipe, fields):
         typer.echo(str(f))
+
+
+@find_app.command("count")
+def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/runs/<run>/model.pt) to count."),
+               device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one).")
+               ) -> None:
+    """Count what the run's kept model finds on every `test` hand crop, at the watershed depth fitted on the `choose`
+    crops: how many printed blocks are found, joined, cut up or lost, the found block edges' distance from the hand
+    ones in feet, and on the April 2000 table's series how many zoning-border statements it agrees with; per era and
+    pooled.  Writes data/find/runs/<run>/counts.json, each test crop's read (reads/test/<crop>.npz) and picture
+    (look/test/<crop>.png).  Exit status 1 when there is no choosing or no test crop, or a crop cannot be read.  $0."""
+    import json
+    import logging
+
+    import torch
+
+    from sfzmaps import gpu
+    from sfzmaps.find import counts, handlabels, pages
+    from sfzmaps.solver.hatchnet.train import default_device, settle_torch
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
+    folder = pages.OUT / "runs" / run
+    if not (folder / "model.pt").is_file():
+        typer.echo(f"{folder / 'model.pt'}: no model; train one with `sfzmaps find train --run {run}`", err=True)
+        raise typer.Exit(1)
+    device = device or default_device()
+    saved = torch.load(folder / "model.pt", map_location="cpu")
+    settle_torch()
+    try:
+        choose, test = handlabels.crops(("choose",)), handlabels.crops(("test",))
+        with gpu.gpu_turn(True, device):
+            out = counts.count(saved["state_dict"], choose, test, device, folder)
+    except (ValueError, FileNotFoundError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    out = {"run": run, "step": saved["step"], "device": str(device), **out}
+    f = folder / "counts.json"
+    f.write_text(json.dumps(out, indent=1, allow_nan=False) + "\n")
+    t = out["test"]
+    typer.echo(f"depth {out['depth_level']}/255 (choosing crops find {out['choose']['found_share']:.3f} of their "
+               f"blocks, mean over eras); test crops find {t['found_share']:.3f}")
+    for era, c in t["eras"].items():
+        typer.echo(f"  {era}: {c}")
+    typer.echo(str(f))
 
 
 @find_app.command("ruled")
