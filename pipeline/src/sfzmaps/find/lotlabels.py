@@ -6,24 +6,10 @@ the lots of the April 2000 table (`solver.table.load_table`, the three `2000-dig
 its year (`districts.read.load_parcels`).  On the grid (`Ground`): the lots painted (`solver.lots.lot_rasters`),
 today's blocks the lots with their enclosed holes filled, and the street labels and weights of
 `hatchnet.data.street_grid` from the blocks and today's centre lines (data/ref/streets.parquet), every street type with
-the pooled half-widths: 1 street, 0 not street (a block), 255 no label.
-
-Street where a centre line runs (`centre_line_street`, on the grid, before anything is read onto a page): every line
-of the streets reference data, active or not, drawn on the grid (`hatchnet.data.centre_segments`).  A centre-line px
-reaches as far as its distance to the nearest px that has a lot: a street is as wide on one side of its centre line as
-on the other, and its near side is the block face.  A px with no lot is street when it lies within the reach of some
-centre-line px (`within_reach`); any other px with no lot gets no label (255, weight 0), so it carries no "no block
-edge" statement either.  A street label that stays keeps its weight; one the rule adds where the lots' labels had none
-weighs 1 (nothing measured says how sure it is less than that).  No distance, width or size picked by a person decides
-anything; the rule is exact up to the grid's own rounding: the lines are drawn to grid px (4 ft) and every distance is
-between px centres.  What the rule cannot do, and does not guess at:
-- where the centre line is not in the middle of the street, a sliver along the far block face gets no label;
-- ground with no lot and no centre line near it (a plaza, a strip nobody named) gets no label;
-- a road inside a lot (a park that is one lot: its drives) is still called block, because lots come first;
-- where a centre line runs through ground with no lot far from any block (a bridge over the water, a road across open
-  land), its reach is long and the rule calls a wide strip street.
-
-Block px and the block-edge cuts (`find.cuts`, from the blocks alone) are not touched.
+the pooled half-widths: 1 street, 0 not street (a block), 255 no label.  A street label's weight is the chance, from
+the city's measured half-widths, that the street is at least that wide where the px lies, and the label stops at each
+side's own block face; so ground far from any centre line's street (the beach and the ocean beyond the Great Highway)
+carries street labels that weigh almost nothing, and ground with no centre line near it carries none.
 
 A sheet's labels (`sheet_labels`): the street-or-not labels read onto its page, the px said to carry no block edge, and
 the block-edge cut statements of `find.cuts`.  The finder makes no label about zoning borders.  `ft_per_px`: the scale
@@ -32,8 +18,8 @@ of a box of a page through its placement (the trainer's items and print sizes, `
 
 Reads data/ref/parcels.parquet or the April 2000 table, data/ref/streets.parquet, a sheet's page, frame cut and
 placement (data/warp/<series>/<sheet>/transform.json with its correction, or data/work/<series>/<sheet>/transform.json)
-and data/warp/<series>/<sheet>/scores.json.  Writes data/find/labels/<series>/grid.npz (`make_ground`, with `off`,
-made by `sfzmaps find labels`, read by everything else) and data/find/labels/<series>/<sheet>.npz (`sheet_labels`)."""
+and data/warp/<series>/<sheet>/scores.json.  Writes data/find/labels/<series>/grid.npz (`make_ground`, made by
+`sfzmaps find labels`, read by everything else) and data/find/labels/<series>/<sheet>.npz (`sheet_labels`)."""
 from __future__ import annotations
 
 import json
@@ -51,7 +37,7 @@ from sfzmaps.find import pages
 from sfzmaps.find.pages import SheetId
 from sfzmaps.solver import hatching
 from sfzmaps.frame import data as frame_data
-from sfzmaps.solver.hatchnet.data import STREET, UNKNOWN, Lines, centre_segments, lines_from, street_grid
+from sfzmaps.solver.hatchnet.data import STREET, UNKNOWN, Lines, lines_from, street_grid
 from sfzmaps.solver.lots import lot_rasters
 from sfzmaps.solver.table import load_table
 from sfzmaps.solver.textread.store import save_npz
@@ -75,85 +61,20 @@ def series_lots(series: str) -> gpd.GeoDataFrame:
 @dataclass(frozen=True)
 class Ground:
     """The street-or-not labels on the solver's grid: the lot index (-1 none), today's blocks, the street labels (1
-    street, 0 not street, 255 no label) and their weights (1 not street, (0, 1] street, 0 no label); `off`: the px with
-    no lot that the centre lines do not call street (`centre_line_street`)."""
+    street, 0 not street, 255 no label) and their weights (1 not street, (0, 1] street, 0 no label)."""
     lot: np.ndarray            # int32
     block: np.ndarray          # bool
     street: np.ndarray         # uint8
     weight: np.ndarray         # float16
-    off: np.ndarray            # bool
-
-
-ENTRIES = 1 << 24           # engineering setting (memory only): the row runs laid down at once in `within_reach`
-
-
-def within_reach(centre: np.ndarray, has_lot: np.ndarray) -> np.ndarray:
-    """Bool (h, w): the px within the reach of some centre-line px of `centre`, a centre-line px's reach being its
-    distance to the nearest px of `has_lot` (between px centres; 0 for one inside a lot; with no lot on the grid, no
-    reach at all).  Exact on the grid, and the same whatever order the centre-line px come in: a px x is within
-    reach when |x - p|^2 <= r_p^2 for some centre-line px p, all in whole numbers (r_p^2 is a squared distance between
-    px centres, a whole number).  Taken in two passes, as a squared distance transform is: along each row, every
-    centre-line px p lays down on its row the run of columns x with (x - px)^2 <= r_p^2, each keeping the lowest
-    g = (x - px)^2 - r_p^2 any p gives it (<= 0); then down each column, a px (y', x) with g <= 0 covers the rows y with
-    (y - y')^2 <= -g.  The two passes give the same set as testing every px against every centre-line px, with no cap
-    and no step."""
-    centre, has_lot = np.asarray(centre, bool), np.asarray(has_lot, bool)
-    h, w = centre.shape
-    out = np.zeros((h, w), bool)
-    if not has_lot.any() or not centre.any():
-        return out
-    ys, xs = np.nonzero(centre)
-    r2 = np.rint(ndimage.distance_transform_edt(~has_lot)[ys, xs] ** 2).astype(np.int64)
-    half = np.floor(np.sqrt(r2)).astype(np.int64)                 # exact: r2 is a whole number far below 2**52
-    runs = 2 * half + 1
-    lowest = np.ones(h * w, np.int64)                             # 1: no centre-line px reaches the px along its row
-    ends = np.cumsum(runs)
-    first = 0
-    while first < len(ys):
-        last = max(first + 1, int(np.searchsorted(ends, ends[first] - runs[first] + ENTRIES, side="right")))
-        n = runs[first:last]
-        start = np.repeat(np.cumsum(n) - n, n)
-        dx = np.arange(int(n.sum())) - start - np.repeat(half[first:last], n)
-        x = np.repeat(xs[first:last], n) + dx
-        ok = (x >= 0) & (x < w)
-        np.minimum.at(lowest, (np.repeat(ys[first:last], n) * w + x)[ok], (dx * dx - np.repeat(r2[first:last], n))[ok])
-        first = last
-    at = np.flatnonzero(lowest <= 0)
-    up = np.floor(np.sqrt(-lowest[at])).astype(np.int64)
-    row, col = at // w, at % w
-    edges = np.zeros((h + 1) * w, np.int64)
-    np.add.at(edges, np.maximum(row - up, 0) * w + col, 1)
-    np.add.at(edges, np.minimum(row + up + 1, h) * w + col, -1)
-    return np.cumsum(edges.reshape(h + 1, w), axis=0)[:h] > 0
-
-
-def centre_line_street(street: np.ndarray, weight: np.ndarray, block: np.ndarray, has_lot: np.ndarray,
-                       centre: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """The lots' street labels `street` and weights `weight` with the centre lines' rule (see the module): a px off
-    `block` is street when it lies within the reach of some centre-line px (`within_reach`), keeping its weight where
-    it was street already and weighing 1 where it was not; any other px off `block` has no label (255, weight 0).
-    Block px are as they were.  (street, weight, off), `off` the px off `block` the rule does not call street."""
-    block = np.asarray(block, bool)
-    called = within_reach(centre, has_lot) & ~block
-    was = np.asarray(street) == STREET
-    street, weight = np.array(street, copy=True), np.array(weight, copy=True)
-    off = ~block & ~called
-    street[called] = STREET
-    weight[called & ~was] = 1
-    street[off] = UNKNOWN
-    weight[off] = 0
-    return street, weight, off
 
 
 def build_ground(lots: gpd.GeoDataFrame, lines: Lines, shape: tuple[int, int] | None = None) -> Ground:
     """`Ground` of `lots` (EPSG:2227 ft) and today's centre `lines` on a grid of `shape` from the solver grid's corner
-    (None: the whole grid): the lots' labels with the street label given by the centre lines (`centre_line_street`)."""
+    (None: the whole grid)."""
     lot, _ = lot_rasters(lots, shape)
     block = ndimage.binary_fill_holes(lot >= 0)
     street, weight, _ = street_grid(lines, block, per_type=False)
-    centre = centre_segments(lines.geoms, block.shape).seg >= 0
-    street, weight, off = centre_line_street(street, weight, block, lot >= 0, centre)
-    return Ground(lot, block, street, weight, off)
+    return Ground(lot, block, street, weight)
 
 
 def grid_path(series: str) -> Path:
@@ -167,22 +88,18 @@ def make_ground(series: str) -> Ground:
     f = grid_path(series)
     f.parent.mkdir(parents=True, exist_ok=True)
     part = f.with_name(f".{GRID}.part")
-    save_npz(part, lot=g.lot, block=g.block, street=g.street, weight=g.weight, off=g.off)
+    save_npz(part, lot=g.lot, block=g.block, street=g.street, weight=g.weight)
     part.replace(f)
     return g
 
 
 def ground(series: str) -> Ground:
-    """The series' `Ground` as `make_ground` last wrote it; FileNotFoundError naming the command that makes it, also for
-    a file made before the centre lines gave the street label (it has no `off`)."""
+    """The series' `Ground` as `make_ground` last wrote it; FileNotFoundError naming the command that makes it."""
     f = grid_path(series)
-    again = f"make them with `sfzmaps find labels --series {series}`"
     if not f.is_file():
-        raise FileNotFoundError(f"{f}: no grid labels; {again}")
+        raise FileNotFoundError(f"{f}: no grid labels; make them with `sfzmaps find labels --series {series}`")
     with np.load(f) as z:
-        if "off" not in z.files:
-            raise FileNotFoundError(f"{f}: made before the centre lines gave the street label; {again}")
-        return Ground(z["lot"], z["block"], z["street"], z["weight"], z["off"])
+        return Ground(z["lot"], z["block"], z["street"], z["weight"])
 
 
 def placement(sid: SheetId, which: str = "warp") -> SheetTransform:
@@ -220,26 +137,29 @@ def page_ft_per_px(tr, shape: tuple[int, int]) -> float:
 
 @dataclass(frozen=True)
 class PageGround:
-    """The street-or-not labels at every page px: 1 street, 0 block, 255 no label; their weights (0 no label); and, on
-    the frame cut, the px with no lot the centre lines do not call street (`Ground.off`)."""
+    """The street-or-not labels at every page px: 1 street, 0 block, 255 no label; and their weights (0 no label)."""
     street: np.ndarray         # uint8 (h, w)
     weight: np.ndarray         # float32 (h, w)
-    off: np.ndarray            # bool (h, w)
 
 
 def page_ground(g: Ground, tr, shape: tuple[int, int], keep: np.ndarray) -> PageGround:
     """The grid's labels read at every px of a page of `shape` through its placement `tr` (`hatching.PageWorld`,
-    `hatching.page_values`); 255 with weight 0 off the grid and off `keep` (the frame cut's map area), and no px off
-    there."""
+    `hatching.page_values`); 255 with weight 0 off the grid and off `keep` (the frame cut's map area)."""
     keep = np.asarray(keep, bool)
     if keep.shape != tuple(shape):
         raise ValueError(f"the frame cut is {keep.shape}, the page {tuple(shape)}")
-    street, weight, off = hatching.page_values(hatching.PageWorld(tr, shape), shape,
-                                               [(g.street, UNKNOWN), (g.weight, 0), (g.off, False)])
+    street, weight = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(g.street, UNKNOWN), (g.weight, 0)])
     weight = weight.astype(np.float32)
     street[~keep] = UNKNOWN
     weight[~keep] = 0
-    return PageGround(street, weight, off & keep)
+    return PageGround(street, weight)
+
+
+def street_totals(street: np.ndarray, weight: np.ndarray) -> tuple[int, float]:
+    """The street labels (`street` 1) with weight above 0, as (px, the sum of their weights): a count of px alone says
+    little, since most px of a street label far from its centre line weigh almost nothing."""
+    on = (np.asarray(street) == STREET) & (np.asarray(weight) > 0)
+    return int(on.sum()), float(np.asarray(weight)[on].astype(np.float64).sum())
 
 
 def page_shape(sid: SheetId) -> tuple[int, int]:
@@ -295,9 +215,7 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     Labels count only where the sheet draws ink (`find.drawn`): a cut not used has weight 0, and a px whose nearest
     block outline px is not inked has weight 0 and no `edge_none`.  A px on a cut the lots call for, kept or dropped at
     the frame cut, is not in `edge_none`.  `counts` (in the file as count_<name>): the cuts used and dropped
-    (`drawn.use`), the labelled px (weight > 0) before and after; `street_left_off`: the px on the frame cut with no lot
-    that the centre lines do not call street (the street labels the rule leaves off compared with "every px with no
-    lot is street")."""
+    (`drawn.use`), and the labelled px (weight > 0) before and after."""
     from sfzmaps.find import cuts, drawn
 
     series, _ = sid
@@ -320,8 +238,7 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     before = int((weight > 0).sum())
     weight = (weight * near).astype(np.float32)
     edge_none &= near
-    counts.update(labelled_px_before=before, labelled_px_after=int((weight > 0).sum()),
-                  street_left_off=int(pg.off.sum()))
+    counts.update(labelled_px_before=before, labelled_px_after=int((weight > 0).sum()))
     out = {"street": street, "weight": weight, "cuts": found, "edge_none": edge_none, "sigma": float(sigma),
            "placement": which, "counts": counts}
     f = sheet_path(sid)
