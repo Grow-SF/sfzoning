@@ -68,7 +68,7 @@ def test_letters_in_the_street_are_street():
     lab = handlabels.make_labels(img, _crop(street=[(10, 20)], blocks=[(20, 4), (20, 35)]))
     assert (lab.street[19:22, 30:33] == 1).all()
     assert (lab.area[19:22, 30:33] == 0).all()
-    assert lab.warnings == []             # smaller than either block: no warning
+    assert not [w for w in lab.warnings if w.startswith("possible")]     # smaller than either block
 
 
 def test_a_stroke_closes_a_gap_and_is_an_edge():
@@ -147,20 +147,23 @@ def test_an_unseeded_block_is_warned_in_page_coordinates():
     _h(img, 14)
     _h(img, 28)                           # an unseeded block above the street, larger than the seeded one below
     lab = handlabels.make_labels(img, _crop(street=[(10, 20)], blocks=[(20, 35)]))
-    assert len(lab.warnings) == 1 and lab.warnings[0].startswith("possible missed block at ")
-    x, y = (int(v) for v in lab.warnings[0].split(" at ")[1].split(", "))
+    possible = [w for w in lab.warnings if w.startswith("possible missed block at ")]
+    assert len(possible) == 1
+    x, y = (int(v) for v in possible[0].split(" at ")[1].split(", "))
     assert BOX[0] <= x < BOX[0] + 60 and BOX[1] <= y < BOX[1] + 14    # in the unseeded block, page px
     assert (lab.street[:14] == 1).all()                                # which is street until it is seeded
-    img[19:22, 30:33] = 0                 # a letter: smaller than the seeded block, no warning
-    assert len(handlabels.make_labels(img, _crop(street=[(10, 20)], blocks=[(20, 35)])).warnings) == 1
+    img[19:22, 30:33] = 0                 # a letter: smaller than the seeded block, no "possible missed block"
+    lab = handlabels.make_labels(img, _crop(street=[(10, 20)], blocks=[(20, 35)]))
+    assert len([w for w in lab.warnings if w.startswith("possible")]) == 1
 
 
 def _write(root, set_, sheet, box, **marks):
     d = root / set_ / "s"
     d.mkdir(parents=True, exist_ok=True)
     f = d / f"{sheet}__{'_'.join(str(v) for v in box)}.json"
-    f.write_text(json.dumps({"box": list(box), "street": [], "blocks": [], "open": [], "strokes": [], "limits": [],
-                             "notes": "", "drawn_by": "", **marks}))
+    if not marks:                         # a crop needs marks: a street seed in its corner
+        marks = {"street": [list(box[:2])]}
+    f.write_text(json.dumps({"box": list(box), "notes": "", "drawn_by": "", **marks}))
     return f
 
 
@@ -226,3 +229,74 @@ def test_the_crops_command_reports_a_bad_crop_and_goes_on(tmp_path, monkeypatch)
     assert "train/s/A__100_100_60_40.json: FAILED" in r.output and "not on paper" in r.output
     assert (tmp_path / "find" / "look" / "crops" / "test" / "s__A__100_100_60_40.png").is_file()
     assert not (tmp_path / "find" / "look" / "crops" / "train").exists()
+
+
+def _outlined(polygons=(), open_polygons=()):
+    """An outline crop at BOX, its corners given in crop px."""
+    return handlabels.Crop("test", "s", "p", BOX, (), (), (), (), (), Path("test/s/p__100_200_60_40.json"),
+                           tuple(_pg(p) for p in polygons), tuple(_pg(p) for p in open_polygons))
+
+
+def test_an_outline_crop_gives_areas_street_and_edges():
+    west, east = [(5, 5), (20, 5), (20, 30), (5, 30)], [(30, 5), (45, 5), (45, 30), (30, 30)]
+    lab = handlabels.make_labels(_page(), _outlined([west, east], [[(50, 5), (55, 5), (55, 30)]]))
+    assert lab.kinds == {1: "block", 2: "block", 3: "open"}
+    assert (lab.area[5:31, 5:21] == 1).all() and (lab.area[5:31, 30:46] == 2).all()
+    assert lab.area[20, 54] == 3 and lab.area[29, 51] == 0             # the triangle, filled
+    assert (lab.street[:, 21:30] == 1).all() and (lab.street[5:31, 5:21] == 0).all()
+    for x0, x1 in ((5, 20), (30, 45)):
+        ring = np.zeros(lab.edge.shape, bool)
+        ring[5:31, x0:x1 + 1] = True
+        ring[6:30, x0 + 1:x1] = False
+        assert (lab.edge[ring] == 1).all()                              # each rectangle's boundary px
+        assert (lab.edge[6:30, x0 + 1:x1] == 0).all()                   # inside
+    assert (lab.edge[1:-1, 21:30] == 0).all()                           # the street between
+    assert lab.warnings == []
+
+
+def test_overlapping_outlines_are_refused():
+    with pytest.raises(ValueError, match=r"polygons\[0\] and open_polygons\[0\] overlap"):
+        handlabels.make_labels(_page(), _outlined([[(5, 5), (20, 5), (20, 30)]], [[(20, 5), (40, 5), (40, 30)]]))
+
+
+def test_marks_of_both_kinds_are_refused(tmp_path):
+    square = [[[105, 205], [120, 205], [120, 220]]]
+    _write(tmp_path, "test", "A", BOX, street=[[110, 210]], polygons=square)
+    with pytest.raises(ValueError, match=r"A__100_200_60_40\.json: marks of both kinds"):
+        handlabels.crops(root=tmp_path)
+    _write(tmp_path, "test", "A", BOX, street=[], polygons=[])
+    with pytest.raises(ValueError, match=r"A__100_200_60_40\.json: no marks"):
+        handlabels.crops(root=tmp_path)
+    _write(tmp_path, "test", "A", BOX, polygons=square)
+    assert handlabels.crops(root=tmp_path)[0].outlined
+
+
+def test_an_outline_crop_cannot_train(tmp_path):
+    _write(tmp_path, "train", "A", BOX, polygons=[[[105, 205], [120, 205], [120, 220]]])
+    with pytest.raises(ValueError, match="only be in choose or test"):
+        handlabels.crops(root=tmp_path)
+
+
+def test_a_block_cut_by_the_crop_side_is_clipped_and_its_cut_side_is_no_edge():
+    block = [(10, 10), (61, 10), (61, 30), (10, 30)]                    # 2 px past the last column, 59
+    lab = handlabels.make_labels(_page(), _outlined([block]))
+    assert (lab.area[10:31, 10:] == 1).all()
+    assert (lab.edge[:, 59] == 255).all()
+    assert (lab.edge[10:31, 10] == 1).all() and (lab.edge[10, 10:59] == 1).all() and (lab.edge[30, 10:59] == 1).all()
+    assert (lab.edge[11:30, 11:59] == 0).all()
+    with pytest.raises(ValueError, match=r"polygons\[0\] has a corner \(162, 210\)"):
+        handlabels.make_labels(_page(), _outlined([[(10, 10), (62, 10), (62, 30), (10, 30)]]))
+
+
+def test_the_largest_unseeded_islands_are_always_listed():
+    img = _page()
+    for x0, x1 in ((5, 15), (22, 36), (42, 56)):                        # three blocks, 11, 15 and 15 px wide
+        _rect(img, x0, 10, x1, 30)
+    lab = handlabels.make_labels(img, _crop(street=[(2, 2)]))
+    assert lab.kinds == {} and (lab.street == 1).all()
+    found = [w for w in lab.warnings if w.startswith("unseeded island of ")]
+    assert len(found) == len(lab.warnings) == 3
+    assert [int(w.split()[3]) for w in found] == [15 * 21, 15 * 21, 11 * 21]      # largest first, sizes in px
+    xs = sorted(int(w.split(" at ")[1].split(",")[0]) - BOX[0] for w in found)
+    assert 5 < xs[0] < 15 and 22 < xs[1] < 36 and 42 < xs[2] < 56
+    assert all(w.endswith("a block left unseeded is labelled street") for w in found)

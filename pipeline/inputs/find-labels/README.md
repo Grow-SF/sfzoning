@@ -1,11 +1,25 @@
 # Hand crops for the street-and-block finder
 
 Hand-made labels on crops of the scans, the only teacher of the street-and-block finder (`sfzmaps.find`) for every
-map before the 1980s. A person marks a few seed points and strokes on a crop; `sfzmaps.find.handlabels` makes the
-per-pixel labels from them. Design: `docs/superpowers/specs/2026-11-23-street-and-block-finder-design.md`.
+map before the 1980s. A person marks a crop, one of two ways (below); `sfzmaps.find.handlabels` makes the per-pixel
+labels from the marks. Design: `docs/superpowers/specs/2026-11-23-street-and-block-finder-design.md`.
 
 One file per crop: `<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json`, the sheet named as in
 `data/work/<series>/<sheet>/page.png`, the name's numbers the same as the file's `box`.
+
+## Two ways to draw a crop
+
+- **Seeds and strokes**, for maps whose streets are open paper: the hatched maps of 1921-1948, where a thin outline
+  closes each block and the street between is white. A few seed points and strokes; the fill does the rest.
+- **Outlines**, for maps where heavy lines and letters join the blocks: 1960 on, where zoning borders run down the
+  streets and letters cross them, so the ink of every block is joined and no fill can tell the blocks apart. Every
+  printed block in the box is typed as a polygon. **Outline crops are for scoring only for now:** they may be in
+  `choose` or `test`, never `train` (a corner typed by eye is a pixel or two off the printed line, and teaching edges
+  from that waits until that spread is measured).
+
+A file holds marks of one kind only; a file with both, or with neither, is refused.
+
+A seed crop:
 
 ```json
 {
@@ -26,6 +40,22 @@ Coordinates are `page.png` pixels at full resolution, as stored (x right, y down
 - a **stroke** is a printed line: it closes a gap in a printed line, or separates two blocks that share one;
 - a **limit** stops the fill where no line is printed (a street running out of the crop into open land, say).
 
+An outline crop:
+
+```json
+{
+ "box": [x0, y0, w, h],
+ "polygons": [[[x, y], [x, y], [x, y], ...]],
+ "open_polygons": [[[x, y], [x, y], [x, y], ...]],
+ "notes": "...",
+ "drawn_by": "..."
+}
+```
+
+`polygons` holds one outline per printed block, its corners on the outer edge of the block's printed line (at least
+3 corners); `open_polygons` the same for land with no outline of its own. A block cut by the crop's side gets its
+corners on the box's edge (or up to 2 px past it; it is clipped to the box).
+
 Check every crop by eye: `uv run sfzmaps find crops --look` (in `pipeline/`) draws the scan and the labels side by side,
 twice size, with page-pixel rulers to read coordinates off, under `data/find/look/crops/<set>/`, and prints each crop's
 warnings and its areas by kind.
@@ -42,6 +72,16 @@ the other. A crop must lie on a sheet that has a placement, and never on a dupli
 
 ## How the labels are made
 
+### Outline crops
+
+Each polygon is an area, numbered in file order (`polygons`, then `open_polygons`), of kind `block` or `open`, filled on
+the crop (corners in page px less the box's corner; px centres at integers). Two polygons sharing any px, or a corner
+more than 2 px outside the box, is an error. The **street** label is 1 outside every polygon and 0 inside; the
+**edge** label 1 on area px 8-adjacent to anything not the same area, 255 (no label) on the crop's outermost rows and
+columns, 0 elsewhere. No warnings.
+
+### Seed crops
+
 In this order:
 
 1. **Paper** is the crop's px lighter than its Otsu threshold.
@@ -55,10 +95,11 @@ In this order:
 6. The **edge** label: 1 on area px 8-adjacent to anything not the same area, and on stroke px; 255 (no label) on px
    8-adjacent to a limit, on limit px, and on the crop's outermost rows and columns; 0 elsewhere.
 7. **Warnings** list each island with no seed that is larger than the smallest seeded one ("possible missed block at
-   x, y", page px, a point well inside it).
+   x, y", page px, a point well inside it), and then always the five largest islands with no seed, whatever was seeded
+   ("unseeded island of N px at x, y: a block left unseeded is labelled street").
 
-The 3 px barriers, the 4-connected street and the 8-connected islands belong to this drawing aid, which is checked by
-eye on its picture. Nothing like it runs when a sheet is read.
+The 3 px barriers, the 4-connected street, the 8-connected islands and the 2 px an outline's corner may lie past the
+box belong to this drawing aid, which is checked by eye on its picture. Nothing like it runs when a sheet is read.
 
 ## Reading the maps
 

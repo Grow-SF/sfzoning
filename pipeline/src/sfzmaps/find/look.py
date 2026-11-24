@@ -109,8 +109,9 @@ def write(sid: SheetId, lum: np.ndarray, lab: dict) -> list[Path]:
     return out
 
 
-# The crop picture.  BGR; no area colour near the street's orange, the edges' black or the no-label grey.
-AREAS = ((255, 90, 0), (60, 170, 60), (200, 80, 200), (230, 200, 60), (90, 60, 160), (40, 160, 160),
+# The crop picture.  BGR; no area colour near the street's orange, the edges' black, the no-label grey or the
+# marks' magenta.
+AREAS = ((255, 90, 0), (60, 170, 60), (140, 200, 230), (230, 200, 60), (90, 60, 160), (40, 160, 160),
          (170, 120, 255), (120, 200, 120), (180, 140, 90), (60, 90, 230))
 WHITE, BLACK, GREY = (255, 255, 255), (0, 0, 0), (160, 160, 160)
 MAGENTA, YELLOW = (255, 0, 255), (0, 230, 255)
@@ -135,7 +136,8 @@ def _seed(img: np.ndarray, xy: tuple[int, int], kind: str) -> None:
 
 
 def _marks(img: np.ndarray, c: handlabels.Crop) -> None:
-    """The crop's strokes, limits and seeds drawn on a panel enlarged ZOOM times."""
+    """The crop's strokes, limits and seeds, or its outlines with a dot at each corner, drawn on a panel enlarged
+    ZOOM times."""
     x0, y0 = c.box[:2]
 
     def at(x, y):
@@ -144,6 +146,11 @@ def _marks(img: np.ndarray, c: handlabels.Crop) -> None:
     for lines, colour in ((c.strokes, MAGENTA), (c.limits, YELLOW)):
         for pts in lines:
             cv2.polylines(img, [np.array([at(*p) for p in pts], np.int32)], False, colour, 1, cv2.LINE_AA)
+    for poly in c.polygons + c.open_polygons:
+        corners = np.array([at(*p) for p in poly], np.int32)
+        cv2.polylines(img, [corners], True, MAGENTA, 1, cv2.LINE_AA)
+        for xy in corners:
+            cv2.circle(img, (int(xy[0]), int(xy[1])), 2, MAGENTA, -1, cv2.LINE_AA)
     for kind, pts in (("street", c.street), ("block", c.blocks), ("open", c.open)):
         for p in pts:
             _seed(img, at(*p), kind)
@@ -196,11 +203,15 @@ CROP_KEY = (("orange = street", ORANGE), ("each area its own colour; open land s
                                             GREY),
             ("     seeds: street white ringed black, block black, open black with a white centre", _key_seeds),
             ("magenta = stroke, yellow = limit (thin lines)", _key_lines))
+OUTLINE_KEY = (("orange = street", ORANGE), ("each area its own colour; open land striped", _key_stripes),
+               ("black = block edge", BLACK), ("grey = no label (the crop's outer px)", GREY),
+               ("magenta = outline as typed (a dot at each corner)", MAGENTA))
 
 
 def crop(lum_crop: np.ndarray, labels: handlabels.CropLabels, c: handlabels.Crop) -> np.ndarray:
     """The picture (BGR uint8) of the hand crop `c`: its scan `lum_crop` (1 paper, 0 ink) and its labels side by side,
-    both enlarged ZOOM times (nearest neighbour), the crop's marks drawn on both, page-px rulers and a key."""
+    both enlarged ZOOM times (nearest neighbour), the crop's marks (seeds and strokes, or outlines) drawn on both,
+    page-px rulers and a key."""
     scan = np.repeat((np.asarray(lum_crop, np.float32) * 255)[..., None], 3, axis=2)
     scan = np.clip(np.rint(scan), 0, 255).astype(np.uint8)
     lab = np.full(scan.shape, 255, np.uint8)
@@ -223,7 +234,7 @@ def crop(lum_crop: np.ndarray, labels: handlabels.CropLabels, c: handlabels.Crop
     counts = ", ".join(f"{k} {list(labels.kinds.values()).count(k)}" for k in ("block", "open"))
     return _keyed(np.hstack([panels[0], gap, panels[1]]),
                   f"{c.set} / {c.series} / {c.sheet}  page x {x0}-{x0 + w}, y {y0}-{y0 + h}, x{ZOOM}; areas: {counts}",
-                  CROP_KEY)
+                  OUTLINE_KEY if c.outlined else CROP_KEY)
 
 
 def write_crop(c: handlabels.Crop, lum_crop: np.ndarray, labels: handlabels.CropLabels,
