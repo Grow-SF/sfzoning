@@ -56,8 +56,7 @@ def _street_between_two_lines():
 def test_the_fill_stops_at_a_line_closing_a_street():
     img = _street_between_two_lines()
     _v(img, 40, 10, 30)                   # the line closing the street's east end
-    # the fill alone: smoothing rounds a dead end's inner corners (test_smoothing_rounds_a_dead_ends_inner_corners_only)
-    lab = handlabels.make_labels(img, _crop(street=[(20, 20)], blocks=[(50, 20)]), smooth=False)
+    lab = handlabels.make_labels(img, _crop(street=[(20, 20)], blocks=[(50, 20)]))
     assert (lab.street[12:28, :40] == 1).all()
     assert (lab.street[12:28, 42:] == 0).all()
     # beyond the line the land is the block the dead end pokes into, as are both sides
@@ -94,8 +93,7 @@ def test_a_limit_stops_the_fill_and_labels_no_edge():
     _h(img, 28, 0, 30)                    # a street that ends in open land at x = 30
     without = handlabels.make_labels(img, _crop(street=[(10, 20)]))
     assert (without.street[12:28, 33:] == 1).all()
-    lab = handlabels.make_labels(img, _crop(street=[(10, 20)], open=[(45, 20)], limits=[[(31, 10), (31, 29)]]),
-                                 smooth=False)       # the fill alone: smoothing rounds the street end's inner corners
+    lab = handlabels.make_labels(img, _crop(street=[(10, 20)], open=[(45, 20)], limits=[[(31, 10), (31, 29)]]))
     assert (lab.street[12:28, :30] == 1).all()
     assert (lab.street[12:28, 33:] == 0).all()
     assert lab.kinds == {1: "open"}
@@ -421,123 +419,3 @@ def test_an_outline_crop_cannot_carry_openings(tmp_path):
            openings=[[[110, 210], [115, 210]]])
     with pytest.raises(ValueError, match=r"A__100_200_60_40\.json: marks of both kinds"):
         handlabels.crops(root=tmp_path)
-
-
-def _at(box, street=(), blocks=(), strokes=()):
-    """A seed crop at `box`, its marks given in crop px."""
-    pg = lambda pts: tuple((x + box[0], y + box[1]) for x, y in pts)                 # noqa: E731
-    return handlabels.Crop("train", "s", "p", tuple(box), pg(street), pg(blocks), (), tuple(pg(s) for s in strokes),
-                           (), Path(f"train/s/p__{'_'.join(str(v) for v in box)}.json"))
-
-
-BIG = (100, 200, 100, 80)                 # w 100, h 80
-
-
-def _big_block():
-    """A block whose 2 px outline's outer px run x 10..90, y 10..70."""
-    img = np.ones((80, 100), np.float32)
-    _rect(img, 10, 10, 90, 70)
-    return img
-
-
-def _dent(img, x0, depth):
-    """A dead end 6 px wide (paper x0..x0 + 5) up from the block's bottom side, `depth` px from the outside of the
-    bottom line (its paper rows 71 - depth..70), walled by 2 px lines."""
-    top = 71 - depth
-    img[top:71, x0:x0 + 6] = 1
-    _v(img, x0 - 2, top - 2, 71)
-    _v(img, x0 + 6, top - 2, 71)
-    _h(img, top - 2, x0 - 2, x0 + 8)
-
-
-def test_a_bite_in_a_blocks_side_is_filled_and_an_alley_is_kept():
-    img = _big_block()
-    # (a) a 6 x 6 cell (x 30..35, y 12..17) just inside the top side, walled by hatching, open to the street by a 1 px
-    # hole in the outline at x 32
-    _h(img, 18, 28, 38)
-    _v(img, 28, 12, 20)
-    _v(img, 36, 12, 20)
-    img[10:12, 32] = 1
-    _dent(img, 60, 41)                    # (b) an alley 6 px wide and 41 deep
-    crop = _at(BIG, street=[(5, 5)], blocks=[(20, 40)])
-    before = handlabels.make_labels(img, crop, smooth=False)
-    assert (before.street[12:18, 30:36] == 1).all()
-    lab = handlabels.make_labels(img, crop)
-    assert (lab.area[12:18, 30:36] == 1).all() and (lab.area[10:12, 32] == 1).all()
-    assert (lab.street[10:18, 30:36] == 0).all()
-    assert (lab.edge[10, 12:89] == 1).all()                            # straight along the outline, across the hole
-    assert (lab.edge[12:18, 30:36] == 0).all()                         # nothing inside the cell
-    assert (lab.street[30:80, 60:66] == 1).all()                       # every px of the alley
-
-
-def test_a_dent_just_deeper_than_the_setting_is_left():
-    deep = _big_block()
-    _dent(deep, 47, handlabels.SHALLOW + 3)
-    lab = handlabels.make_labels(deep, _at(BIG, street=[(5, 5)], blocks=[(20, 40)]))
-    assert (lab.street[71 - handlabels.SHALLOW - 3:80, 47:53] == 1).all()
-    shallow = _big_block()
-    _dent(shallow, 47, handlabels.SHALLOW - 3)
-    lab = handlabels.make_labels(shallow, _at(BIG, street=[(5, 5)], blocks=[(20, 40)]))
-    # filled, all but the mouth's outermost row: the digital disk does not close a gap wider than 4 px right at the
-    # surface (a 1 px notch is left)
-    assert (lab.area[71 - handlabels.SHALLOW + 3:70, 47:53] == 1).all() and (lab.street[70, 47:53] == 1).all()
-
-
-def test_smoothing_takes_nothing_from_another_area_or_a_barrier():
-    img = np.ones((50, 90), np.float32)
-    _rect(img, 5, 5, 40, 35)
-    _rect(img, 45, 5, 80, 35)             # 4 px of street between them, x 41..44
-    stroke = [(42, 20), (43, 20)]         # drawn 3 px wide: x 41..44, y 19..21
-    crop = _at((0, 0, 90, 50), street=[(2, 2)], blocks=[(20, 20), (60, 20)], strokes=[stroke])
-    lab = handlabels.make_labels(img, crop)
-    assert (lab.street[5:19, 41:45] == 1).all() and (lab.street[22:36, 41:45] == 1).all()
-    assert (lab.street[19:22, 41:45] == 255).all()
-    assert (lab.area[5:36, 5:41] == 1).all() and (lab.area[5:36, 45:81] == 2).all()
-
-
-def test_smoothing_changes_only_street_px_into_area_px():
-    rng = np.random.default_rng(7)
-    img = np.ones((120, 120), np.float32)
-    seeds = []
-    for x0, y0 in ((10, 10), (65, 10), (10, 65), (65, 65)):
-        x1, y1 = x0 + 45, y0 + 45
-        for v in range(x0 + 7, x1 - 2, 6):                             # cross-hatching: 5 x 5 px cells
-            img[y0:y1 + 1, v] = 0
-        for v in range(y0 + 7, y1 - 2, 6):
-            img[v, x0:x1 + 1] = 0
-        _rect(img, x0, y0, x1, y1)
-        for _ in range(12):                                            # pin-holes through the outline
-            t = int(rng.integers(3, 43))
-            side = int(rng.integers(4))
-            if side == 0:
-                img[y0:y0 + 2, x0 + t] = 1
-            elif side == 1:
-                img[y1 - 1:y1 + 1, x0 + t] = 1
-            elif side == 2:
-                img[y0 + t, x0:x0 + 2] = 1
-            else:
-                img[y0 + t, x1 - 1:x1 + 1] = 1
-        seeds.append((x0 + 7, y0 + 7))                                 # a hatching crossing: ink, never street
-    for _ in range(40):                                                # specks in the streets
-        x, y = (int(v) for v in rng.integers(0, 120, 2))
-        if img[max(0, y - 2):y + 3, max(0, x - 2):x + 3].all():
-            img[y, x] = 0
-    crop = _at((0, 0, 120, 120), street=[(1, 1)], blocks=seeds)
-    a, b = handlabels.make_labels(img, crop, smooth=False), handlabels.make_labels(img, crop)
-    moved = a.area != b.area
-    assert moved.any()
-    assert (a.area[moved] == 0).all() and (b.area[moved] > 0).all()   # street px into an area, never the reverse
-    assert (a.street[moved] == 1).all() and (b.street[moved] == 0).all()
-    assert not ((a.street != b.street) & ~moved).any()
-    assert a.kinds == b.kinds and a.warnings == b.warnings
-
-
-def test_smoothing_rounds_a_dead_ends_inner_corners_only():
-    img = _street_between_two_lines()
-    _v(img, 40, 10, 30)                   # a dead end 16 px wide, its end at x 40, inside one block
-    crop = _crop(street=[(20, 20)], blocks=[(50, 20)])
-    a, b = handlabels.make_labels(img, crop, smooth=False), handlabels.make_labels(img, crop)
-    ys, xs = np.nonzero(a.street != b.street)
-    assert len(ys) and (xs >= 40 - 3).all()                            # only at the end,
-    assert ((ys <= 12 + 2) | (ys >= 27 - 2)).all()                     # in its two inner corners
-    assert (b.street[15:25, :40] == 1).all()
