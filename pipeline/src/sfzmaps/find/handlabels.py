@@ -8,7 +8,7 @@ maps: inputs/find-labels/README.md).  It is drawn one of two ways:
   areas as the 8-connected islands holding a block or open seed, and each area's ragged sides straightened to within
   STRAIGHT px (`straighten_areas`);
 - outlines (for maps where heavy lines and letters join the blocks): each typed polygon is an area, the rest street.
-  Outline crops are for scoring only (`choose` and `test`): a corner typed by eye is a px or two off the printed line.
+  Outline crops may be in any set; a corner typed by eye sits within about a px of the printed line.
 This is a drawing aid for hand labels only, checked by eye on its picture (`look.crop`): its 3 px barrier width, its
 4-connected street fill and 8-connected islands, STRAIGHT, and the 2 px an outline's corner may lie outside the box
 are parts of the tool, and nothing like it runs when a sheet is read.
@@ -97,8 +97,8 @@ def _points(path: Path, key: str, value) -> tuple[Point, ...]:
 def read_crop(path: Path, set_: str) -> Crop:
     """The crop file at `path` (in `set_`).  ValueError for a name not `<sheet>__<x0>_<y0>_<w>_<h>.json`, a name and
     `box` that disagree, an unknown key, a mark that is not [x, y] points, a polygon of fewer than 3 corners, marks of
-    both kinds (seeds and strokes, outlines) or of neither, an outline crop in the `train` set, a file that is not
-    JSON, and a crop on a duplicate scan (never read)."""
+    both kinds (seeds and strokes, outlines) or of neither, a file that is not JSON, and a crop on a duplicate scan
+    (never read)."""
     path = Path(path)
     sheet, _, tail = path.stem.rpartition("__")
     try:
@@ -132,8 +132,6 @@ def read_crop(path: Path, set_: str) -> Crop:
     if seeded == outlined:
         raise ValueError(f"{path}: {'marks of both kinds' if seeded else 'no marks'}; a crop is drawn either with "
                          f"seeds and strokes ({', '.join(SEED_MARKS)}) or with outlines ({', '.join(OUTLINE_MARKS)})")
-    if outlined and set_ == "train":
-        raise ValueError(f"{path}: outline crops may only be in choose or test (they are for scoring only)")
     for k in OUTLINE_MARKS:
         for i, poly in enumerate(lines[k]):
             if len(poly) < 3:

@@ -268,10 +268,17 @@ def test_marks_of_both_kinds_are_refused(tmp_path):
     assert handlabels.crops(root=tmp_path)[0].outlined
 
 
-def test_an_outline_crop_cannot_train(tmp_path):
-    _write(tmp_path, "train", "A", BOX, polygons=[[[105, 205], [120, 205], [120, 220]]])
-    with pytest.raises(ValueError, match="only be in choose or test"):
-        handlabels.crops(root=tmp_path)
+def test_an_outline_crop_may_train_and_gives_the_labels_it_gives_as_a_test_crop(tmp_path):
+    marks = dict(polygons=[[[105, 205], [130, 205], [130, 225], [105, 225]]], open_polygons=[[[135, 210], [150, 210],
+                                                                                              [150, 230]]])
+    _write(tmp_path / "a", "train", "A", BOX, **marks)
+    _write(tmp_path / "b", "test", "A", BOX, **marks)
+    [train], [test] = handlabels.crops(root=tmp_path / "a"), handlabels.crops(root=tmp_path / "b")
+    assert train.set == "train" and train.outlined
+    a, b = handlabels.make_labels(_page(), train), handlabels.make_labels(_page(), test)
+    for k in ("street", "area", "edge"):
+        np.testing.assert_array_equal(getattr(a, k), getattr(b, k), err_msg=k)
+    assert a.kinds == b.kinds == {1: "block", 2: "open"} and (a.street == 0).any()
 
 
 def test_a_block_cut_by_the_crop_side_is_clipped_and_its_cut_side_is_no_edge():
