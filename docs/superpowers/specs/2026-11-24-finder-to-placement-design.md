@@ -94,8 +94,10 @@ duplicate scans never read; nothing under `pipeline/data/` committed; no `sfzmap
 
 ### 1. Learn from every lot-labelled sheet
 
-- Labels are made, by the existing command, for every sheet of the twelve series the lots label (about 150 sheets),
-  under the rule decided on 2026-11-24 (ground with no lot is street only between blocks).
+- Labels are made, by the existing command, for every sheet of the twelve series the lots label (about 150 sheets).
+  Where the lots cannot say what the print shows (the inside of the two big parks, the far side of a street at the
+  city's edge, ground the city has no lot for), hand-marked pieces teach instead and the lots' labels step aside
+  (the owner, 2026-11-24; a "street only between blocks" rule tried that morning was dropped the same day).
 - *(my call)* "Every" means every sheet whose placement passes the warp's own check: the lots are laid on a scan
   through its placement, and a label laid through a placement the warp itself doubts may not match the print. Five
   lot-labelled sheets fail it today; they are left out and named. The same rule already picks the sheets whose print
