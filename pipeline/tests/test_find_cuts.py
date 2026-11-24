@@ -11,7 +11,8 @@ import shapely
 from PIL import Image
 from typer.testing import CliRunner
 
-from find_fixtures import EAST, ROWS, SHAPE, SPLIT, STREET, WEST, Flat, lines_world, lots_world
+from find_fixtures import (EAST, GRID_COLS, GRID_ROWS, ROWS, SHAPE, SPLIT, STREET, WEST, Flat, blocks_world,
+                           lines_world, lots_world)
 from sfzmaps.find import cuts, lotlabels, pages
 from sfzmaps.frame import data as fdata
 from sfzmaps.solver import grid
@@ -133,12 +134,13 @@ def test_doubling_the_cut_length_changes_nothing_that_matters(ground):
         assert (np.abs(s2 - s1) < 1e-3 * s1).all()
 
 
-def _sheet_world(tmp_path, monkeypatch, sources: str):
-    """A one-sheet series `s` on disk: a white page of PAGE, its frame cut keeping all but a 10 px border, the label
-    sources `sources`, a flat placement and a spread of SIGMA."""
+def _sheet_world(tmp_path, monkeypatch, sources: str, page: np.ndarray | None = None):
+    """A one-sheet series `s` on disk: the page `page` (None: white) of PAGE, its frame cut keeping all but a 10 px
+    border, the label sources `sources`, a flat placement and a spread of SIGMA."""
     work, frame = tmp_path / "work", tmp_path / "frame"
     (work / "s" / "s-p01").mkdir(parents=True)
-    Image.fromarray(np.full(PAGE, 255, np.uint8), "L").save(work / "s" / "s-p01" / "page.png")
+    page = np.full(PAGE, 255, np.uint8) if page is None else page
+    Image.fromarray(page, "L").save(work / "s" / "s-p01" / "page.png")
     cut = np.full(PAGE, 255, np.uint8)
     cut[10:-10, 10:-10] = 0
     (frame / "s" / "s-p01").mkdir(parents=True)
@@ -234,13 +236,51 @@ def test_the_close_up_is_the_window_with_the_most_cut_px():
     px = np.r_[np.arange(10) * shape[1] + 5,                       # 10 cut px near the top-left corner
                (200 + np.arange(30)) * shape[1] + 350]             # 30 down a column near the right
     c = cuts.Cuts(px.astype(np.int64), np.zeros(len(px), np.int32), np.ones(len(px), np.float32),
-                  np.zeros(1, np.uint8), np.ones(1, bool))
+                  np.zeros(1, np.uint8), np.ones(1, bool), np.ones(1, np.float32), np.zeros((1, 2), np.int32))
     x0, y0, x1, y1 = look.busiest({"cuts": c}, shape, 100)
     assert (x1 - x0, y1 - y0) == (100, 100)
     assert x0 <= 350 < x1 and y0 <= 200 and 229 < y1
     lum = np.ones(shape, np.float32)
-    lab = {"cuts": c, "street": np.full(shape, 255, np.uint8), "placement": "warp", "sigma": 1.0}
+    lab = {"cuts": c, "street": np.full(shape, 255, np.uint8), "weight": np.zeros(shape, np.float32),
+           "placement": "warp", "sigma": 1.0}
     whole, close = look.labels(("s", "s-p01"), lum, lab), look.labels(("s", "s-p01"), lum, lab, (x0, y0, x1, y1))
     assert whole.shape[1] == shape[1] and close.shape[1] == 2 * 100       # the close-up at 2x
     drawn = (close[-200:].reshape(-1, 3) != 255).any(axis=1)
     assert drawn.sum() == 4 * 30                                          # the 30 cut px in it, each 2 x 2
+
+
+def test_labels_fade_where_the_sheet_draws_nothing(tmp_path, monkeypatch):
+    lots, lines = blocks_world()
+    g = lotlabels.build_ground(lots, lines, SHAPE)
+    drawn_cols = 3                                          # the sheet draws the blocks of columns 0-2, not 3-4
+    page = np.full(PAGE, 255, np.uint8)
+    for c0, c1 in GRID_COLS[:drawn_cols]:
+        for r0, r1 in GRID_ROWS:                            # each outline 2 px wide, on the block's side
+            page[2 * r0 - 1:2 * r1 + 1, [2 * c0 - 1, 2 * c0, 2 * c1 - 1, 2 * c1]] = 0
+            page[[2 * r0 - 1, 2 * r0, 2 * r1 - 1, 2 * r1], 2 * c0 - 1:2 * c1 + 1] = 0
+    keep = _sheet_world(tmp_path, monkeypatch, "s,lined-1bit,year,zoning\n", page)
+    codes = np.array(["A"] * 4 * drawn_cols + ["B"] * 4 * (len(GRID_COLS) - drawn_cols))
+    monkeypatch.setattr(lotlabels, "ground", lambda series: g)
+    monkeypatch.setattr(lotlabels, "series_codes", lambda series: codes)
+    lab = lotlabels.sheet_labels(("s", "s-p01"))
+    before = lotlabels.page_ground(g, Flat(FT_PER_PX), PAGE, keep).weight
+
+    split = GRID_COLS[drawn_cols - 1][1] + GRID_COLS[drawn_cols][0]        # page x of the street's middle between
+    x = np.arange(PAGE[1])[None, :].repeat(PAGE[0], 0)
+    labelled = before > 0
+    undrawn, drawn_side = labelled & (x > split + 4), labelled & (x < split - 4)
+    assert undrawn.any() and drawn_side.any()
+    assert (lab["weight"][undrawn] < 0.01).all()           # the undrawn blocks and the streets beside them
+    assert (lab["weight"][drawn_side] > 0.99 * before[drawn_side]).all()
+
+    c = lab["cuts"]
+    mean_x = np.bincount(c.cut, c.px % PAGE[1]) / np.bincount(c.cut)
+    edge, border = c.answer == cuts.EDGE, c.answer == cuts.BORDER
+    assert (edge & (mean_x > split)).any() and (c.weight[edge & (mean_x > split)] < 0.01).all()
+    assert (edge & (mean_x < split)).any() and (c.weight[edge & (mean_x < split)] > 0.99).all()
+    across = border & c.says                               # A beside B: a drawn block beside an undrawn one
+    assert across.any() and (c.weight[across] < 0.01).all()
+    both_drawn = border & ~c.says & (mean_x < split)
+    assert both_drawn.any() and (c.weight[both_drawn] > 0.99).all()
+    p = lab["drawn"]
+    assert len(p) == 20 and (np.sort(p)[:8] < 0.01).all() and (np.sort(p)[8:] > 0.99).all()

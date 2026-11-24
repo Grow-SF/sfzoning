@@ -157,28 +157,45 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     """A sheet's labels through its placement `which`, written to data/find/labels/<series>/<sheet>.npz and returned:
     `street` and `weight` (`page_ground`; none for a series not labelled from lots), `cuts` (`find.cuts.Cuts`: edge
     cuts for a series labelled from lots, then zoning-border cuts where its zoning borders are a table column; in the
-    file as cuts_px, cuts_cut, cuts_prior, cuts_answer, cuts_says), `edge_none` (px with a street-or-not label on no
-    edge cut), `border_none` (px inside a lot with a known code on no zoning-border cut; for a series whose zoning
-    borders are `none`, every px of the frame cut), `sigma` (`cuts.spread_px`) and `placement`."""
-    from sfzmaps.find import cuts
+    file as cuts_px, cuts_cut, cuts_prior, cuts_answer, cuts_says, cuts_weight), `edge_none` (px with a street-or-not
+    label on no edge cut), `border_none` (px inside a lot with a known code on no zoning-border cut; for a series whose
+    zoning borders are `none`, every px of the frame cut), `sigma` (`cuts.spread_px`) and `placement`.
+
+    Labels count only where the sheet draws the blocks they are about (`find.drawn`): `drawn`, each block's chance of
+    being drawn, from how many of its edge cuts cross ink (`drawn_fit`: pi, q_drawn, q_blank; `drawn_groups`; the
+    blocks are `cuts.blocks` of the grid window `blocks_window`).  A px's street-or-not weight is multiplied by the
+    chance of its block (or, off the blocks, its nearest block); each cut's weight is `Cuts.weighted`."""
+    from sfzmaps.find import cuts, drawn
 
     series, _ = sid
     src = pages.source(series)
-    shape = page_shape(sid)
+    lum = pages.load_scan(sid)
+    shape = lum.shape
     keep = pages.load_keep(sid, shape)
     tr = placement(sid, which)
     sigma = cuts.spread_px(sid, which)
     found = cuts.Cuts.empty()
     street, weight = np.full(shape, UNKNOWN, np.uint8), np.zeros(shape, np.float32)
+    chance, fit = drawn.drawn_chance(np.zeros(0), np.zeros(0))
+    window = (0, 0, 0, 0)
     g = ground(series) if src.lots else None
     if g is not None:
         pg = page_ground(g, tr, shape, keep)
         street, weight = pg.street, pg.weight
         found = cuts.edge_cuts(g, tr, shape, keep, sigma)
+        bl = cuts.blocks(g.block, tr, keep)
+        window = bl.window
+        inked = np.bincount(found.cut, lum.ravel()[found.px] < drawn.INK_BELOW, minlength=len(found.answer)) > 0
+        owner = found.blocks[:, 0]
+        chance, fit = drawn.drawn_chance(np.bincount(owner, inked, minlength=bl.count).astype(np.int64),
+                                         np.bincount(owner, minlength=bl.count))
+        found = found.weighted(chance)
+        [near] = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(bl.id, -1)], window[::2])
+        weight = (weight * np.r_[chance, 0.0][near]).astype(np.float32)       # off the window (-1): nothing
     edge_none = (street != UNKNOWN) & ~found.on(shape)
     codes = series_codes(series)
     if codes is not None:
-        border = cuts.border_cuts(g.lot, codes, tr, shape, keep, sigma)
+        border = cuts.border_cuts(g.lot, codes, tr, shape, keep, sigma, block=g.block).weighted(chance)
         found = cuts.Cuts.joined(found, border)
         r0, r1, c0, c1 = hatching._slice(tr, keep, g.lot.shape)
         [lot] = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(g.lot[r0:r1, c0:c1], -1)], (r0, c0))
@@ -187,12 +204,14 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     else:
         border_none = keep.copy() if src.borders == "none" else np.zeros(shape, bool)
     out = {"street": street, "weight": weight, "cuts": found, "edge_none": edge_none, "border_none": border_none,
-           "sigma": float(sigma), "placement": which}
+           "sigma": float(sigma), "placement": which, "drawn": chance, "drawn_fit": fit, "blocks_window": window}
     f = sheet_path(sid)
     f.parent.mkdir(parents=True, exist_ok=True)
     part = f.with_name(f".{f.name}.part")
     save_npz(part, street=street, weight=weight, cuts_px=found.px, cuts_cut=found.cut, cuts_prior=found.prior,
-             cuts_answer=found.answer, cuts_says=found.says, edge_none=edge_none, border_none=border_none,
-             sigma=np.float64(sigma), placement=np.array(which))
+             cuts_answer=found.answer, cuts_says=found.says, cuts_weight=found.weight, edge_none=edge_none,
+             border_none=border_none, sigma=np.float64(sigma), placement=np.array(which),
+             drawn=chance.astype(np.float32), drawn_fit=np.array([fit["pi"], fit["q_drawn"], fit["q_blank"]]),
+             drawn_groups=np.int64(fit["groups"]), blocks_window=np.array(window, np.int64))
     part.replace(f)
     return out

@@ -1631,6 +1631,11 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
             ("no zoning border crosses", (c.answer == cuts.BORDER) & ~c.says)))
         typer.echo(f"{h}: sigma {lab['sigma']:.3f} px; cuts: {counts}; {time.time() - t:.1f} s; "
                    f"{lotlabels.sheet_path((series, h))}")
+        fit, p = lab["drawn_fit"], lab["drawn"]
+        typer.echo(f"  blocks drawn on the sheet: {fit['groups']} group(s), pi {fit['pi']:.4f}, q_drawn "
+                   f"{fit['q_drawn']:.4f}, q_blank {fit['q_blank']:.4f}; of {len(p):,} blocks, chance > 0.99: "
+                   f"{int((p > 0.99).sum()):,}, < 0.01: {int((p < 0.01).sum()):,}, between: "
+                   f"{int(((p >= 0.01) & (p <= 0.99)).sum()):,}")
         if look:
             for f in drawn.write((series, h), pages.load_scan((series, h)), lab):
                 typer.echo(f"  {f}")

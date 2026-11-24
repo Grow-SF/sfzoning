@@ -62,3 +62,22 @@ class Flat:
     def grid_to_pixel(self, world, page_shape) -> np.ndarray:
         """`to_pixel` for a large batch, as SheetTransform.grid_to_pixel."""
         return self.to_pixel(world)
+
+
+GRID_COLS = [(10 + 12 * i, 18 + 12 * i) for i in range(5)]     # the grid columns of `blocks_world`'s blocks
+GRID_ROWS = [(6 + 12 * j, 14 + 12 * j) for j in range(4)]      # and their grid rows (ends exclusive)
+
+
+def blocks_world() -> tuple[gpd.GeoDataFrame, data.Lines]:
+    """A 5 x 4 grid of one-lot blocks (8 x 8 grid px, streets 4 grid px wide between), lots column by column (lot
+    4 i + j in column i, row j); and a centre line down the middle of every street between them."""
+    boxes = [_box(*cols, *rows) for cols in GRID_COLS for rows in GRID_ROWS]
+    lots = gpd.GeoDataFrame({"blklot": [f"{i:07d}" for i in range(len(boxes))]}, geometry=boxes, crs="EPSG:2227")
+    xs = [grid.X0 + 4 * (a[1] + b[0]) / 2 for a, b in zip(GRID_COLS, GRID_COLS[1:])]
+    ys = [grid.Y1 - 4 * (a[1] + b[0]) / 2 for a, b in zip(GRID_ROWS, GRID_ROWS[1:])]
+    width, height = 4 * SHAPE[1], 4 * SHAPE[0]
+    found = [shapely.LineString([(x, grid.Y1), (x, grid.Y1 - height)]) for x in xs] + \
+            [shapely.LineString([(grid.X0, y), (grid.X0 + width, y)]) for y in ys]
+    n = len(found)
+    return lots, data.Lines(np.array(found, dtype=object), np.array(["ST"] * n, dtype=object),
+                            np.array([f"{i} ST" for i in range(n)], dtype=object))

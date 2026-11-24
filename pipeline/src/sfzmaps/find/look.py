@@ -1,8 +1,9 @@
 """Pictures of a sheet's labels (`lotlabels.sheet_labels`) on its scan, to check by eye that they sit on the print.
 
-The scan in grey with street tinted orange and block blue; the cut statements drawn over it, each px as strong as its
-prior: "no zoning border crosses" faint green, then "a zoning border crosses" red, then block-edge cuts cyan; a key and
-the sheet's name at the top.  `busiest` finds the close-up: the window holding the most cut px.
+The scan in grey with street tinted orange and block blue, as strongly as the label's weight; the cut statements drawn
+over it, each px as strong as its prior times its cut's weight (so labels of blocks the sheet does not draw fade out):
+"no zoning border crosses" faint green, then "a zoning border crosses" red, then block-edge cuts cyan; a key and the
+sheet's name at the top.  `busiest` finds the close-up: the window holding the most cut px.
 
 Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/."""
 from __future__ import annotations
@@ -51,16 +52,16 @@ def labels(sid: SheetId, lum: np.ndarray, lab: dict, box: tuple[int, int, int, i
     h, w = lum.shape
     x0, y0, x1, y1 = box if box is not None else (0, 0, w, h)
     img = np.repeat((lum[y0:y1, x0:x1] * 255)[..., None], 3, axis=2).astype(np.float32)
-    street = lab["street"][y0:y1, x0:x1]
-    _paint(img, street == STREET, ORANGE, TINT)
-    _paint(img, street == NOT_STREET, BLUE, TINT)
+    street, weight = lab["street"][y0:y1, x0:x1], lab["weight"][y0:y1, x0:x1]
+    for colour, where in ((ORANGE, street == STREET), (BLUE, street == NOT_STREET)):
+        _paint(img, where, colour, TINT * weight[where])
     c: cuts.Cuts = lab["cuts"]
     for colour, strong, which in ((GREEN, FAINT, (c.answer == cuts.BORDER) & ~c.says),       # drawn under the rest
                                   (RED, STRENGTH, (c.answer == cuts.BORDER) & c.says),
                                   (CYAN, STRENGTH, c.answer == cuts.EDGE)):
         strength = np.zeros(h * w, np.float32)
         on = which[c.cut]
-        np.maximum.at(strength, c.px[on], c.prior[on])
+        np.maximum.at(strength, c.px[on], (c.prior * c.weight[c.cut])[on])
         strength = strength.reshape(h, w)[y0:y1, x0:x1]
         _paint(img, strength > 0, colour, strong * strength[strength > 0])
     img = np.clip(np.rint(img), 0, 255).astype(np.uint8)
