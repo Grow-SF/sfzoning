@@ -100,10 +100,20 @@ In this order:
    **area**, numbered in the order its first seed appears in the file (`blocks`, then `open`), of the seed's kind
    (`block` or `open`). Two seeds in one island is an error: draw a stroke between them. A block or open seed the
    street reaches is an error: close the gap with a stroke. An island with no seed is street (lettering in the street).
-6. The **street** label: 1 street, 0 an area, 255 a barrier.
-7. The **edge** label: 1 on area px 8-adjacent to anything not the same area, and on stroke px; 255 (no label) on px
+6. **Bites** are filled. On a cross-hatched block, wherever the thin outline has a pin-hole next to a white cell of
+   the hatching, the street fill runs into that one cell and the block's side gets a bite of street about one cell
+   big. So each area in turn (in area-number order) is closed with a disk of radius `BITE` (5 px; the disk cannot
+   enter a dent narrower than about 10 px). The street px the closing adds (never another area's px, never a stroke
+   or limit) are taken in 8-connected pieces. A piece whose deepest px is no more than `SHALLOW` (10 px) from the
+   outside of the closed shape is a bite and joins the area; a deeper piece is left as street, whole: it is an alley
+   or a dead end. `BITE` and `SHALLOW` are tool settings, checked by eye on the pictures. The cost: a real dead end
+   no deeper than `SHALLOW` and narrower than twice `BITE` is filled. Two smaller effects of drawing the disk in
+   pixels: each inner corner of an area (where a street ends inside a block, say) is rounded by about 6 px, and a dent
+   wider than 4 px keeps a 1 px notch of street in its mouth's outermost row.
+7. The **street** label: 1 street, 0 an area, 255 a barrier.
+8. The **edge** label: 1 on area px 8-adjacent to anything not the same area, and on stroke px; 255 (no label) on px
    8-adjacent to a limit, on limit px, and on the crop's outermost rows and columns; 0 elsewhere.
-8. **Warnings** list each island with no seed that is larger than the smallest seeded one ("possible missed block at
+9. **Warnings** list each island with no seed that is larger than the smallest seeded one ("possible missed block at
    x, y", page px, a point well inside it), and then always the five largest islands with no seed, whatever was seeded
    ("unseeded island of N px at x, y: a block left unseeded is labelled street").
 

@@ -3,15 +3,16 @@ under the test and choosing crops.
 
 A crop file is inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json (the format and the reading of the
 maps: inputs/find-labels/README.md).  It is drawn one of two ways:
-- seeds and strokes (for maps whose streets are open paper): `make_labels` turns them into per-px labels by eight
+- seeds and strokes (for maps whose streets are open paper): `make_labels` turns them into per-px labels by nine
   rules: paper by Otsu's threshold, openings as paper (where the map's owner has said a street runs through printed
   ink), strokes and limits as barriers, street as the paper 4-connected to a street seed, areas as the 8-connected
-  islands holding a block or open seed;
+  islands holding a block or open seed, and bites (a hatching cell the street reached through a pin-hole in the
+  outline) filled back into their area (`fill_bites`);
 - outlines (for maps where heavy lines and letters join the blocks): each typed polygon is an area, the rest street.
   Outline crops are for scoring only (`choose` and `test`): a corner typed by eye is a px or two off the printed line.
 This is a drawing aid for hand labels only, checked by eye on its picture (`look.crop`): its 3 px barrier and opening
-width, its 4-connected street fill and 8-connected islands, and the 2 px an outline's corner may lie outside the box
-are parts of the tool, and nothing like it runs when a sheet is read.
+width, its 4-connected street fill and 8-connected islands, BITE and SHALLOW, and the 2 px an outline's corner may lie
+outside the box are parts of the tool, and nothing like it runs when a sheet is read.
 
 `reserved` is the ground under every `choose` and `test` crop, on any sheet's page, which training leaves out.
 
@@ -29,6 +30,7 @@ import numpy as np
 from scipy import ndimage
 from skimage.draw import line as draw_line
 from skimage.filters import threshold_otsu
+from skimage.morphology import disk
 
 from sfzmaps import config
 from sfzmaps.find import lotlabels
@@ -44,6 +46,10 @@ BARRIER = 3                         # tool setting: a stroke's, limit's or openi
 OUTSIDE = 2                         # tool setting: how far an outline's corner may lie outside the box, px (a block
                                     # cut by the crop's side is typed with corners on or just past the box's edge)
 LARGEST = 5                         # tool setting: how many of the largest unseeded islands are always warned of
+BITE = 5                            # tool setting: the disk that closes an area's dents, radius px (a dent narrower
+                                    # than about 2 BITE is closed); drawn with px centres within BITE + 1/2, so a
+                                    # pin-hole up to 4 px wide closes right up to the surface
+SHALLOW = 10                        # tool setting: a closed dent no deeper than this, px, is a bite and joins the area
 RING_STEP = 8                       # engineering setting: px between the points of a crop's box sent to another page
 log = logging.getLogger(__name__)
 STREET, AREA, NONE = 1, 0, 255      # the street label; NONE also marks edge px with no label
@@ -212,15 +218,15 @@ def _no_edge_on_the_crop_side(edge: np.ndarray) -> None:
     edge[:, [0, -1]] = NONE
 
 
-def make_labels(lum_crop: np.ndarray, crop: Crop) -> CropLabels:
+def make_labels(lum_crop: np.ndarray, crop: Crop, smooth: bool = True) -> CropLabels:
     """The crop's labels from its marks (the module's rules, as inputs/find-labels/README.md states them): an outline
-    crop's by `outline_labels`, a seed crop's by `seed_labels`.  ValueError naming the file if `lum_crop` is not the
-    box's size."""
+    crop's by `outline_labels`, a seed crop's by `seed_labels` (`smooth`: with its bites filled).  ValueError naming the
+    file if `lum_crop` is not the box's size."""
     lum = np.asarray(lum_crop, np.float32)
     w, h = crop.box[2:]
     if lum.shape != (h, w):
         raise ValueError(f"{crop.path}: the crop is {lum.shape}, its box {w} x {h}")
-    return outline_labels(crop) if crop.outlined else seed_labels(lum, crop)
+    return outline_labels(crop) if crop.outlined else seed_labels(lum, crop, smooth)
 
 
 def outline_labels(crop: Crop) -> CropLabels:
@@ -258,11 +264,57 @@ def _deepest(islands: np.ndarray, i: int, depth: np.ndarray) -> tuple[int, int]:
     return int(xx), int(yy)
 
 
-def seed_labels(lum: np.ndarray, crop: Crop) -> CropLabels:
-    """A seed crop's labels by the eight rules.  ValueError naming the file and the seed for a seed off the crop, on a
-    stroke or limit, a street seed not on paper, a block or open seed the street reaches, and two seeds in one
-    island.  Warnings: each unseeded island larger than the smallest seeded one, then the LARGEST largest unseeded
-    islands whatever was seeded (page px of a px well inside each)."""
+@dataclass(frozen=True)
+class Dent:
+    """A piece of street that closing an area adds: its area, px count, depth (px to the closed shape's outside), the
+    crop px (x, y) of its deepest px, and whether it was filled (a bite) or left (an alley or dead end)."""
+    area: int
+    size: int
+    depth: float
+    at: tuple[int, int]
+    filled: bool
+
+
+def fill_bites(area: np.ndarray, barrier: np.ndarray) -> tuple[np.ndarray, list[Dent]]:
+    """`area` with its bites filled, and every dent found.  For each area in number order: its mask closed with a disk
+    of radius BITE; the px the closing adds that are no area's and no barrier's, in 8-connected pieces; a piece whose
+    deepest px lies no more than SHALLOW px from the closed shape's outside joins the area, a deeper one is left
+    whole."""
+    area = area.copy()
+    found: list[Dent] = []
+    pad = BITE + 1
+    h, w = area.shape
+    for k, sl in enumerate(ndimage.find_objects(area), start=1):
+        if sl is None:
+            continue
+        ys, xs = slice(max(0, sl[0].start - pad), min(h, sl[0].stop + pad)), \
+            slice(max(0, sl[1].start - pad), min(w, sl[1].stop + pad))
+        win = area[ys, xs]
+        mask = np.pad(win == k, pad)
+        closed = ndimage.binary_closing(mask, disk(BITE, strict_radius=False).astype(bool)) | mask
+        depth = ndimage.distance_transform_edt(closed)[pad:-pad, pad:-pad]
+        added = closed[pad:-pad, pad:-pad] & (win == 0) & ~barrier[ys, xs]
+        pieces, n = ndimage.label(added, EIGHT)
+        if not n:
+            continue
+        deepest = ndimage.maximum(depth, pieces, np.arange(1, n + 1))
+        where = ndimage.maximum_position(depth, pieces, np.arange(1, n + 1))
+        sizes = np.bincount(pieces.ravel(), minlength=n + 1)
+        for i in range(1, n + 1):
+            filled = bool(deepest[i - 1] <= SHALLOW)
+            if filled:
+                win[pieces == i] = k
+            y, x = where[i - 1]
+            found.append(Dent(k, int(sizes[i]), float(deepest[i - 1]), (int(x) + xs.start, int(y) + ys.start), filled))
+    return area, found
+
+
+def seed_labels(lum: np.ndarray, crop: Crop, smooth: bool = True) -> CropLabels:
+    """A seed crop's labels by the nine rules (`smooth` False: without rule 6, `fill_bites`).  ValueError naming the
+    file and the seed for a seed off the crop, on a stroke or limit, a street seed not on paper, a block or open seed
+    the street reaches, and two seeds in one island.  Warnings (the same either way): each unseeded island larger than
+    the smallest seeded one, then the LARGEST largest unseeded islands whatever was seeded (page px of a px well inside
+    each)."""
     x0, y0, w, h = crop.box
     stroke = _barrier(crop.strokes, x0, y0, lum.shape)
     limit = _barrier(crop.limits, x0, y0, lum.shape)
@@ -311,6 +363,8 @@ def seed_labels(lum: np.ndarray, crop: Crop) -> CropLabels:
             x, y = _deepest(islands, i, depth)
             warnings.append(f"unseeded island of {int(sizes[i])} px at {x + x0}, {y + y0}: a block left unseeded is "
                             f"labelled street")
+    if smooth:
+        area, _ = fill_bites(area, barrier)
     label = np.where(barrier, NONE, np.where(area > 0, AREA, STREET)).astype(np.uint8)
     edge = _edges(area)
     edge[stroke] = 1
