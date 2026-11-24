@@ -458,11 +458,16 @@ def _placer(placements: Callable[[SheetId], object] | None, which: str = "warp")
 def ground_share(a: Crop, b: Crop, tr_a, tr_b) -> float:
     """The share of crop a's ground that lies on crop b's box: points round a's box (`ring`) sent to the ground through
     its sheet's placement `tr_a` and onto b's page through `tr_b`, their polygon (the finite ones, in order) filled on
-    b's page px, and the share of its px inside b's box.  0 when no point can be placed."""
+    b's page px, and the share of its px inside b's box.  0 when no point can be placed (a's ground is not on b's
+    page); when only some can, a warning is logged naming crop a, b's sheet and the count, as `reserved` does."""
     px = tr_b.to_pixel(tr_a.to_world(ring(a.box)))
-    px = px[np.isfinite(px).all(axis=1)]
-    if not len(px):
+    ok = np.isfinite(px).all(axis=1)
+    if not ok.any():
         return 0.0
+    if not ok.all():
+        log.warning("%s: %d of %d points round its box could not be placed on %s/%s; measured the polygon of the "
+                    "rest", a.path, int((~ok).sum()), len(ok), b.series, b.sheet)
+    px = px[ok]
     lo = np.floor(px.min(axis=0)).astype(int) - 1
     hi = np.ceil(px.max(axis=0)).astype(int) + 2
     canvas = np.zeros((hi[1] - lo[1], hi[0] - lo[0]), np.uint8)

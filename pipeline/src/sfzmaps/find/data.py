@@ -54,9 +54,9 @@ class Labelled:
 
 def sheet_labelled(sid: SheetId, which: str = "warp") -> Labelled:
     """The sheet's lot labels (data/find/labels/<series>/<sheet>.npz) as a `Labelled` (see the module), with the
-    reserved ground through placement `which` left unlabelled and every cut with a px on it dropped.  FileNotFoundError or ValueError naming the command
-    that makes the label file (`lotlabels.load_sheet_labels`): missing, made through another placement, or not fitting
-    the scan."""
+    reserved ground through placement `which` left unlabelled and every cut with a px on it dropped.
+    FileNotFoundError or ValueError naming the command that makes the label file (`lotlabels.load_sheet_labels`):
+    missing, made through another placement, or not fitting the scan."""
     lum = pages.load_scan(sid)
     lab = lotlabels.load_sheet_labels(sid, which, lum.shape)
     found = lotlabels.file_cuts(lab)

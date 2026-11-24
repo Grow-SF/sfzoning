@@ -4,9 +4,9 @@ the same read onto a scan's page through its sheet's placement.
 Only a series whose `lots` is set in inputs/find/label_sources.csv is labelled from lots (`series_lots`): "table" from
 the lots of the April 2000 table (`solver.table.load_table`, the three `2000-digital` series), "year" from the lots of
 its year (`districts.read.load_parcels`).  On the grid (`Ground`): the lots painted (`solver.lots.lot_rasters`),
-today's blocks the lots with their enclosed holes filled, and the street labels and weights of `hatchnet.data.street_grid`
-from the blocks and today's centre lines (data/ref/streets.parquet), every street type with the pooled half-widths: 1
-street, 0 not street (a block), 255 no label.
+today's blocks the lots with their enclosed holes filled, and the street labels and weights of
+`hatchnet.data.street_grid` from the blocks and today's centre lines (data/ref/streets.parquet), every street type with
+the pooled half-widths: 1 street, 0 not street (a block), 255 no label.
 
 A sheet's labels (`sheet_labels`): the street-or-not labels read onto its page, the px said to carry no block edge, and
 the block-edge cut statements of `find.cuts`.  The finder makes no label about zoning borders.

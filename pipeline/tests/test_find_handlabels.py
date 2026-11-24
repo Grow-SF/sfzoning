@@ -576,3 +576,22 @@ def test_the_crops_command_prints_a_choosing_crop_on_test_ground(tmp_path, monke
     assert r.exit_code == 1, r.output
     assert ("choose-against-test ground overlap: choose/s/A__130_135_40_40.json lies on the ground of the test crop "
             "test/s/A__100_100_40_40.json (0.031 of the choosing crop's area)") in r.output, r.output
+
+
+def test_a_choosing_crop_the_other_placement_cannot_place_in_part_is_warned(tmp_path, caplog):
+    import logging
+
+    from sfzmaps.solver import grid
+    a = handlabels.read_crop(_write(tmp_path, "choose", "A", (200, 300, 80, 40)), "choose")
+    b = handlabels.read_crop(_write(tmp_path, "test", "B", (300, 300, 50, 40)), "test")
+    blind = _Blind(Flat(4.0, dx=100), grid.X0 + 4.0 * 240)    # B cannot place A's px east of x = 240
+    with caplog.at_level(logging.WARNING, logger="sfzmaps.find.handlabels"):
+        share = handlabels.ground_share(a, b, Flat(4.0), blind)
+    assert share > 0                                          # the part B can place (A's x 200-240) lies on b's box
+    [rec] = caplog.records
+    msg = rec.getMessage()
+    assert "14 of 30 points" in msg and "A__200_300_80_40.json" in msg and "s/B" in msg
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="sfzmaps.find.handlabels"):  # places none: not on B, as `reserved`
+        assert handlabels.ground_share(a, b, Flat(4.0), _Blind(Flat(4.0, dx=100), grid.X0)) == 0.0
+    assert caplog.records == []

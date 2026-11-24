@@ -1801,9 +1801,10 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
                device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one).")
                ) -> None:
     """Count what the run's kept model finds on every `test` hand crop, at the watershed depth fitted on the `choose`
-    crops: how many printed blocks are found, joined, cut up, lost or held whole, how much of the hand street and
-    block ground it calls so, and how far the hand block boundary lies from its block edges in feet; per crop, per era
-    and pooled (`find.counts`).  Writes data/find/runs/<run>/counts.json, each test crop's read
+    crops: how many of the answer key's blocks are found, joined, cut up, lost or held whole, how much of the answer
+    key's street and block ground it calls so, and how far the answer key's block boundary lies from the nearest block
+    edge the model drew, in feet; per crop, per era and pooled (`find.counts`).  The answer key: block outlines marked
+    by hand on the scan, never shown to the model.  Writes data/find/runs/<run>/counts.json, each test crop's read
     (reads/test/<series>__<crop>.npz) and picture (look/test/<series>__<crop>.png).  Exit status 1 when the model
     predates the two-answer finder, there is no choosing or no test crop, a choosing crop lies on a test crop's
     ground, or a crop cannot be read.  $0."""
@@ -1845,8 +1846,8 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
         feet = "no model edge" if b["median"] is None else (f"median {b['median']:.1f} ft, 90% {b['p90']:.1f} ft, "
                                                             f"99% {b['p99']:.1f} ft")
         typer.echo(f"  {era}: {c}; held whole {h['whole']} of {h['blocks']}; street px called street "
-                   f"{g['street_share']}, area px called not street {g['area_share']}; hand block boundary to the "
-                   f"nearest block edge: {feet}")
+                   f"{g['street_share']}, area px called not street {g['area_share']}; answer key's block boundary "
+                   f"to the nearest block edge the model drew: {feet}")
     typer.echo(str(f))
 
 

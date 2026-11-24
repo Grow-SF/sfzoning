@@ -8,7 +8,8 @@ key and the sheet's name at the top.  `busiest` finds the close-up: the window h
 coordinates off for the crop file.  `ruled`: a close-up of the scan with rulers and a grid, to draw crops from.
 
 `read_picture`: a crop as the finder read it (`find.counts`): the scan, the chances of street and of a block edge, and
-the closed areas, the hand blocks outlined by what became of them.
+the closed areas, the answer key's blocks outlined by what became of them (the answer key: block outlines marked by
+hand on the scan, never shown to the model).
 
 Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/, `write_crop` to
 data/find/look/crops/<set>/, `write_ruled` to data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
@@ -201,7 +202,8 @@ CROP_KEY = (("orange = street", ORANGE), ("each area its own colour; open land s
             ("magenta = stroke, yellow = limit (thin lines)", _key_lines))
 OUTLINE_KEY = (("orange = street", ORANGE), ("each area its own colour; open land striped", _key_stripes),
                ("black = block edge", BLACK), ("grey = no label (the crop's outer px)", GREY),
-               ("magenta = outline as typed (a dot at each corner)", MAGENTA))
+               ("magenta = the answer key's outlines as typed (a dot at each corner)", MAGENTA),
+               ("answer key: block outlines marked by hand on the scan, never shown to the model", WHITE))
 
 
 def crop(lum_crop: np.ndarray, labels: handlabels.CropLabels, c: handlabels.Crop) -> np.ndarray:
@@ -325,7 +327,8 @@ def _key_tints(band, box):
 READ_KEY = (("panels: the scan; the chance of street and of a block edge (white 0, black 1); the found areas over "
              "the scan", WHITE),
             ("found areas: each tinted its own colour, their sides dark blue", _key_tints),
-            ("hand block outlines: green = found", OUTCOME_COLOUR["found"]),
+            ("answer key: block outlines marked by hand on the scan, never shown to the model", WHITE),
+            ("the answer key's blocks outlined by outcome: green = found", OUTCOME_COLOUR["found"]),
             ("red = joined (the found area holding most of it lies mostly outside it)", OUTCOME_COLOUR["joined"]),
             ("orange = cut up among found areas", OUTCOME_COLOUR["cut_up"]),
             ("purple = lost (most of it in no found area)", OUTCOME_COLOUR["lost"]))
@@ -355,7 +358,7 @@ def read_picture(lum: np.ndarray, chances: np.ndarray, found: np.ndarray, truth:
         block = truth.area == i
         inner = ndimage.binary_erosion(block, iterations=OUTLINE, border_value=1)
         over[block & ~inner] = OUTCOME_COLOUR[outcome]
-    panels.append(_named(over, "the found areas; hand blocks outlined by outcome"))
+    panels.append(_named(over, "the found areas; the answer key's blocks outlined by outcome"))
     gap = np.full((panels[0].shape[0], GAP, 3), 255, np.uint8)
     row = [panels[0]]
     for p in panels[1:]:

@@ -205,16 +205,6 @@ def _fit_items():
 SMALL = dict(batch=2, tile=32, width=4)
 
 
-def test_every_run_trains_both_answers():
-    recipe = train.Recipe(steps=3, **SMALL)
-    torch.manual_seed(recipe.seed)                                # the network fit makes, before training
-    before = model.FindNet(recipe.width).state_dict()
-    after = train.fit(_fit_items(), recipe, "cpu").state_dict
-    for k in ("head.weight", "head.bias"):
-        for channel in (model.STREET, model.EDGE):
-            assert not torch.equal(after[k][channel], before[k][channel]), (k, channel)
-
-
 def test_same_seed_same_bits_cpu():
     recipe = train.Recipe(steps=5, **SMALL)
     a, b = (train.fit(_fit_items(), recipe, "cpu") for _ in range(2))

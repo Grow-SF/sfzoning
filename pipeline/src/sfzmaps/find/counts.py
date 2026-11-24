@@ -24,8 +24,8 @@ choosing crop lying on a test crop's ground (`handlabels.refuse_choose_on_test`)
 of scan round it where the page allows (`data.grown`) and scored on its own box only.
 
 Reads the scans and frame cuts, the crop files, every held-out crop's sheet placement (for the choosing crops'
-ground), and for `count` each test crop's sheet placement (its ft per px, for scoring only).  `count` writes data/find/runs/<run>/reads/test/<series>__<crop>.npz and
-look/test/<series>__<crop>.png."""
+ground), and for `count` each test crop's sheet placement (its ft per px, for scoring only).  `count` writes
+data/find/runs/<run>/reads/test/<series>__<crop>.npz and look/test/<series>__<crop>.png."""
 from __future__ import annotations
 
 import logging

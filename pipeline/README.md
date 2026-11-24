@@ -1134,9 +1134,9 @@ reads it yet, and `sfzmaps build` doesn't run it. Everything is $0 (no API calls
 
 Inputs, in git: `inputs/find/label_sources.csv` (each series' era and the lots that label it) and the hand crops,
 `inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json` (how to draw them: `inputs/find-labels/README.md`).
-It also reads the scans, the frame cuts and the warp's placements under `data/`. Outputs, under `data/find/`: `labels/<series>/` (the label files), `look/` (pictures),
-and `runs/<run>/` (`model.pt`, `log.json`, `counts.json`, and each test crop's read and picture as
-`reads/test/<series>__<crop>.npz` and `look/test/<series>__<crop>.png`).
+It also reads the scans, the frame cuts and the warp's placements under `data/`. Outputs, under `data/find/`:
+`labels/<series>/` (the label files), `look/` (pictures), and `runs/<run>/` (`model.pt`, `log.json`, `counts.json`,
+and each test crop's read and picture as `reads/test/<series>__<crop>.npz` and `look/test/<series>__<crop>.png`).
 
 The hand crops are training and scoring images, never results: nothing reads them as the map's answer. The ground
 under the `choose` and `test` crops is left out of all training, on every year's scan, and a choosing crop may not

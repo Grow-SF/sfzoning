@@ -11,10 +11,9 @@ these are old, poorly printed and poorly scanned maps).  The noise moves only th
 The loss (`batch_loss`): every label of both answers, summed as one likelihood (`find.losses`: the dense street and
 block-edge labels by `dense_nll`, the block-edge cut statements by `cut_nll`), divided by the batch's statements
 (`losses.statements`); a batch with no statement is skipped and counted.  With `Recipe.unbroken`, the hand-crop tiles
-add the
-branch's unbroken-line terms (`hatchnet.topo`, clDice: 1 - recall and 1 - precision) between the block-edge chance
-and the hand block-edge label.  The loss is taken on the CPU, where its sums (`index_add`) are deterministic (as the
-branch does).
+add the branch's unbroken-line terms (`hatchnet.topo`, clDice: 1 - recall and 1 - precision) between the block-edge
+chance and the hand block-edge label.  The loss is taken on the CPU, where its sums (`index_add`) are deterministic
+(as the branch does).
 
 Every `Recipe.every` steps (and at the last) the weights are a checkpoint: `on_checkpoint(step, state_dict)` scores it
 and the highest is kept, the earliest of a tie; with no callback, the last.
