@@ -127,6 +127,6 @@ when a sheet is read.
 - A road drawn as two lines is a street.
 - Open land (land with no outline of its own) is its own kind, `open`, so it is never counted as blocks that failed to
   separate.
-- Railway lines, shorelines and contours are neither a block edge nor a zoning border.
+- Railway lines, shorelines and contours are not block edges.
 
 The owner corrects these labels on the pictures, not a description of them.
