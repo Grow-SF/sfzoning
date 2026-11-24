@@ -1,0 +1,96 @@
+{
+ "box": [
+  700,
+  2215,
+  520,
+  385
+ ],
+ "street": [
+  [
+   1099,
+   2250
+  ],
+  [
+   1035,
+   2370
+  ],
+  [
+   965,
+   2475
+  ],
+  [
+   895,
+   2595
+  ],
+  [
+   1140,
+   2250
+  ],
+  [
+   1028,
+   2460
+  ],
+  [
+   940,
+   2595
+  ],
+  [
+   1115,
+   2415
+  ],
+  [
+   1083,
+   2505
+  ],
+  [
+   1167,
+   2595
+  ]
+ ],
+ "open": [
+  [
+   800,
+   2400
+  ],
+  [
+   1100,
+   2295
+  ],
+  [
+   1026,
+   2415
+  ],
+  [
+   1092,
+   2415
+  ],
+  [
+   1180,
+   2400
+  ]
+ ],
+ "strokes": [
+  [
+   [
+    1094,
+    2346
+   ],
+   [
+    1099,
+    2346
+   ]
+  ],
+  [
+   [
+    1111,
+    2350
+   ],
+   [
+    1116,
+    2350
+   ]
+  ]
+ ],
+ "notes": "Presidio, south-west (piece P6). Box as assigned (700, 2215, 520, 385), unchanged: every side lies in park land, the top 15 px below the tunnel mouth's bar (y 2196-2200), the bottom above the road entering from the east (y >= 2603 at x 1225) and the park's south line. Three roads, all street: Park Presidio Blvd from the tunnel (band between lines at x 1136/1153 at y 2220 and 929/951 at y 2595, about 17 px between line centres); the ramp on its west (x 1108/1117 at y 2220, x 890/900 at y 2595), only 7-10 px between line centres, narrower than the other roads but drawn as two lines, so street; the ramp branching east off the boulevard's east line at (1116, 2347)-(1112, 2353), 8 px between line centres, curving east to leave the box's bottom at x 1167-1190. The ramp band's top is closed by the boulevard's east line (no opening printed between them), so it is a street separate from the boulevard. Park land, all open: west of the west ramp (one seed); the median between the west ramp and the boulevard, which ends in a pointed tip at (1045, 2362) whose closing line runs back up to the boulevard at (1093, 2341) (it reads as a teardrop at 1x but is the median's tip, not its own island); the strip between the west ramp's lower right line (which starts on the boulevard's west line at (1093, 2349)) and the boulevard; the land between the boulevard and the east ramp, holding the closed wobbly outline at about x 960-1100, y 2455-2599 (cut by the box's bottom), read as a lake (Mountain Lake, by its place; no lettering in the box): its outline is a shoreline, not a block edge, and the water joins this land's area through the ink with no seed of its own; and the land east of the boulevard and the east ramp. The narrow wedge between the median's tip (1045-1093, 2341-2362) and the west ramp's right line is open to the west ramp and labelled street with it. Two short strokes only cut shared road lines at junctions so the land on either side is two areas (they are not printed lines): (1094-1099, 2346) across the boulevard's west line between the median's closing line and the start of the west ramp's right line; (1111-1116, 2350) across the boulevard's east line between the east ramp's two branch points. The one unseeded island left is a 2 px ink speck inside the boulevard at (1066, 2404): street, correctly. Specks of ink in the land west of the roads (800, 2291), (730, 2361), (1058, 2278) lie in open land.",
+ "drawn_by": "Claude (AI), by eye from ruled close-ups, checked on the labels picture, 2026-11-24"
+}
