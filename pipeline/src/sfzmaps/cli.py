@@ -1646,6 +1646,37 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
                 typer.echo(f"  {f}")
 
 
+@find_app.command("measure-town")
+def find_measure_town(series: str = typer.Option(..., "--series", help="The series whose built labels are measured."),
+                      sheet: list[str] = typer.Option(..., "--sheet", help="A sheet to measure (repeatable).")) -> None:
+    """Measure street widths, block sides, block-line and zoning-border widths and the placement spread on built
+    label files (`sfzmaps find labels`), for the made-up towns: inputs/find/town-measures.json, with this command,
+    the date and the git commit.  $0."""
+    import datetime
+    import subprocess
+
+    from sfzmaps.build import git_head
+    from sfzmaps.find import town
+    try:
+        found = town.measure(series, sheet)
+    except FileNotFoundError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "src"],
+                             cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True).stdout.strip()
+    command = " ".join(["sfzmaps find measure-town", f"--series {series}", *(f"--sheet {h}" for h in sheet)])
+    out = {"command": command, "date": datetime.date.today().isoformat(), "commit": git_head(),
+           "uncommitted_changes_in_src": bool(changed), **found}
+    f = town.measures_path()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(out, indent=1) + "\n")
+    for k in town.SIZES:
+        q = found[k]
+        typer.echo(f"{k}: median {q[50]:g} px (5% {q[5]:g}, 95% {q[95]:g}; {found['counts'][k]:,} values)")
+    typer.echo(f"spread_px: {found['spread_px']:.4f}")
+    typer.echo(str(f))
+
+
 @find_app.command("crops")
 def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: train, choose or test (default: all)."),
                look: bool = typer.Option(False, "--look", help="Draw each crop's scan and labels side by side "
