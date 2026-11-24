@@ -45,26 +45,32 @@ class Cuts:
     weight: np.ndarray      # float32 (n,): how much the cut counts (1 as made; `find.drawn` sets 0 for a cut not used)
     ends: np.ndarray        # int32 (n, 2): the grid px it speaks about, as flat indexes of the sheet's grid window
                             # (`window`): an edge cut its inside px and -1, a zoning-border cut a px of each of its lots
+    dropped: np.ndarray     # int64: the page px (flat) of the cuts the lots call for that were dropped for leaving the
+                            # page or the frame cut, those on the page
 
     @staticmethod
     def empty() -> Cuts:
         return Cuts(np.zeros(0, np.int64), np.zeros(0, np.int32), np.zeros(0, np.float32), np.zeros(0, np.uint8),
-                    np.zeros(0, bool), np.zeros(0, np.float32), np.zeros((0, 2), np.int32))
+                    np.zeros(0, bool), np.zeros(0, np.float32), np.zeros((0, 2), np.int32), np.zeros(0, np.int64))
 
     @staticmethod
     def joined(a: Cuts, b: Cuts) -> Cuts:
         """`a`'s cuts, then `b`'s."""
         return Cuts(np.r_[a.px, b.px], np.r_[a.cut, b.cut + len(a.answer)].astype(np.int32), np.r_[a.prior, b.prior],
                     np.r_[a.answer, b.answer], np.r_[a.says, b.says], np.r_[a.weight, b.weight],
-                    np.r_[a.ends, b.ends].astype(np.int32))
+                    np.r_[a.ends, b.ends].astype(np.int32), np.r_[a.dropped, b.dropped])
 
     def with_weight(self, weight: np.ndarray) -> Cuts:
-        return Cuts(self.px, self.cut, self.prior, self.answer, self.says, np.asarray(weight, np.float32), self.ends)
+        return Cuts(self.px, self.cut, self.prior, self.answer, self.says, np.asarray(weight, np.float32), self.ends,
+                    self.dropped)
 
-    def on(self, shape: tuple[int, int], which: np.ndarray | None = None) -> np.ndarray:
-        """Bool (h, w): the page px in any cut (`which`: bool (n,), only those cuts)."""
+    def on(self, shape: tuple[int, int], which: np.ndarray | None = None, dropped: bool = False) -> np.ndarray:
+        """Bool (h, w): the page px in any cut (`which`: bool (n,), only those cuts; `dropped`: and the px of the cuts
+        dropped at the frame cut)."""
         out = np.zeros(shape[0] * shape[1], bool)
         out[self.px if which is None else self.px[which[self.cut]]] = True
+        if dropped:
+            out[self.dropped] = True
         return out.reshape(shape)
 
 
@@ -161,15 +167,17 @@ def _lay(a: np.ndarray, b: np.ndarray, d: np.ndarray, answer: int, says: np.ndar
         col, row = np.rint(pos[:, 0]), np.rint(pos[:, 1])
         inside = (col >= 0) & (col < shape[1]) & (row >= 0) & (row < shape[0])
     col, row = np.where(inside, col, 0).astype(np.int64), np.where(inside, row, 0).astype(np.int64)
+    on_page = inside.copy()
     inside &= keep[row, col]
     good &= np.bincount(cut[~inside], minlength=n) == 0
+    lost = on_page & ~good[cut]
     t = (np.maximum(-k, 0) + np.maximum(k - span[cut], 0)) / m[cut]
     on = good[cut]
     renumber = np.cumsum(good) - 1
     return Cuts((row * shape[1] + col)[on], renumber[cut[on]].astype(np.int32),
                 np.exp(-t[on] ** 2 / (2 * sigma ** 2)).astype(np.float32), np.full(int(good.sum()), answer, np.uint8),
                 np.asarray(says, bool)[good], np.ones(int(good.sum()), np.float32),
-                np.asarray(ends, np.int32).reshape(-1, 2)[good])
+                np.asarray(ends, np.int32).reshape(-1, 2)[good], (row * shape[1] + col)[lost])
 
 
 def _across(p: np.ndarray, q: np.ndarray, width: int, r0: int, c0: int, gp: _GridPage, answer: int,
@@ -218,7 +226,7 @@ def border_cuts(lot: np.ndarray, codes: np.ndarray, tr, shape: tuple[int, int], 
 
     if not (win >= 0).any():
         return touching
-    near = ndimage.distance_transform_edt(win < 0, return_distances=False, return_indices=True)
+    near = ndimage.distance_transform_edt(win < 0, return_distances=False, return_indices=True).astype(np.int64)
     near = (near[0] * width + near[1]).ravel()                                   # each px's nearest lot px
     nlot = np.where(win.ravel() < 0, win.ravel()[near], -1).reshape(win.shape)   # off the lots: the nearest lot
     p, q = _pairs(nlot, test=lambda a, b: (a >= 0) & (b >= 0) & (a != b))
@@ -227,7 +235,9 @@ def border_cuts(lot: np.ndarray, codes: np.ndarray, tr, shape: tuple[int, int], 
     known = (ca >= 0) & (cb >= 0)
     a, b, ca, cb = a[known], b[known], ca[known], cb[known]
     lo, hi = np.minimum(a, b), np.maximum(a, b)                                  # many pairs share two lot px
-    _, first = np.unique(lo * win.size + hi, return_index=True)
+    key = lo * win.size + hi                                                     # int64: a window holds ~10^7 px
+    assert key.dtype == np.int64
+    _, first = np.unique(key, return_index=True)
     lo, hi, same = lo[first], hi[first], ca[first] == cb[first]
     ends = gp.at(np.r_[_centres(lo, width, r0, c0), _centres(hi, width, r0, c0)])
     pa, pb = ends[:len(lo)], ends[len(lo):]

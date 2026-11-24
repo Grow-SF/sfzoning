@@ -163,6 +163,7 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
 
     For a series labelled from lots, labels count only where the sheet draws ink (`find.drawn`): a cut not used has
     weight 0, and a px whose nearest block outline px is not inked has weight 0 and no `edge_none` / `border_none`.
+    A px on a cut the lots call for, kept or dropped at the frame cut, is in neither `edge_none` nor `border_none`.
     `counts` (in the file as count_<name>): the cuts used and dropped (`drawn.use`), and the labelled px (weight > 0)
     before and after."""
     from sfzmaps.find import cuts, drawn
@@ -185,12 +186,12 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
     border = cuts.Cuts.empty()
     if codes is not None:
         border = cuts.border_cuts(g.lot, codes, tr, shape, keep, sigma)
-    edge_none = (street != UNKNOWN) & ~found.on(shape)
+    edge_none = (street != UNKNOWN) & ~found.on(shape, dropped=True)
     if codes is not None:
         r0, r1, c0, c1 = cuts.window(tr, keep, g.lot.shape)
         [lot] = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(g.lot[r0:r1, c0:c1], -1)], (r0, c0))
         known = np.r_[codes != "", False][lot]                  # lot -1 (none) reads the appended False
-        border_none = known & keep & ~border.on(shape)
+        border_none = known & keep & ~border.on(shape, dropped=True)
     else:
         border_none = keep.copy() if src.borders == "none" else np.zeros(shape, bool)
     found = cuts.Cuts.joined(found, border)
@@ -199,10 +200,10 @@ def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
         r0, r1, c0, c1 = cuts.window(tr, keep, g.block.shape)
         used_edge = (found.answer == cuts.EDGE) & drawn.inked(found, lum)
         near_win = drawn.near_inked(g.block[r0:r1, c0:c1], found.ends[used_edge, 0])
-        found, counts = drawn.use(found, lum, near_win)
         [near] = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(near_win, False)], (r0, c0))
         before = int((weight > 0).sum())
         weight = (weight * near).astype(np.float32)
+        found, counts = drawn.use(found, lum, near_win, street, weight)
         edge_none &= near
         border_none &= near
         counts.update(labelled_px_before=before, labelled_px_after=int((weight > 0).sum()))

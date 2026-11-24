@@ -1635,10 +1635,12 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
         if n:
             kept = n["labelled_px_after"] / max(1, n["labelled_px_before"])
             typer.echo(f"  where the sheet draws ink: edge cuts used {n['edge_used']:,}, dropped "
-                       f"{n['edge_dropped']:,}; 'crosses' used {n['crosses_used']:,}, dropped for no ink on the cut "
-                       f"{n['crosses_dropped_no_ink_on_cut']:,}, for a bare block side "
-                       f"{n['crosses_dropped_bare_side']:,}; 'none' used {n['none_used']:,}, dropped "
-                       f"{n['none_dropped']:,}; labelled px kept {kept:.3f}")
+                       f"{n['edge_dropped']:,}; 'crosses' used {n['crosses_used']:,}, dropped for a bare block side "
+                       f"{n['crosses_dropped_bare_side']:,}, for no street between "
+                       f"{n['crosses_dropped_no_street_between']:,}, for no ink on the cut "
+                       f"{n['crosses_dropped_no_ink_on_cut']:,}; 'none' used {n['none_used']:,}, dropped for a bare "
+                       f"block side {n['none_dropped_bare_side']:,}, for no street between "
+                       f"{n['none_dropped_no_street_between']:,}; labelled px kept {kept:.3f}")
         if look:
             for f in pictures.write((series, h), pages.load_scan((series, h)), lab):
                 typer.echo(f"  {f}")

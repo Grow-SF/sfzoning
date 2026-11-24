@@ -35,10 +35,13 @@ def _paint(img: np.ndarray, where: np.ndarray, colour, alpha) -> None:
 
 
 def busiest(lab: dict, shape: tuple[int, int], size: int = CLOSE) -> tuple[int, int, int, int]:
-    """The `size` px window (x0, y0, x1, y1) holding the most cut px (the first such, row by row)."""
+    """The `size` px window (x0, y0, x1, y1) holding the most px of used cuts (weight > 0; the first such, row by
+    row)."""
     h, w = shape
     sh, sw = min(size, h), min(size, w)
-    count = np.bincount(lab["cuts"].px, minlength=h * w).reshape(shape).astype(np.int64)
+    c = lab["cuts"]
+    used = c.weight[c.cut] > 0
+    count = np.bincount(c.px[used], minlength=h * w).reshape(shape).astype(np.int64)
     s = np.zeros((h + 1, w + 1), np.int64)
     s[1:, 1:] = count.cumsum(0).cumsum(1)
     win = s[sh:, sw:] - s[:-sh, sw:] - s[sh:, :-sw] + s[:-sh, :-sw]

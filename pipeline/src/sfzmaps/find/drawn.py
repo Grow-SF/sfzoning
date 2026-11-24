@@ -6,7 +6,8 @@ ink"):
 - an outline px of a block (a block px with a 4-neighbour off the blocks) is inked if one of its edge cuts is used;
 - every other label (a px's street-or-not label, its "no block edge" / "no zoning border" statements, a zoning-border
   cut) is used only where the outline px nearest to it is inked: a zoning-border cut needs both its lots' nearest
-  outline px inked, and a cut saying "a zoning border crosses" needs ink on the cut itself as well.
+  outline px inked, and a cut saying "a zoning border crosses" needs ink on the cut itself as well;
+- a zoning-border cut is used only if the ground between its two lots is street (`use`).
 
 Reads and writes nothing."""
 from __future__ import annotations
@@ -15,6 +16,7 @@ import numpy as np
 from scipy import ndimage
 
 from sfzmaps.find.cuts import BORDER, EDGE, Cuts
+from sfzmaps.solver.hatchnet.data import NOT_STREET, STREET
 
 INK_BELOW = 0.5                 # a px is ink where ink is the more likely reading: luminance under half (exact on the
                                 # 1-bit scans the lots label)
@@ -39,9 +41,14 @@ def near_inked(block: np.ndarray, inked_px: np.ndarray) -> np.ndarray:
     return ink.reshape(block.shape)[near[0], near[1]]
 
 
-def use(c: Cuts, lum: np.ndarray, near: np.ndarray) -> tuple[Cuts, dict]:
+def use(c: Cuts, lum: np.ndarray, near: np.ndarray, street: np.ndarray, weight: np.ndarray) -> tuple[Cuts, dict]:
     """The cuts with weight 1 where used and 0 where not (see the module), and the counts: edge cuts used and dropped;
-    "crosses" cuts used, dropped for no ink on the cut, dropped for a bare block side; "none" cuts used and dropped."""
+    "crosses" and "none" cuts used and dropped, for a bare block side, for ground between their lots that is not
+    street, and ("crosses" only) for no ink on the cut, each cut counted under the first of these that drops it.
+
+    The ground between a zoning-border cut's two lots (its px of prior 1 off the blocks, `street` not NOT_STREET) must
+    all carry a street label (`street` STREET with `weight` > 0 on the page): a cut across a park or the bay would
+    otherwise state what the lots say nothing about."""
     has_ink = inked(c, lum)
     edge, border = c.answer == EDGE, c.answer == BORDER
     flat = near.ravel()
@@ -49,11 +56,16 @@ def use(c: Cuts, lum: np.ndarray, near: np.ndarray) -> tuple[Cuts, dict]:
     for j in (0, 1):
         end = c.ends[:, j]
         sides &= np.where(end >= 0, flat[np.maximum(end, 0)], True)
-    used = np.where(edge, has_ink, sides & (~c.says | has_ink))
+    st, wt = street.ravel()[c.px], weight.ravel()[c.px]
+    between = (c.prior == 1) & (st != NOT_STREET)
+    bad = between & ~((st == STREET) & (wt > 0))
+    on_street = np.bincount(c.cut[bad], minlength=len(c.answer)) == 0
+    used = np.where(edge, has_ink, sides & on_street & (~c.says | has_ink))
     crosses, none = border & c.says, border & ~c.says
-    counts = {"edge_used": int((edge & used).sum()), "edge_dropped": int((edge & ~used).sum()),
-              "crosses_used": int((crosses & used).sum()),
-              "crosses_dropped_no_ink_on_cut": int((crosses & sides & ~has_ink).sum()),
-              "crosses_dropped_bare_side": int((crosses & ~sides).sum()),
-              "none_used": int((none & used).sum()), "none_dropped": int((none & ~used).sum())}
+    counts = {"edge_used": int((edge & used).sum()), "edge_dropped": int((edge & ~used).sum())}
+    for name, which in (("crosses", crosses), ("none", none)):
+        counts[f"{name}_used"] = int((which & used).sum())
+        counts[f"{name}_dropped_bare_side"] = int((which & ~sides).sum())
+        counts[f"{name}_dropped_no_street_between"] = int((which & sides & ~on_street).sum())
+    counts["crosses_dropped_no_ink_on_cut"] = int((crosses & sides & on_street & ~has_ink).sum())
     return c.with_weight(used.astype(np.float32)), counts
