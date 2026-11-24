@@ -5,6 +5,13 @@ day, after the line-by-line audit (`docs/research/hatch-cnn-code-audit-2026-11-2
 (`docs/research/street-and-block-finder-literature-2026-11-23.md`) and a builder's check. Nothing is built.
 Lines marked *(my call)* are the writer's, not the owner's, and can each be changed.
 
+**What has changed since (2026-11-23 night and 2026-11-24), kept here so this page is not read as current:**
+the finder gives two answers, not three: the zoning-border answer was dropped by the owner ("We want the blocks and
+streets"), with its labels and its made-up-town test; the trainer keeps its last step (the choosing crops no longer
+pick a step); training tiles are shown at every print size, measured from the sheets' placements; the area step's
+depth is fitted on panoptic quality. What was built and measured:
+`docs/research/street-and-block-finder-first-chain-2026-11-23.md`.
+
 ## Intent and why
 
 The owner, 2026-11-23:
