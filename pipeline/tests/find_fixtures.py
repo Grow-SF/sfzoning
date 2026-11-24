@@ -46,6 +46,8 @@ class Flat:
     """A flat placement: page px (x, y) (px centres at integers) at (X0 + x ft_per_px, Y1 - y ft_per_px), so page px
     (0, 0) is the grid's top-left corner and y runs down the page as it runs down the grid."""
 
+    correction = None                     # no warp correction laid over it, as a SheetTransform without one
+
     def __init__(self, ft_per_px: float):
         self.ft_per_px = float(ft_per_px)
 

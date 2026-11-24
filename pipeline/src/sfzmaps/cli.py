@@ -1589,22 +1589,51 @@ def find_sheets(series: str = typer.Option(None, "--series", help="Only this ser
 
 @find_app.command("labels")
 def find_labels(series: str = typer.Option(..., "--series", help="A series whose lots label it (label_sources.csv)."),
-                sheet: list[str] = typer.Option(None, "--sheet", help="Only these sheets (repeatable)."),
+                sheet: list[str] = typer.Option(None, "--sheet", help="Only these sheets (repeatable; default: all)."),
                 placement: str = typer.Option("warp", "--placement",
-                                              help="The sheets' placement: warp (data/warp) or work (data/work).")
+                                              help="The sheets' placement: warp (data/warp) or work (data/work)."),
+                look: bool = typer.Option(False, "--look", help="Also draw each sheet's labels on its scan "
+                                                                "(data/find/look/labels/<placement>/).")
                 ) -> None:
     """Make the series' street-or-not labels from its lots on the solver's grid (data/find/labels/<series>/grid.npz,
-    kept once made) and print the px per label."""
+    made again every run), then each sheet's labels through its placement: street or not, and the cuts saying where
+    a block edge and a zoning border cross (data/find/labels/<series>/<sheet>.npz).  $0."""
+    import time
+
     import numpy as np
 
-    from sfzmaps.find import lotlabels
+    from sfzmaps.find import cuts, look as drawn, lotlabels, pages
     from sfzmaps.solver.hatchnet.data import NOT_STREET, STREET, UNKNOWN
     if placement not in lotlabels.PLACEMENTS:
         raise typer.BadParameter(f"expected one of {', '.join(lotlabels.PLACEMENTS)}", param_hint="--placement")
-    g = lotlabels.ground(series)
+    try:
+        pages.source(series)
+    except KeyError as e:
+        raise typer.BadParameter(str(e.args[0]), param_hint="--series") from None
+    found = [h for _, h in pages.sheets(series)]
+    unknown = sorted(set(sheet or []) - set(found))
+    if unknown:
+        raise typer.BadParameter(f"not a map page of {series} that is read: {', '.join(unknown)}", param_hint="--sheet")
+    try:
+        g = lotlabels.make_ground(series)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--series") from None
     for name, v in (("street", STREET), ("block (not street)", NOT_STREET), ("no label", UNKNOWN)):
         typer.echo(f"{name}: {int(np.count_nonzero(g.street == v)):,} grid px")
     typer.echo(f"the grid labels: {lotlabels.grid_path(series)}")
+    for h in sheet or found:
+        t = time.time()
+        lab = lotlabels.sheet_labels((series, h), placement)
+        c = lab["cuts"]
+        counts = ", ".join(f"{name} {int(np.count_nonzero(which)):,}" for name, which in (
+            ("block edge", c.answer == cuts.EDGE),
+            ("a zoning border crosses", (c.answer == cuts.BORDER) & c.says),
+            ("no zoning border crosses", (c.answer == cuts.BORDER) & ~c.says)))
+        typer.echo(f"{h}: sigma {lab['sigma']:.3f} px; cuts: {counts}; {time.time() - t:.1f} s; "
+                   f"{lotlabels.sheet_path((series, h))}")
+        if look:
+            for f in drawn.write((series, h), pages.load_scan((series, h)), lab):
+                typer.echo(f"  {f}")
 
 
 if __name__ == "__main__":

@@ -8,9 +8,15 @@ lots painted (`solver.lots.lot_rasters`), today's blocks the lots with their enc
 labels and weights of `hatchnet.data.street_grid` from the blocks and today's centre lines (data/ref/streets.parquet),
 every street type with the pooled half-widths: 1 street, 0 not street (a block), 255 no label.
 
-Reads data/ref/parcels.parquet or the April 2000 table, data/ref/streets.parquet, and a sheet's placement
-(data/warp/<series>/<sheet>/transform.json with its correction, or data/work/<series>/<sheet>/transform.json).
-Writes data/find/labels/<series>/grid.npz (`ground`), the grid labels kept so they are made once per series."""
+A sheet's labels (`sheet_labels`): the street-or-not labels read onto its page, and the cut statements of
+`find.cuts`: block edges for a series labelled from lots, and zoning borders where the series' zoning borders are a
+column of the April 2000 table (`series_codes`).  A series whose zoning borders are `none` (the hatched maps) has no
+zoning border anywhere on its map.
+
+Reads data/ref/parcels.parquet or the April 2000 table, data/ref/streets.parquet, a sheet's page, frame cut and
+placement (data/warp/<series>/<sheet>/transform.json with its correction, or data/work/<series>/<sheet>/transform.json)
+and data/warp/<series>/<sheet>/scores.json.  Writes data/find/labels/<series>/grid.npz (`make_ground`, made by
+`sfzmaps find labels`, read by everything else) and data/find/labels/<series>/<sheet>.npz (`sheet_labels`)."""
 from __future__ import annotations
 
 import json
@@ -19,13 +25,15 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+from PIL import Image
 from scipy import ndimage
 
 from sfzmaps import config
 from sfzmaps.districts.read import load_parcels, series_year
 from sfzmaps.find import pages
-from sfzmaps.find.pages import OUT, SheetId
+from sfzmaps.find.pages import SheetId
 from sfzmaps.solver import hatching
+from sfzmaps.frame import data as frame_data
 from sfzmaps.solver.hatchnet.data import UNKNOWN, Lines, lines_from, street_grid
 from sfzmaps.solver.lots import lot_rasters
 from sfzmaps.solver.table import load_table
@@ -33,6 +41,10 @@ from sfzmaps.solver.textread.store import save_npz
 from sfzmaps.transform import SheetTransform
 
 TABLE_BORDERS = ("zoning", "height_lim", "sud")     # the April 2000 table's columns a series' zoning borders can be
+# What a lot with no value in a table column is: unknown ("", no statement), except in `sud`, where the table leaves a
+# lot in no special-use district blank; that is known plain ground, and the special-use map draws a zoning border
+# between a district and it.
+MISSING_CODE = {"sud": "(none)"}
 PLACEMENTS = {"warp": config.DATA_DIR / "warp", "work": config.WORK_DIR}
 GRID = "grid.npz"
 
@@ -68,22 +80,28 @@ def build_ground(lots: gpd.GeoDataFrame, lines: Lines, shape: tuple[int, int] | 
 
 
 def grid_path(series: str) -> Path:
-    return OUT / "labels" / series / GRID
+    return pages.OUT / "labels" / series / GRID
 
 
-def ground(series: str) -> Ground:
-    """The series' `Ground` on the whole grid: read from data/find/labels/<series>/grid.npz when there, else made from
-    `series_lots` and today's centre lines and written there."""
-    f = grid_path(series)
-    if f.is_file():
-        with np.load(f) as z:
-            return Ground(z["lot"], z["block"], z["street"], z["weight"])
+def make_ground(series: str) -> Ground:
+    """The series' `Ground` on the whole grid, made from `series_lots` and today's centre lines and written to
+    data/find/labels/<series>/grid.npz (`sfzmaps find labels` makes it every time it runs)."""
     g = build_ground(series_lots(series), lines_from(config.REF_DIR / "streets.parquet"))
+    f = grid_path(series)
     f.parent.mkdir(parents=True, exist_ok=True)
     part = f.with_name(f".{GRID}.part")
     save_npz(part, lot=g.lot, block=g.block, street=g.street, weight=g.weight)
     part.replace(f)
     return g
+
+
+def ground(series: str) -> Ground:
+    """The series' `Ground` as `make_ground` last wrote it; FileNotFoundError naming the command that makes it."""
+    f = grid_path(series)
+    if not f.is_file():
+        raise FileNotFoundError(f"{f}: no grid labels; make them with `sfzmaps find labels --series {series}`")
+    with np.load(f) as z:
+        return Ground(z["lot"], z["block"], z["street"], z["weight"])
 
 
 def placement(sid: SheetId, which: str = "warp") -> SheetTransform:
@@ -113,3 +131,68 @@ def page_ground(g: Ground, tr, shape: tuple[int, int], keep: np.ndarray) -> Page
     street[~keep] = UNKNOWN
     weight[~keep] = 0
     return PageGround(street, weight)
+
+
+def page_shape(sid: SheetId) -> tuple[int, int]:
+    """The page's (h, w), from its file's header."""
+    with Image.open(frame_data.page_path(*sid, work=frame_data.WORK)) as im:
+        return im.height, im.width
+
+
+def series_codes(series: str) -> np.ndarray | None:
+    """Each table lot's code in the table column the series' zoning borders are (`TABLE_BORDERS`), as downloaded and
+    stripped, in lot-index order; a missing value is `MISSING_CODE` for its column, else "" (unknown).  None for a
+    series whose zoning borders are not a table column."""
+    col = pages.source(series).borders
+    if col not in TABLE_BORDERS:
+        return None
+    return load_table()[col].fillna(MISSING_CODE.get(col, "")).astype(str).str.strip().to_numpy(dtype=str)
+
+
+def sheet_path(sid: SheetId) -> Path:
+    return pages.OUT / "labels" / sid[0] / f"{sid[1]}.npz"
+
+
+def sheet_labels(sid: SheetId, which: str = "warp") -> dict:
+    """A sheet's labels through its placement `which`, written to data/find/labels/<series>/<sheet>.npz and returned:
+    `street` and `weight` (`page_ground`; none for a series not labelled from lots), `cuts` (`find.cuts.Cuts`: edge
+    cuts for a series labelled from lots, then zoning-border cuts where its zoning borders are a table column; in the
+    file as cuts_px, cuts_cut, cuts_prior, cuts_answer, cuts_says), `edge_none` (px with a street-or-not label on no
+    edge cut), `border_none` (px inside a lot with a known code on no zoning-border cut; for a series whose zoning
+    borders are `none`, every px of the frame cut), `sigma` (`cuts.spread_px`) and `placement`."""
+    from sfzmaps.find import cuts
+
+    series, _ = sid
+    src = pages.source(series)
+    shape = page_shape(sid)
+    keep = pages.load_keep(sid, shape)
+    tr = placement(sid, which)
+    sigma = cuts.spread_px(sid, which)
+    found = cuts.Cuts.empty()
+    street, weight = np.full(shape, UNKNOWN, np.uint8), np.zeros(shape, np.float32)
+    g = ground(series) if src.lots else None
+    if g is not None:
+        pg = page_ground(g, tr, shape, keep)
+        street, weight = pg.street, pg.weight
+        found = cuts.edge_cuts(g, tr, shape, keep, sigma)
+    edge_none = (street != UNKNOWN) & ~found.on(shape)
+    codes = series_codes(series)
+    if codes is not None:
+        border = cuts.border_cuts(g.lot, codes, tr, shape, keep, sigma)
+        found = cuts.Cuts.joined(found, border)
+        r0, r1, c0, c1 = hatching._slice(tr, keep, g.lot.shape)
+        [lot] = hatching.page_values(hatching.PageWorld(tr, shape), shape, [(g.lot[r0:r1, c0:c1], -1)], (r0, c0))
+        known = np.r_[codes != "", False][lot]                  # lot -1 (none) reads the appended False
+        border_none = known & keep & ~border.on(shape)
+    else:
+        border_none = keep.copy() if src.borders == "none" else np.zeros(shape, bool)
+    out = {"street": street, "weight": weight, "cuts": found, "edge_none": edge_none, "border_none": border_none,
+           "sigma": float(sigma), "placement": which}
+    f = sheet_path(sid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    part = f.with_name(f".{f.name}.part")
+    save_npz(part, street=street, weight=weight, cuts_px=found.px, cuts_cut=found.cut, cuts_prior=found.prior,
+             cuts_answer=found.answer, cuts_says=found.says, edge_none=edge_none, border_none=border_none,
+             sigma=np.float64(sigma), placement=np.array(which))
+    part.replace(f)
+    return out
