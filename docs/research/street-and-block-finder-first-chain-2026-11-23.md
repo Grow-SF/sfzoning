@@ -212,11 +212,16 @@ Settling it takes three seeds without noise on the current recipe.
   the hand pieces two.
 - **Placements the warp itself doubts** sit under two training pieces (1921 094355582; 1935 p10) and one choosing
   piece (1948 sheet 10). "Off every test piece's ground" is checked through those placements.
-- **Calls on the new training pieces for the owner to rule on**: on the 1929 Presidio piece, a narrow strip between
-  the blocks and the Presidio is marked street; it may be the Presidio wall
-  (`look/owner/training-image-presidio-strip-1929.png`). On the Golden Gate Park piece, every ring of the Stadium
-  and the bands round two lakes are marked street (ways); its strokes along the dashed park lines were laid by a
-  helper that follows the printed ink, then checked by eye.
+- **Calls on the new training pieces, as the owner answered them on 2026-11-24.** The narrow strip between the
+  blocks and the Presidio on the 1929 piece is "the Presidio wall next to a road ... the Presidio wall has a walking
+  path along it": it stays marked as a path (street), on his condition that the model can find it and it harms
+  nothing else. Checked: runs never shown the piece were undecided on it (0.32 to 0.44 of the strip called street);
+  the current model finds the same strip on the 1921, 1935 and 1948 scans, none of which it trained on
+  (`look/owner/result-presidio-strip-other-years.png`); block ground called not street and the placing of edges
+  did not change in any era when the piece went in. The bands round the two lakes on the Golden Gate Park piece
+  are "sidewalk paths": marked street, as drawn. The Stadium's rings are the sports track; he knows no general rule
+  for it, none is made, and the piece stays as drawn (ways). That piece's strokes along the dashed park lines were
+  laid by a helper that follows the printed ink, then checked by eye.
 - **The unbroken-line option** (`--unbroken`) is unusable as built (about seven times slower); never compared, and
   not looked at with resized tiles.
 - **Crops only.** Reading a whole sheet and handing streets and block edges to the sheet warp (#69) is not built.
@@ -225,11 +230,10 @@ Settling it takes three seeds without noise on the current recipe.
 
 ## Decisions waiting for the owner
 
-1. The Presidio strip (road or wall) and the Stadium's rings (ways or not).
-2. Areas: keep the watershed (blocks split along zoning borders, few joined, scores unsteady) or take plain pieces
+1. Areas: keep the watershed (blocks split along zoning borders, few joined, scores unsteady) or take plain pieces
    of not-street ground (blocks whole, more joined across streets).
-3. Where a lot-free expanse is open land or water, should the lot labels stop calling it street?
-4. Whether to hand-mark 1960-1980 training pieces (needs teaching from outline pieces, which is not built), now
+2. Where a lot-free expanse is open land or water, should the lot labels stop calling it street?
+3. Whether to hand-mark 1960-1980 training pieces (needs teaching from outline pieces, which is not built), now
    that the print-size fix carries that era to 0.99.
 
 ## Reproducing
