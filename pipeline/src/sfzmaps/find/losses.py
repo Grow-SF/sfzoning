@@ -3,7 +3,7 @@
 - A dense label (street or not at a px, or "no block edge" / "no zoning border" at a px): Bernoulli, `dense_nll`.
 - A cut statement (`find.cuts`): "a line crosses this cut" holds with chance 1 - prod_i (1 - prior_i p_i), the line
   being at px i with the network's chance p_i where the placement allows it (prior_i); "none does" with chance
-  prod_i (1 - p_i).  `cut_nll`, computed in logs.
+  prod_i (1 - p_i).  `statement_chance`, and `cut_nll` from it, computed in logs.
 
 Every term is multiplied by its label's weight, and `statements` counts the labels (their weights summed); the
 trainer divides the summed loss by it.  The three answers add as one likelihood, with no weights between them.
@@ -13,31 +13,42 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 
-TINY = 1e-30        # numerics only: the chance "a line crosses" is never taken below TINY (a loss of 69)
-
-
 def dense_nll(logit: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     """The sum over px of weight * binary cross entropy; target 0/1, weight 0 where there is no label."""
     bce = F.binary_cross_entropy_with_logits(logit, target.to(logit.dtype), reduction="none")
     return (torch.where(weight > 0, weight.to(logit.dtype) * bce, torch.zeros_like(bce))).sum()
 
 
-def _log1mexp(s: torch.Tensor) -> torch.Tensor:
-    """log(1 - exp(s)) for s < 0, accurate at both ends."""
-    return torch.where(s < -0.6931471805599453, torch.log1p(-torch.exp(s)), torch.log(-torch.expm1(s)))
+def _segment_logsumexp(t: torch.Tensor, seg: torch.Tensor, n: int) -> torch.Tensor:
+    """(n,): log sum_i exp(t_i) over the i of each segment (-inf for one with none or with every t_i -inf)."""
+    top = torch.full((n,), float("-inf"), dtype=t.dtype, device=t.device)
+    top = top.scatter_reduce(0, seg, t.detach(), reduce="amax", include_self=True)
+    top = torch.where(torch.isfinite(top), top, torch.zeros_like(top))
+    total = torch.zeros(n, dtype=t.dtype, device=t.device).index_add(0, seg, torch.exp(t - top[seg]))
+    return top + torch.log(total)
 
 
 def _log_statement_chance(logit_flat: torch.Tensor, cuts_px: torch.Tensor, cuts_cut: torch.Tensor,
                           prior: torch.Tensor, says: torch.Tensor) -> torch.Tensor:
-    """The log of each cut's statement chance (see `statement_chance`), computed in logs."""
-    z = logit_flat[cuts_px]
-    prior = prior.to(z.dtype)
+    """The log of each cut's statement chance (see `statement_chance`), computed in logs throughout.
+
+    "None does": sum_i log(1 - p_i) = -sum_i softplus(z_i).  "A line crosses": with a_i = prior_i p_i taken in any
+    order along the cut, 1 - prod_i (1 - a_i) = sum_i a_i prod_{j<i} (1 - a_j) exactly, so its log is a logsumexp of
+    log prior_i + log p_i + sum_{j<i} log(1 - a_j): every term the log of a positive number, its gradient finite and
+    never zero however surely the px are off."""
+    order = torch.argsort(cuts_cut, stable=True)                 # each cut's px together, in their order
+    z, cut = logit_flat[cuts_px[order]], cuts_cut[order]
+    prior = prior[order].to(z.dtype)
     n = len(says)
+    log_off = torch.zeros(n, dtype=z.dtype, device=z.device).index_add(0, cut, -F.softplus(z))     # log prod(1 - p)
     # log(1 - prior p) with p = sigmoid(z): softplus(z + log(1 - prior)) - softplus(z); log(1 - prior) is -inf at 1
     miss = torch.logaddexp(torch.zeros_like(z), z + torch.log1p(-prior.clamp(max=1))) - F.softplus(z)
-    log_none = torch.zeros(n, dtype=z.dtype, device=z.device).index_add(0, cuts_cut, miss)       # log prod(1 - prior p)
-    log_off = torch.zeros(n, dtype=z.dtype, device=z.device).index_add(0, cuts_cut, -F.softplus(z))  # log prod(1 - p)
-    crosses = _log1mexp(log_none.clamp(max=-TINY))                           # log(1 - TINY) = -TINY
+    upto = torch.cumsum(miss.double(), 0)                         # in float64: a batch's sum runs to millions
+    first = torch.ones(len(cut), dtype=torch.bool, device=z.device)
+    first[1:] = cut[1:] != cut[:-1]
+    start = torch.cummax(torch.where(first, torch.arange(len(cut), device=z.device), 0), 0).values
+    before = ((upto - miss.double()) - (upto[start] - miss[start].double())).to(z.dtype)   # sum_{j<i} in its cut
+    crosses = _segment_logsumexp(torch.log(prior) + F.logsigmoid(z) + before, cut, n)
     return torch.where(says.to(torch.bool), crosses, log_off)
 
 

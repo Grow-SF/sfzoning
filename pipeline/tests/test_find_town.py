@@ -63,13 +63,18 @@ def test_town_borders_follow_the_codes(m):
 
 def test_measuring_a_town_gives_back_its_sizes():
     """A town drawn with one size each, labelled as `lotlabels.sheet_labels` labels a sheet, measures back to those
-    sizes (the medians: a cut at a street crossing or under a zoning border beside a block line measures longer)."""
+    sizes: every street width and block side exactly (no cut between two lots of one block counts as a street); every
+    line at least as wide as drawn and most of them exactly (a cut where two lines meet, or under a zoning border
+    beside a block line, measures the lines together)."""
     sizes = {"street_width": 18, "block_side": 60, "block_line_width": 3, "zoning_border_width": 7}
     m = {k: [float(v)] * 101 for k, v in sizes.items()} | {"spread_px": 0.9}
     t = town.draw(np.random.default_rng(1), m)
     found = town.sizes(town.labels(t, m["spread_px"]), t.lum)
-    for k, v in sizes.items():
-        assert np.median(found[k]) == v, k
+    for k in ("street_width", "block_side"):
+        assert len(found[k]) and (found[k] == sizes[k]).all(), (k, np.unique(found[k]))
+    for k in ("block_line_width", "zoning_border_width"):
+        values, counts = np.unique(found[k], return_counts=True)
+        assert values[0] == sizes[k] and values[np.argmax(counts)] == sizes[k], (k, values, counts)
 
 
 def test_the_border_answer_learns_which_ink_is_the_border(m):
@@ -77,6 +82,7 @@ def test_the_border_answer_learns_which_ink_is_the_border(m):
     16 towns to learn from and 20 fresh ones to read, all drawn in turn from np.random.default_rng(0).  The network
     agrees with a cut when it gives the cut's own statement a chance over one half; judged on the fresh towns' cuts
     pooled."""
+    deterministic = torch.are_deterministic_algorithms_enabled()
     torch.use_deterministic_algorithms(True)
     threads = torch.get_num_threads()
     torch.set_num_threads(1)
@@ -87,7 +93,7 @@ def test_the_border_answer_learns_which_ink_is_the_border(m):
         net = town.fit(towns, m["spread_px"], width=8, tile=64, batch=8, steps=400, seed=0)
         chance = [town.chances(net, t.lum)[model.BORDER] for t in fresh]
     finally:
-        torch.use_deterministic_algorithms(False)
+        torch.use_deterministic_algorithms(deterministic)
         torch.set_num_threads(threads)
     agreed, says, on_border, on_block_only = [], [], [], []
     for t, p in zip(fresh, chance):

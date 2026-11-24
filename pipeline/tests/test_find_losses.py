@@ -2,7 +2,7 @@
 cut" needs one px on, "none does" needs every px off)."""
 import math
 
-import numpy as np
+import pytest
 import torch
 
 from sfzmaps.find import losses
@@ -65,10 +65,32 @@ def test_a_cut_of_weight_zero_adds_nothing():
     assert losses.statements(torch.ones(4, 4), weight) == 17.0
 
 
-def test_gradients_are_finite_when_every_px_is_surely_off():
-    """A "crosses" cut whose px are all far below zero still gives a finite loss and gradient (computed in logs)."""
-    logit = torch.full((3,), -200.0, requires_grad=True)
-    loss = losses.cut_nll(logit, torch.arange(3), torch.zeros(3, dtype=torch.long), torch.ones(3),
-                          torch.tensor([True]), torch.ones(1))
-    loss.backward()
-    assert np.isfinite(float(loss.detach())) and torch.isfinite(logit.grad).all() and float(loss.detach()) > 10
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_a_crossing_cut_read_as_surely_off_still_teaches(dtype):
+    """A "crosses" cut whose px the network reads as surely not a line, however surely: a finite loss and a finite,
+    non-zero gradient with weight 1, and exactly zero with weight 0."""
+    prior = torch.tensor([0.5, 1.0, 0.5], dtype=dtype)
+    px, cut, says = torch.arange(3), torch.zeros(3, dtype=torch.long), torch.tensor([True])
+    for z in (-10.0, -20.0, -40.0, -60.0, -80.0, -200.0):
+        for weight in (1.0, 0.0):
+            logit = torch.full((3,), z, dtype=dtype, requires_grad=True)
+            loss = losses.cut_nll(logit, px, cut, prior, says, torch.tensor([weight], dtype=dtype))
+            loss.backward()
+            assert torch.isfinite(loss.detach()) and torch.isfinite(logit.grad).all(), (z, weight, logit.grad)
+            if weight:
+                assert (logit.grad != 0).all() and float(loss.detach()) > 5, (z, logit.grad)
+            else:
+                assert (logit.grad == 0).all() and float(loss.detach()) == 0
+        chance = losses.statement_chance(torch.full((3,), z, dtype=dtype), px, cut, prior, says)
+        assert torch.isfinite(chance).all() and 0 <= float(chance[0]) < 1e-3     # e^-199 is 0 in float32
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
+def test_a_none_cut_read_as_surely_on_has_a_finite_gradient(dtype):
+    for z in (20.0, 60.0):
+        logit = torch.full((3,), z, dtype=dtype, requires_grad=True)
+        loss = losses.cut_nll(logit, torch.arange(3), torch.zeros(3, dtype=torch.long),
+                              torch.tensor([0.5, 1.0, 0.5], dtype=dtype), torch.tensor([False]),
+                              torch.ones(1, dtype=dtype))
+        loss.backward()
+        assert torch.isfinite(loss.detach()) and torch.isfinite(logit.grad).all() and (logit.grad != 0).all()

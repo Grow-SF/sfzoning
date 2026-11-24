@@ -4,12 +4,14 @@ zoning-border answer learns from cut statements alone which ink is the zoning bo
 The measures (`measure`, written by `sfzmaps find measure-town` to inputs/find/town-measures.json, read by
 `measures`): 101 quantiles (px) of each of SIZES, from built label files (`lotlabels.sheet_labels`), used cuts only
 (weight > 0):
-  street_width         the between-lots run of each cut across a street: its px of prior 1, which run from one lot's
-                       px centre to the other's (the street's px and one of each lot's)
+  street_width         the between-lots run of each cut across a street (its px of prior 1 hold street-labelled
+                       px): those px run from one lot's px centre to the other's (the street's px and one of each
+                       lot's)
   block_side           the runs of block px (street-or-not label 0) along rows and columns with street (label 1) at
                        both ends
   block_line_width     the ink run along each block-edge cut under its best px
   zoning_border_width  the same for each "a zoning border crosses" cut
+A zoning border printed beside a block line is measured together with it, so that width is the pair's.
 A cut's best px is its ink px of highest prior, and of those the one in the longest ink run (across a street every
 px between the lots has prior 1, and the zoning border, where the sheet prints one there, is the heavier line).
 `spread_px` is the mean of those sheets' placement spreads (`cuts.spread_px`, the files' `sigma`).
@@ -118,7 +120,8 @@ def sizes(z, lum: np.ndarray) -> dict[str, np.ndarray]:
         b = best[which]
         return run[b[b >= 0]]
 
-    return {"street_width": between[border & (between > 1)],
+    on_street = np.bincount(cut, (prior == 1) & (z["street"].ravel()[px] == STREET), minlength=n) > 0
+    return {"street_width": between[border & on_street],
             "block_side": _block_runs(z["street"], z["weight"]),
             "block_line_width": width((answer == cuts.EDGE) & used),
             "zoning_border_width": width(border & says)}
