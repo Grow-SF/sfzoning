@@ -1717,6 +1717,87 @@ def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: trai
         raise typer.Exit(1)
 
 
+@find_app.command("train")
+def find_train(run: str = typer.Option(..., "--run", help="The run's name: its files go to data/find/runs/<run>/."),
+               sheet: list[str] = typer.Option(None, "--sheet", help="A lot-labelled sheet to train on, as "
+                                                                     "<series>/<sheet> (repeatable)."),
+               without_borders: bool = typer.Option(False, "--without-borders",
+                                                    help="Train no zoning-border answer (its labels give no loss)."),
+               unbroken: bool = typer.Option(False, "--unbroken", help="Add the unbroken-line terms on the hand "
+                                                                       "crops' block edges."),
+               no_noise: bool = typer.Option(False, "--no-noise", help="No print-and-scan noise on the tiles."),
+               steps: int = typer.Option(None, "--steps", min=1, help="Engineering setting: train this many steps "
+                                                                      "instead of the recipe's (a short check)."),
+               device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one)."),
+               look: bool = typer.Option(False, "--look", help="Also draw training tiles without and with noise "
+                                                               "(data/find/look/train/noise-examples.png).")) -> None:
+    """Train the finder on the named lot-labelled sheets (`sfzmaps find labels`) and every `train` hand crop, the
+    ground under the choosing and test crops left out: data/find/runs/<run>/model.pt (the last step's weights) and
+    log.json (the recipe, device, commit, items, curve).  A crop file that cannot be read is reported, recorded in
+    log.json and left out.  $0."""
+    import dataclasses
+    import logging
+    import subprocess
+    import time
+
+    import torch
+
+    from sfzmaps import gpu
+    from sfzmaps.build import git_head
+    from sfzmaps.find import data, handlabels, pages, train
+    from sfzmaps.solver import hatching
+    from sfzmaps.solver.hatchnet.train import THREADS, default_device
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    recipe = train.Recipe()
+    recipe = dataclasses.replace(recipe, steps=steps or recipe.steps, unbroken=unbroken,
+                                 noise=0.0 if no_noise else recipe.noise,
+                                 answers=tuple(a for a in recipe.answers if not (without_borders and a == "border")))
+    device = device or default_device()
+    sids = []
+    for s in sheet or []:
+        series, _, name = s.partition("/")
+        if not series or not name:
+            raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
+        if name in hatching.duplicate_scans(series):
+            raise typer.BadParameter(f"{s} is a duplicate scan, which is never read", param_hint="--sheet")
+        sids.append((series, name))
+    items, not_read = [], []
+    try:
+        for sid in sids:
+            items.append(data.sheet_labelled(sid))
+    except (FileNotFoundError, ValueError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    for path, s in handlabels.crop_files(("train",)):
+        try:
+            items.append(data.crop_labelled(handlabels.read_crop(path, s)))
+        except (ValueError, FileNotFoundError) as e:
+            typer.echo(f"{path}: NOT READ: {e}", err=True)
+            not_read.append({"path": str(path.relative_to(config.INPUTS_DIR)), "error": str(e)})
+    if not items:
+        typer.echo("nothing to train on", err=True)
+        raise typer.Exit(1)
+    listed = [{"name": it.name, "era": it.era, "labelled_px": int(data.labelled(it, recipe.answers).sum())}
+              for it in items]
+    for era in sorted({it.era for it in items}):
+        mine = [x for x in listed if x["era"] == era]
+        typer.echo(f"{era}: {len(mine)} items, {sum(x['labelled_px'] for x in mine):,} labelled px")
+    out = pages.OUT / "runs" / run
+    if look:
+        typer.echo(str(train.write_noise_examples(items, recipe, pages.OUT / "look" / "train" / "noise-examples.png")))
+    changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "src"],
+                             cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True).stdout.strip()
+    t0 = time.perf_counter()
+    with gpu.gpu_turn(True, device):
+        fitted = train.fit(items, recipe, device)
+    fields = {"commit": git_head(), "uncommitted_changes_in_src": bool(changed), "torch": torch.__version__,
+              "threads": THREADS, "items": listed,
+              "train_crops_left_out_as_reserved": {it.name: it.left_out for it in items if it.hand},
+              "crops_not_read": not_read, "seconds": round(time.perf_counter() - t0, 1)}
+    for f in train.save_run(out, fitted, recipe, fields):
+        typer.echo(str(f))
+
+
 @find_app.command("ruled")
 def find_ruled(sheet: str = typer.Option(..., "--sheet", help="The page, as <series>/<sheet>."),
                box: str = typer.Option(..., "--box", help="The page px box x0,y0,w,h."),
