@@ -136,14 +136,14 @@ def _seed(img: np.ndarray, xy: tuple[int, int], kind: str) -> None:
 
 
 def _marks(img: np.ndarray, c: handlabels.Crop) -> None:
-    """The crop's strokes, limits, openings and seeds, or its outlines with a dot at each corner, drawn on a panel
+    """The crop's strokes, limits and seeds, or its outlines with a dot at each corner, drawn on a panel
     enlarged ZOOM times."""
     x0, y0 = c.box[:2]
 
     def at(x, y):
         return (x - x0) * ZOOM + ZOOM // 2, (y - y0) * ZOOM + ZOOM // 2
 
-    for lines, colour in ((c.strokes, MAGENTA), (c.limits, YELLOW), (c.openings, CYAN)):
+    for lines, colour in ((c.strokes, MAGENTA), (c.limits, YELLOW)):
         for pts in lines:
             cv2.polylines(img, [np.array([at(*p) for p in pts], np.int32)], False, colour, 1, cv2.LINE_AA)
     for poly in c.polygons + c.open_polygons:
@@ -202,8 +202,7 @@ CROP_KEY = (("orange = street", ORANGE), ("each area its own colour; open land s
             ("black = block edge", BLACK), ("grey = no label (a stroke or limit, beside a limit, the crop's outer px)",
                                             GREY),
             ("     seeds: street white ringed black, block black, open black with a white centre", _key_seeds),
-            ("magenta = stroke, yellow = limit (thin lines)", _key_lines),
-            ("cyan = opening (a street through printed ink)", CYAN))
+            ("magenta = stroke, yellow = limit (thin lines)", _key_lines))
 OUTLINE_KEY = (("orange = street", ORANGE), ("each area its own colour; open land striped", _key_stripes),
                ("black = block edge", BLACK), ("grey = no label (the crop's outer px)", GREY),
                ("magenta = outline as typed (a dot at each corner)", MAGENTA))

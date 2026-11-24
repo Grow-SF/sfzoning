@@ -3,16 +3,15 @@ under the test and choosing crops.
 
 A crop file is inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json (the format and the reading of the
 maps: inputs/find-labels/README.md).  It is drawn one of two ways:
-- seeds and strokes (for maps whose streets are open paper): `make_labels` turns them into per-px labels by nine
-  rules: paper by Otsu's threshold, openings as paper (where the map's owner has said a street runs through printed
-  ink), strokes and limits as barriers, street as the paper 4-connected to a street seed, areas as the 8-connected
-  islands holding a block or open seed, and each area's ragged sides straightened to within STRAIGHT px
-  (`straighten_areas`);
+- seeds and strokes (for maps whose streets are open paper): `make_labels` turns them into per-px labels by eight
+  rules: paper by Otsu's threshold, strokes and limits as barriers, street as the paper 4-connected to a street seed,
+  areas as the 8-connected islands holding a block or open seed, and each area's ragged sides straightened to within
+  STRAIGHT px (`straighten_areas`);
 - outlines (for maps where heavy lines and letters join the blocks): each typed polygon is an area, the rest street.
   Outline crops are for scoring only (`choose` and `test`): a corner typed by eye is a px or two off the printed line.
-This is a drawing aid for hand labels only, checked by eye on its picture (`look.crop`): its 3 px barrier and opening
-width, its 4-connected street fill and 8-connected islands, STRAIGHT, and the 2 px an outline's corner may lie
-outside the box are parts of the tool, and nothing like it runs when a sheet is read.
+This is a drawing aid for hand labels only, checked by eye on its picture (`look.crop`): its 3 px barrier width, its
+4-connected street fill and 8-connected islands, STRAIGHT, and the 2 px an outline's corner may lie outside the box
+are parts of the tool, and nothing like it runs when a sheet is read.
 
 `reserved` is the ground under every `choose` and `test` crop, on any sheet's page, which training leaves out.
 
@@ -38,10 +37,10 @@ from sfzmaps.solver import hatching
 
 SETS = ("train", "choose", "test")
 HELD_OUT = ("choose", "test")       # the sets whose ground training leaves out
-SEED_MARKS = ("street", "blocks", "open", "strokes", "limits", "openings")
+SEED_MARKS = ("street", "blocks", "open", "strokes", "limits")
 OUTLINE_MARKS = ("polygons", "open_polygons")
 KEYS = {"box", "notes", "drawn_by", *SEED_MARKS, *OUTLINE_MARKS}
-BARRIER = 3                         # tool setting: a stroke's, limit's or opening's width, px
+BARRIER = 3                         # tool setting: a stroke's or limit's width, px
 OUTSIDE = 2                         # tool setting: how far an outline's corner may lie outside the box, px (a block
                                     # cut by the crop's side is typed with corners on or just past the box's edge)
 STRAIGHT = 2.0                      # tool setting: how far a straightened side may lie from the ragged edge it
@@ -78,7 +77,6 @@ class Crop:
     path: Path
     polygons: tuple[tuple[Point, ...], ...] = ()
     open_polygons: tuple[tuple[Point, ...], ...] = ()
-    openings: tuple[tuple[Point, ...], ...] = ()
 
     @property
     def outlined(self) -> bool:
@@ -124,10 +122,9 @@ def read_crop(path: Path, set_: str) -> Crop:
     if box[2] <= 0 or box[3] <= 0:
         raise ValueError(f"{path}: the box's width and height must be positive")
     try:
-        lines = {k: tuple(_points(path, k, s) for s in d.get(k, [])) for k in ("strokes", "limits", "openings",
-                                                                       *OUTLINE_MARKS)}
+        lines = {k: tuple(_points(path, k, s) for s in d.get(k, [])) for k in ("strokes", "limits", *OUTLINE_MARKS)}
     except TypeError:
-        raise ValueError(f"{path}: strokes, limits, openings and outlines must be lists of [x, y] lists") from None
+        raise ValueError(f"{path}: strokes, limits and outlines must be lists of [x, y] lists") from None
     seeded, outlined = any(d.get(k) for k in SEED_MARKS), any(d.get(k) for k in OUTLINE_MARKS)
     if seeded == outlined:
         raise ValueError(f"{path}: {'marks of both kinds' if seeded else 'no marks'}; a crop is drawn either with "
@@ -144,8 +141,7 @@ def read_crop(path: Path, set_: str) -> Crop:
                          f"that scan")
     return Crop(set_, path.parent.name, sheet, box, _points(path, "street", d.get("street", [])),
                 _points(path, "blocks", d.get("blocks", [])), _points(path, "open", d.get("open", [])),
-                lines["strokes"], lines["limits"], path, lines["polygons"], lines["open_polygons"],
-                lines["openings"])
+                lines["strokes"], lines["limits"], path, lines["polygons"], lines["open_polygons"])
 
 
 def crop_files(sets=SETS, root: Path | None = None) -> list[tuple[Path, str]]:
@@ -278,13 +274,17 @@ def _polygon_mask(mask: np.ndarray, eps: float) -> np.ndarray:
     return cover * 2 > TRACE * TRACE
 
 
-def straighten_areas(area: np.ndarray, free: np.ndarray, eps: float = STRAIGHT) -> np.ndarray:
-    """`area` with each area's sides straightened, in area-number order: its outline simplified to within `eps` px
-    (`_polygon_mask`), less each of its holes simplified the same way.  The straightened shape adds only `free` px
-    (street-labelled: flooded street or an unseeded island) not given to an earlier area; px it leaves out become
-    street."""
+def straighten_areas(area: np.ndarray, free: np.ndarray, seeds: dict[int, tuple[int, int]],
+                     eps: float = STRAIGHT) -> tuple[np.ndarray, list[int]]:
+    """`area` with each area's sides straightened, in area-number order, and the areas kept as they were.  Each area's
+    outline is simplified to within `eps` px (`_polygon_mask`), less each of its holes simplified the same way.  The
+    straightened shape adds only `free` px (street-labelled: flooded street or an unseeded island) not given to an
+    earlier area; px it leaves out become street.  An area the straightened shape would empty, or whose seed px
+    (`seeds`: area number to crop px (x, y)) it would drop, is kept whole as it was (a strip no wider than about
+    2 `eps` collapses to a line)."""
     area = area.copy()
     taken = np.zeros(area.shape, bool)
+    kept = []
     pad = int(np.ceil(eps)) + 2
     h, w = area.shape
     for k, sl in enumerate(ndimage.find_objects(area), start=1):
@@ -299,11 +299,17 @@ def straighten_areas(area: np.ndarray, free: np.ndarray, eps: float = STRAIGHT) 
             shape &= ~_polygon_mask(holes == i, eps)
         shape = shape[pad:-pad, pad:-pad]
         mine = area[ys, xs] == k
-        area[ys, xs][mine & ~shape] = 0
         add = shape & ~mine & free[ys, xs] & ~taken[ys, xs] & (area[ys, xs] == 0)
+        new = (mine & shape) | add
+        sx, sy = seeds[k]
+        if not new.any() or not new[sy - ys.start, sx - xs.start]:
+            kept.append(k)
+            taken[ys, xs] |= mine
+            continue
+        area[ys, xs][mine & ~shape] = 0
         area[ys, xs][add] = k
         taken[ys, xs] |= area[ys, xs] == k
-    return area
+    return area, kept
 
 
 def seed_labels(lum: np.ndarray, crop: Crop, straighten: bool = True) -> CropLabels:
@@ -316,7 +322,7 @@ def seed_labels(lum: np.ndarray, crop: Crop, straighten: bool = True) -> CropLab
     stroke = _barrier(crop.strokes, x0, y0, lum.shape)
     limit = _barrier(crop.limits, x0, y0, lum.shape)
     barrier = stroke | limit
-    paper = ((lum > threshold_otsu(lum)) | _barrier(crop.openings, x0, y0, lum.shape)) & ~barrier
+    paper = (lum > threshold_otsu(lum)) & ~barrier
     seeds = [("street", p) for p in crop.street] + [("block", p) for p in crop.blocks] + \
             [("open", p) for p in crop.open]
     for kind, (x, y) in seeds:
@@ -337,6 +343,7 @@ def seed_labels(lum: np.ndarray, crop: Crop, straighten: bool = True) -> CropLab
     area = np.zeros(lum.shape, np.int32)
     kinds: dict[int, str] = {}
     seeded: dict[int, tuple[str, Point]] = {}
+    seed_px: dict[int, tuple[int, int]] = {}
     for kind, (x, y) in seeds:
         if kind == "street":
             continue
@@ -347,6 +354,7 @@ def seed_labels(lum: np.ndarray, crop: Crop, straighten: bool = True) -> CropLab
         seeded[i] = (kind, (x, y))
         kinds[len(kinds) + 1] = kind
         area[islands == i] = len(kinds)
+        seed_px[len(kinds)] = (x - x0, y - y0)
     sizes = np.bincount(islands.ravel(), minlength=n + 1)
     unseeded = sorted((i for i in range(1, n + 1) if i not in seeded), key=lambda i: (-sizes[i], i))
     smallest = min((sizes[i] for i in seeded), default=None)
@@ -361,7 +369,7 @@ def seed_labels(lum: np.ndarray, crop: Crop, straighten: bool = True) -> CropLab
             warnings.append(f"unseeded island of {int(sizes[i])} px at {x + x0}, {y + y0}: a block left unseeded is "
                             f"labelled street")
     if straighten:
-        area = straighten_areas(area, (area == 0) & ~barrier)
+        area, _ = straighten_areas(area, (area == 0) & ~barrier, seed_px)
     label = np.where(barrier, NONE, np.where(area > 0, AREA, STREET)).astype(np.uint8)
     edge = _edges(area)
     edge[stroke] = 1

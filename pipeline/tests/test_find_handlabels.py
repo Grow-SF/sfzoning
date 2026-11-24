@@ -38,12 +38,11 @@ def _pg(points):
     return tuple((x + BOX[0], y + BOX[1]) for x, y in points)
 
 
-def _crop(street=(), blocks=(), open=(), strokes=(), limits=(), openings=()):
+def _crop(street=(), blocks=(), open=(), strokes=(), limits=()):
     """A crop at BOX, every mark given in crop px."""
-    extra = {"openings": tuple(_pg(s) for s in openings)} if openings else {}
     return handlabels.Crop("train", "s", "p", BOX, _pg(street), _pg(blocks), _pg(open),
                            tuple(_pg(s) for s in strokes), tuple(_pg(s) for s in limits),
-                           Path("train/s/p__100_200_60_40.json"), **extra)
+                           Path("train/s/p__100_200_60_40.json"))
 
 
 def _street_between_two_lines():
@@ -380,47 +379,6 @@ def test_a_ruled_tile_shows_its_part_of_the_box():
     assert all((tiles[k][top:, left:] > 0).all() for k in ((0, 0), (0, 1), (1, 0)))
 
 
-def _block_with_a_dead_end_road():
-    """A block (outer px x 10..50, y 5..35) holding a dead-end road up from its bottom side: side lines at x 26-27
-    and 34-35, its end at y 15-16, its paper x 28..33, y 17..33; the block's bottom line (y 34-35) runs across its
-    mouth."""
-    img = _page()
-    _rect(img, 10, 5, 50, 35)
-    _v(img, 26, 15, 36)
-    _v(img, 34, 15, 36)
-    _h(img, 15, 26, 36)
-    return img
-
-
-MOUTH = [(29, 35), (32, 35)]              # drawn 3 px wide: x 28..33, y 34..36, between the road's side lines
-
-
-def test_an_opening_lets_the_street_through_a_line():
-    img = _block_with_a_dead_end_road()
-    marks = dict(street=[(5, 38)], blocks=[(15, 20)])
-    shut = handlabels.make_labels(img, _crop(**marks))
-    assert (shut.street[17:34, 28:34] == 0).all() and (shut.area[17:34, 28:34] == 1).all()
-    lab = handlabels.make_labels(img, _crop(**marks, openings=[MOUTH]))
-    assert (lab.street[17:34, 28:34] == 1).all()                       # the road, joined to the street below
-    assert (lab.street[34:37, 28:34] == 1).all()                       # the opening itself
-    assert lab.kinds == {1: "block"} and lab.area[20, 15] == lab.area[20, 45] == 1
-    assert (lab.edge[18:33, 27] == 1).all() and (lab.edge[18:33, 34] == 1).all()     # the road's sides
-
-
-def test_a_stroke_over_an_opening_wins():
-    img = _block_with_a_dead_end_road()
-    lab = handlabels.make_labels(img, _crop(street=[(5, 38)], blocks=[(15, 20)], openings=[MOUTH], strokes=[MOUTH]))
-    assert (lab.street[17:34, 28:34] == 0).all()
-    assert (lab.street[34:37, 28:34] == 255).all()                     # the stroke
-
-
-def test_an_outline_crop_cannot_carry_openings(tmp_path):
-    _write(tmp_path, "test", "A", BOX, polygons=[[[105, 205], [120, 205], [120, 220]]],
-           openings=[[[110, 210], [115, 210]]])
-    with pytest.raises(ValueError, match=r"A__100_200_60_40\.json: marks of both kinds"):
-        handlabels.crops(root=tmp_path)
-
-
 def _at(box, street=(), blocks=(), strokes=()):
     """A seed crop at `box`, its marks given in crop px."""
     pg = lambda pts: tuple((x + box[0], y + box[1]) for x, y in pts)                 # noqa: E731
@@ -542,3 +500,29 @@ def test_a_curved_side_moves_no_further_than_the_setting():
     inside = a.area == 1
     d = handlabels.ndimage.distance_transform_edt(~(inside ^ handlabels.ndimage.binary_erosion(inside)))
     assert d[changed].max() <= handlabels.STRAIGHT + 1
+
+
+def test_thin_areas_are_kept_as_the_fill_made_them():
+    img = np.ones((60, 100), np.float32)
+    img[10:50, 0] = 0                     # a strip 1 px wide along the crop's side
+    img[10:50, 20:22] = 0                 # 2 px wide
+    img[10:50, 40:43] = 0                 # 3 px wide
+    crop = _at((0, 0, 100, 60), street=[(60, 5)], blocks=[(0, 30), (20, 30), (41, 30)])
+    a, b = handlabels.make_labels(img, crop, straighten=False), handlabels.make_labels(img, crop)
+    assert (a.area == b.area).all()
+    assert b.kinds == {1: "block", 2: "block", 3: "block"} and all((b.area == k).any() for k in b.kinds)
+
+
+def test_a_spur_thins_and_the_block_is_straightened():
+    img = np.ones((60, 80), np.float32)
+    _toothed(img, 15, 20, 64, 49, np.random.default_rng(11))
+    img[8:20, 40:42] = 0                  # a spur 2 px wide and 12 long on the top side
+    crop = _at((0, 0, 80, 60), street=[(2, 2)], blocks=[(30, 35)])
+    lab = handlabels.make_labels(img, crop)
+    rect = np.zeros((60, 80), bool)
+    rect[20:50, 15:65] = True
+    spur = np.zeros((60, 80), bool)
+    spur[8:20, 40:42] = True
+    assert ((lab.area == 1) == rect)[~spur].all()                      # the block straightened, its teeth gone
+    left = (lab.area == 1) & spur         # the spur, no wider than the tolerance, is thinned to a wedge (1 px at its
+    assert left.any() and left.sum() < spur.sum() and left[8:12].sum(axis=1).max() == 1      # tip), not kept whole
