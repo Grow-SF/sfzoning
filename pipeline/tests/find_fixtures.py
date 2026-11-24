@@ -43,21 +43,23 @@ def lines_world() -> data.Lines:
 
 
 class Flat:
-    """A flat placement: page px (x, y) (px centres at integers) at (X0 + x ft_per_px, Y1 - y ft_per_px), so page px
-    (0, 0) is the grid's top-left corner and y runs down the page as it runs down the grid."""
+    """A flat placement: page px (x, y) (px centres at integers) at (X0 + (x - dx) ft_per_px, Y1 - (y - dy)
+    ft_per_px), so with no shift page px (0, 0) is the grid's top-left corner, and y runs down the page as it runs down
+    the grid; with a shift the grid's corner is page px (dx, dy)."""
 
     correction = None                     # no warp correction laid over it, as a SheetTransform without one
 
-    def __init__(self, ft_per_px: float):
+    def __init__(self, ft_per_px: float, dx: float = 0.0, dy: float = 0.0):
         self.ft_per_px = float(ft_per_px)
+        self.dx, self.dy = float(dx), float(dy)
 
     def to_world(self, px) -> np.ndarray:
         px = np.asarray(px, float).reshape(-1, 2)
-        return np.c_[grid.X0 + px[:, 0] * self.ft_per_px, grid.Y1 - px[:, 1] * self.ft_per_px]
+        return np.c_[grid.X0 + (px[:, 0] - self.dx) * self.ft_per_px, grid.Y1 - (px[:, 1] - self.dy) * self.ft_per_px]
 
     def to_pixel(self, world) -> np.ndarray:
         w = np.asarray(world, float).reshape(-1, 2)
-        return np.c_[(w[:, 0] - grid.X0) / self.ft_per_px, (grid.Y1 - w[:, 1]) / self.ft_per_px]
+        return np.c_[(w[:, 0] - grid.X0) / self.ft_per_px + self.dx, (grid.Y1 - w[:, 1]) / self.ft_per_px + self.dy]
 
     def grid_to_pixel(self, world, page_shape) -> np.ndarray:
         """`to_pixel` for a large batch, as SheetTransform.grid_to_pixel."""

@@ -1646,5 +1646,47 @@ def find_labels(series: str = typer.Option(..., "--series", help="A series whose
                 typer.echo(f"  {f}")
 
 
+@find_app.command("crops")
+def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: train, choose or test (default: all)."),
+               look: bool = typer.Option(False, "--look", help="Draw each crop's scan and labels side by side "
+                                                               "(data/find/look/crops/<set>/).")) -> None:
+    """Make the labels of every hand crop (inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json) and
+    print each crop's areas by kind and its warnings.  A crop whose marks cannot be read is reported and the rest go
+    on; the exit status is 1 if any failed.  $0."""
+    from sfzmaps.find import handlabels, look as pictures, pages
+    if set_ is not None and set_ not in handlabels.SETS:
+        raise typer.BadParameter(f"expected one of {', '.join(handlabels.SETS)}", param_hint="--set")
+    try:
+        found = handlabels.crops(handlabels.SETS if set_ is None else (set_,))
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1)
+    if not found:
+        typer.echo("no crops")
+        return
+    failed, scans = 0, {}
+    for c in found:
+        name = f"{c.set}/{c.series}/{c.path.name}"
+        try:
+            sid = (c.series, c.sheet)
+            if sid not in scans:
+                scans = {sid: pages.load_scan(sid)}         # crops come sorted by sheet: keep one page in memory
+            lum = handlabels.crop_scan(scans[sid], c)
+            lab = handlabels.make_labels(lum, c)
+        except (ValueError, FileNotFoundError) as e:
+            failed += 1
+            typer.echo(f"{name}: FAILED: {e}")
+            continue
+        kinds = list(lab.kinds.values())
+        typer.echo(f"{name}: block {kinds.count('block')}, open {kinds.count('open')}")
+        for w in lab.warnings:
+            typer.echo(f"  {w}")
+        if look:
+            typer.echo(f"  {pictures.write_crop(c, lum, lab)}")
+    if failed:
+        typer.echo(f"{failed} of {len(found)} crops failed")
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()
