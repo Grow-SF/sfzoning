@@ -2,6 +2,7 @@
 reserved ground left unlabelled on sheets and training crops, a sheet's block-edge cuts the only cuts trained on,
 tiles shared fairly between eras, both answers trained, the noise on the tiles, and the same bits from the same
 seed."""
+import dataclasses
 import json
 import logging
 import math
@@ -221,13 +222,54 @@ def test_the_last_step_is_kept_whatever_the_choosing_score():
 
     def score(step, state):
         seen[step] = {k: v.clone() for k, v in state.items()}
-        return next(values)
+        return {"choose_found_share": next(values), "choose_panoptic_quality": 0.5, "choose_depth": 3 * step}
     fitted = train.fit(_fit_items(), train.Recipe(steps=4, every=1, **SMALL), "cpu", on_checkpoint=score)
     assert sorted(seen) == [1, 2, 3, 4]
     assert fitted.step == 4
     assert all(torch.equal(fitted.state_dict[k], seen[4][k]) for k in seen[4])
     assert not all(torch.equal(seen[1][k], seen[4][k]) for k in seen[1])
-    assert [r["chosen_by"] for r in fitted.curve] == [0.9, 0.6, 0.3, 0.1]       # every checkpoint's score, traced
+    assert [r["choose_found_share"] for r in fitted.curve] == [0.9, 0.6, 0.3, 0.1]   # every checkpoint's, traced
+    assert [r["choose_depth"] for r in fitted.curve] == [3, 6, 9, 12]
+    assert all("chosen_by" not in r for r in fitted.curve)
+
+
+def test_the_seed_moves_the_batches_and_the_start_and_only_the_seed():
+    items = _fit_items()
+    draws = {}
+    for seed in (0, 1):
+        recipe = train.Recipe(seed=seed, **SMALL)
+        draws[seed] = train.Tiles(items, recipe).draw(*train.generators(recipe))
+        torch.manual_seed(recipe.seed)                           # as fit makes the network
+        draws[seed, "net"] = model.FindNet(recipe.width).state_dict()
+    assert any(not np.array_equal(a.lum, b.lum) for a, b in zip(draws[0], draws[1]))
+    assert not all(torch.equal(draws[0, "net"][k], draws[1, "net"][k]) for k in draws[0, "net"])
+    assert train.Recipe().seed == 0
+
+
+def test_train_passes_the_seed_and_keeps_the_default(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+
+    from sfzmaps.cli import app
+    _sources(tmp_path, monkeypatch)
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    monkeypatch.setattr(pages, "load_scan", lambda sid: _two_line_page())
+    monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
+    monkeypatch.setattr(data, "print_sizes", lambda: ({"s": [4.0]}, [], {}))
+    _crop_file("train", "s", "A", (100, 100, 60, 40), street=[[110, 120]], blocks=[[120, 104], [120, 135]])
+    seen = []
+
+    def fit(items, recipe, device, on_checkpoint=None, sizes=None):
+        seen.append(recipe)
+        return train.Fitted({}, recipe.steps, [], "cpu")
+    monkeypatch.setattr(train, "fit", fit)
+    for args, run in ((["--seed", "3"], "a"), ([], "b")):
+        r = CliRunner().invoke(app, ["find", "train", "--run", run, "--device", "cpu", "--no-trace", *args])
+        assert r.exit_code == 0, r.output
+    assert seen[0].seed == 3 and json.loads((tmp_path / "find" / "runs" / "a" / "log.json").read_text())[
+        "recipe"]["seed"] == 3
+    assert seen[1] == train.Recipe()                             # no --seed: the recipe of before
+    r = CliRunner().invoke(app, ["find", "train", "--run", "c", "--device", "cpu"])     # no choosing crop, traced
+    assert r.exit_code == 1 and "no choose crop" in r.output and "--no-trace" in r.output, r.output
 
 
 def _drawn(recipe, seed=7):
@@ -307,12 +349,12 @@ def test_the_unbroken_terms_reach_only_the_hand_tiles_block_edge():
 
 def test_log_json_holds_no_nan(tmp_path):
     fitted = train.Fitted({"w": torch.zeros(1)}, 3, [{"step": 3, "loss_per_statement": math.nan,
-                                                     "chosen_by": math.inf}], "cpu")
+                                                     "choose_found_share": math.inf}], "cpu")
     _, js = train.save_run(tmp_path, fitted, train.Recipe(), {"x": [-math.inf, 1.5]})
     text = js.read_text()
     assert "NaN" not in text and "Infinity" not in text
     d = json.loads(text)
-    assert d["curve"][0]["loss_per_statement"] is None and d["curve"][0]["chosen_by"] is None
+    assert d["curve"][0]["loss_per_statement"] is None and d["curve"][0]["choose_found_share"] is None
     assert d["x"] == [None, 1.5]
 
 
@@ -377,7 +419,7 @@ def test_train_reports_a_series_with_no_source_row_and_a_refused_fit_without_a_t
     monkeypatch.setattr(lotlabels, "placement", lambda sid, which="warp": Flat(4.0))
     marks = dict(street=[[110, 120]], blocks=[[120, 104], [120, 135]])
     f = _crop_file("train", "u", "A", (100, 100, 60, 40), **marks)        # series u has no row
-    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-chooser"])
+    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
     assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.output
     assert "series 'u' has no row in" in r.output and "1 training crop(s) could not be read" in r.output, r.output
     f.unlink()
@@ -387,7 +429,7 @@ def test_train_reports_a_series_with_no_source_row_and_a_refused_fit_without_a_t
     def refused(*a, **k):                   # as `train.fit` refuses, for example, an item smaller than a tile
         raise ValueError("s/A: 40 x 60 px is smaller than a 256 px tile")
     monkeypatch.setattr(train, "fit", refused)
-    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-chooser"])
+    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
     assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.output
     assert "nothing trained: s/A: 40 x 60 px is smaller than a 256 px tile" in r.output, r.output
     assert not (tmp_path / "find" / "runs").exists()

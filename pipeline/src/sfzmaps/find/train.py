@@ -21,8 +21,9 @@ chance and the hand block-edge label.  The loss is taken on the CPU, where its s
 (as the branch does).
 
 The weights kept are the last step's.  Every `Recipe.every` steps (and at the last) `on_checkpoint(step, state_dict)`
-scores the weights (the choosing crops' share of blocks found, `counts.chooser`); the score goes into the curve as the
-run's held-out trace and chooses nothing.
+scores the weights on the choosing crops (`counts.trace_scorer`: a dict such as `choose_found_share`,
+`choose_panoptic_quality`, `choose_depth`); it goes into the curve row as the run's held-out trace and chooses
+nothing.
 
 Deterministic: torch's generator and three numpy generators (the tiles; the noise, apart so that a run with noise and
 one without draw the same tiles; the print sizes, apart so that a run without resizing draws the tiles of before) are
@@ -360,6 +361,11 @@ def _zero() -> dict:
     return {"loss": 0.0, "statements": 0.0, "unbroken": 0.0, "steps": 0, "skipped": 0}
 
 
+def generators(recipe: Recipe) -> tuple[np.random.Generator, np.random.Generator]:
+    """The tiles' and the noise's generators, from `recipe.seed` (the sizes' is `Tiles`' own, [seed, 2])."""
+    return np.random.default_rng(recipe.seed), np.random.default_rng([recipe.seed, 1])
+
+
 def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None,
         sizes: dict[str, list[float]] | None = None) -> Fitted:
     """The network trained on `items` (see the module), its tiles at the print sizes `sizes` with `recipe.resize`.
@@ -368,7 +374,7 @@ def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None,
     torch.manual_seed(recipe.seed)
     net = model.FindNet(recipe.width)
     tiles = Tiles(items, recipe, sizes)
-    rng, noise_rng = np.random.default_rng(recipe.seed), np.random.default_rng([recipe.seed, 1])
+    rng, noise_rng = generators(recipe)
     net.to(device).train()
     opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=recipe.weight_decay)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=recipe.max_lr, total_steps=recipe.steps,
@@ -412,9 +418,7 @@ def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None,
             sums = _zero()
             last_row = step
             if checkpoint and on_checkpoint is not None:         # the held-out trace: it chooses nothing
-                value = on_checkpoint(step, _state(net))
-                if value is not None:
-                    row["chosen_by"] = float(value)
+                row.update(on_checkpoint(step, _state(net)) or {})
             curve.append(row)
             log.info("steps %d-%d: loss per statement %.4f (%.0f statements), %d skipped", row["first_step"], step,
                      row["loss_per_statement"], row["statements"], row["skipped"])

@@ -331,7 +331,7 @@ def test_the_run_log_holds_the_sizes_and_the_factors(tmp_path, monkeypatch):
         return train.Fitted({}, 1, [], "cpu", 0, {"count": 2, "least": 1.0, "median": 1.5, "most": 2.0,
                                                   "moved_to_fit": 0})
     monkeypatch.setattr(train, "fit", fit)
-    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-chooser"])
+    r = CliRunner().invoke(app, ["find", "train", "--run", "r", "--device", "cpu", "--no-trace"])
     assert r.exit_code == 0, r.output
     log = json.loads((tmp_path / "find" / "runs" / "r" / "log.json").read_text())
     assert log["print_sizes"] == {"s": {"count": 2, "least": 2.0, "median": 2.5, "most": 3.0}}
@@ -339,8 +339,48 @@ def test_the_run_log_holds_the_sizes_and_the_factors(tmp_path, monkeypatch):
     assert log["print_sizes_sheets_left_out"] == {"count": 1, "sheets": {"s/A": "misplaced"}}
     assert log["training_items_on_sheets_left_out"] == ["train/s/A__100_100_60_40"]
     assert seen["recipe"].resize and seen["sizes"] == {"s": [2.0, 3.0]} and seen["ft"] == [pytest.approx(4.0)]
-    r = CliRunner().invoke(app, ["find", "train", "--run", "q", "--device", "cpu", "--no-chooser", "--no-resize"])
+    r = CliRunner().invoke(app, ["find", "train", "--run", "q", "--device", "cpu", "--no-trace", "--no-resize"])
     assert r.exit_code == 0, r.output
     assert not seen["recipe"].resize and seen["sizes"] is None
     log = json.loads((tmp_path / "find" / "runs" / "q" / "log.json").read_text())
     assert log["recipe"]["resize"] is False and "print_sizes" not in log
+
+
+@pytest.mark.parametrize("side", [128, 100, 40])          # shrinking by one half and by 0.64; enlarging by 1.6
+def test_reserved_ground_stays_unlabelled_in_a_resized_tile(side):
+    # reserved ground as the items make it (labels 255, weight 0) in a 200 px item; cuts at random places and
+    # directions, laid by `_lay` off the reserved ground (a cut touching it is dropped from the item, as there)
+    rng = np.random.default_rng(1)
+    held = np.zeros(SHAPE, bool)
+    held[60:140, 70:150] = True
+    n = 1500
+    mid = np.c_[rng.uniform(0, SHAPE[1], n), rng.uniform(0, SHAPE[0], n)]
+    angle = rng.uniform(0, np.pi, n)
+    laid = cuts._lay(mid, np.c_[np.cos(angle), np.sin(angle)], np.arange(n), SIGMA, cuts.reach_px(SIGMA), SHAPE,
+                     ~held)
+    street = np.where(held, data.NONE, rng.choice(np.array([0, 1], np.uint8), size=SHAPE)).astype(np.uint8)
+    edge = np.where(held, data.NONE, rng.choice(np.array([0, 1], np.uint8), size=SHAPE)).astype(np.uint8)
+    it = data.Labelled("t/A", "lined-1bit", rng.uniform(0, 1, SHAPE).astype(np.float32), street,
+                       (~held).astype(np.float32), edge, laid, ft_per_px=FT, sigma=SIGMA)
+    depth = ndimage.distance_transform_edt(held)              # how far inside the reserved ground, source px
+    size = 64
+    f = size / side
+    under = ((2 * np.arange(size) + 1) * side) // (2 * size)
+    reach = cuts.reach_px(SIGMA * f) / f                      # a re-laid cut's reach, in source px
+    landed = 0
+    for y0 in range(20, SHAPE[0] - side + 1, 9):
+        for x0 in range(30, SHAPE[1] - side + 1, 9):
+            sq = (slice(y0, y0 + side), slice(x0, x0 + side))
+            if not held[sq].any() or held[sq].all():
+                continue                                      # only squares that straddle the reserved ground
+            t = data.resized(it, y0, x0, side, size)
+            below = held[sq][np.ix_(under, under)]            # the source px under each tile px's centre
+            assert (t.street[below] == data.NONE).all() and (t.street_w[below] == 0).all()
+            covers = cv2.resize(held[sq].astype(np.float32), (size, size), interpolation=cv2.INTER_AREA) > 0
+            touched = covers if f < 1 else below
+            assert (t.edge[touched] == data.NONE).all()
+            on = below.ravel()[t.cuts.px]
+            landed += int(on.sum())
+            r, q = np.divmod(t.cuts.px[on], size)
+            assert (depth[sq][np.ix_(under, under)][r, q] <= reach).all()     # never deeper than the cut's reach
+    assert landed > 0 or f > 1                                # the shrunk tiles do put re-laid px on that ground

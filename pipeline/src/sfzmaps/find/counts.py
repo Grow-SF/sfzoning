@@ -25,8 +25,8 @@ loses, holds whole, and where it puts the street and the block boundary.
   distance in feet to the nearest answer-key boundary px; the median, 90th and 99th percentile.
 - `edge_feet`: how far, in feet, the hand block-edge px of found blocks lie from the nearest side of a found area.
 
-`chooser` scores a checkpoint by the `choose` crops' `found_share` at their fitted depth (and logs their panoptic
-quality there), for the trainer's log (the
+`trace_scorer` scores a checkpoint on the `choose` crops (their fitted depth, panoptic quality and `found_share`
+there) for the trainer's log (the
 held-out trace; the trainer keeps the last step whatever it scores); `count` reads every `test` crop with a run's
 kept model at the depth fitted on the `choose` crops (the choosing crops' one use in a count).  Both refuse a choosing
 crop lying on a test crop's ground (`handlabels.refuse_choose_on_test`).  A crop is read with model.REACH px of scan
@@ -421,17 +421,19 @@ def _only(crops: list[handlabels.Crop], set_: str) -> None:
         raise ValueError(f"only {set_} crops are read here, not {', '.join(bad)}")
 
 
-def chooser(crops: list[handlabels.Crop], device, test: list[handlabels.Crop] | None = None,
-            placements=None) -> Callable[[int, dict], float]:
-    """A checkpoint's score for the trainer's log (`train.fit`'s on_checkpoint; it chooses nothing): every crop read
-    with the checkpoint's weights, and `fit_depth`'s share.  The crops are read from disk once, here.  ValueError
-    when there is no crop, one is not in the `choose` set, or one lies on the ground of a `test` crop (`test`, None:
-    every test crop; `handlabels.refuse_choose_on_test` with `placements`)."""
+def trace_scorer(crops: list[handlabels.Crop], device, test: list[handlabels.Crop] | None = None,
+                 placements=None) -> Callable[[int, dict], dict]:
+    """A checkpoint's scores on the choosing crops for the trainer's held-out trace (`train.fit`'s on_checkpoint; they
+    choose nothing): every crop read with the checkpoint's weights and `fit_depth` taken, as a curve row's
+    `choose_found_share`, `choose_panoptic_quality` and `choose_depth` (the fitted depth as n of n/255).  The crops
+    are read from disk once, here.  ValueError when there is no crop, one is not in the `choose` set, or one lies on
+    the ground of a `test` crop (`test`, None: every test crop; `handlabels.refuse_choose_on_test` with
+    `placements`)."""
     _only(crops, "choose")
     handlabels.refuse_choose_on_test(crops, handlabels.crops(("test",)) if test is None else test, placements)
     ready = prepare(crops)
 
-    def score(step: int, state_dict: dict) -> float:
+    def score(step: int, state_dict: dict) -> dict:
         t0 = time.perf_counter()
         net = network(state_dict)
         reads = [read_one(net, p, device) for p in ready]
@@ -439,7 +441,8 @@ def chooser(crops: list[handlabels.Crop], device, test: list[handlabels.Crop] | 
         log.info("step %d: the choosing crops find %.3f of their blocks (mean over eras) at depth %d/255, panoptic "
                  "quality %.3f; read and scored in %.1f s", step, share, round(depth * read.LEVELS), quality,
                  time.perf_counter() - t0)
-        return share
+        return {"choose_found_share": float(share), "choose_panoptic_quality": float(quality),
+                "choose_depth": round(depth * read.LEVELS)}
 
     return score
 

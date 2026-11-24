@@ -544,13 +544,13 @@ def test_a_choosing_crop_on_test_ground_is_found_on_another_sheet(tmp_path):
     handlabels.refuse_choose_on_test([beside], test, flats.__getitem__)          # nothing to refuse
 
 
-def test_the_chooser_and_count_refuse_a_choosing_crop_on_test_ground(tmp_path):
+def test_the_trace_scorer_and_count_refuse_a_choosing_crop_on_test_ground(tmp_path):
     from sfzmaps.find import counts
     flats = {("s", "A"): Flat(4.0)}
     choose = [handlabels.read_crop(_write(tmp_path, "choose", "A", (100, 100, 20, 20)), "choose")]
     test = [handlabels.read_crop(_write(tmp_path, "test", "A", (110, 100, 20, 20)), "test")]
     with pytest.raises(ValueError, match=r"choose/s/A__100_100_20_20\.json.*test/s/A__110_100_20_20\.json"):
-        counts.chooser(choose, "cpu", test, flats.__getitem__)
+        counts.trace_scorer(choose, "cpu", test, flats.__getitem__)
     with pytest.raises(ValueError, match=r"0\.500 of the choosing crop's area"):
         counts.count({}, choose, test, "cpu", tmp_path / "run", placements=flats.__getitem__)
 

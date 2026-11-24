@@ -1703,9 +1703,10 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                                                                       "instead of the recipe's (a short check)."),
                every: int = typer.Option(None, "--every", min=1, help="Engineering setting: steps between "
                                                                       "checkpoints instead of the recipe's."),
-               no_chooser: bool = typer.Option(False, "--no-chooser", help="Engineering switch: read no choosing "
-                                                                           "crop at the checkpoints (no held-out "
-                                                                           "trace; a short check)."),
+               no_trace: bool = typer.Option(False, "--no-trace", help="Skip scoring the choosing crops during "
+                                                                       "training."),
+               seed: int = typer.Option(0, "--seed", help="The recipe's seed: the tile draws, the noise, the print "
+                                                         "sizes drawn and the network's start all derive from it."),
                device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one)."),
                look: bool = typer.Option(False, "--look", help="Also draw training tiles without and with noise "
                                                                "(data/find/runs/<run>/noise-examples.png).")) -> None:
@@ -1715,10 +1716,11 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     a sheet the finder is used on, measured from every sheet of every series whose placement passes the warp's own
     check (`find.data.print_sizes`; with --no-resize, at its item's own size).  The last step's weights are kept.  At
     every checkpoint the `choose` crops are read and the share of their blocks found is logged in the curve as the
-    run's held-out trace (`find.counts.chooser`; it chooses nothing; --no-chooser skips it); the choosing crops fit
-    only the depth of the area step, in `find count`.  Every training and choosing crop is read first; if any cannot
-    be, each is reported with its path and nothing is trained (exit status 1), as when there is no choosing crop.
-    $0."""
+    run's held-out trace (`find.counts.trace_scorer`: the share of their blocks found, their panoptic quality and the
+    depth fitted, per checkpoint; it chooses nothing; --no-trace skips it); the choosing crops fit only the depth of
+    the area step, in `find count`.  --seed sets the recipe's seed (0 by default).  Every training crop (and, unless
+    --no-trace, every choosing crop) is read first; if any cannot be, each is reported with its path and nothing is
+    trained (exit status 1), as when there is no choosing crop and --no-trace is not given.  $0."""
     import dataclasses
     import logging
     import math
@@ -1738,7 +1740,7 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                                  param_hint="--run")
     recipe = train.Recipe()
     recipe = dataclasses.replace(recipe, steps=steps or recipe.steps, every=every or recipe.every, unbroken=unbroken,
-                                 noise=0.0 if no_noise else recipe.noise, resize=not no_resize)
+                                 noise=0.0 if no_noise else recipe.noise, resize=not no_resize, seed=seed)
     device = device or default_device()
     sids = []
     for s in sheet or []:
@@ -1772,12 +1774,13 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
         typer.echo(f"{failed} training crop(s) could not be read; nothing trained", err=True)
         raise typer.Exit(1)
     choosing, on_checkpoint = [], None
-    if not no_chooser:
+    if not no_trace:
         try:
             choosing = handlabels.crops(("choose",))
-            on_checkpoint = counts.chooser(choosing, device)
+            on_checkpoint = counts.trace_scorer(choosing, device)
         except (ValueError, FileNotFoundError, KeyError) as e:
-            typer.echo(f"the choosing crops: {said(e)}; nothing trained", err=True)
+            typer.echo(f"the choosing crops: {said(e)}; they give the training trace (--no-trace trains without "
+                       f"it); nothing trained", err=True)
             raise typer.Exit(1) from None
     if not items:
         typer.echo("nothing to train on", err=True)

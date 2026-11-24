@@ -113,7 +113,7 @@ class _GridPage:
 
 def window(tr, keep: np.ndarray, grid_shape) -> tuple[int, int, int, int]:
     """The grid rows and columns (r0, r1, c0, c1) the sheet's kept px reach (`hatching._slice`): the window every cut's
-    `ends` index."""
+    `inside` indexes."""
     return hatching._slice(tr, keep, grid_shape)
 
 

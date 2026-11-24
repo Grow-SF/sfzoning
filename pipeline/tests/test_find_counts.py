@@ -167,11 +167,11 @@ def _crop(set_: str) -> handlabels.Crop:
     return handlabels.Crop(set_, "s", "p1", (0, 0, 10, 10), ((1, 1),), (), (), (), (), Path("s/p1__0_0_10_10.json"))
 
 
-def test_the_chooser_takes_choosing_crops_only():
+def test_the_trace_scorer_takes_choosing_crops_only():
     with pytest.raises(ValueError, match="test"):
-        counts.chooser([_crop("choose"), _crop("test")], "cpu")
+        counts.trace_scorer([_crop("choose"), _crop("test")], "cpu")
     with pytest.raises(ValueError, match="no choose crop"):
-        counts.chooser([], "cpu")
+        counts.trace_scorer([], "cpu")
 
 
 # --- the street and block boundary, whole blocks, a run's counts --------------------------------------------------

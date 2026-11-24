@@ -14,6 +14,7 @@ Constraints that hold everywhere in this package:
 - No LLM output is read.  $0.
 - Deterministic: fixed seeds, deterministic algorithms, the device recorded; GPU work only inside
   sfzmaps.gpu.gpu_turn.
-- Scans are read at their own resolution, as stored.  A duplicate scan is never read.
+- When a sheet or crop is read, its scan is read at its own resolution, as stored, with no resampling code of our
+  own (training tiles are resized, `data.resized`, to learn every print size).  A duplicate scan is never read.
 - Outputs go under data/find/, with the series in every path.
 """

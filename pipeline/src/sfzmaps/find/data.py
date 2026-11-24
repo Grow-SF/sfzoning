@@ -10,7 +10,11 @@ for a hand crop):
   The item is the crop grown by `model.REACH` px on every side where the page allows: the scan is shown there, so the
   network sees the print round a crop's edge as it does when a page is read, but nothing is labelled there.
 The ground under the `choose` and `test` crops, grown by `model.REACH` (`handlabels.reserved`), has no label on any
-sheet or training crop, and a cut touching it is dropped whole; the scan is still shown there.
+sheet or training crop, and a cut touching it is dropped from the item; the scan is still shown there.  When a tile is
+resized (`resized`), its labels there stay "no label", but a re-laid cut's px can fall up to the cut's reach inside
+that margin (its px are placed again at the new size), never on a held-out crop's own box.  The margin is
+`model.REACH` px of the item's own scan: a tile shrunk by a factor f lets a labelled px see `model.REACH / f` source
+px, so a labelled px can see up to that much of a held-out crop's PRINT, never one of its labels.
 
 Each item knows its print size (`Labelled.ft_per_px`, through its sheet's placement: a sheet's over its whole page, a
 crop's at its box) and a sheet its cuts' `sigma` (the label file's).  `print_sizes` measures the print sizes the finder
