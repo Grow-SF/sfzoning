@@ -267,16 +267,6 @@ def edge_feet(found: np.ndarray, truth: CropLabels, ft_per_px: float) -> dict:
     return out
 
 
-def ft_per_px(tr, box: tuple[int, int, int, int]) -> float:
-    """The feet per page px at the box (x0, y0, w, h) through the placement `tr` (`to_world`, ft): the mean over its
-    four sides of the side's length in feet over its length in px."""
-    x0, y0, w, h = box
-    corners = np.array([[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]], float)
-    world = np.asarray(tr.to_world(corners), float)
-    feet = np.linalg.norm(world - np.roll(world, -1, axis=0), axis=1)
-    return float(np.mean(feet / np.array([w, h, w, h], float)))
-
-
 # --- reading the crops ------------------------------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -395,7 +385,7 @@ def count(net: model.FindNet, choose: list[handlabels.Crop], test: list[handlabe
         found = areas.areas(chances[model.STREET], chances[model.EDGE], keep, depth)
         status = block_status(found, p.truth)
         got = blocks(found, p.truth)
-        scale = ft_per_px(lotlabels.placement(sid), c.box)
+        scale = lotlabels.ft_per_px(lotlabels.placement(sid), c.box)
         d = boundary_distances(chances[model.EDGE], p.truth, scale)
         distances.append(d)
         bf = boundary_feet(chances[model.EDGE], p.truth, scale)

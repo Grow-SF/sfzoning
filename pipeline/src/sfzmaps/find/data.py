@@ -12,20 +12,26 @@ for a hand crop):
 The ground under the `choose` and `test` crops, grown by `model.REACH` (`handlabels.reserved`), has no label on any
 sheet or training crop, and a cut touching it is dropped whole; the scan is still shown there.
 
-`window` cuts a square out of an item (a cut is kept only when every px of it lies in the square); `turned` turns an
-item and every label a number of quarter turns.
+Each item knows its print size (`Labelled.ft_per_px`, through its sheet's placement: a sheet's over its whole page, a
+crop's at its box) and a sheet its cuts' `sigma` (the label file's).  `print_sizes` measures the print sizes the finder
+is used on, every placed sheet of every series of the label sources.
 
-Reads data/find/labels/<series>/<sheet>.npz (made by `sfzmaps find labels`), the scans, the crop files and (for the
-reserved ground) the sheets' placements.  Writes nothing."""
+`window` cuts a square out of an item (a cut is kept only when every px of it lies in the square); `resized` shows a
+square at another size, its labels and cuts with it; `turned` turns an item and every label a number of quarter turns.
+
+Reads data/find/labels/<series>/<sheet>.npz (made by `sfzmaps find labels`), the scans, the crop files and the sheets'
+placements (the reserved ground, the items' scales; `print_sizes` every sheet's).  Writes nothing."""
 from __future__ import annotations
 
 import dataclasses
 import logging
+import math
 from dataclasses import dataclass
 
+import cv2
 import numpy as np
 
-from sfzmaps.find import handlabels, lotlabels, model, pages
+from sfzmaps.find import cuts as cutting, handlabels, lotlabels, model, pages
 from sfzmaps.find.cuts import Cuts
 from sfzmaps.find.pages import SheetId
 
@@ -45,6 +51,8 @@ class Labelled:
     cuts: Cuts | None           # the block-edge cut statements; None for a hand crop
     left_out: float = 0.0       # a training crop's share of px left without a label as reserved ground (0 otherwise)
     set: str | None = None      # a hand crop's set (train, choose, test); None for a sheet
+    ft_per_px: float = math.nan  # the print's feet per px, through the sheet's placement (`lotlabels.ft_per_px`)
+    sigma: float = math.nan     # the cuts' sigma, px (the label file's); NaN for a hand crop
 
     @property
     def hand(self) -> bool:
@@ -65,7 +73,9 @@ def sheet_labelled(sid: SheetId, which: str = "warp") -> Labelled:
     street_w = np.where(held | (street == NONE), 0, lab["weight"]).astype(np.float32)
     edge = np.where(lab["edge_none"] & ~held, 0, NONE).astype(np.uint8)
     off_held = np.bincount(found.cut[held.ravel()[found.px]], minlength=len(found.weight)) == 0
-    return Labelled(f"{sid[0]}/{sid[1]}", pages.source(sid[0]).era, lum, street, street_w, edge, found.only(off_held))
+    scale = lotlabels.page_ft_per_px(lotlabels.placement(sid, which), lum.shape)
+    return Labelled(f"{sid[0]}/{sid[1]}", pages.source(sid[0]).era, lum, street, street_w, edge, found.only(off_held),
+                    ft_per_px=scale, sigma=float(lab["sigma"]))
 
 
 def grown(box: tuple[int, int, int, int], shape: tuple[int, int]) -> tuple[tuple[slice, slice], tuple[slice, slice]]:
@@ -106,8 +116,35 @@ def crop_labelled(crop: handlabels.Crop) -> Labelled:
             log.info("%s: %.3f of its px lie on reserved ground and are left without a label", crop_name(crop),
                      left_out)
     street_w = (street != NONE).astype(np.float32)
+    scale = lotlabels.ft_per_px(lotlabels.placement(sid), crop.box)
     return Labelled(crop_name(crop), pages.source(crop.series).era, np.ascontiguousarray(page[gy0:gy1, gx0:gx1]),
-                    street, street_w, edge, None, left_out, crop.set)
+                    street, street_w, edge, None, left_out, crop.set, ft_per_px=scale)
+
+
+def print_sizes(which: str = "warp") -> tuple[dict[str, list[float]], list[str]]:
+    """The print sizes the finder is used on: for every series of the label sources (`pages.sources`), in order, the
+    ft per px over the whole page (`lotlabels.page_ft_per_px`) of each of its sheets (`pages.sheets`: duplicate scans
+    left out) that has a placement `which` on disk; and the series with no such sheet, left out."""
+    sizes, left_out = {}, []
+    for series in pages.sources():
+        found = []
+        for sid in pages.sheets(series):
+            try:
+                tr = lotlabels.placement(sid, which)
+            except FileNotFoundError:
+                continue
+            found.append(lotlabels.page_ft_per_px(tr, lotlabels.page_shape(sid)))
+        if found:
+            sizes[series] = found
+        else:
+            left_out.append(series)
+    return sizes, left_out
+
+
+def size_summary(sizes: dict[str, list[float]]) -> dict[str, dict]:
+    """Per series: how many sheets were measured and their least, median and most ft per px."""
+    return {s: {"count": len(v), "least": float(min(v)), "median": float(np.median(v)), "most": float(max(v))}
+            for s, v in sizes.items()}
 
 
 def labelled(item: Labelled) -> np.ndarray:
@@ -182,6 +219,39 @@ def window(item: Labelled, y0: int, x0: int, side: int, boxes: CutBoxes | None =
                      c.prior[take], c.weight[which], c.inside[which], np.zeros(0, np.int64))
     return dataclasses.replace(item, lum=item.lum[sl], street=item.street[sl], street_w=item.street_w[sl],
                                edge=item.edge[sl], cuts=found)
+
+
+def resized(item: Labelled, y0: int, x0: int, side: int, size: int, boxes: CutBoxes | None = None) -> Labelled:
+    """The square of `side` px of `item` from row y0, column x0 (`window`) shown as a tile of `size` px, the print
+    enlarged (size above side) or shrunk by the factor f = size / side: the scan area-averaged when shrinking and
+    linear when enlarging (cv2); the street label, its weight and "no label" at each tile px those of the source px
+    under its centre; the block-edge label likewise when enlarging, and when shrinking "no label" where any source px
+    the tile px covers has none, else 1 where any is an edge, else 0 (a one-px edge stays unbroken); the cuts laid
+    again at the new size (`cuts.relaid`, with the item's `sigma`).  The tile's `ft_per_px` and `sigma` are the
+    item's at the new size.  A `side` equal to `size` gives `window`'s square itself.  ValueError for a square that
+    leaves the item, or cuts with no sigma."""
+    src = window(item, y0, x0, side, boxes)
+    if side == size:
+        return src
+    f = size / side
+    under = ((2 * np.arange(size) + 1) * side) // (2 * size)      # the source px under each tile px's centre
+    pick = np.ix_(under, under)
+    shrink = size < side
+    lum = cv2.resize(src.lum, (size, size), interpolation=cv2.INTER_AREA if shrink else cv2.INTER_LINEAR)
+    if shrink:
+        covers = {v: cv2.resize((src.edge == v).astype(np.float32), (size, size), interpolation=cv2.INTER_AREA) > 0
+                  for v in (NONE, 1)}
+        edge = np.where(covers[NONE], NONE, np.where(covers[1], 1, 0)).astype(np.uint8)
+    else:
+        edge = src.edge[pick]
+    found = None
+    if src.cuts is not None:
+        if not math.isfinite(item.sigma):
+            raise ValueError(f"{item.name}: its cuts have no sigma; they cannot be laid again at another size")
+        found = cutting.relaid(src.cuts, side, size, item.sigma)
+    return dataclasses.replace(src, lum=np.ascontiguousarray(lum, np.float32), street=src.street[pick],
+                               street_w=src.street_w[pick], edge=edge, cuts=found, ft_per_px=item.ft_per_px / f,
+                               sigma=item.sigma * f)
 
 
 def turned(tile: Labelled, k: int) -> Labelled:

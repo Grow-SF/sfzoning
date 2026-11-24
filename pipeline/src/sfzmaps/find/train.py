@@ -3,7 +3,12 @@
 
 Each step's batch takes equal numbers of tiles from every era present (the remainder to the eras first in sorted
 order), so an era with few labelled px weighs as much as one with many.  A tile's centre is drawn uniformly from its
-era's labelled px (`data.labelled`), the tile shifted to lie inside its item, turned a random
+era's labelled px (`data.labelled`).  With `Recipe.resize`, the tile is then shown at a print size drawn from the
+sizes measured on the sheets the finder is used on (`data.print_sizes`): one series, each equally likely, then one of
+its sheets, each equally likely; the factor is the item's ft per px over that sheet's, and the square around the
+centre that becomes one tile at that factor is resized to the tile (`data.resized`: labels and cuts with it).  When the
+square is bigger than the item, the tile is taken at the nearest factor whose square fits (counted).  The finder is
+never told a scale: it learns every size.  The square (the tile) is shifted to lie inside its item, turned a random
 number of quarter turns (the finder is not told which way is up), given the branch's intensity jitter
 (`hatchnet.train`: ink and paper levels each moved) and then print-and-scan noise (`noised`, the owner's ruling R29:
 these are old, poorly printed and poorly scanned maps).  The noise moves only the luminance, never a label.
@@ -18,8 +23,9 @@ chance and the hand block-edge label.  The loss is taken on the CPU, where its s
 Every `Recipe.every` steps (and at the last) the weights are a checkpoint: `on_checkpoint(step, state_dict)` scores it
 and the highest is kept, the earliest of a tie; with no callback, the last.
 
-Deterministic: torch's generator and two numpy generators (the tiles; the noise, apart so that a run with noise and
-one without draw the same tiles) are seeded from `Recipe.seed`, and torch runs deterministic algorithms
+Deterministic: torch's generator and three numpy generators (the tiles; the noise, apart so that a run with noise and
+one without draw the same tiles; the print sizes, apart so that a run without resizing draws the tiles of before) are
+seeded from `Recipe.seed`, and torch runs deterministic algorithms
 (`hatchnet.train.settle_torch`).  On the Mac's GPU the caller holds the GPU's turn (`sfzmaps.gpu`).
 
 Reads nothing itself; `save_run` writes data/find/runs/<run>/model.pt and log.json, `write_noise_examples`
@@ -53,7 +59,8 @@ class Recipe:
     """How the finder is trained.  Engineering settings, the branch's (`hatchnet.train`): the steps, tiles per step,
     the tile's side (px, a multiple of model.MULTIPLE), the network's width, the one-cycle schedule (`max_lr`,
     `pct_start`), AdamW's weight decay, the intensity jitter, and the steps between checkpoints (`every`).  `unbroken`:
-    add the unbroken-line terms (see the module); `seed`.
+    add the unbroken-line terms (see the module); `resize`: show each tile at a print size drawn from the measured
+    sizes (see the module; off: every tile at its item's own size, as before); `seed`.
 
     The noise (`noised`): engineering settings too, augmentation strengths, not anything a reading uses.  `noise`
     scales every part (0: none at all); each part's maximum: `noise_blur` the blur's sigma (px), `noise_shift` the
@@ -69,6 +76,7 @@ class Recipe:
     jitter: float = 0.25
     every: int = 250
     unbroken: bool = False
+    resize: bool = True
     seed: int = 0
     noise: float = 1.0
     noise_blur: float = 1.0
@@ -81,12 +89,14 @@ class Recipe:
 @dataclass
 class Fitted:
     """The weights kept (on the CPU), the step they are from, the curve (a row at the first step, every `every` steps
-    and the last), the device and the count of batches skipped for holding no statement."""
+    and the last), the device, the count of batches skipped for holding no statement and the factors the tiles were
+    shown at (`Tiles.factor_summary`; None without resizing)."""
     state_dict: dict
     step: int
     curve: list[dict]
     device: str
     skipped: int = 0
+    factors: dict | None = None
 
 
 # --- the noise --------------------------------------------------------------------------------------------------------
@@ -150,11 +160,14 @@ class _Era:
 
 
 class Tiles:
-    """Training tiles drawn from `items` (see the module).  ValueError for an item smaller than the tile or one of a
-    held-out set (`handlabels.HELD_OUT`: a choosing or test crop), naming it; a tile side that is not a multiple of
-    model.MULTIPLE; an era with no labelled px."""
+    """Training tiles drawn from `items` (see the module), at the print sizes `sizes` (series -> each sheet's ft per
+    px, `data.print_sizes`) with `recipe.resize`.  `factors` lists the factor of every tile drawn and `moved` counts
+    those moved to fit their item.  ValueError for an item smaller than the tile or one of a held-out set
+    (`handlabels.HELD_OUT`: a choosing or test crop), naming it; a tile side that is not a multiple of model.MULTIPLE;
+    an era with no labelled px; with `recipe.resize`, no sizes, or an item with no ft per px or with cuts and no
+    sigma."""
 
-    def __init__(self, items: list[Labelled], recipe: Recipe):
+    def __init__(self, items: list[Labelled], recipe: Recipe, sizes: dict[str, list[float]] | None = None):
         side = recipe.tile
         if side % model.MULTIPLE:
             raise ValueError(f"the tile's side {side} is not a multiple of {model.MULTIPLE}")
@@ -176,20 +189,62 @@ class Tiles:
                 raise ValueError(f"era {era}: no labelled px")
             self.pools[era] = pool
         self.boxes = [None if it.cuts is None else data.cut_boxes(it.cuts, it.lum.shape[1]) for it in items]
+        self.sizes, self.size_rng = None, None
+        self.factors: list[float] = []
+        self.moved = 0
+        if recipe.resize:
+            self.sizes = {s: [float(v) for v in vs] for s, vs in sorted((sizes or {}).items()) if len(vs)}
+            if not self.sizes:
+                raise ValueError("resizing the tiles needs the measured print sizes (`data.print_sizes`); none given")
+            for it in items:
+                if not (math.isfinite(it.ft_per_px) and it.ft_per_px > 0):
+                    raise ValueError(f"{it.name}: no ft per px; its tiles cannot be shown at another print size")
+                if it.cuts is not None and not (math.isfinite(it.sigma) and it.sigma > 0):
+                    raise ValueError(f"{it.name}: its cuts have no sigma; they cannot be laid again at another size")
+            self.size_rng = np.random.default_rng([recipe.seed, 2])
 
     def shares(self) -> list[int]:
         """Tiles per era (in `eras` order): equal, the remainder to the first."""
         n, extra = divmod(self.recipe.batch, len(self.eras))
         return [n + (i < extra) for i in range(len(self.eras))]
 
+    def target(self) -> tuple[str, float]:
+        """A print size to show a tile at, from the size generator: a series, each equally likely, then one of its
+        sheets, each equally likely; (series, ft per px)."""
+        names = list(self.sizes)
+        series = names[int(self.size_rng.integers(len(names)))]
+        found = self.sizes[series]
+        return series, found[int(self.size_rng.integers(len(found)))]
+
     def tile(self, era: str, rng: np.random.Generator) -> Labelled:
-        """A tile of `era` turned a random number of quarter turns, before jitter and noise."""
+        """A tile of `era` (with `recipe.resize`, at a drawn print size) turned a random number of quarter turns,
+        before jitter and noise."""
         side = self.recipe.tile
         i, r, c = self.pools[era].centre(rng)
         it = self.items[i]
         h, w = it.lum.shape
-        y0, x0 = min(max(r - side // 2, 0), h - side), min(max(c - side // 2, 0), w - side)
-        return data.turned(data.window(it, y0, x0, side, self.boxes[i]), int(rng.integers(4)))
+        src = side
+        if self.recipe.resize:
+            # the square that becomes one tile at the factor f (the item's ft per px over the target's) is side / f px,
+            # a whole number of px (at least one); when it is bigger than the item, the item's shorter side
+            src = max(1, round(side * self.target()[1] / it.ft_per_px))
+            if src > min(h, w):
+                src = min(h, w)
+                self.moved += 1
+            self.factors.append(side / src)
+        y0, x0 = min(max(r - src // 2, 0), h - src), min(max(c - src // 2, 0), w - src)
+        return data.turned(data.resized(it, y0, x0, src, side, self.boxes[i]), int(rng.integers(4)))
+
+    def factor_summary(self) -> dict | None:
+        """The factors drawn so far: count, least, median, most, and how many were moved to fit their item; None
+        without resizing."""
+        if not self.recipe.resize:
+            return None
+        f = np.asarray(self.factors, float)
+        if not len(f):
+            return {"count": 0, "least": None, "median": None, "most": None, "moved_to_fit": self.moved}
+        return {"count": len(f), "least": float(f.min()), "median": float(np.median(f)), "most": float(f.max()),
+                "moved_to_fit": self.moved}
 
     def draw(self, rng: np.random.Generator, noise_rng: np.random.Generator) -> list[Labelled]:
         """One batch: each era's share of tiles (`shares`), era by era, each jittered (from `rng`) then noised (from
@@ -304,13 +359,14 @@ def _zero() -> dict:
     return {"loss": 0.0, "statements": 0.0, "unbroken": 0.0, "steps": 0, "skipped": 0}
 
 
-def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None) -> Fitted:
-    """The network trained on `items` (see the module).  The network is made right after torch's generator is
-    seeded.  FloatingPointError for a loss that is not finite."""
+def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None,
+        sizes: dict[str, list[float]] | None = None) -> Fitted:
+    """The network trained on `items` (see the module), its tiles at the print sizes `sizes` with `recipe.resize`.
+    The network is made right after torch's generator is seeded.  FloatingPointError for a loss that is not finite."""
     branch.settle_torch()
     torch.manual_seed(recipe.seed)
     net = model.FindNet(recipe.width)
-    tiles = Tiles(items, recipe)
+    tiles = Tiles(items, recipe, sizes)
     rng, noise_rng = np.random.default_rng(recipe.seed), np.random.default_rng([recipe.seed, 1])
     net.to(device).train()
     opt = torch.optim.AdamW(net.parameters(), lr=recipe.max_lr, weight_decay=recipe.weight_decay)
@@ -367,14 +423,15 @@ def fit(items: list[Labelled], recipe: Recipe, device, on_checkpoint=None) -> Fi
                      row["loss_per_statement"], row["statements"], row["skipped"])
     if best is None:                                 # no checkpoint scored a finite value: the last
         best = (recipe.steps, _state(net))
-    return Fitted(best[1], best[0], curve, str(device), skipped)
+    return Fitted(best[1], best[0], curve, str(device), skipped, tiles.factor_summary())
 
 
 # --- the run's files --------------------------------------------------------------------------------------------------
 
 def save_run(folder: Path, fitted: Fitted, recipe: Recipe, log_fields: dict) -> tuple[Path, Path]:
     """model.pt (the weights kept, their step, the recipe, the device: no clock time) and log.json (the recipe, the
-    device, the curve, the skipped batches and `log_fields`; a number that is not finite as null) in `folder`."""
+    device, the curve, the skipped batches, the factors drawn when resizing and `log_fields`; a number that is not
+    finite as null) in `folder`."""
     folder.mkdir(parents=True, exist_ok=True)
     recipe_d = dataclasses.asdict(recipe)
     pt, js = folder / "model.pt", folder / "log.json"
@@ -384,6 +441,8 @@ def save_run(folder: Path, fitted: Fitted, recipe: Recipe, log_fields: dict) -> 
     part.replace(pt)
     out = {"recipe": recipe_d, "device": fitted.device, "step_kept": fitted.step, **log_fields,
            "curve": fitted.curve, "skipped_batches": fitted.skipped}
+    if fitted.factors is not None:
+        out["factors"] = fitted.factors
     js.write_text(json.dumps(_finite(out), indent=1, allow_nan=False) + "\n")
     return pt, js
 
@@ -402,10 +461,12 @@ def _finite(v):
 ZOOM = 2                    # picture setting: the noise examples' enlargement (nearest neighbour)
 
 
-def write_noise_examples(items: list[Labelled], recipe: Recipe, path: Path, per_era: int = 2) -> Path:
-    """`per_era` training tiles of every era, each as trained without noise (turned and jittered) beside the same with
-    noise, in rows, to judge by eye whether the noise looks like these maps."""
-    tiles = Tiles(items, recipe)
+def write_noise_examples(items: list[Labelled], recipe: Recipe, path: Path, per_era: int = 2,
+                         sizes: dict[str, list[float]] | None = None) -> Path:
+    """`per_era` training tiles of every era (at the print sizes `sizes` with `recipe.resize`), each as trained
+    without noise (turned and jittered) beside the same with noise, in rows, to judge by eye whether the noise looks
+    like these maps."""
+    tiles = Tiles(items, recipe, sizes)
     rng, noise_rng = np.random.default_rng([recipe.seed, 2]), np.random.default_rng([recipe.seed, 3])
     rows, j = [], recipe.jitter
     for era in tiles.eras:

@@ -1696,6 +1696,9 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                unbroken: bool = typer.Option(False, "--unbroken", help="Add the unbroken-line terms on the hand "
                                                                        "crops' block edges."),
                no_noise: bool = typer.Option(False, "--no-noise", help="No print-and-scan noise on the tiles."),
+               no_resize: bool = typer.Option(False, "--no-resize", help="Show every tile at its item's own print size "
+                                                                         "(for comparison), none at the measured "
+                                                                         "print sizes of the sheets."),
                steps: int = typer.Option(None, "--steps", min=1, help="Engineering setting: train this many steps "
                                                                       "instead of the recipe's (a short check)."),
                every: int = typer.Option(None, "--every", min=1, help="Engineering setting: steps between "
@@ -1708,12 +1711,15 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                                                                "(data/find/runs/<run>/noise-examples.png).")) -> None:
     """Train the finder on the named lot-labelled sheets (`sfzmaps find labels`) and every `train` hand crop, the
     ground under the choosing and test crops left out: data/find/runs/<run>/model.pt and log.json (the recipe, device,
-    commit, items, curve).  At every checkpoint the `choose` crops are read and the weights kept are those whose
-    closed areas find the most printed blocks (`find.counts.chooser`; with --no-chooser, the last step's).  Every
-    training and choosing crop is read first; if any cannot be, each is reported with its path and nothing is trained
-    (exit status 1), as when there is no choosing crop.  $0."""
+    commit, items, curve, and the print sizes measured and the factors drawn).  Each tile is shown at the print size of
+    a sheet the finder is used on, measured from every placed sheet of every series (`find.data.print_sizes`; with
+    --no-resize, at its item's own size).  At every checkpoint the `choose` crops are read and the weights kept are
+    those whose closed areas find the most printed blocks (`find.counts.chooser`; with --no-chooser, the last step's).
+    Every training and choosing crop is read first; if any cannot be, each is reported with its path and nothing is
+    trained (exit status 1), as when there is no choosing crop.  $0."""
     import dataclasses
     import logging
+    import math
     import subprocess
     import time
 
@@ -1730,7 +1736,7 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
                                  param_hint="--run")
     recipe = train.Recipe()
     recipe = dataclasses.replace(recipe, steps=steps or recipe.steps, every=every or recipe.every, unbroken=unbroken,
-                                 noise=0.0 if no_noise else recipe.noise)
+                                 noise=0.0 if no_noise else recipe.noise, resize=not no_resize)
     device = device or default_device()
     sids = []
     for s in sheet or []:
@@ -1771,26 +1777,38 @@ def find_train(run: str = typer.Option(..., "--run", help="The run's name: its f
     if not items:
         typer.echo("nothing to train on", err=True)
         raise typer.Exit(1)
-    listed = [{"name": it.name, "era": it.era, "labelled_px": int(data.labelled(it).sum()),
+    listed = [{"name": it.name, "era": it.era, "ft_per_px": it.ft_per_px, "labelled_px": int(data.labelled(it).sum()),
                "used_cuts_with_no_px": 0 if it.cuts is None else data.cuts_without_px(it.cuts)} for it in items]
     for era in sorted({it.era for it in items}):
         mine = [x for x in listed if x["era"] == era]
         typer.echo(f"{era}: {len(mine)} items, {sum(x['labelled_px'] for x in mine):,} labelled px")
+    sizes, size_fields = None, {}
+    if recipe.resize:
+        try:
+            sizes, left_out = data.print_sizes()
+        except (FileNotFoundError, ValueError, KeyError) as e:
+            typer.echo(f"the print sizes: {said(e)}; nothing trained", err=True)
+            raise typer.Exit(1) from None
+        size_fields = {"print_sizes": data.size_summary(sizes), "print_sizes_left_out": left_out}
+        typer.echo(f"print sizes: {sum(len(v) for v in sizes.values())} placed sheets of {len(sizes)} series, "
+                   f"{min((min(v) for v in sizes.values()), default=math.nan):.2f}-"
+                   f"{max((max(v) for v in sizes.values()), default=math.nan):.2f} ft per px; left out (no placed "
+                   f"sheet): {', '.join(left_out) or 'none'}")
     out = pages.OUT / "runs" / run
     if look:
-        typer.echo(str(train.write_noise_examples(items, recipe, out / "noise-examples.png")))
+        typer.echo(str(train.write_noise_examples(items, recipe, out / "noise-examples.png", sizes=sizes)))
     changed = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", "src"],
                              cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True).stdout.strip()
     t0 = time.perf_counter()
     try:
         with gpu.gpu_turn(True, device):
-            fitted = train.fit(items, recipe, device, on_checkpoint)
+            fitted = train.fit(items, recipe, device, on_checkpoint, sizes=sizes)
     except ValueError as e:
         typer.echo(f"nothing trained: {e}", err=True)
         raise typer.Exit(1) from None
     fields = {"commit": git_head(), "uncommitted_changes_in_src": bool(changed), "torch": torch.__version__,
               "threads": THREADS, "items": listed, "choosing_crops": [data.crop_name(c) for c in choosing] or None,
-              "train_crops_left_out_as_reserved": {it.name: it.left_out for it in items if it.hand},
+              "train_crops_left_out_as_reserved": {it.name: it.left_out for it in items if it.hand}, **size_fields,
               "seconds": round(time.perf_counter() - t0, 1)}
     for f in train.save_run(out, fitted, recipe, fields):
         typer.echo(str(f))

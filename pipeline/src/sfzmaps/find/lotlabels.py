@@ -9,7 +9,9 @@ today's blocks the lots with their enclosed holes filled, and the street labels 
 the pooled half-widths: 1 street, 0 not street (a block), 255 no label.
 
 A sheet's labels (`sheet_labels`): the street-or-not labels read onto its page, the px said to carry no block edge, and
-the block-edge cut statements of `find.cuts`.  The finder makes no label about zoning borders.
+the block-edge cut statements of `find.cuts`.  The finder makes no label about zoning borders.  `ft_per_px`: the scale
+of a box of a page through its placement (the trainer's items and print sizes, `find.data`; the test crops' feet,
+`find.counts`).
 
 Reads data/ref/parcels.parquet or the April 2000 table, data/ref/streets.parquet, a sheet's page, frame cut and
 placement (data/warp/<series>/<sheet>/transform.json with its correction, or data/work/<series>/<sheet>/transform.json)
@@ -104,6 +106,21 @@ def placement(sid: SheetId, which: str = "warp") -> SheetTransform:
         raise ValueError(f"placement {which!r}: expected one of {', '.join(PLACEMENTS)}")
     folder = PLACEMENTS[which] / sid[0] / sid[1]
     return SheetTransform.from_json(json.loads((folder / "transform.json").read_text()), folder=folder)
+
+
+def ft_per_px(tr, box: tuple[int, int, int, int]) -> float:
+    """The feet per page px at the box (x0, y0, w, h) through the placement `tr` (`to_world`, ft): the mean over its
+    four sides of the side's length in feet over its length in px."""
+    x0, y0, w, h = box
+    corners = np.array([[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h]], float)
+    world = np.asarray(tr.to_world(corners), float)
+    feet = np.linalg.norm(world - np.roll(world, -1, axis=0), axis=1)
+    return float(np.mean(feet / np.array([w, h, w, h], float)))
+
+
+def page_ft_per_px(tr, shape: tuple[int, int]) -> float:
+    """`ft_per_px` over the whole page of `shape` (its box, centred on the page's centre): a sheet's print size."""
+    return ft_per_px(tr, (0, 0, shape[1], shape[0]))
 
 
 @dataclass(frozen=True)

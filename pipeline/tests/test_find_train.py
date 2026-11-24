@@ -129,6 +129,7 @@ def test_reserved_ground_has_no_label_and_only_block_edge_cuts_are_read(tmp_path
     assert np.array_equal(got.cuts.px, 10 * w + runs[0]) and list(got.cuts.cut) == [0] * 10
     assert len(got.cuts.weight) == 1                             # the zoning-border cut of before is not read
     assert (got.era, got.name, got.hand) == ("lined-1bit", "t/A", False)
+    assert got.ft_per_px == pytest.approx(4.0) and got.sigma == 2.0        # the page's scale; the label file's sigma
 
 
 def _two_line_page():
@@ -166,6 +167,7 @@ def test_a_training_crop_on_reserved_ground_loses_that_ground(tmp_path, monkeypa
     assert (got.street_w[inner][keep] == (want.street[keep] != 255)).all()
     assert got.left_out == pytest.approx(32 / 60)
     assert got.hand and got.set == "train" and got.name == "train/s/A__100_100_60_40" and got.era == "hatched-grey"
+    assert got.ft_per_px == pytest.approx(4.0) and math.isnan(got.sigma)    # the scale at its box; no cut, no sigma
     [line] = [r.getMessage() for r in caplog.records if r.name == "sfzmaps.find.data"]
     assert "train/s/A__100_100_60_40" in line and "0.533" in line
     [test_crop] = handlabels.crops(("test",))
@@ -183,7 +185,7 @@ def test_each_era_gets_its_share_of_a_batch():
         arr[:] = 255
     corner.street_w[:] = 0
     corner.street[:4, :4], corner.street_w[:4, :4] = 1, 1
-    recipe = train.Recipe(batch=16, tile=32)
+    recipe = train.Recipe(batch=16, tile=32, resize=False)
     tiles = train.Tiles(items, recipe).draw(np.random.default_rng(2), np.random.default_rng(3))
     assert Counter(t.era for t in tiles) == {"a": 6, "b": 5, "c": 5}
     for t in tiles:
@@ -202,7 +204,7 @@ def _fit_items():
     return [_item((48, 48), rng, "lined-1bit", "sheet"), _item((40, 40), rng, "hatched-grey", "crop", cuts=False)]
 
 
-SMALL = dict(batch=2, tile=32, width=4)
+SMALL = dict(batch=2, tile=32, width=4, resize=False)     # tiles at the items' own size (test_find_resize: resized)
 
 
 def test_same_seed_same_bits_cpu():
@@ -379,6 +381,7 @@ def test_train_reports_a_series_with_no_source_row_and_a_refused_fit_without_a_t
     assert "series 'u' has no row in" in r.output and "1 training crop(s) could not be read" in r.output, r.output
     f.unlink()
     _crop_file("train", "s", "A", (100, 100, 60, 40), **marks)
+    monkeypatch.setattr(data, "print_sizes", lambda: ({"s": [4.0]}, []))   # no real sheet measured
 
     def refused(*a, **k):                   # as `train.fit` refuses, for example, an item smaller than a tile
         raise ValueError("s/A: 40 x 60 px is smaller than a 256 px tile")

@@ -6,7 +6,8 @@ and which px of the cut the edge is on, the model finds itself.  Each px carries
 side, falling off as a Gaussian of the sheet's measured placement spread (`spread_px`), so a cut is as long as the
 placement is unsure.  A cut with any px off the page or off the frame cut is dropped whole.  Each cut names the grid px
 of the block it is across the side of (`Cuts.inside`), so that it can be kept only where the sheet draws the block
-(`find.drawn`).
+(`find.drawn`).  `relaid` lays a square's cuts again on a tile showing the square at another size, by the same
+arithmetic (`_lay`).
 
 Reads a sheet's placement and data/warp/<series>/<sheet>/scores.json (the placement's measured miss).  Writes nothing.
 """
@@ -169,6 +170,34 @@ def _lay(mid: np.ndarray, d: np.ndarray, inside: np.ndarray, sigma: float, reach
     return Cuts((row * shape[1] + col)[on], renumber[cut[on]].astype(np.int32),
                 np.exp(-t[on] ** 2 / (2 * sigma ** 2)).astype(np.float32), np.ones(int(good.sum()), np.float32),
                 np.asarray(inside, np.int32)[good], (row * shape[1] + col)[lost])
+
+
+def relaid(c: Cuts, side: int, size: int, sigma: float) -> Cuts:
+    """The cuts `c` of a square `side` px wide (`px` index it flat) laid again by `_lay` on a tile of `size` px that
+    shows the square at the factor f = size / side.  Each cut's centre (its px of the highest prior, prior 1 as laid;
+    the first of a tie) is moved to the tile px it falls in, its direction kept (the long axis of its px), its sigma
+    `sigma` times f and its reach `reach_px` of that; its weight and `inside` carry over.  A cut that no longer lies
+    wholly in the tile is dropped, as one leaving the page is (`dropped` is empty, as in a window)."""
+    n = len(c.weight)
+    if not n:
+        return Cuts.empty()
+    f = size / side
+    r, q = np.divmod(c.px, side)
+    count = np.bincount(c.cut, minlength=n)
+    mean_q, mean_r = (np.bincount(c.cut, v, n) / np.maximum(count, 1) for v in (q, r))
+    dq, dr = q - mean_q[c.cut], r - mean_r[c.cut]
+    sqq, srr, sqr = (np.bincount(c.cut, v, n) for v in (dq * dq, dr * dr, dq * dr))
+    angle = 0.5 * np.arctan2(2 * sqr, sqq - srr)                  # the long axis of each cut's px
+    order = np.lexsort((-c.prior, c.cut))
+    first = order[np.r_[True, np.diff(c.cut[order]) != 0]] if len(order) else order
+    centre = np.full((n, 2), np.nan)                              # a cut with no px is not laid
+    centre[c.cut[first]] = np.c_[q[first], r[first]]
+    mid = np.floor((centre + 0.5) * f)
+    s = sigma * f
+    laid = _lay(mid, np.c_[np.cos(angle), np.sin(angle)], np.arange(n), s, reach_px(s), (size, size),
+                np.ones((size, size), bool))
+    kept = laid.inside
+    return Cuts(laid.px, laid.cut, laid.prior, c.weight[kept], c.inside[kept], np.zeros(0, np.int64))
 
 
 def edge_cuts(g: lotlabels.Ground, tr, shape: tuple[int, int], keep: np.ndarray, sigma: float,
