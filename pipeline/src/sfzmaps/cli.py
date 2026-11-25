@@ -2036,11 +2036,13 @@ def find_ruled(sheet: str = typer.Option(..., "--sheet", help="The page, as <ser
 
 OFFSET_MEANS = ("offset: how far the finder's area (ground it calls not street) reaches past today's traced block "
                 "outline, in px, measured at every px along the outline; positive = past the outline, towards the "
-                "street; negative = it stops short.  The tracing step puts an outlined (mostly white) block's outline "
-                "on the centre of its printed line, so about half the line's width means the finder's area ends at "
-                "the line's outer edge, and about 0 that it ends at the line's centre.  The area's edge is taken half "
-                "a px beyond its outer px, so an area whose outer px lie on the traced outline measures +0.5, and one "
-                "ending at the line's outer edge half the line's width + 0.5.")
+                "street; negative = it stops short.  The area's edge is taken half a px beyond its outer px.  The "
+                "tracing step takes an outlined (mostly white) block's contour through the centres of its outer ink "
+                "px, half a px inside the line's outer edge, and moves it in by half the line width it measures, so "
+                "an area ending at the line's outer edge measures half the measured line width + 0.5, and one ending "
+                "on the traced outline 0.  For an odd line width the measured width is the line's own, so the traced "
+                "outline sits half a px inside the line's true centre.  A dark (solid or hatched) block is not moved "
+                "in: an area ending at its ink's edge measures +0.5.")
 
 
 @find_app.command("outline-offset")
@@ -2057,10 +2059,10 @@ def find_outline_offset(run: str = typer.Option(..., "--run", help="The run whos
     along each traced outline measures how far the finder's area reaches past the outline (positive: past it, towards
     the street).  The answer is measured on the traced blocks that lie in a finder area holding no other traced block
     (an offset on a block the finder joined to its neighbour means little); the figures for every traced block, and
-    for mostly white and mostly ink blocks apart, are written beside it.  The sheet's half line width is half
-    `linework.stroke_width` of its ink; the inset is whichever of 0 or that half width the median offset is nearer
-    (outer_edge: the finder's areas end at the line's outer edge, so its outlines must move in by it).  Prints one line
-    per era and writes only data/find/trial/<trial>/outline_offsets.json.  Exit status 1, writing nothing, when a sheet
+    for mostly white and mostly ink blocks apart (by the tracing step's own rule: more of its seed px inside the block
+    paper than ink), are written beside it, with the sheet's half line width (half `linework.stroke_width` of its ink).
+    A report only: nothing reads it to decide anything.  Prints one line per era and writes only
+    data/find/trial/<trial>/outline_offsets.json.  Exit status 1, writing nothing, when a sheet
     has no stored read (naming the `sfzmaps find read` command), is a duplicate scan, has no page, frame cut, traced
     blocks or era, or shares its era with another sheet given.  $0."""
     import numpy as np
@@ -2119,14 +2121,14 @@ def find_outline_offset(run: str = typer.Option(..., "--run", help="The run whos
         ink = linework.binarize(img)
         half = linework.stroke_width(ink) / 2.0
         one = np.asarray(placeblocks.one_to_one(areas.areas(street, keep), traced), bool)
-        dark = np.asarray(placeblocks.mostly_ink(ink, traced), bool)
+        seeds = placeblocks.anchors(ink, keep, photo=linework.is_photo(img), scale=placeblocks.tracing_scale(traced))
+        dark = np.asarray(placeblocks.mostly_ink(ink, traced, anchors=seeds), bool)
 
         def offset(mask):
             return placeblocks.outline_offset(street, keep, [p for p, m in zip(traced, mask) if m])
 
         got = offset(one)
         v = np.rint(placeblocks.offsets(street, keep, [p for p, m in zip(traced, one) if m])).astype(int)
-        inset = placeblocks.inset_px(got["median_px"], half)
         era = pages.source(sid[0]).era
         out["eras"][era] = {
             "sheet": label, "offset": got,
@@ -2137,17 +2139,128 @@ def find_outline_offset(run: str = typer.Option(..., "--run", help="The run whos
             "offset_one_to_one_mostly_white": offset(one & ~dark),
             "offset_one_to_one_mostly_ink": offset(one & dark),
             "offset_points_by_whole_px": {str(k): int(n) for k, n in zip(*np.unique(v, return_counts=True))},
-            "half_stroke_px": half, "inset_px": inset, "outer_edge": inset > 0}
+            "half_stroke_px": half}
         typer.echo(f"{era}: {label}: {len(traced)} traced blocks, {int(one.sum())} alone in their finder area; "
                    f"offset (past the traced outline, px) median {got['median_px']:.2f} "
                    f"(p25 {got['p25_px']:.2f}, p75 {got['p75_px']:.2f}) over {got['points']} outline points; "
-                   f"half line width {half:.2f}; "
-                   + ("the areas end at the line's outer edge: move in by it" if inset > 0 else
-                      "the areas end at the line's centre: no move"))
+                   f"half line width {half:.2f}")
     f = trials.TRIAL / trial / "outline_offsets.json"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(json.dumps(out, indent=1) + "\n")
     typer.echo(str(f))
+
+
+@find_app.command("blocks")
+def find_blocks(run: str = typer.Option(..., "--run", help="The run whose stored whole-sheet reads make the blocks "
+                                                          "(data/find/runs/<run>/sheets/)."),
+                trial: str = typer.Option(..., "--trial", help="The trial's name: the blocks go into its finder arm, "
+                                                              "data/find/trial/<trial>/finder/."),
+                sheet: list[str] = typer.Option(..., "--sheet", help="A sheet, as <series>/<sheet> (repeatable).")
+                ) -> None:
+    """Make each sheet's blocks for placement from the finder's read of it, and write them into the trial's finder arm
+    in place of the traced blocks copied there (data/find/trial/<trial>/finder/work/<series>/<sheet>/
+    blocks_px.geojson); the file's freshness record is left as copied, so the placement steps run there take the
+    finder's blocks as current and do not trace the page again.  Today's data and the traced arm are only read.
+
+    A block is a piece of ground the finder calls not street (its street chance at most one half); pieces touching the
+    page's edge or the frame cut are cut, and each other piece is outlined by the tracing step's own outline code: an
+    outlined block's sides are moved in by half the sheet's measured line width, a solid one's are not, by the tracing
+    step's own rule.  Each block keeps how sure the read was of the street round it.
+
+    For each sheet it writes the counts to data/find/trial/<trial>/blocks/<series>/<sheet>.json and a debugging
+    picture, today's traced blocks (from the traced arm) beside the finder's at the page's own size, to
+    data/find/trial/<trial>/look/<series>/<sheet>__outlines.png, with a reduced overview copy beside it
+    (__outlines.small.png), and prints one line: today's traced blocks and good corners; the finder's areas, those cut
+    at the rim, those cleaned away, its blocks and good corners; how many of its areas hold two or more of the year's
+    blocks (today's lots by block, placed on the page by today's placement); and how many of today's traced blocks
+    lie alone in a finder area, share one with other traced blocks, or lie on ground it calls street.  Exit status
+    1, writing nothing, when a sheet has no finder arm root (naming `sfzmaps find trial root`), no stored read (naming
+    `sfzmaps find read`), no traced arm root, no frame cut or no placement today, or is a duplicate scan.  $0."""
+    import numpy as np
+    from shapely.geometry import shape
+
+    from sfzmaps.find import look, pages, placeblocks, trial as trials, wholesheet
+    from sfzmaps.frame import data as frame_data
+    for name, hint in ((run, "--run"), (trial, "--trial")):
+        if not name or name in (".", "..") or "/" in name or "\\" in name:
+            raise typer.BadParameter(f"{name!r}: one folder name (no path separator, no '..')", param_hint=hint)
+    sids = []
+    for s in sheet:
+        ser, _, name = s.partition("/")
+        if not ser or not name:
+            raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
+        sids.append((ser, name))
+    root, traced_root = trials.arm_root(trial, "finder"), trials.arm_root(trial, "traced")
+    folder = pages.OUT / "runs" / run
+    refused = []
+    for sid in sids:
+        label = f"{sid[0]}/{sid[1]}"
+        work = root / "work" / sid[0] / sid[1]
+        missing = [f for f in ("page.png", "blocks_px.geojson", "blocks_px.geojson.inputs.json")
+                   if not (work / f).is_file()]
+        if missing:
+            refused.append(f"{label}: the finder arm root has no {', '.join(missing)} ({work}); make it with "
+                           f"`sfzmaps find trial root --trial {trial} --arm finder --sheet {label}`")
+        f_read = wholesheet.paths(folder, sid)[0]
+        if not f_read.is_file():
+            refused.append(f"{label}: no stored read ({f_read}); read it with "
+                           f"`sfzmaps find read --run {run} --sheet {label}`")
+        why = wholesheet.check(sid)
+        if why:
+            refused.append(why)
+        f_traced = traced_root / "work" / sid[0] / sid[1] / "blocks_px.geojson"
+        if not f_traced.is_file():
+            refused.append(f"{label}: no traced arm root ({f_traced}); make it with "
+                           f"`sfzmaps find trial root --trial {trial} --arm traced --sheet {label}`")
+        placed = config.DATA_DIR / "warp" / sid[0] / sid[1] / "transform.json"
+        if not placed.is_file():
+            refused.append(f"{label}: no placement today ({placed}), to put the year's blocks on the page")
+    if refused:
+        for why in refused:
+            typer.echo(why, err=True)
+        typer.echo("no blocks written", err=True)
+        raise typer.Exit(1)
+    for sid in sids:
+        label = f"{sid[0]}/{sid[1]}"
+        work = root / "work" / sid[0] / sid[1]
+        f_traced = traced_root / "work" / sid[0] / sid[1] / "blocks_px.geojson"
+        lum = frame_data.load_luminance(work / "page.png")
+        points = placeblocks.lot_block_points(sid, lum.shape)
+        got = placeblocks.write_sheet(sid, folder, root, f_traced, points, run=run)
+        with open(work / "blocks_px.geojson") as f:
+            found = json.load(f)
+        with open(f_traced) as f:
+            traced = json.load(f)
+
+        def corners(d):
+            return np.array([[np.nan if v is None else v for v in c] for c in d.get("corners") or []],
+                            float).reshape(-1, 2)
+        pic = look.outlines_picture(
+            lum, [shape(ft["geometry"]) for ft in traced["features"]], corners(traced),
+            [shape(ft["geometry"]) for ft in found["features"]], corners(found),
+            f"RESULT (debugging picture): {sid[0]} / {sid[1]}: today's traced blocks (left) and the finder's blocks "
+            f"from run {run} (right)",
+            found_sure=[np.nan if ft["properties"]["outline_street_p10"] is None
+                        else ft["properties"]["outline_street_p10"] for ft in found["features"]])
+        f_pic = trials.TRIAL / trial / "look" / sid[0] / f"{sid[1]}__outlines.png"
+        f_small = f_pic.with_name(f"{sid[1]}__outlines.small.png")
+        f_pic.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(f_pic), pic)
+        cv2.imwrite(str(f_small), look.reduced(pic))
+        f_counts = trials.TRIAL / trial / "blocks" / sid[0] / f"{sid[1]}.json"
+        f_counts.parent.mkdir(parents=True, exist_ok=True)
+        f_counts.write_text(json.dumps({"run": run, "trial": trial, "sheet": label, **got,
+                                        "blocks_file": str(work / "blocks_px.geojson"), "picture": str(f_pic),
+                                        "overview": str(f_small)}, indent=1) + "\n")
+        typer.echo(f"{label}: today {got['traced_blocks']} traced blocks, {got['traced_good_corners']} good corners; "
+                   f"finder {got['areas']} areas, {got['edge_cut']} cut at the rim, {got['dropped_by_cleaning']} "
+                   f"cleaned away, {got['blocks']} blocks ({got['moved_in']} moved in by half the "
+                   f"{got['stroke_px']:g} px line), {got['good_corners']} good corners; "
+                   f"{got['areas_with_two_or_more']} areas hold two or more of the year's blocks "
+                   f"({got['blocks_in_them']} of the {got['lot_blocks_on_page']} on the page); today's traced blocks: "
+                   f"{got['traced_one_to_one']} alone in a finder area, {got['traced_sharing']} sharing "
+                   f"{got['traced_sharing_areas']} areas, {got['traced_on_street']} on street")
+        typer.echo(f"  {f_counts}\n  {f_pic}\n  {f_small}")
 
 
 @trial_app.command("root")

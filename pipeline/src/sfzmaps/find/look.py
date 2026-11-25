@@ -18,6 +18,10 @@ by what became of them (the answer key: block outlines marked by hand on the sca
 `sheet_picture`: a whole sheet as the finder read it (`find.wholesheet`): the scan with the ground called street tinted
 and the block edges drawn, titled RESULT.
 
+`outlines_picture`: today's traced blocks beside the blocks made from the finder's read (`find.placeblocks`), both at
+the page's own size, each outline 1 px wide, the finder's tinted red as its read was unsure of the street round the
+block, good corners as dots; titled "RESULT (debugging picture):".  `reduced`: an overview copy of a large picture.
+
 Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/, `write_crop` to
 data/find/look/crops/<set>/, `write_ruled` to data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
 from __future__ import annotations
@@ -423,3 +427,68 @@ def read_picture(lum: np.ndarray, chances: np.ndarray, found: np.ndarray, truth:
     for p in panels[1:]:
         row += [gap, p]
     return _keyed(np.hstack(row), title, READ_KEY)
+
+
+# The outlines picture (`outlines_picture`).  BGR.
+TRACED = (0, 150, 0)        # picture setting: today's traced outlines, green
+FOUND = (255, 90, 0)        # picture setting: the finder's outlines where its read was sure of the street round them
+UNSURE = (0, 0, 255)        # picture setting: ... and where it was not, red; between them a blend
+CORNER = YELLOW             # picture setting: a good corner's dot
+CORNER_DOT = 2              # picture setting: a good corner's dot radius, page px
+SMALL_SIDE = 3000           # picture setting: the longer side of a reduced overview copy, px
+OUTLINES_TITLE = "RESULT (debugging picture):"
+OUTLINES_KEY = (("left: today's traced blocks; right: the finder's blocks, made from its read; both at the page's own "
+                 "size", (255, 255, 255)),
+                ("green = today's traced block outlines", TRACED),
+                ("blue = the finder's block outlines where its read was sure of the street round the block", FOUND),
+                ("red = where it was unsure: the redder, the lower the street chance on the least sure tenth of the "
+                 "px round it (outline_street_p10), drawn as strongly as it is low, no cut-off", UNSURE),
+                ("yellow dots = good corners (the corners placement matches to today's map)", CORNER))
+
+
+def _poly_px(p) -> list[np.ndarray]:
+    """A polygon's rings (its exterior and holes) as cv2 points in 1/16 px (shift 4), px centres at integers."""
+    return [np.rint(np.asarray(r.coords) * 16).astype(np.int32) for r in (p.exterior, *p.interiors)]
+
+
+def _outlined(scan: np.ndarray, polys, colours, corners: np.ndarray) -> np.ndarray:
+    img = scan.copy()
+    for p, colour in zip(polys, colours):
+        cv2.polylines(img, _poly_px(p), True, tuple(int(c) for c in colour), 1, cv2.LINE_8, shift=4)
+    for x, y in np.asarray(corners, float).reshape(-1, 2):
+        if np.isfinite(x) and np.isfinite(y):
+            cv2.circle(img, (int(round(x * 16)), int(round(y * 16))), CORNER_DOT * 16, CORNER, -1, cv2.LINE_8,
+                       shift=4)
+    return img
+
+
+def outlines_picture(lum: np.ndarray, traced: list, traced_corners: np.ndarray, found: list,
+                     found_corners: np.ndarray, title: str, found_sure: list[float] | None = None) -> np.ndarray:
+    """The picture (BGR uint8) of today's traced blocks beside the finder's, two panels at the page's own size side by
+    side, GAP apart: on the left the scan `lum` (1 paper, 0 ink) in grey with the `traced` outlines (page px, px
+    centres at integers) drawn 1 px wide in TRACED; on the right the scan with the `found` outlines 1 px wide, each in
+    a blend from UNSURE to FOUND as strong as its `found_sure` value (a block's `outline_street_p10`: 1 all FOUND, 0
+    all UNSURE; no cut-off; FOUND where it is not given or not a number); each panel's good corners as CORNER dots.  A
+    key and `title` above; ValueError when the title does not start "RESULT (debugging picture):"."""
+    if not title.startswith(OUTLINES_TITLE):
+        raise ValueError(f"the outlines picture's title starts {OUTLINES_TITLE!r}: {title!r}")
+    scan = _grey(lum)
+    sure = [1.0] * len(found) if found_sure is None else [float(v) for v in found_sure]
+    colours = []
+    for v in sure:
+        v = 1.0 if not np.isfinite(v) else float(np.clip(v, 0.0, 1.0))
+        colours.append(np.rint(v * np.asarray(FOUND, float) + (1 - v) * np.asarray(UNSURE, float)).astype(int))
+    left = _outlined(scan, traced, [TRACED] * len(traced), traced_corners)
+    right = _outlined(scan, found, colours, found_corners)
+    gap = np.full((scan.shape[0], GAP, 3), 255, np.uint8)
+    return _keyed(np.hstack([left, gap, right]), title, OUTLINES_KEY)
+
+
+def reduced(img: np.ndarray, side: int = SMALL_SIDE) -> np.ndarray:
+    """`img` shrunk (area averaging) so its longer side is `side` px; as it is when it is no longer.  A picture
+    setting, for an overview of a picture too large to look at whole."""
+    h, w = img.shape[:2]
+    f = side / max(h, w)
+    if f >= 1:
+        return img
+    return cv2.resize(img, (max(1, int(round(w * f))), max(1, int(round(h * f)))), interpolation=cv2.INTER_AREA)
