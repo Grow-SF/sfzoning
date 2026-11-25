@@ -5,9 +5,9 @@ branch's `place start` and `place fine` read from the scan today, where the find
 place of the printed lines, how a sheet's stored answers are read, and what has to be on one branch. Nothing was
 changed on the placement branch.
 
-Code cited from branch `placement-one-process` at 0f9a1ab (the checkout
-`.claude/worktrees/placement-one-process`), paths under `pipeline/src/sfzmaps/`. Line numbers checked against that
-code on 2026-11-25.
+Code cited from branch `placement-one-process`, a local branch, not pushed when this was written; the line numbers
+are as of commit 0f9a1ab. Paths are under `pipeline/src/sfzmaps/`. Line numbers checked against that code on
+2026-11-25.
 
 ## What the two steps read from the scan
 
@@ -110,8 +110,8 @@ The read's own confidence is the per-px chances above.
    848); downtown with fewer (1,402 to 1,186). By eye the warped scans look the same as today's.
 2. 1921 `094348509` failed: the rough label step's scale hint, which comes from the blocks' street width and allows
    fits from the hint / 1.5 to the hint x 1.5 (`anchors.SCALE_HINT_FACTOR`), let a false group of 7 label matches
-   win. Tested by a scratch script outside the repository,
-   `/Users/sbuss/.claude/jobs/7f37beca/tmp/checks/rough_hint.py`. A separate check that used the traced arm's rough
+   win. Tested by a one-off check kept in the repository,
+   `pipeline/scripts/spikes/finder-to-placement-2026-11-25/rough_hint.py`. A separate check that used the traced arm's rough
    placement, so not like for like with the trial, gave 633 control points from the same finder blocks against
    today's 79, and passed.
 3. The finder's blocks join where the read breaks a street and are dropped where they touch the frame cut's rim.

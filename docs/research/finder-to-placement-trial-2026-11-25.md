@@ -76,7 +76,7 @@ What its records show (finder arm, against today's): refine ran 30 rounds withou
 corners, 820 were marked "no equivalent" (no matching corner in today's map); the rough placement's scale hint was
 4.82 ft/px (today 3.81).
 
-**The cause, tested** (`/Users/sbuss/.claude/jobs/7f37beca/tmp/checks/rough_hint.py`). The rough placement uses
+**The cause, tested** (`pipeline/scripts/spikes/finder-to-placement-2026-11-25/rough_hint.py`). The rough placement uses
 label matches only (block numbers and street names). It takes a scale hint from the blocks' typical street width and
 accepts fits between the hint divided by 1.5 and the hint times 1.5 (`anchors.SCALE_HINT_FACTOR`). The test ran the
 rough fit on the same 106 label candidates with only the hint changed:
@@ -93,11 +93,11 @@ finder's blocks reach the failure only through the hint they give. The street wi
 warp logs; the hints in the arms' `rough.json`; the rough fits per hint are as the script printed them (recorded in
 the work log; the script kept no log file).
 
-**A separate check from the right rough start** (`/Users/sbuss/.claude/jobs/7f37beca/tmp/checks/rough-check/`;
+**A separate check from the right rough start** (`pipeline/scripts/spikes/finder-to-placement-2026-11-25/` (`make_root.py`, `mark_rough.py`, `proofs.py`, `snap.sh`);
 its own folder `pipeline/data/find/trial/rough-check/finder`). Refine, score and warp were run from the finder's
-blocks with the traced arm's rough placement copied in. Proofs (`proofs.log`): the blocks file's sha equals the
+blocks with the traced arm's rough placement copied in. Proofs (`proofs.py`): the blocks file's sha equals the
 finder arm's; `rough.json` is byte-equal to the traced arm's; refine's record names both. Today's data was untouched
-(`diff.txt`). This is not the trial: the trial's rule is that only the blocks differ, and here the rough start was
+(`snap.sh`, before and after). This is not the trial: the trial's rule is that only the blocks differ, and here the rough start was
 taken from the other arm.
 
 | `094348509` | Blocks | Good corners | Control points | Check | Held-out p50 / p95 ft | Refine | Warp | Within 1 px |
@@ -125,7 +125,7 @@ Counts from each sheet's blocks file. "Areas" are the connected pieces of ground
 - **Dropped at the rim.** An area touching the frame cut's rim gets no outline (the design's rule: an area touching
   the rim counts as cut by the page's edge). Open land, parks, water and the margin touch it, and so does every
   block joined to them. When the finder's blocks were shown to the owner before the trial, a scratch count
-  (`/Users/sbuss/.claude/jobs/7f37beca/tmp/checks/lost_areas.py`) found that areas touching the rim held 41%
+  (`pipeline/scripts/spikes/finder-to-placement-2026-11-25/lost_areas.py`) found that areas touching the rim held 41%
   (Section 12), 33%, 52% and 69% (p08) of the not-street ground. On p08 that is one area: the Bay, the margin,
   Mission Bay and the waterfront joined.
 - **Cleaned away** is mostly specks ("too small"; 0.0 to 0.1% of the not-street ground in the same scratch count).

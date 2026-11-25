@@ -2165,7 +2165,7 @@ def find_blocks(run: str = typer.Option(..., "--run", help="The run whose stored
     A block is a piece of ground the finder calls not street (its street chance at most one half); pieces touching the
     page's edge or the frame cut are cut, and each other piece is outlined by the tracing step's own outline code: an
     outlined block's sides are moved in by half the sheet's measured line width, a solid one's are not, by the tracing
-    step's own rule.  Each block keeps how sure the read was of the street round it.
+    step's own rule.  Each block keeps figures of the read on and just outside its outline (see the README); the read's confidence is the per-pixel chance stored with the read.
 
     For each sheet it writes the counts to data/find/trial/<trial>/blocks/<series>/<sheet>.json and two debugging
     pictures at the page's own size, each with a reduced overview copy (.small.png), in
@@ -2312,15 +2312,16 @@ def find_trial_root(trial: str = typer.Option(..., "--trial", help="The trial's 
 
 @trial_app.command("numbers")
 def find_trial_numbers(trial: str = typer.Option(..., "--trial", help="The trial's name: data/find/trial/<trial>/."),
-                       run: str = typer.Option("all-pieces", "--run", help="The finder run whose training ground is "
-                                                                           "measured (data/find/runs/<run>/).")
+                       run: str = typer.Option(..., "--run", help="The finder run whose training ground is "
+                                                                     "measured (data/find/runs/<run>/).")
                        ) -> None:
     """For every sheet in the trial's arm roots, print one line per data root (today's data, then each arm that is
     there): its blocks, good corners, control points, the placement check with its held-out errors, and the warp's
     chosen correction with its share of block-side points within 1 px of a printed line, each read from that root's
     own files.  Then whether the traced arm came out exactly as today, file by file, and the run's training ground on
     the sheet (the share under its lot-labelled sheets, and its hand crops there).  Reads today's and the trial's
-    data; writes only data/find/trial/<trial>/numbers.json.  $0."""
+    data; writes only data/find/trial/<trial>/numbers.json.  Exit status 1, writing nothing, when the data root in force lies inside
+    the trial (unset SFZMAPS_DATA_DIR).  $0."""
     from sfzmaps.find import pages, trial as trials
     if not run or run == "." or ".." in run or "/" in run or "\\" in run:
         raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
@@ -2332,6 +2333,11 @@ def find_trial_numbers(trial: str = typer.Option(..., "--trial", help="The trial
     if not sids:
         typer.echo(f"{trials.TRIAL / trial}: no arm root with a sheet; make one with `sfzmaps find trial root`",
                    err=True)
+        raise typer.Exit(1)
+    here = (trials.TRIAL / trial).resolve()
+    if config.DATA_DIR.resolve() == here or here in config.DATA_DIR.resolve().parents:
+        typer.echo(f"{config.DATA_DIR}: the data root in force lies inside the trial ({here}), so it is not today's "
+                   f"data; unset SFZMAPS_DATA_DIR and run again", err=True)
         raise typer.Exit(1)
     folder = pages.OUT / "runs" / run
     if not (folder / "log.json").is_file():
@@ -2368,8 +2374,8 @@ def find_trial_numbers(trial: str = typer.Option(..., "--trial", help="The trial
 
 @trial_app.command("compare")
 def find_trial_compare(trial: str = typer.Option(..., "--trial", help="The trial's name: data/find/trial/<trial>/."),
-                       run: str = typer.Option("all-pieces", "--run", help="The finder run whose training ground is "
-                                                                           "measured (data/find/runs/<run>/).")
+                       run: str = typer.Option(..., "--run", help="The finder run whose training ground is "
+                                                                     "measured (data/find/runs/<run>/).")
                        ) -> None:
     """Compare each trial sheet placed from today's traced blocks (the traced arm) with it placed from the finder's
     blocks (the finder arm), beside today's placement.

@@ -223,7 +223,7 @@ def test_the_trial_commands_prepare_a_root_and_write_the_numbers(src, tmp_path, 
     run = tmp_path / "find" / "runs" / "all-pieces"
     run.mkdir(parents=True)
     (run / "log.json").write_text(json.dumps({"items": [{"name": "train/s/a__0_0_64_64"}]}))
-    r = invoke(["find", "trial", "numbers", "--trial", "T"])
+    r = invoke(["find", "trial", "numbers", "--trial", "T", "--run", "all-pieces"])
     assert r.exit_code == 0, r.output
     rows = [ln for ln in r.output.splitlines() if ln.startswith("s/a ") and " blocks, " in ln]
     assert [ln.split()[1] for ln in rows] == ["today:", "traced:"]
@@ -430,7 +430,7 @@ def test_compare_writes_only_its_own_files(src, tmp_path, monkeypatch):
     t = trial.TRIAL / "T"
     (t / "look/s").mkdir(parents=True)
     (t / "look/s/a__centre.png").write_text("an earlier run's picture")
-    r = invoke(["find", "trial", "compare", "--trial", "T"])
+    r = invoke(["find", "trial", "compare", "--trial", "T", "--run", "all-pieces"])
     assert r.exit_code == 0, r.output
     assert _files(*roots) == before                         # today's data and both arms untouched
     written = sorted(str(p.relative_to(t)) for p in t.rglob("*")
@@ -458,14 +458,22 @@ def test_compare_writes_only_its_own_files(src, tmp_path, monkeypatch):
 def test_compare_refuses_a_data_root_inside_the_trial(src, tmp_path, monkeypatch):
     _placed_trial(src, tmp_path, monkeypatch)
     monkeypatch.setattr(config, "DATA_DIR", trial.arm_root("T", "finder"))
-    r = invoke(["find", "trial", "compare", "--trial", "T"])
+    r = invoke(["find", "trial", "compare", "--trial", "T", "--run", "all-pieces"])
     assert r.exit_code == 1 and "unset SFZMAPS_DATA_DIR" in r.output
     assert not (trial.TRIAL / "T/compare.json").exists()
 
 
+def test_numbers_refuses_a_data_root_inside_the_trial(src, tmp_path, monkeypatch):
+    _placed_trial(src, tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "DATA_DIR", trial.arm_root("T", "finder"))
+    r = invoke(["find", "trial", "numbers", "--trial", "T", "--run", "all-pieces"])
+    assert r.exit_code == 1 and "unset SFZMAPS_DATA_DIR" in r.output
+    assert not (trial.TRIAL / "T/numbers.json").exists()
+
+
 def test_compare_refuses_a_sheet_with_no_placement(src, tmp_path, monkeypatch):
     _placed_trial(src, tmp_path, monkeypatch, finder_placed=False)
-    r = invoke(["find", "trial", "compare", "--trial", "T"])
+    r = invoke(["find", "trial", "compare", "--trial", "T", "--run", "all-pieces"])
     assert r.exit_code == 1
     assert "s/a finder" in r.output and "sfzmaps run --year s --sheet a" in r.output
     assert "sfzmaps warp s" in r.output

@@ -563,7 +563,7 @@ def check_blocks(trial: str, sid: SheetId) -> None:
     f = arm_root(trial, "finder") / "work" / sid[0] / sid[1] / "blocks_px.geojson"
     if not rec.is_file():
         raise ValueError(f"{label}: no record of the finder's blocks ({rec}); make them with `sfzmaps find blocks "
-                         f"--trial {trial} --sheet {label}`")
+                         f"--run <run> --trial {trial} --sheet {label}`")
     if not f.is_file():
         raise ValueError(f"{label}: the finder arm has no blocks file ({f})")
     got, want = hashlib.sha256(f.read_bytes()).hexdigest(), json.loads(rec.read_text()).get("sha256")

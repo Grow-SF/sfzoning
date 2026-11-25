@@ -385,8 +385,7 @@ more likely answer). `placeblocks` takes no other cut on a chance. It keeps the 
 
 ### Task 27: Step 4: the hand-off note (after Gate C)
 
-- [ ] **Step 1:** Re-read what the placement branch reads today, in the `placement-one-process` checkout
-  (`/Users/sbuss/workspace/sfzoning/.claude/worktrees/placement-one-process`): `place/start.py` `_ink` and
+- [ ] **Step 1:** Re-read what the placement branch reads today, on the `placement-one-process` branch: `place/start.py` `_ink` and
   `place/inputs.py:159-174`, `place/finefit.py` `PlacedSheet`, and `sheetwarp/targets.py` `fit_targets`,
   `ink_centres`, `block_line_weights`. Cite them by function and check every line number against the code (audit
   H).
