@@ -329,6 +329,7 @@ WINDOW_PX = 1200            # picture setting: a place's side, in px of today's 
 LINE = (255, 0, 255)        # picture setting: today's block lines, magenta (BGR): bright on white paper and on black ink
 LINE_PX = 3                 # picture setting: the width today's block lines are drawn, px (a picture of the line,
                             # centred on it, not its exact width)
+MAX_SIDE = 8000             # the largest picture side the owner's viewer opens, px: a larger picture is refused
 RESULT = "RESULT:"
 
 
@@ -416,8 +417,8 @@ def places(sid: SheetId, source: Path) -> dict[str, tuple[float, float, float, f
     data root `source` (warp/<series>/<sheet>/warped.tif) on a side, on a grid laid from the top-left corner of the
     sheet's warped footprint: `worst`, the box holding the most block-side points off the print under that
     placement (`off_print`); `busiest`, the box holding the most block-side points; `centre`, the box holding the
-    footprint's centroid.  Ties go to the first box, row by row from the top.  Pass today's data root, so that both
-    arms are shown on the same ground."""
+    footprint's centroid.  Ties go to the first box, row by row from the top.  `worst` is left out when no point is
+    off the print.  Pass today's data root, so that both arms are shown on the same ground."""
     folder = Path(source) / "warp" / sid[0] / sid[1]
     side = WINDOW_PX * _resolution(folder / "warped.tif")
     fp = _footprint(source, f"{sid[0]}/{sid[1]}")
@@ -436,7 +437,17 @@ def places(sid: SheetId, source: Path) -> dict[str, tuple[float, float, float, f
     def box_of(k):
         r, col = divmod(k, ncol)
         return (x0 + col * side, y1 - (r + 1) * side, x0 + (col + 1) * side, y1 - r * side)
-    return {"worst": box_of(most(off)), "busiest": box_of(most(np.ones(len(pts), bool))), "centre": box_of(centre)}
+    got = {"worst": box_of(most(off))} if off.any() else {}
+    return {**got, "busiest": box_of(most(np.ones(len(pts), bool))), "centre": box_of(centre)}
+
+
+def shared(boxes: dict) -> dict[str, list[str]]:
+    """The places grouped by box, in PLACES order: each group's first place names it, with every place in it."""
+    groups: dict[str, list[str]] = {}
+    for place in (p for p in PLACES if p in boxes):
+        first = next((k for k, v in groups.items() if boxes[k] == boxes[place]), place)
+        groups.setdefault(first, []).append(place)
+    return groups
 
 
 def in_box(points_world: np.ndarray, box_ft) -> np.ndarray:
@@ -457,17 +468,24 @@ def block_lines(boxes) -> list:
     return [g.boundary for g in blocks.geometry]
 
 
+def _window(s, box_ft) -> tuple[int, int, int, int]:
+    """The px window (column, row, width, height) of the open raster `s` nearest the box (map ft)."""
+    rx, ry = s.res
+    c0, r0 = int(round((box_ft[0] - s.bounds.left) / rx)), int(round((s.bounds.top - box_ft[3]) / ry))
+    return c0, r0, int(round((box_ft[2] - box_ft[0]) / rx)), int(round((box_ft[3] - box_ft[1]) / ry))
+
+
 def _panel(tif: Path, box_ft, lines) -> np.ndarray:
     """The warped scan inside the box at its own resolution (BGR uint8; white where there is no scan), with the lines
-    drawn LINE_PX wide in LINE over it."""
+    drawn LINE_PX wide in LINE over it, each placed by the raster's own georeferencing (the window starts on a whole
+    px, not exactly on the box's corner)."""
     import cv2
     import rasterio
     from rasterio.windows import Window
     with rasterio.open(tif) as s:
         rx, ry = s.res
-        left, top = s.bounds.left, s.bounds.top
-        c0, r0 = int(round((box_ft[0] - left) / rx)), int(round((top - box_ft[3]) / ry))
-        w, h = int(round((box_ft[2] - box_ft[0]) / rx)), int(round((box_ft[3] - box_ft[1]) / ry))
+        c0, r0, w, h = _window(s, box_ft)
+        wx0, wy1 = s.bounds.left + c0 * rx, s.bounds.top - r0 * ry       # the window's top-left corner, map ft
         a = s.read(window=Window(c0, r0, w, h), boundless=True, fill_value=0).astype(np.float32)
         rows, cols = np.arange(r0, r0 + h), np.arange(c0, c0 + w)
         inside = (((rows >= 0) & (rows < s.height))[:, None] & ((cols >= 0) & (cols < s.width))[None, :])
@@ -482,7 +500,7 @@ def _panel(tif: Path, box_ft, lines) -> np.ndarray:
             if ln.geom_type not in ("LineString", "LinearRing") or ln.is_empty:
                 continue
             xy = np.asarray(ln.coords)[:, :2]
-            px = np.stack([(xy[:, 0] - box_ft[0]) / rx - 0.5, (box_ft[3] - xy[:, 1]) / ry - 0.5], axis=1)
+            px = np.stack([(xy[:, 0] - wx0) / rx - 0.5, (wy1 - xy[:, 1]) / ry - 0.5], axis=1)
             cv2.polylines(img, [np.rint(px * 16).astype(np.int32)], False, LINE, LINE_PX, cv2.LINE_8, shift=4)
     return img
 
@@ -497,10 +515,21 @@ def placed_picture(before_tif: Path, after_tif: Path, box_ft, lines, title: str)
     """The picture (BGR uint8) of one place: each warped scan (`before_tif` on the left, `after_tif` on the right)
     read inside the box (map ft: x0, y0, x1, y1) at its own resolution, today's block `lines` (map ft) drawn over each
     LINE_PX wide in LINE, the two side by side `look.GAP` apart (a panel shorter than the other padded with white
-    below).  A key and `title` above; ValueError when the title does not start "RESULT:"."""
+    below).  A key and `title` above; ValueError when the title does not start "RESULT:", or, reading nothing, when
+    the picture would be more than MAX_SIDE px on a side."""
+    import rasterio
+
     from sfzmaps.find import look
     if not title.startswith(RESULT):
         raise ValueError(f"a result picture's title starts {RESULT!r}: {title!r}")
+    sizes = []
+    for tif in (before_tif, after_tif):
+        with rasterio.open(tif) as s:
+            sizes.append(_window(s, box_ft)[2:])
+    wide, high = sum(w for w, _ in sizes) + look.GAP, max(h for _, h in sizes)
+    if max(wide, high) > MAX_SIDE:
+        raise ValueError(f"the picture would be {wide} x {high} px, over the {MAX_SIDE} px a side the owner's viewer "
+                         f"opens; take a smaller box")
     left, right = _panel(Path(before_tif), box_ft, lines), _panel(Path(after_tif), box_ft, lines)
     h = max(left.shape[0], right.shape[0])
 
@@ -508,6 +537,20 @@ def placed_picture(before_tif: Path, after_tif: Path, box_ft, lines, title: str)
         return np.vstack([p, np.full((h - p.shape[0], p.shape[1], 3), 255, np.uint8)])
     gap = np.full((h, look.GAP, 3), 255, np.uint8)
     return look._keyed(np.hstack([tall(left), gap, tall(right)]), title, placed_key())
+
+
+def write_picture(pic: np.ndarray, f: Path) -> Path | None:
+    """Write the picture to `f` and, when its longer side is over `look.SMALL_SIDE`, a reduced overview copy beside it
+    (<name>.small.png), returned; None when there is none."""
+    import cv2
+
+    from sfzmaps.find import look
+    cv2.imwrite(str(f), pic)
+    if max(pic.shape[:2]) <= look.SMALL_SIDE:
+        return None
+    small = f.with_name(f"{f.stem}.small.png")
+    cv2.imwrite(str(small), look.reduced(pic, look.SMALL_SIDE))
+    return small
 
 
 def check_blocks(trial: str, sid: SheetId) -> None:

@@ -2388,10 +2388,15 @@ def find_trial_compare(trial: str = typer.Option(..., "--trial", help="The trial
     blocks on the right, at the warped scan's own resolution, today's block lines drawn on top in magenta, 3 px wide.
     These numbers and pictures are reports: nothing here passes or fails a sheet.
 
+    Places that fall in the same box get one picture, named after the first of them, and the printed row says which
+    places share it.  When no block-side point is off the print today, the worst place is left out and the row says
+    so.
+
     Writes only data/find/trial/<trial>/compare.json and data/find/trial/<trial>/look/<series>/<sheet>__<place>.png
-    (with a reduced .small.png copy when a picture is larger than 3,000 px); today's data and both arms are only read.
-    Prints the table.  Exit status 1, writing nothing, when a finder blocks file was traced again or changed, or a
-    sheet is not yet placed in today's data or an arm (naming the step to run).  $0."""
+    (with a reduced .small.png copy when a picture is larger than 3,000 px; its own earlier place pictures are
+    removed first); today's data and both arms are only read.  Prints the table.  Exit status 1, writing nothing, when
+    the data root in force lies inside the trial (unset SFZMAPS_DATA_DIR), a finder blocks file was traced again or
+    changed, or a sheet is not yet placed in today's data or an arm (naming the step to run).  $0."""
     import numpy as np
 
     from sfzmaps.find import look, pages, trial as trials
@@ -2407,6 +2412,11 @@ def find_trial_compare(trial: str = typer.Option(..., "--trial", help="The trial
                    err=True)
         raise typer.Exit(1)
     roots = {"today": config.DATA_DIR, **{arm: trials.arm_root(trial, arm) for arm in trials.ARMS}}
+    here = (trials.TRIAL / trial).resolve()
+    if config.DATA_DIR.resolve() == here or here in config.DATA_DIR.resolve().parents:
+        typer.echo(f"{config.DATA_DIR}: the data root in force lies inside the trial ({here}), so it is not today's "
+                   f"data; unset SFZMAPS_DATA_DIR and run again", err=True)
+        raise typer.Exit(1)
     refused = []
     for sid in sids:
         try:
@@ -2453,24 +2463,33 @@ def find_trial_compare(trial: str = typer.Option(..., "--trial", help="The trial
         lines = trials.block_lines(list(boxes.values()))
         look_dir = trials.TRIAL / trial / "look" / sid[0]
         look_dir.mkdir(parents=True, exist_ok=True)
-        for place in trials.PLACES:
-            b = boxes[place]
+        for place in trials.PLACES:                 # this command's own pictures of an earlier run, never kept stale
+            for end in (".png", ".small.png"):
+                (look_dir / f"{sid[1]}__{place}{end}").unlink(missing_ok=True)
+        if "worst" not in boxes:
+            got["places"]["worst"] = {"left_out": "no block-side point is off the print today"}
+            typer.echo(f"{label} worst: left out, no block-side point is off the print today")
+        for first, group in trials.shared(boxes).items():
+            b = boxes[first]
             inside = trials.in_box(pts, b)
             pic = trials.placed_picture(
                 trials.arm_root(trial, "traced") / "warp" / sid[0] / sid[1] / "warped.tif",
                 trials.arm_root(trial, "finder") / "warp" / sid[0] / sid[1] / "warped.tif", b, lines,
-                f"RESULT: {label}, {place}: left placed from today's traced blocks, right from the finder's blocks")
-            f_pic = look_dir / f"{sid[1]}__{place}.png"
-            cv2.imwrite(str(f_pic), pic)
-            entry = {"box_ft": list(b), "chosen_by": what[place], "side_points": int(inside.sum()),
-                     "off_print_today": int((inside & off).sum()), "picture": str(f_pic)}
-            if max(pic.shape[:2]) > look.SMALL_SIDE:
-                f_small = look_dir / f"{sid[1]}__{place}.small.png"
-                cv2.imwrite(str(f_small), look.reduced(pic))
-                entry["overview"] = str(f_small)
-            got["places"][place] = entry
-            typer.echo(f"{label} {place} ({what[place]}): {entry['side_points']} block-side points, "
-                       f"{entry['off_print_today']} off the print today; {f_pic}")
+                f"RESULT: {label}, {' = '.join(group)}: left placed from today's traced blocks, right from the "
+                f"finder's blocks")
+            f_pic = look_dir / f"{sid[1]}__{first}.png"
+            f_small = trials.write_picture(pic, f_pic)
+            for place in group:
+                entry = {"box_ft": list(b), "chosen_by": what[place], "side_points": int(inside.sum()),
+                         "off_print_today": int((inside & off).sum()), "picture": str(f_pic),
+                         "picture_px": [int(pic.shape[1]), int(pic.shape[0])], "same_box_as": group}
+                if f_small is not None:
+                    entry["overview"] = str(f_small)
+                got["places"][place] = entry
+            names = " and ".join(f"{p} ({what[p]})" for p in group)
+            typer.echo(f"{label} {names}" + (" share one box" if len(group) > 1 else "") + f": {int(inside.sum())} "
+                       f"block-side points, {int((inside & off).sum())} off the print today; {f_pic} "
+                       f"({pic.shape[1]} x {pic.shape[0]} px)")
         out["sheets"][label] = got
     f = trials.TRIAL / trial / "compare.json"
     f.write_text(json.dumps(out, indent=1))

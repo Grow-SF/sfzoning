@@ -311,6 +311,15 @@ def test_places_takes_the_box_with_most_points_off_the_print(tmp_path, monkeypat
     assert got["worst"] == cell(3)                          # B: the most points off the print
     assert got["busiest"] == cell(2)                        # C: the most points
     assert got["centre"] == cell(1)                         # the footprint's centroid
+    monkeypatch.setattr(trial, "off_print", lambda sid, source: np.zeros(len(pts), bool))
+    got = trial.places(("s", "a"), src)                    # nothing off the print: no worst place, not box 0
+    assert "worst" not in got and got["busiest"] == cell(2)
+
+
+def test_places_sharing_a_box_are_grouped():
+    boxes = {"worst": (0, 0, 1, 1), "busiest": (1, 0, 2, 1), "centre": (0, 0, 1, 1)}
+    assert trial.shared(boxes) == {"worst": ["worst", "centre"], "busiest": ["busiest"]}
+    assert trial.shared({"busiest": (0, 0, 1, 1), "centre": (0, 0, 1, 1)}) == {"busiest": ["busiest", "centre"]}
 
 
 def test_placed_picture_is_at_the_scans_own_resolution(tmp_path):
@@ -335,6 +344,43 @@ def test_placed_picture_is_at_the_scans_own_resolution(tmp_path):
         trial.placed_picture(tmp_path / "before.tif", tmp_path / "after.tif", box_ft, [], "s / a")
 
 
+def test_a_line_lands_on_the_px_the_rasters_georeferencing_says(tmp_path, monkeypatch):
+    from shapely.geometry import LineString
+    from sfzmaps.find import look
+    base, top, res = 6_000_000.0, 2_100_000.0, 2.7
+    left = base + 0.7 * res                                # the raster's origin 0.7 px off the box's grid
+    _tif(tmp_path / "s.tif", 255, left=left)
+    box_ft = (base + 50 * res, top - 60 * res, base + 70 * res, top - 40 * res)
+    # the window starts at raster column round(49.3) = 49; a line a quarter of the way into raster column 60
+    x = left + 60.25 * res
+    monkeypatch.setattr(trial, "LINE_PX", 1)
+    pic = trial.placed_picture(tmp_path / "s.tif", tmp_path / "s.tif", box_ft,
+                               [LineString([(x, top), (x, top - 200 * res)])], "RESULT: s / a")
+    band = pic.shape[0] - 20
+    for x0 in (0, 20 + look.GAP):                          # each panel: raster column 60 is window column 11
+        cols = [c for c in range(20) if tuple(pic[band + 10, x0 + c]) == trial.LINE]
+        assert cols == [11]
+
+
+def test_a_picture_over_the_viewers_limit_is_refused(tmp_path):
+    res = 2.7
+    _tif(tmp_path / "s.tif")
+    box_ft = (6_000_000.0, 2_100_000.0 - 10 * res, 6_000_000.0 + 4000 * res, 2_100_000.0)   # 4,000 px wide each
+    with pytest.raises(ValueError, match="8016 x 10 px"):
+        trial.placed_picture(tmp_path / "s.tif", tmp_path / "s.tif", box_ft, [], "RESULT: s / a")
+
+
+def test_a_large_picture_gets_a_reduced_overview(tmp_path, monkeypatch):
+    import cv2
+    from sfzmaps.find import look
+    monkeypatch.setattr(look, "SMALL_SIDE", 100)
+    assert trial.write_picture(np.zeros((50, 80, 3), np.uint8), tmp_path / "a__worst.png") is None
+    assert not (tmp_path / "a__worst.small.png").exists()
+    small = trial.write_picture(np.zeros((50, 300, 3), np.uint8), tmp_path / "b__worst.png")
+    assert small == tmp_path / "b__worst.small.png"
+    assert cv2.imread(str(small)).shape[:2] == (17, 100) and cv2.imread(str(tmp_path / "b__worst.png")).shape[1] == 300
+
+
 def _placed_trial(src, tmp_path, monkeypatch, finder_placed=True):
     """A trial T with today's data `src` and both arms holding sheet s/a, placed (unless `finder_placed` is False for
     the finder arm), with the finder's blocks recorded, and the slow readers of real data replaced."""
@@ -344,9 +390,15 @@ def _placed_trial(src, tmp_path, monkeypatch, finder_placed=True):
     monkeypatch.setattr(trial, "TRIAL", tmp_path / "find" / "trial")
     monkeypatch.setattr(pages, "OUT", tmp_path / "find")
     _tif(src / "warp/s/a/warped.tif")
+    res = 2.7
+    b = (6_000_000.0 + 10 * res, 2_100_000.0 - 110 * res, 6_000_000.0 + 110 * res, 2_100_000.0 - 10 * res)
     for arm in trial.ARMS:
         root = trial.arm_root("T", arm)
         _fill(root)
+        # each arm its own control points (map ft = 2 x px): traced on the box's corner, finder 300 ft east of it
+        east = 150 if arm == "finder" else 0
+        (root / "work/s/a/transform.json").write_text(json.dumps(_transform(
+            [(b[0] / 2 + east, b[1] / 2, True), (b[0] / 2 + east, b[3] / 2 + 100, True), (0, 0, False)])))
         if arm == "finder" and not finder_placed:
             (root / "work/s/a/transform.json").unlink()
         else:
@@ -358,11 +410,10 @@ def _placed_trial(src, tmp_path, monkeypatch, finder_placed=True):
     run = tmp_path / "find/runs/all-pieces"
     run.mkdir(parents=True)
     (run / "log.json").write_text(json.dumps({"items": [{"name": "train/s/a__0_0_64_64"}]}))
-    res = 2.7
-    b = (6_000_000.0 + 10 * res, 2_100_000.0 - 110 * res, 6_000_000.0 + 110 * res, 2_100_000.0 - 10 * res)
+    other = (b[2], b[1], b[2] + 50 * res, b[3])
     monkeypatch.setattr(trial, "side_points", lambda sid: np.array([[b[0] + 1, b[1] + 1], [b[0] + 1, b[3] + 1]]))
     monkeypatch.setattr(trial, "off_print", lambda sid, source: np.array([True, False]))
-    monkeypatch.setattr(trial, "places", lambda sid, source: {p: b for p in trial.PLACES})
+    monkeypatch.setattr(trial, "places", lambda sid, source: {"worst": b, "busiest": other, "centre": b})
     monkeypatch.setattr(trial, "block_lines", lambda boxes: [LineString([(b[0], b[1]), (b[2], b[3])])])
 
 
@@ -376,22 +427,40 @@ def test_compare_writes_only_its_own_files(src, tmp_path, monkeypatch):
     _placed_trial(src, tmp_path, monkeypatch)
     roots = [src, *(trial.arm_root("T", a) for a in trial.ARMS)]
     before = _files(*roots)
+    t = trial.TRIAL / "T"
+    (t / "look/s").mkdir(parents=True)
+    (t / "look/s/a__centre.png").write_text("an earlier run's picture")
     r = invoke(["find", "trial", "compare", "--trial", "T"])
     assert r.exit_code == 0, r.output
     assert _files(*roots) == before                         # today's data and both arms untouched
-    t = trial.TRIAL / "T"
     written = sorted(str(p.relative_to(t)) for p in t.rglob("*")
                      if p.is_file() and p.relative_to(t).parts[0] not in (*trial.ARMS, "blocks"))
-    assert written == ["compare.json", *(f"look/s/a__{p}.png" for p in sorted(trial.PLACES))]
-    got = json.loads((trial.TRIAL / "T/compare.json").read_text())["sheets"]["s/a"]
+    # worst and centre share a box: one picture, named after worst; the earlier centre picture is gone
+    assert written == ["compare.json", "look/s/a__busiest.png", "look/s/a__worst.png"]
+    assert "s/a worst (the most block-side points off the print today) and centre (the sheet's middle) share one " \
+           "box" in r.output
+    got = json.loads((t / "compare.json").read_text())["sheets"]["s/a"]
+    assert got["places"]["centre"]["picture"] == got["places"]["worst"]["picture"]
     assert got["numbers"]["finder"] == trial.numbers(trial.arm_root("T", "finder"), ("s", "a"))
-    # side points: one in the place's box, one above it; enabled control points at map (3, 5) and (10, 12)
-    pts, gcps = trial.side_points(("s", "a")), np.array([[3.0, 5.0], [10.0, 12.0]])
-    d = np.linalg.norm(pts[:, None] - gcps[None], axis=2).min(axis=1)
-    assert got["reach_ft"]["traced"]["p50"] == pytest.approx(d.mean())
+    pts = trial.side_points(("s", "a"))                     # one in the worst place's box, one above it
+    for col, root in (("today", src), *((a, trial.arm_root("T", a)) for a in trial.ARMS)):
+        gcps = np.array([(g["wx"], g["wy"]) for g in json.loads((root / "work/s/a/transform.json").read_text())["gcps"]
+                         if g["enabled"]])
+        d = np.linalg.norm(pts[:, None] - gcps[None], axis=2).min(axis=1)
+        assert got["reach_ft"][col] == {"p50": pytest.approx(np.percentile(d, 50)),
+                                        "p90": pytest.approx(np.percentile(d, 90))}
+    assert len({got["reach_ft"][c]["p50"] for c in ("today", "traced", "finder")}) == 3
     assert got["places"]["worst"]["side_points"] == 1
     assert got["places"]["worst"]["off_print_today"] == 1
     assert "s/a traced:" in r.output and "s/a finder:" in r.output
+
+
+def test_compare_refuses_a_data_root_inside_the_trial(src, tmp_path, monkeypatch):
+    _placed_trial(src, tmp_path, monkeypatch)
+    monkeypatch.setattr(config, "DATA_DIR", trial.arm_root("T", "finder"))
+    r = invoke(["find", "trial", "compare", "--trial", "T"])
+    assert r.exit_code == 1 and "unset SFZMAPS_DATA_DIR" in r.output
+    assert not (trial.TRIAL / "T/compare.json").exists()
 
 
 def test_compare_refuses_a_sheet_with_no_placement(src, tmp_path, monkeypatch):
