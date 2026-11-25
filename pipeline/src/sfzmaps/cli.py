@@ -2167,19 +2167,22 @@ def find_blocks(run: str = typer.Option(..., "--run", help="The run whose stored
     outlined block's sides are moved in by half the sheet's measured line width, a solid one's are not, by the tracing
     step's own rule.  Each block keeps how sure the read was of the street round it.
 
-    For each sheet it writes the counts to data/find/trial/<trial>/blocks/<series>/<sheet>.json and a debugging
-    picture, today's traced blocks (from the traced arm) beside the finder's at the page's own size, to
-    data/find/trial/<trial>/look/<series>/<sheet>__outlines.png, with a reduced overview copy beside it
-    (__outlines.small.png), and prints one line: today's traced blocks and good corners; the finder's areas, those cut
-    at the rim, those cleaned away, its blocks and good corners; how many of its areas hold two or more of the year's
-    blocks (today's lots by block, placed on the page by today's placement); and how many of today's traced blocks
-    lie alone in a finder area, share one with other traced blocks, or lie on ground it calls street.  Exit status
+    For each sheet it writes the counts to data/find/trial/<trial>/blocks/<series>/<sheet>.json and two debugging
+    pictures at the page's own size, each with a reduced overview copy (.small.png), in
+    data/find/trial/<trial>/look/<series>/: <sheet>__outlines.png, today's traced blocks (from the traced arm) beside
+    the finder's, each block shaded with a bright outline; and <sheet>__areas.png, each area the finder calls not
+    street tinted by what became of it (alone, joined to other blocks, cut at the rim, dropped by the cleaning).  It
+    prints one line: today's traced blocks and good corners; the finder's areas, those cut at the rim, those cleaned
+    away, its blocks and good corners; how many of its areas hold two or more of the year's blocks (today's lots by
+    block, placed on the page by today's placement); how many of today's traced blocks lie alone in a finder area,
+    share one with other traced blocks, or lie on ground it calls street; and today's blocks inside the frame cut by
+    what became of the area they fall in.  Exit status
     1, writing nothing, when a sheet has no finder arm root (naming `sfzmaps find trial root`), no stored read (naming
     `sfzmaps find read`), no traced arm root, no frame cut or no placement today, or is a duplicate scan.  $0."""
     import numpy as np
     from shapely.geometry import shape
 
-    from sfzmaps.find import look, pages, placeblocks, trial as trials, wholesheet
+    from sfzmaps.find import areas, look, pages, placeblocks, read, trial as trials, wholesheet
     from sfzmaps.frame import data as frame_data
     for name, hint in ((run, "--run"), (trial, "--trial")):
         if not name or name in (".", "..") or "/" in name or "\\" in name:
@@ -2239,19 +2242,27 @@ def find_blocks(run: str = typer.Option(..., "--run", help="The run whose stored
             lum, [shape(ft["geometry"]) for ft in traced["features"]], corners(traced),
             [shape(ft["geometry"]) for ft in found["features"]], corners(found),
             f"RESULT (debugging picture): {sid[0]} / {sid[1]}: today's traced blocks (left) and the finder's blocks "
-            f"from run {run} (right)",
-            found_sure=[np.nan if ft["properties"]["outline_street_p10"] is None
-                        else ft["properties"]["outline_street_p10"] for ft in found["features"]])
-        f_pic = trials.TRIAL / trial / "look" / sid[0] / f"{sid[1]}__outlines.png"
-        f_small = f_pic.with_name(f"{sid[1]}__outlines.small.png")
-        f_pic.parent.mkdir(parents=True, exist_ok=True)
+            f"from run {run} (right)")
+        look_dir = trials.TRIAL / trial / "look" / sid[0]
+        look_dir.mkdir(parents=True, exist_ok=True)
+        f_pic, f_small = look_dir / f"{sid[1]}__outlines.png", look_dir / f"{sid[1]}__outlines.small.png"
         cv2.imwrite(str(f_pic), pic)
         cv2.imwrite(str(f_small), look.reduced(pic))
+        keep = pages.load_keep(sid, lum.shape)
+        lab = areas.areas(read.load(wholesheet.paths(folder, sid)[0])[0], keep)
+        kinds = placeblocks.area_kinds(lab, placeblocks.edge_cut(lab, keep),
+                                       [ft["properties"]["area"] for ft in found["features"]], points)
+        pic = look.areas_picture(lum, lab, kinds, f"RESULT (debugging picture): {sid[0]} / {sid[1]}: what became of "
+                                                  f"each area the finder calls not street (run {run})")
+        f_areas, f_areas_small = look_dir / f"{sid[1]}__areas.png", look_dir / f"{sid[1]}__areas.small.png"
+        cv2.imwrite(str(f_areas), pic)
+        cv2.imwrite(str(f_areas_small), look.reduced(pic))
         f_counts = trials.TRIAL / trial / "blocks" / sid[0] / f"{sid[1]}.json"
         f_counts.parent.mkdir(parents=True, exist_ok=True)
         f_counts.write_text(json.dumps({"run": run, "trial": trial, "sheet": label, **got,
                                         "blocks_file": str(work / "blocks_px.geojson"), "picture": str(f_pic),
-                                        "overview": str(f_small)}, indent=1) + "\n")
+                                        "overview": str(f_small), "areas_picture": str(f_areas),
+                                        "areas_overview": str(f_areas_small)}, indent=1) + "\n")
         typer.echo(f"{label}: today {got['traced_blocks']} traced blocks, {got['traced_good_corners']} good corners; "
                    f"finder {got['areas']} areas, {got['edge_cut']} cut at the rim, {got['dropped_by_cleaning']} "
                    f"cleaned away, {got['blocks']} blocks ({got['moved_in']} moved in by half the "
@@ -2259,8 +2270,11 @@ def find_blocks(run: str = typer.Option(..., "--run", help="The run whose stored
                    f"{got['areas_with_two_or_more']} areas hold two or more of the year's blocks "
                    f"({got['blocks_in_them']} of the {got['lot_blocks_on_page']} on the page); today's traced blocks: "
                    f"{got['traced_one_to_one']} alone in a finder area, {got['traced_sharing']} sharing "
-                   f"{got['traced_sharing_areas']} areas, {got['traced_on_street']} on street")
-        typer.echo(f"  {f_counts}\n  {f_pic}\n  {f_small}")
+                   f"{got['traced_sharing_areas']} areas, {got['traced_on_street']} on street; today's blocks inside "
+                   f"the frame cut by what became of them: {got['lot_blocks_alone']} alone, {got['lot_blocks_joined']} "
+                   f"joined, {got['lot_blocks_cut_at_rim']} cut at the rim, {got['lot_blocks_dropped']} dropped by "
+                   f"cleaning, {got['lot_blocks_on_street']} on street")
+        typer.echo(f"  {f_counts}\n  {f_pic}\n  {f_small}\n  {f_areas}\n  {f_areas_small}")
 
 
 @trial_app.command("root")

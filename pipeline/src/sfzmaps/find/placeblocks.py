@@ -16,8 +16,11 @@ likely answer.  That is the only place a chance becomes a yes/no; nothing here t
   street between them) stays one outline here; it grades few good corners.
 - `anchors`: the tracing step's seed px (block interiors and solid fills, `linework.block_material`), which its
   white-or-dark rule counts: a block is outlined (mostly white) when more of its seed px are paper than ink.
-- `outline_confidence`: for each block, how sure the read was: the street chance just outside its rim (is there a
-  street parting it from the next block?) and the block-edge chance on its rim.
+- `outline_confidence`: for each block, figures of the read on and just outside its rim, kept in the blocks file.  The
+  street figure says little about how sure the read was (see there); the per-px chances stored with each sheet's read
+  are the read's confidence.
+- `area_kinds`, `lot_block_fates`: for the report, what became of each area (alone, joined, cut at the rim, dropped by
+  cleaning) and of today's blocks on the sheet (one point each) by the area they fall in.
 - `joined`: for the report only, how many areas hold two or more of the year's blocks (`lot_block_points`: one point
   per block of the year's lots, placed on the page by today's placement).
 - `offsets`, `outline_offset`: for the report only, where the finder's areas end against today's traced outlines.  At
@@ -59,6 +62,9 @@ from sfzmaps.linework import (CLEAN_PX, CLOSE_STREET_FRAC, MIN_BLOCK_AREA, MIN_B
                               estimate_street_px, good_corners_px, sheet_scale, street_width, stroke_width)
 
 NOT_STREET = "street chance <= 0.5 (find.areas)"
+# What became of an area (`area_kinds`); 0 is street (no area).
+STREET, ALONE, JOINED, CUT, DROPPED = 0, 1, 2, 3, 4
+KIND_NAMES = {STREET: "street", ALONE: "alone", JOINED: "joined", CUT: "cut at the rim", DROPPED: "dropped by cleaning"}
 _CROSS = ndi.generate_binary_structure(2, 1)          # a px and its four side neighbours
 
 
@@ -187,11 +193,15 @@ def _pct(v: np.ndarray, q: float) -> float:
 
 
 def outline_confidence(lab: np.ndarray, ids: list[int], chances: np.ndarray, *, keep: np.ndarray) -> list[dict]:
-    """For each area id, how sure the read was about its outline (a dict per id, in order):
+    """For each area id, figures of the read on and just outside its rim (a dict per id, in order):
 
     - `outline_px`: the number of the area's rim px (its own px beside, at a side, a px outside it or the page's edge);
     - `outline_street_p10`, `outline_street_p50`: the 10th and 50th percentile of the street chance on the px just
-      outside the rim (beside a rim px at a side), inside the frame cut `keep` (a read holds 0 off the cut);
+      outside the rim (beside a rim px at a side), inside the frame cut `keep` (a read holds 0 off the cut).  These px
+      are where the chance has only just passed one half (the area is the px at or under it), so the low end lies near
+      one half for every block (0.51 to 0.64 on nearly every block of the four trial sheets) and says little about how
+      sure the read was that a street parts the block from the next; the per-px chances stored with each sheet's read
+      are the read's confidence;
     - `outline_edge_p50`: the median block-edge chance on the rim px.
 
     `chances` is a read as `find.read.load` gives it: (2, h, w), street then block edge.  A percentile of no px is
@@ -354,6 +364,47 @@ def mostly_ink(ink: np.ndarray, traced: list[Polygon], *, anchors: np.ndarray) -
     return out
 
 
+def _px(points_px: np.ndarray, shape: tuple[int, int]) -> tuple[np.ndarray, np.ndarray]:
+    """The px (x, y; ints) holding the points `points_px` (N x 2, px centres at integers) that lie on a page of
+    `shape`."""
+    p = np.rint(np.asarray(points_px, float).reshape(-1, 2))
+    p = p[np.isfinite(p).all(axis=1)].astype(int)
+    on = (p[:, 0] >= 0) & (p[:, 0] < shape[1]) & (p[:, 1] >= 0) & (p[:, 1] < shape[0])
+    return p[on, 0], p[on, 1]
+
+
+def area_kinds(lab: np.ndarray, cut: np.ndarray, outlined, points_px: np.ndarray) -> np.ndarray:
+    """Int8 (lab.max() + 1,): what became of each area of `lab`, by id (0, street, is `STREET`): `CUT` for an id in
+    `cut` (`edge_cut`); for an id in `outlined` (the areas given an outline), `JOINED` when it holds two or more of
+    `points_px` (one point per block of today's lots, `lot_block_points`) and `ALONE` when it holds at most one;
+    `DROPPED` for every other area (neither cut nor outlined: the outline cleaning dropped it)."""
+    lab = np.asarray(lab)
+    n = int(lab.max()) + 1
+    xs, ys = _px(points_px, lab.shape)
+    held = np.bincount(lab[ys, xs], minlength=n)
+    kinds = np.full(n, DROPPED, np.int8)
+    kinds[0] = STREET
+    ids = np.asarray(list(outlined), int)
+    if len(ids):
+        kinds[ids] = np.where(held[ids] >= 2, JOINED, ALONE)
+    c = np.asarray(cut, int).ravel()
+    kinds[c[c > 0]] = CUT
+    return kinds
+
+
+def lot_block_fates(lab: np.ndarray, keep: np.ndarray, kinds: np.ndarray, points_px: np.ndarray) -> dict:
+    """For the report: today's blocks on the sheet (one point each, `points_px`; those on the page and inside the frame
+    cut `keep`) counted by what became of the area they fall in (`kinds`): `lot_blocks_alone`, `lot_blocks_joined`,
+    `lot_blocks_cut_at_rim`, `lot_blocks_dropped`, and `lot_blocks_on_street` (no area)."""
+    lab = np.asarray(lab)
+    xs, ys = _px(points_px, lab.shape)
+    inside = np.asarray(keep, bool)[ys, xs]
+    k = np.asarray(kinds)[lab[ys[inside], xs[inside]]]
+    return {"lot_blocks_alone": int((k == ALONE).sum()), "lot_blocks_joined": int((k == JOINED).sum()),
+            "lot_blocks_cut_at_rim": int((k == CUT).sum()), "lot_blocks_dropped": int((k == DROPPED).sum()),
+            "lot_blocks_on_street": int((k == STREET).sum())}
+
+
 def _today(root: Path) -> str | None:
     """Why `root` may not be written: it is today's data root or lies in its work/, warp/ or out/; None when it is
     a separate folder."""
@@ -361,7 +412,9 @@ def _today(root: Path) -> str | None:
     from sfzmaps.find import trial
     r, s = Path(root).resolve(), config.DATA_DIR.resolve()
     if r == s or any(r == (s / x).resolve() or (s / x).resolve() in r.parents for x in trial.TODAY):
-        return f"{root}: is in today's data; the finder's blocks are written only into a trial root"
+        return f"{root}: is in today's data; the finder's blocks are written only into a trial's finder arm"
+    if r.name != "finder":
+        return f"{root}: not a trial's finder arm; the finder's blocks are written only into a trial's finder arm"
     return None
 
 
@@ -407,7 +460,7 @@ def write_sheet(sid: tuple[str, str], run_folder: Path, root: Path, traced_file:
     """Make the sheet's blocks file from its stored read and write it as root/work/<series>/<sheet>/blocks_px.geojson,
     leaving the freshness record beside it (`.inputs.json`) as it is, so the runner takes the blocks as current and
     does not trace them again.  ValueError, reading and writing nothing, when `root` is today's data root or lies in
-    its work/, warp/ or out/.
+    its work/, warp/ or out/, or is not a trial's finder arm (a folder named `finder`; never the `traced` arm).
 
     Reads the run's stored read of the sheet (`wholesheet.paths(run_folder, sid)`), its frame cut (`pages.load_keep`),
     the root's page.png as the runner reads it (`cv2.IMREAD_UNCHANGED`; ink by `linework.binarize`, photo by
@@ -419,7 +472,8 @@ def write_sheet(sid: tuple[str, str], run_folder: Path, root: Path, traced_file:
     ragged or lettering), `blocks`, `good_corners`, `moved_in`, `stroke_px`, `areas_with_two_or_more`,
     `blocks_in_them`, `lot_blocks_on_page` (the points on the page), today's `traced_blocks` and
     `traced_good_corners`, `traced_one_to_one`, `traced_sharing`, `traced_sharing_areas`, `traced_on_street`
-    (`traced_in_areas`), and `sha256` of the file written."""
+    (`traced_in_areas`), today's blocks by what became of them (`lot_block_fates`), and `sha256` of the file
+    written."""
     from sfzmaps import linework
     from sfzmaps.find import areas, pages, read, wholesheet
     why = _today(root)
@@ -452,10 +506,11 @@ def write_sheet(sid: tuple[str, str], run_folder: Path, root: Path, traced_file:
     on_page = int(((pts[:, 0] >= -0.5) & (pts[:, 0] < lab.shape[1] - 0.5)
                    & (pts[:, 1] >= -0.5) & (pts[:, 1] < lab.shape[0] - 0.5)).sum())
     t = traced_in_areas(lab, traced)
+    fates = lot_block_fates(lab, keep, area_kinds(lab, cut, got.ids, pts), pts)
     n_areas = int(lab.max())
     return {"areas": n_areas, "edge_cut": int(len(cut)), "dropped_by_cleaning": n_areas - int(len(cut)) - len(got.ids),
             "blocks": len(got.polys), "good_corners": len(d["corners"]), "moved_in": int(sum(got.moved_in)),
             "stroke_px": got.stroke_px, **joined(lab, pts), "lot_blocks_on_page": on_page,
             "traced_blocks": len(traced), "traced_good_corners": traced_corners,
-            **{f"traced_{k}": v for k, v in t.items()},
+            **{f"traced_{k}": v for k, v in t.items()}, **fates,
             "sha256": hashlib.sha256(text.encode()).hexdigest()}

@@ -19,8 +19,9 @@ by what became of them (the answer key: block outlines marked by hand on the sca
 and the block edges drawn, titled RESULT.
 
 `outlines_picture`: today's traced blocks beside the blocks made from the finder's read (`find.placeblocks`), both at
-the page's own size, each outline 1 px wide, the finder's tinted red as its read was unsure of the street round the
-block, good corners as dots; titled "RESULT (debugging picture):".  `reduced`: an overview copy of a large picture.
+the page's own size, each block shaded with a bright outline, good corners as dots; `areas_picture`: each area the
+finder calls not street tinted by what became of it (alone, joined, cut at the rim, dropped by cleaning); both titled
+"RESULT (debugging picture):".  `reduced`: an overview copy of a large picture.
 
 Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/, `write_crop` to
 data/find/look/crops/<set>/, `write_ruled` to data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
@@ -32,7 +33,7 @@ import cv2
 import numpy as np
 from scipy import ndimage
 
-from sfzmaps.find import cuts, handlabels, model, pages
+from sfzmaps.find import cuts, handlabels, model, pages, placeblocks
 from sfzmaps.find.pages import SheetId
 from sfzmaps.solver.hatchnet.data import NOT_STREET, STREET
 
@@ -429,21 +430,22 @@ def read_picture(lum: np.ndarray, chances: np.ndarray, found: np.ndarray, truth:
     return _keyed(np.hstack(row), title, READ_KEY)
 
 
-# The outlines picture (`outlines_picture`).  BGR.
-TRACED = (0, 150, 0)        # picture setting: today's traced outlines, green
-FOUND = (255, 90, 0)        # picture setting: the finder's outlines where its read was sure of the street round them
-UNSURE = (0, 0, 255)        # picture setting: ... and where it was not, red; between them a blend
-CORNER = YELLOW             # picture setting: a good corner's dot
-CORNER_DOT = 2              # picture setting: a good corner's dot radius, page px
+# The outlines picture (`outlines_picture`).  BGR.  Every width and strength here is a picture setting, chosen to be
+# seen (the owner asked for shaded blocks with bright outlines), and decides nothing.
+TRACED = (0, 200, 0)        # picture setting: today's traced blocks, bright green
+FOUND = (255, 110, 0)       # picture setting: the finder's blocks, bright blue
+CORNER = (255, 0, 255)      # picture setting: a good corner's dot, magenta (stands out on green and on blue)
+SHADE = 0.3                 # picture setting: how strongly a block's inside is shaded (the scan readable under it)
+OUTLINE_PX = 5              # picture setting: the width an outline is drawn, px (a picture of the outline, centred on
+                            # it, not its exact position; wide enough to show in the reduced overview copy)
+CORNER_DOT = 6              # picture setting: a good corner's dot radius, page px
 SMALL_SIDE = 3000           # picture setting: the longer side of a reduced overview copy, px
-OUTLINES_TITLE = "RESULT (debugging picture):"
+RESULT_DEBUG = "RESULT (debugging picture):"
 OUTLINES_KEY = (("left: today's traced blocks; right: the finder's blocks, made from its read; both at the page's own "
                  "size", (255, 255, 255)),
-                ("green = today's traced block outlines", TRACED),
-                ("blue = the finder's block outlines where its read was sure of the street round the block", FOUND),
-                ("red = where it was unsure: the redder, the lower the street chance on the least sure tenth of the "
-                 "px round it (outline_street_p10), drawn as strongly as it is low, no cut-off", UNSURE),
-                ("yellow dots = good corners (the corners placement matches to today's map)", CORNER))
+                (f"green = today's traced blocks: shaded inside, outline drawn {OUTLINE_PX} px wide", TRACED),
+                (f"blue = the finder's blocks: shaded inside, outline drawn {OUTLINE_PX} px wide", FOUND),
+                ("magenta dots = good corners (the corners placement matches to today's map)", CORNER))
 
 
 def _poly_px(p) -> list[np.ndarray]:
@@ -451,10 +453,17 @@ def _poly_px(p) -> list[np.ndarray]:
     return [np.rint(np.asarray(r.coords) * 16).astype(np.int32) for r in (p.exterior, *p.interiors)]
 
 
-def _outlined(scan: np.ndarray, polys, colours, corners: np.ndarray) -> np.ndarray:
-    img = scan.copy()
-    for p, colour in zip(polys, colours):
-        cv2.polylines(img, _poly_px(p), True, tuple(int(c) for c in colour), 1, cv2.LINE_8, shift=4)
+def _outlined(scan: np.ndarray, polys, colour, corners: np.ndarray) -> np.ndarray:
+    """`scan` with each polygon's inside shaded SHADE in `colour`, its outline drawn OUTLINE_PX wide in `colour`, and
+    the `corners` as CORNER dots."""
+    inside = np.zeros(scan.shape[:2], np.uint8)
+    for p in polys:
+        cv2.fillPoly(inside, _poly_px(p), 1, cv2.LINE_8, shift=4)
+    img = scan.astype(np.float32)
+    _paint(img, inside > 0, colour, SHADE)
+    img = np.clip(np.rint(img), 0, 255).astype(np.uint8)
+    for p in polys:
+        cv2.polylines(img, _poly_px(p), True, tuple(int(c) for c in colour), OUTLINE_PX, cv2.LINE_8, shift=4)
     for x, y in np.asarray(corners, float).reshape(-1, 2):
         if np.isfinite(x) and np.isfinite(y):
             cv2.circle(img, (int(round(x * 16)), int(round(y * 16))), CORNER_DOT * 16, CORNER, -1, cv2.LINE_8,
@@ -462,43 +471,62 @@ def _outlined(scan: np.ndarray, polys, colours, corners: np.ndarray) -> np.ndarr
     return img
 
 
+def _check_title(title: str) -> None:
+    if not title.startswith(RESULT_DEBUG):
+        raise ValueError(f"a debugging picture's title starts {RESULT_DEBUG!r}: {title!r}")
+
+
 def outlines_picture(lum: np.ndarray, traced: list, traced_corners: np.ndarray, found: list,
-                     found_corners: np.ndarray, title: str, found_sure: list[float] | None = None) -> np.ndarray:
+                     found_corners: np.ndarray, title: str) -> np.ndarray:
     """The picture (BGR uint8) of today's traced blocks beside the finder's, two panels at the page's own size side by
-    side, GAP apart: on the left the scan `lum` (1 paper, 0 ink) in grey with the `traced` outlines (page px, px
-    centres at integers) drawn 1 px wide in TRACED; on the right the scan with the `found` outlines 1 px wide, each in
-    a blend from UNSURE to FOUND as strong as its `found_sure` value (a block's `outline_street_p10`: 1 all FOUND, 0
-    all UNSURE; no cut-off; FOUND where it is not given or not a number); each panel's good corners as CORNER dots.  A
-    key and `title` above; ValueError when the title does not start "RESULT (debugging picture):"."""
-    if not title.startswith(OUTLINES_TITLE):
-        raise ValueError(f"the outlines picture's title starts {OUTLINES_TITLE!r}: {title!r}")
+    side, GAP apart: on the left the scan `lum` (1 paper, 0 ink) in grey with the `traced` blocks (page px, px centres
+    at integers) shaded and outlined in TRACED; on the right the scan with the `found` blocks in FOUND; each panel's
+    good corners as CORNER dots.  The outline is drawn OUTLINE_PX wide, centred on it.  A key and `title` above;
+    ValueError when the title does not start "RESULT (debugging picture):"."""
+    _check_title(title)
     scan = _grey(lum)
-    sure = [1.0] * len(found) if found_sure is None else [float(v) for v in found_sure]
-    colours = []
-    for v in sure:
-        v = 1.0 if not np.isfinite(v) else float(np.clip(v, 0.0, 1.0))
-        colours.append(np.rint(v * np.asarray(FOUND, float) + (1 - v) * np.asarray(UNSURE, float)).astype(int))
-    left = _outlined(scan, traced, [TRACED] * len(traced), traced_corners)
-    right = _outlined(scan, found, colours, found_corners)
+    left = _outlined(scan, traced, TRACED, traced_corners)
+    right = _outlined(scan, found, FOUND, found_corners)
     gap = np.full((scan.shape[0], GAP, 3), 255, np.uint8)
     return _keyed(np.hstack([left, gap, right]), title, OUTLINES_KEY)
 
 
-def reduced(img: np.ndarray, side: int = SMALL_SIDE, on_top=CORNER) -> np.ndarray:
-    """An overview copy of the picture `img`, its longer side `side` px (a picture setting; as it is when no longer):
-    the picture shrunk by area averaging, and then every drawn px of it (a px of colour, not grey) carried to the px
-    it falls in, those of colour `on_top` (the corners' dots) last, so that 1 px outlines stay whole and are not
-    averaged away into the scan."""
+# The areas picture (`areas_picture`), by `placeblocks` kind.  BGR; picture settings.
+AREA_COLOURS = {placeblocks.ALONE: (60, 190, 60),       # green
+                placeblocks.JOINED: (230, 140, 40),     # blue
+                placeblocks.CUT: (50, 50, 230),         # red
+                placeblocks.DROPPED: (0, 150, 255)}     # orange
+AREA_TINT = 0.45            # picture setting: how strongly an area is tinted by its kind
+AREAS_KEY = (("green = an area that became one block outline, holding at most one of today's blocks",
+              AREA_COLOURS[placeblocks.ALONE]),
+             ("blue = an area that became one outline but holds two or more of today's blocks (blocks joined where "
+              "the read breaks a street)", AREA_COLOURS[placeblocks.JOINED]),
+             ("red = an area touching the page's edge or the frame cut, so it gets no outline (open land, water, "
+              "the margin, and every block joined to them)", AREA_COLOURS[placeblocks.CUT]),
+             ("orange = an area the outline cleaning dropped (too small, too ragged, or taken for lettering)",
+              AREA_COLOURS[placeblocks.DROPPED]),
+             ("untinted = ground the finder reads as street, or off the frame cut", (255, 255, 255)))
+
+
+def areas_picture(lum: np.ndarray, lab: np.ndarray, kinds: np.ndarray, title: str) -> np.ndarray:
+    """The picture (BGR uint8), at the page's own size, of what became of each area the finder calls not street: the
+    scan `lum` (1 paper, 0 ink) in grey with each area of `lab` tinted AREA_TINT in the colour of its kind (`kinds`,
+    by area id, `placeblocks.area_kinds`); street (no area) untinted.  A key in plain words and `title` above;
+    ValueError when the title does not start "RESULT (debugging picture):"."""
+    _check_title(title)
+    img = _grey(lum).astype(np.float32)
+    lab = np.asarray(lab)
+    per_px = np.asarray(kinds)[lab]
+    for k, colour in AREA_COLOURS.items():
+        _paint(img, (lab > 0) & (per_px == k), colour, AREA_TINT)
+    return _keyed(np.clip(np.rint(img), 0, 255).astype(np.uint8), title, AREAS_KEY)
+
+
+def reduced(img: np.ndarray, side: int = SMALL_SIDE) -> np.ndarray:
+    """`img` shrunk by area averaging so its longer side is `side` px (a picture setting); as it is when it is no
+    longer.  An overview of a picture too large to look at whole."""
     h, w = img.shape[:2]
     f = side / max(h, w)
     if f >= 1:
         return img
-    nh, nw = max(1, int(round(h * f))), max(1, int(round(w * f)))
-    out = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
-    b, g, r = (img[..., i].astype(np.int16) for i in range(3))
-    drawn = (b != g) | (g != r)
-    top = (img == np.asarray(on_top, np.uint8)).all(axis=2)
-    for m in (drawn & ~top, top):
-        ys, xs = np.nonzero(m)
-        out[np.minimum((ys * nh) // h, nh - 1), np.minimum((xs * nw) // w, nw - 1)] = img[ys, xs]
-    return out
+    return cv2.resize(img, (max(1, int(round(w * f))), max(1, int(round(h * f)))), interpolation=cv2.INTER_AREA)

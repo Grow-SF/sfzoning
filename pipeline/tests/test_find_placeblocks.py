@@ -299,18 +299,81 @@ def test_the_outlines_picture_shows_each_side_on_its_own_panel():
     lum = np.ones((H, W), np.float32)
     traced, found = [_box(274, 40, 473, 159)], [_box(50, 40, 249, 159), _box(274, 40, 473, 159)]
     pic = look.outlines_picture(lum, traced, np.zeros((0, 2)), found, np.array([[50.0, 40.0]]),
-                                "RESULT (debugging picture): two blocks", found_sure=[1.0, 0.0])
+                                "RESULT (debugging picture): two blocks")
     band = pic.shape[0] - H
     assert pic.shape == (band + H, 2 * W + look.GAP, 3)
     right = W + look.GAP
-    assert tuple(pic[band + 100, right + 50]) == look.FOUND          # on the found outline, 1 px wide
-    assert tuple(pic[band + 100, right + 51]) == (255, 255, 255)
-    assert tuple(pic[band + 100, 50]) == (255, 255, 255)             # no traced polygon there: the left panel blank
-    assert tuple(pic[band + 100, 274]) == look.TRACED                # the traced outline, on the left only
-    assert tuple(pic[band + 100, right + 274]) == look.UNSURE        # a found block whose read was unsure of its street
+    a = look.SHADE
+
+    def shaded(colour):
+        return tuple(int(v) for v in np.rint((1 - a) * 255 + a * np.asarray(colour, float)))
+    half = look.OUTLINE_PX // 2
+    assert tuple(pic[band + 100, right + 50]) == look.FOUND          # on the found outline ...
+    assert tuple(pic[band + 100, right + 50 + half]) == look.FOUND   # ... drawn OUTLINE_PX wide
+    assert tuple(pic[band + 100, right + 150]) == shaded(look.FOUND)  # inside the found block: shaded
+    assert tuple(pic[band + 100, 150]) == (255, 255, 255)            # no traced block there: the left panel bare
+    assert tuple(pic[band + 100, 274]) == look.TRACED                # the traced outline, on the left
+    assert tuple(pic[band + 100, 374]) == shaded(look.TRACED)
     assert tuple(pic[band + 40, right + 50]) == look.CORNER          # a good corner, as a dot
+    assert len({look.TRACED, look.FOUND, look.CORNER}) == 3
     with pytest.raises(ValueError):
         look.outlines_picture(lum, traced, np.zeros((0, 2)), found, np.zeros((0, 2)), "two blocks")
+
+
+def test_a_finder_outline_is_one_plain_colour_whatever_its_confidence():
+    from sfzmaps.find import look
+    lab, ink, keep = _page()
+    got = _outlines(lab, ink, keep)
+    street = np.where(lab > 0, 0.0, np.where(np.arange(W)[None, :] < 262, 0.99, 0.51))    # sure round 1, not round 2
+    conf = placeblocks.outline_confidence(lab, got.ids, np.stack([street, np.zeros((H, W))]), keep=keep)
+    assert conf[0]["outline_street_p10"] > 0.9 and conf[1]["outline_street_p10"] < 0.6
+    pic = look.outlines_picture(np.ones((H, W), np.float32), [], np.zeros((0, 2)), got.polys, np.zeros((0, 2)),
+                                "RESULT (debugging picture): two blocks")
+    band, right = pic.shape[0] - H, W + look.GAP
+    on = [np.rint(np.asarray(p.exterior.coords)[0]).astype(int) for p in got.polys]
+    mid = [(int(round((p.bounds[1] + p.bounds[3]) / 2)), x) for p, (x, _) in zip(got.polys, on)]
+    assert [tuple(pic[band + y, right + x]) for y, x in mid] == [look.FOUND, look.FOUND]
+    assert look.FOUND != look.TRACED
+
+
+# areas for the fate tests: 1 outlined, one block's point; 2 outlined, none; 3 outlined, two; 4 cut at the rim;
+# 5 neither cut nor outlined
+_LAB = np.zeros((20, 60), np.int32)
+for _g, _x in enumerate((0, 10, 20, 30, 40), start=1):
+    _LAB[2:12, _x + 1:_x + 9] = _g
+_PTS = np.array([[5.0, 6.0], [23.0, 4.0], [26.0, 9.0], [35.0, 6.0], [45.0, 6.0], [55.0, 6.0],   # areas 1, 3, 3, 4, 5, street
+                 [5.0, 15.0],                                                                    # street, off the frame cut
+                 [80.0, 5.0]])                                                                   # off the page
+
+
+def test_each_area_is_named_by_what_became_of_it():
+    kinds = placeblocks.area_kinds(_LAB, np.array([4]), [1, 2, 3], _PTS)
+    k = placeblocks
+    assert kinds.tolist() == [k.STREET, k.ALONE, k.ALONE, k.JOINED, k.CUT, k.DROPPED]
+
+
+def test_todays_blocks_are_counted_by_what_became_of_them():
+    keep = np.ones(_LAB.shape, bool)
+    keep[14:, :] = False
+    kinds = placeblocks.area_kinds(_LAB, np.array([4]), [1, 2, 3], _PTS)
+    assert placeblocks.lot_block_fates(_LAB, keep, kinds, _PTS) == {
+        "lot_blocks_alone": 1, "lot_blocks_joined": 2, "lot_blocks_cut_at_rim": 1, "lot_blocks_dropped": 1,
+        "lot_blocks_on_street": 1}
+
+
+def test_the_areas_picture_tints_each_area_by_its_kind():
+    from sfzmaps.find import look
+    kinds = placeblocks.area_kinds(_LAB, np.array([4]), [1, 2, 3], _PTS)
+    pic = look.areas_picture(np.ones(_LAB.shape, np.float32), _LAB, kinds, "RESULT (debugging picture): areas")
+    band = pic.shape[0] - _LAB.shape[0]
+    a = look.AREA_TINT
+    want = tuple(int(v) for v in np.rint((1 - a) * 255 + a * np.asarray(look.AREA_COLOURS[placeblocks.JOINED], float)))
+    assert tuple(pic[band + 6, 25]) == want                          # a px of the joined area
+    assert tuple(pic[band + 6, 55]) == (255, 255, 255)               # street: untinted
+    assert len({look.AREA_COLOURS[k] for k in (placeblocks.ALONE, placeblocks.JOINED, placeblocks.CUT,
+                                                placeblocks.DROPPED)}) == 4
+    with pytest.raises(ValueError):
+        look.areas_picture(np.ones(_LAB.shape, np.float32), _LAB, kinds, "areas")
 
 
 def _sheet(tmp_path, monkeypatch):
@@ -358,6 +421,16 @@ def test_write_sheet_keeps_the_blocks_sidecar(tmp_path, monkeypatch):
     assert d["finder"]["run"] == "R"
 
 
+def test_write_sheet_refuses_the_traced_arm(tmp_path, monkeypatch):
+    run, root, f_traced, _ = _sheet(tmp_path, monkeypatch)
+    before = f_traced.read_bytes()
+    traced_root = f_traced.parents[3]
+    (traced_root / "work/s/a/page.png").write_bytes((root / "work/s/a/page.png").read_bytes())
+    with pytest.raises(ValueError, match="finder arm"):
+        placeblocks.write_sheet(("s", "a"), run, traced_root, f_traced, np.zeros((0, 2)))
+    assert f_traced.read_bytes() == before
+
+
 def test_write_sheet_refuses_todays_data():
     from sfzmaps import config
     with pytest.raises(ValueError, match="today's data"):
@@ -377,16 +450,40 @@ def test_blocks_refuses_an_unprepared_arm(tmp_path, monkeypatch):
     assert not (tmp_path / "find" / "trial").exists()
 
 
-def test_the_overview_keeps_every_drawn_line():
-    from sfzmaps.find import look
-    img = np.full((1000, 4000, 3), 200, np.uint8)            # a grey scan
-    img[500, 100:3900] = look.FOUND                          # a 1 px outline
-    img[100:900, 2001] = look.TRACED
-    img[300:305, 1000:1005] = look.CORNER                     # a dot on a line
-    img[302, 900:1100] = look.FOUND
-    small = look.reduced(img, side=1000)
-    assert small.shape == (250, 1000, 3)
-    assert (small[125, 25:475] == look.FOUND).all() and (small[125, 525:975] == look.FOUND).all()   # not faint grey-blue
-    assert (small[25:225, 500] == look.TRACED).all()
-    assert tuple(small[75, 250]) == look.CORNER              # a corner's dot drawn over the line it sits on
-    assert tuple(small[10, 10]) == (200, 200, 200)
+def test_blocks_writes_the_finder_arm_and_its_pictures_and_nothing_else(tmp_path, monkeypatch):
+    from find_fixtures import invoke
+    from sfzmaps import config
+    from sfzmaps.find import look, pages, trial
+    from sfzmaps.frame import data as frame_data
+    run, root, f_traced, record = _sheet(tmp_path, monkeypatch)
+    today = tmp_path / "today"
+    for f in ("page.png", "blocks_px.geojson", "blocks_px.geojson.inputs.json"):
+        (today / "work/s/a").mkdir(parents=True, exist_ok=True)
+        (today / "work/s/a" / f).write_bytes((root / "work/s/a" / f).read_bytes())
+    (today / "warp/s/a").mkdir(parents=True)
+    (today / "warp/s/a/transform.json").write_text("{}")
+    monkeypatch.setattr(config, "DATA_DIR", today)
+    monkeypatch.setattr(frame_data, "WORK", today / "work")
+    monkeypatch.setattr(pages, "OUT", tmp_path)                       # runs/R/sheets/s/a.npz is the read
+    monkeypatch.setattr(trial, "TRIAL", tmp_path / "trial")
+    monkeypatch.setattr(placeblocks, "lot_block_points",
+                        lambda sid, shape: np.array([[160.0, 120.0], [384.0, 120.0], [608.0, 264.0], [5.0, 5.0]]))
+
+    def snapshot():
+        return {p: p.read_bytes() for p in sorted([*today.rglob("*"), *f_traced.parents[3].rglob("*")])
+                if p.is_file()}
+    before = snapshot()
+    r = invoke(["find", "blocks", "--run", "R", "--trial", "T", "--sheet", "s/a"])
+    assert r.exit_code == 0, r.output
+    assert snapshot() == before                                       # today's data and the traced arm untouched
+    assert (root / "work/s/a/blocks_px.geojson.inputs.json").read_bytes() == record
+    counts = json.loads((tmp_path / "trial/T/blocks/s/a.json").read_text())
+    assert counts["blocks"] == 8 and counts["traced_blocks"] == 8
+    assert (counts["lot_blocks_alone"], counts["lot_blocks_joined"], counts["lot_blocks_on_street"]) == (3, 0, 1)
+    assert counts["sha256"] == hashlib.sha256((root / "work/s/a/blocks_px.geojson").read_bytes()).hexdigest()
+    look_dir = tmp_path / "trial/T/look/s"
+    assert sorted(p.name for p in look_dir.iterdir()) == ["a__areas.png", "a__areas.small.png", "a__outlines.png",
+                                                         "a__outlines.small.png"]
+    pic = cv2.imread(str(look_dir / "a__outlines.png"))
+    assert pic.shape[1] == 2 * cv2.imread(str(root / "work/s/a/page.png")).shape[1] + look.GAP
+    assert "s/a: today 8 traced blocks" in r.output and "3 alone" in r.output
