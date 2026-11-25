@@ -54,9 +54,10 @@ DVC = ["uv", "tool", "run", "--from", "dvc==3.67.1", "dvc"]
 # shipping (ship, cachepack, datapack, release), the toolchain check, the GIS downloads and the GPU's turns.
 CODE_EXCLUDE = {"editor", "build.py", "share.py", "evaluate.py", "ship.py", "cachepack.py",
                 "datapack.py", "release.py", "toolchain.py", "downloads", "savedreads.py", "solver", "gpu.py",
-                "frame", "__pycache__"}
+                "frame", "find", "__pycache__"}
 # (solver: the 2000 solver's stages name their own code, as an import closure.)
 # (frame: no build stage reads it yet; a stage that does names its code as an import closure, as the solver's do.)
+# (find: the street-and-block finder; likewise no build stage reads it yet.)
 # Modules a command stage imports that can't change its output, left out of its code deps (`Stage.cut`): the GPU's
 # turns (`sfzmaps.gpu`) only decide when a stage computes on the GPU, never what.
 OUTPUT_NEUTRAL = ("sfzmaps.gpu",)

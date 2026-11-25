@@ -1,0 +1,532 @@
+"""Pictures of a sheet's labels (`lotlabels.sheet_labels`) on its scan, to check by eye that they sit on the print.
+
+The scan in grey with street tinted orange and block blue, as strongly as the label's weight; the block-edge cuts drawn
+cyan over it, each px as strong as its prior, a cut not used (weight 0: a block the sheet does not draw) not at all; a
+key and the sheet's name at the top.  `busiest` finds the close-up: the window holding the most cut px.
+
+`beside`: a window of a sheet's page, the scan on the left and on the right the scan with every label tinted as strongly
+as it weighs (weight 1 the full tint, weight 0 none), street orange and block blue, px with no label untinted, and
+(given the frame cut) px outside it grey: where the labels are and how much each weighs.
+
+`crop`: a hand crop (`handlabels`) and its labels side by side, both enlarged ZOOM times, with page-px rulers to read
+coordinates off for the crop file.  `ruled`: a close-up of the scan with rulers and a grid, to draw crops from.
+
+`read_picture`: a crop as the finder read it (`find.counts`): the scan, the chances of street and of a block edge, and
+the areas (`find.areas`: the connected pieces of ground the model calls not street), the answer key's blocks outlined
+by what became of them (the answer key: block outlines marked by hand on the scan, never shown to the model).
+
+`sheet_picture`: a whole sheet as the finder read it (`find.wholesheet`): the scan with the ground called street tinted
+and the block edges drawn, titled RESULT.
+
+`outlines_picture`: today's traced blocks beside the blocks made from the finder's read (`find.placeblocks`), both at
+the page's own size, each block shaded with a bright outline, good corners as dots; `areas_picture`: each area the
+finder calls not street tinted by what became of it (alone, joined, cut at the rim, dropped by cleaning); both titled
+"RESULT (debugging picture):".  `reduced`: an overview copy of a large picture.
+
+Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/, `write_crop` to
+data/find/look/crops/<set>/, `write_ruled` to data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
+from __future__ import annotations
+
+from pathlib import Path
+
+import cv2
+import numpy as np
+from scipy import ndimage
+
+from sfzmaps.find import cuts, handlabels, model, pages, placeblocks
+from sfzmaps.find.pages import SheetId
+from sfzmaps.find.streetlabels import NOT_STREET, STREET
+
+# BGR
+ORANGE, BLUE, CYAN = (0, 140, 255), (255, 90, 0), (255, 255, 0)
+WHITE, BLACK, GREY = (255, 255, 255), (0, 0, 0), (160, 160, 160)
+TINT = 0.25                 # picture setting: how strongly street and block tint the scan
+STRENGTH = 0.85             # picture setting: a cut px's colour at prior 1
+CLOSE = 640                 # picture setting: the close-up's side, page px
+ZOOM = 2                    # picture setting: the close-up's enlargement (nearest neighbour)
+KEY = (("orange = street", ORANGE), ("blue = block", BLUE), ("cyan ticks = block-edge cuts", CYAN))
+
+
+def _paint(img: np.ndarray, where: np.ndarray, colour, alpha) -> None:
+    a = np.asarray(alpha, np.float32)[..., None] if np.ndim(alpha) else np.float32(alpha)
+    img[where] = img[where] * (1 - a) + np.asarray(colour, np.float32) * a
+
+
+def busiest(lab: dict, shape: tuple[int, int], size: int = CLOSE) -> tuple[int, int, int, int]:
+    """The `size` px window (x0, y0, x1, y1) holding the most px of used cuts (weight > 0; the first such, row by
+    row)."""
+    h, w = shape
+    sh, sw = min(size, h), min(size, w)
+    c = lab["cuts"]
+    used = c.weight[c.cut] > 0
+    count = np.bincount(c.px[used], minlength=h * w).reshape(shape).astype(np.int64)
+    s = np.zeros((h + 1, w + 1), np.int64)
+    s[1:, 1:] = count.cumsum(0).cumsum(1)
+    win = s[sh:, sw:] - s[:-sh, sw:] - s[sh:, :-sw] + s[:-sh, :-sw]
+    y0, x0 = np.unravel_index(int(np.argmax(win)), win.shape)
+    return int(x0), int(y0), int(x0) + sw, int(y0) + sh
+
+
+def labels(sid: SheetId, lum: np.ndarray, lab: dict, box: tuple[int, int, int, int] | None = None) -> np.ndarray:
+    """The picture (BGR uint8) of the labels `lab` on the scan `lum` (1 paper, 0 ink); `box` (x0, y0, x1, y1): only
+    that window, enlarged ZOOM times."""
+    h, w = lum.shape
+    x0, y0, x1, y1 = box if box is not None else (0, 0, w, h)
+    img = np.repeat((lum[y0:y1, x0:x1] * 255)[..., None], 3, axis=2).astype(np.float32)
+    street, weight = lab["street"][y0:y1, x0:x1], lab["weight"][y0:y1, x0:x1]
+    for colour, where in ((ORANGE, street == STREET), (BLUE, street == NOT_STREET)):
+        _paint(img, where, colour, TINT * weight[where])
+    c: cuts.Cuts = lab["cuts"]
+    strength = np.zeros(h * w, np.float32)
+    np.maximum.at(strength, c.px, c.prior * c.weight[c.cut])
+    strength = strength.reshape(h, w)[y0:y1, x0:x1]
+    _paint(img, strength > 0, CYAN, STRENGTH * strength[strength > 0])
+    img = np.clip(np.rint(img), 0, 255).astype(np.uint8)
+    if box is not None:
+        img = np.repeat(np.repeat(img, ZOOM, axis=0), ZOOM, axis=1)
+    return _keyed(img, f"{sid[0]} / {sid[1]}  ({lab['placement']} placement, sigma {lab['sigma']:.2f} px)"
+                       + ("" if box is None else f"  page x {x0}-{x1}, y {y0}-{y1}, x{ZOOM}"))
+
+
+def _keyed(img: np.ndarray, title: str, key=KEY) -> np.ndarray:
+    """`img` under a white band holding the title and the key: (text, colour) pairs, a colour a BGR swatch or a
+    function drawing one into the box (x0, y0, x1, y1) of the band."""
+    scale = max(0.5, img.shape[1] / 1800)
+    line = int(round(30 * scale))
+    band = np.full((line * (len(key) + 1) + line // 2, img.shape[1], 3), 255, np.uint8)
+    font, thick = cv2.FONT_HERSHEY_SIMPLEX, max(1, int(round(scale * 1.5)))
+    cv2.putText(band, title, (line // 2, line), font, 0.7 * scale, (0, 0, 0), thick, cv2.LINE_AA)
+    for i, (text, colour) in enumerate(key):
+        y = line * (i + 2)
+        if callable(colour):
+            colour(band, (line // 2, y - line // 2, line, y))
+        else:
+            cv2.rectangle(band, (line // 2, y - line // 2), (line, y), colour, -1)
+        cv2.putText(band, text, (int(line * 1.3), y), font, 0.6 * scale, (0, 0, 0), thick, cv2.LINE_AA)
+    return np.vstack([band, img])
+
+
+def write(sid: SheetId, lum: np.ndarray, lab: dict) -> list[Path]:
+    """The whole sheet and the close-up (`busiest`) as data/find/look/labels/<placement>/<series>__<sheet>__whole.png
+    and __close.png."""
+    folder = pages.OUT / "look" / "labels" / lab["placement"]
+    folder.mkdir(parents=True, exist_ok=True)
+    out = []
+    for name, box in (("whole", None), ("close", busiest(lab, lum.shape))):
+        f = folder / f"{sid[0]}__{sid[1]}__{name}.png"
+        cv2.imwrite(str(f), labels(sid, lum, lab, box))
+        out.append(f)
+    return out
+
+
+BESIDE_TINT = 0.45          # picture setting: how strongly `beside` tints a label of weight 1
+BESIDE_KEY = (("left: the scan; right: the labels over it", (255, 255, 255)),
+              ("orange = street: the stronger the orange, the more the label weighs", ORANGE),
+              ("blue = block", BLUE), ("untinted = no label, or a label that weighs nothing", (255, 255, 255)))
+BESIDE_OUT_KEY = ("grey = outside the frame cut", GREY)
+
+
+def beside(lum: np.ndarray, street: np.ndarray, weight: np.ndarray, box: tuple[int, int, int, int],
+           title: str, keep: np.ndarray | None = None, zoom: int = 1) -> np.ndarray:
+    """The picture (BGR uint8) of the page window `box` (x0, y0, x1, y1), enlarged `zoom` times (nearest neighbour):
+    the scan `lum` (1 paper, 0 ink) on the left; on the right the scan with the px whose label counts (`weight` above
+    0) tinted BESIDE_TINT times its weight, street (`street` 1) orange and block (0) blue, every other px untinted, and,
+    given the frame cut `keep`, the px outside it grey; a key and `title` above."""
+    x0, y0, x1, y1 = box
+    scan = np.repeat((lum[y0:y1, x0:x1] * 255)[..., None], 3, axis=2).astype(np.float32)
+    over = scan.copy()
+    s, wt = street[y0:y1, x0:x1], np.clip(np.asarray(weight[y0:y1, x0:x1], np.float32), 0, 1)
+    for colour, where in ((ORANGE, (wt > 0) & (s == STREET)), (BLUE, (wt > 0) & (s == NOT_STREET))):
+        _paint(over, where, colour, BESIDE_TINT * wt[where])
+    if keep is not None:
+        _paint(over, ~np.asarray(keep, bool)[y0:y1, x0:x1], GREY, BESIDE_TINT)
+    gap = np.full((y1 - y0, GAP, 3), 255, np.float32)
+    row = np.clip(np.rint(np.hstack([scan, gap, over])), 0, 255).astype(np.uint8)
+    if zoom > 1:
+        row = np.repeat(np.repeat(row, zoom, axis=0), zoom, axis=1)
+    return _keyed(row, title, BESIDE_KEY + ((BESIDE_OUT_KEY,) if keep is not None else ()))
+
+
+SHEET_TINT = 0.4            # picture setting: how strongly `sheet_picture` tints ground called street
+SHEET_EDGE = (140, 30, 0)   # picture setting: the block edges the model draws, dark blue (BGR)
+SHEET_KEY = (("RESULT: what the finder answers on the sheet, not training labels", (255, 255, 255)),
+             ("orange = ground the model calls street (its chance of street over one half)", ORANGE),
+             ("dark blue = where the model calls a block edge (its chance over one half)", SHEET_EDGE),
+             ("untinted = ground the model calls not street", (255, 255, 255)),
+             ("grey = outside the frame cut (not read)", GREY))
+
+
+def sheet_picture(lum: np.ndarray, chances: np.ndarray, keep: np.ndarray, title: str) -> np.ndarray:
+    """The picture (BGR uint8) of a whole sheet's read at the page's own size: the scan `lum` (1 paper, 0 ink) with the
+    px the model calls street (`chances` (2, h, w), street over one half) tinted orange SHEET_TINT, the px it calls a
+    block edge painted SHEET_EDGE, and the px off the frame cut `keep` tinted grey; a key and `title` above."""
+    img = np.repeat((np.asarray(lum, np.float32) * 255)[..., None], 3, axis=2)
+    keep = np.asarray(keep, bool)
+    _paint(img, (chances[model.STREET] > 0.5) & keep, ORANGE, SHEET_TINT)
+    _paint(img, ~keep, GREY, SHEET_TINT)
+    img = np.clip(np.rint(img), 0, 255).astype(np.uint8)
+    img[(chances[model.EDGE] > 0.5) & keep] = SHEET_EDGE
+    return _keyed(img, title, SHEET_KEY)
+
+
+# The crop picture.  BGR; no area colour near the street's orange, the edges' black, the no-label grey or the
+# marks' magenta.
+AREAS = ((255, 90, 0), (60, 170, 60), (140, 200, 230), (230, 200, 60), (90, 60, 160), (40, 160, 160),
+         (170, 120, 255), (120, 200, 120), (180, 140, 90), (60, 90, 230))
+MAGENTA, YELLOW = (255, 0, 255), (0, 230, 255)
+STRIPE = 3                  # picture setting: open land's stripe width, crop px
+DOT = 4                     # picture setting: a seed's radius, picture px
+RULER = (30, 56)            # picture setting: the rulers' height (top) and width (left), picture px
+GAP = 16                    # picture setting: the white gap between the two panels, picture px
+
+
+def _stripes(shape: tuple[int, int]) -> np.ndarray:
+    yy, xx = np.mgrid[:shape[0], :shape[1]]
+    return ((xx + yy) // STRIPE) % 2 == 1
+
+
+def _seed(img: np.ndarray, xy: tuple[int, int], kind: str) -> None:
+    fill, ring, centre = {"street": (WHITE, BLACK, None), "block": (BLACK, BLACK, None),
+                          "open": (BLACK, BLACK, WHITE)}[kind]
+    cv2.circle(img, xy, DOT, fill, -1, cv2.LINE_AA)
+    cv2.circle(img, xy, DOT, ring, 1, cv2.LINE_AA)
+    if centre is not None:
+        cv2.circle(img, xy, max(1, DOT // 2), centre, -1, cv2.LINE_AA)
+
+
+def _marks(img: np.ndarray, c: handlabels.Crop) -> None:
+    """The crop's strokes, limits and seeds, or its outlines with a dot at each corner, drawn on a panel
+    enlarged ZOOM times."""
+    x0, y0 = c.box[:2]
+
+    def at(x, y):
+        return (x - x0) * ZOOM + ZOOM // 2, (y - y0) * ZOOM + ZOOM // 2
+
+    for lines, colour in ((c.strokes, MAGENTA), (c.limits, YELLOW)):
+        for pts in lines:
+            cv2.polylines(img, [np.array([at(*p) for p in pts], np.int32)], False, colour, 1, cv2.LINE_AA)
+    for poly in c.polygons + c.open_polygons:
+        corners = np.array([at(*p) for p in poly], np.int32)
+        cv2.polylines(img, [corners], True, MAGENTA, 1, cv2.LINE_AA)
+        for xy in corners:
+            cv2.circle(img, (int(xy[0]), int(xy[1])), 2, MAGENTA, -1, cv2.LINE_AA)
+    for kind, pts in (("street", c.street), ("block", c.blocks), ("open", c.open)):
+        for p in pts:
+            _seed(img, at(*p), kind)
+
+
+def _ruled(panel: np.ndarray, x0: int, y0: int, zoom: int = ZOOM, number: int = 100) -> np.ndarray:
+    """`panel` (enlarged `zoom` times, its corner page px (x0, y0)) with page-px rulers above and to its left: ticks
+    every 10 px, longer every 50, numbered every `number`."""
+    top, left = RULER
+    h, w = panel.shape[:2]
+    out = np.full((h + top, w + left, 3), 255, np.uint8)
+    out[top:, left:] = panel
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    for page0, n, along in ((x0, w // zoom, "x"), (y0, h // zoom, "y")):
+        for v in range(-(-page0 // 10) * 10, page0 + n, 10):
+            p = (v - page0) * zoom + zoom // 2
+            size = 10 if v % 50 == 0 else 5
+            if along == "x":
+                cv2.line(out, (left + p, top - 1), (left + p, top - size), BLACK, 1)
+                if v % number == 0:
+                    cv2.putText(out, str(v), (left + p - 14, top - 13), font, 0.4, BLACK, 1, cv2.LINE_AA)
+            else:
+                cv2.line(out, (left - 1, top + p), (left - size, top + p), BLACK, 1)
+                if v % number == 0:
+                    cv2.putText(out, str(v), (2, top + p + 4), font, 0.4, BLACK, 1, cv2.LINE_AA)
+    return out
+
+
+def _key_stripes(band, box):
+    x0, y0, x1, y1 = box
+    band[y0:y1, x0:x1] = AREAS[0]
+    band[y0:y1, x0:x1][_stripes((y1 - y0, x1 - x0))] = WHITE
+
+
+def _key_seeds(band, box):
+    x0, y0, x1, y1 = box
+    r = (x1 - x0) // 2
+    for i, kind in enumerate(("street", "block", "open")):
+        _seed(band, (x0 + r + i * 3 * DOT, (y0 + y1) // 2), kind)
+
+
+def _key_lines(band, box):
+    x0, y0, x1, y1 = box
+    cv2.line(band, (x0, y0 + 2), (x1, y0 + 2), MAGENTA, 2)
+    cv2.line(band, (x0, y1 - 2), (x1, y1 - 2), YELLOW, 2)
+
+
+CROP_KEY = (("orange = street", ORANGE), ("each area its own colour; open land striped", _key_stripes),
+            ("black = block edge", BLACK), ("grey = no label (a stroke or limit, beside a limit, the crop's outer px)",
+                                            GREY),
+            ("     seeds: street white ringed black, block black, open black with a white centre", _key_seeds),
+            ("magenta = stroke, yellow = limit (thin lines)", _key_lines))
+OUTLINE_KEY = (("orange = street", ORANGE), ("each area its own colour; open land striped", _key_stripes),
+               ("black = block edge", BLACK), ("grey = no label (the crop's outer px)", GREY),
+               ("magenta = the answer key's outlines as typed (a dot at each corner)", MAGENTA),
+               ("answer key: block outlines marked by hand on the scan, never shown to the model", WHITE))
+
+
+def crop(lum_crop: np.ndarray, labels: handlabels.CropLabels, c: handlabels.Crop) -> np.ndarray:
+    """The picture (BGR uint8) of the hand crop `c`: its scan `lum_crop` (1 paper, 0 ink) and its labels side by side,
+    both enlarged ZOOM times (nearest neighbour), the crop's marks (seeds and strokes, or outlines) drawn on both,
+    page-px rulers and a key."""
+    scan = np.repeat((np.asarray(lum_crop, np.float32) * 255)[..., None], 3, axis=2)
+    scan = np.clip(np.rint(scan), 0, 255).astype(np.uint8)
+    lab = np.full(scan.shape, 255, np.uint8)
+    lab[labels.street == 1] = ORANGE
+    stripes = _stripes(lum_crop.shape)
+    for i, kind in labels.kinds.items():
+        on = labels.area == i
+        lab[on] = AREAS[(i - 1) % len(AREAS)]
+        if kind == "open":
+            lab[on & stripes] = WHITE
+    lab[((labels.edge == 255) | (labels.street == 255)) & (labels.edge != 1)] = GREY
+    lab[labels.edge == 1] = BLACK
+    x0, y0, w, h = c.box
+    panels = []
+    for p in (scan, lab):
+        p = np.ascontiguousarray(np.repeat(np.repeat(p, ZOOM, axis=0), ZOOM, axis=1))
+        _marks(p, c)
+        panels.append(_ruled(p, x0, y0))
+    gap = np.full((panels[0].shape[0], GAP, 3), 255, np.uint8)
+    counts = ", ".join(f"{k} {list(labels.kinds.values()).count(k)}" for k in ("block", "open"))
+    return _keyed(np.hstack([panels[0], gap, panels[1]]),
+                  f"{c.set} / {c.series} / {c.sheet}  page x {x0}-{x0 + w}, y {y0}-{y0 + h}, x{ZOOM}; areas: {counts}",
+                  OUTLINE_KEY if c.outlined else CROP_KEY)
+
+
+def write_crop(c: handlabels.Crop, lum_crop: np.ndarray, labels: handlabels.CropLabels,
+               folder: Path | None = None) -> Path:
+    """`crop`'s picture as <folder>/<series>__<file stem>.png (None: data/find/look/crops/<set>/)."""
+    folder = pages.OUT / "look" / "crops" / c.set if folder is None else Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    f = folder / f"{c.series}__{c.path.stem}.png"
+    cv2.imwrite(str(f), crop(lum_crop, labels, c))
+    return f
+
+
+GRID = 50                   # picture setting: the close-up's grid and ruler numbers, every this many page px
+GRID_GREY = (205, 205, 205)
+
+
+def ruled(lum_crop: np.ndarray, box: tuple[int, int, int, int], zoom: int) -> np.ndarray:
+    """The scan `lum_crop` of the page box (x0, y0, w, h), enlarged `zoom` times (nearest neighbour), thin light-grey
+    lines every GRID page px over it, and page-px rulers along its top and left (a tick every 10 px, a number every
+    GRID)."""
+    x0, y0, w, h = box
+    if lum_crop.shape != (h, w):
+        raise ValueError(f"the crop is {lum_crop.shape}, its box {w} x {h}")
+    img = np.repeat((np.clip(np.asarray(lum_crop, np.float32), 0, 1) * 255).astype(np.uint8)[..., None], 3, axis=2)
+    img = np.ascontiguousarray(np.repeat(np.repeat(img, zoom, axis=0), zoom, axis=1))
+    half = zoom // 2
+    for v in range(-(-x0 // GRID) * GRID, x0 + w, GRID):
+        col = img[:, (v - x0) * zoom + half]
+        col[:] = np.minimum(col, GRID_GREY)
+    for v in range(-(-y0 // GRID) * GRID, y0 + h, GRID):
+        row = img[(v - y0) * zoom + half]
+        row[:] = np.minimum(row, GRID_GREY)
+    return _ruled(img, x0, y0, zoom, GRID)
+
+
+def ruled_tiles(lum_crop: np.ndarray, box: tuple[int, int, int, int], zoom: int,
+                tiles: int) -> dict[tuple[int, int], np.ndarray]:
+    """The box cut into `tiles` x `tiles` equal tiles, each as `ruled` draws it, by (row, column)."""
+    x0, y0, w, h = box
+    xs = [w * i // tiles for i in range(tiles + 1)]
+    ys = [h * i // tiles for i in range(tiles + 1)]
+    return {(r, c): ruled(lum_crop[ys[r]:ys[r + 1], xs[c]:xs[c + 1]],
+                          (x0 + xs[c], y0 + ys[r], xs[c + 1] - xs[c], ys[r + 1] - ys[r]), zoom)
+            for r in range(tiles) for c in range(tiles)}
+
+
+def write_ruled(sid: SheetId, lum_crop: np.ndarray, box: tuple[int, int, int, int], zoom: int,
+                tiles: int) -> list[Path]:
+    """`ruled_tiles` as r<row>_c<col>.png and the whole box at ZOOM as whole.png, in
+    data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
+    folder = pages.OUT / "look" / "ruled" / f"{sid[0]}__{sid[1]}__{'_'.join(str(v) for v in box)}"
+    folder.mkdir(parents=True, exist_ok=True)
+    out = []
+    for (r, c), img in ruled_tiles(lum_crop, box, zoom, tiles).items():
+        out.append(folder / f"r{r}_c{c}.png")
+        cv2.imwrite(str(out[-1]), img)
+    out.append(folder / "whole.png")
+    cv2.imwrite(str(out[-1]), ruled(lum_crop, box, ZOOM))
+    return out
+
+
+# The picture of a read crop (`read_picture`).  BGR.  The found areas' tints hold no green, red, orange or purple,
+# the colours of the hand blocks' outcomes.
+OUTCOME_COLOUR = {"found": (0, 170, 0), "joined": (0, 0, 255), "cut_up": (0, 140, 255), "lost": (200, 0, 170)}
+FOUND_TINTS = ((255, 90, 0), (230, 200, 60), (40, 160, 160), (0, 220, 255), (160, 120, 40))
+FOUND_TINT = 0.35           # picture setting: how strongly a found area tints the scan
+SIDE = (120, 40, 0)         # picture setting: the found areas' sides, dark blue
+OUTLINE = 2                 # picture setting: a hand block's outline width, px
+LABEL = 30                  # picture setting: the height of the white strip naming a 1,000 px panel, px
+
+
+def _grey(a: np.ndarray) -> np.ndarray:
+    return np.repeat(np.clip(np.rint(np.asarray(a, np.float32) * 255), 0, 255).astype(np.uint8)[..., None], 3, axis=2)
+
+
+def _named(panel: np.ndarray, name: str) -> np.ndarray:
+    scale = max(0.5, panel.shape[1] / 1000)
+    line = int(round(LABEL * 1.6 * scale))
+    strip = np.full((line, panel.shape[1], 3), 255, np.uint8)
+    cv2.putText(strip, name, (6, line - int(round(10 * scale))), cv2.FONT_HERSHEY_SIMPLEX, 1.1 * scale, BLACK,
+                max(1, int(round(2 * scale))), cv2.LINE_AA)
+    return np.vstack([strip, panel])
+
+
+def _key_tints(band, box):
+    x0, y0, x1, y1 = box
+    step = max(1, (x1 - x0) // len(FOUND_TINTS))
+    for i, colour in enumerate(FOUND_TINTS):
+        band[y0:y1, x0 + i * step:x0 + (i + 1) * step] = colour
+
+
+READ_KEY = (("panels: the scan; the chance of street and of a block edge (white 0, black 1); the found areas over "
+             "the scan", WHITE),
+            ("found areas: the connected pieces of ground the model calls not street, each tinted its own colour, "
+             "their sides dark blue", _key_tints),
+            ("answer key: block outlines marked by hand on the scan, never shown to the model", WHITE),
+            ("the answer key's blocks outlined by outcome: green = found", OUTCOME_COLOUR["found"]),
+            ("red = joined (the found area holding most of it lies mostly outside it)", OUTCOME_COLOUR["joined"]),
+            ("orange = cut up among found areas", OUTCOME_COLOUR["cut_up"]),
+            ("purple = lost (most of it in no found area)", OUTCOME_COLOUR["lost"]))
+
+
+def read_picture(lum: np.ndarray, chances: np.ndarray, found: np.ndarray, truth: handlabels.CropLabels,
+                 status: dict[int, str], title: str) -> np.ndarray:
+    """The picture (BGR uint8) of a crop's read, four panels side by side at the scan's own size: the scan `lum` (1
+    paper, 0 ink); the chances (2, h, w) of street and of a block edge, each as grey from white 0 to black 1; and the
+    found areas `found` (`find.areas`: the connected pieces of ground the model calls not street) tinted over the scan
+    with their sides, each hand block outlined in its outcome's colour (`status`, by hand area number:
+    `OUTCOME_COLOUR`); a key and `title` above."""
+    scan = _grey(lum)
+    panels = [_named(scan, "the scan")]
+    for i, name in ((model.STREET, "street"), (model.EDGE, "a block edge")):
+        panels.append(_named(_grey(1 - np.clip(chances[i], 0, 1)), f"the chance of {name}"))
+    over = scan.astype(np.float32)
+    for k in range(1, int(found.max(initial=0)) + 1):
+        _paint(over, found == k, FOUND_TINTS[(k - 1) % len(FOUND_TINTS)], FOUND_TINT)
+    over = np.clip(np.rint(over), 0, 255).astype(np.uint8)
+    h, w = found.shape
+    padded = np.pad(found, 1, mode="edge")
+    other = np.zeros(found.shape, bool)
+    for dy, dx in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+        other |= padded[1 + dy:1 + dy + h, 1 + dx:1 + dx + w] != found
+    over[(found > 0) & other] = SIDE
+    for i, outcome in sorted(status.items()):
+        block = truth.area == i
+        inner = ndimage.binary_erosion(block, iterations=OUTLINE, border_value=1)
+        over[block & ~inner] = OUTCOME_COLOUR[outcome]
+    panels.append(_named(over, "the pieces called not street; the answer key's blocks by outcome"))
+    gap = np.full((panels[0].shape[0], GAP, 3), 255, np.uint8)
+    row = [panels[0]]
+    for p in panels[1:]:
+        row += [gap, p]
+    return _keyed(np.hstack(row), title, READ_KEY)
+
+
+# The outlines picture (`outlines_picture`).  BGR.  Every width and strength here is a picture setting, chosen to be
+# seen (the owner asked for shaded blocks with bright outlines), and decides nothing.
+TRACED = (0, 200, 0)        # picture setting: today's traced blocks, bright green
+FOUND = (255, 110, 0)       # picture setting: the finder's blocks, bright blue
+CORNER = (255, 0, 255)      # picture setting: a good corner's dot, magenta (stands out on green and on blue)
+SHADE = 0.3                 # picture setting: how strongly a block's inside is shaded (the scan readable under it)
+OUTLINE_PX = 5              # picture setting: the width an outline is drawn, px (a picture of the outline, centred on
+                            # it, not its exact position; wide enough to show in the reduced overview copy)
+CORNER_DOT = 6              # picture setting: a good corner's dot radius, page px
+SMALL_SIDE = 3000           # picture setting: the longer side of a reduced overview copy, px
+RESULT_DEBUG = "RESULT (debugging picture):"
+OUTLINES_KEY = (("left: today's traced blocks; right: the finder's blocks, made from its read; both at the page's own "
+                 "size", (255, 255, 255)),
+                (f"green = today's traced blocks: shaded inside, outline drawn {OUTLINE_PX} px wide", TRACED),
+                (f"blue = the finder's blocks: shaded inside, outline drawn {OUTLINE_PX} px wide", FOUND),
+                ("magenta dots = good corners (the corners placement matches to today's map)", CORNER))
+
+
+def _poly_px(p) -> list[np.ndarray]:
+    """A polygon's rings (its exterior and holes) as cv2 points in 1/16 px (shift 4), px centres at integers."""
+    return [np.rint(np.asarray(r.coords) * 16).astype(np.int32) for r in (p.exterior, *p.interiors)]
+
+
+def _outlined(scan: np.ndarray, polys, colour, corners: np.ndarray) -> np.ndarray:
+    """`scan` with each polygon's inside shaded SHADE in `colour`, its outline drawn OUTLINE_PX wide in `colour`, and
+    the `corners` as CORNER dots."""
+    inside = np.zeros(scan.shape[:2], np.uint8)
+    for p in polys:
+        cv2.fillPoly(inside, _poly_px(p), 1, cv2.LINE_8, shift=4)
+    img = scan.astype(np.float32)
+    _paint(img, inside > 0, colour, SHADE)
+    img = np.clip(np.rint(img), 0, 255).astype(np.uint8)
+    for p in polys:
+        cv2.polylines(img, _poly_px(p), True, tuple(int(c) for c in colour), OUTLINE_PX, cv2.LINE_8, shift=4)
+    for x, y in np.asarray(corners, float).reshape(-1, 2):
+        if np.isfinite(x) and np.isfinite(y):
+            cv2.circle(img, (int(round(x * 16)), int(round(y * 16))), CORNER_DOT * 16, CORNER, -1, cv2.LINE_8,
+                       shift=4)
+    return img
+
+
+def _check_title(title: str) -> None:
+    if not title.startswith(RESULT_DEBUG):
+        raise ValueError(f"a debugging picture's title starts {RESULT_DEBUG!r}: {title!r}")
+
+
+def outlines_picture(lum: np.ndarray, traced: list, traced_corners: np.ndarray, found: list,
+                     found_corners: np.ndarray, title: str) -> np.ndarray:
+    """The picture (BGR uint8) of today's traced blocks beside the finder's, two panels at the page's own size side by
+    side, GAP apart: on the left the scan `lum` (1 paper, 0 ink) in grey with the `traced` blocks (page px, px centres
+    at integers) shaded and outlined in TRACED; on the right the scan with the `found` blocks in FOUND; each panel's
+    good corners as CORNER dots.  The outline is drawn OUTLINE_PX wide, centred on it.  A key and `title` above;
+    ValueError when the title does not start "RESULT (debugging picture):"."""
+    _check_title(title)
+    scan = _grey(lum)
+    left = _outlined(scan, traced, TRACED, traced_corners)
+    right = _outlined(scan, found, FOUND, found_corners)
+    gap = np.full((scan.shape[0], GAP, 3), 255, np.uint8)
+    return _keyed(np.hstack([left, gap, right]), title, OUTLINES_KEY)
+
+
+# The areas picture (`areas_picture`), by `placeblocks` kind.  BGR; picture settings.
+AREA_COLOURS = {placeblocks.ALONE: (60, 190, 60),       # green
+                placeblocks.JOINED: (230, 140, 40),     # blue
+                placeblocks.CUT: (50, 50, 230),         # red
+                placeblocks.DROPPED: (0, 150, 255)}     # orange
+AREA_TINT = 0.45            # picture setting: how strongly an area is tinted by its kind
+AREAS_KEY = (("green = an area that became one block outline, holding at most one of today's blocks",
+              AREA_COLOURS[placeblocks.ALONE]),
+             ("blue = an area that became one outline but holds two or more of today's blocks (blocks joined where "
+              "the read breaks a street)", AREA_COLOURS[placeblocks.JOINED]),
+             ("red = an area touching the page's edge or the frame cut, so it gets no outline (open land, water, "
+              "the margin, and every block joined to them)", AREA_COLOURS[placeblocks.CUT]),
+             ("orange = an area the outline cleaning dropped (too small, too ragged, or taken for lettering)",
+              AREA_COLOURS[placeblocks.DROPPED]),
+             ("untinted = ground the finder reads as street, or off the frame cut", (255, 255, 255)))
+
+
+def areas_picture(lum: np.ndarray, lab: np.ndarray, kinds: np.ndarray, title: str) -> np.ndarray:
+    """The picture (BGR uint8), at the page's own size, of what became of each area the finder calls not street: the
+    scan `lum` (1 paper, 0 ink) in grey with each area of `lab` tinted AREA_TINT in the colour of its kind (`kinds`,
+    by area id, `placeblocks.area_kinds`); street (no area) untinted.  A key in plain words and `title` above;
+    ValueError when the title does not start "RESULT (debugging picture):"."""
+    _check_title(title)
+    img = _grey(lum).astype(np.float32)
+    lab = np.asarray(lab)
+    per_px = np.asarray(kinds)[lab]
+    for k, colour in AREA_COLOURS.items():
+        _paint(img, (lab > 0) & (per_px == k), colour, AREA_TINT)
+    return _keyed(np.clip(np.rint(img), 0, 255).astype(np.uint8), title, AREAS_KEY)
+
+
+def reduced(img: np.ndarray, side: int = SMALL_SIDE) -> np.ndarray:
+    """`img` shrunk by area averaging so its longer side is `side` px (a picture setting); as it is when it is no
+    longer.  An overview of a picture too large to look at whole."""
+    h, w = img.shape[:2]
+    f = side / max(h, w)
+    if f >= 1:
+        return img
+    return cv2.resize(img, (max(1, int(round(w * f))), max(1, int(round(h * f)))), interpolation=cv2.INTER_AREA)
