@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -67,6 +68,7 @@ def _refusals(root: Path, sids: list[SheetId], source: Path) -> list[str]:
     for x in LINKED:
         if not (source / x).exists():
             why.append(f"{source / x}: missing; a trial root links today's {x}/")
+    why += _root_entries(root, source)
     dups: dict[str, dict] = {}
     for series, sheet in sids:
         name = f"{series}/{sheet}"
@@ -86,37 +88,83 @@ def _refusals(root: Path, sids: list[SheetId], source: Path) -> list[str]:
     return why
 
 
+def _root_entries(root: Path, source: Path) -> list[str]:
+    """Why what an existing `root` already holds stops `prepare`: the root itself a link; an entry that is a link or
+    leads into today's work/, warp/ or out/, other than `raw`, `ref` and `cache` linked to today's; or any other entry
+    but `work` (a root is made whole by `prepare`; `work` is the prepared-once case)."""
+    if root.is_symlink():
+        return [f"{root}: is a link; a trial root is a folder of its own"]
+    if not root.is_dir():
+        return []
+    s = source.resolve()
+    why = []
+    for e in sorted(root.iterdir()):
+        if e.name in LINKED and e.is_symlink() and e.resolve() == (source / e.name).resolve():
+            continue
+        if e.is_symlink() or any(_inside(e.resolve(), (s / x).resolve()) for x in TODAY):
+            why.append(f"{e}: a link or a path into today's data; a trial root holds only raw, ref and cache linked "
+                       f"to today's")
+        elif e.name != "work":
+            why.append(f"{e}: not made by `prepare`; delete {root} to make the root again")
+    return why
+
+
+def _unshared(made: list[Path], root: Path, source: Path) -> list[str]:
+    """The files under root/work/ that are not regular files of their own (a link, or the same file as today's)."""
+    bad = []
+    for f in made:
+        twin = source / f.relative_to(root)
+        if f.is_symlink() or not f.is_file() or (f.stat().st_ino, f.stat().st_dev) == \
+                (twin.stat().st_ino, twin.stat().st_dev):
+            bad.append(str(f))
+    return bad
+
+
 def prepare(root: Path, sids: list[SheetId], source: Path) -> list[Path]:
     """Make the trial data root `root` from today's data root `source`: `raw`, `ref` and `cache` linked to today's,
     and each sheet's `KEPT` files with their sidecars (`SIDECARS`, where there are any) copied into
     root/work/<series>/<sheet>/.  Returns the files copied.  ValueError, naming why and writing nothing, when `root` is
-    `source` or lies in its work/, warp/ or out/, or a sheet is a duplicate scan, has a review or a seed, or lacks a
-    `KEPT` file.  FileExistsError, writing nothing, when root/work exists: a root is prepared once (delete the arm's
-    folder to redo it)."""
+    `source` or lies in its work/, warp/ or out/, already holds a link or a path into today's data (other than `raw`,
+    `ref` and `cache` linked to today's) or anything else `prepare` did not make, or a sheet is a duplicate scan, has
+    a review or a seed, or lacks a `KEPT` file.  FileExistsError, writing nothing, when root/work exists: a root is
+    prepared once (delete the arm's folder to redo it).
+
+    The root is made whole in a folder beside it and renamed into place only when every file is copied; a failed
+    prepare removes that folder and leaves `root` as it was.  After the rename every copied file is checked to be a
+    regular file of its own (not a link, not today's file); if one is not, the root is removed and ValueError says
+    which."""
     root, source = Path(root), Path(source)
     why = _refusals(root, sids, source)
     if why:
         raise ValueError("no trial root made:\n" + "\n".join(why))
     if (root / "work").exists():
         raise FileExistsError(f"{root / 'work'} exists: a trial root is prepared once; delete {root} to redo it")
-    for x in LINKED:
-        link = root / x
-        if link.exists() or link.is_symlink():
-            if not (link.is_symlink() and link.resolve() == (source / x).resolve()):
-                raise FileExistsError(f"{link} exists and is not a link to {(source / x).resolve()}")
-    root.mkdir(parents=True, exist_ok=True)
-    for x in LINKED:
-        if not (root / x).is_symlink():
-            (root / x).symlink_to((source / x).resolve(), target_is_directory=True)
-    copied = []
-    for series, sheet in sids:
-        src, dst = source / "work" / series / sheet, root / "work" / series / sheet
-        dst.mkdir(parents=True, exist_ok=True)
-        for f in KEPT:
-            for name in (f, *(f + s for s in SIDECARS)):
-                if (src / name).is_file():
-                    copied.append(Path(shutil.copy2(src / name, dst / name)))
-    return copied
+    root.parent.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix=f".{root.name}.making-", dir=root.parent))
+    try:
+        for x in LINKED:
+            (tmp / x).symlink_to((source / x).resolve(), target_is_directory=True)
+        for series, sheet in sids:
+            src, dst = source / "work" / series / sheet, tmp / "work" / series / sheet
+            dst.mkdir(parents=True, exist_ok=True)
+            for f in KEPT:
+                for name in (f, *(f + s for s in SIDECARS)):
+                    if (src / name).is_file():
+                        shutil.copy2(src / name, dst / name)
+        if root.is_dir():                       # holds nothing but raw, ref and cache linked to today's (`_refusals`)
+            for x in LINKED:
+                (root / x).unlink(missing_ok=True)
+            root.rmdir()
+        tmp.rename(root)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    made = sorted(f for f in (root / "work").rglob("*") if f.is_file() or f.is_symlink())
+    bad = _unshared(made, root, source)
+    if bad:
+        shutil.rmtree(root)
+        raise ValueError("trial root removed: not copies of their own:\n" + "\n".join(bad))
+    return made
 
 
 def _json(f: Path):

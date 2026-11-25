@@ -5,6 +5,7 @@ two roots are compared file by file with no tolerance; the share of a sheet's gr
 training sheets and the run's hand crops on it."""
 import json
 import os
+import shutil
 
 import numpy as np
 import pytest
@@ -73,9 +74,13 @@ def test_a_trial_root_holds_copies_of_the_inputs_and_nothing_after_them(src, tmp
     assert not (root / "warp").exists()
 
 
-@pytest.mark.parametrize("inside", ["", "work/x", "warp/x", "out/x"])
-def test_a_root_in_todays_data_is_refused(src, inside):
-    root = src / inside if inside else src
+@pytest.mark.parametrize("inside", ["", "work/x", "warp/x", "out/x", "work/../work/x", "alias/warp/x"])
+def test_a_root_in_todays_data_is_refused(src, tmp_path, inside):
+    if inside.startswith("alias/"):                   # a linked parent folder that leads into today's data
+        (tmp_path / "alias").symlink_to(src, target_is_directory=True)
+        root = tmp_path / inside
+    else:
+        root = src / inside if inside else src
     before = sorted(p.relative_to(src) for p in src.rglob("*"))
     with pytest.raises(ValueError, match="today's data"):
         trial.prepare(root, [("s", "a")], source=src)
@@ -110,6 +115,43 @@ def test_a_root_is_prepared_once(src, tmp_path):
     with pytest.raises(FileExistsError):
         trial.prepare(root, [("s", "a")], source=src)
     assert (root / "work/s/a/blocks_px.geojson").read_text() == "the finder's"
+
+
+@pytest.mark.parametrize("held", ["warp", "out"])
+def test_a_root_holding_a_link_into_todays_data_is_refused(src, tmp_path, held):
+    root = tmp_path / "t" / "traced"
+    root.mkdir(parents=True)
+    (root / held).symlink_to(src / held, target_is_directory=True)     # a hand-made link, no work/ yet
+    before = sorted(p.relative_to(src) for p in src.rglob("*"))
+    with pytest.raises(ValueError, match=f"{held}: a link or a path into today's data"):
+        trial.prepare(root, [("s", "a")], source=src)
+    assert sorted(p.name for p in root.iterdir()) == [held] and (root / held).is_symlink()
+    assert sorted(p.relative_to(src) for p in src.rglob("*")) == before
+
+
+def test_a_failed_copy_leaves_no_root_and_can_be_redone(src, tmp_path, monkeypatch):
+    root = tmp_path / "t" / "traced"
+    real, calls = shutil.copy2, []
+
+    def failing(a, b, **k):
+        calls.append(a)
+        if len(calls) == 3:
+            raise OSError("no space left on device")
+        return real(a, b, **k)
+    monkeypatch.setattr(shutil, "copy2", failing)
+    with pytest.raises(OSError, match="no space"):
+        trial.prepare(root, [("s", "a")], source=src)
+    assert not root.exists() and list(root.parent.iterdir()) == []      # nothing half-made left beside it
+    monkeypatch.setattr(shutil, "copy2", real)
+    assert {p.name for p in trial.prepare(root, [("s", "a")], source=src)} == {*KEPT, *SIDECARS}
+
+
+def test_a_root_whose_files_are_not_copies_is_removed(src, tmp_path, monkeypatch):
+    root = tmp_path / "t" / "traced"
+    monkeypatch.setattr(shutil, "copy2", lambda a, b, **k: os.link(a, b))  # the same file under a second name
+    with pytest.raises(ValueError, match="not copies of their own"):
+        trial.prepare(root, [("s", "a")], source=src)
+    assert not root.exists() and (src / "work/s/a/page.json").is_file()
 
 
 def test_numbers_are_read_from_the_root(src):

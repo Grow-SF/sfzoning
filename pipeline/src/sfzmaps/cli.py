@@ -2043,8 +2043,9 @@ def find_trial_root(trial: str = typer.Option(..., "--trial", help="The trial's 
     work files up to and including its blocks (page.png, page.json, labels.json, blocks_px.geojson and the paper warp,
     with their freshness records and saved answers) copied, never linked, into its work/<series>/<sheet>/.  Nothing
     made after the blocks is copied, so the placement steps run there (SFZMAPS_DATA_DIR=<root>) make it again.
-    Prints each file copied.  Exit status 1, writing nothing, when the root is today's data root or lies in its work,
-    warp or out folder, a sheet is a duplicate scan, has a review or a seed (its placement does not start from its
+    The root is made whole beside its place and renamed into it, so a failed copy leaves nothing.  Prints each file
+    copied.  Exit status 1, writing nothing, when the root is today's data root or lies in its work, warp or out
+    folder, already holds a link into today's data (other than raw, ref and cache) or anything else, a sheet is a duplicate scan, has a review or a seed (its placement does not start from its
     blocks) or lacks one of those files, or the root was prepared before (delete its folder to redo it).  Reads
     nothing else, $0."""
     from sfzmaps.find import trial as trials
@@ -2075,8 +2076,8 @@ def find_trial_numbers(trial: str = typer.Option(..., "--trial", help="The trial
     there): its blocks, good corners, control points, the placement check with its held-out errors, and the warp's
     chosen correction with its share of block-side points within 1 px of a printed line, each read from that root's
     own files.  Then whether the traced arm came out exactly as today, file by file, and the run's training ground on
-    the sheet (the share under its lot-labelled sheets, and its hand crops there).  Writes
-    data/find/trial/<trial>/numbers.json.  Reads only; $0."""
+    the sheet (the share under its lot-labelled sheets, and its hand crops there).  Reads today's and the trial's
+    data; writes only data/find/trial/<trial>/numbers.json.  $0."""
     from sfzmaps.find import pages, trial as trials
     if not run or run == "." or ".." in run or "/" in run or "\\" in run:
         raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
