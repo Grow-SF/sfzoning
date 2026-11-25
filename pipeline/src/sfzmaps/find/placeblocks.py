@@ -14,6 +14,14 @@ likely answer.  That is the only place a chance becomes a yes/no; nothing here t
 - `outline_confidence`: for each block, how sure the read was: the street chance just outside its rim (is there a
   street parting it from the next block?) and the block-edge chance on its rim.
 - `joined`: for the report only, how many areas hold two or more of the year's blocks.
+- `offsets`, `outline_offset`: where the finder's areas end against today's traced outlines, for choosing the inset.
+  At each px along a traced outline: how far the finder's area reaches past it (towards the street), in px; negative
+  where the area stops short of it.  `inset_px` takes the nearer of the design's two answers: no move (0), or half the
+  printed line's width (the tracing step puts an outlined block's outline on the line's centre, so an area reaching
+  half a line's width past it ends at the line's outer edge).
+- `one_to_one`, `mostly_ink`: for the report on that measurement: which traced blocks lie in a finder area holding no
+  other traced block, and which are mostly ink inside (solid or hatched: the tracing step leaves those outlines on the
+  outer edge of their ink, not on a line's centre).
 - `blocks_file`: today's blocks file (a FeatureCollection of the outlines, the good corners as
   `linework.good_corners_px` grades them), each block's area and confidence in its properties, and the read it came
   from under `finder`.
@@ -27,6 +35,7 @@ import cv2
 import numpy as np
 from scipy import ndimage as ndi
 from shapely.affinity import translate
+import shapely
 from shapely.geometry import Polygon, mapping
 
 from sfzmaps.linework import (CLEAN_PX, CLOSE_STREET_FRAC, MIN_BLOCK_AREA, MIN_BLOCK_SOLIDITY, POLY_EPS_STREET_FRAC,
@@ -180,3 +189,88 @@ def blocks_file(polys: list[Polygon], ids: list[int], confidence: list[dict], fi
                          for p, g, c in zip(polys, ids, confidence)],
             "corners": [[_num(x), _num(y)] for x, y in corners],
             "finder": {**finder, "not_street": NOT_STREET}}
+
+
+def offsets(street: np.ndarray, keep: np.ndarray, traced: list[Polygon]) -> np.ndarray:
+    """Float (n,): at each px along each traced outline's exterior, how far the finder's area reaches past the outline,
+    in px: positive where the area runs on past it (towards the street), negative where it stops short of it.
+
+    The area here is `areas`' ground: the px inside the frame cut `keep` whose street chance is at most one half.  Its
+    edge lies half a px outside its outer px, so a px of ground is (its distance to the nearest px that is not ground)
+    less half a px inside it, and a px that is not ground is (its distance to the nearest px of ground) less half a px
+    outside it.  The outlines (page px, px centres at integers, as `blocks_px.geojson` holds them) are walked from
+    their first vertex in steps of one px, and that distance is read at each point between the four px round it.  A
+    point whose nearest px is off the page or off the frame cut is not measured: there the read says nothing."""
+    keep = np.asarray(keep, bool)
+    ground = (np.asarray(street) <= 0.5) & keep
+    if not ground.any() or ground.all():
+        return np.zeros(0)
+    signed = np.where(ground, ndi.distance_transform_edt(ground) - 0.5,
+                      0.5 - ndi.distance_transform_edt(~ground)).astype(np.float32)
+    h, w = ground.shape
+    out = []
+    for p in traced:
+        ring = p.exterior
+        if ring.length <= 0:
+            continue
+        xy = shapely.get_coordinates(shapely.line_interpolate_point(ring, np.arange(0.0, ring.length, 1.0)))
+        ix, iy = np.rint(xy[:, 0]).astype(int), np.rint(xy[:, 1]).astype(int)
+        on = (ix >= 0) & (ix < w) & (iy >= 0) & (iy < h)
+        on[on] = keep[iy[on], ix[on]]
+        if on.any():
+            out.append(ndi.map_coordinates(signed, [xy[on, 1], xy[on, 0]], order=1, mode="nearest"))
+    return np.concatenate(out) if out else np.zeros(0)
+
+
+def outline_offset(street: np.ndarray, keep: np.ndarray, traced: list[Polygon]) -> dict:
+    """How far the finder's area reaches past the traced outlines (`offsets`), summed up: `median_px`, `p25_px`,
+    `p75_px` (NaN when no point is measured) and `points`, the number of outline points measured."""
+    v = offsets(street, keep, traced)
+    return {"median_px": _pct(v, 50), "p25_px": _pct(v, 25), "p75_px": _pct(v, 75), "points": int(len(v))}
+
+
+def inset_px(offset_px: float, half_stroke_px: float) -> float:
+    """The move in for the finder's outlines: of the design's two answers, no move (0) and half the printed line's
+    width (`half_stroke_px`), the one nearer the measured offset.  A tie keeps 0."""
+    return float(half_stroke_px) if abs(offset_px - half_stroke_px) < abs(offset_px) else 0.0
+
+
+def _inside(p: Polygon, shape: tuple[int, int]) -> tuple[tuple[slice, slice], np.ndarray]:
+    """(the px box, a bool mask over it): the px of the page inside `p`'s exterior, its rim included."""
+    h, w = shape
+    x0, y0, x1, y1 = p.bounds
+    xa, ya = max(0, int(math.floor(x0))), max(0, int(math.floor(y0)))
+    xb, yb = min(w, int(math.ceil(x1)) + 1), min(h, int(math.ceil(y1)) + 1)
+    if xb <= xa or yb <= ya:
+        return (slice(0, 0), slice(0, 0)), np.zeros((0, 0), bool)
+    m = np.zeros((yb - ya, xb - xa), np.uint8)
+    pts = np.rint((np.asarray(p.exterior.coords) - (xa, ya)) * 16).astype(np.int32)   # 1/16 px: cv2's shift=4
+    cv2.fillPoly(m, [pts], 1, lineType=cv2.LINE_8, shift=4)
+    return (slice(ya, yb), slice(xa, xb)), m > 0
+
+
+def one_to_one(lab: np.ndarray, traced: list[Polygon]) -> list[bool]:
+    """For the report: for each traced block, whether the finder area holding most of its px (an area of `lab`, 0 for
+    none) holds no other traced block.  A block on no area is not one to one."""
+    lab = np.asarray(lab)
+    held = []
+    for p in traced:
+        sl, m = _inside(p, lab.shape)
+        a = lab[sl][m]
+        a = a[a > 0]
+        held.append(int(np.bincount(a).argmax()) if len(a) else 0)
+    n = np.bincount(np.asarray(held, int), minlength=1)
+    return [g > 0 and n[g] == 1 for g in held]
+
+
+def mostly_ink(ink: np.ndarray, traced: list[Polygon]) -> list[bool]:
+    """For the report: for each traced block, whether more than half its px (`_inside`) are ink.  The tracing step
+    moves the outline of a mostly white block in to its printed line's centre and leaves a block of ink (solid or
+    hatched) on its ink's outer edge; it decides on its own seed px, so this is the same question asked of the whole
+    block, not its exact answer."""
+    ink = np.asarray(ink, bool)
+    out = []
+    for p in traced:
+        sl, m = _inside(p, ink.shape)
+        out.append(bool(m.any()) and float(ink[sl][m].mean()) > 0.5)
+    return out

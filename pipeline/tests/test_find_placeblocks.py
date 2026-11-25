@@ -181,3 +181,81 @@ def test_the_outlines_are_the_tracing_steps_own():
         mine = p.buffer(-half, join_style="mitre")
         assert _near(_vertices(mine), _vertices(t), tol=1.0)
         assert mine.symmetric_difference(t).area <= 1.0
+
+
+def _square_read(n=180, lo=40, hi=139):
+    """(street, keep): a read whose ground (street chance 0) is the px lo..hi square, street (chance 1) round it.  The
+    ground's edge lies half a px outside its outer px: at lo - 0.5 and hi + 0.5."""
+    street = np.ones((n, n), np.float32)
+    street[lo:hi + 1, lo:hi + 1] = 0.0
+    return street, np.ones((n, n), bool)
+
+
+def _box(x0, y0, x1, y1):
+    from shapely.geometry import box
+    return box(x0, y0, x1, y1)
+
+
+def test_an_outline_inside_the_area_has_a_positive_offset():
+    street, keep = _square_read()
+    got = placeblocks.outline_offset(street, keep, [_box(43, 43, 136, 136)])
+    # 3 px in from the outer px, 3.5 px in from the ground's edge: the finder's area reaches 3.5 px past the outline
+    assert abs(got["median_px"] - 3.5) <= 0.5 and got["p25_px"] <= got["median_px"] <= got["p75_px"]
+    assert got["points"] == 4 * 93                  # the exterior, 372 px long, sampled every px
+
+
+def test_the_same_outline_has_no_offset():
+    street, keep = _square_read()
+    got = placeblocks.outline_offset(street, keep, [_box(40, 40, 139, 139)])
+    assert abs(got["median_px"]) <= 0.5
+
+
+def test_an_outline_outside_the_area_is_negative():
+    street, keep = _square_read()
+    # The line on px 37 lies 2.5 px outside the ground's edge at 39.5 (the brief's -3.5 counted from px 40's centre)
+    got = placeblocks.outline_offset(street, keep, [_box(37, 37, 142, 142)])
+    assert abs(got["median_px"] + 2.5) <= 0.5
+    # the mirror of the first test's outline about the ground's edge: 3.5 px outside it
+    got = placeblocks.outline_offset(street, keep, [_box(36, 36, 143, 143)])
+    assert abs(got["median_px"] + 3.5) <= 0.5
+
+
+def test_the_offset_counts_only_the_points_in_the_frame_cut():
+    street, keep = _square_read()
+    keep[:, :44] = False          # the outline's left side (col 43) lies off the frame cut: it is not measured
+    street[:, :44] = 0.0          # (a read holds 0 there)
+    got = placeblocks.outline_offset(street, keep, [_box(43, 43, 136, 136), _box(150, 150, 150, 150)])
+    assert got["points"] == 4 * 93 - 94             # less the 94 px of col 43, rows 43..136; an empty outline adds none
+    assert got["p25_px"] > 0
+
+
+def test_inset_takes_the_nearer_answer():
+    assert placeblocks.inset_px(2.8, 3.0) == 3.0 and placeblocks.inset_px(0.4, 3.0) == 0.0
+    assert placeblocks.inset_px(1.5, 3.0) == 0.0
+
+
+def test_a_traced_block_alone_in_its_area_is_one_to_one():
+    lab, _, _ = _page(neck=True)                    # one area holding both blocks
+    lab = lab.copy()
+    lab[180:195, 10:30] = 2                         # an area holding one block
+    traced = [_box(55, 45, 245, 155), _box(280, 45, 470, 155), _box(12, 182, 28, 193), _box(490, 180, 510, 195)]
+    assert placeblocks.one_to_one(lab, traced) == [False, False, True, False]      # the last lies on no area
+
+
+def test_a_traced_block_of_ink_is_counted_as_ink():
+    ink = np.zeros((60, 60), bool)
+    ink[10:30, 10:30] = True                        # a solid block
+    ink[35:55, 35:55] = True
+    ink[37:53, 37:53] = False                       # an outlined block
+    assert placeblocks.mostly_ink(ink, [_box(10, 10, 29, 29), _box(35, 35, 54, 54)]) == [True, False]
+
+
+def test_outline_offset_refuses_a_sheet_with_no_read(tmp_path, monkeypatch):
+    from find_fixtures import invoke
+    from sfzmaps.find import pages, trial
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    monkeypatch.setattr(trial, "TRIAL", tmp_path / "find" / "trial")
+    r = invoke(["find", "outline-offset", "--run", "R", "--trial", "T", "--sheet", "1921/x"])
+    assert r.exit_code == 1
+    assert "sfzmaps find read --run R --sheet 1921/x" in r.output
+    assert not (tmp_path / "find" / "trial").exists()
