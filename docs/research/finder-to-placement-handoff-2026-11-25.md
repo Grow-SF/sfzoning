@@ -83,9 +83,12 @@ good corners as an N x 2 list). Each outline's `properties` hold `area` (the are
   outside the rim, inside the frame cut;
 - `outline_edge_p50`: the median block-edge chance on the rim px.
 
-The street figures sit near one half on every block by construction (an area ends where the street chance passes
-one half). On the four trial sheets the 10th-percentile figure has a median of 0.56 to 0.58. Refine and the warp do
-not read `properties`. Per-corner confidence is not kept. The read's own confidence is the per-px chances above.
+The street figures sit near one half on every block by construction (an area ends where the street chance passes one
+half). On the four trial sheets the 10th-percentile figure has a median of 0.56 to 0.58. Refine and the warp do not
+read `properties` (checked on this branch: the only readers of the blocks file in placement take `corners` for refine,
+`runner.py` lines 605-608, and the outlines' geometry for the street width, `runner.py` lines 552-553,
+`sheetwarp/first.py` lines 154-155 and `sheetwarp/probabilistic.py` lines 84-85). Per-corner confidence is not kept.
+The read's own confidence is the per-px chances above.
 
 ## What has to be on one branch
 
@@ -94,17 +97,22 @@ not read `properties`. Per-corner confidence is not kept. The read's own confide
   `solver.hatchnet.model`; `find/wholesheet.py` and `find/pages.py` import `solver.hatching` for the duplicate
   scans). Neither exists on `placement-one-process`.
 - `pipeline/inputs/find/` and `pipeline/inputs/find-labels/` (the finder's label sources and hand pieces).
-- `pipeline/inputs/<series>/duplicate_scans.csv`: on this branch for 1921, 1929, 1935, 1975, 1980 and 1996-2000-su.
-  Commit 243af8c added 1921's; none is on `placement-one-process`. That branch has its own reader of the same
-  file name (`place/inputs.py` `duplicate_scans`, line 211), which finds no file there today.
+- `pipeline/inputs/<series>/duplicate_scans.csv`, which the finder reads through `solver/hatching.py`
+  `duplicate_scans` (line 733 on this branch) to refuse duplicate scans: on this branch for 1921, 1929, 1935, 1975,
+  1980 and 1996-2000-su. Commit 243af8c added 1921's; none is on `placement-one-process`. That branch has its own
+  reader of the same file name (`place/inputs.py` `duplicate_scans`, line 211), which finds no file there today.
 - The run folder `pipeline/data/find/runs/all-pieces/` (`model.pt`, `log.json`; also `sheets/` with the stored
   reads). It is under `pipeline/data/`, not in git.
 
-## The trial's result, in three lines
+## The trial's result, in brief
 
 1. Section 12 and the 2000 p08 control placed from the finder's blocks with more control points (261 to 669; 492 to
    848); downtown with fewer (1,402 to 1,186). By eye the warped scans look the same as today's.
-2. 1921 `094348509` failed: the rough label step's scale hint let a false group of 7 label matches win. From the
-   right rough start the same blocks gave 633 control points against 79 and passed.
+2. 1921 `094348509` failed: the rough label step's scale hint, which comes from the blocks' street width and allows
+   fits from the hint / 1.5 to the hint x 1.5 (`anchors.SCALE_HINT_FACTOR`), let a false group of 7 label matches
+   win. Tested by a scratch script outside the repository,
+   `/Users/sbuss/.claude/jobs/7f37beca/tmp/checks/rough_hint.py`. A separate check that used the traced arm's rough
+   placement, so not like for like with the trial, gave 633 control points from the same finder blocks against
+   today's 79, and passed.
 3. The finder's blocks join where the read breaks a street and are dropped where they touch the frame cut's rim.
    Details: `docs/research/finder-to-placement-trial-2026-11-25.md`.
