@@ -484,11 +484,21 @@ def outlines_picture(lum: np.ndarray, traced: list, traced_corners: np.ndarray, 
     return _keyed(np.hstack([left, gap, right]), title, OUTLINES_KEY)
 
 
-def reduced(img: np.ndarray, side: int = SMALL_SIDE) -> np.ndarray:
-    """`img` shrunk (area averaging) so its longer side is `side` px; as it is when it is no longer.  A picture
-    setting, for an overview of a picture too large to look at whole."""
+def reduced(img: np.ndarray, side: int = SMALL_SIDE, on_top=CORNER) -> np.ndarray:
+    """An overview copy of the picture `img`, its longer side `side` px (a picture setting; as it is when no longer):
+    the picture shrunk by area averaging, and then every drawn px of it (a px of colour, not grey) carried to the px
+    it falls in, those of colour `on_top` (the corners' dots) last, so that 1 px outlines stay whole and are not
+    averaged away into the scan."""
     h, w = img.shape[:2]
     f = side / max(h, w)
     if f >= 1:
         return img
-    return cv2.resize(img, (max(1, int(round(w * f))), max(1, int(round(h * f)))), interpolation=cv2.INTER_AREA)
+    nh, nw = max(1, int(round(h * f))), max(1, int(round(w * f)))
+    out = cv2.resize(img, (nw, nh), interpolation=cv2.INTER_AREA)
+    b, g, r = (img[..., i].astype(np.int16) for i in range(3))
+    drawn = (b != g) | (g != r)
+    top = (img == np.asarray(on_top, np.uint8)).all(axis=2)
+    for m in (drawn & ~top, top):
+        ys, xs = np.nonzero(m)
+        out[np.minimum((ys * nh) // h, nh - 1), np.minimum((xs * nw) // w, nw - 1)] = img[ys, xs]
+    return out

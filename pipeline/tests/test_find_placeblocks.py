@@ -375,3 +375,18 @@ def test_blocks_refuses_an_unprepared_arm(tmp_path, monkeypatch):
     assert "sfzmaps find trial root --trial T --arm finder --sheet 1921/x" in r.output
     assert "sfzmaps find read --run R --sheet 1921/x" in r.output
     assert not (tmp_path / "find" / "trial").exists()
+
+
+def test_the_overview_keeps_every_drawn_line():
+    from sfzmaps.find import look
+    img = np.full((1000, 4000, 3), 200, np.uint8)            # a grey scan
+    img[500, 100:3900] = look.FOUND                          # a 1 px outline
+    img[100:900, 2001] = look.TRACED
+    img[300:305, 1000:1005] = look.CORNER                     # a dot on a line
+    img[302, 900:1100] = look.FOUND
+    small = look.reduced(img, side=1000)
+    assert small.shape == (250, 1000, 3)
+    assert (small[125, 25:475] == look.FOUND).all() and (small[125, 525:975] == look.FOUND).all()   # not faint grey-blue
+    assert (small[25:225, 500] == look.TRACED).all()
+    assert tuple(small[75, 250]) == look.CORNER              # a corner's dot drawn over the line it sits on
+    assert tuple(small[10, 10]) == (200, 200, 200)
