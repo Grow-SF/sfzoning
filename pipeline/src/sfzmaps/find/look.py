@@ -15,6 +15,9 @@ coordinates off for the crop file.  `ruled`: a close-up of the scan with rulers 
 the areas (`find.areas`: the connected pieces of ground the model calls not street), the answer key's blocks outlined
 by what became of them (the answer key: block outlines marked by hand on the scan, never shown to the model).
 
+`sheet_picture`: a whole sheet as the finder read it (`find.wholesheet`): the scan with the ground called street tinted
+and the block edges drawn, titled RESULT.
+
 Reads nothing itself; `write` writes PNGs to data/find/look/labels/<placement>/, `write_crop` to
 data/find/look/crops/<set>/, `write_ruled` to data/find/look/ruled/<series>__<sheet>__<x0>_<y0>_<w>_<h>/."""
 from __future__ import annotations
@@ -137,6 +140,28 @@ def beside(lum: np.ndarray, street: np.ndarray, weight: np.ndarray, box: tuple[i
     if zoom > 1:
         row = np.repeat(np.repeat(row, zoom, axis=0), zoom, axis=1)
     return _keyed(row, title, BESIDE_KEY + ((BESIDE_OUT_KEY,) if keep is not None else ()))
+
+
+SHEET_TINT = 0.4            # picture setting: how strongly `sheet_picture` tints ground called street
+SHEET_EDGE = (140, 30, 0)   # picture setting: the block edges the model draws, dark blue (BGR)
+SHEET_KEY = (("RESULT: what the finder answers on the sheet, not training labels", (255, 255, 255)),
+             ("orange = ground the model calls street (its chance of street over one half)", ORANGE),
+             ("dark blue = where the model calls a block edge (its chance over one half)", SHEET_EDGE),
+             ("untinted = ground the model calls not street", (255, 255, 255)),
+             ("grey = outside the frame cut (not read)", GREY))
+
+
+def sheet_picture(lum: np.ndarray, chances: np.ndarray, keep: np.ndarray, title: str) -> np.ndarray:
+    """The picture (BGR uint8) of a whole sheet's read at the page's own size: the scan `lum` (1 paper, 0 ink) with the
+    px the model calls street (`chances` (2, h, w), street over one half) tinted orange SHEET_TINT, the px it calls a
+    block edge painted SHEET_EDGE, and the px off the frame cut `keep` tinted grey; a key and `title` above."""
+    img = np.repeat((np.asarray(lum, np.float32) * 255)[..., None], 3, axis=2)
+    keep = np.asarray(keep, bool)
+    _paint(img, (chances[model.STREET] > 0.5) & keep, ORANGE, SHEET_TINT)
+    _paint(img, ~keep, GREY, SHEET_TINT)
+    img = np.clip(np.rint(img), 0, 255).astype(np.uint8)
+    img[(chances[model.EDGE] > 0.5) & keep] = SHEET_EDGE
+    return _keyed(img, title, SHEET_KEY)
 
 
 # The crop picture.  BGR; no area colour near the street's orange, the edges' black, the no-label grey or the

@@ -4,8 +4,10 @@
 whole reach, model.REACH, rounded up to model.MULTIPLE) and the page's end padded with paper to model.MULTIPLE, as one
 pass over the whole page pads it: the squares' corners and the context are multiples of model.MULTIPLE, so the
 poolings fall on the whole page's grid and every px gets the numbers one pass over the whole page gives it (as
-`hatchnet.train` reads a sheet).  A hand crop is read as `read_page` of the crop grown as the trainer shows it
-(`data.grown`; `find.counts`).
+`hatchnet.train` reads a sheet).  A whole sheet is read so by `find.wholesheet` (`sfzmaps find read`).  A hand crop is
+read as `read_page` of the crop grown as the trainer shows it (`data.grown`; `find.counts`): that window's corner is
+not on the page's MULTIPLE px grid, so its px are read on another grid than the whole page's and their numbers are not
+the same.
 
 A read is stored as uint8 levels round(255 p) (`save`, `load`; `stored` gives the same levels in memory), so every
 reading downstream (`find.areas`, `find.counts`) sees only the 256 levels a stored read can tell apart.  A read stored

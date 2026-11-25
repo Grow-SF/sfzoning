@@ -1933,6 +1933,75 @@ def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/ru
     typer.echo(str(f))
 
 
+@find_app.command("read")
+def find_read(run: str = typer.Option(..., "--run", help="The run (data/find/runs/<run>/model.pt) to read with."),
+              sheet: list[str] = typer.Option(None, "--sheet", help="A sheet to read, as <series>/<sheet> "
+                                                                    "(repeatable)."),
+              series: str = typer.Option(None, "--series", help="Read every sheet of this series (duplicate scans "
+                                                                "skipped and named)."),
+              device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one).")
+              ) -> None:
+    """Read whole sheets with the run's kept model: the page the placement steps use (data/work/<series>/<sheet>/
+    page.png) and its frame cut, at the page's own px.  For each sheet it writes the read (the chance of street and of
+    a block edge at every px, stored as levels: data/find/runs/<run>/sheets/<series>/<sheet>.npz) and a RESULT picture
+    at the page's own size (the scan with the ground the model calls street tinted orange and its block edges drawn:
+    .png beside it), and prints one line: the sheet, its size, the share of the map area called street and the
+    seconds it took.  Give --sheet (one or more) or --series; nothing else is read.  Exit status 1, reading nothing,
+    when an asked sheet is a duplicate scan (never read), has no page image or no frame cut, or the run has no model;
+    with --series, duplicate scans are skipped and named.  $0."""
+    import torch
+
+    from sfzmaps import gpu
+    from sfzmaps.find import counts, pages, wholesheet
+    from sfzmaps.frame import data as frame_data
+    from sfzmaps.solver import hatching
+    from sfzmaps.solver.hatchnet.train import default_device, settle_torch
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
+    if not sheet and not series:
+        raise typer.BadParameter("give the sheets to read (--sheet <series>/<sheet>) or a series (--series)",
+                                 param_hint="--sheet / --series")
+    sids = []
+    for s in sheet or []:
+        ser, _, name = s.partition("/")
+        if not ser or not name:
+            raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
+        sids.append((ser, name))
+    if series:
+        dup = hatching.duplicate_scans(series)
+        for s, h in frame_data.map_pages(frame_data.PAGE_KINDS, frame_data.WORK):
+            if s != series or (s, h) in sids:
+                continue
+            if h in dup:
+                typer.echo(f"{s}/{h}: skipped, a duplicate scan of {dup[h]} (never read)")
+                continue
+            sids.append((s, h))
+    folder = pages.OUT / "runs" / run
+    refused = [why for why in (wholesheet.check(sid) for sid in sids) if why]
+    if not (folder / "model.pt").is_file():
+        refused.append(f"{folder / 'model.pt'}: no model; train one with `sfzmaps find train --run {run}`")
+    if refused:
+        for why in refused:
+            typer.echo(why, err=True)
+        typer.echo("nothing read", err=True)
+        raise typer.Exit(1)
+    device = device or default_device()
+    saved = torch.load(folder / "model.pt", map_location="cpu")
+    settle_torch()
+    try:
+        net = counts.network(saved["state_dict"])
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    with gpu.gpu_turn(True, device):
+        for sid in sids:
+            got = wholesheet.read_sheet(net, sid, device, folder, run)
+            h, w = got["shape"]
+            typer.echo(f"{sid[0]}/{sid[1]}: {h} x {w} px; {got['street_share']:.3f} of the map area called street; "
+                       f"{got['seconds']:.1f} s; {got['read']}; {got['picture']}")
+
+
 @find_app.command("ruled")
 def find_ruled(sheet: str = typer.Option(..., "--sheet", help="The page, as <series>/<sheet>."),
                box: str = typer.Option(..., "--box", help="The page px box x0,y0,w,h."),
