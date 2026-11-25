@@ -1,0 +1,20 @@
+{
+ "box": [300, 1465, 475, 465],
+ "polygons": [
+  [[587, 1465], [606, 1465], [607, 1606], [596, 1606]],
+  [[622, 1465], [683, 1465], [685, 1607], [624, 1607]],
+  [[699, 1465], [760, 1465], [762, 1606], [701, 1606]],
+  [[597, 1626], [608, 1626], [609, 1778], [605, 1778]],
+  [[624, 1625], [684, 1625], [686, 1779], [625, 1779]],
+  [[701, 1626], [762, 1626], [763, 1778], [703, 1778]],
+  [[625, 1798], [688, 1798], [688, 1930], [627, 1930]],
+  [[703, 1797], [764, 1797], [765, 1930], [704, 1930]]
+ ],
+ "open_polygons": [
+  [[300, 1465], [511, 1465], [538, 1930], [300, 1930]],
+  [[524, 1465], [534, 1465], [561, 1930], [551, 1930]],
+  [[545, 1465], [570, 1465], [597, 1930], [571, 1930]]
+ ],
+ "notes": "Ocean Beach, northern end (piece OB1), just below Lincoln Way, following the settled reading of piece O1 (p05__300_2400_475_640). The Great Highway's five long lines A-E are straight and continuous through the whole box (each fitted over y 1465-1929, within 1 px; slope about 0.058 px per row). Bands at y 1700 (ink x): shoreline 485-488 and ocean/beach west of A = open polygon with line A inside it (A 522-524); A-B paper 525-537 = STREET; B-C (B 538-540, C 545-547) = median, open polygon; C-D paper 548-557 = STREET; D-E (D 558-560, E 582-584) = planted strip, open polygon; east of E = Lower Great Highway, STREET, with the heavy zoning border at 590-595 inside it. The median and the strip close with printed ends at about y 1453-1458, above the box, so both run the box's full height. Differs from O1: here the column east of the highway is drawn differently. (1) A thin slanted line F (590-592 at y 1500, 596-598 at y 1600; slope like the highway's) is the west side of two narrow outlined pieces: block 1701 (number printed in it; x 587-607, from above the box to its printed bottom at y 1604-1606) and a second narrow piece below it (top closed at y 1626-1628, x 597-608, tapering until F merges with its east side at about y 1745 and the merged line ends at y 1778; no number visible in it). Both are typed as blocks; the second one's reading (a block, not some other mark) is a call for the owner, at about x 597-609, y 1626-1778. (2) Between these narrow pieces and the main column (blocks 1702, 1803 with west sides at x 622-627) is a street band about 15 px wide (x 608-622 at y 1550; La Playa), with the heavy west sides of the RM-1 and RH-3 zoning boxes (x 612-620) printed inside it: STREET. (3) From y 1778 to the box bottom no F line is printed: between the heavy border (x 595-601 at y 1790, 603-609 at y 1929) and the vertical west face of block 1805 (x 625-627) lies a widening wedge of plain paper with no outline. It is taken as street (the Lower Great Highway and La Playa running together, bounded by the block faces), not open land; owner to rule (x 601-625, y 1778-1929). Blocks, typed with corners on the outer edge of their thin lines: 1701, 1702 (cut by top), 1703 (cut by top), the narrow piece, 1803, 1802, 1805 (cut by bottom), 1806 (cut by bottom). The heavy zoning border across 1802/1803 at y 1750-1756, and the RM-1/RH-3 heavy box sides through 1702 and 1803 (x 649-658), are inside blocks. The heavy horizontal border at y 1614-1619 (x 585-620) and the RM-1 letters at y 1785-1810 lie in cross streets: STREET. 48th Avenue (x 684-703) and the strip of 47th Avenue at the box's east side (x 763-774), with the heavy border in it from y 1840, are street. NC-2 and block-number lettering is ignored. Polygon ends at y 1930 are each line's fit there (A east 538, B west 551, C east 561, D west 571, E east 597), for the join with OB2.",
+ "drawn_by": "Claude (AI), by eye from ruled close-ups, checked on the labels picture, 2026-11-24"
+}
