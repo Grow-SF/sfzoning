@@ -2366,5 +2366,116 @@ def find_trial_numbers(trial: str = typer.Option(..., "--trial", help="The trial
     typer.echo(str(f))
 
 
+@trial_app.command("compare")
+def find_trial_compare(trial: str = typer.Option(..., "--trial", help="The trial's name: data/find/trial/<trial>/."),
+                       run: str = typer.Option("all-pieces", "--run", help="The finder run whose training ground is "
+                                                                           "measured (data/find/runs/<run>/).")
+                       ) -> None:
+    """Compare each trial sheet placed from today's traced blocks (the traced arm) with it placed from the finder's
+    blocks (the finder arm), beside today's placement.
+
+    First it checks every sheet's finder blocks file is the one `sfzmaps find blocks` wrote (not traced again or
+    changed since), and that today and both arms have the sheet placed (control points and a warped scan).  Then, per
+    sheet and for today, traced and finder: the numbers of `find trial numbers`; how far the sheet's block-side
+    points (every 2 ft along every side of the year's blocks, the points the warp scores) lie from the nearest
+    control point, in feet (median and 90th percentile); and the share of control points on ground the run was
+    trained on with lot labels.
+
+    It picks three places on each sheet, the same for both arms, from today's placement: the worst (the most
+    block-side points more than 1 px from the print, the warp's own measure), the busiest (the most block-side
+    points) and the centre (the sheet's middle), each 1,200 px of today's warped scan on a side.  For each it writes a
+    picture: the scan warped onto today's map, placed from today's traced blocks on the left and from the finder's
+    blocks on the right, at the warped scan's own resolution, today's block lines drawn on top in magenta, 3 px wide.
+    These numbers and pictures are reports: nothing here passes or fails a sheet.
+
+    Writes only data/find/trial/<trial>/compare.json and data/find/trial/<trial>/look/<series>/<sheet>__<place>.png
+    (with a reduced .small.png copy when a picture is larger than 3,000 px); today's data and both arms are only read.
+    Prints the table.  Exit status 1, writing nothing, when a finder blocks file was traced again or changed, or a
+    sheet is not yet placed in today's data or an arm (naming the step to run).  $0."""
+    import numpy as np
+
+    from sfzmaps.find import look, pages, trial as trials
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
+    try:
+        sids = trials.trial_sheets(trial)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--trial") from None
+    if not sids:
+        typer.echo(f"{trials.TRIAL / trial}: no arm root with a sheet; make one with `sfzmaps find trial root`",
+                   err=True)
+        raise typer.Exit(1)
+    roots = {"today": config.DATA_DIR, **{arm: trials.arm_root(trial, arm) for arm in trials.ARMS}}
+    refused = []
+    for sid in sids:
+        try:
+            trials.check_blocks(trial, sid)
+        except ValueError as e:
+            refused.append(str(e))
+    for sid in sids:
+        for label, root in roots.items():
+            refused += trials.unplaced(root, sid, label)
+    folder = pages.OUT / "runs" / run
+    if not (folder / "log.json").is_file():
+        refused.append(f"{folder / 'log.json'}: no run log")
+    if refused:
+        for why in refused:
+            typer.echo(why, err=True)
+        typer.echo("nothing compared", err=True)
+        raise typer.Exit(1)
+    try:
+        ground = trials.trained_union(folder, config.DATA_DIR)
+    except FileNotFoundError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    what = {"worst": "the most block-side points off the print today", "busiest": "the most block-side points",
+            "centre": "the sheet's middle"}
+    out = {"trial": trial, "run": run, "window_px": trials.WINDOW_PX, "line_px": trials.LINE_PX, "sheets": {}}
+    for sid in sids:
+        label = f"{sid[0]}/{sid[1]}"
+        pts = trials.side_points(sid)
+        got = {"numbers": {}, "reach_ft": {}, "control_points_on_trained_ground": {}, "side_points": len(pts),
+               "places": {}}
+        for col, root in roots.items():
+            gcps = trials.control_points(root, sid)
+            got["numbers"][col] = n = trials.numbers(root, sid)
+            got["reach_ft"][col] = reach = trials.reach_ft(pts, gcps)
+            got["control_points_on_trained_ground"][col] = on = trials.share_on(gcps, ground)
+
+            def ft(v):
+                return "-" if v is None else f"{v:.1f}"
+            typer.echo(trials.row(sid, col, n) + f"; block-side points to the nearest control point p50 "
+                       f"{ft(reach['p50'])} / p90 {ft(reach['p90'])} ft; control points on trained ground "
+                       + ("-" if on is None else f"{on:.3f}"))
+        boxes = trials.places(sid, config.DATA_DIR)
+        off = np.asarray(trials.off_print(sid, config.DATA_DIR), bool)
+        lines = trials.block_lines(list(boxes.values()))
+        look_dir = trials.TRIAL / trial / "look" / sid[0]
+        look_dir.mkdir(parents=True, exist_ok=True)
+        for place in trials.PLACES:
+            b = boxes[place]
+            inside = trials.in_box(pts, b)
+            pic = trials.placed_picture(
+                trials.arm_root(trial, "traced") / "warp" / sid[0] / sid[1] / "warped.tif",
+                trials.arm_root(trial, "finder") / "warp" / sid[0] / sid[1] / "warped.tif", b, lines,
+                f"RESULT: {label}, {place}: left placed from today's traced blocks, right from the finder's blocks")
+            f_pic = look_dir / f"{sid[1]}__{place}.png"
+            cv2.imwrite(str(f_pic), pic)
+            entry = {"box_ft": list(b), "chosen_by": what[place], "side_points": int(inside.sum()),
+                     "off_print_today": int((inside & off).sum()), "picture": str(f_pic)}
+            if max(pic.shape[:2]) > look.SMALL_SIDE:
+                f_small = look_dir / f"{sid[1]}__{place}.small.png"
+                cv2.imwrite(str(f_small), look.reduced(pic))
+                entry["overview"] = str(f_small)
+            got["places"][place] = entry
+            typer.echo(f"{label} {place} ({what[place]}): {entry['side_points']} block-side points, "
+                       f"{entry['off_print_today']} off the print today; {f_pic}")
+        out["sheets"][label] = got
+    f = trials.TRIAL / trial / "compare.json"
+    f.write_text(json.dumps(out, indent=1))
+    typer.echo(str(f))
+
+
 if __name__ == "__main__":
     app()

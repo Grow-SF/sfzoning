@@ -15,10 +15,18 @@ every root.  `reproduced` says, file by file, whether a sheet came out the same 
 `trained_ground` measures how much of a sheet's ground the run was trained on: the share under the run's lot-labelled
 sheets and the run's hand crops on it.
 
+The comparison (`sfzmaps find trial compare`): `check_blocks` refuses a finder blocks file traced again or changed
+since `find blocks` wrote it; `reach_ft` says how far the sheet's block-side points (`side_points`, the points the
+warp scores) lie from the nearest control point; `share_on` the share of control points on the run's lot-labelled
+ground (`trained_union`); `places` picks three boxes from today's placement (the most points off the print, the most
+points, the middle) and `placed_picture` shows each arm's warped scan there side by side, today's block lines on top.
+
 These read placement outputs only to report them; `labels.json` is copied as a file and never opened.  Writes only
-inside the trial root it is given (and `TRIAL/<T>/numbers.json`, written by the command)."""
+inside the trial root it is given (and `TRIAL/<T>/numbers.json`, `TRIAL/<T>/compare.json` and `TRIAL/<T>/look/`,
+written by the commands)."""
 from __future__ import annotations
 
+import functools
 import json
 import shutil
 import tempfile
@@ -27,7 +35,7 @@ from pathlib import Path
 import numpy as np
 import shapely
 
-from sfzmaps import inputs
+from sfzmaps import config, inputs
 from sfzmaps.find import pages
 from sfzmaps.find.pages import SheetId
 from sfzmaps.solver import hatching
@@ -257,15 +265,39 @@ def _footprint(source: Path, name: str):
     return shapely.from_geojson(f.read_text())
 
 
+def _lot_labelled(run_folder: Path, source: Path) -> tuple[list[str], dict]:
+    """The run's training items (its log.json), and the warped footprint of each of its lot-labelled sheets (the
+    items with no `__` in their name) under `source`.  FileNotFoundError when a footprint is missing."""
+    items = [it["name"] for it in json.loads((Path(run_folder) / "log.json").read_text())["items"]]
+    return items, {name: _footprint(source, name) for name in items if "__" not in name}
+
+
+def trained_union(run_folder: Path, source: Path):
+    """The ground the run was trained on with lot labels: the union of its lot-labelled sheets' warped footprints
+    (map ft); None when it has none.  FileNotFoundError when a footprint is missing."""
+    lot_labelled = _lot_labelled(run_folder, source)[1]
+    return shapely.union_all(list(lot_labelled.values())) if lot_labelled else None
+
+
+def share_on(points_world: np.ndarray, ground) -> float | None:
+    """The share of the points (map ft) that lie on `ground` (a shapely geometry, or None for no ground: 0); None
+    when there are no points."""
+    pts = np.asarray(points_world, float).reshape(-1, 2)
+    if not len(pts):
+        return None
+    if ground is None:
+        return 0.0
+    return float(shapely.intersects_xy(ground, pts[:, 0], pts[:, 1]).mean())
+
+
 def trained_ground(sid: SheetId, run_folder: Path, source: Path) -> dict:
     """How much of the sheet's ground the run was trained on.  `lot_labelled_share`: the share of the sheet's warped
     footprint (source/warp/<series>/<sheet>/warped.footprint.geojson) that lies under the union of the warped
     footprints of the run's lot-labelled sheets (the items of its log.json with no `__` in their name); `by_sheet`:
     each such sheet's own share, where it is above 0; `hand_crops`: the run's training items on this sheet (its hand
     crops).  FileNotFoundError when a footprint is missing."""
-    items = [it["name"] for it in json.loads((Path(run_folder) / "log.json").read_text())["items"]]
     sheet = _footprint(source, f"{sid[0]}/{sid[1]}")
-    lot_labelled = {name: _footprint(source, name) for name in items if "__" not in name}
+    items, lot_labelled = _lot_labelled(run_folder, source)
     area = sheet.area
     under = shapely.union_all(list(lot_labelled.values())) if lot_labelled else None
     share = 0.0 if under is None or area == 0 else sheet.intersection(under).area / area
@@ -286,3 +318,229 @@ def trial_sheets(trial: str) -> list[SheetId]:
         if work.is_dir():
             found |= {(s.name, h.name) for s in work.iterdir() if s.is_dir() for h in s.iterdir() if h.is_dir()}
     return sorted(found)
+
+
+# The comparison (`sfzmaps find trial compare`): how far the block-side points lie from the nearest control point,
+# three places on each sheet, and the scan warped onto today's map there by each arm's placement.  These report;
+# nothing here decides or gates anything.
+PLACES = ("worst", "busiest", "centre")
+WINDOW_PX = 1200            # picture setting: a place's side, in px of today's warped scan (two panels and the gap
+                            # stay under the owner's viewer's 8,000 px limit)
+LINE = (255, 0, 255)        # picture setting: today's block lines, magenta (BGR): bright on white paper and on black ink
+LINE_PX = 3                 # picture setting: the width today's block lines are drawn, px (a picture of the line,
+                            # centred on it, not its exact width)
+RESULT = "RESULT:"
+
+
+def reach_ft(points_world: np.ndarray, gcps_world: np.ndarray) -> dict:
+    """How far each point lies from its nearest control point (map ft): `p50` and `p90` of those distances; both None
+    when there is no control point or no point."""
+    from scipy.spatial import cKDTree
+    pts = np.asarray(points_world, float).reshape(-1, 2)
+    gcps = np.asarray(gcps_world, float).reshape(-1, 2)
+    if not len(pts) or not len(gcps):
+        return {"p50": None, "p90": None}
+    d = cKDTree(gcps).query(pts)[0]
+    return {"p50": float(np.percentile(d, 50)), "p90": float(np.percentile(d, 90))}
+
+
+def control_points(root: Path, sid: SheetId) -> np.ndarray:
+    """The enabled control points of root/work/<series>/<sheet>/transform.json, as map ft (`wx`, `wy`); none when
+    there is no file."""
+    t = _json(Path(root) / "work" / sid[0] / sid[1] / "transform.json")
+    g = [(c["wx"], c["wy"]) for c in (t or {}).get("gcps", []) if c.get("enabled")]
+    return np.array(g, float).reshape(-1, 2)
+
+
+def _sheet(sid: SheetId, source: Path):
+    """The warp's view of the sheet (`sheetwarp.sheet.Sheet`), reading its work files from `source`/work."""
+    from dataclasses import dataclass
+
+    from sfzmaps.sheetwarp.sheet import Sheet
+
+    @dataclass
+    class SheetIn(Sheet):
+        root: Path = Path()
+
+        @property
+        def folder(self):
+            return Path(self.root) / "work" / self.series / self.name
+    return SheetIn(sid[0], sid[1], Path(source))
+
+
+@functools.lru_cache(maxsize=8)
+def _block_sides(sid: SheetId, source: Path):
+    """`sheetwarp.targets.block_side_points` of the sheet in data root `source` (kept, it is slow to make)."""
+    from sfzmaps.sheetwarp import targets
+    return targets.block_side_points(_sheet(sid, source))
+
+
+def side_points(sid: SheetId) -> np.ndarray:
+    """The block-side points of the sheet under today's data root (map ft): a point every 2 ft along every side of
+    every block of the year's lots inside the sheet's drawn map, the points the warp's within-1-px score uses."""
+    return _block_sides(tuple(sid), Path(config.DATA_DIR)).pts
+
+
+@functools.lru_cache(maxsize=8)
+def off_print(sid: SheetId, source: Path) -> np.ndarray:
+    """Per block-side point of the sheet (`_block_sides`), whether it lies more than 1 px from a printed block line
+    running its way under the placement in data root `source`, corrected by its warp's correction where it has one
+    (source/warp/<series>/<sheet>/correction.npz, named in that folder's transform.json): the warp's own measure
+    (`targets.measure`).  A point off the measured crop counts as off the print, as in the warp's score."""
+    from sfzmaps.sheetwarp import targets
+    from sfzmaps.transform import Correction
+    sheet = _sheet(sid, source)
+    warp = Path(source) / "warp" / sid[0] / sid[1]
+    t = _json(warp / "transform.json") or {}
+    correction = Correction.load(warp / t["correction"]["file"]) if "correction" in t else None
+    d = targets.measure(targets.fit_targets(sheet), _block_sides(sid, source), correction)
+    return ~(d <= 1)
+
+
+def _resolution(tif: Path) -> float:
+    import rasterio
+    with rasterio.open(tif) as s:
+        return float(s.res[0])
+
+
+def _cells(pts: np.ndarray, x0: float, y1: float, side: float, ncol: int) -> np.ndarray:
+    """Each point's grid box (row-major index; rows down from y1, columns right from x0), -1 left or above."""
+    c = np.floor((pts[:, 0] - x0) / side)
+    r = np.floor((y1 - pts[:, 1]) / side)
+    ok = (c >= 0) & (c < ncol) & (r >= 0)
+    return np.where(ok, r * ncol + c, -1).astype(np.int64)
+
+
+def places(sid: SheetId, source: Path) -> dict[str, tuple[float, float, float, float]]:
+    """Three boxes on the sheet (map ft: x0, y0, x1, y1), each WINDOW_PX times the resolution of the warped scan in
+    data root `source` (warp/<series>/<sheet>/warped.tif) on a side, on a grid laid from the top-left corner of the
+    sheet's warped footprint: `worst`, the box holding the most block-side points off the print under that
+    placement (`off_print`); `busiest`, the box holding the most block-side points; `centre`, the box holding the
+    footprint's centroid.  Ties go to the first box, row by row from the top.  Pass today's data root, so that both
+    arms are shown on the same ground."""
+    folder = Path(source) / "warp" / sid[0] / sid[1]
+    side = WINDOW_PX * _resolution(folder / "warped.tif")
+    fp = _footprint(source, f"{sid[0]}/{sid[1]}")
+    x0, _, x1, y1 = fp.bounds
+    ncol = max(1, int(np.ceil((x1 - x0) / side)))
+    pts = np.asarray(_block_sides(tuple(sid), Path(source)).pts, float).reshape(-1, 2)
+    off = np.asarray(off_print(tuple(sid), Path(source)), bool)
+    cell = _cells(pts, x0, y1, side, ncol)
+    c = fp.centroid
+    centre = int(_cells(np.array([[c.x, c.y]]), x0, y1, side, ncol)[0])
+    n = max(int(cell.max(initial=-1)), centre, 0) + 1
+
+    def most(sel):
+        return int(np.argmax(np.bincount(cell[sel & (cell >= 0)], minlength=n)))
+
+    def box_of(k):
+        r, col = divmod(k, ncol)
+        return (x0 + col * side, y1 - (r + 1) * side, x0 + (col + 1) * side, y1 - r * side)
+    return {"worst": box_of(most(off)), "busiest": box_of(most(np.ones(len(pts), bool))), "centre": box_of(centre)}
+
+
+def in_box(points_world: np.ndarray, box_ft) -> np.ndarray:
+    """Whether each point (map ft) lies in the box (x0, y0, x1, y1; the low edges in, the high ones out)."""
+    p = np.asarray(points_world, float).reshape(-1, 2)
+    return (p[:, 0] >= box_ft[0]) & (p[:, 0] < box_ft[2]) & (p[:, 1] >= box_ft[1]) & (p[:, 1] < box_ft[3])
+
+
+def block_lines(boxes) -> list:
+    """Today's block lines round the boxes (map ft): the outline of each of today's blocks (`datasf.build_blocks` of
+    today's active lots, ref/parcels.parquet) that has a lot touching one of the boxes."""
+    import geopandas as gpd
+
+    from sfzmaps.sources import datasf
+    lots = gpd.read_parquet(config.REF_DIR / "parcels.parquet")
+    near = lots[lots.intersects(shapely.union_all([shapely.box(*b) for b in boxes]))]
+    blocks = datasf.build_blocks(lots[lots["block_num"].isin(set(near["block_num"]))])
+    return [g.boundary for g in blocks.geometry]
+
+
+def _panel(tif: Path, box_ft, lines) -> np.ndarray:
+    """The warped scan inside the box at its own resolution (BGR uint8; white where there is no scan), with the lines
+    drawn LINE_PX wide in LINE over it."""
+    import cv2
+    import rasterio
+    from rasterio.windows import Window
+    with rasterio.open(tif) as s:
+        rx, ry = s.res
+        left, top = s.bounds.left, s.bounds.top
+        c0, r0 = int(round((box_ft[0] - left) / rx)), int(round((top - box_ft[3]) / ry))
+        w, h = int(round((box_ft[2] - box_ft[0]) / rx)), int(round((box_ft[3] - box_ft[1]) / ry))
+        a = s.read(window=Window(c0, r0, w, h), boundless=True, fill_value=0).astype(np.float32)
+        rows, cols = np.arange(r0, r0 + h), np.arange(c0, c0 + w)
+        inside = (((rows >= 0) & (rows < s.height))[:, None] & ((cols >= 0) & (cols < s.width))[None, :])
+    rgb = a[:3] if len(a) >= 3 else np.repeat(a[:1], 3, axis=0)
+    alpha = (a[3] / 255.0 if len(a) >= 4 else np.ones((h, w), np.float32)) * inside
+    img = rgb * alpha + 255.0 * (1 - alpha)
+    img = np.ascontiguousarray(np.clip(np.rint(img), 0, 255).astype(np.uint8).transpose(1, 2, 0)[:, :, ::-1])
+    clip = shapely.box(*box_ft).buffer(LINE_PX * max(rx, ry))
+    for g in lines:
+        g = g.boundary if g.geom_type in ("Polygon", "MultiPolygon") else g
+        for ln in shapely.get_parts(shapely.intersection(g, clip)):
+            if ln.geom_type not in ("LineString", "LinearRing") or ln.is_empty:
+                continue
+            xy = np.asarray(ln.coords)[:, :2]
+            px = np.stack([(xy[:, 0] - box_ft[0]) / rx - 0.5, (box_ft[3] - xy[:, 1]) / ry - 0.5], axis=1)
+            cv2.polylines(img, [np.rint(px * 16).astype(np.int32)], False, LINE, LINE_PX, cv2.LINE_8, shift=4)
+    return img
+
+
+def placed_key() -> tuple:
+    return (("the scan warped onto today's map by each placement, at the warped scan's own resolution; white = no scan "
+             "there", (255, 255, 255)),
+            (f"magenta = today's block lines (DataSF blocks), drawn on top {LINE_PX} px wide (a picture setting)", LINE))
+
+
+def placed_picture(before_tif: Path, after_tif: Path, box_ft, lines, title: str) -> np.ndarray:
+    """The picture (BGR uint8) of one place: each warped scan (`before_tif` on the left, `after_tif` on the right)
+    read inside the box (map ft: x0, y0, x1, y1) at its own resolution, today's block `lines` (map ft) drawn over each
+    LINE_PX wide in LINE, the two side by side `look.GAP` apart (a panel shorter than the other padded with white
+    below).  A key and `title` above; ValueError when the title does not start "RESULT:"."""
+    from sfzmaps.find import look
+    if not title.startswith(RESULT):
+        raise ValueError(f"a result picture's title starts {RESULT!r}: {title!r}")
+    left, right = _panel(Path(before_tif), box_ft, lines), _panel(Path(after_tif), box_ft, lines)
+    h = max(left.shape[0], right.shape[0])
+
+    def tall(p):
+        return np.vstack([p, np.full((h - p.shape[0], p.shape[1], 3), 255, np.uint8)])
+    gap = np.full((h, look.GAP, 3), 255, np.uint8)
+    return look._keyed(np.hstack([tall(left), gap, tall(right)]), title, placed_key())
+
+
+def check_blocks(trial: str, sid: SheetId) -> None:
+    """ValueError, naming the sheet, when the finder arm's blocks file is not the one `sfzmaps find blocks` wrote: its
+    sha256 differs from the one recorded in TRIAL/<trial>/blocks/<series>/<sheet>.json (re-traced or changed since),
+    or the file or the record is missing."""
+    import hashlib
+    label = f"{sid[0]}/{sid[1]}"
+    rec = TRIAL / trial / "blocks" / sid[0] / f"{sid[1]}.json"
+    f = arm_root(trial, "finder") / "work" / sid[0] / sid[1] / "blocks_px.geojson"
+    if not rec.is_file():
+        raise ValueError(f"{label}: no record of the finder's blocks ({rec}); make them with `sfzmaps find blocks "
+                         f"--trial {trial} --sheet {label}`")
+    if not f.is_file():
+        raise ValueError(f"{label}: the finder arm has no blocks file ({f})")
+    got, want = hashlib.sha256(f.read_bytes()).hexdigest(), json.loads(rec.read_text()).get("sha256")
+    if got != want:
+        raise ValueError(f"{label}: the finder arm's blocks file was re-traced or changed since `sfzmaps find blocks` "
+                         f"wrote it ({f}: sha256 {got}, recorded {want})")
+
+
+def unplaced(root: Path, sid: SheetId, label: str) -> list[str]:
+    """Why the sheet has no placement to compare in data root `root` (`label` names the root: today, traced or
+    finder), one line each naming the step to run; empty when it has control points and a warped scan."""
+    series, sheet = sid
+    env = "" if label == "today" else f"SFZMAPS_DATA_DIR={Path(root).resolve()} "
+    why = []
+    t = Path(root) / "work" / series / sheet / "transform.json"
+    if not len(control_points(root, sid)):
+        why.append(f"{series}/{sheet} {label}: no placement yet (no control points in {t}); run "
+                   f"`{env}SFZMAPS_MAX_USD=0 pixi run uv run sfzmaps run --year {series} --sheet {sheet}`")
+    w = Path(root) / "warp" / series / sheet / "warped.tif"
+    if not w.is_file():
+        why.append(f"{series}/{sheet} {label}: no warped scan ({w}); run "
+                   f"`{env}SFZMAPS_MAX_USD=0 pixi run uv run sfzmaps warp {series}`")
+    return why

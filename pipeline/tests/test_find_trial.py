@@ -234,3 +234,170 @@ def test_the_trial_commands_prepare_a_root_and_write_the_numbers(src, tmp_path, 
     assert got["today"] == got["traced"] == trial.numbers(src, ("s", "a"))
     assert all(got["reproduced"].values())
     assert got["trained_ground"] == {"lot_labelled_share": 0.0, "by_sheet": {}, "hand_crops": ["train/s/a__0_0_64_64"]}
+
+
+# The comparison (`find trial compare`): control-point reach, the three places, the warped-scan pictures.
+
+def _tif(path, value=255, left=6_000_000.0, top=2_100_000.0, res=2.7, w=300, h=200):
+    """An RGBA GeoTIFF (EPSG:2227, `res` ft/px), every px `value` and opaque, as `sfzmaps warp` writes warped.tif."""
+    import rasterio
+    from rasterio.transform import from_origin
+    path.parent.mkdir(parents=True, exist_ok=True)
+    a = np.full((4, h, w), value, np.uint8)
+    a[3] = 255
+    with rasterio.open(path, "w", driver="GTiff", width=w, height=h, count=4, dtype="uint8", crs="EPSG:2227",
+                       transform=from_origin(left, top, res, res)) as d:
+        d.write(a)
+
+
+def test_reach_is_the_distance_to_the_nearest_control_point():
+    points = np.stack([np.arange(101.0), np.zeros(101)], axis=1)
+    got = trial.reach_ft(points, np.array([[0.0, 0.0]]))
+    assert got == {"p50": pytest.approx(50.0), "p90": pytest.approx(90.0)}
+    assert trial.reach_ft(points, np.zeros((0, 2))) == {"p50": None, "p90": None}
+
+
+def test_control_points_on_trained_ground_are_those_under_the_lot_labelled_sheets(tmp_path):
+    source, run = tmp_path / "data", tmp_path / "run"
+    _footprint(source, "s", "l", box(0, 0, 10, 10))
+    run.mkdir()
+    (run / "log.json").write_text(json.dumps({"items": [{"name": "s/l"}, {"name": "train/s/a__0_0_64_64"}]}))
+    ground = trial.trained_union(run, source)
+    assert trial.share_on(np.array([[1.0, 1.0], [5.0, 5.0], [20.0, 5.0], [-1.0, 3.0]]), ground) == 0.5
+    assert trial.share_on(np.zeros((0, 2)), ground) is None and trial.share_on(np.ones((3, 2)), None) == 0.0
+
+
+def _record(tmp_path, monkeypatch, text="the finder's blocks"):
+    import hashlib
+    monkeypatch.setattr(trial, "TRIAL", tmp_path / "trial")
+    f = trial.arm_root("T", "finder") / "work/s/a/blocks_px.geojson"
+    f.parent.mkdir(parents=True)
+    f.write_text(text)
+    rec = tmp_path / "trial/T/blocks/s/a.json"
+    rec.parent.mkdir(parents=True)
+    rec.write_text(json.dumps({"sheet": "s/a", "sha256": hashlib.sha256(text.encode()).hexdigest()}))
+    return f
+
+
+def test_compare_refuses_a_retraced_blocks_file(tmp_path, monkeypatch):
+    f = _record(tmp_path, monkeypatch)
+    trial.check_blocks("T", ("s", "a"))                     # as `find blocks` wrote it: no complaint
+    f.write_text("traced again")
+    with pytest.raises(ValueError, match="s/a") as e:
+        trial.check_blocks("T", ("s", "a"))
+    assert "re-traced or changed" in str(e.value)
+    (tmp_path / "trial/T/blocks/s/a.json").unlink()
+    with pytest.raises(ValueError, match="s/a.*find blocks"):
+        trial.check_blocks("T", ("s", "a"))
+
+
+def test_places_takes_the_box_with_most_points_off_the_print(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    src, res = tmp_path / "data", 2.7
+    side = trial.WINDOW_PX * res
+    _tif(src / "warp/s/a/warped.tif", res=res)            # today's warped scan: only its resolution is read
+    _footprint(src, "s", "a", box(0, 0, 3.5 * side, side))  # one row of four grid boxes; the centroid in the second
+
+    def at(col, n):                                        # n points inside grid box `col`
+        return np.stack([np.linspace(col * side + 1, (col + 1) * side - 1, n), np.full(n, side / 2)], axis=1)
+    pts = np.vstack([at(0, 10), at(3, 30), at(2, 50)])
+    off = np.r_[np.ones(10, bool), np.ones(30, bool), np.zeros(50, bool)]   # A: 10 off the print, B: 30, C: 50 on it
+    monkeypatch.setattr(trial, "_block_sides", lambda sid, source: SimpleNamespace(pts=pts))
+    monkeypatch.setattr(trial, "off_print", lambda sid, source: off)
+    got = trial.places(("s", "a"), src)
+
+    def cell(col):
+        return pytest.approx((col * side, 0.0, (col + 1) * side, side))
+    assert got["worst"] == cell(3)                          # B: the most points off the print
+    assert got["busiest"] == cell(2)                        # C: the most points
+    assert got["centre"] == cell(1)                         # the footprint's centroid
+
+
+def test_placed_picture_is_at_the_scans_own_resolution(tmp_path):
+    from shapely.geometry import LineString
+    from sfzmaps.find import look
+    left, top, res = 6_000_000.0, 2_100_000.0, 2.7
+    _tif(tmp_path / "before.tif", 255)                     # white paper
+    _tif(tmp_path / "after.tif", 0)                        # black ink
+    x0, y1 = left + 50 * res, top - 40 * res               # a window 100 x 80 px from px (50, 40)
+    box_ft = (x0, y1 - 80 * res, x0 + 100 * res, y1)
+    y = top - (40 + 30.5) * res                            # the centre of the window's px row 30
+    pic = trial.placed_picture(tmp_path / "before.tif", tmp_path / "after.tif", box_ft,
+                               [LineString([(left, y), (left + 300 * res, y)])], "RESULT: s / a")
+    assert pic.shape[1] == 2 * 100 + look.GAP
+    band = pic.shape[0] - 80
+    for x in (40, 100 + look.GAP + 40):                    # each panel
+        for r in (29, 30, 31):                             # the line, drawn LINE_PX (3) wide
+            assert tuple(pic[band + r, x]) == trial.LINE
+        assert tuple(pic[band + 26, x]) != trial.LINE
+    assert tuple(pic[band + 10, 40]) == (255, 255, 255) and tuple(pic[band + 10, 100 + look.GAP + 40]) == (0, 0, 0)
+    with pytest.raises(ValueError, match="RESULT:"):
+        trial.placed_picture(tmp_path / "before.tif", tmp_path / "after.tif", box_ft, [], "s / a")
+
+
+def _placed_trial(src, tmp_path, monkeypatch, finder_placed=True):
+    """A trial T with today's data `src` and both arms holding sheet s/a, placed (unless `finder_placed` is False for
+    the finder arm), with the finder's blocks recorded, and the slow readers of real data replaced."""
+    import hashlib
+    from shapely.geometry import LineString
+    monkeypatch.setattr(config, "DATA_DIR", src)
+    monkeypatch.setattr(trial, "TRIAL", tmp_path / "find" / "trial")
+    monkeypatch.setattr(pages, "OUT", tmp_path / "find")
+    _tif(src / "warp/s/a/warped.tif")
+    for arm in trial.ARMS:
+        root = trial.arm_root("T", arm)
+        _fill(root)
+        if arm == "finder" and not finder_placed:
+            (root / "work/s/a/transform.json").unlink()
+        else:
+            _tif(root / "warp/s/a/warped.tif", 0 if arm == "finder" else 255)
+    f = trial.arm_root("T", "finder") / "work/s/a/blocks_px.geojson"
+    rec = trial.TRIAL / "T/blocks/s/a.json"
+    rec.parent.mkdir(parents=True)
+    rec.write_text(json.dumps({"sha256": hashlib.sha256(f.read_bytes()).hexdigest()}))
+    run = tmp_path / "find/runs/all-pieces"
+    run.mkdir(parents=True)
+    (run / "log.json").write_text(json.dumps({"items": [{"name": "train/s/a__0_0_64_64"}]}))
+    res = 2.7
+    b = (6_000_000.0 + 10 * res, 2_100_000.0 - 110 * res, 6_000_000.0 + 110 * res, 2_100_000.0 - 10 * res)
+    monkeypatch.setattr(trial, "side_points", lambda sid: np.array([[b[0] + 1, b[1] + 1], [b[0] + 1, b[3] + 1]]))
+    monkeypatch.setattr(trial, "off_print", lambda sid, source: np.array([True, False]))
+    monkeypatch.setattr(trial, "places", lambda sid, source: {p: b for p in trial.PLACES})
+    monkeypatch.setattr(trial, "block_lines", lambda boxes: [LineString([(b[0], b[1]), (b[2], b[3])])])
+
+
+def _files(*roots):
+    import hashlib
+    return {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for r in roots for p in sorted(r.rglob("*"))
+            if p.is_file()}
+
+
+def test_compare_writes_only_its_own_files(src, tmp_path, monkeypatch):
+    _placed_trial(src, tmp_path, monkeypatch)
+    roots = [src, *(trial.arm_root("T", a) for a in trial.ARMS)]
+    before = _files(*roots)
+    r = invoke(["find", "trial", "compare", "--trial", "T"])
+    assert r.exit_code == 0, r.output
+    assert _files(*roots) == before                         # today's data and both arms untouched
+    t = trial.TRIAL / "T"
+    written = sorted(str(p.relative_to(t)) for p in t.rglob("*")
+                     if p.is_file() and p.relative_to(t).parts[0] not in (*trial.ARMS, "blocks"))
+    assert written == ["compare.json", *(f"look/s/a__{p}.png" for p in sorted(trial.PLACES))]
+    got = json.loads((trial.TRIAL / "T/compare.json").read_text())["sheets"]["s/a"]
+    assert got["numbers"]["finder"] == trial.numbers(trial.arm_root("T", "finder"), ("s", "a"))
+    # side points: one in the place's box, one above it; enabled control points at map (3, 5) and (10, 12)
+    pts, gcps = trial.side_points(("s", "a")), np.array([[3.0, 5.0], [10.0, 12.0]])
+    d = np.linalg.norm(pts[:, None] - gcps[None], axis=2).min(axis=1)
+    assert got["reach_ft"]["traced"]["p50"] == pytest.approx(d.mean())
+    assert got["places"]["worst"]["side_points"] == 1
+    assert got["places"]["worst"]["off_print_today"] == 1
+    assert "s/a traced:" in r.output and "s/a finder:" in r.output
+
+
+def test_compare_refuses_a_sheet_with_no_placement(src, tmp_path, monkeypatch):
+    _placed_trial(src, tmp_path, monkeypatch, finder_placed=False)
+    r = invoke(["find", "trial", "compare", "--trial", "T"])
+    assert r.exit_code == 1
+    assert "s/a finder" in r.output and "sfzmaps run --year s --sheet a" in r.output
+    assert "sfzmaps warp s" in r.output
+    assert not (trial.TRIAL / "T/compare.json").exists() and not (trial.TRIAL / "T/look").exists()
