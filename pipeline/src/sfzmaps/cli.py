@@ -16,6 +16,9 @@ app.add_typer(solver_app, name="solver")
 find_app = typer.Typer(no_args_is_help=True, help="The street-and-block finder: one model that finds streets and "
                                                   "block edges on a scanned map.")
 app.add_typer(find_app, name="find")
+trial_app = typer.Typer(no_args_is_help=True, help="Trying the finder's blocks in placement, in separate data folders "
+                                                   "(data/find/trial/<trial>/<arm>/) that never touch today's.")
+find_app.add_typer(trial_app, name="trial")
 # Exit status of a command stopped by llm.FATAL (quota, spend cap, missing key): `sfzmaps build`
 # reports it as "needs a paid read". Not 2, which click uses for usage errors.
 PAID_READ_EXIT = 75
@@ -2029,6 +2032,94 @@ def find_ruled(sheet: str = typer.Option(..., "--sheet", help="The page, as <ser
                                  param_hint="--box")
     for f in pictures.write_ruled((series, name), lum[y0:y0 + h, x0:x0 + w], (x0, y0, w, h), zoom, tiles):
         typer.echo(str(f))
+
+
+@trial_app.command("root")
+def find_trial_root(trial: str = typer.Option(..., "--trial", help="The trial's name: data/find/trial/<trial>/."),
+                    arm: str = typer.Option(..., "--arm", help="traced (today's blocks) or finder (the finder's)."),
+                    sheet: list[str] = typer.Option(..., "--sheet", help="A sheet, as <series>/<sheet> "
+                                                                         "(repeatable).")) -> None:
+    """Make one arm's data root, data/find/trial/<trial>/<arm>/: raw, ref and cache linked to today's, and each sheet's
+    work files up to and including its blocks (page.png, page.json, labels.json, blocks_px.geojson and the paper warp,
+    with their freshness records and saved answers) copied, never linked, into its work/<series>/<sheet>/.  Nothing
+    made after the blocks is copied, so the placement steps run there (SFZMAPS_DATA_DIR=<root>) make it again.
+    Prints each file copied.  Exit status 1, writing nothing, when the root is today's data root or lies in its work,
+    warp or out folder, a sheet is a duplicate scan, has a review or a seed (its placement does not start from its
+    blocks) or lacks one of those files, or the root was prepared before (delete its folder to redo it).  Reads
+    nothing else, $0."""
+    from sfzmaps.find import trial as trials
+    if arm not in trials.ARMS:
+        raise typer.BadParameter(f"{arm!r}: one of {', '.join(trials.ARMS)}", param_hint="--arm")
+    sids = []
+    for s in sheet:
+        ser, _, name = s.partition("/")
+        if not ser or not name:
+            raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
+        sids.append((ser, name))
+    try:
+        root = trials.arm_root(trial, arm)
+        copied = trials.prepare(root, sids, source=config.DATA_DIR)
+    except (ValueError, FileExistsError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    for f in copied:
+        typer.echo(str(f))
+
+
+@trial_app.command("numbers")
+def find_trial_numbers(trial: str = typer.Option(..., "--trial", help="The trial's name: data/find/trial/<trial>/."),
+                       run: str = typer.Option("all-pieces", "--run", help="The finder run whose training ground is "
+                                                                           "measured (data/find/runs/<run>/).")
+                       ) -> None:
+    """For every sheet in the trial's arm roots, print one line per data root (today's data, then each arm that is
+    there): its blocks, good corners, control points, the placement check with its held-out errors, and the warp's
+    chosen correction with its share of block-side points within 1 px of a printed line, each read from that root's
+    own files.  Then whether the traced arm came out exactly as today, file by file, and the run's training ground on
+    the sheet (the share under its lot-labelled sheets, and its hand crops there).  Writes
+    data/find/trial/<trial>/numbers.json.  Reads only; $0."""
+    from sfzmaps.find import pages, trial as trials
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
+    try:
+        sids = trials.trial_sheets(trial)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--trial") from None
+    if not sids:
+        typer.echo(f"{trials.TRIAL / trial}: no arm root with a sheet; make one with `sfzmaps find trial root`",
+                   err=True)
+        raise typer.Exit(1)
+    folder = pages.OUT / "runs" / run
+    if not (folder / "log.json").is_file():
+        typer.echo(f"{folder / 'log.json'}: no run log", err=True)
+        raise typer.Exit(1)
+    out = {"trial": trial, "run": run, "sheets": {}}
+    for sid in sids:
+        got = {"today": trials.numbers(config.DATA_DIR, sid)}
+        typer.echo(trials.row(sid, "today", got["today"]))
+        for arm in trials.ARMS:
+            root = trials.arm_root(trial, arm)
+            if (root / "work" / sid[0] / sid[1]).is_dir():
+                got[arm] = trials.numbers(root, sid)
+                typer.echo(trials.row(sid, arm, got[arm]))
+        if "traced" in got:
+            got["reproduced"] = trials.reproduced(trials.arm_root(trial, "traced"), config.DATA_DIR, sid)
+            typer.echo(f"{sid[0]}/{sid[1]} traced as today: " +
+                       ", ".join(f"{k} {'same' if v else 'DIFFERS'}" for k, v in got["reproduced"].items()))
+        try:
+            got["trained_ground"] = ground = trials.trained_ground(sid, folder, config.DATA_DIR)
+        except FileNotFoundError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1) from None
+        parts = ", ".join(f"{k} {v:.3f}" for k, v in ground["by_sheet"].items())
+        typer.echo(f"{sid[0]}/{sid[1]} trained ground ({run}): {ground['lot_labelled_share']:.3f} of its ground under "
+                   f"lot-labelled training sheets" + (f" ({parts})" if parts else "") + "; hand crops on it: "
+                   + (", ".join(ground["hand_crops"]) or "none"))
+        out["sheets"][f"{sid[0]}/{sid[1]}"] = got
+    f = trials.TRIAL / trial / "numbers.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(out, indent=1))
+    typer.echo(str(f))
 
 
 if __name__ == "__main__":

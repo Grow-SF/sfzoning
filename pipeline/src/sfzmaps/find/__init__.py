@@ -17,4 +17,9 @@ Constraints that hold everywhere in this package:
 - When a sheet or crop is read, its scan is read at its own resolution, as stored, with no resampling code of our
   own (training tiles are resized, `data.resized`, to learn every print size).  A duplicate scan is never read.
 - Outputs go under data/find/, with the series in every path.
+
+The placement side (`trial`) tries the finder's blocks in placement, in separate data roots under data/find/trial/
+that never touch today's data.  It reads placement outputs (control points, the placement check, the warp's scores)
+only to report and compare them, and copies `labels.json` with a sheet's other work files without ever opening it.
+Nothing it reads or writes reaches the model.
 """
