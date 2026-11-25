@@ -13,6 +13,12 @@ app = typer.Typer(no_args_is_help=True, help="Georeference historic SF zoning ma
 solver_app = typer.Typer(no_args_is_help=True,
                          help="The 2000 solver: make its inputs (each a `sfzmaps build` stage) and solve.")
 app.add_typer(solver_app, name="solver")
+find_app = typer.Typer(no_args_is_help=True, help="The street-and-block finder: one model that finds streets and "
+                                                  "block edges on a scanned map.")
+app.add_typer(find_app, name="find")
+trial_app = typer.Typer(no_args_is_help=True, help="Trying the finder's blocks in placement, in separate data folders "
+                                                   "(data/find/trial/<trial>/<arm>/) that never touch today's.")
+find_app.add_typer(trial_app, name="trial")
 # Exit status of a command stopped by llm.FATAL (quota, spend cap, missing key): `sfzmaps build`
 # reports it as "needs a paid read". Not 2, which click uses for usage errors.
 PAID_READ_EXIT = 75
@@ -1574,6 +1580,924 @@ def solver_publish(
         from sfzmaps.solver import differences
         out = differences.make(series, root=root, published=published, page_dir=page, new_dir=d)
         typer.echo(f"the page of differences: {out}")
+
+
+@find_app.command("sheets")
+def find_sheets(series: str = typer.Option(None, "--series", help="Only this series (default: every series).")) -> None:
+    """Print the map pages the finder reads, one `series/sheet` a line (duplicate scans left out)."""
+    from sfzmaps.find import pages
+    for s, h in pages.sheets(series):
+        typer.echo(f"{s}/{h}")
+
+
+@find_app.command("labels")
+def find_labels(series: str = typer.Option(..., "--series", help="A series whose lots label it (label_sources.csv)."),
+                sheet: list[str] = typer.Option(None, "--sheet", help="Only these sheets (repeatable; default: all)."),
+                placement: str = typer.Option("warp", "--placement",
+                                              help="The sheets' placement: warp (data/warp) or work (data/work)."),
+                look: bool = typer.Option(False, "--look", help="Also draw each sheet's labels on its scan "
+                                                                "(data/find/look/labels/<placement>/).")
+                ) -> None:
+    """Make the series' street-or-not labels from its lots on the solver's grid (data/find/labels/<series>/grid.npz,
+    made again every run), then each sheet's labels through its placement: street or not, no block edge, and the cuts
+    saying where a block edge crosses (data/find/labels/<series>/<sheet>.npz).  Street labels are reported by their px
+    and the sum of their weights (most px of a street label far from its centre line weigh almost nothing).  The lots
+    listed in inputs/find/unlabelled_lots.csv (the two parks held as one lot) carry no label; a listed lot that is not
+    among the series' lots is refused.  $0."""
+    import time
+
+    import numpy as np
+
+    from sfzmaps.find import look as pictures, lotlabels, pages
+    from sfzmaps.find.streetlabels import NOT_STREET, STREET, UNKNOWN
+    if placement not in lotlabels.PLACEMENTS:
+        raise typer.BadParameter(f"expected one of {', '.join(lotlabels.PLACEMENTS)}", param_hint="--placement")
+    try:
+        pages.source(series)
+    except KeyError as e:
+        raise typer.BadParameter(str(e.args[0]), param_hint="--series") from None
+    found = [h for _, h in pages.sheets(series)]
+    unknown = sorted(set(sheet or []) - set(found))
+    if unknown:
+        raise typer.BadParameter(f"not a map page of {series} that is read: {', '.join(unknown)}", param_hint="--sheet")
+    try:
+        lotlabels.unlabelled_lots()
+    except (FileNotFoundError, ValueError) as e:
+        typer.echo(f"the list of lots carrying no label ({lotlabels.UNLABELLED}) cannot be read: {e}", err=True)
+        raise typer.Exit(1) from None
+    try:
+        g = lotlabels.make_ground(series)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--series") from None
+    for name, v in (("street", STREET), ("block (not street)", NOT_STREET), ("no label", UNKNOWN)):
+        typer.echo(f"{name}: {int(np.count_nonzero(g.street == v)):,} grid px")
+    px, weighs = lotlabels.street_totals(g.street, g.weight)
+    typer.echo(f"street labels: {px:,} grid px with weight above 0, weighing {weighs:,.0f} in all")
+    typer.echo(f"listed lots carrying no label ({lotlabels.UNLABELLED.name}): {int(np.count_nonzero(g.unlabelled)):,} "
+               f"grid px")
+    typer.echo(f"the grid labels: {lotlabels.grid_path(series)}")
+    for h in sheet or found:
+        t = time.time()
+        lab = lotlabels.sheet_labels((series, h), placement)
+        typer.echo(f"{h}: sigma {lab['sigma']:.3f} px; block-edge cuts {len(lab['cuts'].weight):,}; "
+                   f"{time.time() - t:.1f} s; {lotlabels.sheet_path((series, h))}")
+        n = lab["counts"]
+        kept = n["labelled_px_after"] / max(1, n["labelled_px_before"])
+        px, weighs = lotlabels.street_totals(lab["street"], lab["weight"])
+        typer.echo(f"  street labels: {px:,} px with weight above 0, weighing {weighs:,.0f} in all; listed lots "
+                   f"left without a label: {n['unlabelled_lot_px']:,} px")
+        typer.echo(f"  where the sheet draws ink: block-edge cuts used {n['edge_used']:,}, dropped "
+                   f"{n['edge_dropped']:,}; labelled px kept {kept:.3f}")
+        if look:
+            for f in pictures.write((series, h), pages.load_scan((series, h)), lab):
+                typer.echo(f"  {f}")
+
+
+@find_app.command("crops")
+def find_crops(set_: str = typer.Option(None, "--set", help="Only this set: train, choose or test (default: all)."),
+               look: bool = typer.Option(False, "--look", help="Draw each crop's scan and labels side by side "
+                                                               "(data/find/look/crops/<set>/).")) -> None:
+    """Make the labels of every hand crop (inputs/find-labels/<set>/<series>/<sheet>__<x0>_<y0>_<w>_<h>.json) and
+    print each crop's areas by kind and its warnings.  A crop file that cannot be read or labelled is reported with its
+    path and the rest go on.  Then every choosing crop lying on a test crop's ground, sent through the sheets'
+    placements, is printed with the share of its area that overlaps.  The exit status is 1 if any crop failed or any
+    such overlap was found.  $0."""
+    from sfzmaps.find import handlabels, look as pictures, pages
+    if set_ is not None and set_ not in handlabels.SETS:
+        raise typer.BadParameter(f"expected one of {', '.join(handlabels.SETS)}", param_hint="--set")
+    found = handlabels.crop_files(handlabels.SETS if set_ is None else (set_,))
+    if not found:
+        typer.echo("no crops")
+    failed, scans = 0, {}
+    for path, s in found:
+        name = f"{s}/{path.parent.name}/{path.name}"
+        try:
+            c = handlabels.read_crop(path, s)
+            sid = (c.series, c.sheet)
+            if sid not in scans:
+                scans = {sid: pages.load_scan(sid)}         # crops come sorted by sheet: keep one page in memory
+            lum = handlabels.crop_scan(scans[sid], c)
+            lab = handlabels.make_labels(lum, c)
+        except (ValueError, FileNotFoundError) as e:
+            failed += 1
+            msg = str(e)
+            typer.echo(f"{name}: FAILED: {msg if str(path) in msg else f'{path}: {msg}'}")
+            continue
+        kinds = list(lab.kinds.values())
+        typer.echo(f"{name}: block {kinds.count('block')}, open {kinds.count('open')}")
+        for w in lab.warnings:
+            typer.echo(f"  {w}")
+        if look:
+            typer.echo(f"  {pictures.write_crop(c, lum, lab)}")
+    overlaps = []
+    try:
+        overlaps = handlabels.choose_on_test(handlabels.crops(("choose",)), handlabels.crops(("test",)))
+    except (ValueError, FileNotFoundError) as e:
+        failed += 1
+        typer.echo(f"choosing crops against test crops: not checked: {e}")
+    for c, t, share in overlaps:
+        typer.echo(f"choose-against-test ground overlap: {c.set}/{c.series}/{c.path.name} lies on the ground of the "
+                   f"test crop {t.set}/{t.series}/{t.path.name} ({share:.3f} of the choosing crop's area)")
+    if failed:
+        typer.echo(f"{failed} of {len(found)} crops failed")
+    if overlaps:
+        typer.echo(f"{len(overlaps)} choose-against-test overlap(s): a choosing crop must lie away from every test "
+                   f"crop's ground")
+    if failed or overlaps:
+        raise typer.Exit(1)
+
+
+@find_app.command("train")
+def find_train(run: str = typer.Option(..., "--run", help="The run's name: its files go to data/find/runs/<run>/."),
+               sheet: list[str] = typer.Option(None, "--sheet", help="A lot-labelled sheet to train on, as "
+                                                                     "<series>/<sheet> (repeatable)."),
+               unbroken: bool = typer.Option(False, "--unbroken", help="Add the unbroken-line terms on the hand "
+                                                                       "crops' block edges."),
+               no_noise: bool = typer.Option(False, "--no-noise", help="No print-and-scan noise on the tiles."),
+               no_resize: bool = typer.Option(False, "--no-resize", help="Show every tile at its item's own print size "
+                                                                         "(for comparison), none at the measured "
+                                                                         "print sizes of the sheets."),
+               steps: int = typer.Option(None, "--steps", min=1, help="Engineering setting: train this many steps "
+                                                                      "instead of the recipe's (a short check)."),
+               every: int = typer.Option(None, "--every", min=1, help="Engineering setting: steps between "
+                                                                      "checkpoints instead of the recipe's."),
+               no_trace: bool = typer.Option(False, "--no-trace", help="Skip scoring the choosing crops during "
+                                                                       "training."),
+               seed: int = typer.Option(0, "--seed", help="The recipe's seed: the tile draws, the noise, the print "
+                                                         "sizes drawn and the network's start all derive from it."),
+               device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one)."),
+               look: bool = typer.Option(False, "--look", help="Also draw training tiles without and with noise "
+                                                               "(data/find/runs/<run>/noise-examples.png).")) -> None:
+    """Train the finder on the named lot-labelled sheets (`sfzmaps find labels`) and every `train` hand crop, the
+    ground under the choosing and test crops left out: data/find/runs/<run>/model.pt and log.json (the recipe, device,
+    commit (null, with one line saying why, when git cannot tell), items, curve, and the print sizes measured and the
+    factors drawn).  Each tile is shown at the print size of a sheet the finder is used on, measured from every sheet
+    of every series whose placement passes the warp's own check (`find.data.print_sizes`; with --no-resize, at its
+    item's own size).  The last step's weights are kept.  At
+    every checkpoint the `choose` crops are read and the share of their blocks found is logged in the curve as the
+    run's held-out trace (`find.counts.trace_scorer`: the share of their blocks found and the panoptic quality of
+    their areas, the connected pieces of ground the model calls not street, per checkpoint; it chooses nothing;
+    --no-trace skips it).  --seed sets the recipe's seed (0 by default).  Every training crop (and, unless
+    --no-trace, every choosing crop) is read first; if any cannot be, each is reported with its path and nothing is
+    trained (exit status 1), as when there is no choosing crop and --no-trace is not given.  $0."""
+    import dataclasses
+    import logging
+    import math
+    import time
+
+    import torch
+
+    from sfzmaps import gpu
+    from sfzmaps.find import counts, data, handlabels, pages, train
+    from sfzmaps.find.device import THREADS, default_device
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
+    recipe = train.Recipe()
+    recipe = dataclasses.replace(recipe, steps=steps or recipe.steps, every=every or recipe.every, unbroken=unbroken,
+                                 noise=0.0 if no_noise else recipe.noise, resize=not no_resize, seed=seed)
+    device = device or default_device()
+    sids = []
+    for s in sheet or []:
+        series, _, name = s.partition("/")
+        if not series or not name:
+            raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
+        if name in pages.duplicate_scans(series):
+            raise typer.BadParameter(f"{s} is a duplicate scan, which is never read", param_hint="--sheet")
+        sids.append((series, name))
+    def said(e: Exception) -> str:                     # a KeyError's message is its first argument (str() quotes it)
+        return str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e)
+
+    items, failed, on_sheet = [], 0, []                # on_sheet: each item's (series, sheet)
+    try:
+        for sid in sids:
+            items.append(data.sheet_labelled(sid))
+            on_sheet.append(sid)
+    except (FileNotFoundError, ValueError, KeyError) as e:
+        typer.echo(said(e), err=True)
+        raise typer.Exit(1) from None
+    for path, s in handlabels.crop_files(("train",)):
+        try:
+            crop = handlabels.read_crop(path, s)
+            items.append(data.crop_labelled(crop))
+            on_sheet.append((crop.series, crop.sheet))
+        except (ValueError, FileNotFoundError, KeyError) as e:
+            failed += 1
+            msg = said(e)
+            typer.echo(f"FAILED: {msg if str(path) in msg else f'{path}: {msg}'}", err=True)
+    if failed:
+        typer.echo(f"{failed} training crop(s) could not be read; nothing trained", err=True)
+        raise typer.Exit(1)
+    choosing, on_checkpoint = [], None
+    if not no_trace:
+        try:
+            choosing = handlabels.crops(("choose",))
+            on_checkpoint = counts.trace_scorer(choosing, device)
+        except (ValueError, FileNotFoundError, KeyError) as e:
+            typer.echo(f"the choosing crops: {said(e)}; they give the training trace (--no-trace trains without "
+                       f"it); nothing trained", err=True)
+            raise typer.Exit(1) from None
+    if not items:
+        typer.echo("nothing to train on", err=True)
+        raise typer.Exit(1)
+    listed = [{"name": it.name, "era": it.era, "ft_per_px": it.ft_per_px, "labelled_px": int(data.labelled(it).sum()),
+               "used_cuts_with_no_px": 0 if it.cuts is None else data.cuts_without_px(it.cuts),
+               **({} if it.hand else {"hand_marked_px": it.hand_px, "hand_marked_street_weight": it.hand_weight})}
+              for it in items]
+    for it in items:
+        if not it.hand and it.hand_px:
+            typer.echo(f"{it.name}: {it.hand_px:,} px left without a lot label as hand-marked ground (street weight "
+                       f"{it.hand_weight:,.1f})")
+    for era in sorted({it.era for it in items}):
+        mine = [x for x in listed if x["era"] == era]
+        typer.echo(f"{era}: {len(mine)} items, {sum(x['labelled_px'] for x in mine):,} labelled px")
+    sizes, size_fields = None, {}
+    if recipe.resize:
+        try:
+            sizes, left_out, sheets_left_out = data.print_sizes()
+        except (FileNotFoundError, ValueError, KeyError) as e:
+            typer.echo(f"the print sizes: {said(e)}; nothing trained", err=True)
+            raise typer.Exit(1) from None
+        size_fields = {"print_sizes": data.size_summary(sizes), "print_sizes_left_out": left_out,
+                       "print_sizes_sheets_left_out": {"count": len(sheets_left_out), "sheets": sheets_left_out},
+                       "training_items_on_sheets_left_out": [it.name for it, sid in zip(items, on_sheet)
+                                                             if f"{sid[0]}/{sid[1]}" in sheets_left_out]}
+        typer.echo(f"print sizes: {sum(len(v) for v in sizes.values())} placed sheets of {len(sizes)} series, "
+                   f"{min((min(v) for v in sizes.values()), default=math.nan):.2f}-"
+                   f"{max((max(v) for v in sizes.values()), default=math.nan):.2f} ft per px; left out (no placed "
+                   f"sheet): {', '.join(left_out) or 'none'}; {len(sheets_left_out)} sheet(s) left out: "
+                   f"{', '.join(f'{k} ({v})' for k, v in sheets_left_out.items()) or 'none'}")
+    out = pages.OUT / "runs" / run
+    if look:
+        typer.echo(str(train.write_noise_examples(items, recipe, out / "noise-examples.png", sizes=sizes)))
+    changed, why = _git("status", "--porcelain", "--untracked-files=no", "--", "src")
+    t0 = time.perf_counter()
+    try:
+        with gpu.gpu_turn(True, device):
+            fitted = train.fit(items, recipe, device, on_checkpoint, sizes=sizes)
+    except ValueError as e:
+        typer.echo(f"nothing trained: {e}", err=True)
+        raise typer.Exit(1) from None
+    commit, why_head = _git("rev-parse", "HEAD")
+    why = why or why_head
+    if why:
+        typer.echo(f"the git state was not recorded (commit and uncommitted_changes_in_src are null): {why}")
+    fields = {"commit": commit, "uncommitted_changes_in_src": None if changed is None else bool(changed),
+              "torch": torch.__version__,
+              "threads": THREADS, "items": listed, "choosing_crops": [data.crop_name(c) for c in choosing] or None,
+              "train_crops_left_out_as_reserved": {it.name: it.left_out for it in items if it.hand}, **size_fields,
+              "seconds": round(time.perf_counter() - t0, 1)}
+    for f in train.save_run(out, fitted, recipe, fields):
+        typer.echo(str(f))
+
+
+def _git(*args: str) -> tuple[str | None, str | None]:
+    """git's output (stripped) for `args`, run in the pipeline folder, and None; or None and why, in one line, when git
+    is not installed, fails or finds no repository there (a run goes on without the git state)."""
+    import subprocess
+    try:
+        done = subprocess.run(["git", *args], cwd=config.PIPELINE_DIR, check=True, capture_output=True, text=True)
+    except FileNotFoundError:
+        return None, "git is not installed"
+    except subprocess.CalledProcessError as e:
+        said = next((line for line in (e.stderr or "").splitlines() if line.strip()), "")
+        return None, f"`git {' '.join(args)}` exited {e.returncode}" + (f" ({said.strip()})" if said else "")
+    return done.stdout.strip(), None
+
+
+@find_app.command("count")
+def find_count(run: str = typer.Option(..., "--run", help="The run (data/find/runs/<run>/model.pt) to count."),
+               device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one).")
+               ) -> None:
+    """Count what the run's kept model finds on every `choose` and every `test` hand crop, each set measured alike and
+    on its own.  The found areas are the connected pieces of ground the model calls not street.  The measures: the
+    panoptic quality (how well the found areas match the answer key's areas, counting stray areas and missed ones); how
+    many of the answer key's blocks are found, joined, cut up, lost or held whole, how much of the answer key's street
+    and block ground it calls so, how far the answer key's block boundary lies from the nearest block edge the model
+    drew and how far each block edge the model drew lies from the nearest answer-key boundary, in feet; per crop, per
+    era and pooled (`find.counts`).  The answer key: block outlines marked by hand on the scan, never shown to the
+    model.  Writes data/find/runs/<run>/counts.json, each crop's read (reads/<set>/<series>__<crop>.npz) and picture
+    (look/<set>/<series>__<crop>.png).  Exit status 1 when the model
+    predates the two-answer finder, there is no choosing or no test crop, a choosing crop lies on a test crop's
+    ground, or a crop cannot be read.  $0."""
+    import json
+    import logging
+
+    import torch
+
+    from sfzmaps import gpu
+    from sfzmaps.find import counts, handlabels, pages
+    from sfzmaps.find.device import default_device, settle_torch
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
+    folder = pages.OUT / "runs" / run
+    if not (folder / "model.pt").is_file():
+        typer.echo(f"{folder / 'model.pt'}: no model; train one with `sfzmaps find train --run {run}`", err=True)
+        raise typer.Exit(1)
+    device = device or default_device()
+    saved = torch.load(folder / "model.pt", map_location="cpu")
+    settle_torch()
+    try:
+        net = counts.network(saved["state_dict"])
+        choose, test = handlabels.crops(("choose",)), handlabels.crops(("test",))
+        with gpu.gpu_turn(True, device):
+            out = counts.count(net, choose, test, device, folder)
+    except (ValueError, FileNotFoundError, KeyError) as e:
+        typer.echo(str(e.args[0]) if isinstance(e, KeyError) and e.args else str(e), err=True)
+        raise typer.Exit(1) from None
+    out = {"run": run, "step": saved["step"], "device": str(device), **out}
+    f = folder / "counts.json"
+    f.write_text(json.dumps(out, indent=1, allow_nan=False) + "\n")
+    for set_, said in (("choose", "choosing crops"), ("test", "test crops")):
+        t = out[set_]
+        pooled_q = t["panoptic"]["pooled"]["quality"]
+        typer.echo(f"{said}: panoptic quality {t['panoptic']['mean_over_eras']:.3f}, find {t['found_share']:.3f} of "
+                   f"their blocks (means over eras); pooled: {t['pooled']}, panoptic quality "
+                   f"{'none' if pooled_q is None else f'{pooled_q:.3f}'}, held whole {t['whole']['pooled']['whole']} "
+                   f"of {t['whole']['pooled']['blocks']}")
+        for era, c in t["eras"].items():
+            g, b, h = t["ground"]["eras"][era], t["boundary_feet"]["eras"][era], t["whole"]["eras"][era]
+            m = t["model_edge_feet"]["eras"][era]
+            back = ("not measured (no model edge px, or no answer-key boundary px)" if m["median"] is None else
+                    f"median {m['median']:.1f} ft, 90% {m['p90']:.1f} ft, 99% {m['p99']:.1f} ft")
+            feet = "no model edge" if b["median"] is None else (f"median {b['median']:.1f} ft, 90% {b['p90']:.1f} ft, "
+                                                                f"99% {b['p99']:.1f} ft")
+            pq = t["panoptic"]["eras"][era]["quality"]
+            quality = "none" if pq is None else f"{pq:.3f}"
+            typer.echo(f"  {set_} {era}: {c}; panoptic quality {quality}; held whole"
+                       f" {h['whole']} of {h['blocks']}; street px called street "
+                       f"{g['street_share']}, area px called not street {g['area_share']}; answer key's block "
+                       f"boundary to the nearest block edge the model drew: {feet}; block edge the model drew to the "
+                       f"nearest answer-key boundary: {back}")
+    typer.echo(str(f))
+
+
+@find_app.command("read")
+def find_read(run: str = typer.Option(..., "--run", help="The run (data/find/runs/<run>/model.pt) to read with."),
+              sheet: list[str] = typer.Option(None, "--sheet", help="A sheet to read, as <series>/<sheet> "
+                                                                    "(repeatable)."),
+              series: str = typer.Option(None, "--series", help="Read every sheet of this series (duplicate scans "
+                                                                "skipped and named)."),
+              device: str = typer.Option(None, "--device", help="cpu or mps (default: mps where there is one).")
+              ) -> None:
+    """Read whole sheets with the run's kept model: the page the placement steps use (data/work/<series>/<sheet>/
+    page.png) and its frame cut, at the page's own px.  For each sheet it writes the read (the chance of street and of
+    a block edge at every px, stored as levels: data/find/runs/<run>/sheets/<series>/<sheet>.npz) and a RESULT picture
+    at the page's own size (the scan with the ground the model calls street tinted orange and its block edges drawn:
+    .png beside it), and prints one line: the sheet, its size, the share of the map area called street and the
+    seconds it took.  Give --sheet (one or more) or --series; nothing else is read.  Exit status 1, reading nothing,
+    when an asked sheet is a duplicate scan (never read), has no page image or no frame cut, or the run has no model;
+    with --series, duplicate scans are skipped and named.  $0."""
+    import torch
+
+    from sfzmaps import gpu
+    from sfzmaps.find import counts, pages, wholesheet
+    from sfzmaps.find.device import default_device, settle_torch
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
+    if not sheet and not series:
+        raise typer.BadParameter("give the sheets to read (--sheet <series>/<sheet>) or a series (--series)",
+                                 param_hint="--sheet / --series")
+    sids = []
+    for s in sheet or []:
+        ser, _, name = s.partition("/")
+        if not ser or not name:
+            raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
+        sids.append((ser, name))
+    if series:
+        try:
+            found, dups = pages.sheets_and_duplicates(series)
+        except FileNotFoundError as e:
+            typer.echo(f"series {series}: {e}; nothing read", err=True)
+            raise typer.Exit(1) from None
+        if not found:
+            typer.echo(f"no sheets in series {series} (no map page of it is read); nothing read", err=True)
+            raise typer.Exit(1)
+        for (s, h), kept in dups:
+            typer.echo(f"{s}/{h}: skipped, a duplicate scan of {kept} (never read)")
+        sids += [sid for sid in found if sid not in sids]
+    folder = pages.OUT / "runs" / run
+    refused = [why for why in (wholesheet.check(sid) for sid in sids) if why]
+    if not (folder / "model.pt").is_file():
+        refused.append(f"{folder / 'model.pt'}: no model; train one with `sfzmaps find train --run {run}`")
+    if refused:
+        for why in refused:
+            typer.echo(why, err=True)
+        typer.echo("nothing read", err=True)
+        raise typer.Exit(1)
+    device = device or default_device()
+    saved = torch.load(folder / "model.pt", map_location="cpu")
+    settle_torch()
+    try:
+        net = counts.network(saved["state_dict"])
+    except ValueError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    with gpu.gpu_turn(True, device):
+        for sid in sids:
+            got = wholesheet.read_sheet(net, sid, device, folder, run)
+            h, w = got["shape"]
+            typer.echo(f"{sid[0]}/{sid[1]}: {h} x {w} px; {got['street_share']:.3f} of the map area called street; "
+                       f"{got['seconds']:.1f} s; {got['read']}; {got['picture']}")
+
+
+@find_app.command("ruled")
+def find_ruled(sheet: str = typer.Option(..., "--sheet", help="The page, as <series>/<sheet>."),
+               box: str = typer.Option(..., "--box", help="The page px box x0,y0,w,h."),
+               zoom: int = typer.Option(4, "--zoom", help="The tiles' enlargement (nearest neighbour)."),
+               tiles: int = typer.Option(2, "--tiles", help="Cut the box into this many x this many tiles.")) -> None:
+    """Close-ups of a page box to draw a hand crop from: the scan cut into tiles, each enlarged, with page-px rulers
+    and a light grid every 50 px, and the whole box at 2x (data/find/look/ruled/<series>__<sheet>__<box>/).  $0."""
+    from sfzmaps.find import look as pictures, pages
+    series, _, name = sheet.partition("/")
+    if not series or not name:
+        raise typer.BadParameter("expected <series>/<sheet>", param_hint="--sheet")
+    if name in pages.duplicate_scans(series):
+        raise typer.BadParameter(f"{sheet} is a duplicate scan, which is never read", param_hint="--sheet")
+    try:
+        x0, y0, w, h = (int(v) for v in box.split(","))
+    except ValueError:
+        raise typer.BadParameter("expected x0,y0,w,h (whole numbers)", param_hint="--box") from None
+    if zoom < 1 or tiles < 1:
+        raise typer.BadParameter("--zoom and --tiles must be at least 1")
+    lum = pages.load_scan((series, name))
+    if w < tiles or h < tiles or x0 < 0 or y0 < 0 or x0 + w > lum.shape[1] or y0 + h > lum.shape[0]:
+        raise typer.BadParameter(f"must lie on the page ({lum.shape[1]} x {lum.shape[0]} px) and hold every tile",
+                                 param_hint="--box")
+    for f in pictures.write_ruled((series, name), lum[y0:y0 + h, x0:x0 + w], (x0, y0, w, h), zoom, tiles):
+        typer.echo(str(f))
+
+
+OFFSET_MEANS = ("offset: how far the finder's area (ground it calls not street) reaches past today's traced block "
+                "outline, in px, measured at every px along the outline; positive = past the outline, towards the "
+                "street; negative = it stops short.  The area's edge is taken half a px beyond its outer px.  The "
+                "tracing step takes an outlined (mostly white) block's contour through the centres of its outer ink "
+                "px, half a px inside the line's outer edge, and moves it in by half the line width it measures, so "
+                "an area ending at the line's outer edge measures half the measured line width + 0.5, and one ending "
+                "on the traced outline 0.  For an odd line width the measured width is the line's own, so the traced "
+                "outline sits half a px inside the line's true centre.  A dark (solid or hatched) block is not moved "
+                "in: an area ending at its ink's edge measures +0.5.")
+
+
+@find_app.command("outline-offset")
+def find_outline_offset(run: str = typer.Option(..., "--run", help="The run whose stored whole-sheet reads are "
+                                                                  "measured (data/find/runs/<run>/sheets/)."),
+                        trial: str = typer.Option(..., "--trial", help="The trial's name: the result goes to "
+                                                                      "data/find/trial/<trial>/outline_offsets.json."),
+                        sheet: list[str] = typer.Option(..., "--sheet", help="A sheet whose tracing works, as "
+                                                                             "<series>/<sheet> (repeatable; one per "
+                                                                             "era).")) -> None:
+    """Measure where the edge of the finder's areas sits against today's traced block outlines, per era: on the
+    centre of the printed line, or on its outer edge.  For each sheet it reads the run's stored read of it, its frame
+    cut, its page and today's traced blocks (data/work/<series>/<sheet>/blocks_px.geojson, read only), and at every px
+    along each traced outline measures how far the finder's area reaches past the outline (positive: past it, towards
+    the street).  The answer is measured on the traced blocks that lie in a finder area holding no other traced block
+    (an offset on a block the finder joined to its neighbour means little); the figures for every traced block, and
+    for mostly white and mostly ink blocks apart (by the tracing step's own rule: more of its seed px inside the block
+    paper than ink), are written beside it, with the sheet's half line width (half `linework.stroke_width` of its ink).
+    A report only: nothing reads it to decide anything.  Prints one line per era and writes only
+    data/find/trial/<trial>/outline_offsets.json.  Exit status 1, writing nothing, when a sheet
+    has no stored read (naming the `sfzmaps find read` command), is a duplicate scan, has no page, frame cut, traced
+    blocks or era, or shares its era with another sheet given.  $0."""
+    import numpy as np
+    from shapely.geometry import shape
+
+    from sfzmaps import linework
+    from sfzmaps.find import areas, pages, placeblocks, read, trial as trials, wholesheet
+    from sfzmaps.frame import data as frame_data
+    for name, hint in ((run, "--run"), (trial, "--trial")):
+        if not name or name in (".", "..") or "/" in name or "\\" in name:
+            raise typer.BadParameter(f"{name!r}: one folder name (no path separator, no '..')", param_hint=hint)
+    sids = []
+    for s in sheet:
+        ser, _, name = s.partition("/")
+        if not ser or not name:
+            raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
+        sids.append((ser, name))
+    folder = pages.OUT / "runs" / run
+    refused, eras = [], {}
+    for sid in sids:
+        label = f"{sid[0]}/{sid[1]}"
+        f_read = wholesheet.paths(folder, sid)[0]
+        if not f_read.is_file():
+            refused.append(f"{label}: no stored read ({f_read}); read it with "
+                           f"`sfzmaps find read --run {run} --sheet {label}`")
+        why = wholesheet.check(sid)
+        if why:
+            refused.append(why)
+        blocks = frame_data.WORK / sid[0] / sid[1] / "blocks_px.geojson"
+        if not blocks.is_file():
+            refused.append(f"{label}: no traced blocks ({blocks})")
+        try:
+            era = pages.source(sid[0]).era
+        except (KeyError, OSError) as e:
+            refused.append(f"{label}: no era: {e.args[0] if isinstance(e, KeyError) else e}")
+            continue
+        if era in eras:
+            refused.append(f"{label}: the same era ({era}) as {eras[era]}; give one sheet per era")
+        eras.setdefault(era, label)
+    if refused:
+        for why in refused:
+            typer.echo(why, err=True)
+        typer.echo("nothing measured", err=True)
+        raise typer.Exit(1)
+    out = {"run": run, "trial": trial, "offset_means": OFFSET_MEANS, "eras": {}}
+    for sid in sids:
+        label = f"{sid[0]}/{sid[1]}"
+        street = read.load(wholesheet.paths(folder, sid)[0])[0]
+        img = cv2.imread(str(frame_data.page_path(*sid, work=frame_data.WORK)), cv2.IMREAD_UNCHANGED)  # as runner
+        keep = pages.load_keep(sid, img.shape[:2])
+        if street.shape != keep.shape:
+            typer.echo(f"{label}: its read is {street.shape}, its page {keep.shape}; read it again", err=True)
+            raise typer.Exit(1)
+        with open(frame_data.WORK / sid[0] / sid[1] / "blocks_px.geojson") as f:
+            traced = [shape(ft["geometry"]) for ft in json.load(f)["features"]]
+        ink = linework.binarize(img)
+        half = linework.stroke_width(ink) / 2.0
+        one = np.asarray(placeblocks.one_to_one(areas.areas(street, keep), traced), bool)
+        seeds = placeblocks.anchors(ink, keep, photo=linework.is_photo(img), scale=placeblocks.tracing_scale(traced))
+        dark = np.asarray(placeblocks.mostly_ink(ink, traced, anchors=seeds), bool)
+
+        def offset(mask):
+            return placeblocks.outline_offset(street, keep, [p for p, m in zip(traced, mask) if m])
+
+        got = offset(one)
+        v = np.rint(placeblocks.offsets(street, keep, [p for p, m in zip(traced, one) if m])).astype(int)
+        era = pages.source(sid[0]).era
+        out["eras"][era] = {
+            "sheet": label, "offset": got,
+            "offset_measured_on": "traced blocks alone in their finder area (one to one)",
+            "traced_blocks": len(traced), "one_to_one_blocks": int(one.sum()),
+            "mostly_ink_blocks": int(dark.sum()),
+            "offset_all_blocks": offset(np.ones(len(traced), bool)),
+            "offset_one_to_one_mostly_white": offset(one & ~dark),
+            "offset_one_to_one_mostly_ink": offset(one & dark),
+            "offset_points_by_whole_px": {str(k): int(n) for k, n in zip(*np.unique(v, return_counts=True))},
+            "half_stroke_px": half}
+        typer.echo(f"{era}: {label}: {len(traced)} traced blocks, {int(one.sum())} alone in their finder area; "
+                   f"offset (past the traced outline, px) median {got['median_px']:.2f} "
+                   f"(p25 {got['p25_px']:.2f}, p75 {got['p75_px']:.2f}) over {got['points']} outline points; "
+                   f"half line width {half:.2f}")
+    f = trials.TRIAL / trial / "outline_offsets.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(out, indent=1) + "\n")
+    typer.echo(str(f))
+
+
+@find_app.command("blocks")
+def find_blocks(run: str = typer.Option(..., "--run", help="The run whose stored whole-sheet reads make the blocks "
+                                                          "(data/find/runs/<run>/sheets/)."),
+                trial: str = typer.Option(..., "--trial", help="The trial's name: the blocks go into its finder arm, "
+                                                              "data/find/trial/<trial>/finder/."),
+                sheet: list[str] = typer.Option(..., "--sheet", help="A sheet, as <series>/<sheet> (repeatable).")
+                ) -> None:
+    """Make each sheet's blocks for placement from the finder's read of it, and write them into the trial's finder arm
+    in place of the traced blocks copied there (data/find/trial/<trial>/finder/work/<series>/<sheet>/
+    blocks_px.geojson); the file's freshness record is left as copied, so the placement steps run there take the
+    finder's blocks as current and do not trace the page again.  Today's data and the traced arm are only read.
+
+    A block is a piece of ground the finder calls not street (its street chance at most one half); pieces touching the
+    page's edge or the frame cut are cut, and each other piece is outlined by the tracing step's own outline code: an
+    outlined block's sides are moved in by half the sheet's measured line width, a solid one's are not, by the tracing
+    step's own rule.  Each block keeps figures of the read on and just outside its outline (see the README); the read's confidence is the per-pixel chance stored with the read.
+
+    For each sheet it writes the counts to data/find/trial/<trial>/blocks/<series>/<sheet>.json and two debugging
+    pictures at the page's own size, each with a reduced overview copy (.small.png), in
+    data/find/trial/<trial>/look/<series>/: <sheet>__outlines.png, today's traced blocks (from the traced arm) beside
+    the finder's, each block shaded with a bright outline; and <sheet>__areas.png, each area the finder calls not
+    street tinted by what became of it (alone, joined to other blocks, cut at the rim, dropped by the cleaning).  It
+    prints one line: today's traced blocks and good corners; the finder's areas, those cut at the rim, those cleaned
+    away, its blocks and good corners; how many of its areas hold two or more of the year's blocks (today's lots by
+    block, placed on the page by today's placement); how many of today's traced blocks lie alone in a finder area,
+    share one with other traced blocks, or lie on ground it calls street; and today's blocks inside the frame cut by
+    what became of the area they fall in.  Exit status
+    1, writing nothing, when a sheet has no finder arm root (naming `sfzmaps find trial root`), no stored read (naming
+    `sfzmaps find read`), no traced arm root, no frame cut or no placement today, or is a duplicate scan.  $0."""
+    import numpy as np
+    from shapely.geometry import shape
+
+    from sfzmaps.find import areas, look, pages, placeblocks, read, trial as trials, wholesheet
+    from sfzmaps.frame import data as frame_data
+    for name, hint in ((run, "--run"), (trial, "--trial")):
+        if not name or name in (".", "..") or "/" in name or "\\" in name:
+            raise typer.BadParameter(f"{name!r}: one folder name (no path separator, no '..')", param_hint=hint)
+    sids = []
+    for s in sheet:
+        ser, _, name = s.partition("/")
+        if not ser or not name:
+            raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
+        sids.append((ser, name))
+    root, traced_root = trials.arm_root(trial, "finder"), trials.arm_root(trial, "traced")
+    folder = pages.OUT / "runs" / run
+    refused = []
+    for sid in sids:
+        label = f"{sid[0]}/{sid[1]}"
+        work = root / "work" / sid[0] / sid[1]
+        missing = [f for f in ("page.png", "blocks_px.geojson", "blocks_px.geojson.inputs.json")
+                   if not (work / f).is_file()]
+        if missing:
+            refused.append(f"{label}: the finder arm root has no {', '.join(missing)} ({work}); make it with "
+                           f"`sfzmaps find trial root --trial {trial} --arm finder --sheet {label}`")
+        f_read = wholesheet.paths(folder, sid)[0]
+        if not f_read.is_file():
+            refused.append(f"{label}: no stored read ({f_read}); read it with "
+                           f"`sfzmaps find read --run {run} --sheet {label}`")
+        why = wholesheet.check(sid)
+        if why:
+            refused.append(why)
+        f_traced = traced_root / "work" / sid[0] / sid[1] / "blocks_px.geojson"
+        if not f_traced.is_file():
+            refused.append(f"{label}: no traced arm root ({f_traced}); make it with "
+                           f"`sfzmaps find trial root --trial {trial} --arm traced --sheet {label}`")
+        placed = config.DATA_DIR / "warp" / sid[0] / sid[1] / "transform.json"
+        if not placed.is_file():
+            refused.append(f"{label}: no placement today ({placed}), to put the year's blocks on the page")
+    if refused:
+        for why in refused:
+            typer.echo(why, err=True)
+        typer.echo("no blocks written", err=True)
+        raise typer.Exit(1)
+    for sid in sids:
+        label = f"{sid[0]}/{sid[1]}"
+        work = root / "work" / sid[0] / sid[1]
+        f_traced = traced_root / "work" / sid[0] / sid[1] / "blocks_px.geojson"
+        lum = frame_data.load_luminance(work / "page.png")
+        points = placeblocks.lot_block_points(sid, lum.shape)
+        got = placeblocks.write_sheet(sid, folder, root, f_traced, points, run=run)
+        with open(work / "blocks_px.geojson") as f:
+            found = json.load(f)
+        with open(f_traced) as f:
+            traced = json.load(f)
+
+        def corners(d):
+            return np.array([[np.nan if v is None else v for v in c] for c in d.get("corners") or []],
+                            float).reshape(-1, 2)
+        pic = look.outlines_picture(
+            lum, [shape(ft["geometry"]) for ft in traced["features"]], corners(traced),
+            [shape(ft["geometry"]) for ft in found["features"]], corners(found),
+            f"RESULT (debugging picture): {sid[0]} / {sid[1]}: today's traced blocks (left) and the finder's blocks "
+            f"from run {run} (right)")
+        look_dir = trials.TRIAL / trial / "look" / sid[0]
+        look_dir.mkdir(parents=True, exist_ok=True)
+        f_pic, f_small = look_dir / f"{sid[1]}__outlines.png", look_dir / f"{sid[1]}__outlines.small.png"
+        cv2.imwrite(str(f_pic), pic)
+        cv2.imwrite(str(f_small), look.reduced(pic))
+        keep = pages.load_keep(sid, lum.shape)
+        lab = areas.areas(read.load(wholesheet.paths(folder, sid)[0])[0], keep)
+        kinds = placeblocks.area_kinds(lab, placeblocks.edge_cut(lab, keep),
+                                       [ft["properties"]["area"] for ft in found["features"]], points)
+        pic = look.areas_picture(lum, lab, kinds, f"RESULT (debugging picture): {sid[0]} / {sid[1]}: what became of "
+                                                  f"each area the finder calls not street (run {run})")
+        f_areas, f_areas_small = look_dir / f"{sid[1]}__areas.png", look_dir / f"{sid[1]}__areas.small.png"
+        cv2.imwrite(str(f_areas), pic)
+        cv2.imwrite(str(f_areas_small), look.reduced(pic))
+        f_counts = trials.TRIAL / trial / "blocks" / sid[0] / f"{sid[1]}.json"
+        f_counts.parent.mkdir(parents=True, exist_ok=True)
+        f_counts.write_text(json.dumps({"run": run, "trial": trial, "sheet": label, **got,
+                                        "blocks_file": str(work / "blocks_px.geojson"), "picture": str(f_pic),
+                                        "overview": str(f_small), "areas_picture": str(f_areas),
+                                        "areas_overview": str(f_areas_small)}, indent=1) + "\n")
+        typer.echo(f"{label}: today {got['traced_blocks']} traced blocks, {got['traced_good_corners']} good corners; "
+                   f"finder {got['areas']} areas, {got['edge_cut']} cut at the rim, {got['dropped_by_cleaning']} "
+                   f"cleaned away, {got['blocks']} blocks ({got['moved_in']} moved in by half the "
+                   f"{got['stroke_px']:g} px line), {got['good_corners']} good corners; "
+                   f"{got['areas_with_two_or_more']} areas hold two or more of the year's blocks "
+                   f"({got['blocks_in_them']} of the {got['lot_blocks_on_page']} on the page); today's traced blocks: "
+                   f"{got['traced_one_to_one']} alone in a finder area, {got['traced_sharing']} sharing "
+                   f"{got['traced_sharing_areas']} areas, {got['traced_on_street']} on street; today's blocks inside "
+                   f"the frame cut by what became of them: {got['lot_blocks_alone']} alone, {got['lot_blocks_joined']} "
+                   f"joined, {got['lot_blocks_cut_at_rim']} cut at the rim, {got['lot_blocks_dropped']} dropped by "
+                   f"cleaning, {got['lot_blocks_on_street']} on street")
+        typer.echo(f"  {f_counts}\n  {f_pic}\n  {f_small}\n  {f_areas}\n  {f_areas_small}")
+
+
+@trial_app.command("root")
+def find_trial_root(trial: str = typer.Option(..., "--trial", help="The trial's name: data/find/trial/<trial>/."),
+                    arm: str = typer.Option(..., "--arm", help="traced (today's blocks) or finder (the finder's)."),
+                    sheet: list[str] = typer.Option(..., "--sheet", help="A sheet, as <series>/<sheet> "
+                                                                         "(repeatable).")) -> None:
+    """Make one arm's data root, data/find/trial/<trial>/<arm>/: raw, ref and cache linked to today's, and each sheet's
+    work files up to and including its blocks (page.png, page.json, labels.json, blocks_px.geojson and the paper warp,
+    with their freshness records and saved answers) copied, never linked, into its work/<series>/<sheet>/.  Nothing
+    made after the blocks is copied, so the placement steps run there (SFZMAPS_DATA_DIR=<root>) make it again.
+    The root is made whole beside its place and renamed into it, so a failed copy leaves nothing.  Prints each file
+    copied.  Exit status 1, writing nothing, when the root is today's data root or lies in its work, warp or out
+    folder, already holds a link into today's data (other than raw, ref and cache) or anything else, a sheet is a duplicate scan, has a review or a seed (its placement does not start from its
+    blocks) or lacks one of those files, or the root was prepared before (delete its folder to redo it).  Reads
+    nothing else, $0."""
+    from sfzmaps.find import trial as trials
+    if arm not in trials.ARMS:
+        raise typer.BadParameter(f"{arm!r}: one of {', '.join(trials.ARMS)}", param_hint="--arm")
+    sids = []
+    for s in sheet:
+        ser, _, name = s.partition("/")
+        if not ser or not name:
+            raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
+        sids.append((ser, name))
+    try:
+        root = trials.arm_root(trial, arm)
+        copied = trials.prepare(root, sids, source=config.DATA_DIR)
+    except (ValueError, FileExistsError) as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    for f in copied:
+        typer.echo(str(f))
+
+
+@trial_app.command("numbers")
+def find_trial_numbers(trial: str = typer.Option(..., "--trial", help="The trial's name: data/find/trial/<trial>/."),
+                       run: str = typer.Option(..., "--run", help="The finder run whose training ground is "
+                                                                     "measured (data/find/runs/<run>/).")
+                       ) -> None:
+    """For every sheet in the trial's arm roots, print one line per data root (today's data, then each arm that is
+    there): its blocks, good corners, control points, the placement check with its held-out errors, and the warp's
+    chosen correction with its share of block-side points within 1 px of a printed line, each read from that root's
+    own files.  Then whether the traced arm came out exactly as today, file by file, and the run's training ground on
+    the sheet (the share under its lot-labelled sheets, and its hand crops there).  Reads today's and the trial's
+    data; writes only data/find/trial/<trial>/numbers.json.  Exit status 1, writing nothing, when the data root in force lies inside
+    the trial (unset SFZMAPS_DATA_DIR).  $0."""
+    from sfzmaps.find import pages, trial as trials
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
+    try:
+        sids = trials.trial_sheets(trial)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--trial") from None
+    if not sids:
+        typer.echo(f"{trials.TRIAL / trial}: no arm root with a sheet; make one with `sfzmaps find trial root`",
+                   err=True)
+        raise typer.Exit(1)
+    here = (trials.TRIAL / trial).resolve()
+    if config.DATA_DIR.resolve() == here or here in config.DATA_DIR.resolve().parents:
+        typer.echo(f"{config.DATA_DIR}: the data root in force lies inside the trial ({here}), so it is not today's "
+                   f"data; unset SFZMAPS_DATA_DIR and run again", err=True)
+        raise typer.Exit(1)
+    folder = pages.OUT / "runs" / run
+    if not (folder / "log.json").is_file():
+        typer.echo(f"{folder / 'log.json'}: no run log", err=True)
+        raise typer.Exit(1)
+    out = {"trial": trial, "run": run, "sheets": {}}
+    for sid in sids:
+        got = {"today": trials.numbers(config.DATA_DIR, sid)}
+        typer.echo(trials.row(sid, "today", got["today"]))
+        for arm in trials.ARMS:
+            root = trials.arm_root(trial, arm)
+            if (root / "work" / sid[0] / sid[1]).is_dir():
+                got[arm] = trials.numbers(root, sid)
+                typer.echo(trials.row(sid, arm, got[arm]))
+        if "traced" in got:
+            got["reproduced"] = trials.reproduced(trials.arm_root(trial, "traced"), config.DATA_DIR, sid)
+            typer.echo(f"{sid[0]}/{sid[1]} traced as today: " +
+                       ", ".join(f"{k} {'same' if v else 'DIFFERS'}" for k, v in got["reproduced"].items()))
+        try:
+            got["trained_ground"] = ground = trials.trained_ground(sid, folder, config.DATA_DIR)
+        except FileNotFoundError as e:
+            typer.echo(str(e), err=True)
+            raise typer.Exit(1) from None
+        parts = ", ".join(f"{k} {v:.3f}" for k, v in ground["by_sheet"].items())
+        typer.echo(f"{sid[0]}/{sid[1]} trained ground ({run}): {ground['lot_labelled_share']:.3f} of its ground under "
+                   f"lot-labelled training sheets" + (f" ({parts})" if parts else "") + "; hand crops on it: "
+                   + (", ".join(ground["hand_crops"]) or "none"))
+        out["sheets"][f"{sid[0]}/{sid[1]}"] = got
+    f = trials.TRIAL / trial / "numbers.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(out, indent=1))
+    typer.echo(str(f))
+
+
+@trial_app.command("compare")
+def find_trial_compare(trial: str = typer.Option(..., "--trial", help="The trial's name: data/find/trial/<trial>/."),
+                       run: str = typer.Option(..., "--run", help="The finder run whose training ground is "
+                                                                     "measured (data/find/runs/<run>/).")
+                       ) -> None:
+    """Compare each trial sheet placed from today's traced blocks (the traced arm) with it placed from the finder's
+    blocks (the finder arm), beside today's placement.
+
+    First it checks every sheet's finder blocks file is the one `sfzmaps find blocks` wrote (not traced again or
+    changed since), and that today and both arms have the sheet placed (control points and a warped scan).  Then, per
+    sheet and for today, traced and finder: the numbers of `find trial numbers`; how far the sheet's block-side
+    points (every 2 ft along every side of the year's blocks, the points the warp scores) lie from the nearest
+    control point, in feet (median and 90th percentile); and the share of control points on ground the run was
+    trained on with lot labels.
+
+    It picks three places on each sheet, the same for both arms, from today's placement: the worst (the most
+    block-side points more than 1 px from the print, the warp's own measure), the busiest (the most block-side
+    points) and the centre (the sheet's middle), each 1,200 px of today's warped scan on a side.  For each it writes a
+    picture: the scan warped onto today's map, placed from today's traced blocks on the left and from the finder's
+    blocks on the right, at the warped scan's own resolution, today's block lines drawn on top in magenta, 3 px wide.
+    These numbers and pictures are reports: nothing here passes or fails a sheet.
+
+    Places that fall in the same box get one picture, named after the first of them, and the printed row says which
+    places share it.  When no block-side point is off the print today, the worst place is left out and the row says
+    so.
+
+    Writes only data/find/trial/<trial>/compare.json and data/find/trial/<trial>/look/<series>/<sheet>__<place>.png
+    (with a reduced .small.png copy when a picture is larger than 3,000 px; its own earlier place pictures are
+    removed first); today's data and both arms are only read.  Prints the table.  Exit status 1, writing nothing, when
+    the data root in force lies inside the trial (unset SFZMAPS_DATA_DIR), a finder blocks file was traced again or
+    changed, or a sheet is not yet placed in today's data or an arm (naming the step to run).  $0."""
+    import numpy as np
+
+    from sfzmaps.find import look, pages, trial as trials
+    if not run or run == "." or ".." in run or "/" in run or "\\" in run:
+        raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
+                                 param_hint="--run")
+    try:
+        sids = trials.trial_sheets(trial)
+    except ValueError as e:
+        raise typer.BadParameter(str(e), param_hint="--trial") from None
+    if not sids:
+        typer.echo(f"{trials.TRIAL / trial}: no arm root with a sheet; make one with `sfzmaps find trial root`",
+                   err=True)
+        raise typer.Exit(1)
+    roots = {"today": config.DATA_DIR, **{arm: trials.arm_root(trial, arm) for arm in trials.ARMS}}
+    here = (trials.TRIAL / trial).resolve()
+    if config.DATA_DIR.resolve() == here or here in config.DATA_DIR.resolve().parents:
+        typer.echo(f"{config.DATA_DIR}: the data root in force lies inside the trial ({here}), so it is not today's "
+                   f"data; unset SFZMAPS_DATA_DIR and run again", err=True)
+        raise typer.Exit(1)
+    refused = []
+    for sid in sids:
+        try:
+            trials.check_blocks(trial, sid)
+        except ValueError as e:
+            refused.append(str(e))
+    for sid in sids:
+        for label, root in roots.items():
+            refused += trials.unplaced(root, sid, label)
+    folder = pages.OUT / "runs" / run
+    if not (folder / "log.json").is_file():
+        refused.append(f"{folder / 'log.json'}: no run log")
+    if refused:
+        for why in refused:
+            typer.echo(why, err=True)
+        typer.echo("nothing compared", err=True)
+        raise typer.Exit(1)
+    try:
+        ground = trials.trained_union(folder, config.DATA_DIR)
+    except FileNotFoundError as e:
+        typer.echo(str(e), err=True)
+        raise typer.Exit(1) from None
+    what = {"worst": "the most block-side points off the print today", "busiest": "the most block-side points",
+            "centre": "the sheet's middle"}
+    out = {"trial": trial, "run": run, "window_px": trials.WINDOW_PX, "line_px": trials.LINE_PX, "sheets": {}}
+    for sid in sids:
+        label = f"{sid[0]}/{sid[1]}"
+        pts = trials.side_points(sid)
+        got = {"numbers": {}, "reach_ft": {}, "control_points_on_trained_ground": {}, "side_points": len(pts),
+               "places": {}}
+        for col, root in roots.items():
+            gcps = trials.control_points(root, sid)
+            got["numbers"][col] = n = trials.numbers(root, sid)
+            got["reach_ft"][col] = reach = trials.reach_ft(pts, gcps)
+            got["control_points_on_trained_ground"][col] = on = trials.share_on(gcps, ground)
+
+            def ft(v):
+                return "-" if v is None else f"{v:.1f}"
+            typer.echo(trials.row(sid, col, n) + f"; block-side points to the nearest control point p50 "
+                       f"{ft(reach['p50'])} / p90 {ft(reach['p90'])} ft; control points on trained ground "
+                       + ("-" if on is None else f"{on:.3f}"))
+        boxes = trials.places(sid, config.DATA_DIR)
+        off = np.asarray(trials.off_print(sid, config.DATA_DIR), bool)
+        lines = trials.block_lines(list(boxes.values()))
+        look_dir = trials.TRIAL / trial / "look" / sid[0]
+        look_dir.mkdir(parents=True, exist_ok=True)
+        for place in trials.PLACES:                 # this command's own pictures of an earlier run, never kept stale
+            for end in (".png", ".small.png"):
+                (look_dir / f"{sid[1]}__{place}{end}").unlink(missing_ok=True)
+        if "worst" not in boxes:
+            got["places"]["worst"] = {"left_out": "no block-side point is off the print today"}
+            typer.echo(f"{label} worst: left out, no block-side point is off the print today")
+        for first, group in trials.shared(boxes).items():
+            b = boxes[first]
+            inside = trials.in_box(pts, b)
+            pic = trials.placed_picture(
+                trials.arm_root(trial, "traced") / "warp" / sid[0] / sid[1] / "warped.tif",
+                trials.arm_root(trial, "finder") / "warp" / sid[0] / sid[1] / "warped.tif", b, lines,
+                f"RESULT: {label}, {' = '.join(group)}: left placed from today's traced blocks, right from the "
+                f"finder's blocks")
+            f_pic = look_dir / f"{sid[1]}__{first}.png"
+            f_small = trials.write_picture(pic, f_pic)
+            for place in group:
+                entry = {"box_ft": list(b), "chosen_by": what[place], "side_points": int(inside.sum()),
+                         "off_print_today": int((inside & off).sum()), "picture": str(f_pic),
+                         "picture_px": [int(pic.shape[1]), int(pic.shape[0])], "same_box_as": group}
+                if f_small is not None:
+                    entry["overview"] = str(f_small)
+                got["places"][place] = entry
+            names = " and ".join(f"{p} ({what[p]})" for p in group)
+            typer.echo(f"{label} {names}" + (" share one box" if len(group) > 1 else "") + f": {int(inside.sum())} "
+                       f"block-side points, {int((inside & off).sum())} off the print today; {f_pic} "
+                       f"({pic.shape[1]} x {pic.shape[0]} px)")
+        out["sheets"][label] = got
+    f = trials.TRIAL / trial / "compare.json"
+    f.write_text(json.dumps(out, indent=1))
+    typer.echo(str(f))
 
 
 if __name__ == "__main__":

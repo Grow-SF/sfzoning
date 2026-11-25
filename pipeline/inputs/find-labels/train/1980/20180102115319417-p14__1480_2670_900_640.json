@@ -1,0 +1,332 @@
+{
+ "box": [
+  1480,
+  2670,
+  900,
+  640
+ ],
+ "polygons": [
+  [
+   [1529, 2681],
+   [1529, 2670],
+   [1480, 2670],
+   [1480, 2682]
+  ],
+  [
+   [1558, 2775],
+   [1564, 2781],
+   [1572, 2783],
+   [1621, 2782],
+   [1621, 2670],
+   [1559, 2670]
+  ],
+  [
+   [1640, 2699],
+   [1744, 2698],
+   [1756, 2697],
+   [1756, 2670],
+   [1640, 2670]
+  ],
+  [
+   [1762, 2698],
+   [1807, 2697],
+   [1807, 2670],
+   [1762, 2670]
+  ],
+  [
+   [1826, 2699],
+   [1995, 2697],
+   [1995, 2670],
+   [1826, 2670]
+  ],
+  [
+   [2016, 2670],
+   [2017, 2692],
+   [2084, 2701],
+   [2094, 2700],
+   [2094, 2670]
+  ],
+  [
+   [2110, 2704],
+   [2182, 2713],
+   [2182, 2670],
+   [2109, 2670]
+  ],
+  [
+   [2203, 2714],
+   [2244, 2720],
+   [2275, 2723],
+   [2275, 2670],
+   [2202, 2670]
+  ],
+  [
+   [2295, 2726],
+   [2371, 2735],
+   [2370, 2670],
+   [2295, 2670]
+  ],
+  [
+   [1525, 2783],
+   [1528, 2700],
+   [1480, 2697],
+   [1480, 2784]
+  ],
+  [
+   [1807, 2718],
+   [1640, 2719],
+   [1641, 2782],
+   [1807, 2781]
+  ],
+  [
+   [1996, 2717],
+   [1963, 2716],
+   [1826, 2718],
+   [1827, 2779],
+   [1924, 2780],
+   [1996, 2779]
+  ],
+  [
+   [2182, 2734],
+   [2028, 2714],
+   [2017, 2714],
+   [2017, 2779],
+   [2167, 2777],
+   [2182, 2776]
+  ],
+  [
+   [2371, 2762],
+   [2370, 2755],
+   [2203, 2736],
+   [2203, 2778],
+   [2369, 2777]
+  ],
+  [
+   [1508, 2956],
+   [1517, 2959],
+   [1521, 2898],
+   [1524, 2808],
+   [1480, 2807],
+   [1480, 2939]
+  ],
+  [
+   [1622, 2888],
+   [1622, 2806],
+   [1585, 2805],
+   [1559, 2807],
+   [1554, 2812],
+   [1553, 2819],
+   [1550, 2890]
+  ],
+  [
+   [1808, 2804],
+   [1651, 2806],
+   [1640, 2807],
+   [1642, 2890],
+   [1808, 2887]
+  ],
+  [
+   [1997, 2802],
+   [1827, 2803],
+   [1828, 2887],
+   [1997, 2886]
+  ],
+  [
+   [2183, 2801],
+   [2157, 2800],
+   [2043, 2801],
+   [2016, 2802],
+   [2018, 2886],
+   [2183, 2883]
+  ],
+  [
+   [2371, 2801],
+   [2204, 2803],
+   [2204, 2884],
+   [2369, 2883]
+  ],
+  [
+   [1622, 2905],
+   [1551, 2907],
+   [1549, 2916],
+   [1546, 2976],
+   [1555, 2982],
+   [1570, 2987],
+   [1589, 2988],
+   [1624, 2987]
+  ],
+  [
+   [1809, 2964],
+   [1808, 2904],
+   [1667, 2905],
+   [1644, 2906],
+   [1641, 2909],
+   [1642, 2988],
+   [1809, 2985]
+  ],
+  [
+   [1998, 2903],
+   [1828, 2904],
+   [1829, 2985],
+   [1998, 2985]
+  ],
+  [
+   [2184, 2902],
+   [2016, 2902],
+   [2019, 2983],
+   [2033, 2985],
+   [2184, 2982]
+  ],
+  [
+   [2371, 2900],
+   [2215, 2902],
+   [2205, 2903],
+   [2205, 2983],
+   [2304, 2983],
+   [2371, 2982]
+  ],
+  [
+   [1503, 3286],
+   [1518, 2990],
+   [1480, 2968],
+   [1480, 3286]
+  ],
+  [
+   [1624, 3018],
+   [1621, 3015],
+   [1555, 3015],
+   [1573, 3064],
+   [1593, 3094],
+   [1598, 3096],
+   [1624, 3096]
+  ],
+  [
+   [1548, 3015],
+   [1541, 3155],
+   [1541, 3194],
+   [1550, 3198],
+   [1594, 3198],
+   [1625, 3195],
+   [1625, 3113],
+   [1600, 3113],
+   [1595, 3110],
+   [1566, 3065]
+  ],
+  [
+   [1810, 3015],
+   [1808, 3012],
+   [1643, 3015],
+   [1643, 3095],
+   [1655, 3096],
+   [1810, 3093]
+  ],
+  [
+   [1999, 3012],
+   [1841, 3014],
+   [1830, 3015],
+   [1830, 3094],
+   [1997, 3092],
+   [2000, 3089]
+  ],
+  [
+   [2185, 3011],
+   [2154, 3010],
+   [2018, 3013],
+   [2018, 3091],
+   [2125, 3091],
+   [2185, 3091]
+  ],
+  [
+   [2370, 3011],
+   [2250, 3011],
+   [2203, 3011],
+   [2204, 3090],
+   [2283, 3091],
+   [2370, 3089]
+  ],
+  [
+   [1810, 3111],
+   [1643, 3113],
+   [1644, 3196],
+   [1750, 3197],
+   [1811, 3195]
+  ],
+  [
+   [2000, 3112],
+   [1998, 3109],
+   [1831, 3112],
+   [1831, 3193],
+   [1841, 3195],
+   [2000, 3193]
+  ],
+  [
+   [2186, 3109],
+   [2033, 3110],
+   [2018, 3112],
+   [2018, 3194],
+   [2187, 3192]
+  ],
+  [
+   [2371, 3108],
+   [2205, 3109],
+   [2205, 3193],
+   [2371, 3191]
+  ],
+  [
+   [1539, 3228],
+   [1537, 3248],
+   [1537, 3286],
+   [1589, 3285],
+   [1596, 3300],
+   [1627, 3299],
+   [1625, 3221],
+   [1545, 3222]
+  ],
+  [
+   [1812, 3263],
+   [1811, 3219],
+   [1713, 3219],
+   [1644, 3221],
+   [1644, 3295],
+   [1648, 3299],
+   [1811, 3297]
+  ],
+  [
+   [2000, 3218],
+   [1989, 3216],
+   [1831, 3219],
+   [1831, 3297],
+   [2001, 3295]
+  ],
+  [
+   [2186, 3216],
+   [2036, 3216],
+   [2017, 3217],
+   [2018, 3295],
+   [2097, 3295],
+   [2186, 3293]
+  ],
+  [
+   [2372, 3251],
+   [2371, 3214],
+   [2205, 3215],
+   [2205, 3294],
+   [2244, 3295],
+   [2371, 3292]
+  ],
+  [
+   [1480, 3303],
+   [1503, 3303],
+   [1503, 3309],
+   [1480, 3309]
+  ],
+  [
+   [1533, 3302],
+   [1583, 3302],
+   [1586, 3309],
+   [1533, 3309]
+  ]
+ ],
+ "open_polygons": [],
+ "notes": "The Mission on the 1980 map, sheet p14 (page as scanned: the north-south streets run across the page). Printed names in the box: SAN JOSE AVE., VALENCIA, BARTLETT, MISSION ST., SHOTWELL, and '...ADO' on a short street above San Jose at x 2275-2295; block numbers 6514-6519, 6526-6532, 6568-6575, 5501, 3635, 3642-3644. Box as assigned (1480, 2670, 900, 640), not moved. Every printed block is a polygon (42 blocks, 43 polygons: block 6532 is two, see 2); everything else is street. No open polygons: the box holds no ground without an outline of its own. How the sides were placed: each block's paper was taken from the scan (ink darker than 138; the 4-connected paper pieces inside each block picked by hand, letter holes filled), its convex outline found (traced outline after a 13 px closing for the two non-convex blocks, 6571 at x 1541-1625 y 3015-3198 and the block at x 1537-1627 y 3221-3300), and each side pushed out to the centre of the outermost ink px of the block's own thin line, measured along that side (thin lines 2.5-3.75 px, median push 3.0 px; 3.0 px where letters or a heavy line touch the side); small corner cuts were squared where the scan's corner is solid ink, printed rounded corners kept (e.g. 6568 at (1558-1572, 2775-2783)). Then checked block by block on 4x-8x ruled close-ups and the labels picture, and every side measured against the scan: median 0.1 px, 90% within 0.6 px of the outer edge of the block's thin line. Set by hand after measuring: the bottom-right corner of block 6516 (1998, 2985), where the letter P of a small P district cuts the paper; the top-right corner of the block at (2205-2371, 3108-3193), where the C-2 letters cover it; the right side of the block at (2016-2094, 2670-2701) moved out 1 px; the top of the block at (2016-2184, 2902-2984) straightened at y 2902 (a heavy border runs 5 px above it); bottoms at y 2985 and 2983 and a top at y 3216-3217 moved 1 px; the two slivers at the bottom typed by hand. Heavy zoning borders: here they run in the streets a px or two clear of the block lines (all street), and through blocks along rear lot lines (rows at about y 2750, 2848, 2948, 3053, 3152, 3258) and round small districts inside blocks; one polygon per block whatever crosses it. Small district boxes straddle block corners at (1970-2010, 2840-2895), (1970-2011, 2952-3002), (2005-2050, 2994-3036), (1970-2010, 3050-3100), (1695-1752, 2945-3002): the block's corner is on its own thin lines inside them, the parts in the street are street. Lettering in streets and over block lines (C-2, RH-3, RM-1, M-2, the '3' at (1810-1825, 3060-3092)) is ignored. Judgment calls (please rule): 1. The strip x 2095-2117, y 2721-2774 between two heavy borders, closed top and bottom by the thin lines of the block round it and carrying the number 3644, is kept in that block (x 2017-2182, y 2714-2779) as one block. It lines up with the street x 2096-2109 north of San Jose; if it is a path or street, it should be cut out. 2. Block 6532 (x 1640-1807, top of box to y 2699) has a dead-end alley with paper between its lines (x 1757-1761) from San Jose north to y 2640, outside the box: cut out as street, so inside the box the block is two polygons, (1640-1756) and (1762-1807). 3. One block each, with a heavy border through them and no street paper: x 1826-1995 above San Jose (borders at x 1873 and 1938) and x 2202-2275 above San Jose (border at x 2238-2242, which carries on across the street). 4. The narrow slanted street between 6570 and 6571 (about 4-6 px of paper, from (1548, 3015) to (1600, 3110)) is street. 5. At the bottom-left the box catches the tops of two blocks below the street, x 1480-1503 and x 1533-1586, y 3302-3309: typed as blocks. The heavy box in Shotwell at (2245-2340, 3298-3310) and the heavy dip at (2110-2145, 3295-3302) are in the street. Blocks cut by the box's sides end on the box edge.",
+ "drawn_by": "Claude (AI), sides measured off the scan's ink with a scratch script, then checked block by block on close-ups and on the labels picture, 2026-11-24 (see notes)"
+}
