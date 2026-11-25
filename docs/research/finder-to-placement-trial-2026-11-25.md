@@ -224,7 +224,7 @@ SFZMAPS_DATA_DIR=$F SFZMAPS_MAX_USD=0 pixi run uv run sfzmaps run --year 1921 --
 SFZMAPS_DATA_DIR=$F SFZMAPS_MAX_USD=0 pixi run uv run sfzmaps run --year 1921 --sheet 20180102094142210
 SFZMAPS_DATA_DIR=$F SFZMAPS_MAX_USD=0 pixi run uv run sfzmaps run --year 2000-digital-zoning --sheet 2000-digital-zoning-p08
 SFZMAPS_DATA_DIR=$F SFZMAPS_MAX_USD=0 pixi run uv run sfzmaps warp 1921 2000-digital-zoning
-uv run sfzmaps find trial compare --trial all-pieces
+uv run sfzmaps find trial compare --trial all-pieces --run all-pieces
 ```
 
 Commits: the trial ran at 6656acf; the pictures were redrawn at 7839903 (`compare` run again, figures unchanged).
