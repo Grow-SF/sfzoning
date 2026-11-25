@@ -100,3 +100,12 @@ def test_a_series_is_read_with_its_duplicates_skipped_and_named(tmp_path, monkey
     assert r.exit_code == 0, r.output
     assert "s/D: skipped, a duplicate scan of A" in r.output
     assert sorted(p.name for p in (run / "sheets" / "s").glob("*.npz")) == ["A.npz", "B.npz"]
+
+
+def test_a_series_with_no_sheet_read_is_refused(tmp_path, monkeypatch):
+    _sheet_world(tmp_path, monkeypatch, sheets=("A",), frames=("A",), dups={"D": "A"})
+    r = invoke(["find", "read", "--run", "r", "--series", "nobody", "--device", "cpu"])     # an unknown series
+    assert r.exit_code == 1 and "no sheets in series nobody" in r.output, r.output
+    monkeypatch.setattr(fdata, "map_pages", lambda kinds=None, work=None: [("s", "D")])   # a series of duplicates only
+    r = invoke(["find", "read", "--run", "r", "--series", "s", "--device", "cpu"])
+    assert r.exit_code == 1 and "no sheets in series s" in r.output, r.output

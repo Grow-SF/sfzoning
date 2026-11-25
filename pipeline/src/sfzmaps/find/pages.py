@@ -28,22 +28,31 @@ CUT = "outside.png"
 
 
 def sheets(series: str | None = None) -> list[SheetId]:
-    """Every map page of the series (None: all), less its duplicate scans.  FileNotFoundError names every such page
-    with no frame cut."""
+    """Every map page of the series (None: all), less its duplicate scans (`sheets_and_duplicates`).
+    FileNotFoundError names every such page with no frame cut."""
+    return sheets_and_duplicates(series)[0]
+
+
+def sheets_and_duplicates(series: str | None = None) -> tuple[list[SheetId], list[tuple[SheetId, str]]]:
+    """The map pages of the series (None: all) the finder reads, and its duplicate scans, never read, each with the
+    scan kept in its place (`hatching.duplicate_scans`).  FileNotFoundError names every page read with no frame
+    cut."""
     found = frame_data.map_pages(frame_data.PAGE_KINDS, frame_data.WORK)
     skip: dict[str, dict] = {}
-    out = []
+    out, dups = [], []
     for s, h in found:
         if series is not None and s != series:
             continue
         if s not in skip:
             skip[s] = hatching.duplicate_scans(s)
-        if h not in skip[s]:
+        if h in skip[s]:
+            dups.append(((s, h), skip[s][h]))
+        else:
             out.append((s, h))
     missing = [f"{s}/{h}" for s, h in out if not (frame_data.OUT / s / h / CUT).is_file()]
     if missing:
         raise FileNotFoundError(f"map pages with no frame cut ({CUT}): {', '.join(missing)}")
-    return out
+    return out, dups
 
 
 def load_scan(sid: SheetId) -> np.ndarray:

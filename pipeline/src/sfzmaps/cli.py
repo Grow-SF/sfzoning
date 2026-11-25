@@ -1953,8 +1953,6 @@ def find_read(run: str = typer.Option(..., "--run", help="The run (data/find/run
 
     from sfzmaps import gpu
     from sfzmaps.find import counts, pages, wholesheet
-    from sfzmaps.frame import data as frame_data
-    from sfzmaps.solver import hatching
     from sfzmaps.solver.hatchnet.train import default_device, settle_torch
     if not run or run == "." or ".." in run or "/" in run or "\\" in run:
         raise typer.BadParameter(f"{run!r}: a run's name is one folder name (no path separator, no '..')",
@@ -1969,14 +1967,17 @@ def find_read(run: str = typer.Option(..., "--run", help="The run (data/find/run
             raise typer.BadParameter(f"{s}: expected <series>/<sheet>", param_hint="--sheet")
         sids.append((ser, name))
     if series:
-        dup = hatching.duplicate_scans(series)
-        for s, h in frame_data.map_pages(frame_data.PAGE_KINDS, frame_data.WORK):
-            if s != series or (s, h) in sids:
-                continue
-            if h in dup:
-                typer.echo(f"{s}/{h}: skipped, a duplicate scan of {dup[h]} (never read)")
-                continue
-            sids.append((s, h))
+        try:
+            found, dups = pages.sheets_and_duplicates(series)
+        except FileNotFoundError as e:
+            typer.echo(f"series {series}: {e}; nothing read", err=True)
+            raise typer.Exit(1) from None
+        if not found:
+            typer.echo(f"no sheets in series {series} (no map page of it is read); nothing read", err=True)
+            raise typer.Exit(1)
+        for (s, h), kept in dups:
+            typer.echo(f"{s}/{h}: skipped, a duplicate scan of {kept} (never read)")
+        sids += [sid for sid in found if sid not in sids]
     folder = pages.OUT / "runs" / run
     refused = [why for why in (wholesheet.check(sid) for sid in sids) if why]
     if not (folder / "model.pt").is_file():

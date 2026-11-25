@@ -28,8 +28,10 @@ crop.  `trace_scorer` scores a checkpoint on the `choose` crops (the share of th
 quality of their areas) for the trainer's log (the held-out trace; the trainer keeps the last step whatever it scores);
 `count` reads every `choose` and every `test` crop with a run's kept model and measures both sets alike, each under its
 own name (the choosing crops are where two recipes are compared; the test crops are the final word).  Both refuse a
-choosing crop lying on a test crop's ground (`handlabels.refuse_choose_on_test`).  A crop is read with model.REACH px
-of scan round it where the page allows (`data.grown`) and scored on its own box only.
+choosing crop lying on a test crop's ground (`handlabels.refuse_choose_on_test`).  A crop is read with at least
+model.REACH px of scan round it where the page allows, the window's corner on the page's 16 px grid (`read.window`), so
+its px get exactly the numbers its sheet's whole read gives them (the network's answer depends on where its grid
+falls), and scored on its own box only.
 
 Reads the scans and frame cuts, the crop files, every held-out crop's sheet placement (for the choosing crops'
 ground), and for `count` each crop's sheet placement (its ft per px, for scoring only).  `count` writes
@@ -343,8 +345,9 @@ def edge_feet(found: np.ndarray, truth: CropLabels, ft_per_px: float) -> dict:
 
 @dataclass(frozen=True)
 class CropRead:
-    """A hand crop ready to read: its scan and frame cut grown by model.REACH px where the page allows (`data.grown`),
-    its box within them (`inner`), its era and its hand labels."""
+    """A hand crop ready to read: its scan and frame cut in the window it is read through (`read.window`: grown by at
+    least model.REACH px where the page allows, the corner on the page's grid), its box within them (`inner`), its era
+    and its hand labels."""
     crop: handlabels.Crop
     era: str
     lum: np.ndarray
@@ -364,7 +367,7 @@ def prepare(crops: list[handlabels.Crop]) -> list[CropRead]:
             page = (sid, lum, pages.load_keep(sid, lum.shape))
         _, lum, keep = page
         truth = handlabels.make_labels(handlabels.crop_scan(lum, c), c)
-        outer, inner = data.grown(c.box, lum.shape)
+        outer, inner = read.window(c.box, lum.shape)
         out.append(CropRead(c, pages.source(c.series).era, np.ascontiguousarray(lum[outer]),
                             np.ascontiguousarray(keep[outer]), inner, truth))
     return out

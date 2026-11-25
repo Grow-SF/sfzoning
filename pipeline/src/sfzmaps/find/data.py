@@ -100,7 +100,8 @@ def sheet_labelled(sid: SheetId, which: str = "warp") -> Labelled:
 
 def grown(box: tuple[int, int, int, int], shape: tuple[int, int]) -> tuple[tuple[slice, slice], tuple[slice, slice]]:
     """The page slices of the box (x0, y0, w, h) grown by model.REACH px on every side where a page of `shape` allows,
-    and the box's own slices within that: a crop as the trainer shows it and as `find.counts` reads it."""
+    and the box's own slices within that: a crop as the trainer shows it.  (A crop is READ through `read.window`, whose
+    corner is on the page's grid: the network's answer depends on where its grid falls.)"""
     x0, y0, w, h = box
     gx0, gy0 = max(0, x0 - model.REACH), max(0, y0 - model.REACH)
     gx1, gy1 = min(shape[1], x0 + w + model.REACH), min(shape[0], y0 + h + model.REACH)

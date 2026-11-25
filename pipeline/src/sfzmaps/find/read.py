@@ -4,10 +4,13 @@
 whole reach, model.REACH, rounded up to model.MULTIPLE) and the page's end padded with paper to model.MULTIPLE, as one
 pass over the whole page pads it: the squares' corners and the context are multiples of model.MULTIPLE, so the
 poolings fall on the whole page's grid and every px gets the numbers one pass over the whole page gives it (as
-`hatchnet.train` reads a sheet).  A whole sheet is read so by `find.wholesheet` (`sfzmaps find read`).  A hand crop is
-read as `read_page` of the crop grown as the trainer shows it (`data.grown`; `find.counts`): that window's corner is
-not on the page's MULTIPLE px grid, so its px are read on another grid than the whole page's and their numbers are not
-the same.
+`hatchnet.train` reads a sheet).  A whole sheet is read so by `find.wholesheet` (`sfzmaps find read`).
+
+The network's answer at a px depends on where its MULTIPLE px grid falls (it pools four times by 2 x 2): a window read
+with its corner off the page's grid gives other numbers at the same px (measured on a trained run: up to 0.4 in
+chance).  So every read in this code is made on the page's grid: a part of a page (a hand crop, `find.counts`) is
+read through `window`, the box grown by at least model.REACH px with its corner on the page's grid, and its px get
+exactly the numbers the whole sheet's read gives them.
 
 A read is stored as uint8 levels round(255 p) (`save`, `load`; `stored` gives the same levels in memory), so every
 reading downstream (`find.areas`, `find.counts`) sees only the 256 levels a stored read can tell apart.  A read stored
@@ -57,6 +60,19 @@ def read_page(net: model.FindNet, lum: np.ndarray, keep: np.ndarray, device, til
             out[:, y:y + th, x:x + tw] = p[:, y - y0:y - y0 + th, x - x0:x - x0 + tw]
     out[:, ~keep] = 0
     return out
+
+
+def window(box: tuple[int, int, int, int], shape: tuple[int, int]) -> tuple[tuple[slice, slice], tuple[slice, slice]]:
+    """The page slices of the window a box (x0, y0, w, h) is read through on a page of `shape`, and the box's own slices
+    within it: the box grown by model.REACH px on every side where the page allows, its top-left corner then moved
+    up and left onto the page's MULTIPLE px grid, so that every px of the box gets the numbers the whole page's read
+    gives it (see the module)."""
+    x0, y0, w, h = box
+    gx0 = max(0, x0 - model.REACH) // model.MULTIPLE * model.MULTIPLE
+    gy0 = max(0, y0 - model.REACH) // model.MULTIPLE * model.MULTIPLE
+    gx1, gy1 = min(shape[1], x0 + w + model.REACH), min(shape[0], y0 + h + model.REACH)
+    return ((slice(gy0, gy1), slice(gx0, gx1)),
+            (slice(y0 - gy0, y0 - gy0 + h), slice(x0 - gx0, x0 - gx0 + w)))
 
 
 def levels(chances: np.ndarray) -> np.ndarray:

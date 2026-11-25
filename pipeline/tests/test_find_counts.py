@@ -328,3 +328,45 @@ def test_count_refuses_a_model_saved_with_three_answers_in_one_line(tmp_path, mo
     r = invoke(["find", "count", "--run", "r", "--device", "cpu"])
     assert r.exit_code == 1 and isinstance(r.exception, SystemExit), r.output
     assert len(r.output.strip().splitlines()) == 1 and "predates the two-answer finder" in r.output, r.output
+
+
+def test_a_crop_is_read_exactly_as_its_sheet_is(tmp_path, monkeypatch):
+    """A scoring crop's read (`prepare`, `read_one`) gives its px the numbers the whole sheet's read gives them, for
+    crops whose box grown by model.REACH would put the window's corner off the page's 16 px grid."""
+    import json
+
+    import torch
+
+    from sfzmaps import config
+    from sfzmaps.find import model, pages, read
+    rng = np.random.default_rng(4)
+    page = np.ones((400, 500), np.float32)
+    page[110:112] = page[128:130] = 0                        # a street between two lines, rows 112-127
+    for _ in range(30):
+        y, x = rng.integers(150, 390), rng.integers(0, 490)
+        page[y:y + 2, x:x + rng.integers(5, 60)] = 0
+    keep = np.ones(page.shape, bool)
+    keep[:, :6] = False
+    monkeypatch.setattr(pages, "load_scan", lambda sid: page)
+    monkeypatch.setattr(pages, "load_keep", lambda sid, shape: keep)
+    src = tmp_path / "label_sources.csv"
+    src.write_text("series,era,lots\nt,lined-1bit,year\n")
+    monkeypatch.setattr(pages, "SOURCES", src)
+    torch.manual_seed(0)
+    net = model.FindNet(4).eval()
+    with torch.no_grad():                                    # answers that vary with the print, as a trained net's do
+        for m in net.modules():
+            if isinstance(m, torch.nn.Conv2d):
+                m.weight.mul_(3)
+    whole = read.stored(read.read_page(net, page, keep, "cpu"))
+    d = config.INPUTS_DIR / "find-labels" / "test" / "t"
+    d.mkdir(parents=True)
+    for x0, y0 in ((131, 100), (203, 97), (5, 101)):         # 131 - 122 = 9, 203 - 122 = 81: off the grid
+        f = d / f"A__{x0}_{y0}_60_40.json"
+        f.write_text(json.dumps({"box": [x0, y0, 60, 40], "street": [[x0 + 10, 120]],
+                                 "blocks": [[x0 + 20, y0 + 4], [x0 + 20, y0 + 35]]}))
+        [p] = counts.prepare([handlabels.read_crop(f, "test")])
+        got, k = counts.read_one(net, p, "cpu")
+        np.testing.assert_allclose(got, whole[:, y0:y0 + 40, x0:x0 + 60], atol=1.5 / 255, rtol=0, err_msg=f.name)
+        assert np.abs(got - whole[:, y0:y0 + 40, x0:x0 + 60]).mean() < 1e-4
+        assert np.array_equal(k, keep[y0:y0 + 40, x0:x0 + 60])

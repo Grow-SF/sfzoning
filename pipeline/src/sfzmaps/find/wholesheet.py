@@ -8,8 +8,9 @@ picture at the page's own size (`look.sheet_picture`), both under the run's fold
 data/find/runs/<run>/sheets/<series>/<sheet>.npz and .png.
 
 A px's answer does not depend on where `read_page`'s squares fall: they are read with their corners on the page's
-model.MULTIPLE px grid (`find.read`).  A window cut elsewhere (a hand crop grown by model.REACH, `data.grown`, whose
-corner can fall anywhere) is read on its own grid, and the network's answers there are not the same numbers.
+model.MULTIPLE px grid (`find.read`).  The network's answer does depend on where its grid falls, so every read in this
+code is made on the page's grid: a scoring crop (`find.counts`, through `read.window`) gives its px exactly the numbers
+this whole-sheet read gives them.
 
 Reads the page, its frame cut and the series' duplicate scans; writes the two files above."""
 from __future__ import annotations
